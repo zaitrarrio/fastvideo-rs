@@ -16,6 +16,15 @@
 //! `frames.tsv` (arrival ms and RTP time per video frame) and
 //! `summary.json`. Loopback only: the peer binds `0.0.0.0:0` and talks to
 //! the server's host candidates; nothing is exposed.
+//!
+//! Upsampling sessions (docs/serve/prompt-upsampling.md): `--configure FILE`
+//! merges a JSON object into `configure` (`upsample`, `style`, `entities`,
+//! `image_url`, `x_fv_output`, ...); a prompts line that is a JSON object is
+//! merged into its message (line 1: `configure`; later lines: `prompt`,
+//! e.g. `{"prompt": "...", "replan": false}`). `--switch-at-chunks 1,2,3`
+//! sends the updates when that many `chunk` messages have arrived (instead
+//! of `--switch-at` seconds), and `--stop-after-chunks N` stops after N
+//! chunks. `summary.json` lists every `segment_expanded`.
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -39,6 +48,24 @@ struct Args {
     key: Option<String>,
     seed: Option<u64>,
     resolution: Option<String>,
+    configure: Option<Value>,
+    switch_at_chunks: Vec<u64>,
+    stop_after_chunks: Option<u64>,
+}
+
+/// A prompts line: plain text is the prompt; a JSON object is merged into
+/// the message as is.
+fn merge_line(msg: &mut Value, line: &str) -> Result<(), String> {
+    if line.starts_with('{') {
+        let v: Value = serde_json::from_str(line).map_err(|e| format!("prompts line {line:.40}: {e}"))?;
+        let obj = v.as_object().ok_or("a JSON prompts line must be an object")?;
+        for (k, v) in obj {
+            msg[k.as_str()] = v.clone();
+        }
+    } else {
+        msg["prompt"] = line.into();
+    }
+    Ok(())
 }
 
 fn args() -> Result<Args, String> {
@@ -52,6 +79,9 @@ fn args() -> Result<Args, String> {
         key: std::env::var("FV_KEY").ok().filter(|k| !k.is_empty()),
         seed: None,
         resolution: None,
+        configure: None,
+        switch_at_chunks: Vec::new(),
+        stop_after_chunks: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(k) = it.next() {
@@ -71,6 +101,19 @@ fn args() -> Result<Args, String> {
             "--prompt" => a.prompts.push(v()?),
             "--out" => a.out = PathBuf::from(v()?),
             "--resolution" => a.resolution = Some(v()?),
+            "--configure" => {
+                let p = v()?;
+                let text = std::fs::read_to_string(&p).map_err(|e| format!("{p}: {e}"))?;
+                let c: Value = serde_json::from_str(&text).map_err(|e| format!("{p}: {e}"))?;
+                if !c.is_object() {
+                    return Err(format!("{p}: not a JSON object"));
+                }
+                a.configure = Some(c);
+            }
+            "--switch-at-chunks" => {
+                a.switch_at_chunks = v()?.split(',').filter(|s| !s.is_empty()).map(|s| s.trim().parse::<u64>().map_err(|e| format!("--switch-at-chunks: {e}"))).collect::<Result<_, _>>()?
+            }
+            "--stop-after-chunks" => a.stop_after_chunks = Some(v()?.parse().map_err(|e| format!("--stop-after-chunks: {e}"))?),
             "--seed" => a.seed = Some(v()?.parse().map_err(|e| format!("--seed: {e}"))?),
             other => return Err(format!("unknown argument {other}")),
         }
@@ -293,7 +336,13 @@ async fn run(a: Args) -> Result<(), String> {
         }
     };
     eprintln!("session_info: fps {} chunk {} s, context {} frames, causal {}", info["fps"], info["chunk_seconds"], info["continuation_context_frames"], info["causal"]);
-    let mut cfg = json!({"type": "configure", "prompt_version": 1, "prompt": a.prompts[0]});
+    let mut cfg = json!({"type": "configure", "prompt_version": 1});
+    if let Some(Value::Object(extra)) = &a.configure {
+        for (k, v) in extra {
+            cfg[k.as_str()] = v.clone();
+        }
+    }
+    merge_line(&mut cfg, &a.prompts[0])?;
     if let Some(s) = a.seed {
         cfg["seed"] = s.into();
     }
@@ -309,6 +358,8 @@ async fn run(a: Args) -> Result<(), String> {
     let mut first_video: Option<f64> = None;
     let mut stopped = false;
     let mut ended = false;
+    let mut chunks_seen = 0u64;
+    let by_chunks = !a.switch_at_chunks.is_empty();
     let hard_end = Instant::now() + Duration::from_secs_f64(a.seconds + 240.0);
     while !ended && Instant::now() < hard_end {
         if first_video.is_none() {
@@ -316,16 +367,23 @@ async fn run(a: Args) -> Result<(), String> {
         }
         if let Some(fv) = first_video {
             let since = (now_ms() - fv) / 1000.0;
-            if next < a.switch_at.len() && next + 1 < a.prompts.len() && since >= a.switch_at[next] {
+            let due = if by_chunks {
+                next < a.switch_at_chunks.len() && chunks_seen >= a.switch_at_chunks[next]
+            } else {
+                next < a.switch_at.len() && since >= a.switch_at[next]
+            };
+            if due && next + 1 < a.prompts.len() {
                 let v = next as u64 + 2;
                 let text = a.prompts[next + 1].clone();
-                let p = json!({"type": "prompt", "prompt_version": v, "prompt": text});
+                let mut p = json!({"type": "prompt", "prompt_version": v});
+                merge_line(&mut p, &text)?;
                 handle.send_message(ChannelMessage::text("control", p.to_string())).await.map_err(|e| e.to_string())?;
                 eprintln!("{:.1} s: prompt v{v}", since);
                 sent.push((v, now_ms(), text));
                 next += 1;
             }
-            if !stopped && since >= a.seconds {
+            let chunk_stop = a.stop_after_chunks.is_some_and(|n| chunks_seen >= n);
+            if !stopped && (since >= a.seconds || chunk_stop) {
                 handle.send_message(ChannelMessage::text("control", json!({"type": "stop"}).to_string())).await.map_err(|e| e.to_string())?;
                 stopped = true;
             }
@@ -333,6 +391,15 @@ async fn run(a: Args) -> Result<(), String> {
         match tokio::time::timeout(Duration::from_millis(100), msgs.recv()).await {
             Ok(Some((t, m))) => {
                 record(t, &m, &mut all);
+                if m["type"] == "chunk" {
+                    chunks_seen += 1;
+                }
+                if m["type"] == "segment_expanded" {
+                    eprintln!(
+                        "segment_expanded chunk {} v{} fallback {} {}/{} {} latency {} ms",
+                        m["chunk_index"], m["prompt_version"], m["fallback"], m["prompt_length"], m["prompt_limit"], m["prompt_unit"], m["latency_ms"]
+                    );
+                }
                 match m["type"].as_str() {
                     Some("chunk") => eprintln!(
                         "chunk {} v{} frames {} gen {:.2}s pace {} fps buffer {:.2}s recaches {}",
@@ -412,6 +479,10 @@ async fn run(a: Args) -> Result<(), String> {
         "generation_fps_mean": if gen_fps.is_empty() { 0.0 } else { gen_fps.iter().sum::<f64>() / gen_fps.len() as f64 },
         "generation_over_playback": if play_s > 0.0 { gen_s / play_s } else { 0.0 },
         "switches": switches,
+        "segments_expanded": of("segment_expanded").into_iter().map(|(t, m)| json!({"t_ms": t, "msg": m})).collect::<Vec<_>>(),
+        "configured": of("configured").into_iter().map(|x| x.1).next(),
+        "prompt_rejected": of("prompt_rejected").into_iter().map(|x| x.1).collect::<Vec<_>>(),
+        "output_events": all.iter().filter(|(_, m)| m["type"].as_str().is_some_and(|t| t.starts_with("output_"))).map(|x| x.1.clone()).collect::<Vec<_>>(),
         "final_metrics": fin,
     });
     let text = serde_json::to_string_pretty(&summary).unwrap_or_default();

@@ -1,0 +1,65 @@
+23:28:57 [r2-fetch] 3 tree(s) to fetch, 77.92 GB in 611 GETs of up to 2 x 64 MiB, concurrency 32, 256 CPUs; 0 present
+23:29:02 [r2-fetch] r2 6.2/77.9 GB, 1242 MB/s, eta 58s, trees 0/3 (now 1243 MB/s)
+23:29:05 [r2-fetch] tree qwen3-vl-4b-instruct-gguf: ready at 1cd86afb9a95c410a6038ab3b40d8b578c892266 (5.12 GB, 3 files, 7s since start)
+23:29:07 [r2-fetch] r2 9.7/77.9 GB, 966 MB/s, eta 71s, trees 1/3 (now 691 MB/s)
+23:29:07 [r2-fetch] sfwan21-1.3b/text_encoder/model-00002-of-00005.safetensors part 6: slow: 2.3 MB/s after 5s (recent parts 40 MB/s): fetched again on a new connection
+23:29:08 [r2-fetch] sfwan21-1.3b/text_encoder/model-00002-of-00005.safetensors part 20: slow: 4.2 MB/s after 6s (recent parts 35 MB/s): fetched again on a new connection
+23:29:09 [r2-fetch] sfwan21-1.3b/text_encoder/model-00002-of-00005.safetensors part 44: slow: 0.8 MB/s after 5s (recent parts 49 MB/s): fetched again on a new connection
+23:29:09 [r2-fetch] sfwan21-1.3b/text_encoder/model-00002-of-00005.safetensors part 34: slow: 0.7 MB/s after 6s (recent parts 49 MB/s): fetched again on a new connection
+23:29:09 [r2-fetch] sfwan21-1.3b/text_encoder/model-00002-of-00005.safetensors part 48: slow: 0.8 MB/s after 5s (recent parts 49 MB/s): fetched again on a new connection
+23:29:09 [r2-fetch] sfwan21-1.3b/text_encoder/model-00002-of-00005.safetensors part 58: slow: 4.5 MB/s after 5s (recent parts 49 MB/s): fetched again on a new connection
+23:29:09 [r2-fetch] sfwan21-1.3b/text_encoder/model-00002-of-00005.safetensors part 56: slow: 8.0 MB/s after 5s (recent parts 49 MB/s): fetched again on a new connection
+23:29:09 [r2-fetch] sfwan21-1.3b/text_encoder/model-00002-of-00005.safetensors part 60: slow: 3.0 MB/s after 4s (recent parts 49 MB/s): fetched again on a new connection
+23:29:09 [r2-fetch] sfwan21-1.3b/text_encoder/model-00002-of-00005.safetensors part 54: slow: 5.2 MB/s after 5s (recent parts 49 MB/s): fetched again on a new connection
+23:29:11 [r2-fetch] sfwan21-1.3b/text_encoder/model-00002-of-00005.safetensors part 68: slow: 2.5 MB/s after 5s (recent parts 42 MB/s): fetched again on a new connection
+23:29:11 [r2-fetch] sfwan21-1.3b/text_encoder/model-00002-of-00005.safetensors part 62: slow: 0.7 MB/s after 6s (recent parts 42 MB/s): fetched again on a new connection
+23:29:12 [r2-fetch] r2 13.2/77.9 GB, 878 MB/s, eta 74s, trees 1/3 (now 700 MB/s)
+23:29:12 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 2: slow: 4.7 MB/s after 5s (recent parts 42 MB/s): fetched again on a new connection
+23:29:13 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 12: slow: 5.2 MB/s after 5s (recent parts 44 MB/s): fetched again on a new connection
+23:29:14 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 22: slow: 2.4 MB/s after 5s (recent parts 49 MB/s): fetched again on a new connection
+23:29:14 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 32: slow: 1.0 MB/s after 4s (recent parts 49 MB/s): fetched again on a new connection
+23:29:14 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 16: slow: 3.1 MB/s after 5s (recent parts 49 MB/s): fetched again on a new connection
+23:29:14 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 34: slow: 1.9 MB/s after 4s (recent parts 49 MB/s): fetched again on a new connection
+23:29:15 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 42: slow: 9.4 MB/s after 4s (recent parts 49 MB/s): fetched again on a new connection
+23:29:15 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 48: slow: 2.0 MB/s after 4s (recent parts 49 MB/s): fetched again on a new connection
+23:29:15 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 44: slow: 3.8 MB/s after 4s (recent parts 49 MB/s): fetched again on a new connection
+23:29:15 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 46: slow: 3.0 MB/s after 4s (recent parts 49 MB/s): fetched again on a new connection
+23:29:15 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 40: slow: 13.1 MB/s after 4s (recent parts 49 MB/s): fetched again on a new connection
+23:29:15 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 38: slow: 12.7 MB/s after 5s (recent parts 49 MB/s): fetched again on a new connection
+23:29:17 [r2-fetch] r2 15.8/77.9 GB, 789 MB/s, eta 79s, trees 1/3 (now 524 MB/s)
+23:29:17 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 54: slow: 7.5 MB/s after 5s (recent parts 43 MB/s): fetched again on a new connection
+23:29:17 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 52: slow: 0.8 MB/s after 6s (recent parts 43 MB/s): fetched again on a new connection
+23:29:18 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 60: slow: 5.3 MB/s after 6s (recent parts 44 MB/s): fetched again on a new connection
+23:29:18 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 70: slow: 2.6 MB/s after 5s (recent parts 44 MB/s): fetched again on a new connection
+23:29:18 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 64: slow: 3.9 MB/s after 5s (recent parts 44 MB/s): fetched again on a new connection
+23:29:18 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 68: slow: 5.8 MB/s after 5s (recent parts 44 MB/s): fetched again on a new connection
+23:29:18 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 56: slow: 0.7 MB/s after 6s (recent parts 44 MB/s): fetched again on a new connection
+23:29:18 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 58: slow: 6.1 MB/s after 6s (recent parts 44 MB/s): fetched again on a new connection
+23:29:18 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 66: slow: 4.8 MB/s after 5s (recent parts 44 MB/s): fetched again on a new connection
+23:29:18 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 62: slow: 7.9 MB/s after 5s (recent parts 44 MB/s): fetched again on a new connection
+23:29:19 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 72: slow: 11.8 MB/s after 5s (recent parts 39 MB/s): fetched again on a new connection
+23:29:22 [r2-fetch] r2 18.3/77.9 GB, 732 MB/s, eta 81s, trees 1/3 (now 504 MB/s)
+23:29:27 [r2-fetch] r2 23.1/77.9 GB, 769 MB/s, eta 71s, trees 1/3 (now 950 MB/s)
+23:29:28 [r2-fetch] sfwan21-1.3b/text_encoder/model-00001-of-00005.safetensors part 68: slow: 4.9 MB/s after 5s (recent parts 40 MB/s): fetched again on a new connection
+23:29:28 [r2-fetch] sfwan21-1.3b/text_encoder/model-00001-of-00005.safetensors part 58: slow: 7.8 MB/s after 5s (recent parts 40 MB/s): fetched again on a new connection
+23:29:32 [r2-fetch] r2 29.1/77.9 GB, 831 MB/s, eta 59s, trees 1/3 (now 1206 MB/s)
+23:29:35 [r2-fetch] sfwan21-1.3b/vae/diffusion_pytorch_model.safetensors part 0: slow: 8.6 MB/s after 6s (recent parts 34 MB/s): fetched again on a new connection
+23:29:37 [r2-fetch] r2 34.7/77.9 GB, 867 MB/s, eta 50s, trees 1/3 (now 1120 MB/s)
+23:29:41 [r2-fetch] tree sfwan21-1.3b: ready at 4b44356635ae5e927ca552a220f768022be76004 (28.93 GB, 17 files, 43s since start)
+23:29:42 [r2-fetch] r2 42.6/77.9 GB, 947 MB/s, eta 37s, trees 2/3 (now 1584 MB/s)
+23:29:43 [r2-fetch] fasth3-trim-8step/vae/diffusion_pytorch_model.safetensors part 52: slow: 12.4 MB/s after 5s (recent parts 56 MB/s): fetched again on a new connection
+23:29:44 [r2-fetch] fasth3-trim-8step/transformer/diffusion_pytorch_model-00007-of-00008.safetensors part 2: slow: 14.9 MB/s after 4s (recent parts 58 MB/s): fetched again on a new connection
+23:29:47 [r2-fetch] r2 49.2/77.9 GB, 984 MB/s, eta 29s, trees 2/3 (now 1322 MB/s)
+23:29:52 [r2-fetch] r2 54.6/77.9 GB, 993 MB/s, eta 23s, trees 2/3 (now 1075 MB/s)
+23:29:57 [r2-fetch] r2 60.2/77.9 GB, 1003 MB/s, eta 18s, trees 2/3 (now 1112 MB/s)
+23:30:02 [r2-fetch] r2 66.7/77.9 GB, 1026 MB/s, eta 11s, trees 2/3 (now 1311 MB/s)
+23:30:07 [r2-fetch] r2 71.9/77.9 GB, 1027 MB/s, eta 6s, trees 2/3 (now 1037 MB/s)
+23:30:08 [r2-fetch] fasth3-trim-8step/transformer/diffusion_pytorch_model-00002-of-00008.safetensors part 38: slow: 7.2 MB/s after 6s (recent parts 36 MB/s): fetched again on a new connection
+23:30:09 [r2-fetch] fasth3-trim-8step/transformer/diffusion_pytorch_model-00002-of-00008.safetensors part 48: slow: 4.6 MB/s after 6s (recent parts 38 MB/s): fetched again on a new connection
+23:30:11 [r2-fetch] fasth3-trim-8step/transformer/diffusion_pytorch_model-00002-of-00008.safetensors part 33: slow: 10.2 MB/s after 5s (recent parts 38 MB/s): fetched again on a new connection
+23:30:12 [r2-fetch] r2 76.7/77.9 GB, 1022 MB/s, eta 1s, trees 2/3 (now 958 MB/s)
+23:30:14 [r2-fetch] fasth3-trim-8step/transformer/diffusion_pytorch_model-00001-of-00008.safetensors part 40: slow: 10.5 MB/s after 6s (recent parts 40 MB/s): fetched again on a new connection
+23:30:15 [r2-fetch] fasth3-trim-8step/transformer/diffusion_pytorch_model-00001-of-00008.safetensors part 76: slow: 7.4 MB/s after 5s (recent parts 44 MB/s): fetched again on a new connection
+23:30:17 [r2-fetch] r2 77.8/77.9 GB, 972 MB/s, eta 0s, trees 2/3 (now 219 MB/s)
+23:30:19 [r2-fetch] tree fasth3-trim-8step: ready at 9edcb6511d5ff8dd1579e8eec8afee77e098b8d8 (43.88 GB, 19 files, 82s since start)
+23:30:19 [r2-fetch] weights ready: 3 tree(s), 77.92 GB fetched in 82.2s (947 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 44

@@ -24,7 +24,7 @@
 //!   `chunk_duration_note` when an option is missing. Causal models have no
 //!   chunk to size: those keys are absent.
 
-use fastvideo_protocol::{Family, ModelCaps, StreamCaps};
+use fastvideo_protocol::{Family, ModelCaps, StreamCaps, Task};
 use serde_json::{json, Value};
 
 use super::control::{CausalLimits, Limits};
@@ -71,6 +71,7 @@ pub fn model_limits(caps: &ModelCaps, default_seconds: f64, causal_chunk_blocks:
             resolutions: served_resolutions(caps),
             script_max_end_images: 0,
             causal: Some(CausalLimits { block_frames, block_seconds, chunk_blocks, context }),
+            image_conditioning: false,
             ..Limits::default()
         };
     }
@@ -93,6 +94,8 @@ pub fn model_limits(caps: &ModelCaps, default_seconds: f64, causal_chunk_blocks:
             .filter(|t| t.short_edge == Resolution::R1080.short_edge())
             .and_then(|t| t.max_frames)
             .map(|n| (f64::from(n) / f64::from(fps.max(1))).floor()),
+        // FastH3 Trim serves text-to-video only (caps.rs `h3_caps`).
+        image_conditioning: caps.supports(Task::I2V),
         ..Limits::default()
     };
     // The default is one of the served `chunk_duration` options.
