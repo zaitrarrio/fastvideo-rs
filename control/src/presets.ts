@@ -135,6 +135,15 @@ export const POOL_PRESETS: PoolPreset[] = [
     pool: { id: "h3-lightx2v-turbo", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-h3-lightx2v-turbo.toml"), models: [{ id: "h3-lightx2v-turbo", family: "h3", recipe: "h3-lightx2v-turbo" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
   },
   {
+    id: "h3-lightx2v-turbo-v01",
+    min_vram_gb: 80,
+    title: "MiniMax-H3 Turbo LoRA (lightx2v v0.1, the Space's)",
+    description: "MiniMax-H3 with lightx2v/Minimax-h3-Turbo FL2VA/T2VA 4-step v0.1 (Apache-2.0), the file the MiniMax-H3-Turbo-Lora Space folds: 4 forwards at shifts 12 / 3, dense attention, MXFP8; text-, image- and first/last-frame-to-video with audio.",
+    weights: ["h3-base", "h3-turbo-loras/lightx2v-v0.1"],
+    prequant: ["h3-base/text_encoder_fp8"],
+    pool: { id: "h3-lightx2v-turbo-v01", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-h3-lightx2v-turbo-v01.toml"), models: [{ id: "h3-lightx2v-turbo-v01", family: "h3", recipe: "lightx2v-turbo-v0.1" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
+  },
+  {
     id: "fastwan21",
     min_vram_gb: 24,
     title: "FastWan 2.1 1.3B",

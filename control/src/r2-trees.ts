@@ -30,6 +30,7 @@ export const R2_TREES: Record<string, R2Tree> = {
   "h3-to-ltx": { rev: "1792c42689a0f22de880eaf57a187c6a373a636d", files: 2, bytes: 389542136, manifest_sha256: "31cdfb355624b4b3f784d591ebfa18e845bf5f4e776068722530d4a9777030e4", source: "hub-via-dir" },
   "h3-turbo-loras/larry": { rev: "43a74557ac3f6539db8e0f2a959d03feb7a81480", files: 2, bytes: 779857264, manifest_sha256: "901f8cf59955cadd8e2a0fa70c366e20e2c811837c627d69671556e16ef0e4e0", source: "hub" },
   "h3-turbo-loras/lightx2v": { rev: "3ec17a324ced54151364f24f8b5fb6bf7e26414f", files: 2, bytes: 1383679204, manifest_sha256: "ffdc68e092e743fe7b87a4e50d02be44b8ecf25ae0b02025d919c3c251de1974", source: "hub" },
+  "h3-turbo-loras/lightx2v-v0.1": { rev: "3ec17a324ced54151364f24f8b5fb6bf7e26414f", files: 2, bytes: 1383679284, manifest_sha256: "e51cf57fa0fbda4203b635a86bb537080c4dbe3aabcc0320dc9fee332a61c396", source: "hub" },
   "hy15-480-i2v": { rev: "854c04a4c8a53d990b418c7478f0802c0fc8c726", files: 25, bytes: 33780486230, manifest_sha256: "55912c6500262a4378e3ec3a863d2fbc573ddd021a4344e22596ef619e1c9ece", source: "hub-via-dir" },
   "hy15-480-t2v": { rev: "286be7ce72277246578a3e3cc2487e95ddae5bcf", files: 32, bytes: 53384316582, manifest_sha256: "ec98bbd7552735902da20b06fe7e4417a3d653aa3eef08d58b8fa1b229f8b8e3", source: "hub-via-dir" },
   "hy15-720-i2v": { rev: "a1d10cf3af7978bf090b0ab3d8cd79b143444e23", files: 27, bytes: 53384293857, manifest_sha256: "423e5a0f2292314941585eeac2af739c0c40763851c51be87620d6ec21ff22f8", source: "hub-via-dir" },

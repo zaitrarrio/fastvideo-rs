@@ -175,7 +175,7 @@ needs() {
     # MiniMax-H3 Turbo LoRAs (h3-larry-turbo, h3-lightx2v-turbo) on the base tree;
     # docs/ports/h3-turbo-loras.md. Plus their sha: lists.
     h3-turbo-loras)
-      echo "$(needs h3-base) h3-turbo-loras:larry/minimax_h3_turbo_4step_ema_ckpt850.safetensors h3-turbo-loras:lightx2v/minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors" ;;
+      echo "$(needs h3-base) h3-turbo-loras:larry/minimax_h3_turbo_4step_ema_ckpt850.safetensors h3-turbo-loras:lightx2v/minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors h3-turbo-loras:lightx2v-v0.1/minimax_h3_fl2v_turbo_4step_v0.1.safetensors" ;;
     # The optional NCII prompt guard (fv-serve [moderation] ncii). Plus its sha: list.
     ncii-guard) echo ":auxiliary/ncii-light-guard/model.safetensors" ;;
     *) return 1 ;;
@@ -196,7 +196,7 @@ sha_dests() {
     longlive2-5b-nvfp4) echo "longlive2-5b-nvfp4-s4 longlive2-5b-nvfp4-s2" ;;
     longlive-plug)
       echo "longlive-plug/minimax-h3-few-step longlive-plug/minimax-h3-cfg longlive-plug/wan21-t2v-14b-few-step longlive-plug/wan21-t2v-14b-cfg longlive-plug/wan22-ti2v-5b-few-step longlive-plug/wan22-ti2v-5b-cfg" ;;
-    h3-turbo-loras) echo "h3-turbo-loras/larry h3-turbo-loras/lightx2v" ;;
+    h3-turbo-loras) echo "h3-turbo-loras/larry h3-turbo-loras/lightx2v h3-turbo-loras/lightx2v-v0.1" ;;
     ncii-guard) echo "auxiliary/ncii-light-guard" ;;
   esac
 }

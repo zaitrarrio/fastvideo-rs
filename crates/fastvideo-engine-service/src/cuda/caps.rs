@@ -1669,7 +1669,12 @@ impl ProcessPlan {
                 if let Some(name) = &r.profile {
                     let p = load_profile(name)?;
                     if let Some(want) = &p.recipe {
-                        if h3cfg::H3InferenceContract::named(want).ok()
+                        // A Turbo LoRA profile serves every step count and
+                        // adapter file of its family (`steps`, the v0.1 recipe):
+                        // its techniques do not depend on the ladder.
+                        let turbo = turbo_lora_of(want).is_some() && turbo_lora_of(&r.recipe).is_some();
+                        if !turbo
+                            && h3cfg::H3InferenceContract::named(want).ok()
                             != h3cfg::H3InferenceContract::named(&r.recipe).ok()
                         {
                             return Err(format!(
@@ -2348,6 +2353,11 @@ mod tests {
         assert_eq!((r.recipe.as_str(), r.steps, r.lora_strength), ("larry-turbo-5step", 5, Some(1.1)));
         let r = h3r(model_from_config(&l, &entry("lightx2v-turbo-v0.1", &[])).unwrap());
         assert_eq!((r.recipe.as_str(), r.steps), ("lightx2v-turbo-v0.1", 4));
+        // Another step count or the v0.1 file keeps the family's profile and process plan.
+        for (rec, extra) in [("h3-larry-turbo", ("steps", "4")), ("lightx2v-turbo-v0.1", ("steps", "4"))] {
+            let m = model_from_config(&l, &entry(rec, &[extra])).unwrap();
+            ProcessPlan::for_models(&[m]).unwrap_or_else(|e| panic!("{rec}: {e}"));
+        }
         assert!(model_from_config(&l, &entry("h3-larry-turbo", &[("steps", "12")])).is_err());
         assert!(model_from_config(&l, &entry("h3-larry-turbo", &[("lora_strength", "nan")])).is_err());
         assert!(model_from_config(&l, &entry("h3-turbo", &[("steps", "4")])).is_err());
