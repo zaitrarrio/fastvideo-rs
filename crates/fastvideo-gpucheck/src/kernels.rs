@@ -2577,6 +2577,10 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
         crate::nvfp4_linear_check::run(c.report, c.seed)
     })?;
 
+    // The sparse FP4 VSA attention for the H3 NVFP4 checkpoints (sm_120,
+    // docs/ports/fasth3-sparse-fp4-attn.md).
+    group(&mut c, "h3_fp4_attn", |c| crate::kernels_fp4::run(c.report, c.seed))?;
+
     // Reference FP8 recipes (W8A8 / MXFP8) and bf16 activations.
     group(&mut c, "fp8_recipes", |c| {
         crate::kernels_fp8::fp8_recipes(c.report, &mut c.seed)
