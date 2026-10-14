@@ -109,7 +109,7 @@ COMMON=(--text-encoder streamed --text-weights "$W/h3-base" --text-cache "$L/tex
 run() { # <name>
   local name="$1" dir="$SRV/runs/$1" bin="$BIN" args=() envs=(FV_RUN="$1") rc
   case "$name" in
-    main-default) bin="$MAIN"; args=(--weights $L/main-v2) ;;
+    main-default) bin="$MAIN"; args=(--weights "$L/main-v2") ;;
     v2-default) args=(--weights "$V2" --h3-recipe v2-nvfp4) ;;
     v2-vae0) args=(--weights "$V2" --h3-recipe v2-nvfp4); envs+=(FASTVIDEO_H3_VAE_NVFP4=0) ;;
     v2-preview) args=(--weights "$V2" --h3-recipe v2-nvfp4 --taeh3-weights "$TAE") ;;
