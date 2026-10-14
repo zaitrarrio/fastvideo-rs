@@ -610,6 +610,9 @@ pub enum AttnMode<'a> {
     },
     /// One Sol-Attn layer at this tau.
     SolLayer { tau: f64, policy: &'a H3SolPolicy },
+    /// VDN-H3 hybrid attention: the window softmax plus the linear branch
+    /// ([`super::vdn`]); every block must carry a branch.
+    Vdn(&'a super::vdn::VdnPlan),
 }
 
 /// A dense block's attention: the FP8 `Q K^T` kernel when the request runs
@@ -630,7 +633,7 @@ fn dense_attention(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor) -> Result<Cud
 fn record_attn(step: usize, layer: usize, mode: &AttnMode<'_>) {
     use crate::wan::evalstats::{attn, AttnKind};
     let kind = match mode {
-        AttnMode::Dense | AttnMode::Sol(_) | AttnMode::SolVsa { .. } => AttnKind::Dense,
+        AttnMode::Dense | AttnMode::Sol(_) | AttnMode::SolVsa { .. } | AttnMode::Vdn(_) => AttnKind::Dense,
         AttnMode::Vsa(_) => AttnKind::Vsa,
         AttnMode::SolLayer { tau, .. } => AttnKind::Sol { tau: *tau },
     };
@@ -1445,6 +1448,8 @@ pub(crate) struct Attention {
     heads: usize,
     head_dim: usize,
     eps: f32,
+    /// VDN-H3: the block's linear branch and gates ([`AttnMode::Vdn`]).
+    pub(crate) vdn: Option<Arc<super::vdn::VdnBranch>>,
 }
 
 impl Attention {
@@ -1558,6 +1563,7 @@ impl Attention {
                 heads: cfg.num_attention_heads,
                 head_dim: d,
                 eps: cfg.qk_norm_eps as f32,
+                vdn: None,
             });
         }
         let keys: Vec<&str> = names.iter().map(String::as_str).collect();
@@ -1588,6 +1594,7 @@ impl Attention {
             heads: cfg.num_attention_heads,
             head_dim: d,
             eps: cfg.qk_norm_eps as f32,
+            vdn: None,
         })
     }
 
@@ -1598,6 +1605,9 @@ impl Attention {
         rope: Option<(&CudaTensor, &CudaTensor)>,
         mode: AttnMode<'_>,
     ) -> Result<CudaTensor> {
+        if let AttnMode::Vdn(plan) = mode {
+            return self.forward_vdn(n, rope, plan);
+        }
         // Spark Sol layers attend in `[visual | text+audio]` order. Every op
         // before attention is row-wise, so gather the input rows (and the RoPE
         // rows) rather than Q/K/V; the inverse gather follows `to_out`.
@@ -1621,7 +1631,9 @@ impl Attention {
     /// activation: an all-MXFP8 QKV (no bf16 gate rows) and no row gather.
     fn accepts_mx(&self, mode: AttnMode<'_>) -> bool {
         let gathered = matches!(mode, AttnMode::SolLayer { policy, .. } if policy.permutation.is_some());
-        self.qkvg.quant_kind() == Some(QuantKind::Mxfp8) && !self.has_gate && !gathered
+        // VDN reads the bf16 attention input itself (gates, decay, branch).
+        let vdn = matches!(mode, AttnMode::Vdn(_));
+        self.qkvg.quant_kind() == Some(QuantKind::Mxfp8) && !self.has_gate && !gathered && !vdn
     }
 
     /// [`Self::forward`] on a fused producer's output.
@@ -1727,9 +1739,68 @@ impl Attention {
                 ));
             }
             AttnMode::SolLayer { tau, policy } => policy.attend(&q, &k, &v, tau)?,
+            AttnMode::Vdn(_) => {
+                return Err(msg("h3 attn: the VDN mode runs through Attention::forward_vdn"));
+            }
         };
         drop(packed);
         self.project_out(out, permutation)
+    }
+
+    /// Per-head RMSNorm + RoPE of the `col_off` projection of `packed`, BHSD.
+    fn norm_rope(
+        &self,
+        packed: &CudaTensor,
+        rope: Option<(&CudaTensor, &CudaTensor)>,
+        col_off: usize,
+        w: &CudaTensor,
+    ) -> Result<CudaTensor> {
+        if bf16_activations() {
+            return fused16::qk_norm_rope(packed, w, rope, self.heads, self.head_dim, col_off, self.eps);
+        }
+        let t = packed
+            .split_heads_bhsd(col_off, self.heads, self.head_dim)?
+            .rms_norm(w, self.eps)?;
+        match rope {
+            Some((cos, sin)) => t.rope_half(cos, sin),
+            None => Ok(t),
+        }
+    }
+
+    /// VDN-H3's hybrid attention (`M:HybridAttention._hybrid_forward`):
+    /// `to_out(window_softmax(q, k, v) * softmax_gate(n))`, plus
+    /// `to_out_linear(linear_branch(...))` on the inner video rows.
+    fn forward_vdn(
+        &self,
+        n: &CudaTensor,
+        rope: Option<(&CudaTensor, &CudaTensor)>,
+        plan: &super::vdn::VdnPlan,
+    ) -> Result<CudaTensor> {
+        let branch = self
+            .vdn
+            .as_ref()
+            .ok_or_else(|| msg("h3 attn: VDN mode on a block without a VDN branch"))?;
+        let inner = self.heads * self.head_dim;
+        let packed = phase("h3_attn_qkvg", || self.qkvg.forward(n))?;
+        let aux = phase("h3_vdn_aux", || branch.aux(n))?;
+        let q = phase("h3_attn_q", || self.norm_rope(&packed, rope, 0, &self.norm_q))?;
+        let k = phase("h3_attn_k", || self.norm_rope(&packed, rope, inner, &self.norm_k))?;
+        let v = phase("h3_attn_v", || {
+            packed.split_heads_bhsd(2 * inner, self.heads, self.head_dim)
+        })?;
+        let o = phase("h3_vdn_window", || {
+            crate::wan::nn::sdpa_vdn_window(&q, &k, &v, None, plan.window)
+        })?;
+        drop((q, k, v));
+        let o = phase("h3_vdn_gate", || branch.gate_heads(o, &aux))?;
+        let out = self.project_out(o, None)?;
+        if !plan.branch_active() {
+            return Ok(out);
+        }
+        let lin = phase("h3_vdn_branch", || branch.forward(n, &packed, &aux, plan))?;
+        drop((packed, aux));
+        let (row0, _) = plan.layout.inner_rows();
+        phase("h3_vdn_add", || super::vdn::add_rows(out, &lin, row0))
     }
 
     /// q/k/v (and the VSA gate) as f32 BHSD holding the bf16 path's values,
@@ -2056,6 +2127,7 @@ impl Block {
                 heads: cfg.num_attention_heads,
                 head_dim: d,
                 eps: cfg.qk_norm_eps as f32,
+                vdn: None,
             },
             ff: FeedForward {
                 ff_in: r.linear(&format!("{prefix}.ff.net.0.proj"), hidden, 2 * cfg.ffn_dim)?,
@@ -2801,6 +2873,32 @@ impl H3Transformer {
         runtime.residual = Some(after.sub(&before)?);
         runtime.book();
         Ok(())
+    }
+
+    /// Attach VDN-H3's linear branch and gates (`linear_branch/model.safetensors`)
+    /// to every block. The blocks must be resident.
+    pub fn attach_vdn(&mut self, map: &WeightMap) -> Result<()> {
+        if self.blocks.residency().is_streamed() {
+            return Err(msg("h3 vdn: the hybrid attention needs the DiT resident (dit_offload = resident)"));
+        }
+        let cfg = self.cfg.clone();
+        for (i, block) in self.blocks.skeletons_mut().enumerate() {
+            block.attn.vdn = Some(Arc::new(super::vdn::VdnBranch::load(
+                map,
+                &format!("transformer_blocks.{i}.attn"),
+                &cfg,
+            )?));
+        }
+        crate::wan::log::info(format_args!(
+            "h3 vdn: linear branch attached to {} blocks",
+            self.blocks.len()
+        ));
+        Ok(())
+    }
+
+    /// Whether every block carries a VDN branch ([`Self::attach_vdn`]).
+    pub fn has_vdn(&self) -> bool {
+        !self.blocks.is_empty() && (0..self.blocks.len()).all(|i| self.blocks.skeleton(i).attn.vdn.is_some())
     }
 
     pub fn config(&self) -> &H3TransformerConfig {

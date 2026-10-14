@@ -33,6 +33,8 @@ const SRC: &str = "src/wan/kernels.cu";
 const SRC_FP8: &str = "src/wan/attn_fp8.cu";
 /// The SageAttention2-style module (`wan::attn_sage`): same options, sm_89+.
 const SRC_SAGE: &str = "src/wan/attn_sage.cu";
+/// The VDN-H3 linear-branch module (`h3::vdn`): IEEE math (no fast math), sm_80+.
+const SRC_VDN: &str = "src/h3/vdn.cu";
 /// Datacenter attention kernels (tcgen05 / wgmma): arch-specific targets only.
 const DC_SRC: &str = "src/wan/attn_dc.cu";
 /// (SM, nvcc arch) pairs attn_dc.cu is built for, when their SM is in
@@ -190,6 +192,7 @@ fn main() {
     println!("cargo:rerun-if-changed={SRC}");
     println!("cargo:rerun-if-changed={SRC_FP8}");
     println!("cargo:rerun-if-changed={SRC_SAGE}");
+    println!("cargo:rerun-if-changed={SRC_VDN}");
     println!("cargo:rerun-if-changed={DC_SRC}");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=NVCC");
@@ -203,6 +206,7 @@ fn main() {
     let table = out.join("aot.rs");
     let fp8_table = out.join("aot_attn_fp8.rs");
     let sage_table = out.join("aot_attn_sage.rs");
+    let vdn_table = out.join("aot_h3_vdn.rs");
     let cuda_on = env::var_os("CARGO_FEATURE_CUDA").is_some();
     let nvcc = if cuda_on { find_nvcc() } else { None };
     let oxide_rows = find_oxide_cubins();
@@ -226,6 +230,7 @@ fn main() {
         }
         write_fp8(&fp8_table, "");
         write_module_table(&sage_table, "AOT_ATTN_SAGE", "");
+        write_module_table(&vdn_table, "AOT_H3_VDN", "");
         write_aot(&table, "", &oxide, "");
         return;
     };
@@ -330,6 +335,11 @@ fn main() {
         "AOT_ATTN_SAGE",
         &module_entries(&nvcc, &out, &sms, SRC_SAGE, "attn_sage"),
     );
+    write_module_table(
+        &vdn_table,
+        "AOT_H3_VDN",
+        &precise_module_entries(&nvcc, &out, &sms, SRC_VDN, "h3_vdn"),
+    );
     println!(
         "cargo:warning=fastvideo-cudarc: embedded cubins for sm {:?} via {}",
         sms,
@@ -354,6 +364,45 @@ fn write_module_table(table: &Path, name: &str, entries: &str) {
 /// older than the box's NVRTC refuses NVRTC's PTX, so the cubin is the path.
 fn fp8_entries(nvcc: &Path, out: &Path, sms: &[u32]) -> String {
     module_entries(nvcc, out, sms, SRC_FP8, "attn_fp8")
+}
+
+/// An sm_80+ module (`src`) compiled like `kernels.cu` (IEEE division and
+/// square root, no denormal flush, FMA contraction on), cubin + PTX per SM.
+fn precise_module_entries(nvcc: &Path, out: &Path, sms: &[u32], src: &str, stem: &str) -> String {
+    let mut entries = String::new();
+    for sm in sms.iter().filter(|&&s| s >= 80) {
+        let cubin = out.join(format!("{stem}_sm{sm}.cubin"));
+        let ptx = out.join(format!("{stem}_compute{sm}.ptx"));
+        for (kind, arch, dest) in [
+            ("-cubin", format!("sm_{sm}"), &cubin),
+            ("-ptx", format!("compute_{sm}"), &ptx),
+        ] {
+            let status = Command::new(nvcc)
+                .args([
+                    kind,
+                    "-arch",
+                    &arch,
+                    "-O3",
+                    "-std=c++17",
+                    "--fmad=true",
+                    "--prec-div=true",
+                    "--prec-sqrt=true",
+                    "--ftz=false",
+                    "-o",
+                ])
+                .arg(dest)
+                .arg(src)
+                .status()
+                .unwrap_or_else(|e| panic!("running {}: {e}", nvcc.display()));
+            assert!(status.success(), "nvcc {kind} -arch={arch} failed for {src}");
+        }
+        entries.push_str(&format!(
+            "    ({sm}, include_bytes!({:?}), include_str!({:?})),\n",
+            cubin.display(),
+            ptx.display()
+        ));
+    }
+    entries
 }
 
 /// An sm_89+ attention module (`src`) as cubin + PTX per SM, named `stem`.

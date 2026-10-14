@@ -325,6 +325,20 @@ pub fn qk_norm_rope_row(
 // Recipe tables
 // ---------------------------------------------------------------------------
 
+thread_local! {
+    static SCOPED_DEFAULT: std::cell::Cell<Option<QuantMode>> = const { std::cell::Cell::new(None) };
+}
+
+/// Restores the previous [`QuantMode::scoped_default`] when dropped.
+#[must_use = "the default applies only while the guard lives"]
+pub struct ScopedQuantDefault(Option<QuantMode>);
+
+impl Drop for ScopedQuantDefault {
+    fn drop(&mut self) {
+        SCOPED_DEFAULT.with(|d| d.set(self.0));
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum QuantMode {
     #[default]
@@ -358,11 +372,24 @@ impl QuantMode {
     /// `=mxfp8` (e.g. from a technique profile) on a live pre-Blackwell device
     /// runs W8A8 instead: cuBLASLt has no MXFP8 kernels below sm_100, and
     /// W8A8 is the other reference recipe (said once in the log).
+    ///
+    /// A model whose recipe defaults to bf16 (VDN-H3) loads under
+    /// [`QuantMode::scoped_default`]: unset then means that default instead of
+    /// the device's; an explicit `FASTVIDEO_H3_QUANT` still wins.
     pub fn from_env() -> std::result::Result<Self, String> {
         match fastvideo_models::techniques::settings::var(ENV) {
             Some(v) => Ok(Self::parse(&v)?.for_device()),
-            None => Ok(Self::default_for_device()),
+            None => Ok(SCOPED_DEFAULT
+                .with(|d| d.get())
+                .map_or_else(Self::default_for_device, Self::for_device)),
         }
+    }
+
+    /// What an unset `FASTVIDEO_H3_QUANT` means on this thread until the guard
+    /// drops (a model load runs on one thread; dropping the guard restores the
+    /// previous default, so other models keep theirs).
+    pub fn scoped_default(mode: Self) -> ScopedQuantDefault {
+        ScopedQuantDefault(SCOPED_DEFAULT.with(|d| d.replace(Some(mode))))
     }
 
     fn for_device(self) -> Self {
@@ -1759,6 +1786,27 @@ mod tests {
         assert_eq!(QuantMode::parse("W8A8").unwrap(), QuantMode::W8A8);
         assert_eq!(QuantMode::parse("off").unwrap(), QuantMode::Off);
         assert!(QuantMode::parse("int4").is_err());
+    }
+
+    /// VDN-H3 loads under a bf16 scoped default; an explicit
+    /// `FASTVIDEO_H3_QUANT` would still win, and the guard restores the
+    /// previous default (nested guards unwind in order).
+    #[test]
+    fn a_scoped_default_applies_only_while_its_guard_lives() {
+        if fastvideo_models::techniques::settings::var(ENV).is_some() {
+            return; // an explicit setting overrides any default
+        }
+        let device = QuantMode::from_env().unwrap();
+        {
+            let _outer = QuantMode::scoped_default(QuantMode::Off);
+            assert_eq!(QuantMode::from_env().unwrap(), QuantMode::Off);
+            {
+                let _inner = QuantMode::scoped_default(QuantMode::W8A8);
+                assert_eq!(QuantMode::from_env().unwrap(), QuantMode::W8A8);
+            }
+            assert_eq!(QuantMode::from_env().unwrap(), QuantMode::Off);
+        }
+        assert_eq!(QuantMode::from_env().unwrap(), device);
     }
 
     #[test]

@@ -530,6 +530,137 @@ body_max_mb = 64
 [gateway]
 pool = "h3-lightx2v-turbo-v01"
 `,
+  "runpod-vdn-h3.toml": `# fv-serve on Runpod: VDN-H3 (Video DeltaNet on MiniMax-H3, docs/ports/vdn-h3.md).
+# Secrets as in runpod.toml. Weights: $FV_WEIGHTS/h3-base (the MiniMax-H3 DiT,
+# both VAEs, the text encoder and tokenizer) and
+# $FV_WEIGHTS/vdn-h3-stage-b-2000/stage-b-step-2000 (the hybrid attention's
+# linear branch and the stage-B LoRA, merged into h3-base's attention at load).
+#
+# The stage-B model on its own schedule: 50 forwards on the uniform grid,
+# shifts 12 / 3, no CFG; every block attends with a chunk-aligned window
+# softmax plus the frame-wise delta-rule linear branch. bf16 linears (owner
+# decision 2026-10-14; FASTVIDEO_H3_QUANT=mxfp8 opts in). Text-to-video with
+# audio, 768p by default and 480p, 4-15 s. The DiT stays resident (the hybrid
+# needs it): its own pool. The 8-step model is runpod-vdn-h3-8step.toml.
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+
+[[models]]
+id = "vdn-h3"
+family = "h3"
+recipe = "vdn-h3-50step"
+weights = "\${FV_WEIGHTS}/h3-base"
+# The VDN checkpoint: the catalog's vdn_weights,
+# \${FV_WEIGHTS}/vdn-h3-stage-b-2000/stage-b-step-2000.
+resident = true
+served_names = ["vdn-h3-50step"]
+# No warm-up: it runs an image-to-video generation (not offered here) and a
+# text-to-video one, each 50 forwards.
+warmup = false
+
+[aliases]
+"VDN-H3" = "vdn-h3"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = false
+ltx = false
+reactor = false
+native = true
+
+[limits]
+queue_max = 16
+body_max_mb = 64
+
+[gateway]
+pool = "vdn-h3"
+`,
+  "runpod-vdn-h3-8step.toml": `# fv-serve on Runpod: VDN-H3 8-step (the DMD-distilled Video DeltaNet on
+# MiniMax-H3, docs/ports/vdn-h3.md). Secrets as in runpod.toml. Weights:
+# $FV_WEIGHTS/h3-base (the MiniMax-H3 DiT, both VAEs, the text encoder and
+# tokenizer), $FV_WEIGHTS/vdn-h3-dmd-250-turbo/stage-dmd-step-250 (the turbo
+# LoRA) and $FV_WEIGHTS/vdn-h3-stage-b-2000/stage-b-step-2000 (the linear branch
+# and the default LoRA, byte-identical in both stages; the catalog's
+# vdn_shared). Both LoRAs merge into h3-base at load.
+#
+# 8 forwards on the uniform grid, shifts 12 / 3, no CFG; every block attends
+# with a chunk-aligned window softmax plus the frame-wise delta-rule linear
+# branch. bf16 linears (FASTVIDEO_H3_QUANT=mxfp8 opts in). Text-to-video with
+# audio, 768p by default and 480p, 4-15 s. The DiT stays resident: its own pool.
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+
+[[models]]
+id = "vdn-h3-8step"
+family = "h3"
+recipe = "vdn-h3-8step"
+weights = "\${FV_WEIGHTS}/h3-base"
+# The VDN checkpoint: the catalog's vdn_weights / vdn_shared.
+resident = true
+# No warm-up: it runs an image-to-video generation (not offered here).
+warmup = false
+
+[aliases]
+"VDN-H3-8step" = "vdn-h3-8step"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = false
+ltx = false
+reactor = false
+native = true
+
+[limits]
+queue_max = 32
+body_max_mb = 64
+
+[gateway]
+pool = "vdn-h3-8step"
+`,
   "runpod-longlive.toml": `# fv-serve on a Runpod pod: LongLive-1.3B causal streaming (the SF-Wan
 # engine with the LongLive transformer and its prompt-switch KV re-cache,
 # docs/serve/research-longlive.md). Secrets as in runpod.toml.

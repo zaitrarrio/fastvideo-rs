@@ -1,0 +1,21 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[] oxide_embedded=0
+[fastvideo] sdpa: vdn window mma B=1 H=2 S=618 D=128 video=58+14x40 chunk=5 radius=1
+[fastvideo] sdpa: fused mma B=1 H=2 Sq=378 Sk=378 D=128
+[fastvideo] h3 vdn: kernels loaded (cubin sm120, 0.0s, sm120)
+[PASS] kernels/vdn/window_attn_f64 {"max_abs":0.0010739266872406006,"note":"bf16 output vs f64","rel_l2":0.0020519503373121343} (limits {"rel_l2_max":0.01})
+[PASS] kernels/vdn/window_attn_full_cover_vs_dense {"max_abs":0.0,"note":"bitwise against the dense V2 kernel","rel_l2":0.0} (limits {"rel_l2_max":0.0})
+[PASS] kernels/vdn/features_q {"max_abs":0.0009749829769134521,"note":"bf16 out","rel_l2":0.001583386169668876} (limits {"rel_l2_max":0.01})
+[PASS] kernels/vdn/sconv5 {"max_abs":0.015044212341308594,"note":"bf16 out","rel_l2":0.0016609440175487597} (limits {"rel_l2_max":0.01})
+[PASS] kernels/vdn/tconv5_silu_l2 {"max_abs":0.001922905445098877,"note":"bf16 out","rel_l2":0.0016670661097961882} (limits {"rel_l2_max":0.01})
+[PASS] kernels/vdn/frame_stats_A {"max_abs":8.940696716308594e-8,"note":"fp32","rel_l2":8.663387410390361e-8} (limits {"rel_l2_max":0.00001})
+[PASS] kernels/vdn/frame_stats_B {"max_abs":0.0001220703125,"note":"bf16-rounded GEMM output","rel_l2":1.333611950236689e-6} (limits {"rel_l2_max":0.001})
+[PASS] kernels/vdn/kda_alpha {"max_abs":1.1920928955078125e-7,"note":"fp32","rel_l2":7.111629388624295e-8} (limits {"rel_l2_max":0.0001})
+[PASS] kernels/vdn/solve_T {"max_abs":6.556510925292969e-7,"note":"Gauss-Jordan fp32 vs Cholesky f64","rel_l2":3.0356659785865535e-7} (limits {"rel_l2_max":0.0001})
+[PASS] kernels/vdn/solve_J {"max_abs":5.662441253662109e-7,"note":"fp32 vs f64","rel_l2":4.475251446840161e-7} (limits {"rel_l2_max":0.0001})
+[PASS] kernels/vdn/text_state {"max_abs":1.043081283569336e-7,"note":"fp32 vs f64","rel_l2":4.6020847281028895e-7} (limits {"rel_l2_max":0.0001})
+[PASS] kernels/vdn/scan_forward {"max_abs":4.172325134277344e-7,"note":"fp32 vs f64","rel_l2":2.9298678351673373e-7} (limits {"rel_l2_max":0.0001})
+[PASS] kernels/vdn/scan_reverse {"max_abs":3.2782554626464844e-7,"note":"fp32 vs f64","rel_l2":2.927547378311518e-7} (limits {"rel_l2_max":0.0001})
+[PASS] kernels/vdn/gather_bridge {"max_abs":0.0002433285117149353,"note":"bf16 out","rel_l2":0.001658722415342474} (limits {"rel_l2_max":0.01})
+[PASS] kernels/vdn/readout_norm_gate {"max_abs":0.018074750900268555,"note":"bf16 GEMM output rounded","rel_l2":0.0023467860615499327} (limits {"rel_l2_max":0.015})
+[PASS] kernels/vdn/branch_end_to_end {"max_abs":0.017343640327453613,"note":"device kernels vs host reference, 12 inner frames","rel_l2":0.004233672801779401} (limits {"rel_l2_max":0.03})
+[PASS] stage kernels → /srv/gc/kernels.json (9.2s)

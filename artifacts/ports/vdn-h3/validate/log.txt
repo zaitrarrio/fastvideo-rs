@@ -1,0 +1,56 @@
+b.tgz: OK
+downloading uv 0.13.0 x86_64-unknown-linux-gnu
+installing to /opt/uvbin
+  uv
+  uvx
+everything's installed!
+Downloading cpython-3.12.15-linux-x86_64-gnu (download) (32.7MiB)
+ Downloaded cpython-3.12.15-linux-x86_64-gnu (download)
+Installed Python 3.12.15 in 923ms
+ + cpython-3.12.15-linux-x86_64-gnu (python3.12)
+warning: `/root/.local/bin` is not on your PATH. To use installed Python executables, run `export PATH="/root/.local/bin:$PATH"` or `uv python update-shell`.
+2026-10-14T00:38:56Z start: parity 480x832x124 8 steps seed 1024; weights /workspace/weights
+2026-10-14T00:38:56Z begin fetch
+2026-10-14T00:38:56Z begin vdn-setup
+2026-10-14T00:39:02Z end fetch rc=0 6s
+2026-10-14T00:39:02Z VDN checkpoint: /fvw/vdn-h3-stage-b-2000/stage-b-step-2000
+2026-10-14T00:39:02Z begin kernels
+2026-10-14T00:39:02Z begin fetch-v2
+2026-10-14T00:39:12Z end kernels rc=0 10s
+2026-10-14T00:39:12Z begin ours-text
+2026-10-14T00:39:50Z end fetch-v2 rc=0 48s
+2026-10-14T00:39:55Z end vdn-setup rc=0 59s
+2026-10-14T00:47:34Z end ours-text rc=0 502s
+2026-10-14T00:47:34Z begin upstream
+2026-10-14T00:52:16Z end upstream rc=0 282s
+2026-10-14T00:52:16Z begin ours-inj
+2026-10-14T00:56:23Z end ours-inj rc=0 247s
+2026-10-14T00:56:23Z begin compare-dumps-inj
+2026-10-14T00:56:23Z end compare-dumps-inj rc=0 0s
+2026-10-14T00:56:23Z begin av-psnr-inj
+2026-10-14T00:57:51Z end av-psnr-inj rc=0 88s
+2026-10-14T00:57:51Z begin ours-inj-served
+2026-10-14T01:02:21Z end ours-inj-served rc=0 270s
+2026-10-14T01:02:21Z begin compare-dumps-inj-served
+2026-10-14T01:02:21Z end compare-dumps-inj-served rc=0 0s
+2026-10-14T01:02:21Z begin av-psnr-inj-served
+2026-10-14T01:03:46Z end av-psnr-inj-served rc=0 85s
+2026-10-14T01:03:46Z begin time-vdn-480
+2026-10-14T01:10:10Z end time-vdn-480 rc=0 384s
+2026-10-14T01:10:10Z begin time-turbo-480
+2026-10-14T01:13:56Z end time-turbo-480 rc=0 226s
+2026-10-14T01:13:56Z begin time-vdn-768
+2026-10-14T01:21:28Z end time-vdn-768 rc=0 452s
+2026-10-14T01:21:28Z begin time-turbo-768
+2026-10-14T01:25:50Z end time-turbo-768 rc=0 262s
+2026-10-14T01:25:50Z begin time-v2-480
+2026-10-14T01:28:04Z end time-v2-480 rc=0 134s
+2026-10-14T01:28:04Z begin time-v2-768
+2026-10-14T01:30:46Z end time-v2-768 rc=0 162s
+2026-10-14T01:30:46Z begin time-vdn-768-long
+2026-10-14T01:41:39Z end time-vdn-768-long rc=0 653s
+2026-10-14T01:41:39Z begin time-vdn-480-long
+2026-10-14T01:48:05Z end time-vdn-480-long rc=0 386s
+2026-10-14T01:48:05Z begin sample-vdn-50
+2026-10-14T01:55:54Z end sample-vdn-50 rc=0 469s
+2026-10-14T01:55:54Z end: 0 step(s) failed

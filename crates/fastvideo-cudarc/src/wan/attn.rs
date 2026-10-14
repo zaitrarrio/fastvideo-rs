@@ -563,6 +563,158 @@ impl BlockCausal {
     }
 }
 
+/// VDN-H3's window softmax mask (docs/ports/vdn-h3.md §1.3) as kernel
+/// parameters: rows outside `[video_start, video_end)` are global (dense both
+/// ways); frames 0 and `frames - 1` are dense anchors; any other video query
+/// frame sees the key frames of its window (`chunk`-aligned, `radius` chunks
+/// each side; `chunk == 0` is a centred frame window).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VdnWindow {
+    pub video_start: usize,
+    pub frame_tokens: usize,
+    pub frames: usize,
+    pub chunk: usize,
+    pub radius: usize,
+}
+
+impl VdnWindow {
+    pub fn video_end(&self) -> usize {
+        self.video_start + self.frames * self.frame_tokens
+    }
+
+    fn bound(&self, f: i64, hi: bool) -> i64 {
+        let (c, r) = (self.chunk as i64, self.radius as i64);
+        match (c > 0, hi) {
+            (true, false) => (f / c - r) * c,
+            (true, true) => (f / c + r + 1) * c - 1,
+            (false, false) => f - r,
+            (false, true) => f + r,
+        }
+    }
+
+    pub fn allows(&self, q: usize, k: usize) -> bool {
+        let (vs, ve, t) = (self.video_start, self.video_end(), self.frame_tokens.max(1));
+        if !(vs..ve).contains(&q) || !(vs..ve).contains(&k) {
+            return true;
+        }
+        let last = self.frames - 1;
+        let (qf, kf) = ((q - vs) / t, (k - vs) / t);
+        if qf == 0 || kf == 0 || qf == last || kf == last {
+            return true;
+        }
+        let kf = kf as i64;
+        kf >= self.bound(qf as i64, false) && kf <= self.bound(qf as i64, true)
+    }
+
+    /// The additive `[sq, sk]` mask (0 visible, `-1e9` masked).
+    pub fn dense_mask(&self, sq: usize, sk: usize) -> Vec<f32> {
+        let mut m = vec![0.0f32; sq * sk];
+        for q in 0..sq {
+            for k in 0..sk {
+                if !self.allows(q, k) {
+                    m[q * sk + k] = -1e9;
+                }
+            }
+        }
+        m
+    }
+}
+
+/// [`device_mma_sdpa`] under a [`VdnWindow`] mask (`flash_mma_fwd2_window_d128`):
+/// self-attention (`sq == sk`), head dim 128. `None` when the kernel cannot run.
+#[cfg(feature = "cuda")]
+pub fn device_mma_sdpa_window(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    scale: Option<f32>,
+    out_bf16: bool,
+    mask: VdnWindow,
+) -> Result<Option<CudaTensor>> {
+    let Some((b, h, sq, sk, d)) = bhsd(q, k, v) else {
+        return Ok(None);
+    };
+    let Some(dev) = super::device::global_device() else {
+        return Ok(None);
+    };
+    if d != 128
+        || sq != sk
+        || !mma_sdpa_supported(b, h, sq, sk, d, dev.sm_major)
+        || mask.frames == 0
+        || mask.frame_tokens == 0
+        || mask.video_end() > sk
+        || sk > i32::MAX as usize
+    {
+        return Ok(None);
+    }
+    let (Some(qb), Some(kb), Some(vb)) = (q.dev_bf16()?, k.dev_bf16()?, v.dev_bf16()?) else {
+        return Ok(None);
+    };
+    let scale = scale.unwrap_or(1.0 / (d as f32).sqrt());
+    let sl2 = scale * std::f32::consts::LOG2_E;
+    let bh = b * h;
+    static ONCE: AtomicBool = AtomicBool::new(false);
+    super::log::info_once(
+        &ONCE,
+        format_args!(
+            "sdpa: vdn window mma B={b} H={h} S={sq} D={d} video={}+{}x{} chunk={} radius={}",
+            mask.video_start, mask.frames, mask.frame_tokens, mask.chunk, mask.radius
+        ),
+    );
+    let func = &dev.kernels.flash_mma_fwd2_window_d128;
+    let shared = (4 * MMA_TILE * d * 2) as u32;
+    super::ops::opt_in_dynamic_shared(func, shared)?;
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (sq.div_ceil(2 * MMA_TILE) as u32, bh as u32, 1),
+        block_dim: (256, 1, 1),
+        shared_mem_bytes: shared,
+    };
+    let (sq_i, sk_i) = (sq as i32, sk as i32);
+    let p = [
+        mask.video_start,
+        mask.video_end(),
+        mask.frame_tokens,
+        mask.frames,
+        mask.chunk,
+        mask.radius,
+    ]
+    .map(|x| x as i32);
+    let err = |e: cudarc::driver::DriverError| msg(e.to_string());
+    let launch_err = |e: super::device::DeviceError| msg(e.to_string());
+    let n = bh * sq * d;
+    if out_bf16 {
+        let mut out = unsafe { dev.stream.alloc::<half::bf16>(n) }.map_err(err)?;
+        let mut dummy = super::ops::alloc(1)?;
+        let is_bf16 = 1i32;
+        super::kernels::launch!(dev.stream, func, cfg;
+            &*qb, &*kb, &*vb, &mut dummy, &mut out, &is_bf16, &sq_i, &sk_i, &sl2,
+            &p[0], &p[1], &p[2], &p[3], &p[4], &p[5])
+        .map_err(launch_err)?;
+        Ok(Some(CudaTensor::from_device_slice_bf16(out, vec![b, h, sq, d])?))
+    } else {
+        let mut out = super::ops::alloc(n)?;
+        let mut dummy = unsafe { dev.stream.alloc::<half::bf16>(1) }.map_err(err)?;
+        let is_bf16 = 0i32;
+        super::kernels::launch!(dev.stream, func, cfg;
+            &*qb, &*kb, &*vb, &mut out, &mut dummy, &is_bf16, &sq_i, &sk_i, &sl2,
+            &p[0], &p[1], &p[2], &p[3], &p[4], &p[5])
+        .map_err(launch_err)?;
+        Ok(Some(CudaTensor::from_device_slice(out, vec![b, h, sq, d])?))
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn device_mma_sdpa_window(
+    _q: &CudaTensor,
+    _k: &CudaTensor,
+    _v: &CudaTensor,
+    _scale: Option<f32>,
+    _out_bf16: bool,
+    _mask: VdnWindow,
+) -> Result<Option<CudaTensor>> {
+    Ok(None)
+}
+
 /// The [`BlockCausal`] of a causal Wan config over `frame_tokens` tokens per
 /// latent frame, when FastVideo's token-granular window
 /// (`local_attn_size * frame_tokens` keys back from the end of the query's

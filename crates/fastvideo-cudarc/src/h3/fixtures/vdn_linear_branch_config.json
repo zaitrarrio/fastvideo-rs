@@ -1,0 +1,25 @@
+{
+  "config": {
+    "anchor_frames": "both",
+    "enable_softmax_gate": true,
+    "linear_attention": {
+      "a_fp32": true,
+      "bridge": "alpha",
+      "delta_rule": "vdn_solve",
+      "enable_text_state": true,
+      "linear_head_dim": 128,
+      "short_conv": {
+        "targets": [
+          "k",
+          "v"
+        ]
+      }
+    },
+    "softmax_attention": {
+      "chunk": 5,
+      "radius": 1
+    }
+  },
+  "type": "hybrid_attention",
+  "version": 2
+}
