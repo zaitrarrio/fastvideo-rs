@@ -175,7 +175,7 @@ export const PoolSpecZ = z
     weights_source: weightsSource.optional(),
     hub_download_approved: z.boolean().optional().describe("weights_source hub: the owner approved the Hub download at boot (also needs the Worker's FV_HUB_DOWNLOADS_APPROVED=1)."),
     data_centers: dcList.describe(
-      "Runpod pods without a weights volume (GPU: weights_source r2 or none; CPU: volume off): the data centres to try, in order, instead of the region's (EU-RO-1). Any Runpod data centre; a last \"any\" lets Runpod place it.",
+      "Runpod pods without a weights volume (GPU: weights_source r2, hub or none; CPU: volume off): the data centres to try, in order, instead of the region's (EU-RO-1). Any Runpod data centre; a last \"any\" lets Runpod place it. Unset: the cluster's data_centers, else the regions'.",
     ),
     allowed_cuda: uniq(z.enum(CUDA_VERSIONS, { error: (i) => enumMessage("a CUDA version Runpod knows", i.input, CUDA_VERSIONS) }))
       .optional()
@@ -230,7 +230,10 @@ export const ClusterSpecZ = z
       .strict()
       .refine((i) => [i.channel, i.sha, i.ref].filter(Boolean).length === 1, { message: "exactly one of channel, sha, ref" })
       .describe("Which build the pods run. Resolved to digests at start."),
-    regions: uniq(region).min(1).describe("Regions to place GPU workers in, in order."),
+    regions: uniq(region).min(1).describe("Weights volume regions, in order: where the pools that mount the weights volume run (eu = EU-RO-1). Pools without the volume (weights_source r2, hub or none; CPU pools with volume off) run in data_centers when it is set; GMI / Brev pools run at their provider."),
+    data_centers: dcList.describe(
+      "Runpod pools without the weights volume (GPU: weights_source r2, hub or none, including a preset whose default is r2; CPU: volume off) that set no data_centers of their own: the data centres to try, in order (each with every GPU type of the pool), in any Runpod data centre; a last \"any\" lets Runpod place them. Pools that mount the volume always run in regions; GMI / Brev pools at their provider. Unset: the regions' data centres (EU-RO-1).",
+    ),
     control_plane: z
       .enum(["edge", "direct"])
       .describe("edge (default): the edge Worker (EDGE_URL) is the only entry point and every worker is an API front behind it (docs/serve/edge-control-plane.md); one edge cluster runs at a time. direct: clients call each worker with an API key (docs/control/gateway-less-auth.md). The gateway pod is retired."),
@@ -252,10 +255,14 @@ export const ClusterSpecZ = z
       if (seen.has(p.id)) ctx.addIssue({ code: "custom", message: `pool ${p.id} twice`, path: ["pools", i, "id"] });
       seen.add(p.id);
     });
+    if (s.data_centers) {
+      const why = dcListProblem(s.data_centers);
+      if (why) ctx.addIssue({ code: "custom", path: ["data_centers"], message: why });
+    }
     if (s.min_start < s.balance_floor) ctx.addIssue({ code: "custom", path: ["min_start"], message: `at least the balance floor ($${s.balance_floor})` });
     if (s.control_plane === "direct") s.pools.forEach((p, i) => p.family && ctx.addIssue({ code: "custom", path: ["pools", i, "family"], message: "family is for edge clusters (control_plane: edge)" }));
   })
-  .describe("A cluster on Runpod (docs/control/README.md §4).");
+  .describe("A cluster of worker pools on Runpod (any data centre without the weights volume), GMI Cloud or NVIDIA Brev (docs/control/README.md §4).");
 
 export const AttributionZ = z
   .array(
