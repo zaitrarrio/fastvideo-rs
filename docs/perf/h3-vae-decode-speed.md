@@ -1,7 +1,14 @@
 # H3 video VAE decode speed (work order follow-up, 2026-10-14)
 
+**Default flipped (owner decision, 2026-10-14):** the MXFP8 decoder
+linears are now the **default** for the 36-block video decoder on sm_100+
+GPUs (`FASTVIDEO_H3_VAE_MXFP8` unset); `=0` restores the bf16 decode byte
+for byte. See [§5](#5-default-flip-2026-10-14) for what changed, the memory
+plan and the sanity run. The text below is the measurement as written
+before the flip.
+
 **Verdict.** The ≥ 20 % target is reached only with a numerics change:
-`FASTVIDEO_H3_VAE_MXFP8=1` (MXFP8 block linears, **default off**, the owner
+`FASTVIDEO_H3_VAE_MXFP8=1` (MXFP8 block linears, then **default off**, the owner
 decides) cuts the video VAE by **26 %** at 480p, 768p and 1080p, and its
 frames sit at LPIPS 0.001 / PSNR 51 dB from the bf16 decode. The
 numerics-preserving candidates add up to **1.6 %** at 768p: the decoder
@@ -132,7 +139,7 @@ per GEMM on random operands; the fused producers write exactly what
 b and c were not run end to end: the bench bounds them below 1 % of the
 decode, under the stop rule's 5 %. Their flags stay as tuning seams.
 
-## 3. MXFP8 decoder linears (`FASTVIDEO_H3_VAE_MXFP8=1`, default off)
+## 3. MXFP8 decoder linears (`FASTVIDEO_H3_VAE_MXFP8`, default on since 2026-10-14)
 
 The four block linears (qkv, out, SwiGLU in, SwiGLU out) of all 36 blocks
 run as cuBLASLt MXFP8 GEMMs (E4M3 codes, one E8M0 scale per 32 values, the
@@ -184,13 +191,13 @@ the VAE change is three orders of magnitude below that gap.)
 **Verdict: the MXFP8 decode passes the quality gate** (LPIPS 0.002, PSNR
 50 dB, sharpness and jitter at 1.00 against the bf16 decode; no measurable
 change against the 49-forward base) and is 25-26 % faster at every
-resolution. It stays **off by default**: it is a numerics change and the
-default is the owner's call. It also needs 2.4 GB more device memory while
+resolution. It stayed **off by default** in this run: it is a numerics change and the
+default is the owner's call (who turned it on on 2026-10-14, §5). It also needs 2.4 GB more device memory while
 the VAE is resident (peak 72.2 against 69.8 GB at 768p).
 
 ## 4. Cumulative
 
-| resolution | baseline | numerics-preserving (default now) | + MXFP8 (opt-in) |
+| resolution | baseline | numerics-preserving | + MXFP8 (default since 2026-10-14) |
 |---|---|---|---|
 | 480p | 2.671 s | not measured separately (the VEC kernels are ≈ 1 % of the decode) | 1.986 s (−25.6 %) |
 | 768p | 6.306 s | 6.203 s (−1.6 %) | 4.679 s (−25.8 %) |
@@ -214,3 +221,65 @@ Timing pod 4393 s, gate pod 3892 s, the first pod (rejected after 12 min:
 boot (95.8 GB used, or no sidecar) 12-55 s each: 9300 s at $2.49/hr =
 **$6.43** of GPU, plus build-pod time on the shared build pod. Every pod was deleted and checked gone (404). The
 volume and R2 were only read.
+
+## 5. Default flip (2026-10-14)
+
+**Owner decision, 2026-10-14:** the MXFP8 decoder linears are the default.
+`FASTVIDEO_H3_VAE_MXFP8` now resolves as follows (`h3/vae.rs`,
+`resolve_mxfp8`):
+
+| setting | sm_100+ (B200, RTX PRO 6000, RTX 5090, GB10) | pre-Blackwell (H100, A100, L40S, ...) | CPU run |
+|---|---|---|---|
+| unset, 36-block decoder | **MXFP8** | bf16, said once in the log | bf16 |
+| unset, 26-block lightweight decoder (h3-trim) | bf16, said once (the default was measured on the 36-block decoder only) | bf16, said once | bf16 |
+| `=0` | bf16, byte-identical to the old default | bf16 | bf16 |
+| `=1` | MXFP8 on either decoder | **error at load** (cuBLASLt has no MXFP8 kernels below sm_100) | bf16 (no device) |
+| anything else | error | error | error |
+
+This follows the DiT's MXFP8 default (`FASTVIDEO_H3_QUANT`: MXFP8 unset on
+sm_100+, off below). The weights are only quantized when the fused ViT is
+on (`FASTVIDEO_H3_VAE_FUSED` not 0), the only path that runs them. The
+`FASTVIDEO_H3_VAE_CHECK` harness is unchanged and still drops MXFP8 above
+its 0.1 rel-L2 sanity bound. TAEH3 is untouched.
+
+**Memory plan.** The MXFP8 copies sit beside the bf16 weights (the unfused
+path and the check read those): 36 blocks x 16 d² x 33/32 bytes = **2.32
+GiB**, exactly the ledger's `vae` growth on the pod below (4.52 → 6.84 GiB).
+`fastvideo_models::h3::memory` prices them (`video_vae_mxfp8_bytes`,
+`H3PlanOptions::vae_mxfp8`, default true) wherever the decoder lives: for
+the whole run when the DiT is resident, for the decode stage only when it
+streams. The pipeline passes the resolved setting to its residency and
+i2v-encoder plans (off with TAEH3, `=0`, or below sm_100). What moves:
+
+| plan | before | after | budget |
+|---|---|---|---|
+| resident 768p 5 s, dense / with the VSA gate (the `dit_offload = auto` threshold) | 60.0 / 64.6 GiB | 62.3 / 66.9 GiB | 96 GB card with the FP8 encoder resident: ~72 GiB free, still resident; beside the 11 GB upsampler sidecar (60.6 GiB free) it streamed before and still does |
+| 1080P tier minimum (`plan_1080p_min_device_bytes`) | 71.2 GiB | 73.5 GiB | 80 GB cards report 79.6 GiB: tier kept; 48 GB: off as before |
+| streamed (RTX 5090 32 GiB), 768p 5 s peak | 19.4 GiB (denoise) | 19.4 GiB (denoise; decode 12.6) | < 30 GiB |
+| streamed, 480p 124 frames peak | 10.9 GiB (denoise) | 11.9 GiB (video decode) | < 30 GiB |
+
+No supported configuration crosses its budget, so there is no bf16
+fallback for memory. The serve engine's live 1080P admission check
+(`measured_working_bytes`) compares the working set with the free memory
+after the weights are loaded, so a resident decoder's copies are already
+counted there.
+
+**Sanity run** (one RTX PRO 6000 pod, `mpoc5rmbsqvfd7`, EU-RO-1, 0 MiB
+used at boot, image `fastvideo-rs-runtime@sha256:efa9348a…`, EU volume
+`bz0ofkfx45` read only; `h3/fasth3_4step_vsa` = h3-turbo, 768p 5 s, h3-demo
+seed 0, `--warm`, the pinned kernels of §Setup; one process per arm; raw:
+`artifacts/perf/h3-vae-mxfp8-default/`):
+
+| arm | binary | video VAE s (timed clip) | decode s | peak MiB | frames sha256 (16) |
+|---|---|---|---|---|---|
+| new default (MXFP8) | this branch | **4.67** | 4.85 | 72 199 | `11487f92cf893526` |
+| `FASTVIDEO_H3_VAE_MXFP8=0` | this branch | 6.23 | 6.40 | 69 767 | `454cc62632a08a55` |
+| old default | main `3ef71f2` | 6.23 | 6.40 | 69 767 | `454cc62632a08a55` |
+
+* Decode-time win: **−25.0 %** video VAE (6.23 → 4.67 s), in line with §3.
+* `=0` against main's default: **byte-identical** (all 124 frames; compare
+  `max_abs_diff_uint8` 0).
+* MXFP8 against bf16: LPIPS mean 0.0009 (max 0.0019), PSNR 50.8 dB (min
+  47.5), sharpness 1.002; the check: rel-L2 5.3e-3 vs the unfused ViT
+  ("mxfp8 kept").
+* Pod lifetime 912 s at $2.49/hr = **$0.63**; deleted and checked gone (404).

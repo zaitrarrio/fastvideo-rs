@@ -4,6 +4,10 @@
 #
 # torch.compile has no counterpart (the DiT runs our fused kernels), and the
 # full VAE is resident here unless the DiT streams, so neither needs a key.
+# Our video decoder runs its block linears as MXFP8 on sm_120 by default
+# (FASTVIDEO_H3_VAE_MXFP8, 2026-10-14; +2.3 GiB beside the bf16 weights while
+# it is resident, priced in the H3 memory plan, which keeps the streamed
+# 32 GiB plan under 30 GiB). FASTVIDEO_H3_VAE_MXFP8=0 is the full bf16 decode.
 
 [id]
 name = "h3_rtx5090_fullopt"
