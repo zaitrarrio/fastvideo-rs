@@ -1,0 +1,180 @@
+{
+ "impl": "fastvideo",
+ "model": "/fvw/up-4s",
+ "sparsity": 0.9,
+ "layer_profile": "h3_dit_vsa",
+ "env": {
+  "FASTVIDEO_FA4": "0",
+  "FASTVIDEO_H3_VAE_TILE_BATCH": "28",
+  "FASTVIDEO_H3_VSA_FP4": "1",
+  "FASTVIDEO_MINIMAX_H3_FUSIONS": "all",
+  "FASTVIDEO_NVFP4_MM_BACKEND": "cutlass",
+  "FASTVIDEO_STAGE_LOGGING": "1",
+  "FASTVIDEO_VSA_SM100A": "0",
+  "FASTVIDEO_VSA_TRITON": "1",
+  "FLASHINFER_CUDA_ARCH_LIST": "12.0a"
+ },
+ "runs": [
+  {
+   "tag": "4s-480p-h3-demo-cold",
+   "seed": 1024,
+   "height": 480,
+   "width": 832,
+   "num_frames": 124,
+   "steps": 5,
+   "index": 0,
+   "t_start": 1791987418.0667095,
+   "t_end": 1791987437.5408237,
+   "wall_s": 19.474114179611206,
+   "generation_time_s": 17.976787518709898,
+   "peak_memory_mb": 64445.306640625,
+   "stages_s": {
+    "input_preparation_stage": 7.786881178617477e-05,
+    "conditioning_stage": 1.81594015378505,
+    "latent_preparation_stage": 0.04062916897237301,
+    "denoising_stage": 6.84104781690985,
+    "video_decoding_stage": 8.762435041833669,
+    "audio_decoding_stage": 0.26140742283314466,
+    "PostDecodeFrameProcessStage": 0.9069920117035508,
+    "VideoSaveStage": 0.5658865571022034,
+    "AudioMuxStage": 0.0
+   },
+   "video": "/srv/up-4s/00_4s-480p-h3-demo-cold.mp4",
+   "ok": true
+  },
+  {
+   "tag": "4s-480p-h3-demo-warm",
+   "seed": 1024,
+   "height": 480,
+   "width": 832,
+   "num_frames": 124,
+   "steps": 5,
+   "index": 1,
+   "t_start": 1791987437.5417829,
+   "t_end": 1791987446.8119738,
+   "wall_s": 9.270190954208374,
+   "generation_time_s": 8.253102805931121,
+   "peak_memory_mb": 64443.275390625,
+   "stages_s": {
+    "input_preparation_stage": 0.0002619088627398014,
+    "conditioning_stage": 0.20098977722227573,
+    "latent_preparation_stage": 0.03131053410470486,
+    "denoising_stage": 4.7846444472670555,
+    "video_decoding_stage": 2.890088427811861,
+    "audio_decoding_stage": 0.11274809902533889,
+    "PostDecodeFrameProcessStage": 0.46753304125741124,
+    "VideoSaveStage": 0.5262265889905393,
+    "AudioMuxStage": 0.0
+   },
+   "video": "/srv/up-4s/01_4s-480p-h3-demo-warm.mp4",
+   "ok": true
+  },
+  {
+   "tag": "4s-480p-spark-mountain-lake",
+   "seed": 1024,
+   "height": 480,
+   "width": 832,
+   "num_frames": 124,
+   "steps": 5,
+   "index": 2,
+   "t_start": 1791987446.8137834,
+   "t_end": 1791987457.1275668,
+   "wall_s": 10.313783407211304,
+   "generation_time_s": 9.276521198451519,
+   "peak_memory_mb": 64439.39794921875,
+   "stages_s": {
+    "input_preparation_stage": 0.0003141476772725582,
+    "conditioning_stage": 1.4772287020459771,
+    "latent_preparation_stage": 0.06040010554715991,
+    "denoising_stage": 4.586687404196709,
+    "video_decoding_stage": 2.8148791124112904,
+    "audio_decoding_stage": 0.1112098298035562,
+    "PostDecodeFrameProcessStage": 0.3738540858030319,
+    "VideoSaveStage": 0.6384688466787338,
+    "AudioMuxStage": 0.0
+   },
+   "video": "/srv/up-4s/02_4s-480p-spark-mountain-lake.mp4",
+   "ok": true
+  },
+  {
+   "tag": "4s-768p-h3-demo-cold",
+   "seed": 1024,
+   "height": 768,
+   "width": 1344,
+   "num_frames": 124,
+   "steps": 5,
+   "index": 3,
+   "t_start": 1791987457.1305757,
+   "t_end": 1791987471.1591885,
+   "ok": false,
+   "error": "RuntimeError: Forward execution thread failed.\nTraceback (most recent call last):\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/entrypoints/video_generator.py\", line 922, in execute_forward_thread\n    result_container[\"output_batch\"] = self.executor.execute_forward(batch, fastvideo_args)\n                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/worker/uniproc_executor.py\", line 79, in execute_forward\n    responses: list[ForwardBatch] = self.collective_rpc(\"execute_forward\",\n                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/worker/uniproc_executor.py\", line 242, in collective_rpc\n    return [self.driver_worker.execute_method(method, *args, **kwargs)]\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/worker/worker_base.py\", line 87, in execute_method\n    raise e\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/worker/worker_base.py\", line 78, in execute_method\n    return run_method(self, method, args, kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/utils.py\", line 834, in run_method\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/worker/gpu_worker.py\", line 175, in execute_forward\n    output_batch = self.pipeline.forward(forward_batch, self.fastvideo_args)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/pipelines/basic/minimax_h3/minimax_h3_pipeline.py\", line 785, in forward\n    return super().forward(batch, fastvideo_args)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/fastvideo-nvfp4/lib/python3.12/site-packages/torch/utils/_contextlib.py\", line 124, in decorate_context\n    return func(*args,"
+  },
+  {
+   "tag": "4s-768p-h3-demo-warm",
+   "seed": 1024,
+   "height": 768,
+   "width": 1344,
+   "num_frames": 124,
+   "steps": 5,
+   "index": 4,
+   "t_start": 1791987471.169503,
+   "t_end": 1791987485.103961,
+   "ok": false,
+   "error": "RuntimeError: Forward execution thread failed.\nTraceback (most recent call last):\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/entrypoints/video_generator.py\", line 922, in execute_forward_thread\n    result_container[\"output_batch\"] = self.executor.execute_forward(batch, fastvideo_args)\n                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/worker/uniproc_executor.py\", line 79, in execute_forward\n    responses: list[ForwardBatch] = self.collective_rpc(\"execute_forward\",\n                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/worker/uniproc_executor.py\", line 242, in collective_rpc\n    return [self.driver_worker.execute_method(method, *args, **kwargs)]\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/worker/worker_base.py\", line 87, in execute_method\n    raise e\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/worker/worker_base.py\", line 78, in execute_method\n    return run_method(self, method, args, kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/utils.py\", line 834, in run_method\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/worker/gpu_worker.py\", line 175, in execute_forward\n    output_batch = self.pipeline.forward(forward_batch, self.fastvideo_args)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/pipelines/basic/minimax_h3/minimax_h3_pipeline.py\", line 785, in forward\n    return super().forward(batch, fastvideo_args)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/fastvideo-nvfp4/lib/python3.12/site-packages/torch/utils/_contextlib.py\", line 124, in decorate_context\n    return func(*args,"
+  },
+  {
+   "tag": "4s-768p-spark-mountain-lake",
+   "seed": 1024,
+   "height": 768,
+   "width": 1344,
+   "num_frames": 124,
+   "steps": 5,
+   "index": 5,
+   "t_start": 1791987485.1153286,
+   "t_end": 1791987498.5852969,
+   "ok": false,
+   "error": "RuntimeError: Forward execution thread failed.\nTraceback (most recent call last):\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/entrypoints/video_generator.py\", line 922, in execute_forward_thread\n    result_container[\"output_batch\"] = self.executor.execute_forward(batch, fastvideo_args)\n                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/worker/uniproc_executor.py\", line 79, in execute_forward\n    responses: list[ForwardBatch] = self.collective_rpc(\"execute_forward\",\n                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/worker/uniproc_executor.py\", line 242, in collective_rpc\n    return [self.driver_worker.execute_method(method, *args, **kwargs)]\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/worker/worker_base.py\", line 87, in execute_method\n    raise e\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/worker/worker_base.py\", line 78, in execute_method\n    return run_method(self, method, args, kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/utils.py\", line 834, in run_method\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/worker/gpu_worker.py\", line 175, in execute_forward\n    output_batch = self.pipeline.forward(forward_batch, self.fastvideo_args)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/src/FastVideo-nvfp4/fastvideo/pipelines/basic/minimax_h3/minimax_h3_pipeline.py\", line 785, in forward\n    return super().forward(batch, fastvideo_args)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/upstream/fastvideo-nvfp4/lib/python3.12/site-packages/torch/utils/_contextlib.py\", line 124, in decorate_context\n    return func(*args,"
+  }
+ ],
+ "ok": true,
+ "config": {
+  "model_path": "/fvw/up-4s",
+  "engine": {
+   "num_gpus": 1,
+   "use_fsdp_inference": false,
+   "quantization": {
+    "transformer_quant": "NVFP4",
+    "layer_profile": "h3_dit_vsa"
+   },
+   "parallelism": {
+    "tp_size": 1,
+    "sp_size": 1
+   },
+   "offload": {
+    "dit": false,
+    "dit_layerwise": false,
+    "text_encoder": false,
+    "vae": false,
+    "pin_cpu_memory": true,
+    "lazy_module_load": false
+   },
+   "compile": {
+    "enabled": false,
+    "vae_enabled": true
+   }
+  },
+  "pipeline": {
+   "experimental": {
+    "attention_backend": "VIDEO_SPARSE_ATTN_H3",
+    "h3_sequential_load": false,
+    "inference_torch_compile": false,
+    "vae_parallel_decode": false,
+    "video_decode_backend": "h3-vae",
+    "VSA_sparsity": 0.9,
+    "VSA_tile_size": 64
+   }
+  }
+ },
+ "load_s": 36.78320097923279,
+ "process_s": 125.80133581161499
+}
