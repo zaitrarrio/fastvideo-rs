@@ -1,0 +1,12 @@
+[fastvideo] h3 nvfp4: /fvw/fasth3-trim-8step-nvfp4/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors (42 blocks x 5 NVFP4 linears, 9.33 GiB; checked against the bf16 tree in 0.0s)
+[fastvideo] h3 recipe=trim-8step-nvfp4-fp4attn steps=8 video_shift=10 vsa=0.8 dense=false
+[fastvideo] h3 vae chunk 1/7
+[fastvideo] h3 vae chunk 2/7
+[fastvideo] h3 vae chunk 3/7
+[fastvideo] h3 vae chunk 4/7
+[fastvideo] h3 vae chunk 5/7
+[fastvideo] h3 vae chunk 6/7
+[fastvideo] h3 vae chunk 7/7
+[fastvideo] h3 vae fused ViT: gemm mxfp8 (cuBLASLt algo #0), sdpa auto, vector kernels on
+[fastvideo] h3 vae: FASTVIDEO_H3_VAE_MXFP8 default: 26 blocks x 4 linears as MXFP8 (E4M3, E8M0 per 32); FASTVIDEO_H3_VAE_MXFP8=0 for bf16
+[fastvideo] h3: VSA fine stage on sparse FP4 tensor cores (FASTVIDEO_H3_VSA_FP4=1 by the recipe, P two-level)
