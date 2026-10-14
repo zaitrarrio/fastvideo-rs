@@ -1,0 +1,26 @@
+2026-10-14T02:30:49Z	pod-created ewin7xpwjyhqif fv-vaeds-1014023048 gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition dph=2.49 image=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:efa9348a68b81169a4f1bf017fadd3efd14b2e19ee2b38df42d758b85e707183
+2026-10-14T02:43:21Z	pod-deleted ewin7xpwjyhqif
+2026-10-14T02:43:38Z	pod-created 1bw35wcvu1s2fc fv-vaeds-1014024337 gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition dph=2.49 image=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:efa9348a68b81169a4f1bf017fadd3efd14b2e19ee2b38df42d758b85e707183
+2026-10-14T02:43:52Z	pod-deleted 1bw35wcvu1s2fc
+2026-10-14T02:43:54Z	pod-created cytfx27jooyxr9 fv-vaeds-1014024352 gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition dph=2.49 image=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:efa9348a68b81169a4f1bf017fadd3efd14b2e19ee2b38df42d758b85e707183
+2026-10-14T02:44:17Z	pod-deleted cytfx27jooyxr9
+2026-10-14T02:44:20Z	pod-created jdavbehmpulhpl fv-vaeds-1014024418 gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition dph=2.49 image=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:efa9348a68b81169a4f1bf017fadd3efd14b2e19ee2b38df42d758b85e707183
+2026-10-14T02:44:33Z	pod-deleted jdavbehmpulhpl
+2026-10-14T02:44:35Z	pod-created 79gcqpntckd8oh fv-vaeds-1014024433 gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition dph=2.49 image=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:efa9348a68b81169a4f1bf017fadd3efd14b2e19ee2b38df42d758b85e707183
+2026-10-14T02:45:19Z	pod-deleted 79gcqpntckd8oh
+2026-10-14T02:45:22Z	pod-created 7lhl8b7xbwiy7r fv-vaeds-1014024520 gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition dph=2.49 image=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:efa9348a68b81169a4f1bf017fadd3efd14b2e19ee2b38df42d758b85e707183
+2026-10-14T02:45:46Z	pod-deleted 7lhl8b7xbwiy7r
+2026-10-14T02:45:49Z	pod-created vgxbd68dxtt0kh fv-vaeds-1014024547 gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition dph=2.49 image=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:efa9348a68b81169a4f1bf017fadd3efd14b2e19ee2b38df42d758b85e707183
+2026-10-14T02:46:01Z	pod-deleted vgxbd68dxtt0kh
+2026-10-14T02:46:04Z	pod-created 8rpk4uth5g23jj fv-vaeds-1014024602 gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition dph=2.49 image=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:efa9348a68b81169a4f1bf017fadd3efd14b2e19ee2b38df42d758b85e707183
+2026-10-14T02:46:59Z	pod-deleted 8rpk4uth5g23jj
+2026-10-14T02:47:02Z	pod-created i8mxgk9smv8dt8 fv-vaeds-1014024700 gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition dph=2.49 image=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:efa9348a68b81169a4f1bf017fadd3efd14b2e19ee2b38df42d758b85e707183
+2026-10-14T03:26:10Z	pod-created 604pq5lbby7e17 fv-vaeds-1014032608 gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition dph=2.49 image=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:efa9348a68b81169a4f1bf017fadd3efd14b2e19ee2b38df42d758b85e707183
+2026-10-14T03:26:50Z	pod-deleted 604pq5lbby7e17
+2026-10-14T03:26:53Z	pod-created 02z1kn2v0a72cf fv-vaeds-1014032651 gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition dph=2.49 image=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:efa9348a68b81169a4f1bf017fadd3efd14b2e19ee2b38df42d758b85e707183
+2026-10-14T03:27:05Z	pod-deleted 02z1kn2v0a72cf
+2026-10-14T03:27:08Z	pod-created yv2zoxgpnfw655 fv-vaeds-1014032706 gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition dph=2.49 image=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:efa9348a68b81169a4f1bf017fadd3efd14b2e19ee2b38df42d758b85e707183
+2026-10-14T03:27:34Z	pod-deleted yv2zoxgpnfw655
+2026-10-14T03:27:37Z	pod-created x3mhvv4adol4iu fv-vaeds-1014032735 gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition dph=2.49 image=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:efa9348a68b81169a4f1bf017fadd3efd14b2e19ee2b38df42d758b85e707183
+2026-10-14T04:00:15Z	pod-deleted i8mxgk9smv8dt8
+2026-10-14T04:32:29Z	pod-deleted x3mhvv4adol4iu

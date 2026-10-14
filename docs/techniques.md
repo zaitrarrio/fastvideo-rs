@@ -583,6 +583,29 @@ wave-tail time. The work order's stop rule (< 10 %) ended the work there, and
 no default changed. Numbers, per-op profile and method:
 docs/perf/h3-vae-tile-batching.md.
 
+### H3 VAE decode speed (RTX PRO 6000, 2026-10-14)
+
+A CUPTI trace of the 768p decode (`FASTVIDEO_GPU_TRACE_DECODE=1`, now hooked
+to the H3 decode) shows 0.1 % GPU idle, GEMMs 68 % at 397 TFLOPS (85 % of the
+bf16 peak), element-wise 13 %, attention 10 %, layout 9 %. Env-flag seams in
+`h3/vae.rs`, all on `h3/fasth3_4step_vsa`, one pod, h3-demo x 3 seeds:
+
+* `FASTVIDEO_H3_VAE_VEC` (**default on**, `=0` restores the scalar kernels):
+  vector-access merge-heads and SwiGLU kernels, bit-identical. 768p video
+  VAE 6.306 → 6.203 s (−1.6 %), frames byte-identical.
+* `FASTVIDEO_H3_VAE_MXFP8=1` (**default off**, a numerics change): MXFP8
+  block linears (the DiT's MXFP8 recipe; activations quantized by the
+  producing kernel). Video VAE −25.6 % (480p) / −25.8 % (768p) / −26.5 %
+  (1080p); against the bf16 decode LPIPS 0.001, PSNR 51 dB, sharpness and
+  jitter 1.00. Gate: quality pass (5 prompts x 3 seeds: LPIPS 0.002, PSNR 50 dB, sharpness / jitter 1.00 vs the bf16 decode; unchanged vs the 49-forward base). The owner decides on the default.
+* `FASTVIDEO_H3_VAE_GEMM=cublas|lt[N]` and `FASTVIDEO_H3_VAE_SDPA=auto|v1|v2|cudnn`
+  (defaults unchanged): tuning seams; `fv-gpucheck kernels --groups
+  h3vae_bench` found no cuBLASLt algorithm faster than cuBLAS and `auto`
+  already on the fastest SDPA kernel.
+* `FASTVIDEO_H3_VAE_TILE_BATCH=196` at 1080p: +2.8 % (slower).
+
+Numbers and method: docs/perf/h3-vae-decode-speed.md.
+
 ## LongLive-Plug recipes
 
 NVlabs LongLive-Plug LoRAs (arXiv 2609.38154) are merged into the base
