@@ -1,0 +1,26 @@
+{
+  "audio": {
+    "mean_packet_bytes": 36.229838709677416,
+    "opus_packets": 1984,
+    "present": true
+  },
+  "decoded": {
+    "codec": "h264",
+    "frames": 940,
+    "height": 768,
+    "keyframes": 40,
+    "width": 1344
+  },
+  "first_frame_after_whep_post_ms": 1294,
+  "luma": {
+    "black": 0,
+    "deviation": 47.930123135220946,
+    "frames": 940,
+    "mean": 90.12453088061527
+  },
+  "ok": true,
+  "received_frames": 952,
+  "time_to_ready_ms": 3295,
+  "transport": "whep",
+  "watched_s": 40
+}

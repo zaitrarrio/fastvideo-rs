@@ -1,0 +1,57 @@
+{
+  "completed_at": "2026-10-14T04:03:50.905254142Z",
+  "created_at": "2026-10-14T04:03:07.714275495Z",
+  "error": null,
+  "expires_at": "2026-10-15T04:03:07.714275495Z",
+  "fps": 24,
+  "height": 768,
+  "id": "fvjob_c1e52c1620ee43a281a1fded6895e8d2",
+  "metrics": {
+    "build_rtf": 6.731493305225806,
+    "inference_s": 34.779382077,
+    "peak_memory_mb": 56733.12260723114,
+    "queue_s": 0.001809326,
+    "run_s": 43.189169321,
+    "stage_durations": {
+      "audio_decode": 0.059956423,
+      "denoise": 34.779382077,
+      "encode": 0.22237068,
+      "refine": 0.000424952,
+      "text": 0.740212024,
+      "video_decode": 6.59871926
+    }
+  },
+  "model": "h3-lightx2v-turbo",
+  "notes": [
+    "canvas: 1344x768 follows the input image (832x480)"
+  ],
+  "num_frames": 124,
+  "object": "fv.job",
+  "output": {
+    "audio": {
+      "channels": 2,
+      "rate": 32000
+    },
+    "bytes": 4948667,
+    "fps": 24,
+    "frames": 124,
+    "height": 768,
+    "mime": "video/mp4",
+    "url": "<redacted: signed artifact URL on a deleted pod>",
+    "width": 1344
+  },
+  "progress": 1,
+  "protocol": "native",
+  "queue_position": null,
+  "recipe": "h3-lightx2v-turbo-v1.2-768p-dense",
+  "resolved_model": "h3-lightx2v-turbo",
+  "seed": 7,
+  "started_at": "2026-10-14T04:03:07.716084821Z",
+  "status": "succeeded",
+  "task": "i2v",
+  "tier": null,
+  "width": 1344,
+  "hr_tag": "lightx-i2v-768",
+  "hr_task": "i2v",
+  "hr_wall_s": 43.35
+}

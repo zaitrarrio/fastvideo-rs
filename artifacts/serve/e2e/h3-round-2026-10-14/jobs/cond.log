@@ -1,0 +1,86 @@
+[hr 03:58:43] begin cond-larry
+[hr 03:59:11] serve larry: /ping 200 after 28.4s
+[fastvideo] h3 dit: block 45/50 resident
+[fastvideo] h3 dit: block 46/50 resident
+[fastvideo] h3 dit: block 47/50 resident
+[fastvideo] h3 dit: block 48/50 resident
+[fastvideo] h3 dit: block 49/50 resident
+[fastvideo] h3 dit: block 50/50 resident
+[fastvideo] h3 dit: 50 blocks resident
+[2m2026-10-14T03:59:10.558153Z[0m [32m INFO[0m [2mfastvideo_engine_service::cuda::backend[0m[2m:[0m model resident [3mmodel[0m[2m=[0mh3-larry-turbo [3mseconds[0m[2m=[0m25.472748034
+[hr 03:59:27] larry-warm succeeded wall 15.90s metrics {"build_rtf":2.3197920332903226,"inference_s":11.985592172,"peak_memory_mb":53507.192207336426,"queue_s":0.002013482,"run_s":15.580426631,"stage_durations":{"audio_decode":0.215771633,"denoise":11.985592172,"encode":0.266073928,"refine":0.018793567,"text":0.257876772,"video_decode":2.785956906}}
+[hr 03:59:45] larry-i2v-480 succeeded wall 18.00s metrics {"build_rtf":2.4967557354193546,"inference_s":12.899904633,"peak_memory_mb":53737.4964056015,"queue_s":0.001710308,"run_s":17.883455046999998,"stage_durations":{"audio_decode":0.062445346,"denoise":12.899904633,"encode":0.241655787,"refine":0.003237649,"text":1.354527886,"video_decode":2.792582402}}
+[hr 04:00:46] larry-i2v-768 succeeded wall 61.22s metrics {"build_rtf":10.107341488064517,"inference_s":52.221264355,"peak_memory_mb":56733.28666973114,"queue_s":0.00162521,"run_s":61.165578009,"stage_durations":{"audio_decode":0.069950085,"denoise":52.221264355,"encode":0.254368388,"refine":0.000456781,"text":1.240164666,"video_decode":6.5891420499999995}}
+[hr 04:01:06] larry-fl2va-480 succeeded wall 19.56s metrics {"build_rtf":2.6760351152903223,"inference_s":13.826181429,"peak_memory_mb":53849.72817134857,"queue_s":0.002314436,"run_s":18.9897297,"stage_durations":{"audio_decode":0.060602801,"denoise":13.826181429,"encode":0.220994056,"refine":0.006463068,"text":1.337401119,"video_decode":2.815743376}}
+[hr 04:02:11] larry-fl2va-768 succeeded wall 64.96s metrics {"build_rtf":10.713009854903225,"inference_s":55.350550917,"peak_memory_mb":56924.355021476746,"queue_s":0.001835465,"run_s":64.80296615,"stage_durations":{"audio_decode":0.060765518,"denoise":55.350550917,"encode":0.185701649,"refine":0.000470672,"text":1.371400789,"video_decode":6.6626413190000005}}
+[hr 04:02:11] end cond-larry rc=0 208s
+[hr 04:02:11] begin cond-lightx
+[hr 04:02:42] serve lightx: /ping 200 after 30.3s
+[fastvideo] h3 dit: block 45/50 resident
+[fastvideo] h3 dit: block 46/50 resident
+[fastvideo] h3 dit: block 47/50 resident
+[fastvideo] h3 dit: block 48/50 resident
+[fastvideo] h3 dit: block 49/50 resident
+[fastvideo] h3 dit: block 50/50 resident
+[fastvideo] h3 dit: 50 blocks resident
+[2m2026-10-14T04:02:41.577510Z[0m [32m INFO[0m [2mfastvideo_engine_service::cuda::backend[0m[2m:[0m model resident [3mmodel[0m[2m=[0mh3-lightx2v-turbo [3mseconds[0m[2m=[0m26.918943277
+[hr 04:02:54] lightx-warm succeeded wall 12.18s metrics {"build_rtf":1.551680755548387,"inference_s":8.017017237,"peak_memory_mb":53507.028144836426,"queue_s":0.001728428,"run_s":11.787139412,"stage_durations":{"audio_decode":0.165881941,"denoise":8.017017237,"encode":0.27344837,"refine":0.006070695,"text":0.494230799,"video_decode":2.787807471}}
+[hr 04:03:07] lightx-i2v-480 succeeded wall 13.25s metrics {"build_rtf":1.661278299096774,"inference_s":8.583271212,"peak_memory_mb":53737.3323431015,"queue_s":0.001698328,"run_s":13.088388259,"stage_durations":{"audio_decode":0.060545752,"denoise":8.583271212,"encode":0.222553177,"refine":0.003347507,"text":0.877058422,"video_decode":2.799870714}}
+[hr 04:03:51] lightx-i2v-768 succeeded wall 43.35s metrics {"build_rtf":6.731493305225806,"inference_s":34.779382077,"peak_memory_mb":56733.12260723114,"queue_s":0.001809326,"run_s":43.189169321,"stage_durations":{"audio_decode":0.059956423,"denoise":34.779382077,"encode":0.22237068,"refine":0.000424952,"text":0.740212024,"video_decode":6.59871926}}
+[hr 04:04:06] lightx-fl2va-480 succeeded wall 14.84s metrics {"build_rtf":1.7849277023225807,"inference_s":9.222126462,"peak_memory_mb":53849.56410884857,"queue_s":0.002047831,"run_s":14.592754289,"stage_durations":{"audio_decode":0.074988701,"denoise":9.222126462,"encode":0.230939798,"refine":0.008153457,"text":1.400310836,"video_decode":2.837565066}}
+[hr 04:04:52] lightx-fl2va-768 succeeded wall 46.46s metrics {"build_rtf":7.144479281612902,"inference_s":36.913142955,"peak_memory_mb":56924.190958976746,"queue_s":0.001845445,"run_s":46.342727847,"stage_durations":{"audio_decode":0.059785046,"denoise":36.913142955,"encode":0.180167463,"refine":0.000486881,"text":1.352649991,"video_decode":6.653144896}}
+[hr 04:04:52] end cond-lightx rc=0 161s
+[hr 04:04:52] begin cond-v2
+[hr 04:05:27] serve v2: /ping 200 after 34.4s
+[fastvideo] h3 dit: block 45/50 resident
+[fastvideo] h3 dit: block 46/50 resident
+[fastvideo] h3 dit: block 47/50 resident
+[fastvideo] h3 dit: block 48/50 resident
+[fastvideo] h3 dit: block 49/50 resident
+[fastvideo] h3 dit: block 50/50 resident
+[fastvideo] h3 dit: 50 blocks resident
+[2m2026-10-14T04:05:26.305386Z[0m [32m INFO[0m [2mfastvideo_engine_service::cuda::backend[0m[2m:[0m model resident [3mmodel[0m[2m=[0mfasth3-8step-dense [3mseconds[0m[2m=[0m30.741086314
+[hr 04:05:48] v2-warm succeeded wall 21.67s metrics {"build_rtf":3.3468661728387095,"inference_s":17.292141893,"peak_memory_mb":57385.6298789978,"queue_s":0.001526131,"run_s":21.153872746,"stage_durations":{"audio_decode":0.236577383,"denoise":17.292141893,"encode":0.252069761,"refine":0.005639944,"text":0.520522785,"video_decode":2.799212748}}
+[hr 04:06:12] v2-i2v-480 succeeded wall 23.28s metrics {"build_rtf":3.5710439396129026,"inference_s":18.450393688,"peak_memory_mb":57626.70751476288,"queue_s":0.002560682,"run_s":23.1047616,"stage_durations":{"audio_decode":0.062223201,"denoise":18.450393688,"encode":0.234327195,"refine":0.00320686,"text":0.840705926,"video_decode":2.790271925}}
+[hr 04:07:34] v2-i2v-768 succeeded wall 81.80s metrics {"build_rtf":14.098522317290323,"inference_s":72.842365306,"peak_memory_mb":60943.56809139252,"queue_s":0.001167068,"run_s":81.647635435,"stage_durations":{"audio_decode":0.06169364,"denoise":72.842365306,"encode":0.246695403,"refine":0.000459301,"text":1.06706814,"video_decode":6.610873361}}
+[hr 04:08:01] v2-fl2va-480 succeeded wall 26.97s metrics {"build_rtf":3.825714112838709,"inference_s":19.766189583,"peak_memory_mb":57749.71271800995,"queue_s":0.001905694,"run_s":26.470285961,"stage_durations":{"audio_decode":0.062399897,"denoise":19.766189583,"encode":0.220958186,"refine":0.006941859,"text":2.867265008,"video_decode":2.815062019}}
+[hr 04:09:29] v2-fl2va-768 succeeded wall 88.68s metrics {"build_rtf":14.970553731677418,"inference_s":77.347860947,"peak_memory_mb":61153.85909938812,"queue_s":0.001684459,"run_s":88.188312225,"stage_durations":{"audio_decode":0.066189936,"denoise":77.347860947,"encode":0.185515062,"refine":0.000399803,"text":2.740041999,"video_decode":6.651453988}}
+[hr 04:09:29] end cond-v2 rc=0 277s
+[hr 04:09:29] begin cond-draft
+[hr 04:09:42] serve draft: /ping 200 after 12.2s
+[fastvideo] llm resident layer 48/50
+[fastvideo] llm resident layer 49/50
+[fastvideo] llm resident layer 50/50
+[fastvideo] load/io h3 text_encoder {"wall_s":4.92,"viewed_gb":25.95,"prefetch_read_gb":53.55,"prefetch_skipped_gb":0.00,"prefetch_busy_s":75.3,"viewed_gbps":5.28,"window_wait_s":0.0,"fill_s":0.5,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":0.6,"fetch_wait_s":0.0,"mem_mode":true,"prefetch":true}
+[fastvideo] h3 i2v encoder: resident (71.5 GiB free covers the vision tower (2.0 GiB) and the resident plan (64.6 GiB)): vision tower 1.09 GiB loaded in 0.5 s; the language model is the resident text encoder (ResidentFp8), 70.4 GiB free now
+[fastvideo] h3 dit offload: auto -> resident (resident plan 64.6 GiB, 70.4 GiB free before load)
+[fastvideo] h3 dit: 50 blocks resident
+[2m2026-10-14T04:09:41.276107Z[0m [32m INFO[0m [2mfastvideo_engine_service::cuda::backend[0m[2m:[0m model resident [3mmodel[0m[2m=[0mfasth3-4step-vsa-480p-taeh3 [3mseconds[0m[2m=[0m9.403822656
+[hr 04:09:51] draft-warm succeeded wall 9.55s metrics {"build_rtf":1.434278144516129,"inference_s":7.41043708,"peak_memory_mb":55287.79822540283,"queue_s":0.001473582,"run_s":9.282226282,"stage_durations":{"audio_decode":0.227034552,"denoise":7.41043708,"encode":0.194097531,"refine":0.006242472,"text":0.627835687,"video_decode":0.727485034}}
+[hr 04:10:02] draft-i2v-480 succeeded wall 10.61s metrics {"build_rtf":1.5550068917419355,"inference_s":8.034202274,"peak_memory_mb":56313.754318237305,"queue_s":0.001974303,"run_s":10.492681007,"stage_durations":{"audio_decode":0.072726313,"denoise":8.034202274,"encode":0.246727852,"refine":0.003287259,"text":0.858054979,"video_decode":0.69524319}}
+[hr 04:10:16] draft-fl2va-480 succeeded wall 13.78s metrics {"build_rtf":1.7246180264516129,"inference_s":8.91052647,"peak_memory_mb":56555.159271240234,"queue_s":0.002438075,"run_s":13.517386594,"stage_durations":{"audio_decode":0.060986974,"denoise":8.91052647,"encode":0.18670863,"refine":0.009702488,"text":2.8392277249999998,"video_decode":0.737161062}}
+[hr 04:10:16] end cond-draft rc=0 47s
+[hr 04:10:16] begin cond-ref2v-turbo
+[hr 04:10:49] serve ref2v-turbo: /ping 200 after 33.4s
+[fastvideo] h3 dit: block 45/50 resident
+[fastvideo] h3 dit: block 46/50 resident
+[fastvideo] h3 dit: block 47/50 resident
+[fastvideo] h3 dit: block 48/50 resident
+[fastvideo] h3 dit: block 49/50 resident
+[fastvideo] h3 dit: block 50/50 resident
+[fastvideo] h3 dit: 50 blocks resident
+[2m2026-10-14T04:10:48.919861Z[0m [32m INFO[0m [2mfastvideo_engine_service::cuda::backend[0m[2m:[0m model resident [3mmodel[0m[2m=[0mh3-ref2v-turbo [3mseconds[0m[2m=[0m30.571491832
+[hr 04:10:49] ref2v-turbo-warm: submit failed: {"error":{"kind":"invalid_request","message":"model `h3-ref2v-turbo` does not support task t2v","param":"task"}}
+[hr 04:11:04] ref2v-turbo-ref2v-480 succeeded wall 14.32s metrics {"build_rtf":1.6571887643225807,"inference_s":8.562141949,"peak_memory_mb":53740.00110912323,"queue_s":0.001399524,"run_s":13.854284181,"stage_durations":{"audio_decode":0.088435858,"denoise":8.562141949,"encode":0.279064714,"refine":0.003866267,"text":1.15218233,"video_decode":2.774849176}}
+[hr 04:11:47] ref2v-turbo-ref2v-768 succeeded wall 42.79s metrics {"build_rtf":6.525183804387097,"inference_s":33.713449656,"peak_memory_mb":56656.95478725433,"queue_s":0.001778957,"run_s":42.333022926,"stage_durations":{"audio_decode":0.063168442,"denoise":33.713449656,"encode":0.245559094,"refine":0.000589849,"text":0.804998567,"video_decode":6.593572568}}
+[hr 04:11:47] end cond-ref2v-turbo rc=0 91s
+[hr 04:12:18] serve ref2v-max: /ping 200 after 31.4s
+[fastvideo] h3 dit: block 45/50 resident
+[fastvideo] h3 dit: block 46/50 resident
+[fastvideo] h3 dit: block 47/50 resident
+[fastvideo] h3 dit: block 48/50 resident
+[fastvideo] h3 dit: block 49/50 resident
+[fastvideo] h3 dit: block 50/50 resident
+[fastvideo] h3 dit: 50 blocks resident
+[2m2026-10-14T04:12:18.034543Z[0m [32m INFO[0m [2mfastvideo_engine_service::cuda::backend[0m[2m:[0m model resident [3mmodel[0m[2m=[0mh3-ref2v-max [3mseconds[0m[2m=[0m27.921655597
+[hr 04:17:34] ref2v-max-ref2v-480 succeeded wall 315.56s metrics {"build_rtf":50.71254288251613,"inference_s":262.014804893,"peak_memory_mb":55892.01811885834,"queue_s":0.001790156,"run_s":315.501099234,"stage_durations":{"audio_decode":0.127542892,"denoise":262.014804893,"encode":0.210021066,"refine":0.002709449,"text":45.650915622,"video_decode":2.828653295}}

@@ -21,6 +21,9 @@
 # FV_E2E_DISK_GB (container disk, default 40), FV_E2E_NO_SECRETS=1 (no
 # Runpod secret references in the pod env: no Cloudflare / D1 / R2 / webhook
 # credentials on the pod; fv-serve keeps local jobs and artifacts),
+# FV_E2E_SECRETS_ALLOW (with FV_E2E_NO_SECRETS=1: a space list of Runpod
+# secret names whose references are kept, e.g. "fv_cf_stream_api_token
+# fv_cf_account_id"; every other secret reference is still dropped),
 # FV_E2E_NAME (pod name prefix, default fv-e2e-a-), FV_E2E_ENV_JSON (extra
 # pod env as a JSON object, e.g. '{"FV_REACTOR_MODE":"avatar"}').
 # `up <image> <config>`: the in-image config pod-boot.sh starts from
@@ -78,7 +81,7 @@ cmd_up() {
       --arg side "$(base64 -w0 "$ROOT/scripts/serve/e2e/sidecar.py")" \
       --arg keyhash "$(printf '%s' "$key" | sha256sum | cut -d' ' -f1)" --arg admin "$admin" --arg sidecar "$sidecar" \
       --argjson vol "$vol" --argjson extra "${FV_E2E_ENV_JSON:-{\}}" --argjson disk "${FV_E2E_DISK_GB:-40}" \
-      --arg nosecrets "${FV_E2E_NO_SECRETS:-0}" '{
+      --arg nosecrets "${FV_E2E_NO_SECRETS:-0}" --arg allow "${FV_E2E_SECRETS_ALLOW:-}" '{
         name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
         gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: $disk, volumeInGb: 0,
         ports: ["8000/http", "8001/http"],
@@ -95,7 +98,9 @@ cmd_up() {
           FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", FV_WEIGHTS: "/workspace/weights",
           FV_API_KEYS: $keyhash, FV_ADMIN_TOKEN: $admin, FV_SIDECAR_TOKEN: $sidecar, FV_SIDECAR_B64: $side,
           FV_CALLBACKS_ALLOW_PRIVATE: "1", RUST_LOG: "info", FV_E2E_BASE_CONFIG: $cfg
-        } + $extra | if $nosecrets == "1" then with_entries(select((.value | tostring | startswith("{{ RUNPOD_SECRET_")) | not)) else . end)
+        } + $extra | if $nosecrets == "1" then with_entries(select(
+          (.value | tostring) as $v | ($v | startswith("{{ RUNPOD_SECRET_") | not)
+          or ([$allow | splits(" +") | select(. != "") | "{{ RUNPOD_SECRET_\(.) }}"] | index($v) != null))) else . end)
       } + $vol')"
     # The price cap on Runpod's quote, BEFORE the create (scripts/gpu/runpod-price.sh).
     fv_runpod_price_ok "$gpu" "$MAX_DPH" SECURE || continue

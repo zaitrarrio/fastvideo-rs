@@ -1,0 +1,56 @@
+{
+  "case": "whip-h264",
+  "cleanup": {
+    "before": 404,
+    "gone": true,
+    "note": "already deleted (on_stop)",
+    "uid": "f0d1fd0fb19dfd964c6ac7d251d5a6bc"
+  },
+  "create_ms": 1482,
+  "live_input": "f0d1fd0fb19dfd964c6ac7d251d5a6bc",
+  "model": "fasth3",
+  "ok": true,
+  "read": {
+    "audio": {
+      "mean_packet_bytes": 18.491422805247225,
+      "opus_packets": 1982,
+      "present": true
+    },
+    "decoded": {
+      "codec": "h264",
+      "frames": 918,
+      "height": 768,
+      "keyframes": 39,
+      "width": 1344
+    },
+    "first_frame_after_whep_post_ms": 1495,
+    "luma": {
+      "black": 0,
+      "deviation": 57.393339821662714,
+      "frames": 940,
+      "mean": 84.7521567486698
+    },
+    "ok": true,
+    "received_frames": 950,
+    "time_to_ready_ms": 29668,
+    "transport": "whep",
+    "watched_s": 40
+  },
+  "server": {
+    "audio_packets_sent": 2181,
+    "encoder": "Nvenc",
+    "end_reason": null,
+    "fps": null,
+    "frames_sent": 1045,
+    "height": 768,
+    "keyframes_sent": 45,
+    "output_error": null,
+    "output_state": "publishing",
+    "ticks_dropped": 3,
+    "ttff": null,
+    "video_codec": "H264",
+    "width": 1344
+  },
+  "stream_delete_http": 200,
+  "stream_id": "fvstream_29bfceb26541421e9bfdba2db2d25ab6"
+}

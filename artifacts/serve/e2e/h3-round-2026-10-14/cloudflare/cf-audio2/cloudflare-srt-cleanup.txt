@@ -1,0 +1,2 @@
+CLEANUP {"after":404,"before":200,"delete":200,"enabled_before":false,"gone":true,"name":"fv-test-fvstream_5a5d5ead436244c79a0aa7fce4c21edb","recordings":[{"delete":200,"duration_s":-1,"video":"b49cc2375f56f54541f13ab65fdfca0b"}],"uid":"a8075d9d9583a6ead26070fdf57fccf0"}
+LIST {"fv_test_inputs":[],"http":200,"other_inputs":1,"preexisting_divine_firefly_present":true}

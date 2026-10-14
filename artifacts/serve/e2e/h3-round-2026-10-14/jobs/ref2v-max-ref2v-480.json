@@ -1,0 +1,57 @@
+{
+  "completed_at": "2026-10-14T04:17:34.107485402Z",
+  "created_at": "2026-10-14T04:12:18.604596012Z",
+  "error": null,
+  "expires_at": "2026-10-15T04:12:18.604596012Z",
+  "fps": 24,
+  "height": 480,
+  "id": "fvjob_b519385d607747bfa5cba7a12cc2c3f8",
+  "metrics": {
+    "build_rtf": 50.71254288251613,
+    "inference_s": 262.014804893,
+    "peak_memory_mb": 55892.01811885834,
+    "queue_s": 0.001790156,
+    "run_s": 315.501099234,
+    "stage_durations": {
+      "audio_decode": 0.127542892,
+      "denoise": 262.014804893,
+      "encode": 0.210021066,
+      "refine": 0.002709449,
+      "text": 45.650915622,
+      "video_decode": 2.828653295
+    }
+  },
+  "model": "h3-ref2v-max",
+  "notes": [
+    "canvas: 832x480 follows the input image (832x480)"
+  ],
+  "num_frames": 124,
+  "object": "fv.job",
+  "output": {
+    "audio": {
+      "channels": 2,
+      "rate": 32000
+    },
+    "bytes": 3741390,
+    "fps": 24,
+    "frames": 124,
+    "height": 480,
+    "mime": "video/mp4",
+    "url": "<redacted: signed artifact URL on a deleted pod>",
+    "width": 832
+  },
+  "progress": 1,
+  "protocol": "native",
+  "queue_position": null,
+  "recipe": "h3-ref2va-base-49step",
+  "resolved_model": "h3-ref2v-max",
+  "seed": 7,
+  "started_at": "2026-10-14T04:12:18.606386168Z",
+  "status": "succeeded",
+  "task": "ref2v",
+  "tier": "max",
+  "width": 832,
+  "hr_tag": "ref2v-max-ref2v-480",
+  "hr_task": "ref2v",
+  "hr_wall_s": 315.56
+}

@@ -1,0 +1,31 @@
+[hr 04:33:41] cloudflare: stream fvstream_735c0c489eac461da9fa68156dd3b87c live input 39bec94d9e5de289e3af06c742709ed6
+{"ok": true, "tracks": ["audio", "video"], "audio_frames": 4919, "video_frames": 513, "video_size": [1344, 768], "sample_rate": 48000, "layout": "stereo", "seconds_with_audio_above_-60dBFS": 20, "max_rms_dbfs": -11.842896575185272}
+{"output_state":"publishing","encoder":"Nvenc","video_codec":"H264","width":1344,"height":768,"frames_sent":2429,"audio_packets_sent":5064}
+CLEANUP {"before":404,"gone":true,"note":"already deleted (on_stop)","uid":"39bec94d9e5de289e3af06c742709ed6"}
+LIST {"fv_test_inputs":[],"http":200,"other_inputs":1,"preexisting_divine_firefly_present":true}
+[hr 04:35:58] cloudflare-rtmps: stream fvstream_3d87fabcfaf54fd9ac5667c2448a7db1 live input 89ba20f6d34a8241eca48a4d1562c591
+{"kind":"cloudflare-rtmps","audio_listed_after_s":60}
+  Stream #0:0(en-0c8c5e4e): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 0 kb/s (default)
+  Stream #0:0(en-0c8c5e4e): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 0 kb/s (default)
+  Stream #0:0(en-0c8c5e4e): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 0 kb/s (default)
+  Stream #0:0(en-0c8c5e4e): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 0 kb/s (default)
+  Stream #0:0(en-0c8c5e4e): Audio: pcm_s16le, 48000 Hz, stereo, s16, 1536 kb/s (default)
+[Parsed_volumedetect_0 @ 0x5e75ec5a14c0] mean_volume: -23.9 dB
+[Parsed_volumedetect_0 @ 0x5e75ec5a14c0] max_volume: -1.4 dB
+{"output_state":"publishing","encoder":"ffmpeg h264_nvenc","video_codec":"H264","width":1344,"height":768,"frames_sent":2158,"audio_packets_sent":0}
+CLEANUP {"after":404,"before":200,"delete":200,"enabled_before":false,"gone":true,"name":"fv-test-fvstream_3d87fabcfaf54fd9ac5667c2448a7db1","recordings":[{"delete":200,"duration_s":-1,"video":"78855806ae961d368390d8e52f650020"}],"uid":"89ba20f6d34a8241eca48a4d1562c591"}
+LIST {"fv_test_inputs":[],"http":200,"other_inputs":1,"preexisting_divine_firefly_present":true}
+[hr 04:38:17] cloudflare-srt: stream fvstream_5a5d5ead436244c79a0aa7fce4c21edb live input a8075d9d9583a6ead26070fdf57fccf0
+{"kind":"cloudflare-srt","audio_listed_after_s":162}
+  Stream #0:0(en-8578fab7): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 129 kb/s (default)
+  Stream #0:0(en-8578fab7): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 129 kb/s (default)
+  Stream #0:0(en-8578fab7): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 129 kb/s (default)
+  Stream #0:0(en-8578fab7): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 129 kb/s (default)
+  Stream #0:0(en-8578fab7): Audio: pcm_s16le, 48000 Hz, stereo, s16, 1536 kb/s (default)
+[Parsed_volumedetect_0 @ 0x608fdd12f780] mean_volume: -26.6 dB
+[Parsed_volumedetect_0 @ 0x608fdd12f780] max_volume: -6.2 dB
+{"output_state":"publishing","encoder":"ffmpeg h264_nvenc","video_codec":"H264","width":1344,"height":768,"frames_sent":3799,"audio_packets_sent":0}
+CLEANUP {"after":404,"before":200,"delete":200,"enabled_before":false,"gone":true,"name":"fv-test-fvstream_5a5d5ead436244c79a0aa7fce4c21edb","recordings":[{"delete":200,"duration_s":-1,"video":"b49cc2375f56f54541f13ab65fdfca0b"}],"uid":"a8075d9d9583a6ead26070fdf57fccf0"}
+LIST {"fv_test_inputs":[],"http":200,"other_inputs":1,"preexisting_divine_firefly_present":true}
+LIST {"fv_test_inputs":[],"http":200,"other_inputs":1,"preexisting_divine_firefly_present":true}
+c-finished

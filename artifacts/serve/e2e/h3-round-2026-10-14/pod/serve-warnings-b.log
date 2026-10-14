@@ -1,0 +1,40 @@
+[2m2026-10-14T03:26:42.513534Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)
+[2m2026-10-14T03:35:11.194719Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+[2m2026-10-14T03:35:11.261696Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_WEBHOOK_ED25519_KEY is not set: fal webhooks use a per-process key
+[2m2026-10-14T03:35:11.261734Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)
+[2m2026-10-14T03:44:43.769112Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+[2m2026-10-14T03:44:43.831781Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_WEBHOOK_ED25519_KEY is not set: fal webhooks use a per-process key
+[2m2026-10-14T03:44:43.831835Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)
+[2m2026-10-14T03:45:57.979228Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+[2m2026-10-14T03:45:58.042392Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_WEBHOOK_ED25519_KEY is not set: fal webhooks use a per-process key
+[2m2026-10-14T03:45:58.042443Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)
+[2m2026-10-14T03:47:13.213588Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+[2m2026-10-14T03:47:13.280010Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_WEBHOOK_ED25519_KEY is not set: fal webhooks use a per-process key
+[2m2026-10-14T03:47:13.280060Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)
+[2m2026-10-14T03:50:36.906188Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+[2m2026-10-14T03:50:36.979855Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_WEBHOOK_ED25519_KEY is not set: fal webhooks use a per-process key
+[2m2026-10-14T03:50:36.979914Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)
+[2m2026-10-14T03:57:25.900253Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+[2m2026-10-14T03:57:25.968850Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_WEBHOOK_ED25519_KEY is not set: fal webhooks use a per-process key
+[2m2026-10-14T03:57:25.968896Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)
+[2m2026-10-14T03:58:44.806129Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+[2m2026-10-14T03:58:44.874503Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_WEBHOOK_ED25519_KEY is not set: fal webhooks use a per-process key
+[2m2026-10-14T03:58:44.874550Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)
+[2m2026-10-14T04:02:14.357667Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+[2m2026-10-14T04:02:14.436633Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_WEBHOOK_ED25519_KEY is not set: fal webhooks use a per-process key
+[2m2026-10-14T04:02:14.436699Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)
+[2m2026-10-14T04:04:55.286392Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+[2m2026-10-14T04:04:55.353284Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_WEBHOOK_ED25519_KEY is not set: fal webhooks use a per-process key
+[2m2026-10-14T04:04:55.353326Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)
+[2m2026-10-14T04:09:31.590446Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+[2m2026-10-14T04:09:31.657073Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_WEBHOOK_ED25519_KEY is not set: fal webhooks use a per-process key
+[2m2026-10-14T04:09:31.657176Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)
+[2m2026-10-14T04:10:18.051614Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+[2m2026-10-14T04:10:18.127106Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_WEBHOOK_ED25519_KEY is not set: fal webhooks use a per-process key
+[2m2026-10-14T04:10:18.127180Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)
+[2m2026-10-14T04:11:49.824923Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+[2m2026-10-14T04:11:49.900639Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_WEBHOOK_ED25519_KEY is not set: fal webhooks use a per-process key
+[2m2026-10-14T04:11:49.900699Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)
+[2m2026-10-14T04:17:36.633982Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+[2m2026-10-14T04:17:36.718663Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m FV_WEBHOOK_ED25519_KEY is not set: fal webhooks use a per-process key
+[2m2026-10-14T04:17:36.718721Z[0m [33m WARN[0m [2mfastvideo_serve::app[0m[2m:[0m server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)

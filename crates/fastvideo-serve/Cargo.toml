@@ -20,6 +20,12 @@ name = "fv-edge-local"
 path = "src/bin/fv-edge-local.rs"
 required-features = ["http-client"]
 
+# Stream outputs against the real Cloudflare Stream from a running (GPU)
+# fv-serve: WHEP / HLS read-back and live-input cleanup (GPU checks).
+[[example]]
+name = "cf_live_check"
+required-features = ["webrtc", "http-client"]
+
 [dependencies]
 fastvideo-protocol.workspace = true
 fastvideo-trace.workspace = true

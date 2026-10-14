@@ -1,0 +1,13 @@
+RESULT {"case":"rtmps","cleanup":{"after":404,"before":200,"delete":200,"enabled_before":false,"gone":true,"name":"fv-test-fvstream_b52efe9dc0c9407d98d2d5316a0ebf3c","recordings":[{"delete":200,"duration_s":-1,"video":"77a42d96e998d53e321bd0abe0127724"}],"uid":"9568f3888f6ae0d50aab6d6ca151fbad"},"create_ms":1333,"live_input":"9568f3888f6ae0d50aab6d6ca151fbad","model":"fasth3","ok":true,"read":{"audio":null,"connected_after_s":31.572595365,"decoded":{"codec":"h264","frames":144,"height":720,"keyframes":3,"width":1260},"luma":{"black":0,"deviation":57.24590129296913,"frames":144,"mean":84.515679
+CREATED 9568f3888f6ae0d50aab6d6ca151fbad
+LIST {"fv_test_inputs":[],"http":200,"other_inputs":1,"preexisting_divine_firefly_present":true}
+/e2e/out/cf3/cloudflare-rtmps-master-probe.json
+[{"codec_type":"video","codec_name":"h264","width":420,"height":240,"sample_rate":null,"channels":null},{"codec_type":"video","codec_name":"h264","width":630,"height":360,"sample_rate":null,"channels":null},{"codec_type":"video","codec_name":"h264","width":840,"height":480,"sample_rate":null,"channels":null},{"codec_type":"video","codec_name":"h264","width":1260,"height":720,"sample_rate":null,"channels":null},{"codec_type":"audio","codec_name":"aac","width":null,"height":null,"sample_rate":"48000","channels":2}]
+  Stream #0:0(en-959d6ea1): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 0 kb/s (default)
+  Stream #0:0(en-959d6ea1): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 0 kb/s (default)
+  Stream #0:0(en-959d6ea1): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 0 kb/s (default)
+  Stream #0:0(en-959d6ea1): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 0 kb/s (default)
+  Stream #0:0(en-959d6ea1): Audio: pcm_s16le, 48000 Hz, stereo, s16, 1536 kb/s (default)
+[Parsed_volumedetect_0 @ 0x631b6a20c040] mean_volume: -91.0 dB
+[Parsed_volumedetect_0 @ 0x631b6a20c040] max_volume: -91.0 dB
+{"kind":"cloudflare-rtmps","audio_listed_after_s":58}
