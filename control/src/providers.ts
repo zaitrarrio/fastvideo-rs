@@ -579,22 +579,51 @@ say "tunnel $U"
 report tunnel "$U" ""
 `;
 
-/** The Hub fetcher of a boot with weights_source hub (GMI / Brev PROVIDER_BOOT, the Runpod worker boot): `fetch_tree`
- * sets up a venv with huggingface_hub and scripts/gpu/fetch-hub-tree.py (at the image's commit) on first use, then
- * fetches one tree at its pinned revision (weights-revisions.tsv) into $FV_WEIGHTS/<dest>, every file checked against
- * the Hub listing, and logs its time as a boot step. */
+/** The Hub fetcher of a boot with weights_source hub (GMI / Brev PROVIDER_BOOT, the Runpod worker boot, a serverless
+ * worker): `fetch_tree` sets up a venv with huggingface_hub and scripts/gpu/fetch-hub-tree.py (at the image's commit) on
+ * first use, then fetches one tree at its pinned revision (weights-revisions.tsv) into $FV_WEIGHTS/<dest>, every file
+ * checked against the Hub listing (fetch-hub-tree.py renames the tree into place only then), and logs its time as a
+ * boot step (`hub_step`, which a boot may redefine after this block to report it too). With FV_HUB_SHA256_B64
+ * (dest<TAB>path<TAB>bytes<TAB>sha256[|sha256]: scripts/gpu/weights-sha256.tsv's rows, weights-sources.ts HUB_SHA256)
+ * every recorded file of the tree must also match the SHA-256 the fetcher computed and the recorded size, or the tree
+ * is removed (the container's own disk) and the boot fails before fv-serve starts. */
 export const HUB_FETCH_TREE_SH = `FETCHER=""
+hub_step() { say "step $1: $2s"; }
+hub_verify() { # dest sha256.txt: the tree's weights-sha256.tsv rows (FV_HUB_SHA256_B64) against the fetcher's hashes
+  [ -n "\${FV_HUB_SHA256_B64:-}" ] || return 0
+  hv_n=0; hv_bad=""
+  while IFS="$(printf '\\t')" read -r hd hp hb hh; do
+    [ "$hd" = "$1" ] || continue
+    hv_n=$((hv_n + 1))
+    hg="$(awk -v p="$hp" '{ h = $1; sub(/^[0-9a-f]+  /, ""); if ($0 == p) print h }' "$2" 2>/dev/null | head -n 1)"
+    case "|$hh|" in *"|$hg|"*) ;; *) hv_bad="$hv_bad $hp" ;; esac
+    if [ "$hb" != "-" ] && [ "$(stat -c %s "$FV_WEIGHTS/$1/$hp" 2>/dev/null || echo none)" != "$hb" ]; then hv_bad="$hv_bad $hp(size)"; fi
+  done <<EOF_SHA
+$(printf "%s" "$FV_HUB_SHA256_B64" | base64 -d)
+EOF_SHA
+  if [ -n "$hv_bad" ]; then
+    hv_old="$FV_WEIGHTS/.stale-$(printf %s "$1" | tr '/' '_')-$(date +%s)"
+    mv "$FV_WEIGHTS/$1" "$hv_old" && rm -rf "$hv_old"
+    fail "tree $1: not the recorded SHA-256 (weights-sha256.tsv):$hv_bad"
+  fi
+  if [ "$hv_n" = 0 ]; then say "tree $1: no weights-sha256.tsv rows: checked against the Hub listing only"; else say "tree $1: $hv_n files match weights-sha256.tsv"; fi
+}
 fetch_tree() { # dest repo revision globs n: one tree into $FV_WEIGHTS/<dest> (the fetcher is set up on first use)
   if [ -z "$FETCHER" ]; then
+    t1="$(date +%s)"
     { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-venv python3-pip; } >>/fvstate/apt.log 2>&1 || fail "apt python3-venv"
     python3 -m venv /opt/fv/venv && /opt/fv/venv/bin/pip install -q "huggingface_hub>=0.34" >/fvstate/pip.log 2>&1 || fail "pip huggingface_hub"
     mkdir -p /opt/fv/scripts && curl -fsSL --max-time 60 -o /opt/fv/scripts/fetch-hub-tree.py "$FV_SCRIPTS_URL/fetch-hub-tree.py" || fail "fetch-hub-tree.py"
     FETCHER=1
+    hub_step hub_tools "$(( $(date +%s) - t1 ))"
   fi
   mkdir -p "/fvstate/fetch-$5"; t0="$(date +%s)"
   FETCH_REPO="$2" FETCH_REVISION="$3" FETCH_DEST="$1" FETCH_GLOBS="$4" FETCH_WEIGHTS="$FV_WEIGHTS" FETCH_SRV="/fvstate/fetch-$5" FETCH_MIN_FREE_GB=5 \\
     /opt/fv/venv/bin/python /opt/fv/scripts/fetch-hub-tree.py >"/fvstate/fetch-$5.out" 2>&1 || fail "tree $1: $(tail -2 "/fvstate/fetch-$5/log.txt" 2>/dev/null | tr '\\n"' '  ')"
-  say "step hub $1: $(( $(date +%s) - t0 ))s"
+  # fetch-hub-tree.py records its outcome in DONE (0 = the tree was renamed into place after every check).
+  [ "$(cat "/fvstate/fetch-$5/DONE" 2>/dev/null)" = 0 ] || fail "tree $1: $(grep -v '^ ' "/fvstate/fetch-$5/log.txt" 2>/dev/null | tail -2 | tr '\\n"' '  ')"
+  hub_verify "$1" "/fvstate/fetch-$5/sha256.txt"
+  hub_step "hub $1" "$(( $(date +%s) - t0 ))"
 }
 `;
 
