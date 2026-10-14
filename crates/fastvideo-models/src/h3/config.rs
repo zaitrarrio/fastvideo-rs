@@ -891,6 +891,13 @@ impl H3InferenceContract {
             let (lora, forwards) = turbo?;
             return Ok(Self::turbo_lora(lora, forwards));
         }
+        // VDN-H3 (docs/ports/vdn-h3.md §1.6): MiniMax-H3's uniform grid with
+        // the base shifts 12 / 3, no CFG, `N + 1` sigma points for N forwards.
+        // The attention is the hybrid's window softmax + linear branch, not
+        // VSA or Sol: `dense` here means "no VSA".
+        if let Some(n) = super::vdn::vdn_recipe_forwards(name) {
+            return Ok(Self::base(n + 1));
+        }
         match name {
             // FastH3 Trim's fastvideo_inference.json is the V2 contract verbatim:
             // the same 8 rungs, shifts 10 / 3, VSA 0.8 at tile 64.
@@ -910,7 +917,7 @@ impl H3InferenceContract {
             "sol-h3" | "sol_h3" | "sol-h3-t2v" | "sol-h3-i2v" | "sol-h3-ref2va"
             | "sol_h3_ref2va" => Ok(Self::sol_h3()),
             other => Err(format!(
-                "unknown H3 recipe '{other}' (8step|trim-8step|4step-vsa|4step-dense|sol-h3|sol-h3-spark|sol-h3-rtx|base|base-<N>step|h3-plug-4step|h3-plug-cfg|larry-turbo[-<N>step]|lightx2v-turbo[-<N>step]|lightx2v-turbo-v0.1[-<N>step])"
+                "unknown H3 recipe '{other}' (8step|trim-8step|4step-vsa|4step-dense|sol-h3|sol-h3-spark|sol-h3-rtx|base|base-<N>step|h3-plug-4step|h3-plug-cfg|larry-turbo[-<N>step]|lightx2v-turbo[-<N>step]|lightx2v-turbo-v0.1[-<N>step]|vdn-h3-<N>step)"
             )),
         }
     }

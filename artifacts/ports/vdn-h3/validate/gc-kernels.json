@@ -1,0 +1,248 @@
+{
+  "checks": [
+    {
+      "limits": {
+        "rel_l2_max": 0.01
+      },
+      "name": "vdn/window_attn_f64",
+      "ok": true,
+      "values": {
+        "max_abs": 0.0010739266872406006,
+        "note": "bf16 output vs f64",
+        "rel_l2": 0.0020519503373121343
+      }
+    },
+    {
+      "limits": {
+        "rel_l2_max": 0.0
+      },
+      "name": "vdn/window_attn_full_cover_vs_dense",
+      "ok": true,
+      "values": {
+        "max_abs": 0.0,
+        "note": "bitwise against the dense V2 kernel",
+        "rel_l2": 0.0
+      }
+    },
+    {
+      "limits": {
+        "rel_l2_max": 0.01
+      },
+      "name": "vdn/features_q",
+      "ok": true,
+      "values": {
+        "max_abs": 0.0009749829769134521,
+        "note": "bf16 out",
+        "rel_l2": 0.001583386169668876
+      }
+    },
+    {
+      "limits": {
+        "rel_l2_max": 0.01
+      },
+      "name": "vdn/sconv5",
+      "ok": true,
+      "values": {
+        "max_abs": 0.015044212341308594,
+        "note": "bf16 out",
+        "rel_l2": 0.0016609440175487597
+      }
+    },
+    {
+      "limits": {
+        "rel_l2_max": 0.01
+      },
+      "name": "vdn/tconv5_silu_l2",
+      "ok": true,
+      "values": {
+        "max_abs": 0.001922905445098877,
+        "note": "bf16 out",
+        "rel_l2": 0.0016670661097961882
+      }
+    },
+    {
+      "limits": {
+        "rel_l2_max": 0.00001
+      },
+      "name": "vdn/frame_stats_A",
+      "ok": true,
+      "values": {
+        "max_abs": 8.940696716308594e-8,
+        "note": "fp32",
+        "rel_l2": 8.663387410390361e-8
+      }
+    },
+    {
+      "limits": {
+        "rel_l2_max": 0.001
+      },
+      "name": "vdn/frame_stats_B",
+      "ok": true,
+      "values": {
+        "max_abs": 0.0001220703125,
+        "note": "bf16-rounded GEMM output",
+        "rel_l2": 1.333611950236689e-6
+      }
+    },
+    {
+      "limits": {
+        "rel_l2_max": 0.0001
+      },
+      "name": "vdn/kda_alpha",
+      "ok": true,
+      "values": {
+        "max_abs": 1.1920928955078125e-7,
+        "note": "fp32",
+        "rel_l2": 7.111629388624295e-8
+      }
+    },
+    {
+      "limits": {
+        "rel_l2_max": 0.0001
+      },
+      "name": "vdn/solve_T",
+      "ok": true,
+      "values": {
+        "max_abs": 6.556510925292969e-7,
+        "note": "Gauss-Jordan fp32 vs Cholesky f64",
+        "rel_l2": 3.0356659785865535e-7
+      }
+    },
+    {
+      "limits": {
+        "rel_l2_max": 0.0001
+      },
+      "name": "vdn/solve_J",
+      "ok": true,
+      "values": {
+        "max_abs": 5.662441253662109e-7,
+        "note": "fp32 vs f64",
+        "rel_l2": 4.475251446840161e-7
+      }
+    },
+    {
+      "limits": {
+        "rel_l2_max": 0.0001
+      },
+      "name": "vdn/text_state",
+      "ok": true,
+      "values": {
+        "max_abs": 1.043081283569336e-7,
+        "note": "fp32 vs f64",
+        "rel_l2": 4.6020847281028895e-7
+      }
+    },
+    {
+      "limits": {
+        "rel_l2_max": 0.0001
+      },
+      "name": "vdn/scan_forward",
+      "ok": true,
+      "values": {
+        "max_abs": 4.172325134277344e-7,
+        "note": "fp32 vs f64",
+        "rel_l2": 2.9298678351673373e-7
+      }
+    },
+    {
+      "limits": {
+        "rel_l2_max": 0.0001
+      },
+      "name": "vdn/scan_reverse",
+      "ok": true,
+      "values": {
+        "max_abs": 3.2782554626464844e-7,
+        "note": "fp32 vs f64",
+        "rel_l2": 2.927547378311518e-7
+      }
+    },
+    {
+      "limits": {
+        "rel_l2_max": 0.01
+      },
+      "name": "vdn/gather_bridge",
+      "ok": true,
+      "values": {
+        "max_abs": 0.0002433285117149353,
+        "note": "bf16 out",
+        "rel_l2": 0.001658722415342474
+      }
+    },
+    {
+      "limits": {
+        "rel_l2_max": 0.015
+      },
+      "name": "vdn/readout_norm_gate",
+      "ok": true,
+      "values": {
+        "max_abs": 0.018074750900268555,
+        "note": "bf16 GEMM output rounded",
+        "rel_l2": 0.0023467860615499327
+      }
+    },
+    {
+      "limits": {
+        "rel_l2_max": 0.03
+      },
+      "name": "vdn/branch_end_to_end",
+      "ok": true,
+      "values": {
+        "max_abs": 0.017343640327453613,
+        "note": "device kernels vs host reference, 12 inner frames",
+        "rel_l2": 0.004233672801779401
+      }
+    }
+  ],
+  "context": {
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96615,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "gemm_math": "Bf16",
+    "limits": {
+      "denoise": 0.1,
+      "forward": 0.02,
+      "op": 0.005
+    },
+    "mode": "fast",
+    "vdn_timings_ms": [
+      {
+        "ms": 21.776759,
+        "name": "branch_480p_5s"
+      },
+      {
+        "ms": 13.536204,
+        "name": "attn_window_480p_5s"
+      },
+      {
+        "ms": 18.562026,
+        "name": "attn_dense_480p_5s"
+      },
+      {
+        "ms": 35.228024,
+        "name": "branch_768p_5s"
+      },
+      {
+        "ms": 65.889481,
+        "name": "attn_window_768p_5s"
+      },
+      {
+        "ms": 108.304282,
+        "name": "attn_dense_768p_5s"
+      }
+    ]
+  },
+  "elapsed_s": 9.712844169,
+  "env": {},
+  "error": null,
+  "git_sha": null,
+  "stage": "kernels",
+  "status": "pass"
+}

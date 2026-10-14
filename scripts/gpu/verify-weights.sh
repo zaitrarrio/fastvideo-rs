@@ -6,7 +6,7 @@
 # other tree comes from R2. Before that: jg48s6o1w0 (every cell passed on 2026-10-06). The US volume
 # s2k01690bi was deleted (docs/ops/runpod-volumes.md).
 #
-#   verify-weights.sh <cell>...        cells: fasth3-8step fasth3-trim-8step fasth3-trim-8step-nvfp4 h3-base h3-ref2va h3-ref2va-turbo fasth3-4step-vsa
+#   verify-weights.sh <cell>...        cells: fasth3-8step fasth3-trim-8step fasth3-trim-8step-nvfp4 vdn-h3 vdn-h3-8step h3-base h3-ref2va h3-ref2va-turbo fasth3-4step-vsa
 #                                      fasth3-4step-dense sol-h3 sol-h3-spark
 #                                      ltx25-two-stage ltx23 fastwan21-1.3b
 #                                      wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b
@@ -83,6 +83,13 @@ needs() {
     # Its ComfyUI NVFP4 single file (Blackwell). Plus sha:fasth3-trim-8step-nvfp4.
     fasth3-trim-8step-nvfp4)
       echo ":fasth3-trim-8step-nvfp4/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors" ;;
+    # VDN-H3 (docs/ports/vdn-h3.md): h3-base's transformer, VAEs and text encoder plus the stage-B linear branch and its
+    # default LoRA (vdn-h3-stage-b-2000). Plus sha:vdn-h3-stage-b-2000.
+    vdn-h3)
+      echo "$(needs h3-base) vdn-h3-stage-b-2000:stage-b-step-2000/linear_branch/model.safetensors vdn-h3-stage-b-2000:stage-b-step-2000/adapters/default/adapter_model.safetensors" ;;
+    # VDN-H3 8-step: the same plus the DMD turbo LoRA (vdn-h3-dmd-250-turbo). Plus sha:vdn-h3-dmd-250-turbo.
+    vdn-h3-8step)
+      echo "$(needs vdn-h3) vdn-h3-dmd-250-turbo:stage-dmd-step-250/adapters/turbo/adapter_model.safetensors" ;;
     # FastH3 Preview v1 = the base transformer + one Preview LoRA (FastVideo's
     # run_fasth3_lora_preview_*_datafree.sh); the 8-step export is refused.
     fasth3-4step-vsa)
@@ -175,14 +182,14 @@ needs() {
     # MiniMax-H3 Turbo LoRAs (h3-larry-turbo, h3-lightx2v-turbo) on the base tree;
     # docs/ports/h3-turbo-loras.md. Plus their sha: lists.
     h3-turbo-loras)
-      echo "$(needs h3-base) h3-turbo-loras:larry/minimax_h3_turbo_4step_ema_ckpt850.safetensors h3-turbo-loras:lightx2v/minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors" ;;
+      echo "$(needs h3-base) h3-turbo-loras:larry/minimax_h3_turbo_4step_ema_ckpt850.safetensors h3-turbo-loras:lightx2v/minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors h3-turbo-loras:lightx2v-v0.1/minimax_h3_fl2v_turbo_4step_v0.1.safetensors" ;;
     # The optional NCII prompt guard (fv-serve [moderation] ncii). Plus its sha: list.
     ncii-guard) echo ":auxiliary/ncii-light-guard/model.safetensors" ;;
     *) return 1 ;;
   esac
 }
 
-CELLS=(fasth3-8step fasth3-trim-8step fasth3-trim-8step-nvfp4 h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
+CELLS=(fasth3-8step fasth3-trim-8step fasth3-trim-8step-nvfp4 vdn-h3 vdn-h3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
   wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8 dit-prequant upscalers
   ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided ltx2 longlive-1.3b longlive2-5b longlive2-5b-nvfp4 longlive-plug
   sana-video-2b-480p wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq lingbot-moe cosmos3-super upsampler-local
@@ -192,11 +199,13 @@ CELLS=(fasth3-8step fasth3-trim-8step fasth3-trim-8step-nvfp4 h3-base fasth3-4st
 sha_dests() {
   case "$1" in
     longlive-1.3b) echo "longlive-1.3b longlive-1.3b-safetensors" ;;
+    vdn-h3) echo "vdn-h3-stage-b-2000" ;;
+    vdn-h3-8step) echo "vdn-h3-stage-b-2000 vdn-h3-dmd-250-turbo" ;;
     longlive2-5b) echo "longlive2-5b" ;;
     longlive2-5b-nvfp4) echo "longlive2-5b-nvfp4-s4 longlive2-5b-nvfp4-s2" ;;
     longlive-plug)
       echo "longlive-plug/minimax-h3-few-step longlive-plug/minimax-h3-cfg longlive-plug/wan21-t2v-14b-few-step longlive-plug/wan21-t2v-14b-cfg longlive-plug/wan22-ti2v-5b-few-step longlive-plug/wan22-ti2v-5b-cfg" ;;
-    h3-turbo-loras) echo "h3-turbo-loras/larry h3-turbo-loras/lightx2v" ;;
+    h3-turbo-loras) echo "h3-turbo-loras/larry h3-turbo-loras/lightx2v h3-turbo-loras/lightx2v-v0.1" ;;
     ncii-guard) echo "auxiliary/ncii-light-guard" ;;
   esac
 }

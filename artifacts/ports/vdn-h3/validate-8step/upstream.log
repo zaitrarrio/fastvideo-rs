@@ -1,0 +1,18 @@
+[oracle_vdn 02:46:25] torch 2.13.0+cu129 cuda 12.9, NVIDIA RTX PRO 6000 Blackwell Server Edition
+Loading checkpoint shards:   0%|          | 0/14 [00:00<?, ?it/s]Loading checkpoint shards:   7%|▋         | 1/14 [00:00<00:05,  2.43it/s]Loading checkpoint shards:  14%|█▍        | 2/14 [00:00<00:04,  2.63it/s]Loading checkpoint shards:  21%|██▏       | 3/14 [00:01<00:04,  2.53it/s]Loading checkpoint shards:  29%|██▊       | 4/14 [00:01<00:03,  2.53it/s]Loading checkpoint shards:  36%|███▌      | 5/14 [00:02<00:03,  2.41it/s]Loading checkpoint shards:  43%|████▎     | 6/14 [00:02<00:03,  2.41it/s]Loading checkpoint shards:  50%|█████     | 7/14 [00:02<00:02,  2.43it/s]Loading checkpoint shards:  57%|█████▋    | 8/14 [00:03<00:02,  2.48it/s]Loading checkpoint shards:  64%|██████▍   | 9/14 [00:03<00:02,  2.47it/s]Loading checkpoint shards:  71%|███████▏  | 10/14 [00:04<00:01,  2.53it/s]Loading checkpoint shards:  79%|███████▊  | 11/14 [00:04<00:01,  2.55it/s]Loading checkpoint shards:  86%|████████▌ | 12/14 [00:04<00:00,  2.50it/s]Loading checkpoint shards:  93%|█████████▎| 13/14 [00:05<00:00,  2.49it/s]Loading checkpoint shards: 100%|██████████| 14/14 [00:05<00:00,  2.53it/s]Loading checkpoint shards: 100%|██████████| 14/14 [00:05<00:00,  2.50it/s]
+[oracle_vdn 02:51:51] loaded /fvw/vdn8/stage-dmd-step-250 (323s): kernels=eager softmax=ref
+Modular Diffusers is currently an experimental feature under active development. The API is subject to breaking changes in future releases.
+[oracle_vdn 02:52:16] layout: 124 frames -> 37 latent, 30x52, 14890 rows (46 text, 414 audio, 14430 video)
+[oracle_vdn 02:52:25] step 1/8: 8.52s
+[oracle_vdn 02:52:29] step 2/8: 4.22s
+[oracle_vdn 02:52:33] step 3/8: 4.22s
+[oracle_vdn 02:52:38] step 4/8: 4.23s
+[oracle_vdn 02:52:42] step 5/8: 4.23s
+[oracle_vdn 02:52:46] step 6/8: 4.24s
+[oracle_vdn 02:52:50] step 7/8: 4.24s
+[oracle_vdn 02:52:55] step 8/8: 4.24s
+Loading checkpoint shards:   0%|          | 0/3 [00:00<?, ?it/s]Loading checkpoint shards:  33%|███▎      | 1/3 [00:00<00:01,  1.48it/s]Loading checkpoint shards:  67%|██████▋   | 2/3 [00:01<00:00,  1.37it/s]Loading checkpoint shards: 100%|██████████| 3/3 [00:01<00:00,  2.04it/s]
+/opt/vdnpy/lib/python3.12/site-packages/torch/nn/utils/weight_norm.py:144: FutureWarning: `torch.nn.utils.weight_norm` is deprecated in favor of `torch.nn.utils.parametrizations.weight_norm`.
+  WeightNorm.apply(module, name, dim)
+Encoding video chunks:   0%|          | 0/1 [00:00<?, ?it/s]Encoding video chunks: 100%|██████████| 1/1 [00:00<00:00,  2.30it/s]Encoding video chunks: 100%|██████████| 1/1 [00:00<00:00,  2.30it/s]
+[oracle_vdn 02:53:29] done: denoise 38.3s, peak 69.5 GiB

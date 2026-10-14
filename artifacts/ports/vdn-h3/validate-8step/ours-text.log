@@ -1,0 +1,596 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[] oxide_embedded=0
+h3 gen 832x480x124: planned peak 51.56 GiB resident, 10.91 GiB streamed
+[fastvideo] h3 techniques: none [attention_backend from recipe]
+[fastvideo] h3 recipe=vdn-h3-8step steps=8 video_shift=12 vsa=0 dense=true
+[fastvideo] h3 vdn: /fvw/vdn-h3-dmd-250-turbo/stage-dmd-step-250 (default + turbo): fuse 363 pairs max rank 128 scale 1, chunk 5 radius 1
+[fastvideo] h3 i2v encoder: stream (the text encoder is Streamed, not a resident Qwen3-VL): FL2VA/Ref2VA requests read the vision tower and the bf16 language model from the volume per request
+[fastvideo] h3 dit offload: resident -> resident (resident plan 60.0 GiB, 94.4 GiB free before load)
+[fastvideo] h3 adaln table: block 1/50
+[fastvideo] h3 adaln table: block 2/50
+[fastvideo] h3 adaln table: block 3/50
+[fastvideo] h3 adaln table: block 4/50
+[fastvideo] h3 adaln table: block 5/50
+[fastvideo] h3 adaln table: block 6/50
+[fastvideo] h3 adaln table: block 7/50
+[fastvideo] h3 adaln table: block 8/50
+[fastvideo] h3 adaln table: block 9/50
+[fastvideo] h3 adaln table: block 10/50
+[fastvideo] h3 adaln table: block 11/50
+[fastvideo] h3 adaln table: block 12/50
+[fastvideo] h3 adaln table: block 13/50
+[fastvideo] h3 adaln table: block 14/50
+[fastvideo] h3 adaln table: block 15/50
+[fastvideo] h3 adaln table: block 16/50
+[fastvideo] h3 adaln table: block 17/50
+[fastvideo] h3 adaln table: block 18/50
+[fastvideo] h3 adaln table: block 19/50
+[fastvideo] h3 adaln table: block 20/50
+[fastvideo] h3 adaln table: block 21/50
+[fastvideo] h3 adaln table: block 22/50
+[fastvideo] h3 adaln table: block 23/50
+[fastvideo] h3 adaln table: block 24/50
+[fastvideo] h3 adaln table: block 25/50
+[fastvideo] h3 adaln table: block 26/50
+[fastvideo] h3 adaln table: block 27/50
+[fastvideo] h3 adaln table: block 28/50
+[fastvideo] h3 adaln table: block 29/50
+[fastvideo] h3 adaln table: block 30/50
+[fastvideo] h3 adaln table: block 31/50
+[fastvideo] h3 adaln table: block 32/50
+[fastvideo] h3 adaln table: block 33/50
+[fastvideo] h3 adaln table: block 34/50
+[fastvideo] h3 adaln table: block 35/50
+[fastvideo] h3 adaln table: block 36/50
+[fastvideo] h3 adaln table: block 37/50
+[fastvideo] h3 adaln table: block 38/50
+[fastvideo] h3 adaln table: block 39/50
+[fastvideo] h3 adaln table: block 40/50
+[fastvideo] h3 adaln table: block 41/50
+[fastvideo] h3 adaln table: block 42/50
+[fastvideo] h3 adaln table: block 43/50
+[fastvideo] h3 adaln table: block 44/50
+[fastvideo] h3 adaln table: block 45/50
+[fastvideo] h3 adaln table: block 46/50
+[fastvideo] h3 adaln table: block 47/50
+[fastvideo] h3 adaln table: block 48/50
+[fastvideo] h3 adaln table: block 49/50
+[fastvideo] h3 adaln table: block 50/50
+[fastvideo] h3 dit: block 1/50 resident
+[fastvideo] h3 dit: block 2/50 resident
+[fastvideo] h3 dit: block 3/50 resident
+[fastvideo] h3 dit: block 4/50 resident
+[fastvideo] h3 dit: block 5/50 resident
+[fastvideo] h3 dit: block 6/50 resident
+[fastvideo] h3 dit: block 7/50 resident
+[fastvideo] h3 dit: block 8/50 resident
+[fastvideo] h3 dit: block 9/50 resident
+[fastvideo] h3 dit: block 10/50 resident
+[fastvideo] h3 dit: block 11/50 resident
+[fastvideo] h3 dit: block 12/50 resident
+[fastvideo] h3 dit: block 13/50 resident
+[fastvideo] h3 dit: block 14/50 resident
+[fastvideo] h3 dit: block 15/50 resident
+[fastvideo] h3 dit: block 16/50 resident
+[fastvideo] h3 dit: block 17/50 resident
+[fastvideo] h3 dit: block 18/50 resident
+[fastvideo] h3 dit: block 19/50 resident
+[fastvideo] h3 dit: block 20/50 resident
+[fastvideo] h3 dit: block 21/50 resident
+[fastvideo] h3 dit: block 22/50 resident
+[fastvideo] h3 dit: block 23/50 resident
+[fastvideo] h3 dit: block 24/50 resident
+[fastvideo] h3 dit: block 25/50 resident
+[fastvideo] h3 dit: block 26/50 resident
+[fastvideo] h3 dit: block 27/50 resident
+[fastvideo] h3 dit: block 28/50 resident
+[fastvideo] h3 dit: block 29/50 resident
+[fastvideo] h3 dit: block 30/50 resident
+[fastvideo] h3 dit: block 31/50 resident
+[fastvideo] h3 dit: block 32/50 resident
+[fastvideo] h3 dit: block 33/50 resident
+[fastvideo] h3 dit: block 34/50 resident
+[fastvideo] h3 dit: block 35/50 resident
+[fastvideo] h3 dit: block 36/50 resident
+[fastvideo] h3 dit: block 37/50 resident
+[fastvideo] h3 dit: block 38/50 resident
+[fastvideo] h3 dit: block 39/50 resident
+[fastvideo] h3 dit: block 40/50 resident
+[fastvideo] h3 dit: block 41/50 resident
+[fastvideo] h3 dit: block 42/50 resident
+[fastvideo] h3 dit: block 43/50 resident
+[fastvideo] h3 dit: block 44/50 resident
+[fastvideo] h3 dit: block 45/50 resident
+[fastvideo] h3 dit: block 46/50 resident
+[fastvideo] h3 dit: block 47/50 resident
+[fastvideo] h3 dit: block 48/50 resident
+[fastvideo] h3 dit: block 49/50 resident
+[fastvideo] h3 dit: block 50/50 resident
+[fastvideo] h3 dit: 50 blocks resident
+[fastvideo] h3 vdn: linear branch attached to 50 blocks
+[fastvideo] h3 lora merge: device
+[fastvideo] load/io h3 dit {"wall_s":214.79,"viewed_gb":71.75,"prefetch_read_gb":67.36,"prefetch_skipped_gb":0.00,"prefetch_busy_s":3579.1,"viewed_gbps":0.33,"window_wait_s":0.0,"fill_s":1.1,"h2d_wait_s":0.5,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":193.4,"read_wait_s":197.7,"fetch_wait_s":0.0,"mem_mode":true,"prefetch":true}
+[fastvideo] load/io h3 total {"wall_s":242.99,"viewed_gb":81.70,"prefetch_read_gb":76.29,"prefetch_skipped_gb":0.00,"prefetch_busy_s":4031.3,"viewed_gbps":0.34,"window_wait_s":0.0,"fill_s":1.1,"h2d_wait_s":0.5,"h2d_pageable_s":0.2,"convert_s":0.0,"lora_s":193.4,"read_wait_s":222.4,"fetch_wait_s":0.0,"mem_mode":false,"prefetch":true}
+[INFO] h3/text_encoder {"chosen":"streamed","device_gib":0.0,"free_gib_before_load":94.35113525390625,"load_seconds":0.0,"requested":"Streamed"}
+[INFO] h3/load {"audio_vae_s":0.185864312,"dit_residency":"resident","dit_s":201.347863389,"refiner_s":0.145340396,"seconds":243.045810851,"text_encoder_s":0.0,"video_vae_s":28.011034832}
+[fastvideo] llm layer 1/50
+[fastvideo] llm layer 2/50
+[fastvideo] llm layer 3/50
+[fastvideo] llm layer 4/50
+[fastvideo] llm layer 5/50
+[fastvideo] llm layer 6/50
+[fastvideo] llm layer 7/50
+[fastvideo] llm layer 8/50
+[fastvideo] llm layer 9/50
+[fastvideo] llm layer 10/50
+[fastvideo] llm layer 11/50
+[fastvideo] llm layer 12/50
+[fastvideo] llm layer 13/50
+[fastvideo] llm layer 14/50
+[fastvideo] llm layer 15/50
+[fastvideo] llm layer 16/50
+[fastvideo] llm layer 17/50
+[fastvideo] llm layer 18/50
+[fastvideo] llm layer 19/50
+[fastvideo] llm layer 20/50
+[fastvideo] llm layer 21/50
+[fastvideo] llm layer 22/50
+[fastvideo] llm layer 23/50
+[fastvideo] llm layer 24/50
+[fastvideo] llm layer 25/50
+[fastvideo] llm layer 26/50
+[fastvideo] llm layer 27/50
+[fastvideo] llm layer 28/50
+[fastvideo] llm layer 29/50
+[fastvideo] llm layer 30/50
+[fastvideo] llm layer 31/50
+[fastvideo] llm layer 32/50
+[fastvideo] llm layer 33/50
+[fastvideo] llm layer 34/50
+[fastvideo] llm layer 35/50
+[fastvideo] llm layer 36/50
+[fastvideo] llm layer 37/50
+[fastvideo] llm layer 38/50
+[fastvideo] llm layer 39/50
+[fastvideo] llm layer 40/50
+[fastvideo] llm layer 41/50
+[fastvideo] llm layer 42/50
+[fastvideo] llm layer 43/50
+[fastvideo] llm layer 44/50
+[fastvideo] llm layer 45/50
+[fastvideo] llm layer 46/50
+[fastvideo] llm layer 47/50
+[fastvideo] llm layer 48/50
+[fastvideo] llm layer 49/50
+[fastvideo] llm layer 50/50
+[fastvideo] llm prefetch: 50 layers, host read+convert 221.81s, upload wait 0.22s, compute starved 221.95s
+[fastvideo] h3 memory text: peak 47.08 GiB used, 47.09 GiB reserved; 46.16 GiB live after; ledger: text_refiner 1.49 | dit_nonlinear 35.93 | vae 4.52 | audio_vae 0.24 | activations 4.91 | pool_reserved 0.01 | non_pool 0.62 | total 47.70 GiB
+[fastvideo] sdpa: fused mma B=1 H=56 Sq=46 Sk=46 D=128
+[fastvideo] h3 memory refine: peak 46.16 GiB used, 47.09 GiB reserved; 46.16 GiB live after; ledger: text_refiner 1.49 | dit_nonlinear 35.93 | vae 4.52 | audio_vae 0.24 | activations 3.99 | pool_reserved 0.93 | non_pool 0.62 | total 46.79 GiB
+[fastvideo] sdpa: vdn window mma B=1 H=56 S=14890 D=128 video=460+37x390 chunk=5 radius=1
+[fastvideo] h3 vdn: kernels loaded (cubin sm120, 0.0s, sm120)
+[fastvideo] h3 dit step 0: block 1/50
+[fastvideo] h3 dit step 0: block 2/50
+[fastvideo] h3 dit step 0: block 3/50
+[fastvideo] h3 dit step 0: block 4/50
+[fastvideo] h3 dit step 0: block 5/50
+[fastvideo] h3 dit step 0: block 6/50
+[fastvideo] h3 dit step 0: block 7/50
+[fastvideo] h3 dit step 0: block 8/50
+[fastvideo] h3 dit step 0: block 9/50
+[fastvideo] h3 dit step 0: block 10/50
+[fastvideo] h3 dit step 0: block 11/50
+[fastvideo] h3 dit step 0: block 12/50
+[fastvideo] h3 dit step 0: block 13/50
+[fastvideo] h3 dit step 0: block 14/50
+[fastvideo] h3 dit step 0: block 15/50
+[fastvideo] h3 dit step 0: block 16/50
+[fastvideo] h3 dit step 0: block 17/50
+[fastvideo] h3 dit step 0: block 18/50
+[fastvideo] h3 dit step 0: block 19/50
+[fastvideo] h3 dit step 0: block 20/50
+[fastvideo] h3 dit step 0: block 21/50
+[fastvideo] h3 dit step 0: block 22/50
+[fastvideo] h3 dit step 0: block 23/50
+[fastvideo] h3 dit step 0: block 24/50
+[fastvideo] h3 dit step 0: block 25/50
+[fastvideo] h3 dit step 0: block 26/50
+[fastvideo] h3 dit step 0: block 27/50
+[fastvideo] h3 dit step 0: block 28/50
+[fastvideo] h3 dit step 0: block 29/50
+[fastvideo] h3 dit step 0: block 30/50
+[fastvideo] h3 dit step 0: block 31/50
+[fastvideo] h3 dit step 0: block 32/50
+[fastvideo] h3 dit step 0: block 33/50
+[fastvideo] h3 dit step 0: block 34/50
+[fastvideo] h3 dit step 0: block 35/50
+[fastvideo] h3 dit step 0: block 36/50
+[fastvideo] h3 dit step 0: block 37/50
+[fastvideo] h3 dit step 0: block 38/50
+[fastvideo] h3 dit step 0: block 39/50
+[fastvideo] h3 dit step 0: block 40/50
+[fastvideo] h3 dit step 0: block 41/50
+[fastvideo] h3 dit step 0: block 42/50
+[fastvideo] h3 dit step 0: block 43/50
+[fastvideo] h3 dit step 0: block 44/50
+[fastvideo] h3 dit step 0: block 45/50
+[fastvideo] h3 dit step 0: block 46/50
+[fastvideo] h3 dit step 0: block 47/50
+[fastvideo] h3 dit step 0: block 48/50
+[fastvideo] h3 dit step 0: block 49/50
+[fastvideo] h3 dit step 0: block 50/50
+[fastvideo] h3 step 1/8: 4.6s
+[fastvideo] h3 dit step 1: block 1/50
+[fastvideo] h3 dit step 1: block 2/50
+[fastvideo] h3 dit step 1: block 3/50
+[fastvideo] h3 dit step 1: block 4/50
+[fastvideo] h3 dit step 1: block 5/50
+[fastvideo] h3 dit step 1: block 6/50
+[fastvideo] h3 dit step 1: block 7/50
+[fastvideo] h3 dit step 1: block 8/50
+[fastvideo] h3 dit step 1: block 9/50
+[fastvideo] h3 dit step 1: block 10/50
+[fastvideo] h3 dit step 1: block 11/50
+[fastvideo] h3 dit step 1: block 12/50
+[fastvideo] h3 dit step 1: block 13/50
+[fastvideo] h3 dit step 1: block 14/50
+[fastvideo] h3 dit step 1: block 15/50
+[fastvideo] h3 dit step 1: block 16/50
+[fastvideo] h3 dit step 1: block 17/50
+[fastvideo] h3 dit step 1: block 18/50
+[fastvideo] h3 dit step 1: block 19/50
+[fastvideo] h3 dit step 1: block 20/50
+[fastvideo] h3 dit step 1: block 21/50
+[fastvideo] h3 dit step 1: block 22/50
+[fastvideo] h3 dit step 1: block 23/50
+[fastvideo] h3 dit step 1: block 24/50
+[fastvideo] h3 dit step 1: block 25/50
+[fastvideo] h3 dit step 1: block 26/50
+[fastvideo] h3 dit step 1: block 27/50
+[fastvideo] h3 dit step 1: block 28/50
+[fastvideo] h3 dit step 1: block 29/50
+[fastvideo] h3 dit step 1: block 30/50
+[fastvideo] h3 dit step 1: block 31/50
+[fastvideo] h3 dit step 1: block 32/50
+[fastvideo] h3 dit step 1: block 33/50
+[fastvideo] h3 dit step 1: block 34/50
+[fastvideo] h3 dit step 1: block 35/50
+[fastvideo] h3 dit step 1: block 36/50
+[fastvideo] h3 dit step 1: block 37/50
+[fastvideo] h3 dit step 1: block 38/50
+[fastvideo] h3 dit step 1: block 39/50
+[fastvideo] h3 dit step 1: block 40/50
+[fastvideo] h3 dit step 1: block 41/50
+[fastvideo] h3 dit step 1: block 42/50
+[fastvideo] h3 dit step 1: block 43/50
+[fastvideo] h3 dit step 1: block 44/50
+[fastvideo] h3 dit step 1: block 45/50
+[fastvideo] h3 dit step 1: block 46/50
+[fastvideo] h3 dit step 1: block 47/50
+[fastvideo] h3 dit step 1: block 48/50
+[fastvideo] h3 dit step 1: block 49/50
+[fastvideo] h3 dit step 1: block 50/50
+[fastvideo] h3 step 2/8: 3.4s
+[fastvideo] h3 dit step 2: block 1/50
+[fastvideo] h3 dit step 2: block 2/50
+[fastvideo] h3 dit step 2: block 3/50
+[fastvideo] h3 dit step 2: block 4/50
+[fastvideo] h3 dit step 2: block 5/50
+[fastvideo] h3 dit step 2: block 6/50
+[fastvideo] h3 dit step 2: block 7/50
+[fastvideo] h3 dit step 2: block 8/50
+[fastvideo] h3 dit step 2: block 9/50
+[fastvideo] h3 dit step 2: block 10/50
+[fastvideo] h3 dit step 2: block 11/50
+[fastvideo] h3 dit step 2: block 12/50
+[fastvideo] h3 dit step 2: block 13/50
+[fastvideo] h3 dit step 2: block 14/50
+[fastvideo] h3 dit step 2: block 15/50
+[fastvideo] h3 dit step 2: block 16/50
+[fastvideo] h3 dit step 2: block 17/50
+[fastvideo] h3 dit step 2: block 18/50
+[fastvideo] h3 dit step 2: block 19/50
+[fastvideo] h3 dit step 2: block 20/50
+[fastvideo] h3 dit step 2: block 21/50
+[fastvideo] h3 dit step 2: block 22/50
+[fastvideo] h3 dit step 2: block 23/50
+[fastvideo] h3 dit step 2: block 24/50
+[fastvideo] h3 dit step 2: block 25/50
+[fastvideo] h3 dit step 2: block 26/50
+[fastvideo] h3 dit step 2: block 27/50
+[fastvideo] h3 dit step 2: block 28/50
+[fastvideo] h3 dit step 2: block 29/50
+[fastvideo] h3 dit step 2: block 30/50
+[fastvideo] h3 dit step 2: block 31/50
+[fastvideo] h3 dit step 2: block 32/50
+[fastvideo] h3 dit step 2: block 33/50
+[fastvideo] h3 dit step 2: block 34/50
+[fastvideo] h3 dit step 2: block 35/50
+[fastvideo] h3 dit step 2: block 36/50
+[fastvideo] h3 dit step 2: block 37/50
+[fastvideo] h3 dit step 2: block 38/50
+[fastvideo] h3 dit step 2: block 39/50
+[fastvideo] h3 dit step 2: block 40/50
+[fastvideo] h3 dit step 2: block 41/50
+[fastvideo] h3 dit step 2: block 42/50
+[fastvideo] h3 dit step 2: block 43/50
+[fastvideo] h3 dit step 2: block 44/50
+[fastvideo] h3 dit step 2: block 45/50
+[fastvideo] h3 dit step 2: block 46/50
+[fastvideo] h3 dit step 2: block 47/50
+[fastvideo] h3 dit step 2: block 48/50
+[fastvideo] h3 dit step 2: block 49/50
+[fastvideo] h3 dit step 2: block 50/50
+[fastvideo] h3 step 3/8: 3.4s
+[fastvideo] h3 dit step 3: block 1/50
+[fastvideo] h3 dit step 3: block 2/50
+[fastvideo] h3 dit step 3: block 3/50
+[fastvideo] h3 dit step 3: block 4/50
+[fastvideo] h3 dit step 3: block 5/50
+[fastvideo] h3 dit step 3: block 6/50
+[fastvideo] h3 dit step 3: block 7/50
+[fastvideo] h3 dit step 3: block 8/50
+[fastvideo] h3 dit step 3: block 9/50
+[fastvideo] h3 dit step 3: block 10/50
+[fastvideo] h3 dit step 3: block 11/50
+[fastvideo] h3 dit step 3: block 12/50
+[fastvideo] h3 dit step 3: block 13/50
+[fastvideo] h3 dit step 3: block 14/50
+[fastvideo] h3 dit step 3: block 15/50
+[fastvideo] h3 dit step 3: block 16/50
+[fastvideo] h3 dit step 3: block 17/50
+[fastvideo] h3 dit step 3: block 18/50
+[fastvideo] h3 dit step 3: block 19/50
+[fastvideo] h3 dit step 3: block 20/50
+[fastvideo] h3 dit step 3: block 21/50
+[fastvideo] h3 dit step 3: block 22/50
+[fastvideo] h3 dit step 3: block 23/50
+[fastvideo] h3 dit step 3: block 24/50
+[fastvideo] h3 dit step 3: block 25/50
+[fastvideo] h3 dit step 3: block 26/50
+[fastvideo] h3 dit step 3: block 27/50
+[fastvideo] h3 dit step 3: block 28/50
+[fastvideo] h3 dit step 3: block 29/50
+[fastvideo] h3 dit step 3: block 30/50
+[fastvideo] h3 dit step 3: block 31/50
+[fastvideo] h3 dit step 3: block 32/50
+[fastvideo] h3 dit step 3: block 33/50
+[fastvideo] h3 dit step 3: block 34/50
+[fastvideo] h3 dit step 3: block 35/50
+[fastvideo] h3 dit step 3: block 36/50
+[fastvideo] h3 dit step 3: block 37/50
+[fastvideo] h3 dit step 3: block 38/50
+[fastvideo] h3 dit step 3: block 39/50
+[fastvideo] h3 dit step 3: block 40/50
+[fastvideo] h3 dit step 3: block 41/50
+[fastvideo] h3 dit step 3: block 42/50
+[fastvideo] h3 dit step 3: block 43/50
+[fastvideo] h3 dit step 3: block 44/50
+[fastvideo] h3 dit step 3: block 45/50
+[fastvideo] h3 dit step 3: block 46/50
+[fastvideo] h3 dit step 3: block 47/50
+[fastvideo] h3 dit step 3: block 48/50
+[fastvideo] h3 dit step 3: block 49/50
+[fastvideo] h3 dit step 3: block 50/50
+[fastvideo] h3 step 4/8: 3.4s
+[fastvideo] h3 dit step 4: block 1/50
+[fastvideo] h3 dit step 4: block 2/50
+[fastvideo] h3 dit step 4: block 3/50
+[fastvideo] h3 dit step 4: block 4/50
+[fastvideo] h3 dit step 4: block 5/50
+[fastvideo] h3 dit step 4: block 6/50
+[fastvideo] h3 dit step 4: block 7/50
+[fastvideo] h3 dit step 4: block 8/50
+[fastvideo] h3 dit step 4: block 9/50
+[fastvideo] h3 dit step 4: block 10/50
+[fastvideo] h3 dit step 4: block 11/50
+[fastvideo] h3 dit step 4: block 12/50
+[fastvideo] h3 dit step 4: block 13/50
+[fastvideo] h3 dit step 4: block 14/50
+[fastvideo] h3 dit step 4: block 15/50
+[fastvideo] h3 dit step 4: block 16/50
+[fastvideo] h3 dit step 4: block 17/50
+[fastvideo] h3 dit step 4: block 18/50
+[fastvideo] h3 dit step 4: block 19/50
+[fastvideo] h3 dit step 4: block 20/50
+[fastvideo] h3 dit step 4: block 21/50
+[fastvideo] h3 dit step 4: block 22/50
+[fastvideo] h3 dit step 4: block 23/50
+[fastvideo] h3 dit step 4: block 24/50
+[fastvideo] h3 dit step 4: block 25/50
+[fastvideo] h3 dit step 4: block 26/50
+[fastvideo] h3 dit step 4: block 27/50
+[fastvideo] h3 dit step 4: block 28/50
+[fastvideo] h3 dit step 4: block 29/50
+[fastvideo] h3 dit step 4: block 30/50
+[fastvideo] h3 dit step 4: block 31/50
+[fastvideo] h3 dit step 4: block 32/50
+[fastvideo] h3 dit step 4: block 33/50
+[fastvideo] h3 dit step 4: block 34/50
+[fastvideo] h3 dit step 4: block 35/50
+[fastvideo] h3 dit step 4: block 36/50
+[fastvideo] h3 dit step 4: block 37/50
+[fastvideo] h3 dit step 4: block 38/50
+[fastvideo] h3 dit step 4: block 39/50
+[fastvideo] h3 dit step 4: block 40/50
+[fastvideo] h3 dit step 4: block 41/50
+[fastvideo] h3 dit step 4: block 42/50
+[fastvideo] h3 dit step 4: block 43/50
+[fastvideo] h3 dit step 4: block 44/50
+[fastvideo] h3 dit step 4: block 45/50
+[fastvideo] h3 dit step 4: block 46/50
+[fastvideo] h3 dit step 4: block 47/50
+[fastvideo] h3 dit step 4: block 48/50
+[fastvideo] h3 dit step 4: block 49/50
+[fastvideo] h3 dit step 4: block 50/50
+[fastvideo] h3 step 5/8: 3.4s
+[fastvideo] h3 dit step 5: block 1/50
+[fastvideo] h3 dit step 5: block 2/50
+[fastvideo] h3 dit step 5: block 3/50
+[fastvideo] h3 dit step 5: block 4/50
+[fastvideo] h3 dit step 5: block 5/50
+[fastvideo] h3 dit step 5: block 6/50
+[fastvideo] h3 dit step 5: block 7/50
+[fastvideo] h3 dit step 5: block 8/50
+[fastvideo] h3 dit step 5: block 9/50
+[fastvideo] h3 dit step 5: block 10/50
+[fastvideo] h3 dit step 5: block 11/50
+[fastvideo] h3 dit step 5: block 12/50
+[fastvideo] h3 dit step 5: block 13/50
+[fastvideo] h3 dit step 5: block 14/50
+[fastvideo] h3 dit step 5: block 15/50
+[fastvideo] h3 dit step 5: block 16/50
+[fastvideo] h3 dit step 5: block 17/50
+[fastvideo] h3 dit step 5: block 18/50
+[fastvideo] h3 dit step 5: block 19/50
+[fastvideo] h3 dit step 5: block 20/50
+[fastvideo] h3 dit step 5: block 21/50
+[fastvideo] h3 dit step 5: block 22/50
+[fastvideo] h3 dit step 5: block 23/50
+[fastvideo] h3 dit step 5: block 24/50
+[fastvideo] h3 dit step 5: block 25/50
+[fastvideo] h3 dit step 5: block 26/50
+[fastvideo] h3 dit step 5: block 27/50
+[fastvideo] h3 dit step 5: block 28/50
+[fastvideo] h3 dit step 5: block 29/50
+[fastvideo] h3 dit step 5: block 30/50
+[fastvideo] h3 dit step 5: block 31/50
+[fastvideo] h3 dit step 5: block 32/50
+[fastvideo] h3 dit step 5: block 33/50
+[fastvideo] h3 dit step 5: block 34/50
+[fastvideo] h3 dit step 5: block 35/50
+[fastvideo] h3 dit step 5: block 36/50
+[fastvideo] h3 dit step 5: block 37/50
+[fastvideo] h3 dit step 5: block 38/50
+[fastvideo] h3 dit step 5: block 39/50
+[fastvideo] h3 dit step 5: block 40/50
+[fastvideo] h3 dit step 5: block 41/50
+[fastvideo] h3 dit step 5: block 42/50
+[fastvideo] h3 dit step 5: block 43/50
+[fastvideo] h3 dit step 5: block 44/50
+[fastvideo] h3 dit step 5: block 45/50
+[fastvideo] h3 dit step 5: block 46/50
+[fastvideo] h3 dit step 5: block 47/50
+[fastvideo] h3 dit step 5: block 48/50
+[fastvideo] h3 dit step 5: block 49/50
+[fastvideo] h3 dit step 5: block 50/50
+[fastvideo] h3 step 6/8: 3.4s
+[fastvideo] h3 dit step 6: block 1/50
+[fastvideo] h3 dit step 6: block 2/50
+[fastvideo] h3 dit step 6: block 3/50
+[fastvideo] h3 dit step 6: block 4/50
+[fastvideo] h3 dit step 6: block 5/50
+[fastvideo] h3 dit step 6: block 6/50
+[fastvideo] h3 dit step 6: block 7/50
+[fastvideo] h3 dit step 6: block 8/50
+[fastvideo] h3 dit step 6: block 9/50
+[fastvideo] h3 dit step 6: block 10/50
+[fastvideo] h3 dit step 6: block 11/50
+[fastvideo] h3 dit step 6: block 12/50
+[fastvideo] h3 dit step 6: block 13/50
+[fastvideo] h3 dit step 6: block 14/50
+[fastvideo] h3 dit step 6: block 15/50
+[fastvideo] h3 dit step 6: block 16/50
+[fastvideo] h3 dit step 6: block 17/50
+[fastvideo] h3 dit step 6: block 18/50
+[fastvideo] h3 dit step 6: block 19/50
+[fastvideo] h3 dit step 6: block 20/50
+[fastvideo] h3 dit step 6: block 21/50
+[fastvideo] h3 dit step 6: block 22/50
+[fastvideo] h3 dit step 6: block 23/50
+[fastvideo] h3 dit step 6: block 24/50
+[fastvideo] h3 dit step 6: block 25/50
+[fastvideo] h3 dit step 6: block 26/50
+[fastvideo] h3 dit step 6: block 27/50
+[fastvideo] h3 dit step 6: block 28/50
+[fastvideo] h3 dit step 6: block 29/50
+[fastvideo] h3 dit step 6: block 30/50
+[fastvideo] h3 dit step 6: block 31/50
+[fastvideo] h3 dit step 6: block 32/50
+[fastvideo] h3 dit step 6: block 33/50
+[fastvideo] h3 dit step 6: block 34/50
+[fastvideo] h3 dit step 6: block 35/50
+[fastvideo] h3 dit step 6: block 36/50
+[fastvideo] h3 dit step 6: block 37/50
+[fastvideo] h3 dit step 6: block 38/50
+[fastvideo] h3 dit step 6: block 39/50
+[fastvideo] h3 dit step 6: block 40/50
+[fastvideo] h3 dit step 6: block 41/50
+[fastvideo] h3 dit step 6: block 42/50
+[fastvideo] h3 dit step 6: block 43/50
+[fastvideo] h3 dit step 6: block 44/50
+[fastvideo] h3 dit step 6: block 45/50
+[fastvideo] h3 dit step 6: block 46/50
+[fastvideo] h3 dit step 6: block 47/50
+[fastvideo] h3 dit step 6: block 48/50
+[fastvideo] h3 dit step 6: block 49/50
+[fastvideo] h3 dit step 6: block 50/50
+[fastvideo] h3 step 7/8: 3.4s
+[fastvideo] h3 dit step 7: block 1/50
+[fastvideo] h3 dit step 7: block 2/50
+[fastvideo] h3 dit step 7: block 3/50
+[fastvideo] h3 dit step 7: block 4/50
+[fastvideo] h3 dit step 7: block 5/50
+[fastvideo] h3 dit step 7: block 6/50
+[fastvideo] h3 dit step 7: block 7/50
+[fastvideo] h3 dit step 7: block 8/50
+[fastvideo] h3 dit step 7: block 9/50
+[fastvideo] h3 dit step 7: block 10/50
+[fastvideo] h3 dit step 7: block 11/50
+[fastvideo] h3 dit step 7: block 12/50
+[fastvideo] h3 dit step 7: block 13/50
+[fastvideo] h3 dit step 7: block 14/50
+[fastvideo] h3 dit step 7: block 15/50
+[fastvideo] h3 dit step 7: block 16/50
+[fastvideo] h3 dit step 7: block 17/50
+[fastvideo] h3 dit step 7: block 18/50
+[fastvideo] h3 dit step 7: block 19/50
+[fastvideo] h3 dit step 7: block 20/50
+[fastvideo] h3 dit step 7: block 21/50
+[fastvideo] h3 dit step 7: block 22/50
+[fastvideo] h3 dit step 7: block 23/50
+[fastvideo] h3 dit step 7: block 24/50
+[fastvideo] h3 dit step 7: block 25/50
+[fastvideo] h3 dit step 7: block 26/50
+[fastvideo] h3 dit step 7: block 27/50
+[fastvideo] h3 dit step 7: block 28/50
+[fastvideo] h3 dit step 7: block 29/50
+[fastvideo] h3 dit step 7: block 30/50
+[fastvideo] h3 dit step 7: block 31/50
+[fastvideo] h3 dit step 7: block 32/50
+[fastvideo] h3 dit step 7: block 33/50
+[fastvideo] h3 dit step 7: block 34/50
+[fastvideo] h3 dit step 7: block 35/50
+[fastvideo] h3 dit step 7: block 36/50
+[fastvideo] h3 dit step 7: block 37/50
+[fastvideo] h3 dit step 7: block 38/50
+[fastvideo] h3 dit step 7: block 39/50
+[fastvideo] h3 dit step 7: block 40/50
+[fastvideo] h3 dit step 7: block 41/50
+[fastvideo] h3 dit step 7: block 42/50
+[fastvideo] h3 dit step 7: block 43/50
+[fastvideo] h3 dit step 7: block 44/50
+[fastvideo] h3 dit step 7: block 45/50
+[fastvideo] h3 dit step 7: block 46/50
+[fastvideo] h3 dit step 7: block 47/50
+[fastvideo] h3 dit step 7: block 48/50
+[fastvideo] h3 dit step 7: block 49/50
+[fastvideo] h3 dit step 7: block 50/50
+[fastvideo] h3 step 8/8: 3.4s
+[fastvideo] h3 memory denoise: peak 48.20 GiB used, 48.72 GiB reserved; 46.16 GiB live after; ledger: text_refiner 1.49 | dit_nonlinear 35.93 | vae 4.52 | audio_vae 0.24 | activations 6.02 | pool_reserved 0.52 | non_pool 0.62 | total 48.82 GiB
+[fastvideo] h3 memory audio_decode: peak 46.38 GiB used, 46.47 GiB reserved; 46.25 GiB live after; ledger: text_refiner 1.49 | dit_nonlinear 35.93 | vae 4.52 | audio_vae 0.24 | activations 4.21 | pool_reserved 0.09 | non_pool 0.63 | total 47.00 GiB
+[fastvideo] h3 vae chunk 1/7
+[fastvideo] h3 vae chunk 2/7
+[fastvideo] h3 vae chunk 3/7
+[fastvideo] h3 vae chunk 4/7
+[fastvideo] h3 vae chunk 5/7
+[fastvideo] h3 vae chunk 6/7
+[fastvideo] h3 vae chunk 7/7
+[fastvideo] h3 video decode + mp4 2.70s: vae 2.64s, rgb+copy 0.04s, writer push 0.00s, decode waited 0.38s, mp4 tail 0.05s
+[fastvideo] h3 memory video_decode: peak 47.15 GiB used, 47.75 GiB reserved; 46.25 GiB live after; ledger: text_refiner 1.49 | dit_nonlinear 35.93 | vae 4.52 | audio_vae 0.24 | activations 4.97 | pool_reserved 0.60 | non_pool 0.63 | total 47.77 GiB
+[fastvideo] video writer: 124 frames, png deferred (0 inline, 124 after the mp4 in 0.09s, 0.05 GiB, synced), ffmpeg feed blocked 0.13s, mp4 tail 0.05s, buffered peak 0.14 GiB of 130.67
+[INFO] h3/timings {"audio_decode_s":0.148618613,"decode_s":2.849641772,"denoise_s":28.152334067,"load_s":243.045810851,"peak_mib":50526,"refine_s":0.005079296,"step_s":[4.598641278,3.366932709,3.359117153,3.364134108,3.363026855,3.364228489,3.3711100849999998,3.3649754769999998],"text_cache":"miss","text_encoder":"streamed","text_s":224.676596492,"total_s":255.813618976,"video_decode_s":2.701023159,"video_encode_s":0.050221722,"video_push_s":0.000052161000000000004,"video_rgb_s":0.0439341029997648,"video_vae_s":2.6420371500551694,"video_wait_s":0.377413619,"warm":false,"write_s":0.091395065}
+[PASS] h3/frames {"decoded":124} (limits {"expected":124})
+[PASS] h3/middle_frame_not_flat {"frame":"/srv/ours/seed-bf16/frame-062.png","mean":0.4400752044643997,"std":0.24222674478737372} (limits {"std_min":0.02})
+[PASS] h3/mp4_written {"mp4":"/srv/ours/seed-bf16/output.mp4"} (limits {"expected":"output.mp4 with an audio track"})
+benchmark.json → /srv/ours/benchmark.json
+[PASS] stage h3 → gpucheck-out/h3.json (499.1s)

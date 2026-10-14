@@ -85,6 +85,9 @@ def main() -> int:
     ap.add_argument("--steps", type=int, default=6, help="diffusers num_inference_steps (grid points)")
     ap.add_argument("--seed", type=int, default=1024)
     ap.add_argument("--params", default="", help="comma-separated linear prefixes whose weights are dumped")
+    ap.add_argument("--active", choices=("larry", "lightx"), default="larry",
+                    help="larry: the Space's default (larry folded, lightx switched to and back for its weights); lightx: "
+                         "only the lightx2v set loaded (H3_LORA=off), folded once, and the denoise runs with it")
     ap.add_argument("--attention", default="_native_cudnn", help="the Space's H3_ATTENTION ('' keeps the default)")
     a = ap.parse_args()
 
@@ -104,10 +107,11 @@ def main() -> int:
         return real(repo_id, filename, *args, **kw)
 
     huggingface_hub.hf_hub_download = hub
-    os.environ["H3_LORA"] = Path(a.larry).name
+    os.environ["H3_LORA"] = Path(a.larry).name if a.active == "larry" else "off"
     os.environ["H3_LIGHTX_FILE"] = Path(a.lightx).name
     os.environ.setdefault("H3_LORA_STRENGTH", "1.0")
-    os.environ["H3_LORA_DEFAULT"] = "larry"
+    os.environ["H3_LORA_DEFAULT"] = a.active
+    run = out / a.active
     sys.path.insert(0, a.space)
 
     import diffusers
@@ -129,7 +133,7 @@ def main() -> int:
     for p in wanted:
         if f"{p}.weight" not in params:
             raise KeyError(f"--params: {p}.weight is not a transformer parameter")
-        dump(out / "larry", f"base.{p}", params[f"{p}.weight"])
+        dump(run, f"base.{p}", params[f"{p}.weight"])
 
     # The Space's fold, verbatim (h3_lora.apply_lora). The Space folds with the transformer still on the host; here it
     # is on the card first (the pod's RAM need not hold 62 GB twice). The arithmetic is the same: `_apply` computes
@@ -142,19 +146,20 @@ def main() -> int:
     print(f"[ref] {status} ({meta['fold_s']:.0f}s)", flush=True)
     params = dict(pipe.transformer.named_parameters())
     for p in wanted:
-        dump(out / "larry", f"merged.{p}", params[f"{p}.weight"])
-    if h3_lora.set_active(pipe.transformer, "lightx") != "lightx":
+        dump(run, f"merged.{p}", params[f"{p}.weight"])
+    if a.active == "larry" and h3_lora.set_active(pipe.transformer, "lightx") != "lightx":
         raise RuntimeError("the lightx set did not load")
     params = dict(pipe.transformer.named_parameters())
-    for p in wanted:
+    for p in wanted if a.active == "larry" else []:
         dump(out / "lightx", f"merged.{p}", params[f"{p}.weight"])
     # Back to larry: the Space's switch unfolds lightx and refolds larry through one more bf16 rounding; the
     # dumped larry weights above are the startup fold. The run below uses the switched-back weights, as a
     # Space request after a lightx one would.
-    assert h3_lora.set_active(pipe.transformer, "larry") == "larry"
-    params = dict(pipe.transformer.named_parameters())
-    for p in wanted:
-        dump(out / "larry", f"merged_after_switch.{p}", params[f"{p}.weight"])
+    if a.active == "larry":
+        assert h3_lora.set_active(pipe.transformer, "larry") == "larry"
+        params = dict(pipe.transformer.named_parameters())
+        for p in wanted:
+            dump(run, f"merged_after_switch.{p}", params[f"{p}.weight"])
 
     if a.attention:
         try:
@@ -170,7 +175,7 @@ def main() -> int:
     prompt_embeds = hidden.to(torch.bfloat16)[None].to("cuda")
     text_tag = int(getattr(pipe, "text_tag", 1))
     text_token_tags = torch.full((hidden.shape[0],), text_tag, dtype=torch.long)
-    dump(out / "larry", "text_hidden", hidden)
+    dump(run, "text_hidden", hidden)
 
     # Hooks: the starting rows after the noise draw, each step's velocity and latents.
     from diffusers.modular_pipelines.minimax_h3 import before_denoise, denoise
@@ -180,8 +185,8 @@ def main() -> int:
     def prep(self, components, state):
         components, state = prep_call(self, components, state)
         bs = self.get_block_state(state)
-        dump(out / "larry", "video_step00_in", bs.latents)
-        dump(out / "larry", "audio_step00_in", bs.audio_latents)
+        dump(run, "video_step00_in", bs.latents)
+        dump(run, "audio_step00_in", bs.audio_latents)
         return components, state
 
     before_denoise.MiniMaxH3PrepareLatentsStep.__call__ = prep
@@ -190,13 +195,13 @@ def main() -> int:
     def step(self, components, block_state, i, t):
         cv, ca = block_state.num_condition_video_rows, block_state.num_condition_audio_rows
         if i == 0:
-            dump(out / "larry", "video_sigmas", components.scheduler.sigmas)
-            dump(out / "larry", "audio_sigmas", components.audio_scheduler.sigmas)
-        dump(out / "larry", f"video_vel_step{i + 1:02}", block_state.noise_pred[0, cv:])
-        dump(out / "larry", f"audio_vel_step{i + 1:02}", block_state.audio_noise_pred[0, ca:])
+            dump(run, "video_sigmas", components.scheduler.sigmas)
+            dump(run, "audio_sigmas", components.audio_scheduler.sigmas)
+        dump(run, f"video_vel_step{i + 1:02}", block_state.noise_pred[0, cv:])
+        dump(run, f"audio_vel_step{i + 1:02}", block_state.audio_noise_pred[0, ca:])
         components, block_state = step_call(self, components, block_state, i, t)
-        dump(out / "larry", f"video_step{i + 1:02}", block_state.latents[cv:])
-        dump(out / "larry", f"audio_step{i + 1:02}", block_state.audio_latents[ca:])
+        dump(run, f"video_step{i + 1:02}", block_state.latents[cv:])
+        dump(run, f"audio_step{i + 1:02}", block_state.audio_latents[ca:])
         return components, block_state
 
     denoise.MiniMaxH3LoopSchedulerStep.__call__ = step
