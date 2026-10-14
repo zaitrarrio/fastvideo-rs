@@ -83,8 +83,10 @@ const MXFP8_CHECK_REL_L2: f64 = 1e-1;
 /// The check found the MXFP8 forward off by more than [`MXFP8_CHECK_REL_L2`].
 static MXFP8_BROKEN: AtomicBool = AtomicBool::new(false);
 
-/// `FASTVIDEO_H3_VAE_VEC`: the vector-access twins of the merge-heads and
-/// SwiGLU kernels (bit-identical outputs).
+/// `FASTVIDEO_H3_VAE_VEC` (default on; `=0` restores the scalar kernels):
+/// the vector-access twins of the merge-heads and SwiGLU kernels, whose
+/// outputs are bit-identical (768p video VAE 6.30 -> 6.20 s, frames
+/// byte-identical; docs/perf/h3-vae-decode-speed.md).
 #[cfg(feature = "cuda")]
 fn vec_enabled() -> bool {
     static FLAG: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
@@ -93,7 +95,7 @@ fn vec_enabled() -> bool {
 
 /// Default of [`vec_enabled`].
 #[cfg(feature = "cuda")]
-const VEC_DEFAULT: bool = false;
+const VEC_DEFAULT: bool = true;
 
 /// `FASTVIDEO_H3_VAE_GEMM`: `cublas` (default; cuBLAS `GemmEx`'s own pick),
 /// `lt` or `lt:N` / `ltN` (cuBLASLt's first or N-th heuristic algorithm) for the
@@ -717,8 +719,9 @@ impl H3VideoDecoder {
         let algo = gemm_algo();
         let mx_nth = mx_algo();
         let sdpa = sdpa_kernel();
-        static SAID: AtomicBool = AtomicBool::new(false);
-        if !SAID.swap(true, Ordering::Relaxed) {
+        // Once per process and GEMM kind (the check runs both kinds).
+        static SAID: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
+        if !SAID[usize::from(mx)].swap(true, Ordering::Relaxed) {
             crate::wan::log::info(format_args!(
                 "h3 vae fused ViT: gemm {}, sdpa {}, vector kernels {}",
                 if mx {

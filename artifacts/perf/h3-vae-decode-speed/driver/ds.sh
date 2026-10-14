@@ -7,7 +7,8 @@
 # only read; everything is written under /e2e/ds/work.
 #   bash ds.sh prep
 #   bash ds.sh bench                  kernels --groups h3vae_bench
-#   bash ds.sh gen <cell> <res 768p|480p|1080p> <env K=V,K=V | -> <prompts json> [profile] [recipe] [weights]
+#   [NOMP4=1] bash ds.sh gen <cell> <res 768p|480p|1080p> <env K=V,K=V | -> <prompts json> [profile] [recipe] [weights]
+#   bash ds.sh genbase <cell> <res> <prompts json>   the 49-forward base reference
 #   bash ds.sh hash <cell>
 #   bash ds.sh pair <a> <b>           compare-clips per common clip (LPIPS, PSNR, ...)
 #   bash ds.sh results                out/results.tgz
@@ -63,7 +64,7 @@ gen() {  # gen <cell> <res> <env|-> <prompts> [profile] [recipe] [weights]
   # shellcheck disable=SC2046
   ( cd $c && env "${envs[@]}" timeout ${CELL_TIMEOUT:-2400} $B --techniques $prof --mode fast h3 gen \
       --weights $W/$wts --text-weights $W/h3-base --h3-recipe $recipe $(geo $res) --seconds 5 --prompt x \
-      --prompts $ps --warm --text-encoder resident-fp8 --dit-offload resident \
+      --prompts $ps --warm --text-encoder resident-fp8 --dit-offload resident ${NOMP4:+--no-mp4} \
       --adaln-cache $WK/adaln-$res-$recipe.cache --text-cache $WK/text-cache --clip-dir $c/frames ) >$c/log.txt 2>&1
   local rc=$?; kill $pid 2>/dev/null
   local peak; peak=$(cut -d, -f1 $c/smi.csv | sort -n | tail -1)
@@ -73,6 +74,20 @@ gen() {  # gen <cell> <res> <env|-> <prompts> [profile] [recipe] [weights]
   grep -h "h3 video decode + mp4" $c/log.txt | tee -a "$LOG"
   grep -h "h3/decode/gpu_trace" $c/log.txt | cut -c1-300 | tee -a "$LOG"
   grep -h "panicked\|Error\|error:" $c/log.txt | head -5 | tee -a "$LOG"
+  hash_cell $1
+}
+
+genbase() {  # genbase <cell> <res> <prompts>: the 49-forward base (recipe base, dense), no warm pass
+  local c=$WK/$1 res=$2 ps=$3
+  mkdir -p $c
+  local pid t0=$(date +%s); pid=$(smi $c/smi.csv)
+  # shellcheck disable=SC2046
+  ( cd $c && env "${PIN[@]}" timeout ${CELL_TIMEOUT:-4800} $B --mode fast h3 gen \
+      --weights $W/h3-base --text-weights $W/h3-base --h3-recipe base --dense $(geo $res) --seconds 5 --prompt x \
+      --prompts $ps --text-encoder resident-fp8 --dit-offload resident --no-mp4 \
+      --text-cache $WK/text-cache --clip-dir $c/frames ) >$c/log.txt 2>&1
+  local rc=$?; kill $pid 2>/dev/null
+  log "genbase $1 rc=$rc wall=$(( $(date +%s) - t0 ))s res=$res"
   hash_cell $1
 }
 
@@ -112,6 +127,7 @@ bench)
   log "bench rc=$rc"; tail -5 $WK/bench/log.txt | tee -a $LOG
   ;;
 gen) shift; gen "$@" ;;
+genbase) shift; genbase "$@" ;;
 hash) hash_cell "$2" ;;
 pair) pair "$2" "$3" ;;
 results)
@@ -126,6 +142,7 @@ all)
     log "== stage ${a[*]}"
     case ${a[0]} in
       gen) gen "${a[@]:1}" ;;
+      genbase) genbase "${a[@]:1}" ;;
       pair) pair "${a[1]}" "${a[2]}" ;;
       *) bash "$0" "${a[@]}" ;;
     esac
