@@ -4,6 +4,7 @@
 // itself run in bash: a stub llama-server, the real r2-fetch.py against a fake R2 and fv-control's plan handler.
 import { execFile } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -143,7 +144,24 @@ describe.skipIf(!py)("fv-upsampler.sh with a stub llama-server, the real r2-fetc
   let env: Env;
   let tokOn = "";
   let tokOff = "";
-  let port = 18890;
+  // Each launch gets a port the kernel just handed out (bound on 0, then released), never a fixed one: with fixed
+  // ports (18891, 18892, … in launch order) two runs at once (another worktree's gate, a parallel vitest) put their stubs
+  // on the same port; the loser's stub died on bind, and its launcher either saw the other run's stub as healthy or
+  // noticed its own was dead first ("llama-server exited while loading"), so the three launcher cases failed together,
+  // now and then.
+  // And no free-disk floor: the launcher's fetch keeps 2 GB free on a pod (r2-fetch.py --min-free-gb), so whenever the
+  // shared disk of the machine running the tests dipped below 2 GB the three fetching cases failed together ("disk:
+  // … GB free, … 2.0 GB must stay free"), then passed again once space came back. The test tree is 1.6 MB.
+  let port = 0;
+  const freePort = () =>
+    new Promise<number>((ok, bad) => {
+      const s = createServer();
+      s.once("error", bad);
+      s.listen(0, "127.0.0.1", () => {
+        const p = (s.address() as { port: number }).port;
+        s.close(() => ok(p));
+      });
+    });
   const pids: string[] = [];
   const handler = (fn: (req: Request) => Promise<Response>) => (req: any, res: any) => {
     let body = "";
@@ -188,8 +206,8 @@ describe.skipIf(!py)("fv-upsampler.sh with a stub llama-server, the real r2-fetc
     const stub = join(root, "llama-server");
     writeFileSync(stub, STUB);
     chmodSync(stub, 0o755);
-    port += 1;
-    const e = { PATH: process.env.PATH!, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1", ...upsamplerPodEnv(env), FV_UPSAMPLER_REV: "revU", FV_WEIGHTS_TOKEN: tokOn, FV_STATE_DIR: join(root, "state"), FV_WEIGHTS: join(root, "volume"), FV_LLAMA_SERVER: stub, FV_UPSAMPLER_PORT: String(port), FV_R2_TOOLS: join(root, "tools"), FV_UPSAMPLER_RESTARTS: "0", STUB_ARGS: join(root, "args.json"), FV_UPSAMPLER_LOG: join(root, "launcher.log"), RUNPOD_POD_ID: "wk1", ...over };
+    port = await freePort();
+    const e = { PATH: process.env.PATH!, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1", ...upsamplerPodEnv(env), FV_UPSAMPLER_REV: "revU", FV_WEIGHTS_TOKEN: tokOn, FV_STATE_DIR: join(root, "state"), FV_WEIGHTS: join(root, "volume"), FV_LLAMA_SERVER: stub, FV_UPSAMPLER_PORT: String(port), FV_R2_TOOLS: join(root, "tools"), FV_UPSAMPLER_RESTARTS: "0", STUB_ARGS: join(root, "args.json"), FV_UPSAMPLER_LOG: join(root, "launcher.log"), RUNPOD_POD_ID: "wk1", FV_UPSAMPLER_MIN_FREE_GB: "0", ...over };
     const r = await promisify(execFile)("bash", [LAUNCHER, "run"], { env: e, timeout: 60000 });
     for (const f of ["upsampler.pid", "llama-server.pid"]) if (existsSync(join(root, "state", f))) pids.push(readFileSync(join(root, "state", f), "utf8").trim());
     return r;
@@ -200,10 +218,12 @@ describe.skipIf(!py)("fv-upsampler.sh with a stub llama-server, the real r2-fetc
     expect(r.stdout).toContain(`export FV_UPSAMPLER_BASE_URL='http://127.0.0.1:${port}/v1'`);
     expect(r.stdout).toContain(`export FV_UPSAMPLER_MODEL='${UPSAMPLER_MODEL}'`);
     expect(r.stdout).toContain("export FV_UPSAMPLER_VISION='1'");
-    // a local server: no hedge, a long timeout, unless the operator set them (the boot evals these lines)
-    const sh = (pre: string) => promisify(execFile)("bash", ["-c", `${pre}\n${r.stdout}\necho "$FV_UPSAMPLER_HEDGE $FV_UPSAMPLER_TIMEOUT_MS"`]).then((x) => x.stdout.trim());
-    expect(await sh("")).toBe("0 30000");
-    expect(await sh("FV_UPSAMPLER_HEDGE=1; FV_UPSAMPLER_TIMEOUT_MS=5000")).toBe("1 5000");
+    // a local server: FV_UPSAMPLER_LOCAL=1, and fv-serve picks the local defaults (no hedge, 60 s, deck 2) for what the
+    // operator left unset; the exports never set those values themselves (the boot evals these lines)
+    expect(r.stdout).toContain("export FV_UPSAMPLER_LOCAL='1'");
+    const sh = (pre: string) => promisify(execFile)("bash", ["-c", `${pre}\n${r.stdout}\necho "[$FV_UPSAMPLER_HEDGE $FV_UPSAMPLER_TIMEOUT_MS $FV_UPSAMPLER_DECK_SIZE]"`]).then((x) => x.stdout.trim());
+    expect(await sh("")).toBe("[  ]");
+    expect(await sh("FV_UPSAMPLER_HEDGE=1; FV_UPSAMPLER_TIMEOUT_MS=5000; FV_UPSAMPLER_DECK_SIZE=4")).toBe("[1 5000 4]");
     expect(r.stderr).toMatch(/\[fv-boot\] \d\d:\d\d:\d\d step upsampler: [\d.]+s \(llama-server 127\.0\.0\.1:\d+, qwen3-vl-4b-instruct; fetch [\d.]+ load [\d.]+ vision on total [\d.]+\)/);
     const d = join(root, "state/upsampler-weights", UPSAMPLER_TREE);
     for (const [p, b] of Object.entries(files)) expect(readFileSync(join(d, p)).equals(b)).toBe(true);

@@ -3,8 +3,8 @@
 # serves a local Qwen3-VL-4B-Instruct GGUF (language model + vision projector, --mmproj) on 127.0.0.1 next to
 # fv-serve, on the same GPU; fv-serve's upsampler talks to it as an OpenAI-compatible /v1/chat/completions
 # (FV_UPSAMPLER_BASE_URL, FV_UPSAMPLER_MODEL; FV_UPSAMPLER_VISION=1 when the projector is loaded: image_url content
-# parts work, as data: URLs or http(s) URLs llama-server downloads itself, at most 10 MB within 10 s; and, unless the
-# operator set them, FV_UPSAMPLER_HEDGE=0 and FV_UPSAMPLER_TIMEOUT_MS=30000 for a local server).
+# parts work, as data: URLs or http(s) URLs llama-server downloads itself, at most 10 MB within 10 s; and
+# FV_UPSAMPLER_LOCAL=1: fv-serve then defaults an unset hedge / timeout_ms / deck_size to off / 60000 / 2).
 #
 # Shipped in the CUDA serve images as /opt/fastvideo-rs/bin/fv-upsampler, beside /opt/fastvideo-rs/bin/llama-server.
 # The image entrypoint (fv-entry) and fv-control's boots run it when FV_UPSAMPLER_LOCAL=1:
@@ -35,7 +35,9 @@
 # FV_UPSAMPLER_CACHE_REUSE (256: reuse cached KV chunks of at least that many tokens after a shifted prefix),
 # FV_UPSAMPLER_CACHE_RAM_MIB (4096: host-RAM prompt cache), FV_UPSAMPLER_ARGS (extra llama-server flags),
 # FV_UPSAMPLER_START_S (180: fetch + load), FV_UPSAMPLER_WAIT_S (240), FV_UPSAMPLER_RESTARTS (3),
-# FV_UPSAMPLER_LOG (the launcher's log: default stderr), FV_LLAMA_SERVER (/opt/fastvideo-rs/bin/llama-server), S = FV_UPSAMPLER_STATE or FV_STATE_DIR or /fvstate.
+# FV_UPSAMPLER_MIN_FREE_GB (2: GB of disk the fetch leaves free),
+# FV_UPSAMPLER_LOG (the launcher's log: default stderr), FV_LLAMA_SERVER (/opt/fastvideo-rs/bin/llama-server),
+# S = FV_UPSAMPLER_STATE or FV_STATE_DIR or /fvstate.
 set -u
 S="${FV_UPSAMPLER_STATE:-${FV_STATE_DIR:-/fvstate}}"
 BIN="${FV_LLAMA_SERVER:-/opt/fastvideo-rs/bin/llama-server}"
@@ -109,7 +111,7 @@ fetch_tree() {
   say "fetching $TREE from the R2 weights store into $root"
   # No --report-url: fv-control's weights progress is the main fetch's.
   python3 "$f" --root "$root" --plan-url "$url" --token-env "$tok" --pod "${FV_POD_ID:-${RUNPOD_POD_ID:-}}" \
-    --status "$S/upsampler-fetch.json" --concurrency "${FV_UPSAMPLER_R2_CONCURRENCY:-16}" --min-free-gb 2 \
+    --status "$S/upsampler-fetch.json" --concurrency "${FV_UPSAMPLER_R2_CONCURRENCY:-16}" --min-free-gb "${FV_UPSAMPLER_MIN_FREE_GB:-2}" \
     >"$S/upsampler-fetch.log" 2>&1 || fail "fetch: $(grep -E 'FAILED|Error|error' "$S/upsampler-fetch.log" | tail -1 | cut -c1-200)"
   [ -f "$root/$TREE/.complete" ] || fail "fetch: $root/$TREE is not complete after the fetch"
   FV_UPSAMPLER_ROOT="$root"
@@ -177,10 +179,9 @@ start_bg() {
     echo "export FV_UPSAMPLER_BASE_URL='http://127.0.0.1:$PORT/v1'"
     echo "export FV_UPSAMPLER_MODEL='$MODEL'"
     echo "export FV_UPSAMPLER_VISION='$([ -n "$MMPROJ" ] && echo 1 || echo 0)'"
-    # A local server: one request per call (no hedge), and room for a long director prefill; an operator's own
-    # values win (evaluated by the boot).
-    # shellcheck disable=SC2016 # expanded where the boot evals it
-    echo 'export FV_UPSAMPLER_HEDGE="${FV_UPSAMPLER_HEDGE:-0}" FV_UPSAMPLER_TIMEOUT_MS="${FV_UPSAMPLER_TIMEOUT_MS:-30000}"'
+    # A local server: fv-serve picks its defaults (no hedge, timeout 60 s, director deck 2) for unset values, so an
+    # operator's TOML or env wins (fv-serve config.rs UpsamplerCfg; the launcher no longer exports them).
+    echo "export FV_UPSAMPLER_LOCAL='1'"
   } > "$ENVF.part" && mv -f "$ENVF.part" "$ENVF"
   say "ready in $(el "$t0")s ($(tr '\n' ' ' < "$STEPF" | sed 's/ $//'))"
   # Keep it up: a crashed llama-server is restarted (requests in between fall back in fv-serve).
@@ -233,8 +234,7 @@ cmd_wait() {
     echo "[fv-boot] $(ts) upsampler: not ready after ${FV_UPSAMPLER_WAIT_S:-240}s (still starting): fv-serve starts with it; upsampling falls back until it answers" >&2
     echo "export FV_UPSAMPLER_BASE_URL='http://127.0.0.1:$PORT/v1'"
     echo "export FV_UPSAMPLER_MODEL='$MODEL'"
-    # shellcheck disable=SC2016 # expanded where the boot evals it
-    echo 'export FV_UPSAMPLER_HEDGE="${FV_UPSAMPLER_HEDGE:-0}" FV_UPSAMPLER_TIMEOUT_MS="${FV_UPSAMPLER_TIMEOUT_MS:-30000}"'
+    echo "export FV_UPSAMPLER_LOCAL='1'"
   fi
   return 0
 }
@@ -243,5 +243,5 @@ case "${1:-}" in
   start) cmd_start ;;
   wait) cmd_wait ;;
   run) cmd_start && cmd_wait ;;
-  *) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

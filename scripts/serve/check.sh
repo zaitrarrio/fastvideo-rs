@@ -143,6 +143,9 @@ if [[ "${FV_SERVE_HEAVY:-0}" == "1" ]]; then
   # fv-serve with outbound HTTP: D1 over HTTP, S3/R2 read-back for LTX v1.
   # (serve-kit's d1_live smoke test runs above when CLOUDFLARE_API_KEY or
   # FV_CF_API_TOKEN is set, and skips otherwise.)
+  # This is the serve images' feature set (default + http-client, no
+  # `encoders`): output_copies runs here too, so a copy's audio cannot depend
+  # on `encoders` again (gpu-check-2026-10-13 bug 3).
   run cargo test -p fastvideo-serve --features http-client
   # Native /fv/v1/streams: fake engine → pacer → OpenH264/Opus → WHIP (in
   # process endpoint); scripts/serve/whip-e2e.sh adds MediaMTX + WHEP.
