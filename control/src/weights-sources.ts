@@ -417,6 +417,13 @@ export const HUB_SHA256: Record<string, [string, number | null, string[]][]> = {
   "fasth3-trim-8step-nvfp4": [
     ["diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors", 11894623166, ["748b2bcc9c4b7bf7b23406987b42d4ac40362070c164cf11092482be6a863455"]],
   ],
+  "vdn-h3-stage-b-2000": [
+    ["stage-b-step-2000/adapters/default/adapter_model.safetensors", 334026912, ["58558fef506f88bb41649242de9b9b3a365da806b51b2e96afbbe1625222058a"]],
+    ["stage-b-step-2000/linear_branch/model.safetensors", 4279428112, ["dec6981c7874f5b3bc92d1a02e256b673a3b3499dc1a124714bb3b19da602855"]],
+  ],
+  "vdn-h3-dmd-250-turbo": [
+    ["stage-dmd-step-250/adapters/turbo/adapter_model.safetensors", 851452696, ["24fc93c82fe84dc45d0627f4e72c637bc387d282ba18f60ed3b7f8c81089392c"]],
+  ],
   "qwen3-vl-4b-instruct-gguf": [
     ["Qwen3VL-4B-Instruct-Q8_0.gguf", 4280406144, ["054721f478bc5fa6beffb7f38eae575d45298f88cbb8d2f83ef675a727863eb1"]],
     ["mmproj-Qwen3VL-4B-Instruct-F16.gguf", 836180256, ["256f3a43bd4205ffef48d6b92715e1e70b5b0e9aef06522584967513a9985331"]],
@@ -435,5 +442,9 @@ export const HUB_SHA256: Record<string, [string, number | null, string[]][]> = {
     ["model.safetensors", 536225696, ["d5d7ca0d96cd5215cceb0dc2acff4aeb79a862ea9eec2f4cc0407d4c215c49b0"]],
     ["tokenizer.json", 33385105, ["ceeb59cb0d50ec7e025bda69a115d3315090bf0d75c91774e73b43767e4c9202"]],
     ["tokenizer_config.json", 839, ["2dd3876e70d1e247b653b345f4b145c77d86500da756dec9f47b23c3649fbeb0"]],
+  ],
+  "h3-turbo-loras/lightx2v-v0.1": [
+    ["README.md", 1396, ["4939071ba0e40d0c6f3266afd366862b1062fa040b96d4b457c7d582dc9e4936"]],
+    ["minimax_h3_fl2v_turbo_4step_v0.1.safetensors", 1383677888, ["5ff4a12c8b4599fec716e1b15a45e504e0d1129111896bdcde5ac4a15e395b29"]],
   ],
 };
