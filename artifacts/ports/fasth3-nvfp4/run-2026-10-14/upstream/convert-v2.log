@@ -1,0 +1,1 @@
+{"exported_linears": 350, "modelopt_linears": 100, "quantized_dense_linears": 250, "worst_probe_error": 0.1403, "static_activation_scales": 100, "gate_linears": 50, "min_scale_byte_agreement": 0.6082, "mean_scale_byte_agreement": 0.6257, "dense_tensors": 338, "dense_shards": 6}

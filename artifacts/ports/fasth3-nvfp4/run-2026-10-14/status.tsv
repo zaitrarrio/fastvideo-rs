@@ -1,0 +1,16 @@
+fetch	0	1012
+prep	0	9
+lpips	0	2
+kernels	0	2
+convert-te	0	193
+convert-v2	0	40
+up-v2	0	222
+parity-v2	0	91
+cell-v2-nvfp4	0	187
+cell-v2-nvfp4ffn-mxfp8	0	185
+profile-v2	0	120
+convert-4s	0	47
+up-4s	0	129
+parity-4s	0	87
+cell-4s-nvfp4	0	115
+cell-4s-nvfp4ffn-mxfp8	0	109

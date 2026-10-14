@@ -10,10 +10,11 @@
 #   fasth3-nvfp4-validate.sh fetch <pod> DIR  results.tgz into DIR
 #   fasth3-nvfp4-validate.sh down <pod>     delete the pod, check it is gone, drop the staged bundle by its key
 #
-# The R2 plan (presigned GETs from the read-only key, 4 h) reaches the pod gzip + base64 in its env. The bundle
-# (BIN + scripts/gpu) is staged in fv-weights-staging under tmp/fasth3-nvfp4-bundle-<sha256>.tgz (presigned GET,
-# checked by SHA-256 on the pod) and removed by `down` by that exact key. Weights come from R2 only (no volume:
-# the EU volume holds H3 + LTX for serving, and these trees are R2-only), so any data centre with stock works.
+# The bundle (BIN, scripts/gpu and the R2 plan: presigned GETs from the read-only key, 4 h; ~200 kB, too large for
+# the pod's env) is staged in fv-weights-staging under tmp/fasth3-nvfp4-bundle-<sha256>.tgz (presigned GET, checked
+# by SHA-256 on the pod) and removed by `down` (or a failed create) by that exact key. Weights come from R2 only (no
+# volume: the EU volume holds H3 + LTX for serving, and these trees are R2-only), so any data centre with stock
+# works; no CUDA-version filter (2026-10-14: the hosts with stock ran CUDA 13.2 drivers). FV_DISK_GB (default 420).
 #
 # Env: RUNPOD_API_KEY; FV_POD_CAP_S (backstop, default 6000); FV_MIN_BALANCE (default 12: refuse unless the balance
 # is 3 above it); FV_MAX_DPH (default 2.70); FV_SKIP, FV_ONLY_V2 (passed to the pod script); FV_NO_DENSE=1 (no
@@ -94,17 +95,18 @@ sleep 600; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: 
     export FVX_URL="$url"
     payload="$(jq -n --arg name "fv-fasth3-nvfp4-$(date -u +%m%d%H%M)" --arg image "$image" --argjson dcs "$dcs_json" \
       --arg start "$start" --argjson gpus "$gpus_json" --arg sha "$sha" \
-      --arg skip "${FV_SKIP:-}" --arg only "${FV_ONLY_V2:-0}" '{
+      --arg skip "${FV_SKIP:-}" --arg only "${FV_ONLY_V2:-0}" --arg disk "${FV_DISK_GB:-420}" '{
         name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU", gpuCount: 1, gpuTypeIds: $gpus,
         gpuTypePriority: "custom", dataCenterIds: $dcs, dataCenterPriority: "availability", ports: ["8000/http"],
-        dockerStartCmd: ["/bin/bash", "-lc", $start], containerDiskInGb: 420, allowedCudaVersions: ["13.0"],
+        dockerStartCmd: ["/bin/bash", "-lc", $start], containerDiskInGb: ($disk | tonumber),
         env: ({FV_BUNDLE_URL: env.FVX_URL, FV_BUNDLE_SHA256: $sha, FV_ONLY_V2: $only}
               + (if $skip != "" then {FV_SKIP: $skip} else {} end))
       }')"
     unset FVX_URL
-    resp="$(rest POST /pods <<<"$payload")" || { log "pod create failed: $(head -c 600 <<<"$resp")"; exit 1; }
+    unstage() { python3 "$HERE/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "tmp/fasth3-nvfp4-bundle-$sha" >&2 || true; }
+    resp="$(rest POST /pods <<<"$payload")" || { log "pod create failed: $(head -c 600 <<<"$resp")"; unstage; exit 1; }
     id="$(jq -r '.id // empty' <<<"$resp")"
-    [[ -n "$id" ]] || { log "pod create failed: $(head -c 400 <<<"$resp")"; exit 1; }
+    [[ -n "$id" ]] || { log "pod create failed: $(head -c 400 <<<"$resp")"; unstage; exit 1; }
     # A distinctive marker in the backstop's command line, so no generic pkill pattern matches it.
     setsid nohup bash -c ": fv-fasth3-nvfp4-backstop-$id; sleep $CAP_S; curl -sS -X DELETE -H @<(printf 'Authorization: Bearer %s\\n' \"\$RUNPOD_API_KEY\") '$API/pods/$id' >/dev/null 2>&1" >/dev/null 2>&1 </dev/null &
     log "pod $id $(jq -r '.machine.gpuDisplayName // .gpuTypeId // "?"' <<<"$resp") \$$(jq -r '.costPerHr' <<<"$resp")/hr in $(jq -r '.machine.dataCenterId // "?"' <<<"$resp"); balance \$$bal; backstop pid $! deletes it after ${CAP_S}s; https://$id-8000.proxy.runpod.net/"

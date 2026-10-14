@@ -58,9 +58,18 @@ for ck in ("v2", "4s"):
         continue
     r = load(p)
     out["upstream"][ck] = {"load_s": r.get("load_s"), "runs": []}
-    for run in r.get("runs", []):
+    # A request that failed after denoising (FastVideo d5253fd's compiled VAE asserts at a second shape) has no
+    # stages in its result: its denoise time is the stage log's "completed in" line, in request order.
+    logged = []
+    lp = os.path.join(root, f"up-{ck}.log")
+    if os.path.exists(lp):
+        logged = [float(m[1]) / 1000 for m in re.finditer(r"\[denoising_stage\|[^\]]*\] Execution completed in ([0-9.]+) ms",
+                                                          open(lp, errors="replace").read())]
+    for i, run in enumerate(r.get("runs", [])):
         st = run.get("stages_s") or {}
         den = stage(st, "denois")
+        if den is None and i < len(logged) and run.get("steps") != 8:
+            den = logged[i]
         dec = stage(st, "decod")
         peak = nvsmi_peak(run.get("t_start", 0), run.get("t_end", 0))
         row = dict(tag=run["tag"], ok=run.get("ok"), wall_s=run.get("wall_s"), denoise_s=den,
@@ -68,7 +77,9 @@ for ck in ("v2", "4s"):
                    error=run.get("error"), stages=st)
         out["upstream"][ck]["runs"].append(row)
         f = lambda v, n=2: "-" if v is None else f"{v:.{n}f}"
-        print(f"| {run['tag']} | {'yes' if run.get('ok') else 'no: ' + (run.get('error') or '')[:90]} | {f(row['wall_s'])} | "
+        err = (run.get("error") or "").splitlines()
+        why = "refused (grid points)" if run.get("steps") == 8 else ("decode failed (upstream VAE compile)" if den else (err[0] if err else ""))
+        print(f"| {run['tag']} | {'yes' if run.get('ok') else 'no: ' + why[:90]} | {f(row['wall_s'])} | "
               f"{f(den)} | {f(row['forward_s'])} | {f(dec)} | {f(peak, 0)} |")
     print(f"\nload {r.get('load_s', 0):.1f} s ({ck})\n")
 
