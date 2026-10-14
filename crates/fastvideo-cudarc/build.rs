@@ -37,6 +37,9 @@ const SRC_SAGE: &str = "src/wan/attn_sage.cu";
 const SRC_VDN: &str = "src/h3/vdn.cu";
 /// Datacenter attention kernels (tcgen05 / wgmma): arch-specific targets only.
 const DC_SRC: &str = "src/wan/attn_dc.cu";
+/// Sparse FP4 VSA attention (`wan::attn_fp4`, block-scaled `mma.sync` FP4):
+/// sm_120a only, built when 120 is in FV_CUBIN_SMS.
+const SRC_FP4: &str = "src/wan/attn_fp4.cu";
 /// (SM, nvcc arch) pairs attn_dc.cu is built for, when their SM is in
 /// FV_CUBIN_SMS. sm_103a (B300) rides on 100: it is the same tcgen05 code,
 /// built so a B300 can opt in (`FASTVIDEO_DC_SM103=1`; never run on one).
@@ -194,6 +197,7 @@ fn main() {
     println!("cargo:rerun-if-changed={SRC_SAGE}");
     println!("cargo:rerun-if-changed={SRC_VDN}");
     println!("cargo:rerun-if-changed={DC_SRC}");
+    println!("cargo:rerun-if-changed={SRC_FP4}");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=NVCC");
     println!("cargo:rerun-if-env-changed=FV_CUBIN_SMS");
@@ -207,6 +211,7 @@ fn main() {
     let fp8_table = out.join("aot_attn_fp8.rs");
     let sage_table = out.join("aot_attn_sage.rs");
     let vdn_table = out.join("aot_h3_vdn.rs");
+    let fp4_table = out.join("aot_attn_fp4.rs");
     let cuda_on = env::var_os("CARGO_FEATURE_CUDA").is_some();
     let nvcc = if cuda_on { find_nvcc() } else { None };
     let oxide_rows = find_oxide_cubins();
@@ -231,6 +236,7 @@ fn main() {
         write_fp8(&fp8_table, "");
         write_module_table(&sage_table, "AOT_ATTN_SAGE", "");
         write_module_table(&vdn_table, "AOT_H3_VDN", "");
+        write_cubin_table(&fp4_table, "AOT_ATTN_FP4", "");
         write_aot(&table, "", &oxide, "");
         return;
     };
@@ -340,6 +346,7 @@ fn main() {
         "AOT_H3_VDN",
         &precise_module_entries(&nvcc, &out, &sms, SRC_VDN, "h3_vdn"),
     );
+    write_cubin_table(&fp4_table, "AOT_ATTN_FP4", &fp4_entries(&nvcc, &out, &sms));
     println!(
         "cargo:warning=fastvideo-cudarc: embedded cubins for sm {:?} via {}",
         sms,
@@ -349,6 +356,41 @@ fn main() {
 
 fn write_fp8(table: &Path, entries: &str) {
     write_module_table(table, "AOT_ATTN_FP8", entries);
+}
+
+fn write_cubin_table(table: &Path, name: &str, entries: &str) {
+    fs::write(table, format!("pub static {name}: &[(u32, &[u8])] = &[\n{entries}];\n"))
+        .unwrap_or_else(|e| panic!("write {}: {e}", table.display()));
+}
+
+/// `attn_fp4.cu` as an sm_120a cubin when 120 is listed (the block-scaled FP4
+/// `mma.sync` is arch-specific: no PTX to fall forward to). Fast math as the
+/// other attention modules; `FV_DC_PTXAS_VERBOSE=1` reports registers / spills.
+fn fp4_entries(nvcc: &Path, out: &Path, sms: &[u32]) -> String {
+    if !sms.contains(&120) {
+        return String::new();
+    }
+    let cubin = out.join("attn_fp4_sm_120a.cubin");
+    let verbose = env::var("FV_DC_PTXAS_VERBOSE").is_ok_and(|v| v == "1");
+    let mut cmd = Command::new(nvcc);
+    cmd.args(["-cubin", "-arch", "sm_120a", "-O3", "-std=c++17", "--use_fast_math"]);
+    if verbose {
+        cmd.arg("-Xptxas=-v");
+    }
+    let res = cmd
+        .arg("-o")
+        .arg(&cubin)
+        .arg(SRC_FP4)
+        .output()
+        .unwrap_or_else(|e| panic!("running {}: {e}", nvcc.display()));
+    let text = String::from_utf8_lossy(&res.stderr);
+    if verbose || !res.status.success() {
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            println!("cargo:warning=attn_fp4 sm_120a: {line}");
+        }
+    }
+    assert!(res.status.success(), "nvcc -cubin -arch=sm_120a failed for {SRC_FP4}:\n{text}");
+    format!("    (120, include_bytes!({:?})),\n", cubin.display())
 }
 
 fn write_module_table(table: &Path, name: &str, entries: &str) {
