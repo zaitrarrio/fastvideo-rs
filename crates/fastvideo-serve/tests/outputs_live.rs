@@ -6,16 +6,21 @@
 //!   from fv-serve: WHIP (H.264, VP8, VP9), RTMP, RTMPS (a self-signed
 //!   certificate from the `openssl` CLI) and SRT (with a passphrase the
 //!   path requires). MediaMTX's API must show each path ready with a video
-//!   track, and ffprobe reads the resolution back over RTSP. Kinds the
-//!   local ffmpeg cannot publish (no `rtmps` / `srt` protocol) are reported
-//!   and skipped. `ffmpeg -protocols` is printed.
+//!   track, and ffprobe reads the resolution back over RTSP. RTMPS uses a
+//!   certificate from a test CA: refused by default (the output fails with
+//!   the verification error), accepted with `FV_OUTPUTS_RTMPS_CA_FILE` and
+//!   with `insecure_skip_verify`. SRT is skipped when the local ffmpeg has
+//!   no libsrt. `ffmpeg -protocols` is printed.
 //! - `FV_TEST_OUTPUTS_CLOUDFLARE=1` with `FV_CF_ACCOUNT_ID` and
 //!   `FV_CF_STREAM_API_TOKEN`: one stream per kind (WHIP H.264 at 1344x768,
-//!   WHIP VP8, RTMPS, SRT) against Cloudflare Stream for
-//!   `FV_TEST_CF_SECONDS` (60), live inputs named `fv-test-…`. WHEP
-//!   playback is checked with a str0m viewer that decodes what Cloudflare
-//!   delivers (resolution recorded), HLS by ffprobe on the manifest; every
-//!   input is deleted and checked gone.
+//!   WHIP VP8, WHIP VP9, RTMPS, SRT; `FV_TEST_CF_CASES=whip-vp8,srt` picks
+//!   some) against Cloudflare Stream for `FV_TEST_CF_SECONDS` (60), live
+//!   inputs named `fv-test-…`. WHEP playback: a str0m viewer records what
+//!   Cloudflare delivers and ffmpeg decodes it (resolution, codec, luma, so
+//!   a black picture shows). RTMPS/SRT: the HLS manifest and segments and
+//!   the DASH manifest decode, with the HLS live-edge latency. Each case
+//!   prints ingest-to-playable time. Every input and its recordings are
+//!   deleted.
 //!
 //! - `FV_TEST_OUTPUTS_MEDIAMTX=1` also runs `mediamtx_director_copy_carries_audio`:
 //!   a director session (fake H3, audio on) with `x_fv_output` over WHIP and
@@ -129,19 +134,6 @@ fn decode(url: &str, extra: &[&str], secs: Option<u32>) -> Option<(String, usize
     Some((codec, frames.len(), keys, last["width"].as_u64()?, last["height"].as_u64()?))
 }
 
-/// ffprobe's first video stream of `url`: (codec, width, height).
-fn probe(url: &str, extra: &[&str]) -> Option<(String, u64, u64)> {
-    let out = Command::new(fastvideo_media::tools::ffprobe_bin())
-        .args(["-v", "error"])
-        .args(extra)
-        .args(["-select_streams", "v:0", "-show_entries", "stream=codec_name,width,height", "-of", "json", url])
-        .output()
-        .ok()?;
-    let v: Value = serde_json::from_slice(&out.stdout).ok()?;
-    let s = &v["streams"][0];
-    Some((s["codec_name"].as_str()?.to_owned(), s["width"].as_u64()?, s["height"].as_u64()?))
-}
-
 // ---- MediaMTX --------------------------------------------------------------------
 
 fn free_port() -> u16 {
@@ -165,7 +157,33 @@ async fn mediamtx_bin(work: &FsPath) -> PathBuf {
     bin
 }
 
+fn pem(label: &str, der: &[u8]) -> String {
+    use base64::Engine as _;
+    let b = base64::engine::general_purpose::STANDARD.encode(der);
+    let lines: Vec<&str> = b.as_bytes().chunks(64).map(|c| std::str::from_utf8(c).unwrap()).collect();
+    format!("-----BEGIN {label}-----\n{}\n-----END {label}-----\n", lines.join("\n"))
+}
+
+/// Writes `ca.pem` (a fresh test CA) and `server.crt` / `server.key` (a
+/// certificate for 127.0.0.1 and localhost it issued) into `dir`.
+fn test_ca(dir: &FsPath) {
+    let ca_key = rcgen::KeyPair::generate().unwrap();
+    let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+    ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    ca_params.distinguished_name.push(rcgen::DnType::CommonName, "fastvideo test CA");
+    let ca = ca_params.self_signed(&ca_key).unwrap();
+    let key = rcgen::KeyPair::generate().unwrap();
+    let leaf = rcgen::CertificateParams::new(vec!["127.0.0.1".to_owned(), "localhost".to_owned()])
+        .unwrap()
+        .signed_by(&key, &rcgen::Issuer::new(ca_params, ca_key))
+        .unwrap();
+    std::fs::write(dir.join("ca.pem"), pem("CERTIFICATE", ca.der())).unwrap();
+    std::fs::write(dir.join("server.crt"), pem("CERTIFICATE", leaf.der())).unwrap();
+    std::fs::write(dir.join("server.key"), pem("PRIVATE KEY", &key.serialize_der())).unwrap();
+}
+
 struct Mtx {
+    ca: PathBuf,
     child: Child,
     api: u16,
     rtsp: u16,
@@ -187,19 +205,11 @@ async fn start_mediamtx() -> Mtx {
     let work = std::env::var("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|_| std::env::temp_dir()).join("fv-mediamtx");
     std::fs::create_dir_all(&work).unwrap();
     let bin = mediamtx_bin(&work).await;
-    // RTMPS: a self-signed certificate.
+    // RTMPS: a certificate for 127.0.0.1 issued by a test CA no system
+    // trusts (verification refuses it unless given `ca.pem`).
     let (key, crt) = (work.join("server.key"), work.join("server.crt"));
-    let tls = key.exists()
-        || Command::new("openssl")
-            .args(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=127.0.0.1"])
-            .arg("-keyout")
-            .arg(&key)
-            .arg("-out")
-            .arg(&crt)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success());
+    test_ca(&work);
+    let tls = true;
     let cfg = work.join("mediamtx.yml");
     // Settings from MTX_* env; every path accepts publishers.
     std::fs::write(&cfg, "paths:\n  all_others:\n").unwrap();
@@ -225,7 +235,7 @@ async fn start_mediamtx() -> Mtx {
         .stdout(std::fs::File::create(&log).unwrap())
         .stderr(Stdio::inherit());
     let child = cmd.spawn().expect("starting MediaMTX");
-    let m = Mtx { child, api, rtsp, rtmp, rtmps: if tls { rtmps } else { 0 }, srt, webrtc, log };
+    let m = Mtx { ca: work.join("ca.pem"), child, api, rtsp, rtmp, rtmps: if tls { rtmps } else { 0 }, srt, webrtc, log };
     let t0 = Instant::now();
     while reqwest::get(format!("http://127.0.0.1:{api}/v3/paths/list")).await.is_err() {
         assert!(t0.elapsed() < Duration::from_secs(15), "MediaMTX API did not come up");
@@ -274,6 +284,11 @@ async fn mediamtx_whip_rtmp_rtmps_srt() {
     println!("ffmpeg -protocols: {}", protocols.split_whitespace().collect::<Vec<_>>().join(" "));
     let m = start_mediamtx().await;
     let a = app_with(&[("FV_OUTPUTS_ALLOW_PRIVATE", "1".into())]).await;
+    // The same server trusting the test CA (`[outputs] rtmps_ca_file`).
+    let a_ca = app_with(&[("FV_OUTPUTS_ALLOW_PRIVATE", "1".into()), ("FV_OUTPUTS_RTMPS_CA_FILE", m.ca.display().to_string())]).await;
+    if m.rtmps != 0 {
+        rtmps_refuses_an_unknown_ca(&a, &m).await;
+    }
     let mut kinds: Vec<(&str, Value)> = vec![
         ("whip-h264", json!({"kind": "whip", "url": format!("http://127.0.0.1:{}/fvwhip/whip", m.webrtc)})),
         ("rtmp", json!({"kind": "rtmps", "url": format!("rtmp://127.0.0.1:{}/live", m.rtmp), "stream_key": "fvrtmp"})),
@@ -284,10 +299,13 @@ async fn mediamtx_whip_rtmp_rtmps_srt() {
     if fastvideo_media::vp8::libvpx_vp9_available() {
         kinds.push(("whip-vp9", json!({"kind": "whip", "url": format!("http://127.0.0.1:{}/fvvp9/whip", m.webrtc), "codec": "vp9"})));
     }
-    if m.rtmps != 0 && has_protocol(&protocols, "rtmps") {
+    if m.rtmps != 0 {
+        // fastvideo's TLS relay: ffmpeg needs only plain rtmp.
         kinds.push(("rtmps", json!({"kind": "rtmps", "url": format!("rtmps://127.0.0.1:{}/live", m.rtmps), "stream_key": "fvrtmps"})));
-    } else {
-        println!("RESULT rtmps: skipped (ffmpeg rtmps: {}, openssl cert: {})", has_protocol(&protocols, "rtmps"), m.rtmps != 0);
+        kinds.push((
+            "rtmps-insecure",
+            json!({"kind": "rtmps", "url": format!("rtmps://localhost:{}/live", m.rtmps), "stream_key": "fvrtmpsi", "insecure_skip_verify": true}),
+        ));
     }
     if has_protocol(&protocols, "srt") || has_protocol(&protocols, "libsrt") {
         kinds.push(("srt", json!({"kind": "srt", "url": format!("srt://127.0.0.1:{}", m.srt), "stream_id": "publish:fvsrt", "passphrase": SRT_PASS})));
@@ -301,10 +319,13 @@ async fn mediamtx_whip_rtmp_rtmps_srt() {
             "whip-vp9" => "fvvp9",
             "rtmp" => "live/fvrtmp",
             "rtmps" => "live/fvrtmps",
+            "rtmps-insecure" => "live/fvrtmpsi",
             _ => "fvsrt",
         };
         // fake-h3-turbo: H3's native 1344x768 with audio.
         let body = json!({"model": "fake-h3-turbo", "prompt": "a lighthouse", "output": output});
+        // RTMPS (verified) on the server that trusts the test CA.
+        let a = if name == "rtmps" { &a_ca } else { &a };
         let (s, v) = call(&a.router, "POST", "/fv/v1/streams", Some(body)).await;
         assert_eq!(s, StatusCode::CREATED, "{name}: {v}");
         let id = v["id"].as_str().unwrap().to_owned();
@@ -459,6 +480,33 @@ async fn mediamtx_director_copy_carries_audio() {
     }
 }
 
+/// RTMPS to a server whose certificate no trusted CA issued: the output
+/// fails with a verification error, MediaMTX never sees a publisher, and
+/// nothing is retried unverified.
+async fn rtmps_refuses_an_unknown_ca(a: &App, m: &Mtx) {
+    let output = json!({"kind": "rtmps", "url": format!("rtmps://127.0.0.1:{}/live", m.rtmps), "stream_key": "fvrefused"});
+    let (s, v) = call(&a.router, "POST", "/fv/v1/streams", Some(json!({"model": "fake-h3-turbo", "prompt": "x", "output": output}))).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    let t0 = Instant::now();
+    let st = loop {
+        let (_, st) = call(&a.router, "GET", &format!("/fv/v1/streams/{id}"), None).await;
+        if st["status"]["output_state"] == "failed" || t0.elapsed() > Duration::from_secs(30) {
+            break st;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    };
+    let err = st["status"]["output_error"].as_str().unwrap_or_default().to_owned();
+    println!("RESULT rtmps-unknown-ca: output_state {} after {:.1}s, output_error {err:?}", st["status"]["output_state"], t0.elapsed().as_secs_f64());
+    assert_eq!(st["status"]["output_state"], "failed", "{st}");
+    assert!(err.contains("failed verification") && err.contains("UnknownIssuer"), "{err}");
+    assert!(!err.contains("fvrefused"), "the key is scrubbed: {err}");
+    // Nothing reached MediaMTX on that path.
+    let r: Value = reqwest::get(format!("http://127.0.0.1:{}/v3/paths/get/live/fvrefused", m.api)).await.unwrap().json().await.unwrap_or(Value::Null);
+    assert_ne!(r["ready"], true, "{r}");
+    call(&a.router, "DELETE", &format!("/fv/v1/streams/{id}"), None).await;
+}
+
 /// Plays `whep_url` for `secs`, writes what arrived to a file (IVF for
 /// VP8/VP9, Annex-B for H.264) and decodes it with ffprobe: (frames
 /// received, (codec, decoded frames, keyframes, w, h)).
@@ -490,6 +538,15 @@ async fn whep_decode(whep_url: &str, codec: VideoCodec, secs: u64, out: &FsPath)
     }
     peer.close();
     host.shutdown().await;
+    let file = es_file(codec, &frames);
+    std::fs::write(out, &file).unwrap();
+    let fmt: &[&str] = if codec == VideoCodec::H264 { &["-f", "h264"] } else { &["-f", "ivf"] };
+    (frames.len(), decode(out.to_str().unwrap(), fmt, None))
+}
+
+/// What a WHEP viewer received as one file ffmpeg reads: IVF for VP8/VP9,
+/// Annex-B for H.264.
+fn es_file(codec: VideoCodec, frames: &[bytes::Bytes]) -> Vec<u8> {
     let mut file = Vec::new();
     match codec {
         VideoCodec::H264 => frames.iter().for_each(|f| file.extend_from_slice(f)),
@@ -509,18 +566,17 @@ async fn whep_decode(whep_url: &str, codec: VideoCodec, secs: u64, out: &FsPath)
             }
         }
     }
-    std::fs::write(out, &file).unwrap();
-    let fmt: &[&str] = if codec == VideoCodec::H264 { &["-f", "h264"] } else { &["-f", "ivf"] };
-    (frames.len(), decode(out.to_str().unwrap(), fmt, None))
+    file
 }
 
 // ---- Cloudflare (live) ---------------------------------------------------------------
 
 struct Viewer {
-    frames: usize,
+    frames: Vec<bytes::Bytes>,
     keyframes: usize,
     size: Option<(u32, u32)>,
     audio: usize,
+    /// From the WHEP POST to the first video frame.
     first_ms: Option<u128>,
 }
 
@@ -553,24 +609,30 @@ async fn whep_view(whep_url: &str, codec: VideoCodec, secs: u64) -> Result<Viewe
         return Err(format!("WHEP HTTP {status}: {}", answer.chars().take(200).collect::<String>()));
     }
     let mut peer = pending.accept_answer(&answer).await.map_err(|e| e.to_string())?;
-    let mut v = Viewer { frames: 0, keyframes: 0, size: None, audio: 0, first_ms: None };
+    let mut v = Viewer { frames: Vec::new(), keyframes: 0, size: None, audio: 0, first_ms: None };
     let end = Instant::now() + Duration::from_secs(secs);
     while Instant::now() < end {
         match tokio::time::timeout(Duration::from_millis(500), peer.next_event()).await {
             Ok(Some(PeerEvent::Media { kind: TrackKind::Video, data, .. })) => {
-                v.frames += 1;
                 v.first_ms.get_or_insert(t0.elapsed().as_millis());
                 let size = match codec {
                     VideoCodec::H264 => fastvideo_media::h264::find_sps(&data).map(|s| (s.width, s.height)),
-                    _ => fastvideo_media::decode::vp8_keyframe_size(&data),
+                    VideoCodec::Vp8 => fastvideo_media::decode::vp8_keyframe_size(&data),
+                    VideoCodec::Vp9 => None,
                 };
                 if let Some(s) = size {
                     v.keyframes += 1;
                     v.size = Some(s);
                 }
+                v.frames.push(data);
             }
             Ok(Some(PeerEvent::Media { kind: TrackKind::Audio, .. })) => v.audio += 1,
-            Ok(Some(PeerEvent::Closed(r))) => return Err(format!("WHEP peer closed: {r:?}")),
+            Ok(Some(PeerEvent::Closed(r))) => {
+                if v.frames.is_empty() {
+                    return Err(format!("WHEP peer closed: {r:?}"));
+                }
+                break;
+            }
             Ok(None) => break,
             _ => {}
         }
@@ -578,6 +640,162 @@ async fn whep_view(whep_url: &str, codec: VideoCodec, secs: u64) -> Result<Viewe
     peer.close();
     host.shutdown().await;
     Ok(v)
+}
+
+/// Luma of what ffmpeg decodes from `input` (scaled to 64x36 gray): (frames,
+/// mean luma, mean per-frame standard deviation, frames that look black:
+/// mean < 20 and deviation < 4). A black or flat stream has a deviation near 0.
+fn luma(input: &str, extra: &[&str], secs: Option<u32>) -> Option<(usize, f64, f64, usize)> {
+    let mut cmd = Command::new(fastvideo_media::tools::ffmpeg_bin());
+    cmd.args(["-v", "error"]).args(extra).args(["-i", input]);
+    if let Some(s) = secs {
+        cmd.args(["-t", &s.to_string()]);
+    }
+    let out = cmd.args(["-an", "-vf", "scale=64:36,format=gray", "-f", "rawvideo", "-"]).output().ok()?;
+    let px = 64 * 36;
+    let n = out.stdout.len() / px;
+    if n == 0 {
+        return None;
+    }
+    let (mut mean_sum, mut dev_sum, mut black) = (0.0, 0.0, 0);
+    for f in out.stdout.chunks_exact(px) {
+        let m = f.iter().map(|&b| f64::from(b)).sum::<f64>() / px as f64;
+        let d = (f.iter().map(|&b| (f64::from(b) - m).powi(2)).sum::<f64>() / px as f64).sqrt();
+        mean_sum += m;
+        dev_sum += d;
+        if m < 20.0 && d < 4.0 {
+            black += 1;
+        }
+    }
+    Some((n, mean_sum / n as f64, dev_sum / n as f64, black))
+}
+
+/// Unix ms of an ISO-8601 UTC time like `2026-10-13T22:40:01.123Z` (or `+00:00`).
+fn iso_ms(s: &str) -> Option<i64> {
+    let s = s.trim();
+    let (date, time) = s.split_once('T')?;
+    let mut d = date.split('-').map(|x| x.parse::<i64>());
+    let (y, mo, da) = (d.next()?.ok()?, d.next()?.ok()?, d.next()?.ok()?);
+    let time = time.trim_end_matches('Z');
+    let time = time.split(['+']).next()?;
+    let mut t = time.split(':');
+    let (h, mi) = (t.next()?.parse::<i64>().ok()?, t.next()?.parse::<i64>().ok()?);
+    let sec: f64 = t.next()?.parse().ok()?;
+    // Days from civil (Howard Hinnant).
+    let y2 = if mo <= 2 { y - 1 } else { y };
+    let era = y2.div_euclid(400);
+    let yoe = y2 - era * 400;
+    let mp = (mo + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + da - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(((days * 86_400 + h * 3600 + mi * 60) as f64 * 1000.0 + sec * 1000.0) as i64)
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64
+}
+
+/// What the HLS manifest serves now, fetched over HTTPS by the test (the
+/// build pod's static ffmpeg cannot resolve host names): the master's
+/// variants (`#EXT-X-STREAM-INF` lines, highest first), the live-edge
+/// latency (now - the end of the last segment by EXT-X-PROGRAM-DATE-TIME,
+/// when Cloudflare writes it), and the last `segments` segments of the
+/// best video variant joined into one local file ffmpeg decodes (with the
+/// EXT-X-MAP init segment for fMP4).
+struct HlsGrab {
+    variants: Vec<String>,
+    latency_ms: Option<i64>,
+    file: PathBuf,
+    segments: usize,
+    target_duration: Option<f64>,
+}
+
+async fn hls_grab(http: &reqwest::Client, master: &str, segments: usize, out: &FsPath) -> Result<HlsGrab, String> {
+    let get = |u: reqwest::Url| async move {
+        let r = http.get(u.clone()).send().await.map_err(|e| e.without_url().to_string())?;
+        if !r.status().is_success() {
+            return Err(format!("HTTP {} for {}", r.status(), u.path()));
+        }
+        r.bytes().await.map_err(|e| e.without_url().to_string())
+    };
+    let base = reqwest::Url::parse(master).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&get(base.clone()).await?).into_owned();
+    // (bandwidth, info line, uri) of each video variant.
+    let mut vars: Vec<(u64, String, String)> = Vec::new();
+    let mut lines = text.lines();
+    while let Some(l) = lines.next() {
+        if l.starts_with("#EXT-X-STREAM-INF") {
+            let bw = l.split("BANDWIDTH=").nth(1).and_then(|r| r.split(',').next()).and_then(|b| b.parse().ok()).unwrap_or(0);
+            if let Some(u) = lines.next() {
+                vars.push((bw, l.to_owned(), u.trim().to_owned()));
+            }
+        }
+    }
+    vars.sort_by_key(|v| std::cmp::Reverse(v.0));
+    let (_, _, uri) = vars.first().cloned().ok_or_else(|| format!("no variant in the master playlist: {}", text.lines().take(4).collect::<Vec<_>>().join(" | ")))?;
+    let media_url = base.join(&uri).map_err(|e| e.to_string())?;
+    let media = String::from_utf8_lossy(&get(media_url.clone()).await?).into_owned();
+    let (mut pdt, mut dur, mut last_end, mut target) = (None::<i64>, 0.0f64, None::<i64>, None);
+    let mut init = None;
+    let mut segs = Vec::new();
+    for l in media.lines() {
+        if let Some(t) = l.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:") {
+            pdt = iso_ms(t);
+        } else if let Some(t) = l.strip_prefix("#EXT-X-TARGETDURATION:") {
+            target = t.trim().parse().ok();
+        } else if let Some(m) = l.strip_prefix("#EXT-X-MAP:") {
+            init = m.split("URI=\"").nth(1).and_then(|r| r.split('"').next()).map(str::to_owned);
+        } else if let Some(d) = l.strip_prefix("#EXTINF:") {
+            dur = d.split(',').next().and_then(|x| x.parse().ok()).unwrap_or(0.0);
+        } else if !l.starts_with('#') && !l.trim().is_empty() {
+            segs.push(l.trim().to_owned());
+            if let Some(p) = pdt {
+                let end = p + (dur * 1000.0) as i64;
+                last_end = Some(end);
+                pdt = Some(end);
+            }
+        }
+    }
+    if segs.is_empty() {
+        return Err("the media playlist has no segment yet".into());
+    }
+    let mut file = Vec::new();
+    if let Some(i) = &init {
+        file.extend_from_slice(&get(media_url.join(i).map_err(|e| e.to_string())?).await?);
+    }
+    let take = segs.len().min(segments);
+    for s in &segs[segs.len() - take..] {
+        file.extend_from_slice(&get(media_url.join(s).map_err(|e| e.to_string())?).await?);
+    }
+    std::fs::write(out, &file).map_err(|e| e.to_string())?;
+    Ok(HlsGrab {
+        variants: vars.into_iter().map(|v| v.1).collect(),
+        latency_ms: last_end.map(|e| now_ms() - e),
+        file: out.to_owned(),
+        segments: take,
+        target_duration: target,
+    })
+}
+
+/// The DASH manifest: HTTP status and its video representations
+/// (`width`x`height` codecs).
+async fn dash_manifest(http: &reqwest::Client, mpd: &str) -> String {
+    let r = match http.get(mpd).send().await {
+        Ok(r) => r,
+        Err(e) => return format!("DASH: {}", e.without_url()),
+    };
+    let st = r.status();
+    let text = r.text().await.unwrap_or_default();
+    let reps: Vec<String> = text
+        .split("<Representation")
+        .skip(1)
+        .filter_map(|r| {
+            let attr = |n: &str| r.split(&format!(" {n}=\"")).nth(1).and_then(|x| x.split('"').next()).map(str::to_owned);
+            Some(format!("{}x{} {}", attr("width")?, attr("height")?, attr("codecs").unwrap_or_default()))
+        })
+        .collect();
+    format!("DASH HTTP {st}, video representations {reps:?}")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -589,53 +807,146 @@ async fn cloudflare_live_each_kind() {
     let account = std::env::var("FV_CF_ACCOUNT_ID").expect("FV_CF_ACCOUNT_ID");
     let token = std::env::var("FV_CF_STREAM_API_TOKEN").expect("FV_CF_STREAM_API_TOKEN");
     let secs: u64 = std::env::var("FV_TEST_CF_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
+    // FV_TEST_CF_CASES=whip-vp8,srt runs a subset.
+    let only: Option<Vec<String>> = std::env::var("FV_TEST_CF_CASES").ok().map(|s| s.split(',').map(|x| x.trim().to_owned()).collect());
     let a = app_with(&[
         ("FV_CF_ACCOUNT_ID", account.clone()),
         ("FV_CF_STREAM_API_TOKEN", token.clone()),
         ("FV_CF_STREAM_NAME_PREFIX", "fv-test-".into()),
     ])
     .await;
+    let protocols = ffmpeg_protocols();
+    println!("ffmpeg {:?}: rtmps {}, srt {}", fastvideo_media::tools::ffmpeg_bin(), has_protocol(&protocols, "rtmps"), has_protocol(&protocols, "libsrt") || has_protocol(&protocols, "srt"));
     let http = reqwest::Client::new();
     let api = format!("https://api.cloudflare.com/client/v4/accounts/{account}/stream/live_inputs");
     let mut uids = Vec::new();
+    let mut failures = Vec::new();
     for (name, output, codec) in [
         ("whip-h264", json!({"kind": "cloudflare"}), Some(VideoCodec::H264)),
         ("whip-vp8", json!({"kind": "cloudflare", "codec": "vp8"}), Some(VideoCodec::Vp8)),
+        ("whip-vp9", json!({"kind": "cloudflare", "codec": "vp9"}), Some(VideoCodec::Vp9)),
         ("rtmps", json!({"kind": "cloudflare-rtmps"}), None),
         ("srt", json!({"kind": "cloudflare-srt"}), None),
     ] {
+        if only.as_ref().is_some_and(|o| !o.iter().any(|x| x == name)) {
+            continue;
+        }
         let body = json!({"model": "fake-h3-turbo", "prompt": "a lighthouse at dusk", "output": output});
+        let t0 = Instant::now();
         let (s, v) = call(&a.router, "POST", "/fv/v1/streams", Some(body)).await;
-        assert_eq!(s, StatusCode::CREATED, "{name}: {v}");
+        if s != StatusCode::CREATED {
+            println!("RESULT {name}: create refused {s}: {v}");
+            failures.push(name);
+            continue;
+        }
+        let create_ms = t0.elapsed().as_millis();
         let id = v["id"].as_str().unwrap().to_owned();
         let pb = v["playback"].clone();
-        uids.push(pb["live_input_id"].as_str().unwrap().to_owned());
-        println!("{name}: playback {pb}");
-        let t0 = Instant::now();
+        if let Some(u) = pb["live_input_id"].as_str() {
+            uids.push(u.to_owned());
+        }
+        println!("{name}: created in {create_ms} ms; playback {pb}");
         let result = match codec {
             Some(c) => {
-                // Let the publisher connect, then watch over WHEP.
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                match whep_view(pb["whep_url"].as_str().unwrap(), c, secs.saturating_sub(10).max(10)).await {
-                    Ok(w) => format!(
-                        "WHEP: {} frames, {} keyframes, delivered {:?}, {} audio packets, first frame after {:?} ms",
-                        w.frames, w.keyframes, w.size, w.audio, w.first_ms
-                    ),
-                    Err(e) => format!("WHEP failed: {e}"),
+                // Retry WHEP until the publisher is up (Cloudflare answers 409 /
+                // 404 before), then watch for the rest of the case.
+                let whep = pb["whep_url"].as_str().unwrap_or_default().to_owned();
+                let mut outcome = Err("never tried".to_owned());
+                let mut first_try = None;
+                while t0.elapsed() < Duration::from_secs(secs.saturating_sub(10)) {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    let left = secs.saturating_sub(t0.elapsed().as_secs()).max(10);
+                    let t_try = t0.elapsed();
+                    match whep_view(&whep, c, left).await {
+                        Ok(w) if !w.frames.is_empty() => {
+                            first_try = Some(t_try);
+                            outcome = Ok(w);
+                            break;
+                        }
+                        Ok(_) => outcome = Err("WHEP connected but no video frames".into()),
+                        Err(e) => outcome = Err(e),
+                    }
+                }
+                match outcome {
+                    Ok(w) => {
+                        let file = std::env::temp_dir().join(format!("fv-cf-{name}.bin"));
+                        std::fs::write(&file, es_file(c, &w.frames)).unwrap();
+                        let fmt: &[&str] = if c == VideoCodec::H264 { &["-f", "h264"] } else { &["-f", "ivf"] };
+                        let d = decode(file.to_str().unwrap(), fmt, None);
+                        let l = luma(file.to_str().unwrap(), fmt, None);
+                        let playable = first_try.map(|t| t.as_millis() + w.first_ms.unwrap_or(0));
+                        if d.as_ref().is_none_or(|d| d.1 == 0) {
+                            failures.push(name);
+                        }
+                        format!(
+                            "WHEP: {} frames received ({} keyframes with a size, header size {:?}), {} audio packets; ingest-to-playable {:?} ms (create -> first WHEP video frame; first frame {:?} ms after the WHEP POST); decoded (codec, frames, keyframes, w, h) {d:?}; luma (frames, mean, deviation, black frames) {l:?}",
+                            w.frames.len(), w.keyframes, w.size, w.audio, playable, w.first_ms
+                        )
+                    }
+                    Err(e) => {
+                        failures.push(name);
+                        format!("WHEP failed: {e}")
+                    }
                 }
             }
             None => {
                 // HLS appears a few segments after the broadcast starts.
-                let hls = pb["hls_url"].as_str().unwrap().to_owned();
-                let mut got = None;
-                while t0.elapsed() < Duration::from_secs(secs) {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                    if let Some(p) = probe(&hls, &[]) {
-                        got = Some(p);
-                        break;
+                let hls = pb["hls_url"].as_str().unwrap_or_default().to_owned();
+                let dash = pb["dash_url"].as_str().unwrap_or_default().to_owned();
+                let file = std::env::temp_dir().join(format!("fv-cf-{name}.seg"));
+                let mut playable = None;
+                let mut last = String::new();
+                // When Cloudflare reports the input connected (ingest), apart
+                // from when HLS serves a decodable segment.
+                let uid = pb["live_input_id"].as_str().unwrap_or_default().to_owned();
+                let mut connected: Option<Duration> = None;
+                while t0.elapsed() < Duration::from_secs(secs.max(120)) {
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    if connected.is_none() {
+                        if let Ok(r) = http.get(format!("{api}/{uid}")).bearer_auth(&token).send().await {
+                            let v: Value = r.json().await.unwrap_or(Value::Null);
+                            if v["result"]["status"]["current"]["state"] == "connected" {
+                                connected = Some(t0.elapsed());
+                            }
+                        }
+                    }
+                    match hls_grab(&http, &hls, 1, &file).await {
+                        Ok(g) if decode(g.file.to_str().unwrap(), &[], None).is_some_and(|d| d.1 > 0) => {
+                            playable = Some(t0.elapsed());
+                            break;
+                        }
+                        Ok(_) => last = "a segment that does not decode yet".into(),
+                        Err(e) => last = e,
                     }
                 }
-                format!("HLS ffprobe: {got:?} after {:.0}s", t0.elapsed().as_secs_f64())
+                match playable {
+                    None => {
+                        failures.push(name);
+                        format!("HLS never playable after {:.0}s (last: {last}; input connected after {connected:?})", t0.elapsed().as_secs_f64())
+                    }
+                    Some(p) => {
+                        // Let a few more segments land, then decode and measure.
+                        tokio::time::sleep(Duration::from_secs(12)).await;
+                        let g = hls_grab(&http, &hls, 3, &file).await;
+                        let (d, l, info) = match &g {
+                            Ok(g) => (
+                                decode(g.file.to_str().unwrap(), &[], None),
+                                luma(g.file.to_str().unwrap(), &[], None),
+                                format!("variants {:?}; live-edge latency {:?} ms (target duration {:?} s); {} segments", g.variants, g.latency_ms, g.target_duration, g.segments),
+                            ),
+                            Err(e) => (None, None, format!("grab failed: {e}")),
+                        };
+                        let dash_info = dash_manifest(&http, &dash).await;
+                        if d.as_ref().is_none_or(|d| d.1 == 0) {
+                            failures.push(name);
+                        }
+                        format!(
+                            "HLS: ingest-to-playable {:.1}s (create -> first segment that decodes; Cloudflare showed the input connected after {:?}); {info}; decoded (codec, frames, keyframes, w, h) {d:?}; luma {l:?}; {dash_info}",
+                            p.as_secs_f64(),
+                            connected.map(|c| format!("{:.1}s", c.as_secs_f64()))
+                        )
+                    }
+                }
             }
         };
         if t0.elapsed() < Duration::from_secs(secs) {
@@ -643,20 +954,26 @@ async fn cloudflare_live_each_kind() {
         }
         let (_, st) = call(&a.router, "GET", &format!("/fv/v1/streams/{id}"), None).await;
         println!(
-            "RESULT {name}: {result}; sent {} frames ({} {}x{}), output_error {}",
-            st["status"]["frames_sent"], st["status"]["video_codec"], st["status"]["width"], st["status"]["height"], st["status"]["output_error"]
+            "RESULT {name}: {result}; fv-serve sent {} frames ({} {}x{} @ {}), output_state {}, output_error {}",
+            st["status"]["frames_sent"],
+            st["status"]["video_codec"],
+            st["status"]["width"],
+            st["status"]["height"],
+            st["status"]["fps"],
+            st["status"]["output_state"],
+            st["status"]["output_error"]
         );
         call(&a.router, "DELETE", &format!("/fv/v1/streams/{id}"), None).await;
     }
     // Every fv-test- input is gone (or disabled when it recorded).
     tokio::time::sleep(Duration::from_secs(3)).await;
+    let stream_api = api.trim_end_matches("/live_inputs").to_owned();
     for uid in uids {
         let r = http.get(format!("{api}/{uid}")).bearer_auth(&token).send().await.unwrap();
         let st = r.status();
         let v: Value = r.json().await.unwrap_or(Value::Null);
-        let recorded = v["result"]["recording"]["mode"] == "automatic";
         println!("cleanup {uid}: HTTP {st}, enabled {}, recording {}", v["result"]["enabled"], v["result"]["recording"]["mode"]);
-        if recorded {
+        if st.is_success() {
             // `on_stop = auto` disabled it to keep the recording: delete the
             // recordings (stored minutes cost money) and the input here.
             let videos: Value = http
@@ -668,17 +985,24 @@ async fn cloudflare_live_each_kind() {
                 .json()
                 .await
                 .unwrap_or(Value::Null);
-            let stream_api = api.trim_end_matches("/live_inputs");
             for v in videos["result"].as_array().into_iter().flatten() {
                 if let Some(vid) = v["uid"].as_str() {
-                    let d = http.delete(format!("{stream_api}/{vid}")).bearer_auth(&token).send().await.unwrap();
-                    println!("cleanup recording {vid}: HTTP {}", d.status());
+                    // A recording still being processed answers 409: retry.
+                    let t = Instant::now();
+                    let status = loop {
+                        let d = http.delete(format!("{stream_api}/{vid}")).bearer_auth(&token).send().await.unwrap();
+                        if d.status() != reqwest::StatusCode::CONFLICT || t.elapsed() > Duration::from_secs(180) {
+                            break d.status();
+                        }
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                    };
+                    println!("cleanup recording {vid} ({}s): HTTP {status} after {:.0}s", v["duration"], t.elapsed().as_secs_f64());
+                    assert!(status.is_success() || status == reqwest::StatusCode::NOT_FOUND, "deleting recording {vid}: {status}");
                 }
             }
             let d = http.delete(format!("{api}/{uid}")).bearer_auth(&token).send().await.unwrap();
-            assert!(d.status().is_success(), "deleting the recorded test input {uid}");
-        } else {
-            assert_eq!(st, reqwest::StatusCode::NOT_FOUND, "{uid} should be deleted");
+            assert!(d.status().is_success(), "deleting the test input {uid}");
         }
     }
+    assert!(failures.is_empty(), "cases without playback: {failures:?}");
 }
