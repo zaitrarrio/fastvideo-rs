@@ -957,6 +957,17 @@ pub fn denoise_reserve_bytes_for(rows: usize, bf16_act: bool) -> u64 {
     (rows as u64) * per_row + (4u64 << 30)
 }
 
+/// [`I2vEncoderChoice::Auto`] when the resident plan does not fit beside the
+/// vision tower: keep the tower anyway when the DiT streams whether or not
+/// it loads (`policy` resolves to streamed with `free` and with `free` less
+/// the tower) and `free` covers the tower plus the streamed plan.
+pub fn i2v_tower_beside_streamed_dit(policy: DitOffload, free: u64, resident_need: u64, streamed_need: u64) -> bool {
+    let after = free.saturating_sub(I2V_VISION_RESERVE_BYTES);
+    policy.resolve(resident_need, Some(free)).is_streamed()
+        && policy.resolve(resident_need, Some(after)).is_streamed()
+        && after >= streamed_need
+}
+
 /// Whether an `Auto`-resident encoder may stay on the device through a
 /// denoise of `rows` packed rows, given the free bytes measured after the
 /// prompt was encoded. Unknown free memory releases it.
@@ -1409,6 +1420,21 @@ impl H3Pipeline {
                     .peak()
                 })
                 .map_err(msg)?;
+            // The DiT's working set when its blocks stream from host memory.
+            let streamed_need = H3Geometry::default_16x9(5)
+                .map(|g| {
+                    fastvideo_models::h3::memory::plan(
+                        &g,
+                        fastvideo_models::h3::memory::H3PlanOptions {
+                            placement: fastvideo_models::h3::memory::H3Placement::STREAMED,
+                            gate: with_gate,
+                            ..Default::default()
+                        },
+                    )
+                    .peak()
+                })
+                .map_err(msg)?;
+            let dit_policy = DitOffload::from_env_or(options.dit_offload).map_err(msg)?;
             let gib = |b: u64| b as f64 / f64::from(1u32 << 30);
             let (load, why) = match (options.i2v_encoder, lm) {
                 (I2vEncoderChoice::Stream, _) => (false, "configured".to_owned()),
@@ -1433,6 +1459,33 @@ impl H3Pipeline {
                             gib(need)
                         ),
                     ),
+                    // The DiT streams with or without the tower (e.g. the
+                    // upsampler sidecar holds 11 GB of a 96 GB card): the
+                    // tower is 2 GiB beside the streamed plan, while
+                    // streaming it re-reads the vision tower and the whole
+                    // language model (~26 GB FP8) from the volume for every
+                    // image-conditioned build (every anchored director
+                    // chunk; gpu-check-2026-10-13: 160-214 s chunks).
+                    Some(f)
+                        if i2v_tower_beside_streamed_dit(
+                            dit_policy,
+                            f,
+                            need,
+                            streamed_need,
+                        ) =>
+                    {
+                        (
+                            true,
+                            format!(
+                                "the DiT streams either way ({:.1} GiB free < the resident plan {:.1} GiB): {:.1} GiB free covers the vision tower ({:.1} GiB) and the streamed plan ({:.1} GiB)",
+                                gib(f),
+                                gib(need),
+                                gib(f),
+                                gib(I2V_VISION_RESERVE_BYTES),
+                                gib(streamed_need)
+                            ),
+                        )
+                    }
                     Some(f) => (
                         false,
                         format!(
@@ -3218,6 +3271,31 @@ mod tests {
         let last = scheduler_step(&schedule.video, 7, &xt, &vt).unwrap();
         let sigma = 1.0f32 - schedule.video.timesteps[7];
         assert!((last.host_cow().unwrap()[0] - (0.5 + sigma * 1.0)).abs() < 1e-6);
+    }
+
+    /// gpu-check-2026-10-13: beside the 11 GB upsampler sidecar the turbo
+    /// load saw 60.6 GiB free against a 64.6 GiB resident plan, so the DiT
+    /// streamed and the vision tower was streamed too (the language model
+    /// re-read from the volume per anchored chunk). The DiT streams either
+    /// way there, so the tower stays resident; a forced-resident DiT or a
+    /// card without room for the streamed plan keeps streaming it.
+    #[test]
+    fn the_vision_tower_stays_resident_when_the_dit_streams_anyway() {
+        use fastvideo_models::h3::memory::{plan, H3PlanOptions, H3Placement};
+        const GIB: u64 = 1 << 30;
+        let g = H3Geometry::default_16x9(5).unwrap();
+        let resident = plan(&g, H3PlanOptions { gate: true, ..Default::default() }).peak();
+        let streamed = plan(&g, H3PlanOptions { placement: H3Placement::STREAMED, gate: true, ..Default::default() }).peak();
+        assert!(streamed + 4 * GIB < 60 * GIB, "streamed plan {} GiB", streamed / GIB);
+        let free = 60 * GIB + 6 * GIB / 10;
+        assert!(free < resident, "the case of the check: {} vs {} GiB", free / GIB, resident / GIB);
+        assert!(super::i2v_tower_beside_streamed_dit(DitOffload::Auto, free, resident, streamed));
+        assert!(super::i2v_tower_beside_streamed_dit(DitOffload::Streamed, free, resident, streamed));
+        assert!(!super::i2v_tower_beside_streamed_dit(DitOffload::Resident, free, resident, streamed), "a resident DiT needs the room");
+        // Loading the tower would push a fitting DiT out of residency: no.
+        assert!(!super::i2v_tower_beside_streamed_dit(DitOffload::Auto, resident + GIB, resident, streamed));
+        // Not even the streamed plan beside the tower: no.
+        assert!(!super::i2v_tower_beside_streamed_dit(DitOffload::Auto, streamed + GIB, resident, streamed));
     }
 
     #[test]
