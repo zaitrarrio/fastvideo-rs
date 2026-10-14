@@ -7,15 +7,20 @@
 #   pod.sh up <image> [config-in-image]   create; writes the state file
 #   pod.sh down                           delete the pod in the state file
 #   pod.sh wait                           wait for /ping 200 (prints timings)
-#   pod.sh bundle                         upload the test bundle to /e2e
+#   pod.sh bundle [file.tgz]              upload the test bundle (or that tar.gz) to /e2e
 #   pod.sh run '<shell>' [timeout_s]      run on the pod via the sidecar, print output
 #   pod.sh hooks                          the sidecar's recorded webhook deliveries
+#   pod.sh keyrun '<shell>' [timeout_s]   run with FV_KEY / FV_ADMIN_TOKEN set on the pod (never echoed here)
+#   pod.sh get <pod path under /e2e> <local file>   download a file through the sidecar
 #
 # State (pod id, API key, admin token, sidecar token) lives in
 # $FV_E2E_STATE (mode 600, never printed). Guards: balance floor
 # (FV_MIN_BALANCE, 8 $), $/hr cap (RUNPOD_GPU_MAX_DPH, 2.2), a detached
 # wall-clock backstop (FV_POD_CAP_S, max 5400 s) that deletes the pod.
 # Env: RUNPOD_API_KEY, RUNPOD_GPU_TYPES (comma list), RUNPOD_VOLUME_ID,
+# FV_E2E_DISK_GB (container disk, default 40), FV_E2E_NO_SECRETS=1 (no
+# Runpod secret references in the pod env: no Cloudflare / D1 / R2 / webhook
+# credentials on the pod; fv-serve keeps local jobs and artifacts),
 # FV_E2E_NAME (pod name prefix, default fv-e2e-a-), FV_E2E_ENV_JSON (extra
 # pod env as a JSON object, e.g. '{"FV_REACTOR_MODE":"avatar"}').
 # `up <image> <config>`: the in-image config pod-boot.sh starts from
@@ -72,9 +77,10 @@ cmd_up() {
       --arg boot "$(cat "$ROOT/scripts/serve/e2e/pod-boot.sh")" \
       --arg side "$(base64 -w0 "$ROOT/scripts/serve/e2e/sidecar.py")" \
       --arg keyhash "$(printf '%s' "$key" | sha256sum | cut -d' ' -f1)" --arg admin "$admin" --arg sidecar "$sidecar" \
-      --argjson vol "$vol" --argjson extra "${FV_E2E_ENV_JSON:-{\}}" '{
+      --argjson vol "$vol" --argjson extra "${FV_E2E_ENV_JSON:-{\}}" --argjson disk "${FV_E2E_DISK_GB:-40}" \
+      --arg nosecrets "${FV_E2E_NO_SECRETS:-0}" '{
         name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
-        gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: 40, volumeInGb: 0,
+        gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: $disk, volumeInGb: 0,
         ports: ["8000/http", "8001/http"],
         dockerEntrypoint: ["bash", "-c"], dockerStartCmd: [$boot],
         env: ({
@@ -89,7 +95,7 @@ cmd_up() {
           FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", FV_WEIGHTS: "/workspace/weights",
           FV_API_KEYS: $keyhash, FV_ADMIN_TOKEN: $admin, FV_SIDECAR_TOKEN: $sidecar, FV_SIDECAR_B64: $side,
           FV_CALLBACKS_ALLOW_PRIVATE: "1", RUST_LOG: "info", FV_E2E_BASE_CONFIG: $cfg
-        } + $extra)
+        } + $extra | if $nosecrets == "1" then with_entries(select((.value | tostring | startswith("{{ RUNPOD_SECRET_")) | not)) else . end)
       } + $vol')"
     # The price cap on Runpod's quote, BEFORE the create (scripts/gpu/runpod-price.sh).
     fv_runpod_price_ok "$gpu" "$MAX_DPH" SECURE || continue
@@ -135,6 +141,8 @@ cmd_wait() {
 }
 
 cmd_bundle() {
+  # `bundle <file.tgz>`: upload that tar.gz instead (extracted under /e2e).
+  if [[ -n "${1:-}" ]]; then side /bundle 300 -X PUT --data-binary "@$1" -H 'content-type: application/gzip'; echo; return; fi
   local tgz; tgz="$(mktemp)"
   tar czf "$tgz" -C "$ROOT" tests/compat/package.json tests/compat/package-lock.json tests/compat/requirements.txt \
     tests/compat/suites crates/fastvideo-reactor/tests/compat/reactor_sdk_compat.py tests/console/smoke.cjs \
@@ -161,11 +169,18 @@ cmd_run() {
 
 cmd_hooks() { side /hooks 30; }
 
+cmd_get() {
+  local remote="${1:?pod path}" dest="${2:?local file}"
+  mkdir -p "$(dirname "$dest")"
+  side "/file$remote" 600 --fail -o "$dest" || die "get $remote failed"
+  log "got $remote ($(stat -c %s "$dest") bytes)"
+}
+
 case "${1:-}" in
   up) shift; cmd_up "$@" ;;
   down) cmd_down ;;
   wait) cmd_wait ;;
-  bundle) cmd_bundle ;;
+  bundle) shift; cmd_bundle "$@" ;;
   run) shift; cmd_run "$@" ;;
   hooks) cmd_hooks ;;
   clients)
@@ -176,6 +191,11 @@ case "${1:-}" in
     envs="FV_KEY=$(printf '%q' "$(st key)") FV_ADMIN_TOKEN=$(printf '%q' "$(st admin)")"
     cmd_run "$envs bash /e2e/scripts/serve/e2e/pod-clients.sh $sub$args 2>&1 | tail -${FV_TAIL:-60}" "${FV_RUN_TIMEOUT:-1800}" ;;
   log) cmd_run "tail -n ${2:-40} /e2e/serve.log" 60 ;;
+  get) shift; cmd_get "$@" ;;
+  keyrun)
+    # Exported: the whole command line sees them (a `K=V cmd` prefix would reach only its first command).
+    envs="export FV_KEY=$(printf '%q' "$(st key)") FV_ADMIN_TOKEN=$(printf '%q' "$(st admin)");"
+    cmd_run "$envs $2" "${3:-900}" ;;
   restart) cmd_run "/e2e/serve.sh ${2:-/e2e/fv.toml}; sleep 1; cat /e2e/serve.pid" 120 ;;
   *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

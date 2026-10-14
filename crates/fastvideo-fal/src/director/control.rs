@@ -51,6 +51,8 @@ use super::messages::{self as m, Aspect, Configure, ErrorCode, Prompt, RejectRea
 
 /// How refusals name a causal model.
 const CAUSAL_MODEL: &str = "this causal streaming model (LongLive / SF-Wan)";
+/// How refusals name a text-to-video-only clip model.
+const T2V_MODEL: &str = "this model is text-to-video only (no image conditioning)";
 
 /// Server-side limits and defaults (our `session_info` constants).
 #[derive(Clone, Debug, PartialEq)]
@@ -77,6 +79,10 @@ pub struct Limits {
     pub hd_max_chunk_seconds: Option<f64>,
     /// A causal model (one continuous rollout; docs/serve/director-causal.md).
     pub causal: Option<CausalLimits>,
+    /// The model builds image-conditioned clips (`I2V`): `image_url`, end
+    /// images and end-image beats. A text-to-video-only clip model (FastH3
+    /// Trim) refuses them up front instead of failing chunk 0.
+    pub image_conditioning: bool,
 }
 
 /// The block structure of a causal director session.
@@ -159,6 +165,7 @@ impl Default for Limits {
             default_memory: 12,
             hd_max_chunk_seconds: None,
             causal: None,
+            image_conditioning: true,
         }
     }
 }
@@ -468,6 +475,17 @@ impl Control {
                 return fail(ErrorCode::InvalidInitialScript, format!("script end images are not supported: {CAUSAL_MODEL} is text-to-video only"));
             }
         }
+        if self.limits.causal.is_none() && !self.limits.image_conditioning {
+            if c.image_url.is_some() {
+                return fail(ErrorCode::InvalidInitialImage, format!("{T2V_MODEL}: `image_url` (image conditioning) is not supported"));
+            }
+            if c.end_image_url.is_some() {
+                return fail(ErrorCode::InvalidInitialImage, format!("{T2V_MODEL}: `end_image_url` is not supported"));
+            }
+            if c.script.iter().flatten().any(|b| b.end_image_url.is_some()) {
+                return fail(ErrorCode::InvalidInitialScript, format!("script end images are not supported: {T2V_MODEL}"));
+            }
+        }
         if let Some(script) = &c.script {
             if c.end_image_url.is_some() || c.audio_url.is_some() {
                 return fail(ErrorCode::InvalidInitialScript, "`script` cannot be combined with `end_image_url` or `audio_url`; place them in the script".into());
@@ -583,6 +601,11 @@ impl Control {
             && (p.end_image_url.is_some() || p.script.iter().flatten().any(|b| b.end_image_url.is_some()))
         {
             return Err(vec![m::prompt_rejected(v, RejectReason::InvalidImage, format!("end images are not supported: {CAUSAL_MODEL} is text-to-video only"))]);
+        }
+        if !self.limits.image_conditioning
+            && (p.end_image_url.is_some() || p.script.iter().flatten().any(|b| b.end_image_url.is_some()))
+        {
+            return Err(vec![m::prompt_rejected(v, RejectReason::InvalidImage, format!("end images are not supported: {T2V_MODEL}"))]);
         }
         if let Some(script) = &p.script {
             if p.prompt.is_some() || p.end_image_url.is_some() {
@@ -924,6 +947,33 @@ mod tests {
         assert_eq!(out[0]["reason"], "invalid_image");
         let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":4,"audio_url":"a.wav"}"#);
         assert_eq!(out[0]["reason"], "invalid_audio");
+    }
+
+    /// A text-to-video-only clip model (FastH3 Trim) refuses image and
+    /// end-image conditioning at `configure` / `prompt`, before any chunk
+    /// is built (it used to fail chunk 0 with `generation_failed`).
+    #[test]
+    fn t2v_only_clip_model_refuses_images() {
+        let mut c = Control::new(Limits { image_conditioning: false, ..Limits::default() });
+        let refused = [
+            (r#"{"type":"configure","prompt_version":1,"prompt":"x","image_url":"https://a/b.png"}"#, "invalid_initial_image", "image_url"),
+            (r#"{"type":"configure","prompt_version":1,"prompt":"x","end_image_url":"https://a/b.png"}"#, "invalid_initial_image", "end_image_url"),
+            (r#"{"type":"configure","prompt_version":1,"prompt":"x","script":[{"offset":5,"end_image_url":"e"}]}"#, "invalid_initial_script", "end images"),
+        ];
+        for (msg, code, needle) in refused {
+            let e = configure(&mut c, msg).unwrap_err();
+            assert_eq!((e.0["code"].as_str(), e.1), (Some(code), true), "{msg}");
+            assert!(e.0["error"].as_str().unwrap().contains(needle), "{}", e.0);
+            assert!(e.0["error"].as_str().unwrap().contains("text-to-video only"), "{}", e.0);
+        }
+        configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P"}"#).unwrap();
+        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":2,"prompt":"a","end_image_url":"e.png"}"#);
+        assert_eq!((out[0]["type"].as_str(), out[0]["reason"].as_str()), (Some("prompt_rejected"), Some("invalid_image")));
+        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":3,"prompt":"a text direction"}"#);
+        assert!(!types(&out).contains(&"prompt_rejected".to_owned()), "{out:?}");
+        // An image-capable model (the default) still takes images.
+        let mut c = Control::new(Limits::default());
+        configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"x","image_url":"first.png"}"#).unwrap();
     }
 
     /// Causal: one plan per block; a replanning prompt takes the next block,
