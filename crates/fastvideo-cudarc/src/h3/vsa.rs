@@ -325,8 +325,28 @@ struct DevicePlan {
     /// `[n]`: huge on the prefix columns, zero on the video ones.
     prefix_bias: CudaTensor,
     /// For each head and prefix row, the row of the `[heads * n, dim]`
-    /// compression result that belongs to it.
-    prefix_branch_rows: Vec<usize>,
+    /// compression result that belongs to it, resident: the gather uploads
+    /// nothing per block (a pageable copy per block both paced the host and
+    /// kept the step out of a CUDA graph, docs/perf/h3-denoise-graphs.md).
+    prefix_branch_idx: cudarc::driver::CudaSlice<u32>,
+}
+
+#[cfg(feature = "cuda")]
+impl DevicePlan {
+    /// The prefix rows' compression terms, `[heads * prefix rows, dim]`:
+    /// rows of `coarse` (`[heads * n, dim]`), the same gather kernel as
+    /// `index_select_rows` with the index buffer already on the device.
+    fn prefix_branch(
+        &self,
+        coarse: &cudarc::driver::CudaSlice<f32>,
+        dim: usize,
+    ) -> Result<CudaTensor> {
+        let rows = self.prefix_branch_idx.len();
+        CudaTensor::from_device_slice(
+            crate::wan::ops::index_select_rows_idx_device(coarse, dim, &self.prefix_branch_idx)?,
+            vec![rows, dim],
+        )
+    }
 }
 
 /// Larger than any pooled score, small enough that `score + BIAS` is finite.
@@ -374,11 +394,11 @@ impl H3Vsa {
                 vec![n],
             )?;
             bias.pin_device()?;
-            let prefix_branch_rows = (0..heads)
+            let prefix_branch_rows: Vec<u32> = (0..heads)
                 .flat_map(|h| {
                     plan.prefix_row_tile
                         .iter()
-                        .map(move |&t| h * n + t as usize)
+                        .map(move |&t| (h * n + t as usize) as u32)
                 })
                 .collect();
             Some(DevicePlan {
@@ -388,7 +408,7 @@ impl H3Vsa {
                     TILE_ELEMS,
                 )?,
                 prefix_bias: bias,
-                prefix_branch_rows,
+                prefix_branch_idx: crate::wan::ops::upload_row_indices(&prefix_branch_rows)?,
             })
         } else {
             None
@@ -707,8 +727,7 @@ impl H3Vsa {
                 Some(scale),
             )?;
             if let Some(g) = &gate {
-                let branch = CudaTensor::from_device_slice(coarse, vec![bh * n, dim])?
-                    .index_select_rows(&dp.prefix_branch_rows)?;
+                let branch = dp.prefix_branch(&coarse, dim)?;
                 // bf16(bf16(dense) + bf16(bf16(coarse) * gate)), as the combine kernel.
                 let term = branch
                     .reshape(vec![1, bh, prefix, dim])?
@@ -906,8 +925,7 @@ impl H3Vsa {
         phase("vsa_h3_4_prefix_dense", || {
             let mut dense = crate::wan::nn::scaled_dot_product_attention(&q.narrow(2, 0, prefix)?, k, v, Some(scale))?;
             if let Some(g) = gate {
-                let branch = CudaTensor::from_device_slice(coarse, vec![bh * n, dim])?
-                    .index_select_rows(&dp.prefix_branch_rows)?;
+                let branch = dp.prefix_branch(&coarse, dim)?;
                 let term = branch
                     .reshape(vec![1, bh, prefix, dim])?
                     .quantize_bf16()?
@@ -1037,8 +1055,7 @@ impl H3Vsa {
         phase("vsa_h3_4_prefix_dense", || {
             let mut dense = crate::wan::nn::scaled_dot_product_attention(&q.narrow(2, 0, prefix)?, k, v, Some(scale))?;
             if let Some(g) = gate {
-                let branch = CudaTensor::from_device_slice(coarse, vec![bh * n, dim])?
-                    .index_select_rows(&dp.prefix_branch_rows)?;
+                let branch = dp.prefix_branch(&coarse, dim)?;
                 let term = branch
                     .reshape(vec![1, bh, prefix, dim])?
                     .quantize_bf16()?
