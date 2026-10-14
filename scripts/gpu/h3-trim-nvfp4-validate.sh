@@ -19,6 +19,8 @@
 # is 3 above it); FV_MAX_DPH (default 2.70); FV_SKIP / FV_CELL_RES (passed to the pod script).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source-path=SCRIPTDIR source=runpod-cuda.sh
+source "$HERE/runpod-cuda.sh"
 # shellcheck source-path=SCRIPTDIR source=volumes.sh
 source "$HERE/volumes.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
@@ -80,7 +82,7 @@ case "$cmd" in
 sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; sleep infinity'
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"
-    payload="$(jq -n --arg name "fv-h3trim-nvfp4-$(date -u +%m%d%H%M)" --arg image "$image" --arg vol "$FV_EU_VOLUME_ID" \
+    payload="$(jq -n --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" --arg name "fv-h3trim-nvfp4-$(date -u +%m%d%H%M)" --arg image "$image" --arg vol "$FV_EU_VOLUME_ID" \
       --argjson dcs "$dcs_json" --arg mode "$mode" --arg start "$start" --argjson gpus "$gpus_json" \
       --rawfile plan "$tmp/plan.b64" --arg skip "${FV_SKIP:-}" --arg res "${FV_CELL_RES:-}" '{
         name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU", gpuCount: 1, gpuTypeIds: $gpus,
@@ -89,7 +91,7 @@ sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
               + ([range(0; $plan | length; 60000) as $i | {key: "FV_PLAN_GZ_B64_\($i / 60000 | floor)", value: $plan[$i:$i + 60000]}] | from_entries)
               + (if $skip != "" then {FV_SKIP: $skip} else {} end) + (if $res != "" then {FV_CELL_RES: $res} else {} end))
       } + (if $mode == "volume" then {containerDiskInGb: 120, networkVolumeId: $vol, volumeMountPath: "/workspace"}
-           else {containerDiskInGb: 200, allowedCudaVersions: ["13.0"]} end)')"
+           else {containerDiskInGb: 200} + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end) end)')"
     resp="$(rest POST /pods <<<"$payload")" || { log "pod create failed: $(head -c 600 <<<"$resp")"; exit 1; }
     id="$(jq -r '.id // empty' <<<"$resp")"
     [[ -n "$id" ]] || { log "pod create failed: $(head -c 400 <<<"$resp")"; exit 1; }

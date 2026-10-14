@@ -33,7 +33,7 @@ custom endpoint the variant's (`?variant=`). §1a says what a preset is and what
 | `variant`, `compute` | the preset's; custom: `cpu` → `CPU` | `cpu` (fake engine) runs on CPU workers; the CUDA variants on GPU |
 | `config` / `config_toml` | the preset's; custom: the variant's baked config | a config file the image carries (`FV_CONFIG`) or inline (`FV_WORKER_TOML_B64`), in both modes |
 | `env` | | plain extra env; keys fv-control sets (serve mode, image identity, the `{{ RUNPOD_SECRET_fv_* }}` references, …) are refused |
-| `gpu_types`, `gpu_count`, `allowed_cuda` | RTX PRO 6000 Server, 1; `allowed_cuda` `[]` on `volume`, `["13.0"]` on `r2` | GPU types in priority order; `allowed_cuda` is Runpod's host filter (§1b: an `r2` endpoint runs in any DC, and a host older than CUDA 13 crashes the image). `[]` lifts it |
+| `gpu_types`, `gpu_count`, `allowed_cuda` | RTX PRO 6000 Server, 1; `allowed_cuda` `[]` | GPU types in priority order; `allowed_cuda` is an exact list for Runpod's host filter. Leave it empty: every GPU endpoint gets `minCudaVersion: "13.0"`, and a list hides the 13.1 / 13.2 hosts (§1b) |
 | `cpu_flavors`, `vcpu` | `cpu3c, cpu5c`, 2 | CPU workers |
 | `weights_source` | GPU: `volume` (`DEFAULT_SLS_WEIGHTS_SOURCE`, spec.ts); CPU: none | `volume`: the EU weights volume at `/runpod-volume`; `r2`: the R2 weights store, fetched onto the container disk at boot, no volume, any data centre (§1b) |
 | `network_volume`, `data_centers` | GPU on `volume`: `bz0ofkfx45` in `EU-RO-1` (H3 + LTX trees only; other presets default to `r2`); on `r2`: none, any DC; CPU: none | only the EU weights volume is accepted (CLAUDE.md); a volume pins its data center. With `r2`, `network_volume` is null or an R2 cache volume the owner listed (§1b, off by default) |
@@ -65,13 +65,25 @@ store (docs/ops/r2-weights.md). A GPU endpoint takes `weights_source`:
   - the store is configured (`WEIGHTS_R2_*`, `PUBLIC_URL`);
   - the container disk holds the trees (bytes × 1.15 + 30 GB; the default is sized from the manifests).
 
-  Passing `weights_source: r2` to a preset brings that placement with it (`GET /api/serverless/defaults?preset=…&weights_source=r2`),
-  including **`allowed_cuda: ["13.0"]`** (`DEFAULT_R2_CUDA`). On 2026-10-12 an `r2` worker outside EUR-IS-1 landed
-  on a host whose `libcuda` lacked `cuCtxGetDevice_v2`, and fv-serve panicked and crash-looped
-  (docs/ops/r2-bench-2026-10-12.md finding 2). Runpod's REST enum stops at `"13.0"`, the image's minimum
-  (CUDA 13.4 runtime, driver ≥ 580). Caveat: a `"13.0"`-only filter hid the EUR-IS-1 driver-595 hosts on
-  2026-10-07, so it can leave the newest hosts out. `allowed_cuda: []` lifts it, and the boot's driver check
-  (below) still refuses an old host before it fetches anything.
+  Passing `weights_source: r2` to a preset brings that placement with it (`GET /api/serverless/defaults?preset=…&weights_source=r2`).
+
+  **The CUDA filter means "at least 13.0", never "exactly 13.0".** The images ship CUDA 13 runtime libraries,
+  which run on any driver offering CUDA 13.0 or newer (≥ 580). On 2026-10-12 an `r2` worker landed on an older host
+  whose `libcuda` lacked `cuCtxGetDevice_v2`, and fv-serve panicked and crash-looped
+  (docs/ops/r2-bench-2026-10-12.md finding 2). Runpod labels each host by its driver's CUDA version. On 2026-10-14
+  (GraphQL `lowestPrice` by `allowedCudaVersions`) every Secure RTX PRO 6000 host was labelled `"13.2"`, H100 hosts
+  `"13.0"`, and H200 hosts `"13.0"` or `"13.2"`. So the old default `allowed_cuda: ["13.0"]` hid every RTX PRO 6000
+  ("no capacity", or workers that never started). REST v1 cannot list the newer hosts either: it refuses `"13.1"`
+  and `"13.2"` (400, enum ends at `"13.0"`). Hence:
+  - every GPU endpoint gets **`minCudaVersion: "13.0"`** (create and every PATCH; `MIN_CUDA` in `src/enums.ts`).
+    Runpod applies it as a minimum, so a `"13.2"` host passes and a 12.x host does not;
+  - **`allowed_cuda` defaults to `[]`** (no exact list) for every weights source (`DEFAULT_ALLOWED_CUDA`). It becomes
+    the full `IMAGE_CUDA` list (`["13.0", "13.1", "13.2"]`) on its own once Runpod's REST enum (`CUDA_VERSIONS`)
+    names every label. A new label goes into `IMAGE_CUDA` and `scripts/gpu/runpod-cuda.sh`, which a unit test
+    keeps equal;
+  - an update that empties `allowed_cuda` sends `allowedCudaVersions: []` ("not set: any version"). It used to send
+    every REST version, which also stops at 13.0 and so hid the same hosts;
+  - the boot's driver check (below) still refuses a pre-13 host before it fetches anything.
 
 **The worker's boot** (`SLS_R2_SH` in `src/serverless/weights.ts`, put before fv-serve by `payloads.ts`; the
 template's start is `bash -c`):
@@ -216,7 +228,7 @@ Owner request 2026-10-14 ("get the weights and use flashboot"). Pods have had `h
   without the second the validator, the image preflight (`POST /api/preflight {endpoint}`) and the create refuse
   it (`slsWeightsIssues`). CLAUDE.md: large downloads need the owner's approval.
 - **Placement.** No network volume (`network_volume: null`; a volume is refused), so any data centre, and
-  `allowed_cuda: ["13.0"]` by default, as with r2. The container disk is sized from the trees (bytes × 1.15 + 30 GB,
+  `minCudaVersion: "13.0"` with no exact CUDA list, as with r2 (§1b). The container disk is sized from the trees (bytes × 1.15 + 30 GB,
   `slsHubDiskGb`; up to Runpod's 500 GB, over 200 GB allowed). `GET /api/serverless/defaults?preset=…&weights_source=hub`
   brings that placement.
 - **FlashBoot is on** (`flashboot: true`, set by the placement; `false` is refused): a revival keeps the worker, so it
