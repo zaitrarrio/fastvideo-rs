@@ -1,0 +1,11 @@
+session 6ff80178-d0f1-49b3-919c-fce9c872397c
+session_info: fps 24 chunk 5 s, context 1 frames, causal null
+segment_expanded chunk 0 v1 fallback false 414/1024 "tokens" latency 4863.277 ms
+chunk 0 v1 frames 124 gen 214.14s pace null fps buffer 5.17s recaches null
+segment_expanded chunk 1 v1 fallback false 773/1024 "tokens" latency 9682.878 ms
+0.0 s: prompt v2
+chunk 1 v1 frames 124 gen 160.46s pace null fps buffer 5.12s recaches null
+158.9 s: prompt v3
+{"behavior":"freeze_video_and_silence_audio_until_ready","chunk_index":1,"late_by_seconds":155.333342527,"type":"deadline_missed"}
+segment_expanded chunk 2 v2 fallback false 1001/1024 "tokens" latency 13102.178 ms
+{"prompt_version":2,"type":"prompt_applied"}
