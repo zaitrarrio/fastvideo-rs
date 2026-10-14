@@ -1972,7 +1972,14 @@ additions and readings; everything is re-exported from the crate root.
   dense attention, official VAE; untiered `fasth3-trim-8step` (served
   `h3-trim`, pool / control preset `fasth3-trim`, `configs/serve/runpod-h3-trim.toml`)
   = FastH3 Trim 8-step: 42 of the 50 blocks, rank-16 AdaLN, VSA-H3 at 0.8, its
-  own lightweight VAE, text-to-video with audio only (docs/ports/h3-trim.md).
+  own lightweight VAE, text-to-video with audio only (docs/ports/h3-trim.md);
+  untiered `vdn-h3` (served also `vdn-h3-50step`, pool / control preset
+  `vdn-h3`, `configs/serve/runpod-vdn-h3.toml`) = VDN-H3 stage B: h3-base with
+  the stage-B LoRA merged at load and hybrid attention in every block (a
+  chunk-aligned window softmax plus a frame-wise delta-rule linear branch,
+  `H3Recipe.vdn_weights` = `vdn-h3-stage-b-2000/stage-b-step-2000`), 50
+  forwards on the base grid without CFG, resident DiT, text-to-video with audio
+  only (docs/ports/vdn-h3.md; the 8-step VDN model needs its turbo adapter).
   `ltx-pro` = LTX-2.5 distilled
   two-stage, dense stage 2 (`ltx2/ltx25_distill_dense`); `ltx-turbo` = the Sol
   stage 2 (`ltx2/ltx25_distill_sol`); `ltx-draft` = + NVFP4 video FFN

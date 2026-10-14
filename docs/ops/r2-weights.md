@@ -900,3 +900,18 @@ config), `tokenizer/` and `processor/` are byte-identical to `h3-base`'s (and Fa
 `h3-base/audio_vae` and `h3-base/tokenizer` (`text_weights`). Its **`vae/` is not** H3's (26 decoder blocks, F16,
 `73fc5a61…`; plus Kijai's INT8 convrot file) and is in the Trim tree. Its NVFP4 `text_encoder/` was not downloaded
 (h3-base's encoder serves it, docs/ports/h3-trim.md §3). Neither tree is on the 500 GB EU volume.
+
+## 13. VDN-H3 stage B (2026-10-13, owner approval of the same day)
+
+One tree, published Hub → R2 from one CPU pod with `scripts/gpu/r2-publish-hub.sh up vdn-h3-stage-b-2000`
+($0.24/hr, ~3 min), then `verify --deep` on the same pod (every byte re-read; 12 s). Logs:
+`artifacts/ports/vdn-h3/publish/`. The approval covers `stage-b-step-2000/` and the small root files only.
+
+| Tree | Rev | Files | Bytes | Manifest SHA-256 |
+|---|---|---:|---:|---|
+| `vdn-h3-stage-b-2000` | `2ce18deb1d1c6b115d6bb3732f3750fdbac95173` | 11 | 4,613,679,322 | `7627d20925c384784ef9b1fb49d001255fc919a2d95d9387deeb86f807cd73d1` |
+
+**Shared with h3-base, so not duplicated:** the repository's `h3-base/` is MiniMax-H3: 28 of its 29 files carry the same
+LFS / blob hash as `MiniMaxAI/MiniMax-H3` @ `42ed227` (only the README differs), so the pipeline reads our `h3-base` tree.
+Not published: `stage-dmd-step-250/` (the 8-step model); its branch and default adapter are byte-identical to stage B's,
+and only `adapters/turbo/` (0.85 GB) would be new (docs/ports/vdn-h3.md §0). Not on the 500 GB EU volume.

@@ -169,3 +169,120 @@ per output channel / per tensor likewise, fast accumulation, activation amax flo
 of per op: QK-norm + RoPE, the block's norm/modulate and gated residual, SwiGLU, the branch's tconv+SiLU+L2 (Triton), the
 RMSNorm + gate epilogue, the gather, and TF32 for the `A` GEMM. Upstream calls these "not bitwise, ~1 bf16 ulp, in the accurate
 direction". The port follows the inference path (one rounding per fused stage, fp32 accumulation).
+
+## 2. The port
+
+### 2.1 Where it lives
+
+| piece | file |
+|---|---|
+| checkpoint reading, transform config (`chunk 5`, `radius 1`, `linear_head_dim 128`, strict JSON), window bounds, adapter key rerooting, packed-row layout, gather plan, recipe names (`vdn-h3` = 50, `vdn-h3-<N>step`), and the **f32 / f64 host reference** of the whole branch and of the window softmax | `crates/fastvideo-models/src/h3/vdn.rs` |
+| schedule: VDN recipes map to `H3InferenceContract::base(N + 1)` (uniform grid, shifts 12 / 3, guidance 1) | `crates/fastvideo-models/src/h3/config.rs` |
+| the window softmax kernel `flash_mma_fwd2_window_d128` (our FA2 MMA kernel with a chunk-aligned tile walk) | `crates/fastvideo-cudarc/src/wan/kernels.cu`, `wan/attn.rs` (`VdnWindow`), `wan/nn.rs` (`sdpa_vdn_window`) |
+| the linear-branch kernels | `crates/fastvideo-cudarc/src/h3/vdn.cu` (AOT table `AOT_H3_VDN` in `build.rs`, IEEE flags) |
+| branch loader, plan, launchers, GPU self-check | `crates/fastvideo-cudarc/src/h3/vdn.rs` |
+| the hybrid block (`AttnMode::Vdn`, `Attention::forward_vdn`, `H3Transformer::attach_vdn`) | `crates/fastvideo-cudarc/src/h3/transformer.rs` |
+| LoRA merge at load (`H3LoraFuse::open_vdn`) | `crates/fastvideo-cudarc/src/h3/lora.rs` |
+| pipeline option `vdn` / `FASTVIDEO_H3_VDN`, per-request `VdnPlan` | `crates/fastvideo-cudarc/src/h3/pipeline.rs` |
+| serve catalog `vdn-h3` (`H3Recipe.vdn_weights`) | `crates/fastvideo-engine-service/src/cuda/caps.rs` |
+| oracle, pod runner, validation driver | `scripts/gpu/upstream/oracle_vdn.py`, `scripts/gpu/vdn-h3-pod.sh`, `scripts/gpu/vdn-h3-validate.sh` |
+
+### 2.2 The block
+
+`Attention::forward_vdn` replaces the dense attention of all 50 DiT blocks (the text refiner is untouched):
+
+1. the fused QKV + gate GEMM as in H3; one more stacked GEMM (`aux`) gives `beta_proj` (H columns), the output-gate down
+   projection and the softmax gate (H) in one pass over the normalized hidden state;
+2. QK-norm + RoPE on q / k for the softmax only; the branch reads the **raw** q / k / v (§1.2);
+3. the window softmax (§2.3); the per-(row, head) softmax gate `sigmoid(sg)` multiplies its output; `to_out` as usual;
+4. the branch (§2.4) writes only the inner video rows (frames 1..F-2); `to_out_linear` and a row-add into the attention output.
+
+The anchor frames, text, audio and keyframe rows see the dense softmax (they are global rows and columns); a clip whose
+latent frames all fit one window (F <= 2 chunks + anchors) degenerates to dense attention with no branch, which is
+bitwise our dense kernel (test `a_covered_clip_with_an_open_gate_is_dense_attention`, GPU check `full_cover_vs_dense`).
+
+### 2.3 The window softmax
+
+`flash_mma_fwd2_window_d128` is `flash_mma_fwd2` (bf16 MMA, fp32 softmax) with a key-tile walk over at most three merged
+ranges per query tile (the window of its frames, the anchor frames, the global rows); tiles wholly inside the mask run
+unmasked, and only boundary tiles test `vdn_win_lo / hi / allows` per score. Query tiles of global rows walk every key.
+Cost scales with `window / total` frames: at 5 s (32 latent frames) it is 0.73x of dense at 480p and 0.61x at 768p.
+
+### 2.4 The linear branch kernels (stage 1: fp32 CUDA cores)
+
+| kernel | does |
+|---|---|
+| `vdn_act_rows` | q = l2(silu(q)) per head (128) |
+| `vdn_sconv5`, `vdn_tconv5_act` | 5 x 5 spatial then 5-tap temporal depthwise conv on k and v; then silu (+ l2 for k) |
+| `vdn_frame_stats` | per frame and head A = sum beta k k^T (fp32, symmetrized), B = sum bf16(v beta) k^T (rounded to bf16) |
+| `vdn_frame_mean`, `vdn_alpha_down`, `vdn_alpha_up` | KDA decay alpha = exp(-exp(A_log) softplus(up(down(mean)) + dt_bias)) |
+| `vdn_solve` | Gauss-Jordan (I + A)^-1 in 66 KB of shared memory, T = Diag(alpha) (I + A)^-1, J = B (I + A)^-1; text state 0.5 B_t (I + A_t)^-1 |
+| `vdn_scan` | forward and reverse scans over frames (one CTA per head, 32-row block and direction) |
+| `vdn_logprefix`, `vdn_gather` | the alpha bridge (log-prefix in double) and the bidirectional gather |
+| `vdn_readout` | r = state q (bf16 state), RMSNorm (eps 1e-6) x sigmoid(og_up(og_down x)) |
+| `vdn_head_gate`, `vdn_add_rows`, `vdn_copy_cols` | the softmax gate and the row bookkeeping |
+
+Every kernel matches the f32 / f64 host reference in `fastvideo-models::h3::vdn` (§4). Tensor-core versions of
+`frame_stats`, `scan` and `readout` are the next stage; at 5 s the branch costs about as much as the window saves (§6).
+
+### 2.5 Frames and rows
+
+`VdnLayout::from_packed` reads our packed H3 row order (text, video frames, audio, keyframes) and gives the inner video
+rows; `VdnPlan` (per request) holds the window bounds, `branch_active` and the gather plan, uploaded once. Clips of any
+H3 length work: the 14.4 s / 345-frame clip (102 latent frames, 100 in the branch, 100,800 inner tokens at 768p) is
+covered (the spatial conv puts tokens on grid x for that reason).
+
+### 2.6 LoRA merge at load
+
+`H3LoraFuse::open_vdn(base, adapters)` reads peft keys (`…attn.orig.to_q.lora_A.default.weight`), reroots `.attn.orig.`
+to our `.attn.`, concatenates ranks across adapters per target (the turbo adapter's mixed rank 16 / 64 and its FFN, AdaLN
+and `norm_out` targets included) and merges with multiplier 1.0 into the bf16 base weights at load, before any
+quantization. Stage B: rank 64 on attention q / k / v / out.0 of the 50 blocks and the refiner, 208 pairs.
+The manifest tests pin every adapter key to a published h3-base parameter (208 pairs for the default adapter, 363 for
+turbo, from the safetensors headers).
+
+### 2.7 fp8
+
+The served default on sm_120 keeps our MXFP8 linears (blocks 2-46, as FastH3 V2); the branch's narrow projections stay
+bf16 and the attention itself is bf16 (`AttnMode::Vdn` never takes the MX attention path). `FASTVIDEO_H3_QUANT=off`
+gives bf16 linears like the upstream default. Parity of both is in §5.
+
+## 3. Weights and licence
+
+R2 tree `vdn-h3-stage-b-2000` (docs/ops/r2-weights.md §13): `stage-b-step-2000/linear_branch/` (4,279,428,112 B,
+`sha256:dec6981c…`) and `stage-b-step-2000/adapters/default/adapter_model.safetensors` (334,026,912 B, `sha256:58558fef…`)
+plus configs, `LICENSE`, `README.md`, `modular_model_index.json`; 11 files, 4,613,679,322 B. Recorded in
+`scripts/gpu/weights-{manifest,revisions,sha256,r2}.tsv` and `verify-weights.sh` (cell `vdn-h3` = h3-base + the branch
+and adapter). The DiT, VAEs, text encoder and tokenizer are our `h3-base` (the repository's `h3-base/` is MiniMax-H3
+@ `42ed227`, 28 of 29 files byte-identical, README aside).
+
+Licence: the weights carry the **MiniMax H3 Community License** (the base model's), whose territory clause excludes the
+EU, UK, Korea and USA; the owner reportedly holds an H3 licence, which this inherits. The code repository is Apache-2.0
+with a NOTICE; nothing of its code is vendored here (the port is a reimplementation; the oracle imports the remote module
+on the pod).
+
+## 4. Tests
+
+- `fastvideo-models` h3 suite: 130 passed, 11 of them VDN (transform parsing and strictness, window bounds and full cover,
+  adapter key rerooting, the packed layout and gather plan, the host branch against a direct dense reference, recipe
+  names and contracts), plus manifest tests `vdn_branch_asks_for_exactly_the_published_branch`,
+  `vdn_adapters_target_published_base_parameters`, `vdn_configs_parse`.
+- `fastvideo-cudarc` h3 / `wan::attn` / `wan::quant`: 114 passed, including the CPU tests
+  `a_covered_clip_with_an_open_gate_is_dense_attention`, `the_branch_writes_only_the_inner_video_rows`,
+  `the_window_softmax_is_the_reference_mask`.
+- `fastvideo-engine-service --features cuda` `cuda::` 20 passed (`vdn_catalog_entry` new); without cuda 65 passed;
+  `fastvideo-serve` e2e `shipped_configs_parse` passed (the new config).
+- control: `tsc`, `tsc -p ui`, vitest 445 / 445, integration 36 / 36 steps.
+- GPU (`fv-gpucheck kernels`, group `vdn`, RTX PRO 6000), each kernel against the host reference, rel-L2:
+
+| check | rel-L2 | check | rel-L2 |
+|---|---:|---|---:|
+| window attention vs f64 | 2.05e-3 | full cover vs dense kernel | 0 (bitwise) |
+| q features | 1.58e-3 | spatial conv | 1.66e-3 |
+| temporal conv | 1.67e-3 | stats A / B | 8.7e-8 / 1.3e-6 |
+| KDA alpha | 7e-8 | solve T / J | 3.0e-7 / 4.5e-7 |
+| text state | 4.6e-7 | scans | 2.9e-7 |
+| gather | 1.66e-3 | readout | 2.35e-3 |
+| branch end to end | 4.23e-3 | | |
+
+(1e-3-level entries are bf16 outputs against an f64 reference.)
