@@ -756,6 +756,14 @@ load balancer): `src/serverless/`, `/api/serverless/*`, the **Serverless** page,
 cost from Runpod billing (owner `serverless:<name>`), logs and the live test:
 [serverless.md](serverless.md).
 
+A GPU endpoint's `weights_source` is `volume` (the EU volume), `r2` (the R2
+weights store, any data centre) or `hub` (the Hub at the pinned revisions onto
+the container disk, any data centre, FlashBoot on). `hub` needs the owner's two
+approvals, as for pods: the spec's `weights_download_approved: true` and this
+fv-control's `FV_HUB_DOWNLOADS_APPROVED=1`. The boot checks every file against
+the Hub listing and against `scripts/gpu/weights-sha256.tsv` before fv-serve
+starts ([serverless.md §1c](serverless.md#1c-weights-from-the-hub-with-flashboot-weights_source-hub)).
+
 ## 8c. Jobs (clusters and standalone pods)
 
 fv-serve jobs of a cluster or standalone pod: listed, cancelled one by one

@@ -173,6 +173,8 @@ pod ──N × ranged GET (2 × 64 MiB parts each) on the presigned URLs──�
     stays EU-only (`regions.ts`).
 - **Runpod serverless endpoints**: `weights_source: r2` on the endpoint spec (no volume, any data centre, a
   per-endpoint weights token instead of a cluster's ingest token, a cache check that skips the fetch). See §9.
+  `weights_source: hub` (owner-approved, FlashBoot on) is the R2-free alternative: the same trees from the Hub at
+  the revisions R2 was published from, checked against weights-sha256.tsv (docs/control/serverless.md §1c).
 - **Aux files** (TAE decoders, LPIPS): with r2 they come from R2 as the trees `auxiliary/tae` and `auxiliary/lpips`
   (the same files and bytes as `AUX_FILES`, tested), then each is checked against `AUX_FILES`' SHA-256. A missing or
   different file still comes from its pinned URL (GitHub raw, download.pytorch.org), as with `hub`.

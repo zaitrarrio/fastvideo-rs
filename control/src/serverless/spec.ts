@@ -29,7 +29,7 @@ import {
   VARIANTS,
 } from "../enums";
 import { PRESET_OWNED, presetOwned, slsPreset } from "./presets";
-import { slsR2DiskGb, slsTrees } from "./weights";
+import { SLS_MAX_DISK_GB, slsHubDiskGb, slsHubPlan, slsR2DiskGb, slsTrees } from "./weights";
 import { R2_DEFAULT_CUDA } from "../driver-check";
 import { missingTrees } from "../volumes";
 import { upsamplerDiskGb } from "../upsampler";
@@ -38,11 +38,13 @@ import type { Env } from "../env";
 /**
  * Where a GPU endpoint's workers get their weights (docs/control/serverless.md §1b, docs/ops/r2-weights.md §9):
  * volume: the EU network volume mounted at /runpod-volume (one data centre); r2: the R2 weights store, fetched onto
- * the container disk at boot (no volume, so any data centre). The default for new endpoints: flipped to "r2" by the
- * coordinator after the benchmarks (one line).
+ * the container disk at boot (no volume, so any data centre); hub: the Hub at the pinned revisions, downloaded onto the
+ * container disk at boot (owner-approved: weights_download_approved and FV_HUB_DOWNLOADS_APPROVED=1; FlashBoot on).
+ * The default for new endpoints: flipped to "r2" by the coordinator after the benchmarks (one line).
  */
 export const DEFAULT_SLS_WEIGHTS_SOURCE: "volume" | "r2" = "volume";
-export const SLS_WEIGHTS_SOURCES = ["volume", "r2"] as const;
+export const SLS_WEIGHTS_SOURCES = ["volume", "r2", "hub"] as const;
+export type SlsWeightsSource = (typeof SLS_WEIGHTS_SOURCES)[number];
 
 /** The CUDA versions the serve images run on (docs/serve/images.md): the driver must offer 13.0. */
 // No CUDA filter by default: Runpod's allowedCudaVersions is a host filter, and "13.0" alone hid the
@@ -95,6 +97,9 @@ export const SLS_RESERVED = new Set([
   "FV_R2_TREE_REVS",
   "FV_R2_CACHE_ROOT",
   "FV_SLS_REPORT_URL",
+  // weights_source hub (serverless/weights.ts slsHubEnv): the recorded hashes, fetch-hub-tree.py's URL.
+  "FV_HUB_SHA256_B64",
+  "FV_SCRIPTS_URL",
   // upsampler_local (upsampler.ts): set from the spec's switch.
   "FV_UPSAMPLER_LOCAL",
   "FV_UPSAMPLER_REV",
@@ -145,10 +150,11 @@ export const EndpointSpecZ = z
       .enum(SLS_WEIGHTS_SOURCES, { error: (i) => enumMessage("a weights source", i.input, SLS_WEIGHTS_SOURCES) })
       .optional()
       .describe(
-        "GPU workers: where the weights come from. volume: the EU weights network volume at /runpod-volume (its data centre only). r2: the R2 weights store, fetched onto the container disk at boot with presigned URLs (no volume, any data centre; skipped when the disk already holds the trees at their revisions). Default: " +
+        "GPU workers: where the weights come from. volume: the EU weights network volume at /runpod-volume (its data centre only). r2: the R2 weights store, fetched onto the container disk at boot with presigned URLs (no volume, any data centre; skipped when the disk already holds the trees at their revisions). hub: the Hub at the pinned revisions (weights-revisions.tsv), downloaded onto the container disk at boot and checked (the Hub listing, weights-sha256.tsv) before fv-serve starts; no volume, any data centre, FlashBoot on (a revival downloads nothing); needs the owner's approval: weights_download_approved and fv-control's FV_HUB_DOWNLOADS_APPROVED=1. Default: " +
           DEFAULT_SLS_WEIGHTS_SOURCE +
           ".",
       ),
+    weights_download_approved: z.boolean().optional().describe("weights_source hub: the owner approved the Hub download at every cold start of this endpoint's workers (also needs fv-control's FV_HUB_DOWNLOADS_APPROVED=1; CLAUDE.md: large downloads need approval)."),
     network_volume: z
       .string()
       .regex(/^[a-z0-9]{6,16}$/, { message: "a Runpod network volume id" })
@@ -178,7 +184,7 @@ export const EndpointSpecZ = z
     if (p) {
       const own = presetOwned(p);
       for (const k of PRESET_OWNED) if (s[k] !== undefined && s[k] !== own[k]) add(k, `set by preset ${p.id} (${k === "config_toml" ? "its inline config" : JSON.stringify(own[k] ?? "the image's default")}): leave it out, or drop preset for a custom endpoint`);
-      if (p.id !== "cpu" && s.compute === "GPU" && s.network_volume === null && s.weights_source !== "r2") add("network_volume", `preset ${p.id} loads weights from the volume: network_volume ${knownVolumes()[0]?.id ?? "(none available)"}, or weights_source r2`);
+      if (p.id !== "cpu" && s.compute === "GPU" && s.network_volume === null && s.weights_source !== "r2" && s.weights_source !== "hub") add("network_volume", `preset ${p.id} loads weights from the volume: network_volume ${knownVolumes()[0]?.id ?? "(none available)"}, or weights_source r2 (or hub, approved)`);
     }
     if (s.mode === "lb" && s.scaler_type !== "REQUEST_COUNT") add("scaler_type", "load-balancer endpoints scale by REQUEST_COUNT");
     if (s.upsampler_local && s.compute === "CPU") add("upsampler_local", "the upsampler sidecar runs on the GPU: GPU workers only");
@@ -191,13 +197,27 @@ export const EndpointSpecZ = z
     const r2 = s.weights_source === "r2";
     if (r2 && s.compute === "CPU") add("weights_source", "weights_source r2 is for GPU workers (CPU workers run the fake engine: no weights)");
     if (r2 && s.network_volume && knownVolumes().some((x) => x.id === s.network_volume)) add("network_volume", `weights_source r2 replaces the weights volume ${s.network_volume}: network_volume null (or an R2 cache volume, FV_SLS_R2_CACHE_VOLUMES)`);
-    if (!r2 && s.container_disk_gb > 200) add("container_disk_gb", "over 200 GB only with weights_source r2 (the trees on the container disk)");
+    const hub = s.weights_source === "hub";
+    if (!r2 && !hub && s.container_disk_gb > 200) add("container_disk_gb", "over 200 GB only with weights_source r2 or hub (the trees on the container disk)");
     if (r2) {
       const need = slsR2DiskGb(slsTrees(s));
       if (s.container_disk_gb < need) add("container_disk_gb", `weights_source r2 fetches ${slsTrees(s).join(", ") || "the trees"} onto the container disk: at least ${need} GB`);
     }
+    // weights_source hub (owner-approved, as for pods): the spec's approval here, fv-control's FV_HUB_DOWNLOADS_APPROVED
+    // and the trees' Hub sources in serverless/weights.ts slsWeightsIssues; no volume, a disk for the trees, FlashBoot.
+    if (s.weights_download_approved !== undefined && !hub) add("weights_download_approved", "only with weights_source hub");
+    if (hub) {
+      const trees = slsHubPlan(s).trees;
+      if (s.compute === "CPU") add("weights_source", "weights_source hub is for GPU workers (CPU workers run the fake engine: no weights)");
+      if (!s.weights_download_approved) add("weights_download_approved", `weights_source hub downloads ${trees.join(", ") || "the weights"} from the Hub at every cold start: it needs the owner's approval for this endpoint (weights_download_approved: true)`);
+      if (s.network_volume !== null) add("network_volume", "weights_source hub downloads onto the container disk: network_volume null (no volume is mounted with hub)");
+      if (!s.flashboot) add("flashboot", "weights_source hub downloads the weights at every cold start: FlashBoot on (a revival keeps the worker and downloads nothing)");
+      const need = slsHubDiskGb(trees);
+      if (s.compute === "GPU" && need > SLS_MAX_DISK_GB) add("weights_source", `${trees.join(", ")} need ${need} GB of container disk, over Runpod's ${SLS_MAX_DISK_GB} GB: weights_source r2 or volume`);
+      else if (s.compute === "GPU" && s.container_disk_gb < need) add("container_disk_gb", `weights_source hub downloads ${trees.join(", ") || "the trees"} onto the container disk: at least ${need} GB`);
+    }
     // weights_source r2: a cache volume is checked against the owner's list (serverless/weights.ts slsWeightsIssues).
-    if (s.network_volume !== null && !r2) {
+    if (s.network_volume !== null && !r2 && !hub) {
       const v = knownVolumes().find((x) => x.id === s.network_volume);
       if (!v) add("network_volume", `unknown or unavailable volume (${knownVolumes().map((x) => x.id).join(", ") || "none"}; the US volume was deleted 2026-10, CLAUDE.md)`);
       else if (s.data_centers && s.data_centers.some((d) => d !== v.dc)) add("data_centers", `a worker with volume ${v.id} must run in ${v.dc}`);
@@ -255,10 +275,18 @@ export function defaultEndpointSpec(name: string, variant = "cpu", preset?: stri
 }
 
 /** A GPU spec's placement defaults for a weights source: r2 drops the volume and its data centre (any DC) and sizes the
- * container disk from the trees' manifests; volume mounts the EU volume in its data centre. */
-export function withWeightsSource(spec: EndpointSpec, ws: "volume" | "r2"): EndpointSpec {
+ * container disk from the trees' manifests; hub the same (the disk from the trees' sizes) with FlashBoot on; volume
+ * mounts the EU volume in its data centre. */
+export function withWeightsSource(spec: EndpointSpec, ws: SlsWeightsSource): EndpointSpec {
   const out: EndpointSpec = { ...spec, weights_source: ws };
-  if (ws === "r2") {
+  if (ws !== "hub") delete out.weights_download_approved;
+  if (ws === "hub") {
+    out.network_volume = null;
+    delete out.data_centers;
+    out.flashboot = true;
+    if (!(spec.allowed_cuda ?? []).length) out.allowed_cuda = [...DEFAULT_R2_CUDA] as EndpointSpec["allowed_cuda"];
+    out.container_disk_gb = Math.min(SLS_MAX_DISK_GB, Math.max(spec.container_disk_gb, slsHubDiskGb(slsHubPlan(out).trees) + (spec.upsampler_local ? upsamplerDiskGb({} as Env) : 0)));
+  } else if (ws === "r2") {
     out.network_volume = null;
     delete out.data_centers;
     if (!(spec.allowed_cuda ?? []).length) out.allowed_cuda = [...DEFAULT_R2_CUDA] as EndpointSpec["allowed_cuda"];
@@ -300,17 +328,17 @@ export function normalizeEndpointSpec(input: any): EndpointSpec {
   }
   // A weights source other than the default's brings its placement (r2: no volume, any DC, a disk for the trees).
   // A spec stored before weights_source existed (or one naming the weights volume) is a volume spec.
-  const given = input.weights_source === "r2" || input.weights_source === "volume" ? input.weights_source : typeof input.network_volume === "string" && knownVolumes().some((v) => v.id === input.network_volume) ? "volume" : undefined;
+  const given = input.weights_source === "r2" || input.weights_source === "volume" || input.weights_source === "hub" ? input.weights_source : typeof input.network_volume === "string" && knownVolumes().some((v) => v.id === input.network_volume) ? "volume" : undefined;
   const ws = given ?? (compute !== d.compute ? DEFAULT_SLS_WEIGHTS_SOURCE : base.weights_source);
   if (compute === "GPU" && ws && ws !== base.weights_source) {
     Object.assign(base, withWeightsSource({ ...base, ...(input.config !== undefined ? { config: input.config } : {}), ...(input.config_toml !== undefined ? { config_toml: input.config_toml } : {}) } as EndpointSpec, ws));
-    if (ws === "r2") delete base.data_centers;
+    if (ws === "r2" || ws === "hub") delete base.data_centers;
   }
   if (compute === "CPU") delete base.weights_source;
   if (given && input.weights_source === undefined && compute === "GPU") base.weights_source = given;
   const s: any = { ...base, ...input, image: input.image && typeof input.image === "object" ? { ...input.image } : base.image };
   // A volume given without data centers runs in the volume's data center.
-  if (input.network_volume !== undefined && input.data_centers === undefined && s.weights_source !== "r2") {
+  if (input.network_volume !== undefined && input.data_centers === undefined && s.weights_source !== "r2" && s.weights_source !== "hub") {
     const v = knownVolumes().find((x) => x.id === s.network_volume);
     if (v) s.data_centers = [v.dc];
     else if (s.network_volume === null && compute === "GPU") delete s.data_centers;
@@ -349,9 +377,10 @@ export async function placementIssues(
   const issues: SpecIssue[] = [];
   const warnings: SpecIssue[] = [];
   if (spec.compute !== "GPU") return { issues, warnings };
-  const vol = spec.weights_source === "r2" ? undefined : knownVolumes().find((v) => v.id === spec.network_volume);
-  // weights_source r2 without data_centers: no volume, so every data centre Runpod has (the stock shows where).
-  const anyDc = spec.weights_source === "r2" && !spec.data_centers?.length;
+  const noVol = spec.weights_source === "r2" || spec.weights_source === "hub";
+  const vol = noVol ? undefined : knownVolumes().find((v) => v.id === spec.network_volume);
+  // weights_source r2 / hub without data_centers: no volume, so every data centre Runpod has (the stock shows where).
+  const anyDc = noVol && !spec.data_centers?.length;
   const dcs: string[] = spec.data_centers?.length ? spec.data_centers : vol ? [vol.dc] : anyDc ? [...RUNPOD_DATA_CENTERS] : [];
   const gpus = spec.gpu_types?.length ? spec.gpu_types : [...REGIONS.eu.gpus];
   if (!dcs.length) return { issues, warnings };
@@ -371,6 +400,6 @@ export async function placementIssues(
   const where = vol ? `${dcs.join(", ")} (the ${vol.region} volume ${vol.id}'s data centre)` : anyDc ? "any data centre" : dcs.join(", ");
   if (none.length === gpus.length) issues.push({ path: ["gpu_types"], message: `none of ${gpus.join(", ")} is offered in ${where}: the workers could never start (pick a GPU type Runpod has there, e.g. ${REGIONS.eu.gpus[0]})` });
   else for (const g of none) warnings.push({ path: ["gpu_types", gpus.indexOf(g)], message: `${g}: Runpod reports no stock in ${where}; the other types are tried first only in order` });
-  if (anyDc) warnings.push({ path: ["data_centers"], message: `weights_source r2, any data centre: in stock ${stock.map((x) => `${x.gpu.replace(/^NVIDIA /, "")} in ${x.dcs.length ? x.dcs.join(", ") : "none"}`).join("; ")}` });
+  if (anyDc) warnings.push({ path: ["data_centers"], message: `weights_source ${spec.weights_source}, any data centre: in stock ${stock.map((x) => `${x.gpu.replace(/^NVIDIA /, "")} in ${x.dcs.length ? x.dcs.join(", ") : "none"}`).join("; ")}` });
   return { issues, warnings, stock };
 }
