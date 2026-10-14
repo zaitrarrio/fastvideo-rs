@@ -135,18 +135,129 @@ pub fn mxfp8_wanted(layers: usize) -> Result<bool> {
 }
 
 fn mxfp8_resolved(layers: usize) -> Result<(bool, Option<String>)> {
+    let mx = fastvideo_models::techniques::settings::var(MXFP8_ENV);
+    // The published NVFP4 linears replace the bf16 ones: nothing to quantize.
+    if nvfp4_requested()? {
+        return match mx.as_deref().map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            Some("1" | "true" | "on") => Err(msg(format!(
+                "{MXFP8_ENV}=1 and {NVFP4_ENV}=1: the decoder linears are one or the other"
+            ))),
+            _ => Ok((false, Some(format!("NVFP4 decoder linears ({NVFP4_ENV}=1)")))),
+        };
+    }
+    resolve_mxfp8(mx.as_deref(), live_sm(), layers)
+}
+
+/// The live device's compute capability major, `None` without one.
+fn live_sm() -> Option<i32> {
     #[cfg(feature = "cuda")]
-    let sm = crate::wan::stats::device_expected()
-        .then(crate::wan::device::global_device)
-        .flatten()
-        .map(|d| d.sm_major);
+    {
+        crate::wan::stats::device_expected()
+            .then(crate::wan::device::global_device)
+            .flatten()
+            .map(|d| d.sm_major)
+    }
     #[cfg(not(feature = "cuda"))]
-    let sm = None;
-    resolve_mxfp8(
-        fastvideo_models::techniques::settings::var(MXFP8_ENV).as_deref(),
-        sm,
-        layers,
-    )
+    {
+        None
+    }
+}
+
+/// `FASTVIDEO_H3_VAE_NVFP4=1` (opt-in, a numerics change): the decoder's
+/// block linears (`to_q/k/v`, `to_out.0`, `ff.net.0.proj`, `ff.net.2`) are
+/// read **as published** in ModelOpt's NVFP4 layout (E2M1 codes, E4M3 scales
+/// per 16, `weight_scale_2`, a calibrated static `input_scale`) and run on
+/// cuBLASLt `VEC16_UE4M3` (W4A4), the DiT's NVFP4 GEMM path
+/// ([`super::nvfp4::PublishedLinear::read_modelopt`]). Only the `vae/` of the
+/// FastH3 V2 / 4-step NVFP4 releases carries them (shards 1-2 differ from
+/// h3-base's; docs/ports/fasth3-nvfp4.md §1): valid only when the tree does,
+/// and on sm_100 / sm_120. No bf16 copy is held (the tree has none), so the
+/// MXFP8 copies are off. See docs/perf/h3-nvfp4-tier-options.md.
+pub const NVFP4_ENV: &str = "FASTVIDEO_H3_VAE_NVFP4";
+
+/// `FASTVIDEO_H3_VAE_NVFP4_ACT=static|dynamic` (default `static`): quantize
+/// the NVFP4 linears' activations with the checkpoint's calibrated
+/// `input_scale`, or with the amax measured on every call.
+pub const NVFP4_ACT_ENV: &str = "FASTVIDEO_H3_VAE_NVFP4_ACT";
+
+/// `FASTVIDEO_H3_VAE_NVFP4_REF=<bf16 vae dir>`: with
+/// `FASTVIDEO_H3_VAE_CHECK=1` and the NVFP4 linears, the check also decodes
+/// its tile batch through the bf16 decoder of that tree (h3-base's `vae/`)
+/// on the unfused, fused bf16 and fused MXFP8 paths, and logs the NVFP4
+/// output's rel-L2 against each. Loaded for the check only.
+pub const NVFP4_REF_ENV: &str = "FASTVIDEO_H3_VAE_NVFP4_REF";
+
+/// The tensor whose presence says a `vae/` carries ModelOpt NVFP4 decoder linears.
+pub const NVFP4_PROBE: &str = "decoder.transformer_blocks.0.attn.to_q.weight_scale";
+
+/// The NVFP4 decode against the bf16 decoder on the check's tile batch: a
+/// sanity bound (a wrong code order or scale layout gives O(1)), not a
+/// quality bar; quality is the lossy gate's call on whole clips.
+const NVFP4_CHECK_REL_L2: f64 = 0.25;
+
+/// Whether the opened `vae/` files hold [`NVFP4_PROBE`] (a generated or
+/// eager map never does).
+pub fn carries_nvfp4(map: &WeightMap) -> bool {
+    map.lazy().is_some_and(|l| l.contains(NVFP4_PROBE))
+}
+
+fn nvfp4_requested() -> Result<bool> {
+    match fastvideo_models::techniques::settings::var(NVFP4_ENV)
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        None | Some("" | "0" | "false" | "off") => Ok(false),
+        Some("1" | "true" | "on") => Ok(true),
+        Some(v) => Err(msg(format!("{NVFP4_ENV}={v}: expected 0 or 1"))),
+    }
+}
+
+/// [`NVFP4_ENV`] resolved for a `vae/` that does (`carries`) or does not
+/// carry ModelOpt NVFP4 decoder linears, on a device of `sm_major`.
+pub fn resolve_nvfp4(requested: bool, carries: bool, sm_major: Option<i32>) -> Result<bool> {
+    match (requested, carries) {
+        (false, false) => Ok(false),
+        (false, true) => Err(msg(format!(
+            "h3 vae: this vae/ holds ModelOpt NVFP4 decoder linears (no bf16 copy): set {NVFP4_ENV}=1 to decode with them, or use the bf16 VAE (h3-base's vae/)"
+        ))),
+        (true, false) => Err(msg(format!(
+            "{NVFP4_ENV}=1 needs a vae/ whose decoder linears are ModelOpt NVFP4 (the FastH3 V2 / 4-step NVFP4 releases' vae/); this one has none ({NVFP4_PROBE} missing)"
+        ))),
+        (true, true) => match sm_major {
+            Some(sm) if sm >= 10 => Ok(true),
+            Some(sm) => Err(msg(format!(
+                "{NVFP4_ENV}=1 needs NVFP4 tensor cores (sm_100 / sm_120; this GPU is sm_{sm}x)"
+            ))),
+            None => Err(msg(format!("{NVFP4_ENV}=1 needs a CUDA device with NVFP4 tensor cores"))),
+        },
+    }
+}
+
+fn nvfp4_static_act() -> Result<bool> {
+    match fastvideo_models::techniques::settings::var(NVFP4_ACT_ENV)
+        .as_deref()
+        .map(str::trim)
+    {
+        None | Some("" | "static") => Ok(true),
+        Some("dynamic") => Ok(false),
+        Some(v) => Err(msg(format!("{NVFP4_ACT_ENV}={v}: expected static|dynamic"))),
+    }
+}
+
+/// The check found the NVFP4 forward off by more than [`NVFP4_CHECK_REL_L2`]
+/// (logged; the NVFP4 output is still used: there is no bf16 copy).
+static NVFP4_OFF: AtomicBool = AtomicBool::new(false);
+
+/// Which weights a decoder's block linears hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LinearMode {
+    /// bf16 (+ MXFP8 copies when [`mxfp8_resolved`] says so).
+    Official,
+    /// The published ModelOpt NVFP4 linears ([`NVFP4_ENV`]); `static_act`:
+    /// the calibrated activation scales.
+    Nvfp4 { static_act: bool },
 }
 
 /// The MXFP8 forward against the unfused f32-activation ViT, in
@@ -313,6 +424,47 @@ fn pinned_weight(map: &WeightMap, key: &str, shape: &[usize]) -> Result<CudaTens
     Ok(t)
 }
 
+/// `prefixes` (each `[rows, k]`, ModelOpt NVFP4 with an f32 bias) as one
+/// bias-carrying [`Linear::from_nvfp4`] stack of `rows · prefixes.len()`
+/// outputs. With `static_act`, the activation is quantized with the largest
+/// of the parts' calibrated `input_scale`s (the parts read one input); the
+/// scale used is returned.
+#[cfg(feature = "cuda")]
+fn nvfp4_linear(
+    map: &WeightMap,
+    prefixes: &[&str],
+    rows: usize,
+    k: usize,
+    static_act: bool,
+) -> Result<(Linear, Option<f32>)> {
+    use crate::wan::nvfp4_linear::{Nvfp4Linear, Nvfp4Operand, Nvfp4Stack};
+    let rule = fastvideo_models::nvfp4::ScaleRule::Static6;
+    let store = map
+        .lazy()
+        .ok_or_else(|| msg("h3 vae nvfp4: the vae/ weights are not mapped"))?;
+    let mut parts = Vec::with_capacity(prefixes.len());
+    let mut bias = Vec::with_capacity(rows * prefixes.len());
+    let mut act: Option<f32> = None;
+    for p in prefixes {
+        let (l, input_scale) = super::nvfp4::PublishedLinear::read_modelopt(store, p, rows, k)?;
+        if static_act {
+            let s = input_scale
+                .ok_or_else(|| msg(format!("h3 vae nvfp4: {p}.input_scale missing ({NVFP4_ACT_ENV}=dynamic measures it)")))?;
+            act = Some(act.map_or(s, |a| a.max(s)));
+        }
+        let op = Nvfp4Operand::from_host_layout(&l.codes, &l.scales, l.rows, l.k, l.decode_scale, rule)?;
+        parts.push(Nvfp4Linear::from_operand(op, None, rule)?);
+        bias.extend(cuda_tensor_shaped(map, &format!("{p}.bias"), &[rows])?.host_cow()?.iter());
+    }
+    let mut stack = Nvfp4Stack::new(parts)?;
+    if let Some(s) = act {
+        stack = stack.with_static_act_scale(s)?;
+    }
+    let mut lin = Linear::from_nvfp4(stack)?;
+    lin.bias = Some(pinned(bias, vec![rows * prefixes.len()])?);
+    Ok((lin, act))
+}
+
 struct Block {
     norm1: CudaTensor,
     norm2: CudaTensor,
@@ -355,6 +507,45 @@ impl Block {
             #[cfg(feature = "cuda")]
             mx: None,
         })
+    }
+
+    /// The block with its four linears read as published ModelOpt NVFP4
+    /// ([`NVFP4_ENV`]): `to_q/k/v` as one stack (one activation quantization,
+    /// each part its own global scale; the largest of their three calibrated
+    /// activation scales), biases f32 as published.
+    #[cfg(feature = "cuda")]
+    fn load_nvfp4(
+        map: &WeightMap,
+        prefix: &str,
+        cfg: &H3VideoVaeConfig,
+        static_act: bool,
+    ) -> Result<(Self, [Option<f32>; 4])> {
+        let dim = cfg.decoder_dim();
+        let hidden = dim * cfg.decoder_ffn_mult;
+        let vec = |name: &str| pinned_weight(map, &format!("{prefix}.{name}"), &[dim]);
+        let qkv: Vec<String> = ["to_q", "to_k", "to_v"]
+            .iter()
+            .map(|p| format!("{prefix}.attn.{p}"))
+            .collect();
+        let qkv: Vec<&str> = qkv.iter().map(String::as_str).collect();
+        let (qkv, s0) = nvfp4_linear(map, &qkv, dim, dim, static_act)?;
+        let (to_out, s1) = nvfp4_linear(map, &[&format!("{prefix}.attn.to_out.0")], dim, dim, static_act)?;
+        let (ff_in, s2) = nvfp4_linear(map, &[&format!("{prefix}.ff.net.0.proj")], 2 * hidden, dim, static_act)?;
+        let (ff_out, s3) = nvfp4_linear(map, &[&format!("{prefix}.ff.net.2")], dim, hidden, static_act)?;
+        Ok((
+            Self {
+                norm1: vec("norm1.weight")?,
+                norm2: vec("norm2.weight")?,
+                scale1: vec("scale1")?,
+                scale2: vec("scale2")?,
+                qkv,
+                to_out,
+                ff_in,
+                ff_out,
+                mx: None,
+            },
+            [s0, s1, s2, s3],
+        ))
     }
 
     /// Quantize the four block linears' device bf16 weights to MXFP8 (the
@@ -486,12 +677,57 @@ pub struct H3VideoDecoder {
     /// Tiles per ViT forward; they share rotary tables, so this is only a
     /// throughput / memory trade.
     tile_batch: usize,
+    /// The block linears are the published NVFP4 ones ([`NVFP4_ENV`]).
+    nvfp4: bool,
+    /// The bf16 decoder [`NVFP4_REF_ENV`] names, for the check only.
+    reference: Option<Box<H3VideoDecoder>>,
 }
 
 impl H3VideoDecoder {
     /// Reads `decoder.*` and `post_quant_conv.*`; the convolutional encoder is
-    /// never touched.
+    /// never touched. A `vae/` carrying ModelOpt NVFP4 decoder linears loads
+    /// them with [`NVFP4_ENV`]`=1` and is refused without it.
     pub fn load(cfg: H3VideoVaeConfig, map: &WeightMap) -> Result<Self> {
+        let nv = resolve_nvfp4(nvfp4_requested()?, carries_nvfp4(map), live_sm())?;
+        if !nv {
+            return Self::load_with(cfg, map, LinearMode::Official);
+        }
+        let mut dec = Self::load_with(
+            cfg,
+            map,
+            LinearMode::Nvfp4 {
+                static_act: nvfp4_static_act()?,
+            },
+        )?;
+        if check_requested() {
+            if let Some(dir) = fastvideo_models::techniques::settings::var(NVFP4_REF_ENV)
+                .filter(|v| !v.trim().is_empty())
+            {
+                let dir = std::path::PathBuf::from(dir.trim());
+                let cfg_ref = dec.cfg.clone();
+                let files = super::pipeline::vae_files(&dir).map_err(|e| msg(e.to_string()))?;
+                let ref_map = WeightMap::open_files(&files)?;
+                // bf16 + the MXFP8 copies (sm_100+), as the default decoder.
+                let mx = resolve_mxfp8(None, live_sm(), cfg_ref.decoder_num_layers)?.0;
+                let mut r = Self::load_with(cfg_ref, &ref_map, LinearMode::Official)?;
+                #[cfg(feature = "cuda")]
+                if mx && fused_enabled() && crate::wan::stats::device_expected() {
+                    for b in &mut r.blocks {
+                        b.quantize_mx()?;
+                    }
+                }
+                crate::wan::log::info(format_args!(
+                    "h3 vae check: bf16 reference decoder from {} (MXFP8 copies {})",
+                    dir.display(),
+                    if r.mx_ready() { "on" } else { "off" }
+                ));
+                dec.reference = Some(Box::new(r));
+            }
+        }
+        Ok(dec)
+    }
+
+    fn load_with(cfg: H3VideoVaeConfig, map: &WeightMap, mode: LinearMode) -> Result<Self> {
         let (dim, lc, head_dim) = (
             cfg.decoder_dim(),
             cfg.latent_channels,
@@ -519,9 +755,59 @@ impl H3VideoDecoder {
             .into_owned();
         suffix.extend(std::iter::repeat_n(0.0f32, dim));
         #[allow(unused_mut)]
-        let mut blocks = (0..cfg.decoder_num_layers)
-            .map(|i| Block::load(map, &format!("decoder.transformer_blocks.{i}"), &cfg))
-            .collect::<Result<Vec<_>>>()?;
+        let nvfp4 = matches!(mode, LinearMode::Nvfp4 { .. });
+        let mut blocks = match mode {
+            LinearMode::Official => (0..cfg.decoder_num_layers)
+                .map(|i| Block::load(map, &format!("decoder.transformer_blocks.{i}"), &cfg))
+                .collect::<Result<Vec<_>>>()?,
+            LinearMode::Nvfp4 { static_act } => {
+                #[cfg(feature = "cuda")]
+                {
+                    let t = std::time::Instant::now();
+                    let mut scales: Vec<[Option<f32>; 4]> = Vec::new();
+                    let blocks = (0..cfg.decoder_num_layers)
+                        .map(|i| {
+                            Block::load_nvfp4(map, &format!("decoder.transformer_blocks.{i}"), &cfg, static_act)
+                                .map(|(b, s)| {
+                                    scales.push(s);
+                                    b
+                                })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let held: u64 = blocks
+                        .iter()
+                        .flat_map(|b| [&b.qkv, &b.to_out, &b.ff_in, &b.ff_out])
+                        .map(Linear::held_bytes)
+                        .sum();
+                    let range = |j: usize| {
+                        let v: Vec<f32> = scales.iter().filter_map(|s| s[j]).collect();
+                        if v.is_empty() {
+                            "dynamic".to_string()
+                        } else {
+                            let (lo, hi) = v.iter().fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
+                            format!("{lo:.3e}..{hi:.3e}")
+                        }
+                    };
+                    crate::wan::log::info(format_args!(
+                        "h3 vae: {NVFP4_ENV}=1: {} blocks x 4 linears as published ModelOpt NVFP4 (W4A4, E4M3 per 16; {:.2} GiB with biases, loaded in {:.1}s); activation scales {}: qkv {}, to_out {}, ff_in {}, ff_out {}",
+                        blocks.len(),
+                        held as f64 / f64::from(1u32 << 30),
+                        t.elapsed().as_secs_f64(),
+                        if static_act { "static (calibrated input_scale)" } else { "dynamic" },
+                        range(0),
+                        range(1),
+                        range(2),
+                        range(3)
+                    ));
+                    blocks
+                }
+                #[cfg(not(feature = "cuda"))]
+                {
+                    let _ = static_act;
+                    return Err(msg(format!("{NVFP4_ENV}=1 needs a CUDA build")));
+                }
+            }
+        };
         let (mx_on, mx_why) = mxfp8_resolved(blocks.len())?;
         if let Some(why) = mx_why {
             static SAID: AtomicBool = AtomicBool::new(false);
@@ -569,6 +855,8 @@ impl H3VideoDecoder {
             proj_out: Linear::load(map, "decoder.proj_out", dim, cfg.decoder_patch_dim(), true)?,
             qk_unit: pinned(vec![1.0; head_dim], vec![head_dim])?,
             tile_batch: crate::wan::envflag::usize_flag("FASTVIDEO_H3_VAE_TILE_BATCH", 8).max(1),
+            nvfp4,
+            reference: None,
             cfg,
         })
     }
@@ -666,7 +954,7 @@ impl H3VideoDecoder {
                 && self.blocks.iter().all(|b| {
                     [&b.qkv, &b.to_out, &b.ff_in, &b.ff_out]
                         .iter()
-                        .all(|l| l.has_bf16_gemm() && l.bias.is_some())
+                        .all(|l| (l.has_bf16_gemm() || l.is_nvfp4_published()) && l.bias.is_some())
                 })
         }
         #[cfg(not(feature = "cuda"))]
@@ -858,6 +1146,8 @@ impl H3VideoDecoder {
                 "h3 vae fused ViT: gemm {}, sdpa {}, vector kernels {}",
                 if mx {
                     format!("mxfp8 (cuBLASLt algo #{mx_nth})")
+                } else if self.nvfp4 {
+                    "nvfp4 (published ModelOpt, cuBLASLt VEC16_UE4M3)".to_string()
                 } else {
                     match algo {
                         None => "bf16 cublas".to_string(),
@@ -891,6 +1181,9 @@ impl H3VideoDecoder {
                     .as_ref()
                     .ok_or_else(|| msg("h3 vae: no MXFP8 weights"))?[which]
                     .forward_mx_padded(a, mx_nth),
+                Act::Bf16(x16) if l.is_nvfp4_published() => l
+                    .gemm_nvfp4_bf16(x16, rows)?
+                    .ok_or_else(|| msg("h3 vae: linear has no NVFP4 GEMM")),
                 Act::Bf16(x16) => match algo {
                     None => l
                         .gemm_bf16(x16, rows)?
@@ -1061,6 +1354,9 @@ impl H3VideoDecoder {
             crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
             Ok((out, timer.elapsed().as_secs_f64(), prof))
         };
+        if self.nvfp4 {
+            return self.check_nvfp4(tiles, grid);
+        }
         if !self.fused_ready(batch, grid) {
             let (out, secs, prof) = run(false, false)?;
             crate::wan::log::info(format_args!(
@@ -1123,6 +1419,93 @@ impl H3VideoDecoder {
             Ok(reference)
         }
     }
+    /// [`Self::check_paths`] for the NVFP4 linears: the fused NVFP4 forward
+    /// (timed, per op) against the unfused NVFP4 one (the integration: same
+    /// weights, f32 activations between ops) and, with [`NVFP4_REF_ENV`],
+    /// against the bf16 decoder's unfused, fused bf16 and fused MXFP8 outputs
+    /// on the same tiles. Logs every rel-L2; the NVFP4 output is returned
+    /// either way (there is no bf16 copy to fall back to).
+    fn check_nvfp4(&self, tiles: &CudaTensor, grid: [usize; 3]) -> Result<Vec<CudaTensor>> {
+        let batch = tiles.shape.first().copied().unwrap_or(0);
+        let run = |dec: &Self, fused: bool, mx: bool| -> Result<(Vec<CudaTensor>, f64, Prof)> {
+            let mut prof = Prof::on();
+            crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
+            let timer = std::time::Instant::now();
+            let out = dec.decode_tiles_with(tiles, grid, &mut |_, _| Ok(()), fused, mx, &mut prof)?;
+            crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
+            Ok((out, timer.elapsed().as_secs_f64(), prof))
+        };
+        let rel = |got: &[CudaTensor], want: &[CudaTensor]| -> Result<f64> {
+            let (mut num, mut den) = (0f64, 0f64);
+            for (a, b) in got.iter().zip(want) {
+                for (x, y) in a.host_cow()?.iter().zip(b.host_cow()?.iter()) {
+                    num += f64::from(x - y).powi(2);
+                    den += f64::from(*y).powi(2);
+                }
+            }
+            Ok((num / den.max(f64::MIN_POSITIVE)).sqrt())
+        };
+        let fused = self.fused_ready(batch, grid);
+        // Warm the allocations so the timing pays no first use.
+        drop(run(self, fused, false)?);
+        let (nv, nv_secs, nv_prof) = run(self, fused, false)?;
+        let (nv_unfused, unfused_secs, _) = run(self, false, false)?;
+        let integ = rel(&nv, &nv_unfused)?;
+        let mut line = format!(
+            "h3 vae check (nvfp4): batch {batch} grid {grid:?}: {} nvfp4 {nv_secs:.3}s [{}]; unfused nvfp4 {unfused_secs:.3}s, rel_l2 {integ:.3e}",
+            if fused { "fused" } else { "UNFUSED" },
+            nv_prof.summary()
+        );
+        let mut worst = integ;
+        if let Some(r) = self.reference.as_deref() {
+            let (bf_unfused, s0, _) = run(r, false, false)?;
+            let vs_unfused = rel(&nv, &bf_unfused)?;
+            line += &format!("; vs bf16 unfused ({s0:.3}s) rel_l2 {vs_unfused:.3e}");
+            worst = worst.max(vs_unfused);
+            if r.fused_ready(batch, grid) {
+                drop(run(r, true, false)?);
+                let (bf_fused, s1, _) = run(r, true, false)?;
+                line += &format!(
+                    "; vs bf16 fused ({s1:.3}s) {:.3e} (bf16 fused vs unfused {:.3e})",
+                    rel(&nv, &bf_fused)?,
+                    rel(&bf_fused, &bf_unfused)?
+                );
+                if r.mx_ready() {
+                    drop(run(r, true, true)?);
+                    let (mx_out, s2, _) = run(r, true, true)?;
+                    line += &format!(
+                        "; vs mxfp8 fused ({s2:.3}s) {:.3e} (mxfp8 vs bf16 unfused {:.3e})",
+                        rel(&nv, &mx_out)?,
+                        rel(&mx_out, &bf_unfused)?
+                    );
+                }
+            }
+        }
+        let ok = worst.is_finite() && worst < NVFP4_CHECK_REL_L2;
+        if !ok {
+            NVFP4_OFF.store(true, Ordering::Relaxed);
+        }
+        crate::wan::log::info(format_args!(
+            "{line} ({})",
+            if ok {
+                format!("nvfp4 within the {NVFP4_CHECK_REL_L2} sanity bound")
+            } else {
+                format!("NVFP4 OFF THE MARK (>= {NVFP4_CHECK_REL_L2})")
+            }
+        ));
+        Ok(nv)
+    }
+
+    /// Whether [`Self::check_nvfp4`] found the NVFP4 forward off the mark.
+    pub fn nvfp4_off_the_mark() -> bool {
+        NVFP4_OFF.load(Ordering::Relaxed)
+    }
+
+    /// Whether the block linears are the published NVFP4 ones.
+    pub fn is_nvfp4(&self) -> bool {
+        self.nvfp4
+    }
+
     fn axis_tiles(&self, latent_len: usize) -> Result<AxisTiles> {
         let ratio = self.cfg.spatial_compression_ratio();
         let (starts, overlaps) = self.cfg.split_tiles(latent_len * ratio);
@@ -1672,6 +2055,23 @@ mod tests {
             assert!(e.contains("sm_100+") && e.contains("=0"), "{e}");
         }
         assert!(r(Some("yes please"), Some(12), 36).is_err());
+    }
+
+    /// `FASTVIDEO_H3_VAE_NVFP4`: only with a `vae/` that carries the
+    /// published linears, only on NVFP4 tensor cores; such a `vae/` without
+    /// the flag is refused with what to do (it has no bf16 copy).
+    #[test]
+    fn vae_nvfp4_needs_the_published_linears_and_nvfp4_tensor_cores() {
+        assert!(!resolve_nvfp4(false, false, Some(12)).unwrap(), "default: bf16 tree");
+        assert!(resolve_nvfp4(true, true, Some(12)).unwrap(), "RTX PRO 6000");
+        assert!(resolve_nvfp4(true, true, Some(10)).unwrap(), "B200");
+        let e = resolve_nvfp4(false, true, Some(12)).unwrap_err().to_string();
+        assert!(e.contains(NVFP4_ENV) && e.contains("h3-base"), "{e}");
+        let e = resolve_nvfp4(true, false, Some(12)).unwrap_err().to_string();
+        assert!(e.contains(NVFP4_PROBE), "{e}");
+        let e = resolve_nvfp4(true, true, Some(9)).unwrap_err().to_string();
+        assert!(e.contains("sm_9"), "{e}");
+        assert!(resolve_nvfp4(true, true, None).is_err(), "no device");
     }
 
     /// `FASTVIDEO_H3_VAE_AB`'s bf16 re-decode suspends the MXFP8 GEMMs only

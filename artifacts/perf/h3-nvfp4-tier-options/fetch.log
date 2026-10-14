@@ -1,0 +1,173 @@
+16:23:10 [r2-fetch] 5 tree(s) to fetch, 109.10 GB in 839 GETs of up to 2 x 64 MiB, concurrency 64, 224 CPUs; 0 present
+16:23:12 [r2-fetch] tree auxiliary/tae: ready at eu-20261011 (0.02 GB, 1 files, 3s since start)
+16:23:13 [r2-fetch] tree auxiliary/lpips: ready at eu-20261011 (0.24 GB, 2 files, 4s since start)
+16:23:15 [r2-fetch] r2 4.9/109.1 GB, 975 MB/s, eta 107s, trees 2/5 (now 975 MB/s)
+16:23:20 [r2-fetch] r2 9.6/109.1 GB, 964 MB/s, eta 103s, trees 2/5 (now 953 MB/s)
+16:23:25 [r2-fetch] r2 13.4/109.1 GB, 894 MB/s, eta 107s, trees 2/5 (now 754 MB/s)
+16:23:30 [r2-fetch] r2 15.6/109.1 GB, 778 MB/s, eta 120s, trees 2/5 (now 429 MB/s)
+16:23:35 [r2-fetch] r2 17.3/109.1 GB, 691 MB/s, eta 133s, trees 2/5 (now 345 MB/s)
+16:23:37 [r2-fetch] tree fasth3-trim-8step-nvfp4: ready at f66c13dc17391dd4da99242a407918b92bf7d5fc (11.89 GB, 1 files, 27s since start)
+16:23:40 [r2-fetch] r2 21.5/109.1 GB, 717 MB/s, eta 122s, trees 3/5 (now 848 MB/s)
+16:23:45 [r2-fetch] r2 29.4/109.1 GB, 840 MB/s, eta 95s, trees 3/5 (now 1575 MB/s)
+16:23:46 [r2-fetch] fasth3-trim-8step/transformer/diffusion_pytorch_model-00003-of-00008.safetensors part 46: slow: 8.4 MB/s after 7s (recent parts 33 MB/s): fetched again on a new connection
+16:23:50 [r2-fetch] r2 36.6/109.1 GB, 915 MB/s, eta 79s, trees 3/5 (now 1441 MB/s)
+16:23:55 [r2-fetch] r2 44.2/109.1 GB, 982 MB/s, eta 66s, trees 3/5 (now 1515 MB/s)
+16:24:00 [r2-fetch] r2 51.9/109.1 GB, 1037 MB/s, eta 55s, trees 3/5 (now 1531 MB/s)
+16:24:03 [r2-fetch] fasth3-trim-8step/transformer/diffusion_pytorch_model-00001-of-00008.safetensors part 18: slow: 2.2 MB/s after 8s (recent parts 29 MB/s): fetched again on a new connection
+16:24:03 [r2-fetch] fasth3-trim-8step/transformer/diffusion_pytorch_model-00006-of-00008.safetensors part 53: slow: 7.3 MB/s after 8s (recent parts 29 MB/s): fetched again on a new connection
+16:24:05 [r2-fetch] r2 59.0/109.1 GB, 1073 MB/s, eta 47s, trees 3/5 (now 1434 MB/s)
+16:24:06 [r2-fetch] fasth3-trim-8step/transformer/diffusion_pytorch_model-00002-of-00008.safetensors part 67: slow: 7.5 MB/s after 7s (recent parts 29 MB/s): fetched again on a new connection
+16:24:06 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00014-of-00014.safetensors part 2: slow: 0.6 MB/s after 7s (recent parts 29 MB/s): fetched again on a new connection
+16:24:06 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00014-of-00014.safetensors part 4: slow: 0.6 MB/s after 7s (recent parts 29 MB/s): fetched again on a new connection
+16:24:06 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00014-of-00014.safetensors part 6: slow: 0.6 MB/s after 7s (recent parts 29 MB/s): fetched again on a new connection
+16:24:07 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00014-of-00014.safetensors part 10: slow: 0.6 MB/s after 7s (recent parts 28 MB/s): fetched again on a new connection
+16:24:07 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00014-of-00014.safetensors part 8: slow: 0.5 MB/s after 8s (recent parts 28 MB/s): fetched again on a new connection
+16:24:07 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00014-of-00014.safetensors part 12: slow: 0.0 MB/s after 7s (recent parts 28 MB/s): fetched again on a new connection
+16:24:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00014-of-00014.safetensors part 14: slow: 0.5 MB/s after 8s (recent parts 32 MB/s): fetched again on a new connection
+16:24:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00014-of-00014.safetensors part 16: slow: 0.6 MB/s after 8s (recent parts 32 MB/s): fetched again on a new connection
+16:24:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00014-of-00014.safetensors part 18: slow: 0.6 MB/s after 7s (recent parts 32 MB/s): fetched again on a new connection
+16:24:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00014-of-00014.safetensors part 20: slow: 0.6 MB/s after 7s (recent parts 32 MB/s): fetched again on a new connection
+16:24:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00004-of-00014.safetensors part 6: slow: 8.7 MB/s after 7s (recent parts 32 MB/s): fetched again on a new connection
+16:24:09 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00009-of-00014.safetensors part 12: slow: 9.3 MB/s after 6s (recent parts 32 MB/s): fetched again on a new connection
+16:24:09 [r2-fetch] tree fasth3-trim-8step: ready at 9edcb6511d5ff8dd1579e8eec8afee77e098b8d8 (41.74 GB, 17 files, 59s since start)
+16:24:10 [r2-fetch] r2 64.5/109.1 GB, 1075 MB/s, eta 41s, trees 4/5 (now 1094 MB/s)
+16:24:15 [r2-fetch] r2 71.2/109.1 GB, 1096 MB/s, eta 35s, trees 4/5 (now 1347 MB/s)
+16:24:20 [r2-fetch] r2 79.1/109.1 GB, 1130 MB/s, eta 27s, trees 4/5 (now 1573 MB/s)
+16:24:23 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00002-of-00014.safetensors part 50: slow: 7.6 MB/s after 8s (recent parts 25 MB/s): fetched again on a new connection
+16:24:25 [r2-fetch] r2 86.9/109.1 GB, 1158 MB/s, eta 19s, trees 4/5 (now 1559 MB/s)
+16:24:26 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00003-of-00014.safetensors part 18: slow: 6.9 MB/s after 7s (recent parts 31 MB/s): fetched again on a new connection
+16:24:30 [r2-fetch] r2 94.6/109.1 GB, 1182 MB/s, eta 12s, trees 4/5 (now 1540 MB/s)
+16:24:35 [r2-fetch] r2 100.2/109.1 GB, 1179 MB/s, eta 8s, trees 4/5 (now 1124 MB/s)
+16:24:35 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 0: slow: 2.5 MB/s after 7s (recent parts 32 MB/s): fetched again on a new connection
+16:24:35 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 4: slow: 3.8 MB/s after 7s (recent parts 32 MB/s): fetched again on a new connection
+16:24:35 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 6: slow: 2.5 MB/s after 7s (recent parts 32 MB/s): fetched again on a new connection
+16:24:35 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 10: slow: 3.2 MB/s after 7s (recent parts 32 MB/s): fetched again on a new connection
+16:24:35 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 14: slow: 2.6 MB/s after 7s (recent parts 32 MB/s): fetched again on a new connection
+16:24:35 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 26: slow: 3.3 MB/s after 6s (recent parts 32 MB/s): fetched again on a new connection
+16:24:35 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 2: slow: 1.9 MB/s after 7s (recent parts 32 MB/s): fetched again on a new connection
+16:24:35 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 24: slow: 4.6 MB/s after 6s (recent parts 32 MB/s): fetched again on a new connection
+16:24:35 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 30: slow: 3.3 MB/s after 6s (recent parts 32 MB/s): fetched again on a new connection
+16:24:35 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 8: slow: 3.2 MB/s after 7s (recent parts 32 MB/s): fetched again on a new connection
+16:24:35 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 18: slow: 3.9 MB/s after 6s (recent parts 32 MB/s): fetched again on a new connection
+16:24:35 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 32: slow: 2.0 MB/s after 6s (recent parts 32 MB/s): fetched again on a new connection
+16:24:35 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 28: slow: 3.3 MB/s after 6s (recent parts 32 MB/s): fetched again on a new connection
+16:24:35 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 12: slow: 2.6 MB/s after 7s (recent parts 32 MB/s): fetched again on a new connection
+16:24:35 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 16: slow: 3.9 MB/s after 7s (recent parts 32 MB/s): fetched again on a new connection
+16:24:35 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 22: slow: 3.9 MB/s after 6s (recent parts 32 MB/s): fetched again on a new connection
+16:24:35 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 20: slow: 3.9 MB/s after 6s (recent parts 32 MB/s): fetched again on a new connection
+16:24:36 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 38: slow: 3.0 MB/s after 7s (recent parts 33 MB/s): fetched again on a new connection
+16:24:36 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 42: slow: 3.1 MB/s after 7s (recent parts 33 MB/s): fetched again on a new connection
+16:24:36 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 40: slow: 2.4 MB/s after 7s (recent parts 33 MB/s): fetched again on a new connection
+16:24:36 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 36: slow: 3.0 MB/s after 7s (recent parts 33 MB/s): fetched again on a new connection
+16:24:36 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 48: slow: 2.5 MB/s after 7s (recent parts 33 MB/s): fetched again on a new connection
+16:24:36 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 52: slow: 1.3 MB/s after 7s (recent parts 33 MB/s): fetched again on a new connection
+16:24:36 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 50: slow: 1.9 MB/s after 7s (recent parts 33 MB/s): fetched again on a new connection
+16:24:36 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 46: slow: 3.1 MB/s after 7s (recent parts 33 MB/s): fetched again on a new connection
+16:24:36 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 60: slow: 2.0 MB/s after 6s (recent parts 33 MB/s): fetched again on a new connection
+16:24:36 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 54: slow: 2.6 MB/s after 6s (recent parts 33 MB/s): fetched again on a new connection
+16:24:36 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 44: slow: 3.7 MB/s after 7s (recent parts 33 MB/s): fetched again on a new connection
+16:24:36 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 56: slow: 2.7 MB/s after 6s (recent parts 33 MB/s): fetched again on a new connection
+16:24:36 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 34: slow: 2.9 MB/s after 7s (recent parts 33 MB/s): fetched again on a new connection
+16:24:36 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 58: slow: 3.3 MB/s after 6s (recent parts 33 MB/s): fetched again on a new connection
+16:24:40 [r2-fetch] r2 103.3/109.1 GB, 1147 MB/s, eta 5s, trees 4/5 (now 612 MB/s)
+16:24:45 [r2-fetch] r2 105.0/109.1 GB, 1104 MB/s, eta 4s, trees 4/5 (now 333 MB/s)
+16:24:46 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 0: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:46 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 2: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:46 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 4: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:46 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 10: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:46 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 8: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:46 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 32: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:46 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 30: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:46 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 28: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:46 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 14: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:46 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 12: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:46 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 6: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:46 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 26: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:46 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 16: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:46 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 22: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:46 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 20: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:46 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 18: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:46 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 24: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:47 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 38: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:47 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 42: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:47 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 40: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:47 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 36: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:47 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 48: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:47 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 52: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:47 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 46: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:47 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 50: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:47 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 60: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:47 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 56: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:47 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 44: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:47 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 54: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:47 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 58: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:47 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 34: slow: 0.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:50 [r2-fetch] r2 105.0/109.1 GB, 1050 MB/s, eta 4s, trees 4/5 (now 7 MB/s)
+16:24:55 [r2-fetch] r2 105.5/109.1 GB, 1004 MB/s, eta 4s, trees 4/5 (now 94 MB/s)
+16:24:57 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 2: slow: 2.7 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:57 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 4: slow: 2.7 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:57 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 8: slow: 2.7 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:57 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 10: slow: 2.7 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:57 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 32: slow: 2.3 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:57 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 6: slow: 2.7 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:57 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 28: slow: 2.7 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:57 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 30: slow: 2.7 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:57 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 0: slow: 2.7 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:57 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 22: slow: 2.7 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:57 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 26: slow: 2.7 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:57 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 16: slow: 2.7 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:57 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 20: slow: 2.7 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:57 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 24: slow: 2.3 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:57 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 12: slow: 2.3 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:57 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 18: slow: 2.7 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:57 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 14: slow: 2.3 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:58 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 38: slow: 3.4 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:58 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 42: slow: 3.4 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:58 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 40: slow: 3.4 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:58 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 36: slow: 3.4 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:58 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 50: slow: 3.4 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:58 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 52: slow: 3.4 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:58 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 48: slow: 0.4 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:58 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 46: slow: 3.4 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:58 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 44: slow: 3.4 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:58 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 54: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:58 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 34: slow: 3.4 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:58 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 58: slow: 0.8 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:58 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 56: slow: 3.4 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:24:58 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 60: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:00 [r2-fetch] r2 105.6/109.1 GB, 959 MB/s, eta 4s, trees 4/5 (now 20 MB/s)
+16:25:05 [r2-fetch] r2 106.1/109.1 GB, 922 MB/s, eta 3s, trees 4/5 (now 98 MB/s)
+16:25:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 2: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 8: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 10: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 4: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 28: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 30: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 6: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 16: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 22: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 26: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 0: slow: 3.4 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 32: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 20: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 18: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 24: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 14: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:08 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 12: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:09 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 38: slow: 3.8 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:09 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 40: slow: 3.8 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:09 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 36: slow: 3.8 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:09 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 52: slow: 3.8 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:09 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 50: slow: 3.8 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:09 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 54: slow: 3.4 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:09 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 58: slow: 3.0 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:09 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 56: slow: 3.8 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:09 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 48: slow: 3.4 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:09 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 34: slow: 3.8 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:09 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 42: slow: 3.4 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:09 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 46: slow: 3.8 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:09 [r2-fetch] fasth3-v2-nvfp4/transformer/diffusion_pytorch_model-00010-of-00014.safetensors part 44: slow: 3.8 MB/s after 11s (recent parts 20 MB/s): fetched again on a new connection
+16:25:10 [r2-fetch] r2 105.7/109.1 GB, 881 MB/s, eta 4s, trees 4/5 (now -69 MB/s)
+16:25:15 [r2-fetch] r2 108.5/109.1 GB, 868 MB/s, eta 1s, trees 4/5 (now 561 MB/s)
+16:25:19 [r2-fetch] tree fasth3-v2-nvfp4: ready at 0aa5247ba4a5d3f9f4fdb99536d8cf55bdc5e2f0 (55.19 GB, 20 files, 129s since start)
+16:25:19 [r2-fetch] weights ready: 5 tree(s), 109.10 GB fetched in 129.1s (845 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 141

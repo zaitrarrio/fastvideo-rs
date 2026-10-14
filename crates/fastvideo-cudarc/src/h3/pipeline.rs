@@ -1008,14 +1008,23 @@ pub struct H3Pipeline {
 /// fine stage on sparse FP4 tensor cores. The default speed tier of the
 /// ModelOpt NVFP4 checkpoints (owner decision 2026-10-14): unset, it is on for
 /// them where the sm_120 kernel exists and bf16 VSA elsewhere; `0` keeps bf16
-/// VSA; `1` insists, so a device without the kernel refuses it. Any other DiT
-/// ignores it (with a note when it was set).
-fn vsa_fp4_choice(modelopt_nvfp4: bool) -> Result<bool> {
+/// VSA; `1` insists, so a device without the kernel refuses it. The FastH3
+/// Trim's ComfyUI NVFP4 DiT (`comfy_nvfp4`) takes it only on `1` (opt-in,
+/// measured in docs/perf/h3-nvfp4-tier-options.md); any other DiT ignores it
+/// (with a note when it was set).
+fn vsa_fp4_choice(modelopt_nvfp4: bool, comfy_nvfp4: bool) -> Result<bool> {
     let setting = crate::wan::attn_fp4::setting();
     if setting == Some(false) {
         return Ok(false);
     }
-    if !modelopt_nvfp4 {
+    if comfy_nvfp4 && setting.is_none() {
+        crate::wan::log::info(format_args!(
+            "h3: VSA fine stage on bf16 for the Trim NVFP4 DiT ({}=1 opts into sparse FP4 attention)",
+            crate::wan::attn_fp4::ENV
+        ));
+        return Ok(false);
+    }
+    if !modelopt_nvfp4 && !comfy_nvfp4 {
         if setting == Some(true) {
             crate::wan::log::info(format_args!(
                 "h3: {}=1 ignored: the sparse FP4 VSA tier is for the ModelOpt NVFP4 checkpoints only",
@@ -1410,6 +1419,8 @@ impl H3Pipeline {
             }
             None => None,
         };
+        // The Trim's ComfyUI NVFP4 file: sparse FP4 VSA only when asked (`=1`).
+        let comfy_nvfp4 = nvfp4_dit.is_some() && !modelopt_nvfp4;
         // Fast boot (A): the recipe's resident DiT, pre-merged and
         // pre-quantized beside `transformer/` (`super::dit_tree`), when a
         // valid one is there; otherwise the checkpoint as below.
@@ -1983,7 +1994,7 @@ impl H3Pipeline {
             load_timings,
             booking: std::sync::Mutex::new(booking),
             vdn: vdn_ckpt.map(|c| c.transform),
-            vsa_fp4: vsa_fp4_choice(modelopt_nvfp4)?,
+            vsa_fp4: vsa_fp4_choice(modelopt_nvfp4, comfy_nvfp4)?,
             #[cfg(feature = "cuda")]
             graphs: std::sync::Mutex::new(None),
         })

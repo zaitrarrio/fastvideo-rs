@@ -1,0 +1,236 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "text_encoder",
+      "ok": true,
+      "values": {
+        "chosen": "streamed",
+        "device_gib": 0.0,
+        "free_gib_before_load": 94.35113525390625,
+        "load_seconds": 0.0,
+        "requested": "Streamed"
+      }
+    },
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "audio_vae_s": 0.192435347,
+        "dit_residency": "resident",
+        "dit_s": 5.233177634,
+        "refiner_s": 0.095339832,
+        "seconds": 63.179291312,
+        "text_encoder_s": 0.0,
+        "video_vae_s": 53.553986308
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.151165248,
+        "decode_s": 3.9336049159999997,
+        "denoise_s": 11.778788419,
+        "load_s": 63.179291312,
+        "peak_mib": 33504,
+        "refine_s": 0.00560996,
+        "step_s": [
+          1.496302382,
+          1.456540296,
+          1.469498001,
+          1.468258008,
+          1.471355375,
+          1.472124005,
+          1.46919912,
+          1.475322971
+        ],
+        "text_cache": "miss",
+        "text_encoder": "streamed",
+        "text_s": 230.044891049,
+        "total_s": 245.890714179,
+        "video_decode_s": 3.782439668,
+        "video_encode_s": 0.00011071,
+        "video_push_s": 0.000039930000000000006,
+        "video_rgb_s": 0.040501376998275815,
+        "video_vae_s": 3.7747665780782698,
+        "video_wait_s": 0.08365249899999999,
+        "warm": false,
+        "write_s": 0.07866163
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat",
+      "ok": true,
+      "values": {
+        "frame": "/srv/check/static/clip/frame-062.png",
+        "mean": 0.5207156095124532,
+        "std": 0.2851513042743372
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/srv/check/static/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96615,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "device_budget_gib": null,
+    "memory_plan": {
+      "resident": {
+        "peak_gib": 53.87927266955376,
+        "stages": [
+          {
+            "gib": 51.905614107847214,
+            "stage": "text"
+          },
+          {
+            "gib": 48.275975435972214,
+            "stage": "refine"
+          },
+          {
+            "gib": 53.87927266955376,
+            "stage": "denoise"
+          },
+          {
+            "gib": 46.546623677015305,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 49.436656683683395,
+            "stage": "video_decode"
+          }
+        ]
+      },
+      "streamed": {
+        "peak_gib": 11.871074885129929,
+        "stages": [
+          {
+            "gib": 7.503166675567627,
+            "stage": "text"
+          },
+          {
+            "gib": 5.309156894683838,
+            "stage": "refine"
+          },
+          {
+            "gib": 10.91245412826538,
+            "stage": "denoise"
+          },
+          {
+            "gib": 2.3855392932891846,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 11.871074885129929,
+            "stage": "video_decode"
+          }
+        ]
+      }
+    },
+    "mode": "fast",
+    "output": {
+      "audio_samples_per_channel": 165600,
+      "frames": 124,
+      "mp4": null,
+      "sequence_length": 14890,
+      "text_tokens": 46,
+      "wav": "/srv/check/static/clip/audio.wav"
+    },
+    "request": {
+      "attention": "vsa-h3 + to_gate_compress",
+      "height": 480,
+      "num_frames": 124,
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "prompt_set": null,
+      "seconds": 5,
+      "seed": 1024,
+      "techniques": {
+        "plan": [
+          "vsa (sparsity recipe, group default)"
+        ],
+        "profile": null,
+        "settings": [],
+        "sources": [
+          {
+            "from": "recipe",
+            "seam": "attention_backend"
+          }
+        ]
+      },
+      "text_cache": "/fvw/text-cache",
+      "text_weights": "/workspace/weights/h3-base",
+      "video_vae": "official",
+      "warm": false,
+      "width": 832
+    },
+    "stage_memory": {
+      "dit_residency": "resident",
+      "stages": [
+        {
+          "end_used_gib": 27.628536254167557,
+          "peak_reserved_gib": 28.59375,
+          "peak_used_gib": 28.551394745707512,
+          "stage": "text"
+        },
+        {
+          "end_used_gib": 27.62899687886238,
+          "peak_reserved_gib": 28.59375,
+          "peak_used_gib": 27.634063750505447,
+          "stage": "refine"
+        },
+        {
+          "end_used_gib": 27.633746176958084,
+          "peak_reserved_gib": 32.09375,
+          "peak_used_gib": 31.62294477969408,
+          "stage": "denoise"
+        },
+        {
+          "end_used_gib": 27.716610743664205,
+          "peak_reserved_gib": 27.9375,
+          "peak_used_gib": 27.848263098858297,
+          "stage": "audio_decode"
+        },
+        {
+          "end_used_gib": 27.72177131380886,
+          "peak_reserved_gib": 30.75,
+          "peak_used_gib": 30.608891441486776,
+          "stage": "video_decode"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 309.531847781,
+  "env": {
+    "FASTVIDEO_H3_VAE_CHECK": "1",
+    "FASTVIDEO_H3_VAE_NVFP4": "1",
+    "FASTVIDEO_H3_VAE_NVFP4_ACT": "static",
+    "FASTVIDEO_H3_VAE_NVFP4_REF": "/workspace/weights/h3-base/vae"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "h3",
+  "status": "pass"
+}

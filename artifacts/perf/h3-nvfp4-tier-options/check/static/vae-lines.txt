@@ -1,0 +1,13 @@
+[fastvideo] h3 vae: FASTVIDEO_H3_VAE_NVFP4=1: 36 blocks x 4 linears as published ModelOpt NVFP4 (W4A4, E4M3 per 16; 1.27 GiB with biases, loaded in 0.3s); activation scales static (calibrated input_scale): qkv 3.456e-1..3.744e0, to_out 2.783e-1..2.178e0, ff_in 3.456e-1..3.360e0, ff_out 1.304e-1..8.219e-1
+[fastvideo] h3 vae: FASTVIDEO_H3_VAE_MXFP8 unset: NVFP4 decoder linears (FASTVIDEO_H3_VAE_NVFP4=1)
+[fastvideo] h3 vae check: bf16 reference decoder from /workspace/weights/h3-base/vae (MXFP8 copies on)
+[fastvideo] h3 vae fused ViT: gemm nvfp4 (published ModelOpt, cuBLASLt VEC16_UE4M3), sdpa auto, vector kernels on
+[fastvideo] h3 vae fused ViT: gemm mxfp8 (cuBLASLt algo #0), sdpa auto, vector kernels on
+[fastvideo] h3 vae check (nvfp4): batch 6 grid [7, 16, 16]: fused nvfp4 0.146s [vae_ff_in_gemm 0.024, vae_ff_out_gemm 0.022, vae_sdpa 0.019, vae_qkv_gemm 0.018, vae_swiglu 0.018, vae_residual_norm 0.018, vae_qkv_heads 0.012, vae_out_gemm 0.007, vae_unpatchify 0.002, vae_merge_heads 0.002, vae_proj_out 0.001, vae_proj_in 0.000]; unfused nvfp4 0.451s, rel_l2 3.411e-2; vs bf16 unfused (0.510s) rel_l2 4.312e-2; vs bf16 fused (0.196s) 4.312e-2 (bf16 fused vs unfused 1.881e-3); vs mxfp8 fused (0.150s) 4.336e-2 (mxfp8 vs bf16 unfused 1.238e-2) (nvfp4 within the 0.25 sanity bound)
+[fastvideo] h3 vae chunk 1/7
+[fastvideo] h3 vae chunk 2/7
+[fastvideo] h3 vae chunk 3/7
+[fastvideo] h3 vae chunk 4/7
+[fastvideo] h3 vae chunk 5/7
+[fastvideo] h3 vae chunk 6/7
+[fastvideo] h3 vae chunk 7/7

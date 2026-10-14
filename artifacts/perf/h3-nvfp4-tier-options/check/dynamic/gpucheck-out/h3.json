@@ -1,0 +1,236 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "text_encoder",
+      "ok": true,
+      "values": {
+        "chosen": "streamed",
+        "device_gib": 0.0,
+        "free_gib_before_load": 94.35113525390625,
+        "load_seconds": 0.0,
+        "requested": "Streamed"
+      }
+    },
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "audio_vae_s": 0.179360501,
+        "dit_residency": "resident",
+        "dit_s": 3.791942507,
+        "refiner_s": 0.094981831,
+        "seconds": 58.176545838,
+        "text_encoder_s": 0.0,
+        "video_vae_s": 51.741259153
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.135941209,
+        "decode_s": 4.587010813,
+        "denoise_s": 11.750222634,
+        "load_s": 58.176545838,
+        "peak_mib": 33502,
+        "refine_s": 0.074487482,
+        "step_s": [
+          1.514066795,
+          1.471020184,
+          1.460630714,
+          1.461232205,
+          1.459495091,
+          1.461473126,
+          1.461484735,
+          1.460589504
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 3.577950859,
+        "total_s": 20.120965048,
+        "video_decode_s": 4.451069604,
+        "video_encode_s": 0.000103521,
+        "video_push_s": 0.000060240000000000006,
+        "video_rgb_s": 0.0463917699960125,
+        "video_vae_s": 4.44221800121665,
+        "video_wait_s": 0.088152738,
+        "warm": false,
+        "write_s": 0.081648355
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat",
+      "ok": true,
+      "values": {
+        "frame": "/srv/check/dynamic/clip/frame-062.png",
+        "mean": 0.5207374123654984,
+        "std": 0.2851800531711218
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/srv/check/dynamic/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96615,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "device_budget_gib": null,
+    "memory_plan": {
+      "resident": {
+        "peak_gib": 53.87927266955376,
+        "stages": [
+          {
+            "gib": 51.905614107847214,
+            "stage": "text"
+          },
+          {
+            "gib": 48.275975435972214,
+            "stage": "refine"
+          },
+          {
+            "gib": 53.87927266955376,
+            "stage": "denoise"
+          },
+          {
+            "gib": 46.546623677015305,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 49.436656683683395,
+            "stage": "video_decode"
+          }
+        ]
+      },
+      "streamed": {
+        "peak_gib": 11.871074885129929,
+        "stages": [
+          {
+            "gib": 7.503166675567627,
+            "stage": "text"
+          },
+          {
+            "gib": 5.309156894683838,
+            "stage": "refine"
+          },
+          {
+            "gib": 10.91245412826538,
+            "stage": "denoise"
+          },
+          {
+            "gib": 2.3855392932891846,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 11.871074885129929,
+            "stage": "video_decode"
+          }
+        ]
+      }
+    },
+    "mode": "fast",
+    "output": {
+      "audio_samples_per_channel": 165600,
+      "frames": 124,
+      "mp4": null,
+      "sequence_length": 14890,
+      "text_tokens": 46,
+      "wav": "/srv/check/dynamic/clip/audio.wav"
+    },
+    "request": {
+      "attention": "vsa-h3 + to_gate_compress",
+      "height": 480,
+      "num_frames": 124,
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "prompt_set": null,
+      "seconds": 5,
+      "seed": 1024,
+      "techniques": {
+        "plan": [
+          "vsa (sparsity recipe, group default)"
+        ],
+        "profile": null,
+        "settings": [],
+        "sources": [
+          {
+            "from": "recipe",
+            "seam": "attention_backend"
+          }
+        ]
+      },
+      "text_cache": "/fvw/text-cache",
+      "text_weights": "/workspace/weights/h3-base",
+      "video_vae": "official",
+      "warm": false,
+      "width": 832
+    },
+    "stage_memory": {
+      "dit_residency": "resident",
+      "stages": [
+        {
+          "end_used_gib": 27.597285717725754,
+          "peak_reserved_gib": 27.65625,
+          "peak_used_gib": 27.597285717725754,
+          "stage": "text"
+        },
+        {
+          "end_used_gib": 27.628996342420578,
+          "peak_reserved_gib": 27.6875,
+          "peak_used_gib": 27.634063214063644,
+          "stage": "refine"
+        },
+        {
+          "end_used_gib": 27.63374564051628,
+          "peak_reserved_gib": 32.09375,
+          "peak_used_gib": 31.622944243252277,
+          "stage": "denoise"
+        },
+        {
+          "end_used_gib": 27.716610207222402,
+          "peak_reserved_gib": 27.9375,
+          "peak_used_gib": 27.848262562416494,
+          "stage": "audio_decode"
+        },
+        {
+          "end_used_gib": 27.721770777367055,
+          "peak_reserved_gib": 30.71875,
+          "peak_used_gib": 30.608890905044973,
+          "stage": "video_decode"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 78.633360026,
+  "env": {
+    "FASTVIDEO_H3_VAE_CHECK": "1",
+    "FASTVIDEO_H3_VAE_NVFP4": "1",
+    "FASTVIDEO_H3_VAE_NVFP4_ACT": "dynamic",
+    "FASTVIDEO_H3_VAE_NVFP4_REF": "/workspace/weights/h3-base/vae"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "h3",
+  "status": "pass"
+}

@@ -1,0 +1,12 @@
+[fastvideo] h3 nvfp4: ModelOpt /fvw/ours-v2nv/transformer (50 blocks x 2 NVFP4 FFN linears, 6.06 GiB; attention as FASTVIDEO_H3_QUANT; FFN activation scale static (calibrated); checked in 0.0s)
+[fastvideo] h3 vae chunk 1/7
+[fastvideo] h3 vae chunk 2/7
+[fastvideo] h3 vae chunk 3/7
+[fastvideo] h3 vae chunk 4/7
+[fastvideo] h3 vae chunk 5/7
+[fastvideo] h3 vae chunk 6/7
+[fastvideo] h3 vae chunk 7/7
+[fastvideo] h3 vae fused ViT: gemm nvfp4 (published ModelOpt, cuBLASLt VEC16_UE4M3), sdpa auto, vector kernels on
+[fastvideo] h3 vae: FASTVIDEO_H3_VAE_MXFP8 unset: NVFP4 decoder linears (FASTVIDEO_H3_VAE_NVFP4=1)
+[fastvideo] h3 vae: FASTVIDEO_H3_VAE_NVFP4=1: 36 blocks x 4 linears as published ModelOpt NVFP4 (W4A4, E4M3 per 16; 1.27 GiB with biases, loaded in 0.4s); activation scales static (calibrated input_scale): qkv 3.456e-1..3.744e0, to_out 2.783e-1..2.178e0, ff_in 3.456e-1..3.360e0, ff_out 1.304e-1..8.219e-1
+[fastvideo] h3: VSA fine stage on sparse FP4 tensor cores (FASTVIDEO_H3_VSA_FP4=unset: NVFP4 default, P two-level)
