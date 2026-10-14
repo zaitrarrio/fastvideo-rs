@@ -1,0 +1,24 @@
+RESULT {"case":"rtmps","cleanup":{"after":404,"before":200,"delete":200,"enabled_before":false,"gone":true,"name":"fv-test-fvstream_8d5ae8c699af457b8f08af8db3b0fb23","recordings":[{"delete":200,"duration_s":-1,"video":"59dc028afbdcb80c5f6dd30efb55a146"}],"uid":"37be48741dea5c624bab1ce6030ab968"},"create_ms":1493,"live_input":"37be48741dea5c624bab1ce6030ab968","model":"fasth3","ok":true,"read":{"audio":null,"connected_after_s":31.915605444,"decoded":{"codec":"h264","frames":144,"height":720,"keyframes":3,"width":1260},"luma":{"black":0,"deviation":57.245758344798986,"frames":144,"mean":84.51601
+RESULT {"case":"srt","cleanup":{"after":404,"before":200,"delete":200,"enabled_before":false,"gone":true,"name":"fv-test-fvstream_8bf903be875949a1addca6a8371bf181","recordings":[{"delete":200,"duration_s":-1,"video":"a274b260f82eb35525189eb63d592eac"}],"uid":"34547ec7cfed7857f742370523199c86"},"create_ms":1204,"live_input":"34547ec7cfed7857f742370523199c86","model":"fasth3","ok":true,"read":{"audio":null,"connected_after_s":31.657301994,"decoded":{"codec":"h264","frames":96,"height":720,"keyframes":2,"width":1260},"luma":{"black":0,"deviation":57.25334482988617,"frames":230,"mean":84.510297780
+CREATED 37be48741dea5c624bab1ce6030ab968,34547ec7cfed7857f742370523199c86
+LIST {"fv_test_inputs":[],"http":200,"other_inputs":1,"preexisting_divine_firefly_present":true}
+/e2e/out/cf2/cloudflare-rtmps-master-probe.json
+[{"codec_type":"video","codec_name":"h264","width":420,"height":240,"sample_rate":null,"channels":null},{"codec_type":"video","codec_name":"h264","width":630,"height":360,"sample_rate":null,"channels":null},{"codec_type":"video","codec_name":"h264","width":840,"height":480,"sample_rate":null,"channels":null},{"codec_type":"video","codec_name":"h264","width":1260,"height":720,"sample_rate":null,"channels":null},{"codec_type":"audio","codec_name":"aac","width":null,"height":null,"sample_rate":"48000","channels":2}]
+/e2e/out/cf2/cloudflare-srt-master-probe.json
+[{"codec_type":"video","codec_name":"h264","width":420,"height":240,"sample_rate":null,"channels":null},{"codec_type":"video","codec_name":"h264","width":630,"height":360,"sample_rate":null,"channels":null},{"codec_type":"video","codec_name":"h264","width":840,"height":480,"sample_rate":null,"channels":null},{"codec_type":"video","codec_name":"h264","width":1260,"height":720,"sample_rate":null,"channels":null},{"codec_type":"audio","codec_name":"aac","width":null,"height":null,"sample_rate":"48000","channels":2}]
+  Stream #0:0(en-b23bd49a): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 0 kb/s (default)
+  Stream #0:0(en-b23bd49a): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 0 kb/s (default)
+  Stream #0:0(en-b23bd49a): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 0 kb/s (default)
+  Stream #0:0(en-b23bd49a): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 0 kb/s (default)
+  Stream #0:0(en-b23bd49a): Audio: pcm_s16le, 48000 Hz, stereo, s16, 1536 kb/s (default)
+[Parsed_volumedetect_0 @ 0x64cb0b8c01c0] mean_volume: -91.0 dB
+[Parsed_volumedetect_0 @ 0x64cb0b8c01c0] max_volume: -91.0 dB
+  Stream #0:0(en-86518d9b): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 2 kb/s (default)
+  Stream #0:0(en-86518d9b): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 2 kb/s (default)
+  Stream #0:0(en-86518d9b): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 2 kb/s (default)
+  Stream #0:0(en-86518d9b): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 2 kb/s (default)
+  Stream #0:0(en-86518d9b): Audio: pcm_s16le, 48000 Hz, stereo, s16, 1536 kb/s (default)
+[Parsed_volumedetect_0 @ 0x5e0661548f00] mean_volume: -91.0 dB
+[Parsed_volumedetect_0 @ 0x5e0661548f00] max_volume: -91.0 dB
+{"kind":"cloudflare-rtmps","audio_listed_after_s":57}
+{"kind":"cloudflare-srt","audio_listed_after_s":100}

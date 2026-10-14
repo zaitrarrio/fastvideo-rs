@@ -1,0 +1,10 @@
+{
+  "tag": "ref2v-turbo-warm",
+  "error": {
+    "error": {
+      "kind": "invalid_request",
+      "message": "model `h3-ref2v-turbo` does not support task t2v",
+      "param": "task"
+    }
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "completed_at": "2026-10-14T04:00:46.869919809Z",
+  "created_at": "2026-10-14T03:59:45.70271659Z",
+  "error": null,
+  "expires_at": "2026-10-15T03:59:45.70271659Z",
+  "fps": 24,
+  "height": 768,
+  "id": "fvjob_509e993e47a8414197d65fd967a18211",
+  "metrics": {
+    "build_rtf": 10.107341488064517,
+    "inference_s": 52.221264355,
+    "peak_memory_mb": 56733.28666973114,
+    "queue_s": 0.00162521,
+    "run_s": 61.165578009,
+    "stage_durations": {
+      "audio_decode": 0.069950085,
+      "denoise": 52.221264355,
+      "encode": 0.254368388,
+      "refine": 0.000456781,
+      "text": 1.240164666,
+      "video_decode": 6.5891420499999995
+    }
+  },
+  "model": "h3-larry-turbo",
+  "notes": [
+    "canvas: 1344x768 follows the input image (832x480)"
+  ],
+  "num_frames": 124,
+  "object": "fv.job",
+  "output": {
+    "audio": {
+      "channels": 2,
+      "rate": 32000
+    },
+    "bytes": 5468773,
+    "fps": 24,
+    "frames": 124,
+    "height": 768,
+    "mime": "video/mp4",
+    "url": "<redacted: signed artifact URL on a deleted pod>",
+    "width": 1344
+  },
+  "progress": 1,
+  "protocol": "native",
+  "queue_position": null,
+  "recipe": "h3-larry-turbo-ckpt850-dense",
+  "resolved_model": "h3-larry-turbo",
+  "seed": 7,
+  "started_at": "2026-10-14T03:59:45.7043418Z",
+  "status": "succeeded",
+  "task": "i2v",
+  "tier": null,
+  "width": 1344,
+  "hr_tag": "larry-i2v-768",
+  "hr_task": "i2v",
+  "hr_wall_s": 61.22
+}

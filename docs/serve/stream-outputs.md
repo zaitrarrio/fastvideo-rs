@@ -426,6 +426,14 @@ certificate of 127.0.0.1:<port> failed verification (UnknownIssuer); the
 output stops rather than connect unverified" (key scrubbed), and nothing
 reached MediaMTX.
 
+### Results: Cloudflare from a GPU-served model (2026-10-14)
+
+h3-turbo on an RTX PRO 6000 (NVENC), every kind against the real Cloudflare Stream, plus the director
+`x_fv_output` copy: WHIP H.264 / VP8 / VP9 come back over WHEP at 1344x768 (29.7-30.8 s from the POST, the first
+clip's build included), RTMPS / SRT as HLS topped at 1260x720 (41 s / 64-87 s), and every kind, the copy included,
+carries the model's audio (decoded). Cloudflare serves HLS audio as a separate rendition (`#EXT-X-MEDIA TYPE=AUDIO`),
+which a read of the top video variant alone does not see. docs/serve/e2e/h3-test-round-2026-10-14.md.
+
 ### Results: Cloudflare (live, 2026-10-13)
 
 Build pod (EU-RO-1), fake engine `fake-h3-turbo` (1344x768 @ 24 fps with

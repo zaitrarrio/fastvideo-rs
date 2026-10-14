@@ -1,0 +1,23 @@
+t2v-base	0	1545	03:18:07
+t2v-turbo	0	98	03:19:45
+t2v-max	0	99	03:21:24
+t2v-draft	0	30	03:21:54
+t2v-larry	0	176	03:24:50
+t2v-lightx	0	129	03:26:59
+t2v-trim-mx	0	150	03:29:29
+t2v-trim-bf16	0	181	03:32:30
+t2v-v2	0	235	03:36:25
+cmp-turbo	0	21	03:36:46
+cmp-max	0	21	03:37:07
+cmp-draft	0	10	03:37:17
+cmp-larry	0	21	03:37:38
+cmp-lightx	0	21	03:37:59
+cmp-trim-mx	0	21	03:38:20
+cmp-trim-bf16	0	21	03:38:41
+cmp-v2	0	21	03:39:02
+finished
+t2v-larry-f107	0	145
+t2v-lightx-f107	0	108
+t2v-turbo-f107	0	86
+t2v-max-f107	0	84
+regress-finished
