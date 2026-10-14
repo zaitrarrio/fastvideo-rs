@@ -105,6 +105,100 @@ call the FP4 operands are `bh * padded * (64 + 8)` bytes for q and for k and the
 (56 heads, ~40k padded rows), against the bf16 path's three f32/bf16 tiled copies. The output is the fine stage's
 usual f32 `[bh, padded, 128]`, consumed by the existing combine.
 
-## 3. Results
+## 3. Results (one RTX PRO 6000 Blackwell Server Edition, EUR-IS-2, driver 580.159 / CUDA 13.0, image `fastvideo-rs-runtime:sha-b564268`, 2026-10-14)
 
-(filled in below by the GPU runs)
+### 3.1 Kernel checks (`kernels --groups h3_fp4_attn`, all PASS, 37 s)
+
+| check | result |
+|---|---|
+| `mma_mxf4nvf4_layout`: one mma on random fragments vs the host statement of §2 | exact (0 wrong of 128, unit scales and random block scales) |
+| `fp4_quantizer_bitwise`: q / k / v, f32 and bf16 inputs, vs the host twin of upstream's rule | 0 rows / columns differ; f32 and bf16 inputs give identical bytes |
+| fine stage vs host emulation of the same FP4 algorithm (limit 2e-2) | 1.1e-6 (sparse), 5.2e-6 (full list) |
+| **sparse 0.8, rel-L2 vs token-masked f64** (limit 0.19) | **0.160** two-level P, 0.165 single-level P (upstream's rule) |
+| **full block list vs dense f64** (limit 0.19) | **0.183** two-level, 0.189 single-level |
+| our bf16 VSA kernel vs the same references, for scale | 4.1e-4 / 4.7e-4 |
+
+Problem: 2 heads, 4460 rows (6 prefix + 64 video tiles), q/k unit-RMS with a shared smooth positional component and
+outlier channels. The emulation agrees with the kernel to f32 rounding, so the remaining 0.16-0.18 is the FP4
+quantization itself, at upstream's measured floor (0.19); two-level P is slightly better than single-level, as
+expected. There is no separate dense FP4 kernel: the full-list case is the dense FP4 attention.
+
+**Fine-stage timing** (56 heads, random lists of the real length at sparsity 0.8, 5 s clips):
+
+| canvas | rows | tiles / top-k | bf16 fine stage (tile gather + `vsa_mma_attn`) | FP4 quantize + fine | speedup | FP4 kernel |
+|---|---:|---:|---:|---:|---:|---:|
+| 832x480 | 15 100 | 291 / 67 | 9.75 ms | 1.16 + 3.01 = **4.17 ms** | 2.34x | 732 TFLOPS |
+| 1344x768 | 37 966 | 671 / 143 | 40.2 ms | 3.06 + 13.2 = **16.3 ms** | 2.47x | 839 TFLOPS |
+
+### 3.2 The 768p trace (phase 1) and the FP4 path in the model
+
+CUPTI trace of one warm V2-NVFP4 step (`FASTVIDEO_GPU_TRACE=1`, NVFP4 attention + FFN as #110, 124 frames), per
+block (step busy time / 50). Files: `artifacts/ports/fasth3-sparse-fp4-attn/run-2026-10-14/t{480,768}-{bf16,fp4}.json`.
+
+| per block | 480p bf16 VSA | 480p FP4 | 768p bf16 VSA | 768p FP4 |
+|---|---:|---:|---:|---:|
+| **step busy / 50** | **33.6** | **27.9** | **98.3** | **74.1** |
+| attention (all kernels) | 13.1 (40 %) | 7.35 | 48.6 (51 %) | 24.3 |
+| - fine stage kernel (`vsa_mma_attn_tma2` / `attn_fp4_vsa`) | 7.16 | 2.66 | 34.1 | 12.6 |
+| - tiling (`vsa_tile_qkv` x3 / `attn_fp4_quant_tile`) | 2.45 | 1.19 | 5.79 | 2.98 |
+| - prefix rows SDPA, pooling, combine, top-k (unchanged) | 3.5 | 3.5 | 8.7 | 8.7 |
+| NVFP4 GEMMs | 8.87 | 8.85 | 21.3 | 21.4 |
+| norm / casts / layout (unchanged) | 11.6 | 11.7 | 28.4 | 28.4 |
+
+- **Phase 1 answer: attention is the dominant gap at 768p.** It is 51 % of the step (40 % at 480p) and grows 3.7x
+  for 2.5x the rows (k_vid grows with the video tiles), while everything else grows ~2.4x. Upstream's 768p step is
+  ~73 ms per block (3.66 s / forward / 50): the whole 25 ms gap was attention.
+- **GEMM algorithm at 768p rows.** cuBLASLt's heuristic changes with the row count. At 15.1k rows, 6 of the 7
+  NVFP4 GEMMs per block run `cutlass3x_sm120 … 128x128x256` and 1 runs `nvjet … 256x128x128 vec16`. At 38k rows,
+  2 run cutlass (5.97 ms each) and 5 run `nvjet … 128x256x128 vec16` (1.83 ms each). GEMM time grows 2.40x for 2.51x
+  the rows, so the 768p choice is not a regression. Upstream's FlashInfer cutlass was not traced at 768p (its page
+  has no such table), so this compares our choice against itself, not against upstream.
+- With FP4 the fine stage is 2.7x faster in the model (7.16 -> 2.66 ms, 34.1 -> 12.6 ms); our 480p attention is
+  now 7.35 ms per block against upstream's 7.9 ms (sparse FP4, its page).
+
+### 3.3 Denoise timings (warm, 124 frames, seed 1024, one process per arm)
+
+| checkpoint | canvas | prompt | bf16 VSA s | **FP4 VSA s** | speedup | upstream s (#110) | FP4 / upstream |
+|---|---|---|---:|---:|---:|---:|---:|
+| V2 (8 fwd) | 832x480 | h3-demo | 14.06 | **11.76** | 1.20x | 10.25 | 1.15x |
+| V2 | 832x480 | spark-mountain-lake | 13.20 | **11.16** | 1.18x | 9.81 | 1.14x |
+| V2 | 1344x768 | h3-demo | 39.99 | **30.29** | 1.32x | 29.28 | 1.03x |
+| V2 | 1344x768 | spark-mountain-lake | 39.04 | **29.55** | 1.32x | 28.41 | 1.04x |
+
+Median step 1.757 -> 1.472 s (480p) and 4.998 -> 3.789 s (768p). Peak device memory is unchanged or lower (480p
+26.5 -> 26.0 GiB, 768p 34.2 -> 32.4 GiB on h3-demo). VAE decode is unchanged (2.1 / 4.8 s).
+
+**4-step checkpoint: per-prompt numbers lost.** Its cells ran (both arms rc 0; process wall time with load, the warm-up
+and four generations: 127 s bf16 VSA, 94 s FP4). The results archive was not written: `tar` exits 1 when `nvsmi.csv`
+grows during packing, and the pod was deleted before this was noticed. The pack step and the launcher's fetch are
+fixed. Expect the 4-step to follow the V2 ratios per forward.
+
+### 3.4 Quality: FP4 attention vs #110's bf16 VSA NVFP4 arm (same checkpoint, seed, text and noise)
+
+V2, 832x480x124, h3-demo, seed 1024; per-step latents dumped by both arms, `compare-dumps`, then `compare-clips`.
+
+| | FP4 VSA vs bf16 VSA (this run) | for scale: ours vs upstream (#110) |
+|---|---:|---:|
+| step-1 block 0 / 24 / 48 output | 8.2e-3 / 9.1e-2 / 0.83 | 7.5e-2 / 0.13 / 0.84 |
+| step-1 velocity | 0.51 | 0.47 |
+| **video latents after step 1** / 2 / 4 | **1.1e-2** / 1.9e-2 / 5.1e-2 | 1.04e-2 / 1.8e-2 / 4.9e-2 |
+| final video latents (step 8) | 0.65 | 0.61 |
+| clip PSNR / LPIPS (alex, all frames) | 13.5 dB / 0.488 | 12.6 dB / 0.465 |
+| sharpness ratio / jitter ratio (mean) | 0.916 / 0.838 | 0.938 / 1.097 |
+| lossy gate hard checks (sharpness 0.95-1.08, jitter 0.85-1.20) | **FAIL** (both) | FAIL (sharpness) |
+
+**Verdict: quality fails the lossy gate against our bf16-VSA NVFP4 arm.** The attention kernel itself sits at the
+FP4 noise floor (0.16 rel-L2 sparse, §3.1). Through the first step the two arms agree to 1.1e-2, the same distance
+#110 measured between our NVFP4 path and upstream's own FP4 output. The few-step sampler then amplifies it into a
+different sample of the same scene, as it does between any two FP4 implementations. The FP4 arm is somewhat
+softer (sharpness 0.92) and has less frame-to-frame change (jitter 0.84), each just outside the gate's window. One
+prompt and one seed were measured; the five-prompt gate was not run within the budget. It stays an opt-in speed
+tier for the NVFP4 checkpoints, which already fail the gate against bf16 and against upstream (docs/ports/fasth3-nvfp4.md
+§6).
+
+### 3.5 Cost
+
+One RTX PRO 6000 pod (EUR-IS-2, $2.49/hr): 15:21:44-15:42:16, about $0.85. Every step of the session ran:
+fetch of 185 GB from R2 at ~800 MB/s (234 s), kernel checks, four traces, parity and the timing cells. An earlier pod
+was deleted 30 s after creation (~$0.02). Both were deleted and checked gone (GET 404); their backstops were stopped
+by exact PID.

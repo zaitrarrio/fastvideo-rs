@@ -42,8 +42,9 @@ step() {
   return "$rc"
 }
 pack() {
-  (cd $SRV && tar --exclude='*.png' --exclude='*.raw' --exclude='*.f32' --exclude='*.bin' --exclude='*.safetensors' \
-     --exclude='*-dump' --exclude='results.tgz' -czf results.tgz.tmp . && mv results.tgz.tmp results.tgz)
+  # nvsmi.csv grows while tar reads it (exit 1, "file changed as we read it"): only exit >= 2 is a failure.
+  (cd $SRV && { tar --exclude='*.png' --exclude='*.raw' --exclude='*.f32' --exclude='*.bin' --exclude='*.safetensors' \
+     --exclude='*-dump' --exclude='results.tgz*' -czf results.tgz.tmp .; [[ $? -le 1 ]]; } && mv results.tgz.tmp results.tgz)
 }
 finish() { pack; echo "$1" >$SRV/DONE; log "DONE $1"; }
 # /srv on :8000, and PUT /plan (header X-FV-Token = $FV_UPLOAD_TOKEN) writes /opt/fv/plan.json: the R2 plan (presigned

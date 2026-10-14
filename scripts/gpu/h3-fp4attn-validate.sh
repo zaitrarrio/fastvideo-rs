@@ -145,7 +145,8 @@ sleep 600; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: 
   fetch)
     id="${2:?pod id}"; out="${3:?dir}"; u="https://$id-8000.proxy.runpod.net"
     mkdir -p "$out"
-    curl -sS --max-time 900 --fail "$u/results.tgz" -o "$out/results.tgz" && tar -xzf "$out/results.tgz" -C "$out" && rm -f "$out/results.tgz"
+    curl -sS --max-time 900 --fail "$u/results.tgz" -o "$out/results.tgz" && tar -xzf "$out/results.tgz" -C "$out" && rm -f "$out/results.tgz" \
+      || { log "fetch failed: no results.tgz (keep the pod until its files are copied)"; exit 1; }
     log "fetched into $out"
     ;;
   down)
