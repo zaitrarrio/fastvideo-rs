@@ -239,8 +239,9 @@ pub enum Stage {
         /// itself, e.g. the output of `h3 slim-text`.
         #[arg(long)]
         text_weights: Option<PathBuf>,
-        /// `auto` (resident-fp8 when >= 85 GB are free before anything loads,
-        /// else streamed), `streamed`, `resident-fp8`, `resident-bf16`, or
+        /// `auto` (resident-fp8 when the load's memory plan fits it beside the
+        /// DiT at its precision, the decoders and a 768p 5 s denoise, else
+        /// streamed), `streamed`, `resident-fp8`, `resident-bf16`, or
         /// `recovered-8b` (SearchingMan Qwen3-VL-8B + ARA + adapter).
         #[arg(long, default_value = "auto")]
         text_encoder: String,
@@ -461,6 +462,9 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                     text_encoder,
                 )
                 .map_err(|e| anyhow::anyhow!(e))?,
+                // `auto` plans for the default request (768p 5 s); a larger
+                // `--seconds` / 1080p canvas releases it after encoding.
+                auto_text_encoder_request: None,
                 taeh3: taeh3_weights.clone(),
                 recipe: h3_recipe.clone(),
                 ref2va: !references.is_empty(),

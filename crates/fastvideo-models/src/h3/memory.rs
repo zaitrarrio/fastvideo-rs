@@ -20,9 +20,15 @@
 //! follow the allocations of `H3Transformer::forward`: **float32
 //! activations** (residual, QKV(G), per-head Q/K/V, the SwiGLU hidden), bf16
 //! only as GEMM staging, a chunked score buffer, and the SwiGLU FFN whole or
-//! in 8192-row chunks. A resident FP8 text encoder is not part of the
-//! streamed plan: `Auto` loads it only with 85 GB free (see
-//! [`text_encoder_fp8_bytes`] for what it would add).
+//! in 8192-row chunks. The resident DiT is priced at the precision it loads
+//! with ([`H3DitWeights`]: bf16, MXFP8, W8A8 or NVFP4 block linears).
+//!
+//! A resident FP8 text encoder is not part of these stages. Whether `Auto`
+//! loads it is [`auto_text_encoder`]: the resident plan at the DiT's real
+//! precision, the encoder ([`text_encoder_fp8_bytes`]) and the denoise reserve
+//! of the largest request the process plans for ([`denoise_reserve_bytes`])
+//! must fit the free memory measured before any load, and the encoder may
+//! never cost the DiT its residency.
 //!
 //! Against the RTX PRO 6000 run of 1344x768x124 (sol-h3-rtx, TeaCache, DiT
 //! streamed, FP8 encoder resident): the denoise grew the pool by 15.2 GiB
@@ -81,6 +87,81 @@ pub fn block_bytes(cfg: &H3TransformerConfig, gate: bool) -> u64 {
     let qkvg = if gate { 4 } else { 3 } * i * h;
     let linears = qkvg + i * h + h * 2 * f + f * h;
     linears * 2 + block_norm_bytes(cfg)
+}
+
+/// How the DiT's block linears are stored on the device: what the load
+/// resolves (`FASTVIDEO_H3_QUANT`, the published NVFP4 tree). Everything
+/// outside the block linears (norms, AdaLN, the refiner under MXFP8 / NVFP4,
+/// the VSA gate rows under MXFP8 / W8A8) stays as bf16 / float32.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum H3DitWeights {
+    /// bf16 linears: `FASTVIDEO_H3_QUANT=off`, pre-sm_100 defaults, VDN-H3,
+    /// an MLX tree (priced as bf16, the safe side).
+    #[default]
+    Bf16,
+    /// Sol-H3 MXFP8 (the default on sm_100+): blocks
+    /// [`MXFP8_FIRST_BLOCK`]..=[`MXFP8_LAST_BLOCK`] as one E4M3 byte per
+    /// weight plus one E8M0 scale per 32; the others and the gate rows bf16.
+    Mxfp8,
+    /// Tensorwise W8A8: every block's linears one byte per weight, the gate
+    /// rows bf16.
+    W8a8,
+    /// FastH3 Trim's published NVFP4 tree: every block linear (gate
+    /// included) as E2M1 nibbles plus one E4M3 scale per 16 (rows padded to
+    /// 128), resident only.
+    Nvfp4,
+}
+
+/// The MXFP8 block range of `fastvideo_cudarc::wan::quant::H3QuantPlan`.
+pub const MXFP8_FIRST_BLOCK: usize = 2;
+pub const MXFP8_LAST_BLOCK: usize = 46;
+/// bf16 blocks a pruned stack always keeps at its end.
+pub const MXFP8_BF16_TAIL: usize = 3;
+
+impl H3DitWeights {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bf16 => "bf16",
+            Self::Mxfp8 => "mxfp8",
+            Self::W8a8 => "w8a8",
+            Self::Nvfp4 => "nvfp4",
+        }
+    }
+}
+
+/// Device bytes of DiT block `i` resident as `weights` stores it.
+pub fn block_bytes_as(cfg: &H3TransformerConfig, i: usize, gate: bool, weights: H3DitWeights) -> u64 {
+    let (h, inner, f) = (
+        cfg.hidden_size as u64,
+        cfg.inner_dim() as u64,
+        cfg.ffn_dim as u64,
+    );
+    // (rows, k) of qkv, out, ff_in, ff_out; the gate is (inner, h).
+    let linears = [(3 * inner, h), (h, inner), (2 * f, h), (h, f)];
+    let params: u64 = linears.iter().map(|(r, k)| r * k).sum();
+    let gate_bf16 = if gate { inner * h * 2 } else { 0 };
+    let last_mx = MXFP8_LAST_BLOCK.min(cfg.num_layers.saturating_sub(1 + MXFP8_BF16_TAIL));
+    let linear_bytes = match weights {
+        H3DitWeights::Bf16 => return block_bytes(cfg, gate),
+        H3DitWeights::Mxfp8 if !(MXFP8_FIRST_BLOCK..=last_mx).contains(&i) => {
+            return block_bytes(cfg, gate)
+        }
+        H3DitWeights::Mxfp8 => params + params / 32 + gate_bf16,
+        H3DitWeights::W8a8 => params + gate_bf16,
+        H3DitWeights::Nvfp4 => {
+            let nv = |(r, k): (u64, u64)| r * k / 2 + r.next_multiple_of(128) * k / 16;
+            let gate_nv = if gate { nv((inner, h)) } else { 0 };
+            linears.iter().map(|&l| nv(l)).sum::<u64>() + gate_nv
+        }
+    };
+    linear_bytes + block_norm_bytes(cfg)
+}
+
+/// Device bytes of every DiT block resident as `weights` stores them.
+pub fn dit_blocks_bytes(cfg: &H3TransformerConfig, gate: bool, weights: H3DitWeights) -> u64 {
+    (0..cfg.num_layers)
+        .map(|i| block_bytes_as(cfg, i, gate, weights))
+        .sum()
 }
 
 /// The float32 norms a streamed block's skeleton keeps on the device.
@@ -228,8 +309,9 @@ pub fn adaln_step_bytes(cfg: &H3TransformerConfig) -> u64 {
 }
 
 /// Device bytes of the resident FP8 text encoder (layers 0..=tap as E4M3
-/// codes plus one float32 scale per output row, float32 norms): what `Auto`
-/// adds on a card with 85 GB free. A bf16 copy of it would be twice this.
+/// codes plus one float32 scale per output row, float32 norms): what a
+/// resident `Auto` encoder adds ([`auto_text_encoder`]). A bf16 copy of it
+/// would be twice this.
 pub fn text_encoder_fp8_bytes(t: &H3TextEncoderConfig) -> u64 {
     let (h, i) = (t.hidden_size as u64, t.intermediate_size as u64);
     let q = (t.num_attention_heads * t.head_dim) as u64;
@@ -361,6 +443,9 @@ pub struct H3PlanOptions {
     /// pipeline passes what `FASTVIDEO_H3_VAE_MXFP8` resolves to (off on
     /// older GPUs, with `=0` or with TAEH3).
     pub vae_mxfp8: bool,
+    /// How the resident DiT's block linears are stored. Streamed blocks are
+    /// priced as bf16 whatever this says.
+    pub dit: H3DitWeights,
 }
 
 impl Default for H3PlanOptions {
@@ -372,6 +457,7 @@ impl Default for H3PlanOptions {
             vae_tile_batch: 8,
             steps: 50,
             vae_mxfp8: true,
+            dit: H3DitWeights::Bf16,
         }
     }
 }
@@ -406,7 +492,7 @@ pub fn plan(geometry: &H3Geometry, opts: H3PlanOptions) -> H3MemoryPlan {
     // a streamed ring exists only while its model runs.
     let dit_skeleton = dit_global_bytes(&cfg, opts.steps)
         + match opts.placement {
-            H3Placement::Resident => cfg.num_layers as u64 * block_bytes(&cfg, opts.gate),
+            H3Placement::Resident => dit_blocks_bytes(&cfg, opts.gate, opts.dit),
             H3Placement::Streamed { .. } => cfg.num_layers as u64 * block_norm_bytes(&cfg),
         };
     let refiner_held = match opts.placement {
@@ -460,6 +546,130 @@ pub fn plan(geometry: &H3Geometry, opts: H3PlanOptions) -> H3MemoryPlan {
                     + 2 * (geometry.video_rows() * cfg.video_patch_dim()) as u64 * 4,
             },
         ],
+    }
+}
+
+/// Device bytes a denoise needs beside the resident weights for `rows`
+/// packed rows: 1 MiB per row under float32 activations (QKVG `[S, 4 x
+/// 7168]`, BHSD Q/K/V, the SwiGLU hidden and the VSA gathers are all live
+/// around one block), 640 KiB under bf16 activations (the GPU default), plus
+/// 4 GiB of workspace. This is the measured bound, not [`plan`]'s: a 96 GB
+/// card with the FP8 encoder, DiT and decoders resident ran out at the first
+/// 5 s VSA step with ~27 GiB free (float32 activations), and the bf16 VSA
+/// denoise at 1344x768x124 measured ~25 GiB over the live weights, where
+/// [`plan`] prices about 11 GiB.
+pub fn denoise_reserve_bytes(rows: usize, bf16_act: bool) -> u64 {
+    let per_row: u64 = if bf16_act { 640 << 10 } else { 1 << 20 };
+    (rows as u64) * per_row + (4u64 << 30)
+}
+
+/// What [`auto_text_encoder`] decides from.
+#[derive(Debug, Clone)]
+pub struct AutoTextEncoderInputs {
+    /// Free device bytes measured before anything of this load is on the card.
+    pub free: u64,
+    /// The plan the load will run: placement (resident unless the DiT is
+    /// configured streamed), VSA gate, VAE MXFP8 copies, DiT precision.
+    pub plan: H3PlanOptions,
+    /// The largest request the process plans for (its configured canvas and
+    /// length; the default 768p 5 s when it names none). Larger requests
+    /// (the 1080P tier, long clips) are the post-encode release's job.
+    pub request: H3Geometry,
+    /// bf16 activations (the GPU default): the denoise reserve's row rate.
+    pub bf16_act: bool,
+    /// Other pieces the load keeps beside the encoder: the image-to-video
+    /// vision tower's reserve when it may load.
+    pub extra: u64,
+    /// The DiT placement's own need when the placement is decided from the
+    /// free memory left after the encoder loads (`dit_offload = auto`, not
+    /// the resident-only NVFP4 tree) and the card covers it without the
+    /// encoder: the encoder then has to leave it, the DiT has priority.
+    pub dit_need: Option<u64>,
+}
+
+/// The `Auto` text encoder decision with the numbers it was made from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoTextEncoder {
+    /// Load the FP8 encoder resident (`false`: stream it per prompt).
+    pub resident: bool,
+    pub free: u64,
+    /// Everything that has to fit `free`.
+    pub need: u64,
+    /// The resident FP8 encoder ([`text_encoder_fp8_bytes`]).
+    pub encoder: u64,
+    /// The plan's weights at the denoise, plus `extra`.
+    pub weights: u64,
+    /// [`denoise_reserve_bytes`] of the planned request.
+    pub reserve: u64,
+    /// The plan's own peak over every stage, plus `extra`.
+    pub plan_peak: u64,
+    /// What the DiT placement needs left after the encoder (0: none).
+    pub dit_need: u64,
+    /// Packed rows of the planned request.
+    pub rows: usize,
+}
+
+impl AutoTextEncoder {
+    /// One log line with the numbers.
+    pub fn describe(&self, opts: &AutoTextEncoderInputs) -> String {
+        let gib = |b: u64| b as f64 / GIB as f64;
+        let g = &opts.request;
+        format!(
+            "{}: {:.1} GiB free before load {} need {:.1} GiB = fp8 encoder {:.1} + max(resident weights {:.1} [dit {} {}, vae mxfp8 {}, extra {:.1}] + denoise reserve {:.1} for {}x{}x{} ({} rows) + runtime {:.1}; plan peak {:.1}{})",
+            if self.resident { "resident-fp8" } else { "streamed" },
+            gib(self.free),
+            if self.resident { ">=" } else { "<" },
+            gib(self.need),
+            gib(self.encoder),
+            gib(self.weights),
+            opts.plan.dit.as_str(),
+            if opts.plan.placement.is_streamed() { "streamed" } else { "resident" },
+            opts.plan.vae_mxfp8,
+            gib(opts.extra),
+            gib(self.reserve),
+            g.width,
+            g.height,
+            g.num_frames,
+            self.rows,
+            gib(RUNTIME_ALLOWANCE),
+            gib(self.plan_peak),
+            if self.dit_need > 0 {
+                format!("; the DiT placement's {:.1} + extra", gib(self.dit_need))
+            } else {
+                String::new()
+            },
+        )
+    }
+}
+
+/// `TextEncoderChoice::Auto` at load: keep the FP8 encoder resident when the
+/// encoder plus the larger of (a) the resident weights at the DiT's real
+/// precision (decoders with their MXFP8 copies, refiner, `extra`) with the
+/// measured denoise reserve of the planned request and [`RUNTIME_ALLOWANCE`],
+/// (b) the plan's own peak, and (c) the DiT placement's need fit `free`.
+/// Otherwise the encoder streams.
+pub fn auto_text_encoder(opts: &AutoTextEncoderInputs) -> AutoTextEncoder {
+    let p = plan(&opts.request, opts.plan);
+    let weights = p.stage("denoise").map_or(0, |s| s.weights) + opts.extra;
+    let plan_peak = p.peak() + opts.extra;
+    let rows = opts.request.sequence_length(opts.plan.text_tokens);
+    let reserve = denoise_reserve_bytes(rows, opts.bf16_act);
+    let encoder = text_encoder_fp8_bytes(&H3TextEncoderConfig::fasth3_8step());
+    let dit_need = opts.dit_need.unwrap_or(0);
+    let beside = (weights + reserve + RUNTIME_ALLOWANCE)
+        .max(plan_peak)
+        .max(dit_need + opts.extra);
+    let need = encoder + beside;
+    AutoTextEncoder {
+        resident: opts.free >= need,
+        free: opts.free,
+        need,
+        encoder,
+        weights,
+        reserve,
+        plan_peak,
+        dit_need,
+        rows,
     }
 }
 
@@ -617,5 +827,95 @@ mod tests {
         assert!((22.5..28.0).contains(&hd5), "{hd5:.2}");
         assert!((11.2..16.0).contains(&sd5), "{sd5:.2}");
         assert!(hd10 > 1.8 * hd5 - 2.0 && hd15 > hd10);
+    }
+
+
+    /// The resident DiT at the precision it loads with. MXFP8 (45 of 50
+    /// blocks, gate rows bf16) is the 23.87 GiB `dit` the RTX PRO 6000 ledger
+    /// reported for the VSA turbo recipe (docs/perf/raw-inference.md); NVFP4
+    /// every block linear at about 4.5 bits.
+    #[test]
+    fn the_resident_dit_is_priced_at_its_precision() {
+        let cfg = H3TransformerConfig::fasth3_8step();
+        let at = |w, gate| gib(dit_blocks_bytes(&cfg, gate, w));
+        let bf16 = at(H3DitWeights::Bf16, true);
+        assert_eq!(dit_blocks_bytes(&cfg, true, H3DitWeights::Bf16), cfg.num_layers as u64 * block_bytes(&cfg, true));
+        let mx = at(H3DitWeights::Mxfp8, true);
+        assert!((23.0..24.5).contains(&mx), "{mx:.2}");
+        let w8 = at(H3DitWeights::W8a8, true);
+        assert!(w8 < mx && w8 > bf16 / 2.0, "{w8:.2}");
+        let nv = at(H3DitWeights::Nvfp4, true);
+        assert!((10.5..11.5).contains(&nv), "{nv:.2}");
+        eprintln!("dit blocks (gated): bf16 {bf16:.2}, mxfp8 {mx:.2}, w8a8 {w8:.2}, nvfp4 {nv:.2} GiB");
+        // The plan's resident stages move by exactly the difference.
+        let g = H3Geometry::default_16x9(5).unwrap();
+        let p = |dit| {
+            plan(
+                &g,
+                H3PlanOptions {
+                    gate: true,
+                    dit,
+                    ..H3PlanOptions::default()
+                },
+            )
+        };
+        let (b, m) = (p(H3DitWeights::Bf16), p(H3DitWeights::Mxfp8));
+        let diff = dit_blocks_bytes(&cfg, true, H3DitWeights::Bf16)
+            - dit_blocks_bytes(&cfg, true, H3DitWeights::Mxfp8);
+        for (x, y) in b.stages.iter().zip(&m.stages) {
+            assert_eq!(x.total(), y.total() + diff, "{}", x.stage);
+        }
+        // Streamed blocks are priced as bf16 whatever the precision.
+        let s = |dit| {
+            plan(
+                &g,
+                H3PlanOptions {
+                    gate: true,
+                    dit,
+                    ..H3PlanOptions::streamed()
+                },
+            )
+            .peak()
+        };
+        assert_eq!(s(H3DitWeights::Bf16), s(H3DitWeights::Mxfp8));
+    }
+
+    /// The decision's arithmetic: everything it adds is in `need`, and the
+    /// DiT placement's need is a floor.
+    #[test]
+    fn the_auto_text_encoder_need_adds_up() {
+        let g = H3Geometry::default_16x9(5).unwrap();
+        let inputs = AutoTextEncoderInputs {
+            free: 94 * GIB,
+            plan: H3PlanOptions {
+                gate: true,
+                dit: H3DitWeights::Mxfp8,
+                ..H3PlanOptions::default()
+            },
+            request: g.clone(),
+            bf16_act: true,
+            extra: 2 * GIB,
+            dit_need: None,
+        };
+        let d = auto_text_encoder(&inputs);
+        let rows = g.sequence_length(PLAN_TEXT_TOKENS);
+        assert_eq!(d.rows, rows);
+        assert_eq!(d.reserve, denoise_reserve_bytes(rows, true));
+        assert_eq!(d.encoder, text_encoder_fp8_bytes(&H3TextEncoderConfig::fasth3_8step()));
+        assert_eq!(d.need, d.encoder + (d.weights + d.reserve + RUNTIME_ALLOWANCE).max(d.plan_peak));
+        assert!(d.resident);
+        let floor = AutoTextEncoderInputs {
+            dit_need: Some(80 * GIB),
+            ..inputs.clone()
+        };
+        let f = auto_text_encoder(&floor);
+        assert_eq!(f.need, f.encoder + 82 * GIB);
+        assert!(!f.resident);
+        // A larger planned request needs more.
+        let long = AutoTextEncoderInputs {
+            request: H3Geometry::default_16x9(10).unwrap(),
+            ..inputs
+        };
+        assert!(auto_text_encoder(&long).need > d.need);
     }
 }
