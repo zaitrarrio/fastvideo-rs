@@ -75,9 +75,11 @@ extern "C" __global__ void __launch_bounds__(256) vdn_sconv5(
     const unsigned short* __restrict__ x, long stride, long off, int gh, int gw, int C,
     const unsigned short* __restrict__ wt, unsigned short* __restrict__ out
 ) {
-    const int c = (blockIdx.x * 256 + threadIdx.x) * 2;
+    // Tokens on grid x (up to 2^31 - 1; grid y stops at 65535, below the
+    // 100k inner tokens of a 14.4 s 768p clip), channel pairs on grid y.
+    const int c = (blockIdx.y * 256 + threadIdx.x) * 2;
     if (c >= C) return;
-    const long tok = blockIdx.y;
+    const long tok = blockIdx.x;
     const int per = gh * gw;
     const long f = tok / per;
     const int rem = (int)(tok % per);
