@@ -16,7 +16,9 @@
 # Nothing is written to /workspace. /srv is served on :8000: log.txt, status.tsv (step, rc, seconds), *.log, the
 # comparisons, the clips and DONE (0 = every step ok).
 # Env: FV_PROMPT, FV_SEED, FV_H/FV_W/FV_FRAMES (parity geometry, default 832x480x124), FV_STEPS (8), FV_SKIP
-# (space-separated step names), FV_UP_KERNELS / FV_UP_SOFTMAX (oracle_vdn.py, default eager / ref).
+# (space-separated step names), FV_UP_KERNELS / FV_UP_SOFTMAX (oracle_vdn.py, default eager / ref),
+# FV_VDN_MODEL (stage-b, default: the stage-B checkpoint; 8step: the DMD model, vdn-h3-dmd-250-turbo over stage B),
+# FV_INJ_ARMS (the injected runs, <name>:<FASTVIDEO_H3_QUANT or "default">, default "inj:off inj-served:default").
 set -u
 SRV=/srv
 L=/fvw
@@ -79,7 +81,22 @@ step vdn-setup vdn_setup & upid=$!
 wait "$fpid"
 STAGE="$(ls -d $L/vdn-h3-stage-b-2000/*/stage-b-step-2000 $L/vdn-h3-stage-b-2000/stage-b-step-2000 2>/dev/null | head -1)"
 [[ -n "$STAGE" && -f "$STAGE/diffusers/config.json" ]] || { log "no VDN tree under $L"; ls -R $L | head -40 >>$SRV/log.txt; echo 1 >$SRV/DONE; exit 1; }
-log "VDN checkpoint: $STAGE"
+# What ours loads (FASTVIDEO_H3_VDN / _SHARED) and what the reference loads (one complete stage directory).
+OURS_VDN="$STAGE"; OURS_SHARED=""; UP_STAGE="$STAGE"; RECIPE="vdn-h3-${STEPS}step"
+if [[ "${FV_VDN_MODEL:-stage-b}" == 8step ]]; then
+  TURBO="$(ls -d $L/vdn-h3-dmd-250-turbo/*/stage-dmd-step-250 $L/vdn-h3-dmd-250-turbo/stage-dmd-step-250 2>/dev/null | head -1)"
+  [[ -n "$TURBO" && -f "$TURBO/diffusers/config.json" ]] || { log "no turbo tree under $L"; echo 1 >$SRV/DONE; exit 1; }
+  OURS_VDN="$TURBO"; OURS_SHARED="$STAGE"; RECIPE=vdn-h3-8step
+  # The reference reads stage-dmd-step-250 whole: the turbo tree's files plus stage B's byte-identical branch,
+  # default adapter and remote code, linked (nothing copied).
+  UP_STAGE=$L/vdn8/stage-dmd-step-250
+  mkdir -p "$UP_STAGE"
+  cp -rs "$TURBO/." "$UP_STAGE/"
+  for f in linear_branch/model.safetensors adapters/default/adapter_model.safetensors diffusers/modeling_vdn_h3.py; do
+    [[ -e "$UP_STAGE/$f" ]] || { mkdir -p "$(dirname "$UP_STAGE/$f")"; ln -s "$STAGE/$f" "$UP_STAGE/$f"; }
+  done
+fi
+log "VDN checkpoint: ours $OURS_VDN (shared ${OURS_SHARED:-none}), reference $UP_STAGE, recipe $RECIPE"
 step fetch-v2 fetch /opt/fv/plan-v2.json v2 & v2pid=$!
 
 # ---- 2. the kernels ---------------------------------------------------------------------------------------------
@@ -87,11 +104,11 @@ step kernels "$BIN" --mode fast --out $SRV/gc --keep-going kernels --groups vdn 
 
 # ---- 3. parity -------------------------------------------------------------------------------------------------
 GEN=("$BIN" --mode fast h3 gen --prompt "$P" --seed "$SEED" --text-cache $L/text-cache)
-vdn() { env FASTVIDEO_H3_VDN="$STAGE" "$@"; }
+vdn() { env FASTVIDEO_H3_VDN="$OURS_VDN" FASTVIDEO_H3_VDN_SHARED="$OURS_SHARED" "$@"; }
 # a. ours on our own noise, dumping our text encoder's hidden states (bf16 linears, the streamed bf16 encoder).
 ours_text() {
   vdn env FASTVIDEO_H3_QUANT=off FASTVIDEO_DUMP_DIR=$SRV/ours/text-dump \
-    "${GEN[@]}" --height "$H" --width "$WD" --num-frames "$NF" --weights "$W/h3-base" --h3-recipe "vdn-h3-${STEPS}step" \
+    "${GEN[@]}" --height "$H" --width "$WD" --num-frames "$NF" --weights "$W/h3-base" --h3-recipe "$RECIPE" \
     --text-encoder streamed --dit-offload resident --clip-dir $SRV/ours/seed-bf16 >>$SRV/ours-text.log 2>&1
 }
 step ours-text ours_text
@@ -99,19 +116,21 @@ wait "$upid"
 # b. upstream on our text, its own noise
 upstream() {
   mkdir -p $SRV/up
-  $VPY /opt/fv/upstream/oracle_vdn.py --base-parent "$W" --stage "$STAGE" --text-hidden $SRV/ours/text-dump \
+  $VPY /opt/fv/upstream/oracle_vdn.py --base-parent "$W" --stage "$UP_STAGE" --text-hidden $SRV/ours/text-dump \
     --height "$H" --width "$WD" --frames "$NF" --steps "$STEPS" --seed "$SEED" \
     --kernels "${FV_UP_KERNELS:-eager}" --softmax "${FV_UP_SOFTMAX:-ref}" --dump $SRV/up/dump --out $SRV/up \
     >>$SRV/upstream.log 2>&1
 }
 step upstream upstream
 # c. ours on the reference's noise and text: bf16 linears (the reference's), then the served default (MXFP8)
-ours_injected() { # <name> <quant>
-  vdn env FASTVIDEO_H3_QUANT="$2" FASTVIDEO_INJECT_DIR=$SRV/up/dump FASTVIDEO_DUMP_DIR=$SRV/ours/$1-dump \
-    "${GEN[@]}" --height "$H" --width "$WD" --num-frames "$NF" --weights "$W/h3-base" --h3-recipe "vdn-h3-${STEPS}step" \
+ours_injected() { # <name> <quant | default: FASTVIDEO_H3_QUANT unset, the served default>
+  local q=(env)
+  [[ "$2" == default ]] || q=(env FASTVIDEO_H3_QUANT="$2")
+  vdn "${q[@]}" FASTVIDEO_INJECT_DIR=$SRV/up/dump FASTVIDEO_DUMP_DIR=$SRV/ours/$1-dump \
+    "${GEN[@]}" --height "$H" --width "$WD" --num-frames "$NF" --weights "$W/h3-base" --h3-recipe "$RECIPE" \
     --text-encoder streamed --dit-offload resident --clip-dir $SRV/ours/$1 >>$SRV/ours-$1.log 2>&1
 }
-for arm in inj:off inj-served:mxfp8; do
+for arm in ${FV_INJ_ARMS:-inj:off inj-served:default}; do
   name="${arm%%:*}"
   step "ours-$name" ours_injected "$name" "${arm#*:}"
   step "compare-dumps-$name" "$BIN" compare-dumps --baseline $SRV/up/dump --candidate $SRV/ours/$name-dump >$SRV/compare-dumps-$name.txt 2>&1

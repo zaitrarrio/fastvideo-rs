@@ -6,11 +6,12 @@ Target: [`OpenVDN/vdn-minimax-h3`](https://huggingface.co/OpenVDN/vdn-minimax-h3
 blog https://openvdn.github.io/. Owner request 2026-10-13: "let's implement https://huggingface.co/OpenVDN/vdn-minimax-h3".
 Download approval (2026-10-13): `stage-b-step-2000/` plus the small root files only.
 
-Status: see §0. Ported and validated (stage 1): the stage-B model, served as `vdn-h3`; parity §5, timing §6, open items §7.
+Status: see §0. Ported and validated (stage 1): the 50-step stage-B model, served as `vdn-h3`, and the 8-step DMD model,
+served as `vdn-h3-8step` (§8); both default to bf16 linears (§2.7). Parity §5 / §8, timing §6 / §8, open items §7.
 
-## 0. Status and the one open decision
+## 0. Status: two checkpoints, both served
 
-**The 8-step model is not the approved tree.** The repository holds two VDN checkpoints over the same `h3-base/`:
+The repository holds two VDN checkpoints over the same `h3-base/`:
 
 | directory | model card name | what it is | files beyond the other |
 |---|---|---|---|
@@ -18,11 +19,10 @@ Status: see §0. Ported and validated (stage 1): the stage-B model, served as `v
 | `stage-dmd-step-250/` | **VDN-H3-8-step** | the same branch and the same default LoRA (byte-identical files: LFS `dec6981c…`, `58558fef…`), **plus** `adapters/turbo/` (0.85 GB, DMD2 without GAN, 250 steps, teacher = stage B) | `adapters/turbo/adapter_model.safetensors` (851,452,696 B, LFS `24fc93c8…`) and three small JSON files |
 
 `modular_model_index.json` points the diffusers pipeline at `stage-dmd-step-250/diffusers`; every 8-step number on the model
-card (SGLang 6.9 s on 8xB200, `8nfe_*.yaml`) is that directory. The brief's "distilled to 8 steps" therefore needs the turbo
-adapter, which the approval does not cover. This port loads any list of VDN adapters (the turbo adapter's mixed ranks and its
-FFN / AdaLN / `norm_out` targets included, §2.6), so the 8-step model is one add-only publish away
-(`stage-dmd-step-250/adapters/turbo/*` + its `adapter_spec.json`, `metadata.json`, `model_spec.json`, `diffusers/config.json`;
-the branch and default adapter would be reused from `vdn-h3-stage-b-2000`). That download (0.85 GB) needs the owner's yes.
+card (SGLang 6.9 s on 8xB200, `8nfe_*.yaml`) is that directory. The first approval (2026-10-13) covered stage B only; the
+owner approved the turbo adapter on 2026-10-14. It is its own R2 tree, `vdn-h3-dmd-250-turbo` (the turbo LoRA and the
+stage's JSON files, 851,503,008 B); the branch and default adapter are read from `vdn-h3-stage-b-2000`
+(`H3Recipe.vdn_shared`, §2.6). Served: `vdn-h3` (50 forwards) and `vdn-h3-8step` (8 forwards, §8).
 
 ## 1. The reference, read in full
 
@@ -237,23 +237,31 @@ covered (the spatial conv puts tokens on grid x for that reason).
 `H3LoraFuse::open_vdn(base, adapters)` reads peft keys (`…attn.orig.to_q.lora_A.default.weight`), reroots `.attn.orig.`
 to our `.attn.`, concatenates ranks across adapters per target (the turbo adapter's mixed rank 16 / 64 and its FFN, AdaLN
 and `norm_out` targets included) and merges with multiplier 1.0 into the bf16 base weights at load, before any
-quantization. Stage B: rank 64 on attention q / k / v / out.0 of the 50 blocks and the refiner, 208 pairs.
+quantization. The 8-step model's stage directory (`vdn-h3-dmd-250-turbo/stage-dmd-step-250`) names
+`linear_branch/model.safetensors` and `adapters/default/…` it does not carry; `VdnCheckpoint::open_shared` takes those
+from the same relative paths under the shared stage directory (stage B, same transform required): the pipeline option
+`vdn_shared` / `FASTVIDEO_H3_VDN_SHARED`, the catalog's `H3Recipe.vdn_shared`. Turbo merges 363 pairs (the attention at
+rank 64 + 64, FFN / AdaLN / `norm_out` at 16). Stage B: rank 64 on attention q / k / v / out.0 of the 50 blocks and the refiner, 208 pairs.
 The manifest tests pin every adapter key to a published h3-base parameter (208 pairs for the default adapter, 363 for
 turbo, from the safetensors headers).
 
 ### 2.7 fp8
 
-The served default on sm_120 keeps our MXFP8 linears (blocks 2-46, as FastH3 V2); the branch's narrow projections stay
-bf16 and the attention itself is bf16 (`AttnMode::Vdn` never takes the MX attention path). `FASTVIDEO_H3_QUANT=off`
-gives bf16 linears like the upstream default. Parity of both is in §5.
+**bf16 linears by default** (owner decision 2026-10-14, after §5's MXFP8 numbers): a VDN load runs under
+`QuantMode::scoped_default(Off)`, so an unset `FASTVIDEO_H3_QUANT` means bf16 for this model only (other H3 models keep
+the MXFP8 default of sm_100+); `FASTVIDEO_H3_QUANT=mxfp8` still opts in (blocks 2-46, as FastH3 V2). The branch's narrow
+projections and the attention are bf16 either way (`AttnMode::Vdn` never takes the MX attention path). Upstream's fp8 is
+opt-in too.
 
 ## 3. Weights and licence
 
-R2 tree `vdn-h3-stage-b-2000` (docs/ops/r2-weights.md §13): `stage-b-step-2000/linear_branch/` (4,279,428,112 B,
+R2 tree `vdn-h3-stage-b-2000` (docs/ops/r2-weights.md §14): `stage-b-step-2000/linear_branch/` (4,279,428,112 B,
 `sha256:dec6981c…`) and `stage-b-step-2000/adapters/default/adapter_model.safetensors` (334,026,912 B, `sha256:58558fef…`)
 plus configs, `LICENSE`, `README.md`, `modular_model_index.json`; 11 files, 4,613,679,322 B. Recorded in
 `scripts/gpu/weights-{manifest,revisions,sha256,r2}.tsv` and `verify-weights.sh` (cell `vdn-h3` = h3-base + the branch
-and adapter). The DiT, VAEs, text encoder and tokenizer are our `h3-base` (the repository's `h3-base/` is MiniMax-H3
+and adapter). The 8-step model adds R2 tree `vdn-h3-dmd-250-turbo` (7 files, 851,503,008 B, manifest `4f877979…`:
+`stage-dmd-step-250/adapters/turbo/adapter_model.safetensors`, 851,452,696 B, `sha256:24fc93c8…`, plus the stage's JSON
+files; verify cell `vdn-h3-8step`). The DiT, VAEs, text encoder and tokenizer are our `h3-base` (the repository's `h3-base/` is MiniMax-H3
 @ `42ed227`, 28 of 29 files byte-identical, README aside).
 
 Licence: the weights carry the **MiniMax H3 Community License** (the base model's), whose territory clause excludes the
@@ -263,14 +271,14 @@ on the pod).
 
 ## 4. Tests
 
-- `fastvideo-models` h3 suite: 130 passed, 11 of them VDN (transform parsing and strictness, window bounds and full cover,
+- `fastvideo-models` h3 suite (after merging main): 139 passed, 12 of them VDN (incl. `the_turbo_tree_reads_stage_b_files_it_does_not_carry`) (transform parsing and strictness, window bounds and full cover,
   adapter key rerooting, the packed layout and gather plan, the host branch against a direct dense reference, recipe
   names and contracts), plus manifest tests `vdn_branch_asks_for_exactly_the_published_branch`,
   `vdn_adapters_target_published_base_parameters`, `vdn_configs_parse`.
-- `fastvideo-cudarc` h3 / `wan::attn` / `wan::quant`: 114 passed, including the CPU tests
+- `fastvideo-cudarc` h3 / `wan::attn` / `wan::quant`: 116 passed, including `a_scoped_default_applies_only_while_its_guard_lives` and the CPU tests
   `a_covered_clip_with_an_open_gate_is_dense_attention`, `the_branch_writes_only_the_inner_video_rows`,
   `the_window_softmax_is_the_reference_mask`.
-- `fastvideo-engine-service --features cuda` `cuda::` 20 passed (`vdn_catalog_entry` new); without cuda 65 passed;
+- `fastvideo-engine-service --features cuda`: 70 passed (`vdn_catalog_entry`, `vdn_8step_catalog_entry` new);
   `fastvideo-serve` e2e `shipped_configs_parse` passed (the new config).
 - control: `tsc`, `tsc -p ui`, vitest 445 / 445, integration 36 / 36 steps.
 - GPU (`fv-gpucheck kernels`, group `vdn`, RTX PRO 6000), each kernel against the host reference, rel-L2:
@@ -320,14 +328,15 @@ branch is deterministic, so nothing amplifies a rounding difference into a diffe
 operation order) on the block whose inputs are largest; it does not grow. The clips show the same person,
 framing and room (`artifacts/ports/vdn-h3/samples/frame62-upstream-ours-ours768.jpg`: upstream, ours bf16, ours 768p).
 
-**MXFP8 stays the sm_120 default**, as for every other H3 model: it is 1.20x faster per step (2.81 vs 3.37 s at 480p)
-and the first steps stay at the bf16 level (step-1 latents 7.3e-4); the 9 dB lower clip PSNR is the later-step
-divergence of a sample that is still the same scene. Upstream's own fp8 (opt-in) "changes the sample" too.
-`FASTVIDEO_H3_QUANT=off` gives the bf16 reference behaviour.
+MXFP8 is 1.20x faster per step (2.81 vs 3.37 s at 480p) and keeps the first steps at the bf16 level (step-1 latents
+7.3e-4), but costs 9 dB of clip PSNR. **The owner chose bf16 as the default (2026-10-14)**; MXFP8 is an explicit opt-in
+(`FASTVIDEO_H3_QUANT=mxfp8`, §2.7).
 
 ## 6. Timing (RTX PRO 6000 Blackwell 96 GB, same pod, served defaults, `--warm`)
 
-One process per model and geometry; a cold generation, then the measured one (text from the cache). Ours: MXFP8 linears,
+Measured before the bf16 default (§2.7): these VDN numbers are with MXFP8 linears; bf16 is 1.20x slower per step
+(3.36-3.37 s at 480p, 9.05 s at 768p, §8). One process per model and geometry; a cold generation, then the measured one
+(text from the cache). Ours: MXFP8 linears,
 FP8 text encoder resident (streamed for the long clips), DiT resident. VDN runs use the stage-B weights on the 8-step
 grid: per step identical to the 8-step model (its turbo LoRA is merged at load, no runtime cost). Logs:
 `artifacts/ports/vdn-h3/validate/time-*.log`.
@@ -360,9 +369,49 @@ h3-turbo on the same pod; not optimized.
 - Pods: publish `xfrhraloihumz6` (CPU, $0.24/hr, ~3 min) and validation `lldpc5jbqska0t` (RTX PRO 6000, $2.49/hr,
   00:38-01:57 UTC, about $3.3); both deleted and verified gone (`GET /pods/<id>`: not found); the validation bundle in
   `fv-weights-staging/tmp/` removed. Builds and CPU tests on the shared build pod.
-- **Not done:** the 8-step distilled model (needs the 0.85 GB turbo adapter, §0; the loader and the manifest test for it
-  are in place); image-to-video and first/last-frame (keyframe rows are handled as global rows in the masks, but no
+- 2026-10-14: publish pod `u1b1t6lwbrtks5` (CPU, $0.48/hr, ~3 min) for the turbo tree and validation pod
+  `od2u3hq4hix4zo` (RTX PRO 6000, $2.49/hr, 02:37-03:15 UTC, about $1.6); both deleted by hand and verified gone (404),
+  and only their own staged bundles removed (exact key prefix).
+- **Not done:** image-to-video and first/last-frame (keyframe rows are handled as global rows in the masks, but no
   serve task is exposed); tensor-core branch kernels; upstream's fused-kernel / flex-softmax path as a second oracle
   (the eager path was used); an H100 run (sm_90: the window kernel is our FA2 MMA kernel, the branch kernels are
   generic CUDA, built but not run there); a served end-to-end request through fv-serve on a GPU (the catalog entry,
   config and preset are tested on CPU only); dense timing at 345 frames.
+
+## 8. The 8-step model (`vdn-h3-8step`, 2026-10-14)
+
+Same method and geometry as §5 (832 x 480, 124 frames, seed 1024, 8 steps, upstream eager + exact softmax on our text,
+ours on the reference's noise and text), now on the DMD model: the reference reads `stage-dmd-step-250` whole (the turbo
+tree's files with stage B's branch, default adapter and remote code linked in), ours reads the turbo tree with stage B
+as `FASTVIDEO_H3_VDN_SHARED`. Ours ran with `FASTVIDEO_H3_QUANT` unset, i.e. the new served default, and loaded bf16
+(3.36 s / step, the bf16 rate). Logs: `artifacts/ports/vdn-h3/validate-8step/`.
+
+| tensor | ours (served default, bf16) |
+|---|---:|
+| sigmas, timesteps, injected noise | 0 (bitwise) |
+| step-1 block 0 / 1 / 10 / 20 / 30 / 41 / 49 | 5.1e-3 / 3.6e-3 / 4.6e-3 / 1.4e-2 / 3.1e-2 / 0.15 / 8.6e-2 |
+| **step-1 velocity, video / audio** | **6.6e-2 / 6.3e-2** |
+| video latents after steps 1 / 2 / 4 / 8 | 1.1e-3 / 4.3e-3 / 2.2e-2 / 0.41 |
+| audio latents after steps 1 / 8 | 3.2e-3 / 0.31 |
+
+| pair | video PSNR | min frame | audio PSNR |
+|---|---:|---:|---:|
+| upstream vs ours (bf16, injected) | **18.9 dB** | 17.1 dB | **20.9 dB** |
+
+Reading: the first blocks match better than stage B's (block 0 5.1e-3 vs 1.4e-2), so the turbo merge (AdaLN, FFN and
+attention LoRAs) is right; the per-block difference then grows faster through blocks 20-41 than on stage B (0.15 vs
+7.1e-2 at block 41) and the step-1 velocity is 3.5x stage B's. The DMD student is more sensitive to bf16 rounding
+(a few-step generator's sharper map), and its 8 large steps carry that into a sample that diverges in detail: the clips
+show the same person, framing, room and speech with different cushions, lamp and background details
+(`samples/frame62-8step-upstream-ours-ours768.jpg`: upstream, ours, ours 768p). For scale, FastH3 V2 / Trim, also DMD,
+gave 16.6 dB in bf16 against their reference (docs/ports/h3-trim.md §6.1).
+
+Timing (warm, served default = bf16 linears, FP8 text encoder resident, DiT resident; same pod):
+
+| VDN-H3 8-step, warm | denoise (s / step) | end to end | peak |
+|---|---:|---:|---:|
+| 832 x 480, 124 frames | 26.93 s (3.37) | 30.08 s | 73.2 GiB |
+| 1344 x 768, 124 frames | 72.33 s (9.05) | 79.99 s | 70.6 GiB |
+
+Against §6 (same GPU type, FastH3 V2 dense 8-step 2.13 / 8.40 s per step with MXFP8, h3-turbo 1.76 / 4.79 s): bf16 VDN-H3 is
+1.08x slower than V2 at 768p and 1.58x at 480p. MXFP8 opt-in brings it to 2.81 / 7.59 s per step (§6). Load: 330-333 s.

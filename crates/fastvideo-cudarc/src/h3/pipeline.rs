@@ -376,7 +376,11 @@ pub fn vdn_checkpoint(
             let shared = options
                 .vdn_shared
                 .clone()
-                .or_else(|| std::env::var_os(H3_VDN_SHARED_ENV).map(PathBuf::from));
+                .or_else(|| {
+                    std::env::var_os(H3_VDN_SHARED_ENV)
+                        .filter(|s| !s.is_empty())
+                        .map(PathBuf::from)
+                });
             fastvideo_models::h3::vdn::VdnCheckpoint::open_shared(&d, shared.as_deref())
                 .map(Some)
                 .map_err(msg)

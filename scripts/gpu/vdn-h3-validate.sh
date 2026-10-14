@@ -78,6 +78,9 @@ case "$cmd" in
     # The R2 plan: the VDN tree whole and h3-8step's DiT and VAEs (FastH3 V2, timed); in r2 mode also h3-base
     # (transformer, VAEs, bf16 text encoder, tokenizer) and the turbo LoRA.
     trees=(vdn-h3-stage-b-2000 h3-8step)
+    # FV_VDN_MODEL=8step: the DMD model (its turbo tree over stage B); FastH3 V2 is left out with FV_NO_V2=1.
+    [[ "${FV_VDN_MODEL:-}" == 8step ]] && trees+=(vdn-h3-dmd-250-turbo)
+    [[ "${FV_NO_V2:-0}" == 1 ]] && trees=("${trees[@]/h3-8step}") && mapfile -t trees < <(printf '%s\n' "${trees[@]}" | grep .)
     [[ "$mode" == r2 ]] && trees+=(h3-base FastH3-4-step-Preview-v1-LoRA)
     python3 "$HERE/r2-weights.py" plan "${trees[@]}" --ttl 10800 --out "$tmp/plan-all.json"
     python3 - "$tmp/plan-all.json" "$tmp/b/plan.json" <<'PYEOF'
@@ -118,7 +121,8 @@ sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
     payload="$(jq -n --arg name "fv-vdnh3-$(date -u +%m%d%H%M)" --arg image "$IMAGE" --arg vol "$FV_EU_VOLUME_ID" --argjson dcs "$dcs_json" --arg mode "$mode" \
       --arg start "$start" --arg sha "$sha" --argjson gpus "$gpus_json" \
       --arg prompt "${FV_PROMPT:-}" --arg seed "${FV_SEED:-}" --arg h "${FV_H:-}" --arg w "${FV_W:-}" --arg nf "${FV_FRAMES:-}" --arg skip "${FV_SKIP:-}" \
-      --arg steps "${FV_STEPS:-}" --arg upk "${FV_UP_KERNELS:-}" --arg ups "${FV_UP_SOFTMAX:-}" '{
+      --arg steps "${FV_STEPS:-}" --arg upk "${FV_UP_KERNELS:-}" --arg ups "${FV_UP_SOFTMAX:-}" \
+      --arg model "${FV_VDN_MODEL:-}" --arg arms "${FV_INJ_ARMS:-}" '{
         name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU", gpuCount: 1, gpuTypeIds: $gpus,
         gpuTypePriority: "custom", dataCenterIds: $dcs, ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-lc", $start],
         env: ({FV_BUNDLE_URL: env.FVX_URL, FV_BUNDLE_SHA256: $sha, FV_WEIGHTS_MODE: $mode}
@@ -126,6 +130,7 @@ sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
               + (if $h != "" then {FV_H: $h} else {} end) + (if $w != "" then {FV_W: $w} else {} end)
               + (if $nf != "" then {FV_FRAMES: $nf} else {} end) + (if $skip != "" then {FV_SKIP: $skip} else {} end)
               + (if $steps != "" then {FV_STEPS: $steps} else {} end)
+              + (if $model != "" then {FV_VDN_MODEL: $model} else {} end) + (if $arms != "" then {FV_INJ_ARMS: $arms} else {} end)
               + (if $upk != "" then {FV_UP_KERNELS: $upk} else {} end) + (if $ups != "" then {FV_UP_SOFTMAX: $ups} else {} end))
       } + (if $mode == "volume" then {containerDiskInGb: 200, networkVolumeId: $vol, volumeMountPath: "/workspace"}
            else {containerDiskInGb: 400, allowedCudaVersions: ["13.0"]} end)')"
