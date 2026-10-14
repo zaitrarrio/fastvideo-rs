@@ -64,15 +64,85 @@ static FUSED_BROKEN: AtomicBool = AtomicBool::new(false);
 /// is reduction order, so decoded pixels agree to bf16 noise, far below this.
 const FUSED_CHECK_REL_L2: f64 = 1e-2;
 
-/// `FASTVIDEO_H3_VAE_MXFP8=1` (default off; a numerics change): the four
-/// block linears of the fused ViT run as MXFP8 GEMMs (E4M3, one E8M0 scale
-/// per 32 values, the DiT's `[techniques.mxfp8]` recipe and cuBLASLt path),
-/// weights quantized from the bf16 checkpoint at load, activations quantized
-/// by the kernel that produces them. See docs/perf/h3-vae-decode-speed.md.
-#[cfg(feature = "cuda")]
-fn mxfp8_requested() -> bool {
-    static FLAG: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
-    FLAG.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_H3_VAE_MXFP8", false))
+/// `FASTVIDEO_H3_VAE_MXFP8` (a numerics change): the four block linears of
+/// the fused ViT run as MXFP8 GEMMs (E4M3, one E8M0 scale per 32 values, the
+/// DiT's `[techniques.mxfp8]` recipe and cuBLASLt path), weights quantized
+/// from the bf16 checkpoint at load (kept beside the bf16 ones, +2.3 GiB for
+/// the 36-block decoder), activations quantized by the kernel that produces
+/// them. See docs/perf/h3-vae-decode-speed.md.
+///
+/// **Default on** (owner decision 2026-10-14) where it was measured: a live
+/// device with block-scaled FP8 (sm_100+, as the DiT's MXFP8 default) and the
+/// 36-block decoder. Unset elsewhere (pre-Blackwell GPUs, CPU runs, the
+/// 26-block lightweight decoder) it means bf16, said once in the log. `=0`
+/// is the bf16 decode exactly (byte-identical to the earlier default); `=1`
+/// asks for MXFP8 on any decoder and is an error on a GPU without
+/// block-scaled FP8 (cuBLASLt has no MXFP8 kernels below sm_100). Any other
+/// value is an error.
+pub const MXFP8_ENV: &str = "FASTVIDEO_H3_VAE_MXFP8";
+
+/// Decoder blocks of the decoder the MXFP8 default was measured on.
+pub const MXFP8_DEFAULT_LAYERS: usize = 36;
+
+/// [`MXFP8_ENV`] resolved for a decoder of `layers` blocks: `explicit` is
+/// the variable's value (`None` when unset), `sm_major` the live device's
+/// compute capability (`None` without a device). `Ok((on, why))`: `why`
+/// says why an unset variable means bf16 (for the log).
+pub fn resolve_mxfp8(
+    explicit: Option<&str>,
+    sm_major: Option<i32>,
+    layers: usize,
+) -> Result<(bool, Option<String>)> {
+    let explicit = explicit.map(str::trim).filter(|v| !v.is_empty());
+    match explicit.map(str::to_ascii_lowercase).as_deref() {
+        Some("0" | "false" | "off") => Ok((false, None)),
+        Some("1" | "true" | "on") => match sm_major {
+            Some(sm) if sm < 10 => Err(msg(format!(
+                "{MXFP8_ENV}=1 needs block-scaled FP8 (sm_100+; this GPU is sm_{sm}x): unset it or set {MXFP8_ENV}=0 for the bf16 decode"
+            ))),
+            _ => Ok((true, None)),
+        },
+        Some(v) => Err(msg(format!("{MXFP8_ENV}={v}: expected 0 or 1"))),
+        None => match sm_major {
+            None => Ok((false, None)),
+            Some(sm) if sm < 10 => Ok((
+                false,
+                Some(format!(
+                    "bf16 decoder linears (MXFP8 needs sm_100+, this GPU is sm_{sm}x)"
+                )),
+            )),
+            Some(_) if layers != MXFP8_DEFAULT_LAYERS => Ok((
+                false,
+                Some(format!(
+                    "bf16 decoder linears (the MXFP8 default is measured on the {MXFP8_DEFAULT_LAYERS}-block decoder, this one has {layers}; {MXFP8_ENV}=1 opts in)"
+                )),
+            )),
+            Some(_) => Ok((true, None)),
+        },
+    }
+}
+
+/// [`resolve_mxfp8`] for this process: the variable (or the technique
+/// profile's value) and the live device. Whether a decoder of `layers`
+/// blocks loads MXFP8 copies of its block linears (the memory plan prices
+/// them with it, [`fastvideo_models::h3::memory::H3PlanOptions::vae_mxfp8`]).
+pub fn mxfp8_wanted(layers: usize) -> Result<bool> {
+    mxfp8_resolved(layers).map(|(on, _)| on)
+}
+
+fn mxfp8_resolved(layers: usize) -> Result<(bool, Option<String>)> {
+    #[cfg(feature = "cuda")]
+    let sm = crate::wan::stats::device_expected()
+        .then(crate::wan::device::global_device)
+        .flatten()
+        .map(|d| d.sm_major);
+    #[cfg(not(feature = "cuda"))]
+    let sm = None;
+    resolve_mxfp8(
+        fastvideo_models::techniques::settings::var(MXFP8_ENV).as_deref(),
+        sm,
+        layers,
+    )
 }
 
 /// The MXFP8 forward against the unfused f32-activation ViT, in
@@ -417,9 +487,19 @@ impl H3VideoDecoder {
         let mut blocks = (0..cfg.decoder_num_layers)
             .map(|i| Block::load(map, &format!("decoder.transformer_blocks.{i}"), &cfg))
             .collect::<Result<Vec<_>>>()?;
+        let (mx_on, mx_why) = mxfp8_resolved(blocks.len())?;
+        if let Some(why) = mx_why {
+            static SAID: AtomicBool = AtomicBool::new(false);
+            if !SAID.swap(true, Ordering::Relaxed) {
+                crate::wan::log::info(format_args!("h3 vae: {MXFP8_ENV} unset: {why}"));
+            }
+        }
+        // The MXFP8 GEMMs run only inside the fused ViT, so without it there
+        // is nothing to quantize for.
         #[cfg(feature = "cuda")]
-        if mxfp8_requested()
+        if mx_on
             && crate::wan::stats::device_expected()
+            && fused_enabled()
             && blocks.iter().all(|b| {
                 [&b.qkv, &b.to_out, &b.ff_in, &b.ff_out]
                     .iter()
@@ -430,10 +510,17 @@ impl H3VideoDecoder {
                 b.quantize_mx()?;
             }
             crate::wan::log::info(format_args!(
-                "h3 vae: FASTVIDEO_H3_VAE_MXFP8=1: {} blocks x 4 linears as MXFP8 (E4M3, E8M0 per 32)",
+                "h3 vae: {MXFP8_ENV} {}: {} blocks x 4 linears as MXFP8 (E4M3, E8M0 per 32); {MXFP8_ENV}=0 for bf16",
+                if fastvideo_models::techniques::settings::var(MXFP8_ENV).is_some() {
+                    "=1"
+                } else {
+                    "default"
+                },
                 blocks.len()
             ));
         }
+        #[cfg(not(feature = "cuda"))]
+        let _ = mx_on;
         let to_vec = |v: &[f64]| pinned(v.iter().take(lc).map(|&x| x as f32).collect(), vec![lc]);
         Ok(Self {
             std: to_vec(&cfg.latents_std)?,
@@ -1488,6 +1575,47 @@ mod tests {
         assert_eq!(cfg.temporal_decode_plan(37), (0, 7, 124));
         assert_eq!((balanced_batch(28, 8), balanced_batch(12, 8)), (7, 6));
         assert_eq!((balanced_batch(3, 8), balanced_batch(9, 1)), (3, 1));
+    }
+
+    /// MXFP8 decoder linears are the default on sm_100+ for the 36-block
+    /// decoder (owner decision 2026-10-14); `=0` is bf16 everywhere, `=1`
+    /// asks for MXFP8 and fails on a GPU without block-scaled FP8.
+    #[test]
+    fn vae_mxfp8_defaults_on_for_the_measured_decoder_on_sm100_plus() {
+        let r = |e: Option<&str>, sm: Option<i32>, layers: usize| resolve_mxfp8(e, sm, layers);
+        // Unset.
+        assert_eq!(
+            r(None, Some(12), 36).unwrap(),
+            (true, None),
+            "RTX PRO 6000 / RTX 5090"
+        );
+        assert_eq!(r(None, Some(10), 36).unwrap(), (true, None), "B200");
+        assert_eq!(
+            r(Some(""), Some(10), 36).unwrap(),
+            (true, None),
+            "empty = unset"
+        );
+        let (on, why) = r(None, Some(9), 36).unwrap();
+        assert!(!on && why.unwrap().contains("sm_100+"), "H100: bf16, said");
+        let (on, why) = r(None, Some(12), 26).unwrap();
+        assert!(
+            !on && why.unwrap().contains("26"),
+            "the lightweight decoder: bf16, said"
+        );
+        assert_eq!(r(None, None, 36).unwrap(), (false, None), "CPU run");
+        // =0: bf16 everywhere, nothing to say.
+        for v in ["0", "false", "OFF", " 0 "] {
+            assert_eq!(r(Some(v), Some(12), 36).unwrap(), (false, None), "{v}");
+            assert_eq!(r(Some(v), Some(9), 36).unwrap(), (false, None), "{v}");
+        }
+        // =1: MXFP8 on any decoder; an error below sm_100.
+        for v in ["1", "true", "on"] {
+            assert_eq!(r(Some(v), Some(12), 36).unwrap(), (true, None));
+            assert_eq!(r(Some(v), Some(12), 26).unwrap(), (true, None));
+            let e = r(Some(v), Some(9), 36).unwrap_err().to_string();
+            assert!(e.contains("sm_100+") && e.contains("=0"), "{e}");
+        }
+        assert!(r(Some("yes please"), Some(12), 36).is_err());
     }
 
     #[test]
