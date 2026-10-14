@@ -18,17 +18,19 @@
 /// Head dim the kernels are written for.
 pub const HEAD_DIM: usize = 128;
 
-/// `FASTVIDEO_H3_VSA_FP4=1`: the H3 VSA fine stage on this kernel (the
-/// pipeline honours it for ModelOpt NVFP4 checkpoints only).
+/// `FASTVIDEO_H3_VSA_FP4`: the H3 VSA fine stage on this kernel, for ModelOpt
+/// NVFP4 checkpoints only. Unset: on for those checkpoints where the sm_120
+/// kernel exists (owner decision 2026-10-14); `0` keeps bf16 VSA; `1` insists.
 pub const ENV: &str = "FASTVIDEO_H3_VSA_FP4";
 
 /// `FASTVIDEO_H3_VSA_FP4_P=single`: upstream's single-level P quantization
 /// (the default here is two-level: P pre-scaled by 448 * 6).
 pub const P_ENV: &str = "FASTVIDEO_H3_VSA_FP4_P";
 
-/// Whether the request asked for the FP4 fine stage.
-pub fn requested() -> bool {
-    crate::wan::envflag::bool_flag(ENV, false)
+/// The explicit setting: `Some(true)` for `1`, `Some(false)` for `0` / `false`
+/// / `off`, `None` when unset (the NVFP4 tier's default: on where available).
+pub fn setting() -> Option<bool> {
+    fastvideo_models::techniques::settings::var(ENV).map(|_| crate::wan::envflag::bool_flag(ENV, true))
 }
 
 /// Single-level P quantization (upstream's `single_level_p_quant=True`).

@@ -1,13 +1,15 @@
-# FastH3 NVFP4: sparse FP4 VSA attention (opt-in tier)
+# FastH3 NVFP4: sparse FP4 VSA attention (the NVFP4 tier's default)
 
 Owner-approved work order of 2026-10-14, following docs/ports/fasth3-nvfp4.md §8. The VSA-H3 fine stage on
-block-scaled FP4 tensor cores, behind `FASTVIDEO_H3_VSA_FP4=1`, for the ModelOpt NVFP4 FastH3 checkpoints only.
-**Never a default**: no preset, recipe, catalog entry or profile turns it on.
+block-scaled FP4 tensor cores, for the ModelOpt NVFP4 FastH3 checkpoints only.
+**Default for the NVFP4 tier** (owner decision 2026-10-14, after the §3 results: upstream's speed, a different
+sample than bf16 VSA): with `FASTVIDEO_H3_VSA_FP4` unset, an NVFP4 DiT on sm_120 takes it; `FASTVIDEO_H3_VSA_FP4=0`
+keeps bf16 VSA. Every other DiT is unchanged.
 
 | | |
 |---|---|
-| flag | `FASTVIDEO_H3_VSA_FP4=1` (`FASTVIDEO_H3_VSA_FP4_P=single`: upstream's single-level P quantization) |
-| taken when | the DiT is a ModelOpt NVFP4 `transformer/` (`h3::nvfp4::is_modelopt_dir`) **and** the device is sm_120 with the kernel loaded; any other DiT logs that the flag is ignored; an NVFP4 DiT on another device refuses it |
+| flag | `FASTVIDEO_H3_VSA_FP4`: unset = on for NVFP4 where available, `0` = bf16 VSA, `1` = insist (`FASTVIDEO_H3_VSA_FP4_P=single`: upstream's single-level P quantization) |
+| taken when | the DiT is a ModelOpt NVFP4 `transformer/` (`h3::nvfp4::is_modelopt_dir`) **and** the device is sm_120 with the kernel loaded; otherwise bf16 VSA (logged). An explicit `=1` on any other DiT logs that it is ignored; on an NVFP4 DiT without the kernel it refuses to load |
 | code | `crates/fastvideo-cudarc/src/wan/attn_fp4.{cu,rs}` (kernels, host twins), `h3/vsa.rs` (`H3Vsa::with_fp4`), `h3/pipeline.rs` (`vsa_fp4_choice`), `build.rs` (an sm_120a cubin) |
 | checks | `fv-gpucheck kernels --groups h3_fp4_attn` (`crates/fastvideo-gpucheck/src/kernels_fp4.rs`) |
 | GPU runs | `scripts/gpu/h3-fp4attn-validate.sh` + `h3-fp4attn-pod.sh` |

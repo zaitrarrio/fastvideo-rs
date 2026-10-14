@@ -994,44 +994,61 @@ pub struct H3Pipeline {
     booking: std::sync::Mutex<crate::wan::ledger::Booking>,
     /// VDN-H3: the hybrid transform every block runs (branch attached).
     vdn: Option<fastvideo_models::h3::vdn::VdnTransform>,
-    /// The VSA fine stage on sparse FP4 tensor cores (`FASTVIDEO_H3_VSA_FP4=1`,
+    /// The VSA fine stage on sparse FP4 tensor cores (`FASTVIDEO_H3_VSA_FP4`,
     /// docs/ports/fasth3-sparse-fp4-attn.md): only for a ModelOpt NVFP4 DiT on
-    /// sm_120, decided at load.
+    /// sm_120 (the default there), decided at load.
     vsa_fp4: bool,
 }
 
-/// `FASTVIDEO_H3_VSA_FP4=1` (docs/ports/fasth3-sparse-fp4-attn.md): the VSA
-/// fine stage on sparse FP4 tensor cores. An opt-in speed tier of the ModelOpt
-/// NVFP4 checkpoints only: any other DiT ignores it with a warning, and a
-/// device without the sm_120 kernel refuses it.
+/// `FASTVIDEO_H3_VSA_FP4` (docs/ports/fasth3-sparse-fp4-attn.md): the VSA
+/// fine stage on sparse FP4 tensor cores. The default speed tier of the
+/// ModelOpt NVFP4 checkpoints (owner decision 2026-10-14): unset, it is on for
+/// them where the sm_120 kernel exists and bf16 VSA elsewhere; `0` keeps bf16
+/// VSA; `1` insists, so a device without the kernel refuses it. Any other DiT
+/// ignores it (with a note when it was set).
 fn vsa_fp4_choice(modelopt_nvfp4: bool) -> Result<bool> {
-    if !crate::wan::attn_fp4::requested() {
+    let setting = crate::wan::attn_fp4::setting();
+    if setting == Some(false) {
         return Ok(false);
     }
     if !modelopt_nvfp4 {
-        crate::wan::log::info(format_args!(
-            "h3: {}=1 ignored: the sparse FP4 VSA tier is for the ModelOpt NVFP4 checkpoints only",
-            crate::wan::attn_fp4::ENV
-        ));
+        if setting == Some(true) {
+            crate::wan::log::info(format_args!(
+                "h3: {}=1 ignored: the sparse FP4 VSA tier is for the ModelOpt NVFP4 checkpoints only",
+                crate::wan::attn_fp4::ENV
+            ));
+        }
         return Ok(false);
     }
     #[cfg(feature = "cuda")]
     {
         if !crate::wan::attn_fp4::available() {
-            return Err(msg(format!(
-                "h3: {}=1 needs the sm_120 sparse FP4 attention kernel (not available on this device)",
-                crate::wan::attn_fp4::ENV
-            )));
+            if setting == Some(true) {
+                return Err(msg(format!(
+                    "h3: {}=1 needs the sm_120 sparse FP4 attention kernel (not available on this device)",
+                    crate::wan::attn_fp4::ENV
+                )));
+            }
+            crate::wan::log::info(format_args!(
+                "h3: VSA fine stage on bf16 (no sm_120 sparse FP4 attention kernel on this device)"
+            ));
+            return Ok(false);
         }
         crate::wan::log::info(format_args!(
-            "h3: VSA fine stage on sparse FP4 tensor cores ({}=1, P {})",
+            "h3: VSA fine stage on sparse FP4 tensor cores ({}={}, P {})",
             crate::wan::attn_fp4::ENV,
+            if setting == Some(true) { "1" } else { "unset: NVFP4 default" },
             if crate::wan::attn_fp4::p_single() { "single-level" } else { "two-level" }
         ));
         Ok(true)
     }
     #[cfg(not(feature = "cuda"))]
-    Err(msg(format!("h3: {}=1 needs a CUDA build", crate::wan::attn_fp4::ENV)))
+    {
+        if setting == Some(true) {
+            return Err(msg(format!("h3: {}=1 needs a CUDA build", crate::wan::attn_fp4::ENV)));
+        }
+        Ok(false)
+    }
 }
 
 /// Device bytes a denoise needs beside the resident weights for `rows` packed
