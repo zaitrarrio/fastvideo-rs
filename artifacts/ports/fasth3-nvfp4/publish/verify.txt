@@ -1,0 +1,4 @@
+12:21:53   parts of fasth3-v2-nvfp4: 835 in 206s (268 MB/s)
+ok   fasth3-v2-nvfp4@0aa5247ba4a5d3f9f4fdb99536d8cf55bdc5e2f0: 21 files, 55.19 GB (sha256, 206s)
+12:25:13   parts of fasth3-4step-vsa-nvfp4: 840 in 199s (277 MB/s)
+ok   fasth3-4step-vsa-nvfp4@d7adcabeb19a81bb79cf9c4a04f5e366f1f2e90a: 26 files, 55.19 GB (sha256, 199s)
