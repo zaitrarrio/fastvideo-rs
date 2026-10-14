@@ -6,7 +6,8 @@
 //!
 //! ```text
 //! cf_live_check streams --base http://127.0.0.1:8000 --model fasth3 \
-//!   --cases whip-h264,whip-vp8,whip-vp9,rtmps,srt --seconds 60 --out /e2e/out/cf
+//!   --cases whip-h264,whip-vp8,whip-vp9,rtmps,srt --seconds 60 --out /e2e/out/cf \
+//!   [--clips 7] [--audio-seconds 60] [--audio-deadline 300]
 //! cf_live_check whep --url <whep url> --codec h264 --seconds 40 --out /e2e/out/cf/copy
 //! cf_live_check cleanup --uids <uid,uid,...>
 //! cf_live_check list
@@ -16,10 +17,22 @@
 //! `codec`, `cloudflare-rtmps`, `cloudflare-srt`); WHIP cases are read back
 //! over WHEP with a str0m recvonly peer (video access units decoded by
 //! ffprobe for codec / resolution, Opus packets counted), RTMPS / SRT over
-//! HLS (the top variant's segments decoded, the audio stream probed and its
-//! loudness measured). Time to ready is from the POST to the first decoded
-//! WHEP frame / the first HLS segment that decodes. Each stream is then
-//! deleted and its live input cleaned up as in `cleanup`.
+//! HLS: the top variant's segments decoded (video), and the audio followed
+//! through the master playlist (`fastvideo_serve::stream_outputs::hls`):
+//! Cloudflare serves it as a separate rendition (`#EXT-X-MEDIA TYPE=AUDIO`,
+//! the group the top variant names); a muxed playlist is read from the
+//! variant's own segments. The audio playlist is read from the oldest
+//! segment it lists for `--audio-seconds` (60) of segments, at most until
+//! `--audio-deadline` (300) seconds after the POST, decoded and measured
+//! (RMS per second, peak): the case passes only when the audio is present
+//! and not silent (`AudioLevels::audible`: 2 s above -60 dBFS RMS, peak above
+//! -40 dBFS, the WHEP check's bar). A clip stream plays each clip once and
+//! then holds the last frame in silence, so the HLS cases queue `--clips` (7)
+//! more clips after the prompt (a new clip every clip build, as the
+//! 2026-10-14 round's pod C did) and run for up to `--audio-deadline` + 60 s.
+//! Time to ready is from the POST to the first decoded WHEP frame / the first
+//! HLS segment that decodes. Each stream is then deleted and its live input
+//! cleaned up as in `cleanup`.
 //!
 //! `cleanup`: for each uid this run created, GET the live input; only an
 //! input whose name starts with `fv-test-` is touched (anything else is
@@ -31,12 +44,16 @@
 //!
 //! Env: `FV_KEY` (fv-serve API key), `FV_CF_ACCOUNT_ID`,
 //! `FV_CF_STREAM_API_TOKEN` (never printed). Results: one `RESULT {json}`
-//! line per case on stdout and `<out>/<case>.json`.
+//! line per case on stdout and `<out>/<case>.json` (HLS cases also keep the
+//! first master / audio playlists read, `<case>-master.m3u8` and
+//! `<case>-audio.m3u8`, and the joined audio segments `<case>-audio.seg`);
+//! the exit status is 1 when a case failed.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use fastvideo_serve::stream_outputs::hls;
 use fastvideo_webrtc::host::{AudioLayout, HostConfig, OfferOptions, PeerEvent, RtcHost};
 use fastvideo_webrtc::sdp::Direction;
 use fastvideo_webrtc::writer::{TrackKind, VideoCodec};
@@ -393,6 +410,15 @@ async fn streams(args: &[String]) {
     });
     let secs: u64 = arg(args, "--seconds").and_then(|s| s.parse().ok()).unwrap_or(60);
     let cases = arg(args, "--cases").unwrap_or_else(|| "whip-h264,whip-vp8,whip-vp9,rtmps,srt".into());
+    let clips: usize = arg(args, "--clips").and_then(|s| s.parse().ok()).unwrap_or(7);
+    let clip_prompt = arg(args, "--clip-prompt").unwrap_or_else(|| {
+        "Storm waves crash against the lighthouse rocks at night, thunder rolls, rain lashes the windows, the lamp beam \
+         sweeps the sea."
+            .into()
+    });
+    let audio_window: u64 = arg(args, "--audio-seconds").and_then(|s| s.parse().ok()).unwrap_or(60);
+    let audio_deadline: u64 = arg(args, "--audio-deadline").and_then(|s| s.parse().ok()).unwrap_or(300);
+    let mut failed = Vec::new();
     let out = PathBuf::from(arg(args, "--out").unwrap_or_else(|| "cf-out".into()));
     std::fs::create_dir_all(&out).unwrap();
     let key = env("FV_KEY");
@@ -408,7 +434,13 @@ async fn streams(args: &[String]) {
             "srt" => (json!({"kind": "cloudflare-srt"}), None),
             other => panic!("unknown case {other}"),
         };
-        let body = json!({"model": model, "prompt": prompt, "output": output, "max_seconds": secs + 60});
+        let body = if codec.is_some() {
+            json!({"model": model, "prompt": prompt, "output": output, "max_seconds": secs + 60})
+        } else {
+            // HLS: keep clips (and their audio) coming while the audio is read.
+            let more: Vec<Value> = (0..clips).map(|_| json!({"prompt": clip_prompt})).collect();
+            json!({"model": model, "prompt": prompt, "clips": more, "output": output, "max_seconds": secs.max(audio_deadline) + 60})
+        };
         let t0 = Instant::now();
         let r = http.post(format!("{base}/fv/v1/streams")).bearer_auth(&key).json(&body).send().await;
         let (st, v) = match r {
@@ -421,6 +453,7 @@ async fn streams(args: &[String]) {
         let create_ms = t0.elapsed().as_millis();
         if st != 201 {
             let res = json!({"case": name, "ok": false, "create_http": st, "error": v["error"].clone()});
+            failed.push(name.to_owned());
             println!("RESULT {res}");
             std::fs::write(out.join(format!("{name}.json")), serde_json::to_vec_pretty(&res).unwrap()).ok();
             continue;
@@ -464,13 +497,29 @@ async fn streams(args: &[String]) {
                         let vars = hls_grab(&http, &hls, 3, &file).await;
                         let f = file.to_string_lossy().into_owned();
                         let d = decode(&f, &[]);
+                        let video_ok = d.as_ref().is_some_and(|d| d.1 > 0);
+                        // The audio, through the master playlist (a separate rendition on Cloudflare).
+                        let deadline = t0 + Duration::from_secs(audio_deadline);
+                        let afile = out.join(format!("{name}-audio.seg"));
+                        let audio = match hls::read_audio(&http, &hls, Duration::from_secs(audio_window), deadline, &afile).await {
+                            Ok(a) => {
+                                std::fs::write(out.join(format!("{name}-master.m3u8")), &a.master_text).ok();
+                                std::fs::write(out.join(format!("{name}-audio.m3u8")), &a.media_text).ok();
+                                let mut j = serde_json::to_value(&a).unwrap_or(Value::Null);
+                                j["read_after_post_s"] = json!(t0.elapsed().as_secs_f64());
+                                j
+                            }
+                            Err(e) => json!({"audible": false, "error": e}),
+                        };
+                        let audio_ok = audio["audible"] == true;
                         json!({
-                            "transport": "hls", "ok": d.as_ref().is_some_and(|d| d.1 > 0),
+                            "transport": "hls", "ok": video_ok && audio_ok, "video_ok": video_ok, "audio_ok": audio_ok,
                             "time_to_ready_ms": (rd * 1000.0) as u64, "connected_after_s": connected,
                             "variants": vars.unwrap_or_default(),
                             "decoded": d.map(|d| json!({"codec": d.0, "frames": d.1, "keyframes": d.2, "width": d.3, "height": d.4})),
                             "luma": luma(&f, &[]).map(|l| json!({"frames": l.0, "mean": l.1, "deviation": l.2, "black": l.3})),
-                            "audio": audio_probe(&f),
+                            "audio": audio,
+                            "video_segment_audio": audio_probe(&f),
                         })
                     }
                 }
@@ -487,6 +536,9 @@ async fn streams(args: &[String]) {
         tokio::time::sleep(Duration::from_secs(3)).await;
         let clean = if uid.is_empty() { Value::Null } else { cf.cleanup(&uid).await };
         let s = &stv["status"];
+        if read["ok"] != true {
+            failed.push(name.to_owned());
+        }
         let res = json!({
             "case": name, "model": model, "create_ms": create_ms, "stream_id": id, "live_input": uid,
             "ok": read["ok"], "read": read,
@@ -502,6 +554,10 @@ async fn streams(args: &[String]) {
     }
     println!("CREATED {}", created.join(","));
     println!("LIST {}", cf.list().await);
+    if !failed.is_empty() {
+        println!("FAILED {}", failed.join(","));
+        std::process::exit(1);
+    }
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]

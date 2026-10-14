@@ -269,7 +269,9 @@ after a single clip. (fv-serve's counters: WHIP sent 5 064 Opus packets with 2 4
    a 1260x720-topped ladder; the **director copy now carries audio** (#99 verified on a GPU).
 4. **Cloudflare HLS audio is a separate rendition** (`#EXT-X-MEDIA TYPE=AUDIO`, `group_audio`): reading only the top
    video variant's segments (what `outputs_live` and `cf_live_check` do) shows no audio stream. The driver's
-   `cf-hls-audio` step probes the master playlist instead. Worth teaching both readers.
+   `cf-hls-audio` step probes the master playlist instead. Worth teaching both readers. **Done** (2026-10-14,
+   branch `claude/cf-hls-audio-readback`): both follow the rendition and fail on missing or silent audio;
+   results in docs/serve/stream-outputs.md "Results: HLS audio read-back".
 5. Cosmetic, as on 2026-10-13: the ffmpeg sinks report `keyframes_sent` 0 and `audio_packets_sent` 0, and the
    stream status `fps` is null.
 6. Harness: the serve image has no `jq` (installed per pod with apt); a `pkill -f` whose pattern also matches its own

@@ -399,7 +399,8 @@ it with the same rules.
 | `cargo test -p fastvideo-reactor --test runtime output_copy` | `start_session` `x_fv_output`: refusals, every paced tick tapped, events broadcast and in the descriptor, the tap closed with the session |
 | unit tests | request parsing and kinds, redaction (`spec.rs`), URL policy, legacy aliases, `insecure_skip_verify` gating, the Cloudflare client's parsing / playback / stop policy, sink args (FLV, MPEG-TS, CBR clamp, AAC-LC, `+cgop`, `-rtmp_tcurl`), `srt_url`, stderr scrubbing, `exit_error` (ffmpeg's reason, no key; `fastvideo-media/tests/ffmpeg_io.rs`), VP9 args and keyframe detection, WHIP codec offers (`fastvideo-webrtc/tests/whip.rs`), the 1 s H.264 GOP for Cloudflare; the RTMPS relay (`rtmps.rs`): a test CA and name accepted, an unknown CA and a wrong name refused and fatal with no later connection, a refused TCP connection not fatal, a bad CA file an error; address pinning and `tcUrl` (`publish.rs`) |
 | `FV_TEST_OUTPUTS_MEDIAMTX=1 … --test outputs_live` | real MediaMTX v1.15.1 (downloaded): see below |
-| `FV_TEST_OUTPUTS_CLOUDFLARE=1 … --test outputs_live` | real Cloudflare Stream: one stream per kind (WHIP H.264 / VP8 / VP9, RTMPS, SRT; `FV_TEST_CF_CASES` picks some) for `FV_TEST_CF_SECONDS` (60). WHEP: a str0m viewer records what Cloudflare delivers, ffmpeg decodes it (codec, resolution, luma: a black picture shows). RTMPS/SRT: the test fetches the HLS playlists and segments over HTTPS and decodes them, reads the DASH manifest, and polls the input's `status` for when Cloudflare saw the ingest. Every `fv-test-` input and its recordings are deleted (a recording still processing answers 409 and is retried). The token comes from the environment only |
+| `FV_TEST_OUTPUTS_CLOUDFLARE=1 … --test outputs_live` | real Cloudflare Stream: one stream per kind (WHIP H.264 / VP8 / VP9, RTMPS, SRT; `FV_TEST_CF_CASES` picks some) for `FV_TEST_CF_SECONDS` (60). WHEP: a str0m viewer records what Cloudflare delivers, ffmpeg decodes it (codec, resolution, luma: a black picture shows). RTMPS/SRT: the test fetches the HLS playlists and segments over HTTPS and decodes them, reads the DASH manifest, and polls the input's `status` for when Cloudflare saw the ingest; it follows the **audio** through the master playlist (Cloudflare's separate `#EXT-X-MEDIA TYPE=AUDIO` rendition of the group the top variant names, or the variant's own segments when the audio is muxed), from the oldest segment listed, decodes it and fails a case whose audio is missing or silent (2 s above -60 dBFS RMS and a peak above -40 dBFS, the WHEP check's bar); these streams queue 19 more clips so the audio keeps playing while Cloudflare lists the rendition. Every `fv-test-` input and its recordings are deleted (a recording still processing answers 409 and is retried). The token comes from the environment only |
+| `--lib stream_outputs::hls`, `--test hls_audio` | the HLS read-back (`src/stream_outputs/hls.rs`, used by `outputs_live` and `examples/cf_live_check.rs`): master / media playlist parsing on fixtures (`tests/fixtures/hls/`: Cloudflare's separate audio rendition, a muxed master, a group rendition without `URI`, a TS media playlist), the rendition choice (`DEFAULT`, `AUTOSELECT`, a group not listed yet), loudness per second; `hls_audio` reads ffmpeg-made HLS from a local server: a tone in a separate rendition is audible, a silent rendition is not, a video-only variant has no audio, muxed audio is read from the lightest variant |
 | `tests/console/stream_outputs.cjs` | the destination form → request shape for Cloudflare, Cloudflare SRT, your RTMPS with a key, your WHIP with a token and VP8; WHEP player on `webRTCPlayback`, hls.js on `hls_url`, a pasted playlist that really plays (VP9 fMP4: Playwright's Chromium has no H.264 for MSE), `playerFor` for every shape; no credential in storage, the page or the server log; the director's `x_fv_output` (redacted in the log) |
 
 ### Results: MediaMTX (build pod, fake engine, 2026-10-13)
@@ -433,6 +434,31 @@ h3-turbo on an RTX PRO 6000 (NVENC), every kind against the real Cloudflare Stre
 clip's build included), RTMPS / SRT as HLS topped at 1260x720 (41 s / 64-87 s), and every kind, the copy included,
 carries the model's audio (decoded). Cloudflare serves HLS audio as a separate rendition (`#EXT-X-MEDIA TYPE=AUDIO`),
 which a read of the top video variant alone does not see. docs/serve/e2e/h3-test-round-2026-10-14.md.
+
+### Results: HLS audio read-back (live, 2026-10-14)
+
+Both readers now follow the master playlist's audio (`src/stream_outputs/hls.rs`). One RTX PRO 6000 pod
+(EU-RO-1, EU volume read only), the serve image of the 2026-10-14 round, the Cloudflare token and account id as
+Runpod secret references only. Cloudflare served the audio as a separate rendition in every case
+(`#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="group_audio",NAME="original",DEFAULT=YES`, AAC-LC 48 kHz stereo, 2 s fMP4
+segments under the recording's `audio/128/` path); the video variants list `mp4a.40.2` in `CODECS` but their
+segments have no audio.
+
+| reader, model | kind | video | audio rendition read | levels (dBFS) | verdict |
+|---|---|---|---|---|---|
+| `cf_live_check`, h3-turbo (8 clips queued) | RTMPS | ready 41.6 s, 1260x720 H.264, 144 frames, luma 84.5 | from sequence 5 (8 listed), 30 segments = 60 s | RMS -29.4, peak -6.6; 12 s above -60 (two clips, -18 to -32 per second) | **audible** |
+| `cf_live_check`, h3-turbo (8 clips queued) | SRT | ready 95.2 s, 1260x720, 96 frames | from sequence 1 (2 listed), 14 segments = 28.6 s by the 300 s deadline | RMS -25.1, peak -2.1; 3 s above -60 (one clip) | **audible** |
+| `outputs_live`, fake-h3-turbo (20 clips) | RTMPS | ready 16.6 s | from sequence 5, 15 segments = 30 s | RMS -15.1 every second (the fake's 0.25 sine), peak -11.3; 31 s above -60 | **audible** |
+| `outputs_live`, fake-h3-turbo (20 clips) | SRT | first run: no HLS variant within 120 s (the test now waits 180 s); second run: ready 124.2 s | from sequence 1, 10 segments = 21 s by the 300 s deadline | digital silence (-120) in all 21 s | **fails: silent** |
+
+- The live playlists are a sliding window for RTMPS (the first poll listed sequence 5 onwards) and start at
+  sequence 1 for SRT; clips play once, so the readers keep clips queued while they read.
+- **SRT audio from Cloudflare is slow and sparse**: its audio playlist grew by only 10-14 segments (2 s each) over
+  ~3 minutes in both SRT runs (RTMPS: one segment per 2 s), and the fake engine's SRT stream read as silence in
+  the 21 s Cloudflare listed, while its RTMPS stream on the same pod was a steady tone. Not explained yet; the
+  `outputs_live` SRT case reports it as a failure.
+- Clean-up: 5 `fv-test-` live inputs and 5 recordings created, all deleted and checked (GET 404); the
+  pre-existing input untouched. GPU pod 1 692 s at $2.49/hr = $1.17.
 
 ### Results: Cloudflare (live, 2026-10-13)
 

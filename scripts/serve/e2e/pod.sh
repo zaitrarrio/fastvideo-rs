@@ -111,9 +111,11 @@ cmd_up() {
     [[ -n "$pod" ]] || { log "no id: $(head -c 200 <<<"$resp")"; continue; }
     dph="$(jq -r '.costPerHr // 0' <<<"$resp")"
     ledger "pod-created $pod $name gpu=$gpu dph=$dph image=$image"
+    # The marker ($0 of the backstop shell, `fv-e2e-backstop-<pod>`) finds exactly this backstop later
+    # (`pgrep -f fv-e2e-backstop-<pod>`), never another process.
     nohup env POD_ID="$pod" CAP="$CAP_S" API="$API" bash -c \
       'sleep "$CAP"; curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "$API/pods/$POD_ID" >/dev/null' \
-      >/dev/null 2>&1 &
+      "fv-e2e-backstop-$pod" >/dev/null 2>&1 &
     jq --arg pod "$pod" --arg gpu "$gpu" --arg dph "$dph" --arg t "$(date +%s)" --arg name "$name" \
       '. + {pod: $pod, gpu: $gpu, dph: $dph, created: ($t|tonumber), name: $name}' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
     if awk -v p="$dph" -v c="$MAX_DPH" 'BEGIN{exit !(p+0 > c+0)}'; then

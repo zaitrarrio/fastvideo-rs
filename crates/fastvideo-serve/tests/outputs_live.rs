@@ -18,9 +18,15 @@
 //!   inputs named `fv-test-…`. WHEP playback: a str0m viewer records what
 //!   Cloudflare delivers and ffmpeg decodes it (resolution, codec, luma, so
 //!   a black picture shows). RTMPS/SRT: the HLS manifest and segments and
-//!   the DASH manifest decode, with the HLS live-edge latency. Each case
-//!   prints ingest-to-playable time. Every input and its recordings are
-//!   deleted.
+//!   the DASH manifest decode, with the HLS live-edge latency; the audio is
+//!   followed through the master playlist (Cloudflare's separate
+//!   `#EXT-X-MEDIA TYPE=AUDIO` rendition, or the variant's own segments when
+//!   muxed), read from the oldest segment listed, decoded and measured: it
+//!   must be present and not silent (`stream_outputs::hls::AudioLevels::
+//!   audible`). These streams queue 19 more clips after the prompt so the
+//!   audio keeps playing (a clip plays once, then the stream holds in
+//!   silence). Each case prints ingest-to-playable time. Every input and its
+//!   recordings are deleted.
 //!
 //! - `FV_TEST_OUTPUTS_MEDIAMTX=1` also runs `mediamtx_director_copy_carries_audio`:
 //!   a director session (fake H3, audio on) with `x_fv_output` over WHIP and
@@ -41,6 +47,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
 use fastvideo_serve::config::{Config, JobBackend};
+use fastvideo_serve::stream_outputs::hls;
 use fastvideo_serve::{App, Overrides};
 use fastvideo_serve_kit::KeyRing;
 use fastvideo_webrtc::host::{AudioLayout, HostConfig, OfferOptions, PeerEvent, RtcHost};
@@ -831,7 +838,15 @@ async fn cloudflare_live_each_kind() {
         if only.as_ref().is_some_and(|o| !o.iter().any(|x| x == name)) {
             continue;
         }
-        let body = json!({"model": "fake-h3-turbo", "prompt": "a lighthouse at dusk", "output": output});
+        let body = if codec.is_some() {
+            json!({"model": "fake-h3-turbo", "prompt": "a lighthouse at dusk", "output": output})
+        } else {
+            // HLS: the audio rendition is listed well after the video; keep
+            // clips (and their audio) playing for ~100 s (20 is the queue's
+            // generation capacity).
+            let more: Vec<Value> = (0..19).map(|i| json!({"prompt": format!("a lighthouse at dusk, shot {i}")})).collect();
+            json!({"model": "fake-h3-turbo", "prompt": "a lighthouse at dusk", "clips": more, "output": output})
+        };
         let t0 = Instant::now();
         let (s, v) = call(&a.router, "POST", "/fv/v1/streams", Some(body)).await;
         if s != StatusCode::CREATED {
@@ -900,7 +915,9 @@ async fn cloudflare_live_each_kind() {
                 // from when HLS serves a decodable segment.
                 let uid = pb["live_input_id"].as_str().unwrap_or_default().to_owned();
                 let mut connected: Option<Duration> = None;
-                while t0.elapsed() < Duration::from_secs(secs.max(120)) {
+                // SRT's first HLS segment took 68-72 s on 2026-10-13, 95 s
+                // and more than 120 s on 2026-10-14.
+                while t0.elapsed() < Duration::from_secs(secs.max(180)) {
                     tokio::time::sleep(Duration::from_secs(3)).await;
                     if connected.is_none() {
                         if let Ok(r) = http.get(format!("{api}/{uid}")).bearer_auth(&token).send().await {
@@ -940,8 +957,23 @@ async fn cloudflare_live_each_kind() {
                         if d.as_ref().is_none_or(|d| d.1 == 0) {
                             failures.push(name);
                         }
+                        // The audio: Cloudflare's separate rendition (or muxed), from the oldest segment listed.
+                        let afile = std::env::temp_dir().join(format!("fv-cf-{name}-audio.seg"));
+                        let deadline = t0 + Duration::from_secs(secs.max(180) + 120);
+                        let audio = match hls::read_audio(&http, &hls, Duration::from_secs(30), deadline, &afile).await {
+                            Ok(a) => {
+                                if !a.audible {
+                                    failures.push(name);
+                                }
+                                format!("audio {} after {:.1}s: {}", if a.audible { "audible" } else { "SILENT OR MISSING" }, t0.elapsed().as_secs_f64(), serde_json::to_string(&a).unwrap_or_default())
+                            }
+                            Err(e) => {
+                                failures.push(name);
+                                format!("audio not read: {e}")
+                            }
+                        };
                         format!(
-                            "HLS: ingest-to-playable {:.1}s (create -> first segment that decodes; Cloudflare showed the input connected after {:?}); {info}; decoded (codec, frames, keyframes, w, h) {d:?}; luma {l:?}; {dash_info}",
+                            "HLS: ingest-to-playable {:.1}s (create -> first segment that decodes; Cloudflare showed the input connected after {:?}); {info}; decoded (codec, frames, keyframes, w, h) {d:?}; luma {l:?}; {dash_info}; {audio}",
                             p.as_secs_f64(),
                             connected.map(|c| format!("{:.1}s", c.as_secs_f64()))
                         )
@@ -1004,5 +1036,5 @@ async fn cloudflare_live_each_kind() {
             assert!(d.status().is_success(), "deleting the test input {uid}");
         }
     }
-    assert!(failures.is_empty(), "cases without playback: {failures:?}");
+    assert!(failures.is_empty(), "cases without playback or audio: {failures:?}");
 }
