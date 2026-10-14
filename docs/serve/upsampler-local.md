@@ -139,7 +139,10 @@ boot ── mkdir /fvstate ── fv-upsampler start ─┐ (background)
   Since this branch (`i2v_tower_beside_streamed_dit`, crates/fastvideo-cudarc/src/h3/pipeline.rs) the 2 GiB tower stays
   resident beside a DiT that streams anyway (the streamed plan is < 30 GiB), so the language model is the resident text
   encoder again; the DiT itself still streams beside the sidecar. Not yet re-measured on a GPU (the three pods tried on
-  2026-10-14 had 95.8 of 97.9 GB already in use before anything started). If H3 must keep its resident DiT beside the
+  2026-10-14 had 95.8 of 97.9 GB already in use before anything started). **Since the plan-based `auto` text encoder
+  (2026-10-14, docs/perf/h3-text-encoder-residency.md)** the encoder no longer takes the DiT's room: beside the sidecar
+  (~84 GiB free) `auto` streams the encoder (FP8 numbers, as before) and the DiT stays resident; image-to-video text
+  then streams its vision tower and language model per request (from the page cache after the first). If H3 must keep its resident DiT beside the
   sidecar: shrink the sidecar (`FV_UPSAMPLER_CTX=32768 FV_UPSAMPLER_PARALLEL=1`: one 32k slot, KV ≈ 2.6 GB, total ≈ 8.5
   GB; `FV_UPSAMPLER_VISION=0`: −1.1 GB) — 4 GiB is the gap to the resident plan at 768p — or run it on another GPU.
   On an 80 GB H100 / A100, H3 and LTX-2.5 (presets.ts `min_vram_gb: 80`) do not keep their resident plans beside 11
