@@ -1154,12 +1154,33 @@ impl H3Pipeline {
                 ));
                 Some(nv)
             }
+            // FastH3 V2 / 4-step NVFP4 releases (docs/ports/fasth3-nvfp4.md):
+            // a `transformer/` in ModelOpt's unified layout is read as such.
+            None if mlx.is_none() && !options.ref2va && super::nvfp4::is_modelopt_dir(&root.join("transformer"))? => {
+                if vdn_ckpt.is_some() {
+                    return Err(msg("h3 nvfp4: a ModelOpt NVFP4 DiT takes no VDN checkpoint"));
+                }
+                super::nvfp4::require_tensor_cores()?;
+                let t = Instant::now();
+                let opts = super::nvfp4::ModelOptOptions::from_env()?;
+                let nv = super::nvfp4::Nvfp4Dit::open_modelopt(&root.join("transformer"), &cfg, opts)?;
+                crate::wan::log::info(format_args!(
+                    "h3 nvfp4: ModelOpt {} ({} blocks x 2 NVFP4 FFN linears, {:.2} GiB; attention {}; FFN activation scale {}; checked in {:.1}s)",
+                    nv.path().display(),
+                    cfg.num_layers,
+                    nv.linear_bytes(&cfg, false) as f64 / f64::from(1u32 << 30),
+                    if opts.attention { "NVFP4 (quantized at load)" } else { "as FASTVIDEO_H3_QUANT" },
+                    if opts.static_act { "static (calibrated)" } else { "dynamic" },
+                    t.elapsed().as_secs_f64()
+                ));
+                Some(nv)
+            }
             None => None,
         };
         // Fast boot (A): the recipe's resident DiT, pre-merged and
         // pre-quantized beside `transformer/` (`super::dit_tree`), when a
         // valid one is there; otherwise the checkpoint as below.
-        let dit_tree = if mlx.is_none() && !options.ref2va && vdn_ckpt.is_none() {
+        let dit_tree = if mlx.is_none() && !options.ref2va && vdn_ckpt.is_none() && nvfp4_dit.is_none() {
             let identity = dit_tree_identity(
                 root,
                 &options,
@@ -1189,8 +1210,11 @@ impl H3Pipeline {
             let table = |k: &str| {
                 k.starts_with("time_embedder") || k.starts_with("norm_out.linear") || (!skip_adaln && adaln(k))
             };
-            // Under NVFP4 the snapshot's block linears are never read.
-            let nv = nvfp4_dit.is_some();
+            // Under the Trim's NVFP4 file the snapshot's block linears are never
+            // read; a ModelOpt DiT is the snapshot's own `transformer/`.
+            let nv = nvfp4_dit
+                .as_ref()
+                .is_some_and(|n| n.layout() == super::nvfp4::Nvfp4Layout::Comfy);
             let nv_linear = |k: &str| {
                 nv && k.starts_with("transformer_blocks.") && (k.contains(".attn.to_") || k.contains(".ff.net."))
             };
@@ -1199,7 +1223,7 @@ impl H3Pipeline {
             };
             let rest = |k: &str| !adaln(k) && !nv_linear(k);
             map.prefetch_groups(&[&refiner, &table, &blocks, &rest]);
-            if let Some(nv) = &nvfp4_dit {
+            if let Some(nv) = nvfp4_dit.as_ref().filter(|_| nv) {
                 nv.map().prefetch_all();
             }
         }

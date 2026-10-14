@@ -29,6 +29,9 @@
 #                      Qwen/Qwen3-VL-4B-Instruct-GGUF @ 1cd86afb9a95c410a6038ab3b40d8b578c892266 (Hub listing, 2026-10-13).
 # Trees with hashes elsewhere: auxiliary/ (weights-manifest.tsv, cell aux), auxiliary/upscalers/
 # (cell upscalers), */text_encoder_fp8 (cell text-fp8), the upscaler file (cell sol-h3-spark).
+#   fasth3-v2-nvfp4, fasth3-4step-vsa-nvfp4  the Hub LFS SHA-256 of every published LFS file at the pinned revisions
+#                      (listed 2026-10-14), which r2-weights.py publish-hub checked each upload against and
+#                      verify --deep re-read (docs/ports/fasth3-nvfp4.md §1).
 #   fasth3-trim-8step, fasth3-trim-8step-nvfp4  the Hub LFS SHA-256 of every LFS file at the pinned revisions
 #                      (weights-revisions.tsv; listed 2026-10-13 from /api/models/<repo>/tree/<rev>), which
 #                      r2-weights.py publish-hub checked each upload against.
@@ -379,6 +382,38 @@ fasth3-trim-8step	transformer/diffusion_pytorch_model-00008-of-00008.safetensors
 fasth3-trim-8step	vae/diffusion_pytorch_model.safetensors	4225603880	sha256:73fc5a61caeba438633eb8f8efd3a57f4915adfa46731a1c991312c724a3b5cc
 fasth3-trim-8step	vae/minimax_h3_video_vae_int8_convrot.safetensors	2137493384	sha256:f11f8b9b96c9dd22b36bc6c18464b6929c207d247e6d865d90fe31588e58e7e2
 fasth3-trim-8step-nvfp4	diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors	11894623166	sha256:748b2bcc9c4b7bf7b23406987b42d4ac40362070c164cf11092482be6a863455
+fasth3-v2-nvfp4	transformer/diffusion_pytorch_model-00001-of-00014.safetensors	4666278208	sha256:c9c53fc18d80f0ad0829d08b8f16a55c75cee9b132aa18e50cd2184fce44bb80
+fasth3-v2-nvfp4	transformer/diffusion_pytorch_model-00002-of-00014.safetensors	3989260560	sha256:2ae73da5efcd7a86dd0b046285dfce40aac46050ab7f5a3795dda98085ca7b57
+fasth3-v2-nvfp4	transformer/diffusion_pytorch_model-00003-of-00014.safetensors	3989260584	sha256:c6ba263e4db2537f1510e9e5fb5a541378ba0b49e521067dd8bf177e869098c5
+fasth3-v2-nvfp4	transformer/diffusion_pytorch_model-00004-of-00014.safetensors	3546105376	sha256:29b271a07cc9c48ea17c277e1282aff903f97edb8422aeebf73d8c102c69c407
+fasth3-v2-nvfp4	transformer/diffusion_pytorch_model-00005-of-00014.safetensors	4099833616	sha256:844e038ff2b95cdb2253f29fc00b86cb0a343085af5764ae43cbb446b9124022
+fasth3-v2-nvfp4	transformer/diffusion_pytorch_model-00006-of-00014.safetensors	4056696880	sha256:d44fede5a8272c0f4761f1ce3aa9b776a05cf8d40d64250c912b3e8357801eb9
+fasth3-v2-nvfp4	transformer/diffusion_pytorch_model-00007-of-00014.safetensors	3989260544	sha256:536b50166d2b90bf55bf49253621e81c92fa49d1f560b49f9f3fb7c8d4d97c8b
+fasth3-v2-nvfp4	transformer/diffusion_pytorch_model-00008-of-00014.safetensors	3989260584	sha256:5ed17411cac1bf6a79c70eeb9e8dca56bd568d3bb75262c7072c66bda6774fb5
+fasth3-v2-nvfp4	transformer/diffusion_pytorch_model-00009-of-00014.safetensors	3546105400	sha256:9f77433213844665202c2e12eabf7654bf27ff13dbabb261e8c4ce727b16e660
+fasth3-v2-nvfp4	transformer/diffusion_pytorch_model-00010-of-00014.safetensors	4099833600	sha256:f73a3ff97fe95bba7a7c4df378d8363d4ede145ce7ff94f48f04256daa715e9a
+fasth3-v2-nvfp4	transformer/diffusion_pytorch_model-00011-of-00014.safetensors	4056696880	sha256:fcd376d4b584d39d3e28c0072010e33517b80a1f2872b75702a75a88e5113f24
+fasth3-v2-nvfp4	transformer/diffusion_pytorch_model-00012-of-00014.safetensors	3989260560	sha256:5bb999913bba07803eea8ad280f3cba23cbdaae27efdf9f970505206197a306d
+fasth3-v2-nvfp4	transformer/diffusion_pytorch_model-00013-of-00014.safetensors	3989260520	sha256:714ff284c33128ea1b6ad36b6e95eb6ed3ee3d59c64fd222a748aeb76ff9b998
+fasth3-v2-nvfp4	transformer/diffusion_pytorch_model-00014-of-00014.safetensors	1474210952	sha256:427a874e7113cb51c2be6c0fab8f942265a850e360a5a8554b9816cdb3c12372
+fasth3-v2-nvfp4	vae/diffusion_pytorch_model-00001-of-00003.safetensors	735698496	sha256:ad0ece6be8e6d19272c360246eaeb4f29e1d23baa8d7db03478d50f6e048daa4
+fasth3-v2-nvfp4	vae/diffusion_pytorch_model-00002-of-00003.safetensors	976677176	sha256:6631e2b50d42f14cb7a9c8c80c003ae8c6f747cefe6bcdd147d61fcd839418d3
+fasth3-4step-vsa-nvfp4	transformer/diffusion_pytorch_model-00001-of-00014.safetensors	4666278208	sha256:71eb3dde330647e18478c7e9aa3acbdec58abd0e42c4b9e96ed78ae6dffcf17a
+fasth3-4step-vsa-nvfp4	transformer/diffusion_pytorch_model-00002-of-00014.safetensors	3989260560	sha256:6cbc2ba2c5dc7b6e9f3c93b54b305e1f4005a2dffd2fac7ed93101854ebab6a5
+fasth3-4step-vsa-nvfp4	transformer/diffusion_pytorch_model-00003-of-00014.safetensors	3989260584	sha256:566f5f8597effa27c69548ad3186e56f5e3e46d1caef6724a23f3175a7190803
+fasth3-4step-vsa-nvfp4	transformer/diffusion_pytorch_model-00004-of-00014.safetensors	3546105376	sha256:a3597343c1b46d5196699cf406df7ee3b4ad9cdf25a2c4ea7c39faadfc5a615f
+fasth3-4step-vsa-nvfp4	transformer/diffusion_pytorch_model-00005-of-00014.safetensors	4099833616	sha256:c637251aa345f5c92c11a7cbf3dd7c6232a03d17cc44897b83dadd54f183b192
+fasth3-4step-vsa-nvfp4	transformer/diffusion_pytorch_model-00006-of-00014.safetensors	4056696880	sha256:2646c95d33f7719f177ba8d2e408640a592fe3bfbaa7a9d6e142d627b60d8dda
+fasth3-4step-vsa-nvfp4	transformer/diffusion_pytorch_model-00007-of-00014.safetensors	3989260544	sha256:366a8574a0293bb69e5c24a291b4d112cb0cf63a633756bd638e065d6387fc1a
+fasth3-4step-vsa-nvfp4	transformer/diffusion_pytorch_model-00008-of-00014.safetensors	3989260584	sha256:10ffc495acf04998fabfcbfcea4a229e0ddbd5a3a730fc500491580a32dbf39e
+fasth3-4step-vsa-nvfp4	transformer/diffusion_pytorch_model-00009-of-00014.safetensors	3546105400	sha256:05ab97ea2ba92a40f46bf57948b9c566f373d70038b46b87f99cccbc68c342dc
+fasth3-4step-vsa-nvfp4	transformer/diffusion_pytorch_model-00010-of-00014.safetensors	4099833600	sha256:fa4a0ae7316673d5763cd2c0594b69670773c4068a06ba2261bd303e4a5045e6
+fasth3-4step-vsa-nvfp4	transformer/diffusion_pytorch_model-00011-of-00014.safetensors	4056696880	sha256:8eef1af665574360d2df4049656ce0fc1a983352cbbe82f2d6b4bec83341026d
+fasth3-4step-vsa-nvfp4	transformer/diffusion_pytorch_model-00012-of-00014.safetensors	3989260560	sha256:c0f2c96b23922b5c0bc158ddc5c237ad4d8937058be596a0bf56a76afa849294
+fasth3-4step-vsa-nvfp4	transformer/diffusion_pytorch_model-00013-of-00014.safetensors	3989260520	sha256:436079ac0ff83ce3ae79f7e58d07ff61b8af5ad0cbadff62a52c2cf039d92e5a
+fasth3-4step-vsa-nvfp4	transformer/diffusion_pytorch_model-00014-of-00014.safetensors	1474210952	sha256:e3990ddfd96432a9d7b76c09ada2c7814329787503f7b96b7b12de049e18beec
+fasth3-4step-vsa-nvfp4	vae/diffusion_pytorch_model-00001-of-00003.safetensors	735698496	sha256:5ebd5775d1b4f1f9661699a26e57cad8a16dc6e56a7fee790962f757c3e64955
+fasth3-4step-vsa-nvfp4	vae/diffusion_pytorch_model-00002-of-00003.safetensors	976677176	sha256:066ac79f7b3fbd5bd0a36fdbc4b724da83742b8b8a27543e1c4eeb50fe3c8a07
 vdn-h3-stage-b-2000	stage-b-step-2000/adapters/default/adapter_model.safetensors	334026912	sha256:58558fef506f88bb41649242de9b9b3a365da806b51b2e96afbbe1625222058a
 vdn-h3-stage-b-2000	stage-b-step-2000/linear_branch/model.safetensors	4279428112	sha256:dec6981c7874f5b3bc92d1a02e256b673a3b3499dc1a124714bb3b19da602855
 vdn-h3-dmd-250-turbo	stage-dmd-step-250/adapters/turbo/adapter_model.safetensors	851452696	sha256:24fc93c82fe84dc45d0627f4e72c637bc387d282ba18f60ed3b7f8c81089392c
