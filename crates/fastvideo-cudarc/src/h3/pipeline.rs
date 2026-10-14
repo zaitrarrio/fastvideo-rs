@@ -11,7 +11,8 @@
 //!
 //! **What is resident.** [`H3Pipeline`] loads once and generates many times:
 //! the DiT (41 GB as bf16 with the VSA gates, 37 GB dense), the text refiner
-//! (1.6 GB), the video VAE (4.9 GB as bf16 linears) and the audio VAE (0.3 GB)
+//! (1.6 GB), the video VAE (4.9 GB as bf16 linears, plus 2.5 GB of MXFP8
+//! copies of its block linears on sm_100+, `FASTVIDEO_H3_VAE_MXFP8`) and the audio VAE (0.3 GB)
 //! stay on the device, about 48 GB. A 5 s clip adds ~12 GB of activations
 //! (measured peak 53.6 GB with the decoders loaded late), a 15 s clip ~25 GB.
 //!

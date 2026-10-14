@@ -593,11 +593,18 @@ bf16 peak), element-wise 13 %, attention 10 %, layout 9 %. Env-flag seams in
 * `FASTVIDEO_H3_VAE_VEC` (**default on**, `=0` restores the scalar kernels):
   vector-access merge-heads and SwiGLU kernels, bit-identical. 768p video
   VAE 6.306 → 6.203 s (−1.6 %), frames byte-identical.
-* `FASTVIDEO_H3_VAE_MXFP8=1` (**default off**, a numerics change): MXFP8
-  block linears (the DiT's MXFP8 recipe; activations quantized by the
+* `FASTVIDEO_H3_VAE_MXFP8` (**default on** for the 36-block decoder on
+  sm_100+ since 2026-10-14, the owner's decision; a numerics change):
+  MXFP8 block linears (the DiT's MXFP8 recipe; activations quantized by the
   producing kernel). Video VAE −25.6 % (480p) / −25.8 % (768p) / −26.5 %
   (1080p); against the bf16 decode LPIPS 0.001, PSNR 51 dB, sharpness and
-  jitter 1.00. Gate: quality pass (5 prompts x 3 seeds: LPIPS 0.002, PSNR 50 dB, sharpness / jitter 1.00 vs the bf16 decode; unchanged vs the 49-forward base). The owner decides on the default.
+  jitter 1.00. Gate: quality pass (5 prompts x 3 seeds: LPIPS 0.002, PSNR 50 dB, sharpness / jitter 1.00 vs the bf16 decode; unchanged vs the 49-forward base).
+  `=0` restores the bf16 decode byte for byte; `=1` also opts the 26-block
+  lightweight decoder in and fails at load on a GPU below sm_100. Unset on
+  pre-Blackwell GPUs, CPU runs and the lightweight decoder it means bf16
+  (said once in the log). The MXFP8 copies sit beside the bf16 weights,
+  +2.3 GiB while the decoder is resident; the H3 memory plan prices them
+  (`H3PlanOptions::vae_mxfp8`). TAEH3 is unaffected.
 * `FASTVIDEO_H3_VAE_GEMM=cublas|lt[N]` and `FASTVIDEO_H3_VAE_SDPA=auto|v1|v2|cudnn`
   (defaults unchanged): tuning seams; `fv-gpucheck kernels --groups
   h3vae_bench` found no cuBLASLt algorithm faster than cuBLAS and `auto`
