@@ -1,3 +1,4 @@
+# Measured (RTX PRO 6000, image fastvideo-rs-runtime@sha256:efa9348a (fv-gpucheck 0.1.15), h3-demo x 3 seeds, medians): VAE tile batch default (7/forward) vs FASTVIDEO_H3_VAE_TILE_BATCH=196 (28/forward, the per-chunk cap): 768p video VAE 6.292 -> 6.192 s (-1.6%), generate 26.88 -> 26.80 s; 480p 2.666 -> 2.669 s (0%); frames byte-identical (parity pass, gate unchanged by construction); default kept (docs/perf/h3-vae-tile-batching.md).
 # FastH3 Preview v1 4-step VSA: base MiniMax-H3 + the Preview VSA LoRA,
 # VSA-H3, MXFP8 linears, bf16 activations.
 

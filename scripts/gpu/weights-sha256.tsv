@@ -392,3 +392,5 @@ auxiliary/ncii-light-guard	config.json	1656	sha256:f5f502df0fcb01fe450c02ab3652e
 auxiliary/ncii-light-guard	model.safetensors	536225696	sha256:d5d7ca0d96cd5215cceb0dc2acff4aeb79a862ea9eec2f4cc0407d4c215c49b0
 auxiliary/ncii-light-guard	tokenizer.json	33385105	sha256:ceeb59cb0d50ec7e025bda69a115d3315090bf0d75c91774e73b43767e4c9202
 auxiliary/ncii-light-guard	tokenizer_config.json	839	sha256:2dd3876e70d1e247b653b345f4b145c77d86500da756dec9f47b23c3649fbeb0
+h3-turbo-loras/lightx2v-v0.1	README.md	1396	sha256:4939071ba0e40d0c6f3266afd366862b1062fa040b96d4b457c7d582dc9e4936
+h3-turbo-loras/lightx2v-v0.1	minimax_h3_fl2v_turbo_4step_v0.1.safetensors	1383677888	sha256:5ff4a12c8b4599fec716e1b15a45e504e0d1129111896bdcde5ac4a15e395b29

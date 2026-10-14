@@ -99,11 +99,12 @@ pub fn upsampler_service(c: &Config) -> Option<Arc<fastvideo_upsampler::Service>
                 let tok = |x: &Option<Arc<dyn fastvideo_upsampler::TokenCounter>>| x.as_ref().map_or_else(|| "chars".to_owned(), |t| t.describe());
                 tracing::info!(
                     backend = %s.describe(),
-                    timeout_ms = u.timeout_ms,
-                    hedge = u.hedge,
+                    timeout_ms = u.timeout_ms(),
+                    hedge = u.hedge(),
+                    local = u.is_local(),
                     default_on = u.default_on,
                     context_tokens = u.context_tokens,
-                    deck_size = u.deck_size,
+                    deck_size = u.deck_size(),
                     vision = u.vision,
                     tokenizer_h3 = %tok(&counters.h3),
                     tokenizer_wan = %tok(&counters.wan),

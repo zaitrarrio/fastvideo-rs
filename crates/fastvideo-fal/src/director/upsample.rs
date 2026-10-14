@@ -11,6 +11,11 @@
 //!
 //! - one LLM call at a time, front first, so the next segments are always
 //!   expanded before speculative ones further out;
+//! - nothing further ahead while a chunk waits for its segment
+//!   ([`SegmentUpsampler::set_waiting`]), and only the next segment after
+//!   a `replan: true` direction until one executes
+//!   ([`SegmentUpsampler::replanned`]): with a local LLM on the video
+//!   model's GPU every speculative call slows the chunk being built;
 //! - each planned segment is written as if the ones before it had played
 //!   ([`Upsampler::user_message_after`]), so the plan is one continuous
 //!   story;
@@ -120,6 +125,13 @@ pub struct SegmentUpsampler {
     started: u64,
     /// Planned segments discarded unexecuted (busts).
     discarded: u64,
+    /// A chunk is due and waits for the front segment: nothing further
+    /// ahead starts until it is taken ([`Self::set_waiting`]).
+    waiting: bool,
+    /// The client replanned since the last executed segment: another
+    /// replan is likely, so only the next segment is planned until one
+    /// executes ([`Self::replanned`]).
+    steered: bool,
 }
 
 impl Drop for SegmentUpsampler {
@@ -135,7 +147,36 @@ impl SegmentUpsampler {
     /// [`Self::on_done`]. `deck`: segments planned ahead (at least 1);
     /// `images`: the vision loader (`None`: a text-only LLM).
     pub fn new(up: Upsampler, tx: mpsc::UnboundedSender<Done>, deck: usize, images: Option<ImageLoader>) -> Self {
-        Self { up, tx, seq: 0, planned: VecDeque::new(), inflight: None, wanted: Vec::new(), last: None, deck: deck.max(1), images, started: 0, discarded: 0 }
+        Self { up, tx, seq: 0, planned: VecDeque::new(), inflight: None, wanted: Vec::new(), last: None, deck: deck.max(1), images, started: 0, discarded: 0, waiting: false, steered: false }
+    }
+
+    /// A chunk is due and its segment is not ready (`true`), or nothing
+    /// waits (`false`). While one waits, the sidecar serves that call only:
+    /// no speculative call starts in the gap between its answer and the
+    /// chunk taking it (a local LLM shares the GPU with the chunk).
+    pub fn set_waiting(&mut self, waiting: bool) {
+        let was = std::mem::replace(&mut self.waiting, waiting);
+        if was && !waiting {
+            self.pump();
+        }
+    }
+
+    /// The client sent a replanning direction (`replan: true`): until a
+    /// segment executes, plan only the next one (a steering client tends to
+    /// replan again, busting whatever was planned beyond it; the
+    /// gpu-check-2026-10-13 turbo session made 17 calls for 3 played
+    /// segments).
+    pub fn replanned(&mut self) {
+        self.steered = true;
+    }
+
+    /// How far ahead [`Self::pump`] plans now.
+    fn depth(&self) -> usize {
+        if self.waiting || self.steered {
+            1
+        } else {
+            self.deck
+        }
     }
 
     pub fn upsampler(&self) -> &Upsampler {
@@ -226,7 +267,7 @@ impl SegmentUpsampler {
     /// Starts the next planned position when idle and below the deck.
     fn pump(&mut self) {
         let pos = self.planned.len();
-        if self.inflight.is_some() || pos >= self.deck {
+        if self.inflight.is_some() || pos >= self.depth() {
             return;
         }
         let Some(key) = self.wanted.get(pos).cloned() else { return };
@@ -286,6 +327,8 @@ impl SegmentUpsampler {
             return None;
         }
         let s = self.planned.pop_front().expect("ready");
+        self.waiting = false;
+        self.steered = false;
         if s.key.direction.is_some() {
             self.last = s.key.direction.clone();
         }
@@ -456,6 +499,53 @@ mod tests {
         let seen = llm.seen.lock().unwrap();
         let dawn = seen.iter().find(|r| r.user.ends_with("NEW DIRECTION:\nDawn.")).unwrap();
         assert!(dawn.user.contains("[0] beat 0\n") && !dawn.user.contains("beat 1"), "{}", dawn.user);
+    }
+
+    /// A chunk waiting for its segment: when that call answers, nothing
+    /// further ahead starts until the chunk takes it; then the deck refills.
+    #[tokio::test]
+    async fn nothing_speculative_while_a_chunk_waits() {
+        let (mut s, mut rx, _) = setup(0, false, 3, None);
+        s.sync(vec![Cue::default(); 3]);
+        s.set_waiting(true);
+        settle(&mut s, &mut rx).await;
+        assert_eq!((s.planned(), s.started(), s.busy()), (1, 1, false), "the waiting chunk's call only");
+        s.sync(vec![Cue::default(); 3]);
+        assert!(!s.busy(), "a sync while waiting starts nothing further");
+        s.take(&Cue::default()).unwrap();
+        assert!(s.busy(), "taken: planning ahead resumes");
+        settle(&mut s, &mut rx).await;
+        settle(&mut s, &mut rx).await;
+        assert_eq!((s.planned(), s.started()), (2, 3));
+        // Waiting ends without a take: planning ahead resumes too.
+        let (mut s, mut rx, _) = setup(0, false, 3, None);
+        s.set_waiting(true);
+        s.sync(vec![Cue::default(); 3]);
+        settle(&mut s, &mut rx).await;
+        assert!(!s.busy());
+        s.set_waiting(false);
+        assert!(s.busy());
+    }
+
+    /// `replan: true`: only the next segment is planned until it executes
+    /// (a steering client replans again); then the full deck.
+    #[tokio::test]
+    async fn after_a_replan_only_the_next_segment_is_planned() {
+        let (mut s, mut rx, _) = setup(0, false, 3, None);
+        s.sync(vec![Cue::default(); 3]);
+        for _ in 0..3 {
+            settle(&mut s, &mut rx).await;
+        }
+        assert_eq!(s.started(), 3);
+        s.replanned();
+        s.sync(vec![dir(2, "Rain."), Cue::default(), Cue::default()]);
+        assert_eq!((s.discarded(), s.started()), (3, 4));
+        settle(&mut s, &mut rx).await;
+        assert_eq!((s.planned(), s.busy(), s.started()), (1, false, 4), "nothing beyond the replanned segment");
+        s.take(&dir(2, "Rain.")).unwrap();
+        settle(&mut s, &mut rx).await;
+        settle(&mut s, &mut rx).await;
+        assert_eq!((s.planned(), s.started()), (2, 6), "executed: the deck refills");
     }
 
     #[tokio::test]
