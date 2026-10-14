@@ -570,6 +570,7 @@ pub async fn submit_generation(
 ) -> Result<Job, ApiError> {
     ctx.engine().admit()?;
     ctx.safety().check_request(&req)?;
+    ctx.moderate_request(&req).await?;
     let models = ctx.engine().models();
     let engine = ctx.engine().clone();
     let alias = move |n: &str| engine.alias(n);

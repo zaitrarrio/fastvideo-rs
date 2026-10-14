@@ -5,9 +5,16 @@
 // filters and pagination; a launchable row's click selects it, a non-launchable one does not; the selection persists
 // across sort / filter / page and the launch submits the selected type; Refresh asks ?refresh=1 (and a second one
 // within 30 s is served cached, saying so); switching provider swaps the tables and cancels a stale load.
-// Screenshots of each provider's table go to docs/control/img/. Simulated upstreams only.
+// Runpod (owner 2026-10-13: "I should be able to launch Runpod in any region if I am using R2"): the Weights select
+// recomputes the rows' launchable flags without a refetch (volume: EU-RO-1 only; r2: every NVIDIA Secure Cloud row);
+// the table is an ordered multi-pick (click = primary, "+ fallback" / Shift+Enter appends, the Selected GPUs strip
+// reorders and removes) and the launch posts gpu_types in that order with the data centres (r2 in US data centres).
+// Every check waits for the state it asserts (the form's value as the strip / rows show it), not for time.
+// Screenshots of each provider's table go to docs/control/img/ only with FV_UI_SCREENSHOTS=1 (they are tracked
+// files: regenerate them deliberately when the table changes). Simulated upstreams only.
 //   CHROMIUM=/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell node test/ui/instance-tables.mjs
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { chromium } from "playwright-core";
 import { hashPassphrase, HERE, PASSPHRASE, SECRETS, startMock, startWorker } from "../harness.mjs";
@@ -15,13 +22,31 @@ import { hashPassphrase, HERE, PASSPHRASE, SECRETS, startMock, startWorker } fro
 const out = `${HERE}test-results`;
 const img = `${HERE}../docs/control/img`;
 mkdirSync(out, { recursive: true });
-mkdirSync(img, { recursive: true });
+const SHOTS = process.env.FV_UI_SCREENSHOTS === "1";
+if (SHOTS) mkdirSync(img, { recursive: true });
+/** A tracked screenshot (docs/control/img): only when asked (FV_UI_SCREENSHOTS=1). */
+const docShot = async (el, name) => SHOTS && (await el.screenshot({ path: `${img}/${name}` }));
 const mock = await startMock();
+// The wan preset's trees in the mock R2 bucket (as explorer.mjs): one-file manifests pinned by WEIGHTS_R2_EXTRA_TREES.
+const WAN_TREES = ["fastwan22-ti2v-5b", "wan22-ti2v-5b"];
+function mockManifest(dest) {
+  const sha = (b) => createHash("sha256").update(b).digest("hex");
+  const f = Buffer.from(`{"tree": "${dest}"}`);
+  const m = Buffer.from(JSON.stringify({ format: "fv-weights-manifest/1", dest, rev: "rev1", part_size: 1 << 20, total_bytes: f.length, files: [{ path: "config.json", size: f.length, sha256: sha(f), parts: [sha(f)] }] }));
+  mock.r2.objects.set(`manifests/${dest}/rev1.json`, m);
+  mock.r2.objects.set(`weights/${dest}/rev1/config.json`, f);
+  return { rev: "rev1", files: 1, bytes: f.length, manifest_sha256: sha(m), source: "test" };
+}
 mock.runpodKey = SECRETS.RUNPOD_API_KEY;
 mock.githubPat = SECRETS.GITHUB_PAT;
 mock.gmiKey = SECRETS.GMI_API_KEY;
 mock.brevToken = SECRETS.BREV_API_TOKEN;
 mock.brevOrg = "org-ui-tables";
+// A third Runpod data centre (no weights volume there): H100 and H200 in stock, an AMD GPU (never launchable).
+mock.runpodDcs.push({ id: "US-TX-3", name: "US-TX-3", location: "United States", storageSupport: true, listed: true, gpuAvailability: [
+  { available: true, stockStatus: "Low", gpuTypeId: "NVIDIA H100 80GB HBM3" },
+  { available: true, stockStatus: "High", gpuTypeId: "NVIDIA H200" },
+] });
 // Brev: 30 more types (pages of 10 / 25), some CPU-only, one AMD, two not stoppable; only two are allowed.
 const gpus = [["H100", 80, 2.9], ["L40S", 48, 1.6], ["T4", 16, 0.5], ["A10G", 24, 1.1], ["RTX PRO Server 6000", 96, 3.4], ["V100", 16, 0.9]];
 for (let i = 0; i < 30; i++) {
@@ -54,6 +79,13 @@ const w = await startWorker(mock, {
   BREV_ORG_ID: mock.brevOrg,
   BREV_INSTANCE_TYPES: "a100-test,g5.xlarge-test",
   BREV_BUDGET_USD: "40",
+  // The R2 weights store (the mock's bucket), as in explorer.mjs: a Runpod pod with weights_source r2 validates.
+  WEIGHTS_R2_ENDPOINT: `http://127.0.0.1:${mock.port}`,
+  WEIGHTS_R2_BUCKET: mock.r2.bucket,
+  WEIGHTS_R2_ACCESS_KEY_ID: mock.r2.access,
+  WEIGHTS_R2_SECRET_ACCESS_KEY: mock.r2.secret,
+  WEIGHTS_R2_AUX: "0",
+  WEIGHTS_R2_EXTRA_TREES: JSON.stringify(Object.fromEntries(WAN_TREES.map((d) => [d, mockManifest(d)]))),
 });
 const B = w.url;
 let browser;
@@ -99,9 +131,12 @@ try {
     await page.selectOption(`${SL} [data-ctl][data-path="provider"]`, JSON.stringify(p));
   };
   const T = (p) => `${SL} [data-instance-table="${p}"]`;
+  // Loaded: the table drawn, its load done, and the provider's details (whose arrival redraws the form) in too, so
+  // no redraw lands between a check's action and its assertion.
   const loaded = async (p) => {
     await page.waitForSelector(`${T(p)} table.it-table`, { timeout: 15000 });
     await page.waitForFunction((s) => !document.querySelector(`${s} .it-status`)?.hasAttribute("data-loading"), T(p), { timeout: 15000 });
+    await page.waitForFunction((s) => !document.querySelector(`${s} [data-provider-status]`)?.hasAttribute("data-loading"), SL, { timeout: 15000 });
   };
   const names = (p) => page.$$eval(`${T(p)} tbody tr`, (rs) => rs.map((r) => r.getAttribute("data-row")));
   const count = (p) => page.textContent(`${T(p)} [data-it-count]`);
@@ -199,7 +234,7 @@ try {
   await page.waitForFunction((s) => document.querySelector(`${s} [data-ctl][data-path="provider_gpu"]`)?.value?.includes("a100-test"), SL);
   assert.equal(await page.getAttribute(`${T("brev")} tr[data-row="a100-test"]`, "aria-selected"), "true");
   assert.equal(await page.getAttribute(`${T("brev")} tr[data-row="g5.xlarge-test"]`, "aria-selected"), "false");
-  await (await page.$(T("brev"))).screenshot({ path: `${img}/instance-table-brev.png` });
+  await docShot(await page.$(T("brev")), "instance-table-brev.png");
 
   // ---- Refresh: ?refresh=1, a new "updated" time; a second one within 30 s is served cached and says so
   const at0 = Number(await page.getAttribute(`${T("brev")} .it-status`, "data-at"));
@@ -228,7 +263,7 @@ try {
   await page.click(`${T("gmi")} tr[data-row="container.h200.x1@us-denver-1"]`);
   await page.waitForFunction((s) => document.querySelector(`${s} [data-ctl][data-path="provider_gpu"]`)?.value?.includes("container.h200.x1"), SL);
   assert.match(await page.textContent(`${T("gmi")} [data-it-selected]`), /Selected: container\.h200\.x1 · 1× H200 141 GB · \$3\.20\/hr · us-denver-1/);
-  await (await page.$(T("gmi"))).screenshot({ path: `${img}/instance-table-gmi.png` });
+  await docShot(await page.$(T("gmi")), "instance-table-gmi.png");
 
   // ---- Runpod picked while its table loads, then Brev: the stale load is cancelled and Brev's table shows
   await page.route("**/api/providers/runpod/instance-types", async (r) => (await new Promise((res) => setTimeout(res, 1500)), r.continue().catch(() => {})));
@@ -242,12 +277,19 @@ try {
   assert.equal(await page.$(T("runpod")), null, "no Runpod table");
   await page.unroute("**/api/providers/runpod/instance-types");
 
-  // ---- Runpod: GPU types × data centres; only EU-RO-1 (the weights volume) is launchable; the launch submits the pick
+  // ---- Runpod: GPU types × data centres. Weights volume (h3-turbo's default): only EU-RO-1 (the volume) is launchable
   await pick("runpod");
   await loaded("runpod");
   const rp = await names("runpod");
-  assert.ok(rp.includes("NVIDIA RTX PRO 6000 Blackwell Server Edition@EU-RO-1") && rp.includes("NVIDIA H100 80GB HBM3@US-CA-2") && rp.includes("NVIDIA H200@US-CA-2"), rp.join(", "));
-  assert.match(await page.getAttribute(`${T("runpod")} tr[data-row="NVIDIA H200@US-CA-2"]`, "title"), /no fv weights volume in US-CA-2/);
+  assert.ok(rp.includes("NVIDIA RTX PRO 6000 Blackwell Server Edition@EU-RO-1") && rp.includes("NVIDIA H100 80GB HBM3@US-CA-2") && rp.includes("NVIDIA H200@US-CA-2") && rp.includes("NVIDIA H200@US-TX-3"), rp.join(", "));
+  const WS = `${SL} [data-ctl][data-path="weights_source"]`;
+  const weights = (w) => page.click(`${WS} button[role="radio"]:text-is("${w}")`);
+  assert.equal(await page.textContent(`${WS} [aria-checked="true"]`), "volume", "h3-turbo: the volume by default");
+  assert.equal(await page.$(`${SL} .ff-field[data-path="gpu_types"]`), null, "no separate GPU types list: the table is the pick");
+  assert.ok(await page.$(`${SL} .ff-field[data-path="region"]`), "the volume's region");
+  assert.equal(await page.$(`${SL} .ff-field[data-path="data_centers"]`), null);
+  assert.match(await page.getAttribute(`${T("runpod")} tr[data-row="NVIDIA H200@US-CA-2"]`, "title"), /not launchable: no fv weights volume in US-CA-2/);
+  assert.match(await count("runpod"), / · 2 launchable · /, await count("runpod"));
   const rtx = await page.$$eval(`${T("runpod")} tr[data-row="NVIDIA RTX PRO 6000 Blackwell Server Edition@EU-RO-1"] td`, (tds) => tds.map((t) => t.textContent));
   assert.equal(rtx[2], "yes (Low)");
   assert.equal(rtx[6], "Blackwell");
@@ -256,22 +298,117 @@ try {
   await page.click(`${T("runpod")} tr[data-row="NVIDIA H100 80GB HBM3@EU-RO-1"]`);
   await page.waitForSelector(`${T("runpod")} tr[data-row="NVIDIA H100 80GB HBM3@EU-RO-1"][aria-selected="true"]`);
   assert.match(await page.textContent(`${T("runpod")} [data-it-selected]`), /Selected: NVIDIA H100 80GB HBM3 · 1× H100 SXM 80 GB · \$3\.29\/hr · EU-RO-1/);
-  await (await page.$(T("runpod"))).screenshot({ path: `${img}/instance-table-runpod.png` });
-  // Launch: the preflight and the create are answered here (the body is what is checked).
+
+  // ---- the wan preset: its default is r2 (the 500 GB EU volume holds H3 + LTX only). Weights r2: every NVIDIA Secure
+  // Cloud row is launchable (recomputed here: no request); the location is any data centre (no region, no volume)
+  reqs.length = 0;
+  await page.selectOption(`${SL} [data-ctl][data-path="preset"]`, JSON.stringify("wan"));
+  await page.waitForSelector(`${WS} [aria-checked="true"]:text-is("r2")`);
+  await page.waitForSelector(`${SL} .ff-field[data-path="data_centers"]`);
+  await page.waitForSelector(`${T("runpod")} tr[data-row="NVIDIA H200@US-CA-2"].it-can`);
+  assert.deepEqual(typeReqs(), [], `the weights switch refetches nothing: ${reqs}`);
+  assert.match(await page.getAttribute(`${T("runpod")} tr[data-row="NVIDIA H200@US-CA-2"]`, "title"), /^select NVIDIA H200/);
+  assert.match(await count("runpod"), / · 6 launchable · /, await count("runpod"));
+  assert.equal(await page.$(`${SL} .ff-field[data-path="region"]`), null, "no region with r2");
+  assert.equal(await page.$(`${SL} .ff-field[data-path="volume"]`), null, "no volume with r2");
+  // The data centres offered: every one Runpod lists (location, the picked type's stock), fv-control's others, any.
+  const dcChips = await page.$$eval(`${SL} [data-ctl][data-path="data_centers"] button`, (bs) => bs.map((b) => b.textContent));
+  assert.ok(dcChips.some((t) => /^US-CA-2 United States · stock H100 SXM: High/.test(t)), dcChips.join(" | "));
+  assert.ok(dcChips.some((t) => /^US-TX-3 United States · stock H100 SXM: Low/.test(t)), dcChips.join(" | "));
+  assert.ok(dcChips.some((t) => /^EU-NL-1 .*not listed now/.test(t)), "fv-control's other data centres");
+  assert.match(dcChips[dcChips.length - 1], /^any Runpod places it/);
+  // Back to the volume: the rule returns (no refetch); then r2 again.
+  await weights("volume");
+  await page.waitForSelector(`${T("runpod")} tr[data-row="NVIDIA H200@US-CA-2"].it-cannot`);
+  await page.waitForSelector(`${SL} .ff-field[data-path="region"]`);
+  // Hub (owner 2026-10-14): any data centre as r2, and the owner's approval box (as on GMI / Brev), refused unticked.
+  assert.deepEqual(await page.$$eval(`${WS} button[role="radio"]`, (bs) => bs.map((b) => b.textContent)), ["volume", "r2", "hub", "none"]);
+  await weights("hub");
+  await page.waitForSelector(`${SL} .ff-field[data-path="weights_download_approved"]`);
+  await page.waitForSelector(`${T("runpod")} tr[data-row="NVIDIA H200@US-CA-2"].it-can`);
+  await page.waitForSelector(`${SL} .ff-field[data-path="data_centers"]`);
+  assert.equal(await page.$(`${SL} .ff-field[data-path="region"]`), null, "no region with hub");
+  await page.waitForSelector(`${SL} .ff-field[data-path="weights_download_approved"].has-err .cf-err:not([hidden]):text-matches("owner's approval")`, { timeout: 15000 });
+  await page.check(`${SL} [data-ctl][data-path="weights_download_approved"]`);
+  // (This fv-control has no FV_HUB_DOWNLOADS_APPROVED: the Worker-level approval is still missing, and says so.)
+  await page.waitForSelector(`${SL} .ff-field[data-path="weights_download_approved"].has-err .cf-err:not([hidden]):text-matches("FV_HUB_DOWNLOADS_APPROVED")`, { timeout: 15000 });
+  await weights("r2");
+  await page.waitForSelector(`${T("runpod")} tr[data-row="NVIDIA H200@US-CA-2"].it-can`);
+  assert.equal(await page.$(`${SL} .ff-field[data-path="weights_download_approved"]`), null, "no approval box with r2");
+  assert.deepEqual(typeReqs(), [], `no refetch: ${reqs}`);
+
+  // ---- the ordered multi-pick: a click = the primary; "+ fallback" appends (the same type in another data centre
+  // adds the data centre, not the type); Shift+Enter appends from the keyboard; the strip reorders and removes
+  const strip = () => page.$$eval(`${T("runpod")} [data-it-strip] li`, (ls) => ls.map((l) => l.getAttribute("data-it-pick")));
+  // The picked data centres in their order (a chip shows "<n>. " once two or more are picked).
+  const dcs = () =>
+    page.$$eval(`${SL} [data-ctl][data-path="data_centers"] button[aria-pressed="true"]`, (bs) =>
+      bs
+        .map((b) => /^(?:(\d+)\. )?(\S+)/.exec(b.textContent))
+        .sort((a, b) => Number(a[1] || 0) - Number(b[1] || 0))
+        .map((m) => m[2]),
+    );
+  const until = async (fn, want, what) => {
+    for (let i = 0; i < 100; i++) {
+      if (JSON.stringify(await fn()) === JSON.stringify(want)) return;
+      await page.waitForTimeout(50);
+    }
+    assert.deepEqual(await fn(), want, what);
+  };
+  const H100 = "NVIDIA H100 80GB HBM3";
+  const H200 = "NVIDIA H200";
+  const RTX = "NVIDIA RTX PRO 6000 Blackwell Server Edition";
+  await page.click(`${T("runpod")} tr[data-row="${H200}@US-CA-2"]`);
+  await until(strip, [H200], "the click picks the primary");
+  await until(dcs, ["US-CA-2"], "its data centre");
+  await page.click(`${T("runpod")} [data-it-add="${H200}@US-TX-3"]`);
+  await until(dcs, ["US-CA-2", "US-TX-3"], "the same type elsewhere adds the data centre");
+  assert.deepEqual(await strip(), [H200], "not the type twice");
+  await page.click(`${T("runpod")} [data-it-add="${H100}@US-CA-2"]`);
+  await until(strip, [H200, H100], "a fallback type");
+  assert.deepEqual(await dcs(), ["US-CA-2", "US-TX-3"]);
+  // Each picked row shows its type's order; H100 in US-TX-3 is tried too (every data centre × every type).
+  assert.equal(await page.getAttribute(`${T("runpod")} tr[data-row="${H200}@US-TX-3"]`, "data-it-order"), "1");
+  assert.equal(await page.getAttribute(`${T("runpod")} tr[data-row="${H100}@US-TX-3"]`, "data-it-order"), "2");
+  assert.equal(await page.getAttribute(`${T("runpod")} tr[data-row="${H100}@EU-RO-1"]`, "data-it-order"), null);
+  // Keyboard: Shift+Enter on a focused row appends it.
+  await page.focus(`${T("runpod")} tr[data-row="${RTX}@EU-RO-1"]`);
+  await page.keyboard.press("Shift+Enter");
+  await until(strip, [H200, H100, RTX], "Shift+Enter appends");
+  await until(dcs, ["US-CA-2", "US-TX-3", "EU-RO-1"], "with its data centre");
+  // The strip: move H200 down (H100 first), remove the RTX PRO 6000; the data centre chip of EU-RO-1 off; "any" last.
+  await page.click(`${T("runpod")} [data-it-pick="${H200}"] [data-it-down]`);
+  await until(strip, [H100, H200, RTX], "moved down");
+  await page.click(`${T("runpod")} [data-it-pick="${RTX}"] [data-it-remove]`);
+  await until(strip, [H100, H200], "removed");
+  await page.click(`${SL} [data-ctl][data-path="data_centers"] button[aria-pressed="true"]:has-text("EU-RO-1")`);
+  await until(dcs, ["US-CA-2", "US-TX-3"], "EU-RO-1 off");
+  await page.click(`${SL} [data-ctl][data-path="data_centers"] button:text-matches("^any")`);
+  await until(dcs, ["US-CA-2", "US-TX-3", "any"], "any last");
+  assert.match(await page.textContent(`${T("runpod")} [data-it-selected]`), /Selected: NVIDIA H100 80GB HBM3 · 1× H100 SXM 80 GB · \$3\.29\/hr · US-CA-2/, "the primary: the first type in the first data centre");
+  await docShot(await page.$(T("runpod")), "instance-table-runpod.png");
+
+  // ---- launch: an r2 pod in US data centres, the fallbacks in order (the preflight and the create answered here)
   let posted = null;
   await page.route("**/api/preflight", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, errors: [], warnings: [] }) }));
   await page.route("**/api/standalone", (r) => (r.request().method() === "POST" ? ((posted = r.request().postDataJSON()), r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ pod: { name: "tables-ui" } }) })) : r.continue()));
-  await page.waitForFunction((s) => !document.querySelector(`${s} button[type=submit]`).disabled, SL, { timeout: 15000 });
+  await page.waitForFunction((s) => !document.querySelector(`${s} button[type=submit]`).disabled, SL, { timeout: 15000 }).catch(async (e) => {
+    throw new Error(`${e.message}: ${await page.$$eval(`${SL} .cf-err:not([hidden])`, (es) => es.map((x) => `${x.closest("[data-path]")?.getAttribute("data-path")}: ${x.textContent}`).join(" | "))} ${await page.textContent(`${SL} .ff-summary, ${SL} [class*=summary]`).catch(() => "")}`);
+  });
   // (After the launch the page opens the simulated pod, which the Worker does not know: its 404 is expected.)
   assert.deepEqual(errors.filter((e) => !/login required|401/.test(e)), [], "no console errors");
   await page.click(`${SL} button[type=submit]`);
   for (let i = 0; i < 50 && !posted; i++) await page.waitForTimeout(100);
   assert.ok(posted, "the launch was posted");
   assert.equal(posted.provider, "runpod");
-  assert.deepEqual(posted.gpu_types, ["NVIDIA H100 80GB HBM3"]);
-  assert.equal(posted.region, "eu");
+  assert.equal(posted.weights_source, "r2");
+  assert.deepEqual(posted.gpu_types, [H100, H200]);
+  assert.deepEqual(posted.data_centers, ["US-CA-2", "US-TX-3", "any"]);
+  assert.equal(posted.region, undefined, "no region (the volume's) with r2");
+  assert.equal(posted.volume, undefined, "no volume with r2");
+  assert.equal(posted.weights_download_approved, undefined, "the Hub approval goes with hub only");
 
-  console.log(`ok   UI instance-type tables: load on pick only, sort / search / filters / pages, selection kept and launched, refresh=1 (rate-limited), provider switch cancels stale loads (screenshots in ${img})`);
+  console.log(`ok   UI instance-type tables: load on pick only, sort / search / filters / pages, selection kept and launched, refresh=1 (rate-limited), provider switch cancels stale loads, Runpod weights recompute launchability, ordered multi-pick launched as gpu_types + data_centers${SHOTS ? ` (screenshots in ${img})` : ""}`);
 } catch (e) {
   fail(e);
 }

@@ -119,3 +119,12 @@ ltx23-dev	Lightricks/LTX-2.3	ltx-2.3-22b-dev.safetensors ltx-2.3-22b-distilled-l
 wan22-t2v-a14b	Wan-AI/Wan2.2-T2V-A14B-Diffusers	model_index.json scheduler/* tokenizer/* text_encoder/* transformer/* transformer_2/* vae/*
 lingbot-video-moe-30b-a3b	robbyant/lingbot-video-moe-30b-a3b	model_index.json scheduler/* transformer/* refiner/* text_encoder/* processor/* vae/*
 cosmos3-super	nvidia/Cosmos3-Super	model_index.json scheduler/* transformer/* vae/* text_tokenizer/*
+# h3-turbo-loras/*: the MiniMax-H3 Turbo LoRAs the MiniMaxAI/MiniMax-H3-Turbo-Lora Space folds into the base
+# transformer (docs/ports/h3-turbo-loras.md; owner approval 2026-10-13, about 2.2 GB, Apache-2.0). R2 only (not on the
+# EU volume); read beside h3-base (`$W/h3-turbo-loras/<sub>/<file>`). larry: the Space's default file (ckpt850 EMA);
+# lightx2v: the newest 4-step 768p FL2VA/T2VA file (v1.2). The Space's lightx2v v0.1 file is not published (owner).
+h3-turbo-loras/larry	larryvrh/MiniMax-H3-Turbo-Lora	README.md minimax_h3_turbo_4step_ema_ckpt850.safetensors
+h3-turbo-loras/lightx2v	lightx2v/Minimax-h3-Turbo	README.md minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors
+# auxiliary/ncii-light-guard: the optional NCII prompt guard (fv-serve [moderation] ncii, docs/ports/h3-turbo-loras.md),
+# MIT, 270M Gemma3 text classifier, 0.57 GB. R2 only.
+auxiliary/ncii-light-guard	hfmlsoc/ncii-light-guard-v01	README.md config.json model.safetensors tokenizer.json tokenizer_config.json

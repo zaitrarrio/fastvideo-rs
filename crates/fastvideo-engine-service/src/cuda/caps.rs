@@ -15,6 +15,8 @@
 //! | `h3-turbo` | `fasth3-4step-vsa` | FastH3 Preview 4-step (`4step-vsa`), VSA-H3, MXFP8 linears, official VAE, 768p | `h3/fasth3_4step_vsa` | Fastest H3 recipe that passes the gate |
 //! | `h3-draft` | `fasth3-4step-vsa-480p-taeh3` | the turbo recipe at 480p with the TAEH3 decoder | `h3/fasth3_4step_vsa` | 8.1 s on RTX PRO 6000; fails the gate (draft) |
 //! | — | `fasth3-8step-dense` | FastH3 8-step DMD (`8step`), dense attention, official VAE | none | untiered (explicit id or `recipe = "8step"`) |
+//! | — | `h3-larry-turbo` | base MiniMax-H3 + larryvrh Turbo LoRA ckpt850 folded at load (`larry-turbo`, 6 forwards; `steps` 3-8, `lora_strength`), dense, MXFP8, official VAE; T2V + FL2VA | `h3/larry_turbo_dense` | untiered: what the MiniMaxAI/MiniMax-H3-Turbo-Lora Space runs (docs/ports/h3-turbo-loras.md) |
+//! | — | `h3-lightx2v-turbo` | base MiniMax-H3 + lightx2v FL2VA/T2VA 4-step v1.2 768p folded at load (`lightx2v-turbo`, 4 forwards, shifts 6 / 3), dense, MXFP8; T2V + FL2VA | `h3/lightx2v_turbo_dense` | untiered (docs/ports/h3-turbo-loras.md) |
 //! | — (served `h3-trim`) | `fasth3-trim-8step` | FastH3 Trim 8-step DMD (`trim-8step`): 42 of 50 blocks, rank-16 AdaLN, VSA-H3 0.8, its own lightweight VAE; text-to-video only | none | untiered (explicit id, `h3-trim`, or `recipe = "trim-8step"`); docs/ports/h3-trim.md |
 //! | `ltx-pro` | `ltx25-distill-dense` | LTX-2.5 22B distilled two-stage (8 + 3), dense stage 2, conv VAE; SageAttention2 dense attention on sm_120 (`sage_attention`) | `ltx2/ltx25_distill_dense` | Only LTX-2.5 generation path; dense stage 2 (no sparse attention; on sm_120 Sage quantizes Q K to INT8 and P V to FP8, gate-passed), full VAE |
 //! | `ltx-turbo` | `ltx25-distill-sol` | LTX-2.5 distilled two-stage, Sol stage 2 | `ltx2/ltx25_distill_sol` | The reference single-GPU route; passes the gate |
@@ -44,6 +46,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use fastvideo_models::h3::config as h3cfg;
+use fastvideo_models::h3::turbo_lora::{parse_turbo_recipe, TurboLora};
 use fastvideo_protocol::{
     AudioCaps, CanvasCaps, Family, FpsCaps, FrameGrid, KnobCaps, ModelCaps, ModelId, RefLimits,
     StreamCaps, Task, Tier,
@@ -146,6 +149,11 @@ pub struct H3Recipe {
     /// Catalog: h3-max and h3-turbo; `h3_1080p = false` turns it off.
     #[serde(default)]
     pub hd_1080p: bool,
+    /// Turbo LoRA strength (`h3-larry-turbo`, `h3-lightx2v-turbo`; the
+    /// larry card's sharpness dial). `None`: 1.0 (or
+    /// `FV_H3_TURBO_LORA_STRENGTH`).
+    #[serde(default)]
+    pub lora_strength: Option<f32>,
 }
 
 fn auto_str() -> String {
@@ -520,6 +528,17 @@ impl CudaModel {
                         50 H3 blocks, rank-16 AdaLN, VSA-H3 (80% sparse), lightweight VAE; faster and smaller \
                         than FastH3 V2, with some quality cost"
                         .to_owned(),
+                    _ if turbo_lora_of(&r.recipe).is_some() => {
+                        let t = turbo_lora_of(&r.recipe).unwrap_or(TurboLora::Larry);
+                        format!(
+                            "H3 + {} Turbo LoRA ({}, folded at load, strength {}), {} forwards, dense \
+                             attention, MXFP8 linears, official VAE",
+                            t.hub_repo(),
+                            t.file(),
+                            r.lora_strength.unwrap_or(1.0),
+                            r.steps
+                        )
+                    }
                     _ if self.recipe_name.starts_with("fasth3-8step") => "FastH3 8-step DMD, dense \
                                         attention (no compression gate), official VAE"
                         .to_owned(),
@@ -716,6 +735,20 @@ pub fn gate_h3_1080p(models: &mut [CudaModel], device_total: Option<u64>) -> Opt
             gib(need)
         )
     })
+}
+
+/// The Turbo LoRA catalog ids and their technique profiles.
+pub const H3_LARRY_TURBO: &str = "h3-larry-turbo";
+pub const H3_LIGHTX2V_TURBO: &str = "h3-lightx2v-turbo";
+pub const LARRY_TURBO_PROFILE: &str = "h3/larry_turbo_dense";
+pub const LIGHTX2V_TURBO_PROFILE: &str = "h3/lightx2v_turbo_dense";
+
+/// The Turbo LoRA a recipe (`larry-turbo`, `lightx2v-turbo-5step`, ...) runs.
+pub fn turbo_lora_of(recipe: &str) -> Option<TurboLora> {
+    match parse_turbo_recipe(recipe) {
+        Some(Ok((t, _))) => Some(t),
+        _ => None,
+    }
 }
 
 /// The FastH3 Trim catalog id, its served alias and its weight tree.
@@ -980,6 +1013,7 @@ fn h3(
         warmup: false,
         warmup_blocking: false,
         hd_1080p: false,
+        lora_strength: None,
     }
 }
 
@@ -1102,6 +1136,16 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         ref_weights: Some(layout.at("h3-ref2va")),
         ..h3(layout, "h3-base", recipe, Some(profile), steps)
     };
+    // MiniMax-H3 Turbo LoRAs (docs/ports/h3-turbo-loras.md): what the
+    // MiniMaxAI/MiniMax-H3-Turbo-Lora Space runs. Base `transformer/` + one
+    // adapter from `h3-turbo-loras` folded at load, then MXFP8; dense
+    // attention; T2V and FL2VA (first and/or last frame).
+    let h3_turbo_lora = |t: TurboLora, profile: &str| H3Recipe {
+        dense: true,
+        ..h3(layout, "h3-base", t.stem(), Some(profile), t.default_forwards() as u32)
+    };
+    let h3_larry = h3_turbo_lora(TurboLora::Larry, LARRY_TURBO_PROFILE);
+    let h3_lightx = h3_turbo_lora(TurboLora::Lightx2v, LIGHTX2V_TURBO_PROFILE);
     let h3_ref_max = h3_ref("base", "h3/h3_ref2va_base", 49);
     let h3_ref_turbo = h3_ref("sol-h3-ref2va", "h3/sol_h3_ref2va", 4);
     // Reference-to-video (docs/ports/ltx-ref2v.md): the dense two-stage with
@@ -1235,6 +1279,19 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             CudaRecipe::H3(h3_trim),
         )
         .with_served_names(&[H3_TRIM]),
+        // Untiered, addressed by id: the h3-turbo / h3-max slots stay as they are.
+        CudaModel::new(
+            H3_LARRY_TURBO,
+            None,
+            "h3-larry-turbo-ckpt850-dense",
+            CudaRecipe::H3(h3_larry),
+        ),
+        CudaModel::new(
+            H3_LIGHTX2V_TURBO,
+            None,
+            "h3-lightx2v-turbo-v1.2-768p-dense",
+            CudaRecipe::H3(h3_lightx),
+        ),
         // Reference-to-video companions of the H3 max / turbo tiers: the
         // routing sends Ref2V requests for `h3-max` / `h3-turbo` here.
         CudaModel::new(
@@ -1385,6 +1442,10 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
         (Family::H3, "8step" | "v2" | "fasth3-8step") => "fasth3-8step-dense".to_owned(),
         (Family::H3, "trim-8step" | "fasth3-trim" | H3_TRIM) => FASTH3_TRIM_ID.to_owned(),
         (Family::H3, "sol-h3" | "sol_h3") => "h3-max".to_owned(),
+        (Family::H3, r) if turbo_lora_of(r).is_some() => match turbo_lora_of(r) {
+            Some(TurboLora::Larry) => H3_LARRY_TURBO.to_owned(),
+            _ => H3_LIGHTX2V_TURBO.to_owned(),
+        },
         (_, r) => r.to_owned(),
     };
     let mut m = find(&cat, &name).ok_or_else(|| {
@@ -1462,6 +1523,40 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
                         return Err(format!("model `{}`: h3_1080p = {other:?} (true | false)", e.id))
                     }
                 };
+            }
+            if let Some(t) = turbo_lora_of(&r.recipe) {
+                // `recipe = "larry-turbo-4step"` or `steps = 4`; the adapter
+                // file follows the recipe (v0.1 only by its recipe name).
+                let from_recipe = match parse_turbo_recipe(&e.recipe) {
+                    Some(Ok(parsed)) => Some(parsed),
+                    Some(Err(err)) => return Err(format!("model `{}`: {err}", e.id)),
+                    None => None,
+                };
+                let (t, mut forwards) = from_recipe.unwrap_or((t, t.default_forwards()));
+                if let Some(n) = x("steps") {
+                    forwards = n.trim().parse().map_err(|_| {
+                        format!("model `{}`: steps = {n:?} is not a whole number", e.id)
+                    })?;
+                }
+                let recipe = t.recipe(forwards);
+                if let Some(Err(err)) = parse_turbo_recipe(&recipe) {
+                    return Err(format!("model `{}`: {err}", e.id));
+                }
+                r.recipe = recipe;
+                r.steps = forwards as u32;
+                if let Some(s) = x("lora_strength") {
+                    let v: f32 = s.trim().parse().map_err(|_| {
+                        format!("model `{}`: lora_strength = {s:?} is not a number", e.id)
+                    })?;
+                    fastvideo_models::h3::turbo_lora::turbo_strength(Some(v), None)
+                        .map_err(|err| format!("model `{}`: {err}", e.id))?;
+                    r.lora_strength = Some(v);
+                }
+            } else if x("steps").is_some() || x("lora_strength").is_some() {
+                return Err(format!(
+                    "model `{}`: steps / lora_strength apply to the Turbo LoRA models (h3-larry-turbo, h3-lightx2v-turbo) only",
+                    e.id
+                ));
             }
             if r.ref2va && r.warmup {
                 return Err(format!(
@@ -2209,6 +2304,53 @@ mod tests {
         assert_eq!(p.env.get("FASTVIDEO_VSA").map(String::as_str), Some("0"));
         let p = ProcessPlan::for_models(&pick(&["wan-max", "sfwan21-1.3b"])).unwrap();
         assert_eq!(p.env.get("FASTVIDEO_VSA").map(String::as_str), Some("0"));
+    }
+
+    /// The Turbo LoRA models: untiered, base H3 + their adapter, dense, T2V
+    /// and FL2VA (first / last frame), `steps` and `lora_strength` per model.
+    #[test]
+    fn turbo_lora_models() {
+        let l = WeightLayout::new("/w");
+        let cat = catalog(&l);
+        for (id, recipe, steps, profile) in [
+            (H3_LARRY_TURBO, "larry-turbo", 6, LARRY_TURBO_PROFILE),
+            (H3_LIGHTX2V_TURBO, "lightx2v-turbo", 4, LIGHTX2V_TURBO_PROFILE),
+        ] {
+            let m = find(&cat, id).unwrap();
+            assert_eq!(m.tier, None, "{id}");
+            let CudaRecipe::H3(r) = &m.recipe else { panic!("{id}") };
+            assert_eq!((r.recipe.as_str(), r.steps, r.dense, r.ref2va), (recipe, steps, true, false));
+            assert_eq!(r.profile.as_deref(), Some(profile));
+            assert!(r.weights.ends_with("h3-base"));
+            assert!(fastvideo_models::techniques::builtin::get(profile).is_some(), "{profile}");
+            let caps = m.caps();
+            assert_eq!(caps.tasks, [Task::T2V, Task::I2V, Task::Keyframes].into_iter().collect());
+            assert!(m.describe().summary.contains("Turbo LoRA"), "{id}");
+            // Same load-time settings as h3-turbo / h3-max (MXFP8, bf16 activations).
+            ProcessPlan::for_models(&[m.clone(), find(&cat, "h3-turbo").unwrap()]).unwrap();
+        }
+        // The tier aliases are unchanged.
+        assert_eq!(find(&cat, "h3-turbo").unwrap().id.as_str(), "fasth3-4step-vsa");
+        let entry = |recipe: &str, extra: &[(&str, &str)]| ModelEntryCfg {
+            id: String::new(),
+            family: "h3".into(),
+            recipe: recipe.into(),
+            extra: extra.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            ..Default::default()
+        };
+        let h3r = |m: CudaModel| match m.recipe {
+            CudaRecipe::H3(r) => r,
+            _ => panic!(),
+        };
+        let r = h3r(model_from_config(&l, &entry("h3-larry-turbo", &[("steps", "4")])).unwrap());
+        assert_eq!((r.recipe.as_str(), r.steps), ("larry-turbo-4step", 4));
+        let r = h3r(model_from_config(&l, &entry("larry-turbo-5step", &[("lora_strength", "1.1")])).unwrap());
+        assert_eq!((r.recipe.as_str(), r.steps, r.lora_strength), ("larry-turbo-5step", 5, Some(1.1)));
+        let r = h3r(model_from_config(&l, &entry("lightx2v-turbo-v0.1", &[])).unwrap());
+        assert_eq!((r.recipe.as_str(), r.steps), ("lightx2v-turbo-v0.1", 4));
+        assert!(model_from_config(&l, &entry("h3-larry-turbo", &[("steps", "12")])).is_err());
+        assert!(model_from_config(&l, &entry("h3-larry-turbo", &[("lora_strength", "nan")])).is_err());
+        assert!(model_from_config(&l, &entry("h3-turbo", &[("steps", "4")])).is_err());
     }
 
     #[test]

@@ -19,6 +19,8 @@ import { AUX_FILES, HUB_TREES } from "../../src/weights-sources";
 import type { Env } from "../../src/env";
 
 const ROOT = new URL("../../../", import.meta.url).pathname;
+/** h3/ltx presets whose trees are not all on the EU volume (R2 only). */
+const R2_ONLY_PRESETS = new Set(["h3-larry-turbo", "h3-lightx2v-turbo"]);
 const rust = (p: string) => readFileSync(`${ROOT}${p}`, "utf8");
 const configOf = (p: (typeof POOL_PRESETS)[number]) => {
   if (p.pool.config_toml) return p.pool.config_toml;
@@ -59,7 +61,8 @@ describe("preset trees: each preset lists every tree its config reads", () => {
       // The 500 GB EU volume holds H3 + LTX only (owner decision 2026-10-13): a preset's trees are all on it (it
       // mounts the volume) or the Runpod pool defaults to weights_source r2.
       const off = missingTrees("bz0ofkfx45", [...p.weights, ...(p.prequant ?? [])])!;
-      if (/^(h3|ltx)/.test(p.id)) expect(off, `${p.id}: on the EU volume`).toEqual([]);
+      // The Turbo LoRA presets read adapters published to R2 only (docs/ports/h3-turbo-loras.md): they default to r2.
+      if (/^(h3|ltx)/.test(p.id) && !R2_ONLY_PRESETS.has(p.id)) expect(off, `${p.id}: on the EU volume`).toEqual([]);
       else expect(off.length, `${p.id}: not on the EU volume`).toBeGreaterThan(0);
       expect(weightsSource({ ...p.pool }), `${p.id}: Runpod default`).toBe(off.length ? "r2" : "volume");
       // a nested tree sits inside a tree of the same preset (the fetcher places it there, as on the volume)
