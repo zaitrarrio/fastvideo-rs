@@ -29,7 +29,12 @@ pub fn publish_target(t: WhipTarget) -> PublishTarget {
 /// `fps` to a WHIP endpoint of kind `target`: native, at the smallest level
 /// that fits and at least the offered one.
 pub fn whip_h264(target: WhipTarget, width: u32, height: u32, fps: u32) -> H264Config {
-    let c = H264Config::for_publish(publish_target(target), width, height, fps);
+    let mut c = H264Config::for_publish(publish_target(target), width, height, fps);
+    // Cloudflare recommends a 1 s GOP for WebRTC (GOP 30 at 30 fps), as the
+    // VP8/VP9 path does; the live run had H.264 at the 2 s default.
+    if target == WhipTarget::Cloudflare {
+        c.gop_seconds = 1.0;
+    }
     debug_assert!(check_profile(target.profile(), &c).is_ok());
     c
 }
@@ -69,7 +74,9 @@ mod tests {
             assert!(!c.scales());
             assert_eq!(c.resolved_level().unwrap(), lvl, "{w}x{h}@{fps}");
             check_profile(WhipTarget::Cloudflare.profile(), &c).unwrap();
+            assert_eq!(c.gop_frames(), fps, "a 1 s GOP for Cloudflare");
         }
+        assert_eq!(whip_h264(WhipTarget::Mediamtx, 1344, 768, 24).gop_frames(), 48);
     }
 
     #[test]
