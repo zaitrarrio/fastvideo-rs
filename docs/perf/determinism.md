@@ -15,7 +15,7 @@ It did not hold at 1080p. LTX 1080p output differed between pod boots (33.6 to
 |---|---|---|---|
 | **Timed dense-attention pick** | `wan/attn.rs` `auto_cudnn_or_v2` (sm_12x, bf16 out) | The first call of each `(bh, sq, sk, d)` in a process timed cuDNN's SDPA against `flash_mma_fwd2` and kept the faster. The two round 1-2 bf16 ulp apart, and at shapes where they tie (every text or audio cross-attention: 0.63 vs 0.63 ms) the winner changed from boot to boot. Logged picks of the same shape went both ways on one day (Wan 720p `sk=512`: cuDNN in four runs, fwd2 in two) | A fixed rule per (arch, shape class): `wan/sdpa_rule.rs`. The timing lives on as an offline tool that prints the table |
 | **Conditioning cache miss vs hit** | `ltx2/pipeline.rs` text encode | A fresh encode handed the DiT the connectors' output as it came (bf16 storage with bf16 activations); a cache hit handed it host f32. The first job of a new prompt and the next job of the same prompt could differ (the two I2V jobs of a boot: a miss and a hit) | One representation in every case: f32 values uploaded as an f32 device tensor (`canonical_contexts`) |
-| **H3 `auto` text encoder after its release** | `h3/pipeline.rs`, `h3/text.rs` | `auto` starts resident at weight-only FP8 when the card is empty, and releases the encoder before a denoise that needs the memory (1080p). Later prompts then streamed at bf16, a different function: a prompt's conditioning depended on what the process had run before, and the cache key did not tell the two apart | Without a resident encoder, stream at the numbers the resolved choice stands for (`StreamedFp8Encoder`, the resident FP8 numbers bit for bit); FP8 cache entries are keyed apart |
+| **H3 `auto` text encoder after its release** | `h3/pipeline.rs`, `h3/text.rs` | `auto` starts resident at weight-only FP8 when the memory plan fits it, and releases the encoder before a denoise that needs the memory (1080p). Later prompts then streamed at bf16, a different function: a prompt's conditioning depended on what the process had run before, and the cache key did not tell the two apart | Without a resident encoder, stream at the numbers the resolved choice stands for (`StreamedFp8Encoder`, the resident FP8 numbers bit for bit); FP8 cache entries are keyed apart |
 | **Float atomics in reductions** | `abs_diff_sum` (TeaCache distance), `ltx_abs_diff_sums` (FBCache distance), `attn_fp8_colsum_*` (FP8 attention's K smoothing) | Per-block partials added with `atomicAdd` in whatever order blocks finished. The cache distances decide skips at a threshold, so a last-bit change can flip a step | Per-block partials, then a second pass in block order (on the host for the two distances, `attn_fp8_colsum_reduce` on the device) |
 | **Float atomics in SageAttention2's K smoothing** | `attn_sage_colsum_bf16` (`wan/attn_sage.cu`; on by default for `ltx-pro` on sm_120) | The per-head column sums of K (subtracted before the INT8 quantization) were added with `atomicAdd` per block, so a last-bit change in the mean could move an INT8 code and the output | Per-block partials, then `attn_sage_colsum_reduce` adds them in block order, as for FP8 attention. `attn_sage_vmax` keeps `atomicMax` on the float bits, which is order-independent |
 | **cuDNN nondeterministic engines** | `wan/cudnn_sdpa.rs` plan build; `wan/conv.rs` transposed conv | The heuristic may rank an engine that declares `CUDNN_NUMERICAL_NOTE_NONDETERMINISTIC` first; backward-data `ALGO_0` (transposed conv: the audio VAE and vocoder upsamplers) accumulates with atomics | SDPA configs with that note are skipped (heuristic order otherwise kept); `ALGO_0` becomes `ALGO_1` |
@@ -43,9 +43,17 @@ Checked and found deterministic, no change:
   (`i2v_encode.rs`). Noise comes from `StdRng::seed_from_u64(seed)`.
 - **Free-memory decisions**: text residency (LTX two-stage always streams),
   DiT offload, decode placement: they move where weights live, not the
-  arithmetic, except the H3 `auto` encoder above. What remains: `auto`'s
-  FP8-or-bf16 choice is made once at load from the free memory then (an
-  empty card: FP8); `--text-encoder resident-fp8|streamed` pins it.
+  arithmetic, except the H3 `auto` encoder above. Since 2026-10-14 H3
+  `auto`'s *residency* comes from the load's memory plan (resident FP8 when
+  the DiT at its real precision, the decoders, the encoder and a 768p 5 s
+  denoise fit; docs/perf/h3-text-encoder-residency.md), and its *numbers* do
+  not depend on that: on a card with 85 GB free before the load
+  (`AUTO_FP8_NUMBERS_FREE_BYTES`, the 96 GB class) `auto` computes with the
+  FP8 rows whether it keeps the encoder, streams it from the start, or
+  releases it before a large denoise; below that it streams bf16, as before.
+  What remains: that FP8-or-bf16 choice is made once at load from the free
+  memory then (an empty 96 GB card: FP8); `--text-encoder
+  resident-fp8|streamed` pins it.
 
 ## The dense-attention rule
 

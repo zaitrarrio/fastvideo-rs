@@ -7,7 +7,7 @@ import type { Env } from "../env";
 import { runpod } from "../runpod";
 import { validate, type Issue } from "../schemas";
 import { HttpError } from "../util";
-import { workerPlacements } from "./payloads";
+import { placementWhere, poolWithoutVolume, workerPlacements } from "./payloads";
 import { gpuTypes } from "../dynamic";
 import { brevNoStopWarnings, brevOutlook, isOtherPool, poolDph, providerIssues, r2Outlook, weightsPlan } from "../providers";
 import { normalizeSpec, POOL_PRESETS, REGIONS, type ClusterSpec } from "./spec";
@@ -76,7 +76,12 @@ export async function liveSpecIssues(env: Env, spec: ClusterSpec, prefix: (strin
   // GPU types against the regions' data centres (Runpod's stock): a pool none of whose types has stock there is a warning
   // (stock moves by the minute; a definition may wait for it), shown before Start.
   const pairs = new Map<string, { dc: string; gpu: string }>();
-  const plan = spec.pools.filter((p) => p.compute === "GPU" && p.count > 0 && !isOtherPool(p)).map((p) => ({ p, pls: workerPlacements(spec, p).filter((x) => x.dc && x.gpu) }));
+  // A pool whose data centres end with "any" (Runpod places it) is not warned about: any data centre may have stock.
+  const plan = spec.pools
+    .filter((p) => p.compute === "GPU" && p.count > 0 && !isOtherPool(p))
+    .map((p) => ({ p, all: workerPlacements(spec, p, env) }))
+    .filter(({ all }) => all.every((x) => x.dc))
+    .map(({ p, all }) => ({ p, pls: all.filter((x) => x.dc && x.gpu) }));
   for (const { pls } of plan) for (const x of pls) pairs.set(`${x.dc}|${x.gpu}`, { dc: x.dc!, gpu: x.gpu! });
   const st = pairs.size ? await gpuStock(env, [...pairs.values()]).catch(() => null) : null;
   if (st)
@@ -148,6 +153,9 @@ export async function checkSpec(env: Env, doc: unknown, existing?: { id: string;
       if (p.count === 0) warnings.push({ path: ["pools", i, "count"], message: `${p.id}: 0 workers (Start skips it; Scale adds workers later)` });
       const pre = POOL_PRESETS.find((x) => x.id === p.id);
       if (pre?.licence) warnings.push({ path: ["pools", i, "id"], message: pre.licence });
+      // The cluster's data_centers place the pools without the weights volume; one that mounts it stays in its regions.
+      if (s.data_centers?.length && p.count > 0 && !isOtherPool(p) && !poolWithoutVolume(p, env))
+        warnings.push({ path: ["pools", i, "weights_source"], message: `${p.id} mounts the weights volume, so it runs in ${placementWhere(s, p, env)}, not the cluster's data_centers (weights_source r2, hub or none runs there)` });
     });
     if (s.cap_s > 6 * 3600) warnings.push({ path: ["cap_s"], message: `the backstop is ${(s.cap_s / 3600).toFixed(1)} h away from Start` });
     if (!s.log_shipping) warnings.push({ path: ["log_shipping"], message: "log shipping off: only Runpod's short tail of each pod will be visible" });
@@ -217,7 +225,7 @@ export async function gpuStock(env: Env, pairs: { dc: string; gpu: string }[]): 
 const short = (gpu: string) => gpu.replace(/^NVIDIA\s+/, "").replace(/ Blackwell Server Edition$/, "");
 /** Stock per pool for a spec: where each pool's pods may land and what Runpod reports there. */
 export async function availability(env: Env, spec: ClusterSpec): Promise<Availability> {
-  const plan = spec.pools.map((p) => ({ p, pls: isOtherPool(p) ? [] : workerPlacements(spec, p) }));
+  const plan = spec.pools.map((p) => ({ p, pls: isOtherPool(p) ? [] : workerPlacements(spec, p, env) }));
   const pairs = new Map<string, { dc: string; gpu: string }>();
   for (const { pls } of plan) for (const pl of pls) if (pl.gpu && pl.dc) pairs.set(`${pl.dc}|${pl.gpu}`, { dc: pl.dc, gpu: pl.gpu });
   const st = await gpuStock(env, [...pairs.values()]);
@@ -239,13 +247,19 @@ export async function availability(env: Env, spec: ClusterSpec): Promise<Availab
     }
     const best = placements.reduce((a, x) => Math.max(a, RANK[x.stock ?? ""] ?? 0), 0);
     const avail = placements.reduce<number | null>((a, x) => (x.max_available === null ? a : (a ?? 0) + x.max_available), null);
-    const where = placements.map((x) => `${short(x.gpu || "?")} in ${x.dc}: ${x.stock ?? "none"}${x.max_available !== null ? ` (${x.max_available} free)` : ""}`).join("; ");
+    // "any" (no data centre): Runpod places the pod where it has stock; not asked per data centre.
+    const anyDc = placements.some((x) => !x.dc);
+    const named = placements.filter((x) => x.dc);
+    const where = [
+      ...named.map((x) => `${short(x.gpu || "?")} in ${x.dc}: ${x.stock ?? "none"}${x.max_available !== null ? ` (${x.max_available} free)` : ""}`),
+      ...(anyDc ? [`then any data centre (${[...new Set(placements.filter((x) => !x.dc).map((x) => short(x.gpu || "?")))].join(", ")}): Runpod places it`] : []),
+    ].join("; ");
     let status: PoolStock["status"];
     if (!placements.length) status = "none";
-    else if (best === 0) status = "none";
+    else if (best === 0) status = anyDc ? "unknown" : "none";
     else if (best === 1 || (avail !== null && avail < p.count)) status = "low";
     else status = "ok";
-    const hint = !placements.length ? "no region with a weights volume" : status === "none" ? `no stock reported: ${where}` : status === "low" ? `low stock: ${where}` : where;
+    const hint = !placements.length ? "no region with a weights volume" : status === "none" ? `no stock reported: ${where}` : status === "low" ? `low stock: ${where}` : status === "unknown" ? `no stock reported in the named data centres: ${where}` : where;
     return { pool: p.id, compute: "GPU", count: p.count, status, hint, placements };
   });
   const warnings: string[] = [];

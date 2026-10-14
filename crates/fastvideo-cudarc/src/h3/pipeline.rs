@@ -29,13 +29,27 @@
 //!
 //! * *streamed*: nothing resident, ~10 s of host-to-device traffic
 //!   per **new** prompt; the conditioning cache makes a repeated prompt free;
-//! * *resident* (what `Auto` picks on a large empty card): pays the load once. On a 96 GB card the arithmetic decides the
-//!   precision: DiT 41 + decoders 7 + activations 12 = 60 GB leaves ~36 GB, so
-//!   Qwen as FP8-E4M3 (~25 GB) fits at 5 s and bf16 Qwen (50 GB) does not fit at
-//!   any length. At 15 s (activations ~25 GB) even FP8 leaves only ~10 GB of
-//!   slack, so resident mode is for short clips or for a process that drops it
-//!   before denoising. The resident encoder itself lives in [`crate::llm`];
-//!   this module only holds the seam ([`HiddenStateEncoder`]).
+//! * *resident*: pays the load once; a new prompt then encodes in ~0.5 s.
+//!   bf16 Qwen (50 GB) never fits beside the DiT on a 96 GB card; FP8-E4M3
+//!   (22.7 GiB) does when the DiT is MXFP8 (~24 GiB of blocks) or NVFP4
+//!   (~11 GiB), not beside a bf16 DiT (~40 GiB) and a 5 s VSA denoise.
+//!
+//! `Auto` decides at load from the memory plan, not a fixed threshold
+//! ([`auto_text_encoder_plan`], [`fastvideo_models::h3::memory::auto_text_encoder`]):
+//! resident FP8 when the free memory measured before any load covers the
+//! encoder, the resident weights at the DiT's real precision (decoders with
+//! their MXFP8 copies, refiner, the image-to-video tower's reserve) plus the
+//! measured denoise reserve of the planned request
+//! ([`H3PipelineOptions::auto_text_encoder_request`], default 768p 5 s) and
+//! the runtime allowance, and still leaves the `dit_offload = auto` placement
+//! its need (the DiT has priority). The decision is logged once with its
+//! numbers (`h3 text encoder: auto -> …`). A larger request (1080P, a long
+//! clip) releases the encoder before its denoise ([`keep_auto_encoder`]);
+//! later prompts then stream. Streamed or resident, `Auto` on a 96 GB-class
+//! card computes with the FP8 rows ([`AUTO_FP8_NUMBERS_FREE_BYTES`]), so the
+//! residency never changes the conditioning (docs/perf/determinism.md). The
+//! resident encoder itself lives in [`crate::llm`]; this module only holds
+//! the seam ([`HiddenStateEncoder`]).
 //!
 //! Audio decodes before video: it takes milliseconds and the WAV has to exist
 //! before ffmpeg is spawned; the video VAE then streams 17-frame chunks
@@ -178,10 +192,11 @@ impl H3Request {
 /// How prompts are encoded; see the module docs for the memory arithmetic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TextEncoderChoice {
-    /// [`Self::ResidentFp8`] when the card is large and empty enough
-    /// ([`AUTO_RESIDENT_FREE_BYTES`] free before anything loads), else streamed.
-    /// A resident `Auto` encoder is released after encoding when the denoise
-    /// needs its memory ([`keep_auto_encoder`]); later prompts then stream.
+    /// [`Self::ResidentFp8`] when the load's memory plan says the encoder
+    /// fits beside everything else ([`auto_text_encoder_plan`]), else
+    /// streamed. A resident `Auto` encoder is released after encoding when a
+    /// larger request's denoise needs its memory ([`keep_auto_encoder`]);
+    /// later prompts then stream at the same FP8 numbers.
     #[default]
     Auto,
     /// One decoder layer on the device at a time, per prompt. Nothing resident.
@@ -195,13 +210,14 @@ pub enum TextEncoderChoice {
     Recovered8b,
 }
 
-/// Free device memory at which `Auto` loads the encoder resident: DiT 41 +
-/// decoders 7 + FP8 Qwen 24.4 = 72 GB of weights plus headroom. That covers
-/// the load and the first encode, not a denoise: the VSA path at 5 s needs
-/// well over the ~12 GB of dense activations (a 96 GB card OOMed with ~27 GiB
-/// free), so after encoding `Auto` releases the encoder unless
-/// [`keep_auto_encoder`] says the denoise still fits beside it.
-pub const AUTO_RESIDENT_FREE_BYTES: u64 = 85_000_000_000;
+/// Which numbers a *streamed* `Auto` encoder computes with: the FP8 rows of
+/// the resident encoder on a card with this much free before any load (a
+/// 96 GB-class card), bf16 below. This is not a residency rule (that is
+/// [`auto_text_encoder_plan`]); it pins the conditioning a deployment has
+/// always had, so moving residency to the memory plan changes no output:
+/// before the plan, `Auto` loaded the FP8 encoder at this threshold and a
+/// later release streamed the same FP8 numbers.
+pub const AUTO_FP8_NUMBERS_FREE_BYTES: u64 = 85_000_000_000;
 
 impl TextEncoderChoice {
     pub fn parse(name: &str) -> std::result::Result<Self, String> {
@@ -217,15 +233,21 @@ impl TextEncoderChoice {
         }
     }
 
-    /// `Auto` decided by the free device memory measured before any load
-    /// (`None`: no device, or it would not say). Explicit choices pass through.
-    pub fn resolve(self, free_bytes: Option<u64>) -> Self {
+    /// `Auto` decided at load: `(choice, load)`, where `choice` names the
+    /// numbers and `load` says whether a resident encoder loads. `resident`
+    /// is the memory plan's verdict ([`auto_text_encoder_plan`]); `free_bytes`
+    /// the free memory before any load (`None`: no device). A streamed `Auto`
+    /// on a 96 GB-class card stays [`Self::ResidentFp8`] without loading it,
+    /// the state a released encoder leaves: FP8 numbers streamed
+    /// ([`AUTO_FP8_NUMBERS_FREE_BYTES`]). Explicit choices pass through.
+    pub fn resolve(self, resident: bool, free_bytes: Option<u64>) -> (Self, bool) {
         match self {
-            Self::Auto if free_bytes.is_some_and(|f| f >= AUTO_RESIDENT_FREE_BYTES) => {
-                Self::ResidentFp8
+            Self::Auto if resident => (Self::ResidentFp8, true),
+            Self::Auto if free_bytes.is_some_and(|f| f >= AUTO_FP8_NUMBERS_FREE_BYTES) => {
+                (Self::ResidentFp8, false)
             }
-            Self::Auto => Self::Streamed,
-            explicit => explicit,
+            Self::Auto => (Self::Streamed, false),
+            explicit => (explicit, explicit.precision().is_some()),
         }
     }
 
@@ -255,6 +277,12 @@ pub struct H3PipelineOptions {
     /// Conditioning cache directory ([`super::text_cache`]); `None` disables it.
     pub text_cache: Option<PathBuf>,
     pub text_encoder: TextEncoderChoice,
+    /// The largest request the process plans to keep an `Auto` encoder
+    /// resident for (its configured canvas and length). `None`: the default
+    /// request, 1344x768 for 5 s. Larger requests (the 1080P tier, long
+    /// clips) still run: the encoder is released before their denoise when
+    /// it does not fit ([`keep_auto_encoder`]).
+    pub auto_text_encoder_request: Option<H3Geometry>,
     /// Directory or `taeh3.safetensors` file. When set, the official ViT
     /// decoder is not loaded. `FASTVIDEO_TAEH3_WEIGHTS` is the same switch
     /// when this is `None`.
@@ -966,6 +994,61 @@ pub struct H3Pipeline {
     booking: std::sync::Mutex<crate::wan::ledger::Booking>,
     /// VDN-H3: the hybrid transform every block runs (branch attached).
     vdn: Option<fastvideo_models::h3::vdn::VdnTransform>,
+    /// The VSA fine stage on sparse FP4 tensor cores (`FASTVIDEO_H3_VSA_FP4`,
+    /// docs/ports/fasth3-sparse-fp4-attn.md): only for a ModelOpt NVFP4 DiT on
+    /// sm_120 (the default there), decided at load.
+    vsa_fp4: bool,
+}
+
+/// `FASTVIDEO_H3_VSA_FP4` (docs/ports/fasth3-sparse-fp4-attn.md): the VSA
+/// fine stage on sparse FP4 tensor cores. The default speed tier of the
+/// ModelOpt NVFP4 checkpoints (owner decision 2026-10-14): unset, it is on for
+/// them where the sm_120 kernel exists and bf16 VSA elsewhere; `0` keeps bf16
+/// VSA; `1` insists, so a device without the kernel refuses it. Any other DiT
+/// ignores it (with a note when it was set).
+fn vsa_fp4_choice(modelopt_nvfp4: bool) -> Result<bool> {
+    let setting = crate::wan::attn_fp4::setting();
+    if setting == Some(false) {
+        return Ok(false);
+    }
+    if !modelopt_nvfp4 {
+        if setting == Some(true) {
+            crate::wan::log::info(format_args!(
+                "h3: {}=1 ignored: the sparse FP4 VSA tier is for the ModelOpt NVFP4 checkpoints only",
+                crate::wan::attn_fp4::ENV
+            ));
+        }
+        return Ok(false);
+    }
+    #[cfg(feature = "cuda")]
+    {
+        if !crate::wan::attn_fp4::available() {
+            if setting == Some(true) {
+                return Err(msg(format!(
+                    "h3: {}=1 needs the sm_120 sparse FP4 attention kernel (not available on this device)",
+                    crate::wan::attn_fp4::ENV
+                )));
+            }
+            crate::wan::log::info(format_args!(
+                "h3: VSA fine stage on bf16 (no sm_120 sparse FP4 attention kernel on this device)"
+            ));
+            return Ok(false);
+        }
+        crate::wan::log::info(format_args!(
+            "h3: VSA fine stage on sparse FP4 tensor cores ({}={}, P {})",
+            crate::wan::attn_fp4::ENV,
+            if setting == Some(true) { "1" } else { "unset: NVFP4 default" },
+            if crate::wan::attn_fp4::p_single() { "single-level" } else { "two-level" }
+        ));
+        Ok(true)
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        if setting == Some(true) {
+            return Err(msg(format!("h3: {}=1 needs a CUDA build", crate::wan::attn_fp4::ENV)));
+        }
+        Ok(false)
+    }
 }
 
 /// Device bytes a denoise needs beside the resident weights for `rows` packed
@@ -982,10 +1065,113 @@ pub fn denoise_reserve_bytes(rows: usize) -> u64 {
     denoise_reserve_bytes_for(rows, crate::wan::tensor::bf16_activations())
 }
 
-/// [`denoise_reserve_bytes`] for an explicit activation width.
+/// [`denoise_reserve_bytes`] for an explicit activation width
+/// ([`fastvideo_models::h3::memory::denoise_reserve_bytes`], which the
+/// load-time plan prices with too).
 pub fn denoise_reserve_bytes_for(rows: usize, bf16_act: bool) -> u64 {
-    let per_row: u64 = if bf16_act { 640 << 10 } else { 1 << 20 };
-    (rows as u64) * per_row + (4u64 << 30)
+    fastvideo_models::h3::memory::denoise_reserve_bytes(rows, bf16_act)
+}
+
+/// What the DiT placement (`dit_offload = auto`) and the image-to-video
+/// tower decide on: the default request's (1344x768, 5 s) resident plan peak,
+/// bf16 block linears whatever the DiT's precision, with the VSA gate and the
+/// VAE's MXFP8 copies as loaded.
+pub fn dit_placement_need(gate: bool, vae_mxfp8: bool) -> u64 {
+    let g = H3Geometry::default_16x9(5).expect("the default H3 request is a valid geometry");
+    fastvideo_models::h3::memory::plan(
+        &g,
+        fastvideo_models::h3::memory::H3PlanOptions {
+            gate,
+            vae_mxfp8,
+            ..Default::default()
+        },
+    )
+    .peak()
+}
+
+/// The `Auto` text encoder's load-time decision from the memory plan
+/// ([`fastvideo_models::h3::memory::auto_text_encoder`]), with the inputs the
+/// load knows before anything is on the card: `free` (measured), the DiT
+/// placement policy, how the DiT's block linears load (`dit`), the VSA gate,
+/// the VAE's MXFP8 copies, the planned request (`None`: 1344x768 for 5 s),
+/// the activation width, and whether the image-to-video vision tower may
+/// load beside the encoder.
+///
+/// The DiT has priority: when `dit_offload = auto` would keep it resident
+/// on this card ([`dit_placement_need`] fits `free`), the encoder (and the
+/// tower) must leave that need, since the placement is measured after they
+/// load. An NVFP4 DiT is resident whatever is left; a DiT that streams
+/// either way is planned streamed.
+#[allow(clippy::too_many_arguments)]
+pub fn auto_text_encoder_plan(
+    free: u64,
+    policy: DitOffload,
+    dit: fastvideo_models::h3::memory::H3DitWeights,
+    gate: bool,
+    vae_mxfp8: bool,
+    request: Option<H3Geometry>,
+    bf16_act: bool,
+    i2v_tower: bool,
+) -> (
+    fastvideo_models::h3::memory::AutoTextEncoderInputs,
+    fastvideo_models::h3::memory::AutoTextEncoder,
+) {
+    use fastvideo_models::h3::memory::{
+        auto_text_encoder, AutoTextEncoderInputs, H3DitWeights, H3Placement, H3PlanOptions,
+    };
+    let need = dit_placement_need(gate, vae_mxfp8);
+    let (streamed, dit_need) = if dit == H3DitWeights::Nvfp4 {
+        (false, None)
+    } else {
+        let streamed = policy.resolve(need, Some(free)).is_streamed();
+        (streamed, (policy == DitOffload::Auto && !streamed).then_some(need))
+    };
+    let inputs = AutoTextEncoderInputs {
+        free,
+        plan: H3PlanOptions {
+            placement: if streamed { H3Placement::STREAMED } else { H3Placement::Resident },
+            gate,
+            vae_mxfp8,
+            dit,
+            ..Default::default()
+        },
+        request: request.unwrap_or_else(|| {
+            H3Geometry::default_16x9(5).expect("the default H3 request is a valid geometry")
+        }),
+        bf16_act,
+        extra: if i2v_tower { I2V_VISION_RESERVE_BYTES } else { 0 },
+        dit_need,
+    };
+    let decision = auto_text_encoder(&inputs);
+    (inputs, decision)
+}
+
+/// How the DiT's block linears will load, for the plan: the published NVFP4
+/// tree, else `FASTVIDEO_H3_QUANT` as the load resolves it (an MLX tree is
+/// priced as bf16, the safe side).
+fn planned_dit_weights(nvfp4: bool, mlx: bool) -> Result<fastvideo_models::h3::memory::H3DitWeights> {
+    use crate::wan::quant::QuantMode;
+    use fastvideo_models::h3::memory::H3DitWeights;
+    if nvfp4 {
+        return Ok(H3DitWeights::Nvfp4);
+    }
+    if mlx {
+        return Ok(H3DitWeights::Bf16);
+    }
+    Ok(match QuantMode::from_env().map_err(msg)? {
+        QuantMode::Off => H3DitWeights::Bf16,
+        QuantMode::W8A8 => H3DitWeights::W8a8,
+        QuantMode::Mxfp8 => H3DitWeights::Mxfp8,
+        QuantMode::Nvfp4 => H3DitWeights::Nvfp4,
+    })
+}
+
+/// Free device memory plus what the pool has cached but not in use: what a
+/// denoise (or the DiT's load) can allocate. `None` without a device.
+fn device_available() -> Option<u64> {
+    let (free, _) = crate::wan::device::free_memory()?;
+    let cached = crate::wan::device::pool_usage().map_or(0, |p| p.reserved.saturating_sub(p.used));
+    Some(free + cached)
 }
 
 /// [`I2vEncoderChoice::Auto`] when the resident plan does not fit beside the
@@ -1000,8 +1186,10 @@ pub fn i2v_tower_beside_streamed_dit(policy: DitOffload, free: u64, resident_nee
 }
 
 /// Whether an `Auto`-resident encoder may stay on the device through a
-/// denoise of `rows` packed rows, given the free bytes measured after the
-/// prompt was encoded. Unknown free memory releases it.
+/// denoise of `rows` packed rows, given the bytes available after the prompt
+/// was encoded (free plus pool-cached). Unknown free memory releases it. The
+/// load kept the encoder only when the planned request fits beside it, so
+/// this releases it only for a larger request (the 1080P tier, a long clip).
 pub fn keep_auto_encoder(free_bytes: Option<u64>, rows: usize) -> bool {
     free_bytes.is_some_and(|free| free >= denoise_reserve_bytes(rows))
 }
@@ -1090,7 +1278,45 @@ impl H3Pipeline {
         // should happen while the card is otherwise empty.
         let free = crate::wan::device::free_memory().map(|(free, _)| free);
         let auto_text_encoder = options.text_encoder == TextEncoderChoice::Auto;
-        options.text_encoder = options.text_encoder.resolve(free);
+        // `Auto`: resident when the memory plan at the DiT's real precision
+        // fits the card with the encoder, else streamed.
+        let auto_resident = match (auto_text_encoder, free) {
+            (true, Some(f)) => {
+                // As the decoder load below resolves its MXFP8 copies.
+                let vae_mxfp8 = resolve_taeh3(options.taeh3.as_deref()).is_none()
+                    && super::vae::mxfp8_wanted(
+                        video_vae_config(&root.join("vae"))?.decoder_num_layers,
+                    )?;
+                let mlx_dit = !options.ref2va && super::mlx::find(root).is_some();
+                let dit = planned_dit_weights(nvfp4_dit_file(root, &options)?.is_some(), mlx_dit)?;
+                let (inputs, decision) = auto_text_encoder_plan(
+                    f,
+                    DitOffload::from_env_or(options.dit_offload).map_err(msg)?,
+                    dit,
+                    // An MLX tree may not carry the gate; pricing it is the safe side.
+                    dit_loads_vsa_gate(&contract, None),
+                    vae_mxfp8,
+                    options.auto_text_encoder_request.clone(),
+                    crate::wan::tensor::bf16_activations(),
+                    options.i2v_encoder != I2vEncoderChoice::Stream,
+                );
+                crate::wan::log::info(format_args!(
+                    "h3 text encoder: auto -> {}",
+                    decision.describe(&inputs)
+                ));
+                decision.resident
+            }
+            (true, None) => {
+                crate::wan::log::info(format_args!(
+                    "h3 text encoder: auto -> streamed (free device memory unknown)"
+                ));
+                false
+            }
+            (false, _) => false,
+        };
+        let (text_encoder_choice, load_text_encoder) =
+            options.text_encoder.resolve(auto_resident, free);
+        options.text_encoder = text_encoder_choice;
         let mut booking = crate::wan::ledger::Booking::default();
 
         // E12: open every component's shards up front (headers only) and
@@ -1099,7 +1325,7 @@ impl H3Pipeline {
         // across component boundaries. The loads below read the same mappings.
         let io_base = fastvideo_loader::PrefetchStats::now();
         let io_timer = Instant::now();
-        let text_map = match options.text_encoder.precision() {
+        let text_map = match options.text_encoder.precision().filter(|_| load_text_encoder) {
             Some(precision) => Some(super::text::open_resident_encoder(
                 options.text_root.as_deref().unwrap_or(root),
                 precision,
@@ -1136,6 +1362,7 @@ impl H3Pipeline {
         };
         // FastH3 Trim NVFP4 (docs/ports/h3-trim.md §5): the published block
         // linears replace the snapshot's. Refused without NVFP4 tensor cores.
+        let mut modelopt_nvfp4 = false;
         let nvfp4_dit = match nvfp4_dit_file(root, &options)? {
             Some(path) => {
                 if mlx.is_some() || options.ref2va {
@@ -1158,6 +1385,7 @@ impl H3Pipeline {
             // FastH3 V2 / 4-step NVFP4 releases (docs/ports/fasth3-nvfp4.md):
             // a `transformer/` in ModelOpt's unified layout is read as such.
             None if mlx.is_none() && !options.ref2va && super::nvfp4::is_modelopt_dir(&root.join("transformer"))? => {
+                modelopt_nvfp4 = true;
                 if vdn_ckpt.is_some() {
                     return Err(msg("h3 nvfp4: a ModelOpt NVFP4 DiT takes no VDN checkpoint"));
                 }
@@ -1501,19 +1729,7 @@ impl H3Pipeline {
                 .as_deref()
                 .and_then(|e| e.decoder())
                 .map(|d| d.precision());
-            let need = H3Geometry::default_16x9(5)
-                .map(|g| {
-                    fastvideo_models::h3::memory::plan(
-                        &g,
-                        fastvideo_models::h3::memory::H3PlanOptions {
-                            gate: with_gate,
-                            vae_mxfp8,
-                            ..Default::default()
-                        },
-                    )
-                    .peak()
-                })
-                .map_err(msg)?;
+            let need = dit_placement_need(with_gate, vae_mxfp8);
             // The DiT's working set when its blocks stream from host memory.
             let streamed_need = H3Geometry::default_16x9(5)
                 .map(|g| {
@@ -1536,12 +1752,12 @@ impl H3Pipeline {
                 (I2vEncoderChoice::Resident | I2vEncoderChoice::Auto, None) => {
                     if options.i2v_encoder == I2vEncoderChoice::Resident {
                         return Err(msg(format!(
-                            "i2v_encoder = resident needs a resident Qwen3-VL text encoder (text_encoder = resident-fp8 | resident-bf16, or auto on a card with {:.0} GB free); it resolved to {:?}",
-                            AUTO_RESIDENT_FREE_BYTES as f64 / 1e9,
-                            options.text_encoder
+                            "i2v_encoder = resident needs a resident Qwen3-VL text encoder (text_encoder = resident-fp8 | resident-bf16, or auto when the memory plan keeps it resident); it resolved to {:?}{}",
+                            options.text_encoder,
+                            if text_encoder.is_none() { " (not loaded)" } else { "" }
                         )));
                     }
-                    (false, format!("the text encoder is {:?}, not a resident Qwen3-VL", options.text_encoder))
+                    (false, format!("the text encoder is {:?}{}, not a resident Qwen3-VL", options.text_encoder, if text_encoder.is_none() { " (streamed)" } else { "" }))
                 }
                 (I2vEncoderChoice::Resident, Some(_)) => (true, "configured".to_owned()),
                 (I2vEncoderChoice::Auto, Some(_)) => match free {
@@ -1623,19 +1839,7 @@ impl H3Pipeline {
         let residency = {
             let policy = DitOffload::from_env_or(options.dit_offload).map_err(msg)?;
             // What the default request (768p, 5 s) needs with everything resident.
-            let need = H3Geometry::default_16x9(5)
-                .map(|g| {
-                    fastvideo_models::h3::memory::plan(
-                        &g,
-                        fastvideo_models::h3::memory::H3PlanOptions {
-                            gate: with_gate,
-                            vae_mxfp8,
-                            ..Default::default()
-                        },
-                    )
-                    .peak()
-                })
-                .map_err(msg)?;
+            let need = dit_placement_need(with_gate, vae_mxfp8);
             let residency = policy.resolve(need, free);
             // The NVFP4 blocks (about 10 GiB) stay resident: their device
             // operands have no host-streamed form.
@@ -1775,6 +1979,7 @@ impl H3Pipeline {
             load_timings,
             booking: std::sync::Mutex::new(booking),
             vdn: vdn_ckpt.map(|c| c.transform),
+            vsa_fp4: vsa_fp4_choice(modelopt_nvfp4)?,
         })
     }
 
@@ -2133,12 +2338,12 @@ impl H3Pipeline {
             )?
         };
         timings.text_s = timer.elapsed().as_secs_f64();
-        // Auto kept the encoder resident only because the card was empty at
-        // load. The conditioning is encoded (and cached) now; release the
-        // encoder when the denoise needs its memory.
+        // Auto kept the encoder resident for the planned request size. The
+        // conditioning is encoded (and cached) now; release the encoder when
+        // a larger request's denoise needs its memory (the safety net).
         let rows = text.ids.len() + geometry.video_rows() + geometry.audio_rows();
         if self.auto_text_encoder && encoder_slot.is_some() {
-            let free = crate::wan::device::free_memory().map(|(free, _)| free);
+            let free = device_available();
             if !keep_auto_encoder(free, rows) {
                 let released = encoder_slot.take().map_or(0, |e| e.resident_bytes());
                 self.booking
@@ -2146,7 +2351,7 @@ impl H3Pipeline {
                     .expect("h3 booking")
                     .release(crate::wan::ledger::TEXT_ENCODER);
                 crate::wan::log::info(format_args!(
-                    "h3 text encoder: auto released the resident encoder ({:.1} GiB) before the denoise ({rows} rows need {:.1} GiB, {:.1} GiB free); later prompts stream",
+                    "h3 text encoder: auto released the resident encoder ({:.1} GiB) before the denoise ({rows} rows need {:.1} GiB, {:.1} GiB free incl. pool-cached); later prompts stream at the same numbers",
                     released as f64 / f64::from(1u32 << 30),
                     denoise_reserve_bytes(rows) as f64 / f64::from(1u32 << 30),
                     free.unwrap_or(0) as f64 / f64::from(1u32 << 30),
@@ -2276,7 +2481,8 @@ impl H3Pipeline {
                     vsa_cfg,
                 )?
                 .with_schedule(sparsity, self.techniques.vsa_schedule.clone())
-                .with_fp8(self.techniques.fp8_attention.vsa),
+                .with_fp8(self.techniques.fp8_attention.vsa)
+                .with_fp4(self.vsa_fp4),
             )
         };
         let layout = DeviceLayout::new(cfg, layout)?;
@@ -3496,30 +3702,146 @@ mod tests {
     }
 
     #[test]
-    fn auto_keeps_the_encoder_resident_only_on_a_large_empty_card() {
+    fn auto_resolves_from_the_plan_and_keeps_its_numbers() {
         use TextEncoderChoice::*;
-        assert_eq!(Auto.resolve(Some(95_000_000_000)), ResidentFp8);
-        assert_eq!(Auto.resolve(Some(AUTO_RESIDENT_FREE_BYTES)), ResidentFp8);
+        // The plan says resident: the FP8 encoder loads.
+        assert_eq!(Auto.resolve(true, Some(95_000_000_000)), (ResidentFp8, true));
+        // The plan says stream on a 96 GB-class card: FP8 numbers, streamed
+        // (what a released encoder streams), so the conditioning is the one
+        // this card always had.
+        assert_eq!(Auto.resolve(false, Some(95_000_000_000)), (ResidentFp8, false));
         assert_eq!(
-            Auto.resolve(Some(79_000_000_000)),
-            Streamed,
-            "an 80 GB card streams"
+            Auto.resolve(false, Some(AUTO_FP8_NUMBERS_FREE_BYTES)),
+            (ResidentFp8, false)
         );
-        assert_eq!(
-            Auto.resolve(None),
-            Streamed,
-            "no device, no resident encoder"
-        );
-        assert_eq!(
-            Streamed.resolve(Some(u64::MAX)),
-            Streamed,
-            "an explicit choice is not second-guessed"
-        );
-        assert_eq!(ResidentFp8.resolve(Some(0)), ResidentFp8);
+        // Smaller cards stream bf16, as before.
+        assert_eq!(Auto.resolve(false, Some(79_000_000_000)), (Streamed, false));
+        assert_eq!(Auto.resolve(false, None), (Streamed, false));
+        // Explicit choices are not second-guessed.
+        assert_eq!(Streamed.resolve(true, Some(u64::MAX)), (Streamed, false));
+        assert_eq!(ResidentFp8.resolve(false, Some(0)), (ResidentFp8, true));
+        assert_eq!(ResidentBf16.resolve(false, Some(0)), (ResidentBf16, true));
         for name in ["auto", "streamed", "resident-fp8", "resident-bf16"] {
             assert!(TextEncoderChoice::parse(name).is_ok());
         }
         assert!(TextEncoderChoice::parse("fp8").is_err());
+    }
+
+    /// Free bytes before any load, as the cards report them: the RTX PRO
+    /// 6000 (96 GB; `free_gib_before_load` 94.35 in the 768p logs), the RTX
+    /// 5090 (32 GB), an 80 GB-class card, and the PRO 6000 beside the 11 GB
+    /// upsampler sidecar.
+    const GIB: u64 = 1 << 30;
+    fn gib(g: f64) -> u64 {
+        (g * GIB as f64) as u64
+    }
+    const PRO6000: f64 = 94.35;
+    const RTX5090: f64 = 31.3;
+    const CARD80: f64 = 79.1;
+    const SIDECAR: f64 = PRO6000 - 11e9 / GIB as f64;
+
+    /// A served T2V/I2V model's load: `dit_offload = auto`, bf16 activations,
+    /// the VAE MXFP8 copies, `i2v_encoder = auto` (the tower's reserve).
+    fn served(
+        free: f64,
+        dit: fastvideo_models::h3::memory::H3DitWeights,
+        gate: bool,
+        request: Option<H3Geometry>,
+    ) -> fastvideo_models::h3::memory::AutoTextEncoder {
+        let (inputs, d) =
+            auto_text_encoder_plan(gib(free), DitOffload::Auto, dit, gate, true, request, true, true);
+        eprintln!("{}", d.describe(&inputs));
+        d
+    }
+
+    /// The unit-test table of the `Auto` decisions, with the real plans
+    /// (`gate`: the VSA turbo recipe; `h3-max` is Sol-Attn without it).
+    #[test]
+    fn auto_text_encoder_table() {
+        use fastvideo_models::h3::memory::H3DitWeights::{Bf16, Mxfp8, Nvfp4, W8a8};
+        let cases = [
+            // 96 GB + MXFP8 at 768p 5 s: resident (h3-turbo and h3-max).
+            ("96GB mxfp8 turbo", PRO6000, Mxfp8, true, true),
+            ("96GB mxfp8 max", PRO6000, Mxfp8, false, true),
+            ("96GB nvfp4", PRO6000, Nvfp4, true, true),
+            // bf16: streamed from the load (before: loaded, then released
+            // before the first 768p denoise; FP8 numbers either way).
+            ("96GB bf16 gated", PRO6000, Bf16, true, false),
+            ("96GB bf16", PRO6000, Bf16, false, false),
+            ("5090 mxfp8", RTX5090, Mxfp8, true, false),
+            ("5090 nvfp4", RTX5090, Nvfp4, true, false),
+            ("80GB mxfp8", CARD80, Mxfp8, true, false),
+            ("80GB w8a8", CARD80, W8a8, true, false),
+            ("80GB bf16", CARD80, Bf16, true, false),
+            ("80GB nvfp4", CARD80, Nvfp4, true, true),
+            // The sidecar: the encoder would cost the DiT its residency
+            // (the bf16-priced placement need), so it streams.
+            ("sidecar mxfp8 turbo", SIDECAR, Mxfp8, true, false),
+            ("sidecar mxfp8 max", SIDECAR, Mxfp8, false, false),
+            ("sidecar nvfp4", SIDECAR, Nvfp4, true, true),
+        ];
+        for (name, free, dit, gate, resident) in cases {
+            let d = served(free, dit, gate, None);
+            assert_eq!(d.resident, resident, "{name}: need {:.1} GiB", d.need as f64 / GIB as f64);
+        }
+    }
+
+    /// The DiT has priority: whenever `Auto` keeps the encoder, the free
+    /// memory the DiT placement measures after it (and the tower) loads still
+    /// covers the placement's need, at every card size.
+    #[test]
+    fn a_resident_auto_encoder_never_streams_the_dit() {
+        use fastvideo_models::h3::memory::H3DitWeights::{Bf16, Mxfp8, Nvfp4, W8a8};
+        for dit in [Bf16, Mxfp8, W8a8, Nvfp4] {
+            for gate in [false, true] {
+                let need = dit_placement_need(gate, true);
+                for free_gib in 16..=200 {
+                    let free = free_gib * GIB;
+                    let (_, d) =
+                        auto_text_encoder_plan(free, DitOffload::Auto, dit, gate, true, None, true, true);
+                    let dit_resident = DitOffload::Auto.resolve(need, Some(free)) == Residency::Resident;
+                    if d.resident && dit != Nvfp4 {
+                        let after = free - d.encoder - I2V_VISION_RESERVE_BYTES;
+                        assert_eq!(
+                            DitOffload::Auto.resolve(need, Some(after)),
+                            if dit_resident { Residency::Resident } else { Residency::Streamed },
+                            "{dit:?} gate {gate} at {free_gib} GiB"
+                        );
+                    }
+                }
+            }
+        }
+        // Before the plan, an 85 GB threshold loaded the encoder beside the
+        // sidecar (84.1 GiB = 90.3 GB free) and the placement then streamed
+        // the DiT: 84.1 - 22.7 < its need.
+        let need = dit_placement_need(true, true);
+        assert!(gib(SIDECAR) >= AUTO_FP8_NUMBERS_FREE_BYTES);
+        assert!(gib(SIDECAR) - gib(22.7) < need && gib(SIDECAR) >= need);
+    }
+
+    /// The planned request decides; larger requests are the post-encode
+    /// release's job: on the 96 GB card with an MXFP8 DiT, a 768p 5 s denoise
+    /// keeps the encoder, a 1080p (or 768p 15 s) one releases it.
+    #[test]
+    fn larger_requests_release_the_auto_encoder_after_encoding() {
+        use fastvideo_models::h3::memory::H3DitWeights::Mxfp8;
+        let d = served(PRO6000, Mxfp8, true, None);
+        assert!(d.resident);
+        // After the load and the encode: the encoder, the resident weights
+        // (with the tower's reserve) and ~5 GiB of live state the ledgers
+        // show beside the weights (the text phase's `activations`).
+        let after = gib(PRO6000) - d.encoder - d.weights - 5 * GIB;
+        let rows = |g: &H3Geometry| g.sequence_length(600);
+        let r768 = rows(&H3Geometry::default_16x9(5).unwrap());
+        let r1080 = rows(&H3Geometry::new(1088, 1920, 5 * 24).unwrap());
+        let r768_15 = rows(&H3Geometry::default_16x9(15).unwrap());
+        let keep = |r| after >= denoise_reserve_bytes_for(r, true);
+        assert!(keep(r768), "768p 5 s keeps it");
+        assert!(!keep(r1080), "1080p 5 s releases it");
+        assert!(!keep(r768_15), "768p 15 s releases it");
+        // A process that plans for 1080p streams from the load instead.
+        let hd = served(PRO6000, Mxfp8, true, Some(H3Geometry::new(1088, 1920, 5 * 24).unwrap()));
+        assert!(!hd.resident);
     }
 
     #[test]

@@ -39,8 +39,47 @@ export async function clusterEditorChecks({ page, B, api, out, tiny, big }) {
   await page.click('.cf-pool[data-path="pools.1"] .cf-caret');
   for (const k of ["id", "variant", "compute", "gpu_types", "regions", "container_disk_gb", "volume", "image", "family", "config", "models", "fake_models", "max_queued", "job_timeout_s", "stale_after_s"])
     assert.ok(await page.$(`.cf-field[data-path="pools.1.${k}"]`), `pool field ${k}`);
-  for (const k of ["name", "control_plane", "auth", "image", "regions", "cap_s", "max_gpu_dph", "min_start", "balance_floor", "min_balance", "auto_stop_idle_min", "log_shipping", "log_level"])
+  for (const k of ["name", "control_plane", "auth", "image", "regions", "data_centers", "cap_s", "max_gpu_dph", "min_start", "balance_floor", "min_balance", "auto_stop_idle_min", "log_shipping", "log_level"])
     assert.ok(await page.$(`.cf-field[data-path="${k}"]`), `field ${k}`);
+  // ---- placement (owner 2026-10-14): any Runpod data centre for the pools without the weights volume, any provider per pool.
+  // Every pool says its provider and where it runs; by default the regions' EU-RO-1.
+  assert.equal((await page.$$(".cf-pool-head .badge:text-is('runpod')")).length, 4, "a provider badge on every pool");
+  assert.match(await page.textContent('.cf-wherelist li[data-where="wan"]'), /weights r2 \(default\) → EU-RO-1 \(no volume\)/);
+  assert.match(await page.textContent('.cf-wherelist li[data-where="h3-turbo"]'), /weights volume \(default\) → EU-RO-1 \(weights volume\)/);
+  // The data centres offer every Runpod one ("weights volume here" on EU-RO-1) and "any", which stays last.
+  assert.match(await page.textContent('.cf-field[data-path="data_centers"] .fv-chip:has-text("EU-RO-1")'), /weights volume here/);
+  assert.match(await page.textContent('.cf-field[data-path="data_centers"] .cf-help'), /Allowed CUDA filter/);
+  await page.click('.cf-field[data-path="data_centers"] .fv-chip:has-text("Runpod places it")');
+  await page.click('.cf-field[data-path="data_centers"] .fv-chip:has-text("US-TX-3")');
+  await page.waitForSelector('.cf-wherelist li[data-where="wan"]:has-text("US-TX-3, any data centre (the cluster\'s)")');
+  assert.match(await page.textContent('.cf-pool[data-path="pools.3"] .cf-where'), /US-TX-3, any data centre/);
+  // The volume pools stay in EU-RO-1: a warning, not an error.
+  await page.waitForSelector(".cf-issue.warn:has-text('h3-turbo mounts the weights volume, so it runs in EU-RO-1')");
+  await page.waitForSelector(".cf-issues .badge.good");
+  // The wan pool (r2 by default): its own data centres, which name its weights (r2) for the schema's rule.
+  await page.click('.cf-pool[data-path="pools.3"] .cf-caret');
+  await page.waitForSelector('.cf-field[data-path="pools.3.data_centers"]');
+  assert.match(await page.textContent('.cf-field[data-path="pools.3.weights_source"] select option[value=""]'), /default: r2 \(the preset's\)/);
+  await page.click('.cf-field[data-path="pools.3.data_centers"] .fv-chip:has-text("EU-SE-1")');
+  await page.waitForSelector('.cf-wherelist li[data-where="wan"]:has-text("weights r2 → EU-SE-1")');
+  assert.equal(await page.inputValue('.cf-field[data-path="pools.3.weights_source"] select'), "r2");
+  await page.waitForSelector(".cf-issues .badge.good");
+  await page.click('.cf-field[data-path="pools.3.data_centers"] .fv-chip:has-text("EU-SE-1")');
+  await page.click('.cf-pool[data-path="pools.3"] .cf-caret');
+  // A GMI pool from the same page: the provider is the first choice of a pool; the head and the list say gmi.
+  await page.selectOption('.cf-field[data-path="pools.1.provider"] select', "gmi");
+  await page.waitForSelector('.cf-pool[data-path="pools.1"] .cf-pool-head .badge:text-is("gmi")');
+  await page.waitForSelector('.cf-field[data-path="pools.1.provider_gpu"]');
+  assert.equal(await page.$('.cf-field[data-path="pools.1.data_centers"]'), null, "no Runpod data centres on a GMI pool");
+  await page.waitForSelector('.cf-wherelist li[data-where="h3-max"]:has-text("gmi")');
+  await page.screenshot({ path: `${out}/config-02b-placement-providers.png`, fullPage: true });
+  // Back to Runpod and the regions' placement, so the define below is the standard cluster.
+  await page.selectOption('.cf-field[data-path="pools.1.provider"] select', "");
+  await page.waitForSelector('.cf-pool[data-path="pools.1"] .cf-pool-head .badge:text-is("runpod")');
+  await page.click('.cf-field[data-path="data_centers"] .fv-chip:has-text("US-TX-3")');
+  await page.click('.cf-field[data-path="data_centers"] .fv-chip:has-text("Runpod places it")');
+  await page.waitForSelector('.cf-wherelist li[data-where="wan"]:has-text("EU-RO-1 (no volume)")');
+  await page.waitForSelector(".cf-issues .badge.good");
   // Define: the review shows the spec, then the page becomes the cluster's.
   await page.click("button:text('Review & define')");
   await page.waitForSelector("dialog.cf-review");
