@@ -1,0 +1,70 @@
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.91.07, 97887 MiB, 0 MiB
+fv-gpucheck 0.1.15
+384cb1da22579303
+/workspace/weights/FastH3-4-step-Preview-v1-LoRA
+/workspace/weights/auxiliary/lpips
+/workspace/weights/h3-base
+/workspace/weights/h3-base/transformer_prequant_4step-vsa_mxfp8
+overlay          80G  149M   80G   1% /
+2026-10-14T01:34:36Z | == stage gen base768 768p default /e2e/vt/prompts-h3demo-3.json
+2026-10-14T01:41:25Z | gen base768 rc=0 wall=409s peak=69837MiB tb=default res=768p
+[fastvideo] h3 vae check: batch 7 grid [7, 16, 16]: unfused 0.603s [vae_qkv_heads 0.141, vae_ff_in_linear 0.126, vae_swiglu 0.100, vae_ff_out_linear 0.062, vae_qkv_linear 0.051, vae_out_linear 0.043, vae_sdpa 0.036, vae_residual 0.029, vae_norm 0.011, vae_unpatchify 0.002, vae_proj_out 0.001, vae_proj_in 0.000]; fused 0.233s [vae_ff_in_gemm 0.074, vae_ff_out_gemm 0.040, vae_qkv_gemm 0.030, vae_sdpa 0.023, vae_swiglu 0.017, vae_residual_norm 0.016, vae_qkv_heads 0.014, vae_out_gemm 0.011, vae_merge_heads 0.004, vae_unpatchify 0.002, vae_proj_out 0.001, vae_proj_in 0.000]; rel_l2 1.397e-3 (fused kept)
+[fastvideo] h3 video decode + mp4 7.43s: vae 7.32s, rgb+copy 0.11s, writer push 0.00s, decode waited 0.27s, mp4 tail 0.09s
+[fastvideo] h3 video decode + mp4 6.40s: vae 6.28s, rgb+copy 0.11s, writer push 0.00s, decode waited 0.27s, mp4 tail 0.10s
+[fastvideo] h3 video decode + mp4 6.41s: vae 6.29s, rgb+copy 0.11s, writer push 0.00s, decode waited 0.27s, mp4 tail 0.10s
+[fastvideo] h3 video decode + mp4 6.41s: vae 6.30s, rgb+copy 0.11s, writer push 0.00s, decode waited 0.27s, mp4 tail 0.10s
+base768 cold 454cc62632a08a55
+base768 h3-demo-s0 454cc62632a08a55
+base768 h3-demo-s1000 adc1faaf40634f9c
+base768 h3-demo-s2000 461f6abca2963555
+2026-10-14T01:41:26Z | == stage gen tb196_768 768p 196 /e2e/vt/prompts-h3demo-3.json
+2026-10-14T01:45:34Z | gen tb196_768 rc=0 wall=248s peak=69837MiB tb=196 res=768p
+[fastvideo] h3 vae check: batch 28 grid [7, 16, 16]: unfused 2.351s [vae_qkv_heads 0.558, vae_ff_in_linear 0.481, vae_swiglu 0.395, vae_ff_out_linear 0.230, vae_qkv_linear 0.213, vae_out_linear 0.170, vae_sdpa 0.136, vae_residual 0.108, vae_norm 0.042, vae_unpatchify 0.009, vae_proj_out 0.004, vae_proj_in 0.001]; fused 0.882s [vae_ff_in_gemm 0.290, vae_ff_out_gemm 0.143, vae_qkv_gemm 0.112, vae_sdpa 0.089, vae_swiglu 0.064, vae_residual_norm 0.063, vae_qkv_heads 0.050, vae_out_gemm 0.039, vae_merge_heads 0.015, vae_unpatchify 0.009, vae_proj_out 0.004, vae_proj_in 0.001]; rel_l2 1.651e-3 (fused kept)
+[fastvideo] h3 video decode + mp4 9.93s: vae 9.80s, rgb+copy 0.11s, writer push 0.00s, decode waited 0.88s, mp4 tail 0.10s
+[fastvideo] h3 video decode + mp4 6.30s: vae 6.18s, rgb+copy 0.11s, writer push 0.00s, decode waited 0.88s, mp4 tail 0.11s
+[fastvideo] h3 video decode + mp4 6.31s: vae 6.19s, rgb+copy 0.11s, writer push 0.00s, decode waited 0.88s, mp4 tail 0.10s
+[fastvideo] h3 video decode + mp4 6.33s: vae 6.19s, rgb+copy 0.10s, writer push 0.00s, decode waited 0.89s, mp4 tail 0.11s
+tb196_768 cold 454cc62632a08a55
+tb196_768 h3-demo-s0 454cc62632a08a55
+tb196_768 h3-demo-s1000 adc1faaf40634f9c
+tb196_768 h3-demo-s2000 461f6abca2963555
+2026-10-14T01:45:35Z | == stage gen base768b 768p default /e2e/vt/prompts-h3demo-3.json
+2026-10-14T01:51:05Z | gen base768b rc=0 wall=330s peak=69837MiB tb=default res=768p
+[fastvideo] h3 vae check: batch 7 grid [7, 16, 16]: unfused 0.606s [vae_qkv_heads 0.141, vae_ff_in_linear 0.126, vae_swiglu 0.100, vae_ff_out_linear 0.062, vae_qkv_linear 0.051, vae_out_linear 0.044, vae_sdpa 0.036, vae_residual 0.029, vae_norm 0.011, vae_unpatchify 0.002, vae_proj_out 0.001, vae_proj_in 0.000]; fused 0.238s [vae_ff_in_gemm 0.075, vae_ff_out_gemm 0.040, vae_qkv_gemm 0.030, vae_sdpa 0.024, vae_swiglu 0.017, vae_residual_norm 0.016, vae_qkv_heads 0.015, vae_out_gemm 0.011, vae_merge_heads 0.004, vae_unpatchify 0.002, vae_proj_out 0.001, vae_proj_in 0.000]; rel_l2 1.397e-3 (fused kept)
+[fastvideo] h3 video decode + mp4 7.47s: vae 7.33s, rgb+copy 0.11s, writer push 0.00s, decode waited 0.27s, mp4 tail 0.12s
+[fastvideo] h3 video decode + mp4 6.39s: vae 6.28s, rgb+copy 0.11s, writer push 0.00s, decode waited 0.27s, mp4 tail 0.09s
+[fastvideo] h3 video decode + mp4 6.40s: vae 6.29s, rgb+copy 0.10s, writer push 0.00s, decode waited 0.26s, mp4 tail 0.09s
+[fastvideo] h3 video decode + mp4 6.41s: vae 6.30s, rgb+copy 0.11s, writer push 0.00s, decode waited 0.27s, mp4 tail 0.09s
+base768b cold 454cc62632a08a55
+base768b h3-demo-s0 454cc62632a08a55
+base768b h3-demo-s1000 adc1faaf40634f9c
+base768b h3-demo-s2000 461f6abca2963555
+2026-10-14T01:51:06Z | == stage gen base480 480p default /e2e/vt/prompts-h3demo-3.json
+2026-10-14T01:55:21Z | gen base480 rc=0 wall=255s peak=61773MiB tb=default res=480p
+[fastvideo] h3 vae check: batch 6 grid [7, 16, 16]: unfused 0.514s [vae_qkv_heads 0.121, vae_ff_in_linear 0.104, vae_swiglu 0.086, vae_ff_out_linear 0.052, vae_qkv_linear 0.043, vae_out_linear 0.037, vae_sdpa 0.032, vae_residual 0.025, vae_norm 0.009, vae_unpatchify 0.002, vae_proj_out 0.001, vae_proj_in 0.000]; fused 0.203s [vae_ff_in_gemm 0.064, vae_ff_out_gemm 0.033, vae_qkv_gemm 0.026, vae_sdpa 0.021, vae_swiglu 0.015, vae_residual_norm 0.014, vae_qkv_heads 0.012, vae_out_gemm 0.010, vae_merge_heads 0.003, vae_unpatchify 0.002, vae_proj_out 0.001, vae_proj_in 0.000]; rel_l2 1.593e-3 (fused kept)
+[fastvideo] h3 video decode + mp4 3.61s: vae 3.55s, rgb+copy 0.04s, writer push 0.00s, decode waited 0.38s, mp4 tail 0.05s
+[fastvideo] h3 video decode + mp4 2.71s: vae 2.66s, rgb+copy 0.05s, writer push 0.00s, decode waited 0.38s, mp4 tail 0.05s
+[fastvideo] h3 video decode + mp4 2.72s: vae 2.67s, rgb+copy 0.05s, writer push 0.00s, decode waited 0.38s, mp4 tail 0.05s
+[fastvideo] h3 video decode + mp4 2.73s: vae 2.67s, rgb+copy 0.04s, writer push 0.00s, decode waited 0.38s, mp4 tail 0.05s
+base480 cold 2cb72331467b5244
+base480 h3-demo-s0 2cb72331467b5244
+base480 h3-demo-s1000 72e5e58391a4bc3a
+base480 h3-demo-s2000 f11dfef4ef3f9d37
+2026-10-14T01:55:21Z | == stage gen tb196_480 480p 196 /e2e/vt/prompts-h3demo-3.json
+2026-10-14T01:59:44Z | gen tb196_480 rc=0 wall=263s peak=61773MiB tb=196 res=480p
+[fastvideo] h3 vae check: batch 12 grid [7, 16, 16]: unfused 1.025s [vae_qkv_heads 0.240, vae_ff_in_linear 0.208, vae_swiglu 0.170, vae_ff_out_linear 0.105, vae_qkv_linear 0.089, vae_out_linear 0.076, vae_sdpa 0.060, vae_residual 0.051, vae_norm 0.018, vae_unpatchify 0.004, vae_proj_out 0.002, vae_proj_in 0.001]; fused 0.397s [vae_ff_in_gemm 0.124, vae_ff_out_gemm 0.066, vae_qkv_gemm 0.049, vae_sdpa 0.038, vae_residual_norm 0.033, vae_swiglu 0.031, vae_qkv_heads 0.022, vae_out_gemm 0.019, vae_merge_heads 0.007, vae_unpatchify 0.004, vae_proj_out 0.002, vae_proj_in 0.001]; rel_l2 1.767e-3 (fused kept)
+[fastvideo] h3 video decode + mp4 4.37s: vae 4.31s, rgb+copy 0.05s, writer push 0.00s, decode waited 0.48s, mp4 tail 0.05s
+[fastvideo] h3 video decode + mp4 2.73s: vae 2.66s, rgb+copy 0.05s, writer push 0.00s, decode waited 0.48s, mp4 tail 0.06s
+[fastvideo] h3 video decode + mp4 2.73s: vae 2.67s, rgb+copy 0.04s, writer push 0.00s, decode waited 0.48s, mp4 tail 0.06s
+[fastvideo] h3 video decode + mp4 2.73s: vae 2.68s, rgb+copy 0.05s, writer push 0.00s, decode waited 0.48s, mp4 tail 0.05s
+tb196_480 cold 2cb72331467b5244
+tb196_480 h3-demo-s0 2cb72331467b5244
+tb196_480 h3-demo-s1000 72e5e58391a4bc3a
+tb196_480 h3-demo-s2000 f11dfef4ef3f9d37
+2026-10-14T01:59:44Z | == stage pair base768 tb196_768
+2026-10-14T01:59:58Z | pair base768--tb196_768: 3 compares
+2026-10-14T01:59:58Z | == stage pair base768 base768b
+2026-10-14T02:00:12Z | pair base768--base768b: 3 compares
+2026-10-14T02:00:12Z | == stage pair base480 tb196_480
+2026-10-14T02:00:20Z | pair base480--tb196_480: 3 compares
+2026-10-14T02:00:20Z | == stage results
