@@ -5121,7 +5121,8 @@ pub fn h3v_residual_norm_bf16_device(
     if let Some((upd, bias, scale)) = update {
         check(
             "h3v_residual_norm update",
-            upd.len() == x.len() && bias.len() == width && scale.len() == width,
+            // `>=`: an MXFP8 GEMM output carries zero pad rows past `rows`.
+            upd.len() >= x.len() && bias.len() == width && scale.len() == width,
         )?;
     }
     if let Some(w) = norm {
@@ -5174,6 +5175,26 @@ pub fn h3v_qkv_heads_bf16_device(
     r: usize,
     eps: f32,
 ) -> Result<[CudaSlice<half::bf16>; 3]> {
+    h3v_qkv_heads_bf16_device_with(false, qkv, bias, cos, sin, batch, seq, heads, d, r, eps)
+}
+
+/// [`h3v_qkv_heads_bf16_device`]; `vec` runs `h3v_qkv_heads_bf16_v` (one
+/// wide load per lane, bit-identical output).
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn h3v_qkv_heads_bf16_device_with(
+    vec: bool,
+    qkv: &CudaSlice<half::bf16>,
+    bias: &CudaSlice<f32>,
+    cos: &CudaSlice<f32>,
+    sin: &CudaSlice<f32>,
+    batch: usize,
+    seq: usize,
+    heads: usize,
+    d: usize,
+    r: usize,
+    eps: f32,
+) -> Result<[CudaSlice<half::bf16>; 3]> {
     let rows = batch * seq;
     let inner = heads * d;
     check(
@@ -5183,7 +5204,7 @@ pub fn h3v_qkv_heads_bf16_device(
             && d <= 128
             && r <= d
             && r.is_multiple_of(2)
-            && qkv.len() == rows * 3 * inner
+            && qkv.len() >= rows * 3 * inner
             && bias.len() == 3 * inner
             && cos.len() == seq * r
             && sin.len() == seq * r
@@ -5202,7 +5223,12 @@ pub fn h3v_qkv_heads_bf16_device(
         shared_mem_bytes: 0,
     };
     let a = [rows, seq, heads, d, r].map(|v| v as i32);
-    launch!(dev.stream, &dev.kernels.h3v_qkv_heads_bf16, cfg;
+    let func = if vec {
+        &dev.kernels.h3v_qkv_heads_bf16_v
+    } else {
+        &dev.kernels.h3v_qkv_heads_bf16
+    };
+    launch!(dev.stream, func, cfg;
         qkv, bias, cos, sin, &mut q, &mut k, &mut v, &a[0], &a[1], &a[2], &a[3], &a[4], &eps)
     .map_err(err)?;
     Ok([q, k, v])
@@ -5217,6 +5243,20 @@ pub fn h3v_merge_heads_bf16_device(
     seq: usize,
     d: usize,
 ) -> Result<CudaSlice<half::bf16>> {
+    h3v_merge_heads_bf16_device_with(false, src, batch, heads, seq, d)
+}
+
+/// [`h3v_merge_heads_bf16_device`]; `vec` (needs `d % 8 == 0`) runs
+/// `h3v_merge_heads_bf16_v`, 16-byte copies of the same values.
+#[cfg(feature = "cuda")]
+pub fn h3v_merge_heads_bf16_device_with(
+    vec: bool,
+    src: &CudaSlice<half::bf16>,
+    batch: usize,
+    heads: usize,
+    seq: usize,
+    d: usize,
+) -> Result<CudaSlice<half::bf16>> {
     let rows = batch * seq;
     check(
         "h3v_merge_heads",
@@ -5225,9 +5265,15 @@ pub fn h3v_merge_heads_bf16_device(
     let dev = ctx()?;
     let mut out = alloc_bf16(src.len())?;
     let a = [rows, seq, heads, d].map(|v| v as i32);
-    launch!(dev.stream, &dev.kernels.h3v_merge_heads_bf16, cfg_cols_rows(heads * d, rows);
-        src, &mut out, &a[0], &a[1], &a[2], &a[3])
-    .map_err(err)?;
+    if vec && d.is_multiple_of(8) {
+        launch!(dev.stream, &dev.kernels.h3v_merge_heads_bf16_v, cfg_n(src.len() / 8);
+            src, &mut out, &a[0], &a[1], &a[2], &a[3])
+        .map_err(err)?;
+    } else {
+        launch!(dev.stream, &dev.kernels.h3v_merge_heads_bf16, cfg_cols_rows(heads * d, rows);
+            src, &mut out, &a[0], &a[1], &a[2], &a[3])
+        .map_err(err)?;
+    }
     Ok(out)
 }
 
@@ -5241,17 +5287,138 @@ pub fn h3v_swiglu_bf16_device(
 ) -> Result<CudaSlice<half::bf16>> {
     check(
         "h3v_swiglu",
-        half > 0 && x.len().is_multiple_of(2 * half) && bias.len() == 2 * half,
+        half > 0 && x.len().is_multiple_of(2 * half),
     )?;
-    let rows = x.len() / (2 * half);
+    h3v_swiglu_bf16_device_with(false, x, bias, half, x.len() / (2 * half))
+}
+
+/// [`h3v_swiglu_bf16_device`] on the first `rows` rows of `x` (an MXFP8
+/// GEMM output may carry pad rows past them); `vec` (needs `half` even) runs
+/// `h3v_swiglu_bf16_v`, two columns per thread with the same arithmetic.
+#[cfg(feature = "cuda")]
+pub fn h3v_swiglu_bf16_device_with(
+    vec: bool,
+    x: &CudaSlice<half::bf16>,
+    bias: &CudaSlice<f32>,
+    half: usize,
+    rows: usize,
+) -> Result<CudaSlice<half::bf16>> {
+    check(
+        "h3v_swiglu",
+        half > 0 && x.len() >= rows * 2 * half && bias.len() == 2 * half,
+    )?;
     check("h3v_swiglu rows", rows <= i32::MAX as usize)?;
     let dev = ctx()?;
     let mut out = alloc_bf16(rows * half)?;
     let (rows_i, half_i) = (rows as i32, half as i32);
-    launch!(dev.stream, &dev.kernels.h3v_swiglu_bf16, cfg_cols_rows(half, rows);
-        x, bias, &mut out, &rows_i, &half_i)
-    .map_err(err)?;
+    if vec && half.is_multiple_of(2) {
+        launch!(dev.stream, &dev.kernels.h3v_swiglu_bf16_v, cfg_cols_rows(half / 2, rows);
+            x, bias, &mut out, &rows_i, &half_i)
+        .map_err(err)?;
+    } else {
+        launch!(dev.stream, &dev.kernels.h3v_swiglu_bf16, cfg_cols_rows(half, rows);
+            x, bias, &mut out, &rows_i, &half_i)
+        .map_err(err)?;
+    }
     Ok(out)
+}
+
+// ---- MXFP8 producers (FASTVIDEO_H3_VAE_MXFP8) -----------------------------
+// Each writes the bf16 value its h3v_* twin writes, block-quantized straight
+// into the next GEMM's MXFP8 operand (`out`, from `MxAct::alloc(rows, k)`:
+// pad rows and scales start zero).
+
+#[cfg(feature = "cuda")]
+fn mx_check(what: &str, out: &super::quant::MxAct, rows: usize, k: usize) -> Result<()> {
+    check(
+        what,
+        out.rows == rows && out.k == k && k.is_multiple_of(32) && rows <= i32::MAX as usize,
+    )
+}
+
+/// [`h3v_residual_norm_bf16_device`] with the norm always on and written as
+/// MXFP8 into `out`; returns the updated f32 rows when `update` is given.
+#[cfg(feature = "cuda")]
+pub fn h3v_residual_norm_mx_device(
+    x: &CudaSlice<f32>,
+    width: usize,
+    update: Option<(&CudaSlice<half::bf16>, &CudaSlice<f32>, &CudaSlice<f32>)>,
+    norm: &CudaSlice<f32>,
+    eps: f32,
+    out: &mut super::quant::MxAct,
+) -> Result<Option<CudaSlice<f32>>> {
+    check(
+        "h3v_residual_norm_mx",
+        width > 0 && x.len().is_multiple_of(width) && norm.len() == width,
+    )?;
+    let rows = x.len() / width;
+    mx_check("h3v_residual_norm_mx out", out, rows, width)?;
+    if let Some((upd, bias, scale)) = update {
+        check(
+            "h3v_residual_norm_mx update",
+            upd.len() >= x.len() && bias.len() == width && scale.len() == width,
+        )?;
+    }
+    let dev = ctx()?;
+    let f32_dummy = alloc(1)?;
+    let bf16_dummy = alloc_bf16(1)?;
+    let (upd, bias, scale) = match update {
+        Some(u) => u,
+        None => (&bf16_dummy, &f32_dummy, &f32_dummy),
+    };
+    let mut x_out = if update.is_some() {
+        alloc(x.len())?
+    } else {
+        alloc(1)?
+    };
+    let (rows_i, width_i, has_upd) = (rows as i32, width as i32, i32::from(update.is_some()));
+    launch!(dev.stream, &dev.kernels.h3v_residual_norm_mx, cfg_rows(rows);
+        x, upd, bias, scale, norm, &mut x_out, &mut out.q, &mut out.s,
+        &rows_i, &width_i, &eps, &has_upd)
+    .map_err(err)?;
+    Ok(update.is_some().then_some(x_out))
+}
+
+/// [`h3v_merge_heads_bf16_device`] written as MXFP8 into `out`.
+#[cfg(feature = "cuda")]
+pub fn h3v_merge_heads_mx_device(
+    src: &CudaSlice<half::bf16>,
+    batch: usize,
+    heads: usize,
+    seq: usize,
+    d: usize,
+    out: &mut super::quant::MxAct,
+) -> Result<()> {
+    let rows = batch * seq;
+    check("h3v_merge_heads_mx", src.len() == rows * heads * d)?;
+    mx_check("h3v_merge_heads_mx out", out, rows, heads * d)?;
+    let dev = ctx()?;
+    let a = [rows, seq, heads, d].map(|v| v as i32);
+    launch!(dev.stream, &dev.kernels.h3v_merge_heads_mx, cfg_cols_rows(heads * d, rows);
+        src, &mut out.q, &mut out.s, &a[0], &a[1], &a[2], &a[3])
+    .map_err(err)
+}
+
+/// [`h3v_swiglu_bf16_device`] on the first `out.rows` rows of `x`, written
+/// as MXFP8 into `out`.
+#[cfg(feature = "cuda")]
+pub fn h3v_swiglu_mx_device(
+    x: &CudaSlice<half::bf16>,
+    bias: &CudaSlice<f32>,
+    half: usize,
+    out: &mut super::quant::MxAct,
+) -> Result<()> {
+    let rows = out.rows;
+    check(
+        "h3v_swiglu_mx",
+        half > 0 && x.len() >= rows * 2 * half && bias.len() == 2 * half,
+    )?;
+    mx_check("h3v_swiglu_mx out", out, rows, half)?;
+    let dev = ctx()?;
+    let (rows_i, half_i) = (rows as i32, half as i32);
+    launch!(dev.stream, &dev.kernels.h3v_swiglu_mx, cfg_cols_rows(half, rows);
+        x, bias, &mut out.q, &mut out.s, &rows_i, &half_i)
+    .map_err(err)
 }
 
 /// Plain-Rust twins of the `h3v_*` kernels (what `fv-gpucheck kernels`

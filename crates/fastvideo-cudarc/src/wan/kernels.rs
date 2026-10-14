@@ -202,6 +202,12 @@ kernel_fns!(
     h3v_qkv_heads_bf16,
     h3v_merge_heads_bf16,
     h3v_swiglu_bf16,
+    h3v_merge_heads_bf16_v,
+    h3v_swiglu_bf16_v,
+    h3v_qkv_heads_bf16_v,
+    h3v_residual_norm_mx,
+    h3v_merge_heads_mx,
+    h3v_swiglu_mx,
     // ---- ltx video vae region (appended; see the end of kernels.cu) ----
     ltxv_norm_silu,
     ltxv_latent_in,

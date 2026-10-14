@@ -23,6 +23,7 @@ use crate::report::{Report, StageError, StageResult};
 
 mod attn2;
 mod attn3;
+mod h3vae;
 mod determinism;
 mod vsa_dc;
 
@@ -2420,6 +2421,8 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
     group(&mut c, "vsa_stages", attn3::vsa_stages)?;
     group(&mut c, "attn_dc", attn2::dc_parity)?;
     group(&mut c, "vsa_dc", vsa_dc::run)?;
+    // H3 video VAE ops at real shapes (opt-in: `--groups h3vae_bench`).
+    group(&mut c, "h3vae_bench", h3vae::bench)?;
 
     group(&mut c, "conv", |c| {
         // cuDNN conv2d (patch embed, VAE resample): pad/stride variants + bias.

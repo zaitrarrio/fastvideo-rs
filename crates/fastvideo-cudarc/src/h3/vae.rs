@@ -64,6 +64,92 @@ static FUSED_BROKEN: AtomicBool = AtomicBool::new(false);
 /// is reduction order, so decoded pixels agree to bf16 noise, far below this.
 const FUSED_CHECK_REL_L2: f64 = 1e-2;
 
+/// `FASTVIDEO_H3_VAE_MXFP8=1` (default off; a numerics change): the four
+/// block linears of the fused ViT run as MXFP8 GEMMs (E4M3, one E8M0 scale
+/// per 32 values, the DiT's `[techniques.mxfp8]` recipe and cuBLASLt path),
+/// weights quantized from the bf16 checkpoint at load, activations quantized
+/// by the kernel that produces them. See docs/perf/h3-vae-decode-speed.md.
+#[cfg(feature = "cuda")]
+fn mxfp8_requested() -> bool {
+    static FLAG: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
+    FLAG.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_H3_VAE_MXFP8", false))
+}
+
+/// The MXFP8 forward against the unfused f32-activation ViT, in
+/// [`H3VideoDecoder::check_paths`]: a sanity bound (wrong scales or layout
+/// give O(1)), not a quality bar; quality is the gate's call.
+const MXFP8_CHECK_REL_L2: f64 = 1e-1;
+
+/// The check found the MXFP8 forward off by more than [`MXFP8_CHECK_REL_L2`].
+static MXFP8_BROKEN: AtomicBool = AtomicBool::new(false);
+
+/// `FASTVIDEO_H3_VAE_VEC` (default on): the vector-access twins of the
+/// QKV-heads, merge-heads and SwiGLU kernels (bit-identical outputs).
+#[cfg(feature = "cuda")]
+fn vec_enabled() -> bool {
+    static FLAG: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
+    FLAG.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_H3_VAE_VEC", VEC_DEFAULT))
+}
+
+/// Default of [`vec_enabled`].
+#[cfg(feature = "cuda")]
+const VEC_DEFAULT: bool = false;
+
+/// `FASTVIDEO_H3_VAE_GEMM`: `cublas` (default; cuBLAS `GemmEx`'s own pick),
+/// `lt` or `lt:N` / `ltN` (cuBLASLt's first or N-th heuristic algorithm) for the
+/// fused ViT's bf16 GEMMs. Same product either way up to accumulation order.
+#[cfg(feature = "cuda")]
+fn gemm_algo() -> Option<usize> {
+    static FLAG: crate::wan::envflag::CachedString = crate::wan::envflag::CachedString::new();
+    let v = FLAG.get_or_init(|| crate::wan::envflag::string_flag("FASTVIDEO_H3_VAE_GEMM", "cublas"));
+    parse_algo(&v, "lt")
+}
+
+/// `FASTVIDEO_H3_VAE_MXFP8_ALGO=N`: cuBLASLt's N-th heuristic algorithm for
+/// the MXFP8 GEMMs (default 0, its first pick).
+#[cfg(feature = "cuda")]
+fn mx_algo() -> usize {
+    crate::wan::envflag::usize_flag("FASTVIDEO_H3_VAE_MXFP8_ALGO", 0)
+}
+
+/// `lt` -> 0, `lt:N` or `ltN` -> N, anything else -> `None`.
+#[cfg(feature = "cuda")]
+fn parse_algo(v: &str, prefix: &str) -> Option<usize> {
+    let v = v.trim();
+    if v == prefix {
+        return Some(0);
+    }
+    v.strip_prefix(prefix)
+        .map(|r| r.strip_prefix(':').unwrap_or(r))
+        .and_then(|n| n.parse().ok())
+}
+
+/// `FASTVIDEO_H3_VAE_SDPA=auto|v1|v2|cudnn` (default `auto`, the dense-SDPA
+/// seam's pick): the fused kernel for the ViT's attention only.
+#[cfg(feature = "cuda")]
+fn sdpa_kernel() -> Option<crate::wan::attn::FlashKernel> {
+    use crate::wan::attn::FlashKernel;
+    static FLAG: crate::wan::envflag::CachedString = crate::wan::envflag::CachedString::new();
+    match FLAG
+        .get_or_init(|| crate::wan::envflag::string_flag("FASTVIDEO_H3_VAE_SDPA", "auto"))
+        .trim()
+    {
+        "v1" => Some(FlashKernel::V1),
+        "v2" => Some(FlashKernel::V2),
+        "v3" => Some(FlashKernel::V3),
+        "v3s" => Some(FlashKernel::V3s),
+        "cudnn" => Some(FlashKernel::Cudnn),
+        _ => None,
+    }
+}
+
+/// A fused-ViT GEMM operand: bf16 rows, or MXFP8 codes + scales.
+#[cfg(feature = "cuda")]
+enum Act {
+    Bf16(cudarc::driver::CudaSlice<half::bf16>),
+    Mx(crate::wan::quant::MxAct),
+}
+
 /// Per-op wall time of one ViT forward, each op synchronized: only for
 /// [`H3VideoDecoder::check_paths`]; off, it is a plain call.
 #[derive(Default)]
@@ -130,6 +216,9 @@ struct Block {
     to_out: Linear,
     ff_in: Linear,
     ff_out: Linear,
+    /// MXFP8 copies of `[qkv, to_out, ff_in, ff_out]` (`FASTVIDEO_H3_VAE_MXFP8`).
+    #[cfg(feature = "cuda")]
+    mx: Option<Box<[crate::wan::quant::QuantWeight; 4]>>,
 }
 
 impl Block {
@@ -155,7 +244,37 @@ impl Block {
             // SwiGLU: one projection to (value, gate), value half first.
             ff_in: lin("ff.net.0.proj", dim, 2 * hidden)?,
             ff_out: lin("ff.net.2", hidden, dim)?,
+            #[cfg(feature = "cuda")]
+            mx: None,
         })
+    }
+
+    /// Quantize the four block linears' device bf16 weights to MXFP8 (the
+    /// same kernel the DiT recipe quantizes its weights with).
+    #[cfg(feature = "cuda")]
+    fn quantize_mx(&mut self) -> Result<()> {
+        use crate::wan::quant::{QuantKind, QuantLayout, QuantWeight, Section};
+        let one = |l: &Linear| -> Result<QuantWeight> {
+            let w = l
+                .weight_bf16_shared()
+                .ok_or_else(|| msg("h3 vae mxfp8: linear has no device bf16 weight"))?;
+            let layout = QuantLayout::new(
+                QuantKind::Mxfp8,
+                l.in_dim(),
+                vec![Section {
+                    rows: l.out_dim(),
+                    quantized: true,
+                }],
+            )?;
+            QuantWeight::from_device_bf16(layout, &w)
+        };
+        self.mx = Some(Box::new([
+            one(&self.qkv)?,
+            one(&self.to_out)?,
+            one(&self.ff_in)?,
+            one(&self.ff_out)?,
+        ]));
+        Ok(())
     }
 }
 
@@ -291,9 +410,27 @@ impl H3VideoDecoder {
             .host_cow()?
             .into_owned();
         suffix.extend(std::iter::repeat_n(0.0f32, dim));
-        let blocks = (0..cfg.decoder_num_layers)
+        #[allow(unused_mut)]
+        let mut blocks = (0..cfg.decoder_num_layers)
             .map(|i| Block::load(map, &format!("decoder.transformer_blocks.{i}"), &cfg))
             .collect::<Result<Vec<_>>>()?;
+        #[cfg(feature = "cuda")]
+        if mxfp8_requested()
+            && crate::wan::stats::device_expected()
+            && blocks.iter().all(|b| {
+                [&b.qkv, &b.to_out, &b.ff_in, &b.ff_out]
+                    .iter()
+                    .all(|l| l.has_bf16_gemm())
+            })
+        {
+            for b in &mut blocks {
+                b.quantize_mx()?;
+            }
+            crate::wan::log::info(format_args!(
+                "h3 vae: FASTVIDEO_H3_VAE_MXFP8=1: {} blocks x 4 linears as MXFP8 (E4M3, E8M0 per 32)",
+                blocks.len()
+            ));
+        }
         let to_vec = |v: &[f64]| pinned(v.iter().take(lc).map(|&x| x as f32).collect(), vec![lc]);
         Ok(Self {
             std: to_vec(&cfg.latents_std)?,
@@ -343,7 +480,21 @@ impl H3VideoDecoder {
         observe: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
     ) -> Result<Vec<CudaTensor>> {
         let fused = self.fused_ready(tiles.shape.first().copied().unwrap_or(0), grid);
-        self.decode_tiles_with(tiles, grid, observe, fused, &mut Prof::default())
+        let mx = fused && self.mx_ready();
+        self.decode_tiles_with(tiles, grid, observe, fused, mx, &mut Prof::default())
+    }
+
+    /// Whether the fused ViT runs its block GEMMs as MXFP8: requested, the
+    /// weights quantized at load, and the check (if run) did not refuse it.
+    fn mx_ready(&self) -> bool {
+        #[cfg(feature = "cuda")]
+        {
+            !MXFP8_BROKEN.load(Ordering::Relaxed) && self.blocks.iter().all(|b| b.mx.is_some())
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            false
+        }
     }
 
     /// Whether the ViT can run with bf16 activations between its GEMMs
@@ -397,6 +548,7 @@ impl H3VideoDecoder {
         grid: [usize; 3],
         observe: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
         fused: bool,
+        mx: bool,
         prof: &mut Prof,
     ) -> Result<Vec<CudaTensor>> {
         let cfg = &self.cfg;
@@ -428,10 +580,11 @@ impl H3VideoDecoder {
         let x = if fused {
             #[cfg(feature = "cuda")]
             {
-                self.vit_fused(x, batch, tokens, (&cos, &sin), observe, prof)?
+                self.vit_fused(x, batch, tokens, (&cos, &sin), observe, mx, prof)?
             }
             #[cfg(not(feature = "cuda"))]
             {
+                let _ = mx;
                 return Err(msg("h3 vae: the fused ViT needs the cuda feature"));
             }
         } else {
@@ -537,6 +690,7 @@ impl H3VideoDecoder {
     /// QK-norm, RoPE and the BHSD layout; SwiGLU). The residual stream stays
     /// f32. Same arithmetic as [`Self::vit_unfused`] up to reduction order.
     #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
     fn vit_fused(
         &self,
         x: CudaTensor,
@@ -544,9 +698,11 @@ impl H3VideoDecoder {
         tokens: usize,
         (cos, sin): (&CudaTensor, &CudaTensor),
         observe: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
+        mx: bool,
         prof: &mut Prof,
     ) -> Result<CudaTensor> {
         use crate::wan::ops;
+        use crate::wan::quant::MxAct;
         let cfg = &self.cfg;
         let (dim, heads, head_dim) = (
             cfg.decoder_dim(),
@@ -557,6 +713,26 @@ impl H3VideoDecoder {
         let rotary = cfg.decoder_rotary_dim();
         let eps = cfg.decoder_norm_eps as f32;
         let rows = batch * tokens;
+        let vec = vec_enabled();
+        let algo = gemm_algo();
+        let mx_nth = mx_algo();
+        let sdpa = sdpa_kernel();
+        static SAID: AtomicBool = AtomicBool::new(false);
+        if !SAID.swap(true, Ordering::Relaxed) {
+            crate::wan::log::info(format_args!(
+                "h3 vae fused ViT: gemm {}, sdpa {}, vector kernels {}",
+                if mx {
+                    format!("mxfp8 (cuBLASLt algo #{mx_nth})")
+                } else {
+                    match algo {
+                        None => "bf16 cublas".to_string(),
+                        Some(n) => format!("bf16 cuBLASLt algo #{n}"),
+                    }
+                },
+                sdpa.map_or_else(|| "auto".to_string(), |k| format!("{k:?}")),
+                if vec { "on" } else { "off" }
+            ));
+        }
         fn dev(t: &CudaTensor) -> Result<crate::wan::tensor::DevRef<'_>> {
             t.dev()?
                 .ok_or_else(|| msg("h3 vae: tensor not on the device"))
@@ -567,29 +743,73 @@ impl H3VideoDecoder {
                 .as_ref()
                 .ok_or_else(|| msg("h3 vae: linear without a bias"))?)
         }
-        let gemm = |l: &Linear, x16: &cudarc::driver::CudaSlice<half::bf16>| {
-            l.gemm_bf16(x16, rows)?
-                .ok_or_else(|| msg("h3 vae: linear has no bf16 GEMM"))
+        // Block linear `which` (0 qkv, 1 to_out, 2 ff_in, 3 ff_out) on `act`:
+        // bf16 [rows, out] (or [rows_pad, out] from an MXFP8 GEMM, pad rows zero).
+        let gemm = |block: &Block, which: usize, act: &Act| -> Result<cudarc::driver::CudaSlice<half::bf16>> {
+            let l = [&block.qkv, &block.to_out, &block.ff_in, &block.ff_out][which];
+            match act {
+                Act::Mx(a) => block
+                    .mx
+                    .as_ref()
+                    .ok_or_else(|| msg("h3 vae: no MXFP8 weights"))?[which]
+                    .forward_mx_padded(a, mx_nth),
+                Act::Bf16(x16) => match algo {
+                    None => l
+                        .gemm_bf16(x16, rows)?
+                        .ok_or_else(|| msg("h3 vae: linear has no bf16 GEMM")),
+                    Some(nth) => {
+                        let w = l
+                            .weight_bf16_shared()
+                            .ok_or_else(|| msg("h3 vae: linear has no bf16 GEMM"))?;
+                        let ctx = crate::wan::device::global_device()
+                            .ok_or_else(|| msg("h3 vae: no device"))?;
+                        let mut out = unsafe { ctx.stream.alloc::<half::bf16>(rows * l.out_dim()) }
+                            .map_err(|e| msg(e.to_string()))?;
+                        crate::wan::quant::lt_gemm_bf16(
+                            x16,
+                            &w,
+                            &mut out,
+                            rows,
+                            l.in_dim(),
+                            l.out_dim(),
+                            nth,
+                        )?;
+                        Ok(out)
+                    }
+                },
+            }
+        };
+        // Residual step + RMSNorm into the next GEMM's operand.
+        let res_norm = |x: &cudarc::driver::CudaSlice<f32>,
+                        update: Option<(
+            &cudarc::driver::CudaSlice<half::bf16>,
+            &cudarc::driver::CudaSlice<f32>,
+            &cudarc::driver::CudaSlice<f32>,
+        )>,
+                        w: &cudarc::driver::CudaSlice<f32>|
+         -> Result<(Option<cudarc::driver::CudaSlice<f32>>, Act)> {
+            if mx {
+                let mut a = MxAct::alloc(rows, dim)?;
+                let x1 = ops::h3v_residual_norm_mx_device(x, dim, update, w, eps, &mut a)?;
+                Ok((x1, Act::Mx(a)))
+            } else {
+                let (x1, n) = ops::h3v_residual_norm_bf16_device(x, dim, update, Some(w), eps)?;
+                Ok((x1, Act::Bf16(n.ok_or_else(|| msg("h3 vae: no normed rows"))?)))
+            }
         };
         let (cos, sin) = (dev(cos)?, dev(sin)?);
 
         let mut x = x;
-        let mut n16 = prof
+        let mut n1 = prof
             .time("vae_residual_norm", || {
-                ops::h3v_residual_norm_bf16_device(
-                    &*dev(&x)?,
-                    dim,
-                    None,
-                    Some(&*dev(&self.blocks[0].norm1)?),
-                    eps,
-                )
+                res_norm(&*dev(&x)?, None, &*dev(&self.blocks[0].norm1)?)
             })?
-            .1
-            .ok_or_else(|| msg("h3 vae: no normed rows"))?;
+            .1;
         for (index, block) in self.blocks.iter().enumerate() {
-            let qkv = prof.time("vae_qkv_gemm", || gemm(&block.qkv, &n16))?;
+            let qkv = prof.time("vae_qkv_gemm", || gemm(block, 0, &n1))?;
             let [q, k, v] = prof.time("vae_qkv_heads", || {
-                ops::h3v_qkv_heads_bf16_device(
+                ops::h3v_qkv_heads_bf16_device_with(
+                    vec,
                     &qkv,
                     &*bias(&block.qkv)?,
                     &cos,
@@ -606,55 +826,78 @@ impl H3VideoDecoder {
             let bhsd = vec![batch, heads, tokens, head_dim];
             let [q, k, v] = [q, k, v].map(|t| CudaTensor::from_device_slice_bf16(t, bhsd.clone()));
             let a = prof.time("vae_sdpa", || {
-                crate::wan::attn::device_mma_sdpa(&q?, &k?, &v?, None, true)?
-                    .ok_or_else(|| msg("h3 vae: fused SDPA refused the shape"))
+                let (q, k, v) = (q?, k?, v?);
+                match sdpa {
+                    None => crate::wan::attn::device_mma_sdpa(&q, &k, &v, None, true)?,
+                    Some(kernel) => {
+                        crate::wan::attn::device_mma_sdpa_with(&q, &k, &v, None, true, kernel)?
+                    }
+                }
+                .ok_or_else(|| msg("h3 vae: fused SDPA refused the shape"))
             })?;
             let a = prof.time("vae_merge_heads", || {
                 let a16 = a
                     .device_slice_bf16()
                     .ok_or_else(|| msg("h3 vae: SDPA output is not bf16"))?;
-                ops::h3v_merge_heads_bf16_device(a16, batch, heads, tokens, head_dim)
+                if mx {
+                    let mut m = MxAct::alloc(rows, dim)?;
+                    ops::h3v_merge_heads_mx_device(a16, batch, heads, tokens, head_dim, &mut m)?;
+                    Ok(Act::Mx(m))
+                } else {
+                    ops::h3v_merge_heads_bf16_device_with(vec, a16, batch, heads, tokens, head_dim)
+                        .map(Act::Bf16)
+                }
             })?;
-            let o = prof.time("vae_out_gemm", || gemm(&block.to_out, &a))?;
+            let o = prof.time("vae_out_gemm", || gemm(block, 1, &a))?;
             drop(a);
             let (x1, n2) = prof.time("vae_residual_norm", || {
-                ops::h3v_residual_norm_bf16_device(
+                res_norm(
                     &*dev(&x)?,
-                    dim,
                     Some((&o, &*bias(&block.to_out)?, &*dev(&block.scale1)?)),
-                    Some(&*dev(&block.norm2)?),
-                    eps,
+                    &*dev(&block.norm2)?,
                 )
             })?;
             drop(o);
             let x1 = x1.ok_or_else(|| msg("h3 vae: no residual rows"))?;
-            let n2 = n2.ok_or_else(|| msg("h3 vae: no normed rows"))?;
-            let h = prof.time("vae_ff_in_gemm", || gemm(&block.ff_in, &n2))?;
+            let h = prof.time("vae_ff_in_gemm", || gemm(block, 2, &n2))?;
             drop(n2);
             let act = prof.time("vae_swiglu", || {
-                ops::h3v_swiglu_bf16_device(&h, &*bias(&block.ff_in)?, hidden)
+                if mx {
+                    let mut m = MxAct::alloc(rows, hidden)?;
+                    ops::h3v_swiglu_mx_device(&h, &*bias(&block.ff_in)?, hidden, &mut m)?;
+                    Ok(Act::Mx(m))
+                } else {
+                    ops::h3v_swiglu_bf16_device_with(vec, &h, &*bias(&block.ff_in)?, hidden, rows)
+                        .map(Act::Bf16)
+                }
             })?;
             drop(h);
-            let f = prof.time("vae_ff_out_gemm", || gemm(&block.ff_out, &act))?;
+            let f = prof.time("vae_ff_out_gemm", || gemm(block, 3, &act))?;
             drop(act);
             let next = self.blocks.get(index + 1);
-            let (x2, n1) = prof.time("vae_residual_norm", || {
-                let norm = next.map(|b| dev(&b.norm1)).transpose()?;
-                ops::h3v_residual_norm_bf16_device(
+            let (x2, next_n) = prof.time("vae_residual_norm", || match next {
+                Some(nb) => res_norm(
+                    &x1,
+                    Some((&f, &*bias(&block.ff_out)?, &*dev(&block.scale2)?)),
+                    &*dev(&nb.norm1)?,
+                )
+                .map(|(x2, n)| (x2, Some(n))),
+                None => ops::h3v_residual_norm_bf16_device(
                     &x1,
                     dim,
                     Some((&f, &*bias(&block.ff_out)?, &*dev(&block.scale2)?)),
-                    norm.as_deref(),
+                    None,
                     eps,
                 )
+                .map(|(x2, _)| (x2, None)),
             })?;
             x = CudaTensor::from_device_slice(
                 x2.ok_or_else(|| msg("h3 vae: no residual rows"))?,
                 vec![batch, tokens, dim],
             )?;
             observe(index, &x)?;
-            if let Some(n) = n1 {
-                n16 = n;
+            if let Some(n) = next_n {
+                n1 = n;
             }
         }
         Ok(x)
@@ -666,16 +909,17 @@ impl H3VideoDecoder {
     /// fused path only if they agree.
     fn check_paths(&self, tiles: &CudaTensor, grid: [usize; 3]) -> Result<Vec<CudaTensor>> {
         let batch = tiles.shape.first().copied().unwrap_or(0);
-        let run = |fused: bool| -> Result<(Vec<CudaTensor>, f64, Prof)> {
+        let run = |fused: bool, mx: bool| -> Result<(Vec<CudaTensor>, f64, Prof)> {
             let mut prof = Prof::on();
             crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
             let timer = std::time::Instant::now();
-            let out = self.decode_tiles_with(tiles, grid, &mut |_, _| Ok(()), fused, &mut prof)?;
+            let out =
+                self.decode_tiles_with(tiles, grid, &mut |_, _| Ok(()), fused, mx, &mut prof)?;
             crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
             Ok((out, timer.elapsed().as_secs_f64(), prof))
         };
         if !self.fused_ready(batch, grid) {
-            let (out, secs, prof) = run(false)?;
+            let (out, secs, prof) = run(false, false)?;
             crate::wan::log::info(format_args!(
                 "h3 vae check: fused ViT unavailable; unfused batch of {batch} in {secs:.3}s [{}]",
                 prof.summary()
@@ -683,18 +927,46 @@ impl H3VideoDecoder {
             return Ok(out);
         }
         // Warm the fused path's allocations so neither timing pays first use.
-        drop(run(true)?);
-        let (reference, ref_secs, ref_prof) = run(false)?;
-        let (fused, fused_secs, fused_prof) = run(true)?;
-        let (mut num, mut den) = (0f64, 0f64);
-        for (a, b) in fused.iter().zip(&reference) {
-            for (x, y) in a.host_cow()?.iter().zip(b.host_cow()?.iter()) {
-                num += f64::from(x - y).powi(2);
-                den += f64::from(*y).powi(2);
+        drop(run(true, false)?);
+        let (reference, ref_secs, ref_prof) = run(false, false)?;
+        let (fused, fused_secs, fused_prof) = run(true, false)?;
+        let rel = |got: &[CudaTensor]| -> Result<f64> {
+            let (mut num, mut den) = (0f64, 0f64);
+            for (a, b) in got.iter().zip(&reference) {
+                for (x, y) in a.host_cow()?.iter().zip(b.host_cow()?.iter()) {
+                    num += f64::from(x - y).powi(2);
+                    den += f64::from(*y).powi(2);
+                }
             }
-        }
-        let rel_l2 = (num / den.max(f64::MIN_POSITIVE)).sqrt();
+            Ok((num / den.max(f64::MIN_POSITIVE)).sqrt())
+        };
+        let rel_l2 = rel(&fused)?;
         let agree = rel_l2.is_finite() && rel_l2 < FUSED_CHECK_REL_L2;
+        if agree && self.mx_ready() {
+            drop(run(true, true)?);
+            let (mx_out, mx_secs, mx_prof) = run(true, true)?;
+            let mx_rel = rel(&mx_out)?;
+            let fused_rel = {
+                let (mut num, mut den) = (0f64, 0f64);
+                for (a, b) in mx_out.iter().zip(&fused) {
+                    for (x, y) in a.host_cow()?.iter().zip(b.host_cow()?.iter()) {
+                        num += f64::from(x - y).powi(2);
+                        den += f64::from(*y).powi(2);
+                    }
+                }
+                (num / den.max(f64::MIN_POSITIVE)).sqrt()
+            };
+            let keep = mx_rel.is_finite() && mx_rel < MXFP8_CHECK_REL_L2;
+            crate::wan::log::info(format_args!(
+                "h3 vae check: batch {batch} grid {grid:?}: unfused {ref_secs:.3}s; fused bf16 {fused_secs:.3}s, rel_l2 {rel_l2:.3e}; fused mxfp8 {mx_secs:.3}s [{}], rel_l2 {mx_rel:.3e} vs unfused, {fused_rel:.3e} vs fused bf16 ({})",
+                mx_prof.summary(),
+                if keep { "mxfp8 kept" } else { "MXFP8 OFF THE MARK, disabled" }
+            ));
+            if keep {
+                return Ok(mx_out);
+            }
+            MXFP8_BROKEN.store(true, Ordering::Relaxed);
+        }
         crate::wan::log::info(format_args!(
             "h3 vae check: batch {batch} grid {grid:?}: unfused {ref_secs:.3}s [{}]; fused {fused_secs:.3}s [{}]; rel_l2 {rel_l2:.3e} ({})",
             ref_prof.summary(),

@@ -1465,6 +1465,20 @@ mod device_impl {
     /// # Safety
     /// Every pointer is a live device allocation of the implied size.
     pub(crate) unsafe fn lt_matmul(dev: &DeviceContext, ltc: &LtContext, g: &LtGemm) -> Result<()> {
+        lt_matmul_nth(dev, ltc, g, 0)
+    }
+
+    /// [`lt_matmul`] on the `nth` algorithm of cuBLASLt's heuristic list
+    /// (0 = its first pick); an error when the list is shorter.
+    ///
+    /// # Safety
+    /// Every pointer is a live device allocation of the implied size.
+    pub(crate) unsafe fn lt_matmul_nth(
+        dev: &DeviceContext,
+        ltc: &LtContext,
+        g: &LtGemm,
+        nth: usize,
+    ) -> Result<()> {
         let f32_ty = lt::cudaDataType_t::CUDA_R_32F;
         let bf = lt::cudaDataType_t::CUDA_R_16BF;
         let mut desc: lt::cublasLtMatmulDesc_t = std::ptr::null_mut();
@@ -1529,7 +1543,9 @@ mod device_impl {
             ),
             "preference workspace",
         )?;
-        let mut heuristic = std::mem::MaybeUninit::<lt::cublasLtMatmulHeuristicResult_t>::uninit();
+        let want = nth + 1;
+        let mut heuristics: Vec<lt::cublasLtMatmulHeuristicResult_t> =
+            vec![std::mem::zeroed(); want];
         let mut found: i32 = 0;
         let st = lt::cublasLtMatmulAlgoGetHeuristic(
             ltc.handle,
@@ -1539,10 +1555,16 @@ mod device_impl {
             ld.0,
             ld.0,
             pref.0,
-            1,
-            heuristic.as_mut_ptr(),
+            want as i32,
+            heuristics.as_mut_ptr(),
             &mut found,
         );
+        if st == lt::cublasStatus_t::CUBLAS_STATUS_SUCCESS && found > 0 && (found as usize) <= nth {
+            return Err(msg(format!(
+                "cuBLASLt offers {found} algorithms for m={} n={} k={}, not #{nth}",
+                g.m, g.n, g.k
+            )));
+        }
         if st != lt::cublasStatus_t::CUBLAS_STATUS_SUCCESS || found == 0 {
             return Err(msg(format!(
                 "cuBLASLt has no {} algorithm for m={} n={} k={} ldd={} on sm{}{} ({st:?})",
@@ -1559,7 +1581,7 @@ mod device_impl {
                 dev.sm_minor
             )));
         }
-        let heuristic = heuristic.assume_init();
+        let heuristic = &heuristics[nth];
         let (alpha, beta) = (1.0f32, 0.0f32);
         let (ws_ptr, _ws_guard) = ltc.workspace.device_ptr(&dev.stream);
         check(
@@ -1583,6 +1605,91 @@ mod device_impl {
             ),
             "cublasLtMatmul",
         )
+    }
+
+    /// bf16 `out [m, n]` = `x [m, k]` · `w [n, k]ᵀ` (no bias) through
+    /// cuBLASLt on its `nth` heuristic algorithm: the same product as
+    /// [`super::super::device::matmul_linear_wt_bf16`] (cuBLAS `GemmEx`,
+    /// f32 accumulate, one bf16 rounding), on an algorithm the caller picks.
+    pub fn lt_gemm_bf16(
+        x: &CudaSlice<half::bf16>,
+        w: &CudaSlice<half::bf16>,
+        out: &mut CudaSlice<half::bf16>,
+        m: usize,
+        k: usize,
+        n: usize,
+        nth: usize,
+    ) -> Result<()> {
+        if x.len() < m * k || w.len() != n * k || out.len() < m * n {
+            return Err(msg(format!(
+                "lt_gemm_bf16: x={} w={} out={} for m={m} k={k} n={n}",
+                x.len(),
+                w.len(),
+                out.len()
+            )));
+        }
+        let dev = ctx()?;
+        let ltc = super::super::fp8::lt_context(&dev)?;
+        let g = LtGemm {
+            m: n,
+            n: m,
+            k,
+            a: ptr(w),
+            b: ptr(x),
+            ab_type: lt::cudaDataType_t::CUDA_R_16BF,
+            d: ptr_mut(out),
+            ldd: n,
+            scale: LtScale::None,
+            bias: None,
+        };
+        unsafe { lt_matmul_nth(&dev, &ltc, &g, nth) }
+    }
+
+    impl QuantWeight {
+        /// An all-MXFP8 weight times an MXFP8 activation over all its
+        /// `rows_pad` rows (no unaligned-row fallback, no copy): bf16
+        /// `[rows_pad, out_dim]`, of which the first `act.rows` rows are the
+        /// product and the pad rows are zero. `nth` picks the cuBLASLt
+        /// heuristic algorithm (0 = its first).
+        pub fn forward_mx_padded(&self, act: &MxAct, nth: usize) -> Result<CudaSlice<half::bf16>> {
+            let dev = ctx()?;
+            let lay = &*self.layout;
+            if lay.kind != QuantKind::Mxfp8
+                || lay.sections.len() != 1
+                || !lay.sections[0].quantized
+                || act.k != lay.in_dim
+            {
+                return Err(msg("forward_mx_padded: needs one MXFP8 section of the act's width"));
+            }
+            let blob = self
+                .blob_dev
+                .as_ref()
+                .ok_or_else(|| msg("quantized linear: weight is streamed out"))?;
+            let bp = ptr(blob.as_ref());
+            let rows_pad = act.q.len() / act.k;
+            let n_out = lay.out_dim;
+            let mut out =
+                unsafe { dev.stream.alloc::<half::bf16>((rows_pad * n_out).max(1)) }.map_err(err)?;
+            let l = &lay.lay[0];
+            let g = LtGemm {
+                m: n_out,
+                n: rows_pad,
+                k: act.k,
+                a: bp + l.data_off as u64,
+                b: ptr(&act.q),
+                ab_type: lt::cudaDataType_t::CUDA_R_8F_E4M3,
+                d: ptr_mut(&mut out),
+                ldd: n_out,
+                scale: LtScale::Mx {
+                    a: bp + l.scale_off as u64,
+                    b: ptr(&act.s),
+                },
+                bias: None,
+            };
+            let ltc = super::super::fp8::lt_context(&dev)?;
+            unsafe { lt_matmul_nth(&dev, &ltc, &g, nth)? };
+            Ok(out)
+        }
     }
 
     /// bf16 `[m, n]` = `x [m, k]` · `w [n, k]ᵀ` + bias (bf16, epilogue), one

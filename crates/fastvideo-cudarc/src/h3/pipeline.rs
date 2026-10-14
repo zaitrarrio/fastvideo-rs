@@ -2181,6 +2181,9 @@ impl H3Pipeline {
                     TensorError::Message(text)
                 })
         };
+        // FASTVIDEO_GPU_TRACE_DECODE=1: CUPTI trace of this decode (kernel
+        // time by category, GPU idle); a no-op otherwise.
+        crate::wan::gpu_trace::window_begin("h3/decode");
         let decoded = match video_vae {
             VideoDecoder::Official(vae) => vae.decode_streaming(&latents, &mut sink),
             VideoDecoder::Taeh3(tae) => tae
@@ -2198,6 +2201,10 @@ impl H3Pipeline {
             )));
         }
         let (mut writer, split) = drain.finish()?;
+        if crate::wan::gpu_trace::decode_enabled() {
+            crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
+            crate::wan::gpu_trace::window_end(timer.elapsed().as_secs_f64());
+        }
         let tail = Instant::now();
         let mp4 = writer.finish_video()?;
         if let Some(sent) = hooks.finish_sink()? {
