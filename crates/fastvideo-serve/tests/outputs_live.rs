@@ -22,9 +22,15 @@
 //!   prints ingest-to-playable time. Every input and its recordings are
 //!   deleted.
 //!
+//! - `FV_TEST_OUTPUTS_MEDIAMTX=1` also runs `mediamtx_director_copy_carries_audio`:
+//!   a director session (fake H3, audio on) with `x_fv_output` over WHIP and
+//!   over RTMP; MediaMTX must list an audio track beside H.264 (Opus /
+//!   MPEG-4 Audio) and ffprobe must find it over RTSP. Run it without
+//!   `encoders` too (the serve images' feature set): `--features fake,http-client`.
+//!
 //!   cargo test -p fastvideo-serve --features full,fake --test outputs_live -- --nocapture --test-threads=1
 
-#![cfg(all(feature = "webrtc", feature = "http-client", feature = "encoders"))]
+#![cfg(all(feature = "webrtc", feature = "http-client"))]
 
 use std::collections::BTreeMap;
 use std::path::{Path as FsPath, PathBuf};
@@ -52,6 +58,10 @@ fn on(var: &str) -> bool {
 }
 
 async fn app_with(extra: &[(&str, String)]) -> App {
+    app_cfg(extra, |_| {}).await
+}
+
+async fn app_cfg(extra: &[(&str, String)], f: impl FnOnce(&mut Config)) -> App {
     let dir = tempfile::Builder::new().prefix("fv-serve-outputs-live-").tempdir().unwrap().keep();
     let mut env = BTreeMap::new();
     env.insert("FV_API_KEYS".to_owned(), KeyRing::hash_hex(KEY));
@@ -66,6 +76,7 @@ async fn app_with(extra: &[(&str, String)]) -> App {
     c.apply_env(&env).unwrap();
     c.jobs.backend = JobBackend::Memory;
     c.engine.fake.step_ms = 1;
+    f(&mut c);
     c.validate().unwrap();
     let a = App::build(c, Overrides::default()).await.unwrap();
     a.gate.engine().wait_ready().await;
@@ -203,7 +214,7 @@ async fn start_mediamtx() -> Mtx {
     // Settings from MTX_* env; every path accepts publishers.
     std::fs::write(&cfg, "paths:\n  all_others:\n").unwrap();
     let (api, rtsp, rtmp, rtmps, srt, webrtc, udp) = (free_port(), free_port(), free_port(), free_port(), free_port(), free_port(), free_port());
-    let log = work.join("mediamtx.log");
+    let log = work.join(format!("mediamtx-{api}.log"));
     let mut cmd = Command::new(&bin);
     cmd.arg(&cfg)
         .env("MTX_API", "yes")
@@ -349,6 +360,9 @@ async fn mediamtx_whip_rtmp_rtmps_srt() {
             "RESULT {name}: MediaMTX ready after {ready_s:.1}s, tracks {}, bytes {}, decoded over RTSP (codec, frames, keyframes, w, h) {probed:?}, fv-serve sent {} frames ({} {}), output_error {}",
             info["tracks"], info["bytesReceived"], st["status"]["frames_sent"], st["status"]["video_codec"], st["status"]["encoder"], st["status"]["output_error"]
         );
+        // fake-h3-turbo has audio: WHIP carries Opus, RTMP/SRT AAC.
+        let audio_track = if name.starts_with("whip") { "Opus" } else { "MPEG-4 Audio" };
+        assert!(info["tracks"].to_string().contains(audio_track), "{name}: no {audio_track} track: {}", info["tracks"]);
         let (codec, frames, _, w, h) = probed.unwrap_or_else(|| panic!("{name}: ffprobe could not decode {rtsp}"));
         assert!(frames >= 24, "{name}: {frames} frames decoded in 4 s");
         assert_eq!((w, h), (1344, 768), "{name}: native resolution");
@@ -358,6 +372,112 @@ async fn mediamtx_whip_rtmp_rtmps_srt() {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     println!("MediaMTX log: {}", m.log.display());
+}
+
+/// ffprobe's audio streams of `url` (codec names; empty: none).
+#[cfg(feature = "fal")]
+fn audio_codecs(url: &str, extra: &[&str]) -> Vec<String> {
+    let Ok(out) = Command::new(fastvideo_media::tools::ffprobe_bin())
+        .args(["-v", "error"])
+        .args(extra)
+        .args(["-select_streams", "a", "-show_entries", "stream=codec_name,sample_rate,channels", "-of", "json", url])
+        .output()
+    else {
+        return Vec::new();
+    };
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
+    println!("ffprobe audio {url}: {}", v["streams"]);
+    v["streams"].as_array().map(|a| a.iter().filter_map(|s| s["codec_name"].as_str().map(str::to_owned)).collect()).unwrap_or_default()
+}
+
+/// The next control message of `type` on a director peer (others skipped).
+#[cfg(feature = "fal")]
+async fn next_msg(peer: &mut fastvideo_webrtc::host::Peer, ty: &str) -> Value {
+    tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            match peer.next_event().await {
+                Some(PeerEvent::Message(m)) => {
+                    let v: Value = serde_json::from_str(m.as_text().unwrap()).unwrap();
+                    if v["type"] == ty {
+                        return v;
+                    }
+                    if v["type"] == "output_error" || v["type"] == "error" {
+                        println!("director: {v}");
+                    }
+                }
+                Some(PeerEvent::Closed(r)) => panic!("closed waiting for {ty}: {r:?}"),
+                Some(_) => {}
+                None => panic!("peer gone waiting for {ty}"),
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("no {ty}"))
+}
+
+/// Director output copies carry the session's audio (gpu-check-2026-10-13
+/// bug 3: the WHIP copy reached MediaMTX as `1 track (H264)`): a fake H3
+/// director session (audio on) copies to MediaMTX over WHIP (Opus) and RTMP
+/// (AAC); MediaMTX lists both tracks and ffprobe reads the audio back.
+#[cfg(feature = "fal")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mediamtx_director_copy_carries_audio() {
+    if !on("FV_TEST_OUTPUTS_MEDIAMTX") {
+        eprintln!("skipping: FV_TEST_OUTPUTS_MEDIAMTX not set");
+        return;
+    }
+    std::env::set_var("FV_STREAM_STUN", "none");
+    let m = start_mediamtx().await;
+    let a = app_cfg(&[("FV_OUTPUTS_ALLOW_PRIVATE", "1".into())], |c| c.webrtc.public_ip = "127.0.0.1".into()).await;
+    let copies = [
+        ("whip", "fvdirector", json!({"kind": "whip", "url": format!("http://127.0.0.1:{}/fvdirector/whip", m.webrtc), "target": "mediamtx"}), "Opus", "opus"),
+        ("rtmp", "live/fvdirrtmp", json!({"kind": "rtmps", "url": format!("rtmp://127.0.0.1:{}/live", m.rtmp), "stream_key": "fvdirrtmp"}), "MPEG-4 Audio", "aac"),
+    ];
+    for (name, path, out, mtx_track, codec) in copies {
+        let host = RtcHost::bind(HostConfig::loopback(true, false)).await.unwrap();
+        let (pending, offer) = host
+            .offer(OfferOptions {
+                video: Some(Direction::RecvOnly),
+                audio: Some((Direction::RecvOnly, AudioLayout::Stereo)),
+                channels: vec!["control".into()],
+                video_codecs: vec![VideoCodec::H264, VideoCodec::Vp8],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/wma/session")
+            .header("authorization", format!("Key {KEY}"))
+            .header("content-type", "application/json")
+            .body(Body::from(json!({"app_id": "minimax/h3-max/director", "sdp": offer, "type": "offer"}).to_string()))
+            .unwrap();
+        let r = a.router.clone().oneshot(req).await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK, "{name}: /wma/session");
+        let v: Value = serde_json::from_slice(&axum::body::to_bytes(r.into_body(), 1 << 24).await.unwrap()).unwrap();
+        let mut peer = pending.accept_answer(v["sdp"].as_str().unwrap()).await.unwrap();
+        next_msg(&mut peer, "session_info").await;
+        let ctl = |m: Value| fastvideo_webrtc::channel::ChannelMessage::text("control", m.to_string());
+        peer.send_message(ctl(json!({"type": "configure", "prompt_version": 1, "prompt": "a lighthouse", "x_fv_output": out}))).await.unwrap();
+        let c = next_msg(&mut peer, "configured").await;
+        assert!(c["x_fv_output"].is_object(), "{name}: {c}");
+        next_msg(&mut peer, "output_ready").await;
+        let info = match mtx_ready(m.api, path).await {
+            Ok(v) => v,
+            Err(last) => panic!("{name}: MediaMTX path {path} never became ready: {last}\nMediaMTX log:\n{}", tail(&m.log, 30)),
+        };
+        println!("RESULT director copy {name}: MediaMTX tracks {}, bytes {}", info["tracks"], info["bytesReceived"]);
+        let tracks: Vec<String> = info["tracks"].as_array().unwrap().iter().filter_map(|t| t.as_str().map(str::to_owned)).collect();
+        assert!(tracks.iter().any(|t| t == "H264"), "{name}: tracks {tracks:?}");
+        assert!(tracks.iter().any(|t| t == mtx_track), "{name}: the copy has no audio track ({tracks:?}); MediaMTX log:\n{}", tail(&m.log, 20));
+        let rtsp = format!("rtsp://127.0.0.1:{}/{path}", m.rtsp);
+        let audio = audio_codecs(&rtsp, &["-rtsp_transport", "tcp"]);
+        assert!(audio.iter().any(|a| a == codec), "{name}: ffprobe audio streams {audio:?}, want {codec}");
+        peer.send_message(ctl(json!({"type": "stop"}))).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        peer.close();
+        host.shutdown().await;
+    }
 }
 
 /// RTMPS to a server whose certificate no trusted CA issued: the output

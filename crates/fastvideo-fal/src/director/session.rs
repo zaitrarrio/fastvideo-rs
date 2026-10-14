@@ -753,6 +753,11 @@ impl Session {
                 // Upsampling: an appended direction goes behind the segments
                 // already planned (fal), a replan busts them (the deck's
                 // cues change at the next chunk).
+                if !append {
+                    if let Some(up) = self.upsample.as_mut() {
+                        up.replanned();
+                    }
+                }
                 if append {
                     if let Some(up) = &self.upsample {
                         let ahead = up.ahead() as u32;
@@ -802,6 +807,8 @@ impl Session {
                 let Some(first) = cues.first().cloned() else { return };
                 up.sync(cues);
                 if !up.ready(&first) {
+                    // Nothing speculative starts while this chunk waits.
+                    up.set_waiting(true);
                     return;
                 }
                 let Some((plan, applied)) = self.control.next_chunk() else { return };
