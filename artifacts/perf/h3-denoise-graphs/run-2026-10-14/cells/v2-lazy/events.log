@@ -1,0 +1,132 @@
+[INFO] h3/text_encoder {"chosen":"streamed","device_gib":0.0,"free_gib_before_load":94.28277587890625,"load_seconds":0.0,"requested":"Streamed"}
+[INFO] h3/load {"audio_vae_s":0.682690689,"dit_residency":"resident","dit_s":19.20086865,"refiner_s":0.400558742,"seconds":29.304123413,"text_encoder_s":0.0,"video_vae_s":6.510239427}
+[fastvideo] vsa-h3: 16 prefix + 280 video tiles, k_vid 56, 951 of 15381 rows dense
+[fastvideo] h3 step 1/8: 1.6s
+[fastvideo] h3 step 2/8: 1.4s
+[fastvideo] h3 step 3/8: 1.4s
+[fastvideo] h3 step 4/8: 1.4s
+[fastvideo] h3 step 5/8: 1.4s
+[fastvideo] h3 step 6/8: 1.4s
+[fastvideo] h3 step 7/8: 1.4s
+[fastvideo] h3 step 8/8: 1.4s
+[INFO] h3/cold_generation {"audio_decode_s":0.242395096,"decode_s":2.257385053,"denoise_s":11.335085696,"refine_s":0.136217866,"step_s":[1.5925528564453126,1.4444313964843751,1.382072265625,1.3816207275390626,1.3839820556640625,1.383225341796875,1.3836553955078126,1.3826436767578125],"text_cache":"hit","text_encoder":"cache","text_s":0.304712134,"total_s":14.211692399,"video_decode_s":2.014989957,"video_encode_s":0.000371735,"video_push_s":0.000075291,"video_rgb_s":0.13734735599881778,"video_vae_s":1.9960164915025234,"video_wait_s":0.169071023,"write_s":0.101175361}
+[fastvideo] vsa-h3: 16 prefix + 280 video tiles, k_vid 56, 951 of 15381 rows dense
+[fastvideo] h3 step 1/8: 1.4s
+[fastvideo] h3 step 2/8: 1.4s
+[fastvideo] h3 step 3/8: 1.4s
+[fastvideo] h3 step 4/8: 1.4s
+[fastvideo] h3 step 5/8: 1.4s
+[fastvideo] h3 step 6/8: 1.4s
+[fastvideo] h3 step 7/8: 1.4s
+[fastvideo] h3 step 8/8: 1.4s
+[INFO] h3/timings/h3-demo-480p-a {"audio_decode_s":0.08392772,"decode_s":2.078696963,"denoise_s":11.133249645,"load_s":29.304123413,"peak_mib":25988,"refine_s":0.00089419,"step_s":[1.432514892578125,1.3857802734375,1.38488525390625,1.386081298828125,1.3860341796875,1.3855303955078124,1.3857628173828125,1.385702392578125],"text_cache":"hit","text_encoder":"cache","text_s":0.2782783,"total_s":13.66502666,"video_decode_s":1.994769243,"video_encode_s":0.000399873,"video_push_s":0.000053437,"video_rgb_s":0.1137571240016061,"video_vae_s":1.9720293835103513,"video_wait_s":0.173498209,"warm":true,"write_s":0.100340902}
+[fastvideo] vsa-h3: 16 prefix + 280 video tiles, k_vid 56, 951 of 15381 rows dense
+[fastvideo] h3 step 1/8: 1.4s
+[fastvideo] h3 step 2/8: 1.4s
+[fastvideo] h3 step 3/8: 1.4s
+[fastvideo] h3 step 4/8: 1.4s
+[fastvideo] h3 step 5/8: 1.4s
+[fastvideo] h3 step 6/8: 1.4s
+[fastvideo] h3 step 7/8: 1.4s
+[fastvideo] h3 step 8/8: 1.4s
+[INFO] h3/timings/h3-demo-480p-b {"audio_decode_s":0.086858355,"decode_s":2.089772141,"denoise_s":11.143483159,"load_s":29.304123413,"peak_mib":25734,"refine_s":0.000436901,"step_s":[1.4372642822265624,1.3864786376953124,1.3864345703125,1.3859093017578126,1.3863577880859375,1.3861837158203125,1.3866177978515626,1.3873070068359374],"text_cache":"hit","text_encoder":"cache","text_s":0.264051647,"total_s":13.658075467,"video_decode_s":2.002913786,"video_encode_s":0.000420897,"video_push_s":0.000069562,"video_rgb_s":0.13579011600074012,"video_vae_s":1.9798499978780748,"video_wait_s":0.17488164299999998,"warm":true,"write_s":0.094729858}
+[fastvideo] vsa-h3: 16 prefix + 280 video tiles, k_vid 56, 951 of 15381 rows dense
+[fastvideo] h3 step 1/8: 1.4s
+[fastvideo] h3 step 2/8: 1.4s
+[fastvideo] h3 step 3/8: 1.4s
+[fastvideo] h3 step 4/8: 1.4s
+[fastvideo] h3 step 5/8: 1.4s
+[fastvideo] h3 step 6/8: 1.4s
+[fastvideo] h3 step 7/8: 1.4s
+[fastvideo] h3 step 8/8: 1.4s
+[INFO] h3/timings/h3-demo-480p-c {"audio_decode_s":0.081205561,"decode_s":2.081098474,"denoise_s":11.157246618,"load_s":29.304123413,"peak_mib":25734,"refine_s":0.000504166,"step_s":[1.4348125,1.388843994140625,1.3887774658203125,1.388654541015625,1.388230712890625,1.3886566162109375,1.389106201171875,1.3894082031250001],"text_cache":"hit","text_encoder":"cache","text_s":0.256953839,"total_s":13.644299999,"video_decode_s":1.999892913,"video_encode_s":0.000460782,"video_push_s":0.000052744,"video_rgb_s":0.11874747200554807,"video_vae_s":1.980376210987568,"video_wait_s":0.171133246,"warm":true,"write_s":0.086655919}
+[fastvideo] vsa-h3: 9 prefix + 280 video tiles, k_vid 56, 520 of 14950 rows dense
+[fastvideo] h3 step 1/8: 1.4s
+[fastvideo] h3 step 2/8: 1.3s
+[fastvideo] h3 step 3/8: 1.3s
+[fastvideo] h3 step 4/8: 1.3s
+[fastvideo] h3 step 5/8: 1.3s
+[fastvideo] h3 step 6/8: 1.3s
+[fastvideo] h3 step 7/8: 1.3s
+[fastvideo] h3 step 8/8: 1.3s
+[INFO] h3/timings/spark-mountain-lake-480p-a {"audio_decode_s":0.083916598,"decode_s":2.090558857,"denoise_s":10.596978446,"load_s":29.304123413,"peak_mib":25638,"refine_s":0.009505132,"step_s":[1.36459326171875,1.3192416992187501,1.3192847900390625,1.31664697265625,1.31985400390625,1.3192315673828126,1.3182628173828126,1.3189560546875],"text_cache":"hit","text_encoder":"cache","text_s":0.232667073,"total_s":13.089890758,"video_decode_s":2.006642259,"video_encode_s":0.000769588,"video_push_s":0.000052848,"video_rgb_s":0.1219762470009128,"video_vae_s":1.9834443872570993,"video_wait_s":0.17480525700000002,"warm":true,"write_s":0.097398446}
+[fastvideo] vsa-h3: 9 prefix + 280 video tiles, k_vid 56, 520 of 14950 rows dense
+[fastvideo] h3 step 1/8: 1.4s
+[fastvideo] h3 step 2/8: 1.3s
+[fastvideo] h3 step 3/8: 1.3s
+[fastvideo] h3 step 4/8: 1.3s
+[fastvideo] h3 step 5/8: 1.3s
+[fastvideo] h3 step 6/8: 1.3s
+[fastvideo] h3 step 7/8: 1.3s
+[fastvideo] h3 step 8/8: 1.3s
+[INFO] h3/timings/spark-mountain-lake-480p-b {"audio_decode_s":0.084562814,"decode_s":2.087743702,"denoise_s":10.604258245,"load_s":29.304123413,"peak_mib":25638,"refine_s":0.000526107,"step_s":[1.36681201171875,1.319994384765625,1.3201878662109374,1.3191710205078124,1.32007421875,1.3189171142578124,1.31958984375,1.318349853515625],"text_cache":"hit","text_encoder":"cache","text_s":0.271435089,"total_s":13.120428421,"video_decode_s":2.003180888,"video_encode_s":0.000383921,"video_push_s":0.000048287999999999996,"video_rgb_s":0.11527699200241244,"video_vae_s":1.9814238232076167,"video_wait_s":0.173813679,"warm":true,"write_s":0.09119342}
+[fastvideo] vsa-h3: 9 prefix + 280 video tiles, k_vid 56, 520 of 14950 rows dense
+[fastvideo] h3 step 1/8: 1.4s
+[fastvideo] h3 step 2/8: 1.3s
+[fastvideo] h3 step 3/8: 1.3s
+[fastvideo] h3 step 4/8: 1.3s
+[fastvideo] h3 step 5/8: 1.3s
+[fastvideo] h3 step 6/8: 1.3s
+[fastvideo] h3 step 7/8: 1.3s
+[fastvideo] h3 step 8/8: 1.3s
+[INFO] h3/timings/spark-mountain-lake-480p-c {"audio_decode_s":0.083773588,"decode_s":2.0847463840000002,"denoise_s":10.615024667,"load_s":29.304123413,"peak_mib":25638,"refine_s":0.000592807,"step_s":[1.3777132568359376,1.319995361328125,1.3197557373046875,1.319742431640625,1.320016845703125,1.3189488525390625,1.31911474609375,1.3188741455078126],"text_cache":"hit","text_encoder":"cache","text_s":0.262551459,"total_s":13.1261113,"video_decode_s":2.000972796,"video_encode_s":0.000450031,"video_push_s":0.000050524999999999995,"video_rgb_s":0.11196283800150876,"video_vae_s":1.9823885104358199,"video_wait_s":0.17030218800000002,"warm":true,"write_s":0.100445289}
+[fastvideo] vsa-h3: 16 prefix + 660 video tiles, k_vid 132, 951 of 38247 rows dense
+[fastvideo] h3 step 1/8: 3.7s
+[fastvideo] h3 step 2/8: 3.7s
+[fastvideo] h3 step 3/8: 3.7s
+[fastvideo] h3 step 4/8: 3.7s
+[fastvideo] h3 step 5/8: 3.7s
+[fastvideo] h3 step 6/8: 3.7s
+[fastvideo] h3 step 7/8: 3.7s
+[fastvideo] h3 step 8/8: 3.7s
+[INFO] h3/timings/h3-demo-768p-a {"audio_decode_s":0.085890646,"decode_s":4.7823391740000005,"denoise_s":29.548374522,"load_s":29.304123413,"peak_mib":32326,"refine_s":0.000791222,"step_s":[3.739505859375,3.730422607421875,3.67657470703125,3.678117919921875,3.679741943359375,3.68188720703125,3.67904248046875,3.68184521484375],"text_cache":"hit","text_encoder":"cache","text_s":0.338792455,"total_s":35.013399372,"video_decode_s":4.696448528,"video_encode_s":0.000409182,"video_push_s":0.00006417,"video_rgb_s":0.27734639400795874,"video_vae_s":4.652182883381843,"video_wait_s":0.158543824,"warm":true,"write_s":0.19783888}
+[fastvideo] vsa-h3: 16 prefix + 660 video tiles, k_vid 132, 951 of 38247 rows dense
+[fastvideo] h3 step 1/8: 3.7s
+[fastvideo] h3 step 2/8: 3.7s
+[fastvideo] h3 step 3/8: 3.7s
+[fastvideo] h3 step 4/8: 3.7s
+[fastvideo] h3 step 5/8: 3.7s
+[fastvideo] h3 step 6/8: 3.7s
+[fastvideo] h3 step 7/8: 3.7s
+[fastvideo] h3 step 8/8: 3.7s
+[INFO] h3/timings/h3-demo-768p-b {"audio_decode_s":0.081631356,"decode_s":4.784011722,"denoise_s":29.497717426,"load_s":29.304123413,"peak_mib":33446,"refine_s":0.000848667,"step_s":[3.730391845703125,3.681298583984375,3.679791015625,3.68068310546875,3.6799785156250002,3.682419677734375,3.6806318359375,3.6815400390625],"text_cache":"hit","text_encoder":"cache","text_s":0.262603291,"total_s":34.892357173,"video_decode_s":4.702380366,"video_encode_s":0.000472985,"video_push_s":0.000083842,"video_rgb_s":0.2925504620030478,"video_vae_s":4.653702502250671,"video_wait_s":0.16301564600000001,"warm":true,"write_s":0.201543018}
+[fastvideo] vsa-h3: 16 prefix + 660 video tiles, k_vid 132, 951 of 38247 rows dense
+[fastvideo] h3 step 1/8: 3.7s
+[fastvideo] h3 step 2/8: 3.7s
+[fastvideo] h3 step 3/8: 3.7s
+[fastvideo] h3 step 4/8: 3.7s
+[fastvideo] h3 step 5/8: 3.7s
+[fastvideo] h3 step 6/8: 3.7s
+[fastvideo] h3 step 7/8: 3.7s
+[fastvideo] h3 step 8/8: 3.7s
+[INFO] h3/timings/h3-demo-768p-c {"audio_decode_s":0.085806317,"decode_s":4.777994781,"denoise_s":29.497597065,"load_s":29.304123413,"peak_mib":33446,"refine_s":0.000968054,"step_s":[3.730626220703125,3.6812431640625003,3.680400390625,3.681566650390625,3.679848388671875,3.68091650390625,3.681353759765625,3.6805673828125003],"text_cache":"hit","text_encoder":"cache","text_s":0.242937495,"total_s":34.852809032,"video_decode_s":4.692188464,"video_encode_s":0.000443067,"video_push_s":0.000058464,"video_rgb_s":0.27944938901415334,"video_vae_s":4.652945048987865,"video_wait_s":0.153529282,"warm":true,"write_s":0.191615199}
+[fastvideo] vsa-h3: 9 prefix + 660 video tiles, k_vid 132, 520 of 37816 rows dense
+[fastvideo] h3 step 1/8: 3.7s
+[fastvideo] h3 step 2/8: 3.6s
+[fastvideo] h3 step 3/8: 3.6s
+[fastvideo] h3 step 4/8: 3.6s
+[fastvideo] h3 step 5/8: 3.6s
+[fastvideo] h3 step 6/8: 3.6s
+[fastvideo] h3 step 7/8: 3.6s
+[fastvideo] h3 step 8/8: 3.6s
+[INFO] h3/timings/spark-mountain-lake-768p-a {"audio_decode_s":0.081251252,"decode_s":4.7695121270000005,"denoise_s":28.81491229,"load_s":29.304123413,"peak_mib":33254,"refine_s":0.000643148,"step_s":[3.651005126953125,3.595862060546875,3.594682373046875,3.594947509765625,3.5955703125,3.595483154296875,3.5935703125000003,3.592532958984375],"text_cache":"hit","text_encoder":"cache","text_s":0.270363817,"total_s":34.210254449,"video_decode_s":4.688260875,"video_encode_s":0.000611073,"video_push_s":0.000068631,"video_rgb_s":0.28218530199981495,"video_vae_s":4.65217462092638,"video_wait_s":0.14992171999999998,"warm":true,"write_s":0.20571228}
+[fastvideo] vsa-h3: 9 prefix + 660 video tiles, k_vid 132, 520 of 37816 rows dense
+[fastvideo] h3 step 1/8: 3.6s
+[fastvideo] h3 step 2/8: 3.6s
+[fastvideo] h3 step 3/8: 3.6s
+[fastvideo] h3 step 4/8: 3.6s
+[fastvideo] h3 step 5/8: 3.6s
+[fastvideo] h3 step 6/8: 3.6s
+[fastvideo] h3 step 7/8: 3.6s
+[fastvideo] h3 step 8/8: 3.6s
+[INFO] h3/timings/spark-mountain-lake-768p-b {"audio_decode_s":0.080060774,"decode_s":4.777699279999999,"denoise_s":28.824762726,"load_s":29.304123413,"peak_mib":33318,"refine_s":0.000706083,"step_s":[3.64815380859375,3.5963320312500002,3.5983574218750003,3.595303955078125,3.5957873535156253,3.597120361328125,3.597202392578125,3.595559814453125],"text_cache":"hit","text_encoder":"cache","text_s":0.250959922,"total_s":34.183507808,"video_decode_s":4.697638506,"video_encode_s":0.000339834,"video_push_s":0.000068335,"video_rgb_s":0.2899707740071248,"video_vae_s":4.652277139425278,"video_wait_s":0.159548849,"warm":true,"write_s":0.188545495}
+[fastvideo] vsa-h3: 9 prefix + 660 video tiles, k_vid 132, 520 of 37816 rows dense
+[fastvideo] h3 step 1/8: 3.7s
+[fastvideo] h3 step 2/8: 3.6s
+[fastvideo] h3 step 3/8: 3.6s
+[fastvideo] h3 step 4/8: 3.6s
+[fastvideo] h3 step 5/8: 3.6s
+[fastvideo] h3 step 6/8: 3.6s
+[fastvideo] h3 step 7/8: 3.6s
+[fastvideo] h3 step 8/8: 3.6s
+[INFO] h3/timings/spark-mountain-lake-768p-c {"audio_decode_s":0.093267732,"decode_s":4.79347469,"denoise_s":28.831078315,"load_s":29.304123413,"peak_mib":33318,"refine_s":0.000592195,"step_s":[3.65092724609375,3.596376953125,3.597638671875,3.59793359375,3.595483154296875,3.5976806640625,3.59579541015625,3.597715576171875],"text_cache":"hit","text_encoder":"cache","text_s":0.255081694,"total_s":34.217354789,"video_decode_s":4.700206958,"video_encode_s":0.000697934,"video_push_s":0.00007249200000000001,"video_rgb_s":0.30789521300671274,"video_vae_s":4.652358017981053,"video_wait_s":0.161592206,"warm":true,"write_s":0.186856545}

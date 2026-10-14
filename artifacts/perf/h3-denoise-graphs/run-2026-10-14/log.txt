@@ -1,0 +1,33 @@
+downloading uv 0.13.1 x86_64-unknown-linux-gnu
+installing to /opt/uvbin
+  uv
+  uvx
+everything's installed!
+Downloading cpython-3.12.15-linux-x86_64-gnu (download) (32.7MiB)
+ Downloaded cpython-3.12.15-linux-x86_64-gnu (download)
+Installed Python 3.12.15 in 928ms
+ + cpython-3.12.15-linux-x86_64-gnu (python3.12)
+warning: `/root/.local/bin` is not on your PATH. To use installed Python executables, run `export PATH="/root/.local/bin:$PATH"` or `uv python update-shell`.
+2026-10-14T16:43:03Z start: mode r2, steps fetch prep trace cells hash , arms sync lazy graphs, cks v2 4s turbo; fv-gpucheck 0.1.1
+2026-10-14T16:43:19Z plan received
+2026-10-14T16:43:19Z begin fetch
+2026-10-14T16:55:53Z end fetch rc=0 754s
+2026-10-14T16:55:53Z begin prep
+2026-10-14T16:55:57Z end prep rc=0 4s
+2026-10-14T16:55:57Z no h3-turbo tree under /fvw: h3-turbo cells skipped
+2026-10-14T16:55:57Z begin trace-v2-480p
+2026-10-14T16:57:42Z end trace-v2-480p rc=0 105s
+2026-10-14T16:57:43Z begin trace-v2-768p
+2026-10-14T17:00:36Z end trace-v2-768p rc=0 173s
+2026-10-14T17:00:36Z begin cell-v2-sync
+2026-10-14T17:06:18Z end cell-v2-sync rc=0 342s
+2026-10-14T17:06:20Z begin cell-v2-lazy
+2026-10-14T17:11:53Z end cell-v2-lazy rc=0 333s
+2026-10-14T17:11:55Z begin cell-v2-graphs
+2026-10-14T17:17:32Z end cell-v2-graphs rc=0 337s
+2026-10-14T17:17:34Z begin cell-4s-sync
+2026-10-14T17:21:02Z end cell-4s-sync rc=0 208s
+2026-10-14T17:21:05Z begin cell-4s-lazy
+2026-10-14T17:24:27Z end cell-4s-lazy rc=0 202s
+2026-10-14T17:24:30Z begin cell-4s-graphs
+2026-10-14T17:27:56Z end cell-4s-graphs rc=0 206s

@@ -190,8 +190,11 @@ mod imp {
     use crate::wan::graph::{assign, duplicate, Graph, GraphStream};
     use crate::wan::tensor::{CudaTensor, TensorError};
 
-    /// Request shapes kept (each holds a graph per step and its slots).
-    const MAX_KEYS: usize = 4;
+    /// Request shapes kept (each holds a graph per step and its slots). With
+    /// four (2 x 480p + 2 x 768p V2-NVFP4, 32 graphs) the fourth shape's
+    /// capture ran out of graph memory at step 2 on a 96 GB card with 45 GB
+    /// in use (docs/perf/h3-denoise-graphs.md); three fitted.
+    const MAX_KEYS: usize = 2;
 
     /// The persistent buffers a step graph reads and writes: the text
     /// conditioning and the latent rows, refilled in place per request; each
