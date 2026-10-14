@@ -1908,7 +1908,10 @@ impl Attention {
     /// otherwise it is rounded here.
     #[cfg(feature = "cuda")]
     fn round_attn_out(&self, out: CudaTensor) -> Result<CudaTensor> {
-        if out.is_bf16() || self.to_out.mx_whole() {
+        // A published NVFP4 `to_out` rounds it inside its merge too
+        // (fused16::merge_heads_nvfp4, FASTVIDEO_H3_GLUE).
+        let nvfp4_merge = fused16::glue_enabled() && self.to_out.is_nvfp4_published();
+        if out.is_bf16() || self.to_out.mx_whole() || nvfp4_merge {
             return Ok(out);
         }
         out.quantize_bf16()
@@ -1931,6 +1934,19 @@ impl Attention {
                     let shape = vec![1, act.rows, self.to_out.out_dim()];
                     drop(out);
                     return self.to_out.forward_mx(&act, shape);
+                }
+            }
+            // A published NVFP4 `to_out` takes the merged heads as its NVFP4
+            // operand, written by the merge (fused16::merge_heads_nvfp4;
+            // FASTVIDEO_H3_GLUE=0 merges to bf16 and quantizes in the linear).
+            #[cfg(feature = "cuda")]
+            if bf16_activations() {
+                if let Some(stack) = self.to_out.nvfp4_stack() {
+                    if let Some(a) = fused16::merge_heads_nvfp4(&out, stack.static_act_amax(), stack.rule())? {
+                        let shape = vec![1, a.rows, self.to_out.out_dim()];
+                        drop(out);
+                        return self.to_out.forward_nvfp4_operand(&a, shape);
+                    }
                 }
             }
             // Only the fused VSA path hands over an unrounded f32 output

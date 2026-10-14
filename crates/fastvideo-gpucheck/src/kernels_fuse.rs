@@ -238,6 +238,33 @@ fn h3_glue_parity(report: &mut Report, seed: &mut u64) -> StageResult<()> {
         check_nvfp4(report, &format!("h3_glue_swiglu_nvfp4_{rows}x{half}_{rule:?}"), &got, &want)?;
     }
 
+    // Head merge -> NVFP4 (measured or static amax) vs round + merge + quantize.
+    for (s, heads, d, f32_in, fixed) in [
+        (77usize, 6usize, 64usize, true, None),
+        (140, 4, 128, true, None),
+        (77, 6, 64, false, None),
+        (45, 2, 128, true, Some(1.5f32)),
+    ] {
+        let k = heads * d;
+        let vals = rand(seed, heads * s * d, 2.0);
+        let o = if f32_in { t32(&vals, &[1, heads, s, d])? } else { t16(&bf16v(vals), &[1, heads, s, d])? };
+        let fixed_dev = match fixed {
+            Some(v) => Some(dev()?.stream.memcpy_stod(&[v])?),
+            None => None,
+        };
+        let mut got = None;
+        glue(&mut || {
+            got = fused16::merge_heads_nvfp4(&o, fixed_dev.as_ref(), ScaleRule::Static6)?;
+            Ok(())
+        })?;
+        let got = got.ok_or_else(|| anyhow::anyhow!("merge_heads_nvfp4 did not apply"))?;
+        let merged = o.quantize_bf16()?.merge_heads()?;
+        let m16 = merged.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("merged heads not device bf16"))?;
+        let want = quantize_bf16_operand_with(quant::ptr(m16), s, k, false, ScaleRule::Static6, fixed_dev.as_ref())?;
+        let tag = format!("{s}x{k}_{}_{}", if f32_in { "f32" } else { "bf16" }, if fixed.is_some() { "static" } else { "measured" });
+        check_nvfp4(report, &format!("h3_glue_merge_nvfp4_{tag}"), &got, &want)?;
+    }
+
     // FASTVIDEO_H3_GLUE=0 declines.
     let h = t16(&bf16v(rand(seed, 16 * 256, 1.0)), &[1, 16, 256])?;
     let amax = dev()?.stream.memcpy_stod(&[1.0f32])?;

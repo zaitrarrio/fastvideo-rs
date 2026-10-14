@@ -434,6 +434,26 @@ pub fn swiglu_nvfp4(
     dev::swiglu_nvfp4(src, h.numel() / last, half, amax, rule)
 }
 
+/// `merge_heads(out)` (rounded to bf16 when `out` is VSA's f32) written
+/// straight as `to_out`'s NVFP4 operand: the activation amax measured on the
+/// merged bf16 values (or `fixed_amax`, a static scale), then the bytes
+/// `quantize_bf16_operand_with` writes. `out` is `[1, H, S, D]` on the
+/// device. `None` unless [`glue_enabled`] and `H * D % 64 == 0`.
+#[cfg(feature = "cuda")]
+pub fn merge_heads_nvfp4(
+    out: &CudaTensor,
+    fixed_amax: Option<&cudarc::driver::CudaSlice<f32>>,
+    rule: fastvideo_models::nvfp4::ScaleRule,
+) -> Result<Option<crate::wan::nvfp4_linear::Nvfp4Operand>> {
+    let [1, heads, seq, d] = out.shape[..] else {
+        return Ok(None);
+    };
+    if !glue_enabled() || !(heads * d).is_multiple_of(64) || seq == 0 {
+        return Ok(None);
+    }
+    dev::merge_heads_nvfp4(out, heads, seq, d, fixed_amax, rule)
+}
+
 // `launch!` names `super::stats` / `super::device` from its call site.
 #[cfg(feature = "cuda")]
 use crate::wan::{device, stats};
@@ -865,6 +885,59 @@ mod dev {
         let (rows_i, pack_i, half_i) = (rows as i32, a.rows_pack as i32, half as i32);
         launch!(dev.stream, &dev.kernels.fvf_h3_swiglu_nvfp4, nvfp4_cfg(rows);
             &sp, &ap, &pp, &scp, &rows_i, &pack_i, &half_i, &code)
+        .map_err(err)?;
+        Ok(Some(a))
+    }
+
+    pub(super) fn merge_heads_nvfp4(
+        out: &CudaTensor,
+        heads: usize,
+        seq: usize,
+        d: usize,
+        fixed_amax: Option<&cudarc::driver::CudaSlice<f32>>,
+        rule: fastvideo_models::nvfp4::ScaleRule,
+    ) -> Result<Option<crate::wan::nvfp4_linear::Nvfp4Operand>> {
+        let Some(code) = rule_code(rule) else {
+            return Ok(None);
+        };
+        let n = heads * seq * d;
+        let (op, o16) = if out.is_bf16() {
+            match out.device_slice_bf16() {
+                Some(o) => (ptr(o), 1i32),
+                None => return Ok(None),
+            }
+        } else {
+            match out.device_slice() {
+                Some(o) => (ptr(o), 0i32),
+                None => return Ok(None),
+            }
+        };
+        let dev = global_device().ok_or_else(|| msg("no device"))?;
+        let k = heads * d;
+        let mut a = nvfp4_alloc(seq, k)?;
+        let nn = n as i64;
+        let amax_cfg = cudarc::driver::LaunchConfig {
+            grid_dim: (n.div_ceil(256).clamp(1, 4096) as u32, 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        match fixed_amax {
+            Some(f) if f.len() == 1 => dev.stream.memcpy_dtod(f, &mut a.amax).map_err(err)?,
+            Some(_) => return Err(msg("h3 merge nvfp4: the fixed amax is one f32")),
+            // The measured amax of the merged bf16 tensor: the same values in
+            // another order, and max does not depend on the order.
+            None if o16 == 1 => {
+                let g = 0i32;
+                launch!(dev.stream, &dev.kernels.nvfp4_amax_bf16, amax_cfg; &op, &g, &mut a.amax, &nn)
+                    .map_err(err)?
+            }
+            None => launch!(dev.stream, &dev.kernels.fvf_amax_f32_r16, amax_cfg; &op, &mut a.amax, &nn)
+                .map_err(err)?,
+        }
+        let (ap, pp, scp) = (ptr(&a.amax), ptr_mut(&mut a.packed), ptr_mut(&mut a.scales));
+        let v = [seq, a.rows_pack, heads, d].map(|u| u as i32);
+        launch!(dev.stream, &dev.kernels.fvf_h3_merge_heads_nvfp4, nvfp4_cfg(seq);
+            &op, &o16, &ap, &pp, &scp, &v[0], &v[1], &v[2], &v[3], &code)
         .map_err(err)?;
         Ok(Some(a))
     }

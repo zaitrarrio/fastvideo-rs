@@ -7172,6 +7172,51 @@ extern "C" __global__ void fvf_h3_swiglu_nvfp4(
     }
 }
 
+// max |bf16(x)| of an f32 tensor as nvfp4_amax_bf16 measures it on the
+// rounded tensor: rounding is monotone, so each block rounds its partial
+// max; NaN wins (as there). `out` zeroed by the caller.
+extern "C" __global__ void fvf_amax_f32_r16(const float* x, float* out, long n) {
+    __shared__ float sm[256];
+    int tid = threadIdx.x;
+    float acc = 0.0f;
+    long stride = (long)gridDim.x * blockDim.x;
+    for (long i = blockIdx.x * (long)blockDim.x + tid; i < n; i += stride) {
+        float a = fabsf(x[i]);
+        if (!(a <= acc)) acc = a;
+    }
+    sm[tid] = acc;
+    __syncthreads();
+    for (int s = blockDim.x >> 1; s > 0; s >>= 1) {
+        if (tid < s) { float o = sm[tid + s]; if (!(o <= sm[tid])) sm[tid] = o; }
+        __syncthreads();
+    }
+    if (tid == 0) atomicMax((int*)out, __float_as_int(fv_r16(sm[0])));
+}
+
+// merge_heads of the attention output [H, S, D] (f32 rounded to bf16, or
+// bf16) straight into `to_out`'s NVFP4 operand, with the amax of the merged
+// bf16 tensor (fvf_amax_f32_r16 / nvfp4_amax_bf16). One block per operand
+// row; heads * d % 64 == 0.
+extern "C" __global__ void fvf_h3_merge_heads_nvfp4(
+    const void* o, int o16, const float* amax_ptr, unsigned char* packed, unsigned char* scales,
+    int seq, int rows_pack, int heads, int d, int rule
+) {
+    long s = blockIdx.x;
+    int k = heads * d;
+    if (s >= seq) {
+        fv_nvfp4_pad_row(s, rows_pack, k, packed, scales);
+        return;
+    }
+    float amax = *amax_ptr;
+    float e2 = rule == 1 ? 4.0f : 6.0f;
+    for (int j0 = 0; j0 < k; j0 += blockDim.x) {
+        if ((j0 + (int)(threadIdx.x & ~31u)) >= k) continue;
+        int j = j0 + threadIdx.x;
+        int h = j / d;
+        float v = fv_r16(fv_ld(o, ((long)h * seq + s) * d + (j - h * d), o16));
+        fv_nvfp4_store_lane(v, s, j, k, amax, e2, packed, scales);
+    }
+}
 // ==== endregion: DiT block fusions ====
 
 // ==== region: Wan block (bf16 activations) ====
