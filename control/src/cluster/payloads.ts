@@ -285,13 +285,39 @@ export interface Placement {
   gpu?: string;
   cpu?: string;
 }
-export function workerPlacements(spec: ClusterSpec, pool: PoolSpec): Placement[] {
+/** A Runpod pool that mounts no weights volume, so it may run in any data centre: enums.ts noVolumePod (weights_source
+ * r2 / hub / none, a CPU pool with volume off), or a GPU pool with weights_source unset whose default is r2
+ * (providers.ts weightsSource: a preset whose trees are not on the EU volume). GMI / Brev pools: false (no Runpod DC). */
+export function poolWithoutVolume(pool: PoolSpec, env?: Env): boolean {
+  if (isOtherPool(pool)) return false;
+  if (noVolumePod(pool)) return true;
+  return pool.compute !== "CPU" && !pool.weights_source && pool.volume !== true && weightsSource(pool, env) !== "volume";
+}
+/** The data centres a Runpod pool without the volume tries, in order: its own data_centers, else the cluster's
+ * (spec.data_centers); null: the regions' (the weights volume's data centre). */
+export function poolDataCenters(spec: Pick<ClusterSpec, "data_centers">, pool: PoolSpec, env?: Env): string[] | null {
+  if (isOtherPool(pool)) return null;
+  if (pool.data_centers?.length && noVolumePod(pool)) return pool.data_centers;
+  if (spec.data_centers?.length && poolWithoutVolume(pool, env)) return spec.data_centers;
+  return null;
+}
+/** Where a pool's pods run, in words (the editor's outlook): its provider, its data centres, or its volume regions. */
+export function placementWhere(spec: ClusterSpec, pool: PoolSpec, env?: Env): string {
+  if (isOtherPool(pool)) return `${pool.provider}${pool.provider_region ? ` ${pool.provider_region}` : ""}`;
+  const dcs = poolDataCenters(spec, pool, env);
+  if (dcs) return dcs.map((d) => (d === DC_ANY ? "any data centre" : d)).join(", ");
+  const regions = (pool.regions?.length ? pool.regions : spec.regions).filter(regionAvailable);
+  const vol = pool.compute === "CPU" ? pool.volume === true : true;
+  return regions.length ? regions.map((r) => `${REGIONS[r]!.dc}${vol ? ` (the ${r} weights volume)` : ""}`).join(", ") + (pool.compute === "CPU" && !vol ? ", then any data centre" : "") : "no region with a weights volume";
+}
+export function workerPlacements(spec: ClusterSpec, pool: PoolSpec, env?: Env): Placement[] {
   // Never place in a region without a weights volume (us since 2026-10), even from an old stored spec.
   const regions = (pool.regions?.length ? pool.regions : spec.regions).filter(regionAvailable);
   const out: Placement[] = [];
-  // A pod without the weights volume (GPU: weights_source r2 or none; CPU: volume off) with data_centers: those data
-  // centres, in order (each with every GPU type / flavor in order), instead of the regions'; "any" = no dataCenterIds.
-  const dcs = !isOtherPool(pool) && pool.data_centers?.length && noVolumePod(pool) ? pool.data_centers : null;
+  // A pod without the weights volume (GPU: weights_source r2, hub or none; CPU: volume off) with data_centers (its own,
+  // else the cluster's): those data centres, in order (each with every GPU type / flavor in order), instead of the
+  // regions'; "any" = no dataCenterIds. A pool that mounts the volume always runs in its regions.
+  const dcs = poolDataCenters(spec, pool, env);
   const at = (dc: string) => (dc === DC_ANY ? {} : { dc });
   if (pool.compute === "CPU" && dcs) {
     for (const f of pool.cpu_flavors?.length ? pool.cpu_flavors : ["cpu3c", "cpu5c", "cpu3g"]) for (const dc of dcs) out.push({ ...at(dc), cpu: f });

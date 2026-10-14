@@ -11,6 +11,7 @@ import {
   canonical,
   isDirect,
   workerCreatePayload,
+  poolDataCenters,
   workerPlacements,
   workerSystemEnv,
   type ClusterSecrets,
@@ -146,7 +147,7 @@ export async function createWorker(env: Env, c: Cluster, poolId: string, image: 
   if (isOtherPool(pool)) return createOtherWorker(env, c, pool, image, slot, log);
   const ctx = await envCtx(env, c);
   const { full, hash } = await desiredEnv(env, c, ctx, "worker", { pool: poolId, image });
-  for (const pl of workerPlacements(c.spec, pool)) {
+  for (const pl of workerPlacements(c.spec, pool, env)) {
     const payload = workerCreatePayload(runpodName(c, poolId), image, pool, pl, full);
     let r: any;
     try {
@@ -174,7 +175,7 @@ export async function createWorker(env: Env, c: Cluster, poolId: string, image: 
     log(`${poolId}: pod ${rec.pod} on ${pl.gpu || `cpu:${pl.cpu}`} in ${rec.dc || "?"} at $${dph}/hr`);
     return rec;
   }
-  log(`${poolId}: no stock in [${(pool.regions?.length ? pool.regions : c.spec.regions).join(" ")}]`);
+  log(`${poolId}: no stock in [${(poolDataCenters(c.spec, pool, env) ?? (pool.regions?.length ? pool.regions : c.spec.regions)).join(" ")}]`);
   return null;
 }
 
