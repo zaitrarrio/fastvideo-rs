@@ -306,6 +306,34 @@ pub fn with_fuse<R>(on: bool, f: impl FnOnce() -> R) -> R {
     out
 }
 
+thread_local! {
+    static GLUE_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// `FASTVIDEO_H3_GLUE` (default on; needs [`fuse_enabled`]): the glue
+/// fusions around the block's GEMMs and attention (docs/perf/h3-glue-fusion.md)
+/// — VSA fed bf16 q/k/v/gate in place, the q/k/v/gate heads in one kernel,
+/// and the NVFP4 activations written by their producers. Each writes the
+/// bytes of the ops it replaces; `=0` runs those ops.
+pub fn glue_enabled() -> bool {
+    if !fuse_enabled() {
+        return false;
+    }
+    if let Some(v) = GLUE_OVERRIDE.with(|c| c.get()) {
+        return v;
+    }
+    static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENV.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_H3_GLUE", true))
+}
+
+/// Run `f` with [`glue_enabled`] forced on or off (parity checks).
+pub fn with_glue<R>(on: bool, f: impl FnOnce() -> R) -> R {
+    let prev = GLUE_OVERRIDE.with(|c| c.replace(Some(on)));
+    let out = f();
+    GLUE_OVERRIDE.with(|c| c.set(prev));
+    out
+}
+
 /// `merge_heads(out)` as the MXFP8 activation of a linear over `heads * d`
 /// columns: the bytes `mxfp8_quantize` writes for the merged bf16 tensor.
 /// `out` is `[1, H, S, D]` on the device, bf16 or f32 (rounded to bf16 first,

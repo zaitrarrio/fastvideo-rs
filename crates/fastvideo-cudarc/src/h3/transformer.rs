@@ -1806,6 +1806,9 @@ impl Attention {
     /// q/k/v (and the VSA gate) as f32 BHSD holding the bf16 path's values,
     /// then VSA, its output rounded to bf16 as the bf16 path's `keep_dtype`
     /// does. `None` when a piece does not apply (the caller runs that path).
+    /// When VSA reads bf16 in place ([`super::vsa::H3Vsa::takes_bf16`],
+    /// `FASTVIDEO_H3_GLUE`), they are written bf16 instead: the same values,
+    /// half the bytes, and no widening or re-narrowing cast inside VSA.
     #[cfg(feature = "cuda")]
     fn attend_vsa_f32(
         &self,
@@ -1815,6 +1818,24 @@ impl Attention {
     ) -> Result<Option<CudaTensor>> {
         let (heads, d) = (self.heads, self.head_dim);
         let inner = heads * d;
+        if fused16::glue_enabled() && vsa.takes_bf16() && packed.is_bf16() && packed.is_device_fresh() {
+            let q = phase("h3_attn_q", || {
+                fused16::qk_norm_rope(packed, &self.norm_q, rope, heads, d, 0, self.eps)
+            })?;
+            let k = phase("h3_attn_k", || {
+                fused16::qk_norm_rope(packed, &self.norm_k, rope, heads, d, inner, self.eps)
+            })?;
+            let v = phase("h3_attn_v", || packed.split_heads_bhsd(2 * inner, heads, d))?;
+            let gate = if self.has_gate {
+                Some(phase("h3_attn_gate", || packed.split_heads_bhsd(3 * inner, heads, d))?)
+            } else {
+                None
+            };
+            let Some(out) = vsa.attend_unrounded(q, k, v, gate)? else {
+                return Ok(None);
+            };
+            return self.round_attn_out(out).map(Some);
+        }
         let Some(q) = phase("h3_attn_q", || {
             fused16::qk_norm_rope_f32(packed, &self.norm_q, rope, heads, d, 0, self.eps)
         })?
@@ -1839,12 +1860,18 @@ impl Attention {
             None
         };
         let out = vsa.attend(q, k, v, gate)?;
-        // An all-MXFP8 `to_out` rounds the f32 output inside the head merge
-        // (fused16::merge_heads_mx); otherwise it is rounded here.
+        self.round_attn_out(out).map(Some)
+    }
+
+    /// The VSA output for [`Self::project_out`]: an all-MXFP8 `to_out` rounds
+    /// the f32 output inside the head merge (fused16::merge_heads_mx);
+    /// otherwise it is rounded here.
+    #[cfg(feature = "cuda")]
+    fn round_attn_out(&self, out: CudaTensor) -> Result<CudaTensor> {
         if out.is_bf16() || self.to_out.mx_whole() {
-            return Ok(Some(out));
+            return Ok(out);
         }
-        Ok(Some(out.quantize_bf16()?))
+        out.quantize_bf16()
     }
 
     /// `to_out` on the `[1, H, S, D]` attention output, then the Spark

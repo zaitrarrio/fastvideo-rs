@@ -1027,6 +1027,59 @@ impl H3Vsa {
     }
 }
 
+/// The H3 block's glue around VSA (`FASTVIDEO_H3_GLUE`, transformer.rs):
+/// which dtype its producers write, and the output before its rounding.
+#[cfg(feature = "cuda")]
+impl H3Vsa {
+    /// Whether bf16 device q/k/v/gate reach the bf16-in-place kernels
+    /// (`attend_device_dc`, else `attend_device_b16`) rather than being
+    /// widened to f32: the same conditions those two check. The FP8 fine
+    /// stage only exists on the f32 path.
+    pub fn takes_bf16(&self) -> bool {
+        if self.device.is_none() || (self.fp8 && crate::wan::attn_fp8::supported()) {
+            return false;
+        }
+        if crate::wan::attn_dc::vsa_enabled() && self.head_dim == crate::wan::attn_dc::DC_HEAD_DIM {
+            return true;
+        }
+        let sm = crate::wan::device::global_device().map_or(0, |d| d.sm_major);
+        let forced_gather = fastvideo_models::techniques::kernels::choice(
+            fastvideo_models::techniques::kernels::KernelOp::VsaAttention,
+        ) == "gather";
+        crate::wan::envflag::bool_flag("FASTVIDEO_VSA_BF16", true) && sm >= 8 && self.head_dim == 128 && !forced_gather
+    }
+
+    /// [`Self::attend`] on the device without rounding the result to the
+    /// inputs' dtype: the f32 output, which the caller rounds to bf16 itself
+    /// (a fused head merge reads it). `None` without a device plan.
+    pub fn attend_unrounded(
+        &self,
+        q: CudaTensor,
+        k: CudaTensor,
+        v: CudaTensor,
+        gate: Option<CudaTensor>,
+    ) -> Result<Option<CudaTensor>> {
+        let Some(device) = &self.device else {
+            return Ok(None);
+        };
+        let shape = vec![1, self.heads, self.plan.seq, self.head_dim];
+        if q.shape != shape || k.shape != shape || v.shape != shape || gate.as_ref().is_some_and(|g| g.shape != shape) {
+            return Err(msg(format!(
+                "vsa-h3: q {:?} k {:?} v {:?} for a plan of {shape:?}",
+                q.shape, k.shape, v.shape
+            )));
+        }
+        let (n, p, vt) = (
+            self.plan.num_tiles() as u64,
+            self.plan.prefix_tiles as u64,
+            self.plan.video_tiles as u64,
+        );
+        let kv = (self.k_vid() as u64).min(vt);
+        crate::wan::evalstats::vsa(self.heads, vt * (p + kv) + p * n, n * n, vt * kv, vt * vt);
+        self.attend_device(device, q, k, v, gate).map(Some)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

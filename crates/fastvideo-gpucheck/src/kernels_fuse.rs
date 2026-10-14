@@ -90,7 +90,57 @@ fn need(t: Option<CudaTensor>, what: &str) -> anyhow::Result<CudaTensor> {
 pub fn dit_fusion(report: &mut Report, seed: &mut u64) -> StageResult<()> {
     with_bf16_act(true, || parity(report, seed))?;
     with_bf16_act(true, || h3_parity(report, seed))?;
+    with_bf16_act(true, || h3_glue_parity(report, seed))?;
     with_bf16_act(true, || timing(report, seed))
+}
+
+/// FASTVIDEO_H3_GLUE: every glue fusion against the ops it replaces, bit for
+/// bit (bf16 values, NVFP4 codes / scales / amax).
+fn h3_glue_parity(report: &mut Report, seed: &mut u64) -> StageResult<()> {
+    // VSA fed bf16 q/k/v/gate in place (attend_unrounded, rounded after) vs
+    // the f32 feed `attend` widened and rounded.
+    {
+        use fastvideo_cudarc::h3::vsa::{H3Vsa, H3VsaConfig};
+        let layout = fastvideo_models::h3::packing::H3PackedLayout::new(70, (5, 8, 12), 33, [1, 2, 2])
+            .map_err(anyhow::Error::msg)?;
+        let (vh, vd) = (2usize, 128usize);
+        let seq = layout.sequence_length();
+        let shape = [1, vh, seq, vd];
+        let n = vh * seq * vd;
+        let parts: Vec<Vec<f32>> = (0..4).map(|_| bf16v(rand(seed, n, 1.0))).collect();
+        let vsa = H3Vsa::new(&layout, vh, vd, H3VsaConfig { sparsity: 0.5, group: 2, tile_size: 64 })?;
+        report.check(
+            "h3_glue_vsa_takes_bf16",
+            vsa.takes_bf16(),
+            json!({"takes_bf16": vsa.takes_bf16()}),
+            json!({"takes_bf16": true}),
+        )?;
+        let want = vsa
+            .attend(
+                t32(&parts[0], &shape)?,
+                t32(&parts[1], &shape)?,
+                t32(&parts[2], &shape)?,
+                Some(t32(&parts[3], &shape)?),
+            )?
+            .quantize_bf16()?;
+        let got = vsa
+            .attend_unrounded(
+                t16(&parts[0], &shape)?,
+                t16(&parts[1], &shape)?,
+                t16(&parts[2], &shape)?,
+                Some(t16(&parts[3], &shape)?),
+            )?
+            .ok_or_else(|| anyhow::anyhow!("attend_unrounded: no device plan"))?;
+        report.check(
+            "h3_glue_vsa_bf16_unrounded_dtype",
+            !got.is_bf16() && got.shape == want.shape,
+            json!({"got_bf16": got.is_bf16(), "shape": got.shape}),
+            json!({"got_bf16": false}),
+        )?;
+        check_ulps(report, "h3_glue_vsa_bf16_feed", &host(&got.quantize_bf16()?)?, &host(&want)?, true)?;
+    }
+
+    Ok(())
 }
 
 /// `ltx_rope`: the LTX-2 rotary tables gathered on the device from their
