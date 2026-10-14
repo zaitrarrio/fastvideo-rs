@@ -170,10 +170,18 @@ sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
   down)
     : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
     id="${2:?pod id}"
+    # This pod's own staged keys, read from its env before it goes: other runs' bundles share the tmp/ prefix.
+    own="$(rest GET "/pods/$id" 2>/dev/null | jq -r '[.env.FV_BUNDLE_SHA256 // "", .env.FV_UP_DUMP_SHA256 // ""] | join(" ")' 2>/dev/null || true)"
+    read -r sha up_sha <<<"$own" || true
     rest DELETE "/pods/$id" >/dev/null 2>&1 || true
     if rest GET "/pods/$id" >/dev/null 2>&1; then log "WARNING: pod $id still listed"; exit 1; fi
     log "pod $id deleted (GET /pods/$id: not found)"
-    python3 "$HERE/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix tmp/h3-trim-bundle- || true
+    if [[ -n "${sha:-}" ]]; then
+      python3 "$HERE/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "tmp/h3-trim-bundle-$sha" || true
+      [[ -z "${up_sha:-}" ]] || for k in updump upref; do python3 "$HERE/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "tmp/h3-trim-bundle-$k-$up_sha" || true; done
+    else
+      log "bundle sha256 not readable from pod $id: its staged bundle is left under tmp/h3-trim-bundle-; remove it by its full key"
+    fi
     ;;
   *) sed -n '2,20p' "$0"; exit 2 ;;
 esac
