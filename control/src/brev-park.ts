@@ -75,6 +75,8 @@ export const TREE_GB: Record<string, number> = {
   "h3-8step": 144,
   "fasth3-trim-8step": 44,
   "fasth3-trim-8step-nvfp4": 12,
+  "fasth3-v2-nvfp4": 56,
+  "fasth3-4step-vsa-nvfp4": 56,
   "h3-turbo-loras/larry": 1,
   "h3-turbo-loras/lightx2v": 2,
   "vdn-h3-stage-b-2000": 5,

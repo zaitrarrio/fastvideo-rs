@@ -1,0 +1,230 @@
+{
+  "activations": "bf16",
+  "attention": {
+    "dense_video_calls": 0,
+    "forwards": 8,
+    "per_forward": [
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 0,
+        "layers": 42,
+        "pisa": 0,
+        "sol": 0,
+        "step": 0,
+        "tau_calls": {},
+        "vsa": 42
+      },
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 1,
+        "layers": 42,
+        "pisa": 0,
+        "sol": 0,
+        "step": 1,
+        "tau_calls": {},
+        "vsa": 42
+      },
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 2,
+        "layers": 42,
+        "pisa": 0,
+        "sol": 0,
+        "step": 2,
+        "tau_calls": {},
+        "vsa": 42
+      },
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 3,
+        "layers": 42,
+        "pisa": 0,
+        "sol": 0,
+        "step": 3,
+        "tau_calls": {},
+        "vsa": 42
+      },
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 4,
+        "layers": 42,
+        "pisa": 0,
+        "sol": 0,
+        "step": 4,
+        "tau_calls": {},
+        "vsa": 42
+      },
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 5,
+        "layers": 42,
+        "pisa": 0,
+        "sol": 0,
+        "step": 5,
+        "tau_calls": {},
+        "vsa": 42
+      },
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 6,
+        "layers": 42,
+        "pisa": 0,
+        "sol": 0,
+        "step": 6,
+        "tau_calls": {},
+        "vsa": 42
+      },
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 7,
+        "layers": 42,
+        "pisa": 0,
+        "sol": 0,
+        "step": 7,
+        "tau_calls": {},
+        "vsa": 42
+      }
+    ],
+    "pisa_calls": 0,
+    "pisa_sparsity_calls": {},
+    "sol_calls": 0,
+    "tau_calls": {},
+    "video_calls": 336,
+    "vsa_calls": 336
+  },
+  "decode_s": 1.514398066,
+  "denoise_s": 7.526108913,
+  "dit_offload": null,
+  "dtype": "bfloat16",
+  "e2e_seconds": 9.273648442,
+  "env": {},
+  "ffn_chunking": {
+    "calls": 338,
+    "chunked_calls": 0,
+    "chunks": 338
+  },
+  "generate_wall_s": 9.358283757,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "gpu_trace": null,
+  "hardware": "1x NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "includes_model_load": false,
+  "inference_time_s": 9.273648442,
+  "load_s": 7.6656931759999996,
+  "max_device_memory_used_mib": 21566,
+  "memory": {
+    "dit_residency": "resident",
+    "stages": [
+      {
+        "end_allocated_gib": 16.11717044841498,
+        "peak_allocated_gib": 16.11717044841498,
+        "peak_reserved_gib": 16.21875,
+        "stage": "text"
+      },
+      {
+        "end_allocated_gib": 16.117631073109806,
+        "peak_allocated_gib": 16.122697944752872,
+        "peak_reserved_gib": 16.21875,
+        "stage": "refine"
+      },
+      {
+        "end_allocated_gib": 16.12238037120551,
+        "peak_allocated_gib": 19.31069532316178,
+        "peak_reserved_gib": 19.78125,
+        "stage": "denoise"
+      },
+      {
+        "end_allocated_gib": 16.12238037120551,
+        "peak_allocated_gib": 16.2540327263996,
+        "peak_reserved_gib": 16.3125,
+        "stage": "audio_decode"
+      },
+      {
+        "end_allocated_gib": 16.127540941350162,
+        "peak_allocated_gib": 16.92244457732886,
+        "peak_reserved_gib": 17.375,
+        "stage": "video_decode"
+      }
+    ]
+  },
+  "model": "MiniMaxAI/MiniMax-H3",
+  "peak_allocated_gib": 19.31069532316178,
+  "peak_memory_mb": 20256.0,
+  "peak_reserved_gib": 19.78125,
+  "pipeline": "h3",
+  "png_frames_s": 0.084635315,
+  "quantized_linears": {
+    "calls": {
+      "nvfp4_published": 1344
+    },
+    "modules": {
+      "nvfp4_published": 168
+    }
+  },
+  "recipe": "trim-8step-nvfp4-fp4attn",
+  "schema_version": "fastvideo-rs.benchmark.v1",
+  "stage_seconds": {
+    "audio_decode": 0.056984601,
+    "denoise": 7.526108913,
+    "png_frames": 0.084635315,
+    "refine": 0.000394351,
+    "text": 0.194817791,
+    "video_decode": 1.4574134650000001,
+    "video_encode_tail": 0.000096925,
+    "video_push": 0.000025947,
+    "video_rgb": 0.03139896299966246,
+    "video_vae": 1.448954635709524,
+    "video_wait": 0.160498061
+  },
+  "step_seconds": [
+    0.9718951416015625,
+    0.9365801391601563,
+    0.935847900390625,
+    0.9377106323242188,
+    0.9361663818359375,
+    0.9353717651367188,
+    0.936537109375,
+    0.9357034912109375
+  ],
+  "task": "t2va",
+  "teacache": {
+    "enabled": false
+  },
+  "text_cache": "hit",
+  "text_encoder": "cache",
+  "text_s": 0.194817791,
+  "timing_note": "total_s = inference_time_s = e2e_seconds = generate_wall_s - png_frames_s (the PNG frames for compare-clips are written after the mp4, outside every timed number); load_s is separate",
+  "timing_scope": "one warm generate() call: text + denoise + decode, the decode through a finished mp4 (x264 encode included, as sol-engine's video_vae_seconds); PNG frames and model load excluded",
+  "total_s": 9.273648442,
+  "vsa": {
+    "calls": 336,
+    "density": 0.24382716049382716,
+    "selected_tiles": 380534784.0,
+    "total_tiles": 1560674304.0,
+    "video_density": 0.2,
+    "video_selected_tiles": 295034880.0,
+    "video_total_tiles": 1475174400.0
+  },
+  "warm_steady_state": true,
+  "warmup_requests": 1,
+  "workload": {
+    "duration_s": 5,
+    "height": 480,
+    "measured_steps": 8,
+    "num_frames": 124,
+    "prompt_name": "default",
+    "prompt_sha256": "2ace2f9d38833121232f53b2370134915944f561f2b954ac519d180afbce6091",
+    "seed": 1024,
+    "sequence_length": 14890,
+    "task": "t2va",
+    "text_tokens": 46,
+    "width": 832
+  }
+}

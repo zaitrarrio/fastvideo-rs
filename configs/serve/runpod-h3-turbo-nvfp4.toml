@@ -1,0 +1,69 @@
+# fv-serve on Runpod: the H3 NVFP4 tier, FastH3 4-step VSA DataFree NVFP4
+# (docs/ports/fasth3-nvfp4.md, docs/perf/h3-nvfp4-tier-options.md). Opt-in:
+# h3-turbo stays the default H3 tier.
+#
+# Secrets as in runpod.toml. Weights (R2: weights_source r2):
+# $FV_WEIGHTS/fasth3-4step-vsa-nvfp4 (the release's ModelOpt NVFP4
+# transformer/ and its published NVFP4 vae/ shards 1-2) and
+# $FV_WEIGHTS/h3-base (text encoder, tokenizer, audio VAE, and the vae/'s
+# byte-identical third shard).
+#
+# The video decoder is the release's own NVFP4 VAE (owner decision
+# 2026-10-14); FASTVIDEO_H3_VAE_NVFP4=0 decodes with h3-base's vae/ (MXFP8
+# linears). NVFP4 tensor cores only (sm_100 / sm_120), no bf16 fallback.
+# Text-to-video with audio, 4 DMD forwards (the release's ladder 999/749/500/
+# 250, VSA-H3 at 0.9), 768p by default and 480p, 5-15 s. The TAEH3 preview of
+# this recipe is h3-turbo-nvfp4-preview (runpod-h3-turbo-nvfp4-preview.toml).
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+
+[[models]]
+id = "fasth3-4step-vsa-nvfp4"
+family = "h3"
+recipe = "h3-turbo-nvfp4"
+weights = "${FV_WEIGHTS}/fasth3-4step-vsa-nvfp4"
+# The ModelOpt NVFP4 DiT and the published NVFP4 vae/ (shards 1-2): this
+# tree. The text encoder, tokenizer, audio VAE and the vae/'s third shard
+# (byte-identical): the catalog's text_weights, ${FV_WEIGHTS}/h3-base.
+resident = true
+served_names = ["h3-turbo-nvfp4"]
+warmup = true
+
+[aliases]
+"MiniMax-H3-Turbo-NVFP4" = "fasth3-4step-vsa-nvfp4"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = false
+ltx = false
+reactor = false
+native = true
+
+[limits]
+queue_max = 32
+body_max_mb = 64
+
+[gateway]
+pool = "fasth3-4step-nvfp4"

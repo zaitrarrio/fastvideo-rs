@@ -906,6 +906,10 @@ impl H3InferenceContract {
             }
             // The Trim's published NVFP4 DiT runs the same contract.
             n if is_trim_nvfp4_recipe(n) => Ok(Self::fasth3_8step()),
+            // The FastH3 V2 / 4-step NVFP4 releases: their trees' own contracts.
+            n if is_nvfp4_release_recipe(n) => {
+                Ok(nvfp4_release_contract(n).unwrap_or_else(Self::fasth3_8step))
+            }
             "4step-vsa" | "preview-vsa" | "fasth3-4step-vsa" => {
                 Ok(Self::fasth3_preview_lora_vsa())
             }
@@ -919,7 +923,7 @@ impl H3InferenceContract {
             "sol-h3" | "sol_h3" | "sol-h3-t2v" | "sol-h3-i2v" | "sol-h3-ref2va"
             | "sol_h3_ref2va" => Ok(Self::sol_h3()),
             other => Err(format!(
-                "unknown H3 recipe '{other}' (8step|trim-8step|4step-vsa|4step-dense|sol-h3|sol-h3-spark|sol-h3-rtx|base|base-<N>step|h3-plug-4step|h3-plug-cfg|larry-turbo[-<N>step]|lightx2v-turbo[-<N>step]|lightx2v-turbo-v0.1[-<N>step]|vdn-h3-<N>step)"
+                "unknown H3 recipe '{other}' (8step|trim-8step|trim-8step-nvfp4[-fp4attn]|v2-nvfp4|4step-vsa-nvfp4|4step-vsa|4step-dense|sol-h3|sol-h3-spark|sol-h3-rtx|base|base-<N>step|h3-plug-4step|h3-plug-cfg|larry-turbo[-<N>step]|lightx2v-turbo[-<N>step]|lightx2v-turbo-v0.1[-<N>step]|vdn-h3-<N>step)"
             )),
         }
     }
@@ -934,7 +938,42 @@ pub fn is_trim_nvfp4_recipe(name: &str) -> bool {
     matches!(
         name,
         "trim-8step-nvfp4" | "fasth3-trim-8step-nvfp4" | "fasth3-trim-nvfp4" | "h3-trim-nvfp4"
+    ) || is_trim_nvfp4_fp4attn_recipe(name)
+}
+
+/// The Trim NVFP4 with the VSA fine stage on sparse FP4 tensor cores: the
+/// opt-in "fastest" H3 tier (owner decision 2026-10-14; 9.21 / 24.64 s denoise
+/// at 480p / 768p on an RTX PRO 6000, about 20 GiB peak; a different model
+/// from V2 and not gate-equivalent, docs/perf/h3-nvfp4-tier-options.md option
+/// 7). The recipe turns the FP4 attention on (`FASTVIDEO_H3_VSA_FP4=1`
+/// semantics: required, an error on a device without the kernel), so no
+/// process-wide variable is needed; `FASTVIDEO_H3_VSA_FP4=0` still turns it off.
+pub fn is_trim_nvfp4_fp4attn_recipe(name: &str) -> bool {
+    matches!(
+        name,
+        "trim-8step-nvfp4-fp4attn" | "fasth3-trim-nvfp4-fast" | "h3-trim-nvfp4-fast"
     )
+}
+
+/// The contract of a FastH3 V2 / 4-step NVFP4 release recipe (the ModelOpt
+/// `transformer/` and published NVFP4 `vae/` of the `fasth3-v2-nvfp4` /
+/// `fasth3-4step-vsa-nvfp4` trees, docs/ports/fasth3-nvfp4.md): the
+/// `fastvideo_inference.json` each tree publishes. V2: the 8-step V2
+/// contract; 4-step: the Preview VSA full checkpoint's DMD ladder (VSA 0.9).
+/// `None` for any other name.
+pub fn nvfp4_release_contract(name: &str) -> Option<H3InferenceContract> {
+    match name {
+        "v2-nvfp4" | "fasth3-v2-nvfp4" | "h3-v2-nvfp4" => Some(H3InferenceContract::fasth3_8step()),
+        "4step-vsa-nvfp4" | "fasth3-4step-vsa-nvfp4" | "h3-turbo-nvfp4" => {
+            Some(H3InferenceContract::fasth3_4step_vsa())
+        }
+        _ => None,
+    }
+}
+
+/// A FastH3 V2 / 4-step NVFP4 release recipe ([`nvfp4_release_contract`]).
+pub fn is_nvfp4_release_recipe(name: &str) -> bool {
+    nvfp4_release_contract(name).is_some()
 }
 
 pub fn base_recipe_forwards(name: &str) -> Option<usize> {
@@ -1600,6 +1639,29 @@ mod tests {
         assert_eq!(H3VideoVaeConfig { decoder_num_layers: 36, ..trim.clone() }, base);
         // Same chunking, so the same decoded frame counts.
         assert_eq!(trim.temporal_decode_plan(37), base.temporal_decode_plan(37));
+    }
+
+    /// The NVFP4 tier's recipes run their trees' published contracts; the
+    /// Trim "fastest" recipe is a Trim NVFP4 recipe with FP4 attention.
+    #[test]
+    fn nvfp4_release_recipes_run_their_published_contracts() {
+        for name in ["v2-nvfp4", "fasth3-v2-nvfp4", "h3-v2-nvfp4"] {
+            assert_eq!(H3InferenceContract::named(name).unwrap(), H3InferenceContract::fasth3_8step(), "{name}");
+            assert!(is_nvfp4_release_recipe(name) && !is_trim_nvfp4_recipe(name));
+        }
+        for name in ["4step-vsa-nvfp4", "fasth3-4step-vsa-nvfp4", "h3-turbo-nvfp4"] {
+            let c = H3InferenceContract::named(name).unwrap();
+            assert_eq!(c, H3InferenceContract::fasth3_4step_vsa(), "{name}");
+            assert_eq!((c.dmd_denoising_steps.as_slice(), c.vsa_sparsity), (&[999, 749, 500, 250][..], 0.9));
+            assert!(is_nvfp4_release_recipe(name) && !is_trim_nvfp4_recipe(name));
+            // Not the Preview LoRA recipe: the release is the merged model.
+            assert!(crate::h3::lora::FastH3PreviewVariant::from_recipe(name).is_none());
+        }
+        for name in ["trim-8step-nvfp4-fp4attn", "fasth3-trim-nvfp4-fast", "h3-trim-nvfp4-fast"] {
+            assert!(is_trim_nvfp4_recipe(name) && is_trim_nvfp4_fp4attn_recipe(name), "{name}");
+            assert_eq!(H3InferenceContract::named(name).unwrap(), H3InferenceContract::fasth3_8step());
+        }
+        assert!(!is_trim_nvfp4_fp4attn_recipe("trim-8step-nvfp4") && !is_nvfp4_release_recipe("4step-vsa"));
     }
 
     #[test]

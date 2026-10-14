@@ -1,0 +1,73 @@
+# fv-serve on Runpod: the H3 NVFP4 tier, FastH3 V2 NVFP4 (8 steps;
+# docs/ports/fasth3-nvfp4.md, docs/perf/h3-nvfp4-tier-options.md). Opt-in:
+# h3-turbo stays the default H3 tier.
+#
+# Secrets as in runpod.toml. Weights (R2: weights_source r2):
+# $FV_WEIGHTS/fasth3-v2-nvfp4 (the release's ModelOpt NVFP4 transformer/ and
+# its published NVFP4 vae/ shards 1-2) and $FV_WEIGHTS/h3-base (text encoder,
+# tokenizer, audio VAE, and the vae/'s byte-identical third shard).
+#
+# The video decoder is the release's own NVFP4 VAE (owner decision
+# 2026-10-14: gate pass against bf16 and MXFP8, 5 GiB less peak, never
+# slower); FASTVIDEO_H3_VAE_NVFP4=0 decodes with h3-base's vae/ (MXFP8
+# linears), the decoder this checkpoint ran before. The VSA fine stage runs on
+# sparse FP4 tensor cores where the sm_120 kernel exists.
+#
+# NVFP4 tensor cores only (sm_100 / sm_120: B200, RTX PRO 6000): on any other
+# GPU the model is refused, there is no bf16 fallback. Text-to-video with
+# audio, 8 DMD forwards, VSA-H3 at 0.8, 768p by default and 480p, 5-15 s.
+# Its own pool: the TAEH3 preview of this recipe is h3-v2-nvfp4-preview
+# (runpod-h3-v2-nvfp4-preview.toml).
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+
+[[models]]
+id = "fasth3-v2-nvfp4"
+family = "h3"
+recipe = "h3-v2-nvfp4"
+weights = "${FV_WEIGHTS}/fasth3-v2-nvfp4"
+# The ModelOpt NVFP4 DiT and the published NVFP4 vae/ (shards 1-2): this
+# tree. The text encoder, tokenizer, audio VAE and the vae/'s third shard
+# (byte-identical): the catalog's text_weights, ${FV_WEIGHTS}/h3-base.
+resident = true
+served_names = ["h3-v2-nvfp4"]
+warmup = true
+
+[aliases]
+"MiniMax-H3-V2-NVFP4" = "fasth3-v2-nvfp4"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = false
+ltx = false
+reactor = false
+native = true
+
+[limits]
+queue_max = 32
+body_max_mb = 64
+
+[gateway]
+pool = "fasth3-v2-nvfp4"
