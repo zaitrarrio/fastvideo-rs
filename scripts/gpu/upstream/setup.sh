@@ -22,6 +22,11 @@ SGLANG_REV="${SGLANG_REV:-6fa3f9df11c8bdbc0e3b4ddc87a3d873343aca72}"    # RTX509
 LTX2_REV="${LTX2_REV:-fd4ded7f2d88d3da713abcdd4ad41ecc4a9314ca}"        # ltx25/RTX5090 README
 FV_REPO="${FV_REPO:-https://github.com/hao-ai-lab/FastVideo.git}"
 FV_REV="${FV_REV:-e90be598e56138af5c82590f0d72f6fa2dfce400}"            # FastVideo main, 2026-09-24
+# FastH3 NVFP4 on sm_120 (docs/inference/fasth3_rtx_pro_6000.md upstream; docs/ports/fasth3-nvfp4.md here):
+# FastVideo main with the ModelOpt NVFP4 conversion and the block-sparse FP4 attention, and the CUTLASS commit its
+# Modal driver (scripts/benchmarks/minimax_h3_pro6000/app.py) builds fastvideo-kernel against.
+FV_NVFP4_REV="${FV_NVFP4_REV:-d5253fd71055927f12aa6c4aa679b93a00238851}"   # FastVideo main, 2026-10-09
+CUTLASS_REV="${CUTLASS_REV:-e67e63c331d6e4b729047c95cf6b92c8454cba89}"
 
 export UV_PYTHON_INSTALL_DIR="$UP/python"   # interpreters on the volume: venvs survive the pod
 export UV_CACHE_DIR="${UV_CACHE_DIR:-/root/.cache/uv}"   # container disk: keep small-file churn off the shared volume
@@ -100,6 +105,36 @@ install_fastvideo() {
   (cd "$SRC/FastVideo" && uv pip install -q --python "$v/bin/python" --torch-backend cu130 \
       --prerelease allow --no-sources -e ".[fasth3]") || return 1
   smoke "$v/bin/python" fastvideo || return 1
+  echo "$stamp" >"$v/.stamp"
+}
+
+# FastVideo @ FV_NVFP4_REV as its RTX PRO 6000 FastH3 NVFP4 page runs it: the package with --no-sources (torch
+# 2.12 cu130), then fastvideo-kernel built from the checkout for sm_120a with the SageAttention3 FP4 kernels
+# (attn_qat_infer: dense and block-sparse FP4 attention) and without the Hopper TK kernels, against CUTLASS_REV.
+# The build needs nvcc (CUDA 12.8+) but no GPU: the arch is explicit. FlashInfer (mm_fp4, nvfp4_quantize) JITs
+# its kernels on first use, which also needs nvcc at run time.
+install_fastvideo_nvfp4() {
+  local v="$UP/fastvideo-nvfp4" stamp="fastvideo-nvfp4:$FV_NVFP4_REV:cutlass:$CUTLASS_REV:v1"
+  local src="$SRC/FastVideo-nvfp4"
+  stamp_ok "$v" "$stamp" && { slog "fastvideo-nvfp4 venv ok"; return 0; }
+  checkout "$FV_REPO" "$FV_NVFP4_REV" "$src" || return 1
+  venv_new "$v" 3.12 || return 1
+  slog "installing FastVideo @ $FV_NVFP4_REV (torch cu130, --no-sources)"
+  (cd "$src" && uv pip install -q --python "$v/bin/python" --torch-backend cu130 --prerelease allow --no-sources -e .) || return 1
+  uv pip install -q --python "$v/bin/python" 'cmake==3.31.6' ninja 'scikit-build-core>=0.10' pybind11 || return 1
+  if [[ ! -d "$SRC/cutlass/.git" ]] || [[ "$(git -C "$SRC/cutlass" rev-parse HEAD 2>/dev/null)" != "$CUTLASS_REV" ]]; then
+    checkout https://github.com/NVIDIA/cutlass.git "$CUTLASS_REV" "$SRC/cutlass" || return 1
+  fi
+  rm -rf "$src/fastvideo-kernel/include/cutlass" && ln -s "$SRC/cutlass" "$src/fastvideo-kernel/include/cutlass"
+  mkdir -p "$UP/wheels"
+  rm -f "$UP"/wheels/fastvideo_kernel-*.whl
+  slog "building fastvideo-kernel (attn_qat_infer, sm_120a)"
+  (cd "$src/fastvideo-kernel" && env PATH="$v/bin:$PATH" TORCH_CUDA_ARCH_LIST=12.0a MAX_JOBS="${MAX_JOBS:-$(nproc)}" \
+      CC=gcc CXX=g++ CUDAHOSTCXX=g++ \
+      CMAKE_ARGS="-DFASTVIDEO_KERNEL_BUILD_ATTN_QAT_INFER=ON -DFASTVIDEO_KERNEL_BUILD_TK=OFF -DGPU_BACKEND=CUDA -DCMAKE_CUDA_ARCHITECTURES=120a" \
+      "$v/bin/python" -m pip wheel . --no-build-isolation --no-deps -w "$UP/wheels") || return 1
+  uv pip install -q --python "$v/bin/python" --no-deps --reinstall "$UP"/wheels/fastvideo_kernel-*.whl || return 1
+  smoke "$v/bin/python" fastvideo, fastvideo_kernel, flashinfer || return 1
   echo "$stamp" >"$v/.stamp"
 }
 

@@ -947,3 +947,29 @@ LoRA and the stage's small JSON files. Published the same way (`r2-publish-hub.s
 
 The served model reads `vdn-h3-dmd-250-turbo/stage-dmd-step-250` with `vdn-h3-stage-b-2000/stage-b-step-2000` as its
 shared directory (`H3Recipe.vdn_shared`; verify cell `vdn-h3-8step`).
+
+## 15. FastH3 V2 / 4-step NVFP4, ModelOpt layout (2026-10-14, owner approval of the same day)
+
+Two trees, published Hub → R2 from one CPU pod with `scripts/gpu/r2-publish-hub.sh up fasth3-v2-nvfp4
+fasth3-4step-vsa-nvfp4` (python:3.12-slim, 16 vCPU, $0.48/hr, 21 min: 5 min per tree at ~180 MB/s, then
+`verify --deep --record` re-reading every byte at ~270 MB/s, 408 s). Every LFS file was checked against its Hub LFS
+SHA-256 before its upload completed (the 32 rows now in `weights-sha256.tsv`). Logs:
+`artifacts/ports/fasth3-nvfp4/publish/`. `down` removed only the pod's own staged bundle (by its full key); the pod
+was checked gone (404). docs/ports/fasth3-nvfp4.md §1.
+
+| Tree | Rev | Files | Bytes | Manifest SHA-256 |
+|---|---|---:|---:|---|
+| `fasth3-v2-nvfp4` | `0aa5247ba4a5d3f9f4fdb99536d8cf55bdc5e2f0` | 21 | 55,193,972,704 | `dd1501250b64a90f0788c89a684d4643b9a0733a3f29f9d271929e9bf054292d` |
+| `fasth3-4step-vsa-nvfp4` | `d7adcabeb19a81bb79cf9c4a04f5e366f1f2e90a` | 26 | 55,193,988,103 | `0a2eb49d9f8a5e8def61a63da9fcaf1411b3c8c80d6b0aa1da698b4418024068` |
+
+Each holds `transformer/` (14 shards, 53.48 GB: ModelOpt NVFP4 FFN in all 50 blocks, bf16 attention, AdaLN and the
+rest), `vae/config.json`, the two `vae/` shards that differ (1.71 GB: the 36-block VAE with NVFP4 decoder-transformer
+linears) and its index, and the README; the 4-step tree also its root JSONs (`fastvideo_inference.json`,
+`checkpoint_*.json`, `modular_model_index.json`, `provenance.json`), which differ from V2's.
+
+**Shared, so not duplicated** (Hub LFS SHA-256 / git blob compared file by file, 2026-10-14): `text_encoder/` (14
+shards + configs), `tokenizer/`, `processor/`, `audio_vae/`, `vae/diffusion_pytorch_model-00003-of-00003.safetensors`
+and LICENSE are byte-identical to `h3-base` @ `42ed227` and `h3-8step` @ `3da2ddf`; V2-NVFP4's root JSONs
+(`fastvideo_inference.json`, `checkpoint_*.json`, `modular_model_index.json`), schedulers, NOTICE and
+LICENSE-Qwen3-VL equal `h3-8step`'s, and the 4-step's schedulers equal `h3-base`'s. The small files neither R2 tree
+holds come from the Hub at the pinned revisions (`fasth3-nvfp4-pod.sh`). Neither tree is on the 500 GB EU volume.

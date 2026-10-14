@@ -2159,12 +2159,60 @@ impl Block {
         i: usize,
         cfg: &H3TransformerConfig,
         gate: bool,
+        attn_quant: Option<QuantKind>,
     ) -> Result<Self> {
         #[cfg(feature = "cuda")]
         {
             let (hidden, d) = (cfg.hidden_size, cfg.attention_head_dim);
             let p = format!("transformer_blocks.{i}");
             let m = nv.map();
+            if let super::nvfp4::Nvfp4Layout::ModelOpt(opts) = nv.layout() {
+                // ModelOpt (FastH3 V2 / 4-step NVFP4): the FFN as published, the
+                // attention from the same tree's bf16 weights, either quantized
+                // to NVFP4 here or under the block's FASTVIDEO_H3_QUANT kind.
+                let [ff_in, ff_out] = nv.modelopt_ffn(cfg, i)?;
+                let attn = if opts.attention {
+                    let [qkvg, to_out] = nv.modelopt_attention(cfg, i, gate)?;
+                    Attention {
+                        qkvg,
+                        to_out,
+                        has_gate: gate,
+                        norm_q: pinned_weight(m, &format!("{p}.attn.norm_q.weight"), &[d], &mut None)?,
+                        norm_k: pinned_weight(m, &format!("{p}.attn.norm_k.weight"), &[d], &mut None)?,
+                        heads: cfg.num_attention_heads,
+                        head_dim: d,
+                        eps: cfg.qk_norm_eps as f32,
+                        vdn: None,
+                    }
+                } else {
+                    let mut a = Attention::load(m, &format!("{p}.attn"), cfg, gate, &mut None)?;
+                    if let Some(kind) = attn_quant {
+                        let inner = cfg.inner_dim();
+                        let q = |rows| Section { rows, quantized: true };
+                        let mut qkv = match kind {
+                            QuantKind::W8A8 => vec![q(inner), q(inner), q(inner)],
+                            QuantKind::Mxfp8 => vec![q(3 * inner)],
+                        };
+                        if gate {
+                            qkv.push(Section { rows: inner, quantized: false });
+                        }
+                        a.qkvg.quantize(kind, qkv)?;
+                        a.to_out.quantize(kind, vec![q(hidden)])?;
+                    }
+                    a
+                };
+                return Ok(Self {
+                    norm1: pinned_weight(m, &format!("{p}.norm1.weight"), &[hidden], &mut None)?,
+                    norm2: pinned_weight(m, &format!("{p}.norm2.weight"), &[hidden], &mut None)?,
+                    attn,
+                    ff: FeedForward {
+                        ff_in,
+                        ff_out,
+                        ffn_dim: cfg.ffn_dim,
+                    },
+                });
+            }
+            let _ = attn_quant;
             let [qkvg, to_out, ff_in, ff_out] = nv.device_linears(cfg, i, gate)?;
             Ok(Self {
                 norm1: pinned_weight(m, &format!("{p}.norm1.weight"), &[hidden], &mut None)?,
@@ -2189,7 +2237,7 @@ impl Block {
         }
         #[cfg(not(feature = "cuda"))]
         {
-            let _ = (nv, i, cfg, gate);
+            let _ = (nv, i, cfg, gate, attn_quant);
             Err(msg("h3 nvfp4: needs a CUDA build"))
         }
     }
@@ -2659,14 +2707,41 @@ impl H3Transformer {
             AdaLnTable::load_or_precompute_with(&cfg, map, schedule, adaln_cache, lora)
         })?;
         let plan = H3QuantPlan::new(quant, cfg.num_layers, cfg.num_refiner_layers);
+        // A ModelOpt NVFP4 DiT keeps its attention bf16 in the file: unless it
+        // is quantized to NVFP4 at load, it follows FASTVIDEO_H3_QUANT's plan.
+        let modelopt = nvfp4.and_then(|nv| match nv.layout() {
+            super::nvfp4::Nvfp4Layout::ModelOpt(o) => Some(o),
+            super::nvfp4::Nvfp4Layout::Comfy => None,
+        });
+        let attn_plan = match modelopt {
+            Some(o) if !o.attention => Some(H3QuantPlan::new(
+                QuantMode::from_env().map_err(msg)?,
+                cfg.num_layers,
+                cfg.num_refiner_layers,
+            )),
+            _ => None,
+        };
         if quant != QuantMode::Off {
+            let modelopt_what;
             crate::wan::log::info(format_args!(
                 "h3 quant: {} ({} reference linears incl. refiner; {}), bf16 activations",
                 quant.as_str(),
                 plan.reference_linear_count(),
-                match quant {
-                    QuantMode::W8A8 => "FastVideo tensorwise W8A8, all blocks + refiner",
-                    QuantMode::Nvfp4 => "FastH3 Trim's published NVFP4 W4A4 (cuBLASLt VEC16_UE4M3), every block's attention + FFN; refiner bf16",
+                match (quant, modelopt) {
+                    (QuantMode::W8A8, _) => "FastVideo tensorwise W8A8, all blocks + refiner",
+                    (QuantMode::Nvfp4, Some(o)) => {
+                        modelopt_what = format!(
+                            "ModelOpt NVFP4 W4A4 FFN as published ({} activation scale); attention {}; refiner bf16",
+                            if o.static_act { "calibrated static" } else { "dynamic" },
+                            if o.attention {
+                                "NVFP4 quantized at load (static_6, per projection)".to_owned()
+                            } else {
+                                format!("{} per FASTVIDEO_H3_QUANT", attn_plan.map_or("off", |p| p.mode.as_str()))
+                            }
+                        );
+                        modelopt_what.as_str()
+                    }
+                    (QuantMode::Nvfp4, None) => "FastH3 Trim's published NVFP4 W4A4 (cuBLASLt VEC16_UE4M3), every block's attention + FFN; refiner bf16",
                     _ => "Sol-H3 MXFP8, blocks 2..=46 (pruned stacks: the last 3 stay bf16)",
                 }
             ));
@@ -2674,7 +2749,7 @@ impl H3Transformer {
         let mut blocks = BlockWeights::new("h3 dit", residency);
         for i in 0..cfg.num_layers {
             let block = match nvfp4 {
-                Some(nv) => Block::load_nvfp4(nv, i, &cfg, with_gate)?,
+                Some(nv) => Block::load_nvfp4(nv, i, &cfg, with_gate, attn_plan.and_then(|p| p.dit_block(i)))?,
                 None => Block::load_quant(
                     map,
                     &format!("transformer_blocks.{i}"),
