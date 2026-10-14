@@ -1973,6 +1973,11 @@ additions and readings; everything is re-exported from the crate root.
   `h3-trim`, pool / control preset `fasth3-trim`, `configs/serve/runpod-h3-trim.toml`)
   = FastH3 Trim 8-step: 42 of the 50 blocks, rank-16 AdaLN, VSA-H3 at 0.8, its
   own lightweight VAE, text-to-video with audio only (docs/ports/h3-trim.md).
+  Untiered, opt-in `fasth3-trim-nvfp4` (served `h3-trim-nvfp4`, pool / control
+  preset `fasth3-trim-nvfp4`, `configs/serve/runpod-h3-trim-nvfp4.toml`) = the
+  same recipe with the release's NVFP4 DiT (`fasth3-trim-8step-nvfp4` beside the
+  Trim tree): every block's attention and FFN linears W4A4 on NVFP4 tensor cores,
+  sm_100 / sm_120 only (the load fails elsewhere; docs/ports/h3-trim.md §5).
   Untiered `h3-larry-turbo` / `h3-lightx2v-turbo` (pools / control presets of the
   same names, `configs/serve/runpod-h3-{larry,lightx2v}-turbo.toml`) = base
   MiniMax-H3 with a Turbo LoRA folded in at load, as the

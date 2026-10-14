@@ -11,9 +11,9 @@
 #   h3-trim-nvfp4-validate.sh down <pod>      delete the pod and check it is gone
 #
 # Nothing is written to R2 or a volume: the R2 plan (presigned GETs from the read-only key, valid 3 h) reaches the pod
-# gzip + base64 in its env (FV_PLAN_GZ_B64), and the scripts and binary are the image's. With stock in EU-RO-1 the
+# gzip + base64 in its env (FV_PLAN_GZ_B64_0.._3, 60 kB each), and the scripts and binary are the image's. With stock in EU-RO-1 the
 # pod mounts the EU weight volume (h3-base, read only); otherwise (or FV_NO_VOLUME=1) h3-base's tokenizer, audio VAE
-# and FP8 text encoder come from R2 too.
+# and bf16 text encoder come from R2 too (the encoder is streamed once per prompt, then cached).
 #
 # Env: RUNPOD_API_KEY; FV_POD_CAP_S (backstop, default 4200); FV_MIN_BALANCE (default 12: refuse unless the balance
 # is 3 above it); FV_MAX_DPH (default 2.70); FV_SKIP / FV_CELL_RES (passed to the pod script).
@@ -69,14 +69,14 @@ case "$cmd" in
     # The plan, from the read-only key (it cannot write): the Trim trees, and h3-base's parts in r2 mode.
     ro=/root/.config/fv
     FV_WEIGHTS_R2_ACCESS_KEY_ID="$(cat "$ro/r2_weights_ro_access_key_id")" FV_WEIGHTS_R2_SECRET_ACCESS_KEY="$(cat "$ro/r2_weights_ro_secret_access_key")" \
-      python3 "$HERE/r2-weights.py" plan fasth3-trim-8step fasth3-trim-8step-nvfp4 h3-base h3-base/text_encoder_fp8 --ttl 10800 --out "$tmp/plan.json"
+      python3 "$HERE/r2-weights.py" plan fasth3-trim-8step fasth3-trim-8step-nvfp4 h3-base --ttl 10800 --out "$tmp/plan.json"
     python3 "$HERE/h3-trim-nvfp4-plan.py" "$tmp/plan.json" "$mode" "$tmp/plan.b64"
     # The runtime image has curl and coreutils but no Python: uv brings one (r2-fetch.py, the prompt files). The pod
     # deletes itself 20 min after DONE (Runpod's pod-scoped RUNPOD_API_KEY / RUNPOD_POD_ID); the backstop regardless.
-    start='mkdir -p /opt/fv /srv && printf %s "$FV_PLAN_GZ_B64" | base64 -d | gunzip >/opt/fv/plan.json && chmod 600 /opt/fv/plan.json \
+    start='mkdir -p /opt/fv /srv && printf %s "${FV_PLAN_GZ_B64_0:-}" "${FV_PLAN_GZ_B64_1:-}" "${FV_PLAN_GZ_B64_2:-}" "${FV_PLAN_GZ_B64_3:-}" | base64 -d | gunzip >/opt/fv/plan.json && chmod 600 /opt/fv/plan.json \
 && (curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uvbin UV_NO_MODIFY_PATH=1 sh) >>/srv/log.txt 2>&1 \
 && export PATH=/opt/uvbin:$PATH UV_PYTHON_INSTALL_DIR=/opt/uvpy && uv python install 3.12 >>/srv/log.txt 2>&1 && export PY="$(uv python find 3.12)" \
-&& (cd /srv && "$PY" -m http.server 8000 >/dev/null 2>&1 &) && unset FV_PLAN_GZ_B64 && bash /opt/fastvideo-rs/scripts/gpu/h3-trim-nvfp4-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
+&& (cd /srv && "$PY" -m http.server 8000 >/dev/null 2>&1 &) && unset FV_PLAN_GZ_B64_0 FV_PLAN_GZ_B64_1 FV_PLAN_GZ_B64_2 FV_PLAN_GZ_B64_3 && bash /opt/fastvideo-rs/scripts/gpu/h3-trim-nvfp4-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
 sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; sleep infinity'
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"
@@ -85,14 +85,16 @@ sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
       --rawfile plan "$tmp/plan.b64" --arg skip "${FV_SKIP:-}" --arg res "${FV_CELL_RES:-}" '{
         name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU", gpuCount: 1, gpuTypeIds: $gpus,
         gpuTypePriority: "custom", dataCenterIds: $dcs, ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-lc", $start],
-        env: ({FV_PLAN_GZ_B64: $plan, FV_WEIGHTS_MODE: $mode}
+        env: ({FV_WEIGHTS_MODE: $mode}
+              + ([range(0; $plan | length; 60000) as $i | {key: "FV_PLAN_GZ_B64_\($i / 60000 | floor)", value: $plan[$i:$i + 60000]}] | from_entries)
               + (if $skip != "" then {FV_SKIP: $skip} else {} end) + (if $res != "" then {FV_CELL_RES: $res} else {} end))
       } + (if $mode == "volume" then {containerDiskInGb: 120, networkVolumeId: $vol, volumeMountPath: "/workspace"}
-           else {containerDiskInGb: 150, allowedCudaVersions: ["13.0"]} end)')"
+           else {containerDiskInGb: 200, allowedCudaVersions: ["13.0"]} end)')"
     resp="$(rest POST /pods <<<"$payload")" || { log "pod create failed: $(head -c 600 <<<"$resp")"; exit 1; }
     id="$(jq -r '.id // empty' <<<"$resp")"
     [[ -n "$id" ]] || { log "pod create failed: $(head -c 400 <<<"$resp")"; exit 1; }
-    setsid nohup bash -c "sleep $CAP_S; curl -sS -X DELETE -H @<(printf 'Authorization: Bearer %s\\n' \"\$RUNPOD_API_KEY\") '$API/pods/$id' >/dev/null 2>&1" >/dev/null 2>&1 </dev/null &
+    # A distinctive marker in the backstop's command line, so no generic pkill pattern matches it.
+    setsid nohup bash -c ": fv-h3trim-nvfp4-backstop-$id; sleep $CAP_S; curl -sS -X DELETE -H @<(printf 'Authorization: Bearer %s\\n' \"\$RUNPOD_API_KEY\") '$API/pods/$id' >/dev/null 2>&1" >/dev/null 2>&1 </dev/null &
     log "pod $id $(jq -r '.machine.gpuDisplayName // .gpuTypeId // "?"' <<<"$resp") \$$(jq -r '.costPerHr' <<<"$resp")/hr; balance \$$bal; backstop pid $! deletes it after ${CAP_S}s; https://$id-8000.proxy.runpod.net/"
     echo "$id"
     ;;

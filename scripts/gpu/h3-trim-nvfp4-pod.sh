@@ -63,7 +63,7 @@ step kernels env FV_NVFP4_BENCH=0 "$BIN" --out $SRV/kernels kernels --groups nvf
 
 # ---- 3. parity: per-step latents, bf16 vs MXFP8 vs NVFP4 --------------------------------------------------------
 P="${FV_PROMPT:-A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>}"
-COMMON=(--text-encoder resident-fp8 --text-weights "$W/h3-base" --text-cache "$L/text-cache" --adaln-cache "$L/trim-adaln.cache")
+COMMON=(--text-encoder streamed --text-weights "$W/h3-base" --text-cache "$L/text-cache" --adaln-cache "$L/trim-adaln.cache")
 recipe_of() { [[ "$1" == nvfp4 ]] && echo trim-8step-nvfp4 || echo trim-8step; }
 quant_of() { case "$1" in bf16) echo off ;; mxfp8) echo mxfp8 ;; *) echo mxfp8 ;; esac; }
 parity() { # <arm>

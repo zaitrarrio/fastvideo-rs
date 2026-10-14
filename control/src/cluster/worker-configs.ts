@@ -325,6 +325,73 @@ body_max_mb = 64
 [gateway]
 pool = "fasth3-trim"
 `,
+  "runpod-h3-trim-nvfp4.toml": `# fv-serve on Runpod: FastH3 Trim 8-step with the release's NVFP4 DiT
+# (docs/ports/h3-trim.md §5). Opt-in: the default Trim pool (runpod-h3-trim.toml)
+# serves the bf16 checkpoint with MXFP8 linears.
+#
+# Secrets as in runpod.toml. Weights: $FV_WEIGHTS/fasth3-trim-8step (the
+# config, schedule, AdaLN, refiner and lightweight VAE), beside it
+# $FV_WEIGHTS/fasth3-trim-8step-nvfp4 (the published NVFP4 file: every block's
+# attention and FFN linears, W4A4 on NVFP4 tensor cores), and
+# $FV_WEIGHTS/h3-base (text encoder, tokenizer, audio VAE).
+#
+# NVFP4 tensor cores only (sm_100 / sm_120: B200, RTX PRO 6000): on any other
+# GPU the model fails to load, there is no bf16 fallback. Text-to-video with
+# audio only, 8 DMD forwards, VSA-H3 at 0.8, 768p by default and 480p, 5-15 s.
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+
+[[models]]
+id = "fasth3-trim-nvfp4"
+family = "h3"
+recipe = "h3-trim-nvfp4"
+weights = "\${FV_WEIGHTS}/fasth3-trim-8step"
+# The NVFP4 DiT: \${FV_WEIGHTS}/fasth3-trim-8step-nvfp4, read beside weights.
+# The text encoder, tokenizer and audio VAE: the catalog's text_weights,
+# \${FV_WEIGHTS}/h3-base.
+resident = true
+served_names = ["h3-trim-nvfp4"]
+warmup = true
+
+[aliases]
+"MiniMax-H3-Trim-NVFP4" = "fasth3-trim-nvfp4"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = false
+ltx = false
+reactor = false
+native = true
+
+[limits]
+queue_max = 32
+body_max_mb = 64
+
+[gateway]
+pool = "fasth3-trim-nvfp4"
+`,
   "runpod-h3-larry-turbo.toml": `# fv-serve on Runpod: MiniMax-H3 + the larry Turbo LoRA (docs/ports/h3-turbo-loras.md),
 # what the MiniMaxAI/MiniMax-H3-Turbo-Lora Space runs by default. Secrets as in
 # runpod.toml. Weights: $FV_WEIGHTS/h3-base (transformer, text encoder, VAEs) and
