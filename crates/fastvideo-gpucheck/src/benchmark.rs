@@ -39,11 +39,15 @@ pub struct PromptSpec {
     pub name: String,
     pub prompt: String,
     pub seed: u64,
+    /// `(height, width)` for this prompt only (`"height"` / `"width"` in the
+    /// file): one process then runs several canvases (H3 `h3 gen --prompts`).
+    pub size: Option<(usize, usize)>,
 }
 
 /// A prompt-set file: `{"name": .., "source": .., "prompts": [{"name",
-/// "prompt", "seed"}]}` (`seed` defaults to `default_seed`). A bare JSON
-/// list of such objects is accepted too.
+/// "prompt", "seed"}]}` (`seed` defaults to `default_seed`; optional
+/// `"height"` + `"width"` set that prompt's canvas). A bare JSON list of such
+/// objects is accepted too.
 pub fn load_prompts(path: &Path, default_seed: u64) -> anyhow::Result<Vec<PromptSpec>> {
     let text =
         std::fs::read_to_string(path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
@@ -73,10 +77,16 @@ pub fn load_prompts(path: &Path, default_seed: u64) -> anyhow::Result<Vec<Prompt
             );
         }
         let seed = p["seed"].as_u64().unwrap_or(default_seed);
+        let size = match (p["height"].as_u64(), p["width"].as_u64()) {
+            (Some(h), Some(w)) => Some((h as usize, w as usize)),
+            (None, None) => None,
+            _ => anyhow::bail!("{}: prompt `{name}`: give height and width together", path.display()),
+        };
         out.push(PromptSpec {
             name,
             prompt: prompt.to_string(),
             seed,
+            size,
         });
     }
     if out.is_empty() {
@@ -393,6 +403,7 @@ mod tests {
             name: n.into(),
             prompt: n.into(),
             seed: 1,
+            size: None,
         };
         let s = summarize(&[
             (p("a"), json!({"total_s": 4.0, "denoise_s": 3.0})),

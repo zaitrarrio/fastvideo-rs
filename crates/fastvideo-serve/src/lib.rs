@@ -62,6 +62,7 @@ pub mod health;
 pub mod ingest;
 pub mod log_ship;
 pub mod metrics;
+pub mod moderation;
 pub mod multiworker;
 pub mod native;
 pub mod stream_outputs;

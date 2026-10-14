@@ -1,0 +1,26 @@
+compare-dumps audio_sigmas                 rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 6
+compare-dumps audio_step01                 rel_l2 1.038e-3  cosine 0.999999  max_abs 3.733e-3  n 13248
+compare-dumps audio_step02                 rel_l2 2.898e-3  cosine 0.999996  max_abs 1.069e-2  n 13248
+compare-dumps audio_step03                 rel_l2 9.137e-3  cosine 0.999958  max_abs 2.579e-2  n 13248
+compare-dumps audio_step04                 rel_l2 3.650e-2  cosine 0.999344  max_abs 1.159e-1  n 13248
+compare-dumps audio_step05                 rel_l2 9.991e-2  cosine 0.995173  max_abs 3.488e-1  n 13248
+compare-dumps audio_step00_in              rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 13248
+compare-dumps audio_vel_step01             rel_l2 1.173e-2  cosine 0.999932  max_abs 4.853e-2  n 13248
+compare-dumps audio_vel_step02             rel_l2 1.940e-2  cosine 0.999812  max_abs 8.471e-2  n 13248
+compare-dumps audio_vel_step03             rel_l2 4.532e-2  cosine 0.998975  max_abs 1.413e-1  n 13248
+compare-dumps audio_vel_step04             rel_l2 7.643e-2  cosine 0.997147  max_abs 4.795e-1  n 13248
+compare-dumps audio_vel_step05             rel_l2 8.189e-2  cosine 0.996694  max_abs 7.005e-1  n 13248
+compare-dumps text_hidden                  rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 133120
+compare-dumps video_sigmas                 rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 6
+compare-dumps video_step01                 rel_l2 8.262e-4  cosine 1.000000  max_abs 1.051e-2  n 1385280
+compare-dumps video_step02                 rel_l2 9.163e-3  cosine 0.999958  max_abs 2.451e-1  n 1385280
+compare-dumps video_step03                 rel_l2 2.401e-2  cosine 0.999712  max_abs 5.535e-1  n 1385280
+compare-dumps video_step04                 rel_l2 6.958e-2  cosine 0.997579  max_abs 1.220e0  n 1385280
+compare-dumps video_step05                 rel_l2 2.425e-1  cosine 0.970566  max_abs 5.116e0  n 1385280
+compare-dumps video_step00_in              rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 1385280
+compare-dumps video_vel_step01             rel_l2 1.672e-2  cosine 0.999898  max_abs 5.151e-1  n 1385280
+compare-dumps video_vel_step02             rel_l2 1.814e-1  cosine 0.983518  max_abs 7.592e0  n 1385280
+compare-dumps video_vel_step03             rel_l2 1.929e-1  cosine 0.981410  max_abs 5.711e0  n 1385280
+compare-dumps video_vel_step04             rel_l2 1.912e-1  cosine 0.981717  max_abs 5.717e0  n 1385280
+compare-dumps video_vel_step05             rel_l2 2.105e-1  cosine 0.977828  max_abs 5.225e0  n 1385280
+[PASS] stage compare-dumps → gpucheck-out/compare-dumps.json (0.3s)

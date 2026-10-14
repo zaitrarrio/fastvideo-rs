@@ -26,7 +26,7 @@ const SERVE = join(HERE, "../configs/serve");
 const CONSOLE = join(HERE, "../crates/fastvideo-serve/console");
 
 /** The worker configs src/cluster/spec.ts's presets send inline. */
-export const INLINE_WORKER_CONFIGS = ["runpod-ltx-pro.toml", "runpod-ltx-a2v.toml", "runpod-ltx-ref2v.toml", "runpod-h3-ref2v.toml", "runpod-h3-trim.toml", "runpod-longlive.toml"];
+export const INLINE_WORKER_CONFIGS = ["runpod-ltx-pro.toml", "runpod-ltx-a2v.toml", "runpod-ltx-ref2v.toml", "runpod-h3-ref2v.toml", "runpod-h3-trim.toml", "runpod-h3-larry-turbo.toml", "runpod-h3-lightx2v-turbo.toml", "runpod-longlive.toml"];
 
 const lit = (s) => "`" + s.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\{/g, "\\${") + "`";
 

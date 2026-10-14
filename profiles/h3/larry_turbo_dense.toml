@@ -1,0 +1,21 @@
+# MiniMax-H3 Turbo LoRA (larryvrh/MiniMax-H3-Turbo-Lora ckpt850 EMA), as the
+# MiniMaxAI/MiniMax-H3-Turbo-Lora Space runs it: base MiniMax-H3 with the
+# adapter folded into the bf16 weights at load, dense attention, uniform grid
+# at shifts 12 / 3. Here the folded weights are then quantized to MXFP8
+# (merge first, quantize second), with bf16 activations.
+# docs/ports/h3-turbo-loras.md.
+
+[id]
+name = "larry_turbo_dense"
+family = "minimax_h3"
+description = "MiniMax-H3 + larry Turbo LoRA (6 forwards), dense attention, MXFP8."
+
+[pipeline]
+model = "h3"
+recipe = "larry-turbo"
+
+[techniques.dense_attention]
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]

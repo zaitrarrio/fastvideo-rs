@@ -325,6 +325,143 @@ body_max_mb = 64
 [gateway]
 pool = "fasth3-trim"
 `,
+  "runpod-h3-larry-turbo.toml": `# fv-serve on Runpod: MiniMax-H3 + the larry Turbo LoRA (docs/ports/h3-turbo-loras.md),
+# what the MiniMaxAI/MiniMax-H3-Turbo-Lora Space runs by default. Secrets as in
+# runpod.toml. Weights: $FV_WEIGHTS/h3-base (transformer, text encoder, VAEs) and
+# $FV_WEIGHTS/h3-turbo-loras/larry (larryvrh/MiniMax-H3-Turbo-Lora ckpt850 EMA,
+# Apache-2.0), folded into the bf16 transformer at load, then MXFP8.
+#
+# T2V and FL2VA (first and/or last frame): 6 forwards (the card's 6-8; \`steps = 4\`
+# is the design point, softer; \`steps = 5\` is the Space's own default, diffusers
+# num_inference_steps = 6), dense attention, shifts 12 / 3, no CFG, 768p and 480p,
+# 5-15 s. \`lora_strength\` is the card's sharpness dial (1.0; >1 against smear,
+# <1 against grain). Its own pool: one H3 DiT per 96 GB card.
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+
+[[models]]
+id = "h3-larry-turbo"
+family = "h3"
+recipe = "h3-larry-turbo"
+weights = "\${FV_WEIGHTS}/h3-base"
+# The adapter: \${FV_WEIGHTS}/h3-turbo-loras/larry, found beside h3-base.
+resident = true
+served_names = ["h3-larry-turbo"]
+steps = 6
+lora_strength = 1.0
+warmup = true
+
+[aliases]
+"MiniMax-H3-Turbo-Lora" = "h3-larry-turbo"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = false
+ltx = false
+reactor = false
+native = true
+
+# The optional NCII prompt guard (off by default; needs $FV_WEIGHTS/auxiliary/ncii-light-guard):
+# [moderation]
+# ncii = "keyframe"
+
+[limits]
+queue_max = 32
+body_max_mb = 64
+
+[gateway]
+pool = "h3-larry-turbo"
+`,
+  "runpod-h3-lightx2v-turbo.toml": `# fv-serve on Runpod: MiniMax-H3 + the lightx2v Turbo LoRA (docs/ports/h3-turbo-loras.md),
+# the second LoRA the MiniMaxAI/MiniMax-H3-Turbo-Lora Space offers, here its newest
+# 4-step 768p file. Secrets as in runpod.toml. Weights: $FV_WEIGHTS/h3-base and
+# $FV_WEIGHTS/h3-turbo-loras/lightx2v (lightx2v/Minimax-h3-Turbo FL2VA/T2VA 4-step
+# v1.2 768p, Apache-2.0, alpha 8 / rank 128), folded into the bf16 transformer at
+# load, then MXFP8.
+#
+# T2V and FL2VA (first and/or last frame): 4 forwards at the file's training shifts
+# 6 / 3, dense attention, no CFG, 768p and 480p, 5-15 s. Its own pool: one H3 DiT
+# per 96 GB card.
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+
+[[models]]
+id = "h3-lightx2v-turbo"
+family = "h3"
+recipe = "h3-lightx2v-turbo"
+weights = "\${FV_WEIGHTS}/h3-base"
+# The adapter: \${FV_WEIGHTS}/h3-turbo-loras/lightx2v, found beside h3-base.
+resident = true
+served_names = ["h3-lightx2v-turbo"]
+steps = 4
+lora_strength = 1.0
+warmup = true
+
+[aliases]
+"MiniMax-H3-Turbo-Lightx2v" = "h3-lightx2v-turbo"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = false
+ltx = false
+reactor = false
+native = true
+
+# The optional NCII prompt guard (off by default; needs $FV_WEIGHTS/auxiliary/ncii-light-guard):
+# [moderation]
+# ncii = "keyframe"
+
+[limits]
+queue_max = 32
+body_max_mb = 64
+
+[gateway]
+pool = "h3-lightx2v-turbo"
+`,
   "runpod-longlive.toml": `# fv-serve on a Runpod pod: LongLive-1.3B causal streaming (the SF-Wan
 # engine with the LongLive transformer and its prompt-switch KV re-cache,
 # docs/serve/research-longlive.md). Secrets as in runpod.toml.

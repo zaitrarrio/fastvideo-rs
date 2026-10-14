@@ -491,6 +491,9 @@ pub enum ErrorCode {
     InvalidInput,
     GenerationTimeout,
     GenerationFailed,
+    /// The prompt moderator (`[moderation]`, the NCII guard) refused the
+    /// opening prompt (ours; docs/ports/h3-turbo-loras.md).
+    ContentPolicy,
     // diagnostic
     InvalidMessage,
     NotConfigured,
@@ -508,6 +511,7 @@ impl ErrorCode {
             ErrorCode::InvalidInput => "invalid_input",
             ErrorCode::GenerationTimeout => "generation_timeout",
             ErrorCode::GenerationFailed => "generation_failed",
+            ErrorCode::ContentPolicy => "content_policy",
             ErrorCode::InvalidMessage => "invalid_message",
             ErrorCode::NotConfigured => "not_configured",
             ErrorCode::ImmutableSettings => "immutable_settings",
@@ -530,6 +534,8 @@ pub enum RejectReason {
     InvalidAudio,
     InvalidImage,
     QueueFull,
+    /// The prompt moderator refused the update (ours).
+    ContentPolicy,
 }
 
 impl RejectReason {
@@ -542,6 +548,7 @@ impl RejectReason {
             RejectReason::InvalidAudio => "invalid_audio",
             RejectReason::InvalidImage => "invalid_image",
             RejectReason::QueueFull => "queue_full",
+            RejectReason::ContentPolicy => "content_policy",
         }
     }
 }

@@ -381,3 +381,14 @@ qwen3-4b-instruct-gguf	LICENSE	11343	sha256:832dd9e00a68dd83b3c3fb9f5588dad7dcf3
 qwen3-4b-instruct-gguf	provenance.json	1718	sha256:cb79523c160e669fb0abb7e47436591c244c306b753d213537d52da870dd790b
 qwen3-vl-4b-instruct-gguf	Qwen3VL-4B-Instruct-Q8_0.gguf	4280406144	sha256:054721f478bc5fa6beffb7f38eae575d45298f88cbb8d2f83ef675a727863eb1
 qwen3-vl-4b-instruct-gguf	mmproj-Qwen3VL-4B-Instruct-F16.gguf	836180256	sha256:256f3a43bd4205ffef48d6b92715e1e70b5b0e9aef06522584967513a9985331
+# h3-turbo-loras/*, auxiliary/ncii-light-guard: Hub LFS SHA-256 at the pinned revisions (safetensors, tokenizer.json);
+# the small files hashed from the Hub at the same revisions on 2026-10-14 (git blob SHA-1 matched by publish-hub).
+h3-turbo-loras/larry	README.md	7448	sha256:0445dc4967a9ecf6ac5c8e37b4c86b837021d99058bc5af68f188b1d66b62b65
+h3-turbo-loras/larry	minimax_h3_turbo_4step_ema_ckpt850.safetensors	779849816	sha256:5a6eeba171cf183020a4ad48774bb2968f29f8168afd6ec17a04987f3528b4ea
+h3-turbo-loras/lightx2v	README.md	1396	sha256:4939071ba0e40d0c6f3266afd366862b1062fa040b96d4b457c7d582dc9e4936
+h3-turbo-loras/lightx2v	minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors	1383677808	sha256:c3d4a2cf618efea71b9e21a4baaa12d412f1eb6c2b6f86efacaf0ebb6814b689
+auxiliary/ncii-light-guard	README.md	8105	sha256:ca84f41bbd3f15e3cf74e8dc487184f67a95cfb95f93f04389b4d483504bfde3
+auxiliary/ncii-light-guard	config.json	1656	sha256:f5f502df0fcb01fe450c02ab3652e858071ac07fb5ff64da771fe6833132e2f8
+auxiliary/ncii-light-guard	model.safetensors	536225696	sha256:d5d7ca0d96cd5215cceb0dc2acff4aeb79a862ea9eec2f4cc0407d4c215c49b0
+auxiliary/ncii-light-guard	tokenizer.json	33385105	sha256:ceeb59cb0d50ec7e025bda69a115d3315090bf0d75c91774e73b43767e4c9202
+auxiliary/ncii-light-guard	tokenizer_config.json	839	sha256:2dd3876e70d1e247b653b345f4b145c77d86500da756dec9f47b23c3649fbeb0
