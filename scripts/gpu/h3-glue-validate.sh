@@ -40,8 +40,8 @@ balance() { gql <<<'{"query":"{ myself { clientBalance } }"}' | jq -r '.data.mys
 cmd="${1:-}"
 case "$cmd" in
   up)
-    base="${2:?the branch point's release fv-gpucheck}"
-    new="${3:?this branch's release fv-gpucheck}"
+    base_bin="${2:?release fv-gpucheck of the branch point}"
+    new_bin="${3:?release fv-gpucheck of this branch}"
     : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
     bal="$(balance)"
     awk -v b="$bal" -v m="$MIN_BALANCE" 'BEGIN{exit !(b+0 >= m+3)}' || { log "balance \$$bal too close to the \$$MIN_BALANCE floor"; exit 1; }
@@ -91,7 +91,7 @@ for name, pick in (("plan-nvfp4.json", lambda d: d == "fasth3-v2-nvfp4"), ("plan
 print(" ".join(f"{t['dest']}:{len(t['files'])}f/{t['total_bytes'] / 1e9:.1f}GB" for t in plan["trees"]), file=sys.stderr)
 PYEOF
     rm -f "$tmp/plan-all.json"
-    cp "$base" "$tmp/b/base/fv-gpucheck" && cp "$new" "$tmp/b/new/fv-gpucheck"
+    cp "$base_bin" "$tmp/b/base/fv-gpucheck" && cp "$new_bin" "$tmp/b/new/fv-gpucheck"
     chmod 755 "$tmp/b/base/fv-gpucheck" "$tmp/b/new/fv-gpucheck"
     cp "$HERE/r2-fetch.py" "$HERE/h3-glue-pod.sh" "$HERE/prompts-hd5.json" "$tmp/b/"
     tar czf "$tmp/bundle.tgz" -C "$tmp/b" .
