@@ -1,0 +1,37 @@
+b.tgz: OK
+downloading uv 0.13.1 x86_64-unknown-linux-gnu
+installing to /opt/uvbin
+  uv
+  uvx
+everything's installed!
+Downloading cpython-3.12.15-linux-x86_64-gnu (download) (32.7MiB)
+ Downloaded cpython-3.12.15-linux-x86_64-gnu (download)
+Installed Python 3.12.15 in 769ms
+ + cpython-3.12.15-linux-x86_64-gnu (python3.12)
+warning: `/root/.local/bin` is not on your PATH. To use installed Python executables, run `export PATH="/root/.local/bin:$PATH"` or `uv python update-shell`.
+2026-10-14T16:12:45Z start: weights /fvw (r2); base fv-gpucheck 0.1.1; new fv-gpucheck 0.1.1
+2026-10-14T16:12:45Z begin fetch-turbo
+2026-10-14T16:12:45Z begin fetch-nvfp4
+2026-10-14T16:12:45Z begin kernels
+2026-10-14T16:12:58Z end kernels rc=0 13s
+2026-10-14T16:14:57Z end fetch-nvfp4 rc=0 132s
+2026-10-14T16:16:13Z end fetch-turbo rc=0 208s
+2026-10-14T16:16:13Z begin turbo-base
+2026-10-14T16:17:09Z end turbo-base rc=0 56s
+2026-10-14T16:17:09Z begin turbo-new
+2026-10-14T16:17:57Z end turbo-new rc=0 48s
+2026-10-14T16:17:57Z begin trace-turbo-base
+2026-10-14T16:18:12Z end trace-turbo-base rc=0 15s
+2026-10-14T16:18:12Z begin trace-turbo-new
+2026-10-14T16:18:27Z end trace-turbo-new rc=0 15s
+2026-10-14T16:18:27Z begin nvfp4-base
+2026-10-14T16:20:04Z end nvfp4-base rc=0 97s
+2026-10-14T16:20:04Z begin nvfp4-new
+2026-10-14T16:21:24Z end nvfp4-new rc=0 80s
+2026-10-14T16:21:24Z begin trace-nvfp4-base
+2026-10-14T16:21:53Z end trace-nvfp4-base rc=0 29s
+2026-10-14T16:21:53Z begin trace-nvfp4-new
+2026-10-14T16:22:20Z end trace-nvfp4-new rc=0 27s
+2026-10-14T16:22:20Z begin parity
+2026-10-14T16:22:22Z end parity rc=0 2s
+2026-10-14T16:22:22Z end: 0 step(s) failed
