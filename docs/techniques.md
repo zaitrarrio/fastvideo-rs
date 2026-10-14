@@ -569,6 +569,20 @@ Spend: $0.56 for a 480p smoke run (it found that NVRTC's PTX was refused by
 the pod's driver, so `attn_fp8.cu` now ships ahead-of-time cubins), and $3.93
 for the full run (pod `55cs1dp5beoswb`, 1 h 53 min).
 
+### H3 VAE decode tile batching (RTX PRO 6000, 2026-10-14)
+
+`FASTVIDEO_H3_VAE_TILE_BATCH` stays an env-flag seam with its default (8,
+which runs a 768p chunk's 28 tiles as 4 forwards of 7). Setting it to 196
+caps at one chunk's tiles (28 per forward, 7 forwards per decode): on
+`h3/fasth3_4step_vsa`, 3 seeds, same pod and image, the 768p video VAE goes
+from 6.292 s to 6.192 s (**−1.6 %**, generate −0.3 %), and 480p does not move
+(2.666 s against 2.669 s). Frames are byte-identical at both resolutions, so
+the quality gate cannot change. The decoder is GEMM-bound (about 1.9 PFLOP per
+768p decode, roughly 300 TFLOPS achieved). Fewer forwards only save launch and
+wave-tail time. The work order's stop rule (< 10 %) ended the work there, and
+no default changed. Numbers, per-op profile and method:
+docs/perf/h3-vae-tile-batching.md.
+
 ## LongLive-Plug recipes
 
 NVlabs LongLive-Plug LoRAs (arXiv 2609.38154) are merged into the base

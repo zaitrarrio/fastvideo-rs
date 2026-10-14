@@ -1,0 +1,1 @@
+{"rc":0,"wall_s":263,"peak_mib":61773,"tile_batch":"196","res":"480p","profile":"h3/fasth3_4step_vsa","env":"FASTVIDEO_ATTN_SAGE=0 FASTVIDEO_FLASH_KERNEL=cudnn FASTVIDEO_H3_VAE_CHECK=1 FASTVIDEO_H3_VAE_TILE_BATCH=196"}
