@@ -47,6 +47,9 @@ use fastvideo_models::h3::config::{
     H3AudioVaeConfig, H3Geometry, H3InferenceContract, H3SigmaSource, H3TransformerConfig,
     H3VideoVaeConfig, H3_AUDIO_CHANNELS, H3_FPS,
 };
+use fastvideo_models::h3::turbo_lora::{
+    parse_turbo_recipe, turbo_strength, TURBO_LORA_STRENGTH_ENV,
+};
 use fastvideo_models::h3::lora::{
     check_preview_base, is_sol_h3_recipe, preview_lora_strength, sol_h3_forces_ref2va,
     FastH3PreviewVariant, SolH3AdapterSpec, FASTH3_LORA_STRENGTH_ENV,
@@ -269,6 +272,10 @@ pub struct H3PipelineOptions {
     /// Sol-H3 / FastH3 Preview adapter file. When unset, the recipe's adapter is
     /// searched under and beside the weight root.
     pub adapter: Option<PathBuf>,
+    /// Strength of a Turbo LoRA recipe (`larry-turbo`, `lightx2v-turbo`;
+    /// [`fastvideo_models::h3::turbo_lora`]). `None`:
+    /// `FV_H3_TURBO_LORA_STRENGTH`, else 1.0.
+    pub adapter_strength: Option<f32>,
     /// Ref2VA reference-image fit. `Auto` is 2048 short-edge, and `match` for Sol-H3.
     pub reference_image_resize: ReferenceImageResize,
     /// Where the refiner and DiT blocks live. `None`: `FASTVIDEO_DIT_OFFLOAD`,
@@ -804,6 +811,9 @@ fn dit_tree_identity(
         }
     } else if name.is_some_and(|r| PlugRecipe::named(r).is_some()) {
         return Ok(None);
+    } else if name.is_some_and(|r| parse_turbo_recipe(r).is_some()) {
+        // Turbo LoRAs: merged at load, no pre-quantized tree (yet).
+        return Ok(None);
     } else {
         None
     };
@@ -1103,6 +1113,7 @@ impl H3Pipeline {
                 FastH3PreviewVariant::from_recipe(r).is_some()
                     || is_sol_h3_recipe(r)
                     || PlugRecipe::is_plug(r)
+                    || parse_turbo_recipe(r).is_some()
             });
             let skip_adaln = !adapter && options.adaln_cache.as_deref().is_some_and(Path::is_file);
             let adaln = |k: &str| k.contains(".adaln_proj.");
@@ -1337,6 +1348,38 @@ impl H3Pipeline {
                 fuse.effective_scale(),
                 fuse.path,
                 plug.licence
+            ));
+            Some(fuse)
+        } else if let Some(turbo) = options.recipe.as_deref().and_then(parse_turbo_recipe) {
+            // MiniMax-H3 Turbo LoRA (the MiniMax-H3-Turbo-Lora Space): base
+            // MiniMax-H3 + one adapter folded into the bf16 weights here, before
+            // any quantization of the linears (`load_linear` merges, the block
+            // loader quantizes what it returns).
+            let (turbo, forwards) = turbo.map_err(msg)?;
+            if options.ref2va {
+                return Err(msg(format!(
+                    "recipe {}: the Turbo LoRAs are T2VA / FL2VA (base transformer), not Ref2VA",
+                    turbo.stem()
+                )));
+            }
+            let strength = turbo_strength(
+                options.adapter_strength,
+                std::env::var(TURBO_LORA_STRENGTH_ENV).ok().as_deref(),
+            )
+            .map_err(msg)?;
+            let path = turbo.resolve(root, options.adapter.as_deref()).map_err(msg)?;
+            let fuse = super::lora::H3LoraFuse::open_turbo(&map, &path, turbo, strength)?;
+            crate::wan::log::info(format_args!(
+                "h3 {}: fuse {} pairs rank={} alpha={} multiplier={} strength={strength} forwards={forwards} ({}; {} @ {}; licence {})",
+                turbo.stem(),
+                fuse.pairs_total,
+                fuse.rank,
+                turbo.alpha().map_or("rank".to_owned(), |a| a.to_string()),
+                fuse.effective_scale(),
+                fuse.path,
+                turbo.hub_repo(),
+                &turbo.hub_revision()[..7],
+                turbo.licence()
             ));
             Some(fuse)
         } else {

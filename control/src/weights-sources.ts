@@ -14,6 +14,7 @@ export const HUB_TREES: Record<string, HubTree> = {
   "fasth3-trim-8step": { repo: "FastVideo/FastVideo-FastH3-Trim-8-Step", revision: "9edcb6511d5ff8dd1579e8eec8afee77e098b8d8", globs: ["transformer/*","vae/*","scheduler/*","audio_scheduler/*","fastvideo_inference.json","metadata.json","README.md"] },
   "fasth3-trim-8step-nvfp4": { repo: "FastVideo/FastVideo-FastH3-Trim-Comfy", revision: "f66c13dc17391dd4da99242a407918b92bf7d5fc", globs: ["diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors","README.md"] },
   "vdn-h3-stage-b-2000": { repo: "OpenVDN/vdn-minimax-h3", revision: "2ce18deb1d1c6b115d6bb3732f3750fdbac95173", globs: ["stage-b-step-2000/*","LICENSE","README.md","modular_model_index.json"] },
+  "vdn-h3-dmd-250-turbo": { repo: "OpenVDN/vdn-minimax-h3", revision: "2ce18deb1d1c6b115d6bb3732f3750fdbac95173", globs: ["stage-dmd-step-250/adapters/turbo/*","stage-dmd-step-250/adapters/default/adapter_spec.json","stage-dmd-step-250/diffusers/config.json","stage-dmd-step-250/linear_branch/config.json","stage-dmd-step-250/metadata.json","stage-dmd-step-250/model_spec.json"] },
   "upscaler": { repo: "LBH-123-AI/Minimax_h3_latent_Upscaler", revision: "3f941d5d182014dd5c0a5e16330420ee2d4aa0c6", globs: ["minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors"] },
   "h3-to-ltx": { repo: "Efficient-Large-Model/H3-to-LTX-Latent-Adapter", revision: "1792c42689a0f22de880eaf57a187c6a373a636d", globs: ["config.json","model.safetensors"] },
   "ltx2": { repo: "Lightricks/LTX-2", revision: "dfcc2108383fe1aaa0584bdf55d368a4bdadd90c", globs: ["tokenizer/*","text_encoder/model-*","text_encoder/*.json","vae/*","audio_vae/*","vocoder/*","ltx-2-19b-distilled.safetensors"] },
@@ -49,6 +50,9 @@ export const HUB_TREES: Record<string, HubTree> = {
   "wan22-t2v-a14b": { repo: "Wan-AI/Wan2.2-T2V-A14B-Diffusers", revision: "5be7df9619b54f4e2667b2755bc6a756675b5cd7", globs: ["model_index.json","scheduler/*","tokenizer/*","text_encoder/*","transformer/*","transformer_2/*","vae/*"] },
   "lingbot-video-moe-30b-a3b": { repo: "robbyant/lingbot-video-moe-30b-a3b", revision: "f2e538f64afe00cc4ae674db2aeb52e2945edfd5", globs: ["model_index.json","scheduler/*","transformer/*","refiner/*","text_encoder/*","processor/*","vae/*"] },
   "cosmos3-super": { repo: "nvidia/Cosmos3-Super", revision: "f543c56225b2e04d0ad141e29655be3a45d9c455", globs: ["model_index.json","scheduler/*","transformer/*","vae/*","text_tokenizer/*"] },
+  "h3-turbo-loras/larry": { repo: "larryvrh/MiniMax-H3-Turbo-Lora", revision: "43a74557ac3f6539db8e0f2a959d03feb7a81480", globs: ["README.md","minimax_h3_turbo_4step_ema_ckpt850.safetensors"] },
+  "h3-turbo-loras/lightx2v": { repo: "lightx2v/Minimax-h3-Turbo", revision: "3ec17a324ced54151364f24f8b5fb6bf7e26414f", globs: ["README.md","minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors"] },
+  "auxiliary/ncii-light-guard": { repo: "hfmlsoc/ncii-light-guard-v01", revision: "6a44e8b4b608078db164b0c946947922b2b98eab", globs: ["README.md","config.json","model.safetensors","tokenizer.json","tokenizer_config.json"] },
 };
 /** auxiliary/ files: a pinned URL, its SHA-256 and size (verify-weights.sh aux). */
 export const AUX_FILES: { path: string; url: string; sha256: string; size: number }[] = [

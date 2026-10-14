@@ -1,0 +1,220 @@
+{
+ "rows": [
+  {
+   "param": "norm_out.linear",
+   "kind": "norm_out.linear (final AdaLN)",
+   "shape": [
+    10752,
+    2688
+   ],
+   "merged_rel_l2": 2.294204225684628e-06,
+   "delta_rel_l2": 0.007579127683755677,
+   "delta_norm_vs_base": 0.0003026815829798579,
+   "frac_differ": 4.49805573270975e-06,
+   "max_ulps": 1
+  },
+  {
+   "param": "token_refiner.refiner_blocks.0.attn.to_q",
+   "kind": "refiner attn.to_q/k/v (QKV thirds)",
+   "missing": "ours"
+  },
+  {
+   "param": "token_refiner.refiner_blocks.1.attn.to_out.0",
+   "kind": "refiner attn.to_out.0 (out_proj)",
+   "shape": [
+    5376,
+    7168
+   ],
+   "merged_rel_l2": 1.2288283250804526e-06,
+   "delta_rel_l2": 0.010974811418976528,
+   "delta_norm_vs_base": 0.00011196290870429948,
+   "frac_differ": 3.658995336415816e-06,
+   "max_ulps": 1
+  },
+  {
+   "param": "token_refiner.refiner_blocks.1.ff.net.0.proj",
+   "kind": "refiner ff.net.0.proj (fc1, SwiGLU swap)",
+   "shape": [
+    28672,
+    5376
+   ],
+   "merged_rel_l2": 1.978879287155272e-06,
+   "delta_rel_l2": 0.010626858546385296,
+   "delta_norm_vs_base": 0.00018636118329595774,
+   "frac_differ": 5.3652289773331206e-06,
+   "max_ulps": 1
+  },
+  {
+   "param": "transformer_blocks.0.attn.to_k",
+   "kind": "attn.to_q/k/v (QKV thirds)",
+   "missing": "ours"
+  },
+  {
+   "param": "transformer_blocks.0.attn.to_out.0",
+   "kind": "attn.to_out.0 (out_proj)",
+   "shape": [
+    5376,
+    7168
+   ],
+   "merged_rel_l2": 4.016122028662297e-06,
+   "delta_rel_l2": 0.010860094313507375,
+   "delta_norm_vs_base": 0.0003698142245411873,
+   "frac_differ": 7.811046781994047e-06,
+   "max_ulps": 2
+  },
+  {
+   "param": "transformer_blocks.0.attn.to_q",
+   "kind": "attn.to_q/k/v (QKV thirds)",
+   "missing": "ours"
+  },
+  {
+   "param": "transformer_blocks.0.attn.to_v",
+   "kind": "attn.to_q/k/v (QKV thirds)",
+   "missing": "ours"
+  },
+  {
+   "param": "transformer_blocks.0.ff.net.0.proj",
+   "kind": "ff.net.0.proj (fc1, SwiGLU swap)",
+   "shape": [
+    28672,
+    5376
+   ],
+   "merged_rel_l2": 1.0899531102250271e-06,
+   "delta_rel_l2": 0.011260892805549315,
+   "delta_norm_vs_base": 9.688933641882613e-05,
+   "frac_differ": 3.788746944090136e-06,
+   "max_ulps": 1
+  },
+  {
+   "param": "transformer_blocks.0.ff.net.2",
+   "kind": "ff.net.2 (fc2)",
+   "shape": [
+    5376,
+    14336
+   ],
+   "merged_rel_l2": 4.5219806205449333e-07,
+   "delta_rel_l2": 0.01181819359252658,
+   "delta_norm_vs_base": 3.8270754885161296e-05,
+   "frac_differ": 2.283628295068027e-06,
+   "max_ulps": 1
+  },
+  {
+   "param": "transformer_blocks.25.adaln_proj.linear",
+   "kind": "block adaln_proj.linear",
+   "shape": [
+    96768,
+    2688
+   ],
+   "merged_rel_l2": 6.805481814674886e-07,
+   "delta_rel_l2": 0.007768939052789268,
+   "delta_norm_vs_base": 8.776643517194316e-05,
+   "frac_differ": 1.049546337632275e-06,
+   "max_ulps": 1
+  },
+  {
+   "param": "transformer_blocks.25.attn.to_q",
+   "kind": "attn.to_q/k/v (QKV thirds)",
+   "missing": "ours"
+  },
+  {
+   "param": "transformer_blocks.25.attn.to_v",
+   "kind": "attn.to_q/k/v (QKV thirds)",
+   "missing": "ours"
+  },
+  {
+   "param": "transformer_blocks.49.attn.to_k",
+   "kind": "attn.to_q/k/v (QKV thirds)",
+   "missing": "ours"
+  },
+  {
+   "param": "transformer_blocks.49.attn.to_out.0",
+   "kind": "attn.to_out.0 (out_proj)",
+   "shape": [
+    5376,
+    7168
+   ],
+   "merged_rel_l2": 3.999212209394e-06,
+   "delta_rel_l2": 0.010282179947354019,
+   "delta_norm_vs_base": 0.0003889571817126125,
+   "frac_differ": 6.9027855282738096e-06,
+   "max_ulps": 1
+  },
+  {
+   "param": "transformer_blocks.49.ff.net.0.proj",
+   "kind": "ff.net.0.proj (fc1, SwiGLU swap)",
+   "shape": [
+    28672,
+    5376
+   ],
+   "merged_rel_l2": 7.675387909947214e-06,
+   "delta_rel_l2": 0.009793322568933449,
+   "delta_norm_vs_base": 0.0007847336819395423,
+   "frac_differ": 1.0886159883875425e-05,
+   "max_ulps": 1
+  },
+  {
+   "param": "transformer_blocks.49.ff.net.2",
+   "kind": "ff.net.2 (fc2)",
+   "shape": [
+    5376,
+    14336
+   ],
+   "merged_rel_l2": 1.4029148270979163e-05,
+   "delta_rel_l2": 0.005321748411280853,
+   "delta_norm_vs_base": 0.002636377699673176,
+   "frac_differ": 2.031910176179847e-05,
+   "max_ulps": 1
+  }
+ ],
+ "by_kind": {
+  "norm_out.linear (final AdaLN)": {
+   "n": 1,
+   "merged_rel_l2": 2.294204225684628e-06,
+   "delta_rel_l2": 0.007579127683755677,
+   "frac_differ": 4.49805573270975e-06,
+   "max_ulps": 1
+  },
+  "refiner attn.to_out.0 (out_proj)": {
+   "n": 1,
+   "merged_rel_l2": 1.2288283250804526e-06,
+   "delta_rel_l2": 0.010974811418976528,
+   "frac_differ": 3.658995336415816e-06,
+   "max_ulps": 1
+  },
+  "refiner ff.net.0.proj (fc1, SwiGLU swap)": {
+   "n": 1,
+   "merged_rel_l2": 1.978879287155272e-06,
+   "delta_rel_l2": 0.010626858546385296,
+   "frac_differ": 5.3652289773331206e-06,
+   "max_ulps": 1
+  },
+  "attn.to_out.0 (out_proj)": {
+   "n": 2,
+   "merged_rel_l2": 4.016122028662297e-06,
+   "delta_rel_l2": 0.010860094313507375,
+   "frac_differ": 7.811046781994047e-06,
+   "max_ulps": 2
+  },
+  "ff.net.0.proj (fc1, SwiGLU swap)": {
+   "n": 2,
+   "merged_rel_l2": 7.675387909947214e-06,
+   "delta_rel_l2": 0.011260892805549315,
+   "frac_differ": 1.0886159883875425e-05,
+   "max_ulps": 1
+  },
+  "ff.net.2 (fc2)": {
+   "n": 2,
+   "merged_rel_l2": 1.4029148270979163e-05,
+   "delta_rel_l2": 0.01181819359252658,
+   "frac_differ": 2.031910176179847e-05,
+   "max_ulps": 1
+  },
+  "block adaln_proj.linear": {
+   "n": 1,
+   "merged_rel_l2": 6.805481814674886e-07,
+   "delta_rel_l2": 0.007768939052789268,
+   "frac_differ": 1.049546337632275e-06,
+   "max_ulps": 1
+  }
+ }
+}

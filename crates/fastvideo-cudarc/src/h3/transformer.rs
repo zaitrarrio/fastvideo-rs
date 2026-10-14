@@ -115,7 +115,9 @@ fn load_linear(
                 fastvideo_loader::prefetch::ConsumerTime::Lora,
                 t.elapsed(),
             );
-            return Linear::from_device_bf16_bias(w, bias, in_dim, out_dim);
+            let lin = Linear::from_device_bf16_bias(w, bias, in_dim, out_dim)?;
+            dump_merged(prefix, &lin)?;
+            return Ok(lin);
         }
         Err(parts) => parts,
     };
@@ -131,7 +133,33 @@ fn load_linear(
         fastvideo_loader::prefetch::ConsumerTime::Lora,
         t.elapsed(),
     );
-    Linear::from_tensors(CudaTensor::from_vec(weight, vec![out_dim, in_dim])?, bias)
+    let lin = Linear::from_tensors(CudaTensor::from_vec(weight, vec![out_dim, in_dim])?, bias)?;
+    dump_merged(prefix, &lin)?;
+    Ok(lin)
+}
+
+/// `FV_H3_DUMP_MERGED=<prefix>,...` with `FASTVIDEO_DUMP_DIR`: the weight of
+/// these adapted linears as merged at load, `merged.<prefix>` (the Turbo LoRA
+/// weight parity against the Space's fold, docs/ports/h3-turbo-loras.md).
+fn dump_merged(prefix: &str, lin: &Linear) -> Result<()> {
+    let Ok(list) = std::env::var("FV_H3_DUMP_MERGED") else {
+        return Ok(());
+    };
+    if !crate::wan::dump::enabled() || !list.split(',').any(|p| p.trim() == prefix) {
+        return Ok(());
+    }
+    let snap = lin.snapshot()?;
+    let data: Vec<f32> = match &snap.weight {
+        crate::wan::nn::SnapshotWeight::Bf16(bytes) => bytes
+            .chunks_exact(2)
+            .map(|b| f32::from_bits(u32::from(u16::from_le_bytes([b[0], b[1]])) << 16))
+            .collect(),
+        crate::wan::nn::SnapshotWeight::F32(v) => v.clone(),
+        crate::wan::nn::SnapshotWeight::Quant { .. } => {
+            return Err(msg(format!("FV_H3_DUMP_MERGED: {prefix} is already quantized")))
+        }
+    };
+    crate::wan::dump::host(&format!("merged.{prefix}"), &[snap.out_dim, snap.in_dim], &data)
 }
 
 /// The adapter merge on the device (`FASTVIDEO_H3_LORA_DEVICE`, default on):

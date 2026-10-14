@@ -6,10 +6,10 @@
 #
 # The stage-B model on its own schedule: 50 forwards on the uniform grid,
 # shifts 12 / 3, no CFG; every block attends with a chunk-aligned window
-# softmax plus the frame-wise delta-rule linear branch. Text-to-video with
+# softmax plus the frame-wise delta-rule linear branch. bf16 linears (owner
+# decision 2026-10-14; FASTVIDEO_H3_QUANT=mxfp8 opts in). Text-to-video with
 # audio, 768p by default and 480p, 4-15 s. The DiT stays resident (the hybrid
-# needs it): its own pool. The 8-step distilled model (stage-dmd-step-250,
-# the turbo adapter) is not in R2 yet (docs/ports/vdn-h3.md §0).
+# needs it): its own pool. The 8-step model is runpod-vdn-h3-8step.toml.
 
 [server]
 bind = "0.0.0.0:8000"

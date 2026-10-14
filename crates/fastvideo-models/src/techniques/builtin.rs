@@ -129,6 +129,14 @@ pub static PROFILES: &[(&str, &str)] = &[
         include_str!("../../../../profiles/h3/plug_h3_4step_engine_ladder.toml"),
     ),
     (
+        "h3/larry_turbo_dense",
+        include_str!("../../../../profiles/h3/larry_turbo_dense.toml"),
+    ),
+    (
+        "h3/lightx2v_turbo_dense",
+        include_str!("../../../../profiles/h3/lightx2v_turbo_dense.toml"),
+    ),
+    (
         "h3/sol_h3_4step_fp8attn",
         include_str!("../../../../profiles/h3/sol_h3_4step_fp8attn.toml"),
     ),

@@ -73,8 +73,25 @@ pub(crate) fn spawn(
         let (rtx, rrx) = mpsc::unbounded_channel();
         let (ctx, mut crx) = mpsc::unbounded_channel::<(Option<String>, String, serde_json::Map<String, serde_json::Value>)>();
         let driver = live.driver.clone();
+        let moderated = rt.clone();
         tokio::spawn(async move {
             while let Some((request_id, name, args)) = crx.recv().await {
+                // `[moderation]`: a refused `prompt` ends the session with the
+                // `moderation` notice (RT's moderated stop); nothing runs.
+                if let (Some(m), Some(prompt)) = (
+                    moderated.config().moderator.clone(),
+                    args.get("prompt").and_then(|v| v.as_str()),
+                ) {
+                    let visual = moderated.config().mode == Some(crate::engine::Mode::Avatar)
+                        || args
+                            .iter()
+                            .any(|(k, v)| (k.contains("image") || k.contains("video")) && !v.is_null());
+                    if let Err(e) = fastvideo_protocol::moderate(m.0.as_ref(), prompt, visual).await {
+                        tracing::warn!(conn, command = %name, "reactor: {}; stopping the session", e.message);
+                        let _ = moderated.stop_session(true, "moderation".into()).await;
+                        break;
+                    }
+                }
                 let o = driver.command(conn, &name, args).await;
                 let m = match (o, request_id) {
                     (Outcome::Reply(kind, data), r) => ServerMsg::Model { request_id: r, kind, data },

@@ -51,11 +51,29 @@ export const RECIPE_TREES: Record<string, RecipeTrees> = {
     prequant: [H3_TEXT_FP8],
     note: "Ref2VA base: transformer_ref in h3-ref2va (caps.rs ref_weights)",
   },
+  "vdn-h3-8step": {
+    catalog: "vdn-h3-8step",
+    required: ["vdn-h3-dmd-250-turbo", "vdn-h3-stage-b-2000"],
+    prequant: [H3_TEXT_FP8],
+    note: "VDN-H3 8-step: h3-base is the config's weights; the turbo LoRA in vdn-h3-dmd-250-turbo/stage-dmd-step-250, the branch and default LoRA from vdn-h3-stage-b-2000/stage-b-step-2000 (caps.rs VDN_H3_8STEP_TREE, H3Recipe vdn_weights + vdn_shared)",
+  },
   "vdn-h3-50step": {
     catalog: "vdn-h3",
     required: ["vdn-h3-stage-b-2000"],
     prequant: [H3_TEXT_FP8],
     note: "VDN-H3: h3-base is the config's weights; the linear branch and LoRA in vdn-h3-stage-b-2000/stage-b-step-2000 (caps.rs VDN_H3_TREE / VDN_H3_STAGE, H3Recipe vdn_weights; cudarc h3/pipeline.rs vdn_checkpoint)",
+  },
+  "h3-larry-turbo": {
+    catalog: "h3-larry-turbo",
+    required: ["h3-turbo-loras/larry"],
+    prequant: [H3_TEXT_FP8],
+    note: "Turbo LoRA larry: the adapter in h3-turbo-loras/larry beside h3-base (crates/fastvideo-models/src/h3/turbo_lora.rs TurboLora::resolve); no DiT tree (merged at load)",
+  },
+  "h3-lightx2v-turbo": {
+    catalog: "h3-lightx2v-turbo",
+    required: ["h3-turbo-loras/lightx2v"],
+    prequant: [H3_TEXT_FP8],
+    note: "Turbo LoRA lightx2v v1.2 768p: the adapter in h3-turbo-loras/lightx2v beside h3-base (turbo_lora.rs TurboLora::resolve); no DiT tree (merged at load)",
   },
   "h3-trim": {
     catalog: "fasth3-trim-8step",

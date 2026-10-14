@@ -117,6 +117,125 @@ impl H3LoraFuse {
         Self::from_plan(base, &adapter_map, adapter, plan, alpha, scale)
     }
 
+    /// A MiniMax-H3 Turbo adapter ([`fastvideo_models::h3::turbo_lora`]) at
+    /// `strength`. A ComfyUI-layout file (larry) has every `lora_B` mapped
+    /// onto its diffusers targets ([`Self::from_comfy`]); a PEFT file
+    /// (lightx2v) goes through the planner with the adapter's alpha, which
+    /// must match the file's `alpha` metadata when it has one.
+    pub fn open_turbo(
+        base: &WeightMap,
+        adapter: &Path,
+        lora: fastvideo_models::h3::turbo_lora::TurboLora,
+        strength: f32,
+    ) -> Result<Self> {
+        use fastvideo_models::h3::turbo_lora::{comfy_pairs, is_comfy_layout};
+        let adapter_map = WeightMap::open_files(&[adapter.to_path_buf()])?;
+        let lazy = adapter_map
+            .lazy()
+            .ok_or_else(|| msg("adapter map has no store"))?;
+        let mut keys: Vec<String> = lazy.keys().map(str::to_string).collect();
+        keys.sort();
+        let label = adapter.display().to_string();
+        if is_comfy_layout(&keys) {
+            let pairs = comfy_pairs(&keys, &label).map_err(msg)?;
+            return Self::from_comfy(base, &adapter_map, adapter, &pairs, strength);
+        }
+        let alpha = lora.alpha().ok_or_else(|| {
+            msg(format!(
+                "{label}: {} is a ComfyUI-layout adapter, this file is not",
+                lora.stem()
+            ))
+        })?;
+        if let Some(meta) = lazy.metadata().get("alpha") {
+            if meta.trim().parse::<f64>().ok() != Some(f64::from(alpha)) {
+                return Err(msg(format!(
+                    "{label}: metadata alpha {meta:?} differs from {}'s alpha {alpha}",
+                    lora.stem()
+                )));
+            }
+        }
+        let plan = plan_from_keys(&keys, lazy.metadata(), &label).map_err(msg)?;
+        Self::from_plan(base, &adapter_map, adapter, plan, alpha, strength)
+    }
+
+    /// The Space's larry fold: each ComfyUI module's `lora_B` row-mapped onto
+    /// its diffusers targets (fused-QKV thirds sharing `lora_A`, the SwiGLU
+    /// half swap, renames), `alpha = rank` per module so the multiplier is
+    /// `strength` whatever the rank (64 for the linears, 16 for the AdaLN).
+    pub fn from_comfy(
+        base: &WeightMap,
+        adapter_map: &WeightMap,
+        adapter: &Path,
+        modules: &[(String, String, String)],
+        strength: f32,
+    ) -> Result<Self> {
+        use fastvideo_models::h3::turbo_lora::{comfy_targets, map_rows};
+        let inner_dim = base
+            .shape("transformer_blocks.0.attn.to_q.weight")
+            .map(|s| s[0])
+            .ok_or_else(|| msg("h3 turbo lora: base has no transformer_blocks.0.attn.to_q"))?;
+        let mut pairs: HashMap<String, Pair> = HashMap::new();
+        let mut ranks = Vec::new();
+        for (module, a_key, b_key) in modules {
+            let (a_shape, a) = adapter_map.get_f32(a_key)?;
+            let (b_shape, b) = adapter_map.get_f32(b_key)?;
+            if a_shape.len() != 2 || b_shape.len() != 2 || a_shape[0] != b_shape[1] {
+                return Err(msg(format!(
+                    "Invalid LoRA pair for {module}: A{a_shape:?}, B{b_shape:?}"
+                )));
+            }
+            let rank = a_shape[0];
+            ranks.push(rank);
+            for t in comfy_targets(module, b_shape[0], inner_dim).map_err(msg)? {
+                let weight_key = format!("{}.weight", t.module);
+                let base_shape = base.shape(&weight_key).ok_or_else(|| {
+                    msg(format!(
+                        "LoRA target is absent from transformer: {} (from {module})",
+                        t.module
+                    ))
+                })?;
+                let b_rows = map_rows(&b, rank, t.rows).map_err(msg)?;
+                if base_shape.len() != 2
+                    || base_shape[0] * rank != b_rows.len()
+                    || base_shape[1] != a_shape[1]
+                {
+                    return Err(msg(format!(
+                        "LoRA/base mismatch for {} (from {module}): base{base_shape:?}, A{a_shape:?}, B rows {}",
+                        t.module,
+                        b_rows.len() / rank
+                    )));
+                }
+                let pair = Pair {
+                    b: b_rows,
+                    a: a.clone(),
+                    out: base_shape[0],
+                    inn: base_shape[1],
+                };
+                if pairs.insert(t.module.clone(), pair).is_some() {
+                    return Err(msg(format!("two adapter modules target {}", t.module)));
+                }
+            }
+        }
+        let rank = ranks.iter().copied().max().unwrap_or(1);
+        let multiplier = lora_multiplier(LoraFormat::Comfy, rank, 1, strength).map_err(msg)?;
+        let pairs_total = pairs.len();
+        Ok(Self {
+            factors: pairs.clone(),
+            pairs,
+            diffs: HashMap::new(),
+            replacements: HashMap::new(),
+            format: LoraFormat::Comfy,
+            multiplier,
+            diff_scale: strength,
+            rank,
+            alpha: rank as u32,
+            pairs_total,
+            diffs_total: 0,
+            replacements_total: 0,
+            path: adapter.display().to_string(),
+        })
+    }
+
     /// A LongLive-Plug H3 adapter ([`fastvideo_models::plug`]): `explicit`,
     /// else the recipe's file beside `root` (`../longlive-plug/<dir>/`). The
     /// `.pt` release (`generator_lora.pt`, tensors under `student_lora`) is
@@ -279,7 +398,7 @@ impl H3LoraFuse {
             diff_scale: scale,
             rank,
             alpha: match plan.format {
-                LoraFormat::FastvideoV2 => rank as u32,
+                LoraFormat::FastvideoV2 | LoraFormat::Comfy => rank as u32,
                 LoraFormat::Peft => alpha,
             },
             pairs_total,
@@ -651,6 +770,86 @@ mod tests {
         for (g, w) in got.iter().zip(&want) {
             assert!((g - w).abs() <= 1e-5, "{g} vs {w}");
         }
+    }
+
+    /// The larry fold against the Space's arithmetic on synthetic tensors:
+    /// `delta = strength * (B @ A)` of the fused reference module, then the
+    /// diffusers conversion (QKV thirds, fc1 `[gate; value]` -> `[value; gate]`),
+    /// with mixed ranks (64 / 16 in the real file; 2 / 1 here).
+    #[test]
+    fn comfy_fold_matches_the_space() {
+        use fastvideo_models::h3::turbo_lora::comfy_pairs;
+        let (inner, hidden, ffn, r) = (2usize, 3usize, 2usize, 2usize);
+        let ramp = |n: usize, s: f32| (0..n).map(|i| ((i as f32 + s) * 0.61).cos()).collect::<Vec<f32>>();
+        let mm = |b: &[f32], a: &[f32], out: usize, r: usize| {
+            let mut w = vec![0.0f32; out * hidden];
+            for o in 0..out {
+                for k in 0..r {
+                    for i in 0..hidden {
+                        w[o * hidden + i] += b[o * r + k] * a[k * hidden + i];
+                    }
+                }
+            }
+            w
+        };
+        let base = WeightMap::from_f32_tensors(
+            [
+                ("transformer_blocks.0.attn.to_q.weight", inner),
+                ("transformer_blocks.0.attn.to_k.weight", inner),
+                ("transformer_blocks.0.attn.to_v.weight", inner),
+                ("transformer_blocks.0.ff.net.0.proj.weight", 2 * ffn),
+                ("norm_out.linear.weight", 2),
+            ]
+            .map(|(k, out)| (k.to_string(), vec![out, hidden], vec![0.0; out * hidden])),
+        );
+        let (a_qkv, b_qkv) = (ramp(r * hidden, 1.0), ramp(3 * inner * r, 2.0));
+        let (a_fc1, b_fc1) = (ramp(r * hidden, 3.0), ramp(2 * ffn * r, 4.0));
+        let (a_ada, b_ada) = (ramp(hidden, 5.0), ramp(2, 6.0));
+        let adapter = WeightMap::from_f32_tensors([
+            ("blocks.0.attn.qkv_proj.lora_A.weight".to_string(), vec![r, hidden], a_qkv.clone()),
+            ("blocks.0.attn.qkv_proj.lora_B.weight".to_string(), vec![3 * inner, r], b_qkv.clone()),
+            ("blocks.0.mlp.fc1.lora_A.weight".to_string(), vec![r, hidden], a_fc1.clone()),
+            ("blocks.0.mlp.fc1.lora_B.weight".to_string(), vec![2 * ffn, r], b_fc1.clone()),
+            ("final_layer.adaln_proj.linear.lora_A.weight".to_string(), vec![1, hidden], a_ada.clone()),
+            ("final_layer.adaln_proj.linear.lora_B.weight".to_string(), vec![2, 1], b_ada.clone()),
+        ]);
+        let mut keys = adapter.raw_keys();
+        keys.sort();
+        let modules = comfy_pairs(&keys, "larry").unwrap();
+        let strength = 0.5f32;
+        let mut fuse =
+            H3LoraFuse::from_comfy(&base, &adapter, Path::new("larry"), &modules, strength).unwrap();
+        assert_eq!((fuse.pairs_total, fuse.rank), (5, 2));
+        assert_eq!(fuse.effective_scale(), strength);
+        let qkv = mm(&b_qkv, &a_qkv, 3 * inner, r);
+        let fc1 = mm(&b_fc1, &a_fc1, 2 * ffn, r);
+        let (gate, value) = fc1.split_at(ffn * hidden);
+        let swapped: Vec<f32> = value.iter().chain(gate).copied().collect();
+        let ada = mm(&b_ada, &a_ada, 2, 1);
+        let want: Vec<(&str, Vec<f32>)> = vec![
+            ("transformer_blocks.0.attn.to_q.weight", qkv[..inner * hidden].to_vec()),
+            ("transformer_blocks.0.attn.to_k.weight", qkv[inner * hidden..2 * inner * hidden].to_vec()),
+            ("transformer_blocks.0.attn.to_v.weight", qkv[2 * inner * hidden..].to_vec()),
+            ("transformer_blocks.0.ff.net.0.proj.weight", swapped),
+            ("norm_out.linear.weight", ada),
+        ];
+        for (param, delta) in want {
+            let mut data = vec![0.0f32; delta.len()];
+            let shape = [delta.len() / hidden, hidden];
+            assert!(fuse.touches(param), "{param}");
+            fuse.fuse(param, &mut data, &shape).unwrap();
+            for (g, w) in data.iter().zip(&delta) {
+                assert!((g - strength * w).abs() < 1e-6, "{param}: {g} vs {}", strength * w);
+            }
+        }
+        fuse.finish().unwrap();
+        // A target the base does not have is refused at open.
+        let bad = WeightMap::from_f32_tensors([(
+            "transformer_blocks.0.attn.to_q.weight".to_string(),
+            vec![inner, hidden],
+            vec![0.0; inner * hidden],
+        )]);
+        assert!(H3LoraFuse::from_comfy(&bad, &adapter, Path::new("larry"), &modules, 1.0).is_err());
     }
 
     #[test]

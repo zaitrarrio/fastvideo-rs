@@ -4,7 +4,7 @@
 //! | destination | encode | transport |
 //! |---|---|---|
 //! | WHIP (Cloudflare default, any WHIP URL) | H.264 Constrained Baseline (`[webrtc] encoder`), or VP8 / VP9 profile 0 (ffmpeg libvpx) by `codec`; Opus 48 kHz stereo | str0m peer, complete offer (no trickle) |
-//! | RTMP(S), SRT (Cloudflare or any) | ffmpeg sink: H.264 CBR closed 2 s GOP (NVENC; libx264 on CPU builds) + AAC-LC 48 kHz stereo | FLV / MPEG-TS over ffmpeg's rtmp(s)/libsrt |
+//! | RTMP(S), SRT (Cloudflare or any) | ffmpeg sink: H.264 CBR closed 2 s GOP (NVENC; libx264 on CPU builds) + AAC-LC 48 kHz stereo | FLV over ffmpeg's rtmp (RTMPS through fastvideo's verifying TLS relay, [`super::rtmps`]), MPEG-TS over libsrt; both to the address checked at start |
 //!
 //! Both take the native canvas and fps. Native streams feed the pacer's
 //! ticks straight in ([`Source::Paced`]); director and Reactor output copies
@@ -14,6 +14,7 @@
 //! destination URL and its key.
 
 use std::collections::VecDeque;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -34,13 +35,102 @@ use tokio::sync::{mpsc, Notify};
 use url::Url;
 
 use super::cloudflare::LiveInput;
-use super::spec::{looks_like_key, redact_url, scrub, OutputKind, OutputSpec};
+use super::rtmps::{client_config, RtmpsRelay, TlsTarget};
+use super::spec::{check_ip, looks_like_key, redact_url, scrub, OutputKind, OutputSpec, UrlPolicy};
 use super::{OutputState, Outputs};
 
 /// Where the encoded media goes, credentials included (never printed).
 pub(crate) enum Dest {
     Whip(WhipConfig),
-    Sink(SinkTarget),
+    /// RTMP or SRT through the ffmpeg sink, to the IP address checked when
+    /// the output started (`tc_url`: the RTMP server's own URL).
+    Sink { target: SinkTarget, tc_url: Option<String> },
+    /// RTMPS: ffmpeg publishes plain RTMP to a [`RtmpsRelay`] on loopback,
+    /// which carries it over verified TLS ([`super::rtmps`]).
+    Rtmps(RtmpsDest),
+}
+
+/// An RTMPS destination: where the relay connects and what ffmpeg sends.
+pub(crate) struct RtmpsDest {
+    pub target: TlsTarget,
+    /// `/<app>/<key>` (and query), appended to the relay's loopback URL.
+    pub path: String,
+    /// `rtmps://host[:port]/<app>`: the `tcUrl` ffmpeg announces.
+    pub tc_url: String,
+    /// `false` only for `insecure_skip_verify` (tests).
+    pub verify: bool,
+}
+
+/// Resolves `host:port` once; every address must pass `policy`. The
+/// publisher connects to these addresses only, so the address checked is
+/// the address used (no second lookup a DNS change could redirect).
+async fn resolve_checked(host: &str, port: u16, policy: UrlPolicy) -> Result<Vec<SocketAddr>, ApiError> {
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|_| ApiError::invalid_param("output.url", "the destination host does not resolve"))?
+        .collect();
+    if addrs.is_empty() {
+        return Err(ApiError::invalid_param("output.url", "the destination host does not resolve"));
+    }
+    for a in &addrs {
+        check_ip(a.ip(), policy)?;
+    }
+    Ok(addrs)
+}
+
+/// `url` with its host replaced by `ip`.
+fn pin(url: &Url, ip: IpAddr) -> Result<Url, ApiError> {
+    let mut u = url.clone();
+    u.set_ip_host(ip).map_err(|_| ApiError::internal("output URL: cannot pin its address"))?;
+    Ok(u)
+}
+
+/// An RTMP(S) publish URL's server URL (`tcUrl`): no userinfo, query or
+/// stream key (the last path segment).
+fn tc_url(publish: &Url) -> String {
+    let mut u = publish.clone();
+    let _ = u.set_username("");
+    let _ = u.set_password(None);
+    u.set_query(None);
+    u.set_fragment(None);
+    let path = u.path().trim_end_matches('/').to_owned();
+    let app = path.rsplit_once('/').map_or("", |(head, _)| head).to_owned();
+    u.set_path(&app);
+    u.to_string().trim_end_matches('/').to_owned()
+}
+
+fn url_host(u: &Url) -> Result<String, ApiError> {
+    Ok(u.host_str().ok_or_else(|| ApiError::invalid_param("output.url", "the URL has no host"))?.trim_matches(['[', ']']).to_owned())
+}
+
+/// The sink or relay destination of an RTMP(S) publish URL.
+async fn rtmp_dest(publish: &str, verify: bool, policy: UrlPolicy) -> Result<Dest, ApiError> {
+    let u = Url::parse(publish).map_err(|_| ApiError::invalid_param("output.url", "not a valid RTMP URL"))?;
+    let host = url_host(&u)?;
+    let tls = u.scheme() == "rtmps";
+    let port = u.port().unwrap_or(if tls { 443 } else { 1935 });
+    let addrs = resolve_checked(&host, port, policy).await?;
+    let tc = tc_url(&u);
+    if tls {
+        let mut path = u.path().to_owned();
+        if let Some(q) = u.query() {
+            path = format!("{path}?{q}");
+        }
+        return Ok(Dest::Rtmps(RtmpsDest { target: TlsTarget { host, port, addrs }, path, tc_url: tc, verify }));
+    }
+    let pinned = pin(&u, addrs[0].ip())?;
+    Ok(Dest::Sink { target: SinkTarget::Rtmp { url: pinned.to_string() }, tc_url: Some(tc) })
+}
+
+/// The SRT sink destination: the listener's address pinned, then the
+/// `streamid` / `passphrase` / latency query.
+async fn srt_dest(base: &str, stream_id: Option<&str>, passphrase: Option<&str>, latency_ms: u32, policy: UrlPolicy) -> Result<Dest, ApiError> {
+    let u = Url::parse(base).map_err(|_| ApiError::invalid_param("output.url", "not a valid SRT URL"))?;
+    let host = url_host(&u)?;
+    let port = u.port().ok_or_else(|| ApiError::invalid_param("output.url", "an SRT URL needs a port (srt://host:port)"))?;
+    let addrs = resolve_checked(&host, port, policy).await?;
+    let pinned = pin(&u, addrs[0].ip())?;
+    Ok(Dest::Sink { target: SinkTarget::Srt { url: srt_url(pinned.as_str(), stream_id, passphrase, latency_ms) }, tc_url: None })
 }
 
 /// A destination ready to publish to (a Cloudflare live input created).
@@ -110,20 +200,31 @@ impl Outputs {
             let playback = live.playback(cf.settings().customer_domain.as_deref(), whip);
             tracing::info!(live_input = %live.uid, kind = spec.kind.as_str(), recording = live.recording, "cloudflare live input created");
             let missing = |what: &str| ApiError::internal(format!("the Cloudflare live input has no {what} ingest"));
+            // Cloudflare's ingest hosts come from its API: resolved once and
+            // pinned like any destination, but not held to the private-address
+            // policy (the API is trusted; tests point it at localhost).
+            let trusted = UrlPolicy { allow_private: true };
             let dest = match spec.kind {
                 OutputKind::Cloudflare => {
                     let u = live.webrtc_url.clone().ok_or_else(|| missing("WebRTC"))?;
                     let url = Url::parse(&u).map_err(|e| ApiError::internal(format!("Cloudflare WebRTC URL: {e}")))?;
-                    Dest::Whip(WhipConfig::new(url, WhipAuth::None).with_target(WhipTarget::Cloudflare).with_codec(spec.codec))
+                    Ok(Dest::Whip(WhipConfig::new(url, WhipAuth::None).with_target(WhipTarget::Cloudflare).with_codec(spec.codec)))
                 }
                 OutputKind::CloudflareRtmps => {
                     let (u, k) = live.rtmps_url.clone().zip(live.rtmps_key.clone()).ok_or_else(|| missing("RTMPS"))?;
-                    Dest::Sink(SinkTarget::Rtmp { url: format!("{}/{}", u.trim_end_matches('/'), k) })
+                    rtmp_dest(&format!("{}/{}", u.trim_end_matches('/'), k), true, trusted).await
                 }
                 _ => {
                     let u = live.srt_url.clone().ok_or_else(|| missing("SRT"))?;
-                    let url = srt_url(&u, live.srt_stream_id.as_deref(), live.srt_passphrase.as_deref(), self.cfg.srt_latency_ms);
-                    Dest::Sink(SinkTarget::Srt { url })
+                    srt_dest(&u, live.srt_stream_id.as_deref(), live.srt_passphrase.as_deref(), self.cfg.srt_latency_ms, trusted).await
+                }
+            };
+            let dest = match dest {
+                Ok(d) => d,
+                Err(e) => {
+                    // The live input exists: do not leave it behind.
+                    let _ = cf.release(&live).await;
+                    return Err(ApiError::internal(format!("the Cloudflare live input's ingest: {}", e.message)));
                 }
             };
             for s in [&live.webrtc_url, &live.rtmps_key, &live.srt_stream_id, &live.srt_passphrase].into_iter().flatten() {
@@ -133,15 +234,10 @@ impl Outputs {
             return Ok(Provisioned { dest, live: Some(live), kind: spec.kind, playback, secrets });
         }
         // Your own destination: every address its name resolves to must be
-        // public unless `[outputs] allow_private`.
-        if let Some((host, port)) = spec.host() {
-            let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), port))
-                .await
-                .map_err(|_| ApiError::invalid_param("output.url", "the destination host does not resolve"))?
-                .collect();
-            for a in &addrs {
-                super::spec::check_ip(a.ip(), self.cfg.policy)?;
-            }
+        // public unless `[outputs] allow_private` (RTMP(S) and SRT then
+        // connect to that checked address only: rtmp_dest / srt_dest).
+        if let (Some((host, port)), true) = (spec.host(), spec.kind == OutputKind::Whip) {
+            resolve_checked(&host, port, self.cfg.policy).await?;
         }
         let url = spec.url.clone().ok_or_else(|| ApiError::invalid_param("output.url", "this kind needs `url`"))?;
         let dest = match spec.kind {
@@ -164,10 +260,8 @@ impl Outputs {
                 };
                 Dest::Whip(WhipConfig::new(url, auth).with_target(target).with_codec(spec.codec))
             }
-            OutputKind::Rtmps => Dest::Sink(SinkTarget::Rtmp { url: spec.rtmp_publish_url().unwrap_or_default() }),
-            _ => Dest::Sink(SinkTarget::Srt {
-                url: srt_url(url.as_str(), spec.stream_id.as_deref(), spec.passphrase.as_deref(), self.cfg.srt_latency_ms),
-            }),
+            OutputKind::Rtmps => rtmp_dest(&spec.rtmp_publish_url().unwrap_or_default(), !spec.insecure_skip_verify, self.cfg.policy).await?,
+            _ => srt_dest(url.as_str(), spec.stream_id.as_deref(), spec.passphrase.as_deref(), self.cfg.srt_latency_ms, self.cfg.policy).await?,
         };
         secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
         Ok(Provisioned { dest, live: None, kind: spec.kind, playback: json!({}), secrets })
@@ -298,7 +392,15 @@ pub(crate) async fn publish(ctx: &mut Ctx<'_>, prov: &Provisioned, src: &mut Sou
     };
     match &prov.dest {
         Dest::Whip(w) => publish_whip(ctx, prov, w.clone(), src, first).await,
-        Dest::Sink(t) => publish_sink(ctx, prov, t.clone(), src, first).await,
+        Dest::Sink { target, tc_url } => publish_sink(ctx, prov, target.clone(), tc_url.clone(), None, src, first).await,
+        Dest::Rtmps(r) => {
+            let config = client_config(r.verify, ctx.outs.cfg.rtmps_ca_file.as_deref()).map_err(|e| err(ErrorKind::Internal, prov, e))?;
+            let relay = RtmpsRelay::start(r.target.clone(), config)
+                .await
+                .map_err(|e| err(ErrorKind::Internal, prov, format!("RTMPS relay: {e}")))?;
+            let target = SinkTarget::Rtmp { url: format!("rtmp://127.0.0.1:{}{}", relay.port(), r.path) };
+            publish_sink(ctx, prov, target, Some(r.tc_url.clone()), Some(relay), src, first).await
+        }
     }
 }
 
@@ -558,7 +660,15 @@ async fn whip_loop(
     Ok(reason)
 }
 
-async fn publish_sink(ctx: &mut Ctx<'_>, prov: &Provisioned, target: SinkTarget, src: &mut Source<'_>, first: PubTick) -> Result<String, ApiError> {
+async fn publish_sink(
+    ctx: &mut Ctx<'_>,
+    prov: &Provisioned,
+    target: SinkTarget,
+    tc_url: Option<String>,
+    relay: Option<RtmpsRelay>,
+    src: &mut Source<'_>,
+    first: PubTick,
+) -> Result<String, ApiError> {
     ctx.phase("connecting");
     let backend = {
         let c = ctx.outs.cfg.encoder.clone();
@@ -571,6 +681,7 @@ async fn publish_sink(ctx: &mut Ctx<'_>, prov: &Provisioned, target: SinkTarget,
     let (w, h) = (f0.width, f0.height);
     let mut scfg = SinkConfig::new(target, w, h, ctx.fps, ctx.audio_channels.map(|c| SinkAudioIn { rate: 48_000, channels: c }));
     scfg.encoder = encoder;
+    scfg.rtmp_tc_url = tc_url;
     let mut sink = tokio::task::spawn_blocking(move || FfmpegSink::start(scfg))
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
@@ -586,6 +697,7 @@ async fn publish_sink(ctx: &mut Ctx<'_>, prov: &Provisioned, target: SinkTarget,
     let mut pending = Some(first);
     let mut last_check = Instant::now();
     let mut reported: Option<String> = None;
+    let mut failure: Option<ApiError> = None;
     let reason = loop {
         let t = match pending.take() {
             Some(t) => t,
@@ -621,8 +733,20 @@ async fn publish_sink(ctx: &mut Ctx<'_>, prov: &Provisioned, target: SinkTarget,
         // is reported, not fatal; the sink restarts it every 2 s.
         if last_check.elapsed() >= Duration::from_secs(1) {
             last_check = Instant::now();
-            if !sink.is_running() {
-                let msg = prov.scrub(&sink.last_error().unwrap_or_else(|| "ffmpeg exited".into()));
+            // RTMPS: a certificate that failed verification ends the output
+            // (the relay refuses every later connection; no unverified retry).
+            if let Some(f) = relay.as_ref().and_then(RtmpsRelay::fatal) {
+                failure = Some(err(ErrorKind::Forbidden, prov, f));
+                break "failed".to_owned();
+            }
+            if let Some(e) = sink.exit_error() {
+                // The relay's reason (refused, timed out) says more than
+                // ffmpeg's view of the loopback socket.
+                let e = match relay.as_ref().and_then(RtmpsRelay::last_error) {
+                    Some(r) => format!("{r}; {e}"),
+                    None => e,
+                };
+                let msg = prov.scrub(&e);
                 if reported.as_deref() != Some(msg.as_str()) {
                     tracing::warn!(output = %ctx.state.view, error = %msg, "output sink failed; restarting");
                     ctx.state.set(|s| s.output_error = Some(msg.clone()));
@@ -637,7 +761,11 @@ async fn publish_sink(ctx: &mut Ctx<'_>, prov: &Provisioned, target: SinkTarget,
         Ok(st) => ctx.state.set(|s| s.frames_sent = st.frames_sent),
         Err(e) => tracing::info!(error = %prov.scrub(&e.to_string()), "sink finished with an error"),
     }
-    Ok(reason)
+    drop(relay);
+    match failure {
+        Some(e) => Err(e),
+        None => Ok(reason),
+    }
 }
 
 /// The [`OutputOpener`] of director and Reactor sessions.
@@ -704,3 +832,53 @@ async fn run_copy(outs: Arc<Outputs>, spec: OutputSpec, media: OutputMedia, rx: 
     let _ = tx.send(json!({"type": "output_ended", "output": view, "reason": reason, "frames_sent": st.frames_sent}));
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tc_url_is_the_server_url_without_the_key() {
+        let t = |u: &str| tc_url(&Url::parse(u).unwrap());
+        assert_eq!(t("rtmps://live.cloudflare.com:443/live/0123456789abcdef"), "rtmps://live.cloudflare.com:443/live");
+        assert_eq!(t("rtmp://user:pw@a.example/app/inst/key?token=x"), "rtmp://a.example/app/inst");
+        assert_eq!(t("rtmp://a.example/live/k"), "rtmp://a.example/live");
+    }
+
+    #[test]
+    fn pin_keeps_everything_but_the_host() {
+        let u = Url::parse("srt://live.example.com:778").unwrap();
+        assert_eq!(pin(&u, "203.0.113.7".parse().unwrap()).unwrap().as_str(), "srt://203.0.113.7:778");
+        let u = Url::parse("rtmp://a.example/live/k3y").unwrap();
+        assert_eq!(pin(&u, "2001:db8::1".parse().unwrap()).unwrap().as_str(), "rtmp://[2001:db8::1]/live/k3y");
+    }
+
+    #[tokio::test]
+    async fn rtmps_goes_through_the_relay_and_rtmp_srt_are_pinned() {
+        let open = UrlPolicy { allow_private: true };
+        match rtmp_dest("rtmps://localhost:1937/live/k3y", true, open).await.unwrap() {
+            Dest::Rtmps(r) => {
+                assert_eq!((r.target.host.as_str(), r.target.port, r.path.as_str()), ("localhost", 1937, "/live/k3y"));
+                assert_eq!(r.tc_url, "rtmps://localhost:1937/live");
+                assert!(r.verify && r.target.addrs.iter().all(|a| a.ip().is_loopback()));
+            }
+            _ => panic!("rtmps must use the relay"),
+        }
+        match rtmp_dest("rtmp://localhost/live/k3y", true, open).await.unwrap() {
+            Dest::Sink { target: SinkTarget::Rtmp { url }, tc_url } => {
+                assert!(url.starts_with("rtmp://127.0.0.1/live/k3y") || url.starts_with("rtmp://[::1]/live/k3y"), "{url}");
+                assert_eq!(tc_url.as_deref(), Some("rtmp://localhost/live"));
+            }
+            _ => panic!("rtmp is a pinned sink"),
+        }
+        match srt_dest("srt://localhost:9000", Some("publish:x"), None, 1000, open).await.unwrap() {
+            Dest::Sink { target: SinkTarget::Srt { url }, tc_url: None } => {
+                assert!(url.starts_with("srt://127.0.0.1:9000?streamid=publish:x") || url.starts_with("srt://[::1]:9000?"), "{url}")
+            }
+            _ => panic!("srt is a pinned sink"),
+        }
+        // The checked addresses are the policy's: loopback refused by default.
+        assert!(rtmp_dest("rtmps://localhost:1937/live/k", true, UrlPolicy::default()).await.is_err());
+        assert!(srt_dest("srt://localhost:9000", None, None, 1000, UrlPolicy::default()).await.is_err());
+    }
+}

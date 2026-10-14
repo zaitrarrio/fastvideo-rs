@@ -856,6 +856,29 @@ impl H3InferenceContract {
         Self::base(50)
     }
 
+    /// MiniMax-H3 Turbo LoRA recipes ([`super::turbo_lora`]): base
+    /// MiniMax-H3 with the adapter folded in, `forwards` evaluations on the
+    /// uniform grid `linspace(1, 0, forwards + 1)` (diffusers
+    /// `set_timesteps(forwards + 1)`; larry's `generate.py` `timesteps(n)`;
+    /// lightx2v's `q_i = (N - i) / N`) with the adapter's shifts, dense
+    /// attention, no CFG (the base is guidance-distilled).
+    pub fn turbo_lora(lora: super::turbo_lora::TurboLora, forwards: usize) -> Self {
+        let (video, audio) = lora.shifts();
+        Self {
+            dmd_denoising_steps: Vec::new(),
+            num_inference_steps: forwards + 1,
+            transformer_forwards: forwards,
+            video_scheduler_shift: video,
+            audio_scheduler_shift: audio,
+            guidance_scale: 1.0,
+            vsa_sparsity: 0.0,
+            vsa_tile_size: 64,
+            dense: true,
+            sigma_source: H3SigmaSource::Uniform,
+            fresh_noise: false,
+        }
+    }
+
     /// Named recipe: `8step` / `v2`, `4step-vsa` / `preview-vsa`,
     /// `4step-dense` / `preview-dense`, `sol-h3` (and `sol-h3-ref2va`),
     /// `sol-h3-spark`, `sol-h3-rtx`, `base`, `base-<N>step`, and the
@@ -863,6 +886,10 @@ impl H3InferenceContract {
     pub fn named(name: &str) -> Result<Self, String> {
         if let Some(n) = base_recipe_forwards(name) {
             return Ok(Self::base(n + 1));
+        }
+        if let Some(turbo) = super::turbo_lora::parse_turbo_recipe(name) {
+            let (lora, forwards) = turbo?;
+            return Ok(Self::turbo_lora(lora, forwards));
         }
         // VDN-H3 (docs/ports/vdn-h3.md §1.6): MiniMax-H3's uniform grid with
         // the base shifts 12 / 3, no CFG, `N + 1` sigma points for N forwards.
@@ -890,7 +917,7 @@ impl H3InferenceContract {
             "sol-h3" | "sol_h3" | "sol-h3-t2v" | "sol-h3-i2v" | "sol-h3-ref2va"
             | "sol_h3_ref2va" => Ok(Self::sol_h3()),
             other => Err(format!(
-                "unknown H3 recipe '{other}' (8step|trim-8step|4step-vsa|4step-dense|sol-h3|sol-h3-spark|sol-h3-rtx|base|base-<N>step|h3-plug-4step|h3-plug-cfg|vdn-h3-<N>step)"
+                "unknown H3 recipe '{other}' (8step|trim-8step|4step-vsa|4step-dense|sol-h3|sol-h3-spark|sol-h3-rtx|base|base-<N>step|h3-plug-4step|h3-plug-cfg|larry-turbo[-<N>step]|lightx2v-turbo[-<N>step]|lightx2v-turbo-v0.1[-<N>step]|vdn-h3-<N>step)"
             )),
         }
     }
