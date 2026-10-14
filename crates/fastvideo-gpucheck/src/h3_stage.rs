@@ -186,6 +186,13 @@ pub enum Stage {
         /// `FASTVIDEO_DIT_OFFLOAD`, else `auto`.
         #[arg(long)]
         dit_offload: Option<String>,
+        /// FastH3 Trim's published NVFP4 DiT (the file, or the
+        /// `fasth3-trim-8step-nvfp4` tree): its block linears replace the
+        /// snapshot's. Default: none, except that an NVFP4 recipe
+        /// (`--h3-recipe trim-8step-nvfp4`) reads the tree beside `--weights`.
+        /// sm_100 / sm_120 only.
+        #[arg(long)]
+        nvfp4_dit: Option<PathBuf>,
         /// Run as if the card had only this many GiB (e.g. 32 on a 96 GB card
         /// to emulate an RTX 5090): every auto policy decides for that card,
         /// the rest is held back, and a phase peaking above it fails the run.
@@ -414,6 +421,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             width,
             oversize_canvas,
             dit_offload,
+            nvfp4_dit,
             device_budget_gib,
             seed,
             prompts,
@@ -466,6 +474,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                     .transpose()
                     .map_err(|e| anyhow::anyhow!(e))?,
                 i2v_encoder: Default::default(),
+                nvfp4_dit: nvfp4_dit.clone(),
             };
             let canvas = GenCanvas {
                 seconds: *seconds,

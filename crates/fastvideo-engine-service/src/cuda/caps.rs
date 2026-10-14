@@ -18,6 +18,7 @@
 //! | — | `h3-larry-turbo` | base MiniMax-H3 + larryvrh Turbo LoRA ckpt850 folded at load (`larry-turbo`, 6 forwards; `steps` 3-8, `lora_strength`), dense, MXFP8, official VAE; T2V + FL2VA | `h3/larry_turbo_dense` | untiered: what the MiniMaxAI/MiniMax-H3-Turbo-Lora Space runs (docs/ports/h3-turbo-loras.md) |
 //! | — | `h3-lightx2v-turbo` | base MiniMax-H3 + lightx2v FL2VA/T2VA 4-step v1.2 768p folded at load (`lightx2v-turbo`, 4 forwards, shifts 6 / 3), dense, MXFP8; T2V + FL2VA | `h3/lightx2v_turbo_dense` | untiered (docs/ports/h3-turbo-loras.md) |
 //! | — (served `h3-trim`) | `fasth3-trim-8step` | FastH3 Trim 8-step DMD (`trim-8step`): 42 of 50 blocks, rank-16 AdaLN, VSA-H3 0.8, its own lightweight VAE; text-to-video only | none | untiered (explicit id, `h3-trim`, or `recipe = "trim-8step"`); docs/ports/h3-trim.md |
+//! | — (served `h3-trim-nvfp4`) | `fasth3-trim-nvfp4` | the Trim recipe with every block's attention and FFN linears from the release's NVFP4 file (`trim-8step-nvfp4`, tree `fasth3-trim-8step-nvfp4` beside `fasth3-trim-8step`), W4A4 on NVFP4 tensor cores; sm_100 / sm_120 only (the load fails elsewhere) | none | untiered, opt-in (explicit id, `h3-trim-nvfp4`, or `recipe = "trim-8step-nvfp4"`); not a default (docs/ports/h3-trim.md §5) |
 //! | `ltx-pro` | `ltx25-distill-dense` | LTX-2.5 22B distilled two-stage (8 + 3), dense stage 2, conv VAE; SageAttention2 dense attention on sm_120 (`sage_attention`) | `ltx2/ltx25_distill_dense` | Only LTX-2.5 generation path; dense stage 2 (no sparse attention; on sm_120 Sage quantizes Q K to INT8 and P V to FP8, gate-passed), full VAE |
 //! | `ltx-turbo` | `ltx25-distill-sol` | LTX-2.5 distilled two-stage, Sol stage 2 | `ltx2/ltx25_distill_sol` | The reference single-GPU route; passes the gate |
 //! | `ltx-draft` | `ltx25-distill-sol-nvfp4-taehv` | + NVFP4 video FFN + TAEHV (`taeltx2_3_wide`) decode | `ltx2/ltx25_distill_sol_nvfp4` | Faster, fails sharpness at 4K (draft) |
@@ -524,6 +525,10 @@ impl CudaModel {
                          (Sol-H3 Ref2VA route), {} forwards, dense attention, official VAE",
                         r.steps
                     ),
+                    _ if h3cfg::is_trim_nvfp4_recipe(&r.recipe) => "FastH3 Trim 8-step DMD with the release's NVFP4 \
+                        DiT: 42 blocks, every attention and FFN linear W4A4 on NVFP4 tensor cores (sm_100 / sm_120 \
+                        only), rank-16 AdaLN, VSA-H3 (80% sparse), lightweight VAE"
+                        .to_owned(),
                     _ if self.recipe_name.starts_with("fasth3-trim") => "FastH3 Trim 8-step DMD: 42 of the \
                         50 H3 blocks, rank-16 AdaLN, VSA-H3 (80% sparse), lightweight VAE; faster and smaller \
                         than FastH3 V2, with some quality cost"
@@ -755,10 +760,16 @@ pub fn turbo_lora_of(recipe: &str) -> Option<TurboLora> {
 pub const FASTH3_TRIM_ID: &str = "fasth3-trim-8step";
 pub const H3_TRIM: &str = "h3-trim";
 pub const FASTH3_TRIM_TREE: &str = "fasth3-trim-8step";
+/// The FastH3 Trim NVFP4 catalog id, its served alias and its recipe (the
+/// published NVFP4 DiT in `fasth3-trim-8step-nvfp4`, read beside
+/// [`FASTH3_TRIM_TREE`] by the pipeline).
+pub const FASTH3_TRIM_NVFP4_ID: &str = "fasth3-trim-nvfp4";
+pub const H3_TRIM_NVFP4: &str = "h3-trim-nvfp4";
+pub const FASTH3_TRIM_NVFP4_RECIPE: &str = "trim-8step-nvfp4";
 
-/// The FastH3 Trim contract names (`H3InferenceContract::named`).
+/// The FastH3 Trim contract names (`H3InferenceContract::named`), NVFP4 included.
 pub fn is_trim_recipe(recipe: &str) -> bool {
-    matches!(recipe, "trim-8step" | "fasth3-trim-8step" | "fasth3-trim")
+    matches!(recipe, "trim-8step" | "fasth3-trim-8step" | "fasth3-trim") || h3cfg::is_trim_nvfp4_recipe(recipe)
 }
 
 /// LTX caps from the model config (audio from the vocoder).
@@ -1112,6 +1123,9 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
     // (byte-identical) audio VAE come from `h3-base` (`text_weights`). Served
     // with the trained recipe: VSA-H3 at 0.8, tile 64, the 8 DMD rungs.
     let h3_trim = h3(layout, FASTH3_TRIM_TREE, "trim-8step", None, 8);
+    // The same model with the release's NVFP4 block linears (opt-in, sm_100 /
+    // sm_120 only): the pipeline reads `fasth3-trim-8step-nvfp4` beside the tree.
+    let h3_trim_nvfp4 = h3(layout, FASTH3_TRIM_TREE, FASTH3_TRIM_NVFP4_RECIPE, None, 8);
     // h3-turbo and h3-max offer the native 1080P tier (9/9 coherent clips
     // at 1920x1088 and 1088x1920, docs/serve/h3-1080p-and-upscaler.md).
     let h3_turbo = H3Recipe {
@@ -1279,6 +1293,13 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             CudaRecipe::H3(h3_trim),
         )
         .with_served_names(&[H3_TRIM]),
+        CudaModel::new(
+            FASTH3_TRIM_NVFP4_ID,
+            None,
+            "fasth3-trim-8step-vsa-nvfp4",
+            CudaRecipe::H3(h3_trim_nvfp4),
+        )
+        .with_served_names(&[H3_TRIM_NVFP4]),
         // Untiered, addressed by id: the h3-turbo / h3-max slots stay as they are.
         CudaModel::new(
             H3_LARRY_TURBO,
@@ -1441,6 +1462,7 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
         (Family::H3, "4step-vsa" | "preview-vsa" | "fasth3-4step-vsa") => "h3-turbo".to_owned(),
         (Family::H3, "8step" | "v2" | "fasth3-8step") => "fasth3-8step-dense".to_owned(),
         (Family::H3, "trim-8step" | "fasth3-trim" | H3_TRIM) => FASTH3_TRIM_ID.to_owned(),
+        (Family::H3, r) if h3cfg::is_trim_nvfp4_recipe(r) => FASTH3_TRIM_NVFP4_ID.to_owned(),
         (Family::H3, "sol-h3" | "sol_h3") => "h3-max".to_owned(),
         (Family::H3, r) if turbo_lora_of(r).is_some() => match turbo_lora_of(r) {
             Some(TurboLora::Larry) => H3_LARRY_TURBO.to_owned(),
@@ -2485,6 +2507,41 @@ mod tests {
         }
         // Its own process: it never co-resides with another H3 recipe's settings.
         assert!(is_trim_recipe("trim-8step") && !is_trim_recipe("8step"));
+    }
+
+    /// FastH3 Trim NVFP4: the Trim's trees and recipe contract, the NVFP4
+    /// recipe (the pipeline reads `fasth3-trim-8step-nvfp4` beside the tree),
+    /// untiered and opt-in, text-to-video only; the bf16 Trim is unchanged.
+    #[test]
+    fn trim_nvfp4_catalog_entry() {
+        let l = WeightLayout::new("/w");
+        let cat = catalog(&l);
+        for name in [FASTH3_TRIM_NVFP4_ID, H3_TRIM_NVFP4] {
+            let m = find(&cat, name).unwrap();
+            assert_eq!(m.id.as_str(), FASTH3_TRIM_NVFP4_ID, "{name}");
+            assert!(m.tier.is_none());
+            let CudaRecipe::H3(r) = &m.recipe else { panic!() };
+            assert_eq!(r.weights, Path::new("/w/fasth3-trim-8step"));
+            assert_eq!(r.text_weights.as_deref(), Some(Path::new("/w/h3-base")));
+            assert_eq!((r.recipe.as_str(), r.steps, r.dense, r.profile.as_deref()), ("trim-8step-nvfp4", 8, false, None));
+            assert_eq!(
+                h3cfg::H3InferenceContract::named(&r.recipe).unwrap(),
+                h3cfg::H3InferenceContract::fasth3_8step()
+            );
+            let c = m.caps();
+            assert_eq!(c.tasks.iter().copied().collect::<Vec<_>>(), [Task::T2V]);
+            let d = m.describe();
+            assert!(d.summary.contains("NVFP4"), "{}", d.summary);
+        }
+        assert!(m_served(&cat, H3_TRIM_NVFP4));
+        for rec in ["trim-8step-nvfp4", "fasth3-trim-nvfp4", H3_TRIM_NVFP4] {
+            let e = ModelEntryCfg { family: "h3".into(), recipe: rec.into(), resident: true, ..Default::default() };
+            assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), FASTH3_TRIM_NVFP4_ID, "{rec}");
+        }
+        // The default Trim stays the bf16 / MXFP8 checkpoint.
+        let CudaRecipe::H3(t) = &find(&cat, H3_TRIM).unwrap().recipe else { panic!() };
+        assert_eq!(t.recipe, "trim-8step");
+        assert!(is_trim_recipe("trim-8step-nvfp4"));
     }
 
     fn m_served(cat: &[CudaModel], name: &str) -> bool {

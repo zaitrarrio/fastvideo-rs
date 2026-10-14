@@ -55,9 +55,26 @@ pub struct Linear {
     /// at load. Each forward reconstructs the activation, then the existing
     /// GEMM runs. `None` is today's dense path.
     nvfp4_act: Option<fastvideo_models::nvfp4::ScaleRule>,
+    /// A weight published pre-quantized as NVFP4 ([`Linear::from_nvfp4`],
+    /// the FastH3 Trim NVFP4 release): W4A4 on NVFP4 tensor cores (cuBLASLt
+    /// `VEC16_UE4M3`), the activation quantized on every call. No other
+    /// weight form is held.
+    #[cfg(feature = "cuda")]
+    nvfp4_w: Option<std::sync::Arc<Nvfp4Weight>>,
     /// Resident LoRA: unfused base `W0` plus `A [rank, in]` / `B [out, rank]`.
     /// The live weight is `W0 + strength · B @ A`.
     lora: Option<LinearLora>,
+}
+
+/// The device NVFP4 weight of a [`Linear::from_nvfp4`] linear.
+#[cfg(feature = "cuda")]
+pub struct Nvfp4Weight(pub super::nvfp4_linear::Nvfp4Stack);
+
+#[cfg(feature = "cuda")]
+impl std::fmt::Debug for Nvfp4Weight {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Nvfp4Weight([{}, {}], {} parts)", self.0.n, self.0.k, self.0.parts().len())
+    }
 }
 
 /// A linear's resident weight as bytes ([`Linear::snapshot`]).
@@ -358,6 +375,8 @@ impl Linear {
                         weight_fp8_rows: None,
                         weight_affine: None,
                         nvfp4_act: None,
+                        #[cfg(feature = "cuda")]
+                        nvfp4_w: None,
                         lora: None,
                     });
                 }
@@ -400,6 +419,8 @@ impl Linear {
                 weight_fp8_rows: None,
                 weight_affine: None,
                 nvfp4_act,
+                #[cfg(feature = "cuda")]
+                nvfp4_w: None,
                 lora: None,
             });
         }
@@ -416,6 +437,8 @@ impl Linear {
             weight_fp8_rows: None,
             weight_affine: None,
             nvfp4_act,
+            #[cfg(feature = "cuda")]
+            nvfp4_w: None,
             lora: None,
         })
     }
@@ -624,6 +647,8 @@ impl Linear {
             weight_fp8_rows: None,
             weight_affine: None,
             nvfp4_act: None,
+            #[cfg(feature = "cuda")]
+            nvfp4_w: None,
             lora: None,
         };
         maybe_attach_ltx2_lora(prefixes, &mut lin)?;
@@ -691,6 +716,8 @@ impl Linear {
             weight_fp8_rows: None,
             weight_affine: None,
             nvfp4_act: None,
+            #[cfg(feature = "cuda")]
+            nvfp4_w: None,
             lora: None,
         })
     }
@@ -736,6 +763,8 @@ impl Linear {
             weight_fp8_rows: None,
             weight_affine: None,
             nvfp4_act: None,
+            #[cfg(feature = "cuda")]
+            nvfp4_w: None,
             lora: None,
         })
     }
@@ -854,6 +883,8 @@ impl Linear {
             weight_fp8_rows: Some(std::sync::Arc::new(rows)),
             weight_affine: None,
             nvfp4_act: None,
+            #[cfg(feature = "cuda")]
+            nvfp4_w: None,
             lora: None,
         })
     }
@@ -867,6 +898,7 @@ impl Linear {
         #[cfg(feature = "cuda")]
         {
             b += self.weight_bf16.as_ref().map_or(0, |w| w.len() as u64 * 2);
+            b += self.nvfp4_w.as_ref().map_or(0, |w| w.0.held_bytes() as u64);
         }
         b += self
             .quant
@@ -903,6 +935,55 @@ impl Linear {
     /// LongLive NVFP4 W4A4 (`FASTVIDEO_NVFP4`) is active on this linear.
     pub fn is_nvfp4(&self) -> bool {
         self.nvfp4_act.is_some()
+    }
+
+    /// Whether this linear runs a published NVFP4 weight ([`Self::from_nvfp4`]).
+    pub fn is_nvfp4_published(&self) -> bool {
+        #[cfg(feature = "cuda")]
+        {
+            self.nvfp4_w.is_some()
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            false
+        }
+    }
+
+    /// A bias-free linear over a published NVFP4 weight, already on the
+    /// device: `[stack.n, stack.k]`.
+    #[cfg(feature = "cuda")]
+    pub fn from_nvfp4(stack: super::nvfp4_linear::Nvfp4Stack) -> Result<Self> {
+        let (in_dim, out_dim) = (stack.k, stack.n);
+        super::evalstats::quant_module("nvfp4_published");
+        Ok(Self {
+            weight: CudaTensor::from_vec(Vec::new(), vec![0, in_dim])?,
+            bias: None,
+            in_dim,
+            out_dim,
+            weight_bf16: None,
+            quant: None,
+            f32_island: false,
+            weight_fp8_rows: None,
+            weight_affine: None,
+            nvfp4_act: None,
+            nvfp4_w: Some(std::sync::Arc::new(Nvfp4Weight(stack))),
+            lora: None,
+        })
+    }
+
+    /// The published-NVFP4 forward: the activation (bf16 on the device) is
+    /// quantized once per call, every stacked part's GEMM writes its columns.
+    #[cfg(feature = "cuda")]
+    fn forward_nvfp4(&self, w: &Nvfp4Weight, xs: &CudaTensor, gelu: bool) -> Result<CudaTensor> {
+        super::evalstats::quant_call("nvfp4_published");
+        let (m, _, out_shape) = self.out_shape(xs)?;
+        let x16 = xs
+            .dev_bf16()?
+            .ok_or_else(|| msg("nvfp4 linear without a device tensor"))?;
+        let y = w.0.forward_bf16(super::quant::ptr(x16.as_ref()), m)?;
+        drop(x16);
+        let out = CudaTensor::from_device_slice_bf16(y, out_shape)?;
+        self.quant_epilogue(out, gelu)
     }
 
     /// Load `prefix.weight` as MLX affine INT8/6/4 (group 64). Prefers a
@@ -963,6 +1044,8 @@ impl Linear {
             weight_fp8_rows: None,
             weight_affine: Some(std::sync::Arc::new(aff)),
             nvfp4_act: None,
+            #[cfg(feature = "cuda")]
+            nvfp4_w: None,
             lora: None,
         })
     }
@@ -1004,6 +1087,7 @@ impl Linear {
             || self.weight_affine.is_some()
             || self.weight_fp8_rows.is_some()
             || self.nvfp4_act.is_some()
+            || self.is_nvfp4_published()
             || self.quant.is_some()
         {
             return Err(msg(
@@ -1049,6 +1133,7 @@ impl Linear {
             || self.weight_affine.is_some()
             || self.weight_fp8_rows.is_some()
             || self.nvfp4_act.is_some()
+            || self.is_nvfp4_published()
         {
             return Err(msg(
                 "snapshot: only plain bf16/f32 and W8A8/MXFP8 linears can be stored",
@@ -1140,6 +1225,8 @@ impl Linear {
                     weight_fp8_rows: None,
                     weight_affine: None,
                     nvfp4_act: None,
+                    #[cfg(feature = "cuda")]
+                    nvfp4_w: None,
                     lora: None,
                 })
             }
@@ -1541,6 +1628,10 @@ impl Linear {
     }
 
     fn forward_act(&self, xs: &CudaTensor, gelu: bool) -> Result<CudaTensor> {
+        #[cfg(feature = "cuda")]
+        if let Some(w) = self.nvfp4_w.as_deref() {
+            return self.forward_nvfp4(w, xs, gelu);
+        }
         if self.quant.is_some() {
             return self.forward_quant(xs, gelu);
         }

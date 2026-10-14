@@ -285,6 +285,30 @@ pub struct H3PipelineOptions {
     /// Where the FL2VA / Ref2VA multimodal text encoder lives
     /// ([`I2vEncoderChoice`]).
     pub i2v_encoder: I2vEncoderChoice,
+    /// FastH3 Trim's published NVFP4 DiT ([`super::nvfp4`]): the file, or
+    /// a directory holding `diffusion_models/<file>`. Its block linears
+    /// replace the snapshot's (everything else still comes from the
+    /// snapshot). `None`: an NVFP4 recipe (`trim-8step-nvfp4`) reads the
+    /// tree beside the snapshot (`../fasth3-trim-8step-nvfp4`); any other
+    /// recipe runs without it.
+    pub nvfp4_dit: Option<PathBuf>,
+}
+
+/// The NVFP4 DiT file a load reads ([`H3PipelineOptions::nvfp4_dit`]).
+pub fn nvfp4_dit_file(root: &Path, options: &H3PipelineOptions) -> Result<Option<PathBuf>> {
+    if let Some(p) = &options.nvfp4_dit {
+        return Ok(Some(super::nvfp4::resolve_file(p)?));
+    }
+    if options.recipe.as_deref().is_some_and(super::nvfp4::is_nvfp4_recipe) {
+        let tree = super::nvfp4::sibling_tree(root);
+        return super::nvfp4::resolve_file(&tree).map(Some).map_err(|e| {
+            msg(format!(
+                "recipe {}: {e} (or pass the file: --nvfp4-dit)",
+                options.recipe.as_deref().unwrap_or_default()
+            ))
+        });
+    }
+    Ok(None)
 }
 
 /// Where the multimodal (image-conditioned) text encoder's weights live.
@@ -729,6 +753,12 @@ fn dit_tree_identity(
     if crate::wan::affine::bits_from_env().is_some() || fastvideo_models::nvfp4::from_env().is_some() {
         return Ok(None);
     }
+    // The published NVFP4 DiT is loaded as it is; no stored form.
+    if options.nvfp4_dit.is_some()
+        || options.recipe.as_deref().is_some_and(super::nvfp4::is_nvfp4_recipe)
+    {
+        return Ok(None);
+    }
     #[cfg(feature = "cuda")]
     let route = if crate::wan::nn::Linear::device_bf16_route() {
         "device-bf16"
@@ -1024,6 +1054,29 @@ impl H3Pipeline {
                 (WeightMap::open(&dit)?, None)
             }
         };
+        // FastH3 Trim NVFP4 (docs/ports/h3-trim.md §5): the published block
+        // linears replace the snapshot's. Refused without NVFP4 tensor cores.
+        let nvfp4_dit = match nvfp4_dit_file(root, &options)? {
+            Some(path) => {
+                if mlx.is_some() || options.ref2va {
+                    return Err(msg(
+                        "h3 nvfp4: the published NVFP4 DiT is the Trim T2V transformer; not with an MLX snapshot or Ref2VA",
+                    ));
+                }
+                super::nvfp4::require_tensor_cores()?;
+                let t = Instant::now();
+                let nv = super::nvfp4::Nvfp4Dit::open(&path, &cfg, &map)?;
+                crate::wan::log::info(format_args!(
+                    "h3 nvfp4: {} ({} blocks x 5 NVFP4 linears, {:.2} GiB; checked against the bf16 tree in {:.1}s)",
+                    nv.path().display(),
+                    cfg.num_layers,
+                    nv.linear_bytes(&cfg, dit_loads_vsa_gate(&contract, None)) as f64 / f64::from(1u32 << 30),
+                    t.elapsed().as_secs_f64()
+                ));
+                Some(nv)
+            }
+            None => None,
+        };
         // Fast boot (A): the recipe's resident DiT, pre-merged and
         // pre-quantized beside `transformer/` (`super::dit_tree`), when a
         // valid one is there; otherwise the checkpoint as below.
@@ -1057,9 +1110,19 @@ impl H3Pipeline {
             let table = |k: &str| {
                 k.starts_with("time_embedder") || k.starts_with("norm_out.linear") || (!skip_adaln && adaln(k))
             };
-            let blocks = |k: &str| (k.starts_with("transformer_blocks.") || k.starts_with("blocks.")) && !adaln(k);
-            let rest = |k: &str| !adaln(k);
+            // Under NVFP4 the snapshot's block linears are never read.
+            let nv = nvfp4_dit.is_some();
+            let nv_linear = |k: &str| {
+                nv && k.starts_with("transformer_blocks.") && (k.contains(".attn.to_") || k.contains(".ff.net."))
+            };
+            let blocks = |k: &str| {
+                (k.starts_with("transformer_blocks.") || k.starts_with("blocks.")) && !adaln(k) && !nv_linear(k)
+            };
+            let rest = |k: &str| !adaln(k) && !nv_linear(k);
             map.prefetch_groups(&[&refiner, &table, &blocks, &rest]);
+            if let Some(nv) = &nvfp4_dit {
+                nv.map().prefetch_all();
+            }
         }
         let not_encoder = |k: &str| !k.starts_with("encoder.");
         let mut vae_map = match resolve_taeh3(options.taeh3.as_deref()) {
@@ -1397,6 +1460,17 @@ impl H3Pipeline {
                 })
                 .map_err(msg)?;
             let residency = policy.resolve(need, free);
+            // The NVFP4 blocks (about 10 GiB) stay resident: their device
+            // operands have no host-streamed form.
+            let residency = match (&nvfp4_dit, policy) {
+                (None, _) => residency,
+                (Some(_), DitOffload::Streamed) => {
+                    return Err(msg(
+                        "h3 nvfp4: the NVFP4 DiT is resident only (dit_offload = streamed was asked)",
+                    ))
+                }
+                (Some(_), _) => Residency::Resident,
+            };
             crate::wan::log::info(format_args!(
                 "h3 dit offload: {} -> {} (resident plan {:.1} GiB, {} free before load)",
                 policy.as_str(),
@@ -1426,7 +1500,7 @@ impl H3Pipeline {
                 Some(tree) => {
                     H3Transformer::from_tree(cfg.clone(), tree, &schedule, with_gate, residency)
                 }
-                None => H3Transformer::load_with_residency(
+                None => H3Transformer::load_with_nvfp4(
                     cfg.clone(),
                     &map,
                     &schedule,
@@ -1434,6 +1508,7 @@ impl H3Pipeline {
                     options.adaln_cache.as_deref(),
                     &mut lora,
                     residency,
+                    nvfp4_dit.as_ref(),
                 ),
             },
             |_| None,
