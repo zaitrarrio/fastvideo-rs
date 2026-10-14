@@ -172,6 +172,12 @@ needs() {
     dit-prequant) echo "dit-prequant" ;;
     upscalers) echo "upscalers" ;;
     upsampler-local) echo "sha:qwen3-vl-4b-instruct-gguf" ;;
+    # MiniMax-H3 Turbo LoRAs (h3-larry-turbo, h3-lightx2v-turbo) on the base tree;
+    # docs/ports/h3-turbo-loras.md. Plus their sha: lists.
+    h3-turbo-loras)
+      echo "$(needs h3-base) h3-turbo-loras:larry/minimax_h3_turbo_4step_ema_ckpt850.safetensors h3-turbo-loras:lightx2v/minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors" ;;
+    # The optional NCII prompt guard (fv-serve [moderation] ncii). Plus its sha: list.
+    ncii-guard) echo ":auxiliary/ncii-light-guard/model.safetensors" ;;
     *) return 1 ;;
   esac
 }
@@ -179,7 +185,8 @@ needs() {
 CELLS=(fasth3-8step fasth3-trim-8step fasth3-trim-8step-nvfp4 h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
   wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8 dit-prequant upscalers
   ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided ltx2 longlive-1.3b longlive2-5b longlive2-5b-nvfp4 longlive-plug
-  sana-video-2b-480p wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq lingbot-moe cosmos3-super upsampler-local)
+  sana-video-2b-480p wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq lingbot-moe cosmos3-super upsampler-local
+  h3-turbo-loras ncii-guard)
 
 # The weights-sha256.tsv dests a composite cell also checks (sha:<dest>).
 sha_dests() {
@@ -189,6 +196,8 @@ sha_dests() {
     longlive2-5b-nvfp4) echo "longlive2-5b-nvfp4-s4 longlive2-5b-nvfp4-s2" ;;
     longlive-plug)
       echo "longlive-plug/minimax-h3-few-step longlive-plug/minimax-h3-cfg longlive-plug/wan21-t2v-14b-few-step longlive-plug/wan21-t2v-14b-cfg longlive-plug/wan22-ti2v-5b-few-step longlive-plug/wan22-ti2v-5b-cfg" ;;
+    h3-turbo-loras) echo "h3-turbo-loras/larry h3-turbo-loras/lightx2v" ;;
+    ncii-guard) echo "auxiliary/ncii-light-guard" ;;
   esac
 }
 SHA_LIST="$HERE/weights-sha256.tsv"

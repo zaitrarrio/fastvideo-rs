@@ -458,6 +458,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 ref2va: !references.is_empty(),
                 ref_root: ref_root.clone(),
                 adapter: None,
+                adapter_strength: None,
                 reference_image_resize: Default::default(),
                 dit_offload: dit_offload
                     .as_deref()
