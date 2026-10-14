@@ -65,6 +65,45 @@ After the load and a 768p 5 s encode about 32 GiB stay free, over the 27.6
 GiB reserve, so the encoder stays; a 1080p 5 s (50.9 GiB) or 768p 15 s
 request releases it (`larger_requests_release_the_auto_encoder_after_encoding`).
 
-## GPU check
+## GPU check (2026-10-14, one RTX PRO 6000 Server, driver 595.91 / CUDA 13.2)
 
-Pending.
+Release `fv-gpucheck` of this branch, weights from R2 onto the container
+disk, `--no-text-cache` (every prompt encodes), official VAE, one warm process
+per recipe over a prompt set (`h3 gen --prompts`, per-prompt canvases).
+
+Load decisions, as logged:
+
+- h3-turbo (`4step-vsa`, MXFP8, gate): `auto -> resident-fp8: 94.4 GiB free
+  before load >= need 91.7 GiB`; `dit offload: auto -> resident (resident
+  plan 66.9 GiB, 70.5 GiB free before load)`; i2v tower resident.
+- h3-max (`sol-h3`, MXFP8): `auto -> resident-fp8 … need 87.0 GiB`; DiT
+  resident (62.3 GiB plan, 70.5 GiB free).
+
+Per prompt (5 s, `text_encoder` as the run reports it):
+
+| Process | Prompt | Canvas | text encoder | text s | wall s | peak alloc GiB |
+|---|---|---|---|---:|---:|---:|
+| h3-turbo | a (new) | 1344x768 | resident-fp8 | 0.38 | 24.7 | 67.4 |
+| h3-turbo | b (new) | 1344x768 | resident-fp8 | 0.29 | 25.0 | 67.6 |
+| h3-turbo | c (new) | 1344x768 | resident-fp8 | 0.29 | 25.2 | 67.6 |
+| h3-turbo | hd (new) | 1920x1088 | resident-fp8, **released** before the denoise | 0.28 | 59.3 | 56.7 |
+| h3-turbo | e (new, after the release) | 1344x768 | streamed-fp8 | 1.85 | 27.4 | 44.9 |
+| h3-turbo | a again (after the release) | 1344x768 | streamed-fp8 | 1.65 | 26.3 | 44.8 |
+| h3-max | a / b / c (new) | 1344x768 | resident-fp8 | 0.38 / 0.28 / 0.30 | 27.3 / 27.4 / 27.5 | 58.5 |
+
+- **Encode time per new prompt**: 0.28-0.38 s resident against 1.65-1.85 s
+  streamed FP8 (the path a released or streamed `auto` encoder takes; here
+  from the page cache of a local NVMe disk; the network volume's cold read is
+  ~90 s, page cache on other hosts ~5 s).
+- **1080p**: `auto released the resident encoder (22.7 GiB) before the
+  denoise (76055 rows need 50.4 GiB, 38.0 GiB free incl. pool-cached); later
+  prompts stream at the same numbers`. No OOM: peak 56.2 GiB used.
+- **Determinism**: prompt `a` with the resident encoder and again after the
+  release (streamed FP8, cache off) gave byte-identical outputs: all 124
+  frames and the WAV (SHA-256 lists equal).
+- The measured 768p denoise added ~12.3 GiB of activations over the live
+  weights (67.4 GiB peak with the encoder), and 1080p ~23.7 GiB: the
+  reserve (27.6 / 50.4 GiB) is about twice that, so the 1080p request released
+  an encoder that would have fit (~79 GiB). Tightening the reserve is a
+  separate change.
+- Cost: the pod ran 8.5 min ($2.49/hr, about $0.35).
