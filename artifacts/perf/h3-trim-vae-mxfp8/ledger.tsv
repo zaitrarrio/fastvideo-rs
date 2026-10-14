@@ -1,0 +1,2 @@
+2026-10-14T14:57:01Z	pod-created 53q5tp7o0ojzj7 fv-h3trim-vaemx gpu=NVIDIA RTX PRO 6000 Blackwell Workstation Edition dph=2.59 dc=EU-RO-1 volume=bz0ofkfx45 (read only) image=ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-94d6073 binary=this branch's fv-gpucheck (bundle)
+2026-10-14T15:31:01Z	pod-deleted 53q5tp7o0ojzj7 (GET /pods: not found); 2040 s at $2.59/hr = $1.47; staged bundle removed from fv-weights-staging/tmp/

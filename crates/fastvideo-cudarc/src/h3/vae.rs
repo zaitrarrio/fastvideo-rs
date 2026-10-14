@@ -153,6 +153,37 @@ const MXFP8_CHECK_REL_L2: f64 = 1e-1;
 /// The check found the MXFP8 forward off by more than [`MXFP8_CHECK_REL_L2`].
 static MXFP8_BROKEN: AtomicBool = AtomicBool::new(false);
 
+/// [`with_bf16_linears`] is running: the fused ViT takes its bf16 GEMMs.
+static MXFP8_SUSPENDED: AtomicBool = AtomicBool::new(false);
+
+/// `FASTVIDEO_H3_VAE_AB=1` (measurement only, off by default): after each
+/// clip's video decode, when that decode ran the MXFP8 linears, decode the
+/// same latents again with the bf16 linears (the `=0` arithmetic, from the
+/// bf16 weights kept beside the MXFP8 copies) into `<clip>/vae-bf16/`, so one
+/// process gives both decodes of identical latents (the DiT runs once).
+pub const AB_ENV: &str = "FASTVIDEO_H3_VAE_AB";
+
+/// Whether [`AB_ENV`] asks for the bf16 re-decode.
+pub fn ab_requested() -> bool {
+    static FLAG: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
+    FLAG.get_or_init(|| crate::wan::envflag::bool_flag(AB_ENV, false))
+}
+
+/// Run `f` with every decoder's block GEMMs in bf16 even where MXFP8 copies
+/// are loaded (for [`AB_ENV`]): the same kernels and weights as a decoder
+/// loaded with `FASTVIDEO_H3_VAE_MXFP8=0`. Not for concurrent decodes.
+pub fn with_bf16_linears<R>(f: impl FnOnce() -> R) -> R {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            MXFP8_SUSPENDED.store(false, Ordering::Relaxed);
+        }
+    }
+    MXFP8_SUSPENDED.store(true, Ordering::Relaxed);
+    let _restore = Restore;
+    f()
+}
+
 /// `FASTVIDEO_H3_VAE_VEC` (default on; `=0` restores the scalar kernels):
 /// the vector-access twins of the merge-heads and SwiGLU kernels, whose
 /// outputs are bit-identical (768p video VAE 6.30 -> 6.20 s, frames
@@ -542,6 +573,13 @@ impl H3VideoDecoder {
         &self.cfg
     }
 
+    /// Whether a decode now runs the MXFP8 block linears (loaded, not
+    /// refused by the check, not inside [`with_bf16_linears`]). The fused
+    /// ViT must also take the shape; every H3 decode geometry does.
+    pub fn mxfp8_active(&self) -> bool {
+        self.mx_ready()
+    }
+
     pub fn with_tile_batch(mut self, tiles: usize) -> Self {
         self.tile_batch = tiles.max(1);
         self
@@ -579,7 +617,9 @@ impl H3VideoDecoder {
     fn mx_ready(&self) -> bool {
         #[cfg(feature = "cuda")]
         {
-            !MXFP8_BROKEN.load(Ordering::Relaxed) && self.blocks.iter().all(|b| b.mx.is_some())
+            !MXFP8_BROKEN.load(Ordering::Relaxed)
+                && !MXFP8_SUSPENDED.load(Ordering::Relaxed)
+                && self.blocks.iter().all(|b| b.mx.is_some())
         }
         #[cfg(not(feature = "cuda"))]
         {
@@ -1616,6 +1656,17 @@ mod tests {
             assert!(e.contains("sm_100+") && e.contains("=0"), "{e}");
         }
         assert!(r(Some("yes please"), Some(12), 36).is_err());
+    }
+
+    /// `FASTVIDEO_H3_VAE_AB`'s bf16 re-decode suspends the MXFP8 GEMMs only
+    /// inside the closure, and lifts the suspension even if it panics.
+    #[test]
+    fn bf16_linears_are_scoped_to_the_closure() {
+        assert!(!MXFP8_SUSPENDED.load(Ordering::Relaxed));
+        assert!(with_bf16_linears(|| MXFP8_SUSPENDED.load(Ordering::Relaxed)));
+        assert!(!MXFP8_SUSPENDED.load(Ordering::Relaxed));
+        let r = std::panic::catch_unwind(|| with_bf16_linears(|| panic!("decode failed")));
+        assert!(r.is_err() && !MXFP8_SUSPENDED.load(Ordering::Relaxed));
     }
 
     #[test]
