@@ -657,6 +657,22 @@ pub fn routes_with(caps: CapsFn, body_max: usize) -> Router<ServeCtx> {
         )
         .route("/fv/v1/jobs/{id}", handlers::status(proto.clone(), view.clone(), "id").delete(delete))
         .route("/fv/v1/jobs/{id}/content", handlers::result(proto, view, "id"))
+        .route(
+            "/fv/v1/quality/gates",
+            get(|| async {
+                use fastvideo_protocol::quality::QUALITY_GATES;
+                Json(serde_json::json!({
+                    "object": "quality.gates",
+                    "gates": QUALITY_GATES,
+                    "tiers": {
+                        "Max": "must pass all gates",
+                        "Turbo": "must pass all gates",
+                        "Draft": "exempt; results marked via x-fv-quality: draft"
+                    }
+                }))
+                .into_response()
+            }),
+        )
 }
 
 #[cfg(test)]
