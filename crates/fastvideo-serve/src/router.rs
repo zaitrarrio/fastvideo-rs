@@ -129,6 +129,7 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Native, "GET", "/fv/v1/jobs/{id}"),
         r(Native, "DELETE", "/fv/v1/jobs/{id}"),
         r(Native, "GET", "/fv/v1/jobs/{id}/content"),
+        r(Native, "GET", "/fv/v1/quality/gates"),
         r(Native, "GET", "/fv/v1/streams"),
         r(Native, "POST", "/fv/v1/streams"),
         r(Native, "GET", "/fv/v1/outputs"),
