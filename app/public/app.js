@@ -68,4 +68,51 @@ async function renderGallery() {
 
 document.addEventListener("DOMContentLoaded", () => {
   renderGallery().catch((e) => console.error(e));
+  initKeyRequest();
 });
+
+function initKeyRequest() {
+  const submit = document.getElementById("krSubmit");
+  if (!submit) return;
+  const out = document.getElementById("krOut");
+  submit.onclick = async () => {
+    out.textContent = "Submitting…";
+    try {
+      const r = await fetch("/api/v1/key-requests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: document.getElementById("krName").value,
+          email: document.getElementById("krEmail").value,
+          use_case: document.getElementById("krUse").value,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      out.innerHTML = `Request received. Your request ID is <code>${j.id}</code> — save it to check the status.`;
+      document.getElementById("krId").value = j.id;
+    } catch (e) {
+      out.textContent = `Error: ${e.message}`;
+    }
+  };
+  document.getElementById("krCheck").onclick = async () => {
+    const st = document.getElementById("krStatus");
+    const id = document.getElementById("krId").value.trim();
+    if (!id) { st.textContent = "Enter a request ID."; return; }
+    st.textContent = "Checking…";
+    try {
+      const r = await fetch(`/api/v1/key-requests/${encodeURIComponent(id)}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      if (j.status === "fulfilled") {
+        st.innerHTML = `Fulfilled${j.key_hint ? ` (key ending …${j.key_hint})` : ""}. Check your email for the key.`;
+      } else if (j.status === "rejected") {
+        st.textContent = "This request was not approved.";
+      } else {
+        st.textContent = "Pending — we're provisioning your key.";
+      }
+    } catch (e) {
+      st.textContent = `Error: ${e.message}`;
+    }
+  };
+}

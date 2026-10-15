@@ -4,10 +4,14 @@
 
 document.addEventListener("DOMContentLoaded", async () => {
   const id = new URLSearchParams(location.search).get("id");
-  const { models } = await fetch("/api/v1/models").then((r) => r.json());
+  const [{ models }, { prices }] = await Promise.all([
+    fetch("/api/v1/models").then((r) => r.json()),
+    fetch("/api/v1/pricing").then((r) => r.json()),
+  ]);
   const m = models.find((x) => x.id === id) || models[0];
   if (!m) return;
   document.title = `FV — ${m.title}`;
+  const price = (prices.find((p) => p.model === m.id)?.tiers || [])[0] || null;
 
   const detail = document.getElementById("detail");
   detail.innerHTML = `
@@ -16,12 +20,24 @@ document.addEventListener("DOMContentLoaded", async () => {
     <p class="muted" style="max-width:60ch">${m.description}</p>
     <div style="margin:14px 0">
       ${(m.tasks || []).map((t) => `<span class="badge">${t}</span>`).join("")}
+      ${price ? `<span class="badge">$${price.usd_per_sec.toFixed(2)}/s</span>` : ""}
     </div>`;
 
   const urlEl = document.getElementById("pgUrl");
   const keyEl = document.getElementById("pgKey");
+  const secsEl = document.getElementById("pgSecs");
   urlEl.value = localStorage.getItem("fv_engine_url") || "";
   keyEl.value = localStorage.getItem("fv_api_key") || "";
+
+  const estEl = document.getElementById("pgEst");
+  const updateEst = () => {
+    if (price && estEl) {
+      const secs = parseInt(secsEl.value, 10) || 5;
+      estEl.textContent = `Est. cost: $${(secs * price.usd_per_sec).toFixed(2)} (${secs}s × $${price.usd_per_sec.toFixed(2)}/s)`;
+    }
+  };
+  secsEl.onchange = updateEst;
+  updateEst();
 
   document.getElementById("pgRun").onclick = async () => {
     const out = document.getElementById("pgOut");
@@ -63,7 +79,9 @@ document.addEventListener("DOMContentLoaded", async () => {
             v.src = url; v.controls = true; v.style.width = "100%"; v.style.borderRadius = "12px"; v.style.marginTop = "12px";
             vidBox.appendChild(v);
           }
-          out.textContent = `Done in ${pj.inference_time_s ? Number(pj.inference_time_s).toFixed(1) + "s" : "—"}.`;
+          const secs = parseInt(document.getElementById("pgSecs").value, 10) || 5;
+          const cost = price ? ` · Cost: $${(secs * price.usd_per_sec).toFixed(2)}` : "";
+          out.textContent = `Done in ${pj.inference_time_s ? Number(pj.inference_time_s).toFixed(1) + "s" : "—"}.${cost}`;
           break;
         }
         if (status === "failed" || status === "error") { out.textContent = `Failed: ${pj.error || "unknown"}`; break; }

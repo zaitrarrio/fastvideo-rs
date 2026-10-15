@@ -10,6 +10,7 @@ import { PRICES } from "./pricing";
 
 type Env = {
   ASSETS?: { fetch: (req: Request) => Promise<Response> };
+  DB?: D1Database;
 };
 
 const app = new Hono<{ Bindings: Env }>();
@@ -20,6 +21,43 @@ app.get("/api/v1/models", (c) => {
 
 app.get("/api/v1/pricing", (c) => {
   return c.json({ at: Date.now(), placeholder: true, prices: PRICES });
+});
+
+// Key provisioning: request a key, check its status. The key itself is
+// minted operator-side (engine /fv/v1/admin/keys) and delivered out of
+// band; the portal only tracks the request. key_hint is the last 4 chars,
+// never the key.
+function reqId() {
+  const b = new Uint8Array(12);
+  crypto.getRandomValues(b);
+  return "kr_" + [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+app.post("/api/v1/key-requests", async (c) => {
+  if (!c.env.DB) return c.json({ error: "unavailable" }, 503);
+  const body = await c.req.json().catch(() => ({}));
+  const name = String(body.name || "").trim().slice(0, 120);
+  const email = String(body.email || "").trim().slice(0, 200);
+  const use_case = String(body.use_case || "").trim().slice(0, 2000);
+  if (!name || !email || !email.includes("@")) {
+    return c.json({ error: "name and a valid email are required" }, 400);
+  }
+  const id = reqId();
+  await c.env.DB.prepare(
+    "INSERT INTO key_requests (id, name, email, use_case, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)"
+  )
+    .bind(id, name, email, use_case, Date.now())
+    .run();
+  return c.json({ id, status: "pending" }, 201);
+});
+app.get("/api/v1/key-requests/:id", async (c) => {
+  if (!c.env.DB) return c.json({ error: "unavailable" }, 503);
+  const row = await c.env.DB.prepare(
+    "SELECT id, status, key_hint, created_at, fulfilled_at FROM key_requests WHERE id = ?"
+  )
+    .bind(c.req.param("id"))
+    .first<any>();
+  if (!row) return c.json({ error: "not found" }, 404);
+  return c.json(row);
 });
 
 app.get("/healthz", (c) => c.text("ok"));

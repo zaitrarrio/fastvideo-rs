@@ -48,6 +48,27 @@
     <div id="priceTable"></div>
   </section>
 
+  <section class="sect" id="api-key">
+    <h2>Get an API key</h2>
+    <p class="muted">Request a key and we'll provision one for you. Already requested? Check its status below.</p>
+    <div class="grid g2">
+      <div class="card">
+        <h3>Request a key</h3>
+        <label>Name<input id="krName" style="width:100%" placeholder="Ada Lovelace"></label>
+        <label>Email<input id="krEmail" type="email" style="width:100%" placeholder="ada@example.com"></label>
+        <label>What are you building?<textarea id="krUse" rows="2" style="width:100%" placeholder="Short-form ads for my agency"></textarea></label>
+        <button class="btn" id="krSubmit">Request key</button>
+        <div id="krOut" class="muted small" style="margin-top:10px"></div>
+      </div>
+      <div class="card">
+        <h3>Check status</h3>
+        <label>Request ID<input id="krId" style="width:100%" placeholder="kr_…"></label>
+        <button class="btn ghost" id="krCheck">Check status</button>
+        <div id="krStatus" class="muted small" style="margin-top:10px"></div>
+      </div>
+    </div>
+  </section>
+
   <section class="sect" id="docs">
     <h2>Docs</h2>
     <div class="grid g2">
