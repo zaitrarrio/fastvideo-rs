@@ -342,7 +342,7 @@ export class ClusterOps implements DurableObject {
           rt === null ? { phase: "gone", detail: "the pod is gone (deleted outside this operation)", fatal: true } : other ? await otherPodDiag(env, r.pod, rt as Awaited<ReturnType<typeof otherPodState>> | undefined ?? undefined) : await checkPod(env, r.pod, c.id, r.created * 1000, { uptimeS: rt?.uptimeS }).catch(() => null);
         if (!diag) continue;
         if (diag.fatal) {
-          this.log(`${p.id}: pod ${r.pod} FAILED (${diag.phase}): ${diag.detail}; ${r.pod.startsWith("brev:") ? "stopping its VM (kept once stopped; deleted only if its stop fails, owner rule 2026-10-13)" : "deleting it"} (its log and boot timeline are kept: /api/pods/${r.pod}/status)`);
+          this.log(`${p.id}: pod ${r.pod} FAILED (${diag.phase}): ${diag.detail}; ${r.pod.startsWith("brev:") ? "stopping its VM (kept once stopped; deleted only if its stop fails, owner rule 2026-10-13)" : "deleting it"} (its log and boot timeline are kept: /api/v1/pods/${r.pod}/status)`);
           await podUpdate(env, r.pod, { status: "failed" });
           await deletePod(env, r.pod, this.log, `${p.id} ${diag.phase}`);
           c.state.workers[p.id] = (c.state.workers[p.id] || []).filter((x) => x.pod !== r.pod);

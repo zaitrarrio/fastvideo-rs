@@ -1,6 +1,6 @@
 // The launch forms' lazy provider details (owner 2026-10-12: "we should not load provider details / prices until a
-// provider is selected"): GET /api/schemas/dynamic?live=0 calls no upstream API, ?provider=<p> calls only that
-// provider's (cached briefly, one call in flight), /api/providers?provider=<p> reads only that one, and the launch
+// provider is selected"): GET /api/v1/schemas/dynamic?live=0 calls no upstream API, ?provider=<p> calls only that
+// provider's (cached briefly, one call in flight), /api/v1/providers?provider=<p> reads only that one, and the launch
 // validator's ?live=0 checks the request without any provider call.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mintApiToken } from "../../src/auth";
@@ -71,12 +71,12 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("GET /api/schemas/dynamic: the launch form's open and per-provider details", () => {
+describe("GET /api/v1/schemas/dynamic: the launch form's open and per-provider details", () => {
   it("?live=0 calls no upstream API: presets, regions and the provider list (on / off from the config) only", async () => {
     upstream();
     const env = mkEnv({ GMI_PRODUCTS: "" });
     const api = await client(env);
-    const r = await api("/api/schemas/dynamic?live=0");
+    const r = await api("/api/v1/schemas/dynamic?live=0");
     expect(r.status).toBe(200);
     expect(calls).toEqual([]);
     expect(r.j.live).toBe(false);
@@ -93,7 +93,7 @@ describe("GET /api/schemas/dynamic: the launch form's open and per-provider deta
   it("the default (no ?live=0) is still the full view (the JSON editor, the CLI): Runpod and Brev are asked", async () => {
     upstream();
     const api = await client(mkEnv());
-    const r = await api("/api/schemas/dynamic");
+    const r = await api("/api/v1/schemas/dynamic");
     expect(r.status).toBe(200);
     expect(r.j.live).toBe(true);
     expect(r.j.gpu_types[0].id).toBe("NVIDIA H100 80GB HBM3");
@@ -104,7 +104,7 @@ describe("GET /api/schemas/dynamic: the launch form's open and per-provider deta
     upstream();
     const env = mkEnv();
     const api = await client(env);
-    const r = await api("/api/schemas/dynamic?provider=brev");
+    const r = await api("/api/v1/schemas/dynamic?provider=brev");
     expect(r.status).toBe(200);
     expect(hosts()).toEqual(["brev.test"]);
     expect(r.j).toMatchObject({ provider: "brev", enabled: true, live_ok: true, parked: [], budget: { budget_usd: 10, month_usd: 0 } });
@@ -113,57 +113,57 @@ describe("GET /api/schemas/dynamic: the launch form's open and per-provider deta
     expect(r.j.provider_gpus[0].detail).toMatch(/\$1\.01\/hr · stoppable/);
     // The type list is cached (1 h): a second pick asks Brev nothing.
     calls = [];
-    expect((await api("/api/schemas/dynamic?provider=brev")).status).toBe(200);
+    expect((await api("/api/v1/schemas/dynamic?provider=brev")).status).toBe(200);
     expect(calls).toEqual([]);
   });
 
   it("?provider=gmi asks GMI only (products cached 60 s); ?provider=runpod asks Runpod only (cached 5 min)", async () => {
     upstream();
     const api = await client(mkEnv());
-    const g = await api("/api/schemas/dynamic?provider=gmi");
+    const g = await api("/api/v1/schemas/dynamic?provider=gmi");
     expect(hosts()).toEqual(["gmi.test"]);
     expect(g.j).toMatchObject({ provider: "gmi", enabled: true, live_ok: true, provider_regions: [{ id: "us-denver-1" }], budget: { budget_usd: 20 } });
     expect(g.j.provider_gpus).toEqual([{ id: "container.h200.x1", detail: "GMI Cloud · $3.20/hr · available", provider: "gmi", usd_per_hr: 3.2, in_stock: true }]);
     calls = [];
-    await api("/api/schemas/dynamic?provider=gmi");
+    await api("/api/v1/schemas/dynamic?provider=gmi");
     expect(calls).toEqual([]);
-    const rp = await api("/api/schemas/dynamic?provider=runpod");
+    const rp = await api("/api/v1/schemas/dynamic?provider=runpod");
     expect(hosts()).toEqual(["api.runpod.io"]);
     expect(rp.j).toMatchObject({ provider: "runpod", enabled: true, live_ok: true });
     expect(rp.j.gpu_types[0]).toMatchObject({ id: "NVIDIA H100 80GB HBM3", secure_price: 2.99, stock: "High" });
     calls = [];
-    await api("/api/schemas/dynamic?provider=runpod");
+    await api("/api/v1/schemas/dynamic?provider=runpod");
     expect(calls).toEqual([]);
   });
 
   it("an off provider is answered from the config without a call; an unknown one is a 404", async () => {
     upstream();
     const api = await client(mkEnv({ BREV_API_TOKEN: undefined }));
-    const r = await api("/api/schemas/dynamic?provider=brev");
+    const r = await api("/api/v1/schemas/dynamic?provider=brev");
     expect(r.status).toBe(200);
     expect(calls).toEqual([]);
     expect(r.j).toMatchObject({ provider: "brev", enabled: false, live_ok: false, provider_gpus: [{ id: "g5.xlarge", provider: "brev" }] });
     expect(r.j.reason).toMatch(/NVIDIA Brev is off/);
-    expect((await api("/api/schemas/dynamic?provider=cloudrift")).status).toBe(404);
+    expect((await api("/api/v1/schemas/dynamic?provider=cloudrift")).status).toBe(404);
   });
 
   it("an upstream failure is reported (live_ok false), not cached: the next pick asks again", async () => {
     upstream();
     const env = mkEnv({ GMI_API: "https://gmi-down.test/api" });
     const api = await client(env);
-    const r = await api("/api/schemas/dynamic?provider=gmi");
+    const r = await api("/api/v1/schemas/dynamic?provider=gmi");
     expect(r.status).toBe(200);
     expect(r.j.live_ok).toBe(false);
     expect(r.j.provider_gpus[0].detail).toBe("GMI Cloud · price unknown");
     const n = calls.length;
-    await api("/api/schemas/dynamic?provider=gmi");
+    await api("/api/v1/schemas/dynamic?provider=gmi");
     expect(calls.length).toBeGreaterThan(n);
   });
 
   it("concurrent asks share one Runpod call (the details and the validator at once)", async () => {
     upstream({ runpodDelayMs: 30 });
     const api = await client(mkEnv());
-    const rs = await Promise.all([api("/api/schemas/dynamic?provider=runpod"), api("/api/schemas/dynamic?provider=runpod"), api("/api/schemas/dynamic?provider=runpod")]);
+    const rs = await Promise.all([api("/api/v1/schemas/dynamic?provider=runpod"), api("/api/v1/schemas/dynamic?provider=runpod"), api("/api/v1/schemas/dynamic?provider=runpod")]);
     expect(rs.every((r) => r.j.gpu_types.length === 1)).toBe(true);
     expect(calls.filter((c) => c.host === "api.runpod.io")).toHaveLength(1);
   });
@@ -171,38 +171,38 @@ describe("GET /api/schemas/dynamic: the launch form's open and per-provider deta
   it("?images=1: the commits with images (GHCR) on their own", async () => {
     upstream();
     const api = await client(mkEnv());
-    const r = await api("/api/schemas/dynamic?images=1");
+    const r = await api("/api/v1/schemas/dynamic?images=1");
     expect(r.status).toBe(200);
     expect(Array.isArray(r.j.shas)).toBe(true);
     expect(hosts().every((h) => h.startsWith("ghcr"))).toBe(true);
   });
 });
 
-describe("GET /api/providers?provider= and the launch validator's ?live=0", () => {
+describe("GET /api/v1/providers?provider= and the launch validator's ?live=0", () => {
   it("?provider=brev returns only Brev's view; an unknown id is a 404; no filter: all four", async () => {
     upstream();
     const api = await client(mkEnv());
-    const one = await api("/api/providers?provider=brev");
+    const one = await api("/api/v1/providers?provider=brev");
     expect(one.j.providers.map((p: any) => p.id)).toEqual(["brev"]);
     expect(one.j.providers[0]).toMatchObject({ enabled: true, budget_usd: 10, launch: true });
-    expect((await api("/api/providers?provider=nope")).status).toBe(404);
-    expect((await api("/api/providers")).j.providers.map((p: any) => p.id)).toEqual(["runpod", "cloudrift", "gmi", "brev"]);
+    expect((await api("/api/v1/providers?provider=nope")).status).toBe(404);
+    expect((await api("/api/v1/providers")).j.providers.map((p: any) => p.id)).toEqual(["runpod", "cloudrift", "gmi", "brev"]);
     expect(calls).toEqual([]);
   });
 
-  it("POST /api/standalone/validate?live=0 checks the request (rules, name) without a provider call; without it, Runpod is asked", async () => {
+  it("POST /api/v1/standalone/validate?live=0 checks the request (rules, name) without a provider call; without it, Runpod is asked", async () => {
     upstream();
     const env = mkEnv();
     const api = await client(env);
     const body = { name: "lazy-a", preset: "h3-turbo", channel: "stable", region: "eu", deadline_min: 60, env: {} };
-    const r = await api("/api/standalone/validate?live=0", { method: "POST", body });
+    const r = await api("/api/v1/standalone/validate?live=0", { method: "POST", body });
     expect(r.status).toBe(200);
     expect(r.j.ok).toBe(true);
     expect(calls).toEqual([]);
-    const bad = await api("/api/standalone/validate?live=0", { method: "POST", body: { ...body, deadline_min: 1 } });
+    const bad = await api("/api/v1/standalone/validate?live=0", { method: "POST", body: { ...body, deadline_min: 1 } });
     expect(bad.j.issues.map((i: any) => i.path[0])).toContain("deadline_min");
     expect(calls).toEqual([]);
-    await api("/api/standalone/validate", { method: "POST", body: { ...body, provider: "runpod" } });
+    await api("/api/v1/standalone/validate", { method: "POST", body: { ...body, provider: "runpod" } });
     expect(hosts()).toContain("api.runpod.io");
     expect(hosts()).not.toContain("brev.test");
     expect(hosts()).not.toContain("gmi.test");
@@ -211,7 +211,7 @@ describe("GET /api/providers?provider= and the launch validator's ?live=0", () =
   it("a Brev launch's live check asks no Runpod API (its catalog is only for Runpod GPU pools)", async () => {
     upstream();
     const api = await client(mkEnv());
-    const r = await api("/api/standalone/validate", { method: "POST", body: { name: "lazy-b", variant: "cpu", config: "/etc/fv/runpod-fake.toml", fake_models: ["fake-wan"], channel: "stable", deadline_min: 60, env: {}, provider: "brev", provider_gpu: "g5.xlarge", weights_source: "none" } });
+    const r = await api("/api/v1/standalone/validate", { method: "POST", body: { name: "lazy-b", variant: "cpu", config: "/etc/fv/runpod-fake.toml", fake_models: ["fake-wan"], channel: "stable", deadline_min: 60, env: {}, provider: "brev", provider_gpu: "g5.xlarge", weights_source: "none" } });
     expect(r.status).toBe(200);
     expect(r.j.issues).toEqual([]);
     expect(hosts()).toContain("brev.test");

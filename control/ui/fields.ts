@@ -1,5 +1,5 @@
 // Schema-bound form controls (docs/control/config-validation.md): every
-// control is made from the field's JSON Schema (GET /api/schemas, the zod
+// control is made from the field's JSON Schema (GET /api/v1/schemas, the zod
 // schemas of src/schemas.ts), so the UI cannot offer what the server
 // refuses. An enum is a select or a segmented control, a live list
 // (x-dynamic) a select or ordered chips with stale values flagged, a number
@@ -113,7 +113,7 @@ export interface FieldOpts {
   kind?: ControlKind;
   wide?: boolean;
   placeholder?: string;
-  /** Check the name's uniqueness as you type (GET /api/names/<kind>). */
+  /** Check the name's uniqueness as you type (GET /api/v1/names/<kind>). */
   nameCheck?: "cluster" | "endpoint" | "token";
   /** Options instead of the schema's / the live list's. */
   options?: Option[];
@@ -131,7 +131,7 @@ export interface FieldOpts {
   step?: number | "any";
 }
 export interface FormOptions {
-  /** The schema's name (GET /api/schemas/<name>), recorded on every control (data-schema) for the coverage check. */
+  /** The schema's name (GET /api/v1/schemas/<name>), recorded on every control (data-schema) for the coverage check. */
   schemaName: string;
   schema: Schema;
   dyn?: Dynamic;
@@ -552,7 +552,7 @@ export function createForm(o: FormOptions): Form {
         const my = ++seq;
         t = setTimeout(async () => {
           try {
-            const r = await o.api(`/api/names/${opts.nameCheck}?name=${encodeURIComponent(v)}`);
+            const r = await o.api(`/api/v1/names/${opts.nameCheck}?name=${encodeURIComponent(v)}`);
             if (my !== seq) return;
             f.async = f.async.filter((m) => !m.startsWith("taken:"));
             if (r.taken) f.async.push(`taken: ${r.problem}`);

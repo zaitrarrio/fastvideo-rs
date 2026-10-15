@@ -16,7 +16,7 @@ export async function configValidationChecks({ page, B, api, raw, out }) {
   };
   const audit = async () => {
     const probs = await page.evaluate(async () => {
-      const s = (await (await fetch("/api/schemas", { credentials: "same-origin" })).json()).schemas;
+      const s = (await (await fetch("/api/v1/schemas", { credentials: "same-origin" })).json()).schemas;
       return window.FVEditor.auditForms(document, s);
     });
     assert.deepEqual(probs, [], `coverage audit: ${probs.join("\n")}`);
@@ -183,7 +183,7 @@ export async function configValidationChecks({ page, B, api, raw, out }) {
   await audit();
 
   // ---------------------------------------------------------------- env editor
-  const cl = (await api("/api/clusters")).clusters.find((c) => c.name === "tiny");
+  const cl = (await api("/api/v1/clusters")).clusters.find((c) => c.name === "tiny");
   await go(`#/env?cluster=${cl.id}`);
   const envp = ".fv-panel[data-kind=env] >> nth=1";
   await page.waitForSelector(`${envp} >> button:text('+ variable')`);
@@ -258,20 +258,20 @@ export async function configValidationChecks({ page, B, api, raw, out }) {
 
   // ---------------------------------------------------------------- the server refuses the same input
   const st = async (p, body, method = "POST") => (await raw(p, body, method)).status;
-  assert.equal(await st("/api/standalone", { name: "cv-x", preset: "h3-turbo", deadline_min: 2, start: false }), 400);
-  assert.equal(await st("/api/standalone", { name: "tiny", preset: "h3-turbo", start: false }), 409);
-  assert.equal(await st("/api/serverless", { spec: { name: "cv-y", scaler_value: 0.5 } }), 400);
-  assert.equal(await st("/api/build-pods/policy", { policy: { vcpus: [3] } }, "PUT"), 400);
-  assert.equal(await st("/api/serverless/policy", { policy: { max_workers: 999 } }, "PUT"), 400);
-  assert.equal(await st("/api/github/release", { action: "promote", channel: "stable" }), 400);
-  assert.equal(await st("/api/github/release", { action: "promote", channel: "nightly-x", target: "abcdef1" }), 400);
-  assert.equal(await st(`/api/clusters/${cl.id}/extend`, { minutes: 0 }), 400);
-  assert.equal(await st(`/api/clusters/${cl.id}/scale`, { pool: "fake", count: 9 }), 400);
-  assert.equal(await st(`/api/clusters/${cl.id}/scale`, { pool: "nope", count: 1 }), 400);
-  assert.equal(await st(`/api/clusters/${cl.id}/mint-key`, { name: "a/b" }), 400);
-  assert.equal(await st("/api/clusters", { spec: { name: "new", template: "tiny-cpu" } }), 400);
-  assert.equal(await st("/api/logs/query?from=yesterday", undefined, "GET"), 400);
-  const n = await api("/api/names/cluster?name=tiny");
+  assert.equal(await st("/api/v1/standalone", { name: "cv-x", preset: "h3-turbo", deadline_min: 2, start: false }), 400);
+  assert.equal(await st("/api/v1/standalone", { name: "tiny", preset: "h3-turbo", start: false }), 409);
+  assert.equal(await st("/api/v1/serverless", { spec: { name: "cv-y", scaler_value: 0.5 } }), 400);
+  assert.equal(await st("/api/v1/build-pods/policy", { policy: { vcpus: [3] } }, "PUT"), 400);
+  assert.equal(await st("/api/v1/serverless/policy", { policy: { max_workers: 999 } }, "PUT"), 400);
+  assert.equal(await st("/api/v1/github/release", { action: "promote", channel: "stable" }), 400);
+  assert.equal(await st("/api/v1/github/release", { action: "promote", channel: "nightly-x", target: "abcdef1" }), 400);
+  assert.equal(await st(`/api/v1/clusters/${cl.id}/extend`, { minutes: 0 }), 400);
+  assert.equal(await st(`/api/v1/clusters/${cl.id}/scale`, { pool: "fake", count: 9 }), 400);
+  assert.equal(await st(`/api/v1/clusters/${cl.id}/scale`, { pool: "nope", count: 1 }), 400);
+  assert.equal(await st(`/api/v1/clusters/${cl.id}/mint-key`, { name: "a/b" }), 400);
+  assert.equal(await st("/api/v1/clusters", { spec: { name: "new", template: "tiny-cpu" } }), 400);
+  assert.equal(await st("/api/v1/logs/query?from=yesterday", undefined, "GET"), 400);
+  const n = await api("/api/v1/names/cluster?name=tiny");
   assert.equal(n.taken, true);
-  assert.equal((await api("/api/names/endpoint?name=policy")).ok, false);
+  assert.equal((await api("/api/v1/names/endpoint?name=policy")).ok, false);
 }

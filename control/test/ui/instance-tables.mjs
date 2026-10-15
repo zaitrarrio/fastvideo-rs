@@ -105,8 +105,8 @@ try {
   page.on("pageerror", (e) => errors.push(e.message));
   const reqs = [];
   const failed = [];
-  page.on("request", (r) => r.url().includes("/api/") && reqs.push(`${r.method()} ${r.url().slice(B.length)}`));
-  page.on("requestfailed", (r) => r.url().includes("/api/") && failed.push(`${r.method()} ${r.url().slice(B.length)} ${r.failure()?.errorText}`));
+  page.on("request", (r) => r.url().includes("/api/v1/") && reqs.push(`${r.method()} ${r.url().slice(B.length)}`));
+  page.on("requestfailed", (r) => r.url().includes("/api/v1/") && failed.push(`${r.method()} ${r.url().slice(B.length)} ${r.failure()?.errorText}`));
   const typeReqs = () => reqs.filter((r) => r.includes("/instance-types"));
   await page.goto(B + "/");
   await page.waitForSelector("#pass");
@@ -120,7 +120,7 @@ try {
   await page.goto(`${B}/#/standalone`);
   const SL = '[data-schema-form="standalone-launch"]';
   await page.waitForSelector(`${SL} .ff-field[data-path="name"]`);
-  await page.waitForResponse((r) => r.url().includes("/api/standalone/validate"), { timeout: 10000 });
+  await page.waitForResponse((r) => r.url().includes("/api/v1/standalone/validate"), { timeout: 10000 });
   await page.waitForTimeout(600);
   assert.deepEqual(typeReqs(), [], `no table on open: ${reqs}`);
   assert.equal(await page.$("[data-instance-table]"), null, "no table before a pick");
@@ -144,7 +144,7 @@ try {
   // ---- Brev: the table loads on the pick (one request, no refresh)
   await pick("brev");
   await loaded("brev");
-  assert.deepEqual(typeReqs(), ["GET /api/providers/brev/instance-types"], `Brev's table, once: ${reqs}`);
+  assert.deepEqual(typeReqs(), ["GET /api/v1/providers/brev/instance-types"], `Brev's table, once: ${reqs}`);
   assert.match(await count("brev"), /^1–25 of 32 · 2 launchable · /, await count("brev"));
   const headers = await page.$$eval(`${T("brev")} thead th`, (ths) => ths.map((t) => t.textContent.trim()));
   for (const h of ["Name", "Spec", "Available", "Cost $/hr", "$/GPU-hr", "Model", "Model family", "RAM", "vCPU", "GPU", "GPU family", "VRAM", "Storage type", "Storage size", "Region", "Stoppable", "Deploy", "Launchable"])
@@ -243,7 +243,7 @@ try {
   await page.waitForTimeout(20);
   await page.click(`${T("brev")} [data-it-refresh]`);
   await loaded("brev");
-  assert.deepEqual(typeReqs(), ["GET /api/providers/brev/instance-types?refresh=1"], `refresh: ${reqs}`);
+  assert.deepEqual(typeReqs(), ["GET /api/v1/providers/brev/instance-types?refresh=1"], `refresh: ${reqs}`);
   assert.equal(mock.brev.calls.filter((x) => x.path.startsWith("/instances/alltypesavailable")).length, brevCalls0 + 1, "the refresh reads Brev again");
   assert.ok(Number(await page.getAttribute(`${T("brev")} .it-status`, "data-at")) > at0, "a newer list");
   assert.doesNotMatch(await page.textContent(`${T("brev")} .it-status`), /cached/);
@@ -257,7 +257,7 @@ try {
   await pick("gmi");
   await loaded("gmi");
   assert.equal(await page.$(T("brev")), null, "Brev's table is gone");
-  assert.deepEqual(typeReqs(), ["GET /api/providers/gmi/instance-types"]);
+  assert.deepEqual(typeReqs(), ["GET /api/v1/providers/gmi/instance-types"]);
   assert.deepEqual((await names("gmi")).sort(), ["container.b200.x1@us-denver-1", "container.h200.x1@us-denver-1"]);
   assert.match(await page.getAttribute(`${T("gmi")} tr[data-row="container.b200.x1@us-denver-1"]`, "title"), /not in GMI_PRODUCTS/);
   await page.click(`${T("gmi")} tr[data-row="container.h200.x1@us-denver-1"]`);
@@ -266,16 +266,16 @@ try {
   await docShot(await page.$(T("gmi")), "instance-table-gmi.png");
 
   // ---- Runpod picked while its table loads, then Brev: the stale load is cancelled and Brev's table shows
-  await page.route("**/api/providers/runpod/instance-types", async (r) => (await new Promise((res) => setTimeout(res, 1500)), r.continue().catch(() => {})));
+  await page.route("**/api/v1/providers/runpod/instance-types", async (r) => (await new Promise((res) => setTimeout(res, 1500)), r.continue().catch(() => {})));
   failed.length = 0;
   await pick("runpod");
   await page.waitForSelector(`${T("runpod")} .it-status[data-loading]`);
   await pick("brev");
   await loaded("brev");
   await page.waitForTimeout(1800);
-  assert.ok(failed.some((f) => f.startsWith("GET /api/providers/runpod/instance-types")), `the stale Runpod table load is cancelled: ${failed}`);
+  assert.ok(failed.some((f) => f.startsWith("GET /api/v1/providers/runpod/instance-types")), `the stale Runpod table load is cancelled: ${failed}`);
   assert.equal(await page.$(T("runpod")), null, "no Runpod table");
-  await page.unroute("**/api/providers/runpod/instance-types");
+  await page.unroute("**/api/v1/providers/runpod/instance-types");
 
   // ---- Runpod: GPU types × data centres. Weights volume (h3-turbo's default): only EU-RO-1 (the volume) is launchable
   await pick("runpod");
@@ -390,8 +390,8 @@ try {
 
   // ---- launch: an r2 pod in US data centres, the fallbacks in order (the preflight and the create answered here)
   let posted = null;
-  await page.route("**/api/preflight", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, errors: [], warnings: [] }) }));
-  await page.route("**/api/standalone", (r) => (r.request().method() === "POST" ? ((posted = r.request().postDataJSON()), r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ pod: { name: "tables-ui" } }) })) : r.continue()));
+  await page.route("**/api/v1/preflight", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, errors: [], warnings: [] }) }));
+  await page.route("**/api/v1/standalone", (r) => (r.request().method() === "POST" ? ((posted = r.request().postDataJSON()), r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ pod: { name: "tables-ui" } }) })) : r.continue()));
   await page.waitForFunction((s) => !document.querySelector(`${s} button[type=submit]`).disabled, SL, { timeout: 15000 }).catch(async (e) => {
     throw new Error(`${e.message}: ${await page.$$eval(`${SL} .cf-err:not([hidden])`, (es) => es.map((x) => `${x.closest("[data-path]")?.getAttribute("data-path")}: ${x.textContent}`).join(" | "))} ${await page.textContent(`${SL} .ff-summary, ${SL} [class*=summary]`).catch(() => "")}`);
   });

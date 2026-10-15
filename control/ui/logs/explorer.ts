@@ -1,5 +1,5 @@
 // The log explorer (Logs page): every log fv-control keeps in one virtualized
-// list over /api/logs/query, with the filters in the URL. See
+// list over /api/v1/logs/query, with the filters in the URL. See
 // docs/control/README.md "Logs" for the keyboard shortcuts and the API.
 import { badge, copyText, download, h, store, type Api } from "../dom";
 import {
@@ -90,7 +90,7 @@ export async function mountLogs(host: HTMLElement, o: MountOptions) {
   let findTest: ((l: XLine) => boolean) | null = null;
 
   // ---- pickers' data (loaded once)
-  const [clustersR, podsR] = await Promise.all([api("/api/clusters").catch(() => ({ clusters: [] })), api("/api/pods?all=1").catch(() => ({ pods: [] }))]);
+  const [clustersR, podsR] = await Promise.all([api("/api/v1/clusters").catch(() => ({ clusters: [] })), api("/api/v1/pods?all=1").catch(() => ({ pods: [] }))]);
   const clusters: { id: string; name: string; pools: string[] }[] = (clustersR.clusters || []).map((c: any) => ({ id: c.id, name: c.name, pools: (c.spec?.pools || []).map((p: any) => p.id) }));
   const podsInfo = new Map<string, { name: string; owner: string; cluster_id: string | null }>();
   for (const p of podsR.pods || []) podsInfo.set(p.pod_id, { name: p.name || p.pod_id, owner: p.owner, cluster_id: p.cluster_id ?? null });
@@ -278,11 +278,11 @@ export async function mountLogs(host: HTMLElement, o: MountOptions) {
       h(
         "div",
         { class: "lx-menubody" },
-        h("a", { class: "btn", href: `/api/logs/export?${sp}&format=ndjson`, download: "" }, "Filtered result (NDJSON)"),
-        h("a", { class: "btn", href: `/api/logs/export?${sp}&format=txt`, download: "" }, "Filtered result (text)"),
+        h("a", { class: "btn", href: `/api/v1/logs/export?${sp}&format=ndjson`, download: "" }, "Filtered result (NDJSON)"),
+        h("a", { class: "btn", href: `/api/v1/logs/export?${sp}&format=txt`, download: "" }, "Filtered result (text)"),
         h("button", { type: "button", onclick: () => download(`fv-logs-loaded.ndjson`, buf.map((l) => JSON.stringify(l)).join("\n") + "\n", "application/x-ndjson") }, `Loaded lines (${buf.length})`),
         h("button", { type: "button", onclick: () => { const t = selectionText(); if (!t) return toast("nothing selected"); download("fv-logs-selection.log", t + "\n"); } }, "Selection (text)"),
-        view.pod && (view.src.includes("pod") || view.src.includes("archive")) ? h("a", { class: "btn", href: `/api/logs/download?pod=${encodeURIComponent(view.pod)}&day=${new Date().toISOString().slice(0, 10)}` }, "Pod archive, today (raw)") : null,
+        view.pod && (view.src.includes("pod") || view.src.includes("archive")) ? h("a", { class: "btn", href: `/api/v1/logs/download?pod=${encodeURIComponent(view.pod)}&day=${new Date().toISOString().slice(0, 10)}` }, "Pod archive, today (raw)") : null,
       ),
     );
   }
@@ -391,7 +391,7 @@ export async function mountLogs(host: HTMLElement, o: MountOptions) {
   const q = (extra: Record<string, string>) => {
     const p = serverParams(view);
     for (const [k, v] of Object.entries(extra)) p.set(k, v);
-    return api(`/api/logs/query?${p}`);
+    return api(`/api/v1/logs/query?${p}`);
   };
   async function load() {
     const my = ++seq;
@@ -514,7 +514,7 @@ export async function mountLogs(host: HTMLElement, o: MountOptions) {
       try {
         const p = serverParams(view);
         if (tail) p.set("tail", tail);
-        const r = await api(`/api/logs/live?${p}`);
+        const r = await api(`/api/v1/logs/live?${p}`);
         if (my !== seq) return;
         tail = r.tail;
         if (r.lines.length) {
@@ -595,7 +595,7 @@ export async function mountLogs(host: HTMLElement, o: MountOptions) {
     const my = seq;
     try {
       const p = serverParams(view);
-      const f = await api(`/api/logs/facets?${p}&buckets=90`);
+      const f = await api(`/api/v1/logs/facets?${p}&buckets=90`);
       if (my !== seq) return;
       facetPods = f.pods || [];
       drawPodPicker();
@@ -1071,7 +1071,7 @@ export async function mountLogs(host: HTMLElement, o: MountOptions) {
     if (!["pod", "op", "audit"].includes(l.source)) return;
     box.replaceChildren(h("p", { class: "muted small" }, "loading context…"));
     try {
-      const r = await api(`/api/logs/context?uid=${encodeURIComponent(l.uid)}&before=${view.ctx}&after=${view.ctx}`);
+      const r = await api(`/api/v1/logs/context?uid=${encodeURIComponent(l.uid)}&before=${view.ctx}&after=${view.ctx}`);
       box.replaceChildren(
         h("h3", {}, `Context: ${view.ctx} before and after`, l.source === "pod" ? " (same pod, every level)" : l.source === "op" ? " (same operation)" : " (audit log)"),
         h(

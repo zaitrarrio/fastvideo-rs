@@ -61,7 +61,7 @@ queue_max = 8
 body_max_mb = 16
 `;
 
-/** Cluster templates (GET /api/templates): standard, tiny-cpu, and preset groups. */
+/** Cluster templates (GET /api/v1/templates): standard, tiny-cpu, and preset groups. */
 export const TEMPLATES: Record<string, { title: string; pools: string[] }> = {
   standard: { title: "h3-turbo, h3-max, ltx, wan GPU pools", pools: ["h3-turbo", "h3-max", "ltx", "wan"] },
   "tiny-cpu": { title: "1 fake-engine CPU worker (tests)", pools: [] },

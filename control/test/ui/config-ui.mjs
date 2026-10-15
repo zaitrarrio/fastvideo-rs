@@ -29,16 +29,16 @@ const B = w.url;
 let browser;
 let page;
 try {
-  const login = await fetch(`${B}/api/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ passphrase: PASSPHRASE }) });
+  const login = await fetch(`${B}/api/v1/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ passphrase: PASSPHRASE }) });
   const cookie = login.headers.get("set-cookie").split(";")[0];
   const { csrf } = await login.json();
-  const tok = (await (await fetch(`${B}/api/tokens`, { method: "POST", headers: { cookie, "x-csrf-token": csrf, "content-type": "application/json" }, body: JSON.stringify({ name: "seed" }) })).json()).token;
+  const tok = (await (await fetch(`${B}/api/v1/tokens`, { method: "POST", headers: { cookie, "x-csrf-token": csrf, "content-type": "application/json" }, body: JSON.stringify({ name: "seed" }) })).json()).token;
   const raw = (p, body, method) => fetch(B + p, { method: method || (body ? "POST" : "GET"), headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   const api = (p, body, method) => raw(p, body, method).then((r) => r.json());
-  const tiny = await api("/api/clusters", { spec: { name: "tiny", template: "tiny-cpu", cap_s: 3600 } });
-  await api(`/api/clusters/${tiny.cluster.id}/start`, {});
+  const tiny = await api("/api/v1/clusters", { spec: { name: "tiny", template: "tiny-cpu", cap_s: 3600 } });
+  await api(`/api/v1/clusters/${tiny.cluster.id}/start`, {});
   for (let i = 0; i < 60; i++) {
-    const ops = await api(`/api/clusters/${tiny.cluster.id}/ops`);
+    const ops = await api(`/api/v1/clusters/${tiny.cluster.id}/ops`);
     if (ops.operations[0]?.status !== "running") break;
     await new Promise((r) => setTimeout(r, 1000));
   }

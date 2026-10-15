@@ -14,7 +14,7 @@ const placements = (x: Record<string, unknown>) => {
   const { spec } = launch(x);
   return workerPlacements(spec, spec.pools[0]!);
 };
-/** The launch check's answer at a path: what the validator (POST /api/standalone/validate) and the preflight say. */
+/** The launch check's answer at a path: what the validator (POST /api/v1/standalone/validate) and the preflight say. */
 const refused = (x: Record<string, unknown>) => {
   try {
     launch(x);

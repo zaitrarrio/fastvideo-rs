@@ -1,5 +1,5 @@
 // Every instance type a launch provider lists, one normalized row each, for
-// the launch screen's tables (GET /api/providers/:id/instance-types,
+// the launch screen's tables (GET /api/v1/providers/:id/instance-types,
 // docs/control/README.md "Instance types"): Runpod's GPU types per data centre
 // (with stock), every Brev instance type of the org's listing (CPU-only ones
 // too), every GMI container product. Rows outside what fv-control can launch
@@ -371,7 +371,7 @@ const TTL = { runpod: 300_000, gmi: 60_000 };
 const sortRows = (rows: InstanceTypeRow[]) =>
   rows.sort((a, b) => Number(b.supported) - Number(a.supported) || Number(b.available === true) - Number(a.available === true) || (a.usd_per_hr ?? 1e9) - (b.usd_per_hr ?? 1e9) || a.id.localeCompare(b.id));
 
-/** GET /api/providers/:id/instance-types: every type the provider lists, normalized; `refresh` reads the upstream again (rate-limited). */
+/** GET /api/v1/providers/:id/instance-types: every type the provider lists, normalized; `refresh` reads the upstream again (rate-limited). */
 export async function instanceTypes(env: Env, p: string, o: { refresh?: boolean } = {}): Promise<InstanceTypesView> {
   if (!(INSTANCE_TYPE_PROVIDERS as readonly string[]).includes(p)) throw new HttpError(404, `no launch provider ${p} (${INSTANCE_TYPE_PROVIDERS.join(", ")})`);
   const t0 = Date.now();

@@ -7,20 +7,20 @@ import type { Issue, Path, Schema } from "../schema";
 
 let schemas: Promise<Record<string, Schema>> | null = null;
 const dyns = new Map<string, Promise<Dynamic>>();
-export const loadSchemas = (api: Api) => (schemas ||= api("/api/schemas").then((r) => r.schemas));
+export const loadSchemas = (api: Api) => (schemas ||= api("/api/v1/schemas").then((r) => r.schemas));
 /** The lists; `live: false` (the launch forms): no provider's API is called, see loadProvider. */
 export const loadDyn = (api: Api, cluster = "", o: { live?: boolean } = {}) => {
   const live = o.live !== false;
   const k = `${cluster}|${live}`;
   const q = [cluster ? `cluster=${encodeURIComponent(cluster)}` : "", live ? "" : "live=0"].filter(Boolean).join("&");
-  if (!dyns.has(k)) dyns.set(k, api(`/api/schemas/dynamic${q ? `?${q}` : ""}`).catch(() => ({})));
+  if (!dyns.has(k)) dyns.set(k, api(`/api/v1/schemas/dynamic${q ? `?${q}` : ""}`).catch(() => ({})));
   return dyns.get(k)!;
 };
 /** Forget the live lists (after a create: names, endpoints). */
 export const resetDyn = () => (dyns.clear(), providers.clear());
 
 /**
- * One launch provider's live details (GET /api/schemas/dynamic?provider=<p>: GPU / instance types with $/hr and stock,
+ * One launch provider's live details (GET /api/v1/schemas/dynamic?provider=<p>: GPU / instance types with $/hr and stock,
  * GMI's IDC, Brev's parked VMs, the budget), asked only once that provider is picked; kept for the page's session.
  * A load aborted by its signal (the pick changed first) is forgotten, so the next pick asks again.
  */
@@ -40,7 +40,7 @@ export interface ProviderDetails {
 export const providerLoaded = (p: string) => providers.has(p);
 export function loadProvider(api: Api, p: string, signal?: AbortSignal): Promise<ProviderDetails> {
   if (!providers.has(p)) {
-    const pr = api(`/api/schemas/dynamic?provider=${encodeURIComponent(p)}`, { signal });
+    const pr = api(`/api/v1/schemas/dynamic?provider=${encodeURIComponent(p)}`, { signal });
     providers.set(p, pr);
     pr.catch(() => providers.get(p) === pr && providers.delete(p));
   }
@@ -49,7 +49,7 @@ export function loadProvider(api: Api, p: string, signal?: AbortSignal): Promise
 let shas: Promise<string[]> | null = null;
 /** The commits with images (GHCR tags too: ?images=1), folded into a form's lists once its image source is a commit. */
 export async function loadShas(api: Api, dyn: Record<string, any>): Promise<void> {
-  shas ||= api("/api/schemas/dynamic?images=1").then((r) => r.shas || [], () => ((shas = null), []));
+  shas ||= api("/api/v1/schemas/dynamic?images=1").then((r) => r.shas || [], () => ((shas = null), []));
   const got = await shas;
   dyn.shas = [...new Set([...(dyn.shas || []), ...got])];
 }
@@ -121,10 +121,10 @@ export interface Preflight {
   errors: string[];
   warnings: string[];
 }
-/** The image preflight (POST /api/preflight): the images resolve and have what the spec needs. */
+/** The image preflight (POST /api/v1/preflight): the images resolve and have what the spec needs. */
 export async function preflight(api: Api, body: { spec?: unknown; launch?: unknown; endpoint?: unknown }): Promise<Preflight> {
   try {
-    const r = await api("/api/preflight", { method: "POST", body });
+    const r = await api("/api/v1/preflight", { method: "POST", body });
     return { ok: !!r.ok, errors: r.errors || [], warnings: r.warnings || [] };
   } catch (e) {
     return { ok: false, errors: [(e as Error).message], warnings: [] };
@@ -132,8 +132,8 @@ export async function preflight(api: Api, body: { spec?: unknown; launch?: unkno
 }
 export const issuesOf = (r: any): Issue[] => (Array.isArray(r?.issues) ? r.issues : r?.error ? [{ path: [], message: r.error }] : []);
 
-/** The server's own check of a schema (POST /api/schemas/<name>/validate): refinements the JSON Schema cannot say. */
+/** The server's own check of a schema (POST /api/v1/schemas/<name>/validate): refinements the JSON Schema cannot say. */
 export const schemaRemote = (api: Api, name: string) => async (v: unknown) => {
-  const r = await api(`/api/schemas/${name}/validate`, { method: "POST", body: { doc: v } });
+  const r = await api(`/api/v1/schemas/${name}/validate`, { method: "POST", body: { doc: v } });
   return { issues: (r.issues || []) as Issue[] };
 };

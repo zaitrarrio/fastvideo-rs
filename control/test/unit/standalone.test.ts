@@ -274,12 +274,12 @@ describe("standalone pods: the API", () => {
     const admin = { authorization: `Bearer ${(await mintApiToken(env, "t", "admin", "test")).token}` };
     const read = { authorization: `Bearer ${(await mintApiToken(env, "r", "read", "test")).token}` };
     const launch = { name: "h3-solo", preset: "h3-turbo", channel: "latest", deadline_min: 30, env: { FOO: "bar", TOK: { value: "s3cret-value", secret: true } } };
-    expect((await call(env, "/api/standalone", { method: "POST", body: launch, headers: read })).status).toBe(403);
+    expect((await call(env, "/api/v1/standalone", { method: "POST", body: launch, headers: read })).status).toBe(403);
     // A cookie session needs the CSRF token (requireAuth): a forged cookie is refused before any of this.
-    expect((await call(env, "/api/standalone", { method: "POST", body: launch, headers: { cookie: "__Host-fvc_session=x.y" } })).status).toBe(401);
-    expect((await call(env, "/api/standalone", { method: "POST", body: { ...launch, env: { FV_INTERNAL_TOKEN: "x" } }, headers: admin })).status).toBe(400);
+    expect((await call(env, "/api/v1/standalone", { method: "POST", body: launch, headers: { cookie: "__Host-fvc_session=x.y" } })).status).toBe(401);
+    expect((await call(env, "/api/v1/standalone", { method: "POST", body: { ...launch, env: { FV_INTERNAL_TOKEN: "x" } }, headers: admin })).status).toBe(400);
 
-    const r = await call(env, "/api/standalone", { method: "POST", body: launch, headers: admin });
+    const r = await call(env, "/api/v1/standalone", { method: "POST", body: launch, headers: admin });
     expect(r.status).toBe(201);
     const j: any = await r.json();
     expect(j.pod).toMatchObject({ name: "h3-solo", status: "defined", definition: { variant: "h3-turbo", image: { channel: "latest" }, region: "eu", dc: "EU-RO-1", volume: "bz0ofkfx45", deadline_min: 30 }, pod: null });
@@ -294,56 +294,56 @@ describe("standalone pods: the API", () => {
     const audit = await env.DB.prepare("SELECT after FROM audit WHERE action = 'standalone.launch'").first<any>();
     expect(audit.after).not.toContain("s3cret-value");
     // Listed as standalone, not among clusters (unless all=1); readable with a read token.
-    expect(((await (await call(env, "/api/standalone", { headers: read })).json()) as any).pods.map((p: any) => p.name)).toEqual(["h3-solo"]);
-    expect(((await (await call(env, "/api/clusters", { headers: read })).json()) as any).clusters).toEqual([]);
-    expect(((await (await call(env, "/api/clusters?all=1", { headers: read })).json()) as any).clusters[0]).toMatchObject({ name: "h3-solo", kind: "standalone" });
-    expect((await call(env, "/api/standalone/h3-solo", { headers: read })).status).toBe(200);
+    expect(((await (await call(env, "/api/v1/standalone", { headers: read })).json()) as any).pods.map((p: any) => p.name)).toEqual(["h3-solo"]);
+    expect(((await (await call(env, "/api/v1/clusters", { headers: read })).json()) as any).clusters).toEqual([]);
+    expect(((await (await call(env, "/api/v1/clusters?all=1", { headers: read })).json()) as any).clusters[0]).toMatchObject({ name: "h3-solo", kind: "standalone" });
+    expect((await call(env, "/api/v1/standalone/h3-solo", { headers: read })).status).toBe(200);
     // Start / stop / extend go through the same operations; a read token cannot.
-    expect((await call(env, "/api/standalone/h3-solo/stop", { method: "POST", body: {}, headers: read })).status).toBe(403);
-    expect((await call(env, "/api/standalone/h3-solo/stop", { method: "POST", body: {}, headers: admin })).status).toBe(202);
+    expect((await call(env, "/api/v1/standalone/h3-solo/stop", { method: "POST", body: {}, headers: read })).status).toBe(403);
+    expect((await call(env, "/api/v1/standalone/h3-solo/stop", { method: "POST", body: {}, headers: admin })).status).toBe(202);
     expect(ops.calls.filter((x) => x.path === "/op/start").at(-1)?.body).toMatchObject({ kind: "down", params: { reason: "stop" } });
-    expect((await call(env, "/api/standalone/h3-solo/start", { method: "POST", body: {}, headers: admin })).status).toBe(202);
-    expect((await call(env, "/api/standalone/h3-solo/extend", { method: "POST", body: { minutes: 15 }, headers: admin })).status).toBe(202);
+    expect((await call(env, "/api/v1/standalone/h3-solo/start", { method: "POST", body: {}, headers: admin })).status).toBe(202);
+    expect((await call(env, "/api/v1/standalone/h3-solo/extend", { method: "POST", body: { minutes: 15 }, headers: admin })).status).toBe(202);
     // A cluster is not a standalone pod, and a standalone pod does not scale past one.
     await env.DB.prepare("UPDATE clusters SET source = 'controller' WHERE id = ?").bind(cl.id).run();
-    expect((await call(env, "/api/standalone/h3-solo", { headers: read })).status).toBe(404);
+    expect((await call(env, "/api/v1/standalone/h3-solo", { headers: read })).status).toBe(404);
     await env.DB.prepare("UPDATE clusters SET source = 'standalone' WHERE id = ?").bind(cl.id).run();
-    expect((await call(env, `/api/clusters/${cl.id}/scale`, { method: "POST", body: { pool: "pod", count: 2 }, headers: admin })).status).toBe(400);
+    expect((await call(env, `/api/v1/clusters/${cl.id}/scale`, { method: "POST", body: { pool: "pod", count: 2 }, headers: admin })).status).toBe(400);
     // Delete without a pod: the definition and its env go now.
-    expect((await call(env, "/api/standalone/h3-solo", { method: "DELETE", headers: admin })).status).toBe(200);
+    expect((await call(env, "/api/v1/standalone/h3-solo", { method: "DELETE", headers: admin })).status).toBe(200);
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM env_vars WHERE scope_id = ?").bind(cl.id).first<any>()).toEqual({ n: 0 });
-    expect((await call(env, "/api/standalone/h3-solo", { headers: read })).status).toBe(404);
+    expect((await call(env, "/api/v1/standalone/h3-solo", { headers: read })).status).toBe(404);
   });
   it("delete with a pod stops it first and deletes the definition after (down with delete_definition)", async () => {
     const { env, ops } = mkEnv();
     const admin = { authorization: `Bearer ${(await mintApiToken(env, "t", "admin", "test")).token}` };
-    await call(env, "/api/standalone", { method: "POST", body: { name: "solo", preset: "h3-max", start: false }, headers: admin });
+    await call(env, "/api/v1/standalone", { method: "POST", body: { name: "solo", preset: "h3-max", start: false }, headers: admin });
     const cl = await getCluster(env, "solo");
     cl.state.workers[STANDALONE_POOL] = [{ pod: "podx", pool: STANDALONE_POOL, dph: 2.09, created: 1, image: "img" }];
     await env.DB.prepare("UPDATE clusters SET state = ?, status = 'running' WHERE id = ?").bind(JSON.stringify(cl.state), cl.id).run();
-    const r = await call(env, "/api/standalone/solo", { method: "DELETE", headers: admin });
+    const r = await call(env, "/api/v1/standalone/solo", { method: "DELETE", headers: admin });
     expect(r.status).toBe(202);
     expect(ops.calls.filter((x) => x.path === "/op/start").at(-1)?.body).toMatchObject({ kind: "down", params: { delete_definition: true } });
-    expect((await call(env, "/api/standalone/solo", { headers: admin })).status).toBe(200);
+    expect((await call(env, "/api/v1/standalone/solo", { headers: admin })).status).toBe(200);
   });
   it("pod status and logs as JSON for any controller pod", async () => {
     const { env } = mkEnv();
     const read = { authorization: `Bearer ${(await mintApiToken(env, "r", "read", "test")).token}` };
     const admin = { authorization: `Bearer ${(await mintApiToken(env, "t", "admin", "test")).token}` };
-    await call(env, "/api/standalone", { method: "POST", body: { name: "solo", preset: "h3-turbo", start: false }, headers: admin });
+    await call(env, "/api/v1/standalone", { method: "POST", body: { name: "solo", preset: "h3-turbo", start: false }, headers: admin });
     const cl = await getCluster(env, "solo");
     await env.DB.prepare("INSERT INTO cluster_pods (pod_id, cluster_id, role, pool, slot, image, created_at, status) VALUES ('podz', ?, 'worker', 'pod', 'workers', 'img', 1, 'creating')").bind(cl.id).run();
     await env.DB.prepare("INSERT INTO log_lines (cluster_id, pod_id, ts, level, target, msg) VALUES (?, 'podz', 1, 'error', 'runpod.container', ?), (?, 'podz', 2, 'info', 'fastvideo_serve', 'shipped')").bind(cl.id, CRASH, cl.id).run();
     await saveDiagnosis(env, "podz", cl.id, { phase: "crashloop", detail: CRASH, fatal: true });
-    const st: any = await (await call(env, "/api/pods/podz/status", { headers: read })).json();
+    const st: any = await (await call(env, "/api/v1/pods/podz/status", { headers: read })).json();
     expect(st).toMatchObject({ pod_id: "podz", kind: "standalone", controller: { cluster: "solo", pool: "pod" }, boot: { phase: "crashloop" }, logs: { lines: 2 } });
-    const lg: any = await (await call(env, "/api/pods/podz/logs?source=runpod", { headers: read })).json();
+    const lg: any = await (await call(env, "/api/v1/pods/podz/logs?source=runpod", { headers: read })).json();
     expect(lg.lines.map((l: any) => l.msg)).toEqual([CRASH]);
-    const all: any = await (await call(env, "/api/pods/podz/logs", { headers: read })).json();
+    const all: any = await (await call(env, "/api/v1/pods/podz/logs", { headers: read })).json();
     expect(all.lines).toHaveLength(2);
-    const next: any = await (await call(env, `/api/pods/podz/logs?after_id=${all.next_after_id}`, { headers: read })).json();
+    const next: any = await (await call(env, `/api/v1/pods/podz/logs?after_id=${all.next_after_id}`, { headers: read })).json();
     expect(next).toMatchObject({ lines: [], next_after_id: all.next_after_id });
-    expect((await call(env, "/api/pods/nope/status", { headers: read })).status).toBe(404);
+    expect((await call(env, "/api/v1/pods/nope/status", { headers: read })).status).toBe(404);
   });
 });
 
@@ -454,11 +454,11 @@ describe("no secret in a diagnosis", () => {
 });
 
 describe("the log explorer (logquery.ts) sees captured Runpod lines and boot milestones", () => {
-  it("as pod lines of the standalone pod, its pool and name resolved; /api/logs source + after_id and /api/logs/query agree", async () => {
+  it("as pod lines of the standalone pod, its pool and name resolved; /api/v1/logs source + after_id and /api/v1/logs/query agree", async () => {
     const { env } = mkEnv({ RUNPOD_HAPI: "https://hapi.test" } as Partial<Env>);
     const admin = { authorization: `Bearer ${(await mintApiToken(env, "t", "admin", "test")).token}` };
     const call = (path: string) => _app.fetch(new Request(`https://ctl.test${path}`, { headers: admin }), env, { waitUntil() {}, passThroughOnException() {} } as any);
-    await _app.fetch(new Request("https://ctl.test/api/standalone", { method: "POST", headers: { ...admin, "content-type": "application/json" }, body: JSON.stringify({ name: "solo-x", preset: "h3-turbo", start: false }) }), env, {} as any);
+    await _app.fetch(new Request("https://ctl.test/api/v1/standalone", { method: "POST", headers: { ...admin, "content-type": "application/json" }, body: JSON.stringify({ name: "solo-x", preset: "h3-turbo", start: false }) }), env, {} as any);
     const cl = await getCluster(env, "solo-x");
     const t0 = Date.now() - 60_000;
     await env.DB.prepare("INSERT INTO cluster_pods (pod_id, cluster_id, role, pool, slot, image, created_at, status) VALUES ('podq00000000ab', ?, 'worker', 'pod', 'workers', 'img', ?, 'creating')").bind(cl.id, t0).run();
@@ -474,14 +474,14 @@ describe("the log explorer (logquery.ts) sees captured Runpod lines and boot mil
     expect(q.lines.find((l) => l.msg === CRASH)?.level).toBe("error");
     // By pool (the explorer resolves it through cluster_pods) and cluster.
     expect((await queryLogs(env, parseLogQuery({ src: "pod", pool: "pod", cluster: cl.id, since: "1h" }))).lines.length).toBe(q.lines.length);
-    // The routes: the explorer's query, and /api/logs with source / after_id.
-    const qr: any = await (await call(`/api/logs/query?src=pod&pod=podq00000000ab&since=1h`)).json();
+    // The routes: the explorer's query, and /api/v1/logs with source / after_id.
+    const qr: any = await (await call(`/api/v1/logs/query?src=pod&pod=podq00000000ab&since=1h`)).json();
     expect(qr.lines.length).toBe(q.lines.length);
-    const rp: any = await (await call(`/api/logs?pod=podq00000000ab&source=runpod&level=trace`)).json();
+    const rp: any = await (await call(`/api/v1/logs?pod=podq00000000ab&source=runpod&level=trace`)).json();
     expect(rp.lines.map((l: any) => l.target)).toEqual(["runpod.system", "runpod.system", "runpod.system", "runpod.container", "runpod.container"]);
-    const ctlLines: any = await (await call(`/api/logs?pod=podq00000000ab&source=control`)).json();
+    const ctlLines: any = await (await call(`/api/v1/logs?pod=podq00000000ab&source=control`)).json();
     expect(ctlLines.lines.every((l: any) => l.target === "fv-control.boot")).toBe(true);
-    const after: any = await (await call(`/api/logs?pod=podq00000000ab&level=trace&after_id=${rp.lines[2].id}&limit=1`)).json();
+    const after: any = await (await call(`/api/v1/logs?pod=podq00000000ab&level=trace&after_id=${rp.lines[2].id}&limit=1`)).json();
     expect(after.lines).toHaveLength(1);
     expect(after.lines[0].id).toBeGreaterThan(rp.lines[2].id);
   });

@@ -160,7 +160,7 @@ export function servingView(spec: SpecLike): { preset: string | null; preset_inf
 }
 
 /**
- * An update's document merged over the stored spec (PUT /api/serverless/:id takes a partial spec). A
+ * An update's document merged over the stored spec (PUT /api/v1/serverless/:id takes a partial spec). A
  * different preset brings its own variant, compute and config, so the stored ones are dropped; a
  * document that names a variant or config but no preset is a custom endpoint, so the stored preset is
  * dropped (`preset: null` drops it too).

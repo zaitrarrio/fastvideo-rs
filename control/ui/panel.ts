@@ -35,10 +35,10 @@ const dynCache = new Map<string, Promise<Dynamic>>();
 
 export async function openDocPanel(host: HTMLElement, o: PanelOptions) {
   const say = o.toast || (() => {});
-  schemaCache ||= o.api("/api/schemas").then((r) => r.schemas);
+  schemaCache ||= o.api("/api/v1/schemas").then((r) => r.schemas);
   const dk = o.cluster || "";
-  if (!dynCache.has(dk)) dynCache.set(dk, o.api(`/api/schemas/dynamic${dk ? `?cluster=${encodeURIComponent(dk)}` : ""}`).catch(() => ({})));
-  const base = `/api/docs/${o.kind}/${encodeURIComponent(o.id)}`;
+  if (!dynCache.has(dk)) dynCache.set(dk, o.api(`/api/v1/schemas/dynamic${dk ? `?cluster=${encodeURIComponent(dk)}` : ""}`).catch(() => ({})));
+  const base = `/api/v1/docs/${o.kind}/${encodeURIComponent(o.id)}`;
   const [schemas, dyn, loaded] = await Promise.all([schemaCache, dynCache.get(dk)!, o.api(base)]);
   const schema = schemas[loaded.schema] as Schema;
   let original: any = loaded.doc;
