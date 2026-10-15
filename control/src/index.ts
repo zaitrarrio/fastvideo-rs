@@ -10,7 +10,7 @@ import { accessMode, clientIp, login, logout, mintApiToken, requireAuth, require
 import { cancelOp, currentOp, startOp } from "./cluster/control";
 import { adminAll, adminOne, adminTargets, adminToken, desiredEnv, edgeCfg, edgeFamilies, edgePublic, edgeWorkers, envCtx, projectSpend, workerHealth } from "./cluster/ops";
 import { isDirect, workerSystemEnv, type ClusterSecrets, type ClusterState, type PodRec } from "./cluster/payloads";
-import { assertRegionsAvailable, defaultSpec, isEdge, normalizeSpec, POOL_PRESETS, STANDARD_POOLS, TEMPLATES } from "./cluster/spec";
+import { assertRegionsAvailable, defaultSpec, isEdge, normalizeSpec, POOL_PRESETS, presetById, presetPool, STANDARD_POOLS, TEMPLATES } from "./cluster/spec";
 import { allPods, deleteClusterRow, emptyState, getCluster, insertCluster, isStandalone, listClusters, livePods, newSecrets, STANDALONE, type Cluster } from "./cluster/store";
 import { getDiagnosis } from "./podlogs";
 import { bootPhase, bootRows, getBoot } from "./boottime";
@@ -351,6 +351,71 @@ app.get("/api/v1/jobs", async (c) => {
     engines_reached: per_engine.filter((e) => e.ok).length,
     jobs,
   });
+});
+
+// ---------------- deploy: guided recipe deploys (fv-console)
+// GET /api/v1/deploy/recipes — POOL_PRESETS as deployable recipes.
+// POST /api/v1/deploy/validate — { recipe, name, count?, gpu_types?, data_centers? } → spec issues.
+// POST /api/v1/deploy — validate, create the cluster, start it → { cluster, operation }.
+function deploySpec(recipe_id: string, opts: { name: string; count?: number; gpu_types?: string[]; data_centers?: string[] }) {
+  const preset = presetById(recipe_id);
+  if (!preset) throw new HttpError(404, `unknown recipe ${recipe_id}`);
+  const pool: any = presetPool(recipe_id);
+  if (!pool) throw new HttpError(404, `unknown recipe ${recipe_id}`);
+  if (opts.count !== undefined) pool.count = opts.count;
+  if (opts.gpu_types) pool.gpu_types = opts.gpu_types;
+  if (opts.data_centers) pool.data_centers = opts.data_centers;
+  return normalizeSpec({ name: opts.name, pools: [pool] });
+}
+
+app.get("/api/v1/deploy/recipes", async (c) => {
+  return c.json({
+    at: Date.now(),
+    recipes: POOL_PRESETS.map((p) => ({
+      id: p.id,
+      title: p.title,
+      description: p.description,
+      min_vram_gb: p.min_vram_gb,
+      weights: p.weights,
+      models: (p.pool.models || []).map((m: any) => ({ id: m.id, family: m.family, recipe: m.recipe })),
+    })),
+  });
+});
+
+app.post("/api/v1/deploy/validate", async (c) => {
+  const b = await body(c);
+  const spec = deploySpec(String(b.recipe || ""), {
+    name: String(b.name || "deploy-check"),
+    count: b.count !== undefined ? Number(b.count) : undefined,
+    gpu_types: Array.isArray(b.gpu_types) ? b.gpu_types.map(String) : undefined,
+    data_centers: Array.isArray(b.data_centers) ? b.data_centers.map(String) : undefined,
+  });
+  return c.json(await checkSpec(c.env, spec));
+});
+
+app.post("/api/v1/deploy", async (c) => {
+  const b = await body(c);
+  const name = String(b.name || "");
+  if (!name) throw new HttpError(400, "name is required", { issues: [{ path: ["name"], message: "name is required" }] });
+  const spec = deploySpec(String(b.recipe || ""), {
+    name,
+    count: b.count !== undefined ? Number(b.count) : undefined,
+    gpu_types: Array.isArray(b.gpu_types) ? b.gpu_types.map(String) : undefined,
+    data_centers: Array.isArray(b.data_centers) ? b.data_centers.map(String) : undefined,
+  });
+  const live = await liveSpecIssues(c.env, spec);
+  if (live.issues.length) throw new HttpError(400, issuesText(live.issues, "spec"), { issues: live.issues });
+  await assertNameFree(c.env, "cluster", spec.name);
+  const { s, ingestHash } = await newSecrets();
+  const cl = await insertCluster(c.env, spec, emptyState(), s, ingestHash, actor(c), "controller", "defined", null);
+  await auditC(c, { action: "cluster.define", target: cl.name, after: spec });
+  let operation: string | null = null;
+  if (b.start !== false) {
+    const r = await startOp(c.env, cl.id, "up", { skip_price_check: false }, actor(c));
+    operation = r.id;
+    await auditC(c, { action: "cluster.up", target: cl.name, after: { operation: r.id } });
+  }
+  return c.json({ cluster: clusterView(cl), operation }, 201);
 });
 
 // ---------------- providers (Runpod is the primary; CloudRift, docs/ops/cloudrift.md)
