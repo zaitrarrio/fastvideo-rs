@@ -6,11 +6,11 @@
 //   #/standalone?id=<name>  one pod: status, boot, cost, operation, log tail
 "use strict";
 
-/** A boot timeline card for a controller pod (GET /api/pods/:id/boot): each phase's time since create and duration, the phase it is in. Also used by the pod page. */
+/** A boot timeline card for a controller pod (GET /api/v1/pods/:id/boot): each phase's time since create and duration, the phase it is in. Also used by the pod page. */
 function fvBootTimeline(podId) {
   const body = h("div", { class: "muted small" }, "loading…");
   const box = card("Boot timeline", body);
-  api(`/api/pods/${encodeURIComponent(podId)}/boot`)
+  api(`/api/v1/pods/${encodeURIComponent(podId)}/boot`)
     .then((r) => {
       const rows = r.timeline.filter((x) => x.at !== null);
       body.replaceWith(
@@ -44,9 +44,9 @@ function fvBootTimeline(podId) {
   async function pageStandalone(main) {
     const id = new URLSearchParams(location.hash.split("?")[1] || "").get("id");
     if (id) return pageStandaloneOne(main, id);
-    const list = await api("/api/standalone");
+    const list = await api("/api/v1/standalone");
     const draw = async () => {
-      const r = await api("/api/standalone");
+      const r = await api("/api/v1/standalone");
       listHost.replaceChildren(listTable(r.pods));
     };
     const listHost = h("div", {}, listTable(list.pods));
@@ -92,14 +92,14 @@ function fvBootTimeline(podId) {
   }
   function actions(p, after) {
     const busy = !!p.op;
-    const post = (path, body, label) => act(label, () => api(`/api/standalone/${encodeURIComponent(p.name)}/${path}`, { method: "POST", body: body || {} })).then(() => setTimeout(after, 800));
+    const post = (path, body, label) => act(label, () => api(`/api/v1/standalone/${encodeURIComponent(p.name)}/${path}`, { method: "POST", body: body || {} })).then(() => setTimeout(after, 800));
     return h(
       "div",
       { class: "row" },
       !p.pod && h("button", { disabled: busy, onclick: () => post("start", {}, "start") }, "Start"),
       (p.pod || busy) && h("button", { onclick: () => confirm(stopQuestion(p)) && post("stop", {}, "stop") }, "Stop"),
       p.pod && h("button", { disabled: busy, onclick: async () => { const m = await (await fvEditor()).askExtend(api, `Extend ${p.name}`); if (m) post("extend", { minutes: m }, "extend"); } }, "Extend"),
-      h("button", { class: "danger", onclick: async () => { if (confirm(`Delete ${p.name}${p.pod ? (p.pod.brev ? " and its Brev VM (deleted: your explicit delete)" : " (its pod is stopped first)") : ""}?`)) { await act("delete", () => api(`/api/standalone/${encodeURIComponent(p.name)}`, { method: "DELETE" })); location.hash = "#/standalone"; setTimeout(after, 800); } } }, "Delete"),
+      h("button", { class: "danger", onclick: async () => { if (confirm(`Delete ${p.name}${p.pod ? (p.pod.brev ? " and its Brev VM (deleted: your explicit delete)" : " (its pod is stopped first)") : ""}?`)) { await act("delete", () => api(`/api/v1/standalone/${encodeURIComponent(p.name)}`, { method: "DELETE" })); location.hash = "#/standalone"; setTimeout(after, 800); } } }, "Delete"),
     );
   }
 
@@ -114,9 +114,9 @@ function fvBootTimeline(podId) {
 
   async function pageStandaloneOne(main, id) {
     const draw = async () => {
-      const r = await api(`/api/standalone/${encodeURIComponent(id)}`);
+      const r = await api(`/api/v1/standalone/${encodeURIComponent(id)}`);
       const p = r.pod;
-      const [ops, logs] = await Promise.all([api(`/api/clusters/${encodeURIComponent(p.id)}/ops`).catch(() => ({ operations: [] })), p.pod ? api(`/api/pods/${p.pod.pod_id}/logs?limit=40`).catch(() => ({ lines: [] })) : { lines: [] }]);
+      const [ops, logs] = await Promise.all([api(`/api/v1/clusters/${encodeURIComponent(p.id)}/ops`).catch(() => ({ operations: [] })), p.pod ? api(`/api/v1/pods/${p.pod.pod_id}/logs?limit=40`).catch(() => ({ lines: [] })) : { lines: [] }]);
       const last = ops.operations[0];
       const kv = (pairs) => h("dl", { class: "kv" }, ...pairs.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v ?? "–")]));
       main.replaceChildren(
@@ -164,7 +164,7 @@ function fvBootTimeline(podId) {
         card(last ? `Operation: ${last.kind} ${last.status}${last.error ? `: ${last.error}` : ""}` : "Operation", last ? h("div", { class: "log" }, last.log.slice(-60).map((l) => h("div", {}, `${dt(l.at).slice(11)} ${l.msg}`))) : h("p", { class: "muted small" }, "None yet.")),
         card(
           "Log tail (shipped and Runpod, from boot)",
-          p.pod ? h("div", { class: "row small", style: "margin-bottom:6px" }, h("a", { class: "btn", href: `#/logs?pod=${p.pod.pod_id}` }, "Logs page"), h("span", { class: "muted" }, `JSON: /api/pods/${p.pod.pod_id}/logs`)) : null,
+          p.pod ? h("div", { class: "row small", style: "margin-bottom:6px" }, h("a", { class: "btn", href: `#/logs?pod=${p.pod.pod_id}` }, "Logs page"), h("span", { class: "muted" }, `JSON: /api/v1/pods/${p.pod.pod_id}/logs`)) : null,
           logs.lines.length ? h("div", { class: "log" }, logs.lines.map((l) => h("div", {}, `${dt(l.ts).slice(11)} ${l.level.toUpperCase()} ${l.target || ""}: ${l.msg}`))) : h("p", { class: "muted small" }, "No lines yet."),
         ),
       );
