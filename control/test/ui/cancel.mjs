@@ -11,7 +11,7 @@ export async function cancelUiChecks({ page, B, out, tiny, w, mock }) {
   const shot = (n) => page.screenshot({ path: `${out}/cancel-${n}.png`, fullPage: true });
   const audit = async () => {
     const probs = await page.evaluate(async () => {
-      const s = (await (await fetch("/api/schemas", { credentials: "same-origin" })).json()).schemas;
+      const s = (await (await fetch("/api/v1/schemas", { credentials: "same-origin" })).json()).schemas;
       // The dialog this test opened (the endpoint page's spec editor is marked serverless-endpoint-json, a name with no schema: not this change's).
       return window.FVEditor.auditForms(document.querySelector("dialog.ff-dialog") || document, s);
     });

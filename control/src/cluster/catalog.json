@@ -1,5 +1,5 @@
 {
-  "$comment": "Suggestions for the cluster-spec editor (GET /api/schemas/dynamic): the fv-serve CUDA catalog (crates/fastvideo-engine-service/src/cuda/caps.rs), the fal apps (crates/fastvideo-fal/src/schema.rs) and the engine's env keys. `serve: false` recipes are not in the fv-serve catalog: a pool model with one stops the gateway at start, so normalizeSpec refuses them. crates/fastvideo-serve/tests/gateway_bases.rs checks the recipes against the catalog; control/test/unit/catalog.test.ts checks the env keys against the Rust sources.",
+  "$comment": "Suggestions for the cluster-spec editor (GET /api/v1/schemas/dynamic): the fv-serve CUDA catalog (crates/fastvideo-engine-service/src/cuda/caps.rs), the fal apps (crates/fastvideo-fal/src/schema.rs) and the engine's env keys. `serve: false` recipes are not in the fv-serve catalog: a pool model with one stops the gateway at start, so normalizeSpec refuses them. crates/fastvideo-serve/tests/gateway_bases.rs checks the recipes against the catalog; control/test/unit/catalog.test.ts checks the env keys against the Rust sources.",
   "families": [
     { "id": "h3", "detail": "MiniMax H3 (fasth3, Sol-H3, Ref2VA)" },
     { "id": "ltx2", "detail": "LTX-2.5 (also `ltx`)" },

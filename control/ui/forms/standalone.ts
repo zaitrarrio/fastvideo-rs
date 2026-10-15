@@ -1,6 +1,6 @@
 // The standalone pod launch form (#/standalone): every field bound to the
 // standalone-launch schema, the server's validator (POST
-// /api/standalone/validate) for the cross-field rules and the name's
+// /api/v1/standalone/validate) for the cross-field rules and the name's
 // uniqueness, the image preflight before Launch.
 import { badge, h, kids } from "../dom";
 import { createForm, type Api, type FieldOpts } from "../fields";
@@ -28,7 +28,7 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
     // Debounced by the form, the stale one cancelled; ?live=0 until a provider is picked (no provider API call).
     remote: async (v, signal) => {
       const picked = !!v.provider;
-      const r = await api(`/api/standalone/validate${picked ? "" : "?live=0"}`, { method: "POST", body: v, signal });
+      const r = await api(`/api/v1/standalone/validate${picked ? "" : "?live=0"}`, { method: "POST", body: v, signal });
       const issues = issuesOf(r);
       if (!picked && !issues.some((i) => i.path[0] === "provider")) issues.push({ path: ["provider"], message: PICK_PROVIDER });
       return { issues, warnings: r.warnings || [] };
@@ -405,7 +405,7 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
       return;
     }
     try {
-      const r = await api("/api/standalone", { method: "POST", body: f.value() });
+      const r = await api("/api/v1/standalone", { method: "POST", body: f.value() });
       o.toast("launch: ok");
       o.onLaunched(r.pod.name);
     } catch (e) {

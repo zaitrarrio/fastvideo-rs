@@ -135,7 +135,7 @@ function scope(c: Cluster, pods: PodRow[], q: { pool?: string; pod?: string }, w
   return { sql: parts.length ? `(${parts.join(" OR ")})` : "0", args };
 }
 
-/** GET /api/clusters/:id/jobs: recent and running jobs, newest first, with the count per status. */
+/** GET /api/v1/clusters/:id/jobs: recent and running jobs, newest first, with the count per status. */
 export async function listJobs(env: Env, c: Cluster, q: JobsQuery) {
   const { db, source } = jobsDb(env, c);
   const pods = await podsOf(env, c);
@@ -329,7 +329,7 @@ async function edgeClustersAt(env: Env, at: number): Promise<Cluster[]> {
   return out;
 }
 
-/** POST /api/clusters/:id/jobs/cancel-queued: every queued job (of one pool), one cancel each. */
+/** POST /api/v1/clusters/:id/jobs/cancel-queued: every queued job (of one pool), one cancel each. */
 export async function cancelQueued(env: Env, who: Actor, c: Cluster, o: { pool?: string; max?: number }) {
   const { db } = jobsDb(env, c);
   const pods = await podsOf(env, c);

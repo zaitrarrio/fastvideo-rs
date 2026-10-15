@@ -48,8 +48,8 @@ try {
   /** The page's /api requests (method, path and query) and the failed (cancelled) ones. */
   const reqs = [];
   const failed = [];
-  page.on("request", (r) => r.url().includes("/api/") && reqs.push(`${r.method()} ${r.url().slice(B.length)}`));
-  page.on("requestfailed", (r) => r.url().includes("/api/") && failed.push(`${r.method()} ${r.url().slice(B.length)} ${r.failure()?.errorText}`));
+  page.on("request", (r) => r.url().includes("/api/v1/") && reqs.push(`${r.method()} ${r.url().slice(B.length)}`));
+  page.on("requestfailed", (r) => r.url().includes("/api/v1/") && failed.push(`${r.method()} ${r.url().slice(B.length)} ${r.failure()?.errorText}`));
   await page.goto(B + "/");
   await page.waitForSelector("#pass");
   await page.fill("#pass", PASSPHRASE);
@@ -67,16 +67,16 @@ try {
   await page.waitForSelector(`${SL} .ff-field[data-path="name"]`);
   const openMs = Date.now() - t0;
   // The validator runs once (debounced) after the form draws: wait for it, then for anything else to settle.
-  await page.waitForResponse((r) => r.url().includes("/api/standalone/validate"), { timeout: 10000 });
+  await page.waitForResponse((r) => r.url().includes("/api/v1/standalone/validate"), { timeout: 10000 });
   await page.waitForTimeout(800);
   const opened = [...reqs];
   const upOpen = mock.log.slice(mark).map((x) => upstreamOf(x.path)).filter(Boolean);
   console.log(`  open: form in ${openMs} ms; requests: ${opened.join(", ")}`);
   assert.ok(!opened.some((r) => /[?&]provider=/.test(r)), `no provider details on open: ${opened}`);
   assert.ok(!opened.some((r) => /\/api\/providers/.test(r)), `no provider views on open: ${opened}`);
-  assert.ok(opened.includes("GET /api/schemas/dynamic?live=0"), `the lists without live ones: ${opened}`);
-  assert.ok(!opened.some((r) => r === "GET /api/schemas/dynamic" || r.startsWith("GET /api/schemas/dynamic?cluster")), `not the full (live) lists: ${opened}`);
-  assert.ok(opened.filter((r) => r.startsWith("POST /api/standalone/validate")).every((r) => r === "POST /api/standalone/validate?live=0"), `the validator without live checks: ${opened}`);
+  assert.ok(opened.includes("GET /api/v1/schemas/dynamic?live=0"), `the lists without live ones: ${opened}`);
+  assert.ok(!opened.some((r) => r === "GET /api/v1/schemas/dynamic" || r.startsWith("GET /api/v1/schemas/dynamic?cluster")), `not the full (live) lists: ${opened}`);
+  assert.ok(opened.filter((r) => r.startsWith("POST /api/v1/standalone/validate")).every((r) => r === "POST /api/v1/standalone/validate?live=0"), `the validator without live checks: ${opened}`);
   assert.deepEqual(upOpen, [], `no upstream API call on open: ${upOpen}`);
   // The form says to pick a provider; its fields (and Launch) wait for it.
   assert.equal(await page.$eval(`${SL} [data-ctl][data-path="provider"]`, (e) => e.value), "");
@@ -100,14 +100,14 @@ try {
     await page.waitForTimeout(800);
   };
   // Slow Brev's details down so the loading line is seen.
-  await page.route("**/api/schemas/dynamic?provider=brev", async (r) => (await new Promise((res) => setTimeout(res, 600)), r.continue()));
+  await page.route("**/api/v1/schemas/dynamic?provider=brev", async (r) => (await new Promise((res) => setTimeout(res, 600)), r.continue()));
   await pick("brev");
   await page.waitForSelector(`${SL} [data-provider-status][data-loading="brev"]:text-matches("loading brev")`);
   await settle();
-  await page.unroute("**/api/schemas/dynamic?provider=brev");
-  const brevReqs = reqs.filter((r) => r.startsWith("GET /api/schemas/dynamic") || r.startsWith("GET /api/providers"));
+  await page.unroute("**/api/v1/schemas/dynamic?provider=brev");
+  const brevReqs = reqs.filter((r) => r.startsWith("GET /api/v1/schemas/dynamic") || r.startsWith("GET /api/v1/providers"));
   // Brev's details and its instance-type table (owner 2026-10-13: the table loads when the provider is picked).
-  assert.deepEqual(brevReqs.sort(), ["GET /api/providers/brev/instance-types", "GET /api/schemas/dynamic?provider=brev"], `only Brev's details and table: ${reqs}`);
+  assert.deepEqual(brevReqs.sort(), ["GET /api/v1/providers/brev/instance-types", "GET /api/v1/schemas/dynamic?provider=brev"], `only Brev's details and table: ${reqs}`);
   const upBrev = [...new Set(mock.log.slice(mark).map((x) => upstreamOf(x.path)).filter(Boolean))];
   // (Brev's type list may already be in the Worker's 1 h cache: no call at all is fine; any other provider is not.)
   assert.ok(!upBrev.includes("runpod") && !upBrev.includes("gmi") && !upBrev.includes("ghcr"), `no other provider is asked: ${upBrev}`);
@@ -121,8 +121,8 @@ try {
   // ---- pick GMI: GMI's details only
   await pick("gmi");
   await settle();
-  assert.deepEqual(reqs.filter((r) => r.startsWith("GET /api/schemas/dynamic")), ["GET /api/schemas/dynamic?provider=gmi"], `only GMI's details: ${reqs}`);
-  assert.deepEqual(reqs.filter((r) => r.startsWith("GET /api/providers")), ["GET /api/providers/gmi/instance-types"], `GMI's table only: ${reqs}`);
+  assert.deepEqual(reqs.filter((r) => r.startsWith("GET /api/v1/schemas/dynamic")), ["GET /api/v1/schemas/dynamic?provider=gmi"], `only GMI's details: ${reqs}`);
+  assert.deepEqual(reqs.filter((r) => r.startsWith("GET /api/v1/providers")), ["GET /api/v1/providers/gmi/instance-types"], `GMI's table only: ${reqs}`);
   const upGmi = [...new Set(mock.log.slice(mark).map((x) => upstreamOf(x.path)).filter(Boolean))];
   assert.ok(upGmi.every((x) => x === "gmi"), `GMI only: ${upGmi}`);
   assert.ok((await page.$$eval(`${SL} .ff-field[data-path="provider_gpu"] option`, (els) => els.map((e) => e.textContent))).some((t) => /GMI Cloud · \$3\.20\/hr · available/.test(t)));
@@ -130,13 +130,13 @@ try {
   // ---- back to Brev: kept for the session, no request
   await pick("brev");
   await settle();
-  assert.deepEqual(reqs.filter((r) => r.startsWith("GET /api/schemas/dynamic")), [], `Brev's details are kept: ${reqs}`);
+  assert.deepEqual(reqs.filter((r) => r.startsWith("GET /api/v1/schemas/dynamic")), [], `Brev's details are kept: ${reqs}`);
   // The table loads again on each switch (the Worker's cache answers it).
-  assert.deepEqual(reqs.filter((r) => r.startsWith("GET /api/providers")), ["GET /api/providers/brev/instance-types"], `Brev's table again: ${reqs}`);
+  assert.deepEqual(reqs.filter((r) => r.startsWith("GET /api/v1/providers")), ["GET /api/v1/providers/brev/instance-types"], `Brev's table again: ${reqs}`);
 
   // ---- Runpod picked while its load is in flight, then GMI (kept): the Runpod load is cancelled; a re-pick asks again
-  await page.route("**/api/schemas/dynamic?provider=runpod", async (r) => (await new Promise((res) => setTimeout(res, 1500)), r.continue().catch(() => {})));
-  await page.route("**/api/providers/runpod/instance-types", async (r) => (await new Promise((res) => setTimeout(res, 1500)), r.continue().catch(() => {})));
+  await page.route("**/api/v1/schemas/dynamic?provider=runpod", async (r) => (await new Promise((res) => setTimeout(res, 1500)), r.continue().catch(() => {})));
+  await page.route("**/api/v1/providers/runpod/instance-types", async (r) => (await new Promise((res) => setTimeout(res, 1500)), r.continue().catch(() => {})));
   failed.length = 0;
   await pick("runpod");
   await page.waitForSelector(`${SL} [data-provider-status][data-loading="runpod"]`);
@@ -144,14 +144,14 @@ try {
   await settle();
   await page.waitForFunction(() => true);
   await page.waitForTimeout(1800);
-  assert.ok(failed.some((f) => f.startsWith("GET /api/schemas/dynamic?provider=runpod")), `the stale Runpod load is cancelled: ${failed}`);
-  assert.ok(failed.some((f) => f.startsWith("GET /api/providers/runpod/instance-types")), `the stale Runpod table load is cancelled: ${failed}`);
+  assert.ok(failed.some((f) => f.startsWith("GET /api/v1/schemas/dynamic?provider=runpod")), `the stale Runpod load is cancelled: ${failed}`);
+  assert.ok(failed.some((f) => f.startsWith("GET /api/v1/providers/runpod/instance-types")), `the stale Runpod table load is cancelled: ${failed}`);
   assert.match(await page.textContent(`${SL} [data-provider-status]`), /products? with live prices/, "GMI's line, not Runpod's");
-  await page.unroute("**/api/schemas/dynamic?provider=runpod");
-  await page.unroute("**/api/providers/runpod/instance-types");
+  await page.unroute("**/api/v1/schemas/dynamic?provider=runpod");
+  await page.unroute("**/api/v1/providers/runpod/instance-types");
   await pick("runpod");
   await settle();
-  assert.deepEqual(reqs.filter((r) => r.startsWith("GET /api/schemas/dynamic")), ["GET /api/schemas/dynamic?provider=runpod"], `Runpod asked again: ${reqs}`);
+  assert.deepEqual(reqs.filter((r) => r.startsWith("GET /api/v1/schemas/dynamic")), ["GET /api/v1/schemas/dynamic?provider=runpod"], `Runpod asked again: ${reqs}`);
   const upRp = [...new Set(mock.log.slice(mark).map((x) => upstreamOf(x.path)).filter(Boolean))];
   assert.ok(upRp.every((x) => x === "runpod"), `Runpod only: ${upRp}`);
   // Runpod's fields: the instance table (the GPU pick: no separate GPU types list), the weights (the preset's
@@ -162,7 +162,7 @@ try {
   await page.waitForSelector(`${SL} .ff-field[data-path="region"]`);
   assert.match(await page.textContent(`${SL} [data-provider-status]`), /GPU types with live \$\/hr and stock/);
   // The validator now runs live (a provider is picked), and Launch turns on.
-  assert.ok(reqs.some((r) => r === "POST /api/standalone/validate"), `live validation once picked: ${reqs}`);
+  assert.ok(reqs.some((r) => r === "POST /api/v1/standalone/validate"), `live validation once picked: ${reqs}`);
   await page.waitForFunction((s) => !document.querySelector(`${s} button[type=submit]`).disabled, SL, { timeout: 15000 });
   await page.screenshot({ path: `${out}/42-launch-runpod-picked.png`, fullPage: true });
 

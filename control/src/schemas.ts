@@ -1,6 +1,6 @@
 // Every configuration fv-control accepts, as zod schemas: the one source for
 // server-side validation (every write path), the JSON Schemas served at
-// /api/schemas (the dashboard binds its controls to them: enums become
+// /api/v1/schemas (the dashboard binds its controls to them: enums become
 // selects, patterns and ranges inline checks, `x-rule` the rule shown before
 // typing, `x-unit` the unit, `x-dynamic` the live list a control offers), and
 // the TypeScript types of the cluster spec (cluster/spec.ts infers them from
@@ -334,7 +334,7 @@ export const EnvSetZ = z
 export const TokenCreateZ = z
   .object({
     name: z.string().regex(TOKEN_NAME_RE, { message: TOKEN_NAME_RULE }).meta({ "x-rule": TOKEN_NAME_RULE, "x-name": "token" }).describe("A name for the token, unique among the active tokens."),
-    scope: z.enum(TOKEN_SCOPES).describe("read: GET only; admin: everything but minting tokens; ci: only /api/ci/* (a GitHub workflow secret)."),
+    scope: z.enum(TOKEN_SCOPES).describe("read: GET only; admin: everything but minting tokens; ci: only /api/v1/ci/* (a GitHub workflow secret)."),
     ttl_days: z.number().int().min(1).max(365).optional().meta({ "x-unit": "days" }).describe("Expiry in days (default 90)."),
   })
   .strict();
@@ -361,12 +361,12 @@ export const ReleaseDispatchZ = z
     if (d.action === "promote" && d.to) ctx.addIssue({ code: "custom", path: ["to"], message: "`to` is for rollback" });
   });
 
-/** A standalone pod launch (POST /api/standalone; standalone.ts). */
+/** A standalone pod launch (POST /api/v1/standalone; standalone.ts). */
 export const StandaloneLaunchZ = z
   .object({
     name: nameZ("cluster", "Pod name (unique among clusters and standalone pods)"),
     preset: z
-      .enum(POOL_PRESET_IDS, { error: (i) => `no pool preset ${JSON.stringify(i.input)} (GET /api/templates: ${POOL_PRESET_IDS.join(", ")})` })
+      .enum(POOL_PRESET_IDS, { error: (i) => `no pool preset ${JSON.stringify(i.input)} (GET /api/v1/templates: ${POOL_PRESET_IDS.join(", ")})` })
       .optional()
       .meta({ "x-dynamic": "pool_presets" }).describe("A pool preset (variant, config and models); none: variant + config."),
     variant: z.enum(VARIANTS).optional().meta({ "x-dynamic": "variants" }).describe("Without a preset: the image variant."),
@@ -459,7 +459,7 @@ export const StandaloneLaunchZ = z
   })
   .describe("A standalone pod (docs/control/standalone-pods.md).");
 
-/** The managed build pods' policy (PUT /api/build-pods/policy; buildpods.ts normalizePolicy fills the defaults). */
+/** The managed build pods' policy (PUT /api/v1/build-pods/policy; buildpods.ts normalizePolicy fills the defaults). */
 export const BuildPodsPolicyZ = z
   .object({
     enabled: z.boolean().describe("fv-control creates and manages build pods."),
@@ -502,7 +502,7 @@ export const BuildPodsPolicyZ = z
   })
   .describe("Build pods managed by fv-control (docs/dev/build-pods-fv-control.md).");
 
-/** The serverless policy (PUT /api/serverless/policy). */
+/** The serverless policy (PUT /api/v1/serverless/policy). */
 export const SlsPolicyZ = z
   .object({
     balance_margin: z.number().min(0).max(1000).meta({ "x-unit": "$" }).describe("Create / scale-up / invoke need balance ≥ the account floor + this ($)."),
@@ -562,21 +562,21 @@ export const SlsCancelZ = z
     stop_fv_job: z.boolean().optional().describe("Also send the fv-serve cancel as a queue job (kind http) when the job already reached a worker and a worker is up (default on)."),
   })
   .strict()
-  .describe("Cancel one job of a serverless endpoint (POST /api/serverless/:id/jobs/:job/cancel).");
+  .describe("Cancel one job of a serverless endpoint (POST /api/v1/serverless/:id/jobs/:job/cancel).");
 export const SlsPurgeZ = z
   .object({
     confirm: z.string().min(1).max(NAME_MAX).describe("The endpoint's name, typed to confirm: every queued job is dropped (running ones are not)."),
     expected: z.number().int().min(0).max(100000).optional().meta({ "x-unit": "jobs" }).describe("The queued count you saw; refused when the queue grew past it since (default: no check)."),
   })
   .strict()
-  .describe("Purge a serverless endpoint's queue (POST /api/serverless/:id/purge).");
+  .describe("Purge a serverless endpoint's queue (POST /api/v1/serverless/:id/purge).");
 export const JobCancelZ = z
   .object({
     job: jobId("A job id from any API (fvjob_…, a fal request id, a MiniMax task id, video_gen_…, or fv-serve's internal uuid)."),
     cluster: z.string().regex(/^[A-Za-z0-9_.\-]{1,80}$/, { message: "a cluster or standalone pod name or id" }).optional().meta({ "x-dynamic": "clusters" }).describe("Only when the id is ambiguous: the cluster or standalone pod that ran it."),
   })
   .strict()
-  .describe("Cancel one fv-serve job of a cluster or standalone pod (POST /api/jobs/:job/cancel).");
+  .describe("Cancel one fv-serve job of a cluster or standalone pod (POST /api/v1/jobs/:job/cancel).");
 export const JobsQueryZ = z
   .object({
     status: z.string().regex(csvOf(JOB_STATUSES), { message: `statuses: ${JOB_STATUSES.join(", ")}` }).optional().meta({ "x-enum-list": JOB_STATUSES }).describe("Statuses, comma-separated (default: every status)."),
@@ -585,19 +585,19 @@ export const JobsQueryZ = z
     limit: z.string().regex(/^\d{1,3}$/, { message: "1-500 jobs" }).optional().describe("At most this many jobs (default 100, at most 500)."),
   })
   .strict()
-  .describe("The Jobs view's filters (GET /api/clusters/:id/jobs).");
+  .describe("The Jobs view's filters (GET /api/v1/clusters/:id/jobs).");
 export const JobsCancelQueuedZ = z
   .object({
     pool: z.string().regex(/^[A-Za-z0-9_.\-]{1,80}$/, { message: "a pool id" }).optional().meta({ "x-dynamic": "pools" }).describe("Only this pool's queued jobs (default: every pool)."),
     max: z.number().int().min(1).max(200).optional().meta({ "x-unit": "jobs" }).describe("Cancel at most this many (default 100)."),
   })
   .strict()
-  .describe("Cancel every queued job of a cluster or standalone pod (POST /api/clusters/:id/jobs/cancel-queued).");
+  .describe("Cancel every queued job of a cluster or standalone pod (POST /api/v1/clusters/:id/jobs/cancel-queued).");
 
 /** A time in the log explorer: now, unix s / ms, an ISO date (UTC unless it says), HH:MM (today) or relative (15m, 2h, 7d). */
 export const TIME_RE = /^(now|-?\d+(\.\d+)?\s*(s|m|min|h|d|w)|\d{10,13}|\d{4}-\d{2}-\d{2}([ T]\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?)?(Z|[+-]\d{2}:?\d{2})?|\d{1,2}:\d{2}(:\d{2})?)$/;
 const TIME_RULE = "UTC 2026-10-06 12:00, 12:00 (today), unix ms, or 15m / 2h / 7d (ago)";
-/** The log explorer's filters (GET /api/logs/query; logquery.ts parseLogQuery checks them with this schema). */
+/** The log explorer's filters (GET /api/v1/logs/query; logquery.ts parseLogQuery checks them with this schema). */
 export const LogQueryZ = z
   .object({
     q: z.string().max(500).optional().describe("Search text (a regular expression with re=1, at most 300 characters)."),

@@ -10,7 +10,7 @@ import { accessMode, clientIp, login, logout, mintApiToken, requireAuth, require
 import { cancelOp, currentOp, startOp } from "./cluster/control";
 import { adminAll, adminOne, adminTargets, adminToken, desiredEnv, edgeCfg, edgeFamilies, edgePublic, edgeWorkers, envCtx, projectSpend, workerHealth } from "./cluster/ops";
 import { isDirect, workerSystemEnv, type ClusterSecrets, type ClusterState, type PodRec } from "./cluster/payloads";
-import { assertRegionsAvailable, defaultSpec, isEdge, normalizeSpec, POOL_PRESETS, STANDARD_POOLS, TEMPLATES } from "./cluster/spec";
+import { assertRegionsAvailable, defaultSpec, isEdge, normalizeSpec, POOL_PRESETS, presetById, presetPool, STANDARD_POOLS, TEMPLATES } from "./cluster/spec";
 import { allPods, deleteClusterRow, emptyState, getCluster, insertCluster, isStandalone, listClusters, livePods, newSecrets, STANDALONE, type Cluster } from "./cluster/store";
 import { getDiagnosis } from "./podlogs";
 import { bootPhase, bootRows, getBoot } from "./boottime";
@@ -68,7 +68,8 @@ import { normalizeEndpointSpec } from "./serverless/spec";
 import { slsPreset } from "./serverless/presets";
 import { slsWeightsIssues } from "./serverless/weights";
 import { weightsPlanRequest } from "./weights-plan";
-import { endpointReport, isOtherPod, lastReport, otherPodLogs, providerImpl, providerView, reportHistory, reportLines, splitKey } from "./providers";
+import { endpointReport, isOtherPod, lastReport, otherPodLogs, podBaseUrl, providerImpl, providerView, reportHistory, reportLines, splitKey } from "./providers";
+import { gpuMemoryGb } from "./gpus";
 import { audit, fetchWithTimeout, getSetting, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
 
 export { ClusterOps } from "./cluster/do";
@@ -87,7 +88,7 @@ app.use("*", async (c, next) => {
   await next();
   c.header("x-content-type-options", "nosniff");
   c.header("referrer-policy", "no-referrer");
-  if (c.req.path.startsWith("/api/")) c.header("cache-control", "no-store");
+  if (c.req.path.startsWith("/api/v1/")) c.header("cache-control", "no-store");
 });
 
 const body = async <T = any>(c: C): Promise<T> => {
@@ -102,15 +103,15 @@ const auditC = (c: C, a: Omit<Parameters<typeof audit>[1], "actor">) => audit(c.
 
 // ---------------- public
 app.get("/healthz", (c) => c.json({ ok: true, service: "fv-control", environment: c.env.ENVIRONMENT || "dev", auth: accessMode(c.env) ? "access" : "passphrase" }));
-app.post("/api/auth/login", async (c) => {
+app.post("/api/v1/auth/login", async (c) => {
   const b = await body<{ passphrase?: string }>(c);
   return c.json({ ok: true, ...(await login(c, String(b.passphrase || ""))) });
 });
-app.post("/api/auth/logout", async (c) => {
+app.post("/api/v1/auth/logout", async (c) => {
   await logout(c);
   return c.json({ ok: true });
 });
-app.get("/api/auth/me", async (c) => c.json(await whoami(c)));
+app.get("/api/v1/auth/me", async (c) => c.json(await whoami(c)));
 app.post("/ingest/v1/logs", async (c) => c.json(await ingest(c.env, c.req.raw, c.executionCtx as ExecutionContext)));
 /** A GMI / Brev pod reports its phase and tunnel URL (providers.ts PROVIDER_BOOT) with its cluster's ingest token. */
 app.post("/ingest/v1/endpoint", async (c) => c.json(await endpointReport(c.env, c.req.raw)));
@@ -124,10 +125,10 @@ app.post("/ingest/v1/sls-report", async (c) => c.json(await slsReport(c.env, c.r
 app.get("/ingest/v1/r2-fetch.py", () => new Response(R2_FETCH_PY, { headers: { "content-type": "text/x-python; charset=utf-8", "x-sha256": R2_FETCH_SHA256, "cache-control": "no-store" } }));
 
 // ---------------- everything else under /api needs auth
-app.use("/api/*", requireAuth);
+app.use("/api/v1/*", requireAuth);
 
 // Overview: the dashboard's key numbers.
-app.get("/api/overview", async (c) => {
+app.get("/api/v1/overview", async (c) => {
   const env = c.env;
   const t = now();
   const day = utcDay(t);
@@ -171,6 +172,311 @@ app.get("/api/overview", async (c) => {
   });
 });
 
+// ---------------- fleet helpers (fv-console)
+async function fleetPods(env: Env): Promise<any[]> {
+  const pods = await env.DB.prepare(
+    "SELECT pod_id, name, cluster_id FROM pods WHERE gone_at IS NULL ORDER BY cluster_id, pod_id"
+  ).all<any>();
+  return pods.results || [];
+}
+async function fetchEngineJson(env: Env, pod_id: string, path: string, timeoutMs = 8000): Promise<any | null> {
+  try {
+    const base = await podBaseUrl(env, pod_id, (id: string) => defaults.podUrl(env, id));
+    if (!base) return null;
+    const r = await fetchWithTimeout(`${base}${path}`, { timeoutMs });
+    if (!r.ok) return null;
+    return await r.json().catch(() => null);
+  } catch {
+    return null;
+  }
+}
+function pct(sorted: number[], q: number): number | null {
+  if (!sorted.length) return null;
+  return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] ?? null;
+}
+
+// ---------------- fleet: joined engine + infra view (fv-console)
+// GET /api/v1/fleet — every worker: infra facts from the pods table joined with
+// its engine's /fv/v1/status (best-effort, 8s timeout; engine:null when unreachable).
+// Pools are aggregated across engines by pool id.
+app.get("/api/v1/fleet", async (c) => {
+  const env = c.env;
+  const pods = await env.DB.prepare(
+    "SELECT pod_id, name, owner, cluster_id, desired_status, cost_per_hr, gpu, gpu_count, gpu_util, gpu_mem, jobs_running, jobs_queued, health, build_sha, uptime_s, last_seen FROM pods WHERE gone_at IS NULL ORDER BY cluster_id, pod_id"
+  ).all<any>();
+  const workers = await Promise.all(
+    (pods.results || []).map(async (p: any) => {
+      let engine: any = null;
+      try {
+        const base = await podBaseUrl(env, p.pod_id, (id: string) => defaults.podUrl(env, id));
+        if (base) {
+          const r = await fetchWithTimeout(`${base}/fv/v1/status`, { timeoutMs: 8000 });
+          if (r.ok) engine = await r.json().catch(() => null);
+        }
+      } catch {
+        /* best-effort */
+      }
+      const pools = engine?.pools || [];
+      return {
+        pod_id: p.pod_id,
+        name: p.name,
+        cluster_id: p.cluster_id,
+        owner: p.owner,
+        status: p.desired_status,
+        health: p.health,
+        gpu: p.gpu,
+        gpu_count: p.gpu_count || 0,
+        vram_total_gb: gpuMemoryGb(p.gpu || ""),
+        vram_used_pct: p.gpu_mem, // memoryUtilPercent 0-100
+        gpu_util_pct: p.gpu_util,
+        cost_per_hr: p.cost_per_hr,
+        jobs_running: p.jobs_running,
+        jobs_queued: p.jobs_queued,
+        uptime_s: p.uptime_s,
+        build_sha: p.build_sha,
+        last_seen: p.last_seen,
+        engine: engine
+          ? {
+              pools: pools.map((pl: any) => ({
+                id: pl.id,
+                kind: pl.kind,
+                state: pl.state,
+                models: pl.models || [],
+                queued: pl.queued || 0,
+                running: pl.running || 0,
+                versions: pl.versions || [],
+                mixed_versions: !!pl.mixed_versions,
+              })),
+              queued: pools.reduce((s: number, pl: any) => s + (pl.queued || 0), 0),
+              running: pools.reduce((s: number, pl: any) => s + (pl.running || 0), 0),
+            }
+          : null,
+      };
+    })
+  );
+  const poolMap = new Map<string, any>();
+  for (const w of workers) {
+    for (const pl of w.engine?.pools || []) {
+      const cur =
+        poolMap.get(pl.id) ||
+        { id: pl.id, kind: pl.kind, state: pl.state, workers: [], queued: 0, running: 0, models: new Set<string>() };
+      cur.workers.push(w.pod_id);
+      cur.queued += pl.queued;
+      cur.running += pl.running;
+      for (const m of pl.models) cur.models.add(m);
+      if (pl.state !== "Ready") cur.state = pl.state;
+      poolMap.set(pl.id, cur);
+    }
+  }
+  const pools = [...poolMap.values()].map((pl) => ({ ...pl, models: [...pl.models] }));
+  return c.json({
+    at: Date.now(),
+    summary: {
+      workers: workers.length,
+      workers_with_engine: workers.filter((w) => w.engine).length,
+      gpus: workers.reduce((s, w) => s + w.gpu_count, 0),
+      vram_total_gb: workers.reduce((s, w) => s + (w.vram_total_gb || 0) * w.gpu_count, 0),
+      cost_per_hr: workers.reduce((s, w) => s + (w.cost_per_hr || 0), 0),
+      queued: pools.reduce((s, pl) => s + pl.queued, 0),
+      running: pools.reduce((s, pl) => s + pl.running, 0),
+      pools: pools.length,
+    },
+    pools,
+    workers,
+  });
+});
+
+// ---------------- models: what the fleet serves (fv-console)
+// GET /api/v1/models — every engine's /fv/v1/capabilities, aggregated by
+// model id (best-effort, 8s timeout). The source of truth is the engines,
+// not the worker's preset list.
+async function fleetModels(env: Env) {
+  const pods = await fleetPods(env);
+  const per_engine = await Promise.all(
+    pods.map(async (p: any) => ({ ...p, caps: await fetchEngineJson(env, p.pod_id, "/fv/v1/capabilities") }))
+  );
+  const modelMap = new Map<string, any>();
+  for (const e of per_engine) {
+    for (const m of e.caps?.models || []) {
+      const id = m.caps?.id || m.id;
+      if (!id) continue;
+      if (!modelMap.has(id)) {
+        modelMap.set(id, {
+          id,
+          family: m.caps?.family || null,
+          served_names: m.caps?.served_names || [],
+          tasks: m.caps?.tasks ? [...m.caps.tasks] : [],
+          tier: m.caps?.tier || null,
+          recipe: m.recipe || m.caps?.recipe || null,
+          resident: !!m.caps?.resident,
+          canvas: m.caps?.canvas || null,
+          executors: m.executors || [],
+          available_on: [],
+        });
+      }
+      modelMap.get(id).available_on.push(e.pod_id);
+    }
+  }
+  return {
+    engines_total: per_engine.length,
+    engines_reached: per_engine.filter((e) => e.caps).length,
+    models: [...modelMap.values()],
+  };
+}
+app.get("/api/v1/models", async (c) => {
+  return c.json({ at: Date.now(), ...(await fleetModels(c.env)) });
+});
+
+// ---------------- jobs: live engine jobs across the fleet (fv-console)
+// GET /api/v1/jobs — every engine's /fv/v1/jobs (best-effort, 8s timeout),
+// tagged with the pod that holds each job. ?limit= caps per-engine fetch.
+async function fleetJobs(env: Env, limit: number) {
+  const pods = await fleetPods(env);
+  const per_engine = await Promise.all(
+    pods.map(async (p: any) => {
+      const data = await fetchEngineJson(env, p.pod_id, `/fv/v1/jobs?limit=${limit}`);
+      const jobs = Array.isArray(data) ? data : data?.jobs || [];
+      return { pod_id: p.pod_id, name: p.name, ok: data !== null, jobs: jobs.map((j: any) => ({ ...j, pod_id: p.pod_id, pod_name: p.name })) };
+    })
+  );
+  const jobs = per_engine
+    .flatMap((e) => e.jobs)
+    .sort((a: any, b: any) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+  return {
+    engines_total: per_engine.length,
+    engines_reached: per_engine.filter((e) => e.ok).length,
+    jobs,
+  };
+}
+app.get("/api/v1/jobs", async (c) => {
+  const limit = Math.max(1, Math.min(200, parseInt(c.req.query("limit") || "50", 10) || 50));
+  return c.json({ at: Date.now(), ...(await fleetJobs(c.env, limit)) });
+});
+
+// ---------------- benchmarks: observed performance by model (fv-console)
+// GET /api/v1/benchmarks — completed engine jobs aggregated by model:
+// inference time and peak memory percentiles from real job metrics.
+// GET /api/v1/compare?models=a,b — side-by-side capabilities + benchmarks.
+async function fleetBenchmarks(env: Env, limit: number) {
+  const { jobs } = await fleetJobs(env, limit);
+  const done = jobs.filter((j: any) => ["succeeded", "completed", "done"].includes(String(j.state).toLowerCase()));
+  const byModel = new Map<string, any>();
+  for (const j of done) {
+    const model = j.resolved?.model || j.request_echo?.model || "unknown";
+    if (!byModel.has(model)) byModel.set(model, { model, jobs: 0, inf: [], mem: [], stages: new Map<string, number[]>() });
+    const b = byModel.get(model);
+    b.jobs++;
+    if (typeof j.metrics?.inference_s === "number") b.inf.push(j.metrics.inference_s);
+    if (typeof j.metrics?.peak_memory_mb === "number") b.mem.push(j.metrics.peak_memory_mb);
+    for (const [stage, s] of Object.entries(j.metrics?.stage_durations || {})) {
+      if (typeof s === "number") {
+        if (!b.stages.has(stage)) b.stages.set(stage, []);
+        b.stages.get(stage).push(s);
+      }
+    }
+  }
+  const models = [...byModel.values()].map((b) => {
+    b.inf.sort((x: number, y: number) => x - y);
+    b.mem.sort((x: number, y: number) => x - y);
+    const stages: Record<string, number | null> = {};
+    for (const [stage, vals] of b.stages) {
+      vals.sort((x: number, y: number) => x - y);
+      stages[stage] = pct(vals, 0.5);
+    }
+    return {
+      model: b.model,
+      jobs: b.jobs,
+      inference_s: { p50: pct(b.inf, 0.5), p90: pct(b.inf, 0.9), min: b.inf[0] ?? null, max: b.inf[b.inf.length - 1] ?? null },
+      peak_memory_mb: { p50: pct(b.mem, 0.5), max: b.mem[b.mem.length - 1] ?? null },
+      stages,
+    };
+  });
+  return { models };
+}
+app.get("/api/v1/benchmarks", async (c) => {
+  const limit = Math.max(1, Math.min(200, parseInt(c.req.query("limit") || "100", 10) || 100));
+  return c.json({ at: Date.now(), ...(await fleetBenchmarks(c.env, limit)) });
+});
+app.get("/api/v1/compare", async (c) => {
+  const ids = (c.req.query("models") || "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 4);
+  if (!ids.length) throw new HttpError(400, "models query param required, e.g. ?models=fasth3,wan22-ti2v-5b");
+  const [models, benchmarks] = await Promise.all([fleetModels(c.env), fleetBenchmarks(c.env, 100)]);
+  const benchById = new Map(benchmarks.models.map((b: any) => [b.model, b]));
+  return c.json({
+    at: Date.now(),
+    models: ids.map((id) => ({
+      id,
+      capabilities: models.models.find((m: any) => m.id === id || (m.served_names || []).includes(id)) || null,
+      benchmarks: benchById.get(id) || null,
+    })),
+  });
+});
+
+// ---------------- deploy: guided recipe deploys (fv-console)
+// GET /api/v1/deploy/recipes — POOL_PRESETS as deployable recipes.
+// POST /api/v1/deploy/validate — { recipe, name, count?, gpu_types?, data_centers? } → spec issues.
+// POST /api/v1/deploy — validate, create the cluster, start it → { cluster, operation }.
+function deploySpec(recipe_id: string, opts: { name: string; count?: number; gpu_types?: string[]; data_centers?: string[] }) {
+  const preset = presetById(recipe_id);
+  if (!preset) throw new HttpError(404, `unknown recipe ${recipe_id}`);
+  const pool: any = presetPool(recipe_id);
+  if (!pool) throw new HttpError(404, `unknown recipe ${recipe_id}`);
+  if (opts.count !== undefined) pool.count = opts.count;
+  if (opts.gpu_types) pool.gpu_types = opts.gpu_types;
+  if (opts.data_centers) pool.data_centers = opts.data_centers;
+  return normalizeSpec({ name: opts.name, pools: [pool] });
+}
+
+app.get("/api/v1/deploy/recipes", async (c) => {
+  return c.json({
+    at: Date.now(),
+    recipes: POOL_PRESETS.map((p) => ({
+      id: p.id,
+      title: p.title,
+      description: p.description,
+      min_vram_gb: p.min_vram_gb,
+      weights: p.weights,
+      models: (p.pool.models || []).map((m: any) => ({ id: m.id, family: m.family, recipe: m.recipe })),
+    })),
+  });
+});
+
+app.post("/api/v1/deploy/validate", async (c) => {
+  const b = await body(c);
+  const spec = deploySpec(String(b.recipe || ""), {
+    name: String(b.name || "deploy-check"),
+    count: b.count !== undefined ? Number(b.count) : undefined,
+    gpu_types: Array.isArray(b.gpu_types) ? b.gpu_types.map(String) : undefined,
+    data_centers: Array.isArray(b.data_centers) ? b.data_centers.map(String) : undefined,
+  });
+  return c.json(await checkSpec(c.env, spec));
+});
+
+app.post("/api/v1/deploy", async (c) => {
+  const b = await body(c);
+  const name = String(b.name || "");
+  if (!name) throw new HttpError(400, "name is required", { issues: [{ path: ["name"], message: "name is required" }] });
+  const spec = deploySpec(String(b.recipe || ""), {
+    name,
+    count: b.count !== undefined ? Number(b.count) : undefined,
+    gpu_types: Array.isArray(b.gpu_types) ? b.gpu_types.map(String) : undefined,
+    data_centers: Array.isArray(b.data_centers) ? b.data_centers.map(String) : undefined,
+  });
+  const live = await liveSpecIssues(c.env, spec);
+  if (live.issues.length) throw new HttpError(400, issuesText(live.issues, "spec"), { issues: live.issues });
+  await assertNameFree(c.env, "cluster", spec.name);
+  const { s, ingestHash } = await newSecrets();
+  const cl = await insertCluster(c.env, spec, emptyState(), s, ingestHash, actor(c), "controller", "defined", null);
+  await auditC(c, { action: "cluster.define", target: cl.name, after: spec });
+  let operation: string | null = null;
+  if (b.start !== false) {
+    const r = await startOp(c.env, cl.id, "up", { skip_price_check: false }, actor(c));
+    operation = r.id;
+    await auditC(c, { action: "cluster.up", target: cl.name, after: { operation: r.id } });
+  }
+  return c.json({ cluster: clusterView(cl), operation }, 201);
+});
+
 // ---------------- providers (Runpod is the primary; CloudRift, docs/ops/cloudrift.md)
 async function cloudriftView(env: Env) {
   const acct = await getSetting<{ at: number | null; balance: number | null; spend_per_hr: number; running: number }>(env, "cloudrift_account", { at: null, balance: null, spend_per_hr: 0, running: 0 });
@@ -178,7 +484,7 @@ async function cloudriftView(env: Env) {
   return { ...acct, floor, hours_to_floor: acct.balance !== null && acct.spend_per_hr > 0 ? Math.max(0, (acct.balance - floor) / acct.spend_per_hr) : null };
 }
 /** Every provider, or ?provider=<id> only that one (nothing else is read). */
-app.get("/api/providers", async (c) => {
+app.get("/api/v1/providers", async (c) => {
   const only = c.req.query("provider");
   const all = ["runpod", "cloudrift", ...OTHER_PROVIDERS];
   if (only && !all.includes(only)) throw new HttpError(404, `no provider ${only} (${all.join(", ")})`);
@@ -194,9 +500,9 @@ app.get("/api/providers", async (c) => {
 });
 /** Every instance type a launch provider lists, normalized (instance-types.ts; the launch screen's table); ?refresh=1
  * reads the provider again instead of the cache (at most once per 30 s per provider: a faster one is served cached). */
-app.get("/api/providers/:p/instance-types", async (c) => c.json(await instanceTypes(c.env, c.req.param("p"), { refresh: c.req.query("refresh") === "1" })));
+app.get("/api/v1/providers/:p/instance-types", async (c) => c.json(await instanceTypes(c.env, c.req.param("p"), { refresh: c.req.query("refresh") === "1" })));
 /** Price and stock of a GMI / Brev GPU product (the planner's view). */
-app.get("/api/providers/:p/offers", async (c) => {
+app.get("/api/v1/providers/:p/offers", async (c) => {
   const p = c.req.param("p") as OtherProviderId;
   if (!(OTHER_PROVIDERS as readonly string[]).includes(p)) throw new HttpError(404, `no launch provider ${p} (${OTHER_PROVIDERS.join(", ")})`);
   const impl = providerImpl(p);
@@ -207,9 +513,9 @@ app.get("/api/providers/:p/offers", async (c) => {
   return c.json({ provider: p, offers: await Promise.all(gpus.map((g) => impl.offer(c.env, g, region))) });
 });
 /** NVIDIA Brev keep-on-stop (brev-park.ts): parked / held instances, their weights, disk and storage $/day. */
-app.get("/api/providers/brev/parked", async (c) => c.json({ enabled: !providerImpl("brev").off(c.env), ...(await parkedView(c.env)) }));
+app.get("/api/v1/providers/brev/parked", async (c) => c.json({ enabled: !providerImpl("brev").off(c.env), ...(await parkedView(c.env)) }));
 /** Deletes one parked / held Brev instance (only ours: recorded and fv- named). */
-app.post("/api/providers/brev/parked/:id/delete", async (c) => {
+app.post("/api/v1/providers/brev/parked/:id/delete", async (c) => {
   requireAdmin(c);
   const id = c.req.param("id");
   const msg = await deleteParked(c.env, id, `deleted by ${actor(c)}`);
@@ -217,7 +523,7 @@ app.post("/api/providers/brev/parked/:id/delete", async (c) => {
   return c.json({ ok: true, message: msg });
 });
 /** A held instance (its restart failed) back into the warm pool: the next launch of its type may restart it. */
-app.post("/api/providers/brev/parked/:id/unpark", async (c) => {
+app.post("/api/v1/providers/brev/parked/:id/unpark", async (c) => {
   requireAdmin(c);
   const id = c.req.param("id");
   const r = await unpark(c.env, id);
@@ -225,9 +531,9 @@ app.post("/api/providers/brev/parked/:id/unpark", async (c) => {
   return c.json({ ok: true, name: r.name, state: r.state });
 });
 /** Named pod tunnels (tunnels.ts): the settings (mode, template, warning) and the recorded tunnels; ?all=1 with deleted ones. */
-app.get("/api/tunnels", async (c) => c.json(await tunnelsView(c.env, c.req.query("all") === "1")));
+app.get("/api/v1/tunnels", async (c) => c.json(await tunnelsView(c.env, c.req.query("all") === "1")));
 /** The cron's tunnel pass now (leaks deleted, the account and zone listed for strays). */
-app.post("/api/tunnels/sweep", async (c) => {
+app.post("/api/v1/tunnels/sweep", async (c) => {
   requireAdmin(c);
   const r = await tunnelSweep(c.env, undefined, true);
   if (r.actions.length) await auditC(c, { action: "tunnels.sweep", detail: r.actions.join("; ").slice(0, 1900) });
@@ -236,21 +542,21 @@ app.post("/api/tunnels/sweep", async (c) => {
 });
 /** A GMI / Brev pod's own log as the provider keeps it (GMI: GET /v1/containers/{id}/logs; Brev: none), then the pod's
  * reports (POST /ingest/v1/endpoint: a Brev host's facts, failures, heartbeat; the container's phases). */
-app.get("/api/pods/:id/provider-logs", async (c) => {
+app.get("/api/v1/pods/:id/provider-logs", async (c) => {
   const id = c.req.param("id");
-  if (!isOtherPod(id)) throw new HttpError(400, "a GMI / Brev pod id (gmi:<name>, brev:<name>); Runpod pods: /api/pods/:id/runpod-logs");
+  if (!isOtherPod(id)) throw new HttpError(400, "a GMI / Brev pod id (gmi:<name>, brev:<name>); Runpod pods: /api/v1/pods/:id/runpod-logs");
   const lines = await otherPodLogs(c.env, id).catch(() => [] as string[]);
   const report = await lastReport(c.env, id);
   const reports = await reportHistory(c.env, id);
   return c.json({ source: splitKey(id)!.provider, lines: [...lines.slice(-1000), ...reportLines(reports, report)].map((l) => scrub(c.env, l)), report, reports });
 });
-app.get("/api/providers/cloudrift/price", async (c) => {
+app.get("/api/v1/providers/cloudrift/price", async (c) => {
   const gpu = c.req.query("gpu") || "";
   if (!gpu) throw new HttpError(400, "gpu: a brand (RTX PRO 6000) or a variant name");
   return c.json({ gpu, offers: await cloudrift.price(c.env, gpu) });
 });
 /** Terminates one of our CloudRift rentals (tag fv-owner:fastvideo-rs); others are refused. */
-app.post("/api/providers/cloudrift/instances/:id/terminate", async (c) => {
+app.post("/api/v1/providers/cloudrift/instances/:id/terminate", async (c) => {
   const id = c.req.param("id");
   if (!cloudriftEnabled(c.env)) throw new HttpError(400, "CloudRift is not configured (CLOUDRIFT_API_KEY)");
   const inst = (await cloudrift.instances(c.env)).find((i) => i.id === id);
@@ -261,14 +567,14 @@ app.post("/api/providers/cloudrift/instances/:id/terminate", async (c) => {
   return c.json({ id, terminated: ok });
 });
 
-app.get("/api/pods", async (c) => {
+app.get("/api/v1/pods", async (c) => {
   const all = c.req.query("all") === "1";
   const r = await c.env.DB.prepare(`SELECT p.*, (SELECT SUM(usd) FROM cost_daily d WHERE d.pod_id = p.pod_id AND d.day = ?) AS cost_today, (SELECT SUM(usd) FROM cost_daily d WHERE d.pod_id = p.pod_id) AS cost_total FROM pods p ${all ? "" : "WHERE gone_at IS NULL"} ORDER BY desired_status DESC, cost_per_hr DESC`)
     .bind(utcDay(now()))
     .all<any>();
   return c.json({ pods: r.results || [] });
 });
-app.get("/api/pods/:id", async (c) => {
+app.get("/api/v1/pods/:id", async (c) => {
   const id = c.req.param("id");
   const p = await c.env.DB.prepare("SELECT * FROM pods WHERE pod_id = ?").bind(id).first<any>();
   if (!p) throw new HttpError(404, "unknown pod");
@@ -276,13 +582,13 @@ app.get("/api/pods/:id", async (c) => {
   const ctl = await c.env.DB.prepare("SELECT * FROM cluster_pods WHERE pod_id = ?").bind(id).first<any>();
   return c.json({ pod: p, costs: costs.results || [], controller: ctl || null });
 });
-app.get("/api/pods/:id/runpod-logs", async (c) => {
+app.get("/api/v1/pods/:id/runpod-logs", async (c) => {
   const l = await runpod.logs(c.env, c.req.param("id"));
   const s = (x: string[]) => x.slice(-1000).map((line) => scrub(c.env, line));
   return c.json({ source: "runpod", container: s(l.container), system: s(l.system) });
 });
 /** A pod's logs as JSON, oldest first: what fv-serve shipped and the Runpod container / system log the controller captured from boot (podlogs.ts). ?after_id= follows; ?source=runpod|serve|control, ?level=, ?q=, ?since=, ?until=, ?limit= (≤ 2000). */
-app.get("/api/pods/:id/logs", async (c) => {
+app.get("/api/v1/pods/:id/logs", async (c) => {
   const q = c.req.query();
   const id = c.req.param("id");
   const after = q.after_id ? Number(q.after_id) : undefined;
@@ -299,13 +605,13 @@ app.get("/api/pods/:id/logs", async (c) => {
   return c.json({ pod: id, lines, next_after_id: lines.length ? lines[lines.length - 1].id : after ?? 0 });
 });
 /** A controller pod's boot timeline (boottime.ts): each phase's time since create and duration, the weight components, the phase it is in. */
-app.get("/api/pods/:id/boot", async (c) => {
+app.get("/api/v1/pods/:id/boot", async (c) => {
   const bt = await getBoot(c.env, c.req.param("id"));
   if (!bt) throw new HttpError(404, "not a controller pod");
   return c.json({ pod_id: c.req.param("id"), phase: bt.t.ready ? null : bootPhase(bt), timeline: bootRows(bt), boot: bt });
 });
 /** A pod's status as JSON: the account view (Runpod state, $/hr, health, utilisation), the controller's record, its boot diagnosis and its cost. */
-app.get("/api/pods/:id/status", async (c) => {
+app.get("/api/v1/pods/:id/status", async (c) => {
   const id = c.req.param("id");
   const [p, ctl, cost, boot] = await Promise.all([
     c.env.DB.prepare("SELECT * FROM pods WHERE pod_id = ?").bind(id).first<any>(),
@@ -329,18 +635,18 @@ app.get("/api/pods/:id/status", async (c) => {
     logs: { lines: lines?.n ?? 0, last_ts: lines?.last ?? null },
   });
 });
-app.get("/api/metrics/series", async (c) => {
+app.get("/api/v1/metrics/series", async (c) => {
   const hours = Math.min(Math.max(Number(c.req.query("hours") || 6), 1), 24 * 7);
   return c.json(await querySeries(c.env, hours, c.req.query("pod") || undefined));
 });
-app.get("/api/balance", async (c) => {
+app.get("/api/v1/balance", async (c) => {
   const hours = Math.min(Math.max(Number(c.req.query("hours") || 24), 1), 24 * 30);
   const r = await c.env.DB.prepare("SELECT at, balance, spend_per_hr FROM balance_samples WHERE at > ? ORDER BY at").bind(now() - hours * 3600_000).all<any>();
   const pts = r.results || [];
   const step = Math.max(1, Math.floor(pts.length / 500));
   return c.json({ points: pts.filter((_, i) => i % step === 0 || i === pts.length - 1) });
 });
-app.get("/api/costs", async (c) => {
+app.get("/api/v1/costs", async (c) => {
   const days = Math.min(Math.max(Number(c.req.query("days") || 7), 1), 90);
   const since = utcDay(now() - (days - 1) * 86400_000);
   const q = (sql: string) => c.env.DB.prepare(sql).bind(since).all<any>().then((r) => r.results || []);
@@ -358,7 +664,7 @@ app.get("/api/costs", async (c) => {
 function clusterView(cl: Cluster) {
   return { id: cl.id, name: cl.name, kind: isStandalone(cl) ? "standalone" : "cluster", status: cl.status, deadline: cl.deadline, source: cl.source, created_at: cl.created_at, updated_at: cl.updated_at, created_by: cl.created_by, spec: cl.spec, state: cl.state };
 }
-app.get("/api/templates", (c) =>
+app.get("/api/v1/templates", (c) =>
   c.json({
     // Every template as a spec (the keys standard / tiny-cpu as before), their titles, and the pool presets the dashboard can add.
     ...Object.fromEntries(Object.keys(TEMPLATES).map((k) => [k, defaultSpec("example", k)])),
@@ -367,14 +673,14 @@ app.get("/api/templates", (c) =>
     standard_pools: STANDARD_POOLS,
   }),
 );
-app.get("/api/clusters", async (c) => {
-  // Standalone pods are listed under /api/standalone (?all=1: here as well).
+app.get("/api/v1/clusters", async (c) => {
+  // Standalone pods are listed under /api/v1/standalone (?all=1: here as well).
   const cls = (await listClusters(c.env)).filter((cl) => c.req.query("all") === "1" || !isStandalone(cl));
   const out = [];
   for (const cl of cls) out.push({ ...clusterView(cl), op: await currentOp(c.env, cl.id).catch(() => null) });
   return c.json({ clusters: out });
 });
-app.post("/api/clusters", async (c) => {
+app.post("/api/v1/clusters", async (c) => {
   const b = await body(c);
   const spec = normalizeSpec(b.spec || b);
   await assertNameFree(c.env, "cluster", spec.name);
@@ -385,7 +691,7 @@ app.post("/api/clusters", async (c) => {
   await auditC(c, { action: "cluster.define", target: cl.name, after: spec });
   return c.json({ cluster: clusterView(cl) }, 201);
 });
-app.get("/api/clusters/:id", async (c) => {
+app.get("/api/v1/clusters/:id", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
   const pods = await livePods(c.env, cl.id);
   const ops = await c.env.DB.prepare("SELECT id, kind, status, params, error, actor, created_at, updated_at FROM operations WHERE cluster_id = ? ORDER BY created_at DESC LIMIT 20").bind(cl.id).all<any>();
@@ -394,14 +700,14 @@ app.get("/api/clusters/:id", async (c) => {
   const edge_url = isEdge(cl.spec) ? edgeCfg(c.env)?.url || null : undefined;
   return c.json({ cluster: clusterView(cl), ...(edge_url !== undefined ? { edge_url } : {}), pods, live: live.results || [], ops: ops.results || [], op: await currentOp(c.env, cl.id).catch(() => null), drift: clusterDrift(cl, heads.heads) });
 });
-app.put("/api/clusters/:id/spec", async (c) => {
+app.put("/api/v1/clusters/:id/spec", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
   const b = await body(c);
   const doc = normalizeSpec({ ...(b.spec || b), name: cl.name });
   await saveDoc(c.env, "cluster-spec", cl.id, doc, { version: b.version, actor: actor(c), ip: clientIp(c) });
   return c.json({ cluster: clusterView(await getCluster(c.env, cl.id)) });
 });
-app.delete("/api/clusters/:id", async (c) => {
+app.delete("/api/v1/clusters/:id", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
   if (allPods(cl.state).length) throw new HttpError(409, "the cluster has pods: stop it first");
   await deleteClusterRow(c.env, cl.id);
@@ -410,14 +716,14 @@ app.delete("/api/clusters/:id", async (c) => {
 });
 // Every problem of a draft spec with its field path (the configuration editor; nothing is saved).
 // `id`: an existing cluster (its name is fixed); none: a new one (its name must be free).
-app.post("/api/clusters/validate", async (c) => {
+app.post("/api/v1/clusters/validate", async (c) => {
   const b = await body(c);
   const cl = b.id ? await getCluster(c.env, String(b.id)) : null;
   return c.json(await checkSpec(c.env, b.spec, cl ? { id: cl.id, name: cl.name } : undefined));
 });
 // The price check of a cluster's saved spec, or of a draft (`spec`; id `new` for one not defined yet),
 // with Runpod's stock per pool (`availability`, null when Runpod did not answer).
-app.post("/api/clusters/:id/price", async (c) => {
+app.post("/api/v1/clusters/:id/price", async (c) => {
   const id = c.req.param("id");
   const b = await body(c);
   const cl = id === "new" ? null : await getCluster(c.env, id);
@@ -440,7 +746,7 @@ const OPS: Record<string, { kind: Parameters<typeof startOp>[2]; params: (b: any
   restart: { kind: "restart", params: (b) => ({ pods: Array.isArray(b.pods) && b.pods.length ? b.pods.map(String) : undefined, pools: Array.isArray(b.pools) && b.pools.length ? b.pools.map(String) : undefined }) },
 };
 for (const [path, def] of Object.entries(OPS)) {
-  app.post(`/api/clusters/:id/${path}`, async (c) => {
+  app.post(`/api/v1/clusters/:id/${path}`, async (c) => {
     const cl = await getCluster(c.env, c.req.param("id"));
     const params = def.params(await body(c));
     // Ops that create pods refuse a stored spec that still names an unavailable region (us: no weights volume).
@@ -453,25 +759,25 @@ for (const [path, def] of Object.entries(OPS)) {
     return c.json({ operation: r.id, kind: def.kind }, 202);
   });
 }
-app.post("/api/clusters/:id/cancel", async (c) => {
+app.post("/api/v1/clusters/:id/cancel", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
   const r = await cancelOp(c.env, cl.id, actor(c));
   await auditC(c, { action: "cluster.cancel", target: cl.name, after: r });
   return c.json(r);
 });
-app.get("/api/clusters/:id/ops", async (c) => {
+app.get("/api/v1/clusters/:id/ops", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
   const r = await c.env.DB.prepare("SELECT * FROM operations WHERE cluster_id = ? ORDER BY created_at DESC LIMIT 50").bind(cl.id).all<any>();
   return c.json({ operations: (r.results || []).map((o) => ({ ...o, log: JSON.parse(o.log || "[]") })) });
 });
-app.get("/api/ops/:id", async (c) => {
+app.get("/api/v1/ops/:id", async (c) => {
   const o = await c.env.DB.prepare("SELECT * FROM operations WHERE id = ?").bind(c.req.param("id")).first<any>();
   if (!o) throw new HttpError(404, "no such operation");
   return c.json({ operation: { ...o, log: JSON.parse(o.log || "[]"), params: JSON.parse(o.params || "{}") } });
 });
 
 /** The effective env of every pod of a cluster (masked), and which pods need a restart to get it. */
-app.get("/api/clusters/:id/env", async (c) => {
+app.get("/api/v1/clusters/:id/env", async (c) => {
   const env = c.env;
   const cl = await getCluster(env, c.req.param("id"));
   const ctx = await envCtx(env, cl);
@@ -511,32 +817,32 @@ async function frontView(c: any) {
   return c.json({ url: null, direct: true, workers });
 }
 // ---------------- jobs of clusters and standalone pods (src/jobs.ts; docs/control/README.md "Jobs")
-app.get("/api/clusters/:id/jobs", async (c) => {
+app.get("/api/v1/clusters/:id/jobs", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
   const q = parseOr400("jobs-query", Object.fromEntries(Object.entries(c.req.query()).filter(([, v]) => v !== "")));
   return c.json(await listJobs(c.env, cl, q));
 });
-app.post("/api/clusters/:id/jobs/cancel-queued", async (c) => {
+app.post("/api/v1/clusters/:id/jobs/cancel-queued", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
   const x = parseOr400("jobs-cancel-queued", await body(c));
   return c.json(await cancelQueued(c.env, { actor: actor(c), ip: clientIp(c) }, cl, x));
 });
 /** One job by any of its ids (the API's own, or fv-serve's internal uuid); the full job record never leaves fv-control. */
-app.get("/api/jobs/:job", async (c) => {
+app.get("/api/v1/jobs/:job", async (c) => {
   const x = parseOr400("job-cancel", { job: c.req.param("job"), ...(c.req.query("cluster") ? { cluster: c.req.query("cluster") } : {}) });
   const { c: cl, row } = await findJob(c.env, x.job, x.cluster);
   return c.json({ cluster: { id: cl.id, name: cl.name }, job: await jobOf(c.env, cl, row) });
 });
-app.post("/api/jobs/:job/cancel", async (c) => {
+app.post("/api/v1/jobs/:job/cancel", async (c) => {
   const x = parseOr400("job-cancel", { ...(await body(c)), job: c.req.param("job") });
   const { c: cl, row } = await findJob(c.env, x.job, x.cluster);
   const r = await cancelJobRow(c.env, { actor: actor(c), ip: clientIp(c) }, cl, row);
   if (!r.ok) throw new HttpError(502, `cancel ${r.external_id} (${r.api}, ${cl.name}): ${r.note}`, { result: r });
   return c.json(r);
 });
-app.get("/api/clusters/:id/front", frontView);
-app.get("/api/clusters/:id/gateway", frontView);
-app.post("/api/clusters/:id/admin-token", async (c) => {
+app.get("/api/v1/clusters/:id/front", frontView);
+app.get("/api/v1/clusters/:id/gateway", frontView);
+app.post("/api/v1/clusters/:id/admin-token", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
   const tok = await adminToken(c.env, cl);
   await auditC(c, { action: "cluster.admin-token.reveal", target: cl.name });
@@ -544,7 +850,7 @@ app.post("/api/clusters/:id/admin-token", async (c) => {
   const base = u.edge_url ?? u.workers.find((w) => w.url)?.url;
   return c.json({ admin_token: tok, console: base ? `${base}/console/admin` : null, ...u });
 });
-app.post("/api/clusters/:id/mint-key", async (c) => {
+app.post("/api/v1/clusters/:id/mint-key", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
   const name = parseOr400("mint-key", { name: (await body(c)).name ?? "fv-control" }).name;
   const r = await adminOne(c.env, cl, "POST", "/fv/v1/admin/keys", { name });
@@ -553,13 +859,13 @@ app.post("/api/clusters/:id/mint-key", async (c) => {
   // Gateway-less: the other workers load the key from D1 within 30 s.
   return c.json({ api_key: r.body.api_key, key: r.body.key, ...(isDirect(cl.spec, cl.state) ? { minted_on: r.pod, propagation_s: 30 } : {}) }, 201);
 });
-app.get("/api/clusters/:id/keys", async (c) => {
+app.get("/api/v1/clusters/:id/keys", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
   const r = await adminOne(c.env, cl, "GET", "/fv/v1/admin/keys");
   if (r.status !== 200) throw new HttpError(502, `key list refused (${r.status})`);
   return c.json({ keys: r.body?.keys || [], backend: r.body?.backend });
 });
-app.delete("/api/clusters/:id/keys/:kid", async (c) => {
+app.delete("/api/v1/clusters/:id/keys/:kid", async (c) => {
   const cl = await getCluster(c.env, c.req.param("id"));
   const kid = c.req.param("kid");
   if (!/^key_[0-9a-f]{12}$/.test(kid)) throw new HttpError(400, "key id: key_<12 hex>");
@@ -576,17 +882,17 @@ app.delete("/api/clusters/:id/keys/:kid", async (c) => {
 // ---------------- standalone pods (standalone.ts, docs/control/standalone-pods.md)
 async function standaloneOf(c: C): Promise<Cluster> {
   const cl = await getCluster(c.env, c.req.param("id")!);
-  if (!isStandalone(cl)) throw new HttpError(404, `${cl.name} is a cluster, not a standalone pod (/api/clusters)`);
+  if (!isStandalone(cl)) throw new HttpError(404, `${cl.name} is a cluster, not a standalone pod (/api/v1/clusters)`);
   return cl;
 }
 const standaloneOut = async (c: C, cl: Cluster) => standaloneView(c.env, cl, await currentOp(c.env, cl.id).catch(() => null));
-app.get("/api/standalone", async (c) => {
+app.get("/api/v1/standalone", async (c) => {
   const pods = [];
   for (const cl of (await listClusters(c.env)).filter(isStandalone)) pods.push(await standaloneOut(c, cl));
   return c.json({ pods });
 });
 /** Every problem of a draft launch request, path-anchored in the request's own fields (the launch form; nothing is saved). */
-app.post("/api/standalone/validate", async (c) => {
+app.post("/api/v1/standalone/validate", async (c) => {
   const b = await body<any>(c);
   const issues: Issue[] = [];
   let spec = null;
@@ -620,7 +926,7 @@ app.post("/api/standalone/validate", async (c) => {
   return c.json({ ok: !issues.length, issues, warnings, spec: issues.length ? null : spec });
 });
 /** Launch: define the pod and start it (start: false only defines it). The same `up` as a cluster: price check, image preflight, placement, wait until ready. */
-app.post("/api/standalone", async (c) => {
+app.post("/api/v1/standalone", async (c) => {
   requireAdmin(c);
   const b = await body<LaunchRequest & { start?: boolean; skip_image_check?: boolean }>(c);
   const { spec, env: vars } = standaloneSpec(b);
@@ -641,8 +947,8 @@ app.post("/api/standalone", async (c) => {
   }
   return c.json({ pod: await standaloneOut(c, await getCluster(c.env, cl.id)), operation }, 201);
 });
-app.get("/api/standalone/:id", async (c) => c.json({ pod: await standaloneOut(c, await standaloneOf(c)) }));
-app.post("/api/standalone/:id/start", async (c) => {
+app.get("/api/v1/standalone/:id", async (c) => c.json({ pod: await standaloneOut(c, await standaloneOf(c)) }));
+app.post("/api/v1/standalone/:id/start", async (c) => {
   requireAdmin(c);
   const cl = await standaloneOf(c);
   if ((cl.state.workers[STANDALONE_POOL] || []).length) throw new HttpError(409, `${cl.name} has a pod already`);
@@ -653,7 +959,7 @@ app.post("/api/standalone/:id/start", async (c) => {
   return c.json({ operation: r.id, kind: "up" }, 202);
 });
 /** Stop: the pod is deleted (the GPU and its cost released; logs and costs kept); the definition stays, and start makes a new pod. */
-app.post("/api/standalone/:id/stop", async (c) => {
+app.post("/api/v1/standalone/:id/stop", async (c) => {
   requireAdmin(c);
   const cl = await standaloneOf(c);
   const cur = (await currentOp(c.env, cl.id).catch(() => null)) as { kind?: string } | null;
@@ -662,7 +968,7 @@ app.post("/api/standalone/:id/stop", async (c) => {
   await auditC(c, { action: "standalone.stop", target: cl.name, before: { status: cl.status, deadline: cl.deadline } });
   return c.json({ operation: r.id, kind: "down" }, 202);
 });
-app.post("/api/standalone/:id/extend", async (c) => {
+app.post("/api/v1/standalone/:id/extend", async (c) => {
   requireAdmin(c);
   const cl = await standaloneOf(c);
   const { minutes } = parseOr400("extend", { minutes: (await body(c)).minutes });
@@ -671,7 +977,7 @@ app.post("/api/standalone/:id/extend", async (c) => {
   return c.json({ operation: r.id, kind: "extend" }, 202);
 });
 /** Delete: stop the pod if there is one (the definition goes when it is gone: 202), else delete the definition now. */
-app.delete("/api/standalone/:id", async (c) => {
+app.delete("/api/v1/standalone/:id", async (c) => {
   requireAdmin(c);
   const cl = await standaloneOf(c);
   if (allPods(cl.state).length || ["starting", "stopping"].includes(cl.status)) {
@@ -691,8 +997,8 @@ const scopeOf = (s: string): Scope => {
   if (s !== "account" && s !== "cluster" && s !== "pool" && s !== "pod") throw new HttpError(400, "scope: account | cluster | pool | pod");
   return s;
 };
-app.get("/api/env/account", async (c) => c.json({ vars: (await listVars(c.env, "account", "")).map(maskRow) }));
-app.get("/api/env/:scope/:sid", async (c) => {
+app.get("/api/v1/env/account", async (c) => c.json({ vars: (await listVars(c.env, "account", "")).map(maskRow) }));
+app.get("/api/v1/env/:scope/:sid", async (c) => {
   const scope = scopeOf(c.req.param("scope"));
   const sid = scope === "account" ? "" : scope === "pool" ? await poolSid(c.env, c.req.param("sid")) : c.req.param("sid");
   return c.json({ vars: (await listVars(c.env, scope, sid)).map(maskRow) });
@@ -713,13 +1019,13 @@ async function delVar(c: C, scope: Scope, sid: string, key: string) {
   await auditC(c, { action: "env.delete", target: `${scope}:${sid || "-"}:${key}`, before: r.before });
   return c.json({ ok: true });
 }
-app.put("/api/env/account/:key", (c) => putVar(c, "account", "", c.req.param("key")));
-app.delete("/api/env/account/:key", (c) => delVar(c, "account", "", c.req.param("key")));
-app.put("/api/env/:scope/:sid/:key", (c) => putVar(c, scopeOf(c.req.param("scope")), c.req.param("sid"), c.req.param("key")));
-app.delete("/api/env/:scope/:sid/:key", (c) => delVar(c, scopeOf(c.req.param("scope")), c.req.param("sid"), c.req.param("key")));
+app.put("/api/v1/env/account/:key", (c) => putVar(c, "account", "", c.req.param("key")));
+app.delete("/api/v1/env/account/:key", (c) => delVar(c, "account", "", c.req.param("key")));
+app.put("/api/v1/env/:scope/:sid/:key", (c) => putVar(c, scopeOf(c.req.param("scope")), c.req.param("sid"), c.req.param("key")));
+app.delete("/api/v1/env/:scope/:sid/:key", (c) => delVar(c, scopeOf(c.req.param("scope")), c.req.param("sid"), c.req.param("key")));
 
 // ---------------- the shared build pod (read only: buildpod.ts, its /healthz timers)
-app.get("/api/buildpod", async (c) => {
+app.get("/api/v1/buildpod", async (c) => {
   const pol = await policies(c.env);
   const pods = await buildPodStatus(c.env, pol);
   // Its self-stop error carries a Runpod reply: scrubbed like every other upstream text.
@@ -739,9 +1045,9 @@ const podOut = async (c: C, id: string, withToken: boolean) => {
   await auditC(c, { action: "build_pod.token", target: row.pod_id || row.id, detail: row.name });
   return { pod: view, token: await buildPodToken(c.env, row) };
 };
-app.get("/api/build-pods", async (c) => c.json(await buildPodsOverview(c.env)));
-app.get("/api/build-pods/policy", async (c) => c.json({ policy: await buildPodsPolicy(c.env), defaults: normalizePolicy({}) }));
-app.put("/api/build-pods/policy", async (c) => {
+app.get("/api/v1/build-pods", async (c) => c.json(await buildPodsOverview(c.env)));
+app.get("/api/v1/build-pods/policy", async (c) => c.json({ policy: await buildPodsPolicy(c.env), defaults: normalizePolicy({}) }));
+app.put("/api/v1/build-pods/policy", async (c) => {
   const before = await buildPodsPolicy(c.env);
   const b = await body<{ policy?: Record<string, unknown> }>(c);
   const merged = { ...before, ...(b.policy || {}) };
@@ -751,21 +1057,21 @@ app.put("/api/build-pods/policy", async (c) => {
   await auditC(c, { action: "build_pods.policy", before, after: next });
   return c.json({ policy: next });
 });
-app.get("/api/build-pods/plan", async (c) => {
+app.get("/api/v1/build-pods/plan", async (c) => {
   const pol = await buildPodsPolicy(c.env);
   const region = c.req.query("region") || null;
   const ranked = rankCandidates(await cpuCandidates(c.env, pol, region), pol, region);
   const bundle = await serverBundle(c.env, pol).catch((e) => ({ error: (e as Error).message }));
   return c.json({ candidates: ranked.slice(0, 15), server: "error" in bundle ? bundle : { ref: bundle.ref, sha: bundle.sha, image: bundle.image, bytes_b64: bundle.b64.length } });
 });
-app.post("/api/build-pods/up", async (c) => {
+app.post("/api/v1/build-pods/up", async (c) => {
   requireAdmin(c);
   const b = await body<{ region?: string }>(c);
   const region = typeof b.region === "string" && /^[A-Za-z0-9-]{2,20}$/.test(b.region) ? b.region : null;
   const up = await buildPodsUp(c.env, actor(c), { region });
   return c.json({ action: up.action, replaced: up.replaced || [], ...(await podOut(c, up.pod.id, true)) }, up.action === "created" ? 201 : 200);
 });
-app.post("/api/build-pods", async (c) => {
+app.post("/api/v1/build-pods", async (c) => {
   requireAdmin(c);
   const b = await body<{ region?: string; purpose?: string; server_ref?: string }>(c);
   const pol = await buildPodsPolicy(c.env);
@@ -773,29 +1079,29 @@ app.post("/api/build-pods", async (c) => {
   const row = await createBuildPod(c.env, actor(c), pol, { region: b.region || null, purpose, server_ref: b.server_ref });
   return c.json(await podOut(c, row.id, true), 201);
 });
-app.get("/api/build-pods/:id", async (c) => c.json(await podOut(c, c.req.param("id"), false)));
-app.get("/api/build-pods/:id/token", async (c) => c.json(await podOut(c, c.req.param("id"), true)));
-app.post("/api/build-pods/:id/start", async (c) => {
+app.get("/api/v1/build-pods/:id", async (c) => c.json(await podOut(c, c.req.param("id"), false)));
+app.get("/api/v1/build-pods/:id/token", async (c) => c.json(await podOut(c, c.req.param("id"), true)));
+app.post("/api/v1/build-pods/:id/start", async (c) => {
   await startBuildPodRow(c.env, await getBuildPod(c.env, c.req.param("id")), actor(c));
   return c.json(await podOut(c, c.req.param("id"), false));
 });
-app.post("/api/build-pods/:id/stop", async (c) => {
+app.post("/api/v1/build-pods/:id/stop", async (c) => {
   const b = await body<{ force?: boolean }>(c);
   const result = await stopBuildPodRow(c.env, await getBuildPod(c.env, c.req.param("id")), actor(c), { force: !!b.force, reason: "by hand" });
   return c.json({ result, ...(await podOut(c, c.req.param("id"), false)) });
 });
-app.delete("/api/build-pods/:id", async (c) => {
+app.delete("/api/v1/build-pods/:id", async (c) => {
   await deleteBuildPodRow(c.env, await getBuildPod(c.env, c.req.param("id")), actor(c), { force: c.req.query("force") === "1" });
   return c.json(await podOut(c, c.req.param("id"), false));
 });
-app.post("/api/build-pods/:id/runner", async (c) => {
+app.post("/api/v1/build-pods/:id/runner", async (c) => {
   const row = await getBuildPod(c.env, c.req.param("id"));
   const state = await registerRunner(c.env, row);
   await auditC(c, { action: "build_pod.runner", target: row.pod_id || row.id, detail: state });
   return c.json({ runner: state });
 });
-// CI (docs §6): an idle runner now, a pod being woken ("wait": poll again), or GitHub-hosted. Scope `ci` tokens reach only /api/ci/*.
-app.post("/api/ci/build-runner", async (c) => {
+// CI (docs §6): an idle runner now, a pod being woken ("wait": poll again), or GitHub-hosted. Scope `ci` tokens reach only /api/v1/ci/*.
+app.post("/api/v1/ci/build-runner", async (c) => {
   const b = await body<{ label?: string; region?: string; wake?: boolean; workflow?: string; run_id?: number | string }>(c);
   const region = typeof b.region === "string" && /^[a-z]{2}$/.test(b.region) ? b.region : null;
   const ans = await ciBuildRunner(c.env, actor(c), { label: b.label, region, wake: b.wake });
@@ -804,18 +1110,18 @@ app.post("/api/ci/build-runner", async (c) => {
 });
 
 // ---------------- alerts, policies
-app.get("/api/alerts", async (c) => {
+app.get("/api/v1/alerts", async (c) => {
   const open = c.req.query("open") !== "0";
   const r = await c.env.DB.prepare(`SELECT * FROM alerts ${open ? "WHERE resolved_at IS NULL" : ""} ORDER BY opened_at DESC LIMIT 200`).all<any>();
   return c.json({ alerts: r.results || [] });
 });
-app.post("/api/alerts/:id/resolve", async (c) => {
+app.post("/api/v1/alerts/:id/resolve", async (c) => {
   await c.env.DB.prepare("UPDATE alerts SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL").bind(now(), Number(c.req.param("id"))).run();
   await auditC(c, { action: "alert.resolve", target: c.req.param("id") });
   return c.json({ ok: true });
 });
-app.get("/api/policies", async (c) => c.json({ policies: await policies(c.env), defaults: DEFAULT_POLICIES }));
-app.put("/api/policies", async (c) => {
+app.get("/api/v1/policies", async (c) => c.json({ policies: await policies(c.env), defaults: DEFAULT_POLICIES }));
+app.put("/api/v1/policies", async (c) => {
   const b = await body<any>(c);
   const next = dropRemovedPolicies({ ...(await policies(c.env)), ...b });
   delete next.version;
@@ -824,7 +1130,7 @@ app.put("/api/policies", async (c) => {
 });
 
 // ---------------- logs
-app.get("/api/logs", async (c) => {
+app.get("/api/v1/logs", async (c) => {
   const q = c.req.query();
   return c.json({
     lines: await searchLogs(c.env, {
@@ -841,20 +1147,20 @@ app.get("/api/logs", async (c) => {
   });
 });
 // The log explorer (src/logquery.ts): every source in one line shape, filtered server-side, keyset pages.
-app.get("/api/logs/query", async (c) => c.json(await queryLogs(c.env, parseLogQuery(c.req.query()))));
+app.get("/api/v1/logs/query", async (c) => c.json(await queryLogs(c.env, parseLogQuery(c.req.query()))));
 // New lines since `tail` (the state the previous call returned; none: start now).
-app.get("/api/logs/live", async (c) => {
+app.get("/api/v1/logs/live", async (c) => {
   const r = await tailLogs(c.env, parseLogQuery(c.req.query()), decodeTail(c.req.query("tail")));
   return c.json({ lines: r.lines, tail: encodeTail(r.state) });
 });
-app.get("/api/logs/context", async (c) => {
+app.get("/api/v1/logs/context", async (c) => {
   const uid = c.req.query("uid") || "";
   if (!/^[a-z]:[A-Za-z0-9_:.-]{1,120}$/.test(uid)) throw new HttpError(400, "uid: a line's uid");
   return c.json(await lineContext(c.env, uid, Number(c.req.query("before") ?? 10), Number(c.req.query("after") ?? 10)));
 });
-app.get("/api/logs/facets", async (c) => c.json(await logFacets(c.env, parseLogQuery(c.req.query()), Number(c.req.query("buckets") || 60))));
+app.get("/api/v1/logs/facets", async (c) => c.json(await logFacets(c.env, parseLogQuery(c.req.query()), Number(c.req.query("buckets") || 60))));
 // The filtered result as NDJSON or text, paged server-side (at most 50 000 lines).
-app.get("/api/logs/export", async (c) => {
+app.get("/api/v1/logs/export", async (c) => {
   const q = parseLogQuery({ ...c.req.query(), limit: "1000" });
   const fmt = c.req.query("format") === "txt" ? "txt" : "ndjson";
   const max = Math.min(Number(c.req.query("max") || 50_000), 50_000);
@@ -887,7 +1193,7 @@ app.get("/api/logs/export", async (c) => {
     headers: { "content-type": fmt === "txt" ? "text/plain; charset=utf-8" : "application/x-ndjson", "content-disposition": `attachment; filename="fv-logs-${stamp}.${fmt === "txt" ? "log" : "ndjson"}"`, "cache-control": "no-store" },
   });
 });
-app.get("/api/logs/download", async (c) => {
+app.get("/api/v1/logs/download", async (c) => {
   const pod = c.req.query("pod") || "";
   const row = await c.env.DB.prepare("SELECT cluster_id FROM cluster_pods WHERE pod_id = ?").bind(pod).first<{ cluster_id: string }>();
   if (!row) throw new HttpError(404, "not a controller pod");
@@ -896,7 +1202,7 @@ app.get("/api/logs/download", async (c) => {
     headers: { "content-type": "application/x-ndjson", "content-disposition": `attachment; filename="${pod}-${day}.ndjson"`, "cache-control": "no-store" },
   });
 });
-app.get("/api/logs/tail", async (c) => {
+app.get("/api/v1/logs/tail", async (c) => {
   const pod = c.req.query("pod") || "*";
   let cluster = c.req.query("cluster");
   if (!cluster && pod !== "*") cluster = (await c.env.DB.prepare("SELECT cluster_id FROM cluster_pods WHERE pod_id = ?").bind(pod).first<{ cluster_id: string }>())?.cluster_id;
@@ -907,18 +1213,18 @@ app.get("/api/logs/tail", async (c) => {
 });
 
 // ---------------- releases, images, GitHub
-app.get("/api/releases", async (c) => {
+app.get("/api/v1/releases", async (c) => {
   const heads = await releaseHeads(c.env);
   const cls = await listClusters(c.env);
   return c.json({ ...heads, registry: await registry(c.env), drift: cls.map((cl) => ({ cluster: cl.name, ...clusterDrift(cl, heads.heads) })) });
 });
-app.get("/api/images/tags", async (c) => {
+app.get("/api/v1/images/tags", async (c) => {
   const f = c.req.query("filter") || "";
   const tags = (await listTags(c.env)).filter((t) => t.includes(f));
   return c.json({ tags: tags.slice(-500) });
 });
-app.get("/api/github/ci", async (c) => c.json(await ciStatus(c.env)));
-app.post("/api/github/release", async (c) => {
+app.get("/api/v1/github/ci", async (c) => c.json(await ciStatus(c.env)));
+app.post("/api/v1/github/release", async (c) => {
   const b = await body(c);
   parseOr400("release-dispatch", b);
   const known = (await dynamicEnums(c.env, undefined, { live: false })).channels.map((x) => x.id);
@@ -929,11 +1235,11 @@ app.post("/api/github/release", async (c) => {
 });
 
 // ---------------- tokens, audit, collect
-app.get("/api/tokens", async (c) => {
+app.get("/api/v1/tokens", async (c) => {
   const r = await c.env.DB.prepare("SELECT id, name, scope, created_at, created_by, expires_at, last_used_at, revoked_at FROM api_tokens ORDER BY created_at DESC").all<any>();
   return c.json({ tokens: r.results || [] });
 });
-app.post("/api/tokens", async (c) => {
+app.post("/api/v1/tokens", async (c) => {
   if (c.get("authKind") === "token") throw new HttpError(403, "API tokens cannot mint tokens");
   const b = await body<{ name?: string; scope?: string; ttl_days?: number }>(c);
   const v = validate("token-create", { scope: "admin", ...b });
@@ -945,29 +1251,29 @@ app.post("/api/tokens", async (c) => {
   await auditC(c, { action: "token.mint", target: t.id, after: { name, scope, expires_at: t.expires_at } });
   return c.json(t, 201);
 });
-app.delete("/api/tokens/:id", async (c) => {
+app.delete("/api/v1/tokens/:id", async (c) => {
   await c.env.DB.prepare("UPDATE api_tokens SET revoked_at = ? WHERE id = ?").bind(now(), c.req.param("id")).run();
   await auditC(c, { action: "token.revoke", target: c.req.param("id") });
   return c.json({ ok: true });
 });
-app.get("/api/audit", async (c) => {
+app.get("/api/v1/audit", async (c) => {
   const limit = Math.min(Number(c.req.query("limit") || 100), 1000);
   const r = await c.env.DB.prepare("SELECT * FROM audit ORDER BY id DESC LIMIT ?").bind(limit).all<any>();
   return c.json({ audit: r.results || [] });
 });
-app.post("/api/collect", async (c) => c.json(await collect(c.env)));
+app.post("/api/v1/collect", async (c) => c.json(await collect(c.env)));
 
 // ---------------- schemas and editable documents (src/schemas.ts, src/docs.ts)
-app.get("/api/schemas", (c) => c.json({ schemas: jsonSchemas(), documents: SCHEMA_OF }));
+app.get("/api/v1/schemas", (c) => c.json({ schemas: jsonSchemas(), documents: SCHEMA_OF }));
 /** A name's pattern, reserved names and uniqueness (the forms check as you type; every create path enforces the same). */
-app.get("/api/names/:kind", async (c) => c.json(await checkName(c.env, c.req.param("kind"), c.req.query("name") || "")));
+app.get("/api/v1/names/:kind", async (c) => c.json(await checkName(c.env, c.req.param("kind"), c.req.query("name") || "")));
 /**
  * The image preflight before a save or launch (preflight.ts, the check `up` runs before any pod is paid for):
  * each pool's image resolves to a digest, and that build has what the spec asks of it. Body: {spec} (a cluster spec),
  * {launch} (a standalone launch request) or {endpoint} (a serverless spec: its variant and image; with weights_source r2
  * or hub also the weights checks only fv-control can make, e.g. hub's FV_HUB_DOWNLOADS_APPROVED, as errors).
  */
-app.post("/api/preflight", async (c) => {
+app.post("/api/v1/preflight", async (c) => {
   const b = await body<any>(c);
   let spec;
   const weightsErrors: string[] = [];
@@ -999,20 +1305,20 @@ app.post("/api/preflight", async (c) => {
  * provider's live details only (asked once it is picked); ?images=1: the commits with images (GHCR); none of them:
  * the full view (the JSON editor, the CLI).
  */
-app.get("/api/schemas/dynamic", async (c) => {
+app.get("/api/v1/schemas/dynamic", async (c) => {
   const p = c.req.query("provider");
   if (p) return c.json(await providerDetails(c.env, p));
   if (c.req.query("images") === "1") return c.json(await imageCommits(c.env));
   return c.json(await dynamicEnums(c.env, c.req.query("cluster") || undefined, { live: c.req.query("live") !== "0" }));
 });
 /** Any schema's own check (refinements included) on a draft, without acting: the forms' cross-field rules. */
-app.post("/api/schemas/:name/validate", async (c) => {
+app.post("/api/v1/schemas/:name/validate", async (c) => {
   const name = c.req.param("name") as SchemaName;
   if (!jsonSchemas()[name]) throw new HttpError(404, "no such schema");
   const v = validate(name, (await body<any>(c)).doc);
   return c.json({ ok: v.ok, issues: v.ok ? [] : v.issues });
 });
-app.get("/api/schemas/:name", (c) => {
+app.get("/api/v1/schemas/:name", (c) => {
   const s = jsonSchemas()[c.req.param("name")];
   if (!s) throw new HttpError(404, "no such schema");
   return c.json(s);
@@ -1021,29 +1327,29 @@ const kindOf = (k: string): DocKind => {
   if (!DOC_KINDS.includes(k as DocKind)) throw new HttpError(404, `document kinds: ${DOC_KINDS.join(", ")}`);
   return k as DocKind;
 };
-app.get("/api/docs/:kind/:id", async (c) => {
+app.get("/api/v1/docs/:kind/:id", async (c) => {
   const kind = kindOf(c.req.param("kind"));
   const id = await canonicalId(c.env, kind, c.req.param("id"));
   return c.json({ kind, id, schema: SCHEMA_OF[kind], version: await docVersion(c.env, kind, id), doc: await readDoc(c.env, kind, id) });
 });
-app.post("/api/docs/:kind/:id/validate", async (c) => {
+app.post("/api/v1/docs/:kind/:id/validate", async (c) => {
   const kind = kindOf(c.req.param("kind"));
   const id = await canonicalId(c.env, kind, c.req.param("id"));
   const r = await validateDoc(c.env, kind, id, (await body(c)).doc);
   return c.json({ ok: r.ok, issues: r.issues });
 });
-app.post("/api/docs/:kind/:id/plan", async (c) => {
+app.post("/api/v1/docs/:kind/:id/plan", async (c) => {
   if (c.req.param("kind") !== "cluster-spec") throw new HttpError(400, "plans are for cluster-spec documents");
   return c.json(await planSpec(c.env, c.req.param("id"), (await body(c)).doc));
 });
-app.put("/api/docs/:kind/:id", async (c) => {
+app.put("/api/v1/docs/:kind/:id", async (c) => {
   const kind = kindOf(c.req.param("kind"));
   const b = await body<{ doc?: unknown; version?: number }>(c);
   if (typeof b.version !== "number") throw new HttpError(400, "version: the version you loaded (optimistic concurrency)");
   return c.json(await saveDoc(c.env, kind, c.req.param("id"), b.doc, { version: b.version, actor: actor(c), ip: clientIp(c) }));
 });
-app.get("/api/docs/:kind/:id/history", async (c) => c.json({ history: await docHistory(c.env, kindOf(c.req.param("kind")), c.req.param("id")) }));
-app.post("/api/docs/:kind/:id/restore", async (c) => {
+app.get("/api/v1/docs/:kind/:id/history", async (c) => c.json({ history: await docHistory(c.env, kindOf(c.req.param("kind")), c.req.param("id")) }));
+app.post("/api/v1/docs/:kind/:id/restore", async (c) => {
   const kind = kindOf(c.req.param("kind"));
   const b = await body<{ audit_id?: number; which?: "after" | "before"; version?: number }>(c);
   if (typeof b.version !== "number") throw new HttpError(400, "version: the version you loaded");
@@ -1051,9 +1357,9 @@ app.post("/api/docs/:kind/:id/restore", async (c) => {
 });
 
 // ---------------- Runpod serverless endpoints (src/serverless/, docs/control/serverless.md)
-app.route("/api/serverless", serverlessRoutes);
+app.route("/api/v1/serverless", serverlessRoutes);
 
-app.all("/api/*", () => {
+app.all("/api/v1/*", () => {
   throw new HttpError(404, "no such route");
 });
 

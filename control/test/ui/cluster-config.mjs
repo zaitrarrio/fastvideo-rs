@@ -96,7 +96,7 @@ export async function clusterEditorChecks({ page, B, api, out, tiny, big }) {
   await page.click("dialog.cf-review button:has-text('Save (v0')");
   await page.waitForSelector(".cf-side .muted.small:text('saved')");
   const id = await page.evaluate(() => location.hash.split("/")[2]);
-  const doc = await api(`/api/docs/cluster-spec/${id}`);
+  const doc = await api(`/api/v1/docs/cluster-spec/${id}`);
   assert.equal(doc.doc.cap_s, 7200);
   assert.equal(doc.version, 1);
   // The JSON tab is the same document.

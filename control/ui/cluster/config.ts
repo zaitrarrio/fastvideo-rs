@@ -1,8 +1,8 @@
 // The cluster configuration page (#/clusters/new, #/cluster/<id>/config):
 // every spec field as a form (or the raw JSON), checked as you type by the
-// API's own validator (POST /api/clusters/validate, inline errors at each
+// API's own validator (POST /api/v1/clusters/validate, inline errors at each
 // field), a price and Runpod stock preview per pool (POST
-// /api/clusters/<id|new>/price), the diff against the saved spec before
+// /api/v1/clusters/<id|new>/price), the diff against the saved spec before
 // saving, Start / Stop / Scale / Extend with the operation's live log, and
 // the effective env of every pod.
 import { badge, copyText, h, kids, type Api } from "../dom";
@@ -55,20 +55,20 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
   const { api, toast } = o;
   host.replaceChildren(h("p", { class: "muted" }, "loading…"));
   // The lists without any provider's live one (?live=0); the providers the pools use load next (ensureProviders).
-  const [schemas, dyn, tpl] = await Promise.all([api("/api/schemas").then((r) => r.schemas as Record<string, Schema>), api(`/api/schemas/dynamic?live=0${o.id ? `&cluster=${encodeURIComponent(o.id)}` : ""}`).catch(() => ({}) as Dynamic), api("/api/templates")]);
+  const [schemas, dyn, tpl] = await Promise.all([api("/api/v1/schemas").then((r) => r.schemas as Record<string, Schema>), api(`/api/v1/schemas/dynamic?live=0${o.id ? `&cluster=${encodeURIComponent(o.id)}` : ""}`).catch(() => ({}) as Dynamic), api("/api/v1/templates")]);
   const presets: { id: string; title: string; description: string; weights: string[]; licence?: string; pool: any }[] = tpl.pool_presets || [];
   let saved: any = null;
   let version = 0;
-  let cl: any = null; // the cluster's view (GET /api/clusters/<id>)
+  let cl: any = null; // the cluster's view (GET /api/v1/clusters/<id>)
   let spec: any;
   if (o.id) {
-    const [d, c] = await Promise.all([api(`/api/docs/cluster-spec/${encodeURIComponent(o.id)}`), api(`/api/clusters/${encodeURIComponent(o.id)}`)]);
+    const [d, c] = await Promise.all([api(`/api/v1/docs/cluster-spec/${encodeURIComponent(o.id)}`), api(`/api/v1/clusters/${encodeURIComponent(o.id)}`)]);
     saved = d.doc;
     version = d.version;
     cl = c;
     spec = clone(saved);
   } else if (o.clone) {
-    const c = await api(`/api/clusters/${encodeURIComponent(o.clone)}`);
+    const c = await api(`/api/v1/clusters/${encodeURIComponent(o.clone)}`);
     spec = { ...clone(c.cluster.spec), name: `${c.cluster.name}-copy`.slice(0, 31).replace(/-+$/, "") };
   } else {
     const t = o.template && tpl[o.template] ? o.template : "tiny-cpu";
@@ -862,7 +862,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
   async function runValidate() {
     const my = ++vseq;
     try {
-      const r = await api("/api/clusters/validate", { method: "POST", body: { spec, ...(id ? { id } : {}) } });
+      const r = await api("/api/v1/clusters/validate", { method: "POST", body: { spec, ...(id ? { id } : {}) } });
       if (my !== vseq) return;
       issues = r.issues || [];
       warnings = r.warnings || [];
@@ -884,7 +884,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
     priceBusy = true;
     drawPrice();
     try {
-      const r = await api(`/api/clusters/${id ?? "new"}/price`, { method: "POST", body: { spec } });
+      const r = await api(`/api/v1/clusters/${id ?? "new"}/price`, { method: "POST", body: { spec } });
       if (my !== pseq) return;
       price = r;
       priceErr = "";
@@ -965,13 +965,13 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
       go.disabled = true;
       try {
         if (!saved) {
-          const r = await api("/api/clusters", { method: "POST", body: { spec } });
+          const r = await api("/api/v1/clusters", { method: "POST", body: { spec } });
           dlg.close();
           toast(`defined ${r.cluster.name}`);
           location.hash = `#/cluster/${r.cluster.id}/config`;
           return;
         }
-        const r = await api(`/api/docs/cluster-spec/${id}`, { method: "PUT", body: { doc: spec, version } });
+        const r = await api(`/api/v1/docs/cluster-spec/${id}`, { method: "PUT", body: { doc: spec, version } });
         saved = r.doc;
         version = r.version;
         spec = clone(saved);
@@ -992,7 +992,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
     document.body.append(dlg);
     dlg.showModal();
     if (saved)
-      api(`/api/docs/cluster-spec/${id}/plan`, { method: "POST", body: { doc: spec } })
+      api(`/api/v1/docs/cluster-spec/${id}/plan`, { method: "POST", body: { doc: spec } })
         .then((p) => {
           const pr = p.projection || {};
           plan.replaceChildren(
@@ -1008,14 +1008,14 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
   // ---- the cluster: status, operations, live log
   async function refreshCluster() {
     if (!id) return;
-    cl = await api(`/api/clusters/${id}`);
+    cl = await api(`/api/v1/clusters/${id}`);
     if (cl.op?.id) watchOp = cl.op.id;
     drawOps();
   }
   async function runOp(path: string, body: any, question: string) {
     if (!confirm(question)) return;
     try {
-      const r = await api(`/api/clusters/${id}/${path}`, { method: "POST", body });
+      const r = await api(`/api/v1/clusters/${id}/${path}`, { method: "POST", body });
       watchOp = r.operation || null;
       toast(`${path}: started`);
       await refreshCluster();
@@ -1046,7 +1046,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
         running ? b("Extend…", async () => { const m = await askExtend(api, `Extend ${c.name}`); if (m) runOp("extend", { minutes: m }, `Extend ${c.name} by ${m} min?`); }) : null,
         op ? b("Cancel operation", () => runOp("cancel", {}, "Cancel the running operation? Pods it created stay (the backstops hold them).")) : null,
         b("Clone", () => (location.hash = `#/clusters/new?clone=${id}`)),
-        !running ? b("Delete", async () => { if (!confirm(`Delete the definition of ${c.name}? (audited)`)) return; try { await api(`/api/clusters/${id}`, { method: "DELETE" }); toast("deleted"); location.hash = "#/clusters"; } catch (e) { toast((e as Error).message); } }, "danger") : null,
+        !running ? b("Delete", async () => { if (!confirm(`Delete the definition of ${c.name}? (audited)`)) return; try { await api(`/api/v1/clusters/${id}`, { method: "DELETE" }); toast("deleted"); location.hash = "#/clusters"; } catch (e) { toast((e as Error).message); } }, "danger") : null,
       ),
       dirty && !running ? h("p", { class: "muted small" }, "Save first: Start uses the saved spec.") : null,
     ));
@@ -1056,7 +1056,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
     clearTimeout(opTimer);
     if (!watchOp) return;
     try {
-      const r = await api(`/api/ops/${watchOp}`);
+      const r = await api(`/api/v1/ops/${watchOp}`);
       const op = r.operation;
       const live = op.status === "running";
       el.oplog.replaceChildren(
@@ -1087,7 +1087,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
   async function loadEnv() {
     if (!id) return;
     try {
-      const e = await api(`/api/clusters/${id}/env`);
+      const e = await api(`/api/v1/clusters/${id}/env`);
       const table = (env: any[]) =>
         h(
           "table",

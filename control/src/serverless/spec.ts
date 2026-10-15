@@ -2,7 +2,7 @@
 // one fv-serve image variant behind Runpod's queue (`/run`, `/runsync`; the
 // worker runs FV_SERVE_MODE=runpod-queue) or its load balancer (fv-serve's
 // HTTP on port 8000, `/ping`). The zod schema is the one validator (create,
-// update, the editor's JSON Schema at /api/schemas/serverless-endpoint), as
+// update, the editor's JSON Schema at /api/v1/schemas/serverless-endpoint), as
 // for cluster specs (src/schemas.ts).
 import { z } from "zod";
 import { REGIONS, regionAvailable, type RegionId } from "../cluster/regions";
@@ -121,7 +121,7 @@ export const EndpointSpecZ = z
       .enum(SLS_PRESET_IDS, { error: (i) => enumMessage("a preset", i.input, SLS_PRESET_IDS) })
       .optional()
       .meta({ "x-dynamic": "sls_presets" })
-      .describe("What the endpoint serves (GET /api/serverless/presets): the preset sets the image variant, the worker config (in the image or inline), the weights it needs and sensible GPU, disk and timeouts. Without one: a custom endpoint (variant + config)."),
+      .describe("What the endpoint serves (GET /api/v1/serverless/presets): the preset sets the image variant, the worker config (in the image or inline), the weights it needs and sensible GPU, disk and timeouts. Without one: a custom endpoint (variant + config)."),
     image: z
       .object({
         channel: z.string().regex(CHANNEL_RE, { message: "a channel: a lower-case word" }).meta({ "x-dynamic": "channels" }).optional().describe("Release channel (stable, latest, …): the image <variant>-<channel>."),

@@ -1,7 +1,7 @@
 // What a serverless endpoint serves (src/serverless/serves.ts, derived from
 // its preset or config before any worker boots) and the ready-made test
 // invokes built from it (src/serverless/examples.ts): the "Serves" panel of
-// the new-endpoint form (live, from POST /api/serverless/validate) and of the
+// the new-endpoint form (live, from POST /api/v1/serverless/validate) and of the
 // endpoint page, and the endpoint page's invoke picker (an example, a
 // reference image / audio URL where the task needs one, the free-form JSON).
 import { badge, h, type Api } from "../dom";

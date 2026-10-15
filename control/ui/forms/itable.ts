@@ -1,5 +1,5 @@
 // The launch screen's instance-type table (owner 2026-10-13): every type the
-// picked provider lists (GET /api/providers/<p>/instance-types), sortable,
+// picked provider lists (GET /api/v1/providers/<p>/instance-types), sortable,
 // searchable, filterable and paginated; a click (or Enter / Space) on a
 // launchable row selects it. The selection is kept across sort, filter and
 // page; the table loads when its provider is picked and on Refresh (which
@@ -420,7 +420,7 @@ export function instanceTable(o: {
     statusLine();
     render();
     try {
-      const v: ITView = await o.api(`/api/providers/${encodeURIComponent(p)}/instance-types${refresh ? "?refresh=1" : ""}`, { signal: my.signal });
+      const v: ITView = await o.api(`/api/v1/providers/${encodeURIComponent(p)}/instance-types${refresh ? "?refresh=1" : ""}`, { signal: my.signal });
       if (my.signal.aborted) return;
       view = v;
       drawFilters();

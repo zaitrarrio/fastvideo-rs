@@ -1,7 +1,7 @@
 // The serverless pages' forms (#/serverless): the new-endpoint form and its
 // JSON tab, the spec editor of an endpoint, the scale card. Every field is
 // bound to the serverless-endpoint schema; the server's validator (POST
-// /api/serverless/validate) checks the cross-field rules (lb only on GPU, the
+// /api/v1/serverless/validate) checks the cross-field rules (lb only on GPU, the
 // volume's data centre, workers_min ≤ workers_max, the name's uniqueness).
 import { badge, h } from "../dom";
 import { createJsonEditor } from "../editor";
@@ -25,7 +25,7 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
   // The cold start to expect (image pull + R2 fetch + load), live from the validator (serverless/weights.ts slsOutlook).
   const outlookBox = h("div", { class: "small", id: "sls-outlook" });
   const remote = async (v: any, signal?: AbortSignal) => {
-    const r = await api("/api/serverless/validate", { method: "POST", body: { spec: v }, signal });
+    const r = await api("/api/v1/serverless/validate", { method: "POST", body: { spec: v }, signal });
     servesBox.replaceChildren(servesPanel(r.serving));
     outlookBox.replaceChildren(...outlookLine(r.outlook, r.stock));
     return { issues: r.ok ? [] : issuesOf(r), warnings: r.warnings || [] };
@@ -48,7 +48,7 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
   const takeDefaults = async (q: string) => {
     // The weights source chosen stays across a preset switch (its placement and disk come with it).
     const ws = f.get(["weights_source"]);
-    const d = (await api(`/api/serverless/defaults?name=${encodeURIComponent(f.get(["name"]) || "x")}&${q}${ws && !q.includes("weights_source") ? `&weights_source=${ws}` : ""}`)).spec;
+    const d = (await api(`/api/v1/serverless/defaults?name=${encodeURIComponent(f.get(["name"]) || "x")}&${q}${ws && !q.includes("weights_source") ? `&weights_source=${ws}` : ""}`)).spec;
     for (const k of ["variant", "config", "config_toml", "compute", "gpu_types", "gpu_count", "allowed_cuda", "cpu_flavors", "vcpu", "weights_source", "network_volume", "data_centers", "container_disk_gb", "execution_timeout_s"]) f.set([k], d[k], true);
     // hub turns FlashBoot on (a revival downloads nothing); the owner's approval is never set for you.
     if (d.weights_source === "hub") f.set(["flashboot"], true, true);
@@ -205,7 +205,7 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
           },
         });
       else editor.set(pretty(f.value()));
-      jsonBox.append(jsonMsg, h("p", { class: "small muted" }, "The full spec (GET /api/schemas/serverless-endpoint), checked as you type; Create stays off while it is invalid."));
+      jsonBox.append(jsonMsg, h("p", { class: "small muted" }, "The full spec (GET /api/v1/schemas/serverless-endpoint), checked as you type; Create stays off while it is invalid."));
     } else draw();
     drawTabs();
   }
@@ -222,7 +222,7 @@ export async function mountEndpointForm(host: HTMLElement, o: { api: Api; toast:
     }
     if (!confirm(`Create the Runpod serverless endpoint fvc-${s.name}? Workers bill while they run.`)) return void (create.disabled = false);
     try {
-      const r = await api("/api/serverless", { method: "POST", body: { spec: s } });
+      const r = await api("/api/v1/serverless", { method: "POST", body: { spec: s } });
       o.onCreated(r.endpoint.id);
     } catch (e) {
       out.replaceChildren(h("span", { style: "color:var(--critical-text)" }, (e as Error).message));
@@ -274,7 +274,7 @@ export async function mountSpecEditor(host: HTMLElement, o: { api: Api; toast: (
     const my = ++seq;
     status.replaceChildren(h("span", { class: "muted" }, "checking…"));
     t = setTimeout(async () => {
-      const r = await api("/api/serverless/validate", { method: "POST", body: { spec: doc, id: o.endpoint.id } }).catch((e) => ({ ok: false, error: e.message }));
+      const r = await api("/api/v1/serverless/validate", { method: "POST", body: { spec: doc, id: o.endpoint.id } }).catch((e) => ({ ok: false, error: e.message }));
       if (my !== seq) return;
       issues = r.ok ? [] : issuesOf(r);
       ed.relint();
@@ -292,7 +292,7 @@ export async function mountSpecEditor(host: HTMLElement, o: { api: Api; toast: (
   const ed = createJsonEditor({ parent: box, doc: pretty(o.endpoint.spec), schema: schemas["serverless-endpoint"], dynamic: dyn, extraIssues: () => issues, onChange: check });
   save.addEventListener("click", async () => {
     try {
-      await api(`/api/serverless/${o.endpoint.id}`, { method: "PUT", body: { spec: doc } });
+      await api(`/api/v1/serverless/${o.endpoint.id}`, { method: "PUT", body: { spec: doc } });
       o.toast("update: ok");
       o.onSaved();
     } catch (e) {
@@ -315,14 +315,14 @@ export async function mountScaleForm(host: HTMLElement, o: { api: Api; toast: (m
     value: { workers_min: o.endpoint.spec.workers_min, workers_max: o.endpoint.spec.workers_max },
     submit: apply,
     remote: async (v) => {
-      const r = await api("/api/serverless/validate", { method: "POST", body: { spec: { ...o.endpoint.spec, ...v }, id: o.endpoint.id } });
+      const r = await api("/api/v1/serverless/validate", { method: "POST", body: { spec: { ...o.endpoint.spec, ...v }, id: o.endpoint.id } });
       return { issues: r.ok ? [] : issuesOf(r).filter((i: Issue) => ["workers_min", "workers_max"].includes(String(i.path[0]))) };
     },
   });
   apply.addEventListener("click", async () => {
     if (!(await f.ready())) return;
     try {
-      await api(`/api/serverless/${o.endpoint.id}/scale`, { method: "POST", body: f.value() });
+      await api(`/api/v1/serverless/${o.endpoint.id}/scale`, { method: "POST", body: f.value() });
       o.toast("scale: ok");
       o.onDone();
     } catch (e) {

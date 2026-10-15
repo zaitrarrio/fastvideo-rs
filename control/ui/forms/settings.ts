@@ -14,7 +14,7 @@ export async function mountTokenForm(host: HTMLElement, o: { api: Api; toast: (m
   mint.addEventListener("click", async () => {
     if (!f.ok()) return;
     try {
-      const r = await api("/api/tokens", { method: "POST", body: f.value() });
+      const r = await api("/api/v1/tokens", { method: "POST", body: f.value() });
       o.toast("mint: ok");
       o.onMinted(r);
     } catch (e) {
@@ -57,7 +57,7 @@ export async function mountReleaseForm(host: HTMLElement, o: { api: Api; toast: 
     const v = f.value();
     if (!confirm(`${v.action} ${v.action === "promote" ? `${v.target} to ` : ""}${v.channel}${v.dry_run ? " (dry run)" : ""}? This dispatches release.yml.`)) return;
     try {
-      const r = await api("/api/github/release", { method: "POST", body: v });
+      const r = await api("/api/v1/github/release", { method: "POST", body: v });
       o.toast(`dispatched: see ${r.runs_url}`);
     } catch (e) {
       o.toast(`${v.action}: ${(e as Error).message}`);

@@ -218,7 +218,7 @@ export const PROVIDER_IMPLS: Record<OtherProviderId, ComputeProvider> = { gmi: G
 export const providerImpl = (p: OtherProviderId) => PROVIDER_IMPLS[p];
 export const providerEnabled = (env: Env, p: OtherProviderId) => !providerImpl(p).off(env);
 
-/** One provider's state for /api/providers and the UI (enabled, why not, budget, this month's spend). */
+/** One provider's state for /api/v1/providers and the UI (enabled, why not, budget, this month's spend). */
 export async function providerView(env: Env, p: OtherProviderId) {
   const impl = providerImpl(p);
   const off = impl.off(env);

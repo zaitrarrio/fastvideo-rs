@@ -1,4 +1,4 @@
-// /api/serverless/*: Runpod serverless endpoints fv-control manages
+// /api/v1/serverless/*: Runpod serverless endpoints fv-control manages
 // (docs/control/serverless.md). Mounted by index.ts under the /api auth
 // middleware (read tokens: GET only).
 import { Hono, type Context } from "hono";
@@ -260,7 +260,7 @@ serverlessRoutes.get("/:id/logs", async (c) => {
   const live = await sls.getEndpoint(c.env, row.endpoint_id);
   const workers: string[] = Array.isArray(live?.workers) ? live.workers.map((w: any) => String(w.id)) : [];
   const worker = c.req.query("worker") || workers[0];
-  if (!worker) return c.json({ workers, worker: null, container: [], system: [], note: "no worker is up: logs exist only while a worker runs (stored ones: /api/logs?pod=<worker>)" });
+  if (!worker) return c.json({ workers, worker: null, container: [], system: [], note: "no worker is up: logs exist only while a worker runs (stored ones: /api/v1/logs?pod=<worker>)" });
   if (!workers.includes(worker)) {
     // A worker that already stopped: what the log store kept.
     const kept = await c.env.DB.prepare("SELECT ts, level, target, msg FROM log_lines WHERE cluster_id = ? AND pod_id = ? ORDER BY ts LIMIT 2000").bind(logSource(row), worker).all<any>();

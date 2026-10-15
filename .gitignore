@@ -17,3 +17,5 @@ artifacts/
 .cache/
 __pycache__/
 rust_out
+*.zip
+source.zip

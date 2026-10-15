@@ -204,7 +204,7 @@ export async function captureRunpodLogs(env: Env, podId: string, clusterId: stri
 }
 const parse = (xs: string[]) => xs.map(parseRunpodLine);
 
-/** Records a pod's latest boot diagnosis (GET /api/pods/:id/status). */
+/** Records a pod's latest boot diagnosis (GET /api/v1/pods/:id/status). */
 export async function saveDiagnosis(env: Env, podId: string, clusterId: string, d: Diagnosis): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO pod_log_cursors (pod_id, cluster_id, diag, updated_at) VALUES (?, ?, ?, ?)

@@ -32,7 +32,7 @@
 // The owner's deletes stay as they were: `fv-control.sh pod delete <name>` (a
 // standalone pod with a live VM), `fv-control.sh brev delete-parked <id>`, the
 // UI's Delete on the Pods page's parked list, and
-// POST /api/providers/brev/parked/<id>/delete (deleteParked).
+// POST /api/v1/providers/brev/parked/<id>/delete (deleteParked).
 //
 // Brev keeps /home/ubuntu/workspace across a stop; the weights a pod fetched
 // into ~/workspace/weights are 35-120 GB. The next launch of the same instance
