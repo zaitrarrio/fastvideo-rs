@@ -263,26 +263,93 @@ app.get("/api/v1/fleet", async (c) => {
   });
 });
 
-// ---------------- models: the deployable catalog (fv-console)
-// GET /api/v1/models — pool presets: what can be deployed, with weights,
-// VRAM floor, and the model ids/families/recipes each pool serves.
+// ---------------- models: what the fleet serves (fv-console)
+// GET /api/v1/models — every engine's /fv/v1/capabilities, aggregated by
+// model id (best-effort, 8s timeout). The source of truth is the engines,
+// not the worker's preset list.
 app.get("/api/v1/models", async (c) => {
+  const env = c.env;
+  const pods = await env.DB.prepare(
+    "SELECT pod_id, name, cluster_id FROM pods WHERE gone_at IS NULL ORDER BY cluster_id, pod_id"
+  ).all<any>();
+  const per_engine = await Promise.all(
+    (pods.results || []).map(async (p: any) => {
+      let caps: any = null;
+      try {
+        const base = await podBaseUrl(env, p.pod_id, (id: string) => defaults.podUrl(env, id));
+        if (base) {
+          const r = await fetchWithTimeout(`${base}/fv/v1/capabilities`, { timeoutMs: 8000 });
+          if (r.ok) caps = await r.json().catch(() => null);
+        }
+      } catch {
+        /* best-effort */
+      }
+      return { pod_id: p.pod_id, name: p.name, cluster_id: p.cluster_id, caps };
+    })
+  );
+  const modelMap = new Map<string, any>();
+  for (const e of per_engine) {
+    for (const m of e.caps?.models || []) {
+      const id = m.caps?.id || m.id;
+      if (!id) continue;
+      if (!modelMap.has(id)) {
+        modelMap.set(id, {
+          id,
+          family: m.caps?.family || null,
+          served_names: m.caps?.served_names || [],
+          tasks: m.caps?.tasks ? [...m.caps.tasks] : [],
+          tier: m.caps?.tier || null,
+          recipe: m.recipe || m.caps?.recipe || null,
+          resident: !!m.caps?.resident,
+          canvas: m.caps?.canvas || null,
+          executors: m.executors || [],
+          available_on: [],
+        });
+      }
+      modelMap.get(id).available_on.push(e.pod_id);
+    }
+  }
   return c.json({
     at: Date.now(),
-    models: POOL_PRESETS.map((p) => ({
-      id: p.id,
-      title: p.title,
-      description: p.description,
-      min_vram_gb: p.min_vram_gb,
-      weights: p.weights,
-      prequant: p.prequant || [],
-      licence: (p as any).licence || null,
-      pool: {
-        id: p.pool.id,
-        variant: (p.pool as any).variant || null,
-        models: (p.pool.models || []).map((m: any) => ({ id: m.id, family: m.family, recipe: m.recipe })),
-      },
-    })),
+    engines_total: per_engine.length,
+    engines_reached: per_engine.filter((e) => e.caps).length,
+    models: [...modelMap.values()],
+  });
+});
+
+// ---------------- jobs: live engine jobs across the fleet (fv-console)
+// GET /api/v1/jobs — every engine's /fv/v1/jobs (best-effort, 8s timeout),
+// tagged with the pod that holds each job. ?limit= caps per-engine fetch.
+app.get("/api/v1/jobs", async (c) => {
+  const env = c.env;
+  const limit = Math.max(1, Math.min(200, parseInt(c.req.query("limit") || "50", 10) || 50));
+  const pods = await env.DB.prepare(
+    "SELECT pod_id, name, cluster_id FROM pods WHERE gone_at IS NULL ORDER BY cluster_id, pod_id"
+  ).all<any>();
+  const per_engine = await Promise.all(
+    (pods.results || []).map(async (p: any) => {
+      let data: any = null;
+      try {
+        const base = await podBaseUrl(env, p.pod_id, (id: string) => defaults.podUrl(env, id));
+        if (base) {
+          const r = await fetchWithTimeout(`${base}/fv/v1/jobs?limit=${limit}`, { timeoutMs: 8000 });
+          if (r.ok) data = await r.json().catch(() => null);
+        }
+      } catch {
+        /* best-effort */
+      }
+      const jobs = Array.isArray(data) ? data : data?.jobs || [];
+      return { pod_id: p.pod_id, name: p.name, ok: data !== null, jobs: jobs.map((j: any) => ({ ...j, pod_id: p.pod_id, pod_name: p.name })) };
+    })
+  );
+  const jobs = per_engine
+    .flatMap((e) => e.jobs)
+    .sort((a: any, b: any) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+  return c.json({
+    at: Date.now(),
+    engines_total: per_engine.length,
+    engines_reached: per_engine.filter((e) => e.ok).length,
+    jobs,
   });
 });
 
