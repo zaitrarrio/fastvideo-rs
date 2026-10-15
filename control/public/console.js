@@ -276,3 +276,82 @@ async function pageDeploy(main) {
 
   render();
 }
+
+async function pageBenchmarks(main) {
+  const r = await api("/api/v1/benchmarks?limit=200");
+  const fmtS = (v) => (v == null ? "–" : `${Number(v).toFixed(1)}s`);
+  const fmtM = (v) => (v == null ? "–" : `${(Number(v) / 1024).toFixed(1)} GiB`);
+  main.replaceChildren(
+    h("h1", {}, "Benchmarks"),
+    h("p", { class: "muted" }, `Observed performance from completed engine jobs · ${r.models.reduce((s, m) => s + m.jobs, 0)} jobs aggregated`),
+    card(
+      `Models (${r.models.length})`,
+      table(
+        [
+          { label: "model", get: (m) => h("a", { href: `#/compare?models=${encodeURIComponent(m.model)}` }, h("code", {}, m.model)) },
+          { label: "jobs", get: (m) => m.jobs, num: true },
+          { label: "p50 infer", get: (m) => fmtS(m.inference_s.p50), num: true },
+          { label: "p90 infer", get: (m) => fmtS(m.inference_s.p90), num: true },
+          { label: "p50 peak mem", get: (m) => fmtM(m.peak_memory_mb.p50), num: true },
+          { label: "max peak mem", get: (m) => fmtM(m.peak_memory_mb.max), num: true },
+        ],
+        [...r.models].sort((a, b) => (a.inference_s.p50 ?? 1e18) - (b.inference_s.p50 ?? 1e18))
+      )
+    )
+  );
+}
+
+async function pageCompare(main) {
+  const q = new URLSearchParams(location.hash.split("?")[1] || "");
+  const initial = (q.get("models") || "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 2);
+  const st = { a: initial[0] || "", b: initial[1] || "", data: null, error: null };
+
+  const render = async () => {
+    const kids = [h("h1", {}, "Compare"), h("p", { class: "muted" }, "Side-by-side capabilities and observed performance for up to two models.")];
+    kids.push(
+      card("Models",
+        h("div", { class: "row" },
+          h("label", {}, h("span", { class: "k" }, "Model A"), h("input", { value: st.a, oninput: (e) => (st.a = e.target.value), placeholder: "fasth3", style: "width:200px" })),
+          h("label", {}, h("span", { class: "k" }, "Model B"), h("input", { value: st.b, oninput: (e) => (st.b = e.target.value), placeholder: "wan22-ti2v-5b", style: "width:200px" })),
+          h("button", {
+            class: "primary",
+            onclick: async () => {
+              st.error = null;
+              try {
+                const ids = [st.a, st.b].filter(Boolean).join(",");
+                st.data = await api(`/api/v1/compare?models=${encodeURIComponent(ids)}`);
+                history.replaceState(null, "", `#/compare?models=${encodeURIComponent(ids)}`);
+              } catch (e) { st.error = e.message; }
+              render();
+            },
+          }, "Compare")
+        )
+      )
+    );
+    if (st.error) kids.push(card("Error", h("p", {}, st.error)));
+    if (st.data) {
+      const [ma, mb] = st.data.models;
+      const rows = [
+        ["family", (m) => m.capabilities?.family || "–"],
+        ["tier", (m) => m.capabilities?.tier || "–"],
+        ["recipe", (m) => m.capabilities?.recipe || "–"],
+        ["served names", (m) => (m.capabilities?.served_names || []).join(", ") || "–"],
+        ["served by", (m) => `${(m.capabilities?.available_on || []).length} workers`],
+        ["jobs observed", (m) => m.benchmarks?.jobs ?? "–"],
+        ["p50 inference", (m) => (m.benchmarks?.inference_s.p50 != null ? `${Number(m.benchmarks.inference_s.p50).toFixed(1)}s` : "–")],
+        ["p90 inference", (m) => (m.benchmarks?.inference_s.p90 != null ? `${Number(m.benchmarks.inference_s.p90).toFixed(1)}s` : "–")],
+        ["p50 peak mem", (m) => (m.benchmarks?.peak_memory_mb.p50 != null ? `${(Number(m.benchmarks.peak_memory_mb.p50) / 1024).toFixed(1)} GiB` : "–")],
+      ];
+      kids.push(card("Comparison",
+        table(
+          [{ label: "", get: (r) => r[0] },
+           { label: ma.id, get: (r) => r[1](ma) },
+           ...(mb ? [{ label: mb.id, get: (r) => r[1](mb) }] : [])],
+          rows
+        )
+      ));
+    }
+    main.replaceChildren(...kids);
+  };
+  render();
+}

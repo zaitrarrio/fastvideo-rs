@@ -244,6 +244,8 @@ const routes = [
   [/^#\/models$/, pageModels],
   [/^#\/deploy$/, pageDeploy],
   [/^#\/engine-jobs$/, pageEngineJobs],
+  [/^#\/benchmarks$/, pageBenchmarks],
+  [/^#\/compare$/, pageCompare],
   [/^#\/clusters$/, pageClusters],
   [/^#\/clusters\/new$/, pageClusterConfig],
   [/^#\/cluster\/([^/]+)\/config$/, pageClusterConfig],
