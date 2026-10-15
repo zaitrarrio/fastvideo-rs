@@ -434,6 +434,23 @@ app.post("/api/v1/key-requests/:id/fulfill", async (c) => {
   return c.json({ ok: true });
 });
 
+// ---------------- quality: gate definitions (fv-console)
+// GET /api/v1/quality — the engine's /fv/v1/quality/gates (best-effort),
+// the real thresholds every tier is judged against.
+app.get("/api/v1/quality", async (c) => {
+  const pods = await fleetPods(c.env);
+  let gates: any = null;
+  let reached = 0;
+  for (const p of pods) {
+    const g = await fetchEngineJson(c.env, p.pod_id, "/fv/v1/quality/gates");
+    if (g) {
+      reached++;
+      if (!gates) gates = g;
+    }
+  }
+  return c.json({ at: Date.now(), engines_total: pods.length, engines_reached: reached, quality: gates });
+});
+
 // ---------------- deploy: guided recipe deploys (fv-console)
 // GET /api/v1/deploy/recipes — POOL_PRESETS as deployable recipes.
 // POST /api/v1/deploy/validate — { recipe, name, count?, gpu_types?, data_centers? } → spec issues.
