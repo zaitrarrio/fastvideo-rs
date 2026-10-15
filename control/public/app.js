@@ -246,6 +246,7 @@ const routes = [
   [/^#\/engine-jobs$/, pageEngineJobs],
   [/^#\/benchmarks$/, pageBenchmarks],
   [/^#\/compare$/, pageCompare],
+  [/^#\/quality$/, pageQuality],
   [/^#\/key-requests$/, pageKeyRequests],
   [/^#\/clusters$/, pageClusters],
   [/^#\/clusters\/new$/, pageClusterConfig],
