@@ -400,3 +400,39 @@ async function pageKeyRequests(main) {
   };
   render();
 }
+
+async function pageQuality(main) {
+  const r = await api("/api/v1/quality");
+  const q = r.quality;
+  const kids = [
+    h("h1", {}, "Quality gates"),
+    h("p", { class: "muted" }, `Reference-free video sanity checks · ${r.engines_reached}/${r.engines_total} engines reached`),
+  ];
+  if (!q) {
+    kids.push(card("Gates", h("p", { class: "muted" }, "No engine reachable. The gates are defined in fastvideo-protocol/src/quality.rs.")));
+  } else {
+    kids.push(card(
+      "Gates",
+      table(
+        [
+          { label: "check", get: (g) => h("strong", {}, g.title) },
+          { label: "threshold", get: (g) => h("code", {}, g.threshold) },
+          { label: "catches", get: (g) => g.failure_mode },
+        ],
+        q.gates || []
+      )
+    ));
+    const tiers = q.tiers || {};
+    kids.push(card(
+      "Tier policy",
+      table(
+        [
+          { label: "tier", get: ([t]) => h("code", {}, t) },
+          { label: "policy", get: ([, p]) => p },
+        ],
+        Object.entries(tiers)
+      )
+    ));
+  }
+  main.replaceChildren(...kids);
+}
