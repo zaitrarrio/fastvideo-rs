@@ -21,7 +21,7 @@ export type ControlPlane = ClusterSpec["control_plane"];
 // The preset catalog (pool presets and the standard pools) lives in
 // ../presets.ts: one source for cluster pools, standalone pods and serverless
 // endpoints.
-export { POOL_PRESETS, presetPool, STANDARD_POOLS, type PoolPreset } from "../presets";
+export { POOL_PRESETS, presetById, presetPool, STANDARD_POOLS, type PoolPreset } from "../presets";
 
 /** Recipes the fv-serve catalog does not have: a pool model with one cannot be served. */
 export const UNSERVABLE_RECIPES = new Set(CATALOG.recipes.filter((r) => !r.serve).map((r) => r.id));
