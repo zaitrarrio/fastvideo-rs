@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FV — Video generation with native audio</title>
+<meta name="description" content="Fast video generation models with native audio. Browse the gallery, try the playground, integrate via API.">
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header class="nav">
+  <a class="brand" href="/"><span class="mark"></span>FV</a>
+  <nav class="links">
+    <a href="#models">Models</a>
+    <a href="#pricing">Pricing</a>
+    <a href="#docs">Docs</a>
+  </nav>
+  <span class="sp"></span>
+  <a class="btn sm" href="#models">Try the playground</a>
+</header>
+
+<main>
+  <section class="hero">
+    <div>
+      <div class="eyebrow">VIDEO GENERATION API</div>
+      <h1>Video with <span class="grad">native audio</span>,<br>in seconds.</h1>
+      <p class="sub">Dialogue, sound effects, and music rendered alongside the picture — not bolted on after. Pick a model, try a prompt, ship with one API call.</p>
+      <div class="ctas">
+        <a class="btn" href="#models">Browse models</a>
+        <a class="btn ghost" href="#docs">Read the docs</a>
+      </div>
+    </div>
+    <div class="stage">
+      <div class="vid" id="heroVid"><span class="play"><span></span></span><span class="vlabel">H3 Turbo · text-to-video</span></div>
+    </div>
+  </section>
+
+  <section class="sect" id="models">
+    <h2>Models</h2>
+    <p class="muted">Four tiers, one API. All models serve text-to-video; most take an input image too.</p>
+    <div class="grid" id="gallery"></div>
+  </section>
+
+  <section class="sect" id="pricing">
+    <h2>Pricing</h2>
+    <p class="muted">Per-second of generated video. <span class="warn">Representative prices — final pricing coming soon.</span></p>
+    <div id="priceTable"></div>
+  </section>
+
+  <section class="sect" id="docs">
+    <h2>Docs</h2>
+    <div class="grid g2">
+      <div class="card">
+        <h3>Generate a video</h3>
+        <pre><code>curl https://engine.example.com/v1/videos \
+  -H "Authorization: Bearer $FV_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "fasth3",
+    "prompt": "A lighthouse in a storm, waves crashing",
+    "seconds": "5",
+    "size": "1280x720"
+  }'</code></pre>
+      </div>
+      <div class="card">
+        <h3>Poll until done</h3>
+        <pre><code># POST returns {"id": "..."}. Poll:
+curl https://engine.example.com/v1/videos/$ID \
+  -H "Authorization: Bearer $FV_KEY"
+# {"status":"completed","url":"https://.../video.mp4"}</code></pre>
+      </div>
+    </div>
+    <p class="muted small">Point the playground at your engine URL and paste your API key — keys stay in your browser, never on our servers.</p>
+  </section>
+</main>
+
+<footer>
+  <span class="muted small">FV — fast video generation. <a href="https://github.com/zaitrarrio/fastvideo-rs">fastvideo-rs</a></span>
+</footer>
+</body>
+</html>

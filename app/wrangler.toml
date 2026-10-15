@@ -1,0 +1,14 @@
+# fv-app: the public consumer portal for fastvideo-rs.
+# A video-first model gallery + playground. Own Cloudflare Worker and
+# deployment, separate from fv-control: no privileged access, no operator
+# auth. The browser calls engine public APIs directly with the consumer's
+# own API key (stored in localStorage, never sent to this worker).
+#
+# Pricing below is PLACEHOLDER (representative $0.05-$0.13/s, anchored on
+# the known $0.13/s 2K figure). Real prices must be supplied before any
+# public release. See src/pricing.ts.
+name = "fv-app"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true

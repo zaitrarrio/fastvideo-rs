@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FV Model</title>
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+<script src="/model.js" defer></script>
+</head>
+<body>
+<header class="nav">
+  <a class="brand" href="/"><span class="mark"></span>FV</a>
+  <nav class="links">
+    <a href="/#models">Models</a>
+    <a href="/#pricing">Pricing</a>
+    <a href="/#docs">Docs</a>
+  </nav>
+</header>
+<main>
+  <section class="sect" id="detail"></section>
+  <section class="sect" id="playground">
+    <h2>Playground</h2>
+    <div class="card">
+      <div class="grid g2">
+        <label>Engine URL<input id="pgUrl" placeholder="https://engine.example.com" style="width:100%"></label>
+        <label>API key<input id="pgKey" type="password" placeholder="fv_..." style="width:100%"></label>
+      </div>
+      <label>Prompt<textarea id="pgPrompt" rows="3" style="width:100%" placeholder="A lighthouse in a storm, waves crashing"></textarea></label>
+      <div class="row">
+        <label>Seconds
+          <select id="pgSecs"><option>5</option><option>10</option></select>
+        </label>
+        <label>Size
+          <select id="pgSize"><option>1280x720</option><option>1920x1080</option></select>
+        </label>
+        <button class="btn" id="pgRun">Generate</button>
+      </div>
+      <div id="pgOut" class="muted"></div>
+      <div id="pgVideo"></div>
+    </div>
+    <p class="muted small">Your key is stored only in this browser's localStorage and sent only to the engine URL you enter.</p>
+  </section>
+</main>
+</body>
+</html>
