@@ -242,6 +242,7 @@ const routes = [
   [/^#?\/?$/, pageDashboard],
   [/^#\/fleet$/, pageFleet],
   [/^#\/models$/, pageModels],
+  [/^#\/engine-jobs$/, pageEngineJobs],
   [/^#\/clusters$/, pageClusters],
   [/^#\/clusters\/new$/, pageClusterConfig],
   [/^#\/cluster\/([^/]+)\/config$/, pageClusterConfig],

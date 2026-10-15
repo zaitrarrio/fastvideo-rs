@@ -85,27 +85,55 @@ async function pageFleet(main) {
 
 async function pageModels(main) {
   const r = await api("/api/v1/models");
+  const tierKind = (t) => (t === "Max" ? "good" : t === "Turbo" ? "warn" : "");
   main.replaceChildren(
     h("h1", {}, "Models"),
-    h("p", { class: "muted" }, `${r.models.length} deployable presets · VRAM floor is the least GPU memory a worker needs`),
+    h("p", { class: "muted" }, `${r.models.length} models served · ${r.engines_reached}/${r.engines_total} engines reachable · live from /fv/v1/capabilities`),
     h(
       "div",
       { class: "grid g2" },
       ...r.models.map((m) =>
         card(
-          h("span", {}, m.title, " ", badge(`${m.min_vram_gb} GB`, m.min_vram_gb >= 80 ? "warn" : "good")),
+          h("span", {}, h("code", {}, m.id), " ", m.tier ? badge(m.tier, tierKind(m.tier)) : "", " ", m.resident ? badge("resident", "good") : badge("on-demand", "")),
           h("dl", { class: "kv" },
-            ["preset", h("code", {}, m.id)],
-            ["pool", h("code", {}, m.pool.id)],
-            ["serves", m.pool.models.map((mo) => `${mo.id} (${mo.family}/${mo.recipe})`).join(", ") || "–"],
-            ["weights", (m.weights || []).join(", ")],
-            ...(m.prequant?.length ? [["prequant", m.prequant.join(", ")]] : []),
-            ...(m.licence ? [["licence", badge(m.licence, "warn")]] : []),
-          ),
-          h("p", { class: "muted small" }, m.description),
-          h("div", { class: "row" }, h("a", { class: "btn", href: `#/fleet` }, "View fleet"))
+            ["family", m.family || "–"],
+            ["recipe", m.recipe ? h("code", {}, m.recipe) : "–"],
+            ["served as", (m.served_names || []).join(", ") || "–"],
+            ["tasks", (m.tasks || []).join(", ") || "–"],
+            ["served by", (m.available_on || []).join(", ") || "–"],
+          )
         )
       )
     )
   );
+}
+
+const jobKind = (s) => (s === "running" || s === "Running" ? "good" : s === "queued" || s === "Queued" ? "warn" : s === "failed" || s === "Failed" ? "critical" : "");
+
+async function pageEngineJobs(main) {
+  const render = async () => {
+    const r = await api("/api/v1/jobs?limit=100");
+    const active = r.jobs.filter((j) => ["queued", "running", "Queued", "Running"].includes(j.state));
+    main.replaceChildren(
+      h("h1", {}, "Jobs"),
+      h("p", { class: "muted" }, `${r.jobs.length} jobs · ${active.length} active · ${r.engines_reached}/${r.engines_total} engines reachable`),
+      card(
+        `Engine jobs (${r.jobs.length})`,
+        table(
+          [
+            { label: "job", get: (j) => h("code", { title: j.id }, String(j.id).slice(0, 12)) },
+            { label: "model", get: (j) => j.resolved?.model || j.request_echo?.model || "–" },
+            { label: "state", get: (j) => badge(j.state, jobKind(j.state)) },
+            { label: "progress", get: (j) => (j.progress != null ? `${Math.round(j.progress * 100)}%` : "–"), num: true },
+            { label: "pod", get: (j) => h("a", { href: `#/pod/${j.pod_id}` }, j.pod_name || j.pod_id) },
+            { label: "created", get: (j) => (j.created_at ? new Date(j.created_at).toLocaleTimeString() : "–") },
+            { label: "inference", get: (j) => (j.metrics?.inference_time_s != null ? `${Number(j.metrics.inference_time_s).toFixed(1)}s` : "–"), num: true },
+          ],
+          r.jobs
+        )
+      )
+    );
+  };
+  state.timers.push(setInterval(() => render().catch(() => {}), 10000));
+  render();
 }
