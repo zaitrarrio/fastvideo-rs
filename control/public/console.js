@@ -355,3 +355,48 @@ async function pageCompare(main) {
   };
   render();
 }
+
+async function pageKeyRequests(main) {
+  const r = await api("/api/v1/key-requests");
+  const reqs = r.requests || [];
+  const pending = reqs.filter((x) => x.status === "pending");
+  const render = () => {
+    main.replaceChildren(
+      h("h1", {}, "Key requests"),
+      h("p", { class: "muted" }, `${pending.length} pending · from the fv-app portal. Mint the key in the engine admin, deliver it out of band, then mark fulfilled.`),
+      card(
+        `Requests (${reqs.length})`,
+        table(
+          [
+            { label: "id", get: (x) => h("code", {}, x.id) },
+            { label: "name", get: (x) => x.name },
+            { label: "email", get: (x) => x.email },
+            { label: "use case", get: (x) => (x.use_case || "").slice(0, 60) },
+            { label: "status", get: (x) => badge(x.status === "pending" ? "pending" : x.status === "fulfilled" ? "ok" : "down", x.status) },
+            {
+              label: "", get: (x) => x.status === "pending" ? h("span", {},
+                h("button", {
+                  class: "sm", onclick: async () => {
+                    const hint = prompt("Last 4 chars of the minted key (for the user's reference):") || "";
+                    await api(`/api/v1/key-requests/${encodeURIComponent(x.id)}/fulfill`, { method: "POST", body: JSON.stringify({ status: "fulfilled", key_hint: hint }) });
+                    location.reload();
+                  }
+                }, "Fulfill"),
+                " ",
+                h("button", {
+                  class: "sm ghost", onclick: async () => {
+                    if (!confirm("Reject this request?")) return;
+                    await api(`/api/v1/key-requests/${encodeURIComponent(x.id)}/fulfill`, { method: "POST", body: JSON.stringify({ status: "rejected" }) });
+                    location.reload();
+                  }
+                }, "Reject")
+              ) : (x.key_hint ? h("code", {}, `…${x.key_hint}`) : "")
+            },
+          ],
+          reqs
+        )
+      )
+    );
+  };
+  render();
+}
