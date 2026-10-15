@@ -172,6 +172,29 @@ app.get("/api/v1/overview", async (c) => {
   });
 });
 
+// ---------------- fleet helpers (fv-console)
+async function fleetPods(env: Env): Promise<any[]> {
+  const pods = await env.DB.prepare(
+    "SELECT pod_id, name, cluster_id FROM pods WHERE gone_at IS NULL ORDER BY cluster_id, pod_id"
+  ).all<any>();
+  return pods.results || [];
+}
+async function fetchEngineJson(env: Env, pod_id: string, path: string, timeoutMs = 8000): Promise<any | null> {
+  try {
+    const base = await podBaseUrl(env, pod_id, (id: string) => defaults.podUrl(env, id));
+    if (!base) return null;
+    const r = await fetchWithTimeout(`${base}${path}`, { timeoutMs });
+    if (!r.ok) return null;
+    return await r.json().catch(() => null);
+  } catch {
+    return null;
+  }
+}
+function pct(sorted: number[], q: number): number | null {
+  if (!sorted.length) return null;
+  return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] ?? null;
+}
+
 // ---------------- fleet: joined engine + infra view (fv-console)
 // GET /api/v1/fleet — every worker: infra facts from the pods table joined with
 // its engine's /fv/v1/status (best-effort, 8s timeout; engine:null when unreachable).
@@ -267,25 +290,10 @@ app.get("/api/v1/fleet", async (c) => {
 // GET /api/v1/models — every engine's /fv/v1/capabilities, aggregated by
 // model id (best-effort, 8s timeout). The source of truth is the engines,
 // not the worker's preset list.
-app.get("/api/v1/models", async (c) => {
-  const env = c.env;
-  const pods = await env.DB.prepare(
-    "SELECT pod_id, name, cluster_id FROM pods WHERE gone_at IS NULL ORDER BY cluster_id, pod_id"
-  ).all<any>();
+async function fleetModels(env: Env) {
+  const pods = await fleetPods(env);
   const per_engine = await Promise.all(
-    (pods.results || []).map(async (p: any) => {
-      let caps: any = null;
-      try {
-        const base = await podBaseUrl(env, p.pod_id, (id: string) => defaults.podUrl(env, id));
-        if (base) {
-          const r = await fetchWithTimeout(`${base}/fv/v1/capabilities`, { timeoutMs: 8000 });
-          if (r.ok) caps = await r.json().catch(() => null);
-        }
-      } catch {
-        /* best-effort */
-      }
-      return { pod_id: p.pod_id, name: p.name, cluster_id: p.cluster_id, caps };
-    })
+    pods.map(async (p: any) => ({ ...p, caps: await fetchEngineJson(env, p.pod_id, "/fv/v1/capabilities") }))
   );
   const modelMap = new Map<string, any>();
   for (const e of per_engine) {
@@ -309,35 +317,24 @@ app.get("/api/v1/models", async (c) => {
       modelMap.get(id).available_on.push(e.pod_id);
     }
   }
-  return c.json({
-    at: Date.now(),
+  return {
     engines_total: per_engine.length,
     engines_reached: per_engine.filter((e) => e.caps).length,
     models: [...modelMap.values()],
-  });
+  };
+}
+app.get("/api/v1/models", async (c) => {
+  return c.json({ at: Date.now(), ...(await fleetModels(c.env)) });
 });
 
 // ---------------- jobs: live engine jobs across the fleet (fv-console)
 // GET /api/v1/jobs — every engine's /fv/v1/jobs (best-effort, 8s timeout),
 // tagged with the pod that holds each job. ?limit= caps per-engine fetch.
-app.get("/api/v1/jobs", async (c) => {
-  const env = c.env;
-  const limit = Math.max(1, Math.min(200, parseInt(c.req.query("limit") || "50", 10) || 50));
-  const pods = await env.DB.prepare(
-    "SELECT pod_id, name, cluster_id FROM pods WHERE gone_at IS NULL ORDER BY cluster_id, pod_id"
-  ).all<any>();
+async function fleetJobs(env: Env, limit: number) {
+  const pods = await fleetPods(env);
   const per_engine = await Promise.all(
-    (pods.results || []).map(async (p: any) => {
-      let data: any = null;
-      try {
-        const base = await podBaseUrl(env, p.pod_id, (id: string) => defaults.podUrl(env, id));
-        if (base) {
-          const r = await fetchWithTimeout(`${base}/fv/v1/jobs?limit=${limit}`, { timeoutMs: 8000 });
-          if (r.ok) data = await r.json().catch(() => null);
-        }
-      } catch {
-        /* best-effort */
-      }
+    pods.map(async (p: any) => {
+      const data = await fetchEngineJson(env, p.pod_id, `/fv/v1/jobs?limit=${limit}`);
       const jobs = Array.isArray(data) ? data : data?.jobs || [];
       return { pod_id: p.pod_id, name: p.name, ok: data !== null, jobs: jobs.map((j: any) => ({ ...j, pod_id: p.pod_id, pod_name: p.name })) };
     })
@@ -345,11 +342,73 @@ app.get("/api/v1/jobs", async (c) => {
   const jobs = per_engine
     .flatMap((e) => e.jobs)
     .sort((a: any, b: any) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
-  return c.json({
-    at: Date.now(),
+  return {
     engines_total: per_engine.length,
     engines_reached: per_engine.filter((e) => e.ok).length,
     jobs,
+  };
+}
+app.get("/api/v1/jobs", async (c) => {
+  const limit = Math.max(1, Math.min(200, parseInt(c.req.query("limit") || "50", 10) || 50));
+  return c.json({ at: Date.now(), ...(await fleetJobs(c.env, limit)) });
+});
+
+// ---------------- benchmarks: observed performance by model (fv-console)
+// GET /api/v1/benchmarks — completed engine jobs aggregated by model:
+// inference time and peak memory percentiles from real job metrics.
+// GET /api/v1/compare?models=a,b — side-by-side capabilities + benchmarks.
+async function fleetBenchmarks(env: Env, limit: number) {
+  const { jobs } = await fleetJobs(env, limit);
+  const done = jobs.filter((j: any) => ["succeeded", "completed", "done"].includes(String(j.state).toLowerCase()));
+  const byModel = new Map<string, any>();
+  for (const j of done) {
+    const model = j.resolved?.model || j.request_echo?.model || "unknown";
+    if (!byModel.has(model)) byModel.set(model, { model, jobs: 0, inf: [], mem: [], stages: new Map<string, number[]>() });
+    const b = byModel.get(model);
+    b.jobs++;
+    if (typeof j.metrics?.inference_s === "number") b.inf.push(j.metrics.inference_s);
+    if (typeof j.metrics?.peak_memory_mb === "number") b.mem.push(j.metrics.peak_memory_mb);
+    for (const [stage, s] of Object.entries(j.metrics?.stage_durations || {})) {
+      if (typeof s === "number") {
+        if (!b.stages.has(stage)) b.stages.set(stage, []);
+        b.stages.get(stage).push(s);
+      }
+    }
+  }
+  const models = [...byModel.values()].map((b) => {
+    b.inf.sort((x: number, y: number) => x - y);
+    b.mem.sort((x: number, y: number) => x - y);
+    const stages: Record<string, number | null> = {};
+    for (const [stage, vals] of b.stages) {
+      vals.sort((x: number, y: number) => x - y);
+      stages[stage] = pct(vals, 0.5);
+    }
+    return {
+      model: b.model,
+      jobs: b.jobs,
+      inference_s: { p50: pct(b.inf, 0.5), p90: pct(b.inf, 0.9), min: b.inf[0] ?? null, max: b.inf[b.inf.length - 1] ?? null },
+      peak_memory_mb: { p50: pct(b.mem, 0.5), max: b.mem[b.mem.length - 1] ?? null },
+      stages,
+    };
+  });
+  return { models };
+}
+app.get("/api/v1/benchmarks", async (c) => {
+  const limit = Math.max(1, Math.min(200, parseInt(c.req.query("limit") || "100", 10) || 100));
+  return c.json({ at: Date.now(), ...(await fleetBenchmarks(c.env, limit)) });
+});
+app.get("/api/v1/compare", async (c) => {
+  const ids = (c.req.query("models") || "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 4);
+  if (!ids.length) throw new HttpError(400, "models query param required, e.g. ?models=fasth3,wan22-ti2v-5b");
+  const [models, benchmarks] = await Promise.all([fleetModels(c.env), fleetBenchmarks(c.env, 100)]);
+  const benchById = new Map(benchmarks.models.map((b: any) => [b.model, b]));
+  return c.json({
+    at: Date.now(),
+    models: ids.map((id) => ({
+      id,
+      capabilities: models.models.find((m: any) => m.id === id || (m.served_names || []).includes(id)) || null,
+      benchmarks: benchById.get(id) || null,
+    })),
   });
 });
 
