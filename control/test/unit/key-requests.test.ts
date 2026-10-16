@@ -15,15 +15,11 @@ const mkEnv = () =>
 const call = (env: Env, path: string, init: RequestInit = {}) =>
   _app.fetch(new Request(`https://ctl.test${path}`, init), env, { waitUntil() {}, passThroughOnException() {} } as any);
 
-const SCHEMA = `CREATE TABLE key_requests (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL,
-  use_case TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
-  key_hint TEXT, created_at INTEGER NOT NULL, fulfilled_at INTEGER)`;
+// key_requests comes from control/migrations/0014_key_requests.sql (d1shim applies every migration).
 
 describe("/api/v1/key-requests", () => {
   it("lists requests and fulfills one", async () => {
     const env = mkEnv();
-    await env.DB.prepare(SCHEMA).run();
     await env.DB.prepare(
       "INSERT INTO key_requests (id, name, email, use_case, status, created_at) VALUES ('kr_1', 'Ada', 'ada@x.com', 'ads', 'pending', 1)"
     ).run();
@@ -48,7 +44,6 @@ describe("/api/v1/key-requests", () => {
 
   it("rejects invalid status", async () => {
     const env = mkEnv();
-    await env.DB.prepare(SCHEMA).run();
     const admin = { authorization: `Bearer ${(await mintApiToken(env, "a", "admin", "test")).token}` };
     const r = await call(env, "/api/v1/key-requests/kr_1/fulfill", {
       method: "POST",
