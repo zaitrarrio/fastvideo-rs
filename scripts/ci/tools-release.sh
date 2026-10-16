@@ -782,7 +782,7 @@ cmd_pick_runner() {
             ans="$(sed -n "${n}p" "$FV_CONTROL_CI_FILE")"; [[ -n "$ans" ]] || ans="$(tail -n1 "$FV_CONTROL_CI_FILE")"
           else
             ans="$(curl -sS --fail-with-body --max-time 120 -H @"$h" -H 'content-type: application/json' -X POST \
-              "${FV_CONTROL_URL:-https://fv-control-staging.maximalize.workers.dev}/api/ci/build-runner" \
+              "${FV_CONTROL_URL:-https://fv-control-staging.maximalize.workers.dev}/api/v1/ci/build-runner" \
               -d "$(jq -nc --arg l "$label" --arg w "${GITHUB_WORKFLOW:-}" --arg r "${GITHUB_RUN_ID:-}" '{label: $l, workflow: $w, run_id: $r}')" 2>/dev/null)" || ans=""
           fi
           b="$(jq -r '.builder // empty' <<<"$ans" 2>/dev/null || true)"

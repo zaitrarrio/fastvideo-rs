@@ -95,15 +95,18 @@ URL="${FV_CONTROL_URL:-https://fv-control-staging.maximalize.workers.dev}"
 TOKEN_FILE="${FV_CONTROL_TOKEN_FILE:-$HOME/.config/fv/fv-control-token}"
 
 die() { echo "fv-control: $*" >&2; exit 1; }
+# fv-control serves its API under /api/v1 (since the fv-console change); callers here
+# still write /api/<route>, so both helpers map that onto /api/v1/<route>.
+v1() { case "$1" in /api/v1/* | /api/v1) echo "$1" ;; /api/*) echo "/api/v1/${1#/api/}" ;; *) echo "$1" ;; esac; }
 api() {
-  local method="$1" path="$2" body="${3:-}"
+  local method="$1" path; path="$(v1 "$2")"; local body="${3:-}"
   [[ -r "$TOKEN_FILE" ]] || die "no API token in $TOKEN_FILE (mint one under Settings)"
   curl -sS --fail-with-body -X "$method" -H @<(printf 'Authorization: Bearer %s\n' "$(tr -d '\n' <"$TOKEN_FILE")") \
     -H 'content-type: application/json' ${body:+-d "$body"} "$URL$path"
 }
 # Like api, without failing: sets API_CODE (HTTP status) and API_OUT (body); true for 2xx.
 api_s() {
-  local method="$1" path="$2" body="${3:-}" out
+  local method="$1" path; path="$(v1 "$2")"; local body="${3:-}" out
   [[ -r "$TOKEN_FILE" ]] || die "no API token in $TOKEN_FILE (mint one under Settings)"
   out="$(curl -sS -w '\n%{http_code}' -X "$method" -H @<(printf 'Authorization: Bearer %s\n' "$(tr -d '\n' <"$TOKEN_FILE")") \
     -H 'content-type: application/json' ${body:+-d "$body"} "$URL$path")" || die "fv-control unreachable ($URL)"
