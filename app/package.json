@@ -6,7 +6,8 @@
   "devDependencies": {
     "typescript": "^5.6.0",
     "vitest": "^3.0.0",
-    "@cloudflare/workers-types": "^5.0.0"
+    "@cloudflare/workers-types": "^5.0.0",
+    "wrangler": "^4.143.0"
   },
   "name": "fv-app",
   "private": true,
