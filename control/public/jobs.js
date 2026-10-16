@@ -123,21 +123,6 @@
   }
   window.fvJobsCard = fvJobsCard;
 
-  /** #/jobs: every cluster's and standalone pod's jobs (live ones first). */
-  async function pageJobs(main) {
-    const q = new URLSearchParams(location.hash.split("?")[1] || "");
-    const list = (await api("/api/v1/clusters?all=1")).clusters || [];
-    const pick = q.get("cluster") || list.find((c) => c.status === "running")?.id || list[0]?.id;
-    const sel = list.find((c) => c.id === pick || c.name === pick);
-    main.replaceChildren(
-      h("h1", {}, "Jobs"),
-      card(
-        null,
-        h("p", { class: "small muted" }, "fv-serve jobs of each cluster and standalone pod, from the jobs D1 the workers write. Serverless endpoints have their own (Serverless → an endpoint → Jobs)."),
-        h("div", { class: "row", style: "flex-wrap:wrap;gap:6px" }, list.map((c) => h("a", { class: `btn ${sel && c.id === sel.id ? "primary" : ""}`, href: `#/jobs?cluster=${c.id}` }, `${c.name}${c.source === "standalone" ? " (pod)" : ""}${c.status === "running" ? " ●" : ""}`))),
-      ),
-      sel ? fvJobsCard(sel.id, { title: `Jobs: ${sel.name}` }) : card("Jobs", h("p", { class: "muted small" }, "No clusters or standalone pods.")),
-    );
-  }
-  routes.push([/^#\/jobs$/, pageJobs]);
+  // #/jobs is now the unified tabbed page (pageJobsUnified in console.js);
+  // this module only provides fvJobsCard for the "Clusters & pods" tab.
 })();

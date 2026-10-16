@@ -17,7 +17,49 @@
   <a class="brand" href="#/">fv-control</a>
   <span class="env" id="envTag"></span>
   <nav id="nav">
-    <a href="#/">Dashboard</a><a href="#/fleet">Fleet</a><a href="#/models">Models</a><a href="#/deploy">Deploy</a><a href="#/engine-jobs">Engine jobs</a><a href="#/benchmarks">Benchmarks</a><a href="#/compare">Compare</a><a href="#/quality">Quality</a><a href="#/key-requests">Key requests</a><a href="#/clusters">Clusters</a><a href="#/pods">Pods</a><a href="#/jobs">Jobs</a><a href="#/standalone">Standalone</a><a href="#/env">Env</a><a href="#/logs">Logs</a><a href="#/serverless">Serverless</a><a href="#/costs">Costs</a><a href="#/releases">Releases</a><a href="#/settings">Settings</a>
+    <div class="nav-group" data-group="overview">
+      <button class="nav-head" aria-haspopup="true">Overview</button>
+      <div class="nav-drop">
+        <a href="#/">Dashboard</a>
+        <a href="#/fleet">Fleet</a>
+      </div>
+    </div>
+    <div class="nav-group" data-group="compute">
+      <button class="nav-head" aria-haspopup="true">Compute</button>
+      <div class="nav-drop">
+        <a href="#/clusters">Clusters</a>
+        <a href="#/pods">Pods</a>
+        <a href="#/standalone">Standalone</a>
+        <a href="#/serverless">Serverless</a>
+      </div>
+    </div>
+    <div class="nav-group" data-group="inference">
+      <button class="nav-head" aria-haspopup="true">Inference</button>
+      <div class="nav-drop">
+        <a href="#/models">Models</a>
+        <a href="#/deploy">Deploy</a>
+        <a href="#/jobs">Jobs</a>
+      </div>
+    </div>
+    <div class="nav-group" data-group="evaluate">
+      <button class="nav-head" aria-haspopup="true">Evaluate</button>
+      <div class="nav-drop">
+        <a href="#/benchmarks">Benchmarks</a>
+        <a href="#/compare">Compare</a>
+        <a href="#/quality">Quality</a>
+        <a href="#/costs">Costs</a>
+      </div>
+    </div>
+    <div class="nav-group" data-group="admin">
+      <button class="nav-head" aria-haspopup="true">Admin</button>
+      <div class="nav-drop">
+        <a href="#/key-requests">Key requests</a>
+        <a href="#/env">Env</a>
+        <a href="#/logs">Logs</a>
+        <a href="#/releases">Releases</a>
+        <a href="#/settings">Settings</a>
+      </div>
+    </div>
   </nav>
   <span class="spacer"></span>
   <button class="ghost" id="themeBtn" title="Toggle light / dark" aria-label="Toggle theme">◐</button>

@@ -23,6 +23,10 @@ function s(tag, attrs) {
   return el;
 }
 const fmt$ = (v, d = 2) => (v === null || v === undefined || isNaN(v) ? "–" : `$${Number(v).toFixed(d)}`);
+/** Definition list: kv([[term, def], ...]) renders proper dt/dd pairs. */
+function kv(pairs) {
+  return h("dl", { class: "kv" }, ...pairs.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v ?? "–")]));
+}
 const fmtN = (v, d = 0) => (v === null || v === undefined || isNaN(v) ? "–" : Number(v).toFixed(d));
 const fmtPct = (v) => (v === null || v === undefined ? "–" : `${Math.round(v)}%`);
 const ago = (ms) => {
@@ -243,7 +247,8 @@ const routes = [
   [/^#\/fleet$/, pageFleet],
   [/^#\/models$/, pageModels],
   [/^#\/deploy$/, pageDeploy],
-  [/^#\/engine-jobs$/, pageEngineJobs],
+  [/^#\/jobs$/, pageJobsUnified],
+  [/^#\/engine-jobs$/, () => { location.replace("#/jobs?tab=engines"); }],
   [/^#\/benchmarks$/, pageBenchmarks],
   [/^#\/compare$/, pageCompare],
   [/^#\/quality$/, pageQuality],
@@ -272,7 +277,9 @@ async function route() {
   clearTimers();
   if (!state.me?.authenticated) return renderLogin();
   const hash = location.hash || "#/";
-  for (const a of document.querySelectorAll("#nav a")) a.classList.toggle("on", a.getAttribute("href") === (hash.split("?")[0].replace(/^#\/(cluster|pod)\/.*/, "#/$1s") || "#/"));
+  const norm = hash.split("?")[0].replace(/^#\/(cluster|pod)\/.*/, "#/$1s") || "#/";
+  for (const a of document.querySelectorAll("#nav a")) a.classList.toggle("on", a.getAttribute("href") === norm);
+  for (const g of document.querySelectorAll(".nav-group")) g.classList.toggle("active", !!g.querySelector("a.on"));
   const main = $("#main");
   for (const [re, fn] of routes) {
     const m = re.exec(hash.split("?")[0]);
@@ -334,6 +341,22 @@ async function boot() {
 }
 window.addEventListener("hashchange", route);
 window.addEventListener("DOMContentLoaded", () => {
+  // Nav dropdowns: toggle on click, close on outside click or navigation.
+  for (const head of document.querySelectorAll(".nav-head")) {
+    head.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const g = head.closest(".nav-group");
+      const was = g.classList.contains("open");
+      for (const o of document.querySelectorAll(".nav-group.open")) o.classList.remove("open");
+      if (!was) g.classList.add("open");
+    });
+  }
+  document.addEventListener("click", () => {
+    for (const o of document.querySelectorAll(".nav-group.open")) o.classList.remove("open");
+  });
+  document.querySelector("#nav")?.addEventListener("click", (e) => {
+    if (e.target.closest("a")) for (const o of document.querySelectorAll(".nav-group.open")) o.classList.remove("open");
+  });
   $("#themeBtn").addEventListener("click", () => {
     const cur = document.documentElement.getAttribute("data-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
     const next = cur === "dark" ? "light" : "dark";
@@ -543,7 +566,6 @@ function buildPodsCard(bpm, redraw) {
 /** The legacy shared build pod (read only): its own self-stop timers (/healthz) and the controller's backstop. */
 function buildPodCard(bp) {
   const pol = bp.policy || {};
-  const kv = (rows) => h("dl", { class: "kv" }, ...rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v ?? "–")]));
   const one = (p) => {
     const hz = p.health;
     const ss = hz?.self_stop;
