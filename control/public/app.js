@@ -1191,7 +1191,18 @@ async function pageReleases(main) {
     card("Cluster drift", table([{ label: "cluster", get: (d) => d.cluster }, { label: "channel", get: (d) => d.channel || "–" }, { label: "running", get: (d) => d.running_sha || "?" }, { label: "head", get: (d) => d.head_sha || "?" }, { label: "", get: (d) => (d.drift ? badge("drift", "warn") : badge("in step", "good")) }], rel.drift, "No clusters.")),
     card("History", table([{ label: "id", get: (r) => r.id, num: true }, { label: "channel", get: (r) => r.channel }, { label: "sha", get: (r) => h("code", {}, r.git_sha.slice(0, 7)) }, { label: "action", get: (r) => r.action }, { label: "when", get: (r) => dt(r.promoted_at) }, { label: "by", get: (r) => r.promoted_by }, { label: "rolled back", get: (r) => (r.rolled_back_at ? "yes" : "") }], rel.history)),
     card("Release records (JSON)", jsonTree({ heads: rel.heads, history: rel.history }, { open: 1 })),
-    card("Deployment registry (fv-jobs)", table([{ label: "resource", get: (r) => r.id }, { label: "pool", get: (r) => r.pool || "" }, { label: "variant", get: (r) => r.variant || "" }, { label: "sha", get: (r) => (r.git_sha || "").slice(0, 7) }, { label: "status", get: (r) => r.status }, { label: "by", get: (r) => r.created_by }, { label: "created", get: (r) => ago(r.created_at) }], rel.registry.slice(0, 50))),
+    (() => {
+      const live = (rel.registry || []).filter((r) => r.status !== "deleted");
+      const deleted = (rel.registry || []).length - live.length;
+      return card(
+        `Deployment registry (fv-jobs)${deleted ? ` · ${deleted} deleted hidden` : ""}`,
+        table(
+          [{ label: "resource", get: (r) => r.id }, { label: "pool", get: (r) => r.pool || "" }, { label: "variant", get: (r) => r.variant || "" }, { label: "sha", get: (r) => (r.git_sha || "").slice(0, 7) }, { label: "status", get: (r) => r.status }, { label: "by", get: (r) => r.created_by }, { label: "created", get: (r) => ago(r.created_at) }],
+          live.slice(0, 50),
+          "No live deployments."
+        )
+      );
+    })(),
   );
 }
 
