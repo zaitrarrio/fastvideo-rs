@@ -344,7 +344,7 @@ export const ReleaseDispatchZ = z
     action: z.enum(["promote", "rollback"]).describe("promote: point the channel at a build; rollback: back to an earlier release."),
     target: z
       .string()
-      .regex(/^([0-9a-f]{7,40}|sha256:[0-9a-f]{64}|[a-z0-9][a-z0-9._-]{0,60})$/, { message: "a git sha (7-40 hex), a digest (sha256:<64 hex>) or a tag" })
+      .regex(/^([0-9a-f]{7,40}|sha256:[0-9a-f]{64}|[a-z0-9][a-z0-9._\-]{0,60})$/, { message: "a git sha (7-40 hex), a digest (sha256:<64 hex>) or a tag" })
       .optional()
       .meta({ "x-dynamic": "shas", "x-rule": "a git sha, sha256:<digest> or a tag" })
       .describe("promote: a git sha, a digest or a tag."),

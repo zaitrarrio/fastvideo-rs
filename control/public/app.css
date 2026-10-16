@@ -44,6 +44,14 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-
 nav { display: flex; gap: 2px; flex-wrap: wrap; }
 nav a { padding: 5px 9px; border-radius: 6px; color: var(--text-secondary); }
 nav a.on { background: var(--surface-2); color: var(--text-primary); font-weight: 600; }
+.nav-group { position: relative; }
+.nav-head { background: none; border: 0; padding: 5px 9px; border-radius: 6px; color: var(--text-secondary); font: inherit; cursor: pointer; }
+.nav-head::after { content: " ▾"; font-size: 10px; }
+.nav-head:hover, .nav-group.open .nav-head { background: var(--surface-2); color: var(--text-primary); }
+.nav-group.active .nav-head { color: var(--text-primary); font-weight: 600; }
+.nav-drop { display: none; position: absolute; top: 100%; left: 0; min-width: 170px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,.25); z-index: 20; }
+.nav-group.open .nav-drop { display: block; }
+.nav-drop a { display: block; padding: 7px 10px; white-space: nowrap; }
 .spacer { flex: 1; }
 main { padding: 16px; max-width: 1400px; margin: 0 auto; }
 h1 { font-size: 20px; margin: 4px 0 14px; }

@@ -28,12 +28,12 @@ function poolCards(pools) {
     ...pools.map((pl) =>
       card(
         `${pl.id} ${pl.kind ? `(${pl.kind})` : ""}`,
-        h("dl", { class: "kv" },
+        kv([
           ["state", badge(pl.state, fleetKind(pl.state))],
           ["workers", pl.workers.length],
           ["models", (pl.models || []).join(", ") || "–"],
           ["queued / running", `${pl.queued} / ${pl.running}`],
-        )
+        ])
       )
     )
   );
@@ -86,37 +86,67 @@ async function pageFleet(main) {
 async function pageModels(main) {
   const r = await api("/api/v1/models");
   const tierKind = (t) => (t === "Max" ? "good" : t === "Turbo" ? "warn" : "");
-  main.replaceChildren(
+  const kids = [
     h("h1", {}, "Models"),
     h("p", { class: "muted" }, `${r.models.length} models served · ${r.engines_reached}/${r.engines_total} engines reachable · live from /fv/v1/capabilities`),
-    h(
-      "div",
-      { class: "grid g2" },
-      ...r.models.map((m) =>
-        card(
-          h("span", {}, h("code", {}, m.id), " ", m.tier ? badge(m.tier, tierKind(m.tier)) : "", " ", m.resident ? badge("resident", "good") : badge("on-demand", "")),
-          h("dl", { class: "kv" },
-            ["family", m.family || "–"],
-            ["recipe", m.recipe ? h("code", {}, m.recipe) : "–"],
-            ["served as", (m.served_names || []).join(", ") || "–"],
-            ["tasks", (m.tasks || []).join(", ") || "–"],
-            ["served by", (m.available_on || []).join(", ") || "–"],
+  ];
+  if (!r.models.length) {
+    kids.push(card("No models found",
+      h("p", { class: "muted" }, r.engines_reached === 0
+        ? "No engines are reachable. Start a cluster from Deploy, then check Fleet."
+        : "Engines are reachable but report no models. Check an engine's /fv/v1/capabilities directly."),
+      h("div", { class: "row" }, h("a", { class: "btn", href: "#/deploy" }, "Deploy"), h("a", { class: "btn ghost", href: "#/fleet" }, "Fleet"))
+    ));
+  } else {
+    kids.push(
+      h(
+        "div",
+        { class: "grid g2" },
+        ...r.models.map((m) =>
+          card(
+            h("span", {}, h("code", {}, m.id), " ", m.tier ? badge(m.tier, tierKind(m.tier)) : "", " ", m.resident ? badge("resident", "good") : badge("on-demand", "")),
+            kv([
+              ["family", m.family || "–"],
+              ["recipe", m.recipe ? h("code", {}, m.recipe) : "–"],
+              ["served as", (m.served_names || []).join(", ") || "–"],
+              ["tasks", (m.tasks || []).join(", ") || "–"],
+              ["served by", (m.available_on || []).join(", ") || "–"],
+            ])
           )
         )
       )
-    )
-  );
+    );
+  }
+  main.replaceChildren(...kids);
 }
 
 const jobKind = (s) => (s === "running" || s === "Running" ? "good" : s === "queued" || s === "Queued" ? "warn" : s === "failed" || s === "Failed" ? "critical" : "");
 
-async function pageEngineJobs(main) {  const render = async () => {
+async function pageJobsUnified(main) {
+  const q = new URLSearchParams(location.hash.split("?")[1] || "");
+  const tab = q.get("tab") === "clusters" || q.has("cluster") ? "clusters" : "engines"; // #/jobs?cluster=<id> (older links) opens that cluster
+  const tabBtn = (id, label) => h("a", { class: `btn ${tab === id ? "primary" : ""}`, href: `#/jobs?tab=${id}` }, label);
+  const tabs = h("div", { class: "row", style: "margin-bottom:14px" }, tabBtn("engines", "Live engines"), tabBtn("clusters", "Clusters & pods"));
+  main.replaceChildren(h("h1", {}, "Jobs"), tabs, h("div", { id: "jobsTab" }));
+  const slot = document.getElementById("jobsTab");
+  if (tab === "engines") {
+    await renderEngineJobsTab(slot);
+  } else {
+    await renderClusterJobsTab(slot);
+  }
+}
+
+async function renderEngineJobsTab(main) {
+  const render = async () => {
     const r = await api("/api/v1/jobs?limit=100");
     const active = r.jobs.filter((j) => ["queued", "running", "Queued", "Running"].includes(j.state));
-    main.replaceChildren(
-      h("h1", {}, "Jobs"),
+    const kids = [
       h("p", { class: "muted" }, `${r.jobs.length} jobs · ${active.length} active · ${r.engines_reached}/${r.engines_total} engines reachable`),
-      card(
+    ];
+    if (!r.jobs.length) {
+      kids.push(card("No engine jobs", h("p", { class: "muted" }, "No jobs on any reachable engine. Submit one from a model's playground or via the API.")));
+    } else {
+      kids.push(card(
         `Engine jobs (${r.jobs.length})`,
         table(
           [
@@ -130,11 +160,27 @@ async function pageEngineJobs(main) {  const render = async () => {
           ],
           r.jobs
         )
-      )
-    );
+      ));
+    }
+    main.replaceChildren(...kids);
   };
   state.timers.push(setInterval(() => render().catch(() => {}), 10000));
   render();
+}
+
+async function renderClusterJobsTab(main) {
+  const q = new URLSearchParams(location.hash.split("?")[1] || "");
+  const list = (await api("/api/v1/clusters?all=1")).clusters || [];
+  const pick = q.get("cluster") || list.find((c) => c.status === "running")?.id || list[0]?.id;
+  const sel = list.find((c) => c.id === pick || c.name === pick);
+  main.replaceChildren(
+    card(
+      null,
+      h("p", { class: "small muted" }, "fv-serve jobs of each cluster and standalone pod, from the jobs D1 the workers write."),
+      h("div", { class: "row", style: "flex-wrap:wrap;gap:6px" }, list.map((c) => h("a", { class: `btn ${sel && c.id === sel.id ? "primary" : ""}`, href: `#/jobs?tab=clusters&cluster=${c.id}` }, `${c.name}${c.source === "standalone" ? " (pod)" : ""}${c.status === "running" ? " ●" : ""}`))),
+    ),
+    sel ? window.fvJobsCard(sel.id, { title: `Jobs: ${sel.name}` }) : card("Jobs", h("p", { class: "muted small" }, "No clusters or standalone pods.")),
+  );
 }
 
 async function pageDeploy(main) {
@@ -171,10 +217,10 @@ async function pageDeploy(main) {
             card(
               h("span", {}, r.title, " ", badge(`${r.min_vram_gb} GB`, "warn")),
               h("p", { class: "muted small" }, r.description),
-              h("dl", { class: "kv" },
+              kv([
                 ["serves", r.models.map((m) => m.id).join(", ")],
                 ["weights", r.weights.join(", ")],
-              ),
+              ]),
               h("div", { class: "row" },
                 h("button", {
                   class: st.recipe === r.id ? "primary" : "",
@@ -248,10 +294,10 @@ async function pageDeploy(main) {
         st.error
           ? card("Deploy failed", h("p", {}, st.error))
           : card("Deploy launched",
-              h("dl", { class: "kv" },
+              kv([
                 ["cluster", h("a", { href: `#/cluster/${st.result.cluster.id}` }, st.result.cluster.name)],
                 ["operation", st.result.operation ? h("code", {}, st.result.operation) : "not started"],
-              ),
+              ]),
               h("p", { class: "muted small" }, "Follow provisioning on the cluster page."),
               h("div", { class: "row" },
                 h("a", { class: "btn primary", href: `#/cluster/${st.result.cluster.id}` }, "View cluster"),
@@ -281,10 +327,17 @@ async function pageBenchmarks(main) {
   const r = await api("/api/v1/benchmarks?limit=200");
   const fmtS = (v) => (v == null ? "–" : `${Number(v).toFixed(1)}s`);
   const fmtM = (v) => (v == null ? "–" : `${(Number(v) / 1024).toFixed(1)} GiB`);
-  main.replaceChildren(
+  const kids = [
     h("h1", {}, "Benchmarks"),
     h("p", { class: "muted" }, `Observed performance from completed engine jobs · ${r.models.reduce((s, m) => s + m.jobs, 0)} jobs aggregated`),
-    card(
+  ];
+  if (!r.models.length) {
+    kids.push(card("No benchmarks yet",
+      h("p", { class: "muted" }, "Benchmarks are aggregated from completed engine jobs. Run some generations first — timings appear here automatically."),
+      h("div", { class: "row" }, h("a", { class: "btn", href: "#/jobs" }, "Jobs"), h("a", { class: "btn ghost", href: "#/models" }, "Models"))
+    ));
+  } else {
+    kids.push(card(
       `Models (${r.models.length})`,
       table(
         [
@@ -297,8 +350,9 @@ async function pageBenchmarks(main) {
         ],
         [...r.models].sort((a, b) => (a.inference_s.p50 ?? 1e18) - (b.inference_s.p50 ?? 1e18))
       )
-    )
-  );
+    ));
+  }
+  main.replaceChildren(...kids);
 }
 
 async function pageCompare(main) {

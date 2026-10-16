@@ -136,19 +136,31 @@ export async function mountLogs(host: HTMLElement, o: MountOptions) {
   const bar3 = h(
     "div",
     { class: "lx-bar" },
-    el.order,
-    el.sort,
-    el.group,
-    h("label", { class: "lx-inline" }, "context ±", el.ctx),
-    el.jump,
     el.live,
+    h("button", { type: "button", class: "lx-tog", "aria-expanded": "false", title: "More display options", onclick: (e: Event) => {
+      const btn = (e.target as HTMLElement).closest("button")!;
+      const adv = document.getElementById("lx-adv")!;
+      const open = adv.hidden;
+      adv.hidden = !open;
+      btn.setAttribute("aria-expanded", String(open));
+      btn.classList.toggle("on", open);
+    } }, "More ▾"),
     h("span", { class: "spacer" }),
     el.bmMenu,
     el.dlMenu,
     h("button", { type: "button", title: "Copy a link to this view", onclick: () => copyText(location.href).then(() => toast("link copied")) }, "Copy link"),
     h("button", { type: "button", title: "Keyboard shortcuts (?)", onclick: () => el.help.showModal() }, "?"),
   );
-  host.replaceChildren(h("div", { class: "lx", "data-schema-form": "log-query" }, h("div", { class: "lx-head" }, h("h1", {}, "Logs"), el.status), bar1, bar2, bar3, el.hist, el.pins, main), el.help);
+  const barAdv = h(
+    "div",
+    { class: "lx-bar", id: "lx-adv", hidden: true },
+    el.order,
+    el.sort,
+    el.group,
+    h("label", { class: "lx-inline" }, "context ±", el.ctx),
+    el.jump,
+  );
+  host.replaceChildren(h("div", { class: "lx", "data-schema-form": "log-query" }, h("div", { class: "lx-head" }, h("h1", {}, "Logs"), el.status), bar1, bar2, bar3, barAdv, el.hist, el.pins, main), el.help);
   el.help.append(
     h("h2", {}, "Keyboard"),
     h(

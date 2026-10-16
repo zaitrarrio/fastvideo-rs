@@ -137,8 +137,14 @@ export async function checkSpec(env: Env, doc: unknown, existing?: { id: string;
   const name = (doc as any)?.name;
   if (existing && name !== existing.name) add({ path: ["name"], message: `the name is fixed (${existing.name}); clone the cluster to use another name` });
   if (!existing && typeof name === "string" && name && !issues.some((i) => i.path[0] === "name")) {
-    const taken = await env.DB.prepare("SELECT id FROM clusters WHERE name = ?").bind(name).first<{ id: string }>();
-    if (taken) add({ path: ["name"], message: `a cluster or standalone pod named ${name} exists` });
+    // "latest"/"stable" are release channel names; reserving them avoids
+    // channel-vs-cluster confusion in the Releases UI.
+    if (["latest", "stable"].includes(name.toLowerCase())) {
+      add({ path: ["name"], message: `"${name}" is reserved for release channels; pick another cluster name` });
+    } else {
+      const taken = await env.DB.prepare("SELECT id FROM clusters WHERE name = ?").bind(name).first<{ id: string }>();
+      if (taken) add({ path: ["name"], message: `a cluster or standalone pod named ${name} exists` });
+    }
   }
   const warnings: Issue[] = [];
   if (normalized) {
