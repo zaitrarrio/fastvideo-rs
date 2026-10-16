@@ -1,5 +1,6 @@
--- fv-app key provisioning: consumer key requests.
--- Shared D1 (same database as fv-control); the console reads/fulfills these.
+-- fv-app key provisioning: consumer key requests (moved from app/migrations so
+-- fv-control, which owns this D1's schema and applies its migrations on deploy,
+-- creates it; fv-app writes rows, the console reads and fulfills them).
 CREATE TABLE IF NOT EXISTS key_requests (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,

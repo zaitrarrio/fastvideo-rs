@@ -13,11 +13,33 @@ compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
+# Static gallery / playground (public/), served by the ASSETS binding; the
+# worker answers /api/* and /healthz first.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*", "/healthz"]
+
 # Shared D1 with fv-control (database "fv-control"): the key_requests table
-# lives here so the console can list/fulfill requests. database_id is set
-# at deploy time (same value as control/wrangler.toml).
+# lives there so the console can list/fulfill requests. fv-control owns the
+# schema (control/migrations/0014_key_requests.sql, applied by its deploy);
+# fv-app runs no migrations of its own. Production is not set up yet (same as
+# fv-control): the top-level id is a placeholder, deploy only --env staging.
 [[d1_databases]]
 binding = "DB"
 database_name = "fv-control"
 database_id = "00000000-0000-0000-0000-000000000000"
-migrations_dir = "migrations"
+
+# Staging: fv-app-staging.<account>.workers.dev, on fv-control staging's D1.
+[env.staging]
+name = "fv-app-staging"
+
+[env.staging.assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*", "/healthz"]
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "fv-control"
+database_id = "b883b6a2-adf6-483b-8d45-9231de9d256c"
