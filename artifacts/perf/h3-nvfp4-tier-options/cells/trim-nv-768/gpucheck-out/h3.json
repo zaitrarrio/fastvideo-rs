@@ -1,0 +1,523 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "text_encoder",
+      "ok": true,
+      "values": {
+        "chosen": "streamed",
+        "device_gib": 0.0,
+        "free_gib_before_load": 94.35113525390625,
+        "load_seconds": 0.0,
+        "requested": "Streamed"
+      }
+    },
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "audio_vae_s": 0.201403381,
+        "dit_residency": "resident",
+        "dit_s": 3.674752228,
+        "refiner_s": 0.09499368,
+        "seconds": 7.396831506,
+        "text_encoder_s": 0.0,
+        "video_vae_s": 1.969087279
+      }
+    },
+    {
+      "limits": {},
+      "name": "cold_generation",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.141793178,
+        "decode_s": 4.670719464,
+        "denoise_s": 32.322243845,
+        "refine_s": 0.057820319,
+        "step_s": [
+          4.081430388,
+          4.02389052,
+          4.01892228,
+          4.015413384,
+          4.124826841,
+          4.020862334,
+          4.018625129,
+          4.018045589
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.281319512,
+        "total_s": 37.622282652,
+        "video_decode_s": 4.528926286,
+        "video_encode_s": 0.00009406,
+        "video_push_s": 0.0000789,
+        "video_rgb_s": 0.10662698198101508,
+        "video_vae_s": 4.508798639893532,
+        "video_wait_s": 0.26585421400000003,
+        "write_s": 0.182752436
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/talking-head",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.057995046,
+        "decode_s": 4.588014577,
+        "denoise_s": 32.259932482,
+        "load_s": 7.396831506,
+        "peak_mib": 28525,
+        "refine_s": 0.000508501,
+        "step_s": [
+          4.038540197,
+          4.026598625,
+          4.027470192,
+          4.027816529,
+          4.055587389,
+          4.028740481,
+          4.029428032,
+          4.025558125
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.271620675,
+        "total_s": 37.364447172,
+        "video_decode_s": 4.530019531,
+        "video_encode_s": 0.00007682,
+        "video_push_s": 0.00004099,
+        "video_rgb_s": 0.11222465997565448,
+        "video_vae_s": 4.511390265405178,
+        "video_wait_s": 0.26500643100000004,
+        "warm": true,
+        "write_s": 0.140505745
+      }
+    },
+    {
+      "limits": {
+        "expected": "hit (or disabled)"
+      },
+      "name": "warm_text_is_a_cache_hit",
+      "ok": true,
+      "values": {
+        "text_cache": "hit",
+        "text_s": 0.271620675
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/talking-head",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/talking-head",
+      "ok": true,
+      "values": {
+        "frame": "/srv/cells/trim-nv-768/frames/talking-head/frame-062.png",
+        "mean": 0.5297140795440214,
+        "std": 0.28977671660392323
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/spark-mountain-lake",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.056451282,
+        "decode_s": 4.5935062460000005,
+        "denoise_s": 32.467417438,
+        "load_s": 7.396831506,
+        "peak_mib": 28062,
+        "refine_s": 0.008093215,
+        "step_s": [
+          4.062506572,
+          4.052642474,
+          4.051742213,
+          4.051037601,
+          4.071401129,
+          4.049900599,
+          4.047311405,
+          4.080655465
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.27487208,
+        "total_s": 37.602995511,
+        "video_decode_s": 4.537054964,
+        "video_encode_s": 0.00008571,
+        "video_push_s": 0.00005719,
+        "video_rgb_s": 0.11835826000207318,
+        "video_vae_s": 4.511474792480469,
+        "video_wait_s": 0.27166955400000004,
+        "warm": true,
+        "write_s": 0.150020623
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/spark-mountain-lake",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/spark-mountain-lake",
+      "ok": true,
+      "values": {
+        "frame": "/srv/cells/trim-nv-768/frames/spark-mountain-lake/frame-062.png",
+        "mean": 0.31454454429932105,
+        "std": 0.21004083385668715
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/ltx-frogyoga",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.058339256,
+        "decode_s": 4.590046351,
+        "denoise_s": 32.649549379,
+        "load_s": 7.396831506,
+        "peak_mib": 28094,
+        "refine_s": 0.003855347,
+        "step_s": [
+          4.097265535,
+          4.080944056,
+          4.078663412,
+          4.074730274,
+          4.079189923,
+          4.080663385,
+          4.078502751,
+          4.079345603
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.282209052,
+        "total_s": 37.77877207,
+        "video_decode_s": 4.531707095,
+        "video_encode_s": 0.00010029,
+        "video_push_s": 0.000040470000000000004,
+        "video_rgb_s": 0.10898225699675024,
+        "video_vae_s": 4.515574186742306,
+        "video_wait_s": 0.262167696,
+        "warm": true,
+        "write_s": 0.144404123
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/ltx-frogyoga",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/ltx-frogyoga",
+      "ok": true,
+      "values": {
+        "frame": "/srv/cells/trim-nv-768/frames/ltx-frogyoga/frame-062.png",
+        "mean": 0.3544777458775864,
+        "std": 0.2754527593439686
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/ltx-newsbroadcast",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.059154958,
+        "decode_s": 4.590854523,
+        "denoise_s": 32.80925626,
+        "load_s": 7.396831506,
+        "peak_mib": 28158,
+        "refine_s": 0.00594102,
+        "step_s": [
+          4.094677001,
+          4.132442979,
+          4.089197011,
+          4.096109103,
+          4.110190769,
+          4.098211177,
+          4.089820282,
+          4.098397878
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.24245258,
+        "total_s": 37.899342679,
+        "video_decode_s": 4.531699565,
+        "video_encode_s": 0.000087301,
+        "video_push_s": 0.00003919,
+        "video_rgb_s": 0.10555732901998496,
+        "video_vae_s": 4.514774291992189,
+        "video_wait_s": 0.263388528,
+        "warm": true,
+        "write_s": 0.145924565
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/ltx-newsbroadcast",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/ltx-newsbroadcast",
+      "ok": true,
+      "values": {
+        "frame": "/srv/cells/trim-nv-768/frames/ltx-newsbroadcast/frame-062.png",
+        "mean": 0.3174873339645794,
+        "std": 0.23983997287365752
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/h3-demo",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.057921335,
+        "decode_s": 4.587170405999999,
+        "denoise_s": 33.569643321,
+        "load_s": 7.396831506,
+        "peak_mib": 28254,
+        "refine_s": 0.007535794,
+        "step_s": [
+          4.205226272,
+          4.196584355,
+          4.195268183,
+          4.195335974,
+          4.192031177,
+          4.191402507,
+          4.19859711,
+          4.194940182
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.290158677,
+        "total_s": 38.744515855,
+        "video_decode_s": 4.529249071,
+        "video_encode_s": 0.000098511,
+        "video_push_s": 0.00003943,
+        "video_rgb_s": 0.10635803798608304,
+        "video_vae_s": 4.512908377826214,
+        "video_wait_s": 0.26160592499999996,
+        "warm": true,
+        "write_s": 0.142432739
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/h3-demo",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/h3-demo",
+      "ok": true,
+      "values": {
+        "frame": "/srv/cells/trim-nv-768/frames/h3-demo/frame-062.png",
+        "mean": 0.2962451070690259,
+        "std": 0.2562170081469941
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/srv/cells/trim-nv-768/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96615,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "device_budget_gib": null,
+    "memory_plan": {
+      "resident": {
+        "peak_gib": 62.32392379641533,
+        "stages": [
+          {
+            "gib": 51.905614107847214,
+            "stage": "text"
+          },
+          {
+            "gib": 48.275975435972214,
+            "stage": "refine"
+          },
+          {
+            "gib": 62.32392379641533,
+            "stage": "denoise"
+          },
+          {
+            "gib": 46.55480119585991,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 50.177193850278854,
+            "stage": "video_decode"
+          }
+        ]
+      },
+      "streamed": {
+        "peak_gib": 19.357105255126953,
+        "stages": [
+          {
+            "gib": 7.503166675567627,
+            "stage": "text"
+          },
+          {
+            "gib": 5.309156894683838,
+            "stage": "refine"
+          },
+          {
+            "gib": 19.357105255126953,
+            "stage": "denoise"
+          },
+          {
+            "gib": 2.393716812133789,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 12.611612051725388,
+            "stage": "video_decode"
+          }
+        ]
+      }
+    },
+    "mode": "fast",
+    "output": {
+      "audio_samples_per_channel": 165600,
+      "frames": 124,
+      "mp4": null,
+      "sequence_length": 38247,
+      "text_tokens": 537,
+      "wav": "/srv/cells/trim-nv-768/frames/h3-demo/audio.wav"
+    },
+    "request": {
+      "attention": "vsa-h3 + to_gate_compress",
+      "height": 768,
+      "num_frames": 124,
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "prompt_set": [
+        {
+          "name": "talking-head",
+          "seed": 1024
+        },
+        {
+          "name": "spark-mountain-lake",
+          "seed": 42
+        },
+        {
+          "name": "ltx-frogyoga",
+          "seed": 42
+        },
+        {
+          "name": "ltx-newsbroadcast",
+          "seed": 42
+        },
+        {
+          "name": "h3-demo",
+          "seed": 0
+        }
+      ],
+      "seconds": 5,
+      "seed": 1024,
+      "techniques": {
+        "plan": [
+          "vsa (sparsity recipe, group default)"
+        ],
+        "profile": null,
+        "settings": [],
+        "sources": [
+          {
+            "from": "recipe",
+            "seam": "attention_backend"
+          }
+        ]
+      },
+      "text_cache": "/fvw/text-cache",
+      "text_weights": "/workspace/weights/h3-base",
+      "video_vae": "official",
+      "warm": true,
+      "width": 1344
+    },
+    "stage_memory": {
+      "dit_residency": "resident",
+      "stages": [
+        {
+          "end_used_gib": 14.4507538927719,
+          "peak_reserved_gib": 14.5625,
+          "peak_used_gib": 14.4507538927719,
+          "stage": "text"
+        },
+        {
+          "end_used_gib": 14.456131185404956,
+          "peak_reserved_gib": 14.59375,
+          "peak_used_gib": 14.51528140436858,
+          "stage": "refine"
+        },
+        {
+          "end_used_gib": 14.464141334407032,
+          "peak_reserved_gib": 26.96875,
+          "peak_used_gib": 25.75267495866865,
+          "stage": "denoise"
+        },
+        {
+          "end_used_gib": 14.464141334407032,
+          "peak_reserved_gib": 14.71875,
+          "peak_used_gib": 14.595793689601123,
+          "stage": "audio_decode"
+        },
+        {
+          "end_used_gib": 14.47747942339629,
+          "peak_reserved_gib": 16.8125,
+          "peak_used_gib": 15.852023567073047,
+          "stage": "video_decode"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 235.05599963,
+  "env": {},
+  "error": null,
+  "git_sha": null,
+  "stage": "h3",
+  "status": "pass"
+}

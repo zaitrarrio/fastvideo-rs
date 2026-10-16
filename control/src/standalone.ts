@@ -22,7 +22,7 @@ import { noVolumePod, RUNPOD_DC_CHOICES } from "./enums";
 /** The single pool's id inside a standalone pod's spec. */
 export const STANDALONE_POOL = "pod";
 
-/** A launch request (the schema: src/schemas.ts StandaloneLaunchZ, GET /api/schemas/standalone-launch). */
+/** A launch request (the schema: src/schemas.ts StandaloneLaunchZ, GET /api/v1/schemas/standalone-launch). */
 export type LaunchRequest = z.infer<typeof StandaloneLaunchZ>;
 
 /** The region of a region id or a data centre id. A Runpod data centre without a weights volume (or "any") is allowed

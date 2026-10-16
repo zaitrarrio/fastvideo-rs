@@ -19,7 +19,7 @@ import { audit, HttpError, now, parseJson, scrub } from "../util";
 import { clip, pollJob, readyWorkers, TERMINAL, type Actor, type SlsRow } from "./ops";
 import { sls, type SlsEnv } from "./runpod-sls";
 
-/** What POST /api/serverless/:id/jobs/:job/cancel takes (schema serverless-cancel). */
+/** What POST /api/v1/serverless/:id/jobs/:job/cancel takes (schema serverless-cancel). */
 export interface SlsCancelIn {
   job: string;
   fv_job?: string;
@@ -145,7 +145,7 @@ async function stopFvJob(
   };
 }
 
-/** What POST /api/serverless/:id/purge takes (schema serverless-purge). */
+/** What POST /api/v1/serverless/:id/purge takes (schema serverless-purge). */
 export interface SlsPurgeIn {
   confirm: string;
   expected?: number;

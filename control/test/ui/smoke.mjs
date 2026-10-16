@@ -34,20 +34,20 @@ const fail = (e) => {
 };
 try {
   // Seed: an API token, a running tiny cluster, two collector passes.
-  const login = await fetch(`${B}/api/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ passphrase: PASSPHRASE }) });
+  const login = await fetch(`${B}/api/v1/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ passphrase: PASSPHRASE }) });
   const cookie = login.headers.get("set-cookie").split(";")[0];
   const { csrf } = await login.json();
-  const tok = (await (await fetch(`${B}/api/tokens`, { method: "POST", headers: { cookie, "x-csrf-token": csrf, "content-type": "application/json" }, body: JSON.stringify({ name: "seed" }) })).json()).token;
+  const tok = (await (await fetch(`${B}/api/v1/tokens`, { method: "POST", headers: { cookie, "x-csrf-token": csrf, "content-type": "application/json" }, body: JSON.stringify({ name: "seed" }) })).json()).token;
   const api = (p, body) => fetch(B + p, { method: body ? "POST" : "GET", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined }).then((r) => r.json());
-  const c = await api("/api/clusters", { spec: { name: "tiny", template: "tiny-cpu", cap_s: 3600 } });
-  await api(`/api/clusters/${c.cluster.id}/start`, {});
+  const c = await api("/api/v1/clusters", { spec: { name: "tiny", template: "tiny-cpu", cap_s: 3600 } });
+  await api(`/api/v1/clusters/${c.cluster.id}/start`, {});
   for (let i = 0; i < 60; i++) {
-    const ops = await api(`/api/clusters/${c.cluster.id}/ops`);
+    const ops = await api(`/api/v1/clusters/${c.cluster.id}/ops`);
     if (ops.operations[0]?.status !== "running") break;
     await new Promise((r) => setTimeout(r, 1000));
   }
-  await api("/api/collect", {});
-  await api("/api/collect", {});
+  await api("/api/v1/collect", {});
+  await api("/api/v1/collect", {});
 
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM || undefined, headless: true });
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -130,7 +130,7 @@ try {
   await page.click(`${panel} button:has-text('Save (v0')`);
   await page.waitForFunction((sel) => document.querySelector(sel + " .badge")?.textContent === "v1", panel);
   // A stale edit elsewhere is refused.
-  const stale = await fetch(`${B}/api/docs/cluster-spec/${c.cluster.id}`, { method: "PUT", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify({ doc: {}, version: 0 }) });
+  const stale = await fetch(`${B}/api/v1/docs/cluster-spec/${c.cluster.id}`, { method: "PUT", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify({ doc: {}, version: 0 }) });
   assert.ok(stale.status === 409 || stale.status === 400);
   // History and restore.
   await page.click(`${panel} button:text('History')`);
@@ -138,7 +138,7 @@ try {
   await page.click(`${panel} .fv-history details summary`);
   await page.click(`${panel} button:text('Restore the version before it')`);
   await page.waitForFunction((sel) => document.querySelector(sel + " .badge")?.textContent === "v2", panel);
-  const spec = await (await fetch(`${B}/api/docs/cluster-spec/${c.cluster.id}`, { headers: { authorization: `Bearer ${tok}` } })).json();
+  const spec = await (await fetch(`${B}/api/v1/docs/cluster-spec/${c.cluster.id}`, { headers: { authorization: `Bearer ${tok}` } })).json();
   assert.equal(spec.doc.cap_s, 3600, "restored");
   assert.equal(spec.doc.pools[0].count, 1);
 
@@ -173,10 +173,10 @@ try {
   for (const s of ["cap stop in", "7.0 h", "FAILED", "REST stop: HTTP 403", "wt-ui-dash", "paused: jobs running", "controller backstop", "cap in 8.0 h"]) assert.ok(bpText.includes(s), `build pod card: ${s} in ${bpText}`);
   await page.click(".alert:has-text('ui test alert') button:text('Resolve')");
   await page.waitForSelector(".alert:has-text('ui test alert')", { state: "detached" });
-  assert.ok((await (await fetch(`${B}/api/alerts`, { headers: { authorization: `Bearer ${tok}` } })).json()).alerts.every((a) => a.key !== "ui:test"), "resolved");
+  assert.ok((await (await fetch(`${B}/api/v1/alerts`, { headers: { authorization: `Bearer ${tok}` } })).json()).alerts.every((a) => a.key !== "ui:test"), "resolved");
   await page.screenshot({ path: `${out}/12-dashboard-buildpod.png`, fullPage: true });
   // Managed build pods: Up creates one (policy enabled by API), the card shows it with Stop / Delete.
-  await fetch(`${B}/api/build-pods/policy`, { method: "PUT", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify({ policy: { enabled: true } }) });
+  await fetch(`${B}/api/v1/build-pods/policy`, { method: "PUT", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify({ policy: { enabled: true } }) });
   await page.reload();
   await page.click("button:text('Up (reuse / start / create)')");
   await page.waitForSelector(".buildpod[data-bp]", { timeout: 20000 });
@@ -202,7 +202,7 @@ try {
   assert.equal(JSON.parse(await edDoc()).pools.map((p) => p.id).join(","), "ltx,ltx-pro,ltx-a2v,ltx-ref2v,longlive");
   await page.screenshot({ path: `${out}/13-clusters-presets.png`, fullPage: true });
   // Cluster: roll picker (cancelled), add a pool, keys, restart picker.
-  await fetch(`${B}/api/clusters/${c.cluster.id}/mint-key`, { method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify({ name: "ui-key" }) });
+  await fetch(`${B}/api/v1/clusters/${c.cluster.id}/mint-key`, { method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify({ name: "ui-key" }) });
   await page.goto(`${B}/#/cluster/${c.cluster.id}`);
   await page.waitForSelector("button:text('Roll to…'):not([disabled])");
   await page.click("button:text('Roll to…')");
@@ -217,7 +217,7 @@ try {
   await page.selectOption("dialog select[aria-label='Pool preset']", "fastwan21");
   await page.click("dialog .presets button:text('Add pool')");
   for (let i = 0; i < 40; i++) {
-    const d = await (await fetch(`${B}/api/docs/cluster-spec/${c.cluster.id}`, { headers: { authorization: `Bearer ${tok}` } })).json();
+    const d = await (await fetch(`${B}/api/v1/docs/cluster-spec/${c.cluster.id}`, { headers: { authorization: `Bearer ${tok}` } })).json();
     if (d.doc.pools.some((p) => p.id === "fastwan21")) break;
     assert.ok(i < 39, "the pool was added");
     await page.waitForTimeout(250);
@@ -236,7 +236,7 @@ try {
   await page.screenshot({ path: `${out}/16-restart-picker.png` });
   await page.click("dialog.pick button:text('Restart')");
   await page.waitForSelector("text=running: restart");
-  const ops = await (await fetch(`${B}/api/clusters/${c.cluster.id}/ops`, { headers: { authorization: `Bearer ${tok}` } })).json();
+  const ops = await (await fetch(`${B}/api/v1/clusters/${c.cluster.id}/ops`, { headers: { authorization: `Bearer ${tok}` } })).json();
   assert.deepEqual(JSON.parse(ops.operations.find((o) => o.kind === "restart").params), { pools: ["fake"] });
   // Env: the pool level, with the engine's keys suggested.
   await page.goto(`${B}/#/env?cluster=${c.cluster.id}&pool=fake`);
@@ -252,7 +252,7 @@ try {
   await page.click(`${poolp} >> button:text('Review & save')`);
   await page.click(`${poolp} >> button:has-text('Save (v')`);
   for (let i = 0; i < 40; i++) {
-    const v = await (await fetch(`${B}/api/env/pool/${c.cluster.id}:fake`, { headers: { authorization: `Bearer ${tok}` } })).json();
+    const v = await (await fetch(`${B}/api/v1/env/pool/${c.cluster.id}:fake`, { headers: { authorization: `Bearer ${tok}` } })).json();
     if (v.vars?.some((x) => x.key === "FASTVIDEO_ATTN_SAGE" && x.value === "0")) break;
     assert.ok(i < 39, "the pool variable was saved");
     await page.waitForTimeout(250);
@@ -280,13 +280,13 @@ try {
   await page.waitForSelector("h2:text('Boot timeline')", { timeout: 60000 });
   await page.waitForSelector("td:text('Runpod create accepted')", { timeout: 60000 });
   await page.screenshot({ path: `${out}/12-standalone.png`, fullPage: true });
-  const sp = await (await fetch(`${B}/api/standalone/ui-solo`, { headers: { authorization: `Bearer ${tok}` } })).json();
+  const sp = await (await fetch(`${B}/api/v1/standalone/ui-solo`, { headers: { authorization: `Bearer ${tok}` } })).json();
   assert.equal(sp.pod.definition.variant, "cpu");
   assert.equal(sp.pod.definition.compute, "CPU");
-  await fetch(`${B}/api/standalone/ui-solo`, { method: "DELETE", headers: { authorization: `Bearer ${tok}` } });
+  await fetch(`${B}/api/v1/standalone/ui-solo`, { method: "DELETE", headers: { authorization: `Bearer ${tok}` } });
 
   // ---- read-only JSON tree: search and copy.
-  const pods = await (await fetch(`${B}/api/pods`, { headers: { authorization: `Bearer ${tok}` } })).json();
+  const pods = await (await fetch(`${B}/api/v1/pods`, { headers: { authorization: `Bearer ${tok}` } })).json();
   await page.goto(`${B}/#/pod/${pods.pods[0].pod_id}`);
   await page.waitForSelector(".fv-tree input[type=search]");
   await page.fill(".fv-tree input[type=search]", "cost_per_hr");

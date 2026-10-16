@@ -88,21 +88,21 @@ function seedSql(clusterId, now) {
 }
 
 try {
-  const login = await fetch(`${B}/api/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ passphrase: PASSPHRASE }) });
+  const login = await fetch(`${B}/api/v1/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ passphrase: PASSPHRASE }) });
   const cookie = login.headers.get("set-cookie").split(";")[0];
   const { csrf } = await login.json();
-  const tok = (await (await fetch(`${B}/api/tokens`, { method: "POST", headers: { cookie, "x-csrf-token": csrf, "content-type": "application/json" }, body: JSON.stringify({ name: "seed" }) })).json()).token;
+  const tok = (await (await fetch(`${B}/api/v1/tokens`, { method: "POST", headers: { cookie, "x-csrf-token": csrf, "content-type": "application/json" }, body: JSON.stringify({ name: "seed" }) })).json()).token;
   const raw = (p, body, method) => fetch(B + p, { method: method || (body ? "POST" : "GET"), headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   const api = (p, body, method) => fetch(B + p, { method: method || (body ? "POST" : "GET"), headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined }).then((r) => r.json());
   // A tiny cluster that ran (its operations and audit rows), and a defined h3/ltx cluster with seeded pod lines.
-  const tiny = await api("/api/clusters", { spec: { name: "tiny", template: "tiny-cpu", cap_s: 3600 } });
-  await api(`/api/clusters/${tiny.cluster.id}/start`, {});
+  const tiny = await api("/api/v1/clusters", { spec: { name: "tiny", template: "tiny-cpu", cap_s: 3600 } });
+  await api(`/api/v1/clusters/${tiny.cluster.id}/start`, {});
   for (let i = 0; i < 60; i++) {
-    const ops = await api(`/api/clusters/${tiny.cluster.id}/ops`);
+    const ops = await api(`/api/v1/clusters/${tiny.cluster.id}/ops`);
     if (ops.operations[0]?.status !== "running") break;
     await new Promise((r) => setTimeout(r, 1000));
   }
-  const big = await api("/api/clusters", { spec: { name: "h3-and-ltx", template: "h3" } });
+  const big = await api("/api/v1/clusters", { spec: { name: "h3-and-ltx", template: "h3" } });
   const now = Date.now();
   const sqlFile = `${w.dir}/seed.sql`;
   writeFileSync(sqlFile, seedSql(big.cluster.id, now).join(";\n") + ";\n");
@@ -111,14 +111,14 @@ try {
   void d1Exec;
 
   // ---- the API: filters, cursors, export
-  const q1 = await api(`/api/logs/query?src=pod&cluster=${big.cluster.id}&lv=error&since=3h&limit=5`);
+  const q1 = await api(`/api/v1/logs/query?src=pod&cluster=${big.cluster.id}&lv=error&since=3h&limit=5`);
   assert.equal(q1.lines.length, 5);
   assert.ok(q1.lines.every((l) => l.level === "error" && l.cluster === "h3-and-ltx"));
-  const q2 = await api(`/api/logs/query?src=pod&cluster=${big.cluster.id}&lv=error&since=3h&limit=5&cursor=${q1.next}`);
+  const q2 = await api(`/api/v1/logs/query?src=pod&cluster=${big.cluster.id}&lv=error&since=3h&limit=5&cursor=${q1.next}`);
   assert.ok(q2.lines.every((l) => !q1.lines.some((x) => x.uid === l.uid)), "next page has new lines");
-  const rx = await api(`/api/logs/query?src=pod&q=${encodeURIComponent("job_\\d+3\\b")}&re=1&lv=trace,debug,info,warn,error&since=3h&limit=50`);
+  const rx = await api(`/api/v1/logs/query?src=pod&q=${encodeURIComponent("job_\\d+3\\b")}&re=1&lv=trace,debug,info,warn,error&since=3h&limit=50`);
   assert.ok(rx.lines.length > 0 && rx.lines.every((l) => /job_\d+3\b/.test(JSON.stringify(l.fields))), "regex filter");
-  const ex = await fetch(`${B}/api/logs/export?src=pod&pool=h3-max&lv=error&since=3h&format=txt`, { headers: { authorization: `Bearer ${tok}` } });
+  const ex = await fetch(`${B}/api/v1/logs/export?src=pod&pool=h3-max&lv=error&since=3h&format=txt`, { headers: { authorization: `Bearer ${tok}` } });
   const exText = await ex.text();
   assert.match(ex.headers.get("content-disposition"), /attachment/);
   assert.ok(exText.trim().split("\n").every((l) => l.includes("ERROR") && l.includes("h3-max")), "export honours filters");

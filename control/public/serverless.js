@@ -20,7 +20,7 @@
   async function pageServerless(main) {
     const q = new URLSearchParams((location.hash.split("?")[1] || ""));
     if (q.get("ep")) return pageEndpoint(main, q.get("ep"));
-    const [list, defs] = await Promise.all([api(`/api/serverless${q.get("all") ? "?all=1" : ""}`), api("/api/serverless/defaults?name=fake&preset=cpu")]);
+    const [list, defs] = await Promise.all([api(`/api/v1/serverless${q.get("all") ? "?all=1" : ""}`), api("/api/v1/serverless/defaults?name=fake&preset=cpu")]);
     const eps = list.endpoints || [];
     main.replaceChildren(
       card(
@@ -43,14 +43,14 @@
           eps,
           "No serverless endpoints yet.",
         ),
-        h("div", { class: "row", style: "margin-top:8px" }, h("a", { class: "btn", href: q.get("all") ? "#/serverless" : "#/serverless?all=1" }, q.get("all") ? "Recent only" : "Show all (deleted too)"), h("button", { onclick: async () => { await act("tick", () => api("/api/serverless/tick", { method: "POST" })); route(); } }, "Refresh health and billing")),
+        h("div", { class: "row", style: "margin-top:8px" }, h("a", { class: "btn", href: q.get("all") ? "#/serverless" : "#/serverless?all=1" }, q.get("all") ? "Recent only" : "Show all (deleted too)"), h("button", { onclick: async () => { await act("tick", () => api("/api/v1/serverless/tick", { method: "POST" })); route(); } }, "Refresh health and billing")),
       ),
       createCard(defs.spec),
       card("Policy", h("p", { class: "small muted" }, "Limits over every endpoint fv-control manages."), docPanel("serverless-policy", "default", { title: "serverless policy" })),
     );
     every(15000, async () => {
       if (!location.hash.startsWith("#/serverless") || location.hash.includes("ep=")) return;
-      const fresh = await api(`/api/serverless${q.get("all") ? "?all=1" : ""}`).catch(() => null);
+      const fresh = await api(`/api/v1/serverless${q.get("all") ? "?all=1" : ""}`).catch(() => null);
       if (fresh && JSON.stringify(fresh.endpoints.map((e) => [e.status, e.workers, e.health])) !== JSON.stringify(eps.map((e) => [e.status, e.workers, e.health]))) route();
     });
   }
@@ -63,7 +63,7 @@
   }
 
   async function pageEndpoint(main, id) {
-    const d = await api(`/api/serverless/${encodeURIComponent(id)}`);
+    const d = await api(`/api/v1/serverless/${encodeURIComponent(id)}`);
     const e = d.endpoint;
     const live = !e.deleted_at;
     const hh = d.health && !d.health.error ? d.health : e.health;
@@ -95,7 +95,7 @@
         h("a", { class: "btn", href: `#/logs?q=&pod=${(d.runpod?.workers || [])[0]?.id || ""}` }, "Log explorer"),
         // fv-serve's console for this endpoint, served by fv-control (docs/control/serverless.md "Console").
         live && e.endpoint_id ? h("a", { class: "btn primary", id: "open-console", href: `/serverless/${encodeURIComponent(e.endpoint_id)}/console`, target: "_blank", rel: "noopener", title: "Models, Playground and API tabs, Native API: each request runs as a queue job" }, "Open console") : null,
-        live && e.endpoint_id ? h("button", { title: "Forget the console's cached capabilities and schemas: the next page load asks a worker again", onclick: async () => { await act("console cache", () => api(`/api/serverless/${e.id}/console-cache`, { method: "DELETE" })); } }, "Refresh console cache") : null,
+        live && e.endpoint_id ? h("button", { title: "Forget the console's cached capabilities and schemas: the next page load asks a worker again", onclick: async () => { await act("console cache", () => api(`/api/v1/serverless/${e.id}/console-cache`, { method: "DELETE" })); } }, "Refresh console cache") : null,
       ),
     );
     if (!live) {
@@ -109,11 +109,11 @@
       "Scale",
       h("div", { class: "row", style: "flex-wrap:wrap" },
         scaleHost,
-        h("button", { onclick: async () => { await act("scale to 0", () => api(`/api/serverless/${e.id}/scale`, { method: "POST", body: { workers_min: 0, workers_max: 0 } })); route(); } }, "Scale to 0"),
-        h("button", { onclick: async () => { await act("extend", () => api(`/api/serverless/${e.id}/extend`, { method: "POST", body: { minutes: 30 } })); route(); } }, "Backstop +30 min"),
+        h("button", { onclick: async () => { await act("scale to 0", () => api(`/api/v1/serverless/${e.id}/scale`, { method: "POST", body: { workers_min: 0, workers_max: 0 } })); route(); } }, "Scale to 0"),
+        h("button", { onclick: async () => { await act("extend", () => api(`/api/v1/serverless/${e.id}/extend`, { method: "POST", body: { minutes: 30 } })); route(); } }, "Backstop +30 min"),
         h("button", { class: "danger", onclick: async () => {
           if (!confirm(`Delete ${e.runpod_name} (${e.endpoint_id}) and its template? Running jobs are lost.`)) return;
-          await act("delete", () => api(`/api/serverless/${e.id}`, { method: "DELETE" }));
+          await act("delete", () => api(`/api/v1/serverless/${e.id}`, { method: "DELETE" }));
           route();
         } }, "Delete endpoint"),
       ),
@@ -122,7 +122,7 @@
     main.replaceChildren(head, ctl, servesCard(e, d), outlookCard(e, d), invokeCard(e, d.serving), queueCard(e, hh), workersCard(e, d), specCard(e), jobsCard(d, e), costCard(d), auditCard(d));
     every(10000, async () => {
       if (!location.hash.includes(`ep=${id}`)) return;
-      const f = await api(`/api/serverless/${encodeURIComponent(id)}`).catch(() => null);
+      const f = await api(`/api/v1/serverless/${encodeURIComponent(id)}`).catch(() => null);
       if (f && (f.endpoint.status !== e.status || JSON.stringify(f.health) !== JSON.stringify(d.health) || f.jobs.length !== d.jobs.length)) {
         if (!document.activeElement || !main.contains(document.activeElement) || document.activeElement.tagName === "BUTTON") route();
       }
@@ -154,7 +154,7 @@
   /** What the endpoint serves, derived from its preset or config (src/serverless/serves.ts); checked against a running worker on demand. */
   function servesCard(e, d) {
     const host = h("div", { class: "muted small" }, "loading…");
-    fvEditor().then((E) => host.replaceChildren(E.servesPanel(d.serving, { check: () => api(`/api/serverless/${e.id}/serves/check`, { method: "POST" }) }))).catch((err) => host.replaceChildren(h("p", { class: "small" }, err.message)));
+    fvEditor().then((E) => host.replaceChildren(E.servesPanel(d.serving, { check: () => api(`/api/v1/serverless/${e.id}/serves/check`, { method: "POST" }) }))).catch((err) => host.replaceChildren(h("p", { class: "small" }, err.message)));
     return card("Serves", h("p", { class: "small muted" }, "Derived from the preset or worker config before any worker boots. The check reads a running worker's /fv/v1/capabilities (it never starts one)."), host);
   }
 
@@ -172,12 +172,12 @@
     const send = async (body) => {
       out.replaceChildren(h("span", { class: "muted" }, "submitted… (a cold start can take minutes; Runpod holds /runsync ~90 s, then this polls)"));
       try {
-        let r = await api(`/api/serverless/${e.id}/invoke`, { method: "POST", body });
+        let r = await api(`/api/v1/serverless/${e.id}/invoke`, { method: "POST", body });
         show(r);
         if (r.done === false && r.job) {
           for (let i = 0; i < 400; i++) {
             await new Promise((res) => setTimeout(res, 3000));
-            const j = (await api(`/api/serverless/${e.id}/jobs/${r.job}`)).job;
+            const j = (await api(`/api/v1/serverless/${e.id}/jobs/${r.job}`)).job;
             show({ ...j, output: j.output, error: j.error });
             if (j.finished_at) break;
           }
@@ -223,8 +223,8 @@
       if (doneJob && doneFv) break;
       await new Promise((res) => setTimeout(res, 3000));
       if (outcomes.get(e.id) !== o) return;
-      if (!doneJob) o.status = (await api(`/api/serverless/${e.id}/jobs/${r.job}`).catch(() => null))?.job?.status || o.status;
-      if (!doneFv) o.fvStatus = (await api(`/api/serverless/${e.id}/jobs/${r.fv_cancel.job}`).catch(() => null))?.job?.status || o.fvStatus;
+      if (!doneJob) o.status = (await api(`/api/v1/serverless/${e.id}/jobs/${r.job}`).catch(() => null))?.job?.status || o.status;
+      if (!doneFv) o.fvStatus = (await api(`/api/v1/serverless/${e.id}/jobs/${r.fv_cancel.job}`).catch(() => null))?.job?.status || o.fvStatus;
       renderOutcome(e.id);
     }
   }
@@ -233,7 +233,7 @@
     if (!x) return;
     const { job: id, ...rest } = x;
     try {
-      const r = await act("cancel", () => api(`/api/serverless/${e.id}/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST", body: rest }));
+      const r = await act("cancel", () => api(`/api/v1/serverless/${e.id}/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST", body: rest }));
       followCancel(e, r);
       route(); // the queue, the invokes and the audit as they are now (the outcome stays)
     } catch (err) {
@@ -243,11 +243,11 @@
   }
   async function purge(e) {
     let q;
-    try { q = await api(`/api/serverless/${e.id}/queue`); } catch (err) { return toast(`queue: ${err.message}`); }
+    try { q = await api(`/api/v1/serverless/${e.id}/queue`); } catch (err) { return toast(`queue: ${err.message}`); }
     const x = await (await fvEditor()).askPurge(api, e.name, q.queued, q.in_progress);
     if (!x) return;
     try {
-      const r = await act("purge", () => api(`/api/serverless/${e.id}/purge`, { method: "POST", body: x }));
+      const r = await act("purge", () => api(`/api/v1/serverless/${e.id}/purge`, { method: "POST", body: x }));
       outcomes.set(e.id, { purge: r });
       renderOutcome(e.id);
       route();
@@ -274,7 +274,7 @@
     const load = async (w) => {
       out.replaceChildren(h("span", { class: "muted small" }, "loading…"));
       try {
-        const r = await api(`/api/serverless/${e.id}/logs${w ? `?worker=${encodeURIComponent(w)}` : ""}`);
+        const r = await api(`/api/v1/serverless/${e.id}/logs${w ? `?worker=${encodeURIComponent(w)}` : ""}`);
         out.replaceChildren(r.note ? h("p", { class: "small muted" }, r.note) : null, pre([...(r.system || []), ...(r.container || []), ...((r.stored || []).map((x) => `${new Date(x.ts).toISOString()} ${x.msg}`))].join("\n") || "(empty)"),
           h("p", { class: "small muted" }, `Also in the log store: source ${d.log_source}, pod ${r.worker || "-"}.`));
       } catch (err) { out.replaceChildren(h("span", { style: "color:var(--critical-text)" }, err.message)); }

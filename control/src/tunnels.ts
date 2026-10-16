@@ -104,7 +104,7 @@ export function tunnelHost(tpl: string, podName: string, suffix = randomToken(""
 /** What a pod must report as its URL (tests: FV_TUNNEL_URL_TEMPLATE routes it to the simulated edge). */
 export const tunnelUrl = (env: Env, host: string) => (env.FV_TUNNEL_URL_TEMPLATE || "https://{host}").replace("{host}", host);
 
-/** /api/providers and /api/tunnels: the mode and what is wrong with it (no secret). */
+/** /api/v1/providers and /api/v1/tunnels: the mode and what is wrong with it (no secret). */
 export function tunnelView(env: Env) {
   const s = tunnelSettings(env);
   return {

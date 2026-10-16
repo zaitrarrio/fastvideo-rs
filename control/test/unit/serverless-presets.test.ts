@@ -58,7 +58,7 @@ describe("presets: one catalog", () => {
     expect(() => normalizeEndpointSpec({ name: "r", preset: "h3-ref2v", config_toml: "[engine]\n" })).toThrow(/config_toml: set by preset/);
     expect(() => normalizeEndpointSpec({ name: "r", preset: "nope" })).toThrow(/preset/);
   });
-  it("defaults for a preset (GET /api/serverless/defaults?preset=)", () => {
+  it("defaults for a preset (GET /api/v1/serverless/defaults?preset=)", () => {
     expect(defaultEndpointSpec("x", "cpu", "cpu")).toMatchObject({ preset: "cpu", variant: "cpu", compute: "CPU", network_volume: null });
     expect(defaultEndpointSpec("x", "cpu", "h3-ref2v")).toMatchObject({ preset: "h3-ref2v", variant: "h3-max", compute: "GPU", network_volume: EU });
   });

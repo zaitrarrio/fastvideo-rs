@@ -1,0 +1,288 @@
+/opt/fv/bundle.tgz: OK
+downloading uv 0.13.1 x86_64-unknown-linux-gnu
+installing to /opt/uvbin
+  uv
+  uvx
+everything's installed!
+Downloading cpython-3.12.15-linux-x86_64-gnu (download) (32.7MiB)
+ Downloaded cpython-3.12.15-linux-x86_64-gnu (download)
+Installed Python 3.12.15 in 998ms
+ + cpython-3.12.15-linux-x86_64-gnu (python3.12)
+warning: `/root/.local/bin` is not on your PATH. To use installed Python executables, run `export PATH="/root/.local/bin:$PATH"` or `uv python update-shell`.
+2026-10-14T16:23:10Z start: mode volume, steps fetch prep check cells compare , arms v2-mxvae v2-bf16vae v2-nvvae v2-tae trim-nv trim-nvfp4attn trim-bf16, res 480 768; fv-gpucheck 0.1.1
+2026-10-14T16:23:10Z begin fetch
+2026-10-14T16:25:19Z end fetch rc=0 129s
+2026-10-14T16:25:19Z begin prep
+2026-10-14T16:25:20Z end prep rc=0 1s
+2026-10-14T16:25:20Z begin check-static
+2026-10-14T16:30:30Z end check-static rc=0 310s
+2026-10-14T16:30:30Z begin check-dynamic
+2026-10-14T16:31:49Z end check-dynamic rc=0 79s
+2026-10-14T16:31:49Z begin cell-v2-mxvae-480
+2026-10-14T16:48:39Z end cell-v2-mxvae-480 rc=0 1010s
+2026-10-14T16:48:39Z begin cell-v2-bf16vae-480
+2026-10-14T16:50:48Z end cell-v2-bf16vae-480 rc=0 129s
+2026-10-14T16:50:48Z begin cell-v2-nvvae-480
+2026-10-14T16:52:23Z end cell-v2-nvvae-480 rc=0 95s
+2026-10-14T16:52:23Z begin cell-v2-tae-480
+2026-10-14T16:53:46Z end cell-v2-tae-480 rc=0 83s
+2026-10-14T16:53:46Z begin cell-trim-nv-480
+2026-10-14T16:55:16Z end cell-trim-nv-480 rc=0 90s
+2026-10-14T16:55:16Z begin cell-trim-nvfp4attn-480
+2026-10-14T16:56:34Z end cell-trim-nvfp4attn-480 rc=0 78s
+2026-10-14T16:56:34Z begin cell-trim-bf16-480
+2026-10-14T16:58:38Z end cell-trim-bf16-480 rc=0 124s
+2026-10-14T16:58:38Z begin cell-v2-mxvae-768
+2026-10-14T17:02:56Z end cell-v2-mxvae-768 rc=0 258s
+2026-10-14T17:02:56Z begin cell-v2-bf16vae-768
+2026-10-14T17:07:24Z end cell-v2-bf16vae-768 rc=0 268s
+2026-10-14T17:07:24Z begin cell-v2-nvvae-768
+2026-10-14T17:11:12Z end cell-v2-nvvae-768 rc=0 228s
+2026-10-14T17:11:12Z begin cell-v2-tae-768
+2026-10-14T17:14:41Z end cell-v2-tae-768 rc=0 209s
+2026-10-14T17:14:41Z begin cell-trim-nv-768
+2026-10-14T17:18:36Z end cell-trim-nv-768 rc=0 235s
+2026-10-14T17:18:36Z begin cell-trim-nvfp4attn-768
+2026-10-14T17:21:43Z end cell-trim-nvfp4attn-768 rc=0 187s
+2026-10-14T17:21:43Z begin cell-trim-bf16-768
+2026-10-14T17:27:10Z end cell-trim-bf16-768 rc=0 327s
+2026-10-14T17:27:10Z begin compare-v2-mxvae-480--v2-tae-480-talking-head
+2026-10-14T17:27:13Z end compare-v2-mxvae-480--v2-tae-480-talking-head rc=0 3s
+2026-10-14T17:27:13Z begin compare-v2-mxvae-480--v2-tae-480-spark-mountain-lake
+2026-10-14T17:27:16Z end compare-v2-mxvae-480--v2-tae-480-spark-mountain-lake rc=0 3s
+2026-10-14T17:27:16Z begin compare-v2-mxvae-480--v2-tae-480-ltx-frogyoga
+2026-10-14T17:27:19Z end compare-v2-mxvae-480--v2-tae-480-ltx-frogyoga rc=0 3s
+2026-10-14T17:27:19Z begin compare-v2-mxvae-480--v2-tae-480-ltx-newsbroadcast
+2026-10-14T17:27:22Z end compare-v2-mxvae-480--v2-tae-480-ltx-newsbroadcast rc=0 3s
+2026-10-14T17:27:22Z begin compare-v2-mxvae-480--v2-tae-480-h3-demo
+2026-10-14T17:27:24Z end compare-v2-mxvae-480--v2-tae-480-h3-demo rc=0 2s
+2026-10-14T17:27:24Z begin gate-v2-mxvae-480--v2-tae-480
+2026-10-14T17:27:24Z end gate-v2-mxvae-480--v2-tae-480 rc=1 0s
+2026-10-14T17:27:24Z begin compare-v2-bf16vae-480--v2-tae-480-talking-head
+2026-10-14T17:27:27Z end compare-v2-bf16vae-480--v2-tae-480-talking-head rc=0 3s
+2026-10-14T17:27:27Z begin compare-v2-bf16vae-480--v2-tae-480-spark-mountain-lake
+2026-10-14T17:27:30Z end compare-v2-bf16vae-480--v2-tae-480-spark-mountain-lake rc=0 3s
+2026-10-14T17:27:30Z begin compare-v2-bf16vae-480--v2-tae-480-ltx-frogyoga
+2026-10-14T17:27:33Z end compare-v2-bf16vae-480--v2-tae-480-ltx-frogyoga rc=0 3s
+2026-10-14T17:27:33Z begin compare-v2-bf16vae-480--v2-tae-480-ltx-newsbroadcast
+2026-10-14T17:27:35Z end compare-v2-bf16vae-480--v2-tae-480-ltx-newsbroadcast rc=0 2s
+2026-10-14T17:27:35Z begin compare-v2-bf16vae-480--v2-tae-480-h3-demo
+2026-10-14T17:27:38Z end compare-v2-bf16vae-480--v2-tae-480-h3-demo rc=0 3s
+2026-10-14T17:27:38Z begin gate-v2-bf16vae-480--v2-tae-480
+2026-10-14T17:27:38Z end gate-v2-bf16vae-480--v2-tae-480 rc=1 0s
+2026-10-14T17:27:38Z begin compare-v2-bf16vae-480--v2-mxvae-480-talking-head
+2026-10-14T17:27:41Z end compare-v2-bf16vae-480--v2-mxvae-480-talking-head rc=0 3s
+2026-10-14T17:27:41Z begin compare-v2-bf16vae-480--v2-mxvae-480-spark-mountain-lake
+2026-10-14T17:27:43Z end compare-v2-bf16vae-480--v2-mxvae-480-spark-mountain-lake rc=0 2s
+2026-10-14T17:27:43Z begin compare-v2-bf16vae-480--v2-mxvae-480-ltx-frogyoga
+2026-10-14T17:27:46Z end compare-v2-bf16vae-480--v2-mxvae-480-ltx-frogyoga rc=0 3s
+2026-10-14T17:27:46Z begin compare-v2-bf16vae-480--v2-mxvae-480-ltx-newsbroadcast
+2026-10-14T17:27:48Z end compare-v2-bf16vae-480--v2-mxvae-480-ltx-newsbroadcast rc=0 2s
+2026-10-14T17:27:48Z begin compare-v2-bf16vae-480--v2-mxvae-480-h3-demo
+2026-10-14T17:27:51Z end compare-v2-bf16vae-480--v2-mxvae-480-h3-demo rc=0 3s
+2026-10-14T17:27:51Z begin gate-v2-bf16vae-480--v2-mxvae-480
+2026-10-14T17:27:51Z end gate-v2-bf16vae-480--v2-mxvae-480 rc=1 0s
+2026-10-14T17:27:51Z begin compare-v2-bf16vae-480--v2-nvvae-480-talking-head
+2026-10-14T17:27:54Z end compare-v2-bf16vae-480--v2-nvvae-480-talking-head rc=0 3s
+2026-10-14T17:27:54Z begin compare-v2-bf16vae-480--v2-nvvae-480-spark-mountain-lake
+2026-10-14T17:27:56Z end compare-v2-bf16vae-480--v2-nvvae-480-spark-mountain-lake rc=0 2s
+2026-10-14T17:27:56Z begin compare-v2-bf16vae-480--v2-nvvae-480-ltx-frogyoga
+2026-10-14T17:27:59Z end compare-v2-bf16vae-480--v2-nvvae-480-ltx-frogyoga rc=0 3s
+2026-10-14T17:27:59Z begin compare-v2-bf16vae-480--v2-nvvae-480-ltx-newsbroadcast
+2026-10-14T17:28:02Z end compare-v2-bf16vae-480--v2-nvvae-480-ltx-newsbroadcast rc=0 3s
+2026-10-14T17:28:02Z begin compare-v2-bf16vae-480--v2-nvvae-480-h3-demo
+2026-10-14T17:28:04Z end compare-v2-bf16vae-480--v2-nvvae-480-h3-demo rc=0 2s
+2026-10-14T17:28:04Z begin gate-v2-bf16vae-480--v2-nvvae-480
+2026-10-14T17:28:04Z end gate-v2-bf16vae-480--v2-nvvae-480 rc=1 0s
+2026-10-14T17:28:04Z begin compare-v2-mxvae-480--v2-nvvae-480-talking-head
+2026-10-14T17:28:07Z end compare-v2-mxvae-480--v2-nvvae-480-talking-head rc=0 3s
+2026-10-14T17:28:07Z begin compare-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake
+2026-10-14T17:28:10Z end compare-v2-mxvae-480--v2-nvvae-480-spark-mountain-lake rc=0 3s
+2026-10-14T17:28:10Z begin compare-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga
+2026-10-14T17:28:13Z end compare-v2-mxvae-480--v2-nvvae-480-ltx-frogyoga rc=0 3s
+2026-10-14T17:28:13Z begin compare-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast
+2026-10-14T17:28:15Z end compare-v2-mxvae-480--v2-nvvae-480-ltx-newsbroadcast rc=0 2s
+2026-10-14T17:28:15Z begin compare-v2-mxvae-480--v2-nvvae-480-h3-demo
+2026-10-14T17:28:18Z end compare-v2-mxvae-480--v2-nvvae-480-h3-demo rc=0 3s
+2026-10-14T17:28:18Z begin gate-v2-mxvae-480--v2-nvvae-480
+2026-10-14T17:28:18Z end gate-v2-mxvae-480--v2-nvvae-480 rc=1 0s
+2026-10-14T17:28:18Z begin compare-trim-bf16-480--trim-nv-480-talking-head
+2026-10-14T17:28:21Z end compare-trim-bf16-480--trim-nv-480-talking-head rc=0 3s
+2026-10-14T17:28:21Z begin compare-trim-bf16-480--trim-nv-480-spark-mountain-lake
+2026-10-14T17:28:23Z end compare-trim-bf16-480--trim-nv-480-spark-mountain-lake rc=0 2s
+2026-10-14T17:28:23Z begin compare-trim-bf16-480--trim-nv-480-ltx-frogyoga
+2026-10-14T17:28:26Z end compare-trim-bf16-480--trim-nv-480-ltx-frogyoga rc=0 3s
+2026-10-14T17:28:26Z begin compare-trim-bf16-480--trim-nv-480-ltx-newsbroadcast
+2026-10-14T17:28:29Z end compare-trim-bf16-480--trim-nv-480-ltx-newsbroadcast rc=0 3s
+2026-10-14T17:28:29Z begin compare-trim-bf16-480--trim-nv-480-h3-demo
+2026-10-14T17:28:32Z end compare-trim-bf16-480--trim-nv-480-h3-demo rc=0 3s
+2026-10-14T17:28:32Z begin gate-trim-bf16-480--trim-nv-480
+2026-10-14T17:28:32Z end gate-trim-bf16-480--trim-nv-480 rc=1 0s
+2026-10-14T17:28:32Z begin compare-v2-mxvae-480--trim-nv-480-talking-head
+2026-10-14T17:28:34Z end compare-v2-mxvae-480--trim-nv-480-talking-head rc=0 2s
+2026-10-14T17:28:34Z begin compare-v2-mxvae-480--trim-nv-480-spark-mountain-lake
+2026-10-14T17:28:37Z end compare-v2-mxvae-480--trim-nv-480-spark-mountain-lake rc=0 3s
+2026-10-14T17:28:37Z begin compare-v2-mxvae-480--trim-nv-480-ltx-frogyoga
+2026-10-14T17:28:40Z end compare-v2-mxvae-480--trim-nv-480-ltx-frogyoga rc=0 3s
+2026-10-14T17:28:40Z begin compare-v2-mxvae-480--trim-nv-480-ltx-newsbroadcast
+2026-10-14T17:28:43Z end compare-v2-mxvae-480--trim-nv-480-ltx-newsbroadcast rc=0 3s
+2026-10-14T17:28:43Z begin compare-v2-mxvae-480--trim-nv-480-h3-demo
+2026-10-14T17:28:46Z end compare-v2-mxvae-480--trim-nv-480-h3-demo rc=0 3s
+2026-10-14T17:28:46Z begin gate-v2-mxvae-480--trim-nv-480
+2026-10-14T17:28:46Z end gate-v2-mxvae-480--trim-nv-480 rc=1 0s
+2026-10-14T17:28:46Z begin compare-trim-bf16-480--trim-nvfp4attn-480-talking-head
+2026-10-14T17:28:48Z end compare-trim-bf16-480--trim-nvfp4attn-480-talking-head rc=0 2s
+2026-10-14T17:28:48Z begin compare-trim-bf16-480--trim-nvfp4attn-480-spark-mountain-lake
+2026-10-14T17:28:51Z end compare-trim-bf16-480--trim-nvfp4attn-480-spark-mountain-lake rc=0 3s
+2026-10-14T17:28:51Z begin compare-trim-bf16-480--trim-nvfp4attn-480-ltx-frogyoga
+2026-10-14T17:28:54Z end compare-trim-bf16-480--trim-nvfp4attn-480-ltx-frogyoga rc=0 3s
+2026-10-14T17:28:54Z begin compare-trim-bf16-480--trim-nvfp4attn-480-ltx-newsbroadcast
+2026-10-14T17:28:57Z end compare-trim-bf16-480--trim-nvfp4attn-480-ltx-newsbroadcast rc=0 3s
+2026-10-14T17:28:57Z begin compare-trim-bf16-480--trim-nvfp4attn-480-h3-demo
+2026-10-14T17:28:59Z end compare-trim-bf16-480--trim-nvfp4attn-480-h3-demo rc=0 2s
+2026-10-14T17:28:59Z begin gate-trim-bf16-480--trim-nvfp4attn-480
+2026-10-14T17:28:59Z end gate-trim-bf16-480--trim-nvfp4attn-480 rc=1 0s
+2026-10-14T17:28:59Z begin compare-v2-mxvae-480--trim-nvfp4attn-480-talking-head
+2026-10-14T17:29:02Z end compare-v2-mxvae-480--trim-nvfp4attn-480-talking-head rc=0 3s
+2026-10-14T17:29:02Z begin compare-v2-mxvae-480--trim-nvfp4attn-480-spark-mountain-lake
+2026-10-14T17:29:05Z end compare-v2-mxvae-480--trim-nvfp4attn-480-spark-mountain-lake rc=0 3s
+2026-10-14T17:29:05Z begin compare-v2-mxvae-480--trim-nvfp4attn-480-ltx-frogyoga
+2026-10-14T17:29:08Z end compare-v2-mxvae-480--trim-nvfp4attn-480-ltx-frogyoga rc=0 3s
+2026-10-14T17:29:08Z begin compare-v2-mxvae-480--trim-nvfp4attn-480-ltx-newsbroadcast
+2026-10-14T17:29:11Z end compare-v2-mxvae-480--trim-nvfp4attn-480-ltx-newsbroadcast rc=0 3s
+2026-10-14T17:29:11Z begin compare-v2-mxvae-480--trim-nvfp4attn-480-h3-demo
+2026-10-14T17:29:14Z end compare-v2-mxvae-480--trim-nvfp4attn-480-h3-demo rc=0 3s
+2026-10-14T17:29:14Z begin gate-v2-mxvae-480--trim-nvfp4attn-480
+2026-10-14T17:29:14Z end gate-v2-mxvae-480--trim-nvfp4attn-480 rc=1 0s
+2026-10-14T17:29:14Z begin compare-trim-nv-480--trim-nvfp4attn-480-talking-head
+2026-10-14T17:29:17Z end compare-trim-nv-480--trim-nvfp4attn-480-talking-head rc=0 3s
+2026-10-14T17:29:17Z begin compare-trim-nv-480--trim-nvfp4attn-480-spark-mountain-lake
+2026-10-14T17:29:20Z end compare-trim-nv-480--trim-nvfp4attn-480-spark-mountain-lake rc=0 3s
+2026-10-14T17:29:20Z begin compare-trim-nv-480--trim-nvfp4attn-480-ltx-frogyoga
+2026-10-14T17:29:22Z end compare-trim-nv-480--trim-nvfp4attn-480-ltx-frogyoga rc=0 2s
+2026-10-14T17:29:22Z begin compare-trim-nv-480--trim-nvfp4attn-480-ltx-newsbroadcast
+2026-10-14T17:29:25Z end compare-trim-nv-480--trim-nvfp4attn-480-ltx-newsbroadcast rc=0 3s
+2026-10-14T17:29:25Z begin compare-trim-nv-480--trim-nvfp4attn-480-h3-demo
+2026-10-14T17:29:28Z end compare-trim-nv-480--trim-nvfp4attn-480-h3-demo rc=0 3s
+2026-10-14T17:29:28Z begin gate-trim-nv-480--trim-nvfp4attn-480
+2026-10-14T17:29:28Z end gate-trim-nv-480--trim-nvfp4attn-480 rc=1 0s
+2026-10-14T17:29:28Z begin compare-v2-mxvae-768--v2-tae-768-talking-head
+2026-10-14T17:29:33Z end compare-v2-mxvae-768--v2-tae-768-talking-head rc=0 5s
+2026-10-14T17:29:33Z begin compare-v2-mxvae-768--v2-tae-768-spark-mountain-lake
+2026-10-14T17:29:38Z end compare-v2-mxvae-768--v2-tae-768-spark-mountain-lake rc=0 5s
+2026-10-14T17:29:38Z begin compare-v2-mxvae-768--v2-tae-768-ltx-frogyoga
+2026-10-14T17:29:43Z end compare-v2-mxvae-768--v2-tae-768-ltx-frogyoga rc=0 5s
+2026-10-14T17:29:43Z begin compare-v2-mxvae-768--v2-tae-768-ltx-newsbroadcast
+2026-10-14T17:29:47Z end compare-v2-mxvae-768--v2-tae-768-ltx-newsbroadcast rc=0 4s
+2026-10-14T17:29:47Z begin compare-v2-mxvae-768--v2-tae-768-h3-demo
+2026-10-14T17:29:52Z end compare-v2-mxvae-768--v2-tae-768-h3-demo rc=0 5s
+2026-10-14T17:29:52Z begin gate-v2-mxvae-768--v2-tae-768
+2026-10-14T17:29:52Z end gate-v2-mxvae-768--v2-tae-768 rc=1 0s
+2026-10-14T17:29:52Z begin compare-v2-bf16vae-768--v2-tae-768-talking-head
+2026-10-14T17:29:56Z end compare-v2-bf16vae-768--v2-tae-768-talking-head rc=0 4s
+2026-10-14T17:29:56Z begin compare-v2-bf16vae-768--v2-tae-768-spark-mountain-lake
+2026-10-14T17:30:01Z end compare-v2-bf16vae-768--v2-tae-768-spark-mountain-lake rc=0 5s
+2026-10-14T17:30:01Z begin compare-v2-bf16vae-768--v2-tae-768-ltx-frogyoga
+2026-10-14T17:30:06Z end compare-v2-bf16vae-768--v2-tae-768-ltx-frogyoga rc=0 5s
+2026-10-14T17:30:06Z begin compare-v2-bf16vae-768--v2-tae-768-ltx-newsbroadcast
+2026-10-14T17:30:10Z end compare-v2-bf16vae-768--v2-tae-768-ltx-newsbroadcast rc=0 4s
+2026-10-14T17:30:10Z begin compare-v2-bf16vae-768--v2-tae-768-h3-demo
+2026-10-14T17:30:15Z end compare-v2-bf16vae-768--v2-tae-768-h3-demo rc=0 5s
+2026-10-14T17:30:15Z begin gate-v2-bf16vae-768--v2-tae-768
+2026-10-14T17:30:15Z end gate-v2-bf16vae-768--v2-tae-768 rc=1 0s
+2026-10-14T17:30:15Z begin compare-v2-bf16vae-768--v2-mxvae-768-talking-head
+2026-10-14T17:30:20Z end compare-v2-bf16vae-768--v2-mxvae-768-talking-head rc=0 5s
+2026-10-14T17:30:20Z begin compare-v2-bf16vae-768--v2-mxvae-768-spark-mountain-lake
+2026-10-14T17:30:24Z end compare-v2-bf16vae-768--v2-mxvae-768-spark-mountain-lake rc=0 4s
+2026-10-14T17:30:24Z begin compare-v2-bf16vae-768--v2-mxvae-768-ltx-frogyoga
+2026-10-14T17:30:29Z end compare-v2-bf16vae-768--v2-mxvae-768-ltx-frogyoga rc=0 5s
+2026-10-14T17:30:29Z begin compare-v2-bf16vae-768--v2-mxvae-768-ltx-newsbroadcast
+2026-10-14T17:30:33Z end compare-v2-bf16vae-768--v2-mxvae-768-ltx-newsbroadcast rc=0 4s
+2026-10-14T17:30:33Z begin compare-v2-bf16vae-768--v2-mxvae-768-h3-demo
+2026-10-14T17:30:38Z end compare-v2-bf16vae-768--v2-mxvae-768-h3-demo rc=0 5s
+2026-10-14T17:30:38Z begin gate-v2-bf16vae-768--v2-mxvae-768
+2026-10-14T17:30:38Z end gate-v2-bf16vae-768--v2-mxvae-768 rc=1 0s
+2026-10-14T17:30:38Z begin compare-v2-bf16vae-768--v2-nvvae-768-talking-head
+2026-10-14T17:30:43Z end compare-v2-bf16vae-768--v2-nvvae-768-talking-head rc=0 5s
+2026-10-14T17:30:43Z begin compare-v2-bf16vae-768--v2-nvvae-768-spark-mountain-lake
+2026-10-14T17:30:47Z end compare-v2-bf16vae-768--v2-nvvae-768-spark-mountain-lake rc=0 4s
+2026-10-14T17:30:47Z begin compare-v2-bf16vae-768--v2-nvvae-768-ltx-frogyoga
+2026-10-14T17:30:52Z end compare-v2-bf16vae-768--v2-nvvae-768-ltx-frogyoga rc=0 5s
+2026-10-14T17:30:52Z begin compare-v2-bf16vae-768--v2-nvvae-768-ltx-newsbroadcast
+2026-10-14T17:30:57Z end compare-v2-bf16vae-768--v2-nvvae-768-ltx-newsbroadcast rc=0 5s
+2026-10-14T17:30:57Z begin compare-v2-bf16vae-768--v2-nvvae-768-h3-demo
+2026-10-14T17:31:01Z end compare-v2-bf16vae-768--v2-nvvae-768-h3-demo rc=0 4s
+2026-10-14T17:31:01Z begin gate-v2-bf16vae-768--v2-nvvae-768
+2026-10-14T17:31:01Z end gate-v2-bf16vae-768--v2-nvvae-768 rc=1 0s
+2026-10-14T17:31:01Z begin compare-v2-mxvae-768--v2-nvvae-768-talking-head
+2026-10-14T17:31:06Z end compare-v2-mxvae-768--v2-nvvae-768-talking-head rc=0 5s
+2026-10-14T17:31:06Z begin compare-v2-mxvae-768--v2-nvvae-768-spark-mountain-lake
+2026-10-14T17:31:11Z end compare-v2-mxvae-768--v2-nvvae-768-spark-mountain-lake rc=0 5s
+2026-10-14T17:31:11Z begin compare-v2-mxvae-768--v2-nvvae-768-ltx-frogyoga
+2026-10-14T17:31:15Z end compare-v2-mxvae-768--v2-nvvae-768-ltx-frogyoga rc=0 4s
+2026-10-14T17:31:15Z begin compare-v2-mxvae-768--v2-nvvae-768-ltx-newsbroadcast
+2026-10-14T17:31:20Z end compare-v2-mxvae-768--v2-nvvae-768-ltx-newsbroadcast rc=0 5s
+2026-10-14T17:31:20Z begin compare-v2-mxvae-768--v2-nvvae-768-h3-demo
+2026-10-14T17:31:25Z end compare-v2-mxvae-768--v2-nvvae-768-h3-demo rc=0 5s
+2026-10-14T17:31:25Z begin gate-v2-mxvae-768--v2-nvvae-768
+2026-10-14T17:31:25Z end gate-v2-mxvae-768--v2-nvvae-768 rc=1 0s
+2026-10-14T17:31:25Z begin compare-trim-bf16-768--trim-nv-768-talking-head
+2026-10-14T17:31:29Z end compare-trim-bf16-768--trim-nv-768-talking-head rc=0 4s
+2026-10-14T17:31:29Z begin compare-trim-bf16-768--trim-nv-768-spark-mountain-lake
+2026-10-14T17:31:34Z end compare-trim-bf16-768--trim-nv-768-spark-mountain-lake rc=0 5s
+2026-10-14T17:31:34Z begin compare-trim-bf16-768--trim-nv-768-ltx-frogyoga
+2026-10-14T17:31:38Z end compare-trim-bf16-768--trim-nv-768-ltx-frogyoga rc=0 4s
+2026-10-14T17:31:38Z begin compare-trim-bf16-768--trim-nv-768-ltx-newsbroadcast
+2026-10-14T17:31:43Z end compare-trim-bf16-768--trim-nv-768-ltx-newsbroadcast rc=0 5s
+2026-10-14T17:31:43Z begin compare-trim-bf16-768--trim-nv-768-h3-demo
+2026-10-14T17:31:48Z end compare-trim-bf16-768--trim-nv-768-h3-demo rc=0 5s
+2026-10-14T17:31:48Z begin gate-trim-bf16-768--trim-nv-768
+2026-10-14T17:31:48Z end gate-trim-bf16-768--trim-nv-768 rc=1 0s
+2026-10-14T17:31:48Z begin compare-v2-mxvae-768--trim-nv-768-talking-head
+2026-10-14T17:31:53Z end compare-v2-mxvae-768--trim-nv-768-talking-head rc=0 5s
+2026-10-14T17:31:53Z begin compare-v2-mxvae-768--trim-nv-768-spark-mountain-lake
+2026-10-14T17:31:57Z end compare-v2-mxvae-768--trim-nv-768-spark-mountain-lake rc=0 4s
+2026-10-14T17:31:57Z begin compare-v2-mxvae-768--trim-nv-768-ltx-frogyoga
+2026-10-14T17:32:02Z end compare-v2-mxvae-768--trim-nv-768-ltx-frogyoga rc=0 5s
+2026-10-14T17:32:02Z begin compare-v2-mxvae-768--trim-nv-768-ltx-newsbroadcast
+2026-10-14T17:32:06Z end compare-v2-mxvae-768--trim-nv-768-ltx-newsbroadcast rc=0 4s
+2026-10-14T17:32:06Z begin compare-v2-mxvae-768--trim-nv-768-h3-demo
+2026-10-14T17:32:11Z end compare-v2-mxvae-768--trim-nv-768-h3-demo rc=0 5s
+2026-10-14T17:32:11Z begin gate-v2-mxvae-768--trim-nv-768
+2026-10-14T17:32:11Z end gate-v2-mxvae-768--trim-nv-768 rc=1 0s
+2026-10-14T17:32:11Z begin compare-trim-bf16-768--trim-nvfp4attn-768-talking-head
+2026-10-14T17:32:15Z end compare-trim-bf16-768--trim-nvfp4attn-768-talking-head rc=0 4s
+2026-10-14T17:32:15Z begin compare-trim-bf16-768--trim-nvfp4attn-768-spark-mountain-lake
+2026-10-14T17:32:20Z end compare-trim-bf16-768--trim-nvfp4attn-768-spark-mountain-lake rc=0 5s
+2026-10-14T17:32:20Z begin compare-trim-bf16-768--trim-nvfp4attn-768-ltx-frogyoga
+2026-10-14T17:32:25Z end compare-trim-bf16-768--trim-nvfp4attn-768-ltx-frogyoga rc=0 5s
+2026-10-14T17:32:25Z begin compare-trim-bf16-768--trim-nvfp4attn-768-ltx-newsbroadcast
+2026-10-14T17:32:29Z end compare-trim-bf16-768--trim-nvfp4attn-768-ltx-newsbroadcast rc=0 4s
+2026-10-14T17:32:29Z begin compare-trim-bf16-768--trim-nvfp4attn-768-h3-demo
+2026-10-14T17:32:34Z end compare-trim-bf16-768--trim-nvfp4attn-768-h3-demo rc=0 5s
+2026-10-14T17:32:34Z begin gate-trim-bf16-768--trim-nvfp4attn-768
+2026-10-14T17:32:34Z end gate-trim-bf16-768--trim-nvfp4attn-768 rc=1 0s
+2026-10-14T17:32:34Z begin compare-v2-mxvae-768--trim-nvfp4attn-768-talking-head
+2026-10-14T17:32:38Z end compare-v2-mxvae-768--trim-nvfp4attn-768-talking-head rc=0 4s
+2026-10-14T17:32:38Z begin compare-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake
+2026-10-14T17:32:43Z end compare-v2-mxvae-768--trim-nvfp4attn-768-spark-mountain-lake rc=0 5s
+2026-10-14T17:32:43Z begin compare-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga
+2026-10-14T17:32:48Z end compare-v2-mxvae-768--trim-nvfp4attn-768-ltx-frogyoga rc=0 5s
+2026-10-14T17:32:48Z begin compare-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast
+2026-10-14T17:32:52Z end compare-v2-mxvae-768--trim-nvfp4attn-768-ltx-newsbroadcast rc=0 4s
+2026-10-14T17:32:52Z begin compare-v2-mxvae-768--trim-nvfp4attn-768-h3-demo
+2026-10-14T17:32:57Z end compare-v2-mxvae-768--trim-nvfp4attn-768-h3-demo rc=0 5s
+2026-10-14T17:32:57Z begin gate-v2-mxvae-768--trim-nvfp4attn-768
+2026-10-14T17:32:57Z end gate-v2-mxvae-768--trim-nvfp4attn-768 rc=1 0s
+2026-10-14T17:32:57Z begin compare-trim-nv-768--trim-nvfp4attn-768-talking-head
+2026-10-14T17:33:02Z end compare-trim-nv-768--trim-nvfp4attn-768-talking-head rc=0 5s
+2026-10-14T17:33:02Z begin compare-trim-nv-768--trim-nvfp4attn-768-spark-mountain-lake
+2026-10-14T17:33:06Z end compare-trim-nv-768--trim-nvfp4attn-768-spark-mountain-lake rc=0 4s
+2026-10-14T17:33:06Z begin compare-trim-nv-768--trim-nvfp4attn-768-ltx-frogyoga
+2026-10-14T17:33:11Z end compare-trim-nv-768--trim-nvfp4attn-768-ltx-frogyoga rc=0 5s
+2026-10-14T17:33:11Z begin compare-trim-nv-768--trim-nvfp4attn-768-ltx-newsbroadcast
+2026-10-14T17:33:16Z end compare-trim-nv-768--trim-nvfp4attn-768-ltx-newsbroadcast rc=0 5s
+2026-10-14T17:33:16Z begin compare-trim-nv-768--trim-nvfp4attn-768-h3-demo
+2026-10-14T17:33:20Z end compare-trim-nv-768--trim-nvfp4attn-768-h3-demo rc=0 4s
+2026-10-14T17:33:20Z begin gate-trim-nv-768--trim-nvfp4attn-768
+2026-10-14T17:33:20Z end gate-trim-nv-768--trim-nvfp4attn-768 rc=1 0s

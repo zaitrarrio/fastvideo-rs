@@ -74,6 +74,47 @@ describe("preset trees: each preset lists every tree its config reads", () => {
   });
 });
 
+describe("the H3 NVFP4 tier, its fast previews and the fastest Trim (owner decisions 2026-10-14)", () => {
+  const caps = rust("crates/fastvideo-engine-service/src/cuda/caps.rs");
+  const cases: [string, string, string, string[]][] = [
+    // preset, model recipe in its config, catalog id, the trees beyond h3-base's
+    ["fasth3-v2-nvfp4", "h3-v2-nvfp4", "fasth3-v2-nvfp4", ["fasth3-v2-nvfp4"]],
+    ["fasth3-4step-nvfp4", "h3-turbo-nvfp4", "fasth3-4step-vsa-nvfp4", ["fasth3-4step-vsa-nvfp4"]],
+    ["fasth3-v2-nvfp4-preview", "h3-v2-nvfp4-preview", "fasth3-v2-nvfp4-taeh3", ["fasth3-v2-nvfp4"]],
+    ["fasth3-4step-nvfp4-preview", "h3-turbo-nvfp4-preview", "fasth3-4step-vsa-nvfp4-taeh3", ["fasth3-4step-vsa-nvfp4"]],
+    ["h3-turbo-preview", "h3-turbo-preview", "fasth3-4step-vsa-taeh3", [FASTH3_LORA]],
+    ["fasth3-trim-nvfp4-fast", "h3-trim-nvfp4-fast", "fasth3-trim-nvfp4-fast", ["fasth3-trim-8step", "fasth3-trim-8step-nvfp4"]],
+  ];
+  for (const [id, recipe, catalog, trees] of cases) {
+    it(id, () => {
+      const p = POOL_PRESETS.find((x) => x.id === id)!;
+      expect(p, id).toBeTruthy();
+      const cfg = readToml(configOf(p));
+      const models = cfg.models as Record<string, unknown>[];
+      expect(models.map((m) => m.recipe)).toEqual([recipe]);
+      expect(p.pool.models.map((m) => m.recipe)).toEqual([recipe]);
+      expect(RECIPE_TREES[recipe]!.catalog).toBe(catalog);
+      expect(caps, `${catalog} is in the fv-serve catalog`).toContain(`"${catalog}"`);
+      expect([...p.weights].sort()).toEqual(["h3-base", ...trees].sort());
+      // The NVFP4 / Trim release trees are in R2 only: those presets default to weights_source r2.
+      const r2Only = trees.some((t) => t.startsWith("fasth3-"));
+      expect(weightsSource({ ...p.pool }), id).toBe(r2Only ? "r2" : "volume");
+    });
+  }
+  it("the preview and fastest choices are never a default: the standard H3 pools are unchanged", () => {
+    const turbo = POOL_PRESETS.find((x) => x.id === "h3-turbo")!;
+    expect(turbo.pool.models.map((m) => m.recipe)).toEqual(["h3-turbo"]);
+    for (const id of ["fasth3-v2-nvfp4-preview", "fasth3-4step-nvfp4-preview", "h3-turbo-preview", "fasth3-trim-nvfp4-fast"])
+      expect(POOL_PRESETS.find((x) => x.id === id)!.description).toMatch(/never a default|opt-in/i);
+    expect(POOL_PRESETS.find((x) => x.id === "fasth3-trim-nvfp4-fast")!.description).toMatch(/DIFFERENT MODEL.*NOT gate-equivalent/);
+  });
+  it("the fastest Trim turns its FP4 attention on by recipe, not by a process-wide variable", () => {
+    const p = POOL_PRESETS.find((x) => x.id === "fasth3-trim-nvfp4-fast")!;
+    expect(configOf(p)).not.toMatch(/^[^#\n]*FASTVIDEO_H3_VSA_FP4\s*=/m);
+    expect(rust("crates/fastvideo-models/src/h3/config.rs")).toContain('"trim-8step-nvfp4-fp4attn" | "fasth3-trim-nvfp4-fast" | "h3-trim-nvfp4-fast"');
+  });
+});
+
 describe("recipe-trees.ts against the Rust sources", () => {
   const lora = rust("crates/fastvideo-models/src/h3/lora.rs");
   const caps = rust("crates/fastvideo-engine-service/src/cuda/caps.rs");

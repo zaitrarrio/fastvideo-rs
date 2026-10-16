@@ -308,6 +308,9 @@ pub struct H3Vsa {
     current: std::sync::atomic::AtomicUsize,
     /// The fine stage on the FP8 kernel (`fp8_attention` with `vsa`).
     fp8: bool,
+    /// The fine stage on the sparse FP4 kernel ([`crate::wan::attn_fp4`],
+    /// `FASTVIDEO_H3_VSA_FP4=1` with a ModelOpt NVFP4 DiT).
+    fp4: bool,
     heads: usize,
     head_dim: usize,
     #[cfg(feature = "cuda")]
@@ -322,8 +325,28 @@ struct DevicePlan {
     /// `[n]`: huge on the prefix columns, zero on the video ones.
     prefix_bias: CudaTensor,
     /// For each head and prefix row, the row of the `[heads * n, dim]`
-    /// compression result that belongs to it.
-    prefix_branch_rows: Vec<usize>,
+    /// compression result that belongs to it, resident: the gather uploads
+    /// nothing per block (a pageable copy per block both paced the host and
+    /// kept the step out of a CUDA graph, docs/perf/h3-denoise-graphs.md).
+    prefix_branch_idx: cudarc::driver::CudaSlice<u32>,
+}
+
+#[cfg(feature = "cuda")]
+impl DevicePlan {
+    /// The prefix rows' compression terms, `[heads * prefix rows, dim]`:
+    /// rows of `coarse` (`[heads * n, dim]`), the same gather kernel as
+    /// `index_select_rows` with the index buffer already on the device.
+    fn prefix_branch(
+        &self,
+        coarse: &cudarc::driver::CudaSlice<f32>,
+        dim: usize,
+    ) -> Result<CudaTensor> {
+        let rows = self.prefix_branch_idx.len();
+        CudaTensor::from_device_slice(
+            crate::wan::ops::index_select_rows_idx_device(coarse, dim, &self.prefix_branch_idx)?,
+            vec![rows, dim],
+        )
+    }
 }
 
 /// Larger than any pooled score, small enough that `score + BIAS` is finite.
@@ -371,11 +394,11 @@ impl H3Vsa {
                 vec![n],
             )?;
             bias.pin_device()?;
-            let prefix_branch_rows = (0..heads)
+            let prefix_branch_rows: Vec<u32> = (0..heads)
                 .flat_map(|h| {
                     plan.prefix_row_tile
                         .iter()
-                        .map(move |&t| h * n + t as usize)
+                        .map(move |&t| (h * n + t as usize) as u32)
                 })
                 .collect();
             Some(DevicePlan {
@@ -385,7 +408,7 @@ impl H3Vsa {
                     TILE_ELEMS,
                 )?,
                 prefix_bias: bias,
-                prefix_branch_rows,
+                prefix_branch_idx: crate::wan::ops::upload_row_indices(&prefix_branch_rows)?,
             })
         } else {
             None
@@ -395,6 +418,7 @@ impl H3Vsa {
             schedule: None,
             current: std::sync::atomic::AtomicUsize::new(k_vid),
             fp8: false,
+            fp4: false,
             heads,
             head_dim,
             #[cfg(feature = "cuda")]
@@ -434,6 +458,19 @@ impl H3Vsa {
     pub fn with_fp8(mut self, on: bool) -> Self {
         self.fp8 = on;
         self
+    }
+
+    /// The fine stage on the sparse FP4 kernel ([`crate::wan::attn_fp4`]):
+    /// Q K^T and P V on block-scaled FP4 tensor cores, the selection, the
+    /// compression branch, the combine and the dense prefix rows unchanged.
+    pub fn with_fp4(mut self, on: bool) -> Self {
+        self.fp4 = on;
+        self
+    }
+
+    /// Whether the fine stage runs on the sparse FP4 kernel.
+    pub fn fp4(&self) -> bool {
+        self.fp4
     }
 
     /// Set the k_vid for block `layer` of forward `step` (a no-op without a
@@ -611,6 +648,13 @@ impl H3Vsa {
                 (0, n)
             };
             let sparse = phase("vsa_h3_3_mma", || {
+                if self.fp4 {
+                    use crate::wan::attn_fp4::{vsa_fine, Fp4In};
+                    return vsa_fine(
+                        &Fp4In::F32 { q: qd, k: kd, v: vd },
+                        &selected, &dp.plan, bh, seq, topk, scale, q_base, q_tiles,
+                    );
+                }
                 if self.fp8 && crate::wan::attn_fp8::supported() {
                     return crate::wan::attn_fp8::vsa_fine(
                         qd, kd, vd, &selected, &dp.plan, bh, seq, dim, topk, scale, q_base,
@@ -683,8 +727,7 @@ impl H3Vsa {
                 Some(scale),
             )?;
             if let Some(g) = &gate {
-                let branch = CudaTensor::from_device_slice(coarse, vec![bh * n, dim])?
-                    .index_select_rows(&dp.prefix_branch_rows)?;
+                let branch = dp.prefix_branch(&coarse, dim)?;
                 // bf16(bf16(dense) + bf16(bf16(coarse) * gate)), as the combine kernel.
                 let term = branch
                     .reshape(vec![1, bh, prefix, dim])?
@@ -730,6 +773,7 @@ impl H3Vsa {
         use crate::wan::{device, ops};
         let (bh, seq, dim, n) = (self.heads, self.plan.seq, self.head_dim, self.plan.num_tiles());
         if dim != attn_dc::DC_HEAD_DIM
+            || self.fp4
             || (self.fp8 && crate::wan::attn_fp8::supported())
             || !attn_dc::vsa_enabled()
         {
@@ -881,8 +925,7 @@ impl H3Vsa {
         phase("vsa_h3_4_prefix_dense", || {
             let mut dense = crate::wan::nn::scaled_dot_product_attention(&q.narrow(2, 0, prefix)?, k, v, Some(scale))?;
             if let Some(g) = gate {
-                let branch = CudaTensor::from_device_slice(coarse, vec![bh * n, dim])?
-                    .index_select_rows(&dp.prefix_branch_rows)?;
+                let branch = dp.prefix_branch(&coarse, dim)?;
                 let term = branch
                     .reshape(vec![1, bh, prefix, dim])?
                     .quantize_bf16()?
@@ -986,6 +1029,13 @@ impl H3Vsa {
             (0, n)
         };
         let sparse = phase("vsa_h3_3_mma", || {
+            if self.fp4 {
+                use crate::wan::attn_fp4::{vsa_fine, Fp4In};
+                return vsa_fine(
+                    &Fp4In::Bf16 { q: qd, k: kd, v: vd },
+                    &selected, &dp.plan, bh, seq, topk, scale, q_base, q_tiles,
+                );
+            }
             let (qt, kt, vt) = (
                 ops::vsa_tile_qkv_bf16_device(qd, &dp.plan, bh, seq, dim)?,
                 ops::vsa_tile_qkv_bf16_device(kd, &dp.plan, bh, seq, dim)?,
@@ -1005,8 +1055,7 @@ impl H3Vsa {
         phase("vsa_h3_4_prefix_dense", || {
             let mut dense = crate::wan::nn::scaled_dot_product_attention(&q.narrow(2, 0, prefix)?, k, v, Some(scale))?;
             if let Some(g) = gate {
-                let branch = CudaTensor::from_device_slice(coarse, vec![bh * n, dim])?
-                    .index_select_rows(&dp.prefix_branch_rows)?;
+                let branch = dp.prefix_branch(&coarse, dim)?;
                 let term = branch
                     .reshape(vec![1, bh, prefix, dim])?
                     .quantize_bf16()?
@@ -1024,6 +1073,59 @@ impl H3Vsa {
             let out = CudaTensor::from_device_slice(out, vec![1, bh, seq, dim])?;
             Ok(Some(CudaTensor::cat(&[&dense, &out.narrow(2, prefix, seq - prefix)?], 2)?))
         })
+    }
+}
+
+/// The H3 block's glue around VSA (`FASTVIDEO_H3_GLUE`, transformer.rs):
+/// which dtype its producers write, and the output before its rounding.
+#[cfg(feature = "cuda")]
+impl H3Vsa {
+    /// Whether bf16 device q/k/v/gate reach the bf16-in-place kernels
+    /// (`attend_device_dc`, else `attend_device_b16`) rather than being
+    /// widened to f32: the same conditions those two check. The FP8 fine
+    /// stage only exists on the f32 path.
+    pub fn takes_bf16(&self) -> bool {
+        if self.device.is_none() || (self.fp8 && crate::wan::attn_fp8::supported()) {
+            return false;
+        }
+        if crate::wan::attn_dc::vsa_enabled() && self.head_dim == crate::wan::attn_dc::DC_HEAD_DIM {
+            return true;
+        }
+        let sm = crate::wan::device::global_device().map_or(0, |d| d.sm_major);
+        let forced_gather = fastvideo_models::techniques::kernels::choice(
+            fastvideo_models::techniques::kernels::KernelOp::VsaAttention,
+        ) == "gather";
+        crate::wan::envflag::bool_flag("FASTVIDEO_VSA_BF16", true) && sm >= 8 && self.head_dim == 128 && !forced_gather
+    }
+
+    /// [`Self::attend`] on the device without rounding the result to the
+    /// inputs' dtype: the f32 output, which the caller rounds to bf16 itself
+    /// (a fused head merge reads it). `None` without a device plan.
+    pub fn attend_unrounded(
+        &self,
+        q: CudaTensor,
+        k: CudaTensor,
+        v: CudaTensor,
+        gate: Option<CudaTensor>,
+    ) -> Result<Option<CudaTensor>> {
+        let Some(device) = &self.device else {
+            return Ok(None);
+        };
+        let shape = vec![1, self.heads, self.plan.seq, self.head_dim];
+        if q.shape != shape || k.shape != shape || v.shape != shape || gate.as_ref().is_some_and(|g| g.shape != shape) {
+            return Err(msg(format!(
+                "vsa-h3: q {:?} k {:?} v {:?} for a plan of {shape:?}",
+                q.shape, k.shape, v.shape
+            )));
+        }
+        let (n, p, vt) = (
+            self.plan.num_tiles() as u64,
+            self.plan.prefix_tiles as u64,
+            self.plan.video_tiles as u64,
+        );
+        let kv = (self.k_vid() as u64).min(vt);
+        crate::wan::evalstats::vsa(self.heads, vt * (p + kv) + p * n, n * n, vt * kv, vt * vt);
+        self.attend_device(device, q, k, v, gate).map(Some)
     }
 }
 

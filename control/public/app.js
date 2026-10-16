@@ -60,7 +60,7 @@ async function api(path, opts = {}) {
   if (init.method !== "GET" && state.csrf) init.headers["x-csrf-token"] = state.csrf;
   const r = await fetch(path, init);
   const j = await r.json().catch(() => ({}));
-  if (r.status === 401 && !path.startsWith("/api/auth")) {
+  if (r.status === 401 && !path.startsWith("/api/v1/auth")) {
     renderLogin();
     throw new Error("login required");
   }
@@ -240,6 +240,14 @@ function card(title, ...kids) {
 // ---------------------------------------------------------------- routing
 const routes = [
   [/^#?\/?$/, pageDashboard],
+  [/^#\/fleet$/, pageFleet],
+  [/^#\/models$/, pageModels],
+  [/^#\/deploy$/, pageDeploy],
+  [/^#\/engine-jobs$/, pageEngineJobs],
+  [/^#\/benchmarks$/, pageBenchmarks],
+  [/^#\/compare$/, pageCompare],
+  [/^#\/quality$/, pageQuality],
+  [/^#\/key-requests$/, pageKeyRequests],
   [/^#\/clusters$/, pageClusters],
   [/^#\/clusters\/new$/, pageClusterConfig],
   [/^#\/cluster\/([^/]+)\/config$/, pageClusterConfig],
@@ -298,7 +306,7 @@ function renderLogin() {
         ev.preventDefault();
         err.textContent = "";
         try {
-          const r = await api("/api/auth/login", { method: "POST", body: { passphrase: inp.value } });
+          const r = await api("/api/v1/auth/login", { method: "POST", body: { passphrase: inp.value } });
           state.csrf = r.csrf;
           await boot();
         } catch (e) {
@@ -316,7 +324,7 @@ function renderLogin() {
   inp.focus();
 }
 async function boot() {
-  state.me = await api("/api/auth/me");
+  state.me = await api("/api/v1/auth/me");
   state.csrf = state.me.csrf || null;
   if (!state.me.authenticated) return renderLogin();
   $("#nav").hidden = false;
@@ -334,7 +342,7 @@ window.addEventListener("DOMContentLoaded", () => {
     route();
   });
   $("#logoutBtn").addEventListener("click", async () => {
-    await api("/api/auth/logout", { method: "POST" }).catch(() => {});
+    await api("/api/v1/auth/logout", { method: "POST" }).catch(() => {});
     state.me = { authenticated: false, mode: "passphrase" };
     renderLogin();
   });
@@ -375,7 +383,7 @@ function every(ms, fn) {
 // ---------------------------------------------------------------- dashboard
 async function pageDashboard(main) {
   const draw = async () => {
-    const [o, series, bal, costs, bp, bpm] = await Promise.all([api("/api/overview"), api("/api/metrics/series?hours=6"), api("/api/balance?hours=24"), api("/api/costs?days=7"), api("/api/buildpod").catch((e) => ({ error: e.message, pods: [] })), api("/api/build-pods").catch((e) => ({ error: e.message, pods: [] }))]);
+    const [o, series, bal, costs, bp, bpm] = await Promise.all([api("/api/v1/overview"), api("/api/v1/metrics/series?hours=6"), api("/api/v1/balance?hours=24"), api("/api/v1/costs?days=7"), api("/api/v1/buildpod").catch((e) => ({ error: e.message, pods: [] })), api("/api/v1/build-pods").catch((e) => ({ error: e.message, pods: [] }))]);
     const tiles = h(
       "div",
       { class: "tiles" },
@@ -388,7 +396,7 @@ async function pageDashboard(main) {
     );
     const resolve = async (a) => {
       if (!confirm(`Resolve "${a.message}"? It opens again at the next collector pass (each minute) if its condition still holds. (audited)`)) return;
-      await act("resolve", () => api(`/api/alerts/${a.id}/resolve`, { method: "POST" }));
+      await act("resolve", () => api(`/api/v1/alerts/${a.id}/resolve`, { method: "POST" }));
       draw().catch(() => {});
     };
     const alerts = card(
@@ -511,9 +519,9 @@ function buildPodsCard(bpm, redraw) {
       h(
         "div",
         { class: "row" },
-        running ? h("button", { onclick: async () => { if (confirm(`Stop ${p.name}? The container disk (target dirs) is lost; caches stay. (audited)`)) { await call("stop", `/api/build-pods/${p.id}/stop`, { method: "POST", body: {} }); after(); } } }, "Stop") : "",
-        p.state === "stopped" ? h("button", { onclick: async () => { await call("start", `/api/build-pods/${p.id}/start`, { method: "POST", body: {} }); after(); } }, "Start") : "",
-        p.state !== "deleted" ? h("button", { class: "danger", onclick: async () => { if (confirm(`Delete ${p.name}? (audited)`)) { await call("delete", `/api/build-pods/${p.id}`, { method: "DELETE" }); after(); } } }, "Delete") : "",
+        running ? h("button", { onclick: async () => { if (confirm(`Stop ${p.name}? The container disk (target dirs) is lost; caches stay. (audited)`)) { await call("stop", `/api/v1/build-pods/${p.id}/stop`, { method: "POST", body: {} }); after(); } } }, "Stop") : "",
+        p.state === "stopped" ? h("button", { onclick: async () => { await call("start", `/api/v1/build-pods/${p.id}/start`, { method: "POST", body: {} }); after(); } }, "Start") : "",
+        p.state !== "deleted" ? h("button", { class: "danger", onclick: async () => { if (confirm(`Delete ${p.name}? (audited)`)) { await call("delete", `/api/v1/build-pods/${p.id}`, { method: "DELETE" }); after(); } } }, "Delete") : "",
       ),
     );
   };
@@ -527,7 +535,7 @@ function buildPodsCard(bpm, redraw) {
         ? `Managed by fv-control: up to ${pol.max_pods} running, ≤ ${fmt$(pol.max_dph_per_pod)}/hr each, ${fmt$(bpm.spend_today || 0)} of ${fmt$(pol.daily_usd_max)} today; [${(pol.flavors || []).join(" ")}] × [${(pol.vcpus || []).join(" ")}] vCPU, regions ${(pol.regions || []).join(" ") || "any"}${pol.regions_only ? " only" : " first"}; GitHub runner ${pol.runner ? (bpm.secrets?.runner_pat ? "on" : "on, but no GITHUB_RUNNER_PAT") : "off"}${pol.wake_on_queue ? ", woken by queued jobs" : ""}; R2 cache ${bpm.secrets?.r2_cache ? "on" : "off"}.`
         : "Build pods are off (build_pods.enabled). Agents use scripts/dev/build-pod.sh up, which asks fv-control for a pod.",
     ),
-    h("div", { class: "row" }, h("button", { class: "primary", disabled: !pol.enabled, onclick: async () => { const r = await call("up", "/api/build-pods/up", { method: "POST", body: {} }); if (r) toast(`up: ${r.action} ${r.pod.name}`); after(); } }, "Up (reuse / start / create)")),
+    h("div", { class: "row" }, h("button", { class: "primary", disabled: !pol.enabled, onclick: async () => { const r = await call("up", "/api/v1/build-pods/up", { method: "POST", body: {} }); if (r) toast(`up: ${r.action} ${r.pod.name}`); after(); } }, "Up (reuse / start / create)")),
     bpm.error ? h("p", { class: "small" }, bpm.error) : live.length ? live.map(one) : h("p", { class: "muted small" }, "No managed build pod."),
     h("details", {}, h("summary", { class: "small" }, "Policy (build_pods)"), docPanel("build-pods", "default", { title: "build pods policy", onSaved: () => after() })),
   );
@@ -575,7 +583,7 @@ function tile(k, v, sub) {
   return h("div", { class: "tile" }, h("div", { class: "k" }, k), h("div", { class: "v" }, v), h("div", { class: "s" }, sub || ""));
 }
 async function podNameMap() {
-  const r = await api("/api/pods?all=1");
+  const r = await api("/api/v1/pods?all=1");
   return new Map(r.pods.map((p) => [p.pod_id, p]));
 }
 
@@ -606,8 +614,8 @@ function brevParkedCard(pk, redraw) {
             h(
               "span",
               { class: "row" },
-              p.state === "held" ? h("button", { onclick: async () => { await act("unpark", () => api(`/api/providers/brev/parked/${p.workspace_id}/unpark`, { method: "POST", body: {} })); redraw(); } }, "Unpark") : "",
-              h("button", { class: "danger", onclick: async () => { if (!confirm(`Delete the Brev VM ${p.name} and its weights (${trees(p)})? fv-control never does this on its own; the next launch downloads them again. (audited)`)) return; await act("delete", () => api(`/api/providers/brev/parked/${p.workspace_id}/delete`, { method: "POST", body: {} })); redraw(); } }, "Delete"),
+              p.state === "held" ? h("button", { onclick: async () => { await act("unpark", () => api(`/api/v1/providers/brev/parked/${p.workspace_id}/unpark`, { method: "POST", body: {} })); redraw(); } }, "Unpark") : "",
+              h("button", { class: "danger", onclick: async () => { if (!confirm(`Delete the Brev VM ${p.name} and its weights (${trees(p)})? fv-control never does this on its own; the next launch downloads them again. (audited)`)) return; await act("delete", () => api(`/api/v1/providers/brev/parked/${p.workspace_id}/delete`, { method: "POST", body: {} })); redraw(); } }, "Delete"),
             ),
         },
       ],
@@ -641,7 +649,7 @@ function tunnelsCard(tv) {
   );
 }
 async function pagePods(main) {
-  const [r, pk, tv] = await Promise.all([api("/api/pods"), api("/api/providers/brev/parked").catch(() => null), api("/api/tunnels").catch(() => null)]);
+  const [r, pk, tv] = await Promise.all([api("/api/v1/pods"), api("/api/v1/providers/brev/parked").catch(() => null), api("/api/v1/tunnels").catch(() => null)]);
   const t = Date.now();
   main.replaceChildren(
     h("h1", {}, "Pods"),
@@ -671,7 +679,7 @@ async function pagePods(main) {
   );
 }
 async function pagePod(main, id) {
-  const [r, series] = await Promise.all([api(`/api/pods/${id}`), api(`/api/metrics/series?hours=24&pod=${encodeURIComponent(id)}`)]);
+  const [r, series] = await Promise.all([api(`/api/v1/pods/${id}`), api(`/api/v1/metrics/series?hours=24&pod=${encodeURIComponent(id)}`)]);
   const p = r.pod;
   const pts = series.points;
   main.replaceChildren(
@@ -706,7 +714,7 @@ async function pagePod(main, id) {
 
 // ---------------------------------------------------------------- clusters
 async function pageClusters(main) {
-  const [r, tpl] = await Promise.all([api("/api/clusters"), api("/api/templates")]);
+  const [r, tpl] = await Promise.all([api("/api/v1/clusters"), api("/api/v1/templates")]);
   const tplList = tpl.templates || [{ id: "tiny-cpu", title: "1 fake-engine CPU worker" }, { id: "standard", title: "h3-turbo, h3-max, ltx, wan GPU pools" }];
   const tplSel = h("select", { "aria-label": "Template", style: "max-width:min(420px, 62vw)" }, [...tplList].sort((a, b) => (a.id === "tiny-cpu" ? -1 : b.id === "tiny-cpu" ? 1 : 0)).map((x) => h("option", { value: x.id }, `${x.id}: ${x.title}`)));
   main.replaceChildren(
@@ -731,7 +739,7 @@ async function pageClusters(main) {
                 { class: "row", style: "flex-wrap:nowrap" },
                 h("a", { class: "btn", href: `#/cluster/${c.id}/config` }, "Configure"),
                 h("a", { class: "btn", href: `#/clusters/new?clone=${c.id}` }, "Clone"),
-                c.status === "running" || c.status === "starting" ? "" : h("button", { class: "ghost danger", onclick: async () => { if (!confirm(`Delete the definition of ${c.name}? (audited)`)) return; await act("delete", () => api(`/api/clusters/${c.id}`, { method: "DELETE" })); route(); } }, "Delete"),
+                c.status === "running" || c.status === "starting" ? "" : h("button", { class: "ghost danger", onclick: async () => { if (!confirm(`Delete the definition of ${c.name}? (audited)`)) return; await act("delete", () => api(`/api/v1/clusters/${c.id}`, { method: "DELETE" })); route(); } }, "Delete"),
               ),
           },
         ],
@@ -754,12 +762,12 @@ async function pageCluster(main, id) {
   const gwKeysEl = h("div", { id: "gwKeys", style: "margin-top:8px" });
   const gwOutEl = h("pre", { id: "gwOut", class: "log", style: "margin-top:8px;max-height:300px" });
   const draw = async () => {
-    const r = await api(`/api/clusters/${id}`);
+    const r = await api(`/api/v1/clusters/${id}`);
     const c = r.cluster;
     const running = r.pods.length > 0;
     const op = r.op;
     const btn = (label, fn, cls) => h("button", { class: cls, disabled: !!op && label !== "Cancel operation", onclick: fn }, label);
-    const post = (path, body, label) => act(label, () => api(`/api/clusters/${c.id}/${path}`, { method: "POST", body: body || {} })).then(() => setTimeout(draw, 800));
+    const post = (path, body, label) => act(label, () => api(`/api/v1/clusters/${c.id}/${path}`, { method: "POST", body: body || {} })).then(() => setTimeout(draw, 800));
     const actions = h(
       "div",
       { class: "row" },
@@ -769,9 +777,9 @@ async function pageCluster(main, id) {
       running && btn("Extend…", async () => { const m = await (await fvEditor()).askExtend(api, `Extend ${c.name}`); if (m) post("extend", { minutes: m }, "extend"); }),
       running && btn("Roll to…", () => rollDialog(c, post)),
       running && btn("Restart…", () => restartDialog(c, r.pods, post)),
-      btn("Add pool…", async () => addPoolDialog(c, (await api("/api/templates")).pool_presets || [], () => route())),
+      btn("Add pool…", async () => addPoolDialog(c, (await api("/api/v1/templates")).pool_presets || [], () => route())),
       op && btn("Cancel operation", () => confirm("Cancel the running operation? Pods it created stay (the backstops hold them).") && post("cancel", {}, "cancel")),
-      !running && btn("Delete definition", async () => { if (confirm(`Delete the definition of ${c.name}?`)) { await act("delete", () => api(`/api/clusters/${c.id}`, { method: "DELETE" })); location.hash = "#/clusters"; } }, "danger"),
+      !running && btn("Delete definition", async () => { if (confirm(`Delete the definition of ${c.name}?`)) { await act("delete", () => api(`/api/v1/clusters/${c.id}`, { method: "DELETE" })); location.hash = "#/clusters"; } }, "danger"),
     );
     const live = new Map(r.live.map((p) => [p.pod_id, p]));
     const pools = card(
@@ -839,7 +847,7 @@ async function pageCluster(main, id) {
     const reach = !!(gw || (direct && wurls.length));
     const out = (t) => { $("#gwOut").textContent = t; };
     const showKeys = async () => {
-      const j = await act("keys", () => api(`/api/clusters/${c.id}/keys`));
+      const j = await act("keys", () => api(`/api/v1/clusters/${c.id}/keys`));
       const box = $("#gwKeys");
       box.replaceChildren(table(
         [
@@ -848,7 +856,7 @@ async function pageCluster(main, id) {
           { label: "prefix", get: (k) => k.prefix },
           { label: "created", get: (k) => k.created_at || "" },
           { label: "last used", get: (k) => k.last_used_at || "–" },
-          { label: "", get: (k) => (k.revoked ? badge("revoked", "critical") : h("button", { onclick: async () => { if (!confirm(`Revoke ${k.name} (${k.id})? (audited)`)) return; const r = await act("revoke", () => api(`/api/clusters/${c.id}/keys/${k.id}`, { method: "DELETE" })); out(`revoked ${k.id} on ${r.applied.join(", ")}${r.failed.length ? `; not reached: ${r.failed.map((f) => f.pod).join(", ")} (they read it from D1 within 30 s)` : ""}`); showKeys(); } }, "Revoke")) },
+          { label: "", get: (k) => (k.revoked ? badge("revoked", "critical") : h("button", { onclick: async () => { if (!confirm(`Revoke ${k.name} (${k.id})? (audited)`)) return; const r = await act("revoke", () => api(`/api/v1/clusters/${c.id}/keys/${k.id}`, { method: "DELETE" })); out(`revoked ${k.id} on ${r.applied.join(", ")}${r.failed.length ? `; not reached: ${r.failed.map((f) => f.pod).join(", ")} (they read it from D1 within 30 s)` : ""}`); showKeys(); } }, "Revoke")) },
         ],
         j.keys,
         "No minted keys.",
@@ -864,9 +872,9 @@ async function pageCluster(main, id) {
       reach && h(
         "div",
         { class: "row" },
-        h("button", { onclick: async () => { const j = await act("status", () => api(`/api/clusters/${c.id}/front`)); out(JSON.stringify(j.edge ? { status: j.status, workers: j.workers, families: j.families } : { workers: j.workers }, null, 2)); } }, edge ? "Families view" : "Workers view"),
-        h("button", { onclick: async () => { if (!confirm(`Show the ${edge ? "edge" : "cluster"}'s admin token? (audited)`)) return; const j = await act("admin token", () => api(`/api/clusters/${c.id}/admin-token`, { method: "POST" })); out(`admin token: ${j.admin_token}\nconsole: ${j.console}${j.direct ? `\nworkers:\n${j.workers.map((w) => `  ${w.pool} ${w.url}`).join("\n")}` : ""}`); } }, "Reveal admin token"),
-        h("button", { onclick: async () => { const n = await (await fvEditor()).askKeyName(api, `Mint a user API key for ${c.name}`); if (!n) return; const j = await act("mint", () => api(`/api/clusters/${c.id}/mint-key`, { method: "POST", body: { name: n } })); out(`API key (shown once): ${j.api_key}${j.propagation_s ? `\nworks on ${j.minted_on} now, on the other workers within ${j.propagation_s} s` : ""}`); } }, "Mint user API key"),
+        h("button", { onclick: async () => { const j = await act("status", () => api(`/api/v1/clusters/${c.id}/front`)); out(JSON.stringify(j.edge ? { status: j.status, workers: j.workers, families: j.families } : { workers: j.workers }, null, 2)); } }, edge ? "Families view" : "Workers view"),
+        h("button", { onclick: async () => { if (!confirm(`Show the ${edge ? "edge" : "cluster"}'s admin token? (audited)`)) return; const j = await act("admin token", () => api(`/api/v1/clusters/${c.id}/admin-token`, { method: "POST" })); out(`admin token: ${j.admin_token}\nconsole: ${j.console}${j.direct ? `\nworkers:\n${j.workers.map((w) => `  ${w.pool} ${w.url}`).join("\n")}` : ""}`); } }, "Reveal admin token"),
+        h("button", { onclick: async () => { const n = await (await fvEditor()).askKeyName(api, `Mint a user API key for ${c.name}`); if (!n) return; const j = await act("mint", () => api(`/api/v1/clusters/${c.id}/mint-key`, { method: "POST", body: { name: n } })); out(`API key (shown once): ${j.api_key}${j.propagation_s ? `\nworks on ${j.minted_on} now, on the other workers within ${j.propagation_s} s` : ""}`); } }, "Mint user API key"),
         h("button", { onclick: showKeys }, "Keys"),
       ),
       gwKeysEl,
@@ -900,7 +908,7 @@ async function pageCluster(main, id) {
 }
 async function showOp(id) {
   if (!id) return;
-  const j = await api(`/api/ops/${id}`);
+  const j = await api(`/api/v1/ops/${id}`);
   const el = $("#opLog");
   if (!el) return;
   el.replaceChildren(h("h3", {}, `${j.operation.kind} ${j.operation.id}`), h("div", { class: "log" }, j.operation.log.map((l) => h("div", {}, `${new Date(l.at).toISOString().slice(11, 19)}  ${l.msg}`))));
@@ -980,9 +988,9 @@ async function addPoolDialog(c, presets, redraw) {
     h("h2", {}, `Add a pool to ${c.name}`),
     h("p", { class: "muted small" }, "The pool is added to the spec with its preset's count; a running cluster creates its workers on Scale."),
     presetPicker(presets.filter((p) => !c.spec.pools.some((x) => x.id === p.pool.id)), async (pool) => {
-      const d = await api(`/api/docs/cluster-spec/${c.id}`);
+      const d = await api(`/api/v1/docs/cluster-spec/${c.id}`);
       const doc = { ...d.doc, pools: [...d.doc.pools, pool] };
-      await act("add pool", () => api(`/api/docs/cluster-spec/${c.id}`, { method: "PUT", body: { doc, version: d.version } }));
+      await act("add pool", () => api(`/api/v1/docs/cluster-spec/${c.id}`, { method: "PUT", body: { doc, version: d.version } }));
       dlg.close();
       redraw();
     }),
@@ -998,7 +1006,7 @@ async function startDialog(c, redraw) {
   dlg.append(h("h2", {}, `Start ${c.name}`), h("p", { class: "muted small" }, "Price check…"));
   dlg.showModal();
   try {
-    const p = await api(`/api/clusters/${c.id}/price`, { method: "POST", body: {} });
+    const p = await api(`/api/v1/clusters/${c.id}/price`, { method: "POST", body: {} });
     dlg.replaceChildren(
       h("h2", {}, `Start ${c.name}`),
       table([{ label: "pod", get: (x) => `${x.role} ${x.pool || ""}` }, { label: "what", get: (x) => x.what }, { label: "$/hr (est.)", get: (x) => fmt$(x.dph), num: true }], p.pods),
@@ -1007,7 +1015,7 @@ async function startDialog(c, redraw) {
       h(
         "div",
         { class: "row", style: "margin-top:10px" },
-        h("button", { class: "primary", disabled: !p.ok, onclick: async () => { await act("start", () => api(`/api/clusters/${c.id}/start`, { method: "POST", body: {} })); dlg.close(); redraw(); } }, "Start"),
+        h("button", { class: "primary", disabled: !p.ok, onclick: async () => { await act("start", () => api(`/api/v1/clusters/${c.id}/start`, { method: "POST", body: {} })); dlg.close(); redraw(); } }, "Start"),
         h("button", { onclick: () => dlg.close() }, "Cancel"),
       ),
     );
@@ -1020,7 +1028,7 @@ async function startDialog(c, redraw) {
 // ---------------------------------------------------------------- env
 async function pageEnv(main) {
   const q = new URLSearchParams(location.hash.split("?")[1] || "");
-  const clusters = (await api("/api/clusters")).clusters;
+  const clusters = (await api("/api/v1/clusters")).clusters;
   const cid = q.get("cluster") || clusters[0]?.id || "";
   const sel = h("select", { "aria-label": "Cluster", onchange: () => { location.hash = `#/env?cluster=${sel.value}`; } }, clusters.map((c) => h("option", { value: c.id, selected: c.id === cid }, c.name)));
   const parts = [
@@ -1030,7 +1038,7 @@ async function pageEnv(main) {
   ];
   let refreshEff = async () => {};
   if (cid) {
-    const eff = await api(`/api/clusters/${cid}/env`);
+    const eff = await api(`/api/v1/clusters/${cid}/env`);
     parts.push(h("div", { class: "row", style: "margin-bottom:12px" }, h("label", {}, "Cluster", sel)));
     parts.push(card("Cluster", docPanel("env", `cluster:${cid}`, { title: "env: cluster", cluster: cid, onSaved: () => refreshEff() })));
     const cl = clusters.find((x) => x.id === cid);
@@ -1041,7 +1049,7 @@ async function pageEnv(main) {
       parts.push(card("Pool (every worker of one pool)", h("div", { class: "row", style: "margin-bottom:8px" }, h("label", {}, "Pool", psel)), docPanel("env", `pool:${cid}:${pool}`, { title: `env: pool ${pool}`, cluster: cid, onSaved: () => refreshEff() })));
     }
     const effBox = h("div", {});
-    refreshEff = async () => effBox.replaceChildren(effView(await api(`/api/clusters/${cid}/env`), cid));
+    refreshEff = async () => effBox.replaceChildren(effView(await api(`/api/v1/clusters/${cid}/env`), cid));
     effBox.replaceChildren(effView(eff, cid));
     parts.push(card("Effective env per pod", effBox));
   } else parts.push(card("Clusters", h("p", { class: "muted small" }, "Define a cluster to set cluster and pod env.")));
@@ -1050,7 +1058,7 @@ async function pageEnv(main) {
 function effView(eff, cid) {
   const needs = eff.needs_restart;
   const head = needs.length
-    ? h("div", { class: "row", style: "margin-bottom:8px" }, badge(`${needs.length} pod(s) need a restart`, "warn"), h("button", { class: "primary", onclick: async () => { if (confirm(`Rolling restart of ${needs.join(", ")}? One pod at a time; each must come back before the next.`)) { await act("restart", () => api(`/api/clusters/${cid}/restart`, { method: "POST", body: {} })); location.hash = `#/cluster/${cid}`; } } }, "Apply with a rolling restart"))
+    ? h("div", { class: "row", style: "margin-bottom:8px" }, badge(`${needs.length} pod(s) need a restart`, "warn"), h("button", { class: "primary", onclick: async () => { if (confirm(`Rolling restart of ${needs.join(", ")}? One pod at a time; each must come back before the next.`)) { await act("restart", () => api(`/api/v1/clusters/${cid}/restart`, { method: "POST", body: {} })); location.hash = `#/cluster/${cid}`; } } }, "Apply with a rolling restart"))
     : h("p", { class: "small" }, badge("every pod has its env", "good"));
   if (!eff.pods.length) return h("div", {}, head, h("p", { class: "muted small" }, "No pods running; what a new pod would get:"), Object.entries(eff.preview).map(([k, env]) => h("details", {}, h("summary", {}, k), envTable(env))));
   return h(
@@ -1116,7 +1124,7 @@ async function pageLogs(main) {
 async function pageCosts(main) {
   const q = new URLSearchParams(location.hash.split("?")[1] || "");
   const days = Number(q.get("days") || 7);
-  const c = await api(`/api/costs?days=${days}`);
+  const c = await api(`/api/v1/costs?days=${days}`);
   const owners = c.by_owner.map((r) => r.owner);
   const top = owners.slice(0, 7);
   const cats = c.by_day.map((r) => r.day);
@@ -1139,7 +1147,7 @@ async function pageCosts(main) {
 
 // ---------------------------------------------------------------- releases
 async function pageReleases(main) {
-  const [rel, ci] = await Promise.all([api("/api/releases"), api("/api/github/ci").catch((e) => ({ error: e.message }))]);
+  const [rel, ci] = await Promise.all([api("/api/v1/releases"), api("/api/v1/github/ci").catch((e) => ({ error: e.message }))]);
   const relForm = h("div", { class: "muted small" }, "loading the form…");
   fvEditor().then((E) => E.mountReleaseForm(relForm, { api, toast })).catch((e) => relForm.replaceChildren(h("p", { class: "small" }, e.message)));
   main.replaceChildren(
@@ -1167,7 +1175,7 @@ async function pageReleases(main) {
 
 // ---------------------------------------------------------------- settings
 async function pageSettings(main) {
-  const [tok, aud] = await Promise.all([api("/api/tokens"), api("/api/audit?limit=100")]);
+  const [tok, aud] = await Promise.all([api("/api/v1/tokens"), api("/api/v1/audit?limit=100")]);
   const tOut = h("pre", { class: "log", hidden: true });
   const tForm = h("div", { class: "muted small" }, "loading the form…");
   fvEditor().then((E) => E.mountTokenForm(tForm, { api, toast, onMinted: (j) => { tOut.hidden = false; tOut.textContent = `${j.token}\n(shown once; expires ${dt(j.expires_at)})`; } })).catch((e) => tForm.replaceChildren(h("p", { class: "small" }, e.message)));
@@ -1181,10 +1189,10 @@ async function pageSettings(main) {
     card("Serverless policy", docPanel("serverless-policy", "default", { title: "serverless policy" })),
     card(
       "API tokens (scripts/serve/fv-control.sh, agents)",
-      table([{ label: "name", get: (t) => t.name }, { label: "scope", get: (t) => t.scope }, { label: "created", get: (t) => ago(t.created_at) }, { label: "last used", get: (t) => ago(t.last_used_at) }, { label: "expires", get: (t) => dt(t.expires_at) }, { label: "", get: (t) => (t.revoked_at ? "revoked" : h("button", { class: "ghost danger", onclick: async () => { await act("revoke", () => api(`/api/tokens/${t.id}`, { method: "DELETE" })); route(); } }, "Revoke")) }], tok.tokens, "No tokens."),
+      table([{ label: "name", get: (t) => t.name }, { label: "scope", get: (t) => t.scope }, { label: "created", get: (t) => ago(t.created_at) }, { label: "last used", get: (t) => ago(t.last_used_at) }, { label: "expires", get: (t) => dt(t.expires_at) }, { label: "", get: (t) => (t.revoked_at ? "revoked" : h("button", { class: "ghost danger", onclick: async () => { await act("revoke", () => api(`/api/v1/tokens/${t.id}`, { method: "DELETE" })); route(); } }, "Revoke")) }], tok.tokens, "No tokens."),
       h("h3", {}, "Mint a token"),
       tForm,
-      h("p", { class: "muted small" }, "read: GET only · admin: everything but minting tokens · ci: only /api/ci/* (a GitHub workflow secret). Validated against the token-create schema."),
+      h("p", { class: "muted small" }, "read: GET only · admin: everything but minting tokens · ci: only /api/v1/ci/* (a GitHub workflow secret). Validated against the token-create schema."),
       tOut,
     ),
     card(

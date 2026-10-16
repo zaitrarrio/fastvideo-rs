@@ -1344,35 +1344,80 @@ fn dump_adaln_rows(
     )
 }
 
-fn adaln_rows16(table: &AdaLnTable, step: usize, layout: &DeviceLayout) -> Result<AdaRows> {
-    let key = (table.block_mods.as_ptr() as usize, step);
-    let tab = ADALN_ROWS16.with(|c| -> Result<CudaTensor> {
-        if let Some((k, t)) = c.borrow().as_ref() {
-            if *k == key {
-                return Ok(t.clone());
+/// Step `step`'s `[2 * blocks * 3, 6, hidden]` table for the fused kernels,
+/// built on the host and uploaded.
+fn build_rows16(table: &AdaLnTable, step: usize) -> Result<CudaTensor> {
+    let per_step = table.blocks * MODALITY_NUM * ADALN_PARAMS * table.hidden;
+    let rows = table
+        .block_mods
+        .get(step * per_step..(step + 1) * per_step)
+        .ok_or_else(|| msg(format!("h3 adaln: step {step} of {}", table.steps)))?;
+    let h = table.hidden;
+    let data: Vec<f32> = rows
+        .iter()
+        .chain(table.keyframe_mods.iter())
+        .enumerate()
+        .map(|(i, &v)| {
+            let p = (i / h) % ADALN_PARAMS;
+            bf16_table_value(v, p == SCALE_MSA || p == SCALE_MLP)
+        })
+        .collect();
+    CudaTensor::from_vec(data, vec![2 * table.blocks * MODALITY_NUM, ADALN_PARAMS, h])?.to_device()
+}
+
+thread_local! {
+    /// `FASTVIDEO_H3_GRAPHS` (super::step_graph): every step's table, held by
+    /// the graph cache while it captures, read instead of [`ADALN_ROWS16`]
+    /// so a captured step never uploads (and its graph keeps the address).
+    static ADALN_PINNED: std::cell::RefCell<Option<(usize, Vec<CudaTensor>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+impl H3Transformer {
+    /// Every step's bf16 AdaLN table on the device at once (what
+    /// [`adaln_rows16`] builds one step at a time), for the graph cache.
+    pub fn adaln_rows16_all(&self) -> Result<Vec<CudaTensor>> {
+        (0..self.table.steps()).map(|s| build_rows16(&self.table, s)).collect()
+    }
+
+    /// Run `f` with `tabs` ([`Self::adaln_rows16_all`]) as this thread's
+    /// AdaLN tables.
+    pub fn with_pinned_adaln<R>(&self, tabs: &[CudaTensor], f: impl FnOnce() -> R) -> R {
+        struct Unpin;
+        impl Drop for Unpin {
+            fn drop(&mut self) {
+                ADALN_PINNED.with(|c| *c.borrow_mut() = None);
             }
         }
-        let per_step = table.blocks * MODALITY_NUM * ADALN_PARAMS * table.hidden;
-        let rows = table
-            .block_mods
-            .get(step * per_step..(step + 1) * per_step)
-            .ok_or_else(|| msg(format!("h3 adaln: step {step} of {}", table.steps)))?;
-        *c.borrow_mut() = None;
-        let h = table.hidden;
-        let data: Vec<f32> = rows
-            .iter()
-            .chain(table.keyframe_mods.iter())
-            .enumerate()
-            .map(|(i, &v)| {
-                let p = (i / h) % ADALN_PARAMS;
-                bf16_table_value(v, p == SCALE_MSA || p == SCALE_MLP)
-            })
-            .collect();
-        let t = CudaTensor::from_vec(data, vec![2 * table.blocks * MODALITY_NUM, ADALN_PARAMS, h])?
-            .to_device()?;
-        *c.borrow_mut() = Some((key, t.clone()));
-        Ok(t)
-    })?;
+        let key = self.table.block_mods.as_ptr() as usize;
+        ADALN_PINNED.with(|c| *c.borrow_mut() = Some((key, tabs.to_vec())));
+        let _unpin = Unpin;
+        f()
+    }
+}
+
+fn adaln_rows16(table: &AdaLnTable, step: usize, layout: &DeviceLayout) -> Result<AdaRows> {
+    let key = (table.block_mods.as_ptr() as usize, step);
+    let pinned = ADALN_PINNED.with(|c| {
+        c.borrow()
+            .as_ref()
+            .filter(|(k, _)| *k == key.0)
+            .and_then(|(_, tabs)| tabs.get(step).cloned())
+    });
+    let tab = match pinned {
+        Some(t) => t,
+        None => ADALN_ROWS16.with(|c| -> Result<CudaTensor> {
+            if let Some((k, t)) = c.borrow().as_ref() {
+                if *k == key {
+                    return Ok(t.clone());
+                }
+            }
+            *c.borrow_mut() = None;
+            let t = build_rows16(table, step)?;
+            *c.borrow_mut() = Some((key, t.clone()));
+            Ok(t)
+        })?,
+    };
     Ok(AdaRows {
         tab,
         hidden: table.hidden,
@@ -1688,6 +1733,24 @@ impl Attention {
                 }
             }
         }
+        // Dense and Sol-layer attention read bf16 q/k/v: one launch writes
+        // them (FASTVIDEO_H3_GLUE; the same values as the ops below).
+        #[cfg(feature = "cuda")]
+        if fused
+            && fused16::glue_enabled()
+            && !crate::wan::nvfp4::kv_enabled()
+            && matches!(mode, AttnMode::Dense | AttnMode::SolLayer { .. })
+            && packed.is_bf16()
+            && packed.is_device_fresh()
+        {
+            let (q, k, v, _) = self.heads16(&packed, rope, false)?;
+            drop(packed);
+            let out = match mode {
+                AttnMode::SolLayer { tau, policy } => policy.attend(&q, &k, &v, tau)?,
+                _ => dense_attention(&q, &k, &v)?,
+            };
+            return self.project_out(out, permutation);
+        }
         let q = phase("h3_attn_q", || {
             if fused {
                 return fused16::qk_norm_rope(
@@ -1806,6 +1869,9 @@ impl Attention {
     /// q/k/v (and the VSA gate) as f32 BHSD holding the bf16 path's values,
     /// then VSA, its output rounded to bf16 as the bf16 path's `keep_dtype`
     /// does. `None` when a piece does not apply (the caller runs that path).
+    /// When VSA reads bf16 in place ([`super::vsa::H3Vsa::takes_bf16`],
+    /// `FASTVIDEO_H3_GLUE`), they are written bf16 instead: the same values,
+    /// half the bytes, and no widening or re-narrowing cast inside VSA.
     #[cfg(feature = "cuda")]
     fn attend_vsa_f32(
         &self,
@@ -1815,6 +1881,13 @@ impl Attention {
     ) -> Result<Option<CudaTensor>> {
         let (heads, d) = (self.heads, self.head_dim);
         let inner = heads * d;
+        if fused16::glue_enabled() && vsa.takes_bf16() && packed.is_bf16() && packed.is_device_fresh() {
+            let (q, k, v, gate) = self.heads16(packed, rope, self.has_gate)?;
+            let Some(out) = vsa.attend_unrounded(q, k, v, gate)? else {
+                return Ok(None);
+            };
+            return self.round_attn_out(out).map(Some);
+        }
         let Some(q) = phase("h3_attn_q", || {
             fused16::qk_norm_rope_f32(packed, &self.norm_q, rope, heads, d, 0, self.eps)
         })?
@@ -1839,12 +1912,54 @@ impl Attention {
             None
         };
         let out = vsa.attend(q, k, v, gate)?;
-        // An all-MXFP8 `to_out` rounds the f32 output inside the head merge
-        // (fused16::merge_heads_mx); otherwise it is rounded here.
-        if out.is_bf16() || self.to_out.mx_whole() {
-            return Ok(Some(out));
+        self.round_attn_out(out).map(Some)
+    }
+
+    /// bf16 q, k (normed, rotated), v and (with `gate`) the VSA gate of a
+    /// bf16 projection: one launch ([`fused16::qkvg_heads`]) where it
+    /// applies, else [`fused16::qk_norm_rope`] and the head splits.
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::type_complexity)]
+    fn heads16(
+        &self,
+        packed: &CudaTensor,
+        rope: Option<(&CudaTensor, &CudaTensor)>,
+        gate: bool,
+    ) -> Result<(CudaTensor, CudaTensor, CudaTensor, Option<CudaTensor>)> {
+        let (heads, d) = (self.heads, self.head_dim);
+        let inner = heads * d;
+        if let Some(t) = phase("h3_attn_qkvg_heads", || {
+            fused16::qkvg_heads(packed, &self.norm_q, &self.norm_k, rope, heads, d, gate, self.eps)
+        })? {
+            return Ok(t);
         }
-        Ok(Some(out.quantize_bf16()?))
+        let q = phase("h3_attn_q", || {
+            fused16::qk_norm_rope(packed, &self.norm_q, rope, heads, d, 0, self.eps)
+        })?;
+        let k = phase("h3_attn_k", || {
+            fused16::qk_norm_rope(packed, &self.norm_k, rope, heads, d, inner, self.eps)
+        })?;
+        let v = phase("h3_attn_v", || packed.split_heads_bhsd(2 * inner, heads, d))?;
+        let g = if gate {
+            Some(phase("h3_attn_gate", || packed.split_heads_bhsd(3 * inner, heads, d))?)
+        } else {
+            None
+        };
+        Ok((q, k, v, g))
+    }
+
+    /// The VSA output for [`Self::project_out`]: an all-MXFP8 `to_out` rounds
+    /// the f32 output inside the head merge (fused16::merge_heads_mx);
+    /// otherwise it is rounded here.
+    #[cfg(feature = "cuda")]
+    fn round_attn_out(&self, out: CudaTensor) -> Result<CudaTensor> {
+        // A published NVFP4 `to_out` rounds it inside its merge too
+        // (fused16::merge_heads_nvfp4, FASTVIDEO_H3_GLUE).
+        let nvfp4_merge = fused16::glue_enabled() && self.to_out.is_nvfp4_published();
+        if out.is_bf16() || self.to_out.mx_whole() || nvfp4_merge {
+            return Ok(out);
+        }
+        out.quantize_bf16()
     }
 
     /// `to_out` on the `[1, H, S, D]` attention output, then the Spark
@@ -1864,6 +1979,19 @@ impl Attention {
                     let shape = vec![1, act.rows, self.to_out.out_dim()];
                     drop(out);
                     return self.to_out.forward_mx(&act, shape);
+                }
+            }
+            // A published NVFP4 `to_out` takes the merged heads as its NVFP4
+            // operand, written by the merge (fused16::merge_heads_nvfp4;
+            // FASTVIDEO_H3_GLUE=0 merges to bf16 and quantizes in the linear).
+            #[cfg(feature = "cuda")]
+            if bf16_activations() {
+                if let Some(stack) = self.to_out.nvfp4_stack() {
+                    if let Some(a) = fused16::merge_heads_nvfp4(&out, stack.static_act_amax(), stack.rule())? {
+                        let shape = vec![1, a.rows, self.to_out.out_dim()];
+                        drop(out);
+                        return self.to_out.forward_nvfp4_operand(&a, shape);
+                    }
                 }
             }
             // Only the fused VSA path hands over an unrounded f32 output
@@ -2024,6 +2152,19 @@ impl FeedForward {
             if let Some(act) = phase("h3_ffn_act", || fused16::swiglu_mx(&h))? {
                 drop(h);
                 return phase("h3_ffn_out", || self.ff_out.forward_mx(&act, vec![1, rows, hidden]));
+            }
+        }
+        // A published NVFP4 down projection with a static activation scale
+        // takes the SwiGLU as its NVFP4 operand (FASTVIDEO_H3_GLUE).
+        #[cfg(feature = "cuda")]
+        if let Some(stack) = self.ff_out.nvfp4_stack() {
+            if let Some(amax) = stack.static_act_amax() {
+                if let Some(a) = phase("h3_ffn_act", || fused16::swiglu_nvfp4(&h, amax, stack.rule()))? {
+                    drop(h);
+                    return phase("h3_ffn_out", || {
+                        self.ff_out.forward_nvfp4_operand(&a, vec![1, rows, hidden])
+                    });
+                }
             }
         }
         let _ = (rows, hidden);

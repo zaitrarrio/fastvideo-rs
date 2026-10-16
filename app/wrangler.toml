@@ -1,0 +1,23 @@
+# fv-app: the public consumer portal for fastvideo-rs.
+# A video-first model gallery + playground. Own Cloudflare Worker and
+# deployment, separate from fv-control: no privileged access, no operator
+# auth. The browser calls engine public APIs directly with the consumer's
+# own API key (stored in localStorage, never sent to this worker).
+#
+# Pricing below is PLACEHOLDER (representative $0.05-$0.13/s, anchored on
+# the known $0.13/s 2K figure). Real prices must be supplied before any
+# public release. See src/pricing.ts.
+name = "fv-app"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# Shared D1 with fv-control (database "fv-control"): the key_requests table
+# lives here so the console can list/fulfill requests. database_id is set
+# at deploy time (same value as control/wrangler.toml).
+[[d1_databases]]
+binding = "DB"
+database_name = "fv-control"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"

@@ -1,4 +1,4 @@
-// Name checks (GET /api/names/:kind?name=…): the pattern, the reserved
+// Name checks (GET /api/v1/names/:kind?name=…): the pattern, the reserved
 // names and uniqueness against what exists, the same rules every create
 // path enforces (docs/control/config-validation.md "Names").
 //   cluster   clusters and standalone pods (one namespace: D1 clusters.name UNIQUE)

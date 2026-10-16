@@ -1,4 +1,4 @@
-// The launch screen's instance-type tables (owner 2026-10-13): GET /api/providers/:id/instance-types normalizes
+// The launch screen's instance-type tables (owner 2026-10-13): GET /api/v1/providers/:id/instance-types normalizes
 // every type each provider lists (Runpod GPU types × data centres, every Brev instance type, every GMI product),
 // marks the ones fv-control cannot launch with the reason, caches the upstream list and lets ?refresh=1 bypass it
 // (at most once per 30 s per provider). Fixtures are trimmed from the live answers (2026-10-13, GET / read-only).
@@ -303,18 +303,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("GET /api/providers/:id/instance-types", () => {
+describe("GET /api/v1/providers/:id/instance-types", () => {
   it("Runpod: every row, launchable first, counts; the second ask is served from the cache", async () => {
     upstream();
     const api = await client(mkEnv());
-    const r = await api("/api/providers/runpod/instance-types");
+    const r = await api("/api/v1/providers/runpod/instance-types");
     expect(r.status).toBe(200);
     expect(r.j).toMatchObject({ provider: "runpod", enabled: true, live_ok: true, error: null, cached: false, refresh_limited: null, counts: { total: 8, supported: 2 } });
     expect(r.j.rows[0].supported).toBe(true);
     expect(r.j.rows[0].id).toBe("NVIDIA RTX PRO 6000 Blackwell Server Edition@EU-RO-1"); // available before not available
     expect(typeof r.j.at).toBe("number");
     expect(calls.sort()).toEqual(["runpod:dcs", "runpod:types"]);
-    const again = await api("/api/providers/runpod/instance-types");
+    const again = await api("/api/v1/providers/runpod/instance-types");
     expect(again.j.at).toBe(r.j.at);
     expect(calls).toHaveLength(2);
     // No secret in the answer.
@@ -325,41 +325,41 @@ describe("GET /api/providers/:id/instance-types", () => {
     const api = await client(mkEnv());
     let t = 1_800_000_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => t);
-    await api("/api/providers/gmi/instance-types");
+    await api("/api/v1/providers/gmi/instance-types");
     expect(calls).toEqual(["gmi"]);
     t += 1000;
-    const r1 = await api("/api/providers/gmi/instance-types?refresh=1");
+    const r1 = await api("/api/v1/providers/gmi/instance-types?refresh=1");
     expect(calls).toEqual(["gmi", "gmi"]);
     expect(r1.j).toMatchObject({ cached: false, refresh_limited: null, at: t });
     t += 5000;
-    const r2 = await api("/api/providers/gmi/instance-types?refresh=1");
+    const r2 = await api("/api/v1/providers/gmi/instance-types?refresh=1");
     expect(calls).toHaveLength(2);
     expect(r2.j).toMatchObject({ cached: true, refresh_limited: Math.ceil((REFRESH_MIN_MS - 5000) / 1000), at: t - 5000 });
     t += REFRESH_MIN_MS;
-    const r3 = await api("/api/providers/gmi/instance-types?refresh=1");
+    const r3 = await api("/api/v1/providers/gmi/instance-types?refresh=1");
     expect(calls).toHaveLength(3);
     expect(r3.j.refresh_limited).toBeNull();
     // The limit is per provider: Brev's first refresh is allowed now.
-    await api("/api/providers/brev/instance-types?refresh=1");
+    await api("/api/v1/providers/brev/instance-types?refresh=1");
     expect(calls.filter((c) => c === "brev")).toHaveLength(1);
-    const b2 = await api("/api/providers/brev/instance-types?refresh=1");
+    const b2 = await api("/api/v1/providers/brev/instance-types?refresh=1");
     expect(b2.j.refresh_limited).toBeGreaterThan(0);
     expect(calls.filter((c) => c === "brev")).toHaveLength(1);
   });
   it("GMI lists every product (all IDCs: no idc filter); Brev every type of the org", async () => {
     upstream();
     const api = await client(mkEnv());
-    const g = await api("/api/providers/gmi/instance-types");
+    const g = await api("/api/v1/providers/gmi/instance-types");
     expect(calls).toEqual(["gmi"]);
     expect(g.j.counts).toEqual({ total: 3, supported: 1, available: 2 });
-    const b = await api("/api/providers/brev/instance-types");
+    const b = await api("/api/v1/providers/brev/instance-types");
     expect(b.j.counts.total).toBe(6);
     expect(b.j.rows.filter((x: any) => x.supported).map((x: any) => x.name)).toEqual(["g4dn.8xlarge"]);
   });
   it("a provider that is off: its configured types, not launchable, no upstream call", async () => {
     upstream();
     const api = await client(mkEnv({ BREV_API_TOKEN: "" }));
-    const r = await api("/api/providers/brev/instance-types");
+    const r = await api("/api/v1/providers/brev/instance-types");
     expect(r.j).toMatchObject({ enabled: false, live_ok: false, counts: { total: 1, supported: 0 } });
     expect(r.j.reason).toMatch(/NVIDIA Brev is off: BREV_API_TOKEN is not set/);
     expect(r.j.rows[0]).toMatchObject({ name: "g4dn.8xlarge", supported: false });
@@ -369,16 +369,16 @@ describe("GET /api/providers/:id/instance-types", () => {
     upstream();
     failRunpod = true;
     const api = await client(mkEnv());
-    const r = await api("/api/providers/runpod/instance-types");
+    const r = await api("/api/v1/providers/runpod/instance-types");
     expect(r.status).toBe(200);
     expect(r.j.live_ok).toBe(false);
     expect(r.j.error).toMatch(/runpod/);
     expect(r.j.rows.every((x: any) => !x.supported)).toBe(true);
     failRunpod = false;
-    const ok = await api("/api/providers/runpod/instance-types");
+    const ok = await api("/api/v1/providers/runpod/instance-types");
     expect(ok.j.live_ok).toBe(true);
     failRunpod = true;
-    const rf = await api("/api/providers/runpod/instance-types?refresh=1");
+    const rf = await api("/api/v1/providers/runpod/instance-types?refresh=1");
     expect(rf.j.live_ok).toBe(true);
     expect(rf.j.error).toMatch(/the refresh failed: .*showing the cached list/);
     expect(rf.j.counts.total).toBe(8);
@@ -386,16 +386,16 @@ describe("GET /api/providers/:id/instance-types", () => {
   it("Runpod without the data-centre stock (a schema change): one row per GPU type, saying so", async () => {
     upstream();
     failDcs = true;
-    const r = await (await client(mkEnv()))("/api/providers/runpod/instance-types");
+    const r = await (await client(mkEnv()))("/api/v1/providers/runpod/instance-types");
     expect(r.j.counts.total).toBe(6);
     expect(r.j.error).toMatch(/data-centre stock could not be read/);
   });
   it("an unknown provider: 404; the CLI's endpoints are unchanged", async () => {
     upstream();
     const api = await client(mkEnv());
-    expect((await api("/api/providers/cloudrift/instance-types")).status).toBe(404);
-    expect((await api("/api/providers/nope/instance-types")).status).toBe(404);
-    expect((await api("/api/providers/gmi/offers")).status).toBe(200);
+    expect((await api("/api/v1/providers/cloudrift/instance-types")).status).toBe(404);
+    expect((await api("/api/v1/providers/nope/instance-types")).status).toBe(404);
+    expect((await api("/api/v1/providers/gmi/offers")).status).toBe(200);
   });
 });
 

@@ -1,0 +1,9 @@
+[fastvideo] h3 vae chunk 1/7
+[fastvideo] h3 vae chunk 2/7
+[fastvideo] h3 vae chunk 3/7
+[fastvideo] h3 vae chunk 4/7
+[fastvideo] h3 vae chunk 5/7
+[fastvideo] h3 vae chunk 6/7
+[fastvideo] h3 vae chunk 7/7
+[fastvideo] h3 vae fused ViT: gemm bf16 cublas, sdpa auto, vector kernels on
+[fastvideo] h3 vae: FASTVIDEO_H3_VAE_MXFP8 unset: bf16 decoder linears (the MXFP8 default is measured on the 36-block decoder, this one has 26; FASTVIDEO_H3_VAE_MXFP8=1 opts in)

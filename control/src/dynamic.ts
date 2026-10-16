@@ -1,5 +1,5 @@
 // Live values for the editors' autocomplete and dropdowns
-// (GET /api/schemas/dynamic): GPU types with price and stock, regions and
+// (GET /api/v1/schemas/dynamic): GPU types with price and stock, regions and
 // volumes, CPU flavors, release channels and their digests, image
 // variants and the pool presets that use them, pools, model ids, recipes and
 // fal apps (cluster/catalog.json), env keys (the engine's, with what they do,
@@ -66,7 +66,7 @@ async function imageShas(env: Env): Promise<string[]> {
 }
 
 /**
- * The editors' lists. `live: false` (GET /api/schemas/dynamic?live=0, the launch forms on open) makes no upstream
+ * The editors' lists. `live: false` (GET /api/v1/schemas/dynamic?live=0, the launch forms on open) makes no upstream
  * call: no Runpod GPU types, no GHCR tags, no provider listing (only what the config says); the forms then ask
  * providerDetails for the provider picked. The default (live) is the full view (the JSON editor, the CLI).
  */
@@ -127,7 +127,7 @@ export async function dynamicEnums(env: Env, clusterId?: string, opts: { live?: 
 }
 
 const shaList = (history: any[], tagShas: string[]) => [...new Set([...history.map((h: any) => String(h.git_sha).slice(0, 7)), ...tagShas.map((x) => x.slice(0, 7))])].slice(0, 60);
-/** The commits with images (GET /api/schemas/dynamic?images=1): releases and GHCR's sha tags, asked when a form's image source is a commit. */
+/** The commits with images (GET /api/v1/schemas/dynamic?images=1): releases and GHCR's sha tags, asked when a form's image source is a commit. */
 export async function imageCommits(env: Env) {
   const [heads, tagShas] = await Promise.all([releaseHeads(env).catch(() => ({ history: [] as any[] })), imageShas(env).catch(() => [] as string[])]);
   return { shas: shaList(heads.history, tagShas) };
@@ -139,7 +139,7 @@ const configuredGpus = (env: Env, p: OtherProviderId) => (p === "brev" ? brevIns
 export const LAUNCH_PROVIDERS = ["runpod", ...OTHER_PROVIDERS] as const;
 
 /**
- * One launch provider's live details (GET /api/schemas/dynamic?provider=<p>), asked by the launch forms once that
+ * One launch provider's live details (GET /api/v1/schemas/dynamic?provider=<p>), asked by the launch forms once that
  * provider is picked: Runpod's GPU types with $/hr and stock; GMI's products with price and availability in the
  * default IDC; Brev's instance types (stoppable first, live price, parked count) and its parked / held VMs; for GMI
  * and Brev the month's spend against the budget. Only that provider's API is called (an off one: none). The upstream

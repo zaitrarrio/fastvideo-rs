@@ -90,7 +90,188 @@ fn need(t: Option<CudaTensor>, what: &str) -> anyhow::Result<CudaTensor> {
 pub fn dit_fusion(report: &mut Report, seed: &mut u64) -> StageResult<()> {
     with_bf16_act(true, || parity(report, seed))?;
     with_bf16_act(true, || h3_parity(report, seed))?;
+    with_bf16_act(true, || h3_glue_parity(report, seed))?;
     with_bf16_act(true, || timing(report, seed))
+}
+
+/// The bytes of an NVFP4 operand: codes of the padded rows, every scale, the
+/// tensor amax.
+fn nvfp4_bytes(a: &fastvideo_cudarc::wan::nvfp4_linear::Nvfp4Operand) -> anyhow::Result<(Vec<u8>, Vec<u8>, f32)> {
+    let d = dev()?;
+    Ok((
+        d.stream.memcpy_dtov(&a.packed)?,
+        d.stream.memcpy_dtov(&a.scales)?,
+        d.stream.memcpy_dtov(&a.amax)?[0],
+    ))
+}
+
+fn check_nvfp4(
+    report: &mut Report,
+    name: &str,
+    got: &fastvideo_cudarc::wan::nvfp4_linear::Nvfp4Operand,
+    want: &fastvideo_cudarc::wan::nvfp4_linear::Nvfp4Operand,
+) -> StageResult<()> {
+    let (gq, gs, ga) = nvfp4_bytes(got)?;
+    let (wq, ws, wa) = nvfp4_bytes(want)?;
+    let dq = gq.iter().zip(&wq).filter(|(a, b)| a != b).count();
+    let ds = gs.iter().zip(&ws).filter(|(a, b)| a != b).count();
+    let ok = gq.len() == wq.len()
+        && gs.len() == ws.len()
+        && dq == 0
+        && ds == 0
+        && ga.to_bits() == wa.to_bits()
+        && (got.rows, got.rows_pack, got.k) == (want.rows, want.rows_pack, want.k);
+    report.check(
+        name,
+        ok,
+        json!({"codes_differing": dq, "scales_differing": ds, "codes": gq.len(), "scales": gs.len(),
+               "amax": ga, "want_amax": wa}),
+        json!({"differing": 0}),
+    )
+}
+
+/// FASTVIDEO_H3_GLUE: every glue fusion against the ops it replaces, bit for
+/// bit (bf16 values, NVFP4 codes / scales / amax).
+fn h3_glue_parity(report: &mut Report, seed: &mut u64) -> StageResult<()> {
+    use fastvideo_cudarc::wan::nvfp4_linear::quantize_bf16_operand_with;
+    use fastvideo_models::nvfp4::ScaleRule;
+    let glue = |f: &mut dyn FnMut() -> StageResult<()>| fused16::with_fuse(true, || fused16::with_glue(true, f));
+
+    // q/k/v/gate heads in one launch vs qk_norm_rope + split_heads_bhsd.
+    let (h2, d2, r2) = (3usize, 128usize, 96usize);
+    let inner = h2 * d2;
+    for (b, s2, gate) in [(1usize, 83usize, true), (1, 70, false), (2, 41, true)] {
+        let width = 4 * inner + 8;
+        let packed = t16(&bf16v(rand(seed, b * s2 * width, 1.3)), &[b, s2, width])?;
+        let nq = t32(&bf16v(rand(seed, d2, 0.1).into_iter().map(|v| 1.0 + v).collect()), &[d2])?;
+        let nk = t32(&bf16v(rand(seed, d2, 0.1).into_iter().map(|v| 1.0 + v).collect()), &[d2])?;
+        let ang: Vec<f32> = (0..s2 * r2).map(|i| (i as f32 * 0.013).sin() * 3.0).collect();
+        let cos = t32(&ang.iter().map(|a| a.cos()).collect::<Vec<_>>(), &[s2, r2])?;
+        let sin = t32(&ang.iter().map(|a| a.sin()).collect::<Vec<_>>(), &[s2, r2])?;
+        for rope in [Some((&cos, &sin)), None] {
+            let tag = format!("b{b}_s{s2}_gate{}_rope{}", u8::from(gate), u8::from(rope.is_some()));
+            let mut got = None;
+            glue(&mut || {
+                got = fused16::qkvg_heads(&packed, &nq, &nk, rope, h2, d2, gate, 1e-6)?;
+                Ok(())
+            })?;
+            let (q, k, v, g) = got.ok_or_else(|| anyhow::anyhow!("qkvg_heads did not apply ({tag})"))?;
+            let want = [
+                fused16::qk_norm_rope(&packed, &nq, rope, h2, d2, 0, 1e-6)?,
+                fused16::qk_norm_rope(&packed, &nk, rope, h2, d2, inner, 1e-6)?,
+                packed.split_heads_bhsd(2 * inner, h2, d2)?,
+            ];
+            for (name, got, want) in [("q", &q, &want[0]), ("k", &k, &want[1]), ("v", &v, &want[2])] {
+                check_ulps(report, &format!("h3_glue_heads_{name}_{tag}"), &host(got)?, &host(want)?, true)?;
+            }
+            match (g, gate) {
+                (Some(g), true) => {
+                    let w = packed.split_heads_bhsd(3 * inner, h2, d2)?;
+                    check_ulps(report, &format!("h3_glue_heads_gate_{tag}"), &host(&g)?, &host(&w)?, true)?;
+                }
+                (None, false) => {}
+                _ => return Err(anyhow::anyhow!("qkvg_heads: gate output mismatch ({tag})").into()),
+            }
+        }
+    }
+
+    // VSA fed bf16 q/k/v/gate in place (attend_unrounded, rounded after) vs
+    // the f32 feed `attend` widened and rounded.
+    {
+        use fastvideo_cudarc::h3::vsa::{H3Vsa, H3VsaConfig};
+        let layout = fastvideo_models::h3::packing::H3PackedLayout::new(70, (5, 8, 12), 33, [1, 2, 2])
+            .map_err(anyhow::Error::msg)?;
+        let (vh, vd) = (2usize, 128usize);
+        let seq = layout.sequence_length();
+        let shape = [1, vh, seq, vd];
+        let n = vh * seq * vd;
+        let parts: Vec<Vec<f32>> = (0..4).map(|_| bf16v(rand(seed, n, 1.0))).collect();
+        let vsa = H3Vsa::new(&layout, vh, vd, H3VsaConfig { sparsity: 0.5, group: 2, tile_size: 64 })?;
+        report.check(
+            "h3_glue_vsa_takes_bf16",
+            vsa.takes_bf16(),
+            json!({"takes_bf16": vsa.takes_bf16()}),
+            json!({"takes_bf16": true}),
+        )?;
+        let want = vsa
+            .attend(
+                t32(&parts[0], &shape)?,
+                t32(&parts[1], &shape)?,
+                t32(&parts[2], &shape)?,
+                Some(t32(&parts[3], &shape)?),
+            )?
+            .quantize_bf16()?;
+        let got = vsa
+            .attend_unrounded(
+                t16(&parts[0], &shape)?,
+                t16(&parts[1], &shape)?,
+                t16(&parts[2], &shape)?,
+                Some(t16(&parts[3], &shape)?),
+            )?
+            .ok_or_else(|| anyhow::anyhow!("attend_unrounded: no device plan"))?;
+        report.check(
+            "h3_glue_vsa_bf16_unrounded_dtype",
+            !got.is_bf16() && got.shape == want.shape,
+            json!({"got_bf16": got.is_bf16(), "shape": got.shape}),
+            json!({"got_bf16": false}),
+        )?;
+        check_ulps(report, "h3_glue_vsa_bf16_feed", &host(&got.quantize_bf16()?)?, &host(&want)?, true)?;
+    }
+
+    // SwiGLU -> NVFP4 (static activation amax) vs the bf16 SwiGLU quantized.
+    for (rows, half, amax_v, rule) in [
+        (77usize, 320usize, 3.0f32, ScaleRule::Static6),
+        (200, 192, 0.25, ScaleRule::Static6),
+        (130, 128, 2.0, ScaleRule::Static4),
+    ] {
+        let h = t16(&bf16v(rand(seed, rows * 2 * half, 1.5)), &[1, rows, 2 * half])?;
+        let amax = dev()?.stream.memcpy_stod(&[amax_v])?;
+        let mut got = None;
+        glue(&mut || {
+            got = fused16::swiglu_nvfp4(&h, &amax, rule)?;
+            Ok(())
+        })?;
+        let got = got.ok_or_else(|| anyhow::anyhow!("swiglu_nvfp4 did not apply"))?;
+        let act = h.swiglu_value_first()?;
+        let a16 = act.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("swiglu not device bf16"))?;
+        let want = quantize_bf16_operand_with(quant::ptr(a16), rows, half, false, rule, Some(&amax))?;
+        check_nvfp4(report, &format!("h3_glue_swiglu_nvfp4_{rows}x{half}_{rule:?}"), &got, &want)?;
+    }
+
+    // Head merge -> NVFP4 (measured or static amax) vs round + merge + quantize.
+    for (s, heads, d, f32_in, fixed) in [
+        (77usize, 6usize, 64usize, true, None),
+        (140, 4, 128, true, None),
+        (77, 6, 64, false, None),
+        (45, 2, 128, true, Some(1.5f32)),
+    ] {
+        let k = heads * d;
+        let vals = rand(seed, heads * s * d, 2.0);
+        let o = if f32_in { t32(&vals, &[1, heads, s, d])? } else { t16(&bf16v(vals), &[1, heads, s, d])? };
+        let fixed_dev = match fixed {
+            Some(v) => Some(dev()?.stream.memcpy_stod(&[v])?),
+            None => None,
+        };
+        let mut got = None;
+        glue(&mut || {
+            got = fused16::merge_heads_nvfp4(&o, fixed_dev.as_ref(), ScaleRule::Static6)?;
+            Ok(())
+        })?;
+        let got = got.ok_or_else(|| anyhow::anyhow!("merge_heads_nvfp4 did not apply"))?;
+        let merged = o.quantize_bf16()?.merge_heads()?;
+        let m16 = merged.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("merged heads not device bf16"))?;
+        let want = quantize_bf16_operand_with(quant::ptr(m16), s, k, false, ScaleRule::Static6, fixed_dev.as_ref())?;
+        let tag = format!("{s}x{k}_{}_{}", if f32_in { "f32" } else { "bf16" }, if fixed.is_some() { "static" } else { "measured" });
+        check_nvfp4(report, &format!("h3_glue_merge_nvfp4_{tag}"), &got, &want)?;
+    }
+
+    // FASTVIDEO_H3_GLUE=0 declines.
+    let h = t16(&bf16v(rand(seed, 16 * 256, 1.0)), &[1, 16, 256])?;
+    let amax = dev()?.stream.memcpy_stod(&[1.0f32])?;
+    let off = fused16::with_glue(false, || -> anyhow::Result<bool> {
+        Ok(fused16::swiglu_nvfp4(&h, &amax, ScaleRule::Static6)?.is_none())
+    })?;
+    report.check("h3_glue_off_declines", off, json!({"declined": off}), json!({"declined": true}))
 }
 
 /// `ltx_rope`: the LTX-2 rotary tables gathered on the device from their

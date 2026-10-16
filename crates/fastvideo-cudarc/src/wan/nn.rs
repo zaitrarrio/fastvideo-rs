@@ -971,6 +971,31 @@ impl Linear {
         })
     }
 
+    /// The published NVFP4 weight, when this linear runs one.
+    #[cfg(feature = "cuda")]
+    pub fn nvfp4_stack(&self) -> Option<&super::nvfp4_linear::Nvfp4Stack> {
+        self.nvfp4_w.as_deref().map(|w| &w.0)
+    }
+
+    /// The published-NVFP4 forward on an activation its producer already
+    /// wrote as the GEMM's operand (the same bytes [`Self::forward`]'s
+    /// quantizer writes); `out_shape` ends in `out_dim`.
+    #[cfg(feature = "cuda")]
+    pub fn forward_nvfp4_operand(
+        &self,
+        a: &super::nvfp4_linear::Nvfp4Operand,
+        out_shape: Vec<usize>,
+    ) -> Result<CudaTensor> {
+        let w = self
+            .nvfp4_w
+            .as_deref()
+            .ok_or_else(|| msg("forward_nvfp4_operand on a linear without an NVFP4 weight"))?;
+        super::evalstats::quant_call("nvfp4_published");
+        let y = w.0.gemm_operand(a)?;
+        let out = CudaTensor::from_device_slice_bf16(y, out_shape)?;
+        self.quant_epilogue(out, false)
+    }
+
     /// The published-NVFP4 forward: the activation (bf16 on the device) is
     /// quantized once per call, every stacked part's GEMM writes its columns.
     #[cfg(feature = "cuda")]
@@ -1606,6 +1631,30 @@ impl Linear {
         super::device::matmul_linear_wt_bf16(x16, w16, &mut c16, m, k, n)
             .map_err(|e| msg(e.to_string()))?;
         Ok(Some(c16))
+    }
+
+    /// [`Self::gemm_bf16`] for a published NVFP4 weight ([`Self::from_nvfp4`]):
+    /// the bf16 `x16 [m, in]` quantized once (the stack's static activation
+    /// scale when it has one), bf16 `[m, out]` out, **bias not applied**.
+    /// `None` on any other linear.
+    #[cfg(feature = "cuda")]
+    pub fn gemm_nvfp4_bf16(
+        &self,
+        x16: &cudarc::driver::CudaSlice<half::bf16>,
+        m: usize,
+    ) -> Result<Option<cudarc::driver::CudaSlice<half::bf16>>> {
+        let Some(w) = self.nvfp4_w.as_deref() else {
+            return Ok(None);
+        };
+        if x16.len() < m * self.in_dim {
+            return Err(msg(format!(
+                "nvfp4 gemm input of {} elements for [{m}, {}]",
+                x16.len(),
+                self.in_dim
+            )));
+        }
+        super::evalstats::quant_call("nvfp4_published");
+        Ok(Some(w.0.forward_bf16(super::quant::ptr(x16), m)?))
     }
 
     /// `gelu_tanh(W x + b)` with the bias add and activation in one launch.

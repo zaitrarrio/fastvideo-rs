@@ -150,7 +150,7 @@ async function apiTokenActor(env: Env, bearer: string): Promise<{ actor: string;
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-/** Guards /api/*: sets actor/authKind/scope, enforces CSRF + Origin on cookie sessions and read-only tokens. */
+/** Guards /api/v1/*: sets actor/authKind/scope, enforces CSRF + Origin on cookie sessions and read-only tokens. */
 export const requireAuth: MiddlewareHandler<{ Bindings: Env; Variables: Vars }> = async (c, next) => {
   const env = c.env;
   const method = c.req.method.toUpperCase();
@@ -167,9 +167,9 @@ export const requireAuth: MiddlewareHandler<{ Bindings: Env; Variables: Vars }> 
   if (auth.toLowerCase().startsWith("bearer ")) {
     const t = await apiTokenActor(env, auth.slice(7).trim());
     if (!t) throw new HttpError(401, "invalid API token");
-    // A `ci` token (a GitHub workflow's secret) reaches only /api/ci/* (docs/dev/build-pods-fv-control.md §6).
+    // A `ci` token (a GitHub workflow's secret) reaches only /api/v1/ci/* (docs/dev/build-pods-fv-control.md §6).
     if (t.scope === "ci") {
-      if (!c.req.path.startsWith("/api/ci/")) throw new HttpError(403, "a ci token only reaches /api/ci/*");
+      if (!c.req.path.startsWith("/api/v1/ci/")) throw new HttpError(403, "a ci token only reaches /api/v1/ci/*");
     } else if (MUTATING.has(method) && t.scope !== "admin") throw new HttpError(403, "read-only token");
     c.set("actor", t.actor);
     c.set("authKind", "token");

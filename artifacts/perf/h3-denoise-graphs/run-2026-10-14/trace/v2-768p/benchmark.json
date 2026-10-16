@@ -1,0 +1,2323 @@
+{
+  "activations": "bf16",
+  "aggregate": {
+    "n": 4,
+    "per_prompt": [
+      {
+        "decode_s": 4.910119205,
+        "denoise_s": 29.328286085,
+        "name": "spark-mountain-lake-768p-w",
+        "peak_memory_mb": 32416.0,
+        "prompt_sha256": "7393510b34fbc223f0c7f5271a459bb0bd46907518e396d6ad7e4587854ce1d0",
+        "seed": 1024,
+        "total_s": 34.838216767000006
+      },
+      {
+        "decode_s": 4.770447466,
+        "denoise_s": 29.968036576,
+        "name": "h3-demo-768p-a",
+        "peak_memory_mb": 31872.0,
+        "prompt_sha256": "98f36b879692095e099ae824c18d9e93e7006a490e082fd474a5f531769dcf06",
+        "seed": 1024,
+        "total_s": 35.203843146000004
+      },
+      {
+        "decode_s": 4.790776203,
+        "denoise_s": 30.715286727,
+        "name": "h3-demo-768p-b",
+        "peak_memory_mb": 22688.0,
+        "prompt_sha256": "98f36b879692095e099ae824c18d9e93e7006a490e082fd474a5f531769dcf06",
+        "seed": 1024,
+        "total_s": 35.860562893
+      },
+      {
+        "decode_s": 4.78066084,
+        "denoise_s": 29.487400516,
+        "name": "h3-demo-768p-c",
+        "peak_memory_mb": 22688.0,
+        "prompt_sha256": "98f36b879692095e099ae824c18d9e93e7006a490e082fd474a5f531769dcf06",
+        "seed": 1024,
+        "total_s": 34.636727002
+      }
+    ],
+    "statistic": "median"
+  },
+  "attention": {
+    "dense_video_calls": 0.0,
+    "forwards": 8.0,
+    "pisa_calls": 0.0,
+    "pisa_sparsity_calls": {},
+    "sol_calls": 0.0,
+    "tau_calls": {},
+    "video_calls": 400.0,
+    "vsa_calls": 400.0
+  },
+  "decode_s": 4.7857185215,
+  "denoise_s": 29.727718546,
+  "dtype": "bfloat16",
+  "e2e_seconds": 35.0210299565,
+  "env": {
+    "FASTVIDEO_GPU_TRACE": "1",
+    "FASTVIDEO_H3_GRAPHS": "1",
+    "FASTVIDEO_H3_NVFP4_ATTN": "1",
+    "FASTVIDEO_H3_VSA_FP4": "1"
+  },
+  "ffn_chunking": {
+    "calls": 402.0,
+    "chunked_calls": 0.0,
+    "chunks": 402.0
+  },
+  "generate_wall_s": 35.2091814745,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "gpu_trace": {
+    "busy_s": 3.7078116960000003,
+    "dropped_records": 0.0,
+    "gap_count": 2780.0,
+    "host": {
+      "device_tail_s": 1.938562273979187,
+      "enqueue_s": 1.8276183655,
+      "first_activity_lag_s": 0.0028280019760131836
+    },
+    "host_launches": 2684.0,
+    "idle_frac": 0.008165367451487566,
+    "idle_s": 0.0299428955,
+    "kernel_count": 2790.0,
+    "kernel_s": 3.5567696820000005,
+    "memcpy": {
+      "DtoD": {
+        "bytes": 109661798800.0,
+        "count": 150.0
+      }
+    },
+    "memset": {
+      "bytes": 3600.0,
+      "count": 550.0
+    },
+    "pass": "h3",
+    "step": 1.0,
+    "sync_count": 0.0,
+    "wall_s": 3.7459437685,
+    "window_s": 3.7138665525000003
+  },
+  "hardware": "1x NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "includes_model_load": false,
+  "inference_time_s": 35.0210299565,
+  "load_s": 30.595141676,
+  "max_device_memory_used_mib": 34060.0,
+  "memory": {
+    "dit_residency": "resident"
+  },
+  "model": "MiniMaxAI/MiniMax-H3",
+  "peak_allocated_gib": 25.653366399463266,
+  "peak_memory_mb": 27280.0,
+  "peak_reserved_gib": 26.640625,
+  "pipeline": "h3",
+  "png_frames_s": 0.185332529,
+  "prompts": {
+    "h3-demo-768p-a": {
+      "activations": "bf16",
+      "attention": {
+        "dense_video_calls": 0,
+        "forwards": 8,
+        "per_forward": [
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 0,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 0,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 1,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 1,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 2,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 2,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 3,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 3,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 4,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 4,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 5,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 5,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 6,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 6,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 7,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 7,
+            "tau_calls": {},
+            "vsa": 50
+          }
+        ],
+        "pisa_calls": 0,
+        "pisa_sparsity_calls": {},
+        "sol_calls": 0,
+        "tau_calls": {},
+        "video_calls": 400,
+        "vsa_calls": 400
+      },
+      "decode_s": 4.770447466,
+      "denoise_s": 29.968036576,
+      "dit_offload": null,
+      "dtype": "bfloat16",
+      "e2e_seconds": 35.203843146000004,
+      "env": {
+        "FASTVIDEO_GPU_TRACE": "1",
+        "FASTVIDEO_H3_GRAPHS": "1",
+        "FASTVIDEO_H3_NVFP4_ATTN": "1",
+        "FASTVIDEO_H3_VSA_FP4": "1"
+      },
+      "ffn_chunking": {
+        "calls": 402,
+        "chunked_calls": 0,
+        "chunks": 402
+      },
+      "generate_wall_s": 35.389840687,
+      "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "gpu_trace": {
+        "busy_s": 3.7052301510000003,
+        "by_category": [
+          {
+            "calls": 450,
+            "category": "attention",
+            "share": 0.3417967828003978,
+            "total_s": 1.213921639
+          },
+          {
+            "calls": 455,
+            "category": "gemm",
+            "share": 0.3014185097229381,
+            "total_s": 1.070514615
+          },
+          {
+            "calls": 411,
+            "category": "norm_modulate_elementwise",
+            "share": 0.14175544462566658,
+            "total_s": 0.503457055
+          },
+          {
+            "calls": 1014,
+            "category": "cast",
+            "share": 0.1310783443984125,
+            "total_s": 0.46553638500000005
+          },
+          {
+            "calls": 459,
+            "category": "layout",
+            "share": 0.08395091845258498,
+            "total_s": 0.298159145
+          }
+        ],
+        "dropped_records": 0,
+        "gap_count": 3485,
+        "gap_histogram": [
+          {
+            "bucket": "<5us",
+            "count": 3480,
+            "idle_s": 0.002910616
+          },
+          {
+            "bucket": "5-50us",
+            "count": 2,
+            "idle_s": 0.000036961
+          },
+          {
+            "bucket": "50-500us",
+            "count": 0,
+            "idle_s": 0.0
+          },
+          {
+            "bucket": ">500us",
+            "count": 3,
+            "idle_s": 0.062200404
+          }
+        ],
+        "host": {
+          "device_tail_s": 1.0625505447387695,
+          "enqueue_s": 2.708007496,
+          "first_activity_lag_s": 0.0001800060272216797
+        },
+        "host_launches": 2684,
+        "idle_frac": 0.01727889848688524,
+        "idle_s": 0.06514798100000001,
+        "kernel_count": 2789,
+        "kernel_s": 3.5515888390000003,
+        "largest_gaps": [
+          {
+            "after": "memcpy HtoD",
+            "at_s": 0.015029200000000001,
+            "before": "mx_block_copy",
+            "gap_us": 49915.447
+          },
+          {
+            "after": "nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN",
+            "at_s": 0.000011039,
+            "before": "cast_f32_bf16",
+            "gap_us": 8958.82
+          },
+          {
+            "after": "cast_bf16_f32_bias_act",
+            "at_s": 0.009244389,
+            "before": "nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN",
+            "gap_us": 3326.137
+          },
+          {
+            "after": "h3_norm_mod",
+            "at_s": 0.06918903,
+            "before": "memcpy HtoD",
+            "gap_us": 24.257
+          },
+          {
+            "after": "memset",
+            "at_s": 1.084744423,
+            "before": "nvfp4_quant_bf16_sw",
+            "gap_us": 12.704
+          },
+          {
+            "after": "memset",
+            "at_s": 1.327280417,
+            "before": "nvjet_sm120_ootst_mma_128x256x128_3_64x64x128_tmaAB_alignCD4_bx_vec16_ue4m3_TNNN",
+            "gap_us": 4.065
+          },
+          {
+            "after": "memset",
+            "at_s": 0.07461899100000001,
+            "before": "nvjet_sm120_ootst_mma_128x256x128_3_64x64x128_tmaAB_alignCD4_bx_vec16_ue4m3_TNNN",
+            "gap_us": 4.0
+          },
+          {
+            "after": "memset",
+            "at_s": 0.579396441,
+            "before": "mx_swiglu",
+            "gap_us": 4.0
+          },
+          {
+            "after": "memset",
+            "at_s": 0.9320237250000001,
+            "before": "mx_merge_heads",
+            "gap_us": 4.0
+          },
+          {
+            "after": "memset",
+            "at_s": 1.107779219,
+            "before": "nvjet_sm120_ootst_mma_128x256x128_3_64x64x128_tmaAB_alignCD4_bx_vec16_ue4m3_TNNN",
+            "gap_us": 3.969
+          }
+        ],
+        "memcpy": {
+          "DtoD": {
+            "bytes": 109661798800,
+            "count": 150
+          },
+          "HtoD": {
+            "bytes": 38707200,
+            "count": 1
+          }
+        },
+        "memset": {
+          "bytes": 3600,
+          "count": 550
+        },
+        "pass": "h3",
+        "step": 1,
+        "sync_count": 0,
+        "top_kernels": [
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "attn_fp4_vsa",
+            "share": 0.1777238147808021,
+            "total_s": 0.6312019170000001
+          },
+          {
+            "calls": 100,
+            "category": "gemm",
+            "name": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+            "share": 0.16849739739820147,
+            "total_s": 0.5984334760000001
+          },
+          {
+            "calls": 250,
+            "category": "gemm",
+            "name": "nvjet_sm120_ootst_mma_128x256x128_3_64x64x128_tmaAB_alignCD4_bx_vec16_ue4m3_TNNN",
+            "share": 0.12863085303777191,
+            "total_s": 0.456843902
+          },
+          {
+            "calls": 308,
+            "category": "cast",
+            "name": "cast_f32_bf16",
+            "share": 0.06044734645028543,
+            "total_s": 0.214684121
+          },
+          {
+            "calls": 200,
+            "category": "cast",
+            "name": "nvfp4_quant_bf16_sw",
+            "share": 0.05972030733707349,
+            "total_s": 0.21210197700000002
+          },
+          {
+            "calls": 100,
+            "category": "norm_modulate_elementwise",
+            "name": "h3_qk_norm_rope",
+            "share": 0.055677266137506294,
+            "total_s": 0.19774275700000002
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "flash_mma_fwd_d128",
+            "share": 0.05295256222647455,
+            "total_s": 0.18806572900000001
+          },
+          {
+            "calls": 50,
+            "category": "norm_modulate_elementwise",
+            "name": "mx_swiglu",
+            "share": 0.04881295326088843,
+            "total_s": 0.17336354
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "attn_fp4_quant_tile",
+            "share": 0.041575979848381316,
+            "total_s": 0.14766078600000002
+          },
+          {
+            "calls": 150,
+            "category": "attention",
+            "name": "vsa_tile_mean",
+            "share": 0.03265084339904921,
+            "total_s": 0.11596237100000001
+          },
+          {
+            "calls": 100,
+            "category": "layout",
+            "name": "fvf_split_heads_rows",
+            "share": 0.03235726577864719,
+            "total_s": 0.11491970400000001
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "vsa_combine",
+            "share": 0.031335880093410776,
+            "total_s": 0.111292162
+          },
+          {
+            "calls": 50,
+            "category": "layout",
+            "name": "mx_merge_heads",
+            "share": 0.028026662576185666,
+            "total_s": 0.099539182
+          },
+          {
+            "calls": 100,
+            "category": "layout",
+            "name": "fill_f",
+            "share": 0.02069338015508951,
+            "total_s": 0.073494378
+          },
+          {
+            "calls": 50,
+            "category": "norm_modulate_elementwise",
+            "name": "h3_res_gate_norm_mod",
+            "share": 0.016551950595878082,
+            "total_s": 0.058785723000000005
+          },
+          {
+            "calls": 49,
+            "category": "norm_modulate_elementwise",
+            "name": "fvf_h3_gate_res_norm_mod",
+            "share": 0.015791470111667393,
+            "total_s": 0.056084809000000006
+          },
+          {
+            "calls": 100,
+            "category": "cast",
+            "name": "nvfp4_amax_bf16",
+            "share": 0.0098509606787285,
+            "total_s": 0.034986562
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "vsa_topk2",
+            "share": 0.0035936947035777075,
+            "total_s": 0.012763326
+          },
+          {
+            "calls": 50,
+            "category": "gemm",
+            "name": "magma_sgemmEx_kernel<…>",
+            "share": 0.0022536201015468955,
+            "total_s": 0.008003932
+          },
+          {
+            "calls": 50,
+            "category": "norm_modulate_elementwise",
+            "name": "bcast_binary",
+            "share": 0.002177368313325753,
+            "total_s": 0.007733117
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "softmax_last",
+            "share": 0.0019640077487021296,
+            "total_s": 0.006975348
+          },
+          {
+            "calls": 104,
+            "category": "norm_modulate_elementwise",
+            "name": "mx_binary",
+            "share": 0.0018819332143981884,
+            "total_s": 0.006683853
+          },
+          {
+            "calls": 50,
+            "category": "gemm",
+            "name": "cutlass::Kernel2<cutlass_80_simt_sgemm_128x256_8x4_nn_align1>",
+            "share": 0.0018697175548816392,
+            "total_s": 0.006640468
+          },
+          {
+            "calls": 154,
+            "category": "layout",
+            "name": "block_copy",
+            "share": 0.001586469114365859,
+            "total_s": 0.005634486
+          },
+          {
+            "calls": 56,
+            "category": "cast",
+            "name": "cast_bf16_f32_bias_act",
+            "share": 0.000940871860871393,
+            "total_s": 0.00334159
+          }
+        ],
+        "wall_s": 3.771047254,
+        "window_s": 3.7703781320000003
+      },
+      "hardware": "1x NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "includes_model_load": false,
+      "inference_time_s": 35.203843146000004,
+      "load_s": 30.595141676,
+      "max_device_memory_used_mib": 32668,
+      "memory": {
+        "dit_residency": "resident",
+        "stages": [
+          {
+            "end_allocated_gib": 19.8578940955922,
+            "peak_allocated_gib": 19.8578940955922,
+            "peak_reserved_gib": 20.0625,
+            "stage": "text"
+          },
+          {
+            "end_allocated_gib": 19.863271388225257,
+            "peak_allocated_gib": 19.92242160718888,
+            "peak_reserved_gib": 20.0625,
+            "stage": "refine"
+          },
+          {
+            "end_allocated_gib": 19.89914500620216,
+            "peak_allocated_gib": 29.94811567198485,
+            "peak_reserved_gib": 31.125,
+            "stage": "denoise"
+          },
+          {
+            "end_allocated_gib": 19.89914500620216,
+            "peak_allocated_gib": 20.030797361396253,
+            "peak_reserved_gib": 20.21875,
+            "stage": "audio_decode"
+          },
+          {
+            "end_allocated_gib": 19.91248309519142,
+            "peak_allocated_gib": 21.287027238868177,
+            "peak_reserved_gib": 21.90625,
+            "stage": "video_decode"
+          }
+        ]
+      },
+      "model": "MiniMaxAI/MiniMax-H3",
+      "peak_allocated_gib": 29.94811567198485,
+      "peak_memory_mb": 31872.0,
+      "peak_reserved_gib": 31.125,
+      "pipeline": "h3",
+      "png_frames_s": 0.185997541,
+      "quantized_linears": {
+        "calls": {
+          "nvfp4_published": 1600
+        },
+        "modules": {
+          "nvfp4_published": 200
+        }
+      },
+      "recipe": null,
+      "schema_version": "fastvideo-rs.benchmark.v1",
+      "stage_seconds": {
+        "audio_decode": 0.076732957,
+        "denoise": 29.968036576,
+        "png_frames": 0.185997541,
+        "refine": 0.011050659,
+        "text": 0.300789541,
+        "video_decode": 4.693714509,
+        "video_encode_tail": 0.000530578,
+        "video_push": 0.000093374,
+        "video_rgb": 0.3400641339936856,
+        "video_vae": 4.6492439094185825,
+        "video_wait": 0.158805595
+      },
+      "step_seconds": [
+        3.744073517,
+        3.771047254,
+        3.726498566,
+        3.748740111,
+        3.738825314,
+        3.752554829,
+        3.737732321,
+        3.737364609
+      ],
+      "task": "t2va",
+      "teacache": {
+        "enabled": false
+      },
+      "text_cache": "hit",
+      "text_encoder": "cache",
+      "text_s": 0.300789541,
+      "timing_note": "total_s = inference_time_s = e2e_seconds = generate_wall_s - png_frames_s (the PNG frames for compare-clips are written after the mp4, outside every timed number); load_s is separate",
+      "timing_scope": "one warm generate() call: text + denoise + decode, the decode through a finished mp4 (x264 encode included, as sol-engine's video_vae_seconds); PNG frames and model load excluded",
+      "total_s": 35.203843146000004,
+      "vsa": {
+        "calls": 400,
+        "density": 0.23742165890550052,
+        "selected_tiles": 2430310400.0,
+        "total_tiles": 10236262400.0,
+        "video_density": 0.2,
+        "video_selected_tiles": 1951488000.0,
+        "video_total_tiles": 9757440000.0
+      },
+      "warm_steady_state": false,
+      "warmup_requests": 0,
+      "workload": {
+        "duration_s": 5,
+        "height": 768,
+        "measured_steps": 8,
+        "num_frames": 124,
+        "prompt_name": "h3-demo-768p-a",
+        "prompt_sha256": "98f36b879692095e099ae824c18d9e93e7006a490e082fd474a5f531769dcf06",
+        "seed": 1024,
+        "sequence_length": 38247,
+        "task": "t2va",
+        "text_tokens": 537,
+        "width": 1344
+      }
+    },
+    "h3-demo-768p-b": {
+      "activations": "bf16",
+      "attention": {
+        "dense_video_calls": 0,
+        "forwards": 8,
+        "per_forward": [
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 0,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 0,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 1,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 1,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 2,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 2,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 3,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 3,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 4,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 4,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 5,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 5,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 6,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 6,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 7,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 7,
+            "tau_calls": {},
+            "vsa": 50
+          }
+        ],
+        "pisa_calls": 0,
+        "pisa_sparsity_calls": {},
+        "sol_calls": 0,
+        "tau_calls": {},
+        "video_calls": 400,
+        "vsa_calls": 400
+      },
+      "decode_s": 4.790776203,
+      "denoise_s": 30.715286727,
+      "dit_offload": null,
+      "dtype": "bfloat16",
+      "e2e_seconds": 35.860562893,
+      "env": {
+        "FASTVIDEO_GPU_TRACE": "1",
+        "FASTVIDEO_H3_GRAPHS": "1",
+        "FASTVIDEO_H3_NVFP4_ATTN": "1",
+        "FASTVIDEO_H3_VSA_FP4": "1"
+      },
+      "ffn_chunking": {
+        "calls": 402,
+        "chunked_calls": 0,
+        "chunks": 402
+      },
+      "generate_wall_s": 36.033240082,
+      "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "gpu_trace": {
+        "busy_s": 3.7103932410000002,
+        "by_category": [
+          {
+            "calls": 450,
+            "category": "attention",
+            "share": 0.3418535348690729,
+            "total_s": 1.217665378
+          },
+          {
+            "calls": 455,
+            "category": "gemm",
+            "share": 0.3017720497395174,
+            "total_s": 1.074897111
+          },
+          {
+            "calls": 411,
+            "category": "norm_modulate_elementwise",
+            "share": 0.14151452594923394,
+            "total_s": 0.50406774
+          },
+          {
+            "calls": 1014,
+            "category": "cast",
+            "share": 0.13090170728859296,
+            "total_s": 0.466265405
+          },
+          {
+            "calls": 461,
+            "category": "layout",
+            "share": 0.08395818215358283,
+            "total_s": 0.29905489100000004
+          }
+        ],
+        "dropped_records": 0,
+        "gap_count": 2015,
+        "gap_histogram": [
+          {
+            "bucket": "<5us",
+            "count": 2015,
+            "idle_s": 0.0025352160000000003
+          },
+          {
+            "bucket": "5-50us",
+            "count": 0,
+            "idle_s": 0.0
+          },
+          {
+            "bucket": "50-500us",
+            "count": 0,
+            "idle_s": 0.0
+          },
+          {
+            "bucket": ">500us",
+            "count": 0,
+            "idle_s": 0.0
+          }
+        ],
+        "host": {
+          "device_tail_s": 2.8145740032196045,
+          "enqueue_s": 1.025480913,
+          "first_activity_lag_s": 0.12712645530700684
+        },
+        "host_launches": 2686,
+        "idle_frac": 0.0006828076622969522,
+        "idle_s": 0.0025352160000000003,
+        "kernel_count": 2791,
+        "kernel_s": 3.5619505250000003,
+        "largest_gaps": [
+          {
+            "after": "nvfp4_alpha",
+            "at_s": 0.527912132,
+            "before": "memset",
+            "gap_us": 4.768
+          },
+          {
+            "after": "nvfp4_alpha",
+            "at_s": 0.7500505700000001,
+            "before": "memset",
+            "gap_us": 4.5760000000000005
+          },
+          {
+            "after": "nvfp4_alpha",
+            "at_s": 0.6019751210000001,
+            "before": "memset",
+            "gap_us": 4.384
+          },
+          {
+            "after": "nvfp4_alpha",
+            "at_s": 0.305860511,
+            "before": "memset",
+            "gap_us": 4.352
+          },
+          {
+            "after": "nvfp4_alpha",
+            "at_s": 3.7003977970000004,
+            "before": "memset",
+            "gap_us": 4.352
+          },
+          {
+            "after": "nvfp4_alpha",
+            "at_s": 0.8240273180000001,
+            "before": "memset",
+            "gap_us": 4.32
+          },
+          {
+            "after": "nvfp4_alpha",
+            "at_s": 0.294177058,
+            "before": "memset",
+            "gap_us": 4.288
+          },
+          {
+            "after": "nvfp4_alpha",
+            "at_s": 0.897996482,
+            "before": "memset",
+            "gap_us": 4.288
+          },
+          {
+            "after": "nvfp4_alpha",
+            "at_s": 1.0459621380000002,
+            "before": "memset",
+            "gap_us": 4.224
+          },
+          {
+            "after": "nvfp4_alpha",
+            "at_s": 0.157834246,
+            "before": "memset",
+            "gap_us": 4.1930000000000005
+          }
+        ],
+        "memcpy": {
+          "DtoD": {
+            "bytes": 109661798800,
+            "count": 150
+          }
+        },
+        "memset": {
+          "bytes": 3600,
+          "count": 550
+        },
+        "pass": "h3",
+        "step": 1,
+        "sync_count": 0,
+        "top_kernels": [
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "attn_fp4_vsa",
+            "share": 0.1778237694640635,
+            "total_s": 0.633399469
+          },
+          {
+            "calls": 100,
+            "category": "gemm",
+            "name": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+            "share": 0.16873873199010814,
+            "total_s": 0.601039015
+          },
+          {
+            "calls": 250,
+            "category": "gemm",
+            "name": "nvjet_sm120_ootst_mma_128x256x128_3_64x64x128_tmaAB_alignCD4_bx_vec16_ue4m3_TNNN",
+            "share": 0.12867194302200477,
+            "total_s": 0.458323095
+          },
+          {
+            "calls": 308,
+            "category": "cast",
+            "name": "cast_f32_bf16",
+            "share": 0.060497033714414096,
+            "total_s": 0.215487441
+          },
+          {
+            "calls": 200,
+            "category": "cast",
+            "name": "nvfp4_quant_bf16_sw",
+            "share": 0.059544344737915755,
+            "total_s": 0.21209401
+          },
+          {
+            "calls": 100,
+            "category": "norm_modulate_elementwise",
+            "name": "h3_qk_norm_rope",
+            "share": 0.05539939890097154,
+            "total_s": 0.19732991800000002
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "flash_mma_fwd_d128",
+            "share": 0.05289174784369022,
+            "total_s": 0.188397789
+          },
+          {
+            "calls": 50,
+            "category": "norm_modulate_elementwise",
+            "name": "mx_swiglu",
+            "share": 0.04893393795805179,
+            "total_s": 0.174300266
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "attn_fp4_quant_tile",
+            "share": 0.041794476356462024,
+            "total_s": 0.14886985700000002
+          },
+          {
+            "calls": 150,
+            "category": "attention",
+            "name": "vsa_tile_mean",
+            "share": 0.03254652617613211,
+            "total_s": 0.11592911600000001
+          },
+          {
+            "calls": 100,
+            "category": "layout",
+            "name": "fvf_split_heads_rows",
+            "share": 0.03241809233158846,
+            "total_s": 0.11547164100000001
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "vsa_combine",
+            "share": 0.031251675232069655,
+            "total_s": 0.11131692100000001
+          },
+          {
+            "calls": 50,
+            "category": "layout",
+            "name": "mx_merge_heads",
+            "share": 0.027977827120437053,
+            "total_s": 0.099655636
+          },
+          {
+            "calls": 100,
+            "category": "layout",
+            "name": "fill_f",
+            "share": 0.020696463772471967,
+            "total_s": 0.07371978
+          },
+          {
+            "calls": 50,
+            "category": "norm_modulate_elementwise",
+            "name": "h3_res_gate_norm_mod",
+            "share": 0.016492334912484502,
+            "total_s": 0.058744881000000006
+          },
+          {
+            "calls": 49,
+            "category": "norm_modulate_elementwise",
+            "name": "fvf_h3_gate_res_norm_mod",
+            "share": 0.015750551448212493,
+            "total_s": 0.056102685000000006
+          },
+          {
+            "calls": 100,
+            "category": "cast",
+            "name": "nvfp4_amax_bf16",
+            "share": 0.009813846866949394,
+            "total_s": 0.034956437
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "vsa_topk2",
+            "share": 0.0035925597254049453,
+            "total_s": 0.01279652
+          },
+          {
+            "calls": 50,
+            "category": "gemm",
+            "name": "magma_sgemmEx_kernel<…>",
+            "share": 0.0023296895736641373,
+            "total_s": 0.008298239
+          },
+          {
+            "calls": 50,
+            "category": "norm_modulate_elementwise",
+            "name": "bcast_binary",
+            "share": 0.0021922272488610717,
+            "total_s": 0.007808605000000001
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "softmax_last",
+            "share": 0.0019527800712504282,
+            "total_s": 0.006955706000000001
+          },
+          {
+            "calls": 104,
+            "category": "norm_modulate_elementwise",
+            "name": "mx_binary",
+            "share": 0.0018798377330072546,
+            "total_s": 0.006695889
+          },
+          {
+            "calls": 50,
+            "category": "gemm",
+            "name": "cutlass::Kernel2<cutlass_80_simt_sgemm_128x256_8x4_nn_align1>",
+            "share": 0.0018645396541547977,
+            "total_s": 0.006641398000000001
+          },
+          {
+            "calls": 154,
+            "category": "layout",
+            "name": "block_copy",
+            "share": 0.0015793021156575442,
+            "total_s": 0.005625396
+          },
+          {
+            "calls": 56,
+            "category": "cast",
+            "name": "cast_bf16_f32_bias_act",
+            "share": 0.0009351449371970151,
+            "total_s": 0.00333094
+          }
+        ],
+        "wall_s": 3.840750279,
+        "window_s": 3.7129284570000003
+      },
+      "hardware": "1x NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "includes_model_load": false,
+      "inference_time_s": 35.860562893,
+      "load_s": 30.595141676,
+      "max_device_memory_used_mib": 34910,
+      "memory": {
+        "dit_residency": "resident",
+        "stages": [
+          {
+            "end_allocated_gib": 19.88575756456703,
+            "peak_allocated_gib": 19.88575756456703,
+            "peak_reserved_gib": 20.125,
+            "stage": "text"
+          },
+          {
+            "end_allocated_gib": 19.891134857200086,
+            "peak_allocated_gib": 19.95028507616371,
+            "peak_reserved_gib": 20.125,
+            "stage": "refine"
+          },
+          {
+            "end_allocated_gib": 20.2063008537516,
+            "peak_allocated_gib": 20.252929056994617,
+            "peak_reserved_gib": 20.34375,
+            "stage": "denoise"
+          },
+          {
+            "end_allocated_gib": 20.2063008537516,
+            "peak_allocated_gib": 20.33795320894569,
+            "peak_reserved_gib": 20.5,
+            "stage": "audio_decode"
+          },
+          {
+            "end_allocated_gib": 20.219638942740858,
+            "peak_allocated_gib": 21.594183086417615,
+            "peak_reserved_gib": 22.15625,
+            "stage": "video_decode"
+          }
+        ]
+      },
+      "model": "MiniMaxAI/MiniMax-H3",
+      "peak_allocated_gib": 21.594183086417615,
+      "peak_memory_mb": 22688.0,
+      "peak_reserved_gib": 22.15625,
+      "pipeline": "h3",
+      "png_frames_s": 0.172677189,
+      "quantized_linears": {
+        "calls": {
+          "nvfp4_published": 1600
+        },
+        "modules": {
+          "nvfp4_published": 200
+        }
+      },
+      "recipe": null,
+      "schema_version": "fastvideo-rs.benchmark.v1",
+      "stage_seconds": {
+        "audio_decode": 0.081111686,
+        "denoise": 30.715286727,
+        "png_frames": 0.172677189,
+        "refine": 0.000649757,
+        "text": 0.281363682,
+        "video_decode": 4.709664517,
+        "video_encode_tail": 0.000426468,
+        "video_push": 0.00011003900000000001,
+        "video_rgb": 0.3276427089923266,
+        "video_vae": 4.6556726680994025,
+        "video_wait": 0.168599114
+      },
+      "step_seconds": [
+        4.182670886,
+        3.840750279,
+        3.762912781,
+        3.770516155,
+        3.783541469,
+        3.776493209,
+        3.778569063,
+        3.806945743
+      ],
+      "task": "t2va",
+      "teacache": {
+        "enabled": false
+      },
+      "text_cache": "hit",
+      "text_encoder": "cache",
+      "text_s": 0.281363682,
+      "timing_note": "total_s = inference_time_s = e2e_seconds = generate_wall_s - png_frames_s (the PNG frames for compare-clips are written after the mp4, outside every timed number); load_s is separate",
+      "timing_scope": "one warm generate() call: text + denoise + decode, the decode through a finished mp4 (x264 encode included, as sol-engine's video_vae_seconds); PNG frames and model load excluded",
+      "total_s": 35.860562893,
+      "vsa": {
+        "calls": 400,
+        "density": 0.23742165890550052,
+        "selected_tiles": 2430310400.0,
+        "total_tiles": 10236262400.0,
+        "video_density": 0.2,
+        "video_selected_tiles": 1951488000.0,
+        "video_total_tiles": 9757440000.0
+      },
+      "warm_steady_state": false,
+      "warmup_requests": 0,
+      "workload": {
+        "duration_s": 5,
+        "height": 768,
+        "measured_steps": 8,
+        "num_frames": 124,
+        "prompt_name": "h3-demo-768p-b",
+        "prompt_sha256": "98f36b879692095e099ae824c18d9e93e7006a490e082fd474a5f531769dcf06",
+        "seed": 1024,
+        "sequence_length": 38247,
+        "task": "t2va",
+        "text_tokens": 537,
+        "width": 1344
+      }
+    },
+    "h3-demo-768p-c": {
+      "activations": "bf16",
+      "attention": {
+        "dense_video_calls": 0,
+        "forwards": 0,
+        "per_forward": [],
+        "pisa_calls": 0,
+        "pisa_sparsity_calls": {},
+        "sol_calls": 0,
+        "tau_calls": {},
+        "video_calls": 0,
+        "vsa_calls": 0
+      },
+      "decode_s": 4.78066084,
+      "denoise_s": 29.487400516,
+      "dit_offload": null,
+      "dtype": "bfloat16",
+      "e2e_seconds": 34.636727002,
+      "env": {
+        "FASTVIDEO_GPU_TRACE": "1",
+        "FASTVIDEO_H3_GRAPHS": "1",
+        "FASTVIDEO_H3_NVFP4_ATTN": "1",
+        "FASTVIDEO_H3_VSA_FP4": "1"
+      },
+      "ffn_chunking": {
+        "calls": 2,
+        "chunked_calls": 0,
+        "chunks": 2
+      },
+      "generate_wall_s": 34.821394519,
+      "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "gpu_trace": {
+        "busy_s": 3.712366658,
+        "by_category": [
+          {
+            "calls": 450,
+            "category": "attention",
+            "share": 0.3418003060181553,
+            "total_s": 1.218226658
+          },
+          {
+            "calls": 455,
+            "category": "gemm",
+            "share": 0.3019609501504901,
+            "total_s": 1.076233323
+          },
+          {
+            "calls": 411,
+            "category": "norm_modulate_elementwise",
+            "share": 0.14145645345636226,
+            "total_s": 0.504171645
+          },
+          {
+            "calls": 1014,
+            "category": "cast",
+            "share": 0.13082977498742637,
+            "total_s": 0.46629659700000003
+          },
+          {
+            "calls": 461,
+            "category": "layout",
+            "share": 0.08395251538756594,
+            "total_s": 0.299219136
+          }
+        ],
+        "dropped_records": 0,
+        "gap_count": 2075,
+        "gap_histogram": [
+          {
+            "bucket": "<5us",
+            "count": 2075,
+            "idle_s": 0.00243799
+          },
+          {
+            "bucket": "5-50us",
+            "count": 0,
+            "idle_s": 0.0
+          },
+          {
+            "bucket": "50-500us",
+            "count": 0,
+            "idle_s": 0.0
+          },
+          {
+            "bucket": ">500us",
+            "count": 0,
+            "idle_s": 0.0
+          }
+        ],
+        "host": {
+          "device_tail_s": 3.4373936653137207,
+          "enqueue_s": 0.28288703800000004,
+          "first_activity_lag_s": 0.0054759979248046875
+        },
+        "host_launches": 0,
+        "idle_frac": 0.0006562902308503842,
+        "idle_s": 0.00243799,
+        "kernel_count": 2791,
+        "kernel_s": 3.564147359,
+        "largest_gaps": [
+          {
+            "after": "memset",
+            "at_s": 0.9426031610000001,
+            "before": "mx_merge_heads",
+            "gap_us": 4.192
+          },
+          {
+            "after": "nvfp4_alpha",
+            "at_s": 3.639882129,
+            "before": "memset",
+            "gap_us": 4.192
+          },
+          {
+            "after": "memset",
+            "at_s": 2.644835316,
+            "before": "mx_merge_heads",
+            "gap_us": 4.064
+          },
+          {
+            "after": "memset",
+            "at_s": 0.9440038770000001,
+            "before": "nvfp4_quant_bf16_sw",
+            "gap_us": 4.032
+          },
+          {
+            "after": "memset",
+            "at_s": 0.27583328,
+            "before": "mx_merge_heads",
+            "gap_us": 4.0
+          },
+          {
+            "after": "memset",
+            "at_s": 1.1645874660000002,
+            "before": "mx_merge_heads",
+            "gap_us": 3.936
+          },
+          {
+            "after": "memset",
+            "at_s": 0.870063157,
+            "before": "nvfp4_quant_bf16_sw",
+            "gap_us": 3.872
+          },
+          {
+            "after": "memset",
+            "at_s": 2.5892315420000003,
+            "before": "nvfp4_quant_bf16_sw",
+            "gap_us": 3.872
+          },
+          {
+            "after": "memset",
+            "at_s": 0.12804627300000002,
+            "before": "mx_merge_heads",
+            "gap_us": 3.84
+          },
+          {
+            "after": "memset",
+            "at_s": 0.9469779800000001,
+            "before": "h3_res_gate_norm_mod",
+            "gap_us": 3.84
+          }
+        ],
+        "memcpy": {
+          "DtoD": {
+            "bytes": 109661798800,
+            "count": 150
+          }
+        },
+        "memset": {
+          "bytes": 3600,
+          "count": 550
+        },
+        "pass": "h3",
+        "step": 1,
+        "sync_count": 0,
+        "top_kernels": [
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "attn_fp4_vsa",
+            "share": 0.17795909515311373,
+            "total_s": 0.6342724390000001
+          },
+          {
+            "calls": 100,
+            "category": "gemm",
+            "name": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+            "share": 0.1688361398639915,
+            "total_s": 0.601756882
+          },
+          {
+            "calls": 250,
+            "category": "gemm",
+            "name": "nvjet_sm120_ootst_mma_128x256x128_3_64x64x128_tmaAB_alignCD4_bx_vec16_ue4m3_TNNN",
+            "share": 0.12876821404173597,
+            "total_s": 0.45894889000000005
+          },
+          {
+            "calls": 308,
+            "category": "cast",
+            "name": "cast_f32_bf16",
+            "share": 0.060459971851573494,
+            "total_s": 0.21548824900000002
+          },
+          {
+            "calls": 200,
+            "category": "cast",
+            "name": "nvfp4_quant_bf16_sw",
+            "share": 0.05950721298445618,
+            "total_s": 0.212092476
+          },
+          {
+            "calls": 100,
+            "category": "norm_modulate_elementwise",
+            "name": "h3_qk_norm_rope",
+            "share": 0.055394876561836344,
+            "total_s": 0.197435503
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "flash_mma_fwd_d128",
+            "share": 0.05289097784466773,
+            "total_s": 0.18851123900000002
+          },
+          {
+            "calls": 50,
+            "category": "norm_modulate_elementwise",
+            "name": "mx_swiglu",
+            "share": 0.0489047936135011,
+            "total_s": 0.17430389100000002
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "attn_fp4_quant_tile",
+            "share": 0.041633225300099046,
+            "total_s": 0.14838695000000002
+          },
+          {
+            "calls": 150,
+            "category": "attention",
+            "name": "vsa_tile_mean",
+            "share": 0.03253593870275216,
+            "total_s": 0.11596288
+          },
+          {
+            "calls": 100,
+            "category": "layout",
+            "name": "fvf_split_heads_rows",
+            "share": 0.03244039158707523,
+            "total_s": 0.115622336
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "vsa_combine",
+            "share": 0.031234658050511878,
+            "total_s": 0.111324924
+          },
+          {
+            "calls": 50,
+            "category": "layout",
+            "name": "mx_merge_heads",
+            "share": 0.027960836340942097,
+            "total_s": 0.099656541
+          },
+          {
+            "calls": 100,
+            "category": "layout",
+            "name": "fill_f",
+            "share": 0.02068924838749912,
+            "total_s": 0.07373953000000001
+          },
+          {
+            "calls": 50,
+            "category": "norm_modulate_elementwise",
+            "name": "h3_res_gate_norm_mod",
+            "share": 0.016483958176320732,
+            "total_s": 0.058751256
+          },
+          {
+            "calls": 49,
+            "category": "norm_modulate_elementwise",
+            "name": "fvf_h3_gate_res_norm_mod",
+            "share": 0.015737701713808405,
+            "total_s": 0.056091488
+          },
+          {
+            "calls": 100,
+            "category": "cast",
+            "name": "nvfp4_amax_bf16",
+            "share": 0.009811909407082403,
+            "total_s": 0.034971091
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "vsa_topk2",
+            "share": 0.0035912255332762742,
+            "total_s": 0.012799657
+          },
+          {
+            "calls": 50,
+            "category": "gemm",
+            "name": "magma_sgemmEx_kernel<…>",
+            "share": 0.002327473351810985,
+            "total_s": 0.008295458
+          },
+          {
+            "calls": 50,
+            "category": "norm_modulate_elementwise",
+            "name": "bcast_binary",
+            "share": 0.002191459615236408,
+            "total_s": 0.007810685
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "softmax_last",
+            "share": 0.0019551854337344753,
+            "total_s": 0.006968569000000001
+          },
+          {
+            "calls": 104,
+            "category": "norm_modulate_elementwise",
+            "name": "mx_binary",
+            "share": 0.001877834535404236,
+            "total_s": 0.0066928790000000005
+          },
+          {
+            "calls": 50,
+            "category": "gemm",
+            "name": "cutlass::Kernel2<cutlass_80_simt_sgemm_128x256_8x4_nn_align1>",
+            "share": 0.0018636695767437824,
+            "total_s": 0.006642393000000001
+          },
+          {
+            "calls": 154,
+            "category": "layout",
+            "name": "block_copy",
+            "share": 0.001577583481727193,
+            "total_s": 0.00562274
+          },
+          {
+            "calls": 56,
+            "category": "cast",
+            "name": "cast_bf16_f32_bias_act",
+            "share": 0.0009352708135320395,
+            "total_s": 0.003333443
+          }
+        ],
+        "wall_s": 3.7208402830000002,
+        "window_s": 3.7148046480000003
+      },
+      "hardware": "1x NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "includes_model_load": false,
+      "inference_time_s": 34.636727002,
+      "load_s": 30.595141676,
+      "max_device_memory_used_mib": 34910,
+      "memory": {
+        "dit_residency": "resident",
+        "stages": [
+          {
+            "end_allocated_gib": 20.192913412116468,
+            "peak_allocated_gib": 20.192913412116468,
+            "peak_reserved_gib": 20.34375,
+            "stage": "text"
+          },
+          {
+            "end_allocated_gib": 20.198290704749525,
+            "peak_allocated_gib": 20.257440923713148,
+            "peak_reserved_gib": 20.375,
+            "stage": "refine"
+          },
+          {
+            "end_allocated_gib": 20.2063008537516,
+            "peak_allocated_gib": 20.252929056994617,
+            "peak_reserved_gib": 20.375,
+            "stage": "denoise"
+          },
+          {
+            "end_allocated_gib": 20.2063008537516,
+            "peak_allocated_gib": 20.33795320894569,
+            "peak_reserved_gib": 20.5,
+            "stage": "audio_decode"
+          },
+          {
+            "end_allocated_gib": 20.219638942740858,
+            "peak_allocated_gib": 21.594183086417615,
+            "peak_reserved_gib": 22.15625,
+            "stage": "video_decode"
+          }
+        ]
+      },
+      "model": "MiniMaxAI/MiniMax-H3",
+      "peak_allocated_gib": 21.594183086417615,
+      "peak_memory_mb": 22688.0,
+      "peak_reserved_gib": 22.15625,
+      "pipeline": "h3",
+      "png_frames_s": 0.184667517,
+      "quantized_linears": {
+        "calls": {},
+        "modules": {
+          "nvfp4_published": 200
+        }
+      },
+      "recipe": null,
+      "schema_version": "fastvideo-rs.benchmark.v1",
+      "stage_seconds": {
+        "audio_decode": 0.08332513,
+        "denoise": 29.487400516,
+        "png_frames": 0.184667517,
+        "refine": 0.000828861,
+        "text": 0.283351484,
+        "video_decode": 4.69733571,
+        "video_encode_tail": 0.000463034,
+        "video_push": 0.000098699,
+        "video_rgb": 0.3273650290075367,
+        "video_vae": 4.651231810569763,
+        "video_wait": 0.160478072
+      },
+      "step_seconds": [
+        3.687882121,
+        3.7208402830000002,
+        3.676264841,
+        3.676520001,
+        3.677725772,
+        3.67837945,
+        3.678660519,
+        3.678062444
+      ],
+      "task": "t2va",
+      "teacache": {
+        "enabled": false
+      },
+      "text_cache": "hit",
+      "text_encoder": "cache",
+      "text_s": 0.283351484,
+      "timing_note": "total_s = inference_time_s = e2e_seconds = generate_wall_s - png_frames_s (the PNG frames for compare-clips are written after the mp4, outside every timed number); load_s is separate",
+      "timing_scope": "one warm generate() call: text + denoise + decode, the decode through a finished mp4 (x264 encode included, as sol-engine's video_vae_seconds); PNG frames and model load excluded",
+      "total_s": 34.636727002,
+      "vsa": {
+        "calls": 0,
+        "density": null,
+        "selected_tiles": 0.0,
+        "total_tiles": 0.0,
+        "video_density": null,
+        "video_selected_tiles": 0.0,
+        "video_total_tiles": 0.0
+      },
+      "warm_steady_state": false,
+      "warmup_requests": 0,
+      "workload": {
+        "duration_s": 5,
+        "height": 768,
+        "measured_steps": 8,
+        "num_frames": 124,
+        "prompt_name": "h3-demo-768p-c",
+        "prompt_sha256": "98f36b879692095e099ae824c18d9e93e7006a490e082fd474a5f531769dcf06",
+        "seed": 1024,
+        "sequence_length": 38247,
+        "task": "t2va",
+        "text_tokens": 537,
+        "width": 1344
+      }
+    },
+    "spark-mountain-lake-768p-w": {
+      "activations": "bf16",
+      "attention": {
+        "dense_video_calls": 0,
+        "forwards": 8,
+        "per_forward": [
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 0,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 0,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 1,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 1,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 2,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 2,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 3,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 3,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 4,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 4,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 5,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 5,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 6,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 6,
+            "tau_calls": {},
+            "vsa": 50
+          },
+          {
+            "dense": 0,
+            "dense_layers": [],
+            "forward": 7,
+            "layers": 50,
+            "pisa": 0,
+            "sol": 0,
+            "step": 7,
+            "tau_calls": {},
+            "vsa": 50
+          }
+        ],
+        "pisa_calls": 0,
+        "pisa_sparsity_calls": {},
+        "sol_calls": 0,
+        "tau_calls": {},
+        "video_calls": 400,
+        "vsa_calls": 400
+      },
+      "decode_s": 4.910119205,
+      "denoise_s": 29.328286085,
+      "dit_offload": null,
+      "dtype": "bfloat16",
+      "e2e_seconds": 34.838216767000006,
+      "env": {
+        "FASTVIDEO_GPU_TRACE": "1",
+        "FASTVIDEO_H3_GRAPHS": "1",
+        "FASTVIDEO_H3_NVFP4_ATTN": "1",
+        "FASTVIDEO_H3_VSA_FP4": "1"
+      },
+      "ffn_chunking": {
+        "calls": 402,
+        "chunked_calls": 0,
+        "chunks": 402
+      },
+      "generate_wall_s": 35.028522262,
+      "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "gpu_trace": {
+        "busy_s": 3.6077083250000004,
+        "by_category": [
+          {
+            "calls": 450,
+            "category": "attention",
+            "share": 0.3248774552827859,
+            "total_s": 1.122678083
+          },
+          {
+            "calls": 455,
+            "category": "gemm",
+            "share": 0.31366951784546576,
+            "total_s": 1.0839468460000001
+          },
+          {
+            "calls": 411,
+            "category": "norm_modulate_elementwise",
+            "share": 0.1437685712402522,
+            "total_s": 0.49682063600000004
+          },
+          {
+            "calls": 1014,
+            "category": "cast",
+            "share": 0.13293158789976578,
+            "total_s": 0.45937130400000004
+          },
+          {
+            "calls": 459,
+            "category": "layout",
+            "share": 0.08475286773173037,
+            "total_s": 0.29288024
+          }
+        ],
+        "dropped_records": 0,
+        "gap_count": 3485,
+        "gap_histogram": [
+          {
+            "bucket": "<5us",
+            "count": 3482,
+            "idle_s": 0.003166163
+          },
+          {
+            "bucket": "5-50us",
+            "count": 1,
+            "idle_s": 0.000033376
+          },
+          {
+            "bucket": "50-500us",
+            "count": 0,
+            "idle_s": 0.0
+          },
+          {
+            "bucket": ">500us",
+            "count": 2,
+            "idle_s": 0.05415103600000001
+          }
+        ],
+        "host": {
+          "device_tail_s": 1.0353655815124512,
+          "enqueue_s": 2.629755818,
+          "first_activity_lag_s": 0.00006246566772460938
+        },
+        "host_launches": 2684,
+        "idle_frac": 0.015647927240678178,
+        "idle_s": 0.057350575,
+        "kernel_count": 2789,
+        "kernel_s": 3.4556971090000004,
+        "largest_gaps": [
+          {
+            "after": "memcpy HtoD",
+            "at_s": 0.007185953,
+            "before": "mx_block_copy",
+            "gap_us": 49699.72
+          },
+          {
+            "after": "nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN",
+            "at_s": 0.000011136000000000001,
+            "before": "cast_f32_bf16",
+            "gap_us": 4451.316
+          },
+          {
+            "after": "h3_norm_mod",
+            "at_s": 0.061249694,
+            "before": "memcpy HtoD",
+            "gap_us": 33.376
+          },
+          {
+            "after": "memset",
+            "at_s": 2.079601611,
+            "before": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+            "gap_us": 4.321
+          },
+          {
+            "after": "memset",
+            "at_s": 3.494830458,
+            "before": "h3_res_gate_norm_mod",
+            "gap_us": 4.128
+          },
+          {
+            "after": "memset",
+            "at_s": 0.636933533,
+            "before": "fvf_h3_gate_res_norm_mod",
+            "gap_us": 4.096
+          },
+          {
+            "after": "memset",
+            "at_s": 3.297259007,
+            "before": "fvf_h3_gate_res_norm_mod",
+            "gap_us": 4.064
+          },
+          {
+            "after": "memset",
+            "at_s": 1.288194461,
+            "before": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+            "gap_us": 4.032
+          },
+          {
+            "after": "memset",
+            "at_s": 2.698722133,
+            "before": "nvfp4_quant_bf16_sw",
+            "gap_us": 4.032
+          },
+          {
+            "after": "memset",
+            "at_s": 0.428022222,
+            "before": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+            "gap_us": 4.0
+          }
+        ],
+        "memcpy": {
+          "DtoD": {
+            "bytes": 108426035600,
+            "count": 150
+          },
+          "HtoD": {
+            "bytes": 38707200,
+            "count": 1
+          }
+        },
+        "memset": {
+          "bytes": 3600,
+          "count": 550
+        },
+        "pass": "h3",
+        "step": 1,
+        "sync_count": 0,
+        "top_kernels": [
+          {
+            "calls": 300,
+            "category": "gemm",
+            "name": "cutlass3x_sm120_bstensorop_s16864gemm_block_scaled_ue4m3xe2m1_ue4m3xe2m1_f32_bf16_bf16_128x128x256_1x1x1_0_tnn_align32_o…",
+            "share": 0.2837317183981242,
+            "total_s": 0.9804908790000001
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "attn_fp4_vsa",
+            "share": 0.17328796885595335,
+            "total_s": 0.598830733
+          },
+          {
+            "calls": 308,
+            "category": "cast",
+            "name": "cast_f32_bf16",
+            "share": 0.061301371132408466,
+            "total_s": 0.21183897100000001
+          },
+          {
+            "calls": 200,
+            "category": "cast",
+            "name": "nvfp4_quant_bf16_sw",
+            "share": 0.06065749757236608,
+            "total_s": 0.20961393900000003
+          },
+          {
+            "calls": 100,
+            "category": "norm_modulate_elementwise",
+            "name": "h3_qk_norm_rope",
+            "share": 0.05654110989389956,
+            "total_s": 0.19538895
+          },
+          {
+            "calls": 50,
+            "category": "norm_modulate_elementwise",
+            "name": "mx_swiglu",
+            "share": 0.04983413840046709,
+            "total_s": 0.172211688
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "attn_fp4_quant_tile",
+            "share": 0.04517132783236646,
+            "total_s": 0.156098427
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "flash_mma_fwd_d128",
+            "share": 0.03570729583869904,
+            "total_s": 0.123393599
+          },
+          {
+            "calls": 100,
+            "category": "layout",
+            "name": "fvf_split_heads_rows",
+            "share": 0.033239372658224485,
+            "total_s": 0.11486520400000001
+          },
+          {
+            "calls": 150,
+            "category": "attention",
+            "name": "vsa_tile_mean",
+            "share": 0.03320524293091336,
+            "total_s": 0.114747262
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "vsa_combine",
+            "share": 0.031856820932971416,
+            "total_s": 0.110087524
+          },
+          {
+            "calls": 50,
+            "category": "layout",
+            "name": "mx_merge_heads",
+            "share": 0.02852215193956109,
+            "total_s": 0.098563918
+          },
+          {
+            "calls": 50,
+            "category": "gemm",
+            "name": "nvjet_sm120_ootst_mma_128x256x128_3_64x64x128_tmaAB_alignCD4_bx_vec16_ue4m3_TNNN",
+            "share": 0.025705428513584466,
+            "total_s": 0.08883017500000001
+          },
+          {
+            "calls": 100,
+            "category": "layout",
+            "name": "fill_f",
+            "share": 0.02107976848152637,
+            "total_s": 0.072845295
+          },
+          {
+            "calls": 50,
+            "category": "norm_modulate_elementwise",
+            "name": "h3_res_gate_norm_mod",
+            "share": 0.016871928054155164,
+            "total_s": 0.058304273000000004
+          },
+          {
+            "calls": 49,
+            "category": "norm_modulate_elementwise",
+            "name": "fvf_h3_gate_res_norm_mod",
+            "share": 0.016035489874294998,
+            "total_s": 0.055413796
+          },
+          {
+            "calls": 100,
+            "category": "cast",
+            "name": "nvfp4_amax_bf16",
+            "share": 0.010004700906788877,
+            "total_s": 0.034573216000000004
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "vsa_topk2",
+            "share": 0.003637214895734081,
+            "total_s": 0.012569113000000002
+          },
+          {
+            "calls": 50,
+            "category": "gemm",
+            "name": "magma_sgemmEx_kernel<…>",
+            "share": 0.002321944819498936,
+            "total_s": 0.008023938000000001
+          },
+          {
+            "calls": 50,
+            "category": "norm_modulate_elementwise",
+            "name": "bcast_binary",
+            "share": 0.0022294011184994743,
+            "total_s": 0.007704135000000001
+          },
+          {
+            "calls": 50,
+            "category": "attention",
+            "name": "softmax_last",
+            "share": 0.0020115839961481995,
+            "total_s": 0.006951425000000001
+          },
+          {
+            "calls": 50,
+            "category": "gemm",
+            "name": "cutlass::Kernel2<cutlass_80_simt_sgemm_128x256_8x4_nn_align1>",
+            "share": 0.001739280327649804,
+            "total_s": 0.006010426
+          },
+          {
+            "calls": 104,
+            "category": "norm_modulate_elementwise",
+            "name": "mx_binary",
+            "share": 0.0013738854564640608,
+            "total_s": 0.004747732
+          },
+          {
+            "calls": 154,
+            "category": "layout",
+            "name": "block_copy",
+            "share": 0.000874442668059656,
+            "total_s": 0.0030218090000000003
+          },
+          {
+            "calls": 56,
+            "category": "cast",
+            "name": "cast_bf16_f32_bias_act",
+            "share": 0.0008457627818098221,
+            "total_s": 0.0029227000000000003
+          }
+        ],
+        "wall_s": 3.665961044,
+        "window_s": 3.6650589
+      },
+      "hardware": "1x NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "includes_model_load": false,
+      "inference_time_s": 34.838216767000006,
+      "load_s": 30.595141676,
+      "max_device_memory_used_mib": 33210,
+      "memory": {
+        "dit_residency": "resident",
+        "stages": [
+          {
+            "end_allocated_gib": 19.676846902817488,
+            "peak_allocated_gib": 19.676846902817488,
+            "peak_reserved_gib": 19.78125,
+            "stage": "text"
+          },
+          {
+            "end_allocated_gib": 19.709158342331648,
+            "peak_allocated_gib": 19.72083417698741,
+            "peak_reserved_gib": 19.8125,
+            "stage": "refine"
+          },
+          {
+            "end_allocated_gib": 19.78019629791379,
+            "peak_allocated_gib": 29.712549712508917,
+            "peak_reserved_gib": 31.65625,
+            "stage": "denoise"
+          },
+          {
+            "end_allocated_gib": 19.86306086461991,
+            "peak_allocated_gib": 19.994713219814003,
+            "peak_reserved_gib": 20.1875,
+            "stage": "audio_decode"
+          },
+          {
+            "end_allocated_gib": 19.87639895360917,
+            "peak_allocated_gib": 21.250943097285926,
+            "peak_reserved_gib": 22.15625,
+            "stage": "video_decode"
+          }
+        ]
+      },
+      "model": "MiniMaxAI/MiniMax-H3",
+      "peak_allocated_gib": 29.712549712508917,
+      "peak_memory_mb": 32416.0,
+      "peak_reserved_gib": 31.65625,
+      "pipeline": "h3",
+      "png_frames_s": 0.190305495,
+      "quantized_linears": {
+        "calls": {
+          "nvfp4_published": 1600
+        },
+        "modules": {
+          "nvfp4_published": 200
+        }
+      },
+      "recipe": null,
+      "schema_version": "fastvideo-rs.benchmark.v1",
+      "stage_seconds": {
+        "audio_decode": 0.217269089,
+        "denoise": 29.328286085,
+        "png_frames": 0.190305495,
+        "refine": 0.148623249,
+        "text": 0.296348379,
+        "video_decode": 4.692850116,
+        "video_encode_tail": 0.000485692,
+        "video_push": 0.000086078,
+        "video_rgb": 0.31266829999435125,
+        "video_vae": 4.634021173775196,
+        "video_wait": 0.17204528
+      },
+      "step_seconds": [
+        3.806160404,
+        3.665961044,
+        3.63330332,
+        3.64260467,
+        3.642453686,
+        3.644817561,
+        3.639712046,
+        3.637350034
+      ],
+      "task": "t2va",
+      "teacache": {
+        "enabled": false
+      },
+      "text_cache": "hit",
+      "text_encoder": "cache",
+      "text_s": 0.296348379,
+      "timing_note": "total_s = inference_time_s = e2e_seconds = generate_wall_s - png_frames_s (the PNG frames for compare-clips are written after the mp4, outside every timed number); load_s is separate",
+      "timing_scope": "one warm generate() call: text + denoise + decode, the decode through a finished mp4 (x264 encode included, as sol-engine's video_vae_seconds); PNG frames and model load excluded",
+      "total_s": 34.838216767000006,
+      "vsa": {
+        "calls": 400,
+        "density": 0.2213798789438758,
+        "selected_tiles": 2219414400.0,
+        "total_tiles": 10025366400.0,
+        "video_density": 0.2,
+        "video_selected_tiles": 1951488000.0,
+        "video_total_tiles": 9757440000.0
+      },
+      "warm_steady_state": false,
+      "warmup_requests": 0,
+      "workload": {
+        "duration_s": 5,
+        "height": 768,
+        "measured_steps": 8,
+        "num_frames": 124,
+        "prompt_name": "spark-mountain-lake-768p-w",
+        "prompt_sha256": "7393510b34fbc223f0c7f5271a459bb0bd46907518e396d6ad7e4587854ce1d0",
+        "seed": 1024,
+        "sequence_length": 37816,
+        "task": "t2va",
+        "text_tokens": 106,
+        "width": 1344
+      }
+    }
+  },
+  "quantized_linears": {
+    "calls": {},
+    "modules": {
+      "nvfp4_published": 200.0
+    }
+  },
+  "schema_version": "fastvideo-rs.benchmark.v1",
+  "stage_seconds": {
+    "audio_decode": 0.08221840799999999,
+    "denoise": 29.727718546,
+    "png_frames": 0.185332529,
+    "refine": 0.00593976,
+    "text": 0.2898499315,
+    "video_decode": 4.6955251095,
+    "video_encode_tail": 0.000474363,
+    "video_push": 0.00009603650000000001,
+    "video_rgb": 0.32750386899993167,
+    "video_vae": 4.6502378599941725,
+    "video_wait": 0.164538593
+  },
+  "step_seconds": [
+    3.7751169605,
+    3.7459437685,
+    3.7013817035,
+    3.712630056,
+    3.708275543,
+    3.7154671395000003,
+    3.70819642,
+    3.7077135265
+  ],
+  "task": "t2va",
+  "teacache": {
+    "enabled": false
+  },
+  "text_cache": "hit",
+  "text_encoder": "cache",
+  "text_s": 0.2898499315,
+  "timing_note": "total_s = inference_time_s = e2e_seconds = generate_wall_s - png_frames_s (the PNG frames for compare-clips are written after the mp4, outside every timed number); load_s is separate",
+  "timing_scope": "one warm generate() call: text + denoise + decode, the decode through a finished mp4 (x264 encode included, as sol-engine's video_vae_seconds); PNG frames and model load excluded",
+  "total_s": 35.0210299565,
+  "vsa": {
+    "calls": 400.0,
+    "selected_tiles": 2324862400.0,
+    "total_tiles": 10130814400.0,
+    "video_selected_tiles": 1951488000.0,
+    "video_total_tiles": 9757440000.0
+  },
+  "warm_steady_state": false,
+  "warmup_requests": 0.0,
+  "workload": {
+    "duration_s": 5.0,
+    "height": 768.0,
+    "measured_steps": 8.0,
+    "num_frames": 124.0,
+    "seed": 1024.0,
+    "sequence_length": 38247.0,
+    "task": "t2va",
+    "text_tokens": 537.0,
+    "width": 1344.0
+  }
+}

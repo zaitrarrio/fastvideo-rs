@@ -50,7 +50,7 @@ try {
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
   page.on("pageerror", (e) => errors.push(e.message));
   const validations = [];
-  page.on("response", async (r) => r.url().includes("/api/standalone/validate") && validations.push(await r.text().catch(() => "")));
+  page.on("response", async (r) => r.url().includes("/api/v1/standalone/validate") && validations.push(await r.text().catch(() => "")));
   await page.goto(B + "/");
   await page.waitForSelector("#pass");
   await page.fill("#pass", PASSPHRASE);

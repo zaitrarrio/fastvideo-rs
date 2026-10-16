@@ -25,7 +25,7 @@
     const load = async () => {
       const f = FILTERS.find((x) => x[0] === st.filter);
       try {
-        st.data = await api(`/api/clusters/${encodeURIComponent(clusterId)}/jobs?limit=100${f[1] ? `&status=${f[1]}` : ""}`);
+        st.data = await api(`/api/v1/clusters/${encodeURIComponent(clusterId)}/jobs?limit=100${f[1] ? `&status=${f[1]}` : ""}`);
         st.error = null;
       } catch (e) {
         st.error = e.message;
@@ -37,7 +37,7 @@
       st.busy.add(j.id);
       draw();
       try {
-        const r = await api(`/api/jobs/${encodeURIComponent(j.id)}/cancel`, { method: "POST", body: { cluster: clusterId } });
+        const r = await api(`/api/v1/jobs/${encodeURIComponent(j.id)}/cancel`, { method: "POST", body: { cluster: clusterId } });
         showResult(r);
       } catch (e) {
         msg.replaceChildren(h("span", { style: "color:var(--critical-text)" }, e.message));
@@ -58,7 +58,7 @@
       const x = await (await fvEditor()).askCancelQueued(api, st.data?.cluster?.name || clusterId, queued, pools);
       if (!x) return;
       try {
-        const r = await act("cancel queued", () => api(`/api/clusters/${encodeURIComponent(clusterId)}/jobs/cancel-queued`, { method: "POST", body: x }));
+        const r = await act("cancel queued", () => api(`/api/v1/clusters/${encodeURIComponent(clusterId)}/jobs/cancel-queued`, { method: "POST", body: x }));
         msg.replaceChildren(h("div", {}, `cancelled ${r.cancelled} of ${r.queued} queued`), ...r.failed.map((f) => h("div", { style: "color:var(--critical-text)" }, `${f.job} (${f.api}): ${f.note}`)));
       } catch (e) {
         msg.replaceChildren(h("span", { style: "color:var(--critical-text)" }, e.message));
@@ -69,7 +69,7 @@
       const x = await (await fvEditor()).askJobCancel(api, st.data?.cluster?.id);
       if (!x) return;
       try {
-        showResult(await api(`/api/jobs/${encodeURIComponent(x.job)}/cancel`, { method: "POST", body: x.cluster ? { cluster: x.cluster } : {} }));
+        showResult(await api(`/api/v1/jobs/${encodeURIComponent(x.job)}/cancel`, { method: "POST", body: x.cluster ? { cluster: x.cluster } : {} }));
       } catch (e) {
         msg.replaceChildren(h("span", { style: "color:var(--critical-text)" }, e.message));
       }
@@ -126,7 +126,7 @@
   /** #/jobs: every cluster's and standalone pod's jobs (live ones first). */
   async function pageJobs(main) {
     const q = new URLSearchParams(location.hash.split("?")[1] || "");
-    const list = (await api("/api/clusters?all=1")).clusters || [];
+    const list = (await api("/api/v1/clusters?all=1")).clusters || [];
     const pick = q.get("cluster") || list.find((c) => c.status === "running")?.id || list[0]?.id;
     const sel = list.find((c) => c.id === pick || c.name === pick);
     main.replaceChildren(

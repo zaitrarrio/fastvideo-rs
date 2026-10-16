@@ -1,0 +1,902 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "text_encoder",
+      "ok": true,
+      "values": {
+        "chosen": "streamed",
+        "device_gib": 0.0,
+        "free_gib_before_load": 94.28277587890625,
+        "load_seconds": 0.0,
+        "requested": "Streamed"
+      }
+    },
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "audio_vae_s": 0.835249819,
+        "dit_residency": "resident",
+        "dit_s": 24.443634775,
+        "refiner_s": 0.308569953,
+        "seconds": 33.772251731,
+        "text_encoder_s": 0.0,
+        "video_vae_s": 6.680106706
+      }
+    },
+    {
+      "limits": {},
+      "name": "cold_generation",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.226457865,
+        "decode_s": 2.222627493,
+        "denoise_s": 5.607488521,
+        "refine_s": 0.141442758,
+        "step_s": [
+          1.5557603759765626,
+          1.3807513427734375,
+          1.334392822265625,
+          1.3356134033203124
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.285351825,
+        "total_s": 8.465930365,
+        "video_decode_s": 1.996169628,
+        "video_encode_s": 0.000428334,
+        "video_push_s": 0.00006074099999999999,
+        "video_rgb_s": 0.13268352900045813,
+        "video_vae_s": 1.9711814783215524,
+        "video_wait_s": 0.17481139999999998,
+        "write_s": 0.139929894
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/h3-demo-480p-a",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.0914267,
+        "decode_s": 2.083039015,
+        "denoise_s": 5.660985612,
+        "load_s": 33.772251731,
+        "peak_mib": 27454,
+        "refine_s": 0.001034908,
+        "step_s": [
+          1.5981314697265625,
+          1.35347607421875,
+          1.3550888671875,
+          1.35332958984375
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.290527788,
+        "total_s": 8.186581468,
+        "video_decode_s": 1.991612315,
+        "video_encode_s": 0.000512182,
+        "video_push_s": 0.000081862,
+        "video_rgb_s": 0.13895809300029047,
+        "video_vae_s": 1.9669914773702624,
+        "video_wait_s": 0.17453891900000001,
+        "warm": true,
+        "write_s": 0.1143393
+      }
+    },
+    {
+      "limits": {
+        "expected": "hit (or disabled)"
+      },
+      "name": "warm_text_is_a_cache_hit",
+      "ok": true,
+      "values": {
+        "text_cache": "hit",
+        "text_s": 0.290527788
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/h3-demo-480p-a",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/h3-demo-480p-a",
+      "ok": true,
+      "values": {
+        "frame": "/srv/cells/4s-graphs/clip/h3-demo-480p-a/frame-062.png",
+        "mean": 0.10004607962003118,
+        "std": 0.14116800369804347
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/h3-demo-480p-b",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.121380479,
+        "decode_s": 2.121223026,
+        "denoise_s": 5.313862056,
+        "load_s": 33.772251731,
+        "peak_mib": 27454,
+        "refine_s": 0.000993093,
+        "step_s": [
+          1.32869189453125,
+          1.3283092041015625,
+          1.3273397216796876,
+          1.3274539794921876
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.308086615,
+        "total_s": 7.885921661,
+        "video_decode_s": 1.999842547,
+        "video_encode_s": 0.000617007,
+        "video_push_s": 0.00012500600000000002,
+        "video_rgb_s": 0.15915798199753978,
+        "video_vae_s": 1.970563955128193,
+        "video_wait_s": 0.179961421,
+        "warm": true,
+        "write_s": 0.105182915
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/h3-demo-480p-b",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/h3-demo-480p-b",
+      "ok": true,
+      "values": {
+        "frame": "/srv/cells/4s-graphs/clip/h3-demo-480p-b/frame-062.png",
+        "mean": 0.10004607962003118,
+        "std": 0.14116800369804347
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/h3-demo-480p-c",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.098279443,
+        "decode_s": 2.119888712,
+        "denoise_s": 5.315414305,
+        "load_s": 33.772251731,
+        "peak_mib": 27454,
+        "refine_s": 0.003339828,
+        "step_s": [
+          1.3286641845703124,
+          1.3287581787109375,
+          1.328308837890625,
+          1.32805029296875
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.37083739,
+        "total_s": 8.003360609,
+        "video_decode_s": 2.021609269,
+        "video_encode_s": 0.000438441,
+        "video_push_s": 0.000147066,
+        "video_rgb_s": 0.1892752969971605,
+        "video_vae_s": 1.973639914870262,
+        "video_wait_s": 0.19880194699999998,
+        "warm": true,
+        "write_s": 0.150753538
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/h3-demo-480p-c",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/h3-demo-480p-c",
+      "ok": true,
+      "values": {
+        "frame": "/srv/cells/4s-graphs/clip/h3-demo-480p-c/frame-062.png",
+        "mean": 0.10004607962003118,
+        "std": 0.14116800369804347
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/spark-mountain-lake-480p-a",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.088941105,
+        "decode_s": 2.087373145,
+        "denoise_s": 5.14360086,
+        "load_s": 33.772251731,
+        "peak_mib": 31262,
+        "refine_s": 0.010679574,
+        "step_s": [
+          1.3334226074218751,
+          1.2707789306640624,
+          1.2686243896484375,
+          1.269861328125
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.356086858,
+        "total_s": 7.797072168,
+        "video_decode_s": 1.99843204,
+        "video_encode_s": 0.000646888,
+        "video_push_s": 0.00006511300000000001,
+        "video_rgb_s": 0.1252867550013681,
+        "video_vae_s": 1.9757559765279291,
+        "video_wait_s": 0.173392344,
+        "warm": true,
+        "write_s": 0.105922909
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/spark-mountain-lake-480p-a",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/spark-mountain-lake-480p-a",
+      "ok": true,
+      "values": {
+        "frame": "/srv/cells/4s-graphs/clip/spark-mountain-lake-480p-a/frame-062.png",
+        "mean": 0.19989343882559615,
+        "std": 0.1637117148296325
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/spark-mountain-lake-480p-b",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.095879467,
+        "decode_s": 2.100242576,
+        "denoise_s": 5.100033095,
+        "load_s": 33.772251731,
+        "peak_mib": 27468,
+        "refine_s": 0.000598059,
+        "step_s": [
+          1.29121484375,
+          1.251933837890625,
+          1.27675048828125,
+          1.2792412109375
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.260709588,
+        "total_s": 7.606329928,
+        "video_decode_s": 2.004363109,
+        "video_encode_s": 0.000469194,
+        "video_push_s": 0.000067587,
+        "video_rgb_s": 0.12807147300519575,
+        "video_vae_s": 1.9770122598409654,
+        "video_wait_s": 0.17919957,
+        "warm": true,
+        "write_s": 0.109046819
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/spark-mountain-lake-480p-b",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/spark-mountain-lake-480p-b",
+      "ok": true,
+      "values": {
+        "frame": "/srv/cells/4s-graphs/clip/spark-mountain-lake-480p-b/frame-062.png",
+        "mean": 0.19989343882559615,
+        "std": 0.1637117148296325
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/spark-mountain-lake-480p-c",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.097082469,
+        "decode_s": 2.094481633,
+        "denoise_s": 5.008798849,
+        "load_s": 33.772251731,
+        "peak_mib": 27532,
+        "refine_s": 0.000534282,
+        "step_s": [
+          1.252069580078125,
+          1.2518572998046875,
+          1.2518709716796874,
+          1.251811279296875
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.301792682,
+        "total_s": 7.559818903,
+        "video_decode_s": 1.997399164,
+        "video_encode_s": 0.00047531,
+        "video_push_s": 0.00006138,
+        "video_rgb_s": 0.12052984299638683,
+        "video_vae_s": 1.978589801669121,
+        "video_wait_s": 0.17017970300000002,
+        "warm": true,
+        "write_s": 0.120426681
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/spark-mountain-lake-480p-c",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/spark-mountain-lake-480p-c",
+      "ok": true,
+      "values": {
+        "frame": "/srv/cells/4s-graphs/clip/spark-mountain-lake-480p-c/frame-062.png",
+        "mean": 0.19989343882559615,
+        "std": 0.1637117148296325
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/h3-demo-768p-a",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.099195097,
+        "decode_s": 4.799973941,
+        "denoise_s": 13.850818299,
+        "load_s": 33.772251731,
+        "peak_mib": 38796,
+        "refine_s": 0.000901659,
+        "step_s": [
+          3.504791259765625,
+          3.479341552734375,
+          3.46229052734375,
+          3.403356201171875
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.329445523,
+        "total_s": 19.356110754,
+        "video_decode_s": 4.700778844,
+        "video_encode_s": 0.000454055,
+        "video_push_s": 0.00009068800000000001,
+        "video_rgb_s": 0.31031455400253277,
+        "video_vae_s": 4.645670213103295,
+        "video_wait_s": 0.169010943,
+        "warm": true,
+        "write_s": 0.196562693
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/h3-demo-768p-a",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/h3-demo-768p-a",
+      "ok": true,
+      "values": {
+        "frame": "/srv/cells/4s-graphs/clip/h3-demo-768p-a/frame-062.png",
+        "mean": 0.19229932076149436,
+        "std": 0.224627089205553
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/h3-demo-768p-b",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.092804076,
+        "decode_s": 4.800110548,
+        "denoise_s": 13.75318639,
+        "load_s": 33.772251731,
+        "peak_mib": 34700,
+        "refine_s": 0.001010013,
+        "step_s": [
+          3.46478369140625,
+          3.3968344726562503,
+          3.448262451171875,
+          3.442123779296875
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.301661506,
+        "total_s": 19.226179266,
+        "video_decode_s": 4.707306472,
+        "video_encode_s": 0.00063213,
+        "video_push_s": 0.000228095,
+        "video_rgb_s": 0.39121995000967447,
+        "video_vae_s": 4.6461596894264225,
+        "video_wait_s": 0.17525701300000002,
+        "warm": true,
+        "write_s": 0.289511682
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/h3-demo-768p-b",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/h3-demo-768p-b",
+      "ok": true,
+      "values": {
+        "frame": "/srv/cells/4s-graphs/clip/h3-demo-768p-b/frame-062.png",
+        "mean": 0.19229932076149436,
+        "std": 0.224627089205553
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/h3-demo-768p-c",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.082694281,
+        "decode_s": 4.7776366,
+        "denoise_s": 13.588411705,
+        "load_s": 33.772251731,
+        "peak_mib": 34828,
+        "refine_s": 0.001027949,
+        "step_s": [
+          3.3965312500000002,
+          3.39671533203125,
+          3.397016845703125,
+          3.397023681640625
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.396194556,
+        "total_s": 19.081614022,
+        "video_decode_s": 4.694942319,
+        "video_encode_s": 0.000529561,
+        "video_push_s": 0.000098949,
+        "video_rgb_s": 0.3030386120169743,
+        "video_vae_s": 4.648635262072086,
+        "video_wait_s": 0.160211726,
+        "warm": true,
+        "write_s": 0.21637983
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/h3-demo-768p-c",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/h3-demo-768p-c",
+      "ok": true,
+      "values": {
+        "frame": "/srv/cells/4s-graphs/clip/h3-demo-768p-c/frame-062.png",
+        "mean": 0.19229932076149436,
+        "std": 0.224627089205553
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/spark-mountain-lake-768p-a",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.083236781,
+        "decode_s": 4.78718839,
+        "denoise_s": 13.254216822,
+        "load_s": 33.772251731,
+        "peak_mib": 43980,
+        "refine_s": 0.000657798,
+        "step_s": [
+          3.363919677734375,
+          3.29668603515625,
+          3.29697998046875,
+          3.29573583984375
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.287911404,
+        "total_s": 18.679997134,
+        "video_decode_s": 4.703951609,
+        "video_encode_s": 0.000317696,
+        "video_push_s": 0.00015112300000000002,
+        "video_rgb_s": 0.35098442501425636,
+        "video_vae_s": 4.645069642305374,
+        "video_wait_s": 0.173409298,
+        "warm": true,
+        "write_s": 0.213324334
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/spark-mountain-lake-768p-a",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/spark-mountain-lake-768p-a",
+      "ok": true,
+      "values": {
+        "frame": "/srv/cells/4s-graphs/clip/spark-mountain-lake-768p-a/frame-062.png",
+        "mean": 0.33022221807154123,
+        "std": 0.2434067408191755
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/spark-mountain-lake-768p-b",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.083153029,
+        "decode_s": 4.773674237,
+        "denoise_s": 13.307803122,
+        "load_s": 33.772251731,
+        "peak_mib": 34874,
+        "refine_s": 0.000638873,
+        "step_s": [
+          3.365718505859375,
+          3.2860771484375,
+          3.3271518554687503,
+          3.3278298339843753
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.292846737,
+        "total_s": 18.656126844,
+        "video_decode_s": 4.690521208,
+        "video_encode_s": 0.000413202,
+        "video_push_s": 0.00008619799999999999,
+        "video_rgb_s": 0.2845128730043791,
+        "video_vae_s": 4.647233859181405,
+        "video_wait_s": 0.15733909000000001,
+        "warm": true,
+        "write_s": 0.208171784
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/spark-mountain-lake-768p-b",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/spark-mountain-lake-768p-b",
+      "ok": true,
+      "values": {
+        "frame": "/srv/cells/4s-graphs/clip/spark-mountain-lake-768p-b/frame-062.png",
+        "mean": 0.33022221807154123,
+        "std": 0.2434067408191755
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/spark-mountain-lake-768p-c",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.097244789,
+        "decode_s": 4.808835107,
+        "denoise_s": 13.148692841,
+        "load_s": 33.772251731,
+        "peak_mib": 34874,
+        "refine_s": 0.000607232,
+        "step_s": [
+          3.286140869140625,
+          3.286844482421875,
+          3.28716357421875,
+          3.287094482421875
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.2635831,
+        "total_s": 18.494510081,
+        "video_decode_s": 4.711590318,
+        "video_encode_s": 0.000498457,
+        "video_push_s": 0.000133803,
+        "video_rgb_s": 0.36419077600664745,
+        "video_vae_s": 4.647121928870678,
+        "video_wait_s": 0.17859345599999998,
+        "warm": true,
+        "write_s": 0.200597346
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/spark-mountain-lake-768p-c",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/spark-mountain-lake-768p-c",
+      "ok": true,
+      "values": {
+        "frame": "/srv/cells/4s-graphs/clip/spark-mountain-lake-768p-c/frame-062.png",
+        "mean": 0.33022221807154123,
+        "std": 0.2434067408191755
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/srv/cells/4s-graphs/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "device_budget_gib": null,
+    "memory_plan": {
+      "resident": {
+        "peak_gib": 53.87927266955376,
+        "stages": [
+          {
+            "gib": 51.905614107847214,
+            "stage": "text"
+          },
+          {
+            "gib": 48.275975435972214,
+            "stage": "refine"
+          },
+          {
+            "gib": 53.87927266955376,
+            "stage": "denoise"
+          },
+          {
+            "gib": 46.546623677015305,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 49.436656683683395,
+            "stage": "video_decode"
+          }
+        ]
+      },
+      "streamed": {
+        "peak_gib": 11.871074885129929,
+        "stages": [
+          {
+            "gib": 7.503166675567627,
+            "stage": "text"
+          },
+          {
+            "gib": 5.309156894683838,
+            "stage": "refine"
+          },
+          {
+            "gib": 10.91245412826538,
+            "stage": "denoise"
+          },
+          {
+            "gib": 2.3855392932891846,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 11.871074885129929,
+            "stage": "video_decode"
+          }
+        ]
+      }
+    },
+    "mode": "fast",
+    "output": {
+      "audio_samples_per_channel": 165600,
+      "frames": 124,
+      "mp4": null,
+      "sequence_length": 37816,
+      "text_tokens": 106,
+      "wav": "/srv/cells/4s-graphs/clip/spark-mountain-lake-768p-c/audio.wav"
+    },
+    "request": {
+      "attention": "vsa-h3 + to_gate_compress",
+      "height": 480,
+      "num_frames": 124,
+      "prompt": "integrated_multimodal_description: [Shot 1] Cinematic, medium wide shot, pushing in slowly. In the cavernous, dimly lit bridge of a starship, sleek metallic consoles with glowing amber displays flank a massive, curved observation window. A female captain, in her late 40s with an athletic build and short silver-streaked black hair, stands in the center midground. She wears a structured, high-collared dark navy military tunic with silver chest insignias. Her back is to the camera, silhouetted against the cool, ambient starlight pouring through the thick glass. She stands perfectly still with her hands clasped tightly behind her back. Outside the window, a massive armada of jagged, dark grey dreadnoughts hovers in tight formation against a deep purple space nebula. The fleet's massive rear thrusters begin to glow with an intense, escalating bright blue light. [Shot 2] At 00:04.500, the camera cuts to a close-up of the captain's face and shakes strongly. The brilliant blue-white light from the fleet's gathering energy reflects vividly in her dark eyes. Suddenly, a blinding white flash floods through the window, completely washing out the background as the fleet jumps to hyperspace. The sheer spatial force violently jolts the bridge, causing the captain from Shot 1 to stagger slightly forward, her shoulders tensing as she visibly braces herself against the physical tremors. As the intense white light fades abruptly, leaving only the dim, empty expanse of the purple nebula reflected on her starkly lit skin, her jaw clenches, and she slowly closes her eyes in the newly emptied space.\noverall_soundscape: A low, resonant hum of the ship's ambient life support systems serves as the baseline, soon drowned out by an audible, escalating, high-pitched electronic whine as the fleet outside charges its hyperdrives. A massive, deafening, bass-heavy boom and sharp crackle erupts during the blinding flash, accompanied by the loud metallic creaking, rattling, and deep thuds of the bridge's bulkheads vibrating under immense physical stress. The intense roaring impact then cuts abruptly back to a hollow, echoing room tone, leaving only the faint, steady hum of the isolated bridge.\nnon_diegetic_music: Cinematic space-opera orchestral score, slow tempo, featuring a solitary, mournful French horn melody over deep, sustained string dissonances that build rapidly in volume and intensity, swelling to a massive orchestral peak before snapping immediately into silence right after the jump.",
+      "prompt_set": [
+        {
+          "name": "h3-demo-480p-a",
+          "seed": 1024
+        },
+        {
+          "name": "h3-demo-480p-b",
+          "seed": 1024
+        },
+        {
+          "name": "h3-demo-480p-c",
+          "seed": 1024
+        },
+        {
+          "name": "spark-mountain-lake-480p-a",
+          "seed": 1024
+        },
+        {
+          "name": "spark-mountain-lake-480p-b",
+          "seed": 1024
+        },
+        {
+          "name": "spark-mountain-lake-480p-c",
+          "seed": 1024
+        },
+        {
+          "name": "h3-demo-768p-a",
+          "seed": 1024
+        },
+        {
+          "name": "h3-demo-768p-b",
+          "seed": 1024
+        },
+        {
+          "name": "h3-demo-768p-c",
+          "seed": 1024
+        },
+        {
+          "name": "spark-mountain-lake-768p-a",
+          "seed": 1024
+        },
+        {
+          "name": "spark-mountain-lake-768p-b",
+          "seed": 1024
+        },
+        {
+          "name": "spark-mountain-lake-768p-c",
+          "seed": 1024
+        }
+      ],
+      "seconds": 5,
+      "seed": 1024,
+      "techniques": {
+        "plan": [
+          "vsa (sparsity recipe, group default)"
+        ],
+        "profile": null,
+        "settings": [],
+        "sources": [
+          {
+            "from": "recipe",
+            "seam": "attention_backend"
+          }
+        ]
+      },
+      "text_cache": "/fvw/text-cache",
+      "text_weights": "/fvw/h3-base",
+      "video_vae": "official",
+      "warm": true,
+      "width": 832
+    },
+    "stage_memory": {
+      "dit_residency": "resident",
+      "stages": [
+        {
+          "end_used_gib": 20.093742328695953,
+          "peak_reserved_gib": 20.25,
+          "peak_used_gib": 20.093742328695953,
+          "stage": "text"
+        },
+        {
+          "end_used_gib": 20.094803768210113,
+          "peak_reserved_gib": 20.25,
+          "peak_used_gib": 20.106479602865875,
+          "stage": "refine"
+        },
+        {
+          "end_used_gib": 20.107129770331085,
+          "peak_reserved_gib": 20.25,
+          "peak_used_gib": 20.149040604941547,
+          "stage": "denoise"
+        },
+        {
+          "end_used_gib": 20.107129770331085,
+          "peak_reserved_gib": 20.375,
+          "peak_used_gib": 20.238782125525177,
+          "stage": "audio_decode"
+        },
+        {
+          "end_used_gib": 20.120467859320343,
+          "peak_reserved_gib": 22.03125,
+          "peak_used_gib": 21.4950120029971,
+          "stage": "video_decode"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 204.571537603,
+  "env": {
+    "FASTVIDEO_H3_GRAPHS": "1",
+    "FASTVIDEO_H3_NVFP4_ATTN": "1",
+    "FASTVIDEO_H3_VSA_FP4": "1"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "h3",
+  "status": "pass"
+}

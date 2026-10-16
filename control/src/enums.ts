@@ -1,6 +1,6 @@
 // The closed sets and naming rules every fv-control configuration uses
 // (docs/control/config-validation.md): the zod schemas (src/schemas.ts),
-// the serverless spec, the dynamic enums (/api/schemas/dynamic) and the
+// the serverless spec, the dynamic enums (/api/v1/schemas/dynamic) and the
 // dashboard's controls all read them from here, so a value the UI offers is
 // a value the server accepts. No imports: every module may import this one.
 
@@ -67,7 +67,7 @@ export function noVolumePod(x: { compute?: string; variant?: string; weights_sou
   const cpu = x.compute === "CPU" || (x.compute === undefined && x.variant === "cpu");
   return cpu ? x.volume !== true : (x.weights_source === "r2" || x.weights_source === "hub" || x.weights_source === "none") && x.volume !== true;
 }
-/** Runpod GPU type ids (REST v1 openapi, PodCreateInput.gpuTypeIds, 2026-10). The live catalog (prices, stock) is /api/schemas/dynamic. */
+/** Runpod GPU type ids (REST v1 openapi, PodCreateInput.gpuTypeIds, 2026-10). The live catalog (prices, stock) is /api/v1/schemas/dynamic. */
 export const RUNPOD_GPU_TYPES = [
   "AMD Instinct MI300X OAM", "NVIDIA A100 80GB PCIe", "NVIDIA A100-SXM4-40GB", "NVIDIA A100-SXM4-80GB", "NVIDIA A40", "NVIDIA B200", "NVIDIA B300 SXM6 AC", "NVIDIA B300 SXM6 AC MIG 1g.34gb",
   "NVIDIA GeForce RTX 3070", "NVIDIA GeForce RTX 3080", "NVIDIA GeForce RTX 3080 Ti", "NVIDIA GeForce RTX 3090", "NVIDIA GeForce RTX 3090 Ti", "NVIDIA GeForce RTX 4070 Ti", "NVIDIA GeForce RTX 4080",
@@ -138,7 +138,7 @@ export const RESERVED_KEYS = new Set([
 export const isReserved = (k: string) => RESERVED_KEYS.has(k);
 
 /** The pool presets' ids (cluster/spec.ts POOL_PRESETS; test/unit/config-validation.test.ts checks they agree). */
-export const POOL_PRESET_IDS = ["h3-turbo", "h3-max", "ltx", "wan", "ltx-pro", "ltx-a2v", "ltx-ref2v", "h3-ref2v", "fasth3-trim", "fasth3-trim-nvfp4", "h3-larry-turbo", "h3-lightx2v-turbo", "h3-lightx2v-turbo-v01", "vdn-h3", "vdn-h3-8step", "fastwan21", "sfwan", "longlive"] as const;
+export const POOL_PRESET_IDS = ["h3-turbo", "h3-max", "ltx", "wan", "ltx-pro", "ltx-a2v", "ltx-ref2v", "h3-ref2v", "fasth3-trim", "fasth3-trim-nvfp4", "fasth3-v2-nvfp4", "fasth3-4step-nvfp4", "fasth3-trim-nvfp4-fast", "fasth3-v2-nvfp4-preview", "fasth3-4step-nvfp4-preview", "h3-turbo-preview", "h3-larry-turbo", "h3-lightx2v-turbo", "h3-lightx2v-turbo-v01", "vdn-h3", "vdn-h3-8step", "fastwan21", "sfwan", "longlive"] as const;
 /** A serverless endpoint's presets: the pool presets plus `cpu` (the fake engine on CPU workers, for tests); serverless/presets.ts. */
 export const SLS_PRESET_IDS = [...POOL_PRESET_IDS, "cpu"] as const;
 
@@ -149,12 +149,12 @@ export const SLS_PRESET_IDS = [...POOL_PRESET_IDS, "cpu"] as const;
  * letter, not ending with '-'), at most 31 characters. It goes into Runpod
  * pod names (fv-ctl-<cluster>-<pool>-<MMDDHHMMSS>: at most 81 of Runpod's
  * 191), endpoint and template names (fvc-<name>-<stamp>), Durable Object
- * names and URLs (/api/clusters/<name>).
+ * names and URLs (/api/v1/clusters/<name>).
  */
 export const NAME_RE = /^[a-z](?:[a-z0-9-]{0,29}[a-z0-9])?$/;
 export const NAME_MAX = 31;
 export const NAME_RULE = "1-31 lower-case letters, digits and '-'; starts with a letter, does not end with '-'";
-/** Names a route already uses (/api/clusters/validate, /api/clusters/new/price, #/clusters/new; /api/serverless/{defaults,policy,validate,tick}). */
+/** Names a route already uses (/api/v1/clusters/validate, /api/v1/clusters/new/price, #/clusters/new; /api/v1/serverless/{defaults,policy,validate,tick}). */
 export const RESERVED_NAMES = {
   cluster: ["new", "validate"],
   pool: ["gateway"],

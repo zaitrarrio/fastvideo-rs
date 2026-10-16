@@ -1,0 +1,6 @@
+nvfp4-base vs nvfp4-new h3-demo-480p: identical (126 files)
+nvfp4-base vs nvfp4-new h3-demo-768p: identical (126 files)
+nvfp4-glue0 vs nvfp4-new h3-demo-480p: identical (126 files)
+nvfp4-glue0 vs nvfp4-new h3-demo-768p: identical (126 files)
+nvfp4-base vs nvfp4-glue0 h3-demo-480p: identical (126 files)
+nvfp4-base vs nvfp4-glue0 h3-demo-768p: identical (126 files)

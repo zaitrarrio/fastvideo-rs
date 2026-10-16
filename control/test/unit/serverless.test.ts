@@ -72,7 +72,7 @@ describe("serverless spec", () => {
     expect(() => normalizeEndpointSpec({ name: "x", variant: "h3-turbo", mode: "lb", scaler_type: "QUEUE_DELAY" })).toThrow(/REQUEST_COUNT/);
     expect(normalizeEndpointSpec({ name: "x", variant: "h3-turbo", mode: "lb", scaler_type: "REQUEST_COUNT", scaler_value: 1 }).mode).toBe("lb");
   });
-  it("is the same schema /api/schemas serves (the cluster specs' framework)", () => {
+  it("is the same schema /api/v1/schemas serves (the cluster specs' framework)", () => {
     const s = normalizeEndpointSpec({ name: "fake" });
     expect(validate("serverless-endpoint", s).ok).toBe(true);
     const bad = validate("serverless-endpoint", { ...s, workers_max: 99 });

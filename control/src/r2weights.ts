@@ -76,7 +76,7 @@ async function hmac(key: ArrayBuffer | Uint8Array, msg: string): Promise<ArrayBu
 const sha256 = async (s: string | Uint8Array) => hex(await crypto.subtle.digest("SHA-256", (typeof s === "string" ? te.encode(s) : s) as BufferSource));
 
 /** A presigned GET URL for host + path (path already encoded), query auth with UNSIGNED-PAYLOAD (docs.aws.amazon.com
- * AmazonS3/latest/API/sigv4-query-string-auth.html; R2: developers.cloudflare.com/r2/api/s3/presigned-urls). */
+ * AmazonS3/latest/API/sigv4-query-string-auth.html; R2: developers.cloudflare.com/r2/api/v1/s3/presigned-urls). */
 export async function presignPath(scheme: string, host: string, path: string, accessKeyId: string, secret: string, ttlS: number, at: Date = new Date(), region = "auto"): Promise<string> {
   const amzDate = at.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
   const date = amzDate.slice(0, 8);
