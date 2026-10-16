@@ -124,7 +124,7 @@ const jobKind = (s) => (s === "running" || s === "Running" ? "good" : s === "que
 
 async function pageJobsUnified(main) {
   const q = new URLSearchParams(location.hash.split("?")[1] || "");
-  const tab = q.get("tab") === "clusters" ? "clusters" : "engines";
+  const tab = q.get("tab") === "clusters" || q.has("cluster") ? "clusters" : "engines"; // #/jobs?cluster=<id> (older links) opens that cluster
   const tabBtn = (id, label) => h("a", { class: `btn ${tab === id ? "primary" : ""}`, href: `#/jobs?tab=${id}` }, label);
   const tabs = h("div", { class: "row", style: "margin-bottom:14px" }, tabBtn("engines", "Live engines"), tabBtn("clusters", "Clusters & pods"));
   main.replaceChildren(h("h1", {}, "Jobs"), tabs, h("div", { id: "jobsTab" }));
