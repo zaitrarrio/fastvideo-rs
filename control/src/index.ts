@@ -45,6 +45,10 @@ import { canonicalId, docHistory, DOC_KINDS, docVersion, planSpec, poolSid, read
 import { dynamicEnums, imageCommits, providerDetails } from "./dynamic";
 import { instanceTypes } from "./instance-types";
 import { downloadLogs, ingest, searchLogs } from "./logs";
+import { MODEL_FAMILIES, familiesWeights, minStorageGb, fmtGb, fmtBytes } from "./families";
+import { createPreset, duplicatePreset, deletePreset, listPresets, updatePreset, launchRequest, listRequests, cancelRequest, tickDeployRequests, findMatch } from "./deploy-oneclick";
+import { listRunpodVolumes, createRunpodVolume, deleteRunpodVolume, trackedVolumes } from "./volumes-mgmt";
+import { freeMemorableName } from "./names";
 import { decodeCursor, decodeTail, encodeTail, lineContext, logFacets, parseLogQuery, queryLogs, tailLogs, type XLine } from "./logquery";
 import { availability, checkSpec, liveSpecIssues } from "./cluster/editor";
 import { checkImages } from "./cluster/preflight";
@@ -514,6 +518,101 @@ app.post("/api/v1/deploy", async (c) => {
     await auditC(c, { action: "cluster.up", target: cl.name, after: { operation: r.id } });
   }
   return c.json({ cluster: clusterView(cl), operation }, 201);
+});
+
+// ---------------- one-click deployments (families, presets, requests, volumes)
+// GET /api/v1/families — model families with their weights and sizes.
+app.get("/api/v1/families", async (c) => {
+  return c.json({
+    at: Date.now(),
+    families: MODEL_FAMILIES.map((f) => ({
+      id: f.id, title: f.title, description: f.description,
+      weights: f.weights, streaming: f.streaming,
+      bytes: f.bytes, size: fmtBytes(f.bytes),
+      min_storage_gb: (() => { const b = f.bytes; return b == null ? null : Math.ceil((b * 1.1) / 1e9); })(),
+    })),
+  });
+});
+
+// GET /api/v1/names/suggest?kind=cluster|endpoint — a free memorable name.
+app.get("/api/v1/names/suggest", async (c) => {
+  const kind = String(c.req.query("kind") || "cluster");
+  if (!["cluster", "endpoint"].includes(kind)) throw new HttpError(400, "kind: cluster | endpoint");
+  const name = await freeMemorableName(c.env, kind as "cluster" | "endpoint");
+  return c.json({ name });
+});
+
+// One-click presets: create, duplicate, edit, delete.
+app.get("/api/v1/deploy/presets", async (c) => c.json({ at: Date.now(), presets: await listPresets(c.env) }));
+app.post("/api/v1/deploy/presets", async (c) => c.json(await createPreset(c.env, await body(c), actor(c)), 201));
+app.put("/api/v1/deploy/presets/:id", async (c) => c.json(await updatePreset(c.env, c.req.param("id"), await body(c))));
+app.post("/api/v1/deploy/presets/:id/duplicate", async (c) => c.json(await duplicatePreset(c.env, c.req.param("id"), actor(c)), 201));
+app.delete("/api/v1/deploy/presets/:id", async (c) => {
+  await deletePreset(c.env, c.req.param("id"));
+  return c.json({ ok: true });
+});
+
+// One-click requests: launch, list, cancel, tick.
+app.get("/api/v1/deploy/requests", async (c) => c.json({ at: Date.now(), requests: await listRequests(c.env) }));
+app.post("/api/v1/deploy/requests", async (c) => {
+  const b = await body(c);
+  return c.json(await launchRequest(c.env, String(b.preset_id || ""), actor(c)), 201);
+});
+app.post("/api/v1/deploy/requests/:id/cancel", async (c) => {
+  await cancelRequest(c.env, c.req.param("id"));
+  return c.json({ ok: true });
+});
+app.post("/api/v1/deploy/requests/tick", async (c) => c.json({ at: Date.now(), ...(await tickDeployRequests(c.env)) }));
+
+// Volumes: list (Runpod live + tracked costs), create in a region, delete.
+app.get("/api/v1/volumes", async (c) => {
+  const [live, tracked] = await Promise.all([listRunpodVolumes(c.env).catch(() => []), trackedVolumes(c.env)]);
+  const byId = new Map(tracked.map((t: any) => [t.id, t]));
+  return c.json({
+    at: Date.now(),
+    volumes: live.map((v) => ({ ...v, tracked: byId.get(v.id) || null })),
+    tracked_only: tracked.filter((t: any) => t.status === "active" && !live.some((v) => v.id === t.id)),
+  });
+});
+app.post("/api/v1/volumes", async (c) => {
+  const b = await body(c);
+  const name = String(b.name || "").trim();
+  const size = Number(b.size_gb || 0);
+  const region = String(b.data_center_id || "").trim();
+  if (!name) throw new HttpError(400, "name is required");
+  if (!(size >= 10 && size <= 20000)) throw new HttpError(400, "size_gb: 10-20000");
+  if (!region) throw new HttpError(400, "data_center_id is required (any Runpod region)");
+  const id = await createRunpodVolume(c.env, { name, size, dataCenterId: region });
+  await auditC(c, { action: "volume.create", target: name, after: { id, size_gb: size, region } });
+  return c.json({ id, name }, 201);
+});
+app.delete("/api/v1/volumes/:id", async (c) => {
+  await deleteRunpodVolume(c.env, c.req.param("id"));
+  await auditC(c, { action: "volume.delete", target: c.req.param("id") });
+  return c.json({ ok: true });
+});
+
+// POST /api/v1/volumes/:id/serverless — a serverless endpoint with this volume
+// mounted and Flash Boot on: starts immediately, no weight download.
+app.post("/api/v1/volumes/:id/serverless", async (c) => {
+  const b = await body(c);
+  const vols = await listRunpodVolumes(c.env).catch(() => []);
+  const v = vols.find((x) => x.id === c.req.param("id"));
+  if (!v) throw new HttpError(404, `no volume ${c.req.param("id")}`);
+  const name = String(b.name || v.name).trim();
+  if (!name) throw new HttpError(400, "name is required");
+  const { createEndpoint } = await import("./serverless/ops");
+  const row = await createEndpoint(c.env, { actor: actor(c), ip: clientIp(c) }, {
+    name,
+    preset: String(b.preset || "h3-turbo"),
+    network_volume: v.id,
+    data_centers: [v.dataCenterId],
+    flashboot: true,
+    workers_min: 0,
+    workers_max: Number(b.workers_max || 1),
+  });
+  await auditC(c, { action: "volume.serverless", target: name, after: { volume: v.id } });
+  return c.json({ endpoint: row }, 201);
 });
 
 // ---------------- providers (Runpod is the primary; CloudRift, docs/ops/cloudrift.md)
@@ -1430,6 +1529,8 @@ export default {
       }),
     );
     ctx.waitUntil(serverlessTick(env).catch((e) => console.error("serverless tick failed", scrub(env, (e as Error).message))));
+    // One-click deploy requests: poll providers for a match (every minute).
+    ctx.waitUntil(tickDeployRequests(env).catch((e) => console.error("deploy tick failed", scrub(env, (e as Error).message))));
     // The serverless console's uploads (R2 console-uploads/): gone after a day, checked hourly.
     if (new Date().getUTCMinutes() === 7) ctx.waitUntil(sweepUploads(env).catch(() => 0));
   },
