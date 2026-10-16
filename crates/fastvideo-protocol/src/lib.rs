@@ -29,6 +29,7 @@ pub mod moderation;
 pub mod negotiate;
 pub mod request;
 pub mod stream;
+pub mod quality;
 
 pub use av::{Pcm, RgbFrame};
 pub use caps::{

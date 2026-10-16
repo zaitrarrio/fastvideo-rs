@@ -412,6 +412,45 @@ app.get("/api/v1/compare", async (c) => {
   });
 });
 
+// ---------------- key requests: portal API-key provisioning (fv-console)
+// Reads the shared key_requests table (fv-app writes). Operator fulfills by
+// minting a key in the engine (/fv/v1/admin/keys) and recording the hint;
+// the key itself is delivered out of band and never stored here.
+app.get("/api/v1/key-requests", async (c) => {
+  const rows = await c.env.DB.prepare(
+    "SELECT id, name, email, use_case, status, key_hint, created_at, fulfilled_at FROM key_requests ORDER BY created_at DESC LIMIT 200"
+  ).all<any>().catch(() => ({ results: [] }));
+  return c.json({ at: Date.now(), requests: rows.results || [] });
+});
+app.post("/api/v1/key-requests/:id/fulfill", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const status = String(body.status || "");
+  if (!["fulfilled", "rejected"].includes(status)) throw new HttpError(400, "status must be fulfilled or rejected");
+  const key_hint = String(body.key_hint || "").trim().slice(-4) || null;
+  const r = await c.env.DB.prepare(
+    "UPDATE key_requests SET status = ?, key_hint = ?, fulfilled_at = ? WHERE id = ?"
+  ).bind(status, key_hint, Date.now(), c.req.param("id")).run().catch(() => null);
+  if (!r) throw new HttpError(503, "key_requests table unavailable");
+  return c.json({ ok: true });
+});
+
+// ---------------- quality: gate definitions (fv-console)
+// GET /api/v1/quality — the engine's /fv/v1/quality/gates (best-effort),
+// the real thresholds every tier is judged against.
+app.get("/api/v1/quality", async (c) => {
+  const pods = await fleetPods(c.env);
+  let gates: any = null;
+  let reached = 0;
+  for (const p of pods) {
+    const g = await fetchEngineJson(c.env, p.pod_id, "/fv/v1/quality/gates");
+    if (g) {
+      reached++;
+      if (!gates) gates = g;
+    }
+  }
+  return c.json({ at: Date.now(), engines_total: pods.length, engines_reached: reached, quality: gates });
+});
+
 // ---------------- deploy: guided recipe deploys (fv-console)
 // GET /api/v1/deploy/recipes — POOL_PRESETS as deployable recipes.
 // POST /api/v1/deploy/validate — { recipe, name, count?, gpu_types?, data_centers? } → spec issues.
