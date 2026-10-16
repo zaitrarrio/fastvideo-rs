@@ -247,6 +247,7 @@ const routes = [
   [/^#\/fleet$/, pageFleet],
   [/^#\/models$/, pageModels],
   [/^#\/deploy$/, pageDeploy],
+  [/^#\/volumes$/, pageVolumes],
   [/^#\/jobs$/, pageJobsUnified],
   [/^#\/engine-jobs$/, () => { location.replace("#/jobs?tab=engines"); }],
   [/^#\/benchmarks$/, pageBenchmarks],
