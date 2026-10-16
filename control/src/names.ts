@@ -48,3 +48,25 @@ export async function assertNameFree(env: Env, kind: CheckedName, name: string, 
   const taken = await nameTaken(env, kind, name);
   if (taken) throw new HttpError(409, `${path.join(".")}: ${taken}`, { issues: [{ path, message: taken }] });
 }
+
+// ---------------------------------------------------------------- two-word names
+// Memorable pod / cluster / service names ("swift-otter"): an adjective and an
+// animal, both lowercase, joined with '-'. Fits NAME_RULE (1-31 chars).
+const NAME_ADJ = ["swift", "brave", "clever", "bold", "calm", "eager", "fierce", "gentle", "happy", "keen", "lively", "merry", "nimble", "proud", "quick", "silent", "steady", "vivid", "wise", "zippy", "bright", "cosmic", "daring", "electric", "fleet", "golden", "harbor", "iron", "jolly", "lunar"];
+const NAME_ANIMAL = ["otter", "falcon", "badger", "cobra", "dolphin", "eagle", "fox", "gecko", "heron", "ibis", "jaguar", "koala", "lynx", "mantis", "newt", "ocelot", "panda", "quail", "raven", "seal", "tiger", "urchin", "viper", "whale", "yak", "zebra", "bison", "crane", "dove", "elk"];
+
+const pick = (a: string[]) => a[Math.floor(Math.random() * a.length)]!;
+
+/** A random memorable name, e.g. "swift-otter". */
+export function memorableName(): string {
+  return `${pick(NAME_ADJ)}-${pick(NAME_ANIMAL)}`;
+}
+
+/** A memorable name free in the given namespace (cluster/endpoint), or null. */
+export async function freeMemorableName(env: Env, kind: CheckedName, tries = 20): Promise<string | null> {
+  for (let i = 0; i < tries; i++) {
+    const n = memorableName();
+    if (!(await nameTaken(env, kind, n))) return n;
+  }
+  return null;
+}

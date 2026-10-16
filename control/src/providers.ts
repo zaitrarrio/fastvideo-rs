@@ -188,7 +188,8 @@ const BREV: ComputeProvider = {
     // it: brev-park.ts, owner rule 2026-10-13); its price is recorded for the ledger.
     const { usd_per_hr, info } = await brevPriceLive(env, req.gpu);
     const trees = req.weights?.source === "hub" || req.weights?.source === "r2" ? req.weights.trees : [];
-    const disk = brevDiskGb(trees);
+    // Explicit disk size wins (one-click deploys, the console); else auto-size.
+    const disk = req.weights?.disk_gb && req.weights.disk_gb > 0 ? Math.ceil(req.weights.disk_gb) : brevDiskGb(trees);
     const token = newBootToken();
     const id = await brev.create(env, { name: req.name, instanceType: req.gpu, startupScript: brevStartup(`${(env.PUBLIC_URL || "").replace(/\/$/, "")}/ingest/v1/brev-boot`, token), diskStorage: `${disk}Gi`, isStoppable: env.BREV_IS_STOPPABLE !== "0" && !!info?.stoppable });
     await recordBrevCreate(env, {
@@ -304,6 +305,8 @@ export interface WeightsPlan {
   unsupported: string[];
   /** TSV for FV_WEIGHTS_TREES_B64: tree<TAB>dest<TAB>repo<TAB>rev<TAB>globs, aux<TAB>path<TAB>url<TAB>sha256<TAB>size. */
   tsv: string;
+  /** Explicit disk size GB (Brev): overrides the auto-sized disk. */
+  disk_gb?: number;
 }
 /** The weight trees a pool loads: `${FV_WEIGHTS}/<tree>` in its worker config, plus its preset's list. */
 export function poolTrees(pool: PoolSpec): string[] {
