@@ -128,6 +128,11 @@ struct StartSessionBody {
     credential_age_seconds: Option<f64>,
 }
 
+/// The edge session a forwarded offer stands for (set by the edge only).
+fn edge_session(headers: &HeaderMap) -> Option<String> {
+    headers.get(super::service::EDGE_SESSION_HEADER).and_then(|v| v.to_str().ok()).map(str::to_owned).filter(|s| !s.is_empty())
+}
+
 fn offer() -> String {
     "offer".into()
 }
@@ -171,7 +176,7 @@ async fn wma_session(State(ctx): State<ServeCtx>, Extension(svc): Svc, headers: 
     let Some(app) = svc.app_for(&b.app_id).cloned() else {
         return bridge_error(ApiError::not_found(format!("unknown app `{}`", b.app_id)));
     };
-    match svc.create(&ctx, &app, &b.sdp, None, true).await {
+    match svc.create(&ctx, &app, &b.sdp, None, true, edge_session(&headers)).await {
         Ok(c) => {
             let mut r = Json(json!({"session_id": c.session_id, "sdp": c.sdp, "type": "answer"})).into_response();
             let h = r.headers_mut();
@@ -225,7 +230,7 @@ async fn start_session(State(ctx): State<ServeCtx>, Extension(svc): Svc, headers
     let Some(app) = svc.runner_app().cloned() else {
         return runner_error(ApiError::not_found("no director app is configured"));
     };
-    let c = match svc.create(&ctx, &app, &b.sdp, b.session_id, false).await {
+    let c = match svc.create(&ctx, &app, &b.sdp, b.session_id, false, edge_session(&headers)).await {
         Ok(c) => c,
         Err(e) => return runner_error(e),
     };

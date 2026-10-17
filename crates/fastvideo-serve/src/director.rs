@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fastvideo_engine_service::{CancelToken, CausalControl, CausalSession, ClipBuild, ClipSession, EngineService};
+use fastvideo_fal::director::service::{LeaseHook, SessionLeases};
 use fastvideo_fal::director::{
     ChunkBuild, ChunkOutput, DirectorClips, DirectorConfig, DirectorEngine, DirectorService, DirectorStream, StreamBlock,
 };
@@ -173,6 +174,21 @@ fn h264_backend(s: &str) -> EncoderBackend {
     }
 }
 
+/// `[director] buffer_max_mb` in bytes; 0: half of `MemAvailable` now, at
+/// least 2 GiB (the library default where `/proc/meminfo` is unreadable).
+fn buffer_max_bytes(mb: u64) -> u64 {
+    if mb > 0 {
+        return mb << 20;
+    }
+    let avail_kb = std::fs::read_to_string("/proc/meminfo").ok().and_then(|m| {
+        m.lines().find_map(|l| l.strip_prefix("MemAvailable:").and_then(|v| v.trim().trim_end_matches("kB").trim().parse::<u64>().ok()))
+    });
+    match avail_kb {
+        Some(kb) => ((kb << 10) / 2).max(2 << 30),
+        None => fastvideo_fal::director::service::DEFAULT_BUFFER_MAX_BYTES,
+    }
+}
+
 /// `DirectorConfig` from the server config.
 pub fn director_config(c: &Config, m: &MountCfg, host: &RtcHost) -> DirectorConfig {
     let d = &c.director;
@@ -185,7 +201,8 @@ pub fn director_config(c: &Config, m: &MountCfg, host: &RtcHost) -> DirectorConf
         ice_servers: host.ice_servers().to_vec(),
         chunk_seconds: d.chunk_seconds,
         max_session_seconds: (d.max_session_seconds > 0).then_some(d.max_session_seconds),
-        buffer_chunks: d.buffer_chunks.max(1),
+        buffer_chunks: d.buffer_chunks,
+        buffer_max_bytes: buffer_max_bytes(d.buffer_max_mb),
         h264: h264_backend(&d.encoder),
         video_bitrate: (d.video_bitrate > 0).then_some(d.video_bitrate),
         vp8_fallback: d.vp8_fallback,
@@ -193,17 +210,38 @@ pub fn director_config(c: &Config, m: &MountCfg, host: &RtcHost) -> DirectorConf
         work_dir: c.server.state_dir.join("director"),
         heartbeat_timeout: Duration::from_secs(15),
         causal_chunk_blocks: d.causal_chunk_blocks.max(1),
-        causal_lead_seconds: d.causal_lead_seconds.max(0.5),
+        // 0: never pause; a lead below half a second is half a second.
+        causal_lead_seconds: if d.causal_lead_seconds > 0.0 { d.causal_lead_seconds.max(0.5) } else { 0.0 },
         outputs: crate::stream_outputs::hook(c),
         allow_output: d.allow_output,
+        upsample_wait: d.upsample_wait,
         ..DirectorConfig::default()
     }
 }
 
 
-/// The director service on the shared WebRTC host (`crate::rtc`).
-pub fn build(c: &Config, m: &MountCfg, engine: EngineService, host: RtcHost) -> Arc<DirectorService> {
-    let cfg = director_config(c, m, &host);
+/// Director sessions behind the edge: a session binds to the edge session
+/// admitted for it when it starts and gives its lease back when it ends
+/// (crate::edge_sessions).
+struct EdgeLeases(Arc<crate::edge_sessions::EdgeSessions>);
+
+impl SessionLeases for EdgeLeases {
+    fn started(&self, session_id: &str, edge: Option<&str>) {
+        self.0.bind("director", session_id, edge);
+    }
+    fn ended(&self, session_id: &str, reason: &str) {
+        if let Some(e) = self.0.ended(session_id, reason) {
+            tracing::info!(session = %session_id, edge_session = %e, reason, "director session ended: its edge lease is released");
+        }
+    }
+}
+
+/// The director service on the shared WebRTC host (`crate::rtc`);
+/// `edge`: the worker's edge sessions (a session that ends gives its lease
+/// back at once).
+pub fn build(c: &Config, m: &MountCfg, engine: EngineService, host: RtcHost, edge: Option<Arc<crate::edge_sessions::EdgeSessions>>) -> Arc<DirectorService> {
+    let mut cfg = director_config(c, m, &host);
+    cfg.leases = edge.map(|e| LeaseHook(Arc::new(EdgeLeases(e))));
     tracing::info!(apps = cfg.apps.len(), udp = ?host.udp_addr(), tcp = ?host.tcp_addr(), "fal director mounted");
     DirectorService::new(cfg, host, Arc::new(EngineDirector(engine)))
 }

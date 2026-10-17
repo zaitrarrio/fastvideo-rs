@@ -528,6 +528,25 @@ Where the build differs from the design above:
   reclaims dead ones. In `FV_EDGE_WHIP=redirect` mode the edge never sees
   the ingest id, so that lease ends on its TTL or when the worker reports
   the session ended.
+- **Sessions end on the worker (2026-10-17).** A director session ends over
+  its data channel (`stop`), when its peer goes, on a missed heartbeat, a
+  failure or its length limit; a Reactor session on `stop_session`, its
+  orphan timer or its limit. None of these reach the edge over HTTP, and
+  until this change no worker sent `session_end`: the lease stayed held
+  until its TTL (30 min) and batch jobs of the family queued behind it
+  (owner report 2026-10-17, h3-max + h3-turbo cluster: t2v/i2v queued after
+  a stopped director session). Now the edge passes the admitted session id
+  on the session-opening request (`x-fv-edge-session`, edge-only like every
+  `x-fv-*` header); the worker binds its director or Reactor session to it
+  (without the header, from an older edge: the oldest unbound edge session
+  of that kind on the worker), and when the session ends, whatever ended
+  it, frees its arbiter slot and sends `session_end`; the family object
+  then pushes the next queued job at once (measured on the host edge:
+  ~0.3 s after `stop`, the session's farewell). As a second line, a job
+  that queues while a director session is live makes the edge run the
+  same heartbeat reclaim (at most every 5 s per family), and a Reactor
+  start whose bound session no longer renews is admitted anew
+  (`crates/fastvideo-serve/src/edge_sessions.rs`).
 - **Revocation** is the epoch above, not a per-request check.
 - `wrangler dev` covers the Worker's own paths (keys, registry, a job
   through a front); the protocol suites run against the native stand-in

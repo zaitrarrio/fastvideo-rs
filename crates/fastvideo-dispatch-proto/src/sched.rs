@@ -516,6 +516,13 @@ impl Sched {
     pub fn sessions(&self) -> impl Iterator<Item = &SessionRec> {
         self.sessions.values()
     }
+    /// A job waits while a director session is live: the GPU may be held by
+    /// a session that ended on its worker without a `session_end` (workers
+    /// before it was sent), so the host should ask (reclaim) rather than wait
+    /// for the lease's TTL.
+    pub fn queued_behind_director(&self) -> bool {
+        self.jobs.values().any(|j| j.phase == Phase::Queued) && self.sessions.values().any(|s| s.state == SessionState::Live && s.kind == "director")
+    }
     pub fn session(&self, id: &str) -> Option<&SessionRec> {
         self.sessions.get(id)
     }

@@ -264,6 +264,13 @@ pub struct Opts {
     pub causal_lead_seconds: f64,
     /// The prompt upsampler (`None`: none).
     pub upsampler: Option<Arc<fastvideo_upsampler::Service>>,
+    /// `buffer_chunks` (the server's default is 0, no cap; most tests pin
+    /// the earlier 1 so a 1 ms fake build does not race ahead of playout).
+    pub buffer_chunks: usize,
+    pub buffer_max_bytes: u64,
+    /// `upsample_wait` (the server's default is off; the upsampling tests
+    /// pin the expansions to their chunks).
+    pub upsample_wait: bool,
 }
 
 impl Default for Opts {
@@ -280,6 +287,9 @@ impl Default for Opts {
             causal_steps: 4,
             causal_lead_seconds: 2.0,
             upsampler: None,
+            buffer_chunks: 1,
+            buffer_max_bytes: fastvideo_fal::director::service::DEFAULT_BUFFER_MAX_BYTES,
+            upsample_wait: true,
         }
     }
 }
@@ -315,6 +325,9 @@ pub async fn fixture(o: Opts) -> Fixture {
     let dcfg = DirectorConfig {
         apps: vec![FalApp::h3(Tier::Max), silent_app(), longlive_app(), sfwan_app()],
         causal_lead_seconds: o.causal_lead_seconds,
+        buffer_chunks: o.buffer_chunks,
+        buffer_max_bytes: o.buffer_max_bytes,
+        upsample_wait: o.upsample_wait,
         ice_servers: Vec::new(),
         chunk_seconds: o.chunk_seconds,
         max_session_seconds: o.max_session_seconds,

@@ -251,7 +251,12 @@ pub struct PoolScheduler {
     /// The last status push to the registry, and whether one is owed.
     pushed_at: Cell<i64>,
     push_owed: Cell<bool>,
+    /// When a queued job last made this family reclaim director sessions.
+    reclaimed_at: Cell<i64>,
 }
+
+/// A queued job reclaims ended director sessions at most this often.
+const RECLAIM_EVERY_MS: i64 = 5_000;
 
 impl PoolScheduler {
     fn sql(&self) -> worker::SqlStorage {
@@ -824,6 +829,7 @@ impl DurableObject for PoolScheduler {
             job_waiters: RefCell::new(HashMap::new()),
             pushed_at: Cell::new(0),
             push_owed: Cell::new(false),
+            reclaimed_at: Cell::new(0),
         }
     }
 
@@ -846,6 +852,20 @@ impl DurableObject for PoolScheduler {
                 }
                 let (resp, out) = self.enqueue(&pool, body, now).await?;
                 self.apply(out).await?;
+                // Queued while a director session is live: it may have ended
+                // on a worker that does not send `session_end`; ask the
+                // workers behind the response (crate::front::reclaim).
+                if let Scope::Family(fam) = &route.scope {
+                    if resp.state == "queued" && now - self.reclaimed_at.get() >= RECLAIM_EVERY_MS && self.with(|s| s.queued_behind_director())? {
+                        self.reclaimed_at.set(now);
+                        let (env, fam) = (self.env.clone(), fam.clone());
+                        self.state.wait_until(async move {
+                            if crate::front::reclaim(&env, &fam).await {
+                                console_log!("family {fam}: a queued job reclaimed ended director sessions");
+                            }
+                        });
+                    }
+                }
                 Ok(Response::from_json(&resp)?.with_status(202))
             }
             (Method::Post, "cancel", None) => {

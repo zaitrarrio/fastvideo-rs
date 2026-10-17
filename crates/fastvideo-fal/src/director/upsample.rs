@@ -26,9 +26,12 @@
 //! - only the segment that executes ([`SegmentUpsampler::take`]) is
 //!   committed to the ledger and memory.
 //!
-//! A segment whose expansion is not ready waits for it (clip models: the
-//! chunk is held; causal models: the engine keeps its current prompt), at
-//! most the configured timeout. A failed or timed-out call falls back to
+//! Generation never waits for an expansion. Clip models: a chunk whose
+//! segment is not expanded yet builds with the unexpanded prompt
+//! ([`SegmentUpsampler::skip`]: the fallback below); a call still running
+//! for an unchanged beat is kept and serves the next chunk. Causal models:
+//! the engine keeps generating with its current prompt until the
+//! expansion is ready. A failed or timed-out call falls back to
 //! [`Upsampler::fallback_prompt`] (the direction text, else the previous
 //! segment's prompt, within the encoder's limit; never the long premise),
 //! reported in `segment_expanded` (`fallback: true`, `error`).
@@ -317,6 +320,32 @@ impl SegmentUpsampler {
     /// Whether the next segment's expansion (for `key`) is ready.
     pub fn ready(&self, key: &Cue) -> bool {
         self.planned.front().is_some_and(|s| &s.key == key)
+    }
+
+    /// The next segment, cued `key`, executes before its expansion is
+    /// ready (generation does not wait): its fallback prompt (the
+    /// direction text, else the previous segment's prompt, within the
+    /// encoder's limit). Nothing is committed to the ledger; a call running
+    /// for the same cue stays (it serves the next segment when that one is
+    /// cued the same, an unchanged beat; [`Self::sync`] drops it otherwise).
+    pub fn skip(&mut self, key: &Cue) -> Taken {
+        self.waiting = false;
+        self.steered = false;
+        if key.direction.is_some() {
+            self.last = key.direction.clone();
+        }
+        if !self.wanted.is_empty() {
+            self.wanted.remove(0);
+        }
+        let dir = key.direction();
+        let prompt = self.up.fallback_prompt(dir.as_ref().map(|d| d.text.as_str()));
+        Taken {
+            prompt,
+            segment: None,
+            error: Some("the expansion was not ready; generated with the unexpanded prompt (generation does not wait)".into()),
+            latency: Duration::ZERO,
+            planned: self.planned.len(),
+        }
     }
 
     /// The next segment, cued `key`, when its expansion is ready: committed

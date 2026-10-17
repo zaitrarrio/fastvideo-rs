@@ -26,6 +26,11 @@ use crate::WorkerInfo;
 
 /// The identity verdict the edge forwards to a front (JSON, [`Verdict`]).
 pub const EDGE_AUTH_HEADER: &str = "x-fv-edge-auth";
+/// The edge session a forwarded session-opening request stands for (its
+/// family object's session id): the worker binds the session it opens to
+/// it and ends it with `session_end` when that session ends. Set by the
+/// edge only (client `x-fv-*` headers never pass).
+pub const EDGE_SESSION_HEADER: &str = "x-fv-edge-session";
 /// The request id the edge mints (or keeps from the client).
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
 /// A traced hop's clock sample, `<recv wall ns>;<send wall ns>` on the

@@ -210,6 +210,14 @@ fn over(who: &str, limit: u32) -> bool {
 /// Forwards to a front (`url` its base) with the internal token and the
 /// verdict; the response streams back.
 async fn forward(env: &Env, url: &str, method: Method, path_q: &str, h: &Headers, body: Option<JsValue>, verdict: &Verdict) -> Result<Response> {
+    forward_session(env, url, method, path_q, h, body, verdict, None).await
+}
+
+/// [`forward`] of a session-opening request: `session` (the admitted
+/// session's id) rides in `x-fv-edge-session`, so the worker binds the
+/// session it opens to it and ends it (`session_end`) when it ends.
+#[allow(clippy::too_many_arguments)]
+async fn forward_session(env: &Env, url: &str, method: Method, path_q: &str, h: &Headers, body: Option<JsValue>, verdict: &Verdict, session: Option<&str>) -> Result<Response> {
     let out = Headers::new();
     for (k, v) in h.entries() {
         // Client `x-fv-*` headers never pass (the verdict is the edge's),
@@ -228,6 +236,9 @@ async fn forward(env: &Env, url: &str, method: Method, path_q: &str, h: &Headers
     out.set(proto::TOKEN_HEADER, &secret(env, "FV_INTERNAL_TOKEN").unwrap_or_default())?;
     out.set(EDGE_AUTH_HEADER, &verdict.header())?;
     out.set("x-forwarded-for", &client_addr(h))?;
+    if let Some(s) = session {
+        out.set(proto::front::EDGE_SESSION_HEADER, s)?;
+    }
     let req = request(&format!("{}{path_q}", url.trim_end_matches('/')), method, out, body)?;
     match Fetch::Request(req).send().await {
         Ok(r) => Ok(r),
@@ -235,8 +246,8 @@ async fn forward(env: &Env, url: &str, method: Method, path_q: &str, h: &Headers
     }
 }
 
-async fn forward_json(env: &Env, url: &str, path_q: &str, h: &Headers, body: Vec<u8>, verdict: &Verdict) -> Result<(u16, Value, Vec<u8>, Headers)> {
-    let mut r = forward(env, url, Method::Post, path_q, h, Some(js_sys::Uint8Array::from(&body[..]).into()), verdict).await?;
+async fn forward_json(env: &Env, url: &str, path_q: &str, h: &Headers, body: Vec<u8>, verdict: &Verdict, session: Option<&str>) -> Result<(u16, Value, Vec<u8>, Headers)> {
+    let mut r = forward_session(env, url, Method::Post, path_q, h, Some(js_sys::Uint8Array::from(&body[..]).into()), verdict, session).await?;
     let status = r.status_code();
     let hs = r.headers().clone();
     let bytes = r.bytes().await.unwrap_or_default();
@@ -549,8 +560,10 @@ async fn unbind(env: &Env, alias: &str) {
 }
 
 /// Director sessions end over their data channel: before refusing a
-/// session, release the ended ones of `family` (asking their workers).
-async fn reclaim(env: &Env, family: &str) -> bool {
+/// session (and when a job queues behind one, from the family object),
+/// release the ended ones of `family` (asking their workers). Workers also
+/// end their sessions themselves (`session_end`); this covers older ones.
+pub(crate) async fn reclaim(env: &Env, family: &str) -> bool {
     let Ok(mut r) = registry_call(env, Method::Get, &format!("/registry/binds/{family}/director:"), None).await else { return false };
     let held: HashMap<String, SessionBinding> = r.json().await.unwrap_or_default();
     let mut freed = false;
@@ -631,7 +644,7 @@ async fn director(req: &mut Request, env: &Env, ctx: &Context, reg: &Registry, o
                 Err((st, m)) => return session_error("fal_director", st, &m),
             };
             let b = binding_of(&family, &g, "director", v.key.clone());
-            let (status, out, bytes, hs) = match forward_json(env, &g.endpoint, path_q, h, raw, v).await {
+            let (status, out, bytes, hs) = match forward_json(env, &g.endpoint, path_q, h, raw, v, Some(&g.session_id)).await {
                 Ok(x) => x,
                 Err(e) => {
                     session_op(env, &b, "release").await;
@@ -651,7 +664,7 @@ async fn director(req: &mut Request, env: &Env, ctx: &Context, reg: &Registry, o
             let Some(b) = binding(env, &format!("director:{sid}")).await else {
                 return Response::from_json(&json!({"alive": false}));
             };
-            let (status, out, bytes, hs) = forward_json(env, &b.endpoint, path_q, h, raw, v).await?;
+            let (status, out, bytes, hs) = forward_json(env, &b.endpoint, path_q, h, raw, v, None).await?;
             if out.get("alive") == Some(&Value::Bool(false)) {
                 unbind(env, &format!("director:{sid}")).await;
                 session_op(env, &b, "release").await;
@@ -666,7 +679,7 @@ async fn director(req: &mut Request, env: &Env, ctx: &Context, reg: &Registry, o
                 Err((st, m)) => return session_error("fal_director", st, &m),
             };
             let b = binding_of(&family, &g, "director", v.key.clone());
-            let resp = forward(env, &g.endpoint, method, path_q, h, bytes_body(&raw), v).await?;
+            let resp = forward_session(env, &g.endpoint, method, path_q, h, bytes_body(&raw), v, Some(&g.session_id)).await?;
             if resp.status_code() / 100 != 2 {
                 session_op(env, &b, "release").await;
                 return Ok(resp);
@@ -706,14 +719,18 @@ async fn reactor(req: &mut Request, env: &Env, reg: &Registry, op: &ReactorOp, m
     match op {
         ReactorOp::Start => {
             if let Some(b) = held {
-                return forward(env, &b.endpoint, method, path_q, h, body(), v).await;
+                if session_op(env, &b, "renew").await {
+                    return forward(env, &b.endpoint, method, path_q, h, body(), v).await;
+                }
+                // Its session ended (on the worker, or its lease ran out): admit anew.
+                unbind(env, &owner).await;
             }
             let g = match admit_or_reclaim(env, &family, "reactor", None, v.key.clone()).await {
                 Ok(g) => g,
                 Err((st, m)) => return session_error("reactor", if st == 429 { 503 } else { st }, &m),
             };
             let b = binding_of(&family, &g, "reactor", v.key.clone());
-            let resp = forward(env, &g.endpoint, method, path_q, h, body(), v).await?;
+            let resp = forward_session(env, &g.endpoint, method, path_q, h, body(), v, Some(&g.session_id)).await?;
             if resp.status_code() / 100 == 2 {
                 bind(env, &owner, &b).await;
             } else {

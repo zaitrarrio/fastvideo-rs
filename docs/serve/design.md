@@ -1214,8 +1214,10 @@ router so `/fal/proxy` reaches `/wma/*`).
   drop-oldest queue (§5.10), so a slow encoder never stops the audio clock.
   Continuations trim the duplicated anchor frame (`trimmed_context_frames:1`)
   and crossfade 20 ms; underruns hold the last frame with silence and the
-  late chunk reports `deadline_missed`. At most `buffer_chunks` (1) built
-  chunks wait behind the playing one. The answer puts video and audio in
+  late chunk reports `deadline_missed`. Generation does not wait for
+  playout: built chunks queue behind the playing one up to the memory guard
+  `buffer_max_mb` (`buffer_chunks`, 0 by default, caps them in chunks;
+  docs/serve/director-chunks.md). The answer puts video and audio in
   one `msid` stream (one `MediaStream` in the browser).
 - Codecs: H.264 for every offer that has it (NVENC in production, OpenH264
   in CPU tests). Offers **without** H.264 (open-source Chromium, including

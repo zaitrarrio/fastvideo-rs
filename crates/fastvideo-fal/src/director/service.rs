@@ -27,6 +27,34 @@ use super::messages::{Aspect, Resolution};
 use super::session::{self, SessionHandle, SessionInit};
 use crate::FalApp;
 
+/// The header the edge sets on a session-opening request it forwards: the
+/// edge session (its family object's session id) the director session
+/// stands for (`fastvideo_dispatch_proto::front::EDGE_SESSION_HEADER`).
+pub const EDGE_SESSION_HEADER: &str = "x-fv-edge-session";
+
+/// Session lifecycle, for whoever holds a lease on the GPU for the session
+/// (fv-serve's edge sessions): `started` when the session is created
+/// (`edge`: the [`EDGE_SESSION_HEADER`] of its request), `ended` once it
+/// has closed and released its engine session, whatever ended it.
+pub trait SessionLeases: Send + Sync {
+    fn started(&self, session_id: &str, edge: Option<&str>);
+    fn ended(&self, session_id: &str, reason: &str);
+}
+
+/// A [`SessionLeases`] in the config (`Debug` without it).
+#[derive(Clone)]
+pub struct LeaseHook(pub Arc<dyn SessionLeases>);
+
+impl std::fmt::Debug for LeaseHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LeaseHook")
+    }
+}
+
+/// The memory guard when none is configured: 16 GiB of queued video
+/// (~44 chunks of 5 s at 768p, ~3.7 min ahead).
+pub const DEFAULT_BUFFER_MAX_BYTES: u64 = 16 << 30;
+
 /// `[fal] director` settings.
 #[derive(Clone, Debug)]
 pub struct DirectorConfig {
@@ -46,9 +74,15 @@ pub struct DirectorConfig {
     pub heartbeat_timeout: Duration,
     /// `configure` must arrive this soon after the control channel opens.
     pub configure_timeout: Duration,
-    /// Built chunks queued behind the one playing, whatever their length
-    /// (host RAM: one 10 s 768p chunk is ~750 MB of RGB, a 5 s one half).
+    /// Built chunks queued behind the one playing, whatever their length;
+    /// 0 (the default): no cap, the next chunk builds as soon as the last
+    /// one is built. Queued chunks are host RAM: RGB at the delivered size,
+    /// one 5 s 768p chunk (1344x768, 24 fps) is ~370 MB, 10 s ~750 MB.
     pub buffer_chunks: usize,
+    /// The memory guard: generation waits for playout while this many
+    /// bytes of video are queued (logged); 0: no guard. Not a pacing knob:
+    /// set it well above what a session needs.
+    pub buffer_max_bytes: u64,
     /// H.264 backend (NVENC in production, design §0.1).
     pub h264: EncoderBackend,
     /// Video bitrate; `None`: by canvas (§5.1).
@@ -69,14 +103,21 @@ pub struct DirectorConfig {
     /// Causal models: blocks per director chunk (`chunk` message; 4 blocks
     /// of 12 frames = 3 s at 16 fps).
     pub causal_chunk_blocks: u32,
-    /// Causal models: video kept queued for playout; above it the rollout
-    /// pauses at the next block boundary, so a prompt update reaches the
-    /// picture within about this lead.
+    /// Causal models: 0 (the default): the rollout never pauses (only the
+    /// memory guard holds it). Above 0: video kept queued for playout;
+    /// above it the rollout pauses at the next block boundary, so a prompt
+    /// update reaches the picture within about this lead.
     pub causal_lead_seconds: f64,
     /// Opens output copies (`configure.x_fv_output`); `None`: refused.
     pub outputs: Option<fastvideo_media::output::OutputHook>,
     /// Also accept `configure.output` (not in fal's schema).
     pub allow_output: bool,
+    /// Told when a session starts and ends (edge leases); `None`: nobody.
+    pub leases: Option<LeaseHook>,
+    /// Upsampling sessions: a chunk whose expansion is not ready waits for
+    /// it (at most the upsampler's timeout). `false` (the default): it
+    /// builds with the unexpanded prompt at once (generation never waits).
+    pub upsample_wait: bool,
 }
 
 impl Default for DirectorConfig {
@@ -88,7 +129,8 @@ impl Default for DirectorConfig {
             max_session_seconds: None,
             heartbeat_timeout: Duration::from_secs(15),
             configure_timeout: Duration::from_secs(60),
-            buffer_chunks: 1,
+            buffer_chunks: 0,
+            buffer_max_bytes: DEFAULT_BUFFER_MAX_BYTES,
             h264: EncoderBackend::Nvenc,
             video_bitrate: None,
             vp8_fallback: true,
@@ -97,9 +139,11 @@ impl Default for DirectorConfig {
             work_dir: std::env::temp_dir().join("fv-director"),
             max_sessions: 1,
             causal_chunk_blocks: 4,
-            causal_lead_seconds: 2.0,
+            causal_lead_seconds: 0.0,
             outputs: None,
             allow_output: false,
+            leases: None,
+            upsample_wait: false,
         }
     }
 }
@@ -270,6 +314,7 @@ impl DirectorService {
         offer: &str,
         session_id: Option<String>,
         heartbeats: bool,
+        edge: Option<String>,
     ) -> Result<Created, ApiError> {
         if self.open_sessions() >= self.cfg.max_sessions.max(1) {
             return Err(ApiError::new(ErrorKind::Conflict, "a director session is already running on this machine").with_retry_after(5));
@@ -369,9 +414,23 @@ impl DirectorService {
         let svc = self.clone();
         let sid = id.clone();
         tracing::info!(session = %id, app = %app.id, model = %caps.id, ?codec, audio, causal, "director session starting");
+        let leases = self.cfg.leases.clone();
+        if let Some(l) = &leases {
+            l.0.started(&id, edge.as_deref());
+        }
+        let ended = handle.clone();
         tokio::spawn(async move {
             session::run(init).await;
             svc.sessions.lock().expect("sessions").remove(&sid);
+            // Closed, its engine session released: give the GPU back,
+            // whatever ended it (stop, peer gone, heartbeat, failure, limit).
+            if let Some(l) = &leases {
+                let reason = match ended.state() {
+                    fastvideo_protocol::SessionState::Closed(r) => format!("{r:?}"),
+                    s => format!("{s:?}"),
+                };
+                l.0.ended(&sid, &reason);
+            }
         });
         Ok(Created { session_id: id, sdp: answer, handle, caps })
     }

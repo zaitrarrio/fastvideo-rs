@@ -34,7 +34,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use fastvideo_dispatch_proto::front::{
     self, classify, is_submit, plan_forward, reactor_owner, scan_model, Class, DirectorOp, EdgeRoute, Quotas, ReactorOp, Registry, Reply, Scan, SessionBinding,
-    StreamOp, Target, Verdict, EDGE_AUTH_HEADER, REQUEST_ID_HEADER,
+    StreamOp, Target, Verdict, EDGE_AUTH_HEADER, EDGE_SESSION_HEADER, REQUEST_ID_HEADER,
 };
 use fastvideo_dispatch_proto::sched::{Admit, Cfg, JobRec, Out, Sched, SessionRec, UploadRec, WorkerRec};
 use fastvideo_dispatch_proto::{self as proto, DoMsg, EnqueueReq, JobWait, Part, PartUrl, SessionGrant, SessionReq, WorkerMsg};
@@ -126,7 +126,12 @@ pub struct EdgeHost {
     rate: Mutex<HashMap<String, (i64, u32)>>,
     http: reqwest::Client,
     admin: Option<AdminToken>,
+    /// Family → when a queued job last made it reclaim director sessions.
+    reclaimed: Mutex<HashMap<String, i64>>,
 }
+
+/// A queued job reclaims ended director sessions at most this often per family.
+const RECLAIM_EVERY_MS: i64 = 5_000;
 
 impl std::fmt::Debug for EdgeHost {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -173,6 +178,7 @@ impl EdgeHost {
             rate: Mutex::default(),
             http,
             admin,
+            reclaimed: Mutex::default(),
         });
         let app = Router::new()
             .route("/families/{f}/connect", get(connect))
@@ -393,6 +399,24 @@ impl EdgeHost {
     /// Forwards a request to a front.
     #[allow(clippy::too_many_arguments)]
     async fn forward(&self, url: &str, method: &Method, path_q: &str, headers: &HeaderMap, body: reqwest::Body, verdict: &Verdict, timeout: Option<Duration>) -> Response {
+        self.forward_session(url, method, path_q, headers, body, verdict, timeout, None).await
+    }
+
+    /// [`EdgeHost::forward`] of a session-opening request: `session` (the
+    /// admitted session's id) rides in [`EDGE_SESSION_HEADER`], so the
+    /// worker binds the session it opens to it and ends it when it ends.
+    #[allow(clippy::too_many_arguments)]
+    async fn forward_session(
+        &self,
+        url: &str,
+        method: &Method,
+        path_q: &str,
+        headers: &HeaderMap,
+        body: reqwest::Body,
+        verdict: &Verdict,
+        timeout: Option<Duration>,
+        session: Option<&str>,
+    ) -> Response {
         let m = reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
         let mut r = self.http.request(m, format!("{}{path_q}", url.trim_end_matches('/')));
         for (k, v) in headers {
@@ -409,6 +433,9 @@ impl EdgeHost {
             }
         }
         r = r.header(proto::TOKEN_HEADER, &self.cfg.internal_token).header(EDGE_AUTH_HEADER, verdict.header());
+        if let Some(s) = session {
+            r = r.header(EDGE_SESSION_HEADER, s);
+        }
         if let Some(t) = timeout {
             r = r.timeout(t);
         }
@@ -437,8 +464,8 @@ impl EdgeHost {
         }
     }
 
-    async fn forward_json(&self, url: &str, path: &str, headers: &HeaderMap, body: Bytes, verdict: &Verdict) -> Result<(u16, HeaderMap, Value, Bytes), Response> {
-        let resp = self.forward(url, &Method::POST, path, headers, body.into(), verdict, Some(Duration::from_secs(60))).await;
+    async fn forward_json(&self, url: &str, path: &str, headers: &HeaderMap, body: Bytes, verdict: &Verdict, session: Option<&str>) -> Result<(u16, HeaderMap, Value, Bytes), Response> {
+        let resp = self.forward_session(url, &Method::POST, path, headers, body.into(), verdict, Some(Duration::from_secs(60)), session).await;
         let status = resp.status().as_u16();
         let hs = resp.headers().clone();
         let bytes = axum::body::to_bytes(resp.into_body(), 64 << 20).await.map_err(|e| err(502, "loading", e.to_string()))?;
@@ -514,6 +541,32 @@ impl EdgeHost {
             }
         }
         freed
+    }
+
+    /// A job was queued: when a live director session may be what it waits
+    /// behind, reclaim the ended ones in the background (at most every
+    /// [`RECLAIM_EVERY_MS`] per family). Workers end their sessions with
+    /// `session_end`; this covers the ones that do not.
+    fn reclaim_behind_director(self: &Arc<Self>, family: &str) {
+        let obj = format!("family:{family}");
+        if !self.with(&obj, |s| (s.queued_behind_director(), Vec::new())) {
+            return;
+        }
+        let now = now_ms();
+        {
+            let mut g = self.reclaimed.lock().unwrap_or_else(|p| p.into_inner());
+            let last = g.entry(family.to_owned()).or_insert(0);
+            if now - *last < RECLAIM_EVERY_MS {
+                return;
+            }
+            *last = now;
+        }
+        let (h, f) = (self.clone(), family.to_owned());
+        tokio::spawn(async move {
+            if h.reclaim(&f).await {
+                tracing::info!(family = %f, "edge: a queued job reclaimed ended director sessions");
+            }
+        });
     }
 
     /// [`EdgeHost::admit`], reclaiming ended director sessions once when
@@ -656,6 +709,9 @@ async fn enqueue(State(h): State<Arc<EdgeHost>>, Path(f): Path<String>, hs: Head
         return err(400, "invalid_request", "invalid job id");
     }
     let resp = h.with(&obj, |s| s.enqueue(req, now_ms()));
+    if resp.state == "queued" {
+        h.reclaim_behind_director(&f);
+    }
     (StatusCode::ACCEPTED, Json(resp)).into_response()
 }
 
@@ -1041,7 +1097,7 @@ async fn director(h: &Arc<EdgeHost>, op: DirectorOp, method: &Method, path_q: &s
                 Err((st, m)) => return session_error("fal_director", st, m, Some(10)),
             };
             let b = SessionBinding { family: family.clone(), session_id: g.session_id.clone(), lease: g.lease, endpoint: g.endpoint.clone(), kind: "director".into(), owner: verdict.key.clone(), expires_ms: g.expires_ms };
-            let (status, hs, v, bytes) = match h.forward_json(&g.endpoint, path_q, headers, raw, verdict).await {
+            let (status, hs, v, bytes) = match h.forward_json(&g.endpoint, path_q, headers, raw, verdict, Some(&g.session_id)).await {
                 Ok(x) => x,
                 Err(r) => {
                     h.release(&b);
@@ -1066,7 +1122,7 @@ async fn director(h: &Arc<EdgeHost>, op: DirectorOp, method: &Method, path_q: &s
             let Some(b) = h.binding(&format!("director:{sid}")) else {
                 return Json(json!({"alive": false})).into_response();
             };
-            let (status, _, v, bytes) = match h.forward_json(&b.endpoint, path_q, headers, raw, verdict).await {
+            let (status, _, v, bytes) = match h.forward_json(&b.endpoint, path_q, headers, raw, verdict, None).await {
                 Ok(x) => x,
                 Err(r) => return r,
             };
@@ -1087,7 +1143,7 @@ async fn director(h: &Arc<EdgeHost>, op: DirectorOp, method: &Method, path_q: &s
                 Err((st, m)) => return session_error("fal_director", st, m, Some(10)),
             };
             let b = SessionBinding { family, session_id: g.session_id.clone(), lease: g.lease, endpoint: g.endpoint.clone(), kind: "director".into(), owner: verdict.key.clone(), expires_ms: g.expires_ms };
-            let resp = h.forward(&g.endpoint, method, path_q, headers, raw.into(), verdict, None).await;
+            let resp = h.forward_session(&g.endpoint, method, path_q, headers, raw.into(), verdict, None, Some(&g.session_id)).await;
             if !resp.status().is_success() {
                 h.release(&b);
                 return resp;
@@ -1145,15 +1201,19 @@ async fn reactor(h: &Arc<EdgeHost>, op: &ReactorOp, method: &Method, path_q: &st
     match op {
         ReactorOp::Start => {
             if let Some(b) = held {
-                // One session per caller: the worker answers (busy or idempotent).
-                return h.forward(&b.endpoint, method, path_q, headers, raw.into(), verdict, Some(Duration::from_secs(60))).await;
+                if h.renew(&b) {
+                    // One session per caller: the worker answers (busy or idempotent).
+                    return h.forward(&b.endpoint, method, path_q, headers, raw.into(), verdict, Some(Duration::from_secs(60))).await;
+                }
+                // Its session ended (on the worker, or its lease ran out): admit anew.
+                h.unbind(&owner);
             }
             let g = match h.admit_or_reclaim(&family, "reactor", None, verdict.key.clone()).await {
                 Ok(g) => g,
                 Err((st, m)) => return session_error("reactor", if st == 429 { 503 } else { st }, m, Some(10)),
             };
             let b = SessionBinding { family, session_id: g.session_id.clone(), lease: g.lease, endpoint: g.endpoint.clone(), kind: "reactor".into(), owner: verdict.key.clone(), expires_ms: g.expires_ms };
-            let resp = h.forward(&g.endpoint, method, path_q, headers, raw.into(), verdict, Some(Duration::from_secs(60))).await;
+            let resp = h.forward_session(&g.endpoint, method, path_q, headers, raw.into(), verdict, Some(Duration::from_secs(60)), Some(&g.session_id)).await;
             if resp.status().is_success() {
                 h.bind(&owner, b);
             } else {

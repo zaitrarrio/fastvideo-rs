@@ -17,6 +17,10 @@
 //! - `a_reactor_session_is_admitted_by_the_edge`: the family object admits
 //!   the session, the edge proxies the signalling, a batch job waits for the
 //!   GPU, a second session is refused, stop frees the GPU.
+//! - `a_stopped_director_session_frees_the_gpu`: a director session admitted
+//!   by the edge holds the GPU; the client's `stop` ends it on the worker,
+//!   which gives the lease back (`session_end`), and a t2v job queued behind
+//!   it is pushed within seconds (not at the lease's TTL).
 
 #![cfg(all(feature = "http-client", feature = "openai-videos", feature = "minimax", feature = "fal", feature = "ltxapi"))]
 
@@ -528,5 +532,71 @@ async fn whip_offers_can_be_handed_to_the_worker() {
     assert_eq!(s, 401, "a forged capability");
     let (s, _, _) = http.call("GET", &format!("{}/fv/v1/jobs?fv_cap={cap}", w.base), None, None).await;
     assert_eq!(s, 401, "the capability opens the ingest paths only");
+    drop(w);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_stopped_director_session_frees_the_gpu() {
+    use fastvideo_webrtc::channel::ChannelMessage;
+    use fastvideo_webrtc::host::{AudioLayout, HostConfig, OfferOptions, PeerEvent, RtcHost};
+    use fastvideo_webrtc::sdp::Direction;
+    init_log();
+    let e = Env::new(|_| {}).await;
+    // One GPU (capacity 1, one session slot) serving H3: the director and
+    // batch jobs share it.
+    let w = e.front("dir", &[("fake-h3-turbo", "h3")], 5, |_| {}).await;
+    e.fronts(1).await;
+    let g = e.base.clone();
+    let http = &e.http;
+    let host = RtcHost::bind(HostConfig::loopback(true, false)).await.unwrap();
+    let (pending, offer) = host
+        .offer(OfferOptions {
+            video: Some(Direction::RecvOnly),
+            audio: Some((Direction::RecvOnly, AudioLayout::Stereo)),
+            channels: vec!["control".into()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let (s, v, _) = http.call("POST", &format!("{g}/wma/session"), Some(json!({"app_id": "minimax/h3-turbo/director", "sdp": offer, "type": "offer"})), fal_key()).await;
+    assert_eq!(s, 200, "{v}");
+    let mut peer = pending.accept_answer(v["sdp"].as_str().unwrap()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            match peer.next_event().await {
+                Some(PeerEvent::Message(m)) => {
+                    let v: Value = serde_json::from_str(m.as_text().unwrap()).unwrap();
+                    if v["type"] == "session_info" {
+                        break;
+                    }
+                }
+                Some(PeerEvent::Closed(r)) => panic!("closed before session_info: {r:?}"),
+                Some(_) => {}
+                None => panic!("peer gone before session_info"),
+            }
+        }
+    })
+    .await
+    .expect("session_info");
+    assert_eq!(e.edge.registry().counts["h3"].sessions, 1, "the director session holds the GPU");
+    // While it does, a t2v job waits.
+    let (s, j, _) = http.call("POST", &format!("{g}/fv/v1/jobs"), Some(json!({"model": "fake-h3-turbo", "prompt": "after the director"})), bearer()).await;
+    assert_eq!(s, 202, "{j}");
+    let jid = j["id"].as_str().unwrap().to_owned();
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    let (_, jv, _) = http.call("GET", &format!("{g}/fv/v1/jobs/{jid}"), None, bearer()).await;
+    assert_eq!(jv["status"], "queued", "the GPU is the director's: {jv}");
+    // The client stops the session over its data channel (no HTTP reaches
+    // the edge): the worker gives the lease back and the job runs.
+    peer.send_message(ChannelMessage::text("control", r#"{"type":"stop"}"#)).await.unwrap();
+    let t0 = Instant::now();
+    http.poll(&format!("{g}/fv/v1/jobs/{jid}"), bearer(), |v| v["status"] != "queued").await;
+    let took = t0.elapsed();
+    // The session closes ~0.3 s after `stop` (its farewell), then the push.
+    assert!(took < Duration::from_secs(3), "the queued job waited {took:?} after the stop");
+    eprintln!("queued t2v job left the queue {} ms after the director stop", took.as_millis());
+    let jv = http.poll(&format!("{g}/fv/v1/jobs/{jid}"), bearer(), native_done).await;
+    assert_eq!(jv["status"], "succeeded", "{jv}");
+    assert_eq!(e.edge.registry().counts["h3"].sessions, 0);
     drop(w);
 }

@@ -298,7 +298,16 @@ audio to an output while its WebRTC peer keeps playing
 (`fastvideo_media::output`): the session pushes every tick into an
 `OutputTap` (non-blocking, ~2 s deep, drops the newest when full and asks
 for a keyframe after a gap); the copy runs fv-serve's publisher on its own
-task. A refused request refuses the session's start or configure; anything
+task. A WHIP copy encodes video on its own thread behind a 10-tick
+drop-oldest queue and sends each access unit the moment the encoder returns
+it; audio is encoded and sent as its tick arrives, never behind a video
+encode (2026-10-17). Nothing on the send path sleeps or batches. The copy
+still leaves at the session's playout rate, because the ticks are the
+playout's: RTP timestamps are media time (tick index / fps), and a live
+WebRTC receiver (Cloudflare's WHIP ingest, MediaMTX, a browser) plays by
+those timestamps through a jitter buffer of a few hundred milliseconds, so
+media pushed seconds ahead of real time would be late-buffered, dropped or
+add latency, not play sooner. A refused request refuses the session's start or configure; anything
 after that is an event, and **a copy's failure never stops the session**.
 The copy ends with the session (its Cloudflare live input released).
 

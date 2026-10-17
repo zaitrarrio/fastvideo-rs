@@ -66,12 +66,24 @@ chunk plays `frames - 1`.
 - **End images** (`end_image_url`, end-image beats) end a chunk of the
   session's length, or end exactly on their beat. The ≥ 3 s spacing rule
   and the 5 s minimum chunk are unchanged.
-- **Buffering.** `[director] buffer_chunks` counts chunks, so at 5 s it
-  queues half the video (and half the host RAM). The build loop is
-  unchanged: one build at a time. A chunk avoids an underrun when it builds
-  faster than the chunk before it plays. Shorter chunks shorten the time
-  for a prompt update to reach the picture (it lands at the next
-  undispatched chunk).
+- **Buffering (no hold, 2026-10-17).** Generation never waits for
+  playout: the next chunk is dispatched as soon as the previous one is
+  built, one build at a time, until the session is stopped (owner rule:
+  the director keeps the GPU generating as fast as it can). Built chunks
+  queue for playout in host RAM, RGB at the delivered size: a 5 s chunk at
+  768p (1344x768, 24 fps) is ~370 MB, at 480p ~150 MB, at 1080p ~750 MB;
+  10 s chunks twice that. The only default limit is the memory guard
+  `[director] buffer_max_mb` (0, the default: half the host's available
+  memory at startup, at least 2 GiB): while that much video is queued the
+  loop waits for playout and logs `director: playout holds
+  buffer_max_bytes of video` (and `generation resumes` below it).
+  `[director] buffer_chunks` (0, the default: no cap) is an operator's cap
+  in chunks (the earlier default was 1).
+  The trade-off: a prompt update lands at the next undispatched chunk, so
+  when the GPU outpaces playout it reaches the picture only after the
+  chunks already queued play out (`buffer_depth_seconds` in `chunk`). An
+  operator who wants prompt latency over throughput sets `buffer_chunks`.
+  Shorter chunks shorten the time for a prompt update to reach the picture.
 - **Cost.** The LTX tier labels (`LTX_COST_*`) were measured on 121-frame
   (5 s) chunks (docs/serve/e2e/ltx.md "Director tiers"). A 10 s chunk costs
   a little more than twice that, because attention grows with length.
