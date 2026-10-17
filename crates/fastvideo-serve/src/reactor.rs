@@ -97,6 +97,42 @@ pub fn build_on_moderated(
     Ok(Reactor::new(cfg, Arc::new(engine.clone()), host))
 }
 
+/// Reactor sessions behind the edge (crate::edge_sessions): a session that
+/// starts binds to the edge session admitted for it; when it ends, however
+/// it ends (`stop_session`, the orphan timer, a length limit, moderation),
+/// its lease goes back at once. The runtime runs one session at a time,
+/// followed through its state journal (`start_session` ..
+/// `cleanup_complete`).
+pub fn bind_edge_sessions(r: &Reactor, sessions: Arc<crate::edge_sessions::EdgeSessions>) {
+    let (_, mut rx) = r.journal().subscribe(r.journal().last_seq());
+    tokio::spawn(async move {
+        let mut n = 0u64;
+        let mut live: Option<String> = None;
+        loop {
+            let ev = match rx.recv().await {
+                Ok(ev) => ev,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+            };
+            match ev.data.get("event").and_then(|e| e.as_str()) {
+                Some("start_session") => {
+                    n += 1;
+                    let local = format!("reactor-{n}");
+                    if sessions.bind("reactor", &local, None).is_some() {
+                        live = Some(local);
+                    }
+                }
+                Some("cleanup_complete") => {
+                    if let Some(l) = live.take() {
+                        sessions.ended(&l, "the reactor session ended");
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -29,7 +29,10 @@
 //! - **sessions**: `session_offer` reserves the GPU through the arbiter and
 //!   answers `session_ack` with this worker's public endpoint, or
 //!   `session_nack`; `session_revoke` frees it; held sessions are
-//!   re-announced in the hello;
+//!   re-announced in the hello; a session that ends on the worker (a
+//!   director `stop`, a lost peer, a failure, a length limit; see
+//!   [`crate::edge_sessions`]) frees its slot here and is reported
+//!   `session_end`, so the object pushes a queued job at once;
 //! - **direct uploads** (`dispatch.direct_upload`, [`crate::upload`]): after
 //!   the ack the job's output is uploaded through part URLs the object mints.
 
@@ -92,6 +95,8 @@ pub struct Family {
     pub arbiter: Arc<Arbiter>,
     /// Direct uploads (`None`: outputs go through the artifact store).
     pub uploads: Option<Arc<Uploads>>,
+    /// The sessions taken here, bound to the local sessions they stand for.
+    pub sessions: Arc<crate::edge_sessions::EdgeSessions>,
 }
 
 /// Jobs taken from the dispatcher (id → (attempt, lease)) not yet reported done.
@@ -472,6 +477,14 @@ fn on_frame(link: &Arc<Link>, m: DoMsg) {
             match r {
                 Ok(()) => {
                     link.sessions.lock().unwrap_or_else(|p| p.into_inner()).insert(session_id.clone(), lease);
+                    // Ended here (the local session ended): slot and object.
+                    let weak = Arc::downgrade(link);
+                    let ender: crate::edge_sessions::Ender = Arc::new(move |id: &str, lease: u64, why: &str| {
+                        if let Some(l) = weak.upgrade() {
+                            ended_here(&l, id, lease, why);
+                        }
+                    });
+                    f.sessions.admitted(&session_id, lease, &kind, ender);
                     tracing::info!(session = %session_id, lease, kind = %kind, family = link.family(), "worker: session admitted");
                     link.handle.send(WorkerMsg::SessionAck { session_id, lease, endpoint: link.cfg.endpoint.clone() });
                 }
@@ -487,13 +500,31 @@ fn on_frame(link: &Arc<Link>, m: DoMsg) {
     }
 }
 
+/// The dispatcher ended the session (revoke, or while disconnected).
 fn end_session(link: &Link, id: &str, why: &str) {
+    let had = link.sessions.lock().unwrap_or_else(|p| p.into_inner()).remove(id).is_some();
+    if let Some(f) = &link.fam {
+        f.arbiter.release_session(id);
+        f.sessions.forget(id);
+    }
+    if had {
+        tracing::info!(session = %id, reason = %why, "worker: session ended; slot free");
+    }
+}
+
+/// The session ended on this worker: free the slot and tell the object
+/// (`session_end`), which pushes the next queued job at once. A socket that
+/// is down queues the frame; the next hello no longer lists the session
+/// either way.
+fn ended_here(link: &Link, id: &str, lease: u64, why: &str) {
     let had = link.sessions.lock().unwrap_or_else(|p| p.into_inner()).remove(id).is_some();
     if let Some(f) = &link.fam {
         f.arbiter.release_session(id);
     }
     if had {
-        tracing::info!(session = %id, reason = %why, "worker: session ended; slot free");
+        link.handle.send(WorkerMsg::SessionEnd { session_id: id.to_owned(), lease });
+        metrics::counter!("fv_worker_session_end_total", "family" => link.family().to_owned()).increment(1);
+        tracing::info!(session = %id, lease, reason = %why, "worker: session ended; slot free");
     }
 }
 

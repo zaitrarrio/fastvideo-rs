@@ -53,6 +53,8 @@ pub mod front;
 /// in one process (tests, the compat suites, `fv-edge-local`).
 #[cfg(feature = "http-client")]
 pub mod edge_host;
+/// Edge sessions held here and the local sessions they stand for.
+pub mod edge_sessions;
 pub mod encoders;
 pub mod flags;
 pub mod gate;

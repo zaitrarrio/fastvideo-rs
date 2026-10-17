@@ -576,11 +576,20 @@ impl App {
             .merge(fastvideo_serve_kit::admin_routes(key_store.clone(), admin.clone()))
             .merge(crate::flags::routes(flags.clone(), admin.clone()))
             .merge(crate::admin_token::routes(sealed_admin));
+        // Edge sessions taken by the family links, bound to the director
+        // and Reactor sessions they stand for: a session that ends here gives
+        // its lease back at once (crate::edge_sessions).
+        #[allow(unused_variables)]
+        let edge_sessions = crate::edge_sessions::EdgeSessions::new();
+        #[cfg(feature = "reactor")]
+        if let Some(r) = &reactor {
+            crate::reactor::bind_edge_sessions(r, edge_sessions.clone());
+        }
         #[allow(unused_mut)]
         let mut fal_extra: Router<ServeCtx> = Router::new();
         #[cfg(all(feature = "fal", feature = "webrtc"))]
         if let (Some(host), true) = (&rtc_host, config.protocols.fal && config.protocols.fal_director) {
-            let svc = crate::director::build(&config, &mcfg, gate.engine().clone(), host.clone());
+            let svc = crate::director::build(&config, &mcfg, gate.engine().clone(), host.clone(), Some(edge_sessions.clone()));
             fal_extra = fastvideo_fal::director::routes(svc);
         }
         #[allow(unused_mut)]
@@ -648,6 +657,7 @@ impl App {
                             config.dispatch.session_exclusive,
                         )),
                         uploads: direct_uploads.clone(),
+                        sessions: edge_sessions.clone(),
                     };
                     for f in &config.dispatch.families {
                         background.push(crate::edge_link::spawn(st.clone(), link(Scope::Family(f.clone())), Some(fam.clone())));

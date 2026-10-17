@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fastvideo_engine_service::{CancelToken, CausalControl, CausalSession, ClipBuild, ClipSession, EngineService};
+use fastvideo_fal::director::service::{LeaseHook, SessionLeases};
 use fastvideo_fal::director::{
     ChunkBuild, ChunkOutput, DirectorClips, DirectorConfig, DirectorEngine, DirectorService, DirectorStream, StreamBlock,
 };
@@ -201,9 +202,28 @@ pub fn director_config(c: &Config, m: &MountCfg, host: &RtcHost) -> DirectorConf
 }
 
 
-/// The director service on the shared WebRTC host (`crate::rtc`).
-pub fn build(c: &Config, m: &MountCfg, engine: EngineService, host: RtcHost) -> Arc<DirectorService> {
-    let cfg = director_config(c, m, &host);
+/// Director sessions behind the edge: a session binds to the edge session
+/// admitted for it when it starts and gives its lease back when it ends
+/// (crate::edge_sessions).
+struct EdgeLeases(Arc<crate::edge_sessions::EdgeSessions>);
+
+impl SessionLeases for EdgeLeases {
+    fn started(&self, session_id: &str, edge: Option<&str>) {
+        self.0.bind("director", session_id, edge);
+    }
+    fn ended(&self, session_id: &str, reason: &str) {
+        if let Some(e) = self.0.ended(session_id, reason) {
+            tracing::info!(session = %session_id, edge_session = %e, reason, "director session ended: its edge lease is released");
+        }
+    }
+}
+
+/// The director service on the shared WebRTC host (`crate::rtc`);
+/// `edge`: the worker's edge sessions (a session that ends gives its lease
+/// back at once).
+pub fn build(c: &Config, m: &MountCfg, engine: EngineService, host: RtcHost, edge: Option<Arc<crate::edge_sessions::EdgeSessions>>) -> Arc<DirectorService> {
+    let mut cfg = director_config(c, m, &host);
+    cfg.leases = edge.map(|e| LeaseHook(Arc::new(EdgeLeases(e))));
     tracing::info!(apps = cfg.apps.len(), udp = ?host.udp_addr(), tcp = ?host.tcp_addr(), "fal director mounted");
     DirectorService::new(cfg, host, Arc::new(EngineDirector(engine)))
 }

@@ -27,6 +27,30 @@ use super::messages::{Aspect, Resolution};
 use super::session::{self, SessionHandle, SessionInit};
 use crate::FalApp;
 
+/// The header the edge sets on a session-opening request it forwards: the
+/// edge session (its family object's session id) the director session
+/// stands for (`fastvideo_dispatch_proto::front::EDGE_SESSION_HEADER`).
+pub const EDGE_SESSION_HEADER: &str = "x-fv-edge-session";
+
+/// Session lifecycle, for whoever holds a lease on the GPU for the session
+/// (fv-serve's edge sessions): `started` when the session is created
+/// (`edge`: the [`EDGE_SESSION_HEADER`] of its request), `ended` once it
+/// has closed and released its engine session, whatever ended it.
+pub trait SessionLeases: Send + Sync {
+    fn started(&self, session_id: &str, edge: Option<&str>);
+    fn ended(&self, session_id: &str, reason: &str);
+}
+
+/// A [`SessionLeases`] in the config (`Debug` without it).
+#[derive(Clone)]
+pub struct LeaseHook(pub Arc<dyn SessionLeases>);
+
+impl std::fmt::Debug for LeaseHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LeaseHook")
+    }
+}
+
 /// `[fal] director` settings.
 #[derive(Clone, Debug)]
 pub struct DirectorConfig {
@@ -77,6 +101,8 @@ pub struct DirectorConfig {
     pub outputs: Option<fastvideo_media::output::OutputHook>,
     /// Also accept `configure.output` (not in fal's schema).
     pub allow_output: bool,
+    /// Told when a session starts and ends (edge leases); `None`: nobody.
+    pub leases: Option<LeaseHook>,
 }
 
 impl Default for DirectorConfig {
@@ -100,6 +126,7 @@ impl Default for DirectorConfig {
             causal_lead_seconds: 2.0,
             outputs: None,
             allow_output: false,
+            leases: None,
         }
     }
 }
@@ -270,6 +297,7 @@ impl DirectorService {
         offer: &str,
         session_id: Option<String>,
         heartbeats: bool,
+        edge: Option<String>,
     ) -> Result<Created, ApiError> {
         if self.open_sessions() >= self.cfg.max_sessions.max(1) {
             return Err(ApiError::new(ErrorKind::Conflict, "a director session is already running on this machine").with_retry_after(5));
@@ -369,9 +397,23 @@ impl DirectorService {
         let svc = self.clone();
         let sid = id.clone();
         tracing::info!(session = %id, app = %app.id, model = %caps.id, ?codec, audio, causal, "director session starting");
+        let leases = self.cfg.leases.clone();
+        if let Some(l) = &leases {
+            l.0.started(&id, edge.as_deref());
+        }
+        let ended = handle.clone();
         tokio::spawn(async move {
             session::run(init).await;
             svc.sessions.lock().expect("sessions").remove(&sid);
+            // Closed, its engine session released: give the GPU back,
+            // whatever ended it (stop, peer gone, heartbeat, failure, limit).
+            if let Some(l) = &leases {
+                let reason = match ended.state() {
+                    fastvideo_protocol::SessionState::Closed(r) => format!("{r:?}"),
+                    s => format!("{s:?}"),
+                };
+                l.0.ended(&sid, &reason);
+            }
         });
         Ok(Created { session_id: id, sdp: answer, handle, caps })
     }
