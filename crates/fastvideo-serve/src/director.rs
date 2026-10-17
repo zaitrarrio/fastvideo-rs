@@ -174,6 +174,21 @@ fn h264_backend(s: &str) -> EncoderBackend {
     }
 }
 
+/// `[director] buffer_max_mb` in bytes; 0: half of `MemAvailable` now, at
+/// least 2 GiB (the library default where `/proc/meminfo` is unreadable).
+fn buffer_max_bytes(mb: u64) -> u64 {
+    if mb > 0 {
+        return mb << 20;
+    }
+    let avail_kb = std::fs::read_to_string("/proc/meminfo").ok().and_then(|m| {
+        m.lines().find_map(|l| l.strip_prefix("MemAvailable:").and_then(|v| v.trim().trim_end_matches("kB").trim().parse::<u64>().ok()))
+    });
+    match avail_kb {
+        Some(kb) => ((kb << 10) / 2).max(2 << 30),
+        None => fastvideo_fal::director::service::DEFAULT_BUFFER_MAX_BYTES,
+    }
+}
+
 /// `DirectorConfig` from the server config.
 pub fn director_config(c: &Config, m: &MountCfg, host: &RtcHost) -> DirectorConfig {
     let d = &c.director;
@@ -186,7 +201,8 @@ pub fn director_config(c: &Config, m: &MountCfg, host: &RtcHost) -> DirectorConf
         ice_servers: host.ice_servers().to_vec(),
         chunk_seconds: d.chunk_seconds,
         max_session_seconds: (d.max_session_seconds > 0).then_some(d.max_session_seconds),
-        buffer_chunks: d.buffer_chunks.max(1),
+        buffer_chunks: d.buffer_chunks,
+        buffer_max_bytes: buffer_max_bytes(d.buffer_max_mb),
         h264: h264_backend(&d.encoder),
         video_bitrate: (d.video_bitrate > 0).then_some(d.video_bitrate),
         vp8_fallback: d.vp8_fallback,
@@ -194,9 +210,11 @@ pub fn director_config(c: &Config, m: &MountCfg, host: &RtcHost) -> DirectorConf
         work_dir: c.server.state_dir.join("director"),
         heartbeat_timeout: Duration::from_secs(15),
         causal_chunk_blocks: d.causal_chunk_blocks.max(1),
-        causal_lead_seconds: d.causal_lead_seconds.max(0.5),
+        // 0: never pause; a lead below half a second is half a second.
+        causal_lead_seconds: if d.causal_lead_seconds > 0.0 { d.causal_lead_seconds.max(0.5) } else { 0.0 },
         outputs: crate::stream_outputs::hook(c),
         allow_output: d.allow_output,
+        upsample_wait: d.upsample_wait,
         ..DirectorConfig::default()
     }
 }

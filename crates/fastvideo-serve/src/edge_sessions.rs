@@ -130,8 +130,10 @@ impl EdgeSessions {
 mod tests {
     use super::*;
 
-    fn recorder() -> (Arc<Mutex<Vec<(String, u64, String)>>>, Ender) {
-        let log: Arc<Mutex<Vec<(String, u64, String)>>> = Arc::default();
+    type Log = Arc<Mutex<Vec<(String, u64, String)>>>;
+
+    fn recorder() -> (Log, Ender) {
+        let log: Log = Arc::default();
         let l2 = log.clone();
         (log, Arc::new(move |id: &str, lease: u64, why: &str| l2.lock().unwrap().push((id.into(), lease, why.into()))))
     }

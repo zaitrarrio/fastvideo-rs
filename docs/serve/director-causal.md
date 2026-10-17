@@ -30,12 +30,19 @@ Seam: `director::engine::DirectorStream` (`set_prompt`, `set_seed`,
 `EngineService::open_causal_session` + `CausalControl`. The tests implement it
 over the fake engine. The clip path (`DirectorClips`) is unchanged.
 
-**Pacing.** The engine runs ahead of real time (LongLive about 20 fps on an
-RTX PRO 6000 at 16 fps playout). The session keeps about
-`causal_lead_seconds` (2 s) of video queued for playout. Above that it pauses
-the rollout at the next block boundary (`set_paused(true)`), and below it
-resumes. A prompt therefore reaches the picture within about one block of
-generation plus the lead, and not behind a deep queue of pre-generated blocks.
+**Pacing (no hold by default, 2026-10-17).** The engine runs ahead of real
+time (LongLive about 20 fps on an RTX PRO 6000 at 16 fps playout). By
+default (`[director] causal_lead_seconds = 0`) the rollout never pauses: it
+generates as fast as the engine goes until the session is stopped, and the
+queued video grows (about 4 s per minute for LongLive). Only the memory
+guard (`[director] buffer_max_mb`, see director-chunks.md) pauses it. The
+trade-off is prompt latency: a new prompt reaches the engine at the next
+block boundary but plays only after the blocks already queued. An operator
+who wants the earlier behaviour sets `causal_lead_seconds` (e.g. 2): above
+that much queued video the rollout pauses at the next block boundary
+(`set_paused(true)`) and resumes below it, so a prompt reaches the picture
+within about one block of generation plus the lead. The measurements below
+were taken with a 2 s lead.
 
 ## 2. Control mapping
 

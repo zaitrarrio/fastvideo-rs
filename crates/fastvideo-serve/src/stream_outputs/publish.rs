@@ -536,8 +536,6 @@ async fn whip_loop(
         tokio::task::spawn_blocking(move || pick_encoder(&c)).await.map_err(|e| ApiError::internal(e.to_string()))?
     };
     let fps = ctx.fps;
-    let mut enc: Option<VEnc> = None;
-    let mut idr = KeyframePolicy::new(1.0, 1);
     // Opus comes with `webrtc` (this module's gate), not `encoders`: the
     // serve images build without `encoders`, and a gate on it left the
     // offer's audio m-line without packets, so MediaMTX published the copy
@@ -552,34 +550,70 @@ async fn whip_loop(
     };
     ctx.phase("publishing");
     ctx.ready();
-    let t0 = Instant::now();
-    let mut rtps: VecDeque<u64> = VecDeque::new();
+    // Video is encoded and sent on its own thread, fed through a
+    // drop-oldest queue: this loop never waits for an encode, a tick's
+    // audio goes out the moment the tick arrives, and each access unit is
+    // sent the moment the encoder returns it (no sleeps, no batching; RTP
+    // times are the ticks' media times).
+    let (notes_tx, mut notes) = mpsc::unbounded_channel::<VideoNote>();
+    let video = VideoPub::spawn(VideoPubCfg { codec, target, backend, fps, handle: handle.clone() }, notes_tx).map_err(|e| err(ErrorKind::Internal, prov, e))?;
     let mut pending = Some(first);
+    let mut first_sent = false;
     let reason = loop {
         let t = match pending.take() {
             Some(t) => t,
             None => tokio::select! {
-                _ = ctx.stop.notified() => break "stopped".to_owned(),
+                _ = ctx.stop.notified() => break Ok("stopped".to_owned()),
                 ev = publisher.peer().next_event() => {
                     match ev {
                         Some(PeerEvent::KeyframeRequest { .. }) => {
-                            idr.request(t0.elapsed().as_secs_f64());
+                            video.keyframe();
                             ctx.state.set(|s| s.keyframe_requests += 1);
                         }
-                        Some(PeerEvent::Closed(r)) => return Err(err(ErrorKind::Internal, prov, format!("whip peer closed: {r:?}"))),
+                        Some(PeerEvent::Closed(r)) => break Err(err(ErrorKind::Internal, prov, format!("whip peer closed: {r:?}"))),
                         Some(_) => {}
-                        None => return Err(err(ErrorKind::Internal, prov, "whip peer ended")),
+                        None => break Err(err(ErrorKind::Internal, prov, "whip peer ended")),
+                    }
+                    continue;
+                }
+                Some(n) = notes.recv() => {
+                    match n {
+                        VideoNote::Encoder { name, width, height } => ctx.state.set(|s| {
+                            s.encoder = Some(name);
+                            s.width = Some(width);
+                            s.height = Some(height);
+                        }),
+                        VideoNote::Sent { keyframe } => {
+                            ctx.state.set(|s| {
+                                s.frames_sent += 1;
+                                if keyframe {
+                                    s.keyframes_sent += 1;
+                                }
+                            });
+                            if !first_sent {
+                                first_sent = true;
+                                ctx.first_sent();
+                            }
+                        }
+                        VideoNote::SendError => ctx.state.set(|s| s.video_send_errors += 1),
+                        VideoNote::Forced { covered } => ctx.state.set(|s| {
+                            s.forced_idrs += 1;
+                            s.keyframe_requests_covered = covered;
+                        }),
+                        VideoNote::Covered(covered) => ctx.state.set(|s| s.keyframe_requests_covered = covered),
+                        VideoNote::Dropped => ctx.state.set(|s| s.ticks_dropped += 1),
+                        VideoNote::Failed(e) => break Err(err(ErrorKind::Internal, prov, e)),
                     }
                     continue;
                 }
                 t = src.next() => match t {
                     Some(t) => t,
-                    None => break "ended".to_owned(),
+                    None => break Ok("ended".to_owned()),
                 },
             },
         };
         if t.gap {
-            idr.request(t0.elapsed().as_secs_f64());
+            video.keyframe();
             ctx.state.set(|s| s.ticks_dropped += 1);
         }
         if let (Some(op), Some(a)) = (opus.as_mut(), t.audio.as_ref()) {
@@ -596,69 +630,148 @@ async fn whip_loop(
                 Err(e) => tracing::warn!(error = %e, "opus encode failed"),
             }
         }
-        let Some(frame) = t.frame else { continue };
+        if let Some(frame) = t.frame {
+            video.push(frame, t.rtp);
+        }
+    };
+    // The encoder thread flushes and ends on its own (its queue closed).
+    video.close();
+    reason
+}
+
+/// Encoder input depth in ticks (design §5.10: "encoder input 10 ticks,
+/// drop-oldest, then force IDR").
+const VIDEO_QUEUE: usize = 10;
+
+/// What the video thread reports to the publish loop (counters, failure).
+#[derive(Debug)]
+enum VideoNote {
+    Encoder { name: String, width: u32, height: u32 },
+    Sent { keyframe: bool },
+    SendError,
+    Forced { covered: u64 },
+    Covered(u64),
+    /// Frames dropped because the encoder fell behind (drop-oldest).
+    Dropped,
+    Failed(String),
+}
+
+struct VideoPubCfg {
+    codec: VideoCodec,
+    target: WhipTarget,
+    backend: EncoderBackend,
+    fps: u32,
+    handle: fastvideo_webrtc::host::PeerHandle,
+}
+
+/// The WHIP copy's video lane: one OS thread that encodes each queued frame
+/// and sends its access units at once (`send_video` never blocks).
+struct VideoPub {
+    q: Arc<fastvideo_media::queue::DropOldest<(RgbFrame, u64)>>,
+    keyframe: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl VideoPub {
+    fn spawn(cfg: VideoPubCfg, notes: mpsc::UnboundedSender<VideoNote>) -> Result<Self, String> {
+        let q = Arc::new(fastvideo_media::queue::DropOldest::new(VIDEO_QUEUE));
+        let keyframe = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (q2, k2) = (q.clone(), keyframe.clone());
+        std::thread::Builder::new().name("whip-video".into()).spawn(move || video_thread(cfg, &q2, &k2, &notes)).map_err(|e| format!("video thread: {e}"))?;
+        Ok(Self { q, keyframe })
+    }
+
+    /// Queues a frame (never blocks; the oldest goes when the encoder is
+    /// behind, then a keyframe follows).
+    fn push(&self, frame: RgbFrame, rtp: u64) {
+        self.q.push((frame, rtp));
+    }
+
+    /// A keyframe is wanted (PLI/FIR, a gap in the ticks).
+    fn keyframe(&self) {
+        self.keyframe.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn close(&self) {
+        self.q.close();
+    }
+}
+
+impl Drop for VideoPub {
+    fn drop(&mut self) {
+        self.q.close();
+    }
+}
+
+fn video_thread(cfg: VideoPubCfg, q: &fastvideo_media::queue::DropOldest<(RgbFrame, u64)>, want_key: &std::sync::atomic::AtomicBool, notes: &mpsc::UnboundedSender<VideoNote>) {
+    let t0 = Instant::now();
+    let now = || t0.elapsed().as_secs_f64();
+    let mut enc: Option<VEnc> = None;
+    let mut idr = KeyframePolicy::new(1.0, 1);
+    let mut rtps: VecDeque<u64> = VecDeque::new();
+    loop {
+        let Some((frame, rtp)) = q.pop_timeout(Duration::from_millis(200)) else {
+            if q.is_closed() {
+                break;
+            }
+            continue;
+        };
+        if q.take_dropped() {
+            let _ = notes.send(VideoNote::Dropped);
+            idr.request(now());
+        }
+        if want_key.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            idr.request(now());
+        }
         // One encoder per canvas (a size change restarts it on a keyframe).
         if enc.as_ref().is_none_or(|e| e.dims() != (frame.width, frame.height)) {
             let (w, h) = (frame.width, frame.height);
             if let Some(mut old) = enc.take() {
-                let _ = tokio::task::spawn_blocking(move || old.finish()).await;
+                old.finish();
             }
-            let (e, gop, name) = tokio::task::spawn_blocking(move || VEnc::new(codec, target, backend, w, h, fps))
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .map_err(|e| err(ErrorKind::Internal, prov, e))?;
-            idr = KeyframePolicy::new(1.0, gop);
-            rtps.clear();
-            enc = Some(e);
-            ctx.state.set(|s| {
-                s.encoder = Some(name);
-                s.width = Some(w);
-                s.height = Some(h);
-            });
+            match VEnc::new(cfg.codec, cfg.target, cfg.backend, w, h, cfg.fps) {
+                Ok((e, gop, name)) => {
+                    idr = KeyframePolicy::new(1.0, gop);
+                    rtps.clear();
+                    enc = Some(e);
+                    let _ = notes.send(VideoNote::Encoder { name, width: w, height: h });
+                }
+                Err(e) => {
+                    let _ = notes.send(VideoNote::Failed(e));
+                    return;
+                }
+            }
         }
-        let force = idr.next_frame(t0.elapsed().as_secs_f64());
-        rtps.push_back(t.rtp);
-        let mut e = enc.take().expect("encoder present");
-        let (e, out) = tokio::task::spawn_blocking(move || {
-            let r = e.encode(&frame, force);
-            (e, r)
-        })
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-        enc = Some(e);
-        if force {
-            ctx.state.set(|s| s.forced_idrs += 1);
-        }
-        let covered = idr.covered();
-        ctx.state.set(|s| s.keyframe_requests_covered = covered);
-        let aus = out.map_err(|e| err(ErrorKind::Internal, prov, e))?;
+        let Some(e) = enc.as_mut() else { continue };
+        let force = idr.next_frame(now());
+        rtps.push_back(rtp);
+        let aus = match e.encode(&frame, force) {
+            Ok(aus) => aus,
+            Err(e) => {
+                let _ = notes.send(VideoNote::Failed(e));
+                return;
+            }
+        };
+        let _ = notes.send(if force { VideoNote::Forced { covered: idr.covered() } } else { VideoNote::Covered(idr.covered()) });
         for au in aus {
-            let rtp = rtps.pop_front().unwrap_or(t.rtp);
+            let rtp = rtps.pop_front().unwrap_or(rtp);
             let key = au.keyframe;
             if key {
-                idr.keyframe_out(t0.elapsed().as_secs_f64());
+                idr.keyframe_out(now());
             }
-            match handle.send_video(VideoFrame::new(au.data, rtp)) {
+            match cfg.handle.send_video(VideoFrame::new(au.data, rtp)) {
                 Ok(()) => {
-                    ctx.state.set(|s| {
-                        s.frames_sent += 1;
-                        if key {
-                            s.keyframes_sent += 1;
-                        }
-                    });
-                    ctx.first_sent();
+                    let _ = notes.send(VideoNote::Sent { keyframe: key });
                 }
                 Err(_) => {
-                    ctx.state.set(|s| s.video_send_errors += 1);
-                    idr.request(t0.elapsed().as_secs_f64());
+                    let _ = notes.send(VideoNote::SendError);
+                    idr.request(now());
                 }
             }
         }
-    };
-    if let Some(mut e) = enc.take() {
-        let _ = tokio::task::spawn_blocking(move || e.finish()).await;
     }
-    Ok(reason)
+    if let Some(mut e) = enc.take() {
+        e.finish();
+    }
 }
 
 async fn publish_sink(

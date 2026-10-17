@@ -12,15 +12,21 @@
 //! the duplicated anchor frame is trimmed from playout), prepares each
 //! built chunk for lockstep playout (48 kHz stereo, exact sample count,
 //! 20 ms crossfades) and hands it to the playout thread ([`super::media`]).
-//! It keeps at most `buffer_chunks` built chunks queued ahead of the one
-//! playing.
+//! Generation never waits for playout: the next chunk is dispatched as
+//! soon as the previous one is built, until the session is stopped. Built
+//! chunks queue for playout in host RAM (RGB at the delivered size: a 5 s
+//! 1344x768 chunk at 24 fps is ~370 MB, 1080p ~750 MB); `buffer_max_bytes`
+//! only guards against running out of memory (the loop then waits for
+//! playout, logged), and an operator's `buffer_chunks` (0 = none) caps the
+//! queue in chunks.
 //!
 //! On a causal model (LongLive, SF-Wan) there are no chunk builds: one
 //! rollout ([`DirectorStream`]) runs for the session, every block goes to
 //! playout as it arrives, a `chunk` is reported every `causal_chunk_blocks`
 //! blocks, and the control's direction is handed to the engine block by
-//! block (`set_prompt`, applied at the next block boundary). The rollout is
-//! paused while more than `causal_lead_seconds` of video is queued
+//! block (`set_prompt`, applied at the next block boundary). The rollout
+//! runs as fast as the engine goes; it pauses only above an operator's
+//! `causal_lead_seconds` (0 = never) or the `buffer_max_bytes` memory guard
 //! (docs/serve/director-causal.md).
 
 use std::collections::VecDeque;
@@ -265,6 +271,13 @@ struct Session {
     /// The output copy's events (`output_ready` / `_error` / `_ended`),
     /// forwarded to the client (docs/serve/stream-outputs.md).
     output_events: Option<mpsc::UnboundedReceiver<Value>>,
+    /// Playout holds `buffer_max_bytes` of video: generation waits (logged
+    /// on each change).
+    mem_capped: bool,
+    /// Clip models: frames handed to playout (queued = these minus the
+    /// fresh frames emitted; counted here, not by the playout thread, so a
+    /// chunk counts from the moment it is handed over).
+    sent_frames: u64,
 }
 
 /// The next output event; pends forever without an output.
@@ -387,6 +400,8 @@ pub async fn run(init: SessionInit) {
         up_rx,
         plan_dirty: false,
         output_events: None,
+        mem_capped: false,
+        sent_frames: 0,
     };
     handle.set_state(SessionState::Ready);
     let reason = s.run_loop().await;
@@ -789,30 +804,70 @@ impl Session {
         matches!(self.init.continuity, Continuity::AnchorLastFrame { .. })
     }
 
+    /// Bytes of one frame queued for playout (RGB at the delivered size).
+    fn frame_bytes(&self) -> u64 {
+        let v = &self.clips.spec().tracks.video;
+        let (w, h) = self.crop.or(self.canvas).unwrap_or((v.width, v.height));
+        u64::from(w) * u64::from(h) * 3
+    }
+
+    /// The memory guard: `frames` queued for playout reach
+    /// `buffer_max_bytes` (0: no guard). Logged when it starts and stops
+    /// holding generation.
+    fn over_memory(&mut self, frames: u64) -> bool {
+        let max = self.init.cfg.buffer_max_bytes;
+        let bytes = frames.saturating_mul(self.frame_bytes());
+        let over = max > 0 && bytes >= max;
+        if over != self.mem_capped {
+            self.mem_capped = over;
+            let fps = f64::from(self.clips.spec().fps.max(1));
+            if over {
+                tracing::warn!(session = %self.init.handle.id, queued_mb = bytes >> 20, max_mb = max >> 20, queued_s = frames as f64 / fps, "director: playout holds `buffer_max_bytes` of video; generation waits for playout (memory guard)");
+            } else {
+                tracing::info!(session = %self.init.handle.id, queued_mb = bytes >> 20, "director: below the memory guard; generation resumes");
+            }
+        }
+        over
+    }
+
     fn maybe_dispatch(&mut self) {
         if self.causal.is_some() || self.building || self.ending.is_some() || !self.control.is_configured() || self.control.is_stopped() {
             return;
         }
-        // Built chunks queued behind the one playing.
+        // No hold by default: the next chunk builds as soon as the last one
+        // is built. An operator's `buffer_chunks` caps the built chunks
+        // queued behind the one playing; the memory guard caps their bytes.
         let queued = self.chunks_ready.saturating_sub(self.chunks_started) as usize;
-        if queued >= self.init.cfg.buffer_chunks.max(1) {
+        let cap = self.init.cfg.buffer_chunks;
+        if cap > 0 && queued >= cap {
             return;
         }
+        let queued_frames = self.sent_frames.saturating_sub(self.gauges.fresh_frames.load(Ordering::Relaxed));
+        if self.over_memory(queued_frames) {
+            return;
+        }
+        let wait = self.init.cfg.upsample_wait;
         let (mut plan, applied, taken) = match self.upsample.as_mut() {
             Some(up) => {
-                // The chunk waits (undispatched, its `prompt_applied` with
-                // it) until its segment is expanded: at most the timeout.
+                // Generation does not wait for the expansion (unless the
+                // operator's `upsample_wait`): a segment whose expansion is
+                // not ready yet builds with the unexpanded prompt
+                // (`segment_expanded` reports it as a fallback), and a call
+                // already running for an unchanged beat serves the next chunk.
                 let plans = self.control.peek(up.deck_size());
                 let cues = up.cues(&plans.iter().map(view).collect::<Vec<_>>());
                 let Some(first) = cues.first().cloned() else { return };
                 up.sync(cues);
-                if !up.ready(&first) {
-                    // Nothing speculative starts while this chunk waits.
+                let ready = up.ready(&first);
+                if !ready && wait {
+                    // The chunk waits (undispatched) for its segment, at
+                    // most the upsampler's timeout; nothing speculative
+                    // starts meanwhile.
                     up.set_waiting(true);
                     return;
                 }
                 let Some((plan, applied)) = self.control.next_chunk() else { return };
-                let t = up.take(&first);
+                let t = if ready { up.take(&first) } else { Some(up.skip(&first)) };
                 self.plan_dirty = true;
                 (plan, applied, t)
             }
@@ -955,6 +1010,7 @@ impl Session {
         }));
         self.chunks_ready += 1;
         self.anchor = b.anchor;
+        self.sent_frames += b.chunk.frames.len() as u64;
         let _ = self.media.send(MediaCmd::Chunk(b.chunk));
     }
 
@@ -1202,15 +1258,18 @@ impl Session {
         self.report_segment(&t, None, Some(block), w.version);
     }
 
-    /// Causal: pause the rollout while `causal_lead_seconds` of video is
-    /// queued for playout, resume below it.
+    /// Causal: the rollout runs as fast as the engine goes. It pauses only
+    /// while an operator's `causal_lead_seconds` (0: never) of video is
+    /// queued for playout, or the memory guard holds, and resumes below.
     fn throttle(&mut self) {
         let fps = f64::from(self.clips.spec().fps.max(1));
         let fresh = self.gauges.fresh_frames.load(Ordering::Relaxed);
         let lead_target = self.init.cfg.causal_lead_seconds;
+        let Some(queued) = self.causal.as_ref().map(|cz| cz.pushed_frames.saturating_sub(fresh)) else { return };
+        let mem = self.over_memory(queued);
         let Some(cz) = self.causal.as_mut() else { return };
-        let lead = cz.pushed_frames.saturating_sub(fresh) as f64 / fps;
-        let pause = lead >= lead_target;
+        let lead = queued as f64 / fps;
+        let pause = (lead_target > 0.0 && lead >= lead_target) || mem;
         if pause != cz.paused {
             cz.paused = pause;
             cz.stream.set_paused(pause);

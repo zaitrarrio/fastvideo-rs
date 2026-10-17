@@ -564,19 +564,32 @@ pub struct DirectorCfg {
     /// Answer VP8 to offers without H.264 (ffmpeg `libvpx`, else
     /// intra-only libwebp).
     pub vp8_fallback: bool,
-    /// Built chunks queued behind the one playing (host RAM).
+    /// Built chunks queued behind the one playing; 0 (the default): no
+    /// cap, the director builds the next chunk as soon as the last one is
+    /// built, until the session stops. Queued chunks are host RAM (RGB at
+    /// the delivered size: ~370 MB per 5 s 768p chunk).
     pub buffer_chunks: usize,
+    /// The memory guard in MiB: generation waits for playout while this
+    /// much video is queued (logged). 0 (the default): half the host's
+    /// available memory at startup, at least 2 GiB.
+    pub buffer_max_mb: u64,
     /// Video bitrate in bit/s; 0 = by canvas.
     pub video_bitrate: u32,
     /// Causal models (LongLive, SF-Wan): blocks per director `chunk`
     /// (4 blocks of 12 frames = 3 s at 16 fps).
     pub causal_chunk_blocks: u32,
-    /// Causal models: seconds of video kept queued for playout; above it the
-    /// rollout pauses at the next block boundary (prompt latency).
+    /// Causal models: 0 (the default): the rollout never pauses (only the
+    /// memory guard holds it). Above 0: seconds of video kept queued for
+    /// playout; above it the rollout pauses at the next block boundary
+    /// (shorter prompt latency).
     pub causal_lead_seconds: f64,
     /// Accept `configure.output` (fal's schema forbids extra fields, so off
     /// by default: `x_fv_output` is always accepted; docs/serve/stream-outputs.md).
     pub allow_output: bool,
+    /// Upsampling sessions: a chunk whose prompt expansion is not ready
+    /// waits for it (at most `[upsampler] timeout`). Off (the default): it
+    /// builds with the unexpanded prompt at once.
+    pub upsample_wait: bool,
 }
 
 impl Default for DirectorCfg {
@@ -586,11 +599,13 @@ impl Default for DirectorCfg {
             max_session_seconds: 0,
             encoder: "auto".into(),
             vp8_fallback: true,
-            buffer_chunks: 1,
+            buffer_chunks: 0,
+            buffer_max_mb: 0,
             video_bitrate: 0,
             causal_chunk_blocks: 4,
-            causal_lead_seconds: 2.0,
+            causal_lead_seconds: 0.0,
             allow_output: false,
+            upsample_wait: false,
         }
     }
 }

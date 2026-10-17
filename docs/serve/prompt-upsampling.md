@@ -246,10 +246,18 @@ carries the direction.
 at once, while the current chunk generates (only when no planned chunk is
 waiting in the deck; a planned direction is expanded when it comes up). A
 replanning `prompt` starts its expansion the moment it arrives and drops a
-speculative beat. A segment whose expansion is not ready waits for it: a
-clip chunk is held (not yet dispatched, its `prompt_applied` held with it);
-a causal rollout keeps its current prompt, or, for the first segment, has
-not started. The wait is bounded by `timeout_ms`. To make this possible the
+speculative beat. Generation never waits for an expansion (2026-10-17,
+`[director] upsample_wait = false`, the default): a clip chunk whose segment
+is not expanded yet is dispatched at once with the unexpanded prompt (the
+fallback below, reported in `segment_expanded` with `fallback: true` and
+`error: "the expansion was not ready; ..."`); a call still running for an
+unchanged beat is kept and serves the next chunk. In practice the first
+chunk (dispatched with `configure`) and a chunk right after a replanning
+`prompt` run unexpanded; the rest are expanded while the chunk before them
+builds. A causal rollout keeps generating with its current prompt until the
+expansion is ready. With `upsample_wait = true` a clip chunk is held instead
+(not yet dispatched, its `prompt_applied` held with it), bounded by
+`timeout_ms`. To make this possible the
 port splits `next` into `user_message` → `expand_with_hedge` → `commit`
 ([Deviations](#director-port)); a speculative expansion is never committed,
 so the ledger only holds segments that played.

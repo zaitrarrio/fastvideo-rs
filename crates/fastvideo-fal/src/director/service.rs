@@ -51,6 +51,10 @@ impl std::fmt::Debug for LeaseHook {
     }
 }
 
+/// The memory guard when none is configured: 16 GiB of queued video
+/// (~44 chunks of 5 s at 768p, ~3.7 min ahead).
+pub const DEFAULT_BUFFER_MAX_BYTES: u64 = 16 << 30;
+
 /// `[fal] director` settings.
 #[derive(Clone, Debug)]
 pub struct DirectorConfig {
@@ -70,9 +74,15 @@ pub struct DirectorConfig {
     pub heartbeat_timeout: Duration,
     /// `configure` must arrive this soon after the control channel opens.
     pub configure_timeout: Duration,
-    /// Built chunks queued behind the one playing, whatever their length
-    /// (host RAM: one 10 s 768p chunk is ~750 MB of RGB, a 5 s one half).
+    /// Built chunks queued behind the one playing, whatever their length;
+    /// 0 (the default): no cap, the next chunk builds as soon as the last
+    /// one is built. Queued chunks are host RAM: RGB at the delivered size,
+    /// one 5 s 768p chunk (1344x768, 24 fps) is ~370 MB, 10 s ~750 MB.
     pub buffer_chunks: usize,
+    /// The memory guard: generation waits for playout while this many
+    /// bytes of video are queued (logged); 0: no guard. Not a pacing knob:
+    /// set it well above what a session needs.
+    pub buffer_max_bytes: u64,
     /// H.264 backend (NVENC in production, design §0.1).
     pub h264: EncoderBackend,
     /// Video bitrate; `None`: by canvas (§5.1).
@@ -93,9 +103,10 @@ pub struct DirectorConfig {
     /// Causal models: blocks per director chunk (`chunk` message; 4 blocks
     /// of 12 frames = 3 s at 16 fps).
     pub causal_chunk_blocks: u32,
-    /// Causal models: video kept queued for playout; above it the rollout
-    /// pauses at the next block boundary, so a prompt update reaches the
-    /// picture within about this lead.
+    /// Causal models: 0 (the default): the rollout never pauses (only the
+    /// memory guard holds it). Above 0: video kept queued for playout;
+    /// above it the rollout pauses at the next block boundary, so a prompt
+    /// update reaches the picture within about this lead.
     pub causal_lead_seconds: f64,
     /// Opens output copies (`configure.x_fv_output`); `None`: refused.
     pub outputs: Option<fastvideo_media::output::OutputHook>,
@@ -103,6 +114,10 @@ pub struct DirectorConfig {
     pub allow_output: bool,
     /// Told when a session starts and ends (edge leases); `None`: nobody.
     pub leases: Option<LeaseHook>,
+    /// Upsampling sessions: a chunk whose expansion is not ready waits for
+    /// it (at most the upsampler's timeout). `false` (the default): it
+    /// builds with the unexpanded prompt at once (generation never waits).
+    pub upsample_wait: bool,
 }
 
 impl Default for DirectorConfig {
@@ -114,7 +129,8 @@ impl Default for DirectorConfig {
             max_session_seconds: None,
             heartbeat_timeout: Duration::from_secs(15),
             configure_timeout: Duration::from_secs(60),
-            buffer_chunks: 1,
+            buffer_chunks: 0,
+            buffer_max_bytes: DEFAULT_BUFFER_MAX_BYTES,
             h264: EncoderBackend::Nvenc,
             video_bitrate: None,
             vp8_fallback: true,
@@ -123,10 +139,11 @@ impl Default for DirectorConfig {
             work_dir: std::env::temp_dir().join("fv-director"),
             max_sessions: 1,
             causal_chunk_blocks: 4,
-            causal_lead_seconds: 2.0,
+            causal_lead_seconds: 0.0,
             outputs: None,
             allow_output: false,
             leases: None,
+            upsample_wait: false,
         }
     }
 }

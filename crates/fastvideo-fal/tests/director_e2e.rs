@@ -1190,3 +1190,75 @@ async fn upsampled_long_premise_never_reaches_the_engine() {
     c.send(json!({"type": "stop"})).await;
     c.expect("stream_exhausted").await;
 }
+
+/// The server's default (`buffer_chunks = 0`): generation never waits for
+/// playout. Chunk N+1 is dispatched as soon as chunk N is built, so with
+/// builds faster than real time the video queued for playout keeps
+/// growing. With a hold of one chunk (the earlier default) it could never
+/// exceed the playing chunk plus one queued plus the new one (15 s of 5 s
+/// chunks); the playout clock is untouched (the RTP grid).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn generation_never_waits_for_playout() {
+    let Some(h264) = h264_or_skip() else { return };
+    let f = fixture(Opts { h264, buffer_chunks: 0, buffer_max_bytes: 4 << 30, ..Opts::default() }).await;
+    let mut c = open(&f, "minimax/h3-max/director").await;
+    c.expect("session_info").await;
+    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "A lighthouse at dusk", "resolution": "480p"})).await;
+    c.expect("configured").await;
+    let t0 = Instant::now();
+    let (chunks, _) = chunks_until(&mut c, |m| m["chunk_index"] == 11 || m["buffer_depth_seconds"].as_f64().unwrap() > 16.0).await;
+    let depth = chunks.iter().map(|m| m["buffer_depth_seconds"].as_f64().unwrap()).fold(0.0, f64::max);
+    eprintln!("{} chunks built in {:?}; deepest playout queue {depth:.1} s", chunks.len(), t0.elapsed());
+    assert!(depth > 16.0, "chunks queue ahead of playout: {:?}", chunks.iter().map(|m| (&m["chunk_index"], &m["buffer_depth_seconds"], &m["generation_seconds"])).collect::<Vec<_>>());
+    c.more_media(24, 0).await;
+    c.assert_rtp_grids();
+    c.send(json!({"type": "stop"})).await;
+    c.expect("stream_exhausted").await;
+}
+
+/// The memory guard (`buffer_max_bytes`) is the one thing that holds
+/// generation: below one chunk's bytes, chunk 1 is dispatched only once
+/// chunk 0 has played out (~5 s), and the session goes on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_memory_guard_holds_generation() {
+    let Some(h264) = h264_or_skip() else { return };
+    let f = fixture(Opts { h264, buffer_chunks: 0, buffer_max_bytes: 1, ..Opts::default() }).await;
+    let mut c = open(&f, "minimax/h3-max/director").await;
+    c.expect("session_info").await;
+    c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "A lighthouse at dusk", "resolution": "480p"})).await;
+    c.expect("configured").await;
+    let (_, _) = chunks_until(&mut c, |m| m["chunk_index"] == 0).await;
+    let t0 = Instant::now();
+    let (_, _) = chunks_until(&mut c, |m| m["chunk_index"] == 1).await;
+    assert!(t0.elapsed() > Duration::from_millis(4_500), "chunk 1 waited for playout: {:?}", t0.elapsed());
+    c.send(json!({"type": "stop"})).await;
+    c.expect("stream_exhausted").await;
+}
+
+/// The server's default (`upsample_wait = false`): a chunk whose segment is
+/// not expanded yet is built at once with the unexpanded prompt (reported
+/// as a fallback), and later chunks get their expansions.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn upsampled_chunks_do_not_wait_for_their_expansion() {
+    let Some(h264) = h264_or_skip() else { return };
+    let (_llm, svc) = show_llm();
+    let f = fixture(Opts { h264, upsampler: Some(svc), upsample_wait: false, ..Opts::default() }).await;
+    let mut c = open(&f, "minimax/h3-max/director").await;
+    c.expect("session_info").await;
+    c.send(world_configure("A lighthouse keeper on a stormy island.")).await;
+    c.expect("configured").await;
+    // Chunk 0 is dispatched with `configure`, before any call can answer.
+    let (_, others) = chunks_until(&mut c, |m| m["chunk_index"] == 0).await;
+    let s0 = segments(&others).into_iter().find(|m| m["chunk_index"] == 0).unwrap_or_else(|| panic!("{others:?}"));
+    assert_eq!(s0["fallback"], true, "{s0}");
+    assert_eq!(s0["prompt"], "A lighthouse keeper on a stormy island.");
+    assert!(s0["error"].as_str().unwrap().contains("not ready"), "{s0}");
+    let mut expanded = false;
+    for _ in 0..4 {
+        let (_, others) = chunks_until(&mut c, |_| true).await;
+        expanded |= segments(&others).iter().any(|m| m["fallback"] == false);
+    }
+    assert!(expanded, "later chunks are upsampled");
+    c.send(json!({"type": "stop"})).await;
+    c.expect("stream_exhausted").await;
+}
