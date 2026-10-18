@@ -93,7 +93,7 @@ describe("image preflight", () => {
     const edge = normalizeSpec({ name: "h3-and-ltx", template: "h3", image: { channel: "stable" } });
     expect(neededFeatures(edge).find((f) => f.feature === "edge_front")?.fatal).toBe(true);
     const pf = await checkImages(env, edge, Object.fromEntries(edge.pools.map((p) => [p.id, img])));
-    expect(pf.errors[0]).toMatch(/h3-turbo, h3-max, h3-ref2v: the image \(channel stable, built from 2cd1ba0\) predates edge fronts \(FV_AUTH_MODE=trust-edge/);
+    expect(pf.errors[0]).toMatch(/h3-turbo, h3-max, h3-ref2v(, [a-z0-9-]+)+: the image \(channel stable, built from 2cd1ba0\) predates edge fronts \(FV_AUTH_MODE=trust-edge/);
     expect(pf.errors.at(-1)).toMatch(/channel "latest"/);
     const direct = normalizeSpec({ name: "d", template: "h3", image: { channel: "stable" }, control_plane: "direct" });
     const pd = await checkImages(env, direct, Object.fromEntries(direct.pools.map((p) => [p.id, img])));

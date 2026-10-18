@@ -181,7 +181,8 @@ export const brev = {
    * (pkg/store/workspace.go NewCreateWorkspacesOptions, pkg/cmd/gpucreate createWorkspace / applyBuildMode "vm" /
    * resolveWorkspaceUserOptions): workspaceVersion v1 (the old body got 400 "Legacy workspace version unsupported"
    * live), the user template and class, the type's cloudCredId, and the script in vmBuild.lifeCycleScriptAttr.
-   * `diskStorage` ("500Gi"; the CLI's default 120Gi) sizes the disk (UNVERIFIED for fixed-disk types).
+   * `diskStorage` ("500Gi"; the CLI's default 120Gi) sizes the disk: the pool's container_disk_gb, else fv-control's
+   * size for the weights (providers.ts brevDisk; UNVERIFIED for fixed-disk types, which keep their own disk).
    */
   async create(env: Env, req: { name: string; instanceType: string; startupScript: string; diskStorage?: string; isStoppable?: boolean }): Promise<string> {
     const cloudCredId = await brev.cloudCredId(env, req.instanceType);
@@ -263,6 +264,9 @@ export interface BrevType {
   /** The disk is sized at create (`elastic_root_volume`); else it is `fixed_disk_gb`. */
   elastic_disk: boolean;
   fixed_disk_gb: number | null;
+  /** An elastic disk's range from the storage classes (`min_size` / `max_size`, GiB); null: the list does not say. */
+  disk_min_gb: number | null;
+  disk_max_gb: number | null;
   location: string | null;
   provider: string | null;
   /** `estimated_deploy_time` ("7m0s") in seconds. */
@@ -307,6 +311,8 @@ export function toType(x: any): BrevType {
   const prices = st.map((s) => amount(s?.price_per_gb_hr)).filter((v): v is number => v !== null);
   const g = Array.isArray(x?.supported_gpus) ? x.supported_gpus[0] : null;
   const fixed = st.map((s) => parseGiB(s?.size)).filter((v): v is number => v !== null);
+  const mins = st.map((s) => parseGiB(s?.min_size)).filter((v): v is number => v !== null);
+  const maxs = st.map((s) => parseGiB(s?.max_size)).filter((v): v is number => v !== null);
   return {
     type: String(x?.type || ""),
     gpu: g?.name ? String(g.name) : null,
@@ -316,6 +322,8 @@ export function toType(x: any): BrevType {
     storage_usd_per_gb_hr: prices.length ? Math.max(...prices) : null,
     elastic_disk: x?.elastic_root_volume === true,
     fixed_disk_gb: fixed.length ? Math.max(...fixed) : null,
+    disk_min_gb: mins.length ? Math.min(...mins) : null,
+    disk_max_gb: maxs.length ? Math.max(...maxs) : null,
     location: x?.location ? String(x.location) : null,
     provider: x?.provider ? String(x.provider) : null,
     deploy_s: parseDuration(x?.estimated_deploy_time),

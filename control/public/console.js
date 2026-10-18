@@ -183,144 +183,19 @@ async function renderClusterJobsTab(main) {
   );
 }
 
+// One-click deploy (ui/forms/deploy.ts in the editor bundle; docs/control/README.md §4b): model families (or all of
+// them), each with its pools (a preset or a template: h3, fasth3, streaming, …) and its instance types (the launch
+// form's table), into a new cluster or an existing one; the plan is shown before anything is saved.
 async function pageDeploy(main) {
-  const { recipes } = await api("/api/v1/deploy/recipes");
-  const q = new URLSearchParams(location.hash.split("?")[1] || "");
-  const st = {
-    step: 1,
-    recipe: q.get("recipe") || null,
-    name: "",
-    count: 1,
-    gpu_types: "",
-    data_centers: "",
-    validation: null,
-    result: null,
-    error: null,
-  };
-
-  const steps = ["Recipe", "Configure", "Review", "Launch"];
-  function stepBar() {
-    return h("div", { class: "row", style: "gap:8px;margin-bottom:16px" },
-      ...steps.map((s, i) =>
-        h("span", { class: `badge ${st.step === i + 1 ? "primary" : st.step > i + 1 ? "good" : ""}` }, `${i + 1}. ${s}`)
-      )
-    );
-  }
-
-  function render() {
-    const kids = [h("h1", {}, "Deploy"), stepBar()];
-    if (st.step === 1) {
-      kids.push(
-        h("p", { class: "muted" }, "Pick a recipe — a tested pool preset with its weights and worker config."),
-        h("div", { class: "grid g2" },
-          ...recipes.map((r) =>
-            card(
-              h("span", {}, r.title, " ", badge(`${r.min_vram_gb} GB`, "warn")),
-              h("p", { class: "muted small" }, r.description),
-              kv([
-                ["serves", r.models.map((m) => m.id).join(", ")],
-                ["weights", r.weights.join(", ")],
-              ]),
-              h("div", { class: "row" },
-                h("button", {
-                  class: st.recipe === r.id ? "primary" : "",
-                  onclick: () => { st.recipe = r.id; if (!st.name) st.name = `fv-${r.id}-1`; render(); },
-                }, st.recipe === r.id ? "Selected" : "Select")
-              )
-            )
-          )
-        ),
-        h("div", { class: "row", style: "margin-top:12px" },
-          h("button", { class: "primary", disabled: !st.recipe, onclick: () => { st.step = 2; render(); } }, "Continue")
-        )
-      );
-    } else if (st.step === 2) {
-      const recipe = recipes.find((r) => r.id === st.recipe);
-      const field = (label, input) => h("label", {}, h("span", { class: "k" }, label), input);
-      kids.push(
-        h("p", { class: "muted" }, h("code", {}, recipe.id), ` — ${recipe.title}`),
-        card("Configuration",
-          h("div", { class: "grid g2" },
-            field("Cluster name", h("input", { value: st.name, oninput: (e) => (st.name = e.target.value), placeholder: "fv-h3-turbo-1" })),
-            field("Pod count", h("input", { type: "number", min: 1, max: 8, value: st.count, oninput: (e) => (st.count = Math.max(1, parseInt(e.target.value) || 1)) })),
-            field("GPU types (comma-separated, blank = default)", h("input", { value: st.gpu_types, oninput: (e) => (st.gpu_types = e.target.value), placeholder: "NVIDIA RTX PRO 6000 Blackwell Workstation Edition" })),
-            field("Data centers (comma-separated, blank = default)", h("input", { value: st.data_centers, oninput: (e) => (st.data_centers = e.target.value), placeholder: "EU-RO-1" })),
-          )
-        ),
-        h("div", { class: "row", style: "margin-top:12px" },
-          h("button", { onclick: () => { st.step = 1; render(); } }, "Back"),
-          h("button", {
-            class: "primary",
-            onclick: async () => {
-              st.error = null;
-              try {
-                st.validation = await api("/api/v1/deploy/validate", {
-                  method: "POST",
-                  body: deployBody(),
-                });
-              } catch (e) { st.error = e.message; }
-              st.step = 3; render();
-            },
-          }, "Validate & review")
-        )
-      );
-    } else if (st.step === 3) {
-      const v = st.validation;
-      const issues = v?.issues || v?.errors || [];
-      kids.push(
-        st.error ? card("Validation failed", h("p", {}, st.error)) : null,
-        card("Validation",
-          issues.length
-            ? h("ul", {}, ...issues.map((i) => h("li", {}, `${(i.path || []).join(".")}: ${i.message}`)))
-            : h("p", {}, badge("valid", "good"), " No issues found.")
-        ),
-        h("div", { class: "row", style: "margin-top:12px" },
-          h("button", { onclick: () => { st.step = 2; render(); } }, "Back"),
-          h("button", {
-            class: "primary",
-            disabled: !!issues.length,
-            onclick: async () => {
-              st.error = null;
-              try {
-                st.result = await api("/api/v1/deploy", { method: "POST", body: { ...deployBody(), start: true } });
-              } catch (e) { st.error = e.message; }
-              st.step = 4; render();
-            },
-          }, "Launch deploy")
-        )
-      );
-    } else {
-      kids.push(
-        st.error
-          ? card("Deploy failed", h("p", {}, st.error))
-          : card("Deploy launched",
-              kv([
-                ["cluster", h("a", { href: `#/cluster/${st.result.cluster.id}` }, st.result.cluster.name)],
-                ["operation", st.result.operation ? h("code", {}, st.result.operation) : "not started"],
-              ]),
-              h("p", { class: "muted small" }, "Follow provisioning on the cluster page."),
-              h("div", { class: "row" },
-                h("a", { class: "btn primary", href: `#/cluster/${st.result.cluster.id}` }, "View cluster"),
-                h("a", { class: "btn", href: `#/fleet` }, "View fleet")
-              )
-            ),
-        h("div", { class: "row", style: "margin-top:12px" },
-          h("button", { onclick: () => { st.step = 1; st.result = null; render(); } }, "Deploy another")
-        )
-      );
-    }
-    main.replaceChildren(...kids);
-  }
-
-  function deployBody() {
-    const split = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
-    const b = { recipe: st.recipe, name: st.name.trim(), count: st.count };
-    if (st.gpu_types.trim()) b.gpu_types = split(st.gpu_types);
-    if (st.data_centers.trim()) b.data_centers = split(st.data_centers);
-    return b;
-  }
-
-  render();
+  const host = h("div", { class: "muted small" }, "loading the deploy form…");
+  main.replaceChildren(
+    h("h1", {}, "Deploy"),
+    h("p", { class: "muted" }, "Pick model families (or all), what each deploys and on which instance types; review what will be created, then deploy into a new cluster or add the pools to an existing one."),
+    host,
+  );
+  fvEditor()
+    .then((E) => E.mountDeployForm(host, { api, toast }))
+    .catch((e) => host.replaceChildren(h("p", { class: "small" }, e.message)));
 }
 
 async function pageBenchmarks(main) {

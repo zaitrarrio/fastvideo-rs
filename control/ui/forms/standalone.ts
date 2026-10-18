@@ -114,6 +114,8 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
             }
           } else {
             f.set(["provider_gpu"], r ? r.name : undefined, true);
+            // Another Brev type: a disk its range does not allow is cleared (fixed-disk types take none).
+            if (p === "brev" && r?.storage_kind === "fixed") f.set(["container_disk_gb"], undefined, true);
             if (p === "gmi") f.set(["provider_region"], r ? (r.launch?.provider_region as string | undefined) : undefined, true);
           }
           draw();
@@ -158,8 +160,24 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
   const catalog = (dyn.catalog_models || []).map((m: any) => ({ value: m, label: m.id, detail: `${m.family} · ${m.recipe}` }));
   // GMI Cloud / NVIDIA Brev (docs/serve/deploy-gmi-brev.md): a provider that is off says why in its option.
   const providerOpts = (dyn.providers || [{ id: "runpod", detail: "" }]).map((p: any) => ({ value: p.id, detail: p.detail }));
+  // container_disk_gb is in both: Runpod's container disk and a Brev VM's disk are different sizes (cleared on a switch).
   const RUNPOD_ONLY = ["compute", "region", "data_centers", "gpu_types", "cpu_flavors", "vcpu", "volume", "container_disk_gb"];
-  const OTHER_ONLY = ["provider_gpu", "provider_region"];
+  const OTHER_ONLY = ["provider_gpu", "provider_region", "container_disk_gb"];
+  /** NVIDIA Brev: what the picked instance type allows for its disk (its table row, else the dynamic list). */
+  function brevDiskHelp(): { help: string; placeholder: string } {
+    const type = f.get(["provider_gpu"]) as string | undefined;
+    const auto = "Unset: fv-control sizes it for the weights (the trees × 1.3 + 40 GB, at least 200 GB).";
+    if (!type) return { help: `The Brev VM's disk (the image, Docker and the weights). Pick an instance type: its disk range shows here. ${auto}`, placeholder: "sized for the weights" };
+    const row = tables.get("brev")?.view()?.rows.find((r) => r.name === type);
+    const d = (dyn.provider_gpus || []).find((g: any) => g.provider === "brev" && g.id === type) as any;
+    const kind = row?.storage_kind ?? d?.disk?.kind ?? null;
+    const fixed = row?.storage_gb ?? d?.disk?.gb ?? null;
+    if (kind === "fixed" && fixed) return { help: `${type} has a fixed ${fixed} GB disk (Brev does not size it): leave it unset.`, placeholder: `${fixed} (fixed)` };
+    const min = row?.storage_min_gb ?? d?.disk?.min_gb ?? null;
+    const max = row?.storage_max_gb ?? d?.disk?.max_gb ?? null;
+    if (kind === "elastic") return { help: `${type}: an elastic disk of ${min ?? "?"}–${max ?? "?"} GB, sized at create; at least the weights + 40 GB. ${auto}`, placeholder: "sized for the weights" };
+    return { help: `The Brev VM's disk; Brev's list gives no size for ${type}. ${auto}`, placeholder: "sized for the weights" };
+  }
   /** Runpod's weights switched (or the preset / compute changed it): the location fields follow, the table recomputes. */
   function weightsChanged() {
     if (freeDc()) {
@@ -211,10 +229,12 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
           F(["provider_gpu"], {
             label: prov === "gmi" ? "Selected GPU product" : "Selected instance type",
             options: (dyn.provider_gpus || []).filter((g: any) => g.provider === prov).map((g: any) => ({ value: g.id, detail: g.detail })),
-            onSet: () => tableFor(prov).sync(),
+            onSet: () => (tableFor(prov).sync(), draw()),
             help: prov === "gmi" ? "Pick a row in the table above (or here): a GMI container product the account may use (GMI_PRODUCTS)." : "Pick a row in the table above (or here): a Brev instance type the account may use (BREV_INSTANCE_TYPES).",
           }),
           ...(prov === "gmi" ? [F(["provider_region"], { label: "IDC", placeholder: (dyn.provider_regions || [])[0]?.id || "the default IDC", help: "GMI data centre (GET /v1/idcs)." })] : []),
+          // NVIDIA Brev: the VM's disk (diskStorage at create), within what the instance type allows.
+          ...(prov === "brev" ? [F(["container_disk_gb"], { label: "Disk (Brev VM)", unsetLabel: "default", ...brevDiskHelp() })] : []),
           F(["weights_source"], {
             label: "Weights",
             options: [

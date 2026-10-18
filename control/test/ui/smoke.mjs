@@ -187,7 +187,7 @@ try {
   await page.goto(`${B}/#/clusters`);
   await page.waitForSelector("select[aria-label=Template] option[value=ltx]", { state: "attached" });
   const tpls = await page.$$eval("select[aria-label=Template] option", (els) => els.map((e) => e.value));
-  assert.deepEqual(tpls.sort(), ["h3", "longlive", "ltx", "standard", "tiny-cpu", "wan"]);
+  assert.deepEqual(tpls.sort(), ["fasth3", "h3", "longlive", "ltx", "standard", "streaming", "tiny-cpu", "wan"]);
   // New cluster from a template on the configuration page; a pool preset added (its licence confirmed).
   await page.selectOption("select[aria-label=Template]", "ltx");
   await page.click("button:text('New cluster')");

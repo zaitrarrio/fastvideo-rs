@@ -61,7 +61,7 @@ import { getRow, serverlessTick } from "./serverless/ops";
 import { consoleRequest, sweepUploads, uploadGet } from "./serverless/console";
 import { cloudrift, cloudriftEnabled, CLOUDRIFT_OWNER_TAG } from "./cloudrift";
 import { OTHER_PROVIDERS, type OtherProviderId } from "./enums";
-import { brevBoot, deleteParked, parkedView, unpark } from "./brev-park";
+import { brevBoot, brevRow, deleteParked, parkedView, storageDph, unpark } from "./brev-park";
 import { R2_FETCH_PY, R2_FETCH_SHA256 } from "./r2-fetch-script";
 import { slsReport } from "./serverless/ingest";
 import { normalizeEndpointSpec } from "./serverless/spec";
@@ -70,6 +70,7 @@ import { slsWeightsIssues } from "./serverless/weights";
 import { weightsPlanRequest } from "./weights-plan";
 import { endpointReport, isOtherPod, lastReport, otherPodLogs, podBaseUrl, providerImpl, providerView, reportHistory, reportLines, splitKey } from "./providers";
 import { gpuMemoryGb } from "./gpus";
+import { deployFamilies, deploySpecOf, planDeploy, planView } from "./deploy";
 import { audit, fetchWithTimeout, getSetting, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
 
 export { ClusterOps } from "./cluster/do";
@@ -516,6 +517,51 @@ app.post("/api/v1/deploy", async (c) => {
   return c.json({ cluster: clusterView(cl), operation }, 201);
 });
 
+// ---------------- one-click deploy (deploy.ts; the console's Deploy page): families × instance types → a new
+// cluster (one pool per family, or a template's pools) or pools added to an existing one. GET the catalog, POST a plan
+// (nothing saved), POST apply (the plan again, then define / save and start).
+app.get("/api/v1/deploy/catalog", async (c) => {
+  const cls = (await listClusters(c.env)).filter((cl) => !isStandalone(cl));
+  return c.json({
+    at: Date.now(),
+    families: deployFamilies(),
+    templates: Object.entries(TEMPLATES)
+      .filter(([, t]) => t.pools.length)
+      .map(([id, t]) => ({ id, title: t.title, pools: t.pools })),
+    clusters: cls.map((cl) => ({ id: cl.id, name: cl.name, status: cl.status, control_plane: cl.spec.control_plane, pools: cl.spec.pools.map((p) => p.id), running: allPods(cl.state).length > 0 })),
+  });
+});
+app.post("/api/v1/deploy/plan", async (c) => c.json(planView(await planDeploy(c.env, await body(c)))));
+app.post("/api/v1/deploy/apply", async (c) => {
+  const b = await body(c);
+  const p = await planDeploy(c.env, b);
+  if (!p.ok) throw new HttpError(400, issuesText(p.issues, "deploy"), { issues: p.issues });
+  const start = b.start !== false;
+  let operation: string | null = null;
+  let cl: Cluster;
+  if (!p.cluster) {
+    const spec = deploySpecOf(p);
+    await assertNameFree(c.env, "cluster", spec.name);
+    const { s, ingestHash } = await newSecrets();
+    cl = await insertCluster(c.env, spec, emptyState(), s, ingestHash, actor(c), "controller", "defined", null);
+    await auditC(c, { action: "cluster.define", target: cl.name, after: spec, detail: `deploy: ${p.pools.map((x) => x.id).join(", ")}` });
+  } else {
+    // The configuration page's save: the spec document with its version (a save in between answers 409).
+    await saveDoc(c.env, "cluster-spec", p.cluster.id, p.merged, { version: b.version ?? p.target.version ?? undefined, actor: actor(c), ip: clientIp(c), detail: `deploy: added ${p.pools.map((x) => x.id).join(", ")}` });
+    cl = await getCluster(c.env, p.cluster.id);
+  }
+  // A new or stopped cluster starts (up creates every pool); a running one gets its new pools through Scale (the
+  // configuration page's rule: saving changes the definition only).
+  if (start && !p.target.running) {
+    assertRegionsAvailable(cl.spec);
+    const r = await startOp(c.env, cl.id, "up", { skip_price_check: false }, actor(c));
+    operation = r.id;
+    await auditC(c, { action: "cluster.up", target: cl.name, after: { operation: r.id } });
+  }
+  const scale = p.target.running ? p.pools.filter((x) => x.count > 0).map((x) => ({ pool: x.id, count: x.count })) : [];
+  return c.json({ cluster: clusterView(cl), operation, pools: p.pools, scale }, p.cluster ? 200 : 201);
+});
+
 // ---------------- providers (Runpod is the primary; CloudRift, docs/ops/cloudrift.md)
 async function cloudriftView(env: Env) {
   const acct = await getSetting<{ at: number | null; balance: number | null; spend_per_hr: number; running: number }>(env, "cloudrift_account", { at: null, balance: null, spend_per_hr: 0, running: 0 });
@@ -619,7 +665,10 @@ app.get("/api/v1/pods/:id", async (c) => {
   if (!p) throw new HttpError(404, "unknown pod");
   const costs = await c.env.DB.prepare("SELECT day, usd, minutes, idle_minutes FROM cost_daily WHERE pod_id = ? ORDER BY day DESC LIMIT 30").bind(id).all<any>();
   const ctl = await c.env.DB.prepare("SELECT * FROM cluster_pods WHERE pod_id = ?").bind(id).first<any>();
-  return c.json({ pod: p, costs: costs.results || [], controller: ctl || null });
+  // NVIDIA Brev: the VM's record (its disk as created, its type, its keep-on-stop state).
+  const b = id.startsWith("brev:") ? await brevRow(c.env, id) : null;
+  const brevInfo = b ? { workspace_id: b.workspace_id, instance_type: b.instance_type, state: b.state, stoppable: !!b.stoppable, disk_gb: b.disk_gb, storage_usd_per_day: storageDph(b) * 24 } : null;
+  return c.json({ pod: p, costs: costs.results || [], controller: ctl || null, ...(brevInfo ? { brev: brevInfo } : {}) });
 });
 app.get("/api/v1/pods/:id/runpod-logs", async (c) => {
   const l = await runpod.logs(c.env, c.req.param("id"));

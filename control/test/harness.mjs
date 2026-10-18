@@ -570,7 +570,7 @@ export function startMock() {
       return json(res, 404, { reason: `mock: no GMI route ${req.method} ${rest}` });
     }
     // ---- NVIDIA Brev (the CLI's API)
-    if (p.startsWith("/brev/api/v1/")) {
+    if (p.startsWith("/brev/api/")) {
       const b = m.brev;
       const rest = p.slice("/brev/api".length);
       b.calls.push({ method: req.method, path: rest, auth: bearer === m.brevToken });

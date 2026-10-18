@@ -717,6 +717,7 @@ async function pagePod(main, id) {
           ...[
             ["id", p.pod_id], ["owner", p.owner], ["status", p.desired_status], ["health", p.health], ["GPU", `${p.gpu || "cpu"} × ${p.gpu_count || 0}`], ["DC", p.dc], ["$/hr", fmt$(p.cost_per_hr)],
             ["image", p.image], ["build", p.build_sha], ["first seen", dt(p.first_seen)], ["last seen", ago(p.last_seen)], ["controller", r.controller ? `${r.controller.role} ${r.controller.pool || ""} (${r.controller.status})` : "external"],
+            ...(r.brev ? [["Brev", `${r.brev.instance_type} · ${r.brev.state}`], ["Brev disk", `${r.brev.disk_gb ?? "?"} GB · ${fmt$(r.brev.storage_usd_per_day)}/day storage while stopped`]] : []),
           ].flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v ?? "–")]),
         ),
         h("div", { class: "row", style: "margin-top:10px" }, h("a", { class: "btn", href: `#/logs?pod=${p.pod_id}` }, "Logs")),

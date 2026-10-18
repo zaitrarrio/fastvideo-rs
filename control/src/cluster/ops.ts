@@ -198,7 +198,8 @@ async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: st
   // NVIDIA Brev keep-on-stop (brev-park.ts): a parked or held instance of this type is restarted (it keeps its first
   // name, so its pod key) before a new VM is created: the one holding most of the trees first (fetched from r2 or the
   // Hub alike: same revisions); the missing ones download.
-  const warm = prov === "brev" ? await claimWarm(env, pool.provider_gpu!, launchTrees(plan, env)) : null;
+  // A pool that sets its disk (container_disk_gb) reuses only an instance with at least that disk.
+  const warm = prov === "brev" ? await claimWarm(env, pool.provider_gpu!, launchTrees(plan, env), { minDiskGb: pool.container_disk_gb }) : null;
   const name = warm ? warm.row.name : runpodName(c, pool.id);
   const key = podKey(prov, name);
   const { full, hash } = await desiredEnv(env, c, ctx, "worker", { pod: key, pool: pool.id, image });
@@ -258,7 +259,7 @@ async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: st
     await env.DB.prepare("DELETE FROM settings WHERE key = ?").bind(`endpoint:${key}`).run();
   } else {
     try {
-      await impl.create(env, { name, image, gpu: pool.provider_gpu!, region: pool.provider_region, env: pe.env, weights: plan, clusterId: c.id });
+      await impl.create(env, { name, image, gpu: pool.provider_gpu!, region: pool.provider_region, env: pe.env, weights: plan, clusterId: c.id, ...(prov === "brev" && pool.container_disk_gb !== undefined ? { diskGb: pool.container_disk_gb } : {}) });
     } catch (e) {
       log(`${pool.id}: no ${pool.provider_gpu} in ${where}: ${(e as Error).message.slice(0, 200)}`);
       if (tunnel) for (const m of await releaseTunnels(env, key, "the provider's create failed")) log(`${pool.id}: ${m}`);

@@ -314,8 +314,61 @@ A **spec** (`control/src/cluster/spec.ts`) holds:
 
 The `standard` template is one worker each in h3-turbo, h3-max, ltx and
 wan (wan5b). The `tiny-cpu` template is one CPU worker on the `cpu` image
-with the fake engine. The `ltx`, `h3`, `wan` and `longlive` templates group
-the pool presets below.
+with the fake engine. The `ltx`, `wan` and `longlive` templates group
+the pool presets below. Three templates are derived from the presets and
+the serve catalog (`cluster/spec.ts`, owner 2026-10-18), so a new preset
+joins them when its models qualify (`test/unit/templates.test.ts`):
+
+- `h3`: every H3 variant a preset serves (turbo, max, Ref2V, the NVFP4 tier,
+  the TAEH3 previews, Trim, VDN-H3, the turbo LoRAs): 16 pools;
+- `fasth3`: the FastH3 releases among them (model ids `fasth3*`);
+- `streaming`: every causal streaming model, the presets whose recipe
+  `catalog.json` marks `stream: "causal"` (caps.rs `CudaRecipe::SfWan`,
+  `StreamCaps::Causal`): `sfwan` and `longlive`.
+
+**One pool per preset, one GPU per pod** (the decision for `h3` / `fasth3`):
+each H3 variant is its own DiT (40-66 GB; VDN-H3 wants 96 GB cards) with its
+own worker config, image variant and quantization path (MXFP8 / NVFP4), so
+they cannot all be resident on one GPU, and one process swapping between
+them (`engine.swap`, as `runpod-h3-ref2v.toml` does for its two models) would
+mix configs no one has measured together. Catalog models without a preset
+(`h3-draft`'s `fasth3-4step-vsa-480p-taeh3`, `fasth3-8step-dense`) are not in
+the templates until a worker config serves them. The NVFP4, Trim and LoRA
+presets load trees that are only in R2: their pools default to
+`weights_source r2`.
+
+### 4b. One-click deploy (`#/deploy`)
+
+The console's Deploy page (`ui/forms/deploy.ts`, API in `src/deploy.ts`):
+
+1. **Cluster**: a new one (name, control plane) or an existing cluster.
+2. **Model families**: any of the catalog's families (h3, ltx2, wan), or
+   "All families".
+3. **Per family**: its pools (one preset, the family's standard pool by
+   default, or a template of the family: `h3`, `fasth3`, `ltx`, `wan`,
+   `streaming`, `longlive`), workers per pool, the provider, the weights, and
+   the instance types in the launch form's table (`itable.ts`, the same
+   component: Runpod an ordered multi-pick with fallbacks and the data
+   centres, GMI / Brev one product; Brev with its disk).
+4. **Review** (`POST /api/v1/deploy/plan`, nothing saved): every pool that
+   will be created (id, family, preset, workers, where, models), the
+   problems at their family, the price projection, or for an existing
+   cluster the configuration page's plan (`planSpec`). The checks are the
+   configuration page's (`checkSpec`: schema, `normalizeSpec`, live checks).
+5. **Deploy** (`POST /api/v1/deploy/apply`): a new cluster is defined and
+   started (one pool per family, or the template's pools); an existing one
+   gets the pools added through the spec document (`saveDoc`, its version
+   from the plan: a save in between answers 409), pool ids made unique
+   (`h3-turbo-2`), and is started when it was stopped. A running cluster
+   gets the new pools' workers through Scale (the configuration page's
+   rule), which the result says.
+
+`GET /api/v1/deploy/catalog` lists the families with their presets and
+templates and the clusters. The older one-recipe API (`/api/v1/deploy`,
+`/deploy/validate`, `/deploy/recipes`) stays.
+
+![The review: what will be created](img/deploy-review.png)
+![Families with their instance types](img/deploy-families-instance-types.png)
 
 **Pool presets** (`POOL_PRESETS` in `spec.ts`; the dashboard's "Add pool"):
 the four standard pools plus `ltx-pro` (`ltx25-distill-dense`, recipe
@@ -904,6 +957,7 @@ All responses are JSON. Auth is a session cookie plus `x-csrf-token`, or
 | `GET/POST /api/standalone`, `GET/DELETE /api/standalone/<id>`, `POST …/{start,stop,extend}` | standalone pods ([standalone-pods.md](standalone-pods.md)) |
 | `GET /api/metrics/series?hours=&pod=`, `/api/balance?hours=`, `/api/costs?days=` | time series and cost breakdowns |
 | `GET/POST /api/clusters`, `GET /api/templates`, `GET/DELETE /api/clusters/<id>`, `PUT …/spec` | definitions |
+| `GET /api/deploy/catalog`, `POST /api/deploy/plan`, `POST /api/deploy/apply` | one-click deploy (§4b) |
 | `POST /api/clusters/<id>/{price,start,stop,extend,scale,roll,restart,cancel}` | operations (202 + operation id) |
 | `GET /api/clusters/<id>/ops`, `/api/ops/<id>` | operation logs |
 | `GET /api/clusters/<id>/env` | effective env per pod (masked), `needs_restart` |

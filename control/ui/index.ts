@@ -10,6 +10,7 @@ import { mountEndpointForm, mountScaleForm, mountSpecEditor, outlookLine } from 
 import { mountInvokePicker, servesPanel } from "./forms/serves";
 import { mountReleaseForm, mountTokenForm } from "./forms/settings";
 import { mountLaunchForm } from "./forms/standalone";
+import { mountDeployForm } from "./forms/deploy";
 import { openDocPanel } from "./panel";
 import { schemaAt, validate } from "./schema";
 import { diffLines, renderDiff, renderTree } from "./view";
@@ -29,6 +30,7 @@ import { diffLines, renderDiff, renderTree } from "./view";
   formDialog,
   auditForms,
   mountLaunchForm,
+  mountDeployForm,
   mountEndpointForm,
   outlookLine,
   mountSpecEditor,
