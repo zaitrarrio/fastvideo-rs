@@ -159,8 +159,11 @@ is the provider's product / instance type, there is no weights volume
 the owner's approval), the pod reports its HTTPS tunnel URL to
 `/ingest/v1/endpoint` (a named tunnel fv-control made on the owner's zone,
 URL known at create, or a quick tunnel without those settings;
-deploy-gmi-brev.md §6.4), and a monthly budget (`GMI_BUDGET_USD`,
-`BREV_BUDGET_USD`) replaces the balance floor. Both are off until the owner
+deploy-gmi-brev.md §6.4), and a monthly budget replaces the balance floor:
+the form's "Monthly budget" field under Provider (saved for the account,
+policy `brev_budget_usd` / `gmi_budget_usd`; unset: the Worker var
+`BREV_BUDGET_USD` / `GMI_BUDGET_USD`). The form says a launch over it at the
+provider before Launch. "Max GPU $/hr" is a per-pod price cap, not the budget. Both are off until the owner
 sets their secrets; the form and `fv-control.sh providers` say why.
 
 **Brev keep-on-stop** (docs/serve/deploy-gmi-brev.md §3.4). Stopping a

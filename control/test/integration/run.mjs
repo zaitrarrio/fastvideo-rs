@@ -679,7 +679,7 @@ await step("pool env: every worker of the pool; restart by pool or pod", async (
 
 await step("templates and pool presets; a legacy gateway block migrates", async () => {
   const tp = (await call("/api/v1/templates", { headers: T() })).j;
-  assert.deepEqual(tp.templates.map((x) => x.id), ["standard", "tiny-cpu", "ltx", "h3", "wan", "longlive"]);
+  assert.deepEqual(tp.templates.map((x) => x.id), ["standard", "tiny-cpu", "ltx", "h3", "fasth3", "streaming", "wan", "longlive"]);
   for (const id of ["ltx-pro", "ltx-a2v", "ltx-ref2v", "h3-ref2v", "fastwan21", "sfwan", "longlive"]) assert.ok(tp.pool_presets.some((p) => p.id === id), id);
   assert.match(tp.pool_presets.find((p) => p.id === "longlive").licence, /non-commercial/i);
   assert.equal(tp.ltx.pools.length, 4);
@@ -1443,7 +1443,7 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   assert.equal(r.status, 201);
   op = await waitOp(r.j.pod.id, "up");
   assert.equal(op.status, "failed");
-  assert.match(op.error, /NVIDIA Brev: .* over the budget \$2/);
+  assert.match(op.error, /NVIDIA Brev: .* over the monthly budget \$2 \(raise it: the launch form's "Monthly budget" field or Settings → Policies brev_budget_usd\)/);
   assert.equal(b.workspaces.length, 0, "no VM before the budget check");
   await call("/api/v1/standalone/brevbig", { method: "DELETE", headers: T() });
   // Brev: a 20-minute fake-engine VM end to end, launched with the CLI.
@@ -1454,7 +1454,12 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   const dir = mkdtempSync(`${tmpdir()}/fvc-cli-`);
   writeFileSync(`${dir}/token`, token, { mode: 0o600 });
   const cli = async (...args) => (await promisify(execFile)("bash", [new URL("../../../scripts/serve/fv-control.sh", import.meta.url).pathname, ...args], { env: { ...process.env, FV_CONTROL_URL: B, FV_CONTROL_TOKEN_FILE: `${dir}/token`, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1" } })).stdout;
-  assert.match(await cli("providers"), /^gmi\ton\t\tbudget \$50, month \$[\d.]+\tcontainer\.h200\.x1,container\.b200\.x1$/m);
+  assert.match(await cli("providers"), /^gmi\ton\t\tbudget \$50 \(Worker var\), month \$[\d.]+\tcontainer\.h200\.x1,container\.b200\.x1$/m);
+  // The budget as the owner enters it (owner report 2026-10-18): saved in fv-control, read back, unset → the Worker var.
+  assert.match(await cli("budget", "brev"), /^brev: budget \$2\/month \(the Worker var\), this month \$[\d.]+$/m);
+  assert.match(await cli("budget", "brev", "20"), /^brev: budget \$20\/month \(set in fv-control\)/m);
+  assert.equal((await call("/api/v1/policies", { headers: T() })).j.policies.brev_budget_usd, 20);
+  assert.match(await cli("budget", "brev", "unset"), /^brev: budget \$2\/month \(the Worker var\)/m);
   await cli("pod", "launch", "brev1", "--provider", "brev", "--gpu", "g5.xlarge-test", "--fake", "--channel", "stable", "--deadline-min", "20");
   const bid = (await call("/api/v1/standalone/brev1", { headers: T() })).j.pod.id;
   assert.equal((await call("/api/v1/standalone/brev1", { headers: T() })).j.pod.definition.provider_gpu, "g5.xlarge-test", "--gpu is the instance type on brev");
