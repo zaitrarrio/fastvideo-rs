@@ -371,7 +371,9 @@ export function workerCreatePayload(name: string, image: string, pool: PoolSpec,
   }
   const r2 = env.FV_WEIGHTS_SOURCE === "r2";
   const hub = env.FV_WEIGHTS_SOURCE === "hub";
-  const vol = pool.volume !== false && !r2 && !hub && pl.region ? { volumeInGb: 0, networkVolumeId: REGIONS[pl.region]!.volume, volumeMountPath: "/workspace" } : {};
+  // No network volume: say volumeInGb 0, or Runpod adds its default pod volume at /workspace and the r2 / hub fetch
+  // into /workspace/weights lands on that small quota (EDQUOT) instead of the container disk sized for the trees.
+  const vol = pool.volume !== false && !r2 && !hub && pl.region ? { volumeInGb: 0, networkVolumeId: REGIONS[pl.region]!.volume, volumeMountPath: "/workspace" } : { volumeInGb: 0 };
   const cuda = podAllowedCuda(pool);
   return {
     ...common,
