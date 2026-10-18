@@ -50,6 +50,8 @@ du -sh "$R"/* >$SRV/trees.txt 2>&1
 sed 's/^bind = "0.0.0.0:8000"/bind = "127.0.0.1:8001"/; s#^state_dir = .*#state_dir = "/fvstate"#' /opt/fv/runpod-family-h3.toml >/opt/fv/family.toml
 BASE=http://127.0.0.1:8001
 serve() {
+  chmod +x /opt/fv/fv-serve
+  ldd /opt/fv/fv-serve >$SRV/ldd.txt 2>&1
   FV_WEIGHTS="$R" FV_AUTH_MODE=none FV_CONFIG=/opt/fv/family.toml RUST_LOG=info \
     /opt/fv/fv-serve --config /opt/fv/family.toml >$SRV/serve.log 2>&1 &
   echo $! >/tmp/serve.pid
@@ -82,8 +84,10 @@ job() {
   local wall
   wall="$(awk -v a="$t0" -v b="$(date +%s.%N)" 'BEGIN{printf "%.1f", b - a}')"
   echo "$st" >"$SRV/job-$n-$model.json"
-  curl -sSL -o "$SRV/job-$n-$model.mp4" $BASE/fv/v1/jobs/$id/content || true
-  bytes="$(stat -c %s "$SRV/job-$n-$model.mp4" 2>/dev/null || echo 0)"
+  # The output's size from the job (its /files URL is signed for the public port); the MP4 from the local store.
+  bytes="$(python3 -c 'import json,sys; print((json.load(sys.stdin).get("output") or {}).get("bytes", 0))' <<<"$st" 2>/dev/null)"
+  f="$(find /fvstate -name "${id#fvjob_}.mp4" 2>/dev/null | head -1)"
+  [[ -n "$f" ]] && cp "$f" "$SRV/job-$n-$model.mp4"
   sha="$(sha256sum "$SRV/job-$n-$model.mp4" 2>/dev/null | cut -c1-16)"
   curl -sS $BASE/health >"$SRV/health-after-$n.json"
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$n" "$model" "$s" "$wall" "$bytes" "$sha" >>$SRV/jobs.tsv

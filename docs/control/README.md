@@ -344,6 +344,35 @@ its family's config.
 | `wan` | `wan` (the preset) | 2: FastWan 2.2 5B turbo, Wan 2.2 5B max | r2 | 32 GB+ | fastwan21 (`FASTVIDEO_VSA=1` is process-wide; its own pool); sfwan / longlive (an SF-Wan pipeline stays resident once loaded: the `streaming` template) |
 | `streaming` | `streaming-family` | 2: sfwan21-1.3b, longlive-1.3b (NON-COMMERCIAL) | r2: about 36 GB | 80 GB class (both SF-Wan pipelines stay resident: 26-33 GB peak each) | — |
 
+**GPU validation (2026-10-18, `scripts/gpu/family-pool-validate.sh`, one
+RTX PRO 6000 Server, pod `674mivzgycg1u3`, 10 min, about $0.41; raw results
+in `artifacts/serve/e2e/family-pool-h3/`).** One fv-serve process (release
+build of this branch on the `h3-max` serve image) with
+`runpod-family-h3.toml` unchanged, weights from R2 (h3-base, the FastH3
+LoRA, fasth3-v2-nvfp4, auxiliary/tae: 206 GB in about 5 min; no
+pre-quantized trees, as the preset ships). 480p T2V, seed 1, one after the
+other through the native API:
+
+| # | model | what | job run (s) | of which load (s) | denoise (s) | output |
+|---|---|---|---|---|---|---|
+| boot | fasth3 | resident at start (turbo) | — | 31.9 | — | ready 33 s after start |
+| 1 | fasth3 | turbo, resident | 9.2 | 0 | 6.3 | 2 864 229 B |
+| 2 | sol-h3 | max: swaps turbo out | 44.7 | 35.7 | 6.0 | 3 619 560 B |
+| 3 | sol-h3 | max, resident | 8.6 | 0 | 6.1 | 3 619 560 B (same) |
+| 4 | fasth3-v2-nvfp4 | NVFP4 release, no profile: swap across profiles | 36.0 | 23.3 | 10.0 | 3 342 740 B |
+| 5 | fasth3 | back to turbo | 43.8 | 34.5 | 6.3 | 2 864 229 B (same as #1) |
+
+Each swap freed the whole previous model (100.5 GB free before every load
+of the 96 GB card's 101.3 GB), each model loaded with its own profile
+(`h3 technique profile: … (this model's own)`: VSA for turbo, the Sol-H3
+engine route for max, none and the release's NVFP4 FFN for V2), and the
+repeated requests gave the same output size. A swap costs about 35 s for an
+MXFP8 tier quantizing at load (about 23 s for the NVFP4 release). Not
+exercised on a GPU: the family's other variants (Ref2V, Trim, the LoRAs,
+VDN-H3, the previews), and the `fasth3`, `ltx` and `streaming` family pools
+(their configs pass the engine's `shipped_configs_parse` /
+`ProcessPlan` checks only).
+
 What a family pool leaves out is in the template's title and `left_out`
 (`GET /api/v1/templates`, the deploy catalog), never silent. On GMI / Brev a
 family pool may take a larger disk than Runpod's 500 GB.
