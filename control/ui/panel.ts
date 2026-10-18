@@ -236,8 +236,9 @@ export async function openDocPanel(host: HTMLElement, o: PanelOptions) {
             "p",
             { class: "small" },
             `$/hr: ${p.dph_now?.toFixed?.(2) ?? "0.00"} now → ~${pr.cluster_dph?.toFixed?.(2) ?? "?"} after. `,
-            pr.balance !== undefined ? `Balance $${pr.balance.toFixed(2)} → projected $${pr.projected_balance.toFixed(2)} after ${pr.hours.toFixed(1)} h (floor $${pr.floor}). ` : "",
-            pr.ok === false ? h("span", { class: "badge critical" }, `over the floor: ${(pr.reasons || []).join("; ")}`) : pr.ok ? h("span", { class: "badge good" }, "within the floor") : "",
+            pr.balance !== undefined && pr.runpod !== false ? `Balance $${pr.balance.toFixed(2)} → projected $${pr.projected_balance.toFixed(2)} after ${pr.hours.toFixed(1)} h (floor $${pr.floor}). ` : "",
+            ...(pr.budgets || []).map((b: any) => `${b.line}. `),
+            pr.ok === false ? h("span", { class: "badge critical" }, `${pr.runpod === false ? "over the budget" : "over the floor"}: ${(pr.reasons || []).join("; ")}`) : pr.ok ? h("span", { class: "badge good" }, pr.runpod === false ? "within the budget" : "within the floor") : "",
           ),
           h("p", { class: "small muted" }, "Saving changes the definition only; apply it to running pods with Scale, Roll or the env restart."),
         );

@@ -1446,6 +1446,25 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   assert.match(op.error, /NVIDIA Brev: .* over the monthly budget \$2 \(raise it: the launch form's "Monthly budget" field or Settings → Policies brev_budget_usd\)/);
   assert.equal(b.workspaces.length, 0, "no VM before the budget check");
   await call("/api/v1/standalone/brevbig", { method: "DELETE", headers: T() });
+  // Brev's backend fails the create with an error of its own (live 2026-10-18, every type): said in Brev's words as a
+  // provider error, not "NO STOCK"; the operation fails at once and the definition is failed, not left "starting".
+  // The log's money line is the Brev budget, not Runpod's balance and floor.
+  b.createFail = { status: 500, body: { errors: [{ type: "InternalServerError", message: "UnrecognizedClientException: The security token included in the request is invalid.\n\tstatus code: 400, request id: 1234" }] } };
+  r = await call("/api/v1/standalone", { method: "POST", body: { name: "brev500", provider: "brev", provider_gpu: "g5.xlarge-test", ...fake, deadline_min: 20 }, headers: T() });
+  assert.equal(r.status, 201);
+  op = await waitOp(r.j.pod.id, "up");
+  delete b.createFail;
+  const l500 = op.log.map((l) => l.msg);
+  assert.equal(op.status, "failed");
+  assert.match(op.error, /^no worker pod could be made: the provider failed the create \(pod: NVIDIA Brev refused the create of g5\.xlarge-test with HTTP 500: brev POST api\/organizations\/<org>\/workspaces: 500 InternalServerError: UnrecognizedClientException: The security token included in the request is invalid\. status code: 400, request id: 1234 \(a cloud credential was refused inside the provider's backend/, op.error);
+  assert.ok(l500.some((m) => /^pod: PROVIDER ERROR: NVIDIA Brev refused the create .*; not a shortage of stock: not retried$/.test(m)), JSON.stringify(l500));
+  assert.ok(!l500.some((m) => /NO STOCK|no g5\.xlarge-test in brev/.test(m)), JSON.stringify(l500));
+  assert.ok(l500.some((m) => /^NVIDIA Brev: \$[\d.]+ spent this month \+ ~\$[\d.]+\/hr \(this launch \$1\.00\/hr.*\) for 0\.33 h → projected \$[\d.]+ at the deadline; budget \$2 \(within\)$/.test(m)), JSON.stringify(l500));
+  assert.ok(!l500.some((m) => /floor \$|^balance \$/.test(m)), "no Runpod balance / floor line for a Brev-only launch");
+  sp = (await call("/api/v1/standalone/brev500", { headers: T() })).j.pod;
+  assert.deepEqual([sp.status, sp.pool_status?.status, sp.deadline], ["failed", "failed", null], JSON.stringify(sp));
+  assert.equal(b.workspaces.length, 0);
+  assert.equal((await call("/api/v1/standalone/brev500", { method: "DELETE", headers: T() })).status, 200, "no pod: deleted at once");
   // Brev: a 20-minute fake-engine VM end to end, launched with the CLI.
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");

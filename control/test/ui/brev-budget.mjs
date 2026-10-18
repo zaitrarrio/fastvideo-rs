@@ -122,6 +122,10 @@ try {
   assert.ok(!/budget/.test(sp.pod.last_op?.error || ""), `no budget refusal: ${sp.pod.last_op?.error}`);
   assert.ok(mock.brev.workspaces.some((x) => x.name.startsWith("fv-pod-budget-ui-")), `the Brev VM was created: ${JSON.stringify(sp.pod.last_op || sp.pod.op)}`);
   assert.equal(sp.pod.definition.provider, "brev");
+  // The launch's log on the pod's page: the Brev budget line, no Runpod balance / floor line (a Brev-only launch
+  // printed "balance $0.00, account $0.00/hr, …; projected $0.00 at the deadline (floor $8)" before).
+  await page.waitForFunction(() => /NVIDIA Brev: \$[\d.]+ spent this month \+ ~\$[\d.]+\/hr \(this launch \$1\.01\/hr\) for 12\.00 h → projected \$[\d.]+ at the deadline; budget \$75 \(within\)/.test(document.body.innerText), null, { timeout: 30000 });
+  assert.doesNotMatch(await page.textContent("body"), /\(floor \$\d|balance \$0\.00, account \$0\.00\/hr/);
   await page.screenshot({ path: `${out}/52-brev-budget-launched.png`, fullPage: true });
   assert.ok(!(await api("/api/v1/standalone/budget-ui", { method: "DELETE" })).error, "deleted");
 

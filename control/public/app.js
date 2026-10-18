@@ -1033,8 +1033,16 @@ async function startDialog(c, redraw) {
     dlg.replaceChildren(
       h("h2", {}, `Start ${c.name}`),
       table([{ label: "pod", get: (x) => `${x.role} ${x.pool || ""}` }, { label: "what", get: (x) => x.what }, { label: "$/hr (est.)", get: (x) => fmt$(x.dph), num: true }], p.pods),
-      h("dl", { class: "kv", style: "margin-top:10px" }, h("dt", {}, "cluster"), h("dd", {}, `${fmt$(p.cluster_dph)}/hr`), h("dt", {}, "account now"), h("dd", {}, `${fmt$(p.balance)} at ${fmt$(p.account_spend_per_hr)}/hr`), h("dt", {}, `after ${p.hours.toFixed(2)} h`), h("dd", {}, `${fmt$(p.projected_balance)} (floor ${fmt$(p.floor, 0)})`)),
-      p.ok ? h("p", { class: "small" }, badge("within the floor", "good")) : h("div", {}, p.reasons.map((x) => h("p", { class: "small" }, badge("refused", "critical"), " ", x))),
+      // Runpod's balance and floor only when a pool runs there; GMI / Brev pools: their monthly budgets.
+      h(
+        "dl",
+        { class: "kv", style: "margin-top:10px" },
+        h("dt", {}, "cluster"),
+        h("dd", {}, `${fmt$(p.cluster_dph)}/hr`),
+        ...(p.runpod === false ? [] : [h("dt", {}, "account now"), h("dd", {}, `${fmt$(p.balance)} at ${fmt$(p.account_spend_per_hr)}/hr`), h("dt", {}, `after ${p.hours.toFixed(2)} h`), h("dd", {}, `${fmt$(p.projected_balance)} (floor ${fmt$(p.floor, 0)})`)]),
+        ...(p.budgets || []).flatMap((b) => [h("dt", {}, `${b.provider} budget`), h("dd", { "data-budget-line": b.provider }, b.line)]),
+      ),
+      p.ok ? h("p", { class: "small" }, badge(p.runpod === false ? "within the budget" : "within the floor", "good")) : h("div", {}, p.reasons.map((x) => h("p", { class: "small" }, badge("refused", "critical"), " ", x))),
       h(
         "div",
         { class: "row", style: "margin-top:10px" },

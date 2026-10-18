@@ -397,6 +397,10 @@ export const stopRefusal = (msg: string): StopRefusal => (NOT_STOPPABLE_RE.test(
 export function brevErrText(msg: string): string {
   const st = /: (\d{3}) /.exec(msg)?.[1];
   const m = /"message"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(msg)?.[1];
+  // brev.ts call() already says Brev's words ("brev PUT …: 500 InternalServerError: rpc error: …"): the status and
+  // the message without the call and the error type.
+  const said = /^brev \S+ \S+: (\d{3}) (?:[A-Za-z]+Error: )?(.*)$/s.exec(msg);
+  if (!m && said) return `HTTP ${said[1]} ${said[2]}`.slice(0, 200);
   if (!m) return msg.slice(0, 160);
   return `${st ? `HTTP ${st} ` : ""}${m.replace(/\\"/g, '"').replace(/\\\\/g, "\\")}`.slice(0, 200);
 }

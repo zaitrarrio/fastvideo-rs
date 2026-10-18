@@ -307,6 +307,48 @@ export async function budgetCheck(env: Env, p: OtherProviderId, addDph: number, 
   return { provider: p, ok: !reasons.length, reasons, budget, month: s.month, running_dph: s.running_dph, parked_dph: s.parked_dph, add_dph: addDph, hours, projected };
 }
 
+/** A budget check in one line for the operation log (no Runpod balance or floor: GMI / Brev have none):
+ * "NVIDIA Brev: $6.04 spent this month + ~$4.04/hr (this launch $4.04/hr) for 1.00 h → projected $10.08 at the
+ * deadline; budget $100 (within)". */
+export function budgetLine(b: BudgetCheck): string {
+  const dph = b.running_dph + b.parked_dph + b.add_dph;
+  const parts = [`this launch $${b.add_dph.toFixed(2)}/hr`, b.running_dph ? `running $${b.running_dph.toFixed(2)}/hr` : null, b.parked_dph ? `parked storage $${b.parked_dph.toFixed(3)}/hr` : null].filter(Boolean);
+  const verdict = b.budget === null ? "unset" : `$${b.budget} (${b.projected > b.budget ? "OVER" : "within"})`;
+  return `${providerImpl(b.provider).title}: $${b.month.toFixed(2)} spent this month + ~$${dph.toFixed(2)}/hr (${parts.join(", ")}) for ${b.hours.toFixed(2)} h → projected $${b.projected.toFixed(2)} at the deadline; budget ${verdict}`;
+}
+
+/** Why a GMI / Brev create failed: `capacity` (no stock: the type / zone has none now; retried like Runpod's no
+ * stock), `provider` (the provider answered HTTP 5xx with an error of its own: retrying the launch now will not help),
+ * else `other` (handled like no stock, as before). */
+export interface CreateFailure {
+  kind: "capacity" | "provider" | "other";
+  /** The provider's HTTP status, when it answered. */
+  status: number | null;
+  said: string;
+  /** What the error means, when fv-control recognises it. */
+  hint: string | null;
+}
+export const CAPACITY_RE = /InsufficientCapacity|insufficient (?:resources|capacity)|no capacity|out of (?:stock|capacity)|sold out|not enough capacity|capacity (?:is )?(?:not available|unavailable)/i;
+/** AWS's answer to a call made with a credential it does not know: from inside the provider's backend (fv-control
+ * never talks to AWS; its Brev token is a bearer on Brev's own API). */
+const PROVIDER_CRED_RE = /UnrecognizedClientException|security token included in the request is invalid|InvalidClientTokenId|ExpiredTokenException/i;
+export function createFailure(e: unknown): CreateFailure {
+  const said = String((e as Error)?.message ?? e).replace(/\s+/g, " ").trim();
+  const up = e instanceof HttpError ? Number(e.extra?.upstream) : NaN;
+  const status = Number.isFinite(up) ? up : null;
+  if (CAPACITY_RE.test(said)) return { kind: "capacity", status, said, hint: null };
+  if (status !== null && status >= 500)
+    return {
+      kind: "provider",
+      status,
+      said,
+      hint: PROVIDER_CRED_RE.test(said)
+        ? "a cloud credential was refused inside the provider's backend (an AWS error raised on its side, not fv-control's request, not a shortage of stock); on 2026-10-18 every Brev create failed this way, AWS, Nebius and Shadeform types alike): check the provider's status or ask its support"
+        : null,
+    };
+  return { kind: "other", status, said, hint: null };
+}
+
 /** The $/hr a pool's pod will cost on its provider: the offer's price, else the cap (the most it may cost). */
 export async function poolDph(env: Env, pool: PoolSpec, cap: number): Promise<{ dph: number; known: boolean; offer: Offer | null }> {
   const p = poolProvider(pool) as OtherProviderId;

@@ -97,6 +97,27 @@ export function brevPrice(env: Env, type: string): number | null {
   return Number.isFinite(v) && v > 0 ? v : null;
 }
 
+/** Characters of Brev's error kept in a message (its own words, not the JSON around them). */
+export const BREV_ERR_MAX = 400;
+/** What Brev said in an error body: `{"errors":[{"type","message"}]}` as "<type>: <message>" (whitespace collapsed:
+ * Brev's message carries the backend's "\n\tstatus code: …, request id: …"), else `message` / `error`, else the raw
+ * text; at most BREV_ERR_MAX characters. The raw JSON cut at 300 characters lost the message's end. */
+export function brevErrorText(text: string): string {
+  let said = text;
+  try {
+    const j = JSON.parse(text);
+    const errs: any[] = Array.isArray(j?.errors) ? j.errors : [];
+    const parts = errs.map((e) => [e?.type, e?.message ?? e?.detail].filter((x) => typeof x === "string" && x.trim()).join(": ")).filter(Boolean);
+    if (parts.length) said = parts.join("; ");
+    else if (typeof j?.message === "string") said = j.message;
+    else if (typeof j?.error === "string") said = j.error;
+  } catch {
+    /* not JSON: the text itself */
+  }
+  said = said.replace(/\s+/g, " ").trim();
+  return said.length > BREV_ERR_MAX ? `${said.slice(0, BREV_ERR_MAX - 1)}…` : said;
+}
+
 async function call(env: Env, method: string, path: string, body?: unknown): Promise<any> {
   const off = brevOff(env);
   if (off) throw new HttpError(400, `brev: ${off} (docs/serve/deploy-gmi-brev.md §8)`);
@@ -108,7 +129,7 @@ async function call(env: Env, method: string, path: string, body?: unknown): Pro
   });
   const text = await r.text();
   const shown = path.replace(/organizations\/[^/]+/, "organizations/<org>").replace(/alltypesavailable\/[^/]+/, "alltypesavailable/<org>");
-  if (!r.ok) throw new HttpError(r.status >= 500 ? 502 : r.status, `brev ${method} ${shown}: ${r.status} ${scrub(env, text.slice(0, 300))}`, { upstream: r.status });
+  if (!r.ok) throw new HttpError(r.status >= 500 ? 502 : r.status, `brev ${method} ${shown}: ${r.status} ${scrub(env, brevErrorText(text))}`, { upstream: r.status });
   try {
     return text ? JSON.parse(text) : null;
   } catch {

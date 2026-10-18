@@ -13,6 +13,8 @@ import {
   deletePod,
   patchWorker,
   projectSpend,
+  projectionLines,
+  PROVIDER_ERROR,
   workerBusy,
   workerHealth,
   workerInternal,
@@ -27,7 +29,7 @@ import { markReady } from "../boottime";
 import { checkPod } from "../podlogs";
 import type { OtherProviderId } from "../enums";
 import { brevReleased } from "../brev-park";
-import { budgetCheck, isOtherPod, isOtherPool, otherPodDiag, otherPodState, poolProvider, providerIssues, reportedUrl } from "../providers";
+import { budgetCheck, budgetLine, isOtherPod, isOtherPool, otherPodDiag, otherPodState, poolProvider, providerIssues, reportedUrl } from "../providers";
 import type { PodRec, PoolStatus } from "./payloads";
 import { checkImages } from "./preflight";
 import { isEdge } from "./spec";
@@ -216,7 +218,8 @@ export class ClusterOps implements DurableObject {
       const pv = providerIssues(env, c.spec);
       if (pv.length) return { done: true, error: pv.map((i) => `${c.spec.pools[i.path[1] as number]?.id}: ${i.message}`).join("; ") };
       const proj = await projectSpend(env, c.spec, { hours: c.spec.cap_s / 3600 });
-      this.log(`balance $${proj.balance.toFixed(2)}, account $${proj.account_spend_per_hr.toFixed(2)}/hr, cluster ~$${proj.cluster_dph.toFixed(2)}/hr; projected $${proj.projected_balance.toFixed(2)} at the deadline (floor $${proj.floor})`);
+      // Runpod's balance and floor when a pool runs there; a GMI / Brev pool's monthly budget (no Runpod line for them).
+      for (const l of projectionLines(proj)) this.log(l);
       if (!proj.ok && !op.params?.skip_price_check) return { done: true, error: proj.reasons.join("; ") };
       c.state.images = await resolveClusterImages(env, c.spec);
       if (c.spec.image.ref) c.state.image = c.state.images.gateway || Object.values(c.state.images)[0];
@@ -266,11 +269,20 @@ export class ClusterOps implements DurableObject {
       return { delayMs: 10 };
     }
     if (op.phase === "patch") {
-      if (d.failed.length)
-        this.log(`NO STOCK: ${d.failed.join(", ")} got no pod (${d.failed.map((p: string) => c.state.pools?.[p]?.detail || "no stock").join("; ")}); retried every ${NO_STOCK_RETRY_MS / 60000} min while the other pools start, else the operation fails naming them`);
-      // Nothing to wait for: not one worker (no stock anywhere).
-      if (!Object.values(c.state.workers).some((l) => l.length) && c.spec.pools.some((p) => p.count > 0))
-        return { done: true, error: `no worker pod could be made (${d.failed.join(", ")}): stop the cluster or start it again later` };
+      // A pool whose provider failed the create with an error of its own (createFor: status failed) is not "no stock".
+      const broken = d.failed.filter((p: string) => c.state.pools?.[p]?.status === "failed");
+      const nostock = d.failed.filter((p: string) => !broken.includes(p));
+      const detail = (p: string) => c.state.pools?.[p]?.detail || "no stock";
+      if (nostock.length)
+        this.log(`NO STOCK: ${nostock.join(", ")} got no pod (${nostock.map(detail).join("; ")}); retried every ${NO_STOCK_RETRY_MS / 60000} min while the other pools start, else the operation fails naming them`);
+      if (broken.length) this.log(`${PROVIDER_ERROR} ${broken.join(", ")} got no pod: ${broken.map(detail).join("; ")}`);
+      // Nothing to wait for: not one worker. The definition is left failed (not "starting" with no pod).
+      if (!Object.values(c.state.workers).some((l) => l.length) && c.spec.pools.some((p) => p.count > 0)) {
+        await saveState(env, c, { status: "failed", deadline: null });
+        if (broken.length && !nostock.length)
+          return { done: true, error: `no worker pod could be made: the provider failed the create (${broken.map((p: string) => `${p}: ${detail(p)}`).join("; ")})` };
+        return { done: true, error: `no worker pod could be made (${d.failed.join(", ")}${broken.length ? `; ${broken.join(", ")}: provider error` : ""}): stop the cluster or start it again later` };
+      }
       await saveState(env, c, { status: "running" });
       op.phase = "wait";
       d.t0 = now();
@@ -283,11 +295,14 @@ export class ClusterOps implements DurableObject {
   /** createWorker for `up`, recording the pool's status (starting, or no stock with the last reason). */
   private async createFor(c: Cluster, poolId: string): Promise<PodRec | null> {
     let last = "";
+    let provErr = "";
     const rec = await createWorker(this.env, c, poolId, c.state.images[poolId] || c.state.image!, "workers", (m) => {
-      if (/: no .* in /.test(m)) last = m.slice(poolId.length + 2);
+      if (m.startsWith(`${poolId}: ${PROVIDER_ERROR} `)) provErr = m.slice(poolId.length + 2 + PROVIDER_ERROR.length + 1);
+      else if (/: no .* in /.test(m)) last = m.slice(poolId.length + 2);
       this.log(m);
     });
-    (c.state.pools ||= {})[poolId] = rec ? { status: "starting", at: now() } : { status: "no_stock", detail: last || "no stock", at: now() };
+    // A provider error is a failed pool (not retried while others start); else no stock with the last reason.
+    (c.state.pools ||= {})[poolId] = rec ? { status: "starting", at: now() } : provErr ? { status: "failed", detail: provErr, at: now() } : { status: "no_stock", detail: last || "no stock", at: now() };
     return rec;
   }
 
@@ -441,7 +456,7 @@ export class ClusterOps implements DurableObject {
     // GMI / Brev pools: their budgets (no balance API); a cluster only there does not ask Runpod.
     for (const prov of [...new Set(c.spec.pools.filter(isOtherPool).map((p) => poolProvider(p) as OtherProviderId))]) {
       const b = await budgetCheck(env, prov, 0, hours);
-      this.log(`${prov}: $${b.month.toFixed(2)} this month, $${b.running_dph.toFixed(2)}/hr running; projected $${b.projected.toFixed(2)} (budget ${b.budget === null ? "unset" : `$${b.budget}`})`);
+      this.log(budgetLine(b));
       if (!b.ok) return { done: true, error: b.reasons.join("; ") };
     }
     if (!c.spec.pools.some((p) => !isOtherPool(p))) {
@@ -475,7 +490,8 @@ export class ClusterOps implements DurableObject {
       if (count > cur.length) {
         const hours = Math.max(0.1, ((c.deadline || now()) - now()) / 3_600_000);
         const proj = await projectSpend(env, c.spec, { hours, extraOnly: { pool: poolId, count: count - cur.length } });
-        this.log(`scale-up projection: +$${proj.cluster_dph.toFixed(2)}/hr, $${proj.projected_balance.toFixed(2)} at the deadline`);
+        this.log(`scale-up projection: +$${proj.cluster_dph.toFixed(2)}/hr${proj.runpod ? `, $${proj.projected_balance.toFixed(2)} at the deadline` : ""}`);
+        for (const b of proj.budgets) this.log(b.line);
         if (!proj.ok) return { done: true, error: proj.reasons.join("; ") };
         op.phase = "grow";
       } else if (count < cur.length) {
