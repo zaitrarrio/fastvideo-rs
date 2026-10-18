@@ -41,6 +41,8 @@
 #                                              type; --fake = the cpu image's fake engine (a cheap smoke test)
 #   fv-control.sh providers                    launch providers: enabled or why not, budget, month's spend, GPU products
 #                                              and the pod tunnels' mode (named | quick); a warning or error on stderr
+#   fv-control.sh budget gmi|brev [USD|unset]  a GMI / Brev monthly budget: show it, or set it (policy <p>_budget_usd,
+#                                              what every launch check reads); unset = back to the Worker var
 #   fv-control.sh tunnels [--all] | sweep      named pod tunnels (GMI / Brev, docs/serve/deploy-gmi-brev.md §6.4): the
 #                                              recorded tunnels and hosts; sweep = the cron's pass now (leaks deleted,
 #                                              unrecorded fv- tunnels / fv-control records reported, never touched)
@@ -430,9 +432,18 @@ case "$cmd" in
       delete-parked) api_s POST "/api/providers/brev/parked/${2:?brev delete-parked <workspace id>}/delete" '{}' || die "brev delete-parked: $(api_err)"; jq -r .message <<<"$API_OUT" ;;
       *) die "brev parked | unpark <workspace id> | delete-parked <workspace id>" ;;
     esac ;;
+  budget)
+    bp="${1:?budget gmi|brev [USD|unset]}"
+    case "${2:-}" in
+      "") api_s GET "/api/providers?provider=$bp" || die "budget: $(api_err)" ;;
+      unset) api_s PUT "/api/providers/$bp/budget" '{"budget_usd":null}' || die "budget: $(api_err)"; API_OUT="$(jq -c '{providers: [.provider]}' <<<"$API_OUT")" ;;
+      *) [[ "$2" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "budget: a number of \$ per month, or unset"
+        api_s PUT "/api/providers/$bp/budget" "{\"budget_usd\":$2}" || die "budget: $(api_err)"; API_OUT="$(jq -c '{providers: [.provider]}' <<<"$API_OUT")" ;;
+    esac
+    jq -r '.providers[0] | "\(.id): budget \(if .budget_usd != null then "$\(.budget_usd)/month (\(if .budget_source == "policy" then "set in fv-control" else "the Worker var" end))" else "unset (launches are refused)" end), this month $\(.month_usd // 0 | . * 100 | round / 100)"' <<<"$API_OUT" ;;
   providers)
     pv="$(api GET /api/providers)"
-    jq -r '.providers[] | [.id, (if .enabled then "on" else "off" end), (.reason // ""), (if .budget_usd != null then "budget $\(.budget_usd), month $\(.month_usd // 0 | . * 100 | round / 100)" else "" end), ((.gpus // []) | join(","))] | @tsv' <<<"$pv"
+    jq -r '.providers[] | [.id, (if .enabled then "on" else "off" end), (.reason // ""), (if .budget_usd != null then "budget $\(.budget_usd)\(if .budget_source == "worker_var" then " (Worker var)" else "" end), month $\(.month_usd // 0 | . * 100 | round / 100)" else "" end), ((.gpus // []) | join(","))] | @tsv' <<<"$pv"
     # The pod tunnels (tunnels.ts): named or quick, and loudly what is wrong with the settings.
     jq -r '[.providers[] | .tunnel // empty][0] // empty | ["tunnels", .mode, (.host_template // ""), .note] | @tsv' <<<"$pv"
     jq -r '[.providers[] | .tunnel // empty][0] // empty | (.error // empty | "ERROR: \(.)"), (.warning // empty | "WARNING: \(.)")' <<<"$pv" >&2 ;;

@@ -302,7 +302,7 @@ while [ $# -gt 0 ]; do case "$1" in -d) printf '%s\\n' "$2" >> ${sent}; shift 2 
 
 describe("budget (no balance API)", () => {
   it("unset refuses; over refuses; within passes", async () => {
-    expect((await budgetCheck(mkEnv({ GMI_BUDGET_USD: undefined }), "gmi", 3, 1)).reasons[0]).toMatch(/set GMI_BUDGET_USD/);
+    expect((await budgetCheck(mkEnv({ GMI_BUDGET_USD: undefined }), "gmi", 3, 1)).reasons[0]).toMatch(/the Worker var GMI_BUDGET_USD/);
     expect((await budgetCheck(mkEnv(), "gmi", 3.2, 10)).ok).toBe(false);
     expect((await budgetCheck(mkEnv(), "gmi", 3.2, 1)).ok).toBe(true);
   });

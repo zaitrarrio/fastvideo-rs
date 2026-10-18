@@ -26,6 +26,11 @@ export interface Policies {
   // brev_park_delete_failed is removed (ignored when stored).
   brev_park_max: number; // alert: more than this many parked / held (stopped, weights kept) instances
   brev_park_max_days: number; // alert: one parked / held longer than this many days
+  // GMI / Brev have no balance API: the most fv-control may spend there per UTC month ($), as entered in the console
+  // (Settings → Policies, the launch form's budget field). null: the Worker var (GMI_BUDGET_USD / BREV_BUDGET_USD).
+  // providers.ts providerBudget; owner report 2026-10-18 (the budget entered was not the one used).
+  brev_budget_usd: number | null;
+  gmi_budget_usd: number | null;
 }
 export const DEFAULT_POLICIES: Policies = {
   idle_gpu_pct: 5,
@@ -51,6 +56,8 @@ export const DEFAULT_POLICIES: Policies = {
   build_pod_idle_grace_min: 15,
   brev_park_max: 2,
   brev_park_max_days: 7,
+  brev_budget_usd: null,
+  gmi_budget_usd: null,
 };
 /** Policy keys that were removed: dropped when read or saved (brev_park_delete_failed: removed 2026-10-11, owner rule
  * "stopping a brev vm should NOT delete it"). */

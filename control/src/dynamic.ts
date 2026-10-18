@@ -155,7 +155,7 @@ export async function providerDetails(env: Env, p: string) {
   const impl = providerImpl(id);
   const off = impl.off(env);
   const view = await providerView(env, id);
-  const base = { provider: id, enabled: !off, reason: view.reason, budget: { budget_usd: view.budget_usd, month_usd: view.month_usd, running_dph: view.running_dph, parked_dph: view.parked_dph } };
+  const base = { provider: id, enabled: !off, reason: view.reason, budget: { budget_usd: view.budget_usd, budget_source: view.budget_source, month_usd: view.month_usd, running_dph: view.running_dph, parked_dph: view.parked_dph } };
   if (off) return { ...base, live_ok: false, provider_gpus: configuredGpus(env, id), provider_regions: [], ...(id === "brev" ? { parked: [] } : {}) };
   if (id === "brev") {
     const [gpus, pk] = await Promise.all([brevGpuOptions(env).then((x) => ({ ok: true, x }), () => ({ ok: false, x: configuredGpus(env, "brev") })), parkedView(env)]);
