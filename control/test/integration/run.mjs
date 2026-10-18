@@ -679,7 +679,7 @@ await step("pool env: every worker of the pool; restart by pool or pod", async (
 
 await step("templates and pool presets; a legacy gateway block migrates", async () => {
   const tp = (await call("/api/v1/templates", { headers: T() })).j;
-  assert.deepEqual(tp.templates.map((x) => x.id), ["standard", "tiny-cpu", "ltx", "h3", "wan", "longlive"]);
+  assert.deepEqual(tp.templates.map((x) => x.id), ["standard", "tiny-cpu", "ltx", "h3", "fasth3", "streaming", "wan", "longlive"]);
   for (const id of ["ltx-pro", "ltx-a2v", "ltx-ref2v", "h3-ref2v", "fastwan21", "sfwan", "longlive"]) assert.ok(tp.pool_presets.some((p) => p.id === id), id);
   assert.match(tp.pool_presets.find((p) => p.id === "longlive").licence, /non-commercial/i);
   assert.equal(tp.ltx.pools.length, 4);
