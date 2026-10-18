@@ -377,7 +377,7 @@ export async function mountDeployForm(host: HTMLElement, o: { api: Api; toast: (
           ),
         ),
         plan.actions?.length ? h("ul", { class: "small" }, ...plan.actions.map((a: any) => h("li", {}, h("b", {}, a.action), ` ${a.target}: ${a.detail}`))) : null,
-        plan.ok ? h("p", { class: "small", "data-deploy-price": "" }, `Projected: ~${fmt$(pr.cluster_dph)}/hr for the cluster${pr.projected_balance !== undefined ? `; balance ${fmt$(pr.balance)} → ${fmt$(pr.projected_balance)} at the deadline (floor ${fmt$(pr.floor)})` : ""}.`) : null,
+        plan.ok ? h("p", { class: "small", "data-deploy-price": "" }, `Projected: ~${fmt$(pr.cluster_dph)}/hr for the cluster${pr.projected_balance !== undefined && pr.runpod !== false ? `; balance ${fmt$(pr.balance)} → ${fmt$(pr.projected_balance)} at the deadline (floor ${fmt$(pr.floor)})` : ""}${(pr.budgets || []).map((b: any) => `; ${b.line}`).join("")}.`) : null,
         ...(plan.warnings || []).slice(0, 12).map((w: any) => h("p", { class: "small muted" }, `note: ${famOf(w) ? `${famOf(w)}: ` : ""}${w.message}`)),
         h(
           "div",

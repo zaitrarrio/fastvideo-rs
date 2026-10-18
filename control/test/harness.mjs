@@ -582,6 +582,8 @@ export function startMock() {
       const tm = /^\/instances\/alltypesavailable\/([^/]+)$/.exec(rest);
       if (tm && req.method === "GET") return tm[1] !== m.brevOrg ? json(res, 403, { message: "not a member" }) : json(res, 200, { allInstanceTypes: b.types });
       if (om && req.method === "POST") {
+        // A create Brev's backend fails on its own (live 2026-10-18: HTTP 500 with an AWS credential error).
+        if (b.createFail) return json(res, b.createFail.status, b.createFail.body);
         // brev-cli main's body: the old one (vmOnlyMode + startupScript, no workspaceVersion) is refused as live.
         // Live (2026-10-10): a body missing any of Go's non-omitempty fields got this 400 even with workspaceVersion v1.
         const full = ["description", "primaryApplicationId", "applications", "startupScript", "gitRepo", "initBranch", "startupScriptPath", "dotBrevPath", "baseImage", "vmOnlyMode", "portMappings", "execsV1", "reposV1", "labels", "files", "launchJupyterOnStart", "diskStorage", "isStoppable"];

@@ -25,7 +25,7 @@ import type { OtherProviderId } from "../enums";
 import { gmiDefaultIdc } from "../gmi";
 import { claimWarm, holdFailed, restartWarm, unclaimWarm } from "../brev-park";
 import { ensureTunnel, podTunnel, releaseTunnels, tunnelSettings, type PodTunnelGrant } from "../tunnels";
-import { brevNoStopNote, brevRun, budgetCheck, isOtherPod, isOtherPool, launchTrees, podBaseUrl, podKey, poolDph, poolProvider, providerEnv, providerImpl, providerIssues, releaseOtherPod, weightsPlan } from "../providers";
+import { brevNoStopNote, brevRun, budgetCheck, budgetLine, createFailure, isOtherPod, isOtherPool, launchTrees, podBaseUrl, podKey, poolDph, poolProvider, providerEnv, providerImpl, providerIssues, releaseOtherPod, weightsPlan, type BudgetCheck } from "../providers";
 
 export type Logf = (msg: string) => void;
 
@@ -83,12 +83,26 @@ export interface Projection {
   projected_balance: number;
   floor: number;
   pods: { role: string; pool?: string; what: string; dph: number | null }[];
+  /** Runpod's balance and floor apply (a pool runs on Runpod, or the spec has no GMI / Brev pool). False: balance,
+   * account_spend_per_hr, projected_balance and floor are not Runpod's (zeros): the budgets are the check. */
+  runpod: boolean;
+  /** GMI / Brev: each provider's monthly budget check (providers.ts budgetCheck), with its line. */
+  budgets: (BudgetCheck & { line: string })[];
+}
+/** The projection's money lines for the operation log: Runpod's balance and floor when they apply, then each GMI /
+ * Brev budget (a Brev-only launch printed "balance $0.00 … (floor $8)" before). */
+export function projectionLines(p: Projection): string[] {
+  return [
+    ...(p.runpod ? [`balance $${p.balance.toFixed(2)}, account $${p.account_spend_per_hr.toFixed(2)}/hr, cluster ~$${p.cluster_dph.toFixed(2)}/hr; projected $${p.projected_balance.toFixed(2)} at the deadline (floor $${p.floor})`] : []),
+    ...p.budgets.map((b) => b.line),
+  ];
 }
 /** Price check before a start (or an extend / scale-up): the cluster's $/hr, and the balance at the deadline with the whole account's burn. */
 export async function projectSpend(env: Env, spec: ClusterSpec, opts: { hours: number; extraOnly?: { pool: string; count: number }; runningDph?: number }): Promise<Projection> {
   // Runpod's balance only matters when a pool runs there (GMI / Brev pools: their budgets below).
   const onRunpod = spec.pools.some((p) => !isOtherPool(p) && (!opts.extraOnly || opts.extraOnly.pool === p.id));
-  const acct = onRunpod || !spec.pools.some(isOtherPool) ? await runpod.account(env) : { balance: 0, spendPerHr: 0 };
+  const useRunpod = onRunpod || !spec.pools.some(isOtherPool);
+  const acct = useRunpod ? await runpod.account(env) : { balance: 0, spendPerHr: 0 };
   const pods: Projection["pods"] = [];
   const reasons: string[] = [];
   const otherDph: Partial<Record<OtherProviderId, number>> = {};
@@ -126,18 +140,23 @@ export async function projectSpend(env: Env, spec: ClusterSpec, opts: { hours: n
   }
   const cluster_dph = pods.reduce((s, p) => s + (p.dph ?? 0), 0);
   // GMI / Brev: no balance API, so the provider's monthly budget (providers.ts budgetCheck).
-  for (const [prov, add] of Object.entries(otherDph) as [OtherProviderId, number][]) reasons.push(...(await budgetCheck(env, prov, add, opts.hours)).reasons);
+  const budgets: Projection["budgets"] = [];
+  for (const [prov, add] of Object.entries(otherDph) as [OtherProviderId, number][]) {
+    const b = await budgetCheck(env, prov, add, opts.hours);
+    reasons.push(...b.reasons);
+    budgets.push({ ...b, line: budgetLine(b) });
+  }
   const rpDph = cluster_dph - Object.values(otherDph).reduce((s, x) => s + (x ?? 0), 0);
   // The account's burn includes this cluster's running pods (runningDph) when it replans a running cluster.
   const burn = Math.max(0, acct.spendPerHr - (opts.runningDph ?? 0)) + rpDph;
   const projected = acct.balance - burn * opts.hours;
   const floor = Math.max(spec.balance_floor, defaults.balanceFloor(env));
-  if (onRunpod || !spec.pools.some(isOtherPool)) {
+  if (useRunpod) {
     if (!opts.extraOnly && acct.balance < spec.min_start) reasons.push(`balance $${acct.balance.toFixed(2)} is below the start minimum $${spec.min_start}`);
     if (projected < floor)
       reasons.push(`at $${burn.toFixed(2)}/hr (account $${acct.spendPerHr.toFixed(2)} + cluster $${rpDph.toFixed(2)}) the balance would be $${projected.toFixed(2)} after ${opts.hours.toFixed(2)} h, below the floor $${floor}`);
   }
-  return { ok: reasons.length === 0, reasons, balance: acct.balance, account_spend_per_hr: acct.spendPerHr, cluster_dph, hours: opts.hours, projected_balance: projected, floor, pods };
+  return { ok: reasons.length === 0, reasons, balance: acct.balance, account_spend_per_hr: acct.spendPerHr, cluster_dph, hours: opts.hours, projected_balance: projected, floor, pods, runpod: useRunpod, budgets };
 }
 
 // ---------------- create / patch / delete
@@ -179,6 +198,8 @@ export async function createWorker(env: Env, c: Cluster, poolId: string, image: 
   return null;
 }
 
+/** The log prefix of a GMI / Brev create the provider failed with an error of its own (not stock). */
+export const PROVIDER_ERROR = "PROVIDER ERROR:";
 /** A GMI / Brev worker (providers.ts): its provider's GPU product, the provider env and start command, the price cap; null when it could not be made. */
 async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: string, slot: "workers" | "rolling", log: Logf): Promise<PodRec | null> {
   const prov = poolProvider(pool) as OtherProviderId;
@@ -261,7 +282,12 @@ async function createOtherWorker(env: Env, c: Cluster, pool: PoolSpec, image: st
     try {
       await impl.create(env, { name, image, gpu: pool.provider_gpu!, region: pool.provider_region, env: pe.env, weights: plan, clusterId: c.id, ...(prov === "brev" && pool.container_disk_gb !== undefined ? { diskGb: pool.container_disk_gb } : {}) });
     } catch (e) {
-      log(`${pool.id}: no ${pool.provider_gpu} in ${where}: ${(e as Error).message.slice(0, 200)}`);
+      // A provider-side error (HTTP 5xx that is not about capacity) is not a shortage of stock: said as the provider
+      // said it, and the pool fails instead of waiting for stock (do.ts createFor reads the PROVIDER ERROR prefix).
+      const f = createFailure(e);
+      if (f.kind === "provider")
+        log(`${pool.id}: ${PROVIDER_ERROR} ${impl.title} refused the create of ${pool.provider_gpu} with HTTP ${f.status}: ${f.said.slice(0, 500)}${f.hint ? ` (${f.hint})` : ""}; not a shortage of stock: not retried`);
+      else log(`${pool.id}: no ${pool.provider_gpu} in ${where}: ${f.said.slice(0, 400)}`);
       if (tunnel) for (const m of await releaseTunnels(env, key, "the provider's create failed")) log(`${pool.id}: ${m}`);
       return null;
     }

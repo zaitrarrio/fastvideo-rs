@@ -163,7 +163,13 @@ deploy-gmi-brev.md §6.4), and a monthly budget replaces the balance floor:
 the form's "Monthly budget" field under Provider (saved for the account,
 policy `brev_budget_usd` / `gmi_budget_usd`; unset: the Worker var
 `BREV_BUDGET_USD` / `GMI_BUDGET_USD`). The form says a launch over it at the
-provider before Launch. "Max GPU $/hr" is a per-pod price cap, not the budget. Both are off until the owner
+provider before Launch. "Max GPU $/hr" is a per-pod price cap, not the budget. The launch's
+operation log says the budget, not Runpod's balance: a pod with no Runpod
+pool logs `NVIDIA Brev: $6.04 spent this month + ~$4.04/hr (this launch
+$4.04/hr) for 1.00 h → projected $10.08 at the deadline; budget $100
+(within)` and no balance / floor line (`ops.ts projectionLines`; the price
+API's `runpod: false` and `budgets[]`, shown by the Start dialog, the
+cluster page and the deploy plan). Both are off until the owner
 sets their secrets; the form and `fv-control.sh providers` say why.
 
 **Brev keep-on-stop** (docs/serve/deploy-gmi-brev.md §3.4). Stopping a

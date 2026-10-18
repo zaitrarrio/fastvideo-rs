@@ -524,6 +524,25 @@ edge), same log shipping. What differs (`providerEnv`, `PROVIDER_BOOT`):
   It also appends one line per boot (time, hostname, pod) to
   `~/workspace/fv/boots.log`, and the `host` report carries `boots=<lines>`
   (2 after one stop / start). Env values with a line break are refused.
+- **A create the provider fails with an error of its own** (2026-10-18):
+  Brev answered every create (AWS `g7e.2xlarge`, Nebius
+  `gpu-h200-sxm.1gpu-16vcpu-200gb`, Shadeform `massedcompute_RTXPro6000`)
+  with HTTP 500 `InternalServerError: UnrecognizedClientException: The
+  security token included in the request is invalid. status code: 400 …`,
+  while reads (the instance-type list, workspaces) worked with the same
+  token. That is an AWS error raised inside Brev's backend: fv-control never
+  calls AWS, and its create body is brev-cli main's (the type's own
+  `cloudCredId` from the listing, no location) and unchanged since the
+  successful creates of #64 / #67 / #69. fv-control now logs Brev's own
+  words (`brev.ts brevErrorText`: `<type>: <message>`, whitespace collapsed,
+  400 characters, instead of the raw JSON cut at 300) and classifies the
+  failure (`providers.ts createFailure`): capacity words → no stock (retried
+  as before); any other HTTP 5xx → `PROVIDER ERROR: NVIDIA Brev refused the
+  create of <type> with HTTP 500: … (hint); not a shortage of stock: not
+  retried`. The pool is failed (not "no stock"), the operation fails at once
+  with `no worker pod could be made: the provider failed the create (…)`,
+  and the definition is left `failed` (it stayed `starting` with no pod
+  before). Other 4xx keep the old path.
 - Brev host reports (`control/src/brev-host.ts`): the startup script logs
   to `~/workspace/fv/host.log` and reports to `/ingest/v1/endpoint` with
   the ingest token before anything else, so a VM whose host part fails is

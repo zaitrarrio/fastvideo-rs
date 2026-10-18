@@ -679,33 +679,33 @@ await step("pool env: every worker of the pool; restart by pool or pod", async (
 
 await step("templates and pool presets; a legacy gateway block migrates", async () => {
   const tp = (await call("/api/v1/templates", { headers: T() })).j;
-  assert.deepEqual(tp.templates.map((x) => x.id), ["standard", "tiny-cpu", "ltx", "h3", "fasth3", "streaming", "wan", "longlive"]);
+  assert.deepEqual(tp.templates.map((x) => x.id), ["standard", "tiny-cpu", "h3", "fasth3", "ltx", "wan", "streaming", "longlive"]);
   for (const id of ["ltx-pro", "ltx-a2v", "ltx-ref2v", "h3-ref2v", "fastwan21", "sfwan", "longlive"]) assert.ok(tp.pool_presets.some((p) => p.id === id), id);
   assert.match(tp.pool_presets.find((p) => p.id === "longlive").licence, /non-commercial/i);
-  assert.equal(tp.ltx.pools.length, 4);
+  assert.equal(tp.ltx.pools.length, 1, "a family template is one pool");
   const r = await call("/api/v1/clusters", { method: "POST", body: { spec: { name: "ltxs", template: "ltx", gateway: { fal_apps: ["lightricks/ltx-2.5", "fal-ai/ltx-2.3"], protocols: { fastwan: true }, reactor_model: null } } }, headers: T() });
   assert.equal(r.status, 201, JSON.stringify(r.j));
   const s = r.j.cluster.spec;
-  assert.deepEqual(s.pools.map((p) => p.id), ["ltx", "ltx-pro", "ltx-a2v", "ltx-ref2v"]);
-  assert.match(s.pools[1].config_toml, /recipe = "ltx-pro"/);
+  assert.deepEqual(s.pools.map((p) => p.id), ["ltx-family"]);
+  assert.match(s.pools[0].config_toml, /recipe = "ltx-pro"/);
   assert.equal(s.gateway, undefined, "the retired gateway block is dropped");
   assert.equal(s.control_plane, "edge");
   assert.equal(s.auth, "keys");
   // A bare preset id fills in; a Plug recipe is refused.
   const ok = await call(`/api/v1/clusters/${r.j.cluster.id}/spec`, { method: "PUT", body: { spec: { ...s, pools: [...s.pools, { id: "longlive", count: 0 }] } }, headers: T() });
   assert.equal(ok.status, 200, JSON.stringify(ok.j));
-  assert.equal(ok.j.cluster.spec.pools[4].variant, "sfwan");
+  assert.equal(ok.j.cluster.spec.pools[1].variant, "sfwan");
   const bad = await call(`/api/v1/clusters/${r.j.cluster.id}/spec`, { method: "PUT", body: { spec: { ...s, pools: [{ ...s.pools[0], models: [{ id: "x", family: "h3", recipe: "h3-plug-4step" }] }] } }, headers: T() });
   assert.equal(bad.status, 400);
   assert.match(bad.j.error, /not in the fv-serve catalog/);
   // Its pool env and suggestions.
-  assert.equal((await call(`/api/v1/env/pool/ltxs:ltx-pro/FASTVIDEO_ATTN_SAGE`, { method: "PUT", body: { value: "0" }, headers: T() })).status, 200);
+  assert.equal((await call(`/api/v1/env/pool/ltxs:ltx-family/FASTVIDEO_ATTN_SAGE`, { method: "PUT", body: { value: "0" }, headers: T() })).status, 200);
   const dyn = (await call(`/api/v1/schemas/dynamic?cluster=${r.j.cluster.id}`, { headers: T() })).j;
   assert.ok(dyn.recipes.some((x) => x.id === "wan5b-plug-4step" && /NOT servable/.test(x.detail)));
   assert.ok(dyn.fal_apps.some((x) => x.id === "fal-ai/ltx-2.3-quality"));
   assert.ok(dyn.model_ids.some((x) => x.id === "ltx25-distill-dense"));
   assert.match(dyn.env_keys.find((k) => k.id === "FASTVIDEO_ATTN_SAGE").detail, /in use: (cluster|pool)/);
-  assert.equal(dyn.variants.find((v) => v.id === "ltx").detail, "presets: ltx, ltx-pro, ltx-a2v, ltx-ref2v");
+  assert.equal(dyn.variants.find((v) => v.id === "ltx").detail, "presets: ltx, ltx-pro, ltx-a2v, ltx-ref2v, ltx-family");
   // Deleting the definition drops its pool env.
   assert.equal((await call(`/api/v1/clusters/${r.j.cluster.id}`, { method: "DELETE", headers: T() })).status, 200);
   assert.equal(JSON.parse(d1Exec(w.dir, `SELECT COUNT(*) AS n FROM env_vars WHERE scope = 'pool' AND scope_id LIKE '${r.j.cluster.id}:%'`))[0].results[0].n, 0);
@@ -1446,6 +1446,25 @@ await step("GMI / Brev standalone pods: checks, create → running → tunnel re
   assert.match(op.error, /NVIDIA Brev: .* over the monthly budget \$2 \(raise it: the launch form's "Monthly budget" field or Settings → Policies brev_budget_usd\)/);
   assert.equal(b.workspaces.length, 0, "no VM before the budget check");
   await call("/api/v1/standalone/brevbig", { method: "DELETE", headers: T() });
+  // Brev's backend fails the create with an error of its own (live 2026-10-18, every type): said in Brev's words as a
+  // provider error, not "NO STOCK"; the operation fails at once and the definition is failed, not left "starting".
+  // The log's money line is the Brev budget, not Runpod's balance and floor.
+  b.createFail = { status: 500, body: { errors: [{ type: "InternalServerError", message: "UnrecognizedClientException: The security token included in the request is invalid.\n\tstatus code: 400, request id: 1234" }] } };
+  r = await call("/api/v1/standalone", { method: "POST", body: { name: "brev500", provider: "brev", provider_gpu: "g5.xlarge-test", ...fake, deadline_min: 20 }, headers: T() });
+  assert.equal(r.status, 201);
+  op = await waitOp(r.j.pod.id, "up");
+  delete b.createFail;
+  const l500 = op.log.map((l) => l.msg);
+  assert.equal(op.status, "failed");
+  assert.match(op.error, /^no worker pod could be made: the provider failed the create \(pod: NVIDIA Brev refused the create of g5\.xlarge-test with HTTP 500: brev POST api\/organizations\/<org>\/workspaces: 500 InternalServerError: UnrecognizedClientException: The security token included in the request is invalid\. status code: 400, request id: 1234 \(a cloud credential was refused inside the provider's backend/, op.error);
+  assert.ok(l500.some((m) => /^pod: PROVIDER ERROR: NVIDIA Brev refused the create .*; not a shortage of stock: not retried$/.test(m)), JSON.stringify(l500));
+  assert.ok(!l500.some((m) => /NO STOCK|no g5\.xlarge-test in brev/.test(m)), JSON.stringify(l500));
+  assert.ok(l500.some((m) => /^NVIDIA Brev: \$[\d.]+ spent this month \+ ~\$[\d.]+\/hr \(this launch \$1\.00\/hr.*\) for 0\.33 h → projected \$[\d.]+ at the deadline; budget \$2 \(within\)$/.test(m)), JSON.stringify(l500));
+  assert.ok(!l500.some((m) => /floor \$|^balance \$/.test(m)), "no Runpod balance / floor line for a Brev-only launch");
+  sp = (await call("/api/v1/standalone/brev500", { headers: T() })).j.pod;
+  assert.deepEqual([sp.status, sp.pool_status?.status, sp.deadline], ["failed", "failed", null], JSON.stringify(sp));
+  assert.equal(b.workspaces.length, 0);
+  assert.equal((await call("/api/v1/standalone/brev500", { method: "DELETE", headers: T() })).status, 200, "no pod: deleted at once");
   // Brev: a 20-minute fake-engine VM end to end, launched with the CLI.
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");

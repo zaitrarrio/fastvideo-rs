@@ -921,8 +921,14 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
         "div",
         { class: `cf-pricebox${priceBusy ? " stale" : ""}` },
         h("div", { class: "cf-big" }, `${fmt$(p.cluster_dph)}/hr`, h("span", { class: "muted small" }, ` · ${fmt$(p.cluster_dph * p.hours)} for ${p.hours.toFixed(1)} h`)),
-        h("dl", { class: "kv" }, h("dt", {}, "balance"), h("dd", {}, `${fmt$(p.balance)} (account ${fmt$(p.account_spend_per_hr)}/hr)`), h("dt", {}, "at the deadline"), h("dd", {}, `${fmt$(p.projected_balance)} (floor ${fmt$(p.floor, 0)})`)),
-        p.ok ? h("p", { class: "small" }, badge("within the floor", "good")) : h("div", {}, ...(p.reasons || []).map((r: string) => h("p", { class: "small" }, badge("Start would be refused", "critical"), " ", r))),
+        // Runpod's balance and floor only when a pool runs there; GMI / Brev pools: their monthly budgets.
+        h(
+          "dl",
+          { class: "kv" },
+          ...(p.runpod === false ? [] : [h("dt", {}, "balance"), h("dd", {}, `${fmt$(p.balance)} (account ${fmt$(p.account_spend_per_hr)}/hr)`), h("dt", {}, "at the deadline"), h("dd", {}, `${fmt$(p.projected_balance)} (floor ${fmt$(p.floor, 0)})`)]),
+          ...(p.budgets || []).flatMap((b: any) => [h("dt", {}, `${b.provider} budget`), h("dd", { "data-budget-line": b.provider }, b.line)]),
+        ),
+        p.ok ? h("p", { class: "small" }, badge(p.runpod === false ? "within the budget" : "within the floor", "good")) : h("div", {}, ...(p.reasons || []).map((r: string) => h("p", { class: "small" }, badge("Start would be refused", "critical"), " ", r))),
         a
           ? h(
               "div",
@@ -1056,7 +1062,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
       h(
         "div",
         { class: "row", style: "margin-top:8px" },
-        !running ? b("Start", () => runOp("start", {}, `Start ${c.name}? Price check: ${price ? `${fmt$(price.cluster_dph)}/hr, ${price.ok ? "within the floor" : "REFUSED: " + price.reasons.join("; ")}` : "runs first"}.${dirty ? "\n\nYour unsaved edits are NOT used: Start uses the saved spec." : ""}`), "primary", dirty) : null,
+        !running ? b("Start", () => runOp("start", {}, `Start ${c.name}? Price check: ${price ? `${fmt$(price.cluster_dph)}/hr, ${price.ok ? (price.runpod === false ? "within the budget" : "within the floor") : "REFUSED: " + price.reasons.join("; ")}` : "runs first"}.${dirty ? "\n\nYour unsaved edits are NOT used: Start uses the saved spec." : ""}`), "primary", dirty) : null,
         running ? b("Stop", () => runOp("stop", {}, `Stop ${c.name}? Its Runpod / GMI pods are deleted; its Brev VMs are stopped and kept (storage billed, reused by the next launch; never deleted by fv-control).`), "danger") : null,
         running ? b("Extend…", async () => { const m = await askExtend(api, `Extend ${c.name}`); if (m) runOp("extend", { minutes: m }, `Extend ${c.name} by ${m} min?`); }) : null,
         op ? b("Cancel operation", () => runOp("cancel", {}, "Cancel the running operation? Pods it created stay (the backstops hold them).")) : null,
