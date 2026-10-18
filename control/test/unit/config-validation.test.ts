@@ -49,7 +49,7 @@ describe("cluster-spec", () => {
   const base = () => normalizeSpec({ name: "c1", template: "tiny-cpu" });
   const gpu = () => normalizeSpec({ name: "c2" });
   it("templates are valid", () => {
-    for (const t of ["standard", "tiny-cpu", "ltx", "h3", "wan", "longlive"]) ok("cluster-spec", normalizeSpec({ name: "t", template: t }));
+    for (const t of ["standard", "tiny-cpu", "ltx", "h3", "fasth3", "streaming", "wan", "longlive"]) ok("cluster-spec", normalizeSpec({ name: "t", template: t }));
   });
   it("name, image, regions, enums", () => {
     expect(bad("cluster-spec", { ...base(), name: "new" })).toContain("name");

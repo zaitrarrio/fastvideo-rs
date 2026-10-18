@@ -289,7 +289,7 @@ export interface WarmCandidate {
 /** Parked / held instances of an instance type a launch needing `want` may reuse, best first: most trees at the pinned
  * revision, then parked before held, then the newest. Any of the type with the disk for the trees qualifies (the
  * missing ones download onto it); a held one once heldReuseAfterMs passed. Only ours (fv- names). */
-export async function warmCandidates(env: Env, instanceType: string, want: TreeRevs, t = now()): Promise<WarmCandidate[]> {
+export async function warmCandidates(env: Env, instanceType: string, want: TreeRevs, t = now(), o: { minDiskGb?: number } = {}): Promise<WarmCandidate[]> {
   const rows = (await env.DB.prepare(`SELECT ${COLS} FROM brev_instances WHERE state IN ${PARKED_STATES} AND instance_type = ?`).bind(instanceType).all<BrevInstance>()).results || [];
   const out: WarmCandidate[] = [];
   const cool = heldReuseAfterMs(env);
@@ -299,6 +299,8 @@ export async function warmCandidates(env: Env, instanceType: string, want: TreeR
     // Given back after its restart found no capacity: not the launch's next pick for the same cooldown.
     if ((row.note || "").startsWith(NO_CAPACITY_PREFIX) && t - row.updated_at < cool) continue;
     if (!fitsDisk(row, want)) continue;
+    // The pool asked for a disk size (container_disk_gb): a smaller (or unknown) disk is not reused.
+    if (o.minDiskGb !== undefined && (row.disk_gb ?? 0) < o.minDiskGb) continue;
     const have = parseJson<TreeRevs>(row.trees, {});
     out.push({ row, matched: Object.keys(want).filter((k) => have[k] === want[k]), missing: Object.keys(want).filter((k) => have[k] !== want[k]) });
   }
@@ -306,8 +308,8 @@ export async function warmCandidates(env: Env, instanceType: string, want: TreeR
   return out.sort((a, b) => b.matched.length - a.matched.length || held(a) - held(b) || (b.row.parked_at ?? 0) - (a.row.parked_at ?? 0));
 }
 /** Claims the best parked / held instance for a launch (-> restarting, atomically); null: none of the type fits. */
-export async function claimWarm(env: Env, instanceType: string, want: TreeRevs): Promise<WarmCandidate | null> {
-  for (const c of await warmCandidates(env, instanceType, want)) {
+export async function claimWarm(env: Env, instanceType: string, want: TreeRevs, o: { minDiskGb?: number } = {}): Promise<WarmCandidate | null> {
+  for (const c of await warmCandidates(env, instanceType, want, now(), o)) {
     const r = await env.DB.prepare("UPDATE brev_instances SET state = 'restarting', updated_at = ? WHERE workspace_id = ? AND state = ?").bind(now(), c.row.workspace_id, c.row.state).run();
     if (Number(r.meta?.changes ?? 0) === 1) return c;
   }

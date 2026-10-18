@@ -102,7 +102,7 @@ try {
     if (ops.operations[0]?.status !== "running") break;
     await new Promise((r) => setTimeout(r, 1000));
   }
-  const big = await api("/api/v1/clusters", { spec: { name: "h3-and-ltx", template: "h3" } });
+  const big = await api("/api/v1/clusters", { spec: { name: "h3-and-ltx", pools: [{ id: "h3-turbo" }, { id: "h3-max" }, { id: "h3-ref2v" }] } });
   const now = Date.now();
   const sqlFile = `${w.dir}/seed.sql`;
   writeFileSync(sqlFile, seedSql(big.cluster.id, now).join(";\n") + ";\n");

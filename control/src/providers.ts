@@ -25,7 +25,7 @@
 //  - no balance API: a monthly budget per provider (GMI_BUDGET_USD,
 //    BREV_BUDGET_USD) instead of the balance floor;
 //  - Runpod secret references do not resolve there: FV_PROVIDER_SECRET_ENV.
-import { brev, brevInstanceTypes, brevOff, brevPrice, brevPriceLive, brevTaskLine } from "./brev";
+import { brev, brevInstanceTypes, brevOff, brevPrice, brevPriceLive, brevTaskLine, type BrevType } from "./brev";
 import { recordBoot } from "./boottime";
 import { adoptAndStop, bootEstimate, brevDiskGb, treesGb, brevRowById, brevRunScript, brevStartup, markBrevDeleted, newBootToken, parkedDph, recordBrevCreate, releaseBrev, restartDiag, warmCandidates, type Release, type TreeRevs } from "./brev-park";
 import { BAKED_CONFIGS } from "./cluster/image-configs";
@@ -94,6 +94,8 @@ export interface ProviderLaunch {
   weights?: WeightsPlan;
   /** The cluster it serves (Brev's record). */
   clusterId?: string;
+  /** Brev: the VM's disk in GB the pool asked for (container_disk_gb); unset: sized for the weights (brevDisk). */
+  diskGb?: number;
 }
 export interface ComputeProvider {
   id: OtherProviderId;
@@ -188,7 +190,7 @@ const BREV: ComputeProvider = {
     // it: brev-park.ts, owner rule 2026-10-13); its price is recorded for the ledger.
     const { usd_per_hr, info } = await brevPriceLive(env, req.gpu);
     const trees = req.weights?.source === "hub" || req.weights?.source === "r2" ? req.weights.trees : [];
-    const disk = brevDiskGb(trees);
+    const disk = brevDisk(info, trees, req.diskGb);
     const token = newBootToken();
     const id = await brev.create(env, { name: req.name, instanceType: req.gpu, startupScript: brevStartup(`${(env.PUBLIC_URL || "").replace(/\/$/, "")}/ingest/v1/brev-boot`, token), diskStorage: `${disk}Gi`, isStoppable: env.BREV_IS_STOPPABLE !== "0" && !!info?.stoppable });
     await recordBrevCreate(env, {
@@ -358,7 +360,7 @@ export function weightsPlan(pool: PoolSpec, env?: Env): WeightsPlan {
  * cannot stop is offered like any other, its detail saying that a stop deletes it: owner rule 2026-10-13),
  * each with its $/hr, deploy time and parked / held instances. A type the live list does not show (or an unreachable
  * list) stays, last. */
-export async function brevGpuOptions(env: Env): Promise<{ id: string; detail: string; provider: "brev"; stoppable: boolean | null; usd_per_hr: number | null; parked: number }[]> {
+export async function brevGpuOptions(env: Env): Promise<{ id: string; detail: string; provider: "brev"; stoppable: boolean | null; usd_per_hr: number | null; parked: number; disk: BrevDiskInfo | null }[]> {
   const types = await brev.types(env).catch(() => []);
   const parked = (await env.DB.prepare("SELECT instance_type, COUNT(*) AS n FROM brev_instances WHERE state IN ('parked', 'held') GROUP BY instance_type").all<{ instance_type: string; n: number }>()).results || [];
   const out = brevInstanceTypes(env).map((id) => {
@@ -367,10 +369,19 @@ export async function brevGpuOptions(env: Env): Promise<{ id: string; detail: st
     const price = brevPrice(env, id) ?? t?.usd_per_hr ?? null;
     const stop = !t ? "not in Brev's list" : t.stoppable ? "stoppable: stopped and kept on stop (reused by the next launch)" : "WARNING: can't be stopped: a stop deletes it (its disk and weights go too)";
     const bits = ["NVIDIA Brev", price !== null ? `$${price.toFixed(2)}/hr` : "price unknown", stop, ...(t?.deploy_s ? [`deploy ~${Math.round(t.deploy_s / 60)} min`] : []), ...(n ? [`${n} parked / held`] : [])];
-    return { id, detail: bits.join(" · "), provider: "brev" as const, stoppable: t ? t.stoppable : null, usd_per_hr: price, parked: n };
+    const disk: BrevDiskInfo | null = t ? { kind: !t.elastic_disk && t.fixed_disk_gb ? "fixed" : t.elastic_disk ? "elastic" : null, gb: t.fixed_disk_gb, min_gb: t.disk_min_gb, max_gb: t.disk_max_gb, rule: brevDiskRule(t) } : null;
+    return { id, detail: bits.join(" · "), provider: "brev" as const, stoppable: t ? t.stoppable : null, usd_per_hr: price, parked: n, disk };
   });
   const rank = (o: { stoppable: boolean | null }) => (o.stoppable === true ? 0 : o.stoppable === false ? 1 : 2);
   return out.sort((a, b) => rank(a) - rank(b));
+}
+/** A Brev instance type's disk for the forms: fixed (its size) or elastic (its range), and the rule in words. */
+export interface BrevDiskInfo {
+  kind: "fixed" | "elastic" | null;
+  gb: number | null;
+  min_gb: number | null;
+  max_gb: number | null;
+  rule: string;
 }
 /** Owner decision 2026-10-13 ("On Brev we don't want to filter out non-stoppable VMs; we'll just treat them like any
  * other Brev VM"): the warning a type Brev cannot stop gets (launch form, validator, launch log); null when the type is
@@ -414,7 +425,7 @@ export async function brevOutlook(env: Env, pool: PoolSpec): Promise<{ warm: boo
     return { warm: false, stoppable, instance: null, download_gb: e.download_gb, boot_s: e.boot_s, note: `cold: downloads ${trees.join(", ")} (~${e.download_gb} GB${plan.source === "r2" ? " from R2" : " from the Hub"}): boot ${min(e.boot_s)}; WARNING: ${ns || `${pool.provider_gpu} can't be stopped: a stop deletes it (its disk and weights go too)`}` };
   }
   // Reuse (brev-park.ts): a parked / held instance of the type, the one holding most trees first; the missing ones download.
-  const c = (await warmCandidates(env, pool.provider_gpu, want))[0];
+  const c = (await warmCandidates(env, pool.provider_gpu, want, undefined, { minDiskGb: pool.container_disk_gb }))[0];
   if (c) {
     const e = bootEstimate(info, trees, c.matched, r2);
     const what = `${c.row.state} ${c.row.name}${c.row.state === "held" && c.row.note ? ` (held: ${c.row.note.slice(0, 120)})` : ""}`;
@@ -914,6 +925,48 @@ function hubIssues(env: Env, p: PoolSpec, i: number): { path: (string | number)[
 /** A Runpod pod's container disk for these Hub trees (the size table, brev-park.ts treesGb): × 1.15 + 30 GB. */
 export const hubDiskGb = (trees: string[]) => Math.ceil(treesGb(trees) * 1.15 + 30);
 
+// ---------------------------------------------------------------- NVIDIA Brev: the VM's disk
+export { BREV_DISK_MAX_GB, RUNPOD_DISK_MAX_GB } from "./enums";
+/** The least disk a Brev VM needs for these trees: the trees + 40 GB (image, Docker, scratch), as a reuse checks
+ * (brev-park.ts fitsDisk); at least 50 GB. */
+export const brevDiskNeedGb = (trees: string[]) => Math.max(50, Math.ceil(treesGb(trees) + 40));
+/** The disk a Brev VM is created with (GB): the pool's container_disk_gb when set, else fv-control's size for the trees
+ * (brev-park.ts brevDiskGb: x1.3 + 40, at least 200), kept inside the type's elastic range when the list gives one. */
+export function brevDisk(info: Pick<BrevType, "disk_min_gb" | "disk_max_gb"> | null, trees: string[], want?: number): number {
+  if (want !== undefined) return want;
+  let d = brevDiskGb(trees);
+  if (info?.disk_max_gb) d = Math.min(d, info.disk_max_gb);
+  if (info?.disk_min_gb) d = Math.max(d, info.disk_min_gb);
+  return d;
+}
+/** What a Brev instance type allows for its disk, in words (the forms' help, the validator). */
+export function brevDiskRule(info: Pick<BrevType, "type" | "elastic_disk" | "fixed_disk_gb" | "disk_min_gb" | "disk_max_gb"> | null): string {
+  if (!info) return "the instance type is not in Brev's list now: its disk range is unknown";
+  if (!info.elastic_disk && info.fixed_disk_gb) return `${info.type} has a fixed ${info.fixed_disk_gb} GB disk (Brev does not size it)`;
+  if (info.elastic_disk) return `${info.type}: an elastic disk of ${info.disk_min_gb ?? "?"}-${info.disk_max_gb ?? "?"} GB, sized at create`;
+  return `${info.type}: Brev's list gives no disk size`;
+}
+/**
+ * A Brev pool's disk (container_disk_gb, the VM's diskStorage) against its instance type (the live list): a fixed-disk
+ * type takes no other size; an elastic one its storage classes' range. Path-anchored issues; none when the list is
+ * unreachable or the type is not in it (the create then says).
+ */
+export async function brevDiskIssues(env: Env, spec: { pools: PoolSpec[] }): Promise<{ path: (string | number)[]; message: string }[]> {
+  const out: { path: (string | number)[]; message: string }[] = [];
+  for (const [i, p] of spec.pools.entries()) {
+    if (poolProvider(p) !== "brev" || !p.provider_gpu || p.container_disk_gb === undefined) continue;
+    const info = await brev.type(env, p.provider_gpu);
+    if (!info) continue;
+    const v = p.container_disk_gb;
+    const at = ["pools", i, "container_disk_gb"];
+    if (!info.elastic_disk && info.fixed_disk_gb) {
+      if (v !== info.fixed_disk_gb) out.push({ path: at, message: `${brevDiskRule(info)}: leave the disk unset (or ${info.fixed_disk_gb})` });
+    } else if (info.disk_min_gb !== null && v < info.disk_min_gb) out.push({ path: at, message: `${v} GB is below ${info.type}'s smallest disk (${info.disk_min_gb} GB)` });
+    else if (info.disk_max_gb !== null && v > info.disk_max_gb) out.push({ path: at, message: `${v} GB is above ${info.type}'s largest disk (${info.disk_max_gb} GB)` });
+  }
+  return out;
+}
+
 /** Every reason a spec's GMI / Brev pools cannot start, at the field it is about (the launch form, `up`'s first step). */
 export function providerIssues(env: Env, spec: { pools: PoolSpec[] }): { path: (string | number)[]; message: string }[] {
   const out: { path: (string | number)[]; message: string }[] = [];
@@ -960,6 +1013,15 @@ export function providerIssues(env: Env, spec: { pools: PoolSpec[] }): { path: (
       if (!plan.trees.length) out.push({ path: ["pools", i, "weights_source"], message: "the pool's config loads no weight tree fv-control knows: weights_source none" });
     }
     if (plan.source === "hub") out.push(...hubIssues(env, p, i));
+    // NVIDIA Brev: the VM's disk (container_disk_gb) holds the image and the trees (brevDiskIssues: the type's range).
+    if (p.container_disk_gb !== undefined) {
+      // (GMI: refused by the schema, schemas.ts providerRules.)
+      if (prov === "brev") {
+        const trees = plan.source === "none" ? [] : plan.trees;
+        const need = brevDiskNeedGb(trees);
+        if (p.container_disk_gb < need) out.push({ path: ["pools", i, "container_disk_gb"], message: `${p.container_disk_gb} GB is too small for the VM${trees.length ? ` and ${trees.join(", ")}` : ""}: at least ${need} GB (unset: fv-control sizes it)` });
+      }
+    }
   });
   return out;
 }

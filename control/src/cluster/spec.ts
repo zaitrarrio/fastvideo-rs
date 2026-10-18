@@ -61,12 +61,35 @@ queue_max = 8
 body_max_mb = 16
 `;
 
+// ---------------------------------------------------------------- templates
+// The h3, fasth3 and streaming templates are derived from the pool presets and the serve catalog (catalog.json), not
+// listed by hand: a new preset joins them when its models qualify. One pool per preset: every H3 variant is its own
+// DiT (40-66 GB; Ref2VA a second full DiT, VDN-H3 96 GB cards) with its own worker config and image variant, so the
+// variants cannot all be resident on one GPU, and a single process swapping between them (engine.swap, as
+// runpod-h3-ref2v.toml does for its two models) would mix image variants and NVFP4 / MXFP8 paths no config was
+// measured with. Each pool runs one GPU per pod.
+const recipeStream = new Map(CATALOG.recipes.map((r) => [r.id, (r as { stream?: string }).stream ?? null]));
+/** The presets every one of whose models matches (in the presets' order). */
+export function presetsWhere(ok: (m: ModelRef) => boolean): string[] {
+  return POOL_PRESETS.filter((p) => (p.pool.models || []).length > 0 && (p.pool.models || []).every(ok)).map((p) => p.id);
+}
+/** Every H3 variant the serve catalog offers with a pool preset (turbo, max, Ref2V, the NVFP4 tier, previews, Trim,
+ * VDN-H3, the turbo LoRAs). */
+export const H3_TEMPLATE_POOLS = presetsWhere((m) => m.family === "h3");
+/** Every FastH3 variant: the H3 presets whose models are FastH3 releases (model ids fasth3*). */
+export const FASTH3_TEMPLATE_POOLS = presetsWhere((m) => m.family === "h3" && /^fasth3/.test(m.id));
+/** Every streaming model: presets whose recipes the catalog marks causal (caps.rs StreamCaps::Causal: SF-Wan and
+ * LongLive on its engine). */
+export const STREAMING_TEMPLATE_POOLS = presetsWhere((m) => recipeStream.get(m.recipe) === "causal");
+
 /** Cluster templates (GET /api/v1/templates): standard, tiny-cpu, and preset groups. */
 export const TEMPLATES: Record<string, { title: string; pools: string[] }> = {
   standard: { title: "h3-turbo, h3-max, ltx, wan GPU pools", pools: ["h3-turbo", "h3-max", "ltx", "wan"] },
   "tiny-cpu": { title: "1 fake-engine CPU worker (tests)", pools: [] },
   ltx: { title: "LTX: turbo, pro, guided A2V and Ref2V pools", pools: ["ltx", "ltx-pro", "ltx-a2v", "ltx-ref2v"] },
-  h3: { title: "H3: turbo, max and Ref2V pools", pools: ["h3-turbo", "h3-max", "h3-ref2v"] },
+  h3: { title: `H3: every H3 variant, one pool each (${H3_TEMPLATE_POOLS.length} pools, one GPU per pod)`, pools: H3_TEMPLATE_POOLS },
+  fasth3: { title: `FastH3: every FastH3 variant, one pool each (${FASTH3_TEMPLATE_POOLS.length} pools, one GPU per pod)`, pools: FASTH3_TEMPLATE_POOLS },
+  streaming: { title: `Streaming: every causal streaming model (${STREAMING_TEMPLATE_POOLS.join(", ")}; LongLive weights NON-COMMERCIAL)`, pools: STREAMING_TEMPLATE_POOLS },
   wan: { title: "Wan: 2.2 5B, FastWan 1.3B and SF-Wan streaming pools", pools: ["wan", "fastwan21", "sfwan"] },
   longlive: { title: "LongLive-1.3B streaming pool (NON-COMMERCIAL weights)", pools: ["longlive"] },
 };

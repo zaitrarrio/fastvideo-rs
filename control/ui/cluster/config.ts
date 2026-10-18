@@ -699,6 +699,8 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
         optional: true,
         onSet: () => {
           const q = spec.pools[i];
+          // Runpod's container disk and a Brev VM's disk are different sizes (GMI has none): cleared on a switch.
+          delete q.container_disk_gb;
           if (q.provider && q.provider !== "runpod") {
             delete q.gpu_types, delete q.cpu_flavors, delete q.vcpu, delete q.regions, delete q.data_centers, delete q.allowed_cuda;
             q.compute = "GPU";
@@ -732,9 +734,17 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
           ),
           p.weights_source === "hub" ? fieldBox(P("hub_download_approved"), "Hub download", toggle(P("hub_download_approved"), "the owner approved this download"), describe(["pools", 0, "hub_download_approved"])) : null,
         ];
+    /** NVIDIA Brev: what the pool's instance type allows for its disk (the provider's details: brevGpuOptions). */
+    function brevDisk(q: any): { help: string; placeholder: string } {
+      const auto = "Unset: fv-control sizes it for the weights (the trees × 1.3 + 40 GB, at least 200 GB).";
+      const d = (dyn.provider_gpus || []).find((g: any) => g.provider === "brev" && g.id === q.provider_gpu)?.disk;
+      if (!q.provider_gpu || !d) return { help: `The Brev VM's disk (the image, Docker and the weights), within what the instance type allows. ${auto}`, placeholder: "sized for the weights" };
+      if (d.kind === "fixed" && d.gb) return { help: `${d.rule}: leave it unset.`, placeholder: `${d.gb} (fixed)` };
+      return { help: `${d.rule}; at least the weights + 40 GB. ${auto}`, placeholder: "sized for the weights" };
+    }
     const otherBoxes = other
       ? [
-          fieldBox(P("provider_gpu"), "GPU product", select(P("provider_gpu"), (dyn.provider_gpus || []).filter((g: any) => g.provider === p.provider).map((g: any) => [g.id, g.id])), describe(["pools", 0, "provider_gpu"])),
+          fieldBox(P("provider_gpu"), "GPU product", select(P("provider_gpu"), (dyn.provider_gpus || []).filter((g: any) => g.provider === p.provider).map((g: any) => [g.id, g.id]), { onSet: () => drawForm() }), describe(["pools", 0, "provider_gpu"])),
           p.provider === "gmi" ? fieldBox(P("provider_region"), "IDC", text(P("provider_region"), { optional: true, mono: true, placeholder: (dyn.provider_regions || [])[0]?.id || "GMI_DEFAULT_IDC" }), describe(["pools", 0, "provider_region"])) : null,
         ]
       : [];
@@ -774,7 +784,12 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
         : null,
       !other && !isCpu ? fieldBox(P("allowed_cuda"), "Allowed CUDA (host filter)", multi(P("allowed_cuda"), enumOf(["pools", 0, "allowed_cuda", 0]).map((v) => ({ id: v, label: v })), { optional: true }), describe(["pools", 0, "allowed_cuda"]), true) : null,
       isCpu && !other ? fieldBox(P("vcpu"), "vCPUs", select(P("vcpu") as Path, enumOf(["pools", 0, "vcpu"]).map((v) => [v, `${v} vCPU`]), { optional: true, num: true }), "A Runpod CPU instance size (default 2).") : null,
-      fieldBox(P("container_disk_gb"), "Container disk (GB)", num(P("container_disk_gb"), { min: 5, max: 500, step: 5, optional: true, placeholder: isCpu ? "10" : "40" })),
+      // Runpod: the container disk (5-500 GB). NVIDIA Brev: the VM's disk (diskStorage), within the type's range. GMI: none.
+      p.provider === "gmi"
+        ? null
+        : p.provider === "brev"
+          ? fieldBox(P("container_disk_gb"), "Disk (GB, the Brev VM)", num(P("container_disk_gb"), { min: 5, max: 16384, step: 10, optional: true, placeholder: brevDisk(p).placeholder }), brevDisk(p).help)
+          : fieldBox(P("container_disk_gb"), "Container disk (GB)", num(P("container_disk_gb"), { min: 5, max: 500, step: 5, optional: true, placeholder: isCpu ? "10" : "40" })),
       // The prompt upsampler's local sidecar (docs/serve/upsampler-local.md): llama-server next to fv-serve, default off.
       isCpu && !other ? null : fieldBox(P("upsampler_local"), "Prompt upsampler (local)", toggle(P("upsampler_local"), "llama-server sidecar (Qwen3-VL-4B-Instruct) on the pod's GPU"), describe(["pools", 0, "upsampler_local"])),
       other ? null : fieldBox(P("volume"), "Weights volume", volSel, "Mounted at /workspace."),

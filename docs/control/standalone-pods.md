@@ -108,7 +108,21 @@ data centre too. `data_centers` are tried in order, each with every
 a data centre without the volume). Unset, the pod runs in EU-RO-1.
 With r2 and hub fv-control sizes the container disk from the trees (unset
 `container_disk_gb`; at most Runpod's 500 GB, a bigger set is refused); a
-network volume is never written. The Hub boot (`providers.ts HUB_RUNPOD_SH`,
+network volume is never written.
+
+**NVIDIA Brev disk** (owner 2026-10-18): on provider brev `container_disk_gb`
+is the VM's disk ("Disk (Brev VM)" on the launch form and the cluster pool
+editor), sent as Brev's `diskStorage` at create and recorded with the VM.
+It is checked against the instance type in Brev's list: an elastic type
+takes its storage classes' range (e.g. 10–16384 GB), a fixed-disk type
+(`850GiB` ssd) only its own size (leave it unset), and every size at least
+the trees + 40 GB. Unset, fv-control sizes it (the trees × 1.3 + 40, at
+least 200 GB, inside the type's range). A parked VM is reused only when its
+disk is at least the size asked for. The pod's page shows the definition's
+disk and the VM's disk as created (`pod.brev.disk_gb`). GMI's container disk
+is the product's: `container_disk_gb` is refused there.
+
+![Brev disk on the launch form](img/brev-disk-standalone-form.png) The Hub boot (`providers.ts HUB_RUNPOD_SH`,
 inserted before fv-serve by `payloads.ts bootFor`) logs each tree, a `step
 hub <tree>: <s>` line per tree and `step weights: <s> (Hub)`; a failure
 exits after 30 s, Runpod restarts the container and the complete trees are

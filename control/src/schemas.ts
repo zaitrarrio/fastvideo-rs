@@ -10,7 +10,9 @@ import type { Policies } from "./alerts";
 import CATALOG from "./cluster/catalog.json";
 import { AVAILABLE_REGIONS, REGIONS, type RegionId } from "./cluster/regions";
 import {
+  BREV_DISK_MAX_GB,
   BUILD_VCPUS,
+  RUNPOD_DISK_MAX_GB,
   CHANNEL_RE,
   CONFIG_PATH_RE,
   CPU_FLAVORS,
@@ -99,9 +101,24 @@ export const dcListProblem = (dcs: readonly string[]): string | null => (dcs.sli
 /** A data centre with an fv weights volume (CLAUDE.md: EU-RO-1 only now). */
 export const volumeDc = (dc: string): boolean => AVAILABLE_REGIONS.some((r) => REGIONS[r].dc === dc);
 const NEEDS_NO_VOLUME = `data centres outside the weights volume's need a pod without the volume: weights_source r2 (the R2 weights store) or none on a GPU pod, volume off on a CPU pod (a volume pod runs in ${AVAILABLE_REGIONS.map((r) => REGIONS[r].dc).join(", ")}: region)`;
+/** A pool's / launch's disk (GB): Runpod's container disk, or an NVIDIA Brev VM's disk (providers.ts brevDisk). */
+const diskGb = z
+  .number()
+  .int()
+  .min(5)
+  .max(BREV_DISK_MAX_GB)
+  .optional()
+  .meta({ "x-unit": "GB", "x-rule": `Runpod 5-${RUNPOD_DISK_MAX_GB} GB; NVIDIA Brev: the instance type's range (fixed-disk types: unset)` })
+  .describe(
+    "Disk in GB. Runpod: the container disk, 5-500 (default 40 GPU, 10 CPU; weights_source r2 / hub: sized for the trees). NVIDIA Brev: the VM's disk (diskStorage), within what the instance type allows (an elastic disk's range; a fixed-disk type keeps its own size) and at least the trees + 40 GB; unset: sized for the trees (x1.3 + 40, at least 200). GMI Cloud: not settable (the product's).",
+  );
 /** The provider fields' rules shared by a pool and a standalone launch. */
-function providerRules(x: { provider?: string; provider_gpu?: string; provider_region?: string; weights_source?: string; gpu_types?: unknown; cpu_flavors?: unknown; vcpu?: unknown; volume?: boolean; compute?: string; models?: unknown[] }, add: (path: string, message: string) => void, gpuTypesKey = "gpu_types") {
+function providerRules(x: { provider?: string; provider_gpu?: string; provider_region?: string; weights_source?: string; gpu_types?: unknown; cpu_flavors?: unknown; vcpu?: unknown; volume?: boolean; compute?: string; models?: unknown[]; container_disk_gb?: number }, add: (path: string, message: string) => void, gpuTypesKey = "gpu_types") {
   const other = !!x.provider && x.provider !== "runpod";
+  if (x.container_disk_gb !== undefined) {
+    if (!other && x.container_disk_gb > RUNPOD_DISK_MAX_GB) add("container_disk_gb", `at most ${RUNPOD_DISK_MAX_GB} GB on Runpod (a larger disk: provider brev)`);
+    if (x.provider === "gmi") add("container_disk_gb", "GMI Cloud: the product sets the container's disk; leave it unset");
+  }
   if (!other) {
     if (x.provider_gpu) add("provider_gpu", "provider_gpu is for provider gmi / brev (Runpod: gpu_types)");
     if (x.provider_region) add("provider_region", "provider_region is for provider gmi");
@@ -157,7 +174,7 @@ export const PoolSpecZ = z
     regions: uniq(region).min(1).optional().describe("Regions to try, in order. Default: the cluster's."),
     cpu_flavors: uniq(cpuFlavor).min(1).optional().describe("CPU pods: flavors to try, in order."),
     vcpu: z.literal(CPU_VCPUS).optional().meta({ "x-unit": "vCPU" }).describe("CPU pods: vCPUs (a Runpod CPU instance size: 2, 4, 8, 16, 32)."),
-    container_disk_gb: z.number().int().min(5).max(500).optional().meta({ "x-unit": "GB" }).describe("Container disk in GB (default 40 GPU, 10 CPU)."),
+    container_disk_gb: diskGb,
     volume: z.boolean().optional().describe("Mount the region's network volume at /workspace (weights). Default: on for GPU pods."),
     image: imageRef.optional().describe("Override: an image reference for this pool (resolved to a digest at start)."),
     models: z.array(ModelRefZ).max(16).optional().describe("The models this pool serves (their families and recipes)."),
@@ -392,7 +409,7 @@ export const StandaloneLaunchZ = z
       "Runpod pods without the weights volume (weights_source r2 or none; a CPU pod with volume off): the data centres to try, in order (each with every GPU type of gpu_types, in order); a last \"any\" lets Runpod place it. Unset: EU-RO-1.",
     ),
     volume: z.boolean().optional().describe("Mount the region's weights volume at /workspace (GPU default on, CPU off)."),
-    container_disk_gb: z.number().int().min(5).max(500).optional().meta({ "x-unit": "GB" }).describe("Container disk."),
+    container_disk_gb: diskGb,
     env: z
       .record(envKeyZ, z.union([z.string().max(32768), z.object({ value: z.string().max(32768), secret: z.boolean().optional() }).strict()]))
       .optional()

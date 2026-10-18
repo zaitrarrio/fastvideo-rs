@@ -261,3 +261,9 @@ export function enumMessage(what: string, input: unknown, allowed: readonly stri
   const near = typeof input === "string" ? closeMatches(input, allowed) : [];
   return `${JSON.stringify(input)} is not ${what}${near.length ? `; did you mean ${near.map((x) => JSON.stringify(x)).join(" or ")}?` : ` (${allowed.length} allowed: ${allowed.slice(0, 6).join(", ")}…)`}`;
 }
+
+/** Runpod's largest container disk (GB). */
+export const RUNPOD_DISK_MAX_GB = 500;
+/** NVIDIA Brev's largest VM disk (GB; its elastic storage classes list 16 TiB): the schema's ceiling for
+ * container_disk_gb, which on Brev sizes the VM's disk (providers.ts brevDisk). */
+export const BREV_DISK_MAX_GB = 16384;

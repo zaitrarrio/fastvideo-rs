@@ -156,7 +156,7 @@ Columns:
 | pools[].regions | chips | available regions | unique | zod | chips |
 | pools[].cpu_flavors | chips | cpu3c…cpu5m | CPU only | zod | chips |
 | pools[].vcpu | select | 2, 4, 8, 16, 32 (Runpod CPU sizes) | CPU only | zod literal | **number 1–32** |
-| pools[].container_disk_gb | number GB | 5–500 | — | zod | number |
+| pools[].container_disk_gb | number GB | 5–16384 (Runpod 5–500; Brev: the instance type's range, at least the trees + 40 GB; GMI: none) | provider | zod + providerIssues + live (brevDiskIssues: fixed / elastic range from Brev's list) | number |
 | pools[].volume | select default/on/off | bool | — | zod | select |
 | pools[].image | text, pattern | OCI ref | — | zod pattern (new) | free |
 | pools[].family | select | h3, ltx, wan, sfwan, fake | edge only | zod enum (was regex) | **free** |
@@ -189,7 +189,7 @@ Columns:
 | cpu_flavors, vcpu | chips, select | flavors; 2–32 sizes | CPU only | zod | absent |
 | region | select | eu | — | zod enum (EU only message) | select |
 | volume | toggle | bool | CPU off by default | zod | checkbox |
-| container_disk_gb | number GB | 5–500 | — | zod | absent |
+| container_disk_gb | number GB | 5–16384 (Runpod 5–500; Brev: the VM's disk, the type's range; GMI: none) | provider | zod + live (brevDiskIssues) | absent |
 | deadline_min | number min | 5–10080 | — | zod (was manual) | number (no inline error) |
 | idle_stop_min | number or policy | 5–1440 / null | — | zod | number |
 | max_gpu_dph | number $/hr | 0.1–50 | ≥ the cheapest candidate GPU (live) | zod + live | absent |

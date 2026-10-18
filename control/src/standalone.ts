@@ -175,6 +175,8 @@ export async function standaloneView(env: Env, c: Cluster, op: unknown) {
       dc: pool.provider && pool.provider !== "runpod" ? null : (pool.data_centers?.join(", ") ?? REGIONS[(pool.regions || c.spec.regions)[0] as RegionId]?.dc),
       volume: pool.volume !== false && pool.compute === "GPU" ? REGIONS[(pool.regions || c.spec.regions)[0] as RegionId]?.volume : pool.volume ? REGIONS[(pool.regions || c.spec.regions)[0] as RegionId]?.volume : null,
       config: pool.config || (pool.config_toml ? "(inline config_toml)" : null),
+      // Runpod: the container disk; NVIDIA Brev: the VM's disk asked for (null: fv-control sizes it; pod.brev.disk_gb: as created).
+      disk_gb: pool.container_disk_gb ?? null,
       models: (pool.models || []).map((m) => m.id).concat(pool.fake_models || []),
       deadline_min: Math.round(c.spec.cap_s / 60),
       idle_stop_min: c.spec.auto_stop_idle_min ?? null,

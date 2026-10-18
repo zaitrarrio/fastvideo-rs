@@ -9,7 +9,7 @@ import { validate, type Issue } from "../schemas";
 import { HttpError } from "../util";
 import { placementWhere, poolWithoutVolume, workerPlacements } from "./payloads";
 import { gpuTypes } from "../dynamic";
-import { brevNoStopWarnings, brevOutlook, isOtherPool, poolDph, providerIssues, r2Outlook, weightsPlan } from "../providers";
+import { brevDiskIssues, brevNoStopWarnings, brevOutlook, isOtherPool, poolDph, providerIssues, r2Outlook, weightsPlan } from "../providers";
 import { normalizeSpec, POOL_PRESETS, REGIONS, type ClusterSpec } from "./spec";
 import { tunnelSettings } from "../tunnels";
 import { upsamplerIssue } from "../upsampler";
@@ -28,6 +28,9 @@ export async function liveSpecIssues(env: Env, spec: ClusterSpec, prefix: (strin
   // Owner decision 2026-10-13: a Brev type that cannot be stopped is allowed like any other (rule brev_stoppable_only
   // removed); a warning says that a stop deletes it (owner rule 2026-10-13).
   if (spec.pools.some((p) => p.provider === "brev")) for (const x of await brevNoStopWarnings(env, spec)) warnings.push({ path: [...prefix, ...x.path], message: x.message });
+  // NVIDIA Brev: a pool's disk (container_disk_gb) against what its instance type allows (fixed, or the elastic range).
+  if (spec.pools.some((p) => p.provider === "brev" && p.container_disk_gb !== undefined))
+    for (const x of await brevDiskIssues(env, spec).catch(() => [])) issues.push({ path: [...prefix, ...x.path], message: x.message });
   // Named pod tunnels (tunnels.ts): a host two levels below the zone, or a half-configured setup, is said loudly.
   const tun = tunnelSettings(env);
   if (tun.warning)
