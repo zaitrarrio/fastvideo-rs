@@ -1,6 +1,7 @@
 // Shared bits of the schema-bound forms: the schemas and live lists (cached
 // per page load), the field manifests the coverage test reads, and the
 // image preflight before a save or launch.
+import { h } from "../dom";
 import type { Dynamic } from "../editor";
 import type { Api } from "../fields";
 import type { Issue, Path, Schema } from "../schema";
@@ -35,7 +36,8 @@ export interface ProviderDetails {
   provider_regions?: { id: string; detail: string }[];
   parked?: any[];
   parked_usd_per_day?: number;
-  budget?: { budget_usd: number | null; month_usd: number; running_dph: number; parked_dph: number };
+  /** GMI / Brev: the monthly budget (budget_source: policy = entered in the console, worker_var = the Worker's var). */
+  budget?: { budget_usd: number | null; budget_source?: "policy" | "worker_var" | null; month_usd: number; running_dph: number; parked_dph: number };
 }
 export const providerLoaded = (p: string) => providers.has(p);
 export function loadProvider(api: Api, p: string, signal?: AbortSignal): Promise<ProviderDetails> {
@@ -69,10 +71,56 @@ export function providerSummary(d: ProviderDetails): string {
     const n = (d.provider_gpus || []).length;
     bits.push(d.live_ok ? `${n} ${d.provider === "brev" ? "instance type" : "product"}${n === 1 ? "" : "s"} with live prices` : "the live price list is unavailable now");
     const b = d.budget;
-    if (b) bits.push(`this month $${b.month_usd.toFixed(2)}${b.budget_usd != null ? ` of the $${b.budget_usd} budget` : " (no budget set: launches are refused)"}${b.running_dph ? `, $${b.running_dph.toFixed(2)}/hr running` : ""}`);
+    if (b) bits.push(`this month $${b.month_usd.toFixed(2)}${b.budget_usd != null ? ` of the $${b.budget_usd} monthly budget${b.budget_source === "worker_var" ? ` (the Worker var ${d.provider.toUpperCase()}_BUDGET_USD)` : ""}` : " (no budget set: launches are refused)"}${b.running_dph ? `, $${b.running_dph.toFixed(2)}/hr running` : ""}`);
     if (d.provider === "brev") bits.push(d.parked?.length ? `${d.parked.length} parked / held VM${d.parked.length > 1 ? "s" : ""} ($${(d.parked_usd_per_day || 0).toFixed(2)}/day storage)` : "no parked VMs");
   }
   return bits.join(" · ");
+}
+
+/**
+ * GMI / Brev: the provider's monthly budget as an editable field (owner report 2026-10-18: "it is not recognizing the
+ * budget I enter, it always sets the budget to $10": the console had no place to enter it, only the Worker var). Saving
+ * PUTs /api/v1/providers/<p>/budget (the policy brev_budget_usd / gmi_budget_usd, the store every check reads); the
+ * saved value is what the field, the provider line and the next launch's check use. Not a field of the launch
+ * document (data-schema-ignore): it is account-wide, not per pod. The element is meant to be kept across redraws.
+ */
+export function budgetField(api: Api, d: ProviderDetails, onSaved: (d: ProviderDetails) => void): HTMLElement {
+  const title = d.provider === "brev" ? "NVIDIA Brev" : d.provider === "gmi" ? "GMI Cloud" : d.provider;
+  const cur = () => d.budget?.budget_usd;
+  const input = h("input", { type: "number", min: "0", max: "100000", step: "1", value: cur() ?? "", placeholder: "unset: launches are refused", "aria-label": `${title} monthly budget ($)`, "data-budget-input": d.provider }) as HTMLInputElement;
+  const save = h("button", { type: "button", "data-budget-save": d.provider }, "Save budget");
+  const msg = h("span", { class: "small", "data-budget-msg": d.provider, role: "status" });
+  const help = () => {
+    const b = d.budget;
+    const src = b?.budget_source === "policy" ? "set here (Settings → Policies " + d.provider + "_budget_usd)" : b?.budget_source === "worker_var" ? `from the Worker var ${d.provider.toUpperCase()}_BUDGET_USD until you save one here` : "not set";
+    return `The most fv-control may spend on ${title} per UTC month, for every pod and cluster there (not per pod: the per-pod cap is Max GPU $/hr). This month's spend + the running and parked VMs + this launch until its deadline must fit. Now ${cur() != null ? `$${cur()}` : "unset"}, ${src}.`;
+  };
+  const helpEl = h("span", { class: "cf-help" }, help());
+  const dirty = () => input.value.trim() !== String(cur() ?? "");
+  const sync = () => (save.disabled = !dirty() || (input.value.trim() !== "" && !(Number(input.value) >= 0)));
+  input.addEventListener("input", () => (msg.replaceChildren(), sync()));
+  input.addEventListener("keydown", (e) => e.key === "Enter" && (e.preventDefault(), !save.disabled && save.click()));
+  save.addEventListener("click", async () => {
+    const raw = input.value.trim();
+    const v = raw === "" ? null : Number(raw);
+    if (v !== null && !(Number.isFinite(v) && v >= 0)) return void msg.replaceChildren("a number of $ (0 or more)");
+    save.disabled = true;
+    msg.replaceChildren("saving…");
+    try {
+      const r = await api(`/api/v1/providers/${encodeURIComponent(d.provider)}/budget`, { method: "PUT", body: { budget_usd: v } });
+      const pv = r.provider || {};
+      d.budget = { budget_usd: pv.budget_usd ?? null, budget_source: pv.budget_source ?? null, month_usd: pv.month_usd ?? d.budget?.month_usd ?? 0, running_dph: pv.running_dph ?? 0, parked_dph: pv.parked_dph ?? 0 };
+      input.value = String(d.budget.budget_usd ?? "");
+      helpEl.textContent = help();
+      msg.replaceChildren(`saved: $${d.budget.budget_usd ?? "unset"} per month`);
+      onSaved(d);
+    } catch (e) {
+      msg.replaceChildren(`not saved: ${(e as Error).message}`);
+    }
+    sync();
+  });
+  sync();
+  return h("div", { class: "cf-field", "data-schema-ignore": "", "data-budget-field": d.provider }, h("label", {}, `Monthly budget (${title}, $)`), h("div", { class: "row", style: "gap:8px;align-items:center" }, input, save, msg), helpEl);
 }
 
 /**

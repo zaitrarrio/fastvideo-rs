@@ -5,7 +5,7 @@
 // checks, nothing saved) and shows what will be created; "Deploy" applies exactly that (POST /api/v1/deploy/apply).
 import { badge, h } from "../dom";
 import type { Api } from "../fields";
-import { loadDyn, loadProvider, mergeProvider } from "./common";
+import { budgetField, loadDyn, loadProvider, mergeProvider } from "./common";
 import { instanceTable, type InstanceTable, type ITRow } from "./itable";
 
 interface FamilyOpt {
@@ -68,6 +68,25 @@ export async function mountDeployForm(host: HTMLElement, o: { api: Api; toast: (
 
   // ---- the instance-type tables: one per family and provider, kept across redraws (their sort, filters and page).
   const tables = new Map<string, InstanceTable>();
+  // GMI / Brev: the provider's monthly budget (common.ts budgetField), per family card, kept across redraws; a save
+  // rebuilds the other cards' fields of that provider (they show the saved value) and the plan is reviewed again.
+  const budgets = new Map<string, HTMLElement>();
+  const budgetFor = (fid: string, p: string) => {
+    const key = `${fid}|${p}`;
+    let el = budgets.get(key);
+    if (!el)
+      budgets.set(
+        key,
+        (el = budgetField(api, dyn.provider_details[p], () => {
+          for (const k of [...budgets.keys()]) if (k !== key && k.endsWith(`|${p}`)) budgets.delete(k);
+          plan = null;
+          planned = "";
+          drawPlan();
+          draw();
+        })),
+      );
+    return el;
+  };
   const presetWeights = (f: Fam): string => {
     const first = f.pools.startsWith("template:") ? cat.families.flatMap((x) => x.templates).find((t) => `template:${t.id}` === f.pools)?.pools[0] : f.pools;
     return (dyn.pool_presets || []).find((p: any) => p.id === first)?.weights_source || "volume";
@@ -305,6 +324,7 @@ export async function mountDeployForm(host: HTMLElement, o: { api: Api; toast: (
             ]
           : []),
         ...(f.provider === "brev" ? [field("Disk (GB, the Brev VM)", diskIn, diskHelp)] : []),
+        ...(other && dyn.provider_details?.[f.provider]?.enabled ? [budgetFor(fo.id, f.provider)] : []),
       ),
       t.el,
       h(

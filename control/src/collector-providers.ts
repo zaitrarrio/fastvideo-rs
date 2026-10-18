@@ -11,7 +11,7 @@ import { ownerOf, type Cluster } from "./cluster/store";
 import { stopCluster } from "./collector";
 import { OTHER_PROVIDERS, type OtherProviderId } from "./enums";
 import type { Env } from "./env";
-import { providerImpl, providerSpend, type ProviderInstance } from "./providers";
+import { providerBudget, providerImpl, providerSpend, type ProviderInstance } from "./providers";
 import { utcDay } from "./util";
 
 export interface ProvidersCollect {
@@ -136,7 +136,7 @@ export async function collectProviders(env: Env, t: number, dtMs: number, pol: P
     }
 
     const spend = await providerSpend(env, p);
-    const budget = impl.budget(env);
+    const budget = (await providerBudget(env, p, pol)).usd;
     res.summary[p] = { instances: insts.length, running, spend_per_hr: dphSum, month_usd: spend.month, budget_usd: budget };
     const d = budgetDecision(p, impl.title, spend.month, budget, pol.stop_on_floor);
     if (d.alert) res.alerts.push(d.alert);

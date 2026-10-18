@@ -784,7 +784,13 @@ The collector runs every minute (`collector.ts`):
   `GMI_PRICE_DIVISOR`, `BREV_ORG_ID`, `BREV_INSTANCE_TYPES`, `BREV_PRICES`,
   `BREV_BUDGET_USD`, `FV_HUB_DOWNLOADS_APPROVED`; optional secret
   `FV_PROVIDER_SECRET_ENV`. Each is off (and says why) until its secrets
-  are set. The cron lists their fv-named instances into `pods`
+  are set. The monthly budget the owner enters in the console (the launch
+  form's "Monthly budget" under Provider, one-click deploy, Settings →
+  Policies `brev_budget_usd` / `gmi_budget_usd`, `PUT
+  /api/v1/providers/<p>/budget`, `fv-control.sh budget brev 75`) is stored
+  in the policies and overrides the Worker var `BREV_BUDGET_USD` /
+  `GMI_BUDGET_USD`; unset (null) falls back to the var (owner report
+  2026-10-18: the entered budget was ignored, the var's $10 was used). The cron lists their fv-named instances into `pods`
   (`provider = 'gmi' | 'brev'`, owner `pod:<name>` / `cluster:<name>`),
   books the cost recorded at create, raises `<p>_orphan` for an fv-named
   instance it did not record (never touched), and warns at 80 % of the

@@ -68,7 +68,7 @@ import { normalizeEndpointSpec } from "./serverless/spec";
 import { slsPreset } from "./serverless/presets";
 import { slsWeightsIssues } from "./serverless/weights";
 import { weightsPlanRequest } from "./weights-plan";
-import { endpointReport, isOtherPod, lastReport, otherPodLogs, podBaseUrl, providerImpl, providerView, reportHistory, reportLines, splitKey } from "./providers";
+import { budgetCheck, budgetPolicyKey, endpointReport, isOtherPod, isOtherPool, poolDph, poolProvider, lastReport, otherPodLogs, podBaseUrl, providerImpl, providerView, reportHistory, reportLines, splitKey } from "./providers";
 import { gpuMemoryGb } from "./gpus";
 import { deployFamilies, deploySpecOf, planDeploy, planView } from "./deploy";
 import { audit, fetchWithTimeout, getSetting, HttpError, newId, now, putSetting, scrub, utcDay } from "./util";
@@ -597,6 +597,24 @@ app.get("/api/v1/providers/:p/offers", async (c) => {
   const region = c.req.query("region") || undefined;
   return c.json({ provider: p, offers: await Promise.all(gpus.map((g) => impl.offer(c.env, g, region))) });
 });
+/**
+ * A GMI / Brev monthly budget as the owner enters it (the launch form's "Monthly budget", the CLI): saved in the
+ * policies (brev_budget_usd / gmi_budget_usd, the same document Settings → Policies edits) and read back from there by
+ * every check (providers.ts providerBudget). Body {budget_usd: number | null}; null: back to the Worker var.
+ * Returns the provider's view (budget_usd, budget_source, this month's spend).
+ */
+app.put("/api/v1/providers/:p/budget", async (c) => {
+  requireAdmin(c);
+  const p = c.req.param("p") as OtherProviderId;
+  if (!(OTHER_PROVIDERS as readonly string[]).includes(p)) throw new HttpError(404, `no budget for ${p}: only ${OTHER_PROVIDERS.join(", ")} have one (Runpod: the balance floor)`);
+  const b = await body<{ budget_usd?: unknown; version?: number }>(c);
+  const v = b.budget_usd === "" ? null : b.budget_usd;
+  if (v !== null && (typeof v !== "number" || !Number.isFinite(v))) throw new HttpError(400, "budget_usd: a number of $ per month (null: the Worker var)");
+  const key = budgetPolicyKey(p);
+  const next = dropRemovedPolicies({ ...(await policies(c.env)), [key]: v });
+  const r = await saveDoc(c.env, "policies", "default", next, { version: b.version, actor: actor(c), ip: clientIp(c), detail: `${key} = ${v === null ? "null (the Worker var)" : `$${v}`}` });
+  return c.json({ ok: true, version: r.version, provider: await providerView(c.env, p) });
+});
 /** NVIDIA Brev keep-on-stop (brev-park.ts): parked / held instances, their weights, disk and storage $/day. */
 app.get("/api/v1/providers/brev/parked", async (c) => c.json({ enabled: !providerImpl("brev").off(c.env), ...(await parkedView(c.env)) }));
 /** Deletes one parked / held Brev instance (only ours: recorded and fv- named). */
@@ -1006,6 +1024,15 @@ app.post("/api/v1/standalone/validate", async (c) => {
     const live = await liveSpecIssues(c.env, spec);
     issues.push(...mapLaunchIssues(live.issues));
     warnings.push(...mapLaunchIssues(live.warnings));
+    // GMI / Brev: the monthly budget the start checks (cluster/ops.ts projectSpend), said before Launch at the provider
+    // (where the form's "Monthly budget" field is) instead of only in the failed start (owner report 2026-10-18).
+    const pool = spec.pools[0];
+    if (pool && isOtherPool(pool) && pool.count && !issues.length) {
+      const prov = poolProvider(pool) as OtherProviderId;
+      const { dph } = await poolDph(c.env, pool, spec.max_gpu_dph);
+      const bc = await budgetCheck(c.env, prov, dph * pool.count, spec.cap_s / 3600);
+      if (!bc.ok) issues.push(...bc.reasons.map((message) => ({ path: ["provider"], message })));
+    }
   }
   // Named pod tunnels: a host two levels below the zone (or a half-configured setup) shows at once, at the provider.
   const tun = tunnelSettings(c.env);

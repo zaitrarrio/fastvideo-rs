@@ -671,7 +671,7 @@ next poll and the pod is deleted (with its tunnel).
 | Guard | Runpod | GMI / Brev |
 |---|---|---|
 | per-pod $/hr cap | create answer's `costPerHr` > `max_gpu_dph` → delete | offer price (GMI products ÷ `GMI_PRICE_DIVISOR`, Brev's live instance-type list or the `BREV_PRICES` override) > `max_gpu_dph` → refused before create; unknown → planned and booked at `max_gpu_dph` |
-| balance floor | account balance (API) | **no API**: `GMI_BUDGET_USD` / `BREV_BUDGET_USD` per UTC month: this month's ledger + (running + Brev parked storage + new $/hr) × hours to the deadline must fit, at start, scale-up and extend; unset → refused. The cron warns at 80 % and stops that provider's clusters at 100 % (policy `stop_on_floor`; Brev VMs are stopped and parked / held, or deleted when the stop does not succeed, §3.4). No margin or early warning for non-stoppable Brev types (removed 2026-10-13: their stop deletes them) |
+| balance floor | account balance (API) | **no API**: a monthly budget per UTC month, as entered in fv-control (policy `gmi_budget_usd` / `brev_budget_usd`: the launch form's "Monthly budget", Settings → Policies, `fv-control.sh budget`), else the Worker var `GMI_BUDGET_USD` / `BREV_BUDGET_USD`: this month's ledger + (running + Brev parked storage + new $/hr) × hours to the deadline must fit, at start, scale-up and extend; unset → refused. The cron warns at 80 % and stops that provider's clusters at 100 % (policy `stop_on_floor`; Brev VMs are stopped and parked / held, or deleted when the stop does not succeed, §3.4). No margin or early warning for non-stoppable Brev types (removed 2026-10-13: their stop deletes them) |
 | stop that does not succeed | n/a | Brev, owner rule **2026-10-13**: a stop refused ("does not support stop", HTTP 500, measured 2026-10-13, for non-stoppable types), another stop error 3 times, or a VM not STOPPED `BREV_STOP_TIMEOUT_S` (10 min) after an accepted stop → the VM is **deleted** (fv- names, recorded rows), recorded `deleted` with the reason, tunnel released, info alert `brev_stop_deleted`. A successful stop never deletes. A stop while DEPLOYING → `stop_pending`: stopped once it leaves DEPLOYING, deleted after `BREV_DEPLOYING_WAIT_S` (15 min) (§3.4). Replaces `running_unstoppable` / `brev_unstoppable` / the hourly retry (PR #80) |
 | idle storage | none | Brev parked / held instances (stopped successfully): kept until the owner deletes them (owner rule 2026-10-11, unchanged on 2026-10-13); alert `brev_parked_over_limit` past `brev_park_max` instances or `brev_park_max_days` days, with their age and $/day (§3.4) |
 | deadline | cron + pod watchdog | cron (`stopCluster`) + the pod's watchdog (GMI: API delete; Brev: host `shutdown`) |
@@ -739,7 +739,9 @@ storage volume would do the same there (§9).
    2. `wrangler secret put BREV_API_TOKEN`; vars `BREV_ORG_ID`,
       `BREV_INSTANCE_TYPES` (the allow-list; put **stoppable** types first
       for presets with weights, e.g. AWS / GCP / Nebius / Crusoe types,
-      not `massedcompute_*` / `hyperstack_*`), `BREV_BUDGET_USD`.
+      not `massedcompute_*` / `hyperstack_*`), `BREV_BUDGET_USD` (the
+      default monthly budget: the one entered in fv-control, policy
+      `brev_budget_usd`, overrides it).
       `BREV_PRICES` is optional now (an override of the live list).
    3. Keep-on-stop (§3.4): every successful stop keeps the VM (owner rule
       2026-10-11); a VM whose stop does not succeed is deleted (owner

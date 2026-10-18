@@ -22,8 +22,10 @@
 //    without those settings, a quick tunnel; it reports its https URL to
 //    POST /ingest/v1/endpoint (index.ts) with the cluster's ingest token;
 //    edge fronts export it as FV_DISPATCH_ENDPOINT;
-//  - no balance API: a monthly budget per provider (GMI_BUDGET_USD,
-//    BREV_BUDGET_USD) instead of the balance floor;
+//  - no balance API: a monthly budget per provider instead of the balance
+//    floor: the policy brev_budget_usd / gmi_budget_usd (D1, set in the
+//    console: Settings → Policies or the launch form's budget field), else the
+//    Worker var BREV_BUDGET_USD / GMI_BUDGET_USD (providerBudget);
 //  - Runpod secret references do not resolve there: FV_PROVIDER_SECRET_ENV.
 import { brev, brevInstanceTypes, brevOff, brevPrice, brevPriceLive, brevTaskLine, type BrevType } from "./brev";
 import { recordBoot } from "./boottime";
@@ -44,6 +46,7 @@ import { missingTrees } from "./volumes";
 import { DRIVER_CHECK_SH } from "./driver-check";
 import { R2_AUX_TREES, r2AuxTrees, R2_DOWNLOAD_GBPS, R2_FETCH_SH, r2Bytes, r2Cfg, r2DiskGb, r2Manifest, r2PodEnv, r2Trees } from "./r2weights";
 import { UPSAMPLER_START_SH, UPSAMPLER_WAIT_SH } from "./upsampler";
+import { policies, type Policies } from "./alerts";
 
 // ---------------------------------------------------------------- ids
 const KEY_RE = /^(gmi|brev):(.+)$/;
@@ -111,8 +114,9 @@ export interface ComputeProvider {
   create(env: Env, req: ProviderLaunch): Promise<{ id: string }>;
   remove(env: Env, inst: ProviderInstance): Promise<boolean>;
   logs?(env: Env, inst: ProviderInstance): Promise<string[]>;
-  /** The monthly budget in $ (null: unset, launches are refused). */
-  budget(env: Env): number | null;
+  /** The Worker var's monthly budget in $ (GMI_BUDGET_USD / BREV_BUDGET_USD; null: unset). The policy set in the
+   * console overrides it: read the budget with providerBudget. */
+  budgetVar(env: Env): number | null;
 }
 
 const num = (s: string | undefined): number | null => {
@@ -153,7 +157,7 @@ const GMI: ComputeProvider = {
   },
   remove: (env, inst) => gmi.remove(env, inst.id),
   logs: (env, inst) => gmi.logs(env, inst.id),
-  budget: (env) => num(env.GMI_BUDGET_USD),
+  budgetVar: (env) => num(env.GMI_BUDGET_USD),
 };
 
 const BREV: ComputeProvider = {
@@ -213,25 +217,46 @@ const BREV: ComputeProvider = {
     if (ok) await markBrevDeleted(env, inst.id);
     return ok;
   },
-  budget: (env) => num(env.BREV_BUDGET_USD),
+  budgetVar: (env) => num(env.BREV_BUDGET_USD),
 };
 
 export const PROVIDER_IMPLS: Record<OtherProviderId, ComputeProvider> = { gmi: GMI, brev: BREV };
 export const providerImpl = (p: OtherProviderId) => PROVIDER_IMPLS[p];
 export const providerEnabled = (env: Env, p: OtherProviderId) => !providerImpl(p).off(env);
 
+// ---------------------------------------------------------------- the monthly budget
+/** The policy key of a provider's monthly budget (alerts.ts Policies). */
+export const budgetPolicyKey = (p: OtherProviderId) => `${p}_budget_usd` as const;
+export type BudgetSource = "policy" | "worker_var";
+/**
+ * A provider's monthly budget in $ and where it comes from. The one the owner enters in the console (the policy
+ * brev_budget_usd / gmi_budget_usd: Settings → Policies, the launch form's budget field, PUT
+ * /api/v1/providers/<p>/budget) wins; unset (null), the Worker var (BREV_BUDGET_USD / GMI_BUDGET_USD); neither: null
+ * (launches are refused). Owner report 2026-10-18: the budget entered was ignored because only the Worker var was read.
+ */
+export async function providerBudget(env: Env, p: OtherProviderId, pol?: Policies): Promise<{ usd: number | null; source: BudgetSource | null; worker_var: number | null }> {
+  const set = (pol ?? (await policies(env)))[budgetPolicyKey(p)];
+  const worker_var = providerImpl(p).budgetVar(env);
+  if (typeof set === "number" && Number.isFinite(set) && set >= 0) return { usd: set, source: "policy", worker_var };
+  return { usd: worker_var, source: worker_var === null ? null : "worker_var", worker_var };
+}
+/** Where the owner changes a provider's budget (said in every refusal and alert that names it). */
+export const budgetWhere = (p: OtherProviderId) => `the launch form's "Monthly budget" field or Settings → Policies ${budgetPolicyKey(p)}`;
+
 /** One provider's state for /api/v1/providers and the UI (enabled, why not, budget, this month's spend). */
 export async function providerView(env: Env, p: OtherProviderId) {
   const impl = providerImpl(p);
   const off = impl.off(env);
-  const spend = await providerSpend(env, p);
+  const [spend, budget] = await Promise.all([providerSpend(env, p), providerBudget(env, p)]);
   return {
     id: p,
     title: impl.title,
     enabled: !off,
     reason: off ? `${impl.title} is off: ${off} (docs/serve/deploy-gmi-brev.md §8)` : null,
     gpus: impl.gpus(env),
-    budget_usd: impl.budget(env),
+    budget_usd: budget.usd,
+    // policy: entered in the console (Settings → Policies or the launch form); worker_var: the Worker's var.
+    budget_source: budget.source,
     month_usd: spend.month,
     running_dph: spend.running_dph,
     parked_dph: spend.parked_dph,
@@ -272,14 +297,13 @@ export interface BudgetCheck {
  * stop fails and deletes it, owner rule 2026-10-13.) */
 export async function budgetCheck(env: Env, p: OtherProviderId, addDph: number, hours: number): Promise<BudgetCheck> {
   const impl = providerImpl(p);
-  const budget = impl.budget(env);
-  const s = await providerSpend(env, p);
+  const [{ usd: budget }, s] = await Promise.all([providerBudget(env, p), providerSpend(env, p)]);
   const dph = s.running_dph + s.parked_dph + addDph;
   const projected = s.month + dph * hours;
   const reasons: string[] = [];
-  if (budget === null) reasons.push(`${impl.title} has no balance API: set ${p.toUpperCase()}_BUDGET_USD (the most fv-control may spend there per month) before launching`);
+  if (budget === null) reasons.push(`${impl.title} has no balance API: set its monthly budget (the most fv-control may spend there per month: ${budgetWhere(p)}, or the Worker var ${p.toUpperCase()}_BUDGET_USD) before launching`);
   else if (projected > budget)
-    reasons.push(`${impl.title}: $${s.month.toFixed(2)} spent this month + $${dph.toFixed(2)}/hr${s.parked_dph ? ` (parked storage $${s.parked_dph.toFixed(3)}/hr included)` : ""} for ${hours.toFixed(2)} h = $${projected.toFixed(2)}, over the budget $${budget}`);
+    reasons.push(`${impl.title}: $${s.month.toFixed(2)} spent this month + $${dph.toFixed(2)}/hr${s.parked_dph ? ` (parked storage $${s.parked_dph.toFixed(3)}/hr included)` : ""} for ${hours.toFixed(2)} h = $${projected.toFixed(2)}, over the monthly budget $${budget} (raise it: ${budgetWhere(p)})`);
   return { provider: p, ok: !reasons.length, reasons, budget, month: s.month, running_dph: s.running_dph, parked_dph: s.parked_dph, add_dph: addDph, hours, projected };
 }
 

@@ -317,6 +317,8 @@ export const PoliciesZ = z
     build_pod_idle_grace_min: z.number().min(0).max(1440).meta({ "x-unit": "min" }).describe("…or idle (no jobs, per its /healthz) this many minutes past its own idle stop."),
     brev_park_max: z.number().int().min(0).max(20).describe("NVIDIA Brev keep-on-stop: alert (brev_parked_over_limit) when more than this many instances are parked / held (stopped, weights kept, storage billed). Alert only: fv-control never deletes a Brev VM on its own (owner rule 2026-10-11); reuse or delete them yourself."),
     brev_park_max_days: z.number().min(0).max(90).meta({ "x-unit": "days" }).describe("…alert when one has been parked / held longer than this many days (alert only, nothing is deleted)."),
+    brev_budget_usd: z.number().min(0).max(100000).nullable().meta({ "x-unit": "$/month" }).describe("NVIDIA Brev's monthly budget (no balance API): this UTC month's spend + the running and parked VMs + a new launch until its deadline must fit; the cron warns at 80 % and stops at 100 %. null: the Worker var BREV_BUDGET_USD."),
+    gmi_budget_usd: z.number().min(0).max(100000).nullable().meta({ "x-unit": "$/month" }).describe("GMI Cloud's monthly budget, as brev_budget_usd. null: the Worker var GMI_BUDGET_USD."),
   })
   .strict()
   .superRefine((p, ctx) => {

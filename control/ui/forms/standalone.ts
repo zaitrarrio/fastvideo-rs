@@ -5,7 +5,7 @@
 import { badge, h, kids } from "../dom";
 import { createForm, type Api, type FieldOpts } from "../fields";
 import type { Path } from "../schema";
-import { issuesOf, loadDyn, loadProvider, loadSchemas, loadShas, mergeProvider, preflight, providerSummary } from "./common";
+import { budgetField, issuesOf, loadDyn, loadProvider, loadSchemas, loadShas, mergeProvider, preflight, providerSummary } from "./common";
 import { instanceTable, type InstanceTable, type ITRow } from "./itable";
 
 /** The remote check's issue while no provider is picked (nothing provider-specific is loaded or checked until then). */
@@ -40,6 +40,21 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
   // The picked provider's instance-type table (owner 2026-10-13): every type it lists; a launchable row's click sets
   // the fields its `launch` names. Loaded when the provider is picked (each pick) and on its Refresh button.
   const tables = new Map<string, InstanceTable>();
+  // GMI / Brev: the monthly budget field (common.ts budgetField), one per provider, kept across redraws (what is typed
+  // stays); a save updates the provider line and re-runs the checks (the budget refusal at the provider clears).
+  const budgets = new Map<string, HTMLElement>();
+  const budgetFor = (p: string) => {
+    let el = budgets.get(p);
+    if (!el)
+      budgets.set(
+        p,
+        (el = budgetField(api, dyn.provider_details[p], (d) => {
+          if (f.get(["provider"]) === p) provStatus.replaceChildren(providerSummary(d));
+          f.check();
+        })),
+      );
+    return el;
+  };
   // Runpod's weights (owner 2026-10-13: "I should be able to launch Runpod in any region if I am using R2"): the
   // volume pins the pod to the volume's data centre (region); r2 / none (and a CPU pod with volume off) run anywhere:
   // data_centers, in order, a last "any" letting Runpod place it.
@@ -225,6 +240,7 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
       ? []
       : other
       ? [
+          ...(dyn.provider_details?.[prov]?.enabled ? [budgetFor(prov)] : []),
           tableFor(prov).el,
           F(["provider_gpu"], {
             label: prov === "gmi" ? "Selected GPU product" : "Selected instance type",
@@ -308,7 +324,11 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
             allowUnset: true,
             onSet: (v) => {
               if (v) for (const k of ["variant", "config", "models", "fake_models"]) f.set([k], undefined, true);
-              else f.set(["variant"], "cpu", true), f.set(["config"], "/etc/fv/runpod-fake.toml", true), f.set(["fake_models"], ["fake-wan"], true), f.set(["compute"], "CPU", true), f.set(["volume"], false, true);
+              else {
+                f.set(["variant"], "cpu", true), f.set(["config"], "/etc/fv/runpod-fake.toml", true), f.set(["fake_models"], ["fake-wan"], true);
+                // compute / volume are Runpod's: GMI / Brev take none (the cpu variant runs on their GPU machines).
+                if ((f.get(["provider"]) || "runpod") === "runpod") f.set(["compute"], "CPU", true), f.set(["volume"], false, true);
+              }
               // Runpod: the new preset's default weights (the backend's: standalone.ts presetWeightsDefault).
               if ((f.get(["provider"]) || "runpod") === "runpod") f.set(["weights_source"], isCpu() ? undefined : presetWeights(), true), weightsChanged();
               else draw();
@@ -401,7 +421,7 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
           { class: "cf-fields" },
           F(["deadline_min"], { label: "Deadline after start", help: "The pod is deleted then (the cron and its own watchdog)." }),
           F(["idle_stop_min"], { label: "Idle stop", unsetLabel: "policy default", placeholder: "policy default" }),
-          F(["max_gpu_dph"], { label: "Max GPU $/hr", placeholder: "3.6", help: "A pod on a pricier GPU is deleted right after create; the check compares it with the live prices." }),
+          F(["max_gpu_dph"], { label: "Max GPU $/hr", placeholder: "3.6", help: "This pod's GPU price cap per hour (not the monthly budget: GMI / Brev have their own, under Provider): a pod on a pricier GPU is deleted right after create; the check compares it with the live prices." }),
           F(["auth"], { label: "Client auth" }),
           F(["log_level"], { label: "Most verbose level shipped", unsetLabel: "info (default)" }),
         ),
