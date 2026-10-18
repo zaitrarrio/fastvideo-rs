@@ -187,6 +187,8 @@ describe("weights_source r2: the default, the checks, the env", () => {
     expect(gb).toBe(Math.min(500, r2DiskGb(all, planned)));
     const p = workerCreatePayload("fv-ctl-x", "img", pool, { region: "eu", dc: "EU-RO-1", gpu: "g" }, e) as any;
     expect(p.networkVolumeId).toBeUndefined();
+    // No pod volume: Runpod's default one at /workspace would take the fetch into /workspace/weights (EDQUOT)
+    expect([p.volumeInGb, p.volumeMountPath, p.containerDiskInGb]).toEqual([0, undefined, gb]);
     // No exact CUDA list (REST cannot name the 13.1 / 13.2 hosts); the boot's driver check refuses a pre-13 host
     expect(p.allowedCudaVersions).toBeUndefined();
     // r2 anywhere else (docs/ops/r2-bench-2026-10-12.md findings 2 and 5): the data centres given, no exact CUDA list either
