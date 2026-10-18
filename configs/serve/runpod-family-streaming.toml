@@ -1,0 +1,77 @@
+# fv-serve on Runpod: every causal streaming model on ONE GPU, one process
+# (owner decision 2026-10-18, as runpod-family-h3.toml): SF-Wan 1.3B
+# (resident; the Reactor's model) and LongLive-1.3B on the SF-Wan engine
+# (loaded on its first request, `[engine] swap = true`). An SF-Wan pipeline
+# stays resident once loaded (rollouts borrow it), so after the first
+# LongLive request both are: about 26-33 GB peak each at 480p
+# (docs/serve/research-longlive.md), hence an 80 GB-class GPU.
+#
+# LICENCE: the LongLive-1.3B weights are NON-COMMERCIAL (CC-BY-NC-SA-4.0):
+# research and evaluation only.
+#
+# Secrets as in runpod.toml. Weights under $FV_WEIGHTS: sfwan21-1.3b and
+# longlive-1.3b-safetensors (fv-control's streaming-family preset). `longlive`
+# is not expanded like `weights`: the absolute path under FV_WEIGHTS
+# (/workspace/weights on the pods), as runpod-longlive.toml.
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+swap = true
+
+[[models]]
+id = "sfwan21-1.3b"
+family = "wan"
+recipe = "sfwan21-1.3b"
+weights = "${FV_WEIGHTS}/sfwan21-1.3b"
+resident = true
+
+[[models]]
+id = "longlive-1.3b"
+family = "wan"
+recipe = "sfwan21-1.3b"
+weights = "${FV_WEIGHTS}/sfwan21-1.3b"
+resident = false
+longlive = "/workspace/weights/longlive-1.3b-safetensors"
+
+[protocols]
+openai_videos = false
+fastwan = false
+minimax = false
+fal = false
+fal_director = false
+ltx = false
+reactor = true
+native = true
+
+[reactor]
+model = "sfwan21-1.3b"
+
+[streams]
+causal_default_max_s = 120
+causal_hard_max_s = 300
+
+[limits]
+queue_max = 8
+body_max_mb = 64
+
+# As an fv-control cluster worker (docs/serve/edge-control-plane.md).
+[gateway]
+pool = "streaming-family"

@@ -37,12 +37,14 @@
 //!   pipeline's `audio.wav` in a scratch directory that is removed.
 //!
 //! **Technique profiles.** `CudaBackend::new` installs the process's
-//! profile (the models' shared load-time settings, [`ProcessPlan`]) before
-//! any pipeline reads a `FASTVIDEO_*` setting, and sets the process env the
-//! recipes need (`FASTVIDEO_VSA` for FastWan). Per model, an H3 pipeline
-//! whose profile is not the installed one switches to it with `set_arm`
-//! after load; LTX resolves its stage-2 route from its own profile per
-//! request.
+//! profile (the first model's, [`ProcessPlan`]) before any pipeline reads a
+//! `FASTVIDEO_*` setting, and sets the process env the recipes need
+//! (`FASTVIDEO_VSA` for FastWan). Per model, an H3 pipeline loads and runs
+//! with its own profile under its own load-time settings
+//! (`settings::scope_model` around its load and every run), so one process
+//! can serve H3 models of different profiles (MXFP8, the NVFP4 releases,
+//! VDN-H3's bf16) one at a time with `[engine] swap = true`; LTX resolves
+//! its stage-2 route from its own profile per request.
 
 pub mod caps;
 pub mod validate;

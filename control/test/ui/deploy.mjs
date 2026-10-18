@@ -165,9 +165,13 @@ try {
   const wanOpts = await page.$$eval("[data-deploy-pools=wan] option", (els) => els.map((e) => e.value));
   assert.ok(wanOpts.includes("template:streaming"), `wan offers the streaming template: ${wanOpts}`);
   await page.selectOption("[data-deploy-pools=h3]", "template:fasth3");
-  await page.waitForSelector("[data-deploy-family-card=h3]:has-text('pools: h3-turbo, fasth3-trim')");
+  // A family template: ONE pod serving every variant (owner 2026-10-18), its models in the hint.
+  await page.waitForSelector("[data-deploy-pools-hint=h3]:has-text('ONE pod')");
+  const hint = await page.textContent("[data-deploy-pools-hint=h3]");
+  for (const m of ["fasth3", "fasth3-trim-8step", "fasth3-v2-nvfp4", "fasth3-4step-vsa-480p-taeh3"]) assert.ok(hint.includes(m), `the fasth3 family pool serves ${m}: ${hint}`);
+  assert.ok(hint.includes("fasth3-8step-dense"), `what it leaves out is said: ${hint}`);
   await shot(page, "deploy-all-families.png");
-  // Two families only: ltx2 (the ltx template, Runpod: a primary GPU and a fallback) and wan (its pool on Brev).
+  // Two families only: ltx2 (the ltx template: one family pool; Runpod: a primary GPU and a fallback) and wan (its pool on Brev).
   await page.uncheck("[data-deploy-all]");
   await page.uncheck("[data-deploy-family=h3]");
   await page.selectOption("[data-deploy-pools=ltx2]", "template:ltx");
@@ -193,8 +197,9 @@ try {
   const rv = await page.textContent("[data-deploy-review-card]");
   assert.ok(rv.includes("valid"), `plan valid: ${rv}`);
   const poolRows = await page.$$eval("[data-deploy-pools-table] tbody tr", (els) => els.map((e) => [...e.children].map((c) => c.textContent)));
-  assert.deepEqual(poolRows.map((r) => r[0]), ["ltx", "ltx-pro", "ltx-a2v", "ltx-ref2v", "wan"]);
-  assert.match(poolRows[4][4], /^brev: g5\.xlarge-test · disk 600 GB/);
+  assert.deepEqual(poolRows.map((r) => r[0]), ["ltx-family", "wan"]);
+  assert.ok(poolRows[0][5].includes("ltx25-distill-dense") && poolRows[0][5].includes("ltx25-ref2v"), `the ltx family pool serves every LTX variant: ${poolRows[0][5]}`);
+  assert.match(poolRows[1][4], /^brev: g5\.xlarge-test · disk 600 GB/);
   assert.ok(poolRows[0][4].includes("→"), `the ltx pools' GPU types in order: ${poolRows[0][4]} (picked: ${ltxPicked})`);
   assert.equal((await get("/api/v1/clusters")).clusters.filter((c) => c.name === "oneclick").length, 0, "nothing saved by Review");
   await shot(page, "deploy-review.png");
@@ -202,9 +207,9 @@ try {
   await page.click("[data-deploy-apply]");
   await page.waitForSelector("[data-deploy-result]", { timeout: 30000 });
   const cl = (await get("/api/v1/clusters")).clusters.find((c) => c.name === "oneclick");
-  assert.deepEqual(cl.spec.pools.map((p) => p.id), ["ltx", "ltx-pro", "ltx-a2v", "ltx-ref2v", "wan"]);
+  assert.deepEqual(cl.spec.pools.map((p) => p.id), ["ltx-family", "wan"]);
   assert.equal(cl.spec.pools[0].gpu_types.length, 2, "primary + fallback");
-  assert.deepEqual([cl.spec.pools[4].provider, cl.spec.pools[4].provider_gpu, cl.spec.pools[4].container_disk_gb], ["brev", "g5.xlarge-test", 600]);
+  assert.deepEqual([cl.spec.pools[1].provider, cl.spec.pools[1].provider_gpu, cl.spec.pools[1].container_disk_gb], ["brev", "g5.xlarge-test", 600]);
   const op2 = await waitOp(cl.id, "up");
   const wanCreate = creates().find((c) => c.name.includes("oneclick"));
   assert.ok(wanCreate, `a Brev create for the cluster's wan pool (up: ${op2.status} ${op2.error || ""}): ${JSON.stringify(creates())}`);
@@ -224,7 +229,7 @@ try {
   await page.click("[data-deploy-apply]");
   await page.waitForSelector("[data-deploy-result]", { timeout: 30000 });
   const cl2 = (await get(`/api/v1/clusters/${cl.id}`)).cluster;
-  assert.deepEqual(cl2.spec.pools.map((p) => p.id), ["ltx", "ltx-pro", "ltx-a2v", "ltx-ref2v", "wan", "h3-turbo"]);
+  assert.deepEqual(cl2.spec.pools.map((p) => p.id), ["ltx-family", "wan", "h3-turbo"]);
   assert.deepEqual(errors.filter((e) => !/Failed to load resource/.test(e)), [], `page errors: ${errors}`);
   console.log(`ok   UI Brev disk (standalone form + page, cluster pool) and one-click deploy (families, templates, instance types, review, new + existing cluster) (screenshots in ${out}${SHOTS ? ` and ${img}` : ""})`);
   await browser.close();

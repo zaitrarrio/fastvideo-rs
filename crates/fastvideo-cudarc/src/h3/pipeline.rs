@@ -329,6 +329,14 @@ pub struct H3PipelineOptions {
     /// from (the 8-step `stage-dmd-step-250/` reads stage B's byte-identical
     /// linear branch and default adapter). `None`: `FASTVIDEO_H3_VDN_SHARED`.
     pub vdn_shared: Option<PathBuf>,
+    /// The technique profile this pipeline loads and runs with (attention
+    /// route, VSA schedule, TeaCache, the recipe it names). `None`: the
+    /// process's active profile (a binary's `--techniques`,
+    /// `FASTVIDEO_TECHNIQUES`). `Some(p)`: `p` (`Some(None)`: no profile),
+    /// whatever the process installed: fv-serve serving models of several
+    /// profiles from one process (`[engine] swap`) loads each with its own,
+    /// under its own load-time settings (`settings::scope_model`).
+    pub profile: Option<Option<fastvideo_models::techniques::Profile>>,
 }
 
 /// The NVFP4 DiT file a load reads ([`H3PipelineOptions::nvfp4_dit`]).
@@ -1240,9 +1248,16 @@ impl H3Pipeline {
     pub fn load(root: &Path, options: H3PipelineOptions) -> Result<Self> {
         crate::wan::tensor::default_bf16_activations();
         let mut options = options;
-        // A technique profile names its recipe; the caller's wins.
+        // The profile this pipeline runs: the caller's own (fv-serve, one per
+        // model), else the process's.
         let active = fastvideo_models::techniques::settings::active();
-        if let Some(profile) = active.profile.as_ref() {
+        let own = options.profile.take();
+        let profile_in_use = match &own {
+            Some(p) => p.as_ref(),
+            None => active.profile.as_ref(),
+        };
+        // A technique profile names its recipe; the caller's wins.
+        if let Some(profile) = profile_in_use {
             match (&options.recipe, &profile.recipe) {
                 (None, Some(r)) => options.recipe = Some(r.clone()),
                 (Some(a), Some(b)) if a != b => crate::wan::log::info(format_args!(
@@ -1278,9 +1293,17 @@ impl H3Pipeline {
         if contract.dense {
             options.dense = true;
         }
-        let techniques =
-            H3Techniques::from_process(options.recipe.as_deref(), &contract, options.ref2va)
-                .map_err(msg)?;
+        let techniques = match &own {
+            None => H3Techniques::from_process(options.recipe.as_deref(), &contract, options.ref2va),
+            Some(p) => H3Techniques::resolve(
+                options.recipe.as_deref(),
+                &contract,
+                options.ref2va,
+                p.as_ref(),
+                &|k| fastvideo_models::techniques::settings::var(k),
+            ),
+        }
+        .map_err(msg)?;
         let base_dense = options.dense;
         if techniques.forces_dense() {
             options.dense = true;
@@ -1290,7 +1313,12 @@ impl H3Pipeline {
                 "techniques.taeh3: no TAEH3 weights (pass --taeh3-weights, set FASTVIDEO_TAEH3_WEIGHTS, or give techniques.taeh3.weights)",
             ));
         }
-        if let Some(path) = active.path.as_ref() {
+        if let Some(p) = own.as_ref().and_then(|p| p.as_ref()) {
+            crate::wan::log::info(format_args!("h3 technique profile: {} (this model's own)", p.name));
+            for note in &p.notes {
+                crate::wan::log::info(format_args!("h3 technique profile note: {note}"));
+            }
+        } else if let (None, Some(path)) = (&own, active.path.as_ref()) {
             crate::wan::log::info(format_args!(
                 "h3 technique profile: {}",
                 path.display()

@@ -2032,9 +2032,26 @@ additions and readings; everything is re-exported from the crate root.
   `sfwan21-1.3b` = causal SF-Wan (E6 `CausalRollout`).
 - Technique profiles and `FASTVIDEO_VSA` are process-wide and read once:
   `ProcessPlan` refuses a model set whose load-time settings differ (e.g.
-  `fasth3-8step-dense` + `h3-turbo`, `ltx-turbo` + `ltx-draft`, `wan-turbo` +
-  `wan-max`); such models run in separate processes (they do not co-reside
-  anyway, R18).
+  `ltx-turbo` + `ltx-draft`, `fastwan21-1.3b` + `wan-max`); such models run
+  in separate processes (they do not co-reside anyway, R18). **Family pools
+  (2026-10-18):** H3 models are the exception. `FASTVIDEO_H3_QUANT` (the
+  DiT's linears: MXFP8 for the MXFP8 profiles; unset, the device's default or
+  the recipe's, VDN-H3's bf16, an NVFP4 release's own path) is read only
+  while a model loads or runs, and `CudaBackend` holds that model's own
+  settings around both (`settings::scope_model`: the model's profile's table
+  replaces the process profile's on that thread; the environment still
+  wins), and an H3 pipeline loads with its own profile (`H3PipelineOptions::
+  profile`) instead of the process's. So `ProcessPlan` compares H3 models
+  without that setting (and with `FASTVIDEO_BF16_ACT` unset read as the H3
+  default `1`, since it is cached process-wide): every H3 model of the
+  catalog shares one process (`h3_models_of_different_profiles_share_a_process`),
+  one resident at a time with `[engine] swap = true`. Before, an H3 model
+  loaded in a process whose installed profile was another model's resolved
+  that profile's techniques at load (a VSA profile refused the Sol-H3 /
+  dense recipes, "techniques.vsa needs a VSA recipe"), then switched with
+  `set_arm`. The family pools (`configs/serve/runpod-family-*.toml`,
+  fv-control's family presets, docs/control/README.md §4) serve every
+  variant of a family from one process on one GPU this way.
 - Deployment (`[[models]]`, one GPU per process): each entry resolves against
   the catalog (`recipe` = tier alias, catalog id or H3 recipe name; `weights`
   replaces the catalog directory; `resident` models load before readiness).

@@ -192,14 +192,14 @@ try {
   await page.selectOption("select[aria-label=Template]", "ltx");
   await page.click("button:text('New cluster')");
   await page.waitForSelector(".cf-pool");
-  assert.deepEqual(await page.$$eval(".cf-pool-head b", (els) => els.map((e) => e.textContent)), ["ltx", "ltx-pro", "ltx-a2v", "ltx-ref2v"]);
+  assert.deepEqual(await page.$$eval(".cf-pool-head b", (els) => els.map((e) => e.textContent)), ["ltx-family"]);
   // (the page's dialog handler accepts the licence confirm)
   await page.selectOption("select[aria-label='Pool preset']", "longlive");
   await page.waitForSelector(".cf-pool-head b:text('longlive')");
   await page.click(".cf-main .tabs button:text('JSON')");
   await page.waitForSelector(".cf-json .cm-editor");
   const edDoc = () => page.evaluate(() => window.FVEditor.viewOf(document.querySelector(".cf-json .cm-editor")).state.doc.toString());
-  assert.equal(JSON.parse(await edDoc()).pools.map((p) => p.id).join(","), "ltx,ltx-pro,ltx-a2v,ltx-ref2v,longlive");
+  assert.equal(JSON.parse(await edDoc()).pools.map((p) => p.id).join(","), "ltx-family,longlive");
   await page.screenshot({ path: `${out}/13-clusters-presets.png`, fullPage: true });
   // Cluster: roll picker (cancelled), add a pool, keys, restart picker.
   await fetch(`${B}/api/v1/clusters/${c.cluster.id}/mint-key`, { method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" }, body: JSON.stringify({ name: "ui-key" }) });

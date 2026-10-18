@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import CATALOG from "../../src/cluster/catalog.json";
-import { defaultSpec } from "../../src/cluster/spec";
+import { defaultSpec, presetPool } from "../../src/cluster/spec";
 import { b64, randomBytes } from "../../src/crypto";
 import { readDoc, saveDoc } from "../../src/docs";
 import { envKeyOptions } from "../../src/dynamic";
@@ -58,7 +58,8 @@ describe("pool env scope", () => {
   let env: Env;
   beforeEach(async () => {
     env = { DB: d1(), CONTROL_KEK: b64(randomBytes(32)), SESSION_SECRET: "s".repeat(40), RUNPOD_API_KEY: "rpa_x" } as unknown as Env;
-    const spec = defaultSpec("t1", "ltx");
+    // Two LTX pools (the ltx template is one family pool since 2026-10-18).
+    const spec = { ...defaultSpec("t1"), pools: ["ltx", "ltx-pro"].map((id) => presetPool(id)!) };
     await env.DB.prepare("INSERT INTO clusters (id, name, spec, state, status, source, created_at, updated_at, created_by) VALUES ('c_1', 't1', ?, '{}', 'defined', 'controller', 0, 0, 't')").bind(JSON.stringify(spec)).run();
   });
   it("applies to the pool's workers only, between cluster and pod", async () => {

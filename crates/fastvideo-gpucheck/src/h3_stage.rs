@@ -482,6 +482,8 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 // VDN-H3 checkpoint: FASTVIDEO_H3_VDN (+ FASTVIDEO_H3_VDN_SHARED; a vdn-h3-<N>step recipe).
                 vdn: None,
                 vdn_shared: None,
+                // The process's profile (--techniques).
+                profile: None,
             };
             let canvas = GenCanvas {
                 seconds: *seconds,

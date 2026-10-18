@@ -134,17 +134,59 @@ pub fn install_from_env(explicit: Option<&Path>) -> Result<&'static Active, Stri
     }
 }
 
-/// A `FASTVIDEO_*` setting: the env var, else the active profile's value.
+thread_local! {
+    /// One model's own settings while [`scope_model`]'s guard lives.
+    static MODEL_SCOPE: std::cell::RefCell<Option<Settings>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Restores the previous [`scope_model`] table when dropped.
+#[must_use = "the scope ends when the guard drops"]
+pub struct ModelScope(Option<Settings>);
+
+impl Drop for ModelScope {
+    fn drop(&mut self) {
+        let prev = self.0.take();
+        MODEL_SCOPE.with(|s| *s.borrow_mut() = prev);
+    }
+}
+
+/// While the guard lives, this thread's reads ([`var`], [`is_set`]) see
+/// `settings`, one model's own profile's (empty: a model without a profile),
+/// in place of the process profile's; the environment still wins.
+///
+/// A process serving models of several technique profiles (fv-serve with
+/// `[engine] swap = true`, one model resident at a time) loads and runs each
+/// model under its own load-time settings, as it would alone in a process:
+/// e.g. `FASTVIDEO_H3_QUANT` is `mxfp8` while an MXFP8 profile's model loads
+/// and unset (the device's or the recipe's default) while an NVFP4 release
+/// loads. Settings a getter caches on first read (`FASTVIDEO_BF16_ACT`) stay
+/// process-wide: fastvideo-engine-service's `ProcessPlan` admits only sets
+/// that agree on those.
+pub fn scope_model(settings: Settings) -> ModelScope {
+    ModelScope(MODEL_SCOPE.with(|s| s.borrow_mut().replace(settings)))
+}
+
+/// The table a read consults after the environment: the model scope's, else
+/// the active profile's.
+fn table_get(name: &str) -> Option<String> {
+    match MODEL_SCOPE.with(|s| s.borrow().as_ref().map(|t| t.get(name).map(str::to_owned))) {
+        Some(scoped) => scoped,
+        None => active().settings.get(name).map(str::to_owned),
+    }
+}
+
+/// A `FASTVIDEO_*` setting: the env var, else the active profile's value
+/// (inside [`scope_model`]: the scoped model's).
 pub fn var(name: &str) -> Option<String> {
     match std::env::var(name) {
         Ok(v) => Some(v),
-        Err(_) => active().settings.get(name).map(str::to_owned),
+        Err(_) => table_get(name),
     }
 }
 
 /// Whether the setting is present (env or profile), as `var_os().is_some()`.
 pub fn is_set(name: &str) -> bool {
-    std::env::var_os(name).is_some() || active().settings.get(name).is_some()
+    std::env::var_os(name).is_some() || table_get(name).is_some()
 }
 
 /// [`var`] against an explicit table instead of the global one (tests,
@@ -170,6 +212,33 @@ mod tests {
         assert_eq!(var_in(&s, &none, "FASTVIDEO_X").as_deref(), Some("profile"));
         assert_eq!(var_in(&s, &env, "FASTVIDEO_X").as_deref(), Some("env"));
         assert_eq!(var_in(&s, &none, "FASTVIDEO_Y"), None);
+    }
+
+    #[test]
+    fn a_model_scope_replaces_the_profile_table_until_dropped() {
+        // No profile is installed in this test binary: the table is empty.
+        let name = "FASTVIDEO_TEST_MODEL_SCOPE_ONLY";
+        assert_eq!(var(name), None);
+        let mut own = Settings::default();
+        own.set(name, "mxfp8", "mxfp8").unwrap();
+        {
+            let _outer = scope_model(own);
+            assert_eq!(var(name).as_deref(), Some("mxfp8"));
+            assert!(is_set(name));
+            {
+                // A model without a profile: nothing, whatever the outer scope had.
+                let _inner = scope_model(Settings::default());
+                assert_eq!(var(name), None);
+                assert!(!is_set(name));
+            }
+            assert_eq!(var(name).as_deref(), Some("mxfp8"));
+        }
+        assert_eq!(var(name), None);
+        // Another thread never sees this thread's scope.
+        let mut s = Settings::default();
+        s.set(name, "x", "t").unwrap();
+        let _g = scope_model(s);
+        assert_eq!(std::thread::spawn(move || var(name)).join().unwrap(), None);
     }
 
     #[test]

@@ -138,7 +138,7 @@ export const RESERVED_KEYS = new Set([
 export const isReserved = (k: string) => RESERVED_KEYS.has(k);
 
 /** The pool presets' ids (cluster/spec.ts POOL_PRESETS; test/unit/config-validation.test.ts checks they agree). */
-export const POOL_PRESET_IDS = ["h3-turbo", "h3-max", "ltx", "wan", "ltx-pro", "ltx-a2v", "ltx-ref2v", "h3-ref2v", "fasth3-trim", "fasth3-trim-nvfp4", "fasth3-v2-nvfp4", "fasth3-4step-nvfp4", "fasth3-trim-nvfp4-fast", "fasth3-v2-nvfp4-preview", "fasth3-4step-nvfp4-preview", "h3-turbo-preview", "h3-larry-turbo", "h3-lightx2v-turbo", "h3-lightx2v-turbo-v01", "vdn-h3", "vdn-h3-8step", "fastwan21", "sfwan", "longlive"] as const;
+export const POOL_PRESET_IDS = ["h3-turbo", "h3-max", "ltx", "wan", "ltx-pro", "ltx-a2v", "ltx-ref2v", "h3-ref2v", "fasth3-trim", "fasth3-trim-nvfp4", "fasth3-v2-nvfp4", "fasth3-4step-nvfp4", "fasth3-trim-nvfp4-fast", "fasth3-v2-nvfp4-preview", "fasth3-4step-nvfp4-preview", "h3-turbo-preview", "h3-larry-turbo", "h3-lightx2v-turbo", "h3-lightx2v-turbo-v01", "vdn-h3", "vdn-h3-8step", "fastwan21", "sfwan", "longlive", "h3-family", "fasth3-family", "ltx-family", "streaming-family"] as const;
 /** A serverless endpoint's presets: the pool presets plus `cpu` (the fake engine on CPU workers, for tests); serverless/presets.ts. */
 export const SLS_PRESET_IDS = [...POOL_PRESET_IDS, "cpu"] as const;
 

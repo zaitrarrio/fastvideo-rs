@@ -90,12 +90,12 @@ describe("image preflight", () => {
   });
   it("refuses an edge cluster on a pre-edge image (the stable = 2cd1ba0 case); a direct one only warns", async () => {
     globalThis.fetch = ghcr("2cd1ba0e5531f3bec378d745668d040c63e36ba0") as any;
-    const edge = normalizeSpec({ name: "h3-and-ltx", template: "h3", image: { channel: "stable" } });
+    const edge = normalizeSpec({ name: "h3-and-ltx", pools: ["h3-turbo", "h3-max", "h3-ref2v", "fasth3-trim"].map((id) => ({ id })), image: { channel: "stable" } });
     expect(neededFeatures(edge).find((f) => f.feature === "edge_front")?.fatal).toBe(true);
     const pf = await checkImages(env, edge, Object.fromEntries(edge.pools.map((p) => [p.id, img])));
     expect(pf.errors[0]).toMatch(/h3-turbo, h3-max, h3-ref2v(, [a-z0-9-]+)+: the image \(channel stable, built from 2cd1ba0\) predates edge fronts \(FV_AUTH_MODE=trust-edge/);
     expect(pf.errors.at(-1)).toMatch(/channel "latest"/);
-    const direct = normalizeSpec({ name: "d", template: "h3", image: { channel: "stable" }, control_plane: "direct" });
+    const direct = normalizeSpec({ name: "d", pools: ["h3-turbo", "h3-max", "h3-ref2v", "fasth3-trim"].map((id) => ({ id })), image: { channel: "stable" }, control_plane: "direct" });
     const pd = await checkImages(env, direct, Object.fromEntries(direct.pools.map((p) => [p.id, img])));
     expect(pd.errors).toEqual([]);
     expect(pd.warnings.join(" ")).toMatch(/direct workers/);
@@ -103,7 +103,7 @@ describe("image preflight", () => {
   });
   it("passes a newer image, and never refuses when the revision cannot be read", async () => {
     globalThis.fetch = ghcr("b51ddcdcf64562b325342fa3a0a6a51664e53552") as any;
-    const edge = normalizeSpec({ name: "e", template: "h3", image: { channel: "latest" } });
+    const edge = normalizeSpec({ name: "e", pools: [{ id: "h3-turbo" }], image: { channel: "latest" } });
     const ok = await checkImages(env, edge, { "h3-turbo": img });
     expect(ok).toMatchObject({ errors: [], warnings: [] });
     globalThis.fetch = ghcr(null) as any;

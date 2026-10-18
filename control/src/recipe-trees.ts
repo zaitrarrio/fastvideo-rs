@@ -128,6 +128,12 @@ export const RECIPE_TREES: Record<string, RecipeTrees> = {
     prequant: [H3_TEXT_FP8],
     note: "h3-turbo-nvfp4 with the TAEH3 decoder (aux files)",
   },
+  "h3-draft": {
+    catalog: "fasth3-4step-vsa-480p-taeh3",
+    required: [FASTH3_LORA],
+    prequant: [H3_TEXT_FP8, "h3-base/transformer_prequant_4step-vsa_mxfp8"],
+    note: "h3-turbo at 480p with the TAEH3 decoder (aux files): the same adapter and DiT tree as h3-turbo (the H3 family pools serve it)",
+  },
   "h3-turbo-preview": {
     catalog: "fasth3-4step-vsa-taeh3",
     required: [FASTH3_LORA],

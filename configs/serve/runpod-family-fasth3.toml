@@ -1,0 +1,150 @@
+# fv-serve on Runpod: the FastH3 family on ONE GPU, one process (owner
+# decision 2026-10-18, as runpod-family-h3.toml): every FastH3 release a pool
+# preset serves (model ids fasth3*) and the catalog's 480p draft tier. turbo
+# (fasth3, the FastH3 4-step Preview) is resident; the draft, the TAEH3
+# previews, Trim (bf16 / NVFP4 / NVFP4 + FP4 attention) and the NVFP4 tier
+# (FastH3 V2, 4-step) load on their first request, swapping the resident DiT
+# out (`[engine] swap = true`; each with its own technique profile and
+# load-time settings).
+#
+# GPU: RTX PRO 6000 (96 GB, sm_120) or B200 (NVFP4 tensor cores). Secrets as
+# in runpod.toml. Weights under $FV_WEIGHTS: h3-base,
+# FastH3-4-step-Preview-v1-LoRA, fasth3-trim-8step, fasth3-trim-8step-nvfp4,
+# fasth3-v2-nvfp4, fasth3-4step-vsa-nvfp4, auxiliary/tae (fv-control's
+# fasth3-family preset).
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+# One resident DiT; every other model loads on its first request.
+swap = true
+
+[[models]]
+id = "fasth3"
+family = "h3"
+recipe = "h3-turbo"
+weights = "${FV_WEIGHTS}/h3-base"
+resident = true
+served_names = ["fasth3"]
+continuity = "anchor-last-frame"
+i2v_encoder = "auto"
+warmup = true
+
+[[models]]
+id = "fasth3-4step-vsa-480p-taeh3"
+family = "h3"
+recipe = "h3-draft"
+weights = "${FV_WEIGHTS}/h3-base"
+resident = false
+
+[[models]]
+id = "fasth3-4step-vsa-taeh3"
+family = "h3"
+recipe = "h3-turbo-preview"
+weights = "${FV_WEIGHTS}/h3-base"
+resident = false
+served_names = ["h3-turbo-preview"]
+
+[[models]]
+id = "fasth3-v2-nvfp4-taeh3"
+family = "h3"
+recipe = "h3-v2-nvfp4-preview"
+weights = "${FV_WEIGHTS}/fasth3-v2-nvfp4"
+resident = false
+served_names = ["h3-v2-nvfp4-preview"]
+
+[[models]]
+id = "fasth3-4step-vsa-nvfp4-taeh3"
+family = "h3"
+recipe = "h3-turbo-nvfp4-preview"
+weights = "${FV_WEIGHTS}/fasth3-4step-vsa-nvfp4"
+resident = false
+served_names = ["h3-turbo-nvfp4-preview"]
+
+# The NVFP4 Trim DiT: ${FV_WEIGHTS}/fasth3-trim-8step-nvfp4, read beside weights.
+[[models]]
+id = "fasth3-trim-8step"
+family = "h3"
+recipe = "h3-trim"
+weights = "${FV_WEIGHTS}/fasth3-trim-8step"
+resident = false
+served_names = ["h3-trim", "fasth3-trim"]
+
+[[models]]
+id = "fasth3-trim-nvfp4"
+family = "h3"
+recipe = "h3-trim-nvfp4"
+weights = "${FV_WEIGHTS}/fasth3-trim-8step"
+resident = false
+served_names = ["h3-trim-nvfp4"]
+
+[[models]]
+id = "fasth3-trim-nvfp4-fast"
+family = "h3"
+recipe = "h3-trim-nvfp4-fast"
+weights = "${FV_WEIGHTS}/fasth3-trim-8step"
+resident = false
+served_names = ["h3-trim-nvfp4-fast"]
+
+[[models]]
+id = "fasth3-v2-nvfp4"
+family = "h3"
+recipe = "h3-v2-nvfp4"
+weights = "${FV_WEIGHTS}/fasth3-v2-nvfp4"
+resident = false
+served_names = ["h3-v2-nvfp4"]
+
+[[models]]
+id = "fasth3-4step-vsa-nvfp4"
+family = "h3"
+recipe = "h3-turbo-nvfp4"
+weights = "${FV_WEIGHTS}/fasth3-4step-vsa-nvfp4"
+resident = false
+served_names = ["h3-turbo-nvfp4"]
+
+[aliases]
+"MiniMax-H3" = "fasth3"
+"MiniMax-H3-Turbo" = "fasth3"
+"MiniMax-H3-Turbo-Preview" = "fasth3-4step-vsa-taeh3"
+"MiniMax-H3-V2-NVFP4-Preview" = "fasth3-v2-nvfp4-taeh3"
+"MiniMax-H3-Turbo-NVFP4-Preview" = "fasth3-4step-vsa-nvfp4-taeh3"
+"MiniMax-H3-Trim" = "fasth3-trim-8step"
+"MiniMax-H3-Trim-NVFP4" = "fasth3-trim-nvfp4"
+"MiniMax-H3-Trim-NVFP4-Fast" = "fasth3-trim-nvfp4-fast"
+"MiniMax-H3-V2-NVFP4" = "fasth3-v2-nvfp4"
+"MiniMax-H3-Turbo-NVFP4" = "fasth3-4step-vsa-nvfp4"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = true
+ltx = false
+reactor = true
+native = true
+
+[limits]
+queue_max = 32
+body_max_mb = 64
+
+# As an fv-control cluster worker (docs/serve/edge-control-plane.md).
+[gateway]
+pool = "fasth3-family"

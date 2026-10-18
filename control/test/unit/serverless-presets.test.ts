@@ -207,7 +207,7 @@ describe("test invokes generated from what it serves", () => {
           if (mode === "lb") expect(String(e.invoke.path), e.label).toMatch(ROUTE);
           else if (e.id !== "info") expect(e.invoke.input, e.label).toMatchObject({ kind: "http", path: expect.stringMatching(/^\//) });
         }
-        if (!["sfwan", "longlive"].includes(p.id)) expect(ex.length, `${p.id} has job examples`).toBeGreaterThan(2);
+        if (!["sfwan", "longlive", "streaming-family"].includes(p.id)) expect(ex.length, `${p.id} has job examples`).toBeGreaterThan(2);
       }
   });
   it("h3-ref2v: MiniMax V2 ref2v Turbo 768P 5 s (ref2v.py t_minimax), fal reference-to-video, an image URL to fill", () => {
@@ -257,7 +257,8 @@ describe("static data", () => {
     const rows = new Set(readFileSync(`${ROOT}scripts/gpu/weights-r2.tsv`, "utf8").split("\n").filter((l) => l && !l.startsWith("#")).map((l) => l.split("\t")[0]!));
     for (const t of eu) expect(rows.has(t), `${t} is published in R2 (r2-fill-volume.sh filled it from there)`).toBe(true);
     // The Turbo LoRA presets' adapters are in R2 only (docs/ports/h3-turbo-loras.md); their base trees are on the volume.
+    // h3-family carries every H3 tree, the R2-only ones (NVFP4, Trim, VDN) included: it defaults to r2.
     const r2Only = (t: string) => t.startsWith("h3-turbo-loras/");
-    for (const p of SLS_PRESETS) if (/^(h3|ltx)/.test(p.id)) for (const t of [...p.weights, ...p.prequant].filter((t) => !r2Only(t))) expect(missingTrees(EU, [t]), `${p.id}: ${t}`).toEqual([]);
+    for (const p of SLS_PRESETS) if (/^(h3|ltx)/.test(p.id) && p.id !== "h3-family") for (const t of [...p.weights, ...p.prequant].filter((t) => !r2Only(t))) expect(missingTrees(EU, [t]), `${p.id}: ${t}`).toEqual([]);
   });
 });

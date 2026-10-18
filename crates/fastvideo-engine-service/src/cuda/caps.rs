@@ -1864,13 +1864,57 @@ fn settings_of(profile: Option<&str>) -> Result<BTreeMap<String, String>, String
         .collect())
 }
 
+/// A profile's load-time settings as the settings table holds them (none
+/// without a profile): what an H3 model loads and runs under in fv-serve
+/// (`settings::scope_model`).
+pub fn profile_settings(
+    profile: Option<&str>,
+) -> Result<fastvideo_models::techniques::settings::Settings, String> {
+    match profile {
+        None => Ok(Default::default()),
+        Some(name) => load_profile(name)?
+            .settings()
+            .map_err(|e| format!("profile {name}: {e}")),
+    }
+}
+
+/// H3 settings read only while a model loads or runs, under that model's own
+/// settings scope (fv-serve's `CudaBackend`): they may differ between the H3
+/// models of one process. `FASTVIDEO_H3_QUANT` picks the DiT's linears
+/// (MXFP8 for the MXFP8 profiles; unset, the device's default or the
+/// recipe's: VDN-H3's bf16, an NVFP4 release's own path).
+const H3_PER_MODEL_SETTINGS: &[&str] = &["FASTVIDEO_H3_QUANT"];
+
+/// What one process must agree on for a model: its load-time settings, for H3
+/// without the per-model ones and with `FASTVIDEO_BF16_ACT` unset read as the
+/// H3 pipeline's default (`1`: `default_bf16_activations`), since that flag is
+/// cached process-wide on its first read.
+fn process_key(m: &CudaModel, settings: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut k = settings.clone();
+    if matches!(m.recipe, CudaRecipe::H3(_)) {
+        for s in H3_PER_MODEL_SETTINGS {
+            k.remove(*s);
+        }
+        k.entry("FASTVIDEO_BF16_ACT".to_owned()).or_insert_with(|| "1".to_owned());
+    }
+    k
+}
+
 impl ProcessPlan {
     /// Checks that `models` can share one process and returns what to install.
+    ///
+    /// H3 models may differ in their per-model settings
+    /// (`H3_PER_MODEL_SETTINGS`): fv-serve loads and runs each under its own
+    /// (`settings::scope_model`), so e.g. an MXFP8 profile's model, an NVFP4
+    /// release and VDN-H3 share one process (one resident at a time with
+    /// `[engine] swap`, the family pools). Every other setting and the
+    /// process env must agree.
     pub fn for_models(models: &[CudaModel]) -> Result<Self, String> {
         let mut plan = ProcessPlan::default();
         let mut first: Option<(&str, BTreeMap<String, String>)> = None;
         for m in models {
-            let settings = settings_of(m.recipe.profile())?;
+            let raw = settings_of(m.recipe.profile())?;
+            let settings = process_key(m, &raw);
             if let CudaRecipe::H3(r) = &m.recipe {
                 if let Some(name) = &r.profile {
                     let p = load_profile(name)?;
@@ -1894,7 +1938,7 @@ impl ProcessPlan {
             match &first {
                 None => {
                     plan.profile = m.recipe.profile().map(str::to_owned);
-                    plan.settings = settings.clone();
+                    plan.settings = raw;
                     first = Some((m.id.as_str(), settings));
                 }
                 Some((id, s)) if *s != settings => {
@@ -1905,7 +1949,9 @@ impl ProcessPlan {
                     ));
                 }
                 Some(_) => {
-                    if plan.profile.is_none() {
+                    // The first profile whose settings are the installed ones
+                    // (an H3 model of another profile runs under its own).
+                    if plan.profile.is_none() && raw == plan.settings {
                         plan.profile = m.recipe.profile().map(str::to_owned);
                     }
                 }
@@ -2501,9 +2547,15 @@ mod tests {
         let p = ProcessPlan::for_models(&pick(&["h3-turbo", "h3-draft"])).unwrap();
         assert_eq!(p.profile.as_deref(), Some("h3/fasth3_4step_vsa"));
         // Max (the Sol-H3 ladder) shares turbo's load-time settings (MXFP8,
-        // bf16 activations); the 8-step dense recipe has no MXFP8.
+        // bf16 activations).
         ProcessPlan::for_models(&pick(&["h3-max", "h3-turbo"])).unwrap();
-        assert!(ProcessPlan::for_models(&pick(&["fasth3-8step-dense", "h3-turbo"])).is_err());
+        // The 8-step dense recipe has no profile (no MXFP8 setting): it loads
+        // under its own settings scope, so it shares the process too; the
+        // installed profile stays the first model's.
+        let p = ProcessPlan::for_models(&pick(&["fasth3-8step-dense", "h3-turbo"])).unwrap();
+        assert_eq!((p.profile, p.settings.is_empty()), (None, true));
+        let p = ProcessPlan::for_models(&pick(&["h3-turbo", "fasth3-8step-dense"])).unwrap();
+        assert_eq!(p.profile.as_deref(), Some("h3/fasth3_4step_vsa"));
         // NVFP4 is load-time: the LTX draft needs its own process.
         assert!(ProcessPlan::for_models(&pick(&["ltx-turbo", "ltx-draft"])).is_err());
         // FastWan's VSA flag is process-wide; the TI2V-5B recipe runs without it.
@@ -2515,6 +2567,45 @@ mod tests {
         assert_eq!(p.env.get("FASTVIDEO_VSA").map(String::as_str), Some("0"));
         let p = ProcessPlan::for_models(&pick(&["wan-max", "sfwan21-1.3b"])).unwrap();
         assert_eq!(p.env.get("FASTVIDEO_VSA").map(String::as_str), Some("0"));
+    }
+
+    /// Every H3 model of the catalog shares one process (the h3 family pool,
+    /// configs/serve/runpod-family-h3.toml): MXFP8 profiles, the NVFP4
+    /// releases, Trim and VDN-H3 differ only in `FASTVIDEO_H3_QUANT`, which
+    /// each model reads under its own settings scope. A setting cached
+    /// process-wide still has to agree.
+    #[test]
+    fn h3_models_of_different_profiles_share_a_process() {
+        let cat = catalog(&WeightLayout::default());
+        let h3: Vec<CudaModel> = cat
+            .iter()
+            .filter(|m| matches!(m.recipe, CudaRecipe::H3(_)))
+            .cloned()
+            .collect();
+        assert!(h3.len() >= 15, "{}", h3.len());
+        let p = ProcessPlan::for_models(&h3).unwrap_or_else(|e| panic!("{e}"));
+        assert!(p.env.is_empty());
+        // Order does not matter, and the first model's profile is installed.
+        let mut rev = h3.clone();
+        rev.reverse();
+        let q = ProcessPlan::for_models(&rev).unwrap();
+        assert_eq!(q.profile.as_deref(), rev[0].recipe.profile());
+        // Per model: the scoped settings are the model's own profile's.
+        let turbo = find(&cat, "h3-turbo").unwrap();
+        let own = profile_settings(turbo.recipe.profile()).unwrap();
+        assert_eq!(own.get("FASTVIDEO_H3_QUANT"), Some("mxfp8"));
+        assert!(profile_settings(None).unwrap().is_empty());
+        // An explicit f32-activation profile still needs its own process.
+        let key = |m: &CudaModel, kv: &[(&str, &str)]| {
+            process_key(m, &kv.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())
+        };
+        assert_eq!(key(&turbo, &[]), key(&turbo, &[("FASTVIDEO_BF16_ACT", "1"), ("FASTVIDEO_H3_QUANT", "mxfp8")]));
+        assert_ne!(key(&turbo, &[]), key(&turbo, &[("FASTVIDEO_BF16_ACT", "0")]));
+        assert_ne!(key(&turbo, &[]), key(&turbo, &[("FASTVIDEO_DIT_OFFLOAD", "streamed")]));
+        // Not for other families: Wan / LTX settings stay strict.
+        let wan = find(&cat, "wan-max").unwrap();
+        assert_eq!(key(&wan, &[("FASTVIDEO_H3_QUANT", "x")]).get("FASTVIDEO_H3_QUANT").map(String::as_str), Some("x"));
+        assert!(key(&wan, &[]).is_empty());
     }
 
     /// The Turbo LoRA models: untiered, base H3 + their adapter, dense, T2V

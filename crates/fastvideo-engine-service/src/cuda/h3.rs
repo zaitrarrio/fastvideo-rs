@@ -1,6 +1,6 @@
 //! H3 / FastH3 / Sol-H3 on `H3Pipeline` (WP-11): load once with the
-//! recipe's options, switch to the recipe's technique profile (`set_arm`)
-//! when it is not the process's, and map a `ResolvedJob` to an `H3Request`.
+//! recipe's options and its own technique profile (whatever profile the
+//! process installed), and map a `ResolvedJob` to an `H3Request`.
 //!
 //! `fv-gpucheck h3 gen --h3-recipe <r> [--techniques <profile>] [--dense]`
 //! with the same weights, canvas, frames and seed produces the same frames.
@@ -104,6 +104,9 @@ impl H3Model {
             nvfp4_dit: None,
             vdn: recipe.vdn_weights.clone(),
             vdn_shared: recipe.vdn_shared.clone(),
+            // The process's profile (`fv-gpucheck quantize-dit` builds under
+            // it); serving passes the model's own (`load`).
+            profile: None,
         })
     }
 
@@ -112,26 +115,22 @@ impl H3Model {
         text_cache: Option<&Path>,
         obs: &mut dyn FnMut(&'static str),
     ) -> Result<Self, ApiError> {
-        let options = Self::pipeline_options(recipe, text_cache)?;
-        obs("h3_pipeline");
-        let mut pipe = H3Pipeline::load(&recipe.weights, options)
-            .map_err(|e| api_err(&format!("h3 load {}", recipe.weights.display()), e))?;
-        // The process profile is the plan's; switch this model to its own
-        // per-request techniques when it differs (same load-time settings,
-        // checked by ProcessPlan; set_arm re-checks).
-        let active = fastvideo_models::techniques::settings::active();
-        let active_name = active.profile.as_ref().map(|p| p.name.clone());
+        let mut options = Self::pipeline_options(recipe, text_cache)?;
+        // The model loads and runs with its own technique profile (none: no
+        // profile), not the process's: one process may serve models of
+        // several profiles (`[engine] swap`, the family pools). The caller
+        // holds the model's settings scope (`CudaBackend::load`), so its
+        // load-time settings are its own too.
         let want = recipe
             .profile
             .as_deref()
             .map(load_profile)
             .transpose()
             .map_err(ApiError::internal)?;
-        if want.as_ref().map(|p| &p.name) != active_name.as_ref() {
-            obs("h3_techniques");
-            pipe.set_arm(want.as_ref())
-                .map_err(|e| api_err("h3 technique profile", e))?;
-        }
+        options.profile = Some(want);
+        obs("h3_pipeline");
+        let pipe = H3Pipeline::load(&recipe.weights, options)
+            .map_err(|e| api_err(&format!("h3 load {}", recipe.weights.display()), e))?;
         Ok(Self {
             pipe,
             recipe: recipe.clone(),
