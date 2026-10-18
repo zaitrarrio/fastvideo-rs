@@ -460,6 +460,24 @@ impl CudaBackend {
     }
 }
 
+/// An H3 model's own load-time settings (its technique profile's; none
+/// without a profile) for this thread while the guard lives
+/// (`settings::scope_model`): a process serving H3 models of different
+/// profiles loads and runs each as it would alone ([`ProcessPlan`] admits
+/// such sets). Other families keep the process's table (their `ProcessPlan`
+/// check is strict).
+fn model_scope(
+    m: &CudaModel,
+) -> Result<Option<fastvideo_models::techniques::settings::ModelScope>, ApiError> {
+    match &m.recipe {
+        CudaRecipe::H3(r) => {
+            let own = super::caps::profile_settings(r.profile.as_deref()).map_err(ApiError::internal)?;
+            Ok(Some(fastvideo_models::techniques::settings::scope_model(own)))
+        }
+        _ => Ok(None),
+    }
+}
+
 impl EngineBackend for CudaBackend {
     fn device(&self) -> DeviceInfo {
         self.info.clone()
@@ -481,6 +499,8 @@ impl EngineBackend for CudaBackend {
             return Ok(());
         }
         let m = self.model(model)?.clone();
+        // The model's own load-time settings while it loads (and warms up).
+        let _scope = model_scope(&m)?;
         if let Some(why) = self.unsupported.get(model) {
             return Err(ApiError::engine_failed(why.clone()));
         }
@@ -608,6 +628,11 @@ impl EngineBackend for CudaBackend {
             .map_err(|e| ApiError::internal(format!("{}: {e}", work.display())))?;
         let opts = self.mp4_options();
         let text_cache = self.cfg.text_cache.clone();
+        // The run reads the model's own settings, as its load did.
+        let _scope = match self.models.get(&job.model) {
+            Some(m) => model_scope(m)?,
+            None => None,
+        };
         let loaded = self
             .loaded
             .get_mut(&job.model)

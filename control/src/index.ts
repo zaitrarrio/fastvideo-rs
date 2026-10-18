@@ -527,7 +527,7 @@ app.get("/api/v1/deploy/catalog", async (c) => {
     families: deployFamilies(),
     templates: Object.entries(TEMPLATES)
       .filter(([, t]) => t.pools.length)
-      .map(([id, t]) => ({ id, title: t.title, pools: t.pools })),
+      .map(([id, t]) => ({ id, title: t.title, pools: t.pools, left_out: t.left_out ?? [] })),
     clusters: cls.map((cl) => ({ id: cl.id, name: cl.name, status: cl.status, control_plane: cl.spec.control_plane, pools: cl.spec.pools.map((p) => p.id), running: allPods(cl.state).length > 0 })),
   });
 });
@@ -774,7 +774,7 @@ app.get("/api/v1/templates", (c) =>
   c.json({
     // Every template as a spec (the keys standard / tiny-cpu as before), their titles, and the pool presets the dashboard can add.
     ...Object.fromEntries(Object.keys(TEMPLATES).map((k) => [k, defaultSpec("example", k)])),
-    templates: Object.entries(TEMPLATES).map(([id, t]) => ({ id, title: t.title, pools: t.pools })),
+    templates: Object.entries(TEMPLATES).map(([id, t]) => ({ id, title: t.title, pools: t.pools, left_out: t.left_out ?? [] })),
     pool_presets: POOL_PRESETS,
     standard_pools: STANDARD_POOLS,
   }),

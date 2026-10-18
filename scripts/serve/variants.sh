@@ -39,10 +39,14 @@
 #   fastwan21  wan        runpod-wan.toml            in the image
 #   sfwan      sfwan      runpod-sfwan.toml          in the image
 #   longlive   sfwan      runpod-longlive.toml       inline (LongLive-1.3B; NON-COMMERCIAL weights)
+#   h3-family  h3-max     runpod-family-h3.toml      inline (every H3 variant on one pod, one process, swap)
+#   fasth3-family h3-max  runpod-family-fasth3.toml  inline (every FastH3 release on one pod, one process, swap)
+#   ltx-family ltx        runpod-family-ltx.toml     inline (every LTX-2.5 preset on one pod, one process, swap)
+#   streaming-family sfwan runpod-family-streaming.toml inline (SF-Wan + LongLive on one pod, one process, swap)
 
 FV_VARIANTS="h3-turbo h3-max ltx wan wan5b sfwan cpu"
 # <preset>:<variant>:<config> for every non-standard preset (the table above).
-FV_POOL_PRESETS="ltx-pro:ltx:runpod-ltx-pro.toml ltx-a2v:ltx:runpod-ltx-a2v.toml ltx-ref2v:ltx:runpod-ltx-ref2v.toml h3-ref2v:h3-max:runpod-h3-ref2v.toml fasth3-trim:h3-max:runpod-h3-trim.toml fasth3-trim-nvfp4:h3-max:runpod-h3-trim-nvfp4.toml fasth3-v2-nvfp4:h3-max:runpod-h3-v2-nvfp4.toml fasth3-4step-nvfp4:h3-max:runpod-h3-turbo-nvfp4.toml fasth3-v2-nvfp4-preview:h3-max:runpod-h3-v2-nvfp4-preview.toml fasth3-4step-nvfp4-preview:h3-max:runpod-h3-turbo-nvfp4-preview.toml h3-turbo-preview:h3-max:runpod-h3-turbo-preview.toml fasth3-trim-nvfp4-fast:h3-max:runpod-h3-trim-nvfp4-fast.toml h3-larry-turbo:h3-max:runpod-h3-larry-turbo.toml h3-lightx2v-turbo:h3-max:runpod-h3-lightx2v-turbo.toml h3-lightx2v-turbo-v01:h3-max:runpod-h3-lightx2v-turbo-v01.toml vdn-h3:h3-max:runpod-vdn-h3.toml vdn-h3-8step:h3-max:runpod-vdn-h3-8step.toml fastwan21:wan:runpod-wan.toml sfwan:sfwan:runpod-sfwan.toml longlive:sfwan:runpod-longlive.toml"
+FV_POOL_PRESETS="ltx-pro:ltx:runpod-ltx-pro.toml ltx-a2v:ltx:runpod-ltx-a2v.toml ltx-ref2v:ltx:runpod-ltx-ref2v.toml h3-ref2v:h3-max:runpod-h3-ref2v.toml fasth3-trim:h3-max:runpod-h3-trim.toml fasth3-trim-nvfp4:h3-max:runpod-h3-trim-nvfp4.toml fasth3-v2-nvfp4:h3-max:runpod-h3-v2-nvfp4.toml fasth3-4step-nvfp4:h3-max:runpod-h3-turbo-nvfp4.toml fasth3-v2-nvfp4-preview:h3-max:runpod-h3-v2-nvfp4-preview.toml fasth3-4step-nvfp4-preview:h3-max:runpod-h3-turbo-nvfp4-preview.toml h3-turbo-preview:h3-max:runpod-h3-turbo-preview.toml fasth3-trim-nvfp4-fast:h3-max:runpod-h3-trim-nvfp4-fast.toml h3-larry-turbo:h3-max:runpod-h3-larry-turbo.toml h3-lightx2v-turbo:h3-max:runpod-h3-lightx2v-turbo.toml h3-lightx2v-turbo-v01:h3-max:runpod-h3-lightx2v-turbo-v01.toml vdn-h3:h3-max:runpod-vdn-h3.toml vdn-h3-8step:h3-max:runpod-vdn-h3-8step.toml fastwan21:wan:runpod-wan.toml sfwan:sfwan:runpod-sfwan.toml longlive:sfwan:runpod-longlive.toml h3-family:h3-max:runpod-family-h3.toml fasth3-family:h3-max:runpod-family-fasth3.toml ltx-family:ltx:runpod-family-ltx.toml streaming-family:sfwan:runpod-family-streaming.toml"
 FV_SERVE_REPO="${FV_SERVE_REPO:-ghcr.io/zaitrarrio/fastvideo-rs-serve}"
 
 # fv_preset <preset> -> "<variant> <config>" (a pool preset), or status 1

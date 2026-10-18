@@ -4,7 +4,8 @@
 // pods (standalone.ts) and serverless endpoints (serverless/presets.ts).
 // Kept free of runtime imports from ./schemas and ./cluster/spec (both import
 // this module's users), so there is no module cycle.
-import type { PoolSpec } from "./cluster/spec";
+import type { ModelRef, PoolSpec } from "./cluster/spec";
+import CATALOG from "./cluster/catalog.json";
 import { WORKER_CONFIGS } from "./cluster/worker-configs";
 
 export const STANDARD_POOLS: PoolSpec[] = [
@@ -45,6 +46,10 @@ export interface PoolPreset {
    * less is refused (gpus.ts GPU_MEMORY_GB). Conservative: the H3 and LTX-2.5 DiTs run on 80-96 GB cards only. */
   min_vram_gb: number;
   pool: PoolSpec;
+  /** A family preset (FAMILY_PRESETS): the presets whose models its one pool serves. */
+  members?: string[];
+  /** A family preset: what of the family it does not serve, and why (shown with the preset; never silent). */
+  left_out?: { what: string; why: string }[];
 }
 const inline = (file: string) => {
   const t = WORKER_CONFIGS[file];
@@ -54,7 +59,8 @@ const inline = (file: string) => {
 // The presets reuse the image variants CI builds (docs/serve/images.md); a
 // config the variant's image does not carry rides inline (FV_WORKER_TOML_B64,
 // generated from configs/serve by gen-configs.mjs).
-export const POOL_PRESETS: PoolPreset[] = [
+/** The presets of one model (or one tier and its companions) each. */
+export const MODEL_PRESETS: PoolPreset[] = [
   { id: "h3-turbo", min_vram_gb: 80, title: "H3 turbo (fasth3)", description: "MiniMax H3 turbo tier; also the Reactor's clip model.", weights: ["h3-base", "FastH3-4-step-Preview-v1-LoRA"], prequant: ["h3-base/text_encoder_fp8", "h3-base/transformer_prequant_4step-vsa_mxfp8"], pool: STANDARD_POOLS[0]! },
   { id: "h3-max", min_vram_gb: 80, title: "H3 max (Sol-H3)", description: "MiniMax H3 max tier (Sol-H3 4-step ladder).", weights: ["h3-base", "FastH3-4-step-Preview-v1-LoRA"], prequant: ["h3-base/text_encoder_fp8", "h3-base/transformer_prequant_sol-h3_mxfp8"], pool: STANDARD_POOLS[1]! },
   { id: "ltx", min_vram_gb: 80, title: "LTX turbo", description: "LTX-2.5 turbo tier (Sol stage 2): fal lightricks/ltx-2.5 /fast.", weights: ["ltx25"], pool: STANDARD_POOLS[2]! },
@@ -259,6 +265,134 @@ export const POOL_PRESETS: PoolPreset[] = [
     licence: "LongLive-1.3B weights: CC-BY-NC-SA-4.0 (non-commercial; research / evaluation only)",
     pool: { id: "longlive", variant: "sfwan", count: 1, compute: "GPU", config_toml: inline("runpod-longlive.toml"), models: [{ id: "longlive-1.3b", family: "wan", recipe: "sfwan21-1.3b" }], max_queued: 8, job_timeout_s: 1800, stale_after_s: 60 },
   },
+];
+
+// ---------------------------------------------------------------- family presets
+// Owner decision 2026-10-18: "for the presets means all of the weights for a model family and it's variants are
+// installed onto 1 [pod]". A family preset is ONE pool (one pod by default, one GPU, one fv-serve process) whose
+// worker config lists every variant of the family (configs/serve/runpod-family-*.toml): the first resident, the rest
+// `resident = false` with `[engine] swap = true` (one DiT at a time; a request for another variant unloads the
+// resident one and loads it from the pod's disk, each with its own technique profile and load-time settings: the
+// engine's ProcessPlan and settings::scope_model). Its weights are the union of the members' trees, so its container
+// disk (r2) is sized for the union; its GPU fits the largest member. The members are derived from the model presets
+// and the serve catalog: test/unit/templates.test.ts fails when a new preset's models are not in its family's config.
+const recipeStream = new Map(CATALOG.recipes.map((r) => [r.id, (r as { stream?: string }).stream ?? null]));
+/** The model presets every one of whose models matches (in the presets' order). */
+export function presetsWhere(ok: (m: ModelRef) => boolean): string[] {
+  return MODEL_PRESETS.filter((p) => (p.pool.models || []).length > 0 && (p.pool.models || []).every(ok)).map((p) => p.id);
+}
+/** Every H3 variant a preset serves (turbo, max, Ref2V, the NVFP4 tier, previews, Trim, VDN-H3, the turbo LoRAs). */
+export const H3_FAMILY_MEMBERS = presetsWhere((m) => m.family === "h3");
+/** Every FastH3 variant: the H3 presets whose models are FastH3 releases (model ids fasth3*). */
+export const FASTH3_FAMILY_MEMBERS = presetsWhere((m) => m.family === "h3" && /^fasth3/.test(m.id));
+/** Every streaming model: presets whose recipes the catalog marks causal (caps.rs StreamCaps::Causal). */
+export const STREAMING_FAMILY_MEMBERS = presetsWhere((m) => recipeStream.get(m.recipe) === "causal");
+/** Every LTX-2.5 preset (turbo, pro, guided A2V, Ref2V). */
+export const LTX_FAMILY_MEMBERS = presetsWhere((m) => m.family === "ltx2");
+/** The catalog's 480p TAEH3 draft tier: no model preset of its own; the H3 and FastH3 family pools serve it. */
+export const H3_DRAFT: ModelRef = { id: "fasth3-4step-vsa-480p-taeh3", family: "h3", recipe: "h3-draft" };
+
+const uniq = <T,>(xs: T[]) => [...new Set(xs)];
+interface FamilyOpts {
+  id: string;
+  title: string;
+  description: string;
+  members: string[];
+  config: string;
+  variant: PoolSpec["variant"];
+  min_vram_gb: number;
+  prequant?: string[];
+  left_out?: { what: string; why: string }[];
+}
+function familyPreset(o: FamilyOpts): PoolPreset {
+  const ms = o.members.map((id) => MODEL_PRESETS.find((p) => p.id === id)!);
+  const toml = inline(o.config);
+  // The pool's models are its config's [[models]], in its order (the edge routes each id to this pool); the members'
+  // models (and the draft tier, H3_DRAFT, for the H3 families) must be exactly those (test/unit/templates.test.ts).
+  const models: ModelRef[] = [...toml.matchAll(/^\[\[models\]\]\nid = "([^"]+)"\nfamily = "([^"]+)"\nrecipe = "([^"]+)"/gm)].map((m) => ({ id: m[1]!, family: m[2]!, recipe: m[3]! }));
+  const max = (k: "max_queued" | "job_timeout_s" | "stale_after_s" | "container_disk_gb") => {
+    const v = ms.map((p) => p.pool[k]).filter((x): x is number => typeof x === "number");
+    return v.length ? Math.max(...v) : undefined;
+  };
+  const disk = max("container_disk_gb");
+  const licence = uniq(ms.map((p) => p.licence).filter((x): x is string => !!x)).join("; ");
+  return {
+    id: o.id,
+    title: o.title,
+    description: o.description,
+    min_vram_gb: o.min_vram_gb,
+    weights: uniq(ms.flatMap((p) => p.weights)),
+    prequant: o.prequant ?? [],
+    ...(licence ? { licence } : {}),
+    members: [...o.members],
+    ...(o.left_out?.length ? { left_out: o.left_out } : {}),
+    pool: {
+      id: o.id,
+      variant: o.variant,
+      count: 1,
+      compute: "GPU",
+      config_toml: toml,
+      ...(disk !== undefined ? { container_disk_gb: disk } : {}),
+      models,
+      max_queued: max("max_queued") ?? 32,
+      job_timeout_s: max("job_timeout_s") ?? 1800,
+      stale_after_s: max("stale_after_s") ?? 120,
+    },
+  };
+}
+const NOT_8STEP = { what: "fasth3-8step-dense (catalog, no preset)", why: "its 148 GB h3-8step tree would take the union past Runpod's 500 GB container disk" };
+/** One pool per model family, every variant of it on one pod (owner 2026-10-18). */
+export const FAMILY_PRESETS: PoolPreset[] = [
+  familyPreset({
+    id: "h3-family",
+    title: "H3 family: every H3 variant on one pod",
+    description: `Every H3 variant a preset serves on ONE GPU, one fv-serve process (${H3_FAMILY_MEMBERS.join(", ")}, and the 480p draft tier): turbo resident, the others loaded on their first request (one DiT at a time: a switch unloads the resident one and loads the next from the pod's disk, about a minute). RTX PRO 6000 (96 GB, sm_120) or B200: the NVFP4 releases need NVFP4 tensor cores and VDN-H3 a 96 GB card. Weights from R2 by default (the EU volume lacks the NVFP4, Trim, LoRA and VDN trees): about 396 GB, a 485 GB container disk.`,
+    members: H3_FAMILY_MEMBERS,
+    config: "runpod-family-h3.toml",
+    variant: "h3-max",
+    min_vram_gb: 96,
+    left_out: [
+      NOT_8STEP,
+      { what: "the MXFP8 pre-quantized trees (77 GB)", why: "they would take the union (about 396 GB, 485 GB of disk) to 573 GB of disk, past Runpod's 500 GB: turbo and max quantize at load instead" },
+    ],
+  }),
+  familyPreset({
+    id: "fasth3-family",
+    title: "FastH3 family: every FastH3 release on one pod",
+    description: `Every FastH3 release a preset serves on ONE GPU, one fv-serve process (${FASTH3_FAMILY_MEMBERS.join(", ")}, and the 480p draft tier): turbo resident, the previews, Trim and the NVFP4 tier loaded on their first request (one DiT at a time). RTX PRO 6000 (96 GB, sm_120) or B200 (NVFP4 tensor cores). Weights from R2 by default: about 371 GB with turbo's pre-quantized trees, a 457 GB container disk.`,
+    members: FASTH3_FAMILY_MEMBERS,
+    config: "runpod-family-fasth3.toml",
+    variant: "h3-max",
+    min_vram_gb: 96,
+    prequant: ["h3-base/text_encoder_fp8", "h3-base/transformer_prequant_4step-vsa_mxfp8"],
+    left_out: [NOT_8STEP],
+  }),
+  familyPreset({
+    id: "ltx-family",
+    title: "LTX family: turbo, pro, guided A2V and Ref2V on one pod",
+    description: `Every LTX-2.5 preset on ONE GPU, one fv-serve process (${LTX_FAMILY_MEMBERS.join(", ")}): turbo resident, the others loaded on their first request (one 22B DiT at a time); the fal apps route by tier within the process. An 80-96 GB card and ~38 GB of host RAM (the guided A2V model). Its trees (about 165 GB) are on the EU volume.`,
+    members: LTX_FAMILY_MEMBERS,
+    config: "runpod-family-ltx.toml",
+    variant: "ltx",
+    min_vram_gb: 80,
+    left_out: [{ what: "ltx25-distill-sol-nvfp4-taehv (catalog ltx-draft, no preset)", why: "its NVFP4 linears are a process-wide load setting the other LTX recipes do not share (the engine's ProcessPlan): its own process" }],
+  }),
+  familyPreset({
+    id: "streaming-family",
+    title: `Streaming: every causal streaming model on one pod (${STREAMING_FAMILY_MEMBERS.join(", ")}; LongLive weights NON-COMMERCIAL)`,
+    description: `Every causal streaming model on ONE GPU, one fv-serve process (${STREAMING_FAMILY_MEMBERS.join(", ")}): SF-Wan resident (the Reactor's model), LongLive loaded on its first request; an SF-Wan pipeline stays resident once loaded, so both end up resident (26-33 GB peak each): an 80 GB-class card. Weights from R2 by default (about 36 GB).`,
+    members: STREAMING_FAMILY_MEMBERS,
+    config: "runpod-family-streaming.toml",
+    variant: "sfwan",
+    min_vram_gb: 80,
+  }),
+];
+/** The model presets, then the family presets. */
+export const POOL_PRESETS: PoolPreset[] = [...MODEL_PRESETS, ...FAMILY_PRESETS];
+/** Wan's family pool is the wan preset itself (2.2 5B turbo + max, one process with swap); what it leaves out, and why. */
+export const WAN_FAMILY_LEFT_OUT = [
+  { what: "fastwan21 (FastWan 2.1 1.3B)", why: "its VSA is a process-wide setting (FASTVIDEO_VSA=1) the 5B tiers run without: its own pool" },
+  { what: "sfwan / longlive (causal streaming)", why: "an SF-Wan pipeline stays resident once loaded, and the two 5B tiers with their f32 UMT5 encoders and a 720p decode already need the card: the streaming family's pool" },
 ];
 export const presetPool = (id: string): PoolSpec | undefined => {
   const p = POOL_PRESETS.find((x) => x.id === id || x.pool.id === id)?.pool;

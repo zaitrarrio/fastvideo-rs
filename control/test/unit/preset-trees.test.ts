@@ -20,7 +20,7 @@ import type { Env } from "../../src/env";
 
 const ROOT = new URL("../../../", import.meta.url).pathname;
 /** h3/ltx presets whose trees are not all on the EU volume (R2 only). */
-const R2_ONLY_PRESETS = new Set(["h3-larry-turbo", "h3-lightx2v-turbo", "h3-lightx2v-turbo-v01"]);
+const R2_ONLY_PRESETS = new Set(["h3-larry-turbo", "h3-lightx2v-turbo", "h3-lightx2v-turbo-v01", "h3-family"]);
 const rust = (p: string) => readFileSync(`${ROOT}${p}`, "utf8");
 const configOf = (p: (typeof POOL_PRESETS)[number]) => {
   if (p.pool.config_toml) return p.pool.config_toml;
@@ -54,7 +54,11 @@ describe("preset trees: each preset lists every tree its config reads", () => {
     it(p.id, () => {
       const e = expected(p);
       expect([...p.weights].sort(), `${p.id}: weights`).toEqual(e.required);
-      expect([...(p.prequant ?? [])].sort(), `${p.id}: prequant`).toEqual(e.prequant);
+      if (p.members) {
+        // A family preset may leave pre-quantized trees out (disk), only saying so.
+        for (const t of p.prequant ?? []) expect(e.prequant, `${p.id}: prequant ${t}`).toContain(t);
+        if ((p.prequant ?? []).length < e.prequant.length) expect(JSON.stringify(p.left_out), `${p.id}: says why it leaves pre-quantized trees out`).toMatch(/pre-quantized/);
+      } else expect([...(p.prequant ?? [])].sort(), `${p.id}: prequant`).toEqual(e.prequant);
       for (const t of [...p.weights, ...(p.prequant ?? [])]) {
         expect(R2_TREES[t], `${p.id}: ${t} is published in the R2 weights store`).toBeTruthy();
       }

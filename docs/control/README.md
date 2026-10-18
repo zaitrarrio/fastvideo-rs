@@ -314,28 +314,75 @@ A **spec** (`control/src/cluster/spec.ts`) holds:
 
 The `standard` template is one worker each in h3-turbo, h3-max, ltx and
 wan (wan5b). The `tiny-cpu` template is one CPU worker on the `cpu` image
-with the fake engine. The `ltx`, `wan` and `longlive` templates group
-the pool presets below. Three templates are derived from the presets and
-the serve catalog (`cluster/spec.ts`, owner 2026-10-18), so a new preset
-joins them when its models qualify (`test/unit/templates.test.ts`):
+with the fake engine. `longlive` is the LongLive pool alone.
 
-- `h3`: every H3 variant a preset serves (turbo, max, Ref2V, the NVFP4 tier,
-  the TAEH3 previews, Trim, VDN-H3, the turbo LoRAs): 16 pools;
-- `fasth3`: the FastH3 releases among them (model ids `fasth3*`);
-- `streaming`: every causal streaming model, the presets whose recipe
-  `catalog.json` marks `stream: "causal"` (caps.rs `CudaRecipe::SfWan`,
-  `StreamCaps::Causal`): `sfwan` and `longlive`.
+**Family templates: one pod per family** (owner decision 2026-10-18: "for
+the presets means all of the weights for a model family and it's variants
+are installed onto 1 [pod]"). `h3`, `fasth3`, `ltx`, `wan` and `streaming`
+are ONE pool each (one worker by default): a **family preset**
+(`FAMILY_PRESETS` in `src/presets.ts`) whose worker config
+(`configs/serve/runpod-family-*.toml`, sent inline) lists every variant of
+the family, so one fv-serve process on one GPU serves them all. The first
+model is resident; every other one is `resident = false` with
+`[engine] swap = true`: one DiT at a time, and a request for another variant
+unloads the resident one and loads it from the pod's disk (each variant with
+its own technique profile and load-time settings: the engine's
+`ProcessPlan` and `settings::scope_model`, docs/serve/design.md "Family
+pools"). The pool's weights are the union of its members' trees (the
+r2 container disk is sized for the union), its GPU fits the largest member,
+and the edge routes every variant's model id to it
+(`FV_DISPATCH_MODEL_FAMILIES` from the pool's models). The members are derived
+from the model presets and the serve catalog (`H3_FAMILY_MEMBERS`, …);
+`test/unit/templates.test.ts` fails when a preset's models are missing from
+its family's config.
 
-**One pool per preset, one GPU per pod** (the decision for `h3` / `fasth3`):
-each H3 variant is its own DiT (40-66 GB; VDN-H3 wants 96 GB cards) with its
-own worker config, image variant and quantization path (MXFP8 / NVFP4), so
-they cannot all be resident on one GPU, and one process swapping between
-them (`engine.swap`, as `runpod-h3-ref2v.toml` does for its two models) would
-mix configs no one has measured together. Catalog models without a preset
-(`h3-draft`'s `fasth3-4step-vsa-480p-taeh3`, `fasth3-8step-dense`) are not in
-the templates until a worker config serves them. The NVFP4, Trim and LoRA
-presets load trees that are only in R2: their pools default to
-`weights_source r2`.
+| template | pool | models (resident first) | weights (default source, size, container disk) | GPU | not on it (why) |
+|---|---|---|---|---|---|
+| `h3` | `h3-family` | 18: fasth3 (turbo), sol-h3 (max), the 480p draft, Ref2V turbo / max, the three TAEH3 previews, Trim (bf16 / NVFP4 / NVFP4 + FP4 attention), the NVFP4 tier (V2, 4-step), the three Turbo LoRAs, VDN-H3 50 / 8-step | r2 (the EU volume lacks the NVFP4, Trim, LoRA and VDN trees): about 396 GB, 485 GB disk | 96 GB, NVFP4 tensor cores: RTX PRO 6000 (B200 fits but is over `max_gpu_dph`) | fasth3-8step-dense (its 148 GB tree: 654 GB of disk); the MXFP8 pre-quantized trees (77 GB: 573 GB of disk; turbo and max quantize at load instead) |
+| `fasth3` | `fasth3-family` | 10: fasth3, the draft, the three previews, Trim ×3, V2 NVFP4, 4-step NVFP4 | r2: about 371 GB with turbo's pre-quantized trees, 457 GB disk | RTX PRO 6000 / B200 (NVFP4) | fasth3-8step-dense (disk) |
+| `ltx` | `ltx-family` | 4: ltx-turbo, ltx-pro, the guided A2V, Ref2V | the EU volume (about 165 GB) | 80-96 GB, ~38 GB host RAM | ltx-draft (its NVFP4 linears are a process-wide load setting the others do not share) |
+| `wan` | `wan` (the preset) | 2: FastWan 2.2 5B turbo, Wan 2.2 5B max | r2 | 32 GB+ | fastwan21 (`FASTVIDEO_VSA=1` is process-wide; its own pool); sfwan / longlive (an SF-Wan pipeline stays resident once loaded: the `streaming` template) |
+| `streaming` | `streaming-family` | 2: sfwan21-1.3b, longlive-1.3b (NON-COMMERCIAL) | r2: about 36 GB | 80 GB class (both SF-Wan pipelines stay resident: 26-33 GB peak each) | — |
+
+**GPU validation (2026-10-18, `scripts/gpu/family-pool-validate.sh`, one
+RTX PRO 6000 Server, pod `674mivzgycg1u3`, 10 min, about $0.41; raw results
+in `artifacts/serve/e2e/family-pool-h3/`).** One fv-serve process (release
+build of this branch on the `h3-max` serve image) with
+`runpod-family-h3.toml` unchanged, weights from R2 (h3-base, the FastH3
+LoRA, fasth3-v2-nvfp4, auxiliary/tae: 206 GB in about 5 min; no
+pre-quantized trees, as the preset ships). 480p T2V, seed 1, one after the
+other through the native API:
+
+| # | model | what | job run (s) | of which load (s) | denoise (s) | output |
+|---|---|---|---|---|---|---|
+| boot | fasth3 | resident at start (turbo) | — | 31.9 | — | ready 33 s after start |
+| 1 | fasth3 | turbo, resident | 9.2 | 0 | 6.3 | 2 864 229 B |
+| 2 | sol-h3 | max: swaps turbo out | 44.7 | 35.7 | 6.0 | 3 619 560 B |
+| 3 | sol-h3 | max, resident | 8.6 | 0 | 6.1 | 3 619 560 B (same) |
+| 4 | fasth3-v2-nvfp4 | NVFP4 release, no profile: swap across profiles | 36.0 | 23.3 | 10.0 | 3 342 740 B |
+| 5 | fasth3 | back to turbo | 43.8 | 34.5 | 6.3 | 2 864 229 B (same as #1) |
+
+Each swap freed the whole previous model (100.5 GB free before every load
+of the 96 GB card's 101.3 GB), each model loaded with its own profile
+(`h3 technique profile: … (this model's own)`: VSA for turbo, the Sol-H3
+engine route for max, none and the release's NVFP4 FFN for V2), and the
+repeated requests gave the same output size. A swap costs about 35 s for an
+MXFP8 tier quantizing at load (about 23 s for the NVFP4 release). Not
+exercised on a GPU: the family's other variants (Ref2V, Trim, the LoRAs,
+VDN-H3, the previews), and the `fasth3`, `ltx` and `streaming` family pools
+(their configs pass the engine's `shipped_configs_parse` /
+`ProcessPlan` checks only).
+
+What a family pool leaves out is in the template's title and `left_out`
+(`GET /api/v1/templates`, the deploy catalog), never silent. On GMI / Brev a
+family pool may take a larger disk than Runpod's 500 GB.
+
+Stored specs keep the pools they were saved with (a spec stores its pools,
+never its template): a cluster saved with the earlier one-pool-per-preset
+`h3` template (16 pools) reads, validates and runs unchanged, and every model
+preset (`h3-turbo`, `fasth3-v2-nvfp4`, …) stays addable as a pool of its
+own. The NVFP4, Trim and LoRA presets load trees that are only in R2: their
+pools default to `weights_source r2`.
 
 ### 4b. One-click deploy (`#/deploy`)
 
@@ -346,7 +393,9 @@ The console's Deploy page (`ui/forms/deploy.ts`, API in `src/deploy.ts`):
    "All families".
 3. **Per family**: its pools (one preset, the family's standard pool by
    default, or a template of the family: `h3`, `fasth3`, `ltx`, `wan`,
-   `streaming`, `longlive`), workers per pool, the provider, the weights, and
+   `streaming`, `longlive`; a family template is ONE pod serving every
+   variant, and the form says which models it serves and what it leaves
+   out), workers per pool, the provider, the weights, and
    the instance types in the launch form's table (`itable.ts`, the same
    component: Runpod an ordered multi-pick with fallbacks and the data
    centres, GMI / Brev one product; Brev with its disk).
@@ -377,7 +426,9 @@ the four standard pools plus `ltx-pro` (`ltx25-distill-dense`, recipe
 weights from R2), `h3-larry-turbo` / `h3-lightx2v-turbo` (MiniMax-H3 with a Turbo LoRA folded in
 at load, on the `h3-max` image; the adapters from R2, docs/ports/h3-turbo-loras.md), `fastwan21` (the `wan` image, FastWan 2.1 1.3B), `sfwan` (SF-Wan
 streaming) and `longlive` (LongLive-1.3B on the `sfwan` image;
-**non-commercial** weights). They reuse the image variants CI builds; a
+**non-commercial** weights), then the family presets `h3-family`,
+`fasth3-family`, `ltx-family` and `streaming-family` (§4: one pod, every
+variant). They reuse the image variants CI builds; a
 config the variant's image does not carry rides inline (`config_toml`,
 generated from `configs/serve` by `node gen-configs.mjs`). A pool entry
 with a preset's id and nothing else gets the preset. Recipes outside the

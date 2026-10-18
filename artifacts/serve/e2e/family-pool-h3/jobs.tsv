@@ -1,0 +1,6 @@
+n	model	status	wall_s	output_bytes	run_s	denoise_s	peak_gpu_mb
+1	fasth3	succeeded	11.4	2864229	9.2	6.3	61496
+2	sol-h3	succeeded	46.4	3619560	44.7	6.0	55917
+3	sol-h3	succeeded	9.3	3619560	8.6	6.1	55917
+4	fasth3-v2-nvfp4	succeeded	37.1	3342740	36.0	10.0	49058
+5	fasth3	succeeded	44.4	2864229	43.8	6.3	61523

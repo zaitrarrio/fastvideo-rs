@@ -133,14 +133,21 @@ describe("/api/v1/deploy/plan and /apply", () => {
     });
     expect(ok.issues, JSON.stringify(ok.issues)).toEqual([]);
     expect(ok.target).toMatchObject({ kind: "new", name: "one-click-1", running: false });
-    expect(ok.pools.map((p: any) => [p.id, p.family, p.count])).toEqual([["h3-max", "h3", 2], ["ltx", "ltx2", 1], ["ltx-pro", "ltx2", 1], ["ltx-a2v", "ltx2", 1], ["ltx-ref2v", "ltx2", 1]]);
+    expect(ok.pools.map((p: any) => [p.id, p.family, p.count])).toEqual([["h3-max", "h3", 2], ["ltx-family", "ltx2", 1]]);
+    // The ltx template is ONE pool serving every LTX variant (owner 2026-10-18).
+    expect(ok.pools[1].models).toEqual(["ltx25-distill-sol", "ltx25-distill-dense", "ltx25-a2v-guided", "ltx25-ref2v"]);
     expect(ok.pools[0].where).toMatch(/H100 80GB HBM3 → NVIDIA RTX PRO 6000/);
     expect(ok.spec.pools[0]).toMatchObject({ id: "h3-max", gpu_types: ["NVIDIA H100 80GB HBM3", "NVIDIA RTX PRO 6000 Blackwell Server Edition"], count: 2 });
-    expect(ok.actions.map((a: any) => a.target)).toEqual(["h3-max", "ltx", "ltx-pro", "ltx-a2v", "ltx-ref2v"]);
+    expect(ok.actions.map((a: any) => a.target)).toEqual(["h3-max", "ltx-family"]);
     // A Runpod family without the volume: the data centres in order (r2 here; its store is checked live).
     const dc = await post(env, "/api/v1/deploy/plan", { name: "one-click-1", families: [{ family: "wan", pools: "template:streaming", weights_source: "r2", data_centers: ["US-KS-2", "any"] }] });
-    expect(dc.j.spec.pools.find((p: any) => p.id === "sfwan")).toMatchObject({ weights_source: "r2", volume: false, data_centers: ["US-KS-2", "any"] });
-    expect(dc.j.pools.map((p: any) => p.id)).toEqual(["sfwan", "longlive"]);
+    expect(dc.j.spec.pools.find((p: any) => p.id === "streaming-family")).toMatchObject({ weights_source: "r2", volume: false, data_centers: ["US-KS-2", "any"] });
+    expect(dc.j.pools.map((p: any) => [p.id, p.models])).toEqual([["streaming-family", ["sfwan21-1.3b", "longlive-1.3b"]]]);
+    // The h3 template: ONE pod with every H3 variant (one worker), its weights from R2 by default.
+    const h3 = await post(env, "/api/v1/deploy/plan", { name: "one-click-1", families: [{ family: "h3", pools: "template:h3" }] });
+    expect(h3.j.pools.map((p: any) => [p.id, p.count])).toEqual([["h3-family", 1]]);
+    expect(h3.j.pools[0].models).toEqual(expect.arrayContaining(["fasth3", "sol-h3", "fasth3-v2-nvfp4", "fasth3-trim-8step", "vdn-h3", "h3-ref2v-turbo", "h3-larry-turbo"]));
+    expect(h3.j.spec.pools[0].config_toml).toMatch(/^swap = true$/m);
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM clusters").first<any>()).toMatchObject({ n: 0 });
   });
 
@@ -166,12 +173,12 @@ describe("/api/v1/deploy/plan and /apply", () => {
     const plan = await post(env, "/api/v1/deploy/plan", { cluster_id: id, families: [{ family: "h3", pools: "h3-turbo" }, { family: "ltx2", pools: "template:ltx" }] });
     expect(plan.j.issues, JSON.stringify(plan.j.issues)).toEqual([]);
     expect(plan.j.target).toMatchObject({ kind: "existing", id, name: "one-click-2", version: expect.any(Number) });
-    expect(plan.j.pools.map((p: any) => p.id)).toEqual(["h3-turbo-2", "ltx", "ltx-pro", "ltx-a2v", "ltx-ref2v"]);
+    expect(plan.j.pools.map((p: any) => p.id)).toEqual(["h3-turbo-2", "ltx-family"]);
     const stale = await post(env, "/api/v1/deploy/apply", { cluster_id: id, families: [{ family: "ltx2" }], version: plan.j.target.version + 5 });
     expect(stale.status).toBe(409);
     const ap = await post(env, "/api/v1/deploy/apply", { cluster_id: id, families: [{ family: "h3", pools: "h3-turbo" }, { family: "ltx2", pools: "template:ltx" }], version: plan.j.target.version });
     expect(ap.status).toBe(200);
-    expect(ap.j.cluster.spec.pools.map((p: any) => p.id)).toEqual(["h3-turbo", "h3-turbo-2", "ltx", "ltx-pro", "ltx-a2v", "ltx-ref2v"]);
+    expect(ap.j.cluster.spec.pools.map((p: any) => p.id)).toEqual(["h3-turbo", "h3-turbo-2", "ltx-family"]);
     expect(ap.j.operation).toMatch(/^op_/);
     // A name and a cluster_id together are refused; no family neither.
     expect((await post(env, "/api/v1/deploy/plan", { cluster_id: id, name: "x", families: [{ family: "h3" }] })).status).toBe(400);

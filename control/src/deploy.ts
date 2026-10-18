@@ -80,10 +80,11 @@ export function deployFamilies() {
     id: f.id,
     detail: f.detail,
     default: defaultPreset(f.id),
-    presets: POOL_PRESETS.filter((p) => familyOfPreset(p.id) === f.id).map((p) => ({ id: p.id, title: p.title, min_vram_gb: p.min_vram_gb, licence: p.licence ?? null, models: (p.pool.models || []).map((m) => m.id) })),
+    presets: POOL_PRESETS.filter((p) => familyOfPreset(p.id) === f.id).map((p) => ({ id: p.id, title: p.title, min_vram_gb: p.min_vram_gb, licence: p.licence ?? null, models: (p.pool.models || []).map((m) => m.id), ...(p.members ? { members: p.members, left_out: p.left_out ?? [] } : {}) })),
+    // A family template is one pool (one pod) serving every variant (owner 2026-10-18): its models and what it leaves out.
     templates: Object.entries(TEMPLATES)
       .filter(([, t]) => t.pools.length > 0 && t.pools.every((p) => familyOfPreset(p) === f.id))
-      .map(([id, t]) => ({ id, title: t.title, pools: t.pools })),
+      .map(([id, t]) => ({ id, title: t.title, pools: t.pools, models: t.pools.flatMap((p) => (presetPool(p)?.models || []).map((m) => m.id)), left_out: t.left_out ?? [] })),
   }));
 }
 

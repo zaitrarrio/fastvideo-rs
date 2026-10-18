@@ -1,0 +1,85 @@
+# fv-serve on Runpod: the LTX-2.5 family on ONE GPU, one process (owner
+# decision 2026-10-18, as runpod-family-h3.toml): ltx-turbo (Sol stage 2,
+# resident), ltx-pro (dense; Sage attention on sm_120), the guided
+# audio-to-video companion (the dev DiT) and Ref2V (Ingredients IC-LoRA).
+# One 22B DiT at a time: `[engine] swap = true`, a request for another model
+# unloads the resident one and loads it from the local disk. Within one
+# process the fal apps route by tier (`lightricks/ltx-2.5` /fast -> turbo,
+# /pro -> pro; pro A2V -> the guided companion; `fal-ai/ltx-2.3-quality`
+# ingredient -> Ref2V; fastvideo_protocol::route_task).
+#
+# GPU: an 80-96 GB card; the guided A2V model keeps its unfused base in
+# pinned host memory (~38 GB of host RAM). Secrets as in runpod.toml.
+# Weights under $FV_WEIGHTS: ltx25, ltx25-dev, ltx25-ic-lora-ingredients
+# (all on the EU volume; fv-control's ltx-family preset).
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+swap = true
+
+[[models]]
+id = "ltx25-distill-sol"
+family = "ltx2"
+recipe = "ltx-turbo"
+weights = "${FV_WEIGHTS}/ltx25"
+resident = true
+
+[[models]]
+id = "ltx25-distill-dense"
+family = "ltx2"
+recipe = "ltx-pro"
+weights = "${FV_WEIGHTS}/ltx25"
+resident = false
+
+# The dev DiT: ${FV_WEIGHTS}/ltx25-dev/transformer_full (the catalog's layout).
+[[models]]
+id = "ltx25-a2v-guided"
+family = "ltx2"
+recipe = "ltx25-a2v-guided"
+weights = "${FV_WEIGHTS}/ltx25"
+resident = false
+
+# The IC-LoRA: ${FV_WEIGHTS}/ltx25-ic-lora-ingredients.
+[[models]]
+id = "ltx25-ref2v"
+family = "ltx2"
+recipe = "ltx25-ref2v"
+weights = "${FV_WEIGHTS}/ltx25"
+resident = false
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = true
+ltx = true
+reactor = true
+native = true
+fal_apps = ["fastvideo/ltx-turbo", "lightricks/ltx-2.5", "fal-ai/ltx-2.3", "fal-ai/ltx-2.3-quality"]
+
+[limits]
+queue_max = 32
+body_max_mb = 64
+
+# As an fv-control cluster worker (docs/serve/edge-control-plane.md).
+[gateway]
+pool = "ltx-family"

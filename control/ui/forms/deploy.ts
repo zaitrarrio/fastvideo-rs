@@ -12,8 +12,17 @@ interface FamilyOpt {
   id: string;
   detail: string;
   default: string;
-  presets: { id: string; title: string; min_vram_gb: number; licence: string | null; models: string[] }[];
-  templates: { id: string; title: string; pools: string[] }[];
+  presets: { id: string; title: string; min_vram_gb: number; licence: string | null; models: string[]; members?: string[]; left_out?: { what: string; why: string }[] }[];
+  /** A family template: ONE pool (one pod, one process) serving every variant (owner 2026-10-18). */
+  templates: { id: string; title: string; pools: string[]; models?: string[]; left_out?: { what: string; why: string }[] }[];
+}
+/** The pools field's hint: a family pool's models and what it leaves out; several pools; or one preset. */
+function poolsHint(tp: FamilyOpt["templates"][number] | null | undefined, pr: FamilyOpt["presets"][number] | undefined): string {
+  const out = (xs?: { what: string; why: string }[]) => (xs?.length ? ` Not on it: ${xs.map((x) => `${x.what} (${x.why})`).join("; ")}.` : "");
+  if (tp && tp.pools.length === 1) return `ONE pod (one GPU, one process) serving every variant: ${(tp.models || []).length} models (${(tp.models || []).join(", ")}); the first resident, the others loaded on their first request.${out(tp.left_out)}`;
+  if (tp) return `${tp.pools.length} pools: ${tp.pools.join(", ")} (one GPU per pod each).`;
+  if (pr?.members) return `ONE pod serving every variant: ${pr.models.length} models; the first resident, the others loaded on their first request.${out(pr.left_out)}`;
+  return "One pool of this preset (its worker config and models).";
 }
 interface Catalog {
   families: FamilyOpt[];
@@ -257,7 +266,7 @@ export async function mountDeployForm(host: HTMLElement, o: { api: Api; toast: (
     const poolsSel = h("select", { "aria-label": `${fo.id} pools`, "data-deploy-pools": fo.id });
     poolsSel.append(
       h("optgroup", { label: "One pool (a preset)" }, ...fo.presets.map((p) => h("option", { value: p.id }, `${p.id}: ${p.title}${p.licence ? " (licence!)" : ""}${p.id === fo.default ? " (default)" : ""}`))),
-      ...(fo.templates.length ? [h("optgroup", { label: "A template (several pools)" }, ...fo.templates.map((t) => h("option", { value: `template:${t.id}` }, `template ${t.id}: ${t.title}`)))] : []),
+      ...(fo.templates.length ? [h("optgroup", { label: "A family template (one pod, every variant)" }, ...fo.templates.map((t) => h("option", { value: `template:${t.id}` }, `template ${t.id}: ${t.title}`)))] : []),
     );
     poolsSel.value = f.pools;
     poolsSel.addEventListener("change", () => ((f.pools = poolsSel.value), changed(true)));
@@ -298,7 +307,7 @@ export async function mountDeployForm(host: HTMLElement, o: { api: Api; toast: (
       h(
         "div",
         { class: "cf-fields" },
-        field("Pools", poolsSel, tp ? `${tp.pools.length} pools: ${tp.pools.join(", ")} (one GPU per pod each).` : "One pool of this preset (its worker config and models)."),
+        field("Pools", poolsSel, poolsHint(tp, fo.presets.find((p) => p.id === f.pools)), { "data-deploy-pools-hint": fo.id }),
         field("Workers per pool", countIn),
         field("Provider", provSel, "Its instance types load below."),
         field("Weights", wSel, other ? "No Runpod volume on GMI / Brev." : "volume pins the pods to EU-RO-1; r2 / hub / none run in any data centre (the table's data centres)."),
