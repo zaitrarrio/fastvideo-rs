@@ -1,0 +1,51 @@
+{
+ "completed_at": "2026-10-18T17:36:32.699987493Z",
+ "created_at": "2026-10-18T17:36:21.632181385Z",
+ "error": null,
+ "expires_at": "2026-10-19T17:36:21.632181385Z",
+ "fps": 24,
+ "height": 480,
+ "id": "fvjob_6038944e766d4ebc9853cc49f31e1207",
+ "metrics": {
+  "build_rtf": 1.2195429402580644,
+  "inference_s": 6.300971858,
+  "peak_memory_mb": 61496.32833766937,
+  "queue_s": 1.874781519,
+  "run_s": 9.193024589,
+  "stage_durations": {
+   "audio_decode": 0.167792444,
+   "denoise": 6.300971858,
+   "encode": 0.145092442,
+   "refine": 0.006722959,
+   "text": 0.460668531,
+   "video_decode": 2.058409879
+  }
+ },
+ "model": "fasth3",
+ "notes": [],
+ "num_frames": 124,
+ "object": "fv.job",
+ "output": {
+  "audio": {
+   "channels": 2,
+   "rate": 32000
+  },
+  "bytes": 2864229,
+  "fps": 24,
+  "frames": 124,
+  "height": 480,
+  "mime": "video/mp4",
+  "width": 832
+ },
+ "progress": 1.0,
+ "protocol": "native",
+ "queue_position": null,
+ "recipe": "fasth3-4step-vsa",
+ "resolved_model": "fasth3",
+ "seed": 1,
+ "started_at": "2026-10-18T17:36:23.506962904Z",
+ "status": "succeeded",
+ "task": "t2v",
+ "tier": "turbo",
+ "width": 832
+}

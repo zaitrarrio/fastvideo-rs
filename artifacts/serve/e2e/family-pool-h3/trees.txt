@@ -1,0 +1,4 @@
+6.4G	/fvw/root/FastH3-4-step-Preview-v1-LoRA
+123M	/fvw/root/auxiliary
+52G	/fvw/root/fasth3-v2-nvfp4
+135G	/fvw/root/h3-base
