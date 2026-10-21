@@ -144,6 +144,7 @@ describe.skipIf(!URL_)("Tween against a live fv-serve", () => {
   it("a reference shot runs ref2va on H3", async () => {
     const { b, panels } = await boardWithShot(3);
     await call(`/api/boards/${b.id}/shots/${panels[0].id}`, "PUT", {
+      prompt: "she turns toward the light",
       mode: "reference",
       seconds: 5,
       reference_panel_ids: [panels[2].id],

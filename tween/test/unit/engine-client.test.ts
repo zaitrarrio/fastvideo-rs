@@ -48,18 +48,10 @@ describe("buildRequest", () => {
     expect(() => buildRequest({ ...base, mode: "reference", images: [FIRST, LAST] })).toThrow(/H3/);
   });
 
-  it("sends a blank prompt as a single space rather than an empty field", () => {
-    const body = buildRequest({
-      family: "h3",
-      model: "m",
-      mode: "keyframes",
-      prompt: "   ",
-      seconds: 5,
-      seed: 1,
-      aspect_ratio: "16:9",
-      images: [FIRST, LAST],
-    });
-    expect(body.prompt).toBe(" ");
+  it("refuses a blank prompt, which fv-serve rejects on every model", () => {
+    const base = { family: "h3" as const, model: "m", mode: "keyframes" as const, seconds: 5, seed: 1, aspect_ratio: "16:9", images: [FIRST, LAST] };
+    expect(() => buildRequest({ ...base, prompt: "   " })).toThrow(/prompt/);
+    expect(buildRequest({ ...base, prompt: "  a slow push in  " }).prompt).toBe("a slow push in");
   });
 });
 

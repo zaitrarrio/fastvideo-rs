@@ -67,6 +67,9 @@ Staging (`wrangler.toml [env.staging]`) uses `ltx25-distill-sol` /
 - **Reference**: `task: "ref2va"` with both panels plus any extra reference
   panels. **H3 only**: `/v1/videos` accepts `task` on H3 models only, so a
   bake-off in reference mode is refused before anything is sent.
+- **A prompt is required to render.** fv-serve refuses an empty or
+  whitespace-only prompt on every model, so Tween refuses the render first
+  (400) rather than sending one.
 - **Lengths** are whole seconds. The UI shows each engine's range (LTX 6–20 s,
   H3 5–15 s) but the engine decides: a refusal is recorded on that engine's
   take and the other engine keeps going.
@@ -90,7 +93,7 @@ Errors are `{"error": "..."}` with a 4xx/5xx status.
 | `PATCH`, `DELETE /api/boards/:board/panels/:panel` | caption / remove |
 | `PUT /api/boards/:board/panel-order` | `{panel_ids}`, every panel exactly once |
 | `PUT /api/boards/:board/shots/:start` | shot settings `{prompt, seconds, mode, seed, reference_panel_ids}` |
-| `POST /api/boards/:board/shots/:start/renders` | `{engines?, tier?, seed?}`; default: draft bake-off on both |
+| `POST /api/boards/:board/shots/:start/renders` | `{engines?, tier?, seed?}`; default: draft bake-off on both; 400 if the shot has no prompt |
 | `GET /api/renders/:render` | the render, pulling the engine job while it runs |
 | `GET /api/renders/:render/video` | the MP4 (byte ranges supported) |
 | `POST /api/renders/:render/select` | make it the shot's take in the cut |

@@ -30,14 +30,15 @@ export function buildRequest(i: BuildInput): VideoRequestBody {
   if (i.mode === "keyframes" && i.images.length !== 2) {
     throw new Error("a keyframe shot needs exactly two images (first and last panel)");
   }
+  // fv-serve refuses `prompt.trim().is_empty()` on every model (videos.rs).
+  if (!i.prompt.trim()) throw new Error("a shot needs a prompt before it can render");
   if (i.mode === "reference") {
     if (i.family !== "h3") throw new Error("reference shots run on H3 models only");
     if (i.images.length === 0) throw new Error("a reference shot needs at least one image");
   }
   const body: VideoRequestBody = {
     model: i.model,
-    // The engine requires a prompt; a shot with none still carries one.
-    prompt: i.prompt.trim() ? i.prompt.trim() : " ",
+    prompt: i.prompt.trim(),
     seconds: i.seconds,
     seed: i.seed,
     aspect_ratio: i.aspect_ratio,

@@ -592,6 +592,11 @@ function paintShot() {
   };
 
   const render = async (engineIds, tier = "draft") => {
+    if (!prompt.value.trim()) {
+      toast("Write a prompt for this shot first: the engines refuse an empty one", "error");
+      prompt.focus();
+      return;
+    }
     try {
       await save();
       const out = await api(`/api/boards/${state.board.id}/shots/${shot.start_panel_id}/renders`, {
@@ -634,7 +639,7 @@ function paintShot() {
         el("div", { class: "panel-frame" }, el("img", { src: last.image_url, alt: "Last frame" })),
       ),
     ),
-    el("label", { class: "field" }, el("span", { text: "Prompt" }), prompt),
+    el("label", { class: "field" }, el("span", { text: "Prompt (needed to render)" }), prompt),
     el(
       "div",
       { class: "pair" },

@@ -47,6 +47,10 @@ async function board(panelCount: number, aspect = "16:9") {
   const b = (await json("/api/boards", "POST", { title: "Heist", aspect_ratio: aspect })).body.board;
   const panels = [];
   for (let i = 0; i < panelCount; i++) panels.push((await upload(b.id, pngWith(i), `p${i}`)).body.panel);
+  // fv-serve refuses an empty prompt, so every shot gets one unless a test says otherwise.
+  for (let i = 0; i + 1 < panels.length; i++) {
+    await json(`/api/boards/${b.id}/shots/${panels[i].id}`, "PUT", { prompt: `motion ${i}`, seconds: 6 });
+  }
   return { b, panels };
 }
 
@@ -114,7 +118,7 @@ describe("shots", () => {
     expect(put.status).toBe(200);
     expect(put.body.shot).toMatchObject({ prompt: "the vault door swings", seconds: 6, seed: 7, end_panel_id: panels[1].id });
     expect((await json(`/api/boards/${b.id}/shots/${panels[1].id}`, "PUT", { prompt: "x" })).status).toBe(404);
-    expect((await json(`/api/boards/${b.id}/shots/${panels[0].id}`, "PUT", { seconds: 2.5 })).status).toBe(400);
+    expect((await json(`/api/boards/${b.id}/shots/${panels[0].id}`, "PUT", { prompt: "motion", seconds: 2.5 })).status).toBe(400);
   });
 });
 
@@ -142,7 +146,7 @@ describe("bake-off", () => {
 
   it("polls to completion, copies the MP4 into R2 and reports the real-time factor", async () => {
     const { b, panels } = await board(2);
-    await json(`/api/boards/${b.id}/shots/${panels[0].id}`, "PUT", { seconds: 6 });
+    await json(`/api/boards/${b.id}/shots/${panels[0].id}`, "PUT", { prompt: "motion", seconds: 6 });
     const started = (await json(`/api/boards/${b.id}/shots/${panels[0].id}/renders`, "POST", { engines: ["ltx"] })).body.renders[0];
     expect(started.bakeoff_id).toBeNull();
     const done = await pollDone(started.id);
@@ -160,7 +164,7 @@ describe("bake-off", () => {
   it("records an engine refusal on that engine only and keeps the other render running", async () => {
     const { b, panels } = await board(2);
     // H3 refuses 20 s; LTX takes it.
-    await json(`/api/boards/${b.id}/shots/${panels[0].id}`, "PUT", { seconds: 20 });
+    await json(`/api/boards/${b.id}/shots/${panels[0].id}`, "PUT", { prompt: "motion", seconds: 20 });
     const { body } = await json(`/api/boards/${b.id}/shots/${panels[0].id}/renders`, "POST", {});
     const byEngine = Object.fromEntries(body.renders.map((r: any) => [r.engine, r]));
     expect(byEngine.ltx.status).toBe("queued");
@@ -170,7 +174,7 @@ describe("bake-off", () => {
 
   it("refuses a reference bake-off up front because LTX cannot take one", async () => {
     const { b, panels } = await board(2);
-    await json(`/api/boards/${b.id}/shots/${panels[0].id}`, "PUT", { mode: "reference", seconds: 6 });
+    await json(`/api/boards/${b.id}/shots/${panels[0].id}`, "PUT", { prompt: "motion", mode: "reference", seconds: 6 });
     const r = await json(`/api/boards/${b.id}/shots/${panels[0].id}/renders`, "POST", {});
     expect(r.status).toBe(400);
     expect(r.body.error).toMatch(/H3/);
@@ -180,6 +184,7 @@ describe("bake-off", () => {
   it("sends ref2va with the reference panels for a reference shot on H3", async () => {
     const { b, panels } = await board(3);
     await json(`/api/boards/${b.id}/shots/${panels[0].id}`, "PUT", {
+      prompt: "motion",
       mode: "reference",
       seconds: 5,
       reference_panel_ids: [panels[2].id],
@@ -228,6 +233,15 @@ describe("bake-off", () => {
     expect(second.video_url).toBeTruthy();
   });
 
+  it("refuses to render a shot with no prompt, before anything reaches the engine", async () => {
+    const { b, panels } = await board(2);
+    await json(`/api/boards/${b.id}/shots/${panels[0].id}`, "PUT", { prompt: "   ", seconds: 6 });
+    const r = await json(`/api/boards/${b.id}/shots/${panels[0].id}/renders`, "POST", {});
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/prompt/);
+    expect(engine.submitted).toHaveLength(0);
+  });
+
   it("503s without an engine and reads renders without touching one", async () => {
     setup({ TWEEN_ENGINE_URL: undefined });
     const { b, panels } = await board(2);
@@ -238,7 +252,7 @@ describe("bake-off", () => {
 describe("finalize, select and the animatic", () => {
   it("finalizes a draft with the same seed on the final model", async () => {
     const { b, panels } = await board(2);
-    await json(`/api/boards/${b.id}/shots/${panels[0].id}`, "PUT", { seconds: 6, seed: 99 });
+    await json(`/api/boards/${b.id}/shots/${panels[0].id}`, "PUT", { prompt: "motion", seconds: 6, seed: 99 });
     const draft = (await json(`/api/boards/${b.id}/shots/${panels[0].id}/renders`, "POST", { engines: ["h3"] })).body.renders[0];
     const fin = await json(`/api/renders/${draft.id}/finalize`, "POST");
     expect(fin.status).toBe(202);

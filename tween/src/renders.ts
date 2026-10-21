@@ -74,6 +74,9 @@ export async function submitShot(deps: RenderDeps, input: SubmitInput): Promise<
     if (!choice.ok) throw new RenderError(400, choice.reason);
     return { engine, model: choice.model };
   });
+  if (!input.shot.prompt.trim()) {
+    throw new RenderError(400, "write a prompt for this shot first: the engine refuses an empty prompt");
+  }
   const images = await loadDataUris(deps, input.panels, shotImageIds(input.shot));
   const seed = input.seed ?? input.shot.seed ?? (deps.randomSeed ?? randomSeed)();
   const bakeoff_id = plan.length > 1 ? newId("bk") : null;

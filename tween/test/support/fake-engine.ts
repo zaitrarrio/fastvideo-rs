@@ -1,6 +1,6 @@
 // An in-process stand-in for fv-serve's /v1/videos with the rules Tween
 // depends on (crates/fastvideo-openai-videos/src/videos.rs):
-//   - bearer auth; unknown models 404
+//   - bearer auth; blank prompts 400; unknown models 404
 //   - `task` only on H3 models; `ref2va` needs a reference-loaded model
 //   - one or two images without `task` are i2v / keyframes
 //   - jobs go queued -> in_progress -> completed, one step per GET
@@ -101,6 +101,8 @@ export function fakeEngine(key = "sk-test", models: Record<string, FakeModel> = 
     if (req.method === "POST" && url.pathname === "/v1/videos") {
       const body = (await req.json()) as Record<string, unknown>;
       submitted.push(body);
+      // videos.rs normalize: `prompt.trim().is_empty()` is refused on every model.
+      if (typeof body.prompt !== "string" || !body.prompt.trim()) return err(400, "prompt must not be empty", "prompt");
       const m = models[String(body.model)];
       if (!m) return err(404, `model \`${String(body.model)}\` is not served`, "model");
       const images = (body.image_reference as unknown[] | undefined) ?? [];
