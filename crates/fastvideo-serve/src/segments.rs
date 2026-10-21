@@ -217,6 +217,14 @@ struct SegmentStatus {
     planned_frames: u32,
     /// The MP4 carries an audio track.
     audio: bool,
+    /// Clip continuations: how well the build reproduced its anchor
+    /// (`anchor_diff`: mean luma difference between the anchor and the
+    /// build's first frame, the one dropped) and how far the first
+    /// delivered frame is from the anchor (`step_diff`), both 0–255. A
+    /// model that keeps the scene gives a `step_diff` near the clip's own
+    /// inter-frame difference; a model that only paints the anchor and
+    /// then re-imagines the scene gives a large one.
+    seam: Option<(f64, f64)>,
     generation_ms: Option<f64>,
     encode_ms: Option<f64>,
     error: Option<String>,
@@ -268,6 +276,7 @@ impl SegmentJob {
             "planned_duration_sec": if s.fps > 0 { f64::from(s.planned_frames) / f64::from(s.fps) } else { 0.0 },
             "continuity": s.continuity,
             "audio": s.audio,
+            "seam": s.seam.map(|(a, b)| json!({"anchor_diff": a, "step_diff": b})),
             "session": {"restarted": s.restarted, "stale_blocks": s.stale_blocks, "discarded_blocks": s.discarded_blocks},
             "metrics": {"generation_ms": s.generation_ms, "encode_ms": s.encode_ms},
             "error": s.error,
@@ -737,6 +746,25 @@ fn write_png(f: &RgbFrame, path: &PathBuf) -> Result<(), ApiError> {
         .map_err(|e| ApiError::internal(format!("writing {}: {e}", path.display())))
 }
 
+/// Mean absolute luma difference (0–255) between two frames of one size
+/// (sampled every 4th pixel); 255 when the sizes differ.
+fn luma_diff(a: &RgbFrame, b: &RgbFrame) -> f64 {
+    if a.width != b.width || a.height != b.height || a.data.len() != b.data.len() {
+        return 255.0;
+    }
+    let luma = |p: &[u8]| 0.299 * f64::from(p[0]) + 0.587 * f64::from(p[1]) + 0.114 * f64::from(p[2]);
+    let (mut sum, mut n) = (0.0, 0u64);
+    for (pa, pb) in a.data.chunks_exact(3).zip(b.data.chunks_exact(3)).step_by(4) {
+        sum += (luma(pa) - luma(pb)).abs();
+        n += 1;
+    }
+    if n == 0 {
+        0.0
+    } else {
+        (sum / n as f64 * 1000.0).round() / 1000.0
+    }
+}
+
 /// Drops one video frame's worth of samples from the head of `pcm` (the
 /// anchor frame a continuation duplicates).
 fn drop_audio_head(pcm: &Pcm, fps: u32) -> Pcm {
@@ -885,6 +913,7 @@ impl Segments {
                 },
                 planned_frames: planned,
                 audio: false,
+                seam: None,
                 generation_ms: None,
                 encode_ms: None,
                 error: None,
@@ -1167,8 +1196,10 @@ impl Segments {
         let spec = plan.spec.clone();
         let size = plan.output_size();
         let mut session: Option<ClipSession> = None;
-        // The last frame of the previous segment, as a PNG.
+        // The last frame of the previous segment, as a PNG (the build's
+        // first-frame input) and in memory (the seam measurement).
         let mut anchor: Option<PathBuf> = None;
+        let mut anchor_frame: Option<RgbFrame> = None;
         let audio_channels = spec.tracks.audio.as_ref().map(|a| a.channels);
         loop {
             let next = tokio::select! {
@@ -1308,7 +1339,13 @@ impl Segments {
 
             // A continuation's first frame is the anchor itself: drop it (and
             // its audio) so segment N+1 starts on the frame after N's last.
+            let mut seam = None;
             if continuity == "anchor" && frames.len() > 1 {
+                if let Some(a) = &anchor_frame {
+                    let m = (luma_diff(a, &frames[0]), luma_diff(a, &frames[1]));
+                    tracing::info!(stream = %slot.stream_id, segment = job.req.segment_index, anchor_diff = m.0, step_diff = m.1, "clip seam");
+                    seam = Some(m);
+                }
                 frames.remove(0);
                 if let Some(a) = audio.take() {
                     audio = Some(drop_audio_head(&a, spec.fps));
@@ -1330,10 +1367,12 @@ impl Segments {
                     if let Some(old) = anchor.replace(next) {
                         let _ = tokio::fs::remove_file(old).await;
                     }
+                    anchor_frame = frames.last().cloned();
                 }
                 Err(e) => {
                     tracing::warn!(stream = %slot.stream_id, error = %e.message, "anchor frame not written: the next segment starts from text");
                     anchor = None;
+                    anchor_frame = None;
                 }
             }
 
@@ -1361,6 +1400,7 @@ impl Segments {
             job.set(|s| {
                 s.restarted = restarted;
                 s.continuity = continuity;
+                s.seam = seam;
                 s.generation_ms = Some(generation_ms);
             });
             self.finish(&job, outcome).await;
@@ -1810,6 +1850,15 @@ mod tests {
                 .as_deref(),
             Some("stream_id")
         );
+    }
+
+    #[test]
+    fn seam_measure_is_zero_on_equal_frames_and_grows_with_the_change() {
+        let f = |v: u8| RgbFrame::new(8, 4, bytes::Bytes::from(vec![v; 8 * 4 * 3]), 0).unwrap();
+        assert_eq!(luma_diff(&f(10), &f(10)), 0.0);
+        assert_eq!(luma_diff(&f(10), &f(30)), 20.0);
+        let other = RgbFrame::new(4, 4, bytes::Bytes::from(vec![0; 4 * 4 * 3]), 0).unwrap();
+        assert_eq!(luma_diff(&f(10), &other), 255.0);
     }
 
     #[test]

@@ -252,6 +252,49 @@ Results in `artifacts/serve/segments/10212204/`.
   same image ran blind for 26 min because the variant images carry no
   `fv-gpucheck` (the result server); the script now uses python3.
 
+### Clip path (2026-10-21, RTX PRO 6000 Blackwell, EU-RO-1, the EU volume)
+
+`segments-pod.sh` with `FV_SEG_VOLUME=bz0ofkfx45`, `FV_SEG_RES=480p`,
+`FV_SEG_SECONDS=5`, the `ltx` / `h3-turbo` variant images
+(`*-sha-7b36d11`), NVENC. Four segments: the same prompt twice, a prompt
+change at 2, a `reset` at 3. Results in `artifacts/serve/segments/10212254`
+(LTX) and `10212253` (H3).
+
+| model | segment | continuity | frames | generation | encode | seam (luma diff, vs inside the clip) |
+|---|---|---|---|---|---|---|
+| `ltx25-distill-sol` (ltx-turbo) 854×480 24 fps, 48 kHz | 0 | text | 121 | 107.6 s (cold: text encoder, first build) | 0.37 s | — |
+| | 1 | anchor | 120 | 9.8 s | 0.37 s | **4.41 vs 3.02** (PSNR 29.4 dB): seamless |
+| | 2 (recache) | anchor | 120 | 10.3 s | 0.37 s | |
+| | 3 (reset) | text | 121 | 8.8 s | 0.37 s | cut |
+| `fasth3` (h3-turbo) 832×480 24 fps, 32 kHz | 0 | text | 124 | 10.2 s | 0.45 s | — |
+| | 1 | anchor | 123 | 13.7 s | 0.43 s | **38.3 vs 5.66** (PSNR 12.5 dB): a cut |
+| | 2 (recache) | anchor | 123 | 9.9 s | 0.44 s | |
+| | 3 (reset) | text | 124 | 8.7 s | 0.45 s | cut |
+
+- **LTX-2.5 turbo chains seamlessly** on the last frame: the join of
+  segments 0 and 1 is an ordinary inter-frame step (4.4 against 3.0 inside
+  the clip) and the picture is the same shot. Steady state is 10 s of
+  generation per 5 s segment (0.5× realtime) at 480p on the RTX PRO 6000,
+  so a stream needs two segments of lead or a faster GPU; the first segment
+  pays the cold text encoder (108 s) once.
+- **H3 turbo (`fasth3-4step-vsa`) does not keep the scene across the
+  anchor.** The engine encoded the anchor (`h3 fl2va: encode first …` in
+  the log) and the build ran as FL2VA, but the delivered segment is a
+  different take of the same prompt (another river, another forest): the
+  join measures 38 luma levels against 5.7 inside the clip. This is the
+  model's first-frame adherence on this recipe, not the router: `h3-max`'s
+  earlier I2V strip (`artifacts/serve/e2e/h3-max/fal-i2v-strip.jpg`) shows
+  the same behaviour, frame 0 is the image and the clip then follows the
+  prompt. The router now reports `seam.anchor_diff` (the anchor against the
+  build's frame 0, the one it drops) and `seam.step_diff` (against the
+  first delivered frame) on every continuation, so the control plane can
+  tell a model that continues the shot from one that repaints it; the H3
+  numbers are to be collected on the next run. Until the H3 port's FL2VA
+  keeps the scene (or `h3-max` is measured), H3 segments are consecutive
+  takes with one anchored frame, and the control plane should treat each H3
+  seam as a cut (its `cut`/keyframe planning) or keep H3 on fal.
+- Both pods: 4–5 minutes, $0.19–0.21 each; the EU volume was only read.
+
 ## 7. Gaps
 
 - The clip path (H3, LTX) is CPU-tested on the fake engine only

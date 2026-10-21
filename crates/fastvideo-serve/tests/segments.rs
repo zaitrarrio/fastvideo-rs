@@ -334,6 +334,9 @@ async fn clip_models_chain_on_the_last_frame() {
     assert_eq!(d1["continuity"], "anchor");
     assert_eq!(d1["frames"], 144);
     assert_eq!(d1["session"]["restarted"], false);
+    assert!(d1["seam"]["anchor_diff"].is_number(), "{d1}");
+    assert!(d1["seam"]["step_diff"].is_number());
+    assert_eq!(d0["seam"], Value::Null);
 
     // The MP4 has an audio track.
     let url = d1["video_url"].as_str().unwrap();
