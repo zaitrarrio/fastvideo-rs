@@ -1,4 +1,4 @@
-# `/v1/segments`: pull-based segments from a causal session
+# `/v1/segments`: pull-based segments from one engine session
 
 Status: implemented (`crates/fastvideo-serve/src/segments.rs`), mounted with
 `protocols.native` when `[segments] enabled` (default on). CPU tests:
@@ -12,22 +12,33 @@ prompt, asks a render backend for the clip, and feeds the clip into its own
 WHIP publisher. Its backend contract (`docs/render-backend.md` there) is
 `POST /v1/segments` + `GET /v1/segments/{id}` with a `video_url` per segment.
 
-On a clip model that means one job per segment and a visible seam between
-clips. On a causal model (SF-Wan, LongLive) the right answer is **one
-rollout for the whole stream**, cut into segments after the fact: the KV
-cache, the frame sink and the decoder state carry across segments and the
-seams do not exist. That is what this router does, over the engine's
-`CausalSession` (design §5.4), without the live pacer and WHIP publisher of
+On a causal model (SF-Wan, LongLive) the right answer is **one rollout for
+the whole stream**, cut into segments after the fact: the KV cache, the
+frame sink and the decoder state carry across segments and the seams do not
+exist. That is what this router does over the engine's `CausalSession`
+(design §5.4), without the live pacer and WHIP publisher of
 `/fv/v1/streams` (the control plane publishes).
+
+On a clip model (H3, LTX, Wan with image-to-video) a stream is **one clip
+build per segment, chained on the last frame**, the way the fal director
+chains its chunks (`director-chunks.md`): the router keeps the previous
+segment's last frame, conditions the next build on it (`Task::I2V`) and
+drops the duplicated frame. The control plane keeps using `continuity:
+"native"`; nothing crosses the wire between segments. It may instead send
+its own `context.image_url` (its `last_frame` mode) or an `end_image_url`
+(keyframe planning, models with `Task::Keyframes`). This is the same
+`ClipSession` (design §5.5) the director and the Reactor use, so a backend
+serving any `runpod-h3-*.toml` / `runpod-ltx.toml` preset answers
+`/v1/segments` with no further configuration.
 
 ## 2. Routes
 
 | Route | Behaviour |
 |---|---|
-| `POST /v1/segments` | → 202 segment object. The first segment of a `stream_id` opens a causal session on an executor (exclusive lease); later segments continue it |
+| `POST /v1/segments` | → 202 segment object. The first segment of a `stream_id` opens a session on an executor (exclusive lease): a causal rollout or a clip session, by the model; later segments continue it |
 | `GET /v1/segments/{id}` | the segment object: `queued` → `running` → `succeeded` (`video_url`, a signed artifact URL) or `failed` (`error`) |
 | `GET /v1/segments/streams` | the streams with a session here |
-| `GET /v1/segments/streams/{stream_id}` | model, canvas, sessions opened, blocks generated, queue depth, idle time, the session's `state_update` |
+| `GET /v1/segments/streams/{stream_id}` | `path` (`causal` \| `clip`), model, canvas, sessions opened, blocks generated (causal) / `clips` built, queue depth, idle time, a causal session's `state_update` |
 | `DELETE /v1/segments/streams/{stream_id}` | close the session now |
 
 Also under `/fv/v1/segments`. Auth is the native API's (`Authorization:
@@ -55,26 +66,45 @@ Bearer <key>`); a busy executor answers 429 + `Retry-After` on the
 }
 ```
 
-- `model`: a causal model served here; default `[segments] model`, else the
-  first causal model the engine serves. A stream keeps the model it opened with.
-- `duration_sec` 0.5–30. The segment is `round(duration_sec × fps)` frames;
-  the rollout's blocks (12 frames = 0.75 s at 16 fps) are consumed as needed
-  and the remainder carries over to the next segment, so nothing is dropped
-  and segment N+1 starts on the frame after segment N's last. 6 s = 96 frames
-  = exactly 8 blocks.
-- `resolution` / `aspect_ratio`: the causal canvas tier (480p; `width×height`
-  from `canvas_for_aspect`, 832×480 at 16:9). Other tiers only when the
-  model serves them.
-- `recache`: the direction changed. The prompt is set before the segment's
-  first block; the model's prompt-switch policy applies (SF-Wan keeps the
-  cache, LongLive re-caches once). A prompt equal to the previous segment's
-  is not re-set, so an unchanged prompt never triggers a re-cache.
-- `reset`: a scene cut. The KV cache is cleared and blocks the engine had
-  already generated under the old scene are discarded
-  (`session.discarded_blocks`). Block numbering restarts at 0.
-- `context.*`: refused (`invalid_param`). The causal path keeps its own state;
-  the control plane uses `continuity: "native"`, which sends none.
-- `reference_image_urls`, `end_image_url`: accepted and ignored on Wan (`warnings`).
+- `model`: a model served here, by id, served name or tier alias
+  (`h3-turbo`, `ltx-pro`, …); default `[segments] model`, else the first
+  causal model the engine serves, else the first clip model with
+  image-to-video. A stream keeps the model it opened with. A model that can
+  neither stream causally nor chain on a frame (text-only clip models) is
+  refused.
+- `duration_sec` 0.5–30. **Causal:** the segment is `round(duration_sec ×
+  fps)` frames; the rollout's blocks (12 frames = 0.75 s at 16 fps) are
+  consumed as needed and the remainder carries over to the next segment, so
+  nothing is dropped and segment N+1 starts on the frame after segment N's
+  last. 6 s = 96 frames = exactly 8 blocks. **Clip:** the count snaps up
+  onto the model's frame grid within its range (H3 `17n+5` at 24 fps, 6 s →
+  158 frames = 6.58 s; LTX `8k+1`, 6 s → 145; H3's minimum is 4.46 s, LTX's
+  5 s on the two-stage recipes), and a continuation delivers one frame fewer
+  (the duplicated anchor). The 202 object says `planned_frames` /
+  `planned_duration_sec`; the control plane plans its timeline on it.
+- `resolution` / `aspect_ratio`: a short-edge tier of the model (SF-Wan
+  480p; H3 768p, 480p on the real recipes; LTX 480p…2160p). The model's
+  default tier when absent; a tier it does not serve snaps to the nearest
+  served one with a warning (a stream never fails on a tier name). LTX
+  generates its padded canvas and the output is centre-cropped to the tier,
+  the anchor frame uncropped, as the director does.
+- `recache`: the direction changed. **Causal:** the prompt is set before the
+  segment's first block; the model's prompt-switch policy applies (SF-Wan
+  keeps the cache, LongLive re-caches once). A prompt equal to the previous
+  segment's is not re-set, so an unchanged prompt never triggers a re-cache.
+  **Clip:** nothing; every build is conditioned afresh on its prompt.
+- `reset`: a scene cut. **Causal:** the KV cache is cleared and blocks the
+  engine had already generated under the old scene are discarded
+  (`session.discarded_blocks`); block numbering restarts at 0. **Clip:** the
+  build starts from text instead of the previous last frame.
+- `context.image_url`: **clip** models only (the control plane's
+  `last_frame` mode): fetched (`http(s)`, feature `http-client`) and used as
+  the build's first frame instead of the backend's own anchor. Refused on
+  the causal path, which keeps its own state. `context.video_url` is refused
+  on both (no extend on this path; the backend chains on the last frame).
+- `end_image_url`: on clip models with `Task::Keyframes` (H3, LTX-2.5) the
+  frame the segment ends on (keyframe planning); a warning elsewhere.
+- `reference_image_urls`: accepted and ignored (`warnings`).
 - `callback_url`: with the `http-client` feature, the finished segment object
   is POSTed there (3 attempts). Without it, poll.
 - Resubmitting the same `(stream_id, segment_index)` returns the existing
@@ -91,13 +121,24 @@ Bearer <key>`); a busy executor answers 429 + `Retry-After` on the
   "trim_head_sec": 0.0,
   "frames": 96, "fps": 16, "width": 832, "height": 480, "duration_sec": 6.0,
   "blocks": [56, 63],
+  "planned_frames": 96, "planned_duration_sec": 6.0,
+  "continuity": "native", "audio": false,
   "session": {"restarted": false, "stale_blocks": 1, "discarded_blocks": 0},
   "metrics": {"generation_ms": 3900.0, "encode_ms": 180.0},
   "error": null, "created_at": 1761086400, "finished_at": 1761086405
 }
 ```
 
-- `trim_head_sec` is always 0: nothing is re-rendered.
+- `trim_head_sec` is always 0: nothing is re-rendered, and a clip
+  continuation's duplicated first frame is dropped here (with one frame's
+  worth of audio).
+- `continuity`: how the segment was conditioned. `native` (a causal
+  rollout), `anchor` (the previous segment's last frame), `image` (the
+  request's `context.image_url`), `text` (a first segment, a `reset`, or an
+  anchor the router could not keep; after a failed build the picture
+  continues from the anchor it still has).
+- `audio`: the MP4 has an audio track (H3 32 kHz stereo, LTX 48 kHz; AAC
+  128 kb/s). The causal models are silent.
 - `session.stale_blocks`: blocks at the head of the segment that were
   generated before this segment's prompt landed. The engine runs up to
   `causal_depth` (4) blocks ahead, so a direction shows after up to 3 s of
@@ -110,19 +151,32 @@ Bearer <key>`); a busy executor answers 429 + `Retry-After` on the
   `causal_hard_max_s` (300). The control plane should expect a restart at
   that cadence until the long-horizon study (docs/ports/wan.md R12) says
   otherwise.
-- Output: video-only MP4 (Wan is silent), H.264 at constant quality 19
-  (NVENC; `[segments] encoder = "libx264"` for CPU tests), `+faststart`.
+- Output: MP4, H.264 at constant quality 19 (NVENC; `[segments] encoder =
+  "libx264"` for CPU tests), `+faststart`, AAC audio when the model has it.
 
 ## 3. Session lifecycle
 
 ```
-POST segment 0 ──► slot(stream_id) ──► worker task
-                                        ├─ open_causal_session(spec)   (lease on an executor)
+POST segment 0 ──► slot(stream_id) ──► worker task (by the model's path)
+  causal:                               ├─ open_causal_session(spec)   (lease on an executor)
                                         ├─ set_prompt / reset per segment
                                         ├─ next_block() … until `need` frames (carry-over kept)
                                         ├─ write_mp4 → artifacts.put → signed url_for(ttl)
                                         └─ idle > idle_ttl (120 s) or DELETE → close, free the lease
+  clip:                                 ├─ open_clip_session(spec)     (lease on an executor)
+                                        ├─ per segment: first_frame = context.image_url | anchor | none (reset)
+                                        │              last_frame  = end_image_url (Keyframes)
+                                        │              ClipBuild{frames: planned} → frames + PCM
+                                        ├─ anchor = last frame (PNG, uncropped); drop frame 0 of a continuation
+                                        ├─ crop (LTX) → write_mp4 (+AAC) → artifacts.put → signed url_for(ttl)
+                                        └─ idle / DELETE → close, free the lease, delete the anchor
 ```
+
+A failed input (an image that does not fetch or decode) fails that segment
+only; the session and the anchor stay, so the next segment continues the
+picture. An engine failure (a busy executor, a failed build) drops the
+session; the next segment reopens one (`session.restarted`), still on the
+anchor.
 
 The engine blocks the executor when the block channel is full, so a stream
 whose control plane stops asking does not run away: it stalls after 4
@@ -139,6 +193,9 @@ blocks of a segment can be `stale`).
   routing is the caller's).
 - A stream keeps the model it opened with; a segment naming another model
   is refused.
+- Clip builds run at `Priority::Stream` on the session's executor, ahead of
+  batch jobs, like the director's chunks: a backend can keep serving its
+  batch APIs between segments.
 - `queue` (8) segments may wait per stream; more → 429.
 - The session's `max_seconds` is enforced by the engine; when it ends under
   a segment the worker reopens once (`restarted: true`). Ending twice under
@@ -149,7 +206,7 @@ blocks of a segment can be `stale`).
 ```toml
 [segments]
 enabled = true
-model = "sfwan"        # FV_SEGMENTS_MODEL; default: first causal model served
+model = "sfwan"        # FV_SEGMENTS_MODEL; default: first causal model, else first I2V clip model
 idle_ttl_s = 120       # FV_SEGMENTS_IDLE_TTL_S
 max_seconds = 300      # session video length; clamped to [streams] causal_hard_max_s
 url_ttl_s = 3600
@@ -197,10 +254,22 @@ Results in `artifacts/serve/segments/10212204/`.
 
 ## 7. Gaps
 
-- No first-frame or tail prefill on the causal path (`context.*` is refused):
-  the control plane's `last_frame` / `overlap` modes stay on clip providers.
-- No audio; no reference images; one stream per GPU; 480p only.
-- Not yet measured: a 5–10 minute stream (the `max_seconds` restart and the
-  R12 drift question), NVENC on L40S / RTX PRO 6000, and the end-to-end
-  join in the control plane's streamer (the MP4s above are what it gets).
+- The clip path (H3, LTX) is CPU-tested on the fake engine only
+  (`tests/segments.rs`: an LTX chain with anchor, reset, image and keyframe
+  inputs and audio in the MP4; the H3 tier alias and grid). Its GPU smoke
+  is `segments-pod.sh` with `FV_SEG_MODEL=h3-turbo` / `ltx-turbo` and
+  `FV_SEG_RES=768p` / `480p` on the matching variant image, with the H3 /
+  LTX trees mounted from the EU volume or fetched from R2 (the script only
+  fetches SF-Wan today); not run yet.
+- No extend / tail prefill on either path (`context.video_url` is refused):
+  LTX-2.5 `Task::Extend` exists in the engine but needs a staged source and
+  an edit window, and its 2 s minimum extension and 8-frame rounding do not
+  fit the contract's lengths. The control plane's `overlap` mode stays on
+  clip providers.
+- No reference images on either path (H3 ref2va is a separate recipe); no
+  audio on the causal path; one stream per GPU.
+- Not yet measured: a 5–10 minute causal stream (the `max_seconds` restart
+  and the R12 drift question), NVENC on L40S / RTX PRO 6000, and the
+  end-to-end join in the control plane's streamer (the MP4s above are what
+  it gets).
 - Artifacts are never deleted by this router (the store's retention applies).

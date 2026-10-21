@@ -21,7 +21,8 @@
 # Env: RUNPOD_API_KEY, RUNPOD_GPU_TYPES ('|'-separated preference list),
 # RUNPOD_GPU_MAX_DPH (default 4.0), FV_POD_CAP_S (default 3600, the detached
 # backstop that deletes the pod even if this shell dies), FV_MIN_BALANCE
-# (default 8), FV_SEG_COUNT (default 4), FV_SEG_SECONDS (default 6).
+# (default 8), FV_SEG_COUNT (default 4), FV_SEG_SECONDS (default 6),
+# FV_SEG_MODEL (the client's `model`; default the server's), FV_SEG_RES (480p).
 # Results: artifacts/serve/segments/<tag>/; the ledger gets a row per pod.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -39,6 +40,13 @@ CAP_S="${FV_POD_CAP_S:-3600}"
 MIN_BALANCE="${FV_MIN_BALANCE:-8}"
 NSEG="${FV_SEG_COUNT:-4}"
 SEGS="${FV_SEG_SECONDS:-6}"
+# The model the client names (empty: the server's default, SF-Wan on this
+# image) and the tier it asks for. A clip-model smoke (h3-turbo, ltx-turbo)
+# needs the matching variant image and its weights (the EU volume holds the
+# H3 and LTX trees; this script fetches SF-Wan only), see
+# docs/serve/segments.md §7.
+SEG_MODEL="${FV_SEG_MODEL:-}"
+SEG_RES="${FV_SEG_RES:-480p}"
 TAG="$(date -u +%m%d%H%M)"
 OUT="$ROOT/artifacts/serve/segments/$TAG"
 LEDGER="$ROOT/artifacts/runpod/serve/ledger.tsv"
@@ -62,6 +70,7 @@ client_py() {
 import json, os, subprocess, sys, time, urllib.request
 S = os.environ.get("S", "http://127.0.0.1:8080"); OUT = os.environ["OUT"]
 N = int(os.environ.get("NSEG", "4")); SECS = float(os.environ.get("SEGS", "6"))
+MODEL = os.environ.get("MODEL") or None; RES = os.environ.get("RES", "480p")
 P = [
  "A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed",
  "A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed",
@@ -80,8 +89,10 @@ sid = summary["stream_id"]
 for i in range(N):
     prompt = P[min(i, len(P) - 1)]
     body = {"stream_id": sid, "segment_index": i, "prompt": prompt, "duration_sec": SECS,
-            "resolution": "480p", "aspect_ratio": "16:9", "seed": 42,
+            "resolution": RES, "aspect_ratio": "16:9", "seed": 42,
             "recache": i == 2, "reset": i == 3}
+    if MODEL:
+        body["model"] = MODEL
     t0 = time.time()
     st, seg = call("POST", "/v1/segments", body)
     log(f"POST seg {i} -> {st} {seg.get('id')} {seg.get('status')} warnings={seg.get('warnings')}")
@@ -154,7 +165,7 @@ curl -sS \$S/fv/v1/capabilities >"\$OUT/capabilities.json"
 curl -sS \$S/v1/segments/streams >"\$OUT/streams-empty.json"
 echo "\$FV_SEG_PY_B64" | base64 -d >/segments.py
 say "client"
-S=\$S OUT=\$OUT NSEG=$NSEG SEGS=$SEGS python3 /segments.py >"\$OUT/client.log" 2>&1 || say "client failed"
+S=\$S OUT=\$OUT NSEG=$NSEG SEGS=$SEGS MODEL=$SEG_MODEL RES=$SEG_RES python3 /segments.py >"\$OUT/client.log" 2>&1 || say "client failed"
 tail -n 20 "\$OUT/client.log"
 # Seam check: last frame of seg 0 vs first frame of seg 1, against the mean
 # inter-frame difference inside seg 0 (both as ffmpeg psnr MSE of the pair).

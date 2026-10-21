@@ -1,9 +1,9 @@
-//! `/v1/segments`: a pull-based segment API over causal sessions, for a
+//! `/v1/segments`: a pull-based segment API over engine sessions, for a
 //! control plane that drives an infinite live stream (docs/serve/segments.md).
 //!
 //! | Route | Behaviour |
 //! |---|---|
-//! | `POST /v1/segments` | Render the next segment of a stream: `{stream_id, segment_index, prompt, duration_sec, …}` → 202 segment object. The first segment of a `stream_id` opens a causal session (exclusive executor lease); later ones continue it, so the KV cache, the sink and the decoder state carry across segments and the seams are invisible |
+//! | `POST /v1/segments` | Render the next segment of a stream: `{stream_id, segment_index, prompt, duration_sec, …}` → 202 segment object. The first segment of a `stream_id` opens a session on an executor (exclusive lease); later ones continue it. On a **causal** model (SF-Wan) the session is one rollout: the KV cache, the sink and the decoder state carry across segments and the seams are invisible. On a **clip** model (H3, LTX, Wan) each segment is one clip build anchored on the previous segment's last frame (image-to-video), the duplicated frame dropped |
 //! | `GET /v1/segments/{id}` | Segment object: `queued` \| `running` \| `succeeded` (with `video_url`) \| `failed` |
 //! | `GET /v1/segments/streams/{stream_id}` | The stream's session: model, canvas, blocks generated, queue depth, last use |
 //! | `DELETE /v1/segments/streams/{stream_id}` | Close the session now (it also closes after `idle_ttl`) |
@@ -30,9 +30,16 @@
 //!   under a segment, the next segment opens a new one from text: the
 //!   segment object says `session.restarted: true`, and the control plane
 //!   should treat that seam as a cut.
-//! - **Not supported on the causal path** (refused with `invalid_param`):
-//!   `context.image_url`, `context.video_url` (the clip models' chaining
-//!   inputs). `reference_image_urls` are accepted and ignored (`warnings`).
+//! - **Clip models** (`StreamCaps::Clip`, `Task::I2V`): the worker keeps the
+//!   last frame of the previous segment and conditions the next build on it
+//!   (`continuity: "anchor"`); the control plane may instead send its own
+//!   `context.image_url` (`"image"`); `reset` or a first segment starts from
+//!   text (`"text"`). `end_image_url` anchors the last frame when the model
+//!   has `Task::Keyframes`. The clip length snaps up onto the model's frame
+//!   grid: the 202 object says how many frames the segment will have.
+//! - **Not supported** (refused with `invalid_param`): `context.*` on the
+//!   causal path, `context.video_url` everywhere (no extend on this path).
+//!   `reference_image_urls` are accepted and ignored (`warnings`).
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -45,12 +52,14 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use fastvideo_engine_service::{CausalControl, CausalSession, EngineService};
-use fastvideo_media::mp4::{write_mp4, Mp4Spec};
+use fastvideo_engine_service::{
+    CausalControl, CausalSession, ClipBuild, ClipSession, EngineService,
+};
+use fastvideo_media::mp4::{write_mp4, AudioTarget, Mp4Spec};
 use fastvideo_media::video::FfmpegH264;
 use fastvideo_protocol::{
-    canvas_for_aspect, ApiError, CausalLimits, Continuity, ErrorKind, ModelCaps, ModelId,
-    ProtocolId, RgbFrame, SessionSpec, StreamCaps, TrackSet,
+    canvas_for_aspect, resolve_canvas, ApiError, CanvasSpec, CausalLimits, Continuity, ErrorKind,
+    ModelCaps, ModelId, Pcm, ProtocolId, Ratio, RgbFrame, SessionSpec, StreamCaps, Task, TrackSet,
 };
 use fastvideo_serve_kit::{ArtifactMeta, ServeCtx};
 use serde::{Deserialize, Serialize};
@@ -65,8 +74,8 @@ const MAX_PROMPT_CHARS: usize = 800;
 /// `[segments]` resolved.
 #[derive(Clone, Debug)]
 pub struct SegmentsConfig {
-    /// The causal model a request without `model` uses; `None`: the first
-    /// causal model the engine serves.
+    /// The model a request without `model` uses; `None`: the first causal
+    /// model the engine serves, else the first clip model with image-to-video.
     pub model: Option<String>,
     /// Close a stream's session after this long without a segment request.
     pub idle_ttl: Duration,
@@ -127,7 +136,8 @@ pub struct SegmentRequest {
     pub model: Option<String>,
     pub prompt: String,
     pub duration_sec: f64,
-    /// `480p` (the causal canvas tier); other tiers only if the model serves them.
+    /// A short-edge tier (`480p`, `768p`, …); the model's default when
+    /// absent, the nearest served tier (with a warning) when not served.
     #[serde(default)]
     pub resolution: Option<String>,
     /// `16:9` (default), `9:16`, `1:1`, …
@@ -135,16 +145,19 @@ pub struct SegmentRequest {
     pub aspect_ratio: Option<String>,
     #[serde(default)]
     pub seed: Option<u64>,
-    /// The direction changed: apply the model's prompt-switch policy.
+    /// The direction changed: apply the model's prompt-switch policy
+    /// (causal); nothing on clip models (every build is conditioned afresh).
     #[serde(default)]
     pub recache: bool,
-    /// A scene cut: clear the KV cache before this segment.
+    /// A scene cut: clear the KV cache (causal) / start from text instead
+    /// of the previous segment's last frame (clip).
     #[serde(default)]
     pub reset: bool,
-    /// Accepted and ignored on Wan (no reference conditioning).
+    /// Accepted and ignored (no reference conditioning on this path).
     #[serde(default)]
     pub reference_image_urls: Vec<String>,
-    /// Keyframe planning (clip models): accepted and ignored on the causal path.
+    /// Keyframe planning: the frame the segment must end on (clip models
+    /// with `Task::Keyframes`); ignored on the causal path.
     #[serde(default)]
     pub end_image_url: Option<String>,
     #[serde(default)]
@@ -194,6 +207,16 @@ struct SegmentStatus {
     stale_blocks: u32,
     /// Blocks discarded after a `reset` (generated before it).
     discarded_blocks: u32,
+    /// How the segment was conditioned: `native` (one causal rollout),
+    /// `anchor` (the previous segment's last frame), `image` (the request's
+    /// `context.image_url`), `text` (a first segment, a `reset`, or an
+    /// anchor that was lost).
+    continuity: &'static str,
+    /// Frames the segment is planned to have (set at submit from the model's
+    /// frame grid), then the frames it has.
+    planned_frames: u32,
+    /// The MP4 carries an audio track.
+    audio: bool,
     generation_ms: Option<f64>,
     encode_ms: Option<f64>,
     error: Option<String>,
@@ -241,6 +264,10 @@ impl SegmentJob {
             "height": s.height,
             "duration_sec": if s.fps > 0 { f64::from(s.frames) / f64::from(s.fps) } else { 0.0 },
             "blocks": s.blocks,
+            "planned_frames": s.planned_frames,
+            "planned_duration_sec": if s.fps > 0 { f64::from(s.planned_frames) / f64::from(s.fps) } else { 0.0 },
+            "continuity": s.continuity,
+            "audio": s.audio,
             "session": {"restarted": s.restarted, "stale_blocks": s.stale_blocks, "discarded_blocks": s.discarded_blocks},
             "metrics": {"generation_ms": s.generation_ms, "encode_ms": s.encode_ms},
             "error": s.error,
@@ -263,15 +290,41 @@ struct Slot {
     model: ModelId,
     tx: mpsc::Sender<Arc<SegmentJob>>,
     control: Mutex<Option<CausalControl>>,
+    /// Wakes the worker on `DELETE` so a clip session is released at once.
+    close: Notify,
     last_used: Mutex<Instant>,
     closed: AtomicBool,
     /// Sessions opened for this stream (1 = never restarted).
     sessions: AtomicU64,
+    /// Causal: blocks consumed. Clip: builds finished.
     blocks: AtomicU64,
     queued: AtomicU64,
     canvas: (u32, u32),
     fps: u32,
+    path: SegPath,
     created_ms: u64,
+}
+
+/// Which engine session a stream runs on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SegPath {
+    /// One causal rollout (SF-Wan): segments cut from it.
+    Causal,
+    /// One clip build per segment, anchored on the previous last frame.
+    Clip,
+}
+
+impl SegPath {
+    /// The path a model's caps allow; `None` when it can neither stream
+    /// causally nor build image-anchored clips.
+    pub fn of(caps: &ModelCaps) -> Option<Self> {
+        match caps.stream {
+            Some(StreamCaps::Causal { .. }) => Some(Self::Causal),
+            Some(StreamCaps::Clip { .. }) if caps.supports(Task::I2V) => Some(Self::Clip),
+            _ => None,
+        }
+    }
 }
 
 impl Slot {
@@ -289,8 +342,10 @@ impl Slot {
             "width": self.canvas.0,
             "height": self.canvas.1,
             "fps": self.fps,
+            "path": self.path,
             "sessions": self.sessions.load(Ordering::Relaxed),
             "blocks": self.blocks.load(Ordering::Relaxed),
+            "clips": self.blocks.load(Ordering::Relaxed),
             "queued": self.queued.load(Ordering::Relaxed),
             "closed": self.closed.load(Ordering::Relaxed),
             "idle_s": self.last_used.lock().map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0),
@@ -344,30 +399,58 @@ fn err_reply(e: &ApiError) -> Response {
     r
 }
 
-fn parse_aspect(s: &str) -> Option<f64> {
+fn parse_ratio(s: &str) -> Option<(u32, u32)> {
     let (w, h) = s.split_once(':')?;
-    let (w, h): (f64, f64) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
-    (w > 0.0 && h > 0.0).then_some(w / h)
+    let (w, h): (u32, u32) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
+    (w > 0 && h > 0 && w <= 64 && h <= 64).then_some((w, h))
 }
 
 fn parse_short_edge(s: &str) -> Option<u32> {
     s.trim().trim_end_matches(['p', 'P']).parse().ok()
 }
 
-/// The session spec for a stream's first segment (pure; tests).
+/// A stream's session plan: the engine session, the output crop (models
+/// that generate padded and crop back, LTX) and the warnings a snapped
+/// resolution leaves.
+#[derive(Clone, Debug)]
+pub struct SegPlan {
+    pub spec: SessionSpec,
+    /// `(width, height)` of the delivered frames when smaller than the
+    /// generated canvas (centre crop); the anchor stays uncropped.
+    pub crop: Option<(u32, u32)>,
+    pub warnings: Vec<String>,
+}
+
+impl SegPlan {
+    /// The size the control plane receives.
+    pub fn output_size(&self) -> (u32, u32) {
+        self.crop.unwrap_or(self.spec.canvas)
+    }
+}
+
+/// The session plan for a stream's first segment (pure; tests).
 pub fn session_spec(
     caps: &ModelCaps,
     r: &SegmentRequest,
     cfg: &SegmentsConfig,
-) -> Result<SessionSpec, ApiError> {
-    let Some(StreamCaps::Causal { target_fps, .. }) = caps.stream else {
-        return Err(ApiError::invalid_param(
+) -> Result<SegPlan, ApiError> {
+    let path = SegPath::of(caps).ok_or_else(|| {
+        ApiError::invalid_param(
             "model",
-            format!("`{}` is not a causal (streaming) model", caps.id),
-        ));
+            format!(
+                "`{}` can neither stream causally nor build image-anchored clips",
+                caps.id
+            ),
+        )
+    })?;
+    let fps = match (path, &caps.stream) {
+        (SegPath::Causal, Some(StreamCaps::Causal { target_fps, .. })) => *target_fps,
+        _ => caps.fps.default,
     };
+    let mut warnings = Vec::new();
+    let tiers = &caps.canvas.short_edges;
     let short = match &r.resolution {
-        None => caps.canvas.short_edges.first().copied().unwrap_or(480),
+        None => tiers.first().copied().unwrap_or(480),
         Some(s) => {
             let n = parse_short_edge(s).ok_or_else(|| {
                 ApiError::invalid_param(
@@ -375,33 +458,39 @@ pub fn session_spec(
                     format!("`{s}` is not a resolution like `480p`"),
                 )
             })?;
-            if !caps.canvas.short_edges.contains(&n) {
-                return Err(ApiError::invalid_param(
-                    "resolution",
-                    format!(
-                        "`{}` serves {}",
-                        caps.id,
-                        caps.canvas
-                            .short_edges
-                            .iter()
-                            .map(|e| format!("{e}p"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
+            if tiers.contains(&n) {
+                n
+            } else {
+                // The nearest served tier: a stream must not fail on a tier
+                // name; the control plane learns the canvas from the reply.
+                let near = tiers
+                    .iter()
+                    .copied()
+                    .min_by_key(|t| t.abs_diff(n))
+                    .unwrap_or(480);
+                warnings.push(format!(
+                    "resolution {n}p is not served by `{}` (serves {}): using {near}p",
+                    caps.id,
+                    tiers
+                        .iter()
+                        .map(|e| format!("{e}p"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ));
+                near
             }
-            n
         }
     };
-    let ratio = match &r.aspect_ratio {
-        None => 16.0 / 9.0,
-        Some(a) => parse_aspect(a).ok_or_else(|| {
+    let (rw, rh) = match &r.aspect_ratio {
+        None => (16, 9),
+        Some(a) => parse_ratio(a).ok_or_else(|| {
             ApiError::invalid_param(
                 "aspect_ratio",
                 format!("`{a}` is not an aspect ratio like `16:9`"),
             )
         })?,
     };
+    let ratio = f64::from(rw) / f64::from(rh);
     let (lo, hi) = caps.canvas.aspect;
     if ratio < f64::from(lo) || ratio > f64::from(hi) {
         return Err(ApiError::invalid_param(
@@ -409,23 +498,71 @@ pub fn session_spec(
             format!("`{}` serves aspect ratios {lo}..{hi}", caps.id),
         ));
     }
-    let canvas = canvas_for_aspect(&caps.canvas, ratio, short);
-    let tracks = TrackSet::for_model(caps, canvas, target_fps, ("video", "audio"), 2, false);
-    Ok(SessionSpec {
-        model: caps.id.clone(),
-        tracks: TrackSet {
-            audio: None,
-            ..tracks
+    // Like the director: a pad-and-crop model (LTX) generates the padded
+    // canvas and the output is centre-cropped to the tier; the anchor
+    // frame stays uncropped so continuity does not zoom.
+    let (canvas, crop) = if path == SegPath::Clip && caps.canvas.pad_and_crop {
+        let spec = CanvasSpec::Aspect {
+            ratio: Ratio::new(rw, rh),
+            short_edge: short,
+        };
+        match resolve_canvas(&spec, caps, None) {
+            Ok((w, h, c)) => ((w, h), c.filter(|c| *c != (w, h))),
+            Err(_) => (canvas_for_aspect(&caps.canvas, ratio, short), None),
+        }
+    } else {
+        (canvas_for_aspect(&caps.canvas, ratio, short), None)
+    };
+    let tracks = TrackSet::for_model(caps, canvas, fps, ("video", "audio"), 2, false);
+    let spec = match path {
+        SegPath::Causal => SessionSpec {
+            model: caps.id.clone(),
+            // Video-only: the causal models are silent.
+            tracks: TrackSet {
+                audio: None,
+                ..tracks
+            },
+            canvas,
+            fps,
+            continuity: Continuity::default(),
+            max_seconds: Some(cfg.causal.resolve(cfg.max_seconds)?),
+            seed: r.seed,
         },
-        canvas,
-        fps: target_fps,
-        continuity: Continuity::default(),
-        max_seconds: Some(cfg.causal.resolve(cfg.max_seconds)?),
-        seed: r.seed,
+        SegPath::Clip => SessionSpec {
+            model: caps.id.clone(),
+            tracks,
+            canvas,
+            fps,
+            continuity: Continuity::default(),
+            max_seconds: None,
+            seed: r.seed,
+        },
+    };
+    Ok(SegPlan {
+        spec,
+        crop,
+        warnings,
     })
 }
 
-fn validate(r: &SegmentRequest) -> Result<Vec<String>, ApiError> {
+/// Frames a segment gets: `round(duration × fps)` on the causal path (the
+/// rollout is cut anywhere); snapped up onto the model's grid, within its
+/// range, on the clip path.
+pub fn planned_frames(caps: &ModelCaps, path: SegPath, fps: u32, duration_sec: f64) -> u32 {
+    let n = ((duration_sec * f64::from(fps)).round() as u32).max(1);
+    match path {
+        SegPath::Causal => n,
+        SegPath::Clip => {
+            let g = &caps.frames;
+            g.align_up(n.clamp(g.min, g.max)).unwrap_or(g.max)
+        }
+    }
+}
+
+/// Whether URLs in a request can be fetched by this build.
+const CAN_FETCH: bool = cfg!(feature = "http-client");
+
+fn validate(r: &SegmentRequest, caps: &ModelCaps, path: SegPath) -> Result<Vec<String>, ApiError> {
     if r.stream_id.trim().is_empty()
         || r.stream_id.len() > 128
         || !r
@@ -453,26 +590,159 @@ fn validate(r: &SegmentRequest) -> Result<Vec<String>, ApiError> {
             "duration_sec is 0.5 to 30 seconds",
         ));
     }
+    let mut warnings = Vec::new();
     if let Some(c) = &r.context {
-        if c.image_url.is_some() {
-            return Err(ApiError::invalid_param("context.image_url", "the causal path keeps its own state: image conditioning is not supported (use continuity \"native\")"));
-        }
         if c.video_url.is_some() {
-            return Err(ApiError::invalid_param("context.video_url", "the causal path keeps its own state: video context is not supported (use continuity \"native\")"));
+            return Err(ApiError::invalid_param(
+                "context.video_url",
+                match path {
+                    SegPath::Causal => "the causal path keeps its own state: video context is not supported (use continuity \"native\")",
+                    SegPath::Clip => "video context (extend) is not supported on this path: the backend chains segments on the last frame itself (use continuity \"native\" or \"last_frame\")",
+                },
+            ));
+        }
+        if let Some(u) = &c.image_url {
+            match path {
+                SegPath::Causal => {
+                    return Err(ApiError::invalid_param("context.image_url", "the causal path keeps its own state: image conditioning is not supported (use continuity \"native\")"));
+                }
+                SegPath::Clip => check_url("context.image_url", u)?,
+            }
         }
     }
-    let mut warnings = Vec::new();
+    if let Some(u) = &r.end_image_url {
+        match path {
+            SegPath::Clip if caps.supports(Task::Keyframes) => check_url("end_image_url", u)?,
+            SegPath::Clip => warnings.push(format!(
+                "end_image_url ignored: `{}` cannot render toward a last frame",
+                caps.id
+            )),
+            SegPath::Causal => warnings.push(
+                "end_image_url ignored: the causal path renders toward no planned frame".to_owned(),
+            ),
+        }
+    }
     if !r.reference_image_urls.is_empty() {
         warnings.push(
-            "reference_image_urls ignored: the model has no reference conditioning".to_owned(),
-        );
-    }
-    if r.end_image_url.is_some() {
-        warnings.push(
-            "end_image_url ignored: the causal path renders toward no planned frame".to_owned(),
+            "reference_image_urls ignored: no reference conditioning on this path".to_owned(),
         );
     }
     Ok(warnings)
+}
+
+/// A fetchable `http(s)` URL (or `file://` in builds without the HTTP
+/// client, for tests).
+fn check_url(param: &str, u: &str) -> Result<(), ApiError> {
+    let ok = u.starts_with("https://") || u.starts_with("http://");
+    if ok && !CAN_FETCH {
+        return Err(ApiError::invalid_param(
+            param,
+            "this build cannot fetch URLs (feature `http-client`)",
+        ));
+    }
+    if ok || u.starts_with("file://") {
+        return Ok(());
+    }
+    Err(ApiError::invalid_param(
+        param,
+        format!("`{u}` is not an http(s) URL"),
+    ))
+}
+
+/// Fetches an image URL (`context.image_url`, `end_image_url`), checks that
+/// it decodes and writes it as a PNG at `path`.
+async fn fetch_image(url: &str, path: &std::path::Path) -> Result<(), ApiError> {
+    const MAX_BYTES: usize = 32 << 20;
+    let bytes: Vec<u8> = if let Some(p) = url.strip_prefix("file://") {
+        let b = tokio::fs::read(p)
+            .await
+            .map_err(|e| ApiError::invalid_param("image", format!("reading {p}: {e}")))?;
+        if b.len() > MAX_BYTES {
+            return Err(ApiError::invalid_param(
+                "image",
+                "the image is larger than 32 MB",
+            ));
+        }
+        b
+    } else {
+        #[cfg(feature = "http-client")]
+        {
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(20))
+                .build()
+                .map_err(|e| ApiError::internal(format!("http client: {e}")))?;
+            let resp =
+                client.get(url).send().await.map_err(|e| {
+                    ApiError::invalid_param("image", format!("fetching {url}: {e}"))
+                })?;
+            if !resp.status().is_success() {
+                return Err(ApiError::invalid_param(
+                    "image",
+                    format!("fetching {url}: HTTP {}", resp.status()),
+                ));
+            }
+            let b = resp
+                .bytes()
+                .await
+                .map_err(|e| ApiError::invalid_param("image", format!("reading {url}: {e}")))?;
+            if b.len() > MAX_BYTES {
+                return Err(ApiError::invalid_param(
+                    "image",
+                    "the image is larger than 32 MB",
+                ));
+            }
+            b.to_vec()
+        }
+        #[cfg(not(feature = "http-client"))]
+        {
+            return Err(ApiError::invalid_param(
+                "image",
+                "this build cannot fetch URLs (feature `http-client`)",
+            ));
+        }
+    };
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let img = image::load_from_memory(&bytes)
+            .map_err(|e| ApiError::invalid_param("image", format!("not an image: {e}")))?;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| ApiError::internal(format!("creating {}: {e}", dir.display())))?;
+        }
+        img.to_rgb8()
+            .save(&path)
+            .map_err(|e| ApiError::internal(format!("writing {}: {e}", path.display())))
+    })
+    .await
+    .map_err(|e| ApiError::internal(format!("image task: {e}")))?
+}
+
+/// A stored segment MP4.
+struct Stored {
+    url: String,
+    frames: u32,
+    audio: bool,
+    encode_ms: f64,
+}
+
+/// Writes an RGB24 frame as a PNG (the next build's first-frame anchor).
+fn write_png(f: &RgbFrame, path: &PathBuf) -> Result<(), ApiError> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| ApiError::internal(format!("creating {}: {e}", dir.display())))?;
+    }
+    let img = image::RgbImage::from_raw(f.width, f.height, f.data.to_vec())
+        .ok_or_else(|| ApiError::internal("anchor frame has the wrong size"))?;
+    img.save(path)
+        .map_err(|e| ApiError::internal(format!("writing {}: {e}", path.display())))
+}
+
+/// Drops one video frame's worth of samples from the head of `pcm` (the
+/// anchor frame a continuation duplicates).
+fn drop_audio_head(pcm: &Pcm, fps: u32) -> Pcm {
+    let per_frame = (pcm.rate / fps.max(1)) as usize * usize::from(pcm.channels);
+    let skip = per_frame.min(pcm.samples.len());
+    Pcm::new(pcm.rate, pcm.channels, pcm.samples[skip..].to_vec())
 }
 
 impl Segments {
@@ -516,18 +786,26 @@ impl Segments {
         {
             let id = ModelId::new(m);
             return caps
-                .get(&id)
+                .resolve(m)
                 .cloned()
+                .or_else(|| caps.get(&id).cloned())
                 .or_else(|| caps.models().find(|c| c.answers_to(m)).cloned())
                 .ok_or_else(|| {
                     ApiError::invalid_param("model", format!("model `{m}` is not served here"))
                 });
         }
         caps.models()
-            .find(|c| matches!(c.stream, Some(StreamCaps::Causal { .. })))
+            .find(|c| SegPath::of(c) == Some(SegPath::Causal))
+            .or_else(|| {
+                caps.models()
+                    .find(|c| SegPath::of(c) == Some(SegPath::Clip))
+            })
             .cloned()
             .ok_or_else(|| {
-                ApiError::invalid_param("model", "no causal model is served here; give `model`")
+                ApiError::invalid_param(
+                    "model",
+                    "no causal or image-to-video clip model is served here; give `model`",
+                )
             })
     }
 
@@ -550,7 +828,6 @@ impl Segments {
 
     /// Submits a segment: idempotent per `(stream_id, segment_index)`.
     pub async fn submit(self: &Arc<Self>, r: SegmentRequest) -> Result<Arc<SegmentJob>, ApiError> {
-        let warnings = validate(&r)?;
         if let Some(id) = Self::lock(&self.by_index)
             .get(&(r.stream_id.clone(), r.segment_index))
             .cloned()
@@ -560,7 +837,19 @@ impl Segments {
             }
         }
         let caps = self.resolve_model(&r)?;
-        let spec = session_spec(&caps, &r, &self.cfg)?;
+        let path = SegPath::of(&caps).ok_or_else(|| {
+            ApiError::invalid_param(
+                "model",
+                format!(
+                    "`{}` can neither stream causally nor build image-anchored clips",
+                    caps.id
+                ),
+            )
+        })?;
+        let mut warnings = validate(&r, &caps, path)?;
+        let plan = session_spec(&caps, &r, &self.cfg)?;
+        warnings.extend(plan.warnings.iter().cloned());
+        let planned = planned_frames(&caps, path, plan.spec.fps, r.duration_sec);
         let slot = match self.slot(&r.stream_id) {
             Some(s) => {
                 if s.model != caps.id {
@@ -571,7 +860,7 @@ impl Segments {
                 }
                 s
             }
-            None => self.open_slot(&r.stream_id, caps, spec)?,
+            None => self.open_slot(&r.stream_id, caps, plan)?,
         };
         let fps = slot.fps;
         let job = Arc::new(SegmentJob {
@@ -590,6 +879,12 @@ impl Segments {
                 restarted: false,
                 stale_blocks: 0,
                 discarded_blocks: 0,
+                continuity: match path {
+                    SegPath::Causal => "native",
+                    SegPath::Clip => "text",
+                },
+                planned_frames: planned,
+                audio: false,
                 generation_ms: None,
                 encode_ms: None,
                 error: None,
@@ -619,35 +914,43 @@ impl Segments {
         Ok(job)
     }
 
-    /// Opens a stream's slot and spawns its worker. The causal session itself
+    /// Opens a stream's slot and spawns its worker. The engine session itself
     /// opens inside the worker on the first segment (so an executor busy with
     /// another stream fails that segment, not the submit).
     fn open_slot(
         self: &Arc<Self>,
         stream_id: &str,
         caps: ModelCaps,
-        spec: SessionSpec,
+        plan: SegPlan,
     ) -> Result<Arc<Slot>, ApiError> {
         let (tx, rx) = mpsc::channel(self.cfg.queue);
+        let path = SegPath::of(&caps).unwrap_or(SegPath::Causal);
+        let canvas = plan.output_size();
+        let spec = plan.spec.clone();
         let slot = Arc::new(Slot {
             stream_id: stream_id.to_owned(),
             model: caps.id.clone(),
             tx,
             control: Mutex::new(None),
+            close: Notify::new(),
             last_used: Mutex::new(Instant::now()),
             closed: AtomicBool::new(false),
             sessions: AtomicU64::new(0),
             blocks: AtomicU64::new(0),
             queued: AtomicU64::new(0),
-            canvas: spec.canvas,
+            canvas,
             fps: spec.fps,
+            path,
             created_ms: now_ms(),
         });
         Self::lock(&self.slots).insert(stream_id.to_owned(), slot.clone());
         let me = self.clone();
         let s2 = slot.clone();
         tokio::spawn(async move {
-            me.run_slot(s2, caps, spec, rx).await;
+            match path {
+                SegPath::Causal => me.run_slot(s2, caps, spec, rx).await,
+                SegPath::Clip => me.run_clip_slot(s2, caps, plan, rx).await,
+            }
         });
         Ok(slot)
     }
@@ -661,6 +964,7 @@ impl Segments {
         if let Some(c) = Self::lock(&slot.control).take() {
             c.close();
         }
+        slot.close.notify_one();
         true
     }
 
@@ -814,14 +1118,8 @@ impl Segments {
                 *Self::lock(&slot.control) = None;
                 session = None;
                 carry.clear();
-                job.set(|s| {
-                    s.status = SegmentState::Failed;
-                    s.error = Some(e.message.clone());
-                    s.restarted = restarted;
-                    s.finished_ms = Some(now_ms());
-                });
-                self.callback(&job).await;
-                job.done.notify_waiters();
+                job.set(|s| s.restarted = restarted);
+                self.finish(&job, Err(e)).await;
                 continue;
             }
 
@@ -829,75 +1127,17 @@ impl Segments {
             let generation_ms = t0.elapsed().as_secs_f64() * 1e3;
             let last_block = next_block.saturating_sub(1);
             let blocks = first_block.map(|f| (f, last_block));
-
-            // Encode and store off the runtime.
-            let t1 = Instant::now();
-            let ctx = self.engine_ctx();
-            let out = self.work_dir.join(format!("{}.mp4", job.id));
-            let mp4 = Mp4Spec {
-                width: spec.canvas.0,
-                height: spec.canvas.1,
-                fps: spec.fps,
-                quality: 19,
-                encoder: self.cfg.encoder,
-                audio: None,
-                faststart: true,
-                fragmented: false,
-            };
-            let out2 = out.clone();
-            let n = frames.len() as u32;
-            let encoded = tokio::task::spawn_blocking(move || write_mp4(&out2, mp4, &frames, None))
-                .await
-                .map_err(|e| ApiError::internal(format!("encode task: {e}")))
-                .and_then(|r| {
-                    r.map_err(|e| ApiError::internal(format!("encoding the segment: {e}")))
-                });
-            let stored = match (encoded, ctx) {
-                (Ok(path), Some(ctx)) => {
-                    let meta = ArtifactMeta {
-                        file_name: format!("{}-{}.mp4", job.req.stream_id, job.req.segment_index),
-                        mime: "video/mp4".into(),
-                        width: spec.canvas.0,
-                        height: spec.canvas.1,
-                        frames: n,
-                        fps: spec.fps,
-                        audio: None,
-                    };
-                    match ctx.artifacts().put(&path, meta).await {
-                        Ok(a) => Ok(ctx
-                            .artifacts()
-                            .signer()
-                            .url_for(&a, self.cfg.url_ttl)
-                            .to_string()),
-                        Err(e) => Err(e),
-                    }
-                }
-                (Ok(path), None) => Ok(format!("file://{}", path.display())),
-                (Err(e), _) => Err(e),
-            };
-            let encode_ms = t1.elapsed().as_secs_f64() * 1e3;
-            match stored {
-                Ok(url) => job.set(|s| {
-                    s.status = SegmentState::Succeeded;
-                    s.video_url = Some(url);
-                    s.frames = n;
-                    s.blocks = blocks;
-                    s.restarted = restarted;
-                    s.stale_blocks = stale_blocks;
-                    s.discarded_blocks = discarded;
-                    s.generation_ms = Some(generation_ms);
-                    s.encode_ms = Some(encode_ms);
-                    s.finished_ms = Some(now_ms());
-                }),
-                Err(e) => job.set(|s| {
-                    s.status = SegmentState::Failed;
-                    s.error = Some(e.message.clone());
-                    s.restarted = restarted;
-                    s.finished_ms = Some(now_ms());
-                }),
-            }
-            self.callback(&job).await;
-            job.done.notify_waiters();
+            let outcome = self
+                .encode_and_store(&job, &spec, spec.canvas, frames, None)
+                .await;
+            job.set(|s| {
+                s.restarted = restarted;
+                s.stale_blocks = stale_blocks;
+                s.discarded_blocks = discarded;
+                s.blocks = blocks;
+                s.generation_ms = Some(generation_ms);
+            });
+            self.finish(&job, outcome).await;
         }
         // Leaving the loop: close the session and forget the slot.
         slot.closed.store(true, Ordering::Relaxed);
@@ -912,6 +1152,320 @@ impl Segments {
         {
             slots.remove(&slot.stream_id);
         }
+    }
+
+    /// The worker for a clip model: one `ClipSession` (an executor lease)
+    /// per stream, one build per segment, the previous segment's last frame
+    /// as the next build's first frame.
+    async fn run_clip_slot(
+        self: Arc<Self>,
+        slot: Arc<Slot>,
+        caps: ModelCaps,
+        plan: SegPlan,
+        mut rx: mpsc::Receiver<Arc<SegmentJob>>,
+    ) {
+        let spec = plan.spec.clone();
+        let size = plan.output_size();
+        let mut session: Option<ClipSession> = None;
+        // The last frame of the previous segment, as a PNG.
+        let mut anchor: Option<PathBuf> = None;
+        let audio_channels = spec.tracks.audio.as_ref().map(|a| a.channels);
+        loop {
+            let next = tokio::select! {
+                j = tokio::time::timeout(self.cfg.idle_ttl, rx.recv()) => j,
+                () = slot.close.notified() => break,
+            };
+            let job = match next {
+                Ok(Some(j)) => j,
+                Ok(None) => break,
+                Err(_) => {
+                    tracing::info!(stream = %slot.stream_id, idle_s = self.cfg.idle_ttl.as_secs(), "segment stream idle: closing its session");
+                    break;
+                }
+            };
+            slot.queued.fetch_sub(1, Ordering::Relaxed);
+            if slot.closed.load(Ordering::Relaxed) {
+                self.finish(&job, Err(ApiError::conflict("the stream was closed")))
+                    .await;
+                continue;
+            }
+            job.set(|s| s.status = SegmentState::Running);
+            let t0 = Instant::now();
+            let planned = planned_frames(&caps, SegPath::Clip, spec.fps, job.req.duration_sec);
+
+            // Conditioning: the request's image, else the anchor, else text.
+            let mut first_frame: Option<PathBuf> = None;
+            let mut continuity = "text";
+            let mut failed: Option<ApiError> = None;
+            if let Some(u) = job
+                .req
+                .context
+                .as_ref()
+                .and_then(|c| c.image_url.as_deref())
+            {
+                let p = self.work_dir.join(format!("{}-first.png", job.id));
+                match fetch_image(u, &p).await {
+                    Ok(()) => {
+                        first_frame = Some(p);
+                        continuity = "image";
+                    }
+                    Err(e) => failed = Some(e),
+                }
+            } else if !job.req.reset {
+                if let Some(a) = anchor.clone() {
+                    first_frame = Some(a);
+                    continuity = "anchor";
+                }
+            }
+            let mut last_frame: Option<PathBuf> = None;
+            if failed.is_none() && caps.supports(Task::Keyframes) {
+                if let Some(u) = job.req.end_image_url.as_deref() {
+                    let p = self.work_dir.join(format!("{}-last.png", job.id));
+                    match fetch_image(u, &p).await {
+                        Ok(()) => last_frame = Some(p),
+                        Err(e) => failed = Some(e),
+                    }
+                }
+            }
+
+            // Open (or reopen) the session.
+            let mut restarted = false;
+            if failed.is_none() && session.is_none() {
+                match self.engine.open_clip_session(spec.clone()).await {
+                    Ok(s) => {
+                        if slot.sessions.fetch_add(1, Ordering::Relaxed) > 0 {
+                            restarted = true;
+                        }
+                        session = Some(s);
+                    }
+                    Err(e) => failed = Some(e),
+                }
+            }
+
+            let mut built: Option<(Vec<RgbFrame>, Option<Pcm>)> = None;
+            // An engine failure (a busy executor, a failed build) drops the
+            // session so the next segment reopens; a bad input does not.
+            let mut engine_failed = false;
+            if failed.is_none() {
+                let s = session.as_ref().expect("opened above");
+                let build = ClipBuild {
+                    prompt: job.req.prompt.trim().to_owned(),
+                    negative_prompt: None,
+                    // Like the director: the stream seed plus the segment
+                    // index, so consecutive builds differ.
+                    seed: job.req.seed.map(|s| s.wrapping_add(job.req.segment_index)),
+                    seconds: None,
+                    frames: Some(planned),
+                    canvas: None,
+                    first_frame: first_frame.clone(),
+                    last_frame: last_frame.clone(),
+                    audio_drive: None,
+                };
+                let res = match s.build(build).await {
+                    Ok(h) => h.wait().await,
+                    Err(e) => Err(e),
+                };
+                match res {
+                    Ok(out) => {
+                        let frames = out.frames.unwrap_or_default();
+                        if frames.is_empty() {
+                            failed = Some(ApiError::engine_failed("the build returned no frames"));
+                            engine_failed = true;
+                        } else {
+                            built = Some((frames, out.audio));
+                        }
+                    }
+                    Err(e) => {
+                        failed = Some(e);
+                        engine_failed = true;
+                    }
+                }
+            }
+            if let Some(p) = first_frame.as_ref().filter(|p| Some(*p) != anchor.as_ref()) {
+                let _ = tokio::fs::remove_file(p).await;
+            }
+            if let Some(p) = &last_frame {
+                let _ = tokio::fs::remove_file(p).await;
+            }
+
+            let Some((mut frames, mut audio)) = built else {
+                let e = failed.unwrap_or_else(|| ApiError::internal("no build"));
+                tracing::warn!(stream = %slot.stream_id, segment = job.req.segment_index, error = %e.message, "segment failed");
+                // After an engine error the next segment reopens the
+                // session; the anchor survives, so the picture continues.
+                if engine_failed || session.is_none() {
+                    session = None;
+                }
+                job.set(|s| {
+                    s.restarted = restarted;
+                    s.continuity = continuity;
+                });
+                self.finish(&job, Err(e)).await;
+                continue;
+            };
+            let generation_ms = t0.elapsed().as_secs_f64() * 1e3;
+            slot.blocks.fetch_add(1, Ordering::Relaxed);
+
+            // A continuation's first frame is the anchor itself: drop it (and
+            // its audio) so segment N+1 starts on the frame after N's last.
+            if continuity == "anchor" && frames.len() > 1 {
+                frames.remove(0);
+                if let Some(a) = audio.take() {
+                    audio = Some(drop_audio_head(&a, spec.fps));
+                }
+            }
+            // The next segment's anchor: this one's last frame.
+            let next = self.work_dir.join(format!(
+                "anchor-{}-{}.png",
+                slot.stream_id, job.req.segment_index
+            ));
+            let last = frames.last().cloned().expect("non-empty");
+            let n2 = next.clone();
+            let wrote = tokio::task::spawn_blocking(move || write_png(&last, &n2))
+                .await
+                .map_err(|e| ApiError::internal(format!("anchor task: {e}")))
+                .and_then(|r| r);
+            match wrote {
+                Ok(()) => {
+                    if let Some(old) = anchor.replace(next) {
+                        let _ = tokio::fs::remove_file(old).await;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(stream = %slot.stream_id, error = %e.message, "anchor frame not written: the next segment starts from text");
+                    anchor = None;
+                }
+            }
+
+            // The delivered frames: centre-cropped to the tier on a
+            // pad-and-crop model (the anchor above stays uncropped).
+            if let Some((w, h)) = plan.crop {
+                frames = tokio::task::spawn_blocking(move || {
+                    frames
+                        .iter()
+                        .map(|f| f.crop_center(w, h))
+                        .collect::<Vec<_>>()
+                })
+                .await
+                .unwrap_or_default();
+            }
+            let outcome = self
+                .encode_and_store(
+                    &job,
+                    &spec,
+                    size,
+                    frames,
+                    audio.as_ref().map(|a| (a, audio_channels)),
+                )
+                .await;
+            job.set(|s| {
+                s.restarted = restarted;
+                s.continuity = continuity;
+                s.generation_ms = Some(generation_ms);
+            });
+            self.finish(&job, outcome).await;
+        }
+        slot.closed.store(true, Ordering::Relaxed);
+        if let Some(s) = session.take() {
+            s.close();
+        }
+        if let Some(a) = anchor.take() {
+            let _ = tokio::fs::remove_file(a).await;
+        }
+        let mut slots = Self::lock(&self.slots);
+        if slots
+            .get(&slot.stream_id)
+            .is_some_and(|s| Arc::ptr_eq(s, &slot))
+        {
+            slots.remove(&slot.stream_id);
+        }
+    }
+
+    /// Encodes the segment's frames (and audio) to an MP4 off the runtime
+    /// and stores it: the signed URL, the frame count and the encode time.
+    async fn encode_and_store(
+        &self,
+        job: &SegmentJob,
+        spec: &SessionSpec,
+        size: (u32, u32),
+        frames: Vec<RgbFrame>,
+        audio: Option<(&Pcm, Option<u8>)>,
+    ) -> Result<Stored, ApiError> {
+        let t1 = Instant::now();
+        let ctx = self.engine_ctx();
+        let out = self.work_dir.join(format!("{}.mp4", job.id));
+        let target = audio.map(|(pcm, ch)| AudioTarget {
+            rate: pcm.rate,
+            channels: ch.unwrap_or(pcm.channels),
+            bitrate_bps: 128_000,
+        });
+        let mp4 = Mp4Spec {
+            width: size.0,
+            height: size.1,
+            fps: spec.fps,
+            quality: 19,
+            encoder: self.cfg.encoder,
+            audio: target,
+            faststart: true,
+            fragmented: false,
+        };
+        let out2 = out.clone();
+        let n = frames.len() as u32;
+        let pcm = audio.map(|(p, _)| p.clone());
+        let encoded =
+            tokio::task::spawn_blocking(move || write_mp4(&out2, mp4, &frames, pcm.as_ref()))
+                .await
+                .map_err(|e| ApiError::internal(format!("encode task: {e}")))
+                .and_then(|r| {
+                    r.map_err(|e| ApiError::internal(format!("encoding the segment: {e}")))
+                })?;
+        let url = match ctx {
+            Some(ctx) => {
+                let meta = ArtifactMeta {
+                    file_name: format!("{}-{}.mp4", job.req.stream_id, job.req.segment_index),
+                    mime: "video/mp4".into(),
+                    width: size.0,
+                    height: size.1,
+                    frames: n,
+                    fps: spec.fps,
+                    audio: target.map(|t| (t.rate, t.channels)),
+                };
+                let a = ctx.artifacts().put(&encoded, meta).await?;
+                ctx.artifacts()
+                    .signer()
+                    .url_for(&a, self.cfg.url_ttl)
+                    .to_string()
+            }
+            None => format!("file://{}", encoded.display()),
+        };
+        Ok(Stored {
+            url,
+            frames: n,
+            audio: target.is_some(),
+            encode_ms: t1.elapsed().as_secs_f64() * 1e3,
+        })
+    }
+
+    /// Records a segment's outcome, calls back and wakes waiters.
+    async fn finish(&self, job: &SegmentJob, outcome: Result<Stored, ApiError>) {
+        match outcome {
+            Ok(st) => job.set(|s| {
+                s.status = SegmentState::Succeeded;
+                s.video_url = Some(st.url);
+                s.frames = st.frames;
+                s.planned_frames = st.frames;
+                s.audio = st.audio;
+                s.encode_ms = Some(st.encode_ms);
+                s.finished_ms = Some(now_ms());
+            }),
+            Err(e) => job.set(|s| {
+                s.status = SegmentState::Failed;
+                s.error = Some(e.message.clone());
+                s.finished_ms = Some(now_ms());
+            }),
+        }
+        self.callback(job).await;
+        job.done.notify_waiters();
     }
 
     fn engine_ctx(&self) -> Option<ServeCtx> {
@@ -1105,32 +1659,86 @@ mod tests {
     fn spec_follows_the_causal_canvas_and_clamps_the_session_length() {
         let sf = FakeModel::sf_wan().caps;
         let cfg = SegmentsConfig::default();
-        let s = session_spec(&sf, &req(6.0), &cfg).unwrap();
+        let SegPlan {
+            spec: s,
+            warnings: w,
+            ..
+        } = session_spec(&sf, &req(6.0), &cfg).unwrap();
+        assert!(w.is_empty());
         assert_eq!(s.fps, 16);
         assert_eq!(s.canvas.1, 480);
         assert!(s.tracks.audio.is_none(), "segments are video-only on Wan");
         assert_eq!(s.max_seconds, Some(120));
+        assert_eq!(planned_frames(&sf, SegPath::Causal, 16, 6.0), 96);
         let tight = SegmentsConfig {
             max_seconds: Some(900),
             ..SegmentsConfig::default()
         };
         assert_eq!(
-            session_spec(&sf, &req(6.0), &tight).unwrap().max_seconds,
+            session_spec(&sf, &req(6.0), &tight)
+                .unwrap()
+                .spec
+                .max_seconds,
             Some(300)
         );
+        // A tier the model does not serve snaps to the nearest one, with a warning.
         let mut r = req(6.0);
         r.resolution = Some("720p".into());
+        let SegPlan {
+            spec: s,
+            warnings: w,
+            ..
+        } = session_spec(&sf, &r, &cfg).unwrap();
+        assert_eq!(s.canvas.1, 480);
+        assert_eq!(w.len(), 1, "{w:?}");
+        r.resolution = Some("480p".into());
+        r.aspect_ratio = Some("9:16".into());
+        let s = session_spec(&sf, &r, &cfg).unwrap().spec;
+        assert!(s.canvas.0 < s.canvas.1);
+        r.resolution = Some("tall".into());
         assert_eq!(
             session_spec(&sf, &r, &cfg).unwrap_err().param.as_deref(),
             Some("resolution")
         );
-        r.resolution = Some("480p".into());
-        r.aspect_ratio = Some("9:16".into());
-        let s = session_spec(&sf, &r, &cfg).unwrap();
-        assert!(s.canvas.0 < s.canvas.1);
+    }
+
+    #[test]
+    fn clip_models_get_a_clip_session_on_their_frame_grid() {
         let h3 = FakeModel::h3_turbo().caps;
+        let cfg = SegmentsConfig::default();
+        assert_eq!(SegPath::of(&h3), Some(SegPath::Clip));
+        let SegPlan {
+            spec: s,
+            warnings: w,
+            crop,
+        } = session_spec(&h3, &req(6.0), &cfg).unwrap();
+        assert!(w.is_empty());
+        assert_eq!(crop, None);
+        assert_eq!(s.fps, 24);
+        assert_eq!(s.canvas.1, 768, "H3's default tier");
+        assert!(s.tracks.audio.is_some(), "H3 segments carry audio");
+        assert_eq!(s.max_seconds, None);
+        // 6 s = 144 frames, up onto 17n+5: 158.
+        assert_eq!(planned_frames(&h3, SegPath::Clip, 24, 6.0), 158);
+        // Below the grid's minimum: the minimum.
+        assert_eq!(planned_frames(&h3, SegPath::Clip, 24, 1.0), h3.frames.min);
+        assert_eq!(planned_frames(&h3, SegPath::Clip, 24, 30.0), h3.frames.max);
+        // LTX pads to its 64 multiple and crops back to the tier.
+        let ltx = FakeModel::ltx_turbo().caps;
+        let mut r = req(6.0);
+        r.resolution = Some("480p".into());
+        let p = session_spec(&ltx, &r, &cfg).unwrap();
+        assert_eq!(p.output_size().1, 480);
+        assert!(p.spec.canvas.1 >= 480, "{:?}", p.spec.canvas);
+        assert_eq!(planned_frames(&ltx, SegPath::Clip, 24, 6.0), 145);
+        let wan = FakeModel::wan().caps;
         assert_eq!(
-            session_spec(&h3, &req(6.0), &cfg)
+            SegPath::of(&wan),
+            None,
+            "text-only clip models cannot chain"
+        );
+        assert_eq!(
+            session_spec(&wan, &req(6.0), &cfg)
                 .unwrap_err()
                 .param
                 .as_deref(),
@@ -1140,28 +1748,76 @@ mod tests {
 
     #[test]
     fn requests_are_validated_and_clip_inputs_refused() {
-        assert!(validate(&req(6.0)).unwrap().is_empty());
+        let sf = FakeModel::sf_wan().caps;
+        let h3 = FakeModel::h3_turbo().caps;
+        assert!(validate(&req(6.0), &sf, SegPath::Causal)
+            .unwrap()
+            .is_empty());
         let mut r = req(6.0);
         r.context = Some(SegmentContext {
-            image_url: Some("https://x/0.png".into()),
+            image_url: Some("file:///x/0.png".into()),
             ..SegmentContext::default()
         });
         assert_eq!(
-            validate(&r).unwrap_err().param.as_deref(),
+            validate(&r, &sf, SegPath::Causal)
+                .unwrap_err()
+                .param
+                .as_deref(),
             Some("context.image_url")
+        );
+        // The clip path takes an image, never a video context.
+        assert!(validate(&r, &h3, SegPath::Clip).unwrap().is_empty());
+        r.context = Some(SegmentContext {
+            video_url: Some("file:///x/0.mp4".into()),
+            ..SegmentContext::default()
+        });
+        assert_eq!(
+            validate(&r, &h3, SegPath::Clip)
+                .unwrap_err()
+                .param
+                .as_deref(),
+            Some("context.video_url")
         );
         let mut r = req(6.0);
         r.reference_image_urls = vec!["https://x/m.jpg".into()];
-        assert_eq!(validate(&r).unwrap().len(), 1);
+        assert_eq!(validate(&r, &sf, SegPath::Causal).unwrap().len(), 1);
+        // end_image_url: a keyframe on H3, a warning on the causal path.
+        let mut r = req(6.0);
+        r.end_image_url = Some("file:///x/end.png".into());
+        assert!(validate(&r, &h3, SegPath::Clip).unwrap().is_empty());
+        assert_eq!(validate(&r, &sf, SegPath::Causal).unwrap().len(), 1);
+        r.end_image_url = Some("ftp://x/end.png".into());
         assert_eq!(
-            validate(&req(0.0)).unwrap_err().param.as_deref(),
+            validate(&r, &h3, SegPath::Clip)
+                .unwrap_err()
+                .param
+                .as_deref(),
+            Some("end_image_url")
+        );
+        assert_eq!(
+            validate(&req(0.0), &sf, SegPath::Causal)
+                .unwrap_err()
+                .param
+                .as_deref(),
             Some("duration_sec")
         );
         let mut r = req(6.0);
         r.stream_id = "bad id".into();
         assert_eq!(
-            validate(&r).unwrap_err().param.as_deref(),
+            validate(&r, &sf, SegPath::Causal)
+                .unwrap_err()
+                .param
+                .as_deref(),
             Some("stream_id")
         );
+    }
+
+    #[test]
+    fn audio_head_follows_the_dropped_anchor_frame() {
+        let pcm = Pcm::new(48_000, 2, vec![1.0f32; 48_000 * 2]);
+        let cut = drop_audio_head(&pcm, 24);
+        assert_eq!(cut.samples.len(), 48_000 * 2 - 2000 * 2);
+        let short = Pcm::new(48_000, 2, vec![1.0f32; 10]);
+        assert!(drop_audio_head(&short, 24).samples.is_empty());
     }
 }

@@ -27,6 +27,8 @@ name = "cf_live_check"
 required-features = ["webrtc", "http-client"]
 
 [dependencies]
+# Anchor frames and fetched keyframes of /v1/segments (segments.rs).
+image.workspace = true
 fastvideo-protocol.workspace = true
 fastvideo-trace.workspace = true
 fastvideo-engine-service.workspace = true

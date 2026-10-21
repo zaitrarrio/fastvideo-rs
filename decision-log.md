@@ -883,6 +883,16 @@ Project code: FVID
 - ADR: ADR-0002
 - Verification: gates green (tiny CUDA F32 generate on RTX 4090 instance 50416610)
 
+### FVID · 2026-10-21 · FVID-2026-10-21-segments-clip-path
+- Trigger: the owner: "we need this to work with h3 and ltx as well" (`/v1/segments` served only the causal SF-Wan path)
+- Options: one engine clip job per segment with the control plane chaining on `context.image_url` (its `last_frame` mode, a frame over the wire per segment); LTX extend from the previous segment's tail (not reachable through `ClipSession`, 2 s minimum extension, 8-frame rounding); the backend chaining on its own last frame over `ClipSession` the way the fal director chains chunks
+- Decision: the director's way: a clip session per stream, one build per segment anchored on the previous segment's last frame (`Task::I2V`), the duplicated frame and its audio dropped, LTX generated padded and cropped to the tier with the anchor uncropped; `context.image_url` and `end_image_url` accepted on clip models, `context.video_url` refused on both paths; clip lengths snap onto the model's grid and the 202 object reports `planned_frames` / `planned_duration_sec`, which the control plane's custom provider uses as the segment's length
+- Reason: it is the continuity the engine already has for H3 and LTX, proven by the director; `continuity: "native"` keeps working unchanged for the control plane; extend does not fit the contract's lengths
+- Reversibility: cheap (a second worker in the same router; the engine is unchanged)
+- Executed by: Claude (session_013xBkLaNmFvEuC4BKWpjuHc)
+- ADR: none
+- Verification: `tests/segments.rs` on the fake LTX and H3 models (anchor, reset, image and keyframe inputs, audio track, tier alias, grid); not run on a GPU
+
 ### FVID · 2026-10-21 · FVID-2026-10-21-segments-adapter
 - Trigger: the unreel-cloudflare control plane needs a render backend with native continuity (its `custom` provider contract: `POST /v1/segments`, `GET /v1/segments/{id}`, `video_url` per segment)
 - Options: one clip job per segment (last-frame anchoring, VAE round trip per seam); a live `/fv/v1/streams` session the control plane consumes over WHEP; one causal session per `stream_id` cut into segments after the fact
