@@ -285,14 +285,19 @@ change at 2, a `reset` at 3. Results in `artifacts/serve/segments/10212254`
   model's first-frame adherence on this recipe, not the router: `h3-max`'s
   earlier I2V strip (`artifacts/serve/e2e/h3-max/fal-i2v-strip.jpg`) shows
   the same behaviour, frame 0 is the image and the clip then follows the
-  prompt. The router now reports `seam.anchor_diff` (the anchor against the
+  prompt. The router reports `seam.anchor_diff` (the anchor against the
   build's frame 0, the one it drops) and `seam.step_diff` (against the
   first delivered frame) on every continuation, so the control plane can
-  tell a model that continues the shot from one that repaints it; the H3
-  numbers are to be collected on the next run. Until the H3 port's FL2VA
-  keeps the scene (or `h3-max` is measured), H3 segments are consecutive
-  takes with one anchored frame, and the control plane should treat each H3
-  seam as a cut (its `cut`/keyframe planning) or keep H3 on fal.
+  tell a model that continues the shot from one that repaints it. The
+  second H3 run (`artifacts/serve/segments/10212319`, image
+  `h3-turbo-sha-87be763`) measured **`anchor_diff` 41.6 / 38.4 and
+  `step_diff` 44.9 / 38.9** on segments 1 and 2: the build's frame 0 does
+  not reproduce the anchor either, i.e. on `fasth3-4step-vsa` the FL2VA
+  first-frame conditioning has no visible effect (the h3-max strip did
+  paint frame 0). That is a question for the H3 port (FL2VA on the 4-step
+  VSA recipe), not for this router. Until it keeps the scene, H3 turbo
+  segments are consecutive takes, and the control plane should treat each
+  H3 seam as a cut (its `cut`/keyframe planning) or keep H3 on fal.
 - Both pods: 4–5 minutes, $0.19–0.21 each; the EU volume was only read.
 
 ## 7. Gaps
