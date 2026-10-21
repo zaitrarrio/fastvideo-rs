@@ -292,13 +292,20 @@ change at 2, a `reset` at 3. Results in `artifacts/serve/segments/10212254`
   second H3 run (`artifacts/serve/segments/10212319`, image
   `h3-turbo-sha-87be763`) measured **`anchor_diff` 41.6 / 38.4 and
   `step_diff` 44.9 / 38.9** on segments 1 and 2: the build's frame 0 does
-  not reproduce the anchor either, i.e. on `fasth3-4step-vsa` the FL2VA
-  first-frame conditioning has no visible effect (the h3-max strip did
-  paint frame 0). That is a question for the H3 port (FL2VA on the 4-step
-  VSA recipe), not for this router. Until it keeps the scene, H3 turbo
-  segments are consecutive takes, and the control plane should treat each
-  H3 seam as a cut (its `cut`/keyframe planning) or keep H3 on fal.
-- Both pods: 4–5 minutes, $0.19–0.21 each; the EU volume was only read.
+  not reproduce the anchor either. **`h3-max` (`sol-h3`) behaves the same**
+  (`artifacts/serve/segments/10212328`, image `h3-max-sha-87be763`:
+  `anchor_diff` 44.2 / 36.0, `step_diff` 42.3 / 38.0; 8.5–14 s per
+  segment): on both H3 recipes the FL2VA first-frame conditioning reaching
+  the DiT through `ClipSession` (`keyframes: [(First, png)]` → `H3Request
+  .first_image` → `encode_fl2va_cond_rows`) has no visible effect on the
+  picture; two unrelated scenes measure about 50. That is a finding for
+  the H3 port (does FL2VA hold the scene at all in this port? the 2026-09
+  h3-max I2V strip already cut from its beach to a fox), not for this
+  router. Until it does, H3 segments are consecutive takes, and the control
+  plane should treat each H3 seam as a cut (its `cut`/keyframe planning)
+  or keep H3 on fal.
+- Four pods (LTX, H3 turbo twice, H3 max): 4–5 minutes, $0.19–0.21 each;
+  the EU volume was only read.
 
 ## 7. Gaps
 
@@ -314,6 +321,10 @@ change at 2, a `reset` at 3. Results in `artifacts/serve/segments/10212254`
   an edit window, and its 2 s minimum extension and 8-frame rounding do not
   fit the contract's lengths. The control plane's `overlap` mode stays on
   clip providers.
+- **H3 FL2VA does not hold the picture in this port** (§6): the anchored
+  build's frame 0 is not the anchor on `fasth3-4step-vsa` or `sol-h3`.
+  Until the port's first-frame conditioning is verified against the
+  official model (frame 0 should equal the image), H3 cannot chain here.
 - No reference images on either path (H3 ref2va is a separate recipe); no
   audio on the causal path; one stream per GPU.
 - Not yet measured: a 5–10 minute causal stream (the `max_seconds` restart

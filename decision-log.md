@@ -891,7 +891,7 @@ Project code: FVID
 - Reversibility: cheap (a second worker in the same router; the engine is unchanged)
 - Executed by: Claude (session_013xBkLaNmFvEuC4BKWpjuHc)
 - ADR: none
-- Verification: `tests/segments.rs` on the fake LTX and H3 models (anchor, reset, image and keyframe inputs, audio track, tier alias, grid); GPU smoke 2026-10-21 on an RTX PRO 6000 with the EU volume (docs/serve/segments.md §6): LTX-2.5 turbo chains seamlessly (seam 4.4 vs 3.0 inside the clip), 10 s per 5 s segment; H3 turbo repaints the scene after the anchored frame (seam 38 vs 5.7), a model adherence limit the router now measures (`seam`)
+- Verification: `tests/segments.rs` on the fake LTX and H3 models (anchor, reset, image and keyframe inputs, audio track, tier alias, grid); GPU smoke 2026-10-21 on an RTX PRO 6000 with the EU volume (docs/serve/segments.md §6): LTX-2.5 turbo chains seamlessly (seam 4.4 vs 3.0 inside the clip), 10 s per 5 s segment; H3 turbo and H3 max do not reproduce the anchor at all (`seam.anchor_diff` 36–44, the level of two unrelated scenes), a first-frame conditioning finding for the H3 port that the router now measures (`seam`)
 
 ### FVID · 2026-10-21 · FVID-2026-10-21-segments-adapter
 - Trigger: the unreel-cloudflare control plane needs a render backend with native continuity (its `custom` provider contract: `POST /v1/segments`, `GET /v1/segments/{id}`, `video_url` per segment)
