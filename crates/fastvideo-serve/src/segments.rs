@@ -144,6 +144,9 @@ pub struct SegmentRequest {
     /// Accepted and ignored on Wan (no reference conditioning).
     #[serde(default)]
     pub reference_image_urls: Vec<String>,
+    /// Keyframe planning (clip models): accepted and ignored on the causal path.
+    #[serde(default)]
+    pub end_image_url: Option<String>,
     #[serde(default)]
     pub context: Option<SegmentContext>,
     /// POSTed the finished segment object (feature `http-client`).
@@ -462,6 +465,11 @@ fn validate(r: &SegmentRequest) -> Result<Vec<String>, ApiError> {
     if !r.reference_image_urls.is_empty() {
         warnings.push(
             "reference_image_urls ignored: the model has no reference conditioning".to_owned(),
+        );
+    }
+    if r.end_image_url.is_some() {
+        warnings.push(
+            "end_image_url ignored: the causal path renders toward no planned frame".to_owned(),
         );
     }
     Ok(warnings)

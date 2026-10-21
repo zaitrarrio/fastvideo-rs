@@ -74,7 +74,7 @@ Bearer <key>`); a busy executor answers 429 + `Retry-After` on the
   (`session.discarded_blocks`). Block numbering restarts at 0.
 - `context.*`: refused (`invalid_param`). The causal path keeps its own state;
   the control plane uses `continuity: "native"`, which sends none.
-- `reference_image_urls`: accepted and ignored on Wan (`warnings`).
+- `reference_image_urls`, `end_image_url`: accepted and ignored on Wan (`warnings`).
 - `callback_url`: with the `http-client` feature, the finished segment object
   is POSTed there (3 attempts). Without it, poll.
 - Resubmitting the same `(stream_id, segment_index)` returns the existing
