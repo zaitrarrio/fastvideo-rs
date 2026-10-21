@@ -1,0 +1,25 @@
+# Tween's local engine: real fv-serve on the fake engine (CPU, no GPU, no
+# Rust build). The Worker itself runs under `wrangler dev` on the host
+# (task tween:dev), which is how Cloudflare runs D1, R2 and assets locally.
+#
+#   task tween:engine:up     start, then wait for /health from the host
+#   task tween:engine:down   stop and remove state
+name: tween
+
+services:
+  engine:
+    image: ${FV_SERVE_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-serve:cpu}
+    entrypoint: ["/opt/fastvideo-rs/bin/fv-serve", "--config", "/etc/tween/fake.toml"]
+    environment:
+      # sha256 hex of TWEEN_ENGINE_KEY; computed by `task tween:engine:up`.
+      FV_API_KEYS: ${FV_API_KEYS:?run via task tween:engine:up, which sets FV_API_KEYS}
+      FV_ENGINE: fake
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - ./engine/fake.toml:/etc/tween/fake.toml:ro
+      - engine-state:/fvstate
+    ports:
+      - "127.0.0.1:${TWEEN_ENGINE_PORT:-8000}:8000"
+
+volumes:
+  engine-state:

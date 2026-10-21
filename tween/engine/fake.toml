@@ -1,0 +1,44 @@
+# fv-serve on the fake engine for Tween's local stack (tween/docker-compose.yml).
+# Same shape as configs/serve/fake.toml, bound for a container. The key is
+# FV_API_KEYS (sha256 hex of TWEEN_ENGINE_KEY), set by docker-compose.yml.
+# The fake engine honours the real request rules (tasks, refs, clip lengths)
+# but its output is a placeholder file, not motion: use scripts/mock-engine.ts
+# for playable stand-ins and a GPU pool for real renders.
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/fvstate"
+shutdown_grace_s = 5
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "local"
+url_ttl_s = 86400
+
+[jobs]
+backend = "file"
+
+[engine]
+backend = "fake"
+
+[engine.fake]
+step_ms = 20
+load_ms = 500
+all_resident = true
+placeholder_output = true
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = false
+fal = false
+fal_director = false
+ltx = false
+reactor = false
+native = true
+
+[limits]
+queue_max = 32
+body_max_mb = 64

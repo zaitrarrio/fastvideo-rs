@@ -1,0 +1,190 @@
+version: '3'
+
+# Tween: keyframe storyboards over fv-serve (docs/adr/0004-tween-storyboard-app.md).
+# Included from the repo Taskfile as `tween:` — run from the repo root:
+#
+#   task tween:setup        install, .env and .dev.vars, local D1 migrations
+#   task tween:check        typecheck, unit tests, wrangler build (free, no Docker)
+#   task tween:up           fake fv-serve in Docker + wrangler dev → http://127.0.0.1:8787
+#   task tween:up:mock      the same on the mock engine (no Docker; playable crossfades)
+#   task tween:e2e          Tween against the Docker fake engine
+#   task tween:down         stop the engine, drop its state
+
+# Values come from .env through scripts/env-get.mjs (an included Taskfile
+# cannot declare dotenv); the process environment wins over .env.
+vars:
+  PORT: {sh: node scripts/env-get.mjs TWEEN_PORT 8787}
+  ENGINE_PORT: {sh: node scripts/env-get.mjs TWEEN_ENGINE_PORT 8000}
+  MOCK_PORT: {sh: node scripts/env-get.mjs TWEEN_MOCK_PORT 8010}
+  KEY: {sh: node scripts/env-get.mjs TWEEN_ENGINE_KEY sk-local}
+
+tasks:
+  default:
+    silent: true
+    cmds: ['task --list']
+
+  # ---- setup -------------------------------------------------------------
+
+  install:
+    desc: Install npm dependencies
+    sources: [package.json, package-lock.json]
+    generates: [node_modules/.package-lock.json]
+    cmds: ['npm ci --no-audit --no-fund']
+
+  env:
+    desc: Create .env from .env.example (kept if present) and write .dev.vars from it
+    cmds:
+      - '[ -f .env ] || cp .env.example .env'
+      - node scripts/dev-vars.mjs
+
+  setup:
+    desc: Install, env files and local D1 migrations
+    cmds:
+      - task: install
+      - task: env
+      - task: db:migrate
+
+  # ---- checks (free) -----------------------------------------------------
+
+  typecheck:
+    desc: TypeScript, no emit
+    deps: [install]
+    cmds: ['npx tsc --noEmit']
+
+  test:
+    desc: Unit tests (real SQL on node:sqlite, in-memory R2, fake engine)
+    deps: [install]
+    cmds: ['npx vitest run test/unit']
+
+  build:
+    desc: Bundle the Worker (wrangler deploy --dry-run), top level and staging
+    deps: [install]
+    cmds:
+      - npx wrangler deploy --dry-run --outdir dist --env ""
+      - npx wrangler deploy --dry-run --outdir dist/staging --env staging
+
+  check:
+    desc: Typecheck, unit tests and build
+    cmds:
+      - task: typecheck
+      - task: test
+      - task: build
+
+  # ---- database ----------------------------------------------------------
+
+  db:migrate:
+    desc: Apply migrations to the local D1 (wrangler's .wrangler/state)
+    deps: [install]
+    cmds: ['npx wrangler d1 migrations apply fv-tween --local']
+
+  db:reset:
+    desc: Delete local D1 and R2 state, then migrate again
+    prompt: This deletes every local board, panel and render. Continue?
+    cmds:
+      - rm -rf .wrangler/state
+      - task: db:migrate
+
+  db:migrate:staging:
+    desc: Apply migrations to the staging D1
+    deps: [install]
+    cmds: ['npx wrangler d1 migrations apply fv-tween-staging --env staging --remote']
+
+  # ---- engine ------------------------------------------------------------
+
+  docker:up:
+    internal: true
+    silent: true
+    cmds:
+      - |
+        docker info >/dev/null 2>&1 || {
+          echo "Docker is not running. Start it, or use task tween:up:mock (no Docker)." >&2
+          exit 1
+        }
+
+  engine:up:
+    desc: Start real fv-serve on the fake engine (Docker) and wait for /health
+    deps: [docker:up]
+    env:
+      TWEEN_ENGINE_PORT: '{{.ENGINE_PORT}}'
+    cmds:
+      - |
+        export FV_API_KEYS="$(printf %s '{{.KEY}}' | sha256sum | cut -d' ' -f1)"
+        docker compose up -d engine
+      - node scripts/wait-http.mjs http://127.0.0.1:{{.ENGINE_PORT}}/health 120
+      - echo "fv-serve (fake engine) → http://127.0.0.1:{{.ENGINE_PORT}}"
+
+  engine:down:
+    desc: Stop fv-serve and remove its state volume
+    deps: [docker:up]
+    cmds: ['FV_API_KEYS=unused docker compose down -v']
+
+  engine:logs:
+    desc: Follow fv-serve logs
+    cmds: ['FV_API_KEYS=unused docker compose logs -f engine']
+
+  mock:
+    desc: Run the mock engine in the foreground (no Docker; ffmpeg crossfades if installed)
+    deps: [install]
+    env:
+      MOCK_ENGINE_PORT: '{{.MOCK_PORT}}'
+      MOCK_ENGINE_KEY: '{{.KEY}}'
+    cmds: ['node --experimental-strip-types --no-warnings scripts/mock-engine.ts']
+
+  # ---- dev ---------------------------------------------------------------
+
+  dev:
+    desc: wrangler dev against TWEEN_ENGINE_URL (.dev.vars)
+    deps: [install]
+    cmds: ['npx wrangler dev --ip 127.0.0.1 --port {{.PORT}}']
+
+  up:
+    desc: Full local stack — fake fv-serve (Docker) + Tween (default http://127.0.0.1:8787)
+    cmds:
+      - task: setup
+      - task: engine:up
+      - npx wrangler dev --ip 127.0.0.1 --port {{.PORT}} --var TWEEN_ENGINE_URL:http://127.0.0.1:{{.ENGINE_PORT}}
+
+  up:mock:
+    desc: Local stack on the mock engine (no Docker) — Tween (default http://127.0.0.1:8787)
+    cmds:
+      - task: setup
+      - MOCK_ENGINE_PORT={{.MOCK_PORT}} MOCK_ENGINE_KEY='{{.KEY}}' node scripts/with-mock.mjs -- npx wrangler dev --ip 127.0.0.1 --port {{.PORT}} --var TWEEN_ENGINE_URL:http://127.0.0.1:{{.MOCK_PORT}} --var TWEEN_ENGINE_KEY:{{.KEY}}
+
+  down:
+    desc: Stop the local engine and drop its state (wrangler dev stops with Ctrl-C)
+    cmds:
+      - task: engine:down
+
+  # ---- e2e ---------------------------------------------------------------
+
+  e2e:
+    desc: Tween against real fv-serve on the fake engine (Docker)
+    cmds:
+      - task: engine:up
+      - defer: { task: engine:down }
+      - TWEEN_E2E_ENGINE_URL=http://127.0.0.1:{{.ENGINE_PORT}} TWEEN_E2E_ENGINE_KEY='{{.KEY}}' npx vitest run test/e2e
+
+  e2e:mock:
+    desc: The e2e suite against the mock engine (no Docker)
+    deps: [install]
+    cmds:
+      - MOCK_ENGINE_PORT={{.MOCK_PORT}} MOCK_ENGINE_KEY='{{.KEY}}' node scripts/with-mock.mjs -- npx vitest run test/e2e
+
+  # ---- staging -----------------------------------------------------------
+
+  provision:staging:
+    desc: Create the staging D1 database and R2 bucket (once), then paste the D1 id into wrangler.toml
+    deps: [install]
+    cmds:
+      - npx wrangler d1 create fv-tween-staging
+      - npx wrangler r2 bucket create fv-tween-staging-media
+
+  deploy:staging:
+    desc: Migrate and deploy to staging (needs TWEEN_ENGINE_URL in wrangler.toml and both secrets set)
+    cmds:
+      - task: check
+      - |
+        grep -q '^database_id = "00000000-0000-0000-0000-000000000000"' <(sed -n '/env.staging.d1_databases/,/^$/p' wrangler.toml) && {
+          echo "Set the staging database_id in wrangler.toml first (task tween:provision:staging)." >&2; exit 1; } || true
+      - task: db:migrate:staging
+      - npx wrangler deploy --env staging

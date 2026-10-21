@@ -19,3 +19,6 @@ __pycache__/
 rust_out
 *.zip
 source.zip
+
+# go-task checksums
+.task/

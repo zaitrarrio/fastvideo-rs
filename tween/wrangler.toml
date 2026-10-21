@@ -1,0 +1,67 @@
+# fv-tween: keyframe storyboards rendered by fv-serve
+# (docs/adr/0004-tween-storyboard-app.md).
+#
+# Own Worker, D1 and R2: nothing here is shared with fv-app or fv-control.
+# Secrets (never in this file):
+#   wrangler secret put TWEEN_ENGINE_KEY    --env staging   # fv-serve API key
+#   wrangler secret put TWEEN_ACCESS_TOKEN  --env staging   # studio sign-in token
+# Local development reads them from .dev.vars (see .env.example).
+name = "fv-tween"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# Static UI (public/); the worker answers /api/* and /healthz first.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/healthz"]
+
+# Top level = local development against the fake engine (configs/serve/fake.toml
+# via docker-compose.yml). Production is not set up: deploy only --env staging.
+[vars]
+TWEEN_ENGINE_URL = "http://127.0.0.1:8000"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "fv-tween"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "fv-tween-media"
+
+# ---- staging: fv-tween-staging.<account>.workers.dev -------------------------
+# Real models (configs/serve/runpod-family-ltx.toml, runpod-family-h3.toml,
+# runpod-h3-ref2v.toml). TWEEN_ENGINE_URL is the fv-serve edge; set it before
+# the first deploy. Create the D1 database and bucket with `task tween:provision`
+# and paste the database id below.
+[env.staging]
+name = "fv-tween-staging"
+
+[env.staging.vars]
+TWEEN_ENGINE_URL = ""
+TWEEN_LTX_DRAFT_MODEL = "ltx25-distill-sol"
+TWEEN_LTX_FINAL_MODEL = "ltx25-distill-dense"
+TWEEN_H3_DRAFT_MODEL = "fasth3"
+TWEEN_H3_FINAL_MODEL = "sol-h3"
+TWEEN_H3_REFERENCE_MODEL = "h3-ref2v-turbo"
+
+[env.staging.assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/healthz"]
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "fv-tween-staging"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[[env.staging.r2_buckets]]
+binding = "MEDIA"
+bucket_name = "fv-tween-staging-media"
