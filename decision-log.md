@@ -883,3 +883,13 @@ Project code: FVID
 - ADR: ADR-0002
 - Verification: gates green (tiny CUDA F32 generate on RTX 4090 instance 50416610)
 
+### FVID · 2026-10-21 · FVID-2026-10-21-segments-adapter
+- Trigger: the unreel-cloudflare control plane needs a render backend with native continuity (its `custom` provider contract: `POST /v1/segments`, `GET /v1/segments/{id}`, `video_url` per segment)
+- Options: one clip job per segment (last-frame anchoring, VAE round trip per seam); a live `/fv/v1/streams` session the control plane consumes over WHEP; one causal session per `stream_id` cut into segments after the fact
+- Decision: one causal session per `stream_id`, segments cut from the continuous rollout with frame carry-over (`crates/fastvideo-serve/src/segments.rs`, docs/serve/segments.md); `reset` for scene cuts, `context.*` refused on the causal path, the control plane publishes
+- Reason: the seam only exists for scheduling; the KV cache, sink and decoder state carry across segments; the control plane keeps its own WHIP publisher and buffer
+- Reversibility: cheap (a router over existing engine sessions; nothing in the engine changed)
+- Executed by: Claude (session_013xBkLaNmFvEuC4BKWpjuHc)
+- ADR: none
+- Verification: CPU tests on the fake causal model (`tests/segments.rs`); not yet run on a GPU
+

@@ -913,6 +913,8 @@ pub fn mounted_protocols(config: &Config) -> serde_json::Value {
         "reactor": cfg!(feature = "reactor") && p.reactor,
         // `POST /fv/v1/streams` (publishing to a WHIP endpoint) needs `webrtc` + `http-client`.
         "streams": p.native && crate::streams::PUBLISHER,
+        // `/v1/segments` (docs/serve/segments.md).
+        "segments": p.native && config.segments.enabled,
     })
 }
 
@@ -935,6 +937,13 @@ pub fn assemble(
     if config.protocols.native {
         kit = kit.merge(native::routes(gate.clone(), mcfg.body_max, mcfg.sync_timeout, config.streams.causal_limits(), mounted_protocols(config)));
         kit = kit.merge(crate::streams::routes(gate.clone(), crate::streams::StreamsConfig::from_config(config)));
+        if config.segments.enabled {
+            kit = kit.merge(crate::segments::routes(
+                gate.clone(),
+                crate::segments::SegmentsConfig::from_config(config),
+                config.server.state_dir.join("segments"),
+            ));
+        }
     }
     let (adapters, stateful) = adapters::mount(&mcfg, ctx, fal_extra);
     kit = kit.merge(adapters);

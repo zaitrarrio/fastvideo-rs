@@ -47,6 +47,7 @@
 //! | `FV_UPSAMPLER_LOCAL` (`0` \| `1`) | `upsampler.local` (the LLM shares this GPU; unset: a loopback `base_url` is local). Unset `timeout_ms` / `hedge` / `deck_size` of a local server default to 60000 / off / 2 |
 //! | `FV_UPSAMPLER_API_KEY` (or the variable `api_key_env` names) | `upsampler.api_key` (secret) |
 //! | `FV_CAUSAL_DEFAULT_MAX_S`, `FV_CAUSAL_HARD_MAX_S` | `streams.causal_default_max_s` / `causal_hard_max_s` (live SF-Wan session length, 120 / 300 s of video) |
+//! | `FV_SEGMENTS_MODEL`, `FV_SEGMENTS_IDLE_TTL_S`, `FV_SEGMENTS_ENCODER` | `segments.model` / `idle_ttl_s` / `encoder` (the `/v1/segments` adapter, docs/serve/segments.md) |
 //! | `FV_CF_STREAM_API_TOKEN` (secret; Account > Stream > Edit), `FV_CF_ACCOUNT_ID` (shared with D1), `FV_CF_STREAM_API_BASE`, `FV_CF_STREAM_NAME_PREFIX`, `FV_CF_STREAM_CUSTOMER_DOMAIN` | `outputs.cloudflare.*`: the Cloudflare Stream default output of live streams (docs/serve/stream-outputs.md) |
 //! | `FV_OUTPUTS_ALLOW_PRIVATE` (`1`), `FV_OUTPUTS_SRT_LATENCY_MS`, `FV_OUTPUTS_RTMPS_CA_FILE` | `outputs.allow_private` (tests / LAN relays: loopback and private destinations), `outputs.srt_latency_ms`, `outputs.rtmps_ca_file` (extra CAs for RTMPS, PEM) |
 //! | `FV_DIRECTOR_ALLOW_OUTPUT` (`1`) | `director.allow_output` (accept `configure.output`, not only `x_fv_output`) |
@@ -542,6 +543,51 @@ impl Default for StreamsCfg {
 impl StreamsCfg {
     pub fn causal_limits(&self) -> fastvideo_protocol::CausalLimits {
         fastvideo_protocol::CausalLimits { default_max_s: self.causal_default_max_s, hard_max_s: self.causal_hard_max_s }
+    }
+}
+
+/// `[segments]`: the `/v1/segments` adapter (docs/serve/segments.md): a
+/// control plane pulls an infinite stream segment by segment out of one
+/// causal session per `stream_id`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SegmentsCfg {
+    /// Mount the routes (with `protocols.native`).
+    pub enabled: bool,
+    /// The causal model a request without `model` uses (`FV_SEGMENTS_MODEL`);
+    /// empty: the first causal model the engine serves.
+    pub model: Option<String>,
+    /// Close a stream's session after this long without a segment request
+    /// (`FV_SEGMENTS_IDLE_TTL_S`, 120).
+    pub idle_ttl_s: u64,
+    /// Session length in video seconds; `None`: `[streams]
+    /// causal_default_max_s`, never more than `causal_hard_max_s`.
+    pub max_seconds: Option<u32>,
+    /// Signed `video_url` lifetime (3600).
+    pub url_ttl_s: u64,
+    /// `nvenc` (production) | `libx264` (CPU tests) (`FV_SEGMENTS_ENCODER`).
+    pub encoder: String,
+    /// Finished segments kept for `GET` (256).
+    pub keep: usize,
+    /// Segments a stream may have waiting (8).
+    pub queue: usize,
+}
+
+impl Default for SegmentsCfg {
+    fn default() -> Self {
+        Self { enabled: true, model: None, idle_ttl_s: 120, max_seconds: None, url_ttl_s: 3600, encoder: "nvenc".into(), keep: 256, queue: 8 }
+    }
+}
+
+impl SegmentsCfg {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if !matches!(self.encoder.as_str(), "nvenc" | "libx264") {
+            return Err(ConfigError::Invalid(format!("[segments] encoder `{}`: nvenc or libx264", self.encoder)));
+        }
+        if self.max_seconds == Some(0) {
+            return Err(ConfigError::Invalid("[segments] max_seconds must be 1 or more".into()));
+        }
+        Ok(())
     }
 }
 
@@ -1134,6 +1180,7 @@ pub struct Config {
     pub limits: LimitsCfg,
     pub webrtc: WebrtcCfg,
     pub streams: StreamsCfg,
+    pub segments: SegmentsCfg,
     pub outputs: OutputsCfg,
     pub director: DirectorCfg,
     pub reactor: ReactorCfg,
@@ -1326,6 +1373,20 @@ impl Config {
                     .filter(|n| *n >= 1)
                     .ok_or_else(|| ConfigError::Invalid(format!("{k}={v} is not a number of seconds (1 or more)")))?;
             }
+        }
+        if let Some(v) = env.var("FV_SEGMENTS_MODEL") {
+            self.segments.model = Some(v.trim().to_owned()).filter(|m| !m.is_empty());
+        }
+        if let Some(v) = env.var("FV_SEGMENTS_ENCODER") {
+            self.segments.encoder = v.trim().to_owned();
+        }
+        if let Some(v) = env.var("FV_SEGMENTS_IDLE_TTL_S") {
+            self.segments.idle_ttl_s = v
+                .trim()
+                .parse()
+                .ok()
+                .filter(|n| *n >= 1)
+                .ok_or_else(|| ConfigError::Invalid(format!("FV_SEGMENTS_IDLE_TTL_S={v} is not a number of seconds (1 or more)")))?;
         }
         if let Some(v) = env.var("FV_REACTOR_MODEL") {
             self.reactor.model = Some(v);
@@ -1550,6 +1611,7 @@ impl Config {
             return Err(ConfigError::Invalid("server.workers_max must be 1 or more".into()));
         }
         self.streams.causal_limits().check().map_err(|e| ConfigError::Invalid(format!("[streams]: {e}")))?;
+        self.segments.validate()?;
         if let Some(u) = &self.server.public_base_url {
             url::Url::parse(u).map_err(|e| ConfigError::Invalid(format!("server.public_base_url: {e}")))?;
         }

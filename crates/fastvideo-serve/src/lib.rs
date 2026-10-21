@@ -76,6 +76,7 @@ pub mod router;
 pub mod shutdown;
 pub mod status;
 pub mod storage;
+pub mod segments;
 pub mod streams;
 pub mod tokens;
 pub mod trace_http;
