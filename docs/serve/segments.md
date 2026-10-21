@@ -2,7 +2,7 @@
 
 Status: implemented (`crates/fastvideo-serve/src/segments.rs`), mounted with
 `protocols.native` when `[segments] enabled` (default on). CPU tests:
-`crates/fastvideo-serve/tests/segments.rs`. Not yet run on a GPU.
+`crates/fastvideo-serve/tests/segments.rs`. GPU smoke: §6.
 
 ## 1. Why
 
@@ -158,12 +158,49 @@ keep = 256
 queue = 8
 ```
 
-## 6. Gaps
+## 6. GPU smoke (2026-10-21, H100 SXM, Runpod secure)
 
-- Not run on a GPU yet: the CPU tests use the fake causal model. The first
-  GPU smoke is `runpod-sfwan.toml` + two segments of 6 s, checking
-  `generation_ms` ≈ 4 s (H100) and a seamless join in the control plane.
+`scripts/serve/e2e/segments-pod.sh`: one pod with the `sfwan` variant image
+(`sfwan-sha-b9da353`, features `cuda,http-client`), the `sfwan21-1.3b` tree
+fetched from the Hub onto the container disk, `runpod-sfwan.toml`, segments
+encoder `libx264` (H100 has no NVENC). An on-pod client pulled four 6 s
+segments of one stream at 832×480 / 16 fps: the same prompt twice, a
+prompt change (`recache`) at segment 2, a scene cut (`reset`) at segment 3.
+Results in `artifacts/serve/segments/10212204/`.
+
+| segment | blocks | generation_ms | encode_ms | wall (client) | session |
+|---|---|---|---|---|---|
+| 0 | 0–8 | 4911 (includes the session open) | 695 | 6.0 s | — |
+| 1 | 9–16 | 2930 | 866 | 4.0 s | — |
+| 2 (recache) | 17–24 | 2860 | 842 | 4.0 s | `stale_blocks: 3` |
+| 3 (reset) | 0–8 | 4870 (includes the re-prefill) | 812 | 6.0 s | `discarded_blocks: 3` |
+
+- Every segment: 96 frames, H.264 832×480 at 16 fps, 2.6–4.1 MB. The
+  steady state is **2.9 s of generation per 6 s segment (≈2× realtime)** at
+  30 GB of GPU memory; the libx264 encode adds 0.8 s and would be ~0.2 s on
+  NVENC. A control plane that asks 1–2 segments ahead keeps the stream fed.
+- **The seam is invisible.** The mean luma difference between the last frame
+  of segment 0 and the first of segment 1 is 6.90, against 7.01 between
+  consecutive frames inside segment 0 (`seam-intra.txt`); the pair's PSNR
+  is 24.2 dB, an ordinary inter-frame value for this motion. Concatenating
+  the two MP4s (`seg-0-1-joined.mp4`) shows one continuous shot.
+- The direction at segment 2 landed after 3 blocks (2.25 s), exactly the
+  engine's lookahead (`prompt switch: KV cache kept … block=20` for a
+  segment starting at block 17); `stale_blocks` reported it.
+- The reset at segment 3 discarded the 3 blocks the engine had run ahead
+  under the old scene, restarted numbering at 0 and cost the first-segment
+  price again (4.9 s); the picture is a clean cut to the new scene.
+- fv-serve was ready 52 s after start (27 GB of weights loaded); the whole
+  run took 4.4 pod-minutes ($0.29 at $3.99/h). An earlier attempt on the
+  same image ran blind for 26 min because the variant images carry no
+  `fv-gpucheck` (the result server); the script now uses python3.
+
+## 7. Gaps
+
 - No first-frame or tail prefill on the causal path (`context.*` is refused):
   the control plane's `last_frame` / `overlap` modes stay on clip providers.
 - No audio; no reference images; one stream per GPU; 480p only.
+- Not yet measured: a 5–10 minute stream (the `max_seconds` restart and the
+  R12 drift question), NVENC on L40S / RTX PRO 6000, and the end-to-end
+  join in the control plane's streamer (the MP4s above are what it gets).
 - Artifacts are never deleted by this router (the store's retention applies).

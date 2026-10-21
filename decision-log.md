@@ -891,5 +891,5 @@ Project code: FVID
 - Reversibility: cheap (a router over existing engine sessions; nothing in the engine changed)
 - Executed by: Claude (session_013xBkLaNmFvEuC4BKWpjuHc)
 - ADR: none
-- Verification: CPU tests on the fake causal model (`tests/segments.rs`); not yet run on a GPU
+- Verification: CPU tests on the fake causal model (`tests/segments.rs`); GPU smoke 2026-10-21 on an H100 (docs/serve/segments.md §6): four 6 s segments, 2.9 s generation per segment in steady state, the seam between segments 0 and 1 indistinguishable from an inter-frame difference, `stale_blocks`/`discarded_blocks` as designed
 
