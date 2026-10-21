@@ -30,6 +30,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 source "$ROOT/scripts/gpu/runpod-price.sh"
 # shellcheck source-path=SCRIPTDIR source=../../gpu/runpod-cuda.sh
 source "$ROOT/scripts/gpu/runpod-cuda.sh"
+# shellcheck source-path=SCRIPTDIR source=../../gpu/volumes.sh
+source "$ROOT/scripts/gpu/volumes.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="https://api.runpod.io/graphql"
 : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
@@ -47,6 +49,16 @@ SEGS="${FV_SEG_SECONDS:-6}"
 # docs/serve/segments.md §7.
 SEG_MODEL="${FV_SEG_MODEL:-}"
 SEG_RES="${FV_SEG_RES:-480p}"
+# FV_SEG_VOLUME=<network volume id>: mount it read-only at /workspace and
+# serve the image's own preset (FV_CONFIG) from its weights instead of
+# fetching SF-Wan: the clip-path smoke on the h3-turbo / ltx variant images
+# with the EU volume (scripts/gpu/volumes.sh). The pod then runs in the
+# volume's data center on its GPUs (FV_EU_GPUS, NVENC).
+VOLUME="${FV_SEG_VOLUME:-}"
+if [[ -n "$VOLUME" ]]; then
+  fv_check_volume "$VOLUME"
+  GPUS="${RUNPOD_GPU_TYPES:-$FV_EU_GPUS|NVIDIA L40S}"
+fi
 TAG="$(date -u +%m%d%H%M)"
 OUT="$ROOT/artifacts/serve/segments/$TAG"
 LEDGER="$ROOT/artifacts/runpod/serve/ledger.tsv"
@@ -139,6 +151,10 @@ finish() { say "done"; echo "done $TAG" >"\$OUT/DONE"; exec sleep infinity; }
 { nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
   echo "caps=\$NVIDIA_DRIVER_CAPABILITIES"; cat /opt/fastvideo-rs/bin/fv-serve.features
   ffmpeg -hide_banner -encoders 2>/dev/null | grep -c h264_nvenc; echo "encoder=$enc"; } >"\$OUT/box.txt" 2>&1
+WEIGHTS=/fvscratch/weights
+if [ -n "$VOLUME" ]; then
+  WEIGHTS=/workspace/weights; say "weights: volume $VOLUME at \$WEIGHTS"; ls "\$WEIGHTS" >>"\$OUT/box.txt" 2>&1
+else
 say "weights"
 # The sfwan21-1.3b tree at its pinned revision (scripts/gpu/weights-revisions.tsv).
 W=/fvscratch/weights/sfwan21-1.3b; REPO=wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers; REV=4b44356635ae5e927ca552a220f768022be76004
@@ -151,13 +167,17 @@ while read -r f; do mkdir -p "\$W/\$(dirname "\$f")"; echo "\$f"; done <"\$OUT/f
 du -sh "\$W" >>"\$OUT/box.txt"
 echo "\$FV_TAE_B64" | base64 -d >/fetch_taehv.sh
 FV_AUX_DIR=/nonexistent bash /fetch_taehv.sh /fvscratch/tae >"\$OUT/tae.log" 2>&1 || say "tae fetch failed"
+fi
 say "fv-serve"
-# The production preset (runpod-sfwan.toml: engine.backend = cuda, [[models]]
-# sfwan21-1.3b) on the container disk, no auth, local artifacts.
-FV_WEIGHTS=/fvscratch/weights FASTVIDEO_TAE_DIR=/fvscratch/tae FV_AUTH_MODE=none FV_BIND=0.0.0.0:8080 \
+# The image's production preset (runpod-sfwan.toml on the sfwan image:
+# engine.backend = cuda, [[models]] sfwan21-1.3b; the variant's FV_CONFIG
+# otherwise), no auth, local artifacts.
+CFG="\${FV_CONFIG:-/etc/fv/runpod-sfwan.toml}"; [ -n "$VOLUME" ] || CFG=/etc/fv/runpod-sfwan.toml
+say "fv-serve --config \$CFG"
+FV_WEIGHTS=\$WEIGHTS FASTVIDEO_TAE_DIR=/fvscratch/tae FV_AUTH_MODE=none FV_BIND=0.0.0.0:8080 \
   FV_PUBLIC_BASE_URL=http://127.0.0.1:8080 FV_SEGMENTS_ENCODER=$enc \
   FV_STATE_DIR=/fvscratch/state FV_JOB_STORE=memory FV_ARTIFACTS=local FV_STREAM_STUN=none FV_OUTPUTS_ALLOW_PRIVATE=1 FV_LOG_FORMAT=text \
-  /opt/fastvideo-rs/bin/fv-serve --config /etc/fv/runpod-sfwan.toml >"\$OUT/serve.log" 2>&1 &
+  /opt/fastvideo-rs/bin/fv-serve --config "\$CFG" >"\$OUT/serve.log" 2>&1 &
 S=http://127.0.0.1:8080
 for i in \$(seq 1 900); do curl -fsS \$S/health >/dev/null 2>&1 && break; sleep 2; done
 curl -sS \$S/health >"\$OUT/health.json"; say "ready: \$(cat "\$OUT/health.json")"
@@ -192,8 +212,13 @@ EOF
 }
 
 create() {
-  local gpu="$1" enc="$2" payload
-  payload="$(jq -n --arg name "fv-segments-$TAG" --arg image "$RUNPOD_IMAGE" --arg gpu "$gpu" \
+  local gpu="$1" enc="$2" payload vol='{}'
+  if [[ -n "$VOLUME" ]]; then
+    local dc
+    dc="$(rest GET "/networkvolumes/$VOLUME" | jq -r '.dataCenterId')"
+    vol="$(jq -n --arg v "$VOLUME" --arg dc "$dc" '{networkVolumeId: $v, volumeMountPath: "/workspace", dataCenterIds: [$dc]}')"
+  fi
+  payload="$(jq -n --arg name "fv-segments-$TAG" --arg image "$RUNPOD_IMAGE" --arg gpu "$gpu" --argjson vol "$vol" \
     --arg cmd "$(pod_cmd "$enc")" --arg py "$(client_py | base64 -w0)" \
     --arg tae "$(base64 -w0 <"$ROOT/scripts/gpu/fetch_taehv.sh")" \
     --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" '{
@@ -201,7 +226,7 @@ create() {
       gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: 80, volumeInGb: 0,
       env: {NVIDIA_DRIVER_CAPABILITIES: "compute,utility,video", FV_SEG_PY_B64: $py, FV_TAE_B64: $tae},
       ports: ["8000/http"], dockerEntrypoint: ["/bin/bash", "-c"], dockerStartCmd: [$cmd]
-    } + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)')"
+    } + $vol + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)')"
   rest POST /pods "$payload"
 }
 
