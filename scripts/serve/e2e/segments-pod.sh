@@ -222,6 +222,7 @@ elif [ -n "$R2_TREES" ]; then
   for t in weights-revisions.tsv weights-manifest.tsv weights-r2.tsv weights-sha256.tsv; do
     curl -fsSL --retry 5 -o "/fvscratch/r2/\$t" "$R2_RAW/\$t"
   done
+  { echo "endpoint=\$FV_WEIGHTS_R2_ENDPOINT bucket=\$FV_WEIGHTS_R2_BUCKET key=\${FV_WEIGHTS_R2_ACCESS_KEY_ID:0:4}…"; python3 -I /fvscratch/r2/r2-weights.py list; } >"\$OUT/r2-list.log" 2>&1 || say "r2 list failed"
   python3 -I /fvscratch/r2/r2-weights.py plan $R2_TREES --ttl 7200 --out /fvscratch/r2/plan.json >"\$OUT/plan.log" 2>&1 || { say "plan failed"; finish; }
   python3 -I /fvscratch/r2/r2-fetch.py --root "\$WEIGHTS" --plan /fvscratch/r2/plan.json --status "\$OUT/r2-status.json" >"\$OUT/r2-fetch.log" 2>&1 || { say "r2 fetch failed"; finish; }
   say "weights fetched"; du -sh "\$WEIGHTS"/* >>"\$OUT/box.txt" 2>&1
@@ -287,7 +288,10 @@ create() {
   local gpu="$1" enc="$2" payload vol='{}' r2env='{}'
   if [[ -n "$R2_TREES" ]]; then
     # The account's R2 read secrets, resolved by Runpod inside the pod only.
-    r2env='{"FV_WEIGHTS_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}", "FV_WEIGHTS_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}", "FV_WEIGHTS_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}", "FV_WEIGHTS_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}"}'
+    # The account's R2 key from the Runpod secrets; the weights store itself
+    # is always the `fv-weights` bucket on the account endpoint
+    # (docs/ops/r2-weights.md), whatever bucket the media secrets name.
+    r2env='{"FV_WEIGHTS_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}", "FV_WEIGHTS_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}", "FV_WEIGHTS_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}", "FV_WEIGHTS_R2_BUCKET": "fv-weights"}'
   fi
   if [[ -n "$VOLUME" ]]; then
     local dc
@@ -352,7 +356,7 @@ until [[ "$(proxy "$id" "segments/$TAG/DONE" 2>/dev/null | head -1)" == "done $T
   fi
   sleep 20
 done
-for f in live.log box.txt files.txt tae.log prep.log plan.log r2-fetch.log r2-status.json health.json capabilities.json streams-empty.json client.log segments.json \
+for f in live.log box.txt files.txt tae.log prep.log r2-list.log plan.log r2-fetch.log r2-status.json health.json capabilities.json streams-empty.json client.log segments.json \
   seam-psnr.txt seam-intra.txt nvidia-smi.txt metrics.txt serve-tail.log serve.log \
   seg-0.mp4 seg-1.mp4 seg-2.mp4 seg-3.mp4 seg-0-1-joined.mp4 \
   seg0-first.png seg0-last.png seg1-first.png seg2-first.png seg3-first.png \
