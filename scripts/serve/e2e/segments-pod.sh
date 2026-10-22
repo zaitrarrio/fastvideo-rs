@@ -72,6 +72,9 @@ SEG_WEIGHTS="${FV_SEG_WEIGHTS:-}"
 # come from this branch's pushed commit on GitHub. Container disk FV_SEG_DISK_GB
 # (300 in this mode, 80 otherwise).
 R2_TREES="${FV_SEG_R2_TREES:-}"
+# FV_SEG_R2_DROP="<dest>:<glob> …": files of a plan tree not to fetch (the
+# bf16 transformer shards of h3-base when a prequant tree serves the DiT).
+R2_DROP="${FV_SEG_R2_DROP:-}"
 DISK_GB="${FV_SEG_DISK_GB:-$([[ -n "$R2_TREES" ]] && echo 300 || echo 80)}"
 R2_RAW="https://raw.githubusercontent.com/zaitrarrio/fastvideo-rs/$(git -C "$ROOT" rev-parse HEAD)/scripts/gpu"
 if [[ -n "$VOLUME" ]]; then
@@ -224,6 +227,23 @@ elif [ -n "$R2_TREES" ]; then
   done
   { echo "endpoint=\$FV_WEIGHTS_R2_ENDPOINT bucket=\$FV_WEIGHTS_R2_BUCKET key=\${FV_WEIGHTS_R2_ACCESS_KEY_ID:0:4}…"; python3 -I /fvscratch/r2/r2-weights.py list; } >"\$OUT/r2-list.log" 2>&1 || say "r2 list failed"
   python3 -I /fvscratch/r2/r2-weights.py plan $R2_TREES --ttl 7200 --out /fvscratch/r2/plan.json >"\$OUT/plan.log" 2>&1 || { say "plan failed"; finish; }
+  if [ -n "$R2_DROP" ]; then
+    python3 -I - "$R2_DROP" <<'PY' >>"\$OUT/plan.log" 2>&1
+import fnmatch, json, sys
+drops = [d.split(":", 1) for d in sys.argv[1].split()]
+plan = json.load(open("/fvscratch/r2/plan.json"))
+for t in plan["trees"]:
+    keep = [f for f in t["files"] if not any(t["dest"] == d and fnmatch.fnmatch(f["path"], g) for d, g in drops)]
+    gone = sum(f["size"] for f in t["files"]) - sum(f["size"] for f in keep)
+    if gone:
+        print(f"plan: {t['dest']}: dropping {len(t['files']) - len(keep)} files, {gone / 1e9:.1f} GB")
+    t["files"] = keep
+    t["total_bytes"] = sum(f["size"] for f in keep)
+json.dump(plan, open("/fvscratch/r2/plan.json", "w"))
+PY
+  fi
+  # Disk and memory every 30 s, for a container that dies mid-fetch.
+  ( while :; do { date -u +%T; df -h /fvscratch | tail -1; free -g | sed -n 2p; } >>"\$OUT/sys.log"; sleep 30; done ) &
   # The fetcher resumes a partial tree (per-part hashes on disk): a straggler
   # part that times out through all its retries is picked up by the next pass.
   ok=0
@@ -363,7 +383,7 @@ until [[ "$(proxy "$id" "segments/$TAG/DONE" 2>/dev/null | head -1)" == "done $T
   fi
   sleep 20
 done
-for f in live.log box.txt files.txt tae.log prep.log r2-list.log plan.log r2-fetch.log r2-status.json health.json capabilities.json streams-empty.json client.log segments.json \
+for f in live.log box.txt files.txt tae.log prep.log r2-list.log plan.log r2-fetch.log sys.log r2-status.json health.json capabilities.json streams-empty.json client.log segments.json \
   seam-psnr.txt seam-intra.txt nvidia-smi.txt metrics.txt serve-tail.log serve.log \
   seg-0.mp4 seg-1.mp4 seg-2.mp4 seg-3.mp4 seg-0-1-joined.mp4 \
   seg0-first.png seg0-last.png seg1-first.png seg2-first.png seg3-first.png \
