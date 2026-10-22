@@ -304,8 +304,21 @@ change at 2, a `reset` at 3. Results in `artifacts/serve/segments/10212254`
   router. Until it does, H3 segments are consecutive takes, and the control
   plane should treat each H3 seam as a cut (its `cut`/keyframe planning)
   or keep H3 on fal.
-- Four pods (LTX, H3 turbo twice, H3 max): 4–5 minutes, $0.19–0.21 each;
-  the EU volume was only read.
+- **`h3-lightx2v-turbo` (the FL2VA-trained lightx2v 4-step v1.2 768p
+  adapter folded into h3-base; `artifacts/serve/segments/10220019`,
+  `segments-pod.sh` with `FV_SEG_CONFIG` / `FV_SEG_PREP`, the adapter
+  fetched from the Hub beside a symlink to the volume's h3-base):**
+  `anchor_diff` 29.4 / 21.6, `step_diff` 29.4 / 22.3 at 832×480 (3.5 inside
+  the clip), 11–16 s per segment. Better than the T2V-distilled recipes but
+  still another take of the same scene, not the anchored frame. So the
+  FL2VA-trained adapter does not fix it either: the first-frame conditioning
+  as this port applies it (`encode_fl2va_cond_rows` → `inject_start_rows`)
+  is not pinning frame 0 the way the official FL2VA pipeline does. Next:
+  a one-image parity check of that path against diffusers'
+  `MiniMaxH3ModularPipeline` with `first_frame` (frame 0 must equal the
+  image), which is H3 port work outside this router.
+- Five pods (LTX, H3 turbo twice, H3 max, lightx2v): 4–8 minutes,
+  $0.19–0.32 each; the EU volume was only read.
 
 ## 7. Gaps
 
