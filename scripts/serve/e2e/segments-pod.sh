@@ -284,7 +284,7 @@ create() {
   local gpu="$1" enc="$2" payload vol='{}' r2env='{}'
   if [[ -n "$R2_TREES" ]]; then
     # The account's R2 read secrets, resolved by Runpod inside the pod only.
-    r2env='{FV_WEIGHTS_R2_ACCESS_KEY_ID: "{{ RUNPOD_SECRET_fv_r2_access_key_id }}", FV_WEIGHTS_R2_SECRET_ACCESS_KEY: "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}", FV_WEIGHTS_R2_ENDPOINT: "{{ RUNPOD_SECRET_fv_r2_endpoint }}", FV_WEIGHTS_R2_BUCKET: "{{ RUNPOD_SECRET_fv_r2_bucket }}"}'
+    r2env='{"FV_WEIGHTS_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}", "FV_WEIGHTS_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}", "FV_WEIGHTS_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}", "FV_WEIGHTS_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}"}'
   fi
   if [[ -n "$VOLUME" ]]; then
     local dc
