@@ -316,10 +316,16 @@ if awk -v p="$dph" -v c="$MAX_DPH" 'BEGIN{exit !(p+0 > c+0)}'; then log "pod at 
 log "pod $id on $g \$$dph/hr, cap ${CAP_S}s"
 echo "$id $g $dph" >"$OUT/pod.txt"
 t0=$(date +%s); last=""
+# A pod whose container never comes up (no log line within FV_POD_BOOT_S,
+# default 600 s) is deleted and the run fails instead of burning the cap.
+BOOT_S="${FV_POD_BOOT_S:-600}"
 until [[ "$(proxy "$id" "segments/$TAG/DONE" 2>/dev/null | head -1)" == "done $TAG" ]]; do
   (( $(date +%s) - t0 < CAP_S )) || { log "cap reached"; break; }
   cur="$(proxy "$id" "segments/$TAG/live.log" 2>/dev/null | tail -1 || true)"
   [[ -n "$cur" && "$cur" != "$last" ]] && { log "pod: $cur"; last="$cur"; }
+  if [[ -z "$last" ]] && (( $(date +%s) - t0 > BOOT_S )); then
+    log "pod $id never came up in ${BOOT_S}s: giving up (deleted by the exit trap)"; ledger "pod-stuck $id"; exit 2
+  fi
   sleep 20
 done
 for f in live.log box.txt files.txt tae.log prep.log health.json capabilities.json streams-empty.json client.log segments.json \
