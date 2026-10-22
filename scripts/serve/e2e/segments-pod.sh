@@ -219,6 +219,9 @@ elif [ -n "$R2_TREES" ]; then
   mkdir -p /fvscratch/r2 "\$WEIGHTS"
   curl -fsSL --retry 5 -o /fvscratch/r2/r2-weights.py "$R2_RAW/r2-weights.py"
   curl -fsSL --retry 5 -o /fvscratch/r2/r2-fetch.py "$R2_RAW/r2-fetch.py"
+  for t in weights-revisions.tsv weights-manifest.tsv weights-r2.tsv weights-sha256.tsv; do
+    curl -fsSL --retry 5 -o "/fvscratch/r2/\$t" "$R2_RAW/\$t"
+  done
   python3 -I /fvscratch/r2/r2-weights.py plan $R2_TREES --ttl 7200 --out /fvscratch/r2/plan.json >"\$OUT/plan.log" 2>&1 || { say "plan failed"; finish; }
   python3 -I /fvscratch/r2/r2-fetch.py --root "\$WEIGHTS" --plan /fvscratch/r2/plan.json --status "\$OUT/r2-status.json" >"\$OUT/r2-fetch.log" 2>&1 || { say "r2 fetch failed"; finish; }
   say "weights fetched"; du -sh "\$WEIGHTS"/* >>"\$OUT/box.txt" 2>&1
