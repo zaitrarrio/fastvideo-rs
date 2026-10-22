@@ -73,7 +73,9 @@ SEG_WEIGHTS="${FV_SEG_WEIGHTS:-}"
 # (300 in this mode, 80 otherwise).
 R2_TREES="${FV_SEG_R2_TREES:-}"
 # FV_SEG_R2_DROP="<dest>:<glob> …": files of a plan tree not to fetch (the
-# bf16 transformer shards of h3-base when a prequant tree serves the DiT).
+# bf16 transformer shards of h3-base when a prequant tree serves the DiT);
+# they are created as sparse files of their recorded size instead, which is
+# all the pre-quantized tree's check reads of them (names and sizes).
 R2_DROP="${FV_SEG_R2_DROP:-}"
 DISK_GB="${FV_SEG_DISK_GB:-$([[ -n "$R2_TREES" ]] && echo 300 || echo 80)}"
 R2_RAW="https://raw.githubusercontent.com/zaitrarrio/fastvideo-rs/$(git -C "$ROOT" rev-parse HEAD)/scripts/gpu"
@@ -232,14 +234,17 @@ elif [ -n "$R2_TREES" ]; then
 import fnmatch, json, sys
 drops = [d.split(":", 1) for d in sys.argv[1].split()]
 plan = json.load(open("/fvscratch/r2/plan.json"))
+dropped = []
 for t in plan["trees"]:
     keep = [f for f in t["files"] if not any(t["dest"] == d and fnmatch.fnmatch(f["path"], g) for d, g in drops)]
+    dropped += [{"dest": t["dest"], "path": f["path"], "size": f["size"]} for f in t["files"] if f not in keep]
     gone = sum(f["size"] for f in t["files"]) - sum(f["size"] for f in keep)
     if gone:
-        print(f"plan: {t['dest']}: dropping {len(t['files']) - len(keep)} files, {gone / 1e9:.1f} GB")
+        print(f"plan: {t['dest']}: dropping {len(t['files']) - len(keep)} files, {gone / 1e9:.1f} GB (sparse placeholders)")
     t["files"] = keep
     t["total_bytes"] = sum(f["size"] for f in keep)
 json.dump(plan, open("/fvscratch/r2/plan.json", "w"))
+json.dump(dropped, open("/fvscratch/r2/dropped.json", "w"))
 PY
   fi
   # Disk and memory every 30 s, for a container that dies mid-fetch.
@@ -252,6 +257,18 @@ PY
     say "r2 fetch pass \$pass failed; resuming"
   done
   [ "\$ok" = 1 ] || { say "r2 fetch failed"; finish; }
+  if [ -f /fvscratch/r2/dropped.json ]; then
+    python3 -I - "\$WEIGHTS" <<'PY' >>"\$OUT/plan.log" 2>&1
+import json, os, sys
+root = sys.argv[1]
+for f in json.load(open("/fvscratch/r2/dropped.json")):
+    p = os.path.join(root, f["dest"], f["path"])
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "wb") as fh:
+        fh.truncate(f["size"])
+print("sparse placeholders written")
+PY
+  fi
   say "weights fetched"; du -sh "\$WEIGHTS"/* >>"\$OUT/box.txt" 2>&1
 else
 say "weights"
