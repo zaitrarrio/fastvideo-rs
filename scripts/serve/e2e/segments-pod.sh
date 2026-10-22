@@ -224,7 +224,14 @@ elif [ -n "$R2_TREES" ]; then
   done
   { echo "endpoint=\$FV_WEIGHTS_R2_ENDPOINT bucket=\$FV_WEIGHTS_R2_BUCKET key=\${FV_WEIGHTS_R2_ACCESS_KEY_ID:0:4}…"; python3 -I /fvscratch/r2/r2-weights.py list; } >"\$OUT/r2-list.log" 2>&1 || say "r2 list failed"
   python3 -I /fvscratch/r2/r2-weights.py plan $R2_TREES --ttl 7200 --out /fvscratch/r2/plan.json >"\$OUT/plan.log" 2>&1 || { say "plan failed"; finish; }
-  python3 -I /fvscratch/r2/r2-fetch.py --root "\$WEIGHTS" --plan /fvscratch/r2/plan.json --status "\$OUT/r2-status.json" >"\$OUT/r2-fetch.log" 2>&1 || { say "r2 fetch failed"; finish; }
+  # The fetcher resumes a partial tree (per-part hashes on disk): a straggler
+  # part that times out through all its retries is picked up by the next pass.
+  ok=0
+  for pass in 1 2 3 4; do
+    if python3 -I /fvscratch/r2/r2-fetch.py --root "\$WEIGHTS" --plan /fvscratch/r2/plan.json --status "\$OUT/r2-status.json" --timeout 30 >>"\$OUT/r2-fetch.log" 2>&1; then ok=1; break; fi
+    say "r2 fetch pass \$pass failed; resuming"
+  done
+  [ "\$ok" = 1 ] || { say "r2 fetch failed"; finish; }
   say "weights fetched"; du -sh "\$WEIGHTS"/* >>"\$OUT/box.txt" 2>&1
 else
 say "weights"
