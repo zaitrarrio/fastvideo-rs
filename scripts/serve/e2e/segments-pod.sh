@@ -22,7 +22,9 @@
 # RUNPOD_GPU_MAX_DPH (default 4.0), FV_POD_CAP_S (default 3600, the detached
 # backstop that deletes the pod even if this shell dies), FV_MIN_BALANCE
 # (default 8), FV_SEG_COUNT (default 4), FV_SEG_SECONDS (default 6),
-# FV_SEG_MODEL (the client's `model`; default the server's), FV_SEG_RES (480p).
+# FV_SEG_MODEL (the client's `model`; default the server's), FV_SEG_RES (480p),
+# FV_SEG_I2V_CHECK=1 (after the segments: a native image-to-video job on
+# segment 0's last frame, its first frames measured against the image).
 # Results: artifacts/serve/segments/<tag>/; the ledger gets a row per pod.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -139,6 +141,42 @@ for i in range(N):
 _, summary["streams"] = call("GET", "/v1/segments/streams")
 st, closed = call("DELETE", f"/v1/segments/streams/{sid}")
 summary["delete"] = [st, closed]
+
+# I2V_CHECK=1: does the engine's own image-to-video path pin frame 0? Take
+# segment 0's last frame, submit a native job with it and segment 1's
+# prompt, and measure the output's first frames against the image.
+if os.environ.get("I2V_CHECK") == "1" and os.path.exists(f"{OUT}/seg-0.mp4"):
+    import base64, struct, zlib
+    anchor = f"{OUT}/i2v-anchor.png"
+    subprocess.run(["ffmpeg", "-v", "error", "-sseof", "-0.07", "-i", f"{OUT}/seg-0.mp4", "-frames:v", "1", "-y", anchor], check=False)
+    uri = "data:image/png;base64," + base64.b64encode(open(anchor, "rb").read()).decode()
+    w, h = summary["segments"][0]["width"], summary["segments"][0]["height"]
+    model = summary["stream_after_0"]["model"]
+    body = {"model": model, "prompt": P[1], "image_url": uri, "size": f"{w}x{h}", "seed": 43}
+    t0 = time.time()
+    st, job = call("POST", "/fv/v1/jobs", body)
+    log(f"i2v job -> {st} {job.get('id')} {job.get('status')} {str(job.get('error'))[:200]}")
+    jid = job.get("id")
+    while jid and job.get("status") in ("queued", "running", "pending", "in_progress"):
+        time.sleep(1.0)
+        _, job = call("GET", f"/fv/v1/jobs/{jid}")
+    log(f"i2v job: {job.get('status')} wall={time.time()-t0:.1f}s err={job.get('error')}")
+    url = (job.get("output") or {}).get("url")
+    if url:
+        dst = f"{OUT}/i2v.mp4"
+        urllib.request.urlretrieve(url, dst)
+        def ydiff(a, b):
+            r = subprocess.run(["ffmpeg", "-v", "error", "-i", a, "-i", b, "-lavfi",
+                                "blend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-",
+                                "-f", "null", "-"], capture_output=True, text=True)
+            import re
+            m = re.search(r"YAVG=([0-9.]+)", r.stdout + r.stderr)
+            return float(m.group(1)) if m else None
+        subprocess.run(["ffmpeg", "-v", "error", "-i", dst, "-frames:v", "4", "-y", f"{OUT}/i2v-frame-%d.png"], check=False)
+        diffs = [ydiff(anchor, f"{OUT}/i2v-frame-{i}.png") for i in (1, 2, 3, 4)]
+        summary["i2v_check"] = {"job": job, "anchor_vs_frames_0_to_3": diffs}
+        log(f"i2v check: luma diff of frames 0..3 vs the image: {diffs}")
+    json.dump(summary, open(f"{OUT}/segments.json", "w"), indent=1)
 json.dump(summary, open(f"{OUT}/segments.json", "w"), indent=1)
 log("client done")
 EOF
@@ -199,7 +237,7 @@ curl -sS \$S/fv/v1/capabilities >"\$OUT/capabilities.json"
 curl -sS \$S/v1/segments/streams >"\$OUT/streams-empty.json"
 echo "\$FV_SEG_PY_B64" | base64 -d >/segments.py
 say "client"
-S=\$S OUT=\$OUT NSEG=$NSEG SEGS=$SEGS MODEL=$SEG_MODEL RES=$SEG_RES python3 /segments.py >"\$OUT/client.log" 2>&1 || say "client failed"
+S=\$S OUT=\$OUT NSEG=$NSEG SEGS=$SEGS MODEL=$SEG_MODEL RES=$SEG_RES I2V_CHECK=${FV_SEG_I2V_CHECK:-0} python3 /segments.py >"\$OUT/client.log" 2>&1 || say "client failed"
 tail -n 20 "\$OUT/client.log"
 # Seam check: last frame of seg 0 vs first frame of seg 1, against the mean
 # inter-frame difference inside seg 0 (both as ffmpeg psnr MSE of the pair).
@@ -287,7 +325,8 @@ done
 for f in live.log box.txt files.txt tae.log prep.log health.json capabilities.json streams-empty.json client.log segments.json \
   seam-psnr.txt seam-intra.txt nvidia-smi.txt metrics.txt serve-tail.log serve.log \
   seg-0.mp4 seg-1.mp4 seg-2.mp4 seg-3.mp4 seg-0-1-joined.mp4 \
-  seg0-first.png seg0-last.png seg1-first.png seg2-first.png seg3-first.png; do
+  seg0-first.png seg0-last.png seg1-first.png seg2-first.png seg3-first.png \
+  i2v.mp4 i2v-anchor.png i2v-frame-1.png i2v-frame-2.png i2v-frame-3.png i2v-frame-4.png; do
   curl -sS --max-time 300 --fail "https://$id-8000.proxy.runpod.net/segments/$TAG/$f" -o "$OUT/$f" 2>/dev/null || rm -f "$OUT/$f"
 done
 echo "elapsed_s=$(( $(date +%s) - t0 ))" >>"$OUT/pod.txt"
