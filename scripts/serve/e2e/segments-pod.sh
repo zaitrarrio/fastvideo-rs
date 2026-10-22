@@ -55,6 +55,14 @@ SEG_RES="${FV_SEG_RES:-480p}"
 # with the EU volume (scripts/gpu/volumes.sh). The pod then runs in the
 # volume's data center on its GPUs (FV_EU_GPUS, NVENC).
 VOLUME="${FV_SEG_VOLUME:-}"
+# FV_SEG_CONFIG=<toml file>: an fv-serve config shipped to the pod (for a
+# preset the variant image does not carry); FV_SEG_PREP=<shell file>: run on
+# the pod before fv-serve (e.g. assemble a weights directory of symlinks into
+# the volume plus a fetched LoRA); FV_SEG_WEIGHTS: the FV_WEIGHTS the server
+# gets (default: the volume's /workspace/weights, else the fetched SF-Wan).
+SEG_CONFIG="${FV_SEG_CONFIG:-}"
+SEG_PREP="${FV_SEG_PREP:-}"
+SEG_WEIGHTS="${FV_SEG_WEIGHTS:-}"
 if [[ -n "$VOLUME" ]]; then
   fv_check_volume "$VOLUME"
   GPUS="${RUNPOD_GPU_TYPES:-$FV_EU_GPUS|NVIDIA L40S}"
@@ -154,6 +162,11 @@ finish() { say "done"; echo "done $TAG" >"\$OUT/DONE"; exec sleep infinity; }
 WEIGHTS=/fvscratch/weights
 if [ -n "$VOLUME" ]; then
   WEIGHTS=/workspace/weights; say "weights: volume $VOLUME at \$WEIGHTS"; ls "\$WEIGHTS" >>"\$OUT/box.txt" 2>&1
+  if [ -n "\$FV_SEG_PREP_B64" ]; then
+    echo "\$FV_SEG_PREP_B64" | base64 -d >/seg-prep.sh
+    say "prep"; bash /seg-prep.sh >"\$OUT/prep.log" 2>&1 || say "prep failed"
+  fi
+  [ -n "$SEG_WEIGHTS" ] && WEIGHTS="$SEG_WEIGHTS"
 else
 say "weights"
 # The sfwan21-1.3b tree at its pinned revision (scripts/gpu/weights-revisions.tsv).
@@ -173,6 +186,7 @@ say "fv-serve"
 # engine.backend = cuda, [[models]] sfwan21-1.3b; the variant's FV_CONFIG
 # otherwise), no auth, local artifacts.
 CFG="\${FV_CONFIG:-/etc/fv/runpod-sfwan.toml}"; [ -n "$VOLUME" ] || CFG=/etc/fv/runpod-sfwan.toml
+if [ -n "\$FV_SEG_CONFIG_B64" ]; then echo "\$FV_SEG_CONFIG_B64" | base64 -d >/fvscratch/serve.toml; CFG=/fvscratch/serve.toml; fi
 say "fv-serve --config \$CFG"
 FV_WEIGHTS=\$WEIGHTS FASTVIDEO_TAE_DIR=/fvscratch/tae FV_AUTH_MODE=none FV_BIND=0.0.0.0:8080 \
   FV_PUBLIC_BASE_URL=http://127.0.0.1:8080 FV_SEGMENTS_ENCODER=$enc \
@@ -221,10 +235,11 @@ create() {
   payload="$(jq -n --arg name "fv-segments-$TAG" --arg image "$RUNPOD_IMAGE" --arg gpu "$gpu" --argjson vol "$vol" \
     --arg cmd "$(pod_cmd "$enc")" --arg py "$(client_py | base64 -w0)" \
     --arg tae "$(base64 -w0 <"$ROOT/scripts/gpu/fetch_taehv.sh")" \
+    --arg cfgb "$([[ -n "$SEG_CONFIG" ]] && base64 -w0 <"$SEG_CONFIG")" --arg prepb "$([[ -n "$SEG_PREP" ]] && base64 -w0 <"$SEG_PREP")" \
     --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" '{
       name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
       gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: 80, volumeInGb: 0,
-      env: {NVIDIA_DRIVER_CAPABILITIES: "compute,utility,video", FV_SEG_PY_B64: $py, FV_TAE_B64: $tae},
+      env: {NVIDIA_DRIVER_CAPABILITIES: "compute,utility,video", FV_SEG_PY_B64: $py, FV_TAE_B64: $tae, FV_SEG_CONFIG_B64: $cfgb, FV_SEG_PREP_B64: $prepb},
       ports: ["8000/http"], dockerEntrypoint: ["/bin/bash", "-c"], dockerStartCmd: [$cmd]
     } + $vol + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)')"
   rest POST /pods "$payload"
@@ -269,7 +284,7 @@ until [[ "$(proxy "$id" "segments/$TAG/DONE" 2>/dev/null | head -1)" == "done $T
   [[ -n "$cur" && "$cur" != "$last" ]] && { log "pod: $cur"; last="$cur"; }
   sleep 20
 done
-for f in live.log box.txt files.txt tae.log health.json capabilities.json streams-empty.json client.log segments.json \
+for f in live.log box.txt files.txt tae.log prep.log health.json capabilities.json streams-empty.json client.log segments.json \
   seam-psnr.txt seam-intra.txt nvidia-smi.txt metrics.txt serve-tail.log serve.log \
   seg-0.mp4 seg-1.mp4 seg-2.mp4 seg-3.mp4 seg-0-1-joined.mp4 \
   seg0-first.png seg0-last.png seg1-first.png seg2-first.png seg3-first.png; do
