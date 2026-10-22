@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-10-20 · FVID-2026-10-20-tween-storyboard
+- Trigger: owner asked for a fast FLF2V / FLRef2V model for animated storyboards and chose (2026-10-20) an end-to-end storyboard app, LTX and H3 side by side, first + last panels only, a new app in this repository
+- Options: second model H3 fl2va/ref2va, Wan Fun-InP 1.3B, a Wan VACE port; mid-shot keyframes now or later; app in this repo, a separate repo, or a view in app/
+- Decision: **Tween** (`tween/`, Worker `fv-tween`, own D1 + R2) drives fv-serve over `/v1/videos`; shots are adjacent panel pairs (shared boundary frames); `keyframes` and `reference` shot modes; engine model ids are Worker vars (draft / final / reference per engine); engine key server-side; real-time factor from the engine's `inference_time_s`. No Rust change; `Anchor` stays `First | Last`
+- Reason: every capability exists in fv-serve today (LTX-2.5 and H3 declare `Task::Keyframes`); the fake engine gives a GPU-free local stack
+- Reversibility: cheap (a separate Worker; nothing in fv-serve depends on it)
+- Executed by: Executor
+- ADR: docs/adr/0004-tween-storyboard-app.md
+- Verification: `tween/` typecheck, unit tests and `wrangler deploy --dry-run`; `task tween:e2e` against the fake engine (owner-run, needs Docker)
+
 ### FVID · 2026-09-29 · FVID-2026-09-29-ltx-device-rope
 - Trigger: datacenter profile (docs/perf/datacenter-profile.md): LTX idles 3.6-4.6 s before stage 2 on a single-threaded host RoPE build, and the VAE decode stalls behind the CPU x264 feed; kernel plan WP-F, owner-approved
 - Options: cache the host tables per geometry; build them on the device; keep the host build

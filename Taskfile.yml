@@ -11,6 +11,12 @@ version: '3'
 # CUDA compiles in Docker: NVRTC needs libnvrtc, and the binary shipped to a
 # rented box must be linked against the same runtime it will find there.
 
+includes:
+  # Tween: keyframe storyboards over fv-serve (tween/, docs/adr/0004-tween-storyboard-app.md).
+  tween:
+    taskfile: ./tween/Taskfile.yml
+    dir: ./tween
+
 vars:
   UI_PORT: '{{.UI_PORT | default "8733"}}'
   TIER: '{{.TIER | default "clip"}}'

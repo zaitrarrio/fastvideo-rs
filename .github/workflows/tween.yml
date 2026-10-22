@@ -1,0 +1,78 @@
+# Tween CI (docs/adr/0004-tween-storyboard-app.md): typecheck, unit tests and
+# the wrangler build, then the e2e suite against the mock engine and against
+# real fv-serve on the fake engine (the public :cpu image; no GPU, no Rust build).
+name: tween
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "tween/**"
+      - ".github/workflows/tween.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "tween/**"
+      - ".github/workflows/tween.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tween-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: tween
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tween/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npx tsc --noEmit
+      - run: npx vitest run test/unit
+      - run: npx wrangler deploy --dry-run --outdir dist --env ""
+      - run: npx wrangler deploy --dry-run --outdir dist/staging --env staging
+      - name: e2e (mock engine)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null
+          node scripts/with-mock.mjs -- npx vitest run test/e2e
+
+  e2e-fv-serve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: check
+    env:
+      TWEEN_ENGINE_KEY: sk-ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tween/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: fv-serve (fake engine)
+        run: |
+          export FV_API_KEYS="$(printf %s "$TWEEN_ENGINE_KEY" | sha256sum | cut -d' ' -f1)"
+          docker compose up -d engine
+          node scripts/wait-http.mjs http://127.0.0.1:8000/health 180
+      - name: e2e (fv-serve)
+        env:
+          TWEEN_E2E_ENGINE_URL: http://127.0.0.1:8000
+          TWEEN_E2E_ENGINE_KEY: sk-ci
+        run: npx vitest run test/e2e
+      - name: fv-serve logs
+        if: failure()
+        run: FV_API_KEYS=unused docker compose logs engine
+      - if: always()
+        run: FV_API_KEYS=unused docker compose down -v

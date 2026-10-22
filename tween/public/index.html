@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Tween</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=Fraunces:opsz,wght@9..144,400;9..144,600&family=JetBrains+Mono:wght@400;500&display=swap"
+    />
+    <link rel="stylesheet" href="/app.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23161210'/%3E%3Crect x='6' y='9' width='8' height='14' rx='1.5' fill='%23e8a33d'/%3E%3Crect x='18' y='9' width='8' height='14' rx='1.5' fill='%23c2412d'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <header class="masthead">
+      <a class="brand" href="/" data-nav="/">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i></span>
+        <span class="brand-name">Tween</span>
+      </a>
+      <nav class="crumbs" id="crumbs" aria-label="Breadcrumb"></nav>
+      <div class="engine-pill" id="engine-pill" hidden></div>
+    </header>
+
+    <main id="view" tabindex="-1"></main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+    <dialog class="reel" id="reel" aria-label="Animatic">
+      <div class="reel-head">
+        <div>
+          <p class="eyebrow" id="reel-source">Animatic</p>
+          <h2 class="reel-title" id="reel-title"></h2>
+        </div>
+        <button class="btn ghost" type="button" id="reel-close">Close</button>
+      </div>
+      <div class="reel-stage" id="reel-stage">
+        <video id="reel-video" playsinline></video>
+        <img id="reel-still" alt="" hidden />
+        <p class="reel-gap" id="reel-gap" hidden>Not rendered yet</p>
+      </div>
+      <div class="reel-timeline" id="reel-timeline"></div>
+      <div class="reel-controls">
+        <button class="btn" type="button" id="reel-play">Play</button>
+        <span class="mono muted" id="reel-clock">0:00 / 0:00</span>
+      </div>
+    </dialog>
+
+    <template id="tpl-empty">
+      <div class="empty">
+        <p class="empty-title"></p>
+        <p class="muted empty-body"></p>
+      </div>
+    </template>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
