@@ -1,0 +1,411 @@
+#!/usr/bin/env bash
+# GPU smoke for `/v1/segments` (docs/serve/segments.md §6) on one Runpod pod:
+# fv-serve with the SF-Wan causal backend (`FV_ENGINE=cuda`,
+# `FV_SFWAN_WEIGHTS`), then a client ON THE POD pulls one stream segment by
+# segment the way the unreel-cloudflare control plane does (`continuity:
+# "native"`): four 6 s segments, a prompt change (`recache`) at segment 2 and
+# a scene cut (`reset`) at segment 3; every MP4 is downloaded, ffprobed, and
+# the seam between segments 0 and 1 is measured (mean absolute pixel
+# difference across the seam against the clip's own inter-frame difference).
+# Like scripts/serve/runpod-sfwan-whip.sh, SF-Wan is fetched from Hugging
+# Face onto the container disk: nothing is written to a volume.
+#
+#   RUNPOD_IMAGE=ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:… \
+#     bash scripts/serve/e2e/segments-pod.sh
+#
+# The image is the `sfwan` variant (serve-image workflow, features
+# cuda,http-client) from a branch that has the segments router; the variant
+# images carry python3 + ffmpeg but no fv-gpucheck or scripts, so the result
+# server is python3's http.server and fetch_taehv.sh travels in the env. H100 has no NVENC: the segments
+# encoder is `libx264` there and `nvenc` on L40S / RTX PRO 6000.
+# Env: RUNPOD_API_KEY, RUNPOD_GPU_TYPES ('|'-separated preference list),
+# RUNPOD_GPU_MAX_DPH (default 4.0), FV_POD_CAP_S (default 3600, the detached
+# backstop that deletes the pod even if this shell dies), FV_MIN_BALANCE
+# (default 8), FV_SEG_COUNT (default 4), FV_SEG_SECONDS (default 6),
+# FV_SEG_MODEL (the client's `model`; default the server's), FV_SEG_RES (480p),
+# FV_SEG_I2V_CHECK=1 (after the segments: a native image-to-video job on
+# segment 0's last frame, its first frames measured against the image).
+# Results: artifacts/serve/segments/<tag>/; the ledger gets a row per pod.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+# shellcheck source-path=SCRIPTDIR source=../../gpu/runpod-price.sh
+source "$ROOT/scripts/gpu/runpod-price.sh"
+# shellcheck source-path=SCRIPTDIR source=../../gpu/runpod-cuda.sh
+source "$ROOT/scripts/gpu/runpod-cuda.sh"
+# shellcheck source-path=SCRIPTDIR source=../../gpu/volumes.sh
+source "$ROOT/scripts/gpu/volumes.sh"
+API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
+GQL="https://api.runpod.io/graphql"
+: "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
+: "${RUNPOD_IMAGE:?RUNPOD_IMAGE (the fv-serve image with cuda,http-client) missing}"
+GPUS="${RUNPOD_GPU_TYPES:-NVIDIA H100 80GB HBM3|NVIDIA RTX PRO 6000 Blackwell Server Edition|NVIDIA H100 NVL|NVIDIA L40S}"
+MAX_DPH="${RUNPOD_GPU_MAX_DPH:-4.0}"
+CAP_S="${FV_POD_CAP_S:-3600}"
+MIN_BALANCE="${FV_MIN_BALANCE:-8}"
+NSEG="${FV_SEG_COUNT:-4}"
+SEGS="${FV_SEG_SECONDS:-6}"
+# The model the client names (empty: the server's default, SF-Wan on this
+# image) and the tier it asks for. A clip-model smoke (h3-turbo, ltx-turbo)
+# needs the matching variant image and its weights (the EU volume holds the
+# H3 and LTX trees; this script fetches SF-Wan only), see
+# docs/serve/segments.md §7.
+SEG_MODEL="${FV_SEG_MODEL:-}"
+SEG_RES="${FV_SEG_RES:-480p}"
+# FV_SEG_VOLUME=<network volume id>: mount it read-only at /workspace and
+# serve the image's own preset (FV_CONFIG) from its weights instead of
+# fetching SF-Wan: the clip-path smoke on the h3-turbo / ltx variant images
+# with the EU volume (scripts/gpu/volumes.sh). The pod then runs in the
+# volume's data center on its GPUs (FV_EU_GPUS, NVENC).
+VOLUME="${FV_SEG_VOLUME:-}"
+# FV_SEG_CONFIG=<toml file>: an fv-serve config shipped to the pod (for a
+# preset the variant image does not carry); FV_SEG_PREP=<shell file>: run on
+# the pod before fv-serve (e.g. assemble a weights directory of symlinks into
+# the volume plus a fetched LoRA); FV_SEG_WEIGHTS: the FV_WEIGHTS the server
+# gets (default: the volume's /workspace/weights, else the fetched SF-Wan).
+SEG_CONFIG="${FV_SEG_CONFIG:-}"
+SEG_PREP="${FV_SEG_PREP:-}"
+SEG_WEIGHTS="${FV_SEG_WEIGHTS:-}"
+# FV_SEG_R2_TREES="h3-base …": no volume; the pod fetches these trees from
+# the R2 weights store onto its own disk (docs/ops/r2-weights.md §4: a plan
+# minted on the pod by r2-weights.py with the account's `fv_r2_*` Runpod
+# secrets, then r2-fetch.py), so it can run in any data center. The scripts
+# come from this branch's pushed commit on GitHub. Container disk FV_SEG_DISK_GB
+# (300 in this mode, 80 otherwise).
+R2_TREES="${FV_SEG_R2_TREES:-}"
+# FV_SEG_R2_DROP="<dest>:<glob> …": files of a plan tree not to fetch (the
+# bf16 transformer shards of h3-base when a prequant tree serves the DiT);
+# they are created as sparse files of their recorded size instead, which is
+# all the pre-quantized tree's check reads of them (names and sizes).
+R2_DROP="${FV_SEG_R2_DROP:-}"
+DISK_GB="${FV_SEG_DISK_GB:-$([[ -n "$R2_TREES" ]] && echo 300 || echo 80)}"
+R2_RAW="https://raw.githubusercontent.com/zaitrarrio/fastvideo-rs/$(git -C "$ROOT" rev-parse HEAD)/scripts/gpu"
+if [[ -n "$VOLUME" ]]; then
+  fv_check_volume "$VOLUME"
+  GPUS="${RUNPOD_GPU_TYPES:-$FV_EU_GPUS|NVIDIA L40S}"
+fi
+TAG="$(date -u +%m%d%H%M)"
+OUT="$ROOT/artifacts/serve/segments/$TAG"
+LEDGER="$ROOT/artifacts/runpod/serve/ledger.tsv"
+mkdir -p "$OUT" "$(dirname "$LEDGER")"
+
+log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
+ledger() { printf '%s\t%s\n' "$(date -u +%FT%TZ)" "$*" >>"$LEDGER"; }
+rest() {
+  curl -sS --fail-with-body -X "$1" -H "Authorization: Bearer $RUNPOD_API_KEY" \
+    -H 'content-type: application/json' ${3:+-d "$3"} "$API$2"
+}
+proxy() { curl -sS --max-time 30 --fail "https://$1-8000.proxy.runpod.net/$2"; }
+balance() {
+  curl -sS -H "Authorization: Bearer $RUNPOD_API_KEY" -H 'content-type: application/json' \
+    -d '{"query":"{ myself { clientBalance } }"}' "$GQL" | jq -r '.data.myself.clientBalance // empty'
+}
+
+# The client on the pod: segments.py (python3 is in the image; no deps).
+client_py() {
+  cat <<'EOF'
+import json, os, subprocess, sys, time, urllib.request
+S = os.environ.get("S", "http://127.0.0.1:8080"); OUT = os.environ["OUT"]
+N = int(os.environ.get("NSEG", "4")); SECS = float(os.environ.get("SEGS", "6"))
+MODEL = os.environ.get("MODEL") or None; RES = os.environ.get("RES", "480p")
+P = [
+ "A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed",
+ "A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed",
+ "A drone shot gliding over the same river as mist rolls in and the light turns blue and cold, slow steady forward camera motion, highly detailed",
+ "A busy night market street in the rain, neon signs reflected in puddles, handheld camera walking forward, highly detailed",
+]
+def call(method, path, body=None):
+    req = urllib.request.Request(S + path, method=method, data=(json.dumps(body).encode() if body is not None else None),
+                                 headers={"content-type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return r.status, json.loads(r.read() or b"{}")
+def log(m):
+    print(f"[client {time.strftime('%H:%M:%S')}] {m}", flush=True)
+summary = {"segments": [], "stream_id": "str_smoke" + str(int(time.time()))}
+sid = summary["stream_id"]
+for i in range(N):
+    prompt = P[min(i, len(P) - 1)]
+    body = {"stream_id": sid, "segment_index": i, "prompt": prompt, "duration_sec": SECS,
+            "resolution": RES, "aspect_ratio": "16:9", "seed": 42,
+            "recache": i == 2, "reset": i == 3}
+    if MODEL:
+        body["model"] = MODEL
+    t0 = time.time()
+    st, seg = call("POST", "/v1/segments", body)
+    log(f"POST seg {i} -> {st} {seg.get('id')} {seg.get('status')} warnings={seg.get('warnings')}")
+    sid_seg = seg["id"]
+    while seg["status"] in ("queued", "running"):
+        time.sleep(0.5)
+        _, seg = call("GET", f"/v1/segments/{sid_seg}")
+    wall = time.time() - t0
+    seg["client_wall_s"] = round(wall, 2)
+    log(f"seg {i}: {seg['status']} wall={wall:.1f}s frames={seg.get('frames')} blocks={seg.get('blocks')} "
+        f"session={seg.get('session')} metrics={seg.get('metrics')} err={seg.get('error')}")
+    if seg["status"] == "succeeded":
+        dst = f"{OUT}/seg-{i}.mp4"
+        urllib.request.urlretrieve(seg["video_url"], dst)
+        pr = subprocess.run(["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0",
+                             "-show_entries", "stream=codec_name,width,height,nb_read_frames,avg_frame_rate",
+                             "-of", "json", dst], capture_output=True, text=True)
+        seg["ffprobe"] = json.loads(pr.stdout or "{}")
+        seg["bytes"] = os.path.getsize(dst)
+    summary["segments"].append(seg)
+    _, stream = call("GET", f"/v1/segments/streams/{sid}")
+    log(f"stream: {json.dumps(stream)[:300]}")
+    summary["stream_after_%d" % i] = stream
+_, summary["streams"] = call("GET", "/v1/segments/streams")
+st, closed = call("DELETE", f"/v1/segments/streams/{sid}")
+summary["delete"] = [st, closed]
+
+# I2V_CHECK=1: does the engine's own image-to-video path pin frame 0? Take
+# segment 0's last frame, submit a native job with it and segment 1's
+# prompt, and measure the output's first frames against the image.
+if os.environ.get("I2V_CHECK") == "1" and os.path.exists(f"{OUT}/seg-0.mp4"):
+    import base64, struct, zlib
+    anchor = f"{OUT}/i2v-anchor.png"
+    subprocess.run(["ffmpeg", "-v", "error", "-sseof", "-0.07", "-i", f"{OUT}/seg-0.mp4", "-frames:v", "1", "-y", anchor], check=False)
+    uri = "data:image/png;base64," + base64.b64encode(open(anchor, "rb").read()).decode()
+    w, h = summary["segments"][0]["width"], summary["segments"][0]["height"]
+    model = summary["stream_after_0"]["model"]
+    body = {"model": model, "prompt": P[1], "image_url": uri, "size": f"{w}x{h}", "seed": 43}
+    t0 = time.time()
+    st, job = call("POST", "/fv/v1/jobs", body)
+    log(f"i2v job -> {st} {job.get('id')} {job.get('status')} {str(job.get('error'))[:200]}")
+    jid = job.get("id")
+    while jid and job.get("status") in ("queued", "running", "pending", "in_progress"):
+        time.sleep(1.0)
+        _, job = call("GET", f"/fv/v1/jobs/{jid}")
+    log(f"i2v job: {job.get('status')} wall={time.time()-t0:.1f}s err={job.get('error')}")
+    url = (job.get("output") or {}).get("url")
+    if url:
+        dst = f"{OUT}/i2v.mp4"
+        urllib.request.urlretrieve(url, dst)
+        def ydiff(a, b):
+            r = subprocess.run(["ffmpeg", "-v", "error", "-i", a, "-i", b, "-lavfi",
+                                "blend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-",
+                                "-f", "null", "-"], capture_output=True, text=True)
+            import re
+            m = re.search(r"YAVG=([0-9.]+)", r.stdout + r.stderr)
+            return float(m.group(1)) if m else None
+        subprocess.run(["ffmpeg", "-v", "error", "-i", dst, "-frames:v", "4", "-y", f"{OUT}/i2v-frame-%d.png"], check=False)
+        diffs = [ydiff(anchor, f"{OUT}/i2v-frame-{i}.png") for i in (1, 2, 3, 4)]
+        summary["i2v_check"] = {"job": job, "anchor_vs_frames_0_to_3": diffs}
+        log(f"i2v check: luma diff of frames 0..3 vs the image: {diffs}")
+    json.dump(summary, open(f"{OUT}/segments.json", "w"), indent=1)
+json.dump(summary, open(f"{OUT}/segments.json", "w"), indent=1)
+log("client done")
+EOF
+}
+
+pod_cmd() {
+  local enc="$1"
+  cat <<EOF
+set -u
+R=/fvscratch/runs; OUT=\$R/segments/$TAG; mkdir -p "\$OUT"
+mkdir -p /fvscratch
+# The variant images carry no fv-gpucheck: python3 serves the results.
+( cd \$R && exec python3 -m http.server 8000 --bind 0.0.0.0 ) >"\$OUT/http.log" 2>&1 &
+exec >"\$OUT/live.log" 2>&1
+t0=\$(date +%s); el() { echo \$(( \$(date +%s) - t0 )); }
+say() { echo "[\$(el)s] \$*"; }
+finish() { say "done"; echo "done $TAG" >"\$OUT/DONE"; exec sleep infinity; }
+{ nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+  echo "caps=\$NVIDIA_DRIVER_CAPABILITIES"; cat /opt/fastvideo-rs/bin/fv-serve.features
+  ffmpeg -hide_banner -encoders 2>/dev/null | grep -c h264_nvenc; echo "encoder=$enc"; } >"\$OUT/box.txt" 2>&1
+WEIGHTS=/fvscratch/weights
+if [ -n "$VOLUME" ]; then
+  WEIGHTS=/workspace/weights; say "weights: volume $VOLUME at \$WEIGHTS"; ls "\$WEIGHTS" >>"\$OUT/box.txt" 2>&1
+  if [ -n "\$FV_SEG_PREP_B64" ]; then
+    echo "\$FV_SEG_PREP_B64" | base64 -d >/seg-prep.sh
+    say "prep"; bash /seg-prep.sh >"\$OUT/prep.log" 2>&1 || say "prep failed"
+  fi
+  [ -n "$SEG_WEIGHTS" ] && WEIGHTS="$SEG_WEIGHTS"
+elif [ -n "$R2_TREES" ]; then
+  say "weights: r2 ($R2_TREES)"
+  mkdir -p /fvscratch/r2 "\$WEIGHTS"
+  curl -fsSL --retry 5 -o /fvscratch/r2/r2-weights.py "$R2_RAW/r2-weights.py"
+  curl -fsSL --retry 5 -o /fvscratch/r2/r2-fetch.py "$R2_RAW/r2-fetch.py"
+  for t in weights-revisions.tsv weights-manifest.tsv weights-r2.tsv weights-sha256.tsv; do
+    curl -fsSL --retry 5 -o "/fvscratch/r2/\$t" "$R2_RAW/\$t"
+  done
+  { echo "endpoint=\$FV_WEIGHTS_R2_ENDPOINT bucket=\$FV_WEIGHTS_R2_BUCKET key=\${FV_WEIGHTS_R2_ACCESS_KEY_ID:0:4}…"; python3 -I /fvscratch/r2/r2-weights.py list; } >"\$OUT/r2-list.log" 2>&1 || say "r2 list failed"
+  python3 -I /fvscratch/r2/r2-weights.py plan $R2_TREES --ttl 7200 --out /fvscratch/r2/plan.json >"\$OUT/plan.log" 2>&1 || { say "plan failed"; finish; }
+  if [ -n "$R2_DROP" ]; then
+    python3 -I - "$R2_DROP" <<'PY' >>"\$OUT/plan.log" 2>&1
+import fnmatch, json, sys
+drops = [d.split(":", 1) for d in sys.argv[1].split()]
+plan = json.load(open("/fvscratch/r2/plan.json"))
+dropped = []
+for t in plan["trees"]:
+    keep = [f for f in t["files"] if not any(t["dest"] == d and fnmatch.fnmatch(f["path"], g) for d, g in drops)]
+    dropped += [{"dest": t["dest"], "path": f["path"], "size": f["size"]} for f in t["files"] if f not in keep]
+    gone = sum(f["size"] for f in t["files"]) - sum(f["size"] for f in keep)
+    if gone:
+        print(f"plan: {t['dest']}: dropping {len(t['files']) - len(keep)} files, {gone / 1e9:.1f} GB (sparse placeholders)")
+    t["files"] = keep
+    t["total_bytes"] = sum(f["size"] for f in keep)
+json.dump(plan, open("/fvscratch/r2/plan.json", "w"))
+json.dump(dropped, open("/fvscratch/r2/dropped.json", "w"))
+PY
+  fi
+  # Disk and memory every 30 s, for a container that dies mid-fetch.
+  ( while :; do { date -u +%T; df -h /fvscratch | tail -1; free -g | sed -n 2p; } >>"\$OUT/sys.log"; sleep 30; done ) &
+  # The fetcher resumes a partial tree (per-part hashes on disk): a straggler
+  # part that times out through all its retries is picked up by the next pass.
+  ok=0
+  for pass in 1 2 3 4; do
+    if python3 -I /fvscratch/r2/r2-fetch.py --root "\$WEIGHTS" --plan /fvscratch/r2/plan.json --status "\$OUT/r2-status.json" --timeout 30 >>"\$OUT/r2-fetch.log" 2>&1; then ok=1; break; fi
+    say "r2 fetch pass \$pass failed; resuming"
+  done
+  [ "\$ok" = 1 ] || { say "r2 fetch failed"; finish; }
+  if [ -f /fvscratch/r2/dropped.json ]; then
+    python3 -I - "\$WEIGHTS" <<'PY' >>"\$OUT/plan.log" 2>&1
+import json, os, sys
+root = sys.argv[1]
+for f in json.load(open("/fvscratch/r2/dropped.json")):
+    p = os.path.join(root, f["dest"], f["path"])
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "wb") as fh:
+        fh.truncate(f["size"])
+print("sparse placeholders written")
+PY
+  fi
+  say "weights fetched"; du -sh "\$WEIGHTS"/* >>"\$OUT/box.txt" 2>&1
+else
+say "weights"
+# The sfwan21-1.3b tree at its pinned revision (scripts/gpu/weights-revisions.tsv).
+W=/fvscratch/weights/sfwan21-1.3b; REPO=wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers; REV=4b44356635ae5e927ca552a220f768022be76004
+mkdir -p "\$W"
+curl -fsSL "https://huggingface.co/api/models/\$REPO/tree/\$REV?recursive=true" \
+  | grep -oE '"path":"(model_index.json|scheduler/[^"]+|tokenizer/[^"]+|text_encoder/[^"]+|transformer/[^"]+|vae/[^"]+)"' \
+  | sed 's/"path":"//;s/"\$//' >"\$OUT/files.txt"
+while read -r f; do mkdir -p "\$W/\$(dirname "\$f")"; echo "\$f"; done <"\$OUT/files.txt" \
+  | xargs -P 8 -I{} curl -fsSL --retry 5 -o "\$W/{}" "https://huggingface.co/\$REPO/resolve/\$REV/{}"
+du -sh "\$W" >>"\$OUT/box.txt"
+echo "\$FV_TAE_B64" | base64 -d >/fetch_taehv.sh
+FV_AUX_DIR=/nonexistent bash /fetch_taehv.sh /fvscratch/tae >"\$OUT/tae.log" 2>&1 || say "tae fetch failed"
+fi
+say "fv-serve"
+# The image's production preset (runpod-sfwan.toml on the sfwan image:
+# engine.backend = cuda, [[models]] sfwan21-1.3b; the variant's FV_CONFIG
+# otherwise), no auth, local artifacts.
+CFG="\${FV_CONFIG:-/etc/fv/runpod-sfwan.toml}"; [ -n "$VOLUME$R2_TREES" ] || CFG=/etc/fv/runpod-sfwan.toml
+if [ -n "\$FV_SEG_CONFIG_B64" ]; then echo "\$FV_SEG_CONFIG_B64" | base64 -d >/fvscratch/serve.toml; CFG=/fvscratch/serve.toml; fi
+say "fv-serve --config \$CFG"
+FV_WEIGHTS=\$WEIGHTS FASTVIDEO_TAE_DIR=/fvscratch/tae FV_AUTH_MODE=none FV_BIND=0.0.0.0:8080 \
+  FV_PUBLIC_BASE_URL=http://127.0.0.1:8080 FV_SEGMENTS_ENCODER=$enc \
+  FV_STATE_DIR=/fvscratch/state FV_JOB_STORE=memory FV_ARTIFACTS=local FV_STREAM_STUN=none FV_OUTPUTS_ALLOW_PRIVATE=1 FV_LOG_FORMAT=text \
+  /opt/fastvideo-rs/bin/fv-serve --config "\$CFG" >"\$OUT/serve.log" 2>&1 &
+S=http://127.0.0.1:8080
+for i in \$(seq 1 900); do curl -fsS \$S/health >/dev/null 2>&1 && break; sleep 2; done
+curl -sS \$S/health >"\$OUT/health.json"; say "ready: \$(cat "\$OUT/health.json")"
+curl -sS \$S/fv/v1/capabilities >"\$OUT/capabilities.json"
+curl -sS \$S/v1/segments/streams >"\$OUT/streams-empty.json"
+echo "\$FV_SEG_PY_B64" | base64 -d >/segments.py
+say "client"
+S=\$S OUT=\$OUT NSEG=$NSEG SEGS=$SEGS MODEL=$SEG_MODEL RES=$SEG_RES I2V_CHECK=${FV_SEG_I2V_CHECK:-0} python3 /segments.py >"\$OUT/client.log" 2>&1 || say "client failed"
+tail -n 20 "\$OUT/client.log"
+# Seam check: last frame of seg 0 vs first frame of seg 1, against the mean
+# inter-frame difference inside seg 0 (both as ffmpeg psnr MSE of the pair).
+if [ -f "\$OUT/seg-0.mp4" ] && [ -f "\$OUT/seg-1.mp4" ]; then
+  ffmpeg -v error -sseof -0.07 -i "\$OUT/seg-0.mp4" -frames:v 1 -y "\$OUT/seg0-last.png"
+  ffmpeg -v error -i "\$OUT/seg-1.mp4" -frames:v 1 -y "\$OUT/seg1-first.png"
+  ffmpeg -v error -i "\$OUT/seg-0.mp4" -frames:v 1 -y "\$OUT/seg0-first.png"
+  ffmpeg -v error -i "\$OUT/seg0-last.png" -i "\$OUT/seg1-first.png" -lavfi "psnr=stats_file=-" -f null - 2>/dev/null \
+    | tail -1 >"\$OUT/seam-psnr.txt"
+  ffmpeg -v error -i "\$OUT/seg-0.mp4" -vf "tblend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-" \
+    -f null - 2>/dev/null | grep -oE 'YAVG=[0-9.]+' | awk -F= '{s+=\$2;n++} END{if(n) printf "intra_seg0_mean_ydiff=%.3f n=%d\n", s/n, n}' >"\$OUT/seam-intra.txt"
+  ffmpeg -v error -i "\$OUT/seg0-last.png" -i "\$OUT/seg1-first.png" -lavfi "blend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-" \
+    -f null - 2>/dev/null | grep -oE 'YAVG=[0-9.]+' | sed 's/^/seam_ydiff_/' >>"\$OUT/seam-intra.txt"
+  # the joined clip, for the control plane's own look
+  printf "file '%s'\nfile '%s'\n" "\$OUT/seg-0.mp4" "\$OUT/seg-1.mp4" >"\$OUT/concat.txt"
+  ffmpeg -v error -f concat -safe 0 -i "\$OUT/concat.txt" -c copy -y "\$OUT/seg-0-1-joined.mp4" || true
+fi
+for i in 1 2 3; do [ -f "\$OUT/seg-\$i.mp4" ] && ffmpeg -v error -i "\$OUT/seg-\$i.mp4" -frames:v 1 -y "\$OUT/seg\$i-first.png"; done
+nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv >"\$OUT/nvidia-smi.txt" 2>&1
+curl -sS \$S/metrics >"\$OUT/metrics.txt" 2>/dev/null
+grep -iE 'segment|causal|error|warn' "\$OUT/serve.log" | tail -n 200 >"\$OUT/serve-tail.log"
+finish
+EOF
+}
+
+create() {
+  local gpu="$1" enc="$2" payload vol='{}' r2env='{}'
+  if [[ -n "$R2_TREES" ]]; then
+    # The account's R2 read secrets, resolved by Runpod inside the pod only.
+    # The account's R2 key from the Runpod secrets; the weights store itself
+    # is always the `fv-weights` bucket on the account endpoint
+    # (docs/ops/r2-weights.md), whatever bucket the media secrets name.
+    r2env='{"FV_WEIGHTS_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}", "FV_WEIGHTS_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}", "FV_WEIGHTS_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}", "FV_WEIGHTS_R2_BUCKET": "fv-weights"}'
+  fi
+  if [[ -n "$VOLUME" ]]; then
+    local dc
+    dc="$(rest GET "/networkvolumes/$VOLUME" | jq -r '.dataCenterId')"
+    vol="$(jq -n --arg v "$VOLUME" --arg dc "$dc" '{networkVolumeId: $v, volumeMountPath: "/workspace", dataCenterIds: [$dc]}')"
+  fi
+  payload="$(jq -n --arg name "fv-segments-$TAG" --arg image "$RUNPOD_IMAGE" --arg gpu "$gpu" --argjson vol "$vol" --argjson r2env "$r2env" --argjson disk "$DISK_GB" \
+    --arg cmd "$(pod_cmd "$enc")" --arg py "$(client_py | base64 -w0)" \
+    --arg tae "$(base64 -w0 <"$ROOT/scripts/gpu/fetch_taehv.sh")" \
+    --arg cfgb "$([[ -n "$SEG_CONFIG" ]] && base64 -w0 <"$SEG_CONFIG")" --arg prepb "$([[ -n "$SEG_PREP" ]] && base64 -w0 <"$SEG_PREP")" \
+    --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" '{
+      name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
+      gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: $disk, volumeInGb: 0,
+      env: ({NVIDIA_DRIVER_CAPABILITIES: "compute,utility,video", FV_SEG_PY_B64: $py, FV_TAE_B64: $tae, FV_SEG_CONFIG_B64: $cfgb, FV_SEG_PREP_B64: $prepb} + $r2env),
+      ports: ["8000/http"], dockerEntrypoint: ["/bin/bash", "-c"], dockerStartCmd: [$cmd]
+    } + $vol + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)')"
+  rest POST /pods "$payload"
+}
+
+b="$(balance)"; [[ -n "$b" ]] || { log "no balance"; exit 1; }
+awk -v b="$b" -v m="$MIN_BALANCE" -v d="$MAX_DPH" -v c="$CAP_S" 'BEGIN{exit !(b - d*c/3600 >= m)}' \
+  || { log "balance \$$b would drop below \$$MIN_BALANCE at the cap"; exit 1; }
+log "balance \$$b"
+id=""
+IFS='|' read -r -a gpu_list <<<"$GPUS"
+for g in "${gpu_list[@]}"; do
+  fv_runpod_price_ok "$g" "$MAX_DPH" SECURE || continue
+  enc=nvenc; [[ "$g" == *H100* ]] && enc=libx264
+  log "create pod on $g (segments encoder $enc)"
+  if resp="$(create "$g" "$enc" 2>&1)"; then
+    id="$(jq -r '.id // empty' <<<"$resp")"
+    dph="$(jq -r '.costPerHr // 0' <<<"$resp")"
+    [[ -n "$id" ]] && break
+  fi
+  log "no pod on $g: ${resp:0:200}"
+done
+[[ -n "$id" ]] || { log "no pod"; exit 1; }
+ledger "pod-created $id fv-segments-$TAG gpu=$g dph=$dph image=$RUNPOD_IMAGE"
+cleanup() {
+  log "delete pod $id"
+  if rest DELETE "/pods/$id" >/dev/null; then ledger "pod-deleted $id"; else log "WARN: delete failed"; ledger "pod-delete-failed $id"; fi
+}
+trap cleanup EXIT
+# Detached backstop: deletes the pod at the cap even if this shell dies.
+# shellcheck disable=SC2016
+setsid nohup env POD_ID="$id" CAP="$CAP_S" API="$API" bash -c \
+  'sleep "$CAP"; curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "$API/pods/$POD_ID" >/dev/null' \
+  >/dev/null 2>&1 < /dev/null &
+if awk -v p="$dph" -v c="$MAX_DPH" 'BEGIN{exit !(p+0 > c+0)}'; then log "pod at \$$dph/hr exceeds \$$MAX_DPH"; exit 1; fi
+log "pod $id on $g \$$dph/hr, cap ${CAP_S}s"
+echo "$id $g $dph" >"$OUT/pod.txt"
+t0=$(date +%s); last=""
+# A pod whose container never comes up (no log line within FV_POD_BOOT_S,
+# default 600 s) is deleted and the run fails instead of burning the cap.
+BOOT_S="${FV_POD_BOOT_S:-600}"
+until [[ "$(proxy "$id" "segments/$TAG/DONE" 2>/dev/null | head -1)" == "done $TAG" ]]; do
+  (( $(date +%s) - t0 < CAP_S )) || { log "cap reached"; break; }
+  cur="$(proxy "$id" "segments/$TAG/live.log" 2>/dev/null | tail -1 || true)"
+  [[ -n "$cur" && "$cur" != "$last" ]] && { log "pod: $cur"; last="$cur"; }
+  if [[ -z "$last" ]] && (( $(date +%s) - t0 > BOOT_S )); then
+    log "pod $id never came up in ${BOOT_S}s: giving up (deleted by the exit trap)"; ledger "pod-stuck $id"; exit 2
+  fi
+  sleep 20
+done
+for f in live.log box.txt files.txt tae.log prep.log r2-list.log plan.log r2-fetch.log sys.log r2-status.json health.json capabilities.json streams-empty.json client.log segments.json \
+  seam-psnr.txt seam-intra.txt nvidia-smi.txt metrics.txt serve-tail.log serve.log \
+  seg-0.mp4 seg-1.mp4 seg-2.mp4 seg-3.mp4 seg-0-1-joined.mp4 \
+  seg0-first.png seg0-last.png seg1-first.png seg2-first.png seg3-first.png \
+  i2v.mp4 i2v-anchor.png i2v-frame-1.png i2v-frame-2.png i2v-frame-3.png i2v-frame-4.png; do
+  curl -sS --max-time 300 --fail "https://$id-8000.proxy.runpod.net/segments/$TAG/$f" -o "$OUT/$f" 2>/dev/null || rm -f "$OUT/$f"
+done
+echo "elapsed_s=$(( $(date +%s) - t0 ))" >>"$OUT/pod.txt"
+log "results → $OUT"

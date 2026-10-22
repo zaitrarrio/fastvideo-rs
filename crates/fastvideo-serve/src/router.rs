@@ -149,6 +149,18 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Native, "GET", "/fv/v1/streams/{id}"),
         r(Native, "DELETE", "/fv/v1/streams/{id}"),
         r(Native, "POST", "/fv/v1/streams/{id}/commands"),
+        // Pull-based segments of a causal session (docs/serve/segments.md,
+        // src/segments.rs), also under `/fv/v1/segments`.
+        r(Native, "POST", "/v1/segments"),
+        r(Native, "GET", "/v1/segments/streams"),
+        r(Native, "GET", "/v1/segments/streams/{id}"),
+        r(Native, "DELETE", "/v1/segments/streams/{id}"),
+        r(Native, "GET", "/v1/segments/{id}"),
+        r(Native, "POST", "/fv/v1/segments"),
+        r(Native, "GET", "/fv/v1/segments/streams"),
+        r(Native, "GET", "/fv/v1/segments/streams/{id}"),
+        r(Native, "DELETE", "/fv/v1/segments/streams/{id}"),
+        r(Native, "GET", "/fv/v1/segments/{id}"),
         // The worker role's internal routes (internal token; src/worker.rs).
         r(Gateway, "POST", "/fv/v1/internal/jobs"),
         r(Gateway, "GET", "/fv/v1/internal/jobs/{id}"),
