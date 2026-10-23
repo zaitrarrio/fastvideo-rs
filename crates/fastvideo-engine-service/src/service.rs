@@ -14,6 +14,16 @@
 //!
 //! `Queued` is re-sent whenever the position changes. Exactly one terminal
 //! event is sent, and nothing after it.
+//!
+//! The event channel is bounded ([`EVENT_CHANNEL_DEPTH`]) and the executor
+//! thread never blocks on it. When the consumer lags (the channel is full),
+//! [`EventSender`] parks the newest `Queued`, `Started`, `Stage` and
+//! `Progress` event each in a one-slot buffer (an older parked event of the
+//! same kind is replaced: progress is coalesced to the latest step), drops
+//! `Log` lines, and flushes the parked events in that order as soon as the
+//! channel has room again (at the next send). The terminal event uses a
+//! permit reserved when the job was submitted, so it is never dropped and
+//! never waits.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -23,6 +33,7 @@ use std::time::{Duration, Instant};
 use fastvideo_protocol::{
     ApiError, JobId, LogLine, ModelCaps, ModelId, ResolvedJob, SessionSpec, StreamCaps,
 };
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch, Notify};
 
 use crate::backend::{ClipOutput, EngineBackend, SessionId};
@@ -50,6 +61,12 @@ pub struct EngineConfig {
     /// said 4): the causal pacer applies backpressure, so a generator faster
     /// than playout waits here, and every queued block delays a prompt switch.
     pub causal_depth: usize,
+    /// Wall-clock limit of one batch job's generation (`[engine]
+    /// job_deadline_s`), counted from the start of `generate` (after any
+    /// on-demand load). Past it the job is cancelled at its next denoise
+    /// step and fails with `Timeout`. `None`: no limit. Streaming sessions
+    /// are not bounded by it.
+    pub job_deadline: Option<Duration>,
 }
 
 impl Default for EngineConfig {
@@ -60,6 +77,7 @@ impl Default for EngineConfig {
             tier_overrides: BTreeMap::new(),
             output_dir: std::env::temp_dir().join("fv-engine"),
             causal_depth: 2,
+            job_deadline: None,
         }
     }
 }
@@ -87,16 +105,166 @@ impl EngineEvent {
     }
 }
 
+/// Depth of a job's event channel ([`JobHandle::events`]): the events a
+/// consumer may leave unread before the overflow policy (module docs)
+/// coalesces progress and drops logs. Terminal events are never dropped.
+pub const EVENT_CHANNEL_DEPTH: usize = 64;
+
 /// A submitted job.
 ///
-/// **Deviation from design §3.6:** `events` is unbounded, so the executor
-/// thread never blocks on a slow consumer; progress events are small and a
-/// job emits a bounded number of them. `id` is added for convenience.
+/// **Deviation from design §3.6:** `events` is bounded (depth
+/// [`EVENT_CHANNEL_DEPTH`]) with the overflow policy of the module docs, so
+/// the executor thread never blocks on a slow consumer and the terminal
+/// event always arrives. `id` is added for convenience.
 #[derive(Debug)]
 pub struct JobHandle {
     pub id: JobId,
-    pub events: mpsc::UnboundedReceiver<EngineEvent>,
+    pub events: mpsc::Receiver<EngineEvent>,
     pub cancel: CancelToken,
+}
+
+/// Events parked while the consumer lags: the newest of each kind.
+#[derive(Default)]
+struct Parked {
+    queued: Option<EngineEvent>,
+    started: Option<EngineEvent>,
+    stage: Option<EngineEvent>,
+    progress: Option<EngineEvent>,
+    /// The terminal event's reserved slot (`None` once it was sent).
+    terminal: Option<mpsc::OwnedPermit<EngineEvent>>,
+    /// Nothing is sent after the terminal event.
+    done: bool,
+    /// Progress / queued / stage / started events replaced while parked.
+    coalesced: u64,
+    /// Log lines dropped.
+    dropped: u64,
+}
+
+impl Parked {
+    fn any(&self) -> bool {
+        self.queued.is_some()
+            || self.started.is_some()
+            || self.stage.is_some()
+            || self.progress.is_some()
+    }
+
+    fn slot(&mut self, ev: &EngineEvent) -> Option<&mut Option<EngineEvent>> {
+        match ev {
+            EngineEvent::Queued { .. } => Some(&mut self.queued),
+            EngineEvent::Started => Some(&mut self.started),
+            EngineEvent::Stage { .. } => Some(&mut self.stage),
+            EngineEvent::Progress { .. } => Some(&mut self.progress),
+            EngineEvent::Log(_)
+            | EngineEvent::Finished(_)
+            | EngineEvent::Failed(_)
+            | EngineEvent::Cancelled => None,
+        }
+    }
+
+    fn park(&mut self, ev: EngineEvent) {
+        match self.slot(&ev) {
+            Some(slot) => {
+                if slot.replace(ev).is_some() {
+                    self.coalesced += 1;
+                }
+            }
+            None => self.dropped += 1,
+        }
+    }
+}
+
+/// The executor side of a job's event channel (module docs: the overflow
+/// policy). Cheap to clone; every clone shares the parked events and the
+/// terminal permit. Never blocks.
+#[derive(Clone)]
+pub(crate) struct EventSender {
+    id: JobId,
+    tx: mpsc::Sender<EngineEvent>,
+    parked: Arc<Mutex<Parked>>,
+}
+
+impl EventSender {
+    /// A job's channel: `EVENT_CHANNEL_DEPTH` slots for the stream plus one
+    /// reserved for the terminal event.
+    pub(crate) fn channel(id: JobId) -> (Self, mpsc::Receiver<EngineEvent>) {
+        let (tx, rx) = mpsc::channel(EVENT_CHANNEL_DEPTH + 1);
+        // The channel is empty, so the reservation cannot fail; `.ok()`
+        // only keeps the `None` arm of `send` honest.
+        let terminal = tx.clone().try_reserve_owned().ok();
+        let parked = Arc::new(Mutex::new(Parked {
+            terminal,
+            ..Parked::default()
+        }));
+        (Self { id, tx, parked }, rx)
+    }
+
+    /// Sends `ev` without blocking (module docs: what happens when the
+    /// consumer lags). After the terminal event, nothing.
+    pub(crate) fn send(&self, ev: EngineEvent) {
+        let mut p = lock(&self.parked);
+        if p.done {
+            return;
+        }
+        self.flush(&mut p);
+        if ev.is_terminal() {
+            p.done = true;
+            if p.coalesced > 0 || p.dropped > 0 {
+                tracing::debug!(
+                    job = %self.id,
+                    coalesced = p.coalesced,
+                    dropped = p.dropped,
+                    "engine events: the consumer lagged"
+                );
+            }
+            match p.terminal.take() {
+                Some(permit) => {
+                    permit.send(ev);
+                }
+                None => {
+                    let _ = self.tx.try_send(ev);
+                }
+            }
+            return;
+        }
+        if p.any() {
+            // Keep the order: nothing overtakes a parked event.
+            p.park(ev);
+            return;
+        }
+        match self.tx.try_send(ev) {
+            Ok(()) | Err(TrySendError::Closed(_)) => {}
+            Err(TrySendError::Full(ev)) => p.park(ev),
+        }
+    }
+
+    /// Re-sends the parked events (queued, started, stage, progress) while
+    /// the channel has room.
+    fn flush(&self, p: &mut Parked) {
+        let Parked {
+            queued,
+            started,
+            stage,
+            progress,
+            ..
+        } = p;
+        for slot in [queued, started, stage, progress] {
+            let Some(ev) = slot.take() else { continue };
+            match self.tx.try_send(ev) {
+                Ok(()) | Err(TrySendError::Closed(_)) => {}
+                Err(TrySendError::Full(ev)) => {
+                    *slot = Some(ev);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Lag counters so far: (events coalesced, log lines dropped).
+    #[cfg(test)]
+    fn lag(&self) -> (u64, u64) {
+        let p = lock(&self.parked);
+        (p.coalesced, p.dropped)
+    }
 }
 
 impl JobHandle {
@@ -138,11 +306,29 @@ pub struct EngineStats {
     pub executors: usize,
 }
 
+/// Model residency and load counters for metrics (`/metrics`:
+/// `fv_engine_resident_models`, `fv_engine_model_loads_total`,
+/// `fv_engine_model_swaps_total`, `fv_engine_model_load_seconds{model}`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EngineCounters {
+    /// (executor, model) pairs resident now.
+    pub resident: usize,
+    /// Successful model loads since start (boot and on-demand).
+    pub loads: u64,
+    /// On-demand loads in swap mode (`[engine] swap = true`), each evicting
+    /// the executor's other resident models.
+    pub swaps: u64,
+    /// Seconds the last successful load of each model took.
+    pub load_seconds: BTreeMap<ModelId, f64>,
+}
+
 pub(crate) struct JobEntry {
-    pub tx: mpsc::UnboundedSender<EngineEvent>,
+    pub tx: EventSender,
     pub cancel: CancelToken,
     pub job: Arc<ResolvedJob>,
     pub mode: OutputMode,
+    /// `EngineConfig::job_deadline` at submit.
+    pub deadline: Option<Duration>,
     pub last_pos: Option<u32>,
     pub running: bool,
     /// The job's trace (docs/serve/tracing.md) and when it was queued
@@ -165,6 +351,8 @@ pub(crate) struct State {
     /// Per executor: the cancel token of the background warm-up run on its
     /// GPU now (fast boot B). Any arriving work trips it.
     pub warmup_cancel: Vec<Option<CancelToken>>,
+    /// Loads and swaps so far (`resident` is derived from the pool).
+    pub counters: EngineCounters,
 }
 
 impl State {
@@ -183,7 +371,7 @@ impl State {
             if let Some(e) = self.jobs.get_mut(&job) {
                 if e.last_pos != Some(pos) {
                     e.last_pos = Some(pos);
-                    let _ = e.tx.send(EngineEvent::Queued { position: pos });
+                    e.tx.send(EngineEvent::Queued { position: pos });
                 }
             }
         }
@@ -258,7 +446,7 @@ impl Shared {
     ) -> Result<JobHandle, ApiError> {
         let cancel = CancelToken::new();
         let queued_ns = trace.map_or(0, |_| fastvideo_trace::now_ns());
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = EventSender::channel(id);
         {
             let mut st = self.lock();
             if st.draining {
@@ -284,6 +472,7 @@ impl Shared {
                     cancel: cancel.clone(),
                     job: Arc::new(job),
                     mode,
+                    deadline: self.cfg.job_deadline,
                     last_pos: None,
                     running: false,
                     trace,
@@ -312,7 +501,7 @@ impl Shared {
         let mut st = self.lock();
         if st.sched.remove(id).is_some() {
             if let Some(e) = st.jobs.remove(&id) {
-                let _ = e.tx.send(EngineEvent::Cancelled);
+                e.tx.send(EngineEvent::Cancelled);
             }
             st.publish_positions();
             self.changed(&st);
@@ -527,6 +716,7 @@ impl EngineService {
                 shutdown: false,
                 alive: n,
                 warmup_cancel: vec![None; n],
+                counters: EngineCounters::default(),
             }),
             work_cv: Condvar::new(),
             changed: Notify::new(),
@@ -592,6 +782,19 @@ impl EngineService {
     /// Residency of every (executor, model).
     pub fn pool(&self) -> ModelPool {
         self.shared().lock().pool.clone()
+    }
+
+    /// Residency and load counters for metrics.
+    pub fn counters(&self) -> EngineCounters {
+        let st = self.shared().lock();
+        EngineCounters {
+            resident: st
+                .pool
+                .entries()
+                .filter(|e| e.state == Residency::Resident)
+                .count(),
+            ..st.counters.clone()
+        }
     }
 
     /// Queues a job (design §3.6). Errors: `InvalidRequest` (model not
@@ -711,7 +914,7 @@ impl EngineService {
             st.yield_warmups();
             for it in st.sched.clear() {
                 if let Some(e) = st.jobs.remove(&it.job) {
-                    let _ = e.tx.send(EngineEvent::Cancelled);
+                    e.tx.send(EngineEvent::Cancelled);
                 }
             }
             sh.changed(&st);
@@ -745,5 +948,104 @@ impl EngineService {
                 let _ = t.join();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn progress(step: u32) -> EngineEvent {
+        EngineEvent::Progress { step, total: 1000 }
+    }
+
+    fn drain(rx: &mut mpsc::Receiver<EngineEvent>) -> Vec<EngineEvent> {
+        let mut v = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            v.push(e);
+        }
+        v
+    }
+
+    #[test]
+    fn lagging_consumer_gets_coalesced_progress_and_the_terminal_event() {
+        let (tx, mut rx) = EventSender::channel(JobId::new());
+        tx.send(EngineEvent::Started);
+        let n = EVENT_CHANNEL_DEPTH as u32 + 50;
+        for s in 1..=n {
+            tx.send(progress(s));
+            tx.send(EngineEvent::Log(LogLine::info(
+                "noisy",
+                time::OffsetDateTime::now_utc(),
+            )));
+        }
+        // The consumer wakes up: it sees the oldest events, then (at the next
+        // send) the latest progress only, never a step in between.
+        let got = drain(&mut rx);
+        assert_eq!(got.len(), EVENT_CHANNEL_DEPTH);
+        assert_eq!(got[0], EngineEvent::Started);
+        tx.send(EngineEvent::Stage { name: "decode" });
+        assert_eq!(
+            drain(&mut rx),
+            [progress(n), EngineEvent::Stage { name: "decode" }]
+        );
+        let (coalesced, dropped) = tx.lag();
+        assert!(coalesced > 0, "progress was coalesced");
+        assert!(dropped > 0, "logs were dropped");
+
+        // Fill it again and finish without reading: the terminal event
+        // still arrives, last, and nothing after it.
+        for s in 1..=n {
+            tx.send(progress(s));
+        }
+        tx.send(EngineEvent::Cancelled);
+        tx.send(progress(n + 1));
+        tx.send(EngineEvent::Finished(ClipOutput::default()));
+        let got = drain(&mut rx);
+        assert_eq!(got.last(), Some(&EngineEvent::Cancelled));
+        assert_eq!(
+            got.len(),
+            EVENT_CHANNEL_DEPTH + 1,
+            "the stream plus the reserved terminal slot"
+        );
+    }
+
+    #[test]
+    fn parked_events_keep_their_order_and_kinds() {
+        let (tx, mut rx) = EventSender::channel(JobId::new());
+        for s in 1..=(EVENT_CHANNEL_DEPTH as u32) {
+            tx.send(progress(s));
+        }
+        // Full: these park, newest of each kind, flushed in kind order.
+        tx.send(EngineEvent::Queued { position: 3 });
+        tx.send(EngineEvent::Stage { name: "a" });
+        tx.send(progress(500));
+        tx.send(EngineEvent::Stage { name: "b" });
+        tx.send(EngineEvent::Queued { position: 1 });
+        tx.send(progress(501));
+        assert_eq!(drain(&mut rx).len(), EVENT_CHANNEL_DEPTH);
+        tx.send(EngineEvent::Finished(ClipOutput::default()));
+        let got = drain(&mut rx);
+        assert_eq!(
+            got,
+            [
+                EngineEvent::Queued { position: 1 },
+                EngineEvent::Stage { name: "b" },
+                progress(501),
+                EngineEvent::Finished(ClipOutput::default()),
+            ]
+        );
+        assert_eq!(tx.lag(), (3, 0));
+    }
+
+    #[test]
+    fn dropped_receiver_never_blocks_the_sender() {
+        let (tx, rx) = EventSender::channel(JobId::new());
+        drop(rx);
+        for s in 1..=(EVENT_CHANNEL_DEPTH as u32 * 4) {
+            tx.send(progress(s));
+        }
+        tx.send(EngineEvent::Finished(ClipOutput::default()));
+        tx.send(progress(1));
     }
 }

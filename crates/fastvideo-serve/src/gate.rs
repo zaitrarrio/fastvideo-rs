@@ -143,6 +143,13 @@ pub fn job_trace(job: &Job) -> Option<fastvideo_trace::Trace> {
 }
 
 /// Maps a job's engine events onto the store until its terminal event.
+///
+/// Metrics (docs/serve/tracing.md "Prometheus metrics"), labelled by the
+/// job's model id (one of the configured models: bounded cardinality):
+/// `fv_job_queue_wait_seconds{model}` from submit to `Started`,
+/// `fv_job_inference_seconds{model}` from `Started` to the engine's
+/// terminal event, `fv_job_duration_seconds{api,model}` from submit to the
+/// terminal store write (post-processing and upload included).
 #[allow(clippy::too_many_arguments)]
 async fn pump(
     ctx: ServeCtx,
@@ -150,11 +157,13 @@ async fn pump(
     api: &'static str,
     resolved: ResolvedJob,
     file_name: String,
-    mut events: tokio::sync::mpsc::UnboundedReceiver<EngineEvent>,
+    mut events: tokio::sync::mpsc::Receiver<EngineEvent>,
     output: OutputPolicy,
     trace: Option<fastvideo_trace::Trace>,
 ) {
     let started = std::time::Instant::now();
+    let model = resolved.model.to_string();
+    let mut run_started: Option<std::time::Instant> = None;
     let mut ended = false;
     while let Some(ev) = events.recv().await {
         match &ev {
@@ -162,6 +171,18 @@ async fn pump(
             EngineEvent::Progress { step, total } => tracing::debug!(job = %id, "engine: step {step}/{total}"),
             EngineEvent::Log(_) => {}
             e => tracing::debug!(job = %id, "engine: {}", engine_event_name(e)),
+        }
+        if ev == EngineEvent::Started && run_started.is_none() {
+            let now = std::time::Instant::now();
+            metrics::histogram!("fv_job_queue_wait_seconds", "model" => model.clone())
+                .record(now.duration_since(started).as_secs_f64());
+            run_started = Some(now);
+        }
+        if ev.is_terminal() {
+            if let Some(s) = run_started {
+                metrics::histogram!("fv_job_inference_seconds", "model" => model.clone())
+                    .record(s.elapsed().as_secs_f64());
+            }
         }
         let ev = match ev {
             EngineEvent::Queued { position } => JobEvent::Queued { position },
@@ -208,7 +229,8 @@ async fn pump(
         }
         if terminal {
             metrics::counter!("fv_jobs_finished_total", "api" => api, "status" => status).increment(1);
-            metrics::histogram!("fv_job_duration_seconds", "api" => api).record(started.elapsed().as_secs_f64());
+            metrics::histogram!("fv_job_duration_seconds", "api" => api, "model" => model.clone())
+                .record(started.elapsed().as_secs_f64());
             ended = true;
             break;
         }

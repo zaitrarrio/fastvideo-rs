@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs ON the FastH3 NVFP4 apples-to-apples pod (scripts/gpu/fasth3-nvfp4-validate.sh; docs/ports/fasth3-nvfp4.md).
+# Runs ON the FastH3 NVFP4 apples-to-apples pod (scripts/gpu/experiments/fasth3-nvfp4-validate.sh; docs/ports/fasth3-nvfp4.md).
 # One RTX PRO 6000 on the upstream image `fastvideo-rs-upstream-fastvideo-nvfp4` (FastVideo @ d5253fd with its sm_120a
 # FP4 attention kernels, CUDA 13.0 devel for FlashInfer's JIT, and the fastvideo-rs runtime libraries under
 # /opt/fvrs-cuda); this branch's fv-gpucheck and scripts/gpu come in the staged bundle at /opt/fv.

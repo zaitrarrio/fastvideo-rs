@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs ON the H3 NVFP4 tier-options pod (scripts/gpu/h3-tier-options-validate.sh; docs/perf/h3-nvfp4-tier-options.md).
+# Runs ON the H3 NVFP4 tier-options pod (scripts/gpu/experiments/h3-tier-options-validate.sh; docs/perf/h3-nvfp4-tier-options.md).
 # One RTX PRO 6000 on a fastvideo-rs runtime image; this branch's fv-gpucheck, scripts/gpu and the R2 plan arrive
 # in a bundle under /opt/fv. h3-base from the EU volume at /workspace (read only) or, in r2 mode, fetched.
 #

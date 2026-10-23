@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs ON the FastH3 Trim validation pod (scripts/gpu/h3-trim-validate.sh; docs/ports/h3-trim.md §6). One RTX PRO
+# Runs ON the FastH3 Trim validation pod (scripts/gpu/experiments/h3-trim-validate.sh; docs/ports/h3-trim.md §6). One RTX PRO
 # 6000 on the runtime image with the EU weight volume (h3-base: text encoder, tokenizer, audio VAE) at /workspace:
 #
 #   1. fetch fasth3-trim-8step and h3-8step's transformer/ + vae/ from R2 (plan.json, presigned) onto the container

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # H3 denoise launch overhead on ONE Runpod RTX PRO 6000 (docs/perf/h3-denoise-graphs.md): the lazy step clock and the
-# opt-in CUDA graphs of the denoise steps, timed, traced and byte-compared by the pod script scripts/gpu/h3-graphs-pod.sh.
+# opt-in CUDA graphs of the denoise steps, timed, traced and byte-compared by the pod script scripts/gpu/experiments/h3-graphs-pod.sh.
 #
 #   h3-graphs-validate.sh up IMAGE        create the pod (+ a detached wall-clock backstop that deletes it). IMAGE is a
 #                                         fastvideo-rs runtime image (ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-<7>)
@@ -17,8 +17,9 @@
 # is 3 above it); FV_MAX_DPH (default 2.70); FV_STEPS / FV_ARMS / FV_CKS (passed to the pod script).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source-path=SCRIPTDIR source=volumes.sh
-source "$HERE/volumes.sh"
+GPU="$(cd "$HERE/.." && pwd)"   # scripts/gpu: the shared tooling these drivers use
+# shellcheck source-path=SCRIPTDIR/.. source=volumes.sh
+source "$GPU/volumes.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 CAP_S="${FV_POD_CAP_S:-5400}"
@@ -68,7 +69,7 @@ case "$cmd" in
     [[ "$mode" == r2 ]] && trees+=(h3-base)
     ro=/root/.config/fv
     FV_WEIGHTS_R2_ACCESS_KEY_ID="$(cat "$ro/r2_weights_ro_access_key_id")" FV_WEIGHTS_R2_SECRET_ACCESS_KEY="$(cat "$ro/r2_weights_ro_secret_access_key")" \
-      python3 "$HERE/r2-weights.py" plan "${trees[@]}" --ttl 10800 --out "$tmp/plan.json"
+      python3 "$GPU/r2-weights.py" plan "${trees[@]}" --ttl 10800 --out "$tmp/plan.json"
     # Only what the pod reads: the NVFP4 transformers (their NVFP4 vae/ is not read), and in r2 mode h3-base's
     # tokenizer, text encoder (streamed once per prompt, then cached) and VAEs, not its transformer.
     python3 - "$tmp/plan.json" "$tmp/plan.b64" <<'PYEOF'

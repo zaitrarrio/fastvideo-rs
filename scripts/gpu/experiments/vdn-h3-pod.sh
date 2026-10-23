@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs ON the VDN-H3 validation pod (scripts/gpu/vdn-h3-validate.sh; docs/ports/vdn-h3.md §5). One RTX PRO 6000 on
+# Runs ON the VDN-H3 validation pod (scripts/gpu/experiments/vdn-h3-validate.sh; docs/ports/vdn-h3.md §5). One RTX PRO 6000 on
 # the runtime image; h3-base from the EU weight volume at /workspace (or from R2 in r2 mode):
 #
 #   1. fetch vdn-h3-stage-b-2000 (+ h3-8step's DiT for the timing, in the background) from R2 (plan.json,

@@ -235,9 +235,11 @@ after the sync, before those roughly 205 GB of additions.
 
 `h3-base/text_encoder_fp8` and `ltx25/text_encoder_fp8` were produced on
 US on 2026-09-27 by `fv-gpucheck quantize-text-encoder`
-(`crates/fastvideo-gpucheck/src/coldstart.rs`). It ran through the serverless
-worker's `quantize` job (`scripts/gpu/serverless-worker.sh`) on a 1x H200
-queue endpoint in US-CA-2 with the US volume at `/runpod-volume`
+(`crates/fastvideo-gpucheck/src/coldstart.rs`). It ran through the `quantize`
+job of the WP-19 serverless worker script (retired 2026-10-23 with the
+Vast-era scripts; today the same command runs on any pod the Runpod driver
+`scripts/gpu/runpod-http.sh` creates) on a 1x H200 queue endpoint in US-CA-2
+with the US volume at `/runpod-volume`
 (docs/gaps/2026-09-27-cold-start.md "E13 trees"). EU received byte copies
 (docs/gaps/2026-09-27-volume-sync.md).
 

@@ -44,6 +44,8 @@ impl Clock for SystemClock {
 struct ManualState {
     now: Duration,
     sleepers: usize,
+    /// Sleeps that parked and then completed.
+    wakeups: u64,
 }
 
 /// Virtual time. `sleep(d)` parks the caller until a test [`advance`]s the
@@ -70,6 +72,34 @@ impl ManualClock {
     /// Threads currently parked in `sleep`.
     pub fn sleepers(&self) -> usize {
         lock(&self.state).sleepers
+    }
+
+    /// Sleeps that parked and then completed since the clock was made
+    /// (zero sleeps do not count). With [`wait_for_wakeups`] a test
+    /// steps a sleeper without observing anything else it does.
+    ///
+    /// [`wait_for_wakeups`]: ManualClock::wait_for_wakeups
+    pub fn wakeups(&self) -> u64 {
+        lock(&self.state).wakeups
+    }
+
+    /// Blocks (really) until [`wakeups`](ManualClock::wakeups) reaches `n`,
+    /// or `timeout` of wall time passes. Returns whether it did.
+    pub fn wait_for_wakeups(&self, n: u64, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut st = lock(&self.state);
+        while st.wakeups < n {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            st = self
+                .cv
+                .wait_timeout(st, left.min(Duration::from_millis(20)))
+                .unwrap_or_else(|p| p.into_inner())
+                .0;
+        }
+        true
     }
 
     /// Blocks (really) until at least `n` threads are parked in `sleep`, or
@@ -108,6 +138,7 @@ impl Clock for ManualClock {
             st = self.cv.wait(st).unwrap_or_else(|p| p.into_inner());
         }
         st.sleepers -= 1;
+        st.wakeups += 1;
         self.cv.notify_all();
     }
 }
@@ -132,5 +163,12 @@ mod tests {
         c.advance(Duration::from_secs(1));
         assert_eq!(t.join().unwrap(), Duration::from_secs(2));
         assert_eq!(c.sleepers(), 0);
+        assert_eq!(
+            c.wakeups(),
+            1,
+            "one parked sleep completed; the zero sleep did not count"
+        );
+        assert!(c.wait_for_wakeups(1, Duration::ZERO));
+        assert!(!c.wait_for_wakeups(2, Duration::from_millis(5)));
     }
 }

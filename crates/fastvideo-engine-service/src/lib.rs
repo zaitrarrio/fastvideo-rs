@@ -44,7 +44,7 @@ pub use backend::{
     BlockInput, BlockStats, CausalSpec, ClipOutput, ClipSink, CollectSink, DeviceInfo,
     EngineBackend, LoadEvent, NullSink, SessionId,
 };
-pub use cancel::{CancelToken, OutputMode, StepControl, StepEvent, StepHook};
+pub use cancel::{CancelToken, Deadline, OutputMode, StepControl, StepEvent, StepHook};
 pub use caps::{
     default_profile, ltx_fps_caps, parse_tier_alias, tier_alias, CapabilityTable, ModelEntry, Recipe,
     TierBinding, LTX_FPS, PLUG_H3_4STEP_PROFILE, SOL_H3_4STEP_DENSE_PROFILE, SOL_H3_4STEP_PROFILE,
@@ -55,7 +55,8 @@ pub use fake::{FakeBackend, FakeConfig, FakeFaults, FakeModel, FakeTiming, FakeW
 pub use pool::{ModelPool, Readiness, Residency, Warmup};
 pub use scheduler::Priority;
 pub use service::{
-    CancelOutcome, EngineConfig, EngineEvent, EngineService, EngineStats, JobHandle,
+    CancelOutcome, EngineConfig, EngineCounters, EngineEvent, EngineService, EngineStats,
+    JobHandle, EVENT_CHANNEL_DEPTH,
 };
 pub use stream::avatar::{
     AvatarConfig, AvatarEvent, AvatarOutputs, AvatarPlan, AvatarPlayer, AvatarStatus, AvatarTake,

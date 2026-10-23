@@ -5,8 +5,9 @@ Wan / FastWan family. **Primary generate path: cudarc CUDA** (lean
 `--features cuda-cudarc`). Candle remains a frozen behavioral oracle for ports;
 Luminal is frozen (no new Wan features).
 
-Real inference targets Vast.ai NVIDIA GPUs. Mac/CI stay on CPU (cudarc without
-`--features cuda` / `cuda-cudarc` errors if CUDA is requested).
+Real inference runs on Runpod NVIDIA GPUs (RTX PRO 6000 by default, the EU
+weights volume). Mac/CI stay on CPU (cudarc without `--features cuda` /
+`cuda-cudarc` errors if CUDA is requested).
 
 ## Status
 
@@ -27,7 +28,7 @@ Real inference targets Vast.ai NVIDIA GPUs. Mac/CI stay on CPU (cudarc without
 | Sequence parallel | `--num-gpus N` (query-seq shard, real per-rank devices via `FASTVIDEO_SP_WORLD`, host-mediated all-gather) |
 | VSA | `FASTVIDEO_VSA=1` → in-tree block-sparse SDPA (hard-fail without flag) |
 | Flash-style SDPA | default (`FASTVIDEO_SDPA=flash`); `dense` / `sparse` overrides |
-| GPU tests + benches | Vast (`scripts/vast-gpu-bench.sh`) |
+| GPU tests + benches | Runpod (`task rtx6000`, `scripts/gpu/runpod-http.sh`) |
 
 ## Tasks
 
@@ -35,11 +36,9 @@ Everything below is wrapped in a [Taskfile](https://taskfile.dev) — `task` alo
 
 ```bash
 task check      # lint, tests, the NVRTC gate, cuda type-check — no GPU, no cost
-task up         # build the dist binary, then open the control panel
-task clip       # rent a GPU and run the full validation tier (~$0.12)
+task rtx6000    # one RTX PRO 6000 on Runpod: weight gate, then H3 / FastH3 / LTX-2.5 parity cells (~$2/hr)
+task clip       # the older Vast ladder (scripts/gpu/validate.sh): T1 → T3 on one box
 task gen PROMPT="a dog running on a beach"
-task instances  # what is currently billing
-task reap       # destroy every fvgpu-* instance
 ```
 
 Tasks that rent hardware say so in their description, with what a run costs.
@@ -57,59 +56,37 @@ cargo run -p fastvideo-cli -- generate \
 
 Default `--backend` is `cudarc`.
 
-## GPU tests and benches (Vast)
+## GPU runs (Runpod)
+
+GPU work runs on Runpod pods that mount the EU weights volume
+(`bz0ofkfx45`, `fv-weights-h3-ltx-500`, EU-RO-1; the rest of the trees come
+from the R2 bucket `fv-weights`, `docs/ops/r2-weights.md`). Nothing compiles on
+a GPU box: CI builds the runtime image for every push, and
+`scripts/gpu/runpod-http.sh` drives one RTX PRO 6000 on that image over the
+REST API and the pod's HTTPS proxy (no SSH), with a wall-clock backstop and
+the pod deleted at the end.
 
 ```bash
-./scripts/vast-sync.sh
-# on the instance, once: bash scripts/vast-setup-cuda.sh
-./scripts/vast-gpu-bench.sh          # cuda-cudarc tests + 1.3B smoke
-./scripts/vast-gpu-bench.sh full     # plus 480p / 8-step
+task rtx6000                              # weight gate, then H3 / FastH3 / LTX-2.5 parity cells
+scripts/gpu/runpod-http.sh run [sha]      # the same by hand: create, run $FV_FAMILY, pull, destroy
+scripts/gpu/runpod-http.sh kernels [sha]  # every kernel vs host math, no weights
+scripts/gpu/runpod-http.sh upstream [sha] # the upstream Python references (scripts/gpu/upstream/)
 ```
 
-Default bench backend is `cudarc` (`FASTVIDEO_BENCH_BACKENDS=cudarc`).
+`scripts/gpu/README.md` has the family matrix (`runpod-matrix.sh`), the
+evaluation layer and the older Vast ladder (`validate.sh`, `task clip`), and
+`scripts/gpu/experiments/` holds the per-port experiment drivers. Serving
+(fv-serve, images, Runpod serverless and pod deployments, GCP) is documented
+under `docs/serve/`, starting at `docs/serve/design.md` and
+`docs/serve/images.md`.
 
-Weights live on the instance (`scripts/vast-pull-weights.sh`): 1.3B T2V (fits 24GB bf16) plus I2V `image_encoder/` (CLIP ViT-H). Full I2V 14B / A14B DiTs need 48GB+ VRAM (`PULL_I2V_FULL=1` / `PULL_A14B=1`).
+## Building
 
-## GPU on Vast
-
-Bring-up host: running RTX 4090 instance. Default cudarc path uses **device-resident F32** with optional **BF16 DiT GEMM** (`FASTVIDEO_BF16=0` to disable). Compare vs Candle on the same 256² / 9f / 2-step smoke via `scripts/vast-gpu-bench.sh`.
-
-```bash
-./scripts/vast-sync.sh
-ssh -i ~/.ssh/id_strobe_vast -p 41695 root@<vast-host> 'bash /workspace/fastvideo-rs/scripts/vast-setup-cuda.sh'
-./scripts/vast-generate.sh tiny
-# then, after weights are on disk:
-./scripts/vast-generate.sh 1.3b
-```
-
-Cargo registry and `target/` stay on the instance (`CARGO_HOME=/workspace/.cargo`; rsync skips `target`). Rebuilds after the first compile are incremental.
-
-On the instance:
-
-```bash
-cargo run -p fastvideo-cli --release --features cuda-cudarc -- generate \
-  --model Wan-AI/Wan2.1-T2V-1.3B-Diffusers \
-  --device cuda \
-  --frames 9 --steps 2 --height 256 --width 256 \
-  --output /workspace/fastvideo-out \
-  --prompt "A curious raccoon in a field of sunflowers."
-```
-
-`--weights` is optional when the Diffusers snapshot is already in the HF cache.
-Layout: `transformer/`, `vae/`, `text_encoder/`, `tokenizer/tokenizer.json`, and
-`transformer_2/` for Wan 2.2 MoE. Bring-up checkpoint:
-`Wan-AI/Wan2.1-T2V-1.3B-Diffusers`.
-
-## Local Linux CUDA build (Docker)
-
-This Mac cannot compile CUDA natively (no Linux `nvcc`). Docker Desktop can, without a GPU:
-
-```bash
-./scripts/docker-build-cuda.sh
-# → ./target-linux/release/fastvideo  (x86_64 Linux, cuda-cudarc)
-```
-
-Crates cache in the Docker volume `fastvideo-rs-cargo-registry`. Copy the binary onto Vast; you still need CUDA 12.4 runtime libs there (`nvrtc`, `cublas`, `curand`). You cannot *run* the CUDA binary in Docker on this Mac (no NVIDIA device).
+Rust compiles and tests on the shared Runpod **build pod** (a CPU pod on the
+`fv-build` network volume), driven by `scripts/dev/build-pod.sh`: see
+`docs/dev/build-pod.md`. Mac/CI build the CPU paths with plain `cargo`; the
+CUDA feature type-checks without a GPU (`task build:cuda`), and the kernels
+compile for every SM in Docker (`task nvrtc`).
 
 ## Layout
 
@@ -123,11 +100,11 @@ crates/
   fastvideo-cli        `fastvideo` binary
   fastvideo-gpucheck   GPU parity / stage checks
 scripts/
-  vast-sync.sh         rsync onto the Vast box
-  vast-setup-cuda.sh   rustup + CUDA 12.4 nvcc
-  vast-pull-weights.sh 1.3B T2V + I2V CLIP on the instance
-  vast-gpu-bench.sh    CUDA tests + generate/CLIP benches
-  vast-generate.sh     CUDA tiny or 1.3B generate (cudarc)
+  gpu/                 Runpod drivers (runpod-http.sh, runpod.sh, runpod-matrix.sh),
+                       weights tooling (r2-*.py, verify-weights.sh, the TSVs),
+                       the Vast ladder (validate.sh) and experiments/
+  dev/build-pod.sh     the shared CPU build pod (docs/dev/build-pod.md)
+  serve/               fv-serve images, variants, releases and E2E clients
 ```
 
 ## License

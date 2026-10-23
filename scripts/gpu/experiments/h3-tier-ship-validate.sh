@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The H3 NVFP4 tier-ship smoke on ONE Runpod RTX PRO 6000 (owner decisions 2026-10-14; docs/perf/h3-nvfp4-tier-options.md
-# "Shipped"), by the pod script scripts/gpu/h3-tier-ship-pod.sh: V2-NVFP4 at 480p with its NVFP4 VAE by default,
+# "Shipped"), by the pod script scripts/gpu/experiments/h3-tier-ship-pod.sh: V2-NVFP4 at 480p with its NVFP4 VAE by default,
 # FASTVIDEO_H3_VAE_NVFP4=0 against main's default (byte identity), the TAEH3 preview and the Trim NVFP4 + FP4 attention
 # recipe. Pattern of h3-tier-options-validate.sh.
 #
@@ -20,8 +20,9 @@
 # unless the balance is 3 above it); FV_MAX_DPH (default 2.70); FV_STEPS / FV_RUNS (passed to the pod script); FV_DCS.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source-path=SCRIPTDIR source=volumes.sh
-source "$HERE/volumes.sh"
+GPU="$(cd "$HERE/.." && pwd)"   # scripts/gpu: the shared tooling these drivers use
+# shellcheck source-path=SCRIPTDIR/.. source=volumes.sh
+source "$GPU/volumes.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 CAP_S="${FV_POD_CAP_S:-2700}"
@@ -74,7 +75,7 @@ case "$cmd" in
     [[ "$mode" == r2 ]] && trees+=(h3-base)
     ro=/root/.config/fv
     FV_WEIGHTS_R2_ACCESS_KEY_ID="$(cat "$ro/r2_weights_ro_access_key_id")" FV_WEIGHTS_R2_SECRET_ACCESS_KEY="$(cat "$ro/r2_weights_ro_secret_access_key")" \
-      python3 "$HERE/r2-weights.py" plan "${trees[@]}" --ttl 14400 --out "$tmp/plan.json"
+      python3 "$GPU/r2-weights.py" plan "${trees[@]}" --ttl 14400 --out "$tmp/plan.json"
     mkdir -p "$tmp/b"
     # Only what the pod reads: the V2 NVFP4 tree as published in R2 (transformer/, vae/ config, index, shards 1-2);
     # the Trim's transformer, its 26-block VAE and configs; the Trim NVFP4 file; TAEH3; in r2 mode h3-base's
@@ -108,11 +109,11 @@ PYEOF
     rm -f "$tmp/plan.json"
     cp "$bin" "$tmp/b/fv-gpucheck" && chmod 755 "$tmp/b/fv-gpucheck"
     cp "$mainbin" "$tmp/b/fv-gpucheck-main" && chmod 755 "$tmp/b/fv-gpucheck-main"
-    cp -r "$HERE" "$tmp/b/gpu"
+    cp -r "$GPU" "$tmp/b/gpu"
     tar -czf "$tmp/bundle.tgz" -C "$tmp/b" fv-gpucheck fv-gpucheck-main gpu plan.json
     rm -rf "$tmp/b"
     sha="$(sha256sum "$tmp/bundle.tgz" | cut -d' ' -f1)"
-    url="$(python3 "$HERE/r2-weights.py" --bucket fv-weights-staging put-temp "$tmp/bundle.tgz" --key "$PREFIX$sha.tgz" --ttl "$CAP_S")"
+    url="$(python3 "$GPU/r2-weights.py" --bucket fv-weights-staging put-temp "$tmp/bundle.tgz" --key "$PREFIX$sha.tgz" --ttl "$CAP_S")"
     rm -f "$tmp/bundle.tgz"
     log "bundle ${sha:0:12} staged ($PREFIX$sha.tgz), binaries $(du -h "$bin" | cut -f1) + $(du -h "$mainbin" | cut -f1)"
     # The runtime image has curl and coreutils but no Python: uv brings one. The pod deletes itself 30 min after
@@ -121,7 +122,7 @@ PYEOF
 && tar -xzf /opt/fv/bundle.tgz -C /opt/fv && rm -f /opt/fv/bundle.tgz && chmod 600 /opt/fv/plan.json && unset FV_BUNDLE_URL \
 && (curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uvbin UV_NO_MODIFY_PATH=1 sh) >>/srv/log.txt 2>&1 \
 && export PATH=/opt/uvbin:$PATH UV_PYTHON_INSTALL_DIR=/opt/uvpy && uv python install 3.12 >>/srv/log.txt 2>&1 && export PY="$(uv python find 3.12)" \
-&& (cd /srv && "$PY" -m http.server 8000 >/dev/null 2>&1 &) && bash /opt/fv/gpu/h3-tier-ship-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
+&& (cd /srv && "$PY" -m http.server 8000 >/dev/null 2>&1 &) && bash /opt/fv/gpu/experiments/h3-tier-ship-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
 sleep 1800; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; sleep infinity'
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"
@@ -137,7 +138,7 @@ sleep 1800; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
       } + (if $mode == "volume" then {containerDiskInGb: 200, networkVolumeId: $vol, volumeMountPath: "/workspace"}
            else {containerDiskInGb: 280} end)')"
     unset FVX_URL
-    unstage() { python3 "$HERE/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "$PREFIX$sha" >&2 || true; }
+    unstage() { python3 "$GPU/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "$PREFIX$sha" >&2 || true; }
     resp="$(rest POST /pods <<<"$payload")" || { log "pod create failed: $(head -c 600 <<<"$resp")"; unstage; exit 1; }
     id="$(jq -r '.id // empty' <<<"$resp")"
     [[ -n "$id" ]] || { log "pod create failed: $(head -c 400 <<<"$resp")"; unstage; exit 1; }
@@ -174,7 +175,7 @@ sleep 1800; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
     if rest GET "/pods/$id" >/dev/null 2>&1; then log "WARNING: pod $id still listed"; exit 1; fi
     log "pod $id deleted (GET /pods/$id: not found)"
     if [[ -n "$sha" ]]; then
-      python3 "$HERE/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "$PREFIX$sha" || true
+      python3 "$GPU/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "$PREFIX$sha" || true
     else
       log "bundle sha256 not readable from pod $id: remove $PREFIX<sha>.tgz by its full key"
     fi

@@ -12,7 +12,7 @@ keeps bf16 VSA. Every other DiT is unchanged.
 | taken when | the DiT is a ModelOpt NVFP4 `transformer/` (`h3::nvfp4::is_modelopt_dir`) **and** the device is sm_120 with the kernel loaded; otherwise bf16 VSA (logged). An explicit `=1` on any other DiT logs that it is ignored; on an NVFP4 DiT without the kernel it refuses to load |
 | code | `crates/fastvideo-cudarc/src/wan/attn_fp4.{cu,rs}` (kernels, host twins), `h3/vsa.rs` (`H3Vsa::with_fp4`), `h3/pipeline.rs` (`vsa_fp4_choice`), `build.rs` (an sm_120a cubin) |
 | checks | `fv-gpucheck kernels --groups h3_fp4_attn` (`crates/fastvideo-gpucheck/src/kernels_fp4.rs`) |
-| GPU runs | `scripts/gpu/h3-fp4attn-validate.sh` + `h3-fp4attn-pod.sh` |
+| GPU runs | `scripts/gpu/experiments/h3-fp4attn-validate.sh` + `h3-fp4attn-pod.sh` |
 
 ## 1. The reference: what upstream actually does
 

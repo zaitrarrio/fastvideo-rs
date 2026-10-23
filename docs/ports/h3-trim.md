@@ -95,7 +95,7 @@ PSNR 50 dB; docs/perf/h3-vae-decode-speed.md §6).
 | `crates/fastvideo-engine-service/src/cuda/caps.rs` | catalog `fasth3-trim-8step` (served `h3-trim`; `recipe = "trim-8step"` / `"h3-trim"`), weights `fasth3-trim-8step` + `text_weights` h3-base, VSA (not dense), T2V only, untiered |
 | `configs/serve/runpod-h3-trim.toml` | the worker config (openai_videos, minimax, fal, native) |
 | `control/` | preset `fasth3-trim` (weights `fasth3-trim-8step` + `h3-base`, prequant `h3-base/text_encoder_fp8`), `RECIPE_TREES["h3-trim"]`, catalog / serverless recipe tables, Brev tree size |
-| `scripts/gpu/` | `weights-manifest.tsv` / `weights-revisions.tsv` / `weights-sha256.tsv` / `weights-r2.tsv` rows, `verify-weights.sh` cells `fasth3-trim-8step` and `fasth3-trim-8step-nvfp4`, `r2-publish-hub.sh` (Hub -> R2 from a CPU pod), `h3-trim-validate.sh` + `h3-trim-pod.sh` (§6), `upstream/av_psnr.py` |
+| `scripts/gpu/` | `weights-manifest.tsv` / `weights-revisions.tsv` / `weights-sha256.tsv` / `weights-r2.tsv` rows, `verify-weights.sh` cells `fasth3-trim-8step` and `fasth3-trim-8step-nvfp4`, `r2-publish-hub.sh` (Hub -> R2 from a CPU pod), `experiments/h3-trim-validate.sh` + `experiments/h3-trim-pod.sh` (§6), `upstream/av_psnr.py` |
 
 Tests (§6.4 has the counts): `fastvideo-cudarc` `h3::manifest_tests` (every Trim DiT and VAE key requested with its
 published shape, none left over, the dtypes), `h3::pipeline` (the Hub's own config files parse into the port's
@@ -194,7 +194,7 @@ Low-nibble-first or a row-major scale reading gives 0.72-1.45; `fc1` read in the
 | `crates/fastvideo-engine-service/src/cuda/caps.rs`, `configs/serve/runpod-h3-trim-nvfp4.toml` | catalog `fasth3-trim-nvfp4` (untiered, T2V only, served `h3-trim-nvfp4`); the worker config |
 | `control/` | preset `fasth3-trim-nvfp4` (weights `fasth3-trim-8step`, `fasth3-trim-8step-nvfp4`, `h3-base`; prequant `h3-base/text_encoder_fp8`; R2 by default), `RECIPE_TREES["h3-trim-nvfp4"]`, catalog / serverless tables, Brev tree size, `scripts/serve/variants.sh` |
 | `fv-gpucheck` | `h3 gen --nvfp4-dit`; `kernels --groups nvfp4_linear` check `nvfp4_published_stack_matches_host` |
-| `scripts/gpu/h3-trim-nvfp4-{validate,pod}.sh`, `h3-trim-nvfp4-plan.py`, `h3-trim-nvfp4-summary.py` | §5.4 |
+| `scripts/gpu/experiments/h3-trim-nvfp4-{validate,pod}.sh`, `h3-trim-nvfp4-plan.py`, `h3-trim-nvfp4-summary.py` | §5.4 |
 
 **Hardware.** The GEMM is cuBLASLt `VEC16_UE4M3`, which exists on sm_100 / sm_120 only. On any other GPU (or a CPU
 build) the load fails with "the published NVFP4 DiT runs only on NVFP4 tensor cores ... No bf16 fallback"; the
@@ -218,12 +218,12 @@ m = 300) PASS, rel-L2 1.66e-3 against exact host math (limit 4e-3). `control`: `
 
 ### 5.4 GPU validation (RTX PRO 6000 Blackwell, EU-RO-1, 2026-10-14)
 
-`scripts/gpu/h3-trim-nvfp4-validate.sh up ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-b407063` (this branch's runtime
+`scripts/gpu/experiments/h3-trim-nvfp4-validate.sh up ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-b407063` (this branch's runtime
 image; the R2 plan from the read-only key passed in the pod's env, nothing staged in R2), EU volume for h3-base (read
 only), the two Trim trees from R2 (54 GB in 51 s). The bf16 text encoder streamed once per prompt, then from the
 conditioning cache, so every arm runs on bit-identical text (`text_hidden` / `text_refined` rel-L2 0). Arms: **bf16**
 (`FASTVIDEO_H3_QUANT=off`), **MXFP8** (the served default: blocks 2-38), **NVFP4** (`--h3-recipe trim-8step-nvfp4`:
-all 42 blocks). Results: `artifacts/ports/h3-trim/nvfp4/` (`summary.md` from `h3-trim-nvfp4-summary.py`).
+all 42 blocks). Results: `artifacts/ports/h3-trim/nvfp4/` (`summary.md` from `scripts/gpu/experiments/h3-trim-nvfp4-summary.py`).
 
 There is no upstream NVFP4 reference to compare with: FastVideo does not load this ComfyUI file (its pipeline reads the
 diffusers bf16 checkpoint; the file targets ComfyUI's comfy-kitchen kernels), and running ComfyUI was out of scope. So
@@ -289,8 +289,8 @@ and checked gone (`GET /pods/<id>`: not found).
 
 ## 6. GPU validation (RTX PRO 6000, 2026-10-13)
 
-Scripts: `scripts/gpu/h3-trim-validate.sh` (launcher: stock / price check, the R2 plan, the staged bundle, a
-wall-clock backstop) and `scripts/gpu/h3-trim-pod.sh` (on the pod). Image `fastvideo-rs-runtime:sha-8f20822` with this
+Scripts: `scripts/gpu/experiments/h3-trim-validate.sh` (launcher: stock / price check, the R2 plan, the staged bundle, a
+wall-clock backstop) and `scripts/gpu/experiments/h3-trim-pod.sh` (on the pod). Image `fastvideo-rs-runtime:sha-8f20822` with this
 branch's `fv-gpucheck` (built on the build pod); RTX PRO 6000 Blackwell Workstation Edition (driver 580.178.04, CUDA
 13.0), EU-RO-1, the EU volume for h3-base, the Trim and V2 trees from R2 (fetched at 0.5-1 GB/s).
 

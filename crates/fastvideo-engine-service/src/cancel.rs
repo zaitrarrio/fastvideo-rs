@@ -22,6 +22,7 @@
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use fastvideo_protocol::{ApiError, ErrorKind, LogLine};
 use time::OffsetDateTime;
@@ -128,6 +129,74 @@ pub fn is_cancel(e: &ApiError) -> bool {
     e.kind == ErrorKind::Cancelled
 }
 
+/// A running job's wall-clock deadline (`[engine] job_deadline_s`).
+///
+/// Cooperative, like cancellation: [`StepControl::step`] and
+/// [`StepControl::check`] compare the clock with it, and the first call past
+/// it trips the job's [`CancelToken`] (so a pipeline that only polls the
+/// token stops too) and returns `Err(Timeout)`. The executor turns the
+/// job's result into `Failed(Timeout)` once [`Deadline::tripped`] holds,
+/// whatever error the backend unwound with. A kernel that never reaches a
+/// step is not caught here (the serve-side stale-job sweep is).
+#[derive(Clone)]
+pub struct Deadline {
+    started: Instant,
+    limit: Duration,
+    tripped: Arc<AtomicBool>,
+}
+
+impl fmt::Debug for Deadline {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Deadline")
+            .field("limit", &self.limit)
+            .field("elapsed", &self.started.elapsed())
+            .field("tripped", &self.tripped())
+            .finish()
+    }
+}
+
+impl Deadline {
+    /// `limit` of wall clock from now.
+    pub fn after(limit: Duration) -> Self {
+        Self {
+            started: Instant::now(),
+            limit,
+            tripped: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn limit(&self) -> Duration {
+        self.limit
+    }
+
+    /// Whether the deadline has passed; records the first time it is seen
+    /// passed (every later call reports `true` too).
+    pub fn expired(&self) -> bool {
+        if self.tripped() {
+            return true;
+        }
+        if self.started.elapsed() >= self.limit {
+            self.tripped.store(true, Ordering::SeqCst);
+            return true;
+        }
+        false
+    }
+
+    /// Whether a check already saw the deadline passed.
+    pub fn tripped(&self) -> bool {
+        self.tripped.load(Ordering::SeqCst)
+    }
+
+    /// The `Timeout` error for this deadline.
+    pub fn error(&self) -> ApiError {
+        ApiError::timeout(format!(
+            "job exceeded its deadline of {}s ({:.1}s elapsed): cancelled at the next step",
+            self.limit.as_secs_f64(),
+            self.started.elapsed().as_secs_f64()
+        ))
+    }
+}
+
 /// Per-step callbacks a pipeline observer drives (the E1 seam). Implemented
 /// by [`StepControl`]; the CUDA backend adapts it to each pipeline's
 /// observer signature.
@@ -175,6 +244,8 @@ pub struct StepControl {
     emit: Emit,
     /// A traced run's stage/step marks (docs/serve/tracing.md).
     timeline: Option<Mutex<fastvideo_trace::Timeline>>,
+    /// The job's wall-clock deadline, enforced at every step and check.
+    deadline: Option<Deadline>,
 }
 
 impl fmt::Debug for StepControl {
@@ -182,6 +253,7 @@ impl fmt::Debug for StepControl {
         f.debug_struct("StepControl")
             .field("cancel", &self.cancel)
             .field("mode", &self.mode)
+            .field("deadline", &self.deadline)
             .finish()
     }
 }
@@ -197,6 +269,7 @@ impl StepControl {
             mode,
             emit: Arc::new(emit),
             timeline: None,
+            deadline: None,
         }
     }
 
@@ -204,6 +277,30 @@ impl StepControl {
     pub fn with_timeline(mut self, t: fastvideo_trace::Timeline) -> Self {
         self.timeline = Some(Mutex::new(t));
         self
+    }
+
+    /// Fails the run with `Timeout` at the first step or check past `d`
+    /// (tripping the cancel token at the same time).
+    pub fn with_deadline(mut self, d: Deadline) -> Self {
+        self.deadline = Some(d);
+        self
+    }
+
+    /// The run's deadline, if it has one.
+    pub fn deadline(&self) -> Option<&Deadline> {
+        self.deadline.as_ref()
+    }
+
+    /// The deadline first (so a job past it fails with `Timeout`, not
+    /// `Cancelled`), then the token.
+    fn enforce(&self) -> Result<(), ApiError> {
+        if let Some(d) = &self.deadline {
+            if d.expired() {
+                self.cancel.cancel();
+                return Err(d.error());
+            }
+        }
+        self.cancel.check()
     }
 
     /// Whether this run is traced.
@@ -241,12 +338,12 @@ impl StepControl {
         Self::new(cancel, mode, |_| {})
     }
 
-    /// Reports step `step/total`, then fails with `Cancelled` if the token
-    /// is tripped.
+    /// Reports step `step/total`, then fails with `Timeout` past the
+    /// deadline or `Cancelled` if the token is tripped.
     pub fn step(&self, step: u32, total: u32) -> Result<(), ApiError> {
         self.timeline(|t| t.step(step, total));
         (self.emit)(StepEvent::Progress { step, total });
-        self.cancel.check()
+        self.enforce()
     }
 
     pub fn stage(&self, name: &'static str) {
@@ -261,9 +358,10 @@ impl StepControl {
         )));
     }
 
-    /// `Err(Cancelled)` once tripped, without reporting progress.
+    /// `Err(Timeout)` past the deadline, `Err(Cancelled)` once tripped,
+    /// without reporting progress.
     pub fn check(&self) -> Result<(), ApiError> {
-        self.cancel.check()
+        self.enforce()
     }
 
     /// A `FnMut(step, total)` observer (0-based `usize` steps, as the cudarc
@@ -281,7 +379,7 @@ impl StepHook for StepControl {
         self.stage(name)
     }
     fn cancelled(&self) -> bool {
-        self.cancel.is_cancelled()
+        self.cancel.is_cancelled() || self.deadline.as_ref().is_some_and(Deadline::expired)
     }
 }
 
@@ -335,5 +433,39 @@ mod tests {
         assert_eq!(seen[1], StepEvent::Progress { step: 1, total: 4 });
         assert_eq!(seen[2], StepEvent::Progress { step: 2, total: 4 });
         assert_eq!(seen[3], StepEvent::Progress { step: 3, total: 4 });
+    }
+
+    #[test]
+    fn deadline_trips_the_token_and_fails_with_timeout() {
+        let t = CancelToken::new();
+        let ctl = StepControl::detached(t.clone(), OutputMode::Frames)
+            .with_deadline(Deadline::after(Duration::ZERO));
+        assert!(!t.is_cancelled());
+        let err = ctl.step(1, 4).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Timeout, "{err}");
+        assert!(err.message.contains("deadline of 0s"), "{}", err.message);
+        assert!(
+            t.is_cancelled(),
+            "the token is tripped for pipelines that only poll it"
+        );
+        assert!(ctl.deadline().unwrap().tripped());
+        assert!(StepHook::cancelled(&ctl));
+        // Still Timeout, not Cancelled, on every later check.
+        assert_eq!(ctl.check().unwrap_err().kind, ErrorKind::Timeout);
+    }
+
+    #[test]
+    fn far_deadline_does_not_interfere() {
+        let t = CancelToken::new();
+        let ctl = StepControl::detached(t.clone(), OutputMode::Frames)
+            .with_deadline(Deadline::after(Duration::from_secs(3600)));
+        assert!(ctl.step(1, 2).is_ok());
+        assert!(ctl.check().is_ok());
+        assert!(!ctl.deadline().unwrap().tripped());
+        t.cancel();
+        assert!(
+            is_cancel(&ctl.check().unwrap_err()),
+            "a user cancel stays Cancelled"
+        );
     }
 }

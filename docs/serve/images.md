@@ -84,8 +84,10 @@ through (`--config …` still overrides).
 
 ### Weights are not in the images
 
-Weights stay on the network volume (EU `jg48s6o1w0`; the US volume
-`s2k01690bi` was deleted 2026-10, EU only, docs/ops/runpod-volumes.md):
+Weights stay on the network volume (EU `bz0ofkfx45`, `fv-weights-h3-ltx-500`,
+EU-RO-1, H3 + LTX trees only, `scripts/gpu/volumes.sh`; everything else comes
+from the R2 bucket `fv-weights`; the US volume `s2k01690bi` was deleted
+2026-10, EU only, docs/ops/runpod-volumes.md):
 
 - Size. The H3 load views ~72 GB of DiT weights next to a 26 GB FP8 text
   encoder tree, LTX-2.5 has a 13 GB FP8 Gemma tree

@@ -22,7 +22,7 @@ into cuBLASLt's `VEC16_UE4M3` tiled layout) and `fv_nvfp4_pad_row`.
 
 One RTX PRO 6000 Blackwell Server Edition (EU-CZ-1, driver 595.71.05, CUDA 13.2), runtime image `sha-8f20822`,
 two `fv-gpucheck` builds on the same pod: **base** (the branch point, `94edde2`, = main after #110) and **new**
-(this branch). `scripts/gpu/h3-glue-validate.sh up BASE NEW` + `scripts/gpu/h3-glue-pod.sh`; weights from R2 (no
+(this branch). `scripts/gpu/experiments/h3-glue-validate.sh up BASE NEW` + `scripts/gpu/experiments/h3-glue-pod.sh`; weights from R2 (no
 EU-RO-1 stock: h3-base, its pre-quantized 4step-vsa MXFP8 DiT, the turbo LoRA, FastH3 V2 NVFP4's `transformer/`).
 h3-demo prompt, seed 1024, 124 frames (5 s), bf16 text encoder streamed once per prompt (text cache). One process
 per (model, binary), base and new back to back, each warm (`--warm`: a cold 480p generation first). V2-NVFP4 is
@@ -76,7 +76,7 @@ Once #113 made sparse FP4 VSA the default for the NVFP4 tier, the V2-NVFP4 cells
 - one RTX PRO 6000 Server Edition (EUR-IS-2, driver 580.173.02, CUDA 13.0), runtime image `sha-8f20822`;
 - **base** = main `e873146`; **new** = this branch's head with main merged; **glue off** = the new build with
   `FASTVIDEO_H3_GLUE=0`;
-- run with `FV_ONLY_NVFP4=1 scripts/gpu/h3-glue-validate.sh up BASE NEW`.
+- run with `FV_ONLY_NVFP4=1 scripts/gpu/experiments/h3-glue-validate.sh up BASE NEW`.
 
 Results are in `artifacts/perf/h3-glue-fusion/run-2026-10-14-fp4vsa/`.
 

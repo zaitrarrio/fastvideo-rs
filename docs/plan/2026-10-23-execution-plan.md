@@ -53,9 +53,9 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| F1 | Delete the six `scripts/vast-*.sh`, `scripts/docker-build-cuda.sh`, `scripts/gpu/serverless-worker.sh`, `scripts/gpu/upstream_bench.py`, `scripts/gpu/build-remote.sh`, `scripts/gpu/prompts-flux2.json`, `scripts/gpu/sage/{run,vast-run,setup}.sh`; move the 24 port one-offs and `runpod-matrix.sh` to `scripts/gpu/experiments/`; remove the `h3-*`/`ltx2-*` tiers from `validate.sh` and the README Vast sections; fix `docs/serve/images.md:87`, `scripts/gcp/weights.sh:3-4`, ADR-0001 and `docs/scope.md` (removed backends, `unsafe` scope); add `docs/ports/CHECKLIST.md` | no reference to a deleted path remains (`grep`), `scripts/gpu/lint.sh` passes, README describes the Runpod path | `bash scripts/gpu/lint.sh`; `task check` lint part on the pod | none | active |
+| F1 | Delete the six `scripts/vast-*.sh`, `scripts/docker-build-cuda.sh`, `scripts/gpu/serverless-worker.sh`, `scripts/gpu/upstream_bench.py`, `scripts/gpu/build-remote.sh`, `scripts/gpu/prompts-flux2.json`, `scripts/gpu/sage/{run,vast-run,setup}.sh`; move the 24 port one-offs and `runpod-matrix.sh` to `scripts/gpu/experiments/`; remove the `h3-*`/`ltx2-*` tiers from `validate.sh` and the README Vast sections; fix `docs/serve/images.md:87`, `scripts/gcp/weights.sh:3-4`, ADR-0001 and `docs/scope.md` (removed backends, `unsafe` scope); add `docs/ports/CHECKLIST.md` | no reference to a deleted path remains (`grep`), `scripts/gpu/lint.sh` passes, README describes the Runpod path | `bash scripts/gpu/lint.sh`; `task check` lint part on the pod | none | merged (#139) |
 | F2 | One formatting commit; fix the 27 clippy lints; `task check` runs `cargo fmt --check` and `clippy -D warnings` as real gates; `gpucheck-t0` runs them | `cargo fmt --check` and `cargo clippy --workspace --all-targets -D warnings` green | pod | F1 (to avoid churn) | todo |
-| F3a | Serving hardening from review §7.7: per-job deadline in `StepControl`, bounded engine event channel, per-model duration and queue-wait histograms, residency gauges, `otel` feature implemented | tests in `fastvideo-engine-service` and `fastvideo-serve`; `scripts/serve/check.sh` green | pod | none | todo |
+| F3a | Serving hardening from review §7.7: per-job deadline in `StepControl`, bounded engine event channel, per-model duration and queue-wait histograms, residency gauges, `otel` feature implemented | tests in `fastvideo-engine-service` and `fastvideo-serve`; `scripts/serve/check.sh` green | pod | none | pr (#140; `otel` deferred to F3c) |
 | F3b | Delete `multiworker.rs` and `server.workers_max`; rename `[gateway]` to `[cluster]`, drop `gw_workers` | config round-trip tests | pod | owner decision (Runpod LB mode) | blocked |
 
 ### Phase 1: the manifest (Workstream A)
@@ -127,3 +127,26 @@ parallel agents.
 
 Appended as work runs. Each entry: date, WP, agent or session, where it
 ran (pod id, $/hr), result, cost.
+
+- 2026-10-23 21:57Z: PR #138 (review revision, decision log, this plan) and
+  `model-registry-rs#2` (registry rescope) merged by the coordinating
+  session (docs only, CI green where it runs).
+- 2026-10-23 22:12Z: build pod `i8tu0lpdb6nvov` created directly on the
+  Runpod REST API (fv-control has no token in this environment): cpu3c,
+  16 vCPU, $0.48/hr, EU-RO-1, volume `fv-build` (`pxy4hlsnwq`) at
+  `/workspace`, base image pin `bb-d124c1066ca42695`, session token, idle
+  stop 30 min, hard cap 6 h + 30 min grace with the in-pod backstop. Ready
+  in about 2.5 min; no readiness cycle needed. Balance at start $22.61.
+- 2026-10-23 22:37Z: F1 opened #139 (69 files, +311/-2348; lint and
+  reference grep green; no Rust change). Two scope extensions accepted by
+  the coordinator: the Vast `compare` tier (it only ran the deleted
+  `upstream_bench.py`) and `serverless-coldstart.sh` (it only pushed the
+  deleted `serverless-worker.sh` into a template). `runpod-matrix.sh` stays
+  until D1. Merged 22:55Z after gpucheck-t0 (unit tests, NVRTC gate) and
+  the image build passed.
+- 2026-10-23 22:52Z: F3a opened #140 (13 code files, +902/-32): 338 crate
+  tests and `scripts/serve/check.sh` (986 passed) green on the pod. `otel`
+  deferred to a new F3c. Awaiting serve-compat CI.
+- Merge rule applied by the coordinator: when the base moved only by
+  documentation since the branch point, the PR's own green CI stands;
+  otherwise main is merged into the branch and CI re-run on that head.

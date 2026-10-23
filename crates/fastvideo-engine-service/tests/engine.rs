@@ -12,7 +12,7 @@ use fastvideo_engine_service::fake::{audio_len, decode_frame_index};
 use fastvideo_engine_service::{
     CancelOutcome, CausalBlock, CausalSession, ClipBuild, EngineConfig, EngineEvent, FakeConfig, FakeFaults, FakeModel,
     FakeTiming, FakeWarmup, ManualClock, Mp4Mode, Priority, Readiness, Residency, Tier, Warmup,
-    SOL_H3_4STEP_PROFILE,
+    EVENT_CHANNEL_DEPTH, SOL_H3_4STEP_PROFILE,
 };
 use fastvideo_protocol::{
     AudioPlan, AudioTrack, Continuity, ErrorKind, Family, JobId, ModelId, SessionSpec, TrackSet,
@@ -859,4 +859,221 @@ async fn background_warmup_is_ready_first_and_yields_to_jobs() {
 async fn no_warmup_reports_off() {
     let e = ready(EngineConfig::default(), fast_fake().with_models(&["fake-wan"])).await;
     assert_eq!(e.warmup(), "off");
+}
+
+/// A fake whose every step takes `step` of wall clock, no MP4.
+fn wall_fake(step: Duration) -> FakeConfig {
+    FakeConfig {
+        timing: FakeTiming {
+            step,
+            ..FakeTiming::default()
+        },
+        mp4: Mp4Mode::Off,
+        ..FakeConfig::default()
+    }
+}
+
+#[tokio::test]
+async fn job_deadline_fails_with_timeout_at_the_next_step() {
+    // docs/dev/testing.md: the expiry is checked with a deadline that
+    // cannot outlast one step (every step sleeps 100 ms of wall clock), so
+    // the job fails at step 1 (or at the check before it) however loaded
+    // the host is.
+    let cfg = EngineConfig {
+        job_deadline: Some(Duration::from_millis(10)),
+        ..EngineConfig::default()
+    };
+    let e = ready(cfg, wall_fake(Duration::from_millis(100))).await;
+    let mut h = e
+        .submit(JobId::new(), wan("slow"), Priority::Batch)
+        .await
+        .unwrap();
+    let evs = until_terminal(&mut h).await;
+    assert!(has_started(&evs));
+    assert!(
+        progress_steps(&evs).len() <= 1,
+        "stops at the first step past the deadline: {evs:?}"
+    );
+    let EngineEvent::Failed(err) = evs.last().unwrap() else {
+        panic!("not failed: {evs:?}")
+    };
+    assert_eq!(err.kind, ErrorKind::Timeout, "{err}");
+    assert!(err.message.contains("deadline of 0.01s"), "{}", err.message);
+    assert!(
+        h.cancel.is_cancelled(),
+        "the token is tripped for pipelines that only poll it"
+    );
+    assert_eq!(e.stats().running, 0);
+    assert_eq!(
+        e.cancel(h.id),
+        CancelOutcome::Unknown,
+        "gone from the engine"
+    );
+
+    // The same error through `wait`, and the executor is free again.
+    let err = e
+        .submit(JobId::new(), wan("slow again"), Priority::Batch)
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Timeout);
+}
+
+#[tokio::test]
+async fn job_within_its_deadline_succeeds_and_zero_means_none() {
+    // A deadline the job cannot reach by accident (steps take no time).
+    let cfg = EngineConfig {
+        job_deadline: Some(Duration::from_secs(600)),
+        ..EngineConfig::default()
+    };
+    let e = ready(cfg, wall_fake(Duration::ZERO)).await;
+    let out = e
+        .submit(JobId::new(), wan("fast"), Priority::Batch)
+        .await
+        .unwrap()
+        .wait()
+        .await;
+    assert!(out.is_ok(), "{out:?}");
+
+    // No deadline (the default): a slow job is never timed out.
+    assert_eq!(EngineConfig::default().job_deadline, None);
+    let e = ready(
+        EngineConfig::default(),
+        wall_fake(Duration::from_millis(20)),
+    )
+    .await;
+    let out = e
+        .submit(JobId::new(), wan("slow"), Priority::Batch)
+        .await
+        .unwrap()
+        .wait()
+        .await;
+    assert!(out.is_ok(), "{out:?}");
+}
+
+/// One fake step on a manual clock without reading the job's events:
+/// waits for the executor to park, advances, then waits until that sleep
+/// completed (so its progress event is out before the next step).
+async fn step_unread(clock: &Arc<ManualClock>) {
+    sleepers(clock, 1).await;
+    let target = clock.wakeups() + 1;
+    clock.advance(Duration::from_secs(1));
+    let c = clock.clone();
+    let woke = tokio::task::spawn_blocking(move || c.wait_for_wakeups(target, T))
+        .await
+        .unwrap();
+    assert!(woke, "executor never left the clock");
+}
+
+#[tokio::test]
+async fn slow_consumer_sees_coalesced_progress_and_the_terminal_event() {
+    let clock = Arc::new(ManualClock::new());
+    let mut fake = manual_fake(&clock);
+    for m in fake
+        .models
+        .iter_mut()
+        .filter(|m| m.caps.id.as_str() == "fake-h3-turbo")
+    {
+        // The fake honours a step override only where the caps allow one.
+        m.caps.knobs.steps = true;
+    }
+    let e = ready(EngineConfig::default(), fake).await;
+    let mut j = job("fake-h3-turbo", 124, 24, h3_audio(), "many steps");
+    let steps = 100u32;
+    j.sampling.steps = Some(steps);
+    let mut h = e
+        .submit_frames(JobId::new(), j, Priority::Batch)
+        .await
+        .unwrap();
+    // Queued, Started, text_encode, denoise fill 4 slots: the channel is
+    // full after progress step `full`; later steps coalesce.
+    let full = EVENT_CHANNEL_DEPTH as u32 - 4;
+    let unread = full + 10;
+    for _ in 0..unread {
+        step_unread(&clock).await;
+    }
+    let evs = pending(&mut h);
+    assert_eq!(
+        evs.len(),
+        EVENT_CHANNEL_DEPTH,
+        "the channel's depth, nothing blocked the executor"
+    );
+    assert_eq!(evs[0], EngineEvent::Queued { position: 0 });
+    assert_eq!(evs[1], EngineEvent::Started);
+    assert_eq!(progress_steps(&evs), (1..=full).collect::<Vec<_>>());
+    // The consumer caught up: the next step first flushes the latest parked
+    // progress (steps full+1 .. unread-1 were coalesced into it).
+    step_unread(&clock).await;
+    assert_eq!(
+        ev(&mut h).await,
+        EngineEvent::Progress {
+            step: unread,
+            total: steps
+        }
+    );
+    assert_eq!(
+        ev(&mut h).await,
+        EngineEvent::Progress {
+            step: unread + 1,
+            total: steps
+        }
+    );
+    assert!(pending(&mut h).is_empty());
+    // Let it finish unread: the terminal event always arrives.
+    let _drive = Driver::new(&clock);
+    let rest = until_terminal(&mut h).await;
+    let got = progress_steps(&rest);
+    assert!(got.windows(2).all(|w| w[0] < w[1]), "in order: {got:?}");
+    assert!(
+        matches!(rest.last(), Some(EngineEvent::Finished(_))),
+        "{rest:?}"
+    );
+}
+
+#[tokio::test]
+async fn counters_track_loads_and_swaps() {
+    let mut fake = fast_fake();
+    fake.models = vec![FakeModel::wan(), {
+        let mut m = FakeModel::h3_turbo();
+        m.caps.resident = false;
+        m
+    }];
+    let cfg = EngineConfig {
+        swap: true,
+        ..EngineConfig::default()
+    };
+    let e = ready(cfg, fake).await;
+    let c = e.counters();
+    assert_eq!((c.resident, c.loads, c.swaps), (1, 1, 0));
+    assert!(
+        c.load_seconds.contains_key(&ModelId::new("fake-wan")),
+        "{c:?}"
+    );
+
+    e.submit(
+        JobId::new(),
+        job("fake-h3-turbo", 124, 24, h3_audio(), "x"),
+        Priority::Batch,
+    )
+    .await
+    .unwrap()
+    .wait()
+    .await
+    .unwrap();
+    let c = e.counters();
+    assert_eq!((c.resident, c.loads, c.swaps), (1, 2, 1), "{c:?}");
+    assert!(
+        c.load_seconds.contains_key(&ModelId::new("fake-h3-turbo")),
+        "{c:?}"
+    );
+    e.submit(JobId::new(), wan("w"), Priority::Batch)
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    let c = e.counters();
+    assert_eq!((c.resident, c.loads, c.swaps), (1, 3, 2), "{c:?}");
 }

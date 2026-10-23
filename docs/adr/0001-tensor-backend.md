@@ -56,3 +56,19 @@ workspace forbid) because the `cudarc` driver/cuBLAS APIs require it.
   BF16 DiT GEMM is on by default (`FASTVIDEO_BF16=0`
   disables; falls back to F32 on unsupported devices). VAE causal conv3d uses
   device-resident GEMM/cuDNN windows on the decode hot path.
+
+## Status 2026-10-23
+
+Burn, Candle and Luminal are no longer in the tree: the workspace has no
+crate for them, and `crates/fastvideo-core/src/backend_kind.rs` rejects the
+names `candle`, `luminal` and `burn` (as well as `host`, `cpu` and `ref`)
+with "was removed; use cudarc". `fastvideo_ops::TensorBackend` has no model
+user: its only implementation is in `fastvideo-cudarc`, and the pipelines
+reach the device through `cudarc/src/wan` directly. The `unsafe_code` scope
+above is also out of date: the workspace `forbid` is overridden with `allow`
+in `fastvideo-cudarc`, `fastvideo-loader` and `fastvideo-gpucheck` (each
+crate's `Cargo.toml` `[lints.rust]`), not in cudarc only. The decision
+record stays as the history of how cudarc became the sole path; the review
+`docs/gaps/2026-10-22-architecture-review.md` §4.2 and the execution plan
+`docs/plan/2026-10-23-execution-plan.md` (WP-B1) carry what happens next to
+the runtime layer.

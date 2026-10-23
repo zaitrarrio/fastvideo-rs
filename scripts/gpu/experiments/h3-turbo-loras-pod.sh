@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs ON the Turbo LoRA validation pod (scripts/gpu/h3-turbo-loras-validate.sh; docs/ports/h3-turbo-loras.md). One
+# Runs ON the Turbo LoRA validation pod (scripts/gpu/experiments/h3-turbo-loras-validate.sh; docs/ports/h3-turbo-loras.md). One
 # RTX PRO 6000 on the runtime image; weights under $R (the EU volume's h3-base, FastH3 LoRA and LPIPS trees linked in,
 # or all of them fetched from R2), the Turbo LoRA trees from R2:
 #

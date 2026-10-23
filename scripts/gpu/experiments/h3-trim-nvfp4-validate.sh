@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # FastH3 Trim NVFP4 GPU validation on ONE Runpod RTX PRO 6000 (docs/ports/h3-trim.md §5): the published NVFP4 DiT
 # against the bf16 Trim and the served MXFP8 default (per-step latents, PSNR / LPIPS / gate) and the speed and peak
-# memory of all three at 480p and 768p, by the pod script scripts/gpu/h3-trim-nvfp4-pod.sh.
+# memory of all three at 480p and 768p, by the pod script scripts/gpu/experiments/h3-trim-nvfp4-pod.sh.
 #
 #   h3-trim-nvfp4-validate.sh up IMAGE   create the pod (+ a detached wall-clock backstop that deletes it). IMAGE is
 #                                        a runtime image built from this branch (fv-gpucheck + scripts/gpu), e.g.
@@ -19,10 +19,11 @@
 # is 3 above it); FV_MAX_DPH (default 2.70); FV_SKIP / FV_CELL_RES (passed to the pod script).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source-path=SCRIPTDIR source=runpod-cuda.sh
-source "$HERE/runpod-cuda.sh"
-# shellcheck source-path=SCRIPTDIR source=volumes.sh
-source "$HERE/volumes.sh"
+GPU="$(cd "$HERE/.." && pwd)"   # scripts/gpu: the shared tooling these drivers use
+# shellcheck source-path=SCRIPTDIR/.. source=runpod-cuda.sh
+source "$GPU/runpod-cuda.sh"
+# shellcheck source-path=SCRIPTDIR/.. source=volumes.sh
+source "$GPU/volumes.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 CAP_S="${FV_POD_CAP_S:-4200}"
@@ -71,14 +72,14 @@ case "$cmd" in
     # The plan, from the read-only key (it cannot write): the Trim trees, and h3-base's parts in r2 mode.
     ro=/root/.config/fv
     FV_WEIGHTS_R2_ACCESS_KEY_ID="$(cat "$ro/r2_weights_ro_access_key_id")" FV_WEIGHTS_R2_SECRET_ACCESS_KEY="$(cat "$ro/r2_weights_ro_secret_access_key")" \
-      python3 "$HERE/r2-weights.py" plan fasth3-trim-8step fasth3-trim-8step-nvfp4 h3-base --ttl 10800 --out "$tmp/plan.json"
+      python3 "$GPU/r2-weights.py" plan fasth3-trim-8step fasth3-trim-8step-nvfp4 h3-base --ttl 10800 --out "$tmp/plan.json"
     python3 "$HERE/h3-trim-nvfp4-plan.py" "$tmp/plan.json" "$mode" "$tmp/plan.b64"
     # The runtime image has curl and coreutils but no Python: uv brings one (r2-fetch.py, the prompt files). The pod
     # deletes itself 20 min after DONE (Runpod's pod-scoped RUNPOD_API_KEY / RUNPOD_POD_ID); the backstop regardless.
     start='mkdir -p /opt/fv /srv && printf %s "${FV_PLAN_GZ_B64_0:-}" "${FV_PLAN_GZ_B64_1:-}" "${FV_PLAN_GZ_B64_2:-}" "${FV_PLAN_GZ_B64_3:-}" | base64 -d | gunzip >/opt/fv/plan.json && chmod 600 /opt/fv/plan.json \
 && (curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uvbin UV_NO_MODIFY_PATH=1 sh) >>/srv/log.txt 2>&1 \
 && export PATH=/opt/uvbin:$PATH UV_PYTHON_INSTALL_DIR=/opt/uvpy && uv python install 3.12 >>/srv/log.txt 2>&1 && export PY="$(uv python find 3.12)" \
-&& (cd /srv && "$PY" -m http.server 8000 >/dev/null 2>&1 &) && unset FV_PLAN_GZ_B64_0 FV_PLAN_GZ_B64_1 FV_PLAN_GZ_B64_2 FV_PLAN_GZ_B64_3 && bash /opt/fastvideo-rs/scripts/gpu/h3-trim-nvfp4-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
+&& (cd /srv && "$PY" -m http.server 8000 >/dev/null 2>&1 &) && unset FV_PLAN_GZ_B64_0 FV_PLAN_GZ_B64_1 FV_PLAN_GZ_B64_2 FV_PLAN_GZ_B64_3 && bash /opt/fastvideo-rs/scripts/gpu/experiments/h3-trim-nvfp4-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
 sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; sleep infinity'
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"

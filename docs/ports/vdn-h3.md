@@ -185,7 +185,7 @@ direction". The port follows the inference path (one rounding per fused stage, f
 | LoRA merge at load (`H3LoraFuse::open_vdn`) | `crates/fastvideo-cudarc/src/h3/lora.rs` |
 | pipeline option `vdn` / `FASTVIDEO_H3_VDN`, per-request `VdnPlan` | `crates/fastvideo-cudarc/src/h3/pipeline.rs` |
 | serve catalog `vdn-h3` (`H3Recipe.vdn_weights`) | `crates/fastvideo-engine-service/src/cuda/caps.rs` |
-| oracle, pod runner, validation driver | `scripts/gpu/upstream/oracle_vdn.py`, `scripts/gpu/vdn-h3-pod.sh`, `scripts/gpu/vdn-h3-validate.sh` |
+| oracle, pod runner, validation driver | `scripts/gpu/upstream/oracle_vdn.py`, `scripts/gpu/experiments/vdn-h3-pod.sh`, `scripts/gpu/experiments/vdn-h3-validate.sh` |
 
 ### 2.2 The block
 
