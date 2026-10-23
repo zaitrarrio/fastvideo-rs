@@ -617,7 +617,9 @@ impl TreeReader {
         }
         let vals = v
             .bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         Ok((v.shape.to_vec(), vals))
@@ -741,6 +743,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("fv-dit-tree-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let (k, n) = (64usize, 96usize);
+        #[allow(clippy::type_complexity)] // a one-off tuple; a named struct would outweigh it
         let cases: Vec<(&str, Option<(QuantKind, Vec<Section>)>, bool)> = vec![
             (
                 "mx",

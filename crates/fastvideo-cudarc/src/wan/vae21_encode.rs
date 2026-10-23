@@ -22,6 +22,9 @@ fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
 }
 
+// One per model block, built once; boxing the large variant would only add an
+// indirection on the forward path.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 enum Stage {
     Res(ResidualBlock),

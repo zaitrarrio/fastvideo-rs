@@ -244,7 +244,7 @@ impl Cosmos3Pipeline {
         for (i, &tstep) in ts.iter().enumerate() {
             let step_t = Instant::now();
             let temb = dit.time_embed(schedule::transformer_timestep(tstep, cfg.timestep_scale));
-            let compute = tea.as_mut().map_or(true, |c| c.decide(i, &temb));
+            let compute = tea.as_mut().is_none_or(|c| c.decide(i, &temb));
             let lat_t = CudaTensor::from_vec(latents.clone(), shape.clone())?;
             let tea_on = tea.is_some();
             let vc = dit.forward_gen(

@@ -59,6 +59,28 @@ pub fn nvrtc_arch(sm_major: i32, sm_minor: i32) -> Option<&'static str> {
     nvrtc_arches(sm_major, sm_minor).first().copied()
 }
 
+/// SDPA query chunk: larger on Hopper 80GB to cut launch/memcpy overhead.
+/// Called once per attention forward (every block, every step), so the env
+/// override is cached; there is only ever one live device per process, so
+/// caching by `sm_major` isn't necessary in practice.
+pub fn sdpa_query_chunk(sm_major: i32) -> usize {
+    static CACHE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *CACHE.get_or_init(|| {
+        if let Ok(v) = std::env::var("FASTVIDEO_SDPA_CHUNK") {
+            if let Ok(n) = v.parse::<usize>() {
+                return n.max(64);
+            }
+        }
+        if is_hopper(sm_major) {
+            1024
+        } else if sm_major >= 8 {
+            512
+        } else {
+            256
+        }
+    })
+}
+
 #[cfg(test)]
 mod arch_tests {
     use super::{nvrtc_arch, nvrtc_arches};
@@ -81,26 +103,4 @@ mod arch_tests {
         );
         assert_eq!(nvrtc_arch(7, 0), None, "Volta is genuinely unsupported");
     }
-}
-
-/// SDPA query chunk: larger on Hopper 80GB to cut launch/memcpy overhead.
-/// Called once per attention forward (every block, every step), so the env
-/// override is cached; there is only ever one live device per process, so
-/// caching by `sm_major` isn't necessary in practice.
-pub fn sdpa_query_chunk(sm_major: i32) -> usize {
-    static CACHE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *CACHE.get_or_init(|| {
-        if let Ok(v) = std::env::var("FASTVIDEO_SDPA_CHUNK") {
-            if let Ok(n) = v.parse::<usize>() {
-                return n.max(64);
-            }
-        }
-        if is_hopper(sm_major) {
-            1024
-        } else if sm_major >= 8 {
-            512
-        } else {
-            256
-        }
-    })
 }

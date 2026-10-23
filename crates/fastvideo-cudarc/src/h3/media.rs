@@ -186,7 +186,9 @@ pub fn decode_audio_stereo_f32(
         )));
     }
     let interleaved: Vec<f32> = raw
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     let total = interleaved.len() / 2;

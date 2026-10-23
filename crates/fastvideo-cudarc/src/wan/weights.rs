@@ -356,7 +356,7 @@ pub(crate) fn fill_bf16(lazy: &LazyStore, key: &str, out: &mut [half::bf16]) -> 
         out.par_chunks_mut(CHUNK)
             .zip(view.bytes.par_chunks(2 * CHUNK))
             .for_each(|(o, b)| {
-                for (o, c) in o.iter_mut().zip(b.chunks_exact(2)) {
+                for (o, c) in o.iter_mut().zip(b.as_chunks::<2>().0.iter()) {
                     *o = half::bf16::from_bits(u16::from_le_bytes([c[0], c[1]]));
                 }
             });

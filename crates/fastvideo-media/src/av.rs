@@ -40,7 +40,7 @@ impl AvCheck for Pcm {
                 "pcm needs a nonzero rate and channel count",
             ));
         }
-        if self.samples.len() % self.channels as usize != 0 {
+        if !self.samples.len().is_multiple_of(self.channels as usize) {
             return Err(MediaError::invalid(format!(
                 "{} interleaved samples do not divide into {} channels",
                 self.samples.len(),
@@ -98,7 +98,9 @@ pub fn f32_to_f32le(samples: &[f32]) -> Vec<u8> {
 /// Parse little-endian f32 bytes (a trailing partial sample is ignored).
 pub fn f32le_to_f32(bytes: &[u8]) -> Vec<f32> {
     bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
 }

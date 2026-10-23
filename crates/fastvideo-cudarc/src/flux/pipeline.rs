@@ -350,12 +350,14 @@ mod tests {
     #[test]
     fn tiny_generate_writes_png() {
         let mut pipe = Flux1Pipeline::tiny();
-        let mut cfg = GenerateConfig::default();
-        cfg.tiny = true;
-        cfg.output_dir = std::env::temp_dir()
-            .join("fastvideo-cudarc-flux1-tiny")
-            .to_string_lossy()
-            .into();
+        let cfg = GenerateConfig {
+            tiny: true,
+            output_dir: std::env::temp_dir()
+                .join("fastvideo-cudarc-flux1-tiny")
+                .to_string_lossy()
+                .into(),
+            ..Default::default()
+        };
         let paths = pipe.generate(&cfg).unwrap();
         assert!(Path::new(&paths[0]).exists());
         let profile = Path::new(&cfg.output_dir).join("profile.json");

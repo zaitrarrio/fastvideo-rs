@@ -94,6 +94,7 @@ pub fn merge_comfy_lora_host(
 }
 
 /// Conditioning adapter host math: `proj(RMSNorm(x)) + up(silu(down(RMSNorm(x))))`.
+#[allow(clippy::too_many_arguments)]
 pub fn conditioning_adapter_host(
     x: &[f32],
     seq: usize,
@@ -610,6 +611,7 @@ fn linear_specs(cfg: &DecoderConfig, layer: usize) -> [(&'static str, usize, usi
 }
 
 /// Largest linear weight block in any layer (for prefetch pinned sizing).
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 pub(crate) fn max_layer_linear_elems(cfg: &DecoderConfig) -> usize {
     (0..cfg.num_layers())
         .map(|i| linear_specs(cfg, i).iter().map(|(_, i, o)| i * o).sum())
@@ -794,7 +796,7 @@ impl Layer {
         let hkv = cfg.layer_kv_heads(layer);
         let dq = cfg.layer_head_dim(layer);
         let dkv = cfg.layer_kv_head_dim(layer);
-        if hq % hkv != 0 {
+        if !hq.is_multiple_of(hkv) {
             return Err(msg(format!(
                 "llm layer {layer}: {hq} query heads over {hkv} kv heads"
             )));
@@ -1088,6 +1090,7 @@ impl LayerSource for Streamed<'_> {
 
 /// The one layer loop both modes run, so a resident encoder cannot drift from
 /// the streamed one that the parity gates judged.
+#[allow(clippy::too_many_arguments)]
 fn encode<S: LayerSource>(
     cfg: &DecoderConfig,
     source: &mut S,
@@ -1176,9 +1179,8 @@ fn encode<S: LayerSource>(
         // recovered-8B tap-24 is the *un-normed* residual after the last
         // block — `load_with_comfy_lora` leaves final_norm unloaded so we
         // keep x as-is when the norm is not resident.
-        match source.final_norm() {
-            Ok(norm) => x = x.rms_norm(&norm, cfg.rms_eps)?,
-            Err(_) => {}
+        if let Ok(norm) = source.final_norm() {
+            x = x.rms_norm(&norm, cfg.rms_eps)?
         }
     }
     keep(last, &x);
@@ -1705,7 +1707,7 @@ impl EmbedTable {
                         msg(format!("llm: token id {id} past the embedding table"))
                     })?;
                     let half_is_bf16 = matches!(self, Self::Bf16(_));
-                    out.extend(row.chunks_exact(2).map(|c| {
+                    out.extend(row.as_chunks::<2>().0.iter().map(|c| {
                         let bits = u16::from_le_bytes([c[0], c[1]]);
                         if half_is_bf16 {
                             half::bf16::from_bits(bits).to_f32()
@@ -1778,6 +1780,7 @@ impl ResidentDecoder {
     /// [`Self::load_with`] merging Comfy-style LoRA adapters (`lora_down` /
     /// `lora_up`, scale = `alpha / rank`) into the listed layers before the
     /// linear is pinned. SearchingMan ARA uses this shape on layers 16..=23.
+    #[allow(clippy::too_many_arguments)]
     pub fn load_with_comfy_lora(
         map: &WeightMap,
         ara: &WeightMap,
@@ -1806,7 +1809,7 @@ impl ResidentDecoder {
                     let key = format!("{p}.{name}");
                     let wt = cuda_tensor_shaped(map, &format!("{key}.weight"), &[out_dim, in_dim])?;
                     let mut w = wt.host_cow()?.into_owned();
-                    if apply && suffixes.iter().any(|s| *s == name) {
+                    if apply && suffixes.contains(&name) {
                         let base = format!("layers.{i}.{name}");
                         merge_comfy_lora_into(&mut w, ara, &base, out_dim, in_dim, scale)?;
                     }

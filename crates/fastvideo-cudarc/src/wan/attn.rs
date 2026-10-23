@@ -1119,7 +1119,7 @@ mod tests {
         let (b, h, s, d) = (1usize, 2usize, 24usize, 8usize);
         let v = |n: usize, k: f32| {
             (0..n)
-                .map(|i| ((i as f32 * k).sin() * 0.9))
+                .map(|i| (i as f32 * k).sin() * 0.9)
                 .collect::<Vec<_>>()
         };
         let q = CudaTensor::from_vec(v(b * h * s * d, 0.37), vec![b, h, s, d]).unwrap();

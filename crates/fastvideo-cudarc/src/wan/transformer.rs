@@ -257,6 +257,7 @@ impl WanAttention {
         self.to_out.forward(&out)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward_self(
         &self,
         hidden: &CudaTensor,
@@ -685,12 +686,15 @@ pub struct KvTableSpec {
     pub sink: Option<(usize, usize)>,
 }
 
+/// A rebased sink's RoPE tables: `(target, (cos, sin) at 0, (cos, sin) at target)`.
+pub type SinkTables = (usize, (CudaTensor, CudaTensor), (CudaTensor, CudaTensor));
+
 /// The RoPE tables of one causal block forward: `(cos, sin)` of the rows
 /// the block reads, and for a rebased sink `(target, at 0, at target)`.
 #[derive(Debug, Clone)]
 pub struct KvTables {
     pub rope: (CudaTensor, CudaTensor),
-    pub sink: Option<(usize, (CudaTensor, CudaTensor), (CudaTensor, CudaTensor))>,
+    pub sink: Option<SinkTables>,
 }
 
 impl KvTables {
@@ -914,6 +918,7 @@ impl WanBlock {
 
     /// `cond.e`: this block's modulation, `timestep_proj + scale_shift_table`
     /// ([`WanBlock::modulation`]); `cond.cross_kv`: its cached cross K/V.
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         hidden: &CudaTensor,
@@ -1000,7 +1005,7 @@ fn mod_view(x: &CudaTensor, e: &CudaTensor) -> Result<CudaTensor> {
     if rows == b {
         return Ok(x.clone());
     }
-    if rows % b != 0 || (b * s) % rows != 0 {
+    if !rows.is_multiple_of(b) || (b * s) % rows != 0 {
         return Err(TensorError::Message(format!(
             "modulation rows {rows} do not tile {:?}",
             x.shape
@@ -1094,6 +1099,11 @@ impl WanBlockResidency {
     }
 }
 
+/// RoPE `(cos, sin)` tables keyed by `(seq_len, head_dim, start_frame)`.
+type RotaryCache = std::sync::Arc<
+    std::sync::Mutex<std::collections::HashMap<(usize, usize, usize), (CudaTensor, CudaTensor)>>,
+>;
+
 #[derive(Debug, Clone)]
 pub struct WanTransformer3D {
     pub cfg: WanVideoArchConfig,
@@ -1111,11 +1121,7 @@ pub struct WanTransformer3D {
     freq_dim: usize,
     /// RoPE tables keyed by `(seq_len, head_dim, start_frame)`: built and
     /// uploaded once.
-    rotary_cache: std::sync::Arc<
-        std::sync::Mutex<
-            std::collections::HashMap<(usize, usize, usize), (CudaTensor, CudaTensor)>,
-        >,
-    >,
+    rotary_cache: RotaryCache,
     /// VSA tiling per latent grid, built once and shared by every layer.
     #[cfg(feature = "cuda")]
     vsa_cache: std::sync::Arc<
@@ -2264,7 +2270,7 @@ impl WanTransformer3D {
         let vsa = self.vsa_for(t, h, w)?;
         let p = self.cfg.patch_size;
         let morton_grid = Some((t / p[0], h / p[1], w / p[2]));
-        let tea = self.begin_sol_tea(&timestep_proj)?;
+        let tea = self.begin_sol_tea(timestep_proj)?;
         let block_in = if tea == Some(false) {
             Some(hidden.clone())
         } else {
@@ -2320,7 +2326,7 @@ impl WanTransformer3D {
                     &hidden,
                     super::dump::BLOCK_ROW_STRIDE,
                 )?;
-                super::dump::tensor(&super::dump::named("timestep_proj"), &timestep_proj)?;
+                super::dump::tensor(&super::dump::named("timestep_proj"), timestep_proj)?;
             }
             for layer in 0..self.blocks.len() {
                 hidden = self.blocks.with(layer, |block| {
@@ -2703,6 +2709,7 @@ mod tests {
         use fastvideo_loader::{LazyDType, SafetensorsWriter, TensorSpec};
         use std::sync::{Arc, Mutex};
         let cfg = WanVideoArchConfig::tiny();
+        #[allow(clippy::type_complexity)] // a one-off tuple; a named struct would outweigh it
         let seen: Arc<Mutex<Vec<(String, Vec<usize>, Vec<f32>)>>> = Arc::default();
         let sink = seen.clone();
         let recorder = WeightMap::generated(move |key, shape| {

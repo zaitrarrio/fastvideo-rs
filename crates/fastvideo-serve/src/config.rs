@@ -2044,7 +2044,7 @@ impl Config {
 pub fn parse_size(s: &str) -> Option<(u32, u32)> {
     let (w, h) = s.trim().split_once(['x', 'X'])?;
     let (w, h): (u32, u32) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
-    let ok = |v: u32| (64..=4096).contains(&v) && v % 2 == 0;
+    let ok = |v: u32| (64..=4096).contains(&v) && v.is_multiple_of(2);
     (ok(w) && ok(h)).then_some((w, h))
 }
 

@@ -102,7 +102,13 @@ fn psnr(src: &[RgbFrame], dec: &[u8]) -> f64 {
     let mut se = 0f64;
     let mut n = 0usize;
     for (f, d) in src.iter().zip(dec.chunks_exact(src[0].data.len())) {
-        for (a, b) in f.data.chunks_exact(3).zip(d.chunks_exact(3)) {
+        for (a, b) in f
+            .data
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(d.as_chunks::<3>().0.iter())
+        {
             let e = y(a) - y(b);
             se += e * e;
             n += 1;

@@ -26,7 +26,7 @@ pub fn samples_per_frame(rate: u32, fps: u32) -> Result<u32> {
     if fps == 0 || rate == 0 {
         return Err(MediaError::invalid("rate and fps must be positive"));
     }
-    if rate % fps != 0 {
+    if !rate.is_multiple_of(fps) {
         return Err(MediaError::invalid(format!(
             "audio rate {rate} is not a whole number of samples per frame at {fps} fps"
         )));

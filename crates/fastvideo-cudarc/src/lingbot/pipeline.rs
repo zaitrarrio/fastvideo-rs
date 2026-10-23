@@ -134,13 +134,13 @@ impl LingBotRequest {
     }
 
     fn check(&self) -> Result<()> {
-        if self.num_frames != 1 && (self.num_frames - 1) % 4 != 0 {
+        if self.num_frames != 1 && !(self.num_frames - 1).is_multiple_of(4) {
             return Err(msg(format!(
                 "num_frames must be 1 or 4n+1, got {}",
                 self.num_frames
             )));
         }
-        if self.height % 16 != 0 || self.width % 16 != 0 {
+        if !self.height.is_multiple_of(16) || !self.width.is_multiple_of(16) {
             return Err(msg(format!(
                 "height/width must be multiples of 16: {}x{}",
                 self.height, self.width
@@ -328,10 +328,8 @@ impl LingBotPipeline {
             self.load_vae()?;
         }
         let refine = request.refiner.clone();
-        if refine.is_some() {
-            if self.vae_encoder.is_none() {
-                self.load_vae_encoder()?;
-            }
+        if refine.is_some() && self.vae_encoder.is_none() {
+            self.load_vae_encoder()?;
         }
         timing.load_base_s = t.elapsed().as_secs_f64();
         if refine.is_some() && self.residency == Residency::Both && self.refiner.is_none() {
@@ -685,7 +683,7 @@ mod tests {
         let up = upsample_rgb(&rgb, &[0], 2, 2, 4, 4);
         assert_eq!(up.len(), 3 * 16);
         assert!(up.iter().all(|&v| (v - 1.0).abs() < 1e-6));
-        let up = upsample_rgb(&vec![0u8; 12], &[0], 2, 2, 4, 4);
+        let up = upsample_rgb(&[0u8; 12], &[0], 2, 2, 4, 4);
         assert!(up.iter().all(|&v| (v + 1.0).abs() < 1e-6));
     }
 

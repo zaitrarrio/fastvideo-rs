@@ -227,7 +227,10 @@ impl Cosmos3TransformerConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if self.num_attention_heads % self.num_key_value_heads.max(1) != 0 {
+        if !self
+            .num_attention_heads
+            .is_multiple_of(self.num_key_value_heads.max(1))
+        {
             return Err("cosmos3: query heads not a multiple of kv heads".into());
         }
         if self.patch_latent_dim != self.latent_channel * self.latent_patch_size.pow(2) {

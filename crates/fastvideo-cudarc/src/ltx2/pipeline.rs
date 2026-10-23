@@ -1054,6 +1054,7 @@ pub fn denoise_with_cond(
 
 /// Base/dev CFG Euler: two forwards per step, then
 /// `v = uncond + scale * (cond - uncond)` separately for video and audio.
+#[allow(clippy::too_many_arguments)]
 pub fn denoise_cfg(
     model: &Ltx2Transformer,
     text_cond: &TextConditioning,
@@ -1362,6 +1363,7 @@ pub fn denoise_guided_cond(
     Ok((video, audio))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn velocity_call(
     model: &Ltx2Transformer,
     text: &TextConditioning,
@@ -1434,6 +1436,7 @@ fn res2s_combine(
 
 /// LTX-2.3 ODE res2s (no SDE, no bongmath). Two model calls per step except
 /// the last, which snaps to x0 — 15 steps → 29 calls so SCSP 16–28 is live.
+#[allow(clippy::too_many_arguments)]
 pub fn denoise_res2s(
     model: &Ltx2Transformer,
     text: &TextConditioning,
@@ -1815,6 +1818,7 @@ impl<'a> DecodeOut<'a> {
 /// Close the video half of `writer` (ffmpeg fed and exited), hand any frames
 /// still pending to the sink, and add that tail to `decode_video_s`; then
 /// write the PNG frames. Returns `(frames, mp4, decode_video_s, encode_s, write_s)`.
+#[allow(clippy::type_complexity)] // a one-off tuple; a named struct would outweigh it
 fn finish_writer(
     writer: &mut VideoWriter,
     decode_video_s: f64,
@@ -3029,7 +3033,7 @@ impl Ltx2Pipeline {
                 || {
                     load_transformer_ic(
                         &map,
-                        &cfg,
+                        cfg,
                         residency,
                         ic_lora.as_ref().map(|(p, _)| p.as_path()),
                     )
@@ -3130,6 +3134,9 @@ impl Ltx2Pipeline {
     }
 
     /// Resident DiT fused at `strength`. `0` is the base checkpoint.
+    // `if let Some(m) = &self.model` with a conditional `return Ok(m)` is NLL
+    // problem case 3 (the borrow outlives the branch); the `expect`s cannot fail.
+    #[allow(clippy::unnecessary_unwrap)]
     fn dit_for(&mut self, strength: f32) -> Result<&Ltx2Transformer> {
         let strength = if self.lora.is_some() { strength } else { 0.0 };
         if self.model.is_some() && self.loaded_strength == Some(strength) {
@@ -4477,6 +4484,7 @@ impl Ltx2Pipeline {
 
     /// Spark joint refiner: a normalized video latent plus the draft PCM,
     /// three stage-2 updates, then the video VAE muxed with that same PCM.
+    #[allow(clippy::too_many_arguments)]
     pub fn refine_joint(
         &mut self,
         video: &CudaTensor,
@@ -4583,7 +4591,7 @@ impl Ltx2Pipeline {
         let schedule = Ltx2Schedule::distilled_stage_2_steps(3).map_err(err)?;
         crate::wan::log::info(format_args!(
             "ltx2 refine: 3 deterministic steps {:?}, sol stage-2, lora {strength} {}, grid {:?}, {} audio tokens",
-            &schedule.sigmas,
+            schedule.sigmas,
             self.lora.as_deref().map(Path::display).map(|d| d.to_string()).unwrap_or_default(),
             grid,
             audio_tokens
@@ -5482,7 +5490,7 @@ mod tests {
                 assert_eq!((rate, channels, pcm.len()), (24_000, 2, 9 * 48 * 2));
                 let wav = std::fs::read(&got.wav).unwrap();
                 assert_eq!(wav, std::fs::read(&plain.wav).unwrap());
-                for (b, v) in wav[44..].chunks_exact(2).zip(&pcm) {
+                for (b, v) in wav[44..].as_chunks::<2>().0.iter().zip(&pcm) {
                     let w = i16::from_le_bytes([b[0], b[1]]);
                     let q = (v.clamp(-1.0, 1.0) * 32767.0).round() as i16;
                     assert!((i32::from(w) - i32::from(q)).abs() <= 1);

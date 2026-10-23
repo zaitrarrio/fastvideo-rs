@@ -390,6 +390,9 @@ fn combine(
     )
 }
 
+// One per model block, built once; boxing the large variant would only add an
+// indirection on the forward path.
+#[allow(clippy::large_enum_variant)]
 enum Ffn {
     Dense(Mlp),
     Moe(Moe),

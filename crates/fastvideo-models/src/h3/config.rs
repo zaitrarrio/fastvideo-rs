@@ -1132,7 +1132,7 @@ pub fn check_canvas(height: usize, width: usize) -> Result<(), String> {
     let (sh, sw) = snap_canvas(height.max(1), width.max(1));
     let hint = format!("nearest valid canvas: {sh}x{sw} (height x width)");
     let m = H3_CANVAS_MULTIPLE;
-    if height == 0 || width == 0 || height % m != 0 || width % m != 0 {
+    if height == 0 || width == 0 || !height.is_multiple_of(m) || !width.is_multiple_of(m) {
         return Err(format!(
             "H3 height and width must be positive multiples of {m}, got {height}x{width}; {hint}"
         ));

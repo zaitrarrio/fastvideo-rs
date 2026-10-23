@@ -1039,7 +1039,7 @@ fn h3_exact_canvas(w: u32, h: u32, caps: &ModelCaps) -> Result<ResolvedCanvas, A
             .map(|()| (w, h, None))
             .map_err(|e| ApiError::invalid_param("size", e));
     }
-    if (gw, gh) != (w, h) && (w % 2 != 0 || h % 2 != 0) {
+    if (gw, gh) != (w, h) && (!w.is_multiple_of(2) || !h.is_multiple_of(2)) {
         return Err(ApiError::invalid_param(
             "size",
             format!("a 1080P-tier size off the multiple of {m} is cropped from a padded canvas and needs even sides, got {w}x{h}"),

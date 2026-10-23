@@ -165,9 +165,9 @@ impl LpipsWeights {
                 let s = (2.0 / (cin * k * k) as f32).sqrt();
                 Conv {
                     w: (0..cout * cin * k * k)
-                        .map(|_| rng.gen_range(-s..s))
+                        .map(|_| rng.random_range(-s..s))
                         .collect(),
-                    b: (0..cout).map(|_| rng.gen_range(-0.1..0.1)).collect(),
+                    b: (0..cout).map(|_| rng.random_range(-0.1..0.1)).collect(),
                     cout,
                     cin,
                     k,
@@ -179,7 +179,7 @@ impl LpipsWeights {
             .collect::<Vec<_>>();
         let lins = convs
             .iter()
-            .map(|c| (0..c.cout).map(|_| rng.gen_range(0.0..0.2)).collect())
+            .map(|c| (0..c.cout).map(|_| rng.random_range(0.0..0.2)).collect())
             .collect();
         Self { convs, lins }
     }

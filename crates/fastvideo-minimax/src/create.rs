@@ -524,7 +524,7 @@ async fn create(
     let max = mm.config().body_max;
     let bytes = axum::body::to_bytes(body, max).await.map_err(|_| {
         const MIB: usize = 1024 * 1024;
-        let cap = if max % MIB == 0 {
+        let cap = if max.is_multiple_of(MIB) {
             format!("{} MB", max / MIB)
         } else {
             format!("{max} bytes")

@@ -191,6 +191,7 @@ fn bf16r(v: f32) -> f32 {
 /// VSA-H3 in plain loops: `[heads, seq, dim]` row-major inputs in packed
 /// order. The statement of the algorithm the device path is judged against,
 /// with upstream's bf16 rounding points (pooling inputs, combine).
+#[allow(clippy::too_many_arguments)]
 pub fn attention_host(
     q: &[f32],
     k: &[f32],

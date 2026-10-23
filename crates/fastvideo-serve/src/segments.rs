@@ -757,8 +757,10 @@ fn luma_diff(a: &RgbFrame, b: &RgbFrame) -> f64 {
     let (mut sum, mut n) = (0.0, 0u64);
     for (pa, pb) in a
         .data
-        .chunks_exact(3)
-        .zip(b.data.chunks_exact(3))
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .zip(b.data.as_chunks::<3>().0.iter())
         .step_by(4)
     {
         sum += (luma(pa) - luma(pb)).abs();

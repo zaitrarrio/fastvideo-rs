@@ -151,7 +151,7 @@ fn apply_rope_tensor(
 ) -> Result<CudaTensor> {
     let host = x.host_cow()?;
     let out = apply_rope(&host, rope, seq, heads, head_dim);
-    Ok(CudaTensor::from_vec(out, x.shape.clone())?.to_device()?)
+    CudaTensor::from_vec(out, x.shape.clone())?.to_device()
 }
 
 struct FeedForward {

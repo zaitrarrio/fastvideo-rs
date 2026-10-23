@@ -217,10 +217,6 @@ pub(super) fn rms_silu_video(xs: &CudaTensor, gamma: &CudaTensor) -> Result<Cuda
     xs.rms_norm_channels_act(gamma, 1e-12, true)
 }
 
-fn silu_video(xs: &CudaTensor) -> CudaTensor {
-    xs.silu()
-}
-
 #[derive(Debug, Clone)]
 pub(super) struct ResidualBlock {
     norm1: CudaTensor,
@@ -312,7 +308,7 @@ impl ResidualBlock {
         let mut x = rms_silu_video(xs, &self.norm1)?;
         x = conv_cached(&self.conv1, &x, cache.as_deref_mut())?;
         x = rms_silu_video(&x, &self.norm2)?;
-        x = conv_cached(&self.conv2, &x, cache.as_deref_mut())?;
+        x = conv_cached(&self.conv2, &x, cache)?;
         match &self.shortcut {
             Some(sc) => Ok(sc.forward(xs)?.add(&x)?),
             None => xs.add(&x),
@@ -602,7 +598,7 @@ impl UpBlock {
             xs = r.forward(&xs, cache.as_deref_mut())?;
         }
         if let Some(up) = &self.upsample {
-            xs = up.forward(&xs, cache.as_deref_mut())?;
+            xs = up.forward(&xs, cache)?;
         }
         Ok(xs)
     }
@@ -746,7 +742,7 @@ impl WanDecoder {
             x = up.forward(x, cache.as_deref_mut())?;
         }
         x = rms_silu_video(&x, &self.norm_out)?;
-        x = conv_cached(&self.conv_out, &x, cache.as_deref_mut())?;
+        x = conv_cached(&self.conv_out, &x, cache)?;
         Ok(x.clamp(-1.0, 1.0))
     }
 }
@@ -812,6 +808,9 @@ impl EncoderDownsample {
     }
 }
 
+// One per model block, built once; boxing the large variant would only add an
+// indirection on the forward path.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 enum EncoderStage {
     Res(ResidualBlock),

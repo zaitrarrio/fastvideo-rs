@@ -66,8 +66,8 @@ impl VideoDecoderConfig {
     pub fn validate(&self) -> Result<()> {
         if self.width < 2
             || self.height < 2
-            || self.width % 2 != 0
-            || self.height % 2 != 0
+            || !self.width.is_multiple_of(2)
+            || !self.height.is_multiple_of(2)
             || self.width > 8192
             || self.height > 8192
         {

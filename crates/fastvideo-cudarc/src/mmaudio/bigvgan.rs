@@ -20,7 +20,7 @@ const FILTER_TAPS: usize = 12;
 const RATIO: usize = 2;
 const UP_PAD: usize = FILTER_TAPS / RATIO - 1; // 5
 const UP_CROP_LEFT: usize = UP_PAD * RATIO + (FILTER_TAPS - RATIO) / 2; // 15
-const UP_CROP_RIGHT: usize = UP_PAD * RATIO + (FILTER_TAPS - RATIO + 1) / 2; // 15
+const UP_CROP_RIGHT: usize = UP_PAD * RATIO + (FILTER_TAPS - RATIO).div_ceil(2); // 15
 const DOWN_PAD_LEFT: usize = FILTER_TAPS / 2 - 1; // 5
 const DOWN_PAD_RIGHT: usize = FILTER_TAPS / 2; // 6
 
@@ -68,7 +68,7 @@ pub fn kaiser_sinc_12() -> Vec<f32> {
 
 /// `g * v / ||v||` per dim-0 slice.
 fn fold(g: &[f32], v: &[f32], rows: usize) -> Result<Vec<f32>> {
-    if g.len() != rows || v.len() % rows != 0 {
+    if g.len() != rows || !v.len().is_multiple_of(rows) {
         return Err(msg("weight norm shapes"));
     }
     let width = v.len() / rows;

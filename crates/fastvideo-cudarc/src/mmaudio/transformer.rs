@@ -40,6 +40,9 @@ struct SingleBlock {
     post: Option<Post>,
 }
 
+// One per model block, built once; boxing the large variant would only add an
+// indirection on the forward path.
+#[allow(clippy::large_enum_variant)]
 enum Post {
     Conv { linear1: Conv1d, ffn: ConvMlp },
     Linear { linear1: Linear, ffn: Mlp },
@@ -175,6 +178,7 @@ impl SingleBlock {
         let (Some(post), Some(m)) = (self.post.as_ref(), m) else {
             return Ok(x.clone());
         };
+        #[allow(clippy::type_complexity)] // a one-off tuple; a named struct would outweigh it
         let (a, ffn): (CudaTensor, &dyn Fn(&CudaTensor) -> Result<CudaTensor>) = match post {
             Post::Conv { linear1, ffn } => (linear1.forward_cl(attn)?, &|r| ffn.forward_cl(r)),
             Post::Linear { linear1, ffn } => (linear1.forward(attn)?, &|r| ffn.forward(r)),
@@ -363,7 +367,7 @@ impl MmAudioTransformer {
     ) -> Result<Conditions> {
         let ls = sync_f.shape[1];
         let sd = self.cfg.sync_dim;
-        if ls % 8 != 0 || sync_f.shape[2] != sd {
+        if !ls.is_multiple_of(8) || sync_f.shape[2] != sd {
             return Err(msg(format!("sync features {:?}", sync_f.shape)));
         }
         // `+ sync_pos_emb` per 8-frame segment.

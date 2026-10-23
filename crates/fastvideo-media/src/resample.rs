@@ -178,7 +178,7 @@ impl StreamResampler {
 
     /// Push interleaved input; returns whatever output is ready (interleaved).
     pub fn push(&mut self, samples: &[f32]) -> Result<Vec<f32>> {
-        if samples.len() % self.channels != 0 {
+        if !samples.len().is_multiple_of(self.channels) {
             return Err(MediaError::invalid(
                 "input is not a whole number of sample frames",
             ));

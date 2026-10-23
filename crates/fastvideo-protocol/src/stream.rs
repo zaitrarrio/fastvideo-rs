@@ -64,7 +64,7 @@ impl TrackSet {
     /// when it is not an integer: the clip-session admission check (design §5.5).
     pub fn samples_per_frame(&self) -> Result<u32, ApiError> {
         let fps = self.video.fps;
-        if fps == 0 || WIRE_AUDIO_RATE % fps != 0 {
+        if fps == 0 || !WIRE_AUDIO_RATE.is_multiple_of(fps) {
             return Err(ApiError::invalid_param(
                 "fps",
                 format!("fps {fps} does not divide the {WIRE_AUDIO_RATE} Hz audio clock"),

@@ -324,7 +324,7 @@ fn embed_rows(
                 LazyDType::BF16 => {
                     let b = &view.bytes[r * h * 2..(r + 1) * h * 2];
                     out.extend(
-                        b.chunks_exact(2).map(|c| {
+                        b.as_chunks::<2>().0.iter().map(|c| {
                             half::bf16::from_bits(u16::from_le_bytes([c[0], c[1]])).to_f32()
                         }),
                     );
@@ -332,7 +332,9 @@ fn embed_rows(
                 LazyDType::F32 => {
                     let b = &view.bytes[r * h * 4..(r + 1) * h * 4];
                     out.extend(
-                        b.chunks_exact(4)
+                        b.as_chunks::<4>()
+                            .0
+                            .iter()
                             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])),
                     );
                 }

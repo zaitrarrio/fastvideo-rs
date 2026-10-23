@@ -92,6 +92,7 @@ impl Flux1Attention {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn load(
         map: &WeightMap,
         prefix: &str,
@@ -653,6 +654,9 @@ impl FluxSingleTransformerBlock {
     }
 }
 
+/// Pinned RoPE `(sin, cos)` keyed by `(text_len, img_h, img_w)`.
+type RopeCache = Option<((usize, usize, usize), (CudaTensor, CudaTensor))>;
+
 pub struct Flux1Transformer2D {
     pub cfg: Flux1ArchConfig,
     time_text: CombinedTimestepGuidanceTextProj,
@@ -662,7 +666,7 @@ pub struct Flux1Transformer2D {
     singles: Vec<FluxSingleTransformerBlock>,
     norm_out: AdaLayerNormContinuous,
     proj_out: Linear,
-    rope_cache: Option<((usize, usize, usize), (CudaTensor, CudaTensor))>,
+    rope_cache: RopeCache,
     rope_builds: u64,
 }
 
@@ -760,6 +764,7 @@ impl Flux1Transformer2D {
         Ok(tables)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &mut self,
         hidden: &CudaTensor,

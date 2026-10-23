@@ -105,7 +105,7 @@ pub fn write_slim(
         ));
         files.push(path);
     }
-    let all_bytes = store.bytes_with_prefix("") as u64;
+    let all_bytes = store.bytes_with_prefix("");
     Ok(SlimReport {
         files,
         tensors: keys.len(),

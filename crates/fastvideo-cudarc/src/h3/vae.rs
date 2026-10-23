@@ -799,7 +799,9 @@ impl H3VideoDecoder {
                 let files = super::pipeline::vae_files(&dir).map_err(|e| msg(e.to_string()))?;
                 let ref_map = WeightMap::open_files(&files)?;
                 // bf16 + the MXFP8 copies (sm_100+), as the default decoder.
+                #[cfg_attr(not(feature = "cuda"), allow(unused_variables))]
                 let mx = resolve_mxfp8(None, live_sm(), cfg_ref.decoder_num_layers)?.0;
+                #[cfg_attr(not(feature = "cuda"), allow(unused_mut))]
                 let mut r = Self::load_with(cfg_ref, &ref_map, LinearMode::Official)?;
                 #[cfg(feature = "cuda")]
                 if mx && fused_enabled() && crate::wan::stats::device_expected() {
@@ -825,7 +827,7 @@ impl H3VideoDecoder {
             cfg.decoder_attention_head_dim,
         );
         let rotary = cfg.decoder_rotary_dim();
-        if rotary == 0 || rotary % 6 != 0 || rotary > head_dim {
+        if rotary == 0 || !rotary.is_multiple_of(6) || rotary > head_dim {
             return Err(msg(format!(
                 "h3 vae: {rotary} rotary channels of a {head_dim}-wide head is not 3 axes of pairs"
             )));
@@ -845,8 +847,9 @@ impl H3VideoDecoder {
             .host_cow()?
             .into_owned();
         suffix.extend(std::iter::repeat_n(0.0f32, dim));
-        #[allow(unused_mut)]
         let nvfp4 = matches!(mode, LinearMode::Nvfp4 { .. });
+        // Re-quantized in place below with `cuda`.
+        #[cfg_attr(not(feature = "cuda"), allow(unused_mut))]
         let mut blocks = match mode {
             LinearMode::Official => (0..cfg.decoder_num_layers)
                 .map(|i| Block::load(map, &format!("decoder.transformer_blocks.{i}"), &cfg))
@@ -1610,7 +1613,7 @@ impl H3VideoDecoder {
         let ratio = self.cfg.spatial_compression_ratio();
         let (starts, overlaps) = self.cfg.split_tiles(latent_len * ratio);
         if starts.iter().chain(&overlaps).any(|v| v % ratio != 0)
-            || self.cfg.tile_sample_min_size % ratio != 0
+            || !self.cfg.tile_sample_min_size.is_multiple_of(ratio)
         {
             return Err(msg(format!("h3 vae: tile plan {starts:?}/{overlaps:?} is not aligned to the {ratio}px latent grid")));
         }

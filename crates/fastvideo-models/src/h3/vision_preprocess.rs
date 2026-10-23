@@ -57,7 +57,7 @@ impl VisionGrid {
     /// Pad tokens after spatial merge: `prod(grid) / merge²`.
     pub fn num_tokens(&self, merge: usize) -> Result<usize, String> {
         let area = merge * merge;
-        if area == 0 || self.height % merge != 0 || self.width % merge != 0 {
+        if area == 0 || !self.height.is_multiple_of(merge) || !self.width.is_multiple_of(merge) {
             return Err(format!("grid {self:?} not divisible by merge {merge}"));
         }
         Ok(self.num_patches() / area)
@@ -166,7 +166,7 @@ pub fn prepare_vision_video(
     cfg: &H3VisionConfig,
 ) -> Result<PreparedVisionImage, String> {
     let tt = cfg.temporal_patch_size;
-    if num_frames == 0 || num_frames % tt != 0 {
+    if num_frames == 0 || !num_frames.is_multiple_of(tt) {
         return Err(format!(
             "vision video: {num_frames} frames not a multiple of temporal_patch={tt}"
         ));
@@ -305,7 +305,7 @@ pub fn sample_qwen_video_frames(
         indices.push(0);
     }
     let mut timestamps: Vec<f64> = (0..indices.len()).map(|i| i as f64 / sample_fps).collect();
-    while timestamps.len() % temporal_patch != 0 {
+    while !timestamps.len().is_multiple_of(temporal_patch) {
         timestamps.push(*timestamps.last().unwrap());
         indices.push(*indices.last().unwrap());
     }

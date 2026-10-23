@@ -22,6 +22,8 @@ pub const CLIP_FPS: f64 = 8.0;
 pub const SYNC_SIZE: usize = 224;
 pub const SYNC_FPS: f64 = 25.0;
 pub const CLIP_MEAN: [f32; 3] = [0.481_454_66, 0.457_827_5, 0.408_210_73];
+// The published CLIP constants, verbatim.
+#[allow(clippy::excessive_precision)]
 pub const CLIP_STD: [f32; 3] = [0.268_629_54, 0.261_302_58, 0.275_777_11];
 
 /// Which source frames `read_frames` keeps for each rate in `fps_list`, given

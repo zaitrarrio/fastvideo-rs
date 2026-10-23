@@ -1641,6 +1641,7 @@ impl Ltx2Transformer {
     }
 
     /// [`Self::forward`] with a stage-2 video self-attention plan.
+    #[allow(clippy::too_many_arguments)]
     pub fn forward_sol(
         &self,
         video: &CudaTensor,

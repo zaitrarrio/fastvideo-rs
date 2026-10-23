@@ -1288,7 +1288,9 @@ impl Linear {
                     return Self::from_device_bf16_bias(slice, bias, in_dim, out_dim);
                 }
                 let w: Vec<f32> = bytes
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|c| half::bf16::from_bits(u16::from_le_bytes([c[0], c[1]])).to_f32())
                     .collect();
                 Self::from_tensors(CudaTensor::from_vec(w, vec![out_dim, in_dim])?, bias)
@@ -1301,7 +1303,9 @@ impl Linear {
                     )));
                 }
                 let w: Vec<f32> = bytes
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                     .collect();
                 Self::from_tensors(CudaTensor::from_vec(w, vec![out_dim, in_dim])?, bias)
@@ -2751,7 +2755,9 @@ fn fp8_rows_prequantized<'a>(
     }
     let scales = sc
         .bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     Ok(Some((w.bytes, scales)))

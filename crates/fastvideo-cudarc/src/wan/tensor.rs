@@ -1039,7 +1039,7 @@ impl CudaTensor {
         #[cfg(feature = "cuda")]
         let n = self.shape[0];
         if groups == 0
-            || c % groups != 0
+            || !c.is_multiple_of(groups)
             || weight.numel() != c
             || bias.numel() != c
             || self.numel() == 0
@@ -1933,7 +1933,7 @@ impl CudaTensor {
                 self.shape, weight.shape
             )));
         }
-        if (l - 1) * stride + dilation * (k - 1) + output_padding + 1 <= 2 * padding {
+        if (l - 1) * stride + dilation * (k - 1) + output_padding < 2 * padding {
             return Err(msg(format!(
                 "conv_transpose1d: padding {padding} leaves no output for x={:?} w={:?}",
                 self.shape, weight.shape
@@ -2100,7 +2100,10 @@ impl CudaTensor {
         }
         let cin = self.shape[1];
         let cout = weight.shape[0];
-        if cin % groups != 0 || cout % groups != 0 || weight.shape[1] != cin / groups {
+        if !cin.is_multiple_of(groups)
+            || !cout.is_multiple_of(groups)
+            || weight.shape[1] != cin / groups
+        {
             return Err(msg(format!(
                 "conv3d groups {groups}: x={:?} w={:?}",
                 self.shape, weight.shape
@@ -2253,7 +2256,7 @@ impl CudaTensor {
             return Err(msg("upsample_nearest2d NCHW"));
         }
         let (n, c, h, w) = (self.shape[0], self.shape[1], self.shape[2], self.shape[3]);
-        if out_h % h != 0 || out_w % w != 0 {
+        if !out_h.is_multiple_of(h) || !out_w.is_multiple_of(w) {
             return Err(msg(format!(
                 "upsample_nearest2d needs integer factors: {h}x{w} -> {out_h}x{out_w}"
             )));

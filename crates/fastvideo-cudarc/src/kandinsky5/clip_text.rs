@@ -63,7 +63,7 @@ fn quick_gelu(x: &CudaTensor) -> Result<CudaTensor> {
             v * s
         })
         .collect();
-    Ok(CudaTensor::from_vec(out, x.shape.clone())?.to_device()?)
+    CudaTensor::from_vec(out, x.shape.clone())?.to_device()
 }
 
 fn causal_mask(seq: usize) -> Result<CudaTensor> {
@@ -73,7 +73,7 @@ fn causal_mask(seq: usize) -> Result<CudaTensor> {
             m[i * seq + j] = f32::NEG_INFINITY;
         }
     }
-    Ok(CudaTensor::from_vec(m, vec![1, 1, seq, seq])?)
+    CudaTensor::from_vec(m, vec![1, 1, seq, seq])
 }
 
 struct ClipTextAttention {

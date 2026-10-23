@@ -86,15 +86,17 @@ mod tests {
     #[test]
     fn tiny_generate_writes_png() {
         let mut pipe = WanPipeline::tiny();
-        let mut cfg = GenerateConfig::default();
-        cfg.tiny = true;
-        cfg.is_dmd = true;
-        cfg.flow_shift = 8.0;
-        cfg.guidance_scale = 1.0;
-        cfg.output_dir = std::env::temp_dir()
-            .join("fastvideo-cudarc-tiny")
-            .to_string_lossy()
-            .into();
+        let cfg = GenerateConfig {
+            tiny: true,
+            is_dmd: true,
+            flow_shift: 8.0,
+            guidance_scale: 1.0,
+            output_dir: std::env::temp_dir()
+                .join("fastvideo-cudarc-tiny")
+                .to_string_lossy()
+                .into(),
+            ..Default::default()
+        };
         let paths = pipe.generate(&cfg).unwrap();
         assert!(!paths.is_empty());
         assert!(Path::new(&paths[0]).exists());
@@ -109,15 +111,17 @@ mod tests {
     #[test]
     fn tiny_generate_with_cfg_writes_png() {
         let mut pipe = WanPipeline::tiny();
-        let mut cfg = GenerateConfig::default();
-        cfg.tiny = true;
-        cfg.is_dmd = true;
-        cfg.flow_shift = 8.0;
-        cfg.guidance_scale = 2.5;
-        cfg.output_dir = std::env::temp_dir()
-            .join("fastvideo-cudarc-tiny-cfg")
-            .to_string_lossy()
-            .into();
+        let cfg = GenerateConfig {
+            tiny: true,
+            is_dmd: true,
+            flow_shift: 8.0,
+            guidance_scale: 2.5,
+            output_dir: std::env::temp_dir()
+                .join("fastvideo-cudarc-tiny-cfg")
+                .to_string_lossy()
+                .into(),
+            ..Default::default()
+        };
         let paths = pipe.generate(&cfg).unwrap();
         assert!(!paths.is_empty());
         assert!(Path::new(&paths[0]).exists());

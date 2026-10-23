@@ -3,6 +3,7 @@ name = "fastvideo-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 description = "FastVideo-rs pipeline core: registry, sampling, VideoGenerator."
 
 [dependencies]

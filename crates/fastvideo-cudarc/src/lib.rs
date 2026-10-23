@@ -8,6 +8,10 @@
 //! the Wan graph does **not** go through that trait.
 
 #![allow(unsafe_code)]
+// Host reference code indexes tensors the way the Python it is checked against
+// does; the iterator forms clippy suggests (`.iter().enumerate().take(n)`) hide
+// the shape check an out-of-range index gives.
+#![allow(clippy::needless_range_loop)]
 
 pub mod cosmos;
 pub mod cosmos3;

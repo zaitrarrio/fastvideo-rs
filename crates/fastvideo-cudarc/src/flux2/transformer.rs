@@ -99,7 +99,7 @@ fn swiglu(xs: &CudaTensor) -> Result<CudaTensor> {
     }
     let x1 = xs.narrow(xs.rank() - 1, 0, last / 2)?;
     let x2 = xs.narrow(xs.rank() - 1, last / 2, last / 2)?;
-    Ok(x1.silu().mul(&x2)?)
+    x1.silu().mul(&x2)
 }
 
 struct FeedForward {
@@ -542,6 +542,9 @@ impl Modulation {
     }
 }
 
+/// Pinned RoPE `(sin, cos)` keyed by `(text_len, img_h, img_w)`.
+type RopeCache = Option<((usize, usize, usize), (CudaTensor, CudaTensor))>;
+
 pub struct Flux2Transformer2D {
     pub cfg: Flux2ArchConfig,
     time: TimeEmbed,
@@ -556,7 +559,7 @@ pub struct Flux2Transformer2D {
     norm_out: Linear,
     proj_out: Linear,
     /// `(text_len, img_h, img_w)` → pinned sin/cos. Reused across denoise steps.
-    rope_cache: Option<((usize, usize, usize), (CudaTensor, CudaTensor))>,
+    rope_cache: RopeCache,
     /// Times `flux2_rope` ran for this instance (cache misses).
     rope_builds: u64,
 }

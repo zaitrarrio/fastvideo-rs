@@ -3,6 +3,7 @@ name = "fastvideo-models"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 description = "Wan/LTX/H3 host math: schedulers, packing, architecture configs."
 
 [dependencies]

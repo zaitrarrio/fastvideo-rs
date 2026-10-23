@@ -514,7 +514,7 @@ fn exit_reason(r: &mut Running) -> Option<String> {
 
 impl FfmpegSink {
     pub fn start(cfg: SinkConfig) -> Result<Self> {
-        if cfg.width % 2 != 0 || cfg.height % 2 != 0 || cfg.fps == 0 {
+        if !cfg.width.is_multiple_of(2) || !cfg.height.is_multiple_of(2) || cfg.fps == 0 {
             return Err(MediaError::invalid(
                 "sink needs even dimensions and a positive fps",
             ));

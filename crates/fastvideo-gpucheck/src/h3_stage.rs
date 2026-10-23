@@ -20,6 +20,8 @@ use crate::model::measure;
 use crate::report::{Report, StageResult};
 use crate::st;
 
+// clap subcommand: one value per process, so the variant sizes do not matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(clap::Subcommand, Debug)]
 pub enum Stage {
     /// Print the inference contract and geometry the port targets.

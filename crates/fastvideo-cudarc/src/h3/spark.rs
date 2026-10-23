@@ -159,7 +159,7 @@ impl Temporal {
         let dw = Conv3d::load(
             map,
             &format!("{prefix}.dwconv"),
-            [dw_pad(&map, prefix)?, 0, 0],
+            [dw_pad(map, prefix)?, 0, 0],
             1,
         )?;
         let channels = dw.weight.shape[0];
@@ -193,6 +193,9 @@ fn dw_pad(map: &WeightMap, prefix: &str) -> Result<usize> {
     Ok(k / 2)
 }
 
+// One per model block, built once; boxing the large variant would only add an
+// indirection on the forward path.
+#[allow(clippy::large_enum_variant)]
 enum Block {
     Res(ResBlock),
     Temporal(Temporal),

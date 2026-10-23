@@ -140,6 +140,7 @@ pub fn project_points(
 /// Forward-warp RGB (`CHW` in `[-1,1]`) + mask via bilinear splatting.
 ///
 /// Returns `(warped_rgb CHW, mask HW)`.
+#[allow(clippy::too_many_arguments)]
 pub fn forward_warp_rgb(
     rgb: &[f32],
     mask: Option<&[f32]>,
@@ -214,6 +215,7 @@ pub fn forward_warp_rgb(
 /// Render a trajectory of warped frames from one source RGB+depth.
 ///
 /// Returns `frames` of length `w2cs.len()`, each `(rgb CHW, mask HW)`.
+#[allow(clippy::too_many_arguments)]
 pub fn render_trajectory(
     rgb: &[f32],
     depth: &[f32],
@@ -241,6 +243,7 @@ pub fn render_trajectory(
 /// This is the host tensor path when MoGe/VAE warp encoding is unavailable;
 /// call sites with a loaded VAE should replace the RGB stub with encoded
 /// latents via [`pack_vae_buffers`].
+#[allow(clippy::too_many_arguments)]
 pub fn pack_rgb_buffers(
     warps: &[(Vec<f32>, Vec<f32>)],
     src_h: usize,
@@ -284,6 +287,7 @@ pub fn pack_rgb_buffers(
 ///
 /// `encoded[b]` is length `latent_channels * lt * lh * lw`; `masks[b]` is
 /// length `lt * lh * lw` (latent-space mask).
+#[allow(clippy::too_many_arguments)]
 pub fn pack_vae_buffers(
     encoded: &[Vec<f32>],
     masks: &[Vec<f32>],

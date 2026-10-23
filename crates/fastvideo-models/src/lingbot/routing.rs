@@ -133,7 +133,10 @@ pub fn route_token(logits: &[f32], bias: &[f32], spec: &RouterSpec) -> (Vec<u32>
 /// Route `n = logits.len() / num_experts` tokens. Flat `[n, top_k]` outputs.
 pub fn route(logits: &[f32], bias: &[f32], spec: &RouterSpec) -> (Vec<u32>, Vec<f32>) {
     let e = spec.num_experts;
-    assert!(e > 0 && logits.len() % e == 0, "router logits / experts");
+    assert!(
+        e > 0 && logits.len().is_multiple_of(e),
+        "router logits / experts"
+    );
     let k = spec.top_k;
     let rows: Vec<(Vec<u32>, Vec<f32>)> = logits
         .par_chunks(e)

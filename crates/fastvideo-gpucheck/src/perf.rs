@@ -82,7 +82,7 @@ impl ClipSpec {
             self.frames
         );
         anyhow::ensure!(
-            self.height % 16 == 0 && self.width % 16 == 0,
+            self.height.is_multiple_of(16) && self.width.is_multiple_of(16),
             "height/width must be multiples of 16 (got {}x{})",
             self.height,
             self.width
@@ -661,7 +661,9 @@ pub fn compare_dumps(report: &mut Report, baseline: &Path, candidate: &Path) -> 
     fn read(path: &Path) -> anyhow::Result<Vec<f32>> {
         let bytes = std::fs::read(path).with_context(|| path.display().to_string())?;
         Ok(bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect())
     }

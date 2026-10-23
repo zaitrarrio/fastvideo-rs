@@ -815,6 +815,9 @@ pub struct H3LoadTimings {
     pub audio_vae_s: f64,
 }
 
+// One per model block, built once; boxing the large variant would only add an
+// indirection on the forward path.
+#[allow(clippy::large_enum_variant)]
 enum VideoDecoder {
     Official(H3VideoDecoder),
     Taeh3(TaeHv),
@@ -2511,11 +2514,10 @@ impl H3Pipeline {
                 ));
             }
             let lm = match (self.i2v_stream, self.multimodal.as_ref()) {
-                (false, Some(mm)) => match encoder_slot.as_deref().and_then(|e| e.decoder()) {
-                    Some(decoder) => Some((mm, decoder)),
-                    // An `Auto` encoder released before an earlier denoise.
-                    None => None,
-                },
+                (false, Some(mm)) => encoder_slot
+                    .as_deref()
+                    .and_then(|e| e.decoder())
+                    .map(|decoder| (mm, decoder)),
                 _ => None,
             };
             let precision = self

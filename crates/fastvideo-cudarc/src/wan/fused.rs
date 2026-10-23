@@ -208,7 +208,7 @@ impl CudaTensor {
             )));
         };
         let proj = weight.numel();
-        if heads == 0 || proj % heads != 0 || col_off + proj > width {
+        if heads == 0 || !proj.is_multiple_of(heads) || col_off + proj > width {
             return Err(msg(format!(
                 "qk_norm_rope_bhsd: {heads} heads, weight {proj}, input {:?}",
                 self.shape

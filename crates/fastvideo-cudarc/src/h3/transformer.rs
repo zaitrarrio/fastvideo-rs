@@ -151,7 +151,9 @@ fn dump_merged(prefix: &str, lin: &Linear) -> Result<()> {
     let snap = lin.snapshot()?;
     let data: Vec<f32> = match &snap.weight {
         crate::wan::nn::SnapshotWeight::Bf16(bytes) => bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|b| f32::from_bits(u32::from(u16::from_le_bytes([b[0], b[1]])) << 16))
             .collect(),
         crate::wan::nn::SnapshotWeight::F32(v) => v.clone(),
@@ -999,7 +1001,9 @@ impl AdaLnTable {
             let want = header.len() + 4 * sizes.iter().sum::<usize>();
             if bytes.len() == want && bytes[..header.len()] == header[..] {
                 let mut values = bytes[header.len()..]
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]));
                 let block_mods: Vec<f32> = values.by_ref().take(sizes[0]).collect();
                 let out_mods: Vec<f32> = values.by_ref().take(sizes[1]).collect();
@@ -2204,6 +2208,8 @@ impl FeedForward {
     /// projection the SwiGLU writes its MXFP8 input directly (`fused_swiglu_mxfp8`).
     fn forward_in(&self, n: NormOut, rows: usize) -> Result<CudaTensor> {
         let hidden = self.ff_out.out_dim();
+        // Without `cuda`, `NormOut` has only `T` and this match is infallible.
+        #[cfg_attr(not(feature = "cuda"), allow(clippy::infallible_destructuring_match))]
         let t = match n {
             NormOut::T(t) => t,
             #[cfg(feature = "cuda")]
@@ -2607,6 +2613,8 @@ impl Block {
         })?;
         let x = &x;
         let rows = x.shape[1];
+        // Without `cuda`, `NormOut` has only `T` and this pattern is irrefutable.
+        #[cfg_attr(not(feature = "cuda"), allow(irrefutable_let_patterns))]
         if let NormOut::T(t) = &n {
             crate::wan::dump::op("attn_in", t)?;
         }
@@ -2626,6 +2634,8 @@ impl Block {
         })?;
         drop(a);
         crate::wan::dump::op("resid_msa", &x)?;
+        // Without `cuda`, `NormOut` has only `T` and this pattern is irrefutable.
+        #[cfg_attr(not(feature = "cuda"), allow(irrefutable_let_patterns))]
         if let NormOut::T(t) = &n {
             crate::wan::dump::op("ffn_in", t)?;
         }
@@ -3141,7 +3151,7 @@ impl H3Transformer {
         with_gate: bool,
         residency: Residency,
     ) -> Result<Self> {
-        if cfg.rotary_dim() > cfg.attention_head_dim || cfg.freq_dim % 2 != 0 {
+        if cfg.rotary_dim() > cfg.attention_head_dim || !cfg.freq_dim.is_multiple_of(2) {
             return Err(msg(format!(
                 "h3 dit: {} rotary channels of a {}-wide head",
                 cfg.rotary_dim(),

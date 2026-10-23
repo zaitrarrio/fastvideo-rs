@@ -196,15 +196,6 @@ impl StableAudioPipeline {
     }
 }
 
-pub(crate) fn write_wav_public(
-    path: &Path,
-    pcm: &[f32],
-    sample_rate: u32,
-    channels: u16,
-) -> Result<()> {
-    write_wav(path, pcm, sample_rate, channels)
-}
-
 fn write_wav(path: &Path, pcm: &[f32], sample_rate: u32, channels: u16) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| msg(e.to_string()))?;

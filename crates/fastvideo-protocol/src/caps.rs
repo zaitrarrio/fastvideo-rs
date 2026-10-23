@@ -233,7 +233,7 @@ impl FrameGrid {
         if self.step == 0 {
             return n == self.offset;
         }
-        (n - self.offset) % self.step == 0
+        (n - self.offset).is_multiple_of(self.step)
     }
 
     /// The smallest grid value `>= n` (ignoring `min`/`max`).

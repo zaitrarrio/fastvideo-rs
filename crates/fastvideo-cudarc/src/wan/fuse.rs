@@ -248,12 +248,12 @@ pub fn qk_norm_rope(
         return Err(msg(format!("wan qk norm: projection {:?}", proj.shape)));
     };
     let proj_w = weight.numel();
-    if heads == 0 || proj_w % heads != 0 || col_off + proj_w > width {
+    if heads == 0 || !proj_w.is_multiple_of(heads) || col_off + proj_w > width {
         return Err(msg("wan qk norm: weight / columns"));
     }
     let d = proj_w / heads;
     if let Some(r) = &rope {
-        if r.cos.shape != [seq, d] || r.sin.shape != [seq, d] || d % 2 != 0 {
+        if r.cos.shape != [seq, d] || r.sin.shape != [seq, d] || !d.is_multiple_of(2) {
             return Err(msg(format!(
                 "wan qk norm: rope {:?} for d={d}",
                 r.cos.shape

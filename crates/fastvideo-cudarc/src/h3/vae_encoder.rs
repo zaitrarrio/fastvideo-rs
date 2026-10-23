@@ -33,6 +33,7 @@ struct CausalConv3d {
 }
 
 impl CausalConv3d {
+    #[allow(clippy::too_many_arguments)]
     fn load(
         map: &WeightMap,
         prefix: &str,
@@ -231,6 +232,7 @@ struct DownBlock {
 }
 
 impl DownBlock {
+    #[allow(clippy::too_many_arguments)]
     fn load(
         map: &WeightMap,
         prefix: &str,
@@ -460,7 +462,7 @@ impl H3VideoEncoder {
             return self.encode_clip(x);
         }
         let mut x = x.clone();
-        if num_frames % clip != 0 {
+        if !num_frames.is_multiple_of(clip) {
             let pad = (clip - num_frames % clip) % clip;
             let last = x.narrow(2, num_frames - 1, 1)?;
             let mut parts = Vec::with_capacity(1 + pad);
@@ -677,7 +679,7 @@ fn split_tiles(
     if tile_size >= length {
         return (vec![0], vec![length], vec![]);
     }
-    let mut num_tiles = (length + tile_size - 1) / tile_size;
+    let mut num_tiles = length.div_ceil(tile_size);
     while tile_size * num_tiles < min_overlap * (num_tiles - 1) + length {
         num_tiles += 1;
     }

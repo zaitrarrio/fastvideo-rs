@@ -268,11 +268,15 @@ impl SafeTensors {
         let n: usize = shape.iter().product();
         let out: Vec<f32> = match dtype {
             "BF16" => bytes
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| bf16_to_f32(u16::from_le_bytes([c[0], c[1]])))
                 .collect(),
             "F32" => bytes
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect(),
             other => {
@@ -294,11 +298,15 @@ impl SafeTensors {
         let (dtype, bytes) = self.raw(name, shape)?;
         match dtype {
             "BF16" => Ok(bytes
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect()),
             "F32" => Ok(bytes
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| {
                     (round_bf16(f32::from_le_bytes([c[0], c[1], c[2], c[3]])).to_bits() >> 16)
                         as u16

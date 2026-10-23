@@ -362,7 +362,7 @@ fn spec_allows(model: &str, res: &str, fps: u32, d: u32) -> bool {
     let known_res = resolution_strings().iter().any(|r| r == res);
     let fps_ok = [24, 25, 48, 50].contains(&fps);
     let long = fast && hd && (fps == 24 || fps == 25);
-    let d_ok = d % 2 == 0 && d >= 6 && d <= if long { 20 } else { 10 };
+    let d_ok = d.is_multiple_of(2) && d >= 6 && d <= if long { 20 } else { 10 };
     known_res && fps_ok && d_ok
 }
 

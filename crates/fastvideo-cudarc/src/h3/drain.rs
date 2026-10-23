@@ -220,6 +220,8 @@ impl FrameDrain {
     pub fn finish(mut self) -> Result<(VideoWriter, DecodeSplit)> {
         self.host_vae_s += self.last.elapsed().as_secs_f64();
         let (writer, times) = self.join()?;
+        // The event timings below (`cuda`) replace the host estimates.
+        #[cfg_attr(not(feature = "cuda"), allow(unused_mut))]
         let mut split = DecodeSplit {
             vae_s: self.host_vae_s,
             rgb_s: self.host_rgb_s + times.copy_s,

@@ -608,17 +608,23 @@ impl LazyStore {
             match v.dtype {
                 LazyDType::F32 => out.extend(
                     bytes
-                        .chunks_exact(4)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
                         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])),
                 ),
-                LazyDType::BF16 => out.extend(
-                    bytes
-                        .chunks_exact(2)
-                        .map(|c| crate::raw::bf16_bits_to_f32(u16::from_le_bytes([c[0], c[1]]))),
-                ),
+                LazyDType::BF16 => {
+                    out.extend(
+                        bytes.as_chunks::<2>().0.iter().map(|c| {
+                            crate::raw::bf16_bits_to_f32(u16::from_le_bytes([c[0], c[1]]))
+                        }),
+                    )
+                }
                 _ => out.extend(
                     bytes
-                        .chunks_exact(2)
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
                         .map(|c| crate::raw::f16_bits_to_f32(u16::from_le_bytes([c[0], c[1]]))),
                 ),
             }

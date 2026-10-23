@@ -159,7 +159,7 @@ pub fn fuse_into(
     if out == 0 || inn == 0 || weight.len() != out * inn {
         return Err(format!("lora weight len {} != {out}x{inn}", weight.len()));
     }
-    if b.is_empty() || b.len() % out != 0 {
+    if b.is_empty() || !b.len().is_multiple_of(out) {
         return Err(format!(
             "lora B len {} is not a multiple of out {out}",
             b.len()

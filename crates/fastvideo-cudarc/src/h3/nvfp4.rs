@@ -223,7 +223,7 @@ impl PublishedLinear {
     /// as contiguous bytes.
     pub fn swap_row_halves(&mut self) -> Result<()> {
         let half = self.rows / 2;
-        if self.rows % 2 != 0 || !half.is_multiple_of(128) {
+        if !self.rows.is_multiple_of(2) || !half.is_multiple_of(128) {
             return Err(msg(format!(
                 "h3 nvfp4: cannot swap the halves of {} rows (each a multiple of 128)",
                 self.rows

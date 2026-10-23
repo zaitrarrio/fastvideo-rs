@@ -58,9 +58,10 @@ use rand_distr::StandardNormal;
 
 use super::causal::{CausalKvCache, KvSpec};
 use super::pipeline::{
-    causal_noise, causal_noise_draw, causal_noise_from, frames_to_rgb8, GenerateConfig,
-    PipelineError, Result, WanPipeline,
+    causal_noise, frames_to_rgb8, GenerateConfig, PipelineError, Result, WanPipeline,
 };
+#[cfg(feature = "cuda")]
+use super::pipeline::{causal_noise_draw, causal_noise_from};
 use super::taehv::TaeDecodeState;
 use super::tensor::CudaTensor;
 use crate::hooks::{Hooks, Stage};

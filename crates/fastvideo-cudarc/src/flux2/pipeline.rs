@@ -167,7 +167,7 @@ impl Flux2Pipeline {
             pw,
             seq,
             steps,
-            if matches!(self.text.lm_config(), Some(_)) {
+            if self.text.lm_config().is_some() {
                 "qwen3/mistral3"
             } else {
                 "dummy"
@@ -401,12 +401,14 @@ mod tests {
     #[test]
     fn tiny_generate_writes_png() {
         let mut pipe = Flux2Pipeline::tiny();
-        let mut cfg = GenerateConfig::default();
-        cfg.tiny = true;
-        cfg.output_dir = std::env::temp_dir()
-            .join("fastvideo-cudarc-flux2-tiny")
-            .to_string_lossy()
-            .into();
+        let cfg = GenerateConfig {
+            tiny: true,
+            output_dir: std::env::temp_dir()
+                .join("fastvideo-cudarc-flux2-tiny")
+                .to_string_lossy()
+                .into(),
+            ..Default::default()
+        };
         let paths = pipe.generate(&cfg).unwrap();
         assert!(Path::new(&paths[0]).exists());
         let profile = Path::new(&cfg.output_dir).join("profile.json");
@@ -420,14 +422,16 @@ mod tests {
     #[test]
     fn tiny_klein_generate_writes_png() {
         let mut pipe = Flux2Pipeline::tiny_klein();
-        let mut cfg = GenerateConfig::default();
-        cfg.tiny = true;
-        cfg.embedded_cfg_scale = None;
-        cfg.preset = "flux2_klein_4b".into();
-        cfg.output_dir = std::env::temp_dir()
-            .join("fastvideo-cudarc-flux2-klein-tiny")
-            .to_string_lossy()
-            .into();
+        let cfg = GenerateConfig {
+            tiny: true,
+            embedded_cfg_scale: None,
+            preset: "flux2_klein_4b".into(),
+            output_dir: std::env::temp_dir()
+                .join("fastvideo-cudarc-flux2-klein-tiny")
+                .to_string_lossy()
+                .into(),
+            ..Default::default()
+        };
         let paths = pipe.generate(&cfg).unwrap();
         assert!(Path::new(&paths[0]).exists());
         assert_eq!(pipe.text_kind(), Flux2TextKind::Qwen3);

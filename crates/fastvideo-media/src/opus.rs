@@ -111,7 +111,7 @@ impl OpusFramer {
 
     /// Append interleaved 48 kHz PCM with the configured channel count.
     pub fn push(&mut self, samples: &[f32]) -> Result<()> {
-        if samples.len() % self.cfg.channels as usize != 0 {
+        if !samples.len().is_multiple_of(self.cfg.channels as usize) {
             return Err(MediaError::invalid(
                 "pcm is not a whole number of sample frames",
             ));

@@ -315,7 +315,7 @@ pub fn comfy_targets(
             .collect());
     }
     if let Some(stem) = target.strip_suffix(".mlp.fc1") {
-        if b_rows == 0 || b_rows % 2 != 0 {
+        if b_rows == 0 || !b_rows.is_multiple_of(2) {
             return Err(format!(
                 "{name}: SwiGLU fc1 lora_B has an odd row count {b_rows}"
             ));
@@ -347,7 +347,7 @@ pub fn comfy_targets(
 
 /// Apply a [`RowMap`] to a row-major `lora_B` of `rank` columns.
 pub fn map_rows(b: &[f32], rank: usize, rows: RowMap) -> Result<Vec<f32>, String> {
-    if rank == 0 || b.len() % rank != 0 {
+    if rank == 0 || !b.len().is_multiple_of(rank) {
         return Err(format!(
             "lora_B len {} is not a multiple of rank {rank}",
             b.len()
@@ -363,7 +363,7 @@ pub fn map_rows(b: &[f32], rank: usize, rows: RowMap) -> Result<Vec<f32>, String
             Ok(b[start * rank..(start + len) * rank].to_vec())
         }
         RowMap::SwapHalves => {
-            if n % 2 != 0 {
+            if !n.is_multiple_of(2) {
                 return Err(format!("cannot swap halves of {n} rows"));
             }
             let half = n / 2 * rank;

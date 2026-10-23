@@ -122,7 +122,7 @@ impl Mp4Writer {
     /// `audio` is resampled and remixed to `spec.audio` here (not in ffmpeg),
     /// so the AAC track carries exactly the samples given.
     pub fn create(out: &Path, spec: Mp4Spec, audio: Option<&Pcm>) -> Result<Self> {
-        if spec.width % 2 != 0 || spec.height % 2 != 0 || spec.fps == 0 {
+        if !spec.width.is_multiple_of(2) || !spec.height.is_multiple_of(2) || spec.fps == 0 {
             return Err(MediaError::invalid(
                 "mp4 needs even dimensions and a positive fps",
             ));

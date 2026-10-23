@@ -418,7 +418,9 @@ pub fn video_fractions_cond(
         cfg.base_width as f32,
     ];
     video_midpoints(cfg, grid, fps, division, extra, reference)
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .flat_map(|c| {
             [
                 division.div(c[0], max[0]),
@@ -465,7 +467,9 @@ pub fn video_time_fractions_cond(
     reference: Option<ReferenceBlock>,
 ) -> Vec<f32> {
     video_midpoints(cfg, grid, fps, division, extra, reference)
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|c| division.div(c[0], max_seconds))
         .collect()
 }

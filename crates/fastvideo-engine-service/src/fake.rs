@@ -583,7 +583,7 @@ pub fn render_frame(seed: u64, prompt: &str, width: u32, height: u32, index: u64
     for y in 0..h {
         let g = (y as u32 * 255 / hd) as u8;
         let row = &mut v[y * w * 3..(y + 1) * w * 3];
-        for (x, px) in row.chunks_exact_mut(3).enumerate() {
+        for (x, px) in row.as_chunks_mut::<3>().0.iter_mut().enumerate() {
             px[0] = (x as u32 * 255 / wd) as u8;
             px[1] = g;
             px[2] = blue;

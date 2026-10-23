@@ -1135,7 +1135,7 @@ impl Ltx2DiffusionDecoderConfig {
 
     pub fn swiglu_hidden_dim(&self, dim: usize) -> usize {
         let raw = (dim as f64 * self.mlp_ratio) as usize;
-        (raw + 15) / 16 * 16
+        raw.div_ceil(16) * 16
     }
 
     /// Ghost latent frames padded for NATTEN inward window shift on stage 0.

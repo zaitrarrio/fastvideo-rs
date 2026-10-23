@@ -139,6 +139,7 @@ impl DeviceRope {
     /// q/k kernel ([`super::fuse::qk_norm_rope`]). Every row holds each pair's
     /// value in both halves ([`Self::upload`]; [`Self::index_tokens`] only
     /// selects rows), which that kernel relies on to read half the table.
+    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
     pub(crate) fn fused_tables(
         &self,
         heads: usize,

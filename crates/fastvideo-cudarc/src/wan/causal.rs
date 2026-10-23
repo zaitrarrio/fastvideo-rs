@@ -316,11 +316,7 @@ impl KvSpec {
                 0
             };
         let local_end = (local_end_prev + advance)
-            .checked_sub(if current_end >= global_end {
-                0
-            } else {
-                global_end - current_end
-            })
+            .checked_sub(global_end.saturating_sub(current_end))
             .and_then(|e| e.checked_sub(evicted))
             .ok_or_else(|| msg("causal kv: pointer underflow"))?;
         let local_start = local_end

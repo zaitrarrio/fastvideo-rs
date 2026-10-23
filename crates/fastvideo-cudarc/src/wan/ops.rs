@@ -811,7 +811,9 @@ pub fn abs_diff_sums_device(a: &CudaSlice<f32>, b: &CudaSlice<f32>) -> Result<(f
 /// fixed-order second pass of the per-block reductions above.
 pub fn sum_pairs_in_order(pairs: &[f64]) -> (f64, f64) {
     pairs
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .fold((0.0, 0.0), |(x, y), p| (x + p[0], y + p[1]))
 }
 
@@ -1689,7 +1691,7 @@ pub mod host {
     /// Value-first SwiGLU over a packed `[rows, 2*half]` last dim.
     pub fn swiglu_value_first(x: &[f32], half: usize) -> Vec<f32> {
         let width = 2 * half;
-        debug_assert!(half > 0 && x.len() % width == 0);
+        debug_assert!(half > 0 && x.len().is_multiple_of(width));
         let n = x.len() / 2;
         let mut out = vec![0.0; n];
         if n >= PAR_MIN {
@@ -1710,6 +1712,8 @@ pub mod host {
 
     /// erf to double precision (W. J. Cody's rational approximations), since
     /// std has none and the host path is the reference the kernel is held to.
+    // Cody's coefficients digit for digit, so they can be checked against the paper.
+    #[allow(clippy::excessive_precision)]
     pub fn erf(x: f64) -> f64 {
         let ax = x.abs();
         let r = if ax < 0.5 {
@@ -4594,7 +4598,7 @@ pub fn rope_real_host(
 
 /// Per-row top-k. Ties keep the earlier expert. `norm` L1-normalizes the k values.
 pub fn topk_last_host(scores: &[f32], width: usize, k: usize, norm: bool) -> (Vec<u32>, Vec<f32>) {
-    assert!(width > 0 && k > 0 && k <= width && scores.len() % width == 0);
+    assert!(width > 0 && k > 0 && k <= width && scores.len().is_multiple_of(width));
     let rows = scores.len() / width;
     let mut idx = vec![0u32; rows * k];
     let mut val = vec![0f32; rows * k];

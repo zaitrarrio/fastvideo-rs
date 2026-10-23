@@ -1871,7 +1871,7 @@ fn retake_follows_the_source() {
         &with_source(&r, source_video(3840, 2160, 24.0, 97, true)),
     )
     .unwrap();
-    assert!(u64::from(j.width * j.height) <= EDIT_MAX_PIXELS && j.width % 32 == 0);
+    assert!(u64::from(j.width * j.height) <= EDIT_MAX_PIXELS && j.width.is_multiple_of(32));
     let mut small = r.clone();
     small.canvas = CanvasSpec::Exact {
         width: 1920,

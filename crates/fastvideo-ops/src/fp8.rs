@@ -22,7 +22,7 @@ const E4M3_SAT: u32 = 0x7E;
 /// Round-to-nearest-even `f32` → E4M3 bits, saturating.
 pub fn f32_to_e4m3(x: f32) -> u8 {
     let u = x.to_bits();
-    let sign = ((u >> 24) & 0x80) as u32;
+    let sign = (u >> 24) & 0x80;
     let mag = u & 0x7FFF_FFFF;
 
     // NaN, infinity and anything at or past 448 all saturate.
@@ -96,6 +96,8 @@ fn exp2i(n: i32) -> f32 {
 /// Returns `(scale, inv_scale)` where the quantized value is `x * inv_scale` and
 /// dequantization is `q * scale`. An all-zero tensor yields a scale of 1 rather
 /// than 0, so a dead channel cannot produce NaN downstream.
+// `!(amax > 0.0)` is deliberate: it also catches NaN, which `amax <= 0.0` lets through.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn scale_for_amax(amax: f32) -> (f32, f32) {
     if !(amax > 0.0) || !amax.is_finite() {
         return (1.0, 1.0);

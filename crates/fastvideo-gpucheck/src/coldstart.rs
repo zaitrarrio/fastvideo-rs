@@ -2,6 +2,7 @@
 //! page-cache eviction for cold measurements, and the offline pre-quantizer
 //! of the resident FP8 text encoders.
 
+#[cfg(feature = "cuda")]
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -108,6 +109,7 @@ pub fn evict(report: &mut Report, paths: &[PathBuf]) -> StageResult<()> {
     Ok(())
 }
 
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 pub fn sha256_file(path: &Path) -> std::io::Result<String> {
     let mut f = std::fs::File::open(path)?;
     let mut h = Sha256::new();
@@ -123,6 +125,7 @@ pub fn sha256_file(path: &Path) -> std::io::Result<String> {
 }
 
 /// Digest over the captured codes and scales, in load order.
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 fn capture_digest(c: &fastvideo_cudarc::wan::nn::Fp8Capture) -> String {
     let mut h = Sha256::new();
     for (prefix, codes, scales) in c {
@@ -137,6 +140,7 @@ fn capture_digest(c: &fastvideo_cudarc::wan::nn::Fp8Capture) -> String {
 }
 
 /// Which decoder, and how many layers the resident form keeps.
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 fn family(name: &str) -> anyhow::Result<(fastvideo_cudarc::llm::DecoderConfig, usize)> {
     use fastvideo_cudarc::llm::DecoderConfig;
     Ok(match name {

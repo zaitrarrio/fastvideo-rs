@@ -1216,6 +1216,7 @@ impl WanPipeline {
         self.denoise_inner(cfg, latents, encoder_hs, None, None, None, observer)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn denoise_inner(
         &self,
         cfg: &GenerateConfig,
@@ -2362,7 +2363,7 @@ fn unipc_denoise(
 
 fn tokenize_prompt(path: &str, text: &str, max_len: usize) -> Result<(Vec<u32>, usize)> {
     fastvideo_models::tokenize_prompt(path, text, max_len)
-        .map_err(|e| PipelineError::Message(format!("{e}")))
+        .map_err(|e| PipelineError::Message(e.to_string()))
 }
 
 fn load_rgb_frame(path: &str, height: usize, width: usize) -> Result<CudaTensor> {
@@ -2447,7 +2448,7 @@ pub fn frames_to_rgb8(frames: &CudaTensor) -> Result<Vec<u8>> {
     let host = frames.host_cow()?;
     let plane = h * w;
     let mut rgb = vec![0u8; f * plane * 3];
-    for (i, px) in rgb.chunks_exact_mut(3).enumerate() {
+    for (i, px) in rgb.as_chunks_mut::<3>().0.iter_mut().enumerate() {
         let (fi, p) = (i / plane, i % plane);
         for (ch, out) in px.iter_mut().enumerate() {
             let v = host[(fi * 3 + ch) * plane + p];
@@ -2464,7 +2465,7 @@ pub use super::writer::{active_writers, PngMode, VideoWriter, WriterStats};
 /// rather than wrap: a decoder overshooting by 1% must not become a click.
 pub fn write_wav(path: &Path, samples: &[f32], channels: u16, sample_rate: u32) -> Result<()> {
     use std::io::Write as _;
-    if channels == 0 || samples.len() % usize::from(channels) != 0 {
+    if channels == 0 || !samples.len().is_multiple_of(usize::from(channels)) {
         return Err(PipelineError::Message(format!(
             "{} samples is not whole {channels}-channel frames",
             samples.len()
@@ -2502,7 +2503,7 @@ pub fn write_wav(path: &Path, samples: &[f32], channels: u16, sample_rate: u32) 
 
 /// `[channels, samples]` planar (what the audio decoders emit) → interleaved.
 pub fn interleave_audio(planar: &[f32], channels: usize) -> Result<Vec<f32>> {
-    if channels == 0 || planar.len() % channels != 0 {
+    if channels == 0 || !planar.len().is_multiple_of(channels) {
         return Err(PipelineError::Message(format!(
             "{} samples over {channels} channels",
             planar.len()
@@ -2620,7 +2621,7 @@ mod frame_output_tests {
         let rgb = frames_to_rgb8(&frames).unwrap();
         assert_eq!(rgb.len(), f * h * w * 3);
         let plane = h * w;
-        for (i, px) in rgb.chunks_exact(3).enumerate() {
+        for (i, px) in rgb.as_chunks::<3>().0.iter().enumerate() {
             let (fi, p) = (i / plane, i % plane);
             for ch in 0..3 {
                 let v = vals[(fi * 3 + ch) * plane + p];
@@ -2684,7 +2685,9 @@ mod frame_output_tests {
             "data bytes"
         );
         let pcm: Vec<i16> = b[44..]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| i16::from_le_bytes([c[0], c[1]]))
             .collect();
         assert_eq!(

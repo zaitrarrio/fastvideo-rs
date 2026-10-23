@@ -67,6 +67,8 @@ impl ModelVersion {
     }
 }
 
+// clap subcommand: one value per process, so the variant sizes do not matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(clap::Subcommand, Debug)]
 pub enum Stage {
     /// Print the configuration the port targets.
@@ -894,12 +896,16 @@ fn load_oracle(path: &Path, prefixes: &[&str]) -> anyhow::Result<HashMap<String,
         let data: Vec<f32> = match view.dtype() {
             Dtype::F32 => view
                 .data()
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| f32::from_le_bytes(word(c)))
                 .collect(),
             Dtype::I32 => view
                 .data()
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| i32::from_le_bytes(word(c)) as f32)
                 .collect(),
             other => anyhow::bail!(
@@ -2055,6 +2061,7 @@ fn vae_bench(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn gen(
     report: &mut Report,
     model_version: ModelVersion,
@@ -2635,10 +2642,15 @@ pub(crate) fn sink_vs_pngs(
             let body = bytes.get(44..).unwrap_or_default();
             let quantized = |v: f32| (v.clamp(-1.0, 1.0) * 32767.0).round() as i16;
             let same = body.len() == pcm.len() * 2
-                && body.chunks_exact(2).zip(pcm.iter()).all(|(b, &v)| {
-                    let w = i16::from_le_bytes([b[0], b[1]]);
-                    (i32::from(w) - i32::from(quantized(v))).abs() <= 1
-                });
+                && body
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .zip(pcm.iter())
+                    .all(|(b, &v)| {
+                        let w = i16::from_le_bytes([b[0], b[1]]);
+                        (i32::from(w) - i32::from(quantized(v))).abs() <= 1
+                    });
             let header_rate = bytes
                 .get(24..28)
                 .map(|r| u32::from_le_bytes([r[0], r[1], r[2], r[3]]));

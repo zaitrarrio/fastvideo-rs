@@ -59,7 +59,9 @@ pub fn load(path: &Path) -> Result<HashMap<String, F32Tensor>> {
         }
         let data = view
             .data()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         out.insert(

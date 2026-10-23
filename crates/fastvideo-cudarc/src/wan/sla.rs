@@ -102,6 +102,7 @@ pub fn sla_attention(
 }
 
 /// Host SLA without `proj_l` (raw linear branch added to sparse).
+#[allow(clippy::too_many_arguments)]
 pub fn sla_attention_host(
     q: &[f32],
     k: &[f32],
@@ -115,6 +116,7 @@ pub fn sla_attention_host(
     sla_host_inner(q, k, v, b, h, s, d, cfg, None)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn sla_host_branches(
     q: &[f32],
     k: &[f32],
@@ -144,6 +146,7 @@ fn sla_host_branches(
     Ok((o_s_all, o_l_all))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn sla_host_inner(
     q: &[f32],
     k: &[f32],
@@ -205,8 +208,8 @@ fn one_head_branches(
     cfg: &SlaConfig,
 ) -> Result<(Vec<f32>, Vec<f32>)> {
     let scale = 1.0 / (d as f32).sqrt();
-    let nq = (s + cfg.blk_q - 1) / cfg.blk_q;
-    let nk = (s + cfg.blk_k - 1) / cfg.blk_k;
+    let nq = s.div_ceil(cfg.blk_q);
+    let nk = s.div_ceil(cfg.blk_k);
     let topk = ((cfg.topk_ratio * nk as f32).round() as usize).clamp(1, nk);
 
     let mut k_smooth = kh.to_vec();
@@ -318,7 +321,7 @@ fn one_head_branches(
 }
 
 fn mean_pool(x: &[f32], s: usize, d: usize, blk: usize) -> Vec<f32> {
-    let nblocks = (s + blk - 1) / blk;
+    let nblocks = s.div_ceil(blk);
     let mut out = vec![0f32; nblocks * d];
     for bi in 0..nblocks {
         let t0 = bi * blk;

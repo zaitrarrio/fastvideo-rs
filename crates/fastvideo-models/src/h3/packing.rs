@@ -719,7 +719,7 @@ pub fn keyframe_condition_noise_rows(
     use rand::{Rng, SeedableRng};
     use rand_distr::StandardNormal;
     let [pt, ph, pw] = patch;
-    if latent_height % ph != 0 || latent_width % pw != 0 || pt == 0 {
+    if !latent_height.is_multiple_of(ph) || !latent_width.is_multiple_of(pw) || pt == 0 {
         return Err(format!(
             "keyframe noise: {latent_height}x{latent_width} not divisible by patch {patch:?}"
         ));

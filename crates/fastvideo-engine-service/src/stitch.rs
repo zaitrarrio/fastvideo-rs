@@ -192,7 +192,9 @@ impl Stitch {
             }
             out.extend(
                 o.stdout
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .take(want)
                     .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])),
             );

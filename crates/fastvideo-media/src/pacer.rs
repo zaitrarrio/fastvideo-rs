@@ -401,7 +401,7 @@ impl<T: Clone> AvPacer<T> {
     /// frame is rejected.
     pub fn push_audio(&mut self, samples: &[f32]) -> Result<()> {
         let ch = self.cfg.channels as usize;
-        if samples.len() % ch != 0 {
+        if !samples.len().is_multiple_of(ch) {
             return Err(MediaError::invalid(
                 "audio is not a whole number of sample frames",
             ));

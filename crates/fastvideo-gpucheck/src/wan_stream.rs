@@ -328,6 +328,7 @@ fn graph_parity_arm(
     rope: RopePolicy,
     legs: &[(usize, &str)],
 ) -> StageResult<()> {
+    #[allow(clippy::type_complexity)] // a one-off tuple; a named struct would outweigh it
     let run = |graphs: bool| -> anyhow::Result<(Vec<(Vec<u32>, Vec<u32>, f64)>, Option<Value>)> {
         let cfg = RolloutConfig {
             graphs,

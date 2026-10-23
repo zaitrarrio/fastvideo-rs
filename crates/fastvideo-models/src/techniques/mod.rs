@@ -41,10 +41,6 @@ mod tests {
     use super::registry::{h3_spec, ltx2_spec};
     use super::*;
 
-    fn on() -> Schedule<bool> {
-        Schedule::Const(true)
-    }
-
     #[test]
     fn two_attention_backends_are_a_conflict() {
         let items: Vec<Box<dyn Technique>> =

@@ -168,7 +168,7 @@ pub fn run(
     );
     for (k, d) in &diffs {
         report.check(
-            &format!("hidden_{k}"),
+            format!("hidden_{k}"),
             d.within(max_rel),
             d.to_json(),
             json!({"rel_l2": max_rel}),
