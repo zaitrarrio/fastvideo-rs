@@ -1,6 +1,8 @@
 # fastvideo-rs: architecture and implementation review, with a proposal
 
-Date: 2026-10-22. Scope: every element of the tree at `fb1bce3` (the
+Date: 2026-10-22, revised 2026-10-23 (§7.2, §7.4, §7.5 and §7.11: the
+registry's core formats live in this repository). Scope: every element of
+the tree at `fb1bce3` (the
 inference crates, the serving stack, the API adapters, deployment and the
 control plane, the scripts, the validation ladder, CI and the docs). Method:
 a read-only survey of the sources, five parallel deep dives (one per layer),
@@ -55,8 +57,17 @@ replace the per-family copy-paste in dispatch with one trait, put the ten
 boot scripts into one Rust `fv-boot`, put the provider logic into one Rust
 `fv-deploy` with a `Provider` trait, and put the GPU harness into one Rust
 `fv-lab` that reads checked-in tier, cell and gold-standard data and emits
-the tier table. Script count goes from 240 files to roughly 95; shell from
+the tier table. Script count goes from 240 files to roughly 92; shell from
 about 27k lines to about 8k.
+
+One decision taken after the first version of this review (2026-10-23)
+shapes Workstream A: the public formats that the sibling repository
+`zaitrarrio/model-registry-rs` had specified as its `registry-core` (the
+model naming grammar, `model.toml`, the signed file-and-chunk manifest,
+lineage and signatures) are implemented here, as the `fastvideo-manifest`
+crate, and the registry depends on this repository for them. The runtime is
+the thing that guarantees a published model loads, so it owns the format it
+loads. §7.11 gives the split between the two repositories.
 
 Headline numbers:
 
@@ -172,7 +183,7 @@ cell, a gold number in a doc. Each of those is defined where it is used:
 | `profiles/**/*.toml` (43) | technique switches per recipe, measured numbers in comments | |
 | `control/src/{presets,enums,recipe-trees,r2-trees,weights-sources,volumes}.ts`, `cluster/{catalog.json,worker-configs.ts,image-configs.ts}` | presets, variants, tree lists, generated copies of the TOMLs | |
 | `scripts/serve/variants.sh`, `scripts/gpu/volumes.sh`, `scripts/gcp/families.tsv`, `configs/autoscale.toml` | hand-kept bash and TSV copies of the same lists | kept equal by unit tests, e.g. `serverless-presets.test.ts` |
-| `scripts/gpu/weights-{manifest,r2,revisions,sha256}.tsv`, `verify-weights.sh` | trees, revisions, hashes, verify cells | |
+| `scripts/gpu/weights-{manifest,r2,revisions,sha256}.tsv`, `verify-weights.sh` | trees, revisions, hashes, verify cells (a parallel record of what the registry manifest signs) | |
 | `docker/gpucheck.Dockerfile:494-523`, `docs/serve/images.md` | image variants, each baking one config | |
 
 Consequences: adding a variant means editing six to nine of these; a
@@ -489,12 +500,45 @@ formats.**
 
 ### 7.2 Workstream A: the model family manifest (the keystone)
 
-Introduce `families/<family>.toml` (or one directory per family with
-`manifest.toml`), owned by a new small crate `fastvideo-manifest` (serde
-types, validation, no CUDA) that every other crate and the control plane
-read. Sketch, with the fields drawn from what §6 shows is needed (the numeric
-values are illustrative; the real ones come from `cuda/caps.rs` and the
-profile):
+Introduce the crate `fastvideo-manifest` (serde types, validation, pure:
+no I/O, no CUDA), read by every other crate, the control plane and the
+registry. It has two layers.
+
+**Layer 1, the public formats (owner decision 2026-10-23).** The contracts
+the registry's work order WO-001 pinned move here unchanged in substance and
+become this repository's: the naming grammar (`vendor/model[@rev]` and
+`user/model/variant[@rev]`, variant `distillation:steps:encoder`, `rev` the
+first 12 hex of the manifest digest), `model.toml` v1, the manifest v1
+(files, BLAKE3 per file, content-defined chunks, chunking parameters, parent
+link, canonical RFC 8785 digest with integers only, domain-separated Ed25519
+signatures excluded from the digest), `verify_chain` over a lineage, and
+the JSON Schema export with a CI drift check. Modules `name`, `model_toml`,
+`manifest`, `lineage`, `sig`; fixtures and property tests as WO-001 lists
+them (every valid name round-trips, at least 25 invalid names each naming
+its error kind, manifests whose digest is invariant to key order and
+whitespace, tampered and unknown-key signatures, broken links, variant
+mismatch, licence violation). These formats are public: once a model is
+published, changing them breaks every published model, so they are the one
+part of this repository treated as a pinned contract, and the registry's
+ADR-0001..0003 become this repository's ADRs.
+
+Two widenings are made before the first model is published, because a
+served model here varies on more than distillation, steps and text-encoder
+precision (§6): the name grammar stays as the human-facing identifier, and
+`model.toml` gains a `[variant]` table carrying the rest (attention route,
+DiT quantization, decoder, adapters, stage count, resolution tiers), a
+`[runtime]` pointer to the recipe and technique profile, and a `[caps]`
+table with the ranges the engine negotiates against (frame grid, canvas
+multiples and area, allowed fps, reference limits, honoured knobs).
+`runtime.pipeline` is the family id of layer 2.
+
+**Layer 2, the runtime family manifest.** `families/<family>.toml`, the
+superset the engine, the serve configs and the deployment tooling are
+generated from; a published model's `model.toml` plus `.gia/manifest.json`
+is the per-clone projection of one variant of it, and the crate checks that
+a `model.toml` is consistent with the family manifest it names. Sketch, with
+the fields drawn from what §6 shows is needed (the numeric values are
+illustrative; the real ones come from `cuda/caps.rs` and the profile):
 
 ```toml
 [family]
@@ -505,6 +549,7 @@ port_doc = "docs/ports/h3.md"
 
 [[variants]]
 id = "fasth3-4step-vsa"            # the one id everything else derives from
+registry = "minimax/h3/dmd:4:bf16" # the layer-1 name this variant publishes as (rev = manifest digest)
 tier = "turbo"                      # draft | turbo | max
 recipe = "4step-vsa"
 profile = "h3/fasth3_4step_vsa"
@@ -535,14 +580,23 @@ generated file cannot drift):
 | `docs/serve/images.md` table, `docs/scope.md` preset tables | generated sections |
 | per-surface limit constants in the four adapter crates | `ParamSpec` derived from the manifest (§7.6) |
 
-The four weights TSVs stay as the tree-level record (dest, Hub id,
-revision, sha256), because they are already data; the manifest references
-trees by the TSV's dest name and CI checks that every referenced tree
-exists in `weights-r2.tsv`.
+The four weights TSVs (dest, Hub id, revision, sha256; the R2 index) are
+retired in favour of layer 1: a tree is a published manifest (BLAKE3 per
+file, chunks, signed, with its Hub revision as the vendor lineage root), and
+the family manifest references trees by registry name and `@rev`. CI checks
+that every referenced tree resolves to a manifest the registry holds, which
+replaces `verify-weights.sh` and the add-only copy-and-verify method of
+`docs/gaps/2026-09-27-volume-sync.md` with `hydrate` plus `gia verify`.
+Until the registry holds every tree, the TSVs are generated from the
+manifests, not edited.
 
-Effort: about 2 weeks for the crate, the engine projection and the serve
-TOML simplification; about 1 week for the control-plane generation. This
-is the prerequisite for everything below and should land first.
+Effort: about 1 week for layer 1 (the formats, fixtures and property tests
+WO-001 already specifies, plus the two widenings and their ADRs), about 2
+weeks for layer 2, the engine projection and the serve TOML simplification,
+about 1 week for the control-plane generation. This is the prerequisite
+for everything below and for the registry's WO-002 onward, so it lands
+first; layer 1 ships on its own as soon as it is green, so the registry can
+start against it.
 
 ### 7.3 Workstream B: inference core structure
 
@@ -604,10 +658,14 @@ proves works, making the seven variant images unnecessary).
 **C2. `fv-boot`**, a Rust binary in the image beside `fv-serve`
 (`crates/fastvideo-deploy`): the one boot sequence. Driver check, config
 materialization (`FV_WORKER_TOML_B64` / `FV_WORKER_CONFIG` / baked), the
-weights plan (volume / r2 / hub / none, via the plan API or an embedded
-port of `r2-fetch.py`), sidecar start, tunnel and phase reports, watchdog,
-`exec fv-serve`. Testable with a fake provider and a fake R2
-(`scripts/gpu/tests/fake_r2.py` already exists). Deletes `fv-entry.sh`,
+weights plan (volume / registry / hub / none: the registry source is the
+registry's `hydrate` crate, content-defined chunks downloaded in parallel
+and resumably, so a pod fetches only the chunks it lacks and a fork that
+changed one file costs one file; `r2-fetch.py` stays behind the `r2` source
+until `hydrate` has replaced every caller), sidecar start, tunnel and phase
+reports, watchdog, `exec fv-serve`. Testable with a fake provider and a fake
+chunk source (`scripts/gpu/tests/fake_r2.py` already exists for the R2
+half). Deletes `fv-entry.sh`,
 `fv-upsampler.sh`, the three `*_BOOT` strings, `PROVIDER_BOOT`,
 `BREV_BOOTSTRAP`, `SLS_BOOT`/`SLS_R2_SH`/`SLS_HUB_SH`, `DRIVER_CHECK_SH`,
 `UPSAMPLER_*_SH`, most of `scripts/gcp/startup.sh`, the `vm_boot` of
@@ -660,12 +718,16 @@ owns `gate`, `compare-clips`, `compare-dumps`, `lpips`, `benchmark.rs`,
 `quality.rs`, `serve.rs`, `coldstart.rs`) with subcommands:
 `pod {up,status,fetch,down,reap}` (on the `Provider` trait of C3),
 `run <family|cells>` (the on-pod cell runner replacing `runpod-matrix.sh`,
-`remote.sh`, every `*-pod.sh`), `weights {plan,fetch,verify,publish,fill,
-copy}` (replacing the `fetch-*`, `r2-*`, `rebuild-volume`, `verify-*`
-scripts; `r2-weights.py`/`r2-fetch.py` stay Python until C2 embeds them),
-`report {summary,table,tiers}` (replacing every `*-summary.py`,
-`hd_report.py`, `sol_bench_table.py`, `timings.sh`), and the existing
-`gate`/`oracle` moved or aliased.
+`remote.sh`, every `*-pod.sh`), `report {summary,table,tiers}` (replacing
+every `*-summary.py`, `hd_report.py`, `sol_bench_table.py`, `timings.sh`),
+and the existing `gate`/`oracle` moved or aliased. There is no `weights`
+subcommand: publishing, verifying and fetching trees is the registry's
+`chunkstore`, `hydrate` and `gia` CLI (`gia publish`, `gia verify`,
+`gia clone`), and `fv-lab` calls `hydrate` to stage a cell's trees. The
+`fetch-*`, `r2-*`, `rebuild-volume` and `verify-*` scripts collapse into
+those; `r2-weights.py` and `r2-fetch.py` stay until then. `fv-lab` is also
+the registry's verification runner (its WO-005 `verify-runner`): a published
+model becomes Verified when `fv-lab run gold` passes on it.
 
 **D2. Data read by `fv-lab`, checked in:**
 - `lab/tiers.toml`: per tier and family: GPU class, offer query, `$/hr`
@@ -676,7 +738,8 @@ scripts; `r2-weights.py`/`r2-fetch.py` stay Python until C2 embeds them),
 - `lab/gold/<variant>.toml`: **the gold standard per served model**:
 
 ```toml
-[id]           variant = "fasth3-4step-vsa"  profile = "h3/fasth3_4step_vsa"  serve_config = "configs/serve/runpod-family-h3.toml"
+[id]           variant = "fasth3-4step-vsa"  registry = "minimax/h3/dmd:4:bf16@0123456789ab"
+               profile = "h3/fasth3_4step_vsa"  serve_config = "configs/serve/runpod-family-h3.toml"
 [reference]    prompts = "scripts/gpu/prompts-eval.json"  seeds = [1024]  size = [832, 480]  frames = 124  steps = 4
                upstream = { image = "fastvideo-rs-upstream-fastvideo", target = "fasth3-4step-vsa", rev = "e90be59" }
 [gpu]          type = "RTX PRO 6000 Blackwell"  sm = 120  price_usd_hr = 2.09
@@ -691,7 +754,12 @@ scripts; `r2-weights.py`/`r2-fetch.py` stay Python until C2 embeds them),
 
 The relative gate policy and the oracle method are kept exactly; what is
 new is the absolute bound per model, the cost bound, cold start as a gated
-number, and the `last_validated` record. The numbers for the first gold
+number, the `last_validated` record, and the key: a gold file names the
+registry name and `@rev` it certifies, so a Verified badge on the registry
+points at one gold run of one manifest digest. The run record `fv-lab`
+writes is a superset of the registry's benchmark record (`gpu`,
+`clipSeconds`, `wallSeconds`, `vramPeakBytes`, `samples[]`), so the
+registry stores it unchanged. The numbers for the first gold
 files come from `docs/perf/raw-inference.md`, `docs/perf/sol-bench.md`,
 `docs/perf/h3-nvfp4-tier-options.md`, `docs/oracle.md` and the profile
 comments, which then stop carrying numbers.
@@ -789,7 +857,7 @@ manifest-derived caps, but (1) and (4) can start immediately.
 | Group | Today | After A-F | Where it goes |
 |---|---:|---:|---|
 | Provider ops (Runpod, Vast, CloudRift, GCP, serverless, release, lib) | 44 | ~8 | `fv-deploy` (C3), `fv-boot` (C2); wrangler wrappers and `release.sh` thin wrappers stay |
-| Weights (fetch, r2, verify, rebuild, TSVs) | 30 | ~9 | `fv-lab weights` (D1); the 4 TSVs and `r2-weights.py`/`r2-fetch.py` stay |
+| Weights (fetch, r2, verify, rebuild, TSVs) | 30 | ~6 | the registry's `chunkstore`, `hydrate` and `gia` CLI on `fastvideo-manifest` (§7.2 layer 1, §7.11); the 4 TSVs become generated or retired; `r2-weights.py`/`r2-fetch.py` stay until `hydrate` replaces them |
 | Validation tiers (validate, remote, matrix, family-pool, prompts, fixtures) | 17 | ~9 | `fv-lab pod/run` (D1); prompts, fixtures, `gate-policy.toml` stay as data |
 | Port one-offs (`*-pod.sh`, `*-validate.sh`, `*-summary.py`, `*-plan.py`) | 24 | 0 | cells in `lab/cells/*.toml` + `fv-lab report` |
 | Oracle / parity (Python reference side) | 38 | ~25 | stays Python; eight oracle generators behind one `oracle_dump.py --target`, four `fetch-*.py` folded into `fetch-hub-tree.py` |
@@ -797,14 +865,14 @@ manifest-derived caps, but (1) and (4) can start immediately.
 | E2E serve (clients, pods) | 24 | ~16 | client-side Python/JS stays; the pod scripts go to `fv-deploy`/`fv-lab` |
 | Build / CI / dev | 19 | ~16 | stays (GitHub-runner and Docker specific) |
 | UI, tests, misc | 17 | ~10 | `scripts/ui` retired with the Vast ladder; shell tests move next to the Rust tools |
-| **Total files** | **240** | **~95** (3 new Rust binaries, ~12 new TOML data files) | shell lines ~27k to ~8k |
+| **Total files** | **240** | **~92** (3 new Rust binaries, 1 formats crate, ~12 new TOML data files) | shell lines ~27k to ~8k |
 
 ### 7.9 Sequencing
 
 | Phase | Weeks (one engineer, excluding GPU validation wall time) | Delivers |
 |---|---|---|
 | 0 | 1 | F: deletions, doc fixes, fmt/clippy gates, experiments folder |
-| 1 | 3 | A: manifest crate, engine catalog and serve TOML as projections, control-plane generation |
+| 1 | 4 | A: `fastvideo-manifest` layer 1 (the registry's core formats, WO-001, with the two widenings; ships on its own first) and layer 2, the engine catalog and serve TOML as projections, control-plane generation |
 | 2 | 3 | B1-B3: runtime extraction, `VideoFamily` trait, settings layer (byte-identical cells after each) |
 | 3 | 4 | C1-C2: deployment manifest, `fv-boot`; first live GCP and Brev boots through it |
 | 4 | 5 | C3: `fv-deploy` with Runpod, Vast, GCP; fv-control on the shared `Launch` schema |
@@ -814,7 +882,8 @@ manifest-derived caps, but (1) and (4) can start immediately.
 
 Phases 2, 4 and 6 are independent of each other once phase 1 has landed,
 so with the repository's usual parallel agents the calendar is closer to
-12 weeks than 30. Each phase has a measurable exit: phase 1, zero
+12 weeks than 30. Each phase has a measurable exit: phase 1, layer 1 green
+with its fixtures and the registry building against it, then zero
 hand-written catalog rows and zero `[aliases]` blocks; phase 2, byte
 identity on the `techniques` cells and `no_host_fallback` green; phase 3,
 one boot script in the tree; phase 4, one `fv-deploy up` per provider with
@@ -836,15 +905,45 @@ entry.
   `control/test/unit/*` and the mock providers.
 - **`r2-fetch.py` is embedded verbatim by fv-control**; keep it Python
   until `fv-boot` has replaced every caller, then port.
+- **The public formats are pinned once a model is published.** Every
+  widening of the grammar, `model.toml` or the manifest happens before the
+  first publish, with the ADR and fixtures of §7.2 layer 1; after that a
+  change is a versioned schema, never an edit.
 - **Owner decisions needed**: Vast serving (keep or drop), Runpod LB mode
   (keep or drop `multiworker.rs`), single image with boot-time config
   versus seven variant images, and whether GMI/Brev move to Rust or stay
   TS behind the shared schema.
 
+### 7.11 Relationship to model-registry-rs
+
+`zaitrarrio/model-registry-rs` (the Gia Labs Registry: clone a vetted
+video model and run it as weights plus one binary plus one config, with
+signed lineage and chunked hydration) is a separate product and stays a
+separate repository. Its decision log already names fastvideo-rs as the
+runtime. The owner's decision of 2026-10-23 splits the work as follows.
+
+| Piece | Owner | Why |
+|---|---|---|
+| Core formats: naming grammar, `model.toml`, manifest, lineage, signatures, schema export (the registry's WO-001) | this repository, crate `fastvideo-manifest` (§7.2 layer 1); the registry depends on it | the runtime is the first consumer and the thing that guarantees a published model loads: one schema, one place |
+| Family manifest, engine catalog, serve configs, control presets, parameter schemas as projections (§7.2 layer 2, §7.6) | this repository | runtime concerns |
+| Chunk store and hydrate (WO-002) | registry repository, as library crates consumed by `fv-boot` and `fv-lab` | the storage format belongs to the registry; the runtime fetches, it does not store |
+| Registry API, `gia` CLI, namespaces and tokens, licence gate, verification state machine, model pages (WO-003, 004, 005) | registry repository | product, not runtime |
+| Benchmarks and the evidence behind "Verified" | `fv-lab run gold` here, written in the registry's benchmark record format; the registry stores and displays | one runner, measured by the runtime, never by the uploader |
+| Reference GPUs and quality bounds for Verified | the gold files here (RTX PRO 6000, H100, B200; the relative gate policy plus the absolute LPIPS and PSNR bounds of `docs/oracle.md`) | answers the registry's WO-005 open questions |
+
+Consequences recorded in both decision logs: `fastvideo-manifest` layer 1
+ships first and alone; the registry's WO-001 becomes "scaffold the workspace
+against `fastvideo-manifest` and keep its fixtures as the registry's
+acceptance tests"; `fv-lab` is the verification runner; `hydrate` is the
+pod weights fetch; the registry's "existing CDC downloader" is not in this
+repository (the fetcher here is parallel range reads), so WO-002 chooses
+its chunking without an inherited format.
+
 ## 8. Recommendation
 
-Do phase 0 and phase 1 now. Phase 1 (the manifest) is the one change that
-makes every later workstream smaller: the engine catalog, the serve
+Do phase 0 and phase 1 now. Phase 1 (the manifest, with the registry's
+core formats as its first layer) is the one change that makes every later
+workstream smaller and unblocks the registry: the engine catalog, the serve
 configs, the control presets, the deployment presets, the parameter
 schemas and the gold standards all become projections of it, and the
 answer to "what does it take to deploy model X" becomes "its manifest
