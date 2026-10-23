@@ -47,10 +47,11 @@ No explicit `cudaDeviceSynchronize` (PNG download is a sync).
 
 ### Upstream `median_seconds`
 
-`scripts/gpu/upstream_bench.py` times `VideoGenerator.generate_video(...)` with
-`save_video=True`, `torch.cuda.synchronize()` before/after. Load is excluded.
-It does one warmup, then `FV_UPSTREAM_RUNS` (default 2) timed runs, and reports
-the median.
+The upstream bench (the Vast-era bench script, retired 2026-10-23; the
+Runpod upstream cells in `scripts/gpu/upstream/bench_*.py` time the same way)
+timed `VideoGenerator.generate_video(...)` with `save_video=True`,
+`torch.cuda.synchronize()` before/after. Load is excluded. It did one warmup,
+then `FV_UPSTREAM_RUNS` (default 2) timed runs, and reported the median.
 
 `generate_video` is the same user-visible work: text encode → denoise → VAE
 decode → save. `num_frames=1` for `--workload t2i`.

@@ -245,7 +245,7 @@ cleanup() {
       env|bootstrap|upload) bad_host_record "$CURRENT_MACHINE" "$LAST_STAGE rc=$rc" ;;
     esac
   fi
-  # FV_NO_ARTIFACTS=1 (build-remote.sh): the box has no validation output dir.
+  # FV_NO_ARTIFACTS=1: the box has no validation output dir to pull.
   if [[ -n "$HOST" && -n "$RUN_DIR" && "${FV_NO_ARTIFACTS:-0}" != 1 ]]; then
     log "pulling artifacts → $RUN_DIR"
     fv_timeout 300 rsync -az -e "ssh -i $FV_SSH_KEY -p $PORT ${FV_SSH_OPTS[*]}" "root@$HOST:$OUTR/" "$RUN_DIR/remote/" \
@@ -664,7 +664,7 @@ cmd_run() {
       [[ -x $FV_REMOTE_DIR/target/release/hf-fetch-model ]] && install -m 755 $FV_REMOTE_DIR/target/release/hf-fetch-model /usr/local/bin/hf-fetch-model
       command -v hf-fm"
   elif ! fv_ssh "$HOST" "$PORT" "command -v hf-fm >/dev/null"; then
-    die "hf-fm missing on the box and not in $DIST — rebuild with build-remote or push a runtime image that bakes hf-fetch-model"
+    die "hf-fm missing on the box and not in $DIST — run scripts/gpu/dist-ci.sh or push a runtime image that bakes hf-fetch-model"
   fi
   # CPU-path references are cached per ref key (scripts/gpu/lib.sh fv_ref_key):
   # a hit uploads them and skips that CPU-reference stage entirely.

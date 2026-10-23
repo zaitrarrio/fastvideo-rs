@@ -1,6 +1,9 @@
 # ADR-0002: Real GPU inference on Vast CUDA hardware
 
-- Status: Accepted (amended 2026-09-10; cudarc-primary)
+- Status: Accepted (amended 2026-09-10; cudarc-primary). Superseded in
+  practice 2026-10-23: GPU work runs on Runpod (`task rtx6000`,
+  `scripts/gpu/runpod-http.sh`) and compiles on the shared build pod
+  (docs/dev/build-pod.md); the Vast-era helper scripts are gone.
 - Date: 2026-09-09
 - Decision-id: FVID-2026-09-09-vast-gpu
 
@@ -26,13 +29,13 @@ The account already has Vast.ai GPU capacity. A running RTX 4090
 ## Consequences
 
 - Default rentals use the **slim** GHCR image (CUDA runtime libs + `fv-gpucheck`,
-  no PyTorch). CUDA toolkit (`nvcc`) is only needed when compiling on a box;
-  then `scripts/vast-setup-cuda.sh` still applies on a pytorch *runtime* image.
+  no PyTorch). Nothing compiles on a GPU box: CI builds the binary and the
+  shared build pod (docs/dev/build-pod.md) is the fallback.
 - Tiers that need Python+torch (oracle, compare, taehv, H3/LTX-2 reference
   stages) rent images **FROM `vastai/pytorch`** (`docker/vast-pytorch.Dockerfile`),
   selected automatically by `validate.sh` (`VAST_IMAGE_FLAVOR=auto`).
-- Scripts (`vast-generate.sh`, `docker-build-cuda.sh`, default bench backends)
-  target cudarc.
+- The GPU drivers (`scripts/gpu/runpod-http.sh`, `scripts/gpu/validate.sh`)
+  and the default bench backends target cudarc.
 - Weights live on the instance disk, not in this git repo.
 
 Verified (historical): tiny Candle CUDA generate (`--dtype f32`) wrote PNG

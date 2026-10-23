@@ -54,10 +54,6 @@ tasks:
     desc: Fetch the CI-built release binary for the current sources (no GPU, no rental) — the default way to get a dist
     cmds: ['bash scripts/gpu/dist-ci.sh']
 
-  build:remote:
-    desc: 'FALLBACK ONLY: build on a rented box when CI is unavailable. Compiling needs no GPU — prefer dist:ci'
-    cmds: ['bash scripts/gpu/build-remote.sh']
-
   image:
     desc: Build the CUDA runtime image (published to GHCR by CI)
     deps: [docker:up]

@@ -236,9 +236,10 @@ Whether a container that exits leaves the rental `Active` and billed is
 - **Pin digests:** `cloudrift-worker.sh up` refuses a tag, and the other
   commands warn.
 - The build pod stays on Runpod (CLAUDE.md). CloudRift only runs what CI
-  published. `scripts/gpu/build-remote.sh`-style rsync of a fresh binary
-  works over the gpucheck container's sshd (`cloudrift.sh launch`, then
-  ssh to `root@<host>:<port>`), as on Runpod.
+  published. An rsync of a fresh binary built on the build pod
+  (`scripts/dev/build-pod.sh`, docs/dev/build-pod.md) works over the
+  gpucheck container's sshd (`cloudrift.sh launch`, then ssh to
+  `root@<host>:<port>`), as on Runpod.
 - `fv-gpucheck`'s runtime image needs a CUDA 13.4 driver (≥ 580). Which
   driver CloudRift hosts run is **UNVERIFIED**. The smoke writes
   `nvidia-smi.txt` first, so it shows the version.

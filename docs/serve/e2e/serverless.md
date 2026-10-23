@@ -72,8 +72,8 @@ here, so a not-cached number is still the older 458 s one.
 
 1. **Weights links (fixed).** The volume's HF-cache trees link absolutely
    into `/workspace/weights` (where pods mount the volume); serverless
-   workers mount it at `/runpod-volume`. `scripts/gpu/serverless-worker.sh`
-   linked the path, `fv-serve` did not. Now `fv-serve` links
+   workers mount it at `/runpod-volume`. The WP-19 serverless worker script
+   (since retired, 2026-10-23) linked the path, `fv-serve` did not. Now `fv-serve` links
    `/workspace/weights` → `$FV_WEIGHTS` at startup when that path is free
    (`deploy::link_pod_weights`, `4c8c773`), and the queue template's
    entrypoint does the same for older images. The queue runs above used the
