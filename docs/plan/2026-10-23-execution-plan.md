@@ -1,0 +1,129 @@
+# Execution plan for the architecture proposal
+
+Date: 2026-10-23. Source: `docs/gaps/2026-10-22-architecture-review.md` §7
+(revised 2026-10-23 for the registry split, §7.11) and the owner's
+instruction to plan and begin execution. This file is the live plan: the
+status table is updated by every PR that completes a work package, and the
+execution log at the end records what ran where and what it cost.
+
+## 1. Operating rules
+
+- **Where code compiles and tests run.** Never in an agent's container
+  (CLAUDE.md "Builds"): on a CPU build pod on the `fv-build` network volume
+  (`pxy4hlsnwq`, EU-RO-1), driven by `scripts/dev/build-pod.sh run <agent>
+  -- <cmd>` with each agent's own worktree and `CARGO_TARGET_DIR`. The
+  coordinating session provisions the pod (fv-control when a token is
+  available, else directly on the Runpod REST API with the same payload
+  `control/src/buildpods.ts` builds: base image pin, `build-pod-server.py`
+  from main, a session token, idle stop, hard cap and backstop) and records
+  it in the execution log.
+- **GPU pods (owner instruction 2026-10-23).** Only pods that mount the EU
+  weights volume `bz0ofkfx45` (`fv-weights-h3-ltx-500`, EU-RO-1); RTX PRO
+  6000 by default (the gold-standard GPU; the volume's trees cover H3 and
+  LTX). A pod that is not ready (container running, `/ping` or the stage
+  service answering) within **10 minutes** of creation is deleted and a new
+  one acquired; after three cycles, stop and report. Every pod has a
+  wall-clock backstop and is deleted when its cells are done. Stop before
+  the Runpod balance would fall below $8 (CLAUDE.md). Balance at plan time:
+  $22.61, so GPU time in this round is limited to a few hours; the plan
+  defers GPU cells to the points marked **GPU** and runs CPU gates first.
+- **Branches and merges.** One branch and one PR per work package
+  (`claude/<wp-id>-<short>`), opened as a draft by the agent that did the
+  work; the coordinating session reviews, merges main into the branch, waits
+  for CI green on that head, and merges with `--no-ff` (CLAUDE.md "Merging
+  to main"). Sub-agents never merge.
+- **Byte identity first (review §7.1).** Every inference-core structure
+  change carries a `techniques` byte-identity cell per family before merge
+  (**GPU**); kernel changes never ride along with structure changes.
+- **Pinned public formats.** `fastvideo-manifest` layer 1 is the registry's
+  contract; widenings happen before the first publish, with ADRs and
+  fixtures; afterwards a change is a versioned schema.
+- **Owner decisions still open** (review §7.10): Vast serving, Runpod LB
+  mode (`multiworker.rs`), one image with boot-time config versus seven
+  variant images, GMI/Brev in Rust or TS. Work packages that depend on one
+  are marked and wait.
+
+## 2. Work packages
+
+Status: `todo`, `active`, `pr` (draft PR open), `merged`, `blocked`.
+Effort is one engineer-week unless noted; the calendar is shorter with
+parallel agents.
+
+### Phase 0: cleanup and gates (no design risk)
+
+| WP | Scope | Exit criterion | Validation | Depends | Status |
+|---|---|---|---|---|---|
+| F1 | Delete the six `scripts/vast-*.sh`, `scripts/docker-build-cuda.sh`, `scripts/gpu/serverless-worker.sh`, `scripts/gpu/upstream_bench.py`, `scripts/gpu/build-remote.sh`, `scripts/gpu/prompts-flux2.json`, `scripts/gpu/sage/{run,vast-run,setup}.sh`; move the 24 port one-offs and `runpod-matrix.sh` to `scripts/gpu/experiments/`; remove the `h3-*`/`ltx2-*` tiers from `validate.sh` and the README Vast sections; fix `docs/serve/images.md:87`, `scripts/gcp/weights.sh:3-4`, ADR-0001 and `docs/scope.md` (removed backends, `unsafe` scope); add `docs/ports/CHECKLIST.md` | no reference to a deleted path remains (`grep`), `scripts/gpu/lint.sh` passes, README describes the Runpod path | `bash scripts/gpu/lint.sh`; `task check` lint part on the pod | none | active |
+| F2 | One formatting commit; fix the 27 clippy lints; `task check` runs `cargo fmt --check` and `clippy -D warnings` as real gates; `gpucheck-t0` runs them | `cargo fmt --check` and `cargo clippy --workspace --all-targets -D warnings` green | pod | F1 (to avoid churn) | todo |
+| F3a | Serving hardening from review §7.7: per-job deadline in `StepControl`, bounded engine event channel, per-model duration and queue-wait histograms, residency gauges, `otel` feature implemented | tests in `fastvideo-engine-service` and `fastvideo-serve`; `scripts/serve/check.sh` green | pod | none | todo |
+| F3b | Delete `multiworker.rs` and `server.workers_max`; rename `[gateway]` to `[cluster]`, drop `gw_workers` | config round-trip tests | pod | owner decision (Runpod LB mode) | blocked |
+
+### Phase 1: the manifest (Workstream A)
+
+| WP | Scope | Exit criterion | Validation | Depends | Status |
+|---|---|---|---|---|---|
+| A1 | `crates/fastvideo-manifest` layer 1: modules `name`, `model_toml`, `manifest`, `lineage`, `sig`, `schema`; the registry's WO-001 contracts verbatim plus the two widenings (`[variant]`, `[runtime]` recipe/profile, `[caps]`); fixtures under `crates/fastvideo-manifest/fixtures/` (valid and ≥25 invalid names with error kinds, model.toml valid/invalid, manifests with `.digest` siblings, test keys, lineage chains); proptest round-trip; `schemas/*.json` export with a drift test; ADR-0005 naming, ADR-0006 model.toml, ADR-0007 manifest/digest/lineage/signatures | all WO-001 acceptance tests green on CPU; no I/O, no CUDA, `unsafe` forbidden | `cargo test -p fastvideo-manifest` on the pod; clippy -D warnings | none | active |
+| A2 | Layer 2 types (`family`, `variant`, `tiers`) and the first three family files `families/{h3,ltx2,wan}.toml` authored from `engine-service/src/cuda/caps.rs`; an equality test proving `catalog()` equals the manifest projection row for row | equality test green for every catalog row | pod | A1 | todo |
+| A3 | Engine projection: `model_from_config` resolves through the manifest; `validate.rs` and `protocol::ModelCaps` ranges come from it; `[aliases]`, `served_names`, `[protocols]` derived; the 35 serve TOMLs reduced to variant ids and residency; the fake backend serves the manifest; `catalog()` deleted | zero hand-written catalog rows; zero `[aliases]` blocks; `dimension_sweep.rs` and `tests/e2e.rs` green; `/fv/v1/capabilities` unchanged for every config (golden) | pod; serve-compat CI | A2 | todo |
+| A4 | Control-plane and script generation from the families: `control/gen-configs.mjs` emits presets, `enums.ts` ids, `recipe-trees.ts`, `r2-trees.ts`, `weights-sources.ts`, `volumes.ts`; `variants.sh` tables, `volumes.sh`, `gcp/families.tsv`, `autoscale.toml` pools, `verify-weights.sh` cells and `docs/serve/images.md` table generated with `--check` in CI | `gen-configs.mjs --check` green; control unit tests green | pod (node + vitest) | A2 | todo |
+| A5 | Registry hand-off: publish layer 1 (git dependency at a pinned rev); the registry's WO-001 scaffolds against it | registry WO-001 green | registry repo | A1 | todo |
+
+### Phase 2: inference core structure (Workstream B, first half)
+
+| WP | Scope | Exit criterion | Validation | Depends | Status |
+|---|---|---|---|---|---|
+| B1 | Extract the runtime: `cudarc/src/wan/{tensor,device,ops,kernels,nn,weights,offload,quant,log,dump,ledger,envflag,resident,stage_upload,hostmem,writer}` to `cudarc/src/rt/`; `kernels.cu` split by region and concatenated at build time; `gpucheck` and `engine-service` import `rt` | byte-identical SASS and clips | CPU tests + nvrtc gate on the pod; **GPU** `techniques` byte-identity cell for H3, LTX, Wan | F1 | todo |
+| B2 | `VideoFamily` trait, common `Request`/`Conditioning`, `Request::validate(&ModelCaps)`; the 21 registry tables, `resolve()`, `all_registered_ids()` and the 20 `generate_*` functions replaced by the manifest and a static family list; `AvGenerateOptions` reduced to common fields | CLI behaviour unchanged for every preset (golden `--help` and tiny CPU generations); 83 Hub ids resolve | pod; **GPU** one tiny generation per served family | A2, B1 | todo |
+| B3 | Settings layer: the `FASTVIDEO_*` table generated from one declarative list; the 111 direct reads routed through `settings::var`; a `Settings` snapshot passed to `load`; `model_spec` for Wan and the small families; `docs/scope.md` table generated | zero direct `env::var("FASTVIDEO_` outside `settings`; off-identity invariant tests | pod; **GPU** byte-identity cell | B1 | todo |
+
+### Phase 3 and 4: deployment (Workstream C)
+
+| WP | Scope | Exit criterion | Validation | Depends | Status |
+|---|---|---|---|---|---|
+| C1 | `[deploy]` section of the family manifest; presets, variant tables, `families.tsv`, autoscale pools and the Dockerfile variant stages generated from it | `--check` green; one image with boot-time config if the owner decides so | pod | A4 | todo |
+| C2 | `fv-boot` in `fastvideo-deploy`: driver check, config materialization, weights plan (volume / registry `hydrate` / hub / none), sidecar, tunnel and phase reports, watchdog, exec; fake provider and fake chunk source tests; the ten boot variants deleted | one boot script in the tree; fv-control sends env only | pod; **GPU** one pod boot on the EU volume | C1, registry WO-002 for the `hydrate` source (volume and hub sources first) | todo |
+| C3 | `fv-deploy` with the `Provider` trait (from `fastvideo-autoscale`): `runpod::{Pod,Serverless}`, `vast`, `gcp`; shared money guards, backstop, ledger, templates, release promote/rollback; fv-control on the shared `Launch` schema | `fv-deploy up` per provider with the same smoke | pod; **GPU** one `fv-deploy up` on Runpod EU | C2 | todo |
+
+### Phase 5: validation driver and gold standards (Workstream D)
+
+| WP | Scope | Exit criterion | Validation | Depends | Status |
+|---|---|---|---|---|---|
+| D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | todo |
+| D2 | `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments; keyed by registry name and `@rev` | every served variant has a gold file; comments in `profiles/` no longer carry numbers | pod | A2 | todo |
+| D3 | `fv-lab report tiers` and the generated `docs/perf/tiers.md` | table generated from one run set | pod; **GPU** the gold runs | D1, D2 | todo |
+| D4 | CI bridge: gold files parse and resolve; `last_validated.commit` age check; an on-demand `fv-lab run gold --all` workflow | visible per-model validation age in CI | CI | D3 | todo |
+
+### Phase 6: API conformance (Workstream E)
+
+| WP | Scope | Exit criterion | Validation | Depends | Status |
+|---|---|---|---|---|---|
+| E1 | Vendored upstream specs under `docs/serve/specs/` with a drift script; `schemars` schemas for native and director | drift script green | CI | none | todo |
+| E2 | `ParamSpec` per (surface, model) derived from the manifest caps; adapters validate from it; duplicated constants deleted; LTX body typed | one source for every limit | pod; serve-compat | A3 | todo |
+| E3 | Certification matrix harness over every surface, parameter x surface x model TSV, CI assertion that every parameter has a valid and an invalid case | TSV with no empty cell | pod | E2 | todo |
+| E4 | `cargo-llvm-cov` on the pod; adapter `cargo test` in a GitHub workflow | coverage artifact in CI | CI | none | todo |
+| E5 | Upstream captures as fixtures | depends on owner keys | manual | owner | blocked |
+
+### Phase 7: inference core unification (Workstream B, second half)
+
+| WP | Scope | Exit criterion | Validation | Depends | Status |
+|---|---|---|---|---|---|
+| B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | todo |
+| B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | todo |
+| B6 | `H3Pipeline::load` and `Ltx2Pipeline::load` split into plan, open, place, fuse; dead code (`TensorBackend`, mlx scaffold) retired | engine lifecycle testable on CPU | pod | B1 | todo |
+
+## 3. Order of execution
+
+1. F1 and A1 start together (no dependency between them; A1 is the
+   keystone and ships alone when green).
+2. F2 after F1 merges; F3a in parallel with A1.
+3. A2 after A1; A3 and A4 after A2; A5 as soon as A1 is on main.
+4. B1 after F1; B2 and B3 after B1 and A2 (first **GPU** cells).
+5. C1 after A4; C2 after C1; C3 after C2; D1 after C3; D2 after A2 at any
+   time; D3 and D4 after D1 and D2.
+6. E1 and E4 at any time; E2 after A3; E3 after E2.
+7. B4, B5, B6 after B1, interleaved with phases 3-6 as GPU budget allows.
+
+## 4. Execution log
+
+Appended as work runs. Each entry: date, WP, agent or session, where it
+ran (pod id, $/hr), result, cost.
