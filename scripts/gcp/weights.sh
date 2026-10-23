@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Model weights on Google Cloud for the fv-serve GPU VMs (docs/serve/deploy-gcp.md,
-# "Weights"). A cache of manifest trees: the EU Runpod volume stays the record
-# of truth (CLAUDE.md); every tree comes from the Hugging Face Hub at the
+# "Weights"). A cache of manifest trees: the R2 bucket fv-weights is the record
+# of truth (CLAUDE.md, docs/ops/r2-weights.md); every tree comes from the Hugging Face Hub at the
 # revision in scripts/gpu/weights-revisions.tsv (and the pinned auxiliary/
 # URLs), and is checked with verify-weights.sh before it is used.
 #
