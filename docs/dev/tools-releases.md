@@ -124,7 +124,8 @@ newer push replaces a queued run, the running one finishes:
      embedded), the glibc ≤ 2.35 check, target dir `target/gh-runner` (pod)
      or the dependency image's `/target` (hosted);
    - **test gate** (any failure: nothing is published):
-     `scripts/serve/check.sh` (check + clippy + tests of the serve crates,
+     `scripts/serve/check.sh` (check + tests of the serve crates, clippy
+     `-D warnings` of the whole workspace,
      target `target/gh-runner-test`, no debuginfo); the **shipped**
      gpucheck/cudarc unit-test binaries (`gpucheck-tests`) against the
      commit's sources; `-V` of the shipped fv-serve (cpu, fake) and

@@ -57,6 +57,20 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
 
 jobs:
+  # rustfmt gate (plan F2): the build base image's rustfmt, the one the build
+  # pod runs, so `cargo fmt --all -- --check` here is what `task fmt:check`
+  # checked. Tag pinned by scripts/dev/build-base-tag.sh (same as build-pod.sh).
+  fmt:
+    name: rustfmt --check
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    container:
+      image: ghcr.io/zaitrarrio/fastvideo-rs-build-base:bb-d124c1066ca42695
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo fmt --all -- --check
+        run: cargo fmt --all -- --check
+
   build:
     name: build fv-serve (fake)
     runs-on: ubuntu-22.04

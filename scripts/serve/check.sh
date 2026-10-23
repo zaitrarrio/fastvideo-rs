@@ -2,7 +2,9 @@
 # CPU-only gate for the fv-serve crates (docs/serve/design.md §7): check,
 # clippy (warnings are errors) and tests, with no CUDA and no GPU.
 # Stages (docs/dev/testing.md):
-#   1. build: check + clippy;
+#   1. build: check of the serve crates + clippy of the whole workspace
+#      (plan F2: the tools-release pipeline gates every crate on
+#      `clippy -D warnings`, the same line as `task lint:rust`);
 #   2. tests: `cargo test` in parallel. Load-tolerant: no wall-clock rate
 #      or latency assertions (tests named `realtime_*` are #[ignore]d);
 #   3. realtime (--realtime): the `realtime_*` tests (media delivered at
@@ -106,7 +108,8 @@ STAGES=" ${FV_SERVE_STAGES:-lint test} "
 stage() { [[ "$STAGES" == *" $1 "* ]]; }
 if stage lint; then
   run cargo check "${PKGS[@]}" --all-targets
-  run cargo clippy "${PKGS[@]}" --all-targets --no-deps -- -D warnings
+  # The whole workspace, not only the serve crates (plan F2).
+  run cargo clippy --workspace --all-targets --no-deps -- -D warnings
 fi
 stage test && run cargo test "${PKGS[@]}"
 # The Cloudflare Worker / Durable Object dispatcher builds for wasm only
