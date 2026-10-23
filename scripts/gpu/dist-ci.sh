@@ -6,8 +6,9 @@
 # workflow builds the release binary (nvcc cubins for every SM included) on a
 # GitHub runner for every push and uploads it as `fv-gpucheck-<build id>`. The
 # build id is a hash of the sources, so an artifact with that name *is* this
-# tree's binary. build-remote.sh (a rented box) is the fallback for when CI is
-# unavailable, not the default.
+# tree's binary. The shared build pod (scripts/dev/build-pod.sh,
+# docs/dev/build-pod.md) is the fallback for when CI is unavailable, not the
+# default; nothing rents a GPU to compile.
 set -euo pipefail
 # shellcheck source=scripts/gpu/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"

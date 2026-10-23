@@ -467,8 +467,10 @@ Host: config constructors, gated-attn unit test, ancestral step math vs
 `EulerAncestralDiffusionStep`, key-layout detection; vocoder SnakeBeta + BWE
 forward; latent upsampler geometry; DiffVAE NA window + 1-step shape.
 
-GPU: `FV_LTX2_VERSION=2.5 scripts/gpu/validate.sh run ltx2-gen` (single-stage)
-and `FV_LTX2_TWO_STAGE=1` for two-stage; `FV_LTX2_DIFF_VAE=1` for DiffVAE.
+GPU (2026-09-21, on the Vast `ltx2-gen` tier, retired 2026-10-23; the LTX-2.5
+cells now run on Runpod through `task rtx6000` / `scripts/gpu/runpod-http.sh`):
+single-stage by default, `FV_LTX2_TWO_STAGE=1` for two-stage, `FV_LTX2_DIFF_VAE=1`
+for DiffVAE.
 Stage-1 BWE clip
 `artifacts/clips/20260921T213121Z-ltx2-gen/ltx25-bwe.mp4`. Two-stage remote
 pass: `artifacts/clips/20260921T220546Z-ltx2-gen/ltx25-two-stage.mp4`

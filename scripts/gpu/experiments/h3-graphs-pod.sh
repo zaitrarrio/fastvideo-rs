@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs ON the H3 denoise-graphs pod (scripts/gpu/h3-graphs-validate.sh; docs/perf/h3-denoise-graphs.md).
+# Runs ON the H3 denoise-graphs pod (scripts/gpu/experiments/h3-graphs-validate.sh; docs/perf/h3-denoise-graphs.md).
 # One RTX PRO 6000 on a fastvideo-rs runtime image (its fv-gpucheck); this script arrives in the pod's env
 # (FV_POD_SCRIPT_B64). The R2 plan (presigned GETs from the read-only key) is PUT to /opt/fv/plan.json; h3-base, the
 # h3-turbo MXFP8 tree and its LoRA from the EU volume at /workspace (read only) or, in r2 mode, h3-base's text encoder,

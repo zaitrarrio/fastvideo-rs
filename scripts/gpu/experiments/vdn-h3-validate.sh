@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # VDN-H3 GPU validation on ONE Runpod RTX PRO 6000 (docs/ports/vdn-h3.md §5): the VDN kernels against the host
 # reference, parity against the upstream diffusers component (oracle dumps, per-step latents, decoded video + audio
-# PSNR), and timing against FastH3 V2 and h3-turbo, on the pod script scripts/gpu/vdn-h3-pod.sh.
+# PSNR), and timing against FastH3 V2 and h3-turbo, on the pod script scripts/gpu/experiments/vdn-h3-pod.sh.
 #
 #   vdn-h3-validate.sh up BIN           create the pod (+ a detached wall-clock backstop that deletes it); BIN is the
 #                                       release fv-gpucheck to run (built from this tree on the build pod)
@@ -20,10 +20,11 @@
 # FV_UP_KERNELS / FV_UP_SOFTMAX (passed to the pod script).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source-path=SCRIPTDIR source=runpod-cuda.sh
-source "$HERE/runpod-cuda.sh"
-# shellcheck source-path=SCRIPTDIR source=volumes.sh
-source "$HERE/volumes.sh"
+GPU="$(cd "$HERE/.." && pwd)"   # scripts/gpu: the shared tooling these drivers use
+# shellcheck source-path=SCRIPTDIR/.. source=runpod-cuda.sh
+source "$GPU/runpod-cuda.sh"
+# shellcheck source-path=SCRIPTDIR/.. source=volumes.sh
+source "$GPU/volumes.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 CAP_S="${FV_POD_CAP_S:-5400}"
@@ -84,7 +85,7 @@ case "$cmd" in
     [[ "${FV_VDN_MODEL:-}" == 8step ]] && trees+=(vdn-h3-dmd-250-turbo)
     [[ "${FV_NO_V2:-0}" == 1 ]] && trees=("${trees[@]/h3-8step}") && mapfile -t trees < <(printf '%s\n' "${trees[@]}" | grep .)
     [[ "$mode" == r2 ]] && trees+=(h3-base FastH3-4-step-Preview-v1-LoRA)
-    python3 "$HERE/r2-weights.py" plan "${trees[@]}" --ttl 10800 --out "$tmp/plan-all.json"
+    python3 "$GPU/r2-weights.py" plan "${trees[@]}" --ttl 10800 --out "$tmp/plan-all.json"
     python3 - "$tmp/plan-all.json" "$tmp/b/plan.json" <<'PYEOF'
 import fnmatch, json, os, sys
 plan = json.load(open(sys.argv[1]))
@@ -104,11 +105,11 @@ print(" ".join(f"{t['dest']}:{len(t['files'])}f/{t['total_bytes'] / 1e9:.1f}GB" 
 PYEOF
     # BIN "-": the image's own fv-gpucheck (a CI runtime image of this branch, FV_RUNTIME_IMAGE=…:sha-<commit>).
     [[ "$bin" == - ]] || cp "$bin" "$tmp/b/fv-gpucheck"
-    cp "$HERE/r2-fetch.py" "$HERE/vdn-h3-pod.sh" "$tmp/b/"
-    cp "$HERE"/upstream/{oracle_dump.py,oracle_vdn.py,setup.sh,av_psnr.py} "$tmp/b/upstream/"
+    cp "$GPU/r2-fetch.py" "$HERE/vdn-h3-pod.sh" "$tmp/b/"
+    cp "$GPU"/upstream/{oracle_dump.py,oracle_vdn.py,setup.sh,av_psnr.py} "$tmp/b/upstream/"
     tar czf "$tmp/bundle.tgz" -C "$tmp/b" .
     sha="$(sha256sum "$tmp/bundle.tgz" | cut -d' ' -f1)"
-    url="$(python3 "$HERE/r2-weights.py" --bucket fv-weights-staging put-temp "$tmp/bundle.tgz" --key "tmp/vdn-h3-bundle-$sha.tgz" --ttl 10800)"
+    url="$(python3 "$GPU/r2-weights.py" --bucket fv-weights-staging put-temp "$tmp/bundle.tgz" --key "tmp/vdn-h3-bundle-$sha.tgz" --ttl 10800)"
     log "balance \$$bal; bundle ${sha:0:12} ($(du -h "$tmp/bundle.tgz" | cut -f1)) staged"
     # The runtime image has curl and sha256sum but no Python: uv brings one. The pod deletes itself 20 min after
     # DONE (Runpod injects a pod-scoped RUNPOD_API_KEY / RUNPOD_POD_ID); the local backstop deletes it regardless.
@@ -177,7 +178,7 @@ sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
     if rest GET "/pods/$id" >/dev/null 2>&1; then log "WARNING: pod $id still listed"; exit 1; fi
     log "pod $id deleted (GET /pods/$id: not found)"
     if [[ -n "$own" ]]; then
-      python3 "$HERE/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "tmp/vdn-h3-bundle-$own" || true
+      python3 "$GPU/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "tmp/vdn-h3-bundle-$own" || true
     else
       log "bundle sha256 not readable from pod $id: its staged bundle is left under tmp/vdn-h3-bundle-; remove it by its full key"
     fi

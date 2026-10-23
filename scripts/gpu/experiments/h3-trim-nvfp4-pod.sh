@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs ON the FastH3 Trim NVFP4 validation pod (scripts/gpu/h3-trim-nvfp4-validate.sh; docs/ports/h3-trim.md §5).
+# Runs ON the FastH3 Trim NVFP4 validation pod (scripts/gpu/experiments/h3-trim-nvfp4-validate.sh; docs/ports/h3-trim.md §5).
 # One RTX PRO 6000 on this branch's runtime image (its fv-gpucheck and scripts/gpu), the R2 plan in
 # /opt/fv/plan.json; h3-base from the EU volume at /workspace (read only) or, in r2 mode, fetched with the rest.
 #

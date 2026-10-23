@@ -135,7 +135,7 @@ File SHA-256 (Hub LFS): larry ckpt850 `5a6eeba1…3528b4ea`, lightx2v v1.2 `c3d4
 ## 6. Parity against the Space
 
 One RTX PRO 6000 Blackwell Server Edition (Runpod pod `dj7z8zfge2ldud`, 2026-10-14, 37 min, $1.52), fv-gpucheck of
-this branch, every tree from R2 (`scripts/gpu/h3-turbo-loras-validate.sh` / `-pod.sh`). The reference is the Space's
+this branch, every tree from R2 (`scripts/gpu/experiments/h3-turbo-loras-validate.sh` / `-pod.sh`). The reference is the Space's
 own stack: diffusers #14371 @ `665f5782` (installed as 0.40.0.dev0), transformers 5.8.0, torch 2.11.0+cu130, its
 `MiniMaxH3GeneratorBlocks` and `h3_lora.py` verbatim (Space revision `9a76d679`), bf16 transformer, float32 VAEs,
 cuDNN attention (`scripts/gpu/upstream/h3_turbo_lora_ref.py`). Request: T2V, 832x480, 124 frames, seed 1024, the

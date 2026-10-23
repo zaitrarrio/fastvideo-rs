@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # H3 sparse FP4 VSA attention on ONE Runpod RTX PRO 6000 (docs/ports/fasth3-sparse-fp4-attn.md): the 768p trace of the
-# NVFP4 path, the kernel's unit checks, parity and timings, by the pod script scripts/gpu/h3-fp4attn-pod.sh.
+# NVFP4 path, the kernel's unit checks, parity and timings, by the pod script scripts/gpu/experiments/h3-fp4attn-pod.sh.
 #
 #   h3-fp4attn-validate.sh up IMAGE       create the pod (+ a detached wall-clock backstop that deletes it). IMAGE is a
 #                                         fastvideo-rs runtime image (ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-<7>)
@@ -19,8 +19,9 @@
 # FV_WITH_4S=1 (also the 4-step tree).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source-path=SCRIPTDIR source=volumes.sh
-source "$HERE/volumes.sh"
+GPU="$(cd "$HERE/.." && pwd)"   # scripts/gpu: the shared tooling these drivers use
+# shellcheck source-path=SCRIPTDIR/.. source=volumes.sh
+source "$GPU/volumes.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 CAP_S="${FV_POD_CAP_S:-3600}"
@@ -71,7 +72,7 @@ case "$cmd" in
     [[ "$mode" == r2 ]] && trees+=(h3-base)
     ro=/root/.config/fv
     FV_WEIGHTS_R2_ACCESS_KEY_ID="$(cat "$ro/r2_weights_ro_access_key_id")" FV_WEIGHTS_R2_SECRET_ACCESS_KEY="$(cat "$ro/r2_weights_ro_secret_access_key")" \
-      python3 "$HERE/r2-weights.py" plan "${trees[@]}" --ttl 10800 --out "$tmp/plan.json"
+      python3 "$GPU/r2-weights.py" plan "${trees[@]}" --ttl 10800 --out "$tmp/plan.json"
     # Only what the pod reads: the NVFP4 transformers (their NVFP4 vae/ is not read), and in r2 mode h3-base's
     # tokenizer, text encoder (streamed once per prompt, then cached) and VAEs, not its transformer.
     python3 - "$tmp/plan.json" "$tmp/plan.b64" <<'PYEOF'

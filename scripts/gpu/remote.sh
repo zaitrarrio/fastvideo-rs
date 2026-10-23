@@ -474,16 +474,6 @@ cmd_upstream_install() {
   log "upstream install ok"
 }
 
-cmd_upstream_bench() {
-  local backend="$1"; shift
-  export HF_HOME="$WORK/hf"
-  export PATH="$HOME/.local/bin:$PATH"
-  export CC="${CC:-$(command -v gcc || command -v cc || true)}"
-  [[ -x "$UPSTREAM_VENV/bin/python" ]] || die "upstream venv missing (run upstream-install)"
-  "$UPSTREAM_VENV/bin/python" "$ROOT/scripts/gpu/upstream_bench.py" \
-    --backend "$backend" --out "$OUT/upstream-$backend.json" --video-dir "$OUT/upstream-videos/$backend" "$@"
-}
-
 # The oracle runs in the upstream venv: transformers' UMT5 and diffusers'
 # WanTransformer3DModel are the reference our own ports are judged against.
 # oracle-venv [torch_backend]: transformers + diffusers (from git: the
@@ -590,10 +580,9 @@ case "$sub" in
   wait-taeh3) cmd_wait_taeh3 "$@" ;;
   stage) cmd_stage "$@" ;;
   upstream-install) cmd_upstream_install "$@" ;;
-  upstream-bench) cmd_upstream_bench "$@" ;;
   upstream-oracle) cmd_upstream_oracle "$@" ;;
   taehv-oracle) cmd_taehv_oracle "$@" ;;
   oracle-venv) cmd_oracle_venv "$@" ;;
   model-oracle) cmd_model_oracle "$@" ;;
-  *) die "usage: remote.sh env|bootstrap|cublas|fetch|wait-weights|fetch-taehv|wait-taehv|fetch-taeh3|wait-taeh3|stage|upstream-install|upstream-bench|upstream-oracle|taehv-oracle|oracle-venv|model-oracle" ;;
+  *) die "usage: remote.sh env|bootstrap|cublas|fetch|wait-weights|fetch-taehv|wait-taehv|fetch-taeh3|wait-taeh3|stage|upstream-install|upstream-oracle|taehv-oracle|oracle-venv|model-oracle" ;;
 esac

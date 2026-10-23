@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs ON the H3 glue-fusion timing pod (scripts/gpu/h3-glue-validate.sh; docs/perf/h3-glue-fusion.md). One RTX PRO
+# Runs ON the H3 glue-fusion timing pod (scripts/gpu/experiments/h3-glue-validate.sh; docs/perf/h3-glue-fusion.md). One RTX PRO
 # 6000 on the runtime image, two fv-gpucheck binaries in the bundle: `base` (the branch point) and `new` (the fusions).
 #
 #   1. fetch FastH3 V2 NVFP4's transformer/ from R2 (plan-nvfp4.json, presigned) in the background; in r2 mode first
