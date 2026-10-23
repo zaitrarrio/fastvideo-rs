@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-10-23 · FVID-2026-10-23-manifest-crate-registry-formats
+- Trigger: the architecture review (docs/gaps/2026-10-22-architecture-review.md, merged as #137) proposed one family manifest as the source of truth; the sibling `zaitrarrio/model-registry-rs` had specified the same public formats as its own `registry-core` (WO-001: naming grammar, `model.toml`, signed file-and-chunk manifest, lineage, signatures); the owner asked (2026-10-23) to fold that work into the review and rescope the registry
+- Options: two schemas in two repositories kept equal by tests; the formats in the registry with the runtime depending on it; the formats with the runtime and the registry depending on it; everything in one repository
+- Decision: **the core formats are implemented here as the pure crate `fastvideo-manifest` (layer 1: name, model_toml, manifest, lineage, sig, schema export; layer 2: the runtime family manifest) and the registry depends on this repository for them.** Before the first publish, `model.toml` gains `[variant]`, a `[runtime]` recipe/profile pointer and `[caps]`; the name grammar is unchanged. `fv-lab run gold` is the registry's verification runner and writes the registry's benchmark record; the registry's `hydrate` is the pod weights fetch of `fv-boot` and `fv-lab`; the chunk store, API, `gia` CLI, licence gate and model pages stay in the registry repository. The four weights TSVs are generated from manifests and then retired
+- Reason: the runtime is the thing that guarantees a published model loads, so it owns the format it loads; two copies would recreate the duplication the review found, now across repositories; one benchmark runner and one weights fetcher instead of two
+- Reversibility: cheap until the first model is published; costly after (public formats)
+- Executed by: Executor (docs only; the crate is Workstream A, phase 1)
+- ADR: the registry's ADR-0001..0003 are written here with the crate
+- Verification: review §7.2, §7.4, §7.5, §7.11 revised; the registry's CLAUDE.md, BACKGROUND, work orders and decision log rescoped in the same decision
+
 ### FVID · 2026-10-20 · FVID-2026-10-20-tween-storyboard
 - Trigger: owner asked for a fast FLF2V / FLRef2V model for animated storyboards and chose (2026-10-20) an end-to-end storyboard app, LTX and H3 side by side, first + last panels only, a new app in this repository
 - Options: second model H3 fl2va/ref2va, Wan Fun-InP 1.3B, a Wan VACE port; mid-shot keyframes now or later; app in this repo, a separate repo, or a view in app/
