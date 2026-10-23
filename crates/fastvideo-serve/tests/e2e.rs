@@ -170,6 +170,22 @@ async fn batch_job_end_to_end_with_file_store() {
     assert!(m.contains("route=\"/fv/v1/jobs/{id}\""), "{m}");
     assert!(m.contains("fv_jobs_finished_total"), "{m}");
     assert!(m.contains("fv_ready 1"), "{m}");
+    // Per-model series (docs/serve/tracing.md "Prometheus metrics").
+    let labelled = |series: &str| {
+        m.lines()
+            .any(|l| l.starts_with(&format!("{series}_count{{")) && l.contains("model=\"fake-"))
+    };
+    assert!(labelled("fv_job_duration_seconds"), "{m}");
+    assert!(labelled("fv_job_queue_wait_seconds"), "{m}");
+    assert!(labelled("fv_job_inference_seconds"), "{m}");
+    assert!(m.contains("fv_engine_resident_models "), "{m}");
+    assert!(m.contains("fv_engine_model_loads_total "), "{m}");
+    assert!(m.contains("fv_engine_model_swaps_total 0"), "{m}");
+    assert!(
+        m.lines()
+            .any(|l| l.starts_with("fv_engine_model_load_seconds{model=\"fake-")),
+        "{m}"
+    );
 }
 
 /// Every route the §9 table gives to serve, serve-kit and native exists on

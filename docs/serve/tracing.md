@@ -203,3 +203,38 @@ for sandboxes; see the bench doc).
 an RTX PRO 6000, pod direct. Overhead A/B: every traced − untraced median
 difference is inside its 95 % bootstrap interval (denoise +6.5 ms of 7.1 s
 at 480P, +14.5 ms of 19.2 s at 768P); 0 events dropped.
+
+## Prometheus metrics
+
+Traces answer "what happened to this request"; the series below answer
+"how is the server doing", rendered by `GET /metrics` of every `fv-serve`
+(`crates/fastvideo-serve/src/metrics.rs`). Durations are histograms with
+the buckets 5 ms … 600 s. `model` is always the job's model id, one of
+the configured `[[models]]` (the fake engine's ids in CPU tests), so the
+label set stays bounded; `api` is the protocol the job came in on; `route`
+is the matched template, never the raw path.
+
+| Series | Labels | What |
+|---|---|---|
+| `fv_http_requests_total` | `method`, `route`, `status` | every request |
+| `fv_http_request_duration_seconds` | `method`, `route` | request wall time |
+| `fv_jobs_submitted_total` | `api` | jobs the engine accepted |
+| `fv_jobs_finished_total` | `api`, `status` | terminal jobs: `succeeded`, `failed`, `cancelled` |
+| `fv_job_duration_seconds` | `api`, `model` | submit to the terminal store write: queue wait, generation, post-processing and upload |
+| `fv_job_queue_wait_seconds` | `model` | submit to the engine's `Started` (the scheduler's queue, including a swap-in wait behind the running job) |
+| `fv_job_inference_seconds` | `model` | the engine's `Started` to its terminal event: an on-demand load (`[engine] swap`) and the generation itself |
+| `fv_engine_queued` | `priority` | queued jobs (`batch`, `stream`), on scrape |
+| `fv_engine_running`, `fv_engine_sessions` | | jobs running, streaming sessions open, on scrape |
+| `fv_engine_resident_models` | | (executor, model) pairs resident now, on scrape |
+| `fv_engine_model_loads_total` | | successful model loads since start (boot and on demand) |
+| `fv_engine_model_swaps_total` | | on-demand loads in swap mode, each evicting the executor's other resident models |
+| `fv_engine_model_load_seconds` | `model` | wall time of the model's last successful load |
+| `fv_encoder_restart_duration_seconds`, `fv_encoder_restarts_total` | `codec`, `spare` | keyframe restarts of the pipe encoders |
+| `fv_ready` | | 1 once every resident model loaded |
+
+A job that outruns `[engine] job_deadline_s` (`FV_JOB_DEADLINE_S`; 0, the
+default, is no limit) is cancelled by the engine at its next denoise step
+and counts as `failed` with the error kind `timeout` (HTTP 504 on a sync
+route); the deadline covers the generation only, from the start of
+`generate` after any on-demand load, so a swap-in's cost does not eat
+into it. Streaming sessions have their own limits (`[streams]`).
