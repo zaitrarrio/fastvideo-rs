@@ -65,7 +65,14 @@ struct Flux1Attention {
 }
 
 impl Flux1Attention {
-    fn zeros(dim: usize, heads: usize, dim_head: usize, eps: f32, joint: bool, pre_only: bool) -> Self {
+    fn zeros(
+        dim: usize,
+        heads: usize,
+        dim_head: usize,
+        eps: f32,
+        joint: bool,
+        pre_only: bool,
+    ) -> Self {
         let inner = heads * dim_head;
         Self {
             to_q: Linear::zeros(dim, inner, true),
@@ -103,37 +110,77 @@ impl Flux1Attention {
             to_out: if pre_only {
                 None
             } else {
-                Some(Linear::load(map, &format!("{prefix}.to_out.0"), inner, dim, true)?)
+                Some(Linear::load(
+                    map,
+                    &format!("{prefix}.to_out.0"),
+                    inner,
+                    dim,
+                    true,
+                )?)
             },
             norm_q: RmsNorm::load(map, &format!("{prefix}.norm_q"), dim_head, eps)?,
             norm_k: RmsNorm::load(map, &format!("{prefix}.norm_k"), dim_head, eps)?,
             add_q: if joint {
-                Some(Linear::load(map, &format!("{prefix}.add_q_proj"), dim, inner, true)?)
+                Some(Linear::load(
+                    map,
+                    &format!("{prefix}.add_q_proj"),
+                    dim,
+                    inner,
+                    true,
+                )?)
             } else {
                 None
             },
             add_k: if joint {
-                Some(Linear::load(map, &format!("{prefix}.add_k_proj"), dim, inner, true)?)
+                Some(Linear::load(
+                    map,
+                    &format!("{prefix}.add_k_proj"),
+                    dim,
+                    inner,
+                    true,
+                )?)
             } else {
                 None
             },
             add_v: if joint {
-                Some(Linear::load(map, &format!("{prefix}.add_v_proj"), dim, inner, true)?)
+                Some(Linear::load(
+                    map,
+                    &format!("{prefix}.add_v_proj"),
+                    dim,
+                    inner,
+                    true,
+                )?)
             } else {
                 None
             },
             to_add_out: if joint {
-                Some(Linear::load(map, &format!("{prefix}.to_add_out"), inner, dim, true)?)
+                Some(Linear::load(
+                    map,
+                    &format!("{prefix}.to_add_out"),
+                    inner,
+                    dim,
+                    true,
+                )?)
             } else {
                 None
             },
             norm_added_q: if joint {
-                Some(RmsNorm::load(map, &format!("{prefix}.norm_added_q"), dim_head, eps)?)
+                Some(RmsNorm::load(
+                    map,
+                    &format!("{prefix}.norm_added_q"),
+                    dim_head,
+                    eps,
+                )?)
             } else {
                 None
             },
             norm_added_k: if joint {
-                Some(RmsNorm::load(map, &format!("{prefix}.norm_added_k"), dim_head, eps)?)
+                Some(RmsNorm::load(
+                    map,
+                    &format!("{prefix}.norm_added_k"),
+                    dim_head,
+                    eps,
+                )?)
             } else {
                 None
             },
@@ -148,35 +195,46 @@ impl Flux1Attention {
         encoder: Option<&CudaTensor>,
         rope: &(CudaTensor, CudaTensor),
     ) -> Result<(CudaTensor, Option<CudaTensor>)> {
-        let q = rms_heads(&self.to_q.forward(hidden)?, &self.norm_q, self.heads, self.dim_head)?;
-        let k = rms_heads(&self.to_k.forward(hidden)?, &self.norm_k, self.heads, self.dim_head)?;
+        let q = rms_heads(
+            &self.to_q.forward(hidden)?,
+            &self.norm_q,
+            self.heads,
+            self.dim_head,
+        )?;
+        let k = rms_heads(
+            &self.to_k.forward(hidden)?,
+            &self.norm_k,
+            self.heads,
+            self.dim_head,
+        )?;
         let v = {
             let t = self.to_v.forward(hidden)?;
             t.reshape(vec![t.shape[0], t.shape[1], self.heads, self.dim_head])?
         };
-        let (mut q, mut k, v, text_len) = if let (Some(enc), Some(aq), Some(ak), Some(av), Some(nq), Some(nk)) = (
-            encoder,
-            &self.add_q,
-            &self.add_k,
-            &self.add_v,
-            &self.norm_added_q,
-            &self.norm_added_k,
-        ) {
-            let eq = rms_heads(&aq.forward(enc)?, nq, self.heads, self.dim_head)?;
-            let ek = rms_heads(&ak.forward(enc)?, nk, self.heads, self.dim_head)?;
-            let ev = {
-                let t = av.forward(enc)?;
-                t.reshape(vec![t.shape[0], t.shape[1], self.heads, self.dim_head])?
+        let (mut q, mut k, v, text_len) =
+            if let (Some(enc), Some(aq), Some(ak), Some(av), Some(nq), Some(nk)) = (
+                encoder,
+                &self.add_q,
+                &self.add_k,
+                &self.add_v,
+                &self.norm_added_q,
+                &self.norm_added_k,
+            ) {
+                let eq = rms_heads(&aq.forward(enc)?, nq, self.heads, self.dim_head)?;
+                let ek = rms_heads(&ak.forward(enc)?, nk, self.heads, self.dim_head)?;
+                let ev = {
+                    let t = av.forward(enc)?;
+                    t.reshape(vec![t.shape[0], t.shape[1], self.heads, self.dim_head])?
+                };
+                (
+                    CudaTensor::cat(&[&eq, &q], 1)?,
+                    CudaTensor::cat(&[&ek, &k], 1)?,
+                    CudaTensor::cat(&[&ev, &v], 1)?,
+                    Some(enc.shape[1]),
+                )
+            } else {
+                (q, k, v, None)
             };
-            (
-                CudaTensor::cat(&[&eq, &q], 1)?,
-                CudaTensor::cat(&[&ek, &k], 1)?,
-                CudaTensor::cat(&[&ev, &v], 1)?,
-                Some(enc.shape[1]),
-            )
-        } else {
-            (q, k, v, None)
-        };
         q = apply_rotary(&q, &rope.0, &rope.1)?;
         k = apply_rotary(&k, &rope.0, &rope.1)?;
         let attn = nn::scaled_dot_product_attention(
@@ -415,12 +473,18 @@ impl CombinedTimestepGuidanceTextProj {
         })
     }
 
-    fn forward(&self, timestep: f32, guidance: Option<f32>, pooled: &CudaTensor) -> Result<CudaTensor> {
+    fn forward(
+        &self,
+        timestep: f32,
+        guidance: Option<f32>,
+        pooled: &CudaTensor,
+    ) -> Result<CudaTensor> {
         let t = CudaTensor::from_vec(vec![timestep], vec![1])?;
         let proj = nn::sinusoidal_timesteps(&t, self.channels)?;
         let mut emb = self.timestep.forward(&proj)?;
         if let (Some(g), Some(ge)) = (guidance, &self.guidance) {
-            let gp = nn::sinusoidal_timesteps(&CudaTensor::from_vec(vec![g], vec![1])?, self.channels)?;
+            let gp =
+                nn::sinusoidal_timesteps(&CudaTensor::from_vec(vec![g], vec![1])?, self.channels)?;
             emb = emb.add(&ge.forward(&gp)?)?;
         }
         emb.add(&self.text.forward(pooled)?)
@@ -461,7 +525,12 @@ impl FluxTransformerBlock {
         let p = format!("transformer_blocks.{i}");
         Ok(Self {
             norm1: AdaLayerNormZero::load(map, &format!("{p}.norm1"), dim, cfg.eps)?,
-            norm1_context: AdaLayerNormZero::load(map, &format!("{p}.norm1_context"), dim, cfg.eps)?,
+            norm1_context: AdaLayerNormZero::load(
+                map,
+                &format!("{p}.norm1_context"),
+                dim,
+                cfg.eps,
+            )?,
             attn: Flux1Attention::load(
                 map,
                 &format!("{p}.attn"),
@@ -473,7 +542,12 @@ impl FluxTransformerBlock {
                 false,
             )?,
             ff: GeluFeedForward::load(map, &format!("{p}.ff"), dim, cfg.mlp_hidden())?,
-            ff_context: GeluFeedForward::load(map, &format!("{p}.ff_context"), dim, cfg.mlp_hidden())?,
+            ff_context: GeluFeedForward::load(
+                map,
+                &format!("{p}.ff_context"),
+                dim,
+                cfg.mlp_hidden(),
+            )?,
             eps: cfg.eps,
         })
     }
@@ -569,7 +643,9 @@ impl FluxSingleTransformerBlock {
         let (normed, gate) = self.norm.forward(&cat, temb)?;
         let mlp = nn::gelu_tanh(&self.proj_mlp.forward(&normed)?);
         let (attn, _) = self.attn.forward(&normed, None, rope)?;
-        let y = self.proj_out.forward(&CudaTensor::cat(&[&attn, &mlp], attn.rank() - 1)?)?;
+        let y = self
+            .proj_out
+            .forward(&CudaTensor::cat(&[&attn, &mlp], attn.rank() - 1)?)?;
         let y = cat.add(&y.mul(&gate)?)?;
         let encoder = y.narrow(1, 0, text_len)?;
         let hidden = y.narrow(1, text_len, y.shape[1] - text_len)?;
@@ -602,12 +678,18 @@ impl Flux1Transformer2D {
             ),
             x_embed: Linear::zeros(cfg.in_channels, dim, true),
             ctx_embed: Linear::zeros(cfg.joint_attention_dim, dim, true),
-            blocks: (0..cfg.num_layers).map(|_| FluxTransformerBlock::zeros(&cfg)).collect(),
+            blocks: (0..cfg.num_layers)
+                .map(|_| FluxTransformerBlock::zeros(&cfg))
+                .collect(),
             singles: (0..cfg.num_single_layers)
                 .map(|_| FluxSingleTransformerBlock::zeros(&cfg))
                 .collect(),
             norm_out: AdaLayerNormContinuous::zeros(dim, cfg.eps),
-            proj_out: Linear::zeros(dim, cfg.patch_size * cfg.patch_size * cfg.out_channels, true),
+            proj_out: Linear::zeros(
+                dim,
+                cfg.patch_size * cfg.patch_size * cfg.out_channels,
+                true,
+            ),
             rope_cache: None,
             rope_builds: 0,
             cfg,
@@ -651,14 +733,25 @@ impl Flux1Transformer2D {
         })
     }
 
-    fn cached_rope(&mut self, text_len: usize, img_h: usize, img_w: usize) -> Result<(CudaTensor, CudaTensor)> {
+    fn cached_rope(
+        &mut self,
+        text_len: usize,
+        img_h: usize,
+        img_w: usize,
+    ) -> Result<(CudaTensor, CudaTensor)> {
         let key = (text_len, img_h, img_w);
         if let Some((k, tables)) = &self.rope_cache {
             if *k == key {
                 return Ok(tables.clone());
             }
         }
-        let (mut cos, mut sin) = flux1_rope(text_len, img_h, img_w, &self.cfg.axes_dims_rope, self.cfg.rope_theta)?;
+        let (mut cos, mut sin) = flux1_rope(
+            text_len,
+            img_h,
+            img_w,
+            &self.cfg.axes_dims_rope,
+            self.cfg.rope_theta,
+        )?;
         cos.pin_device()?;
         sin.pin_device()?;
         let tables = (cos, sin);
@@ -682,14 +775,18 @@ impl Flux1Transformer2D {
         if x.rank() == 5 {
             let (b, c, t, h, w) = (x.shape[0], x.shape[1], x.shape[2], x.shape[3], x.shape[4]);
             five = Some((b, t, h, w));
-            x = x.permute(&[0, 2, 3, 4, 1])?.reshape(vec![b, t * h * w, c])?;
+            x = x
+                .permute(&[0, 2, 3, 4, 1])?
+                .reshape(vec![b, t * h * w, c])?;
         } else if x.rank() == 4 {
             let (b, c, h, w) = (x.shape[0], x.shape[1], x.shape[2], x.shape[3]);
             five = Some((b, 1, h, w));
             x = x.permute(&[0, 2, 3, 1])?.reshape(vec![b, h * w, c])?;
         }
         x = self.x_embed.forward(&x)?;
-        let temb = self.time_text.forward(timestep * 1000.0, guidance.map(|g| g * 1000.0), pooled)?;
+        let temb =
+            self.time_text
+                .forward(timestep * 1000.0, guidance.map(|g| g * 1000.0), pooled)?;
         let mut enc = self.ctx_embed.forward(encoder)?;
         let text_len = enc.shape[1];
         let rope = self.cached_rope(text_len, img_h, img_w)?;
@@ -758,7 +855,9 @@ mod tests {
         let hidden = CudaTensor::zeros(&[1, dit.cfg.in_channels, 1, 2, 2]);
         let enc = CudaTensor::zeros(&[1, 4, dit.cfg.joint_attention_dim]);
         let pooled = CudaTensor::zeros(&[1, dit.cfg.pooled_projection_dim]);
-        let out = dit.forward(&hidden, &enc, &pooled, 0.5, Some(3.5), 2, 2).unwrap();
+        let out = dit
+            .forward(&hidden, &enc, &pooled, 0.5, Some(3.5), 2, 2)
+            .unwrap();
         assert_eq!(out.shape, vec![1, dit.cfg.out_channels, 1, 2, 2]);
     }
 
@@ -776,8 +875,10 @@ mod tests {
         let hidden = CudaTensor::zeros(&[1, dit.cfg.in_channels, 1, 2, 2]);
         let enc = CudaTensor::zeros(&[1, 4, dit.cfg.joint_attention_dim]);
         let pooled = CudaTensor::zeros(&[1, dit.cfg.pooled_projection_dim]);
-        dit.forward(&hidden, &enc, &pooled, 0.5, Some(1.0), 2, 2).unwrap();
-        dit.forward(&hidden, &enc, &pooled, 0.4, Some(1.0), 2, 2).unwrap();
+        dit.forward(&hidden, &enc, &pooled, 0.5, Some(1.0), 2, 2)
+            .unwrap();
+        dit.forward(&hidden, &enc, &pooled, 0.4, Some(1.0), 2, 2)
+            .unwrap();
         assert_eq!(dit.rope_builds, 1, "same packed size reuses tables");
         dit.cached_rope(4, 3, 3).unwrap();
         assert_eq!(dit.rope_builds, 2);

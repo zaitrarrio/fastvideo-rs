@@ -383,10 +383,16 @@ impl VsaSchedule {
             parts.push(format!("step {s}: {v}"));
         }
         if !self.dense_steps.is_empty() {
-            parts.push(format!("steps {} at {}", self.dense_steps, self.dense_sparsity));
+            parts.push(format!(
+                "steps {} at {}",
+                self.dense_steps, self.dense_sparsity
+            ));
         }
         if !self.dense_layers.is_empty() {
-            parts.push(format!("layers {} at {}", self.dense_layers, self.dense_sparsity));
+            parts.push(format!(
+                "layers {} at {}",
+                self.dense_layers, self.dense_sparsity
+            ));
         }
         parts.join(", ")
     }
@@ -444,9 +450,8 @@ mod tests {
         assert_eq!(s.at(0.9, 3, 0), 0.5);
         assert_eq!(s.at(0.9, 3, 49), 0.5);
         assert!(VsaSchedule::default().is_uniform());
-        let v: toml::Value = toml::from_str::<toml::Table>("s = { default = 0.9, 0 = 0.8 }")
-            .unwrap()["s"]
-            .clone();
+        let v: toml::Value =
+            toml::from_str::<toml::Table>("s = { default = 0.9, 0 = 0.8 }").unwrap()["s"].clone();
         let (d, m) = parse_sparsity(&v).unwrap();
         assert_eq!((d, m.get(&0).copied()), (Some(0.9), Some(0.8)));
         let bad: toml::Value = toml::Value::Float(1.0);

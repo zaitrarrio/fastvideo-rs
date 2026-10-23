@@ -27,7 +27,9 @@ pub struct MonotonicClock {
 
 impl MonotonicClock {
     pub fn new() -> Self {
-        Self { origin: Instant::now() }
+        Self {
+            origin: Instant::now(),
+        }
     }
 }
 
@@ -52,7 +54,9 @@ pub struct ManualClock {
 
 impl ManualClock {
     pub fn new(start: f64) -> Self {
-        Self { t: AtomicU64::new(start.to_bits()) }
+        Self {
+            t: AtomicU64::new(start.to_bits()),
+        }
     }
 
     pub fn advance(&self, dt: f64) {
@@ -106,12 +110,26 @@ pub struct VideoRtpClock {
 impl VideoRtpClock {
     /// A fixed-rate clock at `fps` frames per second.
     pub fn fixed(fps: u32, base: u32) -> Self {
-        Self { base, ticks: 0, fps_num: u64::from(fps.max(1)), fps_den: 1, adaptive_acc: 0.0, adaptive: false }
+        Self {
+            base,
+            ticks: 0,
+            fps_num: u64::from(fps.max(1)),
+            fps_den: 1,
+            adaptive_acc: 0.0,
+            adaptive: false,
+        }
     }
 
     /// An adaptive clock; call [`advance_adaptive`](Self::advance_adaptive).
     pub fn adaptive(base: u32) -> Self {
-        Self { base, ticks: 0, fps_num: 1, fps_den: 1, adaptive_acc: 0.0, adaptive: true }
+        Self {
+            base,
+            ticks: 0,
+            fps_num: 1,
+            fps_den: 1,
+            adaptive_acc: 0.0,
+            adaptive: true,
+        }
     }
 
     /// The timestamp of the frame about to be sent.
@@ -119,8 +137,8 @@ impl VideoRtpClock {
         let off = if self.adaptive {
             self.adaptive_acc.round() as u64
         } else {
-            (u128::from(self.ticks) * u128::from(VIDEO_RTP_HZ) * u128::from(self.fps_den) / u128::from(self.fps_num))
-                as u64
+            (u128::from(self.ticks) * u128::from(VIDEO_RTP_HZ) * u128::from(self.fps_den)
+                / u128::from(self.fps_num)) as u64
         };
         self.base.wrapping_add(off as u32)
     }

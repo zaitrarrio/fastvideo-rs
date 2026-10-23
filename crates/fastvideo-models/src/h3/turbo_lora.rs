@@ -162,7 +162,9 @@ impl TurboLora {
         let mut tried = Vec::new();
         for base in [Some(root), root.parent()].into_iter().flatten() {
             for rel in [
-                Path::new(TURBO_LORA_TREE).join(self.subdir()).join(self.file()),
+                Path::new(TURBO_LORA_TREE)
+                    .join(self.subdir())
+                    .join(self.file()),
                 Path::new(self.subdir()).join(self.file()),
                 PathBuf::from(self.file()),
             ] {
@@ -230,7 +232,9 @@ pub fn turbo_strength(option: Option<f32>, env: Option<&str>) -> Result<f32, Str
         (None, None) => 1.0,
     };
     if !s.is_finite() || !(0.0..=4.0).contains(&s) {
-        return Err(format!("Turbo LoRA strength {s} must be finite and in 0..=4"));
+        return Err(format!(
+            "Turbo LoRA strength {s} must be finite and in 0..=4"
+        ));
     }
     Ok(s)
 }
@@ -274,7 +278,11 @@ pub fn is_comfy_layout(keys: &[String]) -> bool {
 /// The Space's `_larry_targets`: one ComfyUI module name (no `.lora_*`) and
 /// the row count of its `lora_B` onto diffusers module names and row maps.
 /// `inner_dim` is `heads * head_dim` (7168), the row count of each of q, k, v.
-pub fn comfy_targets(name: &str, b_rows: usize, inner_dim: usize) -> Result<Vec<ComfyTarget>, String> {
+pub fn comfy_targets(
+    name: &str,
+    b_rows: usize,
+    inner_dim: usize,
+) -> Result<Vec<ComfyTarget>, String> {
     let name = name.strip_prefix("diffusion_model.").unwrap_or(name);
     let mut target = if let Some(rest) = name.strip_prefix("token_refiner.blocks.") {
         format!("token_refiner.refiner_blocks.{rest}")
@@ -285,7 +293,10 @@ pub fn comfy_targets(name: &str, b_rows: usize, inner_dim: usize) -> Result<Vec<
     };
     target = target.replace("final_layer.adaln_proj.linear", "norm_out.linear");
 
-    if let Some(prefix) = target.strip_suffix("qkv_proj").filter(|_| target.ends_with(".attn.qkv_proj")) {
+    if let Some(prefix) = target
+        .strip_suffix("qkv_proj")
+        .filter(|_| target.ends_with(".attn.qkv_proj"))
+    {
         if inner_dim == 0 || b_rows != 3 * inner_dim {
             return Err(format!(
                 "{name}: fused QKV lora_B has {b_rows} rows, expected 3 x {inner_dim}"
@@ -305,7 +316,9 @@ pub fn comfy_targets(name: &str, b_rows: usize, inner_dim: usize) -> Result<Vec<
     }
     if let Some(stem) = target.strip_suffix(".mlp.fc1") {
         if b_rows == 0 || b_rows % 2 != 0 {
-            return Err(format!("{name}: SwiGLU fc1 lora_B has an odd row count {b_rows}"));
+            return Err(format!(
+                "{name}: SwiGLU fc1 lora_B has an odd row count {b_rows}"
+            ));
         }
         return Ok(vec![ComfyTarget {
             module: format!("{stem}.ff.net.0.proj"),
@@ -335,7 +348,10 @@ pub fn comfy_targets(name: &str, b_rows: usize, inner_dim: usize) -> Result<Vec<
 /// Apply a [`RowMap`] to a row-major `lora_B` of `rank` columns.
 pub fn map_rows(b: &[f32], rank: usize, rows: RowMap) -> Result<Vec<f32>, String> {
     if rank == 0 || b.len() % rank != 0 {
-        return Err(format!("lora_B len {} is not a multiple of rank {rank}", b.len()));
+        return Err(format!(
+            "lora_B len {} is not a multiple of rank {rank}",
+            b.len()
+        ));
     }
     let n = b.len() / rank;
     match rows {
@@ -390,9 +406,17 @@ pub fn comfy_pairs(keys: &[String], path: &str) -> Result<Vec<(String, String, S
             &bad[..bad.len().min(3)]
         ));
     }
-    let lone: Vec<_> = a.keys().filter(|k| !b.contains_key(*k)).chain(b.keys().filter(|k| !a.contains_key(*k))).cloned().collect();
+    let lone: Vec<_> = a
+        .keys()
+        .filter(|k| !b.contains_key(*k))
+        .chain(b.keys().filter(|k| !a.contains_key(*k)))
+        .cloned()
+        .collect();
     if !lone.is_empty() {
-        return Err(format!("{path}: unpaired LoRA tensors: {:?}", &lone[..lone.len().min(3)]));
+        return Err(format!(
+            "{path}: unpaired LoRA tensors: {:?}",
+            &lone[..lone.len().min(3)]
+        ));
     }
     if a.is_empty() {
         return Err(format!("{path}: no LoRA tensors"));
@@ -452,7 +476,10 @@ mod tests {
         );
         assert_eq!(
             comfy_targets("blocks.7.adaln_proj.linear", 18, inner).unwrap(),
-            vec![ComfyTarget { module: "transformer_blocks.7.adaln_proj.linear".into(), rows: RowMap::All }]
+            vec![ComfyTarget {
+                module: "transformer_blocks.7.adaln_proj.linear".into(),
+                rows: RowMap::All
+            }]
         );
         assert_eq!(
             comfy_targets("final_layer.adaln_proj.linear", 2, inner).unwrap()[0].module,
@@ -463,9 +490,11 @@ mod tests {
             "transformer_blocks.2.attn.to_out.0"
         );
         // `blocks.` only at the start; the refiner keeps its own prefix.
-        assert!(comfy_targets("token_refiner.blocks.0.attn.qkv_proj", 12, inner).unwrap()[0]
-            .module
-            .starts_with("token_refiner.refiner_blocks.0.attn."));
+        assert!(
+            comfy_targets("token_refiner.blocks.0.attn.qkv_proj", 12, inner).unwrap()[0]
+                .module
+                .starts_with("token_refiner.refiner_blocks.0.attn.")
+        );
         assert!(comfy_targets("blocks.0.attn.qkv_proj", 11, inner).is_err());
         assert!(comfy_targets("blocks.0.mlp.fc1", 7, inner).is_err());
     }
@@ -485,7 +514,12 @@ mod tests {
         {
             let b = map_rows(&b_qkv, r, t.rows).unwrap();
             let delta = matmul(&b, &a, inner, r, inn);
-            assert_eq!(delta, fused[i * inner * inn..(i + 1) * inner * inn], "{}", t.module);
+            assert_eq!(
+                delta,
+                fused[i * inner * inn..(i + 1) * inner * inn],
+                "{}",
+                t.module
+            );
         }
         // fc1: the diffusers weight is cat([value, gate]) of the reference's [gate; value].
         let ffn = 2usize;
@@ -532,16 +566,34 @@ mod tests {
 
     #[test]
     fn recipes_parse() {
-        assert_eq!(parse_turbo_recipe("larry-turbo"), Some(Ok((TurboLora::Larry, 6))));
-        assert_eq!(parse_turbo_recipe("larry-turbo-4step"), Some(Ok((TurboLora::Larry, 4))));
-        assert_eq!(parse_turbo_recipe("lightx2v-turbo"), Some(Ok((TurboLora::Lightx2v, 4))));
+        assert_eq!(
+            parse_turbo_recipe("larry-turbo"),
+            Some(Ok((TurboLora::Larry, 6)))
+        );
+        assert_eq!(
+            parse_turbo_recipe("larry-turbo-4step"),
+            Some(Ok((TurboLora::Larry, 4)))
+        );
+        assert_eq!(
+            parse_turbo_recipe("lightx2v-turbo"),
+            Some(Ok((TurboLora::Lightx2v, 4)))
+        );
         assert_eq!(
             parse_turbo_recipe("lightx2v-turbo-v0.1-5step"),
             Some(Ok((TurboLora::Lightx2vV01, 5)))
         );
-        assert_eq!(parse_turbo_recipe("lightx2v-turbo-v0.1"), Some(Ok((TurboLora::Lightx2vV01, 4))));
-        assert!(matches!(parse_turbo_recipe("larry-turbo-9step"), Some(Err(_))));
-        assert!(matches!(parse_turbo_recipe("larry-turbo-2step"), Some(Err(_))));
+        assert_eq!(
+            parse_turbo_recipe("lightx2v-turbo-v0.1"),
+            Some(Ok((TurboLora::Lightx2vV01, 4)))
+        );
+        assert!(matches!(
+            parse_turbo_recipe("larry-turbo-9step"),
+            Some(Err(_))
+        ));
+        assert!(matches!(
+            parse_turbo_recipe("larry-turbo-2step"),
+            Some(Err(_))
+        ));
         assert_eq!(parse_turbo_recipe("larry-turbox"), None);
         assert_eq!(parse_turbo_recipe("sol-h3"), None);
         for t in TurboLora::ALL {
@@ -565,14 +617,22 @@ mod tests {
         assert!(c.dense && c.vsa_sparsity == 0.0 && c.guidance_scale == 1.0);
         assert_eq!(c.sigma_source, H3SigmaSource::Uniform);
         let s = H3JointSchedule::from_contract(&c).unwrap();
-        for (got, want) in s.video.sigmas.iter().zip([1.0f32, 0.9730, 0.9231, 0.8, 0.0]) {
+        for (got, want) in s
+            .video
+            .sigmas
+            .iter()
+            .zip([1.0f32, 0.9730, 0.9231, 0.8, 0.0])
+        {
             assert!((got - want).abs() < 1e-4, "video {got} vs {want}");
         }
         for (got, want) in s.audio.sigmas.iter().zip([1.0f32, 0.9, 0.75, 0.5, 0.0]) {
             assert!((got - want).abs() < 1e-4, "audio {got} vs {want}");
         }
         let c = H3InferenceContract::named("lightx2v-turbo").unwrap();
-        assert_eq!((c.video_scheduler_shift, c.audio_scheduler_shift), (6.0, 3.0));
+        assert_eq!(
+            (c.video_scheduler_shift, c.audio_scheduler_shift),
+            (6.0, 3.0)
+        );
         let c = H3InferenceContract::named("larry-turbo").unwrap();
         assert_eq!((c.transformer_forwards, c.video_scheduler_shift), (6, 12.0));
         // The Space's default `steps = 6` (diffusers grid points) is 5 forwards.
@@ -603,7 +663,9 @@ mod tests {
         assert_eq!(TurboLora::Larry.resolve(&base, None).unwrap(), file);
         let err = TurboLora::Lightx2v.resolve(&base, None).unwrap_err();
         assert!(err.contains("v1.2_768p"), "{err}");
-        assert!(TurboLora::Larry.resolve(&base, Some(&tmp.join("nope"))).is_err());
+        assert!(TurboLora::Larry
+            .resolve(&base, Some(&tmp.join("nope")))
+            .is_err());
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 
@@ -615,9 +677,15 @@ mod tests {
         let sha = std::fs::read_to_string(root.join("weights-sha256.tsv")).unwrap();
         for t in TurboLora::ALL {
             let dest = format!("{TURBO_LORA_TREE}/{}", t.subdir());
-            assert!(manifest.contains(&format!("{dest}\t{}\t", t.hub_repo())), "{dest}");
+            assert!(
+                manifest.contains(&format!("{dest}\t{}\t", t.hub_repo())),
+                "{dest}"
+            );
             assert!(manifest.contains(t.file()), "{dest}");
-            assert!(revisions.contains(&format!("{dest}\t{}\t{}", t.hub_repo(), t.hub_revision())), "{dest}");
+            assert!(
+                revisions.contains(&format!("{dest}\t{}\t{}", t.hub_repo(), t.hub_revision())),
+                "{dest}"
+            );
             assert!(sha.contains(t.sha256()), "{dest}");
         }
     }

@@ -32,8 +32,8 @@
 //!   refuses them (`Ltx25I2V`, `LtxKeyframes`) until the LTX I2V port lands.
 
 use fastvideo_protocol::{
-    Anchor, ApiError, AudioOut, CanvasSpec, ExpansionMode, GapId, GenerationRequest, Keyframe, Length, MediaRef,
-    PromptExpansion, ProtocolId, Snap, Task, TimingSpec,
+    Anchor, ApiError, AudioOut, CanvasSpec, ExpansionMode, GapId, GenerationRequest, Keyframe,
+    Length, MediaRef, PromptExpansion, ProtocolId, Snap, Task, TimingSpec,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -50,8 +50,16 @@ pub const LTX_FPS_PRO: [u32; 3] = [24, 25, 50];
 /// The engine's LTX frame grid ceiling (`ltx2_caps`: 8k+1, 9..=481).
 pub const LTX_FRAMES_MAX: u32 = 481;
 /// `camera_motion` values (LTX API).
-pub const CAMERA_MOTIONS: [&str; 8] =
-    ["dolly_in", "dolly_out", "dolly_left", "dolly_right", "jib_up", "jib_down", "static", "focus_shift"];
+pub const CAMERA_MOTIONS: [&str; 8] = [
+    "dolly_in",
+    "dolly_out",
+    "dolly_left",
+    "dolly_right",
+    "jib_up",
+    "jib_down",
+    "static",
+    "focus_shift",
+];
 
 /// fast (`ltx-turbo`) or pro (`ltx-pro`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -99,8 +107,12 @@ pub enum LtxResolution {
 }
 
 impl LtxResolution {
-    pub const ALL: [LtxResolution; 4] =
-        [LtxResolution::P720, LtxResolution::P1080, LtxResolution::P1440, LtxResolution::P2160];
+    pub const ALL: [LtxResolution; 4] = [
+        LtxResolution::P720,
+        LtxResolution::P1080,
+        LtxResolution::P1440,
+        LtxResolution::P2160,
+    ];
     pub fn as_str(&self) -> &'static str {
         match self {
             LtxResolution::P720 => "720p",
@@ -198,7 +210,12 @@ fn parse_duration(f: &Fields, class: LtxClass) -> Result<Option<u32>, ApiError> 
         Some(Value::String(s)) if s == "auto" => return Ok(None),
         Some(Value::String(s)) => s.trim().parse::<i64>().ok(),
         Some(Value::Number(_)) => f.int("duration")?,
-        Some(v) => return Err(bad("duration", format!("Input should be an integer or 'auto', got {}", type_name(v)))),
+        Some(v) => {
+            return Err(bad(
+                "duration",
+                format!("Input should be an integer or 'auto', got {}", type_name(v)),
+            ))
+        }
     };
     match d {
         Some(d) if d > 0 && allowed.contains(&(d as u32)) => Ok(Some(d as u32)),
@@ -222,24 +239,47 @@ fn parse_fps(f: &Fields, class: LtxClass) -> Result<u32, ApiError> {
     }
 }
 
-pub(super) fn parse(f: &Fields, class: LtxClass, image_to_video: bool) -> Result<LtxInput, ApiError> {
+pub(super) fn parse(
+    f: &Fields,
+    class: LtxClass,
+    image_to_video: bool,
+) -> Result<LtxInput, ApiError> {
     let prompt = super::parse_prompt(f, LTX_PROMPT_MAX_CHARS)?;
     let duration = parse_duration(f, class)?;
-    let resolution = parse_enum(f, "resolution", class.resolutions(), LtxResolution::as_str, LtxResolution::P1080)?;
+    let resolution = parse_enum(
+        f,
+        "resolution",
+        class.resolutions(),
+        LtxResolution::as_str,
+        LtxResolution::P1080,
+    )?;
     let fps = parse_fps(f, class)?;
-    let (aspects, default_aspect): (&[LtxAspect], _) =
-        if image_to_video { (&LtxAspect::I2V, LtxAspect::Auto) } else { (&LtxAspect::T2V, LtxAspect::R16x9) };
-    let aspect_ratio = parse_enum(f, "aspect_ratio", aspects, LtxAspect::as_str, default_aspect)?;
+    let (aspects, default_aspect): (&[LtxAspect], _) = if image_to_video {
+        (&LtxAspect::I2V, LtxAspect::Auto)
+    } else {
+        (&LtxAspect::T2V, LtxAspect::R16x9)
+    };
+    let aspect_ratio = parse_enum(
+        f,
+        "aspect_ratio",
+        aspects,
+        LtxAspect::as_str,
+        default_aspect,
+    )?;
     let camera_motion = match f.string("camera_motion")? {
         None => None,
         Some(c) if CAMERA_MOTIONS.contains(&c) => Some(c.to_owned()),
         Some(_) => {
             let list: Vec<String> = CAMERA_MOTIONS.iter().map(|c| format!("'{c}'")).collect();
-            return Err(bad("camera_motion", format!("Input should be {}", list.join(", "))));
+            return Err(bad(
+                "camera_motion",
+                format!("Input should be {}", list.join(", ")),
+            ));
         }
     };
     let (image_url, end_image_url) = if image_to_video {
-        let first = super::opt_url(f, "image_url")?.ok_or_else(|| bad("image_url", "Field required"))?;
+        let first =
+            super::opt_url(f, "image_url")?.ok_or_else(|| bad("image_url", "Field required"))?;
         (Some(first), super::opt_url(f, "end_image_url")?)
     } else {
         (None, None)
@@ -286,25 +326,45 @@ impl LtxInput {
         match self.camera_motion.as_deref() {
             None => {}
             Some("static") => r.note_noop("camera_motion"),
-            Some(_) => return Err(ApiError::unsupported(GapId::LtxCameraMotion).with_param("camera_motion")),
+            Some(_) => {
+                return Err(
+                    ApiError::unsupported(GapId::LtxCameraMotion).with_param("camera_motion")
+                )
+            }
         }
         let (w, h) = self.resolution.landscape();
         r.canvas = match self.aspect_ratio {
-            LtxAspect::R16x9 => CanvasSpec::Exact { width: w, height: h },
-            LtxAspect::R9x16 => CanvasSpec::Exact { width: h, height: w },
+            LtxAspect::R16x9 => CanvasSpec::Exact {
+                width: w,
+                height: h,
+            },
+            LtxAspect::R9x16 => CanvasSpec::Exact {
+                width: h,
+                height: w,
+            },
             LtxAspect::Auto => CanvasSpec::FollowImage { short_edge: h },
         };
         if let Some(u) = &self.image_url {
-            r.keyframes.push(Keyframe { at: Anchor::First, image: MediaRef::parse(u, "image_url")? });
+            r.keyframes.push(Keyframe {
+                at: Anchor::First,
+                image: MediaRef::parse(u, "image_url")?,
+            });
             r.task = Task::I2V;
         }
         if let Some(u) = &self.end_image_url {
-            r.keyframes.push(Keyframe { at: Anchor::Last, image: MediaRef::parse(u, "end_image_url")? });
+            r.keyframes.push(Keyframe {
+                at: Anchor::Last,
+                image: MediaRef::parse(u, "end_image_url")?,
+            });
             r.task = Task::Keyframes;
         }
         if let Some(on) = self.enable_prompt_expansion {
             r.note_noop("enable_prompt_expansion");
-            let mode = if on { ExpansionMode::Balanced } else { ExpansionMode::Disabled };
+            let mode = if on {
+                ExpansionMode::Balanced
+            } else {
+                ExpansionMode::Disabled
+            };
             r.prompt_expansion = Some(PromptExpansion::explicit(mode, "enable_prompt_expansion"));
         }
         Ok(r)

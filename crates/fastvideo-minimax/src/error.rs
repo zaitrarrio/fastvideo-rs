@@ -32,7 +32,11 @@ pub struct OaiClass {
 
 /// The table in the module docs.
 pub fn classify(kind: ErrorKind) -> OaiClass {
-    let c = |http, error_type, code| OaiClass { http, error_type, code };
+    let c = |http, error_type, code| OaiClass {
+        http,
+        error_type,
+        code,
+    };
     match kind {
         ErrorKind::InvalidRequest
         | ErrorKind::Unsupported(_)
@@ -138,9 +142,21 @@ mod tests {
         assert_eq!(s(ApiError::queue_full("x")), 429);
         assert_eq!(s(ApiError::loading("x")), 529);
         assert_eq!(s(ApiError::internal("x")), 500);
-        assert_eq!(message_for(&ApiError::not_found("x")), "invalid task_id (2013)");
-        assert_eq!(message_for(&ApiError::loading("models are loading")), "overloaded, models are loading");
+        assert_eq!(
+            message_for(&ApiError::not_found("x")),
+            "invalid task_id (2013)"
+        );
+        assert_eq!(
+            message_for(&ApiError::loading("models are loading")),
+            "overloaded, models are loading"
+        );
         let rid = render_oai_error(&ApiError::internal("x"), None);
-        assert_eq!(rid.json_body().unwrap()["request_id"].as_str().unwrap().len(), 32);
+        assert_eq!(
+            rid.json_body().unwrap()["request_id"]
+                .as_str()
+                .unwrap()
+                .len(),
+            32
+        );
     }
 }

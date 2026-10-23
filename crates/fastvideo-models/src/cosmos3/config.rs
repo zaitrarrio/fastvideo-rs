@@ -183,12 +183,18 @@ impl Cosmos3TransformerConfig {
             return Err("cosmos3: attention_bias is not ported".into());
         }
         if h.hidden_act != "silu" {
-            return Err(format!("cosmos3: hidden_act {:?} is not ported", h.hidden_act));
+            return Err(format!(
+                "cosmos3: hidden_act {:?} is not ported",
+                h.hidden_act
+            ));
         }
         if h.use_und_k_norm_for_gen {
             return Err("cosmos3: use_und_k_norm_for_gen is not ported".into());
         }
-        if h.position_embedding_type.as_deref().is_some_and(|p| p != "unified_3d_mrope") {
+        if h.position_embedding_type
+            .as_deref()
+            .is_some_and(|p| p != "unified_3d_mrope")
+        {
             return Err("cosmos3: only unified_3d_mrope is ported".into());
         }
         let rs = h.rope_scaling.ok_or("cosmos3: rope_scaling missing")?;
@@ -355,7 +361,12 @@ impl Cosmos3TransformerConfig {
 
     /// Parameters of one tower (all layers), and of the gen-only resident set.
     pub fn tower_params(&self) -> usize {
-        let (h, q, kv, m) = (self.hidden_size, self.q_dim(), self.kv_dim(), self.intermediate_size);
+        let (h, q, kv, m) = (
+            self.hidden_size,
+            self.q_dim(),
+            self.kv_dim(),
+            self.intermediate_size,
+        );
         let per = q * h + 2 * kv * h + h * q + 3 * m * h + 2 * h + 2 * self.head_dim;
         per * self.num_layers
     }

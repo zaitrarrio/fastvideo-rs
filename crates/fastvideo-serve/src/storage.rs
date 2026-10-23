@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use fastvideo_protocol::JobStore;
 use fastvideo_serve_kit::artifacts::{LocalUrls, S3Config};
-use fastvideo_serve_kit::{ArtifactStore, D1Config, D1Options, LocalArtifactStore, MemJobStore, S3ArtifactStore, UrlKey};
+use fastvideo_serve_kit::{
+    ArtifactStore, D1Config, D1Options, LocalArtifactStore, MemJobStore, S3ArtifactStore, UrlKey,
+};
 use time::OffsetDateTime;
 use url::Url;
 
@@ -25,14 +27,19 @@ pub struct Jobs {
 
 impl std::fmt::Debug for Jobs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Jobs").field("kind", &self.kind).finish_non_exhaustive()
+        f.debug_struct("Jobs")
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
     }
 }
 
 /// The `[artifacts.s3]` block as a serve-kit `S3Config`.
 pub fn s3_config(c: &Config) -> Result<S3Config, String> {
     let s = &c.artifacts.s3;
-    let endpoint = s.endpoint.as_deref().ok_or("artifacts.s3.endpoint is not set")?;
+    let endpoint = s
+        .endpoint
+        .as_deref()
+        .ok_or("artifacts.s3.endpoint is not set")?;
     let endpoint = Url::parse(endpoint).map_err(|e| format!("artifacts.s3.endpoint: {e}"))?;
     Ok(S3Config {
         endpoint,
@@ -46,7 +53,11 @@ pub fn s3_config(c: &Config) -> Result<S3Config, String> {
 }
 
 /// The artifact store (and the URL key used for `/files`).
-pub fn build_artifacts(c: &Config, public_base: &Url, key: &UrlKey) -> Result<Arc<dyn ArtifactStore>, String> {
+pub fn build_artifacts(
+    c: &Config,
+    public_base: &Url,
+    key: &UrlKey,
+) -> Result<Arc<dyn ArtifactStore>, String> {
     Ok(match c.artifact_backend() {
         ArtifactBackend::S3 => {
             if !cfg!(feature = "http-client") {
@@ -55,8 +66,14 @@ pub fn build_artifacts(c: &Config, public_base: &Url, key: &UrlKey) -> Result<Ar
             Arc::new(S3ArtifactStore::new(s3_config(c)?))
         }
         _ => Arc::new(LocalArtifactStore::new(
-            c.artifacts.local_dir.clone().unwrap_or_else(|| c.server.state_dir.join("artifacts")),
-            LocalUrls { public_base: public_base.clone(), key: key.clone() },
+            c.artifacts
+                .local_dir
+                .clone()
+                .unwrap_or_else(|| c.server.state_dir.join("artifacts")),
+            LocalUrls {
+                public_base: public_base.clone(),
+                key: key.clone(),
+            },
         )),
     })
 }
@@ -65,9 +82,13 @@ pub fn build_artifacts(c: &Config, public_base: &Url, key: &UrlKey) -> Result<Ar
 pub fn d1_config(c: &Config) -> Result<D1Config, String> {
     let d = &c.jobs.d1;
     let mut cfg = D1Config::new(
-        d.account_id.clone().ok_or("jobs.d1.account_id (FV_CF_ACCOUNT_ID) is not set")?,
+        d.account_id
+            .clone()
+            .ok_or("jobs.d1.account_id (FV_CF_ACCOUNT_ID) is not set")?,
         d.api_token.expose(),
-        d.database_id.clone().ok_or("jobs.d1.database_id (FV_D1_DATABASE_ID) is not set")?,
+        d.database_id
+            .clone()
+            .ok_or("jobs.d1.database_id (FV_D1_DATABASE_ID) is not set")?,
     );
     if let Some(b) = &d.api_base {
         cfg.api_base = b.clone();
@@ -104,26 +125,39 @@ pub async fn build_jobs(
             .open(OffsetDateTime::now_utc())
             .await
             .map_err(|e| format!("opening the D1 job store: {e}"))?;
-        return Ok(Jobs { store: store.clone(), d1: Some(store), kind: JobBackend::D1 });
+        return Ok(Jobs {
+            store: store.clone(),
+            d1: Some(store),
+            kind: JobBackend::D1,
+        });
     }
     let kind = c.job_backend();
     match kind {
         JobBackend::Memory => Ok(Jobs {
-            store: Arc::new(MemJobStore::memory().with_artifacts(artifacts).with_inputs_root(inputs)),
+            store: Arc::new(
+                MemJobStore::memory()
+                    .with_artifacts(artifacts)
+                    .with_inputs_root(inputs),
+            ),
             d1: None,
             kind,
         }),
         JobBackend::D1 => {
             #[cfg(feature = "http-client")]
             {
-                let client = fastvideo_serve_kit::D1Client::http(d1_config(c)?).map_err(|e| e.to_string())?;
+                let client = fastvideo_serve_kit::D1Client::http(d1_config(c)?)
+                    .map_err(|e| e.to_string())?;
                 let store = fastvideo_serve_kit::D1JobStore::new(client, d1_options(c, worker))
                     .with_artifacts(artifacts)
                     .with_inputs_root(inputs)
                     .open(OffsetDateTime::now_utc())
                     .await
                     .map_err(|e| format!("opening the D1 job store: {e}"))?;
-                Ok(Jobs { store: store.clone(), d1: Some(store), kind })
+                Ok(Jobs {
+                    store: store.clone(),
+                    d1: Some(store),
+                    kind,
+                })
             }
             #[cfg(not(feature = "http-client"))]
             {
@@ -147,7 +181,10 @@ pub async fn build_jobs(
 /// The minted-key store (`auth.key_store`): D1 table `api_keys`, the file
 /// `state_dir/api_keys.json`, or memory. `d1` replaces the HTTP D1 client
 /// (tests: the mock shared by several workers).
-pub async fn build_key_store(c: &Config, d1: Option<fastvideo_serve_kit::D1Client>) -> Result<Arc<fastvideo_serve_kit::KeyStore>, String> {
+pub async fn build_key_store(
+    c: &Config,
+    d1: Option<fastvideo_serve_kit::D1Client>,
+) -> Result<Arc<fastvideo_serve_kit::KeyStore>, String> {
     use fastvideo_serve_kit::keys::{FileKeyBackend, KeyBackend, MemoryKeyBackend};
     let backend: Arc<dyn KeyBackend> = match c.key_store_backend() {
         KeyStoreBackend::Memory => Arc::new(MemoryKeyBackend::default()),
@@ -156,7 +193,8 @@ pub async fn build_key_store(c: &Config, d1: Option<fastvideo_serve_kit::D1Clien
             {
                 let client = match d1 {
                     Some(d) => d,
-                    None => fastvideo_serve_kit::D1Client::http(d1_config(c)?).map_err(|e| e.to_string())?,
+                    None => fastvideo_serve_kit::D1Client::http(d1_config(c)?)
+                        .map_err(|e| e.to_string())?,
                 };
                 Arc::new(
                     fastvideo_serve_kit::keys::D1KeyBackend::open(client)
@@ -170,7 +208,11 @@ pub async fn build_key_store(c: &Config, d1: Option<fastvideo_serve_kit::D1Clien
                 return Err("auth.key_store = d1 needs fv-serve built with `http-client`".into());
             }
         }
-        KeyStoreBackend::File | KeyStoreBackend::Auto => Arc::new(FileKeyBackend::new(c.server.state_dir.join("api_keys.json"))),
+        KeyStoreBackend::File | KeyStoreBackend::Auto => Arc::new(FileKeyBackend::new(
+            c.server.state_dir.join("api_keys.json"),
+        )),
     };
-    fastvideo_serve_kit::KeyStore::open(backend).await.map_err(|e| format!("loading API keys: {e}"))
+    fastvideo_serve_kit::KeyStore::open(backend)
+        .await
+        .map_err(|e| format!("loading API keys: {e}"))
 }

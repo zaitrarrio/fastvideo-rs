@@ -22,7 +22,11 @@ use crate::lockstep::clip_samples;
 const CHUNK: usize = 1024;
 
 fn gcd(a: u32, b: u32) -> u32 {
-    if b == 0 { a } else { gcd(b, a % b) }
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
 }
 
 /// An input chunk near [`CHUNK`] whose output chunk is even. rubato reports
@@ -83,7 +87,11 @@ pub fn resample(pcm: &Pcm, to_rate: u32) -> Result<Pcm> {
     debug_assert_eq!(out.len(), want * ch);
     out.truncate(want * ch);
     out.resize(want * ch, 0.0);
-    Ok(Pcm { rate: to_rate, channels: pcm.channels, samples: out.into() })
+    Ok(Pcm {
+        rate: to_rate,
+        channels: pcm.channels,
+        samples: out.into(),
+    })
 }
 
 /// Streaming resampler: push interleaved chunks of any size, get interleaved
@@ -140,7 +148,9 @@ impl StreamResampler {
     }
 
     fn run_chunks(&mut self, out: &mut [Vec<f32>], allow_partial: bool) -> Result<()> {
-        let Some(r) = self.inner.as_mut() else { return Ok(()) };
+        let Some(r) = self.inner.as_mut() else {
+            return Ok(());
+        };
         loop {
             let need = r.input_frames_next();
             let have = self.pending[0].len();
@@ -169,7 +179,9 @@ impl StreamResampler {
     /// Push interleaved input; returns whatever output is ready (interleaved).
     pub fn push(&mut self, samples: &[f32]) -> Result<Vec<f32>> {
         if samples.len() % self.channels != 0 {
-            return Err(MediaError::invalid("input is not a whole number of sample frames"));
+            return Err(MediaError::invalid(
+                "input is not a whole number of sample frames",
+            ));
         }
         self.in_frames += (samples.len() / self.channels) as u64;
         if self.inner.is_none() {
@@ -240,10 +252,18 @@ pub fn to_channels(pcm: &Pcm, channels: u8) -> Result<Pcm> {
     let out_ch = channels as usize;
     let mut out = Vec::with_capacity(pcm.frames() * out_ch);
     for f in pcm.samples.chunks_exact(ch) {
-        let m = if ch == 1 { f[0] } else { f.iter().sum::<f32>() / ch as f32 };
+        let m = if ch == 1 {
+            f[0]
+        } else {
+            f.iter().sum::<f32>() / ch as f32
+        };
         out.extend(std::iter::repeat_n(m, out_ch));
     }
-    Ok(Pcm { rate: pcm.rate, channels, samples: out.into() })
+    Ok(Pcm {
+        rate: pcm.rate,
+        channels,
+        samples: out.into(),
+    })
 }
 
 /// Mean downmix to mono.
@@ -329,7 +349,12 @@ mod tests {
     fn identity_and_empty() {
         let src = sine(48_000, 1000.0, 0.01, 1);
         assert_eq!(resample(&src, 48_000).unwrap(), src);
-        assert_eq!(resample(&Pcm::silence(32_000, 2, 0), 48_000).unwrap().frames(), 0);
+        assert_eq!(
+            resample(&Pcm::silence(32_000, 2, 0), 48_000)
+                .unwrap()
+                .frames(),
+            0
+        );
         assert!(resample(&src, 0).is_err());
     }
 
@@ -351,7 +376,11 @@ mod tests {
         }
         out.extend(s.flush().unwrap());
         assert_eq!(out.len(), whole.samples.len());
-        let d = out.iter().zip(whole.samples.iter()).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        let d = out
+            .iter()
+            .zip(whole.samples.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
         assert!(d < 1e-5, "stream vs whole {d}");
     }
 

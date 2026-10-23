@@ -60,14 +60,18 @@ pub struct LtxA2vInput {
 }
 
 pub(super) fn parse(f: &Fields, class: LtxClass) -> Result<LtxA2vInput, ApiError> {
-    let audio_url = super::opt_url(f, "audio_url")?.ok_or_else(|| bad("audio_url", "Field required"))?;
+    let audio_url =
+        super::opt_url(f, "audio_url")?.ok_or_else(|| bad("audio_url", "Field required"))?;
     let image_url = super::opt_url(f, "image_url")?;
     let prompt = match f.get("prompt") {
         None => None,
         Some(_) => Some(super::parse_prompt(f, LTX_PROMPT_MAX_CHARS)?),
     };
     if prompt.is_none() && image_url.is_none() {
-        return Err(bad("prompt", "prompt is required when image_url is not provided"));
+        return Err(bad(
+            "prompt",
+            "prompt is required when image_url is not provided",
+        ));
     }
     let guidance_scale = match f.get("guidance_scale") {
         None => None,
@@ -75,21 +79,38 @@ pub(super) fn parse(f: &Fields, class: LtxClass) -> Result<LtxA2vInput, ApiError
             let g = n.as_f64().unwrap_or(f64::NAN);
             let (lo, hi) = A2V_GUIDANCE;
             if g.is_nan() || g < lo {
-                return Err(bad("guidance_scale", format!("Input should be greater than or equal to {lo}")));
+                return Err(bad(
+                    "guidance_scale",
+                    format!("Input should be greater than or equal to {lo}"),
+                ));
             }
             if g > hi {
-                return Err(bad("guidance_scale", format!("Input should be less than or equal to {hi}")));
+                return Err(bad(
+                    "guidance_scale",
+                    format!("Input should be less than or equal to {hi}"),
+                ));
             }
             Some(g)
         }
-        Some(v) => return Err(bad("guidance_scale", format!("Input should be a valid number, got {}", type_name(v)))),
+        Some(v) => {
+            return Err(bad(
+                "guidance_scale",
+                format!("Input should be a valid number, got {}", type_name(v)),
+            ))
+        }
     };
     Ok(LtxA2vInput {
         class,
         audio_url,
         image_url,
         prompt,
-        aspect_ratio: parse_enum(f, "aspect_ratio", &A2V_ASPECTS, LtxAspect::as_str, LtxAspect::Auto)?,
+        aspect_ratio: parse_enum(
+            f,
+            "aspect_ratio",
+            &A2V_ASPECTS,
+            LtxAspect::as_str,
+            LtxAspect::Auto,
+        )?,
         guidance_scale,
         seed: super::parse_seed(f)?,
         sync_mode: f.bool("sync_mode", false)?,
@@ -98,7 +119,11 @@ pub(super) fn parse(f: &Fields, class: LtxClass) -> Result<LtxA2vInput, ApiError
 
 impl LtxA2vInput {
     pub(super) fn normalize(&self, model: &str) -> Result<GenerationRequest, ApiError> {
-        let mut r = GenerationRequest::text(ProtocolId::Fal, model, self.prompt.clone().unwrap_or_default());
+        let mut r = GenerationRequest::text(
+            ProtocolId::Fal,
+            model,
+            self.prompt.clone().unwrap_or_default(),
+        );
         r.task = Task::A2V;
         r.seed = self.seed;
         r.output.inline_data_uri = self.sync_mode;
@@ -110,15 +135,27 @@ impl LtxA2vInput {
             max_s: (self.class == LtxClass::Pro).then_some(A2V_PRO_MAX_S),
         });
         if let Some(u) = &self.image_url {
-            r.keyframes.push(Keyframe { at: Anchor::First, image: MediaRef::parse(u, "image_url")? });
+            r.keyframes.push(Keyframe {
+                at: Anchor::First,
+                image: MediaRef::parse(u, "image_url")?,
+            });
         }
         let (w, h) = (A2V_SHORT_EDGE * 16 / 9, A2V_SHORT_EDGE);
         r.canvas = match self.aspect_ratio {
             // "determined automatically based on the input image, or defaults
             // to 16:9": 9:16 for a portrait image (the LTX API rule).
-            LtxAspect::Auto => CanvasSpec::Oriented { width: w, height: h },
-            LtxAspect::R16x9 => CanvasSpec::Exact { width: w, height: h },
-            LtxAspect::R9x16 => CanvasSpec::Exact { width: h, height: w },
+            LtxAspect::Auto => CanvasSpec::Oriented {
+                width: w,
+                height: h,
+            },
+            LtxAspect::R16x9 => CanvasSpec::Exact {
+                width: w,
+                height: h,
+            },
+            LtxAspect::R9x16 => CanvasSpec::Exact {
+                width: h,
+                height: w,
+            },
         };
         match (self.class, self.guidance_scale) {
             // `pro`: the guided dev pipeline's video CFG scale.

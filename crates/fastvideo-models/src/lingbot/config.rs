@@ -373,14 +373,20 @@ impl LingBotTransformerConfig {
         let mut out: Vec<(String, Vec<usize>)> = vec![
             ("patch_embedder.weight".into(), vec![h, self.patch_dim()]),
             ("patch_embedder.bias".into(), vec![h]),
-            ("time_embedder.linear_1.weight".into(), vec![h, self.freq_dim]),
+            (
+                "time_embedder.linear_1.weight".into(),
+                vec![h, self.freq_dim],
+            ),
             ("time_embedder.linear_1.bias".into(), vec![h]),
             ("time_embedder.linear_2.weight".into(), vec![h, h]),
             ("time_embedder.linear_2.bias".into(), vec![h]),
             ("time_modulation.1.weight".into(), vec![6 * h, h]),
             ("time_modulation.1.bias".into(), vec![6 * h]),
             ("text_embedder.norm.weight".into(), vec![self.text_dim]),
-            ("text_embedder.linear_1.weight".into(), vec![h, self.text_dim]),
+            (
+                "text_embedder.linear_1.weight".into(),
+                vec![h, self.text_dim],
+            ),
             ("text_embedder.linear_1.bias".into(), vec![h]),
             ("text_embedder.linear_2.weight".into(), vec![h, h]),
             ("text_embedder.linear_2.bias".into(), vec![h]),

@@ -57,8 +57,11 @@ struct Args {
 /// the message as is.
 fn merge_line(msg: &mut Value, line: &str) -> Result<(), String> {
     if line.starts_with('{') {
-        let v: Value = serde_json::from_str(line).map_err(|e| format!("prompts line {line:.40}: {e}"))?;
-        let obj = v.as_object().ok_or("a JSON prompts line must be an object")?;
+        let v: Value =
+            serde_json::from_str(line).map_err(|e| format!("prompts line {line:.40}: {e}"))?;
+        let obj = v
+            .as_object()
+            .ok_or("a JSON prompts line must be an object")?;
         for (k, v) in obj {
             msg[k.as_str()] = v.clone();
         }
@@ -91,12 +94,25 @@ fn args() -> Result<Args, String> {
             "--app" => a.app = v()?,
             "--seconds" => a.seconds = v()?.parse().map_err(|e| format!("--seconds: {e}"))?,
             "--switch-at" => {
-                a.switch_at = v()?.split(',').filter(|s| !s.is_empty()).map(|s| s.trim().parse::<f64>().map_err(|e| format!("--switch-at: {e}"))).collect::<Result<_, _>>()?
+                a.switch_at = v()?
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| {
+                        s.trim()
+                            .parse::<f64>()
+                            .map_err(|e| format!("--switch-at: {e}"))
+                    })
+                    .collect::<Result<_, _>>()?
             }
             "--prompts" => {
                 let p = v()?;
                 let text = std::fs::read_to_string(&p).map_err(|e| format!("{p}: {e}"))?;
-                a.prompts = text.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect();
+                a.prompts = text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_owned)
+                    .collect();
             }
             "--prompt" => a.prompts.push(v()?),
             "--out" => a.out = PathBuf::from(v()?),
@@ -111,9 +127,22 @@ fn args() -> Result<Args, String> {
                 a.configure = Some(c);
             }
             "--switch-at-chunks" => {
-                a.switch_at_chunks = v()?.split(',').filter(|s| !s.is_empty()).map(|s| s.trim().parse::<u64>().map_err(|e| format!("--switch-at-chunks: {e}"))).collect::<Result<_, _>>()?
+                a.switch_at_chunks = v()?
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| {
+                        s.trim()
+                            .parse::<u64>()
+                            .map_err(|e| format!("--switch-at-chunks: {e}"))
+                    })
+                    .collect::<Result<_, _>>()?
             }
-            "--stop-after-chunks" => a.stop_after_chunks = Some(v()?.parse().map_err(|e| format!("--stop-after-chunks: {e}"))?),
+            "--stop-after-chunks" => {
+                a.stop_after_chunks = Some(
+                    v()?.parse()
+                        .map_err(|e| format!("--stop-after-chunks: {e}"))?,
+                )
+            }
             "--seed" => a.seed = Some(v()?.parse().map_err(|e| format!("--seed: {e}"))?),
             other => return Err(format!("unknown argument {other}")),
         }
@@ -125,22 +154,40 @@ fn args() -> Result<Args, String> {
 }
 
 /// One HTTP/1.1 POST with a JSON body to a plain-HTTP local server.
-async fn post(url: &str, path: &str, key: Option<&str>, body: &Value) -> Result<(u16, Value), String> {
+async fn post(
+    url: &str,
+    path: &str,
+    key: Option<&str>,
+    body: &Value,
+) -> Result<(u16, Value), String> {
     let hostport = url.trim_start_matches("http://").trim_end_matches('/');
-    let mut s = tokio::net::TcpStream::connect(hostport).await.map_err(|e| format!("connect {hostport}: {e}"))?;
+    let mut s = tokio::net::TcpStream::connect(hostport)
+        .await
+        .map_err(|e| format!("connect {hostport}: {e}"))?;
     let body = body.to_string();
-    let auth = key.map(|k| format!("authorization: Key {k}\r\n")).unwrap_or_default();
+    let auth = key
+        .map(|k| format!("authorization: Key {k}\r\n"))
+        .unwrap_or_default();
     let req = format!(
         "POST {path} HTTP/1.1\r\nhost: {hostport}\r\ncontent-type: application/json\r\n{auth}content-length: {}\r\nconnection: close\r\n\r\n{body}",
         body.len()
     );
-    s.write_all(req.as_bytes()).await.map_err(|e| e.to_string())?;
+    s.write_all(req.as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     s.read_to_end(&mut buf).await.map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&buf);
     let (head, rest) = text.split_once("\r\n\r\n").ok_or("malformed response")?;
-    let status: u16 = head.split_whitespace().nth(1).and_then(|s| s.parse().ok()).ok_or("no status")?;
-    let body = if head.to_ascii_lowercase().contains("transfer-encoding: chunked") {
+    let status: u16 = head
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .ok_or("no status")?;
+    let body = if head
+        .to_ascii_lowercase()
+        .contains("transfer-encoding: chunked")
+    {
         let mut out = String::new();
         let mut r = rest;
         while let Some((len, tail)) = r.split_once("\r\n") {
@@ -155,7 +202,10 @@ async fn post(url: &str, path: &str, key: Option<&str>, body: &Value) -> Result<
     } else {
         rest.to_owned()
     };
-    Ok((status, serde_json::from_str(&body).unwrap_or(Value::String(body))))
+    Ok((
+        status,
+        serde_json::from_str(&body).unwrap_or(Value::String(body)),
+    ))
 }
 
 /// A minimal Ogg Opus writer (RFC 7845) for the received stereo packets,
@@ -171,7 +221,11 @@ fn ogg_crc(data: &[u8]) -> u32 {
     for &b in data {
         crc ^= u32::from(b) << 24;
         for _ in 0..8 {
-            crc = if crc & 0x8000_0000 != 0 { (crc << 1) ^ 0x04c1_1db7 } else { crc << 1 };
+            crc = if crc & 0x8000_0000 != 0 {
+                (crc << 1) ^ 0x04c1_1db7
+            } else {
+                crc << 1
+            };
         }
     }
     crc
@@ -179,7 +233,11 @@ fn ogg_crc(data: &[u8]) -> u32 {
 
 impl OggOpus {
     fn create(path: &std::path::Path) -> std::io::Result<Self> {
-        let mut me = Self { f: std::fs::File::create(path)?, seq: 0, first_rtp: None };
+        let mut me = Self {
+            f: std::fs::File::create(path)?,
+            seq: 0,
+            first_rtp: None,
+        };
         let mut head = b"OpusHead".to_vec();
         head.extend_from_slice(&[1, 2]);
         head.extend_from_slice(&312u16.to_le_bytes());
@@ -258,9 +316,13 @@ async fn run(a: Args) -> Result<(), String> {
     std::fs::create_dir_all(&a.out).map_err(|e| e.to_string())?;
     let t0 = Instant::now();
     let now_ms = move || t0.elapsed().as_secs_f64() * 1000.0;
-    let host = RtcHost::bind(HostConfig { udp_bind: Some("0.0.0.0:0".parse().unwrap()), ice_servers: Vec::new(), ..HostConfig::default() })
-        .await
-        .map_err(|e| format!("bind: {e}"))?;
+    let host = RtcHost::bind(HostConfig {
+        udp_bind: Some("0.0.0.0:0".parse().unwrap()),
+        ice_servers: Vec::new(),
+        ..HostConfig::default()
+    })
+    .await
+    .map_err(|e| format!("bind: {e}"))?;
     let (pending, offer) = host
         .offer(OfferOptions {
             video: Some(Direction::RecvOnly),
@@ -272,14 +334,23 @@ async fn run(a: Args) -> Result<(), String> {
         .await
         .map_err(|e| format!("offer: {e}"))?;
     let app_id = format!("{}/director", a.app);
-    let (st, v) = post(&a.url, "/wma/session", a.key.as_deref(), &json!({"app_id": app_id, "sdp": offer, "type": "offer"})).await?;
+    let (st, v) = post(
+        &a.url,
+        "/wma/session",
+        a.key.as_deref(),
+        &json!({"app_id": app_id, "sdp": offer, "type": "offer"}),
+    )
+    .await?;
     if st != 200 {
         return Err(format!("/wma/session: {st} {v}"));
     }
     let answer = v["sdp"].as_str().ok_or("no sdp in the answer")?.to_owned();
     let session_id = v["session_id"].as_str().unwrap_or_default().to_owned();
     eprintln!("session {session_id}");
-    let peer = pending.accept_answer(&answer).await.map_err(|e| format!("answer: {e}"))?;
+    let peer = pending
+        .accept_answer(&answer)
+        .await
+        .map_err(|e| format!("answer: {e}"))?;
     let (handle, mut events) = peer.split();
 
     let media = Arc::new(Mutex::new(Media::default()));
@@ -295,13 +366,24 @@ async fn run(a: Args) -> Result<(), String> {
                         let _ = msg_tx.send((now_ms(), v));
                     }
                 }
-                PeerEvent::Media { kind: TrackKind::Video, rtp_time, keyframe, data, .. } => {
+                PeerEvent::Media {
+                    kind: TrackKind::Video,
+                    rtp_time,
+                    keyframe,
+                    data,
+                    ..
+                } => {
                     let _ = h264.write_all(&data);
                     let mut l = m2.lock().unwrap();
                     l.frames.push((now_ms(), rtp_time));
                     l.keyframes += u64::from(keyframe);
                 }
-                PeerEvent::Media { kind: TrackKind::Audio, rtp_time, data, .. } => {
+                PeerEvent::Media {
+                    kind: TrackKind::Audio,
+                    rtp_time,
+                    data,
+                    ..
+                } => {
                     ogg.packet(&data, rtp_time);
                     m2.lock().unwrap().audio_packets += 1;
                 }
@@ -316,26 +398,42 @@ async fn run(a: Args) -> Result<(), String> {
         let mut t = tokio::time::interval(Duration::from_secs(5));
         loop {
             t.tick().await;
-            let _ = post(&url, "/wma/session/heartbeat", key.as_deref(), &json!({"session_id": sid})).await;
+            let _ = post(
+                &url,
+                "/wma/session/heartbeat",
+                key.as_deref(),
+                &json!({"session_id": sid}),
+            )
+            .await;
         }
     });
 
     let mut log = std::fs::File::create(a.out.join("events.jsonl")).map_err(|e| e.to_string())?;
     let mut all: Vec<(f64, Value)> = Vec::new();
     let mut record = |t: f64, v: &Value, all: &mut Vec<(f64, Value)>| {
-        let _ = writeln!(log, "{}", json!({"t_ms": (t * 10.0).round() / 10.0, "msg": v}));
+        let _ = writeln!(
+            log,
+            "{}",
+            json!({"t_ms": (t * 10.0).round() / 10.0, "msg": v})
+        );
         all.push((t, v.clone()));
     };
     // session_info, then configure.
     let deadline = Instant::now() + Duration::from_secs(120);
     let info = loop {
-        let (t, m) = tokio::time::timeout_at(deadline.into(), msgs.recv()).await.map_err(|_| "no session_info")?.ok_or("closed")?;
+        let (t, m) = tokio::time::timeout_at(deadline.into(), msgs.recv())
+            .await
+            .map_err(|_| "no session_info")?
+            .ok_or("closed")?;
         record(t, &m, &mut all);
         if m["type"] == "session_info" {
             break m;
         }
     };
-    eprintln!("session_info: fps {} chunk {} s, context {} frames, causal {}", info["fps"], info["chunk_seconds"], info["continuation_context_frames"], info["causal"]);
+    eprintln!(
+        "session_info: fps {} chunk {} s, context {} frames, causal {}",
+        info["fps"], info["chunk_seconds"], info["continuation_context_frames"], info["causal"]
+    );
     let mut cfg = json!({"type": "configure", "prompt_version": 1});
     if let Some(Value::Object(extra)) = &a.configure {
         for (k, v) in extra {
@@ -350,7 +448,10 @@ async fn run(a: Args) -> Result<(), String> {
         cfg["resolution"] = r.clone().into();
     }
     let t_configure = now_ms();
-    handle.send_message(ChannelMessage::text("control", cfg.to_string())).await.map_err(|e| e.to_string())?;
+    handle
+        .send_message(ChannelMessage::text("control", cfg.to_string()))
+        .await
+        .map_err(|e| e.to_string())?;
 
     // Run: switches at their times after the first video frame.
     let mut sent: Vec<(u64, f64, String)> = Vec::new();
@@ -377,14 +478,23 @@ async fn run(a: Args) -> Result<(), String> {
                 let text = a.prompts[next + 1].clone();
                 let mut p = json!({"type": "prompt", "prompt_version": v});
                 merge_line(&mut p, &text)?;
-                handle.send_message(ChannelMessage::text("control", p.to_string())).await.map_err(|e| e.to_string())?;
+                handle
+                    .send_message(ChannelMessage::text("control", p.to_string()))
+                    .await
+                    .map_err(|e| e.to_string())?;
                 eprintln!("{:.1} s: prompt v{v}", since);
                 sent.push((v, now_ms(), text));
                 next += 1;
             }
             let chunk_stop = a.stop_after_chunks.is_some_and(|n| chunks_seen >= n);
             if !stopped && (since >= a.seconds || chunk_stop) {
-                handle.send_message(ChannelMessage::text("control", json!({"type": "stop"}).to_string())).await.map_err(|e| e.to_string())?;
+                handle
+                    .send_message(ChannelMessage::text(
+                        "control",
+                        json!({"type": "stop"}).to_string(),
+                    ))
+                    .await
+                    .map_err(|e| e.to_string())?;
                 stopped = true;
             }
         }
@@ -397,16 +507,30 @@ async fn run(a: Args) -> Result<(), String> {
                 if m["type"] == "segment_expanded" {
                     eprintln!(
                         "segment_expanded chunk {} v{} fallback {} {}/{} {} latency {} ms",
-                        m["chunk_index"], m["prompt_version"], m["fallback"], m["prompt_length"], m["prompt_limit"], m["prompt_unit"], m["latency_ms"]
+                        m["chunk_index"],
+                        m["prompt_version"],
+                        m["fallback"],
+                        m["prompt_length"],
+                        m["prompt_limit"],
+                        m["prompt_unit"],
+                        m["latency_ms"]
                     );
                 }
                 match m["type"].as_str() {
                     Some("chunk") => eprintln!(
                         "chunk {} v{} frames {} gen {:.2}s pace {} fps buffer {:.2}s recaches {}",
-                        m["chunk_index"], m["prompt_version"], m["generated_frame_count"], m["generation_seconds"].as_f64().unwrap_or(0.0),
-                        m["causal"]["generation_fps"], m["buffer_depth_seconds"].as_f64().unwrap_or(0.0), m["causal"]["recaches"]
+                        m["chunk_index"],
+                        m["prompt_version"],
+                        m["generated_frame_count"],
+                        m["generation_seconds"].as_f64().unwrap_or(0.0),
+                        m["causal"]["generation_fps"],
+                        m["buffer_depth_seconds"].as_f64().unwrap_or(0.0),
+                        m["causal"]["recaches"]
                     ),
-                    Some("error") | Some("deadline_missed") | Some("prompt_applied") | Some("prompt_rejected") => eprintln!("{m}"),
+                    Some("error")
+                    | Some("deadline_missed")
+                    | Some("prompt_applied")
+                    | Some("prompt_rejected") => eprintln!("{m}"),
                     Some("session_metrics") if m["final"] == true => ended = true,
                     _ => {}
                 }
@@ -442,7 +566,12 @@ async fn run(a: Args) -> Result<(), String> {
         tsv.push_str(&format!("{t:.1}\t{r}\n"));
     }
     let _ = std::fs::write(a.out.join("frames.tsv"), tsv);
-    let of = |ty: &str| all.iter().filter(|(_, m)| m["type"] == ty).cloned().collect::<Vec<_>>();
+    let of = |ty: &str| {
+        all.iter()
+            .filter(|(_, m)| m["type"] == ty)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
     let chunks = of("chunk");
     let applied = of("prompt_applied");
     let switches: Vec<Value> = sent
@@ -453,11 +582,27 @@ async fn run(a: Args) -> Result<(), String> {
             json!({"prompt_version": v, "sent_s": (t - fv.unwrap_or(0.0)) / 1000.0, "applied_after_ms": ap, "first_chunk": first_chunk, "prompt": text})
         })
         .collect();
-    let recaches: u64 = chunks.iter().map(|(_, m)| m["causal"]["recaches"].as_u64().unwrap_or(0)).sum();
-    let gen_fps: Vec<f64> = chunks.iter().filter_map(|(_, m)| m["causal"]["generation_fps"].as_f64()).collect();
-    let gen_s: f64 = chunks.iter().filter_map(|(_, m)| m["generation_seconds"].as_f64()).sum();
-    let play_s: f64 = chunks.iter().filter_map(|(_, m)| m["playback_seconds"].as_f64()).sum();
-    let fin = of("session_metrics").into_iter().rev().find(|(_, m)| m["final"] == true).map(|x| x.1);
+    let recaches: u64 = chunks
+        .iter()
+        .map(|(_, m)| m["causal"]["recaches"].as_u64().unwrap_or(0))
+        .sum();
+    let gen_fps: Vec<f64> = chunks
+        .iter()
+        .filter_map(|(_, m)| m["causal"]["generation_fps"].as_f64())
+        .collect();
+    let gen_s: f64 = chunks
+        .iter()
+        .filter_map(|(_, m)| m["generation_seconds"].as_f64())
+        .sum();
+    let play_s: f64 = chunks
+        .iter()
+        .filter_map(|(_, m)| m["playback_seconds"].as_f64())
+        .sum();
+    let fin = of("session_metrics")
+        .into_iter()
+        .rev()
+        .find(|(_, m)| m["final"] == true)
+        .map(|x| x.1);
     let summary = json!({
         "app": a.app,
         "session_id": session_id,

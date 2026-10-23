@@ -30,9 +30,12 @@ pub mod tokens;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub use chat::{ChatBackend, ChatRequest, UpsampleError};
 pub use assemble::Layout;
-pub use director::{Direction, Entity, EntityKind, ExpandedSegment, Frames, PremiseReport, Upsampler, UpsamplerConfig, WorldBible};
+pub use chat::{ChatBackend, ChatRequest, UpsampleError};
+pub use director::{
+    Direction, Entity, EntityKind, ExpandedSegment, Frames, PremiseReport, Upsampler,
+    UpsamplerConfig, WorldBible,
+};
 pub use rewrite::{Effort, PromptFamily, RewriteSpec};
 pub use tokens::{PromptLimit, TokenCounter, Unit};
 
@@ -51,7 +54,12 @@ pub struct MaxTokens {
 
 impl Default for MaxTokens {
     fn default() -> Self {
-        Self { wan: 512, ltx: 1024, h3: 1024, other: 512 }
+        Self {
+            wan: 512,
+            ltx: 1024,
+            h3: 1024,
+            other: 512,
+        }
     }
 }
 
@@ -83,7 +91,12 @@ pub struct MaxChars {
 
 impl Default for MaxChars {
     fn default() -> Self {
-        Self { wan: 1800, ltx: 3600, h3: 3200, other: 1800 }
+        Self {
+            wan: 1800,
+            ltx: 3600,
+            h3: 3200,
+            other: 1800,
+        }
     }
 }
 
@@ -172,8 +185,10 @@ pub fn record(kind: Kind, outcome: Result<(), &UpsampleError>, latency: Duration
         Ok(()) => "ok",
         Err(e) => e.label(),
     };
-    metrics::counter!("fv_upsampler_calls_total", "kind" => kind.as_str(), "outcome" => label).increment(1);
-    metrics::histogram!("fv_upsampler_latency_seconds", "kind" => kind.as_str()).record(latency.as_secs_f64());
+    metrics::counter!("fv_upsampler_calls_total", "kind" => kind.as_str(), "outcome" => label)
+        .increment(1);
+    metrics::histogram!("fv_upsampler_latency_seconds", "kind" => kind.as_str())
+        .record(latency.as_secs_f64());
 }
 
 /// The text encoders' tokenizers fv-serve found, per family.
@@ -209,14 +224,25 @@ impl std::fmt::Debug for Service {
         f.debug_struct("Service")
             .field("backend", &self.backend.describe())
             .field("settings", &self.settings)
-            .field("tokenizers", &(c(&self.counters.wan), c(&self.counters.ltx), c(&self.counters.h3)))
+            .field(
+                "tokenizers",
+                &(
+                    c(&self.counters.wan),
+                    c(&self.counters.ltx),
+                    c(&self.counters.h3),
+                ),
+            )
             .finish()
     }
 }
 
 impl Service {
     pub fn new(backend: Arc<dyn ChatBackend>, settings: Settings) -> Self {
-        Self { backend, settings, counters: Counters::default() }
+        Self {
+            backend,
+            settings,
+            counters: Counters::default(),
+        }
     }
 
     /// With the text encoders' tokenizers (limits in tokens).
@@ -238,7 +264,11 @@ impl Service {
     /// Over HTTP: `base_url` + `/chat/completions`, `model` from the
     /// settings, the key as a bearer token when set.
     #[cfg(feature = "http")]
-    pub fn http(base_url: &str, api_key: Option<String>, settings: Settings) -> Result<Self, UpsampleError> {
+    pub fn http(
+        base_url: &str,
+        api_key: Option<String>,
+        settings: Settings,
+    ) -> Result<Self, UpsampleError> {
         let chat = http::OpenAiChat::new(base_url, api_key, &settings.model)?;
         Ok(Self::new(Arc::new(chat), settings))
     }
@@ -257,11 +287,30 @@ impl Service {
 
     /// One batch rewrite (logged and counted). The caller falls back to
     /// the original prompt on `Err`.
-    pub async fn rewrite(&self, family: PromptFamily, effort: Effort, image: bool, prompt: &str) -> Result<String, UpsampleError> {
-        let spec = RewriteSpec { family, effort, image, max_chars: self.settings.max_chars.for_family(family) };
+    pub async fn rewrite(
+        &self,
+        family: PromptFamily,
+        effort: Effort,
+        image: bool,
+        prompt: &str,
+    ) -> Result<String, UpsampleError> {
+        let spec = RewriteSpec {
+            family,
+            effort,
+            image,
+            max_chars: self.settings.max_chars.for_family(family),
+        };
         let t0 = Instant::now();
         let limit = self.limit(family);
-        let r = rewrite::rewrite(&self.backend, self.settings.hedge, self.settings.timeout, &spec, &limit, prompt).await;
+        let r = rewrite::rewrite(
+            &self.backend,
+            self.settings.hedge,
+            self.settings.timeout,
+            &spec,
+            &limit,
+            prompt,
+        )
+        .await;
         let dt = t0.elapsed();
         record(Kind::Rewrite, r.as_ref().map(|_| ()), dt);
         match &r {
@@ -286,7 +335,12 @@ impl Service {
 
     /// A director session's upsampler for `world` (`memory`: the
     /// session's `configure.memory`, else the configured default).
-    pub fn director(&self, world: WorldBible, family: PromptFamily, memory: Option<usize>) -> Upsampler {
+    pub fn director(
+        &self,
+        world: WorldBible,
+        family: PromptFamily,
+        memory: Option<usize>,
+    ) -> Upsampler {
         let cfg = UpsamplerConfig {
             memory: memory.unwrap_or(self.settings.memory).min(50),
             limit: self.limit(family),
@@ -315,13 +369,49 @@ mod tests {
 
     #[tokio::test]
     async fn service_rewrites_within_the_family_budget() {
-        let s = Service::new(Arc::new(Echo), Settings { max_chars: MaxChars { wan: 12, ..MaxChars::default() }, ..Settings::default() });
-        assert_eq!(s.rewrite(PromptFamily::H3, Effort::Balanced, false, "a cat").await.unwrap(), "integrated_multimodal_description: Rewritten: a cat");
-        assert_eq!(s.rewrite(PromptFamily::Wan, Effort::Quality, false, "a cat on a mat").await.unwrap(), "Rewritten:");
+        let s = Service::new(
+            Arc::new(Echo),
+            Settings {
+                max_chars: MaxChars {
+                    wan: 12,
+                    ..MaxChars::default()
+                },
+                ..Settings::default()
+            },
+        );
+        assert_eq!(
+            s.rewrite(PromptFamily::H3, Effort::Balanced, false, "a cat")
+                .await
+                .unwrap(),
+            "integrated_multimodal_description: Rewritten: a cat"
+        );
+        assert_eq!(
+            s.rewrite(PromptFamily::Wan, Effort::Quality, false, "a cat on a mat")
+                .await
+                .unwrap(),
+            "Rewritten:"
+        );
         let u = s.director(WorldBible::default(), PromptFamily::Ltx, Some(80));
-        assert_eq!((u.config().memory, u.config().limit.max_chars, u.config().limit.max_tokens), (50, 3600, 1024));
+        assert_eq!(
+            (
+                u.config().memory,
+                u.config().limit.max_chars,
+                u.config().limit.max_tokens
+            ),
+            (50, 3600, 1024)
+        );
         assert_eq!(u.config().layout, Layout::Prose);
-        assert_eq!(s.director(WorldBible::default(), PromptFamily::H3, None).config().layout, Layout::H3);
-        assert_eq!(s.director(WorldBible::default(), PromptFamily::Wan, None).config().memory, 12);
+        assert_eq!(
+            s.director(WorldBible::default(), PromptFamily::H3, None)
+                .config()
+                .layout,
+            Layout::H3
+        );
+        assert_eq!(
+            s.director(WorldBible::default(), PromptFamily::Wan, None)
+                .config()
+                .memory,
+            12
+        );
     }
 }

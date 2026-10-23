@@ -80,7 +80,10 @@ pub fn load_prompts(path: &Path, default_seed: u64) -> anyhow::Result<Vec<Prompt
         let size = match (p["height"].as_u64(), p["width"].as_u64()) {
             (Some(h), Some(w)) => Some((h as usize, w as usize)),
             (None, None) => None,
-            _ => anyhow::bail!("{}: prompt `{name}`: give height and width together", path.display()),
+            _ => anyhow::bail!(
+                "{}: prompt `{name}`: give height and width together",
+                path.display()
+            ),
         };
         out.push(PromptSpec {
             name,

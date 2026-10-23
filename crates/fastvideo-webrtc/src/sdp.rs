@@ -487,9 +487,15 @@ impl Sdp {
             .iter_mut()
             .filter(|m| m.kind() == kind && !m.is_rejected() && m.direction().is_receiving())
         {
-            m.lines.retain(|l| !l.starts_with("b=AS:") && !l.starts_with("b=TIAS:"));
+            m.lines
+                .retain(|l| !l.starts_with("b=AS:") && !l.starts_with("b=TIAS:"));
             // b= lines follow c= (RFC 8866 §5 order: i, c, b, k, a).
-            let at = m.lines.iter().position(|l| l.starts_with("c=")).map(|i| i + 1).unwrap_or(0);
+            let at = m
+                .lines
+                .iter()
+                .position(|l| l.starts_with("c="))
+                .map(|i| i + 1)
+                .unwrap_or(0);
             m.lines.insert(at, format!("b=AS:{kbps}"));
             n += 1;
         }

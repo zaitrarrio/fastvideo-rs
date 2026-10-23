@@ -57,13 +57,23 @@ pub struct RouteSpec {
 }
 
 fn r(owner: Owner, method: &'static str, path: impl Into<String>) -> RouteSpec {
-    RouteSpec { owner, method, path: path.into() }
+    RouteSpec {
+        owner,
+        method,
+        path: path.into(),
+    }
 }
 
 /// LTX endpoints with no engine path (design §4.5): 403 stubs.
 pub const LTX_STUBS: &[&str] = &["video-to-video-hdr", "video-to-video-reframe"];
 /// LTX generation endpoints (`/v1/*` sync, `/v2/*` async).
-pub const LTX_GENERATE: &[&str] = &["text-to-video", "image-to-video", "audio-to-video", "retake", "extend"];
+pub const LTX_GENERATE: &[&str] = &[
+    "text-to-video",
+    "image-to-video",
+    "audio-to-video",
+    "retake",
+    "extend",
+];
 /// fal submit sub-paths of the H3 apps (design §4.4).
 pub const FAL_SUBS: &[&str] = &["text-to-video", "image-to-video", "reference-to-video"];
 
@@ -73,7 +83,10 @@ fn fal_app_subs(app: &str) -> (Vec<&'static str>, bool) {
     #[cfg(feature = "fal")]
     {
         let a = fastvideo_fal::FalApp::from_id(app);
-        (a.endpoints().iter().map(|e| e.sub()).collect(), a.kind().director())
+        (
+            a.endpoints().iter().map(|e| e.sub()).collect(),
+            a.kind().director(),
+        )
     }
     #[cfg(not(feature = "fal"))]
     {
@@ -187,12 +200,36 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Reactor, "POST", "/stop_session"),
         r(Reactor, "GET", "/schema"),
         r(Reactor, "GET", "/events"),
-        r(Reactor, "GET", "/sessions/{sid}/transport/webrtc/ice_servers"),
-        r(Reactor, "POST", "/sessions/{sid}/transport/webrtc/connections"),
-        r(Reactor, "POST", "/sessions/{sid}/transport/webrtc/connections/{cid}/sdp_params"),
-        r(Reactor, "PUT", "/sessions/{sid}/transport/webrtc/connections/{cid}/sdp_params"),
-        r(Reactor, "GET", "/sessions/{sid}/transport/webrtc/connections/{cid}/sdp_params"),
-        r(Reactor, "POST", "/sessions/{sid}/transport/webrtc/connections/{cid}/ice_candidates"),
+        r(
+            Reactor,
+            "GET",
+            "/sessions/{sid}/transport/webrtc/ice_servers",
+        ),
+        r(
+            Reactor,
+            "POST",
+            "/sessions/{sid}/transport/webrtc/connections",
+        ),
+        r(
+            Reactor,
+            "POST",
+            "/sessions/{sid}/transport/webrtc/connections/{cid}/sdp_params",
+        ),
+        r(
+            Reactor,
+            "PUT",
+            "/sessions/{sid}/transport/webrtc/connections/{cid}/sdp_params",
+        ),
+        r(
+            Reactor,
+            "GET",
+            "/sessions/{sid}/transport/webrtc/connections/{cid}/sdp_params",
+        ),
+        r(
+            Reactor,
+            "POST",
+            "/sessions/{sid}/transport/webrtc/connections/{cid}/ice_candidates",
+        ),
         // Reactor uploads (reactor §3.5; the byte PUT is under the session,
         // since `PUT /uploads/{token}` is serve-kit's).
         r(Reactor, "POST", "/sessions/{sid}/uploads"),
@@ -255,7 +292,15 @@ pub fn check_route_table(routes: &[RouteSpec]) -> Result<(), String> {
     for p in by_path.keys() {
         let shape: String = p
             .split('/')
-            .map(|seg| if seg.starts_with("{*") { "{*}" } else if seg.starts_with('{') { "{}" } else { seg })
+            .map(|seg| {
+                if seg.starts_with("{*") {
+                    "{*}"
+                } else if seg.starts_with('{') {
+                    "{}"
+                } else {
+                    seg
+                }
+            })
             .collect::<Vec<_>>()
             .join("/");
         if let Some(other) = shapes.insert(shape, p) {
@@ -296,7 +341,11 @@ mod tests {
     /// The default apps plus fal's LTX-2.5 and Wan apps (multi-segment subs).
     fn apps() -> Vec<String> {
         let mut v = crate::config::ProtocolsCfg::default().fal_apps;
-        v.extend(["lightricks/ltx-2.5".to_owned(), "fal-ai/wan".to_owned(), "fastvideo/ltx-turbo".to_owned()]);
+        v.extend([
+            "lightricks/ltx-2.5".to_owned(),
+            "fal-ai/wan".to_owned(),
+            "fastvideo/ltx-turbo".to_owned(),
+        ]);
         v
     }
 
@@ -329,13 +378,19 @@ mod tests {
         let table = route_table(&apps());
         let mut by_path: BTreeMap<String, Vec<(&'static str, Owner)>> = BTreeMap::new();
         for s in &table {
-            by_path.entry(s.path.clone()).or_default().push((s.method, s.owner));
+            by_path
+                .entry(s.path.clone())
+                .or_default()
+                .push((s.method, s.owner));
         }
         let mut router: Router = Router::new();
         for (p, ms) in by_path {
             let mut mr = axum::routing::MethodRouter::<()>::new();
             for (m, o) in ms {
-                let f = axum::routing::MethodFilter::try_from(axum::http::Method::from_bytes(m.as_bytes()).unwrap()).unwrap();
+                let f = axum::routing::MethodFilter::try_from(
+                    axum::http::Method::from_bytes(m.as_bytes()).unwrap(),
+                )
+                .unwrap();
                 mr = mr.on(f, move || async move { o.as_str() });
             }
             router = router.route(&p, mr);
@@ -350,12 +405,20 @@ mod tests {
             ("GET", "/v2/text-to-video/0f1e", "ltxapi"),
             ("POST", "/v2/retake", "ltxapi"),
             ("GET", "/v2/query/video_generation", "minimax"),
-            ("GET", "/v2/query/video_generation/123456789012345678", "minimax"),
+            (
+                "GET",
+                "/v2/query/video_generation/123456789012345678",
+                "minimax",
+            ),
             ("DELETE", "/v2/video_generation/123", "minimax"),
             ("POST", "/minimax/h3-max/text-to-video", "fal"),
             ("POST", "/minimax/h3-turbo/reference-to-video", "fal"),
             ("GET", "/minimax/h3-max/requests/abc/status", "fal"),
-            ("GET", "/minimax/h3-max/image-to-video/requests/abc/response", "fal"),
+            (
+                "GET",
+                "/minimax/h3-max/image-to-video/requests/abc/response",
+                "fal",
+            ),
             ("PUT", "/minimax/h3-draft/requests/abc/cancel", "fal"),
             ("POST", "/run/minimax/h3-max/text-to-video", "fal"),
             ("POST", "/wma/session", "fal-director"),
@@ -367,14 +430,30 @@ mod tests {
             ("POST", "/info", "fal-director"),
             ("GET", "/session", "reactor"),
             ("POST", "/start_session", "reactor"),
-            ("GET", "/sessions/00000000-0000-0000-0000-000000000000/transport/webrtc/ice_servers", "reactor"),
-            ("PUT", "/sessions/s1/transport/webrtc/connections/1002/sdp_params", "reactor"),
-            ("POST", "/sessions/s1/transport/webrtc/connections/1002/ice_candidates", "reactor"),
+            (
+                "GET",
+                "/sessions/00000000-0000-0000-0000-000000000000/transport/webrtc/ice_servers",
+                "reactor",
+            ),
+            (
+                "PUT",
+                "/sessions/s1/transport/webrtc/connections/1002/sdp_params",
+                "reactor",
+            ),
+            (
+                "POST",
+                "/sessions/s1/transport/webrtc/connections/1002/ice_candidates",
+                "reactor",
+            ),
             ("GET", "/status/abc", "openai-videos"),
             ("GET", "/files/a/b.mp4", "serve-kit"),
             ("GET", "/fv/v1/jobs/fvjob_1", "native"),
             ("DELETE", "/fv/v1/admin/keys/key_abc", "native"),
-            ("GET", "/console/models/minimax/h3-max/text-to-video", "console"),
+            (
+                "GET",
+                "/console/models/minimax/h3-max/text-to-video",
+                "console",
+            ),
             ("GET", "/console/assets/model.js", "console"),
             ("GET", "/fal/schema/minimax/h3-max/image-to-video", "fal"),
             ("POST", "/minimax/h3-max-turbo/text-to-video", "fal"),
@@ -384,19 +463,41 @@ mod tests {
             ("POST", "/lightricks/ltx-2.5/text-to-video/fast", "fal"),
             ("POST", "/run/lightricks/ltx-2.5/image-to-video/pro", "fal"),
             ("GET", "/lightricks/ltx-2.5/requests/abc", "fal"),
-            ("GET", "/lightricks/ltx-2.5/text-to-video/fast/requests/abc/status", "fal"),
+            (
+                "GET",
+                "/lightricks/ltx-2.5/text-to-video/fast/requests/abc/status",
+                "fal",
+            ),
             ("POST", "/fal-ai/wan/v2.2-5b/text-to-video", "fal"),
             ("POST", "/fal-ai/wan/v2.2-5b/text-to-video/fast-wan", "fal"),
             ("POST", "/run/fal-ai/wan/v2.2-5b/image-to-video", "fal"),
             ("GET", "/fal-ai/wan/requests/abc/status/stream", "fal"),
-            ("PUT", "/fal-ai/wan/v2.2-5b/text-to-video/fast-wan/requests/abc/cancel", "fal"),
-            ("GET", "/fal/schema/fal-ai/wan/v2.2-5b/text-to-video/fast-wan", "fal"),
-            ("GET", "/console/models/lightricks/ltx-2.5/text-to-video/fast", "console"),
+            (
+                "PUT",
+                "/fal-ai/wan/v2.2-5b/text-to-video/fast-wan/requests/abc/cancel",
+                "fal",
+            ),
+            (
+                "GET",
+                "/fal/schema/fal-ai/wan/v2.2-5b/text-to-video/fast-wan",
+                "fal",
+            ),
+            (
+                "GET",
+                "/console/models/lightricks/ltx-2.5/text-to-video/fast",
+                "console",
+            ),
         ];
         for (m, uri, want) in cases {
             let resp = router
                 .clone()
-                .oneshot(Request::builder().method(m).uri(uri).body(Body::empty()).unwrap())
+                .oneshot(
+                    Request::builder()
+                        .method(m)
+                        .uri(uri)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
                 .await
                 .unwrap();
             assert_eq!(resp.status(), 200, "{m} {uri}");
@@ -415,10 +516,20 @@ mod tests {
         ] {
             let resp = router
                 .clone()
-                .oneshot(Request::builder().method(m).uri(uri).body(Body::empty()).unwrap())
+                .oneshot(
+                    Request::builder()
+                        .method(m)
+                        .uri(uri)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
                 .await
                 .unwrap();
-            assert!(resp.status() == 404 || resp.status() == 405, "{m} {uri}: {}", resp.status());
+            assert!(
+                resp.status() == 404 || resp.status() == 405,
+                "{m} {uri}: {}",
+                resp.status()
+            );
         }
     }
 }

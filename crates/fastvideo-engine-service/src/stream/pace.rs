@@ -36,8 +36,8 @@ use tokio::sync::{mpsc, watch, Notify};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use crate::cancel::lock;
 use super::causal::{CausalControl, CausalSession};
+use crate::cancel::lock;
 
 /// A slice of one playing clip: `frames` plus exactly their audio.
 #[derive(Clone, Debug, PartialEq)]
@@ -155,7 +155,12 @@ pub(crate) fn tick_queue(cap: usize) -> (TickSender, TickReceiver) {
         dropped: AtomicU64::new(0),
         dropped_flag: AtomicBool::new(false),
     });
-    (TickSender { inner: inner.clone() }, TickReceiver { inner })
+    (
+        TickSender {
+            inner: inner.clone(),
+        },
+        TickReceiver { inner },
+    )
 }
 
 impl TickSender {
@@ -327,37 +332,38 @@ pub fn spawn_clip_pacer(
         let mut first_at: Option<u64> = None;
         let black = || RgbFrame::black(cfg.canvas.0.max(1), cfg.canvas.1.max(1), 0);
         let spt = pacer.samples_per_tick() as usize * cfg.channels.unwrap_or(1) as usize;
-        let apply = |pacer: &mut AvPacer<RgbFrame>, item: MediaItem, pending_black: &mut bool| match item {
-            MediaItem::Slice(s) => {
-                *pending_black = false;
-                let n = s.frames.len();
-                let r = match &s.audio {
-                    Some(a) => pacer.push_slice(s.frames, a),
-                    None if cfg.channels.is_some() => {
-                        pacer.push_slice(s.frames, &vec![0.0; n * spt])
-                    }
-                    None => {
-                        pacer.push_frames(s.frames);
-                        Ok(())
-                    }
-                };
-                if let Err(e) = r {
-                    tracing::warn!(error = %e, "clip pacer dropped a malformed slice");
-                }
-            }
-            MediaItem::ClipEnd { armed, .. } => {
-                if !armed && cfg.idle == IdlePolicy::Black {
-                    *pending_black = true;
-                }
-            }
-            MediaItem::Clear => {
-                pacer.clear();
-                if cfg.idle == IdlePolicy::Black {
-                    pacer.hold(black());
+        let apply =
+            |pacer: &mut AvPacer<RgbFrame>, item: MediaItem, pending_black: &mut bool| match item {
+                MediaItem::Slice(s) => {
                     *pending_black = false;
+                    let n = s.frames.len();
+                    let r = match &s.audio {
+                        Some(a) => pacer.push_slice(s.frames, a),
+                        None if cfg.channels.is_some() => {
+                            pacer.push_slice(s.frames, &vec![0.0; n * spt])
+                        }
+                        None => {
+                            pacer.push_frames(s.frames);
+                            Ok(())
+                        }
+                    };
+                    if let Err(e) = r {
+                        tracing::warn!(error = %e, "clip pacer dropped a malformed slice");
+                    }
                 }
-            }
-        };
+                MediaItem::ClipEnd { armed, .. } => {
+                    if !armed && cfg.idle == IdlePolicy::Black {
+                        *pending_black = true;
+                    }
+                }
+                MediaItem::Clear => {
+                    pacer.clear();
+                    if cfg.idle == IdlePolicy::Black {
+                        pacer.hold(black());
+                        *pending_black = false;
+                    }
+                }
+            };
         loop {
             // Take everything that has arrived.
             loop {
@@ -380,7 +386,11 @@ pub fn spawn_clip_pacer(
                 break;
             }
             let now = t0.elapsed().as_secs_f64();
-            let wait = if started { met.poll(now).err() } else { Some(1.0) };
+            let wait = if started {
+                met.poll(now).err()
+            } else {
+                Some(1.0)
+            };
             if let Some(dt) = wait {
                 if closed {
                     tokio::time::sleep(Duration::from_secs_f64(dt.min(1.0))).await;
@@ -483,7 +493,10 @@ impl CausalPacerConfig {
     /// Settings for a live session under `limits` (design §5.2): the clock
     /// restarts at each `reset`, up to `limits.hard_max_s` of video in all.
     pub fn with_limits(spec: &SessionSpec, limits: &CausalLimits) -> Self {
-        let total = spec.max_seconds.map(|m| m.max(limits.hard_max_s)).unwrap_or(limits.hard_max_s);
+        let total = spec
+            .max_seconds
+            .map(|m| m.max(limits.hard_max_s))
+            .unwrap_or(limits.hard_max_s);
         Self {
             total_max_seconds: Some(total),
             ..Self::for_spec(spec)
@@ -535,7 +548,11 @@ pub fn spawn_causal_pacer(
         let mut last_len = 0usize;
         loop {
             let now = t0.elapsed().as_secs_f64();
-            let wait = if started { met.poll(now).err() } else { Some(1.0) };
+            let wait = if started {
+                met.poll(now).err()
+            } else {
+                Some(1.0)
+            };
             if let Some(dt) = wait {
                 // Backpressure: take the next block only when it fits under
                 // the pull mark, so a generator faster than playout blocks on
@@ -617,7 +634,9 @@ pub fn spawn_causal_pacer(
             met.set_fps(pacer.effective_fps());
             stats_tx.send_replace(stats.clone());
             if cfg.max_seconds.is_some_and(|m| window_s >= f64::from(m))
-                || cfg.total_max_seconds.is_some_and(|m| video_s >= f64::from(m))
+                || cfg
+                    .total_max_seconds
+                    .is_some_and(|m| video_s >= f64::from(m))
             {
                 ended = Some(EndReason::SessionLimit);
                 break;

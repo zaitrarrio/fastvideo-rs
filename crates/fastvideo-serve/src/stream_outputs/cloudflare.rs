@@ -65,15 +65,24 @@ pub struct LiveInput {
 
 impl std::fmt::Debug for LiveInput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LiveInput").field("uid", &self.uid).field("recording", &self.recording).finish_non_exhaustive()
+        f.debug_struct("LiveInput")
+            .field("uid", &self.uid)
+            .field("recording", &self.recording)
+            .finish_non_exhaustive()
     }
 }
 
 impl LiveInput {
     /// Parses a live input object (the API's `result`).
     pub fn from_json(r: &Value) -> Result<Self, ApiError> {
-        let s = |p: &str| r.pointer(p).and_then(Value::as_str).filter(|x| !x.is_empty()).map(str::to_owned);
-        let uid = s("/uid").ok_or_else(|| ApiError::internal("Cloudflare returned a live input without a uid"))?;
+        let s = |p: &str| {
+            r.pointer(p)
+                .and_then(Value::as_str)
+                .filter(|x| !x.is_empty())
+                .map(str::to_owned)
+        };
+        let uid = s("/uid")
+            .ok_or_else(|| ApiError::internal("Cloudflare returned a live input without a uid"))?;
         Ok(LiveInput {
             uid,
             webrtc_url: s("/webRTC/url"),
@@ -100,7 +109,9 @@ impl LiveInput {
     /// The playback block of a stream (public URLs: the WHEP URL names the
     /// input's playback id, not its publish key).
     pub fn playback(&self, customer_domain: Option<&str>, whip: bool) -> Value {
-        let domain = self.customer_domain().or_else(|| customer_domain.map(str::to_owned));
+        let domain = self
+            .customer_domain()
+            .or_else(|| customer_domain.map(str::to_owned));
         let mut p = json!({"provider": "cloudflare", "live_input_id": self.uid, "format": if whip { "whep" } else { "hls" }});
         if whip {
             if let Some(u) = &self.webrtc_playback_url {
@@ -170,7 +181,11 @@ impl CfStream {
     }
 
     fn url(&self, tail: &str) -> String {
-        format!("{}/accounts/{}/stream/live_inputs{tail}", self.s.api_base.trim_end_matches('/'), self.s.account_id)
+        format!(
+            "{}/accounts/{}/stream/live_inputs{tail}",
+            self.s.api_base.trim_end_matches('/'),
+            self.s.account_id
+        )
     }
 
     /// Whether a new input for a WHIP (`true`) or RTMPS/SRT stream records.
@@ -183,14 +198,27 @@ impl CfStream {
     }
 
     async fn call(&self, rb: reqwest::RequestBuilder, what: &str) -> Result<Value, ApiError> {
-        let resp = rb.bearer_auth(&self.s.api_token).send().await.map_err(|e| {
-            let kind = if e.is_timeout() { ErrorKind::Timeout } else { ErrorKind::Internal };
-            // reqwest's error names the URL (account id, input uid): no secret.
-            ApiError::new(kind, format!("Cloudflare Stream {what}: {}", e.without_url()))
-        })?;
+        let resp = rb
+            .bearer_auth(&self.s.api_token)
+            .send()
+            .await
+            .map_err(|e| {
+                let kind = if e.is_timeout() {
+                    ErrorKind::Timeout
+                } else {
+                    ErrorKind::Internal
+                };
+                // reqwest's error names the URL (account id, input uid): no secret.
+                ApiError::new(
+                    kind,
+                    format!("Cloudflare Stream {what}: {}", e.without_url()),
+                )
+            })?;
         let status = resp.status().as_u16();
         let body: Value = resp.json().await.unwrap_or(Value::Null);
-        if (200..300).contains(&status) && body.get("success").and_then(Value::as_bool) != Some(false) {
+        if (200..300).contains(&status)
+            && body.get("success").and_then(Value::as_bool) != Some(false)
+        {
             return Ok(body.get("result").cloned().unwrap_or(Value::Null));
         }
         let detail = cf_errors(&body);
@@ -199,7 +227,9 @@ impl CfStream {
         } else {
             ""
         };
-        Err(ApiError::internal(format!("Cloudflare Stream {what}: HTTP {status}: {detail}{hint}")))
+        Err(ApiError::internal(format!(
+            "Cloudflare Stream {what}: HTTP {status}: {detail}{hint}"
+        )))
     }
 
     /// Creates the live input `name`.
@@ -211,24 +241,43 @@ impl CfStream {
         if let (true, Some(d)) = (record, self.s.delete_recording_after_days) {
             body["deleteRecordingAfterDays"] = json!(d);
         }
-        let r = self.call(self.http.post(self.url("")).json(&body), "create live input").await?;
+        let r = self
+            .call(
+                self.http.post(self.url("")).json(&body),
+                "create live input",
+            )
+            .await?;
         LiveInput::from_json(&r)
     }
 
     /// One live input (its current state, `status`).
     pub async fn get(&self, uid: &str) -> Result<Value, ApiError> {
-        self.call(self.http.get(self.url(&format!("/{uid}"))), "get live input").await
+        self.call(
+            self.http.get(self.url(&format!("/{uid}"))),
+            "get live input",
+        )
+        .await
     }
 
     pub async fn delete(&self, uid: &str) -> Result<(), ApiError> {
-        self.call(self.http.delete(self.url(&format!("/{uid}"))), "delete live input").await.map(|_| ())
+        self.call(
+            self.http.delete(self.url(&format!("/{uid}"))),
+            "delete live input",
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Stops the input from taking new broadcasts (its recordings stay).
     pub async fn disable(&self, uid: &str) -> Result<(), ApiError> {
-        self.call(self.http.put(self.url(&format!("/{uid}"))).json(&json!({"enabled": false})), "disable live input")
-            .await
-            .map(|_| ())
+        self.call(
+            self.http
+                .put(self.url(&format!("/{uid}")))
+                .json(&json!({"enabled": false})),
+            "disable live input",
+        )
+        .await
+        .map(|_| ())
     }
 
     /// What `on_stop` does with an input that did (not) record: `delete`,
@@ -273,9 +322,15 @@ mod tests {
     fn parses_ingests_and_playback() {
         let li = LiveInput::from_json(&sample()).unwrap();
         assert_eq!(li.uid, "66be4bf738797e01e1fca35a7bdecdcd");
-        assert_eq!(li.srt_stream_id.as_deref(), Some("f256e6ea9341d51eea64c9454659e576"));
+        assert_eq!(
+            li.srt_stream_id.as_deref(),
+            Some("f256e6ea9341d51eea64c9454659e576")
+        );
         assert!(!li.recording);
-        assert_eq!(li.customer_domain().as_deref(), Some("customer-m033z5x00ks6nunl.cloudflarestream.com"));
+        assert_eq!(
+            li.customer_domain().as_deref(),
+            Some("customer-m033z5x00ks6nunl.cloudflarestream.com")
+        );
         let p = li.playback(None, true);
         assert_eq!(p["whep_url"], "https://customer-m033z5x00ks6nunl.cloudflarestream.com/197a6b5a3e1d8bf74d9b53cbd2f2bcd4/webRTC/play");
         assert_eq!(p["iframe_url"], "https://customer-m033z5x00ks6nunl.cloudflarestream.com/66be4bf738797e01e1fca35a7bdecdcd/iframe");
@@ -289,7 +344,10 @@ mod tests {
         assert!(p.get("whep_url").is_none());
         // Debug never prints the ingest credentials.
         let d = format!("{li:?}");
-        assert!(!d.contains("MTQ0") && !d.contains("766d7a") && !d.contains("b236bde"), "{d}");
+        assert!(
+            !d.contains("MTQ0") && !d.contains("766d7a") && !d.contains("b236bde"),
+            "{d}"
+        );
         assert!(LiveInput::from_json(&json!({})).is_err());
     }
 

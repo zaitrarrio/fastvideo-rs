@@ -160,7 +160,11 @@ impl Block {
             (&m[0], &m[1], &m[2], &m[3], &m[4], &m[5]);
 
         // 1. Linear self-attention.
-        let h = modulate(&x.layer_norm(cfg.norm_eps, None, None)?, shift_msa, scale_msa)?;
+        let h = modulate(
+            &x.layer_norm(cfg.norm_eps, None, None)?,
+            shift_msa,
+            scale_msa,
+        )?;
         let (q, k, v) = match &self.qkv1.0[..] {
             [q, k, v] => (q.forward(&h)?, k.forward(&h)?, v.forward(&h)?),
             _ => {
@@ -194,7 +198,11 @@ impl Block {
         let x = x.add(&self.out2.forward(&a)?)?;
 
         // 3. GLUMBTempConv.
-        let h = modulate(&x.layer_norm(cfg.norm_eps, None, None)?, shift_mlp, scale_mlp)?;
+        let h = modulate(
+            &x.layer_norm(cfg.norm_eps, None, None)?,
+            shift_mlp,
+            scale_mlp,
+        )?;
         let ff = self.glumb(&h, grid, cfg)?;
         debug_assert_eq!(ff.shape, vec![1, n, d]);
         x.add(&ff.mul(gate_mlp)?)
@@ -274,7 +282,9 @@ pub fn linear_attention(
     let ones = CudaTensor::ones(&[b, heads, 1, n]).to_device()?;
     let k_sum = ones.matmul(&k)?;
     // q · Σ k: [B, H, N, 1].
-    let denom = q.matmul(&k_sum.transpose(2, 3)?)?.try_add_scalar(SANA_LINEAR_ATTN_EPS)?;
+    let denom = q
+        .matmul(&k_sum.transpose(2, 3)?)?
+        .try_add_scalar(SANA_LINEAR_ATTN_EPS)?;
     // k_rotᵀ v: [B, H, D, D]; out = q_rot @ that.
     let kv = k_rot.transpose(2, 3)?.matmul(&v)?;
     let out = q_rot.matmul(&kv)?.div(&denom)?;
@@ -316,7 +326,11 @@ impl SanaVideoTransformer {
         .reshape(vec![d, patch_in])?;
         let patch = Linear::from_tensors(
             pw_t,
-            Some(weights::cuda_tensor_shaped(map, "patch_embedding.bias", &[d])?),
+            Some(weights::cuda_tensor_shaped(
+                map,
+                "patch_embedding.bias",
+                &[d],
+            )?),
         )?;
         let blocks = (0..cfg.num_layers)
             .map(|i| Block::load(map, i, &cfg, &opt))
@@ -327,7 +341,13 @@ impl SanaVideoTransformer {
             t_lin1: Linear::load(map, &format!("{te}.linear_1"), 256, d, true)?,
             t_lin2: Linear::load(map, &format!("{te}.linear_2"), d, d, true)?,
             t_mod: Linear::load(map, "time_embed.linear", d, 6 * d, true)?,
-            cap1: Linear::load(map, "caption_projection.linear_1", cfg.caption_channels, d, true)?,
+            cap1: Linear::load(
+                map,
+                "caption_projection.linear_1",
+                cfg.caption_channels,
+                d,
+                true,
+            )?,
             cap2: Linear::load(map, "caption_projection.linear_2", d, d, true)?,
             cap_norm: tensor(map, "caption_norm.weight", &[d])?,
             out_table: tensor(map, "scale_shift_table", &[2, d])?,
@@ -436,7 +456,7 @@ impl SanaVideoTransformer {
         let scale = ss.narrow(0, 1, 1)?.reshape(vec![1, 1, d])?;
         let x = modulate(&x.layer_norm(1e-6, None, None)?, &shift, &scale)?;
         let x = self.proj_out.forward(&x)?; // [1, N, ph*pw*C]
-        // Unpatchify: (ph, pw, C) per token → [1, C, T, H, W].
+                                            // Unpatchify: (ph, pw, C) per token → [1, C, T, H, W].
         x.reshape(vec![1, t * hh, ww, ph, pw, c])?
             .permute(&[0, 5, 1, 3, 2, 4])?
             .reshape(vec![1, c, t, h, w])
@@ -501,7 +521,8 @@ mod tests {
         let cfg = SanaVideoTransformerConfig::tiny();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let map = recording_map(seen);
-        let base = SanaVideoTransformer::load(cfg.clone(), SanaOptimizations::BASELINE, &map).unwrap();
+        let base =
+            SanaVideoTransformer::load(cfg.clone(), SanaOptimizations::BASELINE, &map).unwrap();
         let merged = SanaVideoTransformer::load(
             cfg.clone(),
             SanaOptimizations {
@@ -550,7 +571,11 @@ mod tests {
         let sin = CudaTensor::from_vec(ang.iter().map(|a| a.sin()).collect(), vec![n, dh]).unwrap();
         let got = linear_attention(&q, &k, &v, heads, &cos, &sin, false).unwrap();
         let got = got.host_cow().unwrap();
-        let (qh, kh, vh) = (q.host_cow().unwrap(), k.host_cow().unwrap(), v.host_cow().unwrap());
+        let (qh, kh, vh) = (
+            q.host_cow().unwrap(),
+            k.host_cow().unwrap(),
+            v.host_cow().unwrap(),
+        );
         let (ch, sh) = (cos.host_cow().unwrap(), sin.host_cow().unwrap());
         let relu = |x: f32| x.max(0.0);
         let rot = |x: &[f32], tok: usize| -> Vec<f32> {
@@ -585,7 +610,10 @@ mod tests {
                     }
                     let want = acc / z;
                     let g = got[i * width + hd * dh + c1];
-                    assert!((g - want).abs() < 1e-4 * (1.0 + want.abs()), "{g} vs {want}");
+                    assert!(
+                        (g - want).abs() < 1e-4 * (1.0 + want.abs()),
+                        "{g} vs {want}"
+                    );
                 }
             }
         }

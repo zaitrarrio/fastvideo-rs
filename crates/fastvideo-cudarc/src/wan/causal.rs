@@ -250,7 +250,11 @@ fn shift_tokens_down(t: &mut CudaTensor, from: usize, to: usize, len: usize) -> 
 /// Wan's interleaved RoPE (`is_neox_style=False`, tables repeat-interleaved)
 /// on BHSD `x` with `[S, D]` tables: BHSD is BSHD with batch `B·H` and one
 /// head. The result is f32.
-pub(crate) fn rope_bhsd_f32(x: &CudaTensor, cos: &CudaTensor, sin: &CudaTensor) -> Result<CudaTensor> {
+pub(crate) fn rope_bhsd_f32(
+    x: &CudaTensor,
+    cos: &CudaTensor,
+    sin: &CudaTensor,
+) -> Result<CudaTensor> {
     let [b, h, s, d] = x.shape[..] else {
         return Err(msg(format!("rope_bhsd expects BHSD, got {:?}", x.shape)));
     };
@@ -411,7 +415,8 @@ impl CausalKvCache {
     /// (the default) every write lands whole, as FastVideo does. Only the
     /// one-off re-cache forward turns it on.
     pub fn set_sink_guard(&self, on: bool) {
-        self.sink_guard.store(on, std::sync::atomic::Ordering::Relaxed);
+        self.sink_guard
+            .store(on, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn sink_guard(&self) -> bool {
@@ -483,7 +488,9 @@ impl CausalKvCache {
         sink_target: usize,
     ) -> Result<KvBlockKey> {
         let p = self.pointers().first().copied().unwrap_or_default();
-        let mv = self.spec.plan(p.global_end, p.local_end, current_start, n)?;
+        let mv = self
+            .spec
+            .plan(p.global_end, p.local_end, current_start, n)?;
         let rebase = self.spec.rebase_sink
             && self.spec.sink > 0
             && sink_target > 0
@@ -600,7 +607,11 @@ impl CausalKvCache {
             return Err(msg("causal kv: write past an empty cache"));
         }
         let join = |prefix: Option<CudaTensor>, new: &CudaTensor| -> Result<CudaTensor> {
-            let new = if skip > 0 { new.narrow(2, skip, n - skip)? } else { new.clone() };
+            let new = if skip > 0 {
+                new.narrow(2, skip, n - skip)?
+            } else {
+                new.clone()
+            };
             match prefix {
                 Some(p) if new.shape[2] > 0 => CudaTensor::cat(&[&p, &new], 2),
                 Some(p) => Ok(p),
@@ -634,7 +645,10 @@ impl CausalKvCache {
             return Err(msg(format!("causal kv: keys {:?}", k.shape)));
         };
         if v.shape.len() != 4 || v.shape[..3] != k.shape[..3] {
-            return Err(msg(format!("causal kv: keys {:?} values {:?}", k.shape, v.shape)));
+            return Err(msg(format!(
+                "causal kv: keys {:?} values {:?}",
+                k.shape, v.shape
+            )));
         }
         if slot.st.is_none() {
             let cap = self.spec.capacity.max(n);
@@ -828,8 +842,8 @@ impl CausalKvCache {
                 ]
                 .into_iter()
                 .flatten()
-                    .map(|t| t.numel() * if t.is_bf16() { 2 } else { 4 })
-                    .sum::<usize>()
+                .map(|t| t.numel() * if t.is_bf16() { 2 } else { 4 })
+                .sum::<usize>()
             })
             .sum()
     }
@@ -961,7 +975,10 @@ mod tests {
         assert_eq!(cache.len(), t * frame_tokens);
     }
 
-    fn tiny_causal_dit() -> (crate::wan::transformer::WanTransformer3D, WanVideoArchConfig) {
+    fn tiny_causal_dit() -> (
+        crate::wan::transformer::WanTransformer3D,
+        WanVideoArchConfig,
+    ) {
         use crate::wan::transformer::WanTransformer3D;
         use crate::wan::weights::WeightMap;
         let mut cfg = WanVideoArchConfig::tiny();
@@ -1031,7 +1048,10 @@ mod tests {
         let a = roll(KvRope::Absolute, 4, 0, 5);
         let r = roll(KvRope::Relativistic, 4, 0, 5);
         let (err, scale) = max_diff(&a, &r);
-        assert!(err <= 1e-4 * scale.max(1.0), "max abs {err} (scale {scale})");
+        assert!(
+            err <= 1e-4 * scale.max(1.0),
+            "max abs {err} (scale {scale})"
+        );
     }
 
     /// With a sink the policies part once the cache rolls; the rebased sink
@@ -1042,9 +1062,15 @@ mod tests {
         let b = roll(KvRope::RebasedSink, 6, 2, 8);
         let a = roll(KvRope::Absolute, 6, 2, 8);
         let (err, scale) = max_diff(&r, &b);
-        assert!(err <= 1e-4 * scale.max(1.0), "rebased: max abs {err} (scale {scale})");
+        assert!(
+            err <= 1e-4 * scale.max(1.0),
+            "rebased: max abs {err} (scale {scale})"
+        );
         let (apart, _) = max_diff(&r, &a);
-        assert!(apart > 1e2 * err.max(1e-6), "absolute should differ with a sink ({apart})");
+        assert!(
+            apart > 1e2 * err.max(1e-6),
+            "absolute should differ with a sink ({apart})"
+        );
     }
 
     /// Every policy runs past the checkpoint's RoPE table
@@ -1057,7 +1083,9 @@ mod tests {
         let text = CudaTensor::zeros(&[1, cfg.text_len, cfg.text_dim]);
         let ts = CudaTensor::from_vec(vec![0.0], vec![1]).unwrap();
         let x = CudaTensor::from_vec(
-            (0..c * fpb * h * w).map(|i| (i as f32 * 0.1).cos()).collect(),
+            (0..c * fpb * h * w)
+                .map(|i| (i as f32 * 0.1).cos())
+                .collect(),
             vec![1, c, fpb, h, w],
         )
         .unwrap();
@@ -1075,7 +1103,11 @@ mod tests {
                 dit.forget_rotary_before((blk * fpb).saturating_sub(6));
             }
             assert_eq!(cache.len(), 6 * frame_tokens);
-            assert_eq!(cache.bytes(), bytes, "{rope:?}: the cache grew after it filled");
+            assert_eq!(
+                cache.bytes(),
+                bytes,
+                "{rope:?}: the cache grew after it filled"
+            );
             cache.reset();
             assert!(cache.is_empty());
         }
@@ -1092,7 +1124,10 @@ mod tests {
             relativistic: false,
             rebase_sink: false,
         };
-        for cache in [CausalKvCache::new(spec, 1), CausalKvCache::new_static(spec, 1)] {
+        for cache in [
+            CausalKvCache::new(spec, 1),
+            CausalKvCache::new_static(spec, 1),
+        ] {
             let blk = |base: f32| {
                 let data: Vec<f32> = (0..4).map(|i| base + i as f32).collect();
                 CudaTensor::from_vec(data, vec![1, 1, 4, 1]).unwrap()
@@ -1181,7 +1216,9 @@ mod tests {
             let key = cache.block_key(start, 20, target).unwrap();
             keys.push(key);
             if key.rebase {
-                cache.rebase_sink(target, (&tab, &zero), (&tab, &zero)).unwrap();
+                cache
+                    .rebase_sink(target, (&tab, &zero), (&tab, &zero))
+                    .unwrap();
             }
             cache.update(0, &blk(start), &blk(start), start).unwrap();
             // The in-place re-run of the same block (next step).
@@ -1218,7 +1255,8 @@ mod tests {
             let target = spec.sink_target(b * 2 + 2);
             for _ in 0..3 {
                 if target > 0 {
-                    real.rebase_sink(target, (&tab, &zero), (&tab, &zero)).unwrap();
+                    real.rebase_sink(target, (&tab, &zero), (&tab, &zero))
+                        .unwrap();
                 }
                 for layer in 0..2 {
                     real.update(layer, &blk(start), &blk(start), start).unwrap();
@@ -1226,7 +1264,9 @@ mod tests {
                 if b == 0 {
                     // The buffers exist after a real first write.
                     for layer in 0..2 {
-                        replay.update(layer, &blk(start), &blk(start), start).unwrap();
+                        replay
+                            .update(layer, &blk(start), &blk(start), start)
+                            .unwrap();
                     }
                 } else {
                     replay.advance(start, 20, target).unwrap();
@@ -1240,7 +1280,9 @@ mod tests {
     /// Keys of `frames` frames from `first` (10 tokens each, one value per
     /// token: `1000 · tag + frame`), `[1, 1, frames·10, 1]`.
     fn tagged(first: usize, frames: usize, tag: f32) -> CudaTensor {
-        let data: Vec<f32> = (0..frames * 10).map(|i| 1000.0 * tag + (first + i / 10) as f32).collect();
+        let data: Vec<f32> = (0..frames * 10)
+            .map(|i| 1000.0 * tag + (first + i / 10) as f32)
+            .collect();
         CudaTensor::from_vec(data, vec![1, 1, frames * 10, 1]).unwrap()
     }
 
@@ -1258,7 +1300,11 @@ mod tests {
     fn sink_guard_keeps_the_sink_through_a_recache() {
         for static_mode in [false, true] {
             let spec = KvSpec::rolling(10, 12, 3, KvRope::Absolute).unwrap();
-            let cache = if static_mode { CausalKvCache::new_static(spec, 1) } else { CausalKvCache::new(spec, 1) };
+            let cache = if static_mode {
+                CausalKvCache::new_static(spec, 1)
+            } else {
+                CausalKvCache::new(spec, 1)
+            };
             for b in 0..5 {
                 let (start, k) = (b * 3, tagged(b * 3, 3, 1.0));
                 cache.update(0, &k, &k, start * 10).unwrap();
@@ -1266,7 +1312,10 @@ mod tests {
             let before = cache.pointers();
             assert_eq!((before[0].global_end, before[0].local_end), (150, 120));
             let plan = crate::wan::longlive::recache_plan(15, 12, true).unwrap();
-            assert_eq!((plan.start_frame, plan.frames, plan.guard_sink), (3, 12, true));
+            assert_eq!(
+                (plan.start_frame, plan.frames, plan.guard_sink),
+                (3, 12, true)
+            );
             let k = tagged(plan.start_frame, plan.frames, 2.0);
             cache.set_sink_guard(plan.guard_sink);
             let (kw, vw) = cache.update(0, &k, &k, plan.start_frame * 10).unwrap();
@@ -1298,17 +1347,27 @@ mod tests {
     fn early_recache_rewrites_the_sink() {
         for static_mode in [false, true] {
             let spec = KvSpec::rolling(10, 12, 3, KvRope::Absolute).unwrap();
-            let cache = if static_mode { CausalKvCache::new_static(spec, 1) } else { CausalKvCache::new(spec, 1) };
+            let cache = if static_mode {
+                CausalKvCache::new_static(spec, 1)
+            } else {
+                CausalKvCache::new(spec, 1)
+            };
             for b in 0..2 {
                 let k = tagged(b * 3, 3, 1.0);
                 cache.update(0, &k, &k, b * 30).unwrap();
             }
             let plan = crate::wan::longlive::recache_plan(6, 12, true).unwrap();
-            assert_eq!((plan.start_frame, plan.frames, plan.guard_sink), (0, 6, false));
+            assert_eq!(
+                (plan.start_frame, plan.frames, plan.guard_sink),
+                (0, 6, false)
+            );
             let k = tagged(0, 6, 2.0);
             cache.set_sink_guard(true); // inert at current_start 0
             let (kw, _) = cache.update(0, &k, &k, 0).unwrap();
-            assert_eq!(frames_of(&kw), (0..6).map(|f| 2000.0 + f as f32).collect::<Vec<_>>());
+            assert_eq!(
+                frames_of(&kw),
+                (0..6).map(|f| 2000.0 + f as f32).collect::<Vec<_>>()
+            );
             // A new block with the guard on writes whole (not a recompute).
             let k = tagged(6, 3, 3.0);
             let (kw, _) = cache.update(0, &k, &k, 60).unwrap();
@@ -1328,13 +1387,17 @@ mod tests {
         let (c, h, w, fpb) = (cfg.in_channels, 4usize, 6usize, cfg.num_frames_per_block);
         let frame_tokens = (h / 2) * (w / 2);
         let text = |phase: f32| {
-            let v: Vec<f32> = (0..cfg.text_len * cfg.text_dim).map(|i| ((i as f32) * 0.11 + phase).cos()).collect();
+            let v: Vec<f32> = (0..cfg.text_len * cfg.text_dim)
+                .map(|i| ((i as f32) * 0.11 + phase).cos())
+                .collect();
             CudaTensor::from_vec(v, vec![1, cfg.text_len, cfg.text_dim]).unwrap()
         };
         let (a, b) = (text(0.0), text(1.3));
         let (window, sink) = (6usize, 2usize);
         let lat = |blk: usize| {
-            let v: Vec<f32> = (0..c * fpb * h * w).map(|i| ((i as f32) * 0.37 + blk as f32).sin()).collect();
+            let v: Vec<f32> = (0..c * fpb * h * w)
+                .map(|i| ((i as f32) * 0.37 + blk as f32).sin())
+                .collect();
             CudaTensor::from_vec(v, vec![1, c, fpb, h, w]).unwrap()
         };
         let t0 = CudaTensor::from_vec(vec![0.0], vec![1]).unwrap();
@@ -1344,14 +1407,22 @@ mod tests {
             let run = |cache: &CausalKvCache, recache: bool| -> (Vec<u32>, Vec<f32>, Vec<f32>) {
                 let mut hist = Vec::new();
                 for blk in 0..5 {
-                    dit.forward_kv(&lat(blk), &t5, &a, cache, blk * fpb).unwrap();
-                    dit.forward_kv(&lat(blk), &t0, &a, cache, blk * fpb).unwrap();
+                    dit.forward_kv(&lat(blk), &t5, &a, cache, blk * fpb)
+                        .unwrap();
+                    dit.forward_kv(&lat(blk), &t0, &a, cache, blk * fpb)
+                        .unwrap();
                     hist.push(lat(blk));
                 }
                 let sink_keys = || -> Vec<f32> {
                     let l = cache.layers[1].lock().unwrap();
-                    let k = l.k.clone().unwrap_or_else(|| l.st.as_ref().expect("written cache").k.clone());
-                    k.narrow(2, 0, sink * frame_tokens).unwrap().host_cow().unwrap().into_owned()
+                    let k =
+                        l.k.clone()
+                            .unwrap_or_else(|| l.st.as_ref().expect("written cache").k.clone());
+                    k.narrow(2, 0, sink * frame_tokens)
+                        .unwrap()
+                        .host_cow()
+                        .unwrap()
+                        .into_owned()
                 };
                 let sink_before = sink_keys();
                 let mut sink_after = sink_before.clone();
@@ -1363,25 +1434,35 @@ mod tests {
                     let x = all.narrow(2, current - plan.frames, plan.frames).unwrap();
                     let before = cache.pointers();
                     cache.set_sink_guard(true);
-                    dit.forward_kv(&x, &t0, &b, cache, plan.start_frame).unwrap();
+                    dit.forward_kv(&x, &t0, &b, cache, plan.start_frame)
+                        .unwrap();
                     cache.set_sink_guard(false);
                     assert_eq!(cache.pointers(), before, "{rope:?}");
                     sink_after = sink_keys();
                 }
                 let mut out = Vec::new();
                 for blk in 5..7 {
-                    let y = dit.forward_kv(&lat(blk), &t5, &b, cache, blk * fpb).unwrap();
+                    let y = dit
+                        .forward_kv(&lat(blk), &t5, &b, cache, blk * fpb)
+                        .unwrap();
                     out.extend(y.host_cow().unwrap().iter().map(|v| v.to_bits()));
-                    dit.forward_kv(&lat(blk), &t0, &b, cache, blk * fpb).unwrap();
+                    dit.forward_kv(&lat(blk), &t0, &b, cache, blk * fpb)
+                        .unwrap();
                 }
                 (out, sink_before, sink_after)
             };
             let (dyn_out, s0, s1) = run(&CausalKvCache::new(spec, cfg.num_layers), true);
             assert_eq!(s0, s1, "{rope:?}: the guarded sink moved");
             let (st_out, ..) = run(&CausalKvCache::new_static(spec, cfg.num_layers), true);
-            assert!(dyn_out == st_out, "{rope:?}: static cache differs through the re-cache");
+            assert!(
+                dyn_out == st_out,
+                "{rope:?}: static cache differs through the re-cache"
+            );
             let (keep_out, ..) = run(&CausalKvCache::new(spec, cfg.num_layers), false);
-            assert!(keep_out != dyn_out, "{rope:?}: the re-cache changed nothing");
+            assert!(
+                keep_out != dyn_out,
+                "{rope:?}: the re-cache changed nothing"
+            );
         }
     }
 }

@@ -56,7 +56,11 @@ pub enum SinkTarget {
     /// [`srt_url`]); 2 s keyframes.
     Srt { url: String },
     /// Rolling HLS in `dir`: 1 s keyframes and segments, `window` segments.
-    Hls { dir: PathBuf, segment_s: u32, window: u32 },
+    Hls {
+        dir: PathBuf,
+        segment_s: u32,
+        window: u32,
+    },
     /// A local MP4 (recording, and tests).
     File { path: PathBuf },
 }
@@ -66,7 +70,11 @@ impl std::fmt::Debug for SinkTarget {
         match self {
             SinkTarget::Rtmp { .. } => write!(f, "Rtmp({})", self.redacted()),
             SinkTarget::Srt { .. } => write!(f, "Srt({})", self.redacted()),
-            SinkTarget::Hls { dir, segment_s, window } => write!(f, "Hls({}, {segment_s}s x {window})", dir.display()),
+            SinkTarget::Hls {
+                dir,
+                segment_s,
+                window,
+            } => write!(f, "Hls({}, {segment_s}s x {window})", dir.display()),
             SinkTarget::File { path } => write!(f, "File({})", path.display()),
         }
     }
@@ -108,7 +116,9 @@ impl SinkTarget {
         };
         out.push(url.clone());
         let after_scheme = url.split_once("://").map_or(url.as_str(), |(_, r)| r);
-        let end = after_scheme.find(['/', '?', '#']).unwrap_or(after_scheme.len());
+        let end = after_scheme
+            .find(['/', '?', '#'])
+            .unwrap_or(after_scheme.len());
         let (authority, rest) = after_scheme.split_at(end);
         if let Some((userinfo, _)) = authority.rsplit_once('@') {
             out.extend(userinfo.split(':').map(str::to_owned));
@@ -138,7 +148,9 @@ impl SinkTarget {
 
 /// `scheme://host:port` (no userinfo) and the rest after the authority.
 fn split_origin(url: &str) -> (String, String) {
-    let Some((scheme, rest)) = url.split_once("://") else { return ("<url>".into(), String::new()) };
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return ("<url>".into(), String::new());
+    };
     let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let authority = &rest[..end];
     let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
@@ -199,8 +211,17 @@ pub fn percent_encode(s: &str) -> String {
 /// (ffmpeg does not percent-decode them; check them with
 /// [`srt_value_ok`]), `latency` (ffmpeg's libsrt takes microseconds) and
 /// the MPEG-TS payload size (7 x 188).
-pub fn srt_url(base: &str, stream_id: Option<&str>, passphrase: Option<&str>, latency_ms: u32) -> String {
-    let has = |k: &str| base.split(['?', '&']).skip(1).any(|kv| kv.split('=').next() == Some(k));
+pub fn srt_url(
+    base: &str,
+    stream_id: Option<&str>,
+    passphrase: Option<&str>,
+    latency_ms: u32,
+) -> String {
+    let has = |k: &str| {
+        base.split(['?', '&'])
+            .skip(1)
+            .any(|kv| kv.split('=').next() == Some(k))
+    };
     let mut adds: Vec<(&str, String)> = Vec::new();
     if let Some(id) = stream_id.filter(|v| !v.is_empty()) {
         if !has("streamid") {
@@ -266,7 +287,13 @@ pub struct SinkConfig {
 }
 
 impl SinkConfig {
-    pub fn new(target: SinkTarget, width: u32, height: u32, fps: u32, audio_in: Option<SinkAudioIn>) -> Self {
+    pub fn new(
+        target: SinkTarget,
+        width: u32,
+        height: u32,
+        fps: u32,
+        audio_in: Option<SinkAudioIn>,
+    ) -> Self {
         Self {
             target,
             width,
@@ -292,7 +319,8 @@ impl SinkConfig {
     /// [`LIVE_VIDEO_BPS`].
     pub fn effective_video_bps(&self) -> u32 {
         if self.target.is_live() {
-            self.video_bitrate_bps.clamp(LIVE_VIDEO_BPS.0, LIVE_VIDEO_BPS.1)
+            self.video_bitrate_bps
+                .clamp(LIVE_VIDEO_BPS.0, LIVE_VIDEO_BPS.1)
         } else {
             self.video_bitrate_bps
         }
@@ -300,20 +328,39 @@ impl SinkConfig {
 
     /// The full ffmpeg argument list (after the binary) for an audio port.
     pub fn ffmpeg_args(&self, audio_port: Option<u16>) -> Result<Vec<String>> {
-        let mut a: Vec<String> = ["-hide_banner", "-loglevel", "error", "-nostats", "-y"].map(String::from).to_vec();
+        let mut a: Vec<String> = ["-hide_banner", "-loglevel", "error", "-nostats", "-y"]
+            .map(String::from)
+            .to_vec();
         a.extend(["-f", "rawvideo", "-pix_fmt", "rgb24", "-s"].map(String::from));
         a.push(format!("{}x{}", self.width, self.height));
-        a.extend(["-r".into(), self.fps.to_string(), "-i".into(), "pipe:0".into()]);
+        a.extend([
+            "-r".into(),
+            self.fps.to_string(),
+            "-i".into(),
+            "pipe:0".into(),
+        ]);
         match (self.audio_in, audio_port) {
             (Some(ai), Some(port)) => {
                 a.extend(["-f", "s16le", "-ar"].map(String::from));
-                a.extend([ai.rate.to_string(), "-ac".into(), ai.channels.to_string(), "-i".into()]);
+                a.extend([
+                    ai.rate.to_string(),
+                    "-ac".into(),
+                    ai.channels.to_string(),
+                    "-i".into(),
+                ]);
                 a.push(format!("tcp://127.0.0.1:{port}"));
             }
             _ => {
                 a.extend(["-f", "lavfi", "-i"].map(String::from));
-                let layout = if self.aac.channels == 1 { "mono" } else { "stereo" };
-                a.push(format!("anullsrc=channel_layout={layout}:sample_rate={}", self.aac.rate));
+                let layout = if self.aac.channels == 1 {
+                    "mono"
+                } else {
+                    "stereo"
+                };
+                a.push(format!(
+                    "anullsrc=channel_layout={layout}:sample_rate={}",
+                    self.aac.rate
+                ));
                 a.push("-shortest".into());
             }
         }
@@ -334,30 +381,74 @@ impl SinkConfig {
         }
         a.extend(v);
         a.extend(["-c:a", "aac", "-profile:a", "aac_low", "-b:a"].map(String::from));
-        a.extend([self.aac.bitrate_bps.to_string(), "-ar".into(), self.aac.rate.to_string()]);
+        a.extend([
+            self.aac.bitrate_bps.to_string(),
+            "-ar".into(),
+            self.aac.rate.to_string(),
+        ]);
         a.extend(["-ac".into(), self.aac.channels.to_string()]);
         match &self.target {
             SinkTarget::Rtmp { url } => {
-                a.extend(["-flush_packets", "1", "-f", "flv", "-flvflags", "no_duration_filesize"].map(String::from));
+                a.extend(
+                    [
+                        "-flush_packets",
+                        "1",
+                        "-f",
+                        "flv",
+                        "-flvflags",
+                        "no_duration_filesize",
+                    ]
+                    .map(String::from),
+                );
                 if let Some(tc) = &self.rtmp_tc_url {
                     a.extend(["-rtmp_tcurl".to_owned(), tc.clone()]);
                 }
                 a.push(url.clone());
             }
             SinkTarget::Srt { url } => {
-                a.extend(["-flush_packets", "1", "-f", "mpegts", "-mpegts_flags", "+resend_headers"].map(String::from));
+                a.extend(
+                    [
+                        "-flush_packets",
+                        "1",
+                        "-f",
+                        "mpegts",
+                        "-mpegts_flags",
+                        "+resend_headers",
+                    ]
+                    .map(String::from),
+                );
                 a.push(url.clone());
             }
-            SinkTarget::Hls { dir, segment_s, window } => {
-                a.extend(["-f".into(), "hls".into(), "-hls_time".into(), segment_s.to_string()]);
-                a.extend(["-hls_list_size".into(), window.to_string(), "-hls_flags".into()]);
+            SinkTarget::Hls {
+                dir,
+                segment_s,
+                window,
+            } => {
+                a.extend([
+                    "-f".into(),
+                    "hls".into(),
+                    "-hls_time".into(),
+                    segment_s.to_string(),
+                ]);
+                a.extend([
+                    "-hls_list_size".into(),
+                    window.to_string(),
+                    "-hls_flags".into(),
+                ]);
                 a.push("delete_segments+temp_file+independent_segments+omit_endlist".into());
-                a.extend(["-hls_start_number_source", "epoch", "-hls_segment_filename"].map(String::from));
+                a.extend(
+                    ["-hls_start_number_source", "epoch", "-hls_segment_filename"]
+                        .map(String::from),
+                );
                 a.push(dir.join("segment-%d.ts").to_string_lossy().into_owned());
                 a.push(dir.join(HLS_PLAYLIST).to_string_lossy().into_owned());
             }
             SinkTarget::File { path } => {
-                a.extend(["-movflags".into(), "+faststart".into(), path.to_string_lossy().into_owned()]);
+                a.extend([
+                    "-movflags".into(),
+                    "+faststart".into(),
+                    path.to_string_lossy().into_owned(),
+                ]);
             }
         }
         Ok(a)
@@ -414,20 +505,31 @@ fn exit_reason(r: &mut Running) -> Option<String> {
     Some(if t.is_empty() {
         format!("ffmpeg exited ({status}) without an error message")
     } else {
-        format!("ffmpeg exited ({status}): {}", t.iter().cloned().collect::<Vec<_>>().join(" | "))
+        format!(
+            "ffmpeg exited ({status}): {}",
+            t.iter().cloned().collect::<Vec<_>>().join(" | ")
+        )
     })
 }
 
 impl FfmpegSink {
     pub fn start(cfg: SinkConfig) -> Result<Self> {
         if cfg.width % 2 != 0 || cfg.height % 2 != 0 || cfg.fps == 0 {
-            return Err(MediaError::invalid("sink needs even dimensions and a positive fps"));
+            return Err(MediaError::invalid(
+                "sink needs even dimensions and a positive fps",
+            ));
         }
         if let SinkTarget::Hls { dir, .. } = &cfg.target {
             std::fs::create_dir_all(dir)?;
         }
         let run = Self::spawn(&cfg)?;
-        Ok(Self { cfg, run: Some(run), started_at: Instant::now(), stats: SinkStats::default(), last_exit: None })
+        Ok(Self {
+            cfg,
+            run: Some(run),
+            started_at: Instant::now(),
+            stats: SinkStats::default(),
+            last_exit: None,
+        })
     }
 
     fn spawn(cfg: &SinkConfig) -> Result<Running> {
@@ -443,26 +545,42 @@ impl FfmpegSink {
             Some(_) => Some(TcpListener::bind(("127.0.0.1", 0))?),
             None => None,
         };
-        let port = listener.as_ref().map(|l| l.local_addr().map(|a| a.port())).transpose()?;
+        let port = listener
+            .as_ref()
+            .map(|l| l.local_addr().map(|a| a.port()))
+            .transpose()?;
         let mut cmd = std::process::Command::new(tools::ffmpeg_bin());
-        cmd.args(cfg.ffmpeg_args(port)?).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
-        let mut child = cmd.spawn().map_err(|e| MediaError::tool("ffmpeg", format!("not available: {e}")))?;
-        let mut stdin = child.stdin.take().ok_or_else(|| MediaError::tool("ffmpeg", "no stdin"))?;
+        cmd.args(cfg.ffmpeg_args(port)?)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| MediaError::tool("ffmpeg", format!("not available: {e}")))?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| MediaError::tool("ffmpeg", "no stdin"))?;
         let stderr = Arc::new(Mutex::new(VecDeque::new()));
         let stderr_reader = match child.stderr.take() {
             Some(pipe) => {
                 let tail = stderr.clone();
                 let secrets = cfg.target.secrets();
-                Some(std::thread::Builder::new().name("sink-stderr".into()).spawn(move || {
-                    for line in std::io::BufReader::new(pipe).lines().map_while(|l| l.ok()) {
-                        let line = scrub(&line, &secrets);
-                        let mut t = tail.lock().unwrap_or_else(|p| p.into_inner());
-                        if t.len() == STDERR_LINES {
-                            t.pop_front();
-                        }
-                        t.push_back(line);
-                    }
-                })?)
+                Some(
+                    std::thread::Builder::new()
+                        .name("sink-stderr".into())
+                        .spawn(move || {
+                            for line in std::io::BufReader::new(pipe).lines().map_while(|l| l.ok())
+                            {
+                                let line = scrub(&line, &secrets);
+                                let mut t = tail.lock().unwrap_or_else(|p| p.into_inner());
+                                if t.len() == STDERR_LINES {
+                                    t.pop_front();
+                                }
+                                t.push_back(line);
+                            }
+                        })?,
+                )
             }
             None => None,
         };
@@ -473,33 +591,51 @@ impl FfmpegSink {
         {
             let q = video_q.clone();
             let stop = stop.clone();
-            threads.push(std::thread::Builder::new().name("sink-video".into()).spawn(move || {
-                while let Some(b) = next(&q, &stop) {
-                    if stdin.write_all(&b).is_err() {
-                        break;
-                    }
-                }
-            })?);
+            threads.push(
+                std::thread::Builder::new()
+                    .name("sink-video".into())
+                    .spawn(move || {
+                        while let Some(b) = next(&q, &stop) {
+                            if stdin.write_all(&b).is_err() {
+                                break;
+                            }
+                        }
+                    })?,
+            );
         }
         let audio_q = match listener {
             Some(l) => {
                 let q = Arc::new(DropOldest::<Bytes>::new(cap));
                 let q2 = q.clone();
                 let stop2 = stop.clone();
-                threads.push(std::thread::Builder::new().name("sink-audio".into()).spawn(move || {
-                    let Some(mut s) = accept(&l, &stop2, Duration::from_secs(15)) else { return };
-                    while let Some(b) = next(&q2, &stop2) {
-                        if s.write_all(&b).is_err() {
-                            break;
-                        }
-                    }
-                    let _ = s.shutdown(std::net::Shutdown::Write);
-                })?);
+                threads.push(
+                    std::thread::Builder::new()
+                        .name("sink-audio".into())
+                        .spawn(move || {
+                            let Some(mut s) = accept(&l, &stop2, Duration::from_secs(15)) else {
+                                return;
+                            };
+                            while let Some(b) = next(&q2, &stop2) {
+                                if s.write_all(&b).is_err() {
+                                    break;
+                                }
+                            }
+                            let _ = s.shutdown(std::net::Shutdown::Write);
+                        })?,
+                );
                 Some(q)
             }
             None => None,
         };
-        Ok(Running { child, video_q, audio_q, threads, stop, stderr, stderr_reader })
+        Ok(Running {
+            child,
+            video_q,
+            audio_q,
+            threads,
+            stop,
+            stderr,
+            stderr_reader,
+        })
     }
 
     /// Whether ffmpeg is alive; restarts it (at most every 2 s) when not.
@@ -575,7 +711,9 @@ impl FfmpegSink {
     /// Close the pipes and wait for ffmpeg to finish writing (trailer,
     /// playlist). Returns the stats.
     pub fn finish(mut self, timeout: Duration) -> Result<SinkStats> {
-        let Some(mut r) = self.run.take() else { return Ok(self.stats) };
+        let Some(mut r) = self.run.take() else {
+            return Ok(self.stats);
+        };
         r.video_q.close();
         if let Some(q) = &r.audio_q {
             q.close();
@@ -604,8 +742,18 @@ impl FfmpegSink {
         match status {
             Some(s) if s.success() => Ok(self.stats),
             Some(s) => {
-                let tail = r.stderr.lock().unwrap_or_else(|p| p.into_inner()).iter().cloned().collect::<Vec<_>>().join("\n");
-                Err(MediaError::tool("ffmpeg", format!("sink exited with {s}: {tail}")))
+                let tail = r
+                    .stderr
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                Err(MediaError::tool(
+                    "ffmpeg",
+                    format!("sink exited with {s}: {tail}"),
+                ))
             }
             None => Err(MediaError::tool("ffmpeg", "sink did not exit in time")),
         }
@@ -637,7 +785,9 @@ impl FfmpegSink {
 
     /// Whether ffmpeg is running now (a dead one restarts on the next `send`).
     pub fn is_running(&mut self) -> bool {
-        self.run.as_mut().is_some_and(|r| matches!(r.child.try_wait(), Ok(None)))
+        self.run
+            .as_mut()
+            .is_some_and(|r| matches!(r.child.try_wait(), Ok(None)))
     }
 
     /// The target, for status (print [`SinkTarget::redacted`]).
@@ -678,7 +828,9 @@ fn accept(l: &TcpListener, stop: &AtomicBool, timeout: Duration) -> Option<TcpSt
                 let _ = s.set_nodelay(true);
                 return Some(s);
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(5)),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(5))
+            }
             Err(_) => return None,
         }
     }
@@ -691,9 +843,20 @@ mod tests {
 
     #[test]
     fn video_only_gets_a_silent_track() {
-        let c = SinkConfig::new(SinkTarget::Rtmp { url: "rtmp://x/live/k".into() }, 1344, 768, 24, None);
+        let c = SinkConfig::new(
+            SinkTarget::Rtmp {
+                url: "rtmp://x/live/k".into(),
+            },
+            1344,
+            768,
+            24,
+            None,
+        );
         let a = c.ffmpeg_args(None).unwrap().join(" ");
-        assert!(a.contains("-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=48000"), "{a}");
+        assert!(
+            a.contains("-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=48000"),
+            "{a}"
+        );
         assert!(a.contains("-map 0:v -map 1:a"));
         assert!(a.contains("-c:a aac -profile:a aac_low -b:a 128000 -ar 48000 -ac 2"));
         assert!(a.contains("-c:v h264_nvenc"));
@@ -702,50 +865,110 @@ mod tests {
         assert!(a.contains("-profile:v baseline -level:v 3.2"));
         assert!(a.contains("-flags +cgop"));
         assert!(!a.contains("libx264"));
-        assert!(a.ends_with("-f flv -flvflags no_duration_filesize rtmp://x/live/k"), "{a}");
+        assert!(
+            a.ends_with("-f flv -flvflags no_duration_filesize rtmp://x/live/k"),
+            "{a}"
+        );
     }
 
     #[test]
     fn rtmp_tc_url_names_the_real_server() {
-        let mut c = SinkConfig::new(SinkTarget::Rtmp { url: "rtmp://127.0.0.1:40001/live/k".into() }, 64, 64, 16, None);
-        assert!(!c.ffmpeg_args(None).unwrap().iter().any(|a| a == "-rtmp_tcurl"));
+        let mut c = SinkConfig::new(
+            SinkTarget::Rtmp {
+                url: "rtmp://127.0.0.1:40001/live/k".into(),
+            },
+            64,
+            64,
+            16,
+            None,
+        );
+        assert!(!c
+            .ffmpeg_args(None)
+            .unwrap()
+            .iter()
+            .any(|a| a == "-rtmp_tcurl"));
         c.rtmp_tc_url = Some("rtmps://live.example.com:443/live".into());
         let a = c.ffmpeg_args(None).unwrap().join(" ");
-        assert!(a.ends_with("-rtmp_tcurl rtmps://live.example.com:443/live rtmp://127.0.0.1:40001/live/k"), "{a}");
+        assert!(
+            a.ends_with(
+                "-rtmp_tcurl rtmps://live.example.com:443/live rtmp://127.0.0.1:40001/live/k"
+            ),
+            "{a}"
+        );
     }
 
     #[test]
     fn srt_is_mpegts_with_cloudflare_settings() {
-        let url = srt_url("srt://live.example.com:778", Some("publish:abc123"), Some("pass/word-123"), 1000);
+        let url = srt_url(
+            "srt://live.example.com:778",
+            Some("publish:abc123"),
+            Some("pass/word-123"),
+            1000,
+        );
         assert_eq!(
             url,
             "srt://live.example.com:778?streamid=publish:abc123&passphrase=pass/word-123&latency=1000000&mode=caller&pkt_size=1316"
         );
-        assert!(srt_value_ok("publish:live/a") && !srt_value_ok("a&b") && !srt_value_ok("a b") && !srt_value_ok("50%"));
+        assert!(
+            srt_value_ok("publish:live/a")
+                && !srt_value_ok("a&b")
+                && !srt_value_ok("a b")
+                && !srt_value_ok("50%")
+        );
         // An existing query is kept and not doubled.
-        assert_eq!(srt_url("srt://h:9000?latency=200000", None, None, 1000), "srt://h:9000?latency=200000&mode=caller&pkt_size=1316");
-        let mut c = SinkConfig::new(SinkTarget::Srt { url: url.clone() }, 832, 480, 16, Some(SinkAudioIn { rate: 48_000, channels: 1 }));
+        assert_eq!(
+            srt_url("srt://h:9000?latency=200000", None, None, 1000),
+            "srt://h:9000?latency=200000&mode=caller&pkt_size=1316"
+        );
+        let mut c = SinkConfig::new(
+            SinkTarget::Srt { url: url.clone() },
+            832,
+            480,
+            16,
+            Some(SinkAudioIn {
+                rate: 48_000,
+                channels: 1,
+            }),
+        );
         c.encoder = FfmpegH264::Libx264CpuTest;
         c.video_bitrate_bps = 500_000; // clamped up to Cloudflare's minimum
         let a = c.ffmpeg_args(Some(1)).unwrap().join(" ");
         assert!(a.contains("-b:v 2000000 -maxrate 2000000"), "{a}");
         assert!(a.contains("nal-hrd=cbr"), "{a}");
         assert!(a.contains("-g 32 -keyint_min 32 -sc_threshold 0"), "{a}");
-        assert!(a.contains("-c:a aac -profile:a aac_low -b:a 128000 -ar 48000 -ac 2"), "{a}");
-        assert!(a.ends_with(&format!("-f mpegts -mpegts_flags +resend_headers {url}")), "{a}");
+        assert!(
+            a.contains("-c:a aac -profile:a aac_low -b:a 128000 -ar 48000 -ac 2"),
+            "{a}"
+        );
+        assert!(
+            a.ends_with(&format!("-f mpegts -mpegts_flags +resend_headers {url}")),
+            "{a}"
+        );
         c.video_bitrate_bps = 40_000_000;
         assert_eq!(c.effective_video_bps(), 13_000_000);
     }
 
     #[test]
     fn credentials_never_print() {
-        let r = SinkTarget::Rtmp { url: "rtmps://live.example.com:443/live/0123456789abcdefk".into() };
+        let r = SinkTarget::Rtmp {
+            url: "rtmps://live.example.com:443/live/0123456789abcdefk".into(),
+        };
         assert_eq!(r.redacted(), "rtmps://live.example.com:443/live/<key>");
         assert!(!format!("{r:?}").contains("0123456789abcdefk"));
         let line = "rtmps://live.example.com:443/live/0123456789abcdefk: Input/output error";
         assert_eq!(scrub(line, &r.secrets()), "<redacted>: Input/output error");
-        assert_eq!(scrub("key 0123456789abcdefk refused", &r.secrets()), "key <redacted> refused");
-        let s = SinkTarget::Srt { url: srt_url("srt://user:pw1234@h:778", Some("streamid-xyz"), Some("secret-pass"), 500) };
+        assert_eq!(
+            scrub("key 0123456789abcdefk refused", &r.secrets()),
+            "key <redacted> refused"
+        );
+        let s = SinkTarget::Srt {
+            url: srt_url(
+                "srt://user:pw1234@h:778",
+                Some("streamid-xyz"),
+                Some("secret-pass"),
+                500,
+            ),
+        };
         assert_eq!(s.redacted(), "srt://h:778");
         let dbg = format!("{s:?}");
         for x in ["streamid-xyz", "secret", "pw1234"] {
@@ -753,21 +976,33 @@ mod tests {
         }
         let sec = s.secrets();
         assert!(sec.contains(&"secret-pass".to_owned()), "{sec:?}");
-        assert_eq!(scrub("Connection to srt://h:778 (secret-pass) failed", &sec), "Connection to srt://h:778 (<redacted>) failed");
+        assert_eq!(
+            scrub("Connection to srt://h:778 (secret-pass) failed", &sec),
+            "Connection to srt://h:778 (<redacted>) failed"
+        );
     }
-
 
     #[test]
     fn av_uses_the_second_pipe_and_hls_uses_1s_gops() {
         let c = SinkConfig::new(
-            SinkTarget::Hls { dir: PathBuf::from("/tmp/h"), segment_s: 1, window: 6 },
+            SinkTarget::Hls {
+                dir: PathBuf::from("/tmp/h"),
+                segment_s: 1,
+                window: 6,
+            },
             832,
             480,
             16,
-            Some(SinkAudioIn { rate: 48_000, channels: 1 }),
+            Some(SinkAudioIn {
+                rate: 48_000,
+                channels: 1,
+            }),
         );
         let a = c.ffmpeg_args(Some(5555)).unwrap().join(" ");
-        assert!(a.contains("-f s16le -ar 48000 -ac 1 -i tcp://127.0.0.1:5555"), "{a}");
+        assert!(
+            a.contains("-f s16le -ar 48000 -ac 1 -i tcp://127.0.0.1:5555"),
+            "{a}"
+        );
         assert!(!a.contains("anullsrc"));
         assert!(a.contains("-g 16 -bf 0"));
         assert!(a.contains("-hls_time 1 -hls_list_size 6"));

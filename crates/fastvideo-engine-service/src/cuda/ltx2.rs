@@ -15,11 +15,13 @@ use fastvideo_cudarc::ltx2::pipeline::{
     default_sol_stage2, IcReference, Ltx2Paths, Ltx2Pipeline, Ltx2Request, PipelineOptions,
     TextResidency,
 };
-use fastvideo_models::ltx2::config::Ltx2Config;
-use fastvideo_models::ltx2::techniques::{Ltx2Techniques, Stage2Flags};
 use fastvideo_cudarc::ltx2::v2v::{EditKind, VideoEdit};
+use fastvideo_models::ltx2::config::Ltx2Config;
 use fastvideo_models::ltx2::edit::ExtendAt;
-use fastvideo_protocol::{ApiError, AudioRole, GapId, JobMetrics, ResolvedEditOp, ResolvedJob, Task};
+use fastvideo_models::ltx2::techniques::{Ltx2Techniques, Stage2Flags};
+use fastvideo_protocol::{
+    ApiError, AudioRole, GapId, JobMetrics, ResolvedEditOp, ResolvedJob, Task,
+};
 
 use super::caps::{load_profile, ltx_config, Ltx2Recipe, LtxA2v, LtxStage2, LtxVersion};
 use super::output::{api_err, bytes_mb, stages, wants_audio};
@@ -51,11 +53,13 @@ pub fn conditioning_images(job: &ResolvedJob) -> Vec<ConditioningImage> {
 /// with one): the first reference image at the job's strengths (1 and 1 when
 /// unset: the model card's defaults).
 pub fn reference(job: &ResolvedJob, ic_lora: bool) -> Result<Option<IcReference>, ApiError> {
-    Ok(super::validate::ltx2_reference(job, ic_lora)?.map(|path| IcReference {
-        path: path.to_path_buf(),
-        strength: job.sampling.reference_strength.unwrap_or(1.0),
-        lora_strength: job.sampling.reference_lora_strength.unwrap_or(1.0),
-    }))
+    Ok(
+        super::validate::ltx2_reference(job, ic_lora)?.map(|path| IcReference {
+            path: path.to_path_buf(),
+            strength: job.sampling.reference_strength.unwrap_or(1.0),
+            lora_strength: job.sampling.reference_lora_strength.unwrap_or(1.0),
+        }),
+    )
 }
 
 /// The job's driving audio (`Task::A2V`, `AudioRole::Drive`): the output
@@ -82,7 +86,17 @@ pub fn driving_audio(job: &ResolvedJob) -> Result<Option<DrivingAudio>, ApiError
 pub fn video_edit(job: &ResolvedJob) -> Result<Option<VideoEdit>, ApiError> {
     let Some(e) = &job.edit else { return Ok(None) };
     let kind = match e.op {
-        ResolvedEditOp::Retake { start_s, end_s, video, audio } => EditKind::Retake { start_s, end_s, video, audio },
+        ResolvedEditOp::Retake {
+            start_s,
+            end_s,
+            video,
+            audio,
+        } => EditKind::Retake {
+            start_s,
+            end_s,
+            video,
+            audio,
+        },
         ResolvedEditOp::Extend { frames, at } => EditKind::Extend {
             frames: frames as usize,
             at: match at {

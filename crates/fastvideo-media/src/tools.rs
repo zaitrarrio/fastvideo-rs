@@ -61,8 +61,19 @@ pub fn run_checked(mut cmd: Command, tool: &str) -> Result<std::process::Output>
         .map_err(|e| MediaError::tool(tool, format!("not available: {e}")))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
-        let tail: String = err.lines().rev().take(8).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
-        return Err(MediaError::tool(tool, format!("exited with {}: {tail}", out.status)));
+        let tail: String = err
+            .lines()
+            .rev()
+            .take(8)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(MediaError::tool(
+            tool,
+            format!("exited with {}: {tail}", out.status),
+        ));
     }
     Ok(out)
 }

@@ -53,12 +53,36 @@ pub struct Mounted {
 /// Every adapter and whether this build includes it.
 pub fn inventory(p: &ProtocolsCfg) -> Vec<Mounted> {
     vec![
-        Mounted { api: "openai_videos", enabled: p.openai_videos || p.fastwan, built: cfg!(feature = "openai-videos") },
-        Mounted { api: "minimax", enabled: p.minimax, built: cfg!(feature = "minimax") },
-        Mounted { api: "ltx", enabled: p.ltx, built: cfg!(feature = "ltxapi") },
-        Mounted { api: "fal", enabled: p.fal, built: cfg!(feature = "fal") },
-        Mounted { api: "fal_director", enabled: p.fal && p.fal_director, built: cfg!(all(feature = "fal", feature = "webrtc")) },
-        Mounted { api: "reactor", enabled: p.reactor, built: cfg!(feature = "reactor") },
+        Mounted {
+            api: "openai_videos",
+            enabled: p.openai_videos || p.fastwan,
+            built: cfg!(feature = "openai-videos"),
+        },
+        Mounted {
+            api: "minimax",
+            enabled: p.minimax,
+            built: cfg!(feature = "minimax"),
+        },
+        Mounted {
+            api: "ltx",
+            enabled: p.ltx,
+            built: cfg!(feature = "ltxapi"),
+        },
+        Mounted {
+            api: "fal",
+            enabled: p.fal,
+            built: cfg!(feature = "fal"),
+        },
+        Mounted {
+            api: "fal_director",
+            enabled: p.fal && p.fal_director,
+            built: cfg!(all(feature = "fal", feature = "webrtc")),
+        },
+        Mounted {
+            api: "reactor",
+            enabled: p.reactor,
+            built: cfg!(feature = "reactor"),
+        },
     ]
 }
 
@@ -67,7 +91,11 @@ pub fn inventory(p: &ProtocolsCfg) -> Vec<Mounted> {
 pub fn ltx_config(cfg: &MountCfg) -> fastvideo_ltxapi::LtxConfig {
     use std::time::Duration;
     fastvideo_ltxapi::LtxConfig {
-        sync_timeout: Some(cfg.ltx.sync_timeout_s.map_or(cfg.sync_timeout, Duration::from_secs)),
+        sync_timeout: Some(
+            cfg.ltx
+                .sync_timeout_s
+                .map_or(cfg.sync_timeout, Duration::from_secs),
+        ),
         url_ttl: cfg.ltx.url_ttl_s.map_or(cfg.url_ttl, Duration::from_secs),
         v1_concurrency: (cfg.ltx.v1_concurrency > 0).then_some(cfg.ltx.v1_concurrency),
         body_max_bytes: cfg.body_max,
@@ -92,7 +120,12 @@ pub fn minimax_config(cfg: &MountCfg) -> fastvideo_minimax::MiniMaxConfig {
 /// only (H3 schema).
 #[cfg(feature = "fal")]
 pub fn fal_config(cfg: &MountCfg) -> fastvideo_fal::FalConfig {
-    let apps = cfg.protocols.fal_apps.iter().map(|id| fastvideo_fal::FalApp::from_id(id)).collect();
+    let apps = cfg
+        .protocols
+        .fal_apps
+        .iter()
+        .map(|id| fastvideo_fal::FalApp::from_id(id))
+        .collect();
     fastvideo_fal::FalConfig {
         apps,
         url_ttl: cfg.url_ttl,
@@ -126,11 +159,19 @@ pub fn renderers(cfg: &MountCfg) -> Vec<(ProtocolId, Arc<dyn CallbackRender>)> {
     #[cfg(feature = "minimax")]
     if cfg.protocols.minimax {
         let mm = fastvideo_minimax::MiniMax::new(minimax_config(cfg));
-        v.push((ProtocolId::MiniMaxV2, fastvideo_minimax::callback_renderer(&mm)));
+        v.push((
+            ProtocolId::MiniMaxV2,
+            fastvideo_minimax::callback_renderer(&mm),
+        ));
     }
     #[cfg(feature = "fal")]
     if cfg.protocols.fal {
-        v.push((ProtocolId::Fal, Arc::new(fastvideo_fal::FalWebhook { url_ttl: cfg.url_ttl })));
+        v.push((
+            ProtocolId::Fal,
+            Arc::new(fastvideo_fal::FalWebhook {
+                url_ttl: cfg.url_ttl,
+            }),
+        ));
     }
     let _ = cfg;
     v
@@ -160,7 +201,11 @@ pub fn root_model(cfg: &MountCfg, ctx: &ServeCtx) -> Option<String> {
 /// state, and routers that already carry it (fal). `fal_extra` is merged
 /// into the fal router (the director's routes, so `/fal/proxy` reaches
 /// them).
-pub fn mount(cfg: &MountCfg, ctx: &ServeCtx, fal_extra: Router<ServeCtx>) -> (Router<ServeCtx>, Router) {
+pub fn mount(
+    cfg: &MountCfg,
+    ctx: &ServeCtx,
+    fal_extra: Router<ServeCtx>,
+) -> (Router<ServeCtx>, Router) {
     #[allow(unused_mut)]
     let mut r: Router<ServeCtx> = Router::new();
     #[allow(unused_mut)]
@@ -171,7 +216,9 @@ pub fn mount(cfg: &MountCfg, ctx: &ServeCtx, fal_extra: Router<ServeCtx>) -> (Ro
         use fastvideo_openai_videos as ov;
         let vc = Arc::new(ov::VideosConfig::default());
         if p.openai_videos {
-            r = r.merge(ov::videos::routes(vc.clone())).merge(ov::models::routes(vc.clone()));
+            r = r
+                .merge(ov::videos::routes(vc.clone()))
+                .merge(ov::models::routes(vc.clone()));
         }
         if p.fastwan {
             r = r.merge(ov::fastwan::routes(ctx, &vc));
@@ -187,11 +234,18 @@ pub fn mount(cfg: &MountCfg, ctx: &ServeCtx, fal_extra: Router<ServeCtx>) -> (Ro
     }
     #[cfg(feature = "fal")]
     if p.fal {
-        stateful = stateful.merge(fastvideo_fal::router_with(ctx.clone(), fal_config(cfg), fal_extra));
+        stateful = stateful.merge(fastvideo_fal::router_with(
+            ctx.clone(),
+            fal_config(cfg),
+            fal_extra,
+        ));
     }
     for m in inventory(p) {
         if m.enabled && !m.built {
-            tracing::warn!(api = m.api, "API enabled in [protocols] but not built into this binary; not mounted");
+            tracing::warn!(
+                api = m.api,
+                "API enabled in [protocols] but not built into this binary; not mounted"
+            );
         }
     }
     #[cfg(not(feature = "fal"))]

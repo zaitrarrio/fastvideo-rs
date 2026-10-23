@@ -33,9 +33,13 @@ use std::time::Duration;
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
 use tokio::net::{TcpListener, TcpStream};
-use tokio_rustls::rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use tokio_rustls::rustls::client::danger::{
+    HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
+};
 use tokio_rustls::rustls::crypto::CryptoProvider;
-use tokio_rustls::rustls::{self, ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
+use tokio_rustls::rustls::{
+    self, ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme,
+};
 use tokio_rustls::TlsConnector;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -55,10 +59,15 @@ pub fn root_store(extra_ca: Option<&Path>) -> Result<RootCertStore, String> {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("rtmps_ca_file {}: {e}", p.display()))?;
         if certs.is_empty() {
-            return Err(format!("rtmps_ca_file {}: no PEM certificate in it", p.display()));
+            return Err(format!(
+                "rtmps_ca_file {}: no PEM certificate in it",
+                p.display()
+            ));
         }
         for c in certs {
-            roots.add(c).map_err(|e| format!("rtmps_ca_file {}: {e}", p.display()))?;
+            roots
+                .add(c)
+                .map_err(|e| format!("rtmps_ca_file {}: {e}", p.display()))?;
         }
     }
     if roots.is_empty() {
@@ -73,11 +82,18 @@ pub fn root_store(extra_ca: Option<&Path>) -> Result<RootCertStore, String> {
 /// accepting any certificate (signatures still checked).
 pub fn client_config(verify: bool, extra_ca: Option<&Path>) -> Result<Arc<ClientConfig>, String> {
     let p = provider();
-    let builder = ClientConfig::builder_with_provider(p.clone()).with_safe_default_protocol_versions().map_err(|e| e.to_string())?;
+    let builder = ClientConfig::builder_with_provider(p.clone())
+        .with_safe_default_protocol_versions()
+        .map_err(|e| e.to_string())?;
     let cfg = if verify {
-        builder.with_root_certificates(root_store(extra_ca)?).with_no_client_auth()
+        builder
+            .with_root_certificates(root_store(extra_ca)?)
+            .with_no_client_auth()
     } else {
-        builder.dangerous().with_custom_certificate_verifier(Arc::new(SkipVerify(p))).with_no_client_auth()
+        builder
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(SkipVerify(p)))
+            .with_no_client_auth()
     };
     Ok(Arc::new(cfg))
 }
@@ -98,12 +114,32 @@ impl ServerCertVerifier for SkipVerify {
         Ok(ServerCertVerified::assertion())
     }
 
-    fn verify_tls12_signature(&self, message: &[u8], cert: &CertificateDer<'_>, dss: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.0.signature_verification_algorithms)
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
     }
 
-    fn verify_tls13_signature(&self, message: &[u8], cert: &CertificateDer<'_>, dss: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.0.signature_verification_algorithms)
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
@@ -133,13 +169,19 @@ fn verify_failure(e: &std::io::Error) -> Option<String> {
     let r = e.get_ref()?.downcast_ref::<rustls::Error>()?;
     match r {
         rustls::Error::InvalidCertificate(c) => Some(format!("{c:?}")),
-        rustls::Error::NoCertificatesPresented => Some("the server presented no certificate".into()),
+        rustls::Error::NoCertificatesPresented => {
+            Some("the server presented no certificate".into())
+        }
         _ => None,
     }
 }
 
-async fn connect(connector: &TlsConnector, t: &TlsTarget) -> Result<tokio_rustls::client::TlsStream<TcpStream>, ConnectError> {
-    let name = ServerName::try_from(t.host.clone()).map_err(|e| ConnectError::Other(format!("server name {}: {e}", t.host)))?;
+async fn connect(
+    connector: &TlsConnector,
+    t: &TlsTarget,
+) -> Result<tokio_rustls::client::TlsStream<TcpStream>, ConnectError> {
+    let name = ServerName::try_from(t.host.clone())
+        .map_err(|e| ConnectError::Other(format!("server name {}: {e}", t.host)))?;
     let mut last = format!("{} resolved to no address", t.host);
     for a in &t.addrs {
         let tcp = match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(a)).await {
@@ -184,7 +226,8 @@ pub struct RtmpsRelay {
 impl RtmpsRelay {
     pub async fn start(target: TlsTarget, config: Arc<ClientConfig>) -> std::io::Result<Self> {
         // Checked here so a bad name fails the output at once.
-        ServerName::try_from(target.host.clone()).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        ServerName::try_from(target.host.clone())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();
         let state: Arc<Mutex<RelayState>> = Arc::default();
@@ -236,17 +279,28 @@ impl RtmpsRelay {
     /// Set once the server's certificate failed verification: the output
     /// must fail with this message.
     pub fn fatal(&self) -> Option<String> {
-        self.state.lock().unwrap_or_else(|p| p.into_inner()).fatal.clone()
+        self.state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .fatal
+            .clone()
     }
 
     /// The last non-fatal connection error (refused, timed out).
     pub fn last_error(&self) -> Option<String> {
-        self.state.lock().unwrap_or_else(|p| p.into_inner()).last_error.clone()
+        self.state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .last_error
+            .clone()
     }
 
     /// Verified TLS sessions opened so far.
     pub fn sessions(&self) -> u64 {
-        self.state.lock().unwrap_or_else(|p| p.into_inner()).sessions
+        self.state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .sessions
     }
 }
 
@@ -264,8 +318,15 @@ mod tests {
     fn pem(der: &[u8]) -> String {
         use base64::Engine as _;
         let b = base64::engine::general_purpose::STANDARD.encode(der);
-        let lines: Vec<&str> = b.as_bytes().chunks(64).map(|c| std::str::from_utf8(c).unwrap()).collect();
-        format!("-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n", lines.join("\n"))
+        let lines: Vec<&str> = b
+            .as_bytes()
+            .chunks(64)
+            .map(|c| std::str::from_utf8(c).unwrap())
+            .collect();
+        format!(
+            "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+            lines.join("\n")
+        )
     }
 
     /// A TLS echo server with a certificate for `names`, issued by a fresh
@@ -274,10 +335,14 @@ mod tests {
         let ca_key = rcgen::KeyPair::generate().unwrap();
         let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
         ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-        ca_params.distinguished_name.push(rcgen::DnType::CommonName, "fv test CA");
+        ca_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "fv test CA");
         let ca = ca_params.self_signed(&ca_key).unwrap();
         let key = rcgen::KeyPair::generate().unwrap();
-        let params = rcgen::CertificateParams::new(names.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap();
+        let params =
+            rcgen::CertificateParams::new(names.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+                .unwrap();
         let issuer = rcgen::Issuer::new(ca_params, ca_key);
         let leaf = params.signed_by(&key, &issuer).unwrap();
         let ca_file = dir.join("ca.pem");
@@ -337,44 +402,83 @@ mod tests {
     async fn verifies_the_chain_and_the_name_and_never_falls_back() {
         let dir = tempfile::tempdir().unwrap();
         let (addr, ca) = tls_echo(&["localhost", "127.0.0.1"], dir.path()).await;
-        let target = |host: &str| TlsTarget { host: host.into(), port: addr.port(), addrs: vec![addr] };
+        let target = |host: &str| TlsTarget {
+            host: host.into(),
+            port: addr.port(),
+            addrs: vec![addr],
+        };
 
         // Trusted CA, matching name: bytes flow both ways.
-        let relay = RtmpsRelay::start(target("localhost"), client_config(true, Some(&ca)).unwrap()).await.unwrap();
-        assert_eq!(echo_through(&relay).await.as_deref(), Some(&b"rtmp-handshake"[..]));
+        let relay = RtmpsRelay::start(target("localhost"), client_config(true, Some(&ca)).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            echo_through(&relay).await.as_deref(),
+            Some(&b"rtmp-handshake"[..])
+        );
         assert_eq!(relay.sessions(), 1);
         assert!(relay.fatal().is_none());
         // An IP address is checked against the certificate's IP names.
-        let relay = RtmpsRelay::start(target("127.0.0.1"), client_config(true, Some(&ca)).unwrap()).await.unwrap();
+        let relay = RtmpsRelay::start(target("127.0.0.1"), client_config(true, Some(&ca)).unwrap())
+            .await
+            .unwrap();
         assert!(echo_through(&relay).await.is_some());
 
         // The system roots alone do not know the test CA: refused, fatal,
         // and the next connection is refused too (no unverified fallback).
-        let relay = RtmpsRelay::start(target("localhost"), client_config(true, None).unwrap()).await.unwrap();
+        let relay = RtmpsRelay::start(target("localhost"), client_config(true, None).unwrap())
+            .await
+            .unwrap();
         assert!(echo_through(&relay).await.is_none());
-        let f = wait_fatal(&relay).await.expect("a verification failure is fatal");
-        assert!(f.contains("failed verification") && f.contains("UnknownIssuer"), "{f}");
+        let f = wait_fatal(&relay)
+            .await
+            .expect("a verification failure is fatal");
+        assert!(
+            f.contains("failed verification") && f.contains("UnknownIssuer"),
+            "{f}"
+        );
         assert!(echo_through(&relay).await.is_none());
         assert_eq!(relay.sessions(), 0);
 
         // Trusted CA but another name: refused.
-        let relay = RtmpsRelay::start(target("live.example.com"), client_config(true, Some(&ca)).unwrap()).await.unwrap();
+        let relay = RtmpsRelay::start(
+            target("live.example.com"),
+            client_config(true, Some(&ca)).unwrap(),
+        )
+        .await
+        .unwrap();
         assert!(echo_through(&relay).await.is_none());
         let f = wait_fatal(&relay).await.expect("a name mismatch is fatal");
         assert!(f.contains("NotValidForName"), "{f}");
 
         // insecure_skip_verify: any certificate (tests only; spec.rs gates it).
-        let relay = RtmpsRelay::start(target("live.example.com"), client_config(false, None).unwrap()).await.unwrap();
+        let relay = RtmpsRelay::start(
+            target("live.example.com"),
+            client_config(false, None).unwrap(),
+        )
+        .await
+        .unwrap();
         assert!(echo_through(&relay).await.is_some());
     }
 
     #[tokio::test]
     async fn a_refused_connection_is_not_fatal() {
-        let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
         let addr: SocketAddr = ([127, 0, 0, 1], port).into();
-        let relay = RtmpsRelay::start(TlsTarget { host: "localhost".into(), port, addrs: vec![addr] }, client_config(false, None).unwrap())
-            .await
-            .unwrap();
+        let relay = RtmpsRelay::start(
+            TlsTarget {
+                host: "localhost".into(),
+                port,
+                addrs: vec![addr],
+            },
+            client_config(false, None).unwrap(),
+        )
+        .await
+        .unwrap();
         assert!(echo_through(&relay).await.is_none());
         for _ in 0..100 {
             if relay.last_error().is_some() {
@@ -382,7 +486,11 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert!(relay.last_error().unwrap().contains("connect"), "{:?}", relay.last_error());
+        assert!(
+            relay.last_error().unwrap().contains("connect"),
+            "{:?}",
+            relay.last_error()
+        );
         assert!(relay.fatal().is_none());
     }
 
@@ -391,7 +499,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("empty.pem");
         std::fs::write(&p, "not a certificate").unwrap();
-        assert!(client_config(true, Some(&p)).unwrap_err().contains("no PEM certificate"));
+        assert!(client_config(true, Some(&p))
+            .unwrap_err()
+            .contains("no PEM certificate"));
         assert!(client_config(true, Some(&dir.path().join("missing.pem"))).is_err());
     }
 }

@@ -125,7 +125,10 @@ impl std::fmt::Debug for OutputsConfig {
             .field("policy", &self.policy)
             .field("srt_latency_ms", &self.srt_latency_ms)
             .field("cloudflare", &self.cloudflare)
-            .field("whip_token", &self.whip_token.as_ref().map(|_| "<redacted>"))
+            .field(
+                "whip_token",
+                &self.whip_token.as_ref().map(|_| "<redacted>"),
+            )
             .field("encoder", &self.encoder)
             .finish_non_exhaustive()
     }
@@ -154,22 +157,28 @@ impl OutputsConfig {
     pub fn from_config(c: &crate::config::Config) -> Self {
         let o = &c.outputs;
         let cf = &o.cloudflare;
-        let cloudflare = (!cf.account_id.trim().is_empty() && !cf.api_token.is_empty()).then(|| CloudflareAccount {
-            account_id: cf.account_id.trim().to_owned(),
-            api_token: cf.api_token.expose().trim().to_owned(),
-            api_base: cf.api_base.clone(),
-            recording: cf.recording,
-            on_stop: cf.on_stop,
-            delete_recording_after_days: cf.delete_recording_after_days,
-            customer_domain: cf.customer_domain.clone().filter(|d| !d.trim().is_empty()),
-            name_prefix: cf.name_prefix.clone(),
-        });
+        let cloudflare =
+            (!cf.account_id.trim().is_empty() && !cf.api_token.is_empty()).then(|| {
+                CloudflareAccount {
+                    account_id: cf.account_id.trim().to_owned(),
+                    api_token: cf.api_token.expose().trim().to_owned(),
+                    api_base: cf.api_base.clone(),
+                    recording: cf.recording,
+                    on_stop: cf.on_stop,
+                    delete_recording_after_days: cf.delete_recording_after_days,
+                    customer_domain: cf.customer_domain.clone().filter(|d| !d.trim().is_empty()),
+                    name_prefix: cf.name_prefix.clone(),
+                }
+            });
         let mut s = Self {
-            policy: UrlPolicy { allow_private: o.allow_private },
+            policy: UrlPolicy {
+                allow_private: o.allow_private,
+            },
             srt_latency_ms: o.srt_latency_ms.clamp(20, 8000),
             rtmps_ca_file: o.rtmps_ca_file.clone(),
             cloudflare,
-            whip_token: (!c.webrtc.whip_token.is_empty()).then(|| c.webrtc.whip_token.expose().to_owned()),
+            whip_token: (!c.webrtc.whip_token.is_empty())
+                .then(|| c.webrtc.whip_token.expose().to_owned()),
             whip_target: c.webrtc.whip_target.clone(),
             encoder: c.webrtc.encoder.clone(),
             ..Self::default()
@@ -178,7 +187,10 @@ impl OutputsConfig {
             s.stun = if v.trim() == "none" {
                 Vec::new()
             } else {
-                v.split(',').map(|x| x.trim().to_owned()).filter(|x| !x.is_empty()).collect()
+                v.split(',')
+                    .map(|x| x.trim().to_owned())
+                    .filter(|x| !x.is_empty())
+                    .collect()
             };
         }
         s
@@ -228,7 +240,10 @@ pub struct OutputState {
 impl OutputState {
     pub fn new(view: Value) -> Arc<Self> {
         Arc::new(Self {
-            status: Mutex::new(OutputStatus { output_state: "provisioning".into(), ..OutputStatus::default() }),
+            status: Mutex::new(OutputStatus {
+                output_state: "provisioning".into(),
+                ..OutputStatus::default()
+            }),
             view,
             playback: Mutex::new(json!({})),
         })
@@ -245,7 +260,10 @@ impl OutputState {
     }
 
     pub fn playback(&self) -> Value {
-        self.playback.lock().map(|p| p.clone()).unwrap_or(Value::Null)
+        self.playback
+            .lock()
+            .map(|p| p.clone())
+            .unwrap_or(Value::Null)
     }
 }
 
@@ -254,7 +272,9 @@ impl OutputState {
 pub fn hook(c: &crate::config::Config) -> Option<fastvideo_media::output::OutputHook> {
     #[cfg(all(feature = "webrtc", feature = "http-client"))]
     {
-        Some(fastvideo_media::output::OutputHook(Arc::new(publish::Opener(Outputs::from_config(c)))))
+        Some(fastvideo_media::output::OutputHook(Arc::new(
+            publish::Opener(Outputs::from_config(c)),
+        )))
     }
     #[cfg(not(all(feature = "webrtc", feature = "http-client")))]
     {
@@ -343,14 +363,23 @@ impl Outputs {
     /// The output of a request: its `output` object, else the legacy WHIP
     /// fields, else the default (Cloudflare when configured). Both at once
     /// is an error.
-    pub fn resolve(&self, output: Option<&Value>, legacy: Option<LegacyWhip>) -> Result<OutputSpec, ApiError> {
+    pub fn resolve(
+        &self,
+        output: Option<&Value>,
+        legacy: Option<LegacyWhip>,
+    ) -> Result<OutputSpec, ApiError> {
         let output = output.filter(|v| !v.is_null());
         let spec = match (output, legacy) {
             (Some(_), Some(_)) => {
-                return Err(ApiError::invalid_param("output", "give `output` or the legacy `whip_url` fields, not both"))
+                return Err(ApiError::invalid_param(
+                    "output",
+                    "give `output` or the legacy `whip_url` fields, not both",
+                ))
             }
             (Some(v), None) => OutputSpec::parse(v, self.cfg.policy)?,
-            (None, Some(l)) => OutputSpec::from_legacy(&l.url, l.token, l.user, l.target, self.cfg.policy)?,
+            (None, Some(l)) => {
+                OutputSpec::from_legacy(&l.url, l.token, l.user, l.target, self.cfg.policy)?
+            }
             (None, None) => {
                 if !self.cloudflare_ready() {
                     return Err(ApiError::invalid_param(
@@ -373,7 +402,11 @@ impl Outputs {
     /// `GET /fv/v1/outputs`: what this server can publish to.
     pub fn info(&self) -> Value {
         let cf = self.cloudflare_ready();
-        let kinds: Vec<&str> = OutputKind::ALL.iter().filter(|k| cf || !k.is_cloudflare()).map(|k| k.as_str()).collect();
+        let kinds: Vec<&str> = OutputKind::ALL
+            .iter()
+            .filter(|k| cf || !k.is_cloudflare())
+            .map(|k| k.as_str())
+            .collect();
         json!({
             "object": "fv.outputs",
             "default": if cf { Value::from("cloudflare") } else { Value::Null },
@@ -421,14 +454,33 @@ mod tests {
         let o = outs(false);
         let e = o.resolve(None, None).unwrap_err();
         assert_eq!(e.param.as_deref(), Some("output"));
-        let e = o.resolve(Some(&json!({"kind": "cloudflare-srt"})), None).unwrap_err();
+        let e = o
+            .resolve(Some(&json!({"kind": "cloudflare-srt"})), None)
+            .unwrap_err();
         assert_eq!(e.param.as_deref(), Some("output.kind"));
         assert_eq!(o.info()["default"], Value::Null);
         assert_eq!(o.info()["kinds"], json!(["whip", "rtmps", "srt"]));
         // Legacy fields and `output` are exclusive.
-        let l = LegacyWhip { url: "https://relay.example/w".into(), ..LegacyWhip::default() };
-        assert_eq!(o.resolve(None, Some(l.clone())).unwrap().kind, OutputKind::Whip);
-        assert!(o.resolve(Some(&json!({"kind": "whip", "url": "https://a.example/w"})), Some(l)).is_err());
-        assert_eq!(o.resolve(Some(&Value::Null), None).unwrap_err().param.as_deref(), Some("output"));
+        let l = LegacyWhip {
+            url: "https://relay.example/w".into(),
+            ..LegacyWhip::default()
+        };
+        assert_eq!(
+            o.resolve(None, Some(l.clone())).unwrap().kind,
+            OutputKind::Whip
+        );
+        assert!(o
+            .resolve(
+                Some(&json!({"kind": "whip", "url": "https://a.example/w"})),
+                Some(l)
+            )
+            .is_err());
+        assert_eq!(
+            o.resolve(Some(&Value::Null), None)
+                .unwrap_err()
+                .param
+                .as_deref(),
+            Some("output")
+        );
     }
 }

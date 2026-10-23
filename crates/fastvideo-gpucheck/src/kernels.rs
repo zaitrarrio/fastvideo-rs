@@ -23,8 +23,8 @@ use crate::report::{Report, StageError, StageResult};
 
 mod attn2;
 mod attn3;
-mod h3vae;
 mod determinism;
+mod h3vae;
 mod vsa_dc;
 
 fn dev() -> anyhow::Result<std::sync::Arc<device::DeviceContext>> {
@@ -267,7 +267,10 @@ fn group(
     name: &str,
     f: impl FnOnce(&mut Ctx<'_>) -> StageResult<()>,
 ) -> StageResult<()> {
-    if c.only.as_ref().is_some_and(|o| !o.iter().any(|g| g == name)) {
+    if c.only
+        .as_ref()
+        .is_some_and(|o| !o.iter().any(|g| g == name))
+    {
         return Ok(());
     }
     match f(c) {
@@ -822,7 +825,12 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
             let want = ops::host::quant_linear_epilogue(&bits, Some(&bias), true);
             let got: Vec<f32> =
                 match ops::quant_linear_epilogue_device(&x16, Some(&bias_d), true, true)? {
-                    Ok(y) => dev()?.stream.memcpy_dtov(&y)?.iter().map(|v| v.to_f32()).collect(),
+                    Ok(y) => dev()?
+                        .stream
+                        .memcpy_dtov(&y)?
+                        .iter()
+                        .map(|v| v.to_f32())
+                        .collect(),
                     Err(_) => unreachable!("bf16 out requested"),
                 };
             c.cmp("quant_linear_epilogue_bias_gelu_bf16", &got, &want, 1e-3)?;
@@ -2579,7 +2587,9 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
 
     // The sparse FP4 VSA attention for the H3 NVFP4 checkpoints (sm_120,
     // docs/ports/fasth3-sparse-fp4-attn.md).
-    group(&mut c, "h3_fp4_attn", |c| crate::kernels_fp4::run(c.report, c.seed))?;
+    group(&mut c, "h3_fp4_attn", |c| {
+        crate::kernels_fp4::run(c.report, c.seed)
+    })?;
 
     // Reference FP8 recipes (W8A8 / MXFP8) and bf16 activations.
     group(&mut c, "fp8_recipes", |c| {
@@ -2599,7 +2609,9 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
     })?;
 
     // LTX-2 rotary tables built on the device vs the host build, bit for bit.
-    group(&mut c, "ltx_rope", |c| crate::kernels_fuse::ltx_rope(c.report))?;
+    group(&mut c, "ltx_rope", |c| {
+        crate::kernels_fuse::ltx_rope(c.report)
+    })?;
 
     // Wan DiT: the bf16 block chain (fused vs unfused, bit for bit) and the
     // block-causal flash attention of SF-Wan against sdpa_composed.

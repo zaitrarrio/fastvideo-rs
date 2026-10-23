@@ -83,8 +83,10 @@ fn median3(f: &mut dyn FnMut() -> anyhow::Result<()>) -> anyhow::Result<f64> {
 pub(super) fn parity(c: &mut Ctx<'_>) -> StageResult<()> {
     let dev = dev()?;
     if dev.sm_major < 8 {
-        c.report
-            .note("attn2_skipped", json!({"sm_major": dev.sm_major, "needs": "sm80+"}));
+        c.report.note(
+            "attn2_skipped",
+            json!({"sm_major": dev.sm_major, "needs": "sm80+"}),
+        );
         return Ok(());
     }
 
@@ -114,10 +116,12 @@ pub(super) fn parity(c: &mut Ctx<'_>) -> StageResult<()> {
         );
         let tag = format!("{b}x{h}x{sq}x{sk}x{d}");
         for out16 in [false, true] {
-            let v1 = attn::device_mma_sdpa_with(&qt, &kt, &vt, Some(scale), out16, FlashKernel::V1)?
-                .ok_or_else(|| anyhow::anyhow!("flash v1 declined {tag}"))?;
-            let v2 = attn::device_mma_sdpa_with(&qt, &kt, &vt, Some(scale), out16, FlashKernel::V2)?
-                .ok_or_else(|| anyhow::anyhow!("flash v2 declined {tag}"))?;
+            let v1 =
+                attn::device_mma_sdpa_with(&qt, &kt, &vt, Some(scale), out16, FlashKernel::V1)?
+                    .ok_or_else(|| anyhow::anyhow!("flash v1 declined {tag}"))?;
+            let v2 =
+                attn::device_mma_sdpa_with(&qt, &kt, &vt, Some(scale), out16, FlashKernel::V2)?
+                    .ok_or_else(|| anyhow::anyhow!("flash v2 declined {tag}"))?;
             let (a, bb) = (host_of(&v1)?, host_of(&v2)?);
             let bad = bit_mismatches(
                 &a.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
@@ -136,19 +140,36 @@ pub(super) fn parity(c: &mut Ctx<'_>) -> StageResult<()> {
         }
         // cuDNN fused attention (bf16 out), called directly so a missing
         // engine is reported rather than silently replaced by flash v2.
-        let (q16, k16, v16) = (qt.quantize_bf16()?, kt.quantize_bf16()?, vt.quantize_bf16()?);
+        let (q16, k16, v16) = (
+            qt.quantize_bf16()?,
+            kt.quantize_bf16()?,
+            vt.quantize_bf16()?,
+        );
         let (qs, ks, vs) = (
-            q16.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("bf16 q"))?,
-            k16.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("bf16 k"))?,
-            v16.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("bf16 v"))?,
+            q16.device_slice_bf16()
+                .ok_or_else(|| anyhow::anyhow!("bf16 q"))?,
+            k16.device_slice_bf16()
+                .ok_or_else(|| anyhow::anyhow!("bf16 k"))?,
+            v16.device_slice_bf16()
+                .ok_or_else(|| anyhow::anyhow!("bf16 v"))?,
         );
         let mut o16 = unsafe { dev.stream.alloc::<bf16>(bh * sq * d) }?;
-        let ran = fastvideo_cudarc::wan::cudnn_sdpa::sdpa_bf16(qs, ks, vs, &mut o16, bh, sq, sk, d, scale)?;
+        let ran = fastvideo_cudarc::wan::cudnn_sdpa::sdpa_bf16(
+            qs, ks, vs, &mut o16, bh, sq, sk, d, scale,
+        )?;
         if ran {
-            let got: Vec<f32> = dev.stream.memcpy_dtov(&o16)?.iter().map(|x| x.to_f32()).collect();
+            let got: Vec<f32> = dev
+                .stream
+                .memcpy_dtov(&o16)?
+                .iter()
+                .map(|x| x.to_f32())
+                .collect();
             c.cmp(&format!("cudnn_sdpa_{tag}_vs_f32"), &got, &want, 1e-2)?;
         } else {
-            c.report.note(format!("cudnn_sdpa_{tag}_no_engine"), json!({"bh": bh, "sq": sq, "sk": sk, "d": d}));
+            c.report.note(
+                format!("cudnn_sdpa_{tag}_no_engine"),
+                json!({"bh": bh, "sq": sq, "sk": sk, "d": d}),
+            );
         }
     }
 
@@ -193,12 +214,20 @@ pub(super) fn parity(c: &mut Ctx<'_>) -> StageResult<()> {
                 kernel: Some(kernel),
                 splits: Some(splits),
             };
-            let v1 = ops::sol_fwd_device_pick(&prep, p.scale, sinks, true, true, pick(SolKernel::V1, 1))?;
+            let v1 = ops::sol_fwd_device_pick(
+                &prep,
+                p.scale,
+                sinks,
+                true,
+                true,
+                pick(SolKernel::V1, 1),
+            )?;
             let (o1, l1) = (down(&v1.out)?, down(v1.lse.as_ref().expect("lse"))?);
             let r1 = dev.stream.memcpy_dtov(v1.route.as_ref().expect("route"))?;
             // x4: bit-exact; x4f: exp2 within 2 ulp (bf16 P may round apart).
             for (kname, kernel) in [("x4", SolKernel::X4), ("x4f", SolKernel::X4f)] {
-                let w = ops::sol_fwd_device_pick(&prep, p.scale, sinks, true, true, pick(kernel, 1))?;
+                let w =
+                    ops::sol_fwd_device_pick(&prep, p.scale, sinks, true, true, pick(kernel, 1))?;
                 let (o2, l2) = (down(&w.out)?, down(w.lse.as_ref().expect("lse"))?);
                 let r2 = dev.stream.memcpy_dtov(w.route.as_ref().expect("route"))?;
                 let route_bad = bit_mismatches(&r1, &r2);
@@ -231,7 +260,14 @@ pub(super) fn parity(c: &mut Ctx<'_>) -> StageResult<()> {
                 if splits > groups {
                     continue;
                 }
-                let w = ops::sol_fwd_device_pick(&prep, p.scale, sinks, true, true, pick(SolKernel::Ws, splits))?;
+                let w = ops::sol_fwd_device_pick(
+                    &prep,
+                    p.scale,
+                    sinks,
+                    true,
+                    true,
+                    pick(SolKernel::Ws, splits),
+                )?;
                 let (o2, l2) = (down(&w.out)?, down(w.lse.as_ref().expect("lse"))?);
                 let r2 = dev.stream.memcpy_dtov(w.route.as_ref().expect("route"))?;
                 let route_bad = bit_mismatches(&r1, &r2);
@@ -255,13 +291,7 @@ pub(super) fn parity(c: &mut Ctx<'_>) -> StageResult<()> {
                     let lerr = l1
                         .iter()
                         .zip(&l2)
-                        .map(|(a, b)| {
-                            if a == b {
-                                0.0
-                            } else {
-                                (a - b).abs()
-                            }
-                        })
+                        .map(|(a, b)| if a == b { 0.0 } else { (a - b).abs() })
                         .fold(0.0f32, f32::max);
                     // Each split rounds P = 2^(s - m_split) to bf16 against its
                     // own running max, so P's bf16 rounding (2^-9) differs from
@@ -305,8 +335,10 @@ pub(super) fn parity(c: &mut Ctx<'_>) -> StageResult<()> {
             }
         }
     } else {
-        c.report
-            .note("sol_ws_skipped", json!({"sm_major": dev.sm_major, "needs": "sm90+"}));
+        c.report.note(
+            "sol_ws_skipped",
+            json!({"sm_major": dev.sm_major, "needs": "sm90+"}),
+        );
     }
 
     // ---- VSA: three-slot TMA ring vs the two-stage TMA kernel ------------
@@ -322,9 +354,15 @@ pub(super) fn parity(c: &mut Ctx<'_>) -> StageResult<()> {
             let topk = vsa::topk_for(sparsity, nb);
             let bh = heads;
             let n = bh * seq * D;
-            let (q, k, v, g) = (c.rand(n, 1.0), c.rand(n, 1.0), c.rand(n, 1.0), c.rand(n, 0.5));
+            let (q, k, v, g) = (
+                c.rand(n, 1.0),
+                c.rand(n, 1.0),
+                c.rand(n, 1.0),
+                c.rand(n, 0.5),
+            );
             let (qd, kd, vd, gd) = (up(&q)?, up(&k)?, up(&v)?, up(&g)?);
-            let plan_dev = ops::vsa_plan_upload(&plan.slot_src, &plan.block_sizes, vsa::TILE_ELEMS)?;
+            let plan_dev =
+                ops::vsa_plan_upload(&plan.slot_src, &plan.block_sizes, vsa::TILE_ELEMS)?;
             let scale = 1.0 / (D as f32).sqrt();
             let run = |kernel: &str| -> anyhow::Result<Vec<u32>> {
                 std::env::set_var("FASTVIDEO_VSA_KERNEL", kernel);
@@ -348,15 +386,20 @@ pub(super) fn parity(c: &mut Ctx<'_>) -> StageResult<()> {
             let b = run("tma2")?;
             let bad = bit_mismatches(&a, &b);
             c.report.check(
-                format!("vsa_tma2_{}x{}x{}_h{heads}_k{topk}_bitexact_vs_tma", grid.0, grid.1, grid.2),
+                format!(
+                    "vsa_tma2_{}x{}x{}_h{heads}_k{topk}_bitexact_vs_tma",
+                    grid.0, grid.1, grid.2
+                ),
                 bad == 0,
                 json!({"mismatched": bad, "of": a.len()}),
                 json!({"mismatched": 0}),
             )?;
         }
     } else {
-        c.report
-            .note("vsa_tma2_skipped", json!({"sm_major": dev.sm_major, "needs": "sm90+"}));
+        c.report.note(
+            "vsa_tma2_skipped",
+            json!({"sm_major": dev.sm_major, "needs": "sm90+"}),
+        );
     }
     Ok(())
 }
@@ -372,8 +415,10 @@ const SHAPES: &[(&str, usize, usize, &[f32])] = &[
 pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
     let dev = dev()?;
     if dev.sm_major < 9 {
-        c.report
-            .note("attn_bench_skipped", json!({"sm_major": dev.sm_major, "needs": "sm90+"}));
+        c.report.note(
+            "attn_bench_skipped",
+            json!({"sm_major": dev.sm_major, "needs": "sm90+"}),
+        );
         return Ok(());
     }
     let only = std::env::var("FV_ATTN_BENCH_SHAPES").unwrap_or_default();
@@ -461,7 +506,8 @@ pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
                 Ok(())
             })?;
             let bits = |kernel| -> anyhow::Result<Vec<u16>> {
-                let o = ops::sol_fused_device_bf16_pick(&q, &k, &v, bh, tokens, D, &p, pk(kernel, 1))?;
+                let o =
+                    ops::sol_fused_device_bf16_pick(&q, &k, &v, bh, tokens, D, &p, pk(kernel, 1))?;
                 bf16_down(&o, cmp_n)
             };
             let sol_bad = bit_mismatches(&bits(SolKernel::V1)?, &bits(SolKernel::Ws)?);
@@ -477,7 +523,8 @@ pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
                     up(&h)
                 };
                 let (q1, k1, v1) = (one(&q)?, one(&k)?, one(&v)?);
-                let prep = ops::sol_prep_device(&q1, &k1, &v1, 1, tokens, D, p.tau, p.scale, p.thresh)?;
+                let prep =
+                    ops::sol_prep_device(&q1, &k1, &v1, 1, tokens, D, p.tau, p.scale, p.thresh)?;
                 let fwd = ops::sol_fwd_device(&prep, p.scale, (0, 0), false, true)?;
                 let route = dev.stream.memcpy_dtov(fwd.route.as_ref().expect("route"))?;
                 let nt = num_blocks(tokens);
@@ -577,7 +624,10 @@ pub(super) fn dc_parity(c: &mut Ctx<'_>) -> StageResult<()> {
         );
         return Ok(());
     };
-    c.report.note("attn_dc_kernel", json!({"sm": k.sm, "origin": k.origin, "rows_per_cta": k.rows}));
+    c.report.note(
+        "attn_dc_kernel",
+        json!({"sm": k.sm, "origin": k.origin, "rows_per_cta": k.rows}),
+    );
     for (b, h, sq, sk, amp) in [
         (1usize, 1usize, 1usize, 1usize, 1.0f32),
         (1, 2, 64, 64, 1.5),
@@ -597,7 +647,11 @@ pub(super) fn dc_parity(c: &mut Ctx<'_>) -> StageResult<()> {
         let v = c.rand(bh * sk * d, 1.0);
         let scale = 1.0 / (d as f32).sqrt();
         let want = ref_sdpa(&q, &kk, &v, bh, sq, sk, d, scale);
-        let (qt, kt, vt) = (t(q, &[b, h, sq, d])?, t(kk, &[b, h, sk, d])?, t(v, &[b, h, sk, d])?);
+        let (qt, kt, vt) = (
+            t(q, &[b, h, sq, d])?,
+            t(kk, &[b, h, sk, d])?,
+            t(v, &[b, h, sk, d])?,
+        );
         let tag = format!("{b}x{h}x{sq}x{sk}");
         let run = |kernel, out16| -> anyhow::Result<Vec<f32>> {
             let o = attn::device_mma_sdpa_with(&qt, &kt, &vt, Some(scale), out16, kernel)?

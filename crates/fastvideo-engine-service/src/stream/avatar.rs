@@ -71,7 +71,8 @@ pub const DEFAULT_WINDOW_S: f64 = 10.0;
 /// Silence after a window's lines, so a sentence is not cut at the edge.
 pub const BREATH_S: f64 = 0.5;
 /// The scene when `set_prompt` is empty (Reactor: "straight-to-camera").
-pub const DEFAULT_SCENE: &str = "A single person speaks directly to the camera, head and shoulders in frame, \
+pub const DEFAULT_SCENE: &str =
+    "A single person speaks directly to the camera, head and shoulders in frame, \
 steady camera, soft natural light, clear voice.";
 
 /// Words in a script (whitespace-separated).
@@ -240,8 +241,16 @@ pub fn pack(script: &str, cap: usize) -> Vec<String> {
 /// The prompt of a window: the scene, then what the person does.
 pub fn window_prompt(scene: &str, kind: WindowKind, text: &str) -> String {
     let scene = scene.trim();
-    let scene = if scene.is_empty() { DEFAULT_SCENE } else { scene };
-    let scene = if scene.ends_with(['.', '!', '?']) { scene.to_owned() } else { format!("{scene}.") };
+    let scene = if scene.is_empty() {
+        DEFAULT_SCENE
+    } else {
+        scene
+    };
+    let scene = if scene.ends_with(['.', '!', '?']) {
+        scene.to_owned()
+    } else {
+        format!("{scene}.")
+    };
     match kind {
         WindowKind::Speech => format!("{scene} The person says: \"{}\"", text.replace('"', "'")),
         WindowKind::Voice if text.is_empty() => format!("{scene} The person is speaking."),
@@ -256,7 +265,8 @@ pub fn window_prompt(scene: &str, kind: WindowKind, text: &str) -> String {
 /// its range).
 fn grid_frames(grid: &FrameGrid, played: u32, trim: u32) -> u32 {
     let want = played.max(1) + trim;
-    grid.align_up(want).unwrap_or(if want > grid.max { grid.max } else { grid.min })
+    grid.align_up(want)
+        .unwrap_or(if want > grid.max { grid.max } else { grid.min })
 }
 
 /// Plans a take (pure).
@@ -304,8 +314,16 @@ pub fn plan(p: &PlanInput<'_>) -> AvatarPlan {
                     break;
                 }
                 let speech = word_count(&chunk) as f64 * 60.0 / f64::from(wpm) + BREATH_S;
-                let played = ((speech * ffps).round() as u32).min(win_frames + (BREATH_S * ffps) as u32);
-                push(&mut windows, &mut cum, WindowKind::Speech, chunk, played, None);
+                let played =
+                    ((speech * ffps).round() as u32).min(win_frames + (BREATH_S * ffps) as u32);
+                push(
+                    &mut windows,
+                    &mut cum,
+                    WindowKind::Speech,
+                    chunk,
+                    played,
+                    None,
+                );
             }
         }
         Some(voice) => {
@@ -324,15 +342,36 @@ pub fn plan(p: &PlanInput<'_>) -> AvatarPlan {
                 // The dropped anchor frame's audio is the previous window's
                 // last frame: start one frame early.
                 let start = (f64::from(cum) - f64::from(trim)) / ffps;
-                push(&mut windows, &mut cum, WindowKind::Voice, text, played, Some((start.max(0.0), f64::from(frames) / ffps)));
+                push(
+                    &mut windows,
+                    &mut cum,
+                    WindowKind::Voice,
+                    text,
+                    played,
+                    Some((start.max(0.0), f64::from(frames) / ffps)),
+                );
             }
         }
     }
     while cum < total_frames {
         let played = (total_frames - cum).min(win_frames);
-        push(&mut windows, &mut cum, WindowKind::Idle, String::new(), played, None);
+        push(
+            &mut windows,
+            &mut cum,
+            WindowKind::Idle,
+            String::new(),
+            played,
+            None,
+        );
     }
-    AvatarPlan { words, derived_seconds: derived, effective_seconds: effective, fps, total_frames, windows }
+    AvatarPlan {
+        words,
+        derived_seconds: derived,
+        effective_seconds: effective,
+        fps,
+        total_frames,
+        windows,
+    }
 }
 
 /// Centre-crops an RGB24 frame to `(w, h)` (no-op when it already is, or is
@@ -404,18 +443,45 @@ pub struct WindowReport {
 /// What the player reports.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AvatarEvent {
-    Started { seconds: f64, total_windows: u32, width: u32, height: u32 },
+    Started {
+        seconds: f64,
+        total_windows: u32,
+        width: u32,
+        height: u32,
+    },
     WindowBuilt(WindowReport),
     /// A window's first frame went out. `since_start_s`: from `start`;
     /// `stalled_s`: how long playout waited for it.
-    WindowStarted { index: u32, total_windows: u32, seconds_sent: f64, since_start_s: f64, stalled_s: f64 },
+    WindowStarted {
+        index: u32,
+        total_windows: u32,
+        seconds_sent: f64,
+        since_start_s: f64,
+        stalled_s: f64,
+    },
     /// A window was streamed to its end.
-    WindowProgress { index: u32, total_windows: u32, seconds_sent: f64, total_seconds: f64 },
-    Paused { seconds_sent: f64 },
-    Resumed { seconds_sent: f64 },
-    Stopped { seconds_sent: f64 },
-    Complete { seconds_sent: f64 },
-    Failed { reason: String, seconds_sent: f64 },
+    WindowProgress {
+        index: u32,
+        total_windows: u32,
+        seconds_sent: f64,
+        total_seconds: f64,
+    },
+    Paused {
+        seconds_sent: f64,
+    },
+    Resumed {
+        seconds_sent: f64,
+    },
+    Stopped {
+        seconds_sent: f64,
+    },
+    Complete {
+        seconds_sent: f64,
+    },
+    Failed {
+        reason: String,
+        seconds_sent: f64,
+    },
 }
 
 /// The player's state (for `state_update`).
@@ -469,11 +535,17 @@ fn gone() -> String {
 impl AvatarPlayer {
     /// Starts the player over `session` (needs a tokio runtime). The model
     /// must build image-to-video clips.
-    pub fn start(session: ClipSession, cfg: AvatarConfig) -> Result<(Self, AvatarOutputs), ApiError> {
+    pub fn start(
+        session: ClipSession,
+        cfg: AvatarConfig,
+    ) -> Result<(Self, AvatarOutputs), ApiError> {
         if !session.caps().supports(Task::I2V) {
             return Err(ApiError::invalid_param(
                 "model",
-                format!("`{}` cannot build image-to-video clips: no script avatar", session.caps().id),
+                format!(
+                    "`{}` cannot build image-to-video clips: no script avatar",
+                    session.caps().id
+                ),
             ));
         }
         let spec = session.spec().clone();
@@ -487,7 +559,12 @@ impl AvatarPlayer {
         let (build_tx, build_rx) = mpsc::channel(4);
         let (session_dir, own_dir) = match &cfg.session_dir {
             Some(d) => (d.clone(), false),
-            None => (std::env::temp_dir().join("fv-sessions").join(format!("{}-avatar", session.id())), true),
+            None => (
+                std::env::temp_dir()
+                    .join("fv-sessions")
+                    .join(format!("{}-avatar", session.id())),
+                true,
+            ),
         };
         let mut p = Player {
             fps: spec.fps.max(1),
@@ -507,12 +584,22 @@ impl AvatarPlayer {
         let (state_tx, state_rx) = watch::channel(AvatarStatus::default());
         let task = tokio::spawn(async move { p.run(msg_rx, build_rx, state_tx).await });
         Ok((
-            Self { tx: msg_tx, state: state_rx, task: Arc::new(std::sync::Mutex::new(Some(task))) },
-            AvatarOutputs { events: ev_rx, media: media_rx },
+            Self {
+                tx: msg_tx,
+                state: state_rx,
+                task: Arc::new(std::sync::Mutex::new(Some(task))),
+            },
+            AvatarOutputs {
+                events: ev_rx,
+                media: media_rx,
+            },
         ))
     }
 
-    async fn ask(&self, f: impl FnOnce(oneshot::Sender<Result<(), String>>) -> Msg) -> Result<(), String> {
+    async fn ask(
+        &self,
+        f: impl FnOnce(oneshot::Sender<Result<(), String>>) -> Msg,
+    ) -> Result<(), String> {
         let (tx, rx) = oneshot::channel();
         self.tx.send(f(tx)).await.map_err(|_| gone())?;
         rx.await.map_err(|_| gone())?
@@ -637,19 +724,43 @@ async fn sleep_until(d: Option<tokio::time::Instant>) {
 /// with silence past the file's end.
 pub fn cut_voice(src: &Path, start: f64, len: f64, dst: &Path) -> Result<(), ApiError> {
     if let Some(d) = dst.parent() {
-        std::fs::create_dir_all(d).map_err(|e| ApiError::internal(format!("creating {}: {e}", d.display())))?;
+        std::fs::create_dir_all(d)
+            .map_err(|e| ApiError::internal(format!("creating {}: {e}", d.display())))?;
     }
     let out = std::process::Command::new("ffmpeg")
-        .args(["-v", "error", "-nostdin", "-y", "-ss", &format!("{start:.6}"), "-i"])
+        .args([
+            "-v",
+            "error",
+            "-nostdin",
+            "-y",
+            "-ss",
+            &format!("{start:.6}"),
+            "-i",
+        ])
         .arg(src)
-        .args(["-vn", "-ac", "2", "-ar", "48000", "-af", "apad", "-t", &format!("{len:.6}"), "-c:a", "pcm_s16le"])
+        .args([
+            "-vn",
+            "-ac",
+            "2",
+            "-ar",
+            "48000",
+            "-af",
+            "apad",
+            "-t",
+            &format!("{len:.6}"),
+            "-c:a",
+            "pcm_s16le",
+        ])
         .arg(dst)
         .output()
         .map_err(|e| ApiError::internal(format!("ffmpeg not available: {e}")))?;
     if !out.status.success() {
         return Err(ApiError::invalid_param(
             "voice_audio",
-            format!("cutting the voice audio failed: {}", String::from_utf8_lossy(&out.stderr).trim()),
+            format!(
+                "cutting the voice audio failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
         ));
     }
     Ok(())
@@ -657,7 +768,9 @@ pub fn cut_voice(src: &Path, start: f64, len: f64, dst: &Path) -> Result<(), Api
 
 impl Player {
     fn seconds_sent(&self) -> f64 {
-        self.take.as_ref().map_or(0.0, |t| round2(f64::from(t.frames_sent) / f64::from(self.fps)))
+        self.take.as_ref().map_or(0.0, |t| {
+            round2(f64::from(t.frames_sent) / f64::from(self.fps))
+        })
     }
 
     async fn send(&self, ev: AvatarEvent) {
@@ -751,7 +864,10 @@ impl Player {
             return Err("the avatar image is missing".into());
         }
         if take.voice.is_some() && !self.session.caps().supports(Task::A2V) {
-            return Err(format!("`{}` cannot take a driving voice (no audio-to-video)", self.session.caps().id));
+            return Err(format!(
+                "`{}` cannot take a driving voice (no audio-to-video)",
+                self.session.caps().id
+            ));
         }
         let (w, h) = self.cfg.delivered.unwrap_or(self.spec.canvas);
         let n = take.plan.windows.len() as u32;
@@ -776,17 +892,33 @@ impl Player {
             done: false,
         });
         tracing::info!(session = %self.session.id(), windows = n, seconds, "avatar take started");
-        self.send(AvatarEvent::Started { seconds, total_windows: n, width: w, height: h }).await;
+        self.send(AvatarEvent::Started {
+            seconds,
+            total_windows: n,
+            width: w,
+            height: h,
+        })
+        .await;
         Ok(())
     }
 
     async fn pause(&mut self, paused: bool) -> Result<(), String> {
         let sent = self.seconds_sent();
         let Some(t) = self.take.as_mut().filter(|t| !t.done) else {
-            return Err(if paused { "nothing is generating" } else { "nothing is paused" }.into());
+            return Err(if paused {
+                "nothing is generating"
+            } else {
+                "nothing is paused"
+            }
+            .into());
         };
         if t.paused == paused {
-            return Err(if paused { "already paused" } else { "not paused" }.into());
+            return Err(if paused {
+                "already paused"
+            } else {
+                "not paused"
+            }
+            .into());
         }
         t.paused = paused;
         if paused {
@@ -822,14 +954,21 @@ impl Player {
     async fn pump_build(&mut self) {
         let lookahead = self.cfg.lookahead.max(1);
         let Some(t) = self.take.as_mut() else { return };
-        if t.done || t.paused || !self.audience || t.building.is_some() || t.ready.len() >= lookahead {
+        if t.done
+            || t.paused
+            || !self.audience
+            || t.building.is_some()
+            || t.ready.len() >= lookahead
+        {
             return;
         }
         if t.next_build as usize >= t.plan.windows.len() {
             return;
         }
         let w = t.plan.windows[t.next_build as usize].clone();
-        let first_frame = if w.index == 0 { t.image.clone() } else {
+        let first_frame = if w.index == 0 {
+            t.image.clone()
+        } else {
             match &t.anchor {
                 Some(a) => a.clone(),
                 None => return,
@@ -840,8 +979,12 @@ impl Player {
             (Some(v), Some(seg)) => Some((v.clone(), seg)),
             _ => None,
         };
-        let voice_path = self.session_dir.join(format!("voice-{}-{}.wav", t.id, w.index));
-        let anchor_path = self.session_dir.join(format!("anchor-{}-{}.png", t.id, w.index));
+        let voice_path = self
+            .session_dir
+            .join(format!("voice-{}-{}.wav", t.id, w.index));
+        let anchor_path = self
+            .session_dir
+            .join(format!("anchor-{}-{}.png", t.id, w.index));
         // Cut the voice slice synchronously (small, ffmpeg, milliseconds).
         let audio_drive = match voice_src {
             Some((src, (start, len))) => match cut_voice(&src, start, len, &voice_path) {
@@ -851,7 +994,13 @@ impl Player {
                     let (take, index) = (t.id, w.index);
                     t.building = Some(CancelToken::new());
                     tokio::spawn(async move {
-                        let _ = tx.send(BuildDone { take, index, result: Err(e) }).await;
+                        let _ = tx
+                            .send(BuildDone {
+                                take,
+                                index,
+                                result: Err(e),
+                            })
+                            .await;
                     });
                     return;
                 }
@@ -876,7 +1025,13 @@ impl Player {
                 let (take, index) = (t.id, w.index);
                 t.building = Some(CancelToken::new());
                 tokio::spawn(async move {
-                    let _ = tx.send(BuildDone { take, index, result: Err(e) }).await;
+                    let _ = tx
+                        .send(BuildDone {
+                            take,
+                            index,
+                            result: Err(e),
+                        })
+                        .await;
                 });
                 return;
             }
@@ -889,7 +1044,13 @@ impl Player {
                 let (take, index) = (t.id, w.index);
                 t.building = Some(CancelToken::new());
                 tokio::spawn(async move {
-                    let _ = tx.send(BuildDone { take, index, result: Err(e) }).await;
+                    let _ = tx
+                        .send(BuildDone {
+                            take,
+                            index,
+                            result: Err(e),
+                        })
+                        .await;
                 });
                 return;
             }
@@ -911,14 +1072,21 @@ impl Player {
                 let out = handle.wait().await?;
                 let build_s = t0.elapsed().as_secs_f64();
                 let built = tokio::task::spawn_blocking(move || {
-                    prepare_window(out, &w, fps, channels, delivered, fade, last, &anchor_path).map(|b| (b, anchor_path))
+                    prepare_window(out, &w, fps, channels, delivered, fade, last, &anchor_path)
+                        .map(|b| (b, anchor_path))
                 })
                 .await
                 .map_err(|e| ApiError::internal(format!("preparing the window: {e}")))??;
                 Ok::<_, ApiError>((built.0, built.1, build_s))
             }
             .await;
-            let _ = tx.send(BuildDone { take, index, result }).await;
+            let _ = tx
+                .send(BuildDone {
+                    take,
+                    index,
+                    result,
+                })
+                .await;
         });
     }
 
@@ -940,7 +1108,11 @@ impl Player {
                 let t = self.take.as_mut().expect("take");
                 t.done = true;
                 t.ready.clear();
-                self.send(AvatarEvent::Failed { reason: e.message, seconds_sent: sent }).await;
+                self.send(AvatarEvent::Failed {
+                    reason: e.message,
+                    seconds_sent: sent,
+                })
+                .await;
             }
             Ok((built, anchor, build_s)) => {
                 let w = &t.plan.windows[built.index as usize];
@@ -984,11 +1156,18 @@ impl Player {
         }
         let built = t.ready.pop_front().expect("front");
         let index = built.index;
-        let stalled = t.waiting_since.take().map_or(0.0, |s| s.elapsed().as_secs_f64());
+        let stalled = t
+            .waiting_since
+            .take()
+            .map_or(0.0, |s| s.elapsed().as_secs_f64());
         let since_start = t.started.elapsed().as_secs_f64();
         let total = t.plan.windows.len() as u32;
         let sent = round2(f64::from(t.frames_sent) / fps);
-        t.playing = Some(Playing { built, next: 0, clock_start: None });
+        t.playing = Some(Playing {
+            built,
+            next: 0,
+            clock_start: None,
+        });
         if index == 0 {
             self.status.first_frame_s = Some(round2(since_start));
         } else if stalled > 0.05 {
@@ -1040,7 +1219,12 @@ impl Player {
         t.frames_sent += hi - lo;
         let window_done = hi >= total;
         let index = p.built.index;
-        let item = MediaItem::Slice(MediaSlice { clip_id: t.id, first_frame: lo, frames, audio });
+        let item = MediaItem::Slice(MediaSlice {
+            clip_id: t.id,
+            first_frame: lo,
+            frames,
+            audio,
+        });
         let _ = self.media.send(item).await;
         if window_done {
             self.finish_window(index).await;
@@ -1066,12 +1250,24 @@ impl Player {
             t.waiting_since = Some(Instant::now());
         }
         let id = t.id;
-        self.send(AvatarEvent::WindowProgress { index, total_windows, seconds_sent: sent, total_seconds }).await;
+        self.send(AvatarEvent::WindowProgress {
+            index,
+            total_windows,
+            seconds_sent: sent,
+            total_seconds,
+        })
+        .await;
         if complete {
-            self.media(MediaItem::ClipEnd { clip_id: id, outcome: PlayOutcome::Finished, armed: false }).await;
+            self.media(MediaItem::ClipEnd {
+                clip_id: id,
+                outcome: PlayOutcome::Finished,
+                armed: false,
+            })
+            .await;
             self.status.finished = true;
             tracing::info!(session = %self.session.id(), seconds = sent, "avatar take complete");
-            self.send(AvatarEvent::Complete { seconds_sent: sent }).await;
+            self.send(AvatarEvent::Complete { seconds_sent: sent })
+                .await;
         }
     }
 }
@@ -1093,7 +1289,9 @@ fn prepare_window(
 ) -> Result<Built, ApiError> {
     let frames = out.frames.unwrap_or_default();
     let Some(tail) = frames.last() else {
-        return Err(ApiError::engine_failed("the window build returned no frames"));
+        return Err(ApiError::engine_failed(
+            "the window build returned no frames",
+        ));
     };
     super::player::write_png(tail, anchor)?;
     let n = frames.len() as u32;
@@ -1103,8 +1301,16 @@ fn prepare_window(
             let pcm = prepare_clip_audio(out.audio.as_ref(), n, fps, WIRE_RATE, ch)
                 .map_err(|e| ApiError::internal(format!("window audio: {e}")))?;
             let s0 = frame_sample_offset(u64::from(trim), fps, WIRE_RATE) as usize * ch as usize;
-            let kept = fastvideo_protocol::Pcm::new(WIRE_RATE, ch, pcm.samples[s0.min(pcm.samples.len())..].to_vec());
-            let faded = if fade_ms > 0 { apply_clip_fades(&kept, fade_ms, w.index > 0, !last) } else { kept };
+            let kept = fastvideo_protocol::Pcm::new(
+                WIRE_RATE,
+                ch,
+                pcm.samples[s0.min(pcm.samples.len())..].to_vec(),
+            );
+            let faded = if fade_ms > 0 {
+                apply_clip_fades(&kept, fade_ms, w.index > 0, !last)
+            } else {
+                kept
+            };
             Some(faded.samples.to_vec())
         }
         None => None,
@@ -1117,7 +1323,11 @@ fn prepare_window(
             None => f,
         })
         .collect();
-    Ok(Built { index: w.index, frames, audio })
+    Ok(Built {
+        index: w.index,
+        frames,
+        audio,
+    })
 }
 
 #[cfg(test)]
@@ -1129,17 +1339,40 @@ mod tests {
     }
 
     fn input<'a>(script: &'a str, duration_s: f64) -> PlanInput<'a> {
-        PlanInput { script, scene: "", wpm: 140, duration_s, window_s: 10.0, fps: 24, grid: grid(), voice_s: None }
+        PlanInput {
+            script,
+            scene: "",
+            wpm: 140,
+            duration_s,
+            window_s: 10.0,
+            fps: 24,
+            grid: grid(),
+            voice_s: None,
+        }
     }
 
     #[test]
     fn sentences_and_packing() {
         let s = sentences("Hello there. How are you?\nFine, thanks! Version 2.5 is out");
-        assert_eq!(s, ["Hello there.", "How are you?", "Fine, thanks!", "Version 2.5 is out"]);
-        assert_eq!(pack("One two. Three four five. Six.", 3), ["One two.", "Three four five.", "Six."]);
+        assert_eq!(
+            s,
+            [
+                "Hello there.",
+                "How are you?",
+                "Fine, thanks!",
+                "Version 2.5 is out"
+            ]
+        );
+        assert_eq!(
+            pack("One two. Three four five. Six.", 3),
+            ["One two.", "Three four five.", "Six."]
+        );
         assert_eq!(pack("One two. Three.", 3), ["One two. Three."]);
         // A long sentence: clauses, then words.
-        assert_eq!(pack("a b c d, e f g h i j", 4), ["a b c d,", "e f g h", "i j"]);
+        assert_eq!(
+            pack("a b c d, e f g h i j", 4),
+            ["a b c d,", "e f g h", "i j"]
+        );
     }
 
     #[test]
@@ -1171,9 +1404,20 @@ mod tests {
             at += w.played();
         }
         assert!(at >= p.total_frames);
-        let spoken: Vec<&str> = p.windows.iter().filter(|w| w.kind == WindowKind::Speech).map(|w| w.text.as_str()).collect();
+        let spoken: Vec<&str> = p
+            .windows
+            .iter()
+            .filter(|w| w.kind == WindowKind::Speech)
+            .map(|w| w.text.as_str())
+            .collect();
         assert_eq!(spoken.join(" ").split_whitespace().count(), p.words);
-        assert!(p.windows[0].prompt.contains("The person says: \"Welcome to the show."), "{}", p.windows[0].prompt);
+        assert!(
+            p.windows[0]
+                .prompt
+                .contains("The person says: \"Welcome to the show."),
+            "{}",
+            p.windows[0].prompt
+        );
     }
 
     #[test]
@@ -1196,13 +1440,20 @@ mod tests {
         i.voice_s = Some(23.0);
         let p = plan(&i);
         assert_eq!(p.effective_seconds, 23.0);
-        let voice: Vec<&AvatarWindow> = p.windows.iter().filter(|w| w.kind == WindowKind::Voice).collect();
+        let voice: Vec<&AvatarWindow> = p
+            .windows
+            .iter()
+            .filter(|w| w.kind == WindowKind::Voice)
+            .collect();
         assert_eq!(voice.len(), 3);
         for w in &voice {
             let (start, len) = w.audio.unwrap();
             // The first played frame's audio is at the window's take position.
             let played_at = start + f64::from(w.trim) / 24.0;
-            assert!((played_at - f64::from(w.start_frame) / 24.0).abs() < 1e-9, "{w:?}");
+            assert!(
+                (played_at - f64::from(w.start_frame) / 24.0).abs() < 1e-9,
+                "{w:?}"
+            );
             assert!((len - f64::from(w.frames) / 24.0).abs() < 1e-9);
         }
         assert!(p.windows[0].prompt.contains("one two"));
@@ -1211,7 +1462,10 @@ mod tests {
     #[test]
     fn prompts() {
         assert!(window_prompt("", WindowKind::Idle, "").starts_with(DEFAULT_SCENE));
-        assert_eq!(window_prompt("A chef in a kitchen", WindowKind::Speech, "Say \"hi\""), "A chef in a kitchen. The person says: \"Say 'hi'\"");
+        assert_eq!(
+            window_prompt("A chef in a kitchen", WindowKind::Speech, "Say \"hi\""),
+            "A chef in a kitchen. The person says: \"Say 'hi'\""
+        );
     }
 
     #[test]
@@ -1222,7 +1476,12 @@ mod tests {
                 data.extend_from_slice(&[x, y, 0]);
             }
         }
-        let f = RgbFrame { width: 4, height: 4, data: data.into(), index: 7 };
+        let f = RgbFrame {
+            width: 4,
+            height: 4,
+            data: data.into(),
+            index: 7,
+        };
         let c = crop_center(&f, 2, 2);
         assert_eq!((c.width, c.height, c.index), (2, 2, 7));
         assert_eq!(&c.data[..], &[1, 1, 0, 2, 1, 0, 1, 2, 0, 2, 2, 0]);

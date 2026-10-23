@@ -329,10 +329,16 @@ fn record_text(s: &SegmentRecord) -> String {
 }
 
 fn frame_lines(frames: Frames) -> String {
-    let seen = if frames.attached { "attached" } else { "not shown to you" };
+    let seen = if frames.attached {
+        "attached"
+    } else {
+        "not shown to you"
+    };
     let mut v = Vec::new();
     if frames.first {
-        v.push(format!("FIRST FRAME: this segment starts from a given image ({seen}); continue from it."));
+        v.push(format!(
+            "FIRST FRAME: this segment starts from a given image ({seen}); continue from it."
+        ));
     }
     if frames.end {
         v.push(format!(
@@ -343,20 +349,41 @@ fn frame_lines(frames: Frames) -> String {
 }
 
 /// `buildUserMessage` (the premise as given: the digest when there is one).
-pub fn build_user_message(world: &WorldBible, registry: &Registry, history: &[SegmentRecord], direction: Option<&Direction>) -> String {
-    build_message(&world.premise, registry, history, direction, Frames::default())
+pub fn build_user_message(
+    world: &WorldBible,
+    registry: &Registry,
+    history: &[SegmentRecord],
+    direction: Option<&Direction>,
+) -> String {
+    build_message(
+        &world.premise,
+        registry,
+        history,
+        direction,
+        Frames::default(),
+    )
 }
 
 /// The four sections of the spec, with the frame lines (ours) after the
 /// direction.
-pub fn build_message(premise: &str, registry: &Registry, history: &[SegmentRecord], direction: Option<&Direction>, frames: Frames) -> String {
+pub fn build_message(
+    premise: &str,
+    registry: &Registry,
+    history: &[SegmentRecord],
+    direction: Option<&Direction>,
+    frames: Frames,
+) -> String {
     let entities = registry
         .values()
         .iter()
         .map(|e| format!("- {} ({}, \"{}\")", e.id, e.kind.as_str(), e.name))
         .collect::<Vec<_>>()
         .join("\n");
-    let recent = history.iter().map(record_text).collect::<Vec<_>>().join("\n\n");
+    let recent = history
+        .iter()
+        .map(record_text)
+        .collect::<Vec<_>>()
+        .join("\n\n");
     let mut dir = match direction.filter(|d| !d.text.trim().is_empty()) {
         Some(d) => format!("NEW DIRECTION:\n{}", d.text),
         None => "NEW DIRECTION:\n(none, advance the story one beat)".to_owned(),
@@ -367,8 +394,22 @@ pub fn build_message(premise: &str, registry: &Registry, history: &[SegmentRecor
     }
     [
         format!("WORLD BIBLE:\n{premise}"),
-        format!("ESTABLISHED ENTITIES:\n{}", if entities.is_empty() { "(none)" } else { &entities }),
-        format!("RECENT SEGMENTS (oldest first):\n{}", if recent.is_empty() { "(stream is starting)" } else { &recent }),
+        format!(
+            "ESTABLISHED ENTITIES:\n{}",
+            if entities.is_empty() {
+                "(none)"
+            } else {
+                &entities
+            }
+        ),
+        format!(
+            "RECENT SEGMENTS (oldest first):\n{}",
+            if recent.is_empty() {
+                "(stream is starting)"
+            } else {
+                &recent
+            }
+        ),
         dir,
     ]
     .join("\n\n")
@@ -387,29 +428,54 @@ pub fn request_for(user: String, images: Vec<String>) -> ChatRequest {
 }
 
 /// `callModel`: one completion, parsed as [`ExpansionOutput`].
-pub async fn call_model(backend: &dyn ChatBackend, req: &ChatRequest) -> Result<ExpansionOutput, UpsampleError> {
+pub async fn call_model(
+    backend: &dyn ChatBackend,
+    req: &ChatRequest,
+) -> Result<ExpansionOutput, UpsampleError> {
     let content = backend.complete(req).await?;
     // Tolerant of small local models: a leading `<think>` block or a code
     // fence around the JSON is dropped first (an addition to the spec).
-    serde_json::from_str(crate::chat::json_body(&content)).map_err(|e| UpsampleError::BadOutput(e.to_string()))
+    serde_json::from_str(crate::chat::json_body(&content))
+        .map_err(|e| UpsampleError::BadOutput(e.to_string()))
 }
 
 /// `expandWithHedge`: two concurrent calls with the hedge (one without),
 /// the first success wins, everything is aborted at the timeout.
-pub async fn expand_with_hedge(backend: &Arc<dyn ChatBackend>, hedge: bool, timeout: Duration, user: String) -> Result<ExpansionOutput, UpsampleError> {
+pub async fn expand_with_hedge(
+    backend: &Arc<dyn ChatBackend>,
+    hedge: bool,
+    timeout: Duration,
+    user: String,
+) -> Result<ExpansionOutput, UpsampleError> {
     expand_request(backend, hedge, timeout, request_for(user, Vec::new())).await
 }
 
 /// [`expand_with_hedge`] for a prepared request (with images).
-pub async fn expand_request(backend: &Arc<dyn ChatBackend>, hedge: bool, timeout: Duration, req: ChatRequest) -> Result<ExpansionOutput, UpsampleError> {
+pub async fn expand_request(
+    backend: &Arc<dyn ChatBackend>,
+    hedge: bool,
+    timeout: Duration,
+    req: ChatRequest,
+) -> Result<ExpansionOutput, UpsampleError> {
     let attempts = if hedge { 2 } else { 1 };
     hedged(attempts, timeout, || call_model(backend.as_ref(), &req)).await
 }
 
 /// `assemblePrompt` in the owner's prose layout, within `max_chars`
 /// characters (trimmed by priority, see [`crate::assemble`]).
-pub fn assemble_prompt(out: &ExpansionOutput, registry: &Registry, world: &WorldBible, max_chars: usize) -> String {
-    assemble(Layout::Prose, out, registry, world, &PromptLimit::chars(max_chars))
+pub fn assemble_prompt(
+    out: &ExpansionOutput,
+    registry: &Registry,
+    world: &WorldBible,
+    max_chars: usize,
+) -> String {
+    assemble(
+        Layout::Prose,
+        out,
+        registry,
+        world,
+        &PromptLimit::chars(max_chars),
+    )
 }
 
 /// The premise digest's system prompt (ours; fal's expander and its system
@@ -498,11 +564,15 @@ fn split_text(s: &str, max: usize) -> Vec<&str> {
         let end = rest.char_indices().nth(max).map_or(rest.len(), |(i, _)| i);
         let head = &rest[..end];
         let half = head.len() / 2;
-        let cut = [head.rfind("\n\n"), head.rfind(". ").map(|i| i + 1), head.rfind(char::is_whitespace)]
-            .into_iter()
-            .flatten()
-            .find(|&i| i >= half)
-            .unwrap_or(end);
+        let cut = [
+            head.rfind("\n\n"),
+            head.rfind(". ").map(|i| i + 1),
+            head.rfind(char::is_whitespace),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|&i| i >= half)
+        .unwrap_or(end);
         out.push(rest[..cut].trim());
         rest = rest[cut..].trim_start();
     }
@@ -518,7 +588,16 @@ impl Upsampler {
         for e in &world.entities {
             registry.set(e.clone());
         }
-        let mut u = Self { cfg, world, backend, registry, ledger: Vec::new(), digest: None, chars_per_token: CHARS_PER_TOKEN, report: PremiseReport::default() };
+        let mut u = Self {
+            cfg,
+            world,
+            backend,
+            registry,
+            ledger: Vec::new(),
+            digest: None,
+            chars_per_token: CHARS_PER_TOKEN,
+            report: PremiseReport::default(),
+        };
         u.report = u.measure(None);
         u
     }
@@ -562,7 +641,10 @@ impl Upsampler {
     /// Tokens the user message may take: the context less the system
     /// prompt and the answer's reserve.
     pub fn input_budget(&self) -> usize {
-        self.cfg.context_tokens.saturating_sub(self.estimate(&system_prompt()) + OUTPUT_RESERVE_TOKENS).max(256)
+        self.cfg
+            .context_tokens
+            .saturating_sub(self.estimate(&system_prompt()) + OUTPUT_RESERVE_TOKENS)
+            .max(256)
     }
 
     /// The largest premise sent verbatim: the input budget less room for
@@ -591,7 +673,11 @@ impl Upsampler {
     /// back to the premise's head within the budget.
     pub async fn prepare(&mut self) -> &PremiseReport {
         let premise = self.world.premise.clone();
-        let exact = if self.cfg.tokenize && !premise.trim().is_empty() { self.backend.tokenize(&premise).await } else { None };
+        let exact = if self.cfg.tokenize && !premise.trim().is_empty() {
+            self.backend.tokenize(&premise).await
+        } else {
+            None
+        };
         if let Some(n) = exact.filter(|&n| n > 0) {
             let ratio = premise.chars().count() as f64 / n as f64;
             self.chars_per_token = ratio.clamp(1.5, 6.0);
@@ -599,11 +685,19 @@ impl Upsampler {
         let mut report = self.measure(exact);
         if report.tokens > report.premise_budget_tokens {
             let t0 = Instant::now();
-            let (digest, calls, error) = match tokio::time::timeout(self.cfg.digest_timeout, self.digest_premise()).await {
-                Ok(Ok((d, calls))) => (Some(d), calls, None),
-                Ok(Err((e, calls))) => (None, calls, Some(e.to_string())),
-                Err(_) => (None, 0, Some(UpsampleError::Timeout(self.cfg.digest_timeout.as_millis() as u64).to_string())),
-            };
+            let (digest, calls, error) =
+                match tokio::time::timeout(self.cfg.digest_timeout, self.digest_premise()).await {
+                    Ok(Ok((d, calls))) => (Some(d), calls, None),
+                    Ok(Err((e, calls))) => (None, calls, Some(e.to_string())),
+                    Err(_) => (
+                        None,
+                        0,
+                        Some(
+                            UpsampleError::Timeout(self.cfg.digest_timeout.as_millis() as u64)
+                                .to_string(),
+                        ),
+                    ),
+                };
             let budget = report.premise_budget_tokens;
             let fits = |s: &str| self.estimate(s) <= budget;
             let fallback = digest.is_none();
@@ -631,7 +725,13 @@ impl Upsampler {
     async fn digest_premise(&self) -> Result<(String, usize), (UpsampleError, usize)> {
         let budget = self.premise_budget();
         // Each call: the piece plus the instruction, and the answer.
-        let piece_tokens = self.cfg.context_tokens.saturating_sub(self.estimate(DIGEST_SYSTEM_PROMPT) + budget.min(self.cfg.context_tokens / 3) + 256).max(512);
+        let piece_tokens = self
+            .cfg
+            .context_tokens
+            .saturating_sub(
+                self.estimate(DIGEST_SYSTEM_PROMPT) + budget.min(self.cfg.context_tokens / 3) + 256,
+            )
+            .max(512);
         let piece_chars = (piece_tokens as f64 * self.chars_per_token) as usize;
         let pieces = split_text(&self.world.premise, piece_chars);
         let n = pieces.len().max(1);
@@ -645,7 +745,10 @@ impl Upsampler {
         let mut joined = parts.join("\n\n");
         if n > 1 && self.estimate(&joined) > budget {
             calls += 1;
-            joined = self.digest_call(&joined, budget * 3 / 4).await.map_err(|e| (e, calls))?;
+            joined = self
+                .digest_call(&joined, budget * 3 / 4)
+                .await
+                .map_err(|e| (e, calls))?;
         }
         Ok((joined, calls))
     }
@@ -673,10 +776,26 @@ impl Upsampler {
 
     /// The message within the input budget: premise, registry, then the
     /// newest of `history` (at most `memory`) that fit, then the direction.
-    fn budgeted(&self, registry: &Registry, history: &[SegmentRecord], direction: Option<&Direction>, frames: Frames) -> String {
+    fn budgeted(
+        &self,
+        registry: &Registry,
+        history: &[SegmentRecord],
+        direction: Option<&Direction>,
+        frames: Frames,
+    ) -> String {
         let m = self.cfg.memory;
-        let window = if m == 0 { history } else { &history[history.len().saturating_sub(m)..] };
-        let fixed = self.estimate(&build_message(self.premise_text(), registry, &[], direction, frames));
+        let window = if m == 0 {
+            history
+        } else {
+            &history[history.len().saturating_sub(m)..]
+        };
+        let fixed = self.estimate(&build_message(
+            self.premise_text(),
+            registry,
+            &[],
+            direction,
+            frames,
+        ));
         let budget = self.input_budget();
         let mut used = fixed;
         let mut start = window.len();
@@ -688,7 +807,13 @@ impl Upsampler {
             used += t;
             start -= 1;
         }
-        build_message(self.premise_text(), registry, &window[start..], direction, frames)
+        build_message(
+            self.premise_text(),
+            registry,
+            &window[start..],
+            direction,
+            frames,
+        )
     }
 
     /// The prompt of `next(direction)` on the current state.
@@ -698,15 +823,28 @@ impl Upsampler {
 
     /// The message for the segment after the `planned` ones (expanded but
     /// not executed), as if they had been committed.
-    pub fn user_message_after(&self, planned: &[PlannedOutput], direction: Option<&Direction>, frames: Frames) -> String {
+    pub fn user_message_after(
+        &self,
+        planned: &[PlannedOutput],
+        direction: Option<&Direction>,
+        frames: Frames,
+    ) -> String {
         if planned.is_empty() {
             return self.budgeted(&self.registry, &self.ledger, direction, frames);
         }
         let mut registry = self.registry.clone();
         let keep = self.cfg.memory.max(50);
-        let mut history: Vec<SegmentRecord> = self.ledger[self.ledger.len().saturating_sub(keep)..].to_vec();
+        let mut history: Vec<SegmentRecord> =
+            self.ledger[self.ledger.len().saturating_sub(keep)..].to_vec();
         for (k, p) in planned.iter().enumerate() {
-            let (rec, _) = commit_into(&mut registry, self.ledger.len() + k, p.direction.as_ref(), p.out.clone(), &self.world, &self.cfg);
+            let (rec, _) = commit_into(
+                &mut registry,
+                self.ledger.len() + k,
+                p.direction.as_ref(),
+                p.out.clone(),
+                &self.world,
+                &self.cfg,
+            );
             history.push(rec);
         }
         self.budgeted(&registry, &history, direction, frames)
@@ -714,10 +852,24 @@ impl Upsampler {
 
     /// The second half of `next`: accept the new entities (new ids only),
     /// keep only registered `entity_ids`, record the segment.
-    pub fn commit(&mut self, direction: Option<&Direction>, out: ExpansionOutput) -> ExpandedSegment {
-        let (record, accepted) = commit_into(&mut self.registry, self.ledger.len(), direction, out, &self.world, &self.cfg);
+    pub fn commit(
+        &mut self,
+        direction: Option<&Direction>,
+        out: ExpansionOutput,
+    ) -> ExpandedSegment {
+        let (record, accepted) = commit_into(
+            &mut self.registry,
+            self.ledger.len(),
+            direction,
+            out,
+            &self.world,
+            &self.cfg,
+        );
         self.ledger.push(record.clone());
-        ExpandedSegment { record, new_entities: accepted }
+        ExpandedSegment {
+            record,
+            new_entities: accepted,
+        }
     }
 
     /// The prompt of a segment whose expansion failed: the direction's
@@ -734,7 +886,10 @@ impl Upsampler {
     }
 
     /// `next(direction)`.
-    pub async fn next(&mut self, direction: Option<Direction>) -> Result<ExpandedSegment, UpsampleError> {
+    pub async fn next(
+        &mut self,
+        direction: Option<Direction>,
+    ) -> Result<ExpandedSegment, UpsampleError> {
         let user = self.user_message(direction.as_ref());
         let out = expand_with_hedge(&self.backend, self.cfg.hedge, self.cfg.timeout, user).await?;
         Ok(self.commit(direction.as_ref(), out))
@@ -742,19 +897,36 @@ impl Upsampler {
 
     /// `snapshot()`.
     pub fn snapshot(&self) -> Snapshot {
-        Snapshot { registry: self.registry.values().to_vec(), ledger: self.ledger.clone() }
+        Snapshot {
+            registry: self.registry.values().to_vec(),
+            ledger: self.ledger.clone(),
+        }
     }
 }
 
-fn commit_into(registry: &mut Registry, index: usize, direction: Option<&Direction>, mut out: ExpansionOutput, world: &WorldBible, cfg: &UpsamplerConfig) -> (SegmentRecord, Vec<Entity>) {
-    let accepted: Vec<Entity> = out.new_entities.iter().filter(|e| !registry.has(&e.id)).cloned().collect();
+fn commit_into(
+    registry: &mut Registry,
+    index: usize,
+    direction: Option<&Direction>,
+    mut out: ExpansionOutput,
+    world: &WorldBible,
+    cfg: &UpsamplerConfig,
+) -> (SegmentRecord, Vec<Entity>) {
+    let accepted: Vec<Entity> = out
+        .new_entities
+        .iter()
+        .filter(|e| !registry.has(&e.id))
+        .cloned()
+        .collect();
     for e in &accepted {
         registry.set(e.clone());
     }
     out.entity_ids.retain(|id| registry.has(id));
     let record = SegmentRecord {
         index,
-        direction_id: direction.filter(|d| !d.text.trim().is_empty()).map(|d| d.id.clone()),
+        direction_id: direction
+            .filter(|d| !d.text.trim().is_empty())
+            .map(|d| d.id.clone()),
         summary: out.beat_summary.clone(),
         prompt: assemble(cfg.layout, &out, registry, world, &cfg.limit),
     };
@@ -767,7 +939,12 @@ mod tests {
     use std::sync::Mutex;
 
     fn ent(id: &str, kind: EntityKind, name: &str, d: &str) -> Entity {
-        Entity { id: id.into(), kind, name: name.into(), descriptor: d.into() }
+        Entity {
+            id: id.into(),
+            kind,
+            name: name.into(),
+            descriptor: d.into(),
+        }
     }
 
     fn world() -> WorldBible {
@@ -775,8 +952,18 @@ mod tests {
             premise: "A lighthouse keeper on a stormy island.".into(),
             style: "35mm film, muted teal palette.".into(),
             entities: vec![
-                ent("mara", EntityKind::Character, "Mara", "a wiry woman in her sixties, yellow oilskin coat, grey braid"),
-                ent("tower", EntityKind::Location, "The lighthouse", "a white stone lighthouse on black rocks, waves breaking below"),
+                ent(
+                    "mara",
+                    EntityKind::Character,
+                    "Mara",
+                    "a wiry woman in her sixties, yellow oilskin coat, grey braid",
+                ),
+                ent(
+                    "tower",
+                    EntityKind::Location,
+                    "The lighthouse",
+                    "a white stone lighthouse on black rocks, waves breaking below",
+                ),
             ],
         }
     }
@@ -796,7 +983,12 @@ mod tests {
     }
 
     fn cfg() -> UpsamplerConfig {
-        UpsamplerConfig { hedge: false, limit: PromptLimit::chars(10_000), timeout: Duration::from_secs(5), ..UpsamplerConfig::default() }
+        UpsamplerConfig {
+            hedge: false,
+            limit: PromptLimit::chars(10_000),
+            timeout: Duration::from_secs(5),
+            ..UpsamplerConfig::default()
+        }
     }
 
     #[test]
@@ -814,10 +1006,23 @@ mod tests {
             r.set(e.clone());
         }
         let h = vec![
-            SegmentRecord { index: 0, direction_id: None, summary: "s0".into(), prompt: "p0".into() },
-            SegmentRecord { index: 1, direction_id: Some("2".into()), summary: "s1".into(), prompt: "p1".into() },
+            SegmentRecord {
+                index: 0,
+                direction_id: None,
+                summary: "s0".into(),
+                prompt: "p0".into(),
+            },
+            SegmentRecord {
+                index: 1,
+                direction_id: Some("2".into()),
+                summary: "s1".into(),
+                prompt: "p1".into(),
+            },
         ];
-        let d = Direction { id: "3".into(), text: "A ship appears.".into() };
+        let d = Direction {
+            id: "3".into(),
+            text: "A ship appears.".into(),
+        };
         assert_eq!(
             build_user_message(&w, &r, &h, Some(&d)),
             "WORLD BIBLE:\nA lighthouse keeper on a stormy island.\n\n\
@@ -826,13 +1031,34 @@ mod tests {
              NEW DIRECTION:\nA ship appears."
         );
         // Frames (ours): one line each under the direction, no description.
-        let m = build_message("P", &r, &[], None, Frames { first: true, end: true, attached: false });
+        let m = build_message(
+            "P",
+            &r,
+            &[],
+            None,
+            Frames {
+                first: true,
+                end: true,
+                attached: false,
+            },
+        );
         assert!(m.ends_with(
             "NEW DIRECTION:\n(none, advance the story one beat)\n\
              FIRST FRAME: this segment starts from a given image (not shown to you); continue from it.\n\
              FINAL FRAME: this segment must end exactly on a given image (not shown to you); move everything so that the shot arrives there."
         ), "{m}");
-        assert!(build_message("P", &r, &[], None, Frames { first: true, end: false, attached: true }).contains("(attached)"));
+        assert!(build_message(
+            "P",
+            &r,
+            &[],
+            None,
+            Frames {
+                first: true,
+                end: false,
+                attached: true
+            }
+        )
+        .contains("(attached)"));
     }
 
     #[test]
@@ -857,10 +1083,19 @@ mod tests {
         let mut o = out();
         o.entity_ids = vec!["mara".into()];
         o.dialogue = vec![
-            DialogueLine { speaker_id: "mara".into(), line: "Light's out again.".into() },
-            DialogueLine { speaker_id: "nobody".into(), line: "Hello?".into() },
+            DialogueLine {
+                speaker_id: "mara".into(),
+                line: "Light's out again.".into(),
+            },
+            DialogueLine {
+                speaker_id: "nobody".into(),
+                line: "Hello?".into(),
+            },
         ];
-        let w2 = WorldBible { style: String::new(), ..w.clone() };
+        let w2 = WorldBible {
+            style: String::new(),
+            ..w.clone()
+        };
         assert_eq!(
             assemble_prompt(&o, &r, &w2, 10_000),
             "Mara: a wiry woman in her sixties, yellow oilskin coat, grey braid \
@@ -884,14 +1119,26 @@ mod tests {
         let full = assemble_prompt(&out(), &r, &w, 10_000);
         let n = full.chars().count();
         assert_eq!(assemble_prompt(&out(), &r, &w, n), full);
-        let no_style = full.trim_end_matches(" 35mm film, muted teal palette.").to_owned();
+        let no_style = full
+            .trim_end_matches(" 35mm film, muted teal palette.")
+            .to_owned();
         assert_eq!(assemble_prompt(&out(), &r, &w, n - 1), no_style);
-        let w2 = WorldBible { style: String::new(), ..w.clone() };
+        let w2 = WorldBible {
+            style: String::new(),
+            ..w.clone()
+        };
         let p = assemble_prompt(&out(), &r, &w2, n - 40);
-        assert!(p.contains("Sound: wind howling") && !p.contains("Lighting:"), "{p}");
+        assert!(
+            p.contains("Sound: wind howling") && !p.contains("Lighting:"),
+            "{p}"
+        );
         // Far under: the description is cut at a word, the sound kept.
         let p = assemble_prompt(&out(), &r, &w, 100);
-        assert!(p.ends_with("Sound: wind howling, iron steps clanging No spoken words.") && p.chars().count() <= 100, "{p}");
+        assert!(
+            p.ends_with("Sound: wind howling, iron steps clanging No spoken words.")
+                && p.chars().count() <= 100,
+            "{p}"
+        );
         assert!(p.starts_with("a white stone"), "{p}");
     }
 
@@ -918,41 +1165,98 @@ mod tests {
     }
 
     fn canned(answers: Vec<Result<String, UpsampleError>>) -> Arc<Canned> {
-        Arc::new(Canned { answers: Mutex::new(answers), seen: Mutex::new(Vec::new()), tokens: None })
+        Arc::new(Canned {
+            answers: Mutex::new(answers),
+            seen: Mutex::new(Vec::new()),
+            tokens: None,
+        })
     }
 
     #[tokio::test]
     async fn next_registers_new_entities_once_and_keeps_the_ledger() {
         let mut o1 = out();
         o1.new_entities = vec![
-            ent("ship", EntityKind::Prop, "The ship", "a rusted trawler, red hull"),
-            ent("mara", EntityKind::Character, "Mara", "someone else entirely"),
+            ent(
+                "ship",
+                EntityKind::Prop,
+                "The ship",
+                "a rusted trawler, red hull",
+            ),
+            ent(
+                "mara",
+                EntityKind::Character,
+                "Mara",
+                "someone else entirely",
+            ),
         ];
         o1.entity_ids = vec!["tower".into(), "ship".into(), "mara".into(), "nope".into()];
         let mut o2 = out();
         o2.new_entities = vec![ent("ship", EntityKind::Prop, "Ship 2", "different")];
-        let be = canned(vec![Ok(serde_json::to_string(&o1).unwrap()), Ok(serde_json::to_string(&o2).unwrap())]);
+        let be = canned(vec![
+            Ok(serde_json::to_string(&o1).unwrap()),
+            Ok(serde_json::to_string(&o2).unwrap()),
+        ]);
         let mut u = Upsampler::new(UpsamplerConfig { memory: 1, ..cfg() }, world(), be.clone());
-        let s1 = u.next(Some(Direction { id: "2".into(), text: "A ship appears.".into() })).await.unwrap();
+        let s1 = u
+            .next(Some(Direction {
+                id: "2".into(),
+                text: "A ship appears.".into(),
+            }))
+            .await
+            .unwrap();
         assert_eq!(s1.record.index, 0);
         assert_eq!(s1.record.direction_id.as_deref(), Some("2"));
-        assert_eq!(s1.new_entities, vec![ent("ship", EntityKind::Prop, "The ship", "a rusted trawler, red hull")]);
-        assert!(s1.record.prompt.contains("The ship: a rusted trawler, red hull"), "{}", s1.record.prompt);
-        assert!(s1.record.prompt.contains("Mara: a wiry woman"), "{}", s1.record.prompt);
+        assert_eq!(
+            s1.new_entities,
+            vec![ent(
+                "ship",
+                EntityKind::Prop,
+                "The ship",
+                "a rusted trawler, red hull"
+            )]
+        );
+        assert!(
+            s1.record
+                .prompt
+                .contains("The ship: a rusted trawler, red hull"),
+            "{}",
+            s1.record.prompt
+        );
+        assert!(
+            s1.record.prompt.contains("Mara: a wiry woman"),
+            "{}",
+            s1.record.prompt
+        );
         let s2 = u.next(None).await.unwrap();
         assert_eq!((s2.record.index, s2.record.direction_id.clone()), (1, None));
         assert!(s2.new_entities.is_empty());
         let snap = u.snapshot();
-        assert_eq!(snap.registry.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["mara", "tower", "ship"]);
-        assert_eq!(snap.registry[0].descriptor, "a wiry woman in her sixties, yellow oilskin coat, grey braid");
+        assert_eq!(
+            snap.registry
+                .iter()
+                .map(|e| e.id.as_str())
+                .collect::<Vec<_>>(),
+            ["mara", "tower", "ship"]
+        );
+        assert_eq!(
+            snap.registry[0].descriptor,
+            "a wiry woman in her sixties, yellow oilskin coat, grey braid"
+        );
         assert_eq!(snap.registry[2].name, "The ship");
         assert_eq!(snap.ledger.len(), 2);
         let seen = be.seen.lock().unwrap();
         assert!(seen[0].system.starts_with(SYSTEM_PROMPT) && seen[0].system.ends_with(MUSIC_RULE));
         assert_eq!(seen[0].temperature, 0.8);
-        assert_eq!(seen[0].response_format.as_ref().unwrap()["json_schema"]["name"], "segment");
+        assert_eq!(
+            seen[0].response_format.as_ref().unwrap()["json_schema"]["name"],
+            "segment"
+        );
         assert!(seen[0].user.contains("NEW DIRECTION:\nA ship appears."));
-        assert!(seen[1].user.contains("[0] Mara climbs the stairs."), "{}", seen[1].user);
+        assert!(
+            seen[1].user.contains("[0] Mara climbs the stairs."),
+            "{}",
+            seen[1].user
+        );
         assert!(seen[1].user.contains("- ship (prop, \"The ship\")"));
     }
 
@@ -963,27 +1267,49 @@ mod tests {
         let e = u.next(None).await.unwrap_err();
         assert!(matches!(e, UpsampleError::BadOutput(_)), "{e:?}");
         assert_eq!(u.ledger_len(), 0);
-        let e: Entity = serde_json::from_str(r#"{"id":"x","kind":"animal","name":"X","descriptor":"d"}"#).unwrap();
+        let e: Entity =
+            serde_json::from_str(r#"{"id":"x","kind":"animal","name":"X","descriptor":"d"}"#)
+                .unwrap();
         assert_eq!(e.kind, EntityKind::Other);
         let schema = output_schema();
-        assert_eq!(schema["schema"]["properties"]["new_entities"]["items"]["properties"]["kind"]["enum"], json!(["character", "location", "prop"]));
+        assert_eq!(
+            schema["schema"]["properties"]["new_entities"]["items"]["properties"]["kind"]["enum"],
+            json!(["character", "location", "prop"])
+        );
         // `music` is listed in `required` (strict) and is a plain string.
-        assert!(schema["schema"]["required"].as_array().unwrap().contains(&json!("music")));
-        assert_eq!(schema["schema"]["properties"]["music"], json!({"type": "string"}));
+        assert!(schema["schema"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("music")));
+        assert_eq!(
+            schema["schema"]["properties"]["music"],
+            json!({"type": "string"})
+        );
     }
 
     #[tokio::test]
     async fn think_blocks_and_fences_are_tolerated_missing_fields_are_not() {
         let body = serde_json::to_string(&out()).unwrap();
         let be = canned(vec![
-            Ok(format!("<think>\nThe user wants {{...}}\n</think>\n```json\n{body}\n```")),
+            Ok(format!(
+                "<think>\nThe user wants {{...}}\n</think>\n```json\n{body}\n```"
+            )),
             Ok("<think>no answer".into()),
             Ok("{\"beat_summary\": \"x\", \"entity_ids\": []}".into()),
         ]);
         let mut u = Upsampler::new(cfg(), world(), be);
-        assert_eq!(u.next(None).await.unwrap().record.summary, "Mara climbs the stairs.");
-        assert!(matches!(u.next(None).await.unwrap_err(), UpsampleError::BadOutput(_)));
-        assert!(matches!(u.next(None).await.unwrap_err(), UpsampleError::BadOutput(_)));
+        assert_eq!(
+            u.next(None).await.unwrap().record.summary,
+            "Mara climbs the stairs."
+        );
+        assert!(matches!(
+            u.next(None).await.unwrap_err(),
+            UpsampleError::BadOutput(_)
+        ));
+        assert!(matches!(
+            u.next(None).await.unwrap_err(),
+            UpsampleError::BadOutput(_)
+        ));
         assert_eq!(u.ledger_len(), 1);
     }
 
@@ -995,7 +1321,10 @@ mod tests {
             u.commit(None, out());
         }
         let m = u.user_message(None);
-        assert!(!m.contains("[0] ") && m.contains("[1] ") && m.contains("[2] "), "{m}");
+        assert!(
+            !m.contains("[0] ") && m.contains("[1] ") && m.contains("[2] "),
+            "{m}"
+        );
         let mut all = Upsampler::new(UpsamplerConfig { memory: 0, ..cfg() }, world(), be);
         for _ in 0..3 {
             all.commit(None, out());
@@ -1017,17 +1346,26 @@ mod tests {
     async fn a_50k_premise_is_sent_verbatim_first() {
         let premise = long_premise(50_000);
         let be = canned(vec![]);
-        let w = WorldBible { premise: premise.clone(), ..world() };
+        let w = WorldBible {
+            premise: premise.clone(),
+            ..world()
+        };
         let mut u = Upsampler::new(cfg(), w, be.clone());
         let r = u.prepare().await.clone();
-        assert_eq!((r.chars, r.tokens, r.tokens_exact, r.digest.is_none()), (50_000, 14_286, false, true));
+        assert_eq!(
+            (r.chars, r.tokens, r.tokens_exact, r.digest.is_none()),
+            (50_000, 14_286, false, true)
+        );
         assert!(be.seen.lock().unwrap().is_empty(), "no digest call");
         for _ in 0..12 {
             u.commit(None, out());
         }
         let m = u.user_message(None);
         assert!(m.starts_with(&format!("WORLD BIBLE:\n{premise}\n\nESTABLISHED ENTITIES:")));
-        assert!(m.contains("[11] ") && m.contains("[0] "), "12 short segments fit");
+        assert!(
+            m.contains("[11] ") && m.contains("[0] "),
+            "12 short segments fit"
+        );
         assert!(u.estimate(&m) <= u.input_budget());
     }
 
@@ -1036,20 +1374,46 @@ mod tests {
     #[test]
     fn budget_drops_the_oldest_segments_first() {
         let be = canned(vec![]);
-        let mut u = Upsampler::new(UpsamplerConfig { context_tokens: 4_000, memory: 50, ..cfg() }, world(), be);
+        let mut u = Upsampler::new(
+            UpsamplerConfig {
+                context_tokens: 4_000,
+                memory: 50,
+                ..cfg()
+            },
+            world(),
+            be,
+        );
         let mut o = out();
         o.action = long_premise(2_000);
         for _ in 0..20 {
             u.commit(None, o.clone());
         }
-        let d = Direction { id: "9".into(), text: "The storm breaks.".into() };
+        let d = Direction {
+            id: "9".into(),
+            text: "The storm breaks.".into(),
+        };
         let m = u.user_message(Some(&d));
-        assert!(u.estimate(&m) <= u.input_budget(), "{} > {}", u.estimate(&m), u.input_budget());
-        assert!(m.starts_with("WORLD BIBLE:\nA lighthouse keeper") && m.contains("- mara (character") && m.ends_with("NEW DIRECTION:\nThe storm breaks."));
-        let kept: Vec<usize> = (0..20).filter(|i| m.contains(&format!("\n[{i}] "))).collect();
+        assert!(
+            u.estimate(&m) <= u.input_budget(),
+            "{} > {}",
+            u.estimate(&m),
+            u.input_budget()
+        );
+        assert!(
+            m.starts_with("WORLD BIBLE:\nA lighthouse keeper")
+                && m.contains("- mara (character")
+                && m.ends_with("NEW DIRECTION:\nThe storm breaks.")
+        );
+        let kept: Vec<usize> = (0..20)
+            .filter(|i| m.contains(&format!("\n[{i}] ")))
+            .collect();
         assert!(!kept.is_empty() && kept.len() < 20, "{kept:?}");
         assert_eq!(*kept.last().unwrap(), 19, "the newest stays");
-        assert_eq!(kept, (kept[0]..20).collect::<Vec<_>>(), "a contiguous newest run");
+        assert_eq!(
+            kept,
+            (kept[0]..20).collect::<Vec<_>>(),
+            "a contiguous newest run"
+        );
     }
 
     /// A premise over the budget is condensed at configure time: one call
@@ -1058,34 +1422,84 @@ mod tests {
     #[tokio::test]
     async fn an_oversized_premise_is_digested_once() {
         let premise = long_premise(50_000);
-        let answers = (0..10).map(|k| Ok(format!("<think>x</think>BIBLE PART {k}. Mara keeps the light."))).collect();
-        let be = Arc::new(Canned { answers: Mutex::new(answers), seen: Mutex::new(Vec::new()), tokens: Some(12_500) });
-        let w = WorldBible { premise: premise.clone(), ..world() };
-        let mut u = Upsampler::new(UpsamplerConfig { context_tokens: 8_000, ..cfg() }, w, be.clone());
+        let answers = (0..10)
+            .map(|k| {
+                Ok(format!(
+                    "<think>x</think>BIBLE PART {k}. Mara keeps the light."
+                ))
+            })
+            .collect();
+        let be = Arc::new(Canned {
+            answers: Mutex::new(answers),
+            seen: Mutex::new(Vec::new()),
+            tokens: Some(12_500),
+        });
+        let w = WorldBible {
+            premise: premise.clone(),
+            ..world()
+        };
+        let mut u = Upsampler::new(
+            UpsamplerConfig {
+                context_tokens: 8_000,
+                ..cfg()
+            },
+            w,
+            be.clone(),
+        );
         let r = u.prepare().await.clone();
-        assert!(r.tokens_exact && r.tokens == 12_500 && r.chars_per_token == 4.0, "{r:?}");
+        assert!(
+            r.tokens_exact && r.tokens == 12_500 && r.chars_per_token == 4.0,
+            "{r:?}"
+        );
         let d = r.digest.clone().expect("digested");
         let seen = be.seen.lock().unwrap().clone();
         assert!(d.calls >= 2 && seen.len() == d.calls, "{d:?}");
-        assert!(seen.iter().all(|q| q.system == DIGEST_SYSTEM_PROMPT && q.response_format.is_none()));
-        assert!(seen[0].user.starts_with("Condense this series premise to at most "));
+        assert!(seen
+            .iter()
+            .all(|q| q.system == DIGEST_SYSTEM_PROMPT && q.response_format.is_none()));
+        assert!(seen[0]
+            .user
+            .starts_with("Condense this series premise to at most "));
         assert!(!d.fallback && d.error.is_none());
         let m = u.user_message(None);
-        assert!(m.starts_with("WORLD BIBLE:\nBIBLE PART 0. Mara keeps the light."), "{m}");
+        assert!(
+            m.starts_with("WORLD BIBLE:\nBIBLE PART 0. Mara keeps the light."),
+            "{m}"
+        );
         assert!(!m.contains("logs every ship"));
         assert!(u.estimate(&m) <= u.input_budget());
-        assert_eq!(u.premise_report().digest.as_ref().map(|d| d.calls), Some(seen.len()));
+        assert_eq!(
+            u.premise_report().digest.as_ref().map(|d| d.calls),
+            Some(seen.len())
+        );
     }
 
     #[tokio::test]
     async fn a_failed_digest_falls_back_to_the_premise_head() {
         let premise = long_premise(50_000);
-        let be = canned(vec![Err(UpsampleError::Status { status: 500, body: "x".into() })]);
+        let be = canned(vec![Err(UpsampleError::Status {
+            status: 500,
+            body: "x".into(),
+        })]);
         let w = WorldBible { premise, ..world() };
-        let mut u = Upsampler::new(UpsamplerConfig { context_tokens: 8_000, ..cfg() }, w, be);
+        let mut u = Upsampler::new(
+            UpsamplerConfig {
+                context_tokens: 8_000,
+                ..cfg()
+            },
+            w,
+            be,
+        );
         let d = u.prepare().await.digest.clone().unwrap();
-        assert!(d.fallback && d.error.as_deref() == Some("upsampler LLM 500: x"), "{d:?}");
-        assert!(u.premise_text().starts_with("The keeper Mara logs every ship") && u.estimate(u.premise_text()) <= u.premise_budget());
+        assert!(
+            d.fallback && d.error.as_deref() == Some("upsampler LLM 500: x"),
+            "{d:?}"
+        );
+        assert!(
+            u.premise_text()
+                .starts_with("The keeper Mara logs every ship")
+                && u.estimate(u.premise_text()) <= u.premise_budget()
+        );
     }
 
     /// Planned segments chain: the message after them sees them as the
@@ -1097,9 +1511,18 @@ mod tests {
         let mut o = out();
         o.beat_summary = "planned one".into();
         o.new_entities = vec![ent("ship", EntityKind::Prop, "Ship", "a red trawler")];
-        let planned = vec![PlannedOutput { direction: Some(Direction { id: "2".into(), text: "A ship.".into() }), out: o }];
+        let planned = vec![PlannedOutput {
+            direction: Some(Direction {
+                id: "2".into(),
+                text: "A ship.".into(),
+            }),
+            out: o,
+        }];
         let m = u.user_message_after(&planned, None, Frames::default());
-        assert!(m.contains("[0] planned one\n") && m.contains("- ship (prop, \"Ship\")"), "{m}");
+        assert!(
+            m.contains("[0] planned one\n") && m.contains("- ship (prop, \"Ship\")"),
+            "{m}"
+        );
         assert_eq!(u.ledger_len(), 0);
         assert!(!u.user_message(None).contains("planned one"));
     }
@@ -1107,10 +1530,23 @@ mod tests {
     #[test]
     fn fallbacks_stay_within_the_limit() {
         let be = canned(vec![]);
-        let w = WorldBible { premise: long_premise(50_000), ..world() };
-        let mut u = Upsampler::new(UpsamplerConfig { limit: PromptLimit::chars(200), ..cfg() }, w, be);
+        let w = WorldBible {
+            premise: long_premise(50_000),
+            ..world()
+        };
+        let mut u = Upsampler::new(
+            UpsamplerConfig {
+                limit: PromptLimit::chars(200),
+                ..cfg()
+            },
+            w,
+            be,
+        );
         let p = u.fallback_prompt(None);
-        assert!(p.chars().count() <= 200 && p.starts_with("The keeper Mara"), "{p}");
+        assert!(
+            p.chars().count() <= 200 && p.starts_with("The keeper Mara"),
+            "{p}"
+        );
         assert_eq!(u.fallback_prompt(Some("Night falls.")), "Night falls.");
         u.commit(None, out());
         assert_eq!(u.fallback_prompt(None), u.last_prompt().unwrap());
@@ -1121,7 +1557,13 @@ mod tests {
         let s = long_premise(1_000);
         let parts = split_text(&s, 300);
         assert!(parts.len() >= 4 && parts.iter().all(|p| p.chars().count() <= 300));
-        assert!(parts[..parts.len() - 1].iter().all(|p| p.ends_with('.')), "{parts:?}");
-        assert_eq!(parts.join(" ").split_whitespace().count(), s.split_whitespace().count());
+        assert!(
+            parts[..parts.len() - 1].iter().all(|p| p.ends_with('.')),
+            "{parts:?}"
+        );
+        assert_eq!(
+            parts.join(" ").split_whitespace().count(),
+            s.split_whitespace().count()
+        );
     }
 }

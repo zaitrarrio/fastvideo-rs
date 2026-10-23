@@ -46,9 +46,9 @@
 use std::sync::Arc;
 
 use fastvideo_protocol::{
-    Anchor, ApiError, AudioInput, AudioOut, AudioRole, CanvasSpec, EditOp, ExpansionMode, ExtendAt, GapId, GenerationRequest,
-    HttpReply, Job, Keyframe, Length, MediaRef, NormalizeCtx, PromptExpansion, RetakeMode, Snap, SubmitEndpoint, Task, TimingSpec,
-    VideoEdit, ViewCtx,
+    Anchor, ApiError, AudioInput, AudioOut, AudioRole, CanvasSpec, EditOp, ExpansionMode, ExtendAt,
+    GapId, GenerationRequest, HttpReply, Job, Keyframe, Length, MediaRef, NormalizeCtx,
+    PromptExpansion, RetakeMode, Snap, SubmitEndpoint, Task, TimingSpec, VideoEdit, ViewCtx,
 };
 use serde_json::{Map, Value};
 
@@ -249,7 +249,9 @@ pub fn normalize(
         Some(v) => Some(
             as_int(v)
                 .and_then(|n| u32::try_from(n).ok())
-                .ok_or_else(|| invalid("duration", "duration must be an integer number of seconds"))?,
+                .ok_or_else(|| {
+                    invalid("duration", "duration must be an integer number of seconds")
+                })?,
         ),
     };
     let fps = int_field(o, "fps")?.unwrap_or(models::DEFAULT_FPS);
@@ -266,13 +268,21 @@ pub fn normalize(
     let generate_audio = match field(o, "generate_audio") {
         None => true,
         Some(Value::Bool(b)) => *b,
-        Some(_) => return Err(invalid("generate_audio", "generate_audio must be a boolean")),
+        Some(_) => {
+            return Err(invalid(
+                "generate_audio",
+                "generate_audio must be a boolean",
+            ))
+        }
     };
     if let Some(cm) = opt_str(o, "camera_motion")? {
         if !CAMERA_MOTIONS.contains(&cm) {
             return Err(invalid(
                 "camera_motion",
-                format!("camera_motion must be one of: {}", CAMERA_MOTIONS.join(", ")),
+                format!(
+                    "camera_motion must be one of: {}",
+                    CAMERA_MOTIONS.join(", ")
+                ),
             ));
         }
         return Err(ApiError::unsupported(GapId::LtxCameraMotion).with_param("camera_motion"));
@@ -291,7 +301,9 @@ pub fn normalize(
             }
             Task::T2V
         }
-        Endpoint::AudioToVideo | Endpoint::Retake | Endpoint::Extend => unreachable!("normalized above"),
+        Endpoint::AudioToVideo | Endpoint::Retake | Endpoint::Extend => {
+            unreachable!("normalized above")
+        }
         Endpoint::ImageToVideo => {
             let first = media_uri(req_str(o, "image_uri")?, "image_uri")?;
             keyframes.push(Keyframe {
@@ -351,7 +363,14 @@ pub fn normalize(
 /// unknown field.
 fn enhance_prompt(o: &Map<String, Value>) -> PromptExpansion {
     match field(o, "enhance_prompt").and_then(Value::as_bool) {
-        Some(on) => PromptExpansion::explicit(if on { ExpansionMode::Balanced } else { ExpansionMode::Disabled }, "enhance_prompt"),
+        Some(on) => PromptExpansion::explicit(
+            if on {
+                ExpansionMode::Balanced
+            } else {
+                ExpansionMode::Disabled
+            },
+            "enhance_prompt",
+        ),
         None => PromptExpansion::default_for(ExpansionMode::Balanced, "enhance_prompt"),
     }
 }
@@ -368,7 +387,10 @@ fn camera_motion(o: &Map<String, Value>) -> Result<(), ApiError> {
         if !CAMERA_MOTIONS.contains(&cm) {
             return Err(invalid(
                 "camera_motion",
-                format!("camera_motion must be one of: {}", CAMERA_MOTIONS.join(", ")),
+                format!(
+                    "camera_motion must be one of: {}",
+                    CAMERA_MOTIONS.join(", ")
+                ),
             ));
         }
         return Err(ApiError::unsupported(GapId::LtxCameraMotion).with_param("camera_motion"));
@@ -377,48 +399,91 @@ fn camera_motion(o: &Map<String, Value>) -> Result<(), ApiError> {
 }
 
 /// `AudioToVideoRequest` (ltx §2.5) → an `A2V` request (see the module docs).
-pub fn normalize_a2v(api: Api, models: &LtxModels, o: &Map<String, Value>) -> Result<GenerationRequest, ApiError> {
+pub fn normalize_a2v(
+    api: Api,
+    models: &LtxModels,
+    o: &Map<String, Value>,
+) -> Result<GenerationRequest, ApiError> {
     let audio = media_uri(req_str(o, "audio_uri")?, "audio_uri")?;
-    let image = opt_str(o, "image_uri")?.map(|s| media_uri(s, "image_uri")).transpose()?;
-    let last = opt_str(o, "last_frame_uri")?.map(|s| media_uri(s, "last_frame_uri")).transpose()?;
+    let image = opt_str(o, "image_uri")?
+        .map(|s| media_uri(s, "image_uri"))
+        .transpose()?;
+    let last = opt_str(o, "last_frame_uri")?
+        .map(|s| media_uri(s, "last_frame_uri"))
+        .transpose()?;
     if last.is_some() && image.is_none() {
-        return Err(invalid("last_frame_uri", "last_frame_uri requires image_uri"));
+        return Err(invalid(
+            "last_frame_uri",
+            "last_frame_uri requires image_uri",
+        ));
     }
     let prompt = opt_str(o, "prompt")?.unwrap_or_default();
     if prompt.trim().is_empty() && image.is_none() {
-        return Err(invalid("prompt", "prompt is required if image_uri is not provided"));
+        return Err(invalid(
+            "prompt",
+            "prompt is required if image_uri is not provided",
+        ));
     }
     if prompt.chars().count() > PROMPT_MAX_CHARS {
-        return Err(invalid("prompt", format!("prompt must be at most {PROMPT_MAX_CHARS} characters")));
+        return Err(invalid(
+            "prompt",
+            format!("prompt must be at most {PROMPT_MAX_CHARS} characters"),
+        ));
     }
     let model_id = opt_str(o, "model")?.unwrap_or(A2V_DEFAULT_MODEL);
     if model_id == "ltx-2-3-fast" {
         return Err(invalid("model", "ltx-2-3-fast does not support audio-to-video; use ltx-2-3-pro, ltx-2-5-fast or ltx-2-5-pro"));
     }
     let model = models.lookup(model_id)?;
-    let res = opt_str(o, "resolution")?.map(Resolution::parse).transpose()?;
+    let res = opt_str(o, "resolution")?
+        .map(Resolution::parse)
+        .transpose()?;
     let fps = int_field(o, "fps")?.unwrap_or(models::DEFAULT_FPS);
     models::check_fps(fps)?;
     camera_motion(o)?;
-    let short = matches!(res.map(|r| r.tier), Some(ResTier::P1440 | ResTier::K4)) || model_id == "ltx-2-5-pro";
-    let max_s = if short { A2V_MAX_S_SHORT } else { A2V_MAX_S_LONG };
+    let short = matches!(res.map(|r| r.tier), Some(ResTier::P1440 | ResTier::K4))
+        || model_id == "ltx-2-5-pro";
+    let max_s = if short {
+        A2V_MAX_S_SHORT
+    } else {
+        A2V_MAX_S_LONG
+    };
 
     let mut req = GenerationRequest::text(api.protocol(), model.target.engine_name(), prompt);
     req.task = Task::A2V;
     req.canvas = match res {
-        Some(r) => CanvasSpec::Exact { width: r.width, height: r.height },
+        Some(r) => CanvasSpec::Exact {
+            width: r.width,
+            height: r.height,
+        },
         // "Portrait image → 1080x1920, landscape → 1920x1080; no image → 1920x1080".
-        None => CanvasSpec::Oriented { width: 1920, height: 1080 },
+        None => CanvasSpec::Oriented {
+            width: 1920,
+            height: 1080,
+        },
     };
     // The audio sets the length (`negotiate`).
-    req.timing = TimingSpec { length: Length::ModelDefault, fps: Some(fps) };
+    req.timing = TimingSpec {
+        length: Length::ModelDefault,
+        fps: Some(fps),
+    };
     if let Some(first) = image {
-        req.keyframes.push(Keyframe { at: Anchor::First, image: first });
+        req.keyframes.push(Keyframe {
+            at: Anchor::First,
+            image: first,
+        });
     }
     if let Some(l) = last {
-        req.keyframes.push(Keyframe { at: Anchor::Last, image: l });
+        req.keyframes.push(Keyframe {
+            at: Anchor::Last,
+            image: l,
+        });
     }
-    req.audio_in = Some(AudioInput { media: audio, role: AudioRole::Drive, max_s: Some(max_s) });
+    req.audio_in = Some(AudioInput {
+        media: audio,
+        role: AudioRole::Drive,
+        max_s: Some(max_s),
+    });
     Ok(req)
 }
 
@@ -449,22 +514,40 @@ fn edit_common(
     let video = media_uri(req_str(o, "video_uri")?, "video_uri")?;
     let prompt = opt_str(o, "prompt")?.unwrap_or_default();
     if prompt.chars().count() > PROMPT_MAX_CHARS {
-        return Err(invalid("prompt", format!("prompt must be at most {PROMPT_MAX_CHARS} characters")));
+        return Err(invalid(
+            "prompt",
+            format!("prompt must be at most {PROMPT_MAX_CHARS} characters"),
+        ));
     }
     let model = models.lookup(opt_str(o, "model")?.unwrap_or(EDIT_DEFAULT_MODEL))?;
-    Ok((GenerationRequest::text(api.protocol(), model.target.engine_name(), prompt), video))
+    Ok((
+        GenerationRequest::text(api.protocol(), model.target.engine_name(), prompt),
+        video,
+    ))
 }
 
 /// `EditVideoRequest` (ltx §2.6) → a `Retake` request.
-pub fn normalize_retake(api: Api, models: &LtxModels, o: &Map<String, Value>) -> Result<GenerationRequest, ApiError> {
+pub fn normalize_retake(
+    api: Api,
+    models: &LtxModels,
+    o: &Map<String, Value>,
+) -> Result<GenerationRequest, ApiError> {
     let (mut req, video) = edit_common(api, models, o)?;
-    let start_s = num_field(o, "start_time")?.ok_or_else(|| invalid("start_time", "start_time is required"))?;
+    let start_s = num_field(o, "start_time")?
+        .ok_or_else(|| invalid("start_time", "start_time is required"))?;
     if start_s < 0.0 {
         return Err(invalid("start_time", "start_time must be at least 0"));
     }
-    let duration_s = num_field(o, "duration")?.ok_or_else(|| invalid("duration", "duration is required"))?;
+    let duration_s =
+        num_field(o, "duration")?.ok_or_else(|| invalid("duration", "duration is required"))?;
     if duration_s < fastvideo_protocol::EDIT_DURATION_MIN_S {
-        return Err(invalid("duration", format!("duration must be at least {}", fastvideo_protocol::EDIT_DURATION_MIN_S)));
+        return Err(invalid(
+            "duration",
+            format!(
+                "duration must be at least {}",
+                fastvideo_protocol::EDIT_DURATION_MIN_S
+            ),
+        ));
     }
     // "Clamped to video length": the window is clamped at negotiation; this
     // server regenerates at most 20 s at once.
@@ -472,42 +555,87 @@ pub fn normalize_retake(api: Api, models: &LtxModels, o: &Map<String, Value>) ->
     let mode = match opt_str(o, "mode")? {
         None => RetakeMode::default(),
         Some(m) => RetakeMode::parse(m).ok_or_else(|| {
-            invalid("mode", "mode must be one of: replace_audio, replace_video, replace_audio_and_video")
+            invalid(
+                "mode",
+                "mode must be one of: replace_audio, replace_video, replace_audio_and_video",
+            )
         })?,
     };
     if let Some(r) = opt_str(o, "resolution")? {
         if !RETAKE_RESOLUTIONS.contains(&r) {
-            return Err(invalid("resolution", format!("resolution must be one of: {}", RETAKE_RESOLUTIONS.join(", "))));
+            return Err(invalid(
+                "resolution",
+                format!(
+                    "resolution must be one of: {}",
+                    RETAKE_RESOLUTIONS.join(", ")
+                ),
+            ));
         }
         let res = Resolution::parse(r)?;
-        req.canvas = CanvasSpec::Exact { width: res.width, height: res.height };
+        req.canvas = CanvasSpec::Exact {
+            width: res.width,
+            height: res.height,
+        };
     }
     req.task = Task::Retake;
-    req.edit = Some(VideoEdit { video, op: EditOp::Retake { start_s, duration_s, mode } });
+    req.edit = Some(VideoEdit {
+        video,
+        op: EditOp::Retake {
+            start_s,
+            duration_s,
+            mode,
+        },
+    });
     Ok(req)
 }
 
 /// `ExtendVideoRequest` (ltx §2.7) → an `Extend` request.
-pub fn normalize_extend(api: Api, models: &LtxModels, o: &Map<String, Value>) -> Result<GenerationRequest, ApiError> {
+pub fn normalize_extend(
+    api: Api,
+    models: &LtxModels,
+    o: &Map<String, Value>,
+) -> Result<GenerationRequest, ApiError> {
     let (mut req, video) = edit_common(api, models, o)?;
-    let (lo, hi) = (fastvideo_protocol::EDIT_DURATION_MIN_S, fastvideo_protocol::EDIT_DURATION_MAX_S);
-    let duration_s = num_field(o, "duration")?.ok_or_else(|| invalid("duration", "duration is required"))?;
+    let (lo, hi) = (
+        fastvideo_protocol::EDIT_DURATION_MIN_S,
+        fastvideo_protocol::EDIT_DURATION_MAX_S,
+    );
+    let duration_s =
+        num_field(o, "duration")?.ok_or_else(|| invalid("duration", "duration is required"))?;
     if !(lo..=hi).contains(&duration_s) {
-        return Err(invalid("duration", format!("duration must be between {lo} and {hi} seconds")));
+        return Err(invalid(
+            "duration",
+            format!("duration must be between {lo} and {hi} seconds"),
+        ));
     }
     let at = match opt_str(o, "mode")? {
         None => ExtendAt::End,
-        Some(m) => ExtendAt::parse(m).ok_or_else(|| invalid("mode", "mode must be one of: start, end"))?,
+        Some(m) => {
+            ExtendAt::parse(m).ok_or_else(|| invalid("mode", "mode must be one of: start, end"))?
+        }
     };
     let context_s = num_field(o, "context")?;
     if let Some(c) = context_s {
-        let (clo, chi) = (fastvideo_protocol::EXTEND_CONTEXT_MIN_S, fastvideo_protocol::EXTEND_CONTEXT_MAX_S);
+        let (clo, chi) = (
+            fastvideo_protocol::EXTEND_CONTEXT_MIN_S,
+            fastvideo_protocol::EXTEND_CONTEXT_MAX_S,
+        );
         if !(clo..=chi).contains(&c) {
-            return Err(invalid("context", format!("context must be between {clo} and {chi} seconds")));
+            return Err(invalid(
+                "context",
+                format!("context must be between {clo} and {chi} seconds"),
+            ));
         }
     }
     req.task = Task::Extend;
-    req.edit = Some(VideoEdit { video, op: EditOp::Extend { duration_s, at, context_s } });
+    req.edit = Some(VideoEdit {
+        video,
+        op: EditOp::Extend {
+            duration_s,
+            at,
+            context_s,
+        },
+    });
     Ok(req)
 }
 
@@ -521,7 +649,12 @@ mod tests {
         normalize(Endpoint::TextToVideo, Api::V2, &LtxModels::default(), &body)
     }
     fn i2v(body: Value) -> Result<GenerationRequest, ApiError> {
-        normalize(Endpoint::ImageToVideo, Api::V2, &LtxModels::default(), &body)
+        normalize(
+            Endpoint::ImageToVideo,
+            Api::V2,
+            &LtxModels::default(),
+            &body,
+        )
     }
     fn base() -> Value {
         json!({"prompt": "a cat", "model": "ltx-2-5-fast", "duration": 8, "resolution": "1920x1080"})
@@ -546,7 +679,13 @@ mod tests {
         let r = t2v(base()).unwrap();
         assert_eq!(r.model, "ltx-turbo");
         assert_eq!(r.task, Task::T2V);
-        assert_eq!(r.canvas, CanvasSpec::Exact { width: 1920, height: 1080 });
+        assert_eq!(
+            r.canvas,
+            CanvasSpec::Exact {
+                width: 1920,
+                height: 1080
+            }
+        );
         assert_eq!(r.timing.fps, Some(24));
         assert_eq!(r.audio_out, AudioOut::ModelDefault);
         let r = t2v(with("generate_audio", json!(false))).unwrap();
@@ -559,11 +698,23 @@ mod tests {
         use fastvideo_protocol::{ExpansionMode as M, PromptExpansion as P};
         const F: &str = "enhance_prompt";
         // Absent: the hosted default (on), applied only with `default_on`.
-        assert_eq!(t2v(base()).unwrap().prompt_expansion, Some(P::default_for(M::Balanced, F)));
-        assert_eq!(t2v(with(F, json!(true))).unwrap().prompt_expansion, Some(P::explicit(M::Balanced, F)));
-        assert_eq!(t2v(with(F, json!(false))).unwrap().prompt_expansion, Some(P::explicit(M::Disabled, F)));
+        assert_eq!(
+            t2v(base()).unwrap().prompt_expansion,
+            Some(P::default_for(M::Balanced, F))
+        );
+        assert_eq!(
+            t2v(with(F, json!(true))).unwrap().prompt_expansion,
+            Some(P::explicit(M::Balanced, F))
+        );
+        assert_eq!(
+            t2v(with(F, json!(false))).unwrap().prompt_expansion,
+            Some(P::explicit(M::Disabled, F))
+        );
         // Not a boolean: ignored like any unknown field.
-        assert_eq!(t2v(with(F, json!("yes"))).unwrap().prompt_expansion, Some(P::default_for(M::Balanced, F)));
+        assert_eq!(
+            t2v(with(F, json!("yes"))).unwrap().prompt_expansion,
+            Some(P::default_for(M::Balanced, F))
+        );
     }
 
     #[test]
@@ -613,7 +764,10 @@ mod tests {
         assert_eq!(k, ErrorKind::InvalidRequest);
         assert!(t2v(with("camera_motion", Value::Null)).is_ok());
         for id in ["ltx-2-fast", "ltx-2-pro", "nope"] {
-            assert_eq!(msg(t2v(with("model", json!(id)))).0, ErrorKind::InvalidRequest);
+            assert_eq!(
+                msg(t2v(with("model", json!(id)))).0,
+                ErrorKind::InvalidRequest
+            );
         }
     }
 
@@ -622,7 +776,10 @@ mod tests {
         let b = with("image_uri", json!("ltx://uploads/abc"));
         let r = i2v(b.clone()).unwrap();
         assert_eq!(r.task, Task::I2V);
-        assert_eq!(r.keyframes[0].image, MediaRef::Upload(fastvideo_protocol::UploadId("abc".into())));
+        assert_eq!(
+            r.keyframes[0].image,
+            MediaRef::Upload(fastvideo_protocol::UploadId("abc".into()))
+        );
         let mut k = b.clone();
         k["last_frame_uri"] = json!("https://example.com/l.png");
         let r = i2v(k.clone()).unwrap();
@@ -631,7 +788,13 @@ mod tests {
         k["duration"] = Value::Null;
         assert!(msg(i2v(k)).1.contains("last_frame_uri"));
         assert_eq!(msg(i2v(base())).1, "image_uri is required");
-        for bad in ["http://example.com/a.png", "ftp://x/y", "mm_file://1", "ltx://other/1", "ltx://uploads/"] {
+        for bad in [
+            "http://example.com/a.png",
+            "ftp://x/y",
+            "mm_file://1",
+            "ltx://other/1",
+            "ltx://uploads/",
+        ] {
             assert!(i2v(with("image_uri", json!(bad))).is_err(), "{bad}");
         }
         assert!(i2v(with("image_uri", json!("data:image/png;base64,AAAA"))).is_ok());
@@ -640,24 +803,48 @@ mod tests {
     }
 
     fn a2v(body: Value) -> Result<GenerationRequest, ApiError> {
-        normalize(Endpoint::AudioToVideo, Api::V2, &LtxModels::default(), &body)
+        normalize(
+            Endpoint::AudioToVideo,
+            Api::V2,
+            &LtxModels::default(),
+            &body,
+        )
     }
 
     #[test]
     fn a2v_shapes() {
         // Defaults: ltx-2-3-pro (our max tier), 1920x1080 or portrait by the
         // image, the length from the audio, 20 s of audio at 1080p.
-        let r = a2v(json!({"audio_uri": "https://example.com/a.mp3", "prompt": "a man talks"})).unwrap();
+        let r = a2v(json!({"audio_uri": "https://example.com/a.mp3", "prompt": "a man talks"}))
+            .unwrap();
         assert_eq!((r.task, r.model.as_str()), (Task::A2V, "ltx-pro"));
-        assert_eq!(r.canvas, CanvasSpec::Oriented { width: 1920, height: 1080 });
-        assert_eq!(r.timing, TimingSpec { length: Length::ModelDefault, fps: Some(24) });
+        assert_eq!(
+            r.canvas,
+            CanvasSpec::Oriented {
+                width: 1920,
+                height: 1080
+            }
+        );
+        assert_eq!(
+            r.timing,
+            TimingSpec {
+                length: Length::ModelDefault,
+                fps: Some(24)
+            }
+        );
         let a = r.audio_in.unwrap();
         assert_eq!((a.role, a.max_s), (AudioRole::Drive, Some(20)));
         assert!(r.keyframes.is_empty());
         // An image: the prompt may be empty; a last frame with it.
         let r = a2v(json!({"audio_uri": "ltx://uploads/a", "image_uri": "ltx://uploads/i", "last_frame_uri": "https://example.com/l.png", "prompt": "", "model": "ltx-2-5-fast", "resolution": "1080x1920", "fps": 25})).unwrap();
         assert_eq!(r.keyframes.len(), 2);
-        assert_eq!(r.canvas, CanvasSpec::Exact { width: 1080, height: 1920 });
+        assert_eq!(
+            r.canvas,
+            CanvasSpec::Exact {
+                width: 1080,
+                height: 1920
+            }
+        );
         assert_eq!((r.model.as_str(), r.timing.fps), ("ltx-turbo", Some(25)));
         // 10 s: pro, and 1440p / 4K.
         let pro = a2v(json!({"audio_uri": "https://example.com/a.mp3", "prompt": "p", "model": "ltx-2-5-pro"})).unwrap();
@@ -668,15 +855,29 @@ mod tests {
         for (b, param) in [
             (json!({"prompt": "p"}), "audio_uri"),
             (json!({"audio_uri": "https://example.com/a.mp3"}), "prompt"),
-            (json!({"audio_uri": "https://example.com/a.mp3", "prompt": "p", "last_frame_uri": "https://example.com/l.png"}), "last_frame_uri"),
-            (json!({"audio_uri": "http://example.com/a.mp3", "prompt": "p"}), "audio_uri"),
-            (json!({"audio_uri": "https://example.com/a.mp3", "prompt": "p", "model": "ltx-2-3-fast"}), "model"),
-            (json!({"audio_uri": "https://example.com/a.mp3", "prompt": "p", "fps": 30}), "fps"),
+            (
+                json!({"audio_uri": "https://example.com/a.mp3", "prompt": "p", "last_frame_uri": "https://example.com/l.png"}),
+                "last_frame_uri",
+            ),
+            (
+                json!({"audio_uri": "http://example.com/a.mp3", "prompt": "p"}),
+                "audio_uri",
+            ),
+            (
+                json!({"audio_uri": "https://example.com/a.mp3", "prompt": "p", "model": "ltx-2-3-fast"}),
+                "model",
+            ),
+            (
+                json!({"audio_uri": "https://example.com/a.mp3", "prompt": "p", "fps": 30}),
+                "fps",
+            ),
         ] {
             let e = a2v(b.clone()).unwrap_err();
             assert_eq!(e.param.as_deref(), Some(param), "{b}");
         }
-        let (k, _) = msg(a2v(json!({"audio_uri": "https://example.com/a.mp3", "prompt": "p", "camera_motion": "jib_up"})));
+        let (k, _) = msg(a2v(
+            json!({"audio_uri": "https://example.com/a.mp3", "prompt": "p", "camera_motion": "jib_up"}),
+        ));
         assert_eq!(k, ErrorKind::Unsupported(GapId::LtxCameraMotion));
         assert_eq!(Endpoint::of_task(Task::A2V), Some(Endpoint::AudioToVideo));
     }
@@ -691,40 +892,115 @@ mod tests {
     fn retake_and_extend_shapes() {
         let ret = |b: Value| normalize(Endpoint::Retake, Api::V2, &LtxModels::default(), &b);
         let ext = |b: Value| normalize(Endpoint::Extend, Api::V2, &LtxModels::default(), &b);
-        let r = ret(json!({"video_uri": "https://example.com/v.mp4", "start_time": 1.5, "duration": 3})).unwrap();
-        assert_eq!((r.task, r.model.as_str(), r.prompt.as_str()), (Task::Retake, "ltx-pro", ""));
+        let r = ret(
+            json!({"video_uri": "https://example.com/v.mp4", "start_time": 1.5, "duration": 3}),
+        )
+        .unwrap();
+        assert_eq!(
+            (r.task, r.model.as_str(), r.prompt.as_str()),
+            (Task::Retake, "ltx-pro", "")
+        );
         assert_eq!(
             r.edit.as_ref().unwrap().op,
-            EditOp::Retake { start_s: 1.5, duration_s: 3.0, mode: RetakeMode::ReplaceAudioAndVideo }
+            EditOp::Retake {
+                start_s: 1.5,
+                duration_s: 3.0,
+                mode: RetakeMode::ReplaceAudioAndVideo
+            }
         );
         assert_eq!(r.canvas, CanvasSpec::ModelDefault);
         let r = ret(json!({"video_uri": "ltx://uploads/v", "start_time": 0, "duration": 30, "mode": "replace_audio", "resolution": "1080x1920", "prompt": "rain"})).unwrap();
-        assert_eq!(r.edit.unwrap().op, EditOp::Retake { start_s: 0.0, duration_s: 20.0, mode: RetakeMode::ReplaceAudio });
-        assert_eq!(r.canvas, CanvasSpec::Exact { width: 1080, height: 1920 });
+        assert_eq!(
+            r.edit.unwrap().op,
+            EditOp::Retake {
+                start_s: 0.0,
+                duration_s: 20.0,
+                mode: RetakeMode::ReplaceAudio
+            }
+        );
+        assert_eq!(
+            r.canvas,
+            CanvasSpec::Exact {
+                width: 1080,
+                height: 1920
+            }
+        );
         for (b, param) in [
             (json!({"start_time": 0, "duration": 3}), "video_uri"),
-            (json!({"video_uri": "https://example.com/v.mp4", "duration": 3}), "start_time"),
-            (json!({"video_uri": "https://example.com/v.mp4", "start_time": -1, "duration": 3}), "start_time"),
-            (json!({"video_uri": "https://example.com/v.mp4", "start_time": 0, "duration": 1.5}), "duration"),
-            (json!({"video_uri": "https://example.com/v.mp4", "start_time": 0, "duration": 3, "mode": "both"}), "mode"),
-            (json!({"video_uri": "https://example.com/v.mp4", "start_time": 0, "duration": 3, "resolution": "1280x720"}), "resolution"),
-            (json!({"video_uri": "http://example.com/v.mp4", "start_time": 0, "duration": 3}), "video_uri"),
+            (
+                json!({"video_uri": "https://example.com/v.mp4", "duration": 3}),
+                "start_time",
+            ),
+            (
+                json!({"video_uri": "https://example.com/v.mp4", "start_time": -1, "duration": 3}),
+                "start_time",
+            ),
+            (
+                json!({"video_uri": "https://example.com/v.mp4", "start_time": 0, "duration": 1.5}),
+                "duration",
+            ),
+            (
+                json!({"video_uri": "https://example.com/v.mp4", "start_time": 0, "duration": 3, "mode": "both"}),
+                "mode",
+            ),
+            (
+                json!({"video_uri": "https://example.com/v.mp4", "start_time": 0, "duration": 3, "resolution": "1280x720"}),
+                "resolution",
+            ),
+            (
+                json!({"video_uri": "http://example.com/v.mp4", "start_time": 0, "duration": 3}),
+                "video_uri",
+            ),
         ] {
-            assert_eq!(ret(b.clone()).unwrap_err().param.as_deref(), Some(param), "{b}");
+            assert_eq!(
+                ret(b.clone()).unwrap_err().param.as_deref(),
+                Some(param),
+                "{b}"
+            );
         }
         let x = ext(json!({"video_uri": "https://example.com/v.mp4", "duration": 5, "prompt": "the car drives on"})).unwrap();
         assert_eq!((x.task, x.model.as_str()), (Task::Extend, "ltx-pro"));
-        assert_eq!(x.edit.unwrap().op, EditOp::Extend { duration_s: 5.0, at: ExtendAt::End, context_s: None });
+        assert_eq!(
+            x.edit.unwrap().op,
+            EditOp::Extend {
+                duration_s: 5.0,
+                at: ExtendAt::End,
+                context_s: None
+            }
+        );
         let x = ext(json!({"video_uri": "https://example.com/v.mp4", "duration": 2, "mode": "start", "context": 4, "model": "ltx-2-5-fast"})).unwrap();
         assert_eq!(x.model, "ltx-turbo");
-        assert_eq!(x.edit.unwrap().op, EditOp::Extend { duration_s: 2.0, at: ExtendAt::Start, context_s: Some(4.0) });
+        assert_eq!(
+            x.edit.unwrap().op,
+            EditOp::Extend {
+                duration_s: 2.0,
+                at: ExtendAt::Start,
+                context_s: Some(4.0)
+            }
+        );
         for (b, param) in [
-            (json!({"video_uri": "https://example.com/v.mp4"}), "duration"),
-            (json!({"video_uri": "https://example.com/v.mp4", "duration": 21}), "duration"),
-            (json!({"video_uri": "https://example.com/v.mp4", "duration": 5, "mode": "middle"}), "mode"),
-            (json!({"video_uri": "https://example.com/v.mp4", "duration": 5, "context": 0.5}), "context"),
+            (
+                json!({"video_uri": "https://example.com/v.mp4"}),
+                "duration",
+            ),
+            (
+                json!({"video_uri": "https://example.com/v.mp4", "duration": 21}),
+                "duration",
+            ),
+            (
+                json!({"video_uri": "https://example.com/v.mp4", "duration": 5, "mode": "middle"}),
+                "mode",
+            ),
+            (
+                json!({"video_uri": "https://example.com/v.mp4", "duration": 5, "context": 0.5}),
+                "context",
+            ),
         ] {
-            assert_eq!(ext(b.clone()).unwrap_err().param.as_deref(), Some(param), "{b}");
+            assert_eq!(
+                ext(b.clone()).unwrap_err().param.as_deref(),
+                Some(param),
+                "{b}"
+            );
         }
         assert_eq!(Endpoint::of_task(Task::Retake), Some(Endpoint::Retake));
         assert_eq!(Endpoint::from_segment("extend"), Some(Endpoint::Extend));

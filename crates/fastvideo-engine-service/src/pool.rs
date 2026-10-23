@@ -227,7 +227,11 @@ mod tests {
         assert_eq!(p.resident_models(), vec![a.clone()]);
         assert_eq!(p.warmup_summary(), "off");
         p.set_warmup(0, &a, Warmup::Pending);
-        assert_eq!(p.readiness(), Readiness::Ready, "warm-up does not hold readiness");
+        assert_eq!(
+            p.readiness(),
+            Readiness::Ready,
+            "warm-up does not hold readiness"
+        );
         assert_eq!(p.warmup_summary(), "warming");
         p.set_warmup(0, &a, Warmup::Done);
         assert_eq!(p.warmup_summary(), "warm");

@@ -124,7 +124,10 @@ impl Scope {
 
 /// Whether `s` is a usable pool, worker or job id (path and tag safe).
 pub fn valid_id(s: &str) -> bool {
-    !s.is_empty() && s.len() <= 128 && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    !s.is_empty()
+        && s.len() <= 128
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
 /// A job a worker holds or recently finished, as it reports it.
@@ -241,15 +244,34 @@ pub enum WorkerMsg {
     Hello(Hello),
     /// The job is taken (the adopt). `worker_ms`: time from receiving the
     /// push to this ack on the worker (input fetch, adopt, engine submit).
-    Ack { job_id: String, attempt: u32, #[serde(default)] lease: u64, #[serde(default)] worker_ms: u64 },
+    Ack {
+        job_id: String,
+        attempt: u32,
+        #[serde(default)]
+        lease: u64,
+        #[serde(default)]
+        worker_ms: u64,
+    },
     /// The job was not taken. `retry`: another worker (or later) may take
     /// it (busy, draining, held elsewhere); otherwise it is failed with
     /// `message`. `code` 424: a client URL it could not fetch; the job
     /// waits for the gateway to send it again with the input in the store
     /// ([`PoolStatus::restage`], [`EnqueueReq::replace`]).
-    Nack { job_id: String, attempt: u32, retry: bool, #[serde(default)] code: u16, #[serde(default)] message: String },
+    Nack {
+        job_id: String,
+        attempt: u32,
+        retry: bool,
+        #[serde(default)]
+        code: u16,
+        #[serde(default)]
+        message: String,
+    },
     /// A taken job finished (its D1 row is already terminal).
-    Done { job_id: String, attempt: u32, state: String },
+    Done {
+        job_id: String,
+        attempt: u32,
+        state: String,
+    },
     /// Load report (also the liveness heartbeat), every few seconds.
     /// `ready`: its models are loaded (a front is routed to only then;
     /// absent from old workers: ready).
@@ -267,19 +289,62 @@ pub enum WorkerMsg {
     Slots(Slots),
     /// Protocol 2: open a multipart upload for a held job's output; the
     /// answer is a [`DoMsg::UploadGrant`] with `req`.
-    UploadInit { req: u64, job_id: String, attempt: u32, lease: u64, name: String, #[serde(default)] content_type: String, #[serde(default = "one_u16")] parts: u16 },
+    UploadInit {
+        req: u64,
+        job_id: String,
+        attempt: u32,
+        lease: u64,
+        name: String,
+        #[serde(default)]
+        content_type: String,
+        #[serde(default = "one_u16")]
+        parts: u16,
+    },
     /// More (or fresh) part URLs: parts `from .. from + count`.
-    UploadMore { req: u64, job_id: String, upload_id: String, from: u16, count: u16 },
+    UploadMore {
+        req: u64,
+        job_id: String,
+        upload_id: String,
+        from: u16,
+        count: u16,
+    },
     /// Every part is uploaded: complete it. Answer: [`DoMsg::UploadCommitted`].
-    UploadDone { req: u64, job_id: String, attempt: u32, lease: u64, upload_id: String, parts: Vec<Part>, bytes: u64, sha256: String },
+    UploadDone {
+        req: u64,
+        job_id: String,
+        attempt: u32,
+        lease: u64,
+        upload_id: String,
+        parts: Vec<Part>,
+        bytes: u64,
+        sha256: String,
+    },
     /// Give the upload up.
-    UploadAbort { job_id: String, upload_id: String },
+    UploadAbort {
+        job_id: String,
+        upload_id: String,
+    },
     /// The arbiter reserved the GPU for the offered session.
-    SessionAck { session_id: String, lease: u64, #[serde(default)] endpoint: String },
+    SessionAck {
+        session_id: String,
+        lease: u64,
+        #[serde(default)]
+        endpoint: String,
+    },
     /// The offered session was refused (busy, draining).
-    SessionNack { session_id: String, lease: u64, #[serde(default)] code: u16, #[serde(default)] message: String },
+    SessionNack {
+        session_id: String,
+        lease: u64,
+        #[serde(default)]
+        code: u16,
+        #[serde(default)]
+        message: String,
+    },
     /// A session ended on the worker.
-    SessionEnd { session_id: String, lease: u64 },
+    SessionEnd {
+        session_id: String,
+        lease: u64,
+    },
     /// Its API front changed (models loaded or failed): replaces the
     /// hello's [`Hello::front`].
     Front(FrontInfo),
@@ -308,7 +373,15 @@ pub enum DoMsg {
     /// writes the job's row only while no newer lease holds it, so a worker
     /// the dispatcher gave up on cannot overwrite its successor.
     /// `takeover`: a re-dispatch after a worker loss.
-    Job { job_id: String, attempt: u32, envelope: Value, #[serde(default)] lease: u64, #[serde(default)] takeover: bool },
+    Job {
+        job_id: String,
+        attempt: u32,
+        envelope: Value,
+        #[serde(default)]
+        lease: u64,
+        #[serde(default)]
+        takeover: bool,
+    },
     /// Stop a job (client cancel).
     Cancel { job_id: String },
     /// Take no new jobs (running ones finish).
@@ -344,9 +417,21 @@ pub enum DoMsg {
         error: Option<String>,
     },
     /// Reserve the GPU for a streaming session (ack or nack).
-    SessionOffer { session_id: String, lease: u64, #[serde(default)] model: Option<String>, #[serde(default)] kind: String, ttl_ms: i64 },
+    SessionOffer {
+        session_id: String,
+        lease: u64,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        kind: String,
+        ttl_ms: i64,
+    },
     /// The session's lease ended (released, expired, given to another).
-    SessionRevoke { session_id: String, #[serde(default)] reason: String },
+    SessionRevoke {
+        session_id: String,
+        #[serde(default)]
+        reason: String,
+    },
 }
 
 /// `GET {scope}/jobs/{id}/wait?since=<phase>&wait_ms=<n>`: answered when the
@@ -568,7 +653,10 @@ pub struct SessionInfo {
 impl PoolStatus {
     /// Connected workers that take new jobs.
     pub fn usable_workers(&self) -> usize {
-        self.workers.iter().filter(|w| w.connected && !w.draining).count()
+        self.workers
+            .iter()
+            .filter(|w| w.connected && !w.draining)
+            .count()
     }
 }
 
@@ -579,11 +667,20 @@ mod tests {
 
     #[test]
     fn frames_round_trip() {
-        let m = WorkerMsg::Ack { job_id: "j".into(), attempt: 2, lease: 3, worker_ms: 7 };
+        let m = WorkerMsg::Ack {
+            job_id: "j".into(),
+            attempt: 2,
+            lease: 3,
+            worker_ms: 7,
+        };
         let s = serde_json::to_string(&m).unwrap();
-        assert_eq!(s, r#"{"t":"ack","job_id":"j","attempt":2,"lease":3,"worker_ms":7}"#);
+        assert_eq!(
+            s,
+            r#"{"t":"ack","job_id":"j","attempt":2,"lease":3,"worker_ms":7}"#
+        );
         assert_eq!(serde_json::from_str::<WorkerMsg>(&s).unwrap(), m);
-        let hello: WorkerMsg = serde_json::from_value(json!({"t": "hello", "worker_id": "w1", "pool": "p"})).unwrap();
+        let hello: WorkerMsg =
+            serde_json::from_value(json!({"t": "hello", "worker_id": "w1", "pool": "p"})).unwrap();
         match hello {
             WorkerMsg::Hello(h) => {
                 assert_eq!(h.capacity, 1);
@@ -591,7 +688,13 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        let job = DoMsg::Job { job_id: "j".into(), attempt: 1, envelope: json!({"job": {}}), lease: 1, takeover: false };
+        let job = DoMsg::Job {
+            job_id: "j".into(),
+            attempt: 1,
+            envelope: json!({"job": {}}),
+            lease: 1,
+            takeover: false,
+        };
         let v = serde_json::to_value(&job).unwrap();
         assert_eq!(v["t"], "job");
         assert_eq!(serde_json::from_value::<DoMsg>(v).unwrap(), job);

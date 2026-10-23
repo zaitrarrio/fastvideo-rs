@@ -107,9 +107,22 @@ fn clean_line(l: &str) -> String {
 
 impl Parts {
     fn new(out: &ExpansionOutput, registry: &Registry, world: &WorldBible) -> Self {
-        let age = |id: &str| registry.values().iter().position(|e| e.id == id).unwrap_or(usize::MAX);
-        let cast: Vec<_> = out.entity_ids.iter().filter_map(|id| registry.get(id)).collect();
-        let location = cast.iter().find(|e| e.kind == EntityKind::Location).map_or_else(String::new, |l| l.descriptor.clone());
+        let age = |id: &str| {
+            registry
+                .values()
+                .iter()
+                .position(|e| e.id == id)
+                .unwrap_or(usize::MAX)
+        };
+        let cast: Vec<_> = out
+            .entity_ids
+            .iter()
+            .filter_map(|id| registry.get(id))
+            .collect();
+        let location = cast
+            .iter()
+            .find(|e| e.kind == EntityKind::Location)
+            .map_or_else(String::new, |l| l.descriptor.clone());
         let action_lc = out.action.to_lowercase();
         let speakers: Vec<&str> = out.dialogue.iter().map(|d| d.speaker_id.as_str()).collect();
         let members = cast
@@ -119,18 +132,28 @@ impl Parts {
                 name: e.name.clone(),
                 descriptor: e.descriptor.clone(),
                 keep: speakers.contains(&e.id.as_str())
-                    || (!e.name.trim().is_empty() && action_lc.contains(&e.name.trim().to_lowercase()))
+                    || (!e.name.trim().is_empty()
+                        && action_lc.contains(&e.name.trim().to_lowercase()))
                     || action_lc.contains(&e.id.to_lowercase()),
                 age: age(&e.id),
                 short: false,
             })
             .collect();
-        let name_of = |id: &str| registry.get(id).map_or("a voice", |e| e.name.as_str()).to_owned();
+        let name_of = |id: &str| {
+            registry
+                .get(id)
+                .map_or("a voice", |e| e.name.as_str())
+                .to_owned()
+        };
         Parts {
             location,
             cast: members,
             action: out.action.clone(),
-            dialogue: out.dialogue.iter().map(|d| (name_of(&d.speaker_id), d.line.clone())).collect(),
+            dialogue: out
+                .dialogue
+                .iter()
+                .map(|d| (name_of(&d.speaker_id), d.line.clone()))
+                .collect(),
             camera: nonempty(&out.camera),
             lighting: nonempty(&out.lighting),
             audio: out.audio.clone(),
@@ -144,7 +167,11 @@ impl Parts {
         if self.style.take().is_some() || self.music.take().is_some() {
             return true;
         }
-        let next = self.cast.iter_mut().filter(|m| !m.keep && !m.short).min_by_key(|m| m.age);
+        let next = self
+            .cast
+            .iter_mut()
+            .filter(|m| !m.keep && !m.short)
+            .min_by_key(|m| m.age);
         if let Some(m) = next {
             m.short = true;
             return true;
@@ -159,23 +186,49 @@ impl Parts {
         let fmt = |s: &str| if h3 { sentence(s) } else { s.to_owned() };
         v.push(fmt(&self.location));
         for m in &self.cast {
-            v.push(if m.short { fmt(&m.name) } else { fmt(&format!("{}: {}", m.name, m.descriptor)) });
+            v.push(if m.short {
+                fmt(&m.name)
+            } else {
+                fmt(&format!("{}: {}", m.name, m.descriptor))
+            });
         }
         v.push(fmt(&self.action));
         for (name, line) in &self.dialogue {
-            v.push(if h3 { format!("{name} says <d>[English] {}</d>", clean_line(line)) } else { format!("{name} says, \"{line}\"") });
+            v.push(if h3 {
+                format!("{name} says <d>[English] {}</d>", clean_line(line))
+            } else {
+                format!("{name} says, \"{line}\"")
+            });
         }
         if let Some(c) = &self.camera {
-            v.push(if h3 { sentence(c) } else { format!("Camera: {c}") });
+            v.push(if h3 {
+                sentence(c)
+            } else {
+                format!("Camera: {c}")
+            });
         }
         if let Some(l) = &self.lighting {
-            v.push(if h3 { sentence(l) } else { format!("Lighting: {l}") });
+            v.push(if h3 {
+                sentence(l)
+            } else {
+                format!("Lighting: {l}")
+            });
         }
         v.into_iter().filter(|p| !p.trim().is_empty()).collect()
     }
 
     fn sound(&self) -> String {
-        format!("{}{}", self.audio.trim(), if self.dialogue.is_empty() { " No spoken words." } else { "" }).trim().to_owned()
+        format!(
+            "{}{}",
+            self.audio.trim(),
+            if self.dialogue.is_empty() {
+                " No spoken words."
+            } else {
+                ""
+            }
+        )
+        .trim()
+        .to_owned()
     }
 
     /// The prompt with `front` as the description.
@@ -186,7 +239,10 @@ impl Parts {
                 if let Some(s) = &self.style {
                     desc = format!("{desc} {}", sentence(s)).trim().to_owned();
                 }
-                let music = self.music.as_deref().map_or_else(|| "None.".to_owned(), sentence);
+                let music = self
+                    .music
+                    .as_deref()
+                    .map_or_else(|| "None.".to_owned(), sentence);
                 format!(
                     "integrated_multimodal_description: {desc}\noverall_soundscape: {}\nnon_diegetic_music: {music}",
                     sentence(&self.sound())
@@ -200,7 +256,11 @@ impl Parts {
                 if let Some(s) = &self.style {
                     parts.push(s.clone());
                 }
-                parts.into_iter().filter(|p| !p.trim().is_empty()).collect::<Vec<_>>().join(" ")
+                parts
+                    .into_iter()
+                    .filter(|p| !p.trim().is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ")
             }
         }
     }
@@ -211,7 +271,13 @@ impl Parts {
 }
 
 /// The segment prompt for `layout` within `limit` (module docs).
-pub fn assemble(layout: Layout, out: &ExpansionOutput, registry: &Registry, world: &WorldBible, limit: &PromptLimit) -> String {
+pub fn assemble(
+    layout: Layout,
+    out: &ExpansionOutput,
+    registry: &Registry,
+    world: &WorldBible,
+    limit: &PromptLimit,
+) -> String {
     let mut parts = Parts::new(out, registry, world);
     let mut p = parts.render(layout);
     while !limit.fits(&p) {
@@ -223,7 +289,11 @@ pub fn assemble(layout: Layout, out: &ExpansionOutput, registry: &Registry, worl
             let p = parts.render_with(layout, &cut);
             // Degenerate: the sound line alone is over the limit. The
             // encoder's limit wins over keeping it whole.
-            return if limit.fits(&p) { p } else { cut_to_fit(&p, &|s: &str| limit.fits(s)) };
+            return if limit.fits(&p) {
+                p
+            } else {
+                cut_to_fit(&p, &|s: &str| limit.fits(s))
+            };
         }
         p = parts.render(layout);
     }
@@ -239,7 +309,12 @@ mod tests {
     use std::sync::Arc;
 
     fn ent(id: &str, kind: EntityKind, name: &str, d: &str) -> Entity {
-        Entity { id: id.into(), kind, name: name.into(), descriptor: d.into() }
+        Entity {
+            id: id.into(),
+            kind,
+            name: name.into(),
+            descriptor: d.into(),
+        }
     }
 
     fn setup() -> (Registry, WorldBible, ExpansionOutput) {
@@ -247,10 +322,30 @@ mod tests {
             premise: "p".into(),
             style: "35mm film, muted teal palette".into(),
             entities: vec![
-                ent("gull", EntityKind::Prop, "Gull", "a grey herring gull on the rail"),
-                ent("mara", EntityKind::Character, "Mara", "a wiry woman in her sixties, yellow oilskin coat"),
-                ent("tower", EntityKind::Location, "Lighthouse", "a white lighthouse on black rocks"),
-                ent("tom", EntityKind::Character, "Tom", "a young sailor in a navy peacoat"),
+                ent(
+                    "gull",
+                    EntityKind::Prop,
+                    "Gull",
+                    "a grey herring gull on the rail",
+                ),
+                ent(
+                    "mara",
+                    EntityKind::Character,
+                    "Mara",
+                    "a wiry woman in her sixties, yellow oilskin coat",
+                ),
+                ent(
+                    "tower",
+                    EntityKind::Location,
+                    "Lighthouse",
+                    "a white lighthouse on black rocks",
+                ),
+                ent(
+                    "tom",
+                    EntityKind::Character,
+                    "Tom",
+                    "a young sailor in a navy peacoat",
+                ),
             ],
         };
         let mut r = Registry::default();
@@ -266,7 +361,10 @@ mod tests {
             lighting: "warm lamp glow against blue dusk".into(),
             audio: "wind howling, iron steps clanging".into(),
             music: "a low cello drone".into(),
-            dialogue: vec![DialogueLine { speaker_id: "mara".into(), line: "Light's out again.".into() }],
+            dialogue: vec![DialogueLine {
+                speaker_id: "mara".into(),
+                line: "Light's out again.".into(),
+            }],
         };
         (r, world, out)
     }
@@ -292,8 +390,14 @@ mod tests {
         let p = assemble(Layout::H3, &o, &r, &w, &PromptLimit::chars(10_000));
         assert!(p.ends_with("overall_soundscape: wind howling, iron steps clanging No spoken words.\nnon_diegetic_music: None."), "{p}");
         // Markup the model added itself is not doubled.
-        o.dialogue = vec![DialogueLine { speaker_id: "tom".into(), line: "<d>[English] Ahoy!</d>".into() }];
-        assert!(assemble(Layout::H3, &o, &r, &w, &PromptLimit::chars(10_000)).contains("Tom says <d>[English] Ahoy!</d>"));
+        o.dialogue = vec![DialogueLine {
+            speaker_id: "tom".into(),
+            line: "<d>[English] Ahoy!</d>".into(),
+        }];
+        assert!(
+            assemble(Layout::H3, &o, &r, &w, &PromptLimit::chars(10_000))
+                .contains("Tom says <d>[English] Ahoy!</d>")
+        );
     }
 
     /// The trim order by tokens: style, music, the non-speaking /
@@ -301,21 +405,41 @@ mod tests {
     #[test]
     fn h3_trims_by_priority_in_tokens() {
         let (r, w, out) = setup();
-        let words = |n| PromptLimit { counter: Some(Arc::new(Words)), max_tokens: n, max_chars: 1 };
+        let words = |n| PromptLimit {
+            counter: Some(Arc::new(Words)),
+            max_tokens: n,
+            max_chars: 1,
+        };
         let full = assemble(Layout::H3, &out, &r, &w, &PromptLimit::chars(10_000));
         let n = Words.count(&full).unwrap();
         assert_eq!(assemble(Layout::H3, &out, &r, &w, &words(n)), full);
-        let steps: Vec<String> = (1..n - 12).map(|k| assemble(Layout::H3, &out, &r, &w, &words(n - k))).collect();
+        let steps: Vec<String> = (1..n - 12)
+            .map(|k| assemble(Layout::H3, &out, &r, &w, &words(n - k)))
+            .collect();
         let no_style = &steps[0];
-        assert!(!no_style.contains("35mm") && no_style.contains("cello"), "{no_style}");
+        assert!(
+            !no_style.contains("35mm") && no_style.contains("cello"),
+            "{no_style}"
+        );
         let at = |needle: &str| steps.iter().position(|s| !s.contains(needle)).unwrap();
         // Gull (registered first, silent, not in the action) before Tom.
-        assert!(at("35mm") < at("cello") && at("cello") < at("herring") && at("herring") < at("peacoat"));
+        assert!(
+            at("35mm") < at("cello")
+                && at("cello") < at("herring")
+                && at("herring") < at("peacoat")
+        );
         assert!(at("peacoat") < at("warm lamp") && at("warm lamp") < at("tracking"));
         // Mara speaks and acts: her descriptor stays through all of that.
         let s = &steps[at("tracking")];
-        assert!(s.contains("Mara: a wiry woman") && s.contains("Gull.") && s.contains("Tom."), "{s}");
-        assert!(s.contains("overall_soundscape: wind howling") && s.contains("non_diegetic_music: None."), "{s}");
+        assert!(
+            s.contains("Mara: a wiry woman") && s.contains("Gull.") && s.contains("Tom."),
+            "{s}"
+        );
+        assert!(
+            s.contains("overall_soundscape: wind howling")
+                && s.contains("non_diegetic_music: None."),
+            "{s}"
+        );
         // Beyond every trim: a cut of the description, never inside <d>…</d>,
         // the sound kept.
         for (k, s) in steps.iter().enumerate() {
@@ -324,7 +448,10 @@ mod tests {
             assert!(s.contains("overall_soundscape: wind howling"), "{s}");
         }
         let last = steps.last().unwrap();
-        assert!(!last.contains("<d>") && last.starts_with("integrated_multimodal_description: a white"), "{last}");
+        assert!(
+            !last.contains("<d>") && last.starts_with("integrated_multimodal_description: a white"),
+            "{last}"
+        );
     }
 
     /// The prose layout is the owner's, and the sound is never dropped
@@ -343,20 +470,32 @@ mod tests {
              Lighting: warm lamp glow against blue dusk Sound: wind howling, iron steps clanging No spoken words. \
              35mm film, muted teal palette"
         );
-        let w2 = WorldBible { style: String::new(), ..w.clone() };
+        let w2 = WorldBible {
+            style: String::new(),
+            ..w.clone()
+        };
         let full = assemble(Layout::Prose, &out, &r, &w2, &PromptLimit::chars(10_000));
         let n = full.chars().count();
         // Down to where the sound line alone is the limit.
         for k in 1..(n - 70) {
             let p = assemble(Layout::Prose, &out, &r, &w2, &PromptLimit::chars(n - k));
-            assert!(p.contains("Sound: wind howling, iron steps clanging No spoken words."), "{k}: {p}");
-            assert!(p.chars().count() <= n - k || !p.contains("Mara climbs"), "{k}: {p}");
+            assert!(
+                p.contains("Sound: wind howling, iron steps clanging No spoken words."),
+                "{k}: {p}"
+            );
+            assert!(
+                p.chars().count() <= n - k || !p.contains("Mara climbs"),
+                "{k}: {p}"
+            );
         }
         // Lighting goes before camera.
         let p = assemble(Layout::Prose, &out, &r, &w2, &PromptLimit::chars(n - 10));
         assert!(!p.contains("Lighting:") && p.contains("Camera:"), "{p}");
         // Music, when there is a score, follows the sound.
         out.music = "a low cello drone".into();
-        assert!(assemble(Layout::Prose, &out, &r, &w, &PromptLimit::chars(10_000)).contains("No spoken words. Music: a low cello drone 35mm"));
+        assert!(
+            assemble(Layout::Prose, &out, &r, &w, &PromptLimit::chars(10_000))
+                .contains("No spoken words. Music: a low cello drone 35mm")
+        );
     }
 }

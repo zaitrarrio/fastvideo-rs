@@ -291,13 +291,18 @@ impl ClipEvent {
 
     /// Whether this is one of fast-h3's wire messages.
     pub fn is_fasth3(&self) -> bool {
-        !matches!(self, ClipEvent::BuildStarted { .. } | ClipEvent::Starved { .. })
+        !matches!(
+            self,
+            ClipEvent::BuildStarted { .. } | ClipEvent::Starved { .. }
+        )
     }
 
     /// The `data` payload as JSON (what a protocol puts on the wire).
     pub fn data(&self) -> serde_json::Value {
         match serde_json::to_value(self) {
-            Ok(serde_json::Value::Object(mut m)) => m.remove("data").unwrap_or(serde_json::Value::Null),
+            Ok(serde_json::Value::Object(mut m)) => {
+                m.remove("data").unwrap_or(serde_json::Value::Null)
+            }
             _ => serde_json::Value::Null,
         }
     }
@@ -386,13 +391,21 @@ fn gone() -> ApiError {
 impl ClipPlayer {
     /// Starts the player task over `session` (needs a tokio runtime).
     /// Fails for `AnchorLastFrame` on a model that cannot build I2V clips.
-    pub fn start(session: ClipSession, cfg: ClipPlayerConfig) -> Result<(Self, ClipOutputs), ApiError> {
+    pub fn start(
+        session: ClipSession,
+        cfg: ClipPlayerConfig,
+    ) -> Result<(Self, ClipOutputs), ApiError> {
         let spec = session.spec().clone();
         let caps = session.caps().clone();
-        if matches!(spec.continuity, Continuity::AnchorLastFrame { .. }) && !caps.supports(Task::I2V) {
+        if matches!(spec.continuity, Continuity::AnchorLastFrame { .. })
+            && !caps.supports(Task::I2V)
+        {
             return Err(ApiError::invalid_param(
                 "continuity",
-                format!("`{}` cannot anchor clips on the last frame (no image-to-video)", caps.id),
+                format!(
+                    "`{}` cannot anchor clips on the last frame (no image-to-video)",
+                    caps.id
+                ),
             ));
         }
         let id = session.id();
@@ -427,14 +440,20 @@ impl ClipPlayer {
     /// the event stream before this returns.
     pub async fn command(&self, cmd: ClipCommand) -> Result<Option<ClipEvent>, ApiError> {
         let (tx, rx) = oneshot::channel();
-        self.tx.send(Msg::Command(cmd, tx)).await.map_err(|_| gone())?;
+        self.tx
+            .send(Msg::Command(cmd, tx))
+            .await
+            .map_err(|_| gone())?;
         rx.await.map_err(|_| gone())
     }
 
     /// Whether any client is watching. Without an audience no build is
     /// submitted and a playing clip is cut quietly (`Orphaned`, §5.2).
     pub async fn set_audience(&self, present: bool) -> Result<(), ApiError> {
-        self.tx.send(Msg::Audience(present)).await.map_err(|_| gone())
+        self.tx
+            .send(Msg::Audience(present))
+            .await
+            .map_err(|_| gone())
     }
 
     /// The latest `state_update` snapshot.
@@ -589,7 +608,8 @@ impl Player {
             (hi as f64 / fps as f64 * 1000.0).floor() / 1000.0,
         );
         let clip_frames = match cfg.clip_seconds {
-            Some(s) => snap_frames(s, fps, grid, range_frames, range_s).map_err(|r| ApiError::invalid_param("clip_seconds", r))?,
+            Some(s) => snap_frames(s, fps, grid, range_frames, range_s)
+                .map_err(|r| ApiError::invalid_param("clip_seconds", r))?,
             None => grid.default.clamp(lo, hi),
         };
         let seed = spec.seed.unwrap_or(1000);
@@ -600,7 +620,9 @@ impl Player {
         let (session_dir, own_dir) = match &cfg.session_dir {
             Some(d) => (d.clone(), false),
             None => (
-                std::env::temp_dir().join("fv-sessions").join(session.id().to_string()),
+                std::env::temp_dir()
+                    .join("fv-sessions")
+                    .join(session.id().to_string()),
                 true,
             ),
         };
@@ -838,7 +860,8 @@ impl Player {
                     let tx = self.build_tx.clone();
                     let fps = self.fps;
                     let channels = self.channels;
-                    let anchor_path = anchor_mode.then(|| self.session_dir.join(format!("anchor-{clip_id}.png")));
+                    let anchor_path =
+                        anchor_mode.then(|| self.session_dir.join(format!("anchor-{clip_id}.png")));
                     tokio::spawn(async move {
                         let t0 = Instant::now();
                         let result = match handle.wait().await {
@@ -846,14 +869,22 @@ impl Player {
                                 prepare_build(out, fps, channels, anchor_path)
                             })
                             .await
-                            .unwrap_or_else(|e| Err(ApiError::internal(format!("preparing the clip: {e}")))),
+                            .unwrap_or_else(|e| {
+                                Err(ApiError::internal(format!("preparing the clip: {e}")))
+                            }),
                             Err(e) => Err(e),
                         }
                         .map(|(mut b, a)| {
                             b.build_s = t0.elapsed().as_secs_f64();
                             (b, a)
                         });
-                        let _ = tx.send(BuildDone { seq, clip_id, result }).await;
+                        let _ = tx
+                            .send(BuildDone {
+                                seq,
+                                clip_id,
+                                result,
+                            })
+                            .await;
                     });
                     self.send(ClipEvent::BuildStarted {
                         clip: info,
@@ -928,7 +959,11 @@ impl Player {
                     tracing::error!("playout queue overflow despite the reservation");
                     return;
                 }
-                self.send(ClipEvent::ClipGenerated { clip: info, build: report }).await;
+                self.send(ClipEvent::ClipGenerated {
+                    clip: info,
+                    build: report,
+                })
+                .await;
                 self.send_queue().await;
                 self.send_state().await;
             }
@@ -938,7 +973,8 @@ impl Player {
     // ------------------------------------------------------------ playout
 
     async fn autoplay_arm(&mut self) {
-        if !self.autoplay || self.play_request.is_some() || self.playing.is_some() || !self.audience {
+        if !self.autoplay || self.play_request.is_some() || self.playing.is_some() || !self.audience
+        {
             return;
         }
         if let Some(e) = self.playout.pop_front() {
@@ -973,12 +1009,20 @@ impl Player {
         }
         let fade = match self.spec.continuity {
             Continuity::HardCut => None,
-            Continuity::Crossfade { ms } | Continuity::AnchorLastFrame { crossfade_ms: ms } => Some(ms),
+            Continuity::Crossfade { ms } | Continuity::AnchorLastFrame { crossfade_ms: ms } => {
+                Some(ms)
+            }
         };
-        let audio = entry.built.as_ref().and_then(|b| b.audio.as_ref()).map(|pcm| match fade {
-            Some(ms) if ms > 0 => apply_clip_fades(pcm, ms, self.clips_played > 0, true).samples.to_vec(),
-            _ => pcm.samples.to_vec(),
-        });
+        let audio = entry
+            .built
+            .as_ref()
+            .and_then(|b| b.audio.as_ref())
+            .map(|pcm| match fade {
+                Some(ms) if ms > 0 => apply_clip_fades(pcm, ms, self.clips_played > 0, true)
+                    .samples
+                    .to_vec(),
+                _ => pcm.samples.to_vec(),
+            });
         let info = entry.info();
         self.playing = Some(Playing {
             entry,
@@ -1064,7 +1108,11 @@ impl Player {
                 .await;
                 let pending = self.gen.len() as u32;
                 if !armed && self.autoplay && (pending > 0 || self.build.is_some()) {
-                    self.send(ClipEvent::Starved { after: clip, pending }).await;
+                    self.send(ClipEvent::Starved {
+                        after: clip,
+                        pending,
+                    })
+                    .await;
                 }
             }
             PlayOutcome::Stopped => {
@@ -1082,7 +1130,13 @@ impl Player {
     // ------------------------------------------------------------ commands
 
     fn snap(&self, seconds: f64) -> Result<u32, String> {
-        snap_frames(seconds, self.fps, &self.caps.frames, self.range_frames, self.range_s)
+        snap_frames(
+            seconds,
+            self.fps,
+            &self.caps.frames,
+            self.range_frames,
+            self.range_s,
+        )
     }
 
     fn cancel_build_for(&mut self, id: Uuid) {
@@ -1108,16 +1162,24 @@ impl Player {
     ) -> Option<ClipEvent> {
         let prompt = prompt.trim();
         if prompt.is_empty() {
-            return self.refuse(command, "The prompt is empty; a clip needs one.").await;
+            return self
+                .refuse(command, "The prompt is empty; a clip needs one.")
+                .await;
         }
         if prompt.chars().count() > MAX_PROMPT_CHARS {
             return self
-                .refuse(command, format!("The prompt is longer than {MAX_PROMPT_CHARS} characters."))
+                .refuse(
+                    command,
+                    format!("The prompt is longer than {MAX_PROMPT_CHARS} characters."),
+                )
                 .await;
         }
         if metadata.chars().count() > MAX_METADATA_CHARS {
             return self
-                .refuse(command, format!("The metadata is longer than {MAX_METADATA_CHARS} characters."))
+                .refuse(
+                    command,
+                    format!("The metadata is longer than {MAX_METADATA_CHARS} characters."),
+                )
                 .await;
         }
         if self.gen.is_full() {
@@ -1164,8 +1226,10 @@ impl Player {
                 seconds,
                 position,
             } => {
-                self.enqueue(name, &prompt, metadata, seed, seconds, position, None, None, None)
-                    .await
+                self.enqueue(
+                    name, &prompt, metadata, seed, seconds, position, None, None, None,
+                )
+                .await
             }
             ClipCommand::Chunk {
                 prompt_version,
@@ -1189,7 +1253,9 @@ impl Player {
             }
             ClipCommand::Play { clip_id } => {
                 if self.current().is_some() {
-                    return self.refuse(name, "A clip is already playing; send `stop` first.").await;
+                    return self
+                        .refuse(name, "A clip is already playing; send `stop` first.")
+                        .await;
                 }
                 let raw = clip_id.trim();
                 let entry = if raw.is_empty() {
@@ -1227,7 +1293,8 @@ impl Player {
             ClipCommand::Pop { clip_id } => {
                 let raw = clip_id.trim();
                 let id = Uuid::parse_str(raw).ok();
-                let entry = id.and_then(|id| self.gen.remove(id).or_else(|| self.playout.remove(id)));
+                let entry =
+                    id.and_then(|id| self.gen.remove(id).or_else(|| self.playout.remove(id)));
                 let Some(entry) = entry else {
                     let reason = if raw.is_empty() {
                         "Pass the `clip_id` of the queued clip to remove.".to_owned()
@@ -1246,11 +1313,19 @@ impl Player {
                 let id = Uuid::parse_str(raw).ok();
                 let moved = id.and_then(|id| {
                     if let Some(i) = self.gen.move_to(id, position as usize) {
-                        Some((QueueName::Generation, i, self.gen.get(id).map(ClipEntry::info)))
+                        Some((
+                            QueueName::Generation,
+                            i,
+                            self.gen.get(id).map(ClipEntry::info),
+                        ))
                     } else {
-                        self.playout
-                            .move_to(id, position as usize)
-                            .map(|i| (QueueName::Playout, i, self.playout.get(id).map(ClipEntry::info)))
+                        self.playout.move_to(id, position as usize).map(|i| {
+                            (
+                                QueueName::Playout,
+                                i,
+                                self.playout.get(id).map(ClipEntry::info),
+                            )
+                        })
                     }
                 });
                 let Some((queue, i, Some(clip))) = moved else {
@@ -1344,7 +1419,10 @@ impl Player {
                 let (lo, hi) = self.caps.canvas.aspect;
                 if !(lo as f64..=hi as f64).contains(&ratio) {
                     return self
-                        .refuse(name, format!("aspect ratios run from {lo} to {hi}, got {aspect}"))
+                        .refuse(
+                            name,
+                            format!("aspect ratios run from {lo} to {hi}, got {aspect}"),
+                        )
                         .await;
                 }
                 let short = self.defaults.canvas.0.min(self.defaults.canvas.1);
@@ -1490,7 +1568,9 @@ mod tests {
         assert!(d.get("clip").is_some());
         let st = ClipEvent::StateUpdate(ClipState::default());
         assert_eq!(st.data()["playing_clip_id"], serde_json::Value::Null);
-        let c: ClipCommand = serde_json::from_value(serde_json::json!({"type": "enqueue", "data": {"prompt": "x"}})).unwrap();
+        let c: ClipCommand =
+            serde_json::from_value(serde_json::json!({"type": "enqueue", "data": {"prompt": "x"}}))
+                .unwrap();
         assert_eq!(c.name(), "enqueue");
     }
 }

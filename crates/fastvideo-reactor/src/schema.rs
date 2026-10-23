@@ -45,7 +45,13 @@ pub fn component_name(msg: &str) -> String {
 }
 
 /// The OpenAPI document for `table` (no input tracks).
-pub fn openapi(title: &str, version: &str, table: &CommandTable, tracks: &TrackSet, causal: &CausalLimits) -> Value {
+pub fn openapi(
+    title: &str,
+    version: &str,
+    table: &CommandTable,
+    tracks: &TrackSet,
+    causal: &CausalLimits,
+) -> Value {
     openapi_with_inputs(title, version, table, tracks, causal, None)
 }
 
@@ -148,14 +154,30 @@ mod tests {
 
     fn tracks(audio: bool) -> TrackSet {
         TrackSet {
-            video: VideoTrack { name: "main_video".into(), width: 1344, height: 768, fps: 24 },
-            audio: audio.then(|| AudioTrack { name: "main_audio".into(), rate: 48_000, channels: 1 }),
+            video: VideoTrack {
+                name: "main_video".into(),
+                width: 1344,
+                height: 768,
+                fps: 24,
+            },
+            audio: audio.then(|| AudioTrack {
+                name: "main_audio".into(),
+                rate: 48_000,
+                channels: 1,
+            }),
         }
     }
 
     #[test]
     fn document_shape() {
-        let t = CommandTable::for_mode(Mode::Clip, ClipBounds { min_s: 5.167, max_s: 14.375, default_s: 5.167 });
+        let t = CommandTable::for_mode(
+            Mode::Clip,
+            ClipBounds {
+                min_s: 5.167,
+                max_s: 14.375,
+                default_s: 5.167,
+            },
+        );
         let l = CausalLimits::default();
         let d = openapi("fasth3", "1", &t, &tracks(true), &l);
         assert_eq!(d["openapi"], "3.1.0");
@@ -165,17 +187,43 @@ mod tests {
             json!([{"name":"main_video","kind":"video","direction":"out"},{"name":"main_audio","kind":"audio","direction":"out"}])
         );
         let e = &d["paths"]["/events/enqueue"]["post"];
-        assert_eq!(e["requestBody"]["content"]["application/json"]["schema"]["required"], json!(["prompt"]));
-        assert_eq!(e["requestBody"]["content"]["application/json"]["schema"]["properties"]["prompt"]["x-reactor-moderate"], true);
-        assert_eq!(e["responses"]["200"]["content"]["application/json"]["schema"]["$ref"], "#/components/schemas/ClipQueued");
+        assert_eq!(
+            e["requestBody"]["content"]["application/json"]["schema"]["required"],
+            json!(["prompt"])
+        );
+        assert_eq!(
+            e["requestBody"]["content"]["application/json"]["schema"]["properties"]["prompt"]
+                ["x-reactor-moderate"],
+            true
+        );
+        assert_eq!(
+            e["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/ClipQueued"
+        );
         assert!(d["paths"]["/events/play"]["post"]["responses"]["202"].is_object());
         assert!(d["webhooks"]["state_update"].is_object());
         assert!(d["components"]["schemas"]["StateUpdate"].is_object());
         assert!(d["components"]["schemas"]["ReactorUploadReference"].is_object());
 
         assert!(d["x-reactor"].get("session_limits").is_none());
-        let v = openapi("sfwan", "1", &CommandTable::for_mode(Mode::Causal, ClipBounds { min_s: 0.0, max_s: 0.0, default_s: 0.0 }), &tracks(false), &l);
-        assert_eq!(v["x-reactor"]["tracks"], json!([{"name":"main_video","kind":"video","direction":"out"}]));
+        let v = openapi(
+            "sfwan",
+            "1",
+            &CommandTable::for_mode(
+                Mode::Causal,
+                ClipBounds {
+                    min_s: 0.0,
+                    max_s: 0.0,
+                    default_s: 0.0,
+                },
+            ),
+            &tracks(false),
+            &l,
+        );
+        assert_eq!(
+            v["x-reactor"]["tracks"],
+            json!([{"name":"main_video","kind":"video","direction":"out"}])
+        );
         assert_eq!(v["x-reactor"]["session_limits"]["default_max_s"], 120);
         assert_eq!(v["x-reactor"]["session_limits"]["hard_max_s"], 300);
         assert!(v["paths"]["/events/set_prompt"].is_object());

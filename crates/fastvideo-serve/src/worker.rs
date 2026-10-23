@@ -24,8 +24,8 @@
 #![allow(clippy::result_large_err)]
 
 use std::collections::{BTreeMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -44,13 +44,15 @@ use fastvideo_serve_kit::events::{apply_event, cancel_job, JobEvent};
 use fastvideo_serve_kit::{D1JobStore, ServeCtx};
 use serde_json::{json, Value};
 
-use crate::gate::ServiceGate;
 use crate::front::envelope::Envelope;
+use crate::gate::ServiceGate;
 use fastvideo_dispatch_proto::TOKEN_HEADER;
 
 /// Paths a worker serves without the internal token.
 fn open_path(p: &str) -> bool {
-    matches!(p, "/ping" | "/health" | "/healthz" | "/" | "/metrics") || p.starts_with("/files/") || p.starts_with("/uploads/")
+    matches!(p, "/ping" | "/health" | "/healthz" | "/" | "/metrics")
+        || p.starts_with("/files/")
+        || p.starts_with("/uploads/")
 }
 
 fn ct_eq(a: &[u8], b: &[u8]) -> bool {
@@ -70,7 +72,9 @@ fn internal_path(p: &str) -> bool {
 /// request runs with the capability's verdict, and the answer's `Location`
 /// (the ingest resource) carries the capability on (trickle ICE, `DELETE`).
 pub fn token_layer(router: Router, token: Arc<str>, direct: bool, front: bool) -> Router {
-    use fastvideo_dispatch_proto::front::{verify_cap, with_param, CAP_PARAM, CAP_PATH, EDGE_AUTH_HEADER};
+    use fastvideo_dispatch_proto::front::{
+        verify_cap, with_param, CAP_PARAM, CAP_PATH, EDGE_AUTH_HEADER,
+    };
     router.layer(axum::middleware::from_fn(move |mut req: Request<Body>, next: Next| {
         let token = token.clone();
         async move {
@@ -127,8 +131,18 @@ pub struct WorkerState {
 }
 
 impl WorkerState {
-    pub fn new(ctx: ServeCtx, gate: Arc<ServiceGate>, d1: Option<Arc<D1JobStore>>, worker_id: String, pool: Option<String>, queue_max: usize) -> Self {
-        let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(10)).build().unwrap_or_default();
+    pub fn new(
+        ctx: ServeCtx,
+        gate: Arc<ServiceGate>,
+        d1: Option<Arc<D1JobStore>>,
+        worker_id: String,
+        pool: Option<String>,
+        queue_max: usize,
+    ) -> Self {
+        let http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .unwrap_or_default();
         Self {
             ctx,
             gate,
@@ -145,7 +159,11 @@ impl WorkerState {
     }
 
     /// Shares the drain flag with the registration (which reports it).
-    pub fn with_drain(mut self, drained: Arc<AtomicBool>, registration: Option<Registration>) -> Self {
+    pub fn with_drain(
+        mut self,
+        drained: Arc<AtomicBool>,
+        registration: Option<Registration>,
+    ) -> Self {
         self.drained = drained;
         self.registration = registration;
         self
@@ -186,7 +204,11 @@ async fn undrain(State(st): State<Arc<WorkerState>>) -> Response {
 
 fn err(e: &ApiError) -> Response {
     let kind = serde_json::to_value(e.kind).unwrap_or(Value::Null);
-    let mut r = (StatusCode::from_u16(e.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), Json(json!({"error": {"kind": kind, "message": e.message}}))).into_response();
+    let mut r = (
+        StatusCode::from_u16(e.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        Json(json!({"error": {"kind": kind, "message": e.message}})),
+    )
+        .into_response();
     if let Some(s) = e.retry_after_s {
         r.headers_mut().insert("retry-after", s.into());
     }
@@ -206,8 +228,14 @@ pub fn routes(st: WorkerState) -> Router {
 /// ([`crate::edge_link`]).
 pub fn routes_shared(st: Arc<WorkerState>) -> Router {
     Router::new()
-        .route("/fv/v1/internal/jobs", post(take).layer(axum::extract::DefaultBodyLimit::max(ENVELOPE_MAX)))
-        .route("/fv/v1/internal/jobs/{id}", get(job_status).delete(job_cancel))
+        .route(
+            "/fv/v1/internal/jobs",
+            post(take).layer(axum::extract::DefaultBodyLimit::max(ENVELOPE_MAX)),
+        )
+        .route(
+            "/fv/v1/internal/jobs/{id}",
+            get(job_status).delete(job_cancel),
+        )
         .route("/fv/v1/internal/status", get(status))
         .route("/fv/v1/internal/drain", post(drain))
         .route("/fv/v1/internal/undrain", post(undrain))
@@ -238,10 +266,15 @@ async fn upload_bytes(State(st): State<Arc<WorkerState>>, Path(token): Path<Stri
             });
             let body = axum::body::Body::from_stream(chunks);
             let mut r = Response::new(body);
-            if let Some(m) = f.mime.as_deref().and_then(|m| axum::http::HeaderValue::from_str(m).ok()) {
+            if let Some(m) = f
+                .mime
+                .as_deref()
+                .and_then(|m| axum::http::HeaderValue::from_str(m).ok())
+            {
                 r.headers_mut().insert(axum::http::header::CONTENT_TYPE, m);
             }
-            r.headers_mut().insert(axum::http::header::CONTENT_LENGTH, f.bytes.into());
+            r.headers_mut()
+                .insert(axum::http::header::CONTENT_LENGTH, f.bytes.into());
             r
         }
         Err(e) => err(&ApiError::internal(format!("reading the upload: {e}"))),
@@ -264,7 +297,11 @@ async fn status(State(st): State<Arc<WorkerState>>) -> Response {
 pub fn status_json(st: &WorkerState) -> Value {
     let engine = st.gate.engine();
     let s = engine.stats();
-    let models: Vec<Value> = engine.caps().entries().map(|e| json!({"caps": e.caps, "recipe": e.recipe})).collect();
+    let models: Vec<Value> = engine
+        .caps()
+        .entries()
+        .map(|e| json!({"caps": e.caps, "recipe": e.recipe}))
+        .collect();
     json!({
         "object": "fv.worker",
         "worker_id": st.worker_id,
@@ -291,7 +328,8 @@ pub fn status_json(st: &WorkerState) -> Value {
 }
 
 fn parse_id(id: &str) -> Result<JobId, Response> {
-    id.parse::<JobId>().map_err(|_| err(&ApiError::not_found(format!("job `{id}` was not found"))))
+    id.parse::<JobId>()
+        .map_err(|_| err(&ApiError::not_found(format!("job `{id}` was not found"))))
 }
 
 /// `?wait_s=N&since=<status>`: a gateway waiting for the job's next status.
@@ -304,7 +342,11 @@ struct StatusWait {
 /// The longest a status wait holds the request.
 const STATUS_WAIT_MAX: Duration = Duration::from_secs(60);
 
-async fn job_status(State(st): State<Arc<WorkerState>>, Path(id): Path<String>, axum::extract::Query(q): axum::extract::Query<StatusWait>) -> Response {
+async fn job_status(
+    State(st): State<Arc<WorkerState>>,
+    Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<StatusWait>,
+) -> Response {
     let id = match parse_id(&id) {
         Ok(i) => i,
         Err(r) => return r,
@@ -381,23 +423,38 @@ enum FetchError {
 /// Puts one envelope input at `dst`: inline bytes, the client's URL (SSRF
 /// guard of ingestion, checked against the gateway's SHA-256), the shared
 /// store, or the signed URL.
-async fn fetch_one(st: &WorkerState, input: &crate::front::envelope::InputRef, dst: &std::path::Path) -> Result<(), FetchError> {
+async fn fetch_one(
+    st: &WorkerState,
+    input: &crate::front::envelope::InputRef,
+    dst: &std::path::Path,
+) -> Result<(), FetchError> {
     let other = FetchError::Other;
     if let Some(b64) = &input.inline {
         let data = base64::engine::general_purpose::STANDARD
             .decode(b64)
-            .map_err(|e| other(ApiError::invalid(format!("a dispatched input is not valid base64: {e}"))))?;
-        return tokio::fs::write(dst, &data).await.map_err(|e| other(ApiError::internal(format!("writing a dispatched input: {e}"))));
+            .map_err(|e| {
+                other(ApiError::invalid(format!(
+                    "a dispatched input is not valid base64: {e}"
+                )))
+            })?;
+        return tokio::fs::write(dst, &data).await.map_err(|e| {
+            other(ApiError::internal(format!(
+                "writing a dispatched input: {e}"
+            )))
+        });
     }
     if let Some(src) = &input.source {
         let r = async {
-            let url = url::Url::parse(src).map_err(|e| ApiError::invalid(format!("a passed-through input URL: {e}")))?;
+            let url = url::Url::parse(src)
+                .map_err(|e| ApiError::invalid(format!("a passed-through input URL: {e}")))?;
             let kind = input.kind.unwrap_or(fastvideo_protocol::MediaKind::Video);
             fastvideo_serve_kit::ingest::fetch_public(&url, kind, &st.ingest, dst, "input").await?;
             if let Some(want) = &input.sha256 {
                 let got = crate::front::envelope::sha256_file(dst).await?;
                 if !got.eq_ignore_ascii_case(want) {
-                    return Err(ApiError::invalid("a passed-through input changed since the gateway fetched it"));
+                    return Err(ApiError::invalid(
+                        "a passed-through input changed since the gateway fetched it",
+                    ));
                 }
             }
             Ok(())
@@ -409,20 +466,32 @@ async fn fetch_one(st: &WorkerState, input: &crate::front::envelope::InputRef, d
                 let _ = tokio::fs::remove_file(dst).await;
                 return Err(FetchError::Source(e));
             }
-            Err(e) => tracing::info!(error = %e.message, "worker: a passed-through input failed; using the store copy"),
+            Err(e) => {
+                tracing::info!(error = %e.message, "worker: a passed-through input failed; using the store copy")
+            }
         }
     }
     // The shared store first (R2, or a directory shared on one host):
     // no round trip through the gateway's public URL.
     if let Some(a) = &input.artifact {
         match st.ctx.artifacts().open(a).await {
-            Ok(fastvideo_serve_kit::artifacts::ArtifactBody::File(p)) if tokio::fs::copy(&p, dst).await.is_ok() => return Ok(()),
-            Ok(fastvideo_serve_kit::artifacts::ArtifactBody::Bytes(b)) if tokio::fs::write(dst, &b).await.is_ok() => return Ok(()),
+            Ok(fastvideo_serve_kit::artifacts::ArtifactBody::File(p))
+                if tokio::fs::copy(&p, dst).await.is_ok() =>
+            {
+                return Ok(())
+            }
+            Ok(fastvideo_serve_kit::artifacts::ArtifactBody::Bytes(b))
+                if tokio::fs::write(dst, &b).await.is_ok() =>
+            {
+                return Ok(())
+            }
             _ => {}
         }
     }
     if input.url.is_empty() {
-        return Err(other(ApiError::internal("a dispatched input has no source")));
+        return Err(other(ApiError::internal(
+            "a dispatched input has no source",
+        )));
     }
     let resp = st
         .http
@@ -430,12 +499,29 @@ async fn fetch_one(st: &WorkerState, input: &crate::front::envelope::InputRef, d
         .timeout(Duration::from_secs(300))
         .send()
         .await
-        .map_err(|e| other(ApiError::internal(format!("fetching a dispatched input: {}", e.without_url()))))?;
+        .map_err(|e| {
+            other(ApiError::internal(format!(
+                "fetching a dispatched input: {}",
+                e.without_url()
+            )))
+        })?;
     if !resp.status().is_success() {
-        return Err(other(ApiError::internal(format!("fetching a dispatched input answered {}", resp.status()))));
+        return Err(other(ApiError::internal(format!(
+            "fetching a dispatched input answered {}",
+            resp.status()
+        ))));
     }
-    let bytes = resp.bytes().await.map_err(|e| other(ApiError::internal(format!("reading a dispatched input: {}", e.without_url()))))?;
-    tokio::fs::write(dst, &bytes).await.map_err(|e| other(ApiError::internal(format!("writing a dispatched input: {e}"))))
+    let bytes = resp.bytes().await.map_err(|e| {
+        other(ApiError::internal(format!(
+            "reading a dispatched input: {}",
+            e.without_url()
+        )))
+    })?;
+    tokio::fs::write(dst, &bytes).await.map_err(|e| {
+        other(ApiError::internal(format!(
+            "writing a dispatched input: {e}"
+        )))
+    })
 }
 
 /// Puts the envelope's inputs in place (all at once: one store round trip
@@ -445,17 +531,29 @@ async fn fetch_inputs(st: &WorkerState, env: &Envelope, job: &mut Job) -> Result
         return Ok(());
     }
     let dir = st.ctx.inputs_dir(job.id);
-    tokio::fs::create_dir_all(&dir).await.map_err(|e| FetchError::Other(ApiError::internal(format!("inputs dir: {e}"))))?;
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| FetchError::Other(ApiError::internal(format!("inputs dir: {e}"))))?;
     let t0 = std::time::Instant::now();
     let fetches = env.inputs.iter().enumerate().map(|(i, input)| {
         let dir = &dir;
         async move {
-            let name = input.path.file_name().and_then(|n| n.to_str()).map(str::to_owned).unwrap_or_else(|| format!("input-{i}"));
+            let name = input
+                .path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("input-{i}"));
             let dst = dir.join(format!("{i}-{name}"));
-            fetch_one(st, input, &dst).await.map(|()| (input.path.clone(), dst))
+            fetch_one(st, input, &dst)
+                .await
+                .map(|()| (input.path.clone(), dst))
         }
     });
-    let map: BTreeMap<PathBuf, PathBuf> = futures::future::try_join_all(fetches).await?.into_iter().collect();
+    let map: BTreeMap<PathBuf, PathBuf> = futures::future::try_join_all(fetches)
+        .await?
+        .into_iter()
+        .collect();
     let fetch_s = t0.elapsed().as_secs_f64();
     metrics::histogram!("fv_worker_input_fetch_seconds").record(fetch_s);
     let via = |w: &str| env.inputs.iter().filter(|i| i.via() == w).count();
@@ -477,7 +575,11 @@ async fn fetch_inputs(st: &WorkerState, env: &Envelope, job: &mut Job) -> Result
 
 /// Deletes the dispatched input artifacts once the job ends.
 fn cleanup_inputs(st: &Arc<WorkerState>, id: JobId, env: &Envelope) {
-    let arts: Vec<_> = env.inputs.iter().filter_map(|i| i.artifact.clone()).collect();
+    let arts: Vec<_> = env
+        .inputs
+        .iter()
+        .filter_map(|i| i.artifact.clone())
+        .collect();
     if arts.is_empty() {
         return;
     }
@@ -507,11 +609,27 @@ async fn take(State(st): State<Arc<WorkerState>>, Json(env): Json<Envelope>) -> 
 /// the dispatcher's fencing token (docs/serve/gateway-cloudflare.md, phase
 /// 2): the job is held and started at once and its row written behind,
 /// every write conditional on the lease (`D1JobStore::adopt_leased`).
-pub async fn take_envelope(st: &Arc<WorkerState>, env: Envelope, takeover: bool, lease: Option<u64>) -> Response {
+pub async fn take_envelope(
+    st: &Arc<WorkerState>,
+    env: Envelope,
+    takeover: bool,
+    lease: Option<u64>,
+) -> Response {
     let id = env.job.id;
     tracing::debug!(job = %id, "worker: envelope received");
-    if st.submitted.lock().unwrap_or_else(|p| p.into_inner()).contains(&id) {
-        let s = st.ctx.jobs().get(id).await.map(|j| j.status().as_str().to_owned()).unwrap_or_default();
+    if st
+        .submitted
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .contains(&id)
+    {
+        let s = st
+            .ctx
+            .jobs()
+            .get(id)
+            .await
+            .map(|j| j.status().as_str().to_owned())
+            .unwrap_or_default();
         return (StatusCode::OK, Json(json!({"id": id.to_string(), "status": s, "worker": st.worker_id, "duplicate": true}))).into_response();
     }
     if st.draining() {
@@ -523,7 +641,11 @@ pub async fn take_envelope(st: &Arc<WorkerState>, env: Envelope, takeover: bool,
     }
     let s = st.gate.engine().stats();
     if st.queue_max > 0 && s.queued_batch >= st.queue_max {
-        return err(&ApiError::queue_full(format!("worker queue is full ({} queued)", s.queued_batch)).with_retry_after(5));
+        return err(&ApiError::queue_full(format!(
+            "worker queue is full ({} queued)",
+            s.queued_batch
+        ))
+        .with_retry_after(5));
     }
     let mut job = env.job.clone();
     if let Err(e) = fetch_inputs(st, &env, &mut job).await {
@@ -553,11 +675,16 @@ pub async fn take_envelope(st: &Arc<WorkerState>, env: Envelope, takeover: bool,
         Ok(j) => j,
         Err(StoreError::AlreadyExists(_)) => {
             let _ = tokio::fs::remove_dir_all(st.ctx.inputs_dir(id)).await;
-            return err(&ApiError::conflict("the job is finished, cancelled, or held by another worker"));
+            return err(&ApiError::conflict(
+                "the job is finished, cancelled, or held by another worker",
+            ));
         }
         Err(e) => return err(&e.into()),
     };
-    st.submitted.lock().unwrap_or_else(|p| p.into_inner()).insert(id);
+    st.submitted
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(id);
     if let Err(e) = fastvideo_serve_kit::EngineGate::submit(st.gate.as_ref(), &job).await {
         tracing::warn!(job = %id, error = %e.message, "worker: engine refused a dispatched job");
         let _ = apply_event(&st.ctx, id, JobEvent::Failed(e.clone())).await;
@@ -565,12 +692,22 @@ pub async fn take_envelope(st: &Arc<WorkerState>, env: Envelope, takeover: bool,
     }
     cleanup_inputs(st, id, &env);
     tracing::info!(job = %id, attempt = env.attempt, pool = ?env.pool, "worker: took a dispatched job");
-    let status = st.ctx.jobs().get(id).await.map(|j| j.status().as_str().to_owned()).unwrap_or_else(|| "queued".into());
+    let status = st
+        .ctx
+        .jobs()
+        .get(id)
+        .await
+        .map(|j| j.status().as_str().to_owned())
+        .unwrap_or_else(|| "queued".into());
     // The load right after taking it (this job included): the gateway
     // places the next job of a burst on it without waiting for a probe.
     let s = st.gate.engine().stats();
     let load = json!({"running": s.running, "queued": s.queued_batch + s.queued_stream, "capacity": s.executors.max(1), "queue_max": st.queue_max});
-    (StatusCode::ACCEPTED, Json(json!({"id": id.to_string(), "status": status, "worker": st.worker_id, "load": load}))).into_response()
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({"id": id.to_string(), "status": status, "worker": st.worker_id, "load": load})),
+    )
+        .into_response()
 }
 
 /// A pod worker's registration in `gw_workers`.
@@ -666,7 +803,9 @@ mod registry_schema {
 
     /// Creates the tables (idempotent).
     pub async fn migrate(db: &D1Client) -> Result<(), D1Error> {
-        db.batch(TABLES.iter().map(|s| Stmt::raw(*s)).collect()).await.map(|_| ())
+        db.batch(TABLES.iter().map(|s| Stmt::raw(*s)).collect())
+            .await
+            .map(|_| ())
     }
 
     /// Milliseconds since the epoch (the unit of every time column).

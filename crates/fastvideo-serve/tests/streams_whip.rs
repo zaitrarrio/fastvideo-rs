@@ -26,7 +26,9 @@ use fastvideo_serve::config::{Config, JobBackend};
 use fastvideo_serve::{App, Overrides};
 use fastvideo_serve_kit::KeyRing;
 use fastvideo_webrtc::channel::ChannelPolicy;
-use fastvideo_webrtc::host::{AnswerOptions, AudioLayout, HostConfig, OfferOptions, Peer, PeerEvent, RtcHost};
+use fastvideo_webrtc::host::{
+    AnswerOptions, AudioLayout, HostConfig, OfferOptions, Peer, PeerEvent, RtcHost,
+};
 use fastvideo_webrtc::sdp::{Direction, MediaKind, Sdp};
 use fastvideo_webrtc::writer::TrackKind;
 use serde_json::{json, Value};
@@ -39,7 +41,11 @@ async fn app() -> App {
 }
 
 async fn app_with(extra: &[(&str, &str)]) -> App {
-    let dir = tempfile::Builder::new().prefix("fv-serve-streams-").tempdir().unwrap().keep();
+    let dir = tempfile::Builder::new()
+        .prefix("fv-serve-streams-")
+        .tempdir()
+        .unwrap()
+        .keep();
     let mut env = BTreeMap::new();
     env.insert("FV_API_KEYS".to_owned(), KeyRing::hash_hex(KEY));
     env.insert("FV_URL_SIGNING_KEY".to_owned(), "k".to_owned());
@@ -62,8 +68,16 @@ async fn app_with(extra: &[(&str, &str)]) -> App {
     a
 }
 
-async fn call(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, HeaderMap, Value) {
-    let mut b = Request::builder().method(method).uri(uri).header("authorization", format!("Bearer {KEY}"));
+async fn call(
+    app: &Router,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, HeaderMap, Value) {
+    let mut b = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("authorization", format!("Bearer {KEY}"));
     let req = match body {
         Some(v) => {
             b = b.header("content-type", "application/json");
@@ -96,19 +110,36 @@ struct Endpoint {
 async fn whip_post(State(m): State<Endpoint>, body: String) -> Response {
     m.rx.lock().unwrap().posts += 1;
     m.rx.lock().unwrap().offers.push(body.clone());
-    let audio = Sdp::parse(&body)
-        .ok()
-        .and_then(|s| s.media.iter().any(|x| x.kind() == MediaKind::Audio).then_some(AudioLayout::Stereo));
+    let audio = Sdp::parse(&body).ok().and_then(|s| {
+        s.media
+            .iter()
+            .any(|x| x.kind() == MediaKind::Audio)
+            .then_some(AudioLayout::Stereo)
+    });
     match m
         .host
-        .answer(&body, AnswerOptions { audio, channels: ChannelPolicy::none(), ..Default::default() })
+        .answer(
+            &body,
+            AnswerOptions {
+                audio,
+                channels: ChannelPolicy::none(),
+                ..Default::default()
+            },
+        )
         .await
     {
         Ok((peer, answer)) => {
             let id = peer.id();
             let rx = m.rx.clone();
             tokio::spawn(collect(peer, rx));
-            (StatusCode::CREATED, [("content-type", "application/sdp".to_string()), ("location", format!("whip/{id}"))], answer)
+            (
+                StatusCode::CREATED,
+                [
+                    ("content-type", "application/sdp".to_string()),
+                    ("location", format!("whip/{id}")),
+                ],
+                answer,
+            )
                 .into_response()
         }
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
@@ -118,10 +149,19 @@ async fn whip_post(State(m): State<Endpoint>, body: String) -> Response {
 async fn collect(mut peer: Peer, rx: Arc<Mutex<Rx>>) {
     while let Some(ev) = peer.next_event().await {
         match ev {
-            PeerEvent::Media { kind: TrackKind::Video, rtp_time, keyframe, data, .. } => {
-                rx.lock().unwrap().video.push((rtp_time, keyframe, data))
-            }
-            PeerEvent::Media { kind: TrackKind::Audio, rtp_time, data, .. } => rx.lock().unwrap().audio.push((rtp_time, data)),
+            PeerEvent::Media {
+                kind: TrackKind::Video,
+                rtp_time,
+                keyframe,
+                data,
+                ..
+            } => rx.lock().unwrap().video.push((rtp_time, keyframe, data)),
+            PeerEvent::Media {
+                kind: TrackKind::Audio,
+                rtp_time,
+                data,
+                ..
+            } => rx.lock().unwrap().audio.push((rtp_time, data)),
             PeerEvent::Closed(_) => break,
             _ => {}
         }
@@ -134,12 +174,17 @@ async fn whip_delete(State(m): State<Endpoint>, Path(_id): Path<String>) -> Stat
 }
 
 async fn endpoint() -> (String, Arc<Mutex<Rx>>) {
-    let host = RtcHost::bind(HostConfig::loopback(true, false)).await.unwrap();
+    let host = RtcHost::bind(HostConfig::loopback(true, false))
+        .await
+        .unwrap();
     let rx = Arc::new(Mutex::new(Rx::default()));
     let app = Router::new()
         .route("/live/whip", post(whip_post))
         .route("/live/whip/{id}", delete(whip_delete))
-        .with_state(Endpoint { host, rx: rx.clone() });
+        .with_state(Endpoint {
+            host,
+            rx: rx.clone(),
+        });
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
@@ -149,7 +194,10 @@ async fn endpoint() -> (String, Arc<Mutex<Rx>>) {
 async fn wait<F: Fn() -> bool>(what: &str, secs: u64, f: F) {
     let t0 = std::time::Instant::now();
     while !f() {
-        assert!(t0.elapsed() < Duration::from_secs(secs), "timed out waiting for {what}");
+        assert!(
+            t0.elapsed() < Duration::from_secs(secs),
+            "timed out waiting for {what}"
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
@@ -158,7 +206,11 @@ async fn wait<F: Fn() -> bool>(what: &str, secs: u64, f: F) {
 fn indices(video: &[(u64, bool, bytes::Bytes)]) -> Vec<u32> {
     let start = video.iter().position(|v| v.1).expect("an IDR");
     let aus: Vec<&[u8]> = video[start..].iter().map(|v| v.2.as_ref()).collect();
-    decode_rgb(&aus).unwrap().iter().filter_map(decode_frame_index).collect()
+    decode_rgb(&aus)
+        .unwrap()
+        .iter()
+        .filter_map(decode_frame_index)
+        .collect()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -166,7 +218,13 @@ async fn causal_stream_publishes_decodable_h264_over_whip() {
     let a = app().await;
     let (url, rx) = endpoint().await;
     // Busy / unknown / bad-body answers first.
-    let (s, _, _) = call(&a.router, "POST", "/fv/v1/streams", Some(json!({"model": "fake-sfwan", "whip_url": url}))).await;
+    let (s, _, _) = call(
+        &a.router,
+        "POST",
+        "/fv/v1/streams",
+        Some(json!({"model": "fake-sfwan", "whip_url": url})),
+    )
+    .await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "a causal stream needs a prompt");
     let body = json!({
         "model": "fake-sfwan", "whip_url": url, "prompt": "a lighthouse at dusk",
@@ -181,7 +239,10 @@ async fn causal_stream_publishes_decodable_h264_over_whip() {
     assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
     assert!(h.contains_key("retry-after"));
 
-    wait("48 video frames", 60, || rx.lock().unwrap().video.len() >= 48).await;
+    wait("48 video frames", 60, || {
+        rx.lock().unwrap().video.len() >= 48
+    })
+    .await;
     let (s, _, v) = call(&a.router, "GET", &format!("/fv/v1/streams/{id}"), None).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(v["status"]["state"], "streaming", "{v}");
@@ -213,8 +274,15 @@ async fn causal_stream_publishes_decodable_h264_over_whip() {
         assert!(rtps.windows(2).all(|w| w[1] > w[0]), "monotonic RTP");
     }
     let idx = indices(&rx.lock().unwrap().video);
-    assert!(idx.len() >= 24, "decoded {} frames with a readable index", idx.len());
-    assert!(idx.windows(2).all(|w| w[1] >= w[0]), "frames in order: {idx:?}");
+    assert!(
+        idx.len() >= 24,
+        "decoded {} frames with a readable index",
+        idx.len()
+    );
+    assert!(
+        idx.windows(2).all(|w| w[1] >= w[0]),
+        "frames in order: {idx:?}"
+    );
 
     // Optional: MediaMTX + WHEP viewer.
     if let Ok(mtx) = std::env::var("FV_TEST_MEDIAMTX") {
@@ -255,11 +323,19 @@ async fn clip_stream_publishes_av_and_takes_clip_commands() {
     {
         let r = rx.lock().unwrap();
         let offer = Sdp::parse(&r.offers[0]).unwrap();
-        let audio = offer.media.iter().find(|m| m.kind() == MediaKind::Audio).expect("audio m-line");
+        let audio = offer
+            .media
+            .iter()
+            .find(|m| m.kind() == MediaKind::Audio)
+            .expect("audio m-line");
         assert_eq!(audio.direction(), Direction::SendOnly);
         // Opus RTP time advances by 960 per 20 ms packet.
         let d: Vec<u64> = r.audio.windows(2).map(|w| w[1].0 - w[0].0).collect();
-        assert!(d.iter().filter(|x| **x == 960).count() * 10 >= d.len() * 9, "{:?}", &d[..d.len().min(20)]);
+        assert!(
+            d.iter().filter(|x| **x == 960).count() * 10 >= d.len() * 9,
+            "{:?}",
+            &d[..d.len().min(20)]
+        );
     }
     let (s, _, r) = call(
         &a.router,
@@ -273,8 +349,16 @@ async fn clip_stream_publishes_av_and_takes_clip_commands() {
     assert_eq!(r["reply"]["data"]["autoplay"], true);
     // The session's fast-h3 events are recorded.
     let (_, _, v) = call(&a.router, "GET", &format!("/fv/v1/streams/{id}"), None).await;
-    let names: Vec<&str> = v["events"].as_array().unwrap().iter().filter_map(|e| e["type"].as_str()).collect();
-    assert!(names.contains(&"clip_generated") && names.contains(&"clip_started"), "{names:?}");
+    let names: Vec<&str> = v["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["type"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"clip_generated") && names.contains(&"clip_started"),
+        "{names:?}"
+    );
     // max_seconds (3 s of video) ends the stream by itself.
     let t0 = std::time::Instant::now();
     loop {
@@ -292,9 +376,18 @@ async fn clip_stream_publishes_av_and_takes_clip_commands() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn causal_streams_end_at_the_session_limit() {
     // [streams] limits from the environment, small enough for real time.
-    let a = app_with(&[("FV_CAUSAL_DEFAULT_MAX_S", "2"), ("FV_CAUSAL_HARD_MAX_S", "3")]).await;
+    let a = app_with(&[
+        ("FV_CAUSAL_DEFAULT_MAX_S", "2"),
+        ("FV_CAUSAL_HARD_MAX_S", "3"),
+    ])
+    .await;
     let (_, _, caps) = call(&a.router, "GET", "/fv/v1/capabilities", None).await;
-    let sf = caps["models"].as_array().unwrap().iter().find(|m| m["caps"]["id"] == "fake-sfwan").unwrap();
+    let sf = caps["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["caps"]["id"] == "fake-sfwan")
+        .unwrap();
     assert_eq!(sf["stream_limits"]["default_max_s"], 2, "{sf}");
     assert_eq!(sf["stream_limits"]["hard_max_s"], 3);
     assert_eq!(sf["stream_limits"]["reset_restarts_clock"], true);
@@ -360,7 +453,9 @@ async fn mediamtx_roundtrip(router: &Router, base: &str) {
     let t0 = std::time::Instant::now();
     loop {
         let (_, _, v) = call(router, "GET", &format!("/fv/v1/streams/{id}"), None).await;
-        if v["status"]["state"] == "streaming" && v["status"]["frames_sent"].as_u64().unwrap_or(0) > 10 {
+        if v["status"]["state"] == "streaming"
+            && v["status"]["frames_sent"].as_u64().unwrap_or(0) > 10
+        {
             break;
         }
         assert!(t0.elapsed() < Duration::from_secs(30), "{v}");
@@ -368,7 +463,11 @@ async fn mediamtx_roundtrip(router: &Router, base: &str) {
     }
     let got = whep_view(&format!("{base}/fvtest/whep"), 48).await;
     let idx = indices(&got);
-    eprintln!("whep viewer: {} access units, {} decoded with a frame index", got.len(), idx.len());
+    eprintln!(
+        "whep viewer: {} access units, {} decoded with a frame index",
+        got.len(),
+        idx.len()
+    );
     assert!(idx.len() >= 24);
     // MediaMTX asks its WebRTC publishers for a keyframe (PLI) every 2 s.
     // Those must be answered by the periodic IDRs, not by forced ones (a
@@ -380,18 +479,26 @@ async fn mediamtx_roundtrip(router: &Router, base: &str) {
     eprintln!("mediamtx publish status after ~9 s: {}", v["status"]);
     let st = &v["status"];
     let n = |k: &str| st[k].as_u64().unwrap_or(0);
-    assert!(n("keyframe_requests") >= 3, "MediaMTX sent no periodic PLIs? {st}");
+    assert!(
+        n("keyframe_requests") >= 3,
+        "MediaMTX sent no periodic PLIs? {st}"
+    );
     // At most the reader joining (MediaMTX asks for a keyframe then too)
     // may force one; before, every periodic PLI did.
     assert!(n("forced_idrs") <= 2, "periodic PLIs forced IDRs: {st}");
-    assert!(n("keyframes_sent") >= 4, "the 2 s GOP should give ~4 IDRs in 9 s: {st}");
+    assert!(
+        n("keyframes_sent") >= 4,
+        "the 2 s GOP should give ~4 IDRs in 9 s: {st}"
+    );
     let (s, _, _) = call(router, "DELETE", &format!("/fv/v1/streams/{id}"), None).await;
     assert_eq!(s, StatusCode::OK);
 }
 
 /// A WHEP viewer: recvonly offer, POST, collect `n` video access units.
 pub async fn whep_view(url: &str, n: usize) -> Vec<(u64, bool, bytes::Bytes)> {
-    let host = RtcHost::bind(HostConfig::loopback(true, false)).await.unwrap();
+    let host = RtcHost::bind(HostConfig::loopback(true, false))
+        .await
+        .unwrap();
     let (pending, offer) = host
         .offer(OfferOptions {
             video: Some(Direction::RecvOnly),
@@ -413,8 +520,17 @@ pub async fn whep_view(url: &str, n: usize) -> Vec<(u64, bool, bytes::Bytes)> {
     let mut out = Vec::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     while out.len() < n {
-        match tokio::time::timeout_at(deadline, peer.next_event()).await.expect("WHEP media") {
-            Some(PeerEvent::Media { kind: TrackKind::Video, rtp_time, keyframe, data, .. }) => out.push((rtp_time, keyframe, data)),
+        match tokio::time::timeout_at(deadline, peer.next_event())
+            .await
+            .expect("WHEP media")
+        {
+            Some(PeerEvent::Media {
+                kind: TrackKind::Video,
+                rtp_time,
+                keyframe,
+                data,
+                ..
+            }) => out.push((rtp_time, keyframe, data)),
             Some(PeerEvent::Closed(r)) => panic!("whep closed: {r:?}"),
             Some(_) => {}
             None => panic!("whep ended"),

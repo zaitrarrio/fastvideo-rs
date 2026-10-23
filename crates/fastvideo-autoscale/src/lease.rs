@@ -25,7 +25,13 @@ pub struct LeaseError(pub String);
 #[async_trait::async_trait]
 pub trait Lease: Send + Sync {
     /// Takes or renews the lease until `now_s + ttl_s`; true when `holder` has it.
-    async fn acquire(&self, name: &str, holder: &str, now_s: f64, ttl_s: f64) -> Result<bool, LeaseError>;
+    async fn acquire(
+        &self,
+        name: &str,
+        holder: &str,
+        now_s: f64,
+        ttl_s: f64,
+    ) -> Result<bool, LeaseError>;
     /// Gives it up (a shutting-down replica), if held.
     async fn release(&self, name: &str, holder: &str) -> Result<(), LeaseError>;
 }
@@ -39,7 +45,13 @@ pub struct MemoryLease {
 
 #[async_trait::async_trait]
 impl Lease for MemoryLease {
-    async fn acquire(&self, name: &str, holder: &str, now_s: f64, ttl_s: f64) -> Result<bool, LeaseError> {
+    async fn acquire(
+        &self,
+        name: &str,
+        holder: &str,
+        now_s: f64,
+        ttl_s: f64,
+    ) -> Result<bool, LeaseError> {
         let mut g = self.rows.lock().unwrap_or_else(|p| p.into_inner());
         match g.get(name) {
             Some((h, exp)) if h != holder && *exp >= now_s => Ok(false),
@@ -69,13 +81,20 @@ name TEXT PRIMARY KEY, holder TEXT NOT NULL, expires_at REAL NOT NULL, updated_a
 
 impl D1Lease {
     pub fn new(client: D1Client) -> Self {
-        Self { client, ready: tokio::sync::OnceCell::new() }
+        Self {
+            client,
+            ready: tokio::sync::OnceCell::new(),
+        }
     }
 
     async fn ensure_table(&self) -> Result<(), LeaseError> {
         self.ready
             .get_or_try_init(|| async {
-                self.client.query(Stmt::raw(LEASE_TABLE_SQL)).await.map(|_| ()).map_err(|e| LeaseError(e.to_string()))
+                self.client
+                    .query(Stmt::raw(LEASE_TABLE_SQL))
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| LeaseError(e.to_string()))
             })
             .await
             .map(|_| ())
@@ -84,7 +103,13 @@ impl D1Lease {
 
 #[async_trait::async_trait]
 impl Lease for D1Lease {
-    async fn acquire(&self, name: &str, holder: &str, now_s: f64, ttl_s: f64) -> Result<bool, LeaseError> {
+    async fn acquire(
+        &self,
+        name: &str,
+        holder: &str,
+        now_s: f64,
+        ttl_s: f64,
+    ) -> Result<bool, LeaseError> {
         self.ensure_table().await?;
         let upsert = Stmt::new(
             "INSERT INTO fv_autoscale_lease (name, holder, expires_at, updated_at) VALUES (?, ?, ?, ?) \
@@ -93,8 +118,15 @@ impl Lease for D1Lease {
              WHERE fv_autoscale_lease.holder = excluded.holder OR fv_autoscale_lease.expires_at < excluded.updated_at",
             vec![json!(name), json!(holder), json!(now_s + ttl_s), json!(now_s)],
         );
-        let select = Stmt::new("SELECT holder FROM fv_autoscale_lease WHERE name = ?", vec![json!(name)]);
-        let out = self.client.batch(vec![upsert, select]).await.map_err(|e| LeaseError(e.to_string()))?;
+        let select = Stmt::new(
+            "SELECT holder FROM fv_autoscale_lease WHERE name = ?",
+            vec![json!(name)],
+        );
+        let out = self
+            .client
+            .batch(vec![upsert, select])
+            .await
+            .map_err(|e| LeaseError(e.to_string()))?;
         let got = out
             .get(1)
             .and_then(|r| r.rows.first())
@@ -128,14 +160,29 @@ mod tests {
 
     async fn exercise(l: &dyn Lease) {
         assert!(l.acquire("as", "a", 100.0, 60.0).await.unwrap());
-        assert!(!l.acquire("as", "b", 110.0, 60.0).await.unwrap(), "b waits while a holds it");
-        assert!(l.acquire("as", "a", 150.0, 60.0).await.unwrap(), "a renews to 210");
+        assert!(
+            !l.acquire("as", "b", 110.0, 60.0).await.unwrap(),
+            "b waits while a holds it"
+        );
+        assert!(
+            l.acquire("as", "a", 150.0, 60.0).await.unwrap(),
+            "a renews to 210"
+        );
         assert!(!l.acquire("as", "b", 200.0, 60.0).await.unwrap());
-        assert!(l.acquire("as", "b", 211.0, 60.0).await.unwrap(), "expired: b takes over");
+        assert!(
+            l.acquire("as", "b", 211.0, 60.0).await.unwrap(),
+            "expired: b takes over"
+        );
         assert!(!l.acquire("as", "a", 212.0, 60.0).await.unwrap());
-        assert!(l.acquire("other", "a", 212.0, 60.0).await.unwrap(), "names are independent");
+        assert!(
+            l.acquire("other", "a", 212.0, 60.0).await.unwrap(),
+            "names are independent"
+        );
         l.release("as", "a").await.unwrap();
-        assert!(!l.acquire("as", "a", 213.0, 60.0).await.unwrap(), "release by a non-holder is a no-op");
+        assert!(
+            !l.acquire("as", "a", 213.0, 60.0).await.unwrap(),
+            "release by a non-holder is a no-op"
+        );
         l.release("as", "b").await.unwrap();
         assert!(l.acquire("as", "a", 214.0, 60.0).await.unwrap());
     }
@@ -150,6 +197,9 @@ mod tests {
         let m = MockD1::new();
         let client = D1Client::new(Arc::new(m.clone())).with_retry(RetryPolicy::immediate(3));
         exercise(&D1Lease::new(client)).await;
-        assert!(m.statements().iter().any(|s| s.contains("ON CONFLICT(name)")));
+        assert!(m
+            .statements()
+            .iter()
+            .any(|s| s.contains("ON CONFLICT(name)")));
     }
 }

@@ -21,8 +21,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use fastvideo_engine_service::{
-    spawn_causal_pacer, CausalCommand, CausalControl, CausalPacerConfig, CausalReply, CausalSession, CausalState,
-    PacedStream,
+    spawn_causal_pacer, CausalCommand, CausalControl, CausalPacerConfig, CausalReply,
+    CausalSession, CausalState, PacedStream,
 };
 use fastvideo_protocol::{ApiError, CausalLimits};
 use serde_json::{json, Map, Value};
@@ -39,7 +39,10 @@ pub struct CausalDriver {
 }
 
 fn state_msg(s: &CausalState) -> ServerMsg {
-    ServerMsg::broadcast("state_update", serde_json::to_value(s).unwrap_or(Value::Null))
+    ServerMsg::broadcast(
+        "state_update",
+        serde_json::to_value(s).unwrap_or(Value::Null),
+    )
 }
 
 impl CausalDriver {
@@ -85,7 +88,8 @@ impl CausalDriver {
     }
 
     fn apply_pause(&self) {
-        let paused = self.user_paused.load(Ordering::Relaxed) || self.peers.load(Ordering::Relaxed) == 0;
+        let paused =
+            self.user_paused.load(Ordering::Relaxed) || self.peers.load(Ordering::Relaxed) == 0;
         self.control.set_paused(paused);
     }
 }
@@ -93,9 +97,15 @@ impl CausalDriver {
 /// A validated wire command (see [`crate::commands`]) → [`CausalCommand`].
 pub fn to_command(name: &str, a: &Map<String, Value>) -> Option<CausalCommand> {
     Some(match name {
-        "set_prompt" => CausalCommand::SetPrompt { prompt: a.get("prompt")?.as_str()?.to_owned() },
-        "set_paused" => CausalCommand::SetPaused { paused: a.get("paused")?.as_bool()? },
-        "set_seed" => CausalCommand::SetSeed { seed: a.get("seed")?.as_u64()? },
+        "set_prompt" => CausalCommand::SetPrompt {
+            prompt: a.get("prompt")?.as_str()?.to_owned(),
+        },
+        "set_paused" => CausalCommand::SetPaused {
+            paused: a.get("paused")?.as_bool()?,
+        },
+        "set_seed" => CausalCommand::SetSeed {
+            seed: a.get("seed")?.as_u64()?,
+        },
         "reset" => CausalCommand::Reset,
         "get_state" => CausalCommand::GetState,
         _ => return None,
@@ -106,7 +116,10 @@ pub fn to_command(name: &str, a: &Map<String, Value>) -> Option<CausalCommand> {
 impl Driver for CausalDriver {
     async fn command(&self, _conn: u32, name: &str, args: Map<String, Value>) -> Outcome {
         let Some(cmd) = to_command(name, &args) else {
-            return Outcome::Error { code: "invalid_command".into(), message: format!("unknown command `{name}`") };
+            return Outcome::Error {
+                code: "invalid_command".into(),
+                message: format!("unknown command `{name}`"),
+            };
         };
         let get = matches!(cmd, CausalCommand::GetState);
         let pause = match &cmd {
@@ -122,13 +135,19 @@ impl Driver for CausalDriver {
             CausalReply::StateUpdate(mut s) => {
                 s.paused = self.user_paused.load(Ordering::Relaxed);
                 if get {
-                    return Outcome::Reply("state_update".into(), serde_json::to_value(&s).unwrap_or(Value::Null));
+                    return Outcome::Reply(
+                        "state_update".into(),
+                        serde_json::to_value(&s).unwrap_or(Value::Null),
+                    );
                 }
                 self.out.broadcast(state_msg(&s));
                 Outcome::Ack
             }
             CausalReply::CommandError { command, reason } => {
-                self.out.broadcast(ServerMsg::broadcast("command_error", json!({"command": command, "reason": reason})));
+                self.out.broadcast(ServerMsg::broadcast(
+                    "command_error",
+                    json!({"command": command, "reason": reason}),
+                ));
                 Outcome::Ack
             }
         }
@@ -161,10 +180,19 @@ mod tests {
             to_command("set_prompt", &m(json!({"prompt": "p"}))),
             Some(CausalCommand::SetPrompt { prompt: "p".into() })
         );
-        assert_eq!(to_command("set_paused", &m(json!({"paused": true}))), Some(CausalCommand::SetPaused { paused: true }));
-        assert_eq!(to_command("set_seed", &m(json!({"seed": 3}))), Some(CausalCommand::SetSeed { seed: 3 }));
+        assert_eq!(
+            to_command("set_paused", &m(json!({"paused": true}))),
+            Some(CausalCommand::SetPaused { paused: true })
+        );
+        assert_eq!(
+            to_command("set_seed", &m(json!({"seed": 3}))),
+            Some(CausalCommand::SetSeed { seed: 3 })
+        );
         assert_eq!(to_command("reset", &Map::new()), Some(CausalCommand::Reset));
-        assert_eq!(to_command("get_state", &Map::new()), Some(CausalCommand::GetState));
+        assert_eq!(
+            to_command("get_state", &Map::new()),
+            Some(CausalCommand::GetState)
+        );
         assert_eq!(to_command("enqueue", &Map::new()), None);
     }
 }

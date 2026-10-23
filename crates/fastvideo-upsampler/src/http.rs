@@ -25,7 +25,14 @@ impl std::fmt::Debug for OpenAiChat {
         f.debug_struct("OpenAiChat")
             .field("url", &self.url)
             .field("model", &self.model)
-            .field("api_key", &if self.api_key.is_some() { "<redacted>" } else { "<unset>" })
+            .field(
+                "api_key",
+                &if self.api_key.is_some() {
+                    "<redacted>"
+                } else {
+                    "<unset>"
+                },
+            )
             .finish()
     }
 }
@@ -34,10 +41,16 @@ impl OpenAiChat {
     /// `base_url` is the API root (`https://api.openai.com/v1`,
     /// `http://127.0.0.1:8000/v1`, …); `/chat/completions` is appended.
     /// No key: no `authorization` header (a local server without auth).
-    pub fn new(base_url: &str, api_key: Option<String>, model: &str) -> Result<Self, UpsampleError> {
+    pub fn new(
+        base_url: &str,
+        api_key: Option<String>,
+        model: &str,
+    ) -> Result<Self, UpsampleError> {
         let base = base_url.trim().trim_end_matches('/');
         if !(base.starts_with("http://") || base.starts_with("https://")) {
-            return Err(UpsampleError::Unavailable(format!("base_url must be an http(s) URL, got `{base}`")));
+            return Err(UpsampleError::Unavailable(format!(
+                "base_url must be an http(s) URL, got `{base}`"
+            )));
         }
         if model.trim().is_empty() {
             return Err(UpsampleError::Unavailable("no model configured".into()));
@@ -63,7 +76,11 @@ impl OpenAiChat {
             json!(req.user)
         } else {
             let mut parts = vec![json!({"type": "text", "text": req.user})];
-            parts.extend(req.images.iter().map(|u| json!({"type": "image_url", "image_url": {"url": u}})));
+            parts.extend(
+                req.images
+                    .iter()
+                    .map(|u| json!({"type": "image_url", "image_url": {"url": u}})),
+            );
             Value::Array(parts)
         };
         let mut body = json!({
@@ -83,7 +100,10 @@ impl OpenAiChat {
 
 /// `choices[0].message.content` of a chat-completions answer.
 pub fn content_of(v: &Value) -> Result<String, UpsampleError> {
-    match v.pointer("/choices/0/message/content").and_then(Value::as_str) {
+    match v
+        .pointer("/choices/0/message/content")
+        .and_then(Value::as_str)
+    {
         Some(s) if !s.is_empty() => Ok(s.to_owned()),
         _ => Err(UpsampleError::NoContent),
     }
@@ -96,11 +116,20 @@ impl ChatBackend for OpenAiChat {
         if let Some(k) = &self.api_key {
             rb = rb.bearer_auth(k);
         }
-        let resp = rb.send().await.map_err(|e| UpsampleError::Transport(e.without_url().to_string()))?;
+        let resp = rb
+            .send()
+            .await
+            .map_err(|e| UpsampleError::Transport(e.without_url().to_string()))?;
         let status = resp.status();
-        let text = resp.text().await.map_err(|e| UpsampleError::Transport(e.without_url().to_string()))?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| UpsampleError::Transport(e.without_url().to_string()))?;
         if !status.is_success() {
-            return Err(UpsampleError::Status { status: status.as_u16(), body: clip(&text, 500) });
+            return Err(UpsampleError::Status {
+                status: status.as_u16(),
+                body: clip(&text, 500),
+            });
         }
         let v: Value = serde_json::from_str(&text)
             .map_err(|e| UpsampleError::BadOutput(format!("the answer is not JSON: {e}")))?;
@@ -119,7 +148,8 @@ impl ChatBackend for OpenAiChat {
             return None;
         }
         let n = self.tokenize_once(text).await;
-        self.tokenize.store(if n.is_some() { 1 } else { 2 }, Ordering::Relaxed);
+        self.tokenize
+            .store(if n.is_some() { 1 } else { 2 }, Ordering::Relaxed);
         if n.is_none() {
             tracing::info!(url = %self.tokenize_url, "upsampler: the LLM server has no usable /tokenize; token counts are estimated");
         }

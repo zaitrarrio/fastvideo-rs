@@ -8,10 +8,7 @@
 use fastvideo_protocol::{ApiError, GapId};
 
 /// Path segments of the refused endpoints.
-pub const STUB_ENDPOINTS: [&str; 2] = [
-    "video-to-video-hdr",
-    "video-to-video-reframe",
-];
+pub const STUB_ENDPOINTS: [&str; 2] = ["video-to-video-hdr", "video-to-video-reframe"];
 
 /// The refusal every stub answers.
 pub fn refused() -> ApiError {

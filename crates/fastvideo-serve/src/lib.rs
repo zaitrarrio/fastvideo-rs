@@ -34,29 +34,29 @@
 pub mod adapters;
 pub mod admin_token;
 pub mod app;
+/// A worker's socket to its pool's Durable Object (`[dispatch] do_url`,
+/// docs/serve/gateway-cloudflare.md).
+#[cfg(feature = "http-client")]
+pub mod arbiter;
 pub mod build_info;
 pub mod config;
 pub mod console;
 pub mod deploy;
 #[cfg(all(feature = "fal", feature = "webrtc"))]
 pub mod director;
-/// A worker's socket to its pool's Durable Object (`[dispatch] do_url`,
-/// docs/serve/gateway-cloudflare.md).
-#[cfg(feature = "http-client")]
-pub mod arbiter;
-#[cfg(feature = "http-client")]
-pub mod edge_link;
-/// An API front behind the edge Worker (docs/serve/edge-control-plane.md).
-#[cfg(feature = "http-client")]
-pub mod front;
 /// The edge on the host: family objects, the registry and the public front
 /// in one process (tests, the compat suites, `fv-edge-local`).
 #[cfg(feature = "http-client")]
 pub mod edge_host;
+#[cfg(feature = "http-client")]
+pub mod edge_link;
 /// Edge sessions held here and the local sessions they stand for.
 pub mod edge_sessions;
 pub mod encoders;
 pub mod flags;
+/// An API front behind the edge Worker (docs/serve/edge-control-plane.md).
+#[cfg(feature = "http-client")]
+pub mod front;
 pub mod gate;
 pub mod health;
 /// Native WHIP ingest into duplex models (`/fv/v1/streams/ingest`).
@@ -67,23 +67,23 @@ pub mod metrics;
 pub mod moderation;
 pub mod multiworker;
 pub mod native;
-pub mod stream_outputs;
 #[cfg(feature = "reactor")]
 pub mod reactor;
+pub mod router;
 #[cfg(feature = "webrtc")]
 pub mod rtc;
-pub mod router;
+pub mod segments;
 pub mod shutdown;
 pub mod status;
 pub mod storage;
-pub mod segments;
+pub mod stream_outputs;
 pub mod streams;
 pub mod tokens;
 pub mod trace_http;
-pub mod whip;
 /// The worker role behind a gateway (`server.role = "worker"`).
 #[cfg(feature = "http-client")]
 pub mod upload;
+pub mod whip;
 #[cfg(feature = "http-client")]
 pub mod worker;
 

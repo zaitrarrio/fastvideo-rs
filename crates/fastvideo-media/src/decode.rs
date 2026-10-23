@@ -64,8 +64,17 @@ pub struct VideoDecoderConfig {
 
 impl VideoDecoderConfig {
     pub fn validate(&self) -> Result<()> {
-        if self.width < 2 || self.height < 2 || self.width % 2 != 0 || self.height % 2 != 0 || self.width > 8192 || self.height > 8192 {
-            return Err(MediaError::invalid(format!("decode size {}x{} (even sides 2..8192)", self.width, self.height)));
+        if self.width < 2
+            || self.height < 2
+            || self.width % 2 != 0
+            || self.height % 2 != 0
+            || self.width > 8192
+            || self.height > 8192
+        {
+            return Err(MediaError::invalid(format!(
+                "decode size {}x{} (even sides 2..8192)",
+                self.width, self.height
+            )));
         }
         Ok(())
     }
@@ -85,8 +94,28 @@ impl VideoDecoderConfig {
             "scale={w}:{h}:force_original_aspect_ratio=decrease:flags=bilinear,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1"
         );
         [
-            "-probesize", "32", "-analyzeduration", "0", "-flags", "low_delay", "-threads", "1", "-f", demux, "-i",
-            "pipe:0", "-an", "-vf", &vf, "-fps_mode", "passthrough", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1",
+            "-probesize",
+            "32",
+            "-analyzeduration",
+            "0",
+            "-flags",
+            "low_delay",
+            "-threads",
+            "1",
+            "-f",
+            demux,
+            "-i",
+            "pipe:0",
+            "-an",
+            "-vf",
+            &vf,
+            "-fps_mode",
+            "passthrough",
+            "-pix_fmt",
+            "rgb24",
+            "-f",
+            "rawvideo",
+            "pipe:1",
         ]
         .map(String::from)
         .to_vec()
@@ -240,13 +269,20 @@ struct PoolInner {
 
 impl std::fmt::Debug for DecoderPool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DecoderPool").field("enabled", &self.0.enabled).field("warm", &self.warm()).finish()
+        f.debug_struct("DecoderPool")
+            .field("enabled", &self.0.enabled)
+            .field("warm", &self.warm())
+            .finish()
     }
 }
 
 impl DecoderPool {
     pub fn new(enabled: bool) -> Self {
-        Self(Arc::new(PoolInner { enabled, warm: Mutex::new(Vec::new()), pending: Mutex::new(Vec::new()) }))
+        Self(Arc::new(PoolInner {
+            enabled,
+            warm: Mutex::new(Vec::new()),
+            pending: Mutex::new(Vec::new()),
+        }))
     }
 
     /// One session's pool; disabled with `FV_DECODER_SPARE=0`.
@@ -277,15 +313,17 @@ impl DecoderPool {
             pending.push(cfg);
         }
         let weak = Arc::downgrade(&self.0);
-        let r = std::thread::Builder::new().name("ffmpeg-decode-prewarm".into()).spawn(move || {
-            let p = spawn_decoder(&cfg);
-            let Some(inner) = weak.upgrade() else { return };
-            lock(&inner.pending).retain(|c| *c != cfg);
-            match p {
-                Ok(p) => lock(&inner.warm).push((cfg, p)),
-                Err(e) => tracing::warn!(error = %e, "cannot pre-start a video decoder"),
-            }
-        });
+        let r = std::thread::Builder::new()
+            .name("ffmpeg-decode-prewarm".into())
+            .spawn(move || {
+                let p = spawn_decoder(&cfg);
+                let Some(inner) = weak.upgrade() else { return };
+                lock(&inner.pending).retain(|c| *c != cfg);
+                match p {
+                    Ok(p) => lock(&inner.warm).push((cfg, p)),
+                    Err(e) => tracing::warn!(error = %e, "cannot pre-start a video decoder"),
+                }
+            });
         if r.is_err() {
             lock(&self.0.pending).retain(|c| *c != cfg);
         }
@@ -317,7 +355,10 @@ pub struct VideoDecoder {
 
 impl std::fmt::Debug for VideoDecoder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VideoDecoder").field("cfg", &self.cfg).field("stats", &self.stats).finish()
+        f.debug_struct("VideoDecoder")
+            .field("cfg", &self.cfg)
+            .field("stats", &self.stats)
+            .finish()
     }
 }
 
@@ -342,8 +383,20 @@ impl VideoDecoder {
             Some(p) => (p, true),
             None => (spawn_decoder(&cfg)?, false),
         };
-        tracing::debug!(codec = cfg.codec.as_str(), warm, ms = t0.elapsed().as_millis() as u64, "video decoder started");
-        let me = Self { cfg, cur: Some(cur), pool, pending: VecDeque::new(), index: 0, stats: DecodeStats::default() };
+        tracing::debug!(
+            codec = cfg.codec.as_str(),
+            warm,
+            ms = t0.elapsed().as_millis() as u64,
+            "video decoder started"
+        );
+        let me = Self {
+            cfg,
+            cur: Some(cur),
+            pool,
+            pending: VecDeque::new(),
+            index: 0,
+            stats: DecodeStats::default(),
+        };
         me.pool.prewarm(cfg);
         Ok(me)
     }
@@ -382,7 +435,12 @@ impl VideoDecoder {
         if warm {
             self.stats.warm_restarts += 1;
         }
-        tracing::info!(codec = self.cfg.codec.as_str(), warm, ms = t0.elapsed().as_millis() as u64, "video decoder restarted");
+        tracing::info!(
+            codec = self.cfg.codec.as_str(),
+            warm,
+            ms = t0.elapsed().as_millis() as u64,
+            "video decoder restarted"
+        );
         self.pool.prewarm(self.cfg);
         Ok(())
     }
@@ -395,7 +453,10 @@ impl VideoDecoder {
             InputVideoCodec::Vp8 => ivf_record(frame, pts_us),
             InputVideoCodec::H264 => h264_unit(frame),
         };
-        let cur = self.cur.as_mut().ok_or_else(|| MediaError::Decode("decoder finished".into()))?;
+        let cur = self
+            .cur
+            .as_mut()
+            .ok_or_else(|| MediaError::Decode("decoder finished".into()))?;
         match cur.write(&data) {
             Ok(()) => {
                 self.stats.frames_in += 1;
@@ -427,7 +488,9 @@ impl VideoDecoder {
     /// Pictures decoded so far (never blocks). A process that exited is
     /// replaced (its error is returned once).
     pub fn poll(&mut self) -> Result<Vec<DecodedPicture>> {
-        let Some(cur) = self.cur.as_mut() else { return Ok(Vec::new()) };
+        let Some(cur) = self.cur.as_mut() else {
+            return Ok(Vec::new());
+        };
         let (frames, ended) = cur.try_take()?;
         let mut out = Vec::with_capacity(frames.len());
         for f in frames {
@@ -458,7 +521,9 @@ impl VideoDecoder {
 
     /// EOF: every picture still in the decoder.
     pub fn finish(&mut self) -> Result<Vec<DecodedPicture>> {
-        let Some(cur) = self.cur.take() else { return Ok(Vec::new()) };
+        let Some(cur) = self.cur.take() else {
+            return Ok(Vec::new());
+        };
         let frames = cur.close("decode")?;
         Ok(frames.into_iter().filter_map(|f| self.picture(f)).collect())
     }
@@ -487,7 +552,10 @@ mod tests {
         let mut buf = h.to_vec();
         buf.extend(r);
         let mut done = false;
-        assert_eq!(crate::vp8::take_ivf_frames(&mut buf, &mut done).unwrap(), vec![vec![1, 2, 3]]);
+        assert_eq!(
+            crate::vp8::take_ivf_frames(&mut buf, &mut done).unwrap(),
+            vec![vec![1, 2, 3]]
+        );
     }
 
     #[test]
@@ -498,7 +566,10 @@ mod tests {
         let with_aud = [&H264_AUD[..], &idr[..]].concat();
         assert_eq!(h264_unit(&with_aud), [&idr[..], &H264_AUD[..]].concat());
         let short = [0u8, 0, 1, 0x09, 0xf0, 0, 0, 1, 0x41, 7];
-        assert_eq!(h264_unit(&short), [&[0u8, 0, 1, 0x41, 7][..], &H264_AUD[..]].concat());
+        assert_eq!(
+            h264_unit(&short),
+            [&[0u8, 0, 1, 0x41, 7][..], &H264_AUD[..]].concat()
+        );
         assert_eq!(h264_unit(&H264_AUD), H264_AUD.to_vec());
     }
 
@@ -522,10 +593,17 @@ mod tests {
 
     #[test]
     fn args_scale_and_pad_to_the_model_size() {
-        let c = VideoDecoderConfig { codec: InputVideoCodec::H264, width: 64, height: 36 };
+        let c = VideoDecoderConfig {
+            codec: InputVideoCodec::H264,
+            width: 64,
+            height: 36,
+        };
         let a = c.ffmpeg_args().join(" ");
         assert!(a.contains("-f h264 -i pipe:0"), "{a}");
-        assert!(a.contains("scale=64:36:force_original_aspect_ratio=decrease"), "{a}");
+        assert!(
+            a.contains("scale=64:36:force_original_aspect_ratio=decrease"),
+            "{a}"
+        );
         assert!(a.ends_with("-pix_fmt rgb24 -f rawvideo pipe:1"), "{a}");
         assert_eq!(c.frame_len(), 64 * 36 * 3);
         assert!(VideoDecoderConfig { width: 63, ..c }.validate().is_err());

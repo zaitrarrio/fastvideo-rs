@@ -44,7 +44,10 @@ fn marks() -> &'static Mutex<Option<Vec<Mark>>> {
 
 fn mark(what: impl Into<String>) {
     if let Some(v) = marks().lock().unwrap().as_mut() {
-        v.push(Mark { at: Instant::now(), what: what.into() });
+        v.push(Mark {
+            at: Instant::now(),
+            what: what.into(),
+        });
     }
 }
 
@@ -89,7 +92,8 @@ fn install_layer() {
     ONCE.get_or_init(|| {
         use tracing_subscriber::layer::SubscriberExt;
         use tracing_subscriber::Layer;
-        let sub = tracing_subscriber::registry().with(Rec.with_filter(tracing_subscriber::filter::LevelFilter::DEBUG));
+        let sub = tracing_subscriber::registry()
+            .with(Rec.with_filter(tracing_subscriber::filter::LevelFilter::DEBUG));
         let _ = tracing::subscriber::set_global_default(sub);
     });
 }
@@ -105,11 +109,20 @@ struct TimedD1 {
 
 fn sql_label(body: &Value) -> String {
     let one = |s: &Value| -> String {
-        let sql = s["sql"].as_str().unwrap_or("?").split_whitespace().collect::<Vec<_>>().join(" ");
+        let sql = s["sql"]
+            .as_str()
+            .unwrap_or("?")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         sql.chars().take(48).collect()
     };
     match body.get("batch").and_then(Value::as_array) {
-        Some(b) => format!("batch[{}] {}", b.len(), b.first().map(one).unwrap_or_default()),
+        Some(b) => format!(
+            "batch[{}] {}",
+            b.len(),
+            b.first().map(one).unwrap_or_default()
+        ),
         None => one(body),
     }
 }
@@ -136,14 +149,23 @@ impl fastvideo_protocol::UrlSigner for R2Mock {
     fn url_for(&self, a: &fastvideo_protocol::Artifact, ttl: Duration) -> url::Url {
         fastvideo_protocol::UrlSigner::url_for(&self.inner, a, ttl)
     }
-    fn url_issued(&self, a: &fastvideo_protocol::Artifact, issued: time::OffsetDateTime, ttl: Duration) -> url::Url {
+    fn url_issued(
+        &self,
+        a: &fastvideo_protocol::Artifact,
+        issued: time::OffsetDateTime,
+        ttl: Duration,
+    ) -> url::Url {
         fastvideo_protocol::UrlSigner::url_issued(&self.inner, a, issued, ttl)
     }
 }
 
 #[async_trait::async_trait]
 impl fastvideo_serve_kit::ArtifactStore for R2Mock {
-    async fn put(&self, src: &std::path::Path, meta: fastvideo_serve_kit::ArtifactMeta) -> Result<fastvideo_protocol::Artifact, fastvideo_protocol::ApiError> {
+    async fn put(
+        &self,
+        src: &std::path::Path,
+        meta: fastvideo_serve_kit::ArtifactMeta,
+    ) -> Result<fastvideo_protocol::Artifact, fastvideo_protocol::ApiError> {
         mark("r2 > PUT");
         tokio::time::sleep(self.put).await;
         let r = self.inner.put(src, meta).await;
@@ -156,7 +178,10 @@ impl fastvideo_serve_kit::ArtifactStore for R2Mock {
     fn signer(&self) -> &dyn fastvideo_protocol::UrlSigner {
         self
     }
-    async fn open(&self, a: &fastvideo_protocol::Artifact) -> Result<fastvideo_serve_kit::ArtifactBody, fastvideo_protocol::ApiError> {
+    async fn open(
+        &self,
+        a: &fastvideo_protocol::Artifact,
+    ) -> Result<fastvideo_serve_kit::ArtifactBody, fastvideo_protocol::ApiError> {
         self.inner.open(a).await
     }
 }
@@ -184,7 +209,17 @@ struct Scn {
 
 impl Scn {
     fn new(name: &'static str, d1_ms: u64) -> Self {
-        Self { name, d1_ms, r2_put_ms: 0, x264: false, progress_ms: 1000, heartbeat_s: 60, watch_poll_ms: 1000, poll_ms: 20, step_ms: STEP_MS }
+        Self {
+            name,
+            d1_ms,
+            r2_put_ms: 0,
+            x264: false,
+            progress_ms: 1000,
+            heartbeat_s: 60,
+            watch_poll_ms: 1000,
+            poll_ms: 20,
+            step_ms: STEP_MS,
+        }
     }
     fn work_ms(&self) -> f64 {
         (self.step_ms * STEPS) as f64
@@ -199,13 +234,20 @@ struct Shared {
 }
 
 fn tmp(tag: &str) -> PathBuf {
-    tempfile::Builder::new().prefix(&format!("fv-overhead-{tag}-")).tempdir().unwrap().keep()
+    tempfile::Builder::new()
+        .prefix(&format!("fv-overhead-{tag}-"))
+        .tempdir()
+        .unwrap()
+        .keep()
 }
 
 fn base_config(tag: &str, sh: &Shared, s: &Scn) -> Config {
     let mut env = BTreeMap::new();
     env.insert("FV_API_KEYS".to_owned(), KeyRing::hash_hex(KEY));
-    env.insert("FV_URL_SIGNING_KEY".to_owned(), "shared-signing-key".to_owned());
+    env.insert(
+        "FV_URL_SIGNING_KEY".to_owned(),
+        "shared-signing-key".to_owned(),
+    );
     env.insert("FV_STATE_DIR".to_owned(), tmp(tag).display().to_string());
     env.insert("FV_INTERNAL_TOKEN".to_owned(), TOKEN.to_owned());
     env.insert("FV_ARTIFACTS_DIR".to_owned(), sh.arts.display().to_string());
@@ -249,16 +291,39 @@ async fn listen() -> (tokio::net::TcpListener, String) {
 }
 
 async fn serve(c: Config, sh: &Shared, listener: tokio::net::TcpListener, base: String) -> Running {
-    let d1 = D1Client::new(Arc::new(TimedD1 { mock: sh.mock.clone(), delay: sh.d1_delay })).with_retry(fastvideo_serve_kit::d1::RetryPolicy::immediate(1));
-    let urls = fastvideo_serve_kit::artifacts::LocalUrls { public_base: base.parse().unwrap(), key: fastvideo_serve_kit::UrlKey::new("shared-signing-key") };
-    let arts: Arc<dyn fastvideo_serve_kit::ArtifactStore> = Arc::new(R2Mock { inner: fastvideo_serve_kit::LocalArtifactStore::new(sh.arts.clone(), urls), put: sh.r2_put });
-    let app = App::build(c, Overrides { d1: Some(d1), artifacts: Some(arts), ..Default::default() }).await.unwrap();
+    let d1 = D1Client::new(Arc::new(TimedD1 {
+        mock: sh.mock.clone(),
+        delay: sh.d1_delay,
+    }))
+    .with_retry(fastvideo_serve_kit::d1::RetryPolicy::immediate(1));
+    let urls = fastvideo_serve_kit::artifacts::LocalUrls {
+        public_base: base.parse().unwrap(),
+        key: fastvideo_serve_kit::UrlKey::new("shared-signing-key"),
+    };
+    let arts: Arc<dyn fastvideo_serve_kit::ArtifactStore> = Arc::new(R2Mock {
+        inner: fastvideo_serve_kit::LocalArtifactStore::new(sh.arts.clone(), urls),
+        put: sh.r2_put,
+    });
+    let app = App::build(
+        c,
+        Overrides {
+            d1: Some(d1),
+            artifacts: Some(arts),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     app.gate.engine().wait_ready().await;
     let router = app.router.clone();
     let task = tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
     });
-    Running { _app: app, base, task }
+    Running {
+        _app: app,
+        base,
+        task,
+    }
 }
 
 /// The server the client talks to.
@@ -279,7 +344,9 @@ async fn setup(s: &Scn) -> Setup {
     c.server.public_base_url = Some(base.clone());
     engine_config(&mut c, s);
     c.validate().unwrap();
-    Setup { entry: serve(c, &sh, l, base).await }
+    Setup {
+        entry: serve(c, &sh, l, base).await,
+    }
 }
 
 // ---- one job -----------------------------------------------------------------
@@ -294,7 +361,11 @@ struct Seen {
     webhook: Option<f64>,
 }
 
-async fn webhook_sink() -> (String, tokio::sync::mpsc::UnboundedReceiver<Instant>, tokio::task::JoinHandle<()>) {
+async fn webhook_sink() -> (
+    String,
+    tokio::sync::mpsc::UnboundedReceiver<Instant>,
+    tokio::task::JoinHandle<()>,
+) {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let (l, base) = listen().await;
     let app = axum::Router::new().route(
@@ -303,7 +374,10 @@ async fn webhook_sink() -> (String, tokio::sync::mpsc::UnboundedReceiver<Instant
             let tx = tx.clone();
             async move {
                 let v: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-                mark(format!("client: webhook received ({})", v["status"].as_str().unwrap_or("?")));
+                mark(format!(
+                    "client: webhook received ({})",
+                    v["status"].as_str().unwrap_or("?")
+                ));
                 let _ = tx.send(Instant::now());
                 "ok"
             }
@@ -332,7 +406,9 @@ async fn one_job(s: &Scn) -> (Seen, Vec<Mark>) {
     let ms = |t: Instant| (t - t0).as_secs_f64() * 1e3;
     mark("client: submit");
     let r = c
-        .post(format!("{base}/minimax/h3-turbo/text-to-video?fal_webhook={hook}"))
+        .post(format!(
+            "{base}/minimax/h3-turbo/text-to-video?fal_webhook={hook}"
+        ))
         .header("authorization", &auth)
         .json(&json!({"prompt": format!("overhead {}", s.name), "seed": 1}))
         .send()
@@ -342,13 +418,25 @@ async fn one_job(s: &Scn) -> (Seen, Vec<Mark>) {
     let v: Value = r.json().await.unwrap();
     assert_eq!(code, 200, "{v}");
     mark("client: submit answered");
-    let mut seen = Seen { accepted: ms(Instant::now()), ..Seen::default() };
+    let mut seen = Seen {
+        accepted: ms(Instant::now()),
+        ..Seen::default()
+    };
     let rid = v["request_id"].as_str().unwrap().to_owned();
     // SSE: fal's status stream.
     let sse = {
-        let (c, auth, url) = (c.clone(), auth.clone(), format!("{base}/minimax/h3-turbo/requests/{rid}/status/stream"));
+        let (c, auth, url) = (
+            c.clone(),
+            auth.clone(),
+            format!("{base}/minimax/h3-turbo/requests/{rid}/status/stream"),
+        );
         tokio::spawn(async move {
-            let mut r = c.get(url).header("authorization", auth).send().await.unwrap();
+            let mut r = c
+                .get(url)
+                .header("authorization", auth)
+                .send()
+                .await
+                .unwrap();
             let mut buf = String::new();
             while let Ok(Some(chunk)) = r.chunk().await {
                 buf.push_str(&String::from_utf8_lossy(&chunk));
@@ -362,7 +450,12 @@ async fn one_job(s: &Scn) -> (Seen, Vec<Mark>) {
     };
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        let r = c.get(format!("{base}/minimax/h3-turbo/requests/{rid}/status")).header("authorization", &auth).send().await.unwrap();
+        let r = c
+            .get(format!("{base}/minimax/h3-turbo/requests/{rid}/status"))
+            .header("authorization", &auth)
+            .send()
+            .await
+            .unwrap();
         let v: Value = r.json().await.unwrap_or(Value::Null);
         match v["status"].as_str() {
             Some("IN_PROGRESS") if seen.poll_running.is_none() => {
@@ -380,19 +473,34 @@ async fn one_job(s: &Scn) -> (Seen, Vec<Mark>) {
         assert!(Instant::now() < deadline, "the job never finished: {v}");
         tokio::time::sleep(Duration::from_millis(s.poll_ms)).await;
     }
-    seen.sse_done = tokio::time::timeout(Duration::from_secs(10), sse).await.ok().and_then(|r| r.ok().flatten()).map(ms);
-    seen.webhook = tokio::time::timeout(Duration::from_secs(10), hooks.recv()).await.ok().flatten().map(ms);
+    seen.sse_done = tokio::time::timeout(Duration::from_secs(10), sse)
+        .await
+        .ok()
+        .and_then(|r| r.ok().flatten())
+        .map(ms);
+    seen.webhook = tokio::time::timeout(Duration::from_secs(10), hooks.recv())
+        .await
+        .ok()
+        .flatten()
+        .map(ms);
     // Late background writes (the terminal flush on a slow D1).
     tokio::time::sleep(Duration::from_millis(300)).await;
     let tl = stop_recording();
-    let r = c.get(format!("{base}/minimax/h3-turbo/requests/{rid}")).header("authorization", &auth).send().await.unwrap();
+    let r = c
+        .get(format!("{base}/minimax/h3-turbo/requests/{rid}"))
+        .header("authorization", &auth)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status().as_u16(), 200);
     drop(st);
     (seen, tl)
 }
 
 fn print_waterfall(s: &Scn, seen: &Seen, tl: &[Mark]) {
-    let Some(t0) = tl.first().map(|m| m.at) else { return };
+    let Some(t0) = tl.first().map(|m| m.at) else {
+        return;
+    };
     println!("\n=== {} (D1 {} ms, R2 PUT {} ms, x264: {}, progress {} ms, heartbeat {} s, watch poll {} ms, client poll {} ms, steps 4 x {} ms)",
         s.name, s.d1_ms, s.r2_put_ms, s.x264, s.progress_ms, s.heartbeat_s, s.watch_poll_ms, s.poll_ms, s.step_ms);
     let mut prev = t0;
@@ -417,7 +525,13 @@ fn print_waterfall(s: &Scn, seen: &Seen, tl: &[Mark]) {
         println!("{t:>8.1} {d:>+8.1}  {}", m.what);
         prev = m.at;
     }
-    println!("-- D1 calls: {d1_calls}; gaps over 100 ms before: {}", gaps.iter().map(|(g, w)| format!("[{g:.0} ms] {w}")).collect::<Vec<_>>().join("; "));
+    println!(
+        "-- D1 calls: {d1_calls}; gaps over 100 ms before: {}",
+        gaps.iter()
+            .map(|(g, w)| format!("[{g:.0} ms] {w}"))
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
     println!(
         "-- client: accepted {:.0} ms, poll IN_PROGRESS {:?}, poll COMPLETED {:.0} ms, SSE {:?}, webhook {:?} (simulated work {} ms)",
         seen.accepted, seen.poll_running.map(|x| x.round()), seen.poll_done, seen.sse_done.map(|x| x.round()), seen.webhook.map(|x| x.round()), s.work_ms()
@@ -432,20 +546,46 @@ async fn waterfall() {
     let scns = [
         Scn::new("single, D1 0 ms", 0),
         Scn::new("single, D1 250 ms", 250),
-        Scn { step_ms: 300, ..Scn::new("single, D1 250 ms, 4 x 300 ms", 250) },
-        Scn { r2_put_ms: 1000, ..Scn::new("single, D1 250 ms, R2 PUT 1 s", 250) },
-        Scn { x264: true, ..Scn::new("single, D1 0 ms, x264", 0) },
-        Scn { progress_ms: 100, heartbeat_s: 1, watch_poll_ms: 100, poll_ms: 100, x264: true, ..Scn::new("single, burst-test settings, x264", 250) },
+        Scn {
+            step_ms: 300,
+            ..Scn::new("single, D1 250 ms, 4 x 300 ms", 250)
+        },
+        Scn {
+            r2_put_ms: 1000,
+            ..Scn::new("single, D1 250 ms, R2 PUT 1 s", 250)
+        },
+        Scn {
+            x264: true,
+            ..Scn::new("single, D1 0 ms, x264", 0)
+        },
+        Scn {
+            progress_ms: 100,
+            heartbeat_s: 1,
+            watch_poll_ms: 100,
+            poll_ms: 100,
+            x264: true,
+            ..Scn::new("single, burst-test settings, x264", 250)
+        },
     ];
     for s in scns {
         let (seen, tl) = one_job(&s).await;
         print_waterfall(&s, &seen, &tl);
         out.push((s, seen));
     }
-    println!("\n{:<44} {:>9} {:>9} {:>9} {:>9}", "setup", "poll", "SSE", "webhook", "overhead");
+    println!(
+        "\n{:<44} {:>9} {:>9} {:>9} {:>9}",
+        "setup", "poll", "SSE", "webhook", "overhead"
+    );
     for (s, seen) in &out {
         let work = s.work_ms();
-        println!("{:<44} {:>9.0} {:>9.0} {:>9.0} {:>9.0}", s.name, seen.poll_done, seen.sse_done.unwrap_or(f64::NAN), seen.webhook.unwrap_or(f64::NAN), seen.poll_done - work);
+        println!(
+            "{:<44} {:>9.0} {:>9.0} {:>9.0} {:>9.0}",
+            s.name,
+            seen.poll_done,
+            seen.sse_done.unwrap_or(f64::NAN),
+            seen.webhook.unwrap_or(f64::NAN),
+            seen.poll_done - work
+        );
     }
 }
 
@@ -458,16 +598,24 @@ async fn overhead_budget_on_the_fake_engine() {
     // Debug build on a loaded CI host: generous next to the ~1 s poll tick
     // and the serial writes this guards against.
     let margin = 400.0;
-    for (s, rtts) in [
-        (Scn { step_ms: 300, ..Scn::new("single, D1 0 ms", 0) }, 0.0),
-    ] {
+    for (s, rtts) in [(
+        Scn {
+            step_ms: 300,
+            ..Scn::new("single, D1 0 ms", 0)
+        },
+        0.0,
+    )] {
         let (seen, tl) = one_job(&s).await;
         print_waterfall(&s, &seen, &tl);
         let budget = s.work_ms() + rtts * s.d1_ms as f64 + margin;
         let sse = seen.sse_done.expect("SSE saw the job finish");
         let hook = seen.webhook.expect("the webhook arrived");
         for (what, v) in [("poll", seen.poll_done), ("SSE", sse), ("webhook", hook)] {
-            assert!(v <= budget, "{}: {what} saw the job finish {v:.0} ms after submit (budget {budget:.0} ms)", s.name);
+            assert!(
+                v <= budget,
+                "{}: {what} saw the job finish {v:.0} ms after submit (budget {budget:.0} ms)",
+                s.name
+            );
         }
     }
 }

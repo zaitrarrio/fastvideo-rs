@@ -49,7 +49,9 @@ pub fn training_aligned_indices(num_source_frames: usize, sample_frame: usize) -
             return vec![0];
         }
         return (0..sample_frame)
-            .map(|i| ((num_source_frames - 1) as f64 * i as f64 / (sample_frame - 1) as f64) as usize)
+            .map(|i| {
+                ((num_source_frames - 1) as f64 * i as f64 / (sample_frame - 1) as f64) as usize
+            })
             .collect();
     }
     let mut out: Vec<usize> = (0..num_source_frames).collect();
@@ -86,7 +88,14 @@ fn bicubic_plan(in_len: usize, out_len: usize) -> Vec<([usize; 4], [f32; 4])> {
 
 /// `F.interpolate(x, (oh, ow), mode="bicubic", align_corners=False)` on one
 /// `[C, H, W]` plane set, then `clamp(0, 1)` (`resize_video_tensor`).
-pub fn resize_bicubic_chw(src: &[f32], c: usize, h: usize, w: usize, oh: usize, ow: usize) -> Vec<f32> {
+pub fn resize_bicubic_chw(
+    src: &[f32],
+    c: usize,
+    h: usize,
+    w: usize,
+    oh: usize,
+    ow: usize,
+) -> Vec<f32> {
     assert_eq!(src.len(), c * h * w);
     let py = bicubic_plan(h, oh);
     let px = bicubic_plan(w, ow);
@@ -165,7 +174,9 @@ mod tests {
         // `scale * (dst + 0.5) - 0.5`, clamped taps); not a torch run.
         let src = vec![0.0f32, 1.0, 0.0, 1.0];
         let got = resize_bicubic_chw(&src, 1, 1, 4, 1, 8);
-        let want = [0.0f32, 0.26171875, 0.87890625, 0.84375, 0.15625, 0.12109375, 0.73828125, 1.0];
+        let want = [
+            0.0f32, 0.26171875, 0.87890625, 0.84375, 0.15625, 0.12109375, 0.73828125, 1.0,
+        ];
         for (g, w) in got.iter().zip(want) {
             assert!((g - w).abs() < 1e-5, "{got:?}");
         }

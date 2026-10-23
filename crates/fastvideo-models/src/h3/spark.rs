@@ -154,8 +154,7 @@ pub fn upscaler_key_is_known(key: &str, in_entries: usize, out_entries: usize) -
         "embed.2.bias",
         "conv_out.weight",
     ];
-    if FIXED.contains(&key)
-        || matches!(key, "conv_out.bias" | "norm_out.weight" | "norm_out.bias")
+    if FIXED.contains(&key) || matches!(key, "conv_out.bias" | "norm_out.weight" | "norm_out.bias")
     {
         return true;
     }
@@ -592,7 +591,11 @@ mod tests {
         assert_eq!(upscaler_block_cadence(3, false), vec![false; 3]);
         assert!(upscaler_key_is_known("conv_in.weight", 18, 18));
         assert!(upscaler_key_is_known("embed.2.bias", 18, 18));
-        assert!(upscaler_key_is_known("in_blocks.17.in_layers.2.weight", 18, 18));
+        assert!(upscaler_key_is_known(
+            "in_blocks.17.in_layers.2.weight",
+            18,
+            18
+        ));
         assert!(upscaler_key_is_known("out_blocks.1.dwconv.weight", 18, 18));
         assert!(!upscaler_key_is_known("in_blocks.18.norm.weight", 18, 18));
         assert!(!upscaler_key_is_known("in_blocks.1.q.weight", 18, 18));

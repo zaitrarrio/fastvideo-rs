@@ -48,14 +48,26 @@ pub async fn apply_event(ctx: &ServeCtx, id: JobId, ev: JobEvent) -> Result<Job,
     let before = current.status();
     // docs/serve/tracing.md: the output path of a traced job.
     let trace = matches!(ev, JobEvent::Finished(_))
-        .then(|| current.trace.as_deref().and_then(fastvideo_trace::Trace::from_traceparent).or_else(fastvideo_trace::current))
+        .then(|| {
+            current
+                .trace
+                .as_deref()
+                .and_then(fastvideo_trace::Trace::from_traceparent)
+                .or_else(fastvideo_trace::current)
+        })
         .flatten();
     drop(current);
     let job = match ev {
         JobEvent::Finished(out) => {
             tracing::debug!(job = %id, "job: storing the output");
             let t_put = trace.map(|_| fastvideo_trace::now_ns());
-            let bytes = if trace.is_some() { std::fs::metadata(&out.file).map(|m| m.len() as i64).unwrap_or(0) } else { 0 };
+            let bytes = if trace.is_some() {
+                std::fs::metadata(&out.file)
+                    .map(|m| m.len() as i64)
+                    .unwrap_or(0)
+            } else {
+                0
+            };
             let art = ctx.artifacts().put(&out.file, out.meta).await;
             if let (Some(t), Some(s)) = (trace, t_put) {
                 t.span_since(fastvideo_trace::Comp::Upload, "artifact_put", s, bytes);
@@ -67,9 +79,12 @@ pub async fn apply_event(ctx: &ServeCtx, id: JobId, ev: JobEvent) -> Result<Job,
                     let e2 = e.clone();
                     let j = ctx
                         .jobs()
-                        .update(id, Box::new(move |j| {
-                            let _ = j.mark_failed(now, e2);
-                        }))
+                        .update(
+                            id,
+                            Box::new(move |j| {
+                                let _ = j.mark_failed(now, e2);
+                            }),
+                        )
                         .await?;
                     tracing::warn!(job = %id, error = %e, "storing output failed");
                     finish(ctx, before, &j);
@@ -82,10 +97,13 @@ pub async fn apply_event(ctx: &ServeCtx, id: JobId, ev: JobEvent) -> Result<Job,
             let t_store = trace.map(|_| fastvideo_trace::now_ns());
             let j = match ctx
                 .jobs()
-                .update(id, Box::new(move |j| {
-                    *acc.lock().unwrap_or_else(|p| p.into_inner()) =
-                        j.mark_succeeded(now, vec![a2], out.metrics).is_ok();
-                }))
+                .update(
+                    id,
+                    Box::new(move |j| {
+                        *acc.lock().unwrap_or_else(|p| p.into_inner()) =
+                            j.mark_succeeded(now, vec![a2], out.metrics).is_ok();
+                    }),
+                )
                 .await
             {
                 Ok(j) => j,
@@ -106,34 +124,37 @@ pub async fn apply_event(ctx: &ServeCtx, id: JobId, ev: JobEvent) -> Result<Job,
         }
         ev => {
             ctx.jobs()
-                .update(id, Box::new(move |j| match ev {
-                    JobEvent::Queued { position } => {
-                        if !j.is_terminal() && j.started_at.is_none() {
-                            j.queue_position = Some(position);
+                .update(
+                    id,
+                    Box::new(move |j| match ev {
+                        JobEvent::Queued { position } => {
+                            if !j.is_terminal() && j.started_at.is_none() {
+                                j.queue_position = Some(position);
+                            }
                         }
-                    }
-                    JobEvent::Started => {
-                        let _ = j.mark_running(now);
-                    }
-                    JobEvent::Stage { name } => {
-                        if !j.is_terminal() {
-                            j.logs.push(LogLine::info(format!("stage: {name}"), now));
+                        JobEvent::Started => {
+                            let _ = j.mark_running(now);
                         }
-                    }
-                    JobEvent::Progress { step, total } => j.set_step(step, total),
-                    JobEvent::Log(l) => {
-                        if !j.is_terminal() {
-                            j.logs.push(l);
+                        JobEvent::Stage { name } => {
+                            if !j.is_terminal() {
+                                j.logs.push(LogLine::info(format!("stage: {name}"), now));
+                            }
                         }
-                    }
-                    JobEvent::Failed(e) => {
-                        let _ = j.mark_failed(now, e);
-                    }
-                    JobEvent::Cancelled => {
-                        let _ = j.mark_cancelled(now);
-                    }
-                    JobEvent::Finished(_) => unreachable!("handled above"),
-                }))
+                        JobEvent::Progress { step, total } => j.set_step(step, total),
+                        JobEvent::Log(l) => {
+                            if !j.is_terminal() {
+                                j.logs.push(l);
+                            }
+                        }
+                        JobEvent::Failed(e) => {
+                            let _ = j.mark_failed(now, e);
+                        }
+                        JobEvent::Cancelled => {
+                            let _ = j.mark_cancelled(now);
+                        }
+                        JobEvent::Finished(_) => unreachable!("handled above"),
+                    }),
+                )
                 .await?
         }
     };
@@ -167,13 +188,16 @@ pub async fn cancel_job(ctx: &ServeCtx, id: JobId) -> Result<Job, ApiError> {
     let before = job.status();
     let job = ctx
         .jobs()
-        .update(id, Box::new(move |j| {
-            if j.status() == fastvideo_protocol::JobStatus::Queued {
-                let _ = j.mark_cancelled(now);
-            } else if !j.is_terminal() {
-                j.cancel_requested = true;
-            }
-        }))
+        .update(
+            id,
+            Box::new(move |j| {
+                if j.status() == fastvideo_protocol::JobStatus::Queued {
+                    let _ = j.mark_cancelled(now);
+                } else if !j.is_terminal() {
+                    j.cancel_requested = true;
+                }
+            }),
+        )
         .await?;
     finish(ctx, before, &job);
     Ok(job)

@@ -74,7 +74,11 @@ fn fold(g: &[f32], v: &[f32], rows: usize) -> Result<Vec<f32>> {
     let width = v.len() / rows;
     let mut out = Vec::with_capacity(v.len());
     for (row, &gain) in v.chunks_exact(width).zip(g) {
-        let norm = row.iter().map(|&x| f64::from(x) * f64::from(x)).sum::<f64>().sqrt();
+        let norm = row
+            .iter()
+            .map(|&x| f64::from(x) * f64::from(x))
+            .sum::<f64>()
+            .sqrt();
         let s = (f64::from(gain) / norm) as f32;
         out.extend(row.iter().map(|&x| x * s));
     }
@@ -108,7 +112,10 @@ impl Conv {
         Ok(Self {
             weight: pinned(w, shape.to_vec())?,
             bias: match bias {
-                Some(n) => Some(pinned(host_values(map, &format!("{prefix}.bias"), &[n])?, vec![n])?),
+                Some(n) => Some(pinned(
+                    host_values(map, &format!("{prefix}.bias"), &[n])?,
+                    vec![n],
+                )?),
                 None => None,
             },
         })
@@ -116,7 +123,10 @@ impl Conv {
 }
 
 fn depthwise(taps: &[f32], c: usize) -> Result<CudaTensor> {
-    pinned((0..c).flat_map(|_| taps.iter().copied()).collect(), vec![c, 1, FILTER_TAPS])
+    pinned(
+        (0..c).flat_map(|_| taps.iter().copied()).collect(),
+        vec![c, 1, FILTER_TAPS],
+    )
 }
 
 struct AliasFreeSnake {
@@ -141,7 +151,10 @@ impl AliasFreeSnake {
         let down = read(&format!("{prefix}.downsample.lowpass.filter"))?;
         Ok(Self {
             alpha: pinned(alpha.iter().map(|a| a.exp()).collect(), vec![c])?,
-            inv_beta: pinned(beta.iter().map(|b| 1.0 / (b.exp() + 1e-9)).collect(), vec![c])?,
+            inv_beta: pinned(
+                beta.iter().map(|b| 1.0 / (b.exp() + 1e-9)).collect(),
+                vec![c],
+            )?,
             up: depthwise(&up, c)?,
             down: depthwise(&down, c)?,
         })
@@ -155,7 +168,10 @@ impl AliasFreeSnake {
             .try_mul_scalar(RATIO as f32)?;
         let up = up.narrow(2, UP_CROP_LEFT, up.shape[2] - UP_CROP_LEFT - UP_CROP_RIGHT)?;
         if up.shape[2] != RATIO * len {
-            return Err(msg(format!("alias-free upsample: {} from {len}", up.shape[2])));
+            return Err(msg(format!(
+                "alias-free upsample: {} from {len}",
+                up.shape[2]
+            )));
         }
         up.snake_beta(&self.alpha, &self.inv_beta)?
             .pad(2, DOWN_PAD_LEFT, DOWN_PAD_RIGHT, PadMode::Replicate)?
@@ -169,7 +185,14 @@ struct AmpBlock {
 }
 
 impl AmpBlock {
-    fn load(map: &WeightMap, p: &str, c: usize, k: usize, dil: &[usize], taps: &[f32]) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        p: &str,
+        c: usize,
+        k: usize,
+        dil: &[usize],
+        taps: &[f32],
+    ) -> Result<Self> {
         let stages = dil
             .iter()
             .enumerate()
@@ -190,10 +213,17 @@ impl AmpBlock {
         let mut x = x.clone();
         for (a1, c1, d, a2, c2) in &self.stages {
             let pad1 = (self.kernel * d - d) / 2;
-            let r = a1.forward(&x)?.conv1d(&c1.weight, c1.bias.as_ref(), pad1, 1, *d, 1)?;
-            let r = a2
-                .forward(&r)?
-                .conv1d(&c2.weight, c2.bias.as_ref(), (self.kernel - 1) / 2, 1, 1, 1)?;
+            let r = a1
+                .forward(&x)?
+                .conv1d(&c1.weight, c1.bias.as_ref(), pad1, 1, *d, 1)?;
+            let r = a2.forward(&r)?.conv1d(
+                &c2.weight,
+                c2.bias.as_ref(),
+                (self.kernel - 1) / 2,
+                1,
+                1,
+                1,
+            )?;
             x = x.add(&r)?;
         }
         Ok(x)
@@ -217,9 +247,19 @@ impl BigVgan {
         let mut ups = Vec::new();
         let mut resblocks = Vec::new();
         let nk = cfg.resblock_kernel_sizes.len();
-        for (i, (&u, &k)) in cfg.upsample_rates.iter().zip(&cfg.upsample_kernel_sizes).enumerate() {
+        for (i, (&u, &k)) in cfg
+            .upsample_rates
+            .iter()
+            .zip(&cfg.upsample_kernel_sizes)
+            .enumerate()
+        {
             let (cin, cout) = (ch0 >> i, ch0 >> (i + 1));
-            ups.push(Conv::load(map, &format!("ups.{i}.0"), [cin, cout, k], Some(cout))?);
+            ups.push(Conv::load(
+                map,
+                &format!("ups.{i}.0"),
+                [cin, cout, k],
+                Some(cout),
+            )?);
             let _ = u;
             for (j, (&rk, dil)) in cfg
                 .resblock_kernel_sizes
@@ -254,10 +294,20 @@ impl BigVgan {
         let [b, _, t] = mel.shape[..] else {
             return Err(msg(format!("vocoder input {:?}", mel.shape)));
         };
-        let mut x = mel.conv1d(&self.conv_pre.weight, self.conv_pre.bias.as_ref(), 3, 1, 1, 1)?;
+        let mut x = mel.conv1d(
+            &self.conv_pre.weight,
+            self.conv_pre.bias.as_ref(),
+            3,
+            1,
+            1,
+            1,
+        )?;
         let nk = self.cfg.resblock_kernel_sizes.len();
         for (i, up) in self.ups.iter().enumerate() {
-            let (u, k) = (self.cfg.upsample_rates[i], self.cfg.upsample_kernel_sizes[i]);
+            let (u, k) = (
+                self.cfg.upsample_rates[i],
+                self.cfg.upsample_kernel_sizes[i],
+            );
             x = x.conv_transpose1d(&up.weight, up.bias.as_ref(), (k - u) / 2, u, 1, 1, 0)?;
             let mut sum: Option<CudaTensor> = None;
             for blk in &self.resblocks[i * nk..(i + 1) * nk] {
@@ -267,10 +317,19 @@ impl BigVgan {
                     None => y,
                 });
             }
-            x = sum.ok_or_else(|| msg("no resblocks"))?.try_mul_scalar(1.0 / nk as f32)?;
+            x = sum
+                .ok_or_else(|| msg("no resblocks"))?
+                .try_mul_scalar(1.0 / nk as f32)?;
         }
         let x = self.act_post.forward(&x)?;
-        let x = x.conv1d(&self.conv_post.weight, self.conv_post.bias.as_ref(), 3, 1, 1, 1)?;
+        let x = x.conv1d(
+            &self.conv_post.weight,
+            self.conv_post.bias.as_ref(),
+            3,
+            1,
+            1,
+            1,
+        )?;
         let x = if self.cfg.use_tanh_at_final {
             return Err(msg("tanh final not ported"));
         } else {
@@ -278,7 +337,10 @@ impl BigVgan {
         };
         let n = t * self.cfg.hop();
         if x.shape != [b, 1, n] {
-            return Err(msg(format!("vocoder produced {:?}, want [{b}, 1, {n}]", x.shape)));
+            return Err(msg(format!(
+                "vocoder produced {:?}, want [{b}, 1, {n}]",
+                x.shape
+            )));
         }
         x.reshape(vec![b, n])
     }

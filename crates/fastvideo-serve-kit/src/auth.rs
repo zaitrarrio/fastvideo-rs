@@ -70,7 +70,10 @@ pub const EDGE_AUTH_HEADER: &str = "x-fv-edge-auth";
 impl EdgeVerdict {
     /// From the request headers (`None`: no verdict, an anonymous caller).
     pub fn from_headers(headers: &HeaderMap) -> Option<Self> {
-        headers.get(EDGE_AUTH_HEADER).and_then(|v| v.to_str().ok()).and_then(|s| serde_json::from_str(s).ok())
+        headers
+            .get(EDGE_AUTH_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| serde_json::from_str(s).ok())
     }
 
     fn scheme(&self) -> Option<Scheme> {
@@ -84,7 +87,11 @@ impl EdgeVerdict {
     /// The edge's refusal as the error the API renders.
     pub fn deny_error(&self) -> Option<ApiError> {
         let d = self.deny.as_ref()?;
-        let msg = if d.message.is_empty() { d.kind.clone() } else { d.message.clone() };
+        let msg = if d.message.is_empty() {
+            d.kind.clone()
+        } else {
+            d.message.clone()
+        };
         let e = match d.kind.as_str() {
             "rate_limited" => ApiError::rate_limited(msg),
             "queue_full" => ApiError::queue_full(msg),
@@ -236,7 +243,9 @@ impl Auth {
     }
     /// Static ring first, then minted keys.
     pub fn check_key(&self, key: &str) -> Option<KeyId> {
-        self.keys.check(key).or_else(|| self.dynamic.as_ref().and_then(|d| d.0.check(key)))
+        self.keys
+            .check(key)
+            .or_else(|| self.dynamic.as_ref().and_then(|d| d.0.check(key)))
     }
     /// Open everything.
     pub fn none() -> Self {
@@ -256,7 +265,11 @@ impl Auth {
 
     /// Authenticates a request for API `p`. `Ok(None)` means anonymous but
     /// allowed; `Err` is `Unauthorized` for the adapter to render.
-    pub fn authenticate(&self, p: ProtocolId, headers: &HeaderMap) -> Result<Option<KeyId>, ApiError> {
+    pub fn authenticate(
+        &self,
+        p: ProtocolId,
+        headers: &HeaderMap,
+    ) -> Result<Option<KeyId>, ApiError> {
         match self.mode {
             AuthMode::None | AuthMode::TrustGateway => return Ok(None),
             AuthMode::TrustEdge => return self.authenticate_edge(p, headers),
@@ -289,7 +302,11 @@ impl Auth {
 
 impl Auth {
     /// `trust-edge`: the API's policy over the edge's verdict.
-    fn authenticate_edge(&self, p: ProtocolId, headers: &HeaderMap) -> Result<Option<KeyId>, ApiError> {
+    fn authenticate_edge(
+        &self,
+        p: ProtocolId,
+        headers: &HeaderMap,
+    ) -> Result<Option<KeyId>, ApiError> {
         let v = EdgeVerdict::from_headers(headers).unwrap_or_default();
         if let Some(e) = v.deny_error() {
             return Err(e);
@@ -303,9 +320,14 @@ impl Auth {
                 }
                 if !v.scheme().is_some_and(|s| schemes.contains(&s)) {
                     let want: Vec<&str> = schemes.iter().map(|s| s.prefix()).collect();
-                    return Err(ApiError::unauthorized(format!("unsupported authorization scheme (expected {})", want.join(" or "))));
+                    return Err(ApiError::unauthorized(format!(
+                        "unsupported authorization scheme (expected {})",
+                        want.join(" or ")
+                    )));
                 }
-                owner().map(Some).ok_or_else(|| ApiError::unauthorized("invalid credentials"))
+                owner()
+                    .map(Some)
+                    .ok_or_else(|| ApiError::unauthorized("invalid credentials"))
             }
         }
     }
@@ -341,7 +363,10 @@ mod tests {
     }
 
     fn auth() -> Auth {
-        Auth::new(AuthMode::Keys, KeyRing::from_plain(["sk-good", "kid:secret"]))
+        Auth::new(
+            AuthMode::Keys,
+            KeyRing::from_plain(["sk-good", "kid:secret"]),
+        )
     }
 
     #[test]
@@ -356,9 +381,17 @@ mod tests {
     #[test]
     fn fal_needs_key_scheme() {
         let a = auth();
-        assert!(a.authenticate(ProtocolId::Fal, &h("Key sk-good")).unwrap().is_some());
-        assert!(a.authenticate(ProtocolId::Fal, &h("key kid:secret")).unwrap().is_some());
-        let e = a.authenticate(ProtocolId::Fal, &h("Bearer sk-good")).unwrap_err();
+        assert!(a
+            .authenticate(ProtocolId::Fal, &h("Key sk-good"))
+            .unwrap()
+            .is_some());
+        assert!(a
+            .authenticate(ProtocolId::Fal, &h("key kid:secret"))
+            .unwrap()
+            .is_some());
+        let e = a
+            .authenticate(ProtocolId::Fal, &h("Bearer sk-good"))
+            .unwrap_err();
         assert_eq!(e.kind, fastvideo_protocol::ErrorKind::Unauthorized);
         assert!(a.authenticate(ProtocolId::Fal, &h("Key wrong")).is_err());
         assert!(a.authenticate(ProtocolId::Fal, &HeaderMap::new()).is_err());
@@ -378,20 +411,39 @@ mod tests {
     #[test]
     fn fastvideo_is_open_but_identifies() {
         let a = auth();
-        assert_eq!(a.authenticate(ProtocolId::OpenAiVideos, &HeaderMap::new()).unwrap(), None);
-        assert_eq!(a.authenticate(ProtocolId::OpenAiVideos, &h("Bearer bad")).unwrap(), None);
-        let id = a.authenticate(ProtocolId::OpenAiVideos, &h("Bearer sk-good")).unwrap().unwrap();
+        assert_eq!(
+            a.authenticate(ProtocolId::OpenAiVideos, &HeaderMap::new())
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            a.authenticate(ProtocolId::OpenAiVideos, &h("Bearer bad"))
+                .unwrap(),
+            None
+        );
+        let id = a
+            .authenticate(ProtocolId::OpenAiVideos, &h("Bearer sk-good"))
+            .unwrap()
+            .unwrap();
         assert!(id.0.starts_with("key_") && !id.0.contains("sk-good"));
         // Configurable: require bearer.
-        let a = a.with_policy(ProtocolId::OpenAiVideos, AuthPolicy::Require(vec![Scheme::Bearer]));
-        assert!(a.authenticate(ProtocolId::OpenAiVideos, &HeaderMap::new()).is_err());
+        let a = a.with_policy(
+            ProtocolId::OpenAiVideos,
+            AuthPolicy::Require(vec![Scheme::Bearer]),
+        );
+        assert!(a
+            .authenticate(ProtocolId::OpenAiVideos, &HeaderMap::new())
+            .is_err());
     }
 
     #[test]
     fn none_and_gateway_modes_open() {
         for mode in [AuthMode::None, AuthMode::TrustGateway] {
             let a = Auth::new(mode, KeyRing::default());
-            assert_eq!(a.authenticate(ProtocolId::Fal, &HeaderMap::new()).unwrap(), None);
+            assert_eq!(
+                a.authenticate(ProtocolId::Fal, &HeaderMap::new()).unwrap(),
+                None
+            );
         }
     }
 
@@ -400,17 +452,41 @@ mod tests {
         let store = crate::keys::KeyStore::memory().await;
         let (k, rec) = store.mint("t").await.unwrap();
         let a = auth().with_key_store(store.clone());
-        assert!(a.authenticate(ProtocolId::Fal, &h(&format!("Key {k}"))).unwrap().is_some());
-        for p in [ProtocolId::MiniMaxV2, ProtocolId::LtxV1, ProtocolId::LtxV2, ProtocolId::Native] {
-            let id = a.authenticate(p, &h(&format!("Bearer {k}"))).unwrap().unwrap();
+        assert!(a
+            .authenticate(ProtocolId::Fal, &h(&format!("Key {k}")))
+            .unwrap()
+            .is_some());
+        for p in [
+            ProtocolId::MiniMaxV2,
+            ProtocolId::LtxV1,
+            ProtocolId::LtxV2,
+            ProtocolId::Native,
+        ] {
+            let id = a
+                .authenticate(p, &h(&format!("Bearer {k}")))
+                .unwrap()
+                .unwrap();
             assert_eq!(id.0, rec.id);
         }
-        assert_eq!(a.authenticate(ProtocolId::OpenAiVideos, &h(&format!("Bearer {k}"))).unwrap().unwrap().0, rec.id);
+        assert_eq!(
+            a.authenticate(ProtocolId::OpenAiVideos, &h(&format!("Bearer {k}")))
+                .unwrap()
+                .unwrap()
+                .0,
+            rec.id
+        );
         // Static keys still work.
-        assert!(a.authenticate(ProtocolId::Fal, &h("Key sk-good")).unwrap().is_some());
+        assert!(a
+            .authenticate(ProtocolId::Fal, &h("Key sk-good"))
+            .unwrap()
+            .is_some());
         store.revoke(&rec.id).await.unwrap();
-        assert!(a.authenticate(ProtocolId::Fal, &h(&format!("Key {k}"))).is_err());
-        assert!(a.authenticate(ProtocolId::Native, &h(&format!("Bearer {k}"))).is_err());
+        assert!(a
+            .authenticate(ProtocolId::Fal, &h(&format!("Key {k}")))
+            .is_err());
+        assert!(a
+            .authenticate(ProtocolId::Native, &h(&format!("Bearer {k}")))
+            .is_err());
     }
 
     #[test]
@@ -422,29 +498,67 @@ mod tests {
             m
         };
         let ok = v(r#"{"v":1,"key":"key_abc","presented":true,"valid":true,"scheme":"key"}"#);
-        assert_eq!(a.authenticate(ProtocolId::Fal, &ok).unwrap().unwrap().0, "key_abc");
+        assert_eq!(
+            a.authenticate(ProtocolId::Fal, &ok).unwrap().unwrap().0,
+            "key_abc"
+        );
         // fal wants `Key`, MiniMax `Bearer`.
-        assert!(a.authenticate(ProtocolId::MiniMaxV2, &ok).unwrap_err().message.contains("scheme"));
+        assert!(a
+            .authenticate(ProtocolId::MiniMaxV2, &ok)
+            .unwrap_err()
+            .message
+            .contains("scheme"));
         let bad = v(r#"{"v":1,"presented":true,"valid":false,"scheme":"bearer"}"#);
-        assert_eq!(a.authenticate(ProtocolId::MiniMaxV2, &bad).unwrap_err().message, "invalid credentials");
-        assert_eq!(a.authenticate(ProtocolId::OpenAiVideos, &bad).unwrap(), None);
+        assert_eq!(
+            a.authenticate(ProtocolId::MiniMaxV2, &bad)
+                .unwrap_err()
+                .message,
+            "invalid credentials"
+        );
+        assert_eq!(
+            a.authenticate(ProtocolId::OpenAiVideos, &bad).unwrap(),
+            None
+        );
         // No verdict at all: anonymous.
-        assert_eq!(a.authenticate(ProtocolId::Native, &HeaderMap::new()).unwrap_err().message, "missing credentials");
-        assert_eq!(a.authenticate(ProtocolId::Reactor, &HeaderMap::new()).unwrap(), None);
+        assert_eq!(
+            a.authenticate(ProtocolId::Native, &HeaderMap::new())
+                .unwrap_err()
+                .message,
+            "missing credentials"
+        );
+        assert_eq!(
+            a.authenticate(ProtocolId::Reactor, &HeaderMap::new())
+                .unwrap(),
+            None
+        );
         // A refusal the edge decided, in the API's terms.
-        let denied = v(r#"{"v":1,"key":"key_abc","presented":true,"valid":true,"scheme":"bearer","deny":{"kind":"rate_limited","message":"slow down","retry_after":7}}"#);
+        let denied = v(
+            r#"{"v":1,"key":"key_abc","presented":true,"valid":true,"scheme":"bearer","deny":{"kind":"rate_limited","message":"slow down","retry_after":7}}"#,
+        );
         let e = a.authenticate(ProtocolId::MiniMaxV2, &denied).unwrap_err();
-        assert_eq!((e.kind, e.retry_after_s), (fastvideo_protocol::ErrorKind::RateLimited, Some(7)));
+        assert_eq!(
+            (e.kind, e.retry_after_s),
+            (fastvideo_protocol::ErrorKind::RateLimited, Some(7))
+        );
         // A client's own Authorization is ignored in this mode.
         let mut h = HeaderMap::new();
-        h.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer sk-good"));
-        assert!(Auth::new(AuthMode::TrustEdge, KeyRing::from_plain(["sk-good"])).authenticate(ProtocolId::Native, &h).is_err());
+        h.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer sk-good"),
+        );
+        assert!(
+            Auth::new(AuthMode::TrustEdge, KeyRing::from_plain(["sk-good"]))
+                .authenticate(ProtocolId::Native, &h)
+                .is_err()
+        );
     }
 
     #[test]
     fn same_key_same_owner() {
         let a = auth();
-        let x = a.authenticate(ProtocolId::MiniMaxV2, &h("Bearer sk-good")).unwrap();
+        let x = a
+            .authenticate(ProtocolId::MiniMaxV2, &h("Bearer sk-good"))
+            .unwrap();
         let y = a.authenticate(ProtocolId::Fal, &h("Key sk-good")).unwrap();
         assert_eq!(x, y);
     }

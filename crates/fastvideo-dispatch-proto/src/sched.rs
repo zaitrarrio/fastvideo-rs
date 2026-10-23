@@ -56,8 +56,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    DispatchTimings, DoMsg, EnqueueReq, EnqueueResp, FailedJob, FamilyMetrics, Hello, Part, PoolStatus, SessionGrant, SessionInfo, SessionReq, Slots, WorkerInfo,
-    WorkerMsg,
+    DispatchTimings, DoMsg, EnqueueReq, EnqueueResp, FailedJob, FamilyMetrics, Hello, Part,
+    PoolStatus, SessionGrant, SessionInfo, SessionReq, Slots, WorkerInfo, WorkerMsg,
 };
 
 /// Timeouts, milliseconds.
@@ -384,20 +384,49 @@ pub enum Out {
     Close { worker: String },
     /// Load the envelope kept at `key` into `msg` (a [`DoMsg::Job`] with a
     /// null envelope), then send it to the worker.
-    PushSpilled { worker: String, key: String, msg: DoMsg },
+    PushSpilled {
+        worker: String,
+        key: String,
+        msg: DoMsg,
+    },
     /// Create a multipart upload of `key`, then call
     /// [`Sched::upload_created`] (with `req` and `parts`).
-    CreateUpload { worker: String, req: u64, key: String, content_type: String, parts: u16 },
+    CreateUpload {
+        worker: String,
+        req: u64,
+        key: String,
+        content_type: String,
+        parts: u16,
+    },
     /// Mint URLs for parts `from .. from + count` of `upload_id`, valid until
     /// `expires_ms`, and send them as a [`DoMsg::UploadGrant`] for `req`.
-    Grant { worker: String, req: u64, job_id: String, key: String, upload_id: String, from: u16, count: u16, expires_ms: i64 },
+    Grant {
+        worker: String,
+        req: u64,
+        job_id: String,
+        key: String,
+        upload_id: String,
+        from: u16,
+        count: u16,
+        expires_ms: i64,
+    },
     /// Complete the upload with `parts`, then call [`Sched::upload_completed`]
     /// with the object's size.
-    CompleteUpload { worker: String, req: u64, key: String, upload_id: String, parts: Vec<Part>, bytes: u64 },
+    CompleteUpload {
+        worker: String,
+        req: u64,
+        key: String,
+        upload_id: String,
+        parts: Vec<Part>,
+        bytes: u64,
+    },
     /// Abort a multipart upload (best effort).
     AbortUpload { key: String, upload_id: String },
     /// Answer the admission call waiting for `session_id`.
-    SessionReady { session_id: String, result: Result<SessionGrant, String> },
+    SessionReady {
+        session_id: String,
+        result: Result<SessionGrant, String>,
+    },
 }
 
 /// What changed since the last [`Sched::take_dirty`]: rows to write.
@@ -490,12 +519,24 @@ impl Sched {
     }
 
     /// Rebuilds from persisted rows (envelopes already set on the jobs).
-    pub fn restore(pool: impl Into<String>, cfg: Cfg, jobs: Vec<JobRec>, workers: Vec<WorkerRec>) -> Self {
+    pub fn restore(
+        pool: impl Into<String>,
+        cfg: Cfg,
+        jobs: Vec<JobRec>,
+        workers: Vec<WorkerRec>,
+    ) -> Self {
         Self::restore_all(pool, cfg, jobs, workers, Vec::new(), Vec::new())
     }
 
     /// [`Sched::restore`] with protocol-2 sessions and uploads.
-    pub fn restore_all(pool: impl Into<String>, cfg: Cfg, jobs: Vec<JobRec>, workers: Vec<WorkerRec>, sessions: Vec<SessionRec>, uploads: Vec<UploadRec>) -> Self {
+    pub fn restore_all(
+        pool: impl Into<String>,
+        cfg: Cfg,
+        jobs: Vec<JobRec>,
+        workers: Vec<WorkerRec>,
+        sessions: Vec<SessionRec>,
+        uploads: Vec<UploadRec>,
+    ) -> Self {
         let mut s = Self::new(pool, cfg);
         for j in jobs {
             s.seq = s.seq.max(j.seq);
@@ -521,7 +562,11 @@ impl Sched {
     /// before it was sent), so the host should ask (reclaim) rather than wait
     /// for the lease's TTL.
     pub fn queued_behind_director(&self) -> bool {
-        self.jobs.values().any(|j| j.phase == Phase::Queued) && self.sessions.values().any(|s| s.state == SessionState::Live && s.kind == "director")
+        self.jobs.values().any(|j| j.phase == Phase::Queued)
+            && self
+                .sessions
+                .values()
+                .any(|s| s.state == SessionState::Live && s.kind == "director")
     }
     pub fn session(&self, id: &str) -> Option<&SessionRec> {
         self.sessions.get(id)
@@ -545,26 +590,53 @@ impl Sched {
 
     /// Changed rows since the last call.
     pub fn take_dirty(&mut self) -> Dirty {
-        let jobs = std::mem::take(&mut self.dirty_jobs).into_iter().filter_map(|id| self.jobs.get(&id).cloned()).collect();
-        let workers = std::mem::take(&mut self.dirty_workers).into_iter().filter_map(|id| self.workers.get(&id).cloned()).collect();
+        let jobs = std::mem::take(&mut self.dirty_jobs)
+            .into_iter()
+            .filter_map(|id| self.jobs.get(&id).cloned())
+            .collect();
+        let workers = std::mem::take(&mut self.dirty_workers)
+            .into_iter()
+            .filter_map(|id| self.workers.get(&id).cloned())
+            .collect();
         let new_envelopes = std::mem::take(&mut self.new_envelopes)
             .into_iter()
-            .filter_map(|id| self.jobs.get(&id).and_then(|j| j.envelope.clone()).map(|e| (id, e)))
+            .filter_map(|id| {
+                self.jobs
+                    .get(&id)
+                    .and_then(|j| j.envelope.clone())
+                    .map(|e| (id, e))
+            })
             .collect();
-        let sessions = std::mem::take(&mut self.dirty_sessions).into_iter().filter_map(|id| self.sessions.get(&id).cloned()).collect();
-        let uploads = std::mem::take(&mut self.dirty_uploads).into_iter().filter_map(|id| self.uploads.get(&id).cloned()).collect();
+        let sessions = std::mem::take(&mut self.dirty_sessions)
+            .into_iter()
+            .filter_map(|id| self.sessions.get(&id).cloned())
+            .collect();
+        let uploads = std::mem::take(&mut self.dirty_uploads)
+            .into_iter()
+            .filter_map(|id| self.uploads.get(&id).cloned())
+            .collect();
         Dirty {
             jobs,
             workers,
             removed_jobs: std::mem::take(&mut self.removed_jobs).into_iter().collect(),
-            removed_workers: std::mem::take(&mut self.removed_workers).into_iter().collect(),
+            removed_workers: std::mem::take(&mut self.removed_workers)
+                .into_iter()
+                .collect(),
             new_envelopes,
-            dropped_envelopes: std::mem::take(&mut self.dropped_envelopes).into_iter().collect(),
-            dropped_spills: std::mem::take(&mut self.dropped_spills).into_iter().collect(),
+            dropped_envelopes: std::mem::take(&mut self.dropped_envelopes)
+                .into_iter()
+                .collect(),
+            dropped_spills: std::mem::take(&mut self.dropped_spills)
+                .into_iter()
+                .collect(),
             sessions,
-            removed_sessions: std::mem::take(&mut self.removed_sessions).into_iter().collect(),
+            removed_sessions: std::mem::take(&mut self.removed_sessions)
+                .into_iter()
+                .collect(),
             uploads,
-            removed_uploads: std::mem::take(&mut self.removed_uploads).into_iter().collect(),
+            removed_uploads: std::mem::take(&mut self.removed_uploads)
+                .into_iter()
+                .collect(),
         }
     }
 
@@ -576,7 +648,13 @@ impl Sched {
     }
 
     fn held(&self, worker: &str) -> u32 {
-        self.jobs.values().filter(|j| matches!(j.phase, Phase::Pushed | Phase::Running) && j.worker.as_deref() == Some(worker)).count() as u32
+        self.jobs
+            .values()
+            .filter(|j| {
+                matches!(j.phase, Phase::Pushed | Phase::Running)
+                    && j.worker.as_deref() == Some(worker)
+            })
+            .count() as u32
     }
 
     /// Free job slots of a worker as the dispatcher estimates them
@@ -597,12 +675,22 @@ impl Sched {
         if w.proto < 2 {
             return 0;
         }
-        let offered = self.sessions.values().filter(|x| x.state == SessionState::Offered && x.worker.as_deref() == Some(w.worker_id.as_str())).count() as u32;
+        let offered = self
+            .sessions
+            .values()
+            .filter(|x| {
+                x.state == SessionState::Offered
+                    && x.worker.as_deref() == Some(w.worker_id.as_str())
+            })
+            .count() as u32;
         w.session_free.saturating_sub(offered)
     }
 
     fn position(&self, j: &JobRec) -> u32 {
-        self.jobs.values().filter(|o| o.phase == Phase::Queued && o.seq < j.seq).count() as u32
+        self.jobs
+            .values()
+            .filter(|o| o.phase == Phase::Queued && o.seq < j.seq)
+            .count() as u32
     }
 
     /// `POST /enqueue`. A job id seen before answers its state (idempotent),
@@ -613,8 +701,18 @@ impl Sched {
 
     /// [`Sched::enqueue`] with the envelope kept by the host at `spill`
     /// (then `req.envelope` is ignored).
-    pub fn enqueue_spilled(&mut self, req: EnqueueReq, spill: Option<String>, now: i64) -> (EnqueueResp, Vec<Out>) {
-        if req.replace && self.jobs.get(&req.job_id).is_some_and(|j| j.restage && j.phase == Phase::Queued) {
+    pub fn enqueue_spilled(
+        &mut self,
+        req: EnqueueReq,
+        spill: Option<String>,
+        now: i64,
+    ) -> (EnqueueResp, Vec<Out>) {
+        if req.replace
+            && self
+                .jobs
+                .get(&req.job_id)
+                .is_some_and(|j| j.restage && j.phase == Phase::Queued)
+        {
             let id = req.job_id.clone();
             let j = self.jobs.get_mut(&id).expect("checked");
             if let Some(old) = j.spill.take() {
@@ -623,7 +721,11 @@ impl Sched {
             j.restage = false;
             j.not_before = now;
             j.first_push_at = None;
-            j.envelope = if spill.is_some() { None } else { Some(req.envelope) };
+            j.envelope = if spill.is_some() {
+                None
+            } else {
+                Some(req.envelope)
+            };
             j.spill = spill;
             if j.envelope.is_some() {
                 self.new_envelopes.insert(id.clone());
@@ -631,10 +733,21 @@ impl Sched {
             self.touch_job(&id);
             let out = self.pump(now);
             let j = &self.jobs[&id];
-            let resp = EnqueueResp { job_id: id, state: j.phase.as_str().into(), worker: j.worker.clone(), position: self.position(j), duplicate: false };
+            let resp = EnqueueResp {
+                job_id: id,
+                state: j.phase.as_str().into(),
+                worker: j.worker.clone(),
+                position: self.position(j),
+                duplicate: false,
+            };
             return (resp, out);
         }
-        if req.replace && self.jobs.get(&req.job_id).is_some_and(|j| !j.phase.finished()) {
+        if req.replace
+            && self
+                .jobs
+                .get(&req.job_id)
+                .is_some_and(|j| !j.phase.finished())
+        {
             // Not waiting for a restage: keep the new envelope (inputs now
             // in the store) for a later restage or re-dispatch.
             let id = req.job_id.clone();
@@ -642,24 +755,50 @@ impl Sched {
             if let Some(old) = j.spill.take() {
                 self.dropped_spills.insert(old);
             }
-            j.envelope = if spill.is_some() { None } else { Some(req.envelope) };
+            j.envelope = if spill.is_some() {
+                None
+            } else {
+                Some(req.envelope)
+            };
             j.spill = spill;
             if j.envelope.is_some() {
                 self.new_envelopes.insert(id.clone());
             }
             self.touch_job(&id);
             let j = &self.jobs[&id];
-            let resp = EnqueueResp { job_id: id, state: j.phase.as_str().into(), worker: j.worker.clone(), position: self.position(j), duplicate: true };
+            let resp = EnqueueResp {
+                job_id: id,
+                state: j.phase.as_str().into(),
+                worker: j.worker.clone(),
+                position: self.position(j),
+                duplicate: true,
+            };
             return (resp, Vec::new());
         }
         if let Some(j) = self.jobs.get(&req.job_id) {
-            let resp = EnqueueResp { job_id: j.job_id.clone(), state: j.phase.as_str().into(), worker: j.worker.clone(), position: self.position(j), duplicate: true };
+            let resp = EnqueueResp {
+                job_id: j.job_id.clone(),
+                state: j.phase.as_str().into(),
+                worker: j.worker.clone(),
+                position: self.position(j),
+                duplicate: true,
+            };
             return (resp, Vec::new());
         }
         if req.max_queued > 0 {
-            let queued = self.jobs.values().filter(|j| j.phase == Phase::Queued && j.model == req.model).count();
+            let queued = self
+                .jobs
+                .values()
+                .filter(|j| j.phase == Phase::Queued && j.model == req.model)
+                .count();
             if queued >= req.max_queued as usize {
-                let resp = EnqueueResp { job_id: req.job_id, state: "refused".into(), worker: None, position: queued as u32, duplicate: false };
+                let resp = EnqueueResp {
+                    job_id: req.job_id,
+                    state: "refused".into(),
+                    worker: None,
+                    position: queued as u32,
+                    duplicate: false,
+                };
                 return (resp, Vec::new());
             }
         }
@@ -688,7 +827,11 @@ impl Sched {
             requeued_at: None,
             lease: 0,
             restage: false,
-            envelope: if spill.is_some() { None } else { Some(req.envelope) },
+            envelope: if spill.is_some() {
+                None
+            } else {
+                Some(req.envelope)
+            },
             spill,
             result: None,
             owner: req.owner,
@@ -701,13 +844,21 @@ impl Sched {
         }
         let out = self.pump(now);
         let j = &self.jobs[&id];
-        let resp = EnqueueResp { job_id: id, state: j.phase.as_str().into(), worker: j.worker.clone(), position: self.position(j), duplicate: false };
+        let resp = EnqueueResp {
+            job_id: id,
+            state: j.phase.as_str().into(),
+            worker: j.worker.clone(),
+            position: self.position(j),
+            duplicate: false,
+        };
         (resp, out)
     }
 
     /// Client cancel: `None` for an unknown job, else its state after.
     pub fn cancel(&mut self, job_id: &str, now: i64) -> (Option<&'static str>, Vec<Out>) {
-        let Some(j) = self.jobs.get_mut(job_id) else { return (None, Vec::new()) };
+        let Some(j) = self.jobs.get_mut(job_id) else {
+            return (None, Vec::new());
+        };
         let mut out = Vec::new();
         match j.phase {
             Phase::Queued => {
@@ -717,7 +868,12 @@ impl Sched {
             Phase::Pushed | Phase::Running => {
                 j.cancel_requested = true;
                 if let Some(w) = j.worker.clone() {
-                    out.push(Out::Send { worker: w, msg: DoMsg::Cancel { job_id: job_id.to_owned() } });
+                    out.push(Out::Send {
+                        worker: w,
+                        msg: DoMsg::Cancel {
+                            job_id: job_id.to_owned(),
+                        },
+                    });
                 }
             }
             _ => {}
@@ -750,9 +906,24 @@ impl Sched {
         }
         match msg {
             WorkerMsg::Hello(h) => return self.hello(worker, h, now),
-            WorkerMsg::Ack { job_id, attempt, lease, worker_ms } => self.ack(worker, &job_id, attempt, lease, worker_ms, now, &mut out),
-            WorkerMsg::Nack { job_id, attempt, retry, code, message } => self.nack(worker, &job_id, attempt, retry, code, &message, now),
-            WorkerMsg::Done { job_id, attempt: _, state } => {
+            WorkerMsg::Ack {
+                job_id,
+                attempt,
+                lease,
+                worker_ms,
+            } => self.ack(worker, &job_id, attempt, lease, worker_ms, now, &mut out),
+            WorkerMsg::Nack {
+                job_id,
+                attempt,
+                retry,
+                code,
+                message,
+            } => self.nack(worker, &job_id, attempt, retry, code, &message, now),
+            WorkerMsg::Done {
+                job_id,
+                attempt: _,
+                state,
+            } => {
                 if let Some(j) = self.jobs.get_mut(&job_id) {
                     if !j.phase.finished() && j.worker.as_deref() == Some(worker) {
                         j.phase = Phase::from_worker(&state);
@@ -763,7 +934,12 @@ impl Sched {
                     }
                 }
             }
-            WorkerMsg::Status { running: _, draining, capacity, ready } => {
+            WorkerMsg::Status {
+                running: _,
+                draining,
+                capacity,
+                ready,
+            } => {
                 if let Some(w) = self.workers.get_mut(worker) {
                     let ready = ready.unwrap_or(true);
                     if w.draining != draining || w.capacity != capacity.max(1) || w.ready != ready {
@@ -782,28 +958,88 @@ impl Sched {
                     self.dirty_workers.insert(worker.to_owned());
                 }
             }
-            WorkerMsg::UploadInit { req, job_id, attempt, lease, name, content_type, parts } => {
-                self.upload_init(worker, req, &job_id, attempt, lease, &name, content_type, parts, now, &mut out)
-            }
-            WorkerMsg::UploadMore { req, job_id, upload_id, from, count } => self.upload_more(worker, req, &job_id, &upload_id, from, count, &mut out),
-            WorkerMsg::UploadDone { req, job_id, attempt: _, lease, upload_id, parts, bytes, sha256 } => {
-                self.upload_done(worker, req, &job_id, lease, &upload_id, parts, bytes, sha256, &mut out)
-            }
-            WorkerMsg::UploadAbort { job_id: _, upload_id } => {
-                let key = self.uploads.values().find(|u| u.upload_id == upload_id && u.worker == worker && u.state != UploadState::Done).map(|u| u.key.clone());
+            WorkerMsg::UploadInit {
+                req,
+                job_id,
+                attempt,
+                lease,
+                name,
+                content_type,
+                parts,
+            } => self.upload_init(
+                worker,
+                req,
+                &job_id,
+                attempt,
+                lease,
+                &name,
+                content_type,
+                parts,
+                now,
+                &mut out,
+            ),
+            WorkerMsg::UploadMore {
+                req,
+                job_id,
+                upload_id,
+                from,
+                count,
+            } => self.upload_more(worker, req, &job_id, &upload_id, from, count, &mut out),
+            WorkerMsg::UploadDone {
+                req,
+                job_id,
+                attempt: _,
+                lease,
+                upload_id,
+                parts,
+                bytes,
+                sha256,
+            } => self.upload_done(
+                worker, req, &job_id, lease, &upload_id, parts, bytes, sha256, &mut out,
+            ),
+            WorkerMsg::UploadAbort {
+                job_id: _,
+                upload_id,
+            } => {
+                let key = self
+                    .uploads
+                    .values()
+                    .find(|u| {
+                        u.upload_id == upload_id
+                            && u.worker == worker
+                            && u.state != UploadState::Done
+                    })
+                    .map(|u| u.key.clone());
                 if let Some(k) = key {
                     out.extend(self.drop_upload(&k));
                 }
             }
-            WorkerMsg::SessionAck { session_id, lease, endpoint } => self.session_ack(worker, &session_id, lease, endpoint, now, &mut out),
-            WorkerMsg::SessionNack { session_id, lease, code: _, message } => {
-                let offered = self.sessions.get(&session_id).is_some_and(|x| x.state == SessionState::Offered && x.worker.as_deref() == Some(worker) && x.lease == lease);
+            WorkerMsg::SessionAck {
+                session_id,
+                lease,
+                endpoint,
+            } => self.session_ack(worker, &session_id, lease, endpoint, now, &mut out),
+            WorkerMsg::SessionNack {
+                session_id,
+                lease,
+                code: _,
+                message,
+            } => {
+                let offered = self.sessions.get(&session_id).is_some_and(|x| {
+                    x.state == SessionState::Offered
+                        && x.worker.as_deref() == Some(worker)
+                        && x.lease == lease
+                });
                 if offered {
                     out.extend(self.session_next(&session_id, Some(&message), now));
                 }
             }
             WorkerMsg::SessionEnd { session_id, lease } => {
-                let mine = self.sessions.get(&session_id).is_some_and(|x| x.state != SessionState::Ended && x.worker.as_deref() == Some(worker) && x.lease == lease);
+                let mine = self.sessions.get(&session_id).is_some_and(|x| {
+                    x.state != SessionState::Ended
+                        && x.worker.as_deref() == Some(worker)
+                        && x.lease == lease
+                });
                 if mine {
                     self.end_session(&session_id, "ended by the worker", now, &mut out, false);
                 }
@@ -826,27 +1062,30 @@ impl Sched {
 
     fn hello(&mut self, worker: &str, h: Hello, now: i64) -> Vec<Out> {
         let mut out = Vec::new();
-        let w = self.workers.entry(worker.to_owned()).or_insert_with(|| WorkerRec {
-            worker_id: worker.to_owned(),
-            connected: true,
-            draining: false,
-            capacity: 1,
-            version: String::new(),
-            sha: String::new(),
-            models: Vec::new(),
-            caps: Value::Null,
-            last_seen: now,
-            disconnected_at: None,
-            full_until: 0,
-            proto: 0,
-            credits: None,
-            offers_sent: 0,
-            offers_seen: 0,
-            session_free: 0,
-            endpoint: String::new(),
-            front: None,
-            ready: true,
-        });
+        let w = self
+            .workers
+            .entry(worker.to_owned())
+            .or_insert_with(|| WorkerRec {
+                worker_id: worker.to_owned(),
+                connected: true,
+                draining: false,
+                capacity: 1,
+                version: String::new(),
+                sha: String::new(),
+                models: Vec::new(),
+                caps: Value::Null,
+                last_seen: now,
+                disconnected_at: None,
+                full_until: 0,
+                proto: 0,
+                credits: None,
+                offers_sent: 0,
+                offers_seen: 0,
+                session_free: 0,
+                endpoint: String::new(),
+                front: None,
+                ready: true,
+            });
         w.connected = true;
         w.disconnected_at = None;
         w.draining = h.draining;
@@ -868,7 +1107,8 @@ impl Sched {
         w.session_free = h.slots.map_or(0, |s| s.session_free);
         self.touch_worker(worker);
 
-        let reported: BTreeMap<String, crate::Held> = h.jobs.into_iter().map(|x| (x.job_id.clone(), x)).collect();
+        let reported: BTreeMap<String, crate::Held> =
+            h.jobs.into_iter().map(|x| (x.job_id.clone(), x)).collect();
         let mut cancel = Vec::new();
         for (id, r) in &reported {
             let Some(j) = self.jobs.get_mut(id) else {
@@ -915,7 +1155,11 @@ impl Sched {
             // without leases, matched by assignment only).
             let current = r.lease == 0 || r.lease == j.lease;
             if j.phase.finished() {
-                if !r.finished() && (j.phase == Phase::Cancelled || j.worker.as_deref() != Some(worker) || !current) {
+                if !r.finished()
+                    && (j.phase == Phase::Cancelled
+                        || j.worker.as_deref() != Some(worker)
+                        || !current)
+                {
                     cancel.push(id.clone());
                 }
                 continue;
@@ -952,26 +1196,46 @@ impl Sched {
         let missing: Vec<(String, Phase)> = self
             .jobs
             .values()
-            .filter(|j| j.worker.as_deref() == Some(worker) && matches!(j.phase, Phase::Pushed | Phase::Running) && !reported.contains_key(&j.job_id))
+            .filter(|j| {
+                j.worker.as_deref() == Some(worker)
+                    && matches!(j.phase, Phase::Pushed | Phase::Running)
+                    && !reported.contains_key(&j.job_id)
+            })
             .map(|j| (j.job_id.clone(), j.phase))
             .collect();
         for (id, phase) in missing {
             if phase == Phase::Pushed {
                 self.requeue(&id, now, 0);
             } else {
-                self.lose(&id, &format!("worker {worker} reconnected without the job"), now);
+                self.lose(
+                    &id,
+                    &format!("worker {worker} reconnected without the job"),
+                    now,
+                );
             }
         }
         // Sessions it re-announces: kept when current, else ended there.
-        let held: BTreeMap<String, u64> = h.sessions.into_iter().map(|x| (x.session_id, x.lease)).collect();
+        let held: BTreeMap<String, u64> = h
+            .sessions
+            .into_iter()
+            .map(|x| (x.session_id, x.lease))
+            .collect();
         let mut end_sessions = Vec::new();
         for (id, lease) in &held {
-            let current = self.sessions.get(id).is_some_and(|x| x.state != SessionState::Ended && x.worker.as_deref() == Some(worker) && x.lease == *lease);
+            let current = self.sessions.get(id).is_some_and(|x| {
+                x.state != SessionState::Ended
+                    && x.worker.as_deref() == Some(worker)
+                    && x.lease == *lease
+            });
             if !current {
                 end_sessions.push(id.clone());
                 continue;
             }
-            if self.sessions.get(id).is_some_and(|x| x.state == SessionState::Offered) {
+            if self
+                .sessions
+                .get(id)
+                .is_some_and(|x| x.state == SessionState::Offered)
+            {
                 // Its ack was lost with the old socket: it holds the GPU.
                 self.session_ack(worker, id, *lease, String::new(), now, &mut out);
             }
@@ -979,22 +1243,58 @@ impl Sched {
         let lost: Vec<String> = self
             .sessions
             .values()
-            .filter(|x| x.state != SessionState::Ended && x.worker.as_deref() == Some(worker) && !held.contains_key(&x.session_id))
+            .filter(|x| {
+                x.state != SessionState::Ended
+                    && x.worker.as_deref() == Some(worker)
+                    && !held.contains_key(&x.session_id)
+            })
             .map(|x| x.session_id.clone())
             .collect();
         for id in lost {
-            self.end_session(&id, "the worker reconnected without it", now, &mut out, false);
+            self.end_session(
+                &id,
+                "the worker reconnected without it",
+                now,
+                &mut out,
+                false,
+            );
         }
-        out.push(Out::Send { worker: worker.to_owned(), msg: DoMsg::Welcome { worker_id: worker.to_owned(), pool: self.pool.clone(), cancel, end_sessions } });
+        out.push(Out::Send {
+            worker: worker.to_owned(),
+            msg: DoMsg::Welcome {
+                worker_id: worker.to_owned(),
+                pool: self.pool.clone(),
+                cancel,
+                end_sessions,
+            },
+        });
         out.extend(self.reap_uploads(now));
         out.extend(self.pump(now));
         out
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn ack(&mut self, worker: &str, id: &str, attempt: u32, lease: u64, worker_ms: u64, now: i64, out: &mut Vec<Out>) {
-        let Some(j) = self.jobs.get_mut(id) else { return };
-        let cancel = |out: &mut Vec<Out>| out.push(Out::Send { worker: worker.to_owned(), msg: DoMsg::Cancel { job_id: id.to_owned() } });
+    fn ack(
+        &mut self,
+        worker: &str,
+        id: &str,
+        attempt: u32,
+        lease: u64,
+        worker_ms: u64,
+        now: i64,
+        out: &mut Vec<Out>,
+    ) {
+        let Some(j) = self.jobs.get_mut(id) else {
+            return;
+        };
+        let cancel = |out: &mut Vec<Out>| {
+            out.push(Out::Send {
+                worker: worker.to_owned(),
+                msg: DoMsg::Cancel {
+                    job_id: id.to_owned(),
+                },
+            })
+        };
         let current = lease == 0 || lease == j.lease;
         if j.phase.finished() {
             if j.worker.as_deref() != Some(worker) || j.phase == Phase::Cancelled || !current {
@@ -1028,7 +1328,11 @@ impl Sched {
         if !j.timed && j.attempt == 1 {
             if let Some(p) = j.pushed_at {
                 j.timed = true;
-                self.timings.push_back(((p - j.enqueued_at) as f64, (now - p) as f64, worker_ms as f64));
+                self.timings.push_back((
+                    (p - j.enqueued_at) as f64,
+                    (now - p) as f64,
+                    worker_ms as f64,
+                ));
                 if self.timings.len() > TIMINGS_KEEP {
                     self.timings.pop_front();
                 }
@@ -1041,9 +1345,21 @@ impl Sched {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn nack(&mut self, worker: &str, id: &str, attempt: u32, retry: bool, code: u16, message: &str, now: i64) {
+    fn nack(
+        &mut self,
+        worker: &str,
+        id: &str,
+        attempt: u32,
+        retry: bool,
+        code: u16,
+        message: &str,
+        now: i64,
+    ) {
         let Some(j) = self.jobs.get(id) else { return };
-        if !(j.phase == Phase::Pushed && j.worker.as_deref() == Some(worker) && j.attempt == attempt) {
+        if !(j.phase == Phase::Pushed
+            && j.worker.as_deref() == Some(worker)
+            && j.attempt == attempt)
+        {
             return;
         }
         if code == 424 {
@@ -1063,7 +1379,12 @@ impl Sched {
             self.fail(id, &format!("a worker refused the job: {message}"), now);
             return;
         }
-        if code == 429 && self.workers.get(worker).is_some_and(|w| w.credits.is_some()) {
+        if code == 429
+            && self
+                .workers
+                .get(worker)
+                .is_some_and(|w| w.credits.is_some())
+        {
             // Its arbiter is full (another family holds the GPU): offer it
             // elsewhere now; this worker waits for its next `slots`.
             if let Some(w) = self.workers.get_mut(worker) {
@@ -1073,12 +1394,25 @@ impl Sched {
             self.requeue(id, now, 0);
             return;
         }
-        let bounced_out = j.first_push_at.is_some_and(|t| now - t > self.cfg.max_bounce_ms);
+        let bounced_out = j
+            .first_push_at
+            .is_some_and(|t| now - t > self.cfg.max_bounce_ms);
         if bounced_out {
-            self.fail(id, &format!("no worker took the job for {} s (last: {message})", self.cfg.max_bounce_ms / 1000), now);
+            self.fail(
+                id,
+                &format!(
+                    "no worker took the job for {} s (last: {message})",
+                    self.cfg.max_bounce_ms / 1000
+                ),
+                now,
+            );
             return;
         }
-        let backoff = if code == 409 { self.cfg.conflict_backoff_ms } else { self.cfg.nack_backoff_ms };
+        let backoff = if code == 409 {
+            self.cfg.conflict_backoff_ms
+        } else {
+            self.cfg.nack_backoff_ms
+        };
         if matches!(code, 429 | 503) {
             if let Some(w) = self.workers.get_mut(worker) {
                 w.full_until = now + 2 * self.cfg.nack_backoff_ms;
@@ -1101,7 +1435,9 @@ impl Sched {
 
     /// The job's worker is lost: re-dispatch (attempt + 1) or fail.
     fn lose(&mut self, id: &str, why: &str, now: i64) {
-        let Some(j) = self.jobs.get_mut(id) else { return };
+        let Some(j) = self.jobs.get_mut(id) else {
+            return;
+        };
         if j.attempt < j.max_attempts && j.has_envelope() && !j.cancel_requested {
             j.attempt += 1;
             j.phase = Phase::Queued;
@@ -1154,8 +1490,12 @@ impl Sched {
     pub fn tick(&mut self, now: i64) -> Vec<Out> {
         let mut out = Vec::new();
         // Connected but silent: lost.
-        let silent: Vec<String> =
-            self.workers.values().filter(|w| w.connected && now - w.last_seen > self.cfg.stale_after_ms).map(|w| w.worker_id.clone()).collect();
+        let silent: Vec<String> = self
+            .workers
+            .values()
+            .filter(|w| w.connected && now - w.last_seen > self.cfg.stale_after_ms)
+            .map(|w| w.worker_id.clone())
+            .collect();
         for id in silent {
             if let Some(w) = self.workers.get_mut(&id) {
                 w.connected = false;
@@ -1172,7 +1512,10 @@ impl Sched {
             .map(|j| (j.job_id.clone(), j.worker.clone()))
             .collect();
         for (id, w) in late {
-            let connected = w.as_deref().and_then(|w| self.workers.get(w)).is_some_and(|w| w.connected);
+            let connected = w
+                .as_deref()
+                .and_then(|w| self.workers.get(w))
+                .is_some_and(|w| w.connected);
             if connected || w.is_none() {
                 if let Some(wr) = w.as_deref().and_then(|w| self.workers.get_mut(w)) {
                     wr.full_until = now + self.cfg.ack_timeout_ms;
@@ -1187,42 +1530,80 @@ impl Sched {
         let gone: Vec<(String, i64)> = self
             .workers
             .values()
-            .filter(|w| !w.connected && w.disconnected_at.is_some_and(|t| now - t >= self.cfg.reconnect_grace_ms))
+            .filter(|w| {
+                !w.connected
+                    && w.disconnected_at
+                        .is_some_and(|t| now - t >= self.cfg.reconnect_grace_ms)
+            })
             .map(|w| (w.worker_id.clone(), now - w.disconnected_at.unwrap_or(now)))
             .collect();
         for (wid, away) in &gone {
             let held: Vec<(String, Phase)> = self
                 .jobs
                 .values()
-                .filter(|j| j.worker.as_deref() == Some(wid.as_str()) && matches!(j.phase, Phase::Pushed | Phase::Running))
+                .filter(|j| {
+                    j.worker.as_deref() == Some(wid.as_str())
+                        && matches!(j.phase, Phase::Pushed | Phase::Running)
+                })
                 .map(|j| (j.job_id.clone(), j.phase))
                 .collect();
             for (id, phase) in held {
                 if phase == Phase::Pushed {
                     self.requeue(&id, now, 0);
                 } else {
-                    self.lose(&id, &format!("worker {wid} disconnected {} s ago", away / 1000), now);
+                    self.lose(
+                        &id,
+                        &format!("worker {wid} disconnected {} s ago", away / 1000),
+                        now,
+                    );
                 }
             }
-            let sess: Vec<String> =
-                self.sessions.values().filter(|x| x.state != SessionState::Ended && x.worker.as_deref() == Some(wid.as_str())).map(|x| x.session_id.clone()).collect();
+            let sess: Vec<String> = self
+                .sessions
+                .values()
+                .filter(|x| {
+                    x.state != SessionState::Ended && x.worker.as_deref() == Some(wid.as_str())
+                })
+                .map(|x| x.session_id.clone())
+                .collect();
             for id in sess {
-                self.end_session(&id, &format!("worker {wid} disconnected {} s ago", away / 1000), now, &mut out, false);
+                self.end_session(
+                    &id,
+                    &format!("worker {wid} disconnected {} s ago", away / 1000),
+                    now,
+                    &mut out,
+                    false,
+                );
             }
         }
         // Session offers without an answer, and leases not renewed.
-        let late: Vec<String> =
-            self.sessions.values().filter(|x| x.state == SessionState::Offered && x.deadline.is_some_and(|d| d <= now)).map(|x| x.session_id.clone()).collect();
+        let late: Vec<String> = self
+            .sessions
+            .values()
+            .filter(|x| x.state == SessionState::Offered && x.deadline.is_some_and(|d| d <= now))
+            .map(|x| x.session_id.clone())
+            .collect();
         for id in late {
             out.extend(self.session_next(&id, Some("no answer to the offer"), now));
         }
-        let expired: Vec<String> =
-            self.sessions.values().filter(|x| x.state == SessionState::Live && x.expires_at.is_some_and(|t| t <= now)).map(|x| x.session_id.clone()).collect();
+        let expired: Vec<String> = self
+            .sessions
+            .values()
+            .filter(|x| x.state == SessionState::Live && x.expires_at.is_some_and(|t| t <= now))
+            .map(|x| x.session_id.clone())
+            .collect();
         for id in expired {
             self.end_session(&id, "the lease expired (no renew)", now, &mut out, true);
         }
-        let old: Vec<String> =
-            self.sessions.values().filter(|x| x.state == SessionState::Ended && x.ended_at.is_some_and(|t| now - t > KEEP_SESSIONS_MS)).map(|x| x.session_id.clone()).collect();
+        let old: Vec<String> = self
+            .sessions
+            .values()
+            .filter(|x| {
+                x.state == SessionState::Ended
+                    && x.ended_at.is_some_and(|t| now - t > KEEP_SESSIONS_MS)
+            })
+            .map(|x| x.session_id.clone())
+            .collect();
         for id in old {
             self.sessions.remove(&id);
             self.dirty_sessions.remove(&id);
@@ -1232,11 +1613,19 @@ impl Sched {
         let stuck: Vec<(String, String)> = self
             .jobs
             .values()
-            .filter(|j| j.phase == Phase::Queued && j.requeued_at.is_some_and(|t| now - t >= self.cfg.redispatch_wait_ms))
+            .filter(|j| {
+                j.phase == Phase::Queued
+                    && j.requeued_at
+                        .is_some_and(|t| now - t >= self.cfg.redispatch_wait_ms)
+            })
             .map(|j| (j.job_id.clone(), j.error.clone().unwrap_or_default()))
             .collect();
         for (id, prev) in stuck {
-            let prev = prev.split("; dispatching again").next().unwrap_or_default().to_owned();
+            let prev = prev
+                .split("; dispatching again")
+                .next()
+                .unwrap_or_default()
+                .to_owned();
             let why = format!("the worker running this job was lost ({prev}); no worker took it again within {} s", self.cfg.redispatch_wait_ms / 1000);
             self.fail(&id, &why, now);
         }
@@ -1244,16 +1633,32 @@ impl Sched {
         let unstaged: Vec<String> = self
             .jobs
             .values()
-            .filter(|j| j.phase == Phase::Queued && j.restage && j.first_push_at.is_some_and(|t| now - t > self.cfg.max_bounce_ms))
+            .filter(|j| {
+                j.phase == Phase::Queued
+                    && j.restage
+                    && j.first_push_at
+                        .is_some_and(|t| now - t > self.cfg.max_bounce_ms)
+            })
             .map(|j| j.job_id.clone())
             .collect();
         for id in unstaged {
-            let why = format!("an input could not be fetched and was not restaged within {} s", self.cfg.max_bounce_ms / 1000);
+            let why = format!(
+                "an input could not be fetched and was not restaged within {} s",
+                self.cfg.max_bounce_ms / 1000
+            );
             self.fail(&id, &why, now);
         }
         // Cleanup.
-        let old: Vec<String> =
-            self.jobs.values().filter(|j| j.phase.finished() && j.finished_at.is_some_and(|t| now - t > self.cfg.keep_finished_ms)).map(|j| j.job_id.clone()).collect();
+        let old: Vec<String> = self
+            .jobs
+            .values()
+            .filter(|j| {
+                j.phase.finished()
+                    && j.finished_at
+                        .is_some_and(|t| now - t > self.cfg.keep_finished_ms)
+            })
+            .map(|j| j.job_id.clone())
+            .collect();
         for id in old {
             self.jobs.remove(&id);
             self.dirty_jobs.remove(&id);
@@ -1264,7 +1669,11 @@ impl Sched {
         let forget: Vec<String> = self
             .workers
             .values()
-            .filter(|w| !w.connected && w.disconnected_at.is_some_and(|t| now - t > FORGET_WORKER_MS))
+            .filter(|w| {
+                !w.connected
+                    && w.disconnected_at
+                        .is_some_and(|t| now - t > FORGET_WORKER_MS)
+            })
             .map(|w| w.worker_id.clone())
             .filter(|id| self.held(id) == 0)
             .collect();
@@ -1286,7 +1695,11 @@ impl Sched {
             match j.phase {
                 Phase::Pushed => {
                     // A disconnected worker's jobs wait for its grace period.
-                    let connected = j.worker.as_deref().and_then(|w| self.workers.get(w)).is_none_or(|w| w.connected);
+                    let connected = j
+                        .worker
+                        .as_deref()
+                        .and_then(|w| self.workers.get(w))
+                        .is_none_or(|w| w.connected);
                     if let (Some(d), true) = (j.deadline, connected) {
                         at(d);
                     }
@@ -1359,7 +1772,9 @@ impl Sched {
         let mut queued: Vec<(u64, String)> = self
             .jobs
             .values()
-            .filter(|j| j.phase == Phase::Queued && j.not_before <= now && j.has_envelope() && !j.restage)
+            .filter(|j| {
+                j.phase == Phase::Queued && j.not_before <= now && j.has_envelope() && !j.restage
+            })
             .map(|j| (j.seq, j.job_id.clone()))
             .collect();
         queued.sort();
@@ -1369,7 +1784,9 @@ impl Sched {
                 .workers
                 .values()
                 .filter(|w| w.connected && !w.draining && w.full_until <= now)
-                .filter(|w| w.models.is_empty() || model.as_ref().is_none_or(|m| w.models.contains(m)))
+                .filter(|w| {
+                    w.models.is_empty() || model.as_ref().is_none_or(|m| w.models.contains(m))
+                })
                 .filter(|w| self.free_estimate(w) > 0)
                 .map(|w| (self.held(&w.worker_id), w.worker_id.clone()))
                 .min();
@@ -1378,18 +1795,34 @@ impl Sched {
                 wr.offers_sent += 1;
                 self.dirty_workers.insert(w.clone());
             }
-            let Some(j) = self.jobs.get_mut(&id) else { continue };
+            let Some(j) = self.jobs.get_mut(&id) else {
+                continue;
+            };
             j.phase = Phase::Pushed;
             j.worker = Some(w.clone());
             j.pushed_at = Some(now);
             j.deadline = Some(now + self.cfg.ack_timeout_ms);
             j.first_push_at.get_or_insert(now);
             j.lease += 1;
-            let msg = DoMsg::Job { job_id: id.clone(), attempt: j.attempt, envelope: j.envelope.clone().unwrap_or(Value::Null), lease: j.lease, takeover: j.takeover };
-            let spill = if j.envelope.is_none() { j.spill.clone() } else { None };
+            let msg = DoMsg::Job {
+                job_id: id.clone(),
+                attempt: j.attempt,
+                envelope: j.envelope.clone().unwrap_or(Value::Null),
+                lease: j.lease,
+                takeover: j.takeover,
+            };
+            let spill = if j.envelope.is_none() {
+                j.spill.clone()
+            } else {
+                None
+            };
             self.touch_job(&id);
             match spill {
-                Some(key) => out.push(Out::PushSpilled { worker: w, key, msg }),
+                Some(key) => out.push(Out::PushSpilled {
+                    worker: w,
+                    key,
+                    msg,
+                }),
                 None => out.push(Out::Send { worker: w, msg }),
             }
         }
@@ -1430,9 +1863,19 @@ impl Sched {
             .jobs
             .values()
             .filter(|j| j.failed_here && j.phase == Phase::Failed)
-            .map(|j| FailedJob { job_id: j.job_id.clone(), attempt: j.attempt, error: j.error.clone().unwrap_or_default(), at_ms: j.finished_at.unwrap_or(now) })
+            .map(|j| FailedJob {
+                job_id: j.job_id.clone(),
+                attempt: j.attempt,
+                error: j.error.clone().unwrap_or_default(),
+                at_ms: j.finished_at.unwrap_or(now),
+            })
             .collect();
-        let restage = self.jobs.values().filter(|j| j.restage && j.phase == Phase::Queued).map(|j| j.job_id.clone()).collect();
+        let restage = self
+            .jobs
+            .values()
+            .filter(|j| j.restage && j.phase == Phase::Queued)
+            .map(|j| j.job_id.clone())
+            .collect();
         PoolStatus {
             pool: self.pool.clone(),
             now_ms: now,
@@ -1469,25 +1912,63 @@ impl Sched {
     /// `GET /metrics`: the demand signal of this dispatcher.
     pub fn metrics(&self, now: i64) -> FamilyMetrics {
         let count = |p: Phase| self.jobs.values().filter(|j| j.phase == p).count() as u32;
-        let oldest = self.jobs.values().filter(|j| j.phase == Phase::Queued).map(|j| j.enqueued_at).min().map_or(0, |t| (now - t).max(0));
+        let oldest = self
+            .jobs
+            .values()
+            .filter(|j| j.phase == Phase::Queued)
+            .map(|j| j.enqueued_at)
+            .min()
+            .map_or(0, |t| (now - t).max(0));
         let conn: Vec<&WorkerRec> = self.workers.values().filter(|w| w.connected).collect();
         let t = self.timings();
         FamilyMetrics {
-            family: self.pool.strip_prefix("family:").unwrap_or(&self.pool).to_owned(),
+            family: self
+                .pool
+                .strip_prefix("family:")
+                .unwrap_or(&self.pool)
+                .to_owned(),
             now_ms: now,
             queued: count(Phase::Queued),
             oldest_queued_ms: oldest,
             pushed: count(Phase::Pushed),
             running: count(Phase::Running),
             workers: conn.len() as u32,
-            slots_total: conn.iter().filter(|w| !w.draining).map(|w| w.capacity).sum(),
-            slots_free: conn.iter().filter(|w| !w.draining).map(|w| self.free_estimate(w)).sum(),
-            sessions_live: self.sessions.values().filter(|x| x.state == SessionState::Live).count() as u32,
-            session_capacity: conn.iter().filter(|w| !w.draining).map(|w| self.session_free_estimate(w)).sum(),
-            failed_1h: self.jobs.values().filter(|j| j.failed_here && j.phase == Phase::Failed && j.finished_at.is_some_and(|f| now - f <= 3_600_000)).count() as u32,
+            slots_total: conn
+                .iter()
+                .filter(|w| !w.draining)
+                .map(|w| w.capacity)
+                .sum(),
+            slots_free: conn
+                .iter()
+                .filter(|w| !w.draining)
+                .map(|w| self.free_estimate(w))
+                .sum(),
+            sessions_live: self
+                .sessions
+                .values()
+                .filter(|x| x.state == SessionState::Live)
+                .count() as u32,
+            session_capacity: conn
+                .iter()
+                .filter(|w| !w.draining)
+                .map(|w| self.session_free_estimate(w))
+                .sum(),
+            failed_1h: self
+                .jobs
+                .values()
+                .filter(|j| {
+                    j.failed_here
+                        && j.phase == Phase::Failed
+                        && j.finished_at.is_some_and(|f| now - f <= 3_600_000)
+                })
+                .count() as u32,
             queue_p50_ms: t.queue_p50_ms,
             ack_p50_ms: t.ack_p50_ms,
-            uploads_open: self.uploads.values().filter(|u| u.state != UploadState::Done).count() as u32,
+            uploads_open: self
+                .uploads
+                .values()
+                .filter(|u| u.state != UploadState::Done)
+                .count() as u32,
         }
     }
 
@@ -1497,7 +1978,11 @@ impl Sched {
     /// slot. `Pending`: the host waits for [`Out::SessionReady`].
     pub fn admit(&mut self, req: SessionReq, now: i64) -> (Admit, Vec<Out>) {
         self.seq += 1;
-        let id = req.session_id.clone().filter(|s| crate::valid_id(s)).unwrap_or_else(|| format!("ses-{now:x}-{}", self.seq));
+        let id = req
+            .session_id
+            .clone()
+            .filter(|s| crate::valid_id(s))
+            .unwrap_or_else(|| format!("ses-{now:x}-{}", self.seq));
         if let Some(x) = self.sessions.get(&id) {
             match x.state {
                 SessionState::Live => return (Admit::Granted(x.grant()), Vec::new()),
@@ -1505,7 +1990,11 @@ impl Sched {
                 SessionState::Ended => {}
             }
         }
-        let ttl = if req.ttl_ms > 0 { req.ttl_ms } else { self.cfg.session_ttl_ms };
+        let ttl = if req.ttl_ms > 0 {
+            req.ttl_ms
+        } else {
+            self.cfg.session_ttl_ms
+        };
         self.sessions.insert(
             id.clone(),
             SessionRec {
@@ -1539,9 +2028,14 @@ impl Sched {
 
     /// Offers session `id` to the next worker; `Err` when none is left.
     fn offer_session(&mut self, id: &str, now: i64, out: &mut Vec<Out>) -> Result<(), String> {
-        let Some(x) = self.sessions.get(id) else { return Err("unknown session".into()) };
+        let Some(x) = self.sessions.get(id) else {
+            return Err("unknown session".into());
+        };
         if x.tried.len() as u32 >= self.cfg.session_max_tries {
-            return Err(format!("no worker took the session ({} tried)", x.tried.len()));
+            return Err(format!(
+                "no worker took the session ({} tried)",
+                x.tried.len()
+            ));
         }
         let (model, tried) = (x.model.clone(), x.tried.clone());
         let pick = self
@@ -1553,14 +2047,27 @@ impl Sched {
             .map(|w| (self.held(&w.worker_id), w.worker_id.clone()))
             .min();
         let Some((_, w)) = pick else {
-            return Err(if tried.is_empty() { "no worker has a free session slot".into() } else { format!("no other worker has a free session slot ({} refused)", tried.len()) });
+            return Err(if tried.is_empty() {
+                "no worker has a free session slot".into()
+            } else {
+                format!(
+                    "no other worker has a free session slot ({} refused)",
+                    tried.len()
+                )
+            });
         };
         let x = self.sessions.get_mut(id).expect("checked");
         x.lease += 1;
         x.worker = Some(w.clone());
         x.state = SessionState::Offered;
         x.deadline = Some(now + self.cfg.session_offer_timeout_ms);
-        let msg = DoMsg::SessionOffer { session_id: id.to_owned(), lease: x.lease, model: x.model.clone(), kind: x.kind.clone(), ttl_ms: x.ttl_ms };
+        let msg = DoMsg::SessionOffer {
+            session_id: id.to_owned(),
+            lease: x.lease,
+            model: x.model.clone(),
+            kind: x.kind.clone(),
+            ttl_ms: x.ttl_ms,
+        };
         self.dirty_sessions.insert(id.to_owned());
         out.push(Out::Send { worker: w, msg });
         Ok(())
@@ -1582,15 +2089,36 @@ impl Sched {
                 None => e,
             };
             self.finish_session(id, &e, now);
-            out.push(Out::SessionReady { session_id: id.to_owned(), result: Err(e) });
+            out.push(Out::SessionReady {
+                session_id: id.to_owned(),
+                result: Err(e),
+            });
         }
         out
     }
 
-    fn session_ack(&mut self, worker: &str, id: &str, lease: u64, endpoint: String, now: i64, out: &mut Vec<Out>) {
-        let fallback = self.workers.get(worker).map(|w| w.endpoint.clone()).unwrap_or_default();
+    fn session_ack(
+        &mut self,
+        worker: &str,
+        id: &str,
+        lease: u64,
+        endpoint: String,
+        now: i64,
+        out: &mut Vec<Out>,
+    ) {
+        let fallback = self
+            .workers
+            .get(worker)
+            .map(|w| w.endpoint.clone())
+            .unwrap_or_default();
         let Some(x) = self.sessions.get_mut(id) else {
-            out.push(Out::Send { worker: worker.to_owned(), msg: DoMsg::SessionRevoke { session_id: id.to_owned(), reason: "unknown session".into() } });
+            out.push(Out::Send {
+                worker: worker.to_owned(),
+                msg: DoMsg::SessionRevoke {
+                    session_id: id.to_owned(),
+                    reason: "unknown session".into(),
+                },
+            });
             return;
         };
         let mine = x.worker.as_deref() == Some(worker) && x.lease == lease;
@@ -1599,13 +2127,26 @@ impl Sched {
                 x.state = SessionState::Live;
                 x.deadline = None;
                 x.expires_at = Some(now + x.ttl_ms);
-                x.endpoint = if endpoint.is_empty() { fallback } else { endpoint };
+                x.endpoint = if endpoint.is_empty() {
+                    fallback
+                } else {
+                    endpoint
+                };
                 let g = x.grant();
                 self.dirty_sessions.insert(id.to_owned());
-                out.push(Out::SessionReady { session_id: id.to_owned(), result: Ok(g) });
+                out.push(Out::SessionReady {
+                    session_id: id.to_owned(),
+                    result: Ok(g),
+                });
             }
             SessionState::Live if mine => {}
-            _ => out.push(Out::Send { worker: worker.to_owned(), msg: DoMsg::SessionRevoke { session_id: id.to_owned(), reason: "the session is not offered to this worker".into() } }),
+            _ => out.push(Out::Send {
+                worker: worker.to_owned(),
+                msg: DoMsg::SessionRevoke {
+                    session_id: id.to_owned(),
+                    reason: "the session is not offered to this worker".into(),
+                },
+            }),
         }
     }
 
@@ -1622,7 +2163,9 @@ impl Sched {
     /// Ends a session: the worker is told (`revoke`) unless it ended it, and
     /// a pending admission is answered.
     fn end_session(&mut self, id: &str, why: &str, now: i64, out: &mut Vec<Out>, revoke: bool) {
-        let Some(x) = self.sessions.get(id) else { return };
+        let Some(x) = self.sessions.get(id) else {
+            return;
+        };
         if x.state == SessionState::Ended {
             return;
         }
@@ -1630,11 +2173,20 @@ impl Sched {
         self.finish_session(id, why, now);
         if revoke {
             if let Some(w) = worker {
-                out.push(Out::Send { worker: w, msg: DoMsg::SessionRevoke { session_id: id.to_owned(), reason: why.to_owned() } });
+                out.push(Out::Send {
+                    worker: w,
+                    msg: DoMsg::SessionRevoke {
+                        session_id: id.to_owned(),
+                        reason: why.to_owned(),
+                    },
+                });
             }
         }
         if state == SessionState::Offered {
-            out.push(Out::SessionReady { session_id: id.to_owned(), result: Err(why.to_owned()) });
+            out.push(Out::SessionReady {
+                session_id: id.to_owned(),
+                result: Err(why.to_owned()),
+            });
         }
     }
 
@@ -1664,7 +2216,9 @@ impl Sched {
 
     /// Whether `worker` holds `job_id` under `lease` now.
     fn holds(&self, worker: &str, job_id: &str, lease: u64) -> bool {
-        self.jobs.get(job_id).is_some_and(|j| !j.phase.finished() && j.worker.as_deref() == Some(worker) && j.lease == lease)
+        self.jobs.get(job_id).is_some_and(|j| {
+            !j.phase.finished() && j.worker.as_deref() == Some(worker) && j.lease == lease
+        })
     }
 
     fn grant_err(worker: &str, req: u64, job_id: &str, e: &str) -> Out {
@@ -1684,19 +2238,47 @@ impl Sched {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn upload_init(&mut self, worker: &str, req: u64, job_id: &str, attempt: u32, lease: u64, name: &str, content_type: String, parts: u16, now: i64, out: &mut Vec<Out>) {
+    fn upload_init(
+        &mut self,
+        worker: &str,
+        req: u64,
+        job_id: &str,
+        attempt: u32,
+        lease: u64,
+        name: &str,
+        content_type: String,
+        parts: u16,
+        now: i64,
+        out: &mut Vec<Out>,
+    ) {
         if !crate::valid_id(name) {
             out.push(Self::grant_err(worker, req, job_id, "invalid object name"));
             return;
         }
         if !self.holds(worker, job_id, lease) {
-            out.push(Self::grant_err(worker, req, job_id, "this worker does not hold the job under this lease"));
+            out.push(Self::grant_err(
+                worker,
+                req,
+                job_id,
+                "this worker does not hold the job under this lease",
+            ));
             return;
         }
-        let scope = self.pool.strip_prefix("family:").unwrap_or(&self.pool).to_owned();
-        let key = format!("{}{scope}/{job_id}/{attempt}-{lease}/{name}", self.cfg.upload_prefix);
+        let scope = self
+            .pool
+            .strip_prefix("family:")
+            .unwrap_or(&self.pool)
+            .to_owned();
+        let key = format!(
+            "{}{scope}/{job_id}/{attempt}-{lease}/{name}",
+            self.cfg.upload_prefix
+        );
         let parts = parts.clamp(1, 10_000);
-        match self.uploads.get(&key).map(|u| (u.state, u.upload_id.clone(), u.expires_at)) {
+        match self
+            .uploads
+            .get(&key)
+            .map(|u| (u.state, u.upload_id.clone(), u.expires_at))
+        {
             Some((UploadState::Open, upload_id, _)) => {
                 // A repeated init (after a reconnect): fresh URLs.
                 let exp = now + self.cfg.upload_ttl_ms;
@@ -1704,9 +2286,23 @@ impl Sched {
                     u.expires_at = exp;
                 }
                 self.dirty_uploads.insert(key.clone());
-                out.push(Out::Grant { worker: worker.to_owned(), req, job_id: job_id.to_owned(), key, upload_id, from: 1, count: parts, expires_ms: exp });
+                out.push(Out::Grant {
+                    worker: worker.to_owned(),
+                    req,
+                    job_id: job_id.to_owned(),
+                    key,
+                    upload_id,
+                    from: 1,
+                    count: parts,
+                    expires_ms: exp,
+                });
             }
-            Some(_) => out.push(Self::grant_err(worker, req, job_id, "the upload is being created or completed")),
+            Some(_) => out.push(Self::grant_err(
+                worker,
+                req,
+                job_id,
+                "the upload is being created or completed",
+            )),
             None => {
                 self.uploads.insert(
                     key.clone(),
@@ -1726,17 +2322,33 @@ impl Sched {
                     },
                 );
                 self.dirty_uploads.insert(key.clone());
-                out.push(Out::CreateUpload { worker: worker.to_owned(), req, key, content_type, parts });
+                out.push(Out::CreateUpload {
+                    worker: worker.to_owned(),
+                    req,
+                    key,
+                    content_type,
+                    parts,
+                });
             }
         }
     }
 
     /// The host created (or failed to create) the multipart upload of `key`.
-    pub fn upload_created(&mut self, key: &str, req: u64, parts: u16, result: Result<String, String>, now: i64) -> Vec<Out> {
+    pub fn upload_created(
+        &mut self,
+        key: &str,
+        req: u64,
+        parts: u16,
+        result: Result<String, String>,
+        now: i64,
+    ) -> Vec<Out> {
         let mut out = Vec::new();
         let Some(u) = self.uploads.get(key).cloned() else {
             if let Ok(id) = result {
-                out.push(Out::AbortUpload { key: key.to_owned(), upload_id: id });
+                out.push(Out::AbortUpload {
+                    key: key.to_owned(),
+                    upload_id: id,
+                });
             }
             return out;
         };
@@ -1751,43 +2363,121 @@ impl Sched {
                 rec.state = UploadState::Open;
                 rec.expires_at = exp;
                 self.dirty_uploads.insert(key.to_owned());
-                out.push(Out::Grant { worker: u.worker, req, job_id: u.job_id, key: key.to_owned(), upload_id, from: 1, count: parts.clamp(1, 10_000), expires_ms: exp });
+                out.push(Out::Grant {
+                    worker: u.worker,
+                    req,
+                    job_id: u.job_id,
+                    key: key.to_owned(),
+                    upload_id,
+                    from: 1,
+                    count: parts.clamp(1, 10_000),
+                    expires_ms: exp,
+                });
             }
             Ok(upload_id) => {
                 // The job moved on while the upload was being created.
                 self.uploads.remove(key);
                 self.removed_uploads.insert(key.to_owned());
-                out.push(Out::AbortUpload { key: key.to_owned(), upload_id });
-                out.push(Self::grant_err(&u.worker, req, &u.job_id, "the job moved on (lease changed)"));
+                out.push(Out::AbortUpload {
+                    key: key.to_owned(),
+                    upload_id,
+                });
+                out.push(Self::grant_err(
+                    &u.worker,
+                    req,
+                    &u.job_id,
+                    "the job moved on (lease changed)",
+                ));
             }
             Err(e) => {
                 self.uploads.remove(key);
                 self.removed_uploads.insert(key.to_owned());
-                out.push(Self::grant_err(&u.worker, req, &u.job_id, &format!("creating the upload failed: {e}")));
+                out.push(Self::grant_err(
+                    &u.worker,
+                    req,
+                    &u.job_id,
+                    &format!("creating the upload failed: {e}"),
+                ));
             }
         }
         out
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn upload_more(&mut self, worker: &str, req: u64, job_id: &str, upload_id: &str, from: u16, count: u16, out: &mut Vec<Out>) {
-        let found = self.uploads.values().find(|u| u.upload_id == upload_id && u.state == UploadState::Open).map(|u| (u.key.clone(), u.worker.clone(), u.lease, u.expires_at));
+    fn upload_more(
+        &mut self,
+        worker: &str,
+        req: u64,
+        job_id: &str,
+        upload_id: &str,
+        from: u16,
+        count: u16,
+        out: &mut Vec<Out>,
+    ) {
+        let found = self
+            .uploads
+            .values()
+            .find(|u| u.upload_id == upload_id && u.state == UploadState::Open)
+            .map(|u| (u.key.clone(), u.worker.clone(), u.lease, u.expires_at));
         match found {
             Some((key, w, lease, exp)) if w == worker && self.holds(worker, job_id, lease) => {
-                out.push(Out::Grant { worker: worker.to_owned(), req, job_id: job_id.to_owned(), key, upload_id: upload_id.to_owned(), from: from.max(1), count: count.clamp(1, 10_000), expires_ms: exp });
+                out.push(Out::Grant {
+                    worker: worker.to_owned(),
+                    req,
+                    job_id: job_id.to_owned(),
+                    key,
+                    upload_id: upload_id.to_owned(),
+                    from: from.max(1),
+                    count: count.clamp(1, 10_000),
+                    expires_ms: exp,
+                });
             }
-            _ => out.push(Self::grant_err(worker, req, job_id, "no open upload of this job for this worker")),
+            _ => out.push(Self::grant_err(
+                worker,
+                req,
+                job_id,
+                "no open upload of this job for this worker",
+            )),
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn upload_done(&mut self, worker: &str, req: u64, job_id: &str, lease: u64, upload_id: &str, parts: Vec<Part>, bytes: u64, sha256: String, out: &mut Vec<Out>) {
+    fn upload_done(
+        &mut self,
+        worker: &str,
+        req: u64,
+        job_id: &str,
+        lease: u64,
+        upload_id: &str,
+        parts: Vec<Part>,
+        bytes: u64,
+        sha256: String,
+        out: &mut Vec<Out>,
+    ) {
         let committed = |key: String, ok: bool, bytes: u64, error: Option<String>| Out::Send {
             worker: worker.to_owned(),
-            msg: DoMsg::UploadCommitted { req, job_id: job_id.to_owned(), key, bucket: String::new(), bytes, ok, error },
+            msg: DoMsg::UploadCommitted {
+                req,
+                job_id: job_id.to_owned(),
+                key,
+                bucket: String::new(),
+                bytes,
+                ok,
+                error,
+            },
         };
-        let Some(u) = self.uploads.values().find(|u| u.upload_id == upload_id && u.job_id == job_id).cloned() else {
-            out.push(committed(String::new(), false, 0, Some("no such upload".into())));
+        let Some(u) = self
+            .uploads
+            .values()
+            .find(|u| u.upload_id == upload_id && u.job_id == job_id)
+            .cloned()
+        else {
+            out.push(committed(
+                String::new(),
+                false,
+                0,
+                Some("no such upload".into()),
+            ));
             return;
         };
         if u.state == UploadState::Done {
@@ -1795,7 +2485,12 @@ impl Sched {
             return;
         }
         if u.worker != worker || u.lease != lease || !self.holds(worker, job_id, lease) {
-            out.push(committed(u.key.clone(), false, 0, Some("fenced: the job is held under a newer lease".into())));
+            out.push(committed(
+                u.key.clone(),
+                false,
+                0,
+                Some("fenced: the job is held under a newer lease".into()),
+            ));
             out.extend(self.drop_upload(&u.key));
             return;
         }
@@ -1807,34 +2502,67 @@ impl Sched {
         rec.bytes = bytes;
         rec.sha256 = sha256;
         self.dirty_uploads.insert(u.key.clone());
-        out.push(Out::CompleteUpload { worker: worker.to_owned(), req, key: u.key, upload_id: upload_id.to_owned(), parts, bytes });
+        out.push(Out::CompleteUpload {
+            worker: worker.to_owned(),
+            req,
+            key: u.key,
+            upload_id: upload_id.to_owned(),
+            parts,
+            bytes,
+        });
     }
 
     /// The host completed (`Ok(object size)`) or failed to complete `key`.
-    pub fn upload_completed(&mut self, key: &str, req: u64, result: Result<u64, String>, _now: i64) -> Vec<Out> {
+    pub fn upload_completed(
+        &mut self,
+        key: &str,
+        req: u64,
+        result: Result<u64, String>,
+        _now: i64,
+    ) -> Vec<Out> {
         let mut out = Vec::new();
-        let Some(u) = self.uploads.get(key).cloned() else { return out };
+        let Some(u) = self.uploads.get(key).cloned() else {
+            return out;
+        };
         if u.state != UploadState::Completing {
             return out;
         }
-        let msg = |ok: bool, bytes: u64, error: Option<String>| DoMsg::UploadCommitted { req, job_id: u.job_id.clone(), key: key.to_owned(), bucket: String::new(), bytes, ok, error };
+        let msg = |ok: bool, bytes: u64, error: Option<String>| DoMsg::UploadCommitted {
+            req,
+            job_id: u.job_id.clone(),
+            key: key.to_owned(),
+            bucket: String::new(),
+            bytes,
+            ok,
+            error,
+        };
         match result {
             Ok(size) if size == u.bytes => {
                 let rec = self.uploads.get_mut(key).expect("checked");
                 rec.state = UploadState::Done;
                 self.dirty_uploads.insert(key.to_owned());
                 if let Some(j) = self.jobs.get_mut(&u.job_id) {
-                    j.result = Some(JobResult { key: key.to_owned(), bytes: size, sha256: u.sha256.clone() });
+                    j.result = Some(JobResult {
+                        key: key.to_owned(),
+                        bytes: size,
+                        sha256: u.sha256.clone(),
+                    });
                     self.dirty_jobs.insert(u.job_id.clone());
                 }
-                out.push(Out::Send { worker: u.worker.clone(), msg: msg(true, size, None) });
+                out.push(Out::Send {
+                    worker: u.worker.clone(),
+                    msg: msg(true, size, None),
+                });
             }
             other => {
                 let e = match other {
                     Ok(size) => format!("the object has {size} bytes, the worker sent {}", u.bytes),
                     Err(e) => format!("completing the upload failed: {e}"),
                 };
-                out.push(Out::Send { worker: u.worker.clone(), msg: msg(false, 0, Some(e)) });
+                out.push(Out::Send {
+                    worker: u.worker.clone(),
+                    msg: msg(false, 0, Some(e)),
+                });
                 out.extend(self.drop_upload(key));
             }
         }
@@ -1848,7 +2576,10 @@ impl Sched {
             self.dirty_uploads.remove(key);
             self.removed_uploads.insert(key.to_owned());
             if !u.upload_id.is_empty() && u.state != UploadState::Done {
-                out.push(Out::AbortUpload { key: u.key, upload_id: u.upload_id });
+                out.push(Out::AbortUpload {
+                    key: u.key,
+                    upload_id: u.upload_id,
+                });
             }
         }
         out
@@ -1867,7 +2598,11 @@ impl Sched {
                 UploadState::Creating | UploadState::Completing => u.expires_at <= now,
                 UploadState::Open => {
                     u.expires_at <= now
-                        || self.jobs.get(&u.job_id).is_none_or(|j| j.lease != u.lease || j.worker.as_deref() != Some(u.worker.as_str()) || j.phase.finished())
+                        || self.jobs.get(&u.job_id).is_none_or(|j| {
+                            j.lease != u.lease
+                                || j.worker.as_deref() != Some(u.worker.as_str())
+                                || j.phase.finished()
+                        })
                 }
             })
             .map(|u| u.key.clone())
@@ -1889,7 +2624,14 @@ impl Sched {
         let (q50, qmax) = p50(self.timings.iter().map(|t| t.0).collect());
         let (a50, amax) = p50(self.timings.iter().map(|t| t.1).collect());
         let (w50, _) = p50(self.timings.iter().map(|t| t.2).collect());
-        DispatchTimings { count: self.timings.len() as u32, queue_p50_ms: q50, queue_max_ms: qmax, ack_p50_ms: a50, ack_max_ms: amax, worker_p50_ms: w50 }
+        DispatchTimings {
+            count: self.timings.len() as u32,
+            queue_p50_ms: q50,
+            queue_max_ms: qmax,
+            ack_p50_ms: a50,
+            ack_max_ms: amax,
+            worker_p50_ms: w50,
+        }
     }
 }
 
@@ -1900,15 +2642,41 @@ mod tests {
     use serde_json::json;
 
     fn hello(id: &str, cap: u32, jobs: Vec<Held>) -> WorkerMsg {
-        WorkerMsg::Hello(Hello { worker_id: id.into(), pool: "p".into(), capacity: cap, jobs, ..Hello::default() })
+        WorkerMsg::Hello(Hello {
+            worker_id: id.into(),
+            pool: "p".into(),
+            capacity: cap,
+            jobs,
+            ..Hello::default()
+        })
     }
     fn enq(s: &mut Sched, id: &str, now: i64) -> (EnqueueResp, Vec<Out>) {
-        s.enqueue(EnqueueReq { job_id: id.into(), envelope: json!({"job": {"id": id}}), retries: 1, model: None, replace: false, owner: None, max_queued: 0 }, now)
+        s.enqueue(
+            EnqueueReq {
+                job_id: id.into(),
+                envelope: json!({"job": {"id": id}}),
+                retries: 1,
+                model: None,
+                replace: false,
+                owner: None,
+                max_queued: 0,
+            },
+            now,
+        )
     }
     fn pushes(out: &[Out]) -> Vec<(String, String, u32, bool)> {
         out.iter()
             .filter_map(|o| match o {
-                Out::Send { worker, msg: DoMsg::Job { job_id, attempt, takeover, .. } } => Some((worker.clone(), job_id.clone(), *attempt, *takeover)),
+                Out::Send {
+                    worker,
+                    msg:
+                        DoMsg::Job {
+                            job_id,
+                            attempt,
+                            takeover,
+                            ..
+                        },
+                } => Some((worker.clone(), job_id.clone(), *attempt, *takeover)),
                 _ => None,
             })
             .collect()
@@ -1916,13 +2684,25 @@ mod tests {
     fn cancels(out: &[Out]) -> Vec<(String, String)> {
         out.iter()
             .filter_map(|o| match o {
-                Out::Send { worker, msg: DoMsg::Cancel { job_id } } => Some((worker.clone(), job_id.clone())),
+                Out::Send {
+                    worker,
+                    msg: DoMsg::Cancel { job_id },
+                } => Some((worker.clone(), job_id.clone())),
                 _ => None,
             })
             .collect()
     }
     fn ack(s: &mut Sched, w: &str, j: &str, attempt: u32, now: i64) -> Vec<Out> {
-        s.on_msg(w, WorkerMsg::Ack { job_id: j.into(), attempt, lease: 0, worker_ms: 3 }, now)
+        s.on_msg(
+            w,
+            WorkerMsg::Ack {
+                job_id: j.into(),
+                attempt,
+                lease: 0,
+                worker_ms: 3,
+            },
+            now,
+        )
     }
 
     #[test]
@@ -1939,7 +2719,15 @@ mod tests {
         let (r, out) = enq(&mut s, "b", 20);
         assert_eq!((r.state.as_str(), r.position), ("queued", 0));
         assert!(pushes(&out).is_empty());
-        let out = s.on_msg("w1", WorkerMsg::Done { job_id: "a".into(), attempt: 1, state: "succeeded".into() }, 30);
+        let out = s.on_msg(
+            "w1",
+            WorkerMsg::Done {
+                job_id: "a".into(),
+                attempt: 1,
+                state: "succeeded".into(),
+            },
+            30,
+        );
         assert_eq!(pushes(&out), vec![("w1".into(), "b".into(), 1, false)]);
         let st = s.status(40);
         assert_eq!((st.queued, st.pushed, st.running), (0, 1, 0));
@@ -1978,12 +2766,32 @@ mod tests {
         assert_eq!(pushes(&out), vec![("w2".into(), "a".into(), 1, false)]);
         assert_eq!(s.job("a").unwrap().lease, 2);
         // w1's late ack (lease 1) is stale: w1 is told to drop it.
-        let late = WorkerMsg::Ack { job_id: "a".into(), attempt: 1, lease: 1, worker_ms: 3 };
+        let late = WorkerMsg::Ack {
+            job_id: "a".into(),
+            attempt: 1,
+            lease: 1,
+            worker_ms: 3,
+        };
         let out = s.on_msg("w1", late, wake + 5);
         assert_eq!(cancels(&out), vec![("w1".into(), "a".into())]);
-        let out = s.on_msg("w2", WorkerMsg::Ack { job_id: "a".into(), attempt: 1, lease: 2, worker_ms: 3 }, wake + 6);
+        let out = s.on_msg(
+            "w2",
+            WorkerMsg::Ack {
+                job_id: "a".into(),
+                attempt: 1,
+                lease: 2,
+                worker_ms: 3,
+            },
+            wake + 6,
+        );
         assert!(cancels(&out).is_empty());
-        assert_eq!((s.job("a").unwrap().phase, s.job("a").unwrap().worker.as_deref()), (Phase::Running, Some("w2")));
+        assert_eq!(
+            (
+                s.job("a").unwrap().phase,
+                s.job("a").unwrap().worker.as_deref()
+            ),
+            (Phase::Running, Some("w2"))
+        );
     }
 
     #[test]
@@ -1991,13 +2799,33 @@ mod tests {
         let mut s = Sched::new("p", Cfg::default());
         s.on_msg("w1", hello("w1", 1, vec![]), 0);
         enq(&mut s, "a", 0);
-        let out = s.on_msg("w1", WorkerMsg::Nack { job_id: "a".into(), attempt: 1, retry: true, code: 409, message: "held".into() }, 1);
+        let out = s.on_msg(
+            "w1",
+            WorkerMsg::Nack {
+                job_id: "a".into(),
+                attempt: 1,
+                retry: true,
+                code: 409,
+                message: "held".into(),
+            },
+            1,
+        );
         assert!(pushes(&out).is_empty());
         let t = s.next_wake(1).unwrap();
         assert_eq!(t, 1 + s.cfg.conflict_backoff_ms);
         let out = s.tick(t);
         assert_eq!(pushes(&out).len(), 1);
-        let out = s.on_msg("w1", WorkerMsg::Nack { job_id: "a".into(), attempt: 1, retry: false, code: 400, message: "bad".into() }, t + 1);
+        let out = s.on_msg(
+            "w1",
+            WorkerMsg::Nack {
+                job_id: "a".into(),
+                attempt: 1,
+                retry: false,
+                code: 400,
+                message: "bad".into(),
+            },
+            t + 1,
+        );
         assert!(pushes(&out).is_empty());
         let j = s.job("a").unwrap();
         assert_eq!(j.phase, Phase::Failed);
@@ -2022,7 +2850,9 @@ mod tests {
         // w2 goes silent (connected, no frames): lost for good.
         let t = 100 + grace + 1 + s.cfg.stale_after_ms + 1;
         let out = s.tick(t);
-        assert!(out.contains(&Out::Close { worker: "w2".into() }));
+        assert!(out.contains(&Out::Close {
+            worker: "w2".into()
+        }));
         let out = s.tick(t + grace);
         assert!(pushes(&out).is_empty());
         let j = s.job("a").unwrap();
@@ -2047,8 +2877,18 @@ mod tests {
         // It comes back holding `run` (never got `pushed`) plus one it
         // finished meanwhile that we never heard of.
         let held = vec![
-            Held { job_id: "run".into(), attempt: 1, lease: 1, state: "running".into() },
-            Held { job_id: "ghost".into(), attempt: 1, lease: 1, state: "succeeded".into() },
+            Held {
+                job_id: "run".into(),
+                attempt: 1,
+                lease: 1,
+                state: "running".into(),
+            },
+            Held {
+                job_id: "ghost".into(),
+                attempt: 1,
+                lease: 1,
+                state: "succeeded".into(),
+            },
         ];
         let out = s.on_msg("w1", hello("w1", 2, held), 2_000);
         assert_eq!(s.job("run").unwrap().phase, Phase::Running);
@@ -2076,7 +2916,14 @@ mod tests {
         s.tick(wake);
         let j = s.job("a").unwrap();
         assert_eq!(j.phase, Phase::Failed);
-        assert!(j.error.as_deref().unwrap().starts_with("the worker running this job was lost (worker w1 disconnected"), "{:?}", j.error);
+        assert!(
+            j.error
+                .as_deref()
+                .unwrap()
+                .starts_with("the worker running this job was lost (worker w1 disconnected"),
+            "{:?}",
+            j.error
+        );
         assert_eq!(s.status(wake).failed.len(), 1);
     }
 
@@ -2092,9 +2939,25 @@ mod tests {
         s.tick(t);
         ack(&mut s, "w2", "a", 2, t + 1);
         // w1 comes back, still running attempt 1 under lease 1: told to drop it.
-        let out = s.on_msg("w1", hello("w1", 1, vec![Held { job_id: "a".into(), attempt: 1, lease: 1, state: "running".into() }]), t + 2);
+        let out = s.on_msg(
+            "w1",
+            hello(
+                "w1",
+                1,
+                vec![Held {
+                    job_id: "a".into(),
+                    attempt: 1,
+                    lease: 1,
+                    state: "running".into(),
+                }],
+            ),
+            t + 2,
+        );
         let welcome = out.iter().find_map(|o| match o {
-            Out::Send { msg: DoMsg::Welcome { cancel, .. }, .. } => Some(cancel.clone()),
+            Out::Send {
+                msg: DoMsg::Welcome { cancel, .. },
+                ..
+            } => Some(cancel.clone()),
             _ => None,
         });
         assert_eq!(welcome, Some(vec!["a".to_string()]));
@@ -2119,19 +2982,72 @@ mod tests {
     #[test]
     fn draining_and_models() {
         let mut s = Sched::new("p", Cfg::default());
-        let mut h = Hello { worker_id: "w1".into(), pool: "p".into(), capacity: 4, models: vec!["m1".into()], ..Hello::default() };
+        let mut h = Hello {
+            worker_id: "w1".into(),
+            pool: "p".into(),
+            capacity: 4,
+            models: vec!["m1".into()],
+            ..Hello::default()
+        };
         s.on_msg("w1", WorkerMsg::Hello(h.clone()), 0);
-        let (_, out) = s.enqueue(EnqueueReq { job_id: "x".into(), envelope: json!({}), retries: 0, model: Some("m2".into()), replace: false, owner: None, max_queued: 0 }, 1);
+        let (_, out) = s.enqueue(
+            EnqueueReq {
+                job_id: "x".into(),
+                envelope: json!({}),
+                retries: 0,
+                model: Some("m2".into()),
+                replace: false,
+                owner: None,
+                max_queued: 0,
+            },
+            1,
+        );
         assert!(pushes(&out).is_empty());
-        let (_, out) = s.enqueue(EnqueueReq { job_id: "y".into(), envelope: json!({}), retries: 0, model: Some("m1".into()), replace: false, owner: None, max_queued: 0 }, 2);
+        let (_, out) = s.enqueue(
+            EnqueueReq {
+                job_id: "y".into(),
+                envelope: json!({}),
+                retries: 0,
+                model: Some("m1".into()),
+                replace: false,
+                owner: None,
+                max_queued: 0,
+            },
+            2,
+        );
         assert_eq!(pushes(&out).len(), 1);
         h.draining = true;
-        h.jobs = vec![Held { job_id: "y".into(), attempt: 1, lease: 1, state: "queued".into() }];
+        h.jobs = vec![Held {
+            job_id: "y".into(),
+            attempt: 1,
+            lease: 1,
+            state: "queued".into(),
+        }];
         s.on_msg("w1", WorkerMsg::Hello(h), 3);
         assert_eq!(s.job("y").unwrap().phase, Phase::Running);
-        let (_, out) = s.enqueue(EnqueueReq { job_id: "z".into(), envelope: json!({}), retries: 0, model: None, replace: false, owner: None, max_queued: 0 }, 4);
+        let (_, out) = s.enqueue(
+            EnqueueReq {
+                job_id: "z".into(),
+                envelope: json!({}),
+                retries: 0,
+                model: None,
+                replace: false,
+                owner: None,
+                max_queued: 0,
+            },
+            4,
+        );
         assert!(pushes(&out).is_empty());
-        let out = s.on_msg("w1", WorkerMsg::Status { running: 1, draining: false, capacity: 4, ready: None }, 5);
+        let out = s.on_msg(
+            "w1",
+            WorkerMsg::Status {
+                running: 1,
+                draining: false,
+                capacity: 4,
+                ready: None,
+            },
+            5,
+        );
         assert_eq!(pushes(&out).len(), 1);
     }
 
@@ -2141,7 +3057,15 @@ mod tests {
         s.on_msg("w1", hello("w1", 1, vec![]), 0);
         enq(&mut s, "a", 0);
         ack(&mut s, "w1", "a", 1, 1);
-        s.on_msg("w1", WorkerMsg::Done { job_id: "a".into(), attempt: 1, state: "failed".into() }, 2);
+        s.on_msg(
+            "w1",
+            WorkerMsg::Done {
+                job_id: "a".into(),
+                attempt: 1,
+                state: "failed".into(),
+            },
+            2,
+        );
         assert!(!s.job("a").unwrap().failed_here);
         let t = s.next_wake(3).unwrap();
         s.tick(t);
@@ -2153,15 +3077,54 @@ mod tests {
     fn restage_after_424_and_spilled_envelopes() {
         let mut s = Sched::new("p", Cfg::default());
         s.on_msg("w1", hello("w1", 1, vec![]), 0);
-        let (_, out) = s.enqueue_spilled(EnqueueReq { job_id: "a".into(), envelope: json!(null), retries: 1, model: None, replace: false, owner: None, max_queued: 0 }, Some("env/a".into()), 0);
+        let (_, out) = s.enqueue_spilled(
+            EnqueueReq {
+                job_id: "a".into(),
+                envelope: json!(null),
+                retries: 1,
+                model: None,
+                replace: false,
+                owner: None,
+                max_queued: 0,
+            },
+            Some("env/a".into()),
+            0,
+        );
         // A spilled envelope is pushed through the host.
         assert!(matches!(&out[..], [Out::PushSpilled { key, .. }] if key == "env/a"));
-        let out = s.on_msg("w1", WorkerMsg::Nack { job_id: "a".into(), attempt: 1, retry: true, code: 424, message: "gone".into() }, 1);
-        assert!(out.iter().all(|o| !matches!(o, Out::Send { msg: DoMsg::Job { .. }, .. } | Out::PushSpilled { .. })));
+        let out = s.on_msg(
+            "w1",
+            WorkerMsg::Nack {
+                job_id: "a".into(),
+                attempt: 1,
+                retry: true,
+                code: 424,
+                message: "gone".into(),
+            },
+            1,
+        );
+        assert!(out.iter().all(|o| !matches!(
+            o,
+            Out::Send {
+                msg: DoMsg::Job { .. },
+                ..
+            } | Out::PushSpilled { .. }
+        )));
         assert_eq!(s.status(2).restage, vec!["a".to_string()]);
         // Not pushed again until the gateway replaces the envelope.
         assert!(pushes(&s.tick(5_000)).is_empty());
-        let (r, out) = s.enqueue(EnqueueReq { job_id: "a".into(), envelope: json!({"stored": true}), retries: 1, model: None, replace: true, owner: None, max_queued: 0 }, 6_000);
+        let (r, out) = s.enqueue(
+            EnqueueReq {
+                job_id: "a".into(),
+                envelope: json!({"stored": true}),
+                retries: 1,
+                model: None,
+                replace: true,
+                owner: None,
+                max_queued: 0,
+            },
+            6_000,
+        );
         assert!(!r.duplicate);
         assert_eq!(pushes(&out), vec![("w1".into(), "a".into(), 1, false)]);
         assert_eq!(s.job("a").unwrap().lease, 2);
@@ -2169,9 +3132,38 @@ mod tests {
         assert_eq!(d.dropped_spills, vec!["env/a".to_string()]);
         assert!(s.status(7_000).restage.is_empty());
         // A restage that never comes fails after the bounce limit.
-        s.enqueue(EnqueueReq { job_id: "b".into(), envelope: json!({}), retries: 1, model: None, replace: false, owner: None, max_queued: 0 }, 7_000);
-        s.on_msg("w1", WorkerMsg::Done { job_id: "a".into(), attempt: 1, state: "succeeded".into() }, 7_001);
-        s.on_msg("w1", WorkerMsg::Nack { job_id: "b".into(), attempt: 1, retry: true, code: 424, message: "gone".into() }, 7_002);
+        s.enqueue(
+            EnqueueReq {
+                job_id: "b".into(),
+                envelope: json!({}),
+                retries: 1,
+                model: None,
+                replace: false,
+                owner: None,
+                max_queued: 0,
+            },
+            7_000,
+        );
+        s.on_msg(
+            "w1",
+            WorkerMsg::Done {
+                job_id: "a".into(),
+                attempt: 1,
+                state: "succeeded".into(),
+            },
+            7_001,
+        );
+        s.on_msg(
+            "w1",
+            WorkerMsg::Nack {
+                job_id: "b".into(),
+                attempt: 1,
+                retry: true,
+                code: 424,
+                message: "gone".into(),
+            },
+            7_002,
+        );
         let t = s.next_wake(7_003).unwrap();
         s.tick(t.max(7_000 + s.cfg.max_bounce_ms + 2));
         assert_eq!(s.job("b").unwrap().phase, Phase::Failed);
@@ -2187,17 +3179,38 @@ mod tests {
             capacity: cap,
             jobs,
             endpoint: format!("https://{id}.example"),
-            slots: Some(Slots { free, session_free, offers_seen: 0 }),
+            slots: Some(Slots {
+                free,
+                session_free,
+                offers_seen: 0,
+            }),
             ..Hello::default()
         })
     }
-    fn slots(s: &mut Sched, w: &str, free: u32, session_free: u32, seen: u64, now: i64) -> Vec<Out> {
-        s.on_msg(w, WorkerMsg::Slots(Slots { free, session_free, offers_seen: seen }), now)
+    fn slots(
+        s: &mut Sched,
+        w: &str,
+        free: u32,
+        session_free: u32,
+        seen: u64,
+        now: i64,
+    ) -> Vec<Out> {
+        s.on_msg(
+            w,
+            WorkerMsg::Slots(Slots {
+                free,
+                session_free,
+                offers_seen: seen,
+            }),
+            now,
+        )
     }
     fn ready(out: &[Out]) -> Vec<(String, Result<SessionGrant, String>)> {
         out.iter()
             .filter_map(|o| match o {
-                Out::SessionReady { session_id, result } => Some((session_id.clone(), result.clone())),
+                Out::SessionReady { session_id, result } => {
+                    Some((session_id.clone(), result.clone()))
+                }
                 _ => None,
             })
             .collect()
@@ -2205,7 +3218,13 @@ mod tests {
     fn session_offers(out: &[Out]) -> Vec<(String, String, u64)> {
         out.iter()
             .filter_map(|o| match o {
-                Out::Send { worker, msg: DoMsg::SessionOffer { session_id, lease, .. } } => Some((worker.clone(), session_id.clone(), *lease)),
+                Out::Send {
+                    worker,
+                    msg:
+                        DoMsg::SessionOffer {
+                            session_id, lease, ..
+                        },
+                } => Some((worker.clone(), session_id.clone(), *lease)),
                 _ => None,
             })
             .collect()
@@ -2213,7 +3232,10 @@ mod tests {
     fn revokes(out: &[Out]) -> Vec<(String, String)> {
         out.iter()
             .filter_map(|o| match o {
-                Out::Send { worker, msg: DoMsg::SessionRevoke { session_id, .. } } => Some((worker.clone(), session_id.clone())),
+                Out::Send {
+                    worker,
+                    msg: DoMsg::SessionRevoke { session_id, .. },
+                } => Some((worker.clone(), session_id.clone())),
                 _ => None,
             })
             .collect()
@@ -2242,20 +3264,39 @@ mod tests {
     #[test]
     fn arbiter_nack_reoffers_elsewhere_at_once() {
         // (No stale-worker detection in this test: it spans a long wait.)
-        let cfg = Cfg { stale_after_ms: i64::MAX / 4, ..Cfg::default() };
+        let cfg = Cfg {
+            stale_after_ms: i64::MAX / 4,
+            ..Cfg::default()
+        };
         let mut s = Sched::new("family:wan", cfg);
         s.on_msg("w1", hello2("w1", 1, 1, 0, vec![]), 0);
         s.on_msg("w2", hello2("w2", 1, 1, 0, vec![]), 0);
         let (_, out) = enq(&mut s, "a", 0);
         assert_eq!(pushes(&out)[0].0, "w1");
         // w1's GPU was taken by another family's job meanwhile.
-        let nack = WorkerMsg::Nack { job_id: "a".into(), attempt: 1, retry: true, code: 429, message: "busy with family ltx".into() };
+        let nack = WorkerMsg::Nack {
+            job_id: "a".into(),
+            attempt: 1,
+            retry: true,
+            code: 429,
+            message: "busy with family ltx".into(),
+        };
         let out = s.on_msg("w1", nack.clone(), 5);
-        assert_eq!(pushes(&out), vec![("w2".into(), "a".into(), 1, false)], "no backoff");
+        assert_eq!(
+            pushes(&out),
+            vec![("w2".into(), "a".into(), 1, false)],
+            "no backoff"
+        );
         assert_eq!(s.job("a").unwrap().lease, 2);
         // w2 is busy too: the job waits (not failed) until a slot frees,
         // however long that takes.
-        let nack2 = WorkerMsg::Nack { job_id: "a".into(), attempt: 1, retry: true, code: 429, message: "busy".into() };
+        let nack2 = WorkerMsg::Nack {
+            job_id: "a".into(),
+            attempt: 1,
+            retry: true,
+            code: 429,
+            message: "busy".into(),
+        };
         let out = s.on_msg("w2", nack2, 6);
         assert!(pushes(&out).is_empty());
         let late = 6 + s.cfg.max_bounce_ms * 3;
@@ -2264,7 +3305,17 @@ mod tests {
         let out = slots(&mut s, "w2", 1, 0, 1, late + 1);
         assert_eq!(pushes(&out), vec![("w2".into(), "a".into(), 1, false)]);
         // A late 429 from w2 again: still not failed (no bounce limit).
-        let out = s.on_msg("w2", WorkerMsg::Nack { job_id: "a".into(), attempt: 1, retry: true, code: 429, message: "busy".into() }, late + 2);
+        let out = s.on_msg(
+            "w2",
+            WorkerMsg::Nack {
+                job_id: "a".into(),
+                attempt: 1,
+                retry: true,
+                code: 429,
+                message: "busy".into(),
+            },
+            late + 2,
+        );
         assert!(pushes(&out).is_empty());
         assert_eq!(s.job("a").unwrap().phase, Phase::Queued);
     }
@@ -2277,7 +3328,16 @@ mod tests {
         enq(&mut s, "a", 0);
         let out = s.tick(s.cfg.ack_timeout_ms);
         assert_eq!(pushes(&out), vec![("w2".into(), "a".into(), 1, false)]);
-        let out = s.on_msg("w1", WorkerMsg::Ack { job_id: "a".into(), attempt: 1, lease: 1, worker_ms: 1 }, s.cfg.ack_timeout_ms + 1);
+        let out = s.on_msg(
+            "w1",
+            WorkerMsg::Ack {
+                job_id: "a".into(),
+                attempt: 1,
+                lease: 1,
+                worker_ms: 1,
+            },
+            s.cfg.ack_timeout_ms + 1,
+        );
         assert_eq!(cancels(&out), vec![("w1".into(), "a".into())]);
     }
 
@@ -2291,12 +3351,28 @@ mod tests {
         let lease_run = s.job("run").unwrap().lease;
         let jobs: Vec<JobRec> = s.jobs().cloned().collect();
         let workers: Vec<WorkerRec> = s.workers().cloned().collect();
-        let mut s = Sched::restore_all("family:wan", Cfg::default(), jobs, workers, Vec::new(), Vec::new());
+        let mut s = Sched::restore_all(
+            "family:wan",
+            Cfg::default(),
+            jobs,
+            workers,
+            Vec::new(),
+            Vec::new(),
+        );
         s.disconnect("w1", 10);
-        let held = vec![Held { job_id: "run".into(), attempt: 1, lease: lease_run, state: "running".into() }];
+        let held = vec![Held {
+            job_id: "run".into(),
+            attempt: 1,
+            lease: lease_run,
+            state: "running".into(),
+        }];
         // Back with one slot left (it runs `run`).
         let out = s.on_msg("w1", hello2("w1", 2, 1, 0, held), 500);
-        assert_eq!(pushes(&out), vec![("w1".into(), "inflight".into(), 1, false)], "only the offer lost in flight goes again");
+        assert_eq!(
+            pushes(&out),
+            vec![("w1".into(), "inflight".into(), 1, false)],
+            "only the offer lost in flight goes again"
+        );
         assert_eq!(s.job("run").unwrap().attempt, 1);
         assert!(cancels(&out).is_empty());
     }
@@ -2305,18 +3381,55 @@ mod tests {
     fn session_admission_ack_renew_expire() {
         let mut s = Sched::new("family:sfwan", Cfg::default());
         s.on_msg("w1", hello2("w1", 1, 1, 1, vec![]), 0);
-        let (a, out) = s.admit(SessionReq { session_id: Some("s1".into()), kind: "director".into(), ..SessionReq::default() }, 10);
+        let (a, out) = s.admit(
+            SessionReq {
+                session_id: Some("s1".into()),
+                kind: "director".into(),
+                ..SessionReq::default()
+            },
+            10,
+        );
         assert_eq!(a, Admit::Pending("s1".into()));
         assert_eq!(session_offers(&out), vec![("w1".into(), "s1".into(), 1)]);
-        let out = s.on_msg("w1", WorkerMsg::SessionAck { session_id: "s1".into(), lease: 1, endpoint: String::new() }, 20);
+        let out = s.on_msg(
+            "w1",
+            WorkerMsg::SessionAck {
+                session_id: "s1".into(),
+                lease: 1,
+                endpoint: String::new(),
+            },
+            20,
+        );
         let r = ready(&out);
         let g = r[0].1.clone().unwrap();
-        assert_eq!((g.worker_id.as_str(), g.endpoint.as_str(), g.expires_ms), ("w1", "https://w1.example", 20 + s.cfg.session_ttl_ms));
+        assert_eq!(
+            (g.worker_id.as_str(), g.endpoint.as_str(), g.expires_ms),
+            ("w1", "https://w1.example", 20 + s.cfg.session_ttl_ms)
+        );
         // Idempotent admit of the same id.
-        assert!(matches!(s.admit(SessionReq { session_id: Some("s1".into()), ..SessionReq::default() }, 21).0, Admit::Granted(_)));
+        assert!(matches!(
+            s.admit(
+                SessionReq {
+                    session_id: Some("s1".into()),
+                    ..SessionReq::default()
+                },
+                21
+            )
+            .0,
+            Admit::Granted(_)
+        ));
         assert_eq!(s.metrics(22).sessions_live, 1);
         let g = s.renew("s1", 1, 1_000).unwrap();
-        s.on_msg("w1", WorkerMsg::Status { running: 0, draining: false, capacity: 1, ready: None }, 50_000);
+        s.on_msg(
+            "w1",
+            WorkerMsg::Status {
+                running: 0,
+                draining: false,
+                capacity: 1,
+                ready: None,
+            },
+            50_000,
+        );
         assert_eq!(g.expires_ms, 1_000 + s.cfg.session_ttl_ms);
         assert!(s.renew("s1", 7, 1_001).is_none(), "wrong lease");
         let out = s.tick(g.expires_ms);
@@ -2334,18 +3447,44 @@ mod tests {
         assert!(matches!(a, Admit::Refused(_)), "{a:?}");
         s.on_msg("w1", hello2("w1", 1, 1, 1, vec![]), 2);
         s.on_msg("w2", hello2("w2", 1, 1, 1, vec![]), 2);
-        let (a, out) = s.admit(SessionReq { session_id: Some("s".into()), ..SessionReq::default() }, 3);
+        let (a, out) = s.admit(
+            SessionReq {
+                session_id: Some("s".into()),
+                ..SessionReq::default()
+            },
+            3,
+        );
         assert_eq!(a, Admit::Pending("s".into()));
         assert_eq!(session_offers(&out)[0].0, "w1");
-        let out = s.on_msg("w1", WorkerMsg::SessionNack { session_id: "s".into(), lease: 1, code: 429, message: "busy".into() }, 4);
+        let out = s.on_msg(
+            "w1",
+            WorkerMsg::SessionNack {
+                session_id: "s".into(),
+                lease: 1,
+                code: 429,
+                message: "busy".into(),
+            },
+            4,
+        );
         assert_eq!(session_offers(&out), vec![("w2".into(), "s".into(), 2)]);
         // w2 never answers: the offer times out and nobody is left.
         let out = s.tick(4 + s.cfg.session_offer_timeout_ms);
         let r = ready(&out);
         assert_eq!(r.len(), 1);
-        assert!(r[0].1.as_ref().unwrap_err().contains("no other worker"), "{r:?}");
+        assert!(
+            r[0].1.as_ref().unwrap_err().contains("no other worker"),
+            "{r:?}"
+        );
         // A late ack from w2 is revoked.
-        let out = s.on_msg("w2", WorkerMsg::SessionAck { session_id: "s".into(), lease: 2, endpoint: String::new() }, 9_000);
+        let out = s.on_msg(
+            "w2",
+            WorkerMsg::SessionAck {
+                session_id: "s".into(),
+                lease: 2,
+                endpoint: String::new(),
+            },
+            9_000,
+        );
         assert_eq!(revokes(&out), vec![("w2".into(), "s".into())]);
     }
 
@@ -2353,21 +3492,51 @@ mod tests {
     fn sessions_survive_a_reconnect_and_release_frees_the_slot() {
         let mut s = Sched::new("family:sfwan", Cfg::default());
         s.on_msg("w1", hello2("w1", 1, 1, 1, vec![]), 0);
-        let (_, _) = s.admit(SessionReq { session_id: Some("a".into()), ..SessionReq::default() }, 1);
-        s.on_msg("w1", WorkerMsg::SessionAck { session_id: "a".into(), lease: 1, endpoint: "https://pod-a".into() }, 2);
+        let (_, _) = s.admit(
+            SessionReq {
+                session_id: Some("a".into()),
+                ..SessionReq::default()
+            },
+            1,
+        );
+        s.on_msg(
+            "w1",
+            WorkerMsg::SessionAck {
+                session_id: "a".into(),
+                lease: 1,
+                endpoint: "https://pod-a".into(),
+            },
+            2,
+        );
         s.disconnect("w1", 3);
         // Back holding `a` plus a stale session it should drop.
         let h = WorkerMsg::Hello(Hello {
             worker_id: "w1".into(),
             pool: "family:sfwan".into(),
             proto: 2,
-            sessions: vec![crate::HeldSession { session_id: "a".into(), lease: 1 }, crate::HeldSession { session_id: "old".into(), lease: 4 }],
-            slots: Some(Slots { free: 0, session_free: 0, offers_seen: 0 }),
+            sessions: vec![
+                crate::HeldSession {
+                    session_id: "a".into(),
+                    lease: 1,
+                },
+                crate::HeldSession {
+                    session_id: "old".into(),
+                    lease: 4,
+                },
+            ],
+            slots: Some(Slots {
+                free: 0,
+                session_free: 0,
+                offers_seen: 0,
+            }),
             ..Hello::default()
         });
         let out = s.on_msg("w1", h, 500);
         let w = out.iter().find_map(|o| match o {
-            Out::Send { msg: DoMsg::Welcome { end_sessions, .. }, .. } => Some(end_sessions.clone()),
+            Out::Send {
+                msg: DoMsg::Welcome { end_sessions, .. },
+                ..
+            } => Some(end_sessions.clone()),
             _ => None,
         });
         assert_eq!(w, Some(vec!["old".to_string()]));
@@ -2376,9 +3545,31 @@ mod tests {
         assert_eq!(st, Some("ended"));
         assert_eq!(revokes(&out), vec![("w1".into(), "a".into())]);
         // A worker that is gone past the grace period loses its sessions.
-        s.on_msg("w1", WorkerMsg::Slots(Slots { free: 1, session_free: 1, offers_seen: 0 }), 700);
-        s.admit(SessionReq { session_id: Some("b".into()), ..SessionReq::default() }, 701);
-        s.on_msg("w1", WorkerMsg::SessionAck { session_id: "b".into(), lease: 1, endpoint: String::new() }, 702);
+        s.on_msg(
+            "w1",
+            WorkerMsg::Slots(Slots {
+                free: 1,
+                session_free: 1,
+                offers_seen: 0,
+            }),
+            700,
+        );
+        s.admit(
+            SessionReq {
+                session_id: Some("b".into()),
+                ..SessionReq::default()
+            },
+            701,
+        );
+        s.on_msg(
+            "w1",
+            WorkerMsg::SessionAck {
+                session_id: "b".into(),
+                lease: 1,
+                endpoint: String::new(),
+            },
+            702,
+        );
         s.disconnect("w1", 800);
         s.tick(800 + s.cfg.reconnect_grace_ms);
         assert_eq!(s.session("b").unwrap().state, SessionState::Ended);
@@ -2387,7 +3578,9 @@ mod tests {
     fn creates(out: &[Out]) -> Vec<(String, u64, String)> {
         out.iter()
             .filter_map(|o| match o {
-                Out::CreateUpload { worker, req, key, .. } => Some((worker.clone(), *req, key.clone())),
+                Out::CreateUpload {
+                    worker, req, key, ..
+                } => Some((worker.clone(), *req, key.clone())),
                 _ => None,
             })
             .collect()
@@ -2395,7 +3588,14 @@ mod tests {
     fn grants(out: &[Out]) -> Vec<(String, u64, String, u16, u16)> {
         out.iter()
             .filter_map(|o| match o {
-                Out::Grant { worker, req, upload_id, from, count, .. } => Some((worker.clone(), *req, upload_id.clone(), *from, *count)),
+                Out::Grant {
+                    worker,
+                    req,
+                    upload_id,
+                    from,
+                    count,
+                    ..
+                } => Some((worker.clone(), *req, upload_id.clone(), *from, *count)),
                 _ => None,
             })
             .collect()
@@ -2403,7 +3603,10 @@ mod tests {
     fn grant_errors(out: &[Out]) -> Vec<String> {
         out.iter()
             .filter_map(|o| match o {
-                Out::Send { msg: DoMsg::UploadGrant { error: Some(e), .. }, .. } => Some(e.clone()),
+                Out::Send {
+                    msg: DoMsg::UploadGrant { error: Some(e), .. },
+                    ..
+                } => Some(e.clone()),
                 _ => None,
             })
             .collect()
@@ -2417,7 +3620,15 @@ mod tests {
             .collect()
     }
     fn init(job: &str, lease: u64, req: u64) -> WorkerMsg {
-        WorkerMsg::UploadInit { req, job_id: job.into(), attempt: 1, lease, name: "output.mp4".into(), content_type: "video/mp4".into(), parts: 4 }
+        WorkerMsg::UploadInit {
+            req,
+            job_id: job.into(),
+            attempt: 1,
+            lease,
+            name: "output.mp4".into(),
+            content_type: "video/mp4".into(),
+            parts: 4,
+        }
     }
 
     #[test]
@@ -2428,25 +3639,90 @@ mod tests {
         ack(&mut s, "w1", "a", 1, 1);
         let out = s.on_msg("w1", init("a", 1, 7), 2);
         let c = creates(&out);
-        assert_eq!(c, vec![("w1".into(), 7, "outputs/wan/a/1-1/output.mp4".into())]);
+        assert_eq!(
+            c,
+            vec![("w1".into(), 7, "outputs/wan/a/1-1/output.mp4".into())]
+        );
         let key = c[0].2.clone();
         let out = s.upload_created(&key, 7, 4, Ok("U1".into()), 3);
         assert_eq!(grants(&out), vec![("w1".into(), 7, "U1".into(), 1, 4)]);
-        let out = s.on_msg("w1", WorkerMsg::UploadMore { req: 8, job_id: "a".into(), upload_id: "U1".into(), from: 5, count: 4 }, 4);
+        let out = s.on_msg(
+            "w1",
+            WorkerMsg::UploadMore {
+                req: 8,
+                job_id: "a".into(),
+                upload_id: "U1".into(),
+                from: 5,
+                count: 4,
+            },
+            4,
+        );
         assert_eq!(grants(&out), vec![("w1".into(), 8, "U1".into(), 5, 4)]);
-        let parts = vec![Part { n: 1, etag: "e1".into() }, Part { n: 2, etag: "e2".into() }];
-        let done = WorkerMsg::UploadDone { req: 9, job_id: "a".into(), attempt: 1, lease: 1, upload_id: "U1".into(), parts: parts.clone(), bytes: 100, sha256: "ab".into() };
+        let parts = vec![
+            Part {
+                n: 1,
+                etag: "e1".into(),
+            },
+            Part {
+                n: 2,
+                etag: "e2".into(),
+            },
+        ];
+        let done = WorkerMsg::UploadDone {
+            req: 9,
+            job_id: "a".into(),
+            attempt: 1,
+            lease: 1,
+            upload_id: "U1".into(),
+            parts: parts.clone(),
+            bytes: 100,
+            sha256: "ab".into(),
+        };
         let out = s.on_msg("w1", done.clone(), 5);
-        assert!(matches!(&out[..], [Out::CompleteUpload { req: 9, bytes: 100, .. }]), "{out:?}");
+        assert!(
+            matches!(
+                &out[..],
+                [Out::CompleteUpload {
+                    req: 9,
+                    bytes: 100,
+                    ..
+                }]
+            ),
+            "{out:?}"
+        );
         // A size mismatch would fail; the right size commits.
         let out = s.upload_completed(&key, 9, Ok(100), 6);
-        assert!(out.iter().any(|o| matches!(o, Out::Send { msg: DoMsg::UploadCommitted { ok: true, bytes: 100, .. }, .. })));
+        assert!(out.iter().any(|o| matches!(
+            o,
+            Out::Send {
+                msg: DoMsg::UploadCommitted {
+                    ok: true,
+                    bytes: 100,
+                    ..
+                },
+                ..
+            }
+        )));
         assert_eq!(s.job("a").unwrap().result.as_ref().unwrap().sha256, "ab");
         // A repeated done is answered from the record (idempotent).
         let out = s.on_msg("w1", done, 7);
-        assert!(out.iter().any(|o| matches!(o, Out::Send { msg: DoMsg::UploadCommitted { ok: true, .. }, .. })));
+        assert!(out.iter().any(|o| matches!(
+            o,
+            Out::Send {
+                msg: DoMsg::UploadCommitted { ok: true, .. },
+                ..
+            }
+        )));
         // The job ends: nothing is aborted.
-        let out = s.on_msg("w1", WorkerMsg::Done { job_id: "a".into(), attempt: 1, state: "succeeded".into() }, 8);
+        let out = s.on_msg(
+            "w1",
+            WorkerMsg::Done {
+                job_id: "a".into(),
+                attempt: 1,
+                state: "succeeded".into(),
+            },
+            8,
+        );
         assert!(aborts(&out).is_empty());
     }
 
@@ -2467,17 +3743,47 @@ mod tests {
         s.disconnect("w1", 10);
         let out = s.tick(10 + s.cfg.reconnect_grace_ms);
         assert_eq!(pushes(&out), vec![("w2".into(), "a".into(), 2, true)]);
-        assert_eq!(aborts(&out), vec!["U".to_string()], "the old holder's upload is aborted");
+        assert_eq!(
+            aborts(&out),
+            vec!["U".to_string()],
+            "the old holder's upload is aborted"
+        );
         // The old holder's done is fenced.
-        let done = WorkerMsg::UploadDone { req: 5, job_id: "a".into(), attempt: 1, lease: 1, upload_id: "U".into(), parts: vec![], bytes: 1, sha256: String::new() };
+        let done = WorkerMsg::UploadDone {
+            req: 5,
+            job_id: "a".into(),
+            attempt: 1,
+            lease: 1,
+            upload_id: "U".into(),
+            parts: vec![],
+            bytes: 1,
+            sha256: String::new(),
+        };
         let out = s.on_msg("w1", done, 20_100);
-        assert!(out.iter().any(|o| matches!(o, Out::Send { msg: DoMsg::UploadCommitted { ok: false, .. }, .. })), "{out:?}");
+        assert!(
+            out.iter().any(|o| matches!(
+                o,
+                Out::Send {
+                    msg: DoMsg::UploadCommitted { ok: false, .. },
+                    ..
+                }
+            )),
+            "{out:?}"
+        );
         // An upload created after its job moved on is aborted at once.
         ack(&mut s, "w2", "a", 2, 20_200);
         let out = s.on_msg("w2", init("a", 2, 6), 20_300);
         let k2 = creates(&out)[0].2.clone();
         s.cancel("a", 20_400);
-        s.on_msg("w2", WorkerMsg::Done { job_id: "a".into(), attempt: 2, state: "cancelled".into() }, 20_500);
+        s.on_msg(
+            "w2",
+            WorkerMsg::Done {
+                job_id: "a".into(),
+                attempt: 2,
+                state: "cancelled".into(),
+            },
+            20_500,
+        );
         let out = s.upload_created(&k2, 6, 2, Ok("U2".into()), 20_600);
         assert_eq!(aborts(&out), vec!["U2".to_string()]);
         // An open upload that outlives its TTL is aborted by the alarm.
@@ -2503,7 +3809,17 @@ mod tests {
         enq(&mut s, "c", 300);
         let m = s.metrics(1_300);
         assert_eq!(m.family, "wan");
-        assert_eq!((m.queued, m.pushed, m.workers, m.slots_total, m.slots_free, m.session_capacity), (2, 1, 1, 2, 0, 1));
+        assert_eq!(
+            (
+                m.queued,
+                m.pushed,
+                m.workers,
+                m.slots_total,
+                m.slots_free,
+                m.session_capacity
+            ),
+            (2, 1, 1, 2, 0, 1)
+        );
         assert_eq!(m.oldest_queued_ms, 1_100);
     }
 
@@ -2531,7 +3847,14 @@ mod tests {
         assert_eq!(st.owners.get("key_1"), Some(&2));
         assert_eq!(st.owners.get("key_2"), Some(&1));
         // `replace` on a queued job keeps the new envelope, no new job.
-        let (r, out) = s.enqueue(EnqueueReq { envelope: json!({"v": 2}), replace: true, ..req("a", "key_1", "m") }, 6);
+        let (r, out) = s.enqueue(
+            EnqueueReq {
+                envelope: json!({"v": 2}),
+                replace: true,
+                ..req("a", "key_1", "m")
+            },
+            6,
+        );
         assert!(r.duplicate && out.is_empty());
         assert_eq!(s.job("a").unwrap().envelope, Some(json!({"v": 2})));
         assert_eq!(s.job_phase("a"), "queued");
@@ -2544,11 +3867,34 @@ mod tests {
     #[test]
     fn fronts_and_readiness_ride_on_the_worker() {
         let mut s = Sched::new("family:h3", Cfg::default());
-        let f = crate::FrontInfo { url: "https://w1".into(), names: [("fasth3".to_owned(), "fasth3".to_owned())].into(), ready: false, ..Default::default() };
-        s.on_msg("w1", WorkerMsg::Hello(Hello { worker_id: "w1".into(), pool: "family:h3".into(), front: Some(f), ..Hello::default() }), 1);
+        let f = crate::FrontInfo {
+            url: "https://w1".into(),
+            names: [("fasth3".to_owned(), "fasth3".to_owned())].into(),
+            ready: false,
+            ..Default::default()
+        };
+        s.on_msg(
+            "w1",
+            WorkerMsg::Hello(Hello {
+                worker_id: "w1".into(),
+                pool: "family:h3".into(),
+                front: Some(f),
+                ..Hello::default()
+            }),
+            1,
+        );
         let w = &s.status(2).workers[0];
         assert!(!w.ready && w.front.as_ref().unwrap().names.contains_key("fasth3"));
-        s.on_msg("w1", WorkerMsg::Status { running: 0, draining: false, capacity: 1, ready: Some(true) }, 3);
+        s.on_msg(
+            "w1",
+            WorkerMsg::Status {
+                running: 0,
+                draining: false,
+                capacity: 1,
+                ready: Some(true),
+            },
+            3,
+        );
         assert!(s.status(4).workers[0].ready);
     }
 }

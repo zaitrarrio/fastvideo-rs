@@ -244,8 +244,13 @@ pub fn adapter_entry(root: &Path, adapter: &Path) -> Result<FileEntry> {
 
 /// Why the tree in `dir` cannot stand in for `transformer` under `want`, or
 /// `Ok(manifest)`. Sizes and identity only (see the module docs).
-pub fn check(transformer: &Path, dir: &Path, want: &Identity) -> std::result::Result<Manifest, String> {
-    let raw = std::fs::read_to_string(dir.join(MANIFEST)).map_err(|e| format!("no manifest ({e})"))?;
+pub fn check(
+    transformer: &Path,
+    dir: &Path,
+    want: &Identity,
+) -> std::result::Result<Manifest, String> {
+    let raw =
+        std::fs::read_to_string(dir.join(MANIFEST)).map_err(|e| format!("no manifest ({e})"))?;
     let m: Manifest = serde_json::from_str(&raw).map_err(|e| format!("manifest: {e}"))?;
     if m.format != FORMAT || m.version != VERSION {
         return Err(format!(
@@ -264,7 +269,10 @@ pub fn check(transformer: &Path, dir: &Path, want: &Identity) -> std::result::Re
     for f in &m.files {
         let got = std::fs::metadata(dir.join(&f.name)).map(|m| m.len()).ok();
         if got != Some(f.bytes) {
-            return Err(format!("{}: {got:?} bytes, manifest says {}", f.name, f.bytes));
+            return Err(format!(
+                "{}: {got:?} bytes, manifest says {}",
+                f.name, f.bytes
+            ));
         }
     }
     Ok(m)
@@ -299,7 +307,9 @@ pub fn select(
         return Ok(None);
     }
     let Some(want) = want else {
-        return refuse("this load has no pre-quantized form (adapter or layout not covered)".into());
+        return refuse(
+            "this load has no pre-quantized form (adapter or layout not covered)".into(),
+        );
     };
     if !dir.is_dir() {
         return refuse(format!("no tree at {}", dir.display()));
@@ -363,9 +373,12 @@ impl TreeWriter {
             bias,
         } = l.snapshot().map_err(|e| msg(format!("{prefix}: {e}")))?;
         match weight {
-            SnapshotWeight::Bf16(b) => {
-                self.push(format!("{prefix}.weight"), LazyDType::BF16, vec![out_dim, in_dim], b)
-            }
+            SnapshotWeight::Bf16(b) => self.push(
+                format!("{prefix}.weight"),
+                LazyDType::BF16,
+                vec![out_dim, in_dim],
+                b,
+            ),
             SnapshotWeight::F32(v) => self.push(
                 format!("{prefix}.weight"),
                 LazyDType::F32,
@@ -378,19 +391,34 @@ impl TreeWriter {
                 blob,
             } => {
                 let enc = layout.encode();
-                self.push(format!("{prefix}.qlayout"), LazyDType::U8, vec![enc.len()], enc);
+                self.push(
+                    format!("{prefix}.qlayout"),
+                    LazyDType::U8,
+                    vec![enc.len()],
+                    enc,
+                );
                 self.push(
                     format!("{prefix}.qscales"),
                     LazyDType::F32,
                     vec![scales.len()],
                     f32_bytes(&scales),
                 );
-                self.push(format!("{prefix}.qblob"), LazyDType::U8, vec![blob.len()], blob);
+                self.push(
+                    format!("{prefix}.qblob"),
+                    LazyDType::U8,
+                    vec![blob.len()],
+                    blob,
+                );
                 self.quantized_linears += 1;
             }
         }
         if let Some(b) = bias {
-            self.push(format!("{prefix}.bias"), LazyDType::F32, vec![b.len()], f32_bytes(&b));
+            self.push(
+                format!("{prefix}.bias"),
+                LazyDType::F32,
+                vec![b.len()],
+                f32_bytes(&b),
+            );
         }
         Ok(())
     }
@@ -398,10 +426,18 @@ impl TreeWriter {
     /// An F32 tensor (a pinned norm weight) as it holds its values.
     pub fn tensor(&mut self, key: &str, t: &CudaTensor) -> Result<()> {
         if t.dtype != TensorDType::F32 {
-            return Err(msg(format!("{key}: only F32 tensors are stored, got {:?}", t.dtype)));
+            return Err(msg(format!(
+                "{key}: only F32 tensors are stored, got {:?}",
+                t.dtype
+            )));
         }
         let v = t.host_cow()?;
-        self.push(key.to_string(), LazyDType::F32, t.shape.clone(), f32_bytes(&v));
+        self.push(
+            key.to_string(),
+            LazyDType::F32,
+            t.shape.clone(),
+            f32_bytes(&v),
+        );
         Ok(())
     }
 
@@ -417,7 +453,14 @@ impl TreeWriter {
     /// sha256 over every tensor (name, dtype, shape, bytes) in name order:
     /// equal digests mean equal resident state.
     pub fn digest(&self) -> String {
-        digest_of(self.tensors.iter().map(|t| (t.name.as_str(), t.dtype.as_str(), &t.shape[..], &t.bytes[..])))
+        digest_of(self.tensors.iter().map(|t| {
+            (
+                t.name.as_str(),
+                t.dtype.as_str(),
+                &t.shape[..],
+                &t.bytes[..],
+            )
+        }))
     }
 
     /// sha256 of each tensor's bytes, by name (to name what differs when
@@ -428,7 +471,10 @@ impl TreeWriter {
             .iter()
             .map(|t| {
                 let d = Sha256::digest(&t.bytes);
-                (t.name.clone(), d.iter().map(|b| format!("{b:02x}")).collect())
+                (
+                    t.name.clone(),
+                    d.iter().map(|b| format!("{b:02x}")).collect(),
+                )
             })
             .collect()
     }
@@ -449,7 +495,9 @@ impl TreeWriter {
         }
         std::fs::create_dir_all(out_dir).map_err(|e| msg(format!("{}: {e}", out_dir.display())))?;
         let mut order: Vec<usize> = (0..self.tensors.len()).collect();
-        order.sort_by(|&a, &b| fastvideo_loader::natural_cmp(&self.tensors[a].name, &self.tensors[b].name));
+        order.sort_by(|&a, &b| {
+            fastvideo_loader::natural_cmp(&self.tensors[a].name, &self.tensors[b].name)
+        });
         let specs: Vec<TensorSpec> = order
             .iter()
             .map(|&i| {
@@ -458,8 +506,13 @@ impl TreeWriter {
             })
             .collect();
         let path = out_dir.join(MODEL_FILE);
-        let data = |i: usize| -> std::result::Result<std::borrow::Cow<'_, [u8]>, fastvideo_loader::LoaderError> {
-            Ok(std::borrow::Cow::Borrowed(&self.tensors[order[i]].bytes[..]))
+        let data = |i: usize| -> std::result::Result<
+            std::borrow::Cow<'_, [u8]>,
+            fastvideo_loader::LoaderError,
+        > {
+            Ok(std::borrow::Cow::Borrowed(
+                &self.tensors[order[i]].bytes[..],
+            ))
         };
         fastvideo_loader::write_parallel(&path, &specs, metadata, &data, 16 << 20)
             .map_err(|e| msg(e.to_string()))?;
@@ -469,7 +522,9 @@ impl TreeWriter {
 
 /// The digest [`TreeWriter::digest`] computes, over any (name, dtype, shape,
 /// bytes) set.
-pub fn digest_of<'a>(items: impl Iterator<Item = (&'a str, &'a str, &'a [usize], &'a [u8])>) -> String {
+pub fn digest_of<'a>(
+    items: impl Iterator<Item = (&'a str, &'a str, &'a [usize], &'a [u8])>,
+) -> String {
     use sha2::{Digest, Sha256};
     let mut v: Vec<_> = items.collect();
     v.sort_by(|a, b| a.0.cmp(b.0));
@@ -540,7 +595,9 @@ impl TreeReader {
     }
 
     fn lazy(&self) -> Result<&fastvideo_loader::LazyStore> {
-        self.map.lazy().ok_or_else(|| msg("dit tree: not a mapped store"))
+        self.map
+            .lazy()
+            .ok_or_else(|| msg("dit tree: not a mapped store"))
     }
 
     pub fn contains(&self, key: &str) -> bool {
@@ -631,7 +688,8 @@ mod tests {
     fn ramp(n: usize, seed: u32) -> Vec<f32> {
         (0..n)
             .map(|i| {
-                let x = (i as u32).wrapping_mul(2654435761).wrapping_add(seed) as f32 / u32::MAX as f32;
+                let x =
+                    (i as u32).wrapping_mul(2654435761).wrapping_add(seed) as f32 / u32::MAX as f32;
                 (x - 0.5) * 0.2
             })
             .collect()
@@ -644,13 +702,22 @@ mod tests {
                 kind,
                 64,
                 vec![
-                    Section { rows: 48, quantized: true },
-                    Section { rows: 16, quantized: false },
+                    Section {
+                        rows: 48,
+                        quantized: true,
+                    },
+                    Section {
+                        rows: 16,
+                        quantized: false,
+                    },
                 ],
             )
             .unwrap();
             let d = QuantLayout::decode(&l.encode()).unwrap();
-            assert_eq!((d.kind, d.in_dim, d.out_dim, d.blob_bytes), (l.kind, l.in_dim, l.out_dim, l.blob_bytes));
+            assert_eq!(
+                (d.kind, d.in_dim, d.out_dim, d.blob_bytes),
+                (l.kind, l.in_dim, l.out_dim, l.blob_bytes)
+            );
             assert_eq!(d.sections, l.sections);
         }
         assert!(QuantLayout::decode(&[0u8; 12]).is_err());
@@ -679,7 +746,16 @@ mod tests {
                 "mx",
                 Some((
                     QuantKind::Mxfp8,
-                    vec![Section { rows: 64, quantized: true }, Section { rows: 32, quantized: false }],
+                    vec![
+                        Section {
+                            rows: 64,
+                            quantized: true,
+                        },
+                        Section {
+                            rows: 32,
+                            quantized: false,
+                        },
+                    ],
                 )),
                 false,
             ),
@@ -688,9 +764,18 @@ mod tests {
                 Some((
                     QuantKind::W8A8,
                     vec![
-                        Section { rows: 32, quantized: true },
-                        Section { rows: 32, quantized: true },
-                        Section { rows: 32, quantized: true },
+                        Section {
+                            rows: 32,
+                            quantized: true,
+                        },
+                        Section {
+                            rows: 32,
+                            quantized: true,
+                        },
+                        Section {
+                            rows: 32,
+                            quantized: true,
+                        },
                     ],
                 )),
                 true,
@@ -714,7 +799,10 @@ mod tests {
         let digest = w.digest();
         assert_eq!(w.quantized_linears, 2);
         let file = w.write(&dir, &[("format", FORMAT)]).unwrap();
-        assert_eq!(file.bytes, std::fs::metadata(dir.join(MODEL_FILE)).unwrap().len());
+        assert_eq!(
+            file.bytes,
+            std::fs::metadata(dir.join(MODEL_FILE)).unwrap().len()
+        );
         write_manifest(
             &dir,
             &Manifest {
@@ -730,7 +818,10 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(w.write(&dir, &[]).is_err(), "a written tree is never overwritten");
+        assert!(
+            w.write(&dir, &[]).is_err(),
+            "a written tree is never overwritten"
+        );
 
         let r = TreeReader::open(&dir).unwrap();
         let mut again = TreeWriter::default();
@@ -741,11 +832,23 @@ mod tests {
             again.linear(name, &l).unwrap();
             let xs = CudaTensor::from_vec(x.clone(), vec![1, 5, k]).unwrap();
             let (a, b) = (orig.forward(&xs).unwrap(), l.forward(&xs).unwrap());
-            let (a, b) = (a.host_cow().unwrap().into_owned(), b.host_cow().unwrap().into_owned());
-            assert!(a.iter().zip(&b).all(|(p, q)| p.to_bits() == q.to_bits()), "{name}: outputs differ");
+            let (a, b) = (
+                a.host_cow().unwrap().into_owned(),
+                b.host_cow().unwrap().into_owned(),
+            );
+            assert!(
+                a.iter().zip(&b).all(|(p, q)| p.to_bits() == q.to_bits()),
+                "{name}: outputs differ"
+            );
         }
-        again.tensor("norm.weight", &r.pinned("norm.weight", &[k]).unwrap()).unwrap();
-        assert_eq!(again.digest(), digest, "read-back state differs from the stored one");
+        again
+            .tensor("norm.weight", &r.pinned("norm.weight", &[k]).unwrap())
+            .unwrap();
+        assert_eq!(
+            again.digest(),
+            digest,
+            "read-back state differs from the stored one"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -774,7 +877,10 @@ mod tests {
         let a = sample_identity();
         let mut b = a.clone();
         b.adapter.as_mut().unwrap().sha256.clear();
-        assert!(a.matches(&b).is_ok(), "the adapter hash is not compared at load");
+        assert!(
+            a.matches(&b).is_ok(),
+            "the adapter hash is not compared at load"
+        );
         b.quant = "w8a8".into();
         let e = a.matches(&b).unwrap_err();
         assert!(e.contains("quant") && e.contains("w8a8"), "{e}");
@@ -810,10 +916,14 @@ mod tests {
         other.recipe = "sol-h3".into();
         assert!(check(&tf, &tree, &other).unwrap_err().contains("recipe"));
         std::fs::write(tf.join("a.safetensors"), b"123456").unwrap();
-        assert!(check(&tf, &tree, &sample_identity()).unwrap_err().contains("source shards"));
+        assert!(check(&tf, &tree, &sample_identity())
+            .unwrap_err()
+            .contains("source shards"));
         std::fs::write(tf.join("a.safetensors"), b"12345").unwrap();
         std::fs::write(tree.join(MODEL_FILE), b"xy").unwrap();
-        assert!(check(&tf, &tree, &sample_identity()).unwrap_err().contains("bytes"));
+        assert!(check(&tf, &tree, &sample_identity())
+            .unwrap_err()
+            .contains("bytes"));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -98,7 +98,10 @@ struct RunSpec {
 
 fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
     let mut parts = s.split(',');
-    let name = parts.next().filter(|n| !n.is_empty()).ok_or_else(|| anyhow!("--run {s}: no name"))?;
+    let name = parts
+        .next()
+        .filter(|n| !n.is_empty())
+        .ok_or_else(|| anyhow!("--run {s}: no name"))?;
     let mut r = RunSpec {
         name: name.to_string(),
         seconds: 10.0,
@@ -116,7 +119,9 @@ fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
         dump: false,
     };
     for kv in parts {
-        let (k, v) = kv.split_once('=').ok_or_else(|| anyhow!("--run {s}: `{kv}` is not key=value"))?;
+        let (k, v) = kv
+            .split_once('=')
+            .ok_or_else(|| anyhow!("--run {s}: `{kv}` is not key=value"))?;
         match k {
             "seconds" => r.seconds = v.parse()?,
             "rope" => {
@@ -130,8 +135,12 @@ fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
             "sink" => r.sink = v.parse()?,
             "window" => r.window = v.parse()?,
             "switch_at" => {
-                r.switch_at = v.split('/').map(str::parse).collect::<Result<Vec<f64>, _>>()?;
-                r.switch_at.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                r.switch_at = v
+                    .split('/')
+                    .map(str::parse)
+                    .collect::<Result<Vec<f64>, _>>()?;
+                r.switch_at
+                    .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             }
             "switch" => {
                 r.switch = match v {
@@ -151,8 +160,13 @@ fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
             }
             "drop_rgb" => r.drop_rgb = v == "1",
             "recache" => {
-                let (e, k) = v.split_once(':').ok_or_else(|| anyhow!("--run {s}: recache=EVERY_BLOCKS:KEEP_FRAMES"))?;
-                r.recache = Some(Recache { every_blocks: e.parse()?, keep_frames: k.parse()? });
+                let (e, k) = v
+                    .split_once(':')
+                    .ok_or_else(|| anyhow!("--run {s}: recache=EVERY_BLOCKS:KEEP_FRAMES"))?;
+                r.recache = Some(Recache {
+                    every_blocks: e.parse()?,
+                    keep_frames: k.parse()?,
+                });
             }
             "graphs" => r.graphs = Some(v == "1"),
             "fresh" => r.fresh = v == "1",
@@ -168,24 +182,39 @@ fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
 /// `--switch-prompts`: LongLive's `interactive_example.jsonl` (line `line`
 /// is `{"prompts": [p0, p1, ...]}`: `p0` starts the run, the rest are the
 /// switches) or plain text (one switch prompt per non-empty line).
-pub fn read_switch_prompts(path: &std::path::Path, line: usize) -> anyhow::Result<(Option<String>, Vec<String>)> {
+pub fn read_switch_prompts(
+    path: &std::path::Path,
+    line: usize,
+) -> anyhow::Result<(Option<String>, Vec<String>)> {
     let text = std::fs::read_to_string(path).map_err(|e| anyhow!("{}: {e}", path.display()))?;
     parse_switch_prompts(&text, line).map_err(|e| anyhow!("{}: {e}", path.display()))
 }
 
 fn parse_switch_prompts(text: &str, line: usize) -> anyhow::Result<(Option<String>, Vec<String>)> {
-    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
     if lines.first().is_some_and(|l| l.starts_with('{')) {
-        let l = lines.get(line).ok_or_else(|| anyhow!("no line {line} ({} lines)", lines.len()))?;
+        let l = lines
+            .get(line)
+            .ok_or_else(|| anyhow!("no line {line} ({} lines)", lines.len()))?;
         let v: Value = serde_json::from_str(l)?;
         let ps: Vec<String> = v["prompts"]
             .as_array()
             .ok_or_else(|| anyhow!("line {line}: no \"prompts\" array"))?
             .iter()
-            .map(|p| p.as_str().map(str::to_string).ok_or_else(|| anyhow!("line {line}: a prompt is not a string")))
+            .map(|p| {
+                p.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| anyhow!("line {line}: a prompt is not a string"))
+            })
             .collect::<anyhow::Result<_>>()?;
         let mut it = ps.into_iter();
-        let first = it.next().ok_or_else(|| anyhow!("line {line}: no prompts"))?;
+        let first = it
+            .next()
+            .ok_or_else(|| anyhow!("line {line}: no prompts"))?;
         return Ok((Some(first), it.collect()));
     }
     Ok((None, lines.into_iter().map(str::to_string).collect()))
@@ -205,7 +234,11 @@ fn pct(v: &mut [f64], p: f64) -> f64 {
 
 pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
     report.set("device", crate::gpu::init(a.device)?);
-    let runs: Vec<RunSpec> = a.runs.iter().map(|s| parse_run(s)).collect::<anyhow::Result<_>>()?;
+    let runs: Vec<RunSpec> = a
+        .runs
+        .iter()
+        .map(|s| parse_run(s))
+        .collect::<anyhow::Result<_>>()?;
     let tokenizer = a.weights.join("tokenizer").join("tokenizer.json");
     if !tokenizer.is_file() {
         return Err(anyhow!("{} missing", tokenizer.display()).into());
@@ -219,9 +252,14 @@ pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
             if !a.longlive_lora {
                 w.lora = None;
             } else if w.lora.is_none() {
-                return Err(anyhow!("--longlive {}: no lora.safetensors (--longlive-no-lora for the base)", dir.display()).into());
+                return Err(anyhow!(
+                    "--longlive {}: no lora.safetensors (--longlive-no-lora for the base)",
+                    dir.display()
+                )
+                .into());
             }
-            let (map, rep) = fastvideo_cudarc::wan::longlive::load_transformer_map(&w).map_err(|e| anyhow!("{e}"))?;
+            let (map, rep) = fastvideo_cudarc::wan::longlive::load_transformer_map(&w)
+                .map_err(|e| anyhow!("{e}"))?;
             report.note(
                 "longlive_weights",
                 json!({"dir": dir.display().to_string(), "tensors": rep.tensors, "lora_modules_merged": rep.merged,
@@ -231,8 +269,9 @@ pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
         }
         None => None,
     };
-    let pipe = WanPipeline::load_with_dit(a.weights, a.preset, LoadParts { text_encoder: true }, dit)
-        .map_err(|e| anyhow!("load {}: {e}", a.weights.display()))?;
+    let pipe =
+        WanPipeline::load_with_dit(a.weights, a.preset, LoadParts { text_encoder: true }, dit)
+            .map_err(|e| anyhow!("load {}: {e}", a.weights.display()))?;
     report.note(
         "load",
         json!({"seconds": t.elapsed().as_secs_f64(),
@@ -290,7 +329,12 @@ fn graph_parity_arm(
     legs: &[(usize, &str)],
 ) -> StageResult<()> {
     let run = |graphs: bool| -> anyhow::Result<(Vec<(Vec<u32>, Vec<u32>, f64)>, Option<Value>)> {
-        let cfg = RolloutConfig { graphs, rope, rgb8: false, ..base.clone() };
+        let cfg = RolloutConfig {
+            graphs,
+            rope,
+            rgb8: false,
+            ..base.clone()
+        };
         let mut ro = CausalRollout::open(pipe, cfg).map_err(|e| anyhow!("{e}"))?;
         let mut out = Vec::new();
         for &(n, then) in legs {
@@ -338,7 +382,10 @@ fn graph_parity_arm(
                "frames": crate::metrics::diff(&f(&a.1), &f(&b.1)).to_json()})
     });
     let times = |v: &[(Vec<u32>, Vec<u32>, f64)]| v.iter().map(|x| x.2).collect::<Vec<_>>();
-    let failed = g.as_ref().and_then(|g| g.get("failed").cloned()).unwrap_or(Value::Null);
+    let failed = g
+        .as_ref()
+        .and_then(|g| g.get("failed").cloned())
+        .unwrap_or(Value::Null);
     report.note(
         format!("parity/graph_vs_eager/{arm}"),
         json!({"blocks": eager.len(), "differing_blocks": differing, "first_difference": first_diff,
@@ -374,7 +421,9 @@ fn parity(report: &mut Report, pipe: &WanPipeline, base: &RolloutConfig) -> Stag
     let t = Instant::now();
     let emb = pipe.encode_prompt(&cfg).map_err(|e| anyhow!("{e}"))?;
     let lat0 = pipe.initial_latents(&cfg).map_err(|e| anyhow!("{e}"))?;
-    let bounded = pipe.denoise(&cfg, lat0, &emb, None).map_err(|e| anyhow!("{e}"))?;
+    let bounded = pipe
+        .denoise(&cfg, lat0, &emb, None)
+        .map_err(|e| anyhow!("{e}"))?;
     let whole = tae.decode(&bounded).map_err(|e| anyhow!("{e}"))?;
     let bounded_s = t.elapsed().as_secs_f64();
     // [1, 3, F, H, W] → [F, 3, H, W]
@@ -404,8 +453,10 @@ fn parity(report: &mut Report, pipe: &WanPipeline, base: &RolloutConfig) -> Stag
             frames.push(b.frames);
         }
         drop(ro);
-        let lat = CudaTensor::cat(&lats.iter().collect::<Vec<_>>(), 2).map_err(|e| anyhow!("{e}"))?;
-        let fr = CudaTensor::cat(&frames.iter().collect::<Vec<_>>(), 0).map_err(|e| anyhow!("{e}"))?;
+        let lat =
+            CudaTensor::cat(&lats.iter().collect::<Vec<_>>(), 2).map_err(|e| anyhow!("{e}"))?;
+        let fr =
+            CudaTensor::cat(&frames.iter().collect::<Vec<_>>(), 0).map_err(|e| anyhow!("{e}"))?;
         let (lat_h, fr_h) = (host(&lat)?, host(&fr)?);
         let lat_d = crate::metrics::diff(&lat_h, &bounded_h);
         // Per-block decode of the stream's own latents against their
@@ -433,10 +484,19 @@ fn parity(report: &mut Report, pipe: &WanPipeline, base: &RolloutConfig) -> Stag
         let chunk3_h = host(&chunk3)?;
         let c3 = crate::metrics::diff(&fr_h, &chunk3_h);
         // 8-bit frames as the stream emits them.
-        let q = |v: &[f32]| -> Vec<u8> { v.iter().map(|x| ((x + 1.0) * 127.5).clamp(0.0, 255.0) as u8).collect() };
+        let q = |v: &[f32]| -> Vec<u8> {
+            v.iter()
+                .map(|x| ((x + 1.0) * 127.5).clamp(0.0, 255.0) as u8)
+                .collect()
+        };
         let (q_fr, q_own) = (q(&fr_h), q(&own_h));
         let u8_diff = q_fr.iter().zip(&q_own).filter(|(a, b)| a != b).count();
-        let u8_max = q_fr.iter().zip(&q_own).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+        let u8_max = q_fr
+            .iter()
+            .zip(&q_own)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
         arms.insert(
             name.into(),
             json!({
@@ -466,13 +526,21 @@ fn parity(report: &mut Report, pipe: &WanPipeline, base: &RolloutConfig) -> Stag
             json!({"max_abs": 0.02, "psnr_db_min": 60.0}),
         )?;
     }
-    report.note("parity", json!({"bounded_s": bounded_s, "arms": Value::Object(arms)}));
+    report.note(
+        "parity",
+        json!({"bounded_s": bounded_s, "arms": Value::Object(arms)}),
+    );
 
     // The rebased sink against FastVideo's relativistic policy, past the
     // first roll (14 blocks, sink 3): the same attention offsets, different
     // rounding points.
     let roll = |rope: RopePolicy| -> anyhow::Result<(Vec<f32>, f64)> {
-        let cfg = RolloutConfig { rope, sink_frames: 3, rgb8: false, ..base.clone() };
+        let cfg = RolloutConfig {
+            rope,
+            sink_frames: 3,
+            rgb8: false,
+            ..base.clone()
+        };
         let mut ro = CausalRollout::open(pipe, cfg).map_err(|e| anyhow!("{e}"))?;
         let (mut lats, mut secs) = (Vec::new(), 0.0);
         for _ in 0..14 {
@@ -514,7 +582,11 @@ fn band_stats(p: &[f32], w: usize, r0: usize, r1: usize) -> (f64, f64, f64) {
     let rows = &p[r0 * w..r1 * w];
     let n = rows.len().max(1) as f64;
     let mean = rows.iter().map(|&v| f64::from(v)).sum::<f64>() / n;
-    let var = rows.iter().map(|&v| (f64::from(v) - mean).powi(2)).sum::<f64>() / n;
+    let var = rows
+        .iter()
+        .map(|&v| (f64::from(v) - mean).powi(2))
+        .sum::<f64>()
+        / n;
     let mut along = 0.0;
     for r in rows.chunks_exact(w) {
         let m = r.iter().map(|&v| f64::from(v)).sum::<f64>() / w as f64;
@@ -547,7 +619,11 @@ fn frame_luma(rgb: &[u8], h: usize, w: usize, stride: usize) -> Vec<f32> {
     for y in (0..h).step_by(stride) {
         for x in (0..w).step_by(stride) {
             let p = (y * w + x) * 3;
-            out.push(0.299 * f32::from(rgb[p]) + 0.587 * f32::from(rgb[p + 1]) + 0.114 * f32::from(rgb[p + 2]));
+            out.push(
+                0.299 * f32::from(rgb[p])
+                    + 0.587 * f32::from(rgb[p + 1])
+                    + 0.114 * f32::from(rgb[p + 2]),
+            );
         }
     }
     out
@@ -562,7 +638,10 @@ fn frame_sat(rgb: &[u8], h: usize, w: usize, stride: usize) -> (f64, f64) {
         for x in (0..w).step_by(stride) {
             let p = (y * w + x) * 3;
             let px = &rgb[p..p + 3];
-            let (mx, mn) = (px.iter().max().copied().unwrap_or(0), px.iter().min().copied().unwrap_or(0));
+            let (mx, mn) = (
+                px.iter().max().copied().unwrap_or(0),
+                px.iter().min().copied().unwrap_or(0),
+            );
             s[k] += f64::from(mx - mn);
             n[k] += 1;
         }
@@ -585,7 +664,8 @@ fn block_pic(b: &HostBlock, prev_last: &mut Option<Vec<f32>>) -> Pic {
         let var = l.iter().map(|&v| (f64::from(v) - m).powi(2)).sum::<f64>() / l.len() as f64;
         p.luma += m / n;
         p.std += var.sqrt() / n;
-        p.clipped += l.iter().filter(|&&v| !(3.0..=252.0).contains(&v)).count() as f64 / l.len() as f64 / n;
+        p.clipped +=
+            l.iter().filter(|&&v| !(3.0..=252.0).contains(&v)).count() as f64 / l.len() as f64 / n;
         let mut g = 0.0f64;
         for y in 0..sh - 1 {
             for x in 0..sw - 1 {
@@ -605,7 +685,11 @@ fn block_pic(b: &HostBlock, prev_last: &mut Option<Vec<f32>>) -> Pic {
         p.rest_sat += rsat / n;
     }
     let mad = |a: &[f32], b: &[f32]| {
-        a.iter().zip(b).map(|(x, y)| f64::from((x - y).abs())).sum::<f64>() / a.len() as f64
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| f64::from((x - y).abs()))
+            .sum::<f64>()
+            / a.len() as f64
     };
     let pairs = lumas.len().saturating_sub(1).max(1) as f64;
     for i in 1..lumas.len() {
@@ -698,7 +782,11 @@ fn rgb_diff(a: &[u8], b: &[u8], h: usize, w: usize) -> (f64, f64, u8) {
             nt += 1;
         }
     }
-    (s as f64 / a.len().max(1) as f64, st as f64 / nt.max(1) as f64, mx)
+    (
+        s as f64 / a.len().max(1) as f64,
+        st as f64 / nt.max(1) as f64,
+        mx,
+    )
 }
 
 /// Half-size RGB8 tile (2x2 box filter) of a `h x w` frame.
@@ -709,7 +797,10 @@ fn half(rgb: &[u8], h: usize, w: usize) -> Vec<u8> {
         for x in 0..tw {
             for c in 0..3 {
                 let at = |yy: usize, xx: usize| u32::from(rgb[(yy * w + xx) * 3 + c]);
-                let v = at(2 * y, 2 * x) + at(2 * y + 1, 2 * x) + at(2 * y, 2 * x + 1) + at(2 * y + 1, 2 * x + 1);
+                let v = at(2 * y, 2 * x)
+                    + at(2 * y + 1, 2 * x)
+                    + at(2 * y, 2 * x + 1)
+                    + at(2 * y + 1, 2 * x + 1);
                 out[(y * tw + x) * 3 + c] = ((v + 2) / 4) as u8;
             }
         }
@@ -724,7 +815,11 @@ type Tile = (Vec<u8>, Option<Vec<u8>>);
 /// below it when measured), six to a row, as a JPEG.
 fn write_sheet(path: &std::path::Path, tiles: &[Tile], h: usize, w: usize) -> anyhow::Result<()> {
     let (th, tw) = (h / 2, w / 2);
-    let rows_per = if tiles.iter().any(|t| t.1.is_some()) { 2 } else { 1 };
+    let rows_per = if tiles.iter().any(|t| t.1.is_some()) {
+        2
+    } else {
+        1
+    };
     let cols = tiles.len().clamp(1, 6);
     let grid_rows = tiles.len().div_ceil(cols);
     let (iw, ih) = (cols * (tw + 4), grid_rows * (rows_per * th + 8));
@@ -736,7 +831,11 @@ fn write_sheet(path: &std::path::Path, tiles: &[Tile], h: usize, w: usize) -> an
             for y in 0..th {
                 for x in 0..tw {
                     let p = (y * tw + x) * 3;
-                    img.put_pixel((x0 + x) as u32, (y0 + k * th + y) as u32, image::Rgb([t[p], t[p + 1], t[p + 2]]));
+                    img.put_pixel(
+                        (x0 + x) as u32,
+                        (y0 + k * th + y) as u32,
+                        image::Rgb([t[p], t[p + 1], t[p + 2]]),
+                    );
                 }
             }
         }
@@ -758,17 +857,27 @@ fn dump_frames(dir: &std::path::Path, b: &HostBlock) {
         return;
     }
     for i in 0..b.frames {
-        let Some(px) = b.rgb.get(i * plane..(i + 1) * plane) else { break };
+        let Some(px) = b.rgb.get(i * plane..(i + 1) * plane) else {
+            break;
+        };
         let path = dir.join(format!("frame-{:05}.png", b.first_frame + i));
-        let res = std::fs::File::create(&path).map_err(anyhow::Error::from).and_then(|f| {
-            let enc = image::codecs::png::PngEncoder::new_with_quality(
-                std::io::BufWriter::new(f),
-                image::codecs::png::CompressionType::Fast,
-                image::codecs::png::FilterType::NoFilter,
-            );
-            image::ImageEncoder::write_image(enc, px, b.width as u32, b.height as u32, image::ExtendedColorType::Rgb8)
+        let res = std::fs::File::create(&path)
+            .map_err(anyhow::Error::from)
+            .and_then(|f| {
+                let enc = image::codecs::png::PngEncoder::new_with_quality(
+                    std::io::BufWriter::new(f),
+                    image::codecs::png::CompressionType::Fast,
+                    image::codecs::png::FilterType::NoFilter,
+                );
+                image::ImageEncoder::write_image(
+                    enc,
+                    px,
+                    b.width as u32,
+                    b.height as u32,
+                    image::ExtendedColorType::Rgb8,
+                )
                 .map_err(anyhow::Error::from)
-        });
+            });
         if let Err(e) = res {
             eprintln!("dump {}: {e}", path.display());
         }
@@ -801,9 +910,12 @@ fn whole_clip_check(
         let Some(piece) = tae.decode_step(&mut st, &z).map_err(|e| anyhow!("{e}"))? else {
             continue;
         };
-        let rgb = fastvideo_cudarc::wan::pipeline::frames_to_rgb8(&piece).map_err(|e| anyhow!("{e}"))?;
+        let rgb =
+            fastvideo_cudarc::wan::pipeline::frames_to_rgb8(&piece).map_err(|e| anyhow!("{e}"))?;
         for f in rgb.chunks_exact(plane) {
-            let Some(o) = streamed.get(frame * plane..(frame + 1) * plane) else { break };
+            let Some(o) = streamed.get(frame * plane..(frame + 1) * plane) else {
+                break;
+            };
             let wi = frame / window_frames.max(1);
             if wins.len() <= wi {
                 wins.resize(wi + 1, [0.0; 8]);
@@ -859,7 +971,11 @@ fn flush_window(
     let wsum: f64 = acc.iter().map(|(_, _, w)| w).sum();
     let avg = |f: fn(&Pic) -> f64| acc.iter().map(|(p, _, w)| f(p) * w).sum::<f64>() / wsum;
     let lavg = |f: fn(&LatStats) -> f64| acc.iter().map(|(_, l, w)| f(l) * w).sum::<f64>() / wsum;
-    let seams: Vec<f64> = acc.iter().map(|(p, _, _)| p.seam_mad).filter(|&s| s > 0.0).collect();
+    let seams: Vec<f64> = acc
+        .iter()
+        .map(|(p, _, _)| p.seam_mad)
+        .filter(|&s| s > 0.0)
+        .collect();
     windows.push(json!({
         "t0_s": t0, "blocks": acc.len(),
         "luma": avg(|p| p.luma), "std": avg(|p| p.std), "mad": avg(|p| p.mad),
@@ -903,11 +1019,24 @@ fn consume(
     for (b, m, k, x) in rx {
         let t = b.first_frame as f64 / fps;
         if t >= win_start + window_s {
-            flush_window(&mut acc, &mut windows, win_start, mem, kv, win_hash, win_fresh.take(), recaches);
+            flush_window(
+                &mut acc,
+                &mut windows,
+                win_start,
+                mem,
+                kv,
+                win_hash,
+                win_fresh.take(),
+                recaches,
+            );
             win_hash = 0;
             win_start = (t / window_s).floor() * window_s;
         }
-        let p = if b.rgb.is_empty() { Pic::default() } else { block_pic(&b, &mut prev_last) };
+        let p = if b.rgb.is_empty() {
+            Pic::default()
+        } else {
+            block_pic(&b, &mut prev_last)
+        };
         if let Some(d) = dump.as_ref().filter(|_| !b.rgb.is_empty()) {
             dump_frames(d, &b);
         }
@@ -929,7 +1058,16 @@ fn consume(
         mem = m;
         kv = k;
     }
-    flush_window(&mut acc, &mut windows, win_start, mem, kv, win_hash, win_fresh.take(), recaches);
+    flush_window(
+        &mut acc,
+        &mut windows,
+        win_start,
+        mem,
+        kv,
+        win_hash,
+        win_fresh.take(),
+        recaches,
+    );
     (windows, frames, tiles, dims)
 }
 
@@ -987,8 +1125,10 @@ fn one_run(
                 };
                 let t = Instant::now();
                 let v = ro.set_prompt(p).map_err(|e| anyhow!("{e}"))?;
-                switch_info.push(json!({"at_frame": frames, "encode_s": t.elapsed().as_secs_f64(), "version": v,
-                                        "prompt": p}));
+                switch_info.push(
+                    json!({"at_frame": frames, "encode_s": t.elapsed().as_secs_f64(), "version": v,
+                                        "prompt": p}),
+                );
             }
         }
         let mut b = ro.next_block().map_err(|e| anyhow!("{e}"))?;
@@ -1007,7 +1147,18 @@ fn one_run(
             mems.push(m as f64);
         }
         let kv_now = ro.kv_bytes();
-        blocks.push(json!([b.index, b.num_frames(), tm.denoise_s, tm.context_s, tm.decode_s, tm.rgb_s, tm.total_s, mem, kv_now >> 20, tm.recache_s]));
+        blocks.push(json!([
+            b.index,
+            b.num_frames(),
+            tm.denoise_s,
+            tm.context_s,
+            tm.decode_s,
+            tm.rgb_s,
+            tm.total_s,
+            mem,
+            kv_now >> 20,
+            tm.recache_s
+        ]));
         // Diagnostics, outside the block's own timings.
         let t_extra = Instant::now();
         let lat_h = host(&b.latents)?;
@@ -1027,7 +1178,8 @@ fn one_run(
         }
         let mut fresh = None;
         if let (true, true, Some(rgb)) = (sample, r.fresh, b.rgb.as_ref()) {
-            let z = CudaTensor::cat(&ring.iter().collect::<Vec<_>>(), 2).map_err(|e| anyhow!("{e}"))?;
+            let z =
+                CudaTensor::cat(&ring.iter().collect::<Vec<_>>(), 2).map_err(|e| anyhow!("{e}"))?;
             let dec = tae.decode(&z).map_err(|e| anyhow!("{e}"))?;
             let (f, h, w) = (dec.shape[2], dec.shape[3], dec.shape[4]);
             let n = b.num_frames();
@@ -1036,9 +1188,15 @@ fn one_run(
                 .and_then(|x| x.permute(&[1, 0, 2, 3]))
                 .and_then(|x| x.narrow(0, f - n, n))
                 .map_err(|e| anyhow!("{e}"))?;
-            let q = fastvideo_cudarc::wan::pipeline::frames_to_rgb8(&own).map_err(|e| anyhow!("{e}"))?;
+            let q = fastvideo_cudarc::wan::pipeline::frames_to_rgb8(&own)
+                .map_err(|e| anyhow!("{e}"))?;
             let (mad, top_mad, max) = rgb_diff(&q, rgb, h, w);
-            fresh = Some(Fresh { first: q[..h * w * 3].to_vec(), mad, top_mad, max });
+            fresh = Some(Fresh {
+                first: q[..h * w * 3].to_vec(),
+                mad,
+                top_mad,
+                max,
+            });
         }
         if r.keep_s > 0.0 && t_video < r.keep_s {
             keep_lat.push(b.latents.clone());
@@ -1047,7 +1205,13 @@ fn one_run(
             }
         }
         extra_s += t_extra.elapsed().as_secs_f64();
-        let x = Extra { lat, hash, sample, fresh, recaches: ro.recaches() };
+        let x = Extra {
+            lat,
+            hash,
+            sample,
+            fresh,
+            recaches: ro.recaches(),
+        };
         b.latents = CudaTensor::zeros(&[1]);
         let mut hb = b.into_host();
         if r.drop_rgb {
@@ -1070,7 +1234,8 @@ fn one_run(
     drop(ro);
     drop(tx);
     drop(ring);
-    let (windows, rx_frames, tiles, dims) = consumer.join().map_err(|_| anyhow!("consumer panicked"))?;
+    let (windows, rx_frames, tiles, dims) =
+        consumer.join().map_err(|_| anyhow!("consumer panicked"))?;
     let sheet_path = if r.sheet && !tiles.is_empty() {
         let p = report.dir().join("sheets").join(format!("{}.jpg", r.name));
         write_sheet(&p, &tiles, dims.0, dims.1)?;
@@ -1081,7 +1246,13 @@ fn one_run(
     let whole_clip = if keep_lat.is_empty() {
         None
     } else {
-        Some(whole_clip_check(tae, &keep_lat, &keep_rgb, (a.height, a.width), (window_s * fps) as usize)?)
+        Some(whole_clip_check(
+            tae,
+            &keep_lat,
+            &keep_rgb,
+            (a.height, a.width),
+            (window_s * fps) as usize,
+        )?)
     };
     drop((keep_lat, keep_rgb));
     let wall = (t_end - t_run).as_secs_f64();
@@ -1162,9 +1333,18 @@ mod tests {
     #[test]
     fn switch_prompts_from_jsonl_or_lines() {
         let jsonl = "{\"prompts\": [\"a\", \"b\", \"c\"]}\n{\"prompts\": [\"x\", \"y\"]}\n";
-        assert_eq!(parse_switch_prompts(jsonl, 0).unwrap(), (Some("a".into()), vec!["b".into(), "c".into()]));
-        assert_eq!(parse_switch_prompts(jsonl, 1).unwrap(), (Some("x".into()), vec!["y".into()]));
+        assert_eq!(
+            parse_switch_prompts(jsonl, 0).unwrap(),
+            (Some("a".into()), vec!["b".into(), "c".into()])
+        );
+        assert_eq!(
+            parse_switch_prompts(jsonl, 1).unwrap(),
+            (Some("x".into()), vec!["y".into()])
+        );
         assert!(parse_switch_prompts(jsonl, 2).is_err());
-        assert_eq!(parse_switch_prompts("p1\n\np2\n", 0).unwrap(), (None, vec!["p1".into(), "p2".into()]));
+        assert_eq!(
+            parse_switch_prompts("p1\n\np2\n", 0).unwrap(),
+            (None, vec!["p1".into(), "p2".into()])
+        );
     }
 }

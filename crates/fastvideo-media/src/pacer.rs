@@ -85,7 +85,13 @@ pub struct FramePacer<T, C: Clock> {
 }
 
 impl<T: Clone, C: Clock> FramePacer<T, C> {
-    pub fn new(fps: u32, max_buffer: usize, adaptive: bool, min_fps: u32, clock: C) -> Result<Self, PacerError> {
+    pub fn new(
+        fps: u32,
+        max_buffer: usize,
+        adaptive: bool,
+        min_fps: u32,
+        clock: C,
+    ) -> Result<Self, PacerError> {
         if fps == 0 || max_buffer == 0 {
             return Err(PacerError::InvalidParams);
         }
@@ -200,7 +206,11 @@ impl<T: Clone, C: Clock> FramePacer<T, C> {
         match self.first_serve_t {
             Some(t0) => {
                 let dt = self.clock.now() - t0;
-                if dt > 1e-6 { self.stats.unique_frames() as f64 / dt } else { 0.0 }
+                if dt > 1e-6 {
+                    self.stats.unique_frames() as f64 / dt
+                } else {
+                    0.0
+                }
             }
             None => 0.0,
         }
@@ -332,7 +342,8 @@ impl<T: Clone> AvPacer<T> {
             return Err(MediaError::invalid("buffer_seconds must be positive"));
         }
         let max_frames = ((f64::from(cfg.fps) * cfg.buffer_seconds).round() as usize).max(1);
-        let max_audio = ((f64::from(cfg.rate) * cfg.buffer_seconds).round() as usize).max(1) * cfg.channels as usize;
+        let max_audio = ((f64::from(cfg.rate) * cfg.buffer_seconds).round() as usize).max(1)
+            * cfg.channels as usize;
         let (tx, _) = watch::channel(false);
         Ok(Self {
             cfg,
@@ -391,7 +402,9 @@ impl<T: Clone> AvPacer<T> {
     pub fn push_audio(&mut self, samples: &[f32]) -> Result<()> {
         let ch = self.cfg.channels as usize;
         if samples.len() % ch != 0 {
-            return Err(MediaError::invalid("audio is not a whole number of sample frames"));
+            return Err(MediaError::invalid(
+                "audio is not a whole number of sample frames",
+            ));
         }
         if !self.cfg.audio {
             return Ok(());
@@ -407,7 +420,11 @@ impl<T: Clone> AvPacer<T> {
     }
 
     /// Push one lockstep slice (frames plus their audio).
-    pub fn push_slice<I: IntoIterator<Item = T>>(&mut self, frames: I, audio: &[f32]) -> Result<()> {
+    pub fn push_slice<I: IntoIterator<Item = T>>(
+        &mut self,
+        frames: I,
+        audio: &[f32],
+    ) -> Result<()> {
         self.push_audio(audio)?;
         self.push_frames(frames);
         Ok(())
@@ -445,7 +462,12 @@ impl<T: Clone> AvPacer<T> {
         } else {
             (None, 0)
         };
-        AvTick { index, video, audio, silent_frames }
+        AvTick {
+            index,
+            video,
+            audio,
+            silent_frames,
+        }
     }
 
     /// Hold `frame` from now on (Reactor `flush` to black, §5.5), dropping
@@ -498,7 +520,11 @@ pub struct Metronome {
 
 impl Metronome {
     pub fn new(fps: f64) -> Self {
-        Self { period: 1.0 / fps.max(1e-3), next: None, resnaps: 0 }
+        Self {
+            period: 1.0 / fps.max(1e-3),
+            next: None,
+            resnaps: 0,
+        }
     }
 
     /// Change the rate (adaptive causal playout); takes effect from the next tick.
@@ -680,7 +706,7 @@ mod tests {
         assert_eq!(p.buffered(), 48);
         assert_eq!(p.stats().dropped, 12);
         assert_eq!(p.next_frame().unwrap(), 12); // oldest block dropped
-        // 12 frames per 0.5 s is 24 fps of generation: clamped to the 16 cap.
+                                                 // 12 frames per 0.5 s is 24 fps of generation: clamped to the 16 cap.
         assert_eq!(p.effective_fps(), 16.0);
         // Starve it: freeze on the last frame, counted as underruns.
         let mut q = FramePacer::<u32, _>::causal(16, clock.clone()).unwrap();
@@ -749,7 +775,10 @@ mod tests {
         assert_eq!(c.video, VideoOut::Repeat(2));
         assert_eq!(c.silent_frames, 2000);
         let s = p.stats();
-        assert_eq!((s.ticks, s.fresh_frames, s.repeated_frames, s.empty_ticks), (4, 2, 1, 1));
+        assert_eq!(
+            (s.ticks, s.fresh_frames, s.repeated_frames, s.empty_ticks),
+            (4, 2, 1, 1)
+        );
         assert_eq!((s.silent_ticks, s.partial_ticks), (2, 1));
         assert_eq!(s.audio_frames_out, 8000);
     }
@@ -818,13 +847,20 @@ mod tests {
         let mut fresh_ids = Vec::new();
         while ticks_done < ticks {
             // A clip of random legal-ish length (H3 17n+5; SF-Wan blocks of 12).
-            let frames = if fps == 24 { 17 * (7 + rng.below(14)) as u32 + 5 } else { 12 * (1 + rng.below(8)) as u32 };
+            let frames = if fps == 24 {
+                17 * (7 + rng.below(14)) as u32 + 5
+            } else {
+                12 * (1 + rng.below(8)) as u32
+            };
             // Wire audio already fitted to the frame count (`prepare_clip_audio`).
             let n = clip_samples(u64::from(frames), fps, 48_000) as usize;
             let audio = vec![0.25f32; n * channels as usize];
             for sl in slices(frames, EMIT_FRAMES, fps, 48_000) {
-                let a = &audio[sl.sample_lo as usize * channels as usize..sl.sample_hi as usize * channels as usize];
-                let ids: Vec<u64> = (0..sl.frames()).map(|k| next_frame_id + u64::from(k)).collect();
+                let a = &audio[sl.sample_lo as usize * channels as usize
+                    ..sl.sample_hi as usize * channels as usize];
+                let ids: Vec<u64> = (0..sl.frames())
+                    .map(|k| next_frame_id + u64::from(k))
+                    .collect();
                 next_frame_id += u64::from(sl.frames());
                 p.push_slice(ids, a).unwrap();
                 // Emit about one slice worth of ticks, sometimes fewer (build
@@ -852,7 +888,11 @@ mod tests {
                 }
                 ticks_done += 1;
             }
-            assert_eq!(sent_audio, ticks_done * spt, "audio drifted from the tick count");
+            assert_eq!(
+                sent_audio,
+                ticks_done * spt,
+                "audio drifted from the tick count"
+            );
         }
         let s = p.stats();
         assert_eq!(s.audio_frames_out, s.ticks * spt);
@@ -866,7 +906,10 @@ mod tests {
             v.advance();
             a.advance(spt);
         }
-        assert_eq!(u64::from(v.current()), (s.ticks * 90_000 / u64::from(fps)) % (1 << 32));
+        assert_eq!(
+            u64::from(v.current()),
+            (s.ticks * 90_000 / u64::from(fps)) % (1 << 32)
+        );
         assert_eq!(a.samples(), s.ticks * spt);
         // Audio time equals video time exactly.
         assert_eq!(a.samples() * u64::from(fps), s.ticks * 48_000);

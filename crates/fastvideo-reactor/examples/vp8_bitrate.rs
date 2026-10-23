@@ -23,21 +23,36 @@ use fastvideo_protocol::RgbFrame;
 use fastvideo_reactor::media::{vp8::Vp8Encoder as Webp, FrameEncoder};
 
 fn arg(args: &[String], name: &str) -> Option<String> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1).cloned())
 }
 
 fn testsrc2(w: u32, h: u32, fps: u32, n: usize) -> Vec<RgbFrame> {
     let out = Command::new(fastvideo_media::tools::ffmpeg_bin())
         .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
         .arg(format!("testsrc2=s={w}x{h}:r={fps}"))
-        .args(["-frames:v", &n.to_string(), "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+        .args([
+            "-frames:v",
+            &n.to_string(),
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "pipe:1",
+        ])
         .output()
         .expect("ffmpeg");
     let len = (w * h * 3) as usize;
     out.stdout
         .chunks_exact(len)
         .enumerate()
-        .map(|(i, c)| RgbFrame { width: w, height: h, data: Bytes::copy_from_slice(c), index: i as u64 })
+        .map(|(i, c)| RgbFrame {
+            width: w,
+            height: h,
+            data: Bytes::copy_from_slice(c),
+            index: i as u64,
+        })
         .collect()
 }
 
@@ -55,7 +70,20 @@ fn decode(w: u32, h: u32, frames: &[Bytes]) -> Vec<u8> {
         ivf.extend_from_slice(f);
     }
     let mut c = Command::new(fastvideo_media::tools::ffmpeg_bin())
-        .args(["-hide_banner", "-loglevel", "error", "-f", "ivf", "-i", "pipe:0", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "ivf",
+            "-i",
+            "pipe:0",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "pipe:1",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -103,13 +131,18 @@ fn report(name: &str, src: &[RgbFrame], frames: &[(Bytes, bool)], secs: f64, too
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let size = arg(&args, "--size").unwrap_or_else(|| "1344x768".into());
-    let (w, h) = size.split_once('x').map(|(a, b)| (a.parse().unwrap(), b.parse().unwrap())).expect("--size WxH");
+    let (w, h) = size
+        .split_once('x')
+        .map(|(a, b)| (a.parse().unwrap(), b.parse().unwrap()))
+        .expect("--size WxH");
     let fps: u32 = arg(&args, "--fps").map_or(24, |v| v.parse().unwrap());
     let secs: f64 = arg(&args, "--seconds").map_or(4.0, |v| v.parse().unwrap());
     let source = arg(&args, "--source").unwrap_or_else(|| "testsrc2".into());
     let n = (secs * f64::from(fps)) as usize;
     let src: Vec<RgbFrame> = match source.as_str() {
-        "fake" => (0..n as u64).map(|i| fastvideo_engine_service::fake::render_frame(7, "a lighthouse", w, h, i)).collect(),
+        "fake" => (0..n as u64)
+            .map(|i| fastvideo_engine_service::fake::render_frame(7, "a lighthouse", w, h, i))
+            .collect(),
         _ => testsrc2(w, h, fps, n),
     };
     println!("source {source} {w}x{h} @ {fps} fps, {} frames", src.len());
@@ -118,9 +151,20 @@ fn main() {
     let mut webp = Webp::new(w, h, 70.0).expect("libwebp (feature vp8)");
     let mut out = Vec::new();
     for (i, f) in src.iter().enumerate() {
-        out.extend(webp.encode(f, false, i as u64).expect("webp").into_iter().map(|(_, d)| (d, true)));
+        out.extend(
+            webp.encode(f, false, i as u64)
+                .expect("webp")
+                .into_iter()
+                .map(|(_, d)| (d, true)),
+        );
     }
-    report("libwebp intra q70 (before)", &src, &out, secs, t.elapsed().as_secs_f64());
+    report(
+        "libwebp intra q70 (before)",
+        &src,
+        &out,
+        secs,
+        t.elapsed().as_secs_f64(),
+    );
 
     let mut cfg = Vp8Config::new(w, h, fps);
     if let Some(b) = arg(&args, "--bitrate") {
@@ -131,8 +175,18 @@ fn main() {
     let mut vpx = Libvpx::new(cfg).expect("ffmpeg libvpx");
     let mut out = Vec::new();
     for f in &src {
-        out.extend(vpx.encode(f).expect("libvpx").into_iter().map(|e| (e.data, e.keyframe)));
+        out.extend(
+            vpx.encode(f)
+                .expect("libvpx")
+                .into_iter()
+                .map(|e| (e.data, e.keyframe)),
+        );
     }
-    out.extend(vpx.finish().expect("libvpx").into_iter().map(|e| (e.data, e.keyframe)));
+    out.extend(
+        vpx.finish()
+            .expect("libvpx")
+            .into_iter()
+            .map(|e| (e.data, e.keyframe)),
+    );
     report(&label, &src, &out, secs, t.elapsed().as_secs_f64());
 }

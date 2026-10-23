@@ -70,7 +70,14 @@ pub fn rope_tables(cfg: &LingBotTransformerConfig, positions: &[[u32; 3]]) -> (V
 }
 
 /// Host reference of `apply_rotary_emb` on `[S, H, D]` (one batch).
-pub fn apply_rope_pairs(x: &mut [f32], cos: &[f32], sin: &[f32], seq: usize, heads: usize, d: usize) {
+pub fn apply_rope_pairs(
+    x: &mut [f32],
+    cos: &[f32],
+    sin: &[f32],
+    seq: usize,
+    heads: usize,
+    d: usize,
+) {
     for s in 0..seq {
         for h in 0..heads {
             let base = (s * heads + h) * d;

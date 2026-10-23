@@ -57,12 +57,13 @@ use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
 use super::causal::{CausalKvCache, KvSpec};
-use crate::hooks::{Hooks, Stage};
 use super::pipeline::{
-    causal_noise, causal_noise_draw, causal_noise_from, frames_to_rgb8, GenerateConfig, PipelineError, Result, WanPipeline,
+    causal_noise, causal_noise_draw, causal_noise_from, frames_to_rgb8, GenerateConfig,
+    PipelineError, Result, WanPipeline,
 };
 use super::taehv::TaeDecodeState;
 use super::tensor::CudaTensor;
+use crate::hooks::{Hooks, Stage};
 
 fn err(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())
@@ -358,7 +359,9 @@ impl Drop for GraphRun {
 /// Graph mode falls back to eager blocks for good, saying why once.
 #[cfg(feature = "cuda")]
 fn give_up(failed: &mut Option<String>, why: String) {
-    super::log::info(format_args!("causal rollout: {why}; running eagerly from here"));
+    super::log::info(format_args!(
+        "causal rollout: {why}; running eagerly from here"
+    ));
     failed.get_or_insert(why);
 }
 
@@ -378,7 +381,11 @@ fn keep_graph(
     } else {
         give_up(
             failed,
-            format!("{what} graph: {} allocations outlive it ({:?})", graph.escaped(), graph.stats),
+            format!(
+                "{what} graph: {} allocations outlive it ({:?})",
+                graph.escaped(),
+                graph.stats
+            ),
         );
         std::mem::forget(graph);
     }
@@ -401,11 +408,15 @@ impl<'p> CausalRollout<'p> {
     pub fn open(pipe: &'p WanPipeline, cfg: RolloutConfig) -> Result<Self> {
         let dit = pipe.transformer();
         if !dit.cfg.causal {
-            return Err(err("causal rollout needs a causal (Self-Forcing) Wan preset"));
+            return Err(err(
+                "causal rollout needs a causal (Self-Forcing) Wan preset",
+            ));
         }
         let tae = pipe.taehv().ok_or_else(|| {
-            err("causal rollout decodes per block with TAEHV (taew2_1): none loaded \
-                 (FASTVIDEO_TAEHV_WEIGHTS / FASTVIDEO_TAE_DIR; scripts/gpu/fetch_taehv.sh)")
+            err(
+                "causal rollout decodes per block with TAEHV (taew2_1): none loaded \
+                 (FASTVIDEO_TAEHV_WEIGHTS / FASTVIDEO_TAE_DIR; scripts/gpu/fetch_taehv.sh)",
+            )
         })?;
         let (z_c, _, z_h, z_w) = pipe.latent_shape(&GenerateConfig {
             height: cfg.height,
@@ -434,7 +445,10 @@ impl<'p> CausalRollout<'p> {
             }
         }
         if let Some(rc) = cfg.recache {
-            if rc.every_blocks == 0 || rc.keep_frames < fpb || rc.keep_frames + fpb > cfg.local_attn_frames {
+            if rc.every_blocks == 0
+                || rc.keep_frames < fpb
+                || rc.keep_frames + fpb > cfg.local_attn_frames
+            {
                 return Err(err(format!(
                     "recache every {} blocks keeping {} frames: keep at least one block ({fpb} \
                      frames) and leave one block of the {}-frame window",
@@ -829,7 +843,9 @@ impl<'p> CausalRollout<'p> {
             return Ok(());
         };
         let current = self.pos_block * self.fpb;
-        let Some(plan) = super::longlive::recache_plan(current, self.cfg.local_attn_frames, global_sink) else {
+        let Some(plan) =
+            super::longlive::recache_plan(current, self.cfg.local_attn_frames, global_sink)
+        else {
             return Ok(());
         };
         let t = Instant::now();
@@ -1042,7 +1058,10 @@ impl<'p> CausalRollout<'p> {
                 let x0 = round(CudaTensor::lincomb(&[(1.0, &cur), (-sigma, &flow)])?)?;
                 cur = if i + 1 < steps {
                     let next = sched.sigma(sched.timesteps[i + 1]) as f32;
-                    round(CudaTensor::lincomb(&[(1.0 - next, &x0), (next, &renoise[i])])?)?
+                    round(CudaTensor::lincomb(&[
+                        (1.0 - next, &x0),
+                        (next, &renoise[i]),
+                    ])?)?
                 } else {
                     x0
                 };

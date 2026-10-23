@@ -146,7 +146,16 @@ impl Controller {
         let pools = &self.cfg.pools;
         let names: Vec<String> = pools.iter().map(|p| p.name.clone()).collect();
 
-        let leader = match self.lease.acquire(&self.cfg.lease.name, &self.holder, now_s, self.cfg.lease.ttl_s).await {
+        let leader = match self
+            .lease
+            .acquire(
+                &self.cfg.lease.name,
+                &self.holder,
+                now_s,
+                self.cfg.lease.ttl_s,
+            )
+            .await
+        {
             Ok(l) => l,
             Err(e) => {
                 tracing::warn!(error = %e, "autoscale: lease unavailable; not leading this tick");
@@ -154,14 +163,22 @@ impl Controller {
             }
         };
 
-        let signals: BTreeMap<String, _> =
-            self.signals.signals(&names).await.into_iter().map(|s| (s.pool.clone(), s)).collect();
+        let signals: BTreeMap<String, _> = self
+            .signals
+            .signals(&names)
+            .await
+            .into_iter()
+            .map(|s| (s.pool.clone(), s))
+            .collect();
 
         let mut observations = BTreeMap::new();
         let mut errors: BTreeMap<String, String> = BTreeMap::new();
         for pool in pools {
             let Some(p) = self.providers.get(pool.kind) else {
-                errors.insert(pool.name.clone(), format!("no provider for {:?} pools", pool.kind));
+                errors.insert(
+                    pool.name.clone(),
+                    format!("no provider for {:?} pools", pool.kind),
+                );
                 continue;
             };
             match p.observe(pool, now_s).await {
@@ -178,7 +195,12 @@ impl Controller {
         let decisions = {
             let mut g = self.lock();
             g.leader = leader;
-            let inp = Inputs { now_s, signals: signals.clone(), observations: observations.clone(), balance_usd: balance };
+            let inp = Inputs {
+                now_s,
+                signals: signals.clone(),
+                observations: observations.clone(),
+                balance_usd: balance,
+            };
             g.policy.decide(&self.cfg, &inp)
         };
 
@@ -201,14 +223,32 @@ impl Controller {
                     }
                 }
             }
-            log_decision(&d, &observed, leader, dry, applied.as_ref(), error.as_deref());
+            log_decision(
+                &d,
+                &observed,
+                leader,
+                dry,
+                applied.as_ref(),
+                error.as_deref(),
+            );
             record_metrics(&d, &observed, signals.get(&pool.name));
-            out.push(PoolTick { decision: d, observed, applied, error });
+            out.push(PoolTick {
+                decision: d,
+                observed,
+                applied,
+                error,
+            });
         }
         metrics::gauge!("fv_autoscale_leader").set(if leader { 1.0 } else { 0.0 });
         metrics::gauge!("fv_autoscale_dry_run").set(if dry { 1.0 } else { 0.0 });
 
-        let report = TickReport { at_s: now_s, leader, dry_run: dry, balance_usd: balance, pools: out };
+        let report = TickReport {
+            at_s: now_s,
+            leader,
+            dry_run: dry,
+            balance_usd: balance,
+            pools: out,
+        };
         let mut g = self.lock();
         for t in &report.pools {
             if t.decision.action != Action::Hold || !t.decision.is_noop(&t.observed) {
@@ -247,7 +287,10 @@ impl Controller {
 
     /// Runs `tick` every `interval_s` on the wall clock until `stop` turns
     /// true (a dropped sender never stops it); releases the lease on the way out.
-    pub fn spawn(self: Arc<Self>, mut stop: tokio::sync::watch::Receiver<bool>) -> tokio::task::JoinHandle<()> {
+    pub fn spawn(
+        self: Arc<Self>,
+        mut stop: tokio::sync::watch::Receiver<bool>,
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut every = tokio::time::interval(Duration::from_secs_f64(self.cfg.interval_s));
             every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -278,7 +321,10 @@ impl Controller {
 }
 
 pub fn unix_now() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 fn log_decision(
@@ -291,7 +337,10 @@ fn log_decision(
 ) {
     let changed = !d.is_noop(obs);
     let reasons = d.reasons.join("; ");
-    let endpoint = d.endpoint.as_ref().map(|e| format!("min={} max={}", e.workers_min, e.workers_max));
+    let endpoint = d
+        .endpoint
+        .as_ref()
+        .map(|e| format!("min={} max={}", e.workers_min, e.workers_max));
     if let Some(e) = error {
         tracing::warn!(pool = %d.pool, action = ?d.action, current = d.current, target = d.target, error = e, "autoscale decision failed");
     } else if changed || d.action != Action::Hold {
@@ -319,22 +368,31 @@ fn log_decision(
     }
 }
 
-fn record_metrics(d: &PoolDecision, obs: &PoolObservation, sig: Option<&crate::types::PoolSignals>) {
+fn record_metrics(
+    d: &PoolDecision,
+    obs: &PoolObservation,
+    sig: Option<&crate::types::PoolSignals>,
+) {
     let pool = d.pool.clone();
     metrics::gauge!("fv_autoscale_target_workers", "pool" => pool.clone()).set(f64::from(d.target));
     metrics::gauge!("fv_autoscale_demand_workers", "pool" => pool.clone()).set(d.demand);
     metrics::gauge!("fv_autoscale_busy_workers", "pool" => pool.clone()).set(f64::from(d.busy));
     metrics::gauge!("fv_autoscale_floor_workers", "pool" => pool.clone()).set(f64::from(d.floor));
     metrics::gauge!("fv_autoscale_cap_workers", "pool" => pool.clone()).set(f64::from(d.cap));
-    metrics::gauge!("fv_autoscale_target_usd_per_hour", "pool" => pool.clone()).set(d.target_usd_per_hr);
-    for (state, name) in
-        [(WorkerState::Starting, "starting"), (WorkerState::Ready, "ready"), (WorkerState::Draining, "draining")]
-    {
-        metrics::gauge!("fv_autoscale_workers", "pool" => pool.clone(), "state" => name).set(f64::from(obs.count(state)));
+    metrics::gauge!("fv_autoscale_target_usd_per_hour", "pool" => pool.clone())
+        .set(d.target_usd_per_hr);
+    for (state, name) in [
+        (WorkerState::Starting, "starting"),
+        (WorkerState::Ready, "ready"),
+        (WorkerState::Draining, "draining"),
+    ] {
+        metrics::gauge!("fv_autoscale_workers", "pool" => pool.clone(), "state" => name)
+            .set(f64::from(obs.count(state)));
     }
     if let Some(s) = sig {
         metrics::gauge!("fv_autoscale_queued", "pool" => pool.clone()).set(f64::from(s.queued));
-        metrics::gauge!("fv_autoscale_oldest_queued_seconds", "pool" => pool.clone()).set(s.oldest_queued_s);
+        metrics::gauge!("fv_autoscale_oldest_queued_seconds", "pool" => pool.clone())
+            .set(s.oldest_queued_s);
     }
     let action = match d.action {
         Action::Hold => "hold",
@@ -342,5 +400,6 @@ fn record_metrics(d: &PoolDecision, obs: &PoolObservation, sig: Option<&crate::t
         Action::ScaleDown => "scale_down",
         Action::HardStop => "hard_stop",
     };
-    metrics::counter!("fv_autoscale_decisions_total", "pool" => pool, "action" => action).increment(1);
+    metrics::counter!("fv_autoscale_decisions_total", "pool" => pool, "action" => action)
+        .increment(1);
 }

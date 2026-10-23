@@ -91,8 +91,10 @@ fn to_f32(x: &[u16]) -> Vec<f32> {
 pub(super) fn parity(c: &mut Ctx<'_>) -> StageResult<()> {
     let dev = dev()?;
     if dev.sm_major < 8 {
-        c.report
-            .note("attn3_skipped", json!({"sm_major": dev.sm_major, "needs": "sm80+"}));
+        c.report.note(
+            "attn3_skipped",
+            json!({"sm_major": dev.sm_major, "needs": "sm80+"}),
+        );
         return Ok(());
     }
     for (b, h, sq, sk) in [
@@ -115,7 +117,11 @@ pub(super) fn parity(c: &mut Ctx<'_>) -> StageResult<()> {
         let v = c.rand(bh * sk * d, 1.0);
         let scale = 1.0 / (d as f32).sqrt();
         let want = ref_sdpa(&q, &kk, &v, bh, sq, sk, d, scale);
-        let (qt, kt, vt) = (t(q, &[b, h, sq, d])?, t(kk, &[b, h, sk, d])?, t(v, &[b, h, sk, d])?);
+        let (qt, kt, vt) = (
+            t(q, &[b, h, sq, d])?,
+            t(kk, &[b, h, sk, d])?,
+            t(v, &[b, h, sk, d])?,
+        );
         let tag = format!("{b}x{h}x{sq}x{sk}x{d}");
         let run = |kernel, out16| -> anyhow::Result<Vec<f32>> {
             let o = attn::device_mma_sdpa_with(&qt, &kt, &vt, Some(scale), out16, kernel)?
@@ -154,11 +160,18 @@ pub(super) fn parity(c: &mut Ctx<'_>) -> StageResult<()> {
             }
         }
         // cuDNN, every graph: vs the f32 reference and vs fwd2's bf16 output.
-        let (q16, k16, v16) = (qt.quantize_bf16()?, kt.quantize_bf16()?, vt.quantize_bf16()?);
+        let (q16, k16, v16) = (
+            qt.quantize_bf16()?,
+            kt.quantize_bf16()?,
+            vt.quantize_bf16()?,
+        );
         let (qs, ks, vs) = (
-            q16.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("bf16 q"))?,
-            k16.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("bf16 k"))?,
-            v16.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("bf16 v"))?,
+            q16.device_slice_bf16()
+                .ok_or_else(|| anyhow::anyhow!("bf16 q"))?,
+            k16.device_slice_bf16()
+                .ok_or_else(|| anyhow::anyhow!("bf16 k"))?,
+            v16.device_slice_bf16()
+                .ok_or_else(|| anyhow::anyhow!("bf16 v"))?,
         );
         let v2_16 = run(FlashKernel::V2, true)?;
         for graph in SdpaGraph::ALL {
@@ -166,7 +179,12 @@ pub(super) fn parity(c: &mut Ctx<'_>) -> StageResult<()> {
                 Ok(plan) => {
                     let mut o16 = unsafe { dev.stream.alloc::<bf16>(bh * sq * d) }?;
                     cudnn_sdpa::execute(&plan, qs, ks, vs, &mut o16, scale)?;
-                    let got: Vec<f32> = dev.stream.memcpy_dtov(&o16)?.iter().map(|x| x.to_f32()).collect();
+                    let got: Vec<f32> = dev
+                        .stream
+                        .memcpy_dtov(&o16)?
+                        .iter()
+                        .map(|x| x.to_f32())
+                        .collect();
                     let dd = diff(&got, &v2_16);
                     if graph == SdpaGraph::Softmax {
                         // Known broken on cuDNN 9.26 / sm_120 (inf / NaN output);
@@ -178,7 +196,12 @@ pub(super) fn parity(c: &mut Ctx<'_>) -> StageResult<()> {
                         );
                         continue;
                     }
-                    c.cmp(&format!("cudnn_{}_{tag}_vs_f32", graph.name()), &got, &want, 1e-2)?;
+                    c.cmp(
+                        &format!("cudnn_{}_{tag}_vs_f32", graph.name()),
+                        &got,
+                        &want,
+                        1e-2,
+                    )?;
                     c.report.check(
                         format!("cudnn_{}_{tag}_vs_flash2_bf16", graph.name()),
                         dd.within(1e-2),
@@ -207,8 +230,10 @@ const SHAPES: &[(&str, usize, usize)] = &[
 pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
     let dev = dev()?;
     if dev.sm_major < 8 {
-        c.report
-            .note("attn3_bench_skipped", json!({"sm_major": dev.sm_major, "needs": "sm80+"}));
+        c.report.note(
+            "attn3_bench_skipped",
+            json!({"sm_major": dev.sm_major, "needs": "sm80+"}),
+        );
         return Ok(());
     }
     let only = std::env::var("FV_ATTN_BENCH_SHAPES").unwrap_or_default();
@@ -236,7 +261,11 @@ pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
         row.insert("bh".into(), json!(bh));
         row.insert("tokens".into(), json!(tokens));
         let mut bits = std::collections::HashMap::new();
-        for (kname, kernel) in [("v2", FlashKernel::V2), ("v3", FlashKernel::V3), ("v3s", FlashKernel::V3s)] {
+        for (kname, kernel) in [
+            ("v2", FlashKernel::V2),
+            ("v3", FlashKernel::V3),
+            ("v3s", FlashKernel::V3s),
+        ] {
             let s = median3(&mut || {
                 attn::device_mma_sdpa_with(&qt, &kt, &vt, None, true, kernel)?
                     .ok_or_else(|| anyhow::anyhow!("flash declined"))?;
@@ -286,7 +315,10 @@ pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
                     }
                 }
             }
-            row.insert(format!("cudnn_{}", graph.name()), serde_json::Value::Object(g));
+            row.insert(
+                format!("cudnn_{}", graph.name()),
+                serde_json::Value::Object(g),
+            );
         }
         c.report.check(
             format!("attn3_bench_dense_{name}"),
@@ -311,8 +343,10 @@ pub(super) fn sdpa_rule(c: &mut Ctx<'_>) -> StageResult<()> {
     use fastvideo_cudarc::wan::sdpa_rule as rule;
     let dev = dev()?;
     if dev.sm_major < 8 {
-        c.report
-            .note("sdpa_rule_skipped", json!({"sm_major": dev.sm_major, "needs": "sm80+"}));
+        c.report.note(
+            "sdpa_rule_skipped",
+            json!({"sm_major": dev.sm_major, "needs": "sm80+"}),
+        );
         return Ok(());
     }
     let tol = std::env::var("FV_SDPA_RULE_TOL")
@@ -394,10 +428,18 @@ pub(super) fn sdpa_rule(c: &mut Ctx<'_>) -> StageResult<()> {
             _ => v2,
         };
         // Sub-50 us differences are timer noise, not a margin.
-        let loss = if rule_s - best < 50e-6 { 0.0 } else { rule_s / best - 1.0 };
+        let loss = if rule_s - best < 50e-6 {
+            0.0
+        } else {
+            rule_s / best - 1.0
+        };
         worst = worst.max(loss);
         if loss > tol {
-            suggestions.push(format!("{name} (sq {sq}, sk {sk}): {} is {:.1} % faster", best_kernel.name(), loss * 100.0));
+            suggestions.push(format!(
+                "{name} (sq {sq}, sk {sk}): {} is {:.1} % faster",
+                best_kernel.name(),
+                loss * 100.0
+            ));
         }
         c.report.check(
             format!("sdpa_rule_{name}"),
@@ -433,8 +475,10 @@ const VSA_WORKLOADS: &[(&str, usize, (usize, usize, usize), &[f64])] = &[
 pub(super) fn vsa_stages(c: &mut Ctx<'_>) -> StageResult<()> {
     let dev = dev()?;
     if dev.sm_major < 9 {
-        c.report
-            .note("vsa_stages_skipped", json!({"sm_major": dev.sm_major, "needs": "sm90+"}));
+        c.report.note(
+            "vsa_stages_skipped",
+            json!({"sm_major": dev.sm_major, "needs": "sm90+"}),
+        );
         return Ok(());
     }
     let only = std::env::var("FV_VSA_WORKLOADS").unwrap_or_default();
@@ -474,22 +518,35 @@ pub(super) fn vsa_stages(c: &mut Ctx<'_>) -> StageResult<()> {
         {
             let to16 = |x: &CudaSlice<f32>| -> anyhow::Result<CudaSlice<bf16>> {
                 let t = CudaTensor::from_device_slice(x.clone(), shape.clone())?.quantize_bf16()?;
-                Ok(t.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("bf16"))?.clone())
+                Ok(t.device_slice_bf16()
+                    .ok_or_else(|| anyhow::anyhow!("bf16"))?
+                    .clone())
             };
             let widen = |x: &CudaSlice<bf16>| -> anyhow::Result<CudaSlice<f32>> {
-                let t = CudaTensor::from_device_slice_bf16(x.clone(), shape.clone())?.to_f32_act()?;
-                Ok(t.device_slice().ok_or_else(|| anyhow::anyhow!("f32"))?.clone())
+                let t =
+                    CudaTensor::from_device_slice_bf16(x.clone(), shape.clone())?.to_f32_act()?;
+                Ok(t.device_slice()
+                    .ok_or_else(|| anyhow::anyhow!("f32"))?
+                    .clone())
             };
             let (q16, g16) = (to16(&q)?, to16(&gate)?);
             let (qw, gw) = (widen(&q16)?, widen(&g16)?);
-            let m32 = down(&ops::vsa_tile_mean_round_device(&qw, &plan_dev, bh, seq, D, true)?)?;
-            let m16 = down(&ops::vsa_tile_mean_bf16_device(&q16, &plan_dev, bh, seq, D)?)?;
+            let m32 = down(&ops::vsa_tile_mean_round_device(
+                &qw, &plan_dev, bh, seq, D, true,
+            )?)?;
+            let m16 = down(&ops::vsa_tile_mean_bf16_device(
+                &q16, &plan_dev, bh, seq, D,
+            )?)?;
             let bad_mean = mismatches(
                 &m32.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
                 &m16.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
             );
-            let t32 = dev.stream.memcpy_dtov(&ops::vsa_tile_qkv_device(&qw, &plan_dev, bh, seq, D)?)?;
-            let t16 = dev.stream.memcpy_dtov(&ops::vsa_tile_qkv_bf16_device(&q16, &plan_dev, bh, seq, D)?)?;
+            let t32 = dev
+                .stream
+                .memcpy_dtov(&ops::vsa_tile_qkv_device(&qw, &plan_dev, bh, seq, D)?)?;
+            let t16 = dev
+                .stream
+                .memcpy_dtov(&ops::vsa_tile_qkv_bf16_device(&q16, &plan_dev, bh, seq, D)?)?;
             let bad_tile = mismatches(
                 &t32.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
                 &t16.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
@@ -498,8 +555,31 @@ pub(super) fn vsa_stages(c: &mut Ctx<'_>) -> StageResult<()> {
             let coarse0 = up(&c.rand(bh * nb * D, 1.0))?;
             let mut o32 = ops::fill_device(bh * seq * D, 0.0)?;
             let mut o16 = ops::fill_device(bh * seq * D, 0.0)?;
-            ops::vsa_combine_round_device(&sparse, &coarse0, Some(&gw), &plan_dev, &mut o32, bh, nb, 0, seq, D, true)?;
-            ops::vsa_combine_gate16_device(&sparse, &coarse0, Some(&g16), &plan_dev, &mut o16, bh, nb, 0, seq, D)?;
+            ops::vsa_combine_round_device(
+                &sparse,
+                &coarse0,
+                Some(&gw),
+                &plan_dev,
+                &mut o32,
+                bh,
+                nb,
+                0,
+                seq,
+                D,
+                true,
+            )?;
+            ops::vsa_combine_gate16_device(
+                &sparse,
+                &coarse0,
+                Some(&g16),
+                &plan_dev,
+                &mut o16,
+                bh,
+                nb,
+                0,
+                seq,
+                D,
+            )?;
             let bad_comb = mismatches(
                 &down(&o32)?.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
                 &down(&o16)?.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
@@ -517,7 +597,18 @@ pub(super) fn vsa_stages(c: &mut Ctx<'_>) -> StageResult<()> {
                 Ok(())
             })?;
             let cb16 = median3(&mut || {
-                ops::vsa_combine_gate16_device(&sparse, &coarse0, Some(&g16), &plan_dev, &mut o16, bh, nb, 0, seq, D)?;
+                ops::vsa_combine_gate16_device(
+                    &sparse,
+                    &coarse0,
+                    Some(&g16),
+                    &plan_dev,
+                    &mut o16,
+                    bh,
+                    nb,
+                    0,
+                    seq,
+                    D,
+                )?;
                 Ok(())
             })?;
             c.report.check(
@@ -535,7 +626,16 @@ pub(super) fn vsa_stages(c: &mut Ctx<'_>) -> StageResult<()> {
             let kc = ops::vsa_tile_mean_device(&k, &plan_dev, bh, seq, D)?;
             let vc = ops::vsa_tile_mean_device(&v, &plan_dev, bh, seq, D)?;
             let mut scores = ops::alloc(bh * nb * nb)?;
-            device::matmul_linear_wt_strided_batched_f32(&qc, &kc, &mut scores, bh, nb, D, nb, scale)?;
+            device::matmul_linear_wt_strided_batched_f32(
+                &qc,
+                &kc,
+                &mut scores,
+                bh,
+                nb,
+                D,
+                nb,
+                scale,
+            )?;
             let probs = ops::softmax_last_device(&scores, nb)?;
             let mut coarse = ops::alloc(bh * nb * D)?;
             device::matmul_2d_strided_batched_f32(&probs, &vc, &mut coarse, bh, nb, nb, D)?;
@@ -577,7 +677,10 @@ pub(super) fn vsa_stages(c: &mut Ctx<'_>) -> StageResult<()> {
                     std::env::remove_var("FASTVIDEO_VSA_TOPK");
                     r
                 };
-                let tied: Vec<f32> = down(&scores)?.iter().map(|x| (x * 8.0).round() / 8.0).collect();
+                let tied: Vec<f32> = down(&scores)?
+                    .iter()
+                    .map(|x| (x * 8.0).round() / 8.0)
+                    .collect();
                 let tied = up(&tied)?;
                 let (a, t1) = pick("v1", &scores)?;
                 let (b, t2) = pick("v2", &scores)?;
@@ -596,21 +699,48 @@ pub(super) fn vsa_stages(c: &mut Ctx<'_>) -> StageResult<()> {
             for kernel in ["tma2", "tma"] {
                 std::env::set_var("FASTVIDEO_VSA_KERNEL", kernel);
                 let s = median3(&mut || {
-                    ops::vsa_mma_attn_range_device(&q, &k, &v, &selected, &plan_dev, bh, seq, D, topk, scale, 0, nb)?;
+                    ops::vsa_mma_attn_range_device(
+                        &q, &k, &v, &selected, &plan_dev, bh, seq, D, topk, scale, 0, nb,
+                    )?;
                     Ok(())
                 });
                 std::env::remove_var("FASTVIDEO_VSA_KERNEL");
                 fine.insert(kernel, s?);
             }
-            let sparse = ops::vsa_mma_attn_range_device(&q, &k, &v, &selected, &plan_dev, bh, seq, D, topk, scale, 0, nb)?;
+            let sparse = ops::vsa_mma_attn_range_device(
+                &q, &k, &v, &selected, &plan_dev, bh, seq, D, topk, scale, 0, nb,
+            )?;
             let mut out = ops::alloc(bh * seq * D)?;
             let combine_s = median3(&mut || {
-                ops::vsa_combine_device(&sparse, &coarse, Some(&gate), &plan_dev, &mut out, bh, nb, 0, seq, D)?;
+                ops::vsa_combine_device(
+                    &sparse,
+                    &coarse,
+                    Some(&gate),
+                    &plan_dev,
+                    &mut out,
+                    bh,
+                    nb,
+                    0,
+                    seq,
+                    D,
+                )?;
                 Ok(())
             })?;
             drop((sparse, out));
             let total_s = median3(&mut || {
-                vsa::vsa_attention_device(&q, &k, &v, Some(&gate), &plan_dev, topk, bh, seq, D, scale, nb)?;
+                vsa::vsa_attention_device(
+                    &q,
+                    &k,
+                    &v,
+                    Some(&gate),
+                    &plan_dev,
+                    topk,
+                    bh,
+                    seq,
+                    D,
+                    scale,
+                    nb,
+                )?;
                 Ok(())
             })?;
             let fine_s = fine["tma2"] - tile_s;
@@ -629,7 +759,8 @@ pub(super) fn vsa_stages(c: &mut Ctx<'_>) -> StageResult<()> {
                 }),
             );
         }
-        c.report.note(format!("vsa_stages_{name}"), serde_json::Value::Object(row));
+        c.report
+            .note(format!("vsa_stages_{name}"), serde_json::Value::Object(row));
     }
     Ok(())
 }

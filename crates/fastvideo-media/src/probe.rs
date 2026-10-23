@@ -47,7 +47,14 @@ pub struct MediaProbe {
 impl From<&MediaProbe> for fastvideo_protocol::MediaProbe {
     /// The subset `StagedMedia.probe` carries (design §3.2).
     fn from(p: &MediaProbe) -> Self {
-        Self { width: p.width, height: p.height, duration_s: p.duration_s, fps: p.fps, audio_rate: p.audio_rate, frames: p.frames }
+        Self {
+            width: p.width,
+            height: p.height,
+            duration_s: p.duration_s,
+            fps: p.fps,
+            audio_rate: p.audio_rate,
+            frames: p.frames,
+        }
     }
 }
 
@@ -62,14 +69,21 @@ pub fn probe(path: &Path) -> Result<MediaProbe> {
     if let Ok(info) = crate::mp4::inspect(path) {
         return Ok(from_mp4(&info));
     }
-    Err(MediaError::Unsupported(format!("cannot probe {} without ffprobe", path.display())))
+    Err(MediaError::Unsupported(format!(
+        "cannot probe {} without ffprobe",
+        path.display()
+    )))
 }
 
 /// PNG/JPEG via the image crate; `None` if the file is not an image it knows.
 pub fn probe_image(path: &Path) -> Result<Option<MediaProbe>> {
     let reader = image::ImageReader::open(path)?.with_guessed_format()?;
-    let Some(fmt) = reader.format() else { return Ok(None) };
-    let (w, h) = reader.into_dimensions().map_err(|e| MediaError::parse(Some(path), e.to_string()))?;
+    let Some(fmt) = reader.format() else {
+        return Ok(None);
+    };
+    let (w, h) = reader
+        .into_dimensions()
+        .map_err(|e| MediaError::parse(Some(path), e.to_string()))?;
     Ok(Some(MediaProbe {
         kind: Some(MediaKind::Image),
         width: Some(w),
@@ -83,15 +97,25 @@ fn parse_rate(s: &str) -> Option<f64> {
     let (n, d) = s.split_once('/').unwrap_or((s, "1"));
     let n: f64 = n.parse().ok()?;
     let d: f64 = d.parse().ok()?;
-    if d == 0.0 || n == 0.0 { None } else { Some(n / d) }
+    if d == 0.0 || n == 0.0 {
+        None
+    } else {
+        Some(n / d)
+    }
 }
 
 /// Parse `ffprobe -print_format json -show_format -show_streams` output.
 pub fn parse_ffprobe_json(json: &str) -> Result<MediaProbe> {
-    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| MediaError::parse(None, e.to_string()))?;
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| MediaError::parse(None, e.to_string()))?;
     let mut p = MediaProbe {
-        format: v["format"]["format_name"].as_str().unwrap_or_default().to_string(),
-        duration_s: v["format"]["duration"].as_str().and_then(|s| s.parse().ok()),
+        format: v["format"]["format_name"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        duration_s: v["format"]["duration"]
+            .as_str()
+            .and_then(|s| s.parse().ok()),
         ..Default::default()
     };
     let streams = v["streams"].as_array().cloned().unwrap_or_default();
@@ -105,10 +129,18 @@ pub fn parse_ffprobe_json(json: &str) -> Result<MediaProbe> {
                 p.height = s["height"].as_u64().map(|x| x as u32);
                 p.video_codec = s["codec_name"].as_str().map(str::to_string);
                 p.video_profile = s["profile"].as_str().map(str::to_string);
-                p.fps = s["avg_frame_rate"].as_str().and_then(parse_rate).or_else(|| s["r_frame_rate"].as_str().and_then(parse_rate));
-                p.frames = s["nb_frames"].as_str().and_then(|n| n.parse().ok()).filter(|n: &u32| *n > 0);
-                still = matches!(p.video_codec.as_deref(), Some("png" | "mjpeg" | "webp" | "bmp" | "gif"))
-                    && s["nb_frames"].as_str().map(|n| n == "1").unwrap_or(true)
+                p.fps = s["avg_frame_rate"]
+                    .as_str()
+                    .and_then(parse_rate)
+                    .or_else(|| s["r_frame_rate"].as_str().and_then(parse_rate));
+                p.frames = s["nb_frames"]
+                    .as_str()
+                    .and_then(|n| n.parse().ok())
+                    .filter(|n: &u32| *n > 0);
+                still = matches!(
+                    p.video_codec.as_deref(),
+                    Some("png" | "mjpeg" | "webp" | "bmp" | "gif")
+                ) && s["nb_frames"].as_str().map(|n| n == "1").unwrap_or(true)
                     && p.format.contains("pipe");
             }
             Some("audio") if p.audio_codec.is_none() => {
@@ -134,7 +166,15 @@ pub fn parse_ffprobe_json(json: &str) -> Result<MediaProbe> {
 
 pub fn ffprobe(path: &Path) -> Result<MediaProbe> {
     let mut cmd = Command::new(tools::ffprobe_bin());
-    cmd.args(["-v", "error", "-print_format", "json", "-show_format", "-show_streams"]).arg(path);
+    cmd.args([
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+    ])
+    .arg(path);
     let out = tools::run_checked(cmd, "ffprobe")?;
     parse_ffprobe_json(&String::from_utf8_lossy(&out.stdout))
 }
@@ -143,19 +183,37 @@ fn from_mp4(i: &crate::mp4::Mp4Info) -> MediaProbe {
     let v = i.video();
     let a = i.audio();
     MediaProbe {
-        kind: Some(if v.is_some() { MediaKind::Video } else { MediaKind::Audio }),
+        kind: Some(if v.is_some() {
+            MediaKind::Video
+        } else {
+            MediaKind::Audio
+        }),
         width: v.and_then(|t| t.width),
         height: v.and_then(|t| t.height),
         duration_s: Some(i.duration_s),
         fps: v.and_then(|t| t.fps),
         audio_rate: a.and_then(|t| t.audio.as_ref().map(|x| x.sample_rate)),
         audio_channels: a.and_then(|t| t.audio.as_ref().map(|x| x.channels as u8)),
-        video_codec: v.map(|t| if t.codec.starts_with("avc") { "h264".into() } else { t.codec.clone() }),
-        audio_codec: a.map(|t| if t.codec == "mp4a" { "aac".into() } else { t.codec.clone() }),
+        video_codec: v.map(|t| {
+            if t.codec.starts_with("avc") {
+                "h264".into()
+            } else {
+                t.codec.clone()
+            }
+        }),
+        audio_codec: a.map(|t| {
+            if t.codec == "mp4a" {
+                "aac".into()
+            } else {
+                t.codec.clone()
+            }
+        }),
         format: "mov,mp4,m4a,3gp,3g2,mj2".into(),
         video_profile: None,
         audio_profile: None,
-        frames: v.and_then(|t| u32::try_from(t.samples).ok()).filter(|n| *n > 0),
+        frames: v
+            .and_then(|t| u32::try_from(t.samples).ok())
+            .filter(|n| *n > 0),
     }
 }
 
@@ -167,15 +225,29 @@ pub fn decode_image_rgb(path: &Path) -> Result<RgbFrame> {
         .map_err(|e| MediaError::Decode(format!("{}: {e}", path.display())))?
         .to_rgb8();
     let (w, h) = img.dimensions();
-    Ok(RgbFrame { width: w, height: h, data: Bytes::from(img.into_raw()), index: 0 })
+    Ok(RgbFrame {
+        width: w,
+        height: h,
+        data: Bytes::from(img.into_raw()),
+        index: 0,
+    })
 }
 
 /// Decode the audio of any file ffmpeg reads to interleaved f32 at `rate`/`channels`.
 pub fn decode_audio(path: &Path, rate: u32, channels: u8) -> Result<Pcm> {
     let mut cmd = tools::ffmpeg_command();
-    cmd.arg("-i")
-        .arg(path)
-        .args(["-vn", "-f", "f32le", "-acodec", "pcm_f32le", "-ar", &rate.to_string(), "-ac", &channels.to_string(), "pipe:1"]);
+    cmd.arg("-i").arg(path).args([
+        "-vn",
+        "-f",
+        "f32le",
+        "-acodec",
+        "pcm_f32le",
+        "-ar",
+        &rate.to_string(),
+        "-ac",
+        &channels.to_string(),
+        "pipe:1",
+    ]);
     let out = tools::run_checked(cmd, "ffmpeg")?;
     let mut s = f32le_to_f32(&out.stdout);
     s.truncate(s.len() - s.len() % channels as usize);
@@ -184,11 +256,20 @@ pub fn decode_audio(path: &Path, rate: u32, channels: u8) -> Result<Pcm> {
 
 /// Decode a video's frames to RGB24 at its own size (optionally resampled to
 /// `fps`), up to `max_frames`.
-pub fn decode_video_rgb(path: &Path, fps: Option<u32>, max_frames: Option<u32>) -> Result<Vec<RgbFrame>> {
+pub fn decode_video_rgb(
+    path: &Path,
+    fps: Option<u32>,
+    max_frames: Option<u32>,
+) -> Result<Vec<RgbFrame>> {
     let p = probe(path)?;
     let (w, h) = match (p.width, p.height) {
         (Some(w), Some(h)) => (w, h),
-        _ => return Err(MediaError::Decode(format!("{} has no video stream", path.display()))),
+        _ => {
+            return Err(MediaError::Decode(format!(
+                "{} has no video stream",
+                path.display()
+            )))
+        }
     };
     let mut cmd = tools::ffmpeg_command();
     cmd.arg("-i").arg(path).arg("-an");
@@ -205,7 +286,12 @@ pub fn decode_video_rgb(path: &Path, fps: Option<u32>, max_frames: Option<u32>) 
         .stdout
         .chunks_exact(size)
         .enumerate()
-        .map(|(i, c)| RgbFrame { width: w, height: h, data: Bytes::copy_from_slice(c), index: i as u64 })
+        .map(|(i, c)| RgbFrame {
+            width: w,
+            height: h,
+            data: Bytes::copy_from_slice(c),
+            index: i as u64,
+        })
         .collect())
 }
 
@@ -217,7 +303,8 @@ mod tests {
     fn image_probe_and_decode() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("x.png");
-        let img = image::RgbImage::from_fn(6, 4, |x, y| image::Rgb([x as u8 * 10, y as u8 * 20, 7]));
+        let img =
+            image::RgbImage::from_fn(6, 4, |x, y| image::Rgb([x as u8 * 10, y as u8 * 20, 7]));
         img.save(&p).unwrap();
         let pr = probe(&p).unwrap();
         assert_eq!(pr.kind, Some(MediaKind::Image));
@@ -242,7 +329,10 @@ mod tests {
           "format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","duration":"5.184000"}}"#;
         let p = parse_ffprobe_json(j).unwrap();
         assert_eq!(p.kind, Some(MediaKind::Video));
-        assert_eq!((p.width, p.height, p.fps), (Some(1344), Some(768), Some(24.0)));
+        assert_eq!(
+            (p.width, p.height, p.fps),
+            (Some(1344), Some(768), Some(24.0))
+        );
         assert_eq!((p.audio_rate, p.audio_channels), (Some(32_000), Some(2)));
         assert_eq!(p.audio_profile.as_deref(), Some("LC"));
         assert_eq!(p.duration_s, Some(5.184));
@@ -254,7 +344,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(a.kind, Some(MediaKind::Audio));
-        assert_eq!(parse_rate("30000/1001").map(|r| (r * 1000.0).round()), Some(29970.0));
+        assert_eq!(
+            parse_rate("30000/1001").map(|r| (r * 1000.0).round()),
+            Some(29970.0)
+        );
         assert_eq!(parse_rate("0/0"), None);
     }
 }

@@ -430,7 +430,11 @@ impl Technique for SolAttn {
             self.route.describe(),
             self.sink.as_str(),
             self.thresh_type,
-            if self.dense_vsa { ", dense calls on VSA" } else { "" }
+            if self.dense_vsa {
+                ", dense calls on VSA"
+            } else {
+                ""
+            }
         )
     }
     any!();
@@ -502,7 +506,10 @@ impl Technique for Fp8Attention {
         &self.enabled
     }
     fn describe(&self) -> String {
-        format!("fp8_attention ({}; Q K^T e4m3, P V bf16)", self.ops.describe())
+        format!(
+            "fp8_attention ({}; Q K^T e4m3, P V bf16)",
+            self.ops.describe()
+        )
     }
     any!();
 }

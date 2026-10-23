@@ -29,13 +29,17 @@ fn msg(s: impl Into<String>) -> PipelineError {
 /// `FASTVIDEO_WAN_AUDIO`: `mmaudio` turns the sidecar on.
 pub fn requested() -> bool {
     matches!(
-        std::env::var("FASTVIDEO_WAN_AUDIO").unwrap_or_default().trim(),
+        std::env::var("FASTVIDEO_WAN_AUDIO")
+            .unwrap_or_default()
+            .trim(),
         "mmaudio" | "1"
     )
 }
 
 pub fn weights_root() -> PathBuf {
-    if let Some(p) = std::env::var_os("FASTVIDEO_MMAUDIO_WEIGHTS").or_else(|| std::env::var_os("MMAUDIO_MODEL_PATH")) {
+    if let Some(p) = std::env::var_os("FASTVIDEO_MMAUDIO_WEIGHTS")
+        .or_else(|| std::env::var_os("MMAUDIO_MODEL_PATH"))
+    {
         return PathBuf::from(p);
     }
     let base = std::env::var_os("FV_WEIGHTS")
@@ -73,12 +77,21 @@ impl SidecarReport {
 }
 
 fn env_or<T: std::str::FromStr>(k: &str, d: T) -> T {
-    std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
+    std::env::var(k)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(d)
 }
 
 /// V2A on `mp4`, then mux the soundtrack into it in place (video stream
 /// copied, AAC audio). `num_frames`/`fps` define the clip duration.
-pub fn run_on_mp4(mp4: &Path, prompt: &str, seed: u64, num_frames: usize, fps: u32) -> Result<SidecarReport> {
+pub fn run_on_mp4(
+    mp4: &Path,
+    prompt: &str,
+    seed: u64,
+    num_frames: usize,
+    fps: u32,
+) -> Result<SidecarReport> {
     let t_io = Instant::now();
     let video = VideoFrames::from_file(mp4)?;
     let mut io_s = t_io.elapsed().as_secs_f64();
@@ -122,7 +135,17 @@ pub fn mux(mp4: &Path, wav: &Path) -> Result<()> {
         .arg(mp4)
         .arg("-i")
         .arg(wav)
-        .args(["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-shortest"])
+        .args([
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-shortest",
+        ])
         .arg(&tmp)
         .status()
         .map_err(|e| msg(format!("ffmpeg mux: {e}")))?;
@@ -130,7 +153,16 @@ pub fn mux(mp4: &Path, wav: &Path) -> Result<()> {
         return Err(msg(format!("ffmpeg mux failed: {st}")));
     }
     let probe = std::process::Command::new("ffprobe")
-        .args(["-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_type", "-of", "csv=p=0"])
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "csv=p=0",
+        ])
         .arg(&tmp)
         .output()
         .map_err(|e| msg(format!("ffprobe: {e}")))?;

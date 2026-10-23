@@ -84,7 +84,8 @@ pub fn worker_tag(worker_id: &str) -> String {
 /// The tag of an upload token issued by a front (`{tag}.{random}`).
 pub fn token_tag(token: &str) -> Option<&str> {
     let (tag, rest) = token.split_once('.')?;
-    (tag.len() == 8 && tag.bytes().all(|b| b.is_ascii_hexdigit()) && !rest.is_empty()).then_some(tag)
+    (tag.len() == 8 && tag.bytes().all(|b| b.is_ascii_hexdigit()) && !rest.is_empty())
+        .then_some(tag)
 }
 
 fn hex(b: &[u8]) -> String {
@@ -190,7 +191,10 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
     if s.len() % 2 != 0 {
         return None;
     }
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok()).collect()
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .collect()
 }
 
 /// `hex(json).hex(hmac-sha256)`, keyed by the workers' internal token.
@@ -306,7 +310,10 @@ pub enum StreamOp {
 pub enum Target {
     Edge(EdgeRoute),
     /// The fal app at `path[skip..]`; `id`: a request id (sticky).
-    FalApp { skip: usize, id: Option<String> },
+    FalApp {
+        skip: usize,
+        id: Option<String>,
+    },
     /// fal's proxy: the app is in `x-fal-target-url`.
     FalProxy,
     /// The `model` of the body (a submit).
@@ -322,7 +329,10 @@ pub enum Target {
     Director(DirectorOp),
     Reactor(ReactorOp),
     /// Native streams (`ingest = false`) or WHIP ingest (`true`).
-    Stream { ingest: bool, op: StreamOp },
+    Stream {
+        ingest: bool,
+        op: StreamOp,
+    },
     /// No such route.
     NotFound,
 }
@@ -341,7 +351,15 @@ fn c(protocol: &'static str, target: Target) -> Class {
 }
 
 /// LTX endpoints (generation and 403 stubs).
-const LTX_ENDPOINTS: &[&str] = &["text-to-video", "image-to-video", "audio-to-video", "retake", "extend", "video-to-video-hdr", "video-to-video-reframe"];
+const LTX_ENDPOINTS: &[&str] = &[
+    "text-to-video",
+    "image-to-video",
+    "audio-to-video",
+    "retake",
+    "extend",
+    "video-to-video-hdr",
+    "video-to-video-reframe",
+];
 
 /// Classifies one request (see the module docs). `path` has no query.
 pub fn classify(method: &str, path: &str) -> Class {
@@ -364,7 +382,9 @@ pub fn classify(method: &str, path: &str) -> Class {
         ("GET", "/fal/schema") => return c("edge", T::Edge(E::FalSchema)),
         (_, "/fv/v1/admin/keys") => return c("edge", T::Edge(E::Keys)),
         ("POST", "/fv/v1/admin/keys/invalidate") => return c("edge", T::Edge(E::KeysInvalidate)),
-        (_, "/fv/v1/edge/families" | "/fv/v1/gateway/pools") => return c("edge", T::Edge(E::Families)),
+        (_, "/fv/v1/edge/families" | "/fv/v1/gateway/pools") => {
+            return c("edge", T::Edge(E::Families))
+        }
         (_, "/up" | "/dl") => return c("edge", T::Edge(E::Internal)),
         _ => {}
     }
@@ -380,10 +400,18 @@ pub fn classify(method: &str, path: &str) -> Class {
         return c("edge", T::Edge(E::KeyRevoke(s(4).to_owned())));
     }
     if path.starts_with("/fv/v1/admin/releases") || path == "/fv/v1/admin/deployments" {
-        return c("edge", T::Edge(E::Moved("releases and deployments are on fv-control (/api/releases)")));
+        return c(
+            "edge",
+            T::Edge(E::Moved(
+                "releases and deployments are on fv-control (/api/releases)",
+            )),
+        );
     }
     if path == "/fv/v1/admin/token/sealed" {
-        return c("edge", T::Edge(E::Moved("the admin token is held by fv-control")));
+        return c(
+            "edge",
+            T::Edge(E::Moved("the admin token is held by fv-control")),
+        );
     }
     if path == "/fv/v1/admin/flags" || path.starts_with("/fv/v1/admin/flags/") {
         return c("native", T::Any);
@@ -403,19 +431,27 @@ pub fn classify(method: &str, path: &str) -> Class {
     }
     // OpenAI-style videos.
     match (m, n, s(0), s(1)) {
-        ("POST", 2, "v1", "videos") | ("POST", 3, "v1", "videos") if n == 2 || matches!(s(2), "generations" | "sync") => {
+        ("POST", 2, "v1", "videos") | ("POST", 3, "v1", "videos")
+            if n == 2 || matches!(s(2), "generations" | "sync") =>
+        {
             return c("openai_videos", T::Body);
         }
         ("GET", 2, "v1", "videos") => return c("openai_videos", T::Any),
-        ("GET" | "DELETE", 3, "v1", "videos") => return c("openai_videos", T::Job(s(2).to_owned())),
-        ("GET", 4, "v1", "videos") if s(3) == "content" => return c("openai_videos", T::Job(s(2).to_owned())),
+        ("GET" | "DELETE", 3, "v1", "videos") => {
+            return c("openai_videos", T::Job(s(2).to_owned()))
+        }
+        ("GET", 4, "v1", "videos") if s(3) == "content" => {
+            return c("openai_videos", T::Job(s(2).to_owned()))
+        }
         (_, 2, "v1", "model_info") => return c("openai_videos", T::Any),
         _ => {}
     }
     // FastWan.
     match (m, n, s(0)) {
         ("POST", 1, "generate") => return c("fastwan", T::Body),
-        ("GET", 2, "status") | ("GET" | "DELETE", 2, "video") => return c("fastwan", T::Job(s(1).to_owned())),
+        ("GET", 2, "status") | ("GET" | "DELETE", 2, "video") => {
+            return c("fastwan", T::Job(s(1).to_owned()))
+        }
         _ => {}
     }
     // MiniMax.
@@ -479,25 +515,39 @@ pub fn classify(method: &str, path: &str) -> Class {
         ("GET", "/.well-known/jwks.json") => return c("fal", T::Any),
         ("POST", "/wma/ice") => return c("fal_director", T::Director(DirectorOp::Ice)),
         ("POST", "/wma/session") => return c("fal_director", T::Director(DirectorOp::Session)),
-        ("POST", "/wma/session/heartbeat") => return c("fal_director", T::Director(DirectorOp::Heartbeat)),
+        ("POST", "/wma/session/heartbeat") => {
+            return c("fal_director", T::Director(DirectorOp::Heartbeat))
+        }
         ("POST", "/start-session") => return c("fal_director", T::Director(DirectorOp::Start)),
         (_, "/info") => return c("fal_director", T::Director(DirectorOp::Info)),
         ("POST", "/start_session") => return c("reactor", T::Reactor(ReactorOp::Start)),
         ("POST", "/stop_session") => return c("reactor", T::Reactor(ReactorOp::Stop)),
-        ("GET", "/session" | "/schema" | "/events") => return c("reactor", T::Reactor(ReactorOp::Follow)),
+        ("GET", "/session" | "/schema" | "/events") => {
+            return c("reactor", T::Reactor(ReactorOp::Follow))
+        }
         _ => {}
     }
     if s(0) == "sessions" && n >= 3 {
         return c("reactor", T::Reactor(ReactorOp::Sid(s(1).to_owned())));
     }
     if path.starts_with("/fal/schema/") {
-        return c("fal", T::FalApp { skip: "/fal/schema".len(), id: None });
+        return c(
+            "fal",
+            T::FalApp {
+                skip: "/fal/schema".len(),
+                id: None,
+            },
+        );
     }
     // Everything else is a fal app path: `/{owner}/{app}[/sub][/requests/{id}[/…]]`,
     // or the same under `/run`.
     if n >= 2 {
         let skip = if s(0) == "run" { 4 } else { 0 };
-        let id = segs.iter().position(|x| *x == "requests").and_then(|i| segs.get(i + 1)).map(|x| (*x).to_owned());
+        let id = segs
+            .iter()
+            .position(|x| *x == "requests")
+            .and_then(|i| segs.get(i + 1))
+            .map(|x| (*x).to_owned());
         return c("fal", T::FalApp { skip, id });
     }
     c("edge", T::NotFound)
@@ -517,7 +567,11 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        let hex2 = || b.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok());
+        let hex2 = || {
+            b.get(i + 1..i + 3)
+                .and_then(|h| std::str::from_utf8(h).ok())
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+        };
         match b[i] {
             b'+' => out.push(b' '),
             b'%' => match hex2() {
@@ -539,7 +593,9 @@ fn percent_decode(s: &str) -> String {
 /// as `fastvideo_fal::proxy`), so the edge routes and admits it like a
 /// direct call. `None`: not a fal host.
 pub fn unproxy(target: &str) -> Option<String> {
-    let rest = target.strip_prefix("https://").or_else(|| target.strip_prefix("http://"))?;
+    let rest = target
+        .strip_prefix("https://")
+        .or_else(|| target.strip_prefix("http://"))?;
     let (host, pq) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
         None => (rest, "/"),
@@ -591,14 +647,29 @@ pub struct Front<'a> {
 
 impl Registry {
     /// From each family object's status (`family`, its `status`).
-    pub fn from_statuses(statuses: Vec<(String, crate::PoolStatus)>, key_epoch: u64, now_ms: i64) -> Self {
-        let mut r = Registry { key_epoch, at_ms: now_ms, ..Registry::default() };
+    pub fn from_statuses(
+        statuses: Vec<(String, crate::PoolStatus)>,
+        key_epoch: u64,
+        now_ms: i64,
+    ) -> Self {
+        let mut r = Registry {
+            key_epoch,
+            at_ms: now_ms,
+            ..Registry::default()
+        };
         for (f, st) in statuses {
             for (o, n) in &st.owners {
                 *r.owners.entry(o.clone()).or_default() += n;
             }
             let sessions = st.sessions.iter().filter(|x| x.state == "live").count() as u32;
-            r.counts.insert(f.clone(), Counts { queued: st.queued, running: st.running + st.pushed, sessions });
+            r.counts.insert(
+                f.clone(),
+                Counts {
+                    queued: st.queued,
+                    running: st.running + st.pushed,
+                    sessions,
+                },
+            );
             r.families.insert(f, st.workers);
         }
         r
@@ -609,7 +680,12 @@ impl Registry {
         self.families.iter().flat_map(|(f, ws)| {
             ws.iter().filter_map(move |w| {
                 let info = w.front.as_ref()?;
-                (w.connected && !w.draining && w.ready && info.ready && !info.url.is_empty()).then_some(Front { family: f, worker: w, info })
+                (w.connected && !w.draining && w.ready && info.ready && !info.url.is_empty())
+                    .then_some(Front {
+                        family: f,
+                        worker: w,
+                        info,
+                    })
             })
         })
     }
@@ -617,7 +693,9 @@ impl Registry {
     /// The family serving the model named `name` (any name of
     /// [`FrontInfo::names`]), with every front that knows the name.
     pub fn family_of_name(&self, name: &str) -> Option<&str> {
-        self.fronts().find(|x| x.info.names.contains_key(name)).map(|x| x.family)
+        self.fronts()
+            .find(|x| x.info.names.contains_key(name))
+            .map(|x| x.family)
     }
 
     /// The fal app `path` starts with (the longest match) and its family.
@@ -650,14 +728,22 @@ impl Registry {
                 return Some(x.family);
             }
         }
-        self.fronts().find(|x| x.info.reactor.is_some()).map(|x| x.family)
+        self.fronts()
+            .find(|x| x.info.reactor.is_some())
+            .map(|x| x.family)
     }
 
     /// Picks a front: of `family` (any family when `None`), mounting
     /// `protocol` (unless empty), knowing `name` (unless `None`). With
     /// `sticky`, the rendezvous choice for that id; otherwise the least
     /// held (ties: the fewest held of the GPU, then the id).
-    pub fn pick(&self, family: Option<&str>, protocol: &str, name: Option<&str>, sticky: Option<&str>) -> Option<Front<'_>> {
+    pub fn pick(
+        &self,
+        family: Option<&str>,
+        protocol: &str,
+        name: Option<&str>,
+        sticky: Option<&str>,
+    ) -> Option<Front<'_>> {
         let ok = |x: &Front<'_>| {
             family.is_none_or(|f| x.family == f)
                 && (protocol.is_empty() || x.info.protocols.iter().any(|p| p == protocol))
@@ -668,8 +754,16 @@ impl Registry {
         c.sort_by(|a, b| a.worker.worker_id.cmp(&b.worker.worker_id));
         c.dedup_by(|a, b| a.worker.worker_id == b.worker.worker_id);
         match sticky {
-            Some(id) => c.into_iter().max_by_key(|x| rendezvous(id, &x.worker.worker_id)),
-            None => c.into_iter().min_by_key(|x| (x.worker.held, u32::MAX - x.worker.free, x.worker.worker_id.clone())),
+            Some(id) => c
+                .into_iter()
+                .max_by_key(|x| rendezvous(id, &x.worker.worker_id)),
+            None => c.into_iter().min_by_key(|x| {
+                (
+                    x.worker.held,
+                    u32::MAX - x.worker.free,
+                    x.worker.worker_id.clone(),
+                )
+            }),
         }
     }
 
@@ -680,7 +774,10 @@ impl Registry {
 
     /// Every distinct front (one per worker), for fan-outs.
     pub fn distinct(&self, protocol: &str) -> Vec<Front<'_>> {
-        let mut c: Vec<Front<'_>> = self.fronts().filter(|x| protocol.is_empty() || x.info.protocols.iter().any(|p| p == protocol)).collect();
+        let mut c: Vec<Front<'_>> = self
+            .fronts()
+            .filter(|x| protocol.is_empty() || x.info.protocols.iter().any(|p| p == protocol))
+            .collect();
         c.sort_by(|a, b| a.worker.worker_id.cmp(&b.worker.worker_id));
         c.dedup_by(|a, b| a.worker.worker_id == b.worker.worker_id);
         c
@@ -690,7 +787,9 @@ impl Registry {
     pub fn one_per_family(&self, protocol: &str) -> Vec<Front<'_>> {
         let mut out: Vec<Front<'_>> = Vec::new();
         for x in self.fronts() {
-            if (protocol.is_empty() || x.info.protocols.iter().any(|p| p == protocol)) && !out.iter().any(|o| o.family == x.family) {
+            if (protocol.is_empty() || x.info.protocols.iter().any(|p| p == protocol))
+                && !out.iter().any(|o| o.family == x.family)
+            {
                 out.push(x);
             }
         }
@@ -721,7 +820,10 @@ pub fn rendezvous(id: &str, worker: &str) -> u64 {
 
 /// A worker's public state word (`crate::status` of fv-serve).
 fn worker_state(w: &WorkerInfo) -> &'static str {
-    let failed = w.front.as_ref().is_some_and(|f| !f.failed_models.is_empty() && f.names.is_empty());
+    let failed = w
+        .front
+        .as_ref()
+        .is_some_and(|f| !f.failed_models.is_empty() && f.names.is_empty());
     if !w.connected {
         "down"
     } else if w.draining {
@@ -777,7 +879,13 @@ pub fn status_body(reg: &Registry, version: serde_json::Value, now_ms: i64) -> s
             }));
             last_seen = Some(last_seen.map_or(w.last_seen_ms, |l| l.max(w.last_seen_ms)));
             if w.connected {
-                *versions.entry(if w.sha.is_empty() { "unknown".into() } else { w.sha.clone() }).or_default() += 1;
+                *versions
+                    .entry(if w.sha.is_empty() {
+                        "unknown".into()
+                    } else {
+                        w.sha.clone()
+                    })
+                    .or_default() += 1;
             }
             if let Some(fi) = &w.front {
                 for (n, m) in &fi.names {
@@ -789,7 +897,12 @@ pub fn status_body(reg: &Registry, version: serde_json::Value, now_ms: i64) -> s
                 failed.extend(fi.failed_models.clone());
             }
         }
-        let state = workers.iter().map(|w| w["state"].as_str().unwrap_or("down")).min_by_key(|s| state_rank(s)).unwrap_or("scaled_to_zero").to_owned();
+        let state = workers
+            .iter()
+            .map(|w| w["state"].as_str().unwrap_or("down"))
+            .min_by_key(|s| state_rank(s))
+            .unwrap_or("scaled_to_zero")
+            .to_owned();
         overall = overall.min(state_rank(&state));
         let mixed = versions.len() > 1;
         mixed_any |= mixed;
@@ -877,7 +990,11 @@ pub fn merge_list(bodies: &[serde_json::Value], key: &str, id: &str) -> Vec<serd
 
 /// `/fv/v1/capabilities` at the edge: one front's per family, merged
 /// (`models`, `tiers`, `aliases`), with the families as `pools`.
-pub fn merge_capabilities(bodies: &[serde_json::Value], reg: &Registry, now_ms: i64) -> serde_json::Value {
+pub fn merge_capabilities(
+    bodies: &[serde_json::Value],
+    reg: &Registry,
+    now_ms: i64,
+) -> serde_json::Value {
     let mut aliases = serde_json::Map::new();
     for b in bodies {
         if let Some(m) = b.get("aliases").and_then(|v| v.as_object()) {
@@ -905,12 +1022,29 @@ pub fn merge_capabilities(bodies: &[serde_json::Value], reg: &Registry, now_ms: 
 pub fn merge_fal_schema(bodies: &[serde_json::Value]) -> serde_json::Value {
     let mut apps: Vec<serde_json::Value> = Vec::new();
     for b in bodies {
-        for a in b.get("apps").and_then(|v| v.as_array()).into_iter().flatten() {
+        for a in b
+            .get("apps")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
             match apps.iter_mut().find(|x| x.get("id") == a.get("id")) {
                 Some(x) => {
-                    let mut eps = x.get("endpoints").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-                    for e in a.get("endpoints").and_then(|v| v.as_array()).into_iter().flatten() {
-                        if !eps.iter().any(|o| o.get("endpoint_id") == e.get("endpoint_id")) {
+                    let mut eps = x
+                        .get("endpoints")
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                    for e in a
+                        .get("endpoints")
+                        .and_then(|v| v.as_array())
+                        .into_iter()
+                        .flatten()
+                    {
+                        if !eps
+                            .iter()
+                            .any(|o| o.get("endpoint_id") == e.get("endpoint_id"))
+                        {
                             eps.push(e.clone());
                         }
                     }
@@ -929,15 +1063,41 @@ pub fn prometheus(ms: &[crate::FamilyMetrics]) -> String {
     type Gauge = (&'static str, &'static str, fn(&crate::FamilyMetrics) -> f64);
     let mut out = String::new();
     let gauges: [Gauge; 9] = [
-        ("fv_family_queued", "jobs queued in the family object", |m| f64::from(m.queued)),
-        ("fv_family_oldest_queued_seconds", "age of the oldest queued job", |m| m.oldest_queued_ms as f64 / 1e3),
-        ("fv_family_running", "jobs pushed or running", |m| f64::from(m.pushed + m.running)),
-        ("fv_family_workers", "connected workers", |m| f64::from(m.workers)),
-        ("fv_family_slots_total", "job slots of connected workers", |m| f64::from(m.slots_total)),
-        ("fv_family_slots_free", "free job slots (estimate)", |m| f64::from(m.slots_free)),
-        ("fv_family_sessions_live", "live streaming sessions", |m| f64::from(m.sessions_live)),
-        ("fv_family_failed_1h", "jobs the dispatcher failed in the last hour", |m| f64::from(m.failed_1h)),
-        ("fv_family_queue_p50_seconds", "enqueue to push, p50", |m| m.queue_p50_ms / 1e3),
+        (
+            "fv_family_queued",
+            "jobs queued in the family object",
+            |m| f64::from(m.queued),
+        ),
+        (
+            "fv_family_oldest_queued_seconds",
+            "age of the oldest queued job",
+            |m| m.oldest_queued_ms as f64 / 1e3,
+        ),
+        ("fv_family_running", "jobs pushed or running", |m| {
+            f64::from(m.pushed + m.running)
+        }),
+        ("fv_family_workers", "connected workers", |m| {
+            f64::from(m.workers)
+        }),
+        (
+            "fv_family_slots_total",
+            "job slots of connected workers",
+            |m| f64::from(m.slots_total),
+        ),
+        ("fv_family_slots_free", "free job slots (estimate)", |m| {
+            f64::from(m.slots_free)
+        }),
+        ("fv_family_sessions_live", "live streaming sessions", |m| {
+            f64::from(m.sessions_live)
+        }),
+        (
+            "fv_family_failed_1h",
+            "jobs the dispatcher failed in the last hour",
+            |m| f64::from(m.failed_1h),
+        ),
+        ("fv_family_queue_p50_seconds", "enqueue to push, p50", |m| {
+            m.queue_p50_ms / 1e3
+        }),
     ];
     for (name, help, f) in gauges {
         out.push_str(&format!("# HELP {name} {help}\n# TYPE {name} gauge\n"));
@@ -964,7 +1124,11 @@ pub struct Quotas {
 
 impl Default for Quotas {
     fn default() -> Self {
-        Self { key_rpm: 300, key_in_flight: 30, invalid_key_rpm: 60 }
+        Self {
+            key_rpm: 300,
+            key_in_flight: 30,
+            invalid_key_rpm: 60,
+        }
     }
 }
 
@@ -994,20 +1158,38 @@ impl Reply {
 }
 
 fn unavailable(msg: impl Into<String>) -> Reply {
-    Reply { status: 503, kind: "loading", message: msg.into(), retry_after: Some(10) }
+    Reply {
+        status: 503,
+        kind: "loading",
+        message: msg.into(),
+        retry_after: Some(10),
+    }
 }
 
 /// Whether a request starts a job (a submit: the in-flight quota applies).
 pub fn is_submit(method: &str, class: &Class) -> bool {
-    method.eq_ignore_ascii_case("POST") && matches!(class.target, Target::Body | Target::FalApp { id: None, .. })
+    method.eq_ignore_ascii_case("POST")
+        && matches!(class.target, Target::Body | Target::FalApp { id: None, .. })
 }
 
 /// The front of a stateless request (every [`Target`] but the edge's own
 /// routes and sessions). `model`: the body's model for [`Target::Body`]
 /// (`None`: absent); `fal_target`: the path of `x-fal-target-url` for
 /// [`Target::FalProxy`]; `query`: the raw query.
-pub fn plan_forward(class: &Class, reg: &Registry, path: &str, query: &str, model: Option<&str>, fal_target: Option<&str>) -> Result<Forward, Reply> {
-    let fwd = |x: Front<'_>, deny: Option<Deny>| Forward { url: x.info.url.clone(), family: x.family.to_owned(), worker_id: x.worker.worker_id.clone(), deny };
+pub fn plan_forward(
+    class: &Class,
+    reg: &Registry,
+    path: &str,
+    query: &str,
+    model: Option<&str>,
+    fal_target: Option<&str>,
+) -> Result<Forward, Reply> {
+    let fwd = |x: Front<'_>, deny: Option<Deny>| Forward {
+        url: x.info.url.clone(),
+        family: x.family.to_owned(),
+        worker_id: x.worker.worker_id.clone(),
+        deny,
+    };
     let p = class.protocol;
     // Any front of the protocol, rendering `deny` (a front of another family
     // still speaks the API).
@@ -1018,17 +1200,29 @@ pub fn plan_forward(class: &Class, reg: &Registry, path: &str, query: &str, mode
             match reg.fal_app(rest) {
                 Some((_, family)) => {
                     let family = family.to_owned();
-                    reg.pick(Some(&family), "fal", None, id.as_deref()).map(|x| fwd(x, None)).ok_or_else(|| unavailable(format!("no worker serves this fal app right now (family `{family}`)")))
+                    reg.pick(Some(&family), "fal", None, id.as_deref())
+                        .map(|x| fwd(x, None))
+                        .ok_or_else(|| {
+                            unavailable(format!(
+                                "no worker serves this fal app right now (family `{family}`)"
+                            ))
+                        })
                 }
                 // No front mounts the app: any fal front answers its 404.
-                None => reg.pick(None, "fal", None, None).map(|x| fwd(x, None)).ok_or_else(|| unavailable("no fal front is up")),
+                None => reg
+                    .pick(None, "fal", None, None)
+                    .map(|x| fwd(x, None))
+                    .ok_or_else(|| unavailable("no fal front is up")),
             }
         }
         Target::FalProxy => {
             let target = fal_target.unwrap_or("");
             let fam = reg.fal_app(target).map(|(_, f)| f.to_owned());
             match fam {
-                Some(f) => reg.pick(Some(&f), "fal", None, None).map(|x| fwd(x, None)).ok_or_else(|| unavailable("no fal front is up")),
+                Some(f) => reg
+                    .pick(Some(&f), "fal", None, None)
+                    .map(|x| fwd(x, None))
+                    .ok_or_else(|| unavailable("no fal front is up")),
                 // No app in the target (fal's token and storage calls): a
                 // front that mounts fal apps.
                 None => reg
@@ -1049,30 +1243,62 @@ pub fn plan_forward(class: &Class, reg: &Registry, path: &str, query: &str, mode
             match family {
                 Some(f) => match reg.pick(Some(&f), p, None, None) {
                     Some(x) => Ok(fwd(x, None)),
-                    None => any_with(Deny { kind: "unavailable".into(), message: format!("no worker serves this model right now (family `{f}`)"), retry_after: Some(10) })
-                        .ok_or_else(|| unavailable(format!("no worker serves this model right now (family `{f}`)"))),
+                    None => any_with(Deny {
+                        kind: "unavailable".into(),
+                        message: format!("no worker serves this model right now (family `{f}`)"),
+                        retry_after: Some(10),
+                    })
+                    .ok_or_else(|| {
+                        unavailable(format!(
+                            "no worker serves this model right now (family `{f}`)"
+                        ))
+                    }),
                 },
                 // A name no front announces (an API-specific model name):
                 // a front of the API resolves it itself.
-                None => reg.pick(None, p, None, None).map(|x| fwd(x, None)).ok_or_else(|| unavailable("no worker serves this API right now")),
+                None => reg
+                    .pick(None, p, None, None)
+                    .map(|x| fwd(x, None))
+                    .ok_or_else(|| unavailable("no worker serves this API right now")),
             }
         }
-        Target::Job(id) => reg.pick(None, p, None, Some(id)).map(|x| fwd(x, None)).ok_or_else(|| unavailable("no worker serves this API right now")),
+        Target::Job(id) => reg
+            .pick(None, p, None, Some(id))
+            .map(|x| fwd(x, None))
+            .ok_or_else(|| unavailable("no worker serves this API right now")),
         Target::JobQuery(name) => {
             let id = query_param(query, name);
-            reg.pick(None, p, None, id.as_deref()).map(|x| fwd(x, None)).ok_or_else(|| unavailable("no worker serves this API right now"))
+            reg.pick(None, p, None, id.as_deref())
+                .map(|x| fwd(x, None))
+                .ok_or_else(|| unavailable("no worker serves this API right now"))
         }
-        Target::Any => reg.pick(None, p, None, None).map(|x| fwd(x, None)).ok_or_else(|| unavailable("no worker serves this API right now")),
+        Target::Any => reg
+            .pick(None, p, None, None)
+            .map(|x| fwd(x, None))
+            .ok_or_else(|| unavailable("no worker serves this API right now")),
         Target::Upload(token) => {
             let tagged = token_tag(token).and_then(|t| reg.by_tag(t));
             match (tagged, token_tag(token)) {
                 (Some(x), _) => Ok(fwd(x, None)),
                 // Tagged by a front that is gone: its uploads went with it.
-                (None, Some(_)) => Err(Reply { status: 404, kind: "not_found", message: "the upload is gone (its worker left)".into(), retry_after: None }),
-                (None, None) => reg.pick(None, "", None, Some(token)).map(|x| fwd(x, None)).ok_or_else(|| unavailable("no worker is up")),
+                (None, Some(_)) => Err(Reply {
+                    status: 404,
+                    kind: "not_found",
+                    message: "the upload is gone (its worker left)".into(),
+                    retry_after: None,
+                }),
+                (None, None) => reg
+                    .pick(None, "", None, Some(token))
+                    .map(|x| fwd(x, None))
+                    .ok_or_else(|| unavailable("no worker is up")),
             }
         }
-        _ => Err(Reply { status: 404, kind: "not_found", message: "no such route".into(), retry_after: None }),
+        _ => Err(Reply {
+            status: 404,
+            kind: "not_found",
+            message: "no such route".into(),
+            retry_after: None,
+        }),
     }
 }
 
@@ -1119,7 +1345,10 @@ pub enum Scan {
 /// anything else that starts with `{`) or `multipart/form-data` (a part
 /// named `model`). `complete`: `body` is the whole body.
 pub fn scan_model(content_type: &str, body: &[u8], complete: bool) -> Scan {
-    if let Some(b) = content_type.split(';').find_map(|p| p.trim().strip_prefix("boundary=")) {
+    if let Some(b) = content_type
+        .split(';')
+        .find_map(|p| p.trim().strip_prefix("boundary="))
+    {
         return scan_multipart(b.trim_matches('"'), body, complete);
     }
     scan_json(body, complete)
@@ -1217,7 +1446,10 @@ fn scan_json(body: &[u8], complete: bool) -> Scan {
                 None
             }
             _ => {
-                while *i < n && !matches!(body[*i], b',' | b'}' | b']') && !body[*i].is_ascii_whitespace() {
+                while *i < n
+                    && !matches!(body[*i], b',' | b'}' | b']')
+                    && !body[*i].is_ascii_whitespace()
+                {
                     *i += 1;
                 }
                 (*i < n).then_some(())
@@ -1238,7 +1470,9 @@ fn scan_json(body: &[u8], complete: bool) -> Scan {
             b'"' => {}
             _ => return Scan::Absent,
         }
-        let Some((ks, ke)) = string(body, &mut i) else { return more() };
+        let Some((ks, ke)) = string(body, &mut i) else {
+            return more();
+        };
         let is_model = &body[ks..ke] == b"model";
         ws(&mut i);
         if i >= n {
@@ -1256,7 +1490,9 @@ fn scan_json(body: &[u8], complete: bool) -> Scan {
             if body[i] != b'"' {
                 return Scan::Absent;
             }
-            let Some((vs, ve)) = string(body, &mut i) else { return more() };
+            let Some((vs, ve)) = string(body, &mut i) else {
+                return more();
+            };
             let raw = &body[vs..ve];
             // Unescape through serde (rare: names have no escapes).
             let quoted = [b"\"".as_slice(), raw, b"\""].concat();
@@ -1279,7 +1515,10 @@ mod tests {
         FrontInfo {
             url: url.into(),
             protocols: protocols.iter().map(|s| s.to_string()).collect(),
-            names: names.iter().map(|s| (s.to_string(), names[0].to_string())).collect(),
+            names: names
+                .iter()
+                .map(|s| (s.to_string(), names[0].to_string()))
+                .collect(),
             fal_apps: apps.iter().map(|s| s.to_string()).collect(),
             ready: true,
             ..FrontInfo::default()
@@ -1287,14 +1526,32 @@ mod tests {
     }
 
     fn w(id: &str, held: u32, f: FrontInfo) -> WorkerInfo {
-        WorkerInfo { worker_id: id.into(), connected: true, held, ready: true, front: Some(f), ..WorkerInfo::default() }
+        WorkerInfo {
+            worker_id: id.into(),
+            connected: true,
+            held,
+            ready: true,
+            front: Some(f),
+            ..WorkerInfo::default()
+        }
     }
 
     fn reg() -> Registry {
         let mut r = Registry::default();
-        let h3 = front("https://a", &["fasth3", "h3-turbo", "MiniMax-H3"], &["minimax/h3-turbo", "minimax/h3"], &["fal", "minimax", "native"]);
-        let ltx = front("https://b", &["ltx25-distill-sol", "ltx-turbo"], &["lightricks/ltx-2.5"], &["fal", "ltx", "native"]);
-        r.families.insert("h3".into(), vec![w("wa", 1, h3.clone()), w("wa2", 0, h3)]);
+        let h3 = front(
+            "https://a",
+            &["fasth3", "h3-turbo", "MiniMax-H3"],
+            &["minimax/h3-turbo", "minimax/h3"],
+            &["fal", "minimax", "native"],
+        );
+        let ltx = front(
+            "https://b",
+            &["ltx25-distill-sol", "ltx-turbo"],
+            &["lightricks/ltx-2.5"],
+            &["fal", "ltx", "native"],
+        );
+        r.families
+            .insert("h3".into(), vec![w("wa", 1, h3.clone()), w("wa2", 0, h3)]);
         r.families.insert("ltx".into(), vec![w("wb", 0, ltx)]);
         r
     }
@@ -1303,33 +1560,114 @@ mod tests {
     fn classifies_every_api() {
         assert_eq!(classify("POST", "/v1/videos").target, Target::Body);
         assert_eq!(classify("POST", "/v1/videos/sync").target, Target::Body);
-        assert_eq!(classify("GET", "/v1/videos/video_1").target, Target::Job("video_1".into()));
-        assert_eq!(classify("GET", "/v1/videos/video_1/content").target, Target::Job("video_1".into()));
+        assert_eq!(
+            classify("GET", "/v1/videos/video_1").target,
+            Target::Job("video_1".into())
+        );
+        assert_eq!(
+            classify("GET", "/v1/videos/video_1/content").target,
+            Target::Job("video_1".into())
+        );
         assert_eq!(classify("GET", "/v1/videos").target, Target::Any);
         assert_eq!(classify("POST", "/v2/video_generation").protocol, "minimax");
-        assert_eq!(classify("GET", "/v2/query/video_generation").target, Target::JobQuery("task_id"));
+        assert_eq!(
+            classify("GET", "/v2/query/video_generation").target,
+            Target::JobQuery("task_id")
+        );
         assert_eq!(classify("POST", "/v2/text-to-video").target, Target::Body);
-        assert_eq!(classify("GET", "/v2/text-to-video/abc").target, Target::Job("abc".into()));
+        assert_eq!(
+            classify("GET", "/v2/text-to-video/abc").target,
+            Target::Job("abc".into())
+        );
         assert_eq!(classify("POST", "/v1/image-to-video").protocol, "ltx");
         assert_eq!(classify("POST", "/fv/v1/jobs").target, Target::Body);
-        assert_eq!(classify("GET", "/fv/v1/jobs/j1/content").target, Target::Job("j1".into()));
-        assert_eq!(classify("POST", "/fv/v1/streams").target, Target::Stream { ingest: false, op: StreamOp::Create });
-        assert_eq!(classify("DELETE", "/fv/v1/streams/s1").target, Target::Stream { ingest: false, op: StreamOp::Delete("s1".into()) });
-        assert_eq!(classify("POST", "/fv/v1/streams/ingest").target, Target::Stream { ingest: true, op: StreamOp::Create });
-        assert_eq!(classify("POST", "/fv/v1/streams/ingest/i1/commands").target, Target::Stream { ingest: true, op: StreamOp::Follow("i1".into()) });
-        assert_eq!(classify("POST", "/minimax/h3-turbo/text-to-video").target, Target::FalApp { skip: 0, id: None });
-        assert_eq!(classify("GET", "/minimax/h3-turbo/requests/r1/status").target, Target::FalApp { skip: 0, id: Some("r1".into()) });
-        assert_eq!(classify("POST", "/run/minimax/h3-turbo/text-to-video").target, Target::FalApp { skip: 4, id: None });
-        assert_eq!(classify("PUT", "/uploads/abcd1234.xyz").target, Target::Upload("abcd1234.xyz".into()));
-        assert_eq!(classify("GET", "/files/t/x.png").target, Target::Upload("t".into()));
-        assert_eq!(classify("POST", "/wma/session").target, Target::Director(DirectorOp::Session));
-        assert_eq!(classify("POST", "/start_session").target, Target::Reactor(ReactorOp::Start));
-        assert_eq!(classify("POST", "/sessions/s9/uploads").target, Target::Reactor(ReactorOp::Sid("s9".into())));
-        assert_eq!(classify("GET", "/fv/v1/status").target, Target::Edge(EdgeRoute::Status));
-        assert_eq!(classify("DELETE", "/fv/v1/admin/keys/key_1").target, Target::Edge(EdgeRoute::KeyRevoke("key_1".into())));
-        assert_eq!(classify("GET", "/fv/v1/internal/status").target, Target::NotFound);
-        assert_eq!(classify("GET", "/console/assets/app.js").protocol, "console");
-        assert_eq!(classify("GET", "/families/h3/status").target, Target::Edge(EdgeRoute::Internal));
+        assert_eq!(
+            classify("GET", "/fv/v1/jobs/j1/content").target,
+            Target::Job("j1".into())
+        );
+        assert_eq!(
+            classify("POST", "/fv/v1/streams").target,
+            Target::Stream {
+                ingest: false,
+                op: StreamOp::Create
+            }
+        );
+        assert_eq!(
+            classify("DELETE", "/fv/v1/streams/s1").target,
+            Target::Stream {
+                ingest: false,
+                op: StreamOp::Delete("s1".into())
+            }
+        );
+        assert_eq!(
+            classify("POST", "/fv/v1/streams/ingest").target,
+            Target::Stream {
+                ingest: true,
+                op: StreamOp::Create
+            }
+        );
+        assert_eq!(
+            classify("POST", "/fv/v1/streams/ingest/i1/commands").target,
+            Target::Stream {
+                ingest: true,
+                op: StreamOp::Follow("i1".into())
+            }
+        );
+        assert_eq!(
+            classify("POST", "/minimax/h3-turbo/text-to-video").target,
+            Target::FalApp { skip: 0, id: None }
+        );
+        assert_eq!(
+            classify("GET", "/minimax/h3-turbo/requests/r1/status").target,
+            Target::FalApp {
+                skip: 0,
+                id: Some("r1".into())
+            }
+        );
+        assert_eq!(
+            classify("POST", "/run/minimax/h3-turbo/text-to-video").target,
+            Target::FalApp { skip: 4, id: None }
+        );
+        assert_eq!(
+            classify("PUT", "/uploads/abcd1234.xyz").target,
+            Target::Upload("abcd1234.xyz".into())
+        );
+        assert_eq!(
+            classify("GET", "/files/t/x.png").target,
+            Target::Upload("t".into())
+        );
+        assert_eq!(
+            classify("POST", "/wma/session").target,
+            Target::Director(DirectorOp::Session)
+        );
+        assert_eq!(
+            classify("POST", "/start_session").target,
+            Target::Reactor(ReactorOp::Start)
+        );
+        assert_eq!(
+            classify("POST", "/sessions/s9/uploads").target,
+            Target::Reactor(ReactorOp::Sid("s9".into()))
+        );
+        assert_eq!(
+            classify("GET", "/fv/v1/status").target,
+            Target::Edge(EdgeRoute::Status)
+        );
+        assert_eq!(
+            classify("DELETE", "/fv/v1/admin/keys/key_1").target,
+            Target::Edge(EdgeRoute::KeyRevoke("key_1".into()))
+        );
+        assert_eq!(
+            classify("GET", "/fv/v1/internal/status").target,
+            Target::NotFound
+        );
+        assert_eq!(
+            classify("GET", "/console/assets/app.js").protocol,
+            "console"
+        );
+        assert_eq!(
+            classify("GET", "/families/h3/status").target,
+            Target::Edge(EdgeRoute::Internal)
+        );
     }
 
     #[test]
@@ -1338,18 +1676,46 @@ mod tests {
         assert_eq!(r.family_of_name("MiniMax-H3"), Some("h3"));
         assert_eq!(r.family_of_name("ltx-turbo"), Some("ltx"));
         assert_eq!(r.family_of_name("nope"), None);
-        assert_eq!(r.fal_app("/minimax/h3-turbo/text-to-video").map(|x| x.0), Some("minimax/h3-turbo".to_owned()));
+        assert_eq!(
+            r.fal_app("/minimax/h3-turbo/text-to-video").map(|x| x.0),
+            Some("minimax/h3-turbo".to_owned())
+        );
         assert_eq!(r.fal_app("/minimax/h3/requests/x").map(|x| x.1), Some("h3"));
         assert_eq!(r.fal_app("/minimax/h3x/requests/x"), None);
         // Least held first.
-        assert_eq!(r.pick(Some("h3"), "fal", None, None).unwrap().worker.worker_id, "wa2");
+        assert_eq!(
+            r.pick(Some("h3"), "fal", None, None)
+                .unwrap()
+                .worker
+                .worker_id,
+            "wa2"
+        );
         // Sticky: the same id always lands on the same front.
-        let a = r.pick(Some("h3"), "fal", None, Some("req-1")).unwrap().worker.worker_id.clone();
+        let a = r
+            .pick(Some("h3"), "fal", None, Some("req-1"))
+            .unwrap()
+            .worker
+            .worker_id
+            .clone();
         for _ in 0..5 {
-            assert_eq!(r.pick(Some("h3"), "fal", None, Some("req-1")).unwrap().worker.worker_id, a);
+            assert_eq!(
+                r.pick(Some("h3"), "fal", None, Some("req-1"))
+                    .unwrap()
+                    .worker
+                    .worker_id,
+                a
+            );
         }
         // Sticky ids spread over both fronts.
-        let n = (0..200).filter(|i| r.pick(Some("h3"), "fal", None, Some(&format!("id-{i}"))).unwrap().worker.worker_id == "wa").count();
+        let n = (0..200)
+            .filter(|i| {
+                r.pick(Some("h3"), "fal", None, Some(&format!("id-{i}")))
+                    .unwrap()
+                    .worker
+                    .worker_id
+                    == "wa"
+            })
+            .count();
         assert!((60..140).contains(&n), "{n}");
         // A protocol only one family mounts.
         assert_eq!(r.pick(None, "ltx", None, None).unwrap().family, "ltx");
@@ -1359,25 +1725,79 @@ mod tests {
     #[test]
     fn plans_forwards() {
         let mut r = reg();
-        r.families.get_mut("ltx").unwrap()[0].front.as_mut().unwrap().tag = worker_tag("wb");
-        let p = |m: &str, path: &str, model: Option<&str>| plan_forward(&classify(m, path), &r, path, "", model, None);
-        assert_eq!(p("POST", "/v2/video_generation", Some("MiniMax-H3")).unwrap().family, "h3");
-        assert_eq!(p("POST", "/v2/text-to-video", Some("ltx-turbo")).unwrap().url, "https://b");
+        r.families.get_mut("ltx").unwrap()[0]
+            .front
+            .as_mut()
+            .unwrap()
+            .tag = worker_tag("wb");
+        let p = |m: &str, path: &str, model: Option<&str>| {
+            plan_forward(&classify(m, path), &r, path, "", model, None)
+        };
+        assert_eq!(
+            p("POST", "/v2/video_generation", Some("MiniMax-H3"))
+                .unwrap()
+                .family,
+            "h3"
+        );
+        assert_eq!(
+            p("POST", "/v2/text-to-video", Some("ltx-turbo"))
+                .unwrap()
+                .url,
+            "https://b"
+        );
         // A name nobody announces: a front of the API resolves it.
-        assert_eq!(p("POST", "/v2/text-to-video", Some("ltx-2-fast")).unwrap().url, "https://b");
-        assert_eq!(p("POST", "/minimax/h3-turbo/text-to-video", None).unwrap().family, "h3");
-        assert_eq!(p("GET", "/lightricks/ltx-2.5/requests/r1/status", None).unwrap().family, "ltx");
+        assert_eq!(
+            p("POST", "/v2/text-to-video", Some("ltx-2-fast"))
+                .unwrap()
+                .url,
+            "https://b"
+        );
+        assert_eq!(
+            p("POST", "/minimax/h3-turbo/text-to-video", None)
+                .unwrap()
+                .family,
+            "h3"
+        );
+        assert_eq!(
+            p("GET", "/lightricks/ltx-2.5/requests/r1/status", None)
+                .unwrap()
+                .family,
+            "ltx"
+        );
         let up = format!("{}.abc", worker_tag("wb"));
-        assert_eq!(p("PUT", &format!("/uploads/{up}"), None).unwrap().url, "https://b");
-        assert_eq!(p("GET", &format!("/files/{up}/x.png"), None).unwrap().url, "https://b");
+        assert_eq!(
+            p("PUT", &format!("/uploads/{up}"), None).unwrap().url,
+            "https://b"
+        );
+        assert_eq!(
+            p("GET", &format!("/files/{up}/x.png"), None).unwrap().url,
+            "https://b"
+        );
         let gone = format!("{}.abc", worker_tag("left"));
-        assert_eq!(p("PUT", &format!("/uploads/{gone}"), None).unwrap_err().status, 404);
+        assert_eq!(
+            p("PUT", &format!("/uploads/{gone}"), None)
+                .unwrap_err()
+                .status,
+            404
+        );
         assert!(!p("GET", "/fv/v1/jobs/j1", None).unwrap().family.is_empty());
         assert!(is_submit("POST", &classify("POST", "/fv/v1/jobs")));
         assert!(!is_submit("GET", &classify("GET", "/fv/v1/jobs/x")));
         let mut empty = Registry::default();
         empty.families.insert("h3".into(), Vec::new());
-        assert_eq!(plan_forward(&classify("POST", "/fv/v1/jobs"), &empty, "/fv/v1/jobs", "", Some("x"), None).unwrap_err().status, 503);
+        assert_eq!(
+            plan_forward(
+                &classify("POST", "/fv/v1/jobs"),
+                &empty,
+                "/fv/v1/jobs",
+                "",
+                Some("x"),
+                None
+            )
+            .unwrap_err()
+            .status,
+            503
+        );
     }
 
     #[test]
@@ -1396,23 +1816,56 @@ mod tests {
     #[test]
     fn finds_the_model_of_a_prefix() {
         let j = br#"{"prompt": "a \"model\" here", "nested": {"model": "no"}, "list": [1, {"model": "x"}], "model": "fasth3", "image": "data:..."}"#;
-        assert_eq!(scan_model("application/json", j, true), Scan::Found("fasth3".into()));
+        assert_eq!(
+            scan_model("application/json", j, true),
+            Scan::Found("fasth3".into())
+        );
         let k = br#"{"model":"MiniMax-H3","prompt":"#;
-        assert_eq!(scan_model("application/json", k, false), Scan::Found("MiniMax-H3".into()));
-        assert_eq!(scan_model("application/json", br#"{"prompt": "abc"#, false), Scan::More);
-        assert_eq!(scan_model("application/json", br#"{"prompt": "abc"}"#, true), Scan::Absent);
-        assert_eq!(scan_model("application/json", br#"[1]"#, true), Scan::Absent);
+        assert_eq!(
+            scan_model("application/json", k, false),
+            Scan::Found("MiniMax-H3".into())
+        );
+        assert_eq!(
+            scan_model("application/json", br#"{"prompt": "abc"#, false),
+            Scan::More
+        );
+        assert_eq!(
+            scan_model("application/json", br#"{"prompt": "abc"}"#, true),
+            Scan::Absent
+        );
+        assert_eq!(
+            scan_model("application/json", br#"[1]"#, true),
+            Scan::Absent
+        );
         let mp = b"--XY\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nhi\r\n--XY\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nsora-2\r\n--XY--\r\n";
-        assert_eq!(scan_model("multipart/form-data; boundary=XY", mp, true), Scan::Found("sora-2".into()));
-        assert_eq!(scan_model("multipart/form-data; boundary=XY", &mp[..60], false), Scan::More);
+        assert_eq!(
+            scan_model("multipart/form-data; boundary=XY", mp, true),
+            Scan::Found("sora-2".into())
+        );
+        assert_eq!(
+            scan_model("multipart/form-data; boundary=XY", &mp[..60], false),
+            Scan::More
+        );
     }
 
     #[test]
     fn fal_proxy_targets() {
-        assert_eq!(unproxy("https://queue.fal.run/minimax/h3-max/requests/r1/status?logs=1").as_deref(), Some("/minimax/h3-max/requests/r1/status?logs=1"));
-        assert_eq!(unproxy("https://fal.run/minimax/h3-max/director/ice").as_deref(), Some("/run/minimax/h3-max/director/ice"));
-        assert_eq!(unproxy("https://wma.fal.run/session").as_deref(), Some("/wma/session"));
-        assert_eq!(unproxy("https://rest.alpha.fal.ai/storage/upload/initiate?x=1").as_deref(), Some("/storage/upload/initiate?x=1"));
+        assert_eq!(
+            unproxy("https://queue.fal.run/minimax/h3-max/requests/r1/status?logs=1").as_deref(),
+            Some("/minimax/h3-max/requests/r1/status?logs=1")
+        );
+        assert_eq!(
+            unproxy("https://fal.run/minimax/h3-max/director/ice").as_deref(),
+            Some("/run/minimax/h3-max/director/ice")
+        );
+        assert_eq!(
+            unproxy("https://wma.fal.run/session").as_deref(),
+            Some("/wma/session")
+        );
+        assert_eq!(
+            unproxy("https://rest.alpha.fal.ai/storage/upload/initiate?x=1").as_deref(),
+            Some("/storage/upload/initiate?x=1")
+        );
         assert_eq!(unproxy("https://example.com/x"), None);
     }
 
@@ -1424,22 +1877,39 @@ mod tests {
         let d = key_digest("sk-good");
         assert_eq!(d.len(), 64);
         assert_eq!(key_id(&d), format!("key_{}", &d[..12]));
-        let v = Verdict { v: 1, key: Some("key_1".into()), presented: true, valid: true, scheme: Some("key".into()), deny: None };
+        let v = Verdict {
+            v: 1,
+            key: Some("key_1".into()),
+            presented: true,
+            valid: true,
+            scheme: Some("key".into()),
+            deny: None,
+        };
         assert_eq!(Verdict::parse(&v.header()), Some(v.clone()));
         let t = worker_tag("pod-1");
         assert_eq!(t.len(), 8);
         assert_eq!(token_tag(&format!("{t}.abc")), Some(t.as_str()));
         assert_eq!(token_tag("plain"), None);
-        let cap = SessionCap { verdict: v.clone(), exp_ms: 2_000 };
+        let cap = SessionCap {
+            verdict: v.clone(),
+            exp_ms: 2_000,
+        };
         let tok = sign_cap("secret", &cap);
         assert_eq!(verify_cap("secret", &tok, 1_000), Some(v.clone()));
         assert_eq!(verify_cap("secret", &tok, 2_000), None, "expired");
         assert_eq!(verify_cap("other", &tok, 1_000), None, "wrong key");
         assert_eq!(verify_cap("", &tok, 1_000), None);
-        let forged = format!("{}.{}", hex(br#"{"verdict":{"v":1,"key":"key_x","valid":true},"exp_ms":9}"#), tok.split_once('.').unwrap().1);
+        let forged = format!(
+            "{}.{}",
+            hex(br#"{"verdict":{"v":1,"key":"key_x","valid":true},"exp_ms":9}"#),
+            tok.split_once('.').unwrap().1
+        );
         assert_eq!(verify_cap("secret", &forged, 1), None, "body swapped");
         assert_eq!(with_param("/a?x=1", CAP_PARAM, "t"), "/a?x=1&fv_cap=t");
         assert_eq!(with_param("/a", CAP_PARAM, "t"), "/a?fv_cap=t");
-        assert_eq!(query_param("a=1&task_id=12%2034&b", "task_id").as_deref(), Some("12 34"));
+        assert_eq!(
+            query_param("a=1&task_id=12%2034&b", "task_id").as_deref(),
+            Some("12 34")
+        );
     }
 }

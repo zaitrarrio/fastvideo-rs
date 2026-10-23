@@ -1112,10 +1112,17 @@ impl WanPipeline {
         timings.wait_s = split.wait_s;
         if let (true, Some(p)) = (crate::mmaudio::sidecar::requested(), &mp4_path) {
             let timer = std::time::Instant::now();
-            let rep = crate::mmaudio::sidecar::run_on_mp4(Path::new(p), &cfg.prompt, cfg.seed, frames, cfg.fps)?;
+            let rep = crate::mmaudio::sidecar::run_on_mp4(
+                Path::new(p),
+                &cfg.prompt,
+                cfg.seed,
+                frames,
+                cfg.fps,
+            )?;
             timings.audio_s = timer.elapsed().as_secs_f64();
             timings.audio_generate_s = rep.audio_s;
-            timings.audio_clip_s = rep.audio.waveform.len() as f64 / f64::from(rep.audio.sample_rate);
+            timings.audio_clip_s =
+                rep.audio.waveform.len() as f64 / f64::from(rep.audio.sample_rate);
             super::log::info(format_args!(
                 "audio sidecar (mmaudio): {:.2}s generate, {:.2}s total, rtf {:.3} -> {p}",
                 rep.audio_s,
@@ -2211,17 +2218,19 @@ pub(crate) fn causal_noise(seed: u64, k: usize, btchw: [usize; 5]) -> Result<Cud
 /// the upload: what an open-ended rollout draws ahead while the device works.
 pub(crate) fn causal_noise_draw(seed: u64, k: usize, btchw: [usize; 5]) -> Result<Vec<f32>> {
     let n: usize = btchw.iter().product();
-    Ok(match super::inject::load_numel(&format!("sf_noise_{k:03}"), n)? {
-        Some(v) => v,
-        None => {
-            let mut rng = rand::rngs::StdRng::seed_from_u64(
-                seed ^ (0xD1B5_4A32_D192_ED03u64.wrapping_mul(k as u64 + 1)),
-            );
-            (0..n)
-                .map(|_| rng.sample::<f32, _>(StandardNormal))
-                .collect()
-        }
-    })
+    Ok(
+        match super::inject::load_numel(&format!("sf_noise_{k:03}"), n)? {
+            Some(v) => v,
+            None => {
+                let mut rng = rand::rngs::StdRng::seed_from_u64(
+                    seed ^ (0xD1B5_4A32_D192_ED03u64.wrapping_mul(k as u64 + 1)),
+                );
+                (0..n)
+                    .map(|_| rng.sample::<f32, _>(StandardNormal))
+                    .collect()
+            }
+        },
+    )
 }
 
 /// [`causal_noise`] from drawn values.

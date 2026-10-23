@@ -58,14 +58,24 @@ pub fn fit_len(pcm: &Pcm, frames: usize) -> Pcm {
     let want = frames * ch;
     let mut v: Vec<f32> = pcm.samples.iter().copied().take(want).collect();
     v.resize(want, 0.0);
-    Pcm { rate: pcm.rate, channels: pcm.channels, samples: v.into() }
+    Pcm {
+        rate: pcm.rate,
+        channels: pcm.channels,
+        samples: v.into(),
+    }
 }
 
 /// Turn a clip's native audio into its wire form (§5.5): resample to
 /// `out_rate`, convert to `out_channels` (mono is the mean downmix), then trim
 /// or pad to exactly `round(frames/fps·out_rate)` samples. A clip with no
 /// audio gets that much silence.
-pub fn prepare_clip_audio(native: Option<&Pcm>, frames: u32, fps: u32, out_rate: u32, out_channels: u8) -> Result<Pcm> {
+pub fn prepare_clip_audio(
+    native: Option<&Pcm>,
+    frames: u32,
+    fps: u32,
+    out_rate: u32,
+    out_channels: u8,
+) -> Result<Pcm> {
     let want = clip_samples(u64::from(frames), fps, out_rate) as usize;
     let Some(native) = native else {
         return Ok(Pcm::silence(out_rate, out_channels, want));
@@ -141,10 +151,18 @@ mod tests {
 
     #[test]
     fn slices_tile_the_clip_exactly() {
-        for &(frames, fps, rate) in &[(124u32, 24u32, 48_000u32), (81, 16, 48_000), (124, 24, 44_100), (1, 24, 48_000)] {
+        for &(frames, fps, rate) in &[
+            (124u32, 24u32, 48_000u32),
+            (81, 16, 48_000),
+            (124, 24, 44_100),
+            (1, 24, 48_000),
+        ] {
             let s: Vec<Slice> = slices(frames, EMIT_FRAMES, fps, rate).collect();
             assert_eq!(s.first().unwrap().sample_lo, 0);
-            assert_eq!(s.last().unwrap().sample_hi, clip_samples(u64::from(frames), fps, rate));
+            assert_eq!(
+                s.last().unwrap().sample_hi,
+                clip_samples(u64::from(frames), fps, rate)
+            );
             assert_eq!(s.last().unwrap().frame_hi, frames);
             for w in s.windows(2) {
                 assert_eq!(w[0].sample_hi, w[1].sample_lo);
@@ -171,7 +189,12 @@ mod tests {
         assert_eq!(wire.frames(), 248_000);
         // Too-short audio is padded.
         let short = Pcm::silence(24_000, 1, 1000);
-        assert_eq!(prepare_clip_audio(Some(&short), 24, 24, 48_000, 2).unwrap().frames(), 48_000);
+        assert_eq!(
+            prepare_clip_audio(Some(&short), 24, 24, 48_000, 2)
+                .unwrap()
+                .frames(),
+            48_000
+        );
         // No audio: silence of the right length.
         let none = prepare_clip_audio(None, 81, 16, 48_000, 2).unwrap();
         assert_eq!(none.frames(), 243_000);

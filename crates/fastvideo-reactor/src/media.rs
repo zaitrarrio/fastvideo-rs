@@ -107,7 +107,14 @@ pub struct MediaConfig {
 
 impl MediaConfig {
     pub fn new(fps: u32, audio: bool, canvas: (u32, u32)) -> Self {
-        Self { fps, audio, canvas, h264: H264Backend::Nvenc, bitrate_bps: None, vp8_quality: 70.0 }
+        Self {
+            fps,
+            audio,
+            canvas,
+            h264: H264Backend::Nvenc,
+            bitrate_bps: None,
+            vp8_quality: 70.0,
+        }
     }
 }
 
@@ -162,7 +169,9 @@ pub struct MediaPipeline {
 
 impl std::fmt::Debug for MediaPipeline {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MediaPipeline").field("fps", &self.sh.cfg.fps).finish()
+        f.debug_struct("MediaPipeline")
+            .field("fps", &self.sh.cfg.fps)
+            .finish()
     }
 }
 
@@ -224,7 +233,14 @@ impl MediaPipeline {
     pub fn add_peer(&self, handle: PeerHandle) {
         let codec = handle.video_codec();
         let audio = handle.sends(TrackKind::Audio);
-        lock(&self.sh.peers).insert(handle.id(), PeerSink { handle, codec, audio });
+        lock(&self.sh.peers).insert(
+            handle.id(),
+            PeerSink {
+                handle,
+                codec,
+                audio,
+            },
+        );
         if let Some(c) = codec {
             self.kick(c);
         }
@@ -248,7 +264,10 @@ impl MediaPipeline {
     /// keyframe per [`KEYFRAME_MIN_INTERVAL`] per codec; a request inside the
     /// window is served when the window ends.
     pub fn request_keyframe(&self, codec: VideoCodec) {
-        lock(&self.sh.requests).entry(codec).or_insert((false, None)).0 = true;
+        lock(&self.sh.requests)
+            .entry(codec)
+            .or_insert((false, None))
+            .0 = true;
     }
 
     /// Copies every tick (the picture showing, the tick's audio) to an
@@ -273,7 +292,10 @@ impl Drop for MediaPipeline {
 }
 
 fn same_picture(a: &RgbFrame, b: &RgbFrame) -> bool {
-    a.width == b.width && a.height == b.height && a.data.as_ptr() == b.data.as_ptr() && a.data.len() == b.data.len()
+    a.width == b.width
+        && a.height == b.height
+        && a.data.as_ptr() == b.data.as_ptr()
+        && a.data.len() == b.data.len()
 }
 
 struct VideoState {
@@ -290,7 +312,12 @@ struct VideoState {
     spares: SparePool,
 }
 
-fn video_loop(sh: Arc<Shared>, mut ticks: TickReceiver, rt: tokio::runtime::Handle, spares: SparePool) {
+fn video_loop(
+    sh: Arc<Shared>,
+    mut ticks: TickReceiver,
+    rt: tokio::runtime::Handle,
+    spares: SparePool,
+) {
     let step = 90_000 / u64::from(sh.cfg.fps.max(1));
     let mut st = VideoState {
         encoders: HashMap::new(),
@@ -301,7 +328,9 @@ fn video_loop(sh: Arc<Shared>, mut ticks: TickReceiver, rt: tokio::runtime::Hand
         spares,
     };
     while !sh.closed.load(Ordering::Relaxed) {
-        let next = rt.block_on(async { tokio::time::timeout(Duration::from_millis(50), ticks.recv()).await });
+        let next = rt.block_on(async {
+            tokio::time::timeout(Duration::from_millis(50), ticks.recv()).await
+        });
         let tick: Option<Tick> = match next {
             Ok(Some(t)) => Some(t),
             // The pacer ended (session closed).
@@ -349,7 +378,9 @@ fn video_loop(sh: Arc<Shared>, mut ticks: TickReceiver, rt: tokio::runtime::Hand
             }
         }
         if let Some(a) = t.audio {
-            sh.stats.audio_samples_in.fetch_add(a.len() as u64, Ordering::Relaxed);
+            sh.stats
+                .audio_samples_in
+                .fetch_add(a.len() as u64, Ordering::Relaxed);
             let mut buf = lock(&sh.audio);
             buf.extend(a);
             let over = buf.len().saturating_sub(AUDIO_BUFFER_SAMPLES);
@@ -417,7 +448,10 @@ fn send_picture(
     all_key: bool,
 ) {
     let frame = pic.unwrap_or_else(|| {
-        let (w, h) = st.current.as_ref().map_or(sh.cfg.canvas, |c| (c.width, c.height));
+        let (w, h) = st
+            .current
+            .as_ref()
+            .map_or(sh.cfg.canvas, |c| (c.width, c.height));
         RgbFrame::black(w, h, 0)
     });
     let peers: Vec<(PeerHandle, VideoCodec)> = lock(&sh.peers)
@@ -428,7 +462,11 @@ fn send_picture(
     let black = frame.data.iter().step_by(97).all(|b| *b == 0);
     for codec in codecs {
         let gaps = st.gaps.entry(codec).or_default();
-        if st.encoders.get(&codec).is_some_and(|e| e.dims() != (frame.width, frame.height)) {
+        if st
+            .encoders
+            .get(&codec)
+            .is_some_and(|e| e.dims() != (frame.width, frame.height))
+        {
             // Dropped first: its ffmpeg processes (and spare) end here.
             st.encoders.remove(&codec);
         }
@@ -473,7 +511,13 @@ fn send_picture(
 
 /// Sends encoded frames to every peer of `codec`; `true` if one was a
 /// keyframe.
-fn fan_out(sh: &Shared, peers: &[(PeerHandle, VideoCodec)], codec: VideoCodec, out: Vec<(u64, Bytes)>, black: bool) -> bool {
+fn fan_out(
+    sh: &Shared,
+    peers: &[(PeerHandle, VideoCodec)],
+    codec: VideoCodec,
+    out: Vec<(u64, Bytes)>,
+    black: bool,
+) -> bool {
     let mut key = false;
     for (t, data) in out {
         key |= match codec {
@@ -482,7 +526,9 @@ fn fan_out(sh: &Shared, peers: &[(PeerHandle, VideoCodec)], codec: VideoCodec, o
             VideoCodec::Vp9 => fastvideo_media::vp8::vp9_is_keyframe(&data),
         };
         sh.stats.frames_encoded.fetch_add(1, Ordering::Relaxed);
-        sh.stats.video_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
+        sh.stats
+            .video_bytes
+            .fetch_add(data.len() as u64, Ordering::Relaxed);
         if black {
             sh.stats.black_frames.fetch_add(1, Ordering::Relaxed);
         }
@@ -505,7 +551,10 @@ fn flush_ready(sh: &Shared, st: &mut VideoState) {
         .values()
         .filter_map(|p| p.codec.map(|c| (p.handle.clone(), c)))
         .collect();
-    let black = st.current.as_ref().is_some_and(|f| f.data.iter().step_by(97).all(|b| *b == 0));
+    let black = st
+        .current
+        .as_ref()
+        .is_some_and(|f| f.data.iter().step_by(97).all(|b| *b == 0));
     let mut failed = Vec::new();
     for (codec, enc) in st.encoders.iter_mut() {
         match enc.poll() {
@@ -537,7 +586,10 @@ fn sleep_until(sh: &Shared, t: Instant) {
         if now >= t {
             return;
         }
-        g = cv.wait_timeout(g, t - now).map(|r| r.0).unwrap_or_else(|e| e.into_inner().0);
+        g = cv
+            .wait_timeout(g, t - now)
+            .map(|r| r.0)
+            .unwrap_or_else(|e| e.into_inner().0);
     }
 }
 
@@ -570,7 +622,9 @@ fn audio_loop(sh: Arc<Shared>) {
                 if buf.len() >= AUDIO_FRAME_SAMPLES {
                     buf.drain(..AUDIO_FRAME_SAMPLES).collect()
                 } else {
-                    sh.stats.audio_silence_frames.fetch_add(1, Ordering::Relaxed);
+                    sh.stats
+                        .audio_silence_frames
+                        .fetch_add(1, Ordering::Relaxed);
                     vec![0.0; AUDIO_FRAME_SAMPLES]
                 }
             };
@@ -578,8 +632,11 @@ fn audio_loop(sh: Arc<Shared>) {
             samples += AUDIO_FRAME_SAMPLES as u64;
             sh.stats.audio_frames.fetch_add(1, Ordering::Relaxed);
             let Some(enc) = enc.as_mut() else { continue };
-            let peers: Vec<PeerHandle> =
-                lock(&sh.peers).values().filter(|p| p.audio).map(|p| p.handle.clone()).collect();
+            let peers: Vec<PeerHandle> = lock(&sh.peers)
+                .values()
+                .filter(|p| p.audio)
+                .map(|p| p.handle.clone())
+                .collect();
             if peers.is_empty() {
                 continue;
             }
@@ -630,7 +687,9 @@ fn prewarm_spec(cfg: &MediaConfig) -> Option<SpareSpec> {
     // VP8: start the spare without waiting for the libvpx probe (another
     // ffmpeg run, seconds on a loaded host), which runs alongside; an
     // encoder adopts the spare only when the probe found libvpx.
-    let _ = std::thread::Builder::new().name("libvpx-probe".into()).spawn(fastvideo_media::vp8::libvpx_available);
+    let _ = std::thread::Builder::new()
+        .name("libvpx-probe".into())
+        .spawn(fastvideo_media::vp8::libvpx_available);
     SpareSpec::vp8(&vp8_config(cfg, w, h)).ok()
 }
 
@@ -659,11 +718,14 @@ fn new_encoder(
     spares: &SparePool,
 ) -> Result<Box<dyn FrameEncoder>, String> {
     match codec {
-        VideoCodec::H264 => H264Encoder::new(cfg, w, h, spares).map(|e| Box::new(e) as Box<dyn FrameEncoder>),
+        VideoCodec::H264 => {
+            H264Encoder::new(cfg, w, h, spares).map(|e| Box::new(e) as Box<dyn FrameEncoder>)
+        }
         VideoCodec::Vp8 if fastvideo_media::vp8::libvpx_available() => {
             LibvpxEncoder::new(cfg, w, h, spares).map(|e| Box::new(e) as Box<dyn FrameEncoder>)
         }
-        VideoCodec::Vp8 => vp8::Vp8Encoder::new(w, h, cfg.vp8_quality).map(|e| Box::new(e) as Box<dyn FrameEncoder>),
+        VideoCodec::Vp8 => vp8::Vp8Encoder::new(w, h, cfg.vp8_quality)
+            .map(|e| Box::new(e) as Box<dyn FrameEncoder>),
         // `sendable_codecs` never lists VP9 (the host does not answer it).
         VideoCodec::Vp9 => Err("VP9 is not served to Reactor peers".into()),
     }
@@ -683,7 +745,9 @@ impl RtpFifo {
 
     /// `out` came back (nothing went in).
     fn take(&mut self, out: impl IntoIterator<Item = Bytes>) -> Vec<(u64, Bytes)> {
-        out.into_iter().filter_map(|d| self.0.pop_front().map(|t| (t, d))).collect()
+        out.into_iter()
+            .filter_map(|d| self.0.pop_front().map(|t| (t, d)))
+            .collect()
     }
 }
 
@@ -696,8 +760,12 @@ struct LibvpxEncoder {
 impl LibvpxEncoder {
     fn new(cfg: &MediaConfig, w: u32, h: u32, spares: &SparePool) -> Result<Self, String> {
         let c = vp8_config(cfg, w, h);
-        let inner = fastvideo_media::vp8::Vp8Encoder::with_pool(c, Some(spares.clone())).map_err(|e| e.to_string())?;
-        Ok(Self { inner, rtps: RtpFifo::default() })
+        let inner = fastvideo_media::vp8::Vp8Encoder::with_pool(c, Some(spares.clone()))
+            .map_err(|e| e.to_string())?;
+        Ok(Self {
+            inner,
+            rtps: RtpFifo::default(),
+        })
     }
 }
 
@@ -732,8 +800,13 @@ impl H264Encoder {
             H264Backend::OpenH264 => EncoderBackend::OpenH264,
             H264Backend::Off => return Err("H.264 is off".into()),
         };
-        let inner = create_stream_encoder(backend, h264_config(cfg, w, h), spares).map_err(|e| e.to_string())?;
-        Ok(Self { dims: (w, h), inner, rtps: RtpFifo::default() })
+        let inner = create_stream_encoder(backend, h264_config(cfg, w, h), spares)
+            .map_err(|e| e.to_string())?;
+        Ok(Self {
+            dims: (w, h),
+            inner,
+            rtps: RtpFifo::default(),
+        })
     }
 }
 
@@ -781,7 +854,10 @@ pub mod vp8 {
             if w == 0 || h == 0 || w > 16383 || h > 16383 {
                 return Err(format!("VP8 cannot carry {w}x{h}"));
             }
-            Ok(Self { dims: (w, h), quality })
+            Ok(Self {
+                dims: (w, h),
+                quality,
+            })
         }
     }
 
@@ -798,7 +874,8 @@ pub mod vp8 {
             ));
         }
         let len = u32::from_le_bytes([webp[16], webp[17], webp[18], webp[19]]) as usize;
-        webp.get(20..20 + len).ok_or_else(|| "truncated VP8 chunk".to_string())
+        webp.get(20..20 + len)
+            .ok_or_else(|| "truncated VP8 chunk".to_string())
     }
 
     /// Whether a VP8 frame is a key frame (RFC 6386 §9.1: bit 0 clear).
@@ -812,7 +889,12 @@ pub mod vp8 {
         }
 
         #[cfg(feature = "vp8")]
-        fn encode(&mut self, f: &RgbFrame, _key: bool, rtp: u64) -> Result<Vec<(u64, Bytes)>, String> {
+        fn encode(
+            &mut self,
+            f: &RgbFrame,
+            _key: bool,
+            rtp: u64,
+        ) -> Result<Vec<(u64, Bytes)>, String> {
             let mut cfg = webp::WebPConfig::new().map_err(|_| "libwebp config".to_string())?;
             cfg.lossless = 0;
             cfg.quality = self.quality;
@@ -826,7 +908,12 @@ pub mod vp8 {
         }
 
         #[cfg(not(feature = "vp8"))]
-        fn encode(&mut self, _f: &RgbFrame, _key: bool, _rtp: u64) -> Result<Vec<(u64, Bytes)>, String> {
+        fn encode(
+            &mut self,
+            _f: &RgbFrame,
+            _key: bool,
+            _rtp: u64,
+        ) -> Result<Vec<(u64, Bytes)>, String> {
             Err("built without the `vp8` feature".into())
         }
     }
@@ -842,9 +929,11 @@ impl AudioEncoder {
     fn new() -> Result<Self, String> {
         #[cfg(feature = "opus")]
         {
-            let inner =
-                fastvideo_media::opus::OpusEncoder::new(fastvideo_media::opus::OpusConfig::reactor(), 0)
-                    .map_err(|e| e.to_string())?;
+            let inner = fastvideo_media::opus::OpusEncoder::new(
+                fastvideo_media::opus::OpusConfig::reactor(),
+                0,
+            )
+            .map_err(|e| e.to_string())?;
             Ok(Self { inner })
         }
         #[cfg(not(feature = "opus"))]
@@ -886,7 +975,10 @@ mod tests {
     #[test]
     fn vp8_frames_are_keyframes_with_the_right_size() {
         let mut e = vp8::Vp8Encoder::new(64, 48, 60.0).unwrap();
-        let (_, data) = e.encode(&RgbFrame::black(64, 48, 0), false, 0).unwrap().remove(0);
+        let (_, data) = e
+            .encode(&RgbFrame::black(64, 48, 0), false, 0)
+            .unwrap()
+            .remove(0);
         assert!(vp8::is_keyframe(&data));
         // RFC 6386 §9.1: start code 9d 01 2a, then 14-bit width and height.
         assert_eq!(&data[3..6], &[0x9d, 0x01, 0x2a]);
@@ -898,7 +990,10 @@ mod tests {
     #[test]
     fn sendable_codecs_follow_the_build() {
         let c = sendable_codecs(H264Backend::Off);
-        assert_eq!(c.contains(&VideoCodec::Vp8), cfg!(feature = "vp8") || fastvideo_media::vp8::libvpx_available());
+        assert_eq!(
+            c.contains(&VideoCodec::Vp8),
+            cfg!(feature = "vp8") || fastvideo_media::vp8::libvpx_available()
+        );
         assert!(!c.contains(&VideoCodec::H264));
     }
 
@@ -926,9 +1021,15 @@ mod tests {
         request(VideoCodec::Vp8);
         request(VideoCodec::Vp8);
         request(VideoCodec::H264);
-        assert_eq!(due_requests(&sh, t0 + Duration::from_millis(500)), vec![VideoCodec::H264]);
+        assert_eq!(
+            due_requests(&sh, t0 + Duration::from_millis(500)),
+            vec![VideoCodec::H264]
+        );
         assert!(due_requests(&sh, t0 + Duration::from_millis(999)).is_empty());
-        assert_eq!(due_requests(&sh, t0 + KEYFRAME_MIN_INTERVAL), vec![VideoCodec::Vp8]);
+        assert_eq!(
+            due_requests(&sh, t0 + KEYFRAME_MIN_INTERVAL),
+            vec![VideoCodec::Vp8]
+        );
         assert!(due_requests(&sh, t0 + Duration::from_secs(5)).is_empty());
         assert_eq!(sh.stats.keyframes_limited.load(Ordering::Relaxed), 2);
     }

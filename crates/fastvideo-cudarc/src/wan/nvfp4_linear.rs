@@ -238,7 +238,11 @@ unsafe fn build_plan(
     if bias {
         let epi = lt::cublasLtEpilogue_t::CUBLASLT_EPILOGUE_BIAS as u32;
         set_attr(desc.0, A::CUBLASLT_MATMUL_DESC_EPILOGUE, &epi)?;
-        set_attr(desc.0, A::CUBLASLT_MATMUL_DESC_BIAS_DATA_TYPE, &(bf16t as i32))?;
+        set_attr(
+            desc.0,
+            A::CUBLASLT_MATMUL_DESC_BIAS_DATA_TYPE,
+            &(bf16t as i32),
+        )?;
     }
     bind(&desc, bias, p)?;
     let layout = |ty, rows: usize, cols: usize, ld: usize| -> Result<Layout> {
@@ -268,7 +272,16 @@ unsafe fn build_plan(
     let mut result: lt::cublasLtMatmulHeuristicResult_t = std::mem::zeroed();
     let mut found: i32 = 0;
     let st = lt::cublasLtMatmulAlgoGetHeuristic(
-        ltc.handle, desc.0, la.0, lb.0, ld.0, ld.0, pref.0, 1, &mut result, &mut found,
+        ltc.handle,
+        desc.0,
+        la.0,
+        lb.0,
+        ld.0,
+        ld.0,
+        pref.0,
+        1,
+        &mut result,
+        &mut found,
     );
     if st != lt::cublasStatus_t::CUBLAS_STATUS_SUCCESS || found == 0 {
         return Ok(None);
@@ -615,7 +628,10 @@ impl Nvfp4Stack {
             return Err(err("nvfp4 stack: no parts"));
         };
         let (k, rule) = (first.k, first.rule);
-        if parts.iter().any(|p| p.k != k || p.rule != rule || p.bias.is_some()) {
+        if parts
+            .iter()
+            .any(|p| p.k != k || p.rule != rule || p.bias.is_some())
+        {
             return Err(err(
                 "nvfp4 stack: the parts must share k and the scale rule and have no bias",
             ));
@@ -688,7 +704,10 @@ impl Nvfp4Stack {
     /// → bf16 `[a.rows, n]`.
     pub fn gemm_operand(&self, a: &Nvfp4Operand) -> Result<CudaSlice<half::bf16>> {
         if a.k != self.k {
-            return Err(err(format!("nvfp4 stack: activation k {} != {}", a.k, self.k)));
+            return Err(err(format!(
+                "nvfp4 stack: activation k {} != {}",
+                a.k, self.k
+            )));
         }
         let m = a.rows;
         if let [one] = self.parts.as_slice() {

@@ -320,8 +320,13 @@ impl Ltx2Request {
             ));
         }
         if let Some(e) = &self.edit {
-            if self.audio.is_some() || self.reference.is_some() || !self.conditioning_images().is_empty() {
-                return Err(err("ltx2: retake/extend takes no images, references or driving audio"));
+            if self.audio.is_some()
+                || self.reference.is_some()
+                || !self.conditioning_images().is_empty()
+            {
+                return Err(err(
+                    "ltx2: retake/extend takes no images, references or driving audio",
+                ));
             }
             if self.sol_stage2 || self.pisa_stage2 {
                 return Err(err("ltx2 retake/extend is one dense stage"));
@@ -340,7 +345,9 @@ impl Ltx2Request {
             // `ICLoraPipeline` is the two-stage distilled pipeline with a
             // dense stage 2 (its `DiffusionStage`s carry no Sol/PISA route).
             if !self.two_stage {
-                return Err(err("ltx2 reference-to-video is two-stage (`ICLoraPipeline`)"));
+                return Err(err(
+                    "ltx2 reference-to-video is two-stage (`ICLoraPipeline`)",
+                ));
             }
             if self.sol_stage2 || self.pisa_stage2 {
                 return Err(err("ltx2 reference-to-video runs a dense stage 2"));
@@ -691,9 +698,8 @@ pub fn euler_update_cond(
         let v = state.store(v.clone())?;
         let x0 = state.store(c.x0(x, &v, sigma)?)?;
         let x0 = state.store(c.post(&x0)?)?;
-        let v = state.store(
-            CudaTensor::lincomb(&[(1.0, x), (-1.0, &x0)])?.try_mul_scalar(1.0 / sigma)?,
-        )?;
+        let v = state
+            .store(CudaTensor::lincomb(&[(1.0, x), (-1.0, &x0)])?.try_mul_scalar(1.0 / sigma)?)?;
         return state.store(CudaTensor::lincomb(&[(1.0, x), (next - sigma, &v)])?);
     }
     match state {
@@ -825,8 +831,7 @@ pub fn initial_noise_with(
         cfg.audio_vae.latent_mel_bins(),
     );
     if LatentState::for_version(cfg.version) == LatentState::Bf16 {
-        let mut draws =
-            noise.draw(&[&[1, f * h * w + extra, c], &[1, audio_tokens, ac * bins]])?;
+        let mut draws = noise.draw(&[&[1, f * h * w + extra, c], &[1, audio_tokens, ac * bins]])?;
         let audio = draws.pop().expect("audio noise");
         let video = draws.pop().expect("video noise");
         return Ok((video, audio));
@@ -898,9 +903,11 @@ fn dump_step_velocity(
             // Frozen audio: every audio timestep is 0, so `x0 = x`.
             Some(c) if c.frozen_audio.is_some() => x.clone(),
             // A retake of the audio: per-token timesteps on its pinned rows.
-            Some(c) if c.audio_cond().is_some() => {
-                state.store(c.audio_cond().expect("audio cond").x0(x, &v, sigma as f32)?)?
-            }
+            Some(c) if c.audio_cond().is_some() => state.store(
+                c.audio_cond()
+                    .expect("audio cond")
+                    .x0(x, &v, sigma as f32)?,
+            )?,
             _ => state.store(CudaTensor::lincomb(&[(1.0, x), (-(sigma as f32), &v)])?)?,
         };
         dump::tensor(&dump::named(&format!("{tag}_x0_step{:02}", i + 1)), &x0)?;
@@ -1150,8 +1157,16 @@ fn pass_perturbation(
     match pass {
         GuidedPass::Cond | GuidedPass::Uncond => Ltx2Perturbation::default(),
         GuidedPass::Ptb => Ltx2Perturbation {
-            skip_video_self_attn: if video.needs_ptb() { video.stg_blocks.clone() } else { Vec::new() },
-            skip_audio_self_attn: if audio.needs_ptb() { audio.stg_blocks.clone() } else { Vec::new() },
+            skip_video_self_attn: if video.needs_ptb() {
+                video.stg_blocks.clone()
+            } else {
+                Vec::new()
+            },
+            skip_audio_self_attn: if audio.needs_ptb() {
+                audio.stg_blocks.clone()
+            } else {
+                Vec::new()
+            },
             skip_av_cross: false,
         },
         GuidedPass::Mod => Ltx2Perturbation {
@@ -1173,7 +1188,10 @@ fn guided_combine(
     let terms: Vec<(f32, &CudaTensor)> = x0
         .iter()
         .filter_map(|(pass, t)| {
-            let wi = w[GuidedPass::ALL.iter().position(|q| q == pass).expect("pass")];
+            let wi = w[GuidedPass::ALL
+                .iter()
+                .position(|q| q == pass)
+                .expect("pass")];
             (wi != 0.0).then_some((wi, t))
         })
         .collect();
@@ -1205,7 +1223,8 @@ fn euler_from_x0(
     next: f32,
     state: LatentState,
 ) -> Result<CudaTensor> {
-    let v = state.store(CudaTensor::lincomb(&[(1.0, x), (-1.0, x0)])?.try_mul_scalar(1.0 / sigma)?)?;
+    let v =
+        state.store(CudaTensor::lincomb(&[(1.0, x), (-1.0, x0)])?.try_mul_scalar(1.0 / sigma)?)?;
     state.store(CudaTensor::lincomb(&[(1.0, x), (next - sigma, &v)])?)
 }
 
@@ -1283,8 +1302,14 @@ pub fn denoise_guided_cond(
                     let (vv, va) = (state.store(vv)?, state.store(va)?);
                     if dump::enabled() {
                         let sfx = pass.suffix();
-                        dump::tensor(&dump::named(&format!("video_vel_step{:02}{sfx}", i + 1)), &vv)?;
-                        dump::tensor(&dump::named(&format!("audio_vel_step{:02}{sfx}", i + 1)), &va)?;
+                        dump::tensor(
+                            &dump::named(&format!("video_vel_step{:02}{sfx}", i + 1)),
+                            &vv,
+                        )?;
+                        dump::tensor(
+                            &dump::named(&format!("audio_vel_step{:02}{sfx}", i + 1)),
+                            &va,
+                        )?;
                     }
                     vx0.push((pass, x0_of(&video, &vv, sigma, true)?));
                     ax0.push((pass, x0_of(&audio, &va, sigma, false)?));
@@ -1299,8 +1324,14 @@ pub fn denoise_guided_cond(
             }
         };
         if dump::enabled() {
-            dump::tensor(&dump::named(&format!("video_x0_step{:02}", i + 1)), &x0_video)?;
-            dump::tensor(&dump::named(&format!("audio_x0_step{:02}", i + 1)), &x0_audio)?;
+            dump::tensor(
+                &dump::named(&format!("video_x0_step{:02}", i + 1)),
+                &x0_video,
+            )?;
+            dump::tensor(
+                &dump::named(&format!("audio_x0_step{:02}", i + 1)),
+                &x0_audio,
+            )?;
         }
         let post = match cond {
             Some(c) => state.store(c.post(&x0_video)?)?,
@@ -1826,7 +1857,11 @@ fn decode_audio_first(
             let channels = wave.shape[1];
             let rate = u32::try_from(dec.vocoder.sample_rate())
                 .map_err(|_| err("ltx2: vocoder sample rate out of range"))?;
-            (interleave_audio(&wave.host_cow()?, channels)?, channels, rate)
+            (
+                interleave_audio(&wave.host_cow()?, channels)?,
+                channels,
+                rate,
+            )
         }
     };
     let wav = dir.join("audio.wav");
@@ -2262,7 +2297,11 @@ impl TextEncoder {
             None => WeightMap::open(&source)?,
         };
         if let Some(lazy) = map.lazy() {
-            lazy.prefetch(&crate::llm::prequant::kept_keys(lazy, &cfg, cfg.num_layers()));
+            lazy.prefetch(&crate::llm::prequant::kept_keys(
+                lazy,
+                &cfg,
+                cfg.num_layers(),
+            ));
         }
         Ok(map)
     }
@@ -2806,7 +2845,12 @@ fn load_transformer_ic(
 ) -> Result<Ltx2Transformer> {
     let keys = Keys::transformer(Keys::detect(map));
     let Some(path) = ic else {
-        return Ok(Ltx2Transformer::load_with_residency(map, &keys, &cfg.transformer, residency)?);
+        return Ok(Ltx2Transformer::load_with_residency(
+            map,
+            &keys,
+            &cfg.transformer,
+            residency,
+        )?);
     };
     let guard = super::lora::install(path, 0.0)?;
     let model = Ltx2Transformer::load_with_residency(map, &keys, &cfg.transformer, residency)?;
@@ -2886,7 +2930,10 @@ impl Ltx2Pipeline {
                     ));
                 }
                 if !path.is_file() {
-                    return Err(err(format!("ltx2 ic-lora: {} is not a file", path.display())));
+                    return Err(err(format!(
+                        "ltx2 ic-lora: {} is not a file",
+                        path.display()
+                    )));
                 }
                 let info = super::lora::ic_lora_info(&path)?;
                 if info.temporal_scale != 1 {
@@ -2910,14 +2957,20 @@ impl Ltx2Pipeline {
             for (k, v, source) in active.settings.iter() {
                 crate::wan::log::info(format_args!(
                     "ltx2 technique setting {k}={v} ({source}{})",
-                    if std::env::var_os(k).is_some() { "; overridden by env" } else { "" }
+                    if std::env::var_os(k).is_some() {
+                        "; overridden by env"
+                    } else {
+                        ""
+                    }
                 ));
             }
             let has_taehv = active
                 .profile
                 .iter()
                 .flat_map(|p| p.techniques.iter())
-                .any(|t| t.name() == "taehv" && t.active_somewhere(fastvideo_models::techniques::HORIZON));
+                .any(|t| {
+                    t.name() == "taehv" && t.active_somewhere(fastvideo_models::techniques::HORIZON)
+                });
             if has_taehv && resolve_tae(options.tae.as_deref()).is_none() {
                 return Err(err(
                     "techniques.taehv: no weights (pass --ltx-tae-weights, set FASTVIDEO_LTX2_TAE_WEIGHTS, or give techniques.taehv.weights)",
@@ -3035,7 +3088,11 @@ impl Ltx2Pipeline {
         } else {
             None
         };
-        let lora_base_host = match std::env::var("FASTVIDEO_LTX2_LORA_BASE").ok().as_deref().map(str::trim) {
+        let lora_base_host = match std::env::var("FASTVIDEO_LTX2_LORA_BASE")
+            .ok()
+            .as_deref()
+            .map(str::trim)
+        {
             Some("host") => true,
             Some("device") => false,
             Some(other) if !other.is_empty() => {
@@ -3128,7 +3185,10 @@ impl Ltx2Pipeline {
         if self.ic_strength == s {
             return Ok(());
         }
-        let model = self.model.as_mut().ok_or_else(|| err("ltx2 ic-lora: no resident DiT"))?;
+        let model = self
+            .model
+            .as_mut()
+            .ok_or_else(|| err("ltx2 ic-lora: no resident DiT"))?;
         let t = Instant::now();
         model.set_lora_strength(s)?;
         sync()?;
@@ -3163,7 +3223,11 @@ impl Ltx2Pipeline {
             if let Some((ic, _)) = &self.ic_lora {
                 let model = load_transformer_ic(&map, &self.cfg, self.residency, Some(ic))?;
                 sync()?;
-                crate::wan::weights::log_load_io("ltx2 dit", &io_base, timer.elapsed().as_secs_f64());
+                crate::wan::weights::log_load_io(
+                    "ltx2 dit",
+                    &io_base,
+                    timer.elapsed().as_secs_f64(),
+                );
                 return Ok(model);
             }
         }
@@ -3543,7 +3607,9 @@ impl Ltx2Pipeline {
         check_generate_contract(&cfg, use_cfg, a2v_guided)?;
         let guiders = if a2v_guided {
             if !req.two_stage {
-                return Err(err("ltx2 guided audio-to-video is two-stage (`A2VidPipelineTwoStage`)"));
+                return Err(err(
+                    "ltx2 guided audio-to-video is two-stage (`A2VidPipelineTwoStage`)",
+                ));
             }
             if req.audio_guidance_scale != 1.0 {
                 return Err(err(
@@ -3577,11 +3643,15 @@ impl Ltx2Pipeline {
             ));
         }
         if req.edit.is_some()
-            && (cfg.version != Ltx2ModelVersion::V25 || cfg.scheduler.use_dynamic_shifting || use_cfg)
+            && (cfg.version != Ltx2ModelVersion::V25
+                || cfg.scheduler.use_dynamic_shifting
+                || use_cfg)
         {
             // `RetakePipeline(distilled=True)` with the 2.5 ancestral sampler;
             // the guided line would need the dev transformer.
-            return Err(err("ltx2 retake/extend runs on the LTX-2.5 distilled pipeline (unguided)"));
+            return Err(err(
+                "ltx2 retake/extend runs on the LTX-2.5 distilled pipeline (unguided)",
+            ));
         }
         if req.audio.is_some() && !a2v_guided && (cfg.version != Ltx2ModelVersion::V25 || use_cfg) {
             // The frozen audio stream runs on the LTX-2.5 lines only: the
@@ -3758,7 +3828,11 @@ impl Ltx2Pipeline {
             crate::wan::log::info(format_args!(
                 "ltx2: {} conditioning image(s){} encoded in {:.2}s",
                 images.len(),
-                if ref_geom.is_some() { " and the reference" } else { "" },
+                if ref_geom.is_some() {
+                    " and the reference"
+                } else {
+                    ""
+                },
                 t.elapsed().as_secs_f64()
             ));
             memory.mark("image_encode")?;
@@ -3830,9 +3904,12 @@ impl Ltx2Pipeline {
             if crate::wan::inject::enabled()
                 && std::env::var("FASTVIDEO_INJECT_COND").map_or(true, |v| v != "0")
             {
-                if let Some(v) = crate::wan::inject::load_numel("s1_ref0_latent", tokens.clean.numel())? {
+                if let Some(v) =
+                    crate::wan::inject::load_numel("s1_ref0_latent", tokens.clean.numel())?
+                {
                     crate::wan::log::info(format_args!("inject: s1_ref0_latent (reference)"));
-                    tokens.clean = CudaTensor::from_vec(v, tokens.clean.shape.clone())?.to_device()?;
+                    tokens.clean =
+                        CudaTensor::from_vec(v, tokens.clean.shape.clone())?.to_device()?;
                 }
             }
             crate::wan::log::info(format_args!(
@@ -3848,7 +3925,10 @@ impl Ltx2Pipeline {
             };
             cond1 = Some(base.with_reference(tokens)?);
         }
-        let extra1 = cond1.as_ref().map(|c| c.extra_frames.clone()).unwrap_or_default();
+        let extra1 = cond1
+            .as_ref()
+            .map(|c| c.extra_frames.clone())
+            .unwrap_or_default();
         let reference1 = cond1.as_ref().and_then(|c| c.reference);
 
         let (s1, s2) = self.stage_lora_strengths(req.two_stage);
@@ -3909,7 +3989,10 @@ impl Ltx2Pipeline {
         // only then zeroes its mask. The first forward sees the noise (at
         // timestep and sigma 0); the first step's `post_process_latent` makes
         // it clean (`StageConditioning::audio_after`).
-        let edit_frozen_audio = cond1.as_ref().and_then(|c| c.frozen_audio.clone()).filter(|_| req.edit.is_some());
+        let edit_frozen_audio = cond1
+            .as_ref()
+            .and_then(|c| c.frozen_audio.clone())
+            .filter(|_| req.edit.is_some());
         self.model
             .as_ref()
             .expect("dit")
@@ -3923,7 +4006,10 @@ impl Ltx2Pipeline {
                 .expect("dit")
                 .set_audio_conditioning(Some(ac.timestep_segments()));
         }
-        self.model.as_ref().expect("dit").set_video_frozen(video_frozen);
+        self.model
+            .as_ref()
+            .expect("dit")
+            .set_video_frozen(video_frozen);
         crate::wan::dump::digest("text_proj_video", &text.video)?;
         crate::wan::dump::digest("text_proj_audio", &text.audio)?;
         if let Some(c) = &cond1 {
@@ -3964,7 +4050,11 @@ impl Ltx2Pipeline {
         let res2s = cfg.version == Ltx2ModelVersion::V23;
         // An edit's one stage is the reference's first (and only)
         // `DiffusionStage`: its dumps are `s1_` as well.
-        crate::wan::dump::set_prefix(if req.two_stage || req.edit.is_some() { "s1_" } else { "" });
+        crate::wan::dump::set_prefix(if req.two_stage || req.edit.is_some() {
+            "s1_"
+        } else {
+            ""
+        });
         let stage1_total = schedule.num_steps();
         hooks.stage(Stage::Denoise, stage1_total)?;
         let (mut video, mut audio) = {
@@ -5011,7 +5101,9 @@ mod tests {
         assert!(check_generate_contract(&dev, false, true).is_ok());
         // Other lines keep their own (guided) samplers.
         assert!(check_generate_contract(&fastvideo_models::ltx2::ltx2_19b(), true, false).is_ok());
-        assert!(check_generate_contract(&fastvideo_models::ltx2::ltx2_23_22b(), true, false).is_ok());
+        assert!(
+            check_generate_contract(&fastvideo_models::ltx2::ltx2_23_22b(), true, false).is_ok()
+        );
         assert_eq!(
             LatentState::for_version(Ltx2ModelVersion::V25),
             LatentState::Bf16
@@ -5045,7 +5137,11 @@ mod tests {
         std::fs::write(te.join("gemma/model-00001-of-00002.safetensors"), b"x").unwrap();
         // FastVideo's LTX-2.3 tree: shards only under gemma/.
         assert_eq!(gemma_identity_dir(&te), te.join("gemma"));
-        assert!(super::super::text_cache::weights_identity(&gemma_identity_dir(&te), Some("model-")).is_ok());
+        assert!(super::super::text_cache::weights_identity(
+            &gemma_identity_dir(&te),
+            Some("model-")
+        )
+        .is_ok());
         // Shards in text_encoder/ itself (LTX-2 / 2.5): unchanged.
         std::fs::write(te.join("model-00001-of-00001.safetensors"), b"y").unwrap();
         assert_eq!(gemma_identity_dir(&te), te);
@@ -5151,27 +5247,42 @@ mod tests {
         let (video, audio) =
             initial_noise(&cfg, grid, audio_tokens, &mut NoiseStream::new(3, false)).unwrap();
         let clean = CudaTensor::from_vec(
-            (0..audio.numel()).map(|i| (i as f32 * 0.37).cos()).collect(),
+            (0..audio.numel())
+                .map(|i| (i as f32 * 0.37).cos())
+                .collect(),
             audio.shape.clone(),
         )
         .unwrap();
         let forward = |frozen: bool| {
             model.set_audio_frozen(frozen);
-            let (v, a) = model.forward(&video, &clean, &text, 500.0, &ropes, None).unwrap();
-            (v.host_cow().unwrap().into_owned(), a.host_cow().unwrap().into_owned())
+            let (v, a) = model
+                .forward(&video, &clean, &text, 500.0, &ropes, None)
+                .unwrap();
+            (
+                v.host_cow().unwrap().into_owned(),
+                a.host_cow().unwrap().into_owned(),
+            )
         };
         let plain = forward(false);
         let frozen = forward(true);
         assert_ne!(plain.0, frozen.0, "the video must see the audio at sigma 0");
         assert_ne!(plain.1, frozen.1);
-        assert_eq!(forward(false), plain, "unfreezing restores the joint modulation");
+        assert_eq!(
+            forward(false),
+            plain,
+            "unfreezing restores the joint modulation"
+        );
 
         let cond = StageConditioning::new(grid, &[], Vec::new(), 9)
             .unwrap()
             .with_frozen_audio(clean.clone())
             .unwrap();
         model.set_audio_frozen(true);
-        let opts = AncestralOpts { eta: 1.0, s_noise: 1.0, noise_seed: 5 };
+        let opts = AncestralOpts {
+            eta: 1.0,
+            s_noise: 1.0,
+            noise_seed: 5,
+        };
         let run = |c: Option<&StageConditioning>| {
             denoise_ancestral_cond(
                 &model,

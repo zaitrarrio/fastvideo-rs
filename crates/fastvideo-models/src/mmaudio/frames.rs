@@ -240,7 +240,9 @@ mod tests {
         let src: Vec<u8> = (0..4 * 6 * 3).map(|i| (i * 7 % 256) as u8).collect();
         assert_eq!(resize_bicubic_aa(&src, 4, 6, 4, 6), src);
         let flat = vec![200u8; 10 * 12 * 3];
-        assert!(resize_bicubic_aa(&flat, 10, 12, 3, 5).iter().all(|&v| v == 200));
+        assert!(resize_bicubic_aa(&flat, 10, 12, 3, 5)
+            .iter()
+            .all(|&v| v == 200));
     }
 
     #[test]

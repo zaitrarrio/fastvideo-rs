@@ -162,7 +162,12 @@ fn apply_rope_neox(xs: &CudaTensor, theta: f32) -> Result<CudaTensor> {
     CudaTensor::cat(&[&y1, &y2], 3)
 }
 
-fn text_sdpa(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor, mask: &CudaTensor) -> Result<CudaTensor> {
+fn text_sdpa(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    mask: &CudaTensor,
+) -> Result<CudaTensor> {
     let d = q.shape[3] as f32;
     let scale = 1.0 / d.sqrt();
     let mut scores = q.matmul(&k.transpose(2, 3)?)?.try_mul_scalar(scale)?;
@@ -170,7 +175,12 @@ fn text_sdpa(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor, mask: &CudaTensor) 
     scores.softmax(-1)?.matmul(v)
 }
 
-fn causal_pad_mask(batch: usize, heads: usize, seq: usize, valid_len: Option<usize>) -> Result<CudaTensor> {
+fn causal_pad_mask(
+    batch: usize,
+    heads: usize,
+    seq: usize,
+    valid_len: Option<usize>,
+) -> Result<CudaTensor> {
     let valid = valid_len.unwrap_or(seq).min(seq);
     let mut data = vec![0.0f32; batch * heads * seq * seq];
     for q in 0..seq {
@@ -208,8 +218,12 @@ impl DecoderAttention {
             k_proj: Linear::zeros(cfg.hidden_size, kv, false),
             v_proj: Linear::zeros(cfg.hidden_size, kv, false),
             o_proj: Linear::zeros(q, cfg.hidden_size, false),
-            q_norm: cfg.qk_norm.then(|| RmsNorm::zeros(cfg.head_dim, cfg.rms_norm_eps as f32)),
-            k_norm: cfg.qk_norm.then(|| RmsNorm::zeros(cfg.head_dim, cfg.rms_norm_eps as f32)),
+            q_norm: cfg
+                .qk_norm
+                .then(|| RmsNorm::zeros(cfg.head_dim, cfg.rms_norm_eps as f32)),
+            k_norm: cfg
+                .qk_norm
+                .then(|| RmsNorm::zeros(cfg.head_dim, cfg.rms_norm_eps as f32)),
             heads: cfg.num_attention_heads,
             kv_heads: cfg.num_key_value_heads,
             head_dim: cfg.head_dim,
@@ -222,10 +236,34 @@ impl DecoderAttention {
         let kv = cfg.num_key_value_heads * cfg.head_dim;
         let attn = weights::join_key(prefix, "self_attn");
         Ok(Self {
-            q_proj: Linear::load(map, &weights::join_key(&attn, "q_proj"), cfg.hidden_size, q, false)?,
-            k_proj: Linear::load(map, &weights::join_key(&attn, "k_proj"), cfg.hidden_size, kv, false)?,
-            v_proj: Linear::load(map, &weights::join_key(&attn, "v_proj"), cfg.hidden_size, kv, false)?,
-            o_proj: Linear::load(map, &weights::join_key(&attn, "o_proj"), q, cfg.hidden_size, false)?,
+            q_proj: Linear::load(
+                map,
+                &weights::join_key(&attn, "q_proj"),
+                cfg.hidden_size,
+                q,
+                false,
+            )?,
+            k_proj: Linear::load(
+                map,
+                &weights::join_key(&attn, "k_proj"),
+                cfg.hidden_size,
+                kv,
+                false,
+            )?,
+            v_proj: Linear::load(
+                map,
+                &weights::join_key(&attn, "v_proj"),
+                cfg.hidden_size,
+                kv,
+                false,
+            )?,
+            o_proj: Linear::load(
+                map,
+                &weights::join_key(&attn, "o_proj"),
+                q,
+                cfg.hidden_size,
+                false,
+            )?,
             q_norm: if cfg.qk_norm {
                 Some(RmsNorm::load(
                     map,
@@ -377,7 +415,11 @@ impl DecoderLayer {
     }
 
     fn forward(&self, xs: &CudaTensor, valid_len: Option<usize>) -> Result<CudaTensor> {
-        let h = xs.add(&self.attn.forward(&self.input_norm.forward(xs)?, valid_len)?)?;
+        let h = xs.add(
+            &self
+                .attn
+                .forward(&self.input_norm.forward(xs)?, valid_len)?,
+        )?;
         h.add(&self.mlp.forward(&self.post_norm.forward(&h)?)?)
     }
 }
@@ -407,18 +449,28 @@ impl Qwen3Encoder {
 
     pub fn load(cfg: Qwen3Config, map: &WeightMap) -> Result<Self> {
         let prefix = detect_text_prefix(map, cfg.vocab_size, cfg.hidden_size)?;
-        let embed = weights::cuda_tensor_shaped(map, &key(&prefix, "embed_tokens.weight"), &[
-            cfg.vocab_size,
-            cfg.hidden_size,
-        ])?;
+        let embed = weights::cuda_tensor_shaped(
+            map,
+            &key(&prefix, "embed_tokens.weight"),
+            &[cfg.vocab_size, cfg.hidden_size],
+        )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         for i in 0..cfg.num_hidden_layers {
-            layers.push(DecoderLayer::load(map, &key(&prefix, &format!("layers.{i}")), &cfg)?);
+            layers.push(DecoderLayer::load(
+                map,
+                &key(&prefix, &format!("layers.{i}")),
+                &cfg,
+            )?);
         }
         Ok(Self {
             embed,
             layers,
-            norm: RmsNorm::load(map, &key(&prefix, "norm"), cfg.hidden_size, cfg.rms_norm_eps as f32)?,
+            norm: RmsNorm::load(
+                map,
+                &key(&prefix, "norm"),
+                cfg.hidden_size,
+                cfg.rms_norm_eps as f32,
+            )?,
             cfg,
         })
     }
@@ -437,7 +489,10 @@ impl Qwen3Encoder {
             .iter()
             .map(|&i| (i as usize).min(self.cfg.vocab_size.saturating_sub(1)))
             .collect();
-        let mut hidden = self.embed.embedding_rows(&indices)?.reshape(vec![batch, seq, self.cfg.hidden_size])?;
+        let mut hidden =
+            self.embed
+                .embedding_rows(&indices)?
+                .reshape(vec![batch, seq, self.cfg.hidden_size])?;
         let mut all = vec![hidden.clone()];
         for layer in &self.layers {
             hidden = layer.forward(&hidden, valid_len)?;
@@ -545,5 +600,4 @@ mod tests {
         assert_eq!(stacked.shape, vec![1, 4, 48]);
         assert_eq!(text.kind, Flux2TextKind::Mistral3);
     }
-
 }

@@ -980,7 +980,11 @@ pub fn base_recipe_forwards(name: &str) -> Option<usize> {
     if name == "base" {
         return Some(49);
     }
-    let n: usize = name.strip_prefix("base-")?.strip_suffix("step")?.parse().ok()?;
+    let n: usize = name
+        .strip_prefix("base-")?
+        .strip_suffix("step")?
+        .parse()
+        .ok()?;
     (1..=99).contains(&n).then_some(n)
 }
 
@@ -1181,7 +1185,13 @@ pub fn check_canvas_1080p(height: usize, width: usize) -> Result<(), String> {
 /// [`H3_SHORT_EDGE_1080P`] (1088x1920 -> 1080x1920, 1088x1088 -> 1080x1080,
 /// 1088x1440 -> 1080x1440). Other sides (21:9 is 960x2176) are kept.
 pub fn delivered_1080p(height: usize, width: usize) -> (usize, usize) {
-    let crop = |v: usize| if v == H3_CANVAS_SHORT_1080P { H3_SHORT_EDGE_1080P } else { v };
+    let crop = |v: usize| {
+        if v == H3_CANVAS_SHORT_1080P {
+            H3_SHORT_EDGE_1080P
+        } else {
+            v
+        }
+    };
     (crop(height), crop(width))
 }
 
@@ -1322,12 +1332,21 @@ mod tests {
     #[test]
     fn base_recipes_are_the_uniform_grid_without_an_adapter() {
         let base = H3InferenceContract::named("base").unwrap();
-        assert_eq!((base.num_inference_steps, base.transformer_forwards), (50, 49));
-        assert_eq!((base.video_scheduler_shift, base.audio_scheduler_shift), (12.0, 3.0));
+        assert_eq!(
+            (base.num_inference_steps, base.transformer_forwards),
+            (50, 49)
+        );
+        assert_eq!(
+            (base.video_scheduler_shift, base.audio_scheduler_shift),
+            (12.0, 3.0)
+        );
         assert!(base.dense && base.vsa_sparsity == 0.0 && base.guidance_scale == 1.0);
         assert_eq!(base.sigma_source, H3SigmaSource::Uniform);
         let four = H3InferenceContract::named("base-4step").unwrap();
-        assert_eq!((four.num_inference_steps, four.transformer_forwards), (5, 4));
+        assert_eq!(
+            (four.num_inference_steps, four.transformer_forwards),
+            (5, 4)
+        );
         assert_eq!(base_recipe_forwards("base-0step"), None);
         assert_eq!(base_recipe_forwards("base-x"), None);
         assert_eq!(base_recipe_forwards("sol-h3"), None);
@@ -1365,18 +1384,33 @@ mod tests {
     fn the_1080p_tier_admits_its_canvases_only() {
         // The trained canvases pass unchanged, with the same hints.
         assert!(check_canvas_1080p(768, 1344).is_ok());
-        assert!(check_canvas_1080p(720, 1280).unwrap_err().contains("704x1280"));
+        assert!(check_canvas_1080p(720, 1280)
+            .unwrap_err()
+            .contains("704x1280"));
         // 16:9, 9:16, 1:1, 4:3 at the 1088 short edge; 21:9 in the budget.
-        for (h, w) in [(1088, 1920), (1920, 1088), (1088, 1088), (1088, 1440), (960, 2176)] {
+        for (h, w) in [
+            (1088, 1920),
+            (1920, 1088),
+            (1088, 1088),
+            (1088, 1440),
+            (960, 2176),
+        ] {
             assert!(check_canvas_1080p(h, w).is_ok(), "{h}x{w}");
-            assert!(check_canvas(h, w).is_err(), "{h}x{w} is above the trained cap");
+            assert!(
+                check_canvas(h, w).is_err(),
+                "{h}x{w} is above the trained cap"
+            );
         }
         let g = H3Geometry::checked_1080p(1088, 1920, 124).unwrap();
         assert_eq!(g.token_grid, (37, 34, 60));
         assert!(H3Geometry::checked(1088, 1920, 124).is_err());
         // Above the tier, off the multiple, or outside the aspect range.
-        assert!(check_canvas_1080p(1088, 1952).unwrap_err().contains("1080P"));
-        assert!(check_canvas_1080p(1080, 1920).unwrap_err().contains("multiples"));
+        assert!(check_canvas_1080p(1088, 1952)
+            .unwrap_err()
+            .contains("1080P"));
+        assert!(check_canvas_1080p(1080, 1920)
+            .unwrap_err()
+            .contains("multiples"));
         assert!(check_canvas_1080p(1440, 1440).is_ok());
         assert!(check_canvas_1080p(1472, 1472).is_err());
         assert!(check_canvas_1080p(544, 2176).is_ok());
@@ -1567,7 +1601,15 @@ mod tests {
         // Nearest-multiple rounding above the cap rounds a side down instead
         // (a 6:13 portrait used to give 1504x704, refused by `check_canvas`).
         assert_eq!(resolve_canvas_size(6.0, 13.0).unwrap(), (1504, 672));
-        for (aw, ah) in [(6.0, 13.0), (5.0, 9.0), (3.0, 11.0), (7.0, 15.0), (13.0, 6.0), (1.0, 4.0), (4.0, 1.0)] {
+        for (aw, ah) in [
+            (6.0, 13.0),
+            (5.0, 9.0),
+            (3.0, 11.0),
+            (7.0, 15.0),
+            (13.0, 6.0),
+            (1.0, 4.0),
+            (4.0, 1.0),
+        ] {
             let (h, w) = resolve_canvas_size(aw, ah).unwrap();
             assert!(check_canvas(h, w).is_ok(), "{aw}:{ah} -> {h}x{w}");
         }
@@ -1579,7 +1621,8 @@ mod tests {
                     continue;
                 }
                 for short in [H3_SHORT_EDGE, H3_SHORT_EDGE_480P] {
-                    let (h, w) = resolve_canvas_size_short(f64::from(n), f64::from(d), short).unwrap();
+                    let (h, w) =
+                        resolve_canvas_size_short(f64::from(n), f64::from(d), short).unwrap();
                     assert!(check_canvas(h, w).is_ok(), "{n}:{d} at {short} -> {h}x{w}");
                 }
             }
@@ -1597,8 +1640,9 @@ mod tests {
         assert!(trim.is_pruned() && !base.is_pruned());
         assert_eq!(trim.adaln_out_dim(), 96768);
         // Dropped: 6, 7, 9, 13, 15, 16, 22, 23 (the model card's "eight blocks").
-        let dropped: Vec<usize> =
-            (0..50).filter(|b| !FASTH3_TRIM_KEPT_BLOCKS.contains(b)).collect();
+        let dropped: Vec<usize> = (0..50)
+            .filter(|b| !FASTH3_TRIM_KEPT_BLOCKS.contains(b))
+            .collect();
         assert_eq!(dropped, [6, 7, 9, 13, 15, 16, 22, 23]);
         // Every dim but the three pruning fields is H3's.
         let same = H3TransformerConfig {
@@ -1610,24 +1654,47 @@ mod tests {
         assert_eq!(same, base);
         let parsed = base
             .clone()
-            .with_pruning(42, Some(50), Some(FASTH3_TRIM_KEPT_BLOCKS.to_vec()), Some(16))
+            .with_pruning(
+                42,
+                Some(50),
+                Some(FASTH3_TRIM_KEPT_BLOCKS.to_vec()),
+                Some(16),
+            )
             .unwrap();
         assert_eq!(parsed, trim);
         // An unpruned config.json (no extra fields) keeps the base.
-        assert_eq!(base.clone().with_pruning(50, None, None, None).unwrap(), base);
+        assert_eq!(
+            base.clone().with_pruning(50, None, None, None).unwrap(),
+            base
+        );
     }
 
     #[test]
     fn trim_pruning_fields_are_checked() {
         let base = H3TransformerConfig::fasth3_8step();
         let kept = FASTH3_TRIM_KEPT_BLOCKS.to_vec();
-        assert!(base.clone().with_pruning(41, Some(50), Some(kept.clone()), Some(16)).is_err());
+        assert!(base
+            .clone()
+            .with_pruning(41, Some(50), Some(kept.clone()), Some(16))
+            .is_err());
         let mut unsorted = kept.clone();
         unsorted.swap(3, 4);
-        assert!(base.clone().with_pruning(42, Some(50), Some(unsorted), Some(16)).is_err());
-        assert!(base.clone().with_pruning(42, Some(49), Some(kept.clone()), Some(16)).is_err());
-        assert!(base.clone().with_pruning(42, Some(50), Some(kept.clone()), Some(0)).is_err());
-        assert!(base.clone().with_pruning(42, Some(50), Some(kept), Some(2689)).is_err());
+        assert!(base
+            .clone()
+            .with_pruning(42, Some(50), Some(unsorted), Some(16))
+            .is_err());
+        assert!(base
+            .clone()
+            .with_pruning(42, Some(49), Some(kept.clone()), Some(16))
+            .is_err());
+        assert!(base
+            .clone()
+            .with_pruning(42, Some(50), Some(kept.clone()), Some(0))
+            .is_err());
+        assert!(base
+            .clone()
+            .with_pruning(42, Some(50), Some(kept), Some(2689))
+            .is_err());
         assert!(base.with_pruning(0, None, None, None).is_err());
     }
 
@@ -1636,7 +1703,13 @@ mod tests {
         let base = H3VideoVaeConfig::fasth3_8step();
         let trim = H3VideoVaeConfig::fasth3_trim_8step();
         assert_eq!(trim.decoder_num_layers, 26);
-        assert_eq!(H3VideoVaeConfig { decoder_num_layers: 36, ..trim.clone() }, base);
+        assert_eq!(
+            H3VideoVaeConfig {
+                decoder_num_layers: 36,
+                ..trim.clone()
+            },
+            base
+        );
         // Same chunking, so the same decoded frame counts.
         assert_eq!(trim.temporal_decode_plan(37), base.temporal_decode_plan(37));
     }
@@ -1646,27 +1719,57 @@ mod tests {
     #[test]
     fn nvfp4_release_recipes_run_their_published_contracts() {
         for name in ["v2-nvfp4", "fasth3-v2-nvfp4", "h3-v2-nvfp4"] {
-            assert_eq!(H3InferenceContract::named(name).unwrap(), H3InferenceContract::fasth3_8step(), "{name}");
+            assert_eq!(
+                H3InferenceContract::named(name).unwrap(),
+                H3InferenceContract::fasth3_8step(),
+                "{name}"
+            );
             assert!(is_nvfp4_release_recipe(name) && !is_trim_nvfp4_recipe(name));
         }
-        for name in ["4step-vsa-nvfp4", "fasth3-4step-vsa-nvfp4", "h3-turbo-nvfp4"] {
+        for name in [
+            "4step-vsa-nvfp4",
+            "fasth3-4step-vsa-nvfp4",
+            "h3-turbo-nvfp4",
+        ] {
             let c = H3InferenceContract::named(name).unwrap();
             assert_eq!(c, H3InferenceContract::fasth3_4step_vsa(), "{name}");
-            assert_eq!((c.dmd_denoising_steps.as_slice(), c.vsa_sparsity), (&[999, 749, 500, 250][..], 0.9));
+            assert_eq!(
+                (c.dmd_denoising_steps.as_slice(), c.vsa_sparsity),
+                (&[999, 749, 500, 250][..], 0.9)
+            );
             assert!(is_nvfp4_release_recipe(name) && !is_trim_nvfp4_recipe(name));
             // Not the Preview LoRA recipe: the release is the merged model.
             assert!(crate::h3::lora::FastH3PreviewVariant::from_recipe(name).is_none());
         }
-        for name in ["trim-8step-nvfp4-fp4attn", "fasth3-trim-nvfp4-fast", "h3-trim-nvfp4-fast"] {
-            assert!(is_trim_nvfp4_recipe(name) && is_trim_nvfp4_fp4attn_recipe(name), "{name}");
-            assert_eq!(H3InferenceContract::named(name).unwrap(), H3InferenceContract::fasth3_8step());
+        for name in [
+            "trim-8step-nvfp4-fp4attn",
+            "fasth3-trim-nvfp4-fast",
+            "h3-trim-nvfp4-fast",
+        ] {
+            assert!(
+                is_trim_nvfp4_recipe(name) && is_trim_nvfp4_fp4attn_recipe(name),
+                "{name}"
+            );
+            assert_eq!(
+                H3InferenceContract::named(name).unwrap(),
+                H3InferenceContract::fasth3_8step()
+            );
         }
-        assert!(!is_trim_nvfp4_fp4attn_recipe("trim-8step-nvfp4") && !is_nvfp4_release_recipe("4step-vsa"));
+        assert!(
+            !is_trim_nvfp4_fp4attn_recipe("trim-8step-nvfp4")
+                && !is_nvfp4_release_recipe("4step-vsa")
+        );
     }
 
     #[test]
     fn trim_recipe_is_the_v2_contract() {
-        for name in ["trim-8step", "fasth3-trim-8step", "fasth3-trim", "trim-8step-nvfp4", "fasth3-trim-nvfp4"] {
+        for name in [
+            "trim-8step",
+            "fasth3-trim-8step",
+            "fasth3-trim",
+            "trim-8step-nvfp4",
+            "fasth3-trim-nvfp4",
+        ] {
             assert_eq!(
                 H3InferenceContract::named(name).unwrap(),
                 H3InferenceContract::fasth3_8step(),
@@ -1674,10 +1777,23 @@ mod tests {
             );
         }
         let c = H3InferenceContract::fasth3_8step();
-        assert_eq!(c.dmd_denoising_steps, [999, 874, 749, 624, 500, 375, 250, 125]);
-        assert_eq!((c.video_scheduler_shift, c.audio_scheduler_shift), (10.0, 3.0));
+        assert_eq!(
+            c.dmd_denoising_steps,
+            [999, 874, 749, 624, 500, 375, 250, 125]
+        );
+        assert_eq!(
+            (c.video_scheduler_shift, c.audio_scheduler_shift),
+            (10.0, 3.0)
+        );
         assert_eq!((c.vsa_sparsity, c.vsa_tile_size, c.dense), (0.8, 64, false));
-        assert_eq!((c.transformer_forwards, c.num_inference_steps, c.guidance_scale), (8, 9, 1.0));
+        assert_eq!(
+            (
+                c.transformer_forwards,
+                c.num_inference_steps,
+                c.guidance_scale
+            ),
+            (8, 9, 1.0)
+        );
     }
 
     #[test]

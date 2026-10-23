@@ -727,7 +727,10 @@ mod tests {
         let f = video_fractions_with(&cfg(), grid, 24.0, ScalarDivision::Exact, &[16]);
         assert_eq!(f.len(), (3 + 1) * 2 * 2 * 3);
         // The grid is unchanged by the appended block.
-        assert_eq!(&f[..3 * 4 * 3], &video_fractions(&cfg(), grid, 24.0, ScalarDivision::Exact)[..]);
+        assert_eq!(
+            &f[..3 * 4 * 3],
+            &video_fractions(&cfg(), grid, 24.0, ScalarDivision::Exact)[..]
+        );
         // Keyframe at pixel frame 16 covers [16, 17) / 24 s: midpoint 16.5 / 24.
         let t = f[3 * 4 * 3] * 20.0;
         assert!((t - 16.5 / 24.0).abs() < 1e-6, "{t}");
@@ -741,14 +744,29 @@ mod tests {
         // the grid token it overlays (the Ingredients LoRA's layout).
         let grid = [3, 2, 2];
         let r = ReferenceBlock { grid, downscale: 1 };
-        let f = video_fractions_cond(&cfg(), grid, 24.0, ScalarDivision::Reciprocal, &[16], Some(r));
+        let f = video_fractions_cond(
+            &cfg(),
+            grid,
+            24.0,
+            ScalarDivision::Reciprocal,
+            &[16],
+            Some(r),
+        );
         let n = 3 * 4 * 3;
         assert_eq!(f.len(), (3 * 4 + 4 + 3 * 4) * 3);
         let base = video_fractions(&cfg(), grid, 24.0, ScalarDivision::Reciprocal);
         assert_eq!(&f[..n], &base[..]);
         // After the grid and the one keyframe block.
         assert_eq!(&f[n + 4 * 3..], &base[..]);
-        let t = video_time_fractions_cond(&cfg(), grid, 24.0, 20.0, ScalarDivision::Exact, &[], Some(r));
+        let t = video_time_fractions_cond(
+            &cfg(),
+            grid,
+            24.0,
+            20.0,
+            ScalarDivision::Exact,
+            &[],
+            Some(r),
+        );
         let tb = video_time_fractions(&cfg(), grid, 24.0, 20.0, ScalarDivision::Exact);
         assert_eq!(&t[12..], &tb[..]);
     }
@@ -757,7 +775,10 @@ mod tests {
     fn a_half_size_reference_is_stretched_over_the_target() {
         // Downscale 2: a [1, 1, 1] reference cell covers pixels [0, 64) of the
         // target, midpoint 32 (the target's own first cell: 16).
-        let r = ReferenceBlock { grid: [1, 1, 1], downscale: 2 };
+        let r = ReferenceBlock {
+            grid: [1, 1, 1],
+            downscale: 2,
+        };
         let f = video_fractions_cond(&cfg(), [1, 2, 2], 24.0, ScalarDivision::Exact, &[], Some(r));
         let last = &f[4 * 3..];
         assert_eq!(last[1], 32.0 / 2048.0);
@@ -820,7 +841,11 @@ mod tests {
     }
 
     fn same_bits(a: &SplitRope, b: &SplitRope, what: &str) {
-        assert_eq!((a.heads, a.tokens, a.half), (b.heads, b.tokens, b.half), "{what}");
+        assert_eq!(
+            (a.heads, a.tokens, a.half),
+            (b.heads, b.tokens, b.half),
+            "{what}"
+        );
         let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
         assert!(bits(&a.cos) == bits(&b.cos), "{what}: cos differs");
         assert!(bits(&a.sin) == bits(&b.sin), "{what}: sin differs");
@@ -847,16 +872,26 @@ mod tests {
             (&[0][..], reference),
         ] {
             for division in [ScalarDivision::Reciprocal, ScalarDivision::Exact] {
-                let direct =
-                    Ltx2RopeTables::with_conditioning(&c, grid, extra, reference, 151, 24.0, division);
-                let luts =
-                    Ltx2RopeLuts::with_conditioning(&c, grid, extra, reference, 151, 24.0, division);
+                let direct = Ltx2RopeTables::with_conditioning(
+                    &c, grid, extra, reference, 151, 24.0, division,
+                );
+                let luts = Ltx2RopeLuts::with_conditioning(
+                    &c, grid, extra, reference, 151, 24.0, division,
+                );
                 let got = luts.expand();
                 let what = format!("{extra:?} {reference:?} {division:?}");
                 same_bits(&got.video, &direct.video, &format!("video {what}"));
                 same_bits(&got.audio, &direct.audio, &format!("audio {what}"));
-                same_bits(&got.cross_video, &direct.cross_video, &format!("cross_video {what}"));
-                same_bits(&got.cross_audio, &direct.cross_audio, &format!("cross_audio {what}"));
+                same_bits(
+                    &got.cross_video,
+                    &direct.cross_video,
+                    &format!("cross_video {what}"),
+                );
+                same_bits(
+                    &got.cross_audio,
+                    &direct.cross_audio,
+                    &format!("cross_audio {what}"),
+                );
             }
         }
         // Connector-shaped (one axis, 30 heads, odd pad) as well.
@@ -885,10 +920,22 @@ mod tests {
         let rows = luts.video.cos.len() / luts.video.n;
         assert!(rows < 20 + 34 + 60 + 1, "{rows} distinct fractions");
         // Spot checks against the direct definition.
-        let fr = video_fractions_cond(&cfg(), [19, 34, 60], 24.0, ScalarDivision::Reciprocal, &[0], None);
+        let fr = video_fractions_cond(
+            &cfg(),
+            [19, 34, 60],
+            24.0,
+            ScalarDivision::Reciprocal,
+            &[0],
+            None,
+        );
         let (n, pad) = (luts.video.n, luts.video.pad);
         let freqs = frequencies(n, cfg().rope_theta);
-        for (h, t, j) in [(0, 0, 5), (7, 12_345, 33), (31, 40_799, 63), (16, 38_760, 0)] {
+        for (h, t, j) in [
+            (0, 0, 5),
+            (7, 12_345, 33),
+            (31, 40_799, 63),
+            (16, 38_760, 0),
+        ] {
             let m = h * luts.video.half + j;
             let want = rotation(fr[t * 3 + (m - pad) % 3], freqs[(m - pad) / 3]);
             assert_eq!(luts.video.at(h, t, j), want, "h{h} t{t} j{j}");

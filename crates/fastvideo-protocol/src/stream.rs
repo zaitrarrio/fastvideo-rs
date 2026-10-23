@@ -184,7 +184,10 @@ pub struct CausalLimits {
 
 impl Default for CausalLimits {
     fn default() -> Self {
-        Self { default_max_s: 120, hard_max_s: 300 }
+        Self {
+            default_max_s: 120,
+            hard_max_s: 300,
+        }
     }
 }
 
@@ -194,7 +197,10 @@ impl CausalLimits {
     /// `max_seconds`).
     pub fn resolve(&self, requested: Option<u32>) -> Result<u32, ApiError> {
         match requested {
-            Some(0) => Err(ApiError::invalid_param("max_seconds", "max_seconds must be at least 1")),
+            Some(0) => Err(ApiError::invalid_param(
+                "max_seconds",
+                "max_seconds must be at least 1",
+            )),
             Some(s) => Ok(s.min(self.hard_max_s)),
             None => Ok(self.default_max_s.min(self.hard_max_s)),
         }

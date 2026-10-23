@@ -36,12 +36,23 @@ impl CudaModel {
 /// the transformer the pipeline loaded (`transformer_ref/` serves
 /// reference-to-video only).
 pub fn h3(r: &H3Recipe, job: &ResolvedJob) -> Result<H3Geometry, ApiError> {
-    let (h, w, n) = (job.height as usize, job.width as usize, job.num_frames as usize);
-    let g = if r.hd_1080p { H3Geometry::checked_1080p(h, w, n) } else { H3Geometry::checked(h, w, n) }
-        .map_err(|e| ApiError::invalid(format!("h3: {e}")))?;
+    let (h, w, n) = (
+        job.height as usize,
+        job.width as usize,
+        job.num_frames as usize,
+    );
+    let g = if r.hd_1080p {
+        H3Geometry::checked_1080p(h, w, n)
+    } else {
+        H3Geometry::checked(h, w, n)
+    }
+    .map_err(|e| ApiError::invalid(format!("h3: {e}")))?;
     let refs = job.task == Task::Ref2V || !job.references.is_empty();
     if job.task == Task::Ref2V && job.references.is_empty() {
-        return Err(ApiError::invalid_param("references", "reference-to-video takes one or more references"));
+        return Err(ApiError::invalid_param(
+            "references",
+            "reference-to-video takes one or more references",
+        ));
     }
     if refs != r.ref2va {
         return Err(if refs {
@@ -58,11 +69,17 @@ pub fn h3(r: &H3Recipe, job: &ResolvedJob) -> Result<H3Geometry, ApiError> {
 /// `Ltx2Request::validate`'s geometry (multiples of 64 two-stage, 8k+1).
 pub fn ltx2(r: &Ltx2Recipe, job: &ResolvedJob) -> Result<(), ApiError> {
     ltx2_reference(job, r.ic_lora.is_some())?;
-    let drive = matches!(job.audio_in, Some((fastvideo_protocol::AudioRole::Drive, _)));
+    let drive = matches!(
+        job.audio_in,
+        Some((fastvideo_protocol::AudioRole::Drive, _))
+    );
     let dub = matches!(job.audio_in, Some((fastvideo_protocol::AudioRole::Dub, _)));
     match (job.task, &job.audio_in) {
         (Task::A2V, _) if !drive => {
-            return Err(ApiError::invalid_param("audio_url", "audio-to-video needs the driving audio"))
+            return Err(ApiError::invalid_param(
+                "audio_url",
+                "audio-to-video needs the driving audio",
+            ))
         }
         (Task::A2V, _) => {}
         (Task::Retake, Some(_)) if dub => {}
@@ -81,7 +98,10 @@ pub fn ltx2(r: &Ltx2Recipe, job: &ResolvedJob) -> Result<(), ApiError> {
         return ltx2_edit(job);
     }
     if job.edit.is_some() {
-        return Err(ApiError::invalid_param("video_url", "a source video is only taken by retake and extend"));
+        return Err(ApiError::invalid_param(
+            "video_url",
+            "a source video is only taken by retake and extend",
+        ));
     }
     match job.task {
         Task::Ref2V => {}
@@ -94,7 +114,9 @@ pub fn ltx2(r: &Ltx2Recipe, job: &ResolvedJob) -> Result<(), ApiError> {
     // Audio-to-video with an image may leave the prompt empty.
     let prompt_optional = drive && !job.keyframes.is_empty();
     if job.fps == 0 || (job.prompt.trim().is_empty() && !prompt_optional) {
-        return Err(ApiError::invalid("ltx2: needs a positive frame rate and a non-empty prompt"));
+        return Err(ApiError::invalid(
+            "ltx2: needs a positive frame rate and a non-empty prompt",
+        ));
     }
     fastvideo_models::ltx2::config::check_geometry(
         job.height as usize,
@@ -113,13 +135,24 @@ pub fn ltx2(r: &Ltx2Recipe, job: &ResolvedJob) -> Result<(), ApiError> {
 pub fn ltx2_edit(job: &ResolvedJob) -> Result<(), ApiError> {
     use fastvideo_protocol::{ResolvedEditOp, EDIT_MAX_FRAMES, EDIT_MAX_PIXELS};
     let Some(e) = &job.edit else {
-        return Err(ApiError::invalid_param("video_url", "retake and extend need the source video"));
+        return Err(ApiError::invalid_param(
+            "video_url",
+            "retake and extend need the source video",
+        ));
     };
     if !job.keyframes.is_empty() || !job.references.is_empty() {
-        return Err(ApiError::invalid_param("task", "retake and extend take no images or references"));
+        return Err(ApiError::invalid_param(
+            "task",
+            "retake and extend take no images or references",
+        ));
     }
-    fastvideo_models::ltx2::config::check_geometry(job.height as usize, job.width as usize, job.num_frames as usize, false)
-        .map_err(ApiError::invalid)?;
+    fastvideo_models::ltx2::config::check_geometry(
+        job.height as usize,
+        job.width as usize,
+        job.num_frames as usize,
+        false,
+    )
+    .map_err(ApiError::invalid)?;
     if u64::from(job.width) * u64::from(job.height) > EDIT_MAX_PIXELS {
         return Err(ApiError::invalid(format!(
             "ltx2 edit: {}x{} is over the {EDIT_MAX_PIXELS}-pixel budget of one stage",
@@ -138,15 +171,24 @@ pub fn ltx2_edit(job: &ResolvedJob) -> Result<(), ApiError> {
         && e.source_fps.is_finite()
         && e.source_fps > 0.0;
     let extend = match e.op {
-        ResolvedEditOp::Retake { start_s, end_s, video, audio } => {
+        ResolvedEditOp::Retake {
+            start_s,
+            end_s,
+            video,
+            audio,
+        } => {
             if !(video || audio) || !(start_s >= 0.0 && end_s > start_s) {
-                return Err(ApiError::invalid("ltx2 retake: an empty window or nothing to regenerate"));
+                return Err(ApiError::invalid(
+                    "ltx2 retake: an empty window or nothing to regenerate",
+                ));
             }
             0
         }
         ResolvedEditOp::Extend { frames, .. } => {
             if frames == 0 || frames % 8 != 0 {
-                return Err(ApiError::invalid(format!("ltx2 extend: {frames} new frames is not a positive multiple of 8")));
+                return Err(ApiError::invalid(format!(
+                    "ltx2 extend: {frames} new frames is not a positive multiple of 8"
+                )));
             }
             frames
         }
@@ -162,7 +204,10 @@ pub fn ltx2_edit(job: &ResolvedJob) -> Result<(), ApiError> {
 
 /// The LTX reference sheet of a `Ref2V` job: exactly one image reference
 /// on a model loaded with the IC-LoRA. `None` for other tasks.
-pub fn ltx2_reference(job: &ResolvedJob, ic_lora: bool) -> Result<Option<&std::path::Path>, ApiError> {
+pub fn ltx2_reference(
+    job: &ResolvedJob,
+    ic_lora: bool,
+) -> Result<Option<&std::path::Path>, ApiError> {
     if job.task != Task::Ref2V {
         return Ok(None);
     }
@@ -172,7 +217,10 @@ pub fn ltx2_reference(job: &ResolvedJob, ic_lora: bool) -> Result<Option<&std::p
             "reference-to-video needs an LTX model loaded with the IC-LoRA",
         ));
     }
-    let mut images = job.references.iter().filter(|(k, _)| *k == MediaKind::Image);
+    let mut images = job
+        .references
+        .iter()
+        .filter(|(k, _)| *k == MediaKind::Image);
     let (Some((_, path)), None) = (images.next(), images.next()) else {
         return Err(ApiError::invalid_param(
             "references",
@@ -192,9 +240,14 @@ pub fn ltx2_reference(job: &ResolvedJob, ic_lora: bool) -> Result<Option<&std::p
 /// preset's exact geometry (`fastvideo_models::wan::config::check_geometry`:
 /// the VAE x patch multiple, 4k+1 frames, whole causal blocks).
 pub fn wan(r: &WanRecipe, job: &ResolvedJob) -> Result<(), ApiError> {
-    let first = job.keyframes.iter().any(|(a, _)| *a == fastvideo_protocol::Anchor::First);
+    let first = job
+        .keyframes
+        .iter()
+        .any(|(a, _)| *a == fastvideo_protocol::Anchor::First);
     if job.task == Task::I2V && (!first || !r.i2v) {
-        return Err(ApiError::invalid("wan: image-to-video needs a first-frame image on an I2V model"));
+        return Err(ApiError::invalid(
+            "wan: image-to-video needs a first-frame image on an I2V model",
+        ));
     }
     fastvideo_models::wan::config::check_geometry(
         &r.preset,

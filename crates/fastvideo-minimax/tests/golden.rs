@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use common::*;
 use fastvideo_minimax::delete::delete_body;
-use fastvideo_minimax::{render_oai_error, task_json, CreateBody, CreateEndpoint, MiniMax, TaskView};
+use fastvideo_minimax::{
+    render_oai_error, task_json, CreateBody, CreateEndpoint, MiniMax, TaskView,
+};
 use fastvideo_protocol::{
     Anchor, ApiError, Artifact, ArtifactId, ArtifactLocation, AudioPlan, BatchProtocol, ErrorCtx,
     GapId, Job, JobId, JobView, MediaKind, NormalizeCtx, PostProcess, ProtocolId, ResolvedJob,
@@ -45,10 +47,17 @@ fn resolved(task: Task) -> ResolvedJob {
         height: 768,
         num_frames: 124,
         fps: 24,
-        keyframes: if task == Task::I2V { vec![(Anchor::First, "/in/0.png".into())] } else { vec![] },
+        keyframes: if task == Task::I2V {
+            vec![(Anchor::First, "/in/0.png".into())]
+        } else {
+            vec![]
+        },
         references: vec![],
         audio_in: None,
-        audio: AudioPlan::Native { rate: 32000, channels: 2 },
+        audio: AudioPlan::Native {
+            rate: 32000,
+            channels: 2,
+        },
         post: PostProcess::default(),
         sampling: SamplingOverrides::default(),
         tier: None,
@@ -59,7 +68,14 @@ fn resolved(task: Task) -> ResolvedJob {
 
 fn job(ext: &str, echo: Value, task: Task) -> Job {
     let id = JobId("6f1c2a52-8d7e-4b8e-9a51-2f3a4b5c6d7e".parse().unwrap());
-    let mut j = Job::new(id, ProtocolId::MiniMaxV2, ext, resolved(task), at(1785125529), Duration::from_secs(7 * 86400));
+    let mut j = Job::new(
+        id,
+        ProtocolId::MiniMaxV2,
+        ext,
+        resolved(task),
+        at(1785125529),
+        Duration::from_secs(7 * 86400),
+    );
     j.request_echo = echo;
     j
 }
@@ -80,7 +96,12 @@ fn artifact() -> Artifact {
 }
 
 fn view_ctx<'a>(base: &'a Url) -> ViewCtx<'a> {
-    ViewCtx { now: at(1785126000), urls: &Signer, public_base: base, with_logs: false }
+    ViewCtx {
+        now: at(1785126000),
+        urls: &Signer,
+        public_base: base,
+        with_logs: false,
+    }
 }
 
 fn tv() -> TaskView {
@@ -92,9 +113,15 @@ fn tv() -> TaskView {
 #[test]
 fn create_examples_normalize() {
     for name in ["create_t2v", "create_i2v", "create_r2v"] {
-        let body: CreateBody = serde_json::from_value(load_golden(&format!("{name}.body.json"))).unwrap();
-        let req = CreateEndpoint.normalize(body, &NormalizeCtx::new(at(0))).unwrap();
-        assert_golden(&format!("{name}.normalized.json"), &serde_json::to_value(&req).unwrap());
+        let body: CreateBody =
+            serde_json::from_value(load_golden(&format!("{name}.body.json"))).unwrap();
+        let req = CreateEndpoint
+            .normalize(body, &NormalizeCtx::new(at(0)))
+            .unwrap();
+        assert_golden(
+            &format!("{name}.normalized.json"),
+            &serde_json::to_value(&req).unwrap(),
+        );
     }
 }
 
@@ -107,7 +134,10 @@ fn create_reply_is_task_id_only() {
     assert_golden("create_reply.json", r.json_body().unwrap());
     // Our ids are 18 digits.
     let id = MiniMax::default().new_external_id(JobId::new());
-    assert!(id.len() == 18 && id.bytes().all(|b| b.is_ascii_digit()), "{id}");
+    assert!(
+        id.len() == 18 && id.bytes().all(|b| b.is_ascii_digit()),
+        "{id}"
+    );
 }
 
 // ---- query ------------------------------------------------------------------
@@ -118,7 +148,8 @@ fn query_succeeded_matches_minimax_example() {
         "_fv": {"input_image_count": 1, "input_video_seconds": 0.0, "input_audio_seconds": 6.0}});
     let mut j = job("424010985738629", echo, Task::I2V);
     j.mark_running(at(1785125600)).unwrap();
-    j.mark_succeeded(at(1785125946), vec![artifact()], Default::default()).unwrap();
+    j.mark_succeeded(at(1785125946), vec![artifact()], Default::default())
+        .unwrap();
     let base = Url::parse("http://fv.test").unwrap();
     let got = tv().status_reply(&j, &view_ctx(&base));
     assert_eq!(got.status, 200);
@@ -144,20 +175,46 @@ fn query_states_golden() {
     let mut all = serde_json::Map::new();
     all.insert("queued".into(), task_json(&j, &cx, Duration::from_secs(60)));
     j.mark_running(at(1785125600)).unwrap();
-    all.insert("running".into(), task_json(&j, &cx, Duration::from_secs(60)));
+    all.insert(
+        "running".into(),
+        task_json(&j, &cx, Duration::from_secs(60)),
+    );
     let mut failed = j.clone();
-    failed.mark_failed(at(1785125700), ApiError::engine_failed("injected failure at step 1/8")).unwrap();
-    all.insert("failed".into(), task_json(&failed, &cx, Duration::from_secs(60)));
+    failed
+        .mark_failed(
+            at(1785125700),
+            ApiError::engine_failed("injected failure at step 1/8"),
+        )
+        .unwrap();
+    all.insert(
+        "failed".into(),
+        task_json(&failed, &cx, Duration::from_secs(60)),
+    );
     let mut filtered = j.clone();
-    filtered.mark_failed(at(1785125700), ApiError::content_filtered("video description contains sensitive content")).unwrap();
-    all.insert("failed_filtered".into(), task_json(&filtered, &cx, Duration::from_secs(60)));
+    filtered
+        .mark_failed(
+            at(1785125700),
+            ApiError::content_filtered("video description contains sensitive content"),
+        )
+        .unwrap();
+    all.insert(
+        "failed_filtered".into(),
+        task_json(&filtered, &cx, Duration::from_secs(60)),
+    );
     let mut cancelled = j.clone();
     cancelled.mark_cancelled(at(1785125650)).unwrap();
-    all.insert("cancelled".into(), task_json(&cancelled, &cx, Duration::from_secs(60)));
+    all.insert(
+        "cancelled".into(),
+        task_json(&cancelled, &cx, Duration::from_secs(60)),
+    );
     j.resolved.tier = Some(Tier::Draft);
     j.resolved.recipe = Some("4step-vsa-480p-tiny-vae".into());
-    j.mark_succeeded(at(1785125946), vec![artifact()], Default::default()).unwrap();
-    all.insert("succeeded_draft".into(), task_json(&j, &cx, Duration::from_secs(60)));
+    j.mark_succeeded(at(1785125946), vec![artifact()], Default::default())
+        .unwrap();
+    all.insert(
+        "succeeded_draft".into(),
+        task_json(&j, &cx, Duration::from_secs(60)),
+    );
     let all = Value::Object(all);
     assert_golden("query_states.json", &all);
     // Invariants: error only when failed, usage only on success.
@@ -167,19 +224,33 @@ fn query_states_golden() {
     }
     assert_eq!(all["failed_filtered"]["error"]["code"], "1026");
     assert_eq!(all["succeeded_draft"]["metadata"]["quality"], "draft");
-    assert_eq!(all["succeeded_draft"]["ratio"], "16:9", "adaptive reports the generated ratio");
+    assert_eq!(
+        all["succeeded_draft"]["ratio"], "16:9",
+        "adaptive reports the generated ratio"
+    );
 }
 
 #[test]
 fn list_golden() {
     let base = Url::parse("http://fv.test").unwrap();
     let cx = view_ctx(&base);
-    let a = job("100000000000000001", json!({"model": "MiniMax-H3", "resolution": "768P", "duration": 5, "ratio": "16:9"}), Task::T2V);
-    let mut b = job("100000000000000002", json!({"model": "MiniMax-H3", "resolution": "768P", "duration": 4, "ratio": "9:16"}), Task::T2V);
+    let a = job(
+        "100000000000000001",
+        json!({"model": "MiniMax-H3", "resolution": "768P", "duration": 5, "ratio": "16:9"}),
+        Task::T2V,
+    );
+    let mut b = job(
+        "100000000000000002",
+        json!({"model": "MiniMax-H3", "resolution": "768P", "duration": 4, "ratio": "9:16"}),
+        Task::T2V,
+    );
     b.resolved.width = 768;
     b.resolved.height = 1344;
     b.mark_running(at(1785125600)).unwrap();
-    let items: Vec<Value> = [&b, &a].iter().map(|j| task_json(j, &cx, Duration::from_secs(60))).collect();
+    let items: Vec<Value> = [&b, &a]
+        .iter()
+        .map(|j| task_json(j, &cx, Duration::from_secs(60)))
+        .collect();
     assert_golden("list.json", &json!({"items": items, "total": 2}));
 }
 
@@ -199,8 +270,14 @@ fn delete_golden() {
 #[test]
 fn error_envelopes() {
     let mm = MiniMax::default();
-    let cx = ErrorCtx { request_id: Some(RID.into()), ..Default::default() };
-    let r = mm.render_error(&ApiError::invalid("content must include a non-empty text item (prompt is required)"), &cx);
+    let cx = ErrorCtx {
+        request_id: Some(RID.into()),
+        ..Default::default()
+    };
+    let r = mm.render_error(
+        &ApiError::invalid("content must include a non-empty text item (prompt is required)"),
+        &cx,
+    );
     assert_eq!(r.status, 400);
     assert_eq!(r.json_body().unwrap(), &load_golden("error_400.json"));
     let r = mm.render_error(&ApiError::unauthorized("missing credentials"), &cx);
@@ -211,18 +288,35 @@ fn error_envelopes() {
     for (name, e) in [
         ("unknown_task", ApiError::not_found("`1` was not found")),
         ("gap_2k", ApiError::unsupported(GapId::H3Resolution2K)),
-        ("gap_provider_file", ApiError::unsupported(GapId::ProviderFiles)),
-        ("delete_running", ApiError::conflict("task 123456789012345678 is running and cannot be cancelled or deleted")),
-        ("body_too_large", ApiError::payload_too_large("request body exceeds 64 MB")),
+        (
+            "gap_provider_file",
+            ApiError::unsupported(GapId::ProviderFiles),
+        ),
+        (
+            "delete_running",
+            ApiError::conflict(
+                "task 123456789012345678 is running and cannot be cancelled or deleted",
+            ),
+        ),
+        (
+            "body_too_large",
+            ApiError::payload_too_large("request body exceeds 64 MB"),
+        ),
         ("bad_key", ApiError::unauthorized("invalid credentials")),
-        ("filtered", ApiError::content_filtered("video description contains sensitive content")),
+        (
+            "filtered",
+            ApiError::content_filtered("video description contains sensitive content"),
+        ),
         ("rate_limited", ApiError::rate_limited("please retry later")),
         ("queue_full", ApiError::queue_full("job queue is full")),
         ("loading", ApiError::loading("models are loading")),
         ("internal", ApiError::internal("boom")),
     ] {
         let r = render_oai_error(&e, Some(RID));
-        all.insert(name.into(), json!({"http": r.status, "body": r.json_body().unwrap()}));
+        all.insert(
+            name.into(),
+            json!({"http": r.status, "body": r.json_body().unwrap()}),
+        );
     }
     assert_golden("errors.json", &Value::Object(all));
 }
@@ -260,13 +354,18 @@ async fn callback_sequence_golden() {
     // The final callback equals a fresh query (same structure, same fields).
     let q = query(&f, &id).await;
     let last = seen.last().unwrap();
-    assert_eq!(normalize_callback(&json!({"task": q})), normalize_callback(last));
+    assert_eq!(
+        normalize_callback(&json!({"task": q})),
+        normalize_callback(last)
+    );
 }
 
 #[test]
 fn reference_kinds_keep_content_order() {
     let body: CreateBody = serde_json::from_value(load_golden("create_r2v.body.json")).unwrap();
-    let req = CreateEndpoint.normalize(body, &NormalizeCtx::new(at(0))).unwrap();
+    let req = CreateEndpoint
+        .normalize(body, &NormalizeCtx::new(at(0)))
+        .unwrap();
     let kinds: Vec<MediaKind> = req.references.iter().map(|r| r.kind).collect();
     assert_eq!(kinds, [MediaKind::Video, MediaKind::Audio]);
 }

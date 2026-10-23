@@ -832,9 +832,7 @@ impl Layer {
                 cap,
                 mask,
             )?,
-            None => {
-                scaled_dot_product_attention_gqa(&q, &k, &v, Some(cfg.attn_scale), Some(mask))?
-            }
+            None => scaled_dot_product_attention_gqa(&q, &k, &v, Some(cfg.attn_scale), Some(mask))?,
         };
         let a = self
             .o
@@ -2577,7 +2575,12 @@ mod tests {
         let gen = weights();
         for (k, s) in &tensors {
             let t = crate::wan::weights::cuda_tensor_shaped(&gen, k, s).unwrap();
-            let bytes: Vec<u8> = t.host_cow().unwrap().iter().flat_map(|v| v.to_le_bytes()).collect();
+            let bytes: Vec<u8> = t
+                .host_cow()
+                .unwrap()
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect();
             w.write(k, &bytes).unwrap();
         }
         w.finish().unwrap();
@@ -2591,9 +2594,13 @@ mod tests {
         let tree = root.join(prequant::DIR_NAME);
         prequant::write_tree(&src, &tree, &cfg, 2, &captured, &Default::default(), "test").unwrap();
         assert!(prequant::check(&src, &tree, 2).is_ok());
-        assert!(prequant::check(&src, &tree, 3).is_err(), "more layers than the tree holds");
         assert!(
-            prequant::write_tree(&src, &tree, &cfg, 2, &captured, &Default::default(), "t").is_err(),
+            prequant::check(&src, &tree, 3).is_err(),
+            "more layers than the tree holds"
+        );
+        assert!(
+            prequant::write_tree(&src, &tree, &cfg, 2, &captured, &Default::default(), "t")
+                .is_err(),
             "an existing tree is never overwritten"
         );
         let opened = prequant::open_tree(&src, 2).unwrap().expect("valid tree");
@@ -2604,8 +2611,12 @@ mod tests {
         assert_eq!(captured, again, "codes and scales byte-identical");
         let ids = [1u32, 3, 0, 2];
         let pos: Vec<u32> = (0..4).collect();
-        let a = quantized.hidden_states(&ids, &pos, &[true; 4], &[2]).unwrap();
-        let b = from_tree.hidden_states(&ids, &pos, &[true; 4], &[2]).unwrap();
+        let a = quantized
+            .hidden_states(&ids, &pos, &[true; 4], &[2])
+            .unwrap();
+        let b = from_tree
+            .hidden_states(&ids, &pos, &[true; 4], &[2])
+            .unwrap();
         assert_eq!(&*a[0].host_cow().unwrap(), &*b[0].host_cow().unwrap());
         // A source that changed size invalidates the tree.
         std::fs::write(src.join("extra.safetensors"), b"x").unwrap();
@@ -2804,8 +2815,11 @@ mod tests {
         let ids = [1u32, 3, 0, 3, 2];
         let h = cfg.hidden;
         let feats = || {
-            CudaTensor::from_vec((0..2 * h).map(|i| (i as f32 * 0.37).sin()).collect(), vec![2, h])
-                .unwrap()
+            CudaTensor::from_vec(
+                (0..2 * h).map(|i| (i as f32 * 0.37).sin()).collect(),
+                vec![2, h],
+            )
+            .unwrap()
         };
         let ctx = |mask: Vec<bool>| MultimodalCtx {
             mrope_positions: (0..ids.len())

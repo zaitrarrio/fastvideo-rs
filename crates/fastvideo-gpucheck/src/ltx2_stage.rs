@@ -707,7 +707,9 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             }
             if !*guided
                 && !*hq
-                && (guidance_scale.is_some() || num_inference_steps.is_some() || negative_prompt.is_some())
+                && (guidance_scale.is_some()
+                    || num_inference_steps.is_some()
+                    || negative_prompt.is_some())
             {
                 return Err(anyhow::anyhow!(
                     "--guidance-scale / --num-inference-steps / --negative-prompt need --guided or --hq"
@@ -844,8 +846,9 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                         .transpose()
                         .map_err(|e| anyhow::anyhow!(e.to_string()))?,
                     guided: guided.then(|| GuidedArgs {
-                        guidance_scale: guidance_scale
-                            .unwrap_or(fastvideo_models::ltx2::guidance::ltx25_video_guider().cfg_scale),
+                        guidance_scale: guidance_scale.unwrap_or(
+                            fastvideo_models::ltx2::guidance::ltx25_video_guider().cfg_scale,
+                        ),
                         steps: *num_inference_steps,
                         negative_prompt: negative_prompt.clone().unwrap_or_default(),
                     }),
@@ -2460,7 +2463,7 @@ fn gen(
                 json!({"samples_per_channel": want, "sample_rate": rate, "channels": a2v::ENCODER_CHANNELS, "source": "driving audio"}),
             )?;
         } else {
-        report.check(
+            report.check(
         ck("gen.wav"),
         wav_bytes == 44 + (want_samples * cfg.vocoder.out_channels * 2) as u64,
         json!({"bytes": wav_bytes}),
@@ -2541,8 +2544,15 @@ fn parse_cond_image(
     Ok(fastvideo_cudarc::ltx2::i2v_encode::ConditioningImage {
         path: PathBuf::from(parts[0]),
         frame_idx,
-        strength: parts.get(2).map_or(Ok(1.0), |v| v.parse()).map_err(|_| bad())?,
-        crf: parts.get(3).map(|v| v.parse()).transpose().map_err(|_| bad())?,
+        strength: parts
+            .get(2)
+            .map_or(Ok(1.0), |v| v.parse())
+            .map_err(|_| bad())?,
+        crf: parts
+            .get(3)
+            .map(|v| v.parse())
+            .transpose()
+            .map_err(|_| bad())?,
     })
 }
 

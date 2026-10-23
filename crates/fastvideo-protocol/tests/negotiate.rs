@@ -376,7 +376,10 @@ fn h3_1080p_tier() {
     // The default and the 768 / 480 tiers are as before.
     let j = nego(&t2v("fasth3", "x"), &caps).unwrap();
     assert_eq!((j.width, j.height, j.post.crop), (1344, 768, None));
-    assert_eq!(at(Ratio::R16_9, 768).unwrap(), (1344, 768, None, (1344, 768)));
+    assert_eq!(
+        at(Ratio::R16_9, 768).unwrap(),
+        (1344, 768, None, (1344, 768))
+    );
     assert_eq!(at(Ratio::R16_9, 480).unwrap(), (832, 480, None, (832, 480)));
     // 1080P.
     for (ratio, gen, out) in [
@@ -393,7 +396,10 @@ fn h3_1080p_tier() {
     }
     // 21:9 is capped by the pixel budget and not cropped.
     let (w, h, crop, _) = at(Ratio::new(21, 9), 1080).unwrap();
-    assert!(w as usize * h as usize <= h3cfg::H3_MAX_PIXELS_1080P && crop.is_none(), "{w}x{h}");
+    assert!(
+        w as usize * h as usize <= h3cfg::H3_MAX_PIXELS_1080P && crop.is_none(),
+        "{w}x{h}"
+    );
     // Exact sizes: 1920x1080 is padded to 1088 and cropped back; 1088x1920
     // canvases are taken as they are; within the trained budget nothing changes.
     let exact = |width: u32, height: u32| {
@@ -407,13 +413,26 @@ fn h3_1080p_tier() {
     assert_eq!(exact(1344, 768).unwrap(), (1344, 768, None));
     for (w, h) in [(1280, 720), (1952, 1088), (2560, 1440), (1921, 1080)] {
         let e = exact(w, h).unwrap_err();
-        assert_eq!((e.kind, e.param.as_deref()), (ErrorKind::InvalidRequest, Some("size")), "{w}x{h}");
+        assert_eq!(
+            (e.kind, e.param.as_deref()),
+            (ErrorKind::InvalidRequest, Some("size")),
+            "{w}x{h}"
+        );
     }
     // Without the tier: 1080 is the H3Refine1080P gap, and 1920x1080 a size error.
     let mut r = t2v("fasth3", "x");
-    r.canvas = CanvasSpec::Aspect { ratio: Ratio::R16_9, short_edge: 1080 };
-    assert_eq!(err_of(nego(&r, &h3())).kind, ErrorKind::Unsupported(GapId::H3Refine1080P));
-    r.canvas = CanvasSpec::Exact { width: 1920, height: 1080 };
+    r.canvas = CanvasSpec::Aspect {
+        ratio: Ratio::R16_9,
+        short_edge: 1080,
+    };
+    assert_eq!(
+        err_of(nego(&r, &h3())).kind,
+        ErrorKind::Unsupported(GapId::H3Refine1080P)
+    );
+    r.canvas = CanvasSpec::Exact {
+        width: 1920,
+        height: 1080,
+    };
     assert_eq!(err_of(nego(&r, &h3())).param.as_deref(), Some("size"));
 }
 
@@ -425,28 +444,62 @@ fn h3_1080p_length_cap_and_the_experimental_flag() {
     caps.canvas = CanvasCaps::h3().with_h3_1080p();
     let req = |short_edge: u32, secs: f64| {
         let mut r = t2v("fasth3", "x");
-        r.canvas = CanvasSpec::Aspect { ratio: Ratio::R16_9, short_edge };
-        r.timing = TimingSpec { length: Length::Seconds { value: secs, snap: Snap::AlignUp }, fps: None };
+        r.canvas = CanvasSpec::Aspect {
+            ratio: Ratio::R16_9,
+            short_edge,
+        };
+        r.timing = TimingSpec {
+            length: Length::Seconds {
+                value: secs,
+                snap: Snap::AlignUp,
+            },
+            fps: None,
+        };
         r
     };
     // Off (the default).
     assert_eq!(nego(&req(1080, 5.0), &caps).unwrap().num_frames, 124);
     let e = err_of(nego(&req(1080, 6.0), &caps));
-    assert_eq!((e.kind, e.param.as_deref()), (ErrorKind::InvalidRequest, Some("duration")), "{e:?}");
-    assert!(e.message.contains("limited to 5 s") && e.message.contains("experimental") && e.message.contains("h3_1080p_long"), "{}", e.message);
+    assert_eq!(
+        (e.kind, e.param.as_deref()),
+        (ErrorKind::InvalidRequest, Some("duration")),
+        "{e:?}"
+    );
+    assert!(
+        e.message.contains("limited to 5 s")
+            && e.message.contains("experimental")
+            && e.message.contains("h3_1080p_long"),
+        "{}",
+        e.message
+    );
     assert!(precheck(&req(1080, 10.0), &caps).is_err());
     assert_eq!(nego(&req(768, 15.0), &caps).unwrap().num_frames, 362);
     // Exact 1920x1080 and a frame count are capped the same way.
     let mut r = req(1080, 5.0);
-    r.canvas = CanvasSpec::Exact { width: 1920, height: 1080 };
-    r.timing = TimingSpec { length: Length::Frames { value: 243, snap: Snap::Exact }, fps: None };
+    r.canvas = CanvasSpec::Exact {
+        width: 1920,
+        height: 1080,
+    };
+    r.timing = TimingSpec {
+        length: Length::Frames {
+            value: 243,
+            snap: Snap::Exact,
+        },
+        fps: None,
+    };
     assert_eq!(err_of(nego(&r, &caps)).param.as_deref(), Some("num_frames"));
     // On.
-    fastvideo_protocol::apply_feature_flags(&mut caps, &|f| f == fastvideo_protocol::FLAG_H3_1080P_LONG);
+    fastvideo_protocol::apply_feature_flags(&mut caps, &|f| {
+        f == fastvideo_protocol::FLAG_H3_1080P_LONG
+    });
     assert_eq!(nego(&req(1080, 10.0), &caps).unwrap().num_frames, 243);
     assert_eq!(nego(&r, &caps).unwrap().num_frames, 243);
     let e = err_of(nego(&req(1080, 11.0), &caps));
-    assert!(e.message.contains("limited to 10 s") && !e.message.contains("experimental"), "{}", e.message);
+    assert!(
+        e.message.contains("limited to 10 s") && !e.message.contains("experimental"),
+        "{}",
+        e.message
+    );
     // Off again: idempotent.
     fastvideo_protocol::apply_feature_flags(&mut caps, &|_| false);
     assert!(nego(&req(1080, 10.0), &caps).is_err());
@@ -573,9 +626,23 @@ fn aspect_canvas_stays_within_the_pixel_budget() {
     };
     assert_eq!(canvas_for_aspect(&c, 16.0 / 9.0, 480), (832, 480));
     assert_eq!(canvas_for_aspect(&c, 9.0 / 16.0, 480), (480, 832));
-    for (w, h) in [(16u32, 9u32), (9, 16), (1, 1), (4, 3), (3, 4), (21, 9), (4, 1), (1, 4), (3, 2), (2, 3)] {
+    for (w, h) in [
+        (16u32, 9u32),
+        (9, 16),
+        (1, 1),
+        (4, 3),
+        (3, 4),
+        (21, 9),
+        (4, 1),
+        (1, 4),
+        (3, 2),
+        (2, 3),
+    ] {
         let (cw, ch) = canvas_for_aspect(&c, w as f64 / h as f64, 480);
-        assert!(u64::from(cw) * u64::from(ch) <= c.max_area, "{w}:{h} -> {cw}x{ch}");
+        assert!(
+            u64::from(cw) * u64::from(ch) <= c.max_area,
+            "{w}:{h} -> {cw}x{ch}"
+        );
         assert!(cw % 16 == 0 && ch % 16 == 0, "{w}:{h} -> {cw}x{ch}");
     }
 }
@@ -606,14 +673,20 @@ fn follow_image() {
     st.keyframes[0].1 = image("f.png", 5000, 1000);
     let (j, notes) = negotiate_noted(&r, &h3(), &st).unwrap();
     assert_eq!((j.width, j.height), (2016, 512));
-    assert!(notes[0].contains("clamped") && notes[0].contains("5000x1000"), "{notes:?}");
+    assert!(
+        notes[0].contains("clamped") && notes[0].contains("5000x1000"),
+        "{notes:?}"
+    );
     st.keyframes[0].1 = image("f.png", 100, 1000);
     let (j, notes) = negotiate_noted(&r, &h3(), &st).unwrap();
     assert_eq!((j.width, j.height), (512, 2016));
     assert!(notes[0].contains("clamped"), "{notes:?}");
     st.keyframes[0].1 = image("f.png", 1920, 1080);
     let (_, notes) = negotiate_noted(&r, &h3(), &st).unwrap();
-    assert_eq!(notes, vec!["canvas: 1344x768 follows the input image (1920x1080)".to_owned()]);
+    assert_eq!(
+        notes,
+        vec!["canvas: 1344x768 follows the input image (1920x1080)".to_owned()]
+    );
 
     // FollowImage on T2V has no image.
     let mut t = t2v("fasth3", "x");
@@ -911,8 +984,20 @@ fn knob_values_validated() {
     assert_eq!(nego(&w, &fastwan()).unwrap().sampling, w.sampling);
     // The reference strengths belong to reference-to-video models only.
     for (s, param) in [
-        (SamplingOverrides { reference_strength: Some(1.0), ..Default::default() }, "reference_strength"),
-        (SamplingOverrides { reference_lora_strength: Some(1.0), ..Default::default() }, "reference_lora_strength"),
+        (
+            SamplingOverrides {
+                reference_strength: Some(1.0),
+                ..Default::default()
+            },
+            "reference_strength",
+        ),
+        (
+            SamplingOverrides {
+                reference_lora_strength: Some(1.0),
+                ..Default::default()
+            },
+            "reference_lora_strength",
+        ),
     ] {
         w.sampling = s;
         assert_eq!(err_of(nego(&w, &fastwan())).param.as_deref(), Some(param));
@@ -1044,7 +1129,11 @@ fn a2v_caps() -> ModelCaps {
     let mut c = ltx25();
     c.tasks.insert(Task::A2V);
     c.frames = FrameGrid::new(8, 1, 9, 481, 121);
-    c.fps = FpsCaps { allowed: vec![24, 25, 48, 50], default: 24, container_only: false };
+    c.fps = FpsCaps {
+        allowed: vec![24, 25, 48, 50],
+        default: 24,
+        container_only: false,
+    };
     c
 }
 
@@ -1074,24 +1163,56 @@ fn a2v_takes_its_length_from_the_audio() {
     // 5.2 s at 24 fps: 124.8 → the longest 8k+1 that fits, 121 (5.04 s).
     let j = negotiate(&a, &c, &with_audio(&a, Some(5.2), Some(44_100))).unwrap();
     assert_eq!((j.task, j.num_frames, j.fps), (Task::A2V, 121, 24));
-    assert_eq!(j.audio_in, Some((AudioRole::Drive, "/stage/audio.wav".into())));
+    assert_eq!(
+        j.audio_in,
+        Some((AudioRole::Drive, "/stage/audio.wav".into()))
+    );
     // The output carries the input audio, at its rate.
-    assert_eq!(j.audio, AudioPlan::Native { rate: 44_100, channels: 2 });
+    assert_eq!(
+        j.audio,
+        AudioPlan::Native {
+            rate: 44_100,
+            channels: 2
+        }
+    );
     // Exactly 5 s: 120 frames fit, 113 is the grid value below.
-    assert_eq!(negotiate(&a, &c, &with_audio(&a, Some(5.0), Some(48_000))).unwrap().num_frames, 113);
+    assert_eq!(
+        negotiate(&a, &c, &with_audio(&a, Some(5.0), Some(48_000)))
+            .unwrap()
+            .num_frames,
+        113
+    );
     // 20 s: 480 → 473; at 25 fps 500 → the grid's 481 ceiling.
-    assert_eq!(negotiate(&a, &c, &with_audio(&a, Some(20.0), Some(48_000))).unwrap().num_frames, 473);
+    assert_eq!(
+        negotiate(&a, &c, &with_audio(&a, Some(20.0), Some(48_000)))
+            .unwrap()
+            .num_frames,
+        473
+    );
     let mut f25 = a.clone();
     f25.timing.fps = Some(25);
-    assert_eq!(negotiate(&f25, &c, &with_audio(&f25, Some(20.0), Some(48_000))).unwrap().num_frames, 481);
+    assert_eq!(
+        negotiate(&f25, &c, &with_audio(&f25, Some(20.0), Some(48_000)))
+            .unwrap()
+            .num_frames,
+        481
+    );
     // An explicit length must fit in the audio.
     let mut s4 = a.clone();
     seconds(&mut s4, 4.0);
-    assert_eq!(negotiate(&s4, &c, &with_audio(&s4, Some(5.2), Some(44_100))).unwrap().num_frames, 97);
+    assert_eq!(
+        negotiate(&s4, &c, &with_audio(&s4, Some(5.2), Some(44_100)))
+            .unwrap()
+            .num_frames,
+        97
+    );
     let mut s6 = a.clone();
     seconds(&mut s6, 6.0);
     assert_eq!(
-        negotiate(&s6, &c, &with_audio(&s6, Some(5.2), Some(44_100))).unwrap_err().param.as_deref(),
+        negotiate(&s6, &c, &with_audio(&s6, Some(5.2), Some(44_100)))
+            .unwrap_err()
+            .param
+            .as_deref(),
         Some("duration")
     );
     // precheck cannot see the audio: the default length passes it.
@@ -1103,7 +1224,12 @@ fn a2v_validates_the_audio() {
     let c = a2v_caps();
     let a = a2v_req("x");
     let param = |st: StagedInputs| negotiate(&a, &c, &st).unwrap_err();
-    for (d, r) in [(Some(1.5), Some(48_000)), (Some(25.0), Some(48_000)), (Some(8.0), Some(4_000)), (Some(8.0), Some(384_000))] {
+    for (d, r) in [
+        (Some(1.5), Some(48_000)),
+        (Some(25.0), Some(48_000)),
+        (Some(8.0), Some(4_000)),
+        (Some(8.0), Some(384_000)),
+    ] {
         let e = param(with_audio(&a, d, r));
         assert_eq!(e.param.as_deref(), Some("audio_url"), "{d:?} {r:?}: {e:?}");
         assert_eq!(e.kind, ErrorKind::InvalidRequest);
@@ -1115,12 +1241,18 @@ fn a2v_validates_the_audio() {
     pro.audio_in.as_mut().unwrap().max_s = Some(10);
     assert!(negotiate(&pro, &c, &with_audio(&pro, Some(10.0), Some(48_000))).is_ok());
     assert_eq!(
-        negotiate(&pro, &c, &with_audio(&pro, Some(12.0), Some(48_000))).unwrap_err().param.as_deref(),
+        negotiate(&pro, &c, &with_audio(&pro, Some(12.0), Some(48_000)))
+            .unwrap_err()
+            .param
+            .as_deref(),
         Some("audio_url")
     );
     for (d, r) in [(None, Some(48_000)), (Some(8.0), None)] {
         let e = param(with_audio(&a, d, r));
-        assert_eq!((e.kind, e.param.as_deref()), (ErrorKind::UnsupportedMedia, Some("audio_url")));
+        assert_eq!(
+            (e.kind, e.param.as_deref()),
+            (ErrorKind::UnsupportedMedia, Some("audio_url"))
+        );
     }
     // An image as the audio is refused by type.
     let mut st = with_audio(&a, Some(8.0), Some(48_000));
@@ -1138,13 +1270,22 @@ fn a2v_inputs_prompt_and_canvas() {
     // A soundtrack role is not a driving audio.
     let mut target = a2v_req("x");
     target.audio_in.as_mut().unwrap().role = AudioRole::TargetSoundtrack;
-    assert_eq!(err_of(nego(&target, &c)).param.as_deref(), Some("audio_url"));
+    assert_eq!(
+        err_of(nego(&target, &c)).param.as_deref(),
+        Some("audio_url")
+    );
     // No image and no prompt.
-    assert_eq!(err_of(nego(&a2v_req(" "), &c)).param.as_deref(), Some("prompt"));
+    assert_eq!(
+        err_of(nego(&a2v_req(" "), &c)).param.as_deref(),
+        Some("prompt")
+    );
     // With a first-frame image the prompt may be empty and the canvas
     // follows the image (portrait 1080x1920 → the 1080 tier, 1088 wide).
     let mut i = a2v_req("");
-    i.keyframes = vec![Keyframe { at: Anchor::First, image: url("https://e.x/f.png") }];
+    i.keyframes = vec![Keyframe {
+        at: Anchor::First,
+        image: url("https://e.x/f.png"),
+    }];
     let mut st = stage_all(&i);
     st.keyframes[0].1 = image("kf0.png", 1080, 1920);
     let j = negotiate(&i, &c, &st).unwrap();
@@ -1152,28 +1293,55 @@ fn a2v_inputs_prompt_and_canvas() {
     assert_eq!(j.output_size(), (1080, 1920));
     // The LTX API default: 1920x1080, 1080x1920 for a portrait image.
     let mut o = i.clone();
-    o.canvas = CanvasSpec::Oriented { width: 1920, height: 1080 };
+    o.canvas = CanvasSpec::Oriented {
+        width: 1920,
+        height: 1080,
+    };
     assert_eq!(negotiate(&o, &c, &st).unwrap().output_size(), (1080, 1920));
     let mut land = stage_all(&o);
     land.keyframes[0].1 = image("kf0.png", 832, 480);
-    assert_eq!(negotiate(&o, &c, &land).unwrap().output_size(), (1920, 1080));
+    assert_eq!(
+        negotiate(&o, &c, &land).unwrap().output_size(),
+        (1920, 1080)
+    );
     let mut no_image = a2v_req("x");
-    no_image.canvas = CanvasSpec::Oriented { width: 1920, height: 1080 };
+    no_image.canvas = CanvasSpec::Oriented {
+        width: 1920,
+        height: 1080,
+    };
     let j = negotiate(&no_image, &c, &stage_all(&no_image)).unwrap();
-    assert_eq!((j.width, j.height, j.output_size()), (1920, 1088, (1920, 1080)));
+    assert_eq!(
+        (j.width, j.height, j.output_size()),
+        (1920, 1088, (1920, 1080))
+    );
     // A last frame needs a first one; references are not inputs of A2V.
     let mut last = a2v_req("x");
-    last.keyframes = vec![Keyframe { at: Anchor::Last, image: url("https://e.x/l.png") }];
+    last.keyframes = vec![Keyframe {
+        at: Anchor::Last,
+        image: url("https://e.x/l.png"),
+    }];
     assert_eq!(err_of(nego(&last, &c)).param.as_deref(), Some("task"));
     let mut fl = i.clone();
-    fl.keyframes.push(Keyframe { at: Anchor::Last, image: url("https://e.x/l.png") });
+    fl.keyframes.push(Keyframe {
+        at: Anchor::Last,
+        image: url("https://e.x/l.png"),
+    });
     assert!(nego(&fl, &c).is_ok());
     let mut refs = a2v_req("x");
-    refs.references = vec![Reference { kind: MediaKind::Image, media: url("https://e.x/r.png") }];
+    refs.references = vec![Reference {
+        kind: MediaKind::Image,
+        media: url("https://e.x/r.png"),
+    }];
     assert_eq!(err_of(nego(&refs, &c)).param.as_deref(), Some("task"));
     // A model without A2V: LTX answers the endpoint gap, others the task.
-    assert_eq!(gap_of(nego(&a2v_req("x"), &ltx23())), Some(GapId::LtxEndpoint));
-    assert_eq!(err_of(nego(&a2v_req("x"), &h3())).param.as_deref(), Some("task"));
+    assert_eq!(
+        gap_of(nego(&a2v_req("x"), &ltx23())),
+        Some(GapId::LtxEndpoint)
+    );
+    assert_eq!(
+        err_of(nego(&a2v_req("x"), &h3())).param.as_deref(),
+        Some("task")
+    );
 }
 
 // ---- rule order, precheck, model resolution -----------------------------------------------
@@ -1340,7 +1508,10 @@ fn h3_tier(id: &str, ref2va_only: bool, tier: Tier) -> ModelCaps {
 }
 
 fn image_ref(u: &str) -> Reference {
-    Reference { kind: MediaKind::Image, media: url(u) }
+    Reference {
+        kind: MediaKind::Image,
+        media: url(u),
+    }
 }
 
 #[test]
@@ -1349,10 +1520,18 @@ fn ref2v_routes_to_the_tier_companion() {
     let companion = h3_tier("h3-ref2v-max", true, Tier::Max);
     let turbo = h3_tier("fasth3", false, Tier::Turbo);
     let untiered = ModelCaps::h3("plain", false);
-    let models = [companion.clone(), base.clone(), turbo.clone(), untiered.clone()];
+    let models = [
+        companion.clone(),
+        base.clone(),
+        turbo.clone(),
+        untiered.clone(),
+    ];
     // The tier resolves to its text-to-video model even when the companion
     // comes first.
-    assert_eq!(resolve_tier(Family::H3, Tier::Max, &models).unwrap().id, base.id);
+    assert_eq!(
+        resolve_tier(Family::H3, Tier::Max, &models).unwrap().id,
+        base.id
+    );
     assert_eq!(route_task(&base, Task::Ref2V, &models).id, companion.id);
     assert_eq!(route_task(&base, Task::T2V, &models).id, base.id);
     // No companion at that tier, or an untiered model: unchanged, so
@@ -1374,7 +1553,11 @@ fn ref2v_clip_lengths_follow_the_minimax_limits() {
             MediaKind::Video => ("video/mp4", format!("v{i}.mp4")),
             _ => ("audio/wav", format!("a{i}.wav")),
         };
-        let mut m = staged(mime, (kind == MediaKind::Video).then_some((1280, 720)), &name);
+        let mut m = staged(
+            mime,
+            (kind == MediaKind::Video).then_some((1280, 720)),
+            &name,
+        );
         m.probe.duration_s = Some(secs);
         (kind, m)
     };
@@ -1383,21 +1566,45 @@ fn ref2v_clip_lengths_follow_the_minimax_limits() {
         r.task = Task::Ref2V;
         r.references = clips
             .iter()
-            .map(|(k, _)| Reference { kind: *k, media: url("https://e.x/c") })
+            .map(|(k, _)| Reference {
+                kind: *k,
+                media: url("https://e.x/c"),
+            })
             .collect();
-        let staged = StagedInputs { references: clips, ..StagedInputs::default() };
+        let staged = StagedInputs {
+            references: clips,
+            ..StagedInputs::default()
+        };
         negotiate(&r, &caps, &staged)
     };
-    assert!(run(vec![clip(MediaKind::Video, 5.0, 0), clip(MediaKind::Audio, 15.02, 1)]).is_ok());
-    assert!(run(vec![clip(MediaKind::Video, 7.5, 0), clip(MediaKind::Video, 7.5, 1)]).is_ok());
+    assert!(run(vec![
+        clip(MediaKind::Video, 5.0, 0),
+        clip(MediaKind::Audio, 15.02, 1)
+    ])
+    .is_ok());
+    assert!(run(vec![
+        clip(MediaKind::Video, 7.5, 0),
+        clip(MediaKind::Video, 7.5, 1)
+    ])
+    .is_ok());
     for bad in [
         vec![clip(MediaKind::Video, 1.5, 0)],
         vec![clip(MediaKind::Video, 16.0, 0)],
-        vec![clip(MediaKind::Video, 8.0, 0), clip(MediaKind::Video, 8.0, 1)],
-        vec![clip(MediaKind::Video, 4.0, 0), clip(MediaKind::Audio, 9.0, 1), clip(MediaKind::Audio, 9.0, 2)],
+        vec![
+            clip(MediaKind::Video, 8.0, 0),
+            clip(MediaKind::Video, 8.0, 1),
+        ],
+        vec![
+            clip(MediaKind::Video, 4.0, 0),
+            clip(MediaKind::Audio, 9.0, 1),
+            clip(MediaKind::Audio, 9.0, 2),
+        ],
     ] {
         let e = run(bad).unwrap_err();
-        assert_eq!((e.kind, e.param.as_deref()), (ErrorKind::InvalidRequest, Some("references")));
+        assert_eq!(
+            (e.kind, e.param.as_deref()),
+            (ErrorKind::InvalidRequest, Some("references"))
+        );
     }
 }
 
@@ -1408,17 +1615,26 @@ fn ref2v_adaptive_canvas_follows_the_first_image_else_the_first_video() {
     r.task = Task::Ref2V;
     r.canvas = CanvasSpec::FollowImage { short_edge: 768 };
     r.references = vec![
-        Reference { kind: MediaKind::Video, media: url("https://e.x/v.mp4") },
+        Reference {
+            kind: MediaKind::Video,
+            media: url("https://e.x/v.mp4"),
+        },
         image_ref("https://e.x/i.png"),
     ];
     let mut staged = stage_all(&r);
     staged.references[1].1 = image("i.png", 768, 1344);
     let j = negotiate(&r, &caps, &staged).unwrap();
-    assert!(j.height > j.width, "the portrait image wins over the landscape video");
+    assert!(
+        j.height > j.width,
+        "the portrait image wins over the landscape video"
+    );
     r.references.truncate(1);
     staged.references.truncate(1);
     let j = negotiate(&r, &caps, &staged).unwrap();
-    assert!(j.width > j.height, "video only: the video's landscape canvas");
+    assert!(
+        j.width > j.height,
+        "video only: the video's landscape canvas"
+    );
 }
 
 // ---- image-conditioned requests with no size follow the image -----------------------
@@ -1426,7 +1642,10 @@ fn ref2v_adaptive_canvas_follows_the_first_image_else_the_first_video() {
 fn i2v_default(model: &str) -> GenerationRequest {
     let mut r = t2v(model, "x");
     r.task = Task::I2V;
-    r.keyframes = vec![Keyframe { at: Anchor::First, image: url("https://e.x/f.png") }];
+    r.keyframes = vec![Keyframe {
+        at: Anchor::First,
+        image: url("https://e.x/f.png"),
+    }];
     r
 }
 
@@ -1439,7 +1658,10 @@ fn with_first(r: &GenerationRequest, w: u32, h: u32) -> StagedInputs {
 #[test]
 fn model_default_i2v_follows_the_image() {
     let r = i2v_default("fasth3");
-    assert_eq!(effective_canvas(&r, &h3()), CanvasSpec::FollowImage { short_edge: 768 });
+    assert_eq!(
+        effective_canvas(&r, &h3()),
+        CanvasSpec::FollowImage { short_edge: 768 }
+    );
     assert!(precheck(&r, &h3()).is_ok());
     for ((w, h), want) in [
         ((1920, 1080), (1344, 768)),
@@ -1454,7 +1676,10 @@ fn model_default_i2v_follows_the_image() {
     // Keyframes with only a last frame follow that frame.
     let mut k = t2v("fasth3", "x");
     k.task = Task::Keyframes;
-    k.keyframes = vec![Keyframe { at: Anchor::Last, image: url("https://e.x/l.png") }];
+    k.keyframes = vec![Keyframe {
+        at: Anchor::Last,
+        image: url("https://e.x/l.png"),
+    }];
     let j = negotiate(&k, &h3(), &with_first(&k, 720, 1280)).unwrap();
     assert!(j.height > j.width);
     // Text-to-video keeps 16:9.
@@ -1462,10 +1687,16 @@ fn model_default_i2v_follows_the_image() {
     assert_eq!((j.width, j.height), (1344, 768));
     // An explicit aspect or size wins over the image.
     let mut e = r.clone();
-    e.canvas = CanvasSpec::Aspect { ratio: Ratio::R16_9, short_edge: 768 };
+    e.canvas = CanvasSpec::Aspect {
+        ratio: Ratio::R16_9,
+        short_edge: 768,
+    };
     let j = negotiate(&e, &h3(), &with_first(&e, 1080, 1920)).unwrap();
     assert_eq!((j.width, j.height), (1344, 768));
-    e.canvas = CanvasSpec::Exact { width: 960, height: 960 };
+    e.canvas = CanvasSpec::Exact {
+        width: 960,
+        height: 960,
+    };
     let j = negotiate(&e, &h3(), &with_first(&e, 1080, 1920)).unwrap();
     assert_eq!((j.width, j.height), (960, 960));
 }
@@ -1475,7 +1706,10 @@ fn model_default_ltx_i2v_follows_the_image_within_the_budget() {
     let mut caps = ltx23();
     caps.tasks.insert(Task::Keyframes);
     let mut r = i2v_default("ltx");
-    r.timing.length = Length::Frames { value: 145, snap: Snap::Exact };
+    r.timing.length = Length::Frames {
+        value: 145,
+        snap: Snap::Exact,
+    };
     for ((w, h), gen, out) in [
         ((1920, 1080), (1920, 1088), (1920, 1080)),
         ((1080, 1920), (1088, 1920), (1080, 1920)),
@@ -1483,7 +1717,11 @@ fn model_default_ltx_i2v_follows_the_image_within_the_budget() {
         ((1080, 1350), (1088, 1408), (1080, 1350)),
     ] {
         let j = negotiate(&r, &caps, &with_first(&r, w, h)).unwrap();
-        assert_eq!(((j.width, j.height), j.output_size()), (gen, out), "{w}x{h}");
+        assert_eq!(
+            ((j.width, j.height), j.output_size()),
+            (gen, out),
+            "{w}x{h}"
+        );
     }
     // 4:1 at the 2160 tier would be 8640x2160: scaled into the pixel budget.
     r.canvas = CanvasSpec::FollowImage { short_edge: 2160 };
@@ -1491,7 +1729,10 @@ fn model_default_ltx_i2v_follows_the_image_within_the_budget() {
     assert!(u64::from(j.width) * u64::from(j.height) <= caps.canvas.max_area);
     assert_eq!((j.width % 64, j.height % 64), (0, 0));
     let (ow, oh) = j.output_size();
-    assert!((f64::from(ow) / f64::from(oh) - 4.0).abs() < 0.1, "{ow}x{oh}");
+    assert!(
+        (f64::from(ow) / f64::from(oh) - 4.0).abs() < 0.1,
+        "{ow}x{oh}"
+    );
     assert!(notes[0].contains("clamped"), "{notes:?}");
 }
 
@@ -1505,7 +1746,10 @@ fn model_default_ref2v_follows_the_image_on_h3_only() {
     let j = negotiate(&r, &h3_ref2va(), &st).unwrap();
     assert_eq!((j.width, j.height), (768, 1344));
     // Video-only references keep the 16:9 default.
-    r.references = vec![Reference { kind: MediaKind::Video, media: url("https://e.x/v.mp4") }];
+    r.references = vec![Reference {
+        kind: MediaKind::Video,
+        media: url("https://e.x/v.mp4"),
+    }];
     assert_eq!(effective_canvas(&r, &h3_ref2va()), CanvasSpec::ModelDefault);
     // LTX reference-to-video: the reference is a sheet, not a frame.
     let mut ltx = ltx23();
@@ -1529,7 +1773,10 @@ fn edit_req(op: EditOp) -> GenerationRequest {
         EditOp::Retake { .. } => Task::Retake,
         EditOp::Extend { .. } => Task::Extend,
     };
-    r.edit = Some(VideoEdit { video: url("https://e.x/v.mp4"), op });
+    r.edit = Some(VideoEdit {
+        video: url("https://e.x/v.mp4"),
+        op,
+    });
     r
 }
 
@@ -1540,11 +1787,19 @@ fn with_source(req: &GenerationRequest, src: StagedMedia) -> StagedInputs {
 }
 
 fn retake(start_s: f64, duration_s: f64, mode: RetakeMode) -> GenerationRequest {
-    edit_req(EditOp::Retake { start_s, duration_s, mode })
+    edit_req(EditOp::Retake {
+        start_s,
+        duration_s,
+        mode,
+    })
 }
 
 fn extend(duration_s: f64, at: ExtendAt, context_s: Option<f64>) -> GenerationRequest {
-    edit_req(EditOp::Extend { duration_s, at, context_s })
+    edit_req(EditOp::Extend {
+        duration_s,
+        at,
+        context_s,
+    })
 }
 
 #[test]
@@ -1552,32 +1807,82 @@ fn retake_follows_the_source() {
     let c = edit_caps();
     let r = retake(1.0, 2.0, RetakeMode::ReplaceAudioAndVideo);
     // 768x512, 121 frames at 24 fps with audio: the window is the whole clip.
-    let j = negotiate(&r, &c, &with_source(&r, source_video(768, 512, 24.0, 121, true))).unwrap();
-    assert_eq!((j.width, j.height, j.num_frames, j.fps), (768, 512, 121, 24));
+    let j = negotiate(
+        &r,
+        &c,
+        &with_source(&r, source_video(768, 512, 24.0, 121, true)),
+    )
+    .unwrap();
+    assert_eq!(
+        (j.width, j.height, j.num_frames, j.fps),
+        (768, 512, 121, 24)
+    );
     let e = j.edit.as_ref().unwrap();
-    assert_eq!((e.window_start, e.window_frames, e.source_audio), (0, 121, true));
-    assert_eq!(e.op, ResolvedEditOp::Retake { start_s: 1.0, end_s: 3.0, video: true, audio: true });
+    assert_eq!(
+        (e.window_start, e.window_frames, e.source_audio),
+        (0, 121, true)
+    );
+    assert_eq!(
+        e.op,
+        ResolvedEditOp::Retake {
+            start_s: 1.0,
+            end_s: 3.0,
+            video: true,
+            audio: true
+        }
+    );
     assert_eq!(j.output_frames(), 121);
     // 1080p at 30 fps, 125 frames: 1920x1056, 121 frames (the last 4 dropped),
     // the window clamped to the clip.
     let r = retake(3.0, 20.0, RetakeMode::ReplaceVideo);
-    let (j, notes) = negotiate_noted(&r, &c, &with_source(&r, source_video(1920, 1080, 30.0, 125, true))).unwrap();
-    assert_eq!((j.width, j.height, j.num_frames, j.fps), (1920, 1056, 121, 30));
+    let (j, notes) = negotiate_noted(
+        &r,
+        &c,
+        &with_source(&r, source_video(1920, 1080, 30.0, 125, true)),
+    )
+    .unwrap();
+    assert_eq!(
+        (j.width, j.height, j.num_frames, j.fps),
+        (1920, 1056, 121, 30)
+    );
     assert_eq!(
         j.edit.as_ref().unwrap().op,
-        ResolvedEditOp::Retake { start_s: 3.0, end_s: 121.0 / 30.0, video: true, audio: false }
+        ResolvedEditOp::Retake {
+            start_s: 3.0,
+            end_s: 121.0 / 30.0,
+            video: true,
+            audio: false
+        }
     );
     assert!(notes.iter().any(|n| n.contains("dropped")), "{notes:?}");
     // 29.97 fps is written at 30 fps, the model runs at the exact rate.
-    let j = negotiate(&r, &c, &with_source(&r, source_video(640, 360, 30000.0 / 1001.0, 97, false))).unwrap();
+    let j = negotiate(
+        &r,
+        &c,
+        &with_source(&r, source_video(640, 360, 30000.0 / 1001.0, 97, false)),
+    )
+    .unwrap();
     assert_eq!((j.width, j.height, j.fps), (640, 352, 30));
     assert!((j.edit.unwrap().source_fps - 29.97).abs() < 1e-2);
     // 4K is scaled into the one-stage budget; an exact size can only shrink.
-    let j = negotiate(&r, &c, &with_source(&r, source_video(3840, 2160, 24.0, 97, true))).unwrap();
+    let j = negotiate(
+        &r,
+        &c,
+        &with_source(&r, source_video(3840, 2160, 24.0, 97, true)),
+    )
+    .unwrap();
     assert!(u64::from(j.width * j.height) <= EDIT_MAX_PIXELS && j.width % 32 == 0);
     let mut small = r.clone();
-    small.canvas = CanvasSpec::Exact { width: 1920, height: 1080 };
-    let j = negotiate(&small, &c, &with_source(&small, source_video(768, 512, 24.0, 97, true))).unwrap();
+    small.canvas = CanvasSpec::Exact {
+        width: 1920,
+        height: 1080,
+    };
+    let j = negotiate(
+        &small,
+        &c,
+        &with_source(&small, source_video(768, 512, 24.0, 97, true)),
+    )
+    .unwrap();
     assert_eq!((j.width, j.height), (768, 512));
 }
 
@@ -1585,19 +1890,39 @@ fn retake_follows_the_source() {
 fn retake_refusals_name_what_is_valid() {
     let c = edit_caps();
     let src = || source_video(768, 512, 24.0, 121, true);
-    let refuse = |r: GenerationRequest, s: StagedMedia| negotiate(&r, &c, &with_source(&r, s)).unwrap_err();
+    let refuse =
+        |r: GenerationRequest, s: StagedMedia| negotiate(&r, &c, &with_source(&r, s)).unwrap_err();
     // Past the end, too long a source, too short, a bad rate.
     let e = refuse(retake(5.1, 2.0, RetakeMode::default()), src());
     assert_eq!(e.param.as_deref(), Some("start_time"));
-    let e = refuse(retake(0.0, 2.0, RetakeMode::default()), source_video(768, 512, 24.0, 600, true));
+    let e = refuse(
+        retake(0.0, 2.0, RetakeMode::default()),
+        source_video(768, 512, 24.0, 600, true),
+    );
     assert!(e.message.contains("at most 505 frames"), "{}", e.message);
-    let e = refuse(retake(0.0, 2.0, RetakeMode::default()), source_video(768, 512, 24.0, 8, true));
+    let e = refuse(
+        retake(0.0, 2.0, RetakeMode::default()),
+        source_video(768, 512, 24.0, 8, true),
+    );
     assert!(e.message.contains("at least 9 frames"), "{}", e.message);
-    let e = refuse(retake(0.0, 2.0, RetakeMode::default()), source_video(768, 512, 120.0, 121, true));
+    let e = refuse(
+        retake(0.0, 2.0, RetakeMode::default()),
+        source_video(768, 512, 120.0, 121, true),
+    );
     assert_eq!(e.param.as_deref(), Some("video_url"));
     // Bad numbers, a length or fps set, a missing or mistyped video.
-    assert_eq!(err_of(nego(&retake(0.0, 1.0, RetakeMode::default()), &c)).param.as_deref(), Some("duration"));
-    assert_eq!(err_of(nego(&retake(-1.0, 2.0, RetakeMode::default()), &c)).param.as_deref(), Some("start_time"));
+    assert_eq!(
+        err_of(nego(&retake(0.0, 1.0, RetakeMode::default()), &c))
+            .param
+            .as_deref(),
+        Some("duration")
+    );
+    assert_eq!(
+        err_of(nego(&retake(-1.0, 2.0, RetakeMode::default()), &c))
+            .param
+            .as_deref(),
+        Some("start_time")
+    );
     let mut r = retake(0.0, 2.0, RetakeMode::default());
     r.timing.fps = Some(24);
     assert_eq!(err_of(nego(&r, &c)).param.as_deref(), Some("fps"));
@@ -1606,34 +1931,56 @@ fn retake_refusals_name_what_is_valid() {
     assert_eq!(err_of(nego(&r, &c)).param.as_deref(), Some("duration"));
     let mut r = retake(0.0, 2.0, RetakeMode::default());
     r.edit = None;
-    assert_eq!(precheck(&r, &c).unwrap_err().param.as_deref(), Some("video_url"));
+    assert_eq!(
+        precheck(&r, &c).unwrap_err().param.as_deref(),
+        Some("video_url")
+    );
     let r = retake(0.0, 2.0, RetakeMode::default());
     let mut st = with_source(&r, src());
     st.video_in.as_mut().unwrap().mime = "image/png".into();
-    assert_eq!(negotiate(&r, &c, &st).unwrap_err().param.as_deref(), Some("video_url"));
+    assert_eq!(
+        negotiate(&r, &c, &st).unwrap_err().param.as_deref(),
+        Some("video_url")
+    );
     // A model without the edits answers the LTX endpoint gap.
-    assert_eq!(gap_of(nego(&retake(0.0, 2.0, RetakeMode::default()), &ltx25())), Some(GapId::LtxEndpoint));
+    assert_eq!(
+        gap_of(nego(&retake(0.0, 2.0, RetakeMode::default()), &ltx25())),
+        Some(GapId::LtxEndpoint)
+    );
     // A source video on another task is refused.
     let mut t = t2v("ltx", "x");
     t.edit = retake(0.0, 2.0, RetakeMode::default()).edit;
-    assert_eq!(precheck(&t, &c).unwrap_err().param.as_deref(), Some("video_url"));
+    assert_eq!(
+        precheck(&t, &c).unwrap_err().param.as_deref(),
+        Some("video_url")
+    );
 }
 
 #[test]
 fn retake_takes_new_window_audio_with_replace_video() {
     let c = edit_caps();
     let mut r = retake(1.0, 2.0, RetakeMode::ReplaceVideo);
-    r.audio_in = Some(AudioInput { media: url("https://e.x/dub.wav"), role: AudioRole::Dub, max_s: None });
+    r.audio_in = Some(AudioInput {
+        media: url("https://e.x/dub.wav"),
+        role: AudioRole::Dub,
+        max_s: None,
+    });
     let mut st = with_source(&r, source_video(768, 512, 24.0, 121, true));
     st.audio_in.as_mut().unwrap().probe.duration_s = Some(2.0);
     let j = negotiate(&r, &c, &st).unwrap();
     assert_eq!(j.audio_in.as_ref().map(|a| a.0), Some(AudioRole::Dub));
     // Shorter than the window, or on another mode.
     st.audio_in.as_mut().unwrap().probe.duration_s = Some(1.5);
-    assert_eq!(negotiate(&r, &c, &st).unwrap_err().param.as_deref(), Some("audio_url"));
+    assert_eq!(
+        negotiate(&r, &c, &st).unwrap_err().param.as_deref(),
+        Some("audio_url")
+    );
     let mut both = r.clone();
     both.edit = retake(1.0, 2.0, RetakeMode::ReplaceAudioAndVideo).edit;
-    assert_eq!(precheck(&both, &c).unwrap_err().param.as_deref(), Some("retake_mode"));
+    assert_eq!(
+        precheck(&both, &c).unwrap_err().param.as_deref(),
+        Some("retake_mode")
+    );
     // A dub is a retake input only.
     let mut x = extend(2.0, ExtendAt::End, None);
     x.audio_in = r.audio_in.clone();
@@ -1645,41 +1992,108 @@ fn extend_adds_whole_latent_frames_and_keeps_the_rest_of_the_source() {
     let c = edit_caps();
     // 5 s at 24 fps (120 frames) after a 121-frame source: all of it fits.
     let r = extend(5.0, ExtendAt::End, None);
-    let j = negotiate(&r, &c, &with_source(&r, source_video(768, 512, 24.0, 121, true))).unwrap();
+    let j = negotiate(
+        &r,
+        &c,
+        &with_source(&r, source_video(768, 512, 24.0, 121, true)),
+    )
+    .unwrap();
     assert_eq!(j.num_frames, 241);
     let e = j.edit.as_ref().unwrap();
     assert_eq!((e.window_start, e.window_frames), (0, 121));
-    assert_eq!(e.op, ResolvedEditOp::Extend { frames: 120, at: ExtendAt::End });
-    assert_eq!((e.prefix_frames(), e.suffix_frames(), j.output_frames()), (0, 0, 241));
+    assert_eq!(
+        e.op,
+        ResolvedEditOp::Extend {
+            frames: 120,
+            at: ExtendAt::End
+        }
+    );
+    assert_eq!(
+        (e.prefix_frames(), e.suffix_frames(), j.output_frames()),
+        (0, 0, 241)
+    );
     // A 20 s source with 5 s more: the context is the last 385 frames that
     // fit in 505, the first 95 source frames are copied in front.
     let r = extend(5.0, ExtendAt::End, None);
-    let j = negotiate(&r, &c, &with_source(&r, source_video(768, 512, 24.0, 480, true))).unwrap();
+    let j = negotiate(
+        &r,
+        &c,
+        &with_source(&r, source_video(768, 512, 24.0, 480, true)),
+    )
+    .unwrap();
     let e = j.edit.as_ref().unwrap();
-    assert_eq!((e.window_start, e.window_frames, j.num_frames), (95, 385, 505));
+    assert_eq!(
+        (e.window_start, e.window_frames, j.num_frames),
+        (95, 385, 505)
+    );
     assert_eq!(j.output_frames(), 480 + 120);
     // 20 s more at 24 fps keeps 25 frames of context (fal / the LTX API: 505).
     let r = extend(20.0, ExtendAt::End, None);
-    let j = negotiate(&r, &c, &with_source(&r, source_video(768, 512, 24.0, 121, true))).unwrap();
-    assert_eq!((j.edit.as_ref().unwrap().window_frames, j.num_frames), (25, 505));
+    let j = negotiate(
+        &r,
+        &c,
+        &with_source(&r, source_video(768, 512, 24.0, 121, true)),
+    )
+    .unwrap();
+    assert_eq!(
+        (j.edit.as_ref().unwrap().window_frames, j.num_frames),
+        (25, 505)
+    );
     // An explicit context, extended at the start: the rest follows the clip.
     let r = extend(2.0, ExtendAt::Start, Some(3.0));
-    let j = negotiate(&r, &c, &with_source(&r, source_video(768, 512, 25.0, 250, false))).unwrap();
+    let j = negotiate(
+        &r,
+        &c,
+        &with_source(&r, source_video(768, 512, 25.0, 250, false)),
+    )
+    .unwrap();
     let e = j.edit.as_ref().unwrap();
     // 2 s at 25 fps = 50 → 56 frames; 3 s = 75 → 73 frames of context.
-    assert_eq!((e.window_start, e.window_frames, j.num_frames), (0, 73, 129));
-    assert_eq!((e.prefix_frames(), e.suffix_frames(), j.output_frames()), (0, 177, 56 + 250));
-    assert_eq!(e.op, ResolvedEditOp::Extend { frames: 56, at: ExtendAt::Start });
+    assert_eq!(
+        (e.window_start, e.window_frames, j.num_frames),
+        (0, 73, 129)
+    );
+    assert_eq!(
+        (e.prefix_frames(), e.suffix_frames(), j.output_frames()),
+        (0, 177, 56 + 250)
+    );
+    assert_eq!(
+        e.op,
+        ResolvedEditOp::Extend {
+            frames: 56,
+            at: ExtendAt::Start
+        }
+    );
     // Refusals: no room for context (20 s at 25 fps is 504 frames), bad
     // context, short or long sources.
     let r = extend(20.0, ExtendAt::End, None);
-    let e = negotiate(&r, &c, &with_source(&r, source_video(768, 512, 25.0, 121, true))).unwrap_err();
+    let e = negotiate(
+        &r,
+        &c,
+        &with_source(&r, source_video(768, 512, 25.0, 121, true)),
+    )
+    .unwrap_err();
     assert_eq!(e.param.as_deref(), Some("duration"));
     assert!(e.message.contains("at most"), "{}", e.message);
-    assert_eq!(err_of(nego(&extend(2.0, ExtendAt::End, Some(0.5)), &c)).param.as_deref(), Some("context"));
+    assert_eq!(
+        err_of(nego(&extend(2.0, ExtendAt::End, Some(0.5)), &c))
+            .param
+            .as_deref(),
+        Some("context")
+    );
     let r = extend(2.0, ExtendAt::End, None);
-    let e = negotiate(&r, &c, &with_source(&r, source_video(768, 512, 24.0, 5, true))).unwrap_err();
+    let e = negotiate(
+        &r,
+        &c,
+        &with_source(&r, source_video(768, 512, 24.0, 5, true)),
+    )
+    .unwrap_err();
     assert!(e.message.contains("at least 9 frames"), "{}", e.message);
-    let e = negotiate(&r, &c, &with_source(&r, source_video(768, 512, 24.0, 24 * 61, true))).unwrap_err();
+    let e = negotiate(
+        &r,
+        &c,
+        &with_source(&r, source_video(768, 512, 24.0, 24 * 61, true)),
+    )
+    .unwrap_err();
     assert!(e.message.contains("at most 60 s"), "{}", e.message);
 }

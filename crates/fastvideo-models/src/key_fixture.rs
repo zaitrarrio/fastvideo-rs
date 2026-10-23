@@ -30,7 +30,10 @@ pub fn parse_fixture(text: &str) -> Result<BTreeMap<String, (String, Vec<usize>)
         } else {
             shape
                 .split('x')
-                .map(|d| d.parse::<usize>().map_err(|e| format!("line {}: {e}", n + 1)))
+                .map(|d| {
+                    d.parse::<usize>()
+                        .map_err(|e| format!("line {}: {e}", n + 1))
+                })
                 .collect::<Result<Vec<_>, _>>()?
         };
         out.insert(key.to_string(), (dtype.to_string(), dims));
@@ -50,15 +53,17 @@ pub fn diff_against(
     for (k, shape) in spec {
         match header.get(k) {
             None => problems.push(format!("loader reads {k} {shape:?}; not in the checkpoint")),
-            Some((_, s)) if s != shape => {
-                problems.push(format!("{k}: loader expects {shape:?}, checkpoint has {s:?}"))
-            }
+            Some((_, s)) if s != shape => problems.push(format!(
+                "{k}: loader expects {shape:?}, checkpoint has {s:?}"
+            )),
             Some(_) => {}
         }
     }
     for (k, (_, s)) in header {
         if filter(k) && !spec.contains_key(k) {
-            problems.push(format!("checkpoint has {k} {s:?}; the loader never reads it"));
+            problems.push(format!(
+                "checkpoint has {k} {s:?}; the loader never reads it"
+            ));
         }
     }
     problems

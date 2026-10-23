@@ -70,11 +70,18 @@ pub fn nearest_ratio(width: u32, height: u32) -> &'static str {
         return "";
     }
     let r = (width as f64 / height as f64).ln();
-    [("21:9", 21.0f64 / 9.0), ("16:9", 16.0 / 9.0), ("4:3", 4.0 / 3.0), ("1:1", 1.0), ("3:4", 0.75), ("9:16", 9.0 / 16.0)]
-        .into_iter()
-        .min_by(|a, b| (a.1.ln() - r).abs().total_cmp(&(b.1.ln() - r).abs()))
-        .map(|x| x.0)
-        .unwrap_or("")
+    [
+        ("21:9", 21.0f64 / 9.0),
+        ("16:9", 16.0 / 9.0),
+        ("4:3", 4.0 / 3.0),
+        ("1:1", 1.0),
+        ("3:4", 0.75),
+        ("9:16", 9.0 / 16.0),
+    ]
+    .into_iter()
+    .min_by(|a, b| (a.1.ln() - r).abs().total_cmp(&(b.1.ln() - r).abs()))
+    .map(|x| x.0)
+    .unwrap_or("")
 }
 
 fn unix(t: time::OffsetDateTime) -> i64 {
@@ -93,9 +100,15 @@ pub fn task_json(job: &Job, cx: &ViewCtx, url_ttl: std::time::Duration) -> Value
     t.insert("model".into(), json!(job.requested_model()));
     t.insert("status".into(), json!(status_str(job.status())));
     if let JobState::Failed(e) = &job.state {
-        t.insert("error".into(), json!({ "code": task_error_code(e.kind), "message": e.message }));
+        t.insert(
+            "error".into(),
+            json!({ "code": task_error_code(e.kind), "message": e.message }),
+        );
     }
-    let updated = job.completed_at.or(job.started_at).unwrap_or(job.created_at);
+    let updated = job
+        .completed_at
+        .or(job.started_at)
+        .unwrap_or(job.created_at);
     t.insert("created_at".into(), json!(unix(job.created_at)));
     t.insert("updated_at".into(), json!(unix(updated)));
     let mut content = Map::new();
@@ -105,8 +118,14 @@ pub fn task_json(job: &Job, cx: &ViewCtx, url_ttl: std::time::Duration) -> Value
         }
     }
     t.insert("content".into(), Value::Object(content));
-    t.insert("resolution".into(), echo.get("resolution").cloned().unwrap_or(json!("768P")));
-    let duration = echo.get("duration").map(secs).unwrap_or_else(|| job.resolved.duration_s().round() as u64);
+    t.insert(
+        "resolution".into(),
+        echo.get("resolution").cloned().unwrap_or(json!("768P")),
+    );
+    let duration = echo
+        .get("duration")
+        .map(secs)
+        .unwrap_or_else(|| job.resolved.duration_s().round() as u64);
     t.insert("duration".into(), json!(duration));
     if job.status() == JobStatus::Succeeded {
         let fv = echo.get("_fv").cloned().unwrap_or_default();
@@ -115,7 +134,13 @@ pub fn task_json(job: &Job, cx: &ViewCtx, url_ttl: std::time::Duration) -> Value
         u.insert("total_seconds".into(), json!(input + duration));
         u.insert("input_seconds".into(), json!(input));
         u.insert("output_seconds".into(), json!(duration));
-        u.insert("input_image_count".into(), json!(fv.get("input_image_count").and_then(Value::as_u64).unwrap_or(0)));
+        u.insert(
+            "input_image_count".into(),
+            json!(fv
+                .get("input_image_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)),
+        );
         if let Some(a) = fv.get("input_audio_seconds").filter(|v| !v.is_null()) {
             u.insert("input_audio_seconds".into(), json!(secs(a)));
         }
@@ -144,8 +169,17 @@ pub fn task_json(job: &Job, cx: &ViewCtx, url_ttl: std::time::Duration) -> Value
     Value::Object(t)
 }
 
-pub(crate) async fn query_handle(mm: Arc<MiniMax>, State(ctx): State<ServeCtx>, Path(task_id): Path<String>, headers: HeaderMap) -> Response {
-    let ecx = ErrorCtx { request_id: Some(random_token()), route: Some("/v2/query/video_generation/{task_id}".into()), external_id: Some(task_id.clone()) };
+pub(crate) async fn query_handle(
+    mm: Arc<MiniMax>,
+    State(ctx): State<ServeCtx>,
+    Path(task_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let ecx = ErrorCtx {
+        request_id: Some(random_token()),
+        route: Some("/v2/query/video_generation/{task_id}".into()),
+        external_id: Some(task_id.clone()),
+    };
     let reply = async {
         let owner = ctx.auth().authenticate(ProtocolId::MiniMaxV2, &headers)?;
         let job = find_job(&ctx, &*mm, &task_id, owner.as_ref()).await?;
@@ -199,9 +233,12 @@ pub fn parse_list_query(params: &[(String, String)]) -> Result<Option<ListQuery>
                     });
                 }
             }
-            "filter.task_ids" | "filter.task_ids[]" | "filter[task_ids]" => q
-                .external_ids
-                .extend(v.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned)),
+            "filter.task_ids" | "filter.task_ids[]" | "filter[task_ids]" => q.external_ids.extend(
+                v.split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned),
+            ),
             "filter.model" | "filter[model]" => {
                 if !v.trim().is_empty() {
                     q.model = Some(v.trim().to_owned());
@@ -224,8 +261,17 @@ pub fn parse_list_query(params: &[(String, String)]) -> Result<Option<ListQuery>
     Ok((!empty).then_some(q))
 }
 
-pub(crate) async fn list_handle(mm: Arc<MiniMax>, State(ctx): State<ServeCtx>, Query(params): Query<Vec<(String, String)>>, headers: HeaderMap) -> Response {
-    let ecx = ErrorCtx { request_id: Some(random_token()), route: Some("/v2/query/video_generation".into()), external_id: None };
+pub(crate) async fn list_handle(
+    mm: Arc<MiniMax>,
+    State(ctx): State<ServeCtx>,
+    Query(params): Query<Vec<(String, String)>>,
+    headers: HeaderMap,
+) -> Response {
+    let ecx = ErrorCtx {
+        request_id: Some(random_token()),
+        route: Some("/v2/query/video_generation".into()),
+        external_id: None,
+    };
     let reply = async {
         let owner = ctx.auth().authenticate(ProtocolId::MiniMaxV2, &headers)?;
         let Some(mut q) = parse_list_query(&params)? else {
@@ -236,7 +282,10 @@ pub(crate) async fn list_handle(mm: Arc<MiniMax>, State(ctx): State<ServeCtx>, Q
         let cx = ctx.view_ctx(false);
         let ttl = mm.config().url_ttl;
         let items: Vec<Value> = page.items.iter().map(|j| task_json(j, &cx, ttl)).collect();
-        Ok::<_, ApiError>(HttpReply::json(200, json!({ "items": items, "total": page.total })))
+        Ok::<_, ApiError>(HttpReply::json(
+            200,
+            json!({ "items": items, "total": page.total }),
+        ))
     }
     .await
     .unwrap_or_else(|e| error_reply(&*mm, &e, &ecx));
@@ -260,18 +309,36 @@ mod tests {
     #[test]
     fn list_query() {
         let p = |v: &[(&str, &str)]| -> Vec<(String, String)> {
-            v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+            v.iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect()
         };
-        let q = parse_list_query(&p(&[("page_num", "3"), ("page_size", "5"), ("filter.status", "succeeded"),
-            ("filter.task_ids", "1"), ("filter.task_ids", "2,3"), ("filter.model", "MiniMax-H3")]))
+        let q = parse_list_query(&p(&[
+            ("page_num", "3"),
+            ("page_size", "5"),
+            ("filter.status", "succeeded"),
+            ("filter.task_ids", "1"),
+            ("filter.task_ids", "2,3"),
+            ("filter.model", "MiniMax-H3"),
+        ]))
         .unwrap()
         .unwrap();
         assert_eq!((q.offset, q.limit), (10, 5));
         assert_eq!(q.statuses, [JobStatus::Succeeded]);
         assert_eq!(q.external_ids, ["1", "2", "3"]);
         assert_eq!(q.model.as_deref(), Some("MiniMax-H3"));
-        assert_eq!(parse_list_query(&p(&[("page_size", "1000")])).unwrap().unwrap().limit, 100);
-        assert!(parse_list_query(&p(&[("filter.task_type", "regeneration")])).unwrap().is_none());
+        assert_eq!(
+            parse_list_query(&p(&[("page_size", "1000")]))
+                .unwrap()
+                .unwrap()
+                .limit,
+            100
+        );
+        assert!(
+            parse_list_query(&p(&[("filter.task_type", "regeneration")]))
+                .unwrap()
+                .is_none()
+        );
         assert!(parse_list_query(&p(&[("page_num", "0")])).is_err());
         assert!(parse_list_query(&p(&[("filter.status", "done")])).is_err());
     }

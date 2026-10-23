@@ -652,7 +652,13 @@ mod tests {
 
     #[test]
     fn one_gpu_sol_h3_is_dense_by_default() {
-        for recipe in ["sol-h3", "sol-h3-t2v", "sol-h3-i2v", "sol-h3-ref2va", "sol-h3-spark"] {
+        for recipe in [
+            "sol-h3",
+            "sol-h3-t2v",
+            "sol-h3-i2v",
+            "sol-h3-ref2va",
+            "sol-h3-spark",
+        ] {
             assert_eq!(
                 recipe_sol_attn_policy(Some(recipe), None, false).unwrap(),
                 H3SolAttnPolicy::Off,
@@ -671,7 +677,10 @@ mod tests {
             recipe_sol_attn_policy(Some("4step-vsa"), None, false).unwrap(),
             H3SolAttnPolicy::Off
         );
-        assert_eq!(recipe_sol_attn_policy(None, None, false).unwrap(), H3SolAttnPolicy::Off);
+        assert_eq!(
+            recipe_sol_attn_policy(None, None, false).unwrap(),
+            H3SolAttnPolicy::Off
+        );
     }
 
     #[test]
@@ -866,14 +875,9 @@ mod tests {
         // Tiny FL2VA: start < 64, so the cond rows are in the spill.
         assert!(sink_plan(&fl2va()).is_err());
         // One 64-row cond frame + two target frames: no partial block.
-        let l = H3PackedLayout::with_keyframes(
-            3,
-            (2, 16, 16),
-            2,
-            [1, 2, 2],
-            &[KeyframeAnchor::First],
-        )
-        .unwrap();
+        let l =
+            H3PackedLayout::with_keyframes(3, (2, 16, 16), 2, [1, 2, 2], &[KeyframeAnchor::First])
+                .unwrap();
         assert_eq!((l.cond.len, l.video.len), (64, 128));
         let plan = sink_plan(&l).unwrap();
         assert_eq!(plan.sink_start, 192);

@@ -36,8 +36,14 @@ pub struct Boot {
 
 impl Boot {
     pub fn now() -> Self {
-        let unix = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
-        Self { at: Instant::now(), unix }
+        let unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        Self {
+            at: Instant::now(),
+            unix,
+        }
     }
 }
 
@@ -67,11 +73,17 @@ pub fn link_weights_alias(root: &Path, alias: &Path) -> std::io::Result<bool> {
 
 /// [`link_weights_alias`] for `FV_WEIGHTS` and [`POD_WEIGHTS`] (logged).
 pub fn link_pod_weights() {
-    let Some(root) = std::env::var("FV_WEIGHTS").ok().filter(|s| !s.is_empty()) else { return };
+    let Some(root) = std::env::var("FV_WEIGHTS").ok().filter(|s| !s.is_empty()) else {
+        return;
+    };
     match link_weights_alias(Path::new(&root), Path::new(POD_WEIGHTS)) {
-        Ok(true) => tracing::info!(%root, "linked {POD_WEIGHTS} to the weights root (absolute volume links)"),
+        Ok(true) => {
+            tracing::info!(%root, "linked {POD_WEIGHTS} to the weights root (absolute volume links)")
+        }
         Ok(false) => {}
-        Err(e) => tracing::warn!(%root, error = %e, "could not link {POD_WEIGHTS} to the weights root"),
+        Err(e) => {
+            tracing::warn!(%root, error = %e, "could not link {POD_WEIGHTS} to the weights root")
+        }
     }
 }
 
@@ -86,7 +98,10 @@ fn weights_summary() -> Value {
     let p = Path::new(&root);
     let entries: Vec<String> = std::fs::read_dir(p)
         .map(|rd| {
-            let mut v: Vec<String> = rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+            let mut v: Vec<String> = rd
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
             v.sort();
             v.truncate(64);
             v
@@ -100,7 +115,15 @@ fn weights_summary() -> Value {
 /// error text when it fails, so a host without a working NVENC says why.
 fn nvenc_probe() -> Value {
     let o = std::process::Command::new("ffmpeg")
-        .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=256x144:r=24:d=0.2"])
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=256x144:r=24:d=0.2",
+        ])
         .args(["-c:v", "h264_nvenc", "-f", "null", "-"])
         .stdin(std::process::Stdio::null())
         .output();
@@ -108,13 +131,27 @@ fn nvenc_probe() -> Value {
         Ok(o) if o.status.success() => json!({"ok": true}),
         Ok(o) => {
             let err = String::from_utf8_lossy(&o.stderr);
-            let tail: Vec<&str> = err.lines().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect();
-            let libs: Vec<String> = ["/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/local/nvidia/lib64"]
-                .iter()
-                .filter_map(|d| std::fs::read_dir(d).ok())
-                .flat_map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()))
-                .filter(|n| n.starts_with("libnvidia-encode") || n.starts_with("libnvcuvid"))
+            let tail: Vec<&str> = err
+                .lines()
+                .rev()
+                .take(6)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
                 .collect();
+            let libs: Vec<String> = [
+                "/usr/lib/x86_64-linux-gnu",
+                "/usr/lib64",
+                "/usr/local/nvidia/lib64",
+            ]
+            .iter()
+            .filter_map(|d| std::fs::read_dir(d).ok())
+            .flat_map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+            })
+            .filter(|n| n.starts_with("libnvidia-encode") || n.starts_with("libnvcuvid"))
+            .collect();
             json!({"ok": false, "stderr": tail, "driver_libs": libs})
         }
         Err(e) => json!({"ok": false, "stderr": [e.to_string()]}),
@@ -123,20 +160,29 @@ fn nvenc_probe() -> Value {
 
 fn cmd_line(prog: &str, args: &[&str]) -> Option<String> {
     let o = std::process::Command::new(prog).args(args).output().ok()?;
-    o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+    o.status
+        .success()
+        .then(|| String::from_utf8_lossy(&o.stdout).trim().to_owned())
 }
 
 /// The startup NVENC probe behind `auto`, if it ran.
 fn startup_probe() -> Value {
     match fastvideo_media::video::auto_encoder_if_probed() {
-        Some(a) => json!({"backend": a.backend, "attempts": a.attempts, "nvenc_error": a.nvenc_error}),
+        Some(a) => {
+            json!({"backend": a.backend, "attempts": a.attempts, "nvenc_error": a.nvenc_error})
+        }
         None => Value::Null,
     }
 }
 
 /// The `info` job / diagnostics: version, platform discovery, readiness,
 /// weights root, GPU, NVENC (`nvenc: true` also encodes a few frames).
-pub fn info_fn(config: &Config, gate: Arc<ServiceGate>, boot: Boot, ready_after: Arc<std::sync::OnceLock<f64>>) -> InfoFn {
+pub fn info_fn(
+    config: &Config,
+    gate: Arc<ServiceGate>,
+    boot: Boot,
+    ready_after: Arc<std::sync::OnceLock<f64>>,
+) -> InfoFn {
     let port = http_port(config);
     let (udp, tcp) = (config.webrtc.udp_port, config.webrtc.tcp_port);
     let engine = format!("{:?}", config.engine.backend).to_ascii_lowercase();
@@ -158,20 +204,38 @@ pub fn info_fn(config: &Config, gate: Arc<ServiceGate>, boot: Boot, ready_after:
         let encoders = encoders.clone();
         Box::pin(async move {
             let blocking = tokio::task::spawn_blocking(move || {
-                let encoders = cmd_line("ffmpeg", &["-hide_banner", "-encoders"]).unwrap_or_default();
-                let gpu = cmd_line("nvidia-smi", &["--query-gpu=name,memory.total,driver_version", "--format=csv,noheader"]);
+                let encoders =
+                    cmd_line("ffmpeg", &["-hide_banner", "-encoders"]).unwrap_or_default();
+                let gpu = cmd_line(
+                    "nvidia-smi",
+                    &[
+                        "--query-gpu=name,memory.total,driver_version",
+                        "--format=csv,noheader",
+                    ],
+                );
                 let nvenc_encode = job.nvenc.then(nvenc_probe);
-                (encoders.contains("h264_nvenc"), gpu, nvenc_encode, weights_summary())
+                (
+                    encoders.contains("h264_nvenc"),
+                    gpu,
+                    nvenc_encode,
+                    weights_summary(),
+                )
             })
             .await;
-            let (nvenc_built, gpu, nvenc_encode, weights) = blocking.unwrap_or((false, None, None, Value::Null));
+            let (nvenc_built, gpu, nvenc_encode, weights) =
+                blocking.unwrap_or((false, None, None, Value::Null));
             let nvenc_ok = nvenc_encode.as_ref().map(|v| v["ok"] == true);
             let readiness = match gate.engine().readiness() {
                 Readiness::Ready => json!("ready"),
                 Readiness::Loading { done, total } => json!({"loading": [done, total]}),
                 Readiness::Failed(e) => json!({"failed": e}),
             };
-            let models: Vec<String> = gate.engine().caps().models().map(|m| m.id.0.clone()).collect();
+            let models: Vec<String> = gate
+                .engine()
+                .caps()
+                .models()
+                .map(|m| m.id.0.clone())
+                .collect();
             json!({
                 "server": "fv-serve",
                 "version": crate::build_info::VERSION,
@@ -201,12 +265,20 @@ pub fn info_fn(config: &Config, gate: Arc<ServiceGate>, boot: Boot, ready_after:
 
 /// The dispatcher over the app's router.
 pub fn handler(app: &App, boot: Boot, ready_after: Arc<std::sync::OnceLock<f64>>) -> RouterHandler {
-    let h = RouterHandler::new(app.router.clone()).with_info(info_fn(&app.config, app.gate.clone(), boot, ready_after));
+    let h = RouterHandler::new(app.router.clone()).with_info(info_fn(
+        &app.config,
+        app.gate.clone(),
+        boot,
+        ready_after,
+    ));
     // A queue worker behind the gateway: queue jobs are authenticated by
     // the platform, so the dispatcher adds the internal token itself (it
     // never travels in the job input, docs/serve/gateway.md §3).
     if app.config.server.role == crate::config::Role::Worker {
-        h.with_header("x-fv-internal-token", app.config.gateway.internal_token.expose())
+        h.with_header(
+            "x-fv-internal-token",
+            app.config.gateway.internal_token.expose(),
+        )
     } else {
         h
     }
@@ -218,7 +290,12 @@ pub fn with_forward(router: Router, handler: RouterHandler) -> Router {
 }
 
 fn test_input() -> anyhow::Result<Option<Value>> {
-    let Some(v) = std::env::var("FV_RUNPOD_TEST_INPUT").ok().filter(|s| !s.trim().is_empty()) else { return Ok(None) };
+    let Some(v) = std::env::var("FV_RUNPOD_TEST_INPUT")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    else {
+        return Ok(None);
+    };
     let text = match v.strip_prefix('@') {
         Some(path) => std::fs::read_to_string(path).with_context(|| format!("reading {path}"))?,
         None => v,
@@ -228,7 +305,11 @@ fn test_input() -> anyhow::Result<Option<Value>> {
 }
 
 /// Runs `server.mode = runpod-queue` until `stop` resolves.
-pub async fn run_runpod_queue(app: App, boot: Boot, stop: impl std::future::Future<Output = ()> + Send + 'static) -> anyhow::Result<()> {
+pub async fn run_runpod_queue(
+    app: App,
+    boot: Boot,
+    stop: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
     let ready_after = Arc::new(std::sync::OnceLock::new());
     let h = handler(&app, boot, ready_after.clone());
     let gate = app.gate.clone();
@@ -275,19 +356,32 @@ async fn run_worker(
 ) -> anyhow::Result<()> {
     use fastvideo_deploy::runpod::{ReqwestTransport, Worker, WorkerOptions};
     let transport = ReqwestTransport::new().map_err(|e| anyhow!("HTTP client: {e}"))?;
-    let opts = WorkerOptions { shutdown_grace: grace, ..WorkerOptions::default() };
+    let opts = WorkerOptions {
+        shutdown_grace: grace,
+        ..WorkerOptions::default()
+    };
     let worker = Worker::new(env, transport, h, opts);
     match gate.engine().wait_ready().await {
         Readiness::Failed(e) => {
             tracing::error!(error = %e, "model loading failed: failing one job, then exiting");
-            let r = worker.fail_one(&format!("model loading failed: {e}"), Duration::from_secs(120)).await;
+            let r = worker
+                .fail_one(
+                    &format!("model loading failed: {e}"),
+                    Duration::from_secs(120),
+                )
+                .await;
             tracing::info!(?r, "prestart failure reported");
             Err(anyhow!("model loading failed: {e}"))
         }
         _ => {
             let secs = boot.at.elapsed().as_secs_f64();
             let _ = ready_after.set(secs);
-            let ids: Vec<String> = gate.engine().caps().models().map(|m| m.id.0.clone()).collect();
+            let ids: Vec<String> = gate
+                .engine()
+                .caps()
+                .models()
+                .map(|m| m.id.0.clone())
+                .collect();
             println!("FV-SERVE READY models={}", ids.join(","));
             tracing::info!(ready_after_s = secs, "runpod worker: ready");
             let r = worker.run(stop).await;
@@ -307,7 +401,9 @@ async fn run_worker(
     _ready_after: Arc<std::sync::OnceLock<f64>>,
     _stop: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    Err(anyhow!("server.mode = runpod-queue needs fv-serve built with `http-client`"))
+    Err(anyhow!(
+        "server.mode = runpod-queue needs fv-serve built with `http-client`"
+    ))
 }
 
 #[cfg(test)]
@@ -317,7 +413,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn weights_alias_links_once() {
-        let base = tempfile::Builder::new().prefix("fv-alias-").tempdir().unwrap().keep();
+        let base = tempfile::Builder::new()
+            .prefix("fv-alias-")
+            .tempdir()
+            .unwrap()
+            .keep();
         let root = base.join("runpod-volume/weights");
         std::fs::create_dir_all(root.join("h3-base")).unwrap();
         let alias = base.join("workspace/weights");

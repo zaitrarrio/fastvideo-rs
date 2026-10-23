@@ -64,7 +64,11 @@ pub fn apply_clip_fades(pcm: &Pcm, ms: u16, fade_head: bool, fade_tail: bool) ->
     if fade_tail {
         fade_out(&mut v, pcm.rate, pcm.channels, ms);
     }
-    Pcm { rate: pcm.rate, channels: pcm.channels, samples: v.into() }
+    Pcm {
+        rate: pcm.rate,
+        channels: pcm.channels,
+        samples: v.into(),
+    }
 }
 
 #[cfg(test)]
@@ -105,7 +109,10 @@ mod tests {
         let a = apply_clip_fades(&Pcm::new(48_000, 1, vec![0.9f32; 4800]), 20, false, true);
         let b = apply_clip_fades(&Pcm::new(48_000, 1, vec![-0.9f32; 4800]), 20, true, false);
         let joined: Vec<f32> = a.samples.iter().chain(b.samples.iter()).copied().collect();
-        let max_step = joined.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        let max_step = joined
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
         assert!(max_step < 0.01, "largest sample step {max_step}");
     }
 

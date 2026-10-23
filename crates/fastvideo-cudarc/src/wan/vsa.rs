@@ -292,7 +292,9 @@ pub enum FineKernel {
 #[cfg(feature = "cuda")]
 fn fine_kernel(dim: usize, tile_elems: usize) -> FineKernel {
     use super::envflag::bool_flag;
-    let pick = fastvideo_models::techniques::kernels::choice(fastvideo_models::techniques::kernels::KernelOp::VsaAttention);
+    let pick = fastvideo_models::techniques::kernels::choice(
+        fastvideo_models::techniques::kernels::KernelOp::VsaAttention,
+    );
     let sm = super::device::global_device()
         .map(|d| d.sm_major)
         .unwrap_or(0);

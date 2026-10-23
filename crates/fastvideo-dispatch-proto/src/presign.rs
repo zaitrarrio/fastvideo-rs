@@ -49,7 +49,9 @@ pub fn uri_encode(s: &str, keep_slash: bool) -> String {
     let mut o = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => o.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                o.push(b as char)
+            }
             b'/' if keep_slash => o.push('/'),
             _ => o.push_str(&format!("%{b:02X}")),
         }
@@ -108,7 +110,12 @@ pub fn amz_dates(unix_s: i64) -> (String, String) {
     let secs = unix_s.rem_euclid(86_400);
     let (y, m, d) = civil(days);
     let date = format!("{y:04}{m:02}{d:02}");
-    let ts = format!("{date}T{:02}{:02}{:02}Z", secs / 3600, (secs / 60) % 60, secs % 60);
+    let ts = format!(
+        "{date}T{:02}{:02}{:02}Z",
+        secs / 3600,
+        (secs / 60) % 60,
+        secs % 60
+    );
     (date, ts)
 }
 
@@ -140,7 +147,10 @@ impl std::fmt::Debug for S3Presign {
 impl S3Presign {
     /// `(scheme, host[:port], base path)` of the endpoint.
     fn split_endpoint(&self) -> (String, String, String) {
-        let (scheme, rest) = self.endpoint.split_once("://").unwrap_or(("https", self.endpoint.as_str()));
+        let (scheme, rest) = self
+            .endpoint
+            .split_once("://")
+            .unwrap_or(("https", self.endpoint.as_str()));
         let (host, path) = match rest.find('/') {
             Some(i) => (&rest[..i], rest[i..].trim_end_matches('/')),
             None => (rest, ""),
@@ -150,31 +160,64 @@ impl S3Presign {
 
     /// A SigV4 query-presigned URL for `method key`, with `extra` query
     /// parameters signed too (e.g. `partNumber`, `uploadId`).
-    pub fn presign(&self, method: &str, key: &str, extra: &[(&str, &str)], expires_s: u64, now_unix_s: i64) -> String {
+    pub fn presign(
+        &self,
+        method: &str,
+        key: &str,
+        extra: &[(&str, &str)],
+        expires_s: u64,
+        now_unix_s: i64,
+    ) -> String {
         let expires = expires_s.clamp(1, MAX_PRESIGN_S);
         let (scheme, ep_host, base) = self.split_endpoint();
         let ekey = uri_encode(key, true);
         let (host, path) = if self.path_style {
-            (ep_host, format!("{base}/{}/{ekey}", uri_encode(&self.bucket, false)))
+            (
+                ep_host,
+                format!("{base}/{}/{ekey}", uri_encode(&self.bucket, false)),
+            )
         } else {
-            (format!("{}.{ep_host}", self.bucket), format!("{base}/{ekey}"))
+            (
+                format!("{}.{ep_host}", self.bucket),
+                format!("{base}/{ekey}"),
+            )
         };
         let (date, ts) = amz_dates(now_unix_s);
         let scope = format!("{date}/{}/s3/aws4_request", self.region);
         let mut q: Vec<(String, String)> = vec![
             ("X-Amz-Algorithm".into(), "AWS4-HMAC-SHA256".into()),
-            ("X-Amz-Credential".into(), format!("{}/{scope}", self.access_key)),
+            (
+                "X-Amz-Credential".into(),
+                format!("{}/{scope}", self.access_key),
+            ),
             ("X-Amz-Date".into(), ts.clone()),
             ("X-Amz-Expires".into(), expires.to_string()),
             ("X-Amz-SignedHeaders".into(), "host".into()),
         ];
-        q.extend(extra.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())));
-        let mut enc: Vec<(String, String)> = q.iter().map(|(k, v)| (uri_encode(k, false), uri_encode(v, false))).collect();
+        q.extend(
+            extra
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned())),
+        );
+        let mut enc: Vec<(String, String)> = q
+            .iter()
+            .map(|(k, v)| (uri_encode(k, false), uri_encode(v, false)))
+            .collect();
         enc.sort();
-        let cq = enc.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("&");
+        let cq = enc
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("&");
         let creq = format!("{method}\n{path}\n{cq}\nhost:{host}\n\nhost\nUNSIGNED-PAYLOAD");
-        let sts = format!("AWS4-HMAC-SHA256\n{ts}\n{scope}\n{}", sha256_hex(creq.as_bytes()));
-        let k = hmac(format!("AWS4{}", self.secret_key).as_bytes(), date.as_bytes());
+        let sts = format!(
+            "AWS4-HMAC-SHA256\n{ts}\n{scope}\n{}",
+            sha256_hex(creq.as_bytes())
+        );
+        let k = hmac(
+            format!("AWS4{}", self.secret_key).as_bytes(),
+            date.as_bytes(),
+        );
         let k = hmac(&k, self.region.as_bytes());
         let k = hmac(&k, b"s3");
         let k = hmac(&k, b"aws4_request");
@@ -183,9 +226,22 @@ impl S3Presign {
     }
 
     /// `PUT` of one part of a multipart upload.
-    pub fn part_url(&self, key: &str, upload_id: &str, part: u16, expires_s: u64, now_unix_s: i64) -> String {
+    pub fn part_url(
+        &self,
+        key: &str,
+        upload_id: &str,
+        part: u16,
+        expires_s: u64,
+        now_unix_s: i64,
+    ) -> String {
         let n = part.to_string();
-        self.presign("PUT", key, &[("partNumber", &n), ("uploadId", upload_id)], expires_s, now_unix_s)
+        self.presign(
+            "PUT",
+            key,
+            &[("partNumber", &n), ("uploadId", upload_id)],
+            expires_s,
+            now_unix_s,
+        )
     }
 }
 
@@ -193,7 +249,11 @@ impl S3Presign {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Cap {
     /// `PUT` part `part` of upload `upload_id` of object `key`.
-    Part { key: String, upload_id: String, part: u16 },
+    Part {
+        key: String,
+        upload_id: String,
+        part: u16,
+    },
     /// `GET` object `key`.
     Get { key: String },
 }
@@ -215,11 +275,24 @@ pub fn cap_url(base: &str, secret: &[u8], cap: &Cap, exp_ms: i64) -> String {
     let base = base.trim_end_matches('/');
     let e = exp_ms.to_string();
     match cap {
-        Cap::Part { key, upload_id, part } => {
+        Cap::Part {
+            key,
+            upload_id,
+            part,
+        } => {
             let n = part.to_string();
-            let f = [("k", key.as_str()), ("u", upload_id.as_str()), ("n", n.as_str()), ("e", e.as_str())];
+            let f = [
+                ("k", key.as_str()),
+                ("u", upload_id.as_str()),
+                ("n", n.as_str()),
+                ("e", e.as_str()),
+            ];
             let s = hex(&hmac(secret, cap_msg("up", &f).as_bytes()));
-            format!("{base}/up?k={}&u={}&n={n}&e={e}&s={s}", uri_encode(key, false), uri_encode(upload_id, false))
+            format!(
+                "{base}/up?k={}&u={}&n={n}&e={e}&s={s}",
+                uri_encode(key, false),
+                uri_encode(upload_id, false)
+            )
         }
         Cap::Get { key } => {
             let f = [("k", key.as_str()), ("e", e.as_str())];
@@ -231,7 +304,12 @@ pub fn cap_url(base: &str, secret: &[u8], cap: &Cap, exp_ms: i64) -> String {
 
 /// Checks a capability URL's path (`/up` or `/dl`) and query against
 /// `secret` and `now_ms` (constant-time signature check).
-pub fn cap_verify(path: &str, query: &str, secret: &[u8], now_ms: i64) -> Result<Cap, &'static str> {
+pub fn cap_verify(
+    path: &str,
+    query: &str,
+    secret: &[u8],
+    now_ms: i64,
+) -> Result<Cap, &'static str> {
     let q = parse_query(query);
     let get = |k: &str| q.get(k).map(String::as_str).ok_or("a field is missing");
     let e = get("e")?;
@@ -243,17 +321,34 @@ pub fn cap_verify(path: &str, query: &str, secret: &[u8], now_ms: i64) -> Result
             if part == 0 || part > 10_000 {
                 return Err("bad part number");
             }
-            ("up", vec![("k", k), ("u", u), ("n", n), ("e", e)], Cap::Part { key: k.to_owned(), upload_id: u.to_owned(), part })
+            (
+                "up",
+                vec![("k", k), ("u", u), ("n", n), ("e", e)],
+                Cap::Part {
+                    key: k.to_owned(),
+                    upload_id: u.to_owned(),
+                    part,
+                },
+            )
         }
         "/dl" => {
             let k = get("k")?;
-            ("dl", vec![("k", k), ("e", e)], Cap::Get { key: k.to_owned() })
+            (
+                "dl",
+                vec![("k", k), ("e", e)],
+                Cap::Get { key: k.to_owned() },
+            )
         }
         _ => return Err("not a capability route"),
     };
     let sig = get("s")?;
     let want = hex(&hmac(secret, cap_msg(kind, &fields).as_bytes()));
-    let ok = sig.len() == want.len() && sig.bytes().zip(want.bytes()).fold(0u8, |a, (x, y)| a | (x ^ y)) == 0;
+    let ok = sig.len() == want.len()
+        && sig
+            .bytes()
+            .zip(want.bytes())
+            .fold(0u8, |a, (x, y)| a | (x ^ y))
+            == 0;
     if !ok {
         return Err("bad signature");
     }
@@ -280,19 +375,36 @@ mod tests {
 
     #[test]
     fn dates() {
-        assert_eq!(amz_dates(1_369_353_600), ("20130524".into(), "20130524T000000Z".into()));
+        assert_eq!(
+            amz_dates(1_369_353_600),
+            ("20130524".into(), "20130524T000000Z".into())
+        );
         assert_eq!(amz_dates(0), ("19700101".into(), "19700101T000000Z".into()));
         // 2024-02-29T23:59:59Z (leap day).
-        assert_eq!(amz_dates(1_709_251_199), ("20240229".into(), "20240229T235959Z".into()));
-        assert_eq!(amz_dates(1_790_000_000), ("20260921".into(), "20260921T141320Z".into()));
+        assert_eq!(
+            amz_dates(1_709_251_199),
+            ("20240229".into(), "20240229T235959Z".into())
+        );
+        assert_eq!(
+            amz_dates(1_790_000_000),
+            ("20260921".into(), "20260921T141320Z".into())
+        );
     }
 
     /// The AWS SigV4 documentation example ("Example: presigned URL").
     #[test]
     fn sigv4_matches_aws_example() {
         let u = aws().presign("GET", "test.txt", &[], 86_400, 1_369_353_600);
-        assert!(u.starts_with("https://examplebucket.s3.amazonaws.com/test.txt?"), "{u}");
-        assert!(u.ends_with("&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"), "{u}");
+        assert!(
+            u.starts_with("https://examplebucket.s3.amazonaws.com/test.txt?"),
+            "{u}"
+        );
+        assert!(
+            u.ends_with(
+                "&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"
+            ),
+            "{u}"
+        );
     }
 
     #[test]
@@ -301,22 +413,36 @@ mod tests {
         c.path_style = true;
         c.endpoint = "http://127.0.0.1:9000/base/".into();
         let u = c.part_url("out/a b.mp4", "up/1+2", 3, 30 * 86_400, 1_369_353_600);
-        assert!(u.starts_with("http://127.0.0.1:9000/base/examplebucket/out/a%20b.mp4?"), "{u}");
+        assert!(
+            u.starts_with("http://127.0.0.1:9000/base/examplebucket/out/a%20b.mp4?"),
+            "{u}"
+        );
         let q = parse_query(u.split_once('?').unwrap().1);
         assert_eq!(q["partNumber"], "3");
         assert_eq!(q["uploadId"], "up/1+2");
         assert_eq!(q["X-Amz-Expires"], "604800");
         // A different part changes the signature.
         let v = c.part_url("out/a b.mp4", "up/1+2", 4, 30 * 86_400, 1_369_353_600);
-        assert_ne!(parse_query(v.split_once('?').unwrap().1)["X-Amz-Signature"], q["X-Amz-Signature"]);
+        assert_ne!(
+            parse_query(v.split_once('?').unwrap().1)["X-Amz-Signature"],
+            q["X-Amz-Signature"]
+        );
     }
 
     #[test]
     fn capability_urls() {
         let s = b"upload-secret";
-        let cap = Cap::Part { key: "outputs/wan/j1/1-1/out put.mp4".into(), upload_id: "U/x=1".into(), part: 2 };
+        let cap = Cap::Part {
+            key: "outputs/wan/j1/1-1/out put.mp4".into(),
+            upload_id: "U/x=1".into(),
+            part: 2,
+        };
         let u = cap_url("https://edge.example/", s, &cap, 10_000);
-        let (path, q) = u.strip_prefix("https://edge.example").unwrap().split_once('?').unwrap();
+        let (path, q) = u
+            .strip_prefix("https://edge.example")
+            .unwrap()
+            .split_once('?')
+            .unwrap();
         assert_eq!(path, "/up");
         assert_eq!(cap_verify(path, q, s, 9_999), Ok(cap.clone()));
         assert_eq!(cap_verify(path, q, s, 10_001), Err("expired"));
@@ -326,7 +452,11 @@ mod tests {
         assert_eq!(cap_verify("/dl", q, s, 0), Err("bad signature"));
         let g = Cap::Get { key: "k/1".into() };
         let u = cap_url("https://edge.example", s, &g, 5);
-        let (path, q) = u.strip_prefix("https://edge.example").unwrap().split_once('?').unwrap();
+        let (path, q) = u
+            .strip_prefix("https://edge.example")
+            .unwrap()
+            .split_once('?')
+            .unwrap();
         assert_eq!(cap_verify(path, q, s, 1), Ok(g));
         assert_eq!(cap_verify("/x", q, s, 1), Err("not a capability route"));
     }

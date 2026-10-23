@@ -27,7 +27,6 @@ fn pinned(mut t: CudaTensor) -> Result<CudaTensor> {
     Ok(t)
 }
 
-
 #[derive(Debug, Clone)]
 struct WanAttention {
     /// Self-attention: [q; k; v] rows. Cross-attention: q only.
@@ -465,7 +464,10 @@ fn rotary_1d_cached(dim: usize, seq: usize, theta: f64) -> std::sync::Arc<(Vec<f
     type Memo = std::collections::HashMap<(usize, u64), std::sync::Arc<(Vec<f32>, Vec<f32>)>>;
     static MEMO: std::sync::OnceLock<std::sync::Mutex<Memo>> = std::sync::OnceLock::new();
     let key = (dim, theta.to_bits());
-    let mut memo = MEMO.get_or_init(Default::default).lock().expect("rope memo");
+    let mut memo = MEMO
+        .get_or_init(Default::default)
+        .lock()
+        .expect("rope memo");
     if let Some(t) = memo.get(&key) {
         if t.0.len() >= seq * dim {
             return t.clone();
@@ -494,9 +496,22 @@ fn wan_rope_at(
     let axes = [
         // Past the checkpoint's table (an open-ended stream, `wan::stream`) the
         // temporal rows continue with the same formula.
-        (t_dim, rotary_1d_cached(t_dim, cfg.rope_max_seq_len.max(start_frame + frames), 10000.0)),
-        (h_dim, rotary_1d_cached(h_dim, cfg.rope_max_seq_len, 10000.0)),
-        (w_dim, rotary_1d_cached(w_dim, cfg.rope_max_seq_len, 10000.0)),
+        (
+            t_dim,
+            rotary_1d_cached(
+                t_dim,
+                cfg.rope_max_seq_len.max(start_frame + frames),
+                10000.0,
+            ),
+        ),
+        (
+            h_dim,
+            rotary_1d_cached(h_dim, cfg.rope_max_seq_len, 10000.0),
+        ),
+        (
+            w_dim,
+            rotary_1d_cached(w_dim, cfg.rope_max_seq_len, 10000.0),
+        ),
     ];
     let (ppf, pph, ppw) = (
         frames / cfg.patch_size[0],
@@ -725,7 +740,9 @@ impl KvText {
             kv: match &self.kv {
                 Some(kv) => Some(
                     kv.iter()
-                        .map(|(k, v)| Ok((super::graph::duplicate(k)?, super::graph::duplicate(v)?)))
+                        .map(|(k, v)| {
+                            Ok((super::graph::duplicate(k)?, super::graph::duplicate(v)?))
+                        })
                         .collect::<Result<Vec<_>>>()?,
                 ),
                 None => None,
@@ -2690,7 +2707,9 @@ mod tests {
         let sink = seen.clone();
         let recorder = WeightMap::generated(move |key, shape| {
             let v = generated_values(key, shape);
-            sink.lock().unwrap().push((key.to_string(), shape.to_vec(), v.clone()));
+            sink.lock()
+                .unwrap()
+                .push((key.to_string(), shape.to_vec(), v.clone()));
             v
         });
         drop(WanTransformer3D::load(cfg.clone(), &recorder).unwrap());
@@ -2716,7 +2735,8 @@ mod tests {
         }
         w.finish().unwrap();
 
-        let eager = WanTransformer3D::load(cfg.clone(), &WeightMap::from_dir(&dir).unwrap()).unwrap();
+        let eager =
+            WanTransformer3D::load(cfg.clone(), &WeightMap::from_dir(&dir).unwrap()).unwrap();
         let lazy_map = WeightMap::open(&dir).unwrap();
         assert!(lazy_map.lazy().is_some());
         let lazy = WanTransformer3D::load(cfg, &lazy_map).unwrap();

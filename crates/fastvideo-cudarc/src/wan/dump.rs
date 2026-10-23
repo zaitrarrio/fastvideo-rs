@@ -222,8 +222,8 @@ pub fn digest_bf16_device(name: &str, w: &cudarc::driver::CudaSlice<half::bf16>)
     if !weights_digest_enabled() {
         return Ok(());
     }
-    let dev = super::device::global_device()
-        .ok_or_else(|| TensorError::Message("no device".into()))?;
+    let dev =
+        super::device::global_device().ok_or_else(|| TensorError::Message("no device".into()))?;
     let host = dev
         .stream
         .memcpy_dtov(w)
@@ -250,10 +250,7 @@ pub fn sha256_f32(data: &[f32]) -> String {
 /// [`digest_enabled`]: log the digest of host values.
 pub fn digest_host(name: &str, shape: &[usize], data: &[f32]) {
     if digest_enabled() {
-        super::log::info(format_args!(
-            "digest {name} {shape:?} {}",
-            sha256_f32(data)
-        ));
+        super::log::info(format_args!("digest {name} {shape:?} {}", sha256_f32(data)));
     }
 }
 

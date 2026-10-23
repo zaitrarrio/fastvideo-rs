@@ -76,7 +76,12 @@ impl Health {
         caps.models()
             .find(|m| m.resident)
             .or_else(|| caps.models().next())
-            .map(|m| m.served_names.first().cloned().unwrap_or_else(|| m.id.0.clone()))
+            .map(|m| {
+                m.served_names
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| m.id.0.clone())
+            })
     }
 }
 
@@ -95,8 +100,16 @@ async fn ping(State(h): State<Health>) -> Response {
     match h.phase() {
         Phase::Loading => StatusCode::NO_CONTENT.into_response(),
         Phase::Ready => (StatusCode::OK, Json(json!({"status": "healthy"}))).into_response(),
-        Phase::Failed => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"status": "failed"}))).into_response(),
-        Phase::Draining => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"status": "draining"}))).into_response(),
+        Phase::Failed => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"status": "failed"})),
+        )
+            .into_response(),
+        Phase::Draining => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"status": "draining"})),
+        )
+            .into_response(),
     }
 }
 
@@ -174,7 +187,11 @@ async fn healthz(State(h): State<Health>) -> Response {
         "version": crate::build_info::VERSION,
         "build": BuildInfo::current().json(),
     });
-    let code = if phase == Phase::Ready { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    let code = if phase == Phase::Ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
     (code, Json(body)).into_response()
 }
 
@@ -208,7 +225,14 @@ pub fn status_body(h: &Health) -> serde_json::Value {
         queued,
         running,
         last_seen_s: Some(0.0),
-        workers: vec![WorkerStatus { label: "local".into(), state, last_seen_s: Some(0.0), running, queued, sessions: s.sessions as u32 }],
+        workers: vec![WorkerStatus {
+            label: "local".into(),
+            state,
+            last_seen_s: Some(0.0),
+            running,
+            queued,
+            sessions: s.sessions as u32,
+        }],
         loading,
         worker_counts: None,
         versions: {
@@ -218,15 +242,23 @@ pub fn status_body(h: &Health) -> serde_json::Value {
         mixed_versions: false,
         failed_models: failed_models(&engine.pool()),
     };
-    status::body(false, vec![pool], status::names(caps.models(), h.gate.aliases()))
+    status::body(
+        false,
+        vec![pool],
+        status::names(caps.models(), h.gate.aliases()),
+    )
 }
 
 /// Models whose load failed (the startup capability check or a load
 /// error) and why, for `/fv/v1/status` and the worker's internal status.
-pub fn failed_models(pool: &fastvideo_engine_service::ModelPool) -> std::collections::BTreeMap<String, String> {
+pub fn failed_models(
+    pool: &fastvideo_engine_service::ModelPool,
+) -> std::collections::BTreeMap<String, String> {
     pool.entries()
         .filter_map(|e| match &e.state {
-            fastvideo_engine_service::Residency::Failed(err) => Some((e.model.0.clone(), err.message.clone())),
+            fastvideo_engine_service::Residency::Failed(err) => {
+                Some((e.model.0.clone(), err.message.clone()))
+            }
             _ => None,
         })
         .collect()
@@ -267,5 +299,9 @@ async fn metrics_text(State(h): State<Health>) -> Response {
     }
     metrics::gauge!("fv_ready").set(if h.phase() == Phase::Ready { 1.0 } else { 0.0 });
     handle.run_upkeep();
-    ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], handle.render()).into_response()
+    (
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        handle.render(),
+    )
+        .into_response()
 }

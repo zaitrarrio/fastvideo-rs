@@ -157,7 +157,11 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
         .map_err(|e| anyhow::anyhow!("load {}: {e}", weights.display()))?;
     let load_s = t.elapsed().as_secs_f64();
     let frames = VideoFrames::from_file(video).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let fps = if frames.times.len() > 1 { 1.0 / frames.times[1] } else { 16.0 };
+    let fps = if frames.times.len() > 1 {
+        1.0 / frames.times[1]
+    } else {
+        16.0
+    };
     let clip_s = duration.unwrap_or(frames.times.len() as f64 / fps);
     let req = MmAudioRequest {
         prompt: prompt.clone(),
@@ -173,7 +177,9 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
     let mem = crate::gpu::PeakMem::start();
     for i in 0..(*runs).max(1) {
         let t = std::time::Instant::now();
-        let o = pipe.generate(&req).map_err(|e| anyhow::anyhow!("generate: {e}"))?;
+        let o = pipe
+            .generate(&req)
+            .map_err(|e| anyhow::anyhow!("generate: {e}"))?;
         let wall = t.elapsed().as_secs_f64();
         let tm = &o.timings;
         eprintln!(
@@ -210,8 +216,11 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
         "peak_mib": peak_mib,
         "wav": wav, "muxed_path": muxed,
     });
-    std::fs::write(out.join("mmaudio.json"), serde_json::to_string_pretty(&doc).unwrap_or_default())
-        .map_err(anyhow::Error::from)?;
+    std::fs::write(
+        out.join("mmaudio.json"),
+        serde_json::to_string_pretty(&doc).unwrap_or_default(),
+    )
+    .map_err(anyhow::Error::from)?;
     report.set("mmaudio", doc);
     Ok(())
 }

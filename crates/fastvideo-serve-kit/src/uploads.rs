@@ -121,12 +121,19 @@ pub struct UploadStore {
 #[async_trait::async_trait]
 pub trait RemoteUploads: Send + Sync + 'static {
     /// Writes the upload `token` to `dst`; returns its size and type.
-    async fn fetch(&self, token: &str, dst: &std::path::Path, max_bytes: u64) -> Result<(u64, Option<String>), String>;
+    async fn fetch(
+        &self,
+        token: &str,
+        dst: &std::path::Path,
+        max_bytes: u64,
+    ) -> Result<(u64, Option<String>), String>;
 }
 
 impl std::fmt::Debug for UploadStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("UploadStore").field("root", &self.root).finish_non_exhaustive()
+        f.debug_struct("UploadStore")
+            .field("root", &self.root)
+            .finish_non_exhaustive()
     }
 }
 
@@ -174,17 +181,26 @@ impl UploadStore {
     /// Whether another front behind the same edge issued `token` (it
     /// carries another `{tag}.` prefix and a remote source is set).
     pub fn is_remote(&self, token: &str) -> bool {
-        let tagged = token.split_once('.').is_some_and(|(t, r)| t.len() == 8 && t.bytes().all(|b| b.is_ascii_hexdigit()) && !r.is_empty());
+        let tagged = token.split_once('.').is_some_and(|(t, r)| {
+            t.len() == 8 && t.bytes().all(|b| b.is_ascii_hexdigit()) && !r.is_empty()
+        });
         tagged && self.remote_for(token).is_some()
     }
 
     /// The remote source, unless `token` is one of ours.
     pub fn remote_for(&self, token: &str) -> Option<Arc<dyn RemoteUploads>> {
-        let prefix = self.prefix.read().unwrap_or_else(|p| p.into_inner()).clone();
+        let prefix = self
+            .prefix
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
         if !prefix.is_empty() && token.starts_with(&format!("{prefix}.")) {
             return None;
         }
-        self.remote.read().unwrap_or_else(|p| p.into_inner()).clone()
+        self.remote
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
 
     pub fn root(&self) -> &std::path::Path {
@@ -203,8 +219,16 @@ impl UploadStore {
         content_type: Option<&str>,
         now: OffsetDateTime,
     ) -> std::io::Result<UploadTicket> {
-        let prefix = self.prefix.read().unwrap_or_else(|p| p.into_inner()).clone();
-        let token = if prefix.is_empty() { crate::random_token() } else { format!("{prefix}.{}", crate::random_token()) };
+        let prefix = self
+            .prefix
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let token = if prefix.is_empty() {
+            crate::random_token()
+        } else {
+            format!("{prefix}.{}", crate::random_token())
+        };
         let file_name = file_name
             .map(sanitize_name)
             .filter(|n| valid_file_name(n))
@@ -220,7 +244,10 @@ impl UploadStore {
         };
         let dir = self.root.join(&token);
         std::fs::create_dir_all(&dir)?;
-        std::fs::write(dir.join(META), serde_json::to_vec(&m).map_err(std::io::Error::other)?)?;
+        std::fs::write(
+            dir.join(META),
+            serde_json::to_vec(&m).map_err(std::io::Error::other)?,
+        )?;
         self.lock().insert(token.clone(), m);
         let mut upload_url = self.urls.public_base.clone();
         if !upload_url.path().ends_with('/') {
@@ -303,7 +330,9 @@ impl UploadStore {
                 return Err(e);
             }
         };
-        tokio::fs::rename(&tmp, dir.join(&m.file_name)).await.map_err(io)?;
+        tokio::fs::rename(&tmp, dir.join(&m.file_name))
+            .await
+            .map_err(io)?;
         tokio::fs::write(dir.join(META), meta).await.map_err(io)?;
         Ok(n)
     }
@@ -357,7 +386,13 @@ fn sanitize_name(n: &str) -> String {
     let base = n.rsplit(['/', '\\']).next().unwrap_or(n);
     let s: String = base
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     s.trim_start_matches('.').chars().take(200).collect()
 }
@@ -373,7 +408,10 @@ pub fn uploads_router<S: Clone + Send + Sync + 'static>(store: Arc<UploadStore>)
 pub type UploadClock = Arc<dyn Fn() -> OffsetDateTime + Send + Sync>;
 
 /// [`uploads_router`] judging token expiry by `clock`.
-pub fn uploads_router_with_clock<S: Clone + Send + Sync + 'static>(store: Arc<UploadStore>, clock: UploadClock) -> Router<S> {
+pub fn uploads_router_with_clock<S: Clone + Send + Sync + 'static>(
+    store: Arc<UploadStore>,
+    clock: UploadClock,
+) -> Router<S> {
     Router::new()
         .route("/uploads/{token}", put(put_upload))
         .layer(DefaultBodyLimit::disable())
@@ -390,12 +428,13 @@ async fn put_upload(
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.split(';').next().unwrap_or(s).trim().to_owned());
-    let mut resp = match store
-        .put(&token, ct.as_deref(), body, clock())
-        .await
-    {
+    let mut resp = match store.put(&token, ct.as_deref(), body, clock()).await {
         Ok(_) => (StatusCode::OK, axum::Json(serde_json::json!({}))).into_response(),
-        Err(e) => (e.status(), axum::Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (
+            e.status(),
+            axum::Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     };
     resp.headers_mut().insert(
         header::ACCESS_CONTROL_ALLOW_ORIGIN,
@@ -412,7 +451,10 @@ mod tests {
     use tower::ServiceExt;
 
     fn store(dir: &std::path::Path) -> Arc<UploadStore> {
-        let urls = LocalUrls { public_base: Url::parse("http://h:1/api").unwrap(), key: UrlKey::new("k") };
+        let urls = LocalUrls {
+            public_base: Url::parse("http://h:1/api").unwrap(),
+            key: UrlKey::new("k"),
+        };
         Arc::new(UploadStore::new(dir.join("uploads"), urls).unwrap())
     }
 
@@ -435,7 +477,11 @@ mod tests {
         let late: UploadClock = Arc::new(move || now + Duration::from_secs(10 * 24 * 3600));
         let app: Router = uploads_router_with_clock(s.clone(), late);
         let r = app.oneshot(put_req(&t.token, b"x")).await.unwrap();
-        assert_eq!(r.status(), StatusCode::NOT_FOUND, "expired by the injected clock");
+        assert_eq!(
+            r.status(),
+            StatusCode::NOT_FOUND,
+            "expired by the injected clock"
+        );
         let on_time: UploadClock = Arc::new(move || now);
         let app: Router = uploads_router_with_clock(s.clone(), on_time);
         let r = app.oneshot(put_req(&t.token, b"x")).await.unwrap();
@@ -451,27 +497,56 @@ mod tests {
         let t = s.create(Some("../../etc/a photo.png"), None, now).unwrap();
         assert_eq!(t.token.len(), 32);
         assert_eq!(t.file_name, "a_photo.png");
-        assert_eq!(t.upload_url.as_str(), format!("http://h:1/api/uploads/{}", t.token));
+        assert_eq!(
+            t.upload_url.as_str(),
+            format!("http://h:1/api/uploads/{}", t.token)
+        );
         assert_eq!(t.ltx_storage_uri(), format!("ltx://uploads/{}", t.token));
-        assert!(s.resolve(&UploadId(t.token.clone()), now).is_none(), "not uploaded yet");
+        assert!(
+            s.resolve(&UploadId(t.token.clone()), now).is_none(),
+            "not uploaded yet"
+        );
 
         let app: Router = uploads_router(s.clone());
-        let r = app.clone().oneshot(put_req(&t.token, b"PNGDATA")).await.unwrap();
+        let r = app
+            .clone()
+            .oneshot(put_req(&t.token, b"PNGDATA"))
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::OK);
         let f = s.resolve(&UploadId(t.token.clone()), now).unwrap();
         assert_eq!((f.bytes, f.mime.as_deref()), (7, Some("image/png")));
         assert_eq!(std::fs::read(&f.path).unwrap(), b"PNGDATA");
 
-        let r = app.clone().oneshot(put_req(&t.token, b"again")).await.unwrap();
+        let r = app
+            .clone()
+            .oneshot(put_req(&t.token, b"again"))
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::PRECONDITION_FAILED);
-        let r = app.clone().oneshot(put_req("0123456789abcdef0123456789abcdef", b"x")).await.unwrap();
+        let r = app
+            .clone()
+            .oneshot(put_req("0123456789abcdef0123456789abcdef", b"x"))
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::NOT_FOUND);
 
         // Served by /files with a signed URL (fal file_url).
-        let files: Router = files_router(Arc::new(FileServer { key: UrlKey::new("k"), roots: vec![s.root().to_owned()] }));
+        let files: Router = files_router(Arc::new(FileServer {
+            key: UrlKey::new("k"),
+            roots: vec![s.root().to_owned()],
+        }));
         let u = s.file_url(&t.token, Duration::from_secs(60)).unwrap();
         let r = files
-            .oneshot(Request::get(format!("{}?{}", u.path().trim_start_matches("/api"), u.query().unwrap())).body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get(format!(
+                    "{}?{}",
+                    u.path().trim_start_matches("/api"),
+                    u.query().unwrap()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(r.status(), StatusCode::OK);
@@ -490,7 +565,10 @@ mod tests {
     #[tokio::test]
     async fn size_limit_and_deadline() {
         let dir = std::env::temp_dir().join(format!("fvkit-up-{}", crate::random_token()));
-        let urls = LocalUrls { public_base: Url::parse("http://h").unwrap(), key: UrlKey::new("k") };
+        let urls = LocalUrls {
+            public_base: Url::parse("http://h").unwrap(),
+            key: UrlKey::new("k"),
+        };
         let mut s = UploadStore::new(dir.join("uploads"), urls).unwrap();
         s.max_bytes = 4;
         let s = Arc::new(s);
@@ -498,14 +576,27 @@ mod tests {
         let t = s.create(None, Some("video/mp4"), now).unwrap();
         assert_eq!(t.file_name, "upload");
         let app: Router = uploads_router(s.clone());
-        let r = app.clone().oneshot(put_req(&t.token, b"12345")).await.unwrap();
+        let r = app
+            .clone()
+            .oneshot(put_req(&t.token, b"12345"))
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::PAYLOAD_TOO_LARGE);
         // A failed PUT does not burn the token.
         assert!(s.put(&t.token, None, Body::from("1234"), now).await.is_ok());
-        assert_eq!(s.resolve(&UploadId(t.token.clone()), now).unwrap().mime.as_deref(), Some("video/mp4"));
+        assert_eq!(
+            s.resolve(&UploadId(t.token.clone()), now)
+                .unwrap()
+                .mime
+                .as_deref(),
+            Some("video/mp4")
+        );
         let t2 = s.create(None, None, now).unwrap();
         let late = now + Duration::from_secs(3601);
-        assert_eq!(s.put(&t2.token, None, Body::from("1"), late).await, Err(UploadError::NotFound));
+        assert_eq!(
+            s.put(&t2.token, None, Body::from("1"), late).await,
+            Err(UploadError::NotFound)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

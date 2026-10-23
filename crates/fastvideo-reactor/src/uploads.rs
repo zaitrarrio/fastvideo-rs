@@ -56,12 +56,20 @@ pub struct Uploads {
 }
 
 fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 impl Uploads {
     pub fn new(dir: PathBuf) -> Self {
-        Self { dir, entries: Mutex::new(HashMap::new()), notify: Notify::new() }
+        Self {
+            dir,
+            entries: Mutex::new(HashMap::new()),
+            notify: Notify::new(),
+        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Entry>> {
@@ -69,9 +77,18 @@ impl Uploads {
     }
 
     /// Registers an upload; returns its id.
-    pub fn create(&self, name: &str, size: u64, mime_type: &str, id: Option<&str>) -> Result<String, Refusal> {
+    pub fn create(
+        &self,
+        name: &str,
+        size: u64,
+        mime_type: &str,
+        id: Option<&str>,
+    ) -> Result<String, Refusal> {
         if size == 0 || size > MAX_UPLOAD_BYTES {
-            return Err(Refusal::new(422, format!("size must be 1..={MAX_UPLOAD_BYTES} bytes")));
+            return Err(Refusal::new(
+                422,
+                format!("size must be 1..={MAX_UPLOAD_BYTES} bytes"),
+            ));
         }
         let id = match id {
             Some(i) if valid_id(i) => i.to_owned(),
@@ -80,11 +97,19 @@ impl Uploads {
         };
         let mut m = self.lock();
         if m.len() >= MAX_UPLOADS && !m.contains_key(&id) {
-            return Err(Refusal::new(429, format!("at most {MAX_UPLOADS} uploads per session")));
+            return Err(Refusal::new(
+                429,
+                format!("at most {MAX_UPLOADS} uploads per session"),
+            ));
         }
         m.insert(
             id.clone(),
-            Entry { name: name.chars().take(255).collect(), mime_type: mime_type.chars().take(127).collect(), size, done: false },
+            Entry {
+                name: name.chars().take(255).collect(),
+                mime_type: mime_type.chars().take(127).collect(),
+                size,
+                done: false,
+            },
         );
         Ok(id)
     }
@@ -100,9 +125,13 @@ impl Uploads {
             None => return Err(Refusal::new(404, "no such upload")),
         };
         if bytes.len() as u64 != size {
-            return Err(Refusal::new(400, format!("expected {size} bytes, got {}", bytes.len())));
+            return Err(Refusal::new(
+                400,
+                format!("expected {size} bytes, got {}", bytes.len()),
+            ));
         }
-        std::fs::create_dir_all(&self.dir).map_err(|e| Refusal::new(500, format!("upload store: {e}")))?;
+        std::fs::create_dir_all(&self.dir)
+            .map_err(|e| Refusal::new(500, format!("upload store: {e}")))?;
         let tmp = self.dir.join(format!("{id}.part"));
         std::fs::write(&tmp, bytes)
             .and_then(|()| std::fs::rename(&tmp, self.path(id)))
@@ -156,10 +185,21 @@ mod tests {
 
     #[tokio::test]
     async fn create_put_resolve_clear() {
-        let dir = std::env::temp_dir().join(format!("fv-reactor-uploads-test-{}", uuid::Uuid::new_v4().simple()));
+        let dir = std::env::temp_dir().join(format!(
+            "fv-reactor-uploads-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
         let u = Uploads::new(dir.clone());
-        assert_eq!(u.create("a.png", 0, "image/png", None).unwrap_err().status, 422);
-        assert_eq!(u.create("a.png", 3, "image/png", Some("../x")).unwrap_err().status, 422);
+        assert_eq!(
+            u.create("a.png", 0, "image/png", None).unwrap_err().status,
+            422
+        );
+        assert_eq!(
+            u.create("a.png", 3, "image/png", Some("../x"))
+                .unwrap_err()
+                .status,
+            422
+        );
         let id = u.create("a.png", 3, "image/png", Some("img1")).unwrap();
         assert_eq!(id, "img1");
         assert_eq!(u.put("nope", b"abc").unwrap_err().status, 404);
@@ -176,9 +216,15 @@ mod tests {
         let got = got.expect("resolved");
         assert_eq!((got.name.as_str(), got.size), ("a.png", 3));
         assert_eq!(std::fs::read(&got.path).unwrap(), b"abc");
-        assert!(u.resolve("missing", Duration::from_millis(10)).await.is_none());
+        assert!(u
+            .resolve("missing", Duration::from_millis(10))
+            .await
+            .is_none());
         let pending = u.create("b", 1, "x", None).unwrap();
-        assert!(u.resolve(&pending, Duration::from_millis(20)).await.is_none());
+        assert!(u
+            .resolve(&pending, Duration::from_millis(20))
+            .await
+            .is_none());
         u.clear();
         assert!(!got.path.exists());
         let _ = std::fs::remove_dir_all(dir);

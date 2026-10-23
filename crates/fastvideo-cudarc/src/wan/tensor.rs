@@ -126,7 +126,14 @@ impl ActKey {
 
 /// `(big, small, op, inner, period, out_shape)` of a broadcast binary op.
 #[cfg(feature = "cuda")]
-type BcastPlan<'a> = (&'a CudaTensor, &'a CudaTensor, BcastOp, usize, usize, Vec<usize>);
+type BcastPlan<'a> = (
+    &'a CudaTensor,
+    &'a CudaTensor,
+    BcastOp,
+    usize,
+    usize,
+    Vec<usize>,
+);
 
 /// A tensor's device storage in its own dtype (see [`CudaTensor::dev_any`]).
 #[cfg(feature = "cuda")]
@@ -1105,7 +1112,14 @@ impl CudaTensor {
         op: BcastOp,
     ) -> Result<Option<BcastPlan<'a>>> {
         if self.shape == other.shape {
-            return Ok(Some((self, other, op, 1, self.numel().max(1), self.shape.clone())));
+            return Ok(Some((
+                self,
+                other,
+                op,
+                1,
+                self.numel().max(1),
+                self.shape.clone(),
+            )));
         }
         let out_shape = broadcast_shapes(&self.shape, &other.shape)?;
         Ok(if self.shape == out_shape {
@@ -1116,7 +1130,8 @@ impl CudaTensor {
                 BcastOp::Div => BcastOp::RDiv,
                 o => o,
             };
-            repeat_plan(&other.shape, &self.shape).map(|(i, p)| (other, self, swapped, i, p, out_shape))
+            repeat_plan(&other.shape, &self.shape)
+                .map(|(i, p)| (other, self, swapped, i, p, out_shape))
         } else {
             None
         })
@@ -1133,7 +1148,8 @@ impl CudaTensor {
         #[cfg(feature = "cuda")]
         if self.act16_device() || other.act16_device() {
             if let Some((big, small, op, inner, period, shape)) = self.bcast_plan(other, op)? {
-                if let Some(t) = super::act16::binary(big, small, op, inner, period, out16, shape)? {
+                if let Some(t) = super::act16::binary(big, small, op, inner, period, out16, shape)?
+                {
                     return Ok(t);
                 }
             }
@@ -1300,7 +1316,12 @@ impl CudaTensor {
 
     /// The bf16-native unary kernel for a bf16 activation (`None` otherwise).
     #[cfg(feature = "cuda")]
-    fn act16_unary(&self, kind: super::act16::Unary, p0: f32, p1: f32) -> Result<Option<CudaTensor>> {
+    fn act16_unary(
+        &self,
+        kind: super::act16::Unary,
+        p0: f32,
+        p1: f32,
+    ) -> Result<Option<CudaTensor>> {
         if !(self.act16_device() && self.is_bf16()) {
             return Ok(None);
         }

@@ -792,7 +792,10 @@ pub fn abs_diff_sums_device(a: &CudaSlice<f32>, b: &CudaSlice<f32>) -> Result<(f
     let blocks = a.len().div_ceil(threads as usize).clamp(1, 1024) as u32;
     // One (diff, prev) pair per block, added here in block order: no
     // atomics, so the TeaCache distance is the same bits in every run.
-    let mut out = dev.stream.alloc_zeros::<f64>(2 * blocks as usize).map_err(err)?;
+    let mut out = dev
+        .stream
+        .alloc_zeros::<f64>(2 * blocks as usize)
+        .map_err(err)?;
     let cfg = LaunchConfig {
         grid_dim: (blocks, 1, 1),
         block_dim: (threads, 1, 1),
@@ -875,7 +878,11 @@ pub fn vsa_tile_mean_round_device(
         shared_mem_bytes: 0,
     };
     let (seq_i, dim_i) = (seq as i64, dim as i32);
-    let (nt, te, r16) = (plan.num_tiles as i32, plan.tile_elems as i32, i32::from(round16));
+    let (nt, te, r16) = (
+        plan.num_tiles as i32,
+        plan.tile_elems as i32,
+        i32::from(round16),
+    );
     launch!(dev.stream, &dev.kernels.vsa_tile_mean, cfg;
         x, &plan.slot_src, &plan.block_sizes, &mut out, &seq_i, &dim_i, &nt, &te, &r16)
     .map_err(err)?;
@@ -1156,7 +1163,9 @@ pub fn vsa_mma_attn_range_device(
             vsa_tile_qkv_device(v, plan, bh, seq, dim)?,
         ))
     })?;
-    vsa_mma_attn_tiled_device(&qt, &kt, &vt, selected, plan, bh, dim, topk, scale, q_base, q_tiles)
+    vsa_mma_attn_tiled_device(
+        &qt, &kt, &vt, selected, plan, bh, dim, topk, scale, q_base, q_tiles,
+    )
 }
 
 /// [`vsa_tile_qkv_device`] on a bf16 `[bh, seq, dim]` tensor: the same bits
@@ -1169,7 +1178,10 @@ pub fn vsa_tile_qkv_bf16_device(
     seq: usize,
     dim: usize,
 ) -> Result<CudaSlice<half::bf16>> {
-    check("vsa_tile_qkv_b16 dim", dim % 8 == 0 && x.len() >= bh * seq * dim)?;
+    check(
+        "vsa_tile_qkv_b16 dim",
+        dim % 8 == 0 && x.len() >= bh * seq * dim,
+    )?;
     let dev = ctx()?;
     let padded = plan.num_tiles * plan.tile_elems;
     let total = bh * padded * dim;
@@ -1327,7 +1339,10 @@ pub fn vsa_mma_attn_tiled_device(
                 // mbarriers): two CTAs per SM where the two-stage one fits one.
                 let ring = vsa_ring_requested();
                 let (func, shared) = if ring {
-                    (&dev.kernels.vsa_mma_attn_tma2, (3 * TILE * DIM * 2 + 32) as u32)
+                    (
+                        &dev.kernels.vsa_mma_attn_tma2,
+                        (3 * TILE * DIM * 2 + 32) as u32,
+                    )
                 } else {
                     (&dev.kernels.vsa_mma_attn_tma, shared_tma)
                 };
@@ -1398,7 +1413,9 @@ fn tma_requested(sm_major: i32) -> bool {
     if string_flag("FASTVIDEO_VSA_TMA", "1") == "0" {
         return false;
     }
-    let pick = fastvideo_models::techniques::kernels::choice(fastvideo_models::techniques::kernels::KernelOp::VsaAttention);
+    let pick = fastvideo_models::techniques::kernels::choice(
+        fastvideo_models::techniques::kernels::KernelOp::VsaAttention,
+    );
     if pick == "mma" {
         return false; // explicit Ampere path for A/B
     }
@@ -1413,7 +1430,11 @@ fn tma_requested(sm_major: i32) -> bool {
 /// [`vsa_ring_default`].
 #[cfg(feature = "cuda")]
 fn vsa_ring_requested() -> bool {
-    match fastvideo_models::techniques::kernels::choice(fastvideo_models::techniques::kernels::KernelOp::VsaAttention).as_str() {
+    match fastvideo_models::techniques::kernels::choice(
+        fastvideo_models::techniques::kernels::KernelOp::VsaAttention,
+    )
+    .as_str()
+    {
         "tma2" => true,
         "tma" => false,
         _ => vsa_ring_default(),
@@ -1428,7 +1449,10 @@ pub fn vsa_ring_default() -> bool {
 }
 
 #[cfg(feature = "cuda")]
-pub(crate) fn opt_in_dynamic_shared(func: &cudarc::driver::CudaFunction, shared: u32) -> Result<()> {
+pub(crate) fn opt_in_dynamic_shared(
+    func: &cudarc::driver::CudaFunction,
+    shared: u32,
+) -> Result<()> {
     use cudarc::driver::sys::CUfunction_attribute_enum::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES;
     // Once per function per process. Two kernels, two Once locks.
     // set_attribute is idempotent; a failed first call is the one we surface.
@@ -1549,7 +1573,9 @@ pub fn vsa_combine_device(
     seq: usize,
     dim: usize,
 ) -> Result<()> {
-    vsa_combine_round_device(sparse, coarse, gate, plan, out, bh, group, q_base, seq, dim, false)
+    vsa_combine_round_device(
+        sparse, coarse, gate, plan, out, bh, group, q_base, seq, dim, false,
+    )
 }
 
 /// [`vsa_combine_device`]; `round16` combines with H3 upstream's bf16
@@ -3353,7 +3379,11 @@ pub fn sol_prep_device_bf16(
     scale: f32,
     thresh: fastvideo_models::sol_attn::SolThresh,
 ) -> Result<SolPrepDev> {
-    for (name, n) in [("sol_prep q", q.len()), ("sol_prep k", k.len()), ("sol_prep v", v.len())] {
+    for (name, n) in [
+        ("sol_prep q", q.len()),
+        ("sol_prep k", k.len()),
+        ("sol_prep v", v.len()),
+    ] {
         sol_geometry(name, n, bh, tokens, dim)?;
     }
     let p = super::quant::ptr;
@@ -3469,7 +3499,11 @@ pub enum SolKernel {
 #[cfg(feature = "cuda")]
 pub fn sol_kernel_choice(sm_major: i32) -> SolKernel {
     // The kernel seam (`[kernels] sol_attention`, else `FASTVIDEO_SOL_KERNEL`).
-    match fastvideo_models::techniques::kernels::choice(fastvideo_models::techniques::kernels::KernelOp::SolAttention).as_str() {
+    match fastvideo_models::techniques::kernels::choice(
+        fastvideo_models::techniques::kernels::KernelOp::SolAttention,
+    )
+    .as_str()
+    {
         "v1" => SolKernel::V1,
         "x4" => SolKernel::X4,
         "x4f" => SolKernel::X4f,
@@ -3574,8 +3608,11 @@ pub fn sol_fwd_core(
     let groups = nt.div_ceil(ROUTE_GROUP);
     let n_out = bh * tokens * SOL_HEAD_DIM;
     let mut out = alloc(if out_bf16 { 1 } else { n_out })?;
-    let mut out16 = unsafe { dev.stream.alloc::<half::bf16>(if out_bf16 { n_out } else { 1 }) }
-        .map_err(err)?;
+    let mut out16 = unsafe {
+        dev.stream
+            .alloc::<half::bf16>(if out_bf16 { n_out } else { 1 })
+    }
+    .map_err(err)?;
     let mut lse = alloc(if want_lse { bh * tokens } else { 1 })?;
     let mut route = unsafe {
         dev.stream
@@ -3710,7 +3747,9 @@ pub fn sol_fwd_device_pick(
         pick,
     )?;
     let SolOut::F32(out) = o else {
-        return Err(TensorError::Message("sol_fwd: expected an f32 output".into()));
+        return Err(TensorError::Message(
+            "sol_fwd: expected an f32 output".into(),
+        ));
     };
     Ok(SolFwdDev { out, lse, route })
 }
@@ -4828,7 +4867,11 @@ pub fn moe_group_topk_device(
     let mut val = alloc((rows * k).max(1))?;
     let (rows_i, e_i, k_i) = (rows as i32, p.experts as i32, k as i32);
     let (g_i, tg_i) = (p.n_group as i32, p.topk_group as i32);
-    let (sm_i, norm_i, r16_i) = (i32::from(p.softmax), i32::from(p.norm), i32::from(p.round_bf16));
+    let (sm_i, norm_i, r16_i) = (
+        i32::from(p.softmax),
+        i32::from(p.norm),
+        i32::from(p.round_bf16),
+    );
     let scale = p.scale;
     if rows > 0 {
         launch!(dev.stream, &fns.moe_group_topk, cfg_n(rows);
@@ -4845,19 +4888,28 @@ pub fn moe_group_topk_device(
 }
 
 /// `out[t, :] = Σ_s w[t·k+s] · ys[pos[t·k+s], :]` for `n` tokens.
-pub fn moe_combine_host(ys: &[f32], pos: &[u32], w: &[f32], n: usize, k: usize, d: usize) -> Vec<f32> {
+pub fn moe_combine_host(
+    ys: &[f32],
+    pos: &[u32],
+    w: &[f32],
+    n: usize,
+    k: usize,
+    d: usize,
+) -> Vec<f32> {
     use rayon::prelude::*;
     let mut out = vec![0f32; n * d];
-    out.par_chunks_mut(d.max(1)).enumerate().for_each(|(t, row)| {
-        for s in 0..k {
-            let r = t * k + s;
-            let src = &ys[pos[r] as usize * d..][..d];
-            let wr = w[r];
-            for (o, &v) in row.iter_mut().zip(src) {
-                *o += wr * v;
+    out.par_chunks_mut(d.max(1))
+        .enumerate()
+        .for_each(|(t, row)| {
+            for s in 0..k {
+                let r = t * k + s;
+                let src = &ys[pos[r] as usize * d..][..d];
+                let wr = w[r];
+                for (o, &v) in row.iter_mut().zip(src) {
+                    *o += wr * v;
+                }
             }
-        }
-    });
+        });
     out
 }
 
@@ -4937,14 +4989,16 @@ pub fn ltx_abs_diff_sums_device(a: &CudaSlice<f32>, b: &CudaSlice<f32>) -> Resul
     let n = a.len() as i64;
     let blocks = a.len().div_ceil(256).clamp(1, 4096) as u32;
     // One pair per block, added on the host in block order (no atomics).
-    let mut out = dev.stream.alloc_zeros::<f64>(2 * blocks as usize).map_err(err)?;
+    let mut out = dev
+        .stream
+        .alloc_zeros::<f64>(2 * blocks as usize)
+        .map_err(err)?;
     let cfg = LaunchConfig {
         grid_dim: (blocks, 1, 1),
         block_dim: (256, 1, 1),
         shared_mem_bytes: 0,
     };
-    launch!(dev.stream, &dev.kernels.ltx_abs_diff_sums, cfg; a, b, &mut out, &n)
-        .map_err(err)?;
+    launch!(dev.stream, &dev.kernels.ltx_abs_diff_sums, cfg; a, b, &mut out, &n).map_err(err)?;
     let host = dev.stream.memcpy_dtov(&out).map_err(err)?;
     super::stats::record_d2h(4 * blocks as usize);
     Ok(sum_pairs_in_order(&host))
@@ -4979,7 +5033,8 @@ pub fn index_select_rows_dev_idx(
     let n = idx.len() * d;
     let (n_i, d_i) = (n as i64, d as i64);
     let mut out = alloc(n.max(1))?;
-    launch!(dev.stream, &dev.kernels.index_select_rows, cfg_n(n); table, idx, &mut out, &n_i, &d_i).map_err(err)?;
+    launch!(dev.stream, &dev.kernels.index_select_rows, cfg_n(n); table, idx, &mut out, &n_i, &d_i)
+        .map_err(err)?;
     Ok(out)
 }
 
@@ -5285,10 +5340,7 @@ pub fn h3v_swiglu_bf16_device(
     bias: &CudaSlice<f32>,
     half: usize,
 ) -> Result<CudaSlice<half::bf16>> {
-    check(
-        "h3v_swiglu",
-        half > 0 && x.len().is_multiple_of(2 * half),
-    )?;
+    check("h3v_swiglu", half > 0 && x.len().is_multiple_of(2 * half))?;
     h3v_swiglu_bf16_device_with(false, x, bias, half, x.len() / (2 * half))
 }
 

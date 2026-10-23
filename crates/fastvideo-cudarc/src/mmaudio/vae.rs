@@ -20,13 +20,24 @@ use crate::wan::weights::WeightMap;
 const MP_SILU: f32 = 1.0 / 0.596;
 
 /// `MPConv1D` with its weight normalized (and `gain` folded in).
-fn mp_conv(map: &WeightMap, key: &str, cin: usize, cout: usize, k: usize, gain: f32) -> Result<Conv1d> {
+fn mp_conv(
+    map: &WeightMap,
+    key: &str,
+    cin: usize,
+    cout: usize,
+    k: usize,
+    gain: f32,
+) -> Result<Conv1d> {
     let w = host_values(map, &format!("{key}.weight"), &[cout, cin, k])?;
     let fan = cin * k;
     let alpha = (1.0 / fan as f64).sqrt();
     let mut out = Vec::with_capacity(w.len());
     for row in w.chunks_exact(fan) {
-        let norm = row.iter().map(|&x| f64::from(x) * f64::from(x)).sum::<f64>().sqrt() as f32;
+        let norm = row
+            .iter()
+            .map(|&x| f64::from(x) * f64::from(x))
+            .sum::<f64>()
+            .sqrt() as f32;
         let denom = 1e-4f32 + norm * alpha as f32;
         let scale = 1.0 / (fan as f32).sqrt();
         out.extend(row.iter().map(|&x| (x / denom) * scale * gain));
@@ -61,7 +72,14 @@ impl ResBlock {
             conv1: mp_conv(map, &format!("{p}.conv1"), cin, cout, 3, 1.0)?,
             conv2: mp_conv(map, &format!("{p}.conv2"), cout, cout, 3, 1.0)?,
             nin: if cin != cout {
-                Some(mp_conv(map, &format!("{p}.nin_shortcut"), cin, cout, 1, 1.0)?)
+                Some(mp_conv(
+                    map,
+                    &format!("{p}.nin_shortcut"),
+                    cin,
+                    cout,
+                    1,
+                    1.0,
+                )?)
             } else {
                 None
             },
@@ -141,7 +159,8 @@ impl MmAudioVaeDecoder {
         let mid1 = ResBlock::load(map, "decoder.mid.block_1", top, top)?;
         let mid_attn = AttnBlock::load(map, "decoder.mid.attn_1", top)?;
         let mid2 = ResBlock::load(map, "decoder.mid.block_2", top, top)?;
-        let mut up: Vec<(Vec<ResBlock>, Option<Conv1d>)> = (0..levels).map(|_| (Vec::new(), None)).collect();
+        let mut up: Vec<(Vec<ResBlock>, Option<Conv1d>)> =
+            (0..levels).map(|_| (Vec::new(), None)).collect();
         let mut block_in = top;
         for level in (0..levels).rev() {
             let block_out = dim * cfg.ch_mult[level];
@@ -156,7 +175,14 @@ impl MmAudioVaeDecoder {
                 block_in = block_out;
             }
             let upsample = if cfg.up_levels.contains(&level) {
-                Some(mp_conv(map, &format!("decoder.up.{level}.upsample.conv"), block_in, block_in, 3, 1.0)?)
+                Some(mp_conv(
+                    map,
+                    &format!("decoder.up.{level}.upsample.conv"),
+                    block_in,
+                    block_in,
+                    3,
+                    1.0,
+                )?)
             } else {
                 None
             };

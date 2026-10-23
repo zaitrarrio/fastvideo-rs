@@ -23,8 +23,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use fastvideo_protocol::{
-    ApiError, GapId, GenerationRequest, MediaKind, MediaProbe, MediaRef, StagedInputs,
-    StagedMedia,
+    ApiError, GapId, GenerationRequest, MediaKind, MediaProbe, MediaRef, StagedInputs, StagedMedia,
 };
 use time::OffsetDateTime;
 
@@ -62,9 +61,21 @@ impl Default for IngestPolicy {
     /// 50 MB / 30 s; data URIs up to the 64 MB body limit.
     fn default() -> Self {
         Self {
-            image: KindLimits { max_bytes: 30 * MB, data_uri_max_encoded: 40 * MB, timeout: Duration::from_secs(20) },
-            video: KindLimits { max_bytes: 100 * MB, data_uri_max_encoded: 64 * MB, timeout: Duration::from_secs(60) },
-            audio: KindLimits { max_bytes: 50 * MB, data_uri_max_encoded: 64 * MB, timeout: Duration::from_secs(30) },
+            image: KindLimits {
+                max_bytes: 30 * MB,
+                data_uri_max_encoded: 40 * MB,
+                timeout: Duration::from_secs(20),
+            },
+            video: KindLimits {
+                max_bytes: 100 * MB,
+                data_uri_max_encoded: 64 * MB,
+                timeout: Duration::from_secs(60),
+            },
+            audio: KindLimits {
+                max_bytes: 50 * MB,
+                data_uri_max_encoded: 64 * MB,
+                timeout: Duration::from_secs(30),
+            },
             target: TargetPolicy::default(),
             follow_redirects: true,
             max_redirects: 5,
@@ -77,10 +88,26 @@ impl IngestPolicy {
     /// video and audio 32 MB / 30 s; data URIs 7 MB (image) and 15 MB encoded.
     pub fn ltx() -> Self {
         Self {
-            image: KindLimits { max_bytes: 15 * MB, data_uri_max_encoded: 7 * MB, timeout: Duration::from_secs(10) },
-            video: KindLimits { max_bytes: 32 * MB, data_uri_max_encoded: 15 * MB, timeout: Duration::from_secs(30) },
-            audio: KindLimits { max_bytes: 32 * MB, data_uri_max_encoded: 15 * MB, timeout: Duration::from_secs(30) },
-            target: TargetPolicy { https_only: true, allow_ip_literals: false, allow_private: false },
+            image: KindLimits {
+                max_bytes: 15 * MB,
+                data_uri_max_encoded: 7 * MB,
+                timeout: Duration::from_secs(10),
+            },
+            video: KindLimits {
+                max_bytes: 32 * MB,
+                data_uri_max_encoded: 15 * MB,
+                timeout: Duration::from_secs(30),
+            },
+            audio: KindLimits {
+                max_bytes: 32 * MB,
+                data_uri_max_encoded: 15 * MB,
+                timeout: Duration::from_secs(30),
+            },
+            target: TargetPolicy {
+                https_only: true,
+                allow_ip_literals: false,
+                allow_private: false,
+            },
             follow_redirects: false,
             max_redirects: 0,
         }
@@ -100,7 +127,8 @@ impl IngestPolicy {
 pub trait Prober: Send + Sync + 'static {
     /// Facts about a staged file whose type already matched `kind`. An error
     /// refuses the input (`UnsupportedMedia` for an undecodable file).
-    async fn probe(&self, path: &Path, kind: MediaKind, mime: &str) -> Result<MediaProbe, ApiError>;
+    async fn probe(&self, path: &Path, kind: MediaKind, mime: &str)
+        -> Result<MediaProbe, ApiError>;
 }
 
 /// PNG/JPEG via the `image` crate; other types via `ffprobe` when present
@@ -112,13 +140,20 @@ pub struct DefaultProber {
 
 impl Default for DefaultProber {
     fn default() -> Self {
-        Self { ffprobe: Some(PathBuf::from("ffprobe")) }
+        Self {
+            ffprobe: Some(PathBuf::from("ffprobe")),
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl Prober for DefaultProber {
-    async fn probe(&self, path: &Path, kind: MediaKind, mime: &str) -> Result<MediaProbe, ApiError> {
+    async fn probe(
+        &self,
+        path: &Path,
+        kind: MediaKind,
+        mime: &str,
+    ) -> Result<MediaProbe, ApiError> {
         if kind == MediaKind::Image && matches!(mime, "image/png" | "image/jpeg") {
             let p = path.to_owned();
             let dims = tokio::task::spawn_blocking(move || {
@@ -130,8 +165,14 @@ impl Prober for DefaultProber {
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
             return match dims {
-                Ok((w, h)) if w > 0 && h > 0 => Ok(MediaProbe { width: Some(w), height: Some(h), ..Default::default() }),
-                _ => Err(ApiError::unsupported_media("the image could not be decoded")),
+                Ok((w, h)) if w > 0 && h > 0 => Ok(MediaProbe {
+                    width: Some(w),
+                    height: Some(h),
+                    ..Default::default()
+                }),
+                _ => Err(ApiError::unsupported_media(
+                    "the image could not be decoded",
+                )),
             };
         }
         // MP4 / MOV video: the box reader gives the exact sample count, size,
@@ -157,7 +198,10 @@ impl Prober for DefaultProber {
                 b.truncate(WAV_HEAD_MAX);
                 b
             });
-            let size = tokio::fs::metadata(path).await.map(|m| m.len()).unwrap_or(0);
+            let size = tokio::fs::metadata(path)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(0);
             if let Some((rate, secs)) = head.as_deref().and_then(|h| parse_wav_header(h, size)) {
                 p.audio_rate.get_or_insert(rate);
                 p.duration_s.get_or_insert(secs);
@@ -175,13 +219,18 @@ pub fn mp4_probe(i: &fastvideo_media::mp4::Mp4Info) -> Option<MediaProbe> {
     let (w, h) = (v.width.filter(|w| *w > 0)?, v.height.filter(|h| *h > 0)?);
     let frames = u32::try_from(v.samples).ok().filter(|n| *n > 0)?;
     let dur = v.duration_s();
-    let fps = v.fps.or_else(|| (dur > 0.0).then(|| f64::from(frames) / dur))?;
+    let fps = v
+        .fps
+        .or_else(|| (dur > 0.0).then(|| f64::from(frames) / dur))?;
     Some(MediaProbe {
         width: Some(w),
         height: Some(h),
         duration_s: Some(if dur > 0.0 { dur } else { i.duration_s }),
         fps: Some(fps),
-        audio_rate: i.audio().and_then(|a| a.audio.as_ref().map(|x| x.sample_rate)).filter(|r| *r > 0),
+        audio_rate: i
+            .audio()
+            .and_then(|a| a.audio.as_ref().map(|x| x.sample_rate))
+            .filter(|r| *r > 0),
         frames: Some(frames),
     })
 }
@@ -195,7 +244,10 @@ const WAV_HEAD_MAX: usize = 1 << 16;
 /// else.
 pub fn parse_wav_header(head: &[u8], file_len: u64) -> Option<(u32, f64)> {
     let u16_at = |i: usize| head.get(i..i + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
-    let u32_at = |i: usize| head.get(i..i + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    let u32_at = |i: usize| {
+        head.get(i..i + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
     if head.get(0..4)? != b"RIFF" || head.get(8..12)? != b"WAVE" {
         return None;
     }
@@ -213,7 +265,11 @@ pub fn parse_wav_header(head: &[u8], file_len: u64) -> Option<(u32, f64)> {
             b"data" => {
                 let (rate, block) = (rate?, u64::from(block?));
                 let avail = file_len.saturating_sub(body as u64);
-                let bytes = if len == 0 || len == u32::MAX as usize { avail } else { (len as u64).min(avail) };
+                let bytes = if len == 0 || len == u32::MAX as usize {
+                    avail
+                } else {
+                    (len as u64).min(avail)
+                };
                 return Some((rate, (bytes / block) as f64 / f64::from(rate)));
             }
             _ => {}
@@ -227,7 +283,14 @@ pub fn parse_wav_header(head: &[u8], file_len: u64) -> Option<(u32, f64)> {
 /// audio stream. `None` when ffprobe is missing or fails.
 pub async fn ffprobe(bin: &Path, path: &Path) -> Option<MediaProbe> {
     let out = tokio::process::Command::new(bin)
-        .args(["-v", "error", "-print_format", "json", "-show_streams", "-show_format"])
+        .args([
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_streams",
+            "-show_format",
+        ])
         .arg(path)
         .kill_on_drop(true)
         .output()
@@ -264,7 +327,9 @@ pub fn parse_ffprobe(v: &serde_json::Value) -> Option<MediaProbe> {
                 if p.duration_s.is_none() {
                     p.duration_s = num(s.get("duration"));
                 }
-                p.frames = num(s.get("nb_frames")).filter(|n| *n >= 1.0).map(|n| n as u32);
+                p.frames = num(s.get("nb_frames"))
+                    .filter(|n| *n >= 1.0)
+                    .map(|n| n as u32);
             }
             Some("audio") if p.audio_rate.is_none() => {
                 p.audio_rate = num(s.get("sample_rate")).map(|r| r as u32);
@@ -377,7 +442,11 @@ pub fn parse_data_uri(s: &str) -> Option<DataUri<'_>> {
     let mut parts = head.split(';');
     let mime = parts.next().filter(|m| !m.is_empty());
     let base64 = parts.any(|p| p.eq_ignore_ascii_case("base64"));
-    Some(DataUri { mime, base64, payload })
+    Some(DataUri {
+        mime,
+        base64,
+        payload,
+    })
 }
 
 /// Decodes a base64 data URI payload (standard or URL-safe alphabet,
@@ -438,19 +507,29 @@ impl Ingestor {
         let mut out = StagedInputs::default();
         for (i, k) in req.keyframes.iter().enumerate() {
             let param = format!("keyframes[{i}]");
-            let m = self.stage_one(&k.image, MediaKind::Image, policy, dir, &param, now).await?;
+            let m = self
+                .stage_one(&k.image, MediaKind::Image, policy, dir, &param, now)
+                .await?;
             out.keyframes.push((k.at, m));
         }
         for (i, r) in req.references.iter().enumerate() {
             let param = format!("references[{i}]");
-            let m = self.stage_one(&r.media, r.kind, policy, dir, &param, now).await?;
+            let m = self
+                .stage_one(&r.media, r.kind, policy, dir, &param, now)
+                .await?;
             out.references.push((r.kind, m));
         }
         if let Some(a) = &req.audio_in {
-            out.audio_in = Some(self.stage_one(&a.media, MediaKind::Audio, policy, dir, "audio", now).await?);
+            out.audio_in = Some(
+                self.stage_one(&a.media, MediaKind::Audio, policy, dir, "audio", now)
+                    .await?,
+            );
         }
         if let Some(e) = &req.edit {
-            out.video_in = Some(self.stage_one(&e.video, MediaKind::Video, policy, dir, "video_url", now).await?);
+            out.video_in = Some(
+                self.stage_one(&e.video, MediaKind::Video, policy, dir, "video_url", now)
+                    .await?,
+            );
         }
         Ok(out)
     }
@@ -473,10 +552,14 @@ impl Ingestor {
                 return Err(ApiError::unsupported(GapId::ProviderFiles).with_param(param));
             }
             MediaRef::DataUri(s) => {
-                let d = parse_data_uri(s)
-                    .ok_or_else(|| ApiError::invalid_param(param, format!("`{param}` is not a valid data URI")))?;
+                let d = parse_data_uri(s).ok_or_else(|| {
+                    ApiError::invalid_param(param, format!("`{param}` is not a valid data URI"))
+                })?;
                 if !d.base64 {
-                    return Err(ApiError::invalid_param(param, "data URIs must be base64 encoded"));
+                    return Err(ApiError::invalid_param(
+                        param,
+                        "data URIs must be base64 encoded",
+                    ));
                 }
                 if d.payload.len() as u64 > lim.data_uri_max_encoded {
                     return Err(ApiError::payload_too_large(format!(
@@ -485,8 +568,9 @@ impl Ingestor {
                     ))
                     .with_param(param));
                 }
-                let data = decode_b64(d.payload)
-                    .ok_or_else(|| ApiError::invalid_param(param, format!("`{param}` has invalid base64")))?;
+                let data = decode_b64(d.payload).ok_or_else(|| {
+                    ApiError::invalid_param(param, format!("`{param}` has invalid base64"))
+                })?;
                 if data.len() as u64 > lim.max_bytes {
                     return Err(too_large(param, lim.max_bytes));
                 }
@@ -495,7 +579,11 @@ impl Ingestor {
             }
             MediaRef::Upload(id) => {
                 let local = self.uploads.as_ref().and_then(|u| u.resolve(id, now));
-                let remote = self.uploads.as_ref().filter(|_| local.is_none()).and_then(|u| u.remote_for(&id.0));
+                let remote = self
+                    .uploads
+                    .as_ref()
+                    .filter(|_| local.is_none())
+                    .and_then(|u| u.remote_for(&id.0));
                 match (local, remote) {
                     (Some(f), _) => {
                         if f.bytes > lim.max_bytes {
@@ -538,7 +626,10 @@ impl Ingestor {
                 .map_err(|e| ApiError::internal(e.to_string()))?;
             let mut n = 0;
             while n < head.len() {
-                let k = f.read(&mut head[n..]).await.map_err(|e| ApiError::internal(e.to_string()))?;
+                let k = f
+                    .read(&mut head[n..])
+                    .await
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
                 if k == 0 {
                     break;
                 }
@@ -547,15 +638,30 @@ impl Ingestor {
             n
         };
         if n == 0 {
-            return Err(ApiError::invalid_param(param, format!("`{param}` is empty")));
+            return Err(ApiError::invalid_param(
+                param,
+                format!("`{param}` is empty"),
+            ));
         }
         let declared = declared
-            .map(|m| m.split(';').next().unwrap_or(&m).trim().to_ascii_lowercase())
-            .filter(|m| !m.is_empty() && m != "application/octet-stream" && m != "binary/octet-stream");
+            .map(|m| {
+                m.split(';')
+                    .next()
+                    .unwrap_or(&m)
+                    .trim()
+                    .to_ascii_lowercase()
+            })
+            .filter(|m| {
+                !m.is_empty() && m != "application/octet-stream" && m != "binary/octet-stream"
+            });
         let mut mime = match sniff_mime(&head[..n]) {
             Some(s) => s.to_owned(),
             None => declared.ok_or_else(|| {
-                ApiError::unsupported_media(format!("`{param}`: unrecognized {} format", kind_word(kind))).with_param(param)
+                ApiError::unsupported_media(format!(
+                    "`{param}`: unrecognized {} format",
+                    kind_word(kind)
+                ))
+                .with_param(param)
             })?,
         };
         if kind_of(&mime) != Some(kind) {
@@ -571,10 +677,15 @@ impl Ingestor {
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let mut bytes = bytes;
         if kind == MediaKind::Image && matches!(mime.as_str(), "image/png" | "image/jpeg") {
-            let (src, out) = (path.clone(), dir.join(format!("{}.png", crate::random_token())));
-            let done = tokio::task::spawn_blocking(move || apply_exif_orientation(&src, &out).map(|b| b.map(|b| (out, b))))
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
+            let (src, out) = (
+                path.clone(),
+                dir.join(format!("{}.png", crate::random_token())),
+            );
+            let done = tokio::task::spawn_blocking(move || {
+                apply_exif_orientation(&src, &out).map(|b| b.map(|b| (out, b)))
+            })
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
             match done {
                 Ok(Some((out, b))) => {
                     let _ = tokio::fs::remove_file(&path).await;
@@ -583,7 +694,10 @@ impl Ingestor {
                 Ok(None) => {}
                 Err(e) => {
                     let _ = tokio::fs::remove_file(&path).await;
-                    return Err(ApiError::unsupported_media(format!("`{param}`: the image could not be decoded: {e}")).with_param(param));
+                    return Err(ApiError::unsupported_media(format!(
+                        "`{param}`: the image could not be decoded: {e}"
+                    ))
+                    .with_param(param));
                 }
             }
         }
@@ -591,10 +705,19 @@ impl Ingestor {
             Ok(p) => p,
             Err(e) => {
                 let _ = tokio::fs::remove_file(&path).await;
-                return Err(if e.param.is_none() { e.with_param(param) } else { e });
+                return Err(if e.param.is_none() {
+                    e.with_param(param)
+                } else {
+                    e
+                });
             }
         };
-        Ok(StagedMedia { path, mime, bytes, probe })
+        Ok(StagedMedia {
+            path,
+            mime,
+            bytes,
+            probe,
+        })
     }
 }
 
@@ -618,7 +741,8 @@ pub fn apply_exif_orientation(path: &Path, out: &Path) -> std::io::Result<Option
     }
     let mut img = image::DynamicImage::from_decoder(decoder).map_err(std::io::Error::other)?;
     img.apply_orientation(orientation);
-    img.save_with_format(out, image::ImageFormat::Png).map_err(std::io::Error::other)?;
+    img.save_with_format(out, image::ImageFormat::Png)
+        .map_err(std::io::Error::other)?;
     Ok(Some(std::fs::metadata(out)?.len()))
 }
 
@@ -626,8 +750,16 @@ pub fn apply_exif_orientation(path: &Path, out: &Path) -> std::io::Result<Option
 /// guard, redirect rules, and `kind`'s size and time limits); returns the
 /// byte count. A gateway worker uses it for inputs the client gave as a
 /// URL (docs/serve/gateway.md §3).
-pub async fn fetch_public(url: &url::Url, kind: MediaKind, policy: &IngestPolicy, dest: &Path, param: &str) -> Result<u64, ApiError> {
-    fetch::fetch_to(url, policy.limits(kind), policy, dest, param).await.map(|(n, _)| n)
+pub async fn fetch_public(
+    url: &url::Url,
+    kind: MediaKind,
+    policy: &IngestPolicy,
+    dest: &Path,
+    param: &str,
+) -> Result<u64, ApiError> {
+    fetch::fetch_to(url, policy.limits(kind), policy, dest, param)
+        .await
+        .map(|(n, _)| n)
 }
 
 fn too_large(param: &str, max: u64) -> ApiError {
@@ -654,7 +786,10 @@ mod fetch {
                 let _ = tokio::fs::remove_file(dest).await;
                 Err(ApiError::invalid_param(
                     param,
-                    format!("fetching `{param}` timed out after {} s", lim.timeout.as_secs()),
+                    format!(
+                        "fetching `{param}` timed out after {} s",
+                        lim.timeout.as_secs()
+                    ),
                 ))
             }
         }
@@ -703,7 +838,10 @@ mod fetch {
             break resp;
         };
         if !resp.status().is_success() {
-            return Err(bad(format!("fetching `{param}` returned HTTP {}", resp.status().as_u16())));
+            return Err(bad(format!(
+                "fetching `{param}` returned HTTP {}",
+                resp.status().as_u16()
+            )));
         }
         if resp.content_length().is_some_and(|n| n > lim.max_bytes) {
             return Err(too_large(param, lim.max_bytes));
@@ -718,7 +856,8 @@ mod fetch {
         let mut n = 0u64;
         let mut body = resp.bytes_stream();
         while let Some(chunk) = body.next().await {
-            let chunk = chunk.map_err(|e| bad(format!("fetching `{param}` failed: {}", without_url(&e))))?;
+            let chunk = chunk
+                .map_err(|e| bad(format!("fetching `{param}` failed: {}", without_url(&e))))?;
             n += chunk.len() as u64;
             if n > lim.max_bytes {
                 drop(f);
@@ -808,15 +947,24 @@ pub(crate) mod tests {
     /// left half is dark and the right half bright, so a rotation shows.
     pub fn jpeg_exif(w: u32, h: u32, orientation: u16) -> Vec<u8> {
         use image::ImageEncoder as _;
-        let img = image::RgbImage::from_fn(w, h, |x, _| if x < w / 2 { image::Rgb([0, 0, 0]) } else { image::Rgb([255, 255, 255]) });
+        let img = image::RgbImage::from_fn(w, h, |x, _| {
+            if x < w / 2 {
+                image::Rgb([0, 0, 0])
+            } else {
+                image::Rgb([255, 255, 255])
+            }
+        });
         // A little-endian TIFF header with one IFD entry: 0x0112 SHORT = orientation.
-        let mut exif = vec![0x49, 0x49, 0x2a, 0, 8, 0, 0, 0, 1, 0, 0x12, 0x01, 3, 0, 1, 0, 0, 0];
+        let mut exif = vec![
+            0x49, 0x49, 0x2a, 0, 8, 0, 0, 0, 1, 0, 0x12, 0x01, 3, 0, 1, 0, 0, 0,
+        ];
         exif.extend_from_slice(&orientation.to_le_bytes());
         exif.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
         let mut out = Vec::new();
         let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 95);
         enc.set_exif_metadata(exif).unwrap();
-        enc.write_image(img.as_raw(), w, h, image::ExtendedColorType::Rgb8).unwrap();
+        enc.write_image(img.as_raw(), w, h, image::ExtendedColorType::Rgb8)
+            .unwrap();
         out
     }
 
@@ -828,7 +976,15 @@ pub(crate) mod tests {
         // Stored 64x32 landscape, orientation 6 (rotate 90 CW to display):
         // the viewer sees 32x64 portrait with the bright half at the bottom.
         let s = ing
-            .stage(&i2v(MediaRef::DataUri(data_uri("image/jpeg", &jpeg_exif(64, 32, 6)))), &IngestPolicy::default(), &dir, now)
+            .stage(
+                &i2v(MediaRef::DataUri(data_uri(
+                    "image/jpeg",
+                    &jpeg_exif(64, 32, 6),
+                ))),
+                &IngestPolicy::default(),
+                &dir,
+                now,
+            )
             .await
             .unwrap();
         let m = &s.keyframes[0].1;
@@ -838,22 +994,47 @@ pub(crate) mod tests {
         assert_eq!(m.bytes, std::fs::metadata(&m.path).unwrap().len());
         let img = image::open(&m.path).unwrap().to_rgb8();
         assert_eq!(img.dimensions(), (32, 64));
-        assert!(img.get_pixel(16, 4)[0] < 64 && img.get_pixel(16, 60)[0] > 192, "rotated clockwise");
+        assert!(
+            img.get_pixel(16, 4)[0] < 64 && img.get_pixel(16, 60)[0] > 192,
+            "rotated clockwise"
+        );
         // Only the upright file stays staged.
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         // 8 (rotate 90 CCW) and 3 (180) too; 1 is left untouched.
-        for (o, dims, mime) in [(8, (32, 64), "image/png"), (3, (64, 32), "image/png"), (1, (64, 32), "image/jpeg")] {
+        for (o, dims, mime) in [
+            (8, (32, 64), "image/png"),
+            (3, (64, 32), "image/png"),
+            (1, (64, 32), "image/jpeg"),
+        ] {
             let s = ing
-                .stage(&i2v(MediaRef::DataUri(data_uri("image/jpeg", &jpeg_exif(64, 32, o)))), &IngestPolicy::default(), &dir, now)
+                .stage(
+                    &i2v(MediaRef::DataUri(data_uri(
+                        "image/jpeg",
+                        &jpeg_exif(64, 32, o),
+                    ))),
+                    &IngestPolicy::default(),
+                    &dir,
+                    now,
+                )
                 .await
                 .unwrap();
-            assert_eq!((s.keyframes[0].1.probe.dims(), s.keyframes[0].1.mime.as_str()), (Some(dims), mime), "orientation {o}");
+            assert_eq!(
+                (
+                    s.keyframes[0].1.probe.dims(),
+                    s.keyframes[0].1.mime.as_str()
+                ),
+                (Some(dims), mime),
+                "orientation {o}"
+            );
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     pub fn data_uri(mime: &str, b: &[u8]) -> String {
-        format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(b))
+        format!(
+            "data:{mime};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(b)
+        )
     }
 
     fn tmpdir() -> PathBuf {
@@ -862,7 +1043,10 @@ pub(crate) mod tests {
 
     fn i2v(r: MediaRef) -> GenerationRequest {
         let mut g = GenerationRequest::text(ProtocolId::Fal, "m", "p");
-        g.keyframes.push(Keyframe { at: Anchor::First, image: r });
+        g.keyframes.push(Keyframe {
+            at: Anchor::First,
+            image: r,
+        });
         g
     }
 
@@ -871,7 +1055,10 @@ pub(crate) mod tests {
         assert_eq!(sniff_mime(&png(1, 1)), Some("image/png"));
         assert_eq!(sniff_mime(b"\xff\xd8\xff\xe0...."), Some("image/jpeg"));
         assert_eq!(sniff_mime(b"\0\0\0\x20ftypisom\0\0"), Some("video/mp4"));
-        assert_eq!(sniff_mime(b"\0\0\0\x20ftypqt  \0\0"), Some("video/quicktime"));
+        assert_eq!(
+            sniff_mime(b"\0\0\0\x20ftypqt  \0\0"),
+            Some("video/quicktime")
+        );
         assert_eq!(sniff_mime(b"\0\0\0\x20ftypM4A \0\0"), Some("audio/mp4"));
         assert_eq!(sniff_mime(b"RIFF\0\0\0\0WAVEfmt "), Some("audio/wav"));
         assert_eq!(sniff_mime(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
@@ -882,7 +1069,10 @@ pub(crate) mod tests {
     #[test]
     fn data_uri_parse() {
         let d = parse_data_uri("data:image/png;base64,AAAA").unwrap();
-        assert_eq!((d.mime, d.base64, d.payload), (Some("image/png"), true, "AAAA"));
+        assert_eq!(
+            (d.mime, d.base64, d.payload),
+            (Some("image/png"), true, "AAAA")
+        );
         let d = parse_data_uri("data:,hello").unwrap();
         assert_eq!((d.mime, d.base64), (None, false));
         assert!(parse_data_uri("data:nocomma").is_none());
@@ -900,7 +1090,10 @@ pub(crate) mod tests {
             "format": {"duration":"5.2"}
         });
         let p = parse_ffprobe(&v).unwrap();
-        assert_eq!((p.width, p.height, p.audio_rate), (Some(1344), Some(768), Some(32000)));
+        assert_eq!(
+            (p.width, p.height, p.audio_rate),
+            (Some(1344), Some(768), Some(32000))
+        );
         assert_eq!(p.fps, Some(24.0));
         assert_eq!(p.duration_s, Some(5.2));
     }
@@ -912,7 +1105,12 @@ pub(crate) mod tests {
         let now = OffsetDateTime::now_utc();
         let img = png(64, 48);
         let s = ing
-            .stage(&i2v(MediaRef::DataUri(data_uri("image/png", &img))), &IngestPolicy::default(), &dir, now)
+            .stage(
+                &i2v(MediaRef::DataUri(data_uri("image/png", &img))),
+                &IngestPolicy::default(),
+                &dir,
+                now,
+            )
             .await
             .unwrap();
         let m = &s.keyframes[0].1;
@@ -922,34 +1120,98 @@ pub(crate) mod tests {
 
         // Declared type lies: magic bytes win.
         let s = ing
-            .stage(&i2v(MediaRef::DataUri(data_uri("image/jpeg", &img))), &IngestPolicy::default(), &dir, now)
+            .stage(
+                &i2v(MediaRef::DataUri(data_uri("image/jpeg", &img))),
+                &IngestPolicy::default(),
+                &dir,
+                now,
+            )
             .await
             .unwrap();
         assert_eq!(s.keyframes[0].1.mime, "image/png");
 
         let mut tight = IngestPolicy::ltx();
         tight.image.data_uri_max_encoded = 16;
-        let e = ing.stage(&i2v(MediaRef::DataUri(data_uri("image/png", &img))), &tight, &dir, now).await.unwrap_err();
+        let e = ing
+            .stage(
+                &i2v(MediaRef::DataUri(data_uri("image/png", &img))),
+                &tight,
+                &dir,
+                now,
+            )
+            .await
+            .unwrap_err();
         assert_eq!(e.kind, ErrorKind::PayloadTooLarge);
         assert_eq!(e.param.as_deref(), Some("keyframes[0]"));
         let mut tight = IngestPolicy::ltx();
         tight.image.max_bytes = 16;
-        let e = ing.stage(&i2v(MediaRef::DataUri(data_uri("image/png", &img))), &tight, &dir, now).await.unwrap_err();
+        let e = ing
+            .stage(
+                &i2v(MediaRef::DataUri(data_uri("image/png", &img))),
+                &tight,
+                &dir,
+                now,
+            )
+            .await
+            .unwrap_err();
         assert_eq!(e.kind, ErrorKind::PayloadTooLarge);
 
         // Wrong kind, unknown bytes, not base64, bad base64, corrupt png.
         let mp4 = b"\0\0\0\x20ftypisom\0\0\0\0isomavc1";
-        let e = ing.stage(&i2v(MediaRef::DataUri(data_uri("video/mp4", mp4))), &IngestPolicy::default(), &dir, now).await.unwrap_err();
+        let e = ing
+            .stage(
+                &i2v(MediaRef::DataUri(data_uri("video/mp4", mp4))),
+                &IngestPolicy::default(),
+                &dir,
+                now,
+            )
+            .await
+            .unwrap_err();
         assert_eq!(e.kind, ErrorKind::UnsupportedMedia);
-        let e = ing.stage(&i2v(MediaRef::DataUri(data_uri("application/octet-stream", b"????"))), &IngestPolicy::default(), &dir, now).await.unwrap_err();
+        let e = ing
+            .stage(
+                &i2v(MediaRef::DataUri(data_uri(
+                    "application/octet-stream",
+                    b"????",
+                ))),
+                &IngestPolicy::default(),
+                &dir,
+                now,
+            )
+            .await
+            .unwrap_err();
         assert_eq!(e.kind, ErrorKind::UnsupportedMedia);
-        let e = ing.stage(&i2v(MediaRef::DataUri("data:image/png,abc".into())), &IngestPolicy::default(), &dir, now).await.unwrap_err();
+        let e = ing
+            .stage(
+                &i2v(MediaRef::DataUri("data:image/png,abc".into())),
+                &IngestPolicy::default(),
+                &dir,
+                now,
+            )
+            .await
+            .unwrap_err();
         assert_eq!(e.kind, ErrorKind::InvalidRequest);
-        let e = ing.stage(&i2v(MediaRef::DataUri("data:image/png;base64,!!!".into())), &IngestPolicy::default(), &dir, now).await.unwrap_err();
+        let e = ing
+            .stage(
+                &i2v(MediaRef::DataUri("data:image/png;base64,!!!".into())),
+                &IngestPolicy::default(),
+                &dir,
+                now,
+            )
+            .await
+            .unwrap_err();
         assert_eq!(e.kind, ErrorKind::InvalidRequest);
         let mut broken = img.clone();
         broken.truncate(12);
-        let e = ing.stage(&i2v(MediaRef::DataUri(data_uri("image/png", &broken))), &IngestPolicy::default(), &dir, now).await.unwrap_err();
+        let e = ing
+            .stage(
+                &i2v(MediaRef::DataUri(data_uri("image/png", &broken))),
+                &IngestPolicy::default(),
+                &dir,
+                now,
+            )
+            .await
+            .unwrap_err();
         assert_eq!(e.kind, ErrorKind::UnsupportedMedia);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -965,23 +1227,66 @@ pub(crate) mod tests {
         let up = Arc::new(UploadStore::new(dir.join("up"), urls).unwrap());
         let t = up.create(None, None, now).unwrap();
         let ing = Ingestor::new(Some(up.clone()), Arc::new(DefaultProber { ffprobe: None }));
-        let e = ing.stage(&i2v(MediaRef::ProviderFile("mm_file://1".into())), &IngestPolicy::default(), &dir, now).await.unwrap_err();
+        let e = ing
+            .stage(
+                &i2v(MediaRef::ProviderFile("mm_file://1".into())),
+                &IngestPolicy::default(),
+                &dir,
+                now,
+            )
+            .await
+            .unwrap_err();
         assert_eq!(e.kind, ErrorKind::Unsupported(GapId::ProviderFiles));
-        let e = ing.stage(&i2v(MediaRef::Upload(UploadId(t.token.clone()))), &IngestPolicy::default(), &dir, now).await.unwrap_err();
+        let e = ing
+            .stage(
+                &i2v(MediaRef::Upload(UploadId(t.token.clone()))),
+                &IngestPolicy::default(),
+                &dir,
+                now,
+            )
+            .await
+            .unwrap_err();
         assert_eq!(e.kind, ErrorKind::InvalidRequest, "not uploaded yet");
-        up.put(&t.token, None, axum::body::Body::from(png(8, 8)), now).await.unwrap();
-        let s = ing.stage(&i2v(MediaRef::Upload(UploadId(t.token.clone()))), &IngestPolicy::default(), &dir, now).await.unwrap();
+        up.put(&t.token, None, axum::body::Body::from(png(8, 8)), now)
+            .await
+            .unwrap();
+        let s = ing
+            .stage(
+                &i2v(MediaRef::Upload(UploadId(t.token.clone()))),
+                &IngestPolicy::default(),
+                &dir,
+                now,
+            )
+            .await
+            .unwrap();
         assert_eq!(s.keyframes[0].1.probe.dims(), Some((8, 8)));
         let mut tight = IngestPolicy::ltx();
         tight.image.max_bytes = 10;
-        let e = ing.stage(&i2v(MediaRef::Upload(UploadId(t.token.clone()))), &tight, &dir, now).await.unwrap_err();
+        let e = ing
+            .stage(
+                &i2v(MediaRef::Upload(UploadId(t.token.clone()))),
+                &tight,
+                &dir,
+                now,
+            )
+            .await
+            .unwrap_err();
         assert_eq!(e.kind, ErrorKind::PayloadTooLarge);
 
         // Reference kinds are checked (audio ref given an image).
         let mut g = GenerationRequest::text(ProtocolId::MiniMaxV2, "m", "p");
-        g.references.push(Reference { kind: MediaKind::Audio, media: MediaRef::DataUri(data_uri("image/png", &png(2, 2))) });
-        let e = ing.stage(&g, &IngestPolicy::default(), &dir, now).await.unwrap_err();
-        assert_eq!((e.kind, e.param.as_deref()), (ErrorKind::UnsupportedMedia, Some("references[0]")));
+        g.references.push(Reference {
+            kind: MediaKind::Audio,
+            media: MediaRef::DataUri(data_uri("image/png", &png(2, 2))),
+        });
+        let e = ing
+            .stage(&g, &IngestPolicy::default(), &dir, now)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.kind, e.param.as_deref()),
+            (ErrorKind::UnsupportedMedia, Some("references[0]"))
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -990,7 +1295,14 @@ pub(crate) mod tests {
     async fn http_refused_without_fetch() {
         let dir = tmpdir();
         let e = Ingestor::default()
-            .stage(&i2v(MediaRef::Http(url::Url::parse("https://example.com/a.png").unwrap())), &IngestPolicy::default(), &dir, OffsetDateTime::now_utc())
+            .stage(
+                &i2v(MediaRef::Http(
+                    url::Url::parse("https://example.com/a.png").unwrap(),
+                )),
+                &IngestPolicy::default(),
+                &dir,
+                OffsetDateTime::now_utc(),
+            )
             .await
             .unwrap_err();
         assert_eq!(e.kind, ErrorKind::InvalidRequest);
@@ -1008,36 +1320,58 @@ pub(crate) mod tests {
             let img = png(32, 16);
             let big = vec![0u8; 64 * 1024];
             let app = Router::new()
-                .route("/img.png", get({
-                    let img = img.clone();
-                    move || async move { ([("content-type", "image/png")], img) }
-                }))
-                .route("/noctype", get({
-                    let img = img.clone();
-                    move || async move { img }
-                }))
-                .route("/big.png", get(move || async move {
-                    let mut b = png(1, 1);
-                    b.extend_from_slice(&big);
-                    ([("content-type", "image/png")], b)
-                }))
-                .route("/chunked.png", get(|| async {
-                    let chunks = futures::stream::iter((0..64).map(|i| {
-                        let mut c = if i == 0 { png(1, 1) } else { Vec::new() };
-                        c.extend_from_slice(&[0u8; 1024]);
-                        Ok::<_, std::io::Error>(bytes::Bytes::from(c))
-                    }));
-                    axum::body::Body::from_stream(chunks)
-                }))
-                .route("/slow.png", get(|| async {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                    png(1, 1)
-                }))
-                .route("/redirect", get(|| async {
-                    (axum::http::StatusCode::FOUND, [("location", "/img.png")])
-                }))
-                .route("/page", get(|| async { ([("content-type", "text/html")], "<html></html>") }))
-                .route("/missing", get(|| async { axum::http::StatusCode::NOT_FOUND }));
+                .route(
+                    "/img.png",
+                    get({
+                        let img = img.clone();
+                        move || async move { ([("content-type", "image/png")], img) }
+                    }),
+                )
+                .route(
+                    "/noctype",
+                    get({
+                        let img = img.clone();
+                        move || async move { img }
+                    }),
+                )
+                .route(
+                    "/big.png",
+                    get(move || async move {
+                        let mut b = png(1, 1);
+                        b.extend_from_slice(&big);
+                        ([("content-type", "image/png")], b)
+                    }),
+                )
+                .route(
+                    "/chunked.png",
+                    get(|| async {
+                        let chunks = futures::stream::iter((0..64).map(|i| {
+                            let mut c = if i == 0 { png(1, 1) } else { Vec::new() };
+                            c.extend_from_slice(&[0u8; 1024]);
+                            Ok::<_, std::io::Error>(bytes::Bytes::from(c))
+                        }));
+                        axum::body::Body::from_stream(chunks)
+                    }),
+                )
+                .route(
+                    "/slow.png",
+                    get(|| async {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        png(1, 1)
+                    }),
+                )
+                .route(
+                    "/redirect",
+                    get(|| async { (axum::http::StatusCode::FOUND, [("location", "/img.png")]) }),
+                )
+                .route(
+                    "/page",
+                    get(|| async { ([("content-type", "text/html")], "<html></html>") }),
+                )
+                .route(
+                    "/missing",
+                    get(|| async { axum::http::StatusCode::NOT_FOUND }),
+                );
             let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let addr = l.local_addr().unwrap();
             tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
@@ -1053,7 +1387,12 @@ pub(crate) mod tests {
         async fn stage(url: &str, p: &IngestPolicy) -> Result<StagedInputs, ApiError> {
             let dir = tmpdir();
             let r = Ingestor::default()
-                .stage(&i2v(MediaRef::Http(url::Url::parse(url).unwrap())), p, &dir, OffsetDateTime::now_utc())
+                .stage(
+                    &i2v(MediaRef::Http(url::Url::parse(url).unwrap())),
+                    p,
+                    &dir,
+                    OffsetDateTime::now_utc(),
+                )
                 .await;
             let _ = std::fs::remove_dir_all(&dir);
             r
@@ -1063,23 +1402,46 @@ pub(crate) mod tests {
         async fn fetch_rules() {
             let a = server().await;
             let base = format!("http://127.0.0.1:{}", a.port());
-            let s = stage(&format!("{base}/img.png"), &open_policy()).await.unwrap();
+            let s = stage(&format!("{base}/img.png"), &open_policy())
+                .await
+                .unwrap();
             assert_eq!(s.keyframes[0].1.probe.dims(), Some((32, 16)));
             // No content type: sniffed.
-            assert!(stage(&format!("{base}/noctype"), &open_policy()).await.is_ok());
+            assert!(stage(&format!("{base}/noctype"), &open_policy())
+                .await
+                .is_ok());
 
             // SSRF guard: loopback refused by default.
-            let e = stage(&format!("{base}/img.png"), &IngestPolicy::default()).await.unwrap_err();
+            let e = stage(&format!("{base}/img.png"), &IngestPolicy::default())
+                .await
+                .unwrap_err();
             assert_eq!(e.kind, ErrorKind::InvalidRequest);
             assert!(e.message.contains("non-public"), "{}", e.message);
-            let e = stage(&format!("http://localhost:{}/img.png", a.port()), &IngestPolicy::default()).await.unwrap_err();
+            let e = stage(
+                &format!("http://localhost:{}/img.png", a.port()),
+                &IngestPolicy::default(),
+            )
+            .await
+            .unwrap_err();
             assert_eq!(e.kind, ErrorKind::InvalidRequest);
 
             // Size: declared and streamed.
             let mut p = open_policy();
             p.image.max_bytes = 16 * 1024;
-            assert_eq!(stage(&format!("{base}/big.png"), &p).await.unwrap_err().kind, ErrorKind::PayloadTooLarge);
-            assert_eq!(stage(&format!("{base}/chunked.png"), &p).await.unwrap_err().kind, ErrorKind::PayloadTooLarge);
+            assert_eq!(
+                stage(&format!("{base}/big.png"), &p)
+                    .await
+                    .unwrap_err()
+                    .kind,
+                ErrorKind::PayloadTooLarge
+            );
+            assert_eq!(
+                stage(&format!("{base}/chunked.png"), &p)
+                    .await
+                    .unwrap_err()
+                    .kind,
+                ErrorKind::PayloadTooLarge
+            );
 
             // Timeout.
             let mut p = open_policy();
@@ -1088,21 +1450,44 @@ pub(crate) mod tests {
             assert!(e.message.contains("timed out"), "{}", e.message);
 
             // Redirects: followed by default, refused under LTX rules.
-            assert!(stage(&format!("{base}/redirect"), &open_policy()).await.is_ok());
+            assert!(stage(&format!("{base}/redirect"), &open_policy())
+                .await
+                .is_ok());
             let mut ltxish = IngestPolicy::ltx();
-            ltxish.target = TargetPolicy { https_only: false, allow_ip_literals: false, allow_private: true };
+            ltxish.target = TargetPolicy {
+                https_only: false,
+                allow_ip_literals: false,
+                allow_private: true,
+            };
             let host = format!("http://localhost:{}", a.port());
-            assert!(stage(&format!("{host}/img.png"), &ltxish).await.is_ok(), "domain name allowed");
-            let e = stage(&format!("{host}/redirect"), &ltxish).await.unwrap_err();
+            assert!(
+                stage(&format!("{host}/img.png"), &ltxish).await.is_ok(),
+                "domain name allowed"
+            );
+            let e = stage(&format!("{host}/redirect"), &ltxish)
+                .await
+                .unwrap_err();
             assert!(e.message.contains("redirects"), "{}", e.message);
-            let e = stage(&format!("{base}/img.png"), &ltxish).await.unwrap_err();
+            let e = stage(&format!("{base}/img.png"), &ltxish)
+                .await
+                .unwrap_err();
             assert!(e.message.contains("IP address"), "{}", e.message);
-            let e = stage(&format!("{host}/img.png"), &IngestPolicy::ltx()).await.unwrap_err();
+            let e = stage(&format!("{host}/img.png"), &IngestPolicy::ltx())
+                .await
+                .unwrap_err();
             assert!(e.message.contains("https"), "{}", e.message);
 
             // Type and status.
-            assert_eq!(stage(&format!("{base}/page"), &open_policy()).await.unwrap_err().kind, ErrorKind::UnsupportedMedia);
-            let e = stage(&format!("{base}/missing"), &open_policy()).await.unwrap_err();
+            assert_eq!(
+                stage(&format!("{base}/page"), &open_policy())
+                    .await
+                    .unwrap_err()
+                    .kind,
+                ErrorKind::UnsupportedMedia
+            );
+            let e = stage(&format!("{base}/missing"), &open_policy())
+                .await
+                .unwrap_err();
             assert!(e.message.contains("404"));
         }
     }

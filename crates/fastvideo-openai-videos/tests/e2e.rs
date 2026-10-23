@@ -600,7 +600,10 @@ async fn fastwan_link_flow() {
             "unknown status {s}"
         );
         seen.push(s);
-        assert!(tokio::time::Instant::now() < deadline, "no result after {T:?}: {job}");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no result after {T:?}: {job}"
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
         let r = call(&f.app, "GET", &format!("/status/{pid}"), None).await;
         assert_eq!(r.status, StatusCode::OK);

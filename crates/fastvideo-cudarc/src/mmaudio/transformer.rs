@@ -104,7 +104,13 @@ impl SingleBlock {
             })
         };
         Ok(Self {
-            ada: linear(map, &format!("{prefix}.adaLN_modulation.1"), d, ada_out, true)?,
+            ada: linear(
+                map,
+                &format!("{prefix}.adaLN_modulation.1"),
+                d,
+                ada_out,
+                true,
+            )?,
             qkv: linear_from(w2, Some(b2), 3 * d, d)?,
             q_norm,
             k_norm,
@@ -160,7 +166,12 @@ impl SingleBlock {
     }
 
     /// `post_attention` (a no-op for pre-only blocks). `attn`: `[1, N, D]`.
-    fn post_attention(&self, x: &CudaTensor, attn: &CudaTensor, m: Option<PostMod>) -> Result<CudaTensor> {
+    fn post_attention(
+        &self,
+        x: &CudaTensor,
+        attn: &CudaTensor,
+        m: Option<PostMod>,
+    ) -> Result<CudaTensor> {
         let (Some(post), Some(m)) = (self.post.as_ref(), m) else {
             return Ok(x.clone());
         };
@@ -250,7 +261,9 @@ pub struct MmAudioTransformer {
 impl MmAudioTransformer {
     pub fn load(cfg: MmAudioDiTConfig, map: &WeightMap) -> Result<Self> {
         if !cfg.v2 {
-            return Err(msg("MMAudio: only the v2 networks (SiLU projections) are ported"));
+            return Err(msg(
+                "MMAudio: only the v2 networks (SiLU projections) are ported",
+            ));
         }
         let (d, ff) = (cfg.hidden_dim, cfg.ffn_dim());
         let joint = (0..cfg.joint_depth())
@@ -258,9 +271,21 @@ impl MmAudioTransformer {
                 let p = format!("joint_blocks.{i}");
                 let pre_only = i == cfg.joint_depth() - 1;
                 Ok(JointBlock {
-                    latent: SingleBlock::load(map, &format!("{p}.latent_block"), &cfg, false, true)?,
+                    latent: SingleBlock::load(
+                        map,
+                        &format!("{p}.latent_block"),
+                        &cfg,
+                        false,
+                        true,
+                    )?,
                     clip: SingleBlock::load(map, &format!("{p}.clip_block"), &cfg, pre_only, true)?,
-                    text: SingleBlock::load(map, &format!("{p}.text_block"), &cfg, pre_only, false)?,
+                    text: SingleBlock::load(
+                        map,
+                        &format!("{p}.text_block"),
+                        &cfg,
+                        pre_only,
+                        false,
+                    )?,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -270,7 +295,9 @@ impl MmAudioTransformer {
         let tf = cfg.t_freq_dim();
         let rb = |v: Vec<f32>| -> Vec<f32> {
             if cfg.bf16_buffers {
-                v.into_iter().map(fastvideo_models::mmaudio::bf16_round).collect()
+                v.into_iter()
+                    .map(fastvideo_models::mmaudio::bf16_round)
+                    .collect()
             } else {
                 v
             }
@@ -312,11 +339,17 @@ impl MmAudioTransformer {
 
     /// `get_empty_clip_sequence`: `[1, clip_len, clip_dim]`.
     pub fn empty_clip(&self, clip_len: usize) -> Result<CudaTensor> {
-        CudaTensor::from_vec(self.empty_clip_feat.repeat(clip_len), vec![1, clip_len, self.cfg.clip_dim])
+        CudaTensor::from_vec(
+            self.empty_clip_feat.repeat(clip_len),
+            vec![1, clip_len, self.cfg.clip_dim],
+        )
     }
 
     pub fn empty_sync(&self, sync_len: usize) -> Result<CudaTensor> {
-        CudaTensor::from_vec(self.empty_sync_feat.repeat(sync_len), vec![1, sync_len, self.cfg.sync_dim])
+        CudaTensor::from_vec(
+            self.empty_sync_feat.repeat(sync_len),
+            vec![1, sync_len, self.cfg.sync_dim],
+        )
     }
 
     /// `preprocess_conditions` for one sample: `clip_f [1, Lc, 1024]`,
@@ -336,12 +369,21 @@ impl MmAudioTransformer {
         // `+ sync_pos_emb` per 8-frame segment.
         let pos = CudaTensor::from_vec(self.sync_pos_emb.repeat(ls / 8), vec![1, ls, sd])?;
         let sync = sync_f.add(&pos)?;
-        let clip = self.clip_in2.forward_cl(&self.clip_in0.forward(clip_f)?.silu())?;
-        let sync = self.sync_in2.forward_cl(&self.sync_in0.forward_cl(&sync)?.silu())?;
-        let text = self.text_in2.forward(&self.text_in0.forward(text_f)?.silu())?;
+        let clip = self
+            .clip_in2
+            .forward_cl(&self.clip_in0.forward(clip_f)?.silu())?;
+        let sync = self
+            .sync_in2
+            .forward_cl(&self.sync_in0.forward_cl(&sync)?.silu())?;
+        let text = self
+            .text_in2
+            .forward(&self.text_in0.forward(text_f)?.silu())?;
         // nearest-exact upsample of the sync stream to the latent length.
-        let sync = gather_rows(&sync, &nearest_exact_indices(ls, latent_len))?
-            .reshape(vec![1, latent_len, self.cfg.hidden_dim])?;
+        let sync = gather_rows(&sync, &nearest_exact_indices(ls, latent_len))?.reshape(vec![
+            1,
+            latent_len,
+            self.cfg.hidden_dim,
+        ])?;
         let clip_c = self.clip_cond_proj.forward(&mean_seq(&clip)?)?;
         let text_c = self.text_cond_proj.forward(&mean_seq(&text)?)?;
         let global = self.global_cond_mlp.forward(&clip_c.add(&text_c)?)?;
@@ -354,11 +396,18 @@ impl MmAudioTransformer {
     }
 
     /// RoPE tables for the latent and the CLIP streams.
-    pub fn rotations(&self, latent_len: usize, clip_len: usize) -> Result<[(CudaTensor, CudaTensor); 2]> {
+    pub fn rotations(
+        &self,
+        latent_len: usize,
+        clip_len: usize,
+    ) -> Result<[(CudaTensor, CudaTensor); 2]> {
         let hd = self.cfg.head_dim();
         let lat = rope_angles(latent_len, hd, 1.0);
         let clip = rope_angles(clip_len, hd, latent_len as f32 / clip_len as f32);
-        Ok([rope_tables(&lat, latent_len, hd)?, rope_tables(&clip, clip_len, hd)?])
+        Ok([
+            rope_tables(&lat, latent_len, hd)?,
+            rope_tables(&clip, clip_len, hd)?,
+        ])
     }
 
     /// `predict_flow` for one sample. `latent`: `[1, N, latent_dim]`
@@ -381,8 +430,12 @@ impl MmAudioTransformer {
         let (nc, nt) = (clip.shape[1], text.shape[1]);
         let blocks = dump::blocks();
         for (i, blk) in self.joint.iter().enumerate() {
-            let (xq, xm) = blk.latent.pre_attention(&x, &extended_c, Some(&rot[0]), cfg)?;
-            let (cq, cm) = blk.clip.pre_attention(&clip, &global_c, Some(&rot[1]), cfg)?;
+            let (xq, xm) = blk
+                .latent
+                .pre_attention(&x, &extended_c, Some(&rot[0]), cfg)?;
+            let (cq, cm) = blk
+                .clip
+                .pre_attention(&clip, &global_c, Some(&rot[1]), cfg)?;
             let (tq, tm) = blk.text.pre_attention(&text, &global_c, None, cfg)?;
             let q = CudaTensor::cat(&[&xq.q, &cq.q, &tq.q], 2)?;
             let k = CudaTensor::cat(&[&xq.k, &cq.k, &tq.k], 2)?;
@@ -391,7 +444,9 @@ impl MmAudioTransformer {
             x = blk.latent.post_attention(&x, &o.narrow(1, 0, n)?, xm)?;
             if !blk.clip.pre_only {
                 clip = blk.clip.post_attention(&clip, &o.narrow(1, n, nc)?, cm)?;
-                text = blk.text.post_attention(&text, &o.narrow(1, n + nc, nt)?, tm)?;
+                text = blk
+                    .text
+                    .post_attention(&text, &o.narrow(1, n + nc, nt)?, tm)?;
             }
             if blocks {
                 dump::tensor(&dump::named(&format!("mm_step00_block_{i}")), &x)?;

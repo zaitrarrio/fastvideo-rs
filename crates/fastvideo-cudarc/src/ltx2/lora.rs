@@ -160,7 +160,10 @@ pub fn ic_lora_info(path: &Path) -> Result<IcLoraInfo> {
         )));
     }
     Ok(IcLoraInfo {
-        downscale: fastvideo_models::ltx2::lora::reference_scale(meta, "reference_downscale_factor"),
+        downscale: fastvideo_models::ltx2::lora::reference_scale(
+            meta,
+            "reference_downscale_factor",
+        ),
         temporal_scale: fastvideo_models::ltx2::lora::reference_scale(
             meta,
             "reference_temporal_scale_factor",

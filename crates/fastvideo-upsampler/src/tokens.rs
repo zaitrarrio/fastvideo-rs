@@ -78,14 +78,19 @@ impl PartialEq for PromptLimit {
     fn eq(&self, o: &Self) -> bool {
         self.max_tokens == o.max_tokens
             && self.max_chars == o.max_chars
-            && self.counter.as_ref().map(|c| c.describe()) == o.counter.as_ref().map(|c| c.describe())
+            && self.counter.as_ref().map(|c| c.describe())
+                == o.counter.as_ref().map(|c| c.describe())
     }
 }
 
 impl PromptLimit {
     /// Characters only (no tokenizer).
     pub fn chars(max_chars: usize) -> Self {
-        Self { counter: None, max_tokens: 0, max_chars }
+        Self {
+            counter: None,
+            max_tokens: 0,
+            max_chars,
+        }
     }
 
     /// `(size, limit, unit)` of `s`.
@@ -175,7 +180,12 @@ pub(crate) mod tests {
     pub struct Words;
     impl TokenCounter for Words {
         fn count(&self, text: &str) -> Option<usize> {
-            Some(text.replace("<d>", " <d> ").replace("</d>", " </d> ").split_whitespace().count())
+            Some(
+                text.replace("<d>", " <d> ")
+                    .replace("</d>", " </d> ")
+                    .split_whitespace()
+                    .count(),
+            )
         }
         fn describe(&self) -> String {
             "words".into()
@@ -187,7 +197,11 @@ pub(crate) mod tests {
         assert_eq!(estimate_tokens(""), 0);
         assert_eq!(estimate_tokens("abcdefg"), 2);
         assert_eq!(estimate_tokens(&"x".repeat(50_000)), 14_286);
-        let l = PromptLimit { counter: Some(Arc::new(Words)), max_tokens: 3, max_chars: 5 };
+        let l = PromptLimit {
+            counter: Some(Arc::new(Words)),
+            max_tokens: 3,
+            max_chars: 5,
+        };
         assert_eq!(l.measure("a b c"), (3, 3, Unit::Tokens));
         assert!(!l.fits("a b c d"));
         assert_eq!(PromptLimit::chars(5).measure("a b c"), (5, 5, Unit::Chars));
@@ -201,7 +215,10 @@ pub(crate) mod tests {
         assert_eq!(cut_to_fit(s, &fits(6)), "Mara turns.");
         assert_eq!(cut_to_fit(s, &fits(4)), "Mara turns.");
         // The whole pair fits: kept whole.
-        assert_eq!(cut_to_fit(s, &fits(11)), "Mara turns. Mara says <d>[English] Light the lamp now.</d>");
+        assert_eq!(
+            cut_to_fit(s, &fits(11)),
+            "Mara turns. Mara says <d>[English] Light the lamp now.</d>"
+        );
         assert_eq!(cut_to_fit(s, &fits(100)), s);
         assert_eq!(cut_to_fit("one two three four", &fits(3)), "one two three");
         assert_eq!(cut_to_fit("one", &fits(0)), "");

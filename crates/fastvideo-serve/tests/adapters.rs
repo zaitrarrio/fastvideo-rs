@@ -27,7 +27,11 @@ async fn app(tag: &str) -> App {
 
 /// [`app`] with extra environment (`FV_*`) on top of the defaults.
 async fn app_with(tag: &str, extra: &[(&str, String)]) -> App {
-    let dir = tempfile::Builder::new().prefix(&format!("fv-serve-adapters-{tag}-")).tempdir().unwrap().keep();
+    let dir = tempfile::Builder::new()
+        .prefix(&format!("fv-serve-adapters-{tag}-"))
+        .tempdir()
+        .unwrap()
+        .keep();
     let mut env = BTreeMap::new();
     env.insert("FV_API_KEYS".to_owned(), KeyRing::hash_hex(KEY));
     env.insert("FV_URL_SIGNING_KEY".to_owned(), "k".to_owned());
@@ -59,19 +63,35 @@ impl Resp {
     }
 }
 
-async fn call(app: &Router, method: &str, uri: &str, body: Option<Value>, auth: Option<&str>) -> Resp {
+async fn call(
+    app: &Router,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+    auth: Option<&str>,
+) -> Resp {
     let mut b = Request::builder().method(method).uri(uri);
     if let Some(a) = auth {
         b = b.header("authorization", a);
     }
     let req = match body {
-        Some(v) => b.header("content-type", "application/json").body(Body::from(v.to_string())).unwrap(),
+        Some(v) => b
+            .header("content-type", "application/json")
+            .body(Body::from(v.to_string()))
+            .unwrap(),
         None => b.body(Body::empty()).unwrap(),
     };
     let r = app.clone().oneshot(req).await.unwrap();
     let (status, headers) = (r.status(), r.headers().clone());
-    let bytes = axum::body::to_bytes(r.into_body(), 1 << 26).await.unwrap().to_vec();
-    Resp { status, headers, bytes }
+    let bytes = axum::body::to_bytes(r.into_body(), 1 << 26)
+        .await
+        .unwrap()
+        .to_vec();
+    Resp {
+        status,
+        headers,
+        bytes,
+    }
 }
 
 fn bearer() -> Option<&'static str> {
@@ -94,10 +114,20 @@ async fn poll(app: &Router, uri: &str, auth: Option<&str>, done: impl Fn(&Value)
 async fn fastvideo_videos_and_fastwan() {
     let a = app("ov").await;
     let r = a.router.clone();
-    let s = call(&r, "POST", "/v1/videos", Some(json!({"model": "h3-turbo", "prompt": "a cat", "seconds": "5"})), None).await;
+    let s = call(
+        &r,
+        "POST",
+        "/v1/videos",
+        Some(json!({"model": "h3-turbo", "prompt": "a cat", "seconds": "5"})),
+        None,
+    )
+    .await;
     assert_eq!(s.status, 200, "{}", String::from_utf8_lossy(&s.bytes));
     let id = s.json()["id"].as_str().unwrap().to_owned();
-    let v = poll(&r, &format!("/v1/videos/{id}"), None, |v| matches!(v["status"].as_str(), Some("completed" | "failed"))).await;
+    let v = poll(&r, &format!("/v1/videos/{id}"), None, |v| {
+        matches!(v["status"].as_str(), Some("completed" | "failed"))
+    })
+    .await;
     assert_eq!(v["status"], "completed", "{v}");
     let c = call(&r, "GET", &format!("/v1/videos/{id}/content"), None, None).await;
     assert_eq!(c.status, 200);
@@ -110,11 +140,24 @@ async fn fastvideo_videos_and_fastwan() {
     let root = call(&r, "GET", "/", None, None).await.json();
     assert_eq!(root["model"], "fake-wan");
     let h = call(&r, "GET", "/health", None, None).await;
-    assert_eq!((h.status, h.json()["model_loaded"].as_bool()), (StatusCode::OK, Some(true)));
-    let g = call(&r, "POST", "/generate", Some(json!({"prompt": "waves", "width": 832, "height": 480, "num_frames": 49})), None).await;
+    assert_eq!(
+        (h.status, h.json()["model_loaded"].as_bool()),
+        (StatusCode::OK, Some(true))
+    );
+    let g = call(
+        &r,
+        "POST",
+        "/generate",
+        Some(json!({"prompt": "waves", "width": 832, "height": 480, "num_frames": 49})),
+        None,
+    )
+    .await;
     assert_eq!(g.status, 200, "{}", String::from_utf8_lossy(&g.bytes));
     let pid = g.json()["prompt_id"].as_str().unwrap().to_owned();
-    let st = poll(&r, &format!("/status/{pid}"), None, |v| matches!(v["status"].as_str(), Some("completed" | "failed"))).await;
+    let st = poll(&r, &format!("/status/{pid}"), None, |v| {
+        matches!(v["status"].as_str(), Some("completed" | "failed"))
+    })
+    .await;
     assert_eq!(st["status"], "completed", "{st}");
     let vid = call(&r, "GET", &format!("/video/{pid}"), None, None).await;
     assert_eq!(vid.status, 200);
@@ -131,15 +174,32 @@ async fn minimax_create_query_list() {
     assert_eq!(s.status, 200, "{}", String::from_utf8_lossy(&s.bytes));
     let tid = s.json()["task_id"].as_str().unwrap().to_owned();
     assert_eq!(tid.len(), 18);
-    let t = poll(&r, &format!("/v2/query/video_generation/{tid}"), bearer(), |v| {
-        matches!(v["task"]["status"].as_str(), Some("succeeded" | "failed"))
-    })
+    let t = poll(
+        &r,
+        &format!("/v2/query/video_generation/{tid}"),
+        bearer(),
+        |v| matches!(v["task"]["status"].as_str(), Some("succeeded" | "failed")),
+    )
     .await;
     assert_eq!(t["task"]["status"], "succeeded", "{t}");
     let url = t["task"]["content"]["url"].as_str().unwrap();
-    let f = call(&r, "GET", url.strip_prefix("http://fv.test").unwrap(), None, None).await;
+    let f = call(
+        &r,
+        "GET",
+        url.strip_prefix("http://fv.test").unwrap(),
+        None,
+        None,
+    )
+    .await;
     assert_eq!(f.status, 200);
-    let l = call(&r, "GET", "/v2/query/video_generation?page_num=1&page_size=10", None, bearer()).await;
+    let l = call(
+        &r,
+        "GET",
+        "/v2/query/video_generation?page_num=1&page_size=10",
+        None,
+        bearer(),
+    )
+    .await;
     assert_eq!(l.status, 200);
     assert_eq!(l.json()["total"], 1);
     let s = call(&r, "POST", "/v2/video_generation", Some(json!({})), None).await;
@@ -151,27 +211,62 @@ async fn fal_queue_submit_status_result() {
     let a = app("fal").await;
     let r = a.router.clone();
     let key = Some("Key sk-adapters");
-    let s = call(&r, "POST", "/minimax/h3-turbo/text-to-video", Some(json!({"prompt": "a kitten", "seed": 7})), key).await;
+    let s = call(
+        &r,
+        "POST",
+        "/minimax/h3-turbo/text-to-video",
+        Some(json!({"prompt": "a kitten", "seed": 7})),
+        key,
+    )
+    .await;
     assert_eq!(s.status, 200, "{}", String::from_utf8_lossy(&s.bytes));
     let v = s.json();
     let rid = v["request_id"].as_str().unwrap().to_owned();
     let status_path = format!("/minimax/h3-turbo/requests/{rid}/status?logs=1");
     let done = poll(&r, &status_path, key, |v| v["status"] == "COMPLETED").await;
     assert!(done.get("error").is_none(), "{done}");
-    let out = call(&r, "GET", &format!("/minimax/h3-turbo/requests/{rid}"), None, key).await;
+    let out = call(
+        &r,
+        "GET",
+        &format!("/minimax/h3-turbo/requests/{rid}"),
+        None,
+        key,
+    )
+    .await;
     assert_eq!(out.status, 200);
     let o = out.json();
     let url = o["video"]["url"].as_str().unwrap();
     // Hosted fal's form, named by app and tier (`<nanoid21>_minimax-h3-turbo.mp4`).
-    assert!(url.split('?').next().unwrap().ends_with("_minimax-h3-turbo.mp4"), "{url}");
-    let job = a.ctx.jobs().by_external(ProtocolId::Fal, &rid).await.unwrap();
-    assert_eq!(job.artifacts[0].file_name, fastvideo_fal::output_file_name(&job));
+    assert!(
+        url.split('?')
+            .next()
+            .unwrap()
+            .ends_with("_minimax-h3-turbo.mp4"),
+        "{url}"
+    );
+    let job = a
+        .ctx
+        .jobs()
+        .by_external(ProtocolId::Fal, &rid)
+        .await
+        .unwrap();
+    assert_eq!(
+        job.artifacts[0].file_name,
+        fastvideo_fal::output_file_name(&job)
+    );
     // JWKS for our webhook signatures.
     let j = call(&r, "GET", "/.well-known/jwks.json", None, None).await;
     assert_eq!(j.status, 200);
     assert!(j.json()["keys"].as_array().is_some_and(|k| !k.is_empty()));
     // Unknown apps are not routed.
-    let s = call(&r, "POST", "/minimax/h9/text-to-video", Some(json!({"prompt": "x"})), key).await;
+    let s = call(
+        &r,
+        "POST",
+        "/minimax/h9/text-to-video",
+        Some(json!({"prompt": "x"})),
+        key,
+    )
+    .await;
     assert_eq!(s.status, 404);
 }
 
@@ -182,7 +277,10 @@ async fn every_mounted_route_of_the_table_answers() {
     let a = app("table").await;
     let apps = a.config.protocols.fal_apps.clone();
     for spec in route_table(&apps) {
-        if matches!(spec.owner, Owner::Reactor | Owner::FalDirector | Owner::Gateway) {
+        if matches!(
+            spec.owner,
+            Owner::Reactor | Owner::FalDirector | Owner::Gateway
+        ) {
             continue;
         }
         let mut uri = String::new();
@@ -200,7 +298,13 @@ async fn every_mounted_route_of_the_table_answers() {
         }
         let body = matches!(spec.method, "POST" | "PUT").then(|| json!({}));
         let s = call(&a.router, spec.method, &uri, body, bearer()).await;
-        assert_ne!(s.status, StatusCode::METHOD_NOT_ALLOWED, "{} {uri} ({:?})", spec.method, spec.owner);
+        assert_ne!(
+            s.status,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "{} {uri} ({:?})",
+            spec.method,
+            spec.owner
+        );
         assert!(
             !(s.status == 404 && s.bytes.is_empty()),
             "{} {uri} ({:?}) is not routed",
@@ -217,11 +321,15 @@ async fn every_mounted_route_of_the_table_answers() {
 async fn native_jobs_metrics_and_list_scope() {
     let a = app("native-list").await;
     let r = a.router.clone();
-    let body = json!({"model": "h3-turbo", "prompt": "a fox", "aspect_ratio": "16:9", "short_edge": 768});
+    let body =
+        json!({"model": "h3-turbo", "prompt": "a fox", "aspect_ratio": "16:9", "short_edge": 768});
     let s = call(&r, "POST", "/fv/v1/jobs", Some(body), bearer()).await;
     assert_eq!(s.status, 202, "{}", String::from_utf8_lossy(&s.bytes));
     let nid = s.json()["id"].as_str().unwrap().to_owned();
-    let v = poll(&r, &format!("/fv/v1/jobs/{nid}"), bearer(), |v| v["status"] == "succeeded").await;
+    let v = poll(&r, &format!("/fv/v1/jobs/{nid}"), bearer(), |v| {
+        v["status"] == "succeeded"
+    })
+    .await;
     assert_eq!(v["protocol"], "native");
     let m = &v["metrics"];
     assert!(m["inference_s"].is_number(), "{m}");
@@ -229,30 +337,65 @@ async fn native_jobs_metrics_and_list_scope() {
     assert!(m["queue_s"].is_number() && m["run_s"].is_number(), "{m}");
 
     let key = Some("Key sk-adapters");
-    let s = call(&r, "POST", "/minimax/h3-turbo/text-to-video", Some(json!({"prompt": "a kitten"})), key).await;
+    let s = call(
+        &r,
+        "POST",
+        "/minimax/h3-turbo/text-to-video",
+        Some(json!({"prompt": "a kitten"})),
+        key,
+    )
+    .await;
     assert_eq!(s.status, 200);
     let fid = s.json()["request_id"].as_str().unwrap().to_owned();
-    poll(&r, &format!("/minimax/h3-turbo/requests/{fid}/status"), key, |v| v["status"] == "COMPLETED").await;
+    poll(
+        &r,
+        &format!("/minimax/h3-turbo/requests/{fid}/status"),
+        key,
+        |v| v["status"] == "COMPLETED",
+    )
+    .await;
 
     let ids = |v: Value| -> Vec<(String, String)> {
         v["data"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|j| (j["protocol"].as_str().unwrap().to_owned(), j["id"].as_str().unwrap().to_owned()))
+            .map(|j| {
+                (
+                    j["protocol"].as_str().unwrap().to_owned(),
+                    j["id"].as_str().unwrap().to_owned(),
+                )
+            })
             .collect()
     };
     let native = ids(call(&r, "GET", "/fv/v1/jobs", None, bearer()).await.json());
     assert_eq!(native, vec![("native".to_owned(), nid.clone())]);
-    let all = ids(call(&r, "GET", "/fv/v1/jobs?protocol=all", None, bearer()).await.json());
-    assert!(all.contains(&("native".to_owned(), nid.clone())) && all.contains(&("fal".to_owned(), fid.clone())), "{all:?}");
-    let fal = ids(call(&r, "GET", "/fv/v1/jobs?protocol=fal", None, bearer()).await.json());
+    let all = ids(call(&r, "GET", "/fv/v1/jobs?protocol=all", None, bearer())
+        .await
+        .json());
+    assert!(
+        all.contains(&("native".to_owned(), nid.clone()))
+            && all.contains(&("fal".to_owned(), fid.clone())),
+        "{all:?}"
+    );
+    let fal = ids(call(&r, "GET", "/fv/v1/jobs?protocol=fal", None, bearer())
+        .await
+        .json());
     assert_eq!(fal, vec![("fal".to_owned(), fid)]);
     let bad = call(&r, "GET", "/fv/v1/jobs?protocol=nope", None, bearer()).await;
-    assert_eq!((bad.status, bad.json()["error"]["param"].as_str()), (StatusCode::BAD_REQUEST, Some("protocol")));
+    assert_eq!(
+        (bad.status, bad.json()["error"]["param"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("protocol"))
+    );
 }
 
-async fn preflight(app: &Router, path: &str, origin: &str, method: &str, headers: &str) -> axum::http::Response<Body> {
+async fn preflight(
+    app: &Router,
+    path: &str,
+    origin: &str,
+    method: &str,
+    headers: &str,
+) -> axum::http::Response<Body> {
     let req = Request::builder()
         .method("OPTIONS")
         .uri(path)
@@ -271,19 +414,37 @@ async fn preflight(app: &Router, path: &str, origin: &str, method: &str, headers
 async fn cors_preflights_and_cross_origin_upload() {
     let a = app("cors").await;
     let origin = "https://page.example";
-    let r = preflight(&a.router, "/storage/upload/initiate", origin, "POST", "authorization,content-type").await;
+    let r = preflight(
+        &a.router,
+        "/storage/upload/initiate",
+        origin,
+        "POST",
+        "authorization,content-type",
+    )
+    .await;
     assert!(r.status().is_success(), "{}", r.status());
     let h = r.headers();
     assert_eq!(h["access-control-allow-origin"], "*");
-    let allowed = h["access-control-allow-headers"].to_str().unwrap().to_ascii_lowercase();
-    assert!(allowed.contains("authorization") && allowed.contains("content-type"), "{allowed}");
-    assert!(h["access-control-allow-methods"].to_str().unwrap().contains("POST"));
+    let allowed = h["access-control-allow-headers"]
+        .to_str()
+        .unwrap()
+        .to_ascii_lowercase();
+    assert!(
+        allowed.contains("authorization") && allowed.contains("content-type"),
+        "{allowed}"
+    );
+    assert!(h["access-control-allow-methods"]
+        .to_str()
+        .unwrap()
+        .contains("POST"));
 
     let req = Request::post("/storage/upload/initiate")
         .header("origin", origin)
         .header("authorization", "Key sk-adapters")
         .header("content-type", "application/json")
-        .body(Body::from(json!({"content_type": "image/png", "file_name": "a.png"}).to_string()))
+        .body(Body::from(
+            json!({"content_type": "image/png", "file_name": "a.png"}).to_string(),
+        ))
         .unwrap();
     let r = a.router.clone().oneshot(req).await.unwrap();
     assert_eq!(r.status(), StatusCode::OK);
@@ -295,7 +456,10 @@ async fn cors_preflights_and_cross_origin_upload() {
     let r = preflight(&a.router, upload.path(), origin, "PUT", "content-type").await;
     assert!(r.status().is_success(), "{}", r.status());
     assert_eq!(r.headers()["access-control-allow-origin"], "*");
-    assert!(r.headers()["access-control-allow-methods"].to_str().unwrap().contains("PUT"));
+    assert!(r.headers()["access-control-allow-methods"]
+        .to_str()
+        .unwrap()
+        .contains("PUT"));
     let req = Request::put(upload.path())
         .header("origin", origin)
         .header("content-type", "image/png")
@@ -306,7 +470,14 @@ async fn cors_preflights_and_cross_origin_upload() {
     assert_eq!(r.headers()["access-control-allow-origin"], "*");
 
     // The FastVideo metric headers are readable cross-origin.
-    let r = preflight(&a.router, "/v1/videos/sync", origin, "POST", "authorization,content-type").await;
+    let r = preflight(
+        &a.router,
+        "/v1/videos/sync",
+        origin,
+        "POST",
+        "authorization,content-type",
+    )
+    .await;
     assert!(r.status().is_success());
     let req = Request::post("/v1/videos/sync")
         .header("origin", origin)
@@ -316,7 +487,10 @@ async fn cors_preflights_and_cross_origin_upload() {
         .unwrap();
     let r = a.router.clone().oneshot(req).await.unwrap();
     assert_eq!(r.status(), StatusCode::OK);
-    let exposed = r.headers()["access-control-expose-headers"].to_str().unwrap().to_ascii_lowercase();
+    let exposed = r.headers()["access-control-expose-headers"]
+        .to_str()
+        .unwrap()
+        .to_ascii_lowercase();
     assert!(exposed.contains("x-inference-time-s"), "{exposed}");
 }
 
@@ -324,15 +498,43 @@ async fn cors_preflights_and_cross_origin_upload() {
 /// it off (a preflight is then an ordinary unrouted OPTIONS).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cors_origins_are_configurable() {
-    let a = app_with("cors-list", &[("FV_CORS_ORIGINS", "https://ok.example".to_owned())]).await;
-    let r = preflight(&a.router, "/storage/upload/initiate", "https://ok.example", "POST", "authorization").await;
+    let a = app_with(
+        "cors-list",
+        &[("FV_CORS_ORIGINS", "https://ok.example".to_owned())],
+    )
+    .await;
+    let r = preflight(
+        &a.router,
+        "/storage/upload/initiate",
+        "https://ok.example",
+        "POST",
+        "authorization",
+    )
+    .await;
     assert!(r.status().is_success());
-    assert_eq!(r.headers()["access-control-allow-origin"], "https://ok.example");
-    let r = preflight(&a.router, "/storage/upload/initiate", "https://evil.example", "POST", "authorization").await;
+    assert_eq!(
+        r.headers()["access-control-allow-origin"],
+        "https://ok.example"
+    );
+    let r = preflight(
+        &a.router,
+        "/storage/upload/initiate",
+        "https://evil.example",
+        "POST",
+        "authorization",
+    )
+    .await;
     assert!(r.headers().get("access-control-allow-origin").is_none());
 
     let a = app_with("cors-off", &[("FV_CORS_ORIGINS", "none".to_owned())]).await;
-    let r = preflight(&a.router, "/storage/upload/initiate", "https://ok.example", "POST", "authorization").await;
+    let r = preflight(
+        &a.router,
+        "/storage/upload/initiate",
+        "https://ok.example",
+        "POST",
+        "authorization",
+    )
+    .await;
     assert!(r.headers().get("access-control-allow-origin").is_none());
 }
 
@@ -351,10 +553,12 @@ async fn fastvideo_sync_streams_s3_artifacts_with_headers() {
     let (o1, o2) = (objects.clone(), objects.clone());
     let s3: Router = Router::new().route(
         "/{*key}",
-        put(move |Path(k): Path<String>, body: axum::body::Bytes| async move {
-            o1.lock().unwrap().insert(k, body.to_vec());
-            StatusCode::OK
-        })
+        put(
+            move |Path(k): Path<String>, body: axum::body::Bytes| async move {
+                o1.lock().unwrap().insert(k, body.to_vec());
+                StatusCode::OK
+            },
+        )
         .get(move |Path(k): Path<String>| async move {
             match o2.lock().unwrap().get(&k) {
                 Some(b) => (StatusCode::OK, b.clone()).into_response(),
@@ -380,9 +584,20 @@ async fn fastvideo_sync_streams_s3_artifacts_with_headers() {
     assert_eq!(s.status, 200, "{}", String::from_utf8_lossy(&s.bytes));
     assert_eq!(s.headers["content-type"], "video/mp4");
     assert!(s.headers.get("location").is_none());
-    for h in ["x-request-id", "x-model", "x-inference-time-s", "x-stage-durations"] {
+    for h in [
+        "x-request-id",
+        "x-model",
+        "x-inference-time-s",
+        "x-stage-durations",
+    ] {
         assert!(s.headers.get(h).is_some(), "missing {h}");
     }
-    let stored = objects.lock().unwrap().values().next().cloned().expect("uploaded to the bucket");
+    let stored = objects
+        .lock()
+        .unwrap()
+        .values()
+        .next()
+        .cloned()
+        .expect("uploaded to the bucket");
     assert_eq!(s.bytes, stored);
 }

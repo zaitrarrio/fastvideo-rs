@@ -26,7 +26,12 @@ pub const PUBLISHED_FULLOPT_SPEEDUP: f64 = 2.26;
 
 /// Latent grid of a `(frames, height, width)` request: Wan 2.2 VAE (×4 time,
 /// ×16 space), then 2×2 patches with the height/width padded up to even.
-pub fn latent_grid(frames: usize, height: usize, width: usize, patch: usize) -> ([usize; 3], [usize; 3]) {
+pub fn latent_grid(
+    frames: usize,
+    height: usize,
+    width: usize,
+    patch: usize,
+) -> ([usize; 3], [usize; 3]) {
     let lt = (frames - 1) / 4 + 1;
     let (lh, lw) = (height / 16, width / 16);
     ([lt, lh, lw], [lt, lh.div_ceil(patch), lw.div_ceil(patch)])

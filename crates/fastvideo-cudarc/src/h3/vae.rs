@@ -277,7 +277,10 @@ pub fn resolve_nvfp4(
 /// no h3-base `vae/` at hand (the pipeline resolves its own source with one,
 /// `super::pipeline::resolve_video_vae`).
 pub fn nvfp4_for(map: &WeightMap) -> Result<bool> {
-    Ok(resolve_nvfp4(nvfp4_setting()?, carries_nvfp4(map), false, live_sm())? == VaeLinearsChoice::Nvfp4)
+    Ok(
+        resolve_nvfp4(nvfp4_setting()?, carries_nvfp4(map), false, live_sm())?
+            == VaeLinearsChoice::Nvfp4,
+    )
 }
 
 /// The live device's compute capability major (`None` without one).
@@ -498,13 +501,21 @@ fn nvfp4_linear(
     for p in prefixes {
         let (l, input_scale) = super::nvfp4::PublishedLinear::read_modelopt(store, p, rows, k)?;
         if static_act {
-            let s = input_scale
-                .ok_or_else(|| msg(format!("h3 vae nvfp4: {p}.input_scale missing ({NVFP4_ACT_ENV}=dynamic measures it)")))?;
+            let s = input_scale.ok_or_else(|| {
+                msg(format!(
+                    "h3 vae nvfp4: {p}.input_scale missing ({NVFP4_ACT_ENV}=dynamic measures it)"
+                ))
+            })?;
             act = Some(act.map_or(s, |a| a.max(s)));
         }
-        let op = Nvfp4Operand::from_host_layout(&l.codes, &l.scales, l.rows, l.k, l.decode_scale, rule)?;
+        let op =
+            Nvfp4Operand::from_host_layout(&l.codes, &l.scales, l.rows, l.k, l.decode_scale, rule)?;
         parts.push(Nvfp4Linear::from_operand(op, None, rule)?);
-        bias.extend(cuda_tensor_shaped(map, &format!("{p}.bias"), &[rows])?.host_cow()?.iter());
+        bias.extend(
+            cuda_tensor_shaped(map, &format!("{p}.bias"), &[rows])?
+                .host_cow()?
+                .iter(),
+        );
     }
     let mut stack = Nvfp4Stack::new(parts)?;
     if let Some(s) = act {
@@ -579,9 +590,27 @@ impl Block {
             .collect();
         let qkv: Vec<&str> = qkv.iter().map(String::as_str).collect();
         let (qkv, s0) = nvfp4_linear(map, &qkv, dim, dim, static_act)?;
-        let (to_out, s1) = nvfp4_linear(map, &[&format!("{prefix}.attn.to_out.0")], dim, dim, static_act)?;
-        let (ff_in, s2) = nvfp4_linear(map, &[&format!("{prefix}.ff.net.0.proj")], 2 * hidden, dim, static_act)?;
-        let (ff_out, s3) = nvfp4_linear(map, &[&format!("{prefix}.ff.net.2")], dim, hidden, static_act)?;
+        let (to_out, s1) = nvfp4_linear(
+            map,
+            &[&format!("{prefix}.attn.to_out.0")],
+            dim,
+            dim,
+            static_act,
+        )?;
+        let (ff_in, s2) = nvfp4_linear(
+            map,
+            &[&format!("{prefix}.ff.net.0.proj")],
+            2 * hidden,
+            dim,
+            static_act,
+        )?;
+        let (ff_out, s3) = nvfp4_linear(
+            map,
+            &[&format!("{prefix}.ff.net.2")],
+            dim,
+            hidden,
+            static_act,
+        )?;
         Ok((
             Self {
                 norm1: vec("norm1.weight")?,
@@ -829,11 +858,16 @@ impl H3VideoDecoder {
                     let mut scales: Vec<[Option<f32>; 4]> = Vec::new();
                     let blocks = (0..cfg.decoder_num_layers)
                         .map(|i| {
-                            Block::load_nvfp4(map, &format!("decoder.transformer_blocks.{i}"), &cfg, static_act)
-                                .map(|(b, s)| {
-                                    scales.push(s);
-                                    b
-                                })
+                            Block::load_nvfp4(
+                                map,
+                                &format!("decoder.transformer_blocks.{i}"),
+                                &cfg,
+                                static_act,
+                            )
+                            .map(|(b, s)| {
+                                scales.push(s);
+                                b
+                            })
                         })
                         .collect::<Result<Vec<_>>>()?;
                     let held: u64 = blocks
@@ -846,7 +880,9 @@ impl H3VideoDecoder {
                         if v.is_empty() {
                             "dynamic".to_string()
                         } else {
-                            let (lo, hi) = v.iter().fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
+                            let (lo, hi) = v
+                                .iter()
+                                .fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
                             format!("{lo:.3e}..{hi:.3e}")
                         }
                     };
@@ -1494,7 +1530,8 @@ impl H3VideoDecoder {
             let mut prof = Prof::on();
             crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
             let timer = std::time::Instant::now();
-            let out = dec.decode_tiles_with(tiles, grid, &mut |_, _| Ok(()), fused, mx, &mut prof)?;
+            let out =
+                dec.decode_tiles_with(tiles, grid, &mut |_, _| Ok(()), fused, mx, &mut prof)?;
             crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
             Ok((out, timer.elapsed().as_secs_f64(), prof))
         };
@@ -2131,18 +2168,35 @@ mod tests {
         let r = resolve_nvfp4;
         // A bf16 vae/ (h3-base, the Trim): unchanged whatever is at hand.
         for base in [false, true] {
-            assert_eq!(r(None, false, base, Some(12)).unwrap(), Official, "default: bf16 tree");
-            assert_eq!(r(Some(false), false, base, Some(12)).unwrap(), Official, "=0 on a bf16 tree");
-            let e = r(Some(true), false, base, Some(12)).unwrap_err().to_string();
+            assert_eq!(
+                r(None, false, base, Some(12)).unwrap(),
+                Official,
+                "default: bf16 tree"
+            );
+            assert_eq!(
+                r(Some(false), false, base, Some(12)).unwrap(),
+                Official,
+                "=0 on a bf16 tree"
+            );
+            let e = r(Some(true), false, base, Some(12))
+                .unwrap_err()
+                .to_string();
             assert!(e.contains(NVFP4_PROBE), "{e}");
         }
         // The NVFP4 tier's vae/: NVFP4 unset or =1, on sm_100 / sm_120.
         for setting in [None, Some(true)] {
             for base in [false, true] {
-                assert_eq!(r(setting, true, base, Some(12)).unwrap(), Nvfp4, "RTX PRO 6000");
+                assert_eq!(
+                    r(setting, true, base, Some(12)).unwrap(),
+                    Nvfp4,
+                    "RTX PRO 6000"
+                );
                 assert_eq!(r(setting, true, base, Some(10)).unwrap(), Nvfp4, "B200");
                 let e = r(setting, true, base, Some(9)).unwrap_err().to_string();
-                assert!(e.contains("sm_9") && e.contains(&format!("{NVFP4_ENV}=0")), "{e}");
+                assert!(
+                    e.contains("sm_9") && e.contains(&format!("{NVFP4_ENV}=0")),
+                    "{e}"
+                );
                 let e = r(setting, true, base, None).unwrap_err().to_string();
                 assert!(e.contains(&format!("{NVFP4_ENV}=0")), "no device: {e}");
             }
@@ -2150,7 +2204,9 @@ mod tests {
         // =0: h3-base's vae/ (bf16 + MXFP8), whatever the device; without it, an error naming the fix.
         assert_eq!(r(Some(false), true, true, Some(12)).unwrap(), BaseOfficial);
         assert_eq!(r(Some(false), true, true, Some(9)).unwrap(), BaseOfficial);
-        let e = r(Some(false), true, false, Some(12)).unwrap_err().to_string();
+        let e = r(Some(false), true, false, Some(12))
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("h3-base") && e.contains("--text-weights"), "{e}");
     }
 

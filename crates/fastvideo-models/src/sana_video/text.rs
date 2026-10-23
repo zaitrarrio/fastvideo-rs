@@ -43,7 +43,9 @@ pub fn with_motion_score(prompt: &str, motion_score: Option<u32>) -> String {
 
 /// Positions of the padded sequence the DiT sees, in order.
 pub fn select_index(max_sequence_length: usize, padded_len: usize) -> Vec<usize> {
-    let tail = max_sequence_length.saturating_sub(1).min(padded_len.saturating_sub(1));
+    let tail = max_sequence_length
+        .saturating_sub(1)
+        .min(padded_len.saturating_sub(1));
     std::iter::once(0)
         .chain(padded_len - tail..padded_len)
         .collect()
@@ -153,7 +155,10 @@ mod tests {
     fn chi_and_motion_text() {
         assert!(chi_prompt().ends_with("\nUser Prompt: "));
         assert_eq!(chi_prompt().matches('\n').count(), 7);
-        assert_eq!(with_motion_score("a cat", Some(30)), "a cat motion score: 30.");
+        assert_eq!(
+            with_motion_score("a cat", Some(30)),
+            "a cat motion score: 30."
+        );
         assert_eq!(with_motion_score("a cat", None), "a cat");
     }
 }

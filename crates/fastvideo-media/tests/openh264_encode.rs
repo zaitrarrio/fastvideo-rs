@@ -23,8 +23,17 @@ fn pattern(w: u32, h: u32, i: u64) -> RgbFrame {
 }
 
 fn psnr(a: &[u8], b: &[u8]) -> f64 {
-    let mse = a.iter().zip(b).map(|(&x, &y)| (f64::from(x) - f64::from(y)).powi(2)).sum::<f64>() / a.len() as f64;
-    if mse == 0.0 { 99.0 } else { 10.0 * (255.0 * 255.0 / mse).log10() }
+    let mse = a
+        .iter()
+        .zip(b)
+        .map(|(&x, &y)| (f64::from(x) - f64::from(y)).powi(2))
+        .sum::<f64>()
+        / a.len() as f64;
+    if mse == 0.0 {
+        99.0
+    } else {
+        10.0 * (255.0 * 255.0 / mse).log10()
+    }
 }
 
 #[test]
@@ -41,7 +50,10 @@ fn constrained_baseline_1344x768_gop_and_forced_idr() {
     aus.extend(enc.finish().unwrap());
     assert_eq!(aus.len(), 100, "one AU per frame, no skips");
     let keys: Vec<u64> = aus.iter().filter(|a| a.keyframe).map(|a| a.index).collect();
-    assert!(keys.contains(&0) && keys.contains(&30), "IDR at start and on force: {keys:?}");
+    assert!(
+        keys.contains(&0) && keys.contains(&30),
+        "IDR at start and on force: {keys:?}"
+    );
     // Periodic IDR every 2 s (48 frames) from the last IDR, never scene-cut.
     for w in keys.windows(2) {
         assert!(w[1] - w[0] <= 48, "{keys:?}");
@@ -50,8 +62,14 @@ fn constrained_baseline_1344x768_gop_and_forced_idr() {
     for a in aus.iter().filter(|a| a.keyframe) {
         let sps = h264::find_sps(&a.data).expect("SPS/PPS with every IDR");
         assert_eq!(sps.profile_idc, 66, "{sps:?}");
-        assert!(sps.is_constrained_baseline(), "constraint_set1 must be set: {sps:?}");
-        assert!(sps.level_idc >= H264Level::L3_2.idc(), "1344x768 needs level 3.2+: {sps:?}");
+        assert!(
+            sps.is_constrained_baseline(),
+            "constraint_set1 must be set: {sps:?}"
+        );
+        assert!(
+            sps.level_idc >= H264Level::L3_2.idc(),
+            "1344x768 needs level 3.2+: {sps:?}"
+        );
         assert_eq!((sps.width, sps.height), (1344, 768));
     }
     // Round trip through the OpenH264 decoder.
@@ -95,9 +113,17 @@ fn configured_level_4_and_small_canvas() {
     let sps = h264::find_sps(&au.data).unwrap();
     assert_eq!((sps.width, sps.height, sps.level_idc), (1280, 720, 31));
     let dec = decode_rgb(&[&au.data[..]]).unwrap();
-    assert_eq!(dec[0].pixel(2, 360).map(|p| p.iter().all(|&c| c < 24)), Some(true), "fit padding is black");
+    assert_eq!(
+        dec[0].pixel(2, 360).map(|p| p.iter().all(|&c| c < 24)),
+        Some(true),
+        "fit padding is black"
+    );
     // The Cloudflare publish profile is native: 1344x768 at level 3.2.
-    let mut native = create_encoder(EncoderBackend::OpenH264, H264Config::for_publish(PublishTarget::Cloudflare, 1344, 768, 24)).unwrap();
+    let mut native = create_encoder(
+        EncoderBackend::OpenH264,
+        H264Config::for_publish(PublishTarget::Cloudflare, 1344, 768, 24),
+    )
+    .unwrap();
     let au = native.encode(&pattern(1344, 768, 0)).unwrap().remove(0);
     let sps = h264::find_sps(&au.data).unwrap();
     assert_eq!((sps.width, sps.height, sps.level_idc), (1344, 768, 32));

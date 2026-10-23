@@ -81,7 +81,12 @@ pub enum Resolution {
 
 impl Resolution {
     /// Every value, lowest first (the order forms list them in).
-    pub const ALL: [Resolution; 4] = [Resolution::R480, Resolution::R720, Resolution::R768, Resolution::R1080];
+    pub const ALL: [Resolution; 4] = [
+        Resolution::R480,
+        Resolution::R720,
+        Resolution::R768,
+        Resolution::R1080,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -127,7 +132,11 @@ impl Aspect {
         let l = ratio.max(1e-6).ln();
         [Aspect::Landscape, Aspect::Portrait, Aspect::Square]
             .into_iter()
-            .min_by(|a, b| (a.ratio().ln() - l).abs().total_cmp(&(b.ratio().ln() - l).abs()))
+            .min_by(|a, b| {
+                (a.ratio().ln() - l)
+                    .abs()
+                    .total_cmp(&(b.ratio().ln() - l).abs())
+            })
             .unwrap_or(Aspect::Landscape)
     }
     /// The protocol's aspect ratio (`CanvasSpec::Aspect`).
@@ -281,23 +290,39 @@ impl WorldEntity {
 fn check_world(m: &Configure, v: &Value) -> Result<(), Invalid> {
     if let Some(s) = &m.style {
         if s.chars().count() > STYLE_MAX_CHARS {
-            return Err(invalid(format!("`style` must be at most {STYLE_MAX_CHARS} characters"), v));
+            return Err(invalid(
+                format!("`style` must be at most {STYLE_MAX_CHARS} characters"),
+                v,
+            ));
         }
     }
     let Some(es) = &m.entities else { return Ok(()) };
     if es.len() > ENTITIES_MAX {
-        return Err(invalid(format!("`entities` must have at most {ENTITIES_MAX} entries"), v));
+        return Err(invalid(
+            format!("`entities` must have at most {ENTITIES_MAX} entries"),
+            v,
+        ));
     }
     let mut ids = std::collections::HashSet::new();
     for (i, e) in es.iter().enumerate() {
-        for (field, s, max) in [("id", &e.id, ENTITY_ID_MAX_CHARS), ("name", &e.name, ENTITY_NAME_MAX_CHARS), ("descriptor", &e.descriptor, ENTITY_DESCRIPTOR_MAX_CHARS)] {
+        for (field, s, max) in [
+            ("id", &e.id, ENTITY_ID_MAX_CHARS),
+            ("name", &e.name, ENTITY_NAME_MAX_CHARS),
+            ("descriptor", &e.descriptor, ENTITY_DESCRIPTOR_MAX_CHARS),
+        ] {
             let n = s.trim().chars().count();
             if n == 0 || n > max {
-                return Err(invalid(format!("`entities[{i}].{field}` must be 1..{max} characters"), v));
+                return Err(invalid(
+                    format!("`entities[{i}].{field}` must be 1..{max} characters"),
+                    v,
+                ));
             }
         }
         if !ids.insert(e.id.trim()) {
-            return Err(invalid(format!("`entities[{i}].id` `{}` is not unique", e.id.trim()), v));
+            return Err(invalid(
+                format!("`entities[{i}].id` `{}` is not unique", e.id.trim()),
+                v,
+            ));
         }
     }
     Ok(())
@@ -358,7 +383,9 @@ pub enum ClientMessage {
     Ping(serde_json::Number),
     Stop,
     /// The JS client's reserved session-affine network query.
-    NetworkInfo { request_id: String },
+    NetworkInfo {
+        request_id: String,
+    },
 }
 
 /// Why a message was refused as `invalid_message`.
@@ -370,13 +397,19 @@ pub struct Invalid {
 }
 
 fn invalid(error: impl Into<String>, v: &Value) -> Invalid {
-    Invalid { error: error.into(), prompt_version: v.get("prompt_version").and_then(Value::as_u64) }
+    Invalid {
+        error: error.into(),
+        prompt_version: v.get("prompt_version").and_then(Value::as_u64),
+    }
 }
 
 fn check_text(field: &str, s: &str, v: &Value) -> Result<(), Invalid> {
     let n = s.chars().count();
     if n == 0 || n > PROMPT_MAX_CHARS {
-        return Err(invalid(format!("`{field}` must be 1..{PROMPT_MAX_CHARS} characters"), v));
+        return Err(invalid(
+            format!("`{field}` must be 1..{PROMPT_MAX_CHARS} characters"),
+            v,
+        ));
     }
     Ok(())
 }
@@ -390,7 +423,10 @@ fn check_url(field: &str, s: &Option<String>, v: &Value) -> Result<(), Invalid> 
 
 fn check_version(ver: u64, v: &Value) -> Result<(), Invalid> {
     if !(1..=MAX_SAFE_INTEGER).contains(&ver) {
-        return Err(invalid("`prompt_version` must be an integer in 1..2^53-1", v));
+        return Err(invalid(
+            "`prompt_version` must be an integer in 1..2^53-1",
+            v,
+        ));
     }
     Ok(())
 }
@@ -398,7 +434,10 @@ fn check_version(ver: u64, v: &Value) -> Result<(), Invalid> {
 fn check_script(script: &Option<Vec<ScriptBeat>>, v: &Value) -> Result<(), Invalid> {
     let Some(beats) = script else { return Ok(()) };
     if beats.is_empty() || beats.len() > SCRIPT_MAX_BEATS {
-        return Err(invalid(format!("`script` must have 1..{SCRIPT_MAX_BEATS} beats"), v));
+        return Err(invalid(
+            format!("`script` must have 1..{SCRIPT_MAX_BEATS} beats"),
+            v,
+        ));
     }
     for (i, b) in beats.iter().enumerate() {
         if let Some(p) = &b.prompt {
@@ -412,8 +451,10 @@ fn check_script(script: &Option<Vec<ScriptBeat>>, v: &Value) -> Result<(), Inval
 
 /// Parses one control-channel text frame strictly.
 pub fn parse(text: &str) -> Result<ClientMessage, Invalid> {
-    let v: Value = serde_json::from_str(text)
-        .map_err(|e| Invalid { error: format!("control messages are JSON objects: {e}"), prompt_version: None })?;
+    let v: Value = serde_json::from_str(text).map_err(|e| Invalid {
+        error: format!("control messages are JSON objects: {e}"),
+        prompt_version: None,
+    })?;
     let Some(obj) = v.as_object() else {
         return Err(invalid("control messages are JSON objects", &v));
     };
@@ -426,8 +467,15 @@ pub fn parse(text: &str) -> Result<ClientMessage, Invalid> {
             // Checked on the raw value so a wrong type names the field too.
             match obj.get("chunk_duration") {
                 None | Some(Value::Null) => {}
-                Some(d) if d.as_u64().is_some_and(|d| CHUNK_DURATIONS.iter().any(|&c| u64::from(c) == d)) => {}
-                Some(d) => return Err(invalid(format!("`chunk_duration` must be 5 or 10 (whole seconds), got {d}"), &v)),
+                Some(d)
+                    if d.as_u64()
+                        .is_some_and(|d| CHUNK_DURATIONS.iter().any(|&c| u64::from(c) == d)) => {}
+                Some(d) => {
+                    return Err(invalid(
+                        format!("`chunk_duration` must be 5 or 10 (whole seconds), got {d}"),
+                        &v,
+                    ))
+                }
             }
             let m: Configure = serde_json::from_value(v.clone()).map_err(de)?;
             check_version(m.prompt_version, &v)?;
@@ -440,7 +488,10 @@ pub fn parse(text: &str) -> Result<ClientMessage, Invalid> {
             }
             if let Some(b) = m.audio_bitrate {
                 if !matches!(b, 96_000 | 128_000 | 192_000) {
-                    return Err(invalid("`audio_bitrate` must be 96000, 128000 or 192000", &v));
+                    return Err(invalid(
+                        "`audio_bitrate` must be 96000, 128000 or 192000",
+                        &v,
+                    ));
                 }
             }
             if m.protocol_version.is_some_and(|p| p != 1) {
@@ -469,7 +520,9 @@ pub fn parse(text: &str) -> Result<ClientMessage, Invalid> {
         }
         NETWORK_INFO_REQUEST => {
             let m: NetworkInfoRequest = serde_json::from_value(v.clone()).map_err(de)?;
-            Ok(ClientMessage::NetworkInfo { request_id: m.request_id })
+            Ok(ClientMessage::NetworkInfo {
+                request_id: m.request_id,
+            })
         }
         other => Err(invalid(format!("unknown message type `{other}`"), &v)),
     }
@@ -520,7 +573,10 @@ impl ErrorCode {
 
     /// Session failures end the session; diagnostics do not.
     pub fn is_session_failure(self) -> bool {
-        !matches!(self, ErrorCode::InvalidMessage | ErrorCode::NotConfigured | ErrorCode::ImmutableSettings)
+        !matches!(
+            self,
+            ErrorCode::InvalidMessage | ErrorCode::NotConfigured | ErrorCode::ImmutableSettings
+        )
     }
 }
 
@@ -688,7 +744,9 @@ mod tests {
             r#"{"aspect_ratio":"16:9","protocol_version":1,"memory":3,"prompt_version":1,"prompt":"A sitcom","type":"configure","resolution":"768p"}"#,
         )
         .unwrap();
-        let ClientMessage::Configure(c) = m else { panic!() };
+        let ClientMessage::Configure(c) = m else {
+            panic!()
+        };
         assert_eq!(c.prompt_version, 1);
         assert_eq!(c.resolution, Some(Resolution::R768));
         assert_eq!(c.aspect_ratio, Some(Aspect::Landscape));
@@ -697,7 +755,10 @@ mod tests {
         assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","image_url":null,"end_image_url":null,"audio_url":null,"audio_bitrate":null,"seed":null,"script":null,"chunk_duration":null}"#).is_ok());
         assert_eq!(c.chunk_duration, None);
         for d in CHUNK_DURATIONS {
-            let ClientMessage::Configure(c) = parse(&format!(r#"{{"type":"configure","prompt_version":1,"prompt":"x","chunk_duration":{d}}}"#)).unwrap() else {
+            let ClientMessage::Configure(c) = parse(&format!(
+                r#"{{"type":"configure","prompt_version":1,"prompt":"x","chunk_duration":{d}}}"#
+            ))
+            .unwrap() else {
                 panic!()
             };
             assert_eq!(c.chunk_duration, Some(d));
@@ -707,12 +768,24 @@ mod tests {
     #[test]
     fn every_resolution_round_trips() {
         for r in Resolution::ALL {
-            let m = parse(&format!(r#"{{"type":"configure","prompt_version":1,"prompt":"x","resolution":"{}"}}"#, r.as_str())).unwrap();
-            let ClientMessage::Configure(c) = m else { panic!() };
+            let m = parse(&format!(
+                r#"{{"type":"configure","prompt_version":1,"prompt":"x","resolution":"{}"}}"#,
+                r.as_str()
+            ))
+            .unwrap();
+            let ClientMessage::Configure(c) = m else {
+                panic!()
+            };
             assert_eq!(c.resolution, Some(r));
-            assert_eq!(r.as_str().trim_end_matches('p').parse::<u32>().unwrap(), r.short_edge());
+            assert_eq!(
+                r.as_str().trim_end_matches('p').parse::<u32>().unwrap(),
+                r.short_edge()
+            );
         }
-        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"720P"}"#).is_err());
+        assert!(parse(
+            r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"720P"}"#
+        )
+        .is_err());
     }
 
     #[test]
@@ -727,23 +800,50 @@ mod tests {
         // Types, enums, ranges.
         assert!(parse(r#"{"type":"configure","prompt_version":"1","prompt":"x"}"#).is_err());
         // 720p is an extension (LTX's tier); tiers nobody serves stay refused.
-        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"360p"}"#).is_err());
-        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"768P"}"#).is_err());
-        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","aspect_ratio":"4:3"}"#).is_err());
-        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","memory":0}"#).is_err());
-        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","memory":51}"#).is_err());
-        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","audio_bitrate":64000}"#).is_err());
-        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","protocol_version":2}"#).is_err());
+        assert!(parse(
+            r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"360p"}"#
+        )
+        .is_err());
+        assert!(parse(
+            r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"768P"}"#
+        )
+        .is_err());
+        assert!(parse(
+            r#"{"type":"configure","prompt_version":1,"prompt":"x","aspect_ratio":"4:3"}"#
+        )
+        .is_err());
+        assert!(
+            parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","memory":0}"#).is_err()
+        );
+        assert!(
+            parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","memory":51}"#).is_err()
+        );
+        assert!(parse(
+            r#"{"type":"configure","prompt_version":1,"prompt":"x","audio_bitrate":64000}"#
+        )
+        .is_err());
+        assert!(parse(
+            r#"{"type":"configure","prompt_version":1,"prompt":"x","protocol_version":2}"#
+        )
+        .is_err());
         // chunk_duration: whole seconds, 5 or 10.
         for bad in ["0", "3", "7", "15", "-5", "5.5", "\"5\""] {
-            let e = err(&format!(r#"{{"type":"configure","prompt_version":1,"prompt":"x","chunk_duration":{bad}}}"#));
+            let e = err(&format!(
+                r#"{{"type":"configure","prompt_version":1,"prompt":"x","chunk_duration":{bad}}}"#
+            ));
             assert!(e.error.contains("chunk_duration"), "{bad}: {e:?}");
             assert_eq!(e.prompt_version, Some(1));
         }
         assert!(parse(r#"{"type":"configure","prompt_version":0,"prompt":"x"}"#).is_err());
-        assert!(parse(r#"{"type":"configure","prompt_version":9007199254740992,"prompt":"x"}"#).is_err());
+        assert!(
+            parse(r#"{"type":"configure","prompt_version":9007199254740992,"prompt":"x"}"#)
+                .is_err()
+        );
         assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":""}"#).is_err());
-        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","image_url":""}"#).is_err());
+        assert!(
+            parse(r#"{"type":"configure","prompt_version":1,"prompt":"x","image_url":""}"#)
+                .is_err()
+        );
         assert!(parse(r#"{"type":"configure","prompt_version":1.5,"prompt":"x"}"#).is_err());
         assert!(parse(r#"{"type":"prompt","prompt_version":2,"script":[]}"#).is_err());
         assert!(parse(r#"{"type":"prompt","prompt_version":2,"audio_behavior":"mix"}"#).is_err());
@@ -754,7 +854,10 @@ mod tests {
         // Not objects / unknown types.
         assert!(parse("[]").is_err());
         assert!(parse("not json").is_err());
-        assert_eq!(err(r#"{"type":"dance"}"#).error, "unknown message type `dance`");
+        assert_eq!(
+            err(r#"{"type":"dance"}"#).error,
+            "unknown message type `dance`"
+        );
         assert!(parse(r#"{"kind":"ping"}"#).is_err());
     }
 
@@ -767,12 +870,16 @@ mod tests {
         };
         assert_eq!(p.prompt_version, 2);
         assert_eq!(p.replan, None);
-        let ClientMessage::Ping(ts) = parse(r#"{"type":"ping","ts":1712.5}"#).unwrap() else { panic!() };
+        let ClientMessage::Ping(ts) = parse(r#"{"type":"ping","ts":1712.5}"#).unwrap() else {
+            panic!()
+        };
         assert_eq!(pong(ts)["client_ts"], json!(1712.5));
         assert_eq!(parse(r#"{"type":"stop"}"#).unwrap(), ClientMessage::Stop);
         assert_eq!(
             parse(r#"{"type":"wma.network-info.request","request_id":"r1"}"#).unwrap(),
-            ClientMessage::NetworkInfo { request_id: "r1".into() }
+            ClientMessage::NetworkInfo {
+                request_id: "r1".into()
+            }
         );
     }
 
@@ -782,10 +889,22 @@ mod tests {
             error(ErrorCode::InvalidInput, "no", Some(1)),
             json!({"type":"error","code":"invalid_input","error":"no","prompt_version":1,"detail":null})
         );
-        assert_eq!(prompt_rejected(3, RejectReason::StalePromptVersion, "old")["reason"], "stale_prompt_version");
-        assert_eq!(stream_exhausted(4, "stopped"), json!({"type":"stream_exhausted","chunks":4,"reason":"stopped"}));
-        assert_eq!(deadline_missed(2, 0.5)["behavior"], "freeze_video_and_silence_audio_until_ready");
-        assert_eq!(prompt_applied(5, Some((3, 0, 2, ScriptMode::Append)))["script_mode"], "append");
+        assert_eq!(
+            prompt_rejected(3, RejectReason::StalePromptVersion, "old")["reason"],
+            "stale_prompt_version"
+        );
+        assert_eq!(
+            stream_exhausted(4, "stopped"),
+            json!({"type":"stream_exhausted","chunks":4,"reason":"stopped"})
+        );
+        assert_eq!(
+            deadline_missed(2, 0.5)["behavior"],
+            "freeze_video_and_silence_audio_until_ready"
+        );
+        assert_eq!(
+            prompt_applied(5, Some((3, 0, 2, ScriptMode::Append)))["script_mode"],
+            "append"
+        );
         assert!(!ErrorCode::InvalidMessage.is_session_failure());
         assert!(ErrorCode::InvalidInitialAudio.is_session_failure());
         assert_eq!(SERVER_MESSAGE_TYPES.len(), 16);

@@ -37,7 +37,9 @@ struct Row {
 
 fn rfc(ms: Option<f64>) -> Value {
     match ms {
-        Some(ms) => json!(js_sys::Date::new(&JsValue::from_f64(ms)).to_iso_string().as_string()),
+        Some(ms) => json!(js_sys::Date::new(&JsValue::from_f64(ms))
+            .to_iso_string()
+            .as_string()),
         None => Value::Null,
     }
 }
@@ -57,7 +59,8 @@ fn view(r: &Row) -> Value {
 /// 32 bytes from the platform CSPRNG (`crypto.getRandomValues`).
 fn random_bytes() -> Result<[u8; 32]> {
     let crypto = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("crypto"))?;
-    let get = js_sys::Reflect::get(&crypto, &JsValue::from_str("getRandomValues"))?.dyn_into::<js_sys::Function>()?;
+    let get = js_sys::Reflect::get(&crypto, &JsValue::from_str("getRandomValues"))?
+        .dyn_into::<js_sys::Function>()?;
     let buf = js_sys::Uint8Array::new_with_length(32);
     get.call1(&crypto, &buf)?;
     let mut out = [0u8; 32];
@@ -81,13 +84,27 @@ const CREATE: &str = "CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY N
 const COLS: &str = "id, name, prefix, created_at, last_used_at, revoked_at";
 
 async fn one(db: &D1Database, id: &str) -> Result<Option<Row>> {
-    db.prepare(format!("SELECT {COLS} FROM api_keys WHERE id = ?")).bind(&[JsValue::from_str(id)])?.first::<Row>(None).await
+    db.prepare(format!("SELECT {COLS} FROM api_keys WHERE id = ?"))
+        .bind(&[JsValue::from_str(id)])?
+        .first::<Row>(None)
+        .await
 }
 
-pub(crate) async fn admin(req: &mut Request, env: &Env, r: &EdgeRoute, method: Method) -> Result<Response> {
+pub(crate) async fn admin(
+    req: &mut Request,
+    env: &Env,
+    r: &EdgeRoute,
+    method: Method,
+) -> Result<Response> {
     let db = match env.d1(D1_BINDING) {
         Ok(db) => db,
-        Err(_) => return json_err(503, "unavailable", "this edge has no key database (D1 binding `DB`)"),
+        Err(_) => {
+            return json_err(
+                503,
+                "unavailable",
+                "this edge has no key database (D1 binding `DB`)",
+            )
+        }
     };
     db.exec(CREATE).await?;
     match (r, method) {
@@ -98,27 +115,51 @@ pub(crate) async fn admin(req: &mut Request, env: &Env, r: &EdgeRoute, method: M
             }
             let b: MintBody = match req.json().await {
                 Ok(b) => b,
-                Err(e) => return json_err(400, "invalid_request", &format!("expected {{\"name\": \"...\"}}: {e}")),
+                Err(e) => {
+                    return json_err(
+                        400,
+                        "invalid_request",
+                        &format!("expected {{\"name\": \"...\"}}: {e}"),
+                    )
+                }
             };
             let name = b.name.trim();
             if name.is_empty() {
                 return json_err(400, "invalid_request", "`name` must not be empty");
             }
             if name.chars().count() > NAME_MAX_CHARS {
-                return json_err(400, "invalid_request", &format!("`name` must be at most {NAME_MAX_CHARS} characters"));
+                return json_err(
+                    400,
+                    "invalid_request",
+                    &format!("`name` must be at most {NAME_MAX_CHARS} characters"),
+                );
             }
             if name.chars().any(char::is_control) {
-                return json_err(400, "invalid_request", "`name` must not contain control characters");
+                return json_err(
+                    400,
+                    "invalid_request",
+                    "`name` must not contain control characters",
+                );
             }
             let (key, digest, id) = loop {
-                let k = format!("{KEY_PREFIX}{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random_bytes()?));
+                let k = format!(
+                    "{KEY_PREFIX}{}",
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random_bytes()?)
+                );
                 let d = f::key_digest(&k);
                 let id = f::key_id(&d);
                 if one(&db, &id).await?.is_none() {
                     break (k, d, id);
                 }
             };
-            let row = Row { id, name: name.to_owned(), prefix: format!("{}…", &key[..KEY_PREFIX.len() + 6]), created_at: now_ms() as f64, last_used_at: None, revoked_at: None };
+            let row = Row {
+                id,
+                name: name.to_owned(),
+                prefix: format!("{}…", &key[..KEY_PREFIX.len() + 6]),
+                created_at: now_ms() as f64,
+                last_used_at: None,
+                revoked_at: None,
+            };
             db.prepare("INSERT INTO api_keys (id, name, prefix, digest, created_at, last_used_at, revoked_at) VALUES (?, ?, ?, ?, ?, NULL, NULL)")
                 .bind(&[
                     JsValue::from_str(&row.id),
@@ -134,8 +175,16 @@ pub(crate) async fn admin(req: &mut Request, env: &Env, r: &EdgeRoute, method: M
             Ok(Response::from_json(&json!({"api_key": key, "key": view(&row)}))?.with_status(201))
         }
         (EdgeRoute::Keys, Method::Get) => {
-            let rows: Vec<Row> = db.prepare(format!("SELECT {COLS} FROM api_keys ORDER BY created_at DESC, id")).all().await?.results()?;
-            Response::from_json(&json!({"keys": rows.iter().map(view).collect::<Vec<_>>(), "backend": "d1"}))
+            let rows: Vec<Row> = db
+                .prepare(format!(
+                    "SELECT {COLS} FROM api_keys ORDER BY created_at DESC, id"
+                ))
+                .all()
+                .await?
+                .results()?;
+            Response::from_json(
+                &json!({"keys": rows.iter().map(view).collect::<Vec<_>>(), "backend": "d1"}),
+            )
         }
         (EdgeRoute::KeyRevoke(id), Method::Delete) => {
             db.prepare("UPDATE api_keys SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?")

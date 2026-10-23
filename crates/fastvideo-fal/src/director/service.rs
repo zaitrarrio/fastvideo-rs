@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use fastvideo_media::video::EncoderBackend;
 use fastvideo_protocol::{
-    canvas_for_aspect, h3_1080p_canvas, resolve_canvas, ApiError, CanvasSpec, Continuity, ErrorKind, Family, ModelCaps, ModelId, ResolvedCanvas,
-    SessionSpec, StreamCaps, Task, TrackSet,
+    canvas_for_aspect, h3_1080p_canvas, resolve_canvas, ApiError, CanvasSpec, Continuity,
+    ErrorKind, Family, ModelCaps, ModelId, ResolvedCanvas, SessionSpec, StreamCaps, Task, TrackSet,
 };
 use fastvideo_serve_kit::{IngestPolicy, ServeCtx};
 use fastvideo_webrtc::channel::ChannelPolicy;
@@ -185,12 +185,17 @@ pub fn canvas_for(caps: &ModelCaps, res: Resolution, aspect: Aspect) -> Resolved
         return (w, h, None);
     }
     if caps.canvas.pad_and_crop {
-        let spec = CanvasSpec::Aspect { ratio: aspect.as_ratio(), short_edge: res.short_edge() };
+        let spec = CanvasSpec::Aspect {
+            ratio: aspect.as_ratio(),
+            short_edge: res.short_edge(),
+        };
         match resolve_canvas(&spec, caps, None) {
             Ok(c) => return c,
             // Not reached for a served tier (the dimension sweep checks every
             // one); the snapped canvas below is the engine-valid fallback.
-            Err(e) => tracing::warn!(model = %caps.id, res = res.as_str(), aspect = aspect.as_str(), error = %e.message, "director canvas"),
+            Err(e) => {
+                tracing::warn!(model = %caps.id, res = res.as_str(), aspect = aspect.as_str(), error = %e.message, "director canvas")
+            }
         }
     }
     let (w, h) = canvas_for_aspect(&caps.canvas, aspect.ratio(), res.short_edge());
@@ -226,13 +231,21 @@ pub struct DirectorService {
 
 impl std::fmt::Debug for DirectorService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DirectorService").field("host", &self.host).field("apps", &self.cfg.apps).finish()
+        f.debug_struct("DirectorService")
+            .field("host", &self.host)
+            .field("apps", &self.cfg.apps)
+            .finish()
     }
 }
 
 impl DirectorService {
     pub fn new(cfg: DirectorConfig, host: RtcHost, engine: Arc<dyn DirectorEngine>) -> Arc<Self> {
-        Arc::new(Self { cfg: Arc::new(cfg), host, engine, sessions: Mutex::new(HashMap::new()) })
+        Arc::new(Self {
+            cfg: Arc::new(cfg),
+            host,
+            engine,
+            sessions: Mutex::new(HashMap::new()),
+        })
     }
 
     pub fn config(&self) -> &DirectorConfig {
@@ -261,7 +274,12 @@ impl DirectorService {
 
     /// Sessions not yet closed.
     pub fn open_sessions(&self) -> usize {
-        self.sessions.lock().expect("sessions").values().filter(|s| s.is_open()).count()
+        self.sessions
+            .lock()
+            .expect("sessions")
+            .values()
+            .filter(|s| s.is_open())
+            .count()
     }
 
     /// The app's model caps: clip streaming, or a causal rollout (LongLive,
@@ -275,9 +293,14 @@ impl DirectorService {
             .models()
             .into_iter()
             .find(|c| c.id.0 == id)
-            .ok_or_else(|| ApiError::not_found(format!("Application \"{}/director\" not found", app.id)))?;
+            .ok_or_else(|| {
+                ApiError::not_found(format!("Application \"{}/director\" not found", app.id))
+            })?;
         if !super::info::director_capable(&caps) {
-            return Err(ApiError::invalid(format!("model `{}` supports neither clip streaming nor a causal rollout", caps.id)));
+            return Err(ApiError::invalid(format!(
+                "model `{}` supports neither clip streaming nor a causal rollout",
+                caps.id
+            )));
         }
         Ok(caps)
     }
@@ -287,7 +310,9 @@ impl DirectorService {
         let limits = limits_for(&self.cfg, caps);
         let default_chunk_frames = match &limits.causal {
             Some(c) => c.block_frames * c.chunk_blocks,
-            None => frames_for(caps, limits.fps, limits.chunk_seconds).unwrap_or(caps.frames.default),
+            None => {
+                frames_for(caps, limits.fps, limits.chunk_seconds).unwrap_or(caps.frames.default)
+            }
         };
         InfoFacts {
             app: app_name(&app.id),
@@ -301,9 +326,15 @@ impl DirectorService {
 
     /// `DirectorInfo` of the runner app.
     pub fn info(&self, ctx: &ServeCtx) -> Result<Value, ApiError> {
-        let app = self.runner_app().ok_or_else(|| ApiError::not_found("no director app is configured"))?;
+        let app = self
+            .runner_app()
+            .ok_or_else(|| ApiError::not_found("no director app is configured"))?;
         let caps = self.caps_for(ctx, app)?;
-        Ok(director_info(&self.facts(app, &caps, caps.has_native_audio())))
+        Ok(director_info(&self.facts(
+            app,
+            &caps,
+            caps.has_native_audio(),
+        )))
     }
 
     /// Admission, engine session, WebRTC answer, then the session task.
@@ -317,7 +348,11 @@ impl DirectorService {
         edge: Option<String>,
     ) -> Result<Created, ApiError> {
         if self.open_sessions() >= self.cfg.max_sessions.max(1) {
-            return Err(ApiError::new(ErrorKind::Conflict, "a director session is already running on this machine").with_retry_after(5));
+            return Err(ApiError::new(
+                ErrorKind::Conflict,
+                "a director session is already running on this machine",
+            )
+            .with_retry_after(5));
         }
         let caps = self.caps_for(ctx, app)?;
         let fps = caps.fps.default;
@@ -326,21 +361,34 @@ impl DirectorService {
         let res = if facts_probe.resolutions.contains(&Resolution::R768) && !causal {
             Resolution::R768
         } else {
-            *facts_probe.resolutions.last().ok_or_else(|| ApiError::invalid(format!("model `{}` serves neither 480p nor 768p", caps.id)))?
+            *facts_probe.resolutions.last().ok_or_else(|| {
+                ApiError::invalid(format!("model `{}` serves neither 480p nor 768p", caps.id))
+            })?
         };
         // The engine session generates `canvas`; the tracks carry the
         // delivered (cropped) size.
         let (w, h, crop) = canvas_for(&caps, res, Aspect::Landscape);
         let canvas = (w, h);
-        let tracks = TrackSet::for_model(&caps, crop.unwrap_or(canvas), fps, ("video", "audio"), 2, false);
+        let tracks = TrackSet::for_model(
+            &caps,
+            crop.unwrap_or(canvas),
+            fps,
+            ("video", "audio"),
+            2,
+            false,
+        );
         let audio = tracks.has_audio();
         let continuity = if causal {
             // One rollout: the KV cache carries continuity.
             Continuity::HardCut
         } else if caps.supports(Task::I2V) {
-            Continuity::AnchorLastFrame { crossfade_ms: self.cfg.crossfade_ms }
+            Continuity::AnchorLastFrame {
+                crossfade_ms: self.cfg.crossfade_ms,
+            }
         } else {
-            Continuity::Crossfade { ms: self.cfg.crossfade_ms }
+            Continuity::Crossfade {
+                ms: self.cfg.crossfade_ms,
+            }
         };
         let spec = SessionSpec {
             model: ModelId(caps.id.0.clone()),
@@ -354,7 +402,8 @@ impl DirectorService {
         // Starting counts as busy: the engine session is held from here.
         let (clips, stream) = if causal {
             let st = self.engine.open_stream(spec).await?;
-            let clips: Arc<dyn super::engine::DirectorClips> = Arc::new(session::NoClips(st.caps().clone(), st.spec().clone()));
+            let clips: Arc<dyn super::engine::DirectorClips> =
+                Arc::new(session::NoClips(st.caps().clone(), st.spec().clone()));
             (clips, Some(st))
         } else {
             (self.engine.open(spec).await?, None)
@@ -378,8 +427,12 @@ impl DirectorService {
             Err(e) => {
                 release(&stream);
                 return Err(match e {
-                    fastvideo_webrtc::WebrtcError::Sdp(e) => ApiError::invalid(format!("invalid offer: {e}")),
-                    fastvideo_webrtc::WebrtcError::PeerLimit(n) => ApiError::conflict(format!("peer limit ({n}) reached")).with_retry_after(5),
+                    fastvideo_webrtc::WebrtcError::Sdp(e) => {
+                        ApiError::invalid(format!("invalid offer: {e}"))
+                    }
+                    fastvideo_webrtc::WebrtcError::PeerLimit(n) => {
+                        ApiError::conflict(format!("peer limit ({n}) reached")).with_retry_after(5)
+                    }
                     other => ApiError::internal(format!("webrtc: {other}")),
                 });
             }
@@ -391,13 +444,20 @@ impl DirectorService {
             Some(WVideoCodec::Vp9) | None => {
                 peer.close();
                 release(&stream);
-                return Err(ApiError::invalid("the offer has no receivable video we can send (H.264 or VP8)"));
+                return Err(ApiError::invalid(
+                    "the offer has no receivable video we can send (H.264 or VP8)",
+                ));
             }
         };
-        let id = session_id.filter(|s| !s.is_empty()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let id = session_id
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let answer = unify_msid(&answer, &format!("fv-director-{}", &id[..id.len().min(8)]));
         let handle = SessionHandle::new(id.clone(), heartbeats);
-        self.sessions.lock().expect("sessions").insert(id.clone(), handle.clone());
+        self.sessions
+            .lock()
+            .expect("sessions")
+            .insert(id.clone(), handle.clone());
         let (peer_handle, events) = peer.split();
         let init = SessionInit {
             cfg: self.cfg.clone(),
@@ -432,7 +492,12 @@ impl DirectorService {
                 l.0.ended(&sid, &reason);
             }
         });
-        Ok(Created { session_id: id, sdp: answer, handle, caps })
+        Ok(Created {
+            session_id: id,
+            sdp: answer,
+            handle,
+            caps,
+        })
     }
 }
 
@@ -451,7 +516,8 @@ mod tests {
 
     #[test]
     fn one_stream_for_all_tracks() {
-        let a = "v=0\r\na=msid:s1 v1\r\na=ssrc:11 msid:s1 v1\r\na=ssrc:11 cname:x\r\na=msid:s2 a1\r\n";
+        let a =
+            "v=0\r\na=msid:s1 v1\r\na=ssrc:11 msid:s1 v1\r\na=ssrc:11 cname:x\r\na=msid:s2 a1\r\n";
         assert_eq!(
             unify_msid(a, "fv"),
             "v=0\r\na=msid:fv v1\r\na=ssrc:11 msid:fv v1\r\na=ssrc:11 cname:x\r\na=msid:fv a1\r\n"
@@ -462,24 +528,52 @@ mod tests {
     fn the_h3_1080p_tier_serves_director_1080p() {
         let mut caps = ModelCaps::h3("h3", false);
         caps.canvas.short_edges.push(480);
-        assert_eq!(served_resolutions(&caps), [Resolution::R480, Resolution::R768]);
+        assert_eq!(
+            served_resolutions(&caps),
+            [Resolution::R480, Resolution::R768]
+        );
         caps.canvas = caps.canvas.clone().with_h3_1080p();
-        assert_eq!(served_resolutions(&caps), [Resolution::R480, Resolution::R768, Resolution::R1080]);
-        assert_eq!(canvas_for(&caps, Resolution::R768, Aspect::Landscape), (1344, 768, None));
-        assert_eq!(canvas_for(&caps, Resolution::R480, Aspect::Landscape), (832, 480, None));
-        assert_eq!(canvas_for(&caps, Resolution::R1080, Aspect::Landscape), (1920, 1088, None));
-        assert_eq!(canvas_for(&caps, Resolution::R1080, Aspect::Portrait), (1088, 1920, None));
-        assert_eq!(canvas_for(&caps, Resolution::R1080, Aspect::Square), (1088, 1088, None));
+        assert_eq!(
+            served_resolutions(&caps),
+            [Resolution::R480, Resolution::R768, Resolution::R1080]
+        );
+        assert_eq!(
+            canvas_for(&caps, Resolution::R768, Aspect::Landscape),
+            (1344, 768, None)
+        );
+        assert_eq!(
+            canvas_for(&caps, Resolution::R480, Aspect::Landscape),
+            (832, 480, None)
+        );
+        assert_eq!(
+            canvas_for(&caps, Resolution::R1080, Aspect::Landscape),
+            (1920, 1088, None)
+        );
+        assert_eq!(
+            canvas_for(&caps, Resolution::R1080, Aspect::Portrait),
+            (1088, 1920, None)
+        );
+        assert_eq!(
+            canvas_for(&caps, Resolution::R1080, Aspect::Square),
+            (1088, 1088, None)
+        );
         assert_eq!(relative_chunk_cost(&caps, Resolution::R1080), Some(2.5));
         assert_eq!(relative_chunk_cost(&caps, Resolution::R480), None);
         // 1080p chunks within the tier's clip cap: 5 s, 10 s with the flag.
         let l = limits_for(&DirectorConfig::default(), &caps);
         assert_eq!(l.hd_max_chunk_seconds, Some(5.0));
         let at = l.at(Resolution::R1080);
-        assert_eq!((at.min_chunk_seconds, at.chunk_seconds, at.max_chunk_seconds), (5.0, 5.0, 5.0));
+        assert_eq!(
+            (at.min_chunk_seconds, at.chunk_seconds, at.max_chunk_seconds),
+            (5.0, 5.0, 5.0)
+        );
         assert_eq!(l.at(Resolution::R768), l);
         assert_eq!(at.chunk_options(), [5]);
-        assert_eq!(at.with_chunk(Some(10)).chunk_seconds, 5.0, "10 s falls back to the 5 s cap");
+        assert_eq!(
+            at.with_chunk(Some(10)).chunk_seconds,
+            5.0,
+            "10 s falls back to the 5 s cap"
+        );
         fastvideo_protocol::apply_feature_flags(&mut caps, &|_| true);
         let at = limits_for(&DirectorConfig::default(), &caps).at(Resolution::R1080);
         assert_eq!((at.chunk_seconds, at.max_chunk_seconds), (5.0, 10.0));
@@ -491,7 +585,10 @@ mod tests {
         let mut caps = ModelCaps::h3("m", false);
         caps.family = family;
         caps.fps = fastvideo_protocol::FpsCaps::fixed(fps);
-        caps.stream = Some(StreamCaps::Clip { min_s: grid.min as f32 / fps as f32, max_s: grid.max as f32 / fps as f32 });
+        caps.stream = Some(StreamCaps::Clip {
+            min_s: grid.min as f32 / fps as f32,
+            max_s: grid.max as f32 / fps as f32,
+        });
         caps.frames = grid;
         caps
     }
@@ -505,10 +602,30 @@ mod tests {
         let cfg = DirectorConfig::default();
         let models = [
             // (name, caps, grid check, want)
-            ("h3 17n+5 @24", ModelCaps::h3("h3", false), (17, 5), vec![(5, 124), (10, 243)]),
-            ("ltx 8k+1 @24", clip_caps(Family::Ltx2, FrameGrid::new(8, 1, 9, 481, 121), 24), (8, 1), vec![(5, 121), (10, 241)]),
-            ("wan2.2-5b 4k+1 @24", clip_caps(Family::Wan, FrameGrid::new(4, 1, 9, 161, 121), 24), (4, 1), vec![(5, 121)]),
-            ("fastwan-1.3b 4k+1 @16", clip_caps(Family::Wan, FrameGrid::new(4, 1, 9, 129, 81), 16), (4, 1), vec![(5, 81)]),
+            (
+                "h3 17n+5 @24",
+                ModelCaps::h3("h3", false),
+                (17, 5),
+                vec![(5, 124), (10, 243)],
+            ),
+            (
+                "ltx 8k+1 @24",
+                clip_caps(Family::Ltx2, FrameGrid::new(8, 1, 9, 481, 121), 24),
+                (8, 1),
+                vec![(5, 121), (10, 241)],
+            ),
+            (
+                "wan2.2-5b 4k+1 @24",
+                clip_caps(Family::Wan, FrameGrid::new(4, 1, 9, 161, 121), 24),
+                (4, 1),
+                vec![(5, 121)],
+            ),
+            (
+                "fastwan-1.3b 4k+1 @16",
+                clip_caps(Family::Wan, FrameGrid::new(4, 1, 9, 129, 81), 16),
+                (4, 1),
+                vec![(5, 81)],
+            ),
         ];
         for (name, caps, (step, offset), want) in models {
             let l = limits_for(&cfg, &caps);
@@ -518,7 +635,10 @@ mod tests {
             for (d, n) in got {
                 assert_eq!((n - offset) % step, 0, "{name}: {n} frames off the grid");
                 assert!(n >= d * l.fps, "{name}: {n} frames cover {d} s");
-                assert!(n < (d * l.fps) + step + offset, "{name}: {n} frames, no more than one grid step over {d} s");
+                assert!(
+                    n < (d * l.fps) + step + offset,
+                    "{name}: {n} frames, no more than one grid step over {d} s"
+                );
             }
             let v = director_info(&InfoFacts {
                 app: "a".into(),
@@ -529,11 +649,21 @@ mod tests {
                 audio: false,
             });
             assert_eq!(v["default_chunk_duration"], 5, "{name}");
-            assert_eq!(v["chunk_duration_options"], serde_json::json!(l.chunk_options()), "{name}");
+            assert_eq!(
+                v["chunk_duration_options"],
+                serde_json::json!(l.chunk_options()),
+                "{name}"
+            );
         }
         // An operator default of 10 s stays 10 where served, 5 where not.
-        let ten = DirectorConfig { chunk_seconds: 10.0, ..DirectorConfig::default() };
-        assert_eq!(limits_for(&ten, &ModelCaps::h3("h3", false)).chunk_seconds, 10.0);
+        let ten = DirectorConfig {
+            chunk_seconds: 10.0,
+            ..DirectorConfig::default()
+        };
+        assert_eq!(
+            limits_for(&ten, &ModelCaps::h3("h3", false)).chunk_seconds,
+            10.0
+        );
         let wan = clip_caps(Family::Wan, FrameGrid::new(4, 1, 9, 161, 121), 24);
         assert_eq!(limits_for(&ten, &wan).chunk_seconds, 5.0);
     }
@@ -576,7 +706,13 @@ mod tests {
         ];
         for (r, a, gen, out) in want {
             let (w, h, crop) = canvas_for(&caps, r, a);
-            assert_eq!(((w, h), crop.unwrap_or((w, h))), (gen, out), "{} {}", r.as_str(), a.as_str());
+            assert_eq!(
+                ((w, h), crop.unwrap_or((w, h))),
+                (gen, out),
+                "{} {}",
+                r.as_str(),
+                a.as_str()
+            );
             // Two-stage: stage 1 runs at half size on the latent grid (/32).
             assert_eq!((w % 64, h % 64), (0, 0), "{} {}", r.as_str(), a.as_str());
             assert_eq!(crop.is_some(), gen != out);
@@ -600,21 +736,45 @@ mod tests {
     fn ltx_director_form_lists_every_tier_with_labels() {
         let form = crate::catalog::director_schema(&ltx_caps());
         let p = &form["properties"]["resolution"];
-        assert_eq!(p["enum"], serde_json::json!(["480p", "720p", "768p", "1080p"]));
+        assert_eq!(
+            p["enum"],
+            serde_json::json!(["480p", "720p", "768p", "1080p"])
+        );
         assert_eq!(p["default"], "768p");
-        assert!(p["x-fv-labels"]["1080p"].as_str().unwrap().contains("slower"), "{p}");
+        assert!(
+            p["x-fv-labels"]["1080p"]
+                .as_str()
+                .unwrap()
+                .contains("slower"),
+            "{p}"
+        );
         assert!(p["x-fv-labels"].get("768p").is_none());
         // H3 without the 1080P tier: no labels, 768p default.
         let form = crate::catalog::director_schema(&ModelCaps::h3("h3", false));
-        assert_eq!(form["properties"]["resolution"]["enum"], serde_json::json!(["768p"]));
-        assert_eq!(form["properties"]["resolution"]["x-fv-labels"], serde_json::json!({}));
+        assert_eq!(
+            form["properties"]["resolution"]["enum"],
+            serde_json::json!(["768p"])
+        );
+        assert_eq!(
+            form["properties"]["resolution"]["x-fv-labels"],
+            serde_json::json!({})
+        );
         // chunk_duration: 5 or 10 s (5 default) on clip models.
         let cd = &crate::catalog::director_schema(&ltx_caps())["properties"]["chunk_duration"];
-        assert_eq!((cd["enum"].clone(), cd["default"].clone()), (serde_json::json!([5, 10]), serde_json::json!(5)));
+        assert_eq!(
+            (cd["enum"].clone(), cd["default"].clone()),
+            (serde_json::json!([5, 10]), serde_json::json!(5))
+        );
         let mut h3 = ModelCaps::h3("h3", false);
         h3.canvas = h3.canvas.clone().with_h3_1080p();
         let form = crate::catalog::director_schema(&h3);
-        assert_eq!(form["properties"]["chunk_duration"]["x-fv-options-by-resolution"]["1080p"], serde_json::json!([5]));
-        assert_eq!(form["x-fal-order-properties"], serde_json::json!(["resolution", "aspect_ratio", "chunk_duration"]));
+        assert_eq!(
+            form["properties"]["chunk_duration"]["x-fv-options-by-resolution"]["1080p"],
+            serde_json::json!([5])
+        );
+        assert_eq!(
+            form["x-fal-order-properties"],
+            serde_json::json!(["resolution", "aspect_ratio", "chunk_duration"])
+        );
     }
 }

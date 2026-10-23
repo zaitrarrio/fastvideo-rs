@@ -7,7 +7,9 @@ use std::time::Instant;
 
 use fastvideo_media::h264::{self, H264Level};
 use fastvideo_media::mp4::{self, Mp4Spec};
-use fastvideo_media::video::{create_encoder, nvenc_available, EncoderBackend, H264Config, PublishTarget};
+use fastvideo_media::video::{
+    create_encoder, nvenc_available, EncoderBackend, H264Config, PublishTarget,
+};
 use fastvideo_media::{Pcm, RgbFrame};
 
 fn pattern(w: u32, h: u32, i: u64) -> RgbFrame {
@@ -45,14 +47,24 @@ fn run(target: PublishTarget, want: (u32, u32, H264Level)) {
     aus.extend(enc.finish().unwrap());
     let ms = t.elapsed().as_secs_f64() * 1000.0 / 120.0;
     let keys: Vec<u64> = aus.iter().filter(|a| a.keyframe).map(|a| a.index).collect();
-    println!("nvenc {target:?}: {} AUs, IDRs {keys:?}, {ms:.2} ms/frame wall (pipe, incl. one restart)", aus.len());
+    println!(
+        "nvenc {target:?}: {} AUs, IDRs {keys:?}, {ms:.2} ms/frame wall (pipe, incl. one restart)",
+        aus.len()
+    );
     assert_eq!(aus.len(), 120);
     assert_eq!(keys, vec![0, 48, 70, 118]);
     for a in aus.iter().filter(|a| a.keyframe) {
         let sps = h264::find_sps(&a.data).expect("SPS with every IDR");
-        println!("  idr {} sps {sps:?} plid {}", a.index, sps.profile_level_id());
+        println!(
+            "  idr {} sps {sps:?} plid {}",
+            a.index,
+            sps.profile_level_id()
+        );
         assert!(sps.is_constrained_baseline(), "{sps:?}");
-        assert_eq!((sps.width, sps.height, sps.level_idc), (want.0, want.1, want.2.idc()));
+        assert_eq!(
+            (sps.width, sps.height, sps.level_idc),
+            (want.0, want.1, want.2.idc())
+        );
     }
 }
 

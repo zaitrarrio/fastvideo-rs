@@ -147,10 +147,7 @@ impl LtxModels {
             ));
         }
         self.get(id).ok_or_else(|| {
-            ApiError::invalid_param(
-                "model",
-                format!("model must be one of: {}", self.list()),
-            )
+            ApiError::invalid_param("model", format!("model must be one of: {}", self.list()))
         })
     }
 
@@ -296,7 +293,11 @@ mod tests {
                 } else {
                     &short
                 };
-                assert_eq!(&allowed_durations(Fast, res, fps), want_fast, "{res:?} {fps}");
+                assert_eq!(
+                    &allowed_durations(Fast, res, fps),
+                    want_fast,
+                    "{res:?} {fps}"
+                );
                 assert_eq!(allowed_durations(Pro, res, fps), short, "{res:?} {fps}");
             }
         }
@@ -309,7 +310,15 @@ mod tests {
             let r = Resolution::parse(&s).unwrap();
             assert_eq!(format!("{}x{}", r.width, r.height), s);
         }
-        for bad in ["1920X1080", "1920x1088", "768x512", "x", "", "1280x720x1", "-1x720"] {
+        for bad in [
+            "1920X1080",
+            "1920x1088",
+            "768x512",
+            "x",
+            "",
+            "1280x720x1",
+            "-1x720",
+        ] {
             assert!(Resolution::parse(bad).is_err(), "{bad}");
         }
         assert_eq!(Resolution::parse("2160x3840").unwrap().tier, ResTier::K4);

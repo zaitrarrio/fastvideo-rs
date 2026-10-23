@@ -104,7 +104,12 @@ Describe the subject, action, setting, camera, lighting and mood.",
 
 /// The system prompt for one rewrite.
 pub fn system_prompt(spec: &RewriteSpec) -> String {
-    let RewriteSpec { family, effort, image, max_chars } = *spec;
+    let RewriteSpec {
+        family,
+        effort,
+        image,
+        max_chars,
+    } = *spec;
     let (lo, hi) = effort.words(family);
     let image = if image {
         "\nThe first frame is an image you cannot see: do not describe its look; describe the motion and camera from it."
@@ -161,15 +166,27 @@ impl H3Sections {
     pub fn parse(s: &str) -> Self {
         let find = |l: &str| s.find(l);
         let (d, sd, m) = (find(H3_DESCRIPTION), find(H3_SOUNDSCAPE), find(H3_MUSIC));
-        let next_after = |start: usize| [d, sd, m].into_iter().flatten().filter(|&e| e > start).min().unwrap_or(s.len());
+        let next_after = |start: usize| {
+            [d, sd, m]
+                .into_iter()
+                .flatten()
+                .filter(|&e| e > start)
+                .min()
+                .unwrap_or(s.len())
+        };
         let desc = match d {
             Some(i) => &s[i + H3_DESCRIPTION.len()..next_after(i)],
             None => &s[..[sd, m].into_iter().flatten().min().unwrap_or(s.len())],
         };
         let section = |o: Option<usize>, label: &str| {
-            o.map(|i| squash(&s[i + label.len()..next_after(i)]).replace('\n', " ")).filter(|t| !t.is_empty())
+            o.map(|i| squash(&s[i + label.len()..next_after(i)]).replace('\n', " "))
+                .filter(|t| !t.is_empty())
         };
-        H3Sections { description: squash(desc), soundscape: section(sd, H3_SOUNDSCAPE), music: section(m, H3_MUSIC) }
+        H3Sections {
+            description: squash(desc),
+            soundscape: section(sd, H3_SOUNDSCAPE),
+            music: section(m, H3_MUSIC),
+        }
     }
 
     pub fn render(&self) -> String {
@@ -191,7 +208,11 @@ impl H3Sections {
         if limit.fits(&p) {
             return p;
         }
-        if self.music.as_deref().is_some_and(|m| !m.trim_end_matches('.').eq_ignore_ascii_case("none")) {
+        if self
+            .music
+            .as_deref()
+            .is_some_and(|m| !m.trim_end_matches('.').eq_ignore_ascii_case("none"))
+        {
             self.music = Some("None.".into());
             let p = self.render();
             if limit.fits(&p) {
@@ -199,7 +220,15 @@ impl H3Sections {
             }
         }
         let desc = self.description.clone();
-        let fits = |d: &str| limit.fits(&H3Sections { description: d.to_owned(), ..self.clone() }.render());
+        let fits = |d: &str| {
+            limit.fits(
+                &H3Sections {
+                    description: d.to_owned(),
+                    ..self.clone()
+                }
+                .render(),
+            )
+        };
         self.description = cut_to_fit(&desc, &fits);
         let p = self.render();
         if limit.fits(&p) {
@@ -236,18 +265,32 @@ fn strip_wrappers(answer: &str) -> String {
         s = s.trim_end().trim_end_matches('`');
     }
     let mut s = s.trim();
-    for label in ["rewritten prompt:", "enhanced prompt:", "expanded prompt:", "prompt:"] {
-        if s.get(..label.len()).is_some_and(|h| h.eq_ignore_ascii_case(label)) {
+    for label in [
+        "rewritten prompt:",
+        "enhanced prompt:",
+        "expanded prompt:",
+        "prompt:",
+    ] {
+        if s.get(..label.len())
+            .is_some_and(|h| h.eq_ignore_ascii_case(label))
+        {
             s = s[label.len()..].trim_start();
             break;
         }
     }
     let s = s.trim();
     match (s.chars().next(), s.chars().last()) {
-        (Some(a), Some(b)) if s.chars().count() >= 2 && matches!((a, b), ('"', '"') | ('“', '”') | ('\'', '\'')) => {
+        (Some(a), Some(b))
+            if s.chars().count() >= 2
+                && matches!((a, b), ('"', '"') | ('“', '”') | ('\'', '\'')) =>
+        {
             let inner = &s[a.len_utf8()..s.len() - b.len_utf8()];
             // Only a wrapper: no other quote of that kind inside.
-            if inner.contains(a) || inner.contains(b) { s.to_owned() } else { inner.to_owned() }
+            if inner.contains(a) || inner.contains(b) {
+                s.to_owned()
+            } else {
+                inner.to_owned()
+            }
         }
         _ => s.to_owned(),
     }
@@ -255,7 +298,13 @@ fn strip_wrappers(answer: &str) -> String {
 
 /// The rewrite request (plain text, temperature 0.6).
 pub fn request(spec: &RewriteSpec, prompt: &str) -> ChatRequest {
-    ChatRequest { system: system_prompt(spec), user: prompt.to_owned(), temperature: 0.6, response_format: None, images: Vec::new() }
+    ChatRequest {
+        system: system_prompt(spec),
+        user: prompt.to_owned(),
+        temperature: 0.6,
+        response_format: None,
+        images: Vec::new(),
+    }
 }
 
 /// Cleans an LLM answer into a prompt: drops code fences, a leading
@@ -282,7 +331,11 @@ pub fn clean_for(family: PromptFamily, answer: &str, limit: &PromptLimit) -> Opt
         return Some(s);
     }
     let c = cut(&s, limit.max_chars);
-    Some(if limit.fits(&c) { c } else { cut_to_fit(&s, &|x: &str| limit.fits(x)) })
+    Some(if limit.fits(&c) {
+        c
+    } else {
+        cut_to_fit(&s, &|x: &str| limit.fits(x))
+    })
 }
 
 /// `s` within `max` characters: whole when it fits, else up to the last
@@ -306,7 +359,14 @@ pub fn cut(s: &str, max: usize) -> String {
 
 /// One rewrite: hedged and timed out like the director's calls.
 /// `limit` is the family's prompt limit (tokens with its tokenizer).
-pub async fn rewrite(backend: &Arc<dyn ChatBackend>, hedge: bool, timeout: Duration, spec: &RewriteSpec, limit: &PromptLimit, prompt: &str) -> Result<String, UpsampleError> {
+pub async fn rewrite(
+    backend: &Arc<dyn ChatBackend>,
+    hedge: bool,
+    timeout: Duration,
+    spec: &RewriteSpec,
+    limit: &PromptLimit,
+    prompt: &str,
+) -> Result<String, UpsampleError> {
     let req = request(spec, prompt);
     let family = spec.family;
     let attempts = if hedge { 2 } else { 1 };
@@ -323,30 +383,79 @@ mod tests {
 
     #[test]
     fn system_prompts_follow_the_family() {
-        let spec = |family, effort, image, max_chars| RewriteSpec { family, effort, image, max_chars };
+        let spec = |family, effort, image, max_chars| RewriteSpec {
+            family,
+            effort,
+            image,
+            max_chars,
+        };
         let wan = system_prompt(&spec(PromptFamily::Wan, Effort::Balanced, false, 1800));
-        assert!(wan.contains("makes no sound") && wan.contains("60 to 100 words") && wan.contains("1800 characters"));
+        assert!(
+            wan.contains("makes no sound")
+                && wan.contains("60 to 100 words")
+                && wan.contains("1800 characters")
+        );
         let ltx = system_prompt(&spec(PromptFamily::Ltx, Effort::Quality, true, 3600));
-        assert!(ltx.contains("Start directly with the main action") && ltx.contains("140 to 200 words") && ltx.contains("image you cannot see"));
+        assert!(
+            ltx.contains("Start directly with the main action")
+                && ltx.contains("140 to 200 words")
+                && ltx.contains("image you cannot see")
+        );
         let h3 = system_prompt(&spec(PromptFamily::H3, Effort::Balanced, false, 3200));
-        assert!(h3.contains("camera language") && h3.contains("<d>[English]") && !h3.contains("image you cannot see"));
-        assert!(h3.contains("integrated_multimodal_description:") && h3.contains("overall_soundscape:") && h3.contains("non_diegetic_music:"));
-        assert!(h3.contains("one paragraph") && !h3.contains("[Shot 1]") && h3.contains("60 to 110 words"));
+        assert!(
+            h3.contains("camera language")
+                && h3.contains("<d>[English]")
+                && !h3.contains("image you cannot see")
+        );
+        assert!(
+            h3.contains("integrated_multimodal_description:")
+                && h3.contains("overall_soundscape:")
+                && h3.contains("non_diegetic_music:")
+        );
+        assert!(
+            h3.contains("one paragraph")
+                && !h3.contains("[Shot 1]")
+                && h3.contains("60 to 110 words")
+        );
         let q = system_prompt(&spec(PromptFamily::H3, Effort::Quality, false, 3200));
         assert!(q.contains("[Shot 1]") && q.contains("120 to 220 words"));
-        let r = request(&spec(PromptFamily::H3, Effort::Balanced, false, 3200), "a cat");
-        assert_eq!((r.user.as_str(), r.response_format.is_none()), ("a cat", true));
+        let r = request(
+            &spec(PromptFamily::H3, Effort::Balanced, false, 3200),
+            "a cat",
+        );
+        assert_eq!(
+            (r.user.as_str(), r.response_format.is_none()),
+            ("a cat", true)
+        );
     }
 
     #[test]
     fn clean_strips_wrappers() {
-        assert_eq!(clean("  A cat walks.  ", 100).as_deref(), Some("A cat walks."));
-        assert_eq!(clean("\"A cat walks.\"", 100).as_deref(), Some("A cat walks."));
-        assert_eq!(clean("Prompt: A cat\nwalks.", 100).as_deref(), Some("A cat walks."));
-        assert_eq!(clean("```text\nA cat walks.\n```", 100).as_deref(), Some("A cat walks."));
-        assert_eq!(clean("```\nA cat walks.\n```", 100).as_deref(), Some("A cat walks."));
+        assert_eq!(
+            clean("  A cat walks.  ", 100).as_deref(),
+            Some("A cat walks.")
+        );
+        assert_eq!(
+            clean("\"A cat walks.\"", 100).as_deref(),
+            Some("A cat walks.")
+        );
+        assert_eq!(
+            clean("Prompt: A cat\nwalks.", 100).as_deref(),
+            Some("A cat walks.")
+        );
+        assert_eq!(
+            clean("```text\nA cat walks.\n```", 100).as_deref(),
+            Some("A cat walks.")
+        );
+        assert_eq!(
+            clean("```\nA cat walks.\n```", 100).as_deref(),
+            Some("A cat walks.")
+        );
         // Inner quotes keep the wrapper (it is dialogue, not a wrapper).
-        assert_eq!(clean("\"Go,\" she says, \"now.\"", 100).as_deref(), Some("\"Go,\" she says, \"now.\""));
+        assert_eq!(
+            clean("\"Go,\" she says, \"now.\"", 100).as_deref(),
+            Some("\"Go,\" she says, \"now.\"")
+        );
         assert_eq!(clean("   ", 100), None);
         assert_eq!(clean("\"\"", 100), None);
     }
@@ -371,7 +480,10 @@ mod tests {
             "integrated_multimodal_description: A keeper climbs.\nMara says <d>[English] Light it.</d>\noverall_soundscape: Wind.\nnon_diegetic_music: None."
         );
         // No labels: all description.
-        assert_eq!(clean_h3("A cat walks.", &lim).unwrap(), "integrated_multimodal_description: A cat walks.");
+        assert_eq!(
+            clean_h3("A cat walks.", &lim).unwrap(),
+            "integrated_multimodal_description: A cat walks."
+        );
         // [Shot N] blocks stay on their lines.
         let q = "integrated_multimodal_description:\n[Shot 1] A wide shot.\n[Shot 2] A close-up.\noverall_soundscape: Rain.\nnon_diegetic_music: Strings.";
         assert_eq!(
@@ -389,11 +501,18 @@ mod tests {
         use crate::tokens::tests::Words;
         use crate::tokens::TokenCounter;
         let a = "integrated_multimodal_description: A keeper climbs the stairs. Mara says <d>[English] Light the lamp now please.</d> The beam sweeps the sea.\noverall_soundscape: Wind and rain.\nnon_diegetic_music: A low cello drone.";
-        let words = |n| PromptLimit { counter: Some(std::sync::Arc::new(Words)), max_tokens: n, max_chars: 1 };
+        let words = |n| PromptLimit {
+            counter: Some(std::sync::Arc::new(Words)),
+            max_tokens: n,
+            max_chars: 1,
+        };
         let full = clean_h3(a, &words(1000)).unwrap();
         let n = Words.count(&full).unwrap();
         let p = clean_h3(a, &words(n - 1)).unwrap();
-        assert!(p.ends_with("non_diegetic_music: None.") && p.contains("The beam sweeps the sea."), "{p}");
+        assert!(
+            p.ends_with("non_diegetic_music: None.") && p.contains("The beam sweeps the sea."),
+            "{p}"
+        );
         for k in 2..(n - 12) {
             let p = clean_h3(a, &words(n - k)).unwrap();
             assert!(Words.count(&p).unwrap() <= n - k, "{p}");

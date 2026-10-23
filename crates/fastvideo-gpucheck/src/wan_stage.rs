@@ -237,7 +237,9 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             match audio.as_str() {
                 "none" => {}
                 "mmaudio" => std::env::set_var("FASTVIDEO_WAN_AUDIO", "mmaudio"),
-                other => return Err(anyhow::anyhow!("--audio {other}: want none or mmaudio").into()),
+                other => {
+                    return Err(anyhow::anyhow!("--audio {other}: want none or mmaudio").into())
+                }
             }
             if *full_vae {
                 std::env::set_var("FASTVIDEO_WAN_VAE", "full");
@@ -351,25 +353,25 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             };
             let prompt = first.as_deref().unwrap_or(prompt.as_str());
             crate::wan_stream::run(
-            report,
-            &crate::wan_stream::Args {
-                weights,
-                preset,
-                prompt,
-                switch_prompt,
-                switch_prompts: &switches,
-                longlive: longlive.as_deref(),
-                longlive_lora: !*longlive_no_lora,
-                seed: *seed,
-                height: *height,
-                width: *width,
-                fps: *fps,
-                parity: *parity,
-                runs,
-                window_s: *window_s,
-                device,
-            },
-        )
+                report,
+                &crate::wan_stream::Args {
+                    weights,
+                    preset,
+                    prompt,
+                    switch_prompt,
+                    switch_prompts: &switches,
+                    longlive: longlive.as_deref(),
+                    longlive_lora: !*longlive_no_lora,
+                    seed: *seed,
+                    height: *height,
+                    width: *width,
+                    fps: *fps,
+                    parity: *parity,
+                    runs,
+                    window_s: *window_s,
+                    device,
+                },
+            )
         }
         Stage::Oracle {
             weights,

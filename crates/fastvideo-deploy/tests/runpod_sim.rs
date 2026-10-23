@@ -15,7 +15,8 @@ use axum::{Json, Router};
 use fastvideo_deploy::dispatch::{DispatchOpts, RouterHandler};
 use fastvideo_deploy::runpod::sim::{Sim, SimStatus};
 use fastvideo_deploy::runpod::{
-    JobCtx, JobError, JobHandler, JobInput, RouterTransport, RunpodEnv, Transport, Worker, WorkerOptions, WorkerReport,
+    JobCtx, JobError, JobHandler, JobInput, RouterTransport, RunpodEnv, Transport, Worker,
+    WorkerOptions, WorkerReport,
 };
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
@@ -129,7 +130,12 @@ fn sim() -> Sim {
 }
 
 fn start_sim<H: JobHandler>(sim: &Sim, h: H, o: WorkerOptions) -> Running {
-    start(env_for(sim, "http://sim.local"), RouterTransport(sim.router()), h, o)
+    start(
+        env_for(sim, "http://sim.local"),
+        RouterTransport(sim.router()),
+        h,
+        o,
+    )
 }
 
 const T: Duration = Duration::from_secs(10);
@@ -151,7 +157,9 @@ async fn http_job_take_done_and_ping() {
     tokio::time::sleep(Duration::from_millis(250)).await;
     let pings = sim.pings();
     assert!(!pings.is_empty());
-    assert!(pings.iter().all(|p| p.worker == "w-test" && p.version.starts_with("fv-rs/")));
+    assert!(pings
+        .iter()
+        .all(|p| p.worker == "w-test" && p.version.starts_with("fv-rs/")));
     assert_eq!(sim.takes().first(), Some(&false));
     assert_eq!(sim.unauthorized(), 0);
     let r = w.finish().await;
@@ -168,7 +176,11 @@ async fn ping_lists_the_running_job() {
     assert_eq!(j.status, SimStatus::Failed);
     assert_eq!(j.error_report().unwrap()["error_type"], "WaitTimeout");
     assert_eq!(j.output.unwrap()["body"]["status"], "running");
-    assert!(sim.pings().iter().any(|p| p.job_ids == vec![id.clone()]), "{:?}", sim.pings());
+    assert!(
+        sim.pings().iter().any(|p| p.job_ids == vec![id.clone()]),
+        "{:?}",
+        sim.pings()
+    );
     w.finish().await;
 }
 
@@ -176,21 +188,32 @@ async fn ping_lists_the_running_job() {
 async fn wait_polls_to_terminal_with_progress() {
     let sim = sim();
     let w = start_sim(&sim, handler(), opts());
-    let id = sim.submit(json!({"kind": "http", "path": "/v1/videos", "headers": {"authorization": "Bearer k"},
-        "body": {"model": "fake-wan", "prompt": "fox"}, "wait": true}));
+    let id = sim.submit(
+        json!({"kind": "http", "path": "/v1/videos", "headers": {"authorization": "Bearer k"},
+        "body": {"model": "fake-wan", "prompt": "fox"}, "wait": true}),
+    );
     let j = sim.wait_terminal(&id, T).await.unwrap();
     assert_eq!(j.status, SimStatus::Completed, "{j:?}");
     let out = j.output.unwrap();
     assert_eq!(out["body"]["status"], "completed");
     assert_eq!(out["submit"]["id"], "vid_1");
     assert_eq!(out["poll_path"], "/v1/videos/vid_1");
-    let states: Vec<&str> = j.progress.iter().filter_map(|p| p["state"].as_str()).collect();
+    let states: Vec<&str> = j
+        .progress
+        .iter()
+        .filter_map(|p| p["state"].as_str())
+        .collect();
     assert_eq!(states, ["in_progress", "completed"]);
     // MiniMax: task_id + the query route.
-    let id = sim.submit(json!({"path": "/v2/video_generation", "body": {"model": "MiniMax-H3"}, "wait": true}));
+    let id = sim.submit(
+        json!({"path": "/v2/video_generation", "body": {"model": "MiniMax-H3"}, "wait": true}),
+    );
     let j = sim.wait_terminal(&id, T).await.unwrap();
     let out = j.output.unwrap();
-    assert_eq!(out["poll_path"], "/v2/query/video_generation?task_id=106916112212032");
+    assert_eq!(
+        out["poll_path"],
+        "/v2/query/video_generation?task_id=106916112212032"
+    );
     assert_eq!(out["body"]["status"], "Success");
     w.finish().await;
 }
@@ -242,7 +265,10 @@ async fn take_backs_off_on_429_400_and_errors() {
     let id = sim.submit(json!({"kind": "info"}));
     let j = sim.wait_terminal(&id, T).await.unwrap();
     assert_eq!(j.status, SimStatus::Completed);
-    assert!(j.output.unwrap()["version"].as_str().unwrap().starts_with("fv-rs/"));
+    assert!(j.output.unwrap()["version"]
+        .as_str()
+        .unwrap()
+        .starts_with("fv-rs/"));
     assert!(sim.takes().len() >= 5);
     w.finish().await;
 }
@@ -319,7 +345,14 @@ async fn stream_chunks_and_final_is_stream() {
     let w = start_sim(&sim, Chunky, opts());
     let id = sim.submit(json!({"kind": "info"}));
     let j = sim.wait_terminal(&id, T).await.unwrap();
-    assert_eq!(j.stream, vec![json!({"chunk": 0}), json!({"chunk": 1}), json!({"chunk": 2})]);
+    assert_eq!(
+        j.stream,
+        vec![
+            json!({"chunk": 0}),
+            json!({"chunk": 1}),
+            json!({"chunk": 2})
+        ]
+    );
     assert_eq!(j.progress, vec![json!({"state": "almost"})]);
     assert_eq!(j.final_is_stream, Some(true));
     assert_eq!(j.output.unwrap()["chunks"], 3);
@@ -335,7 +368,10 @@ async fn invalid_input_fails_the_job() {
     assert_eq!(j.status, SimStatus::Failed);
     let e = j.error_report().unwrap();
     assert_eq!(e["error_type"], "InvalidInput");
-    assert!(e["error_message"].as_str().unwrap().contains("unknown job kind"));
+    assert!(e["error_message"]
+        .as_str()
+        .unwrap()
+        .contains("unknown job kind"));
     let id = sim.submit(json!({"kind": "http", "path": "/fv/v1/forward"}));
     let j = sim.wait_terminal(&id, T).await.unwrap();
     assert_eq!(j.error_report().unwrap()["error_type"], "InvalidInput");
@@ -359,7 +395,13 @@ async fn shutdown_cancels_running_jobs_and_reports() {
     assert_eq!(j.status, SimStatus::Failed);
     let e = j.error_report().unwrap();
     assert_eq!(e["error_type"], "Cancelled");
-    assert!(e["error_message"].as_str().unwrap().contains("shutting down"), "{e}");
+    assert!(
+        e["error_message"]
+            .as_str()
+            .unwrap()
+            .contains("shutting down"),
+        "{e}"
+    );
     // No takes after shutdown: a new job stays queued.
     let id2 = sim.submit(json!({"kind": "info"}));
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -369,11 +411,26 @@ async fn shutdown_cancels_running_jobs_and_reports() {
 #[tokio::test]
 async fn concurrency_two_uses_batch_take() {
     let sim = sim();
-    let w = start_sim(&sim, handler(), WorkerOptions { concurrency: 2, ..opts() });
-    let a = sim.submit(json!({"kind": "http", "path": "/v1/videos", "body": {"model": "m"}, "wait": true}));
+    let w = start_sim(
+        &sim,
+        handler(),
+        WorkerOptions {
+            concurrency: 2,
+            ..opts()
+        },
+    );
+    let a = sim.submit(
+        json!({"kind": "http", "path": "/v1/videos", "body": {"model": "m"}, "wait": true}),
+    );
     let b = sim.submit(json!({"kind": "info"}));
-    assert_eq!(sim.wait_terminal(&a, T).await.unwrap().status, SimStatus::Completed);
-    assert_eq!(sim.wait_terminal(&b, T).await.unwrap().status, SimStatus::Completed);
+    assert_eq!(
+        sim.wait_terminal(&a, T).await.unwrap().status,
+        SimStatus::Completed
+    );
+    assert_eq!(
+        sim.wait_terminal(&b, T).await.unwrap().status,
+        SimStatus::Completed
+    );
     let r = w.finish().await;
     assert_eq!(r.succeeded, 2);
 }
@@ -381,10 +438,17 @@ async fn concurrency_two_uses_batch_take() {
 #[tokio::test]
 async fn prestart_failure_fails_one_job() {
     let sim = sim();
-    let w = Worker::new(env_for(&sim, "http://sim.local"), RouterTransport(sim.router()), handler(), opts());
+    let w = Worker::new(
+        env_for(&sim, "http://sim.local"),
+        RouterTransport(sim.router()),
+        handler(),
+        opts(),
+    );
     let id = sim.submit(json!({"kind": "info"}));
     let id2 = sim.submit(json!({"kind": "info"}));
-    let r = w.fail_one("CUDA init failed: no device", Duration::from_secs(5)).await;
+    let r = w
+        .fail_one("CUDA init failed: no device", Duration::from_secs(5))
+        .await;
     assert_eq!((r.taken, r.failed), (1, 1));
     let j = sim.job(&id).unwrap();
     assert_eq!(j.status, SimStatus::Failed);
@@ -414,17 +478,39 @@ async fn reqwest_transport_over_tcp() {
     use fastvideo_deploy::runpod::ReqwestTransport;
     let sim = sim();
     let (base, server) = sim.serve("127.0.0.1:0").await.unwrap();
-    let w = start(env_for(&sim, &base), ReqwestTransport::new().unwrap(), handler(), opts());
-    let id = sim.submit(json!({"kind": "http", "path": "/v1/videos", "body": {"model": "m"}, "wait": true}));
+    let w = start(
+        env_for(&sim, &base),
+        ReqwestTransport::new().unwrap(),
+        handler(),
+        opts(),
+    );
+    let id = sim.submit(
+        json!({"kind": "http", "path": "/v1/videos", "body": {"model": "m"}, "wait": true}),
+    );
     let j = sim.wait_terminal(&id, T).await.unwrap();
     assert_eq!(j.status, SimStatus::Completed);
     assert_eq!(j.output.unwrap()["body"]["status"], "completed");
     // Public client API: /run and /status.
     let c = reqwest::Client::new();
-    let r: Value = c.post(format!("{base}/v2/sim-ep/run")).json(&json!({"input": {"kind": "info"}})).send().await.unwrap().json().await.unwrap();
+    let r: Value = c
+        .post(format!("{base}/v2/sim-ep/run"))
+        .json(&json!({"input": {"kind": "info"}}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let id = r["id"].as_str().unwrap().to_owned();
     sim.wait_terminal(&id, T).await.unwrap();
-    let s: Value = c.get(format!("{base}/v2/sim-ep/status/{id}")).send().await.unwrap().json().await.unwrap();
+    let s: Value = c
+        .get(format!("{base}/v2/sim-ep/status/{id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(s["status"], "COMPLETED");
     w.finish().await;
     server.abort();

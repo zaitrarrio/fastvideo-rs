@@ -447,8 +447,7 @@ impl MultimodalLm<'_> {
                 precision: Native, ..
             } => "streamed-multimodal",
             Self::Streamed {
-                precision: Fp8Rows,
-                ..
+                precision: Fp8Rows, ..
             } => "streamed-fp8-multimodal",
         }
     }

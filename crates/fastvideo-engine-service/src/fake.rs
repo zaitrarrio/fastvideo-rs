@@ -32,13 +32,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fastvideo_protocol::{
-    ApiError, AudioCaps, AudioPlan, AudioRole, CanvasCaps, Family, FpsCaps, FrameGrid, JobMetrics, KnobCaps,
-    ModelCaps, ModelId, Pcm, RefLimits, ResolvedJob, RgbFrame, StreamCaps, Task, Tier,
+    ApiError, AudioCaps, AudioPlan, AudioRole, CanvasCaps, Family, FpsCaps, FrameGrid, JobMetrics,
+    KnobCaps, ModelCaps, ModelId, Pcm, RefLimits, ResolvedJob, RgbFrame, StreamCaps, Task, Tier,
 };
 
 use crate::backend::{
-    BlockInput, BlockStats, CausalSpec, ClipOutput, ClipSink, DeviceInfo, EngineBackend,
-    LoadEvent, SessionId,
+    BlockInput, BlockStats, CausalSpec, ClipOutput, ClipSink, DeviceInfo, EngineBackend, LoadEvent,
+    SessionId,
 };
 use crate::cancel::{OutputMode, StepControl};
 use crate::caps::Recipe;
@@ -97,7 +97,16 @@ impl FakeModel {
             id: ModelId::new(id),
             family: Family::Ltx2,
             served_names: vec![id.to_owned()],
-            tasks: [Task::T2V, Task::I2V, Task::Keyframes, Task::A2V, Task::Retake, Task::Extend].into_iter().collect(),
+            tasks: [
+                Task::T2V,
+                Task::I2V,
+                Task::Keyframes,
+                Task::A2V,
+                Task::Retake,
+                Task::Extend,
+            ]
+            .into_iter()
+            .collect(),
             audio: Some(AudioCaps {
                 native_rate: 48_000,
                 channels: 2,
@@ -212,7 +221,13 @@ impl FakeModel {
     pub fn wan() -> Self {
         Self {
             caps: Self::wan_caps("fake-wan"),
-            recipe: recipe("dmd-3step", 3, "dense", "full", "fake: video-only clip model"),
+            recipe: recipe(
+                "dmd-3step",
+                3,
+                "dense",
+                "full",
+                "fake: video-only clip model",
+            ),
         }
     }
 
@@ -231,7 +246,13 @@ impl FakeModel {
         };
         Self {
             caps,
-            recipe: recipe("causal-4step", 4, "dense", "tiny", "fake: causal block rollout"),
+            recipe: recipe(
+                "causal-4step",
+                4,
+                "dense",
+                "tiny",
+                "fake: causal block rollout",
+            ),
         }
     }
 
@@ -252,7 +273,13 @@ impl FakeModel {
                 prompt_recache: true,
             }),
         });
-        m.recipe = recipe("causal-4step-recache", 4, "dense", "tiny", "fake: causal block rollout, KV re-cache at prompt switches");
+        m.recipe = recipe(
+            "causal-4step-recache",
+            4,
+            "dense",
+            "tiny",
+            "fake: causal block rollout, KV re-cache at prompt switches",
+        );
         m
     }
 
@@ -342,8 +369,10 @@ impl JobValidator {
     /// The CUDA pipelines' checks ([`crate::cuda::validate::check_job`]) for
     /// the models of `catalog`, by model id; other models pass.
     pub fn cuda(catalog: &[crate::cuda::caps::CudaModel]) -> Self {
-        let by_id: BTreeMap<ModelId, crate::cuda::caps::CudaRecipe> =
-            catalog.iter().map(|m| (m.id.clone(), m.recipe.clone())).collect();
+        let by_id: BTreeMap<ModelId, crate::cuda::caps::CudaRecipe> = catalog
+            .iter()
+            .map(|m| (m.id.clone(), m.recipe.clone()))
+            .collect();
         Self::new(move |job| match by_id.get(&job.model) {
             Some(r) => crate::cuda::validate::check_job(r, job),
             None => Ok(()),
@@ -425,13 +454,19 @@ impl FakeConfig {
             .map(|m| {
                 let mut caps = m.caps();
                 caps.resident = true;
-                FakeModel { caps, recipe: m.describe() }
+                FakeModel {
+                    caps,
+                    recipe: m.describe(),
+                }
             })
             .collect();
         Self {
             models,
             validator: Some(JobValidator::cuda(catalog)),
-            requirements: catalog.iter().map(|m| (m.id.clone(), m.requirements())).collect(),
+            requirements: catalog
+                .iter()
+                .map(|m| (m.id.clone(), m.requirements()))
+                .collect(),
             ..Self::default()
         }
     }
@@ -660,12 +695,21 @@ fn write_mp4(
     std::fs::create_dir_all(dir).map_err(|e| io_err("mkdir", e))?;
     let out = dir.join("output.mp4");
     let mut cmd = Command::new(ffmpeg);
-    cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24"])
-        .arg("-s")
-        .arg(format!("{}x{}", job.width, job.height))
-        .arg("-r")
-        .arg(job.fps.to_string())
-        .args(["-i", "-"]);
+    cmd.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+    ])
+    .arg("-s")
+    .arg(format!("{}x{}", job.width, job.height))
+    .arg("-r")
+    .arg(job.fps.to_string())
+    .args(["-i", "-"]);
     if let Some(pcm) = audio {
         let wav = dir.join("audio.wav");
         write_wav(&wav, pcm).map_err(|e| io_err("wav", e))?;
@@ -699,7 +743,9 @@ impl EngineBackend for FakeBackend {
         match &self.cfg.device_profile {
             Some(d) => DeviceInfo {
                 name: d.name.clone(),
-                total_memory_mb: d.total_bytes.map_or(self.cfg.device.total_memory_mb, |b| b >> 20),
+                total_memory_mb: d
+                    .total_bytes
+                    .map_or(self.cfg.device.total_memory_mb, |b| b >> 20),
                 ..self.cfg.device.clone()
             },
             None => self.cfg.device.clone(),
@@ -720,11 +766,17 @@ impl EngineBackend for FakeBackend {
     fn load(&mut self, model: &ModelId, obs: &mut dyn FnMut(LoadEvent)) -> Result<(), ApiError> {
         let m = self.model(model)?;
         if let Some(dev) = &self.cfg.device_profile {
-            let req = self.cfg.requirements.get(model).cloned().unwrap_or_else(|| crate::device::Requirements {
-                fp8: m.caps.family == fastvideo_protocol::Family::H3,
-                ..Default::default()
-            });
-            req.check(model.as_str(), dev).map_err(ApiError::engine_failed)?;
+            let req = self
+                .cfg
+                .requirements
+                .get(model)
+                .cloned()
+                .unwrap_or_else(|| crate::device::Requirements {
+                    fp8: m.caps.family == fastvideo_protocol::Family::H3,
+                    ..Default::default()
+                });
+            req.check(model.as_str(), dev)
+                .map_err(ApiError::engine_failed)?;
         }
         obs(LoadEvent::Stage("weights"));
         let slice = self.cfg.timing.load / 4;
@@ -749,7 +801,10 @@ impl EngineBackend for FakeBackend {
     }
 
     fn marks(&mut self, cap: usize) -> Option<Box<dyn fastvideo_trace::MarkPool>> {
-        Some(Box::new(FakeMarks { clock: self.cfg.clock.clone(), at: Vec::with_capacity(cap) }))
+        Some(Box::new(FakeMarks {
+            clock: self.cfg.clock.clone(),
+            at: Vec::with_capacity(cap),
+        }))
     }
 
     fn warmup_pending(&self, model: &ModelId) -> Vec<String> {
@@ -793,7 +848,10 @@ impl EngineBackend for FakeBackend {
     ) -> Result<ClipOutput, ApiError> {
         let m = self.model(&job.model)?.clone();
         if !self.loaded.contains(&job.model) {
-            return Err(ApiError::engine_failed(format!("`{}` is not loaded", job.model)));
+            return Err(ApiError::engine_failed(format!(
+                "`{}` is not loaded",
+                job.model
+            )));
         }
         if let Some(v) = &self.cfg.validator {
             v.check(job)?;
@@ -824,7 +882,10 @@ impl EngineBackend for FakeBackend {
         // plus the source frames an extension keeps).
         if let Some(e) = &job.edit {
             if !e.source.is_file() {
-                return Err(ApiError::engine_failed(format!("an edit without its staged source video: {}", e.source.display())));
+                return Err(ApiError::engine_failed(format!(
+                    "an edit without its staged source video: {}",
+                    e.source.display()
+                )));
             }
         }
         let frames_out = job.output_frames();
@@ -838,14 +899,22 @@ impl EngineBackend for FakeBackend {
 
     fn causal_open(&mut self, s: SessionId, spec: &CausalSpec) -> Result<(), ApiError> {
         let m = self.model(&spec.model)?;
-        let Some(StreamCaps::Causal { block_frames, context, .. }) = m.caps.stream else {
+        let Some(StreamCaps::Causal {
+            block_frames,
+            context,
+            ..
+        }) = m.caps.stream
+        else {
             return Err(ApiError::invalid_param(
                 "model",
                 format!("`{}` is not a causal model", spec.model),
             ));
         };
         if !self.loaded.contains(&spec.model) {
-            return Err(ApiError::engine_failed(format!("`{}` is not loaded", spec.model)));
+            return Err(ApiError::engine_failed(format!(
+                "`{}` is not loaded",
+                spec.model
+            )));
         }
         self.sessions.insert(
             s,
@@ -928,7 +997,10 @@ static RESOLVED_ON: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::n
 
 /// The threads that read fake device marks so far (tests).
 pub fn marks_resolved_on() -> Vec<String> {
-    RESOLVED_ON.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    RESOLVED_ON
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
 }
 
 impl fastvideo_trace::MarkPool for FakeMarks {
@@ -946,9 +1018,17 @@ impl fastvideo_trace::MarkPool for FakeMarks {
     fn elapsed_ns(&self, from: usize, to: usize) -> Option<u64> {
         if from == 0 && to == 1 {
             let name = std::thread::current().name().unwrap_or("?").to_owned();
-            RESOLVED_ON.lock().unwrap_or_else(|p| p.into_inner()).push(name);
+            RESOLVED_ON
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(name);
         }
-        Some(self.at.get(to)?.saturating_sub(*self.at.get(from)?).as_nanos() as u64)
+        Some(
+            self.at
+                .get(to)?
+                .saturating_sub(*self.at.get(from)?)
+                .as_nanos() as u64,
+        )
     }
 }
 
@@ -992,13 +1072,9 @@ impl FakeBackend {
         };
         let audio = match job.audio {
             _ if !to_sink && mp4_dir.is_none() => None,
-            AudioPlan::Native { rate, channels } => Some(render_audio(
-                job.seed,
-                frames_out,
-                job.fps,
-                rate,
-                channels,
-            )),
+            AudioPlan::Native { rate, channels } => {
+                Some(render_audio(job.seed, frames_out, job.fps, rate, channels))
+            }
             _ => None,
         };
         let render = |i: u32| render_frame(job.seed, &job.prompt, job.width, job.height, i as u64);

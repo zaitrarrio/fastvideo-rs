@@ -74,13 +74,21 @@ pub fn tier_alias(family: Family, tier: Tier) -> String {
 }
 
 /// The apps mounted when none are configured.
-pub const DEFAULT_APPS: [&str; 5] =
-    ["minimax/h3-max", "minimax/h3-turbo", "minimax/h3-draft", "minimax/h3-max-turbo", "minimax/h3"];
+pub const DEFAULT_APPS: [&str; 5] = [
+    "minimax/h3-max",
+    "minimax/h3-turbo",
+    "minimax/h3-draft",
+    "minimax/h3-max-turbo",
+    "minimax/h3",
+];
 
 /// The endpoint ids (`app/sub`) of a configured app id, for route tables.
 pub fn endpoint_ids(app_id: &str) -> Vec<String> {
     let app = FalApp::from_id(app_id);
-    app.endpoints().iter().map(|e| format!("{}/{}", app.id, e.sub())).collect()
+    app.endpoints()
+        .iter()
+        .map(|e| format!("{}/{}", app.id, e.sub()))
+        .collect()
 }
 
 /// One fal app (`owner/alias`) this server answers for.
@@ -100,7 +108,11 @@ impl FalApp {
     /// `minimax/h3-{max,turbo,draft}` → the H3 model of that tier.
     pub fn h3(tier: Tier) -> Self {
         let alias = format!("h3-{}", tier.as_str());
-        Self { id: format!("minimax/{alias}"), model: alias, tier: Some((Family::H3, tier)) }
+        Self {
+            id: format!("minimax/{alias}"),
+            model: alias,
+            tier: Some((Family::H3, tier)),
+        }
     }
 
     /// fal's `minimax/h3-max-turbo` (the H3 Turbo tier) and `minimax/h3`
@@ -114,7 +126,11 @@ impl FalApp {
             "minimax/h3" => ("h3-max", Tier::Max),
             _ => return None,
         };
-        Some(Self { id: id.to_owned(), model: alias.to_owned(), tier: Some((Family::H3, tier)) })
+        Some(Self {
+            id: id.to_owned(),
+            model: alias.to_owned(),
+            tier: Some((Family::H3, tier)),
+        })
     }
 
     /// fal's LTX-2.5 (`lightricks/ltx-2.5`) and Wan (`fal-ai/wan`) apps: each
@@ -126,18 +142,24 @@ impl FalApp {
             AppKind::LtxQuality | AppKind::Ltx23 => ("ltx-pro", (Family::Ltx2, Tier::Max)),
             AppKind::H3 | AppKind::H3Base => return None,
         };
-        Some(Self { id: id.to_owned(), model: model.to_owned(), tier: Some(tier) })
+        Some(Self {
+            id: id.to_owned(),
+            model: model.to_owned(),
+            tier: Some(tier),
+        })
     }
 
     /// The app for a configured id: the named H3 and family apps get their
     /// tier fallbacks; any other id resolves its alias part by name only.
     pub fn from_id(id: &str) -> Self {
         let id = id.trim_matches('/');
-        Self::h3_named(id).or_else(|| Self::family_app(id)).unwrap_or_else(|| Self {
-            id: id.to_owned(),
-            model: id.rsplit('/').next().unwrap_or(id).to_owned(),
-            tier: None,
-        })
+        Self::h3_named(id)
+            .or_else(|| Self::family_app(id))
+            .unwrap_or_else(|| Self {
+                id: id.to_owned(),
+                model: id.rsplit('/').next().unwrap_or(id).to_owned(),
+                tier: None,
+            })
     }
 
     /// The schema family (from the id).
@@ -161,7 +183,11 @@ impl FalApp {
 
     /// `owner/alias` with both parts non-empty and URL-safe.
     pub fn is_valid(&self) -> bool {
-        let ok = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        let ok = |s: &str| {
+            !s.is_empty()
+                && s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        };
         matches!(self.id.split_once('/'), Some((o, a)) if ok(o) && ok(a))
     }
 }

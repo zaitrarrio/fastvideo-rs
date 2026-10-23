@@ -47,10 +47,8 @@ mod tests {
 
     #[test]
     fn two_attention_backends_are_a_conflict() {
-        let items: Vec<Box<dyn Technique>> = vec![
-            Box::new(SolAttn::rtx()),
-            Box::new(Vsa::uniform(None, None)),
-        ];
+        let items: Vec<Box<dyn Technique>> =
+            vec![Box::new(SolAttn::rtx()), Box::new(Vsa::uniform(None, None))];
         let e = compose(items, &h3_spec(), HORIZON).unwrap_err().to_string();
         assert!(
             e.contains("exclusive seam 'attention_backend' has multiple active writers: [\"sol_attn\", \"vsa\"]"),

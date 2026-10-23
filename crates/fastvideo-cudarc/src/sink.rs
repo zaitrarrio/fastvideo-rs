@@ -283,7 +283,10 @@ impl Port for SinkPort<'_> {
     fn pump(&self) -> Result<()> {
         let mut s = self.state.borrow_mut();
         // A detached consumer that stopped early stops the run now.
-        if s.relay.as_ref().is_some_and(std::thread::JoinHandle::is_finished) {
+        if s.relay
+            .as_ref()
+            .is_some_and(std::thread::JoinHandle::is_finished)
+        {
             let relay = s.relay.take().expect("checked");
             s.next = join_relay(relay)?;
         }
@@ -456,7 +459,11 @@ mod tests {
         }
         let got = got.lock().unwrap();
         assert_eq!(got.iter().map(|g| g.0).collect::<Vec<_>>(), vec![0, 1, 4]);
-        assert!(got.iter().all(|g| g.2 == "fv-frame-relay"), "{:?}", got.iter().map(|g| &g.2).collect::<Vec<_>>());
+        assert!(
+            got.iter().all(|g| g.2 == "fv-frame-relay"),
+            "{:?}",
+            got.iter().map(|g| &g.2).collect::<Vec<_>>()
+        );
         let all: Vec<u8> = got.iter().flat_map(|g| g.1.clone()).collect();
         assert_eq!(all, bytes);
         let _ = std::fs::remove_dir_all(&dir);
@@ -471,10 +478,13 @@ mod tests {
                 Ok(())
             }
             fn detach(&mut self) -> Option<DetachedSink> {
-                Some(Box::new(|_: &VideoFrames| Err(PipelineError::Message("encoder gone".into()))))
+                Some(Box::new(|_: &VideoFrames| {
+                    Err(PipelineError::Message("encoder gone".into()))
+                }))
             }
         }
-        let dir = std::env::temp_dir().join(format!("fv-sink-detach-refuse-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("fv-sink-detach-refuse-{}", std::process::id()));
         let mut sink = Refuse;
         let port = SinkPort::new(&mut sink);
         let hooks = Hooks::default().with_sink(&port);

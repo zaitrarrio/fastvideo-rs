@@ -86,10 +86,17 @@ impl Default for EngineConfig {
 #[derive(Clone, Debug, PartialEq)]
 pub enum EngineEvent {
     /// 0-based position; re-sent when it changes.
-    Queued { position: u32 },
+    Queued {
+        position: u32,
+    },
     Started,
-    Stage { name: &'static str },
-    Progress { step: u32, total: u32 },
+    Stage {
+        name: &'static str,
+    },
+    Progress {
+        step: u32,
+        total: u32,
+    },
     Log(LogLine),
     Finished(ClipOutput),
     Failed(ApiError),
@@ -414,7 +421,10 @@ impl Shared {
         if self.caps.get(model).is_none() {
             return Err(ApiError::invalid_param(
                 "model",
-                format!("model `{model}` is not served here ({})", self.caps.served_summary()),
+                format!(
+                    "model `{model}` is not served here ({})",
+                    self.caps.served_summary()
+                ),
             ));
         }
         match st.pool.model_state(model) {
@@ -454,7 +464,9 @@ impl Shared {
             }
             self.admit_model(&st, &job.model)?;
             if st.jobs.contains_key(&id) {
-                return Err(ApiError::conflict(format!("job {id} was already submitted")));
+                return Err(ApiError::conflict(format!(
+                    "job {id} was already submitted"
+                )));
             }
             st.sched.enqueue(QueueItem {
                 job: id,
@@ -546,16 +558,16 @@ impl Shared {
         duplex: bool,
     ) -> Result<(usize, ModelCaps), ApiError> {
         let is_causal = causal.is_some();
-        let caps = self
-            .caps
-            .get(&spec.model)
-            .cloned()
-            .ok_or_else(|| {
-                ApiError::invalid_param(
-                    "model",
-                    format!("model `{}` is not served here ({})", spec.model, self.caps.served_summary()),
-                )
-            })?;
+        let caps = self.caps.get(&spec.model).cloned().ok_or_else(|| {
+            ApiError::invalid_param(
+                "model",
+                format!(
+                    "model `{}` is not served here ({})",
+                    spec.model,
+                    self.caps.served_summary()
+                ),
+            )
+        })?;
         let ok = match &caps.stream {
             Some(StreamCaps::Causal { .. }) => is_causal && !duplex,
             Some(StreamCaps::Clip { .. }) => !is_causal && !duplex,
@@ -591,15 +603,16 @@ impl Shared {
         match st.pool.model_state(&spec.model) {
             Some(Residency::Resident) => {}
             Some(Residency::Pending | Residency::Loading { .. }) => {
-                return Err(ApiError::loading(format!("model `{}` is still loading", spec.model))
-                    .with_retry_after(1))
+                return Err(
+                    ApiError::loading(format!("model `{}` is still loading", spec.model))
+                        .with_retry_after(1),
+                )
             }
             _ => {
-                return Err(ApiError::loading(format!(
-                    "model `{}` is not resident",
-                    spec.model
-                ))
-                .with_retry_after(1))
+                return Err(
+                    ApiError::loading(format!("model `{}` is not resident", spec.model))
+                        .with_retry_after(1),
+                )
             }
         }
         let exec = st.sched.session_executor(&spec.model).ok_or_else(busy)?;
@@ -876,7 +889,13 @@ impl EngineService {
     pub async fn open_clip_session(&self, spec: SessionSpec) -> Result<ClipSession, ApiError> {
         let sid = SessionId::new();
         let (exec, caps) = self.shared().open_session(&spec, sid, None)?;
-        Ok(ClipSession::new(self.shared().clone(), sid, exec, spec, caps))
+        Ok(ClipSession::new(
+            self.shared().clone(),
+            sid,
+            exec,
+            spec,
+            caps,
+        ))
     }
 
     /// Opens a duplex session (design §5.11): admission as for any stream
@@ -889,7 +908,9 @@ impl EngineService {
     ) -> Result<crate::stream::duplex::DuplexSession, ApiError> {
         spec.context.validate()?;
         let sid = SessionId::new();
-        let (exec, caps) = self.shared().open_session_of(&spec.session, sid, None, true)?;
+        let (exec, caps) = self
+            .shared()
+            .open_session_of(&spec.session, sid, None, true)?;
         crate::stream::duplex::DuplexSession::new(self.shared().clone(), sid, exec, spec, caps)
     }
 
@@ -943,7 +964,10 @@ impl EngineService {
             st.yield_warmups();
             sh.changed(&st);
         }
-        if sh.wait_until(Duration::from_secs(10), |st| st.alive == 0).await {
+        if sh
+            .wait_until(Duration::from_secs(10), |st| st.alive == 0)
+            .await
+        {
             for t in lock(&self.inner.threads).drain(..) {
                 let _ = t.join();
             }

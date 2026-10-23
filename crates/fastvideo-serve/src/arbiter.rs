@@ -61,7 +61,11 @@ pub enum Refusal {
 impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Refusal::Full { families } => write!(f, "every slot of this GPU is held (families: {})", families.join(", ")),
+            Refusal::Full { families } => write!(
+                f,
+                "every slot of this GPU is held (families: {})",
+                families.join(", ")
+            ),
             Refusal::Session => f.write_str("a streaming session holds this GPU"),
             Refusal::Busy => f.write_str("jobs hold this GPU (sessions need it idle)"),
             Refusal::NoSessionSlot => f.write_str("no free session slot"),
@@ -85,7 +89,13 @@ impl Arbiter {
     /// `exclusive`: a session excludes jobs and the reverse.
     pub fn new(capacity: u32, sessions: u32, exclusive: bool) -> Self {
         let (version, _) = watch::channel(0);
-        Self { capacity: capacity.max(1), sessions, exclusive, inner: Mutex::default(), version }
+        Self {
+            capacity: capacity.max(1),
+            sessions,
+            exclusive,
+            inner: Mutex::default(),
+            version,
+        }
     }
 
     pub fn capacity(&self) -> u32 {
@@ -93,7 +103,9 @@ impl Arbiter {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn bump(&self) {
@@ -108,8 +120,16 @@ impl Arbiter {
     fn free_of(&self, g: &Inner) -> Free {
         let held = g.jobs.len() as u32;
         let live = g.sessions.len() as u32;
-        let jobs = if self.exclusive && live > 0 { 0 } else { self.capacity.saturating_sub(held) };
-        let sessions = if self.exclusive && held > 0 { 0 } else { self.sessions.saturating_sub(live) };
+        let jobs = if self.exclusive && live > 0 {
+            0
+        } else {
+            self.capacity.saturating_sub(held)
+        };
+        let sessions = if self.exclusive && held > 0 {
+            0
+        } else {
+            self.sessions.saturating_sub(live)
+        };
         Free { jobs, sessions }
     }
 
@@ -132,7 +152,12 @@ impl Arbiter {
             families.dedup();
             return Err(Refusal::Full { families });
         }
-        g.jobs.insert(job.to_owned(), Holder { family: family.to_owned() });
+        g.jobs.insert(
+            job.to_owned(),
+            Holder {
+                family: family.to_owned(),
+            },
+        );
         let n = g.jobs.len() as u32;
         g.peak = g.peak.max(n);
         if n > self.capacity {
@@ -140,7 +165,8 @@ impl Arbiter {
             metrics::counter!("fv_worker_arbiter_overbooked_total").increment(1);
         }
         drop(g);
-        metrics::counter!("fv_worker_arbiter_taken_total", "family" => family.to_owned()).increment(1);
+        metrics::counter!("fv_worker_arbiter_taken_total", "family" => family.to_owned())
+            .increment(1);
         self.bump();
         Ok(())
     }
@@ -165,7 +191,12 @@ impl Arbiter {
         if self.exclusive && !g.jobs.is_empty() {
             return Err(Refusal::Busy);
         }
-        g.sessions.insert(id.to_owned(), Holder { family: family.to_owned() });
+        g.sessions.insert(
+            id.to_owned(),
+            Holder {
+                family: family.to_owned(),
+            },
+        );
         drop(g);
         self.bump();
         Ok(())
@@ -180,7 +211,12 @@ impl Arbiter {
 
     /// Sessions held for `family` (re-announced after a reconnect).
     pub fn sessions_of(&self, family: &str) -> Vec<String> {
-        self.lock().sessions.iter().filter(|(_, h)| h.family == family).map(|(k, _)| k.clone()).collect()
+        self.lock()
+            .sessions
+            .iter()
+            .filter(|(_, h)| h.family == family)
+            .map(|(k, _)| k.clone())
+            .collect()
     }
 
     /// Jobs held now and the most ever held at once.
@@ -206,11 +242,16 @@ mod tests {
                     let (a, b) = (a.clone(), barrier.clone());
                     std::thread::spawn(move || {
                         b.wait();
-                        a.try_take_job(if i % 2 == 0 { "wan" } else { "ltx" }, &format!("j{i}")).is_ok()
+                        a.try_take_job(if i % 2 == 0 { "wan" } else { "ltx" }, &format!("j{i}"))
+                            .is_ok()
                     })
                 })
                 .collect();
-            let taken = hs.into_iter().map(|h| h.join().unwrap()).filter(|t| *t).count();
+            let taken = hs
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .filter(|t| *t)
+                .count();
             assert_eq!(taken, 1);
             assert_eq!(a.held(), (1, 1));
         }
@@ -220,27 +261,60 @@ mod tests {
     fn exclusive_sessions_and_free_counts() {
         let a = Arbiter::new(2, 1, true);
         let mut rx = a.subscribe();
-        assert_eq!(a.free(), Free { jobs: 2, sessions: 1 });
+        assert_eq!(
+            a.free(),
+            Free {
+                jobs: 2,
+                sessions: 1
+            }
+        );
         a.try_take_job("wan", "j1").unwrap();
         assert!(rx.has_changed().unwrap());
         rx.borrow_and_update();
-        assert_eq!(a.free(), Free { jobs: 1, sessions: 0 });
+        assert_eq!(
+            a.free(),
+            Free {
+                jobs: 1,
+                sessions: 0
+            }
+        );
         assert_eq!(a.try_take_session("sfwan", "s1"), Err(Refusal::Busy));
         assert_eq!(a.try_take_job("ltx", "j1"), Err(Refusal::Held));
         a.try_take_job("ltx", "j2").unwrap();
-        assert!(matches!(a.try_take_job("wan", "j3"), Err(Refusal::Full { .. })));
+        assert!(matches!(
+            a.try_take_job("wan", "j3"),
+            Err(Refusal::Full { .. })
+        ));
         a.release_job("j1");
         a.release_job("j2");
         a.try_take_session("sfwan", "s1").unwrap();
-        assert_eq!(a.free(), Free { jobs: 0, sessions: 0 });
+        assert_eq!(
+            a.free(),
+            Free {
+                jobs: 0,
+                sessions: 0
+            }
+        );
         assert_eq!(a.try_take_job("wan", "j4"), Err(Refusal::Session));
         assert_eq!(a.sessions_of("sfwan"), vec!["s1".to_string()]);
         a.release_session("s1");
-        assert_eq!(a.free(), Free { jobs: 2, sessions: 1 });
+        assert_eq!(
+            a.free(),
+            Free {
+                jobs: 2,
+                sessions: 1
+            }
+        );
         // Non-exclusive: both at once.
         let b = Arbiter::new(1, 1, false);
         b.try_take_session("sfwan", "s").unwrap();
         b.try_take_job("wan", "j").unwrap();
-        assert_eq!(b.free(), Free { jobs: 0, sessions: 0 });
+        assert_eq!(
+            b.free(),
+            Free {
+                jobs: 0,
+                sessions: 0
+            }
+        );
     }
 }

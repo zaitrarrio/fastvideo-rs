@@ -60,8 +60,8 @@ impl DeviceRope {
         if crate::wan::device::global_device().is_some() {
             let (rows, d) = (lut.heads * lut.tokens, lut.half * 2);
             let (cos, sin) = crate::wan::ops::ltx_split_rope_device(
-                &lut.index, &lut.cos, &lut.sin, lut.heads, lut.tokens, lut.half, lut.axes,
-                lut.pad, lut.n,
+                &lut.index, &lut.cos, &lut.sin, lut.heads, lut.tokens, lut.half, lut.axes, lut.pad,
+                lut.n,
             )?;
             return Ok(Self {
                 cos: CudaTensor::from_device_slice(cos, vec![rows, d])?,
@@ -77,7 +77,10 @@ impl DeviceRope {
     /// The cos / sin tables on the host (`[H·S, D]` each, row-major), for
     /// parity checks against [`SplitRope::rotate_half_tables`].
     pub fn host_tables(&self) -> Result<(Vec<f32>, Vec<f32>)> {
-        Ok((self.cos.host_cow()?.into_owned(), self.sin.host_cow()?.into_owned()))
+        Ok((
+            self.cos.host_cow()?.into_owned(),
+            self.sin.host_cow()?.into_owned(),
+        ))
     }
 
     /// Keep `tokens` (ascending video-token indices) in the head-major table.
@@ -146,7 +149,15 @@ impl DeviceRope {
             return Ok(None);
         }
         let r = match self.cos.shape[..] {
-            [rows, r] if rows == heads * seq && self.sin.shape == self.cos.shape && r % 2 == 0 && r > 0 && r <= d => r,
+            [rows, r]
+                if rows == heads * seq
+                    && self.sin.shape == self.cos.shape
+                    && r % 2 == 0
+                    && r > 0
+                    && r <= d =>
+            {
+                r
+            }
             _ => return Ok(None),
         };
         Ok(Some((self.cos.to_f32_act()?, self.sin.to_f32_act()?, r)))
@@ -1073,7 +1084,10 @@ pub(crate) mod tests {
         let got = attn.forward_value_only(tensor(&x)).unwrap();
         let w = |n: &str, s: &[usize]| get(&map, &format!("blk.vattn.{n}"), s);
         let (wv, bv) = (w("to_v.weight", &[12, 12]), w("to_v.bias", &[12]));
-        let (wg, bg) = (w("to_gate_logits.weight", &[3, 12]), w("to_gate_logits.bias", &[3]));
+        let (wg, bg) = (
+            w("to_gate_logits.weight", &[3, 12]),
+            w("to_gate_logits.bias", &[3]),
+        );
         let (wo, bo) = (w("to_out.0.weight", &[12, 12]), w("to_out.0.bias", &[12]));
         let want: Vec<Vec<f32>> = x
             .iter()

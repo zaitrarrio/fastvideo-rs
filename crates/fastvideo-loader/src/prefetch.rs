@@ -185,7 +185,13 @@ impl StoreShared {
     /// The bytes of entry `i` (`[start, end)` of file `file`) when a
     /// memory-mode read has them, waiting for (or doing) that read if it is
     /// still pending. `None`: read the mapping.
-    pub(crate) fn mem_bytes(&self, i: usize, file: usize, start: usize, end: usize) -> Option<&[u8]> {
+    pub(crate) fn mem_bytes(
+        &self,
+        i: usize,
+        file: usize,
+        start: usize,
+        end: usize,
+    ) -> Option<&[u8]> {
         let mut st = self.state[i].load(Ordering::Acquire);
         if st == PENDING {
             let t = Instant::now();
@@ -211,7 +217,10 @@ impl StoreShared {
             let (m, cv) = ready_cv();
             let mut g = m.lock().expect("ready");
             while self.state[i].load(Ordering::Acquire) == PENDING {
-                g = cv.wait_timeout(g, Duration::from_millis(50)).expect("ready").0;
+                g = cv
+                    .wait_timeout(g, Duration::from_millis(50))
+                    .expect("ready")
+                    .0;
             }
             drop(g);
             add_consumer_time(ConsumerTime::ReadWait, t.elapsed());
@@ -527,7 +536,9 @@ pub(crate) fn submit(
             continue;
         }
         let shard = if mem {
-            let len = std::fs::metadata(&paths[r.file]).map(|m| m.len() as usize).ok();
+            let len = std::fs::metadata(&paths[r.file])
+                .map(|m| m.len() as usize)
+                .ok();
             let made = store.mem[r.file].get().cloned().or_else(|| {
                 let m = Arc::new(MemShard::new(len?).ok()?);
                 Some(store.mem[r.file].get_or_init(|| m).clone())

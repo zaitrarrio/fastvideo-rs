@@ -160,7 +160,10 @@ impl Scheduler {
             .with_retry_after(5));
         }
         if self.items.contains_key(&item.job) {
-            return Err(ApiError::conflict(format!("job {} is already queued", item.job)));
+            return Err(ApiError::conflict(format!(
+                "job {} is already queued",
+                item.job
+            )));
         }
         let key = (item.prio.rank(), self.seq);
         self.seq += 1;
@@ -249,7 +252,12 @@ impl Scheduler {
 
     /// Occupies executor `i` with a session; `exclusive` also grants the
     /// causal lease.
-    pub fn open_session(&mut self, i: usize, s: SessionId, exclusive: bool) -> Result<(), ApiError> {
+    pub fn open_session(
+        &mut self,
+        i: usize,
+        s: SessionId,
+        exclusive: bool,
+    ) -> Result<(), ApiError> {
         let e = &mut self.execs[i];
         if e.session.is_some() {
             return Err(busy());

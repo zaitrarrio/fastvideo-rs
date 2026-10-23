@@ -66,10 +66,16 @@ pub struct IngredientInput {
 fn int_in(f: &Fields, k: &str, lo: i64, hi: i64, default: i64) -> Result<u32, ApiError> {
     let v = f.int(k)?.unwrap_or(default);
     if v < lo {
-        return Err(bad(k, format!("Input should be greater than or equal to {lo}")));
+        return Err(bad(
+            k,
+            format!("Input should be greater than or equal to {lo}"),
+        ));
     }
     if v > hi {
-        return Err(bad(k, format!("Input should be less than or equal to {hi}")));
+        return Err(bad(
+            k,
+            format!("Input should be less than or equal to {hi}"),
+        ));
     }
     Ok(v as u32)
 }
@@ -78,29 +84,56 @@ fn num_in(f: &Fields, k: &str, (lo, hi, default): (f64, f64, f64)) -> Result<f64
     let v = match f.get(k) {
         None => default,
         Some(Value::Number(n)) => n.as_f64().unwrap_or(f64::NAN),
-        Some(v) => return Err(bad(k, format!("Input should be a valid number, got {}", type_name(v)))),
+        Some(v) => {
+            return Err(bad(
+                k,
+                format!("Input should be a valid number, got {}", type_name(v)),
+            ))
+        }
     };
     if v.is_nan() || v < lo {
-        return Err(bad(k, format!("Input should be greater than or equal to {lo}")));
+        return Err(bad(
+            k,
+            format!("Input should be greater than or equal to {lo}"),
+        ));
     }
     if v > hi {
-        return Err(bad(k, format!("Input should be less than or equal to {hi}")));
+        return Err(bad(
+            k,
+            format!("Input should be less than or equal to {hi}"),
+        ));
     }
     Ok(v)
 }
 
 pub(super) fn parse(f: &Fields) -> Result<IngredientInput, ApiError> {
     let prompt = super::parse_prompt(f, LTX_PROMPT_MAX_CHARS)?;
-    let image_url = super::opt_url(f, "image_url")?.ok_or_else(|| bad("image_url", "Field required"))?;
+    let image_url =
+        super::opt_url(f, "image_url")?.ok_or_else(|| bad("image_url", "Field required"))?;
     Ok(IngredientInput {
         prompt,
         image_url,
         ingredient_strength: num_in(f, "ingredient_strength", INGREDIENT_STRENGTH)?,
         reference_strength: num_in(f, "reference_strength", INGREDIENT_STRENGTH)?,
-        num_frames: int_in(f, "num_frames", INGREDIENT_FRAMES_MIN, INGREDIENT_FRAMES_MAX, INGREDIENT_FRAMES_DEFAULT)?,
-        frames_per_second: int_in(f, "frames_per_second", INGREDIENT_FPS_MIN, INGREDIENT_FPS_MAX, INGREDIENT_FPS_DEFAULT)?,
+        num_frames: int_in(
+            f,
+            "num_frames",
+            INGREDIENT_FRAMES_MIN,
+            INGREDIENT_FRAMES_MAX,
+            INGREDIENT_FRAMES_DEFAULT,
+        )?,
+        frames_per_second: int_in(
+            f,
+            "frames_per_second",
+            INGREDIENT_FPS_MIN,
+            INGREDIENT_FPS_MAX,
+            INGREDIENT_FPS_DEFAULT,
+        )?,
         generate_audio: f.bool("generate_audio", true)?,
-        negative_prompt: f.string("negative_prompt")?.filter(|s| !s.trim().is_empty()).map(str::to_owned),
+        negative_prompt: f
+            .string("negative_prompt")?
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_owned),
         seed: super::parse_seed(f)?,
         sync_mode: f.bool("sync_mode", false)?,
         enable_prompt_expansion: f.lenient_bool("enable_prompt_expansion"),
@@ -116,7 +149,10 @@ impl IngredientInput {
         r.timing = TimingSpec {
             // fal takes up to 481; this server's reference clips stop at
             // 241, so a longer count runs at 241 (noted in the job log).
-            length: Length::Frames { value: self.num_frames, snap: Snap::Nearest },
+            length: Length::Frames {
+                value: self.num_frames,
+                snap: Snap::Nearest,
+            },
             fps: Some(self.frames_per_second),
         };
         if !self.generate_audio {
@@ -139,9 +175,18 @@ impl IngredientInput {
         r.prompt_expansion = Some(match self.enable_prompt_expansion {
             Some(on) => {
                 r.note_noop("enable_prompt_expansion");
-                PromptExpansion::explicit(if on { ExpansionMode::Balanced } else { ExpansionMode::Disabled }, "enable_prompt_expansion")
+                PromptExpansion::explicit(
+                    if on {
+                        ExpansionMode::Balanced
+                    } else {
+                        ExpansionMode::Disabled
+                    },
+                    "enable_prompt_expansion",
+                )
             }
-            None => PromptExpansion::default_for(ExpansionMode::Balanced, "enable_prompt_expansion"),
+            None => {
+                PromptExpansion::default_for(ExpansionMode::Balanced, "enable_prompt_expansion")
+            }
         });
         Ok(r)
     }

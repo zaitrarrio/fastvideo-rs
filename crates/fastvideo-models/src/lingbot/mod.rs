@@ -15,4 +15,6 @@ pub use config::{
 };
 pub use rope::{joint_positions, rope_tables};
 pub use routing::{dispatch, route, Dispatch, RouterSpec};
-pub use schedule::{base_unipc, refiner_sigmas, refiner_unipc, transformer_timestep, LingBotSchedule};
+pub use schedule::{
+    base_unipc, refiner_sigmas, refiner_unipc, transformer_timestep, LingBotSchedule,
+};

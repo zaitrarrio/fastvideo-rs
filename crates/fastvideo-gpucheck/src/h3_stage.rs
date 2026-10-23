@@ -1583,8 +1583,7 @@ impl GenCanvas {
                 g.width,
                 g.height,
                 g.width * g.height,
-                (g.width * g.height) as f64
-                    / fastvideo_models::h3::config::H3_MAX_PIXELS as f64
+                (g.width * g.height) as f64 / fastvideo_models::h3::config::H3_MAX_PIXELS as f64
             );
             return Ok(r);
         }
@@ -1824,77 +1823,93 @@ fn gen(
     }
     let single = [(String::new(), None)];
     let run_arms: &[(String, Option<fastvideo_models::techniques::Profile>)] =
-        if arm_list.is_empty() { &single } else { &arm_list };
-    for (arm_index, (arm_name, arm_profile)) in run_arms.iter().enumerate() {
-    let arm_clip = if arm_list.is_empty() { clip_dir.to_path_buf() } else { arm_dir(arm_name) };
-    if !arm_list.is_empty() {
-        if let Err(e) = pipeline.set_arm(arm_profile.as_ref()) {
-            eprintln!("h3 gen arm {arm_name}: {e}");
-            report.note(format!("arm_error/{arm_name}"), json!({"error": e.to_string()}));
-            continue;
-        }
-        fastvideo_cudarc::wan::stats::phase_reset();
-    }
-    let arm_result = (|| -> StageResult<()> {
-    let clip_dir = arm_clip.as_path();
-    let mut docs: Vec<(crate::benchmark::PromptSpec, serde_json::Value)> = Vec::new();
-    for (index, spec) in prompts.iter().enumerate() {
-        // A prompt's own `height` / `width` (prompt-set files) override the canvas.
-        let prompt_canvas = match spec.size {
-            Some((h, w)) => GenCanvas { height: Some(h), width: Some(w), ..canvas },
-            None => canvas,
-        };
-        let mut request = prompt_canvas.request(&spec.prompt, spec.seed)?;
-        request.references = refs.clone();
-        request.mp4 = mp4;
-        let clip_dir_owned = if multi {
-            clip_dir.join(&spec.name)
+        if arm_list.is_empty() {
+            &single
         } else {
+            &arm_list
+        };
+    for (arm_index, (arm_name, arm_profile)) in run_arms.iter().enumerate() {
+        let arm_clip = if arm_list.is_empty() {
             clip_dir.to_path_buf()
+        } else {
+            arm_dir(arm_name)
         };
-        let clip_dir = clip_dir_owned.as_path();
-        // Suffix per-prompt checks with the prompt name in a prompt-set run,
-        // and prefix them with the arm in a multi-arm run.
-        let ck = |name: &str| {
-            let name = if arm_list.is_empty() {
-                name.to_string()
-            } else {
-                format!("{arm_name}/{name}")
-            };
-            if multi {
-                format!("{name}/{}", spec.name)
-            } else {
-                name
+        if !arm_list.is_empty() {
+            if let Err(e) = pipeline.set_arm(arm_profile.as_ref()) {
+                eprintln!("h3 gen arm {arm_name}: {e}");
+                report.note(
+                    format!("arm_error/{arm_name}"),
+                    json!({"error": e.to_string()}),
+                );
+                continue;
             }
-        };
-        if index > 0 {
             fastvideo_cudarc::wan::stats::phase_reset();
         }
-        let mem = load_mem.take().unwrap_or_else(crate::gpu::PeakMem::start);
-        fastvideo_cudarc::wan::evalstats::reset();
-        // FASTVIDEO_GPU_TRACE: the cold pass traces too; only the timed one is kept.
-        fastvideo_cudarc::wan::gpu_trace::reset_report();
-        let timer = std::time::Instant::now();
-        // FV_SINK_CHECK=1 (serve E2): the timed run also feeds an in-memory
-        // frame sink (PNG frames kept), checked byte for byte against them.
-        let sink_check = std::env::var("FV_SINK_CHECK").is_ok_and(|v| v == "1");
-        let mut collected = fastvideo_cudarc::sink::CollectFrames::default();
-        let out = if sink_check {
-            let port = fastvideo_cudarc::sink::SinkPort::new(&mut collected).with_pngs(true);
-            let hooks = fastvideo_cudarc::Hooks::default().with_sink(&port);
-            pipeline.generate_with_hooks(&request, clip_dir, hooks)?
-        } else {
-            pipeline.generate(&request, clip_dir)?
-        };
-        let total = timer.elapsed().as_secs_f64();
-        if sink_check {
-            let sink = crate::ltx2_stage::sink_vs_pngs(
-                &collected,
-                &out.frame_paths,
-                &out.wav.to_string_lossy(),
-            );
-            report.set(&ck("sink"), &sink);
-            report.check(
+        let arm_result = (|| -> StageResult<()> {
+            let clip_dir = arm_clip.as_path();
+            let mut docs: Vec<(crate::benchmark::PromptSpec, serde_json::Value)> = Vec::new();
+            for (index, spec) in prompts.iter().enumerate() {
+                // A prompt's own `height` / `width` (prompt-set files) override the canvas.
+                let prompt_canvas = match spec.size {
+                    Some((h, w)) => GenCanvas {
+                        height: Some(h),
+                        width: Some(w),
+                        ..canvas
+                    },
+                    None => canvas,
+                };
+                let mut request = prompt_canvas.request(&spec.prompt, spec.seed)?;
+                request.references = refs.clone();
+                request.mp4 = mp4;
+                let clip_dir_owned = if multi {
+                    clip_dir.join(&spec.name)
+                } else {
+                    clip_dir.to_path_buf()
+                };
+                let clip_dir = clip_dir_owned.as_path();
+                // Suffix per-prompt checks with the prompt name in a prompt-set run,
+                // and prefix them with the arm in a multi-arm run.
+                let ck = |name: &str| {
+                    let name = if arm_list.is_empty() {
+                        name.to_string()
+                    } else {
+                        format!("{arm_name}/{name}")
+                    };
+                    if multi {
+                        format!("{name}/{}", spec.name)
+                    } else {
+                        name
+                    }
+                };
+                if index > 0 {
+                    fastvideo_cudarc::wan::stats::phase_reset();
+                }
+                let mem = load_mem.take().unwrap_or_else(crate::gpu::PeakMem::start);
+                fastvideo_cudarc::wan::evalstats::reset();
+                // FASTVIDEO_GPU_TRACE: the cold pass traces too; only the timed one is kept.
+                fastvideo_cudarc::wan::gpu_trace::reset_report();
+                let timer = std::time::Instant::now();
+                // FV_SINK_CHECK=1 (serve E2): the timed run also feeds an in-memory
+                // frame sink (PNG frames kept), checked byte for byte against them.
+                let sink_check = std::env::var("FV_SINK_CHECK").is_ok_and(|v| v == "1");
+                let mut collected = fastvideo_cudarc::sink::CollectFrames::default();
+                let out = if sink_check {
+                    let port =
+                        fastvideo_cudarc::sink::SinkPort::new(&mut collected).with_pngs(true);
+                    let hooks = fastvideo_cudarc::Hooks::default().with_sink(&port);
+                    pipeline.generate_with_hooks(&request, clip_dir, hooks)?
+                } else {
+                    pipeline.generate(&request, clip_dir)?
+                };
+                let total = timer.elapsed().as_secs_f64();
+                if sink_check {
+                    let sink = crate::ltx2_stage::sink_vs_pngs(
+                        &collected,
+                        &out.frame_paths,
+                        &out.wav.to_string_lossy(),
+                    );
+                    report.set(&ck("sink"), &sink);
+                    report.check(
                 ck("gen.sink_identical"),
                 sink["frames"] == json!(out.frames)
                     && sink["mismatched_frames"] == json!(0)
@@ -1902,82 +1917,83 @@ fn gen(
                 sink.clone(),
                 json!({"frames": out.frames, "mismatched_frames": 0, "audio_matches_wav": true}),
             )?;
-        }
-        let counters = fastvideo_cudarc::wan::evalstats::snapshot();
-        let mut values = timings(&out, total);
-        values["warm"] = json!(warm);
-        values["load_s"] = json!(load_s);
-        let peak_mib = mem.stop();
-        values["peak_mib"] = json!(peak_mib);
-        let gpu_trace = fastvideo_cudarc::wan::gpu_trace::last_report();
-        if let Some(trace) = &gpu_trace {
-            values["gpu_trace"] = trace.clone();
-        }
-        let doc = h3_benchmark(&H3Bench {
-            spec,
-            recipe: recipe.as_deref(),
-            out: &out,
-            total,
-            load_s,
-            warm,
-            peak_mib,
-            seconds,
-        });
-        docs.push((spec.clone(), crate::benchmark::merge(doc, counters)));
-        report.note(
-            if multi {
-                format!("timings/{}", spec.name)
-            } else {
-                "timings".to_string()
-            },
-            values,
-        );
-        if let Some(trace) = gpu_trace {
-            report.set("gpu_trace", trace);
-        }
-        let gib = |b: u64| b as f64 / f64::from(1u32 << 30);
-        report.set(
-            "stage_memory",
-            json!({
-                "dit_residency": out.dit_residency,
-                "stages": out.memory.iter().map(|p| json!({
-                    "stage": p.phase,
-                    "peak_used_gib": gib(p.peak_used),
-                    "peak_reserved_gib": gib(p.peak_reserved),
-                    "end_used_gib": gib(p.end_used),
-                })).collect::<Vec<_>>(),
-            }),
-        );
-        if let Some(o) = &out.offload {
-            report.set(
-                "dit_offload",
-                json!({
-                    "block_copies": o.copies,
-                    "h2d_gib": gib(o.bytes),
-                    "h2d_gbs": o.throughput_gbs(),
-                    "copy_s": o.copy_ms * 1e-3,
-                    "exposed_s": o.exposed_ms * 1e-3,
-                    "hidden_fraction": o.hidden_fraction(),
-                    "worst_stall_ms": o.worst_exposed_ms,
-                }),
-            );
-        }
-        // Empty unless FASTVIDEO_PROFILE=1: each phase synchronizes, so this is
-        // where time goes, not a number to quote against an unprofiled clip.
-        // Nested names overlap (h3_2_attn contains h3_attn_* and vsa_h3_*), so
-        // each group's pct is of that group, not of a grand sum.
-        let phases = fastvideo_cudarc::wan::stats::phase_report();
-        if !phases.is_empty() {
-            let row = |n: &str, c: u64, s: f64, total: f64| json!({"phase": n, "calls": c, "seconds": s, "pct": if total > 0.0 { 100.0 * s / total } else { 0.0 }});
-            let group = |pred: &dyn Fn(&str) -> bool| {
-                let rows: Vec<_> = phases.iter().copied().filter(|(n, _, _)| pred(n)).collect();
-                let total: f64 = rows.iter().map(|(_, _, s)| s).sum();
-                json!({
-                    "total_s": total,
-                    "by_phase": rows.iter().map(|(n, c, s)| row(n, *c, *s, total)).collect::<Vec<_>>(),
-                })
-            };
-            report.set(
+                }
+                let counters = fastvideo_cudarc::wan::evalstats::snapshot();
+                let mut values = timings(&out, total);
+                values["warm"] = json!(warm);
+                values["load_s"] = json!(load_s);
+                let peak_mib = mem.stop();
+                values["peak_mib"] = json!(peak_mib);
+                let gpu_trace = fastvideo_cudarc::wan::gpu_trace::last_report();
+                if let Some(trace) = &gpu_trace {
+                    values["gpu_trace"] = trace.clone();
+                }
+                let doc = h3_benchmark(&H3Bench {
+                    spec,
+                    recipe: recipe.as_deref(),
+                    out: &out,
+                    total,
+                    load_s,
+                    warm,
+                    peak_mib,
+                    seconds,
+                });
+                docs.push((spec.clone(), crate::benchmark::merge(doc, counters)));
+                report.note(
+                    if multi {
+                        format!("timings/{}", spec.name)
+                    } else {
+                        "timings".to_string()
+                    },
+                    values,
+                );
+                if let Some(trace) = gpu_trace {
+                    report.set("gpu_trace", trace);
+                }
+                let gib = |b: u64| b as f64 / f64::from(1u32 << 30);
+                report.set(
+                    "stage_memory",
+                    json!({
+                        "dit_residency": out.dit_residency,
+                        "stages": out.memory.iter().map(|p| json!({
+                            "stage": p.phase,
+                            "peak_used_gib": gib(p.peak_used),
+                            "peak_reserved_gib": gib(p.peak_reserved),
+                            "end_used_gib": gib(p.end_used),
+                        })).collect::<Vec<_>>(),
+                    }),
+                );
+                if let Some(o) = &out.offload {
+                    report.set(
+                        "dit_offload",
+                        json!({
+                            "block_copies": o.copies,
+                            "h2d_gib": gib(o.bytes),
+                            "h2d_gbs": o.throughput_gbs(),
+                            "copy_s": o.copy_ms * 1e-3,
+                            "exposed_s": o.exposed_ms * 1e-3,
+                            "hidden_fraction": o.hidden_fraction(),
+                            "worst_stall_ms": o.worst_exposed_ms,
+                        }),
+                    );
+                }
+                // Empty unless FASTVIDEO_PROFILE=1: each phase synchronizes, so this is
+                // where time goes, not a number to quote against an unprofiled clip.
+                // Nested names overlap (h3_2_attn contains h3_attn_* and vsa_h3_*), so
+                // each group's pct is of that group, not of a grand sum.
+                let phases = fastvideo_cudarc::wan::stats::phase_report();
+                if !phases.is_empty() {
+                    let row = |n: &str, c: u64, s: f64, total: f64| json!({"phase": n, "calls": c, "seconds": s, "pct": if total > 0.0 { 100.0 * s / total } else { 0.0 }});
+                    let group = |pred: &dyn Fn(&str) -> bool| {
+                        let rows: Vec<_> =
+                            phases.iter().copied().filter(|(n, _, _)| pred(n)).collect();
+                        let total: f64 = rows.iter().map(|(_, _, s)| s).sum();
+                        json!({
+                            "total_s": total,
+                            "by_phase": rows.iter().map(|(n, c, s)| row(n, *c, *s, total)).collect::<Vec<_>>(),
+                        })
+                    };
+                    report.set(
             "dit_phases",
             json!({
                 "block": group(&|n| n.starts_with("h3_") && !n.starts_with("h3_attn_") && !n.starts_with("h3_ffn_")),
@@ -1986,75 +2002,82 @@ fn gen(
                 "vsa": group(&|n| n.starts_with("vsa_")),
             }),
         );
-        }
-        report.set("output", json!({"frames": out.frames, "text_tokens": out.text_tokens, "sequence_length": out.sequence_length, "mp4": out.mp4, "wav": out.wav, "audio_samples_per_channel": out.geometry.audio_samples()}));
-        if warm && index == 0 && arm_index == 0 {
-            report.check(
+                }
+                report.set("output", json!({"frames": out.frames, "text_tokens": out.text_tokens, "sequence_length": out.sequence_length, "mp4": out.mp4, "wav": out.wav, "audio_samples_per_channel": out.geometry.audio_samples()}));
+                if warm && index == 0 && arm_index == 0 {
+                    report.check(
                 "warm_text_is_a_cache_hit",
                 out.text_cache.as_str() != "miss",
                 json!({"text_cache": out.text_cache.as_str(), "text_s": out.timings.text_s}),
                 json!({"expected": "hit (or disabled)"}),
             )?;
+                }
+                report.check(
+                    ck("frames"),
+                    out.frames == out.geometry.num_frames,
+                    json!({"decoded": out.frames}),
+                    json!({"expected": out.geometry.num_frames}),
+                )?;
+                // A finite, non-constant picture: the cheapest statement that the clip is not garbage.
+                let probe = out
+                    .frame_paths
+                    .get(out.frame_paths.len() / 2)
+                    .ok_or_else(|| anyhow::anyhow!("no frames were written"))?;
+                let img = image::open(probe)
+                    .with_context(|| format!("open {probe}"))?
+                    .to_rgb8();
+                let values: Vec<f32> = img.as_raw().iter().map(|&b| f32::from(b) / 255.0).collect();
+                let (mean, std) = crate::metrics::mean_std(&values);
+                report.check(
+                    ck("middle_frame_not_flat"),
+                    std > 0.02 && mean > 0.02 && mean < 0.98,
+                    json!({"mean": mean, "std": std, "frame": probe}),
+                    json!({"std_min": 0.02}),
+                )?;
+                if mp4 {
+                    report.check(
+                        ck("mp4_written"),
+                        out.mp4.is_some(),
+                        json!({"mp4": out.mp4}),
+                        json!({"expected": "output.mp4 with an audio track"}),
+                    )?;
+                }
+            }
+            let path = crate::benchmark::path_beside(clip_dir);
+            let mut doc = if multi {
+                crate::benchmark::summarize(&docs)
+            } else {
+                docs.pop().map(|(_, d)| d).unwrap_or_default()
+            };
+            if !arm_list.is_empty() {
+                let t = pipeline.techniques();
+                doc["arm"] = json!({
+                    "name": arm_name,
+                    "profile": arm_profile.as_ref().map(|p| p.name.clone()),
+                    "plan": t.plan.techniques.iter().map(|x| x.describe()).collect::<Vec<_>>(),
+                });
+            }
+            crate::benchmark::write(&path, &doc)?;
+            report.set(
+                &if arm_list.is_empty() {
+                    "benchmark_json".to_string()
+                } else {
+                    format!("benchmark_json/{arm_name}")
+                },
+                path.display().to_string(),
+            );
+            Ok(())
+        })();
+        match arm_result {
+            Err(e) if !arm_list.is_empty() => {
+                eprintln!("h3 gen arm {arm_name} failed: {e}");
+                report.note(
+                    format!("arm_error/{arm_name}"),
+                    json!({"error": e.to_string()}),
+                );
+            }
+            other => other?,
         }
-        report.check(
-            ck("frames"),
-            out.frames == out.geometry.num_frames,
-            json!({"decoded": out.frames}),
-            json!({"expected": out.geometry.num_frames}),
-        )?;
-        // A finite, non-constant picture: the cheapest statement that the clip is not garbage.
-        let probe = out
-            .frame_paths
-            .get(out.frame_paths.len() / 2)
-            .ok_or_else(|| anyhow::anyhow!("no frames were written"))?;
-        let img = image::open(probe)
-            .with_context(|| format!("open {probe}"))?
-            .to_rgb8();
-        let values: Vec<f32> = img.as_raw().iter().map(|&b| f32::from(b) / 255.0).collect();
-        let (mean, std) = crate::metrics::mean_std(&values);
-        report.check(
-            ck("middle_frame_not_flat"),
-            std > 0.02 && mean > 0.02 && mean < 0.98,
-            json!({"mean": mean, "std": std, "frame": probe}),
-            json!({"std_min": 0.02}),
-        )?;
-        if mp4 {
-            report.check(
-                ck("mp4_written"),
-                out.mp4.is_some(),
-                json!({"mp4": out.mp4}),
-                json!({"expected": "output.mp4 with an audio track"}),
-            )?;
-        }
-    }
-    let path = crate::benchmark::path_beside(clip_dir);
-    let mut doc = if multi {
-        crate::benchmark::summarize(&docs)
-    } else {
-        docs.pop().map(|(_, d)| d).unwrap_or_default()
-    };
-    if !arm_list.is_empty() {
-        let t = pipeline.techniques();
-        doc["arm"] = json!({
-            "name": arm_name,
-            "profile": arm_profile.as_ref().map(|p| p.name.clone()),
-            "plan": t.plan.techniques.iter().map(|x| x.describe()).collect::<Vec<_>>(),
-        });
-    }
-    crate::benchmark::write(&path, &doc)?;
-    report.set(
-        &if arm_list.is_empty() { "benchmark_json".to_string() } else { format!("benchmark_json/{arm_name}") },
-        path.display().to_string(),
-    );
-    Ok(())
-    })();
-    match arm_result {
-        Err(e) if !arm_list.is_empty() => {
-            eprintln!("h3 gen arm {arm_name} failed: {e}");
-            report.note(format!("arm_error/{arm_name}"), json!({"error": e.to_string()}));
-        }
-        other => other?,
-    }
     }
     Ok(())
 }

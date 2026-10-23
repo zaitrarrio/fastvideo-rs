@@ -87,7 +87,10 @@ pub fn resolve_file(p: &Path) -> Result<PathBuf> {
 /// Where an NVFP4 recipe looks when no file is given: the tree beside the
 /// Trim's (`$FV_WEIGHTS/fasth3-trim-8step-nvfp4` next to `$FV_WEIGHTS/fasth3-trim-8step`).
 pub fn sibling_tree(root: &Path) -> PathBuf {
-    let root = Path::new(root.to_str().map_or(root.as_os_str(), |s| s.trim_end_matches('/').as_ref()));
+    let root = Path::new(
+        root.to_str()
+            .map_or(root.as_os_str(), |s| s.trim_end_matches('/').as_ref()),
+    );
     root.parent().unwrap_or(Path::new(".")).join(TREE)
 }
 
@@ -97,7 +100,9 @@ pub fn require_tensor_cores() -> Result<()> {
     #[cfg(feature = "cuda")]
     {
         let Some(d) = crate::wan::device::global_device() else {
-            return Err(msg("h3 nvfp4: needs a CUDA device (NVFP4 tensor cores, sm_100 / sm_120)"));
+            return Err(msg(
+                "h3 nvfp4: needs a CUDA device (NVFP4 tensor cores, sm_100 / sm_120)",
+            ));
         };
         if d.sm_major < 10 {
             return Err(msg(format!(
@@ -109,7 +114,9 @@ pub fn require_tensor_cores() -> Result<()> {
     }
     #[cfg(not(feature = "cuda"))]
     {
-        Err(msg("h3 nvfp4: needs a CUDA build and NVFP4 tensor cores (sm_100 / sm_120)"))
+        Err(msg(
+            "h3 nvfp4: needs a CUDA build and NVFP4 tensor cores (sm_100 / sm_120)",
+        ))
     }
 }
 
@@ -158,7 +165,9 @@ impl PublishedLinear {
             ))
         };
         if !k.is_multiple_of(64) || !rows.is_multiple_of(16) {
-            return Err(msg(format!("h3 nvfp4: {prefix}: [{rows}, {k}] (rows % 16, k % 64)")));
+            return Err(msg(format!(
+                "h3 nvfp4: {prefix}: [{rows}, {k}] (rows % 16, k % 64)"
+            )));
         }
         let q = view("comfy_quant")?;
         let fmt: serde_json::Value = serde_json::from_slice(q.bytes)
@@ -170,7 +179,12 @@ impl PublishedLinear {
         }
         let w = view("weight")?;
         if *w.dtype != LazyDType::U8 || w.shape != [rows, k / 2] {
-            return Err(shape_err("weight", w.dtype, w.shape, &format!("U8 [{rows}, {}]", k / 2)));
+            return Err(shape_err(
+                "weight",
+                w.dtype,
+                w.shape,
+                &format!("U8 [{rows}, {}]", k / 2),
+            ));
         }
         let rows_scale = rows.next_multiple_of(128);
         let s = view("weight_scale")?;
@@ -231,7 +245,8 @@ impl PublishedLinear {
                 let byte = self.codes[r * self.k / 2 + c / 2];
                 let code = if c % 2 == 0 { byte & 15 } else { byte >> 4 };
                 let s = crate::wan::quant::e4m3_decode(self.scales[blocked_offset(r, c / 16, sc)]);
-                out[r * self.k + c] = fastvideo_models::nvfp4::e2m1_to_f32(code) * s * self.decode_scale;
+                out[r * self.k + c] =
+                    fastvideo_models::nvfp4::e2m1_to_f32(code) * s * self.decode_scale;
             }
         }
         out
@@ -282,17 +297,26 @@ pub const ACT_ENV: &str = "FASTVIDEO_H3_NVFP4_ACT";
 
 impl ModelOptOptions {
     pub fn from_env() -> Result<Self> {
-        let attention = match fastvideo_models::techniques::settings::var(ATTN_ENV).as_deref().map(str::trim) {
+        let attention = match fastvideo_models::techniques::settings::var(ATTN_ENV)
+            .as_deref()
+            .map(str::trim)
+        {
             None | Some("" | "0" | "off" | "false" | "bf16") => false,
             Some("1" | "on" | "true" | "nvfp4") => true,
             Some(other) => return Err(msg(format!("{ATTN_ENV}={other}: expected 0|1"))),
         };
-        let static_act = match fastvideo_models::techniques::settings::var(ACT_ENV).as_deref().map(str::trim) {
+        let static_act = match fastvideo_models::techniques::settings::var(ACT_ENV)
+            .as_deref()
+            .map(str::trim)
+        {
             None | Some("" | "static") => true,
             Some("dynamic") => false,
             Some(other) => return Err(msg(format!("{ACT_ENV}={other}: expected static|dynamic"))),
         };
-        Ok(Self { attention, static_act })
+        Ok(Self {
+            attention,
+            static_act,
+        })
     }
 }
 
@@ -339,22 +363,45 @@ impl PublishedLinear {
     /// `[rows, k/16]` block scales **row-major** (moved into the 128x4 tiled
     /// layout here); F32 scalar `weight_scale_2`; the optional F32 scalar
     /// static activation scale `input_scale`, returned beside.
-    pub fn read_modelopt(store: &LazyStore, prefix: &str, rows: usize, k: usize) -> Result<(Self, Option<f32>)> {
-        let view = |name: &str| store.view(&format!("{prefix}.{name}")).map_err(|e| msg(format!("h3 nvfp4: {e}")));
+    pub fn read_modelopt(
+        store: &LazyStore,
+        prefix: &str,
+        rows: usize,
+        k: usize,
+    ) -> Result<(Self, Option<f32>)> {
+        let view = |name: &str| {
+            store
+                .view(&format!("{prefix}.{name}"))
+                .map_err(|e| msg(format!("h3 nvfp4: {e}")))
+        };
         let bad = |name: &str, dtype: &LazyDType, shape: &[usize], want: &str| {
-            msg(format!("h3 nvfp4: {prefix}.{name} is {dtype:?} {shape:?}, expected {want}"))
+            msg(format!(
+                "h3 nvfp4: {prefix}.{name} is {dtype:?} {shape:?}, expected {want}"
+            ))
         };
         if !k.is_multiple_of(64) || !rows.is_multiple_of(16) {
-            return Err(msg(format!("h3 nvfp4: {prefix}: [{rows}, {k}] (rows % 16, k % 64)")));
+            return Err(msg(format!(
+                "h3 nvfp4: {prefix}: [{rows}, {k}] (rows % 16, k % 64)"
+            )));
         }
         let w = view("weight")?;
         if *w.dtype != LazyDType::U8 || w.shape != [rows, k / 2] {
-            return Err(bad("weight", w.dtype, w.shape, &format!("U8 [{rows}, {}]", k / 2)));
+            return Err(bad(
+                "weight",
+                w.dtype,
+                w.shape,
+                &format!("U8 [{rows}, {}]", k / 2),
+            ));
         }
         let sc = k / 16;
         let s = view("weight_scale")?;
         if *s.dtype != LazyDType::F8E4M3 || s.shape != [rows, sc] {
-            return Err(bad("weight_scale", s.dtype, s.shape, &format!("F8_E4M3 [{rows}, {sc}] (row-major)")));
+            return Err(bad(
+                "weight_scale",
+                s.dtype,
+                s.shape,
+                &format!("F8_E4M3 [{rows}, {sc}] (row-major)"),
+            ));
         }
         let scalar = |name: &str| -> Result<Option<f32>> {
             if !store.contains(&format!("{prefix}.{name}")) {
@@ -440,13 +487,20 @@ impl Nvfp4Dit {
                 // Headers only: the views are not read here.
                 for (name, dtype, shape) in [
                     ("weight", LazyDType::U8, vec![rows, k / 2]),
-                    ("weight_scale", LazyDType::F8E4M3, vec![rows.next_multiple_of(128), k / 16]),
+                    (
+                        "weight_scale",
+                        LazyDType::F8E4M3,
+                        vec![rows.next_multiple_of(128), k / 16],
+                    ),
                     ("comfy_quant", LazyDType::U8, Vec::new()),
                 ] {
                     let key = format!("{prefix}.{name}");
-                    let v = store
-                        .view(&key)
-                        .map_err(|e| msg(format!("h3 nvfp4: {} is not the Trim NVFP4 file: {e}", path.display())))?;
+                    let v = store.view(&key).map_err(|e| {
+                        msg(format!(
+                            "h3 nvfp4: {} is not the Trim NVFP4 file: {e}",
+                            path.display()
+                        ))
+                    })?;
                     if *v.dtype != dtype || (!shape.is_empty() && v.shape != shape.as_slice()) {
                         return Err(msg(format!(
                             "h3 nvfp4: {key} is {:?} {:?}, expected {dtype:?} {shape:?}",
@@ -455,7 +509,12 @@ impl Nvfp4Dit {
                     }
                 }
             }
-            for name in ["norm1.weight", "norm2.weight", "attn.norm_q.weight", "attn.norm_k.weight"] {
+            for name in [
+                "norm1.weight",
+                "norm2.weight",
+                "attn.norm_q.weight",
+                "attn.norm_k.weight",
+            ] {
                 let key = format!("transformer_blocks.{i}.{name}");
                 let (a, b) = (map.get_bf16_bytes(&key)?, trim.get_bf16_bytes(&key)?);
                 if a != b {
@@ -476,13 +535,24 @@ impl Nvfp4Dit {
     /// Open a ModelOpt NVFP4 `transformer/` ([`is_modelopt_dir`]): every
     /// block's two FFN linears (dtypes, shapes, scales) and its bf16 attention
     /// projections are checked from the headers; nothing is read.
-    pub fn open_modelopt(dir: &Path, cfg: &H3TransformerConfig, options: ModelOptOptions) -> Result<Self> {
+    pub fn open_modelopt(
+        dir: &Path,
+        cfg: &H3TransformerConfig,
+        options: ModelOptOptions,
+    ) -> Result<Self> {
         let map = WeightMap::open(dir)?;
         let store = map
             .lazy()
             .ok_or_else(|| msg(format!("h3 nvfp4: {} is not mapped", dir.display())))?;
-        if store.contains(&format!("transformer_blocks.{}.ff.net.2.weight", cfg.num_layers)) {
-            return Err(msg(format!("h3 nvfp4: {} has more than {} blocks", dir.display(), cfg.num_layers)));
+        if store.contains(&format!(
+            "transformer_blocks.{}.ff.net.2.weight",
+            cfg.num_layers
+        )) {
+            return Err(msg(format!(
+                "h3 nvfp4: {} has more than {} blocks",
+                dir.display(),
+                cfg.num_layers
+            )));
         }
         let (h, inner) = (cfg.hidden_size, cfg.inner_dim());
         for i in 0..cfg.num_layers {
@@ -494,7 +564,10 @@ impl Nvfp4Dit {
                 ] {
                     let key = format!("{prefix}.{name}");
                     let v = store.view(&key).map_err(|e| {
-                        msg(format!("h3 nvfp4: {} is not a ModelOpt NVFP4 H3 transformer: {e}", dir.display()))
+                        msg(format!(
+                            "h3 nvfp4: {} is not a ModelOpt NVFP4 H3 transformer: {e}",
+                            dir.display()
+                        ))
                     })?;
                     if *v.dtype != dtype || (!shape.is_empty() && v.shape != shape.as_slice()) {
                         return Err(msg(format!(
@@ -504,10 +577,19 @@ impl Nvfp4Dit {
                     }
                 }
             }
-            for (name, want) in [("to_q", [inner, h]), ("to_k", [inner, h]), ("to_v", [inner, h]), ("to_out.0", [h, inner])] {
+            for (name, want) in [
+                ("to_q", [inner, h]),
+                ("to_k", [inner, h]),
+                ("to_v", [inner, h]),
+                ("to_out.0", [h, inner]),
+            ] {
                 let key = format!("transformer_blocks.{i}.attn.{name}.weight");
-                let v = store.view(&key).map_err(|e| msg(format!("h3 nvfp4: {e}")))?;
-                if v.shape != want || !matches!(v.dtype, LazyDType::BF16 | LazyDType::F16 | LazyDType::F32) {
+                let v = store
+                    .view(&key)
+                    .map_err(|e| msg(format!("h3 nvfp4: {e}")))?;
+                if v.shape != want
+                    || !matches!(v.dtype, LazyDType::BF16 | LazyDType::F16 | LazyDType::F32)
+                {
                     return Err(msg(format!(
                         "h3 nvfp4: {key} is {:?} {:?}, expected a float {want:?} (ModelOpt keeps attention dense)",
                         v.dtype, v.shape
@@ -550,7 +632,9 @@ impl Nvfp4Dit {
 
     /// Bytes of the published linears (what the device holds for them).
     pub fn linear_bytes(&self, cfg: &H3TransformerConfig, gate: bool) -> u64 {
-        let fp4 = |(_, rows, k): (String, usize, usize)| (rows * k / 2 + rows.next_multiple_of(128) * k / 16) as u64;
+        let fp4 = |(_, rows, k): (String, usize, usize)| {
+            (rows * k / 2 + rows.next_multiple_of(128) * k / 16) as u64
+        };
         match self.layout {
             Nvfp4Layout::Comfy => (0..cfg.num_layers)
                 .flat_map(|i| block_linears(cfg, i))
@@ -568,17 +652,31 @@ impl Nvfp4Dit {
     /// checkpoint, each with its calibrated static activation scale when
     /// [`ModelOptOptions::static_act`] (and the checkpoint has one).
     #[cfg(feature = "cuda")]
-    pub fn modelopt_ffn(&self, cfg: &H3TransformerConfig, i: usize) -> Result<[crate::wan::nn::Linear; 2]> {
+    pub fn modelopt_ffn(
+        &self,
+        cfg: &H3TransformerConfig,
+        i: usize,
+    ) -> Result<[crate::wan::nn::Linear; 2]> {
         use crate::wan::nn::Linear;
         use crate::wan::nvfp4_linear::{Nvfp4Linear, Nvfp4Operand, Nvfp4Stack};
         let Nvfp4Layout::ModelOpt(opts) = self.layout else {
             return Err(msg("h3 nvfp4: modelopt_ffn on a ComfyUI file"));
         };
         let rule = fastvideo_models::nvfp4::ScaleRule::Static6;
-        let store = self.map.lazy().ok_or_else(|| msg("h3 nvfp4: the transformer is not mapped"))?;
+        let store = self
+            .map
+            .lazy()
+            .ok_or_else(|| msg("h3 nvfp4: the transformer is not mapped"))?;
         let one = |(p, rows, k): &(String, usize, usize)| -> Result<Linear> {
             let (l, input_scale) = PublishedLinear::read_modelopt(store, p, *rows, *k)?;
-            let op = Nvfp4Operand::from_host_layout(&l.codes, &l.scales, l.rows, l.k, l.decode_scale, rule)?;
+            let op = Nvfp4Operand::from_host_layout(
+                &l.codes,
+                &l.scales,
+                l.rows,
+                l.k,
+                l.decode_scale,
+                rule,
+            )?;
             let mut stack = Nvfp4Stack::new(vec![Nvfp4Linear::from_operand(op, None, rule)?])?;
             if let (true, Some(s)) = (opts.static_act, input_scale) {
                 stack = stack.with_static_act_scale(s)?;
@@ -605,7 +703,8 @@ impl Nvfp4Dit {
         use crate::wan::nvfp4_linear::{Nvfp4Linear, Nvfp4Stack};
         use cudarc::driver::DevicePtr;
         let rule = fastvideo_models::nvfp4::ScaleRule::Static6;
-        let d = crate::wan::device::global_device().ok_or_else(|| msg("h3 nvfp4: no CUDA device"))?;
+        let d =
+            crate::wan::device::global_device().ok_or_else(|| msg("h3 nvfp4: no CUDA device"))?;
         let quantize = |name: &str, rows: usize, k: usize| -> Result<Nvfp4Linear> {
             let key = format!("transformer_blocks.{i}.attn.{name}.weight");
             let (shape, values) = self
@@ -613,9 +712,14 @@ impl Nvfp4Dit {
                 .lazy_bf16(&key)?
                 .ok_or_else(|| msg(format!("h3 nvfp4: {key} is not mapped")))?;
             if shape != [rows, k] {
-                return Err(msg(format!("h3 nvfp4: {key} is {shape:?}, expected [{rows}, {k}]")));
+                return Err(msg(format!(
+                    "h3 nvfp4: {key} is {shape:?}, expected [{rows}, {k}]"
+                )));
             }
-            let w = d.stream.memcpy_stod(&values).map_err(|e| msg(e.to_string()))?;
+            let w = d
+                .stream
+                .memcpy_stod(&values)
+                .map_err(|e| msg(e.to_string()))?;
             let l = {
                 let (p, _guard) = w.device_ptr(&d.stream);
                 Nvfp4Linear::from_bf16(p, rows, k, None, rule)?
@@ -625,7 +729,11 @@ impl Nvfp4Dit {
             Ok(l)
         };
         let (h, inner) = (cfg.hidden_size, cfg.inner_dim());
-        let mut parts = vec![quantize("to_q", inner, h)?, quantize("to_k", inner, h)?, quantize("to_v", inner, h)?];
+        let mut parts = vec![
+            quantize("to_q", inner, h)?,
+            quantize("to_k", inner, h)?,
+            quantize("to_v", inner, h)?,
+        ];
         if gate {
             parts.push(quantize("to_gate_compress", inner, h)?);
         }
@@ -649,7 +757,14 @@ impl Nvfp4Dit {
         use crate::wan::nvfp4_linear::{Nvfp4Linear, Nvfp4Operand, Nvfp4Stack};
         let rule = fastvideo_models::nvfp4::ScaleRule::Static6;
         let dev = |l: PublishedLinear| -> Result<Nvfp4Linear> {
-            let op = Nvfp4Operand::from_host_layout(&l.codes, &l.scales, l.rows, l.k, l.decode_scale, rule)?;
+            let op = Nvfp4Operand::from_host_layout(
+                &l.codes,
+                &l.scales,
+                l.rows,
+                l.k,
+                l.decode_scale,
+                rule,
+            )?;
             Nvfp4Linear::from_operand(op, None, rule)
         };
         let [qkv, g, out, fc1, fc2] = block_linears(cfg, i);
@@ -781,7 +896,12 @@ mod tests {
                 ("l.weight", "U8", vec![rows, k / 2], codes),
                 ("l.weight_scale", "F8_E4M3", vec![rows, k / 16], scales),
                 ("l.weight_scale_2", "F32", vec![], ds.to_le_bytes().to_vec()),
-                ("l.comfy_quant", "U8", vec![19], br#"{"format": "nvfp4"}"#.to_vec()),
+                (
+                    "l.comfy_quant",
+                    "U8",
+                    vec![19],
+                    br#"{"format": "nvfp4"}"#.to_vec(),
+                ),
             ],
         );
         let store = LazyStore::open_files(&[p]).unwrap();
@@ -808,22 +928,46 @@ mod tests {
             tmp.path(),
             &[
                 ("l.weight", "U8", vec![rows, k / 2], codes.clone()),
-                ("l.weight_scale", "F8_E4M3", vec![rows, k / 16], scales.clone()),
+                (
+                    "l.weight_scale",
+                    "F8_E4M3",
+                    vec![rows, k / 16],
+                    scales.clone(),
+                ),
                 ("l.weight_scale_2", "F32", vec![], ds.to_le_bytes().to_vec()),
-                ("l.comfy_quant", "U8", vec![19], br#"{"format": "mxfp8"}"#.to_vec()),
+                (
+                    "l.comfy_quant",
+                    "U8",
+                    vec![19],
+                    br#"{"format": "mxfp8"}"#.to_vec(),
+                ),
                 ("m.weight", "U8", vec![rows, k / 2], codes),
                 ("m.weight_scale", "U8", vec![rows, k / 16], scales),
                 ("m.weight_scale_2", "F32", vec![], ds.to_le_bytes().to_vec()),
-                ("m.comfy_quant", "U8", vec![19], br#"{"format": "nvfp4"}"#.to_vec()),
+                (
+                    "m.comfy_quant",
+                    "U8",
+                    vec![19],
+                    br#"{"format": "nvfp4"}"#.to_vec(),
+                ),
             ],
         );
         let store = LazyStore::open_files(&[p]).unwrap();
-        let e = PublishedLinear::read(&store, "l", rows, k).unwrap_err().to_string();
+        let e = PublishedLinear::read(&store, "l", rows, k)
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("comfy_quant"), "{e}");
-        let e = PublishedLinear::read(&store, "m", rows, k).unwrap_err().to_string();
+        let e = PublishedLinear::read(&store, "m", rows, k)
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("weight_scale"), "{e}");
-        let e = PublishedLinear::read(&store, "l", rows, 2 * k).unwrap_err().to_string();
-        assert!(e.contains("weight_scale") || e.contains("comfy_quant") || e.contains("weight"), "{e}");
+        let e = PublishedLinear::read(&store, "l", rows, 2 * k)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("weight_scale") || e.contains("comfy_quant") || e.contains("weight"),
+            "{e}"
+        );
     }
 
     #[test]
@@ -835,11 +979,20 @@ mod tests {
             comfy_block_key("transformer_blocks.7.attn.norm_q.weight").as_deref(),
             Some("blocks.7.attn.q_norm.weight")
         );
-        assert_eq!(comfy_block_key("transformer_blocks.7.norm2.weight").as_deref(), Some("blocks.7.norm2.weight"));
-        assert_eq!(comfy_block_key("transformer_blocks.7.attn.to_q.weight"), None);
+        assert_eq!(
+            comfy_block_key("transformer_blocks.7.norm2.weight").as_deref(),
+            Some("blocks.7.norm2.weight")
+        );
+        assert_eq!(
+            comfy_block_key("transformer_blocks.7.attn.to_q.weight"),
+            None
+        );
         assert!(is_nvfp4_recipe("trim-8step-nvfp4") && is_nvfp4_recipe("fasth3-trim-nvfp4"));
         assert!(!is_nvfp4_recipe("trim-8step"));
-        assert_eq!(sibling_tree(Path::new("/w/fasth3-trim-8step/")), Path::new("/w").join(TREE));
+        assert_eq!(
+            sibling_tree(Path::new("/w/fasth3-trim-8step/")),
+            Path::new("/w").join(TREE)
+        );
     }
 
     /// ModelOpt's unified layout is our TE quantization as stored: low
@@ -857,14 +1010,29 @@ mod tests {
             tmp.path(),
             &[
                 ("l.weight", "U8", vec![rows, k / 2], t.packed.clone()),
-                ("l.weight_scale", "F8_E4M3", vec![rows, k / 16], t.scales.clone()),
+                (
+                    "l.weight_scale",
+                    "F8_E4M3",
+                    vec![rows, k / 16],
+                    t.scales.clone(),
+                ),
                 ("l.weight_scale_2", "F32", vec![], f32b(ds)),
                 ("l.input_scale", "F32", vec![], f32b(0.375)),
                 ("m.weight", "U8", vec![rows, k / 2], t.packed.clone()),
-                ("m.weight_scale", "F8_E4M3", vec![rows, k / 16], t.scales.clone()),
+                (
+                    "m.weight_scale",
+                    "F8_E4M3",
+                    vec![rows, k / 16],
+                    t.scales.clone(),
+                ),
                 ("m.weight_scale_2", "F32", vec![], f32b(ds)),
                 ("b.weight", "U8", vec![rows, k / 2], t.packed.clone()),
-                ("b.weight_scale", "F8_E4M3", vec![rows.next_multiple_of(128), k / 16], vec![0; 256 * k / 16]),
+                (
+                    "b.weight_scale",
+                    "F8_E4M3",
+                    vec![rows.next_multiple_of(128), k / 16],
+                    vec![0; 256 * k / 16],
+                ),
                 ("b.weight_scale_2", "F32", vec![], f32b(ds)),
             ],
         );
@@ -881,8 +1049,15 @@ mod tests {
         let (_, blocked, _, _) = publish(&w, rows, k);
         assert_eq!(l.scales, blocked);
         // No input_scale: dynamic; tiled (Comfy-shaped) scales refused.
-        assert_eq!(PublishedLinear::read_modelopt(&store, "m", rows, k).unwrap().1, None);
-        let e = PublishedLinear::read_modelopt(&store, "b", rows, k).unwrap_err().to_string();
+        assert_eq!(
+            PublishedLinear::read_modelopt(&store, "m", rows, k)
+                .unwrap()
+                .1,
+            None
+        );
+        let e = PublishedLinear::read_modelopt(&store, "b", rows, k)
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("row-major"), "{e}");
     }
 
@@ -894,15 +1069,32 @@ mod tests {
         write(r#"{"_class_name": "MiniMaxH3Transformer3DModel"}"#);
         assert!(!is_modelopt_dir(tmp.path()).unwrap());
         write(r#"{"quantization_config": {"quant_method": "fp8"}}"#);
-        assert!(!is_modelopt_dir(tmp.path()).unwrap(), "another kind keeps its path");
+        assert!(
+            !is_modelopt_dir(tmp.path()).unwrap(),
+            "another kind keeps its path"
+        );
         write(r#"{"quantization_config": {"quant_method": "modelopt", "quant_algo": "NVFP4"}}"#);
         assert!(is_modelopt_dir(tmp.path()).unwrap());
         write(r#"{"quantization_config": {"quant_method": "modelopt", "quant_algo": "FP8"}}"#);
         assert!(is_modelopt_dir(tmp.path()).is_err());
         let cfg = H3TransformerConfig::fasth3_trim_8step();
         let [a, b] = modelopt_ffn_linears(&cfg, 3);
-        assert_eq!((a.0.as_str(), a.1, a.2), ("transformer_blocks.3.ff.net.0.proj", 2 * cfg.ffn_dim, cfg.hidden_size));
-        assert_eq!((b.0.as_str(), b.1, b.2), ("transformer_blocks.3.ff.net.2", cfg.hidden_size, cfg.ffn_dim));
+        assert_eq!(
+            (a.0.as_str(), a.1, a.2),
+            (
+                "transformer_blocks.3.ff.net.0.proj",
+                2 * cfg.ffn_dim,
+                cfg.hidden_size
+            )
+        );
+        assert_eq!(
+            (b.0.as_str(), b.1, b.2),
+            (
+                "transformer_blocks.3.ff.net.2",
+                cfg.hidden_size,
+                cfg.ffn_dim
+            )
+        );
     }
 
     #[test]
@@ -912,7 +1104,16 @@ mod tests {
         let shapes: Vec<(usize, usize)> = l.iter().map(|(_, r, k)| (*r, *k)).collect();
         // The published file's headers: qkv [21504, 2688], gate [7168, 2688],
         // out [5376, 3584], fc1 [28672, 2688], fc2 [5376, 7168] (U8 = k / 2).
-        assert_eq!(shapes, [(21504, 5376), (7168, 5376), (5376, 7168), (28672, 5376), (5376, 14336)]);
+        assert_eq!(
+            shapes,
+            [
+                (21504, 5376),
+                (7168, 5376),
+                (5376, 7168),
+                (28672, 5376),
+                (5376, 14336)
+            ]
+        );
         assert_eq!(l[3].0, "blocks.41.mlp.fc1");
     }
 }

@@ -454,7 +454,8 @@ fn build_transpose_plan(dev: &DeviceContext, key: &ConvKey) -> Result<ConvTransp
         w: &w,
         dy: &x,
     };
-    let algo = deterministic_bwd_data_algo(op.pick_algorithm()?, |a| op.get_workspace_size(a).is_ok());
+    let algo =
+        deterministic_bwd_data_algo(op.pick_algorithm()?, |a| op.get_workspace_size(a).is_ok());
     let workspace_bytes = op.get_workspace_size(algo)?;
     super::log::debug(format_args!(
         "conv-transpose plan x={:?} w={:?} pad={:?} stride={:?} algo={algo:?} workspace={}B",
@@ -561,7 +562,11 @@ static CONV3D_BACKEND: CachedString = CachedString::new();
 
 /// `auto` (default), `cudnn` or `unfold`.
 pub fn conv3d_backend() -> String {
-    CONV3D_BACKEND.get_or_init(|| fastvideo_models::techniques::kernels::choice(fastvideo_models::techniques::kernels::KernelOp::Conv3d))
+    CONV3D_BACKEND.get_or_init(|| {
+        fastvideo_models::techniques::kernels::choice(
+            fastvideo_models::techniques::kernels::KernelOp::Conv3d,
+        )
+    })
 }
 
 /// `FASTVIDEO_CONV3D_TIMED=1`: `auto` times the backends per shape (the

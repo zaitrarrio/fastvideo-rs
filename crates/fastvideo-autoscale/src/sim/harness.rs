@@ -127,7 +127,9 @@ pub fn pool_for(profile: &FamilyProfile, max_workers: u32) -> PoolConfig {
 }
 
 pub fn run(s: &Scenario) -> Report {
-    let rt = tokio::runtime::Builder::new_current_thread().build().expect("tokio runtime");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("tokio runtime");
     rt.block_on(run_async(s))
 }
 
@@ -153,7 +155,12 @@ async fn run_async(s: &Scenario) -> Report {
     };
     {
         let mut w = world.lock().unwrap_or_else(|p| p.into_inner());
-        w.add_pool(s.pool.clone(), s.profile.clone(), s.price_usd_per_hr, endpoint);
+        w.add_pool(
+            s.pool.clone(),
+            s.profile.clone(),
+            s.price_usd_per_hr,
+            endpoint,
+        );
         w.load_trace(&s.pool.name, s.arrivals.clone());
     }
     let warm = match s.strategy {
@@ -167,12 +174,24 @@ async fn run_async(s: &Scenario) -> Report {
             dry_run: false,
             interval_s: 15.0,
             balance_interval_s: 60.0,
-            pools: vec![PoolConfig { price_usd_per_hr: Some(s.price_usd_per_hr), warm_min, ..s.pool.clone() }],
+            pools: vec![PoolConfig {
+                price_usd_per_hr: Some(s.price_usd_per_hr),
+                warm_min,
+                ..s.pool.clone()
+            }],
             ..AutoscaleConfig::default()
         };
         let sim = Arc::new(SimProvider(world.clone()));
-        let providers = Providers::new(sim.clone()).with(PoolKind::Serverless, sim.clone()).with(PoolKind::Pod, sim);
-        Some(Controller::new(cfg, providers, Arc::new(SimSignals(world.clone())), Arc::new(MemoryLease::default()), "sim"))
+        let providers = Providers::new(sim.clone())
+            .with(PoolKind::Serverless, sim.clone())
+            .with(PoolKind::Pod, sim);
+        Some(Controller::new(
+            cfg,
+            providers,
+            Arc::new(SimSignals(world.clone())),
+            Arc::new(MemoryLease::default()),
+            "sim",
+        ))
     } else {
         None
     };
@@ -197,13 +216,20 @@ async fn run_async(s: &Scenario) -> Report {
             break;
         }
     }
-    let st = world.lock().unwrap_or_else(|p| p.into_inner()).stats(&s.pool.name);
+    let st = world
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .stats(&s.pool.name);
     let mut waits = st.waits.clone();
     waits.sort_by(f64::total_cmp);
     let within = if waits.is_empty() {
         1.0
     } else {
-        waits.iter().filter(|w| **w <= s.pool.slo_queue_wait_s).count() as f64 / waits.len() as f64
+        waits
+            .iter()
+            .filter(|w| **w <= s.pool.slo_queue_wait_s)
+            .count() as f64
+            / waits.len() as f64
     };
     Report {
         trace: s.trace.clone(),
@@ -244,13 +270,21 @@ pub fn traces(family: &str, seed: u64) -> Vec<(String, Vec<Arrival>, f64)> {
     let avg = avg_per_hr(family);
     let mut rng = Rng::new(seed);
     let mut out = vec![
-        ("steady".to_string(), trace::steady(&mut rng, SIM_EPOCH, 6.0, avg), 6.0),
+        (
+            "steady".to_string(),
+            trace::steady(&mut rng, SIM_EPOCH, 6.0, avg),
+            6.0,
+        ),
         (
             "diurnal 2.5x".to_string(),
             trace::diurnal(&mut rng, SIM_EPOCH, 24.0, avg, 2.5, 14.0),
             24.0,
         ),
-        ("spike 10x/10min".to_string(), trace::spike(&mut rng, SIM_EPOCH, 4.0, avg, 10.0, 2.0, 10.0), 4.0),
+        (
+            "spike 10x/10min".to_string(),
+            trace::spike(&mut rng, SIM_EPOCH, 4.0, avg, 10.0, 2.0, 10.0),
+            4.0,
+        ),
     ];
     let (b, h) = trace::idle_burst(&mut rng, SIM_EPOCH, 2.0, 20, 120.0, 1.0);
     out.push(("idle→burst 20".to_string(), b, h));
@@ -279,7 +313,12 @@ pub fn standard_suite(seed: u64) -> Vec<Scenario> {
                 let mut pool = pool_for(&profile, 4);
                 if name.starts_with("diurnal") && strategy == Strategy::Autoscaler {
                     // Business-hours floor ahead of the 14:00 peak.
-                    pool.schedule = vec![ScheduleRule { days: vec![], start_hour: 10, end_hour: 19, min_workers: 1 }];
+                    pool.schedule = vec![ScheduleRule {
+                        days: vec![],
+                        start_hour: 10,
+                        end_hour: 19,
+                        min_workers: 1,
+                    }];
                 }
                 v.push(Scenario {
                     trace: name.clone(),
@@ -307,7 +346,10 @@ pub fn peak_workers(p: &FamilyProfile, avg_per_hr: f64) -> u32 {
 pub fn merge(reports: Vec<Report>) -> Vec<Report> {
     let mut out: Vec<Report> = Vec::new();
     for r in reports {
-        if let Some(m) = out.iter_mut().find(|m| m.trace == r.trace && m.family == r.family && m.strategy == r.strategy) {
+        if let Some(m) = out
+            .iter_mut()
+            .find(|m| m.trace == r.trace && m.family == r.family && m.strategy == r.strategy)
+        {
             let n = f64::from(m.runs);
             let avg = |a: f64, b: f64| (a * n + b) / (n + 1.0);
             m.gpu_hours = avg(m.gpu_hours, r.gpu_hours);

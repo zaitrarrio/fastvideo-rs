@@ -52,7 +52,11 @@ pub struct TrackInfo {
 
 impl TrackInfo {
     pub fn duration_s(&self) -> f64 {
-        if self.timescale == 0 { 0.0 } else { self.duration as f64 / f64::from(self.timescale) }
+        if self.timescale == 0 {
+            0.0
+        } else {
+            self.duration as f64 / f64::from(self.timescale)
+        }
     }
 }
 
@@ -105,7 +109,10 @@ impl Mp4Info {
                     None => p.push("audio sample entry unreadable".into()),
                     Some(ai) => {
                         if ai.object_type != Some(2) {
-                            p.push(format!("AAC object type {:?} is not LC (2)", ai.object_type));
+                            p.push(format!(
+                                "AAC object type {:?} is not LC (2)",
+                                ai.object_type
+                            ));
                         }
                         if ai.sample_rate != 32_000 {
                             p.push(format!("audio rate {} is not 32000", ai.sample_rate));
@@ -125,13 +132,23 @@ fn be16(b: &[u8], o: usize) -> Option<u16> {
     b.get(o..o + 2).map(|s| u16::from_be_bytes([s[0], s[1]]))
 }
 fn be32(b: &[u8], o: usize) -> Option<u32> {
-    b.get(o..o + 4).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
+    b.get(o..o + 4)
+        .map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
 }
 fn be64(b: &[u8], o: usize) -> Option<u64> {
-    b.get(o..o + 8).map(|s| u64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]))
+    b.get(o..o + 8)
+        .map(|s| u64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]))
 }
 fn fourcc(b: &[u8]) -> String {
-    b.iter().map(|&c| if c.is_ascii_graphic() || c == b' ' { c as char } else { '?' }).collect()
+    b.iter()
+        .map(|&c| {
+            if c.is_ascii_graphic() || c == b' ' {
+                c as char
+            } else {
+                '?'
+            }
+        })
+        .collect()
 }
 
 /// Child boxes of a container payload: (type, payload).
@@ -159,7 +176,10 @@ fn children(b: &[u8]) -> Vec<(String, &[u8])> {
 }
 
 fn child<'a>(b: &'a [u8], ty: &str) -> Option<&'a [u8]> {
-    children(b).into_iter().find(|(t, _)| t == ty).map(|(_, p)| p)
+    children(b)
+        .into_iter()
+        .find(|(t, _)| t == ty)
+        .map(|(_, p)| p)
 }
 
 fn descriptor(b: &[u8], o: &mut usize) -> Option<(u8, usize)> {
@@ -180,9 +200,13 @@ fn descriptor(b: &[u8], o: &mut usize) -> Option<(u8, usize)> {
 /// (objectTypeIndication, AudioSpecificConfig object type) from an `esds` payload.
 fn parse_esds(b: &[u8]) -> (Option<u8>, Option<u8>) {
     let mut o = 4; // full box header
-    let Some((3, _)) = descriptor(b, &mut o) else { return (None, None) };
+    let Some((3, _)) = descriptor(b, &mut o) else {
+        return (None, None);
+    };
     o += 2; // ES_ID
-    let Some(&flags) = b.get(o) else { return (None, None) };
+    let Some(&flags) = b.get(o) else {
+        return (None, None);
+    };
     o += 1;
     if flags & 0x80 != 0 {
         o += 2;
@@ -194,7 +218,9 @@ fn parse_esds(b: &[u8]) -> (Option<u8>, Option<u8>) {
     if flags & 0x20 != 0 {
         o += 2;
     }
-    let Some((4, _)) = descriptor(b, &mut o) else { return (None, None) };
+    let Some((4, _)) = descriptor(b, &mut o) else {
+        return (None, None);
+    };
     let oti = b.get(o).copied();
     o += 13;
     let aot = match descriptor(b, &mut o) {
@@ -212,7 +238,9 @@ fn parse_trak(t: &[u8]) -> Option<TrackInfo> {
     } else {
         (be32(mdhd, 12)?, u64::from(be32(mdhd, 16)?))
     };
-    let handler = child(mdia, "hdlr").map(|h| fourcc(h.get(8..12).unwrap_or(b"????"))).unwrap_or_default();
+    let handler = child(mdia, "hdlr")
+        .map(|h| fourcc(h.get(8..12).unwrap_or(b"????")))
+        .unwrap_or_default();
     let kind = match handler.as_str() {
         "vide" => TrackKind::Video,
         "soun" => TrackKind::Audio,
@@ -244,7 +272,12 @@ fn parse_trak(t: &[u8]) -> Option<TrackInfo> {
         if kind == TrackKind::Video {
             // A trailing single-sample entry may carry a different delta.
             let main = deltas.first().copied().unwrap_or(0);
-            if main > 0 && deltas.iter().take(deltas.len().saturating_sub(1).max(1)).all(|&d| d == main) {
+            if main > 0
+                && deltas
+                    .iter()
+                    .take(deltas.len().saturating_sub(1).max(1))
+                    .all(|&d| d == main)
+            {
                 info.fps = Some(f64::from(timescale) / f64::from(main));
             }
         }
@@ -258,16 +291,26 @@ fn parse_trak(t: &[u8]) -> Option<TrackInfo> {
                     info.height = be16(entry, 26).map(u32::from);
                     if let Some(avcc) = child(&entry[78..], "avcC") {
                         if avcc.len() >= 4 {
-                            info.avc = Some(AvcInfo { profile_idc: avcc[1], constraint_flags: avcc[2], level_idc: avcc[3] });
+                            info.avc = Some(AvcInfo {
+                                profile_idc: avcc[1],
+                                constraint_flags: avcc[2],
+                                level_idc: avcc[3],
+                            });
                         }
                     }
                 }
                 TrackKind::Audio if entry.len() >= 28 => {
                     let channels = be16(entry, 16).unwrap_or(0);
                     let sample_rate = be32(entry, 24).unwrap_or(0) >> 16;
-                    let (oti, aot) = child(&entry[28..], "esds").map(parse_esds).unwrap_or((None, None));
-                    info.audio =
-                        Some(AudioInfo { sample_rate, channels, object_type: aot, object_type_indication: oti });
+                    let (oti, aot) = child(&entry[28..], "esds")
+                        .map(parse_esds)
+                        .unwrap_or((None, None));
+                    info.audio = Some(AudioInfo {
+                        sample_rate,
+                        channels,
+                        object_type: aot,
+                        object_type_indication: oti,
+                    });
                 }
                 _ => {}
             }
@@ -297,7 +340,10 @@ pub fn inspect(path: &Path) -> Result<Mp4Info> {
         let size32 = u64::from(u32::from_be_bytes([h[0], h[1], h[2], h[3]]));
         let ty = fourcc(&h[4..8]);
         let (hdr, size) = match size32 {
-            1 if n >= 16 => (16, u64::from_be_bytes([h[8], h[9], h[10], h[11], h[12], h[13], h[14], h[15]])),
+            1 if n >= 16 => (
+                16,
+                u64::from_be_bytes([h[8], h[9], h[10], h[11], h[12], h[13], h[14], h[15]]),
+            ),
             0 => (8, len - pos),
             s => (8, s),
         };
@@ -333,10 +379,26 @@ pub fn inspect(path: &Path) -> Result<Mp4Info> {
                 Some((be32(m, 12)?, u64::from(be32(m, 16)?)))
             }
         })
-        .map(|(ts, d)| if ts == 0 { 0.0 } else { d as f64 / f64::from(ts) })
+        .map(|(ts, d)| {
+            if ts == 0 {
+                0.0
+            } else {
+                d as f64 / f64::from(ts)
+            }
+        })
         .unwrap_or(0.0);
-    let tracks = children(&moov).into_iter().filter(|(t, _)| t == "trak").filter_map(|(_, b)| parse_trak(b)).collect();
-    Ok(Mp4Info { major_brand: brand, top_level: top, faststart, duration_s, tracks })
+    let tracks = children(&moov)
+        .into_iter()
+        .filter(|(t, _)| t == "trak")
+        .filter_map(|(_, b)| parse_trak(b))
+        .collect();
+    Ok(Mp4Info {
+        major_brand: brand,
+        top_level: top,
+        faststart,
+        duration_s,
+        tracks,
+    })
 }
 
 /// A header-only MP4 (`ftyp`, `moov`, an empty `mdat`) with one H.264 video
@@ -345,7 +407,14 @@ pub fn inspect(path: &Path) -> Result<Mp4Info> {
 /// file; nothing can decode it. For tests of ingestion and negotiation that
 /// must not need ffmpeg.
 #[doc(hidden)]
-pub fn header_only_mp4(width: u16, height: u16, timescale: u32, delta: u32, frames: u32, audio_rate: Option<u32>) -> Vec<u8> {
+pub fn header_only_mp4(
+    width: u16,
+    height: u16,
+    timescale: u32,
+    delta: u32,
+    frames: u32,
+    audio_rate: Option<u32>,
+) -> Vec<u8> {
     fn bx(ty: &str, payload: &[u8]) -> Vec<u8> {
         let mut v = ((payload.len() + 8) as u32).to_be_bytes().to_vec();
         v.extend_from_slice(ty.as_bytes());
@@ -357,7 +426,13 @@ pub fn header_only_mp4(width: u16, height: u16, timescale: u32, delta: u32, fram
         v.extend_from_slice(rest);
         v
     }
-    fn trak(handler: &str, timescale: u32, duration: u32, entry: Vec<u8>, stts: &[(u32, u32)]) -> Vec<u8> {
+    fn trak(
+        handler: &str,
+        timescale: u32,
+        duration: u32,
+        entry: Vec<u8>,
+        stts: &[(u32, u32)],
+    ) -> Vec<u8> {
         let mut mdhd = vec![0u8; 8];
         mdhd.extend(timescale.to_be_bytes());
         mdhd.extend(duration.to_be_bytes());
@@ -371,9 +446,15 @@ pub fn header_only_mp4(width: u16, height: u16, timescale: u32, delta: u32, fram
             st.extend(d.to_be_bytes());
         }
         let stsd = full(&[&1u32.to_be_bytes()[..], &entry].concat());
-        let stbl = bx("stbl", &[bx("stsd", &stsd), bx("stts", &full(&st))].concat());
+        let stbl = bx(
+            "stbl",
+            &[bx("stsd", &stsd), bx("stts", &full(&st))].concat(),
+        );
         let minf = bx("minf", &stbl);
-        let mdia = bx("mdia", &[bx("mdhd", &full(&mdhd)), bx("hdlr", &full(&hdlr)), minf].concat());
+        let mdia = bx(
+            "mdia",
+            &[bx("mdhd", &full(&mdhd)), bx("hdlr", &full(&hdlr)), minf].concat(),
+        );
         bx("trak", &mdia)
     }
     let mut v = vec![0u8; 78];
@@ -387,10 +468,19 @@ pub fn header_only_mp4(width: u16, height: u16, timescale: u32, delta: u32, fram
         let mut a = vec![0u8; 28];
         a[16..18].copy_from_slice(&2u16.to_be_bytes());
         a[24..28].copy_from_slice(&(rate << 16).to_be_bytes());
-        let esds = full(&[3, 25, 0, 1, 0, 4, 17, 0x40, 0x15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 2, 0x12, 0x10, 6, 1, 2]);
+        let esds = full(&[
+            3, 25, 0, 1, 0, 4, 17, 0x40, 0x15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 2, 0x12, 0x10,
+            6, 1, 2,
+        ]);
         a.extend(bx("esds", &esds));
         let packets = (secs * f64::from(rate) / 1024.0).ceil() as u32;
-        traks.extend(trak("soun", rate, packets * 1024, bx("mp4a", &a), &[(packets, 1024)]));
+        traks.extend(trak(
+            "soun",
+            rate,
+            packets * 1024,
+            bx("mp4a", &a),
+            &[(packets, 1024)],
+        ));
     }
     let mut mvhd = vec![0u8; 8];
     mvhd.extend(1000u32.to_be_bytes());
@@ -431,9 +521,20 @@ mod tests {
             st.extend(d.to_be_bytes());
         }
         let stsd = full(0, &[&1u32.to_be_bytes()[..], &entry].concat());
-        let stbl = bx("stbl", &[bx("stsd", &stsd), bx("stts", &full(0, &st))].concat());
+        let stbl = bx(
+            "stbl",
+            &[bx("stsd", &stsd), bx("stts", &full(0, &st))].concat(),
+        );
         let minf = bx("minf", &stbl);
-        let mdia = bx("mdia", &[bx("mdhd", &full(0, &mdhd[4..])), bx("hdlr", &full(0, &hdlr[4..])), minf].concat());
+        let mdia = bx(
+            "mdia",
+            &[
+                bx("mdhd", &full(0, &mdhd[4..])),
+                bx("hdlr", &full(0, &hdlr[4..])),
+                minf,
+            ]
+            .concat(),
+        );
         bx("trak", &mdia)
     }
 
@@ -448,7 +549,13 @@ mod tests {
         let mut a = vec![0u8; 28];
         a[16..18].copy_from_slice(&2u16.to_be_bytes());
         a[24..28].copy_from_slice(&(32_000u32 << 16).to_be_bytes());
-        let esds = full(0, &[3, 25, 0, 1, 0, 4, 17, 0x40, 0x15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 2, 0x12, 0x90, 6, 1, 2]);
+        let esds = full(
+            0,
+            &[
+                3, 25, 0, 1, 0, 4, 17, 0x40, 0x15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 2, 0x12,
+                0x90, 6, 1, 2,
+            ],
+        );
         a.extend(bx("esds", &esds));
         let mp4a = bx("mp4a", &a);
         let mut mvhd = vec![0u8; 12];
@@ -465,7 +572,11 @@ mod tests {
         );
         let ftyp = bx("ftyp", b"isom\0\0\x02\0isomiso2avc1mp41");
         let mdat = bx("mdat", &[0u8; 64]);
-        if faststart { [ftyp, moov, mdat].concat() } else { [ftyp, mdat, moov].concat() }
+        if faststart {
+            [ftyp, moov, mdat].concat()
+        } else {
+            [ftyp, mdat, moov].concat()
+        }
     }
 
     #[test]
@@ -479,13 +590,31 @@ mod tests {
         assert_eq!(i.major_brand, "isom");
         assert!((i.duration_s - 5.167).abs() < 1e-9);
         let v = i.video().unwrap();
-        assert_eq!((v.codec.as_str(), v.width, v.height, v.samples), ("avc1", Some(1344), Some(768), 124));
+        assert_eq!(
+            (v.codec.as_str(), v.width, v.height, v.samples),
+            ("avc1", Some(1344), Some(768), 124)
+        );
         assert_eq!(v.fps, Some(24.0));
-        assert_eq!(v.avc, Some(AvcInfo { profile_idc: 66, constraint_flags: 0xc0, level_idc: 32 }));
+        assert_eq!(
+            v.avc,
+            Some(AvcInfo {
+                profile_idc: 66,
+                constraint_flags: 0xc0,
+                level_idc: 32
+            })
+        );
         let a = i.audio().unwrap();
         assert_eq!(a.codec, "mp4a");
         let ai = a.audio.as_ref().unwrap();
-        assert_eq!((ai.sample_rate, ai.channels, ai.object_type, ai.object_type_indication), (32_000, 2, Some(2), Some(0x40)));
+        assert_eq!(
+            (
+                ai.sample_rate,
+                ai.channels,
+                ai.object_type,
+                ai.object_type_indication
+            ),
+            (32_000, 2, Some(2), Some(0x40))
+        );
         assert!(i.fal_h3_problems().is_empty(), "{:?}", i.fal_h3_problems());
     }
 
@@ -511,12 +640,22 @@ mod tests {
     fn header_only_files_read_back() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("h.mp4");
-        std::fs::write(&p, header_only_mp4(768, 512, 24_000, 1000, 121, Some(44_100))).unwrap();
+        std::fs::write(
+            &p,
+            header_only_mp4(768, 512, 24_000, 1000, 121, Some(44_100)),
+        )
+        .unwrap();
         let i = inspect(&p).unwrap();
         let v = i.video().unwrap();
-        assert_eq!((v.width, v.height, v.samples, v.fps), (Some(768), Some(512), 121, Some(24.0)));
+        assert_eq!(
+            (v.width, v.height, v.samples, v.fps),
+            (Some(768), Some(512), 121, Some(24.0))
+        );
         assert!((v.duration_s() - 121.0 / 24.0).abs() < 1e-9);
-        assert_eq!(i.audio().unwrap().audio.as_ref().unwrap().sample_rate, 44_100);
+        assert_eq!(
+            i.audio().unwrap().audio.as_ref().unwrap().sample_rate,
+            44_100
+        );
         std::fs::write(&p, header_only_mp4(640, 360, 30_000, 1001, 90, None)).unwrap();
         let i = inspect(&p).unwrap();
         assert!((i.video().unwrap().fps.unwrap() - 29.97).abs() < 1e-2);

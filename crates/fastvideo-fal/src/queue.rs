@@ -54,8 +54,14 @@ pub fn app_of(job: &Job) -> &str {
 /// `(response_url, status_url, cancel_url)`: app-only, no `/response`
 /// suffix (fal §9.1 recommendation).
 pub fn request_urls(app: &str, request_id: &str, cx: &ViewCtx) -> (String, String, String) {
-    let base = cx.public_url(&format!("{app}/requests/{request_id}")).to_string();
-    (base.clone(), format!("{base}/status"), format!("{base}/cancel"))
+    let base = cx
+        .public_url(&format!("{app}/requests/{request_id}"))
+        .to_string();
+    (
+        base.clone(),
+        format!("{base}/status"),
+        format!("{base}/cancel"),
+    )
 }
 
 /// A timestamp as fal writes it: `2026-02-17T10:30:01.123Z`.
@@ -209,9 +215,14 @@ pub fn timings(job: &Job) -> Option<serde_json::Map<String, Value>> {
         return None;
     }
     if let Some(start) = job.started_at {
-        m.entry("queue").or_insert_with(|| secs(start - job.created_at));
-        if let Some(d) = job.dispatched_at.filter(|d| *d >= job.created_at && *d <= start) {
-            m.entry("dispatch").or_insert_with(|| secs(d - job.created_at));
+        m.entry("queue")
+            .or_insert_with(|| secs(start - job.created_at));
+        if let Some(d) = job
+            .dispatched_at
+            .filter(|d| *d >= job.created_at && *d <= start)
+        {
+            m.entry("dispatch")
+                .or_insert_with(|| secs(d - job.created_at));
             m.entry("wait").or_insert_with(|| secs(start - d));
         }
         if let Some(end) = job.completed_at {
@@ -244,13 +255,16 @@ pub struct FalView {
 
 impl Default for FalView {
     fn default() -> Self {
-        Self { url_ttl: Duration::from_secs(24 * 3600) }
+        Self {
+            url_ttl: Duration::from_secs(24 * 3600),
+        }
     }
 }
 
 impl JobView for FalView {
     fn status_reply(&self, job: &Job, cx: &ViewCtx) -> HttpReply {
-        HttpReply::json(200, status_json(job, cx)).with_header("x-fal-request-id", job.external_id.clone())
+        HttpReply::json(200, status_json(job, cx))
+            .with_header("x-fal-request-id", job.external_id.clone())
     }
 
     /// Succeeded: 200 bare output. Queued/running: 400
@@ -259,17 +273,27 @@ impl JobView for FalView {
     /// `client_cancelled`.
     fn result_reply(&self, job: &Job, cx: &ViewCtx) -> HttpReply {
         let rid = job.external_id.clone();
-        let ecx = ErrorCtx { request_id: Some(rid.clone()), route: None, external_id: Some(rid.clone()) };
+        let ecx = ErrorCtx {
+            request_id: Some(rid.clone()),
+            route: None,
+            external_id: Some(rid.clone()),
+        };
         let mut r = match &job.state {
-            JobState::Queued | JobState::Running => HttpReply::json(400, json!({"detail": "Request is still in progress"}))
-                .with_header("x-fal-error-type", "bad_request")
-                .with_header("x-fal-request-id", rid),
+            JobState::Queued | JobState::Running => {
+                HttpReply::json(400, json!({"detail": "Request is still in progress"}))
+                    .with_header("x-fal-error-type", "bad_request")
+                    .with_header("x-fal-request-id", rid)
+            }
             JobState::Succeeded => match output_json(job, cx, self.url_ttl) {
                 Some(v) => HttpReply::json(200, v).with_header("x-fal-request-id", rid),
-                None => FalProtocol.render_error(&ApiError::internal("the job has no output"), &ecx),
+                None => {
+                    FalProtocol.render_error(&ApiError::internal("the job has no output"), &ecx)
+                }
             },
             JobState::Failed(e) => FalProtocol.render_error(e, &ecx),
-            JobState::Cancelled => FalProtocol.render_error(&ApiError::cancelled("Request was cancelled"), &ecx),
+            JobState::Cancelled => {
+                FalProtocol.render_error(&ApiError::cancelled("Request was cancelled"), &ecx)
+            }
         };
         meta_headers(job, &mut r);
         r
@@ -301,12 +325,18 @@ pub async fn inline_video(mut reply: HttpReply, job: &Job, max_bytes: u64) -> Ht
     if reply.status != 200 || !wants_inline(job) {
         return reply;
     }
-    let Some(a) = job.artifacts.first() else { return reply };
-    let ArtifactLocation::Local(path) = &a.location else { return reply };
+    let Some(a) = job.artifacts.first() else {
+        return reply;
+    };
+    let ArtifactLocation::Local(path) = &a.location else {
+        return reply;
+    };
     if a.bytes > max_bytes {
         return reply;
     }
-    let Ok(bytes) = tokio::fs::read(path).await else { return reply };
+    let Ok(bytes) = tokio::fs::read(path).await else {
+        return reply;
+    };
     if let ReplyBody::Json(v) = &mut reply.body {
         let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
         v["video"]["url"] = format!("data:{};base64,{b64}", a.mime).into();
@@ -333,7 +363,8 @@ impl FalEndpoint {
 impl SubmitEndpoint for FalEndpoint {
     type Body = Value;
     fn normalize(&self, body: Value, cx: &NormalizeCtx) -> Result<GenerationRequest, ApiError> {
-        FalInput::parse_for(self.app.kind(), self.endpoint, &body)?.normalize(&self.app.target(self.endpoint).0, cx)
+        FalInput::parse_for(self.app.kind(), self.endpoint, &body)?
+            .normalize(&self.app.target(self.endpoint).0, cx)
     }
     /// HTTP 200 `{request_id, response_url, status_url, cancel_url,
     /// queue_position}` with app-only URLs (design §4.4), plus
@@ -363,20 +394,33 @@ async fn queued_for(ctx: &ServeCtx, app: &str) -> usize {
         limit: usize::MAX,
         ..Default::default()
     };
-    ctx.jobs().list(q).await.items.iter().filter(|j| app_of(j) == app).count()
+    ctx.jobs()
+        .list(q)
+        .await
+        .items
+        .iter()
+        .filter(|j| app_of(j) == app)
+        .count()
 }
 
 /// Resolves an endpoint's model: its name (the app's model, or the LTX /
 /// Wan endpoint's tier alias) through the engine's aliases and served
 /// names, else its tier (design §0.3).
-pub(crate) fn resolve_app_model(ctx: &ServeCtx, app: &FalApp, endpoint: Endpoint) -> Result<String, ApiError> {
+pub(crate) fn resolve_app_model(
+    ctx: &ServeCtx,
+    app: &FalApp,
+    endpoint: Endpoint,
+) -> Result<String, ApiError> {
     let (name, tier) = app.target(endpoint);
     let models = ctx.engine().models();
     let engine = ctx.engine().clone();
-    let by_name = fastvideo_protocol::resolve_model(&name, |n| engine.alias(n), &models).map(|c| c.id.0.clone());
+    let by_name = fastvideo_protocol::resolve_model(&name, |n| engine.alias(n), &models)
+        .map(|c| c.id.0.clone());
     by_name
         .or_else(|e| match tier {
-            Some((family, tier)) => fastvideo_protocol::resolve_tier(family, tier, &models).map(|c| c.id.0.clone()),
+            Some((family, tier)) => {
+                fastvideo_protocol::resolve_tier(family, tier, &models).map(|c| c.id.0.clone())
+            }
             None => Err(e),
         })
         .map_err(|_| match endpoint.target() {
@@ -403,7 +447,8 @@ pub(crate) async fn submit_job(
     let mut echo: Value = if body.is_empty() {
         Value::Object(Default::default())
     } else {
-        serde_json::from_slice(body).map_err(|e| ApiError::invalid(format!("JSON decode error: {e}")))?
+        serde_json::from_slice(body)
+            .map_err(|e| ApiError::invalid(format!("JSON decode error: {e}")))?
     };
     let mut ncx = NormalizeCtx::new(ctx.now());
     ncx.owner = owner.clone();
@@ -414,10 +459,12 @@ pub(crate) async fn submit_job(
         .collect();
     let mut req = ep.normalize(echo.clone(), &ncx)?;
     if let Some(max) = ncx.query_param("fal_max_queue_length") {
-        let max: usize = max
-            .trim()
-            .parse()
-            .map_err(|_| ApiError::invalid_param("fal_max_queue_length", "fal_max_queue_length must be a non-negative integer"))?;
+        let max: usize = max.trim().parse().map_err(|_| {
+            ApiError::invalid_param(
+                "fal_max_queue_length",
+                "fal_max_queue_length must be a non-negative integer",
+            )
+        })?;
         // "Reject the request with 429 if the endpoint's queue already has
         // more than this many requests waiting" (D-HDR).
         let waiting = queued_for(ctx, &ep.app.id).await;
@@ -432,7 +479,12 @@ pub(crate) async fn submit_job(
     // The H3 schema's omitted `resolution` (768P) follows the model's tiers;
     // the LTX and Wan schemas have their own defaults.
     if echo.get("resolution").is_none() && ep.endpoint.target().is_none() {
-        if let Some(caps) = ctx.engine().models().into_iter().find(|m| m.id.0 == req.model) {
+        if let Some(caps) = ctx
+            .engine()
+            .models()
+            .into_iter()
+            .find(|m| m.id.0 == req.model)
+        {
             crate::schema::default_resolution_for(&mut req, &caps.canvas.short_edges);
         }
     }
@@ -466,7 +518,11 @@ pub(crate) async fn submit_handler(
     let reply = match submit_job(&ctx, &cfg, &ep, query, &headers, &body).await {
         Ok(job) => ep.submit_reply(&job, &ctx.view_ctx(false)),
         Err(e) => {
-            let ecx = ErrorCtx { request_id: Some(fresh_request_id()), route: Some(format!("/{}", ep.endpoint_id())), external_id: None };
+            let ecx = ErrorCtx {
+                request_id: Some(fresh_request_id()),
+                route: Some(format!("/{}", ep.endpoint_id())),
+                external_id: None,
+            };
             error_reply(&FalProtocol, &e, &ecx)
         }
     };
@@ -476,8 +532,17 @@ pub(crate) async fn submit_handler(
 // ---------------------------------------------------------------- lookups
 
 /// Auth, then the job by request id under `app`; errors are ready replies.
-pub(crate) async fn lookup(ctx: &ServeCtx, app: &str, id: &str, headers: &HeaderMap) -> Result<Job, HttpReply> {
-    let ecx = ErrorCtx { request_id: None, route: None, external_id: Some(id.to_owned()) };
+pub(crate) async fn lookup(
+    ctx: &ServeCtx,
+    app: &str,
+    id: &str,
+    headers: &HeaderMap,
+) -> Result<Job, HttpReply> {
+    let ecx = ErrorCtx {
+        request_id: None,
+        route: None,
+        external_id: Some(id.to_owned()),
+    };
     let owner = ctx
         .auth()
         .authenticate(ProtocolId::Fal, headers)
@@ -516,14 +581,23 @@ pub(crate) async fn request_handler(
     query: Vec<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
-    let view = Arc::new(FalView { url_ttl: cfg.url_ttl });
+    let view = Arc::new(FalView {
+        url_ttl: cfg.url_ttl,
+    });
     let job = match lookup(&ctx, &app, &id, &headers).await {
         Ok(j) => j,
         Err(r) => return into_response(r, &ctx, None).await,
     };
     let with_logs = logs_param(&query);
     match op {
-        Op::Status => into_response(view.status_reply(&job, &ctx.view_ctx(with_logs)), &ctx, None).await,
+        Op::Status => {
+            into_response(
+                view.status_reply(&job, &ctx.view_ctx(with_logs)),
+                &ctx,
+                None,
+            )
+            .await
+        }
         Op::Result => {
             let r = view.result_reply(&job, &ctx.view_ctx(false));
             let r = inline_video(r, &job, cfg.inline_max_bytes).await;
@@ -537,11 +611,19 @@ pub(crate) async fn request_handler(
             };
             let spec = SseSpec {
                 initial: vec![SseEvent::data(data)],
-                follow: (!job.is_terminal()).then_some(SseFollow::JobStatus { job: job.id, close_on_terminal: true, with_logs }),
+                follow: (!job.is_terminal()).then_some(SseFollow::JobStatus {
+                    job: job.id,
+                    close_on_terminal: true,
+                    with_logs,
+                }),
                 keepalive: Some(Duration::from_secs(15)),
             };
-            let reply = HttpReply::sse(spec).with_header("x-fal-request-id", job.external_id.clone());
-            let v: Arc<dyn JobView> = Arc::new(LogsView { inner: view, with_logs });
+            let reply =
+                HttpReply::sse(spec).with_header("x-fal-request-id", job.external_id.clone());
+            let v: Arc<dyn JobView> = Arc::new(LogsView {
+                inner: view,
+                with_logs,
+            });
             into_response(reply, &ctx, Some(v)).await
         }
         Op::Cancel => {
@@ -550,13 +632,18 @@ pub(crate) async fn request_handler(
                 already_completed(&rid)
             } else {
                 match cancel_job(&ctx, job.id).await {
-                    Ok(_) => HttpReply::json(202, json!({"status": "CANCELLATION_REQUESTED"})).with_header("x-fal-request-id", rid),
+                    Ok(_) => HttpReply::json(202, json!({"status": "CANCELLATION_REQUESTED"}))
+                        .with_header("x-fal-request-id", rid),
                     Err(e) if e.kind == ErrorKind::AlreadyCompleted => already_completed(&rid),
                     Err(e) if e.kind == ErrorKind::NotFound => not_found_request(Some(&rid)),
                     Err(e) => error_reply(
                         &FalProtocol,
                         &e,
-                        &ErrorCtx { request_id: Some(rid.clone()), route: None, external_id: Some(rid) },
+                        &ErrorCtx {
+                            request_id: Some(rid.clone()),
+                            route: None,
+                            external_id: Some(rid),
+                        },
                     ),
                 }
             };
@@ -580,34 +667,61 @@ pub(crate) fn app_routes(
     use axum::routing::{get, post, put};
     let body_max = cfg.body_max;
     for &endpoint in app.endpoints() {
-        let ep = Arc::new(FalEndpoint { app: app.clone(), endpoint });
+        let ep = Arc::new(FalEndpoint {
+            app: app.clone(),
+            endpoint,
+        });
         let path = format!("/{}", ep.endpoint_id());
         let (c, e) = (cfg.clone(), ep.clone());
         router = router.route(
             &path,
-            post(move |State(ctx): State<ServeCtx>, Query(q): Query<Vec<(String, String)>>, headers: HeaderMap, body: Bytes| {
-                submit_handler(ctx, c.clone(), e.clone(), q, headers, body)
-            })
+            post(
+                move |State(ctx): State<ServeCtx>,
+                      Query(q): Query<Vec<(String, String)>>,
+                      headers: HeaderMap,
+                      body: Bytes| {
+                    submit_handler(ctx, c.clone(), e.clone(), q, headers, body)
+                },
+            )
             .layer(axum::extract::DefaultBodyLimit::max(body_max)),
         );
     }
     let app_id: Arc<str> = Arc::from(app.id.as_str());
     let prefixes: Vec<String> = std::iter::once(format!("/{}", app.id))
-        .chain(app.endpoints().iter().map(|e| format!("/{}/{}", app.id, e.sub())))
+        .chain(
+            app.endpoints()
+                .iter()
+                .map(|e| format!("/{}/{}", app.id, e.sub())),
+        )
         .collect();
     for prefix in prefixes {
         let mk = |op: Op| {
             let (c, a) = (cfg.clone(), app_id.clone());
-            move |State(ctx): State<ServeCtx>, UrlPath(id): UrlPath<String>, Query(q): Query<Vec<(String, String)>>, headers: HeaderMap| {
+            move |State(ctx): State<ServeCtx>,
+                  UrlPath(id): UrlPath<String>,
+                  Query(q): Query<Vec<(String, String)>>,
+                  headers: HeaderMap| {
                 request_handler(ctx, c.clone(), a.clone(), op, id, q, headers)
             }
         };
         router = router
             .route(&format!("{prefix}/requests/{{id}}"), get(mk(Op::Result)))
-            .route(&format!("{prefix}/requests/{{id}}/response"), get(mk(Op::Result)))
-            .route(&format!("{prefix}/requests/{{id}}/status"), get(mk(Op::Status)))
-            .route(&format!("{prefix}/requests/{{id}}/status/stream"), get(mk(Op::Stream)))
-            .route(&format!("{prefix}/requests/{{id}}/cancel"), put(mk(Op::Cancel)));
+            .route(
+                &format!("{prefix}/requests/{{id}}/response"),
+                get(mk(Op::Result)),
+            )
+            .route(
+                &format!("{prefix}/requests/{{id}}/status"),
+                get(mk(Op::Status)),
+            )
+            .route(
+                &format!("{prefix}/requests/{{id}}/status/stream"),
+                get(mk(Op::Stream)),
+            )
+            .route(
+                &format!("{prefix}/requests/{{id}}/cancel"),
+                put(mk(Op::Cancel)),
+            );
     }
     router
 }

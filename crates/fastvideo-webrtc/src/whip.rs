@@ -299,7 +299,11 @@ mod client {
                 } else {
                     // reqwest's message names the URL, whose path can hold
                     // the publish key (Cloudflare): drop it.
-                    WebrtcError::Whip(format!("POST {}: {}", redact(&self.cfg.url), e.without_url()))
+                    WebrtcError::Whip(format!(
+                        "POST {}: {}",
+                        redact(&self.cfg.url),
+                        e.without_url()
+                    ))
                 }
             })?;
             let status = resp.status().as_u16();
@@ -322,7 +326,9 @@ mod client {
                 .auth(self.http.delete(resource.clone()))
                 .send()
                 .await
-                .map_err(|e| WebrtcError::Whip(format!("DELETE {}: {}", redact(resource), e.without_url())))?;
+                .map_err(|e| {
+                    WebrtcError::Whip(format!("DELETE {}: {}", redact(resource), e.without_url()))
+                })?;
             Ok(resp.status().as_u16())
         }
     }

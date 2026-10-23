@@ -33,7 +33,8 @@ pub const CLIP_COMMANDS: [&str; 12] = [
 ];
 
 /// The causal command set (Waypoint-style `InputState` setters, design §5.7).
-pub const CAUSAL_COMMANDS: [&str; 5] = ["get_state", "reset", "set_paused", "set_prompt", "set_seed"];
+pub const CAUSAL_COMMANDS: [&str; 5] =
+    ["get_state", "reset", "set_paused", "set_prompt", "set_seed"];
 
 /// The clip commands the session accepts in this state, sorted.
 ///
@@ -127,7 +128,10 @@ mod tests {
 
     #[test]
     fn every_valid_command_is_a_clip_command() {
-        for s in [valid_commands(true, 3, 20, 2), valid_commands(false, 0, 20, 0)] {
+        for s in [
+            valid_commands(true, 3, 20, 2),
+            valid_commands(false, 0, 20, 0),
+        ] {
             for c in s {
                 assert!(CLIP_COMMANDS.contains(&c));
             }

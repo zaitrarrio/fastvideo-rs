@@ -67,11 +67,25 @@ impl ClipAttn {
     fn forward(&self, xs: &CudaTensor, mask: &CudaTensor) -> Result<CudaTensor> {
         let b = xs.shape[0];
         let s = xs.shape[1];
-        let q = self.q.forward(xs)?.reshape(vec![b, s, self.heads, self.dim_head])?.transpose(1, 2)?;
-        let k = self.k.forward(xs)?.reshape(vec![b, s, self.heads, self.dim_head])?.transpose(1, 2)?;
-        let v = self.v.forward(xs)?.reshape(vec![b, s, self.heads, self.dim_head])?.transpose(1, 2)?;
+        let q = self
+            .q
+            .forward(xs)?
+            .reshape(vec![b, s, self.heads, self.dim_head])?
+            .transpose(1, 2)?;
+        let k = self
+            .k
+            .forward(xs)?
+            .reshape(vec![b, s, self.heads, self.dim_head])?
+            .transpose(1, 2)?;
+        let v = self
+            .v
+            .forward(xs)?
+            .reshape(vec![b, s, self.heads, self.dim_head])?
+            .transpose(1, 2)?;
         let attn = nn::scaled_dot_product_attention_masked(&q, &k, &v, None, Some(mask))?;
-        let attn = attn.transpose(1, 2)?.reshape(vec![b, s, self.heads * self.dim_head])?;
+        let attn = attn
+            .transpose(1, 2)?
+            .reshape(vec![b, s, self.heads * self.dim_head])?;
         self.out.forward(&attn)
     }
 }
@@ -105,12 +119,37 @@ impl ClipLayer {
     fn load(map: &WeightMap, prefix: &str, cfg: &ClipTextConfig) -> Result<Self> {
         let dim = cfg.hidden_size;
         Ok(Self {
-            attn: ClipAttn::load(map, &format!("{prefix}.self_attn"), dim, cfg.num_attention_heads)?,
-            ln1_w: weights::cuda_tensor_shaped(map, &format!("{prefix}.layer_norm1.weight"), &[dim])?,
+            attn: ClipAttn::load(
+                map,
+                &format!("{prefix}.self_attn"),
+                dim,
+                cfg.num_attention_heads,
+            )?,
+            ln1_w: weights::cuda_tensor_shaped(
+                map,
+                &format!("{prefix}.layer_norm1.weight"),
+                &[dim],
+            )?,
             ln1_b: weights::cuda_tensor_shaped(map, &format!("{prefix}.layer_norm1.bias"), &[dim])?,
-            fc1: Linear::load(map, &format!("{prefix}.mlp.fc1"), dim, cfg.intermediate_size, true)?,
-            fc2: Linear::load(map, &format!("{prefix}.mlp.fc2"), cfg.intermediate_size, dim, true)?,
-            ln2_w: weights::cuda_tensor_shaped(map, &format!("{prefix}.layer_norm2.weight"), &[dim])?,
+            fc1: Linear::load(
+                map,
+                &format!("{prefix}.mlp.fc1"),
+                dim,
+                cfg.intermediate_size,
+                true,
+            )?,
+            fc2: Linear::load(
+                map,
+                &format!("{prefix}.mlp.fc2"),
+                cfg.intermediate_size,
+                dim,
+                true,
+            )?,
+            ln2_w: weights::cuda_tensor_shaped(
+                map,
+                &format!("{prefix}.layer_norm2.weight"),
+                &[dim],
+            )?,
             ln2_b: weights::cuda_tensor_shaped(map, &format!("{prefix}.layer_norm2.bias"), &[dim])?,
             eps: cfg.layer_norm_eps as f32,
         })
@@ -136,7 +175,9 @@ pub struct ClipTextEncoder {
 impl ClipTextEncoder {
     pub fn zeros(cfg: ClipTextConfig) -> Self {
         let dim = cfg.hidden_size;
-        let layers = (0..cfg.num_hidden_layers).map(|_| ClipLayer::zeros(&cfg)).collect();
+        let layers = (0..cfg.num_hidden_layers)
+            .map(|_| ClipLayer::zeros(&cfg))
+            .collect();
         Self {
             token_emb: CudaTensor::zeros(&[cfg.vocab_size, dim]),
             pos_emb: CudaTensor::zeros(&[cfg.max_position_embeddings, dim]),
@@ -184,8 +225,16 @@ impl ClipTextEncoder {
                 &pe,
                 &[cfg.max_position_embeddings, cfg.hidden_size],
             )?,
-            final_ln_w: weights::cuda_tensor_shaped(map, &format!("{fln}.weight"), &[cfg.hidden_size])?,
-            final_ln_b: weights::cuda_tensor_shaped(map, &format!("{fln}.bias"), &[cfg.hidden_size])?,
+            final_ln_w: weights::cuda_tensor_shaped(
+                map,
+                &format!("{fln}.weight"),
+                &[cfg.hidden_size],
+            )?,
+            final_ln_b: weights::cuda_tensor_shaped(
+                map,
+                &format!("{fln}.bias"),
+                &[cfg.hidden_size],
+            )?,
             layers,
             cfg,
         })
@@ -209,7 +258,11 @@ impl ClipTextEncoder {
         for layer in &self.layers {
             x = layer.forward(&x, &mask)?;
         }
-        x = x.layer_norm(self.cfg.layer_norm_eps as f32, Some(&self.final_ln_w), Some(&self.final_ln_b))?;
+        x = x.layer_norm(
+            self.cfg.layer_norm_eps as f32,
+            Some(&self.final_ln_w),
+            Some(&self.final_ln_b),
+        )?;
         let eos = ids
             .iter()
             .enumerate()
@@ -258,13 +311,28 @@ impl T5Attn {
     fn forward(&self, xs: &CudaTensor, bias: &CudaTensor) -> Result<CudaTensor> {
         let b = xs.shape[0];
         let s = xs.shape[1];
-        let q = self.q.forward(xs)?.reshape(vec![b, s, self.n_heads, self.d_kv])?.transpose(1, 2)?;
-        let k = self.k.forward(xs)?.reshape(vec![b, s, self.n_heads, self.d_kv])?.transpose(1, 2)?;
-        let v = self.v.forward(xs)?.reshape(vec![b, s, self.n_heads, self.d_kv])?.transpose(1, 2)?;
+        let q = self
+            .q
+            .forward(xs)?
+            .reshape(vec![b, s, self.n_heads, self.d_kv])?
+            .transpose(1, 2)?;
+        let k = self
+            .k
+            .forward(xs)?
+            .reshape(vec![b, s, self.n_heads, self.d_kv])?
+            .transpose(1, 2)?;
+        let v = self
+            .v
+            .forward(xs)?
+            .reshape(vec![b, s, self.n_heads, self.d_kv])?
+            .transpose(1, 2)?;
         let scores = q.matmul(&k.transpose(2, 3)?)?;
         let scores = scores.add(bias)?;
         let attn = scores.softmax(-1)?;
-        let ctx = attn.matmul(&v)?.transpose(1, 2)?.reshape(vec![b, s, self.n_heads * self.d_kv])?;
+        let ctx =
+            attn.matmul(&v)?
+                .transpose(1, 2)?
+                .reshape(vec![b, s, self.n_heads * self.d_kv])?;
         self.o.forward(&ctx)
     }
 }
@@ -318,8 +386,16 @@ impl T5Layer {
                 d,
                 false,
             )?,
-            ln1: weights::cuda_tensor_shaped(map, &format!("{prefix}.layer.0.layer_norm.weight"), &[d])?,
-            ln2: weights::cuda_tensor_shaped(map, &format!("{prefix}.layer.1.layer_norm.weight"), &[d])?,
+            ln1: weights::cuda_tensor_shaped(
+                map,
+                &format!("{prefix}.layer.0.layer_norm.weight"),
+                &[d],
+            )?,
+            ln2: weights::cuda_tensor_shaped(
+                map,
+                &format!("{prefix}.layer.1.layer_norm.weight"),
+                &[d],
+            )?,
             eps: cfg.inner.eps as f32,
         })
     }
@@ -345,10 +421,15 @@ pub struct T5Encoder {
 impl T5Encoder {
     pub fn zeros(cfg: T5Config) -> Self {
         let d = cfg.inner.d_model;
-        let layers = (0..cfg.inner.num_layers).map(|_| T5Layer::zeros(&cfg)).collect();
+        let layers = (0..cfg.inner.num_layers)
+            .map(|_| T5Layer::zeros(&cfg))
+            .collect();
         Self {
             embed: CudaTensor::zeros(&[cfg.inner.vocab_size, d]),
-            relative_bias: CudaTensor::zeros(&[cfg.inner.relative_attention_num_buckets, cfg.inner.num_heads]),
+            relative_bias: CudaTensor::zeros(&[
+                cfg.inner.relative_attention_num_buckets,
+                cfg.inner.num_heads,
+            ]),
             final_ln: CudaTensor::from_vec(vec![1.0; d], vec![d]).expect("ln"),
             layers,
             cfg,
@@ -359,12 +440,19 @@ impl T5Encoder {
         let d = cfg.inner.d_model;
         let embed = weights::cuda_tensor_shaped(map, "shared.weight", &[cfg.inner.vocab_size, d])
             .or_else(|_| {
-                weights::cuda_tensor_shaped(map, "encoder.embed_tokens.weight", &[cfg.inner.vocab_size, d])
-            })?;
+            weights::cuda_tensor_shaped(
+                map,
+                "encoder.embed_tokens.weight",
+                &[cfg.inner.vocab_size, d],
+            )
+        })?;
         let relative_bias = weights::cuda_tensor_shaped(
             map,
             "encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight",
-            &[cfg.inner.relative_attention_num_buckets, cfg.inner.num_heads],
+            &[
+                cfg.inner.relative_attention_num_buckets,
+                cfg.inner.num_heads,
+            ],
         )?;
         let mut layers = Vec::with_capacity(cfg.inner.num_layers);
         for i in 0..cfg.inner.num_layers {
@@ -473,7 +561,12 @@ impl Flux1TextEncoder {
         }
     }
 
-    pub fn load(root: &std::path::Path, joint: usize, pooled: usize, t5_max: usize) -> Result<Self> {
+    pub fn load(
+        root: &std::path::Path,
+        joint: usize,
+        pooled: usize,
+        t5_max: usize,
+    ) -> Result<Self> {
         if dummy_text() {
             return Ok(Self::dummy(joint, pooled));
         }
@@ -536,7 +629,10 @@ fn dummy_encode(
     }
     let mut pool = vec![0.0f32; pooled];
     for (i, v) in pool.iter_mut().enumerate() {
-        let id = clip_ids.get(i % clip_ids.len().max(1)).copied().unwrap_or(0) as f32;
+        let id = clip_ids
+            .get(i % clip_ids.len().max(1))
+            .copied()
+            .unwrap_or(0) as f32;
         *v = ((id * 0.01) + (i as f32) * 0.001) % 1.0;
     }
     Ok((

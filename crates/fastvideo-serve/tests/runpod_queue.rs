@@ -19,7 +19,11 @@ use tower::ServiceExt;
 const KEY: &str = "sk-test-queue";
 
 fn config(forward: bool) -> Config {
-    let dir = tempfile::Builder::new().prefix("fv-serve-queue-").tempdir().unwrap().keep();
+    let dir = tempfile::Builder::new()
+        .prefix("fv-serve-queue-")
+        .tempdir()
+        .unwrap()
+        .keep();
     let mut env = BTreeMap::new();
     env.insert("FV_API_KEYS".to_owned(), KeyRing::hash_hex(KEY));
     env.insert("FV_STATE_DIR".to_owned(), dir.display().to_string());
@@ -38,24 +42,35 @@ fn config(forward: bool) -> Config {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn queue_worker_runs_native_jobs_on_the_fake_engine() {
-    let app = App::build(config(false), Overrides::default()).await.unwrap();
+    let app = App::build(config(false), Overrides::default())
+        .await
+        .unwrap();
     app.gate.engine().wait_ready().await;
     let sim = Sim::new("rk").with_long_poll(Duration::from_millis(20));
-    let vars: BTreeMap<String, String> = sim.env("http://sim.local", "w1", 100).into_iter().collect();
+    let vars: BTreeMap<String, String> =
+        sim.env("http://sim.local", "w1", 100).into_iter().collect();
     let env = RunpodEnv::from_lookup(|k| vars.get(k).cloned()).unwrap();
     let ready = std::sync::Arc::new(std::sync::OnceLock::new());
     let h = handler(&app, Boot::now(), ready);
-    let opts = WorkerOptions { idle_backoff: Duration::from_millis(5), ..WorkerOptions::default() };
+    let opts = WorkerOptions {
+        idle_backoff: Duration::from_millis(5),
+        ..WorkerOptions::default()
+    };
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-    let w = tokio::spawn(Worker::new(env, RouterTransport(sim.router()), h, opts).run(async move {
-        let _ = rx.await;
-    }));
+    let w = tokio::spawn(
+        Worker::new(env, RouterTransport(sim.router()), h, opts).run(async move {
+            let _ = rx.await;
+        }),
+    );
     let auth = json!({"authorization": format!("Bearer {KEY}")});
 
-    let caps = sim.submit(json!({"kind": "http", "method": "GET", "path": "/fv/v1/capabilities", "headers": auth}));
+    let caps = sim.submit(
+        json!({"kind": "http", "method": "GET", "path": "/fv/v1/capabilities", "headers": auth}),
+    );
     let job = sim.submit(json!({"kind": "http", "method": "POST", "path": "/fv/v1/jobs", "headers": auth,
         "body": {"model": "fake-wan", "prompt": "a red fox in fresh snow", "seed": 1}, "wait": true}));
-    let unauth = sim.submit(json!({"kind": "http", "method": "GET", "path": "/fv/v1/capabilities"}));
+    let unauth =
+        sim.submit(json!({"kind": "http", "method": "GET", "path": "/fv/v1/capabilities"}));
     let info = sim.submit(json!({"kind": "info"}));
     let stream = sim.submit(json!({"kind": "stream", "model": "fake-sfwan", "prompt": "p", "whip_url": "https://whip.example/x"}));
 
@@ -71,7 +86,10 @@ async fn queue_worker_runs_native_jobs_on_the_fake_engine() {
     let out = j.output.unwrap();
     assert_eq!(out["status"], 200, "{out}");
     assert_eq!(out["body"]["status"], "succeeded", "{out}");
-    assert!(out["poll_path"].as_str().unwrap().starts_with("/fv/v1/jobs/"));
+    assert!(out["poll_path"]
+        .as_str()
+        .unwrap()
+        .starts_with("/fv/v1/jobs/"));
     assert!(!j.progress.is_empty());
 
     let u = sim.wait_terminal(&unauth, t).await.unwrap();
@@ -81,7 +99,11 @@ async fn queue_worker_runs_native_jobs_on_the_fake_engine() {
     let out = i.output.unwrap();
     assert_eq!(out["server"], "fv-serve");
     assert_eq!(out["readiness"], "ready");
-    assert!(out["models"].as_array().unwrap().iter().any(|m| m == "fake-wan"));
+    assert!(out["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|m| m == "fake-wan"));
 
     // Native WHIP streams are not in this build: the job fails with the reason.
     let s = sim.wait_terminal(&stream, t).await.unwrap();
@@ -96,7 +118,9 @@ async fn queue_worker_runs_native_jobs_on_the_fake_engine() {
 
 #[tokio::test]
 async fn forward_route_dispatches_envelopes() {
-    let app = App::build(config(true), Overrides::default()).await.unwrap();
+    let app = App::build(config(true), Overrides::default())
+        .await
+        .unwrap();
     app.gate.engine().wait_ready().await;
     let call = |v: Value| {
         let r = app.router.clone();
@@ -109,12 +133,16 @@ async fn forward_route_dispatches_envelopes() {
                 .unwrap();
             let resp = r.oneshot(req).await.unwrap();
             let s = resp.status().as_u16();
-            let b = axum::body::to_bytes(resp.into_body(), 1 << 22).await.unwrap();
+            let b = axum::body::to_bytes(resp.into_body(), 1 << 22)
+                .await
+                .unwrap();
             (s, serde_json::from_slice::<Value>(&b).unwrap())
         }
     };
-    let (s, v) = call(json!({"kind": "http", "method": "GET", "path": "/fv/v1/capabilities",
-        "headers": {"authorization": format!("Bearer {KEY}")}}))
+    let (s, v) = call(
+        json!({"kind": "http", "method": "GET", "path": "/fv/v1/capabilities",
+        "headers": {"authorization": format!("Bearer {KEY}")}}),
+    )
     .await;
     assert_eq!(s, 200);
     assert_eq!(v["status"], 200);

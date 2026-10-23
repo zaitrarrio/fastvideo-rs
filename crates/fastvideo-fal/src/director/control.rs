@@ -47,7 +47,10 @@ use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
-use super::messages::{self as m, Aspect, Configure, ErrorCode, Prompt, RejectReason, Resolution, ScriptBeat, ScriptMode, CHUNK_DURATIONS};
+use super::messages::{
+    self as m, Aspect, Configure, ErrorCode, Prompt, RejectReason, Resolution, ScriptBeat,
+    ScriptMode, CHUNK_DURATIONS,
+};
 
 /// How refusals name a causal model.
 const CAUSAL_MODEL: &str = "this causal streaming model (LongLive / SF-Wan)";
@@ -107,7 +110,9 @@ impl Limits {
         if let (Resolution::R1080, Some(cap)) = (res, self.hd_max_chunk_seconds) {
             l.max_chunk_seconds = l.max_chunk_seconds.min(cap);
             l.min_chunk_seconds = l.min_chunk_seconds.min(l.max_chunk_seconds);
-            l.chunk_seconds = l.chunk_seconds.clamp(l.min_chunk_seconds, l.max_chunk_seconds);
+            l.chunk_seconds = l
+                .chunk_seconds
+                .clamp(l.min_chunk_seconds, l.max_chunk_seconds);
         }
         l
     }
@@ -132,7 +137,11 @@ impl Limits {
     /// 5 nor 10 s) the request clamped to `min..=max`.
     pub fn chunk_for(&self, seconds: f64) -> f64 {
         let options = self.chunk_options();
-        let nearest = options.iter().copied().min_by(|&a, &b| (f64::from(a) - seconds).abs().total_cmp(&(f64::from(b) - seconds).abs()));
+        let nearest = options.iter().copied().min_by(|&a, &b| {
+            (f64::from(a) - seconds)
+                .abs()
+                .total_cmp(&(f64::from(b) - seconds).abs())
+        });
         match nearest {
             Some(d) => f64::from(d),
             None => seconds.clamp(self.min_chunk_seconds, self.max_chunk_seconds),
@@ -240,15 +249,25 @@ pub struct Segment {
 
 /// Cuts a script into chunks (see the module docs). `Err` explains why the
 /// timing is infeasible.
-pub fn plan_script(beats: &[ScriptBeat], l: &Limits) -> Result<(Vec<Segment>, Option<usize>), String> {
+pub fn plan_script(
+    beats: &[ScriptBeat],
+    l: &Limits,
+) -> Result<(Vec<Segment>, Option<usize>), String> {
     if let Some(c) = &l.causal {
         return Ok(plan_script_blocks(beats, c));
     }
     let mut order: Vec<usize> = (0..beats.len()).collect();
     order.sort_by_key(|&i| beats[i].offset);
-    let ends: Vec<usize> = order.iter().copied().filter(|&i| beats[i].end_image_url.is_some()).collect();
+    let ends: Vec<usize> = order
+        .iter()
+        .copied()
+        .filter(|&i| beats[i].end_image_url.is_some())
+        .collect();
     if ends.len() > l.script_max_end_images {
-        return Err(format!("at most {} end images per script", l.script_max_end_images));
+        return Err(format!(
+            "at most {} end images per script",
+            l.script_max_end_images
+        ));
     }
     for w in ends.windows(2) {
         let (a, b) = (beats[w[0]].offset as f64, beats[w[1]].offset as f64);
@@ -260,7 +279,10 @@ pub fn plan_script(beats: &[ScriptBeat], l: &Limits) -> Result<(Vec<Segment>, Op
         }
     }
     let text_at = |t: f64| -> Option<usize> {
-        order.iter().copied().rfind(|&i| beats[i].prompt.is_some() && beats[i].offset as f64 <= t + 1e-9)
+        order
+            .iter()
+            .copied()
+            .rfind(|&i| beats[i].prompt.is_some() && beats[i].offset as f64 <= t + 1e-9)
     };
     let mut segs = Vec::new();
     let mut pos = 0.0f64;
@@ -280,7 +302,10 @@ pub fn plan_script(beats: &[ScriptBeat], l: &Limits) -> Result<(Vec<Segment>, Op
     for (b, end) in boundaries {
         if b <= pos + 1e-9 {
             if end.is_some() {
-                return Err(format!("an end image at {b}s cannot end a chunk (a chunk is at least {}s)", l.min_chunk_seconds));
+                return Err(format!(
+                    "an end image at {b}s cannot end a chunk (a chunk is at least {}s)",
+                    l.min_chunk_seconds
+                ));
             }
             continue;
         }
@@ -307,13 +332,23 @@ pub fn plan_script(beats: &[ScriptBeat], l: &Limits) -> Result<(Vec<Segment>, Op
         };
         let n = parts.len();
         for (k, cut) in parts.into_iter().enumerate() {
-            segs.push(Segment { seconds: cut, text: text_at(pos), end_image: if k + 1 == n { end } else { None }, blocks: 1 });
+            segs.push(Segment {
+                seconds: cut,
+                text: text_at(pos),
+                end_image: if k + 1 == n { end } else { None },
+                blocks: 1,
+            });
             pos += cut;
         }
         pos = b;
     }
     if segs.is_empty() {
-        segs.push(Segment { seconds: l.chunk_seconds, text: text_at(0.0), end_image: None, blocks: 1 });
+        segs.push(Segment {
+            seconds: l.chunk_seconds,
+            text: text_at(0.0),
+            end_image: None,
+            blocks: 1,
+        });
     }
     // The direction that stays current after the script: its last text beat.
     let last_text = order.iter().copied().rfind(|&i| beats[i].prompt.is_some());
@@ -351,8 +386,15 @@ pub fn plan_script_blocks(beats: &[ScriptBeat], c: &CausalLimits) -> (Vec<Segmen
     let bs = c.block_seconds.max(1e-3);
     let mut order: Vec<usize> = (0..beats.len()).collect();
     order.sort_by_key(|&i| beats[i].offset);
-    let text_at = |t: u64| -> Option<usize> { order.iter().copied().rfind(|&i| beats[i].prompt.is_some() && beats[i].offset <= t) };
-    let mut points: Vec<u64> = std::iter::once(0).chain(order.iter().map(|&i| beats[i].offset)).collect();
+    let text_at = |t: u64| -> Option<usize> {
+        order
+            .iter()
+            .copied()
+            .rfind(|&i| beats[i].prompt.is_some() && beats[i].offset <= t)
+    };
+    let mut points: Vec<u64> = std::iter::once(0)
+        .chain(order.iter().map(|&i| beats[i].offset))
+        .collect();
     points.dedup();
     let block = |t: u64| (t as f64 / bs).round() as u64;
     let mut segs = Vec::new();
@@ -362,11 +404,24 @@ pub fn plan_script_blocks(beats: &[ScriptBeat], c: &CausalLimits) -> (Vec<Segmen
             continue;
         }
         let n = n.min(u64::from(u32::MAX)) as u32;
-        segs.push(Segment { seconds: f64::from(n) * bs, text: text_at(w[0]), end_image: None, blocks: n });
+        segs.push(Segment {
+            seconds: f64::from(n) * bs,
+            text: text_at(w[0]),
+            end_image: None,
+            blocks: n,
+        });
     }
     let last = *points.last().unwrap_or(&0);
-    segs.push(Segment { seconds: bs, text: text_at(last), end_image: None, blocks: 1 });
-    (segs, order.iter().copied().rfind(|&i| beats[i].prompt.is_some()))
+    segs.push(Segment {
+        seconds: bs,
+        text: text_at(last),
+        end_image: None,
+        blocks: 1,
+    });
+    (
+        segs,
+        order.iter().copied().rfind(|&i| beats[i].prompt.is_some()),
+    )
 }
 
 /// The control state of one director session.
@@ -412,7 +467,11 @@ impl Control {
         if self.limits.resolutions.contains(&Resolution::R768) {
             Resolution::R768
         } else {
-            self.limits.resolutions.last().copied().unwrap_or(Resolution::R768)
+            self.limits
+                .resolutions
+                .last()
+                .copied()
+                .unwrap_or(Resolution::R768)
         }
     }
 
@@ -446,44 +505,82 @@ impl Control {
     /// reply; `.1` says whether it is a session failure (end the session).
     pub fn precheck_configure(&self, c: &Configure) -> Result<(), (Value, bool)> {
         if self.settings.is_some() {
-            let e = m::error(ErrorCode::ImmutableSettings, "the session is already configured; reconnect to change settings", Some(c.prompt_version));
+            let e = m::error(
+                ErrorCode::ImmutableSettings,
+                "the session is already configured; reconnect to change settings",
+                Some(c.prompt_version),
+            );
             return Err((e, false));
         }
-        let fail = |code: ErrorCode, msg: String| Err((m::error(code, msg, Some(c.prompt_version)), true));
+        let fail =
+            |code: ErrorCode, msg: String| Err((m::error(code, msg, Some(c.prompt_version)), true));
         if c.prompt_version != 1 {
-            return fail(ErrorCode::InvalidInput, "`configure` starts the version sequence at prompt_version 1".into());
+            return fail(
+                ErrorCode::InvalidInput,
+                "`configure` starts the version sequence at prompt_version 1".into(),
+            );
         }
         let res = c.resolution.unwrap_or(self.default_resolution());
         if !self.limits.resolutions.contains(&res) {
             let served: Vec<&str> = self.limits.resolutions.iter().map(|r| r.as_str()).collect();
-            return fail(ErrorCode::InvalidInput, format!("resolution {} is not served here (served: {})", res.as_str(), served.join(", ")));
+            return fail(
+                ErrorCode::InvalidInput,
+                format!(
+                    "resolution {} is not served here (served: {})",
+                    res.as_str(),
+                    served.join(", ")
+                ),
+            );
         }
         if c.audio_url.is_some() {
-            return fail(ErrorCode::InvalidInitialAudio, "target-audio conditioning (`audio_url`) is not supported by this server yet".into());
+            return fail(
+                ErrorCode::InvalidInitialAudio,
+                "target-audio conditioning (`audio_url`) is not supported by this server yet"
+                    .into(),
+            );
         }
         if self.limits.causal.is_some() {
             if c.image_url.is_some() {
                 return fail(ErrorCode::InvalidInitialImage, format!("{CAUSAL_MODEL} is text-to-video only: `image_url` (image conditioning) is not supported"));
             }
             if c.end_image_url.is_some() {
-                return fail(ErrorCode::InvalidInitialImage, format!("{CAUSAL_MODEL} is text-to-video only: `end_image_url` is not supported"));
+                return fail(
+                    ErrorCode::InvalidInitialImage,
+                    format!(
+                        "{CAUSAL_MODEL} is text-to-video only: `end_image_url` is not supported"
+                    ),
+                );
             }
             if let Some(a) = c.aspect_ratio.filter(|a| *a != Aspect::Landscape) {
                 return fail(ErrorCode::InvalidInput, format!("aspect ratio {} is not served: {CAUSAL_MODEL} generates its 16:9 canvas only", a.as_str()));
             }
             if c.script.iter().flatten().any(|b| b.end_image_url.is_some()) {
-                return fail(ErrorCode::InvalidInitialScript, format!("script end images are not supported: {CAUSAL_MODEL} is text-to-video only"));
+                return fail(
+                    ErrorCode::InvalidInitialScript,
+                    format!(
+                        "script end images are not supported: {CAUSAL_MODEL} is text-to-video only"
+                    ),
+                );
             }
         }
         if self.limits.causal.is_none() && !self.limits.image_conditioning {
             if c.image_url.is_some() {
-                return fail(ErrorCode::InvalidInitialImage, format!("{T2V_MODEL}: `image_url` (image conditioning) is not supported"));
+                return fail(
+                    ErrorCode::InvalidInitialImage,
+                    format!("{T2V_MODEL}: `image_url` (image conditioning) is not supported"),
+                );
             }
             if c.end_image_url.is_some() {
-                return fail(ErrorCode::InvalidInitialImage, format!("{T2V_MODEL}: `end_image_url` is not supported"));
+                return fail(
+                    ErrorCode::InvalidInitialImage,
+                    format!("{T2V_MODEL}: `end_image_url` is not supported"),
+                );
             }
             if c.script.iter().flatten().any(|b| b.end_image_url.is_some()) {
-                return fail(ErrorCode::InvalidInitialScript, format!("script end images are not supported: {T2V_MODEL}"));
+                return fail(
+                    ErrorCode::InvalidInitialScript,
+                    format!("script end images are not supported: {T2V_MODEL}"),
+                );
             }
         }
         if let Some(script) = &c.script {
@@ -491,7 +588,10 @@ impl Control {
                 return fail(ErrorCode::InvalidInitialScript, "`script` cannot be combined with `end_image_url` or `audio_url`; place them in the script".into());
             }
             if script.iter().any(|b| b.audio_url.is_some()) {
-                return fail(ErrorCode::InvalidInitialScript, "script audio beats are not supported by this server yet".into());
+                return fail(
+                    ErrorCode::InvalidInitialScript,
+                    "script audio beats are not supported by this server yet".into(),
+                );
             }
             if let Err(e) = plan_script(script, &self.limits.at(res).with_chunk(c.chunk_duration)) {
                 return fail(ErrorCode::InvalidInitialScript, e);
@@ -502,7 +602,13 @@ impl Control {
 
     /// Applies a prechecked `configure` with its staged images
     /// (`script_images[i]` for beat `i`). Returns `configured` and plans chunk 0.
-    pub fn configure(&mut self, c: &Configure, image: Option<PathBuf>, end_image: Option<PathBuf>, script_images: Vec<Option<PathBuf>>) -> Value {
+    pub fn configure(
+        &mut self,
+        c: &Configure,
+        image: Option<PathBuf>,
+        end_image: Option<PathBuf>,
+        script_images: Vec<Option<PathBuf>>,
+    ) -> Value {
         let settings = Settings {
             resolution: c.resolution.unwrap_or(self.default_resolution()),
             aspect: c.aspect_ratio.unwrap_or(Aspect::Landscape),
@@ -513,7 +619,10 @@ impl Control {
         };
         // 1080p: chunks within the tier's clip cap; then the session's
         // chunk length (ignored on a causal model).
-        self.limits = self.limits.at(settings.resolution).with_chunk(c.chunk_duration);
+        self.limits = self
+            .limits
+            .at(settings.resolution)
+            .with_chunk(c.chunk_duration);
         self.premise = c.prompt.clone();
         self.current_version = c.prompt_version;
         self.last_version = c.prompt_version;
@@ -533,7 +642,13 @@ impl Control {
         });
         self.settings = Some(settings);
         if let Some(script) = &c.script {
-            let entries = self.script_entries(script, script_images, c.prompt_version, ScriptMode::Replace, 0);
+            let entries = self.script_entries(
+                script,
+                script_images,
+                c.prompt_version,
+                ScriptMode::Replace,
+                0,
+            );
             self.deck.extend(entries);
         } else if end_image.is_some() {
             self.deck.push_back(Planned {
@@ -551,7 +666,14 @@ impl Control {
         reply
     }
 
-    fn script_entries(&mut self, script: &[ScriptBeat], images: Vec<Option<PathBuf>>, version: u64, mode: ScriptMode, queued: u32) -> Vec<Planned> {
+    fn script_entries(
+        &mut self,
+        script: &[ScriptBeat],
+        images: Vec<Option<PathBuf>>,
+        version: u64,
+        mode: ScriptMode,
+        queued: u32,
+    ) -> Vec<Planned> {
         let (segs, last_text) = plan_script(script, &self.limits).unwrap_or_default();
         let group = self.next_script;
         self.next_script += 1;
@@ -566,11 +688,18 @@ impl Control {
                 seconds: s.seconds,
                 version,
                 announce: if k == 0 {
-                    vec![Announce { version, script: Some((origin, queued, beats, mode)) }]
+                    vec![Announce {
+                        version,
+                        script: Some((origin, queued, beats, mode)),
+                    }]
                 } else {
                     Vec::new()
                 },
-                persist: if k + 1 == n { last_text.and_then(|i| script[i].prompt.clone()) } else { None },
+                persist: if k + 1 == n {
+                    last_text.and_then(|i| script[i].prompt.clone())
+                } else {
+                    None
+                },
                 script: Some(group),
                 blocks: s.blocks.max(1),
                 reserved: false,
@@ -582,7 +711,11 @@ impl Control {
     /// stale versions and refusals that need no staging. `Err` is the reply.
     pub fn precheck_prompt(&mut self, p: &Prompt) -> Result<(), Vec<Value>> {
         if self.settings.is_none() {
-            return Err(vec![m::error(ErrorCode::NotConfigured, "send `configure` and wait for `configured` first", Some(p.prompt_version))]);
+            return Err(vec![m::error(
+                ErrorCode::NotConfigured,
+                "send `configure` and wait for `configured` first",
+                Some(p.prompt_version),
+            )]);
         }
         let v = p.prompt_version;
         if v <= self.last_version {
@@ -595,30 +728,60 @@ impl Control {
         // A version is spent once seen, whatever its outcome.
         self.last_version = v;
         if p.audio_url.is_some() || p.audio_behavior.is_some() {
-            return Err(vec![m::prompt_rejected(v, RejectReason::InvalidAudio, "target-audio conditioning is not supported by this server yet")]);
+            return Err(vec![m::prompt_rejected(
+                v,
+                RejectReason::InvalidAudio,
+                "target-audio conditioning is not supported by this server yet",
+            )]);
         }
         if self.limits.causal.is_some()
-            && (p.end_image_url.is_some() || p.script.iter().flatten().any(|b| b.end_image_url.is_some()))
+            && (p.end_image_url.is_some()
+                || p.script.iter().flatten().any(|b| b.end_image_url.is_some()))
         {
-            return Err(vec![m::prompt_rejected(v, RejectReason::InvalidImage, format!("end images are not supported: {CAUSAL_MODEL} is text-to-video only"))]);
+            return Err(vec![m::prompt_rejected(
+                v,
+                RejectReason::InvalidImage,
+                format!("end images are not supported: {CAUSAL_MODEL} is text-to-video only"),
+            )]);
         }
         if !self.limits.image_conditioning
-            && (p.end_image_url.is_some() || p.script.iter().flatten().any(|b| b.end_image_url.is_some()))
+            && (p.end_image_url.is_some()
+                || p.script.iter().flatten().any(|b| b.end_image_url.is_some()))
         {
-            return Err(vec![m::prompt_rejected(v, RejectReason::InvalidImage, format!("end images are not supported: {T2V_MODEL}"))]);
+            return Err(vec![m::prompt_rejected(
+                v,
+                RejectReason::InvalidImage,
+                format!("end images are not supported: {T2V_MODEL}"),
+            )]);
         }
         if let Some(script) = &p.script {
             if p.prompt.is_some() || p.end_image_url.is_some() {
-                return Err(vec![m::prompt_rejected(v, RejectReason::InvalidScript, "`script` is exclusive with `prompt`, `end_image_url` and `audio_url`")]);
+                return Err(vec![m::prompt_rejected(
+                    v,
+                    RejectReason::InvalidScript,
+                    "`script` is exclusive with `prompt`, `end_image_url` and `audio_url`",
+                )]);
             }
             if script.iter().any(|b| b.audio_url.is_some()) {
-                return Err(vec![m::prompt_rejected(v, RejectReason::InvalidAudio, "script audio beats are not supported by this server yet")]);
+                return Err(vec![m::prompt_rejected(
+                    v,
+                    RejectReason::InvalidAudio,
+                    "script audio beats are not supported by this server yet",
+                )]);
             }
             if let Err(e) = plan_script(script, &self.limits) {
-                return Err(vec![m::prompt_rejected(v, RejectReason::InfeasibleTiming, e)]);
+                return Err(vec![m::prompt_rejected(
+                    v,
+                    RejectReason::InfeasibleTiming,
+                    e,
+                )]);
             }
         } else if p.prompt.is_none() && p.end_image_url.is_none() {
-            return Err(vec![m::prompt_rejected(v, RejectReason::PreparationFailed, "the update carries no prompt, end image or script")]);
+            return Err(vec![m::prompt_rejected(
+                v,
+                RejectReason::PreparationFailed,
+                "the update carries no prompt, end image or script",
+            )]);
         }
         let append = match &p.script {
             Some(_) => p.script_mode == Some(ScriptMode::Append),
@@ -626,10 +789,24 @@ impl Control {
         };
         if append {
             if self.deck.iter().filter(|p| !p.reserved).count() >= self.limits.deck_size {
-                return Err(vec![m::prompt_rejected(v, RejectReason::QueueFull, format!("the planned deck is full ({} chunks)", self.limits.deck_size))]);
+                return Err(vec![m::prompt_rejected(
+                    v,
+                    RejectReason::QueueFull,
+                    format!(
+                        "the planned deck is full ({} chunks)",
+                        self.limits.deck_size
+                    ),
+                )]);
             }
             if p.script.is_some() && self.queued_scripts() >= self.limits.script_max_queued {
-                return Err(vec![m::prompt_rejected(v, RejectReason::QueueFull, format!("at most {} scripts may be queued", self.limits.script_max_queued))]);
+                return Err(vec![m::prompt_rejected(
+                    v,
+                    RejectReason::QueueFull,
+                    format!(
+                        "at most {} scripts may be queued",
+                        self.limits.script_max_queued
+                    ),
+                )]);
             }
         }
         Ok(())
@@ -643,7 +820,12 @@ impl Control {
 
     /// Applies a prechecked `prompt` with its staged images: `prompt_pending`,
     /// then the deck change.
-    pub fn prompt(&mut self, p: &Prompt, end_image: Option<PathBuf>, script_images: Vec<Option<PathBuf>>) -> Vec<Value> {
+    pub fn prompt(
+        &mut self,
+        p: &Prompt,
+        end_image: Option<PathBuf>,
+        script_images: Vec<Option<PathBuf>>,
+    ) -> Vec<Value> {
         let v = p.prompt_version;
         let out = vec![m::prompt_pending(v)];
         if let Some(script) = &p.script {
@@ -661,11 +843,18 @@ impl Control {
             end_image,
             seconds: self.limits.chunk_seconds,
             version: v,
-            announce: vec![Announce { version: v, script: None }],
+            announce: vec![Announce {
+                version: v,
+                script: None,
+            }],
             persist: p.prompt.clone(),
             script: None,
             // Causal: an appended direction holds one director chunk.
-            blocks: self.limits.causal.as_ref().map_or(1, |c| c.chunk_blocks.max(1)),
+            blocks: self
+                .limits
+                .causal
+                .as_ref()
+                .map_or(1, |c| c.chunk_blocks.max(1)),
             reserved: false,
         };
         if p.replan != Some(false) {
@@ -731,7 +920,11 @@ impl Control {
         }
         let index = self.next_index;
         self.next_index += 1;
-        let first_image = if index == 0 { self.initial_image.take() } else { None };
+        let first_image = if index == 0 {
+            self.initial_image.take()
+        } else {
+            None
+        };
         // A causal entry directs several blocks: hand out one block's share,
         // announcing it once and persisting its direction with the last.
         let next = match self.deck.front_mut() {
@@ -761,7 +954,9 @@ impl Control {
                 let plan = ChunkPlan {
                     index,
                     prompt: self.compose(direction.as_deref()),
-                    direction: direction.clone().filter(|d| !d.is_empty() && *d != self.premise),
+                    direction: direction
+                        .clone()
+                        .filter(|d| !d.is_empty() && *d != self.premise),
                     seconds: p.seconds,
                     first_image,
                     end_image: p.end_image,
@@ -773,7 +968,10 @@ impl Control {
                 ChunkPlan {
                     index,
                     prompt: self.compose(self.direction.clone().as_deref()),
-                    direction: self.direction.clone().filter(|d| !d.is_empty() && *d != self.premise),
+                    direction: self
+                        .direction
+                        .clone()
+                        .filter(|d| !d.is_empty() && *d != self.premise),
                     seconds: self.limits.chunk_seconds,
                     first_image,
                     end_image: None,
@@ -782,7 +980,10 @@ impl Control {
                 Vec::new(),
             ),
         };
-        let msgs = announce.into_iter().map(|a| m::prompt_applied(a.version, a.script)).collect();
+        let msgs = announce
+            .into_iter()
+            .map(|a| m::prompt_applied(a.version, a.script))
+            .collect();
         Some((plan, msgs))
     }
 }
@@ -793,28 +994,44 @@ mod tests {
     use crate::director::messages::{parse, ClientMessage};
 
     fn configure(c: &mut Control, s: &str) -> Result<Value, (Value, bool)> {
-        let ClientMessage::Configure(cfg) = parse(s).unwrap() else { panic!() };
+        let ClientMessage::Configure(cfg) = parse(s).unwrap() else {
+            panic!()
+        };
         c.precheck_configure(&cfg)?;
         let n = cfg.script.as_ref().map_or(0, Vec::len);
         let end = cfg.end_image_url.as_ref().map(PathBuf::from);
         let img = cfg.image_url.as_ref().map(PathBuf::from);
-        let script_imgs = cfg.script.iter().flatten().map(|b| b.end_image_url.as_ref().map(PathBuf::from)).collect();
+        let script_imgs = cfg
+            .script
+            .iter()
+            .flatten()
+            .map(|b| b.end_image_url.as_ref().map(PathBuf::from))
+            .collect();
         let _ = n;
         Ok(c.configure(&cfg, img, end, script_imgs))
     }
 
     fn prompt(c: &mut Control, s: &str) -> Vec<Value> {
-        let ClientMessage::Prompt(p) = parse(s).unwrap() else { panic!() };
+        let ClientMessage::Prompt(p) = parse(s).unwrap() else {
+            panic!()
+        };
         if let Err(out) = c.precheck_prompt(&p) {
             return out;
         }
         let end = p.end_image_url.as_ref().map(PathBuf::from);
-        let imgs = p.script.iter().flatten().map(|b| b.end_image_url.as_ref().map(PathBuf::from)).collect();
+        let imgs = p
+            .script
+            .iter()
+            .flatten()
+            .map(|b| b.end_image_url.as_ref().map(PathBuf::from))
+            .collect();
         c.prompt(&p, end, imgs)
     }
 
     fn types(v: &[Value]) -> Vec<String> {
-        v.iter().map(|m| m["type"].as_str().unwrap().to_owned()).collect()
+        v.iter()
+            .map(|m| m["type"].as_str().unwrap().to_owned())
+            .collect()
     }
 
     #[test]
@@ -822,23 +1039,50 @@ mod tests {
         let mut c = Control::new(Limits::default());
         assert!(c.next_chunk().is_none(), "nothing before configure");
         // Refusals are session failures with their codes.
-        let e = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"1080p"}"#).unwrap_err();
+        let e = configure(
+            &mut c,
+            r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"1080p"}"#,
+        )
+        .unwrap_err();
         assert_eq!((e.0["code"].as_str(), e.1), (Some("invalid_input"), true));
-        let e = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"480p"}"#).unwrap_err();
+        let e = configure(
+            &mut c,
+            r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"480p"}"#,
+        )
+        .unwrap_err();
         assert_eq!(e.0["code"], "invalid_input");
-        let e = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"720p"}"#).unwrap_err();
+        let e = configure(
+            &mut c,
+            r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"720p"}"#,
+        )
+        .unwrap_err();
         assert_eq!(e.0["code"], "invalid_input");
-        assert!(e.0["error"].as_str().unwrap().contains("served: 768p"), "{}", e.0);
-        let e = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"x","audio_url":"https://a/b.wav"}"#).unwrap_err();
+        assert!(
+            e.0["error"].as_str().unwrap().contains("served: 768p"),
+            "{}",
+            e.0
+        );
+        let e = configure(
+            &mut c,
+            r#"{"type":"configure","prompt_version":1,"prompt":"x","audio_url":"https://a/b.wav"}"#,
+        )
+        .unwrap_err();
         assert_eq!(e.0["code"], "invalid_initial_audio");
         let e = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"x","script":[{"offset":0,"audio_url":"https://a"}]}"#).unwrap_err();
         assert_eq!(e.0["code"], "invalid_initial_script");
         let e = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"x","end_image_url":"e","script":[{"offset":0,"prompt":"p"}]}"#).unwrap_err();
         assert_eq!(e.0["code"], "invalid_initial_script");
-        let e = configure(&mut c, r#"{"type":"configure","prompt_version":2,"prompt":"x"}"#).unwrap_err();
+        let e = configure(
+            &mut c,
+            r#"{"type":"configure","prompt_version":2,"prompt":"x"}"#,
+        )
+        .unwrap_err();
         assert_eq!(e.0["code"], "invalid_input");
         // Prompts before configure are diagnostics.
-        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":2,"prompt":"y"}"#);
+        let out = prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":2,"prompt":"y"}"#,
+        );
         assert_eq!(out[0]["code"], "not_configured");
 
         let r = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"A sitcom","memory":3,"image_url":"first.png"}"#).unwrap();
@@ -848,11 +1092,21 @@ mod tests {
                    "chunk_duration":5,"audio_bitrate":null,"resolution":"768p","has_initial_image":true,
                    "has_initial_audio":false,"acceleration":null})
         );
-        let e = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"again"}"#).unwrap_err();
-        assert_eq!((e.0["code"].as_str(), e.1), (Some("immutable_settings"), false));
+        let e = configure(
+            &mut c,
+            r#"{"type":"configure","prompt_version":1,"prompt":"again"}"#,
+        )
+        .unwrap_err();
+        assert_eq!(
+            (e.0["code"].as_str(), e.1),
+            (Some("immutable_settings"), false)
+        );
         let (p0, applied) = c.next_chunk().unwrap();
         assert!(applied.is_empty());
-        assert_eq!((p0.index, p0.prompt.as_str(), p0.seconds, p0.prompt_version), (0, "A sitcom", 5.0, 1));
+        assert_eq!(
+            (p0.index, p0.prompt.as_str(), p0.seconds, p0.prompt_version),
+            (0, "A sitcom", 5.0, 1)
+        );
         assert_eq!(p0.first_image, Some(PathBuf::from("first.png")));
         let (p1, _) = c.next_chunk().unwrap();
         assert_eq!((p1.index, p1.first_image.clone()), (1, None));
@@ -861,40 +1115,96 @@ mod tests {
     #[test]
     fn versions_replan_and_deck() {
         let mut c = Control::new(Limits::default());
-        configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P"}"#).unwrap();
+        configure(
+            &mut c,
+            r#"{"type":"configure","prompt_version":1,"prompt":"P"}"#,
+        )
+        .unwrap();
         let (_, _) = c.next_chunk().unwrap(); // chunk 0 dispatched
-        // Stale and equal versions.
-        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":1,"prompt":"old"}"#);
-        assert_eq!((out[0]["type"].as_str(), out[0]["reason"].as_str()), (Some("prompt_rejected"), Some("stale_prompt_version")));
+                                              // Stale and equal versions.
+        let out = prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":1,"prompt":"old"}"#,
+        );
+        assert_eq!(
+            (out[0]["type"].as_str(), out[0]["reason"].as_str()),
+            (Some("prompt_rejected"), Some("stale_prompt_version"))
+        );
         // Pending, replaced by a newer replan (no final event for v2), applied at dispatch.
-        assert_eq!(types(&prompt(&mut c, r#"{"type":"prompt","prompt_version":2,"prompt":"A"}"#)), ["prompt_pending"]);
-        assert_eq!(types(&prompt(&mut c, r#"{"type":"prompt","prompt_version":5,"prompt":"B"}"#)), ["prompt_pending"]);
+        assert_eq!(
+            types(&prompt(
+                &mut c,
+                r#"{"type":"prompt","prompt_version":2,"prompt":"A"}"#
+            )),
+            ["prompt_pending"]
+        );
+        assert_eq!(
+            types(&prompt(
+                &mut c,
+                r#"{"type":"prompt","prompt_version":5,"prompt":"B"}"#
+            )),
+            ["prompt_pending"]
+        );
         assert_eq!(c.deck_len(), 1);
         // Gaps are fine but reuse is not.
-        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":4,"prompt":"C"}"#);
+        let out = prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":4,"prompt":"C"}"#,
+        );
         assert_eq!(out[0]["reason"], "stale_prompt_version");
         let (p, applied) = c.next_chunk().unwrap();
         assert_eq!((p.prompt.as_str(), p.prompt_version), ("P B", 5));
-        assert_eq!(applied, vec![json!({"type":"prompt_applied","prompt_version":5})]);
+        assert_eq!(
+            applied,
+            vec![json!({"type":"prompt_applied","prompt_version":5})]
+        );
         // The direction persists for continuations.
         let (p, applied) = c.next_chunk().unwrap();
-        assert_eq!((p.prompt.as_str(), p.prompt_version, applied.len()), ("P B", 5, 0));
+        assert_eq!(
+            (p.prompt.as_str(), p.prompt_version, applied.len()),
+            ("P B", 5, 0)
+        );
         // replan:false appends; the deck is bounded.
         for v in 6..12u64 {
-            let out = prompt(&mut c, &format!(r#"{{"type":"prompt","prompt_version":{v},"prompt":"s{v}","replan":false}}"#));
+            let out = prompt(
+                &mut c,
+                &format!(
+                    r#"{{"type":"prompt","prompt_version":{v},"prompt":"s{v}","replan":false}}"#
+                ),
+            );
             assert_eq!(types(&out), ["prompt_pending"], "v{v}");
         }
-        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":12,"prompt":"full","replan":false}"#);
+        let out = prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":12,"prompt":"full","replan":false}"#,
+        );
         assert_eq!(out[0]["reason"], "queue_full");
-        let order: Vec<u64> = (0..6).map(|_| c.next_chunk().unwrap().0.prompt_version).collect();
+        let order: Vec<u64> = (0..6)
+            .map(|_| c.next_chunk().unwrap().0.prompt_version)
+            .collect();
         assert_eq!(order, [6, 7, 8, 9, 10, 11]);
         // Audio and empty updates.
-        assert_eq!(prompt(&mut c, r#"{"type":"prompt","prompt_version":20,"audio_url":"a.wav"}"#)[0]["reason"], "invalid_audio");
-        assert_eq!(prompt(&mut c, r#"{"type":"prompt","prompt_version":21}"#)[0]["reason"], "preparation_failed");
+        assert_eq!(
+            prompt(
+                &mut c,
+                r#"{"type":"prompt","prompt_version":20,"audio_url":"a.wav"}"#
+            )[0]["reason"],
+            "invalid_audio"
+        );
+        assert_eq!(
+            prompt(&mut c, r#"{"type":"prompt","prompt_version":21}"#)[0]["reason"],
+            "preparation_failed"
+        );
         // End image only: keeps the direction, lands on the next chunk.
-        prompt(&mut c, r#"{"type":"prompt","prompt_version":22,"end_image_url":"end.png"}"#);
+        prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":22,"end_image_url":"end.png"}"#,
+        );
         let (p, applied) = c.next_chunk().unwrap();
-        assert_eq!((p.end_image, p.prompt.as_str()), (Some(PathBuf::from("end.png")), "P s11"));
+        assert_eq!(
+            (p.end_image, p.prompt.as_str()),
+            (Some(PathBuf::from("end.png")), "P s11")
+        );
         assert_eq!(applied[0]["prompt_version"], 22);
         // Stop ends dispatching.
         assert!(c.stop());
@@ -914,7 +1224,11 @@ mod tests {
                 block_frames: 12,
                 block_seconds: 0.75,
                 chunk_blocks: 4,
-                context: Some(fastvideo_protocol::CausalContext { window_latent_frames: 12, sink_latent_frames: 3, prompt_recache: true }),
+                context: Some(fastvideo_protocol::CausalContext {
+                    window_latent_frames: 12,
+                    sink_latent_frames: 3,
+                    prompt_recache: true,
+                }),
             }),
             ..Limits::default()
         }
@@ -927,13 +1241,41 @@ mod tests {
         let mut c = Control::new(causal_limits());
         assert_eq!(c.default_resolution(), Resolution::R480);
         let refused = [
-            (r#"{"type":"configure","prompt_version":1,"prompt":"x","image_url":"https://a/b.png"}"#, "invalid_initial_image", "image_url"),
-            (r#"{"type":"configure","prompt_version":1,"prompt":"x","end_image_url":"https://a/b.png"}"#, "invalid_initial_image", "end_image_url"),
-            (r#"{"type":"configure","prompt_version":1,"prompt":"x","audio_url":"https://a/b.wav"}"#, "invalid_initial_audio", "audio"),
-            (r#"{"type":"configure","prompt_version":1,"prompt":"x","aspect_ratio":"9:16"}"#, "invalid_input", "16:9"),
-            (r#"{"type":"configure","prompt_version":1,"prompt":"x","aspect_ratio":"1:1"}"#, "invalid_input", "16:9"),
-            (r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"768p"}"#, "invalid_input", "served: 480p"),
-            (r#"{"type":"configure","prompt_version":1,"prompt":"x","script":[{"offset":4,"end_image_url":"e"}]}"#, "invalid_initial_script", "end images"),
+            (
+                r#"{"type":"configure","prompt_version":1,"prompt":"x","image_url":"https://a/b.png"}"#,
+                "invalid_initial_image",
+                "image_url",
+            ),
+            (
+                r#"{"type":"configure","prompt_version":1,"prompt":"x","end_image_url":"https://a/b.png"}"#,
+                "invalid_initial_image",
+                "end_image_url",
+            ),
+            (
+                r#"{"type":"configure","prompt_version":1,"prompt":"x","audio_url":"https://a/b.wav"}"#,
+                "invalid_initial_audio",
+                "audio",
+            ),
+            (
+                r#"{"type":"configure","prompt_version":1,"prompt":"x","aspect_ratio":"9:16"}"#,
+                "invalid_input",
+                "16:9",
+            ),
+            (
+                r#"{"type":"configure","prompt_version":1,"prompt":"x","aspect_ratio":"1:1"}"#,
+                "invalid_input",
+                "16:9",
+            ),
+            (
+                r#"{"type":"configure","prompt_version":1,"prompt":"x","resolution":"768p"}"#,
+                "invalid_input",
+                "served: 480p",
+            ),
+            (
+                r#"{"type":"configure","prompt_version":1,"prompt":"x","script":[{"offset":4,"end_image_url":"e"}]}"#,
+                "invalid_initial_script",
+                "end images",
+            ),
         ];
         for (msg, code, needle) in refused {
             let e = configure(&mut c, msg).unwrap_err();
@@ -941,11 +1283,23 @@ mod tests {
             assert!(e.0["error"].as_str().unwrap().contains(needle), "{}", e.0);
         }
         configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P","aspect_ratio":"16:9","resolution":"480p"}"#).unwrap();
-        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":2,"end_image_url":"e.png"}"#);
-        assert_eq!((out[0]["type"].as_str(), out[0]["reason"].as_str()), (Some("prompt_rejected"), Some("invalid_image")));
-        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":3,"script":[{"offset":3,"end_image_url":"e"}]}"#);
+        let out = prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":2,"end_image_url":"e.png"}"#,
+        );
+        assert_eq!(
+            (out[0]["type"].as_str(), out[0]["reason"].as_str()),
+            (Some("prompt_rejected"), Some("invalid_image"))
+        );
+        let out = prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":3,"script":[{"offset":3,"end_image_url":"e"}]}"#,
+        );
         assert_eq!(out[0]["reason"], "invalid_image");
-        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":4,"audio_url":"a.wav"}"#);
+        let out = prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":4,"audio_url":"a.wav"}"#,
+        );
         assert_eq!(out[0]["reason"], "invalid_audio");
     }
 
@@ -954,26 +1308,68 @@ mod tests {
     /// is built (it used to fail chunk 0 with `generation_failed`).
     #[test]
     fn t2v_only_clip_model_refuses_images() {
-        let mut c = Control::new(Limits { image_conditioning: false, ..Limits::default() });
+        let mut c = Control::new(Limits {
+            image_conditioning: false,
+            ..Limits::default()
+        });
         let refused = [
-            (r#"{"type":"configure","prompt_version":1,"prompt":"x","image_url":"https://a/b.png"}"#, "invalid_initial_image", "image_url"),
-            (r#"{"type":"configure","prompt_version":1,"prompt":"x","end_image_url":"https://a/b.png"}"#, "invalid_initial_image", "end_image_url"),
-            (r#"{"type":"configure","prompt_version":1,"prompt":"x","script":[{"offset":5,"end_image_url":"e"}]}"#, "invalid_initial_script", "end images"),
+            (
+                r#"{"type":"configure","prompt_version":1,"prompt":"x","image_url":"https://a/b.png"}"#,
+                "invalid_initial_image",
+                "image_url",
+            ),
+            (
+                r#"{"type":"configure","prompt_version":1,"prompt":"x","end_image_url":"https://a/b.png"}"#,
+                "invalid_initial_image",
+                "end_image_url",
+            ),
+            (
+                r#"{"type":"configure","prompt_version":1,"prompt":"x","script":[{"offset":5,"end_image_url":"e"}]}"#,
+                "invalid_initial_script",
+                "end images",
+            ),
         ];
         for (msg, code, needle) in refused {
             let e = configure(&mut c, msg).unwrap_err();
             assert_eq!((e.0["code"].as_str(), e.1), (Some(code), true), "{msg}");
             assert!(e.0["error"].as_str().unwrap().contains(needle), "{}", e.0);
-            assert!(e.0["error"].as_str().unwrap().contains("text-to-video only"), "{}", e.0);
+            assert!(
+                e.0["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("text-to-video only"),
+                "{}",
+                e.0
+            );
         }
-        configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P"}"#).unwrap();
-        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":2,"prompt":"a","end_image_url":"e.png"}"#);
-        assert_eq!((out[0]["type"].as_str(), out[0]["reason"].as_str()), (Some("prompt_rejected"), Some("invalid_image")));
-        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":3,"prompt":"a text direction"}"#);
-        assert!(!types(&out).contains(&"prompt_rejected".to_owned()), "{out:?}");
+        configure(
+            &mut c,
+            r#"{"type":"configure","prompt_version":1,"prompt":"P"}"#,
+        )
+        .unwrap();
+        let out = prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":2,"prompt":"a","end_image_url":"e.png"}"#,
+        );
+        assert_eq!(
+            (out[0]["type"].as_str(), out[0]["reason"].as_str()),
+            (Some("prompt_rejected"), Some("invalid_image"))
+        );
+        let out = prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":3,"prompt":"a text direction"}"#,
+        );
+        assert!(
+            !types(&out).contains(&"prompt_rejected".to_owned()),
+            "{out:?}"
+        );
         // An image-capable model (the default) still takes images.
         let mut c = Control::new(Limits::default());
-        configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"x","image_url":"first.png"}"#).unwrap();
+        configure(
+            &mut c,
+            r#"{"type":"configure","prompt_version":1,"prompt":"x","image_url":"first.png"}"#,
+        )
+        .unwrap();
     }
 
     /// Causal: one plan per block; a replanning prompt takes the next block,
@@ -982,38 +1378,79 @@ mod tests {
     #[test]
     fn causal_blocks_follow_prompts_and_scripts() {
         let mut c = Control::new(causal_limits());
-        configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P"}"#).unwrap();
+        configure(
+            &mut c,
+            r#"{"type":"configure","prompt_version":1,"prompt":"P"}"#,
+        )
+        .unwrap();
         let (b0, a) = c.next_chunk().unwrap();
-        assert_eq!((b0.prompt.as_str(), b0.prompt_version, a.len()), ("P", 1, 0));
-        assert_eq!(types(&prompt(&mut c, r#"{"type":"prompt","prompt_version":2,"prompt":"A"}"#)), ["prompt_pending"]);
+        assert_eq!(
+            (b0.prompt.as_str(), b0.prompt_version, a.len()),
+            ("P", 1, 0)
+        );
+        assert_eq!(
+            types(&prompt(
+                &mut c,
+                r#"{"type":"prompt","prompt_version":2,"prompt":"A"}"#
+            )),
+            ["prompt_pending"]
+        );
         let (b1, a) = c.next_chunk().unwrap();
         assert_eq!((b1.prompt.as_str(), b1.prompt_version), ("P A", 2));
         assert_eq!(a, vec![json!({"type":"prompt_applied","prompt_version":2})]);
         // Every direction holds a director chunk (4 blocks) before an
         // appended one takes over: A's 3 remaining blocks, B for 4, then C
         // (announced once each), and C stays.
-        prompt(&mut c, r#"{"type":"prompt","prompt_version":3,"prompt":"B","replan":false}"#);
-        prompt(&mut c, r#"{"type":"prompt","prompt_version":4,"prompt":"C","replan":false}"#);
+        prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":3,"prompt":"B","replan":false}"#,
+        );
+        prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":4,"prompt":"C","replan":false}"#,
+        );
         let mut seen = Vec::new();
         for _ in 0..12 {
             let (p, a) = c.next_chunk().unwrap();
             seen.push((p.prompt.clone(), a.len()));
         }
-        let want: Vec<(String, usize)> = [("P A", 0), ("P A", 0), ("P A", 0), ("P B", 1), ("P B", 0), ("P B", 0), ("P B", 0), ("P C", 1), ("P C", 0), ("P C", 0), ("P C", 0), ("P C", 0)]
-            .iter()
-            .map(|(p, n)| ((*p).to_owned(), *n))
-            .collect();
+        let want: Vec<(String, usize)> = [
+            ("P A", 0),
+            ("P A", 0),
+            ("P A", 0),
+            ("P B", 1),
+            ("P B", 0),
+            ("P B", 0),
+            ("P B", 0),
+            ("P C", 1),
+            ("P C", 0),
+            ("P C", 0),
+            ("P C", 0),
+            ("P C", 0),
+        ]
+        .iter()
+        .map(|(p, n)| ((*p).to_owned(), *n))
+        .collect();
         assert_eq!(seen, want);
         // A script: beats at 0, 3 and 6 s → 4 blocks, 4 blocks, then "z" stays.
-        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":5,"script":[{"offset":0,"prompt":"x"},{"offset":3,"prompt":"y"},{"offset":6,"prompt":"z"}]}"#);
+        let out = prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":5,"script":[{"offset":0,"prompt":"x"},{"offset":3,"prompt":"y"},{"offset":6,"prompt":"z"}]}"#,
+        );
         assert_eq!(types(&out), ["prompt_pending"]);
         let got: Vec<String> = (0..10).map(|_| c.next_chunk().unwrap().0.prompt).collect();
-        assert_eq!(got, ["P x", "P x", "P x", "P x", "P y", "P y", "P y", "P y", "P z", "P z"]);
+        assert_eq!(
+            got,
+            ["P x", "P x", "P x", "P x", "P y", "P y", "P y", "P y", "P z", "P z"]
+        );
         let (segs, last) = plan_script_blocks(
             &serde_json::from_value::<Vec<ScriptBeat>>(json!([{"offset": 2, "prompt": "late"}, {"offset": 1_000_000_000, "prompt": "far"}])).unwrap(),
             c.limits().causal.as_ref().unwrap(),
         );
-        assert_eq!(segs.iter().map(|s| s.blocks).collect::<Vec<_>>(), [3, 1_333_333_330, 1]);
+        assert_eq!(
+            segs.iter().map(|s| s.blocks).collect::<Vec<_>>(),
+            [3, 1_333_333_330, 1]
+        );
         assert_eq!((segs[0].text, last), (None, Some(1)));
     }
 
@@ -1022,28 +1459,51 @@ mod tests {
     #[test]
     fn chunk_duration_default_and_explicit() {
         let mut c = Control::new(Limits::default());
-        let r = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P"}"#).unwrap();
+        let r = configure(
+            &mut c,
+            r#"{"type":"configure","prompt_version":1,"prompt":"P"}"#,
+        )
+        .unwrap();
         assert_eq!(r["chunk_duration"], 5);
         assert_eq!(c.limits().chunk_seconds, 5.0);
         for _ in 0..3 {
             assert_eq!(c.next_chunk().unwrap().0.seconds, 5.0);
         }
-        prompt(&mut c, r#"{"type":"prompt","prompt_version":2,"prompt":"A","end_image_url":"e.png"}"#);
+        prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":2,"prompt":"A","end_image_url":"e.png"}"#,
+        );
         assert_eq!(c.next_chunk().unwrap().0.seconds, 5.0);
 
         let mut c = Control::new(Limits::default());
         let r = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P","chunk_duration":10,"end_image_url":"e.png"}"#).unwrap();
         assert_eq!(r["chunk_duration"], 10);
         let (p0, _) = c.next_chunk().unwrap();
-        assert_eq!((p0.seconds, p0.end_image.clone()), (10.0, Some(PathBuf::from("e.png"))));
+        assert_eq!(
+            (p0.seconds, p0.end_image.clone()),
+            (10.0, Some(PathBuf::from("e.png")))
+        );
         assert_eq!(c.next_chunk().unwrap().0.seconds, 10.0);
-        prompt(&mut c, r#"{"type":"prompt","prompt_version":2,"prompt":"A","replan":false}"#);
+        prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":2,"prompt":"A","replan":false}"#,
+        );
         assert_eq!(c.next_chunk().unwrap().0.seconds, 10.0);
         // Explicit 5 is the default.
         let mut c = Control::new(Limits::default());
-        assert_eq!(configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P","chunk_duration":5}"#).unwrap()["chunk_duration"], 5);
+        assert_eq!(
+            configure(
+                &mut c,
+                r#"{"type":"configure","prompt_version":1,"prompt":"P","chunk_duration":5}"#
+            )
+            .unwrap()["chunk_duration"],
+            5
+        );
         // Other values never reach the control: `invalid_message` at parse.
-        assert!(parse(r#"{"type":"configure","prompt_version":1,"prompt":"P","chunk_duration":7}"#).is_err());
+        assert!(parse(
+            r#"{"type":"configure","prompt_version":1,"prompt":"P","chunk_duration":7}"#
+        )
+        .is_err());
     }
 
     /// Options and fallbacks: a model whose clip range cannot hold 10 s
@@ -1054,32 +1514,67 @@ mod tests {
     fn chunk_options_and_fallbacks() {
         let l = Limits::default();
         assert_eq!(l.chunk_options(), [5, 10]);
-        assert_eq!((l.with_chunk(None).chunk_seconds, l.with_chunk(Some(10)).chunk_seconds), (5.0, 10.0));
-        let wan = Limits { max_chunk_seconds: 161.0 / 24.0, ..Limits::default() };
+        assert_eq!(
+            (
+                l.with_chunk(None).chunk_seconds,
+                l.with_chunk(Some(10)).chunk_seconds
+            ),
+            (5.0, 10.0)
+        );
+        let wan = Limits {
+            max_chunk_seconds: 161.0 / 24.0,
+            ..Limits::default()
+        };
         assert_eq!(wan.chunk_options(), [5]);
         assert_eq!(wan.with_chunk(Some(10)).chunk_seconds, 5.0);
         let mut c = Control::new(wan);
-        assert_eq!(configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P","chunk_duration":10}"#).unwrap()["chunk_duration"], 5);
+        assert_eq!(
+            configure(
+                &mut c,
+                r#"{"type":"configure","prompt_version":1,"prompt":"P","chunk_duration":10}"#
+            )
+            .unwrap()["chunk_duration"],
+            5
+        );
         assert_eq!(c.next_chunk().unwrap().0.seconds, 5.0);
         // H3 with the 1080P tier (cap 5 s): 10 s at 768p, 5 s at 1080p.
-        let h3 = Limits { resolutions: vec![Resolution::R768, Resolution::R1080], hd_max_chunk_seconds: Some(5.0), ..Limits::default() };
+        let h3 = Limits {
+            resolutions: vec![Resolution::R768, Resolution::R1080],
+            hd_max_chunk_seconds: Some(5.0),
+            ..Limits::default()
+        };
         assert_eq!(h3.at(Resolution::R1080).chunk_options(), [5]);
         assert_eq!(h3.at(Resolution::R768).chunk_options(), [5, 10]);
         let mut c = Control::new(h3.clone());
         let r = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P","resolution":"1080p","chunk_duration":10}"#).unwrap();
-        assert_eq!((r["chunk_duration"].as_u64(), c.next_chunk().unwrap().0.seconds), (Some(5), 5.0));
+        assert_eq!(
+            (
+                r["chunk_duration"].as_u64(),
+                c.next_chunk().unwrap().0.seconds
+            ),
+            (Some(5), 5.0)
+        );
         let mut c = Control::new(h3);
         let r = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P","resolution":"768p","chunk_duration":10}"#).unwrap();
         assert_eq!(r["chunk_duration"], 10);
         // A clip range below 5 s (no option): the request clamped.
-        let short = Limits { min_chunk_seconds: 2.0, max_chunk_seconds: 2.0, chunk_seconds: 2.0, ..Limits::default() };
+        let short = Limits {
+            min_chunk_seconds: 2.0,
+            max_chunk_seconds: 2.0,
+            chunk_seconds: 2.0,
+            ..Limits::default()
+        };
         assert!(short.chunk_options().is_empty());
         assert_eq!(short.with_chunk(Some(10)).chunk_seconds, 2.0);
         // Causal: ignored, the director chunk stays 3 s.
         let causal = causal_limits();
         assert!(causal.chunk_options().is_empty());
         let mut c = Control::new(causal);
-        let r = configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P","chunk_duration":10}"#).unwrap();
+        let r = configure(
+            &mut c,
+            r#"{"type":"configure","prompt_version":1,"prompt":"P","chunk_duration":10}"#,
+        )
+        .unwrap();
         assert_eq!(r["chunk_duration"], 3);
         assert_eq!(c.limits().chunk_seconds, 3.0);
     }
@@ -1100,29 +1595,70 @@ mod tests {
         let secs: Vec<f64> = segs.iter().map(|s| s.seconds).collect();
         assert_eq!(secs, [8.0, 5.0, 5.0, 5.0, 5.0, 5.0, 7.0]);
         assert_eq!(secs.iter().sum::<f64>(), 40.0);
-        assert!(secs.iter().all(|&x| (l.min_chunk_seconds..=10.0).contains(&x)), "{secs:?}");
-        assert_eq!((segs[0].end_image, segs[6].end_image, last), (Some(1), Some(3), Some(3)));
+        assert!(
+            secs.iter()
+                .all(|&x| (l.min_chunk_seconds..=10.0).contains(&x)),
+            "{secs:?}"
+        );
+        assert_eq!(
+            (segs[0].end_image, segs[6].end_image, last),
+            (Some(1), Some(3), Some(3))
+        );
         // "turn" (12 s) directs the first chunk starting at or after it (13 s).
         let texts: Vec<Option<usize>> = segs.iter().map(|s| s.text).collect();
-        assert_eq!(texts, [Some(0), Some(0), Some(2), Some(2), Some(2), Some(2), Some(2)]);
+        assert_eq!(
+            texts,
+            [
+                Some(0),
+                Some(0),
+                Some(2),
+                Some(2),
+                Some(2),
+                Some(2),
+                Some(2)
+            ]
+        );
         // Gaps 5..10 s stay one chunk; 11 s splits 5 + 6; under 5 s refused.
-        for (end, want) in [(5u64, vec![5.0]), (7, vec![7.0]), (9, vec![9.0]), (10, vec![5.0, 5.0]), (11, vec![5.0, 6.0]), (16, vec![5.0, 5.0, 6.0])] {
-            let b: Vec<ScriptBeat> = serde_json::from_value(json!([{"offset": end, "end_image_url": "e"}])).unwrap();
-            let got: Vec<f64> = plan_script(&b, &l).unwrap().0.iter().map(|s| s.seconds).collect();
+        for (end, want) in [
+            (5u64, vec![5.0]),
+            (7, vec![7.0]),
+            (9, vec![9.0]),
+            (10, vec![5.0, 5.0]),
+            (11, vec![5.0, 6.0]),
+            (16, vec![5.0, 5.0, 6.0]),
+        ] {
+            let b: Vec<ScriptBeat> =
+                serde_json::from_value(json!([{"offset": end, "end_image_url": "e"}])).unwrap();
+            let got: Vec<f64> = plan_script(&b, &l)
+                .unwrap()
+                .0
+                .iter()
+                .map(|s| s.seconds)
+                .collect();
             assert_eq!(got, want, "end image at {end}s");
         }
-        let b: Vec<ScriptBeat> = serde_json::from_value(json!([{"offset": 4, "end_image_url": "e"}])).unwrap();
+        let b: Vec<ScriptBeat> =
+            serde_json::from_value(json!([{"offset": 4, "end_image_url": "e"}])).unwrap();
         assert!(plan_script(&b, &l).is_err());
         // Under the 5 s 1080p cap only multiples of 5 s can end on an image;
         // a text beat that cannot end a chunk directs from the next one.
-        let hd = Limits { hd_max_chunk_seconds: Some(5.0), ..Limits::default() }.at(Resolution::R1080);
-        let b: Vec<ScriptBeat> = serde_json::from_value(json!([{"offset": 7, "end_image_url": "e"}])).unwrap();
+        let hd = Limits {
+            hd_max_chunk_seconds: Some(5.0),
+            ..Limits::default()
+        }
+        .at(Resolution::R1080);
+        let b: Vec<ScriptBeat> =
+            serde_json::from_value(json!([{"offset": 7, "end_image_url": "e"}])).unwrap();
         assert!(plan_script(&b, &hd).unwrap_err().contains("cannot be cut"));
         let b: Vec<ScriptBeat> = serde_json::from_value(json!([{"offset": 0, "prompt": "a"}, {"offset": 7, "prompt": "b"}, {"offset": 15, "end_image_url": "e"}])).unwrap();
         let (segs, _) = plan_script(&b, &hd).unwrap();
-        assert_eq!(segs.iter().map(|s| (s.seconds, s.text)).collect::<Vec<_>>(), [(5.0, Some(0)), (5.0, Some(0)), (5.0, Some(1))]);
+        assert_eq!(
+            segs.iter().map(|s| (s.seconds, s.text)).collect::<Vec<_>>(),
+            [(5.0, Some(0)), (5.0, Some(0)), (5.0, Some(1))]
+        );
         // Text only: one default chunk.
-        let b: Vec<ScriptBeat> = serde_json::from_value(json!([{"offset": 0, "prompt": "x"}])).unwrap();
+        let b: Vec<ScriptBeat> =
+            serde_json::from_value(json!([{"offset": 0, "prompt": "x"}])).unwrap();
         assert_eq!(plan_script(&b, &l).unwrap().0[0].seconds, 5.0);
         // The session's chunk length drives a configured script.
         let mut c = Control::new(Limits::default());
@@ -1139,7 +1675,10 @@ mod tests {
     /// default.
     #[test]
     fn scripts_plan_chunks_at_beats() {
-        let l = Limits { chunk_seconds: 10.0, ..Limits::default() };
+        let l = Limits {
+            chunk_seconds: 10.0,
+            ..Limits::default()
+        };
         let beats: Vec<ScriptBeat> = serde_json::from_value(json!([
             {"offset": 0, "prompt": "open"},
             {"offset": 8, "end_image_url": "e8.png"},
@@ -1158,10 +1697,13 @@ mod tests {
         assert_eq!(segs[3].end_image, Some(3));
         assert_eq!(last, Some(3));
         // Infeasible timings.
-        let near: Vec<ScriptBeat> = serde_json::from_value(json!([{"offset": 3, "end_image_url": "a"}])).unwrap();
+        let near: Vec<ScriptBeat> =
+            serde_json::from_value(json!([{"offset": 3, "end_image_url": "a"}])).unwrap();
         assert!(plan_script(&near, &l).is_err());
-        let close: Vec<ScriptBeat> =
-            serde_json::from_value(json!([{"offset": 10, "end_image_url": "a"}, {"offset": 12, "end_image_url": "b"}])).unwrap();
+        let close: Vec<ScriptBeat> = serde_json::from_value(
+            json!([{"offset": 10, "end_image_url": "a"}, {"offset": 12, "end_image_url": "b"}]),
+        )
+        .unwrap();
         assert!(plan_script(&close, &l).unwrap_err().contains("closer"));
 
         let mut c = Control::new(l);
@@ -1171,20 +1713,32 @@ mod tests {
         )
         .unwrap();
         let (p0, _) = c.next_chunk().unwrap();
-        assert_eq!((p0.seconds, p0.prompt.as_str(), p0.end_image.clone()), (8.0, "P open", Some(PathBuf::from("e8.png"))));
+        assert_eq!(
+            (p0.seconds, p0.prompt.as_str(), p0.end_image.clone()),
+            (8.0, "P open", Some(PathBuf::from("e8.png")))
+        );
         let (p1, _) = c.next_chunk().unwrap();
         assert_eq!((p1.seconds, p1.prompt.as_str()), (10.0, "P open"));
 
         // A live script replaces the deck and announces itself once.
-        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":3,"script":[{"offset":0,"prompt":"night"},{"offset":6,"end_image_url":"n.png"}]}"#);
+        let out = prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":3,"script":[{"offset":0,"prompt":"night"},{"offset":6,"end_image_url":"n.png"}]}"#,
+        );
         assert_eq!(types(&out), ["prompt_pending"]);
         let (p, applied) = c.next_chunk().unwrap();
         assert_eq!((p.prompt.as_str(), p.seconds), ("P night", 6.0));
         assert_eq!(applied[0]["script_origin_chunk_index"], 2);
         assert_eq!(applied[0]["script_mode"], "replace");
-        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":4,"prompt":"x","script":[{"offset":0,"prompt":"y"}]}"#);
+        let out = prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":4,"prompt":"x","script":[{"offset":0,"prompt":"y"}]}"#,
+        );
         assert_eq!(out[0]["reason"], "invalid_script");
-        let out = prompt(&mut c, r#"{"type":"prompt","prompt_version":5,"script":[{"offset":2,"end_image_url":"z"}]}"#);
+        let out = prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":5,"script":[{"offset":2,"end_image_url":"z"}]}"#,
+        );
         assert_eq!(out[0]["reason"], "infeasible_timing");
     }
 
@@ -1194,33 +1748,73 @@ mod tests {
     #[test]
     fn peek_and_reserve() {
         let mut c = Control::new(Limits::default());
-        configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P","image_url":"f.png"}"#).unwrap();
+        configure(
+            &mut c,
+            r#"{"type":"configure","prompt_version":1,"prompt":"P","image_url":"f.png"}"#,
+        )
+        .unwrap();
         let p = c.peek(3);
         assert_eq!(p.iter().map(|x| x.index).collect::<Vec<_>>(), [0, 1, 2]);
         assert_eq!(p[0].first_image, Some(PathBuf::from("f.png")));
         assert_eq!(c.next_chunk().unwrap().0, p[0]);
         // Three segments planned: an appended direction goes fourth.
         c.reserve(3);
-        prompt(&mut c, r#"{"type":"prompt","prompt_version":2,"prompt":"A","replan":false}"#);
-        let got: Vec<(String, usize)> = (0..5).map(|_| c.next_chunk().unwrap()).map(|(p, a)| (p.prompt, a.len())).collect();
-        assert_eq!(got, [("P".into(), 0), ("P".into(), 0), ("P".into(), 0), ("P A".into(), 1), ("P A".into(), 0)]);
+        prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":2,"prompt":"A","replan":false}"#,
+        );
+        let got: Vec<(String, usize)> = (0..5)
+            .map(|_| c.next_chunk().unwrap())
+            .map(|(p, a)| (p.prompt, a.len()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("P".into(), 0),
+                ("P".into(), 0),
+                ("P".into(), 0),
+                ("P A".into(), 1),
+                ("P A".into(), 0)
+            ]
+        );
         // Reservations are not deck entries for queue_full.
         c.reserve(6);
         for v in 3..9u64 {
-            let out = prompt(&mut c, &format!(r#"{{"type":"prompt","prompt_version":{v},"prompt":"s{v}","replan":false}}"#));
+            let out = prompt(
+                &mut c,
+                &format!(
+                    r#"{{"type":"prompt","prompt_version":{v},"prompt":"s{v}","replan":false}}"#
+                ),
+            );
             assert_eq!(types(&out), ["prompt_pending"], "v{v}");
         }
-        assert_eq!(prompt(&mut c, r#"{"type":"prompt","prompt_version":9,"prompt":"x","replan":false}"#)[0]["reason"], "queue_full");
+        assert_eq!(
+            prompt(
+                &mut c,
+                r#"{"type":"prompt","prompt_version":9,"prompt":"x","replan":false}"#
+            )[0]["reason"],
+            "queue_full"
+        );
         // A replan clears the deck, reservations included.
-        prompt(&mut c, r#"{"type":"prompt","prompt_version":10,"prompt":"B"}"#);
+        prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":10,"prompt":"B"}"#,
+        );
         assert_eq!(c.deck_len(), 1);
         assert_eq!(c.next_chunk().unwrap().0.prompt, "P B");
         // Causal: one entry of the needed blocks.
         let mut c = Control::new(causal_limits());
-        configure(&mut c, r#"{"type":"configure","prompt_version":1,"prompt":"P"}"#).unwrap();
+        configure(
+            &mut c,
+            r#"{"type":"configure","prompt_version":1,"prompt":"P"}"#,
+        )
+        .unwrap();
         c.reserve(8);
         assert_eq!(c.deck_len(), 1);
-        prompt(&mut c, r#"{"type":"prompt","prompt_version":2,"prompt":"A","replan":false}"#);
+        prompt(
+            &mut c,
+            r#"{"type":"prompt","prompt_version":2,"prompt":"A","replan":false}"#,
+        );
         let got: Vec<String> = (0..9).map(|_| c.next_chunk().unwrap().0.prompt).collect();
         assert_eq!(got.iter().filter(|p| *p == "P").count(), 8);
         assert_eq!(got[8], "P A");

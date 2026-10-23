@@ -66,7 +66,8 @@ pub const QUALITY_GATES: &[QualityGate] = &[
     QualityGate {
         id: "clipped_fraction_max",
         title: "Maximum saturation",
-        description: "Fraction of samples at the clamp rails (|x| >= 0.99) must stay below the ceiling.",
+        description:
+            "Fraction of samples at the clamp rails (|x| >= 0.99) must stay below the ceiling.",
         threshold: "0.25",
         unit: "fraction",
         failure_mode: "saturated frames",
@@ -74,7 +75,8 @@ pub const QUALITY_GATES: &[QualityGate] = &[
     QualityGate {
         id: "temporal_mad",
         title: "Temporal coherence band",
-        description: "Mean absolute difference between consecutive frames must stay inside the band.",
+        description:
+            "Mean absolute difference between consecutive frames must stay inside the band.",
         threshold: "0.2 – 45.0",
         unit: "0..255 MAD",
         failure_mode: "frozen video (too low) or incoherent noise (too high)",

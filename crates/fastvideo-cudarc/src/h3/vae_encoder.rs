@@ -561,10 +561,15 @@ impl H3VideoEncoder {
         noise_aug: bool,
         seed: u64,
     ) -> Result<CudaTensor> {
-        let fitted = fastvideo_models::h3::packing::prepare_keyframe_rgb(rgb, width, height, width, height, true)
-            .map_err(msg)?;
-        let x = CudaTensor::from_vec(imagenet_from_signed(fitted, height, width), vec![1, 3, 1, height, width])?
-            .to_device()?;
+        let fitted = fastvideo_models::h3::packing::prepare_keyframe_rgb(
+            rgb, width, height, width, height, true,
+        )
+        .map_err(msg)?;
+        let x = CudaTensor::from_vec(
+            imagenet_from_signed(fitted, height, width),
+            vec![1, 3, 1, height, width],
+        )?
+        .to_device()?;
         let mut z = self.encode(&x)?;
         if noise_aug {
             z = scale_noise_latent(&z, KEYFRAME_NOISE_AUG, seed)?;

@@ -81,13 +81,21 @@ impl Secret {
 
 impl std::fmt::Debug for Secret {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(if self.0.is_empty() { "<unset>" } else { "<redacted>" })
+        f.write_str(if self.0.is_empty() {
+            "<unset>"
+        } else {
+            "<redacted>"
+        })
     }
 }
 
 impl Serialize for Secret {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(if self.0.is_empty() { "<unset>" } else { "<redacted>" })
+        s.serialize_str(if self.0.is_empty() {
+            "<unset>"
+        } else {
+            "<redacted>"
+        })
     }
 }
 
@@ -467,9 +475,15 @@ impl Default for ProtocolsCfg {
             native: true,
             // = fastvideo_fal::DEFAULT_APPS (the H3 tiers plus fal's own
             // `minimax/h3-max-turbo` and base `minimax/h3` ids).
-            fal_apps: ["minimax/h3-max", "minimax/h3-turbo", "minimax/h3-draft", "minimax/h3-max-turbo", "minimax/h3"]
-                .map(String::from)
-                .to_vec(),
+            fal_apps: [
+                "minimax/h3-max",
+                "minimax/h3-turbo",
+                "minimax/h3-draft",
+                "minimax/h3-max-turbo",
+                "minimax/h3",
+            ]
+            .map(String::from)
+            .to_vec(),
         }
     }
 }
@@ -483,7 +497,10 @@ pub struct LimitsCfg {
 
 impl Default for LimitsCfg {
     fn default() -> Self {
-        Self { queue_max: 32, body_max_mb: 64 }
+        Self {
+            queue_max: 32,
+            body_max_mb: 64,
+        }
     }
 }
 
@@ -501,7 +518,11 @@ pub struct LtxCfg {
 
 impl Default for LtxCfg {
     fn default() -> Self {
-        Self { sync_timeout_s: None, v1_concurrency: 2, url_ttl_s: None }
+        Self {
+            sync_timeout_s: None,
+            v1_concurrency: 2,
+            url_ttl_s: None,
+        }
     }
 }
 
@@ -555,13 +576,19 @@ pub struct StreamsCfg {
 impl Default for StreamsCfg {
     fn default() -> Self {
         let l = fastvideo_protocol::CausalLimits::default();
-        Self { causal_default_max_s: l.default_max_s, causal_hard_max_s: l.hard_max_s }
+        Self {
+            causal_default_max_s: l.default_max_s,
+            causal_hard_max_s: l.hard_max_s,
+        }
     }
 }
 
 impl StreamsCfg {
     pub fn causal_limits(&self) -> fastvideo_protocol::CausalLimits {
-        fastvideo_protocol::CausalLimits { default_max_s: self.causal_default_max_s, hard_max_s: self.causal_hard_max_s }
+        fastvideo_protocol::CausalLimits {
+            default_max_s: self.causal_default_max_s,
+            hard_max_s: self.causal_hard_max_s,
+        }
     }
 }
 
@@ -594,17 +621,31 @@ pub struct SegmentsCfg {
 
 impl Default for SegmentsCfg {
     fn default() -> Self {
-        Self { enabled: true, model: None, idle_ttl_s: 120, max_seconds: None, url_ttl_s: 3600, encoder: "nvenc".into(), keep: 256, queue: 8 }
+        Self {
+            enabled: true,
+            model: None,
+            idle_ttl_s: 120,
+            max_seconds: None,
+            url_ttl_s: 3600,
+            encoder: "nvenc".into(),
+            keep: 256,
+            queue: 8,
+        }
     }
 }
 
 impl SegmentsCfg {
     pub fn validate(&self) -> Result<(), ConfigError> {
         if !matches!(self.encoder.as_str(), "nvenc" | "libx264") {
-            return Err(ConfigError::Invalid(format!("[segments] encoder `{}`: nvenc or libx264", self.encoder)));
+            return Err(ConfigError::Invalid(format!(
+                "[segments] encoder `{}`: nvenc or libx264",
+                self.encoder
+            )));
         }
         if self.max_seconds == Some(0) {
-            return Err(ConfigError::Invalid("[segments] max_seconds must be 1 or more".into()));
+            return Err(ConfigError::Invalid(
+                "[segments] max_seconds must be 1 or more".into(),
+            ));
         }
         Ok(())
     }
@@ -696,7 +737,12 @@ pub struct OutputsCfg {
 
 impl Default for OutputsCfg {
     fn default() -> Self {
-        Self { allow_private: false, srt_latency_ms: 1000, rtmps_ca_file: None, cloudflare: CloudflareOutputCfg::default() }
+        Self {
+            allow_private: false,
+            srt_latency_ms: 1000,
+            rtmps_ca_file: None,
+            cloudflare: CloudflareOutputCfg::default(),
+        }
     }
 }
 
@@ -845,7 +891,12 @@ pub struct MaxCharsCfg {
 impl Default for MaxCharsCfg {
     fn default() -> Self {
         let d = fastvideo_upsampler::MaxChars::default();
-        Self { wan: d.wan, ltx: d.ltx, h3: d.h3, other: d.other }
+        Self {
+            wan: d.wan,
+            ltx: d.ltx,
+            h3: d.h3,
+            other: d.other,
+        }
     }
 }
 
@@ -873,7 +924,11 @@ impl UpsamplerCfg {
     /// at the 32-38 tok/s a local 4B decodes beside a denoising chunk takes
     /// ~30 s), else 10000.
     pub fn timeout_ms(&self) -> u64 {
-        self.timeout_ms.unwrap_or(if self.is_local() { UPSAMPLER_LOCAL_TIMEOUT_MS } else { UPSAMPLER_TIMEOUT_MS })
+        self.timeout_ms.unwrap_or(if self.is_local() {
+            UPSAMPLER_LOCAL_TIMEOUT_MS
+        } else {
+            UPSAMPLER_TIMEOUT_MS
+        })
     }
 
     /// `hedge`, else off for a local server (a hedge doubles its load), else on.
@@ -884,7 +939,11 @@ impl UpsamplerCfg {
     /// `deck_size`, else 2 for a local server (every planned segment is an
     /// LLM call competing with the video model for the GPU), else 6.
     pub fn deck_size(&self) -> usize {
-        self.deck_size.unwrap_or(if self.is_local() { UPSAMPLER_LOCAL_DECK_SIZE } else { UPSAMPLER_DECK_SIZE })
+        self.deck_size.unwrap_or(if self.is_local() {
+            UPSAMPLER_LOCAL_DECK_SIZE
+        } else {
+            UPSAMPLER_DECK_SIZE
+        })
     }
 
     /// The service settings (the transport is built from `base_url`,
@@ -896,7 +955,12 @@ impl UpsamplerCfg {
             timeout: Duration::from_millis(self.timeout_ms()),
             hedge: self.hedge(),
             memory: self.memory as usize,
-            max_chars: fastvideo_upsampler::MaxChars { wan: m.wan, ltx: m.ltx, h3: m.h3, other: m.other },
+            max_chars: fastvideo_upsampler::MaxChars {
+                wan: m.wan,
+                ltx: m.ltx,
+                h3: m.h3,
+                other: m.other,
+            },
             max_tokens: fastvideo_upsampler::MaxTokens::default(),
             default_on: self.default_on,
             context_tokens: self.context_tokens,
@@ -908,7 +972,8 @@ impl UpsamplerCfg {
 
     fn validate(&self) -> Result<(), ConfigError> {
         let bad = |m: String| Err(ConfigError::Invalid(format!("[upsampler]: {m}")));
-        let u = url::Url::parse(self.base_url.trim()).map_err(|e| ConfigError::Invalid(format!("[upsampler] base_url: {e}")))?;
+        let u = url::Url::parse(self.base_url.trim())
+            .map_err(|e| ConfigError::Invalid(format!("[upsampler] base_url: {e}")))?;
         if !matches!(u.scheme(), "http" | "https") {
             return bad(format!("base_url must be http(s), got {}", u.scheme()));
         }
@@ -916,17 +981,26 @@ impl UpsamplerCfg {
             return bad("model is required (FV_UPSAMPLER_MODEL)".into());
         }
         if !(100..=120_000).contains(&self.timeout_ms()) {
-            return bad(format!("timeout_ms must be 100..120000, got {}", self.timeout_ms()));
+            return bad(format!(
+                "timeout_ms must be 100..120000, got {}",
+                self.timeout_ms()
+            ));
         }
         if !(1..=50).contains(&self.memory) {
             return bad(format!("memory must be 1..50, got {}", self.memory));
         }
         let m = self.max_chars;
-        if [m.wan, m.ltx, m.h3, m.other].iter().any(|&n| !(200..=20_000).contains(&n)) {
+        if [m.wan, m.ltx, m.h3, m.other]
+            .iter()
+            .any(|&n| !(200..=20_000).contains(&n))
+        {
             return bad("max_chars values must be 200..20000".into());
         }
         if !(4_096..=1_000_000).contains(&self.context_tokens) {
-            return bad(format!("context_tokens must be 4096..1000000, got {}", self.context_tokens));
+            return bad(format!(
+                "context_tokens must be 4096..1000000, got {}",
+                self.context_tokens
+            ));
         }
         if !(1..=12).contains(&self.deck_size()) {
             return bad(format!("deck_size must be 1..12, got {}", self.deck_size()));
@@ -1123,7 +1197,10 @@ pub struct LogCfg {
 
 impl Default for LogCfg {
     fn default() -> Self {
-        Self { format: "text".into(), filter: "info".into() }
+        Self {
+            format: "text".into(),
+            filter: "info".into(),
+        }
     }
 }
 
@@ -1150,7 +1227,12 @@ pub struct ModerationCfg {
 
 impl Default for ModerationCfg {
     fn default() -> Self {
-        Self { ncii: "off".into(), ncii_dir: None, ncii_threshold: 0.5, ncii_concurrency: 2 }
+        Self {
+            ncii: "off".into(),
+            ncii_dir: None,
+            ncii_threshold: 0.5,
+            ncii_concurrency: 2,
+        }
     }
 }
 
@@ -1163,8 +1245,11 @@ impl ModerationCfg {
     /// `ncii_dir`, else `$FV_WEIGHTS/auxiliary/ncii-light-guard`.
     pub fn ncii_dir(&self, env: &dyn Env) -> PathBuf {
         self.ncii_dir.clone().unwrap_or_else(|| {
-            PathBuf::from(env.var("FV_WEIGHTS").unwrap_or_else(|| "/workspace/weights".into()))
-                .join(fastvideo_models::ncii::NCII_TREE)
+            PathBuf::from(
+                env.var("FV_WEIGHTS")
+                    .unwrap_or_else(|| "/workspace/weights".into()),
+            )
+            .join(fastvideo_models::ncii::NCII_TREE)
         })
     }
 
@@ -1177,7 +1262,9 @@ impl ModerationCfg {
             )));
         }
         if self.ncii_concurrency == 0 {
-            return Err(ConfigError::Invalid("[moderation] ncii_concurrency must be 1 or more".into()));
+            return Err(ConfigError::Invalid(
+                "[moderation] ncii_concurrency must be 1 or more".into(),
+            ));
         }
         Ok(())
     }
@@ -1249,7 +1336,8 @@ impl Env for BTreeMap<String, String> {
 
 /// `NAME` or its lower-case Runpod-secret spelling.
 fn var2(env: &dyn Env, name: &str) -> Option<String> {
-    env.var(name).or_else(|| env.var(&name.to_ascii_lowercase()))
+    env.var(name)
+        .or_else(|| env.var(&name.to_ascii_lowercase()))
 }
 
 fn parse_enum<T: for<'de> Deserialize<'de>>(name: &str, v: &str) -> Result<T, ConfigError> {
@@ -1267,7 +1355,8 @@ impl Config {
     pub fn load(path: Option<&Path>, env: &dyn Env) -> Result<Self, ConfigError> {
         let mut c = match path {
             Some(p) => {
-                let text = std::fs::read_to_string(p).map_err(|e| ConfigError::Read(p.to_owned(), e))?;
+                let text =
+                    std::fs::read_to_string(p).map_err(|e| ConfigError::Read(p.to_owned(), e))?;
                 Self::from_toml(&text, &p.display().to_string())?
             }
             None => Self::default(),
@@ -1286,8 +1375,16 @@ impl Config {
             self.server.bind = v;
         }
         if let Some(p) = env.var("PORT") {
-            let port: u16 = p.trim().parse().map_err(|_| ConfigError::Invalid(format!("PORT={p} is not a port")))?;
-            let host = self.server.bind.rsplit_once(':').map_or("0.0.0.0", |(h, _)| h).to_owned();
+            let port: u16 = p
+                .trim()
+                .parse()
+                .map_err(|_| ConfigError::Invalid(format!("PORT={p} is not a port")))?;
+            let host = self
+                .server
+                .bind
+                .rsplit_once(':')
+                .map_or("0.0.0.0", |(h, _)| h)
+                .to_owned();
             self.server.bind = format!("{host}:{port}");
         }
         if let Some(v) = env.var("FV_PUBLIC_BASE_URL") {
@@ -1303,17 +1400,21 @@ impl Config {
             self.server.callbacks_allow_private = matches!(v.trim(), "1" | "true" | "yes");
         }
         if let Some(v) = env.var("FV_WORKERS_MAX") {
-            self.server.workers_max = v
-                .trim()
-                .parse()
-                .ok()
-                .filter(|n| *n >= 1)
-                .ok_or_else(|| ConfigError::Invalid(format!("FV_WORKERS_MAX={v} is not a worker count (1 or more)")))?;
+            self.server.workers_max =
+                v.trim().parse().ok().filter(|n| *n >= 1).ok_or_else(|| {
+                    ConfigError::Invalid(format!(
+                        "FV_WORKERS_MAX={v} is not a worker count (1 or more)"
+                    ))
+                })?;
         }
         if let Some(v) = env.var("FV_CORS_ORIGINS") {
             self.server.cors_origins = match v.trim() {
                 "" | "none" | "off" => Vec::new(),
-                list => list.split(',').map(|o| o.trim().to_owned()).filter(|o| !o.is_empty()).collect(),
+                list => list
+                    .split(',')
+                    .map(|o| o.trim().to_owned())
+                    .filter(|o| !o.is_empty())
+                    .collect(),
             };
         }
         if let Some(v) = env.var("FV_WORKER_ID") {
@@ -1368,7 +1469,10 @@ impl Config {
         // RT's own environment names (reactor §3.3).
         for (k, slot) in [
             ("ORPHAN_TIMEOUT_SECONDS", &mut self.reactor.orphan_timeout_s),
-            ("WEBRTC_CLIENT_PING_TIMEOUT_SECONDS", &mut self.reactor.ping_timeout_s),
+            (
+                "WEBRTC_CLIENT_PING_TIMEOUT_SECONDS",
+                &mut self.reactor.ping_timeout_s,
+            ),
         ] {
             if let Some(v) = env.var(k) {
                 *slot = v
@@ -1377,20 +1481,22 @@ impl Config {
                     .ok()
                     .filter(|s| s.is_finite() && *s > 0.0)
                     .map(|s| s.ceil() as u64)
-                    .ok_or_else(|| ConfigError::Invalid(format!("{k}={v} is not a positive number of seconds")))?;
+                    .ok_or_else(|| {
+                        ConfigError::Invalid(format!("{k}={v} is not a positive number of seconds"))
+                    })?;
             }
         }
         for (k, slot) in [
-            ("FV_CAUSAL_DEFAULT_MAX_S", &mut self.streams.causal_default_max_s),
+            (
+                "FV_CAUSAL_DEFAULT_MAX_S",
+                &mut self.streams.causal_default_max_s,
+            ),
             ("FV_CAUSAL_HARD_MAX_S", &mut self.streams.causal_hard_max_s),
         ] {
             if let Some(v) = env.var(k) {
-                *slot = v
-                    .trim()
-                    .parse()
-                    .ok()
-                    .filter(|n| *n >= 1)
-                    .ok_or_else(|| ConfigError::Invalid(format!("{k}={v} is not a number of seconds (1 or more)")))?;
+                *slot = v.trim().parse().ok().filter(|n| *n >= 1).ok_or_else(|| {
+                    ConfigError::Invalid(format!("{k}={v} is not a number of seconds (1 or more)"))
+                })?;
             }
         }
         if let Some(v) = env.var("FV_SEGMENTS_MODEL") {
@@ -1400,12 +1506,12 @@ impl Config {
             self.segments.encoder = v.trim().to_owned();
         }
         if let Some(v) = env.var("FV_SEGMENTS_IDLE_TTL_S") {
-            self.segments.idle_ttl_s = v
-                .trim()
-                .parse()
-                .ok()
-                .filter(|n| *n >= 1)
-                .ok_or_else(|| ConfigError::Invalid(format!("FV_SEGMENTS_IDLE_TTL_S={v} is not a number of seconds (1 or more)")))?;
+            self.segments.idle_ttl_s =
+                v.trim().parse().ok().filter(|n| *n >= 1).ok_or_else(|| {
+                    ConfigError::Invalid(format!(
+                        "FV_SEGMENTS_IDLE_TTL_S={v} is not a number of seconds (1 or more)"
+                    ))
+                })?;
         }
         if let Some(v) = env.var("FV_REACTOR_MODEL") {
             self.reactor.model = Some(v);
@@ -1458,10 +1564,13 @@ impl Config {
                 .parse()
                 .ok()
                 .filter(|n| (20..=8000).contains(n))
-                .ok_or_else(|| ConfigError::Invalid(format!("FV_OUTPUTS_SRT_LATENCY_MS={v} is not 20..8000")))?;
+                .ok_or_else(|| {
+                    ConfigError::Invalid(format!("FV_OUTPUTS_SRT_LATENCY_MS={v} is not 20..8000"))
+                })?;
         }
         if let Some(v) = env.var("FV_OUTPUTS_RTMPS_CA_FILE") {
-            self.outputs.rtmps_ca_file = Some(PathBuf::from(v.trim())).filter(|p| !p.as_os_str().is_empty());
+            self.outputs.rtmps_ca_file =
+                Some(PathBuf::from(v.trim())).filter(|p| !p.as_os_str().is_empty());
         }
         if let Some(v) = env.var("FV_DIRECTOR_ALLOW_OUTPUT") {
             self.director.allow_output = matches!(v.trim(), "1" | "true" | "yes" | "on");
@@ -1501,12 +1610,11 @@ impl Config {
             s3.region = Some(v);
         }
         if let Some(v) = env.var("FV_JOBS_HEARTBEAT_S") {
-            self.jobs.heartbeat_s = v
-                .trim()
-                .parse()
-                .ok()
-                .filter(|n| *n >= 1)
-                .ok_or_else(|| ConfigError::Invalid(format!("FV_JOBS_HEARTBEAT_S={v} is not a number of seconds")))?;
+            self.jobs.heartbeat_s = v.trim().parse().ok().filter(|n| *n >= 1).ok_or_else(|| {
+                ConfigError::Invalid(format!(
+                    "FV_JOBS_HEARTBEAT_S={v} is not a number of seconds"
+                ))
+            })?;
         }
         if let Some(v) = env.var("FV_ARTIFACTS_DIR") {
             self.artifacts.local_dir = Some(v.into());
@@ -1526,19 +1634,33 @@ impl Config {
         if let Some(v) = env.var("FV_DISPATCH_DO_URL") {
             self.dispatch.do_url = Some(v.trim().to_owned()).filter(|s| !s.is_empty());
         }
-        if let Some(v) = env.var("FV_DISPATCH_CAPACITY").and_then(|v| v.trim().parse().ok()) {
+        if let Some(v) = env
+            .var("FV_DISPATCH_CAPACITY")
+            .and_then(|v| v.trim().parse().ok())
+        {
             self.dispatch.capacity = v;
         }
         if let Some(v) = env.var("FV_DISPATCH_FAMILIES") {
-            self.dispatch.families = v.split([',', ' ']).map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect();
+            self.dispatch.families = v
+                .split([',', ' '])
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect();
         }
-        if let Some(v) = env.var("FV_DISPATCH_SESSIONS").and_then(|v| v.trim().parse().ok()) {
+        if let Some(v) = env
+            .var("FV_DISPATCH_SESSIONS")
+            .and_then(|v| v.trim().parse().ok())
+        {
             self.dispatch.sessions = v;
         }
         if let Some(v) = env.var("FV_DISPATCH_DIRECT_UPLOAD") {
             self.dispatch.direct_upload = matches!(v.trim(), "1" | "true" | "on" | "yes");
         }
-        if let Some(v) = env.var("FV_DISPATCH_UPLOAD_PART_MIB").and_then(|v| v.trim().parse().ok()) {
+        if let Some(v) = env
+            .var("FV_DISPATCH_UPLOAD_PART_MIB")
+            .and_then(|v| v.trim().parse().ok())
+        {
             self.dispatch.upload_part_mib = v;
         }
         if let Some(v) = env.var("FV_DISPATCH_FRONT") {
@@ -1556,17 +1678,26 @@ impl Config {
                 .filter(|(m, f)| !m.is_empty() && !f.is_empty())
                 .collect();
         }
-        if let Some(v) = env.var("FV_DISPATCH_MAX_QUEUED").and_then(|v| v.trim().parse().ok()) {
+        if let Some(v) = env
+            .var("FV_DISPATCH_MAX_QUEUED")
+            .and_then(|v| v.trim().parse().ok())
+        {
             self.dispatch.max_queued = v;
         }
-        if let Some(v) = env.var("FV_DISPATCH_STATUS_S").and_then(|v| v.trim().parse().ok()) {
+        if let Some(v) = env
+            .var("FV_DISPATCH_STATUS_S")
+            .and_then(|v| v.trim().parse().ok())
+        {
             self.dispatch.status_s = v;
         }
         self.apply_upsampler_env(env)?;
         if let Some(v) = env.var("FV_MODERATION_NCII") {
             self.moderation.ncii = v.trim().to_owned();
         }
-        if let Some(v) = env.var("FV_MODERATION_NCII_DIR").filter(|v| !v.trim().is_empty()) {
+        if let Some(v) = env
+            .var("FV_MODERATION_NCII_DIR")
+            .filter(|v| !v.trim().is_empty())
+        {
             self.moderation.ncii_dir = Some(PathBuf::from(v.trim()));
         }
         if let Some(v) = env.var("FV_MODERATION_NCII_THRESHOLD") {
@@ -1587,9 +1718,13 @@ impl Config {
     /// key from `api_key_env`.
     fn apply_upsampler_env(&mut self, env: &dyn Env) -> Result<(), ConfigError> {
         if let Some(v) = env.var("FV_UPSAMPLER_BASE_URL") {
-            self.upsampler.get_or_insert_with(UpsamplerCfg::default).base_url = v.trim().to_owned();
+            self.upsampler
+                .get_or_insert_with(UpsamplerCfg::default)
+                .base_url = v.trim().to_owned();
         }
-        let Some(u) = self.upsampler.as_mut() else { return Ok(()) };
+        let Some(u) = self.upsampler.as_mut() else {
+            return Ok(());
+        };
         if let Some(v) = env.var("FV_UPSAMPLER_MODEL") {
             u.model = v.trim().to_owned();
         }
@@ -1606,13 +1741,21 @@ impl Config {
             u.vision = matches!(v.trim(), "1" | "true" | "on" | "yes");
         }
         if let Some(v) = env.var("FV_UPSAMPLER_CONTEXT_TOKENS") {
-            u.context_tokens = v.trim().parse().map_err(|_| ConfigError::Invalid(format!("FV_UPSAMPLER_CONTEXT_TOKENS={v} is not a number")))?;
+            u.context_tokens = v.trim().parse().map_err(|_| {
+                ConfigError::Invalid(format!("FV_UPSAMPLER_CONTEXT_TOKENS={v} is not a number"))
+            })?;
         }
         if let Some(v) = env.var("FV_UPSAMPLER_DECK_SIZE") {
-            u.deck_size = Some(v.trim().parse().map_err(|_| ConfigError::Invalid(format!("FV_UPSAMPLER_DECK_SIZE={v} is not a number")))?);
+            u.deck_size = Some(v.trim().parse().map_err(|_| {
+                ConfigError::Invalid(format!("FV_UPSAMPLER_DECK_SIZE={v} is not a number"))
+            })?);
         }
         if let Some(v) = env.var("FV_UPSAMPLER_TIMEOUT_MS") {
-            u.timeout_ms = Some(v.trim().parse().map_err(|_| ConfigError::Invalid(format!("FV_UPSAMPLER_TIMEOUT_MS={v} is not a number of milliseconds")))?);
+            u.timeout_ms = Some(v.trim().parse().map_err(|_| {
+                ConfigError::Invalid(format!(
+                    "FV_UPSAMPLER_TIMEOUT_MS={v} is not a number of milliseconds"
+                ))
+            })?);
         }
         if let Some(v) = env.var("FV_UPSAMPLER_API_KEY_ENV") {
             u.api_key_env = v.trim().to_owned();
@@ -1634,22 +1777,34 @@ impl Config {
         }
         self.moderation.validate()?;
         if self.server.workers_max == 0 {
-            return Err(ConfigError::Invalid("server.workers_max must be 1 or more".into()));
+            return Err(ConfigError::Invalid(
+                "server.workers_max must be 1 or more".into(),
+            ));
         }
-        self.streams.causal_limits().check().map_err(|e| ConfigError::Invalid(format!("[streams]: {e}")))?;
+        self.streams
+            .causal_limits()
+            .check()
+            .map_err(|e| ConfigError::Invalid(format!("[streams]: {e}")))?;
         self.segments.validate()?;
         if let Some(u) = &self.server.public_base_url {
-            url::Url::parse(u).map_err(|e| ConfigError::Invalid(format!("server.public_base_url: {e}")))?;
+            url::Url::parse(u)
+                .map_err(|e| ConfigError::Invalid(format!("server.public_base_url: {e}")))?;
         }
         for o in &self.server.cors_origins {
             if o == "*" {
                 if self.server.cors_origins.len() > 1 {
-                    return Err(ConfigError::Invalid("server.cors_origins: `*` cannot be combined with origins".into()));
+                    return Err(ConfigError::Invalid(
+                        "server.cors_origins: `*` cannot be combined with origins".into(),
+                    ));
                 }
                 continue;
             }
             let ok = url::Url::parse(o)
-                .map(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some() && u.origin().ascii_serialization() == *o)
+                .map(|u| {
+                    matches!(u.scheme(), "http" | "https")
+                        && u.host().is_some()
+                        && u.origin().ascii_serialization() == *o
+                })
                 .unwrap_or(false);
             if !ok {
                 return Err(ConfigError::Invalid(format!(
@@ -1658,7 +1813,8 @@ impl Config {
             }
         }
         if self.auth.mode == AuthMode::Keys && !self.auth.keys.is_empty() {
-            fastvideo_serve_kit::KeyRing::from_hash_list(self.auth.keys.expose()).map_err(ConfigError::Invalid)?;
+            fastvideo_serve_kit::KeyRing::from_hash_list(self.auth.keys.expose())
+                .map_err(ConfigError::Invalid)?;
         }
         if self.auth.key_store == KeyStoreBackend::D1 && !self.d1_configured() {
             return Err(ConfigError::Invalid("auth.key_store = d1 needs the D1 settings (FV_CF_ACCOUNT_ID, FV_CF_API_TOKEN, FV_D1_DATABASE_ID)".into()));
@@ -1670,17 +1826,27 @@ impl Config {
         }
         if self.artifacts.backend == ArtifactBackend::S3 && !self.s3_configured() {
             return Err(ConfigError::Invalid(
-                "artifacts.backend = s3 needs endpoint, bucket and both keys (FV_R2_* or FV_S3_*)".into(),
+                "artifacts.backend = s3 needs endpoint, bucket and both keys (FV_R2_* or FV_S3_*)"
+                    .into(),
             ));
         }
         for p in self.jobs.retention_s.keys() {
-            if !fastvideo_protocol::ProtocolId::ALL.iter().any(|x| x.as_str() == p) {
-                return Err(ConfigError::Invalid(format!("jobs.retention_s: unknown API `{p}`")));
+            if !fastvideo_protocol::ProtocolId::ALL
+                .iter()
+                .any(|x| x.as_str() == p)
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "jobs.retention_s: unknown API `{p}`"
+                )));
             }
         }
         match self.engine.post_encoder.as_str() {
             "auto" | "nvenc" | "cpu-test-x264" => {}
-            other => return Err(ConfigError::Invalid(format!("engine.post_encoder: unknown `{other}`"))),
+            other => {
+                return Err(ConfigError::Invalid(format!(
+                    "engine.post_encoder: unknown `{other}`"
+                )))
+            }
         }
         if self.engine.job_deadline_s > EngineCfg::JOB_DEADLINE_MAX_S {
             return Err(ConfigError::Invalid(format!(
@@ -1692,34 +1858,55 @@ impl Config {
         match self.director.encoder.as_str() {
             "auto" | "nvenc" | "openh264" | "cpu-test-x264" => {}
             other => {
-                return Err(ConfigError::Invalid(format!("director.encoder: unknown `{other}` (auto | nvenc | openh264)")))
+                return Err(ConfigError::Invalid(format!(
+                    "director.encoder: unknown `{other}` (auto | nvenc | openh264)"
+                )))
             }
         }
         match self.reactor.mode.as_str() {
             "auto" | "avatar" => {}
-            other => return Err(ConfigError::Invalid(format!("reactor.mode: unknown `{other}` (auto | avatar)"))),
+            other => {
+                return Err(ConfigError::Invalid(format!(
+                    "reactor.mode: unknown `{other}` (auto | avatar)"
+                )))
+            }
         }
         if parse_size(&self.reactor.avatar_size).is_none() {
-            return Err(ConfigError::Invalid(format!("reactor.avatar_size: `{}` is not WxH", self.reactor.avatar_size)));
+            return Err(ConfigError::Invalid(format!(
+                "reactor.avatar_size: `{}` is not WxH",
+                self.reactor.avatar_size
+            )));
         }
         if !(1.0..=20.0).contains(&self.reactor.avatar_window_s) {
-            return Err(ConfigError::Invalid("reactor.avatar_window_s: 1..=20 seconds".into()));
+            return Err(ConfigError::Invalid(
+                "reactor.avatar_window_s: 1..=20 seconds".into(),
+            ));
         }
         if self.reactor.avatar_session_max_s == 0 {
-            return Err(ConfigError::Invalid("reactor.avatar_session_max_s: at least 1".into()));
+            return Err(ConfigError::Invalid(
+                "reactor.avatar_session_max_s: at least 1".into(),
+            ));
         }
         match self.reactor.h264.as_str() {
             "auto" | "nvenc" | "openh264" | "off" => {}
-            other => return Err(ConfigError::Invalid(format!("reactor.h264: unknown `{other}` (auto | nvenc | openh264 | off)"))),
+            other => {
+                return Err(ConfigError::Invalid(format!(
+                    "reactor.h264: unknown `{other}` (auto | nvenc | openh264 | off)"
+                )))
+            }
         }
         match self.webrtc.encoder.as_str() {
             "auto" | "nvenc" | "openh264" | "x264-test" => {}
             other => {
-                return Err(ConfigError::Invalid(format!("webrtc.encoder: unknown `{other}` (auto | nvenc | openh264)")))
+                return Err(ConfigError::Invalid(format!(
+                    "webrtc.encoder: unknown `{other}` (auto | nvenc | openh264)"
+                )))
             }
         }
         if !(self.director.chunk_seconds.is_finite() && self.director.chunk_seconds > 0.0) {
-            return Err(ConfigError::Invalid("director.chunk_seconds must be positive".into()));
+            return Err(ConfigError::Invalid(
+                "director.chunk_seconds must be positive".into(),
+            ));
         }
         self.validate_gateway()
     }
@@ -1740,17 +1927,24 @@ impl Config {
         }
         if self.server.role == Role::Worker {
             if self.gateway.internal_token.is_empty() {
-                return bad("server.role = worker needs gateway.internal_token (FV_INTERNAL_TOKEN)".into());
+                return bad(
+                    "server.role = worker needs gateway.internal_token (FV_INTERNAL_TOKEN)".into(),
+                );
             }
             if let Some(u) = &self.dispatch.do_url {
-                url::Url::parse(u).map_err(|e| ConfigError::Invalid(format!("dispatch.do_url `{u}`: {e}")))?;
-                if self.dispatch.families.is_empty() && self.gateway.pool.as_deref().unwrap_or("").is_empty() {
+                url::Url::parse(u)
+                    .map_err(|e| ConfigError::Invalid(format!("dispatch.do_url `{u}`: {e}")))?;
+                if self.dispatch.families.is_empty()
+                    && self.gateway.pool.as_deref().unwrap_or("").is_empty()
+                {
                     return bad("dispatch.do_url needs gateway.pool (FV_GATEWAY_POOL, the pool whose Durable Object this worker connects to) or dispatch.families (FV_DISPATCH_FAMILIES)".into());
                 }
             }
             for f in &self.dispatch.families {
                 if !fastvideo_dispatch_proto::valid_id(f) {
-                    return bad(format!("dispatch.families: `{f}` is not a valid family id ([A-Za-z0-9._-])"));
+                    return bad(format!(
+                        "dispatch.families: `{f}` is not a valid family id ([A-Za-z0-9._-])"
+                    ));
                 }
             }
             if !self.dispatch.families.is_empty() && self.dispatch.do_url.is_none() {
@@ -1769,14 +1963,18 @@ impl Config {
                     }
                 }
                 if let Some(e) = &self.dispatch.endpoint {
-                    url::Url::parse(e).map_err(|err| ConfigError::Invalid(format!("dispatch.endpoint `{e}`: {err}")))?;
+                    url::Url::parse(e).map_err(|err| {
+                        ConfigError::Invalid(format!("dispatch.endpoint `{e}`: {err}"))
+                    })?;
                 }
             }
             if self.dispatch.direct_upload && self.dispatch.families.is_empty() {
                 return bad("dispatch.direct_upload needs dispatch.families: upload URLs come from the family Durable Objects".into());
             }
             if self.dispatch.direct_upload && !(5..=1024).contains(&self.dispatch.upload_part_mib) {
-                return bad("dispatch.upload_part_mib must be 5..=1024 (S3 multipart parts)".into());
+                return bad(
+                    "dispatch.upload_part_mib must be 5..=1024 (S3 multipart parts)".into(),
+                );
             }
         }
         Ok(())
@@ -1796,7 +1994,10 @@ impl Config {
 
     pub fn s3_configured(&self) -> bool {
         let s = &self.artifacts.s3;
-        s.endpoint.is_some() && s.bucket.is_some() && !s.access_key_id.is_empty() && !s.secret_access_key.is_empty()
+        s.endpoint.is_some()
+            && s.bucket.is_some()
+            && !s.access_key_id.is_empty()
+            && !s.secret_access_key.is_empty()
     }
 
     /// The job store `auto` resolves to.
@@ -1812,7 +2013,9 @@ impl Config {
     /// `http-client`).
     pub fn key_store_backend(&self) -> KeyStoreBackend {
         match self.auth.key_store {
-            KeyStoreBackend::Auto if self.d1_configured() && cfg!(feature = "http-client") => KeyStoreBackend::D1,
+            KeyStoreBackend::Auto if self.d1_configured() && cfg!(feature = "http-client") => {
+                KeyStoreBackend::D1
+            }
             KeyStoreBackend::Auto => KeyStoreBackend::File,
             b => b,
         }
@@ -1850,7 +2053,10 @@ mod tests {
     use super::*;
 
     fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
@@ -1886,13 +2092,25 @@ mod tests {
     fn cors_origins_default_env_and_validation() {
         let mut c = Config::default();
         assert_eq!(c.server.cors_origins, vec!["*"]);
-        c.apply_env(&env(&[("FV_CORS_ORIGINS", "https://a.example, http://127.0.0.1:3000")])).unwrap();
-        assert_eq!(c.server.cors_origins, vec!["https://a.example", "http://127.0.0.1:3000"]);
+        c.apply_env(&env(&[(
+            "FV_CORS_ORIGINS",
+            "https://a.example, http://127.0.0.1:3000",
+        )]))
+        .unwrap();
+        assert_eq!(
+            c.server.cors_origins,
+            vec!["https://a.example", "http://127.0.0.1:3000"]
+        );
         c.validate().unwrap();
         c.apply_env(&env(&[("FV_CORS_ORIGINS", "none")])).unwrap();
         assert!(c.server.cors_origins.is_empty());
         c.validate().unwrap();
-        for bad in ["https://a.example/", "a.example", "https://a.example/path", "*,https://a.example"] {
+        for bad in [
+            "https://a.example/",
+            "a.example",
+            "https://a.example/path",
+            "*,https://a.example",
+        ] {
             c.apply_env(&env(&[("FV_CORS_ORIGINS", bad)])).unwrap();
             assert!(c.validate().is_err(), "{bad}");
         }
@@ -1901,14 +2119,41 @@ mod tests {
     #[test]
     fn causal_stream_limits_default_file_env_and_validation() {
         let mut c = Config::default();
-        assert_eq!(c.streams.causal_limits(), fastvideo_protocol::CausalLimits { default_max_s: 120, hard_max_s: 300 });
-        let mut c2 = Config::from_toml("[streams]\ncausal_default_max_s = 60\ncausal_hard_max_s = 90\n", "t").unwrap();
+        assert_eq!(
+            c.streams.causal_limits(),
+            fastvideo_protocol::CausalLimits {
+                default_max_s: 120,
+                hard_max_s: 300
+            }
+        );
+        let mut c2 = Config::from_toml(
+            "[streams]\ncausal_default_max_s = 60\ncausal_hard_max_s = 90\n",
+            "t",
+        )
+        .unwrap();
         c2.validate().unwrap();
-        assert_eq!((c2.streams.causal_default_max_s, c2.streams.causal_hard_max_s), (60, 90));
-        c2.apply_env(&env(&[("FV_CAUSAL_DEFAULT_MAX_S", "30"), ("FV_CAUSAL_HARD_MAX_S", "45")])).unwrap();
-        assert_eq!(c2.streams.causal_limits(), fastvideo_protocol::CausalLimits { default_max_s: 30, hard_max_s: 45 });
+        assert_eq!(
+            (
+                c2.streams.causal_default_max_s,
+                c2.streams.causal_hard_max_s
+            ),
+            (60, 90)
+        );
+        c2.apply_env(&env(&[
+            ("FV_CAUSAL_DEFAULT_MAX_S", "30"),
+            ("FV_CAUSAL_HARD_MAX_S", "45"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            c2.streams.causal_limits(),
+            fastvideo_protocol::CausalLimits {
+                default_max_s: 30,
+                hard_max_s: 45
+            }
+        );
         assert!(c.apply_env(&env(&[("FV_CAUSAL_HARD_MAX_S", "0")])).is_err());
-        c.apply_env(&env(&[("FV_CAUSAL_DEFAULT_MAX_S", "400")])).unwrap();
+        c.apply_env(&env(&[("FV_CAUSAL_DEFAULT_MAX_S", "400")]))
+            .unwrap();
         assert!(c.validate().is_err(), "default above the hard ceiling");
     }
 
@@ -1953,10 +2198,20 @@ queue_max = 32
 body_max_mb = 64
 "#;
         let mut c = Config::from_toml(text, "sketch").unwrap();
-        c.apply_env(&env(&[("FV_WEIGHTS", "/runpod-volume/weights"), ("PORT", "8080")])).unwrap();
+        c.apply_env(&env(&[
+            ("FV_WEIGHTS", "/runpod-volume/weights"),
+            ("PORT", "8080"),
+        ]))
+        .unwrap();
         c.validate().unwrap();
-        assert_eq!(c.models[0].weights.as_deref(), Some("/runpod-volume/weights/FastH3"));
-        assert_eq!(c.models[0].extra["continuity"].as_str(), Some("anchor-last-frame"));
+        assert_eq!(
+            c.models[0].weights.as_deref(),
+            Some("/runpod-volume/weights/FastH3")
+        );
+        assert_eq!(
+            c.models[0].extra["continuity"].as_str(),
+            Some("anchor-last-frame")
+        );
         assert_eq!(c.server.bind, "0.0.0.0:8080");
         assert_eq!(c.aliases["MiniMax-H3-Max"], "fasth3");
         assert!(!c.protocols.ltx && c.protocols.minimax);
@@ -1994,7 +2249,12 @@ body_max_mb = 64
         assert_eq!(c.server.mode, Mode::RunpodQueue);
         assert_eq!(c.server.worker_id.as_deref(), Some("pod-123"));
         let shown = format!("{} {:?}", c.redacted(), c);
-        for secret in ["cf-token-value", "r2-secret-value", "AKID", "admin-secret-value"] {
+        for secret in [
+            "cf-token-value",
+            "r2-secret-value",
+            "AKID",
+            "admin-secret-value",
+        ] {
             assert!(!shown.contains(secret), "{secret} leaked");
         }
         assert!(shown.contains("fv-media"));
@@ -2005,7 +2265,12 @@ body_max_mb = 64
         let mut c = Config::default();
         assert!(c.server.console);
         assert_eq!(c.key_store_backend(), KeyStoreBackend::File);
-        c.apply_env(&env(&[("FV_KEY_STORE", "memory"), ("FV_CONSOLE", "0"), ("FV_ADMIN_TOKEN", " t ")])).unwrap();
+        c.apply_env(&env(&[
+            ("FV_KEY_STORE", "memory"),
+            ("FV_CONSOLE", "0"),
+            ("FV_ADMIN_TOKEN", " t "),
+        ]))
+        .unwrap();
         assert_eq!(c.key_store_backend(), KeyStoreBackend::Memory);
         assert!(!c.server.console);
         assert_eq!(c.auth.admin_token.expose(), "t");
@@ -2017,10 +2282,15 @@ body_max_mb = 64
     #[test]
     fn callbacks_allow_private_is_opt_in() {
         let mut c = Config::default();
-        assert!(!c.server.callbacks_allow_private, "the SSRF guard is on by default");
-        c.apply_env(&env(&[("FV_CALLBACKS_ALLOW_PRIVATE", "1")])).unwrap();
+        assert!(
+            !c.server.callbacks_allow_private,
+            "the SSRF guard is on by default"
+        );
+        c.apply_env(&env(&[("FV_CALLBACKS_ALLOW_PRIVATE", "1")]))
+            .unwrap();
         assert!(c.server.callbacks_allow_private);
-        c.apply_env(&env(&[("FV_CALLBACKS_ALLOW_PRIVATE", "0")])).unwrap();
+        c.apply_env(&env(&[("FV_CALLBACKS_ALLOW_PRIVATE", "0")]))
+            .unwrap();
         assert!(!c.server.callbacks_allow_private);
         let c = Config::from_toml("[server]\ncallbacks_allow_private = true\n", "t").unwrap();
         assert!(c.server.callbacks_allow_private);
@@ -2034,7 +2304,12 @@ body_max_mb = 64
         assert_eq!(c.server.workers_max, 3);
         c.validate().unwrap();
         for bad in ["0", "-1", "many"] {
-            assert!(Config::default().apply_env(&env(&[("FV_WORKERS_MAX", bad)])).is_err(), "{bad}");
+            assert!(
+                Config::default()
+                    .apply_env(&env(&[("FV_WORKERS_MAX", bad)]))
+                    .is_err(),
+                "{bad}"
+            );
         }
         let c = Config::from_toml("[server]\nworkers_max = 0\n", "t").unwrap();
         assert!(c.validate().is_err());
@@ -2063,8 +2338,15 @@ body_max_mb = 64
         let mut w = Config::default();
         w.server.role = Role::Worker;
         w.gateway.internal_token = Secret("t".into());
-        w.apply_env(&env(&[("FV_DISPATCH_DO_URL", "https://edge.example"), ("FV_DISPATCH_CAPACITY", "3")])).unwrap();
-        assert_eq!((w.dispatch.do_url.as_deref(), w.dispatch.capacity), (Some("https://edge.example"), 3));
+        w.apply_env(&env(&[
+            ("FV_DISPATCH_DO_URL", "https://edge.example"),
+            ("FV_DISPATCH_CAPACITY", "3"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            (w.dispatch.do_url.as_deref(), w.dispatch.capacity),
+            (Some("https://edge.example"), 3)
+        );
         assert!(w.validate().is_err(), "a worker's socket needs its pool");
         w.gateway.pool = Some("h3".into());
         w.validate().unwrap();
@@ -2075,17 +2357,30 @@ body_max_mb = 64
     #[test]
     fn direct_worker_needs_the_worker_role_client_auth_and_an_admin_token() {
         let mut w = Config::default();
-        w.apply_env(&env(&[("FV_SERVE_ROLE", "worker"), ("FV_INTERNAL_TOKEN", "t"), ("FV_WORKER_DIRECT", "1")])).unwrap();
+        w.apply_env(&env(&[
+            ("FV_SERVE_ROLE", "worker"),
+            ("FV_INTERNAL_TOKEN", "t"),
+            ("FV_WORKER_DIRECT", "1"),
+        ]))
+        .unwrap();
         assert!(w.gateway.direct);
         let e = w.validate().unwrap_err();
         assert!(e.to_string().contains("FV_ADMIN_TOKEN"), "{e}");
         w.apply_env(&env(&[("FV_ADMIN_TOKEN", "fvadm_x")])).unwrap();
         w.validate().unwrap();
         w.auth.mode = AuthMode::TrustGateway;
-        assert!(w.validate().unwrap_err().to_string().contains("trust-gateway"));
+        assert!(w
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("trust-gateway"));
         w.auth.mode = AuthMode::Keys;
         w.server.role = Role::Standalone;
-        assert!(w.validate().unwrap_err().to_string().contains("server.role = worker"));
+        assert!(w
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("server.role = worker"));
         let mut d = Config::default();
         d.apply_env(&env(&[("FV_WORKER_DIRECT", "0")])).unwrap();
         assert!(!d.gateway.direct);

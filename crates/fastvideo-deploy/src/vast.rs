@@ -37,7 +37,11 @@ impl Port {
     }
     /// The docker flag Vast parses: `-p 8000:8000` / `-p 70010:70010/udp`.
     pub fn flag(&self) -> String {
-        format!("-p {0}:{0}{1}", self.port, if self.udp { "/udp" } else { "" })
+        format!(
+            "-p {0}:{0}{1}",
+            self.port,
+            if self.udp { "/udp" } else { "" }
+        )
     }
 }
 
@@ -68,7 +72,9 @@ pub fn env_dict(ports: &[Port], vars: &[(&str, &str)]) -> Result<Value, String> 
     }
     for (k, v) in vars {
         if SECRET_NAMES.contains(k) {
-            return Err(format!("{k} is a secret: set it as a Vast account env var, not in the instance env"));
+            return Err(format!(
+                "{k} is a secret: set it as a Vast account env var, not in the instance env"
+            ));
         }
         m.insert((*k).to_owned(), Value::String((*v).to_owned()));
     }
@@ -93,7 +99,11 @@ mod tests {
 
     #[test]
     fn env_is_a_dict_with_port_keys() {
-        let v = env_dict(&DEFAULT_PORTS, &[("FV_SERVE_MODE", "http"), ("FV_ENGINE", "fake")]).unwrap();
+        let v = env_dict(
+            &DEFAULT_PORTS,
+            &[("FV_SERVE_MODE", "http"), ("FV_ENGINE", "fake")],
+        )
+        .unwrap();
         let o = v.as_object().unwrap();
         assert_eq!(o["-p 8000:8000"], "1");
         assert_eq!(o["-p 70010:70010/udp"], "1");

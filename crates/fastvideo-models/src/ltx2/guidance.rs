@@ -83,7 +83,11 @@ impl GuiderParams {
     /// to 1. A pass that does not run gets weight 0 (its term is the
     /// reference's `0.0` placeholder times a zero scale).
     pub fn weights(&self) -> [f32; 4] {
-        let (c, s, m) = (self.cfg_scale - 1.0, self.stg_scale, self.modality_scale - 1.0);
+        let (c, s, m) = (
+            self.cfg_scale - 1.0,
+            self.stg_scale,
+            self.modality_scale - 1.0,
+        );
         [1.0 + c + s + m, -c, -s, -m]
     }
 
@@ -153,7 +157,13 @@ pub fn std_unbiased(x: &[f32]) -> f64 {
 /// Host reference of one guided combine (`MultiModalGuider.calculate`), for
 /// the tests and the oracle: float32 terms as the reference evaluates them,
 /// then the rescale.
-pub fn combine_host(p: &GuiderParams, cond: &[f32], uncond: &[f32], ptb: &[f32], md: &[f32]) -> Vec<f32> {
+pub fn combine_host(
+    p: &GuiderParams,
+    cond: &[f32],
+    uncond: &[f32],
+    ptb: &[f32],
+    md: &[f32],
+) -> Vec<f32> {
     let (c, s, m) = (p.cfg_scale - 1.0, p.stg_scale, p.modality_scale - 1.0);
     let mut pred: Vec<f32> = (0..cond.len())
         .map(|i| {
@@ -179,7 +189,13 @@ mod tests {
     fn defaults_match_the_2_4_params() {
         let v = ltx25_video_guider();
         assert_eq!(
-            (v.cfg_scale, v.stg_scale, v.rescale_scale, v.modality_scale, v.skip_step),
+            (
+                v.cfg_scale,
+                v.stg_scale,
+                v.rescale_scale,
+                v.modality_scale,
+                v.skip_step
+            ),
             (3.0, 1.0, 0.7, 3.0, 0)
         );
         assert_eq!(v.stg_blocks, vec![28]);
@@ -200,8 +216,22 @@ mod tests {
         let w = p.weights();
         assert!((w.iter().sum::<f32>() - 1.0).abs() < 1e-6);
         assert_eq!(w, [6.0, -2.0, -1.0, -2.0]);
-        let (cond, u, pt, md) = ([1.0f32, -2.0, 0.5], [0.5f32, -1.0, 0.0], [0.9f32, -2.5, 1.0], [2.0f32, 0.0, 0.25]);
-        let host = combine_host(&GuiderParams { rescale_scale: 0.0, ..p.clone() }, &cond, &u, &pt, &md);
+        let (cond, u, pt, md) = (
+            [1.0f32, -2.0, 0.5],
+            [0.5f32, -1.0, 0.0],
+            [0.9f32, -2.5, 1.0],
+            [2.0f32, 0.0, 0.25],
+        );
+        let host = combine_host(
+            &GuiderParams {
+                rescale_scale: 0.0,
+                ..p.clone()
+            },
+            &cond,
+            &u,
+            &pt,
+            &md,
+        );
         for i in 0..3 {
             let lin = w[0] * cond[i] + w[1] * u[i] + w[2] * pt[i] + w[3] * md[i];
             assert!((lin - host[i]).abs() < 1e-5, "{i}: {lin} vs {}", host[i]);
@@ -213,7 +243,9 @@ mod tests {
         let p = ltx25_video_guider();
         let cond = [1.0f32, -1.0, 2.0, -2.0];
         let pred_raw: Vec<f32> = cond.iter().map(|v| v * 3.0).collect();
-        let f = p.rescale_factor(std_unbiased(&cond), std_unbiased(&pred_raw)).unwrap();
+        let f = p
+            .rescale_factor(std_unbiased(&cond), std_unbiased(&pred_raw))
+            .unwrap();
         // r / 3 + (1 − r) with r = 0.7.
         assert!((f - (0.7 / 3.0 + 0.3) as f32).abs() < 1e-6);
         assert!((std_unbiased(&[1.0, 2.0, 3.0, 4.0]) - (5.0f64 / 3.0).sqrt()).abs() < 1e-12);
@@ -221,7 +253,10 @@ mod tests {
 
     #[test]
     fn skip_step_keeps_every_nth() {
-        let p = GuiderParams { skip_step: 2, ..GuiderParams::default() };
+        let p = GuiderParams {
+            skip_step: 2,
+            ..GuiderParams::default()
+        };
         let run: Vec<bool> = (0..7).map(|i| !p.skips(i)).collect();
         assert_eq!(run, [true, false, false, true, false, false, true]);
         assert!(!GuiderParams::default().skips(5));

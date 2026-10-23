@@ -59,7 +59,8 @@ pub fn upload_bf16_parts(parts: &[&[u8]]) -> Result<Option<CudaSlice<bf16>>> {
 /// A host bf16 buffer (e.g. a weight fused on the host) through the stage.
 pub fn upload_bf16_values(values: &[bf16]) -> Result<Option<CudaSlice<bf16>>> {
     // SAFETY: bf16 is two plain bytes.
-    let bytes = unsafe { std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), values.len() * 2) };
+    let bytes =
+        unsafe { std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), values.len() * 2) };
     upload_parts::<bf16>(&[bytes])
 }
 
@@ -151,8 +152,10 @@ pub fn verify_enabled() -> bool {
     FLAG.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_VERIFY_UPLOAD", false))
 }
 
-static VERIFY: [std::sync::atomic::AtomicU64; 2] =
-    [std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)];
+static VERIFY: [std::sync::atomic::AtomicU64; 2] = [
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+];
 
 /// Book one comparison; the first few mismatches are logged by name.
 pub fn record_verify(what: &str, equal: bool) {

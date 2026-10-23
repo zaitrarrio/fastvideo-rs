@@ -32,7 +32,13 @@
 //! direct-upload test then reads the object back through `/dl` with
 //! `FV_EDGE_UPLOAD_KEY`. The tests that need the stand-in's internals skip.
 
-#![cfg(all(feature = "http-client", feature = "openai-videos", feature = "minimax", feature = "fal", feature = "ltxapi"))]
+#![cfg(all(
+    feature = "http-client",
+    feature = "openai-videos",
+    feature = "minimax",
+    feature = "fal",
+    feature = "ltxapi"
+))]
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -55,16 +61,26 @@ const BUCKET: &str = "fv-test-outputs";
 
 fn init_log() {
     if std::env::var("RUST_LOG").is_ok() {
-        let _ = tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).with_test_writer().try_init();
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_test_writer()
+            .try_init();
     }
 }
 
 fn tmp(tag: &str) -> PathBuf {
-    tempfile::Builder::new().prefix(&format!("fv-family-{tag}-")).tempdir().unwrap().keep()
+    tempfile::Builder::new()
+        .prefix(&format!("fv-family-{tag}-"))
+        .tempdir()
+        .unwrap()
+        .keep()
 }
 
 fn now() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
 }
 
 /// An S3 mock: multipart uploads and objects, every request checked
@@ -102,7 +118,14 @@ mod s3 {
     /// `YYYYMMDDTHHMMSSZ` → Unix seconds.
     fn unix(ts: &str) -> Option<i64> {
         let n = |a: usize, b: usize| ts.get(a..b)?.parse::<i64>().ok();
-        let (y, m, d, hh, mm, ss) = (n(0, 4)?, n(4, 6)?, n(6, 8)?, n(9, 11)?, n(11, 13)?, n(13, 15)?);
+        let (y, m, d, hh, mm, ss) = (
+            n(0, 4)?,
+            n(4, 6)?,
+            n(6, 8)?,
+            n(9, 11)?,
+            n(11, 13)?,
+            n(13, 15)?,
+        );
         let y2 = if m <= 2 { y - 1 } else { y };
         let era = y2.div_euclid(400);
         let yoe = y2 - era * 400;
@@ -124,8 +147,13 @@ mod s3 {
                 secret_key: secret.into(),
                 path_style: true,
             };
-            let m = Self { store: Arc::default(), signer };
-            let app = Router::new().route("/{bucket}/{*key}", any(handle)).with_state(m.clone());
+            let m = Self {
+                store: Arc::default(),
+                signer,
+            };
+            let app = Router::new()
+                .route("/{bucket}/{*key}", any(handle))
+                .with_state(m.clone());
             tokio::spawn(async move {
                 let _ = axum::serve(l, app).await;
             });
@@ -135,15 +163,27 @@ mod s3 {
         /// Recomputes the signature of a presigned request.
         fn signed(&self, method: &str, key: &str, query: &str) -> bool {
             let q = parse_query(query);
-            let (Some(sig), Some(ts), Some(exp)) = (q.get("X-Amz-Signature"), q.get("X-Amz-Date"), q.get("X-Amz-Expires")) else { return false };
+            let (Some(sig), Some(ts), Some(exp)) = (
+                q.get("X-Amz-Signature"),
+                q.get("X-Amz-Date"),
+                q.get("X-Amz-Expires"),
+            ) else {
+                return false;
+            };
             let Some(t) = unix(ts) else { return false };
             let exp: i64 = exp.parse().unwrap_or(0);
             if t + exp < super::now() / 1000 {
                 return false;
             }
-            let extra: Vec<(&str, &str)> = q.iter().filter(|(k, _)| !k.starts_with("X-Amz-")).map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            let extra: Vec<(&str, &str)> = q
+                .iter()
+                .filter(|(k, _)| !k.starts_with("X-Amz-"))
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
             let url = self.signer.presign(method, key, &extra, exp as u64, t);
-            let want = parse_query(url.split_once('?').unwrap().1).remove("X-Amz-Signature").unwrap_or_default();
+            let want = parse_query(url.split_once('?').unwrap().1)
+                .remove("X-Amz-Signature")
+                .unwrap_or_default();
             &want == sig
         }
     }
@@ -152,11 +192,21 @@ mod s3 {
         (status, [("content-type", "application/xml")], body).into_response()
     }
 
-    async fn handle(State(m): State<Mock>, Path((bucket, key)): Path<(String, String)>, method: Method, RawQuery(q): RawQuery, _h: HeaderMap, body: Bytes) -> Response {
+    async fn handle(
+        State(m): State<Mock>,
+        Path((bucket, key)): Path<(String, String)>,
+        method: Method,
+        RawQuery(q): RawQuery,
+        _h: HeaderMap,
+        body: Bytes,
+    ) -> Response {
         let q = q.unwrap_or_default();
         if bucket != super::BUCKET || !m.signed(method.as_str(), &key, &q) {
             m.store.lock().unwrap().bad_signatures += 1;
-            return xml(StatusCode::FORBIDDEN, "<Error><Code>SignatureDoesNotMatch</Code></Error>".into());
+            return xml(
+                StatusCode::FORBIDDEN,
+                "<Error><Code>SignatureDoesNotMatch</Code></Error>".into(),
+            );
         }
         let p = parse_query(&q);
         let mut st = m.store.lock().unwrap();
@@ -164,28 +214,61 @@ mod s3 {
             ("POST", None, None) if p.contains_key("uploads") => {
                 st.next += 1;
                 let id = format!("mpu-{}", st.next);
-                st.uploads.insert(id.clone(), (key.clone(), BTreeMap::new()));
+                st.uploads
+                    .insert(id.clone(), (key.clone(), BTreeMap::new()));
                 xml(StatusCode::OK, format!("<InitiateMultipartUploadResult><Bucket>{bucket}</Bucket><Key>{key}</Key><UploadId>{id}</UploadId></InitiateMultipartUploadResult>"))
             }
             ("PUT", Some(id), Some(n)) => {
                 let n: u16 = n.parse().unwrap_or(0);
-                let Some((_, parts)) = st.uploads.get_mut(id) else { return xml(StatusCode::NOT_FOUND, "<Error><Code>NoSuchUpload</Code></Error>".into()) };
-                let etag = format!("\"{}\"", fastvideo_dispatch_proto::presign::sha256_hex(&body));
+                let Some((_, parts)) = st.uploads.get_mut(id) else {
+                    return xml(
+                        StatusCode::NOT_FOUND,
+                        "<Error><Code>NoSuchUpload</Code></Error>".into(),
+                    );
+                };
+                let etag = format!(
+                    "\"{}\"",
+                    fastvideo_dispatch_proto::presign::sha256_hex(&body)
+                );
                 parts.insert(n, body.to_vec());
                 *st.part_puts.entry((id.clone(), n)).or_default() += 1;
                 (StatusCode::OK, [("etag", etag)]).into_response()
             }
             ("POST", Some(id), None) => {
-                let Some((k, parts)) = st.uploads.remove(id) else { return xml(StatusCode::NOT_FOUND, "<Error><Code>NoSuchUpload</Code></Error>".into()) };
+                let Some((k, parts)) = st.uploads.remove(id) else {
+                    return xml(
+                        StatusCode::NOT_FOUND,
+                        "<Error><Code>NoSuchUpload</Code></Error>".into(),
+                    );
+                };
                 // The listed parts, in order, with matching ETags.
                 let text = String::from_utf8_lossy(&body).into_owned();
                 let mut data = Vec::new();
                 for chunk in text.split("<Part>").skip(1) {
-                    let n: u16 = chunk.split("<PartNumber>").nth(1).and_then(|s| s.split('<').next()).and_then(|s| s.parse().ok()).unwrap_or(0);
-                    let etag = chunk.split("<ETag>").nth(1).and_then(|s| s.split('<').next()).unwrap_or_default().trim_matches('"').to_owned();
-                    let Some(b) = parts.get(&n) else { return xml(StatusCode::BAD_REQUEST, "<Error><Code>InvalidPart</Code></Error>".into()) };
+                    let n: u16 = chunk
+                        .split("<PartNumber>")
+                        .nth(1)
+                        .and_then(|s| s.split('<').next())
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0);
+                    let etag = chunk
+                        .split("<ETag>")
+                        .nth(1)
+                        .and_then(|s| s.split('<').next())
+                        .unwrap_or_default()
+                        .trim_matches('"')
+                        .to_owned();
+                    let Some(b) = parts.get(&n) else {
+                        return xml(
+                            StatusCode::BAD_REQUEST,
+                            "<Error><Code>InvalidPart</Code></Error>".into(),
+                        );
+                    };
                     if fastvideo_dispatch_proto::presign::sha256_hex(b) != etag {
-                        return xml(StatusCode::BAD_REQUEST, "<Error><Code>InvalidPart</Code></Error>".into());
+                        return xml(
+                            StatusCode::BAD_REQUEST,
+                            "<Error><Code>InvalidPart</Code></Error>".into(),
+                        );
                     }
                     data.extend_from_slice(b);
                 }
@@ -198,11 +281,16 @@ mod s3 {
                 StatusCode::NO_CONTENT.into_response()
             }
             ("HEAD", None, None) | ("GET", None, None) => match st.objects.get(&key) {
-                Some(b) if method == Method::HEAD => (StatusCode::OK, [("content-length", b.len().to_string())]).into_response(),
+                Some(b) if method == Method::HEAD => {
+                    (StatusCode::OK, [("content-length", b.len().to_string())]).into_response()
+                }
                 Some(b) => (StatusCode::OK, b.clone()).into_response(),
                 None => StatusCode::NOT_FOUND.into_response(),
             },
-            _ => xml(StatusCode::BAD_REQUEST, "<Error><Code>InvalidRequest</Code></Error>".into()),
+            _ => xml(
+                StatusCode::BAD_REQUEST,
+                "<Error><Code>InvalidRequest</Code></Error>".into(),
+            ),
         }
     }
 
@@ -215,31 +303,73 @@ mod s3 {
 
     impl Client {
         fn url(&self, method: &str, key: &str, extra: &[(&str, &str)]) -> String {
-            self.signer.presign(method, key, extra, 300, super::now() / 1000)
+            self.signer
+                .presign(method, key, extra, 300, super::now() / 1000)
         }
         pub async fn create(&self, key: &str) -> Result<String, String> {
-            let r = self.http.post(self.url("POST", key, &[("uploads", "")])).send().await.map_err(|e| e.to_string())?;
+            let r = self
+                .http
+                .post(self.url("POST", key, &[("uploads", "")]))
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
             let t = r.text().await.map_err(|e| e.to_string())?;
-            t.split("<UploadId>").nth(1).and_then(|s| s.split('<').next()).map(str::to_owned).ok_or(t)
+            t.split("<UploadId>")
+                .nth(1)
+                .and_then(|s| s.split('<').next())
+                .map(str::to_owned)
+                .ok_or(t)
         }
         pub fn part_url(&self, key: &str, upload: &str, n: u16) -> String {
-            self.signer.part_url(key, upload, n, 600, super::now() / 1000)
+            self.signer
+                .part_url(key, upload, n, 600, super::now() / 1000)
         }
-        pub async fn complete(&self, key: &str, upload: &str, parts: &[fastvideo_dispatch_proto::Part]) -> Result<u64, String> {
+        pub async fn complete(
+            &self,
+            key: &str,
+            upload: &str,
+            parts: &[fastvideo_dispatch_proto::Part],
+        ) -> Result<u64, String> {
             let mut body = String::from("<CompleteMultipartUpload>");
             for p in parts {
-                body.push_str(&format!("<Part><PartNumber>{}</PartNumber><ETag>{}</ETag></Part>", p.n, p.etag));
+                body.push_str(&format!(
+                    "<Part><PartNumber>{}</PartNumber><ETag>{}</ETag></Part>",
+                    p.n, p.etag
+                ));
             }
             body.push_str("</CompleteMultipartUpload>");
-            let r = self.http.post(self.url("POST", key, &[("uploadId", upload)])).body(body).send().await.map_err(|e| e.to_string())?;
+            let r = self
+                .http
+                .post(self.url("POST", key, &[("uploadId", upload)]))
+                .body(body)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
             if !r.status().is_success() {
-                return Err(format!("complete: HTTP {}: {}", r.status(), r.text().await.unwrap_or_default()));
+                return Err(format!(
+                    "complete: HTTP {}: {}",
+                    r.status(),
+                    r.text().await.unwrap_or_default()
+                ));
             }
-            let h = self.http.head(self.url("HEAD", key, &[])).send().await.map_err(|e| e.to_string())?;
-            h.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok()).ok_or_else(|| "no size".to_owned())
+            let h = self
+                .http
+                .head(self.url("HEAD", key, &[]))
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+            h.headers()
+                .get("content-length")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse().ok())
+                .ok_or_else(|| "no size".to_owned())
         }
         pub async fn abort(&self, key: &str, upload: &str) {
-            let _ = self.http.delete(self.url("DELETE", key, &[("uploadId", upload)])).send().await;
+            let _ = self
+                .http
+                .delete(self.url("DELETE", key, &[("uploadId", upload)]))
+                .send()
+                .await;
         }
     }
 }
@@ -258,8 +388,12 @@ mod family_do {
     use axum::response::{IntoResponse, Response};
     use axum::routing::{get, post};
     use axum::{Json, Router};
-    use fastvideo_dispatch_proto::sched::{Admit, Cfg, JobRec, Out, Sched, SessionRec, UploadRec, WorkerRec};
-    use fastvideo_dispatch_proto::{self as proto, DoMsg, EnqueueReq, PartUrl, SessionGrant, SessionReq, WorkerMsg};
+    use fastvideo_dispatch_proto::sched::{
+        Admit, Cfg, JobRec, Out, Sched, SessionRec, UploadRec, WorkerRec,
+    };
+    use fastvideo_dispatch_proto::{
+        self as proto, DoMsg, EnqueueReq, PartUrl, SessionGrant, SessionReq, WorkerMsg,
+    };
     use futures::{SinkExt, StreamExt};
     use tokio::sync::{mpsc, oneshot, watch};
 
@@ -289,7 +423,12 @@ mod family_do {
     impl FamilyDo {
         pub async fn start(cfg: Cfg, s3: Client) -> (Self, String) {
             let (epoch, _) = watch::channel(0);
-            let d = Self { inner: Arc::default(), cfg, s3, epoch };
+            let d = Self {
+                inner: Arc::default(),
+                cfg,
+                s3,
+                epoch,
+            };
             let app = Router::new()
                 .route("/families/{f}/connect", get(connect))
                 .route("/families/{f}/enqueue", post(enqueue))
@@ -311,7 +450,8 @@ mod family_do {
                 loop {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                     let now = now();
-                    let objs: Vec<String> = t.inner.lock().unwrap().scheds.keys().cloned().collect();
+                    let objs: Vec<String> =
+                        t.inner.lock().unwrap().scheds.keys().cloned().collect();
                     for o in objs {
                         let out = {
                             let mut g = t.inner.lock().unwrap();
@@ -340,8 +480,19 @@ mod family_do {
                 let workers: Vec<WorkerRec> = s.workers().cloned().collect();
                 let sessions: Vec<SessionRec> = s.sessions().cloned().collect();
                 let uploads: Vec<UploadRec> = s.uploads().cloned().collect();
-                let mut s = Sched::restore_all(o.clone(), self.cfg.clone(), jobs, workers, sessions, uploads);
-                let ids: Vec<String> = s.workers().filter(|w| w.connected).map(|w| w.worker_id.clone()).collect();
+                let mut s = Sched::restore_all(
+                    o.clone(),
+                    self.cfg.clone(),
+                    jobs,
+                    workers,
+                    sessions,
+                    uploads,
+                );
+                let ids: Vec<String> = s
+                    .workers()
+                    .filter(|w| w.connected)
+                    .map(|w| w.worker_id.clone())
+                    .collect();
                 for id in ids {
                     s.disconnect(&id, now);
                 }
@@ -357,7 +508,10 @@ mod family_do {
             let (t, out) = {
                 let mut g = self.inner.lock().unwrap();
                 let cfg = self.cfg.clone();
-                let s = g.scheds.entry(obj.to_owned()).or_insert_with(|| Sched::new(obj, cfg));
+                let s = g
+                    .scheds
+                    .entry(obj.to_owned())
+                    .or_insert_with(|| Sched::new(obj, cfg));
                 f(s)
             };
             self.apply(obj, out);
@@ -376,12 +530,22 @@ mod family_do {
                 match o {
                     Out::Send { worker, msg } => {
                         if let DoMsg::Job { job_id, .. } = &msg {
-                            *self.inner.lock().unwrap().offers.entry(job_id.clone()).or_default() += 1;
+                            *self
+                                .inner
+                                .lock()
+                                .unwrap()
+                                .offers
+                                .entry(job_id.clone())
+                                .or_default() += 1;
                         }
                         self.send(obj, &worker, &msg);
                     }
                     Out::Close { worker } => {
-                        self.inner.lock().unwrap().conns.remove(&(obj.to_owned(), worker));
+                        self.inner
+                            .lock()
+                            .unwrap()
+                            .conns
+                            .remove(&(obj.to_owned(), worker));
                     }
                     Out::PushSpilled { .. } => {}
                     Out::SessionReady { session_id, result } => {
@@ -389,18 +553,53 @@ mod family_do {
                             let _ = w.send(result);
                         }
                     }
-                    Out::Grant { worker, req, job_id, key, upload_id, from, count, expires_ms } => {
-                        let part_urls = (from..from.saturating_add(count)).map(|n| PartUrl { n, url: self.s3.part_url(&key, &upload_id, n) }).collect();
-                        self.send(obj, &worker, &DoMsg::UploadGrant { req, job_id, upload_id, key, bucket: super::BUCKET.into(), part_urls, expires_ms, error: None });
+                    Out::Grant {
+                        worker,
+                        req,
+                        job_id,
+                        key,
+                        upload_id,
+                        from,
+                        count,
+                        expires_ms,
+                    } => {
+                        let part_urls = (from..from.saturating_add(count))
+                            .map(|n| PartUrl {
+                                n,
+                                url: self.s3.part_url(&key, &upload_id, n),
+                            })
+                            .collect();
+                        self.send(
+                            obj,
+                            &worker,
+                            &DoMsg::UploadGrant {
+                                req,
+                                job_id,
+                                upload_id,
+                                key,
+                                bucket: super::BUCKET.into(),
+                                part_urls,
+                                expires_ms,
+                                error: None,
+                            },
+                        );
                     }
-                    Out::CreateUpload { req, key, parts, .. } => {
+                    Out::CreateUpload {
+                        req, key, parts, ..
+                    } => {
                         let (d, obj) = (self.clone(), obj.to_owned());
                         tokio::spawn(async move {
                             let r = d.s3.create(&key).await;
                             d.with(&obj, |s| ((), s.upload_created(&key, req, parts, r, now())));
                         });
                     }
-                    Out::CompleteUpload { req, key, upload_id, parts, .. } => {
+                    Out::CompleteUpload {
+                        req,
+                        key,
+                        upload_id,
+                        parts,
+                        ..
+                    } => {
                         let (d, obj) = (self.clone(), obj.to_owned());
                         tokio::spawn(async move {
                             let r = d.s3.complete(&key, &upload_id, &parts).await;
@@ -421,23 +620,44 @@ mod family_do {
 
         /// Injects a frame as if `worker` had sent it on its socket.
         pub fn inject(&self, family: &str, worker: &str, msg: WorkerMsg) {
-            self.with(&format!("family:{family}"), |s| ((), s.on_msg(worker, msg, now())));
+            self.with(&format!("family:{family}"), |s| {
+                ((), s.on_msg(worker, msg, now()))
+            });
         }
 
         pub fn nacks(&self, worker: &str, code: u16) -> usize {
-            self.inner.lock().unwrap().frames.iter().filter(|(_, w, m)| w == worker && matches!(m, WorkerMsg::Nack { code: c, .. } if *c == code)).count()
+            self.inner
+                .lock()
+                .unwrap()
+                .frames
+                .iter()
+                .filter(|(_, w, m)| {
+                    w == worker && matches!(m, WorkerMsg::Nack { code: c, .. } if *c == code)
+                })
+                .count()
         }
     }
 
     fn authed(h: &HeaderMap) -> bool {
-        h.get(proto::TOKEN_HEADER).and_then(|v| v.to_str().ok()) == Some(super::TOKEN) || h.get("authorization").and_then(|v| v.to_str().ok()) == Some(&format!("Bearer {}", super::ADMIN))
+        h.get(proto::TOKEN_HEADER).and_then(|v| v.to_str().ok()) == Some(super::TOKEN)
+            || h.get("authorization").and_then(|v| v.to_str().ok())
+                == Some(&format!("Bearer {}", super::ADMIN))
     }
 
-    async fn connect(State(d): State<FamilyDo>, Path(f): Path<String>, h: HeaderMap, ws: WebSocketUpgrade) -> Response {
+    async fn connect(
+        State(d): State<FamilyDo>,
+        Path(f): Path<String>,
+        h: HeaderMap,
+        ws: WebSocketUpgrade,
+    ) -> Response {
         if !authed(&h) {
             return StatusCode::UNAUTHORIZED.into_response();
         }
-        let Some(worker) = h.get(proto::WORKER_HEADER).and_then(|v| v.to_str().ok()).map(str::to_owned) else {
+        let Some(worker) = h
+            .get(proto::WORKER_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+        else {
             return StatusCode::BAD_REQUEST.into_response();
         };
         ws.on_upgrade(move |socket| run(d, format!("family:{f}"), worker, socket))
@@ -489,7 +709,12 @@ mod family_do {
         }
     }
 
-    async fn enqueue(State(d): State<FamilyDo>, Path(f): Path<String>, h: HeaderMap, Json(req): Json<EnqueueReq>) -> Response {
+    async fn enqueue(
+        State(d): State<FamilyDo>,
+        Path(f): Path<String>,
+        h: HeaderMap,
+        Json(req): Json<EnqueueReq>,
+    ) -> Response {
         if !authed(&h) {
             return StatusCode::UNAUTHORIZED.into_response();
         }
@@ -497,7 +722,11 @@ mod family_do {
         (StatusCode::ACCEPTED, Json(resp)).into_response()
     }
 
-    async fn cancel(State(d): State<FamilyDo>, Path((f, job)): Path<(String, String)>, h: HeaderMap) -> Response {
+    async fn cancel(
+        State(d): State<FamilyDo>,
+        Path((f, job)): Path<(String, String)>,
+        h: HeaderMap,
+    ) -> Response {
         if !authed(&h) {
             return StatusCode::UNAUTHORIZED.into_response();
         }
@@ -522,7 +751,12 @@ mod family_do {
         Json(d.with(&format!("family:{f}"), |s| (s.metrics(now()), Vec::new()))).into_response()
     }
 
-    async fn admit(State(d): State<FamilyDo>, Path(f): Path<String>, h: HeaderMap, Json(req): Json<SessionReq>) -> Response {
+    async fn admit(
+        State(d): State<FamilyDo>,
+        Path(f): Path<String>,
+        h: HeaderMap,
+        Json(req): Json<SessionReq>,
+    ) -> Response {
         if !authed(&h) {
             return StatusCode::UNAUTHORIZED.into_response();
         }
@@ -532,7 +766,11 @@ mod family_do {
             let (a, out) = {
                 let mut g = d.inner.lock().unwrap();
                 let cfg = d.cfg.clone();
-                let (a, out) = g.scheds.entry(obj.clone()).or_insert_with(|| Sched::new(&obj, cfg)).admit(req, now());
+                let (a, out) = g
+                    .scheds
+                    .entry(obj.clone())
+                    .or_insert_with(|| Sched::new(&obj, cfg))
+                    .admit(req, now());
                 if let Admit::Pending(id) = &a {
                     g.waiters.insert(id.clone(), tx);
                 }
@@ -541,7 +779,13 @@ mod family_do {
             d.apply(&obj, out);
             a
         };
-        let err = |m: String| (StatusCode::TOO_MANY_REQUESTS, Json(serde_json::json!({"error": {"kind": "queue_full", "message": m}}))).into_response();
+        let err = |m: String| {
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(serde_json::json!({"error": {"kind": "queue_full", "message": m}})),
+            )
+                .into_response()
+        };
         match a {
             Admit::Granted(g) => Json(g).into_response(),
             Admit::Refused(m) => err(m),
@@ -553,7 +797,11 @@ mod family_do {
         }
     }
 
-    async fn session_op(State(d): State<FamilyDo>, Path((f, id, op)): Path<(String, String, String)>, h: HeaderMap) -> Response {
+    async fn session_op(
+        State(d): State<FamilyDo>,
+        Path((f, id, op)): Path<(String, String, String)>,
+        h: HeaderMap,
+    ) -> Response {
         if !authed(&h) {
             return StatusCode::UNAUTHORIZED.into_response();
         }
@@ -564,7 +812,9 @@ mod family_do {
                 None => StatusCode::NOT_FOUND.into_response(),
             },
             "release" => match d.with(&obj, |s| s.release(&id, now())) {
-                Some(st) => Json(serde_json::json!({"session_id": id, "state": st})).into_response(),
+                Some(st) => {
+                    Json(serde_json::json!({"session_id": id, "state": st})).into_response()
+                }
                 None => StatusCode::NOT_FOUND.into_response(),
             },
             _ => StatusCode::NOT_FOUND.into_response(),
@@ -604,21 +854,48 @@ struct Env {
 
 impl Env {
     async fn new() -> Self {
-        Self::with_cfg(fastvideo_dispatch_proto::sched::Cfg { reconnect_grace_ms: 3_000, stale_after_ms: 8_000, ack_timeout_ms: 1_000, ..Default::default() }).await
+        Self::with_cfg(fastvideo_dispatch_proto::sched::Cfg {
+            reconnect_grace_ms: 3_000,
+            stale_after_ms: 8_000,
+            ack_timeout_ms: 1_000,
+            ..Default::default()
+        })
+        .await
     }
     async fn with_cfg(cfg: fastvideo_dispatch_proto::sched::Cfg) -> Self {
         let arts = tmp("arts");
         std::fs::create_dir_all(&arts).unwrap();
         let (s3, _) = s3::Mock::start("AKTEST", "test-secret").await;
-        let client = s3::Client { signer: s3.signer.clone(), http: reqwest::Client::builder().no_proxy().build().unwrap() };
+        let client = s3::Client {
+            signer: s3.signer.clone(),
+            http: reqwest::Client::builder().no_proxy().build().unwrap(),
+        };
         let run = format!("{:x}", now() % 0xff_ffff);
         if let Some(base) = std::env::var("FV_EDGE_URL").ok().filter(|s| !s.is_empty()) {
             let token = std::env::var("FV_EDGE_TOKEN").expect("FV_EDGE_TOKEN with FV_EDGE_URL");
             let http = Http::new(&token);
-            return Self { mock: MockD1::new(), arts, s3, native: None, base: base.trim_end_matches('/').to_owned(), token, run, http };
+            return Self {
+                mock: MockD1::new(),
+                arts,
+                s3,
+                native: None,
+                base: base.trim_end_matches('/').to_owned(),
+                token,
+                run,
+                http,
+            };
         }
         let (d, base) = family_do::FamilyDo::start(cfg, client).await;
-        Self { mock: MockD1::new(), arts, s3, native: Some(d), base, token: TOKEN.to_owned(), run, http: Http::new(TOKEN) }
+        Self {
+            mock: MockD1::new(),
+            arts,
+            s3,
+            native: Some(d),
+            base,
+            token: TOKEN.to_owned(),
+            run,
+            http: Http::new(TOKEN),
+        }
     }
     fn external(&self) -> bool {
         self.native.is_none()
@@ -637,22 +914,62 @@ impl Env {
         }
     }
     fn d1(&self, dead: &Arc<AtomicBool>) -> D1Client {
-        D1Client::new(Arc::new(Cuttable { mock: self.mock.clone(), dead: dead.clone() })).with_retry(fastvideo_serve_kit::d1::RetryPolicy::immediate(1))
+        D1Client::new(Arc::new(Cuttable {
+            mock: self.mock.clone(),
+            dead: dead.clone(),
+        }))
+        .with_retry(fastvideo_serve_kit::d1::RetryPolicy::immediate(1))
     }
     fn job(&self, external_id: &str) -> fastvideo_protocol::Job {
-        let r = self.mock.sql("SELECT job FROM jobs WHERE external_id = ?", &[json!(external_id)]).unwrap().remove(0);
+        let r = self
+            .mock
+            .sql(
+                "SELECT job FROM jobs WHERE external_id = ?",
+                &[json!(external_id)],
+            )
+            .unwrap()
+            .remove(0);
         serde_json::from_str(r["job"].as_str().unwrap()).unwrap()
     }
     fn worker_of(&self, external_id: &str) -> String {
-        let r = self.mock.sql("SELECT worker FROM jobs WHERE external_id = ?", &[json!(external_id)]).unwrap().remove(0);
+        let r = self
+            .mock
+            .sql(
+                "SELECT worker FROM jobs WHERE external_id = ?",
+                &[json!(external_id)],
+            )
+            .unwrap()
+            .remove(0);
         r["worker"].as_str().unwrap_or_default().to_owned()
     }
     async fn status(&self, family: &str) -> PoolStatus {
-        let r = self.http.0.get(format!("{}/families/{}/status", self.base, self.fam(family))).header("x-fv-internal-token", &self.token).send().await.unwrap();
+        let r = self
+            .http
+            .0
+            .get(format!(
+                "{}/families/{}/status",
+                self.base,
+                self.fam(family)
+            ))
+            .header("x-fv-internal-token", &self.token)
+            .send()
+            .await
+            .unwrap();
         r.json().await.unwrap()
     }
     async fn metrics(&self, family: &str) -> FamilyMetrics {
-        let r = self.http.0.get(format!("{}/families/{}/metrics", self.base, self.fam(family))).header("x-fv-internal-token", &self.token).send().await.unwrap();
+        let r = self
+            .http
+            .0
+            .get(format!(
+                "{}/families/{}/metrics",
+                self.base,
+                self.fam(family)
+            ))
+            .header("x-fv-internal-token", &self.token)
+            .send()
+            .await
+            .unwrap();
         r.json().await.unwrap()
     }
     /// Waits until `n` workers are connected to `family`'s object.
@@ -663,7 +980,10 @@ impl Env {
             if st.usable_workers() >= n {
                 return;
             }
-            assert!(t0.elapsed() < Duration::from_secs(30), "workers never connected to {family}: {st:?}");
+            assert!(
+                t0.elapsed() < Duration::from_secs(30),
+                "workers never connected to {family}: {st:?}"
+            );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
@@ -671,10 +991,16 @@ impl Env {
     fn base_config(&self, tag: &str) -> Config {
         let mut env = BTreeMap::new();
         env.insert("FV_API_KEYS".to_owned(), KeyRing::hash_hex(KEY));
-        env.insert("FV_URL_SIGNING_KEY".to_owned(), "shared-signing-key".to_owned());
+        env.insert(
+            "FV_URL_SIGNING_KEY".to_owned(),
+            "shared-signing-key".to_owned(),
+        );
         env.insert("FV_STATE_DIR".to_owned(), tmp(tag).display().to_string());
         env.insert("FV_INTERNAL_TOKEN".to_owned(), self.token.clone());
-        env.insert("FV_ARTIFACTS_DIR".to_owned(), self.arts.display().to_string());
+        env.insert(
+            "FV_ARTIFACTS_DIR".to_owned(),
+            self.arts.display().to_string(),
+        );
         env.insert("FV_ADMIN_TOKEN".to_owned(), ADMIN.to_owned());
         env.insert("FV_CF_ACCOUNT_ID".to_owned(), "acct".to_owned());
         env.insert("FV_CF_API_TOKEN".to_owned(), "tok".to_owned());
@@ -696,17 +1022,37 @@ impl Env {
         c.server.public_base_url = Some(base.clone());
         c.validate().unwrap();
         let dead = Arc::new(AtomicBool::new(false));
-        let app = App::build(c, Overrides { d1: Some(self.d1(&dead)), ..Overrides::default() }).await.unwrap();
+        let app = App::build(
+            c,
+            Overrides {
+                d1: Some(self.d1(&dead)),
+                ..Overrides::default()
+            },
+        )
+        .await
+        .unwrap();
         app.gate.engine().wait_ready().await;
         let router = app.router.clone();
         let task = tokio::spawn(async move {
             let _ = axum::serve(l, router).await;
         });
-        Running { app, base, dead, task }
+        Running {
+            app,
+            base,
+            dead,
+            task,
+        }
     }
 
     /// A fake-engine worker serving `families` through one arbiter.
-    async fn worker(&self, tag: &str, families: &[&str], models: &[&str], step_ms: u64, direct: bool) -> Running {
+    async fn worker(
+        &self,
+        tag: &str,
+        families: &[&str],
+        models: &[&str],
+        step_ms: u64,
+        direct: bool,
+    ) -> Running {
         let mut c = self.base_config(tag);
         c.server.role = Role::Worker;
         c.server.worker_id = Some(format!("worker-{tag}"));
@@ -725,7 +1071,14 @@ impl Env {
     /// [`Env::worker`] and enqueues every submit on its model's family
     /// object (docs/serve/edge-control-plane.md §2.4), as the retired
     /// gateway did. Requests to it carry the edge's headers ([`Http`]).
-    async fn front(&self, tag: &str, families: &[&str], models: &[&str], step_ms: u64, direct: bool) -> Running {
+    async fn front(
+        &self,
+        tag: &str,
+        families: &[&str],
+        models: &[&str],
+        step_ms: u64,
+        direct: bool,
+    ) -> Running {
         let mut c = self.base_config(tag);
         c.server.role = Role::Worker;
         c.server.worker_id = Some(format!("worker-{tag}"));
@@ -733,7 +1086,10 @@ impl Env {
         c.engine.fake.step_ms = step_ms;
         c.dispatch.do_url = Some(self.base.clone());
         c.dispatch.families = families.iter().map(|f| self.fam(f)).collect();
-        c.dispatch.model_families = models.iter().map(|m| (m.to_string(), self.fam(family_of(m)))).collect();
+        c.dispatch.model_families = models
+            .iter()
+            .map(|m| (m.to_string(), self.fam(family_of(m))))
+            .collect();
         c.dispatch.capacity = 1;
         c.dispatch.sessions = 1;
         c.dispatch.status_s = 2;
@@ -777,8 +1133,19 @@ struct Http(reqwest::Client, String, String);
 impl Http {
     fn new(token: &str) -> Self {
         use fastvideo_dispatch_proto::front::{key_digest, key_id, Verdict};
-        let v = Verdict { v: 1, key: Some(key_id(&key_digest(KEY))), presented: true, valid: true, scheme: Some("bearer".into()), deny: None };
-        Self(reqwest::Client::builder().no_proxy().build().unwrap(), token.to_owned(), v.header())
+        let v = Verdict {
+            v: 1,
+            key: Some(key_id(&key_digest(KEY))),
+            presented: true,
+            valid: true,
+            scheme: Some("bearer".into()),
+            deny: None,
+        };
+        Self(
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+            token.to_owned(),
+            v.header(),
+        )
     }
     async fn call(&self, method: &str, url: &str, body: Option<Value>) -> (u16, Value) {
         let mut r = self
@@ -793,17 +1160,35 @@ impl Http {
         let resp = r.send().await.unwrap();
         let s = resp.status().as_u16();
         let bytes = resp.bytes().await.unwrap();
-        (s, serde_json::from_slice(&bytes).unwrap_or(Value::String(String::from_utf8_lossy(&bytes).into_owned())))
+        (
+            s,
+            serde_json::from_slice(&bytes)
+                .unwrap_or(Value::String(String::from_utf8_lossy(&bytes).into_owned())),
+        )
     }
     async fn submit(&self, g: &str, model: &str, prompt: &str) -> String {
-        let (s, v) = self.call("POST", &format!("{g}/fv/v1/jobs"), Some(json!({"model": model, "prompt": prompt}))).await;
+        let (s, v) = self
+            .call(
+                "POST",
+                &format!("{g}/fv/v1/jobs"),
+                Some(json!({"model": model, "prompt": prompt})),
+            )
+            .await;
         assert_eq!(s, 202, "{v}");
         v["id"].as_str().unwrap().to_owned()
     }
-    async fn wait(&self, g: &str, id: &str, done: impl Fn(&Value) -> bool, limit: Duration) -> Value {
+    async fn wait(
+        &self,
+        g: &str,
+        id: &str,
+        done: impl Fn(&Value) -> bool,
+        limit: Duration,
+    ) -> Value {
         let t0 = Instant::now();
         loop {
-            let (s, v) = self.call("GET", &format!("{g}/fv/v1/jobs/{id}"), None).await;
+            let (s, v) = self
+                .call("GET", &format!("{g}/fv/v1/jobs/{id}"), None)
+                .await;
             if s == 200 && done(&v) {
                 return v;
             }
@@ -812,14 +1197,27 @@ impl Http {
         }
     }
     async fn finished(&self, g: &str, id: &str) -> Value {
-        self.wait(g, id, |v| matches!(v["status"].as_str(), Some("succeeded" | "failed" | "cancelled")), Duration::from_secs(120)).await
+        self.wait(
+            g,
+            id,
+            |v| {
+                matches!(
+                    v["status"].as_str(),
+                    Some("succeeded" | "failed" | "cancelled")
+                )
+            },
+            Duration::from_secs(120),
+        )
+        .await
     }
 }
 
 /// Whether `job` (an external id) went through `family`'s object (the stand-in's view).
 fn in_family(e: &Env, family: &str, id: &str) -> bool {
     let jid = e.job(id).id.to_string();
-    e.d().with(&format!("family:{family}"), |s| (s.job(&jid).is_some(), Vec::new()))
+    e.d().with(&format!("family:{family}"), |s| {
+        (s.job(&jid).is_some(), Vec::new())
+    })
 }
 
 // ----------------------------------------------------------------- tests
@@ -838,7 +1236,18 @@ async fn multi_family_worker_never_holds_two_jobs() {
     // A burst on both families at once.
     let subs = (0..12).map(|i| {
         let (http, g) = (&e.http, g.clone());
-        async move { http.submit(&g, if i % 2 == 0 { "fake-h3-turbo" } else { "fake-ltx-turbo" }, &format!("burst {i}")).await }
+        async move {
+            http.submit(
+                &g,
+                if i % 2 == 0 {
+                    "fake-h3-turbo"
+                } else {
+                    "fake-ltx-turbo"
+                },
+                &format!("burst {i}"),
+            )
+            .await
+        }
     });
     let ids = futures::future::join_all(subs).await;
     let mut spans: BTreeMap<String, Vec<(i128, i128)>> = BTreeMap::new();
@@ -846,11 +1255,17 @@ async fn multi_family_worker_never_holds_two_jobs() {
         let v = e.http.finished(&g, id).await;
         assert_eq!(v["status"], "succeeded", "{v}");
         let j = e.job(id);
-        let (s, c) = (j.started_at.unwrap().unix_timestamp_nanos(), j.completed_at.unwrap().unix_timestamp_nanos());
+        let (s, c) = (
+            j.started_at.unwrap().unix_timestamp_nanos(),
+            j.completed_at.unwrap().unix_timestamp_nanos(),
+        );
         spans.entry(e.worker_of(id)).or_default().push((s, c));
         // Each job went through its own family's object.
         if !e.external() {
-            assert!(in_family(&e, if i % 2 == 0 { "h3" } else { "ltx" }, id), "{v}");
+            assert!(
+                in_family(&e, if i % 2 == 0 { "h3" } else { "ltx" }, id),
+                "{v}"
+            );
         }
     }
     // Each worker ran its jobs one after another: its one slot was never
@@ -864,10 +1279,25 @@ async fn multi_family_worker_never_holds_two_jobs() {
     assert_eq!(spans.len(), 2, "both workers took jobs: {spans:?}");
     if let Some(d) = &e.native {
         let offers: u32 = d.inner.lock().unwrap().offers.values().sum();
-        eprintln!("FAMILY-BURST: 12 jobs, {offers} offers, 429 nacks: a {} b {}", d.nacks("worker-a", 429), d.nacks("worker-b", 429));
+        eprintln!(
+            "FAMILY-BURST: 12 jobs, {offers} offers, 429 nacks: a {} b {}",
+            d.nacks("worker-a", 429),
+            d.nacks("worker-b", 429)
+        );
     }
-    let q: Vec<f64> = ids.iter().map(|id| { let j = e.job(id); (j.started_at.unwrap() - j.created_at).as_seconds_f64() }).collect();
-    eprintln!("FAMILY-BURST: queue s {:?}", q.iter().map(|x| (x * 1000.0).round() / 1000.0).collect::<Vec<_>>());
+    let q: Vec<f64> = ids
+        .iter()
+        .map(|id| {
+            let j = e.job(id);
+            (j.started_at.unwrap() - j.created_at).as_seconds_f64()
+        })
+        .collect();
+    eprintln!(
+        "FAMILY-BURST: queue s {:?}",
+        q.iter()
+            .map(|x| (x * 1000.0).round() / 1000.0)
+            .collect::<Vec<_>>()
+    );
     let m = e.metrics("h3").await;
     assert_eq!((m.queued, m.running, m.workers), (0, 0, 2), "{m:?}");
     drop((a, b));
@@ -882,17 +1312,42 @@ async fn an_arbiter_nack_is_offered_elsewhere_at_once() {
         return;
     }
     // a serves h3 and ltx; b serves ltx only.
-    let a = e.front("a", &["h3", "ltx"], &["fake-h3-turbo", "fake-ltx-turbo"], 400, false).await;
-    let b = e.worker("b", &["ltx"], &["fake-ltx-turbo"], 20, false).await;
+    let a = e
+        .front(
+            "a",
+            &["h3", "ltx"],
+            &["fake-h3-turbo", "fake-ltx-turbo"],
+            400,
+            false,
+        )
+        .await;
+    let b = e
+        .worker("b", &["ltx"], &["fake-ltx-turbo"], 20, false)
+        .await;
     e.connected("h3", 1).await;
     e.connected("ltx", 2).await;
     let g = a.base.clone();
     // a's GPU is busy with an h3 job.
     let h = e.http.submit(&g, "fake-h3-turbo", "long").await;
-    e.http.wait(&g, &h, |v| v["status"] == "running", Duration::from_secs(30)).await;
+    e.http
+        .wait(
+            &g,
+            &h,
+            |v| v["status"] == "running",
+            Duration::from_secs(30),
+        )
+        .await;
     // A stale credit from a (as if a `slots` frame crossed the h3 offer):
     // the ltx object believes a has a free slot, and prefers it (worker-a < worker-b).
-    e.d().inject("ltx", "worker-a", fastvideo_dispatch_proto::WorkerMsg::Slots(fastvideo_dispatch_proto::Slots { free: 1, session_free: 0, offers_seen: 1_000 }));
+    e.d().inject(
+        "ltx",
+        "worker-a",
+        fastvideo_dispatch_proto::WorkerMsg::Slots(fastvideo_dispatch_proto::Slots {
+            free: 1,
+            session_free: 0,
+            offers_seen: 1_000,
+        }),
+    );
     let t0 = Instant::now();
     let l = e.http.submit(&g, "fake-ltx-turbo", "re-offered").await;
     let v = e.http.finished(&g, &l).await;
@@ -901,7 +1356,10 @@ async fn an_arbiter_nack_is_offered_elsewhere_at_once() {
     assert!(e.d().nacks("worker-a", 429) >= 1, "a refused the offer");
     let j = e.job(&l);
     let queue = (j.started_at.unwrap() - j.created_at).as_seconds_f64();
-    eprintln!("FAMILY-NACK: re-offered after a 429; queue {queue:.3} s, end-to-end {:.3} s", t0.elapsed().as_secs_f64());
+    eprintln!(
+        "FAMILY-NACK: re-offered after a 429; queue {queue:.3} s, end-to-end {:.3} s",
+        t0.elapsed().as_secs_f64()
+    );
     assert!(queue < 1.0, "no backoff after an arbiter nack: {queue}");
     let hv = e.http.finished(&g, &h).await;
     assert_eq!(hv["status"], "succeeded");
@@ -920,9 +1378,16 @@ async fn a_missed_ack_requeues_to_another_worker() {
         return;
     }
     // A "worker" that announces a free slot and never answers an offer.
-    let mut req = format!("{}/families/wan/connect", e.base.replace("http://", "ws://")).into_client_request().unwrap();
-    req.headers_mut().insert("x-fv-internal-token", TOKEN.parse().unwrap());
-    req.headers_mut().insert("x-fv-worker-id", "aaa-silent".parse().unwrap());
+    let mut req = format!(
+        "{}/families/wan/connect",
+        e.base.replace("http://", "ws://")
+    )
+    .into_client_request()
+    .unwrap();
+    req.headers_mut()
+        .insert("x-fv-internal-token", TOKEN.parse().unwrap());
+    req.headers_mut()
+        .insert("x-fv-worker-id", "aaa-silent".parse().unwrap());
     let (ws, _) = tokio_tungstenite::connect_async(req).await.unwrap();
     let (mut sink, mut stream) = ws.split();
     let hello = json!({"t": "hello", "worker_id": "aaa-silent", "pool": "family:wan", "proto": 2, "capacity": 1, "slots": {"free": 1}});
@@ -943,14 +1408,20 @@ async fn a_missed_ack_requeues_to_another_worker() {
     // the offer.
     let f = e.front("zz-front", &["wan"], &["fake-wan"], 5, false).await;
     e.connected("wan", 2).await;
-    let (s, _) = e.http.call("POST", &format!("{}/fv/v1/internal/drain", f.base), None).await;
+    let (s, _) = e
+        .http
+        .call("POST", &format!("{}/fv/v1/internal/drain", f.base), None)
+        .await;
     assert_eq!(s, 200);
     let g = f.base.clone();
     let id = e.http.submit(&g, "fake-wan", "acked late").await;
     // The silent worker got the offer; nobody else is there yet.
     let t0 = Instant::now();
     while offers.load(Ordering::SeqCst) == 0 {
-        assert!(t0.elapsed() < Duration::from_secs(10), "no offer to the silent worker");
+        assert!(
+            t0.elapsed() < Duration::from_secs(10),
+            "no offer to the silent worker"
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     let b = e.worker("b", &["wan"], &["fake-wan"], 5, false).await;
@@ -958,8 +1429,18 @@ async fn a_missed_ack_requeues_to_another_worker() {
     assert_eq!(v["status"], "succeeded", "{v}");
     assert_eq!(e.worker_of(&id), "worker-b");
     let st = e.status("wan").await;
-    eprintln!("FAMILY-ACK-TIMEOUT: requeued after the ack deadline; workers {:?}", st.workers.iter().map(|w| (&w.worker_id, w.held)).collect::<Vec<_>>());
-    assert_eq!(e.d().inner.lock().unwrap().offers[&e.job(&id).id.to_string()], 2, "offered twice (the second under a new lease)");
+    eprintln!(
+        "FAMILY-ACK-TIMEOUT: requeued after the ack deadline; workers {:?}",
+        st.workers
+            .iter()
+            .map(|w| (&w.worker_id, w.held))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        e.d().inner.lock().unwrap().offers[&e.job(&id).id.to_string()],
+        2,
+        "offered twice (the second under a new lease)"
+    );
     silent.abort();
     drop((b, f));
 }
@@ -982,24 +1463,45 @@ async fn a_deploy_reconnects_and_reannounces_without_duplicates() {
     }
     // Two run, two wait in the object.
     for id in &ids[..2] {
-        e.http.wait(&g, id, |v| v["status"] == "running", Duration::from_secs(30)).await;
+        e.http
+            .wait(
+                &g,
+                id,
+                |v| v["status"] == "running",
+                Duration::from_secs(30),
+            )
+            .await;
     }
-    let before: BTreeMap<String, String> = ids[..2].iter().map(|id| (id.clone(), e.worker_of(id))).collect();
+    let before: BTreeMap<String, String> = ids[..2]
+        .iter()
+        .map(|id| (id.clone(), e.worker_of(id)))
+        .collect();
     let t0 = Instant::now();
     e.d().redeploy();
     e.connected("wan", 2).await;
-    eprintln!("FAMILY-REDEPLOY: workers back in {:.3} s", t0.elapsed().as_secs_f64());
+    eprintln!(
+        "FAMILY-REDEPLOY: workers back in {:.3} s",
+        t0.elapsed().as_secs_f64()
+    );
     for id in &ids {
         let v = e.http.finished(&g, id).await;
         assert_eq!(v["status"], "succeeded", "{v}");
     }
     for (id, w) in &before {
-        assert_eq!(&e.worker_of(id), w, "{id} finished where it ran before the deploy");
+        assert_eq!(
+            &e.worker_of(id),
+            w,
+            "{id} finished where it ran before the deploy"
+        );
     }
     let offers = e.d().inner.lock().unwrap().offers.clone();
     for id in &ids {
         let jid = e.job(id).id.to_string();
-        assert_eq!(offers.get(&jid).copied().unwrap_or(0), 1, "{id} was offered once: {offers:?}");
+        assert_eq!(
+            offers.get(&jid).copied().unwrap_or(0),
+            1,
+            "{id} was offered once: {offers:?}"
+        );
     }
     let st = e.status("wan").await;
     assert!(st.failed.is_empty(), "{:?}", st.failed);
@@ -1018,16 +1520,40 @@ async fn direct_upload_commits_through_the_family_object() {
     assert_eq!(v["status"], "succeeded", "{v}");
     let job = e.job(&id);
     let art = &job.artifacts[0];
-    let fastvideo_protocol::ArtifactLocation::Object { bucket, key } = &art.location else { panic!("not an object: {art:?}") };
-    assert!(key.starts_with(&format!("outputs/{}/{}/1-1/", e.fam("wan"), job.id)), "{key}");
+    let fastvideo_protocol::ArtifactLocation::Object { bucket, key } = &art.location else {
+        panic!("not an object: {art:?}")
+    };
+    assert!(
+        key.starts_with(&format!("outputs/{}/{}/1-1/", e.fam("wan"), job.id)),
+        "{key}"
+    );
     if e.external() {
         // Read it back through the Worker (`/dl`, signed with the upload key).
-        let secret = std::env::var("FV_EDGE_UPLOAD_KEY").expect("FV_EDGE_UPLOAD_KEY with FV_EDGE_URL");
+        let secret =
+            std::env::var("FV_EDGE_UPLOAD_KEY").expect("FV_EDGE_UPLOAD_KEY with FV_EDGE_URL");
         let cap = fastvideo_dispatch_proto::presign::Cap::Get { key: key.clone() };
-        let url = fastvideo_dispatch_proto::presign::cap_url(&e.base, secret.as_bytes(), &cap, now() + 60_000);
-        let body = e.http.0.get(url).send().await.unwrap().bytes().await.unwrap();
+        let url = fastvideo_dispatch_proto::presign::cap_url(
+            &e.base,
+            secret.as_bytes(),
+            &cap,
+            now() + 60_000,
+        );
+        let body = e
+            .http
+            .0
+            .get(url)
+            .send()
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
         assert_eq!(body.len() as u64, art.bytes, "the object in R2");
-        eprintln!("FAMILY-UPLOAD: {bucket}/{key} {} bytes, sha256 {}", body.len(), fastvideo_dispatch_proto::presign::sha256_hex(&body));
+        eprintln!(
+            "FAMILY-UPLOAD: {bucket}/{key} {} bytes, sha256 {}",
+            body.len(),
+            fastvideo_dispatch_proto::presign::sha256_hex(&body)
+        );
         drop(w);
         return;
     }
@@ -1040,17 +1566,39 @@ async fn direct_upload_commits_through_the_family_object() {
         assert!(st.uploads.is_empty(), "no upload left open");
     }
     // The family object recorded the result (key, bytes, sha256).
-    let r = e.d().with("family:wan", |s| (s.job(&job.id.to_string()).and_then(|j| j.result.clone()), Vec::new())).expect("a result");
+    let r = e
+        .d()
+        .with("family:wan", |s| {
+            (
+                s.job(&job.id.to_string()).and_then(|j| j.result.clone()),
+                Vec::new(),
+            )
+        })
+        .expect("a result");
     assert_eq!((r.key.as_str(), r.bytes), (key.as_str(), art.bytes));
-    assert_eq!(r.sha256, fastvideo_dispatch_proto::presign::sha256_hex(e.s3.store.lock().unwrap().objects.get(key).unwrap()));
+    assert_eq!(
+        r.sha256,
+        fastvideo_dispatch_proto::presign::sha256_hex(
+            e.s3.store.lock().unwrap().objects.get(key).unwrap()
+        )
+    );
     // A cancelled job's upload is aborted.
     let c = e.http.submit(&g, "fake-wan", "cancel me").await;
-    let _ = e.http.call("DELETE", &format!("{g}/fv/v1/jobs/{c}"), None).await;
+    let _ = e
+        .http
+        .call("DELETE", &format!("{g}/fv/v1/jobs/{c}"), None)
+        .await;
     let cv = e.http.finished(&g, &c).await;
-    assert!(matches!(cv["status"].as_str(), Some("cancelled" | "succeeded")), "{cv}");
+    assert!(
+        matches!(cv["status"].as_str(), Some("cancelled" | "succeeded")),
+        "{cv}"
+    );
     let t0 = Instant::now();
     while !e.s3.store.lock().unwrap().uploads.is_empty() {
-        assert!(t0.elapsed() < Duration::from_secs(10), "an upload stayed open");
+        assert!(
+            t0.elapsed() < Duration::from_secs(10),
+            "an upload stayed open"
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     drop(w);
@@ -1065,7 +1613,10 @@ async fn tail_upload_overlaps_the_write_and_resends_only_changed_parts() {
     use fastvideo_serve::upload::{UploadSpec, Uploads};
     init_log();
     let e = Env::new().await;
-    let client = s3::Client { signer: e.s3.signer.clone(), http: reqwest::Client::builder().no_proxy().build().unwrap() };
+    let client = s3::Client {
+        signer: e.s3.signer.clone(),
+        http: reqwest::Client::builder().no_proxy().build().unwrap(),
+    };
     // A family object reduced to the upload frames.
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<WorkerMsg>();
     let link = LinkHandle::new(Scope::Family("wan".into()), tx);
@@ -1074,19 +1625,70 @@ async fn tail_upload_overlaps_the_write_and_resends_only_changed_parts() {
         let mut key = String::new();
         while let Some(m) = rx.recv().await {
             let answer = match m {
-                WorkerMsg::UploadInit { req, job_id, name, .. } => {
+                WorkerMsg::UploadInit {
+                    req, job_id, name, ..
+                } => {
                     key = format!("outputs/wan/{job_id}/1-1/{name}");
                     let id = client.create(&key).await.unwrap();
-                    let part_urls = (1..=4).map(|n| PartUrl { n, url: client.part_url(&key, &id, n) }).collect();
-                    DoMsg::UploadGrant { req, job_id, upload_id: id, key: key.clone(), bucket: BUCKET.into(), part_urls, expires_ms: now() + 600_000, error: None }
+                    let part_urls = (1..=4)
+                        .map(|n| PartUrl {
+                            n,
+                            url: client.part_url(&key, &id, n),
+                        })
+                        .collect();
+                    DoMsg::UploadGrant {
+                        req,
+                        job_id,
+                        upload_id: id,
+                        key: key.clone(),
+                        bucket: BUCKET.into(),
+                        part_urls,
+                        expires_ms: now() + 600_000,
+                        error: None,
+                    }
                 }
-                WorkerMsg::UploadMore { req, job_id, upload_id, from, count } => {
-                    let part_urls = (from..from + count).map(|n| PartUrl { n, url: client.part_url(&key, &upload_id, n) }).collect();
-                    DoMsg::UploadGrant { req, job_id, upload_id, key: key.clone(), bucket: BUCKET.into(), part_urls, expires_ms: now() + 600_000, error: None }
+                WorkerMsg::UploadMore {
+                    req,
+                    job_id,
+                    upload_id,
+                    from,
+                    count,
+                } => {
+                    let part_urls = (from..from + count)
+                        .map(|n| PartUrl {
+                            n,
+                            url: client.part_url(&key, &upload_id, n),
+                        })
+                        .collect();
+                    DoMsg::UploadGrant {
+                        req,
+                        job_id,
+                        upload_id,
+                        key: key.clone(),
+                        bucket: BUCKET.into(),
+                        part_urls,
+                        expires_ms: now() + 600_000,
+                        error: None,
+                    }
                 }
-                WorkerMsg::UploadDone { req, job_id, upload_id, parts, bytes, .. } => {
+                WorkerMsg::UploadDone {
+                    req,
+                    job_id,
+                    upload_id,
+                    parts,
+                    bytes,
+                    ..
+                } => {
                     let size = client.complete(&key, &upload_id, &parts).await.unwrap();
-                    DoMsg::UploadCommitted { req, job_id, key: key.clone(), bucket: BUCKET.into(), bytes: size, ok: size == bytes, error: None }
+                    DoMsg::UploadCommitted {
+                        req,
+                        job_id,
+                        key: key.clone(),
+                        bucket: BUCKET.into(),
+                        bytes: size,
+                        ok: size == bytes,
+                        error: None,
+                    }
                 }
                 _ => continue,
             };
@@ -1100,10 +1702,21 @@ async fn tail_upload_overlaps_the_write_and_resends_only_changed_parts() {
     let file = dir.join(job.to_string()).join("output.mp4");
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     std::fs::write(&file, b"").unwrap();
-    uploads.start(UploadSpec { job, attempt: 1, lease: 1, tail: file.clone(), name: "output.mp4".into(), content_type: "video/mp4".into(), link });
+    uploads.start(UploadSpec {
+        job,
+        attempt: 1,
+        lease: 1,
+        tail: file.clone(),
+        name: "output.mp4".into(),
+        content_type: "video/mp4".into(),
+        link,
+    });
     // The "encoder": six full parts and a short tail, 120 ms apart, then a
     // patch of the first bytes (as a muxer fixing its header).
-    let mut f = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&file)
+        .unwrap();
     let mut all = Vec::new();
     for i in 0..6u8 {
         let chunk = vec![i.wrapping_mul(31).wrapping_add(7); part as usize];
@@ -1121,17 +1734,34 @@ async fn tail_upload_overlaps_the_write_and_resends_only_changed_parts() {
     f.write_all(b"moov").unwrap();
     drop(f);
     all[4..8].copy_from_slice(b"moov");
-    let c = uploads.finish(job, &file).await.expect("a direct upload").expect("committed");
+    let c = uploads
+        .finish(job, &file)
+        .await
+        .expect("a direct upload")
+        .expect("committed");
     eprintln!("FAMILY-TAIL: {:?}", c.stats);
     assert_eq!(c.bytes, all.len() as u64);
-    assert_eq!(c.sha256, fastvideo_dispatch_proto::presign::sha256_hex(&all));
+    assert_eq!(
+        c.sha256,
+        fastvideo_dispatch_proto::presign::sha256_hex(&all)
+    );
     let st = e.s3.store.lock().unwrap();
     assert_eq!(st.objects.get(&c.key).map(Vec::as_slice), Some(&all[..]));
-    let puts = |n: u16| st.part_puts.iter().filter(|((_, p), _)| *p == n).map(|(_, c)| *c).sum::<u32>();
+    let puts = |n: u16| {
+        st.part_puts
+            .iter()
+            .filter(|((_, p), _)| *p == n)
+            .map(|(_, c)| *c)
+            .sum::<u32>()
+    };
     assert_eq!(puts(1), 2, "the patched first part went twice");
     for n in 2..=7 {
         assert_eq!(puts(n), 1, "part {n} went once");
     }
-    assert!(c.stats.bytes_early >= 5 * part, "most parts went while the file grew: {:?}", c.stats);
+    assert!(
+        c.stats.bytes_early >= 5 * part,
+        "most parts went while the file grew: {:?}",
+        c.stats
+    );
     assert_eq!(c.stats.bytes_resent, part);
 }

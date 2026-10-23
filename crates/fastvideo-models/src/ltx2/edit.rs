@@ -140,7 +140,10 @@ pub fn extend_window(source_frames: usize, extend: usize, at: ExtendAt, fps: f64
     let delta = round_half_even(EXTEND_MASK_DELTA_S * fps).max(0.0) as usize;
     match at {
         ExtendAt::Start => (0.0, target.min(extend + delta) as f64 / fps),
-        ExtendAt::End => (source_frames.saturating_sub(delta) as f64 / fps, target as f64 / fps),
+        ExtendAt::End => (
+            source_frames.saturating_sub(delta) as f64 / fps,
+            target as f64 / fps,
+        ),
     }
 }
 
@@ -158,7 +161,9 @@ pub fn edit_canvas(src_w: u32, src_h: u32, max_pixels: u64) -> (u32, u32) {
         let s = (max_pixels as f64 / (f64::from(src_w) * f64::from(src_h))).sqrt();
         w = snap(f64::from(src_w) * s);
         h = snap(f64::from(src_h) * s);
-        while u64::from(w) * u64::from(h) > max_pixels && (w > SPATIAL_MULTIPLE || h > SPATIAL_MULTIPLE) {
+        while u64::from(w) * u64::from(h) > max_pixels
+            && (w > SPATIAL_MULTIPLE || h > SPATIAL_MULTIPLE)
+        {
             if w >= h {
                 w -= SPATIAL_MULTIPLE;
             } else {
@@ -210,7 +215,12 @@ mod tests {
         // 121 frames at 24 fps, retake [1, 3) s: latent frames whose spans
         // overlap. Frame i covers [(8i-7)/24, (8i+1)/24).
         let m = in_region(&video_latent_spans(16, 24.0), 1.0, 3.0);
-        let idx: Vec<usize> = m.iter().enumerate().filter(|(_, b)| **b).map(|(i, _)| i).collect();
+        let idx: Vec<usize> = m
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| **b)
+            .map(|(i, _)| i)
+            .collect();
         // i=3: [17/24, 25/24) overlaps 1.0; i=9: [65/24, 73/24) = [2.708, 3.04) overlaps 3.0.
         assert_eq!(idx, (3..=9).collect::<Vec<_>>());
         assert_eq!(kept_runs(&m), vec![(0, 3), (10, 6)]);
@@ -224,10 +234,19 @@ mod tests {
     #[test]
     fn extend_windows_feather_half_a_second_into_the_source() {
         // 97 source frames at 24 fps, 48 new frames.
-        assert_eq!(extend_window(97, 48, ExtendAt::End, 24.0), (85.0 / 24.0, 145.0 / 24.0));
-        assert_eq!(extend_window(97, 48, ExtendAt::Start, 24.0), (0.0, 60.0 / 24.0));
+        assert_eq!(
+            extend_window(97, 48, ExtendAt::End, 24.0),
+            (85.0 / 24.0, 145.0 / 24.0)
+        );
+        assert_eq!(
+            extend_window(97, 48, ExtendAt::Start, 24.0),
+            (0.0, 60.0 / 24.0)
+        );
         // The feather never passes the clip.
-        assert_eq!(extend_window(9, 8, ExtendAt::Start, 24.0), (0.0, 17.0 / 24.0));
+        assert_eq!(
+            extend_window(9, 8, ExtendAt::Start, 24.0),
+            (0.0, 17.0 / 24.0)
+        );
     }
 
     #[test]
@@ -238,7 +257,10 @@ mod tests {
         assert_eq!(edit_canvas(1080, 1920, budget), (1056, 1920));
         assert_eq!(edit_canvas(854, 480, budget), (832, 480));
         let (w, h) = edit_canvas(3840, 2160, budget);
-        assert!(u64::from(w * h) <= budget && w % 32 == 0 && h % 32 == 0, "{w}x{h}");
+        assert!(
+            u64::from(w * h) <= budget && w % 32 == 0 && h % 32 == 0,
+            "{w}x{h}"
+        );
         assert_eq!((w, h), (1920, 1056));
         assert_eq!(edit_canvas(20, 20, budget), (32, 32));
     }

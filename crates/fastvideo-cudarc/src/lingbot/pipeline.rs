@@ -15,8 +15,10 @@ use fastvideo_models::lingbot::sol::{
     EasyCache, EasyCacheConfig, PisaPolicy, SolArm, OFFICIAL_FPS,
 };
 use fastvideo_models::lingbot::{
-    base_unipc, refiner::{self as host_refiner}, refiner_unipc, transformer_timestep, LingBotPreset,
-    LingBotTransformerConfig, DEFAULT_NEGATIVE_PROMPT,
+    base_unipc,
+    refiner::{self as host_refiner},
+    refiner_unipc, transformer_timestep, LingBotPreset, LingBotTransformerConfig,
+    DEFAULT_NEGATIVE_PROMPT,
 };
 use fastvideo_models::schedulers::FlowUniPCMultistepScheduler;
 use fastvideo_models::wan::WanVaeConfig;
@@ -133,10 +135,16 @@ impl LingBotRequest {
 
     fn check(&self) -> Result<()> {
         if self.num_frames != 1 && (self.num_frames - 1) % 4 != 0 {
-            return Err(msg(format!("num_frames must be 1 or 4n+1, got {}", self.num_frames)));
+            return Err(msg(format!(
+                "num_frames must be 1 or 4n+1, got {}",
+                self.num_frames
+            )));
         }
         if self.height % 16 != 0 || self.width % 16 != 0 {
-            return Err(msg(format!("height/width must be multiples of 16: {}x{}", self.height, self.width)));
+            return Err(msg(format!(
+                "height/width must be multiples of 16: {}x{}",
+                self.height, self.width
+            )));
         }
         if let Some(r) = &self.refiner {
             if r.height % 16 != 0 || r.width % 16 != 0 {
@@ -156,7 +164,11 @@ pub enum Residency {
 
 impl Residency {
     pub fn from_env() -> Self {
-        match std::env::var("FASTVIDEO_LINGBOT_RESIDENCY").ok().as_deref().map(str::trim) {
+        match std::env::var("FASTVIDEO_LINGBOT_RESIDENCY")
+            .ok()
+            .as_deref()
+            .map(str::trim)
+        {
             Some("both") | Some("resident") => Self::Both,
             _ => Self::Swap,
         }
@@ -229,7 +241,8 @@ impl LingBotPipeline {
     }
 
     pub fn load_text(&mut self) -> Result<()> {
-        self.text = Some(LingBotTextEncoder::load(&self.root, self.dit_cfg.text_dim).map_err(terr)?);
+        self.text =
+            Some(LingBotTextEncoder::load(&self.root, self.dit_cfg.text_dim).map_err(terr)?);
         Ok(())
     }
 
@@ -262,7 +275,13 @@ impl LingBotPipeline {
     }
 
     fn latent_shape(&self, frames: usize, height: usize, width: usize) -> [usize; 5] {
-        [1, self.dit_cfg.in_channels, (frames - 1) / 4 + 1, height / 8, width / 8]
+        [
+            1,
+            self.dit_cfg.in_channels,
+            (frames - 1) / 4 + 1,
+            height / 8,
+            width / 8,
+        ]
     }
 
     /// Run the request; writes `base/` (and `refined/` with a refiner) under
@@ -289,7 +308,10 @@ impl LingBotPipeline {
         let t = Instant::now();
         let enc = self.text.as_ref().expect("loaded");
         let prompt_h = enc.encode(&request.prompt)?;
-        let neg = request.negative_prompt.as_deref().unwrap_or(DEFAULT_NEGATIVE_PROMPT);
+        let neg = request
+            .negative_prompt
+            .as_deref()
+            .unwrap_or(DEFAULT_NEGATIVE_PROMPT);
         let do_cfg = request.guidance_scale > 1.0;
         let neg_h = if do_cfg { Some(enc.encode(neg)?) } else { None };
         timing.text_encode_s = t.elapsed().as_secs_f64();
@@ -380,23 +402,37 @@ impl LingBotPipeline {
             trim()?;
         }
         let t = Instant::now();
-        let (sample, _, _) = host_refiner::training_frame_budget(bf, f64::from(request.fps), request.fps, 4);
+        let (sample, _, _) =
+            host_refiner::training_frame_budget(bf, f64::from(request.fps), request.fps, 4);
         let idx = host_refiner::training_aligned_indices(bf, sample);
         let up = upsample_rgb(&base_rgb.rgb, &idx, bh, bw, refine.height, refine.width);
         drop(base_rgb);
         let video = CudaTensor::from_vec(up, vec![1, 3, sample, refine.height, refine.width])?;
-        let encoder = self.vae_encoder.as_ref().ok_or_else(|| msg("vae encoder not loaded"))?;
+        let encoder = self
+            .vae_encoder
+            .as_ref()
+            .ok_or_else(|| msg("vae encoder not loaded"))?;
         let z = encoder.encode_mean(&video)?;
         drop(video);
         trim()?;
         let vae = self.vae.as_ref().expect("loaded");
-        let x_up = vae.normalize_latents(&z).map_err(terr)?.host_cow()?.into_owned();
+        let x_up = vae
+            .normalize_latents(&z)
+            .map_err(terr)?
+            .host_cow()?
+            .into_owned();
         let rshape = self.latent_shape(sample, refine.height, refine.width);
         if x_up.len() != rshape.iter().product::<usize>() {
-            return Err(msg(format!("refiner latent {} vs {:?}", x_up.len(), rshape)));
+            return Err(msg(format!(
+                "refiner latent {} vs {:?}",
+                x_up.len(),
+                rshape
+            )));
         }
         let mut rng = rand::rngs::StdRng::seed_from_u64(request.seed);
-        let rnoise: Vec<f32> = (0..x_up.len()).map(|_| StandardNormal.sample(&mut rng)).collect();
+        let rnoise: Vec<f32> = (0..x_up.len())
+            .map(|_| StandardNormal.sample(&mut rng))
+            .collect();
         let start = host_refiner::noised_start(&x_up, &rnoise, refine.t_thresh as f32);
         drop((x_up, rnoise));
         timing.refiner_prepare_s = t.elapsed().as_secs_f64();
@@ -408,7 +444,10 @@ impl LingBotPipeline {
         }
 
         let t = Instant::now();
-        let rdit = self.refiner.as_ref().ok_or_else(|| msg("refiner not loaded"))?;
+        let rdit = self
+            .refiner
+            .as_ref()
+            .ok_or_else(|| msg("refiner not loaded"))?;
         let rtext_c = rdit.embed_text(&prompt_h)?;
         // `null_cond_clone_zero` (refiner default): a zero Qwen hidden state.
         let rtext_u = if refine.guidance_scale > 1.0 {
@@ -416,11 +455,21 @@ impl LingBotPipeline {
         } else {
             None
         };
-        let mut rsched = refiner_unipc(refine.steps, refine.shift, refine.t_thresh, refine.tail_steps)
-            .map_err(msg)?;
+        let mut rsched = refiner_unipc(
+            refine.steps,
+            refine.shift,
+            refine.t_thresh,
+            refine.tail_steps,
+        )
+        .map_err(msg)?;
         let rsteps = rsched.inference_timesteps().len();
-        let reasy = request.sol.easycache.then(|| EasyCacheConfig::for_schedule(rsteps));
-        let pisa = (request.sol.pisa).then(PisaPolicy::published).filter(|p| p.refiner);
+        let reasy = request
+            .sol
+            .easycache
+            .then(|| EasyCacheConfig::for_schedule(rsteps));
+        let pisa = (request.sol.pisa)
+            .then(PisaPolicy::published)
+            .filter(|p| p.refiner);
         let (rlat, rstats) = denoise(
             rdit,
             &mut rsched,
@@ -548,7 +597,10 @@ fn decode_rgb(vae: &AutoencoderKlWan, latents: Vec<f32>, shape: [usize; 5]) -> R
         [1, 3, f, h, w] => [1, 3, f, h, w],
         _ => return Err(msg(format!("lingbot decode shape {:?}", pixels.shape))),
     };
-    let by_frame = pixels.permute(&[0, 2, 1, 3, 4])?.reshape(vec![f, 3, h, w])?.clamp(-1.0, 1.0);
+    let by_frame = pixels
+        .permute(&[0, 2, 1, 3, 4])?
+        .reshape(vec![f, 3, h, w])?
+        .clamp(-1.0, 1.0);
     Ok(Rgb {
         rgb: frames_to_rgb8(&by_frame)?,
         frames: f,
@@ -599,7 +651,10 @@ fn write_video(dir: &Path, fps: u32, rgb: &Rgb) -> Result<()> {
 fn write_timing(out_dir: &Path, timing: &LingBotTiming) -> Result<()> {
     let text = serde_json::to_string_pretty(timing).map_err(terr)?;
     std::fs::write(out_dir.join("lingbot_timing.json"), text).map_err(terr)?;
-    crate::wan::log::info(format_args!("lingbot timing {}", serde_json::to_string(timing).map_err(terr)?));
+    crate::wan::log::info(format_args!(
+        "lingbot timing {}",
+        serde_json::to_string(timing).map_err(terr)?
+    ));
     Ok(())
 }
 
@@ -610,7 +665,10 @@ mod tests {
     #[test]
     fn official_request_matches_the_profile() {
         let r = LingBotRequest::official("a cat");
-        assert_eq!((r.width, r.height, r.num_frames, r.num_steps), (832, 480, 121, 40));
+        assert_eq!(
+            (r.width, r.height, r.num_frames, r.num_steps),
+            (832, 480, 121, 40)
+        );
         assert_eq!(r.seed, 42);
         let f = r.refiner.as_ref().unwrap();
         assert_eq!((f.width, f.height, f.steps), (1920, 1088, 8));
@@ -641,14 +699,25 @@ mod tests {
             let n: usize = shape.iter().product();
             let is_norm = key.contains("norm") && key.ends_with(".weight");
             (0..n)
-                .map(|i| if is_norm { 1.0 } else { ((i as f32) * 0.013 + key.len() as f32).sin() * 0.05 })
+                .map(|i| {
+                    if is_norm {
+                        1.0
+                    } else {
+                        ((i as f32) * 0.013 + key.len() as f32).sin() * 0.05
+                    }
+                })
                 .collect()
         });
         let dit = LingBotTransformer::load(cfg.clone(), &map).unwrap();
         let text = dit
-            .embed_text(&CudaTensor::from_vec(vec![0.2; 3 * cfg.text_dim], vec![1, 3, cfg.text_dim]).unwrap())
+            .embed_text(
+                &CudaTensor::from_vec(vec![0.2; 3 * cfg.text_dim], vec![1, 3, cfg.text_dim])
+                    .unwrap(),
+            )
             .unwrap();
-        let neg = dit.embed_text(&CudaTensor::zeros(&[1, 3, cfg.text_dim])).unwrap();
+        let neg = dit
+            .embed_text(&CudaTensor::zeros(&[1, 3, cfg.text_dim]))
+            .unwrap();
         let shape = [1, cfg.in_channels, 2, 4, 4];
         let n: usize = shape.iter().product();
         let mut sched = base_unipc(6, 3.0);
@@ -660,7 +729,12 @@ mod tests {
             &text,
             Some(&neg),
             3.0,
-            Some(EasyCacheConfig { threshold: 10.0, head_steps: 1, tail_steps: 1, max_reuse: 1 }),
+            Some(EasyCacheConfig {
+                threshold: 10.0,
+                head_steps: 1,
+                tail_steps: 1,
+                max_reuse: 1,
+            }),
             None,
             "test",
         )
@@ -673,10 +747,24 @@ mod tests {
         let mut rsched = refiner_unipc(8, 3.0, 0.85, 2).unwrap();
         let steps = rsched.inference_timesteps().len();
         let policy = PisaPolicy::published();
-        let (rl, rs) = denoise(&dit, &mut rsched, lat, shape, &text, Some(&neg), 3.0, None, Some(&policy), "r")
-            .unwrap();
+        let (rl, rs) = denoise(
+            &dit,
+            &mut rsched,
+            lat,
+            shape,
+            &text,
+            Some(&neg),
+            3.0,
+            None,
+            Some(&policy),
+            "r",
+        )
+        .unwrap();
         assert_eq!(rl.len(), n);
         assert_eq!(rs.computed, steps);
-        assert_eq!(rs.sparse, (0..steps).filter(|&s| policy.sparse_step(s, steps)).count());
+        assert_eq!(
+            rs.sparse,
+            (0..steps).filter(|&s| policy.sparse_step(s, steps)).count()
+        );
     }
 }

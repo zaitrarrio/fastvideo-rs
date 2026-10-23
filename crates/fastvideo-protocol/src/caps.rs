@@ -215,8 +215,7 @@ impl FrameGrid {
     pub fn h3() -> Self {
         let min = h3::align_num_frames(h3::H3_MIN_DURATION_S * h3::H3_FPS) as u32;
         let max = h3::align_num_frames(h3::H3_MAX_DURATION_S * h3::H3_FPS) as u32;
-        let default =
-            h3::align_num_frames(h3::H3_FASTVIDEO_MIN_DURATION_S * h3::H3_FPS) as u32;
+        let default = h3::align_num_frames(h3::H3_FASTVIDEO_MIN_DURATION_S * h3::H3_FPS) as u32;
         Self {
             step: h3::H3_FRAMES_PER_CHUNK as u32,
             offset: h3::H3_LATENTS_PER_CHUNK as u32,
@@ -336,7 +335,9 @@ impl HdTier {
             short_edge: h3::H3_SHORT_EDGE_1080P as u32,
             max_area: h3::H3_MAX_PIXELS_1080P as u64,
             max_frames: Some(h3::align_num_frames(H3_1080P_MAX_S * h3::H3_FPS) as u32),
-            experimental_max_frames: Some(h3::align_num_frames(H3_1080P_LONG_MAX_S * h3::H3_FPS) as u32),
+            experimental_max_frames: Some(
+                h3::align_num_frames(H3_1080P_LONG_MAX_S * h3::H3_FPS) as u32
+            ),
         }
     }
 
@@ -347,9 +348,17 @@ impl HdTier {
         let short = h3::align_num_frames(H3_1080P_MAX_S * h3::H3_FPS) as u32;
         let long = h3::align_num_frames(H3_1080P_LONG_MAX_S * h3::H3_FPS) as u32;
         if on {
-            Self { max_frames: Some(long), experimental_max_frames: None, ..self }
+            Self {
+                max_frames: Some(long),
+                experimental_max_frames: None,
+                ..self
+            }
         } else {
-            Self { max_frames: Some(short), experimental_max_frames: Some(long), ..self }
+            Self {
+                max_frames: Some(short),
+                experimental_max_frames: Some(long),
+                ..self
+            }
         }
     }
 }

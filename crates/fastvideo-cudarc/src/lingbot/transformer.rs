@@ -25,7 +25,9 @@
 use std::sync::Mutex;
 
 use fastvideo_models::lingbot::sol::PisaPolicy;
-use fastvideo_models::lingbot::{joint_positions, rope_tables, LingBotTransformerConfig, RouterSpec};
+use fastvideo_models::lingbot::{
+    joint_positions, rope_tables, LingBotTransformerConfig, RouterSpec,
+};
 
 use crate::wan::nn::{self, Linear};
 use crate::wan::tensor::{CudaTensor, Result, TensorError};
@@ -46,7 +48,11 @@ struct HostLinear {
 
 impl HostLinear {
     fn load(map: &WeightMap, prefix: &str, in_dim: usize, out_dim: usize) -> Result<Self> {
-        let w = weights::cuda_tensor_shaped(map, &weights::join_key(prefix, "weight"), &[out_dim, in_dim])?;
+        let w = weights::cuda_tensor_shaped(
+            map,
+            &weights::join_key(prefix, "weight"),
+            &[out_dim, in_dim],
+        )?;
         let b = weights::cuda_tensor_shaped(map, &weights::join_key(prefix, "bias"), &[out_dim])?;
         Ok(Self {
             w: w.host_cow()?.into_owned(),
@@ -183,7 +189,8 @@ fn stacked_linears(
 /// Which router implementation runs (`FASTVIDEO_LINGBOT_ROUTER=host|device`).
 fn router_on_host() -> bool {
     static FLAG: crate::wan::envflag::CachedString = crate::wan::envflag::CachedString::new();
-    FLAG.get_or_init(|| crate::wan::envflag::string_flag("FASTVIDEO_LINGBOT_ROUTER", "device")) == "host"
+    FLAG.get_or_init(|| crate::wan::envflag::string_flag("FASTVIDEO_LINGBOT_ROUTER", "device"))
+        == "host"
 }
 
 /// Tokens per MoE dispatch chunk (`FASTVIDEO_LINGBOT_MOE_CHUNK`, default 32768):
@@ -245,7 +252,12 @@ impl Moe {
             .map(|((gate, up), down)| Mlp { gate, up, down })
             .collect();
         let shared = if cfg.n_shared_experts > 0 {
-            Some(Mlp::load(map, &key("shared_experts"), d, m * cfg.n_shared_experts)?)
+            Some(Mlp::load(
+                map,
+                &key("shared_experts"),
+                d,
+                m * cfg.n_shared_experts,
+            )?)
         } else {
             None
         };
@@ -262,7 +274,11 @@ impl Moe {
     fn route(&self, x: &CudaTensor) -> Result<(Vec<u32>, Vec<f32>)> {
         let logits = x.to_f32_act()?.matmul(&self.router_t)?;
         let host = |l: &CudaTensor| -> Result<(Vec<u32>, Vec<f32>)> {
-            Ok(fastvideo_models::lingbot::route(&l.host_cow()?, &self.bias, &self.spec))
+            Ok(fastvideo_models::lingbot::route(
+                &l.host_cow()?,
+                &self.bias,
+                &self.spec,
+            ))
         };
         if router_on_host() {
             return host(&logits);
@@ -353,7 +369,14 @@ impl Moe {
     }
 }
 
-fn combine(ys: &CudaTensor, pos: &[u32], w: &[f32], n: usize, k: usize, d: usize) -> Result<CudaTensor> {
+fn combine(
+    ys: &CudaTensor,
+    pos: &[u32],
+    w: &[f32],
+    n: usize,
+    k: usize,
+    d: usize,
+) -> Result<CudaTensor> {
     #[cfg(feature = "cuda")]
     if let Some(y) = ys.dev()? {
         return CudaTensor::from_device_slice(
@@ -455,7 +478,11 @@ impl Attention {
         };
         let q = qk(&self.to_q, &self.norm_q)?;
         let k = qk(&self.to_k, &self.norm_k)?;
-        let v = self.to_v.forward(x)?.reshape(shape.clone())?.transpose(1, 2)?;
+        let v = self
+            .to_v
+            .forward(x)?
+            .reshape(shape.clone())?
+            .transpose(1, 2)?;
         let out = match pisa_sparsity {
             Some(sp) => crate::pisa_attn::pisa_attn(&q, &k, &v, sp, None)?,
             None => nn::scaled_dot_product_attention(&q, &k, &v, None)?,
@@ -638,9 +665,18 @@ impl LingBotTransformer {
         (self.time_mod.apply(&st), self.out_mod.apply(&st))
     }
 
-    fn rope_for(&self, text_len: usize, gt: usize, gh: usize, gw: usize) -> Result<(CudaTensor, CudaTensor)> {
+    fn rope_for(
+        &self,
+        text_len: usize,
+        gt: usize,
+        gh: usize,
+        gw: usize,
+    ) -> Result<(CudaTensor, CudaTensor)> {
         let key = (text_len, gt, gh, gw);
-        let mut slot = self.rope.lock().map_err(|_| msg("lingbot rope cache poisoned"))?;
+        let mut slot = self
+            .rope
+            .lock()
+            .map_err(|_| msg("lingbot rope cache poisoned"))?;
         if let Some((_, c, s)) = slot.iter().find(|(k, _, _)| *k == key) {
             return Ok((c.clone(), s.clone()));
         }
@@ -670,27 +706,41 @@ impl LingBotTransformer {
             _ => return Err(msg(format!("lingbot dit: {:?}", latents.shape))),
         };
         if b != 1 {
-            return Err(msg("lingbot dit: batch 1 (CFG branches run as separate passes)"));
+            return Err(msg(
+                "lingbot dit: batch 1 (CFG branches run as separate passes)",
+            ));
         }
         if c != self.cfg.in_channels {
-            return Err(msg(format!("lingbot dit: {c} channels, want {}", self.cfg.in_channels)));
+            return Err(msg(format!(
+                "lingbot dit: {c} channels, want {}",
+                self.cfg.in_channels
+            )));
         }
         let [pt, ph, pw] = self.cfg.patch_size;
         if t % pt != 0 || h % ph != 0 || w % pw != 0 {
-            return Err(msg(format!("lingbot dit: [{t},{h},{w}] vs patch {:?}", self.cfg.patch_size)));
+            return Err(msg(format!(
+                "lingbot dit: [{t},{h},{w}] vs patch {:?}",
+                self.cfg.patch_size
+            )));
         }
         let d = self.cfg.hidden_size;
         let (gt, gh, gw) = (t / pt, h / ph, w / pw);
         let n_video = gt * gh * gw;
         let text_len = text.shape.get(1).copied().unwrap_or(0);
         if text.shape != [1, text_len, d] {
-            return Err(msg(format!("lingbot dit: text {:?}, want [1, L, {d}]", text.shape)));
+            return Err(msg(format!(
+                "lingbot dit: text {:?}, want [1, L, {d}]",
+                text.shape
+            )));
         }
 
         let tokens = patchify(&latents.host_cow()?, c, t, h, w, self.cfg.patch_size);
         let x = self
             .patch
-            .forward(&CudaTensor::from_vec(tokens, vec![n_video, self.cfg.patch_dim()])?)?
+            .forward(&CudaTensor::from_vec(
+                tokens,
+                vec![n_video, self.cfg.patch_dim()],
+            )?)?
             .reshape(vec![1, n_video, d])?;
         let mut joint = CudaTensor::cat(&[&x, text], 1)?;
         let (cos, sin) = self.rope_for(text_len, gt, gh, gw)?;
@@ -712,7 +762,14 @@ impl LingBotTransformer {
             .mul(&scale)?
             .add(&shift)?;
         let out = self.proj_out.forward(&y)?;
-        let pixels = unpatchify(&out.host_cow()?, self.cfg.out_channels, t, h, w, self.cfg.patch_size);
+        let pixels = unpatchify(
+            &out.host_cow()?,
+            self.cfg.out_channels,
+            t,
+            h,
+            w,
+            self.cfg.patch_size,
+        );
         CudaTensor::from_vec(pixels, vec![1, self.cfg.out_channels, t, h, w])
     }
 }
@@ -732,7 +789,9 @@ pub fn patchify(x: &[f32], c: usize, t: usize, h: usize, w: usize, p: [usize; 3]
                     for bb in 0..ph {
                         for cc in 0..pw {
                             for ci in 0..c {
-                                out[o] = x[((ci * t + ti * pt + a) * h + yi * ph + bb) * w + xi * pw + cc];
+                                out[o] = x[((ci * t + ti * pt + a) * h + yi * ph + bb) * w
+                                    + xi * pw
+                                    + cc];
                                 o += 1;
                             }
                         }
@@ -759,7 +818,9 @@ pub fn unpatchify(y: &[f32], c: usize, t: usize, h: usize, w: usize, p: [usize; 
                     for bb in 0..ph {
                         for cc in 0..pw {
                             for ci in 0..c {
-                                out[((ci * t + ti * pt + a) * h + yi * ph + bb) * w + xi * pw + cc] = y[o];
+                                out[((ci * t + ti * pt + a) * h + yi * ph + bb) * w
+                                    + xi * pw
+                                    + cc] = y[o];
                                 o += 1;
                             }
                         }
@@ -777,12 +838,16 @@ mod tests {
 
     fn seeded(key: &str, shape: &[usize]) -> Vec<f32> {
         // Deterministic small weights from the key; norms near 1.
-        let h = key.bytes().fold(1469598103934665603u64, |a, b| (a ^ b as u64).wrapping_mul(1099511628211));
+        let h = key.bytes().fold(1469598103934665603u64, |a, b| {
+            (a ^ b as u64).wrapping_mul(1099511628211)
+        });
         let n: usize = shape.iter().product();
         let is_norm = key.contains("norm") && key.ends_with(".weight");
         (0..n)
             .map(|i| {
-                let v = (((h.wrapping_add((i as u64).wrapping_mul(0x9e3779b97f4a7c15))) >> 11) as f64 / (1u64 << 53) as f64) as f32;
+                let v = (((h.wrapping_add((i as u64).wrapping_mul(0x9e3779b97f4a7c15))) >> 11)
+                    as f64
+                    / (1u64 << 53) as f64) as f32;
                 let u = (v - 0.5) * 0.4;
                 if is_norm {
                     1.0 + u
@@ -821,9 +886,13 @@ mod tests {
     fn tiny_dense_forward_shapes_and_finite() {
         let cfg = LingBotTransformerConfig::tiny();
         let dit = tiny(&cfg);
-        let x: Vec<f32> = (0..cfg.in_channels * 2 * 4 * 4).map(|i| (i as f32 * 0.37).sin()).collect();
+        let x: Vec<f32> = (0..cfg.in_channels * 2 * 4 * 4)
+            .map(|i| (i as f32 * 0.37).sin())
+            .collect();
         let x = CudaTensor::from_vec(x, vec![1, cfg.in_channels, 2, 4, 4]).unwrap();
-        let enc: Vec<f32> = (0..3 * cfg.text_dim).map(|i| (i as f32 * 0.11).cos()).collect();
+        let enc: Vec<f32> = (0..3 * cfg.text_dim)
+            .map(|i| (i as f32 * 0.11).cos())
+            .collect();
         let enc = CudaTensor::from_vec(enc, vec![1, 3, cfg.text_dim]).unwrap();
         let text = dit.embed_text(&enc).unwrap();
         let out = dit.forward(&x, &text, 500.0, AttnRoute::default()).unwrap();
@@ -848,11 +917,20 @@ mod tests {
             .unwrap()
             .matmul(&moe.router_t)
             .unwrap();
-        let (idx, w) = fastvideo_models::lingbot::route(&logits.host_cow().unwrap(), &moe.bias, &moe.spec);
+        let (idx, w) =
+            fastvideo_models::lingbot::route(&logits.host_cow().unwrap(), &moe.bias, &moe.spec);
         let k = cfg.num_experts_per_tok;
         for t in 0..n {
             let row = CudaTensor::from_vec(x[t * d..(t + 1) * d].to_vec(), vec![1, d]).unwrap();
-            let mut want = moe.shared.as_ref().unwrap().forward(&row).unwrap().host_cow().unwrap().into_owned();
+            let mut want = moe
+                .shared
+                .as_ref()
+                .unwrap()
+                .forward(&row)
+                .unwrap()
+                .host_cow()
+                .unwrap()
+                .into_owned();
             for s in 0..k {
                 let e = idx[t * k + s] as usize;
                 let y = moe.experts[e].forward(&row).unwrap();
@@ -887,15 +965,27 @@ mod tests {
     fn tiny_moe_full_forward_and_pisa_route() {
         let cfg = LingBotTransformerConfig::tiny_moe();
         let dit = tiny(&cfg);
-        let x: Vec<f32> = (0..cfg.in_channels * 2 * 4 * 4).map(|i| (i as f32 * 0.21).cos()).collect();
+        let x: Vec<f32> = (0..cfg.in_channels * 2 * 4 * 4)
+            .map(|i| (i as f32 * 0.21).cos())
+            .collect();
         let x = CudaTensor::from_vec(x, vec![1, cfg.in_channels, 2, 4, 4]).unwrap();
-        let enc = CudaTensor::from_vec(vec![0.1; 2 * cfg.text_dim], vec![1, 2, cfg.text_dim]).unwrap();
+        let enc =
+            CudaTensor::from_vec(vec![0.1; 2 * cfg.text_dim], vec![1, 2, cfg.text_dim]).unwrap();
         let text = dit.embed_text(&enc).unwrap();
         let dense = dit.forward(&x, &text, 700.0, AttnRoute::default()).unwrap();
         let mut policy = PisaPolicy::published();
         policy.dense_layers = 0..=0;
         policy.density = 1.0; // keep every block: PISA must equal dense
-        let pisa = dit.forward(&x, &text, 700.0, AttnRoute { pisa: Some(&policy) }).unwrap();
+        let pisa = dit
+            .forward(
+                &x,
+                &text,
+                700.0,
+                AttnRoute {
+                    pisa: Some(&policy),
+                },
+            )
+            .unwrap();
         let (a, b) = (dense.host_cow().unwrap(), pisa.host_cow().unwrap());
         for (u, v) in a.iter().zip(b.iter()) {
             assert!((u - v).abs() < 1e-4, "{u} vs {v}");

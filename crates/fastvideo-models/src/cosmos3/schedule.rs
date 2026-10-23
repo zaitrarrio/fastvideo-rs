@@ -25,10 +25,17 @@ pub const KARRAS_RHO: f64 = 7.0;
 /// int64 timesteps from them before storing the sigmas as f32.
 pub fn karras_flow_sigmas(steps: usize, sigma_min: f64, sigma_max: f64) -> Vec<f64> {
     let n = steps.max(1);
-    let (lo, hi) = (sigma_min.powf(1.0 / KARRAS_RHO), sigma_max.powf(1.0 / KARRAS_RHO));
+    let (lo, hi) = (
+        sigma_min.powf(1.0 / KARRAS_RHO),
+        sigma_max.powf(1.0 / KARRAS_RHO),
+    );
     (0..n)
         .map(|i| {
-            let ramp = if n == 1 { 0.0 } else { i as f64 / (n - 1) as f64 };
+            let ramp = if n == 1 {
+                0.0
+            } else {
+                i as f64 / (n - 1) as f64
+            };
             let s = (hi + ramp * (lo - hi)).powf(KARRAS_RHO);
             s / (s + 1.0)
         })
@@ -38,7 +45,11 @@ pub fn karras_flow_sigmas(steps: usize, sigma_min: f64, sigma_max: f64) -> Vec<f
 /// The configured UniPC (`solver_order 2`, `bh2`, `predict_x0`, lower-order final).
 pub fn unipc(steps: usize) -> FlowUniPCMultistepScheduler {
     let mut s = FlowUniPCMultistepScheduler::new(1_000, 1.0);
-    s.set_sigmas(&karras_flow_sigmas(steps, KARRAS_SIGMA_MIN, KARRAS_SIGMA_MAX));
+    s.set_sigmas(&karras_flow_sigmas(
+        steps,
+        KARRAS_SIGMA_MIN,
+        KARRAS_SIGMA_MAX,
+    ));
     s
 }
 

@@ -263,7 +263,9 @@ mod tests {
     #[test]
     fn batched_route_matches_per_token() {
         let s = spec(Some(4));
-        let logits: Vec<f32> = (0..5 * 8).map(|i| ((i as f32) * 0.37).sin() * 3.0).collect();
+        let logits: Vec<f32> = (0..5 * 8)
+            .map(|i| ((i as f32) * 0.37).sin() * 3.0)
+            .collect();
         let bias: Vec<f32> = (0..8).map(|i| (i as f32) * 0.01).collect();
         let (idx, w) = route(&logits, &bias, &s);
         for t in 0..5 {

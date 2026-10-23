@@ -65,7 +65,10 @@ impl VideoInputCaps {
     /// Whether a `w`x`h` picture is within the limit (either orientation).
     pub fn allows_size(&self, w: u32, h: u32) -> bool {
         let (long, short) = (w.max(h), w.min(h));
-        let (lmax, smax) = (self.max_width.max(self.max_height), self.max_width.min(self.max_height));
+        let (lmax, smax) = (
+            self.max_width.max(self.max_height),
+            self.max_width.min(self.max_height),
+        );
         w > 0 && h > 0 && long <= lmax && short <= smax
     }
 }
@@ -140,14 +143,23 @@ pub struct SessionContext {
 
 impl SessionContext {
     pub fn is_empty(&self) -> bool {
-        self.scene.as_deref().is_none_or(str::is_empty) && self.persona.as_deref().is_none_or(str::is_empty)
+        self.scene.as_deref().is_none_or(str::is_empty)
+            && self.persona.as_deref().is_none_or(str::is_empty)
     }
 
     /// Length checks (`CONTEXT_MAX_CHARS` each).
     pub fn validate(&self) -> Result<(), ApiError> {
-        for (name, v) in [("context.scene", &self.scene), ("context.persona", &self.persona)] {
-            if v.as_deref().is_some_and(|s| s.chars().count() > CONTEXT_MAX_CHARS) {
-                return Err(ApiError::invalid_param(name, format!("longer than {CONTEXT_MAX_CHARS} characters")));
+        for (name, v) in [
+            ("context.scene", &self.scene),
+            ("context.persona", &self.persona),
+        ] {
+            if v.as_deref()
+                .is_some_and(|s| s.chars().count() > CONTEXT_MAX_CHARS)
+            {
+                return Err(ApiError::invalid_param(
+                    name,
+                    format!("longer than {CONTEXT_MAX_CHARS} characters"),
+                ));
             }
         }
         Ok(())
@@ -213,11 +225,20 @@ mod tests {
     #[test]
     fn context_limits() {
         assert!(SessionContext::default().is_empty());
-        let c = SessionContext { scene: Some("a kitchen".into()), persona: None };
+        let c = SessionContext {
+            scene: Some("a kitchen".into()),
+            persona: None,
+        };
         assert!(!c.is_empty());
         c.validate().unwrap();
-        let long = SessionContext { scene: None, persona: Some("x".repeat(CONTEXT_MAX_CHARS + 1)) };
-        assert_eq!(long.validate().unwrap_err().param.as_deref(), Some("context.persona"));
+        let long = SessionContext {
+            scene: None,
+            persona: Some("x".repeat(CONTEXT_MAX_CHARS + 1)),
+        };
+        assert_eq!(
+            long.validate().unwrap_err().param.as_deref(),
+            Some("context.persona")
+        );
         assert!(serde_json::from_str::<SessionContext>(r#"{"scene":"s","mood":"x"}"#).is_err());
     }
 
@@ -226,13 +247,21 @@ mod tests {
         let d = DuplexCaps {
             unit_ms: 160,
             target_fps: 25,
-            input: InputCaps { video: Some(caps()), audio: None, max_bitrate_kbps: 4000, buffer_ms: 500 },
+            input: InputCaps {
+                video: Some(caps()),
+                audio: None,
+                max_bitrate_kbps: 4000,
+                buffer_ms: 500,
+            },
             audio_out: true,
             context: true,
         };
         let v = serde_json::to_value(crate::StreamCaps::Duplex(d.clone())).unwrap();
         assert_eq!(v["duplex"]["unit_ms"], 160);
-        assert_eq!(v["duplex"]["input"]["video"]["codecs"], serde_json::json!(["vp8", "h264"]));
+        assert_eq!(
+            v["duplex"]["input"]["video"]["codecs"],
+            serde_json::json!(["vp8", "h264"])
+        );
         let back: crate::StreamCaps = serde_json::from_value(v).unwrap();
         assert_eq!(back, crate::StreamCaps::Duplex(d.clone()));
         assert!((d.units_per_second() - 6.25).abs() < 1e-9);

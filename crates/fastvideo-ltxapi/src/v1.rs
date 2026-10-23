@@ -149,7 +149,10 @@ mod tests {
         assert_eq!(e.retry_after_s, Some(DEFAULT_RETRY_AFTER_S));
         let r = error::render(&e, Api::V1, &ErrorCtx::default());
         assert_eq!(r.status, 429);
-        assert_eq!(r.json_body().unwrap()["error"]["type"], "concurrency_limit_error");
+        assert_eq!(
+            r.json_body().unwrap()["error"]["type"],
+            "concurrency_limit_error"
+        );
         assert!(l.acquire("k2").is_ok());
         drop(a);
         assert_eq!(l.active("k1"), 1);

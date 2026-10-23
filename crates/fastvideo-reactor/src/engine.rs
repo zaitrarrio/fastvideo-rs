@@ -8,7 +8,9 @@
 //! the CUDA backend in production).
 
 use async_trait::async_trait;
-use fastvideo_engine_service::{CausalSession, ClipSession, DuplexSession, EngineService, Readiness};
+use fastvideo_engine_service::{
+    CausalSession, ClipSession, DuplexSession, EngineService, Readiness,
+};
 use fastvideo_protocol::{ApiError, DuplexSpec, ModelCaps, ModelId, SessionSpec, StreamCaps};
 
 /// Model loading as the runtime's state machine sees it.
@@ -56,7 +58,10 @@ impl StreamEngine for EngineService {
                 .or_else(|| caps.resolve(w))
                 .filter(|c| c.stream.is_some())
                 .cloned(),
-            None => caps.models().find(|c| c.stream.is_some() && c.resident).cloned(),
+            None => caps
+                .models()
+                .find(|c| c.stream.is_some() && c.resident)
+                .cloned(),
         }
     }
 

@@ -100,7 +100,11 @@ impl BuildInfo {
         let reference = env.var("FV_IMAGE_REF").and_then(|r| non_empty(&r));
         let (ref_tag, ref_digest) = reference.as_deref().map(split_ref).unwrap_or_default();
         let git_sha = non_empty(GIT_SHA).unwrap_or_else(|| "unknown".into());
-        let git_sha_short = if git_sha == "unknown" { git_sha.clone() } else { git_sha.chars().take(7).collect() };
+        let git_sha_short = if git_sha == "unknown" {
+            git_sha.clone()
+        } else {
+            git_sha.chars().take(7).collect()
+        };
         BuildInfo {
             version: VERSION.to_owned(),
             git_sha,
@@ -109,10 +113,19 @@ impl BuildInfo {
             build_id: non_empty(BUILD_ID),
             features: FEATURES.split(',').filter_map(non_empty).collect(),
             profile: PROFILE.to_owned(),
-            variant: env.var("FV_VARIANT").and_then(|v| non_empty(&v)).or_else(|| non_empty(BUILD_VARIANT)),
+            variant: env
+                .var("FV_VARIANT")
+                .and_then(|v| non_empty(&v))
+                .or_else(|| non_empty(BUILD_VARIANT)),
             image: ImageInfo {
-                tag: env.var("FV_IMAGE_TAG").and_then(|t| non_empty(&t)).or(ref_tag),
-                digest: env.var("FV_IMAGE_DIGEST").and_then(|d| valid_digest(&d)).or(ref_digest),
+                tag: env
+                    .var("FV_IMAGE_TAG")
+                    .and_then(|t| non_empty(&t))
+                    .or(ref_tag),
+                digest: env
+                    .var("FV_IMAGE_DIGEST")
+                    .and_then(|d| valid_digest(&d))
+                    .or(ref_digest),
                 reference,
             },
             channel: env.var("FV_RELEASE_CHANNEL").and_then(|c| non_empty(&c)),
@@ -188,13 +201,18 @@ mod tests {
     const D: &str = "sha256:c782eb378f3f5e41139096010c4942244793cde70b5e5bba97877a11ecfd6045";
 
     fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
     fn version_is_the_release_version_when_built_as_one() {
         // tools-release.sh builds with FV_RELEASE_VERSION (docs/dev/tools-releases.md).
-        let want = option_env!("FV_RELEASE_VERSION").filter(|v| !v.trim().is_empty()).map(str::trim);
+        let want = option_env!("FV_RELEASE_VERSION")
+            .filter(|v| !v.trim().is_empty())
+            .map(str::trim);
         assert_eq!(VERSION, want.unwrap_or(env!("CARGO_PKG_VERSION")));
     }
 
@@ -203,7 +221,11 @@ mod tests {
         let b = BuildInfo::from_env(&env(&[]));
         assert_eq!(b.version, env!("FV_BUILD_VERSION"));
         assert!(!b.git_sha.is_empty());
-        assert!(b.git_sha == "unknown" || b.git_sha.chars().all(|c| c.is_ascii_hexdigit()), "{}", b.git_sha);
+        assert!(
+            b.git_sha == "unknown" || b.git_sha.chars().all(|c| c.is_ascii_hexdigit()),
+            "{}",
+            b.git_sha
+        );
         assert!(b.git_sha_short.len() <= 7 || b.git_sha_short == "unknown");
         assert!(b.git_sha.starts_with(&b.git_sha_short));
         assert!(!b.profile.is_empty());
@@ -216,7 +238,10 @@ mod tests {
     fn deployment_env_fills_variant_image_and_channel() {
         let b = BuildInfo::from_env(&env(&[
             ("FV_VARIANT", "h3-turbo"),
-            ("FV_IMAGE_REF", &format!("ghcr.io/zaitrarrio/fastvideo-rs-serve@{D}")),
+            (
+                "FV_IMAGE_REF",
+                &format!("ghcr.io/zaitrarrio/fastvideo-rs-serve@{D}"),
+            ),
             ("FV_IMAGE_TAG", "h3-turbo-sha-2cd1ba0"),
             ("FV_RELEASE_CHANNEL", "stable"),
         ]));
@@ -225,7 +250,10 @@ mod tests {
         assert_eq!(b.image.tag.as_deref(), Some("h3-turbo-sha-2cd1ba0"));
         assert_eq!(b.channel.as_deref(), Some("stable"));
         let j = b.json();
-        assert_eq!(j["image"]["ref"], format!("ghcr.io/zaitrarrio/fastvideo-rs-serve@{D}"));
+        assert_eq!(
+            j["image"]["ref"],
+            format!("ghcr.io/zaitrarrio/fastvideo-rs-serve@{D}")
+        );
         assert_eq!(j["image"]["digest"], D);
         assert_eq!(j["variant"], "h3-turbo");
         assert_eq!(j["channel"], "stable");
@@ -243,18 +271,30 @@ mod tests {
         let b = BuildInfo::from_env(&env(&[("FV_IMAGE_REF", "localhost:5000/fv/serve:stable")]));
         assert_eq!(b.image.tag.as_deref(), Some("stable"));
         assert_eq!(b.image.digest, None);
-        let b = BuildInfo::from_env(&env(&[("FV_IMAGE_REF", &format!("ghcr.io/o/r:h3-max@{D}"))]));
+        let b = BuildInfo::from_env(&env(&[(
+            "FV_IMAGE_REF",
+            &format!("ghcr.io/o/r:h3-max@{D}"),
+        )]));
         assert_eq!(b.image.tag.as_deref(), Some("h3-max"));
         assert_eq!(b.image.digest.as_deref(), Some(D));
         // An explicit digest wins; a malformed one is dropped.
-        let b = BuildInfo::from_env(&env(&[("FV_IMAGE_REF", "ghcr.io/o/r@sha256:abc"), ("FV_IMAGE_DIGEST", "latest")]));
+        let b = BuildInfo::from_env(&env(&[
+            ("FV_IMAGE_REF", "ghcr.io/o/r@sha256:abc"),
+            ("FV_IMAGE_DIGEST", "latest"),
+        ]));
         assert_eq!(b.image.digest, None);
-        let b = BuildInfo::from_env(&env(&[("FV_IMAGE_DIGEST", &D.to_ascii_uppercase().replace("SHA256", "sha256"))]));
+        let b = BuildInfo::from_env(&env(&[(
+            "FV_IMAGE_DIGEST",
+            &D.to_ascii_uppercase().replace("SHA256", "sha256"),
+        )]));
         assert_eq!(b.image.digest.as_deref(), Some(D));
     }
 
     #[test]
     fn current_is_stable() {
-        assert_eq!(BuildInfo::current() as *const _, BuildInfo::current() as *const _);
+        assert_eq!(
+            BuildInfo::current() as *const _,
+            BuildInfo::current() as *const _
+        );
     }
 }

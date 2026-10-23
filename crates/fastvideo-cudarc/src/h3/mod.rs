@@ -5,8 +5,8 @@
 
 pub mod audio_vae;
 pub mod dit_tree;
-pub mod fused16;
 pub mod drain;
+pub mod fused16;
 pub mod lora;
 pub mod media;
 pub mod mlx;
@@ -18,8 +18,8 @@ pub mod step_graph;
 pub mod text;
 pub mod transformer;
 pub mod vae;
-pub mod vdn;
 pub mod vae_encoder;
+pub mod vdn;
 pub mod vision;
 pub mod vsa;
 

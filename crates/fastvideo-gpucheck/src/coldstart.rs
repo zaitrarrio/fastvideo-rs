@@ -334,14 +334,20 @@ pub fn quantize_dit(
     finalize: bool,
 ) -> StageResult<()> {
     use fastvideo_cudarc::h3::dit_tree::{self, TreeWriter};
-    use fastvideo_cudarc::h3::pipeline::{dit_tree_identity_for, H3Pipeline, I2vEncoderChoice, TextEncoderChoice};
-    use fastvideo_engine_service::cuda::{self, h3::H3Model, CudaRecipe, ProcessPlan, WeightLayout};
+    use fastvideo_cudarc::h3::pipeline::{
+        dit_tree_identity_for, H3Pipeline, I2vEncoderChoice, TextEncoderChoice,
+    };
+    use fastvideo_engine_service::cuda::{
+        self, h3::H3Model, CudaRecipe, ProcessPlan, WeightLayout,
+    };
 
     let layout = WeightLayout::new(weights_root);
     let cat = cuda::catalog(&layout);
     let m = cuda::find(&cat, model).ok_or_else(|| anyhow::anyhow!("unknown model {model}"))?;
     let CudaRecipe::H3(r) = &m.recipe else {
-        return Err(StageError::Error(anyhow::anyhow!("{model} is not an H3 model")));
+        return Err(StageError::Error(anyhow::anyhow!(
+            "{model} is not an H3 model"
+        )));
     };
     let plan = ProcessPlan::for_models(std::slice::from_ref(&m)).map_err(|e| anyhow::anyhow!(e))?;
     cuda::install_process_plan(&plan).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -361,7 +367,8 @@ pub fn quantize_dit(
             identity.linear_route
         )));
     }
-    let quant = fastvideo_cudarc::wan::quant::QuantMode::parse(&identity.quant).map_err(|e| anyhow::anyhow!(e))?;
+    let quant = fastvideo_cudarc::wan::quant::QuantMode::parse(&identity.quant)
+        .map_err(|e| anyhow::anyhow!(e))?;
     let name = dit_tree::dir_name(&identity.recipe, quant);
     let final_dir = r.weights.join(&name);
     let tmp = tmp.map_or_else(
@@ -388,11 +395,13 @@ pub fn quantize_dit(
             None => std::env::remove_var(dit_tree::DIR_ENV),
         }
         let t0 = Instant::now();
-        let pipe = H3Pipeline::load(&r.weights, options.clone()).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let pipe =
+            H3Pipeline::load(&r.weights, options.clone()).map_err(|e| anyhow::anyhow!("{e}"))?;
         let load_s = t0.elapsed().as_secs_f64();
         let from_tree = pipe.load_timings.dit_from_tree;
         let mut w = TreeWriter::default();
-        pipe.export_dit(&mut w).map_err(|e| anyhow::anyhow!("{e}"))?;
+        pipe.export_dit(&mut w)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         drop(pipe);
         let _ = fastvideo_cudarc::wan::device::trim_pool();
         Ok((w, from_tree, load_s))
@@ -400,13 +409,18 @@ pub fn quantize_dit(
 
     let (digest, per_tensor) = if verify_only {
         let (w, _, load_s) = load("off", None)?;
-        report.note("load_time", json!({"load_s": load_s, "tensors": w.tensors.len(), "digest": w.digest()}));
+        report.note(
+            "load_time",
+            json!({"load_s": load_s, "tensors": w.tensors.len(), "digest": w.digest()}),
+        );
         (w.digest(), w.tensor_digests())
     } else {
         let t0 = Instant::now();
         let (w, from_tree, load_s) = load("off", None)?;
         if from_tree {
-            return Err(StageError::Error(anyhow::anyhow!("the reference load came from a tree")));
+            return Err(StageError::Error(anyhow::anyhow!(
+                "the reference load came from a tree"
+            )));
         }
         let export_s = t0.elapsed().as_secs_f64() - load_s;
         let digest = w.digest();
@@ -414,11 +428,22 @@ pub fn quantize_dit(
         let t0 = Instant::now();
         let build = std::env::var("FV_BUILD_ID")
             .ok()
-            .or_else(|| std::fs::read_to_string("/opt/fastvideo-rs/target/release/fv-gpucheck.build-id").ok())
+            .or_else(|| {
+                std::fs::read_to_string("/opt/fastvideo-rs/target/release/fv-gpucheck.build-id")
+                    .ok()
+            })
             .unwrap_or_default();
         let layers = identity.num_layers.to_string();
         let file = w
-            .write(&tmp, &[("format", dit_tree::FORMAT), ("recipe", &identity.recipe), ("quant", &identity.quant), ("layers", &layers)])
+            .write(
+                &tmp,
+                &[
+                    ("format", dit_tree::FORMAT),
+                    ("recipe", &identity.recipe),
+                    ("quant", &identity.quant),
+                    ("layers", &layers),
+                ],
+            )
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         let write_s = t0.elapsed().as_secs_f64();
         let (tensors, quantized, stored) = (w.tensors.len(), w.quantized_linears, w.bytes());
@@ -440,7 +465,11 @@ pub fn quantize_dit(
         let mut identity = identity.clone();
         if let Some(a) = identity.adapter.as_mut() {
             let base = r.weights.parent().unwrap_or(&r.weights);
-            let p = if Path::new(&a.name).is_absolute() { PathBuf::from(&a.name) } else { base.join(&a.name) };
+            let p = if Path::new(&a.name).is_absolute() {
+                PathBuf::from(&a.name)
+            } else {
+                base.join(&a.name)
+            };
             a.sha256 = sha256_file(&p).map_err(anyhow::Error::from)?;
         }
         let hash_s = t0.elapsed().as_secs_f64();
@@ -449,7 +478,10 @@ pub fn quantize_dit(
             version: dit_tree::VERSION,
             identity,
             source,
-            files: vec![dit_tree::FileEntry { sha256: sha.clone(), ..file }],
+            files: vec![dit_tree::FileEntry {
+                sha256: sha.clone(),
+                ..file
+            }],
             tensors,
             quantized_linears: quantized,
             digest: digest.clone(),
@@ -465,8 +497,13 @@ pub fn quantize_dit(
     };
 
     if verify || verify_only {
-        let dir = if verify_only && !tmp.exists() { final_dir.clone() } else { tmp.clone() };
-        let manifest = dit_tree::check(&transformer, &dir, &identity).map_err(|e| anyhow::anyhow!("tree rejected: {e}"))?;
+        let dir = if verify_only && !tmp.exists() {
+            final_dir.clone()
+        } else {
+            tmp.clone()
+        };
+        let manifest = dit_tree::check(&transformer, &dir, &identity)
+            .map_err(|e| anyhow::anyhow!("tree rejected: {e}"))?;
         let (w, from_tree, load_s) = load("require", Some(&dir))?;
         let tree_digest = w.digest();
         let differs: Vec<String> = w
@@ -474,7 +511,12 @@ pub fn quantize_dit(
             .into_iter()
             .filter(|(k, v)| per_tensor.get(k) != Some(v))
             .map(|(k, _)| k)
-            .chain(per_tensor.keys().filter(|k| !w.tensors.iter().any(|t| &t.name == *k)).cloned())
+            .chain(
+                per_tensor
+                    .keys()
+                    .filter(|k| !w.tensors.iter().any(|t| &t.name == *k))
+                    .cloned(),
+            )
             .take(20)
             .collect();
         drop(w);
@@ -491,10 +533,17 @@ pub fn quantize_dit(
     }
     if finalize && !verify_only {
         if final_dir.exists() {
-            return Err(StageError::Error(anyhow::anyhow!("{} appeared meanwhile; leaving {}", final_dir.display(), tmp.display())));
+            return Err(StageError::Error(anyhow::anyhow!(
+                "{} appeared meanwhile; leaving {}",
+                final_dir.display(),
+                tmp.display()
+            )));
         }
         std::fs::rename(&tmp, &final_dir).map_err(anyhow::Error::from)?;
-        report.note("finalized", json!({"from": tmp.display().to_string(), "to": final_dir.display().to_string()}));
+        report.note(
+            "finalized",
+            json!({"from": tmp.display().to_string(), "to": final_dir.display().to_string()}),
+        );
     }
     Ok(())
 }

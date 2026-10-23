@@ -29,9 +29,9 @@ use axum::response::Response;
 use fastvideo_models::h3::config::H3Geometry;
 use fastvideo_protocol::{
     negotiate_noted, precheck, Anchor, ApiError, BatchProtocol, CallbackSpec, CanvasSpec, ErrorCtx,
-    ExpansionMode, Family, GapId, GenerationRequest, HttpReply, Job, JobId, KeyId, Keyframe, Length, ListQuery,
-    MediaKind, MediaRef, ModelCaps, NormalizeCtx, PromptExpansion, ProtocolId, Ratio, Reference, Snap,
-    StagedInputs, SubmitEndpoint, Task, TimingSpec, ViewCtx,
+    ExpansionMode, Family, GapId, GenerationRequest, HttpReply, Job, JobId, KeyId, Keyframe,
+    Length, ListQuery, MediaKind, MediaRef, ModelCaps, NormalizeCtx, PromptExpansion, ProtocolId,
+    Ratio, Reference, Snap, StagedInputs, SubmitEndpoint, Task, TimingSpec, ViewCtx,
 };
 use fastvideo_serve_kit::handlers::{error_reply, into_response};
 use fastvideo_serve_kit::{random_token, ServeCtx};
@@ -140,7 +140,13 @@ pub fn normalize(b: CreateBody) -> Result<GenerationRequest, ApiError> {
         .ok_or_else(|| bad("model", "model is required"))?;
     let model = MiniMaxModel::parse(name).ok_or_else(|| {
         let all: Vec<&str> = MiniMaxModel::ALL.iter().map(|m| m.as_str()).collect();
-        bad("model", format!("model `{name}` is not supported; expected one of {}", all.join(", ")))
+        bad(
+            "model",
+            format!(
+                "model `{name}` is not supported; expected one of {}",
+                all.join(", ")
+            ),
+        )
     })?;
 
     let content = parse_content(b.content.as_deref().unwrap_or_default())?;
@@ -158,14 +164,21 @@ pub fn normalize(b: CreateBody) -> Result<GenerationRequest, ApiError> {
         None if model.resolution_optional() => Resolution::P768,
         None => return Err(bad("resolution", "resolution is required")),
         Some(s) => Resolution::parse(s).ok_or_else(|| {
-            bad("resolution", format!("resolution `{s}` is invalid; expected 480P, 768P or 2K"))
+            bad(
+                "resolution",
+                format!("resolution `{s}` is invalid; expected 480P, 768P or 2K"),
+            )
         })?,
     };
     if !model.resolutions().contains(&resolution) {
         let ok: Vec<&str> = model.resolutions().iter().map(|r| r.as_str()).collect();
         return Err(bad(
             "resolution",
-            format!("resolution {} is not supported by {model}; supported: {}", resolution.as_str(), ok.join(", ")),
+            format!(
+                "resolution {} is not supported by {model}; supported: {}",
+                resolution.as_str(),
+                ok.join(", ")
+            ),
         ));
     }
 
@@ -174,7 +187,10 @@ pub fn normalize(b: CreateBody) -> Result<GenerationRequest, ApiError> {
     let short_edge = resolution.short_edge();
     let canvas = match task {
         Task::T2V => match ratio {
-            Some(r) => CanvasSpec::Aspect { ratio: r, short_edge },
+            Some(r) => CanvasSpec::Aspect {
+                ratio: r,
+                short_edge,
+            },
             None => {
                 return Err(bad(
                     "ratio",
@@ -185,13 +201,19 @@ pub fn normalize(b: CreateBody) -> Result<GenerationRequest, ApiError> {
         // i2va: always adaptive; another valid value is ignored (§1.3).
         Task::I2V | Task::Keyframes => CanvasSpec::FollowImage { short_edge },
         _ => match ratio {
-            Some(r) => CanvasSpec::Aspect { ratio: r, short_edge },
+            Some(r) => CanvasSpec::Aspect {
+                ratio: r,
+                short_edge,
+            },
             // r2va adaptive follows the first reference image; with no image
             // reference there is nothing to follow, so 16:9 (INFERRED).
             None if content.refs.iter().any(|r| r.kind == MediaKind::Image) => {
                 CanvasSpec::FollowImage { short_edge }
             }
-            None => CanvasSpec::Aspect { ratio: Ratio::R16_9, short_edge },
+            None => CanvasSpec::Aspect {
+                ratio: Ratio::R16_9,
+                short_edge,
+            },
         },
     };
 
@@ -199,19 +221,32 @@ pub fn normalize(b: CreateBody) -> Result<GenerationRequest, ApiError> {
     req.task = task;
     req.canvas = canvas;
     req.timing = TimingSpec {
-        length: Length::Seconds { value: duration as f64, snap: Snap::AlignUp },
+        length: Length::Seconds {
+            value: duration as f64,
+            snap: Snap::AlignUp,
+        },
         fps: None,
     };
     req.keyframes = content
         .first
         .into_iter()
-        .map(|image| Keyframe { at: Anchor::First, image })
-        .chain(content.last.into_iter().map(|image| Keyframe { at: Anchor::Last, image }))
+        .map(|image| Keyframe {
+            at: Anchor::First,
+            image,
+        })
+        .chain(content.last.into_iter().map(|image| Keyframe {
+            at: Anchor::Last,
+            image,
+        }))
         .collect();
     req.references = content.refs;
 
     if let Some(Value::Bool(on)) = b.prompt_optimizer {
-        let mode = if on { ExpansionMode::Balanced } else { ExpansionMode::Disabled };
+        let mode = if on {
+            ExpansionMode::Balanced
+        } else {
+            ExpansionMode::Disabled
+        };
         req.prompt_expansion = Some(PromptExpansion::explicit(mode, "prompt_optimizer"));
         req.note_noop("prompt_optimizer");
     }
@@ -238,7 +273,8 @@ pub fn normalize(b: CreateBody) -> Result<GenerationRequest, ApiError> {
                 // (docs/serve/prompt-upsampling.md); else accepted, no effect.
                 req.note_noop("prompt_expansion_mode");
                 if let Some(mode) = v.as_str().and_then(ExpansionMode::parse) {
-                    req.prompt_expansion = Some(PromptExpansion::explicit(mode, "prompt_expansion_mode"));
+                    req.prompt_expansion =
+                        Some(PromptExpansion::explicit(mode, "prompt_expansion_mode"));
                 }
             }
         }
@@ -247,10 +283,18 @@ pub fn normalize(b: CreateBody) -> Result<GenerationRequest, ApiError> {
     // H3-Max documents `prompt_expansion_mode` default `balanced`: applied
     // only when the operator turns `[upsampler] default_on` on.
     if model.accepts_extra() && req.prompt_expansion.is_none() {
-        req.prompt_expansion = Some(PromptExpansion::default_for(ExpansionMode::Balanced, "prompt_expansion_mode"));
+        req.prompt_expansion = Some(PromptExpansion::default_for(
+            ExpansionMode::Balanced,
+            "prompt_expansion_mode",
+        ));
     }
 
-    if let Some(u) = b.callback_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(u) = b
+        .callback_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         let url = url::Url::parse(u)
             .ok()
             .filter(|u| matches!(u.scheme(), "http" | "https"))
@@ -309,10 +353,20 @@ fn parse_content(items: &[ContentItem]) -> Result<Content, ApiError> {
             (MediaKind::Image, None | Some("first_frame")) => c.first.push(media),
             (MediaKind::Image, Some("last_frame")) => c.last.push(media),
             (MediaKind::Image, Some("reference_image")) => c.refs.push(Reference { kind, media }),
-            (MediaKind::Video, None | Some("reference_video")) => c.refs.push(Reference { kind, media }),
-            (MediaKind::Audio, None | Some("reference_audio")) => c.refs.push(Reference { kind, media }),
+            (MediaKind::Video, None | Some("reference_video")) => {
+                c.refs.push(Reference { kind, media })
+            }
+            (MediaKind::Audio, None | Some("reference_audio")) => {
+                c.refs.push(Reference { kind, media })
+            }
             (_, Some(r)) => {
-                let known = ["first_frame", "last_frame", "reference_image", "reference_video", "reference_audio"];
+                let known = [
+                    "first_frame",
+                    "last_frame",
+                    "reference_image",
+                    "reference_video",
+                    "reference_audio",
+                ];
                 let msg = if known.contains(&r) {
                     format!("role `{r}` is not valid for a {ty} item")
                 } else {
@@ -330,7 +384,12 @@ fn parse_content(items: &[ContentItem]) -> Result<Content, ApiError> {
             ))
         }
         1 => c.prompt = texts.remove(0),
-        n => return Err(bad("content", format!("content must include exactly one text item, got {n}"))),
+        n => {
+            return Err(bad(
+                "content",
+                format!("content must include exactly one text item, got {n}"),
+            ))
+        }
     }
     if c.first.len() > 1 {
         return Err(bad("content", "at most one first_frame image is allowed"));
@@ -354,7 +413,10 @@ fn parse_content(items: &[ContentItem]) -> Result<Content, ApiError> {
         (c.refs.len(), mt, "reference items in total"),
     ] {
         if got > max {
-            return Err(bad("content", format!("at most {max} {what} are allowed, got {got}")));
+            return Err(bad(
+                "content",
+                format!("at most {max} {what} are allowed, got {got}"),
+            ));
         }
     }
     Ok(c)
@@ -383,19 +445,31 @@ fn parse_media(url: &str, kind: MediaKind, param: &str) -> Result<MediaRef, ApiE
     }
     match url::Url::parse(url) {
         Ok(u) if matches!(u.scheme(), "http" | "https") => Ok(MediaRef::Http(u)),
-        _ => Err(bad(param, format!("{param} must be a public URL, a data URI or mm_file://"))),
+        _ => Err(bad(
+            param,
+            format!("{param} must be a public URL, a data URI or mm_file://"),
+        )),
     }
 }
 
 fn parse_duration(v: Option<&Value>, model: MiniMaxModel) -> Result<u32, ApiError> {
-    let v = v.filter(|v| !v.is_null()).ok_or_else(|| bad("duration", "duration is required"))?;
+    let v = v
+        .filter(|v| !v.is_null())
+        .ok_or_else(|| bad("duration", "duration is required"))?;
     let n = v
         .as_u64()
-        .or_else(|| v.as_f64().filter(|f| f.fract() == 0.0 && *f >= 0.0).map(|f| f as u64))
+        .or_else(|| {
+            v.as_f64()
+                .filter(|f| f.fract() == 0.0 && *f >= 0.0)
+                .map(|f| f as u64)
+        })
         .ok_or_else(|| bad("duration", "duration must be an integer number of seconds"))?;
     let (lo, hi) = (model.min_duration() as u64, model.max_duration() as u64);
     if !(lo..=hi).contains(&n) {
-        return Err(bad("duration", format!("duration {n} is not supported by {model}; expected {lo} to {hi}")));
+        return Err(bad(
+            "duration",
+            format!("duration {n} is not supported by {model}; expected {lo} to {hi}"),
+        ));
     }
     Ok(n as u32)
 }
@@ -405,37 +479,68 @@ fn parse_ratio(s: Option<&str>) -> Result<Option<Ratio>, ApiError> {
     match s {
         None | Some("adaptive") => Ok(None),
         Some(r) if RATIOS.contains(&r) => Ok(Some(r.parse()?)),
-        Some(r) => Err(bad("ratio", format!("ratio `{r}` is invalid; expected one of {}", RATIOS.join(", ")))),
+        Some(r) => Err(bad(
+            "ratio",
+            format!(
+                "ratio `{r}` is invalid; expected one of {}",
+                RATIOS.join(", ")
+            ),
+        )),
     }
 }
 
 // ---- HTTP -----------------------------------------------------------------------
 
-pub(crate) async fn handle(mm: Arc<MiniMax>, State(ctx): State<ServeCtx>, headers: HeaderMap, body: Body) -> Response {
+pub(crate) async fn handle(
+    mm: Arc<MiniMax>,
+    State(ctx): State<ServeCtx>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
     let rid = random_token();
     let reply = match create(&mm, &ctx, &headers, body, &rid).await {
         Ok(r) => r,
-        Err(e) => error_reply(&*mm, &e, &ErrorCtx { request_id: Some(rid), route: Some("/v2/video_generation".into()), external_id: None }),
+        Err(e) => error_reply(
+            &*mm,
+            &e,
+            &ErrorCtx {
+                request_id: Some(rid),
+                route: Some("/v2/video_generation".into()),
+                external_id: None,
+            },
+        ),
     };
     into_response(reply, &ctx, None).await
 }
 
-async fn create(mm: &MiniMax, ctx: &ServeCtx, headers: &HeaderMap, body: Body, rid: &str) -> Result<HttpReply, ApiError> {
+async fn create(
+    mm: &MiniMax,
+    ctx: &ServeCtx,
+    headers: &HeaderMap,
+    body: Body,
+    rid: &str,
+) -> Result<HttpReply, ApiError> {
     let owner = ctx.auth().authenticate(ProtocolId::MiniMaxV2, headers)?;
     let max = mm.config().body_max;
     let bytes = axum::body::to_bytes(body, max).await.map_err(|_| {
         const MIB: usize = 1024 * 1024;
-        let cap = if max % MIB == 0 { format!("{} MB", max / MIB) } else { format!("{max} bytes") };
+        let cap = if max % MIB == 0 {
+            format!("{} MB", max / MIB)
+        } else {
+            format!("{max} bytes")
+        };
         ApiError::payload_too_large(format!("request body exceeds {cap}"))
     })?;
     if bytes.is_empty() {
         return Err(ApiError::invalid("request body is required"));
     }
-    let raw: Value = serde_json::from_slice(&bytes).map_err(|e| ApiError::invalid(format!("invalid JSON body: {e}")))?;
+    let raw: Value = serde_json::from_slice(&bytes)
+        .map_err(|e| ApiError::invalid(format!("invalid JSON body: {e}")))?;
     if !raw.is_object() {
         return Err(ApiError::invalid("request body must be a JSON object"));
     }
-    let parsed: CreateBody = serde_json::from_value(raw).map_err(|e| ApiError::invalid(e.to_string()))?;
+    let parsed: CreateBody =
+        serde_json::from_value(raw).map_err(|e| ApiError::invalid(e.to_string()))?;
     let mut ncx = NormalizeCtx::new(ctx.now());
     ncx.owner = owner.clone();
     ncx.request_id = rid.to_owned();
@@ -464,13 +569,18 @@ async fn create(mm: &MiniMax, ctx: &ServeCtx, headers: &HeaderMap, body: Body, r
         let q = ListQuery {
             owner: owner.clone(),
             protocol: Some(ProtocolId::MiniMaxV2),
-            statuses: vec![fastvideo_protocol::JobStatus::Queued, fastvideo_protocol::JobStatus::Running],
+            statuses: vec![
+                fastvideo_protocol::JobStatus::Queued,
+                fastvideo_protocol::JobStatus::Running,
+            ],
             limit: 0,
             ..ListQuery::default()
         };
         if ctx.jobs().list(q).await.total >= limit as usize {
-            return Err(ApiError::rate_limited(format!("at most {limit} tasks may be queued or running"))
-                .with_retry_after(10));
+            return Err(ApiError::rate_limited(format!(
+                "at most {limit} tasks may be queued or running"
+            ))
+            .with_retry_after(10));
         }
     }
     let job = submit_generation(ctx, mm, req, owner, echo).await?;
@@ -485,13 +595,24 @@ fn default_resolution(ctx: &ServeCtx, mm: &MiniMax, req: &mut GenerationRequest,
     let models = ctx.engine().models();
     let engine = ctx.engine().clone();
     let alias = move |n: &str| engine.alias(n);
-    let Ok((caps, _)) = mm.resolve_caps(&req.model, &alias, &models) else { return };
+    let Ok((caps, _)) = mm.resolve_caps(&req.model, &alias, &models) else {
+        return;
+    };
     let tiers = &caps.canvas.short_edges;
     let p768 = Resolution::P768.short_edge();
-    let Some(&first) = tiers.first().filter(|_| !tiers.contains(&p768)) else { return };
-    let Some(r) = [Resolution::P480, Resolution::P768].into_iter().find(|r| r.short_edge() == first) else { return };
+    let Some(&first) = tiers.first().filter(|_| !tiers.contains(&p768)) else {
+        return;
+    };
+    let Some(r) = [Resolution::P480, Resolution::P768]
+        .into_iter()
+        .find(|r| r.short_edge() == first)
+    else {
+        return;
+    };
     match &mut req.canvas {
-        CanvasSpec::Aspect { short_edge, .. } | CanvasSpec::FollowImage { short_edge } if *short_edge == p768 => {
+        CanvasSpec::Aspect { short_edge, .. } | CanvasSpec::FollowImage { short_edge }
+            if *short_edge == p768 =>
+        {
             *short_edge = first;
             echo["resolution"] = json!(r.as_str());
         }
@@ -549,8 +670,15 @@ fn input_usage(staged: &StagedInputs) -> Value {
             .sum()
     };
     let images = staged.keyframes.len()
-        + staged.references.iter().filter(|(k, _)| *k == MediaKind::Image).count();
-    let has_audio = staged.references.iter().any(|(k, _)| *k == MediaKind::Audio);
+        + staged
+            .references
+            .iter()
+            .filter(|(k, _)| *k == MediaKind::Image)
+            .count();
+    let has_audio = staged
+        .references
+        .iter()
+        .any(|(k, _)| *k == MediaKind::Audio);
     json!({
         "input_image_count": images,
         "input_video_seconds": secs(MediaKind::Video),
@@ -588,11 +716,18 @@ pub async fn submit_generation(
     let id = JobId::new();
     let dir = ctx.inputs_dir(id);
     let staged = async {
-        let staged = ctx.ingestor().stage(&plan, &mm.config().ingest, &dir, ctx.now()).await?;
+        let staged = ctx
+            .ingestor()
+            .stage(&plan, &mm.config().ingest, &dir, ctx.now())
+            .await?;
         let (mut resolved, notes) = negotiate_noted(&plan, caps, &staged)?;
         if let Some(n) = four {
-            H3Geometry::new(resolved.height as usize, resolved.width as usize, n as usize)
-                .map_err(|e| bad("duration", format!("H3 geometry: {e}")))?;
+            H3Geometry::new(
+                resolved.height as usize,
+                resolved.width as usize,
+                n as usize,
+            )
+            .map_err(|e| bad("duration", format!("H3 geometry: {e}")))?;
             resolved.num_frames = n;
         }
         // Caps without a tier tag (e.g. the engine table drops the draft
@@ -612,7 +747,14 @@ pub async fn submit_generation(
     };
     echo["_fv"] = input_usage(&staged);
     let now = ctx.now();
-    let mut job = Job::new(id, ProtocolId::MiniMaxV2, mm.new_external_id(id), resolved, now, ctx.config().retention(ProtocolId::MiniMaxV2));
+    let mut job = Job::new(
+        id,
+        ProtocolId::MiniMaxV2,
+        mm.new_external_id(id),
+        resolved,
+        now,
+        ctx.config().retention(ProtocolId::MiniMaxV2),
+    );
     job.owner = owner;
     job.request_echo = echo;
     job.callback = req.callback.clone();
@@ -650,9 +792,16 @@ pub async fn submit_generation(
     if let Err(e) = submitted {
         // The receiver already saw `queued`: close the sequence with `failed`.
         let (now, err) = (ctx.now(), e.clone());
-        if let Ok(j) = ctx.jobs().update(id, Box::new(move |j| {
-            let _ = j.mark_failed(now, err);
-        })).await {
+        if let Ok(j) = ctx
+            .jobs()
+            .update(
+                id,
+                Box::new(move |j| {
+                    let _ = j.mark_failed(now, err);
+                }),
+            )
+            .await
+        {
             ctx.notify(&j);
         }
         ctx.jobs().remove(id).await;
@@ -663,13 +812,26 @@ pub async fn submit_generation(
 
 /// `POST /v2/h3_context_ir`, `POST /v2/video_regeneration`: authenticated,
 /// then 400 (design §1.2: they need MiniMax platform components).
-pub(crate) async fn unsupported(mm: Arc<MiniMax>, State(ctx): State<ServeCtx>, headers: HeaderMap, route: &'static str) -> Response {
+pub(crate) async fn unsupported(
+    mm: Arc<MiniMax>,
+    State(ctx): State<ServeCtx>,
+    headers: HeaderMap,
+    route: &'static str,
+) -> Response {
     let rid = random_token();
     let err = match ctx.auth().authenticate(ProtocolId::MiniMaxV2, &headers) {
         Err(e) => e,
         Ok(_) => ApiError::invalid(format!("{route} is not supported by this server")),
     };
-    let reply = error_reply(&*mm, &err, &ErrorCtx { request_id: Some(rid), route: Some(route.into()), external_id: None });
+    let reply = error_reply(
+        &*mm,
+        &err,
+        &ErrorCtx {
+            request_id: Some(rid),
+            route: Some(route.into()),
+            external_id: None,
+        },
+    );
     into_response(reply, &ctx, None).await
 }
 
@@ -683,27 +845,53 @@ mod tests {
 
     #[test]
     fn t2v_basics() {
-        let r = normalize(body(json!({"model":"MiniMax-H3","content":[{"type":"text","text":"a cat"}],
-            "resolution":"768P","duration":5,"ratio":"16:9"})))
+        let r = normalize(body(
+            json!({"model":"MiniMax-H3","content":[{"type":"text","text":"a cat"}],
+            "resolution":"768P","duration":5,"ratio":"16:9"}),
+        ))
         .unwrap();
         assert_eq!(r.task, Task::T2V);
         assert_eq!(r.prompt, "a cat");
-        assert_eq!(r.canvas, CanvasSpec::Aspect { ratio: Ratio::R16_9, short_edge: 768 });
-        assert_eq!(r.timing.length, Length::Seconds { value: 5.0, snap: Snap::AlignUp });
+        assert_eq!(
+            r.canvas,
+            CanvasSpec::Aspect {
+                ratio: Ratio::R16_9,
+                short_edge: 768
+            }
+        );
+        assert_eq!(
+            r.timing.length,
+            Length::Seconds {
+                value: 5.0,
+                snap: Snap::AlignUp
+            }
+        );
     }
 
     #[test]
     fn four_second_plan() {
         let caps = ModelCaps::h3("h", false);
         let mut r = GenerationRequest::text(ProtocolId::MiniMaxV2, "MiniMax-H3", "x");
-        r.timing.length = Length::Seconds { value: 4.0, snap: Snap::AlignUp };
+        r.timing.length = Length::Seconds {
+            value: 4.0,
+            snap: Snap::AlignUp,
+        };
         assert_eq!(four_second_frames(&r, &caps).unwrap(), Some(107));
-        r.timing.length = Length::Seconds { value: 5.0, snap: Snap::AlignUp };
+        r.timing.length = Length::Seconds {
+            value: 5.0,
+            snap: Snap::AlignUp,
+        };
         assert_eq!(four_second_frames(&r, &caps).unwrap(), None);
         // A model grid that starts at 5 s keeps the gap.
         let mut c5 = caps.clone();
         c5.frames.min = 124;
-        r.timing.length = Length::Seconds { value: 4.0, snap: Snap::AlignUp };
-        assert_eq!(four_second_frames(&r, &c5).unwrap_err().gap(), Some(GapId::H3FourSeconds));
+        r.timing.length = Length::Seconds {
+            value: 4.0,
+            snap: Snap::AlignUp,
+        };
+        assert_eq!(
+            four_second_frames(&r, &c5).unwrap_err().gap(),
+            Some(GapId::H3FourSeconds)
+        );
     }
 }

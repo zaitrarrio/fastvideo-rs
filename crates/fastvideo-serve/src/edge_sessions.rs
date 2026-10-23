@@ -58,7 +58,13 @@ pub struct EdgeSessions {
 impl std::fmt::Debug for EdgeSessions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let g = self.lock();
-        f.debug_map().entries(g.by_edge.iter().map(|(k, e)| (k, (&e.kind, e.lease, &e.local)))).finish()
+        f.debug_map()
+            .entries(
+                g.by_edge
+                    .iter()
+                    .map(|(k, e)| (k, (&e.kind, e.lease, &e.local))),
+            )
+            .finish()
     }
 }
 
@@ -68,7 +74,9 @@ impl EdgeSessions {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// The family object's offer `edge_id` (`kind`, `lease`) was taken here.
@@ -76,7 +84,16 @@ impl EdgeSessions {
         let mut g = self.lock();
         g.seq += 1;
         let seq = g.seq;
-        g.by_edge.insert(edge_id.to_owned(), Entry { kind: kind.to_owned(), lease, seq, local: None, ender });
+        g.by_edge.insert(
+            edge_id.to_owned(),
+            Entry {
+                kind: kind.to_owned(),
+                lease,
+                seq,
+                local: None,
+                ender,
+            },
+        );
     }
 
     /// The dispatcher ended `edge_id` (revoke, release, re-hello): nothing
@@ -94,7 +111,12 @@ impl EdgeSessions {
         let free = |e: &Entry| e.kind == kind && e.local.is_none();
         let id = match hint.filter(|h| g.by_edge.get(*h).is_some_and(free)) {
             Some(h) => h.to_owned(),
-            None => g.by_edge.iter().filter(|(_, e)| free(e)).min_by_key(|(_, e)| e.seq).map(|(k, _)| k.clone())?,
+            None => g
+                .by_edge
+                .iter()
+                .filter(|(_, e)| free(e))
+                .min_by_key(|(_, e)| e.seq)
+                .map(|(k, _)| k.clone())?,
         };
         if let Some(e) = g.by_edge.get_mut(&id) {
             e.local = Some(local.to_owned());
@@ -108,7 +130,11 @@ impl EdgeSessions {
     pub fn ended(&self, local: &str, reason: &str) -> Option<String> {
         let (id, e) = {
             let mut g = self.lock();
-            let id = g.by_edge.iter().find(|(_, e)| e.local.as_deref() == Some(local)).map(|(k, _)| k.clone())?;
+            let id = g
+                .by_edge
+                .iter()
+                .find(|(_, e)| e.local.as_deref() == Some(local))
+                .map(|(k, _)| k.clone())?;
             let e = g.by_edge.remove(&id)?;
             (id, e)
         };
@@ -135,7 +161,12 @@ mod tests {
     fn recorder() -> (Log, Ender) {
         let log: Log = Arc::default();
         let l2 = log.clone();
-        (log, Arc::new(move |id: &str, lease: u64, why: &str| l2.lock().unwrap().push((id.into(), lease, why.into()))))
+        (
+            log,
+            Arc::new(move |id: &str, lease: u64, why: &str| {
+                l2.lock().unwrap().push((id.into(), lease, why.into()))
+            }),
+        )
     }
 
     #[test]
@@ -148,7 +179,10 @@ mod tests {
         // No hint: the oldest unbound one of the kind.
         assert_eq!(s.bind("director", "d1", None).as_deref(), Some("ses-a"));
         // A hint names its own.
-        assert_eq!(s.bind("director", "d2", Some("ses-b")).as_deref(), Some("ses-b"));
+        assert_eq!(
+            s.bind("director", "d2", Some("ses-b")).as_deref(),
+            Some("ses-b")
+        );
         // Nothing left of that kind: a direct client.
         assert_eq!(s.bind("director", "d3", None), None);
         // A hint of the wrong kind or bound already falls back (nothing free here).
@@ -156,7 +190,10 @@ mod tests {
         assert_eq!(s.ended("d2", "stopped").as_deref(), Some("ses-b"));
         assert_eq!(s.ended("d2", "stopped"), None, "once");
         assert_eq!(s.ended("d9", "stopped"), None, "not an edge session");
-        assert_eq!(*log.lock().unwrap(), vec![("ses-b".to_owned(), 4, "stopped".to_owned())]);
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![("ses-b".to_owned(), 4, "stopped".to_owned())]
+        );
         // The dispatcher ended it first: nothing to send back.
         s.forget("ses-a");
         assert_eq!(s.ended("d1", "stopped"), None);

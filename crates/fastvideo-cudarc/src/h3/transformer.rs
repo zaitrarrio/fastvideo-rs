@@ -41,8 +41,8 @@ use super::fused16::{self, AdaRows, NormOut};
 use crate::wan::nn::{scaled_dot_product_attention, Linear};
 use crate::wan::offload::{BlockWeights, OffloadBlock, Residency};
 use crate::wan::quant::{H3QuantPlan, QuantKind, QuantMode, Section};
-use crate::wan::tensor::bf16_activations;
 use crate::wan::stats::phase;
+use crate::wan::tensor::bf16_activations;
 use crate::wan::tensor::{CudaTensor, Result, TensorError};
 use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
 
@@ -156,10 +156,16 @@ fn dump_merged(prefix: &str, lin: &Linear) -> Result<()> {
             .collect(),
         crate::wan::nn::SnapshotWeight::F32(v) => v.clone(),
         crate::wan::nn::SnapshotWeight::Quant { .. } => {
-            return Err(msg(format!("FV_H3_DUMP_MERGED: {prefix} is already quantized")))
+            return Err(msg(format!(
+                "FV_H3_DUMP_MERGED: {prefix} is already quantized"
+            )))
         }
     };
-    crate::wan::dump::host(&format!("merged.{prefix}"), &[snap.out_dim, snap.in_dim], &data)
+    crate::wan::dump::host(
+        &format!("merged.{prefix}"),
+        &[snap.out_dim, snap.in_dim],
+        &data,
+    )
 }
 
 /// The adapter merge on the device (`FASTVIDEO_H3_LORA_DEVICE`, default on):
@@ -330,8 +336,10 @@ pub(crate) mod lora_device {
         FLAG.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_H3_LORA_VERIFY", false))
     }
 
-    static COUNTS: [std::sync::atomic::AtomicU64; 2] =
-        [std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)];
+    static COUNTS: [std::sync::atomic::AtomicU64; 2] = [
+        std::sync::atomic::AtomicU64::new(0),
+        std::sync::atomic::AtomicU64::new(0),
+    ];
 
     /// `(equal, different)` device merges checked so far.
     pub fn verify_counts() -> (u64, u64) {
@@ -532,8 +540,8 @@ impl H3SolPolicy {
         layout: &DeviceLayout,
     ) -> Result<Self> {
         let kind = fastvideo_models::h3::sol::sink_policy(technique.sink);
-        let spec =
-            fastvideo_models::h3::sol::sink_spec_for(technique.sink, &layout.layout).map_err(msg)?;
+        let spec = fastvideo_models::h3::sol::sink_spec_for(technique.sink, &layout.layout)
+            .map_err(msg)?;
         let permutation = match spec.plan {
             None => None,
             Some(plan) => {
@@ -633,7 +641,9 @@ fn dense_attention(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor) -> Result<Cud
 fn record_attn(step: usize, layer: usize, mode: &AttnMode<'_>) {
     use crate::wan::evalstats::{attn, AttnKind};
     let kind = match mode {
-        AttnMode::Dense | AttnMode::Sol(_) | AttnMode::SolVsa { .. } | AttnMode::Vdn(_) => AttnKind::Dense,
+        AttnMode::Dense | AttnMode::Sol(_) | AttnMode::SolVsa { .. } | AttnMode::Vdn(_) => {
+            AttnKind::Dense
+        }
         AttnMode::Vsa(_) => AttnKind::Vsa,
         AttnMode::SolLayer { tau, .. } => AttnKind::Sol { tau: *tau },
     };
@@ -859,9 +869,21 @@ impl AdaLnTable {
 
     /// The table into a pre-quantized tree (`adaln_table.*`, F32).
     fn export(&self, w: &mut super::dit_tree::TreeWriter) -> Result<()> {
-        w.values("adaln_table.block_mods", vec![self.block_mods.len()], &self.block_mods)?;
-        w.values("adaln_table.out_mods", vec![self.out_mods.len()], &self.out_mods)?;
-        w.values("adaln_table.keyframe_mods", vec![self.keyframe_mods.len()], &self.keyframe_mods)?;
+        w.values(
+            "adaln_table.block_mods",
+            vec![self.block_mods.len()],
+            &self.block_mods,
+        )?;
+        w.values(
+            "adaln_table.out_mods",
+            vec![self.out_mods.len()],
+            &self.out_mods,
+        )?;
+        w.values(
+            "adaln_table.keyframe_mods",
+            vec![self.keyframe_mods.len()],
+            &self.keyframe_mods,
+        )?;
         let te = self.temb.first().map_or(0, Vec::len);
         let flat: Vec<f32> = self.temb.iter().flatten().copied().collect();
         w.values("adaln_table.temb", vec![self.temb.len(), te], &flat)
@@ -901,7 +923,10 @@ impl AdaLnTable {
             block_mods,
             out_mods,
             keyframe_mods,
-            temb: flat.chunks_exact(cfg.time_embed_dim).map(<[f32]>::to_vec).collect(),
+            temb: flat
+                .chunks_exact(cfg.time_embed_dim)
+                .map(<[f32]>::to_vec)
+                .collect(),
         })
     }
 
@@ -1108,15 +1133,28 @@ impl FactorizedAdaLn {
         rows: usize,
     ) -> Result<Vec<f32>> {
         let round = |v: Vec<f32>| -> Vec<f32> { v.into_iter().map(f16_round).collect() };
-        let w = round(host_f32(map, &format!("{prefix}.weight"), &[out, self.rank])?);
+        let w = round(host_f32(
+            map,
+            &format!("{prefix}.weight"),
+            &[out, self.rank],
+        )?);
         let b = round(host_f32(map, &format!("{prefix}.bias"), &[out])?);
-        Ok(fp16_linear(&self.r[..rows * self.rank], rows, self.rank, &w, Some(&b), out))
+        Ok(fp16_linear(
+            &self.r[..rows * self.rank],
+            rows,
+            self.rank,
+            &w,
+            Some(&b),
+            out,
+        ))
     }
 }
 
 /// A tensor's values on the host as f32, its shape checked.
 fn host_f32(map: &WeightMap, key: &str, shape: &[usize]) -> Result<Vec<f32>> {
-    Ok(cuda_tensor_shaped(map, key, shape)?.host_cow()?.into_owned())
+    Ok(cuda_tensor_shaped(map, key, shape)?
+        .host_cow()?
+        .into_owned())
 }
 
 /// `y = fp16(x @ w.T + b)` for float16-valued `x [rows, k]`, `w [out, k]`,
@@ -1377,7 +1415,9 @@ impl H3Transformer {
     /// Every step's bf16 AdaLN table on the device at once (what
     /// [`adaln_rows16`] builds one step at a time), for the graph cache.
     pub fn adaln_rows16_all(&self) -> Result<Vec<CudaTensor>> {
-        (0..self.table.steps()).map(|s| build_rows16(&self.table, s)).collect()
+        (0..self.table.steps())
+            .map(|s| build_rows16(&self.table, s))
+            .collect()
     }
 
     /// Run `f` with `tabs` ([`Self::adaln_rows16_all`]) as this thread's
@@ -1550,8 +1590,8 @@ impl Attention {
             let qkvg = if device {
                 #[cfg(feature = "cuda")]
                 {
-                    let dev = crate::wan::device::global_device()
-                        .ok_or_else(|| msg("no device"))?;
+                    let dev =
+                        crate::wan::device::global_device().ok_or_else(|| msg("no device"))?;
                     // SAFETY: every part is written below before any read.
                     let mut stacked = unsafe { dev.stream.alloc::<half::bf16>(rows * hidden) }
                         .map_err(|e| msg(format!("qkvg stack: {e}")))?;
@@ -1675,7 +1715,8 @@ impl Attention {
     /// Whether the fused norm+modulate may hand this attention an MXFP8
     /// activation: an all-MXFP8 QKV (no bf16 gate rows) and no row gather.
     fn accepts_mx(&self, mode: AttnMode<'_>) -> bool {
-        let gathered = matches!(mode, AttnMode::SolLayer { policy, .. } if policy.permutation.is_some());
+        let gathered =
+            matches!(mode, AttnMode::SolLayer { policy, .. } if policy.permutation.is_some());
         // VDN reads the bf16 attention input itself (gates, decay, branch).
         let vdn = matches!(mode, AttnMode::Vdn(_));
         self.qkvg.quant_kind() == Some(QuantKind::Mxfp8) && !self.has_gate && !gathered && !vdn
@@ -1754,7 +1795,13 @@ impl Attention {
         let q = phase("h3_attn_q", || {
             if fused {
                 return fused16::qk_norm_rope(
-                    &packed, &self.norm_q, rope, self.heads, self.head_dim, 0, self.eps,
+                    &packed,
+                    &self.norm_q,
+                    rope,
+                    self.heads,
+                    self.head_dim,
+                    0,
+                    self.eps,
                 );
             }
             let t = packed
@@ -1768,7 +1815,13 @@ impl Attention {
         let k = phase("h3_attn_k", || {
             if fused {
                 return fused16::qk_norm_rope(
-                    &packed, &self.norm_k, rope, self.heads, self.head_dim, inner, self.eps,
+                    &packed,
+                    &self.norm_k,
+                    rope,
+                    self.heads,
+                    self.head_dim,
+                    inner,
+                    self.eps,
                 );
             }
             let t = packed
@@ -1803,7 +1856,9 @@ impl Attention {
             }
             AttnMode::SolLayer { tau, policy } => policy.attend(&q, &k, &v, tau)?,
             AttnMode::Vdn(_) => {
-                return Err(msg("h3 attn: the VDN mode runs through Attention::forward_vdn"));
+                return Err(msg(
+                    "h3 attn: the VDN mode runs through Attention::forward_vdn",
+                ));
             }
         };
         drop(packed);
@@ -1819,7 +1874,15 @@ impl Attention {
         w: &CudaTensor,
     ) -> Result<CudaTensor> {
         if bf16_activations() {
-            return fused16::qk_norm_rope(packed, w, rope, self.heads, self.head_dim, col_off, self.eps);
+            return fused16::qk_norm_rope(
+                packed,
+                w,
+                rope,
+                self.heads,
+                self.head_dim,
+                col_off,
+                self.eps,
+            );
         }
         let t = packed
             .split_heads_bhsd(col_off, self.heads, self.head_dim)?
@@ -1846,8 +1909,12 @@ impl Attention {
         let inner = self.heads * self.head_dim;
         let packed = phase("h3_attn_qkvg", || self.qkvg.forward(n))?;
         let aux = phase("h3_vdn_aux", || branch.aux(n))?;
-        let q = phase("h3_attn_q", || self.norm_rope(&packed, rope, 0, &self.norm_q))?;
-        let k = phase("h3_attn_k", || self.norm_rope(&packed, rope, inner, &self.norm_k))?;
+        let q = phase("h3_attn_q", || {
+            self.norm_rope(&packed, rope, 0, &self.norm_q)
+        })?;
+        let k = phase("h3_attn_k", || {
+            self.norm_rope(&packed, rope, inner, &self.norm_k)
+        })?;
         let v = phase("h3_attn_v", || {
             packed.split_heads_bhsd(2 * inner, self.heads, self.head_dim)
         })?;
@@ -1881,7 +1948,11 @@ impl Attention {
     ) -> Result<Option<CudaTensor>> {
         let (heads, d) = (self.heads, self.head_dim);
         let inner = heads * d;
-        if fused16::glue_enabled() && vsa.takes_bf16() && packed.is_bf16() && packed.is_device_fresh() {
+        if fused16::glue_enabled()
+            && vsa.takes_bf16()
+            && packed.is_bf16()
+            && packed.is_device_fresh()
+        {
             let (q, k, v, gate) = self.heads16(packed, rope, self.has_gate)?;
             let Some(out) = vsa.attend_unrounded(q, k, v, gate)? else {
                 return Ok(None);
@@ -1900,11 +1971,16 @@ impl Attention {
         else {
             return Ok(None);
         };
-        let Some(v) = phase("h3_attn_v", || fused16::split_heads_f32(packed, 2 * inner, heads, d))? else {
+        let Some(v) = phase("h3_attn_v", || {
+            fused16::split_heads_f32(packed, 2 * inner, heads, d)
+        })?
+        else {
             return Ok(None);
         };
         let gate = if self.has_gate {
-            match phase("h3_attn_gate", || fused16::split_heads_f32(packed, 3 * inner, heads, d))? {
+            match phase("h3_attn_gate", || {
+                fused16::split_heads_f32(packed, 3 * inner, heads, d)
+            })? {
                 Some(g) => Some(g),
                 None => return Ok(None),
             }
@@ -1929,7 +2005,16 @@ impl Attention {
         let (heads, d) = (self.heads, self.head_dim);
         let inner = heads * d;
         if let Some(t) = phase("h3_attn_qkvg_heads", || {
-            fused16::qkvg_heads(packed, &self.norm_q, &self.norm_k, rope, heads, d, gate, self.eps)
+            fused16::qkvg_heads(
+                packed,
+                &self.norm_q,
+                &self.norm_k,
+                rope,
+                heads,
+                d,
+                gate,
+                self.eps,
+            )
         })? {
             return Ok(t);
         }
@@ -1941,7 +2026,9 @@ impl Attention {
         })?;
         let v = phase("h3_attn_v", || packed.split_heads_bhsd(2 * inner, heads, d))?;
         let g = if gate {
-            Some(phase("h3_attn_gate", || packed.split_heads_bhsd(3 * inner, heads, d))?)
+            Some(phase("h3_attn_gate", || {
+                packed.split_heads_bhsd(3 * inner, heads, d)
+            })?)
         } else {
             None
         };
@@ -1987,7 +2074,9 @@ impl Attention {
             #[cfg(feature = "cuda")]
             if bf16_activations() {
                 if let Some(stack) = self.to_out.nvfp4_stack() {
-                    if let Some(a) = fused16::merge_heads_nvfp4(&out, stack.static_act_amax(), stack.rule())? {
+                    if let Some(a) =
+                        fused16::merge_heads_nvfp4(&out, stack.static_act_amax(), stack.rule())?
+                    {
                         let shape = vec![1, a.rows, self.to_out.out_dim()];
                         drop(out);
                         return self.to_out.forward_nvfp4_operand(&a, shape);
@@ -2107,7 +2196,8 @@ impl FeedForward {
     /// Whether the fused residual+norm+modulate may hand this FFN an MXFP8
     /// activation (MXFP8 up projection, one row chunk).
     fn accepts_mx(&self, rows: usize) -> bool {
-        self.ff_in.quant_kind() == Some(QuantKind::Mxfp8) && ffn_row_chunk(rows, self.ffn_dim) >= rows
+        self.ff_in.quant_kind() == Some(QuantKind::Mxfp8)
+            && ffn_row_chunk(rows, self.ffn_dim) >= rows
     }
 
     /// [`Self::forward`] on a fused producer's output; with an MXFP8 down
@@ -2134,7 +2224,9 @@ impl FeedForward {
         let mut start = 0;
         while start < rows {
             let len = chunk.min(rows - start);
-            let h = phase("h3_ffn_in", || self.ff_in.forward(&t.narrow(1, start, len)?))?;
+            let h = phase("h3_ffn_in", || {
+                self.ff_in.forward(&t.narrow(1, start, len)?)
+            })?;
             parts.push(self.down(h, len, hidden)?);
             start += len;
         }
@@ -2151,7 +2243,9 @@ impl FeedForward {
         if self.ff_out.quant_kind() == Some(QuantKind::Mxfp8) {
             if let Some(act) = phase("h3_ffn_act", || fused16::swiglu_mx(&h))? {
                 drop(h);
-                return phase("h3_ffn_out", || self.ff_out.forward_mx(&act, vec![1, rows, hidden]));
+                return phase("h3_ffn_out", || {
+                    self.ff_out.forward_mx(&act, vec![1, rows, hidden])
+                });
             }
         }
         // A published NVFP4 down projection with a static activation scale
@@ -2159,7 +2253,9 @@ impl FeedForward {
         #[cfg(feature = "cuda")]
         if let Some(stack) = self.ff_out.nvfp4_stack() {
             if let Some(amax) = stack.static_act_amax() {
-                if let Some(a) = phase("h3_ffn_act", || fused16::swiglu_nvfp4(&h, amax, stack.rule()))? {
+                if let Some(a) = phase("h3_ffn_act", || {
+                    fused16::swiglu_nvfp4(&h, amax, stack.rule())
+                })? {
                     drop(h);
                     return phase("h3_ffn_out", || {
                         self.ff_out.forward_nvfp4_operand(&a, vec![1, rows, hidden])
@@ -2318,8 +2414,18 @@ impl Block {
                         qkvg,
                         to_out,
                         has_gate: gate,
-                        norm_q: pinned_weight(m, &format!("{p}.attn.norm_q.weight"), &[d], &mut None)?,
-                        norm_k: pinned_weight(m, &format!("{p}.attn.norm_k.weight"), &[d], &mut None)?,
+                        norm_q: pinned_weight(
+                            m,
+                            &format!("{p}.attn.norm_q.weight"),
+                            &[d],
+                            &mut None,
+                        )?,
+                        norm_k: pinned_weight(
+                            m,
+                            &format!("{p}.attn.norm_k.weight"),
+                            &[d],
+                            &mut None,
+                        )?,
                         heads: cfg.num_attention_heads,
                         head_dim: d,
                         eps: cfg.qk_norm_eps as f32,
@@ -2329,13 +2435,19 @@ impl Block {
                     let mut a = Attention::load(m, &format!("{p}.attn"), cfg, gate, &mut None)?;
                     if let Some(kind) = attn_quant {
                         let inner = cfg.inner_dim();
-                        let q = |rows| Section { rows, quantized: true };
+                        let q = |rows| Section {
+                            rows,
+                            quantized: true,
+                        };
                         let mut qkv = match kind {
                             QuantKind::W8A8 => vec![q(inner), q(inner), q(inner)],
                             QuantKind::Mxfp8 => vec![q(3 * inner)],
                         };
                         if gate {
-                            qkv.push(Section { rows: inner, quantized: false });
+                            qkv.push(Section {
+                                rows: inner,
+                                quantized: false,
+                            });
                         }
                         a.qkvg.quantize(kind, qkv)?;
                         a.to_out.quantize(kind, vec![q(hidden)])?;
@@ -2447,10 +2559,23 @@ impl Block {
         // this block's first norm kernel (fused16::gate_res_norm_mod).
         let (x, n) = phase("h3_1_norm_msa", || match input {
             BlockIn::Hidden(x) => {
-                let n = fused16::norm_mod(&x, &self.norm1, rows_tab, base, scale_msa, shift_msa, eps, mx)?;
+                let n = fused16::norm_mod(
+                    &x,
+                    &self.norm1,
+                    rows_tab,
+                    base,
+                    scale_msa,
+                    shift_msa,
+                    eps,
+                    mx,
+                )?;
                 Ok((x, n))
             }
-            BlockIn::Pending { res, f, base: base_g } => {
+            BlockIn::Pending {
+                res,
+                f,
+                base: base_g,
+            } => {
                 if let Some(out) = fused16::gate_res_norm_mod(
                     &res,
                     &f,
@@ -2467,7 +2592,16 @@ impl Block {
                 }
                 let x = fused16::gate_residual(&res, &f, rows_tab, base_g, gate_mlp)?;
                 drop((res, f));
-                let n = fused16::norm_mod(&x, &self.norm1, rows_tab, base, scale_msa, shift_msa, eps, mx)?;
+                let n = fused16::norm_mod(
+                    &x,
+                    &self.norm1,
+                    rows_tab,
+                    base,
+                    scale_msa,
+                    shift_msa,
+                    eps,
+                    mx,
+                )?;
                 Ok((x, n))
             }
         })?;
@@ -2808,7 +2942,16 @@ impl H3Transformer {
         lora: &mut Option<super::lora::H3LoraFuse>,
         residency: Residency,
     ) -> Result<Self> {
-        Self::load_with_nvfp4(cfg, map, schedule, with_gate, adaln_cache, lora, residency, None)
+        Self::load_with_nvfp4(
+            cfg,
+            map,
+            schedule,
+            with_gate,
+            adaln_cache,
+            lora,
+            residency,
+            None,
+        )
     }
 
     /// [`Self::load_with_residency`], with every block's attention and FFN
@@ -2835,7 +2978,9 @@ impl H3Transformer {
         }
         let quant = match nvfp4 {
             Some(_) if lora.is_some() => {
-                return Err(msg("h3 nvfp4: no adapter can be merged into the published NVFP4 weights"));
+                return Err(msg(
+                    "h3 nvfp4: no adapter can be merged into the published NVFP4 weights",
+                ));
             }
             Some(_) if residency.is_streamed() => {
                 return Err(msg("h3 nvfp4: the NVFP4 blocks are resident only"));
@@ -2890,7 +3035,13 @@ impl H3Transformer {
         let mut blocks = BlockWeights::new("h3 dit", residency);
         for i in 0..cfg.num_layers {
             let block = match nvfp4 {
-                Some(nv) => Block::load_nvfp4(nv, i, &cfg, with_gate, attn_plan.and_then(|p| p.dit_block(i)))?,
+                Some(nv) => Block::load_nvfp4(
+                    nv,
+                    i,
+                    &cfg,
+                    with_gate,
+                    attn_plan.and_then(|p| p.dit_block(i)),
+                )?,
                 None => Block::load_quant(
                     map,
                     &format!("transformer_blocks.{i}"),
@@ -3027,11 +3178,19 @@ impl H3Transformer {
         };
         Ok(Self {
             proj_in: island(r.linear("proj_in", cfg.video_patch_dim(), cfg.hidden_size)?),
-            audio_proj_in: island(r.linear("audio_proj_in", cfg.audio_in_channels, cfg.hidden_size)?),
+            audio_proj_in: island(r.linear(
+                "audio_proj_in",
+                cfg.audio_in_channels,
+                cfg.hidden_size,
+            )?),
             blocks,
             norm_out: r.pinned("norm_out.norm.weight", &[cfg.hidden_size])?,
             proj_out: island(r.linear("proj_out", cfg.hidden_size, cfg.video_patch_dim())?),
-            audio_proj_out: island(r.linear("audio_proj_out", cfg.hidden_size, cfg.audio_in_channels)?),
+            audio_proj_out: island(r.linear(
+                "audio_proj_out",
+                cfg.hidden_size,
+                cfg.audio_in_channels,
+            )?),
             out_mods: pinned(
                 table.out_mods.clone(),
                 vec![table.out_mods.len() / cfg.hidden_size, cfg.hidden_size],
@@ -3130,7 +3289,9 @@ impl H3Transformer {
             "h3 teacache step {step}: {} ({}; rel_l1 {} indicator {} acc {:.4})",
             if decision.compute { "compute" } else { "REUSE" },
             decision.reason,
-            decision.relative_l1.map_or("-".into(), |v| format!("{v:.4}")),
+            decision
+                .relative_l1
+                .map_or("-".into(), |v| format!("{v:.4}")),
             decision.indicator.map_or("-".into(), |v| format!("{v:.4}")),
             decision.accumulator
         ));
@@ -3170,7 +3331,9 @@ impl H3Transformer {
     /// to every block. The blocks must be resident.
     pub fn attach_vdn(&mut self, map: &WeightMap) -> Result<()> {
         if self.blocks.residency().is_streamed() {
-            return Err(msg("h3 vdn: the hybrid attention needs the DiT resident (dit_offload = resident)"));
+            return Err(msg(
+                "h3 vdn: the hybrid attention needs the DiT resident (dit_offload = resident)",
+            ));
         }
         let cfg = self.cfg.clone();
         for (i, block) in self.blocks.skeletons_mut().enumerate() {
@@ -3189,7 +3352,8 @@ impl H3Transformer {
 
     /// Whether every block carries a VDN branch ([`Self::attach_vdn`]).
     pub fn has_vdn(&self) -> bool {
-        !self.blocks.is_empty() && (0..self.blocks.len()).all(|i| self.blocks.skeleton(i).attn.vdn.is_some())
+        !self.blocks.is_empty()
+            && (0..self.blocks.len()).all(|i| self.blocks.skeleton(i).attn.vdn.is_some())
     }
 
     pub fn config(&self) -> &H3TransformerConfig {
@@ -3398,12 +3562,14 @@ impl H3Transformer {
                                 AttnMode::SolLayer { tau, policy }
                             }
                         },
-                        AttnMode::SolVsa { policy, vsa } => match policy.route(step, index).map_err(msg)? {
-                            fastvideo_models::h3::sol::H3SolRoute::Dense => AttnMode::Vsa(vsa),
-                            fastvideo_models::h3::sol::H3SolRoute::Sol { tau } => {
-                                AttnMode::SolLayer { tau, policy }
+                        AttnMode::SolVsa { policy, vsa } => {
+                            match policy.route(step, index).map_err(msg)? {
+                                fastvideo_models::h3::sol::H3SolRoute::Dense => AttnMode::Vsa(vsa),
+                                fastvideo_models::h3::sol::H3SolRoute::Sol { tau } => {
+                                    AttnMode::SolLayer { tau, policy }
+                                }
                             }
-                        },
+                        }
                         other => other,
                     };
                     record_attn(step, index, &layer_mode);
@@ -3426,7 +3592,9 @@ impl H3Transformer {
                             rope,
                             layer_mode,
                             eps,
-                            [SHIFT_MSA, SCALE_MSA, GATE_MSA, SHIFT_MLP, SCALE_MLP, GATE_MLP],
+                            [
+                                SHIFT_MSA, SCALE_MSA, GATE_MSA, SHIFT_MLP, SCALE_MLP, GATE_MLP,
+                            ],
                             defer,
                         )
                     })?;
@@ -3453,12 +3621,14 @@ impl H3Transformer {
                             AttnMode::SolLayer { tau, policy }
                         }
                     },
-                    AttnMode::SolVsa { policy, vsa } => match policy.route(step, index).map_err(msg)? {
-                        fastvideo_models::h3::sol::H3SolRoute::Dense => AttnMode::Vsa(vsa),
-                        fastvideo_models::h3::sol::H3SolRoute::Sol { tau } => {
-                            AttnMode::SolLayer { tau, policy }
+                    AttnMode::SolVsa { policy, vsa } => {
+                        match policy.route(step, index).map_err(msg)? {
+                            fastvideo_models::h3::sol::H3SolRoute::Dense => AttnMode::Vsa(vsa),
+                            fastvideo_models::h3::sol::H3SolRoute::Sol { tau } => {
+                                AttnMode::SolLayer { tau, policy }
+                            }
                         }
-                    },
+                    }
                     other => other,
                 };
                 record_attn(step, index, &layer_mode);
@@ -4217,11 +4387,18 @@ pub(crate) mod tests {
                     let m = usize::from(tag);
                     let got = table.block_slot(step, block, tag);
                     for p in 0..6 {
-                        let plus = if p == SCALE_MSA || p == SCALE_MLP { 1.0 } else { 0.0 };
+                        let plus = if p == SCALE_MSA || p == SCALE_MLP {
+                            1.0
+                        } else {
+                            0.0
+                        };
                         for c in 0..h {
                             let want = y[m * 6 * h + p * h + c];
                             let have = got[p * h + c] - plus;
-                            assert!((have - want).abs() <= 1e-6, "step {step} tag {tag} p {p} c {c}");
+                            assert!(
+                                (have - want).abs() <= 1e-6,
+                                "step {step} tag {tag} p {p} c {c}"
+                            );
                             // Float16 values: rounding again changes nothing.
                             assert_eq!(f16_round(want), want);
                         }
@@ -4239,7 +4416,10 @@ pub(crate) mod tests {
         }
         // A factorized table differs from the full-rank one on the same map.
         let full = AdaLnTable::precompute(&tiny_cfg(), &map, &schedule).unwrap();
-        assert_ne!(full.block_slot(0, 0, TAG_VIDEO), table.block_slot(0, 0, TAG_VIDEO));
+        assert_ne!(
+            full.block_slot(0, 0, TAG_VIDEO),
+            table.block_slot(0, 0, TAG_VIDEO)
+        );
     }
 
     #[test]
@@ -4250,7 +4430,10 @@ pub(crate) mod tests {
         let schedule = H3JointSchedule::fasth3_8step();
         let map = weights();
         // A generated map has no lazy view: the cache is bypassed, never wrong.
-        let cfg = H3TransformerConfig { adaln_rank: Some(2), ..tiny_cfg() };
+        let cfg = H3TransformerConfig {
+            adaln_rank: Some(2),
+            ..tiny_cfg()
+        };
         let a = AdaLnTable::load_or_precompute(&cfg, &map, &schedule, Some(&path)).unwrap();
         let b = AdaLnTable::precompute(&cfg, &map, &schedule).unwrap();
         assert_eq!(a.block_slot(2, 1, TAG_AUDIO), b.block_slot(2, 1, TAG_AUDIO));
@@ -4376,12 +4559,20 @@ pub(crate) mod tests {
         let mut never = SolAttn::rtx();
         never.route.dense_steps = StepSet::from(0);
         let policy = H3SolPolicy::from_technique(&never, &dl).unwrap();
-        assert_eq!(bits(&base, AttnMode::Sol(&policy)), dense, "all-dense sol_attn");
+        assert_eq!(
+            bits(&base, AttnMode::Sol(&policy)),
+            dense,
+            "all-dense sol_attn"
+        );
         let cached = H3Transformer::load(cfg.clone(), &map, &schedule, false).unwrap();
         let warm_only =
             fastvideo_models::h3::sol::H3TeaCache::new(0.1, 8, 0, 8, vec![1.0, 0.0]).unwrap();
         cached.enable_teacache(warm_only).unwrap();
-        assert_eq!(bits(&cached, AttnMode::Dense), dense, "a TeaCache that never reuses");
+        assert_eq!(
+            bits(&cached, AttnMode::Dense),
+            dense,
+            "a TeaCache that never reuses"
+        );
         cached.end_denoise();
     }
 
@@ -4503,7 +4694,11 @@ pub(crate) mod tests {
     }
 
     fn cosine(a: &[f32], b: &[f32]) -> f64 {
-        let dot: f64 = a.iter().zip(b).map(|(&x, &y)| f64::from(x) * f64::from(y)).sum();
+        let dot: f64 = a
+            .iter()
+            .zip(b)
+            .map(|(&x, &y)| f64::from(x) * f64::from(y))
+            .sum();
         let na: f64 = a.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
         let nb: f64 = b.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
         dot / (na.sqrt() * nb.sqrt())
@@ -4516,23 +4711,54 @@ pub(crate) mod tests {
         let layout = H3PackedLayout::new(2, (2, 2, 4), 1, cfg.patch_size).unwrap();
         let (nv, na, nt) = (layout.video.len, layout.audio.len, layout.text.len);
         let dl = DeviceLayout::new(&cfg, layout).unwrap();
-        let video = CudaTensor::from_vec(seeded(nv * cfg.video_patch_dim(), 0.41), vec![nv, cfg.video_patch_dim()]).unwrap();
-        let audio = CudaTensor::from_vec(seeded(na * cfg.audio_in_channels, 0.23), vec![na, cfg.audio_in_channels]).unwrap();
-        let text = CudaTensor::from_vec(seeded(nt * cfg.hidden_size, 0.57), vec![1, nt, cfg.hidden_size]).unwrap();
+        let video = CudaTensor::from_vec(
+            seeded(nv * cfg.video_patch_dim(), 0.41),
+            vec![nv, cfg.video_patch_dim()],
+        )
+        .unwrap();
+        let audio = CudaTensor::from_vec(
+            seeded(na * cfg.audio_in_channels, 0.23),
+            vec![na, cfg.audio_in_channels],
+        )
+        .unwrap();
+        let text = CudaTensor::from_vec(
+            seeded(nt * cfg.hidden_size, 0.57),
+            vec![1, nt, cfg.hidden_size],
+        )
+        .unwrap();
         let run = |on: bool| {
             crate::wan::tensor::with_bf16_act(on, || {
                 let model = H3Transformer::load(cfg.clone(), &map, &schedule, false).unwrap();
                 let (v, a) = model
-                    .forward(3, &video, &audio, &text, &dl, AttnMode::Dense, None, None, None)
+                    .forward(
+                        3,
+                        &video,
+                        &audio,
+                        &text,
+                        &dl,
+                        AttnMode::Dense,
+                        None,
+                        None,
+                        None,
+                    )
                     .unwrap();
-                let out: Vec<f32> = v.host_cow().unwrap().iter().chain(a.host_cow().unwrap().iter()).copied().collect();
+                let out: Vec<f32> = v
+                    .host_cow()
+                    .unwrap()
+                    .iter()
+                    .chain(a.host_cow().unwrap().iter())
+                    .copied()
+                    .collect();
                 // The proj_out island keeps the head f32.
                 (out, v.is_bf16())
             })
         };
         let (f32_out, _) = run(false);
         let (bf_out, head_bf16) = run(true);
-        assert!(!head_bf16, "proj_out is an f32 island (_keep_in_fp32_modules)");
+        assert!(
+            !head_bf16,
+            "proj_out is an f32 island (_keep_in_fp32_modules)"
+        );
         let cos = cosine(&bf_out, &f32_out);
         assert!(cos > 0.999, "bf16 forward cosine {cos}");
     }
@@ -4548,8 +4774,9 @@ pub(crate) mod tests {
         let ada = synthetic_rows(h, rows);
         let run = |quant: Option<QuantKind>| {
             crate::wan::tensor::with_bf16_act(true, || {
-                let b = Block::load_quant(&map, "transformer_blocks.0", &cfg, false, &mut None, quant)
-                    .unwrap();
+                let b =
+                    Block::load_quant(&map, "transformer_blocks.0", &cfg, false, &mut None, quant)
+                        .unwrap();
                 if let Some(kind) = quant {
                     assert_eq!(b.attn.qkvg.quant_kind(), Some(kind));
                     assert_eq!(b.ff.ff_out.quant_kind(), Some(kind));
@@ -4562,7 +4789,9 @@ pub(crate) mod tests {
                         None,
                         AttnMode::Dense,
                         1e-5,
-                        [SHIFT_MSA, SCALE_MSA, GATE_MSA, SHIFT_MLP, SCALE_MLP, GATE_MLP],
+                        [
+                            SHIFT_MSA, SCALE_MSA, GATE_MSA, SHIFT_MLP, SCALE_MLP, GATE_MLP,
+                        ],
                         false,
                     )
                     .unwrap()
@@ -4585,15 +4814,42 @@ pub(crate) mod tests {
     #[test]
     fn a_vsa_gate_stays_bf16_under_the_recipes() {
         let (cfg, map) = (quant_cfg(), weights());
-        let b = Block::load_quant(&map, "transformer_blocks.0", &cfg, true, &mut None, Some(QuantKind::W8A8))
-            .unwrap();
+        let b = Block::load_quant(
+            &map,
+            "transformer_blocks.0",
+            &cfg,
+            true,
+            &mut None,
+            Some(QuantKind::W8A8),
+        )
+        .unwrap();
         assert_eq!(b.attn.qkvg.quant_kind(), Some(QuantKind::W8A8));
-        assert!(!b.attn.accepts_mx(AttnMode::Dense), "W8A8 quantizes its input itself");
-        let b = Block::load_quant(&map, "transformer_blocks.0", &cfg, true, &mut None, Some(QuantKind::Mxfp8))
-            .unwrap();
-        assert!(!b.attn.accepts_mx(AttnMode::Dense), "a bf16 gate section needs the bf16 input");
-        let b = Block::load_quant(&map, "transformer_blocks.0", &cfg, false, &mut None, Some(QuantKind::Mxfp8))
-            .unwrap();
+        assert!(
+            !b.attn.accepts_mx(AttnMode::Dense),
+            "W8A8 quantizes its input itself"
+        );
+        let b = Block::load_quant(
+            &map,
+            "transformer_blocks.0",
+            &cfg,
+            true,
+            &mut None,
+            Some(QuantKind::Mxfp8),
+        )
+        .unwrap();
+        assert!(
+            !b.attn.accepts_mx(AttnMode::Dense),
+            "a bf16 gate section needs the bf16 input"
+        );
+        let b = Block::load_quant(
+            &map,
+            "transformer_blocks.0",
+            &cfg,
+            false,
+            &mut None,
+            Some(QuantKind::Mxfp8),
+        )
+        .unwrap();
         assert!(b.attn.accepts_mx(AttnMode::Dense));
     }
 
@@ -4603,6 +4859,9 @@ pub(crate) mod tests {
         let t = bf16_table_value(v, true);
         assert_eq!(t, crate::wan::quant::bf16_round(v - 1.0) + 1.0);
         assert_eq!(bf16_table_value(t, true), t, "idempotent");
-        assert_eq!(bf16_table_value(0.3, false), crate::wan::quant::bf16_round(0.3));
+        assert_eq!(
+            bf16_table_value(0.3, false),
+            crate::wan::quant::bf16_round(0.3)
+        );
     }
 }

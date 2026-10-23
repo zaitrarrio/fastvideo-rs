@@ -159,7 +159,9 @@ impl SanaVideoTransformerConfig {
             }
         }
         if b("norm_elementwise_affine", false)? {
-            return Err("transformer config.json: norm_elementwise_affine=true is not ported".into());
+            return Err(
+                "transformer config.json: norm_elementwise_affine=true is not ported".into(),
+            );
         }
         let in_channels = u("in_channels", d.in_channels)?;
         let cfg = Self {
@@ -273,7 +275,9 @@ impl Gemma2TextConfig {
             .and_then(Value::as_str)
             .unwrap_or("gelu_pytorch_tanh");
         if act != "gelu_pytorch_tanh" {
-            return Err(format!("text_encoder config.json: activation {act} not ported"));
+            return Err(format!(
+                "text_encoder config.json: activation {act} not ported"
+            ));
         }
         let layers = u("num_hidden_layers")?;
         let sliding_layers = match v.get("layer_types") {

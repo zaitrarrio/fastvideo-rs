@@ -16,7 +16,10 @@ pub(crate) struct RateLimiter {
 
 impl RateLimiter {
     pub(crate) fn new(rpm: u32) -> Self {
-        Self { rpm, windows: Mutex::new(HashMap::new()) }
+        Self {
+            rpm,
+            windows: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Records one request at `now`, or refuses it when the key already made
@@ -58,7 +61,9 @@ mod tests {
         assert_eq!(e.kind, ErrorKind::RateLimited);
         assert_eq!(e.retry_after_s, Some(40));
         // Another key has its own window.
-        assert!(l.hit(Some(&KeyId("b".into())), t0 + Duration::seconds(20)).is_ok());
+        assert!(l
+            .hit(Some(&KeyId("b".into())), t0 + Duration::seconds(20))
+            .is_ok());
         // The first request leaves the window after a minute.
         assert!(l.hit(Some(&k), t0 + Duration::seconds(60)).is_ok());
         assert!(RateLimiter::new(0).hit(None, t0).is_ok());

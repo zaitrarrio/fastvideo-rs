@@ -238,16 +238,27 @@ pub fn canvas_multiple(two_stage: bool) -> usize {
 /// The model card's request geometry: height and width positive multiples
 /// of [`canvas_multiple`], and `8k + 1` frames. `Ltx2Request::validate` and
 /// the serving engine's job check both use this.
-pub fn check_geometry(height: usize, width: usize, num_frames: usize, two_stage: bool) -> Result<(), String> {
+pub fn check_geometry(
+    height: usize,
+    width: usize,
+    num_frames: usize,
+    two_stage: bool,
+) -> Result<(), String> {
     let multiple = canvas_multiple(two_stage);
-    if height == 0 || width == 0 || !height.is_multiple_of(multiple) || !width.is_multiple_of(multiple) {
+    if height == 0
+        || width == 0
+        || !height.is_multiple_of(multiple)
+        || !width.is_multiple_of(multiple)
+    {
         return Err(format!(
             "ltx2: {width}x{height} — height and width must be positive multiples of {multiple}{}",
             if two_stage { " for two-stage" } else { "" }
         ));
     }
     if num_frames % 8 != 1 {
-        return Err(format!("ltx2: {num_frames} frames — the frame count must be 8k + 1"));
+        return Err(format!(
+            "ltx2: {num_frames} frames — the frame count must be 8k + 1"
+        ));
     }
     Ok(())
 }

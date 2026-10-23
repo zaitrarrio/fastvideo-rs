@@ -632,8 +632,14 @@ mod tests {
             lora_multiplier(LoraFormat::FastvideoV2, 16, 64, 1.0).unwrap(),
             1.0
         );
-        assert_eq!(lora_multiplier(LoraFormat::Comfy, 64, 1, 1.25).unwrap(), 1.25);
-        assert_eq!(lora_multiplier(LoraFormat::Comfy, 16, 1, 1.25).unwrap(), 1.25);
+        assert_eq!(
+            lora_multiplier(LoraFormat::Comfy, 64, 1, 1.25).unwrap(),
+            1.25
+        );
+        assert_eq!(
+            lora_multiplier(LoraFormat::Comfy, 16, 1, 1.25).unwrap(),
+            1.25
+        );
     }
 
     #[test]

@@ -81,7 +81,9 @@ pub struct Candidates {
 }
 
 fn ice_chars_ok(s: &str, min: usize) -> bool {
-    (min..=256).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/')
+    (min..=256).contains(&s.len())
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/')
 }
 
 /// What `GET …/sdp_params` answers.
@@ -100,13 +102,19 @@ impl Reactor {
         if sid != SESSION_ID {
             return Err(Refusal::new(404, "Unknown session"));
         }
-        self.live().ok_or_else(|| Refusal::new(400, "No session running"))
+        self.live()
+            .ok_or_else(|| Refusal::new(400, "No session running"))
     }
 
     /// `GET ice_servers`.
     pub fn ice_servers(&self, sid: &str) -> Result<Value, Refusal> {
         self.require_running(sid)?;
-        let servers: Vec<Value> = self.host().ice_servers().iter().map(|s| s.to_reactor_json()).collect();
+        let servers: Vec<Value> = self
+            .host()
+            .ice_servers()
+            .iter()
+            .map(|s| s.to_reactor_json())
+            .collect();
         Ok(json!({"ice_servers": servers}))
     }
 
@@ -130,25 +138,43 @@ impl Reactor {
         }
         conns.insert(
             id,
-            Conn { gen: 0, answer: Answer::None, candidates: Vec::new(), peer: None, mapping: HashMap::new() },
+            Conn {
+                gen: 0,
+                answer: Answer::None,
+                candidates: Vec::new(),
+                peer: None,
+                mapping: HashMap::new(),
+            },
         );
         Ok(json!({"connection_id": id, "track_map": Reactor::live_track_map(&live)}))
     }
 
     /// `POST`/`PUT sdp_params`: starts answering `params.sdp_offer`.
-    pub fn offer(&self, sid: &str, cid: u32, params: SdpParams, header: Option<&str>) -> Result<Value, Refusal> {
+    pub fn offer(
+        &self,
+        sid: &str,
+        cid: u32,
+        params: SdpParams,
+        header: Option<&str>,
+    ) -> Result<Value, Refusal> {
         let live = self.require_running(sid)?;
         if params.sdp_offer.trim().is_empty() {
             return Err(Refusal::new(422, "sdp_offer is required"));
         }
         if let Some(c) = &params.ice_credentials {
             if !ice_chars_ok(&c.ufrag, 4) || !ice_chars_ok(&c.pwd, 22) {
-                return Err(Refusal::new(422, "ice_credentials: ufrag 4..256 and pwd 22..256 ice-chars"));
+                return Err(Refusal::new(
+                    422,
+                    "ice_credentials: ufrag 4..256 and pwd 22..256 ice-chars",
+                ));
             }
         }
         if params.port_range.is_some() {
             // One shared mux socket serves every peer (design §5.8).
-            tracing::debug!(cid, "port_range ignored: the WebRTC host uses one shared socket");
+            tracing::debug!(
+                cid,
+                "port_range ignored: the WebRTC host uses one shared socket"
+            );
         }
         let seed = WireVersion::from_header(header);
         let (gen, old) = {
@@ -157,7 +183,9 @@ impl Reactor {
                 .iter()
                 .filter(|(id, c)| **id != cid && (c.peer.is_some() || c.answer == Answer::Pending))
                 .count();
-            let c = conns.get_mut(&cid).ok_or_else(|| Refusal::new(404, "Unknown connection"))?;
+            let c = conns
+                .get_mut(&cid)
+                .ok_or_else(|| Refusal::new(404, "Unknown connection"))?;
             let reoffer = c.gen > 0;
             if !reoffer && active >= self.config().max_connections {
                 return Err(Refusal::new(503, "Connection limit reached"));
@@ -235,7 +263,9 @@ impl Reactor {
     pub fn poll_answer(&self, sid: &str, cid: u32) -> Result<AnswerPoll, Refusal> {
         let live = self.require_running(sid)?;
         let mut conns = lock(&live.conns);
-        let c = conns.get_mut(&cid).ok_or_else(|| Refusal::new(404, "Unknown connection"))?;
+        let c = conns
+            .get_mut(&cid)
+            .ok_or_else(|| Refusal::new(404, "Unknown connection"))?;
         match std::mem::replace(&mut c.answer, Answer::Taken) {
             Answer::Ready(a) => Ok(AnswerPoll::Ready(a)),
             Answer::Failed(e) => {
@@ -250,15 +280,26 @@ impl Reactor {
     }
 
     /// `POST ice_candidates`.
-    pub async fn add_candidates(&self, sid: &str, cid: u32, body: Candidates) -> Result<(), Refusal> {
+    pub async fn add_candidates(
+        &self,
+        sid: &str,
+        cid: u32,
+        body: Candidates,
+    ) -> Result<(), Refusal> {
         let live = self.require_running(sid)?;
         let peer = {
             let mut conns = lock(&live.conns);
-            let c = conns.get_mut(&cid).ok_or_else(|| Refusal::new(404, "Unknown connection"))?;
+            let c = conns
+                .get_mut(&cid)
+                .ok_or_else(|| Refusal::new(404, "Unknown connection"))?;
             match &c.peer {
                 Some(p) => Some(p.clone()),
                 None => {
-                    for cand in body.candidates.iter().filter(|c| !c.candidate.trim().is_empty()) {
+                    for cand in body
+                        .candidates
+                        .iter()
+                        .filter(|c| !c.candidate.trim().is_empty())
+                    {
                         if c.candidates.len() < self.config().max_candidates {
                             c.candidates.push(cand.candidate.clone());
                         }
@@ -268,7 +309,11 @@ impl Reactor {
             }
         };
         if let Some(p) = peer {
-            for cand in body.candidates.iter().filter(|c| !c.candidate.trim().is_empty()) {
+            for cand in body
+                .candidates
+                .iter()
+                .filter(|c| !c.candidate.trim().is_empty())
+            {
                 let _ = p.add_remote_candidate(&cand.candidate).await;
             }
         }
