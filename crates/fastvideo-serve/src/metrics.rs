@@ -7,9 +7,18 @@
 //!   `fv_http_request_duration_seconds{method,route}` (route = the matched
 //!   template, never the raw path, so ids do not explode cardinality);
 //! - `fv_jobs_submitted_total{api}`, `fv_jobs_finished_total{api,status}`,
-//!   `fv_job_duration_seconds{api}` (the engine gate);
+//!   `fv_job_duration_seconds{api,model}` (submit to the terminal store
+//!   write), `fv_job_queue_wait_seconds{model}` (submit to the engine's
+//!   `Started`), `fv_job_inference_seconds{model}` (`Started` to the
+//!   engine's terminal event): the engine gate, `model` = the job's model
+//!   id (one of the configured models);
 //! - `fv_engine_queued{priority}`, `fv_engine_running`, `fv_engine_sessions`,
-//!   `fv_ready` (refreshed on scrape).
+//!   `fv_engine_resident_models`, `fv_engine_model_loads_total`,
+//!   `fv_engine_model_swaps_total`, `fv_engine_model_load_seconds{model}`
+//!   (the last load's wall time), `fv_ready` (refreshed on scrape).
+//!
+//! The series are listed for operators in docs/serve/tracing.md
+//! ("Prometheus metrics").
 //! - `fv_encoder_restart_duration_seconds{codec,spare}` and
 //!   `fv_encoder_restarts_total{codec,spare}`: keyframe restarts of the
 //!   ffmpeg pipe encoders (director, Reactor), from the restart to the new

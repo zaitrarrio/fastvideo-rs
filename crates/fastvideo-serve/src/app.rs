@@ -191,6 +191,7 @@ pub fn build_engine_with_clock(
                     let cfg = EngineConfig {
                         queue_max: c.limits.queue_max,
                         output_dir: c.server.state_dir.join("engine-out"),
+                        job_deadline: c.engine.job_deadline(),
                         ..EngineConfig::default()
                     };
                     return EngineService::start(cfg, vec![Box::new(b)])
@@ -213,6 +214,7 @@ pub fn build_engine_with_clock(
         swap: c.engine.swap,
         tier_overrides: c.engine.tier_overrides.iter().map(|(k, v)| (k.clone(), ModelId::new(v))).collect(),
         output_dir: c.server.state_dir.join("engine-out"),
+        job_deadline: c.engine.job_deadline(),
         ..EngineConfig::default()
     };
     EngineService::start(cfg, backends).map_err(|e| anyhow!("starting the engine: {e}"))

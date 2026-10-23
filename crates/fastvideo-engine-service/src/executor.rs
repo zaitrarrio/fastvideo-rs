@@ -23,8 +23,8 @@ use std::time::{Duration, Instant};
 use fastvideo_protocol::{ApiError, ModelId};
 
 use crate::backend::{ClipSink, CollectSink, EngineBackend, LoadEvent, NullSink, SessionId};
-use crate::cancel::{is_cancel, OutputMode, StepControl, StepEvent};
 use crate::cancel::CancelToken;
+use crate::cancel::{is_cancel, Deadline, OutputMode, StepControl, StepEvent};
 use crate::pool::{Residency, Warmup};
 use crate::scheduler::{Dispatch, QueueItem};
 use crate::service::{EngineEvent, Shared};
@@ -247,12 +247,16 @@ fn load(sh: &Shared, idx: usize, backend: &mut dyn EngineBackend, model: &ModelI
         );
         sh.changed(&st);
     };
+    let t_load = Instant::now();
     let r = backend.load(model, &mut obs);
+    let took = t_load.elapsed().as_secs_f64();
     let mut st = sh.lock();
     match &r {
         Ok(()) => {
             st.pool.set(idx, model, Residency::Resident);
             st.sched.exec_mut(idx).resident.insert(model.clone());
+            st.counters.loads += 1;
+            st.counters.load_seconds.insert(model.clone(), took);
             if boot && !backend.warmup_pending(model).is_empty() {
                 st.pool.set_warmup(idx, model, Warmup::Pending);
             }
@@ -286,6 +290,7 @@ fn swap_in(sh: &Shared, idx: usize, backend: &mut dyn EngineBackend, model: &Mod
         st.pool.set(idx, &m, Residency::Unloaded);
         sh.changed(&st);
     }
+    sh.lock().counters.swaps += 1;
     load(sh, idx, backend, model, false)
 }
 
@@ -293,11 +298,19 @@ fn swap_in(sh: &Shared, idx: usize, backend: &mut dyn EngineBackend, model: &Mod
 const TIMELINE_MARKS: usize = 256;
 
 fn run_job(sh: &Arc<Shared>, idx: usize, backend: &mut dyn EngineBackend, it: QueueItem) {
-    let Some((tx, cancel, job, mode, trace, queued_ns)) = ({
+    let Some((tx, cancel, job, mode, trace, queued_ns, deadline)) = ({
         let st = sh.lock();
-        st.jobs
-            .get(&it.job)
-            .map(|e| (e.tx.clone(), e.cancel.clone(), e.job.clone(), e.mode.clone(), e.trace, e.queued_ns))
+        st.jobs.get(&it.job).map(|e| {
+            (
+                e.tx.clone(),
+                e.cancel.clone(),
+                e.job.clone(),
+                e.mode.clone(),
+                e.trace,
+                e.queued_ns,
+                e.deadline,
+            )
+        })
     }) else {
         sh.lock().sched.finish(idx);
         return;
@@ -307,23 +320,29 @@ fn run_job(sh: &Arc<Shared>, idx: usize, backend: &mut dyn EngineBackend, it: Qu
         t.span_since(fastvideo_trace::Comp::Queue, "wait", queued_ns, idx as i64);
         fastvideo_trace::now_ns()
     });
-    let _ = tx.send(EngineEvent::Started);
+    tx.send(EngineEvent::Started);
     let t0 = Instant::now();
     let result = (|| {
         cancel.check()?;
         let resident = sh.lock().sched.exec(idx).resident.contains(&job.model);
         if !resident {
-            let _ = tx.send(EngineEvent::Stage { name: "load" });
+            tx.send(EngineEvent::Stage { name: "load" });
             swap_in(sh, idx, backend, &job.model)?;
         }
         let etx = tx.clone();
         let mut ctl = StepControl::new(cancel.clone(), mode.clone(), move |ev| {
-            let _ = etx.send(match ev {
+            etx.send(match ev {
                 StepEvent::Stage(name) => EngineEvent::Stage { name },
                 StepEvent::Progress { step, total } => EngineEvent::Progress { step, total },
                 StepEvent::Log(l) => EngineEvent::Log(l),
             });
         });
+        // The deadline counts the generation only (an on-demand load is
+        // not cancellable at a step and has its own cost).
+        let deadline = deadline.map(Deadline::after);
+        if let Some(d) = &deadline {
+            ctl = ctl.with_deadline(d.clone());
+        }
         if let Some(t) = trace {
             // Marks storage is allocated here, before the run.
             let pool = backend.marks(TIMELINE_MARKS).unwrap_or_else(|| Box::new(fastvideo_trace::HostMarks));
@@ -338,7 +357,13 @@ fn run_job(sh: &Arc<Shared>, idx: usize, backend: &mut dyn EngineBackend, it: Qu
         let generated = backend.generate(&job, sink, &ctl);
         // Device marks resolve on the trace drain thread, not here.
         ctl.finish_timeline();
-        let mut out = generated?;
+        // Past the deadline the backend unwinds with whatever its cancel
+        // path returns (`Cancelled` from the hooks): the job failed by
+        // `Timeout`, not by a user's cancel.
+        let mut out = generated.map_err(|e| match &deadline {
+            Some(d) if d.tripped() => d.error(),
+            _ => e,
+        })?;
         if mode == OutputMode::Frames {
             if out.frames.is_none() {
                 out.frames = Some(std::mem::take(&mut collect.frames));
@@ -367,7 +392,7 @@ fn run_job(sh: &Arc<Shared>, idx: usize, backend: &mut dyn EngineBackend, it: Qu
     let mut st = sh.lock();
     st.sched.finish(idx);
     st.jobs.remove(&it.job);
-    let _ = tx.send(ev);
+    tx.send(ev);
     sh.changed(&st);
 }
 

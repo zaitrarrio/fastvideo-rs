@@ -256,6 +256,15 @@ async fn metrics_text(State(h): State<Health>) -> Response {
     metrics::gauge!("fv_engine_queued", "priority" => "stream").set(s.queued_stream as f64);
     metrics::gauge!("fv_engine_running").set(s.running as f64);
     metrics::gauge!("fv_engine_sessions").set(s.sessions as f64);
+    // Residency and load counters (docs/serve/tracing.md "Prometheus
+    // metrics"); `model` is one of the configured ids.
+    let c = engine.counters();
+    metrics::gauge!("fv_engine_resident_models").set(c.resident as f64);
+    metrics::counter!("fv_engine_model_loads_total").absolute(c.loads);
+    metrics::counter!("fv_engine_model_swaps_total").absolute(c.swaps);
+    for (model, secs) in &c.load_seconds {
+        metrics::gauge!("fv_engine_model_load_seconds", "model" => model.to_string()).set(*secs);
+    }
     metrics::gauge!("fv_ready").set(if h.phase() == Phase::Ready { 1.0 } else { 0.0 });
     handle.run_upkeep();
     ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], handle.render()).into_response()

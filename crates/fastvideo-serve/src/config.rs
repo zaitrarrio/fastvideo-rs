@@ -41,6 +41,7 @@
 //! | `FV_DISPATCH_FAMILIES`, `FV_DISPATCH_SESSIONS`, `FV_DISPATCH_DIRECT_UPLOAD`, `FV_DISPATCH_UPLOAD_PART_MIB` | `dispatch.families` / `sessions` / `direct_upload` / `upload_part_mib` (family Durable Objects, docs/serve/dispatch-do-family.md) |
 //! | `FV_DISPATCH_FRONT` (`0` \| `1`), `FV_DISPATCH_ENDPOINT`, `FV_DISPATCH_MODEL_FAMILIES` (`model=family,…`), `FV_DISPATCH_MAX_QUEUED` | `dispatch.front` / `endpoint` / `model_families` / `max_queued` (and `FV_DISPATCH_STATUS_S`: `dispatch.status_s`): an API front behind the edge Worker (docs/serve/edge-control-plane.md) |
 //! | `FV_MP4_FRAGMENTED` (`0` \| `1`) | `engine.mp4_fragmented` (append-only MP4 for overlapped uploads) |
+//! | `FV_JOB_DEADLINE_S` | `engine.job_deadline_s` (wall-clock limit of one job's generation; 0 = none) |
 //! | `FV_ARTIFACTS_DIR` | `artifacts.local_dir` (local artifacts shared by processes on one host) |
 //! | `FV_JOBS_HEARTBEAT_S` | `jobs.heartbeat_s` (D1 heartbeat of unfinished jobs) |
 //! | `FV_UPSAMPLER_BASE_URL`, `FV_UPSAMPLER_MODEL`, `FV_UPSAMPLER_TIMEOUT_MS`, `FV_UPSAMPLER_HEDGE`, `FV_UPSAMPLER_DECK_SIZE`, `FV_UPSAMPLER_DEFAULT_ON`, `FV_UPSAMPLER_API_KEY_ENV` | `[upsampler]` (a base URL alone creates it; docs/serve/prompt-upsampling.md) |
@@ -384,6 +385,12 @@ pub struct EngineCfg {
     /// instead of faststart, so a direct upload can follow the file while it
     /// is written (docs/serve/dispatch-do-family.md §7.2).
     pub mp4_fragmented: bool,
+    /// Wall-clock limit, in seconds, of one batch job's generation (from the
+    /// start of `generate`, after any on-demand load; `FV_JOB_DEADLINE_S`).
+    /// Past it the engine cancels the job at its next denoise step and it
+    /// fails with `timeout` (HTTP 504 on a sync route). 0: no limit.
+    /// Streaming sessions are not bounded by it. At most a day.
+    pub job_deadline_s: u64,
 }
 
 impl Default for EngineCfg {
@@ -396,7 +403,19 @@ impl Default for EngineCfg {
             post_encoder: "auto".into(),
             echo_model: false,
             mp4_fragmented: false,
+            job_deadline_s: 0,
         }
+    }
+}
+
+impl EngineCfg {
+    /// The longest `job_deadline_s` accepted (a day): a larger value is a
+    /// unit mistake (milliseconds), not a deadline.
+    pub const JOB_DEADLINE_MAX_S: u64 = 86_400;
+
+    /// `job_deadline_s` as the engine takes it (`None` for 0).
+    pub fn job_deadline(&self) -> Option<std::time::Duration> {
+        (self.job_deadline_s > 0).then(|| std::time::Duration::from_secs(self.job_deadline_s))
     }
 }
 
@@ -1400,6 +1419,13 @@ impl Config {
         if let Some(v) = env.var("FV_FAKE_H3_1080P") {
             self.engine.fake.h3_1080p = matches!(v.trim(), "1" | "true" | "on" | "yes");
         }
+        if let Some(v) = env.var("FV_JOB_DEADLINE_S") {
+            self.engine.job_deadline_s = v.trim().parse().map_err(|_| {
+                ConfigError::Invalid(format!(
+                    "FV_JOB_DEADLINE_S={v} is not a number of seconds (0 = none)"
+                ))
+            })?;
+        }
         if let Some(v) = env.var("FV_FAKE_DEVICE") {
             let v = v.trim();
             self.engine.fake.device = (!v.is_empty()).then(|| v.to_owned());
@@ -1656,6 +1682,13 @@ impl Config {
             "auto" | "nvenc" | "cpu-test-x264" => {}
             other => return Err(ConfigError::Invalid(format!("engine.post_encoder: unknown `{other}`"))),
         }
+        if self.engine.job_deadline_s > EngineCfg::JOB_DEADLINE_MAX_S {
+            return Err(ConfigError::Invalid(format!(
+                "engine.job_deadline_s: {} is more than a day ({}); seconds, 0 = none",
+                self.engine.job_deadline_s,
+                EngineCfg::JOB_DEADLINE_MAX_S
+            )));
+        }
         match self.director.encoder.as_str() {
             "auto" | "nvenc" | "openh264" | "cpu-test-x264" => {}
             other => {
@@ -1818,6 +1851,35 @@ mod tests {
 
     fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn job_deadline_default_env_and_validation() {
+        let mut c = Config::default();
+        assert_eq!(c.engine.job_deadline_s, 0, "off by default");
+        assert_eq!(c.engine.job_deadline(), None);
+        c.validate().unwrap();
+        c.apply_env(&env(&[("FV_JOB_DEADLINE_S", "90")])).unwrap();
+        assert_eq!(
+            c.engine.job_deadline(),
+            Some(std::time::Duration::from_secs(90))
+        );
+        c.validate().unwrap();
+        c.apply_env(&env(&[("FV_JOB_DEADLINE_S", "0")])).unwrap();
+        assert_eq!(c.engine.job_deadline(), None);
+        assert!(c
+            .apply_env(&env(&[("FV_JOB_DEADLINE_S", "ninety")]))
+            .is_err());
+        assert!(c.apply_env(&env(&[("FV_JOB_DEADLINE_S", "-1")])).is_err());
+        let t: Config = toml::from_str("[engine]\njob_deadline_s = 600\n").unwrap();
+        assert_eq!(
+            t.engine.job_deadline(),
+            Some(std::time::Duration::from_secs(600))
+        );
+        t.validate().unwrap();
+        let t: Config = toml::from_str("[engine]\njob_deadline_s = 600000\n").unwrap();
+        let err = t.validate().unwrap_err().to_string();
+        assert!(err.contains("job_deadline_s"), "{err}");
     }
 
     #[test]
