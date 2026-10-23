@@ -159,7 +159,7 @@ tasks:
       - '{{if .DPH}}MAX_DPH={{.DPH}} {{end}}{{if .MINUTES}}MAX_MINUTES={{.MINUTES}} {{end}}{{if .GPU}}FV_OFFER_QUERY_EXTRA=gpu_name={{.GPU}} {{end}}bash scripts/gpu/validate.sh offers {{.TIER}}'
 
   run:
-    desc: 'Rent and run a tier (TIER=kernels|parity|clip|compare)'
+    desc: 'Rent and run a tier (TIER=kernels|parity|clip)'
     cmds:
       - '{{if .DPH}}MAX_DPH={{.DPH}} {{end}}{{if .MINUTES}}MAX_MINUTES={{.MINUTES}} {{end}}{{if .GPU}}FV_OFFER_QUERY_EXTRA=gpu_name={{.GPU}} {{end}}bash scripts/gpu/validate.sh run {{.TIER}}{{if .SKIP_LOCAL}} --skip-local{{end}}'
 
@@ -182,10 +182,6 @@ tasks:
   weights:verify:
     desc: 'On a box: prove the H3 / FastH3 / LTX-2.5 weight trees complete (no GPU needed)'
     cmds: ['bash scripts/gpu/verify-weights.sh fasth3-8step fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage']
-
-  compare:
-    desc: Compare tier — our stack against upstream FastVideo on one box (~$0.30)
-    cmds: [{ task: run, vars: { TIER: compare } }]
 
   oracle:
     desc: Oracle tier — our text encoder and one DiT step vs transformers/diffusers (~$1.50)

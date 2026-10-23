@@ -160,7 +160,7 @@ def offers(tier: str, gpu: str) -> list[dict]:
     Mirrors the filters `validate.sh tier_query` uses, so what the page shows is
     what a run would actually rent.
     """
-    need = {"gen": 24, "clip": 24, "compare": 24, "parity": 16, "kernels": 8}.get(tier, 24)
+    need = {"gen": 24, "clip": 24, "parity": 16, "kernels": 8}.get(tier, 24)
     q = {
         "num_gpus": {"eq": 1},
         "gpu_ram": {"gte": need * 1000},
