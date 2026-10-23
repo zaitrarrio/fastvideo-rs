@@ -974,4 +974,4 @@ shards + configs), `tokenizer/`, `processor/`, `audio_vae/`, `vae/diffusion_pyto
 and LICENSE are byte-identical to `h3-base` @ `42ed227` and `h3-8step` @ `3da2ddf`; V2-NVFP4's root JSONs
 (`fastvideo_inference.json`, `checkpoint_*.json`, `modular_model_index.json`), schedulers, NOTICE and
 LICENSE-Qwen3-VL equal `h3-8step`'s, and the 4-step's schedulers equal `h3-base`'s. The small files neither R2 tree
-holds come from the Hub at the pinned revisions (`fasth3-nvfp4-pod.sh`). Neither tree is on the 500 GB EU volume.
+holds come from the Hub at the pinned revisions (`scripts/gpu/experiments/fasth3-nvfp4-pod.sh`). Neither tree is on the 500 GB EU volume.

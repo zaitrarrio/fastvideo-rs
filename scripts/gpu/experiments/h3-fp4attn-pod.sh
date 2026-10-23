@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs ON the H3 sparse FP4 attention pod (scripts/gpu/h3-fp4attn-validate.sh; docs/ports/fasth3-sparse-fp4-attn.md).
+# Runs ON the H3 sparse FP4 attention pod (scripts/gpu/experiments/h3-fp4attn-validate.sh; docs/ports/fasth3-sparse-fp4-attn.md).
 # One RTX PRO 6000 on a fastvideo-rs runtime image (its fv-gpucheck and scripts/gpu); this script itself arrives in
 # the pod's env (FV_POD_SCRIPT_B64), so it can run on an image that predates it. The R2 plan (presigned GETs from
 # the read-only key) is /opt/fv/plan.json; h3-base from the EU volume at /workspace (read only) or, in r2 mode,

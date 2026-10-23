@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # FastH3 Trim GPU validation on ONE Runpod RTX PRO 6000 (docs/ports/h3-trim.md §6): upstream FastVideo parity
 # (oracle dumps, per-step latents, decoded video + audio PSNR) and the timing against FastH3 V2, on the pod script
-# scripts/gpu/h3-trim-pod.sh.
+# scripts/gpu/experiments/h3-trim-pod.sh.
 #
 #   h3-trim-validate.sh up BIN          create the pod (+ a detached wall-clock backstop that deletes it); BIN is the
 #                                       release fv-gpucheck to run (built from this tree on the build pod)
@@ -21,10 +21,11 @@
 # Trim's adaln_rank); FV_PROMPT / FV_SEED / FV_H / FV_W / FV_FRAMES / FV_SKIP (passed to the pod script).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source-path=SCRIPTDIR source=runpod-cuda.sh
-source "$HERE/runpod-cuda.sh"
-# shellcheck source-path=SCRIPTDIR source=volumes.sh
-source "$HERE/volumes.sh"
+GPU="$(cd "$HERE/.." && pwd)"   # scripts/gpu: the shared tooling these drivers use
+# shellcheck source-path=SCRIPTDIR/.. source=runpod-cuda.sh
+source "$GPU/runpod-cuda.sh"
+# shellcheck source-path=SCRIPTDIR/.. source=volumes.sh
+source "$GPU/volumes.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 CAP_S="${FV_POD_CAP_S:-4800}"
@@ -83,7 +84,7 @@ case "$cmd" in
     # run); in r2 mode also h3-base's text encoder, tokenizer and audio VAE (not its 70 GB transformer).
     trees=(fasth3-trim-8step h3-8step)
     [[ "$mode" == r2 ]] && trees+=(h3-base)
-    python3 "$HERE/r2-weights.py" plan "${trees[@]}" --ttl 10800 --out "$tmp/plan-all.json"
+    python3 "$GPU/r2-weights.py" plan "${trees[@]}" --ttl 10800 --out "$tmp/plan-all.json"
     python3 - "$tmp/plan-all.json" "$tmp/b/plan.json" <<'PYEOF'
 import fnmatch, json, os, sys
 plan = json.load(open(sys.argv[1]))
@@ -104,11 +105,11 @@ print(" ".join(f"{t['dest']}:{len(t['files'])}f/{t['total_bytes'] / 1e9:.1f}GB" 
 PYEOF
     # BIN "-": the image's own fv-gpucheck (a CI runtime image of this branch, FV_RUNTIME_IMAGE=…:sha-<commit>).
     [[ "$bin" == - ]] || cp "$bin" "$tmp/b/fv-gpucheck"
-    cp "$HERE/r2-fetch.py" "$HERE/h3-trim-pod.sh" "$tmp/b/"
-    cp -r "$HERE/upstream/oracle_site" "$HERE"/upstream/{oracle_dump.py,oracle_fastvideo.py,bench_fastvideo.py,setup.sh,av_psnr.py} "$tmp/b/upstream/"
+    cp "$GPU/r2-fetch.py" "$HERE/h3-trim-pod.sh" "$tmp/b/"
+    cp -r "$GPU/upstream/oracle_site" "$GPU"/upstream/{oracle_dump.py,oracle_fastvideo.py,bench_fastvideo.py,setup.sh,av_psnr.py} "$tmp/b/upstream/"
     tar czf "$tmp/bundle.tgz" -C "$tmp/b" .
     sha="$(sha256sum "$tmp/bundle.tgz" | cut -d' ' -f1)"
-    url="$(python3 "$HERE/r2-weights.py" --bucket fv-weights-staging put-temp "$tmp/bundle.tgz" --key "tmp/h3-trim-bundle-$sha.tgz" --ttl 10800)"
+    url="$(python3 "$GPU/r2-weights.py" --bucket fv-weights-staging put-temp "$tmp/bundle.tgz" --key "tmp/h3-trim-bundle-$sha.tgz" --ttl 10800)"
     log "balance \$$bal; bundle ${sha:0:12} ($(du -h "$tmp/bundle.tgz" | cut -f1)) staged"
     # The runtime image has curl and sha256sum but no Python: uv brings one. The pod deletes itself 20 min after
     # DONE (Runpod injects a pod-scoped RUNPOD_API_KEY / RUNPOD_POD_ID); the local backstop deletes it regardless.
@@ -122,8 +123,8 @@ sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
     up_dump_url="" up_dump_sha="" up_ref_url=""
     if [[ -n "${FV_UP_DUMP:-}" ]]; then
       up_dump_sha="$(sha256sum "$FV_UP_DUMP" | cut -d' ' -f1)"
-      up_dump_url="$(python3 "$HERE/r2-weights.py" --bucket fv-weights-staging put-temp "$FV_UP_DUMP" --key "tmp/h3-trim-bundle-updump-$up_dump_sha.tar" --ttl 10800)"
-      up_ref_url="$(python3 "$HERE/r2-weights.py" --bucket fv-weights-staging put-temp "${FV_UP_REF:?FV_UP_REF with FV_UP_DUMP}" --key "tmp/h3-trim-bundle-upref-$up_dump_sha.mp4" --ttl 10800)"
+      up_dump_url="$(python3 "$GPU/r2-weights.py" --bucket fv-weights-staging put-temp "$FV_UP_DUMP" --key "tmp/h3-trim-bundle-updump-$up_dump_sha.tar" --ttl 10800)"
+      up_ref_url="$(python3 "$GPU/r2-weights.py" --bucket fv-weights-staging put-temp "${FV_UP_REF:?FV_UP_REF with FV_UP_DUMP}" --key "tmp/h3-trim-bundle-upref-$up_dump_sha.mp4" --ttl 10800)"
       log "upstream dump ${up_dump_sha:0:12} staged: this pod reuses it"
     fi
     export FVX_URL="$url" FVX_UPD="$up_dump_url" FVX_UPR="$up_ref_url"
@@ -179,8 +180,8 @@ sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization:
     if rest GET "/pods/$id" >/dev/null 2>&1; then log "WARNING: pod $id still listed"; exit 1; fi
     log "pod $id deleted (GET /pods/$id: not found)"
     if [[ -n "${sha:-}" ]]; then
-      python3 "$HERE/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "tmp/h3-trim-bundle-$sha" || true
-      [[ -z "${up_sha:-}" ]] || for k in updump upref; do python3 "$HERE/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "tmp/h3-trim-bundle-$k-$up_sha" || true; done
+      python3 "$GPU/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "tmp/h3-trim-bundle-$sha" || true
+      [[ -z "${up_sha:-}" ]] || for k in updump upref; do python3 "$GPU/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "tmp/h3-trim-bundle-$k-$up_sha" || true; done
     else
       log "bundle sha256 not readable from pod $id: its staged bundle is left under tmp/h3-trim-bundle-; remove it by its full key"
     fi

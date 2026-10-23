@@ -3,7 +3,7 @@
 Two levers on the time an H3 denoise spends with the GPU idle. Both sit at the pipeline, step and graph level, and
 neither touches a per-op kernel. Code: `crates/fastvideo-cudarc/src/h3/step_graph.rs`. Measured on one RTX PRO 6000
 (2026-10-14, image `fastvideo-rs-runtime:sha-edd18a9`, pod `hoirrt9s4b3h3t`, EU-NL-1). Results:
-`artifacts/perf/h3-denoise-graphs/run-2026-10-14/` (`summary.txt` from `scripts/gpu/h3-graphs-summary.py`).
+`artifacts/perf/h3-denoise-graphs/run-2026-10-14/` (`summary.txt` from `scripts/gpu/experiments/h3-graphs-summary.py`).
 
 | lever | flag | output | default |
 |---|---|---|---|
@@ -134,16 +134,16 @@ lever makes a kernel faster. They remove idle time.
   - It fits a fixed-prompt loop (benchmarks, re-renders of one prompt at other seeds), not serving.
 - **h3-turbo (MXFP8, 768p) was not measured.** No RTX PRO 6000 was in stock in EU-RO-1, where the EU volume holds its
   MXFP8 tree. Its 4-step VSA shape matches the 4-step NVFP4 cells: expect (a) to save about 1.4% at 768p, (b) 0.6-0.7%
-  more on a replay, and neither to change a bit. Measure it with `h3-graphs-validate.sh` on an EU-RO-1 pod, where
+  more on a replay, and neither to change a bit. Measure it with `scripts/gpu/experiments/h3-graphs-validate.sh` on an EU-RO-1 pod, where
   `FV_CKS=turbo` runs it.
 
 ## 6. Reproduce
 
 ```bash
-scripts/gpu/h3-graphs-validate.sh up ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-<7>   # backstop marker fv-h3graphs-backstop-<pod>
-scripts/gpu/h3-graphs-validate.sh status <pod>
-scripts/gpu/h3-graphs-validate.sh fetch <pod> DIR && scripts/gpu/h3-graphs-validate.sh down <pod>
-python3 scripts/gpu/h3-graphs-summary.py DIR
+scripts/gpu/experiments/h3-graphs-validate.sh up ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-<7>   # backstop marker fv-h3graphs-backstop-<pod>
+scripts/gpu/experiments/h3-graphs-validate.sh status <pod>
+scripts/gpu/experiments/h3-graphs-validate.sh fetch <pod> DIR && scripts/gpu/experiments/h3-graphs-validate.sh down <pod>
+python3 scripts/gpu/experiments/h3-graphs-summary.py DIR
 ```
 
 Spend: one pod for 46 min at $2.49/hr, about $1.91.

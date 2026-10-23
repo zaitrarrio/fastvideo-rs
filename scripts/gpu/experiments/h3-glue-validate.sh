@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # H3 glue-fusion timing on ONE Runpod RTX PRO 6000 (docs/perf/h3-glue-fusion.md): two fv-gpucheck binaries, the
-# branch point and the fusions, on the same pod, by the pod script scripts/gpu/h3-glue-pod.sh.
+# branch point and the fusions, on the same pod, by the pod script scripts/gpu/experiments/h3-glue-pod.sh.
 #
 #   h3-glue-validate.sh up BASE_BIN NEW_BIN   create the pod (+ a detached wall-clock backstop that deletes it)
 #   h3-glue-validate.sh status <pod>          status.tsv, the log tail, DONE
@@ -17,8 +17,9 @@
 # is 3 above it); FV_MAX_DPH (default 2.70); FV_SKIP, FV_ONLY_NVFP4 (passed to the pod script); FV_RUNTIME_IMAGE.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source-path=SCRIPTDIR source=volumes.sh
-source "$HERE/volumes.sh"
+GPU="$(cd "$HERE/.." && pwd)"   # scripts/gpu: the shared tooling these drivers use
+# shellcheck source-path=SCRIPTDIR/.. source=volumes.sh
+source "$GPU/volumes.sh"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 CAP_S="${FV_POD_CAP_S:-3600}"
@@ -75,7 +76,7 @@ case "$cmd" in
     elif [[ "$mode" == r2 ]]; then trees+=(h3-base h3-base/transformer_prequant_4step-vsa_mxfp8 FastH3-4-step-Preview-v1-LoRA); fi
     ro=/root/.config/fv
     FV_WEIGHTS_R2_ACCESS_KEY_ID="$(cat "$ro/r2_weights_ro_access_key_id")" FV_WEIGHTS_R2_SECRET_ACCESS_KEY="$(cat "$ro/r2_weights_ro_secret_access_key")" \
-      python3 "$HERE/r2-weights.py" plan "${trees[@]}" --ttl 10800 --out "$tmp/plan-all.json"
+      python3 "$GPU/r2-weights.py" plan "${trees[@]}" --ttl 10800 --out "$tmp/plan-all.json"
     python3 - "$tmp/plan-all.json" "$tmp/b" <<'PYEOF'
 import fnmatch, json, os, sys
 plan = json.load(open(sys.argv[1]))
@@ -96,11 +97,11 @@ PYEOF
     rm -f "$tmp/plan-all.json"
     cp "$base_bin" "$tmp/b/base/fv-gpucheck" && cp "$new_bin" "$tmp/b/new/fv-gpucheck"
     chmod 755 "$tmp/b/base/fv-gpucheck" "$tmp/b/new/fv-gpucheck"
-    cp "$HERE/r2-fetch.py" "$HERE/h3-glue-pod.sh" "$HERE/prompts-hd5.json" "$tmp/b/"
+    cp "$GPU/r2-fetch.py" "$HERE/h3-glue-pod.sh" "$GPU/prompts-hd5.json" "$tmp/b/"
     tar czf "$tmp/bundle.tgz" -C "$tmp/b" .
     rm -rf "$tmp/b"
     sha="$(sha256sum "$tmp/bundle.tgz" | cut -d' ' -f1)"
-    url="$(python3 "$HERE/r2-weights.py" --bucket fv-weights-staging put-temp "$tmp/bundle.tgz" --key "tmp/h3-glue-bundle-$sha.tgz" --ttl 10800)"
+    url="$(python3 "$GPU/r2-weights.py" --bucket fv-weights-staging put-temp "$tmp/bundle.tgz" --key "tmp/h3-glue-bundle-$sha.tgz" --ttl 10800)"
     log "balance \$$bal; bundle ${sha:0:12} ($(du -h "$tmp/bundle.tgz" | cut -f1)) staged"
     rm -f "$tmp/bundle.tgz"
     # The runtime image has curl and sha256sum but no Python: uv brings one (r2-fetch.py, the prompt file). The pod
@@ -122,7 +123,7 @@ sleep 600; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: 
       } + (if $mode == "volume" then {containerDiskInGb: 150, networkVolumeId: $vol, volumeMountPath: "/workspace"}
            else {containerDiskInGb: 400} end)')"
     unset FVX_URL
-    unstage() { python3 "$HERE/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "tmp/h3-glue-bundle-$sha" >&2 || true; }
+    unstage() { python3 "$GPU/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "tmp/h3-glue-bundle-$sha" >&2 || true; }
     resp="$(rest POST /pods <<<"$payload")" || { log "pod create failed: $(head -c 600 <<<"$resp")"; unstage; exit 1; }
     id="$(jq -r '.id // empty' <<<"$resp")"
     [[ -n "$id" ]] || { log "pod create failed: $(head -c 400 <<<"$resp")"; unstage; exit 1; }
@@ -152,7 +153,7 @@ sleep 600; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: 
     if rest GET "/pods/$id" >/dev/null 2>&1; then log "WARNING: pod $id still listed"; exit 1; fi
     log "pod $id deleted (GET /pods/$id: not found)"
     if [[ -n "$own" ]]; then
-      python3 "$HERE/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "tmp/h3-glue-bundle-$own" || true
+      python3 "$GPU/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "tmp/h3-glue-bundle-$own" || true
     else
       log "bundle sha256 not readable from pod $id: its staged bundle is left under tmp/h3-glue-bundle-; remove it by its full key"
     fi

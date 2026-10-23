@@ -41,7 +41,7 @@ The gate's **performance** section asks for at least 1.03x on `denoise_s`. A dec
 untouched (1.00x), so every decoder-only pair below reads "fail" overall. **The quality column is the verdict that
 matters for options 5 and 6.**
 
-Scripts: `scripts/gpu/h3-tier-options-{validate,pod}.sh` and `h3-tier-options-summary.py`. Raw results are in
+Scripts: `scripts/gpu/experiments/h3-tier-options-{validate,pod}.sh` and `h3-tier-options-summary.py`. Raw results are in
 `artifacts/perf/h3-nvfp4-tier-options/` (`summary.md`, per-cell `benchmark.json` and logs, compare / gate reports,
 middle-frame sheets `frame062-480p-*.jpg`).
 
@@ -258,7 +258,7 @@ fv-control presets, recipe trees, catalog, serverless recipes, `scripts/serve/va
 
 **GPU smoke of what shipped** (one RTX PRO 6000, pod `2d8zzz9gsqsop3`, US-NC-1, r2 mode, image
 `fastvideo-rs-runtime:sha-b564268`, this branch's and main's (`cf8a20d`) release `fv-gpucheck`;
-`scripts/gpu/h3-tier-ship-{validate,pod}.sh`; results in `artifacts/perf/h3-nvfp4-tier-ship/`). One prompt
+`scripts/gpu/experiments/h3-tier-ship-{validate,pod}.sh`; results in `artifacts/perf/h3-nvfp4-tier-ship/`). One prompt
 (talking-head, seed 1024), 832x480, 124 frames, `--warm`, one process each. V2 ran on the R2 tree as fetched
 (`--h3-recipe v2-nvfp4 --text-weights h3-base`); main ran it from a folder holding the tree's `transformer/` and
 h3-base's `vae/`, as option 6 measured it.

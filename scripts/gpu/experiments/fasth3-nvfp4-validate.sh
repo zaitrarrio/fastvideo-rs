@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # FastH3 V2 / 4-step NVFP4 apples-to-apples on ONE Runpod RTX PRO 6000 (docs/ports/fasth3-nvfp4.md): upstream
-# FastVideo's RTX PRO 6000 recipe and ours on the same pod, by the pod script scripts/gpu/fasth3-nvfp4-pod.sh.
+# FastVideo's RTX PRO 6000 recipe and ours on the same pod, by the pod script scripts/gpu/experiments/fasth3-nvfp4-pod.sh.
 #
 #   fasth3-nvfp4-validate.sh up IMAGE BIN   create the pod (+ a detached wall-clock backstop that deletes it). IMAGE
 #                                           is ghcr.io/zaitrarrio/fastvideo-rs-upstream-fastvideo-nvfp4:sha-<7>
@@ -21,6 +21,7 @@
 # dense-control transformer); FV_DCS (space-separated data centres to allow; default: any with stock).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GPU="$(cd "$HERE/.." && pwd)"   # scripts/gpu: the shared tooling these drivers use
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 CAP_S="${FV_POD_CAP_S:-6000}"
@@ -64,7 +65,7 @@ case "$cmd" in
     trap 'rm -rf "$tmp"' EXIT
     ro=/root/.config/fv
     FV_WEIGHTS_R2_ACCESS_KEY_ID="$(cat "$ro/r2_weights_ro_access_key_id")" FV_WEIGHTS_R2_SECRET_ACCESS_KEY="$(cat "$ro/r2_weights_ro_secret_access_key")" \
-      python3 "$HERE/r2-weights.py" plan fasth3-v2-nvfp4 fasth3-4step-vsa-nvfp4 h3-8step --ttl 14400 --out "$tmp/plan.json"
+      python3 "$GPU/r2-weights.py" plan fasth3-v2-nvfp4 fasth3-4step-vsa-nvfp4 h3-8step --ttl 14400 --out "$tmp/plan.json"
     flags=()
     [[ "${FV_NO_DENSE:-0}" == 1 ]] && flags+=(--no-dense)
     [[ "${FV_ONLY_V2:-0}" == 1 ]] && flags+=(--only-v2)
@@ -73,14 +74,14 @@ case "$cmd" in
     # The bundle: this branch's fv-gpucheck and scripts/gpu (the image's scripts are main's).
     mkdir -p "$tmp/b"
     cp "$bin" "$tmp/b/fv-gpucheck" && chmod 755 "$tmp/b/fv-gpucheck"
-    cp -r "$HERE" "$tmp/b/gpu"
+    cp -r "$GPU" "$tmp/b/gpu"
     # The plan rides in the bundle (private bucket, SHA-256 checked, removed by `down`): at ~200 kB it is too large
     # for the pod's env (Runpod answered 500).
     base64 -d <"$tmp/plan.b64" | gunzip >"$tmp/b/plan.json" && chmod 600 "$tmp/b/plan.json"
     tar -czf "$tmp/bundle.tgz" -C "$tmp/b" fv-gpucheck gpu plan.json
     rm -rf "$tmp/b"
     sha="$(sha256sum "$tmp/bundle.tgz" | cut -d' ' -f1)"
-    url="$(python3 "$HERE/r2-weights.py" --bucket fv-weights-staging put-temp "$tmp/bundle.tgz" --key "tmp/fasth3-nvfp4-bundle-$sha.tgz" --ttl "$CAP_S")"
+    url="$(python3 "$GPU/r2-weights.py" --bucket fv-weights-staging put-temp "$tmp/bundle.tgz" --key "tmp/fasth3-nvfp4-bundle-$sha.tgz" --ttl "$CAP_S")"
     rm -f "$tmp/bundle.tgz"
     size="$(du -h "$bin" | cut -f1)"
     log "bundle ${sha:0:12} staged, binary $size"
@@ -88,7 +89,7 @@ case "$cmd" in
     # deletes it regardless.
     start='mkdir -p /opt/fv /srv && curl -fsSL --retry 5 -o /opt/fv/bundle.tgz "$FV_BUNDLE_URL" && echo "$FV_BUNDLE_SHA256  /opt/fv/bundle.tgz" | sha256sum -c - >>/srv/log.txt 2>&1 \
 && tar -xzf /opt/fv/bundle.tgz -C /opt/fv && rm -f /opt/fv/bundle.tgz && chmod 600 /opt/fv/plan.json \
-&& (cd /srv && /opt/upstream/tools/bin/python -m http.server 8000 >/dev/null 2>&1 &) && bash /opt/fv/gpu/fasth3-nvfp4-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
+&& (cd /srv && /opt/upstream/tools/bin/python -m http.server 8000 >/dev/null 2>&1 &) && bash /opt/fv/gpu/experiments/fasth3-nvfp4-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
 sleep 600; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; sleep infinity'
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"
@@ -103,7 +104,7 @@ sleep 600; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: 
               + (if $skip != "" then {FV_SKIP: $skip} else {} end))
       }')"
     unset FVX_URL
-    unstage() { python3 "$HERE/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "tmp/fasth3-nvfp4-bundle-$sha" >&2 || true; }
+    unstage() { python3 "$GPU/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "tmp/fasth3-nvfp4-bundle-$sha" >&2 || true; }
     resp="$(rest POST /pods <<<"$payload")" || { log "pod create failed: $(head -c 600 <<<"$resp")"; unstage; exit 1; }
     id="$(jq -r '.id // empty' <<<"$resp")"
     [[ -n "$id" ]] || { log "pod create failed: $(head -c 400 <<<"$resp")"; unstage; exit 1; }
@@ -133,7 +134,7 @@ sleep 600; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: 
     if rest GET "/pods/$id" >/dev/null 2>&1; then log "WARNING: pod $id still listed"; exit 1; fi
     log "pod $id deleted (GET /pods/$id: not found)"
     if [[ -n "$sha" ]]; then
-      python3 "$HERE/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "tmp/fasth3-nvfp4-bundle-$sha" || true
+      python3 "$GPU/r2-weights.py" --bucket fv-weights-staging rm-temp --prefix "tmp/fasth3-nvfp4-bundle-$sha" || true
     else
       log "bundle sha256 not readable from pod $id: remove tmp/fasth3-nvfp4-bundle-<sha>.tgz by its full key"
     fi
