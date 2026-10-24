@@ -606,6 +606,31 @@ fn scope_doc_table_is_generated_from_the_rows() {
 }
 
 #[test]
+fn only_the_test_module_is_stripped() {
+    let text = "fn before() { read(\"FASTVIDEO_A\") }\n#[cfg(test)]\nmod manifest_tests;\n\
+                #[cfg(test)]\nmod tests {\n    fn t() { let s = \"}\"; read(\"FASTVIDEO_B\") }\n}\n\
+                fn after() { read(\"FASTVIDEO_C\") }\n";
+    let (code, strings) = lex(text);
+    let src = Source {
+        rel: "x.rs".into(),
+        code,
+        strings,
+    };
+    let kept = without_tests(&src);
+    assert!(kept.contains("FASTVIDEO_A"));
+    assert!(!kept.contains("FASTVIDEO_B"), "{kept}");
+    assert!(
+        kept.contains("FASTVIDEO_C"),
+        "production code after the module: {kept}"
+    );
+    assert_eq!(
+        kept.lines().count(),
+        text.lines().count(),
+        "line numbers kept"
+    );
+}
+
+#[test]
 fn the_lexer_blanks_comments_and_finds_strings() {
     let (code, strings) =
         lex("let a = \"x // y\"; // FASTVIDEO_GONE\nlet b = r#\"q\"#; /* c */ let c = 'z'; fn f<'a>() {}");
@@ -615,26 +640,62 @@ fn the_lexer_blanks_comments_and_finds_strings() {
     assert_eq!(lits, vec!["x // y", "q"]);
 }
 
-/// The shared runtime files through which Wan (and every CUDA family) reads
-/// the techniques layer: the review's "11 files" (`docs/gaps/2026-10-22-
-/// architecture-review.md` §4.2), which were under `wan/` before plan B1
-/// moved them to `rt/`.
-const RUNTIME_TECHNIQUE_FILES: &[&str] = &[
-    "crates/fastvideo-cudarc/src/rt/attn.rs",
-    "crates/fastvideo-cudarc/src/rt/attn_dc.rs",
-    "crates/fastvideo-cudarc/src/rt/attn_fp4.rs",
-    "crates/fastvideo-cudarc/src/rt/attn_sage.rs",
-    "crates/fastvideo-cudarc/src/rt/conv.rs",
-    "crates/fastvideo-cudarc/src/rt/envflag.rs",
-    "crates/fastvideo-cudarc/src/rt/offload.rs",
-    "crates/fastvideo-cudarc/src/rt/ops.rs",
-    "crates/fastvideo-cudarc/src/rt/quant.rs",
-    "crates/fastvideo-cudarc/src/rt/tensor.rs",
-    "crates/fastvideo-cudarc/src/rt/vsa.rs",
+/// The shared runtime (`crates/fastvideo-cudarc/src/rt/`, every file and
+/// subdirectory): the review's "11 files" through which Wan reads the
+/// techniques layer (`docs/gaps/2026-10-22-architecture-review.md` §4.2,
+/// under `wan/` before plan B1 moved them) and the rest of the runtime every
+/// CUDA family runs on.
+const RUNTIME_DIR: &str = "crates/fastvideo-cudarc/src/rt/";
+
+/// `(row, the specs that reach its reader, why)`: the reviewed family rows
+/// the shared runtime reads on behalf of fewer than all of Wan, H3 and
+/// LTX-2. Every other layered row a runtime file reads must be declared by
+/// all three specs.
+const RUNTIME_FAMILY_ROWS: &[(&str, &[&str], &str)] = &[
+    (
+        "FASTVIDEO_H3_AFFINE",
+        &["h3"],
+        "rt::affine::bits_from_env: H3's linear loads (h3/transformer.rs) and the MLX tree",
+    ),
+    (
+        "FASTVIDEO_H3_QUANT",
+        &["h3"],
+        "rt::quant::QuantMode::from_env / from_settings: H3's loads only (h3/pipeline.rs, h3/transformer.rs)",
+    ),
+    (
+        "FASTVIDEO_H3_VSA_FP4",
+        &["h3"],
+        "rt::attn_fp4::setting: h3/pipeline.rs vsa_fp4_choice",
+    ),
+    (
+        "FASTVIDEO_H3_VSA_FP4_P",
+        &["h3"],
+        "rt::attn_fp4::p_single: h3/pipeline.rs vsa_fp4_choice",
+    ),
+    (
+        "FASTVIDEO_WAN_CAUSAL_FLASH",
+        &["wan"],
+        "rt::nn::causal_flash_enabled: the causal Wan attention (sdpa_block_causal, sdpa_kv_window)",
+    ),
+    (
+        "FASTVIDEO_WAN_GRAPH",
+        &["wan"],
+        "rt::graph::graphs_enabled: wan/stream.rs (H3's graphs are FASTVIDEO_H3_GRAPHS)",
+    ),
+    (
+        "FASTVIDEO_WAN_GRAPH_CUBLAS_WS_MIB",
+        &["wan", "h3"],
+        "rt::graph::GraphStream::new: wan/stream.rs and h3/step_graph.rs",
+    ),
+    (
+        "FASTVIDEO_WAN_QUANT",
+        &["wan"],
+        "rt::quant::WanQuantPlan::from_env: wan/transformer.rs",
+    ),
 ];
 
 /// Where a family's own code lives (`crates/fastvideo-{cudarc,models}/src/<dir>/`).
-/// Every CUDA family also reads through [`RUNTIME_TECHNIQUE_FILES`].
+/// Every CUDA family also reads through the runtime ([`RUNTIME_DIR`]).
 fn family_sources(name: &str) -> Vec<String> {
     let dirs: Vec<&str> = match name {
         "cosmos" => vec!["cosmos", "cosmos3"],
@@ -697,35 +758,75 @@ fn layered_reads(src: &Source) -> (Vec<(usize, &str)>, BTreeSet<&'static str>) {
     (names, ops)
 }
 
-/// `src`'s code without its `#[cfg(test)] mod` (test scaffolding reads
-/// settings a family's runtime does not).
-fn without_tests(src: &Source) -> &str {
-    let code = src.code.as_str();
+/// `src`'s code with every inline `#[cfg(test)] mod name { .. }` blanked
+/// (newlines kept, so line numbers stay): test scaffolding reads settings a
+/// family's runtime does not, and production code may follow the module.
+fn without_tests(src: &Source) -> String {
+    let code = src.code.as_bytes();
+    let mut string_byte = vec![false; code.len()];
+    for &(a, z) in &src.strings {
+        for b in &mut string_byte[a.min(code.len())..z.min(code.len())] {
+            *b = true;
+        }
+    }
+    let in_string = |i: usize| string_byte[i];
+    let mut out = code.to_vec();
     let mut from = 0;
-    while let Some(n) = code[from..].find("#[cfg(test)]") {
+    while let Some(n) = src.code[from..].find("#[cfg(test)]") {
         let at = from + n;
-        let rest = code[at + "#[cfg(test)]".len()..].trim_start();
+        from = at + 1;
+        if in_string(at) {
+            continue;
+        }
+        let after = at + "#[cfg(test)]".len();
+        let rest = src.code[after..].trim_start();
         // An inline `mod tests { .. }`, not a `mod manifest_tests;` file.
         let inline = rest.starts_with("mod ")
             && rest
                 .find('{')
                 .is_some_and(|b| rest.find(';').is_none_or(|c| b < c));
-        if inline {
-            return &code[..at];
+        if !inline {
+            continue;
         }
-        from = at + 1;
+        let Some(open) = src.code[after..].find('{').map(|o| after + o) else {
+            continue;
+        };
+        let mut depth = 0usize;
+        let mut end = code.len();
+        for (i, &c) in code.iter().enumerate().skip(open) {
+            if in_string(i) {
+                continue;
+            }
+            match c {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        for c in &mut out[at..end] {
+            if *c != b'\n' {
+                *c = b' ';
+            }
+        }
+        from = end;
     }
-    code
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// The `model_spec`s of Wan, H3, LTX-2 and the small families declare every
 /// techniques-layer read their code makes (`docs/adr/0010-settings-layer.md`
 /// "`model_spec`"): each layered setting a family's own sources read is one
 /// its spec `reads`, and each `[kernels]` op they name is one it
-/// `dispatches`. The shared runtime files ([`RUNTIME_TECHNIQUE_FILES`]) are
-/// read by Wan, H3 and LTX-2 alike: their runtime rows and kernel ops are
-/// declared by all three specs, a family row they read (`FASTVIDEO_H3_QUANT`
-/// in `rt/quant.rs`) by its own family's spec.
+/// `dispatches`. The shared runtime ([`RUNTIME_DIR`]) is read by Wan, H3
+/// and LTX-2 alike: every layered row and kernel op a runtime file reads is
+/// declared by all three specs, except the reviewed family rows of
+/// [`RUNTIME_FAMILY_ROWS`], declared by the specs listed there.
 #[test]
 fn family_specs_declare_their_techniques_reads() {
     use crate::techniques::registry::{family_spec, SMALL_FAMILIES};
@@ -762,32 +863,25 @@ fn family_specs_declare_their_techniques_reads() {
             .iter()
             .filter(|s| dirs.iter().any(|d| s.rel.starts_with(d.as_str())))
         {
-            check(&spec, src, without_tests(src), name);
+            check(&spec, src, &without_tests(src), name);
         }
     }
-    for src in all
-        .iter()
-        .filter(|s| RUNTIME_TECHNIQUE_FILES.contains(&s.rel.as_str()))
-    {
-        let code = without_tests(src);
+    for src in all.iter().filter(|s| s.rel.starts_with(RUNTIME_DIR)) {
         let view = Source {
             rel: src.rel.clone(),
-            code: code.to_string(),
+            code: without_tests(src),
             strings: Vec::new(),
         };
         let (names, ops) = layered_reads(&view);
         for (line, n) in names {
             checked += 1;
-            let family = lookup(n).map(|r| r.family);
-            for name in ["wan", "h3", "ltx2"] {
+            let owners: &[&str] = RUNTIME_FAMILY_ROWS
+                .iter()
+                .find(|(row, _, _)| *row == n)
+                .map_or(&["wan", "h3", "ltx2"], |(_, specs, _)| specs);
+            for name in owners {
                 let spec = family_spec(name).unwrap_or_else(|| panic!("{name}"));
-                let owner = match family {
-                    Some(super::Family::Runtime) => true,
-                    // A spec's first family is the family's own.
-                    Some(f) => spec.families.first() == Some(&f),
-                    None => false,
-                };
-                if owner && !spec.reads(n) {
+                if !spec.reads(n) {
                     bad.push(format!("{name}: {}:{line}: reads {n}", src.rel));
                 }
             }
@@ -800,6 +894,17 @@ fn family_specs_declare_their_techniques_reads() {
                 }
             }
         }
+    }
+    // A reviewed row the runtime no longer reads is stale.
+    for (row, specs, _) in RUNTIME_FAMILY_ROWS {
+        assert!(
+            lookup(row).is_some_and(|r| r.reader == Reader::Layered),
+            "RUNTIME_FAMILY_ROWS: {row} is not a layered row"
+        );
+        assert!(
+            !specs.is_empty(),
+            "RUNTIME_FAMILY_ROWS: {row} names no spec"
+        );
     }
     assert!(checked > 60, "only {checked} layered reads found");
     assert!(

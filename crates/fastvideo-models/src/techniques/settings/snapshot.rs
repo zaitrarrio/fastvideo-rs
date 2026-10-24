@@ -152,9 +152,17 @@ thread_local! {
     static LOAD_SCOPE: RefCell<Option<Snapshot>> = const { RefCell::new(None) };
 }
 
-/// Restores the previous [`Snapshot::scope`] when dropped.
+/// Restores the previous [`Snapshot::scope`] when dropped. `!Send`: the
+/// scope is this thread's, so the guard cannot move to another thread or be
+/// held across an `.await` in a `Send` future.
+///
+/// ```compile_fail
+/// fn send<T: Send>(_: T) {}
+/// let snapshot = fastvideo_models::settings::Snapshot::capture();
+/// send(snapshot.scope());
+/// ```
 #[must_use = "the scope ends when the guard drops"]
-pub struct LoadScope(Option<Snapshot>);
+pub struct LoadScope(Option<Snapshot>, std::marker::PhantomData<*const ()>);
 
 impl Drop for LoadScope {
     fn drop(&mut self) {
@@ -231,7 +239,10 @@ impl Snapshot {
     /// this snapshot's values for every row. Nested scopes restore the outer
     /// one on drop.
     pub fn scope(&self) -> LoadScope {
-        LoadScope(LOAD_SCOPE.with(|s| s.borrow_mut().replace(self.clone())))
+        LoadScope(
+            LOAD_SCOPE.with(|s| s.borrow_mut().replace(self.clone())),
+            std::marker::PhantomData,
+        )
     }
 
     /// The captured sources of `name`, if it is a row.

@@ -348,7 +348,8 @@ pub fn h3_spec() -> ModelSpec {
         layers: crate::h3::sol::LAYERS_PER_FORWARD,
         profiles: true,
         families: &[Family::H3, Family::Runtime, Family::TextEncoder],
-        extra_settings: &[],
+        // `rt::graph::GraphStream::new` (the step graphs, h3/step_graph.rs).
+        extra_settings: &["FASTVIDEO_WAN_GRAPH_CUBLAS_WS_MIB"],
         kernels: SPARSE_KERNELS,
     }
 }

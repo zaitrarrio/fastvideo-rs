@@ -193,7 +193,8 @@ Inside, two mechanisms, chosen so that no loader is restructured:
    `H3Techniques::from_process`, `WanVaeChoice`, `streaming_fetch_env`,
    `headroom_bytes`).
 2. **Scoped**: the first statement of each `load_with_settings` is
-   `let _load_scope = settings.scope();`. While the guard lives, this thread's
+   `let _load_scope = settings.scope();` (the guard is `!Send`: it cannot
+   leave the thread or be held across an `.await`). While it lives, this thread's
    `settings::var`, `is_set`, `env_var` and `env_var_os` return the
    snapshot's values for every row. The shared code a load calls (the DiT and
    decoder constructors, quantization, weight loading, the text encoders)
@@ -428,16 +429,21 @@ before (`registry::tests::only_h3_and_ltx2_profiles_load`). The full version
 sense the list itself uses: the spec is the authority and a test keeps the
 code inside it. `workspace_check::family_specs_declare_their_techniques_reads`
 scans each family's sources (`crates/fastvideo-{cudarc,models}/src/<family>/`)
-and the review's 11 files (now `rt/{attn,attn_dc,attn_fp4,attn_sage,conv,
-envflag,offload,ops,quant,tensor,vsa}.rs`, moved out of `wan/` by B1) for
-every layered read (the typed getters, `settings::var` / `is_set`, a
-`Source`'s `.var` / `.is_set`, with a literal or a same-file `const` name) and
-every `KernelOp`, and fails when the family's spec does not declare it. In
-the runtime files a runtime row and every kernel op must be declared by the
-Wan, H3 and LTX-2 specs, and a family row (`FASTVIDEO_H3_QUANT` in
-`rt/quant.rs`) by its own family's spec. At run time the same reads come from
-the Wan load's snapshot. The attention files are plan B5's; nothing in them
-changed. `fastvideo-core`'s `family::tests::every_family_has_a_model_spec`
+and the whole shared runtime (`crates/fastvideo-cudarc/src/rt/`, which holds
+the review's 11 files, `rt/{attn,attn_dc,attn_fp4,attn_sage,conv,envflag,
+offload,ops,quant,tensor,vsa}.rs`, moved out of `wan/` by B1) for every
+layered read (the typed getters, `settings::var` / `is_set`, a `Source`'s
+`.var` / `.is_set`, with a literal or a same-file `const` name) and every
+`KernelOp`, outside inline `#[cfg(test)]` modules, and fails when the
+family's spec does not declare it. A runtime file's read must be declared by
+the Wan, H3 and LTX-2 specs alike, except a reviewed family row the runtime
+reads on behalf of some of them (`RUNTIME_FAMILY_ROWS`, with the caller that
+reaches it: `FASTVIDEO_H3_QUANT`, `_H3_AFFINE`, `_H3_VSA_FP4`, `_H3_VSA_FP4_P`
+for H3; `FASTVIDEO_WAN_QUANT`, `_WAN_GRAPH`, `_WAN_CAUSAL_FLASH` for Wan;
+`FASTVIDEO_WAN_GRAPH_CUBLAS_WS_MIB` for Wan and H3, whose step graphs open a
+`GraphStream`, so `h3_spec` lists it in `extra_settings`). At run time the
+same reads come from the load's snapshot. The attention files are plan B5's;
+nothing in them changed. `fastvideo-core`'s `family::tests::every_family_has_a_model_spec`
 ties the specs to `FAMILIES`.
 
 ### The scan, extended
