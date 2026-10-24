@@ -7,8 +7,12 @@
 //!   devices they run on, the plan's decisions (what loads, the quant mode,
 //!   the offload, the adapter and step-cache fusions) are pinned in
 //!   `tests/goldens/{h3,ltx2}_load_plan.txt`. A change to a decision is a
-//!   change to the golden, reviewed. `FV_GOLDEN_BLESS=1` prints the current
-//!   text instead of comparing.
+//!   change to the golden, reviewed. `FV_GOLDEN_BLESS=1` writes the current
+//!   text to the golden instead of comparing. The H3 cases plan on a
+//!   synthetic weights directory with the EU volume's layout (the served
+//!   pre-quantized trees with their manifests, the Preview LoRAs, a Trim
+//!   NVFP4 file, a ModelOpt NVFP4 `transformer/`, a VDN checkpoint) on an
+//!   RTX PRO 6000, a B200, an H100, a 32 GiB card and the CPU.
 //! * **open**: H3's plan and open on a tiny synthetic snapshot (the reference
 //!   fixtures under `src/h3/fixtures/`).
 //! * **the full lifecycle**: LTX-2's plan → open → place → fuse on the tiny
@@ -64,12 +68,22 @@ fn snapshot(env: &[(&str, &str)], table: &Settings) -> Snapshot {
     )
 }
 
+/// Compare `got` with `tests/goldens/<name>`. `FV_GOLDEN_BLESS=1` writes it
+/// there instead (and a copy under the target directory's `tmp/goldens/`,
+/// for a run on a build pod whose source tree is a mirror).
 fn compare(name: &str, got: &str) {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/goldens")
         .join(name);
     if std::env::var("FV_GOLDEN_BLESS").ok().as_deref() == Some("1") {
-        eprintln!("==== {name} ====\n{got}==== end {name} ====");
+        let copy = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("goldens");
+        for p in [path.clone(), copy.join(name)] {
+            if let Some(dir) = p.parent() {
+                std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+            }
+            std::fs::write(&p, got).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+            eprintln!("blessed {}", p.display());
+        }
         return;
     }
     let want = std::fs::read_to_string(&path)
@@ -86,121 +100,326 @@ fn compare(name: &str, got: &str) {
     }
 }
 
-/// One H3 case: the options a served model (or a `techniques` cell) loads
-/// with, its own profile if any, the process environment, the device.
+/// An NVIDIA B200 (sm_100): 178 GiB free.
+fn b200() -> DeviceFacts {
+    DeviceFacts::device((10, 0), 178 * GIB)
+}
+
+/// An NVIDIA H100 (sm_90): 79 GiB free.
+fn h100() -> DeviceFacts {
+    DeviceFacts::device((9, 0), 79 * GIB)
+}
+
+/// One H3 case: the snapshot under the weights directory, the options a
+/// served model (or a `techniques` cell) loads with, its own profile if any,
+/// the process environment, the device.
 struct H3Case {
     name: &'static str,
+    /// The snapshot, under the synthetic weights directory.
+    root: &'static str,
     recipe: &'static str,
     profile: Option<&'static str>,
+    /// The VDN checkpoint directory under the weights directory.
+    vdn: Option<&'static str>,
     env: &'static [(&'static str, &'static str)],
     facts: DeviceFacts,
 }
 
-fn h3_plan_text(root: &Path, case: &H3Case) -> String {
-    let profile = case
-        .profile
-        .map(|p| Profile::load(Path::new(p)).unwrap_or_else(|e| panic!("{p}: {e}")));
-    // fv-serve loads a model under its own profile's settings
-    // (`settings::scope_model`): the snapshot's table is the profile's.
-    let table = profile
-        .as_ref()
-        .map(|p| p.settings().unwrap_or_else(|e| panic!("{e}")))
-        .unwrap_or_default();
-    let options = H3PipelineOptions {
-        recipe: Some(case.recipe.to_owned()),
-        text_encoder: TextEncoderChoice::Auto,
-        i2v_encoder: I2vEncoderChoice::Auto,
-        profile: case.profile.map(|_| profile.clone()),
-        ..Default::default()
-    };
-    let plan = H3LoadPlan::new(
-        root,
-        options,
-        &snapshot(case.env, &table),
-        &Active::default(),
-        case.facts,
+impl H3Case {
+    fn plan(&self, weights: &Path) -> Result<H3LoadPlan, String> {
+        let profile = self
+            .profile
+            .map(|p| Profile::load(Path::new(p)).unwrap_or_else(|e| panic!("{p}: {e}")));
+        // fv-serve loads a model under its own profile's settings
+        // (`settings::scope_model`): the snapshot's table is the profile's.
+        let table = profile
+            .as_ref()
+            .map(|p| p.settings().unwrap_or_else(|e| panic!("{e}")))
+            .unwrap_or_default();
+        let options = H3PipelineOptions {
+            recipe: Some(self.recipe.to_owned()),
+            text_encoder: TextEncoderChoice::Auto,
+            i2v_encoder: I2vEncoderChoice::Auto,
+            profile: self.profile.map(|_| profile.clone()),
+            vdn: self.vdn.map(|d| weights.join(d)),
+            ..Default::default()
+        };
+        H3LoadPlan::new(
+            &weights.join(self.root),
+            options,
+            &snapshot(self.env, &table),
+            &Active::default(),
+            self.facts,
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    fn text(&self, weights: &Path) -> String {
+        let body = match self.plan(weights) {
+            Ok(p) => p.describe(),
+            Err(e) => format!("error: {e}\n"),
+        };
+        format!("== {} ==\n{body}", self.name)
+    }
+}
+
+fn touch(path: &Path, bytes: &[u8]) {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    }
+    std::fs::write(path, bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+}
+
+/// The EU volume's H3 layout in miniature (names and markers only, no
+/// tensor bytes): `h3-base/` with a transformer shard, the Preview LoRAs
+/// beside it, a FastH3 Trim snapshot with its NVFP4 tree, a ModelOpt NVFP4
+/// `transformer/` and a VDN stage-B checkpoint. The served pre-quantized
+/// trees (`transformer_prequant_{4step-vsa,sol-h3}_mxfp8`) are added by
+/// [`write_served_trees`].
+fn h3_weights() -> PathBuf {
+    let w = scratch("h3-plan");
+    touch(
+        &w.join("h3-base/transformer/diffusion_pytorch_model-00001-of-00001.safetensors"),
+        b"",
     );
-    let body = match plan {
-        Ok(p) => p.describe(),
-        Err(e) => format!("error: {e}\n"),
-    };
-    format!("== {} ==\n{body}", case.name)
+    for v in ["vsa", "dense"] {
+        touch(
+            &w.join(format!(
+                "FastH3-4-step-Preview-v1-LoRA/{v}-datafree/adapter_model.safetensors"
+            )),
+            b"",
+        );
+    }
+    std::fs::create_dir_all(w.join("fasth3-trim-8step")).expect("trim dir");
+    touch(
+        &w.join(format!(
+            "{}/{}/{}",
+            fastvideo_cudarc::h3::nvfp4::TREE,
+            fastvideo_cudarc::h3::nvfp4::SUBDIR,
+            fastvideo_cudarc::h3::nvfp4::FILE
+        )),
+        b"",
+    );
+    touch(
+        &w.join("fasth3-4step-vsa-nvfp4/transformer/config.json"),
+        br#"{"quantization_config": {"quant_method": "modelopt", "quant_algo": "NVFP4"}}"#,
+    );
+    touch(
+        &w.join("vdn-h3-stage-b-2000")
+            .join(fastvideo_models::h3::vdn::VDN_CONFIG_REL),
+        include_bytes!("../src/h3/fixtures/vdn_stage_b_config.json"),
+    );
+    w
+}
+
+/// The pre-quantized trees the EU volume carries beside `h3-base/`
+/// (`transformer_prequant_<recipe>_mxfp8`), each with the manifest
+/// `fv-gpucheck quantize-dit` writes for the load an RTX PRO 6000 makes
+/// (the identity the plan keys the selection on, the source shards' names
+/// and sizes; no tensor files, which only the open stage reads).
+fn write_served_trees(weights: &Path) {
+    use fastvideo_cudarc::h3::dit_tree::{self, Manifest};
+    let root = weights.join("h3-base");
+    for recipe in ["4step-vsa", "sol-h3"] {
+        let case = H3Case {
+            name: "",
+            root: "h3-base",
+            recipe,
+            profile: None,
+            vdn: None,
+            env: &[],
+            facts: rtx_pro_6000(),
+        };
+        let plan = case.plan(weights).expect("plan");
+        let identity = plan.dit_tree_identity.expect("the load has a stored form");
+        let dir = root.join(format!("transformer_prequant_{recipe}_{}", identity.quant));
+        let manifest = Manifest {
+            format: dit_tree::FORMAT.into(),
+            version: dit_tree::VERSION,
+            identity,
+            source: dit_tree::source_entries(&root.join("transformer")).expect("source"),
+            files: Vec::new(),
+            tensors: 0,
+            quantized_linears: 0,
+            digest: "0000000000000000".into(),
+            created_by: "load_stages test".into(),
+        };
+        touch(
+            &dir.join(dit_tree::MANIFEST),
+            serde_json::to_string_pretty(&manifest)
+                .expect("manifest json")
+                .as_bytes(),
+        );
+    }
 }
 
 #[test]
 fn h3_plans_are_the_golden_decisions() {
-    let root = scratch("h3-plan");
+    let weights = h3_weights();
+    write_served_trees(&weights);
+    fn case(
+        name: &'static str,
+        root: &'static str,
+        recipe: &'static str,
+        profile: Option<&'static str>,
+        env: &'static [(&'static str, &'static str)],
+        facts: DeviceFacts,
+    ) -> H3Case {
+        H3Case {
+            name,
+            root,
+            recipe,
+            profile,
+            vdn: None,
+            env,
+            facts,
+        }
+    }
     let cases = [
-        H3Case {
-            name: "fasth3-4step-vsa (served: profile h3/fasth3_4step_vsa) on an RTX PRO 6000",
-            recipe: "4step-vsa",
-            profile: Some("h3/fasth3_4step_vsa"),
-            env: &[],
-            facts: rtx_pro_6000(),
-        },
-        H3Case {
-            name: "fasth3-4step-vsa-768p (techniques cell, -env arm) on an RTX PRO 6000",
-            recipe: "4step-vsa",
-            profile: None,
-            env: &[],
-            facts: rtx_pro_6000(),
-        },
-        H3Case {
-            name: "fasth3-4step-vsa on the CPU",
-            recipe: "4step-vsa",
-            profile: None,
-            env: &[],
-            facts: DeviceFacts::cpu(),
-        },
-        H3Case {
-            name: "sol-h3 (served: profile h3/sol_h3_4step_engine_ladder) on an RTX PRO 6000",
-            recipe: "sol-h3",
-            profile: Some("h3/sol_h3_4step_engine_ladder"),
-            env: &[],
-            facts: rtx_pro_6000(),
-        },
-        H3Case {
-            name: "fasth3-8step on an RTX PRO 6000",
-            recipe: "8step",
-            profile: None,
-            env: &[],
-            facts: rtx_pro_6000(),
-        },
-        H3Case {
-            name: "fasth3-8step on a 32 GiB card",
-            recipe: "8step",
-            profile: None,
-            env: &[],
-            facts: card_32g(),
-        },
-        H3Case {
-            name: "fasth3-8step, FASTVIDEO_DIT_OFFLOAD=streamed, FASTVIDEO_H3_QUANT=w8a8",
-            recipe: "8step",
-            profile: None,
-            env: &[
+        case(
+            "fasth3-4step-vsa (served: profile h3/fasth3_4step_vsa) on an RTX PRO 6000",
+            "h3-base",
+            "4step-vsa",
+            Some("h3/fasth3_4step_vsa"),
+            &[],
+            rtx_pro_6000(),
+        ),
+        case(
+            "fasth3-4step-vsa-768p (techniques cell, -env arm) on an RTX PRO 6000",
+            "h3-base",
+            "4step-vsa",
+            None,
+            &[],
+            rtx_pro_6000(),
+        ),
+        case(
+            "fasth3-4step-vsa, FASTVIDEO_H3_DIT_TREE=off (the Preview merge at load)",
+            "h3-base",
+            "4step-vsa",
+            None,
+            &[("FASTVIDEO_H3_DIT_TREE", "off")],
+            rtx_pro_6000(),
+        ),
+        case(
+            "fasth3-4step-vsa on a B200",
+            "h3-base",
+            "4step-vsa",
+            None,
+            &[],
+            b200(),
+        ),
+        case(
+            "fasth3-4step-vsa on an H100",
+            "h3-base",
+            "4step-vsa",
+            None,
+            &[],
+            h100(),
+        ),
+        case(
+            "fasth3-4step-vsa on the CPU",
+            "h3-base",
+            "4step-vsa",
+            None,
+            &[],
+            DeviceFacts::cpu(),
+        ),
+        case(
+            "sol-h3 (served: profile h3/sol_h3_4step_engine_ladder) on an RTX PRO 6000",
+            "h3-base",
+            "sol-h3",
+            Some("h3/sol_h3_4step_engine_ladder"),
+            &[],
+            rtx_pro_6000(),
+        ),
+        case(
+            "sol-h3, FASTVIDEO_H3_QUANT=mxfp8 on an H100 (W8A8 below sm_100)",
+            "h3-base",
+            "sol-h3",
+            None,
+            &[("FASTVIDEO_H3_QUANT", "mxfp8")],
+            h100(),
+        ),
+        case(
+            "fasth3-8step on an RTX PRO 6000",
+            "h3-base",
+            "8step",
+            None,
+            &[],
+            rtx_pro_6000(),
+        ),
+        case(
+            "fasth3-8step on a 32 GiB card",
+            "h3-base",
+            "8step",
+            None,
+            &[],
+            card_32g(),
+        ),
+        case(
+            "fasth3-8step, FASTVIDEO_DIT_OFFLOAD=streamed, FASTVIDEO_H3_QUANT=w8a8",
+            "h3-base",
+            "8step",
+            None,
+            &[
                 ("FASTVIDEO_DIT_OFFLOAD", "streamed"),
                 ("FASTVIDEO_H3_QUANT", "w8a8"),
             ],
-            facts: rtx_pro_6000(),
-        },
+            rtx_pro_6000(),
+        ),
+        case(
+            "h3-480p-fullopt (techniques cell, -env arm: sol-h3-rtx + FASTVIDEO_H3_SOL_CACHE=teacache)",
+            "h3-base",
+            "sol-h3-rtx",
+            None,
+            &[("FASTVIDEO_H3_SOL_CACHE", "teacache")],
+            rtx_pro_6000(),
+        ),
+        case(
+            "h3-480p-fullopt (techniques cell, -prof arm: profile h3/rtx5090_fullopt + FASTVIDEO_H3_QUANT=mxfp8)",
+            "h3-base",
+            "sol-h3-rtx",
+            Some("h3/rtx5090_fullopt"),
+            &[("FASTVIDEO_H3_QUANT", "mxfp8")],
+            rtx_pro_6000(),
+        ),
+        case(
+            "fasth3-trim-nvfp4 (trim-8step-nvfp4: the Trim's ComfyUI NVFP4 file) on an RTX PRO 6000",
+            "fasth3-trim-8step",
+            "trim-8step-nvfp4",
+            None,
+            &[],
+            rtx_pro_6000(),
+        ),
+        case(
+            "fasth3-trim-nvfp4 on an H100 (no NVFP4 tensor cores)",
+            "fasth3-trim-8step",
+            "trim-8step-nvfp4",
+            None,
+            &[],
+            h100(),
+        ),
+        case(
+            "fasth3-4step-vsa-nvfp4 (a ModelOpt NVFP4 transformer/) on a B200",
+            "fasth3-4step-vsa-nvfp4",
+            "4step-vsa-nvfp4",
+            None,
+            &[],
+            b200(),
+        ),
         H3Case {
-            name: "h3-480p-fullopt (techniques cell, -env arm: sol-h3-rtx + FASTVIDEO_H3_SOL_CACHE=teacache)",
-            recipe: "sol-h3-rtx",
+            name: "vdn-h3 (vdn-h3-50step, the stage-B checkpoint) on an RTX PRO 6000",
+            root: "h3-base",
+            recipe: "vdn-h3-50step",
             profile: None,
-            env: &[("FASTVIDEO_H3_SOL_CACHE", "teacache")],
-            facts: rtx_pro_6000(),
-        },
-        H3Case {
-            name: "h3-480p-fullopt (techniques cell, -prof arm: profile h3/rtx5090_fullopt + FASTVIDEO_H3_QUANT=mxfp8)",
-            recipe: "sol-h3-rtx",
-            profile: Some("h3/rtx5090_fullopt"),
-            env: &[("FASTVIDEO_H3_QUANT", "mxfp8")],
+            vdn: Some("vdn-h3-stage-b-2000"),
+            env: &[],
             facts: rtx_pro_6000(),
         },
     ];
-    let got: String = cases.iter().map(|c| h3_plan_text(&root, c)).collect();
+    let got: String = cases.iter().map(|c| c.text(&weights)).collect();
     compare("h3_load_plan.txt", &got);
-    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&weights);
 }
 
 fn fixture(family: &str, name: &str) -> PathBuf {
@@ -409,7 +628,7 @@ fn ltx2_plans_are_the_golden_decisions() {
             facts: card_32g(),
         },
         LtxCase {
-            name: "ltx25-distill two-stage, offload cpu (FASTVIDEO_LTX_OFFLOAD=cpu)",
+            name: "ltx25-distill two-stage, --offload cpu (PipelineOptions::offload)",
             dev: false,
             options: PipelineOptions {
                 offload: Some(LtxOffload::Cpu),

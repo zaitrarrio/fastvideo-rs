@@ -128,6 +128,10 @@ pub struct H3LoadPlan {
     pub load_text_encoder: bool,
     pub dit: H3DitSource,
     pub nvfp4: H3Nvfp4Plan,
+    /// What a pre-quantized DiT tree for this load must have been built
+    /// from (`None`: this load has no stored form, or it was not looked for:
+    /// MLX, Ref2VA, VDN, NVFP4).
+    pub dit_tree_identity: Option<crate::h3::dit_tree::Identity>,
     /// The valid pre-quantized DiT tree this load reads, if any.
     pub dit_tree: Option<PathBuf>,
     /// The DiT loads its VSA gate (`to_gate_compress`).
@@ -277,12 +281,16 @@ impl H3LoadPlan {
         if contract.dense {
             options.dense = true;
         }
+        // `H3Techniques::from_settings` with the profile given (`active`),
+        // not read from the process: the same resolution for the process's
+        // own profile, and a dry run or a test can plan under another.
         let techniques = match &own {
-            None => H3Techniques::from_settings(
+            None => H3Techniques::resolve(
                 options.recipe.as_deref(),
                 &contract,
                 options.ref2va,
-                settings,
+                active.profile.as_ref(),
+                &|k| settings.var(k),
             ),
             Some(p) => H3Techniques::resolve(
                 options.recipe.as_deref(),
@@ -448,7 +456,7 @@ impl H3LoadPlan {
         // Fast boot (A): the recipe's resident DiT, pre-merged and
         // pre-quantized beside `transformer/` (`crate::h3::dit_tree`), when a
         // valid one is there; otherwise the checkpoint.
-        let dit_tree = if !mlx
+        let (dit_tree_identity, dit_tree) = if !mlx
             && !options.ref2va
             && vdn_ckpt.is_none()
             && matches!(nvfp4, H3Nvfp4Plan::None)
@@ -463,10 +471,12 @@ impl H3LoadPlan {
                 &quant,
                 facts.linear_route,
             )?;
-            crate::h3::dit_tree::select(root, &root.join("transformer"), identity.as_ref())?
-                .map(|(dir, _)| dir)
+            let tree =
+                crate::h3::dit_tree::select(root, &root.join("transformer"), identity.as_ref())?
+                    .map(|(dir, _)| dir);
+            (identity, tree)
         } else {
-            None
+            (None, None)
         };
         // A fused adapter rebuilds the AdaLN table from the projections;
         // otherwise a valid cache file means they are never read.
@@ -615,6 +625,7 @@ impl H3LoadPlan {
             load_text_encoder,
             dit,
             nvfp4,
+            dit_tree_identity,
             dit_tree,
             with_gate,
             vae_linears,
@@ -739,11 +750,14 @@ impl H3LoadPlan {
     /// adapter merge and the step cache.
     pub fn describe(&self) -> String {
         let gib = |b: u64| format!("{:.2}GiB", b as f64 / f64::from(1u32 << 30));
-        let rel = |p: &Path| {
-            p.strip_prefix(&self.root).map_or_else(
-                |_| p.display().to_string(),
-                |r| format!("<root>/{}", r.display()),
-            )
+        // Paths under the snapshot, or beside it (the weights directory).
+        let rel = |p: &Path| match (
+            p.strip_prefix(&self.root),
+            self.root.parent().map(|w| p.strip_prefix(w)),
+        ) {
+            (Ok(r), _) => format!("<root>/{}", r.display()),
+            (_, Some(Ok(r))) => format!("<weights>/{}", r.display()),
+            _ => p.display().to_string(),
         };
         let c = &self.contract;
         let mut out = vec![
@@ -803,8 +817,10 @@ impl H3LoadPlan {
                 self.options.text_encoder, self.auto_text_encoder, self.load_text_encoder
             ),
             format!("i2v encoder: {}", self.options.i2v_encoder.as_str()),
+            // Place decides on the free memory it measures after the text
+            // encoder and the i2v tower; the load-start figure shows the rule.
             format!(
-                "dit offload: {} resident_need={} streamed_need={} -> {}",
+                "dit offload: {} resident_need={} streamed_need={}; at the load-start free memory -> {} (place re-measures after the encoders)",
                 self.dit_policy.as_str(),
                 gib(self.resident_need),
                 gib(self.streamed_need),

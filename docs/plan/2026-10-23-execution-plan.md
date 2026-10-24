@@ -672,3 +672,20 @@ ran (pod id, $/hr), result, cost.
   gpucheck and core green (the base's warnings only); `scripts/serve/check.sh`
   1037 passed; `scripts/gpu/lint.sh` green. GPU `techniques` byte-identity
   family pending (coordinator).
+- 2026-10-24 10:10Z: B6 review follow-ups on the PR: ADR-0017 corrected
+  (h3-480p-fullopt is `sol-h3-rtx`, no adapter merge) and extended (the
+  `load/io` wall seconds exclude tree selection; `dit_tree_identity_for`
+  resolves the quant mode eagerly; NVFP4, VDN and MLX loads have no EU tree,
+  so no GPU cell); new `b6` family in `scripts/gpu/runpod-matrix.sh` (8 cells,
+  baseline vs this build, `--off-identity`: sol-h3 from its prequant tree,
+  sol-h3 and 4step-vsa merged at load, H3 under a 32 GiB budget, H3 Ref2VA,
+  LTX-2.5 IC-LoRA, dev a2v guided, `--offload cpu`; about 40 min on one RTX
+  PRO 6000) and `FV_DRY_RUN=1` for the matrix; the H3 plan goldens grew to
+  17 cases on a synthetic EU-volume layout (the served prequant trees
+  selected, B200, H100 with W8A8, Trim NVFP4, ModelOpt NVFP4, VDN), the
+  H3 placement line labelled, `FV_GOLDEN_BLESS=1` writes the goldens, the
+  plan resolves the techniques under the `active` it is given. On build pod
+  (agent `b6-loader`): models + cudarc + core + engine-service 1379 passed;
+  workspace lib 1971 passed; fmt, clippy `-D warnings`, the `--features
+  cuda` check, `scripts/serve/check.sh` (1177 passed) and
+  `scripts/gpu/lint.sh` green.

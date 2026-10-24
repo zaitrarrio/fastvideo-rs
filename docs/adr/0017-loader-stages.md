@@ -158,22 +158,62 @@ which changes a tensor, a precision, a placement or an evidence line:
   and raised where the load read it before.
 - The once-per-process `FASTVIDEO_H3_QUANT=mxfp8 needs sm_100+` line is now
   written by the first live read (the DiT load), not by the plan.
+- The wall seconds of the `load/io h3 ..` lines no longer include the
+  pre-quantized tree's selection (its manifest and the source shard sizes
+  are read by the plan, before the I/O clock starts); their byte counters
+  are unchanged (those reads go through no weight map).
+- `dit_tree_identity_for` (`fv-gpucheck quantize-dit`) resolves the quant
+  mode before its early returns instead of at the end; an invalid
+  `FASTVIDEO_H3_QUANT` is still reported only where it was.
 
-The GPU confirmation is the `techniques` byte-identity family
-(fasth3-4step-vsa-768p: Preview LoRA merge and the auto encoder;
-h3-480p-fullopt: the Sol-H3 merge and TeaCache; ltx25-512p-sol: LTX-2.5
-two-stage).
+**GPU confirmation.** The `techniques` byte-identity family:
+fasth3-4step-vsa-768p (on the EU volume it loads the served
+`transformer_prequant_4step-vsa_mxfp8` tree, so the tree path and the auto
+encoder), h3-480p-fullopt (`sol-h3-rtx`: no adapter, since
+`is_sol_h3_recipe` excludes `-rtx`; it covers the plan's quant and placement
+and TeaCache installed in fuse), ltx25-512p-sol (LTX-2.5 two-stage). The
+paths those cells do not reach run in the `b6` family of
+`scripts/gpu/runpod-matrix.sh` (baseline binary against this build, the same
+command line, `compare-clips --off-identity`), on trees of the EU volume
+only:
+
+| cell | what it loads |
+|---|---|
+| `b6-solh3-tree` | `sol-h3` from `h3-base/transformer_prequant_sol-h3_mxfp8` (tree selection on the linear route and the quant mode) |
+| `b6-solh3-merge` | `sol-h3` with `FASTVIDEO_H3_DIT_TREE=off`: the Sol-H3 adapter merged in place |
+| `b6-4stepvsa-merge` | `4step-vsa` with `FASTVIDEO_H3_DIT_TREE=off`: the Preview LoRA merged at load |
+| `b6-h3-streamed` | `4step-vsa` under `FASTVIDEO_DEVICE_BUDGET_GIB=32`: streamed encoder and DiT, decoders per decode |
+| `b6-h3-ref2va` | `transformer_ref` from `h3-ref2va`, one image reference, the i2v tower beside the auto encoder |
+| `b6-ltx25-ref2v` | the Ingredients IC-LoRA attached at load, fused at stage 1 |
+| `b6-ltx25-a2v-guided` | the dev DiT with the distilled LoRA: DiT on the first request, base in host memory |
+| `b6-ltx25-offload-cpu` | `--offload cpu`: DiT and Gemma streamed, decoders around their calls |
+
+No cell covers the NVFP4 loads (the Trim's ComfyUI file, the ModelOpt
+`transformer/`), VDN-H3 or the MLX export: none of their trees is on the EU
+volume (`scripts/gpu/volumes.sh` `FV_EU_VOLUME_TREES`). Their plans are
+pinned by the goldens below; their open and place code moved verbatim.
 
 ### Testing on the CPU
 
 - Plan goldens (`h3_plans_are_the_golden_decisions`,
-  `ltx2_plans_are_the_golden_decisions`): H3 `4step-vsa` (served profile,
-  the `techniques` cell, the CPU), `sol-h3` (served profile), `8step` (RTX PRO
-  6000, a 32 GiB card, streamed + W8A8), `sol-h3-rtx` + TeaCache (the
-  `fullopt` cell's two arms); LTX-2.5 distilled two-stage (RTX PRO 6000, a
-  32 GiB card, offload cpu, TAEHV + NVFP4, the CPU), reference-to-video
-  (IC-LoRA), dev audio-to-video (distilled LoRA, base on the host). Each pins
-  what loads, the quant mode, the offload, the adapter and step-cache fusions.
+  `ltx2_plans_are_the_golden_decisions`), on a synthetic weights directory
+  with the EU volume's H3 layout (names and markers, no tensor bytes): the
+  served pre-quantized trees with the manifests `quantize-dit` writes, the
+  Preview LoRAs, a Trim NVFP4 file, a ModelOpt NVFP4 `transformer/`, a VDN
+  stage-B checkpoint. H3: `4step-vsa` (served profile and the `techniques`
+  arm: the served tree; tree off: the Preview merge; B200: the tree; H100 and
+  CPU: bf16, no tree), `sol-h3` (served profile: its tree; H100 with
+  `mxfp8` asked: W8A8, no tree), `8step` (RTX PRO 6000, a 32 GiB card,
+  streamed + W8A8), `sol-h3-rtx` + TeaCache (the `fullopt` cell's two arms),
+  `trim-8step-nvfp4` (RTX PRO 6000; H100 refused), `4step-vsa-nvfp4`
+  (ModelOpt, B200), `vdn-h3-50step`. LTX-2.5: distilled two-stage (RTX PRO
+  6000, a 32 GiB card, `--offload cpu`, TAEHV + NVFP4, the CPU),
+  reference-to-video (IC-LoRA), dev audio-to-video (distilled LoRA, base on
+  the host). Each pins what loads, the quant mode, the offload, the adapter
+  and step-cache fusions. H3's DiT placement line shows the rule at the
+  load-start free memory; the place stage applies it to the free memory it
+  measures after the text encoder and the i2v tower. `FV_GOLDEN_BLESS=1`
+  rewrites the goldens.
 - Open on a tiny synthetic snapshot (H3, the reference fixtures).
 - The full LTX-2 lifecycle (plan, open, place, fuse) on the tiny fixtures at
   a tiny config, to a pipeline.

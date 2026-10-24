@@ -297,7 +297,7 @@ impl Ltx2LoadPlan {
                 self.cfg.transformer.in_channels
             ),
             format!(
-                "offload: {:?} dit {} need={} -> {}",
+                "offload: {:?} dit {} need={} -> {} (at the load-start free memory, as the load decides)",
                 self.offload,
                 self.dit_policy.as_str(),
                 gib(self.need),

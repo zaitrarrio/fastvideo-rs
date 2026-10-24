@@ -1231,7 +1231,7 @@ Project code: FVID
 - Reversibility: cheap
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: 0017
-- Verification: build pod: plan goldens (`tests/goldens/{h3,ltx2}_load_plan.txt`, 9 H3 and 7 LTX-2 configurations), H3 open on a tiny snapshot, the LTX-2 plan → open → place → fuse on the tiny fixtures, `QuantMode::resolve_on` against the live reader; GPU `techniques` byte-identity family by the coordinator
+- Verification: build pod: plan goldens (`tests/goldens/{h3,ltx2}_load_plan.txt`, 17 H3 and 7 LTX-2 configurations), H3 open on a tiny snapshot, the LTX-2 plan → open → place → fuse on the tiny fixtures, `QuantMode::resolve_on` against the live reader; GPU `techniques` byte-identity family by the coordinator
 
 ### FVID · 2026-10-24 · FVID-2026-10-24-b6-retire-dead-code
 - Trigger: plan B6 / review §7.3 item 6: retire `TensorBackend` and the mlx scaffold, only what is unreachable

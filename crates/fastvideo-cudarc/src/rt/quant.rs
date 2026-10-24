@@ -1975,9 +1975,6 @@ mod tests {
         assert!(QuantMode::parse("int4").is_err());
     }
 
-    /// VDN-H3 loads under a bf16 scoped default; an explicit
-    /// `FASTVIDEO_H3_QUANT` would still win, and the guard restores the
-    /// previous default (nested guards unwind in order).
     /// The plan's resolver (`docs/adr/0017-loader-stages.md`): the device
     /// rule as a table, and on this (host) process the live reader's answer
     /// for every value of the setting, with and without a scoped default.
@@ -2020,6 +2017,9 @@ mod tests {
         }
     }
 
+    /// VDN-H3 loads under a bf16 scoped default; an explicit
+    /// `FASTVIDEO_H3_QUANT` would still win, and the guard restores the
+    /// previous default (nested guards unwind in order).
     #[test]
     fn a_scoped_default_applies_only_while_its_guard_lives() {
         if fastvideo_models::techniques::settings::var(ENV).is_some() {
