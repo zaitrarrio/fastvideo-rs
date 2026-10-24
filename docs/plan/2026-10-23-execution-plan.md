@@ -671,3 +671,21 @@ ran (pod id, $/hr), result, cost.
   `--kind` for a bare unrecorded id; interrupts reach the smoke; upper bounds
   unless `--force-guards`; CI builds `--features deploy`. CPU only on the
   build pod; no Runpod call.
+
+- 2026-10-24 09:46Z, coordinator: C3a live gate on Runpod EU with
+  `fv-deploy` built from `23e1500` (the review fixes) on the build pod:
+  `fv-deploy up --family h3 --preset h3-turbo --region eu --channel latest
+  --yes --cap-s 1800` from the session container. Balance $49.39 (floor
+  projection passed), image `serve:h3-turbo-latest` pinned to its digest
+  `sha256:54acd68a…` (built on main `8178a7a` from tools-v0.1.38, so fv-boot
+  is the entrypoint), one RTX PRO 6000 in EU-RO-1 on `bz0ofkfx45` at
+  $2.49/hr (cap $2.50), detached backstop armed (handshake), `/ping` at 49 s,
+  ready at 219 s (cycle 1 of 3), `/healthz` ready with `fasth3`, one native
+  job (480p 16:9) succeeded in 17.5 s, pod deleted at 09:50:40; the backstop
+  saw it gone and exited by itself at 09:51:52. About 4 GPU-minutes,
+  ~$0.17. Evidence: `artifacts/runpod/c3a-deploy/23e1500-10240946/`.
+  Side finding: main's serve images had not been rebuilt since #152
+  (tools-release on main kept queueing behind a `check-test` run on
+  `c7a6bb5` that hung for over an hour, before the #166/#167 fixes); the
+  coordinator cancelled it, tools-v0.1.38 published from `8178a7a` and
+  `serve-image` rebuilt every variant.

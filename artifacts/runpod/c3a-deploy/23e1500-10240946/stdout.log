@@ -1,0 +1,57 @@
+[fv-deploy] runpod-pod fv-deploy-h3-turbo-1024094640 on NVIDIA RTX PRO 6000 Blackwell Server Edition: image ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:54acd68a1595e13c0d5e54a917d30770cd576c95bb6dc42be592e5eca8ed2185
+[fv-deploy] balance $49.39 (floor $8.00)
+[fv-deploy] backstop armed for 5jeq42lc5cn8xa (pid 2592): deleted at the latest 1800 s after create
+[fv-deploy] runpod-pod 5jeq42lc5cn8xa on NVIDIA RTX PRO 6000 Blackwell Server Edition at $2.490/hr
+[fv-deploy] 5jeq42lc5cn8xa answers /ping (loading) 49 s after create
+[fv-deploy] 5jeq42lc5cn8xa ready 218.7 s after create
+[fv-deploy] /healthz 200
+[fv-deploy] job: {"aspect_ratio":"16:9","model":"fasth3","prompt":"a red fox trotting through fresh snow","seed":1,"short_edge":480}
+[fv-deploy] job fvjob_f555b869c17947a9a04773d0f30df163: succeeded
+[fv-deploy] deleted 5jeq42lc5cn8xa (done)
+{
+  "name": "fv-deploy-h3-turbo-1024094640",
+  "provider": "runpod-pod",
+  "instance": {
+    "id": "5jeq42lc5cn8xa",
+    "provider": "runpod-pod",
+    "name": "fv-deploy-h3-turbo-1024094640",
+    "state": "running",
+    "url": "https://5jeq42lc5cn8xa-8000.proxy.runpod.net",
+    "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "data_center": "EU-RO-1",
+    "usd_per_hr": 2.49,
+    "created_at": 1792835202.5971196
+  },
+  "cycles": [
+    {
+      "n": 1,
+      "instance": "5jeq42lc5cn8xa",
+      "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "usd_per_hr": 2.49,
+      "ready_after_s": 218.73654699325562,
+      "outcome": "ready"
+    }
+  ],
+  "smoke": {
+    "ok": true,
+    "ping": "200",
+    "healthz_status": 200,
+    "healthz": {
+      "loaded": [
+        "fasth3"
+      ],
+      "loading": [],
+      "state": "ready"
+    },
+    "job": {
+      "id": "fvjob_f555b869c17947a9a04773d0f30df163",
+      "model": "fasth3",
+      "status": "succeeded",
+      "error": null,
+      "wall_s": 17.509560108184814
+    },
+    "why": null
+  },
+  "deleted": true,
+  "ok": true
+}
