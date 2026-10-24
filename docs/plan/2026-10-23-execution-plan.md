@@ -511,3 +511,20 @@ ran (pod id, $/hr), result, cost.
   `pzocv1keasg3xn`: fmt, workspace clippy `-D warnings`, `scripts/gpu/lint.sh`
   green; cudarc + models + gpucheck 1220 passed, 0 failed; both new checks
   green with no warning; `scripts/serve/check.sh` 1033 passed, 0 failed.
+- 2026-10-24 06:50Z: B5 GPU gates (coordinator), runtime image `sha-1de80f1`
+  (the PR's code; later commits change no dispatch), RTX PRO 6000 in
+  EU-RO-1 with volume `bz0ofkfx45`, pods deleted. `kernels` tier (pod
+  `kkm6prv7a2q7a2`): every `no_host_fallback` check passes on device (48
+  new `sdpa_*_on_device` checks over d 128/64/80, self and cross, f32 and
+  bf16: zero host fallbacks, device-resident output); 889 PASS, 9 FAIL. The
+  same 9 fail on main's `sha-326c879` (pod `b7qm5l9f2kip2a`, 841 PASS):
+  the five FP8 "peaked" accuracy checks (known, docs/techniques.md), the
+  three `sdpa_rule` timing margins (cuDNN 7-8 % faster than the rule's
+  fwd2 pick on LTX 1080p/720p and the 24k edge) and one Wan norm at 2 ULP;
+  none is B5's. `techniques` byte identity vs `326c879` (pod
+  `syol3vmb2k5qfd` failed at once without FV_BASELINE_SHA on the pod, a
+  coordinator error; rerun on a new pod): fasth3-4step-vsa-768p and
+  h3-480p-fullopt 124/124 frames, ltx25-512p-sol 121/121, env and prof
+  arms and the LTX cache arm, max abs diff 0; fasth3-8step skipped (not
+  on the EU volume). Evidence: `artifacts/runpod/techniques/1de80f1-10240618/`,
+  `artifacts/runpod/kernels/{1de80f1-10240616,326c879-10240623}/`.
