@@ -82,7 +82,7 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | C1 | `[deploy]` section of the family manifest; presets, variant tables, `families.tsv`, autoscale pools and the Dockerfile variant stages generated from it | `--check` green; one image with boot-time config if the owner decides so | pod | A4 | pr (single image: owner decision, analysed in ADR-0011) |
-| C2 | `fv-boot` in `fastvideo-deploy`: driver check, config materialization, weights plan (volume / registry `hydrate` / hub / none), sidecar, tunnel and phase reports, watchdog, exec; fake provider and fake chunk source tests; the ten boot variants deleted | one boot script in the tree; fv-control sends env only | pod; **GPU** one pod boot on the EU volume | C1, registry WO-002 for the `hydrate` source (volume and hub sources first) | todo |
+| C2 | `fv-boot` in `fastvideo-deploy`: driver check, config materialization, weights plan (volume / registry `hydrate` / hub / none), sidecar, tunnel and phase reports, watchdog, exec; fake provider and fake chunk source tests; the ten boot variants deleted | one boot script in the tree; fv-control sends env only | pod; **GPU** one pod boot on the EU volume | C1, registry WO-002 for the `hydrate` source (volume and hub sources first) | pr (#159: fv-boot is the images' entrypoint and every fv-control boot prefers it, ADR-0014; GPU gate pending; remaining: C2b deletes the shell boots and sends env only after the image promotion, the `registry` source after WO-002, the upsampler launcher in Rust) |
 | C3 | `fv-deploy` with the `Provider` trait (from `fastvideo-autoscale`): `runpod::{Pod,Serverless}`, `vast`, `gcp`; shared money guards, backstop, ledger, templates, release promote/rollback; fv-control on the shared `Launch` schema | `fv-deploy up` per provider with the same smoke | pod; **GPU** one `fv-deploy up` on Runpod EU | C2 | todo |
 
 ### Phase 5: validation driver and gold standards (Workstream D)
@@ -422,3 +422,17 @@ ran (pod id, $/hr), result, cost.
   `coverage.sh --tests` 13 crates / 819 passed (fastvideo-manifest joins the
   set); `fastvideo-autoscale` `committed_example_parses` and the GCP e2e
   test green on the generated files.
+- 2026-10-24 05:40Z: C2 opened draft PR #159 (`claude/c2-fv-boot`): `fv-boot`
+  in `fastvideo-deploy` (feature `boot`), the `ENTRYPOINT` of every serve
+  image (`fv-entry.sh` deleted), ADR-0014 with the inventory of the ten boots,
+  the env contract and the byte-compatible report protocol (fixture shared
+  with a control vitest). Staging: every fv-control shell boot starts with
+  `PREFER_FV_BOOT_SH` (fv-boot when the image has it, `FV_BOOT_LEGACY=1`
+  rolls back); the shell bodies and "env only" wait for the promotion (C2b).
+  On build pod `pzocv1keasg3xn`: `cargo test --locked -p fastvideo-deploy
+  --features boot` 61 + 2 (real `r2-fetch.py` against a fake chunk source,
+  streaming through the real `fetch-guard`) + 16 passed; workspace clippy
+  `-D warnings`, fmt, `coverage.sh --tests` (14 crates, 895 passed),
+  `check.sh` (exit 0), `scripts/gpu/lint.sh` green. Control: `--check`,
+  typecheck, vitest 46 files / 602 tests. No new lockfile package. GPU gate
+  (`scripts/gpu/fv-boot-smoke-pod.sh` on the EU volume) pending.
