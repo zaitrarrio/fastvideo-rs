@@ -219,6 +219,10 @@ describe("the pod env and start command", () => {
 while [ $# -gt 0 ]; do case "$1" in -d) printf '%s\\n' "$2" >> ${sent}; shift 2 ;; -H) case "$2" in @*) cat "\${2#@}" >> ${join(dir, "headers.txt")} ;; esac; shift 2 ;; *) shift ;; esac; done`);
       stub("nvidia-smi", 'echo "GPU 0: NVIDIA RTX PRO 6000 (UUID: GPU-x)"');
       stub("shutdown", "exit 0");
+      // Passwordless sudo, as the Brev images promise: the host script runs `sudo -n true` and prefixes
+      // Docker with `sudo -n` when it is not root. Stubbed so the test does not depend on the user
+      // running it (root in the containers, `runner` without sudo on the PATH in CI).
+      stub("sudo", 'while [ "${1:-}" = -n ] || [ "${1:-}" = -E ]; do shift; done; exec "$@"');
       // The container: running with a tunnel in its log, or exited (OOM) after a config error that names an env value.
       writeFileSync(join(dir, "state"), o.docker === "exits" ? "exited exit=2 oom=true" : "running exit=0 oom=false");
       writeFileSync(join(dir, "clog"), o.docker === "exits" ? "[fv-boot] start\nfv-serve: config: bad value SECRETVALUE123 for X_SECRET\n" : "[fv-boot] tunnel https://x.trycloudflare.com\n");
