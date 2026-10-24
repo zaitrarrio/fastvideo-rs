@@ -35,24 +35,34 @@ pub fn sse_events(
 ) -> impl Stream<Item = SseEvent> + Send + 'static {
     let initial = stream::iter(spec.initial);
     let follow = match (spec.follow, view) {
-        (Some(SseFollow::JobStatus { job, close_on_terminal, with_logs }), Some(view)) => {
+        (
+            Some(SseFollow::JobStatus {
+                job,
+                close_on_terminal,
+                with_logs,
+            }),
+            Some(view),
+        ) => {
             let rx = ctx.jobs().watch(job);
-            stream::unfold((ctx, view, rx, false), move |(ctx, view, rx, done)| async move {
-                if done {
-                    return None;
-                }
-                let mut rx = rx?;
-                rx.changed().await.ok()?;
-                rx.borrow_and_update();
-                let j = ctx.jobs().get(job).await?;
-                let reply = view.status_reply(&j, &ctx.view_ctx(with_logs));
-                let data = match reply.body {
-                    ReplyBody::Json(v) => v.to_string(),
-                    _ => return None,
-                };
-                let done = close_on_terminal && j.is_terminal();
-                Some((SseEvent::data(data), (ctx, view, Some(rx), done)))
-            })
+            stream::unfold(
+                (ctx, view, rx, false),
+                move |(ctx, view, rx, done)| async move {
+                    if done {
+                        return None;
+                    }
+                    let mut rx = rx?;
+                    rx.changed().await.ok()?;
+                    rx.borrow_and_update();
+                    let j = ctx.jobs().get(job).await?;
+                    let reply = view.status_reply(&j, &ctx.view_ctx(with_logs));
+                    let data = match reply.body {
+                        ReplyBody::Json(v) => v.to_string(),
+                        _ => return None,
+                    };
+                    let done = close_on_terminal && j.is_terminal();
+                    Some((SseEvent::data(data), (ctx, view, Some(rx), done)))
+                },
+            )
             .boxed()
         }
         _ => stream::empty().boxed(),

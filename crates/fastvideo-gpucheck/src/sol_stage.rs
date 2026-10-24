@@ -168,7 +168,11 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
 
 /// Prompt lines: one prompt per line (`lingbot-t2v-val3.txt`, the captions
 /// already rendered as the reference runner renders them).
-fn lingbot_prompts(file: Option<&Path>, single: Option<&str>, n: usize) -> anyhow::Result<Vec<String>> {
+fn lingbot_prompts(
+    file: Option<&Path>,
+    single: Option<&str>,
+    n: usize,
+) -> anyhow::Result<Vec<String>> {
     if let Some(p) = single {
         return Ok(vec![p.to_string()]);
     }
@@ -238,7 +242,10 @@ fn lingbot_gen(
         runs.push(serde_json::to_value(&t)?);
         fastvideo_cudarc::wan::stats::phase_reset();
     }
-    let req: Vec<f64> = runs.iter().filter_map(|r| r["request_s"].as_f64()).collect();
+    let req: Vec<f64> = runs
+        .iter()
+        .filter_map(|r| r["request_s"].as_f64())
+        .collect();
     let field = |k: &str| median(runs.iter().filter_map(|r| r[k].as_f64()).collect());
     report.note(
         "timings",
@@ -259,7 +266,12 @@ fn lingbot_gen(
             "runs": runs,
         }),
     );
-    report.check("prompts_done", runs.len() == prompts.len(), json!({"done": runs.len()}), json!({"expected": prompts.len()}))?;
+    report.check(
+        "prompts_done",
+        runs.len() == prompts.len(),
+        json!({"done": runs.len()}),
+        json!({"expected": prompts.len()}),
+    )?;
     Ok(())
 }
 
@@ -288,7 +300,12 @@ fn cosmos3_gen(
         "fullopt_speedup": fastvideo_models::cosmos3::PUBLISHED_FULLOPT_SPEEDUP,
     });
     report.note("timings", v);
-    report.check("steps", t.steps_computed + t.steps_reused == t.steps, json!({"steps": t.steps}), json!({}))?;
+    report.check(
+        "steps",
+        t.steps_computed + t.steps_reused == t.steps,
+        json!({"steps": t.steps}),
+        json!({}),
+    )?;
     Ok(())
 }
 
@@ -327,8 +344,10 @@ fn router_check(report: &mut Report, tokens: usize, device: &str) -> StageResult
         };
         let t = std::time::Instant::now();
         let (di, dw) = fastvideo_cudarc::wan::ops::moe_group_topk_device(
-            l.device_slice().ok_or_else(|| anyhow::anyhow!("logits not on device"))?,
-            b.device_slice().ok_or_else(|| anyhow::anyhow!("bias not on device"))?,
+            l.device_slice()
+                .ok_or_else(|| anyhow::anyhow!("logits not on device"))?,
+            b.device_slice()
+                .ok_or_else(|| anyhow::anyhow!("bias not on device"))?,
             p,
         )?;
         let ms = t.elapsed().as_secs_f64() * 1e3;
@@ -355,11 +374,19 @@ fn router_check(report: &mut Report, tokens: usize, device: &str) -> StageResult
             json!({"different_sets": diff_sets}),
             json!({"max": tokens / 1000}),
         )?;
-        report.check("router_weights", w_err < 2e-2, json!({"max_w_err": w_err}), json!({"max": 2e-2}))?;
+        report.check(
+            "router_weights",
+            w_err < 2e-2,
+            json!({"max_w_err": w_err}),
+            json!({"max": 2e-2}),
+        )?;
     }
     #[cfg(not(feature = "cuda"))]
     {
-        report.note("router", json!({"tokens": tokens, "host_rows": hi.len() / spec.top_k, "weights": hw.len()}));
+        report.note(
+            "router",
+            json!({"tokens": tokens, "host_rows": hi.len() / spec.top_k, "weights": hw.len()}),
+        );
     }
     Ok(())
 }
@@ -382,9 +409,12 @@ mod tests {
 
     #[test]
     fn vendored_val3_prompts_parse() {
-        let f = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/gpu/sol/lingbot-t2v-val3.txt");
+        let f = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/gpu/sol/lingbot-t2v-val3.txt");
         let p = lingbot_prompts(Some(&f), None, 3).unwrap();
         assert_eq!(p.len(), 3);
-        assert!(p.iter().all(|s| s.starts_with("{\"comprehensive_description\":")));
+        assert!(p
+            .iter()
+            .all(|s| s.starts_with("{\"comprehensive_description\":")));
     }
 }

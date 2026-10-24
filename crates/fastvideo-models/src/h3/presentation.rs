@@ -227,8 +227,8 @@ mod tests {
             .count();
         assert_eq!(pads, 3);
         assert_eq!(p.token_tags.len(), p.token_ids.len());
-        assert!(p.token_tags.iter().any(|&t| t == TAG_VIDEO));
-        assert!(p.token_tags.iter().any(|&t| t == TAG_TEXT));
+        assert!(p.token_tags.contains(&TAG_VIDEO));
+        assert!(p.token_tags.contains(&TAG_TEXT));
     }
 
     #[test]

@@ -20,11 +20,18 @@ use std::process::Command;
 
 fn env(name: &str) -> Option<String> {
     println!("cargo:rerun-if-env-changed={name}");
-    std::env::var(name).ok().map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
+    std::env::var(name)
+        .ok()
+        .map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
 }
 
 fn git(args: &[&str]) -> Option<String> {
-    let out = Command::new("git").args(args).env("TZ", "UTC").output().ok()?;
+    let out = Command::new("git")
+        .args(args)
+        .env("TZ", "UTC")
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -56,17 +63,30 @@ fn main() {
         .filter(|s| s.chars().all(|c| c.is_ascii_hexdigit()))
         .unwrap_or_else(|| "unknown".into());
     let time = env("FV_BUILD_TIME")
-        .or_else(|| git(&["log", "-1", "--format=%cd", "--date=format-local:%Y-%m-%dT%H:%M:%SZ"]))
+        .or_else(|| {
+            git(&[
+                "log",
+                "-1",
+                "--format=%cd",
+                "--date=format-local:%Y-%m-%dT%H:%M:%SZ",
+            ])
+        })
         .unwrap_or_default();
-    let build_id = env("FV_BUILD_ID").or_else(|| env("BUILD_ID")).unwrap_or_default();
+    let build_id = env("FV_BUILD_ID")
+        .or_else(|| env("BUILD_ID"))
+        .unwrap_or_default();
     let variant = env("FV_BUILD_VARIANT").unwrap_or_default();
     let mut features: Vec<String> = std::env::vars()
-        .filter_map(|(k, _)| k.strip_prefix("CARGO_FEATURE_").map(|f| f.to_ascii_lowercase().replace('_', "-")))
+        .filter_map(|(k, _)| {
+            k.strip_prefix("CARGO_FEATURE_")
+                .map(|f| f.to_ascii_lowercase().replace('_', "-"))
+        })
         .filter(|f| f != "default")
         .collect();
     features.sort();
     let profile = std::env::var("PROFILE").unwrap_or_default();
-    let version = env("FV_RELEASE_VERSION").unwrap_or_else(|| std::env::var("CARGO_PKG_VERSION").unwrap_or_default());
+    let version = env("FV_RELEASE_VERSION")
+        .unwrap_or_else(|| std::env::var("CARGO_PKG_VERSION").unwrap_or_default());
     println!("cargo:rustc-env=FV_BUILD_GIT_SHA={sha}");
     println!("cargo:rustc-env=FV_BUILD_TIME={time}");
     println!("cargo:rustc-env=FV_BUILD_ID={build_id}");

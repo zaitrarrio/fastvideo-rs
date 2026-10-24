@@ -63,7 +63,8 @@ pub fn is_forbidden_ip(ip: IpAddr) -> bool {
                 || (s[0] & 0xffc0) == 0xfe80 // link local fe80::/10
                 || (s[0] == 0x2001 && s[1] == 0x0db8) // documentation
                 || (s[0] == 0x0064 && s[1] == 0xff9b) // NAT64 (maps v4)
-                || (s[0] == 0 && s[1] == 0 && s[2] == 0 && s[3] == 0 && s[4] == 0 && s[5] == 0) // v4-compatible
+                || (s[0] == 0 && s[1] == 0 && s[2] == 0 && s[3] == 0 && s[4] == 0 && s[5] == 0)
+            // v4-compatible
         }
     }
 }
@@ -105,7 +106,9 @@ fn check_ip(ip: IpAddr, p: &TargetPolicy, url: &Url) -> Result<(), TargetError> 
         return Err(TargetError::IpLiteral);
     }
     if !p.allow_private && is_forbidden_ip(ip) {
-        return Err(TargetError::Private(url.host_str().unwrap_or_default().to_owned()));
+        return Err(TargetError::Private(
+            url.host_str().unwrap_or_default().to_owned(),
+        ));
     }
     Ok(())
 }
@@ -142,9 +145,21 @@ mod tests {
     #[test]
     fn forbidden_ranges() {
         for s in [
-            "127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "0.0.0.0",
-            "100.64.0.1", "224.0.0.1", "255.255.255.255", "::1", "fc00::1", "fe80::1",
-            "::ffff:127.0.0.1", "::ffff:10.0.0.1", "64:ff9b::a00:1",
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "0.0.0.0",
+            "100.64.0.1",
+            "224.0.0.1",
+            "255.255.255.255",
+            "::1",
+            "fc00::1",
+            "fe80::1",
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.1",
+            "64:ff9b::a00:1",
         ] {
             assert!(is_forbidden_ip(s.parse().unwrap()), "{s}");
         }
@@ -155,15 +170,34 @@ mod tests {
 
     #[test]
     fn url_rules() {
-        let ltx = TargetPolicy { https_only: true, allow_ip_literals: false, allow_private: false };
+        let ltx = TargetPolicy {
+            https_only: true,
+            allow_ip_literals: false,
+            allow_private: false,
+        };
         let u = |s: &str| Url::parse(s).unwrap();
-        assert_eq!(check_url(&u("http://example.com/a.png"), &ltx), Err(TargetError::NotHttps));
-        assert_eq!(check_url(&u("https://8.8.8.8/a.png"), &ltx), Err(TargetError::IpLiteral));
+        assert_eq!(
+            check_url(&u("http://example.com/a.png"), &ltx),
+            Err(TargetError::NotHttps)
+        );
+        assert_eq!(
+            check_url(&u("https://8.8.8.8/a.png"), &ltx),
+            Err(TargetError::IpLiteral)
+        );
         assert!(check_url(&u("https://example.com/a.png"), &ltx).is_ok());
-        assert!(matches!(check_url(&u("ftp://example.com/a"), &ltx), Err(TargetError::Scheme(_))));
+        assert!(matches!(
+            check_url(&u("ftp://example.com/a"), &ltx),
+            Err(TargetError::Scheme(_))
+        ));
         let d = TargetPolicy::default();
-        assert!(matches!(check_url(&u("http://127.0.0.1/"), &d), Err(TargetError::Private(_))));
-        assert!(matches!(check_url(&u("http://[::1]/"), &d), Err(TargetError::Private(_))));
+        assert!(matches!(
+            check_url(&u("http://127.0.0.1/"), &d),
+            Err(TargetError::Private(_))
+        ));
+        assert!(matches!(
+            check_url(&u("http://[::1]/"), &d),
+            Err(TargetError::Private(_))
+        ));
         assert!(check_url(&u("http://8.8.8.8/"), &d).is_ok());
     }
 
@@ -171,8 +205,14 @@ mod tests {
     async fn localhost_name_is_private() {
         let u = Url::parse("http://localhost:9/x").unwrap();
         let r = resolve_target(&u, &TargetPolicy::default()).await;
-        assert!(matches!(r, Err(TargetError::Private(_)) | Err(TargetError::Resolve(_))));
-        let open = TargetPolicy { allow_private: true, ..TargetPolicy::default() };
+        assert!(matches!(
+            r,
+            Err(TargetError::Private(_)) | Err(TargetError::Resolve(_))
+        ));
+        let open = TargetPolicy {
+            allow_private: true,
+            ..TargetPolicy::default()
+        };
         if let Ok(a) = resolve_target(&u, &open).await {
             assert!(a.iter().all(|a| a.ip().is_loopback()));
         }

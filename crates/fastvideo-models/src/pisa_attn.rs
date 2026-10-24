@@ -155,6 +155,7 @@ pub fn pisa_attn_head_zeroth(
     pisa_attn_head_remainder(q, k, v, tokens, dim, sparsity, scale, false)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn pisa_attn_head_remainder(
     q: &[f32],
     k: &[f32],

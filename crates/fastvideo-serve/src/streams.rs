@@ -30,7 +30,10 @@
 //! "set"`).
 
 // The registry is only driven by the publisher.
-#![cfg_attr(not(all(feature = "webrtc", feature = "http-client")), allow(dead_code))]
+#![cfg_attr(
+    not(all(feature = "webrtc", feature = "http-client")),
+    allow(dead_code)
+)]
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -46,8 +49,8 @@ use fastvideo_engine_service::stream::{
 };
 use fastvideo_engine_service::EngineService;
 use fastvideo_protocol::{
-    canvas_for_aspect, ApiError, CausalLimits, Continuity, ErrorKind, ModelCaps, ModelId, ProtocolId, SessionSpec,
-    StreamCaps, TrackSet,
+    canvas_for_aspect, ApiError, CausalLimits, Continuity, ErrorKind, ModelCaps, ModelId,
+    ProtocolId, SessionSpec, StreamCaps, TrackSet,
 };
 use fastvideo_serve_kit::ServeCtx;
 use serde::{Deserialize, Serialize};
@@ -71,7 +74,9 @@ pub struct StreamsConfig {
 impl Default for StreamsConfig {
     fn default() -> Self {
         Self {
-            outputs: crate::stream_outputs::Outputs::new(crate::stream_outputs::OutputsConfig::default()),
+            outputs: crate::stream_outputs::Outputs::new(
+                crate::stream_outputs::OutputsConfig::default(),
+            ),
             first_frame_timeout: Duration::from_secs(300),
             keep_ended: 32,
             causal: CausalLimits::default(),
@@ -81,7 +86,11 @@ impl Default for StreamsConfig {
 
 impl StreamsConfig {
     pub fn from_config(c: &crate::config::Config) -> Self {
-        Self { outputs: crate::stream_outputs::Outputs::from_config(c), causal: c.streams.causal_limits(), ..Self::default() }
+        Self {
+            outputs: crate::stream_outputs::Outputs::from_config(c),
+            causal: c.streams.causal_limits(),
+            ..Self::default()
+        }
     }
 }
 
@@ -203,7 +212,9 @@ impl Entry {
             .ok()
             .and_then(|p| p.as_ref().map(|r| r.borrow().clone()));
         let (ttff, session_state) = match self.control.lock().ok().as_deref() {
-            Some(Some(Control::Causal(c))) => (Some(c.ttff()), serde_json::to_value(c.state()).ok()),
+            Some(Some(Control::Causal(c))) => {
+                (Some(c.ttff()), serde_json::to_value(c.state()).ok())
+            }
             Some(Some(Control::Clip(p))) => (None, serde_json::to_value(p.state()).ok()),
             _ => (None, None),
         };
@@ -264,7 +275,10 @@ pub struct Streams {
 }
 
 fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn err_reply(e: &ApiError) -> Response {
@@ -274,7 +288,11 @@ fn err_reply(e: &ApiError) -> Response {
         _ => StatusCode::from_u16(e.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
     };
     let kind = serde_json::to_value(e.kind).unwrap_or(Value::Null);
-    let mut r = (status, Json(json!({"error": {"kind": kind, "message": e.message, "param": e.param}}))).into_response();
+    let mut r = (
+        status,
+        Json(json!({"error": {"kind": kind, "message": e.message, "param": e.param}})),
+    )
+        .into_response();
     if let Some(s) = e.retry_after_s {
         if let Ok(v) = HeaderValue::from_str(&s.to_string()) {
             r.headers_mut().insert("retry-after", v);
@@ -284,7 +302,10 @@ fn err_reply(e: &ApiError) -> Response {
 }
 
 fn not_found(id: &str) -> Response {
-    err_reply(&ApiError::new(ErrorKind::NotFound, format!("no stream {id}")))
+    err_reply(&ApiError::new(
+        ErrorKind::NotFound,
+        format!("no stream {id}"),
+    ))
 }
 
 impl Streams {
@@ -334,15 +355,26 @@ impl Streams {
     }
 
     fn list(&self) -> Vec<Value> {
-        let ids: Vec<String> = self.order.lock().map(|o| o.iter().rev().cloned().collect()).unwrap_or_default();
-        ids.iter().filter_map(|id| self.get(id)).map(|e| e.view()).collect()
+        let ids: Vec<String> = self
+            .order
+            .lock()
+            .map(|o| o.iter().rev().cloned().collect())
+            .unwrap_or_default();
+        ids.iter()
+            .filter_map(|id| self.get(id))
+            .map(|e| e.view())
+            .collect()
     }
 }
 
 /// The session spec for a body (pure; exposed for tests). A causal session
 /// always gets a limit: `max_seconds`, else `causal.default_max_s`, clamped
 /// to `causal.hard_max_s` (design §5.2); a clip session keeps the request's.
-pub fn session_spec(caps: &ModelCaps, b: &StreamBody, causal: &CausalLimits) -> Result<SessionSpec, ApiError> {
+pub fn session_spec(
+    caps: &ModelCaps,
+    b: &StreamBody,
+    causal: &CausalLimits,
+) -> Result<SessionSpec, ApiError> {
     let fps = b.fps.unwrap_or(match caps.stream {
         Some(StreamCaps::Causal { target_fps, .. }) => target_fps,
         _ => caps.fps.default,
@@ -353,15 +385,26 @@ pub fn session_spec(caps: &ModelCaps, b: &StreamBody, causal: &CausalLimits) -> 
             let short = caps.canvas.short_edges.first().copied().unwrap_or(480);
             canvas_for_aspect(&caps.canvas, 16.0 / 9.0, short)
         }
-        _ => return Err(ApiError::invalid_param("width", "give both width and height, or neither")),
+        _ => {
+            return Err(ApiError::invalid_param(
+                "width",
+                "give both width and height, or neither",
+            ))
+        }
     };
     if canvas.0 % 2 != 0 || canvas.1 % 2 != 0 || canvas.0 < 16 || canvas.1 < 16 {
-        return Err(ApiError::invalid_param("width", "the canvas needs even sides of at least 16"));
+        return Err(ApiError::invalid_param(
+            "width",
+            "the canvas needs even sides of at least 16",
+        ));
     }
     // WHIP publishes stereo Opus (design §5.3).
     let tracks = TrackSet::for_model(caps, canvas, fps, ("video", "audio"), 2, false);
     let tracks = if b.audio == Some(false) {
-        TrackSet { audio: None, ..tracks }
+        TrackSet {
+            audio: None,
+            ..tracks
+        }
     } else {
         tracks
     };
@@ -380,7 +423,12 @@ pub fn session_spec(caps: &ModelCaps, b: &StreamBody, causal: &CausalLimits) -> 
     })
 }
 
-async fn create(State(ctx): State<ServeCtx>, st: Arc<Streams>, headers: HeaderMap, body: Value) -> Response {
+async fn create(
+    State(ctx): State<ServeCtx>,
+    st: Arc<Streams>,
+    headers: HeaderMap,
+    body: Value,
+) -> Response {
     if let Err(e) = ctx.auth().authenticate(ProtocolId::Native, &headers) {
         return err_reply(&e);
     }
@@ -415,7 +463,12 @@ async fn start(st: &Arc<Streams>, b: StreamBody) -> Result<Arc<Entry>, ApiError>
     publish::start(st, b).await
 }
 
-async fn status(State(ctx): State<ServeCtx>, st: Arc<Streams>, headers: HeaderMap, id: String) -> Response {
+async fn status(
+    State(ctx): State<ServeCtx>,
+    st: Arc<Streams>,
+    headers: HeaderMap,
+    id: String,
+) -> Response {
     if let Err(e) = ctx.auth().authenticate(ProtocolId::Native, &headers) {
         return err_reply(&e);
     }
@@ -425,7 +478,12 @@ async fn status(State(ctx): State<ServeCtx>, st: Arc<Streams>, headers: HeaderMa
     }
 }
 
-async fn stop(State(ctx): State<ServeCtx>, st: Arc<Streams>, headers: HeaderMap, id: String) -> Response {
+async fn stop(
+    State(ctx): State<ServeCtx>,
+    st: Arc<Streams>,
+    headers: HeaderMap,
+    id: String,
+) -> Response {
     if let Err(e) = ctx.auth().authenticate(ProtocolId::Native, &headers) {
         return err_reply(&e);
     }
@@ -435,7 +493,11 @@ async fn stop(State(ctx): State<ServeCtx>, st: Arc<Streams>, headers: HeaderMap,
     e.stop.notify_one();
     // Wait (briefly) for the WHIP DELETE and the session release.
     for _ in 0..200 {
-        if e.status.lock().map(|s| s.state == StreamState::Closed).unwrap_or(true) {
+        if e.status
+            .lock()
+            .map(|s| s.state == StreamState::Closed)
+            .unwrap_or(true)
+        {
             break;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -443,7 +505,13 @@ async fn stop(State(ctx): State<ServeCtx>, st: Arc<Streams>, headers: HeaderMap,
     Json(e.view()).into_response()
 }
 
-async fn command(State(ctx): State<ServeCtx>, st: Arc<Streams>, headers: HeaderMap, id: String, body: Value) -> Response {
+async fn command(
+    State(ctx): State<ServeCtx>,
+    st: Arc<Streams>,
+    headers: HeaderMap,
+    id: String,
+    body: Value,
+) -> Response {
     if let Err(e) = ctx.auth().authenticate(ProtocolId::Native, &headers) {
         return err_reply(&e);
     }
@@ -507,28 +575,39 @@ pub fn routes(gate: Arc<ServiceGate>, cfg: StreamsConfig) -> Router<ServeCtx> {
                     Json(json!({"object": "list", "data": st.list()})).into_response()
                 }
             })
-            .post(move |ctx: State<ServeCtx>, headers: HeaderMap, Json(body): Json<Value>| {
-                let st = s2.clone();
-                async move { create(ctx, st, headers, body).await }
-            }),
+            .post(
+                move |ctx: State<ServeCtx>, headers: HeaderMap, Json(body): Json<Value>| {
+                    let st = s2.clone();
+                    async move { create(ctx, st, headers, body).await }
+                },
+            ),
         )
         .route(
             "/fv/v1/streams/{id}",
-            get(move |ctx: State<ServeCtx>, headers: HeaderMap, Path(id): Path<String>| {
-                let st = s3.clone();
-                async move { status(ctx, st, headers, id).await }
-            })
-            .delete(move |ctx: State<ServeCtx>, headers: HeaderMap, Path(id): Path<String>| {
-                let st = s4.clone();
-                async move { stop(ctx, st, headers, id).await }
-            }),
+            get(
+                move |ctx: State<ServeCtx>, headers: HeaderMap, Path(id): Path<String>| {
+                    let st = s3.clone();
+                    async move { status(ctx, st, headers, id).await }
+                },
+            )
+            .delete(
+                move |ctx: State<ServeCtx>, headers: HeaderMap, Path(id): Path<String>| {
+                    let st = s4.clone();
+                    async move { stop(ctx, st, headers, id).await }
+                },
+            ),
         )
         .route(
             "/fv/v1/streams/{id}/commands",
-            post(move |ctx: State<ServeCtx>, headers: HeaderMap, Path(id): Path<String>, Json(body): Json<Value>| {
-                let st = s5.clone();
-                async move { command(ctx, st, headers, id, body).await }
-            }),
+            post(
+                move |ctx: State<ServeCtx>,
+                      headers: HeaderMap,
+                      Path(id): Path<String>,
+                      Json(body): Json<Value>| {
+                    let st = s5.clone();
+                    async move { command(ctx, st, headers, id, body).await }
+                },
+            ),
         )
 }
 
@@ -569,13 +648,15 @@ mod publish {
     use std::time::Instant;
 
     use fastvideo_engine_service::stream::{
-        spawn_causal_pacer, spawn_clip_pacer, CausalPacerConfig, ClipCommand, ClipPacerConfig, ClipPlayerConfig,
-        PacedStream,
+        spawn_causal_pacer, spawn_clip_pacer, CausalPacerConfig, ClipCommand, ClipPacerConfig,
+        ClipPlayerConfig, PacedStream,
     };
     use fastvideo_protocol::{ApiError, ErrorKind, StreamCaps};
     use serde_json::json;
 
-    use super::{new_entry, now_ms, session_spec, Control, Entry, StreamBody, StreamState, Streams};
+    use super::{
+        new_entry, now_ms, session_spec, Control, Entry, StreamBody, StreamState, Streams,
+    };
     use crate::stream_outputs::publish::{publish, Ctx, Provisioned, Source};
     use crate::stream_outputs::{LegacyWhip, OutputState, Outputs};
 
@@ -597,33 +678,48 @@ mod publish {
     pub(super) async fn start(st: &Arc<Streams>, b: StreamBody) -> Result<Arc<Entry>, ApiError> {
         let outs = st.cfg.outputs.clone();
         // The output first: a bad destination is refused before a session opens.
-        let legacy = b.whip_url.as_ref().filter(|u| !u.trim().is_empty()).map(|u| LegacyWhip {
-            url: u.clone(),
-            token: b.whip_token.clone(),
-            user: b.whip_user.clone(),
-            target: b.whip_target.clone(),
-        });
+        let legacy = b
+            .whip_url
+            .as_ref()
+            .filter(|u| !u.trim().is_empty())
+            .map(|u| LegacyWhip {
+                url: u.clone(),
+                token: b.whip_token.clone(),
+                user: b.whip_user.clone(),
+                target: b.whip_target.clone(),
+            });
         let spec = outs.resolve(b.output.as_ref(), legacy)?;
         let caps = st
             .engine
             .caps()
             .get(&fastvideo_protocol::ModelId::new(&b.model))
             .cloned()
-            .ok_or_else(|| ApiError::invalid_param("model", format!("model `{}` is not served here", b.model)))?;
+            .ok_or_else(|| {
+                ApiError::invalid_param("model", format!("model `{}` is not served here", b.model))
+            })?;
         let spec_s = session_spec(&caps, &b, &st.cfg.causal)?;
         let causal = matches!(caps.stream, Some(StreamCaps::Causal { .. }));
-        let entry = new_entry(&caps.id, if causal { "causal" } else { "clip" }, spec_s.max_seconds);
+        let entry = new_entry(
+            &caps.id,
+            if causal { "causal" } else { "clip" },
+            spec_s.max_seconds,
+        );
         let paced: PacedStream = if causal {
             let prompt = b
                 .prompt
                 .clone()
                 .filter(|p| !p.trim().is_empty())
-                .ok_or_else(|| ApiError::invalid_param("prompt", "a causal stream needs a prompt"))?;
+                .ok_or_else(|| {
+                    ApiError::invalid_param("prompt", "a causal stream needs a prompt")
+                })?;
             let session = st.engine.open_causal_session(spec_s.clone()).await?;
             let control = session.control();
             control.set_prompt(prompt.trim());
             *entry.control.lock().map_err(internal)? = Some(Control::Causal(control));
-            spawn_causal_pacer(session, CausalPacerConfig::with_limits(&spec_s, &st.cfg.causal))?
+            spawn_causal_pacer(
+                session,
+                CausalPacerConfig::with_limits(&spec_s, &st.cfg.causal),
+            )?
         } else {
             let session = st.engine.open_clip_session(spec_s.clone()).await?;
             let (player, out) = session.into_player(ClipPlayerConfig {
@@ -637,14 +733,23 @@ mod publish {
                     e2.push_event(json!({"type": ev.type_name(), "data": ev.data()}));
                 }
             });
-            let mut clips: Vec<(String, Option<f64>, Option<u64>)> =
-                b.clips.iter().map(|c| (c.prompt.clone(), c.seconds, c.seed)).collect();
+            let mut clips: Vec<(String, Option<f64>, Option<u64>)> = b
+                .clips
+                .iter()
+                .map(|c| (c.prompt.clone(), c.seconds, c.seed))
+                .collect();
             if let Some(p) = &b.prompt {
                 clips.insert(0, (p.clone(), None, None));
             }
             for (prompt, seconds, seed) in clips {
                 player
-                    .command(ClipCommand::Enqueue { prompt, metadata: String::new(), seed, seconds, position: None })
+                    .command(ClipCommand::Enqueue {
+                        prompt,
+                        metadata: String::new(),
+                        seed,
+                        seconds,
+                        position: None,
+                    })
                     .await?;
             }
             *entry.control.lock().map_err(internal)? = Some(Control::Clip(player));
@@ -765,7 +870,11 @@ mod publish {
                 Ok(match end {
                     Some(e) => serde_json::to_value(e)
                         .ok()
-                        .and_then(|v| v.as_str().map(str::to_owned).or_else(|| Some(v.to_string())))
+                        .and_then(|v| {
+                            v.as_str()
+                                .map(str::to_owned)
+                                .or_else(|| Some(v.to_string()))
+                        })
                         .unwrap_or_else(|| "ended".into()),
                     None => "ended".into(),
                 })
@@ -782,25 +891,59 @@ mod tests {
     use super::*;
 
     fn body(max_seconds: Option<u32>) -> StreamBody {
-        StreamBody { model: "m".into(), prompt: Some("p".into()), max_seconds, ..StreamBody::default() }
+        StreamBody {
+            model: "m".into(),
+            prompt: Some("p".into()),
+            max_seconds,
+            ..StreamBody::default()
+        }
     }
 
     #[test]
     fn causal_sessions_always_get_a_clamped_limit() {
         let sf = FakeModel::sf_wan().caps;
         let l = CausalLimits::default();
-        assert_eq!(session_spec(&sf, &body(None), &l).unwrap().max_seconds, Some(120));
-        assert_eq!(session_spec(&sf, &body(Some(45)), &l).unwrap().max_seconds, Some(45));
-        assert_eq!(session_spec(&sf, &body(Some(250)), &l).unwrap().max_seconds, Some(250));
-        assert_eq!(session_spec(&sf, &body(Some(900)), &l).unwrap().max_seconds, Some(300));
+        assert_eq!(
+            session_spec(&sf, &body(None), &l).unwrap().max_seconds,
+            Some(120)
+        );
+        assert_eq!(
+            session_spec(&sf, &body(Some(45)), &l).unwrap().max_seconds,
+            Some(45)
+        );
+        assert_eq!(
+            session_spec(&sf, &body(Some(250)), &l).unwrap().max_seconds,
+            Some(250)
+        );
+        assert_eq!(
+            session_spec(&sf, &body(Some(900)), &l).unwrap().max_seconds,
+            Some(300)
+        );
         let e = session_spec(&sf, &body(Some(0)), &l).unwrap_err();
         assert_eq!(e.param.as_deref(), Some("max_seconds"));
-        let tight = CausalLimits { default_max_s: 10, hard_max_s: 20 };
-        assert_eq!(session_spec(&sf, &body(None), &tight).unwrap().max_seconds, Some(10));
-        assert_eq!(session_spec(&sf, &body(Some(60)), &tight).unwrap().max_seconds, Some(20));
+        let tight = CausalLimits {
+            default_max_s: 10,
+            hard_max_s: 20,
+        };
+        assert_eq!(
+            session_spec(&sf, &body(None), &tight).unwrap().max_seconds,
+            Some(10)
+        );
+        assert_eq!(
+            session_spec(&sf, &body(Some(60)), &tight)
+                .unwrap()
+                .max_seconds,
+            Some(20)
+        );
         // Clip sessions keep the request's (no default).
         let h3 = FakeModel::h3_max().caps;
-        assert_eq!(session_spec(&h3, &body(None), &l).unwrap().max_seconds, None);
-        assert_eq!(session_spec(&h3, &body(Some(900)), &l).unwrap().max_seconds, Some(900));
+        assert_eq!(
+            session_spec(&h3, &body(None), &l).unwrap().max_seconds,
+            None
+        );
+        assert_eq!(
+            session_spec(&h3, &body(Some(900)), &l).unwrap().max_seconds,
+            Some(900)
+        );
     }
 }

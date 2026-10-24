@@ -95,8 +95,12 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
         } else {
             xr.clone()
         };
-        let host = nvfp4::quantize(&src, rows, k, ScaleRule::Static6).map_err(anyhow::Error::msg)?;
-        let name = format!("nvfp4_operand_{}_matches_te_reference", if gelu { "gelu" } else { "plain" });
+        let host =
+            nvfp4::quantize(&src, rows, k, ScaleRule::Static6).map_err(anyhow::Error::msg)?;
+        let name = format!(
+            "nvfp4_operand_{}_matches_te_reference",
+            if gelu { "gelu" } else { "plain" }
+        );
         let q = match nl::quantize_bf16_operand(ptr(&xd), rows, k, gelu, ScaleRule::Static6) {
             Ok(q) => q,
             Err(e) => {
@@ -128,7 +132,10 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
 
     // ---- 2. Nvfp4Linear vs exact dequantized host math -------------------------------
     for (gelu, n) in [(false, 512usize), (true, 256usize)] {
-        let name = format!("nvfp4_linear_{}_matches_host", if gelu { "gelu_in" } else { "plain" });
+        let name = format!(
+            "nvfp4_linear_{}_matches_host",
+            if gelu { "gelu_in" } else { "plain" }
+        );
         let r = (|| -> anyhow::Result<serde_json::Value> {
             let wf = randn(seed ^ 0xbeef ^ n as u64, n * k, 0.05);
             let w16 = to_bf16(&wf);
@@ -151,7 +158,8 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
             } else {
                 xr.clone()
             };
-            let aq = nvfp4::quantize(&src, rows, k, ScaleRule::Static6).map_err(anyhow::Error::msg)?;
+            let aq =
+                nvfp4::quantize(&src, rows, k, ScaleRule::Static6).map_err(anyhow::Error::msg)?;
             let wq = nvfp4::quantize(&wr, n, k, ScaleRule::Static6).map_err(anyhow::Error::msg)?;
             let (ad, wdq) = (aq.dequantize(), wq.dequantize());
             let mut want = vec![0.0f32; rows * n];
@@ -169,10 +177,12 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
             }
             let dv = diff(&got, &want);
             let peak = dense.iter().fold(0.0f32, |a, v| a.max(v.abs())) as f64;
-            Ok(json!({"ok": dv.within(BF16_OUT_LIMIT), "vs_exact": dv.to_json(),
+            Ok(
+                json!({"ok": dv.within(BF16_OUT_LIMIT), "vs_exact": dv.to_json(),
                       "bias_in_epilogue": bias_in, "m": rows, "n": n, "k": k,
                       "vs_dense_rel_l2": diff(&got, &dense).rel_l2,
-                      "vs_dense_psnr_db": psnr(&got, &dense, 2.0 * peak)}))
+                      "vs_dense_psnr_db": psnr(&got, &dense, 2.0 * peak)}),
+            )
         })();
         match r {
             Ok(v) => {
@@ -198,7 +208,8 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
             let mut wdq = Vec::new();
             for (p, scale) in [(0u64, 0.05f32), (1, 5.0)] {
                 let wf = randn(seed ^ 0x9b1d ^ p, n_part * k, scale);
-                let wq = nvfp4::quantize(&wf, n_part, k, ScaleRule::Static6).map_err(anyhow::Error::msg)?;
+                let wq = nvfp4::quantize(&wf, n_part, k, ScaleRule::Static6)
+                    .map_err(anyhow::Error::msg)?;
                 wdq.extend(wq.dequantize());
                 // As the file stores it, then as the loader converts it.
                 let mut file_codes = wq.packed.clone();
@@ -212,14 +223,22 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
                     k,
                     decode_scale: nvfp4::dequant_factor(wq.amax, ScaleRule::Static6),
                 };
-                let op = Nvfp4Operand::from_host_layout(&l.codes, &l.scales, l.rows, l.k, l.decode_scale, ScaleRule::Static6)?;
+                let op = Nvfp4Operand::from_host_layout(
+                    &l.codes,
+                    &l.scales,
+                    l.rows,
+                    l.k,
+                    l.decode_scale,
+                    ScaleRule::Static6,
+                )?;
                 parts.push(Nvfp4Linear::from_operand(op, None, ScaleRule::Static6)?);
             }
             let stack = Nvfp4Stack::new(parts)?;
             let n = stack.n;
             let y = stack.forward_bf16(ptr(&xd), rows)?;
             let got = to_f32(&d.stream.memcpy_dtov(&y)?);
-            let aq = nvfp4::quantize(&xr, rows, k, ScaleRule::Static6).map_err(anyhow::Error::msg)?;
+            let aq =
+                nvfp4::quantize(&xr, rows, k, ScaleRule::Static6).map_err(anyhow::Error::msg)?;
             let ad = aq.dequantize();
             let mut want = vec![0.0f32; rows * n];
             for i in 0..rows {
@@ -234,14 +253,20 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
             // Each part on its own (its columns of the stacked output).
             let mut worst = 0.0f64;
             for (p, cols) in [(0usize, 0..n_part), (1, n_part..n)] {
-                let g: Vec<f32> = (0..rows).flat_map(|i| got[i * n + cols.start..i * n + cols.end].to_vec()).collect();
-                let w: Vec<f32> = (0..rows).flat_map(|i| want[i * n + cols.start..i * n + cols.end].to_vec()).collect();
+                let g: Vec<f32> = (0..rows)
+                    .flat_map(|i| got[i * n + cols.start..i * n + cols.end].to_vec())
+                    .collect();
+                let w: Vec<f32> = (0..rows)
+                    .flat_map(|i| want[i * n + cols.start..i * n + cols.end].to_vec())
+                    .collect();
                 let dv = diff(&g, &w);
                 worst = worst.max(dv.rel_l2);
                 let _ = p;
             }
-            Ok(json!({"ok": worst <= BF16_OUT_LIMIT, "worst_part_rel_l2": worst, "m": rows, "n": n, "k": k,
-                      "parts": 2, "vs_exact": diff(&got, &want).to_json()}))
+            Ok(
+                json!({"ok": worst <= BF16_OUT_LIMIT, "worst_part_rel_l2": worst, "m": rows, "n": n, "k": k,
+                      "parts": 2, "vs_exact": diff(&got, &want).to_json()}),
+            )
         })();
         match r {
             Ok(v) => {
@@ -263,23 +288,33 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
             use fastvideo_cudarc::wan::nvfp4_linear::Nvfp4Stack;
             let n = 256usize;
             let wf = randn(seed ^ 0x51a7, n * k, 0.05);
-            let wd = d.stream.memcpy_stod(&wf.iter().map(|&v| bf16::from_f32(v)).collect::<Vec<_>>())?;
+            let wd = d
+                .stream
+                .memcpy_stod(&wf.iter().map(|&v| bf16::from_f32(v)).collect::<Vec<_>>())?;
             let lin = || Nvfp4Linear::from_bf16(ptr(&wd), n, k, None, ScaleRule::Static6);
             let amax = xr.iter().fold(0.0f32, |a, v| a.max(v.abs()));
             let unit = amax / (6.0 * 448.0);
             let dynamic = Nvfp4Stack::new(vec![lin()?])?;
             let fixed = Nvfp4Stack::new(vec![lin()?])?.with_static_act_scale(unit)?;
             let clipped = Nvfp4Stack::new(vec![lin()?])?.with_static_act_scale(unit * 0.25)?;
-            let yd = to_f32(&d.stream.memcpy_dtov(&dynamic.forward_bf16(ptr(&xd), rows)?)?);
+            let yd = to_f32(
+                &d.stream
+                    .memcpy_dtov(&dynamic.forward_bf16(ptr(&xd), rows)?)?,
+            );
             let yf = to_f32(&d.stream.memcpy_dtov(&fixed.forward_bf16(ptr(&xd), rows)?)?);
-            let yc = to_f32(&d.stream.memcpy_dtov(&clipped.forward_bf16(ptr(&xd), rows)?)?);
+            let yc = to_f32(
+                &d.stream
+                    .memcpy_dtov(&clipped.forward_bf16(ptr(&xd), rows)?)?,
+            );
             // The scale round-trips through f32 (amax / 2688 · 2688), so allow an ulp's flips.
             let same = diff(&yf, &yd).rel_l2;
             let bits = yd.iter().zip(&yf).all(|(a, b)| a.to_bits() == b.to_bits());
             let finite = yc.iter().all(|v| v.is_finite());
-            Ok(json!({"ok": same <= 1e-3 && finite, "vs_dynamic_rel_l2": same, "bit_identical": bits,
+            Ok(
+                json!({"ok": same <= 1e-3 && finite, "vs_dynamic_rel_l2": same, "bit_identical": bits,
                       "clipped_quarter_amax_finite": finite, "clipped_vs_dynamic_rel_l2": diff(&yc, &yd).rel_l2,
-                      "m": rows, "n": n, "k": k}))
+                      "m": rows, "n": n, "k": k}),
+            )
         })();
         match r {
             Ok(v) => {
@@ -294,24 +329,25 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
     {
         let r = (|| -> anyhow::Result<serde_json::Value> {
             let (m, k, n) = (2048usize, 4096usize, 16384usize);
-            let x = ops::cast_f32_bf16_device(&fastvideo_cudarc::wan::nvfp4_gemm::fill_uniform_device(
-                m * k,
-                seed ^ 3,
-                1.0,
-            )?)?;
-            let w = ops::cast_f32_bf16_device(&fastvideo_cudarc::wan::nvfp4_gemm::fill_uniform_device(
-                n * k,
-                seed ^ 4,
-                0.05,
-            )?)?;
+            let x = ops::cast_f32_bf16_device(
+                &fastvideo_cudarc::wan::nvfp4_gemm::fill_uniform_device(m * k, seed ^ 3, 1.0)?,
+            )?;
+            let w = ops::cast_f32_bf16_device(
+                &fastvideo_cudarc::wan::nvfp4_gemm::fill_uniform_device(n * k, seed ^ 4, 0.05)?,
+            )?;
             let mut yb = unsafe { d.stream.alloc::<bf16>(m * n)? };
             device::matmul_linear_wt_bf16(&x, &w, &mut yb, m, k, n)?;
             let lin = Nvfp4Linear::from_bf16(ptr(&w), n, k, None, ScaleRule::Static6)?;
             let (yq, _) = lin.forward_bf16(ptr(&x), m, false)?;
-            let (a, b) = (to_f32(&d.stream.memcpy_dtov(&yq)?), to_f32(&d.stream.memcpy_dtov(&yb)?));
+            let (a, b) = (
+                to_f32(&d.stream.memcpy_dtov(&yq)?),
+                to_f32(&d.stream.memcpy_dtov(&yb)?),
+            );
             let peak = b.iter().fold(0.0f32, |acc, v| acc.max(v.abs())) as f64;
-            Ok(json!({"m": m, "k": k, "n": n, "rel_l2": diff(&a, &b).rel_l2,
-                      "cosine": diff(&a, &b).cosine, "psnr_db": psnr(&a, &b, 2.0 * peak)}))
+            Ok(
+                json!({"m": m, "k": k, "n": n, "rel_l2": diff(&a, &b).rel_l2,
+                      "cosine": diff(&a, &b).cosine, "psnr_db": psnr(&a, &b, 2.0 * peak)}),
+            )
         })();
         match r {
             Ok(v) => report.note("nvfp4_linear_vs_bf16_ffn_up", v),
@@ -326,7 +362,10 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
 
     // ---- 4. timings --------------------------------------------------------------------
     if std::env::var("FV_NVFP4_BENCH").is_ok_and(|v| v == "0") {
-        report.note("nvfp4_linear_bench_skipped", json!({"reason": "FV_NVFP4_BENCH=0"}));
+        report.note(
+            "nvfp4_linear_bench_skipped",
+            json!({"reason": "FV_NVFP4_BENCH=0"}),
+        );
         return Ok(());
     }
     // LTX-2.5 video FFN (4096 -> 16384 -> 4096). Stage 1 runs whole (below
@@ -357,7 +396,10 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
             )?,
         }
     }
-    eprintln!("[INFO] NVFP4 linear (ms) on sm_{}{}:", d.sm_major, d.sm_minor);
+    eprintln!(
+        "[INFO] NVFP4 linear (ms) on sm_{}{}:",
+        d.sm_major, d.sm_minor
+    );
     eprintln!(
         "[INFO] {:<24} {:>10} {:>12} {:>12} {:>12} {:>10} {:>9}",
         "shape", "bf16 GEMM", "bf16 linear", "FP8 linear", "NVFP4 GEMM", "NVFP4 lin", "speedup"
@@ -390,14 +432,12 @@ fn bench(seed: u64, m: usize, k: usize, n: usize, gelu: bool) -> anyhow::Result<
     row.insert("k".into(), json!(k));
     row.insert("n".into(), json!(n));
     row.insert("gelu_in".into(), json!(gelu));
-    let x: CudaSlice<bf16> = ops::cast_f32_bf16_device(&fastvideo_cudarc::wan::nvfp4_gemm::fill_uniform_device(
-        m * k, seed, 1.0,
-    )?)?;
-    let w: CudaSlice<bf16> = ops::cast_f32_bf16_device(&fastvideo_cudarc::wan::nvfp4_gemm::fill_uniform_device(
-        n * k,
-        seed ^ 1,
-        0.05,
-    )?)?;
+    let x: CudaSlice<bf16> = ops::cast_f32_bf16_device(
+        &fastvideo_cudarc::wan::nvfp4_gemm::fill_uniform_device(m * k, seed, 1.0)?,
+    )?;
+    let w: CudaSlice<bf16> = ops::cast_f32_bf16_device(
+        &fastvideo_cudarc::wan::nvfp4_gemm::fill_uniform_device(n * k, seed ^ 1, 0.05)?,
+    )?;
     let b16 = std::sync::Arc::new(ops::cast_f32_bf16_device(
         &fastvideo_cudarc::wan::nvfp4_gemm::fill_uniform_device(n, seed ^ 2, 0.1)?,
     )?);
@@ -479,14 +519,19 @@ fn bench(seed: u64, m: usize, k: usize, n: usize, gelu: bool) -> anyhow::Result<
         Ok(())
     })?;
     row.insert("nvfp4_linear_ms".into(), json!(ms));
-    let get = |k: &str, row: &serde_json::Map<String, serde_json::Value>| row.get(k).and_then(|v| v.as_f64());
+    let get = |k: &str, row: &serde_json::Map<String, serde_json::Value>| {
+        row.get(k).and_then(|v| v.as_f64())
+    };
     if let (Some(b), Some(q)) = (get("bf16_linear_ms", &row), get("nvfp4_linear_ms", &row)) {
         row.insert("nvfp4_linear_speedup_vs_bf16_linear".into(), json!(b / q));
     }
     if let (Some(b), Some(q)) = (get("bf16_gemm_ms", &row), get("nvfp4_gemm_ms", &row)) {
         row.insert("nvfp4_gemm_speedup_vs_bf16_gemm".into(), json!(b / q));
     }
-    if let (Some(f), Some(q)) = (get("fp8_w8a8_linear_ms", &row), get("nvfp4_linear_ms", &row)) {
+    if let (Some(f), Some(q)) = (
+        get("fp8_w8a8_linear_ms", &row),
+        get("nvfp4_linear_ms", &row),
+    ) {
         row.insert("nvfp4_linear_speedup_vs_fp8_linear".into(), json!(f / q));
     }
     Ok(serde_json::Value::Object(row))

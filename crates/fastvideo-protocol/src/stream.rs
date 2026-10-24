@@ -64,7 +64,7 @@ impl TrackSet {
     /// when it is not an integer: the clip-session admission check (design §5.5).
     pub fn samples_per_frame(&self) -> Result<u32, ApiError> {
         let fps = self.video.fps;
-        if fps == 0 || WIRE_AUDIO_RATE % fps != 0 {
+        if fps == 0 || !WIRE_AUDIO_RATE.is_multiple_of(fps) {
             return Err(ApiError::invalid_param(
                 "fps",
                 format!("fps {fps} does not divide the {WIRE_AUDIO_RATE} Hz audio clock"),
@@ -184,7 +184,10 @@ pub struct CausalLimits {
 
 impl Default for CausalLimits {
     fn default() -> Self {
-        Self { default_max_s: 120, hard_max_s: 300 }
+        Self {
+            default_max_s: 120,
+            hard_max_s: 300,
+        }
     }
 }
 
@@ -194,7 +197,10 @@ impl CausalLimits {
     /// `max_seconds`).
     pub fn resolve(&self, requested: Option<u32>) -> Result<u32, ApiError> {
         match requested {
-            Some(0) => Err(ApiError::invalid_param("max_seconds", "max_seconds must be at least 1")),
+            Some(0) => Err(ApiError::invalid_param(
+                "max_seconds",
+                "max_seconds must be at least 1",
+            )),
             Some(s) => Ok(s.min(self.hard_max_s)),
             None => Ok(self.default_max_s.min(self.hard_max_s)),
         }

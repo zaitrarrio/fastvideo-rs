@@ -164,7 +164,10 @@ fn gen(
     if warm {
         let timer = std::time::Instant::now();
         let cold = pipeline.generate(request, &clip.join("cold"))?;
-        report.note("cold_generation", timings(&cold, timer.elapsed().as_secs_f64()));
+        report.note(
+            "cold_generation",
+            timings(&cold, timer.elapsed().as_secs_f64()),
+        );
         fastvideo_cudarc::wan::stats::phase_reset();
     }
     let timer = std::time::Instant::now();

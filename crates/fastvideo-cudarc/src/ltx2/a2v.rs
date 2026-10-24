@@ -120,7 +120,8 @@ impl Waveform {
         let (len, olen) = (self.samples(), other.samples());
         let n = olen.min(len.saturating_sub(at));
         for c in 0..self.channels {
-            self.planar[c * len + at..c * len + at + n].copy_from_slice(&other.planar[c * olen..c * olen + n]);
+            self.planar[c * len + at..c * len + at + n]
+                .copy_from_slice(&other.planar[c * olen..c * olen + n]);
         }
         Ok(())
     }
@@ -204,13 +205,24 @@ pub fn decode(path: &Path, max_duration_s: Option<f64>) -> Result<Waveform> {
 /// from `start_s` (the first `round(start_s · rate)` samples dropped), and
 /// resampled to `rate` by ffmpeg when given (a spliced track takes the
 /// source's rate).
-pub fn decode_range(path: &Path, start_s: f64, max_duration_s: Option<f64>, to_rate: Option<u32>) -> Result<Waveform> {
+pub fn decode_range(
+    path: &Path,
+    start_s: f64,
+    max_duration_s: Option<f64>,
+    to_rate: Option<u32>,
+) -> Result<Waveform> {
     let (native_rate, native) = probe(path)?;
     let rate = to_rate.unwrap_or(native_rate);
     let mut cmd = Command::new("ffmpeg");
-    cmd.args(["-v", "error", "-nostdin", "-i"])
-        .arg(path)
-        .args(["-vn", "-map", "0:a:0", "-f", "f32le", "-acodec", "pcm_f32le"]);
+    cmd.args(["-v", "error", "-nostdin", "-i"]).arg(path).args([
+        "-vn",
+        "-map",
+        "0:a:0",
+        "-f",
+        "f32le",
+        "-acodec",
+        "pcm_f32le",
+    ]);
     if native != ENCODER_CHANNELS {
         cmd.args(["-ac", &ENCODER_CHANNELS.to_string()]);
     }

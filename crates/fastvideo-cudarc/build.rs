@@ -359,8 +359,11 @@ fn write_fp8(table: &Path, entries: &str) {
 }
 
 fn write_cubin_table(table: &Path, name: &str, entries: &str) {
-    fs::write(table, format!("pub static {name}: &[(u32, &[u8])] = &[\n{entries}];\n"))
-        .unwrap_or_else(|e| panic!("write {}: {e}", table.display()));
+    fs::write(
+        table,
+        format!("pub static {name}: &[(u32, &[u8])] = &[\n{entries}];\n"),
+    )
+    .unwrap_or_else(|e| panic!("write {}: {e}", table.display()));
 }
 
 /// `attn_fp4.cu` as an sm_120a cubin when 120 is listed (the block-scaled FP4
@@ -373,7 +376,14 @@ fn fp4_entries(nvcc: &Path, out: &Path, sms: &[u32]) -> String {
     let cubin = out.join("attn_fp4_sm_120a.cubin");
     let verbose = env::var("FV_DC_PTXAS_VERBOSE").is_ok_and(|v| v == "1");
     let mut cmd = Command::new(nvcc);
-    cmd.args(["-cubin", "-arch", "sm_120a", "-O3", "-std=c++17", "--use_fast_math"]);
+    cmd.args([
+        "-cubin",
+        "-arch",
+        "sm_120a",
+        "-O3",
+        "-std=c++17",
+        "--use_fast_math",
+    ]);
     if verbose {
         cmd.arg("-Xptxas=-v");
     }
@@ -389,7 +399,10 @@ fn fp4_entries(nvcc: &Path, out: &Path, sms: &[u32]) -> String {
             println!("cargo:warning=attn_fp4 sm_120a: {line}");
         }
     }
-    assert!(res.status.success(), "nvcc -cubin -arch=sm_120a failed for {SRC_FP4}:\n{text}");
+    assert!(
+        res.status.success(),
+        "nvcc -cubin -arch=sm_120a failed for {SRC_FP4}:\n{text}"
+    );
     format!("    (120, include_bytes!({:?})),\n", cubin.display())
 }
 
@@ -436,7 +449,10 @@ fn precise_module_entries(nvcc: &Path, out: &Path, sms: &[u32], src: &str, stem:
                 .arg(src)
                 .status()
                 .unwrap_or_else(|e| panic!("running {}: {e}", nvcc.display()));
-            assert!(status.success(), "nvcc {kind} -arch={arch} failed for {src}");
+            assert!(
+                status.success(),
+                "nvcc {kind} -arch={arch} failed for {src}"
+            );
         }
         entries.push_str(&format!(
             "    ({sm}, include_bytes!({:?}), include_str!({:?})),\n",
@@ -458,12 +474,23 @@ fn module_entries(nvcc: &Path, out: &Path, sms: &[u32], src: &str, stem: &str) -
             ("-ptx", format!("compute_{sm}"), &ptx),
         ] {
             let status = Command::new(nvcc)
-                .args([kind, "-arch", &arch, "-O3", "-std=c++17", "--use_fast_math", "-o"])
+                .args([
+                    kind,
+                    "-arch",
+                    &arch,
+                    "-O3",
+                    "-std=c++17",
+                    "--use_fast_math",
+                    "-o",
+                ])
                 .arg(dest)
                 .arg(src)
                 .status()
                 .unwrap_or_else(|e| panic!("running {}: {e}", nvcc.display()));
-            assert!(status.success(), "nvcc {kind} -arch={arch} failed for {src}");
+            assert!(
+                status.success(),
+                "nvcc {kind} -arch={arch} failed for {src}"
+            );
         }
         entries.push_str(&format!(
             "    ({sm}, include_bytes!({:?}), include_str!({:?})),\n",

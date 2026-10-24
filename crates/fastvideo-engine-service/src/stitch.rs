@@ -75,12 +75,27 @@ impl Stitch {
             let mut child = Command::new(fastvideo_media::tools::ffmpeg_bin())
                 .args(["-v", "error", "-nostdin", "-noautorotate", "-i"])
                 .arg(&self.source)
-                .args(["-map", "0:v:0", "-vf", &vf, sync, "passthrough", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+                .args([
+                    "-map",
+                    "0:v:0",
+                    "-vf",
+                    &vf,
+                    sync,
+                    "passthrough",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "pipe:1",
+                ])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
                 .map_err(|e| failed("ffmpeg", e))?;
-            let mut out = child.stdout.take().ok_or_else(|| failed("ffmpeg", "no stdout"))?;
+            let mut out = child
+                .stdout
+                .take()
+                .ok_or_else(|| failed("ffmpeg", "no stdout"))?;
             let bytes = RgbFrame::byte_len(w, h);
             let mut n = 0u32;
             let mut fault = None;
@@ -120,7 +135,11 @@ impl Stitch {
                 format!(
                     "{} gave {n} of {count} frames from {start}{}",
                     self.source.display(),
-                    if ok { String::new() } else { format!(": {}", err.trim()) }
+                    if ok {
+                        String::new()
+                    } else {
+                        format!(": {}", err.trim())
+                    }
                 ),
             ));
         }
@@ -129,7 +148,13 @@ impl Stitch {
 
     /// `samples` interleaved sample frames of the source's audio from
     /// `start_s`, at `rate` / `channels`; silence where it has none.
-    fn audio(&self, start_s: f64, samples: usize, rate: u32, channels: u8) -> Result<Vec<f32>, ApiError> {
+    fn audio(
+        &self,
+        start_s: f64,
+        samples: usize,
+        rate: u32,
+        channels: u8,
+    ) -> Result<Vec<f32>, ApiError> {
         let want = samples * usize::from(channels);
         if want == 0 {
             return Ok(Vec::new());
@@ -137,18 +162,42 @@ impl Stitch {
         let mut out = Vec::with_capacity(want);
         if self.source_audio {
             let start = (start_s * f64::from(rate)).round().max(0.0) as u64;
-            let af = format!("aresample={rate},atrim=start_sample={start}:end_sample={}", start + samples as u64);
+            let af = format!(
+                "aresample={rate},atrim=start_sample={start}:end_sample={}",
+                start + samples as u64
+            );
             let o = Command::new(fastvideo_media::tools::ffmpeg_bin())
                 .args(["-v", "error", "-nostdin", "-i"])
                 .arg(&self.source)
-                .args(["-map", "0:a:0", "-vn", "-af", &af, "-ac", &channels.to_string(), "-f", "f32le", "pipe:1"])
+                .args([
+                    "-map",
+                    "0:a:0",
+                    "-vn",
+                    "-af",
+                    &af,
+                    "-ac",
+                    &channels.to_string(),
+                    "-f",
+                    "f32le",
+                    "pipe:1",
+                ])
                 .stdin(Stdio::null())
                 .output()
                 .map_err(|e| failed("ffmpeg audio", e))?;
             if !o.status.success() {
-                return Err(failed("audio", String::from_utf8_lossy(&o.stderr).trim().to_owned()));
+                return Err(failed(
+                    "audio",
+                    String::from_utf8_lossy(&o.stderr).trim().to_owned(),
+                ));
             }
-            out.extend(o.stdout.chunks_exact(4).take(want).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])));
+            out.extend(
+                o.stdout
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .take(want)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])),
+            );
         }
         out.resize(want, 0.0);
         Ok(out)
@@ -158,7 +207,9 @@ impl Stitch {
     /// suffix spans around it (at the generated audio's rate and layout).
     pub fn splice_audio(&self, generated: &Pcm) -> Result<Pcm, ApiError> {
         let (rate, ch) = (generated.rate, generated.channels);
-        let span = |frames: u32| (f64::from(frames) / f64::from(self.out_fps) * f64::from(rate)).round() as usize;
+        let span = |frames: u32| {
+            (f64::from(frames) / f64::from(self.out_fps) * f64::from(rate)).round() as usize
+        };
         let at = |frame: u32| f64::from(frame) / self.source_fps;
         let pre = self.audio(at(self.prefix.0), span(self.prefix.1), rate, ch)?;
         let post = self.audio(at(self.suffix.0), span(self.suffix.1), rate, ch)?;
@@ -173,7 +224,9 @@ impl Stitch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fastvideo_protocol::{AudioPlan, ExtendAt, PostProcess, ResolvedEdit, ResolvedEditOp, SamplingOverrides, Task};
+    use fastvideo_protocol::{
+        AudioPlan, ExtendAt, PostProcess, ResolvedEdit, ResolvedEditOp, SamplingOverrides, Task,
+    };
 
     fn job(at: ExtendAt, start: u32, window: u32, source: u32) -> ResolvedJob {
         ResolvedJob {
@@ -189,7 +242,10 @@ mod tests {
             keyframes: vec![],
             references: vec![],
             audio_in: None,
-            audio: AudioPlan::Native { rate: 48_000, channels: 2 },
+            audio: AudioPlan::Native {
+                rate: 48_000,
+                channels: 2,
+            },
             post: PostProcess::default(),
             sampling: SamplingOverrides::default(),
             tier: None,

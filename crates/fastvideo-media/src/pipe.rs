@@ -178,7 +178,10 @@ impl std::fmt::Debug for SparePool {
         let st = self.lock();
         f.debug_struct("SparePool")
             .field("enabled", &self.0.enabled)
-            .field("spare", &st.spare.as_ref().map(|s| (s.spec.codec, s.proc.child.id())))
+            .field(
+                "spare",
+                &st.spare.as_ref().map(|s| (s.spec.codec, s.proc.child.id())),
+            )
             .field("pending", &st.pending)
             .finish()
     }
@@ -187,7 +190,11 @@ impl std::fmt::Debug for SparePool {
 impl SparePool {
     /// A pool that keeps a spare (`enabled`) or never does.
     pub fn new(enabled: bool) -> Self {
-        Self(Arc::new(PoolShared { enabled, st: Mutex::new(PoolState::default()), cv: Condvar::new() }))
+        Self(Arc::new(PoolShared {
+            enabled,
+            st: Mutex::new(PoolState::default()),
+            cv: Condvar::new(),
+        }))
     }
 
     /// One session's pool; disabled with `FV_ENCODER_SPARE=0`.
@@ -228,15 +235,19 @@ impl SparePool {
         }
         self.lock().pending += 1;
         let weak: Weak<PoolShared> = Arc::downgrade(&self.0);
-        let spawned = std::thread::Builder::new().name("ffmpeg-spare-prewarm".into()).spawn(move || {
-            let spec = spec();
-            let Some(pool) = weak.upgrade().map(SparePool) else { return };
-            if let Some(spec) = spec {
-                pool.prewarm(spec);
-            }
-            pool.lock().pending -= 1;
-            pool.0.cv.notify_all();
-        });
+        let spawned = std::thread::Builder::new()
+            .name("ffmpeg-spare-prewarm".into())
+            .spawn(move || {
+                let spec = spec();
+                let Some(pool) = weak.upgrade().map(SparePool) else {
+                    return;
+                };
+                if let Some(spec) = spec {
+                    pool.prewarm(spec);
+                }
+                pool.lock().pending -= 1;
+                pool.0.cv.notify_all();
+            });
         if spawned.is_err() {
             self.lock().pending -= 1;
         }
@@ -262,7 +273,12 @@ impl SparePool {
             if now >= deadline {
                 break;
             }
-            st = self.0.cv.wait_timeout(st, deadline - now).map(|r| r.0).unwrap_or_else(|p| p.into_inner().0);
+            st = self
+                .0
+                .cv
+                .wait_timeout(st, deadline - now)
+                .map(|r| r.0)
+                .unwrap_or_else(|p| p.into_inner().0);
         }
         if st.spare.as_ref().is_some_and(|s| s.spec.args == spec.args) {
             st.spare.take()
@@ -289,10 +305,18 @@ impl Proc {
     /// discards the first `skip` frames (a primer's output).
     pub(crate) fn spawn(args: &[String], framer: Framer, skip: usize) -> Result<Self> {
         let mut cmd = tools::ffmpeg_command();
-        cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
-        let mut child = cmd.spawn().map_err(|e| MediaError::tool("ffmpeg", format!("not available: {e}")))?;
+        cmd.args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| MediaError::tool("ffmpeg", format!("not available: {e}")))?;
         let stdin = child.stdin.take();
-        let stdout = child.stdout.take().ok_or_else(|| MediaError::tool("ffmpeg", "no stdout"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| MediaError::tool("ffmpeg", "no stdout"))?;
         let (tx, rx) = mpsc::channel();
         let first_out = Arc::new(OnceLock::new());
         let first = first_out.clone();
@@ -301,8 +325,9 @@ impl Proc {
             Framer::Ivf => "vp8-ffmpeg-out",
             Framer::Raw(_) => "ffmpeg-decode-out",
         };
-        let reader =
-            std::thread::Builder::new().name(name.into()).spawn(move || read_frames(stdout, framer, skip, &tx, &first));
+        let reader = std::thread::Builder::new()
+            .name(name.into())
+            .spawn(move || read_frames(stdout, framer, skip, &tx, &first));
         let reader = match reader {
             Ok(r) => r,
             Err(e) => {
@@ -311,7 +336,14 @@ impl Proc {
                 return Err(e.into());
             }
         };
-        Ok(Self { child, stdin, rx, reader: Some(reader), first_out, eof_at: None })
+        Ok(Self {
+            child,
+            stdin,
+            rx,
+            reader: Some(reader),
+            first_out,
+            eof_at: None,
+        })
     }
 
     pub(crate) fn id(&self) -> u32 {
@@ -319,8 +351,13 @@ impl Proc {
     }
 
     pub(crate) fn write(&mut self, data: &[u8]) -> Result<()> {
-        let stdin = self.stdin.as_mut().ok_or_else(|| MediaError::Encode("encoder finished".into()))?;
-        stdin.write_all(data).map_err(|e| MediaError::tool("ffmpeg", format!("stdin: {e}")))
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| MediaError::Encode("encoder finished".into()))?;
+        stdin
+            .write_all(data)
+            .map_err(|e| MediaError::tool("ffmpeg", format!("stdin: {e}")))
     }
 
     /// Close stdin: ffmpeg encodes what it has and exits.
@@ -348,7 +385,10 @@ impl Proc {
         }
         let status = self.child.wait()?;
         if !status.success() {
-            return Err(MediaError::tool("ffmpeg", format!("{what} encode exited with {status}")));
+            return Err(MediaError::tool(
+                "ffmpeg",
+                format!("{what} encode exited with {status}"),
+            ));
         }
         Ok(())
     }
@@ -430,7 +470,10 @@ pub(crate) fn take_raw_frames(buf: &mut Vec<u8>, len: usize) -> Vec<Vec<u8>> {
         return Vec::new();
     }
     let n = buf.len() / len;
-    let out = buf[..n * len].chunks_exact(len).map(<[u8]>::to_vec).collect();
+    let out = buf[..n * len]
+        .chunks_exact(len)
+        .map(<[u8]>::to_vec)
+        .collect();
     buf.drain(..n * len);
     out
 }
@@ -440,7 +483,8 @@ pub(crate) fn take_complete_aus(buf: &mut Vec<u8>) -> Vec<Vec<u8>> {
     let mut starts = Vec::new();
     let mut i = 0;
     while i + 4 <= buf.len() {
-        if buf[i] == 0 && buf[i + 1] == 0 && buf[i + 2] == 1 && buf[i + 3] & 0x1f == h264::nal::AUD {
+        if buf[i] == 0 && buf[i + 1] == 0 && buf[i + 2] == 1 && buf[i + 3] & 0x1f == h264::nal::AUD
+        {
             // Include the leading zero of a 4-byte start code.
             let s = if i > 0 && buf[i - 1] == 0 { i - 1 } else { i };
             starts.push(s);
@@ -465,7 +509,9 @@ pub(crate) fn take_complete_aus(buf: &mut Vec<u8>) -> Vec<Vec<u8>> {
 /// frame 1 (the first real one) a forced keyframe. `args` ends with the
 /// output (`-f <fmt> pipe:1`); the option goes before it.
 pub(crate) fn primed_args(args: &[String]) -> Vec<String> {
-    debug_assert!(args.len() >= 3 && args[args.len() - 1] == "pipe:1" && args[args.len() - 3] == "-f");
+    debug_assert!(
+        args.len() >= 3 && args[args.len() - 1] == "pipe:1" && args[args.len() - 3] == "-f"
+    );
     let at = args.len().saturating_sub(3);
     let mut a = args[..at].to_vec();
     a.extend(["-force_key_frames".into(), "expr:eq(n,1)".into()]);
@@ -486,16 +532,27 @@ struct Spare {
 impl Spare {
     fn start(spec: SpareSpec) -> Result<Self> {
         let mut proc = Proc::spawn(&primed_args(&spec.args), spec.framer, 1)?;
-        let mut stdin = proc.stdin.take().ok_or_else(|| MediaError::tool("ffmpeg", "no stdin"))?;
+        let mut stdin = proc
+            .stdin
+            .take()
+            .ok_or_else(|| MediaError::tool("ffmpeg", "no stdin"))?;
         let (tx, primer) = mpsc::channel();
         let frame_len = spec.frame_len;
-        std::thread::Builder::new().name("ffmpeg-spare-primer".into()).spawn(move || {
-            // Blocks until ffmpeg reads it: done means started. Killing the
-            // spare fails the write.
-            let black = vec![0u8; frame_len];
-            let _ = tx.send(stdin.write_all(&black).map(|()| stdin));
-        })?;
-        Ok(Self { spec, proc, primer, primed: None, started: Instant::now() })
+        std::thread::Builder::new()
+            .name("ffmpeg-spare-primer".into())
+            .spawn(move || {
+                // Blocks until ffmpeg reads it: done means started. Killing the
+                // spare fails the write.
+                let black = vec![0u8; frame_len];
+                let _ = tx.send(stdin.write_all(&black).map(|()| stdin));
+            })?;
+        Ok(Self {
+            spec,
+            proc,
+            primer,
+            primed: None,
+            started: Instant::now(),
+        })
     }
 
     /// Whether the primer went in (without waiting).
@@ -509,11 +566,22 @@ impl Spare {
     /// The primed process, waiting for its primer when it is still starting.
     fn into_proc(mut self) -> Result<(Proc, SpareKind)> {
         self.is_primed();
-        let kind = if self.primed.is_some() { SpareKind::Warm } else { SpareKind::Warming };
-        let Spare { mut proc, primer, primed, .. } = self;
+        let kind = if self.primed.is_some() {
+            SpareKind::Warm
+        } else {
+            SpareKind::Warming
+        };
+        let Spare {
+            mut proc,
+            primer,
+            primed,
+            ..
+        } = self;
         let primed = match primed {
             Some(r) => r,
-            None => primer.recv().map_err(|_| MediaError::tool("ffmpeg", "spare primer thread died"))?,
+            None => primer
+                .recv()
+                .map_err(|_| MediaError::tool("ffmpeg", "spare primer thread died"))?,
         };
         let stdin = primed.map_err(|e| MediaError::tool("ffmpeg", format!("spare primer: {e}")))?;
         if !proc.alive() {
@@ -583,7 +651,10 @@ impl PipeProcs {
                 }
             }
         }
-        Ok((Proc::spawn(&self.spec.args, self.spec.framer, 0)?, SpareKind::Cold))
+        Ok((
+            Proc::spawn(&self.spec.args, self.spec.framer, 0)?,
+            SpareKind::Cold,
+        ))
     }
 
     pub(crate) fn stats(&self) -> &RestartStats {
@@ -592,19 +663,34 @@ impl PipeProcs {
 
     /// Ids of the encoder's ffmpeg processes alive now (current, flushing).
     pub(crate) fn pids(&self) -> Vec<u32> {
-        self.cur.iter().chain(self.draining.iter()).map(|p| p.child.id()).collect()
+        self.cur
+            .iter()
+            .chain(self.draining.iter())
+            .map(|p| p.child.id())
+            .collect()
     }
 
     pub(crate) fn write(&mut self, data: &[u8]) -> Result<()> {
-        self.cur.as_mut().ok_or_else(|| MediaError::Encode("encoder finished".into()))?.write(data)
+        self.cur
+            .as_mut()
+            .ok_or_else(|| MediaError::Encode("encoder finished".into()))?
+            .write(data)
     }
 
     /// Replace the current process: its next frame is a keyframe.
     pub(crate) fn restart(&mut self) -> Result<()> {
-        if self.pool.is_some() && self.cur.as_ref().is_some_and(|c| c.first_out.get().is_none()) {
+        if self.pool.is_some()
+            && self
+                .cur
+                .as_ref()
+                .is_some_and(|c| c.first_out.get().is_none())
+        {
             // Its first output, still to come, is a keyframe.
             self.stats.skipped += 1;
-            tracing::debug!(codec = self.spec.codec, "keyframe restart skipped: the first keyframe is still on its way");
+            tracing::debug!(
+                codec = self.spec.codec,
+                "keyframe restart skipped: the first keyframe is still on its way"
+            );
             return Ok(());
         }
         let t0 = Instant::now();
@@ -630,7 +716,10 @@ impl PipeProcs {
                 let d = self.draining.pop_front().expect("front");
                 d.reap(self.spec.codec)?;
             } else if d.eof_at.is_some_and(|t| t.elapsed() > DRAIN_TIMEOUT) {
-                tracing::warn!(codec = self.spec.codec, "ffmpeg did not exit after EOF; killed");
+                tracing::warn!(
+                    codec = self.spec.codec,
+                    "ffmpeg did not exit after EOF; killed"
+                );
                 self.draining.pop_front();
             } else {
                 return Ok(out);
@@ -646,19 +735,24 @@ impl PipeProcs {
     /// Records a finished restart and asks the pool for a spare of this
     /// profile once the current process has output its first frame.
     fn after_output(&mut self) {
-        let Some(first) = self.cur.as_ref().and_then(|c| c.first_out.get().copied()) else { return };
+        let Some(first) = self.cur.as_ref().and_then(|c| c.first_out.get().copied()) else {
+            return;
+        };
         if std::mem::take(&mut self.refill) {
             if let Some(p) = &self.pool {
                 p.prewarm(self.spec.clone());
             }
         }
-        let Some((t0, kind)) = self.restart.take() else { return };
+        let Some((t0, kind)) = self.restart.take() else {
+            return;
+        };
         let codec = self.spec.codec;
         let latency = first.saturating_duration_since(t0);
         self.stats.latencies.push((kind, latency));
         metrics::histogram!("fv_encoder_restart_duration_seconds", "codec" => codec, "spare" => kind.as_str())
             .record(latency.as_secs_f64());
-        metrics::counter!("fv_encoder_restarts_total", "codec" => codec, "spare" => kind.as_str()).increment(1);
+        metrics::counter!("fv_encoder_restarts_total", "codec" => codec, "spare" => kind.as_str())
+            .increment(1);
         tracing::info!(
             codec,
             spare = kind.as_str(),
@@ -678,7 +772,9 @@ impl PipeProcs {
             let first = c.first_out.clone();
             out.extend(c.close(self.spec.codec)?);
             if let (Some((t0, kind)), Some(t)) = (self.restart.take(), first.get()) {
-                self.stats.latencies.push((kind, t.saturating_duration_since(t0)));
+                self.stats
+                    .latencies
+                    .push((kind, t.saturating_duration_since(t0)));
             }
         }
         Ok(out)
@@ -692,7 +788,10 @@ mod tests {
     #[test]
     fn raw_framer_splits_fixed_size_pictures() {
         let mut b: Vec<u8> = (0..10).collect();
-        assert_eq!(take_raw_frames(&mut b, 4), vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]]);
+        assert_eq!(
+            take_raw_frames(&mut b, 4),
+            vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]]
+        );
         assert_eq!(b, vec![8, 9]);
         assert!(take_raw_frames(&mut b, 4).is_empty());
         let (tx, rx) = mpsc::channel();
@@ -704,8 +803,13 @@ mod tests {
 
     #[test]
     fn primer_keyframe_goes_before_the_output() {
-        let a: Vec<String> = ["-i", "pipe:0", "-c:v", "libvpx", "-f", "ivf", "pipe:1"].map(String::from).to_vec();
-        assert_eq!(primed_args(&a).join(" "), "-i pipe:0 -c:v libvpx -force_key_frames expr:eq(n,1) -f ivf pipe:1");
+        let a: Vec<String> = ["-i", "pipe:0", "-c:v", "libvpx", "-f", "ivf", "pipe:1"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(
+            primed_args(&a).join(" "),
+            "-i pipe:0 -c:v libvpx -force_key_frames expr:eq(n,1) -f ivf pipe:1"
+        );
     }
 
     #[test]
@@ -728,7 +832,12 @@ mod tests {
     fn a_disabled_pool_never_prewarms_or_waits() {
         let p = SparePool::new(false);
         p.prewarm_with(|| panic!("not called"));
-        let spec = SpareSpec { codec: "libvpx", args: vec![], framer: Framer::Ivf, frame_len: 3 };
+        let spec = SpareSpec {
+            codec: "libvpx",
+            args: vec![],
+            framer: Framer::Ivf,
+            frame_len: 3,
+        };
         p.prewarm(spec.clone());
         assert!(p.spare_state().is_none());
         assert!(p.take(&spec).is_none());
@@ -742,7 +851,12 @@ mod tests {
             let _ = rx.recv();
             None
         });
-        let spec = SpareSpec { codec: "libvpx", args: vec![], framer: Framer::Ivf, frame_len: 3 };
+        let spec = SpareSpec {
+            codec: "libvpx",
+            args: vec![],
+            framer: Framer::Ivf,
+            frame_len: 3,
+        };
         let t0 = Instant::now();
         let h = {
             let p = p.clone();

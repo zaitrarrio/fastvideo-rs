@@ -130,6 +130,7 @@ impl RefIo {
 
     /// Record (dump) or compare one output. `rel_limit` bounds relative L2;
     /// `seconds` is how long the output took to generate (recorded in the report).
+    #[allow(clippy::too_many_arguments)]
     pub fn output(
         &mut self,
         report: &mut Report,

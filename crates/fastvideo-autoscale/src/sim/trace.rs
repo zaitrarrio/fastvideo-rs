@@ -42,16 +42,32 @@ pub struct Arrival {
 
 impl Arrival {
     pub fn job(t: f64) -> Self {
-        Self { t, stream: false, duration_s: 0.0, duration_scale: 1.0 }
+        Self {
+            t,
+            stream: false,
+            duration_s: 0.0,
+            duration_scale: 1.0,
+        }
     }
     pub fn stream(t: f64, duration_s: f64) -> Self {
-        Self { t, stream: true, duration_s, duration_scale: 1.0 }
+        Self {
+            t,
+            stream: true,
+            duration_s,
+            duration_scale: 1.0,
+        }
     }
 }
 
 /// Poisson arrivals on `[start, start + dur)` with rate `rate(t)` per hour
 /// (thinning against `max_rate`).
-pub fn poisson(rng: &mut Rng, start: f64, dur: f64, max_rate_per_hr: f64, rate_per_hr: impl Fn(f64) -> f64) -> Vec<Arrival> {
+pub fn poisson(
+    rng: &mut Rng,
+    start: f64,
+    dur: f64,
+    max_rate_per_hr: f64,
+    rate_per_hr: impl Fn(f64) -> f64,
+) -> Vec<Arrival> {
     let mut out = Vec::new();
     if max_rate_per_hr <= 0.0 {
         return out;
@@ -87,12 +103,19 @@ pub struct Diurnal {
 
 impl Diurnal {
     pub fn new(peak_ratio: f64, peak_hour: f64) -> Self {
-        let shape = |k: f64, h: f64| (1.0 + (2.0 * std::f64::consts::PI * (h - peak_hour) / 24.0).cos()).powf(k);
+        let shape = |k: f64, h: f64| {
+            (1.0 + (2.0 * std::f64::consts::PI * (h - peak_hour) / 24.0).cos()).powf(k)
+        };
         // Mean over the day and over the busiest hour, by minutes.
         let stats = |k: f64| {
-            let mins: Vec<f64> = (0..1440).map(|m| shape(k, (f64::from(m) + 0.5) / 60.0)).collect();
+            let mins: Vec<f64> = (0..1440)
+                .map(|m| shape(k, (f64::from(m) + 0.5) / 60.0))
+                .collect();
             let mean = mins.iter().sum::<f64>() / 1440.0;
-            let best = mins.chunks(60).map(|c| c.iter().sum::<f64>() / 60.0).fold(0.0, f64::max);
+            let best = mins
+                .chunks(60)
+                .map(|c| c.iter().sum::<f64>() / 60.0)
+                .fold(0.0, f64::max);
             (mean, best / mean)
         };
         let (mut lo, mut hi) = (0.01, 8.0);
@@ -105,11 +128,16 @@ impl Diurnal {
             }
         }
         let k = 0.5 * (lo + hi);
-        Self { k, norm: stats(k).0, peak_hour }
+        Self {
+            k,
+            norm: stats(k).0,
+            peak_hour,
+        }
     }
     /// Rate multiplier at hour-of-day `h` (mean 1 over a day).
     pub fn factor(&self, h: f64) -> f64 {
-        (1.0 + (2.0 * std::f64::consts::PI * (h - self.peak_hour) / 24.0).cos()).powf(self.k) / self.norm
+        (1.0 + (2.0 * std::f64::consts::PI * (h - self.peak_hour) / 24.0).cos()).powf(self.k)
+            / self.norm
     }
     pub fn max_factor(&self) -> f64 {
         2f64.powf(self.k) / self.norm
@@ -117,22 +145,44 @@ impl Diurnal {
     /// Busiest-hour / average, by the hour.
     pub fn busiest_hour_ratio(&self) -> f64 {
         (0..24)
-            .map(|h| (0..60).map(|m| self.factor(f64::from(h) + (f64::from(m) + 0.5) / 60.0)).sum::<f64>() / 60.0)
+            .map(|h| {
+                (0..60)
+                    .map(|m| self.factor(f64::from(h) + (f64::from(m) + 0.5) / 60.0))
+                    .sum::<f64>()
+                    / 60.0
+            })
             .fold(0.0, f64::max)
     }
 }
 
 /// `hours` of diurnal traffic averaging `avg_per_hr`, peaking at `peak_hour`
 /// (hours after `start`, which is taken as midnight).
-pub fn diurnal(rng: &mut Rng, start: f64, hours: f64, avg_per_hr: f64, peak_ratio: f64, peak_hour: f64) -> Vec<Arrival> {
+pub fn diurnal(
+    rng: &mut Rng,
+    start: f64,
+    hours: f64,
+    avg_per_hr: f64,
+    peak_ratio: f64,
+    peak_hour: f64,
+) -> Vec<Arrival> {
     let d = Diurnal::new(peak_ratio, peak_hour);
     let max = avg_per_hr * d.max_factor();
-    poisson(rng, start, hours * 3600.0, max, |t| avg_per_hr * d.factor((t / 3600.0) % 24.0))
+    poisson(rng, start, hours * 3600.0, max, |t| {
+        avg_per_hr * d.factor((t / 3600.0) % 24.0)
+    })
 }
 
 /// A steady base with `mult` × the base rate for `spike_min` minutes
 /// starting `at_h` hours in.
-pub fn spike(rng: &mut Rng, start: f64, hours: f64, base_per_hr: f64, mult: f64, at_h: f64, spike_min: f64) -> Vec<Arrival> {
+pub fn spike(
+    rng: &mut Rng,
+    start: f64,
+    hours: f64,
+    base_per_hr: f64,
+    mult: f64,
+    at_h: f64,
+    spike_min: f64,
+) -> Vec<Arrival> {
     let (a, b) = (at_h * 3600.0, at_h * 3600.0 + spike_min * 60.0);
     poisson(rng, start, hours * 3600.0, base_per_hr * mult, |t| {
         if t >= a && t < b {
@@ -153,9 +203,18 @@ pub fn jitter(rng: &mut Rng, v: &mut [Arrival], jitter: f64) {
 
 /// Nothing for `idle_h` hours, then `n` jobs spread over `burst_s`
 /// seconds, then nothing for `tail_h` hours.
-pub fn idle_burst(rng: &mut Rng, start: f64, idle_h: f64, n: usize, burst_s: f64, tail_h: f64) -> (Vec<Arrival>, f64) {
+pub fn idle_burst(
+    rng: &mut Rng,
+    start: f64,
+    idle_h: f64,
+    n: usize,
+    burst_s: f64,
+    tail_h: f64,
+) -> (Vec<Arrival>, f64) {
     let t0 = start + idle_h * 3600.0;
-    let mut v: Vec<Arrival> = (0..n).map(|_| Arrival::job((t0 + rng.next_f64() * burst_s).floor())).collect();
+    let mut v: Vec<Arrival> = (0..n)
+        .map(|_| Arrival::job((t0 + rng.next_f64() * burst_s).floor()))
+        .collect();
     v.sort_by(|a, b| a.t.total_cmp(&b.t));
     (v, idle_h + burst_s / 3600.0 + tail_h)
 }
@@ -167,15 +226,26 @@ mod tests {
     #[test]
     fn diurnal_busiest_hour_is_2_5x_average() {
         let d = Diurnal::new(2.5, 14.0);
-        assert!((d.busiest_hour_ratio() - 2.5).abs() < 0.01, "{}", d.busiest_hour_ratio());
-        let mean: f64 = (0..1440).map(|m| d.factor((f64::from(m) + 0.5) / 60.0)).sum::<f64>() / 1440.0;
+        assert!(
+            (d.busiest_hour_ratio() - 2.5).abs() < 0.01,
+            "{}",
+            d.busiest_hour_ratio()
+        );
+        let mean: f64 = (0..1440)
+            .map(|m| d.factor((f64::from(m) + 0.5) / 60.0))
+            .sum::<f64>()
+            / 1440.0;
         assert!((mean - 1.0).abs() < 1e-6);
         // Generated traffic matches: ~avg × 24 jobs, and the peak hour holds ~2.5× the mean hour.
         let mut rng = Rng::new(7);
         let v = diurnal(&mut rng, 0.0, 24.0 * 20.0, 100.0, 2.5, 14.0);
         let per_day = v.len() as f64 / 20.0;
         assert!((per_day - 2400.0).abs() < 100.0, "{per_day}");
-        let at14 = v.iter().filter(|a| ((a.t / 3600.0) % 24.0).floor() == 14.0).count() as f64 / 20.0;
+        let at14 = v
+            .iter()
+            .filter(|a| ((a.t / 3600.0) % 24.0).floor() == 14.0)
+            .count() as f64
+            / 20.0;
         assert!((at14 / 100.0 - 2.5).abs() < 0.25, "{at14}");
     }
 

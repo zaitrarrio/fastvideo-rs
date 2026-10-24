@@ -21,7 +21,11 @@ const TOKEN: &str = "direct-internal-token";
 const ADMIN: &str = "fvadm_direct_test";
 
 fn tmp(tag: &str) -> PathBuf {
-    tempfile::Builder::new().prefix(&format!("fv-direct-{tag}-")).tempdir().unwrap().keep()
+    tempfile::Builder::new()
+        .prefix(&format!("fv-direct-{tag}-"))
+        .tempdir()
+        .unwrap()
+        .keep()
 }
 
 struct Shared {
@@ -33,10 +37,14 @@ impl Shared {
     fn new() -> Self {
         let arts = tmp("arts");
         std::fs::create_dir_all(&arts).unwrap();
-        Self { mock: MockD1::new(), arts }
+        Self {
+            mock: MockD1::new(),
+            arts,
+        }
     }
     fn d1(&self) -> D1Client {
-        D1Client::new(std::sync::Arc::new(self.mock.clone())).with_retry(fastvideo_serve_kit::d1::RetryPolicy::immediate(1))
+        D1Client::new(std::sync::Arc::new(self.mock.clone()))
+            .with_retry(fastvideo_serve_kit::d1::RetryPolicy::immediate(1))
     }
 }
 
@@ -52,7 +60,10 @@ async fn direct_worker(sh: &Shared, tag: &str) -> Running {
     let base = format!("http://{}", l.local_addr().unwrap());
     let mut env = BTreeMap::new();
     env.insert("FV_API_KEYS".to_owned(), KeyRing::hash_hex(KEY));
-    env.insert("FV_URL_SIGNING_KEY".to_owned(), "shared-signing-key".to_owned());
+    env.insert(
+        "FV_URL_SIGNING_KEY".to_owned(),
+        "shared-signing-key".to_owned(),
+    );
     env.insert("FV_STATE_DIR".to_owned(), tmp(tag).display().to_string());
     env.insert("FV_INTERNAL_TOKEN".to_owned(), TOKEN.to_owned());
     env.insert("FV_ARTIFACTS_DIR".to_owned(), sh.arts.display().to_string());
@@ -75,23 +86,49 @@ async fn direct_worker(sh: &Shared, tag: &str) -> Running {
     c.auth.key_store = KeyStoreBackend::D1;
     c.engine.fake.models = vec!["fake-h3-turbo".into()];
     c.validate().unwrap();
-    let app = App::build(c, Overrides { d1: Some(sh.d1()), ..Default::default() }).await.unwrap();
+    let app = App::build(
+        c,
+        Overrides {
+            d1: Some(sh.d1()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     app.gate.engine().wait_ready().await;
     let router = app.router.clone();
     let task = tokio::spawn(async move {
         let _ = axum::serve(l, router).await;
     });
-    Running { app, base, _task: task }
+    Running {
+        app,
+        base,
+        _task: task,
+    }
 }
 
 struct Http(reqwest::Client);
 
 impl Http {
     fn new() -> Self {
-        Self(reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).build().unwrap())
+        Self(
+            reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+        )
     }
-    async fn call(&self, method: &str, url: &str, body: Option<Value>, auth: Option<&str>) -> (u16, Value, reqwest::header::HeaderMap) {
-        let mut r = self.0.request(reqwest::Method::from_bytes(method.as_bytes()).unwrap(), url);
+    async fn call(
+        &self,
+        method: &str,
+        url: &str,
+        body: Option<Value>,
+        auth: Option<&str>,
+    ) -> (u16, Value, reqwest::header::HeaderMap) {
+        let mut r = self
+            .0
+            .request(reqwest::Method::from_bytes(method.as_bytes()).unwrap(), url);
         if let Some(a) = auth {
             r = r.header("authorization", a);
         }
@@ -102,7 +139,12 @@ impl Http {
         let s = resp.status().as_u16();
         let h = resp.headers().clone();
         let bytes = resp.bytes().await.unwrap();
-        (s, serde_json::from_slice(&bytes).unwrap_or(Value::String(String::from_utf8_lossy(&bytes).into_owned())), h)
+        (
+            s,
+            serde_json::from_slice(&bytes)
+                .unwrap_or(Value::String(String::from_utf8_lossy(&bytes).into_owned())),
+            h,
+        )
     }
     async fn poll(&self, url: &str, auth: Option<&str>, done: impl Fn(&Value) -> bool) -> Value {
         for _ in 0..1200 {
@@ -135,11 +177,29 @@ async fn direct_workers_take_minted_keys_and_the_admin_token() {
     let keys = |b: &str| format!("{b}/fv/v1/admin/keys");
 
     // Open: health. Closed without a key: the APIs. The static FV_API_KEYS key works.
-    assert_eq!(http.call("GET", &format!("{}/health", w1.base), None, None).await.0, 200);
+    assert_eq!(
+        http.call("GET", &format!("{}/health", w1.base), None, None)
+            .await
+            .0,
+        200
+    );
     let (s, v, _) = http.call("GET", &caps(&w1.base), None, None).await;
     assert_eq!(s, 401, "{v}");
-    assert!(!v.to_string().contains("internal token"), "a direct worker answers like a server, not like a cluster worker: {v}");
-    assert_eq!(http.call("POST", &format!("{}/minimax/h3-turbo/text-to-video", w1.base), Some(json!({"prompt": "x"})), None).await.0, 401);
+    assert!(
+        !v.to_string().contains("internal token"),
+        "a direct worker answers like a server, not like a cluster worker: {v}"
+    );
+    assert_eq!(
+        http.call(
+            "POST",
+            &format!("{}/minimax/h3-turbo/text-to-video", w1.base),
+            Some(json!({"prompt": "x"})),
+            None
+        )
+        .await
+        .0,
+        401
+    );
     let (s, v, _) = http.call("GET", &caps(&w1.base), None, bearer()).await;
     assert_eq!(s, 200, "{v}");
     assert_eq!(v["auth"], json!({"mode": "keys"}), "{v}");
@@ -147,45 +207,100 @@ async fn direct_workers_take_minted_keys_and_the_admin_token() {
     // The internal routes keep the internal token (not the admin token).
     let status = format!("{}/fv/v1/internal/status", w1.base);
     assert_eq!(http.call("GET", &status, None, Some(&admin)).await.0, 401);
-    let r = http.0.get(&status).header("x-fv-internal-token", TOKEN).send().await.unwrap();
+    let r = http
+        .0
+        .get(&status)
+        .header("x-fv-internal-token", TOKEN)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status().as_u16(), 200);
 
     // Admin routes: the admin token only.
-    assert_eq!(http.call("GET", &keys(&w1.base), None, bearer()).await.0, 401);
+    assert_eq!(
+        http.call("GET", &keys(&w1.base), None, bearer()).await.0,
+        401
+    );
     let (s, v, _) = http.call("GET", &keys(&w1.base), None, Some(&admin)).await;
     assert_eq!(s, 200, "{v}");
     assert_eq!(v["backend"], "d1");
 
     // Mint on one worker: it works there at once and runs a job.
-    let (s, m, _) = http.call("POST", &keys(&w1.base), Some(json!({"name": "laptop"})), Some(&admin)).await;
+    let (s, m, _) = http
+        .call(
+            "POST",
+            &keys(&w1.base),
+            Some(json!({"name": "laptop"})),
+            Some(&admin),
+        )
+        .await;
     assert_eq!(s, 201, "{m}");
     let plain = m["api_key"].as_str().unwrap().to_owned();
     let kid = m["key"]["id"].as_str().unwrap().to_owned();
     let (bk, kk) = (format!("Bearer {plain}"), format!("Key {plain}"));
-    assert_eq!(http.call("GET", &caps(&w1.base), None, Some(&bk)).await.0, 200);
-    let (s, sub, _) = http.call("POST", &format!("{}/minimax/h3-turbo/text-to-video", w1.base), Some(json!({"prompt": "a red fox"})), Some(&kk)).await;
+    assert_eq!(
+        http.call("GET", &caps(&w1.base), None, Some(&bk)).await.0,
+        200
+    );
+    let (s, sub, _) = http
+        .call(
+            "POST",
+            &format!("{}/minimax/h3-turbo/text-to-video", w1.base),
+            Some(json!({"prompt": "a red fox"})),
+            Some(&kk),
+        )
+        .await;
     assert_eq!(s, 200, "{sub}");
     let rid = sub["request_id"].as_str().unwrap();
-    http.poll(&format!("{}/minimax/h3-turbo/requests/{rid}/status", w1.base), Some(&kk), |v| v["status"] == "COMPLETED").await;
+    http.poll(
+        &format!("{}/minimax/h3-turbo/requests/{rid}/status", w1.base),
+        Some(&kk),
+        |v| v["status"] == "COMPLETED",
+    )
+    .await;
     // The other worker after its D1 refresh (every 30 s; forced here).
     w2.app.keys.refresh().await.unwrap();
-    assert_eq!(http.call("GET", &caps(&w2.base), None, Some(&bk)).await.0, 200);
+    assert_eq!(
+        http.call("GET", &caps(&w2.base), None, Some(&bk)).await.0,
+        200
+    );
     // A worker started later (restart, scale-up) loads it at start.
     let w3 = direct_worker(&sh, "direct-3").await;
-    assert_eq!(http.call("GET", &caps(&w3.base), None, Some(&bk)).await.0, 200);
+    assert_eq!(
+        http.call("GET", &caps(&w3.base), None, Some(&bk)).await.0,
+        200
+    );
 
     // Revoke on every worker (what fv-control does): refused everywhere at once.
     for w in [&w1, &w2, &w3] {
-        let (s, v, _) = http.call("DELETE", &format!("{}/{kid}", keys(&w.base)), None, Some(&admin)).await;
+        let (s, v, _) = http
+            .call(
+                "DELETE",
+                &format!("{}/{kid}", keys(&w.base)),
+                None,
+                Some(&admin),
+            )
+            .await;
         assert_eq!(s, 200, "{v}");
         assert_eq!(v["key"]["revoked"], true, "{v}");
     }
     for w in [&w1, &w2, &w3] {
-        assert_eq!(http.call("GET", &caps(&w.base), None, Some(&bk)).await.0, 401);
+        assert_eq!(
+            http.call("GET", &caps(&w.base), None, Some(&bk)).await.0,
+            401
+        );
     }
     // A worker that never saw the DELETE learns it from D1 (start or refresh).
     let w4 = direct_worker(&sh, "direct-4").await;
-    assert_eq!(http.call("GET", &caps(&w4.base), None, Some(&bk)).await.0, 401);
+    assert_eq!(
+        http.call("GET", &caps(&w4.base), None, Some(&bk)).await.0,
+        401
+    );
     // The admin token is not a client key.
-    assert_eq!(http.call("GET", &caps(&w1.base), None, Some(&admin)).await.0, 401);
+    assert_eq!(
+        http.call("GET", &caps(&w1.base), None, Some(&admin))
+            .await
+            .0,
+        401
+    );
 }

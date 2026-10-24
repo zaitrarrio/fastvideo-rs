@@ -114,7 +114,9 @@ mod imp {
     /// or below it (driver JIT). NVRTC is the last resort: a driver older
     /// than the box's NVRTC refuses NVRTC's PTX (seen on RTX PRO 6000:
     /// `CUDA_ERROR_UNSUPPORTED_PTX_VERSION`).
-    fn load_embedded(dev: &DeviceContext) -> Result<Option<(Arc<cudarc::driver::CudaModule>, String)>> {
+    fn load_embedded(
+        dev: &DeviceContext,
+    ) -> Result<Option<(Arc<cudarc::driver::CudaModule>, String)>> {
         let want = (dev.sm_major * 10 + dev.sm_minor) as u32;
         if crate::wan::envflag::string_flag("FASTVIDEO_KERNELS", "auto") == "nvrtc" {
             return Ok(None);

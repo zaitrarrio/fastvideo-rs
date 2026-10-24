@@ -48,7 +48,13 @@ fn handle(root: &Path, mut stream: TcpStream) -> std::io::Result<()> {
     };
     if path.is_dir() {
         let body = listing(&path)?;
-        return respond(&mut stream, 200, "text/html; charset=utf-8", body.as_bytes(), head_only);
+        return respond(
+            &mut stream,
+            200,
+            "text/html; charset=utf-8",
+            body.as_bytes(),
+            head_only,
+        );
     }
     let Ok(mut file) = std::fs::File::open(&path) else {
         return respond(&mut stream, 404, "text/plain", b"not found", head_only);

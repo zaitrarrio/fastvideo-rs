@@ -72,9 +72,11 @@ tasks:
   # ---- checks that cost nothing -------------------------------------------
 
   check:
-    desc: Lint, tests and the kernel compile gate — everything free
+    desc: Lint (shell, rustfmt, clippy -D warnings), tests and the kernel compile gate — everything free
     cmds:
       - task: lint
+      - task: fmt:check
+      - task: lint:rust
       - task: test
       - task: nvrtc
       - task: build:cuda
@@ -83,20 +85,20 @@ tasks:
     desc: Shell lint — the array-expansion trap that cost a GPU run
     cmds: ['bash scripts/gpu/lint.sh']
 
-  # The workspace is not rustfmt- or clippy-clean today: `cargo fmt --all` rewrites
-  # ~60 files and clippy reports 27 lints. Both are advisory here rather than gates,
-  # so `task check` does not fail on drift that predates the change being checked.
+  # rustfmt and clippy are gates (docs/dev/testing.md): the workspace is
+  # formatted and `-D warnings` clean since plan F2, CI runs `fmt --check` on
+  # every PR that touches the crates, and scripts/serve/check.sh runs the same
+  # clippy line, so a lint or formatting drift fails `task check` here first.
   lint:rust:
-    desc: Clippy over the workspace (advisory — does not fail the build)
-    cmds: ['cargo clippy --workspace --all-targets || true']
+    desc: Clippy over the workspace, warnings are errors (the CI line)
+    cmds: ['cargo clippy --workspace --all-targets --no-deps -- -D warnings']
 
   fmt:check:
-    desc: Show rustfmt drift (advisory — reformats nothing)
-    cmds: ['cargo fmt --all -- --check || true']
+    desc: rustfmt drift fails (the CI line); `task fmt` fixes it
+    cmds: ['cargo fmt --all -- --check']
 
   fmt:
-    desc: Apply rustfmt (warning — touches the whole workspace, not just your edits)
-    prompt: rustfmt currently rewrites ~60 files across the repo. Apply anyway?
+    desc: Apply rustfmt to the workspace
     cmds: ['cargo fmt --all']
 
   test:

@@ -53,7 +53,12 @@ impl MockD1 {
     pub fn new() -> Self {
         let conn = Connection::open_in_memory().expect("sqlite in memory");
         Self {
-            inner: Arc::new(Mutex::new(Inner { conn, faults: Vec::new(), requests: 0, statements: Vec::new() })),
+            inner: Arc::new(Mutex::new(Inner {
+                conn,
+                faults: Vec::new(),
+                requests: 0,
+                statements: Vec::new(),
+            })),
             token: None,
         }
     }
@@ -92,8 +97,15 @@ impl MockD1 {
         g.requests += 1;
         if !g.faults.is_empty() {
             let st = g.faults.remove(0);
-            let msg = if st == 429 { "Too many requests" } else { "Network connection lost." };
-            return (st, json!({"success": false, "result": [], "messages": [], "errors": [{"code": 7500, "message": msg}]}));
+            let msg = if st == 429 {
+                "Too many requests"
+            } else {
+                "Network connection lost."
+            };
+            return (
+                st,
+                json!({"success": false, "result": [], "messages": [], "errors": [{"code": 7500, "message": msg}]}),
+            );
         }
         let stmts: Vec<(String, Vec<Value>)> = match body.get("batch").and_then(Value::as_array) {
             Some(b) => b.iter().map(parse_stmt).collect(),
@@ -118,26 +130,39 @@ impl MockD1 {
                     if batch {
                         let _ = conn.execute_batch("ROLLBACK");
                     }
-                    return (400, json!({"success": false, "result": [], "messages": [], "errors": [{"code": 7500, "message": e}]}));
+                    return (
+                        400,
+                        json!({"success": false, "result": [], "messages": [], "errors": [{"code": 7500, "message": e}]}),
+                    );
                 }
             }
         }
         if batch {
             let _ = conn.execute_batch("COMMIT");
         }
-        (200, json!({"result": results, "errors": [], "messages": [], "success": true}))
+        (
+            200,
+            json!({"result": results, "errors": [], "messages": [], "success": true}),
+        )
     }
 
     /// `POST /client/v4/accounts/{a}/d1/database/{d}/query`. Point
     /// `D1Config::api_base` at `http://<addr>/client/v4`.
     pub fn router(&self) -> Router {
         Router::new()
-            .route("/client/v4/accounts/{account}/d1/database/{db}/query", post(http_query))
+            .route(
+                "/client/v4/accounts/{account}/d1/database/{db}/query",
+                post(http_query),
+            )
             .with_state(self.clone())
     }
 }
 
-async fn http_query(State(m): State<MockD1>, headers: HeaderMap, Json(body): Json<Value>) -> impl IntoResponse {
+async fn http_query(
+    State(m): State<MockD1>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
     if let Some(t) = &m.token {
         let ok = headers
             .get("authorization")
@@ -146,26 +171,42 @@ async fn http_query(State(m): State<MockD1>, headers: HeaderMap, Json(body): Jso
         if !ok {
             return (
                 StatusCode::UNAUTHORIZED,
-                Json(json!({"success": false, "result": null, "messages": [], "errors": [{"code": 10000, "message": "Authentication error"}]})),
+                Json(
+                    json!({"success": false, "result": null, "messages": [], "errors": [{"code": 10000, "message": "Authentication error"}]}),
+                ),
             );
         }
     }
     let (st, v) = m.handle(&body);
-    (StatusCode::from_u16(st).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), Json(v))
+    (
+        StatusCode::from_u16(st).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        Json(v),
+    )
 }
 
 #[async_trait::async_trait]
 impl D1Transport for MockD1 {
     async fn post(&self, body: &Value) -> Result<RawReply, D1Error> {
         let (status, body) = self.handle(body);
-        Ok(RawReply { status, retry_after: None, text: String::new(), body })
+        Ok(RawReply {
+            status,
+            retry_after: None,
+            text: String::new(),
+            body,
+        })
     }
 }
 
 fn parse_stmt(v: &Value) -> (String, Vec<Value>) {
     (
-        v.get("sql").and_then(Value::as_str).unwrap_or_default().to_owned(),
-        v.get("params").and_then(Value::as_array).cloned().unwrap_or_default(),
+        v.get("sql")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        v.get("params")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
     )
 }
 
@@ -180,10 +221,16 @@ fn bind(v: &Value) -> SqlValue {
     }
 }
 
-fn exec(conn: &Connection, sql: &str, params: &[Value]) -> Result<(Vec<Map<String, Value>>, usize), String> {
+fn exec(
+    conn: &Connection,
+    sql: &str,
+    params: &[Value],
+) -> Result<(Vec<Map<String, Value>>, usize), String> {
     let fmt = |e: rusqlite::Error| {
         let code = match &e {
-            rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::ConstraintViolation => {
+            rusqlite::Error::SqliteFailure(f, _)
+                if f.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
                 ": SQLITE_CONSTRAINT"
             }
             _ => ": SQLITE_ERROR",
@@ -194,7 +241,9 @@ fn exec(conn: &Connection, sql: &str, params: &[Value]) -> Result<(Vec<Map<Strin
     let names: Vec<String> = st.column_names().iter().map(|s| s.to_string()).collect();
     let readonly = st.readonly();
     let vals: Vec<SqlValue> = params.iter().map(bind).collect();
-    let mut rows = st.query(rusqlite::params_from_iter(vals.iter())).map_err(fmt)?;
+    let mut rows = st
+        .query(rusqlite::params_from_iter(vals.iter()))
+        .map_err(fmt)?;
     let mut out = Vec::new();
     while let Some(r) = rows.next().map_err(fmt)? {
         let mut m = Map::new();

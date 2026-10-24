@@ -208,7 +208,7 @@ impl CudaTensor {
             )));
         };
         let proj = weight.numel();
-        if heads == 0 || proj % heads != 0 || col_off + proj > width {
+        if heads == 0 || !proj.is_multiple_of(heads) || col_off + proj > width {
             return Err(msg(format!(
                 "qk_norm_rope_bhsd: {heads} heads, weight {proj}, input {:?}",
                 self.shape
@@ -285,8 +285,7 @@ impl CudaTensor {
         // A bf16 projection is split as bf16 (a copy, never widened).
         #[cfg(feature = "cuda")]
         if self.device_slice_bf16().is_some() {
-            if let Some(t) =
-                super::act16::split_heads(self, batch, seq, heads, d, width, col_off)?
+            if let Some(t) = super::act16::split_heads(self, batch, seq, heads, d, width, col_off)?
             {
                 return Ok(t);
             }
@@ -514,7 +513,10 @@ mod tests {
     #[test]
     fn apply_rotary_bshd_matches_pair_rotate() {
         let (b, s, h, d) = (1usize, 2usize, 2usize, 4usize);
-        let xs = t((0..b * s * h * d).map(|i| i as f32 * 0.1).collect(), &[b, s, h, d]);
+        let xs = t(
+            (0..b * s * h * d).map(|i| i as f32 * 0.1).collect(),
+            &[b, s, h, d],
+        );
         let cs: Vec<f32> = (0..s * d).map(|i| (i as f32 * 0.2).cos()).collect();
         let sn: Vec<f32> = (0..s * d).map(|i| (i as f32 * 0.2).sin()).collect();
         let ct = t(cs.clone(), &[s, d]);

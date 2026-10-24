@@ -21,7 +21,10 @@ pub enum MediaError {
     Decode(String),
     /// A container or bitstream could not be parsed.
     #[error("parse {path:?}: {message}")]
-    Parse { path: Option<PathBuf>, message: String },
+    Parse {
+        path: Option<PathBuf>,
+        message: String,
+    },
     #[error("resample: {0}")]
     Resample(String),
     #[error(transparent)]
@@ -34,10 +37,16 @@ impl MediaError {
     }
 
     pub(crate) fn tool(tool: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::Tool { tool: tool.into(), message: message.into() }
+        Self::Tool {
+            tool: tool.into(),
+            message: message.into(),
+        }
     }
 
     pub(crate) fn parse(path: Option<&std::path::Path>, message: impl Into<String>) -> Self {
-        Self::Parse { path: path.map(|p| p.to_path_buf()), message: message.into() }
+        Self::Parse {
+            path: path.map(|p| p.to_path_buf()),
+            message: message.into(),
+        }
     }
 }

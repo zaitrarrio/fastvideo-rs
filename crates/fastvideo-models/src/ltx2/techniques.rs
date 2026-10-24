@@ -59,7 +59,9 @@ pub fn published_pisa() -> Pisa {
     Pisa {
         enabled: Schedule::Const(true),
         sparsity: Some(super::pisa::SPARSITY),
-        dense_layers: Some(crate::techniques::StepSet::first(super::pisa::DENSE_LAYERS.len())),
+        dense_layers: Some(crate::techniques::StepSet::first(
+            super::pisa::DENSE_LAYERS.len(),
+        )),
     }
 }
 
@@ -130,7 +132,9 @@ impl Ltx2Techniques {
             } else if let Some(p) = t.downcast_ref::<Pisa>() {
                 let want = published_pisa();
                 let ok = p.sparsity.is_none_or(|s| Some(s) == want.sparsity)
-                    && p.dense_layers.as_ref().is_none_or(|d| Some(d) == want.dense_layers.as_ref());
+                    && p.dense_layers
+                        .as_ref()
+                        .is_none_or(|d| Some(d) == want.dense_layers.as_ref());
                 if !ok {
                     return Err("ltx2: techniques.pisa must be the published stage-2 route (sparsity 0.9, layers 0-1 dense)".into());
                 }
@@ -184,7 +188,11 @@ impl Ltx2Techniques {
     }
 
     pub fn describe(&self) -> String {
-        let src: Vec<String> = self.sources.iter().map(|(s, f)| format!("{s} from {f}")).collect();
+        let src: Vec<String> = self
+            .sources
+            .iter()
+            .map(|(s, f)| format!("{s} from {f}"))
+            .collect();
         format!("{} [{}]", self.plan.describe(), src.join(", "))
     }
 }
@@ -200,14 +208,46 @@ mod tests {
     use super::*;
 
     const ALL: [Stage2Flags; 8] = [
-        Stage2Flags { sol: false, dense: false, pisa: false },
-        Stage2Flags { sol: true, dense: false, pisa: false },
-        Stage2Flags { sol: false, dense: true, pisa: false },
-        Stage2Flags { sol: false, dense: false, pisa: true },
-        Stage2Flags { sol: true, dense: true, pisa: false },
-        Stage2Flags { sol: true, dense: false, pisa: true },
-        Stage2Flags { sol: false, dense: true, pisa: true },
-        Stage2Flags { sol: true, dense: true, pisa: true },
+        Stage2Flags {
+            sol: false,
+            dense: false,
+            pisa: false,
+        },
+        Stage2Flags {
+            sol: true,
+            dense: false,
+            pisa: false,
+        },
+        Stage2Flags {
+            sol: false,
+            dense: true,
+            pisa: false,
+        },
+        Stage2Flags {
+            sol: false,
+            dense: false,
+            pisa: true,
+        },
+        Stage2Flags {
+            sol: true,
+            dense: true,
+            pisa: false,
+        },
+        Stage2Flags {
+            sol: true,
+            dense: false,
+            pisa: true,
+        },
+        Stage2Flags {
+            sol: false,
+            dense: true,
+            pisa: true,
+        },
+        Stage2Flags {
+            sol: true,
+            dense: true,
+            pisa: true,
+        },
     ];
 
     /// No profile: `sol = flag || default_sol_stage2(.., pisa, dense)` and
@@ -246,19 +286,35 @@ mod tests {
         let dense = profile("[techniques.dense_attention]\n");
         let t = Ltx2Techniques::resolve(Stage2Flags::default(), true, Some(&dense)).unwrap();
         assert_eq!(t.stage2, Ltx2Stage2::Dense);
-        let flags = Stage2Flags { sol: true, ..Default::default() };
-        assert!(Ltx2Techniques::resolve(flags, true, Some(&dense)).unwrap().sol_stage2());
+        let flags = Stage2Flags {
+            sol: true,
+            ..Default::default()
+        };
+        assert!(Ltx2Techniques::resolve(flags, true, Some(&dense))
+            .unwrap()
+            .sol_stage2());
         let sol = profile("[techniques.sol_attn]\npreset='ltx25_stage2'\n");
-        assert!(Ltx2Techniques::resolve(Stage2Flags::default(), false, Some(&sol)).unwrap().sol_stage2());
+        assert!(
+            Ltx2Techniques::resolve(Stage2Flags::default(), false, Some(&sol))
+                .unwrap()
+                .sol_stage2()
+        );
         let pisa = profile("[techniques.pisa]\n");
-        assert!(Ltx2Techniques::resolve(Stage2Flags::default(), true, Some(&pisa)).unwrap().pisa_stage2());
+        assert!(
+            Ltx2Techniques::resolve(Stage2Flags::default(), true, Some(&pisa))
+                .unwrap()
+                .pisa_stage2()
+        );
         // A route the kernels do not implement is refused.
         let other = profile("[techniques.sol_attn]\npreset='ltx25_stage2'\ndense_layers=2\n");
         assert!(Ltx2Techniques::resolve(Stage2Flags::default(), true, Some(&other)).is_err());
         let h3 = profile("[techniques.sol_attn]\npreset='rtx'\n");
         assert!(Ltx2Techniques::resolve(Stage2Flags::default(), true, Some(&h3)).is_err());
         // No step cache on LTX-2.
-        assert!(Profile::parse("[id]\nname='p'\n[pipeline]\nmodel='ltx2'\n[techniques.teacache]\n").is_err());
+        assert!(Profile::parse(
+            "[id]\nname='p'\n[pipeline]\nmodel='ltx2'\n[techniques.teacache]\n"
+        )
+        .is_err());
     }
 
     #[test]
@@ -288,15 +344,22 @@ mod tests {
             got,
             vec![
                 ("FASTVIDEO_FP8".into(), "1".into()),
-                ("FASTVIDEO_LTX2_TAE_WEIGHTS".into(), "/tae/taeltx2_3_wide.safetensors".into()),
+                (
+                    "FASTVIDEO_LTX2_TAE_WEIGHTS".into(),
+                    "/tae/taeltx2_3_wide.safetensors".into()
+                ),
                 ("FASTVIDEO_LTX_OFFLOAD".into(), "cpu".into()),
             ]
         );
-        assert!(Profile::parse("[id]\nname='p'\n[pipeline]\nmodel='h3'\n[techniques.offload]\nplacement='cpu'\n")
-            .and_then(|p| p.settings())
-            .is_err());
-        assert!(Profile::parse("[id]\nname='p'\n[pipeline]\nmodel='ltx2'\n[techniques.taeh3]\n")
-            .and_then(|p| p.settings())
-            .is_err());
+        assert!(Profile::parse(
+            "[id]\nname='p'\n[pipeline]\nmodel='h3'\n[techniques.offload]\nplacement='cpu'\n"
+        )
+        .and_then(|p| p.settings())
+        .is_err());
+        assert!(
+            Profile::parse("[id]\nname='p'\n[pipeline]\nmodel='ltx2'\n[techniques.taeh3]\n")
+                .and_then(|p| p.settings())
+                .is_err()
+        );
     }
 }

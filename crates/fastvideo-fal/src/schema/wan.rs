@@ -28,8 +28,8 @@
 //! 480, 576 or 704.
 
 use fastvideo_protocol::{
-    Anchor, ApiError, CanvasSpec, ExpansionMode, GenerationRequest, Keyframe, Length, MediaRef, PromptExpansion, ProtocolId,
-    Ratio, Snap, Task, TimingSpec,
+    Anchor, ApiError, CanvasSpec, ExpansionMode, GenerationRequest, Keyframe, Length, MediaRef,
+    PromptExpansion, ProtocolId, Ratio, Snap, Task, TimingSpec,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -99,7 +99,11 @@ pub enum WanResolution {
 }
 
 impl WanResolution {
-    pub const ALL: [WanResolution; 3] = [WanResolution::P480, WanResolution::P580, WanResolution::P720];
+    pub const ALL: [WanResolution; 3] = [
+        WanResolution::P480,
+        WanResolution::P580,
+        WanResolution::P720,
+    ];
     pub fn as_str(&self) -> &'static str {
         match self {
             WanResolution::P480 => "480p",
@@ -141,7 +145,12 @@ pub enum WanAspect {
 
 impl WanAspect {
     pub const T2V: [WanAspect; 3] = [WanAspect::R16x9, WanAspect::R9x16, WanAspect::R1x1];
-    pub const I2V: [WanAspect; 4] = [WanAspect::Auto, WanAspect::R16x9, WanAspect::R9x16, WanAspect::R1x1];
+    pub const I2V: [WanAspect; 4] = [
+        WanAspect::Auto,
+        WanAspect::R16x9,
+        WanAspect::R9x16,
+        WanAspect::R1x1,
+    ];
     pub fn as_str(&self) -> &'static str {
         match self {
             WanAspect::Auto => "auto",
@@ -179,10 +188,16 @@ pub struct WanInput {
 fn int_in(f: &Fields, k: &str, lo: i64, hi: i64, default: i64) -> Result<u32, ApiError> {
     let v = f.int(k)?.unwrap_or(default);
     if v < lo {
-        return Err(bad(k, format!("Input should be greater than or equal to {lo}")));
+        return Err(bad(
+            k,
+            format!("Input should be greater than or equal to {lo}"),
+        ));
     }
     if v > hi {
-        return Err(bad(k, format!("Input should be less than or equal to {hi}")));
+        return Err(bad(
+            k,
+            format!("Input should be less than or equal to {hi}"),
+        ));
     }
     Ok(v as u32)
 }
@@ -191,29 +206,73 @@ fn num_in(f: &Fields, k: &str, (lo, hi, default): (f64, f64, f64)) -> Result<f64
     let v = match f.get(k) {
         None => default,
         Some(Value::Number(n)) => n.as_f64().unwrap_or(f64::NAN),
-        Some(v) => return Err(bad(k, format!("Input should be a valid number, got {}", type_name(v)))),
+        Some(v) => {
+            return Err(bad(
+                k,
+                format!("Input should be a valid number, got {}", type_name(v)),
+            ))
+        }
     };
     if v.is_nan() || v < lo {
-        return Err(bad(k, format!("Input should be greater than or equal to {lo}")));
+        return Err(bad(
+            k,
+            format!("Input should be greater than or equal to {lo}"),
+        ));
     }
     if v > hi {
-        return Err(bad(k, format!("Input should be less than or equal to {hi}")));
+        return Err(bad(
+            k,
+            format!("Input should be less than or equal to {hi}"),
+        ));
     }
     Ok(v)
 }
 
 pub(super) fn parse(f: &Fields, variant: WanVariant) -> Result<WanInput, ApiError> {
     let prompt = super::parse_prompt(f, PROMPT_MAX_CHARS)?;
-    let negative_prompt = f.string("negative_prompt")?.filter(|s| !s.trim().is_empty()).map(str::to_owned);
-    let num_frames = int_in(f, "num_frames", WAN_FRAMES_MIN, WAN_FRAMES_MAX, WAN_FRAMES_DEFAULT)?;
-    let frames_per_second = int_in(f, "frames_per_second", WAN_FPS_MIN, WAN_FPS_MAX, WAN_FPS_DEFAULT)?;
-    let resolution = parse_enum(f, "resolution", variant.resolutions(), WanResolution::as_str, WanResolution::P720)?;
-    let aspect_ratio = parse_enum(f, "aspect_ratio", variant.aspects(), WanAspect::as_str, variant.default_aspect())?;
+    let negative_prompt = f
+        .string("negative_prompt")?
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_owned);
+    let num_frames = int_in(
+        f,
+        "num_frames",
+        WAN_FRAMES_MIN,
+        WAN_FRAMES_MAX,
+        WAN_FRAMES_DEFAULT,
+    )?;
+    let frames_per_second = int_in(
+        f,
+        "frames_per_second",
+        WAN_FPS_MIN,
+        WAN_FPS_MAX,
+        WAN_FPS_DEFAULT,
+    )?;
+    let resolution = parse_enum(
+        f,
+        "resolution",
+        variant.resolutions(),
+        WanResolution::as_str,
+        WanResolution::P720,
+    )?;
+    let aspect_ratio = parse_enum(
+        f,
+        "aspect_ratio",
+        variant.aspects(),
+        WanAspect::as_str,
+        variant.default_aspect(),
+    )?;
     let (num_inference_steps, shift) = if variant.distilled() {
         (None, None)
     } else {
         (
-            Some(int_in(f, "num_inference_steps", WAN_STEPS_MIN, WAN_STEPS_MAX, WAN_STEPS_DEFAULT)?),
+            Some(int_in(
+                f,
+                "num_inference_steps",
+                WAN_STEPS_MIN,
+                WAN_STEPS_MAX,
+                WAN_STEPS_DEFAULT,
+            )?),
             Some(num_in(f, "shift", WAN_SHIFT)?),
         )
     };
@@ -223,7 +282,10 @@ pub(super) fn parse(f: &Fields, variant: WanVariant) -> Result<WanInput, ApiErro
         Some(s) if INTERPOLATORS.contains(&s) => s.to_owned(),
         Some(_) => {
             let list: Vec<String> = INTERPOLATORS.iter().map(|c| format!("'{c}'")).collect();
-            return Err(bad("interpolator_model", format!("Input should be {}", list.join(", "))));
+            return Err(bad(
+                "interpolator_model",
+                format!("Input should be {}", list.join(", ")),
+            ));
         }
     };
     let num_interpolated_frames = int_in(f, "num_interpolated_frames", 0, WAN_INTERPOLATED_MAX, 0)?;
@@ -267,10 +329,16 @@ impl WanInput {
         r.note_noop("enable_safety_checker");
         r.note_noop("enable_prompt_expansion");
         if self.enable_prompt_expansion {
-            r.prompt_expansion = Some(PromptExpansion::explicit(ExpansionMode::Balanced, "enable_prompt_expansion"));
+            r.prompt_expansion = Some(PromptExpansion::explicit(
+                ExpansionMode::Balanced,
+                "enable_prompt_expansion",
+            ));
         }
         r.timing = TimingSpec {
-            length: Length::Frames { value: self.num_frames, snap: Snap::AlignUp },
+            length: Length::Frames {
+                value: self.num_frames,
+                snap: Snap::AlignUp,
+            },
             fps: Some(self.frames_per_second),
         };
         if self.variant.distilled() {
@@ -289,12 +357,24 @@ impl WanInput {
         let (w, h) = self.resolution.landscape();
         r.canvas = match self.aspect_ratio {
             WanAspect::Auto => CanvasSpec::FollowImage { short_edge },
-            WanAspect::R16x9 => CanvasSpec::Exact { width: w, height: h },
-            WanAspect::R9x16 => CanvasSpec::Exact { width: h, height: w },
-            WanAspect::R1x1 => CanvasSpec::Aspect { ratio: Ratio::R1_1, short_edge },
+            WanAspect::R16x9 => CanvasSpec::Exact {
+                width: w,
+                height: h,
+            },
+            WanAspect::R9x16 => CanvasSpec::Exact {
+                width: h,
+                height: w,
+            },
+            WanAspect::R1x1 => CanvasSpec::Aspect {
+                ratio: Ratio::R1_1,
+                short_edge,
+            },
         };
         if let Some(u) = &self.image_url {
-            r.keyframes.push(Keyframe { at: Anchor::First, image: MediaRef::parse(u, "image_url")? });
+            r.keyframes.push(Keyframe {
+                at: Anchor::First,
+                image: MediaRef::parse(u, "image_url")?,
+            });
             r.task = Task::I2V;
         }
         Ok(r)

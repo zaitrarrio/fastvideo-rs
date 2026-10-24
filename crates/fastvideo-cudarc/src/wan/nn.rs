@@ -73,7 +73,13 @@ pub struct Nvfp4Weight(pub super::nvfp4_linear::Nvfp4Stack);
 #[cfg(feature = "cuda")]
 impl std::fmt::Debug for Nvfp4Weight {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Nvfp4Weight([{}, {}], {} parts)", self.0.n, self.0.k, self.0.parts().len())
+        write!(
+            f,
+            "Nvfp4Weight([{}, {}], {} parts)",
+            self.0.n,
+            self.0.k,
+            self.0.parts().len()
+        )
     }
 }
 
@@ -598,7 +604,9 @@ impl Linear {
                 .map_err(|e| msg(e.to_string()))?;
             super::stage_upload::record_verify(
                 prefixes.first().copied().unwrap_or(""),
-                got.iter().map(|v| v.to_bits()).eq(host.iter().map(|v| v.to_bits())),
+                got.iter()
+                    .map(|v| v.to_bits())
+                    .eq(host.iter().map(|v| v.to_bits())),
             );
         }
         let slice = match staged {
@@ -740,8 +748,7 @@ impl Linear {
         in_dim: usize,
         out_dim: usize,
     ) -> Result<Self> {
-        if weight.len() != in_dim * out_dim || bias.as_ref().is_some_and(|b| b.numel() != out_dim)
-        {
+        if weight.len() != in_dim * out_dim || bias.as_ref().is_some_and(|b| b.numel() != out_dim) {
             return Err(msg(format!(
                 "bf16 weight of {} elements for a {out_dim}x{in_dim} linear, bias {:?}",
                 weight.len(),
@@ -830,29 +837,29 @@ impl Linear {
             let wf = match staged {
                 Some(w16) => super::ops::cast_bf16_f32_bias_act_device(&w16, None, false)?,
                 None => match map.lazy_bf16(&key)? {
-                // bf16 on disk: upload 2 bytes/param and widen on the device.
-                Some((shape, values)) => {
-                    if shape != [out_dim, in_dim] {
-                        return Err(msg(format!(
-                            "key {key}: shape {shape:?} != expected {:?}",
-                            [out_dim, in_dim]
-                        )));
+                    // bf16 on disk: upload 2 bytes/param and widen on the device.
+                    Some((shape, values)) => {
+                        if shape != [out_dim, in_dim] {
+                            return Err(msg(format!(
+                                "key {key}: shape {shape:?} != expected {:?}",
+                                [out_dim, in_dim]
+                            )));
+                        }
+                        let w16 = dev
+                            .stream
+                            .memcpy_stod(&values)
+                            .map_err(|e| msg(e.to_string()))?;
+                        stats::record_h2d(values.len() / 2);
+                        super::ops::cast_bf16_f32_bias_act_device(&w16, None, false)?
                     }
-                    let w16 = dev
-                        .stream
-                        .memcpy_stod(&values)
-                        .map_err(|e| msg(e.to_string()))?;
-                    stats::record_h2d(values.len() / 2);
-                    super::ops::cast_bf16_f32_bias_act_device(&w16, None, false)?
-                }
-                None => {
-                    let w = super::weights::cuda_tensor_shaped(map, &key, &[out_dim, in_dim])?;
-                    let host = w.host_cow()?;
-                    stats::record_h2d(host.len());
-                    dev.stream
-                        .memcpy_stod(&host[..])
-                        .map_err(|e| msg(e.to_string()))?
-                }
+                    None => {
+                        let w = super::weights::cuda_tensor_shaped(map, &key, &[out_dim, in_dim])?;
+                        let host = w.host_cow()?;
+                        stats::record_h2d(host.len());
+                        dev.stream
+                            .memcpy_stod(&host[..])
+                            .map_err(|e| msg(e.to_string()))?
+                    }
                 },
             };
             rows.dev = Some(super::ops::fp8_rows_quantize_device(&wf, out_dim, in_dim)?);
@@ -1281,7 +1288,9 @@ impl Linear {
                     return Self::from_device_bf16_bias(slice, bias, in_dim, out_dim);
                 }
                 let w: Vec<f32> = bytes
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|c| half::bf16::from_bits(u16::from_le_bytes([c[0], c[1]])).to_f32())
                     .collect();
                 Self::from_tensors(CudaTensor::from_vec(w, vec![out_dim, in_dim])?, bias)
@@ -1294,7 +1303,9 @@ impl Linear {
                     )));
                 }
                 let w: Vec<f32> = bytes
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                     .collect();
                 Self::from_tensors(CudaTensor::from_vec(w, vec![out_dim, in_dim])?, bias)
@@ -2147,8 +2158,12 @@ pub fn scaled_dot_product_attention_masked(
                 let out_bf16 = super::tensor::bf16_activations();
                 // Opt-in SageAttention2 (INT8 QK, FP8 PV): long self-attention only.
                 if super::attn_sage::dense_enabled()
-                    && q.shape.get(2).is_some_and(|&s| s >= super::attn_sage::min_seq())
-                    && k.shape.get(2).is_some_and(|&s| s >= super::attn_sage::min_seq())
+                    && q.shape
+                        .get(2)
+                        .is_some_and(|&s| s >= super::attn_sage::min_seq())
+                    && k.shape
+                        .get(2)
+                        .is_some_and(|&s| s >= super::attn_sage::min_seq())
                 {
                     if let Some(out) = super::attn_sage::dense_sdpa(q, k, v, scale, out_bf16)? {
                         return Ok(out);
@@ -2702,7 +2717,6 @@ mod bf16_act_tests {
     }
 }
 
-
 /// Key of the per-row scales a pre-quantized FP8 tree stores beside each
 /// linear's E4M3 `weight` (E13).
 pub const FP8_ROWS_SCALE_SUFFIX: &str = "weight_scale_rows";
@@ -2741,7 +2755,9 @@ fn fp8_rows_prequantized<'a>(
     }
     let scales = sc
         .bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     Ok(Some((w.bytes, scales)))
@@ -2763,7 +2779,9 @@ thread_local! {
 pub fn capture_fp8_rows<R>(f: impl FnOnce() -> Result<R>) -> Result<(R, Fp8Capture)> {
     FP8_CAPTURE.with(|c| *c.borrow_mut() = Some(Vec::new()));
     let out = f();
-    let captured = FP8_CAPTURE.with(|c| c.borrow_mut().take()).unwrap_or_default();
+    let captured = FP8_CAPTURE
+        .with(|c| c.borrow_mut().take())
+        .unwrap_or_default();
     Ok((out?, captured))
 }
 
@@ -2796,14 +2814,16 @@ fn fp8_capture_push(prefix: &str, rows: &Fp8Rows) -> Result<()> {
     Ok(())
 }
 
-
 /// `half::bf16::from_f32` of every value, across the rayon pool. The rounding
 /// is per element, so the result is the sequential one bit for bit.
 #[cfg(feature = "cuda")]
 fn to_bf16_par(values: &[f32]) -> Vec<half::bf16> {
     use rayon::prelude::*;
     let t = std::time::Instant::now();
-    let out = values.par_iter().map(|&v| half::bf16::from_f32(v)).collect();
+    let out = values
+        .par_iter()
+        .map(|&v| half::bf16::from_f32(v))
+        .collect();
     fastvideo_loader::prefetch::add_consumer_time(
         fastvideo_loader::prefetch::ConsumerTime::Convert,
         t.elapsed(),

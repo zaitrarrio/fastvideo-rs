@@ -88,7 +88,7 @@ pub fn avg_down(x: &CudaTensor, out_c: usize, ft: usize, fs: usize) -> Result<Cu
     let x = x.pad_zeros(2, pad_t, 0)?;
     let t = t + pad_t;
     let f = ft * fs * fs;
-    if (c * f) % out_c != 0 || h % fs != 0 || w % fs != 0 {
+    if !(c * f).is_multiple_of(out_c) || h % fs != 0 || w % fs != 0 {
         return Err(msg(format!(
             "avg_down: {c}x{f} channels to {out_c}, {h}x{w} by {fs}"
         )));
@@ -97,7 +97,7 @@ pub fn avg_down(x: &CudaTensor, out_c: usize, ft: usize, fs: usize) -> Result<Cu
     if f == 1 && g == 1 {
         return Ok(x);
     }
-    if f % g != 0 {
+    if !f.is_multiple_of(g) {
         return Err(msg(format!("avg_down: group {g} does not divide {f}")));
     }
     let (tp, hp, wp) = (t / ft, h / fs, w / fs);
@@ -134,7 +134,7 @@ pub fn dup_up(
 ) -> Result<CudaTensor> {
     let [_, c, t, h, w] = dims5(x, "dup_up")?;
     let f = ft * fs * fs;
-    if (out_c * f) % c != 0 {
+    if !(out_c * f).is_multiple_of(c) {
         return Err(msg(format!("dup_up: {c} channels to {out_c}x{f}")));
     }
     let r = out_c * f / c;
@@ -504,7 +504,7 @@ impl UpBlock {
             x = r.forward(&x, cache.as_deref_mut())?;
         }
         if let Some(up) = &self.up {
-            x = up.forward(&x, cache.as_deref_mut())?;
+            x = up.forward(&x, cache)?;
         }
         match self.shortcut {
             Some((out_c, ft)) => x.add(&dup_up(xs, out_c, ft, 2, first_chunk)?),
@@ -659,7 +659,7 @@ impl Decoder22 {
             x = b.forward(&x, cache.as_deref_mut(), first_chunk)?;
         }
         x = rms_silu_video(&x, &self.norm_out)?;
-        conv_cached(&self.conv_out, &x, cache.as_deref_mut())
+        conv_cached(&self.conv_out, &x, cache)
     }
 }
 

@@ -6,10 +6,7 @@
 //! and the host Morton3D gather used only on the 14B Sol route.
 
 use fastvideo_models::wan::sol::{morton3d_inverse, morton3d_perm};
-use fastvideo_models::wan::sol_cache::{
-    A14bCacheController, EasyCacheProfile, A14B_EASY_THRESHOLD, A14B_MAX_REUSE, A14B_START_STEP,
-    A14B_TAIL_STEPS,
-};
+use fastvideo_models::wan::sol_cache::{A14bCacheController, EasyCacheProfile};
 
 use super::tensor::{CudaTensor, Result, TensorError};
 
@@ -154,6 +151,7 @@ pub fn morton_gather(
             t.shape
         )));
     }
+    #[cfg_attr(not(feature = "cuda"), allow(unused_variables))]
     let (b, h, s, d) = (t.shape[0], t.shape[1], t.shape[2], t.shape[3]);
     if grid.0 * grid.1 * grid.2 != s {
         return Err(msg(format!(
@@ -217,7 +215,10 @@ fn pin_like(t: CudaTensor, like: &CudaTensor) -> Result<CudaTensor> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fastvideo_models::wan::sol_cache::{A14bExpert, EasyCache};
+    use fastvideo_models::wan::sol_cache::{
+        A14bExpert, EasyCache, A14B_EASY_THRESHOLD, A14B_MAX_REUSE, A14B_START_STEP,
+        A14B_TAIL_STEPS,
+    };
 
     #[test]
     fn a14b_is_not_the_whole_stack_easycache() {

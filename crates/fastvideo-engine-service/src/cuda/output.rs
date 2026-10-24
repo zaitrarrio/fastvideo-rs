@@ -124,7 +124,9 @@ impl Delivery<'_> {
         let Some(feed) = self.feed.take() else {
             return 0.0;
         };
-        let mut f = feed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut f = feed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.writer = f.writer.take();
         self.count = f.frames;
         f.busy_s
@@ -164,7 +166,9 @@ impl Delivery<'_> {
 
     /// Source frames `span` of the stitch, in chunks of 8.
     fn push_source(&mut self, span: (u32, u32), index0: u64) -> Result<u32, PipelineError> {
-        let Some(st) = self.stitch.clone() else { return Ok(0) };
+        let Some(st) = self.stitch.clone() else {
+            return Ok(0);
+        };
         let mut buf = Vec::with_capacity(8);
         let mut fault: Option<PipelineError> = None;
         let n = st
@@ -223,7 +227,10 @@ impl FrameSink for Delivery<'_> {
         Some(Box::new(move |v: &VideoFrames| {
             let t0 = Instant::now();
             let mut f = feed.lock().map_err(|_| sink_err("encoder feed poisoned"))?;
-            let wr = f.writer.as_mut().ok_or_else(|| sink_err("encoder feed closed"))?;
+            let wr = f
+                .writer
+                .as_mut()
+                .ok_or_else(|| sink_err("encoder feed closed"))?;
             let (w, h) = (v.width as u32, v.height as u32);
             for i in 0..v.len() {
                 let frame = crop(
@@ -357,7 +364,12 @@ pub(crate) fn deliver(
         // time, as a span ending now (its exact placement is not kept).
         let busy = (feed_busy_s.max(d.encode_s) * 1e9) as u64;
         let now = fastvideo_trace::now_ns();
-        t.span_since(fastvideo_trace::Comp::Post, "encode_busy", now.saturating_sub(busy), d.count as i64);
+        t.span_since(
+            fastvideo_trace::Comp::Post,
+            "encode_busy",
+            now.saturating_sub(busy),
+            d.count as i64,
+        );
     }
     let mut metrics = metrics?;
     ctl.check()?;
@@ -372,7 +384,8 @@ pub(crate) fn deliver(
     // source frames after the context go last.
     if let Some(span) = d.stitch.as_ref().map(|s| s.suffix).filter(|s| s.1 > 0) {
         let index0 = d.stitched + d.count;
-        d.push_source(span, index0).map_err(|e| ApiError::engine_failed(format!("stitch: {e}")))?;
+        d.push_source(span, index0)
+            .map_err(|e| ApiError::engine_failed(format!("stitch: {e}")))?;
     }
     let mp4 = match d.writer.take() {
         Some(w) => Some(
@@ -381,19 +394,26 @@ pub(crate) fn deliver(
         ),
         None => None,
     };
-    metrics.stage_durations.insert(
-        "encode".into(),
-        d.encode_s + t0.elapsed().as_secs_f64(),
-    );
+    metrics
+        .stage_durations
+        .insert("encode".into(), d.encode_s + t0.elapsed().as_secs_f64());
     if feed_busy_s > 0.0 {
         // Off the critical path: the encoder fed during the decode.
-        tracing::debug!(feed_busy_s, tail_s = t0.elapsed().as_secs_f64(), "mp4 encoder feed overlapped the decode");
+        tracing::debug!(
+            feed_busy_s,
+            tail_s = t0.elapsed().as_secs_f64(),
+            "mp4 encoder feed overlapped the decode"
+        );
     }
     let in_memory = mp4.is_none();
     Ok(ClipOutput {
         mp4,
         frames: in_memory.then(|| std::mem::take(&mut d.frames)),
-        audio: if in_memory && d.keep_audio { d.pcm.take() } else { None },
+        audio: if in_memory && d.keep_audio {
+            d.pcm.take()
+        } else {
+            None
+        },
         metrics,
     })
 }
@@ -460,9 +480,20 @@ mod tests {
             feed: None,
         };
         let s = [0.5f32, -0.5];
-        d.audio(&AudioPcm { sample_rate: 32_000, channels: 2, samples: &s }).unwrap();
+        d.audio(&AudioPcm {
+            sample_rate: 32_000,
+            channels: 2,
+            samples: &s,
+        })
+        .unwrap();
         let rgb: Vec<u8> = (0..2 * 4 * 2 * 3).map(|i| i as u8).collect();
-        let v = VideoFrames { index: 5, width: 4, height: 2, fps: 24.0, rgb: std::sync::Arc::new(rgb) };
+        let v = VideoFrames {
+            index: 5,
+            width: 4,
+            height: 2,
+            fps: 24.0,
+            rgb: std::sync::Arc::new(rgb),
+        };
         d.frames(&v).unwrap();
         assert_eq!(d.count, 2);
         assert_eq!(d.frames[1].index, 6);
@@ -508,7 +539,13 @@ mod tests {
         std::thread::spawn(move || {
             for (index, n) in [(0usize, 3usize), (3, 5)] {
                 let rgb: Vec<u8> = (0..n * w * h * 3).map(|i| (i % 251) as u8).collect();
-                let v = VideoFrames { index, width: w, height: h, fps: 24.0, rgb: std::sync::Arc::new(rgb) };
+                let v = VideoFrames {
+                    index,
+                    width: w,
+                    height: h,
+                    fps: 24.0,
+                    rgb: std::sync::Arc::new(rgb),
+                };
                 consumer(&v).unwrap();
             }
         })
@@ -518,7 +555,10 @@ mod tests {
         assert_eq!(d.count, 8);
         assert!(d.frames.is_empty());
         let mp4 = d.writer.take().expect("writer back").finish().unwrap();
-        assert!(clip.frames.is_empty(), "a file job's frames stay out of the clip sink");
+        assert!(
+            clip.frames.is_empty(),
+            "a file job's frames stay out of the clip sink"
+        );
         let info = fastvideo_media::mp4::inspect(&mp4).unwrap();
         let v = &info.tracks[0];
         assert_eq!((v.width, v.height, v.samples), (Some(16), Some(16), 8));

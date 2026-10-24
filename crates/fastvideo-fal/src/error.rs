@@ -19,7 +19,9 @@
 //!
 //! Every error carries `X-Fal-Error-Type` and, when known, `x-fal-request-id`.
 
-use fastvideo_protocol::{ApiError, BatchProtocol, ErrorCtx, ErrorKind, GapId, HttpReply, JobId, ProtocolId};
+use fastvideo_protocol::{
+    ApiError, BatchProtocol, ErrorCtx, ErrorKind, GapId, HttpReply, JobId, ProtocolId,
+};
 use serde_json::json;
 
 use crate::schema::loc;
@@ -31,7 +33,9 @@ pub struct FalProtocol;
 /// `(status, error_type, detail-list form)` for an error kind.
 pub fn classify(kind: ErrorKind) -> (u16, &'static str, bool) {
     match kind {
-        ErrorKind::InvalidRequest | ErrorKind::Unsupported(_) | ErrorKind::UnsupportedMedia => (422, "value_error", true),
+        ErrorKind::InvalidRequest | ErrorKind::Unsupported(_) | ErrorKind::UnsupportedMedia => {
+            (422, "value_error", true)
+        }
         ErrorKind::ContentFiltered => (422, "content_policy_violation", true),
         ErrorKind::Unauthorized => (401, "unauthorized", false),
         ErrorKind::Forbidden => (403, "forbidden", false),
@@ -108,7 +112,8 @@ impl BatchProtocol for FalProtocol {
 
 /// 404 `{"status":"NOT_FOUND"}` for an unknown request id (fal §9.3 PROBE).
 pub fn not_found_request(request_id: Option<&str>) -> HttpReply {
-    let mut r = HttpReply::json(404, json!({"status": "NOT_FOUND"})).with_header("x-fal-error-type", "not_found");
+    let mut r = HttpReply::json(404, json!({"status": "NOT_FOUND"}))
+        .with_header("x-fal-error-type", "not_found");
     if let Some(id) = request_id {
         r.push_header("x-fal-request-id", id.to_owned());
     }

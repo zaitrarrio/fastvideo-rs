@@ -59,7 +59,7 @@ impl RawTensor {
     fn from_native(shape: Vec<usize>, dtype: RawDType, data: Vec<u8>) -> Self {
         let values = if dtype == RawDType::F32 {
             let mut vals = Vec::with_capacity(data.len() / 4);
-            for chunk in data.chunks_exact(4) {
+            for chunk in data.as_chunks::<4>().0 {
                 vals.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
             }
             vals
@@ -88,26 +88,26 @@ impl RawTensor {
         match self.dtype {
             RawDType::F32 => Ok(self.values.clone()),
             RawDType::F16 => {
-                if self.data.len() % 2 != 0 {
+                if !self.data.len().is_multiple_of(2) {
                     return Err(LoaderError::Message(
                         "F16 tensor byte length is not a multiple of 2".into(),
                     ));
                 }
                 let mut out = Vec::with_capacity(self.data.len() / 2);
-                for chunk in self.data.chunks_exact(2) {
+                for chunk in self.data.as_chunks::<2>().0 {
                     let bits = u16::from_le_bytes([chunk[0], chunk[1]]);
                     out.push(f16_bits_to_f32(bits));
                 }
                 Ok(out)
             }
             RawDType::BF16 => {
-                if self.data.len() % 2 != 0 {
+                if !self.data.len().is_multiple_of(2) {
                     return Err(LoaderError::Message(
                         "BF16 tensor byte length is not a multiple of 2".into(),
                     ));
                 }
                 let mut out = Vec::with_capacity(self.data.len() / 2);
-                for chunk in self.data.chunks_exact(2) {
+                for chunk in self.data.as_chunks::<2>().0 {
                     let bits = u16::from_le_bytes([chunk[0], chunk[1]]);
                     out.push(bf16_bits_to_f32(bits));
                 }
@@ -192,7 +192,7 @@ fn view_to_f32(view: &TensorView<'_>) -> Result<(Vec<usize>, Vec<f32>), LoaderEr
                 ));
             }
             let mut vals = Vec::with_capacity(raw.len() / 4);
-            for chunk in raw.chunks_exact(4) {
+            for chunk in raw.as_chunks::<4>().0 {
                 vals.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
             }
             vals
@@ -204,7 +204,7 @@ fn view_to_f32(view: &TensorView<'_>) -> Result<(Vec<usize>, Vec<f32>), LoaderEr
                 ));
             }
             let mut vals = Vec::with_capacity(raw.len() / 2);
-            for chunk in raw.chunks_exact(2) {
+            for chunk in raw.as_chunks::<2>().0 {
                 vals.push(f16_bits_to_f32(u16::from_le_bytes([chunk[0], chunk[1]])));
             }
             vals
@@ -216,7 +216,7 @@ fn view_to_f32(view: &TensorView<'_>) -> Result<(Vec<usize>, Vec<f32>), LoaderEr
                 ));
             }
             let mut vals = Vec::with_capacity(raw.len() / 2);
-            for chunk in raw.chunks_exact(2) {
+            for chunk in raw.as_chunks::<2>().0 {
                 vals.push(bf16_bits_to_f32(u16::from_le_bytes([chunk[0], chunk[1]])));
             }
             vals

@@ -37,34 +37,58 @@ async fn run_handler(
     let job = match submit_job(&ctx, &cfg, &ep, query, &headers, &body).await {
         Ok(j) => j,
         Err(e) => {
-            let ecx = ErrorCtx { request_id: Some(uuid::Uuid::new_v4().to_string()), route, external_id: None };
+            let ecx = ErrorCtx {
+                request_id: Some(uuid::Uuid::new_v4().to_string()),
+                route,
+                external_id: None,
+            };
             return into_response(error_reply(&FalProtocol, &e, &ecx), &ctx, None).await;
         }
     };
     let rid = job.external_id.clone();
-    let job = wait_terminal(&ctx, job.id, ctx.config().sync_timeout).await.unwrap_or(job);
+    let job = wait_terminal(&ctx, job.id, ctx.config().sync_timeout)
+        .await
+        .unwrap_or(job);
     if !job.is_terminal() {
         let _ = cancel_job(&ctx, job.id).await;
-        let ecx = ErrorCtx { request_id: Some(rid.clone()), route, external_id: Some(rid) };
+        let ecx = ErrorCtx {
+            request_id: Some(rid.clone()),
+            route,
+            external_id: Some(rid),
+        };
         let e = ApiError::timeout("The request did not finish within the server's sync timeout");
         return into_response(error_reply(&FalProtocol, &e, &ecx), &ctx, None).await;
     }
-    let view = FalView { url_ttl: cfg.url_ttl };
+    let view = FalView {
+        url_ttl: cfg.url_ttl,
+    };
     let reply = view.result_reply(&job, &ctx.view_ctx(false));
     let reply = inline_video(reply, &job, cfg.inline_max_bytes).await;
     into_response(reply, &ctx, None).await
 }
 
 /// Adds `POST /run/{app}/{sub}` for every endpoint of `app`.
-pub(crate) fn app_routes(mut router: Router<ServeCtx>, cfg: &Arc<FalConfig>, app: &FalApp) -> Router<ServeCtx> {
+pub(crate) fn app_routes(
+    mut router: Router<ServeCtx>,
+    cfg: &Arc<FalConfig>,
+    app: &FalApp,
+) -> Router<ServeCtx> {
     for &endpoint in app.endpoints() {
-        let ep = Arc::new(FalEndpoint { app: app.clone(), endpoint });
+        let ep = Arc::new(FalEndpoint {
+            app: app.clone(),
+            endpoint,
+        });
         let (c, e) = (cfg.clone(), ep.clone());
         router = router.route(
             &format!("/run/{}", ep.endpoint_id()),
-            post(move |State(ctx): State<ServeCtx>, Query(q): Query<Vec<(String, String)>>, headers: HeaderMap, body: Bytes| {
-                run_handler(ctx, c.clone(), e.clone(), q, headers, body)
-            })
+            post(
+                move |State(ctx): State<ServeCtx>,
+                      Query(q): Query<Vec<(String, String)>>,
+                      headers: HeaderMap,
+                      body: Bytes| {
+                    run_handler(ctx, c.clone(), e.clone(), q, headers, body)
+                },
+            )
             .layer(axum::extract::DefaultBodyLimit::max(cfg.body_max)),
         );
     }

@@ -121,7 +121,7 @@ mod tests {
         }
         assert!(close(s.init_noise_scale(), s.sigmas[0], 0.0));
         let c0 = s.step_coeffs(0);
-        assert!(close(c0.t_cur as f64, s.sigmas[0], 0.0));
+        assert!(close(c0.t_cur, s.sigmas[0], 0.0));
         assert!(close(c0.model_timestep as f64, s.timesteps[0], 1e-4));
     }
 

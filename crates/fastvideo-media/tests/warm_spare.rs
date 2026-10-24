@@ -15,7 +15,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use fastvideo_media::pipe::{RestartStats, SparePool, SpareKind, SpareSpec};
+use fastvideo_media::pipe::{RestartStats, SpareKind, SparePool, SpareSpec};
 use fastvideo_media::tools;
 use fastvideo_media::video::{EncodedFrame, FfmpegH264, H264Config, PipeEncoder, VideoEncoder};
 use fastvideo_media::vp8::{Vp8Config, Vp8Encoder};
@@ -30,8 +30,15 @@ enum Codec {
 }
 
 fn has_encoder(name: &str) -> bool {
-    let out = Command::new(tools::ffmpeg_bin()).args(["-hide_banner", "-encoders"]).stderr(Stdio::null()).output();
-    let ok = out.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().any(|w| w == name));
+    let out = Command::new(tools::ffmpeg_bin())
+        .args(["-hide_banner", "-encoders"])
+        .stderr(Stdio::null())
+        .output();
+    let ok = out.is_ok_and(|o| {
+        String::from_utf8_lossy(&o.stdout)
+            .split_whitespace()
+            .any(|w| w == name)
+    });
     if !ok {
         eprintln!("skipping {name}: not in this ffmpeg (set FV_FFMPEG)");
     }
@@ -79,9 +86,10 @@ enum Enc {
 impl Enc {
     fn new(c: Codec, w: u32, h: u32, pool: Option<&SparePool>) -> Enc {
         match c {
-            Codec::X264 => {
-                Enc::H264(PipeEncoder::with_pool(h264_cfg(w, h), FfmpegH264::Libx264CpuTest, pool.cloned()).unwrap())
-            }
+            Codec::X264 => Enc::H264(
+                PipeEncoder::with_pool(h264_cfg(w, h), FfmpegH264::Libx264CpuTest, pool.cloned())
+                    .unwrap(),
+            ),
             Codec::Libvpx => Enc::Vp8(Vp8Encoder::with_pool(vp8_cfg(w, h), pool.cloned()).unwrap()),
         }
     }
@@ -163,7 +171,20 @@ fn decode_count(c: Codec, w: u32, h: u32, frames: &[EncodedFrame]) -> usize {
         }
     };
     let mut p = Command::new(tools::ffmpeg_bin())
-        .args(["-hide_banner", "-loglevel", "error", "-f", fmt, "-i", "pipe:0", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            fmt,
+            "-i",
+            "pipe:0",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "pipe:1",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -173,7 +194,11 @@ fn decode_count(c: Codec, w: u32, h: u32, frames: &[EncodedFrame]) -> usize {
     let writer = std::thread::spawn(move || stdin.write_all(&input));
     let out = p.wait_with_output().unwrap();
     writer.join().unwrap().unwrap();
-    assert!(out.status.success(), "decode failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "decode failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     out.stdout.len() / (w * h * 3) as usize
 }
 
@@ -217,8 +242,16 @@ fn wait_primed(pool: &SparePool, limit: Duration) -> Option<u32> {
 /// Exact: one frame out per frame in, consecutive indices, keyframes at
 /// `keys`, and the stream decodes to `n` frames.
 fn assert_exact(c: Codec, (w, h): (u32, u32), out: &[EncodedFrame], n: u64, keys: &[u64]) {
-    assert_eq!(out.len() as u64, n, "{c:?}: {} frames out for {n} in", out.len());
-    assert!(out.iter().enumerate().all(|(i, f)| f.index == i as u64), "{c:?}");
+    assert_eq!(
+        out.len() as u64,
+        n,
+        "{c:?}: {} frames out for {n} in",
+        out.len()
+    );
+    assert!(
+        out.iter().enumerate().all(|(i, f)| f.index == i as u64),
+        "{c:?}"
+    );
     let got: Vec<u64> = out.iter().filter(|f| f.keyframe).map(|f| f.index).collect();
     assert_eq!(got, keys, "{c:?}: keyframes");
     assert_eq!(decode_count(c, w, h, out), n as usize, "{c:?}");
@@ -230,11 +263,23 @@ fn warm_swap_flushes_the_old_process_and_swaps_in_the_spare() {
     for c in codecs() {
         let pool = SparePool::new(true);
         let mut e = Enc::new(c, wh.0, wh.1, Some(&pool));
-        assert_eq!(e.stats().start, Some(SpareKind::Cold), "{c:?}: nothing to adopt yet");
+        assert_eq!(
+            e.stats().start,
+            Some(SpareKind::Cold),
+            "{c:?}: nothing to adopt yet"
+        );
         let (mut out, mut n) = (Vec::new(), 0u64);
         // The spare starts after the first frame is out, then primes.
-        run_until(&mut e, &mut out, &mut n, wh, Duration::from_secs(30), |_| pool.spare_state().is_some());
-        let spare = wait_primed(&pool, Duration::from_secs(30)).unwrap_or_else(|| panic!("{c:?}: spare not primed"));
+        run_until(
+            &mut e,
+            &mut out,
+            &mut n,
+            wh,
+            Duration::from_secs(30),
+            |_| pool.spare_state().is_some(),
+        );
+        let spare = wait_primed(&pool, Duration::from_secs(30))
+            .unwrap_or_else(|| panic!("{c:?}: spare not primed"));
         let old = e.pids()[0];
         // Forced keyframe: the spare becomes the encoder at once, the old
         // process flushes after EOF.
@@ -243,26 +288,53 @@ fn warm_swap_flushes_the_old_process_and_swaps_in_the_spare() {
         out.extend(e.encode(&pattern(wh.0, wh.1, n)));
         n += 1;
         let pids = e.pids();
-        assert!(pids[0] == spare && pids[1..].iter().all(|p| *p == old), "{c:?}: the spare is current: {pids:?}");
+        assert!(
+            pids[0] == spare && pids[1..].iter().all(|p| *p == old),
+            "{c:?}: the spare is current: {pids:?}"
+        );
         // ...and a new spare follows once its first frame is out.
-        let refilled = run_until(&mut e, &mut out, &mut n, wh, Duration::from_secs(30), |_| {
-            pool.spare_state().is_some_and(|(p, primed)| p != spare && primed)
-        });
+        let refilled = run_until(
+            &mut e,
+            &mut out,
+            &mut n,
+            wh,
+            Duration::from_secs(30),
+            |_| {
+                pool.spare_state()
+                    .is_some_and(|(p, primed)| p != spare && primed)
+            },
+        );
         assert!(refilled, "{c:?}: no new spare");
         let (next_spare, _) = pool.spare_state().unwrap();
-        let reaped = run_until(&mut e, &mut out, &mut n, wh, Duration::from_secs(20), |e| e.pids() == vec![spare]);
-        assert!(reaped, "{c:?}: the old process was not reaped: {:?}", e.pids());
+        let reaped = run_until(&mut e, &mut out, &mut n, wh, Duration::from_secs(20), |e| {
+            e.pids() == vec![spare]
+        });
+        assert!(
+            reaped,
+            "{c:?}: the old process was not reaped: {:?}",
+            e.pids()
+        );
         out.extend(e.finish());
         assert_exact(c, wh, &out, n, &[0, forced_at]);
         let s = e.stats();
-        assert_eq!((s.restarts, s.warm, s.warming, s.cold, s.skipped), (1, 1, 0, 0, 0), "{c:?}: {s:?}");
+        assert_eq!(
+            (s.restarts, s.warm, s.warming, s.cold, s.skipped),
+            (1, 1, 0, 0, 0),
+            "{c:?}: {s:?}"
+        );
         assert_eq!(s.latencies.len(), 1);
         assert_eq!(s.latencies[0].0, SpareKind::Warm);
-        eprintln!("{c:?}: warm restart, first frame after {:?}", s.latencies[0].1);
+        eprintln!(
+            "{c:?}: warm restart, first frame after {:?}",
+            s.latencies[0].1
+        );
 
         // Session end: the pool's last handle goes, and the spare with it.
         drop(e);
-        assert!(alive(next_spare), "{c:?}: the spare belongs to the session, not the encoder");
+        assert!(
+            alive(next_spare),
+            "{c:?}: the spare belongs to the session, not the encoder"
+        );
         drop(pool);
         for p in [old, spare, next_spare] {
             assert!(!alive(p), "{c:?}: ffmpeg {p} outlived its session");
@@ -277,12 +349,15 @@ fn a_prewarmed_spare_is_the_first_process() {
         let pool = SparePool::new(true);
         let s = spec(c, wh.0, wh.1);
         pool.prewarm_with(move || Some(s));
-        let spare = wait_primed(&pool, Duration::from_secs(30)).unwrap_or_else(|| panic!("{c:?}: not primed"));
+        let spare = wait_primed(&pool, Duration::from_secs(30))
+            .unwrap_or_else(|| panic!("{c:?}: not primed"));
         let mut e = Enc::new(c, wh.0, wh.1, Some(&pool));
         assert_eq!(e.pids(), vec![spare], "{c:?}: adopted");
         assert_eq!(e.stats().start, Some(SpareKind::Warm));
         let (mut out, mut n) = (Vec::new(), 0u64);
-        run_until(&mut e, &mut out, &mut n, wh, Duration::from_secs(2), |_| false);
+        run_until(&mut e, &mut out, &mut n, wh, Duration::from_secs(2), |_| {
+            false
+        });
         out.extend(e.finish());
         // The primer's frame is not in the stream; the first real frame is
         // the keyframe.
@@ -292,7 +367,10 @@ fn a_prewarmed_spare_is_the_first_process() {
         pool.prewarm_with(move || Some(other));
         let e2 = Enc::new(c, wh.0, wh.1, Some(&pool));
         assert_eq!(e2.stats().start, Some(SpareKind::Cold), "{c:?}");
-        assert!(pool.spare_state().is_some(), "{c:?}: the other profile's spare stays");
+        assert!(
+            pool.spare_state().is_some(),
+            "{c:?}: the other profile's spare stays"
+        );
     }
 }
 
@@ -305,7 +383,9 @@ fn a_keyframe_before_the_first_one_went_out_needs_no_restart() {
         // A new peer's keyframe request while ffmpeg is still starting.
         e.key();
         let (mut out, mut n) = (Vec::new(), 0u64);
-        run_until(&mut e, &mut out, &mut n, wh, Duration::from_secs(1), |_| false);
+        run_until(&mut e, &mut out, &mut n, wh, Duration::from_secs(1), |_| {
+            false
+        });
         out.extend(e.finish());
         assert_exact(c, wh, &out, n, &[0]);
         let s = e.stats();
@@ -316,37 +396,80 @@ fn a_keyframe_before_the_first_one_went_out_needs_no_restart() {
 #[test]
 fn batch_encoders_have_no_spare_and_a_pool_holds_one() {
     let wh = (64u32, 48u32);
-    let Some(c) = codecs().into_iter().next() else { return };
+    let Some(c) = codecs().into_iter().next() else {
+        return;
+    };
     // Batch (no pool): a forced keyframe starts ffmpeg cold, as before.
     let mut batch = Enc::new(c, wh.0, wh.1, None);
     let (mut out, mut n) = (Vec::new(), 0u64);
-    run_until(&mut batch, &mut out, &mut n, wh, Duration::from_millis(600), |_| false);
+    run_until(
+        &mut batch,
+        &mut out,
+        &mut n,
+        wh,
+        Duration::from_millis(600),
+        |_| false,
+    );
     assert_eq!(batch.pids().len(), 1);
     let forced_at = n;
     batch.key();
-    run_until(&mut batch, &mut out, &mut n, wh, Duration::from_millis(500), |_| false);
+    run_until(
+        &mut batch,
+        &mut out,
+        &mut n,
+        wh,
+        Duration::from_millis(500),
+        |_| false,
+    );
     out.extend(batch.finish());
     assert_exact(c, wh, &out, n, &[0, forced_at]);
     assert_eq!(batch.stats().cold, 1);
     let pool = SparePool::new(false);
     let mut off = Enc::new(c, wh.0, wh.1, Some(&pool));
     let (mut o, mut k) = (Vec::new(), 0);
-    run_until(&mut off, &mut o, &mut k, wh, Duration::from_secs(1), |_| false);
-    assert!(pool.spare_state().is_none(), "a disabled pool (FV_ENCODER_SPARE=0) keeps none");
+    run_until(&mut off, &mut o, &mut k, wh, Duration::from_secs(1), |_| {
+        false
+    });
+    assert!(
+        pool.spare_state().is_none(),
+        "a disabled pool (FV_ENCODER_SPARE=0) keeps none"
+    );
 
     // Two encoders of one session (two profiles): one spare between them.
     let pool = SparePool::new(true);
-    let (mut a, mut b) = (Enc::new(c, wh.0, wh.1, Some(&pool)), Enc::new(c, 96, 64, Some(&pool)));
+    let (mut a, mut b) = (
+        Enc::new(c, wh.0, wh.1, Some(&pool)),
+        Enc::new(c, 96, 64, Some(&pool)),
+    );
     let (mut oa, mut ob, mut na, mut nb) = (Vec::new(), Vec::new(), 0, 0);
-    assert!(run_until(&mut a, &mut oa, &mut na, wh, Duration::from_secs(20), |_| pool.spare_state().is_some()));
+    assert!(run_until(
+        &mut a,
+        &mut oa,
+        &mut na,
+        wh,
+        Duration::from_secs(20),
+        |_| pool.spare_state().is_some()
+    ));
     let (first, _) = pool.spare_state().unwrap();
-    assert!(run_until(&mut b, &mut ob, &mut nb, (96, 64), Duration::from_secs(20), |_| {
-        pool.spare_state().is_some_and(|(p, _)| p != first)
-    }));
+    assert!(run_until(
+        &mut b,
+        &mut ob,
+        &mut nb,
+        (96, 64),
+        Duration::from_secs(20),
+        |_| { pool.spare_state().is_some_and(|(p, _)| p != first) }
+    ));
     assert!(!alive(first), "{c:?}: replaced, not kept");
     // Each refills once per process start: no ping-pong.
     let (second, _) = pool.spare_state().unwrap();
-    run_until(&mut a, &mut oa, &mut na, wh, Duration::from_millis(500), |_| false);
+    run_until(
+        &mut a,
+        &mut oa,
+        &mut na,
+        wh,
+        Duration::from_millis(500),
+        |_| false,
+    );
     assert_eq!(pool.spare_state().map(|s| s.0), Some(second));
 }
 
@@ -369,10 +492,24 @@ fn restart_latency_cold_vs_warm() {
             let (mut out, mut n) = (Vec::new(), 0u64);
             let t0 = Instant::now();
             for _ in 0..8 {
-                run_until(&mut e, &mut out, &mut n, wh, Duration::from_millis(1500), |_| false);
+                run_until(
+                    &mut e,
+                    &mut out,
+                    &mut n,
+                    wh,
+                    Duration::from_millis(1500),
+                    |_| false,
+                );
                 e.key();
             }
-            run_until(&mut e, &mut out, &mut n, wh, Duration::from_millis(1500), |_| false);
+            run_until(
+                &mut e,
+                &mut out,
+                &mut n,
+                wh,
+                Duration::from_millis(1500),
+                |_| false,
+            );
             out.extend(e.finish());
             assert_eq!(out.len() as u64, n, "{c:?}");
             let s = e.stats();

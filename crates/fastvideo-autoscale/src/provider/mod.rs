@@ -42,9 +42,18 @@ pub struct ApplyReport {
 pub trait Provider: Send + Sync {
     fn name(&self) -> &'static str;
     /// The pool's workers (and endpoint settings for serverless).
-    async fn observe(&self, pool: &PoolConfig, now_s: f64) -> Result<PoolObservation, ProviderError>;
+    async fn observe(
+        &self,
+        pool: &PoolConfig,
+        now_s: f64,
+    ) -> Result<PoolObservation, ProviderError>;
     /// Carry out a decision. Never deletes a worker with `busy > 0`.
-    async fn apply(&self, pool: &PoolConfig, decision: &PoolDecision, now_s: f64) -> Result<ApplyReport, ProviderError>;
+    async fn apply(
+        &self,
+        pool: &PoolConfig,
+        decision: &PoolDecision,
+        now_s: f64,
+    ) -> Result<ApplyReport, ProviderError>;
 }
 
 /// The account balance in dollars.
@@ -72,7 +81,10 @@ pub struct Providers {
 
 impl Providers {
     pub fn new(balance: Arc<dyn BalanceSource>) -> Self {
-        Self { by_kind: BTreeMap::new(), balance }
+        Self {
+            by_kind: BTreeMap::new(),
+            balance,
+        }
     }
     pub fn with(mut self, kind: PoolKind, p: Arc<dyn Provider>) -> Self {
         self.by_kind.insert(kind_key(kind), p);

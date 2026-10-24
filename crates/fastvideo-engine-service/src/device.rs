@@ -34,7 +34,11 @@ const GIB: u64 = 1 << 30;
 
 impl DeviceProfile {
     pub fn new(name: impl Into<String>, sm: (u32, u32), total_bytes: Option<u64>) -> Self {
-        Self { name: name.into(), sm, total_bytes }
+        Self {
+            name: name.into(),
+            sm,
+            total_bytes,
+        }
     }
     /// NVIDIA A100 80 GB (sm80: bf16, no FP8).
     pub fn a100_80gb() -> Self {
@@ -54,7 +58,11 @@ impl DeviceProfile {
     }
     /// RTX PRO 6000 Blackwell Server Edition (sm120, 96 GB).
     pub fn rtx_pro_6000() -> Self {
-        Self::new("NVIDIA RTX PRO 6000 Blackwell Server Edition", (12, 0), Some(96 * GIB))
+        Self::new(
+            "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+            (12, 0),
+            Some(96 * GIB),
+        )
     }
 
     /// A named profile (`a100`, `l40s`, `h100`, `b200`, `rtx-pro-6000`), or
@@ -69,7 +77,9 @@ impl DeviceProfile {
             "b200" => Self::b200(),
             "rtx-pro-6000" | "rtxpro6000" => Self::rtx_pro_6000(),
             other => {
-                let bad = || format!("device profile {other:?}: expected a100, l40s, h100, b200, rtx-pro-6000 or sm<NN>[:<GiB>]");
+                let bad = || {
+                    format!("device profile {other:?}: expected a100, l40s, h100, b200, rtx-pro-6000 or sm<NN>[:<GiB>]")
+                };
                 let rest = other.strip_prefix("sm").ok_or_else(bad)?;
                 let (sm, mem) = match rest.split_once(':') {
                     Some((a, b)) => (a, Some(b.parse::<u64>().map_err(|_| bad())? * GIB)),
@@ -106,9 +116,15 @@ impl Requirements {
         if self.nvfp4 {
             ((10, 0), "NVFP4 tensor cores (Blackwell, sm100 or newer)")
         } else if self.fp8 {
-            ((8, 9), "FP8 tensor cores (Ada, Hopper or Blackwell: sm89 or newer)")
+            (
+                (8, 9),
+                "FP8 tensor cores (Ada, Hopper or Blackwell: sm89 or newer)",
+            )
         } else {
-            ((8, 0), "bf16 tensor cores and the attention kernels (sm80 or newer)")
+            (
+                (8, 0),
+                "bf16 tensor cores and the attention kernels (sm80 or newer)",
+            )
         }
     }
 
@@ -143,27 +159,57 @@ mod tests {
 
     #[test]
     fn fp8_models_refuse_an_a100() {
-        let fp8 = Requirements { fp8: true, ..Requirements::default() };
-        let e = fp8.check("h3-turbo", &DeviceProfile::a100_80gb()).unwrap_err();
-        assert!(e.contains("A100") && e.contains("sm80") && e.contains("FP8") && e.contains("sm89"), "{e}");
-        for d in [DeviceProfile::l40s(), DeviceProfile::h100_80gb(), DeviceProfile::rtx_pro_6000()] {
+        let fp8 = Requirements {
+            fp8: true,
+            ..Requirements::default()
+        };
+        let e = fp8
+            .check("h3-turbo", &DeviceProfile::a100_80gb())
+            .unwrap_err();
+        assert!(
+            e.contains("A100") && e.contains("sm80") && e.contains("FP8") && e.contains("sm89"),
+            "{e}"
+        );
+        for d in [
+            DeviceProfile::l40s(),
+            DeviceProfile::h100_80gb(),
+            DeviceProfile::rtx_pro_6000(),
+        ] {
             assert!(fp8.check("h3-turbo", &d).is_ok(), "{}", d.name);
         }
-        assert!(Requirements::default().check("wan", &DeviceProfile::a100_80gb()).is_ok());
-        assert!(Requirements::default().check("wan", &DeviceProfile::parse("sm75").unwrap()).is_err());
-        let fp4 = Requirements { nvfp4: true, ..Requirements::default() };
+        assert!(Requirements::default()
+            .check("wan", &DeviceProfile::a100_80gb())
+            .is_ok());
+        assert!(Requirements::default()
+            .check("wan", &DeviceProfile::parse("sm75").unwrap())
+            .is_err());
+        let fp4 = Requirements {
+            nvfp4: true,
+            ..Requirements::default()
+        };
         assert!(fp4.check("ltx-draft", &DeviceProfile::h100_80gb()).is_err());
-        assert!(fp4.check("ltx-draft", &DeviceProfile::rtx_pro_6000()).is_ok());
+        assert!(fp4
+            .check("ltx-draft", &DeviceProfile::rtx_pro_6000())
+            .is_ok());
     }
 
     #[test]
     fn memory_and_profile_parsing() {
-        let big = Requirements { min_total_bytes: Some(60 * GIB), ..Requirements::default() };
+        let big = Requirements {
+            min_total_bytes: Some(60 * GIB),
+            ..Requirements::default()
+        };
         let e = big.check("m", &DeviceProfile::l40s()).unwrap_err();
         assert!(e.contains("48.0 GiB") && e.contains("60.0 GiB"), "{e}");
         assert!(big.check("m", &DeviceProfile::h100_80gb()).is_ok());
-        assert_eq!(DeviceProfile::parse("sm90:80").unwrap(), DeviceProfile::new("sm90 (simulated)", (9, 0), Some(80 * GIB)));
-        assert_eq!(DeviceProfile::parse("A100").unwrap(), DeviceProfile::a100_80gb());
+        assert_eq!(
+            DeviceProfile::parse("sm90:80").unwrap(),
+            DeviceProfile::new("sm90 (simulated)", (9, 0), Some(80 * GIB))
+        );
+        assert_eq!(
+            DeviceProfile::parse("A100").unwrap(),
+            DeviceProfile::a100_80gb()
+        );
         assert!(DeviceProfile::parse("tpu").is_err());
         assert!(DeviceProfile::parse("sm8").is_err());
     }

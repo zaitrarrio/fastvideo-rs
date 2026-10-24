@@ -125,7 +125,9 @@ mod tests {
         let map = WeightMap::generated(move |key, shape| {
             rec.lock().unwrap().push((key.to_string(), shape.to_vec()));
             let n: usize = shape.iter().product();
-            (0..n).map(|i| ((i * 7 + key.len()) % 13) as f32 * 0.01 - 0.06).collect()
+            (0..n)
+                .map(|i| ((i * 7 + key.len()) % 13) as f32 * 0.01 - 0.06)
+                .collect()
         });
         let layout = PromptLayout::new(vec![2, 5, 9, 11, 3], 7, 4);
         let out = encode_layout(&map, &gemma2_decoder(&cfg), &layout).unwrap();

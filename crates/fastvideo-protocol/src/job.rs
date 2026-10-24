@@ -317,7 +317,11 @@ pub struct Job {
     /// job never left the process that created it). `created_at` to here
     /// is dispatch (input staging, store round trips, the hop to the
     /// worker); here to `started_at` is the wait for the GPU.
-    #[serde(default, with = "time::serde::rfc3339::option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub dispatched_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub started_at: Option<OffsetDateTime>,
@@ -678,11 +682,7 @@ pub trait JobStore: Send + Sync + 'static {
     async fn get(&self, id: JobId) -> Option<Job>;
     async fn by_external(&self, p: ProtocolId, external_id: &str) -> Option<Job>;
     /// Applies `f` atomically and returns the updated job; watchers see a new snapshot.
-    async fn update(
-        &self,
-        id: JobId,
-        f: JobUpdate,
-    ) -> Result<Job, StoreError>;
+    async fn update(&self, id: JobId, f: JobUpdate) -> Result<Job, StoreError>;
     /// Owner/protocol/status/model filters, cursor.
     async fn list(&self, q: ListQuery) -> Page<Job>;
     async fn remove(&self, id: JobId) -> Option<Job>;

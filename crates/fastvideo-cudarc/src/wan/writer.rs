@@ -465,6 +465,7 @@ fn feed(rx: std::sync::mpsc::Receiver<FrameBatch>, cfg: &FeedConfig) -> Result<F
     // Inline PNG encodes run on the rayon pool across batches, at most
     // PNG_IN_FLIGHT frames at once; this thread feeds ffmpeg meanwhile.
     let slots = Arc::new((Mutex::new(0usize), Condvar::new()));
+    #[allow(clippy::type_complexity)] // a one-off tuple; a named struct would outweigh it
     let written: Mutex<Vec<(usize, Result<(String, u64)>)>> = Mutex::new(Vec::new());
     let dir = cfg.dir.as_path();
     let fed: Result<()> = rayon::in_place_scope(|s| {

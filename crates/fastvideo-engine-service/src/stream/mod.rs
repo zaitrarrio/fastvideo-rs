@@ -50,8 +50,8 @@ pub use causal::{
 };
 pub use clip::{ClipBuild, ClipSession};
 pub use duplex::{
-    draw_echo_overlay, echo_caps, read_echo_index, DuplexCommand, DuplexControl, DuplexReply, DuplexSession,
-    DuplexState, EchoBackend, ECHO_BORDER, ECHO_MODEL,
+    draw_echo_overlay, echo_caps, read_echo_index, DuplexCommand, DuplexControl, DuplexReply,
+    DuplexSession, DuplexState, EchoBackend, ECHO_BORDER, ECHO_MODEL,
 };
 pub use pace::{
     spawn_causal_pacer, spawn_clip_pacer, CausalPacerConfig, ClipPacerConfig, IdlePolicy,

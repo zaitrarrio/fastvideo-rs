@@ -24,7 +24,9 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::routing::post;
 use axum::Router;
-use fastvideo_protocol::{ApiError, ErrorCtx, GenerationRequest, HttpReply, MediaRef, ProtocolId, UploadId};
+use fastvideo_protocol::{
+    ApiError, ErrorCtx, GenerationRequest, HttpReply, MediaRef, ProtocolId, UploadId,
+};
 use fastvideo_serve_kit::handlers::error_reply;
 use fastvideo_serve_kit::{into_response, ServeCtx};
 use serde::Deserialize;
@@ -42,12 +44,18 @@ pub struct InitiateBody {
     pub file_name: Option<String>,
 }
 
-async fn initiate(ctx: &ServeCtx, ttl: Duration, headers: &HeaderMap, body: &Bytes) -> Result<HttpReply, ApiError> {
+async fn initiate(
+    ctx: &ServeCtx,
+    ttl: Duration,
+    headers: &HeaderMap,
+    body: &Bytes,
+) -> Result<HttpReply, ApiError> {
     ctx.auth().authenticate(ProtocolId::Fal, headers)?;
     let b: InitiateBody = if body.is_empty() {
         InitiateBody::default()
     } else {
-        serde_json::from_slice(body).map_err(|e| ApiError::invalid(format!("JSON decode error: {e}")))?
+        serde_json::from_slice(body)
+            .map_err(|e| ApiError::invalid(format!("JSON decode error: {e}")))?
     };
     let t = ctx
         .uploads()
@@ -57,14 +65,28 @@ async fn initiate(ctx: &ServeCtx, ttl: Duration, headers: &HeaderMap, body: &Byt
         .uploads()
         .file_url(&t.token, ttl)
         .ok_or_else(|| ApiError::internal("the upload vanished"))?;
-    Ok(HttpReply::json(200, json!({"upload_url": t.upload_url.as_str(), "file_url": file_url.as_str()})))
+    Ok(HttpReply::json(
+        200,
+        json!({"upload_url": t.upload_url.as_str(), "file_url": file_url.as_str()}),
+    ))
 }
 
-async fn initiate_handler(ctx: ServeCtx, cfg: Arc<FalConfig>, headers: HeaderMap, body: Bytes) -> Response {
-    let reply = initiate(&ctx, cfg.url_ttl, &headers, &body).await.unwrap_or_else(|e| {
-        let ecx = ErrorCtx { request_id: None, route: Some("/storage/upload/initiate".into()), external_id: None };
-        error_reply(&FalProtocol, &e, &ecx)
-    });
+async fn initiate_handler(
+    ctx: ServeCtx,
+    cfg: Arc<FalConfig>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let reply = initiate(&ctx, cfg.url_ttl, &headers, &body)
+        .await
+        .unwrap_or_else(|e| {
+            let ecx = ErrorCtx {
+                request_id: None,
+                route: Some("/storage/upload/initiate".into()),
+                external_id: None,
+            };
+            error_reply(&FalProtocol, &e, &ecx)
+        });
     into_response(reply, &ctx, None).await
 }
 
@@ -72,7 +94,11 @@ pub(crate) fn routes(router: Router<ServeCtx>, cfg: &Arc<FalConfig>) -> Router<S
     let c = cfg.clone();
     router.route(
         "/storage/upload/initiate",
-        post(move |State(ctx): State<ServeCtx>, headers: HeaderMap, body: Bytes| initiate_handler(ctx, c.clone(), headers, body)),
+        post(
+            move |State(ctx): State<ServeCtx>, headers: HeaderMap, body: Bytes| {
+                initiate_handler(ctx, c.clone(), headers, body)
+            },
+        ),
     )
 }
 
@@ -118,9 +144,22 @@ mod tests {
     fn own_tokens() {
         let base = url::Url::parse("https://fv.test/api").unwrap();
         let u = |s: &str| url::Url::parse(s).unwrap();
-        assert_eq!(own_upload_token(&base, &u("https://fv.test/api/files/abc/x.png?exp=1&sig=2")).as_deref(), Some("abc"));
-        assert_eq!(own_upload_token(&base, &u("https://other.test/api/files/abc/x.png")), None);
-        assert_eq!(own_upload_token(&base, &u("https://fv.test/api/files/abc")), None);
-        assert_eq!(own_upload_token(&base, &u("https://fv.test/api/uploads/abc/x")), None);
+        assert_eq!(
+            own_upload_token(&base, &u("https://fv.test/api/files/abc/x.png?exp=1&sig=2"))
+                .as_deref(),
+            Some("abc")
+        );
+        assert_eq!(
+            own_upload_token(&base, &u("https://other.test/api/files/abc/x.png")),
+            None
+        );
+        assert_eq!(
+            own_upload_token(&base, &u("https://fv.test/api/files/abc")),
+            None
+        );
+        assert_eq!(
+            own_upload_token(&base, &u("https://fv.test/api/uploads/abc/x")),
+            None
+        );
     }
 }

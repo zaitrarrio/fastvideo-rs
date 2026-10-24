@@ -45,11 +45,17 @@ pub fn whip_h264(target: WhipTarget, width: u32, height: u32, fps: u32) -> H264C
 pub fn check_profile(p: EncodeProfile, c: &H264Config) -> Result<(), String> {
     let level = c.resolved_level().map_err(|e| e.to_string())?;
     if level.idc() < p.h264_level.idc() {
-        return Err(format!("encoder level {level} is below the offered {:?}", p.h264_level));
+        return Err(format!(
+            "encoder level {level} is below the offered {:?}",
+            p.h264_level
+        ));
     }
     let want = p.output_size(c.input_width, c.input_height);
     if (c.width, c.height) != want {
-        return Err(format!("frame {}x{} is not the native {}x{}", c.width, c.height, want.0, want.1));
+        return Err(format!(
+            "frame {}x{} is not the native {}x{}",
+            c.width, c.height, want.0, want.1
+        ));
     }
     Ok(())
 }
@@ -76,7 +82,10 @@ mod tests {
             check_profile(WhipTarget::Cloudflare.profile(), &c).unwrap();
             assert_eq!(c.gop_frames(), fps, "a 1 s GOP for Cloudflare");
         }
-        assert_eq!(whip_h264(WhipTarget::Mediamtx, 1344, 768, 24).gop_frames(), 48);
+        assert_eq!(
+            whip_h264(WhipTarget::Mediamtx, 1344, 768, 24).gop_frames(),
+            48
+        );
     }
 
     #[test]

@@ -40,7 +40,9 @@ pub struct FalWebhook {
 
 impl Default for FalWebhook {
     fn default() -> Self {
-        Self { url_ttl: Duration::from_secs(24 * 3600) }
+        Self {
+            url_ttl: Duration::from_secs(24 * 3600),
+        }
     }
 }
 
@@ -49,7 +51,13 @@ pub fn webhook_body(job: &Job, cx: &ViewCtx, url_ttl: Duration) -> Option<serde_
     let rid = job.external_id.as_str();
     let fail = |e: &ApiError| {
         let (status, _, body) = error_body(e);
-        fal_webhook_body(rid, rid, false, body, Some(&format!("Invalid status code: {status}")))
+        fal_webhook_body(
+            rid,
+            rid,
+            false,
+            body,
+            Some(&format!("Invalid status code: {status}")),
+        )
     };
     match &job.state {
         JobState::Queued | JobState::Running => None,
@@ -73,7 +81,9 @@ async fn jwks(ctx: axum::extract::State<ServeCtx>) -> Response {
         Some(s) => axum::Json(s.jwks()).into_response(),
         None => (
             axum::http::StatusCode::NOT_FOUND,
-            axum::Json(json!({"detail": "webhook signing is not configured", "error_type": "not_found"})),
+            axum::Json(
+                json!({"detail": "webhook signing is not configured", "error_type": "not_found"}),
+            ),
         )
             .into_response(),
     }

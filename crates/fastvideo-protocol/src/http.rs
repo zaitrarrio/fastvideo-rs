@@ -135,7 +135,11 @@ pub enum SseFollow {
     /// stream ends after the first terminal status (fal `/status/stream`).
     /// `with_logs` renders each change with `ViewCtx::with_logs` (fal
     /// `?logs=1`).
-    JobStatus { job: JobId, close_on_terminal: bool, with_logs: bool },
+    JobStatus {
+        job: JobId,
+        close_on_terminal: bool,
+        with_logs: bool,
+    },
 }
 
 /// One SSE event.

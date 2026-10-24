@@ -16,7 +16,9 @@ fn bits_of(x: &CudaTensor) -> anyhow::Result<Vec<u32>> {
 fn same<T: PartialEq>(runs: &[Vec<T>]) -> usize {
     runs.iter()
         .skip(1)
-        .map(|r| r.iter().zip(&runs[0]).filter(|(a, b)| a != b).count() + r.len().abs_diff(runs[0].len()))
+        .map(|r| {
+            r.iter().zip(&runs[0]).filter(|(a, b)| a != b).count() + r.len().abs_diff(runs[0].len())
+        })
         .sum()
 }
 
@@ -25,7 +27,10 @@ pub(super) fn run(c: &mut Ctx<'_>) -> StageResult<()> {
     // Dense SDPA under `auto` (the fixed rule; on sm_12x cuDNN or fwd2 per
     // shape): a self-attention shape the rule sends to cuDNN on sm_12x, and a
     // cross-attention shape (a tie, fwd2).
-    for (name, bh, sq, sk) in [("self_24k6", 8usize, 24_832usize, 24_832usize), ("cross", 8, 9_690, 1_024)] {
+    for (name, bh, sq, sk) in [
+        ("self_24k6", 8usize, 24_832usize, 24_832usize),
+        ("cross", 8, 9_690, 1_024),
+    ] {
         let d = 128;
         let q = t(c.rand(bh * sq * d, 1.0), &[1, bh, sq, d])?;
         let k = t(c.rand(bh * sk * d, 1.0), &[1, bh, sk, d])?;
@@ -86,8 +91,15 @@ pub(super) fn run(c: &mut Ctx<'_>) -> StageResult<()> {
     if fastvideo_cudarc::wan::attn_fp8::supported() {
         let (bh, s, d) = (4usize, 4_160usize, 128usize);
         let mk = |c: &mut Ctx<'_>| -> anyhow::Result<CudaTensor> {
-            let v: Vec<bf16> = c.rand(bh * s * d, 1.0).iter().map(|&x| bf16::from_f32(x)).collect();
-            Ok(CudaTensor::from_device_slice_bf16(dev.stream.memcpy_stod(&v)?, vec![1, bh, s, d])?)
+            let v: Vec<bf16> = c
+                .rand(bh * s * d, 1.0)
+                .iter()
+                .map(|&x| bf16::from_f32(x))
+                .collect();
+            Ok(CudaTensor::from_device_slice_bf16(
+                dev.stream.memcpy_stod(&v)?,
+                vec![1, bh, s, d],
+            )?)
         };
         let (q, k, v) = (mk(c)?, mk(c)?, mk(c)?);
         let mut runs = Vec::new();

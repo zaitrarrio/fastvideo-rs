@@ -85,7 +85,11 @@ pub fn pad_token_ids(ids: &[u32], text_len: usize, pad_id: u32) -> (Vec<u32>, us
 }
 
 /// Tokenize an already formatted Flux2 chat string. Specials live in the wrap.
-pub fn tokenize_flux2(path: &str, formatted: &str, max_len: usize) -> Result<(Vec<u32>, usize), String> {
+pub fn tokenize_flux2(
+    path: &str,
+    formatted: &str,
+    max_len: usize,
+) -> Result<(Vec<u32>, usize), String> {
     let tokenizer = tokenizers::Tokenizer::from_file(path)
         .map_err(|e| format!("tokenizer load failed: {e}"))?;
     let encoding = tokenizer
@@ -275,8 +279,14 @@ mod tests {
 
     #[test]
     fn klein_uses_qwen3() {
-        assert_eq!(Flux2TextKind::from_preset("flux2_klein_4b"), Flux2TextKind::Qwen3);
-        assert_eq!(Flux2TextKind::from_preset("flux2_dev"), Flux2TextKind::Mistral3);
+        assert_eq!(
+            Flux2TextKind::from_preset("flux2_klein_4b"),
+            Flux2TextKind::Qwen3
+        );
+        assert_eq!(
+            Flux2TextKind::from_preset("flux2_dev"),
+            Flux2TextKind::Mistral3
+        );
         assert_eq!(Qwen3Config::klein_4b().hidden_size, 2560);
         assert_eq!(Qwen3Config::mistral3_24b().hidden_size, 5120);
     }

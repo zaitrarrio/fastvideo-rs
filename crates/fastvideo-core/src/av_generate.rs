@@ -112,9 +112,9 @@ fn require_cuda(device: &str) -> Result<()> {
     #[cfg(not(feature = "cuda-cudarc"))]
     {
         let _ = device;
-        return Err(FastVideoError::Message(
+        Err(FastVideoError::Message(
             "rebuild with --features cuda-cudarc to generate LTX/H3".into(),
-        ));
+        ))
     }
     #[cfg(feature = "cuda-cudarc")]
     Ok(())

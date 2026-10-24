@@ -60,7 +60,9 @@ impl Selection {
         let note = |v: &str| match v {
             "off" => " (VP8 only)",
             "x264-test" | "cpu-test-x264" => " (CPU test encoder)",
-            "openh264" if !EncoderBackend::OpenH264.compiled() => " (not in this build: answered with VP8 instead)",
+            "openh264" if !EncoderBackend::OpenH264.compiled() => {
+                " (not in this build: answered with VP8 instead)"
+            }
             _ => "",
         };
         settings
@@ -163,15 +165,24 @@ mod tests {
         assert_eq!(Selection::new(&ok, false).reactor, "nvenc");
         assert_eq!(Selection::new(&ok, false).post, "nvenc");
         let s = Selection::new(&bad, true);
-        assert_eq!((s.director.as_str(), s.reactor.as_str(), s.streams.as_str()), ("openh264", "openh264", "openh264"));
+        assert_eq!(
+            (s.director.as_str(), s.reactor.as_str(), s.streams.as_str()),
+            ("openh264", "openh264", "openh264")
+        );
         let s = Selection::new(&bad, false);
-        assert_eq!((s.director.as_str(), s.reactor.as_str(), s.streams.as_str()), ("openh264", "off", "x264-test"));
+        assert_eq!(
+            (s.director.as_str(), s.reactor.as_str(), s.streams.as_str()),
+            ("openh264", "off", "x264-test")
+        );
 
         let mut c = Config::default();
         assert!(wants_auto(&c), "every encoder setting defaults to auto");
         c.reactor.h264 = "nvenc".into();
         let changed = apply(&mut c, &Selection::new(&bad, true));
-        assert_eq!(changed, vec!["director.encoder", "webrtc.encoder", "engine.post_encoder"]);
+        assert_eq!(
+            changed,
+            vec!["director.encoder", "webrtc.encoder", "engine.post_encoder"]
+        );
         assert_eq!(c.director.encoder, "openh264");
         assert_eq!(c.reactor.h264, "nvenc", "explicit values are kept");
         assert_eq!(c.webrtc.encoder, "openh264");
@@ -184,11 +195,22 @@ mod tests {
     #[test]
     fn fallback_description_names_the_real_encoders() {
         let bad = AutoEncoder::from_probe(Err("no device".into()));
-        let all = ["director.encoder", "reactor.h264", "webrtc.encoder", "engine.post_encoder"];
+        let all = [
+            "director.encoder",
+            "reactor.h264",
+            "webrtc.encoder",
+            "engine.post_encoder",
+        ];
         let d = Selection::new(&bad, false).describe(&all);
         assert!(d.contains("reactor.h264=off (VP8 only)"), "{d}");
-        assert!(d.contains("webrtc.encoder=x264-test (CPU test encoder)"), "{d}");
-        assert!(d.contains("engine.post_encoder=cpu-test-x264 (CPU test encoder)"), "{d}");
+        assert!(
+            d.contains("webrtc.encoder=x264-test (CPU test encoder)"),
+            "{d}"
+        );
+        assert!(
+            d.contains("engine.post_encoder=cpu-test-x264 (CPU test encoder)"),
+            "{d}"
+        );
         let d = Selection::new(&bad, true).describe(&["webrtc.encoder", "engine.post_encoder"]);
         assert!(d.starts_with("webrtc.encoder=openh264"), "{d}");
         assert!(!d.contains("director"), "only rewritten settings: {d}");

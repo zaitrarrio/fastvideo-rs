@@ -128,7 +128,10 @@ fn sync() -> anyhow::Result<()> {
 }
 
 /// Median wall time of `f` over `iters` synchronized runs, in ms.
-pub(crate) fn time_ms(iters: usize, mut f: impl FnMut() -> anyhow::Result<()>) -> anyhow::Result<f64> {
+pub(crate) fn time_ms(
+    iters: usize,
+    mut f: impl FnMut() -> anyhow::Result<()>,
+) -> anyhow::Result<f64> {
     f()?;
     sync()?;
     let mut t = Vec::with_capacity(iters);
@@ -295,7 +298,8 @@ pub fn fp8_recipes(report: &mut Report, seed: &mut u64) -> StageResult<()> {
         let (blob, scales) = layout.quantize_host(&w)?;
         let emu = layout.forward_host(&blob, &scales, &x, m);
         for (act16, gelu) in [(false, false), (false, true), (true, false), (true, true)] {
-            let want = fastvideo_cudarc::wan::ops::host::quant_linear_epilogue(&emu, Some(&b), gelu);
+            let want =
+                fastvideo_cudarc::wan::ops::host::quant_linear_epilogue(&emu, Some(&b), gelu);
             let xt = if act16 {
                 t16(&x, &[1, m, k])?
             } else {

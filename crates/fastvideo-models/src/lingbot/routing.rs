@@ -133,7 +133,10 @@ pub fn route_token(logits: &[f32], bias: &[f32], spec: &RouterSpec) -> (Vec<u32>
 /// Route `n = logits.len() / num_experts` tokens. Flat `[n, top_k]` outputs.
 pub fn route(logits: &[f32], bias: &[f32], spec: &RouterSpec) -> (Vec<u32>, Vec<f32>) {
     let e = spec.num_experts;
-    assert!(e > 0 && logits.len() % e == 0, "router logits / experts");
+    assert!(
+        e > 0 && logits.len().is_multiple_of(e),
+        "router logits / experts"
+    );
     let k = spec.top_k;
     let rows: Vec<(Vec<u32>, Vec<f32>)> = logits
         .par_chunks(e)
@@ -263,7 +266,9 @@ mod tests {
     #[test]
     fn batched_route_matches_per_token() {
         let s = spec(Some(4));
-        let logits: Vec<f32> = (0..5 * 8).map(|i| ((i as f32) * 0.37).sin() * 3.0).collect();
+        let logits: Vec<f32> = (0..5 * 8)
+            .map(|i| ((i as f32) * 0.37).sin() * 3.0)
+            .collect();
         let bias: Vec<f32> = (0..8).map(|i| (i as f32) * 0.01).collect();
         let (idx, w) = route(&logits, &bias, &s);
         for t in 0..5 {

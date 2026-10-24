@@ -209,7 +209,7 @@ fn expand_token(x: &CudaTensor, seq: usize) -> Result<CudaTensor> {
             out[(bi * seq + s) * c..][..c].copy_from_slice(&host[bi * c..][..c]);
         }
     }
-    Ok(CudaTensor::from_vec(out, vec![b, seq, c])?)
+    CudaTensor::from_vec(out, vec![b, seq, c])
 }
 
 pub struct LongCatTransformer {
@@ -354,12 +354,12 @@ impl LongCatTransformer {
                             for phi in 0..ph {
                                 for pwi in 0..pw {
                                     for ci in 0..cin {
-                                        let src = ((((bi * cin + ci) * t + ti * pt + pti) * h
+                                        let src = (((bi * cin + ci) * t + ti * pt + pti) * h
                                             + yi * ph
                                             + phi)
                                             * w
                                             + xi * pw
-                                            + pwi);
+                                            + pwi;
                                         tokens[((bi * seq + tok) * cin * pt * ph * pw) + o] =
                                             host[src];
                                         o += 1;
@@ -418,12 +418,12 @@ impl LongCatTransformer {
                             for phi in 0..ph {
                                 for pwi in 0..pw {
                                     for ci in 0..oc {
-                                        let dst = ((((bi * oc + ci) * t + ti * pt + pti) * h
+                                        let dst = (((bi * oc + ci) * t + ti * pt + pti) * h
                                             + yi * ph
                                             + phi)
                                             * w
                                             + xi * pw
-                                            + pwi);
+                                            + pwi;
                                         pixels[dst] =
                                             oh[((bi * seq + tok) * (pt * ph * pw * oc)) + o];
                                         o += 1;
@@ -435,7 +435,7 @@ impl LongCatTransformer {
                 }
             }
         }
-        Ok(CudaTensor::from_vec(pixels, vec![b, oc, t, h, w])?)
+        CudaTensor::from_vec(pixels, vec![b, oc, t, h, w])
     }
 }
 

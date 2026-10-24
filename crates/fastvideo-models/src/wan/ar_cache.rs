@@ -129,10 +129,8 @@ impl ArKvCache {
             self.rule,
             false,
         )?;
-        for i in 0..n_new {
-            self.k[local_start + i] = k_slots[i].clone();
-            self.v[local_start + i] = v_slots[i].clone();
-        }
+        self.k[local_start..local_start + n_new].clone_from_slice(&k_slots[..n_new]);
+        self.v[local_start..local_start + n_new].clone_from_slice(&v_slots[..n_new]);
         self.local_end = local_end;
         self.global_end += n_new;
         let parts = attend_parts(sink, self.spec.max_attention, local_end);
@@ -143,6 +141,7 @@ impl ArKvCache {
     }
 }
 
+#[allow(clippy::type_complexity)] // a one-off tuple; a named struct would outweigh it
 fn plan_append(
     capacity: usize,
     sink: usize,

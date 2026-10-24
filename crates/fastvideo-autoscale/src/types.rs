@@ -82,7 +82,10 @@ impl PoolObservation {
     }
     /// Starting + ready (not draining).
     pub fn active(&self) -> u32 {
-        self.workers.iter().filter(|w| w.state != WorkerState::Draining).count() as u32
+        self.workers
+            .iter()
+            .filter(|w| w.state != WorkerState::Draining)
+            .count() as u32
     }
 }
 
@@ -154,6 +157,9 @@ impl PoolDecision {
             && self.drain.is_empty()
             && self.undrain.is_empty()
             && self.delete.is_empty()
-            && self.endpoint.as_ref().is_none_or(|e| obs.endpoint.as_ref() == Some(e))
+            && self
+                .endpoint
+                .as_ref()
+                .is_none_or(|e| obs.endpoint.as_ref() == Some(e))
     }
 }

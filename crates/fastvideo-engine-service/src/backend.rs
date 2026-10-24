@@ -177,7 +177,9 @@ pub trait EngineBackend: Send + 'static {
         name: &str,
         _cancel: &crate::cancel::CancelToken,
     ) -> Result<String, ApiError> {
-        Err(ApiError::internal(format!("model `{model}` has no warm-up `{name}`")))
+        Err(ApiError::internal(format!(
+            "model `{model}` has no warm-up `{name}`"
+        )))
     }
     /// Frees a model (swap mode, R18). **Addition to design §3.6**; the
     /// default does nothing.

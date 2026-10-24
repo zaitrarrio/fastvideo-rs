@@ -16,7 +16,6 @@
 //!
 //! Prints `FV-EDGE READY <base URL>` once listening.
 
-
 use fastvideo_dispatch_proto::front::Quotas;
 use fastvideo_serve::config::{Config, ProcessEnv};
 use fastvideo_serve::edge_host::{EdgeHost, EdgeHostCfg};
@@ -24,12 +23,20 @@ use fastvideo_serve_kit::KeyRing;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into())).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
     let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     let mut c = Config::default();
-    c.apply_env(&ProcessEnv).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let token = var("FV_INTERNAL_TOKEN").ok_or_else(|| anyhow::anyhow!("FV_INTERNAL_TOKEN is required"))?;
-    let keys = fastvideo_serve::storage::build_key_store(&c, None).await.map_err(|e| anyhow::anyhow!(e))?;
+    c.apply_env(&ProcessEnv)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let token =
+        var("FV_INTERNAL_TOKEN").ok_or_else(|| anyhow::anyhow!("FV_INTERNAL_TOKEN is required"))?;
+    let keys = fastvideo_serve::storage::build_key_store(&c, None)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
     let mut cfg = EdgeHostCfg::new(token, keys);
     cfg.admin_token = var("FV_ADMIN_TOKEN");
     if let Some(k) = var("FV_API_KEYS") {
@@ -40,7 +47,11 @@ async fn main() -> anyhow::Result<()> {
     cfg.whip_redirect = var("FV_EDGE_WHIP").as_deref() == Some("redirect");
     let n = |k: &str, d: u32| var(k).and_then(|v| v.parse().ok()).unwrap_or(d);
     let q = Quotas::default();
-    cfg.quotas = Quotas { key_rpm: n("FV_EDGE_KEY_RPM", q.key_rpm), key_in_flight: n("FV_EDGE_KEY_IN_FLIGHT", q.key_in_flight), invalid_key_rpm: q.invalid_key_rpm };
+    cfg.quotas = Quotas {
+        key_rpm: n("FV_EDGE_KEY_RPM", q.key_rpm),
+        key_in_flight: n("FV_EDGE_KEY_IN_FLIGHT", q.key_in_flight),
+        invalid_key_rpm: q.invalid_key_rpm,
+    };
     let bind = var("FV_EDGE_BIND").unwrap_or_else(|| "127.0.0.1:8787".into());
     let l = tokio::net::TcpListener::bind(&bind).await?;
     let (_h, base) = EdgeHost::start(cfg, l).await;

@@ -29,8 +29,8 @@ use crate::techniques::methods::{
     DenseAttention, Fp8Attention, Fp8AttentionOps, SinkMode, SolAttn, TeaCache, TinyDecoder,
     TinyDecoderKind, Vsa,
 };
-use crate::techniques::VsaSchedule;
 use crate::techniques::registry::h3_spec;
+use crate::techniques::VsaSchedule;
 use crate::techniques::{compose, Plan, Profile, Schedule, Technique, HORIZON};
 
 /// `FASTVIDEO_VSA_GROUP` default for H3 (the query-tile group).
@@ -221,9 +221,9 @@ impl H3Techniques {
             H3Attention::Dense => items.push(Box::new(DenseAttention {
                 enabled: Schedule::Const(true),
             })),
-            H3Attention::Auto if contract.vsa_sparsity > 0.0 && !contract.dense => {
-                items.push(Box::new(vsa_profile.clone().unwrap_or(Vsa::uniform(None, None))))
-            }
+            H3Attention::Auto if contract.vsa_sparsity > 0.0 && !contract.dense => items.push(
+                Box::new(vsa_profile.clone().unwrap_or(Vsa::uniform(None, None))),
+            ),
             H3Attention::Auto => {}
         }
 
@@ -623,10 +623,9 @@ mod tests {
     fn fasth3_8step_arms_resolve_as_described() {
         let none = |_: &str| None;
         let c = contract("8step");
-        let load = |n: &str| {
-            Profile::parse(crate::techniques::builtin::get(n).unwrap()).unwrap()
-        };
-        let sol = H3Techniques::resolve(None, &c, false, Some(&load("h3/fasth3_8step_sol")), &none).unwrap();
+        let load = |n: &str| Profile::parse(crate::techniques::builtin::get(n).unwrap()).unwrap();
+        let sol = H3Techniques::resolve(None, &c, false, Some(&load("h3/fasth3_8step_sol")), &none)
+            .unwrap();
         let s = sol.sol().unwrap();
         for step in 0..8 {
             for layer in 0..super::super::sol::LAYERS_PER_FORWARD {

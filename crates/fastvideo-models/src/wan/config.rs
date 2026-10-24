@@ -322,11 +322,18 @@ pub fn canvas_multiple(preset: &str) -> usize {
 /// positive multiples of [`canvas_multiple`], `4k + 1` frames (the VAE's
 /// temporal compression), and for a causal preset latent frames in whole
 /// blocks (`num_frames_per_block`). The serving engine's job check.
-pub fn check_geometry(preset: &str, height: usize, width: usize, num_frames: usize) -> Result<(), String> {
+pub fn check_geometry(
+    preset: &str,
+    height: usize,
+    width: usize,
+    num_frames: usize,
+) -> Result<(), String> {
     let dit = WanVideoArchConfig::from_preset(preset);
     let m = canvas_multiple(preset);
     if height == 0 || width == 0 || !height.is_multiple_of(m) || !width.is_multiple_of(m) {
-        return Err(format!("wan: {width}x{height} — height and width must be positive multiples of {m}"));
+        return Err(format!(
+            "wan: {width}x{height} — height and width must be positive multiples of {m}"
+        ));
     }
     let tc = if dit.out_channels == 48 {
         crate::wan::WanVaeConfig::wan_2_2()
@@ -335,7 +342,9 @@ pub fn check_geometry(preset: &str, height: usize, width: usize, num_frames: usi
     }
     .temporal_compression();
     if num_frames == 0 || !(num_frames - 1).is_multiple_of(tc) {
-        return Err(format!("wan: {num_frames} frames — the frame count must be {tc}k + 1"));
+        return Err(format!(
+            "wan: {num_frames} frames — the frame count must be {tc}k + 1"
+        ));
     }
     let latents = (num_frames - 1) / tc + 1;
     let fpb = dit.num_frames_per_block.max(1);

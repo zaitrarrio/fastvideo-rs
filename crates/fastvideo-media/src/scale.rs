@@ -25,7 +25,13 @@ pub enum ScaleMode {
 }
 
 /// Where the fitted picture sits inside the output: `(x, y, w, h)`, all even.
-pub fn fit_rect(in_w: u32, in_h: u32, out_w: u32, out_h: u32, mode: ScaleMode) -> (u32, u32, u32, u32) {
+pub fn fit_rect(
+    in_w: u32,
+    in_h: u32,
+    out_w: u32,
+    out_h: u32,
+    mode: ScaleMode,
+) -> (u32, u32, u32, u32) {
     if mode == ScaleMode::Stretch || in_w == 0 || in_h == 0 {
         return (0, 0, out_w, out_h);
     }
@@ -41,11 +47,21 @@ pub fn fit_rect(in_w: u32, in_h: u32, out_w: u32, out_h: u32, mode: ScaleMode) -
 /// inside the cap are returned unchanged.
 pub fn capped_canvas(in_w: u32, in_h: u32, cap: (u32, u32)) -> (u32, u32) {
     let (cw, ch) = if in_w >= in_h { cap } else { (cap.1, cap.0) };
-    if in_w <= cw && in_h <= ch { (in_w, in_h) } else { (cw, ch) }
+    if in_w <= cw && in_h <= ch {
+        (in_w, in_h)
+    } else {
+        (cw, ch)
+    }
 }
 
 /// The ffmpeg `-vf` chain that maps `in` to `out` (None when equal).
-pub fn ffmpeg_filter(in_w: u32, in_h: u32, out_w: u32, out_h: u32, mode: ScaleMode) -> Option<String> {
+pub fn ffmpeg_filter(
+    in_w: u32,
+    in_h: u32,
+    out_w: u32,
+    out_h: u32,
+    mode: ScaleMode,
+) -> Option<String> {
     if (in_w, in_h) == (out_w, out_h) {
         return None;
     }
@@ -89,7 +105,12 @@ pub fn scale_rgb(src: &RgbFrame, out_w: u32, out_h: u32, mode: ScaleMode) -> Rgb
             }
         }
     }
-    RgbFrame { width: out_w, height: out_h, data: Bytes::from(out), index: src.index }
+    RgbFrame {
+        width: out_w,
+        height: out_h,
+        data: Bytes::from(out),
+        index: src.index,
+    }
 }
 
 #[cfg(test)]
@@ -101,14 +122,26 @@ mod tests {
         assert_eq!(capped_canvas(1344, 768, (1280, 720)), (1280, 720));
         assert_eq!(capped_canvas(768, 1344, (1280, 720)), (720, 1280));
         assert_eq!(capped_canvas(832, 480, (1280, 720)), (832, 480));
-        assert_eq!(fit_rect(1344, 768, 1280, 720, ScaleMode::Fit), (10, 0, 1260, 720));
-        assert_eq!(fit_rect(768, 1344, 720, 1280, ScaleMode::Fit), (0, 10, 720, 1260));
-        assert_eq!(fit_rect(1344, 768, 1280, 720, ScaleMode::Stretch), (0, 0, 1280, 720));
+        assert_eq!(
+            fit_rect(1344, 768, 1280, 720, ScaleMode::Fit),
+            (10, 0, 1260, 720)
+        );
+        assert_eq!(
+            fit_rect(768, 1344, 720, 1280, ScaleMode::Fit),
+            (0, 10, 720, 1260)
+        );
+        assert_eq!(
+            fit_rect(1344, 768, 1280, 720, ScaleMode::Stretch),
+            (0, 0, 1280, 720)
+        );
         assert_eq!(
             ffmpeg_filter(1344, 768, 1280, 720, ScaleMode::Fit).unwrap(),
             "scale=1260:720:flags=bicubic,pad=1280:720:10:0:black,setsar=1"
         );
-        assert_eq!(ffmpeg_filter(1344, 768, 1280, 720, ScaleMode::Stretch).unwrap(), "scale=1280:720:flags=bicubic,setsar=1");
+        assert_eq!(
+            ffmpeg_filter(1344, 768, 1280, 720, ScaleMode::Stretch).unwrap(),
+            "scale=1280:720:flags=bicubic,setsar=1"
+        );
         assert_eq!(ffmpeg_filter(1344, 768, 1344, 768, ScaleMode::Fit), None);
     }
 

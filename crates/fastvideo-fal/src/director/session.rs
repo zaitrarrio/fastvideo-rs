@@ -37,7 +37,9 @@ use std::time::{Duration, Instant};
 
 use fastvideo_media::crossfade::apply_clip_fades;
 use fastvideo_media::lockstep::{prepare_clip_audio, WIRE_RATE};
-use fastvideo_protocol::{ApiError, Continuity, EndReason, MediaKind, MediaRef, ModelCaps, SessionSpec, SessionState};
+use fastvideo_protocol::{
+    ApiError, Continuity, EndReason, MediaKind, MediaRef, ModelCaps, SessionSpec, SessionState,
+};
 use fastvideo_serve_kit::ServeCtx;
 use fastvideo_webrtc::channel::{ChannelMessage, FAL_CONTROL};
 use fastvideo_webrtc::host::{CloseReason, PeerEvent, PeerHandle};
@@ -47,7 +49,9 @@ use tokio::sync::mpsc;
 use super::control::{CausalLimits, ChunkPlan, Control};
 use super::engine::{ChunkBuild, DirectorClips, DirectorStream, StreamBlock};
 use super::info::{session_info, InfoFacts};
-use super::media::{self, MediaCmd, MediaConfig, MediaEvent, MediaGauges, MediaSink, PreparedChunk, VideoCodec};
+use super::media::{
+    self, MediaCmd, MediaConfig, MediaEvent, MediaGauges, MediaSink, PreparedChunk, VideoCodec,
+};
 use super::messages::{self as m, ClientMessage, ErrorCode, RejectReason, ScriptBeat};
 use super::service::{canvas_for, DirectorConfig};
 use super::upsample::{self as ups, Cue, PlanView, SegmentUpsampler};
@@ -96,7 +100,10 @@ impl SessionHandle {
     }
 
     pub fn is_open(&self) -> bool {
-        !matches!(self.state(), SessionState::Closing | SessionState::Closed(_))
+        !matches!(
+            self.state(),
+            SessionState::Closing | SessionState::Closed(_)
+        )
     }
 
     fn set_state(&self, s: SessionState) {
@@ -123,10 +130,14 @@ struct PeerSink(PeerHandle);
 
 impl MediaSink for PeerSink {
     fn video(&mut self, data: bytes::Bytes, rtp_time: u64, _keyframe: bool) {
-        let _ = self.0.send_video(fastvideo_webrtc::writer::VideoFrame { data, rtp_time });
+        let _ = self
+            .0
+            .send_video(fastvideo_webrtc::writer::VideoFrame { data, rtp_time });
     }
     fn audio(&mut self, data: bytes::Bytes, rtp_time: u64) {
-        let _ = self.0.send_audio(fastvideo_webrtc::writer::AudioPacket { data, rtp_time });
+        let _ = self
+            .0
+            .send_audio(fastvideo_webrtc::writer::AudioPacket { data, rtp_time });
     }
 }
 
@@ -174,7 +185,13 @@ impl Phase {
     fn summary(&self) -> Value {
         let mut v = self.samples.clone();
         v.sort_by(|a, b| a.total_cmp(b));
-        let q = |p: f64| if v.is_empty() { 0.0 } else { v[((v.len() - 1) as f64 * p).round() as usize] };
+        let q = |p: f64| {
+            if v.is_empty() {
+                0.0
+            } else {
+                v[((v.len() - 1) as f64 * p).round() as usize]
+            }
+        };
         json!({
             "total_ms": v.iter().sum::<f64>(),
             "p50_ms": q(0.5),
@@ -290,7 +307,12 @@ async fn next_output(rx: &mut Option<mpsc::UnboundedReceiver<Value>>) -> Option<
 
 /// What the upsampler needs of a chunk plan.
 fn view(p: &ChunkPlan) -> PlanView {
-    PlanView { version: p.prompt_version, direction: p.direction.clone(), first_image: p.first_image.clone(), end_image: p.end_image.clone() }
+    PlanView {
+        version: p.prompt_version,
+        direction: p.direction.clone(),
+        first_image: p.first_image.clone(),
+        end_image: p.end_image.clone(),
+    }
 }
 
 fn ms(d: f64) -> f64 {
@@ -317,7 +339,9 @@ pub async fn run(init: SessionInit) {
         Err(e) => {
             tracing::error!(error = %e, "director playout failed to start");
             init.peer.close();
-            handle.set_state(SessionState::Closed(EndReason::Error(ApiError::internal(e))));
+            handle.set_state(SessionState::Closed(EndReason::Error(ApiError::internal(
+                e,
+            ))));
             handle.closed.send_replace(true);
             return;
         }
@@ -339,7 +363,8 @@ pub async fn run(init: SessionInit) {
                             }
                         }
                         None => {
-                            let _ = block_tx.send(Err(ApiError::engine_failed("the causal rollout ended")));
+                            let _ = block_tx
+                                .send(Err(ApiError::engine_failed("the causal rollout ended")));
                             return;
                         }
                     }
@@ -388,7 +413,11 @@ pub async fn run(init: SessionInit) {
         chunks_started: 0,
         last_ready: None,
         gen_ema: None,
-        phases: [("generation", Phase::default()), ("prepare", Phase::default()), ("delivery", Phase::default())],
+        phases: [
+            ("generation", Phase::default()),
+            ("prepare", Phase::default()),
+            ("delivery", Phase::default()),
+        ],
         last_metrics: Instant::now(),
         video_seconds: 0.0,
         underruns: 0,
@@ -411,7 +440,11 @@ pub async fn run(init: SessionInit) {
 impl Session {
     fn send(&self, v: Value) {
         let text = v.to_string();
-        if let Err(e) = self.init.peer.post_message(ChannelMessage::text(FAL_CONTROL, text)) {
+        if let Err(e) = self
+            .init
+            .peer
+            .post_message(ChannelMessage::text(FAL_CONTROL, text))
+        {
             tracing::debug!(error = %e, "control message dropped");
         }
     }
@@ -471,7 +504,11 @@ impl Session {
         if !self.control.is_configured() {
             if let Some(t) = self.channel_open_at {
                 if t.elapsed() > self.init.cfg.configure_timeout {
-                    return self.fail(ErrorCode::ConfigurationTimeout, "no `configure` arrived in time", None);
+                    return self.fail(
+                        ErrorCode::ConfigurationTimeout,
+                        "no `configure` arrived in time",
+                        None,
+                    );
                 }
             }
         }
@@ -495,7 +532,8 @@ impl Session {
                     if let Some(svc) = self.init.ctx.upsampler() {
                         // fal's value for its server-side expander; ours is
                         // the prompt upsampler this session may turn on.
-                        let family = fastvideo_serve_kit::upsample::prompt_family(self.clips.caps().family);
+                        let family =
+                            fastvideo_serve_kit::upsample::prompt_family(self.clips.caps().family);
                         let limit = svc.limit(family);
                         let st = svc.settings();
                         info["prompt_expander"] = json!("fast");
@@ -528,13 +566,19 @@ impl Session {
                     self.send(info);
                 }
             }
-            PeerEvent::ChannelClose { label } if label == FAL_CONTROL => self.end(EndReason::ClientGone),
+            PeerEvent::ChannelClose { label } if label == FAL_CONTROL => {
+                self.end(EndReason::ClientGone)
+            }
             PeerEvent::Message(msg) if msg.label == FAL_CONTROL => match msg.as_text() {
                 Some(t) => {
                     let t = t.to_owned();
                     self.on_text(&t).await
                 }
-                None => self.send(m::error(ErrorCode::InvalidMessage, "control messages are JSON text", None)),
+                None => self.send(m::error(
+                    ErrorCode::InvalidMessage,
+                    "control messages are JSON text",
+                    None,
+                )),
             },
             PeerEvent::Closed(r) => {
                 tracing::info!(session = %self.init.handle.id, reason = ?r, "director peer closed");
@@ -552,15 +596,28 @@ impl Session {
     }
 
     /// [`Self::stage`], plus the image's upright size when known.
-    async fn stage_sized(&self, url: &str, param: &str) -> Result<(PathBuf, Option<(u32, u32)>), String> {
+    async fn stage_sized(
+        &self,
+        url: &str,
+        param: &str,
+    ) -> Result<(PathBuf, Option<(u32, u32)>), String> {
         let r = MediaRef::parse(url, param).map_err(|e| e.message)?;
         let dir = self.dir.join("inputs");
         // `stage_one` writes into `dir` (a data URI or an upload) without
         // creating it.
-        tokio::fs::create_dir_all(&dir).await.map_err(|e| format!("staging input: {e}"))?;
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| format!("staging input: {e}"))?;
         let ctx = &self.init.ctx;
         ctx.ingestor()
-            .stage_one(&r, MediaKind::Image, &self.init.cfg.ingest, &dir, param, ctx.now())
+            .stage_one(
+                &r,
+                MediaKind::Image,
+                &self.init.cfg.ingest,
+                &dir,
+                param,
+                ctx.now(),
+            )
             .await
             .map(|m| (m.path, m.probe.dims()))
             .map_err(|e| e.message)
@@ -580,7 +637,13 @@ impl Session {
     async fn on_text(&mut self, text: &str) {
         let msg = match m::parse(text) {
             Ok(x) => x,
-            Err(inv) => return self.send(m::error(ErrorCode::InvalidMessage, inv.error, inv.prompt_version)),
+            Err(inv) => {
+                return self.send(m::error(
+                    ErrorCode::InvalidMessage,
+                    inv.error,
+                    inv.prompt_version,
+                ))
+            }
         };
         match msg {
             ClientMessage::Ping(ts) => self.send(m::pong(ts)),
@@ -620,12 +683,18 @@ impl Session {
                     _ => None,
                 };
                 if want_output.is_some() && self.init.cfg.outputs.is_none() {
-                    return self.send(m::error(ErrorCode::InvalidInput, "this server has no stream outputs", Some(c.prompt_version)));
+                    return self.send(m::error(
+                        ErrorCode::InvalidInput,
+                        "this server has no stream outputs",
+                        Some(c.prompt_version),
+                    ));
                 }
                 if let Err((reply, fatal)) = self.control.precheck_configure(&c) {
                     self.send(reply.clone());
                     if fatal {
-                        self.end(EndReason::Error(ApiError::invalid(reply["error"].as_str().unwrap_or_default())));
+                        self.end(EndReason::Error(ApiError::invalid(
+                            reply["error"].as_str().unwrap_or_default(),
+                        )));
                     }
                     return;
                 }
@@ -636,7 +705,12 @@ impl Session {
                     || c.end_image_url.is_some()
                     || c.script.iter().flatten().any(|b| b.end_image_url.is_some());
                 let texts: Vec<&str> = std::iter::once(c.prompt.as_str())
-                    .chain(c.script.iter().flatten().filter_map(|b| b.prompt.as_deref()))
+                    .chain(
+                        c.script
+                            .iter()
+                            .flatten()
+                            .filter_map(|b| b.prompt.as_deref()),
+                    )
                     .collect();
                 for t in texts {
                     if let Err(e) = self.init.ctx.moderate_prompt(t, visual).await {
@@ -697,8 +771,16 @@ impl Session {
                         match hook.0.open(req, media) {
                             Ok(copy) => Some(copy),
                             Err(e) => {
-                                let field = if c.x_fv_output.is_some() { "x_fv_output" } else { "output" };
-                                let msg = format!("{field}: {}{}", e.param.map(|p| format!("{p}: ")).unwrap_or_default(), e.message);
+                                let field = if c.x_fv_output.is_some() {
+                                    "x_fv_output"
+                                } else {
+                                    "output"
+                                };
+                                let msg = format!(
+                                    "{field}: {}{}",
+                                    e.param.map(|p| format!("{p}: ")).unwrap_or_default(),
+                                    e.message
+                                );
                                 return self.send(m::error(ErrorCode::InvalidInput, msg, v));
                             }
                         }
@@ -740,24 +822,37 @@ impl Session {
                     .prompt
                     .as_deref()
                     .into_iter()
-                    .chain(p.script.iter().flatten().filter_map(|b| b.prompt.as_deref()))
+                    .chain(
+                        p.script
+                            .iter()
+                            .flatten()
+                            .filter_map(|b| b.prompt.as_deref()),
+                    )
                     .collect();
                 for t in texts {
                     if let Err(e) = self.init.ctx.moderate_prompt(t, visual).await {
-                        return self.send(m::prompt_rejected(v, RejectReason::ContentPolicy, e.message));
+                        return self.send(m::prompt_rejected(
+                            v,
+                            RejectReason::ContentPolicy,
+                            e.message,
+                        ));
                     }
                 }
                 let end_image = match &p.end_image_url {
                     Some(u) => match self.stage(u, "end_image_url").await {
                         Ok(x) => Some(x),
-                        Err(e) => return self.send(m::prompt_rejected(v, RejectReason::InvalidImage, e)),
+                        Err(e) => {
+                            return self.send(m::prompt_rejected(v, RejectReason::InvalidImage, e))
+                        }
                     },
                     None => None,
                 };
                 let script_images = match &p.script {
                     Some(b) => match self.stage_script(b).await {
                         Ok(x) => x,
-                        Err(e) => return self.send(m::prompt_rejected(v, RejectReason::InvalidImage, e)),
+                        Err(e) => {
+                            return self.send(m::prompt_rejected(v, RejectReason::InvalidImage, e))
+                        }
                     },
                     None => Vec::new(),
                 };
@@ -779,7 +874,11 @@ impl Session {
                         let blocks = match &self.causal {
                             Some(cz) => {
                                 let cb = cz.limits.chunk_blocks.max(1);
-                                let rest = if cz.want.is_some() { 0 } else { cb.saturating_sub(cz.seg_blocks) };
+                                let rest = if cz.want.is_some() {
+                                    0
+                                } else {
+                                    cb.saturating_sub(cz.seg_blocks)
+                                };
                                 rest + ahead * cb
                             }
                             None => ahead,
@@ -831,7 +930,12 @@ impl Session {
     }
 
     fn maybe_dispatch(&mut self) {
-        if self.causal.is_some() || self.building || self.ending.is_some() || !self.control.is_configured() || self.control.is_stopped() {
+        if self.causal.is_some()
+            || self.building
+            || self.ending.is_some()
+            || !self.control.is_configured()
+            || self.control.is_stopped()
+        {
             return;
         }
         // No hold by default: the next chunk builds as soon as the last one
@@ -842,7 +946,9 @@ impl Session {
         if cap > 0 && queued >= cap {
             return;
         }
-        let queued_frames = self.sent_frames.saturating_sub(self.gauges.fresh_frames.load(Ordering::Relaxed));
+        let queued_frames = self
+            .sent_frames
+            .saturating_sub(self.gauges.fresh_frames.load(Ordering::Relaxed));
         if self.over_memory(queued_frames) {
             return;
         }
@@ -856,7 +962,9 @@ impl Session {
                 // already running for an unchanged beat serves the next chunk.
                 let plans = self.control.peek(up.deck_size());
                 let cues = up.cues(&plans.iter().map(view).collect::<Vec<_>>());
-                let Some(first) = cues.first().cloned() else { return };
+                let Some(first) = cues.first().cloned() else {
+                    return;
+                };
                 up.sync(cues);
                 let ready = up.ready(&first);
                 if !ready && wait {
@@ -866,8 +974,14 @@ impl Session {
                     up.set_waiting(true);
                     return;
                 }
-                let Some((plan, applied)) = self.control.next_chunk() else { return };
-                let t = if ready { up.take(&first) } else { Some(up.skip(&first)) };
+                let Some((plan, applied)) = self.control.next_chunk() else {
+                    return;
+                };
+                let t = if ready {
+                    up.take(&first)
+                } else {
+                    Some(up.skip(&first))
+                };
                 self.plan_dirty = true;
                 (plan, applied, t)
             }
@@ -883,12 +997,20 @@ impl Session {
         for a in applied {
             self.send(a);
         }
-        let anchor = if self.anchoring() && plan.first_image.is_none() { self.anchor.clone() } else { None };
+        let anchor = if self.anchoring() && plan.first_image.is_none() {
+            self.anchor.clone()
+        } else {
+            None
+        };
         let trimmed = u32::from(anchor.is_some());
         let first = plan.first_image.clone().or(anchor);
         let build = ChunkBuild {
             prompt: plan.prompt.clone(),
-            seed: self.control.settings().and_then(|s| s.seed).map(|s| s.wrapping_add(u64::from(plan.index))),
+            seed: self
+                .control
+                .settings()
+                .and_then(|s| s.seed)
+                .map(|s| s.wrapping_add(u64::from(plan.index))),
             seconds: plan.seconds,
             canvas: self.canvas,
             first_frame: first,
@@ -910,9 +1032,13 @@ impl Session {
         let audio = self.clips.spec().tracks.has_audio();
         let crossfade = match self.init.continuity {
             Continuity::HardCut => None,
-            Continuity::Crossfade { ms } | Continuity::AnchorLastFrame { crossfade_ms: ms } => Some(ms),
+            Continuity::Crossfade { ms } | Continuity::AnchorLastFrame { crossfade_ms: ms } => {
+                Some(ms)
+            }
         };
-        let anchor_path = self.anchoring().then(|| self.dir.join(format!("anchor-{}.png", plan.index)));
+        let anchor_path = self
+            .anchoring()
+            .then(|| self.dir.join(format!("anchor-{}.png", plan.index)));
         let dir = self.dir.clone();
         let crop = self.crop;
         tokio::spawn(async move {
@@ -923,7 +1049,15 @@ impl Session {
                 Err(e) => Err(e),
                 Ok(out) => {
                     let t1 = Instant::now();
-                    let prep = Prep { fps, audio, trimmed, crossfade, anchor_path, dir, crop };
+                    let prep = Prep {
+                        fps,
+                        audio,
+                        trimmed,
+                        crossfade,
+                        anchor_path,
+                        dir,
+                        crop,
+                    };
                     let prepared = tokio::task::spawn_blocking(move || prepare(plan, out, prep))
                         .await
                         .map_err(|e| ApiError::internal(format!("chunk preparation panicked: {e}")))
@@ -960,7 +1094,9 @@ impl Session {
         });
         let est = self.gen_ema.unwrap_or(b.gen_s);
         let depth_chunks = self.chunks_ready.saturating_sub(self.chunks_started) + 1;
-        let interval = self.last_ready.map(|t| ms(b.ready_at.duration_since(t).as_secs_f64()));
+        let interval = self
+            .last_ready
+            .map(|t| ms(b.ready_at.duration_since(t).as_secs_f64()));
         self.last_ready = Some(b.ready_at);
         let gen_ms = ms(b.gen_s);
         let prep_ms = ms(b.prep_s);
@@ -1022,11 +1158,15 @@ impl Session {
         if self.ending.is_some() {
             return;
         }
-        let Some((plan, applied)) = self.control.next_chunk() else { return };
+        let Some((plan, applied)) = self.control.next_chunk() else {
+            return;
+        };
         if self.upsample.is_some() {
             return self.causal_upsampled(plan, applied);
         }
-        let Some(cz) = self.causal.as_mut() else { return };
+        let Some(cz) = self.causal.as_mut() else {
+            return;
+        };
         if cz.engine_prompt.as_deref() != Some(plan.prompt.as_str()) {
             let v = cz.stream.set_prompt(&plan.prompt);
             tracing::info!(session = %self.init.handle.id, engine_version = v, prompt_version = plan.prompt_version, "director: prompt to the causal engine");
@@ -1049,7 +1189,11 @@ impl Session {
     /// Upsampling: the deck's upcoming segments, synced (after every
     /// change: configure, a prompt, a segment taken, an expansion done).
     fn plan_ahead(&mut self) {
-        if !std::mem::take(&mut self.plan_dirty) || self.ending.is_some() || !self.control.is_configured() || self.control.is_stopped() {
+        if !std::mem::take(&mut self.plan_dirty)
+            || self.ending.is_some()
+            || !self.control.is_configured()
+            || self.control.is_stopped()
+        {
             return;
         }
         let cues = match &self.causal {
@@ -1069,7 +1213,9 @@ impl Session {
     /// any), then the predicted boundaries (a new direction, else every
     /// `causal_chunk_blocks` blocks) over the control's next blocks.
     fn causal_upcoming(&self) -> Vec<Cue> {
-        let (Some(up), Some(cz)) = (&self.upsample, &self.causal) else { return Vec::new() };
+        let (Some(up), Some(cz)) = (&self.upsample, &self.causal) else {
+            return Vec::new();
+        };
         let n = up.deck_size();
         let cb = cz.limits.chunk_blocks.max(1);
         let mut out = Vec::new();
@@ -1090,7 +1236,8 @@ impl Session {
             if let Some(d) = &cue.direction {
                 last = Some(d.clone());
             }
-            if cue.direction.is_some() || sb >= cb || (out.is_empty() && cz.engine_prompt.is_none()) {
+            if cue.direction.is_some() || sb >= cb || (out.is_empty() && cz.engine_prompt.is_none())
+            {
                 out.push(cue);
                 sb = 0;
             }
@@ -1106,7 +1253,9 @@ impl Session {
     /// `configured` (`upsample`, `upsample_premise`).
     async fn start_upsampling(&mut self, c: &m::Configure, reply: &mut Value) {
         let svc = self.init.ctx.upsampler().cloned();
-        let on = c.upsample.unwrap_or_else(|| svc.as_ref().is_some_and(|s| s.settings().default_on));
+        let on = c
+            .upsample
+            .unwrap_or_else(|| svc.as_ref().is_some_and(|s| s.settings().default_on));
         if !on {
             if c.upsample == Some(false) {
                 reply["upsample"] = json!(false);
@@ -1121,7 +1270,12 @@ impl Session {
         let world = fastvideo_upsampler::WorldBible {
             premise: c.prompt.clone(),
             style: c.style.clone().unwrap_or_default().trim().to_owned(),
-            entities: c.entities.iter().flatten().map(m::WorldEntity::to_entity).collect(),
+            entities: c
+                .entities
+                .iter()
+                .flatten()
+                .map(m::WorldEntity::to_entity)
+                .collect(),
         };
         let family = fastvideo_serve_kit::upsample::prompt_family(self.clips.caps().family);
         let mut up = svc.director(world, family, c.memory.map(|x| x as usize));
@@ -1144,20 +1298,31 @@ impl Session {
         );
         if let Some(d) = &report.digest {
             match &d.error {
-                None => tracing::info!(session = %self.init.handle.id, premise_tokens = report.tokens, digest_tokens = d.tokens, calls = d.calls, latency_ms = d.latency_ms, "director: the premise overflows the LLM budget; condensed into a series bible"),
-                Some(e) => tracing::warn!(session = %self.init.handle.id, premise_tokens = report.tokens, digest_tokens = d.tokens, error = %e, "director: the premise digest failed; the premise's head is used"),
+                None => {
+                    tracing::info!(session = %self.init.handle.id, premise_tokens = report.tokens, digest_tokens = d.tokens, calls = d.calls, latency_ms = d.latency_ms, "director: the premise overflows the LLM budget; condensed into a series bible")
+                }
+                Some(e) => {
+                    tracing::warn!(session = %self.init.handle.id, premise_tokens = report.tokens, digest_tokens = d.tokens, error = %e, "director: the premise digest failed; the premise's head is used")
+                }
             }
         }
         reply["upsample"] = json!(true);
         reply["upsample_premise"] = serde_json::to_value(&report).unwrap_or(Value::Null);
         let images = svc.settings().vision.then(ups::default_image_loader);
-        self.upsample = Some(SegmentUpsampler::new(up, self.up_tx.clone(), svc.settings().deck_size, images));
+        self.upsample = Some(SegmentUpsampler::new(
+            up,
+            self.up_tx.clone(),
+            svc.settings().deck_size,
+            images,
+        ));
         self.plan_dirty = true;
     }
 
     /// Upsampling: an expansion finished.
     fn on_upsampled(&mut self, d: ups::Done) {
-        let Some(up) = self.upsample.as_mut() else { return };
+        let Some(up) = self.upsample.as_mut() else {
+            return;
+        };
         if up.on_done(d) && self.causal.is_some() {
             self.causal_apply_ready();
         }
@@ -1169,12 +1334,20 @@ impl Session {
     fn report_segment(&self, t: &ups::Taken, chunk: Option<u32>, block: Option<u64>, version: u64) {
         let latency_ms = ms(t.latency.as_secs_f64());
         match &t.error {
-            None => tracing::info!(session = %self.init.handle.id, chunk = ?chunk, block = ?block, prompt_version = version, latency_ms, chars = t.prompt.chars().count(), "director: segment upsampled"),
-            Some(e) => tracing::warn!(session = %self.init.handle.id, chunk = ?chunk, block = ?block, prompt_version = version, latency_ms, error = %e, "director: upsampling failed, the raw prompt is used"),
+            None => {
+                tracing::info!(session = %self.init.handle.id, chunk = ?chunk, block = ?block, prompt_version = version, latency_ms, chars = t.prompt.chars().count(), "director: segment upsampled")
+            }
+            Some(e) => {
+                tracing::warn!(session = %self.init.handle.id, chunk = ?chunk, block = ?block, prompt_version = version, latency_ms, error = %e, "director: upsampling failed, the raw prompt is used")
+            }
         }
         let (length, limit, unit) = match &self.upsample {
             Some(up) => up.upsampler().config().limit.measure(&t.prompt),
-            None => (t.prompt.chars().count(), 0, fastvideo_upsampler::Unit::Chars),
+            None => (
+                t.prompt.chars().count(),
+                0,
+                fastvideo_upsampler::Unit::Chars,
+            ),
         };
         self.send(m::segment_expanded(&m::SegmentExpanded {
             chunk_index: chunk,
@@ -1195,9 +1368,13 @@ impl Session {
     /// the first block, and every director chunk (`causal_chunk_blocks`);
     /// until its expansion is ready the engine keeps its current prompt.
     fn causal_upsampled(&mut self, plan: ChunkPlan, applied: Vec<Value>) {
-        let (Some(up), Some(cz)) = (self.upsample.as_mut(), self.causal.as_mut()) else { return };
+        let (Some(up), Some(cz)) = (self.upsample.as_mut(), self.causal.as_mut()) else {
+            return;
+        };
         let key = up.cues(&[view(&plan)]).remove(0);
-        let boundary = key.direction.is_some() || cz.engine_prompt.is_none() || cz.seg_blocks >= cz.limits.chunk_blocks.max(1);
+        let boundary = key.direction.is_some()
+            || cz.engine_prompt.is_none()
+            || cz.seg_blocks >= cz.limits.chunk_blocks.max(1);
         cz.seg_blocks = cz.seg_blocks.saturating_add(1);
         if !boundary && cz.want.is_none() {
             // Mid-segment: nothing changes in the picture.
@@ -1217,7 +1394,13 @@ impl Session {
                 w.key = key;
                 w.version = plan.prompt_version;
             }
-            None => cz.want = Some(Want { key, version: plan.prompt_version, applied }),
+            None => {
+                cz.want = Some(Want {
+                    key,
+                    version: plan.prompt_version,
+                    applied,
+                })
+            }
         }
         self.plan_dirty = true;
         self.plan_ahead();
@@ -1230,7 +1413,9 @@ impl Session {
         if self.ending.is_some() {
             return;
         }
-        let (Some(up), Some(cz)) = (self.upsample.as_mut(), self.causal.as_mut()) else { return };
+        let (Some(up), Some(cz)) = (self.upsample.as_mut(), self.causal.as_mut()) else {
+            return;
+        };
         let Some(w) = cz.want.as_ref() else { return };
         let Some(t) = up.take(&w.key) else { return };
         let w = cz.want.take().expect("want");
@@ -1265,9 +1450,17 @@ impl Session {
         let fps = f64::from(self.clips.spec().fps.max(1));
         let fresh = self.gauges.fresh_frames.load(Ordering::Relaxed);
         let lead_target = self.init.cfg.causal_lead_seconds;
-        let Some(queued) = self.causal.as_ref().map(|cz| cz.pushed_frames.saturating_sub(fresh)) else { return };
+        let Some(queued) = self
+            .causal
+            .as_ref()
+            .map(|cz| cz.pushed_frames.saturating_sub(fresh))
+        else {
+            return;
+        };
         let mem = self.over_memory(queued);
-        let Some(cz) = self.causal.as_mut() else { return };
+        let Some(cz) = self.causal.as_mut() else {
+            return;
+        };
         let lead = queued as f64 / fps;
         let pause = (lead_target > 0.0 && lead >= lead_target) || mem;
         if pause != cz.paused {
@@ -1292,7 +1485,9 @@ impl Session {
         }
         let fps = f64::from(self.clips.spec().fps.max(1));
         let id = self.init.handle.id.clone();
-        let Some(cz) = self.causal.as_mut() else { return };
+        let Some(cz) = self.causal.as_mut() else {
+            return;
+        };
         // `prompt_applied` for every version this block carries.
         let mut out = Vec::new();
         while cz.owed.front().is_some_and(|(v, _)| *v <= b.prompt_version) {
@@ -1301,7 +1496,11 @@ impl Session {
         while cz.versions.len() > 1 && cz.versions[1].0 <= b.prompt_version {
             cz.versions.pop_front();
         }
-        let version = cz.versions.front().filter(|(v, _)| *v <= b.prompt_version).map_or(1, |x| x.1);
+        let version = cz
+            .versions
+            .front()
+            .filter(|(v, _)| *v <= b.prompt_version)
+            .map_or(1, |x| x.1);
         let block = cz.blocks;
         cz.blocks += 1;
         let n = b.frames.len() as u32;
@@ -1322,11 +1521,19 @@ impl Session {
         cz.pushed_frames += u64::from(n);
         let chunk_blocks = cz.limits.chunk_blocks.max(1);
         let done = cz.acc.blocks >= chunk_blocks;
-        let acc = if done { Some(std::mem::take(&mut cz.acc)) } else { None };
+        let acc = if done {
+            Some(std::mem::take(&mut cz.acc))
+        } else {
+            None
+        };
         for o in out {
             self.send(o);
         }
-        let _ = self.media.send(MediaCmd::Chunk(PreparedChunk { index: block as u32, frames: b.frames, audio: None }));
+        let _ = self.media.send(MediaCmd::Chunk(PreparedChunk {
+            index: block as u32,
+            frames: b.frames,
+            audio: None,
+        }));
         if let Some(acc) = acc {
             self.causal_chunk(acc, fps);
         }
@@ -1337,7 +1544,9 @@ impl Session {
 
     /// Causal: the `chunk` / `chunk_metrics` of a full director chunk.
     fn causal_chunk(&mut self, acc: ChunkAcc, fps: f64) {
-        let Some(cz) = self.causal.as_ref() else { return };
+        let Some(cz) = self.causal.as_ref() else {
+            return;
+        };
         let fresh = self.gauges.fresh_frames.load(Ordering::Relaxed);
         let lead_s = cz.pushed_frames.saturating_sub(fresh) as f64 / fps;
         let chunk_s = f64::from(cz.limits.block_frames * cz.limits.chunk_blocks.max(1)) / fps;
@@ -1350,14 +1559,20 @@ impl Session {
         });
         let est = self.gen_ema.unwrap_or(gen_s);
         let now = Instant::now();
-        let interval = self.last_ready.map(|t| ms(now.duration_since(t).as_secs_f64()));
+        let interval = self
+            .last_ready
+            .map(|t| ms(now.duration_since(t).as_secs_f64()));
         self.last_ready = Some(now);
         let gen_ms = ms(gen_s);
         self.phases[0].1.push(gen_ms);
         self.phases[1].1.push(0.0);
         let index = self.chunks_ready;
         let depth_chunks = (lead_s / chunk_s).ceil() as u32;
-        let pace = if gen_s > 0.0 { f64::from(acc.frames) / gen_s } else { 0.0 };
+        let pace = if gen_s > 0.0 {
+            f64::from(acc.frames) / gen_s
+        } else {
+            0.0
+        };
         let causal = json!({
             "blocks": acc.blocks,
             "first_block": acc.first_block,
@@ -1444,15 +1659,22 @@ impl Session {
                     }
                 }
             }
-            MediaEvent::Failed(err) => self.fail(ErrorCode::GenerationFailed, format!("encoding failed: {err}"), None),
+            MediaEvent::Failed(err) => self.fail(
+                ErrorCode::GenerationFailed,
+                format!("encoding failed: {err}"),
+                None,
+            ),
         }
     }
 
     fn session_metrics(&mut self, final_: bool) -> Value {
         self.last_metrics = Instant::now();
         let g = &self.gauges;
-        let phases: serde_json::Map<String, Value> =
-            self.phases.iter().map(|(n, p)| ((*n).to_owned(), p.summary())).collect();
+        let phases: serde_json::Map<String, Value> = self
+            .phases
+            .iter()
+            .map(|(n, p)| ((*n).to_owned(), p.summary()))
+            .collect();
         let causal = self.causal.as_ref().map(|cz| {
             json!({
                 "blocks": cz.blocks,
@@ -1504,7 +1726,10 @@ impl Session {
             tracing::info!(session = %h.id, blocks = cz.blocks, recaches = cz.recaches, underruns = self.underruns, "director causal rollout closing");
             cz.stream.close().await;
         }
-        self.clips = Arc::new(NoClips(self.clips.caps().clone(), self.clips.spec().clone()));
+        self.clips = Arc::new(NoClips(
+            self.clips.caps().clone(),
+            self.clips.spec().clone(),
+        ));
         self.init.clips = self.clips.clone();
         let _ = tokio::fs::remove_dir_all(&self.dir).await;
         h.set_state(SessionState::Closed(reason));
@@ -1547,7 +1772,15 @@ struct Prep {
 
 /// Chunk preparation (blocking): anchor PNG, trim, wire audio, fades.
 fn prepare(plan: ChunkPlan, out: super::engine::ChunkOutput, p: Prep) -> Result<Built, ApiError> {
-    let Prep { fps, audio, trimmed, crossfade, anchor_path, dir, crop } = p;
+    let Prep {
+        fps,
+        audio,
+        trimmed,
+        crossfade,
+        anchor_path,
+        dir,
+        crop,
+    } = p;
     let mut frames = out.frames;
     let generated = frames.len() as u32;
     if generated == 0 {
@@ -1559,11 +1792,13 @@ fn prepare(plan: ChunkPlan, out: super::engine::ChunkOutput, p: Prep) -> Result<
     // every join).
     let anchor = match anchor_path {
         Some(p) => {
-            std::fs::create_dir_all(&dir).map_err(|e| ApiError::internal(format!("session dir: {e}")))?;
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| ApiError::internal(format!("session dir: {e}")))?;
             let last = frames.last().expect("non-empty");
             let img = image::RgbImage::from_raw(last.width, last.height, last.data.to_vec())
                 .ok_or_else(|| ApiError::internal("last frame has the wrong size"))?;
-            img.save(&p).map_err(|e| ApiError::internal(format!("writing the anchor frame: {e}")))?;
+            img.save(&p)
+                .map_err(|e| ApiError::internal(format!("writing the anchor frame: {e}")))?;
             Some(p)
         }
         None => None,
@@ -1591,7 +1826,11 @@ fn prepare(plan: ChunkPlan, out: super::engine::ChunkOutput, p: Prep) -> Result<
     let index = plan.index;
     Ok(Built {
         plan,
-        chunk: PreparedChunk { index, frames, audio },
+        chunk: PreparedChunk {
+            index,
+            frames,
+            audio,
+        },
         generated,
         trimmed,
         anchor,
@@ -1620,10 +1859,29 @@ mod tests {
             }
             RgbFrame::new(8, 6, data.into(), i).unwrap()
         };
-        let plan = ChunkPlan { index: 1, prompt: "p".into(), direction: None, seconds: 5.0, first_image: None, end_image: None, prompt_version: 1 };
-        let out = super::super::engine::ChunkOutput { frames: (0..3).map(frame).collect(), audio: None };
+        let plan = ChunkPlan {
+            index: 1,
+            prompt: "p".into(),
+            direction: None,
+            seconds: 5.0,
+            first_image: None,
+            end_image: None,
+            prompt_version: 1,
+        };
+        let out = super::super::engine::ChunkOutput {
+            frames: (0..3).map(frame).collect(),
+            audio: None,
+        };
         let anchor_path = dir.join("anchor-1.png");
-        let prep = Prep { fps: 24, audio: false, trimmed: 1, crossfade: None, anchor_path: Some(anchor_path.clone()), dir: dir.clone(), crop: Some((6, 4)) };
+        let prep = Prep {
+            fps: 24,
+            audio: false,
+            trimmed: 1,
+            crossfade: None,
+            anchor_path: Some(anchor_path.clone()),
+            dir: dir.clone(),
+            crop: Some((6, 4)),
+        };
         let b = prepare(plan, out, prep).unwrap();
         assert_eq!((b.generated, b.trimmed), (3, 1));
         assert_eq!(b.chunk.frames.len(), 2);

@@ -205,7 +205,13 @@ impl CausalShared {
 
     /// Hands a finished block to the consumer, blocking (interruptibly)
     /// while the channel is full.
-    pub fn deliver(&self, input: BlockInput, frames: Vec<RgbFrame>, audio: Option<Pcm>, stats: BlockStats) {
+    pub fn deliver(
+        &self,
+        input: BlockInput,
+        frames: Vec<RgbFrame>,
+        audio: Option<Pcm>,
+        stats: BlockStats,
+    ) {
         let mut c = lock(&self.ctl);
         c.next_block = input.block_index + 1;
         c.first_block_at.get_or_insert_with(Instant::now);
@@ -288,7 +294,9 @@ pub struct CausalControl {
 
 impl std::fmt::Debug for CausalControl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CausalControl").field("id", &self.shared.id).finish()
+        f.debug_struct("CausalControl")
+            .field("id", &self.shared.id)
+            .finish()
     }
 }
 
@@ -382,7 +390,9 @@ impl CausalControl {
 
     /// The transport sent its first frame (ends the TTFF `transport` phase).
     pub fn mark_first_frame_sent(&self) {
-        lock(&self.shared.ctl).first_frame_at.get_or_insert_with(Instant::now);
+        lock(&self.shared.ctl)
+            .first_frame_at
+            .get_or_insert_with(Instant::now);
     }
 
     /// TTFF so far.
@@ -503,7 +513,9 @@ impl CausalSession {
 
     pub fn caps(&self) -> &ModelCaps {
         // Set by `attach` before the session is handed out.
-        self.caps.as_ref().expect("admitted causal session has caps")
+        self.caps
+            .as_ref()
+            .expect("admitted causal session has caps")
     }
 
     /// The executor holding the lease.

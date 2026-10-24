@@ -348,7 +348,7 @@ impl H3VisionTower {
         self.forward_grids(
             &prepared.pixels,
             prepared.patch_dim,
-            &[prepared.grid.clone()],
+            std::slice::from_ref(&prepared.grid),
         )
     }
 

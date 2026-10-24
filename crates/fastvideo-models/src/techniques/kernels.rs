@@ -483,14 +483,21 @@ mod tests {
     #[test]
     fn datacenter_vsa_is_exactly_sm90_and_sm100() {
         for sm in [90, 100] {
-            let c = resolve(KernelOp::VsaAttention, "dc", Some(sm)).unwrap().unwrap();
+            let c = resolve(KernelOp::VsaAttention, "dc", Some(sm))
+                .unwrap()
+                .unwrap();
             assert_eq!(c.setting(), ("FASTVIDEO_VSA_KERNEL", "dc"));
         }
         for sm in [80, 89, 103, 120] {
-            assert!(resolve(KernelOp::VsaAttention, "dc", Some(sm)).is_err(), "sm {sm}");
+            assert!(
+                resolve(KernelOp::VsaAttention, "dc", Some(sm)).is_err(),
+                "sm {sm}"
+            );
         }
         // sm_120 keeps the mma.sync ring kernel as its only TMA choice.
-        assert!(resolve(KernelOp::VsaAttention, "tma2", Some(120)).unwrap().is_some());
+        assert!(resolve(KernelOp::VsaAttention, "tma2", Some(120))
+            .unwrap()
+            .is_some());
     }
 
     #[test]

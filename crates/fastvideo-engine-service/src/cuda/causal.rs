@@ -30,13 +30,13 @@ use fastvideo_cudarc::wan::pipeline::PipelineError;
 use fastvideo_cudarc::wan::stream::{CausalRollout, RolloutConfig};
 use fastvideo_cudarc::{LoadParts, WanPipeline};
 use fastvideo_protocol::{
-    ApiError, CanvasCaps, CausalContext, Family, FpsCaps, FrameGrid, KnobCaps, ModelCaps, ModelId, RefLimits,
-    ResolvedJob, RgbFrame, StreamCaps, Task,
+    ApiError, CanvasCaps, CausalContext, Family, FpsCaps, FrameGrid, KnobCaps, ModelCaps, ModelId,
+    RefLimits, ResolvedJob, RgbFrame, StreamCaps, Task,
 };
 
 use crate::backend::{
-    BlockInput, BlockStats, CausalSpec, ClipOutput, ClipSink, DeviceInfo, EngineBackend,
-    LoadEvent, SessionId,
+    BlockInput, BlockStats, CausalSpec, ClipOutput, ClipSink, DeviceInfo, EngineBackend, LoadEvent,
+    SessionId,
 };
 use crate::cancel::{cancelled_error, StepControl};
 use crate::caps::Recipe;
@@ -66,7 +66,9 @@ pub struct CausalDriver {
 
 impl std::fmt::Debug for CausalDriver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CausalDriver").field("sessions", &self.sessions.len()).finish()
+        f.debug_struct("CausalDriver")
+            .field("sessions", &self.sessions.len())
+            .finish()
     }
 }
 
@@ -118,7 +120,8 @@ impl CausalDriver {
         if !live.bridged {
             // The session's token is the same for every turn: bridge once.
             let flag = live.cancel.flag().clone();
-            ctl.cancel.on_cancel(move || flag.store(true, Ordering::Release));
+            ctl.cancel
+                .on_cancel(move || flag.store(true, Ordering::Release));
             live.bridged = true;
         }
         if input.reset {
@@ -269,7 +272,11 @@ impl CausalCudaBackend {
     /// as the transformer, the rollout on `cfg` (window 12, sink 3, KV
     /// re-cache at prompt switches). `weights` still supplies the text
     /// encoder, tokenizer and VAE (`sfwan21-1.3b`).
-    pub fn with_longlive(mut self, dir: PathBuf, cfg: fastvideo_cudarc::wan::longlive::LongLiveConfig) -> Self {
+    pub fn with_longlive(
+        mut self,
+        dir: PathBuf,
+        cfg: fastvideo_cudarc::wan::longlive::LongLiveConfig,
+    ) -> Self {
         self.base = cfg.rollout(self.base);
         self.longlive = Some((dir, cfg));
         self
@@ -282,15 +289,22 @@ impl CausalCudaBackend {
     /// `FV_LONGLIVE_RECACHE=0` (keep the cache at switches, the ablation),
     /// `FV_LONGLIVE_INFINITY=1` (relative RoPE, past 1024 latent frames).
     pub fn from_env() -> Option<Self> {
-        let w = std::env::var("FV_SFWAN_WEIGHTS").ok().filter(|s| !s.is_empty())?;
+        let w = std::env::var("FV_SFWAN_WEIGHTS")
+            .ok()
+            .filter(|s| !s.is_empty())?;
         let id = std::env::var("FV_SFWAN_MODEL").unwrap_or_else(|_| "sf-wan".into());
         let preset = std::env::var("FV_SFWAN_PRESET").unwrap_or_else(|_| "sf_wan_t2v_1_3b".into());
         let dev = std::env::var("FV_CUDA_DEVICE").unwrap_or_else(|_| "cuda:0".into());
         let me = Self::new(&id, PathBuf::from(w), &preset, &dev);
-        let Some(ll) = std::env::var("FV_LONGLIVE_WEIGHTS").ok().filter(|s| !s.is_empty()) else {
+        let Some(ll) = std::env::var("FV_LONGLIVE_WEIGHTS")
+            .ok()
+            .filter(|s| !s.is_empty())
+        else {
             return Some(me);
         };
-        let flag = |k: &str, d: bool| std::env::var(k).map_or(d, |v| !matches!(v.trim(), "0" | "false" | "off"));
+        let flag = |k: &str, d: bool| {
+            std::env::var(k).map_or(d, |v| !matches!(v.trim(), "0" | "false" | "off"))
+        };
         use fastvideo_cudarc::wan::longlive::LongLiveConfig;
         let cfg = LongLiveConfig {
             recache: flag("FV_LONGLIVE_RECACHE", true),
@@ -356,7 +370,10 @@ impl EngineBackend for CausalCudaBackend {
         if model.as_str() != self.id {
             return Err(ApiError::invalid_param(
                 "model",
-                format!("`{model}` is not served here (served: {}; aliases: none)", self.id),
+                format!(
+                    "`{model}` is not served here (served: {}; aliases: none)",
+                    self.id
+                ),
             ));
         }
         if self.driver.is_some() {
@@ -371,16 +388,26 @@ impl EngineBackend for CausalCudaBackend {
                 obs(LoadEvent::Stage("longlive_weights"));
                 let w = fastvideo_cudarc::wan::longlive::LongLiveWeights::in_dir(dir, cfg);
                 if w.lora.is_none() {
-                    return Err(ApiError::engine_failed(format!("longlive: no lora.safetensors in {}", dir.display())));
+                    return Err(ApiError::engine_failed(format!(
+                        "longlive: no lora.safetensors in {}",
+                        dir.display()
+                    )));
                 }
-                let (map, _) = fastvideo_cudarc::wan::longlive::load_transformer_map(&w)
-                    .map_err(|e| ApiError::engine_failed(format!("longlive weights {}: {e}", dir.display())))?;
+                let (map, _) =
+                    fastvideo_cudarc::wan::longlive::load_transformer_map(&w).map_err(|e| {
+                        ApiError::engine_failed(format!("longlive weights {}: {e}", dir.display()))
+                    })?;
                 Some(map)
             }
             None => None,
         };
-        let pipe = WanPipeline::load_with_dit(&self.weights, &self.preset, LoadParts { text_encoder: true }, dit)
-            .map_err(|e| ApiError::engine_failed(format!("loading {}: {e}", self.weights.display())))?;
+        let pipe = WanPipeline::load_with_dit(
+            &self.weights,
+            &self.preset,
+            LoadParts { text_encoder: true },
+            dit,
+        )
+        .map_err(|e| ApiError::engine_failed(format!("loading {}: {e}", self.weights.display())))?;
         if pipe.taehv().is_none() {
             return Err(ApiError::engine_failed(
                 "SF-Wan streaming decodes with TAEHV (taew2_1): set FASTVIDEO_TAE_DIR or FASTVIDEO_TAEHV_WEIGHTS",
@@ -391,10 +418,18 @@ impl EngineBackend for CausalCudaBackend {
         Ok(())
     }
 
-    fn generate(&mut self, job: &ResolvedJob, _out: &mut dyn ClipSink, _ctl: &StepControl) -> Result<ClipOutput, ApiError> {
+    fn generate(
+        &mut self,
+        job: &ResolvedJob,
+        _out: &mut dyn ClipSink,
+        _ctl: &StepControl,
+    ) -> Result<ClipOutput, ApiError> {
         Err(ApiError::invalid_param(
             "model",
-            format!("`{}` serves streaming sessions only (no batch jobs)", job.model),
+            format!(
+                "`{}` serves streaming sessions only (no batch jobs)",
+                job.model
+            ),
         ))
     }
 

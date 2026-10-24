@@ -339,7 +339,7 @@ fn causal_frame_mask(n_frame: usize, n_hw: usize) -> Result<CudaTensor> {
             m[i * seq + j] = 0.0;
         }
     }
-    Ok(CudaTensor::from_vec(m, vec![1, 1, seq, seq])?)
+    CudaTensor::from_vec(m, vec![1, 1, seq, seq])
 }
 
 struct MidBlock {
@@ -429,7 +429,7 @@ fn upsample_nearest5d(x: &CudaTensor, ft: usize, fh: usize, fw: usize) -> Result
             }
         }
     }
-    Ok(CudaTensor::from_vec(out, vec![b, c, out_t, out_h, out_w])?.to_device()?)
+    CudaTensor::from_vec(out, vec![b, c, out_t, out_h, out_w])?.to_device()
 }
 
 struct Upsample {

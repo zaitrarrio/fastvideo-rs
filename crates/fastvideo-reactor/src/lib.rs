@@ -38,8 +38,10 @@ pub mod signalling;
 pub mod uploads;
 pub mod wire;
 
+pub use avatar::AvatarSettings;
 pub use engine::{LoadState, Mode, StreamEngine};
 pub use http::router;
 pub use media::H264Backend;
-pub use avatar::AvatarSettings;
-pub use session::{session_limit_reason, IngestAuth, ModeratorHook, Reactor, ReactorConfig, RtState, SESSION_ID};
+pub use session::{
+    session_limit_reason, IngestAuth, ModeratorHook, Reactor, ReactorConfig, RtState, SESSION_ID,
+};

@@ -51,7 +51,20 @@ fn decode_count(w: u32, h: u32, frames: &[bytes::Bytes]) -> usize {
         ivf.extend_from_slice(f);
     }
     let mut c = Command::new(tools::ffmpeg_bin())
-        .args(["-hide_banner", "-loglevel", "error", "-f", "ivf", "-i", "pipe:0", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "ivf",
+            "-i",
+            "pipe:0",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "pipe:1",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -61,7 +74,11 @@ fn decode_count(w: u32, h: u32, frames: &[bytes::Bytes]) -> usize {
     let writer = std::thread::spawn(move || stdin.write_all(&ivf));
     let out = c.wait_with_output().unwrap();
     writer.join().unwrap().unwrap();
-    assert!(out.status.success(), "decode failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "decode failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     out.stdout.len() / (w * h * 3) as usize
 }
 
@@ -87,12 +104,24 @@ fn inter_frames_forced_keyframes_and_cbr() {
     let elapsed = t0.elapsed();
     assert_eq!(out.len(), 48, "one frame out per frame in");
     assert!(out.iter().enumerate().all(|(i, f)| f.index == i as u64));
-    let keys: Vec<usize> = out.iter().enumerate().filter(|(_, f)| f.keyframe).map(|(i, _)| i).collect();
-    assert_eq!(keys, vec![0, 30], "keyframes at the start and where forced (gop is 48)");
+    let keys: Vec<usize> = out
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.keyframe)
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        keys,
+        vec![0, 30],
+        "keyframes at the start and where forced (gop is 48)"
+    );
     assert_eq!(e.restarts(), 1);
     let kbps = out.iter().map(|f| f.data.len()).sum::<usize>() as f64 * 8.0 / 2.0 / 1000.0;
     eprintln!("vp8 libvpx 320x192@24 target 500 kb/s: {kbps:.0} kb/s over 2 s, encode {elapsed:?}");
-    assert!(kbps < 1500.0, "{kbps} kb/s is far above the 500 kb/s target");
+    assert!(
+        kbps < 1500.0,
+        "{kbps} kb/s is far above the 500 kb/s target"
+    );
     let data: Vec<bytes::Bytes> = out.iter().map(|f| f.data.clone()).collect();
     assert_eq!(decode_count(w, h, &data), 48);
 }

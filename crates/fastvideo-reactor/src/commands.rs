@@ -24,16 +24,26 @@ use crate::engine::Mode;
 /// A parameter's type and constraints (RT `InputField`).
 #[derive(Clone, Debug, PartialEq)]
 pub enum ParamType {
-    String { max_len: Option<usize> },
-    Integer { min: Option<i64>, max: Option<i64> },
-    Number { min: Option<f64>, max: Option<f64> },
+    String {
+        max_len: Option<usize>,
+    },
+    Integer {
+        min: Option<i64>,
+        max: Option<i64>,
+    },
+    Number {
+        min: Option<f64>,
+        max: Option<f64>,
+    },
     Boolean,
     Choice(Vec<String>),
     /// An uploaded file (`FileRef`): the `Command.uploads[param]` reference
     /// or `{upload_id, …}` inline; normalized to an upload reference object.
     /// `accept`: the MIME type prefix a client should send (a hint; the
     /// model side checks the bytes).
-    File { accept: &'static str },
+    File {
+        accept: &'static str,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -52,7 +62,15 @@ pub struct Param {
 
 impl Param {
     fn new(name: &'static str, ty: ParamType, description: &'static str) -> Self {
-        Self { name, ty, required: true, nullable: false, default: None, description, moderate: false }
+        Self {
+            name,
+            ty,
+            required: true,
+            nullable: false,
+            default: None,
+            description,
+            moderate: false,
+        }
     }
     fn optional(mut self, default: Value) -> Self {
         self.required = false;
@@ -124,7 +142,9 @@ impl Param {
         let bad = |what: &str| Err(format!("`{}` must be {what}", self.name));
         match &self.ty {
             ParamType::String { max_len } => {
-                let Some(s) = v.as_str() else { return bad("a string") };
+                let Some(s) = v.as_str() else {
+                    return bad("a string");
+                };
                 if let Some(m) = max_len {
                     if s.chars().count() > *m {
                         return Err(format!("`{}` is longer than {m} characters", self.name));
@@ -135,8 +155,13 @@ impl Param {
             ParamType::Integer { min, max } => {
                 let i = match v {
                     Value::Number(n) if n.is_i64() => n.as_i64(),
-                    Value::Number(n) if n.is_u64() => n.as_u64().and_then(|u| i64::try_from(u).ok()),
-                    Value::Number(n) => n.as_f64().filter(|f| f.fract() == 0.0 && f.abs() < 9.0e15).map(|f| f as i64),
+                    Value::Number(n) if n.is_u64() => {
+                        n.as_u64().and_then(|u| i64::try_from(u).ok())
+                    }
+                    Value::Number(n) => n
+                        .as_f64()
+                        .filter(|f| f.fract() == 0.0 && f.abs() < 9.0e15)
+                        .map(|f| f as i64),
                     _ => None,
                 };
                 let Some(i) = i else { return bad("an integer") };
@@ -146,7 +171,9 @@ impl Param {
                 Ok(json!(i))
             }
             ParamType::Number { min, max } => {
-                let Some(f) = v.as_f64() else { return bad("a number") };
+                let Some(f) = v.as_f64() else {
+                    return bad("a number");
+                };
                 if !f.is_finite() || min.is_some_and(|m| f < m) || max.is_some_and(|m| f > m) {
                     return Err(format!("`{}` = {f} is out of range", self.name));
                 }
@@ -218,8 +245,14 @@ impl CommandTable {
 
     /// Validates `data` against the command's parameters and fills in the
     /// defaults. Unknown fields are ignored.
-    pub fn validate(&self, name: &str, data: &Map<String, Value>) -> Result<Map<String, Value>, String> {
-        let c = self.get(name).ok_or_else(|| format!("unknown command `{name}`"))?;
+    pub fn validate(
+        &self,
+        name: &str,
+        data: &Map<String, Value>,
+    ) -> Result<Map<String, Value>, String> {
+        let c = self
+            .get(name)
+            .ok_or_else(|| format!("unknown command `{name}`"))?;
         let mut out = Map::new();
         for p in &c.params {
             match data.get(p.name) {
@@ -263,7 +296,10 @@ fn s(max: usize) -> ParamType {
     ParamType::String { max_len: Some(max) }
 }
 fn uint() -> ParamType {
-    ParamType::Integer { min: Some(0), max: None }
+    ParamType::Integer {
+        min: Some(0),
+        max: None,
+    }
 }
 
 fn obj(props: Value, required: &[&str]) -> Value {
@@ -278,16 +314,29 @@ fn clip_info_schema() -> Value {
             "frames": {"type": "integer"}, "seconds": {"type": "number"},
             "seed": {"type": "integer"}, "ready": {"type": "boolean"}
         }),
-        &["clip_id", "prompt", "metadata", "frames", "seconds", "seed", "ready"],
+        &[
+            "clip_id", "prompt", "metadata", "frames", "seconds", "seed", "ready",
+        ],
     )
 }
 
 fn clip_table(b: ClipBounds) -> CommandTable {
     let clip_id = |req: bool| {
-        let p = Param::new("clip_id", ParamType::String { max_len: Some(64) }, "Clip id (uuid).");
-        if req { p } else { p.optional(json!("")) }
+        let p = Param::new(
+            "clip_id",
+            ParamType::String { max_len: Some(64) },
+            "Clip id (uuid).",
+        );
+        if req {
+            p
+        } else {
+            p.optional(json!(""))
+        }
     };
-    let seconds = || ParamType::Number { min: Some(b.min_s), max: Some(b.max_s) };
+    let seconds = || ParamType::Number {
+        min: Some(b.min_s),
+        max: Some(b.max_s),
+    };
     let commands = vec![
         CommandSpec {
             name: "enqueue",
@@ -338,43 +387,139 @@ fn clip_table(b: ClipBounds) -> CommandTable {
         CommandSpec { name: "reset", description: "Clear both queues and stop playback.", params: vec![], reply: Some("session_reset") },
     ];
     let clip = json!({"clip": clip_info_schema()});
-    let m = |name, description, schema| MessageSpec { name, description, schema };
+    let m = |name, description, schema| MessageSpec {
+        name,
+        description,
+        schema,
+    };
     let messages = vec![
-        m("clip_queued", "A clip entered the generation queue.", obj(clip.clone(), &["clip"])),
-        m("clip_generated", "A clip finished building and is ready to play.", obj(clip.clone(), &["clip"])),
-        m("clip_moved", "A clip moved.", obj(json!({"clip": clip_info_schema(), "queue": {"type": "string"}, "position": {"type": "integer"}}), &["clip", "queue", "position"])),
-        m("clip_started", "A clip started playing.", obj(clip.clone(), &["clip"])),
-        m("clip_finished", "A clip played to its end.", obj(clip.clone(), &["clip"])),
-        m("clip_stopped", "The playing clip was stopped.", obj(clip.clone(), &["clip"])),
-        m("clip_popped", "A clip was removed.", obj(clip.clone(), &["clip"])),
-        m("clip_failed", "A clip failed to build.", obj(json!({"clip": clip_info_schema(), "reason": {"type": "string"}}), &["clip", "reason"])),
-        m("clip_length_accepted", "New default clip length.", obj(json!({"clip_seconds": {"type": "number"}, "frames": {"type": "integer"}}), &["clip_seconds", "frames"])),
-        m("seed_accepted", "New session seed.", obj(json!({"seed": {"type": "integer"}}), &["seed"])),
-        m("autoplay_accepted", "Autoplay changed.", obj(json!({"enabled": {"type": "boolean"}}), &["enabled"])),
-        m("canvas_accepted", "New canvas.", obj(json!({"aspect": {"type": "string"}, "width": {"type": "integer"}, "height": {"type": "integer"}}), &["aspect", "width", "height"])),
-        m("session_reset", "Queues cleared.", obj(json!({"cleared_clips": {"type": "integer"}, "was_playing": {"type": "boolean"}}), &["cleared_clips", "was_playing"])),
-        m("state_update", "Session state.", obj(json!({
-            "clip_seconds": {"type": "number"}, "clip_seconds_min": {"type": "number"}, "clip_seconds_max": {"type": "number"},
-            "seed": {"type": "integer"}, "autoplay": {"type": "boolean"}, "aspect": {"type": "string"},
-            "width": {"type": "integer"}, "height": {"type": "integer"}, "playing": {"type": "boolean"},
-            "playing_clip_id": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-            "generation_queued": {"type": "integer"}, "generation_capacity": {"type": "integer"},
-            "playout_queued": {"type": "integer"}, "playout_capacity": {"type": "integer"},
-            "clips_played": {"type": "integer"}, "seconds_sent": {"type": "number"},
-            "valid_commands": {"type": "array", "items": {"type": "string"}}
-        }), &[])),
-        m("queue_update", "The queues.", obj(json!({
-            "generation": {"type": "array", "items": clip_info_schema()},
-            "playout": {"type": "array", "items": clip_info_schema()},
-            "playing": {"anyOf": [clip_info_schema(), {"type": "null"}]}
-        }), &["generation", "playout"])),
-        m("command_error", "A refused command.", command_error_schema()),
+        m(
+            "clip_queued",
+            "A clip entered the generation queue.",
+            obj(clip.clone(), &["clip"]),
+        ),
+        m(
+            "clip_generated",
+            "A clip finished building and is ready to play.",
+            obj(clip.clone(), &["clip"]),
+        ),
+        m(
+            "clip_moved",
+            "A clip moved.",
+            obj(
+                json!({"clip": clip_info_schema(), "queue": {"type": "string"}, "position": {"type": "integer"}}),
+                &["clip", "queue", "position"],
+            ),
+        ),
+        m(
+            "clip_started",
+            "A clip started playing.",
+            obj(clip.clone(), &["clip"]),
+        ),
+        m(
+            "clip_finished",
+            "A clip played to its end.",
+            obj(clip.clone(), &["clip"]),
+        ),
+        m(
+            "clip_stopped",
+            "The playing clip was stopped.",
+            obj(clip.clone(), &["clip"]),
+        ),
+        m(
+            "clip_popped",
+            "A clip was removed.",
+            obj(clip.clone(), &["clip"]),
+        ),
+        m(
+            "clip_failed",
+            "A clip failed to build.",
+            obj(
+                json!({"clip": clip_info_schema(), "reason": {"type": "string"}}),
+                &["clip", "reason"],
+            ),
+        ),
+        m(
+            "clip_length_accepted",
+            "New default clip length.",
+            obj(
+                json!({"clip_seconds": {"type": "number"}, "frames": {"type": "integer"}}),
+                &["clip_seconds", "frames"],
+            ),
+        ),
+        m(
+            "seed_accepted",
+            "New session seed.",
+            obj(json!({"seed": {"type": "integer"}}), &["seed"]),
+        ),
+        m(
+            "autoplay_accepted",
+            "Autoplay changed.",
+            obj(json!({"enabled": {"type": "boolean"}}), &["enabled"]),
+        ),
+        m(
+            "canvas_accepted",
+            "New canvas.",
+            obj(
+                json!({"aspect": {"type": "string"}, "width": {"type": "integer"}, "height": {"type": "integer"}}),
+                &["aspect", "width", "height"],
+            ),
+        ),
+        m(
+            "session_reset",
+            "Queues cleared.",
+            obj(
+                json!({"cleared_clips": {"type": "integer"}, "was_playing": {"type": "boolean"}}),
+                &["cleared_clips", "was_playing"],
+            ),
+        ),
+        m(
+            "state_update",
+            "Session state.",
+            obj(
+                json!({
+                    "clip_seconds": {"type": "number"}, "clip_seconds_min": {"type": "number"}, "clip_seconds_max": {"type": "number"},
+                    "seed": {"type": "integer"}, "autoplay": {"type": "boolean"}, "aspect": {"type": "string"},
+                    "width": {"type": "integer"}, "height": {"type": "integer"}, "playing": {"type": "boolean"},
+                    "playing_clip_id": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "generation_queued": {"type": "integer"}, "generation_capacity": {"type": "integer"},
+                    "playout_queued": {"type": "integer"}, "playout_capacity": {"type": "integer"},
+                    "clips_played": {"type": "integer"}, "seconds_sent": {"type": "number"},
+                    "valid_commands": {"type": "array", "items": {"type": "string"}}
+                }),
+                &[],
+            ),
+        ),
+        m(
+            "queue_update",
+            "The queues.",
+            obj(
+                json!({
+                    "generation": {"type": "array", "items": clip_info_schema()},
+                    "playout": {"type": "array", "items": clip_info_schema()},
+                    "playing": {"anyOf": [clip_info_schema(), {"type": "null"}]}
+                }),
+                &["generation", "playout"],
+            ),
+        ),
+        m(
+            "command_error",
+            "A refused command.",
+            command_error_schema(),
+        ),
     ];
-    CommandTable { mode: Mode::Clip, commands, messages }
+    CommandTable {
+        mode: Mode::Clip,
+        commands,
+        messages,
+    }
 }
 
 fn command_error_schema() -> Value {
-    obj(json!({"command": {"type": "string"}, "reason": {"type": "string"}}), &["command", "reason"])
+    obj(
+        json!({"command": {"type": "string"}, "reason": {"type": "string"}}),
+        &["command", "reason"],
+    )
 }
 
 fn causal_table() -> CommandTable {
@@ -391,9 +536,24 @@ fn causal_table() -> CommandTable {
             params: vec![Param::new("paused", ParamType::Boolean, "Paused.")],
             reply: None,
         },
-        CommandSpec { name: "set_seed", description: "Seed.", params: vec![Param::new("seed", uint(), "Seed.")], reply: None },
-        CommandSpec { name: "reset", description: "Clear the KV cache and restart at block 0.", params: vec![], reply: None },
-        CommandSpec { name: "get_state", description: "The session state.", params: vec![], reply: Some("state_update") },
+        CommandSpec {
+            name: "set_seed",
+            description: "Seed.",
+            params: vec![Param::new("seed", uint(), "Seed.")],
+            reply: None,
+        },
+        CommandSpec {
+            name: "reset",
+            description: "Clear the KV cache and restart at block 0.",
+            params: vec![],
+            reply: None,
+        },
+        CommandSpec {
+            name: "get_state",
+            description: "The session state.",
+            params: vec![],
+            reply: Some("state_update"),
+        },
     ];
     let messages = vec![
         MessageSpec {
@@ -407,9 +567,17 @@ fn causal_table() -> CommandTable {
                 &["prompt", "paused", "seed", "block_index", "unique_fps"],
             ),
         },
-        MessageSpec { name: "command_error", description: "A refused command.", schema: command_error_schema() },
+        MessageSpec {
+            name: "command_error",
+            description: "A refused command.",
+            schema: command_error_schema(),
+        },
     ];
-    CommandTable { mode: Mode::Causal, commands, messages }
+    CommandTable {
+        mode: Mode::Causal,
+        commands,
+        messages,
+    }
 }
 
 /// Reactor `ltx` bounds (docs.reactor.inc/model-api-reference/ltx/schema).
@@ -419,7 +587,12 @@ pub const AVATAR_PROMPT_MAX: usize = fastvideo_engine_service::stream::avatar::S
 fn avatar_table() -> CommandTable {
     use fastvideo_engine_service::stream::avatar::{TAKE_MAX_S, WPM_MAX, WPM_MIN};
     let file = |accept| ParamType::File { accept };
-    let cmd = |name, description, params, reply| CommandSpec { name, description, params, reply };
+    let cmd = |name, description, params, reply| CommandSpec {
+        name,
+        description,
+        params,
+        reply,
+    };
     let commands = vec![
         cmd(
             "set_avatar_image",
@@ -465,50 +638,168 @@ fn avatar_table() -> CommandTable {
             Some("voice_audio_accepted"),
         ),
     ];
-    let m = |name, description, schema| MessageSpec { name, description, schema };
+    let m = |name, description, schema| MessageSpec {
+        name,
+        description,
+        schema,
+    };
     let n = || json!({"type": "number"});
     let i = || json!({"type": "integer"});
     let st = || json!({"type": "string"});
     let b = || json!({"type": "boolean"});
     let sent = || obj(json!({"seconds_sent": n()}), &["seconds_sent"]);
     let messages = vec![
-        m("state_update", "Session state (on connect and after every change).", obj(json!({
-            "script": st(), "prompt": st(), "has_avatar_image": b(), "has_voice_audio": b(),
-            "wpm": i(), "wpm_min": i(), "wpm_max": i(),
-            "duration_seconds": n(), "effective_seconds": n(), "seed": i(),
-            "ready": b(), "generating": b(), "paused": b(), "finished": b(),
-            "valid_commands": {"type": "array", "items": st()},
-            "queued_changes": {"type": "array", "items": st()},
-            "window_index": i(), "total_windows": i(), "seconds_sent": n(),
-            "windows_built": i(), "stalls": i(), "stalled_seconds": n(),
-            "first_frame_seconds": {"anyOf": [n(), {"type": "null"}]}
-        }), &[])),
-        m("avatar_image_accepted", "The image was accepted.", obj(json!({"name": st(), "width": i(), "height": i()}), &["name", "width", "height"])),
-        m("script_accepted", "The script was accepted.", obj(json!({"words": i(), "derived_seconds": n(), "effective_seconds": n()}), &["words", "derived_seconds", "effective_seconds"])),
-        m("prompt_accepted", "The scene prompt was accepted.", obj(json!({"prompt": st()}), &["prompt"])),
-        m("wpm_accepted", "The speech rate was accepted.", obj(json!({"wpm": i(), "derived_seconds": n(), "effective_seconds": n()}), &["wpm", "derived_seconds", "effective_seconds"])),
-        m("duration_accepted", "The take length was accepted.", obj(json!({"duration_seconds": n(), "effective_seconds": n()}), &["duration_seconds", "effective_seconds"])),
-        m("seed_accepted", "The seed was accepted.", obj(json!({"seed": i()}), &["seed"])),
-        m("voice_audio_accepted", "Extension: the driving voice was accepted.", obj(json!({"name": st(), "seconds": n(), "effective_seconds": n()}), &["name", "seconds", "effective_seconds"])),
-        m("generation_started", "A take began.", obj(json!({"seconds": n(), "total_windows": i(), "width": i(), "height": i()}), &["seconds", "total_windows", "width", "height"])),
-        m("window_progress", "A window was streamed.", obj(json!({
-            "window_index": i(), "total_windows": i(), "seconds_sent": n(), "total_seconds": n()
-        }), &["window_index", "total_windows", "seconds_sent", "total_seconds"])),
-        m("window_built", "Extension: a window finished generating (timings).", obj(json!({
-            "window_index": i(), "total_windows": i(), "kind": st(), "frames": i(), "seconds": n(), "build_seconds": n(), "rtf": n()
-        }), &["window_index", "total_windows", "seconds", "build_seconds", "rtf"])),
-        m("window_started", "Extension: a window's first frame was sent.", obj(json!({
-            "window_index": i(), "total_windows": i(), "seconds_sent": n(), "since_start_seconds": n(), "stalled_seconds": n()
-        }), &["window_index", "total_windows", "seconds_sent", "since_start_seconds", "stalled_seconds"])),
+        m(
+            "state_update",
+            "Session state (on connect and after every change).",
+            obj(
+                json!({
+                    "script": st(), "prompt": st(), "has_avatar_image": b(), "has_voice_audio": b(),
+                    "wpm": i(), "wpm_min": i(), "wpm_max": i(),
+                    "duration_seconds": n(), "effective_seconds": n(), "seed": i(),
+                    "ready": b(), "generating": b(), "paused": b(), "finished": b(),
+                    "valid_commands": {"type": "array", "items": st()},
+                    "queued_changes": {"type": "array", "items": st()},
+                    "window_index": i(), "total_windows": i(), "seconds_sent": n(),
+                    "windows_built": i(), "stalls": i(), "stalled_seconds": n(),
+                    "first_frame_seconds": {"anyOf": [n(), {"type": "null"}]}
+                }),
+                &[],
+            ),
+        ),
+        m(
+            "avatar_image_accepted",
+            "The image was accepted.",
+            obj(
+                json!({"name": st(), "width": i(), "height": i()}),
+                &["name", "width", "height"],
+            ),
+        ),
+        m(
+            "script_accepted",
+            "The script was accepted.",
+            obj(
+                json!({"words": i(), "derived_seconds": n(), "effective_seconds": n()}),
+                &["words", "derived_seconds", "effective_seconds"],
+            ),
+        ),
+        m(
+            "prompt_accepted",
+            "The scene prompt was accepted.",
+            obj(json!({"prompt": st()}), &["prompt"]),
+        ),
+        m(
+            "wpm_accepted",
+            "The speech rate was accepted.",
+            obj(
+                json!({"wpm": i(), "derived_seconds": n(), "effective_seconds": n()}),
+                &["wpm", "derived_seconds", "effective_seconds"],
+            ),
+        ),
+        m(
+            "duration_accepted",
+            "The take length was accepted.",
+            obj(
+                json!({"duration_seconds": n(), "effective_seconds": n()}),
+                &["duration_seconds", "effective_seconds"],
+            ),
+        ),
+        m(
+            "seed_accepted",
+            "The seed was accepted.",
+            obj(json!({"seed": i()}), &["seed"]),
+        ),
+        m(
+            "voice_audio_accepted",
+            "Extension: the driving voice was accepted.",
+            obj(
+                json!({"name": st(), "seconds": n(), "effective_seconds": n()}),
+                &["name", "seconds", "effective_seconds"],
+            ),
+        ),
+        m(
+            "generation_started",
+            "A take began.",
+            obj(
+                json!({"seconds": n(), "total_windows": i(), "width": i(), "height": i()}),
+                &["seconds", "total_windows", "width", "height"],
+            ),
+        ),
+        m(
+            "window_progress",
+            "A window was streamed.",
+            obj(
+                json!({
+                    "window_index": i(), "total_windows": i(), "seconds_sent": n(), "total_seconds": n()
+                }),
+                &[
+                    "window_index",
+                    "total_windows",
+                    "seconds_sent",
+                    "total_seconds",
+                ],
+            ),
+        ),
+        m(
+            "window_built",
+            "Extension: a window finished generating (timings).",
+            obj(
+                json!({
+                    "window_index": i(), "total_windows": i(), "kind": st(), "frames": i(), "seconds": n(), "build_seconds": n(), "rtf": n()
+                }),
+                &[
+                    "window_index",
+                    "total_windows",
+                    "seconds",
+                    "build_seconds",
+                    "rtf",
+                ],
+            ),
+        ),
+        m(
+            "window_started",
+            "Extension: a window's first frame was sent.",
+            obj(
+                json!({
+                    "window_index": i(), "total_windows": i(), "seconds_sent": n(), "since_start_seconds": n(), "stalled_seconds": n()
+                }),
+                &[
+                    "window_index",
+                    "total_windows",
+                    "seconds_sent",
+                    "since_start_seconds",
+                    "stalled_seconds",
+                ],
+            ),
+        ),
         m("generation_paused", "The take is paused.", sent()),
         m("generation_resumed", "The take resumed.", sent()),
         m("generation_stopped", "The take was stopped.", sent()),
         m("generation_complete", "The take reached its end.", sent()),
-        m("generation_failed", "The take ended early.", obj(json!({"reason": st(), "seconds_sent": n()}), &["reason", "seconds_sent"])),
-        m("generation_reset", "Every condition was cleared.", obj(json!({"was_generating": b()}), &["was_generating"])),
-        m("command_error", "A refused command.", command_error_schema()),
+        m(
+            "generation_failed",
+            "The take ended early.",
+            obj(
+                json!({"reason": st(), "seconds_sent": n()}),
+                &["reason", "seconds_sent"],
+            ),
+        ),
+        m(
+            "generation_reset",
+            "Every condition was cleared.",
+            obj(json!({"was_generating": b()}), &["was_generating"]),
+        ),
+        m(
+            "command_error",
+            "A refused command.",
+            command_error_schema(),
+        ),
     ];
-    CommandTable { mode: Mode::Avatar, commands, messages }
+    CommandTable {
+        mode: Mode::Avatar,
+        commands,
+        messages,
+    }
 }
 
 /// Duplex mode (design §5.11): the client publishes input tracks with
@@ -521,7 +812,12 @@ fn duplex_table() -> CommandTable {
             params: vec![Param::new("paused", ParamType::Boolean, "Paused.")],
             reply: None,
         },
-        CommandSpec { name: "get_state", description: "The session state.", params: vec![], reply: Some("state_update") },
+        CommandSpec {
+            name: "get_state",
+            description: "The session state.",
+            params: vec![],
+            reply: Some("state_update"),
+        },
     ];
     let messages = vec![
         MessageSpec {
@@ -548,7 +844,11 @@ fn duplex_table() -> CommandTable {
             schema: obj(json!({"track": {"type": "string"}, "reason": {"type": "string"}}), &["track", "reason"]),
         },
     ];
-    CommandTable { mode: Mode::Duplex, commands, messages }
+    CommandTable {
+        mode: Mode::Duplex,
+        commands,
+        messages,
+    }
 }
 
 #[cfg(test)]
@@ -556,7 +856,11 @@ mod tests {
     use super::*;
 
     fn b() -> ClipBounds {
-        ClipBounds { min_s: 5.167, max_s: 14.375, default_s: 5.167 }
+        ClipBounds {
+            min_s: 5.167,
+            max_s: 14.375,
+            default_s: 5.167,
+        }
     }
 
     fn m(v: Value) -> Map<String, Value> {
@@ -569,10 +873,40 @@ mod tests {
         let names: Vec<&str> = t.commands.iter().map(|c| c.name).collect();
         assert_eq!(
             names,
-            ["enqueue", "play", "pop", "move", "stop", "get_queue", "get_state", "set_clip_seconds", "set_seed", "set_autoplay", "set_canvas", "reset"]
+            [
+                "enqueue",
+                "play",
+                "pop",
+                "move",
+                "stop",
+                "get_queue",
+                "get_state",
+                "set_clip_seconds",
+                "set_seed",
+                "set_autoplay",
+                "set_canvas",
+                "reset"
+            ]
         );
         let msgs: Vec<&str> = t.messages.iter().map(|c| c.name).collect();
-        for want in ["clip_queued", "clip_generated", "clip_moved", "clip_started", "clip_finished", "clip_stopped", "clip_popped", "clip_failed", "clip_length_accepted", "seed_accepted", "autoplay_accepted", "canvas_accepted", "session_reset", "state_update", "queue_update", "command_error"] {
+        for want in [
+            "clip_queued",
+            "clip_generated",
+            "clip_moved",
+            "clip_started",
+            "clip_finished",
+            "clip_stopped",
+            "clip_popped",
+            "clip_failed",
+            "clip_length_accepted",
+            "seed_accepted",
+            "autoplay_accepted",
+            "canvas_accepted",
+            "session_reset",
+            "state_update",
+            "queue_update",
+            "command_error",
+        ] {
             assert!(msgs.contains(&want), "{want}");
         }
     }
@@ -580,47 +914,128 @@ mod tests {
     #[test]
     fn validation_follows_the_contract() {
         let t = CommandTable::for_mode(Mode::Clip, b());
-        let ok = t.validate("enqueue", &m(json!({"prompt": "a cat"}))).unwrap();
-        assert_eq!(Value::Object(ok), json!({"prompt": "a cat", "metadata": "", "seed": null, "seconds": null, "position": null}));
-        assert!(t.validate("enqueue", &m(json!({}))).unwrap_err().contains("required"));
-        assert!(t.validate("enqueue", &m(json!({"prompt": "x".repeat(801)}))).is_err());
-        assert!(t.validate("enqueue", &m(json!({"prompt": "a", "seconds": 3.0}))).is_err());
-        assert!(t.validate("enqueue", &m(json!({"prompt": "a", "seed": -1}))).is_err());
+        let ok = t
+            .validate("enqueue", &m(json!({"prompt": "a cat"})))
+            .unwrap();
+        assert_eq!(
+            Value::Object(ok),
+            json!({"prompt": "a cat", "metadata": "", "seed": null, "seconds": null, "position": null})
+        );
+        assert!(t
+            .validate("enqueue", &m(json!({})))
+            .unwrap_err()
+            .contains("required"));
+        assert!(t
+            .validate("enqueue", &m(json!({"prompt": "x".repeat(801)})))
+            .is_err());
+        assert!(t
+            .validate("enqueue", &m(json!({"prompt": "a", "seconds": 3.0})))
+            .is_err());
+        assert!(t
+            .validate("enqueue", &m(json!({"prompt": "a", "seed": -1})))
+            .is_err());
         // Struct numbers are doubles: a whole 7.0 is an integer.
-        assert_eq!(t.validate("set_seed", &m(json!({"seed": 7.0}))).unwrap()["seed"], json!(7));
+        assert_eq!(
+            t.validate("set_seed", &m(json!({"seed": 7.0}))).unwrap()["seed"],
+            json!(7)
+        );
         assert!(t.validate("set_seed", &m(json!({"seed": 7.5}))).is_err());
-        assert!(t.validate("set_canvas", &m(json!({"aspect": "21:9"}))).is_err());
-        assert!(t.validate("set_canvas", &m(json!({"aspect": "9:16"}))).is_ok());
-        assert!(t.validate("set_autoplay", &m(json!({"enabled": "yes"}))).is_err());
-        assert!(t.validate("nope", &Map::new()).unwrap_err().contains("unknown"));
+        assert!(t
+            .validate("set_canvas", &m(json!({"aspect": "21:9"})))
+            .is_err());
+        assert!(t
+            .validate("set_canvas", &m(json!({"aspect": "9:16"})))
+            .is_ok());
+        assert!(t
+            .validate("set_autoplay", &m(json!({"enabled": "yes"})))
+            .is_err());
+        assert!(t
+            .validate("nope", &Map::new())
+            .unwrap_err()
+            .contains("unknown"));
         // Extra fields are ignored.
         assert!(t.validate("get_state", &m(json!({"x": 1}))).is_ok());
 
         let c = CommandTable::for_mode(Mode::Causal, b());
         let names: Vec<&str> = c.commands.iter().map(|c| c.name).collect();
-        assert_eq!(names, ["set_prompt", "set_paused", "set_seed", "reset", "get_state"]);
-        assert!(c.validate("set_paused", &m(json!({"paused": true}))).is_ok());
+        assert_eq!(
+            names,
+            ["set_prompt", "set_paused", "set_seed", "reset", "get_state"]
+        );
+        assert!(c
+            .validate("set_paused", &m(json!({"paused": true})))
+            .is_ok());
     }
 
     #[test]
     fn avatar_set_is_reactor_ltx() {
         let t = CommandTable::for_mode(Mode::Avatar, b());
         let names: Vec<&str> = t.commands.iter().map(|c| c.name).collect();
-        for want in ["set_avatar_image", "set_script", "set_prompt", "set_wpm", "set_duration_seconds", "set_seed", "start", "pause", "resume", "stop", "reset"] {
+        for want in [
+            "set_avatar_image",
+            "set_script",
+            "set_prompt",
+            "set_wpm",
+            "set_duration_seconds",
+            "set_seed",
+            "start",
+            "pause",
+            "resume",
+            "stop",
+            "reset",
+        ] {
             assert!(names.contains(&want), "{want}");
         }
         let msgs: Vec<&str> = t.messages.iter().map(|c| c.name).collect();
-        for want in ["state_update", "avatar_image_accepted", "script_accepted", "prompt_accepted", "wpm_accepted", "duration_accepted", "seed_accepted", "generation_started", "window_progress", "generation_paused", "generation_resumed", "generation_stopped", "generation_complete", "generation_failed", "generation_reset", "command_error"] {
+        for want in [
+            "state_update",
+            "avatar_image_accepted",
+            "script_accepted",
+            "prompt_accepted",
+            "wpm_accepted",
+            "duration_accepted",
+            "seed_accepted",
+            "generation_started",
+            "window_progress",
+            "generation_paused",
+            "generation_resumed",
+            "generation_stopped",
+            "generation_complete",
+            "generation_failed",
+            "generation_reset",
+            "command_error",
+        ] {
             assert!(msgs.contains(&want), "{want}");
         }
         assert!(t.validate("set_wpm", &m(json!({"wpm": 79}))).is_err());
         assert!(t.validate("set_wpm", &m(json!({"wpm": 220}))).is_ok());
-        assert!(t.validate("set_duration_seconds", &m(json!({"duration_seconds": 301}))).is_err());
-        assert!(t.validate("set_script", &m(json!({"script": "x".repeat(10_001)}))).is_err());
-        let f = t.validate("set_avatar_image", &m(json!({"avatar_image": {"upload_id": "u1", "name": "a.png"}}))).unwrap();
-        assert_eq!(f["avatar_image"], json!({"upload_id": "u1", "name": "a.png", "mime_type": "", "size": 0}));
-        assert_eq!(t.validate("set_avatar_image", &m(json!({"avatar_image": "u2"}))).unwrap()["avatar_image"]["upload_id"], "u2");
-        assert!(t.validate("set_avatar_image", &m(json!({"avatar_image": {"name": "a"}}))).is_err());
+        assert!(t
+            .validate("set_duration_seconds", &m(json!({"duration_seconds": 301})))
+            .is_err());
+        assert!(t
+            .validate("set_script", &m(json!({"script": "x".repeat(10_001)})))
+            .is_err());
+        let f = t
+            .validate(
+                "set_avatar_image",
+                &m(json!({"avatar_image": {"upload_id": "u1", "name": "a.png"}})),
+            )
+            .unwrap();
+        assert_eq!(
+            f["avatar_image"],
+            json!({"upload_id": "u1", "name": "a.png", "mime_type": "", "size": 0})
+        );
+        assert_eq!(
+            t.validate("set_avatar_image", &m(json!({"avatar_image": "u2"})))
+                .unwrap()["avatar_image"]["upload_id"],
+            "u2"
+        );
+        assert!(t
+            .validate(
+                "set_avatar_image",
+                &m(json!({"avatar_image": {"name": "a"}}))
+            )
+            .is_err());
         assert!(t.validate("set_avatar_image", &m(json!({}))).is_err());
     }
 }

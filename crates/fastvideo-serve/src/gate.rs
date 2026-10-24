@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use fastvideo_engine_service::{CancelOutcome, ClipOutput, EngineEvent, EngineService, Priority, Readiness};
+use fastvideo_engine_service::{
+    CancelOutcome, ClipOutput, EngineEvent, EngineService, Priority, Readiness,
+};
 use fastvideo_media::mp4;
 use fastvideo_media::video::FfmpegH264;
 use fastvideo_protocol::{ApiError, AudioPlan, Job, JobId, ModelCaps, ResolvedJob};
@@ -49,14 +51,20 @@ pub struct ServiceGate {
 
 impl std::fmt::Debug for ServiceGate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ServiceGate").field("engine", &self.engine).finish_non_exhaustive()
+        f.debug_struct("ServiceGate")
+            .field("engine", &self.engine)
+            .finish_non_exhaustive()
     }
 }
 
 impl ServiceGate {
     /// `aliases`: the config's `[aliases]`; the engine's tier aliases
     /// (`h3-max`, `ltx-turbo`, ...) are added unless the config names them.
-    pub fn new(engine: EngineService, mut aliases: BTreeMap<String, String>, output: OutputPolicy) -> Arc<Self> {
+    pub fn new(
+        engine: EngineService,
+        mut aliases: BTreeMap<String, String>,
+        output: OutputPolicy,
+    ) -> Arc<Self> {
         for (alias, model) in engine.caps().tier_aliases() {
             aliases.entry(alias).or_insert(model.0);
         }
@@ -64,7 +72,13 @@ impl ServiceGate {
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             rt.spawn_blocking(ffmpeg_ok);
         }
-        Arc::new(Self { engine, aliases, ctx: OnceLock::new(), admitting: AtomicBool::new(true), output })
+        Arc::new(Self {
+            engine,
+            aliases,
+            ctx: OnceLock::new(),
+            admitting: AtomicBool::new(true),
+            output,
+        })
     }
 
     /// Connects the gate to the context built around it (once).
@@ -90,7 +104,9 @@ impl ServiceGate {
     }
 
     fn ctx(&self) -> Result<&ServeCtx, ApiError> {
-        self.ctx.get().ok_or_else(|| ApiError::internal("engine gate is not attached"))
+        self.ctx
+            .get()
+            .ok_or_else(|| ApiError::internal("engine gate is not attached"))
     }
 }
 
@@ -110,10 +126,12 @@ impl EngineGate for ServiceGate {
         }
         match self.engine.readiness() {
             Readiness::Ready => Ok(()),
-            Readiness::Loading { done, total } => {
-                Err(ApiError::loading(format!("models are loading ({done}/{total})")))
-            }
-            Readiness::Failed(m) => Err(ApiError::engine_failed(format!("model loading failed: {m}"))),
+            Readiness::Loading { done, total } => Err(ApiError::loading(format!(
+                "models are loading ({done}/{total})"
+            ))),
+            Readiness::Failed(m) => Err(ApiError::engine_failed(format!(
+                "model loading failed: {m}"
+            ))),
         }
     }
 
@@ -122,12 +140,24 @@ impl EngineGate for ServiceGate {
         // docs/serve/tracing.md: the job's trace (a dispatched job carries
         // it in its envelope), else the request's.
         let trace = job_trace(job);
-        let handle = self.engine.submit_traced(job.id, job.resolved.clone(), Priority::Batch, trace).await?;
+        let handle = self
+            .engine
+            .submit_traced(job.id, job.resolved.clone(), Priority::Batch, trace)
+            .await?;
         metrics::counter!("fv_jobs_submitted_total", "api" => job.protocol.as_str()).increment(1);
         let output = self.output.clone();
         let (id, api, resolved) = (job.id, job.protocol.as_str(), job.resolved.clone());
         let name = crate::adapters::artifact_file_name(job);
-        tokio::spawn(pump(ctx, id, api, resolved, name, handle.events, output, trace));
+        tokio::spawn(pump(
+            ctx,
+            id,
+            api,
+            resolved,
+            name,
+            handle.events,
+            output,
+            trace,
+        ));
         Ok(())
     }
 
@@ -139,7 +169,10 @@ impl EngineGate for ServiceGate {
 /// A job's trace: its `traceparent` (set at submit, carried by dispatch),
 /// else the current request's.
 pub fn job_trace(job: &Job) -> Option<fastvideo_trace::Trace> {
-    job.trace.as_deref().and_then(fastvideo_trace::Trace::from_traceparent).or_else(fastvideo_trace::current)
+    job.trace
+        .as_deref()
+        .and_then(fastvideo_trace::Trace::from_traceparent)
+        .or_else(fastvideo_trace::current)
 }
 
 /// Maps a job's engine events onto the store until its terminal event.
@@ -168,7 +201,9 @@ async fn pump(
     while let Some(ev) = events.recv().await {
         match &ev {
             EngineEvent::Stage { name } => tracing::debug!(job = %id, "engine: stage {name}"),
-            EngineEvent::Progress { step, total } => tracing::debug!(job = %id, "engine: step {step}/{total}"),
+            EngineEvent::Progress { step, total } => {
+                tracing::debug!(job = %id, "engine: step {step}/{total}")
+            }
             EngineEvent::Log(_) => {}
             e => tracing::debug!(job = %id, "engine: {}", engine_event_name(e)),
         }
@@ -187,7 +222,9 @@ async fn pump(
         let ev = match ev {
             EngineEvent::Queued { position } => JobEvent::Queued { position },
             EngineEvent::Started => JobEvent::Started,
-            EngineEvent::Stage { name } => JobEvent::Stage { name: name.to_owned() },
+            EngineEvent::Stage { name } => JobEvent::Stage {
+                name: name.to_owned(),
+            },
             EngineEvent::Progress { step, total } => JobEvent::Progress { step, total },
             EngineEvent::Log(l) => JobEvent::Log(l),
             EngineEvent::Failed(e) => JobEvent::Failed(e),
@@ -200,7 +237,12 @@ async fn pump(
                 });
                 let r = finish(id, &resolved, &file_name, out, &output).await;
                 if let (Some(t), Some(s)) = (trace, t_post) {
-                    t.span_since(fastvideo_trace::Comp::Post, "finalize", s, i64::from(r.is_ok()));
+                    t.span_since(
+                        fastvideo_trace::Comp::Post,
+                        "finalize",
+                        s,
+                        i64::from(r.is_ok()),
+                    );
                 }
                 match r {
                     Ok(f) => JobEvent::Finished(f),
@@ -208,14 +250,19 @@ async fn pump(
                 }
             }
         };
-        let terminal = matches!(ev, JobEvent::Finished(_) | JobEvent::Failed(_) | JobEvent::Cancelled);
+        let terminal = matches!(
+            ev,
+            JobEvent::Finished(_) | JobEvent::Failed(_) | JobEvent::Cancelled
+        );
         let status = match &ev {
             JobEvent::Finished(_) => "succeeded",
             JobEvent::Failed(_) => "failed",
             JobEvent::Cancelled => "cancelled",
             _ => "",
         };
-        let t_apply = trace.filter(|_| terminal).map(|_| fastvideo_trace::now_ns());
+        let t_apply = trace
+            .filter(|_| terminal)
+            .map(|_| fastvideo_trace::now_ns());
         let applied = match trace.filter(|_| terminal) {
             Some(t) => fastvideo_trace::scope(t, apply_event(&ctx, id, ev)).await,
             None => apply_event(&ctx, id, ev).await,
@@ -228,7 +275,8 @@ async fn pump(
             t.span_since(fastvideo_trace::Comp::Store, "terminal", s, 0);
         }
         if terminal {
-            metrics::counter!("fv_jobs_finished_total", "api" => api, "status" => status).increment(1);
+            metrics::counter!("fv_jobs_finished_total", "api" => api, "status" => status)
+                .increment(1);
             metrics::histogram!("fv_job_duration_seconds", "api" => api, "model" => model.clone())
                 .record(started.elapsed().as_secs_f64());
             ended = true;
@@ -263,7 +311,13 @@ fn engine_event_name(e: &EngineEvent) -> &'static str {
 }
 
 /// The engine's output -> a finalized file plus its artifact facts.
-async fn finish(id: JobId, r: &ResolvedJob, file_name: &str, out: ClipOutput, policy: &OutputPolicy) -> Result<FinishedOutput, ApiError> {
+async fn finish(
+    id: JobId,
+    r: &ResolvedJob,
+    file_name: &str,
+    out: ClipOutput,
+    policy: &OutputPolicy,
+) -> Result<FinishedOutput, ApiError> {
     let dir = policy.scratch.join(id.to_string());
     tokio::fs::create_dir_all(&dir)
         .await
@@ -289,10 +343,13 @@ async fn finish(id: JobId, r: &ResolvedJob, file_name: &str, out: ClipOutput, po
             // Off the async runtime: the checks read the file and may run
             // ffmpeg once (the probe is cached per process).
             let out = tokio::task::spawn_blocking(move || -> Result<PathBuf, ApiError> {
-                if keep_fragmented || (!needs_post && (!ffmpeg_ok() || mp4::finalize_is_noop(&src2, &post))) {
+                if keep_fragmented
+                    || (!needs_post && (!ffmpeg_ok() || mp4::finalize_is_noop(&src2, &post)))
+                {
                     return Ok(src2);
                 }
-                mp4::finalize_with(&src2, &dst2, &post, enc).map_err(|e| ApiError::engine_failed(format!("post-processing: {e}")))?;
+                mp4::finalize_with(&src2, &dst2, &post, enc)
+                    .map_err(|e| ApiError::engine_failed(format!("post-processing: {e}")))?;
                 Ok(dst2)
             })
             .await
@@ -304,7 +361,11 @@ async fn finish(id: JobId, r: &ResolvedJob, file_name: &str, out: ClipOutput, po
             out
         }
         None if policy.placeholder => write_placeholder(&dir, id, r).await?,
-        None => return Err(ApiError::engine_failed("the engine produced no output file")),
+        None => {
+            return Err(ApiError::engine_failed(
+                "the engine produced no output file",
+            ))
+        }
     };
     Ok(FinishedOutput {
         file,

@@ -18,6 +18,7 @@
 
 mod benchmark;
 mod clipcmp;
+mod coldstart;
 mod embed;
 #[cfg(feature = "cuda")]
 mod engine_stage;
@@ -25,8 +26,6 @@ mod gate;
 mod gpu;
 mod h3_stage;
 mod hunyuan15_stage;
-mod sana_video_stage;
-mod sol_stage;
 #[cfg(feature = "cuda")]
 mod kernels;
 #[cfg(feature = "cuda")]
@@ -41,11 +40,11 @@ mod kernels_fuse;
 mod kernels_wan;
 mod llm_oracle;
 mod lpips;
-mod mmaudio_stage;
 mod ltx2_stage;
 #[cfg(feature = "cuda")]
 mod mathprobe;
 mod metrics;
+mod mmaudio_stage;
 mod mode;
 mod model;
 #[cfg(feature = "cuda")]
@@ -59,14 +58,15 @@ mod quality;
 mod rand_weights;
 mod reference;
 mod report;
+mod sana_video_stage;
 mod serve;
+mod sol_stage;
 mod st;
 mod taehv;
 mod wan_oracle;
 mod wan_stage;
 mod wan_stream;
 mod writer_bench;
-mod coldstart;
 
 use std::path::PathBuf;
 

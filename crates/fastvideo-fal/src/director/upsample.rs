@@ -63,7 +63,10 @@ pub struct Cue {
 
 impl Cue {
     fn direction(&self) -> Option<Direction> {
-        self.direction.as_ref().map(|(v, t)| Direction { id: v.to_string(), text: t.clone() })
+        self.direction.as_ref().map(|(v, t)| Direction {
+            id: v.to_string(),
+            text: t.clone(),
+        })
     }
 }
 
@@ -149,8 +152,27 @@ impl SegmentUpsampler {
     /// `tx` feeds the session loop, which hands each [`Done`] back to
     /// [`Self::on_done`]. `deck`: segments planned ahead (at least 1);
     /// `images`: the vision loader (`None`: a text-only LLM).
-    pub fn new(up: Upsampler, tx: mpsc::UnboundedSender<Done>, deck: usize, images: Option<ImageLoader>) -> Self {
-        Self { up, tx, seq: 0, planned: VecDeque::new(), inflight: None, wanted: Vec::new(), last: None, deck: deck.max(1), images, started: 0, discarded: 0, waiting: false, steered: false }
+    pub fn new(
+        up: Upsampler,
+        tx: mpsc::UnboundedSender<Done>,
+        deck: usize,
+        images: Option<ImageLoader>,
+    ) -> Self {
+        Self {
+            up,
+            tx,
+            seq: 0,
+            planned: VecDeque::new(),
+            inflight: None,
+            wanted: Vec::new(),
+            last: None,
+            deck: deck.max(1),
+            images,
+            started: 0,
+            discarded: 0,
+            waiting: false,
+            steered: false,
+        }
     }
 
     /// A chunk is due and its segment is not ready (`true`), or nothing
@@ -232,12 +254,21 @@ impl SegmentUpsampler {
         plans
             .iter()
             .map(|p| {
-                let d = p.direction.as_deref().map(str::trim).filter(|d| !d.is_empty()).map(|d| (p.version, d.to_owned()));
+                let d = p
+                    .direction
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|d| !d.is_empty())
+                    .map(|d| (p.version, d.to_owned()));
                 let new = d.is_some() && d != last;
                 if new {
                     last = d.clone();
                 }
-                Cue { direction: if new { d } else { None }, first_frame: p.first_image.clone(), end_frame: p.end_image.clone() }
+                Cue {
+                    direction: if new { d } else { None },
+                    first_frame: p.first_image.clone(),
+                    end_frame: p.end_image.clone(),
+                }
             })
             .collect()
     }
@@ -251,7 +282,12 @@ impl SegmentUpsampler {
     /// Keeps the planned prefix that matches, discards the rest (aborting
     /// a call for a discarded position) and starts the next call.
     pub fn sync(&mut self, wanted: Vec<Cue>) {
-        let keep = self.planned.iter().zip(&wanted).take_while(|(s, w)| &s.key == *w).count();
+        let keep = self
+            .planned
+            .iter()
+            .zip(&wanted)
+            .take_while(|(s, w)| &s.key == *w)
+            .count();
         if keep < self.planned.len() {
             self.discarded += (self.planned.len() - keep) as u64;
             self.planned.truncate(keep);
@@ -273,17 +309,35 @@ impl SegmentUpsampler {
         if self.inflight.is_some() || pos >= self.depth() {
             return;
         }
-        let Some(key) = self.wanted.get(pos).cloned() else { return };
+        let Some(key) = self.wanted.get(pos).cloned() else {
+            return;
+        };
         let chain: Vec<PlannedOutput> = self
             .planned
             .iter()
-            .filter_map(|s| s.result.as_ref().ok().map(|out| PlannedOutput { direction: s.key.direction(), out: out.clone() }))
+            .filter_map(|s| {
+                s.result.as_ref().ok().map(|out| PlannedOutput {
+                    direction: s.key.direction(),
+                    out: out.clone(),
+                })
+            })
             .collect();
         // Images only in the segment they pin.
-        let paths: Vec<PathBuf> = key.first_frame.iter().chain(&key.end_frame).cloned().collect();
+        let paths: Vec<PathBuf> = key
+            .first_frame
+            .iter()
+            .chain(&key.end_frame)
+            .cloned()
+            .collect();
         let attach = self.images.is_some() && !paths.is_empty();
-        let frames = Frames { first: key.first_frame.is_some(), end: key.end_frame.is_some(), attached: attach };
-        let user = self.up.user_message_after(&chain, key.direction().as_ref(), frames);
+        let frames = Frames {
+            first: key.first_frame.is_some(),
+            end: key.end_frame.is_some(),
+            attached: attach,
+        };
+        let user = self
+            .up
+            .user_message_after(&chain, key.direction().as_ref(), frames);
         self.seq += 1;
         self.started += 1;
         let seq = self.seq;
@@ -294,11 +348,19 @@ impl SegmentUpsampler {
         let handle = tokio::spawn(async move {
             let t0 = Instant::now();
             let images = match loader {
-                Some(l) => tokio::task::spawn_blocking(move || paths.iter().filter_map(|p| l(p)).collect::<Vec<_>>()).await.unwrap_or_default(),
+                Some(l) => tokio::task::spawn_blocking(move || {
+                    paths.iter().filter_map(|p| l(p)).collect::<Vec<_>>()
+                })
+                .await
+                .unwrap_or_default(),
                 None => Vec::new(),
             };
             let result = expand_request(&backend, hedge, timeout, request_for(user, images)).await;
-            let _ = tx.send(Done { seq, result, latency: t0.elapsed() });
+            let _ = tx.send(Done {
+                seq,
+                result,
+                latency: t0.elapsed(),
+            });
         });
         self.inflight = Some(Inflight { seq, key, handle });
     }
@@ -309,7 +371,11 @@ impl SegmentUpsampler {
         match &self.inflight {
             Some(f) if f.seq == d.seq => {
                 let f = self.inflight.take().expect("inflight");
-                self.planned.push_back(Slot { key: f.key, result: d.result, latency: d.latency });
+                self.planned.push_back(Slot {
+                    key: f.key,
+                    result: d.result,
+                    latency: d.latency,
+                });
                 self.pump();
                 true
             }
@@ -338,7 +404,9 @@ impl SegmentUpsampler {
             self.wanted.remove(0);
         }
         let dir = key.direction();
-        let prompt = self.up.fallback_prompt(dir.as_ref().map(|d| d.text.as_str()));
+        let prompt = self
+            .up
+            .fallback_prompt(dir.as_ref().map(|d| d.text.as_str()));
         Taken {
             prompt,
             segment: None,
@@ -371,12 +439,26 @@ impl SegmentUpsampler {
             Ok(out) => {
                 fastvideo_upsampler::record(Kind::Director, Ok(()), s.latency);
                 let seg = self.up.commit(dir.as_ref(), out);
-                Taken { prompt: seg.record.prompt.clone(), segment: Some(seg), error: None, latency: s.latency, planned }
+                Taken {
+                    prompt: seg.record.prompt.clone(),
+                    segment: Some(seg),
+                    error: None,
+                    latency: s.latency,
+                    planned,
+                }
             }
             Err(e) => {
                 fastvideo_upsampler::record(Kind::Director, Err(&e), s.latency);
-                let prompt = self.up.fallback_prompt(dir.as_ref().map(|d| d.text.as_str()));
-                Taken { prompt, segment: None, error: Some(e.to_string()), latency: s.latency, planned }
+                let prompt = self
+                    .up
+                    .fallback_prompt(dir.as_ref().map(|d| d.text.as_str()));
+                Taken {
+                    prompt,
+                    segment: None,
+                    error: Some(e.to_string()),
+                    latency: s.latency,
+                    planned,
+                }
             }
         };
         self.pump();
@@ -391,11 +473,20 @@ pub fn image_data_url(path: &Path, max_side: u32, max_bytes: usize) -> Option<St
     use base64::Engine as _;
     let bytes = std::fs::read(path).ok()?;
     let img = image::load_from_memory(&bytes).ok()?;
-    let img = if img.width().max(img.height()) > max_side { img.resize(max_side, max_side, image::imageops::FilterType::Triangle) } else { img };
+    let img = if img.width().max(img.height()) > max_side {
+        img.resize(max_side, max_side, image::imageops::FilterType::Triangle)
+    } else {
+        img
+    };
     let mut out = std::io::Cursor::new(Vec::new());
-    img.to_rgb8().write_to(&mut out, image::ImageFormat::Jpeg).ok()?;
+    img.to_rgb8()
+        .write_to(&mut out, image::ImageFormat::Jpeg)
+        .ok()?;
     let out = out.into_inner();
-    let url = format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(&out));
+    let url = format!(
+        "data:image/jpeg;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&out)
+    );
     (url.len() <= max_bytes).then_some(url)
 }
 
@@ -434,7 +525,10 @@ mod tests {
             self.seen.lock().unwrap().push(req.clone());
             tokio::time::sleep(self.delay).await;
             if self.fail {
-                return Err(UpsampleError::Status { status: 503, body: "down".into() });
+                return Err(UpsampleError::Status {
+                    status: 503,
+                    body: "down".into(),
+                });
             }
             Ok(serde_json::json!({
                 "beat_summary": format!("beat {n}"), "entity_ids": [], "new_entities": [],
@@ -444,33 +538,85 @@ mod tests {
         }
     }
 
-    fn setup(delay_ms: u64, fail: bool, deck: usize, images: Option<ImageLoader>) -> (SegmentUpsampler, mpsc::UnboundedReceiver<Done>, Arc<Llm>) {
-        let llm = Arc::new(Llm { n: AtomicUsize::new(0), delay: Duration::from_millis(delay_ms), fail, seen: Mutex::new(Vec::new()) });
-        let cfg = UpsamplerConfig { memory: 12, limit: PromptLimit::chars(1800), hedge: false, timeout: Duration::from_secs(5), ..UpsamplerConfig::default() };
-        let up = Upsampler::new(cfg, WorldBible { premise: "premise".into(), ..WorldBible::default() }, llm.clone());
+    fn setup(
+        delay_ms: u64,
+        fail: bool,
+        deck: usize,
+        images: Option<ImageLoader>,
+    ) -> (SegmentUpsampler, mpsc::UnboundedReceiver<Done>, Arc<Llm>) {
+        let llm = Arc::new(Llm {
+            n: AtomicUsize::new(0),
+            delay: Duration::from_millis(delay_ms),
+            fail,
+            seen: Mutex::new(Vec::new()),
+        });
+        let cfg = UpsamplerConfig {
+            memory: 12,
+            limit: PromptLimit::chars(1800),
+            hedge: false,
+            timeout: Duration::from_secs(5),
+            ..UpsamplerConfig::default()
+        };
+        let up = Upsampler::new(
+            cfg,
+            WorldBible {
+                premise: "premise".into(),
+                ..WorldBible::default()
+            },
+            llm.clone(),
+        );
         let (tx, rx) = mpsc::unbounded_channel();
         (SegmentUpsampler::new(up, tx, deck, images), rx, llm)
     }
 
     async fn settle(s: &mut SegmentUpsampler, rx: &mut mpsc::UnboundedReceiver<Done>) {
-        let d = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.unwrap().unwrap();
+        let d = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
         s.on_done(d);
     }
 
     fn plan(version: u64, d: Option<&str>) -> PlanView {
-        PlanView { version, direction: d.map(Into::into), first_image: None, end_image: None }
+        PlanView {
+            version,
+            direction: d.map(Into::into),
+            first_image: None,
+            end_image: None,
+        }
     }
 
     fn dir(v: u64, t: &str) -> Cue {
-        Cue { direction: Some((v, t.into())), ..Cue::default() }
+        Cue {
+            direction: Some((v, t.into())),
+            ..Cue::default()
+        }
     }
 
     #[test]
     fn cues_mark_a_direction_new_once() {
-        let plans = [plan(1, None), plan(2, Some("A storm.")), plan(2, Some("A storm.")), plan(3, Some("Calm.")), plan(3, Some("Calm."))];
+        let plans = [
+            plan(1, None),
+            plan(2, Some("A storm.")),
+            plan(2, Some("A storm.")),
+            plan(3, Some("Calm.")),
+            plan(3, Some("Calm.")),
+        ];
         let c = SegmentUpsampler::cues_from(None, &plans);
-        assert_eq!(c, vec![Cue::default(), dir(2, "A storm."), Cue::default(), dir(3, "Calm."), Cue::default()]);
-        assert_eq!(SegmentUpsampler::cues_from(Some(&(2, "A storm.".into())), &plans[1..2]), vec![Cue::default()]);
+        assert_eq!(
+            c,
+            vec![
+                Cue::default(),
+                dir(2, "A storm."),
+                Cue::default(),
+                dir(3, "Calm."),
+                Cue::default()
+            ]
+        );
+        assert_eq!(
+            SegmentUpsampler::cues_from(Some(&(2, "A storm.".into())), &plans[1..2]),
+            vec![Cue::default()]
+        );
     }
 
     /// The deck plans ahead one call at a time up to `deck`, each planned
@@ -484,14 +630,28 @@ mod tests {
         for _ in 0..3 {
             settle(&mut s, &mut rx).await;
         }
-        assert_eq!((s.planned(), s.started(), s.busy()), (3, 3, false), "stops at the deck size");
+        assert_eq!(
+            (s.planned(), s.started(), s.busy()),
+            (3, 3, false),
+            "stops at the deck size"
+        );
         {
             let seen = llm.seen.lock().unwrap();
-            assert!(seen[1].user.contains("[0] beat 0\n") && seen[2].user.contains("[1] beat 1\n"), "{}", seen[2].user);
+            assert!(
+                seen[1].user.contains("[0] beat 0\n") && seen[2].user.contains("[1] beat 1\n"),
+                "{}",
+                seen[2].user
+            );
         }
         assert_eq!(s.upsampler().ledger_len(), 0, "planned, not executed");
         let t = s.take(&Cue::default()).unwrap();
-        assert_eq!((t.prompt.as_str(), t.planned), ("action 0. Camera: c Lighting: l Sound: a No spoken words.", 2));
+        assert_eq!(
+            (t.prompt.as_str(), t.planned),
+            (
+                "action 0. Camera: c Lighting: l Sound: a No spoken words.",
+                2
+            )
+        );
         assert_eq!(s.upsampler().ledger_len(), 1);
         assert!(s.busy(), "the next position is planned at once");
     }
@@ -507,15 +667,38 @@ mod tests {
             settle(&mut s, &mut rx).await;
         }
         // Append: the direction comes after the three planned beats.
-        s.sync(vec![Cue::default(), Cue::default(), Cue::default(), dir(2, "Night.")]);
-        assert_eq!((s.planned(), s.discarded(), s.busy()), (3, 0, false), "full deck: the appended one waits");
+        s.sync(vec![
+            Cue::default(),
+            Cue::default(),
+            Cue::default(),
+            dir(2, "Night."),
+        ]);
+        assert_eq!(
+            (s.planned(), s.discarded(), s.busy()),
+            (3, 0, false),
+            "full deck: the appended one waits"
+        );
         let t = s.take(&Cue::default()).unwrap();
         assert_eq!(t.segment.unwrap().record.summary, "beat 0");
         // ...and is planned once there is room, after beats 1 and 2.
         assert!(s.busy());
         settle(&mut s, &mut rx).await;
-        assert!(llm.seen.lock().unwrap().last().unwrap().user.contains("[2] beat 2\n"));
-        assert!(llm.seen.lock().unwrap().last().unwrap().user.ends_with("NEW DIRECTION:\nNight."));
+        assert!(llm
+            .seen
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .user
+            .contains("[2] beat 2\n"));
+        assert!(llm
+            .seen
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .user
+            .ends_with("NEW DIRECTION:\nNight."));
         // Bust: a direction now; everything planned goes, nothing committed.
         s.sync(vec![dir(3, "Dawn."), Cue::default()]);
         assert_eq!((s.planned(), s.discarded()), (0, 3));
@@ -526,8 +709,15 @@ mod tests {
         assert_eq!(s.last_direction(), Some(&(3, "Dawn.".into())));
         // The new plan was written on the executed ledger only.
         let seen = llm.seen.lock().unwrap();
-        let dawn = seen.iter().find(|r| r.user.ends_with("NEW DIRECTION:\nDawn.")).unwrap();
-        assert!(dawn.user.contains("[0] beat 0\n") && !dawn.user.contains("beat 1"), "{}", dawn.user);
+        let dawn = seen
+            .iter()
+            .find(|r| r.user.ends_with("NEW DIRECTION:\nDawn."))
+            .unwrap();
+        assert!(
+            dawn.user.contains("[0] beat 0\n") && !dawn.user.contains("beat 1"),
+            "{}",
+            dawn.user
+        );
     }
 
     /// A chunk waiting for its segment: when that call answers, nothing
@@ -538,7 +728,11 @@ mod tests {
         s.sync(vec![Cue::default(); 3]);
         s.set_waiting(true);
         settle(&mut s, &mut rx).await;
-        assert_eq!((s.planned(), s.started(), s.busy()), (1, 1, false), "the waiting chunk's call only");
+        assert_eq!(
+            (s.planned(), s.started(), s.busy()),
+            (1, 1, false),
+            "the waiting chunk's call only"
+        );
         s.sync(vec![Cue::default(); 3]);
         assert!(!s.busy(), "a sync while waiting starts nothing further");
         s.take(&Cue::default()).unwrap();
@@ -570,11 +764,19 @@ mod tests {
         s.sync(vec![dir(2, "Rain."), Cue::default(), Cue::default()]);
         assert_eq!((s.discarded(), s.started()), (3, 4));
         settle(&mut s, &mut rx).await;
-        assert_eq!((s.planned(), s.busy(), s.started()), (1, false, 4), "nothing beyond the replanned segment");
+        assert_eq!(
+            (s.planned(), s.busy(), s.started()),
+            (1, false, 4),
+            "nothing beyond the replanned segment"
+        );
         s.take(&dir(2, "Rain.")).unwrap();
         settle(&mut s, &mut rx).await;
         settle(&mut s, &mut rx).await;
-        assert_eq!((s.planned(), s.started()), (2, 6), "executed: the deck refills");
+        assert_eq!(
+            (s.planned(), s.started()),
+            (2, 6),
+            "executed: the deck refills"
+        );
     }
 
     #[tokio::test]
@@ -600,7 +802,11 @@ mod tests {
         assert_eq!(t.prompt, "Night falls.");
         assert!(t.segment.is_none());
         assert_eq!(t.error.as_deref(), Some("upsampler LLM 503: down"));
-        assert_eq!(s.cues(&[plan(2, Some("Night falls."))]), vec![Cue::default()], "consumed");
+        assert_eq!(
+            s.cues(&[plan(2, Some("Night falls."))]),
+            vec![Cue::default()],
+            "consumed"
+        );
         assert_eq!(s.upsampler().ledger_len(), 0);
     }
 
@@ -608,20 +814,37 @@ mod tests {
     /// pins; the others carry no image (stable prompt-cache prefix).
     #[tokio::test]
     async fn images_only_with_the_segment_they_pin() {
-        let loader: ImageLoader = Arc::new(|p: &Path| Some(format!("data:image/jpeg;base64,{}", p.display())));
+        let loader: ImageLoader =
+            Arc::new(|p: &Path| Some(format!("data:image/jpeg;base64,{}", p.display())));
         let (mut s, mut rx, llm) = setup(0, false, 3, Some(loader));
-        let first = Cue { first_frame: Some("first.png".into()), ..Cue::default() };
-        let end = Cue { end_frame: Some("end.png".into()), ..Cue::default() };
+        let first = Cue {
+            first_frame: Some("first.png".into()),
+            ..Cue::default()
+        };
+        let end = Cue {
+            end_frame: Some("end.png".into()),
+            ..Cue::default()
+        };
         s.sync(vec![first, Cue::default(), end]);
         for _ in 0..3 {
             settle(&mut s, &mut rx).await;
         }
         let seen = llm.seen.lock().unwrap();
-        assert_eq!(seen[0].images, vec!["data:image/jpeg;base64,first.png".to_owned()]);
-        assert!(seen[0].user.contains("FIRST FRAME: this segment starts from a given image (attached)"));
+        assert_eq!(
+            seen[0].images,
+            vec!["data:image/jpeg;base64,first.png".to_owned()]
+        );
+        assert!(seen[0]
+            .user
+            .contains("FIRST FRAME: this segment starts from a given image (attached)"));
         assert!(seen[1].images.is_empty() && !seen[1].user.contains("FRAME:"));
-        assert_eq!(seen[2].images, vec!["data:image/jpeg;base64,end.png".to_owned()]);
-        assert!(seen[2].user.contains("FINAL FRAME: this segment must end exactly on a given image (attached)"));
+        assert_eq!(
+            seen[2].images,
+            vec!["data:image/jpeg;base64,end.png".to_owned()]
+        );
+        assert!(seen[2]
+            .user
+            .contains("FINAL FRAME: this segment must end exactly on a given image (attached)"));
     }
 
     #[test]
@@ -629,13 +852,23 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("fv-ups-img-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("big.png");
-        image::RgbImage::from_pixel(3000, 1500, image::Rgb([200, 10, 10])).save(&p).unwrap();
+        image::RgbImage::from_pixel(3000, 1500, image::Rgb([200, 10, 10]))
+            .save(&p)
+            .unwrap();
         let url = image_data_url(&p, 1024, 4 << 20).unwrap();
         let b64 = url.strip_prefix("data:image/jpeg;base64,").unwrap();
         use base64::Engine as _;
-        let img = image::load_from_memory(&base64::engine::general_purpose::STANDARD.decode(b64).unwrap()).unwrap();
+        let img = image::load_from_memory(
+            &base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!((img.width(), img.height()), (1024, 512));
-        assert!(image_data_url(&p, 1024, 100).is_none(), "over the cap: refused");
+        assert!(
+            image_data_url(&p, 1024, 100).is_none(),
+            "over the cap: refused"
+        );
         assert!(image_data_url(&dir.join("missing.png"), 1024, 4 << 20).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }

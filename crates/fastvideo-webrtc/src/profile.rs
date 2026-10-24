@@ -84,9 +84,13 @@ pub struct EncodeProfile {
 
 impl EncodeProfile {
     /// Cloudflare WHIP: `42e01f` offered, native resolution.
-    pub const CLOUDFLARE: EncodeProfile = EncodeProfile { h264_level: H264Level::L3_1 };
+    pub const CLOUDFLARE: EncodeProfile = EncodeProfile {
+        h264_level: H264Level::L3_1,
+    };
     /// MediaMTX WHIP and peer WebRTC: `42e028` offered, native resolution.
-    pub const NATIVE: EncodeProfile = EncodeProfile { h264_level: H264Level::L4_0 };
+    pub const NATIVE: EncodeProfile = EncodeProfile {
+        h264_level: H264Level::L4_0,
+    };
 
     /// The encode size for a `width`x`height` source: native, rounded down
     /// to even dimensions (4:2:0).
@@ -103,7 +107,13 @@ mod tests {
     fn cloudflare_offers_3_1_and_keeps_native_resolution() {
         let p = EncodeProfile::CLOUDFLARE;
         assert_eq!(p.h264_level.constrained_baseline_plid(), 0x42e01f);
-        for (w, h) in [(1344, 768), (1920, 1080), (768, 1344), (832, 480), (1280, 704)] {
+        for (w, h) in [
+            (1344, 768),
+            (1920, 1080),
+            (768, 1344),
+            (832, 480),
+            (1280, 704),
+        ] {
             assert_eq!(p.output_size(w, h), (w, h));
         }
         // The offered level does not bound the stream: native H3 needs 3.2.

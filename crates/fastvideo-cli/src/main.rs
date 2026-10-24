@@ -43,6 +43,8 @@ struct Cli {
     command: Commands,
 }
 
+// clap subcommand: one value per process, so the variant sizes do not matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Commands {
     /// List registered Hugging Face ids (Wan, LTX, H3, image, audio families).
@@ -203,8 +205,6 @@ struct GenerateToml {
     prompt: Option<String>,
     negative: Option<String>,
     save_mp4: Option<bool>,
-    flow_shift: Option<f32>,
-    fps: Option<u32>,
     dtype: Option<String>,
     device: Option<String>,
     refine_steps: Option<u32>,

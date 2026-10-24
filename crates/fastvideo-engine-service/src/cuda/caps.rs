@@ -476,7 +476,11 @@ impl CudaModel {
             }
             CudaRecipe::Wan(_) | CudaRecipe::SfWan(_) => (false, false),
         };
-        crate::device::Requirements { fp8, nvfp4, min_total_bytes: self.dit_bytes() }
+        crate::device::Requirements {
+            fp8,
+            nvfp4,
+            min_total_bytes: self.dit_bytes(),
+        }
     }
 
     /// On-disk bytes of the DiT, the dominant resident weights: the
@@ -486,12 +490,16 @@ impl CudaModel {
     /// side for the co-residency check.
     pub fn dit_bytes(&self) -> Option<u64> {
         let dir = match &self.recipe {
-            CudaRecipe::Ltx2(r) if r.dit.is_file() => return r.dit.metadata().ok().map(|m| m.len()),
+            CudaRecipe::Ltx2(r) if r.dit.is_file() => {
+                return r.dit.metadata().ok().map(|m| m.len())
+            }
             CudaRecipe::Ltx2(r) if r.a2v == LtxA2v::Guided => r.dit.clone(),
             CudaRecipe::Ltx2(r) => r.dit.join("transformer"),
-            CudaRecipe::H3(r) if r.ref2va => {
-                r.ref_weights.as_deref().unwrap_or(&r.weights).join("transformer_ref")
-            }
+            CudaRecipe::H3(r) if r.ref2va => r
+                .ref_weights
+                .as_deref()
+                .unwrap_or(&r.weights)
+                .join("transformer_ref"),
             _ => self.weights().join("transformer"),
         };
         let total: u64 = std::fs::read_dir(&dir)
@@ -718,7 +726,10 @@ pub const LTX_DRAFT_PROFILE: &str = "ltx2/ltx25_distill_sol_nvfp4";
 
 fn h3_caps(id: &str, r: &H3Recipe) -> ModelCaps {
     let mut c = ModelCaps::h3(id, r.ref2va);
-    if is_trim_recipe(&r.recipe) || r.vdn_weights.is_some() || h3cfg::is_nvfp4_release_recipe(&r.recipe) {
+    if is_trim_recipe(&r.recipe)
+        || r.vdn_weights.is_some()
+        || h3cfg::is_nvfp4_release_recipe(&r.recipe)
+    {
         // FastH3 Trim: distilled and released for text-to-video+audio only.
         // VDN-H3: the checkpoint serves T2VA / I2VA / L2VA / FL2VA; the
         // keyframe rows run through H3's FL2VA path (global rows of the
@@ -873,7 +884,8 @@ pub const VDN_H3_8STEP_STAGE: &str = "stage-dmd-step-250";
 
 /// The FastH3 Trim contract names (`H3InferenceContract::named`), NVFP4 included.
 pub fn is_trim_recipe(recipe: &str) -> bool {
-    matches!(recipe, "trim-8step" | "fasth3-trim-8step" | "fasth3-trim") || h3cfg::is_trim_nvfp4_recipe(recipe)
+    matches!(recipe, "trim-8step" | "fasth3-trim-8step" | "fasth3-trim")
+        || h3cfg::is_trim_nvfp4_recipe(recipe)
 }
 
 /// LTX caps from the model config (audio from the vocoder).
@@ -903,12 +915,25 @@ fn ltx2_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
         // kept tokens pinned (`ltx2::v2v`, docs/oracle.md "LTX-2.5 retake and
         // extend"); the guided companion (`ltx2_a2v_guided_caps`) does not.
         tasks: match (r.version, r.a2v) {
-            (LtxVersion::V25, LtxA2v::Off) => {
-                [Task::T2V, Task::I2V, Task::Keyframes, Task::Retake, Task::Extend].into_iter().collect()
-            }
-            (LtxVersion::V25, _) => {
-                [Task::T2V, Task::I2V, Task::Keyframes, Task::A2V, Task::Retake, Task::Extend].into_iter().collect()
-            }
+            (LtxVersion::V25, LtxA2v::Off) => [
+                Task::T2V,
+                Task::I2V,
+                Task::Keyframes,
+                Task::Retake,
+                Task::Extend,
+            ]
+            .into_iter()
+            .collect(),
+            (LtxVersion::V25, _) => [
+                Task::T2V,
+                Task::I2V,
+                Task::Keyframes,
+                Task::A2V,
+                Task::Retake,
+                Task::Extend,
+            ]
+            .into_iter()
+            .collect(),
             (LtxVersion::V23, _) => [Task::T2V].into_iter().collect(),
         },
         audio: Some(AudioCaps {
@@ -965,7 +990,13 @@ pub const LTX_REF_FRAMES_MAX: u32 = 241;
 
 /// LTX-2.5 reference-to-video (the IC-LoRA companion of `ltx-pro`).
 fn ltx2_ref_caps(id: &str, r: &Ltx2Recipe, fps: u32) -> ModelCaps {
-    let base = ltx2_caps(id, &Ltx2Recipe { ic_lora: None, ..r.clone() });
+    let base = ltx2_caps(
+        id,
+        &Ltx2Recipe {
+            ic_lora: None,
+            ..r.clone()
+        },
+    );
     let grid = FrameGrid::new(8, 1, 9, LTX_REF_FRAMES_MAX, 121);
     ModelCaps {
         tasks: [Task::Ref2V].into_iter().collect(),
@@ -995,7 +1026,13 @@ fn ltx2_ref_caps(id: &str, r: &Ltx2Recipe, fps: u32) -> ModelCaps {
 /// audio-to-video only, the video CFG scale a per-request knob
 /// (`guidance_scale`; the reference default 3 when unset).
 fn ltx2_a2v_guided_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
-    let base = ltx2_caps(id, &Ltx2Recipe { a2v: LtxA2v::Distilled, ..r.clone() });
+    let base = ltx2_caps(
+        id,
+        &Ltx2Recipe {
+            a2v: LtxA2v::Distilled,
+            ..r.clone()
+        },
+    );
     ModelCaps {
         tasks: [Task::A2V].into_iter().collect(),
         knobs: KnobCaps {
@@ -1043,7 +1080,9 @@ fn wan_caps(id: &str, r: &WanRecipe) -> ModelCaps {
         // container rates are accepted; the model's own rate is the default.
         // Any integer rate 4..=60 (fal's `frames_per_second`), the model's first.
         fps: FpsCaps {
-            allowed: std::iter::once(fps).chain((WAN_FPS_MIN..=WAN_FPS_MAX).filter(|&f| f != fps)).collect(),
+            allowed: std::iter::once(fps)
+                .chain((WAN_FPS_MIN..=WAN_FPS_MAX).filter(|&f| f != fps))
+                .collect(),
             default: fps,
             container_only: true,
         },
@@ -1074,10 +1113,18 @@ fn sfwan_caps(id: &str, r: &SfWanRecipe) -> ModelCaps {
     c.fps = FpsCaps::fixed(fps);
     // A bounded clip is whole causal blocks of latent frames: 4 (L - 1) + 1
     // pixel frames for L a multiple of the block (3: 9, 21, ..., 81).
-    let fpb = fastvideo_models::wan::config::WanVideoArchConfig::from_preset(&r.wan.preset).num_frames_per_block.max(1) as u32;
+    let fpb = fastvideo_models::wan::config::WanVideoArchConfig::from_preset(&r.wan.preset)
+        .num_frames_per_block
+        .max(1) as u32;
     let first = 4 * (fpb - 1) + 1;
     let max = first + (r.wan.frames_max.saturating_sub(first) / (4 * fpb)) * 4 * fpb;
-    c.frames = FrameGrid::new(4 * fpb, first, first, max, r.wan.default.2.clamp(first, max));
+    c.frames = FrameGrid::new(
+        4 * fpb,
+        first,
+        first,
+        max,
+        r.wan.default.2.clamp(first, max),
+    );
     c.stream = Some(StreamCaps::Causal {
         block_frames: r.block_frames,
         target_fps: fps,
@@ -1161,7 +1208,11 @@ impl WarmupMode {
         if !r.warmup {
             return Self::Off;
         }
-        let configured = if r.warmup_blocking { Self::Blocking } else { Self::Background };
+        let configured = if r.warmup_blocking {
+            Self::Blocking
+        } else {
+            Self::Background
+        };
         match env.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
             None | Some("") => configured,
             Some("blocking" | "block" | "sync") => Self::Blocking,
@@ -1233,14 +1284,32 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
     // sm_120 only): the pipeline reads `fasth3-trim-8step-nvfp4` beside the tree.
     let h3_trim_nvfp4 = h3(layout, FASTH3_TRIM_TREE, FASTH3_TRIM_NVFP4_RECIPE, None, 8);
     // The opt-in "fastest" tier: the same trees, sparse FP4 VSA by the recipe.
-    let h3_trim_nvfp4_fast = h3(layout, FASTH3_TRIM_TREE, FASTH3_TRIM_NVFP4_FAST_RECIPE, None, 8);
+    let h3_trim_nvfp4_fast = h3(
+        layout,
+        FASTH3_TRIM_TREE,
+        FASTH3_TRIM_NVFP4_FAST_RECIPE,
+        None,
+        8,
+    );
     // The NVFP4 tier: each release's tree holds its ModelOpt DiT and its
     // published NVFP4 `vae/` (shards 1-2, the default decoder; the third
     // shard is read from h3-base's `vae/`, `text_weights`). No technique
     // profile: the NVFP4 path sets its own linears (NVFP4 FFN, attention as
     // FASTVIDEO_H3_QUANT) and sparse FP4 VSA where the kernel exists.
-    let h3_v2_nvfp4 = h3(layout, FASTH3_V2_NVFP4_TREE, FASTH3_V2_NVFP4_RECIPE, None, 8);
-    let h3_4step_nvfp4 = h3(layout, FASTH3_4STEP_NVFP4_TREE, FASTH3_4STEP_NVFP4_RECIPE, None, 4);
+    let h3_v2_nvfp4 = h3(
+        layout,
+        FASTH3_V2_NVFP4_TREE,
+        FASTH3_V2_NVFP4_RECIPE,
+        None,
+        8,
+    );
+    let h3_4step_nvfp4 = h3(
+        layout,
+        FASTH3_4STEP_NVFP4_TREE,
+        FASTH3_4STEP_NVFP4_RECIPE,
+        None,
+        4,
+    );
     // VDN-H3 (docs/ports/vdn-h3.md): h3-base's DiT, VAEs and text encoder with
     // the stage-B hybrid attention (linear branch + LoRA) of
     // `vdn-h3-stage-b-2000`: the 50-step model on its own schedule (no CFG,
@@ -1267,7 +1336,13 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
     // at 1920x1088 and 1088x1920, docs/serve/h3-1080p-and-upscaler.md).
     let h3_turbo = H3Recipe {
         hd_1080p: true,
-        ..h3(layout, "h3-base", "4step-vsa", Some("h3/fasth3_4step_vsa"), 4)
+        ..h3(
+            layout,
+            "h3-base",
+            "4step-vsa",
+            Some("h3/fasth3_4step_vsa"),
+            4,
+        )
     };
     let h3_draft = H3Recipe {
         taeh3: Some(tae("taeh3.safetensors")),
@@ -1282,7 +1357,11 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         hd_1080p: false,
         ..r.clone()
     };
-    let previews = [preview(&h3_v2_nvfp4), preview(&h3_4step_nvfp4), preview(&h3_turbo)];
+    let previews = [
+        preview(&h3_v2_nvfp4),
+        preview(&h3_4step_nvfp4),
+        preview(&h3_turbo),
+    ];
     let sol_h3 = H3Recipe {
         hd_1080p: true,
         ..h3(layout, "h3-base", "sol-h3", Some(SOL_H3_4STEP_PROFILE), 4)
@@ -1301,7 +1380,13 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
     // attention; T2V and FL2VA (first and/or last frame).
     let h3_turbo_lora = |t: TurboLora, profile: &str| H3Recipe {
         dense: true,
-        ..h3(layout, "h3-base", t.stem(), Some(profile), t.default_forwards() as u32)
+        ..h3(
+            layout,
+            "h3-base",
+            t.stem(),
+            Some(profile),
+            t.default_forwards() as u32,
+        )
     };
     let h3_larry = h3_turbo_lora(TurboLora::Larry, LARRY_TURBO_PROFILE);
     let h3_lightx = h3_turbo_lora(TurboLora::Lightx2v, LIGHTX2V_TURBO_PROFILE);
@@ -1483,7 +1568,12 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             CudaRecipe::H3(h3_lightx),
         ),
         CudaModel::new(VDN_H3_ID, None, VDN_H3_RECIPE, CudaRecipe::H3(vdn_h3)),
-        CudaModel::new(VDN_H3_8STEP_ID, None, VDN_H3_8STEP_RECIPE, CudaRecipe::H3(vdn_h3_8step)),
+        CudaModel::new(
+            VDN_H3_8STEP_ID,
+            None,
+            VDN_H3_8STEP_RECIPE,
+            CudaRecipe::H3(vdn_h3_8step),
+        ),
         // Reference-to-video companions of the H3 max / turbo tiers: the
         // routing sends Ref2V requests for `h3-max` / `h3-turbo` here.
         CudaModel::new(
@@ -1628,14 +1718,23 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
         "h3" => Family::H3,
         "ltx" | "ltx2" => Family::Ltx2,
         "wan" => Family::Wan,
-        other => return Err(format!("model `{}`: unknown family `{other}` (h3, ltx2, wan)", e.id)),
+        other => {
+            return Err(format!(
+                "model `{}`: unknown family `{other}` (h3, ltx2, wan)",
+                e.id
+            ))
+        }
     };
     let name = match (family, e.recipe.as_str()) {
-        (_, "") => crate::caps::tier_alias(family, Tier::Turbo).unwrap_or_default().to_owned(),
+        (_, "") => crate::caps::tier_alias(family, Tier::Turbo)
+            .unwrap_or_default()
+            .to_owned(),
         (Family::H3, "4step-vsa" | "preview-vsa" | "fasth3-4step-vsa") => "h3-turbo".to_owned(),
         (Family::H3, "8step" | "v2" | "fasth3-8step") => "fasth3-8step-dense".to_owned(),
         (Family::H3, "trim-8step" | "fasth3-trim" | H3_TRIM) => FASTH3_TRIM_ID.to_owned(),
-        (Family::H3, r) if h3cfg::is_trim_nvfp4_fp4attn_recipe(r) => FASTH3_TRIM_NVFP4_FAST_ID.to_owned(),
+        (Family::H3, r) if h3cfg::is_trim_nvfp4_fp4attn_recipe(r) => {
+            FASTH3_TRIM_NVFP4_FAST_ID.to_owned()
+        }
         (Family::H3, r) if h3cfg::is_trim_nvfp4_recipe(r) => FASTH3_TRIM_NVFP4_ID.to_owned(),
         (Family::H3, FASTH3_V2_NVFP4_RECIPE) => FASTH3_V2_NVFP4_ID.to_owned(),
         (Family::H3, FASTH3_4STEP_NVFP4_RECIPE) => FASTH3_4STEP_NVFP4_ID.to_owned(),
@@ -1653,11 +1752,17 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
             "model `{}`: recipe `{}` is not in the CUDA catalog ({})",
             e.id,
             e.recipe,
-            cat.iter().map(|m| m.id.as_str()).collect::<Vec<_>>().join(", ")
+            cat.iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         )
     })?;
     if m.family() != family {
-        return Err(format!("model `{}`: recipe `{}` is not a {} recipe", e.id, e.recipe, e.family));
+        return Err(format!(
+            "model `{}`: recipe `{}` is not a {} recipe",
+            e.id, e.recipe, e.family
+        ));
     }
     if !e.id.is_empty() {
         m.id = ModelId::new(&e.id);
@@ -1726,7 +1831,10 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
                     }
                     "false" => false,
                     other => {
-                        return Err(format!("model `{}`: h3_1080p = {other:?} (true | false)", e.id))
+                        return Err(format!(
+                            "model `{}`: h3_1080p = {other:?} (true | false)",
+                            e.id
+                        ))
                     }
                 };
             }
@@ -1815,7 +1923,9 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
                     match x(k).as_deref() {
                         None | Some("true") => Ok(true),
                         Some("false") => Ok(false),
-                        Some(other) => Err(format!("model `{}`: {k} = {other:?} (true | false)", e.id)),
+                        Some(other) => {
+                            Err(format!("model `{}`: {k} = {other:?} (true | false)", e.id))
+                        }
                     }
                 };
                 r.longlive = Some(LongLiveRecipe {
@@ -1895,7 +2005,8 @@ fn process_key(m: &CudaModel, settings: &BTreeMap<String, String>) -> BTreeMap<S
         for s in H3_PER_MODEL_SETTINGS {
             k.remove(*s);
         }
-        k.entry("FASTVIDEO_BF16_ACT".to_owned()).or_insert_with(|| "1".to_owned());
+        k.entry("FASTVIDEO_BF16_ACT".to_owned())
+            .or_insert_with(|| "1".to_owned());
     }
     k
 }
@@ -1922,10 +2033,11 @@ impl ProcessPlan {
                         // A Turbo LoRA profile serves every step count and
                         // adapter file of its family (`steps`, the v0.1 recipe):
                         // its techniques do not depend on the ladder.
-                        let turbo = turbo_lora_of(want).is_some() && turbo_lora_of(&r.recipe).is_some();
+                        let turbo =
+                            turbo_lora_of(want).is_some() && turbo_lora_of(&r.recipe).is_some();
                         if !turbo
                             && h3cfg::H3InferenceContract::named(want).ok()
-                            != h3cfg::H3InferenceContract::named(&r.recipe).ok()
+                                != h3cfg::H3InferenceContract::named(&r.recipe).ok()
                         {
                             return Err(format!(
                                 "model `{}`: profile {name} runs recipe {want}, the model runs {}",
@@ -2012,7 +2124,11 @@ mod tests {
             assert!(c.resident);
         }
         assert_eq!(t.resolve("fasth3").unwrap().id.as_str(), "fasth3-4step-vsa");
-        assert!(t.get(&ModelId::new("fasth3-8step-dense")).unwrap().tier.is_none());
+        assert!(t
+            .get(&ModelId::new("fasth3-8step-dense"))
+            .unwrap()
+            .tier
+            .is_none());
         assert_eq!(t.len(), cat.len());
     }
 
@@ -2108,8 +2224,14 @@ mod tests {
         // The 1080 tier does not move the budgets of the others.
         assert_eq!(h3.canvas.area_at(768), 768 * 1344);
         assert_eq!(h3.canvas.area_at(1080), 1088 * 1920);
-        assert_eq!(fastvideo_protocol::canvas_for_aspect(&h3.canvas, 16.0 / 9.0, 480), (832, 480));
-        assert_eq!(fastvideo_protocol::canvas_for_aspect(&h3.canvas, 16.0 / 9.0, 768), (1344, 768));
+        assert_eq!(
+            fastvideo_protocol::canvas_for_aspect(&h3.canvas, 16.0 / 9.0, 480),
+            (832, 480)
+        );
+        assert_eq!(
+            fastvideo_protocol::canvas_for_aspect(&h3.canvas, 16.0 / 9.0, 768),
+            (1344, 768)
+        );
         assert_eq!(get("sol-h3").canvas.short_edges, vec![768, 480, 1080]);
         assert_eq!(get("fasth3-8step-dense").canvas.short_edges, vec![768, 480]);
         assert_eq!(h3.frames.default, 124);
@@ -2163,21 +2285,46 @@ mod tests {
         assert!(ti2v.knobs.guidance && ti2v.knobs.negative && !ti2v.knobs.guidance_2);
         assert_eq!(ti2v.fps.default, 24);
         // fal's Wan 5B: 720p/580p/480p, 17..=161 frames, 4..=60 fps (container).
-        for id in ["wan22-ti2v-5b", "fastwan22-ti2v-5b", "fastwan22-ti2v-5b-taehv"] {
+        for id in [
+            "wan22-ti2v-5b",
+            "fastwan22-ti2v-5b",
+            "fastwan22-ti2v-5b-taehv",
+        ] {
             let c = get(id);
             assert_eq!(c.canvas.short_edges, vec![704, 576, 480], "{id}");
-            assert_eq!((c.frames.min, c.frames.max, c.frames.default), (9, 161, 121), "{id}");
+            assert_eq!(
+                (c.frames.min, c.frames.max, c.frames.default),
+                (9, 161, 121),
+                "{id}"
+            );
             assert!(c.frames.contains(17) && c.frames.contains(161));
-            assert!((4..=60).all(|f| c.fps.allows(f)) && !c.fps.allows(3) && !c.fps.allows(61), "{id}");
+            assert!(
+                (4..=60).all(|f| c.fps.allows(f)) && !c.fps.allows(3) && !c.fps.allows(61),
+                "{id}"
+            );
             assert!(c.supports(Task::I2V), "{id}");
-            let mut req = fastvideo_protocol::GenerationRequest::text(fastvideo_protocol::ProtocolId::Fal, id, "a cat");
-            req.canvas = fastvideo_protocol::CanvasSpec::Aspect { ratio: fastvideo_protocol::Ratio::R16_9, short_edge: 576 };
+            let mut req = fastvideo_protocol::GenerationRequest::text(
+                fastvideo_protocol::ProtocolId::Fal,
+                id,
+                "a cat",
+            );
+            req.canvas = fastvideo_protocol::CanvasSpec::Aspect {
+                ratio: fastvideo_protocol::Ratio::R16_9,
+                short_edge: 576,
+            };
             req.timing = fastvideo_protocol::TimingSpec {
-                length: fastvideo_protocol::Length::Frames { value: 161, snap: fastvideo_protocol::Snap::AlignUp },
+                length: fastvideo_protocol::Length::Frames {
+                    value: 161,
+                    snap: fastvideo_protocol::Snap::AlignUp,
+                },
                 fps: Some(60),
             };
             let r = fastvideo_protocol::negotiate(&req, &c, &Default::default()).unwrap();
-            assert_eq!((r.width, r.height, r.num_frames, r.fps), (1024, 576, 161, 60), "{id}");
+            assert_eq!(
+                (r.width, r.height, r.num_frames, r.fps),
+                (1024, 576, 161, 60),
+                "{id}"
+            );
         }
         let fw = get("fastwan22-ti2v-5b");
         assert!(!fw.knobs.negative && !fw.knobs.guidance && fw.knobs.steps && fw.knobs.flow_shift);
@@ -2188,7 +2335,10 @@ mod tests {
             Some(StreamCaps::Causal {
                 block_frames: 12,
                 target_fps: 16,
-                context: Some(fastvideo_protocol::CausalContext { prompt_recache: false, .. })
+                context: Some(fastvideo_protocol::CausalContext {
+                    prompt_recache: false,
+                    ..
+                })
             })
         ));
     }
@@ -2203,38 +2353,75 @@ mod tests {
         assert_eq!(find(&cat, "wan14b-plug-4step").unwrap().id, m.id);
         // Untiered: the Wan turbo slot stays the 5B (fal's fast-wan app).
         assert_eq!(m.tier, None);
-        assert_eq!(find(&cat, "wan-turbo").unwrap().id.as_str(), "fastwan22-ti2v-5b");
-        let CudaRecipe::Wan(r) = &m.recipe else { panic!("{:?}", m.recipe) };
+        assert_eq!(
+            find(&cat, "wan-turbo").unwrap().id.as_str(),
+            "fastwan22-ti2v-5b"
+        );
+        let CudaRecipe::Wan(r) = &m.recipe else {
+            panic!("{:?}", m.recipe)
+        };
         assert_eq!(r.preset, "wan_t2v_14b");
         assert_eq!(r.weights, layout.root.join("wan21-t2v-14b"));
         assert_eq!(r.plug.as_deref(), Some("wan14b-plug-4step"));
         let plug = fastvideo_models::plug::PlugRecipe::named(r.plug.as_deref().unwrap()).unwrap();
-        assert_eq!((plug.preset, plug.base), (r.preset.as_str(), "wan21-t2v-14b"));
+        assert_eq!(
+            (plug.preset, plug.base),
+            (r.preset.as_str(), "wan21-t2v-14b")
+        );
         assert_eq!(plug.licence, "Apache-2.0");
         match (&r.sampler, &plug.sampler) {
             (
                 WanSampler::StepDistill { timesteps, shift },
-                fastvideo_models::plug::PlugSampler::WanEuler { timesteps: want, shift: s },
+                fastvideo_models::plug::PlugSampler::WanEuler {
+                    timesteps: want,
+                    shift: s,
+                },
             ) => assert_eq!((timesteps.as_slice(), *shift), (*want, *s)),
             other => panic!("{other:?}"),
         }
         let t = table(&cat);
-        assert_eq!(t.resolve(WAN14B_TURBO).unwrap().id.as_str(), WAN14B_PLUG_RECIPE);
+        assert_eq!(
+            t.resolve(WAN14B_TURBO).unwrap().id.as_str(),
+            WAN14B_PLUG_RECIPE
+        );
         let d = m.describe();
-        assert_eq!((d.steps, d.attention.as_str(), d.vae.as_str(), d.profile), (Some(4), "dense", "full", None));
-        assert!(d.summary.contains("wan14b-plug-4step") && d.summary.contains("1000/750/500/250"), "{}", d.summary);
+        assert_eq!(
+            (d.steps, d.attention.as_str(), d.vae.as_str(), d.profile),
+            (Some(4), "dense", "full", None)
+        );
+        assert!(
+            d.summary.contains("wan14b-plug-4step") && d.summary.contains("1000/750/500/250"),
+            "{}",
+            d.summary
+        );
         let c = m.caps();
         assert!(c.served_names.iter().any(|n| n == WAN14B_TURBO));
         assert_eq!(c.tasks, [Task::T2V].into_iter().collect());
         assert_eq!(c.canvas.short_edges, vec![480]);
-        assert_eq!((c.frames.min, c.frames.max, c.frames.default, c.fps.default), (9, 81, 81, 16));
-        assert_eq!(c.knobs, KnobCaps { seed: true, ..KnobCaps::default() });
+        assert_eq!(
+            (c.frames.min, c.frames.max, c.frames.default, c.fps.default),
+            (9, 81, 81, 16)
+        );
+        assert_eq!(
+            c.knobs,
+            KnobCaps {
+                seed: true,
+                ..KnobCaps::default()
+            }
+        );
         assert!(!m.requirements().fp8 && !m.requirements().nvfp4);
         for (ratio, want) in [(Ratio::R16_9, (832, 480)), (Ratio::R9_16, (480, 832))] {
             let mut req = GenerationRequest::text(ProtocolId::Native, WAN14B_TURBO, "a cat");
-            req.canvas = CanvasSpec::Aspect { ratio, short_edge: 480 };
+            req.canvas = CanvasSpec::Aspect {
+                ratio,
+                short_edge: 480,
+            };
             let j = negotiate(&req, &c, &Default::default()).unwrap();
-            assert_eq!((j.width, j.height, j.num_frames, j.fps), (want.0, want.1, 81, 16), "{ratio:?}");
+            assert_eq!(
+                (j.width, j.height, j.num_frames, j.fps),
+                (want.0, want.1, 81, 16),
+                "{ratio:?}"
+            );
         }
         // 14B and the 5B tiers share the process settings (no VSA).
         assert!(ProcessPlan::for_models(&[m.clone(), find(&cat, "wan-turbo").unwrap()]).is_ok());
@@ -2272,16 +2459,29 @@ mod tests {
                     path: "/stage/a.wav".into(),
                     mime: "audio/wav".into(),
                     bytes: 1,
-                    probe: MediaProbe { duration_s: Some(7.0), audio_rate: Some(44_100), ..Default::default() },
+                    probe: MediaProbe {
+                        duration_s: Some(7.0),
+                        audio_rate: Some(44_100),
+                        ..Default::default()
+                    },
                 });
-                let r = negotiate(&req, &caps, &staged).unwrap_or_else(|e| panic!("{}: {e:?}", m.id));
-                assert_eq!((r.num_frames, r.fps, r.sampling.guidance), (161, 24, Some(5.0)), "{}", m.id);
+                let r =
+                    negotiate(&req, &caps, &staged).unwrap_or_else(|e| panic!("{}: {e:?}", m.id));
+                assert_eq!(
+                    (r.num_frames, r.fps, r.sampling.guidance),
+                    (161, 24, Some(5.0)),
+                    "{}",
+                    m.id
+                );
                 assert_eq!(r.recipe.as_deref(), Some(m.recipe_name.as_str()));
                 continue;
             }
             if !caps.supports(Task::T2V) {
                 // Ref2VA models serve reference-to-video only.
-                assert_eq!(caps.tasks.iter().copied().collect::<Vec<_>>(), vec![Task::Ref2V]);
+                assert_eq!(
+                    caps.tasks.iter().copied().collect::<Vec<_>>(),
+                    vec![Task::Ref2V]
+                );
                 req.task = Task::Ref2V;
                 req.references = vec![Reference {
                     kind: MediaKind::Image,
@@ -2293,7 +2493,11 @@ mod tests {
                         path: "/stage/r.png".into(),
                         mime: "image/png".into(),
                         bytes: 1,
-                        probe: MediaProbe { width: Some(1024), height: Some(1024), ..Default::default() },
+                        probe: MediaProbe {
+                            width: Some(1024),
+                            height: Some(1024),
+                            ..Default::default()
+                        },
                     },
                 )];
             }
@@ -2312,31 +2516,57 @@ mod tests {
             ("h3-ref2v-turbo", Tier::Turbo, "sol-h3-ref2va", 4),
         ] {
             let m = get(id);
-            let CudaRecipe::H3(r) = &m.recipe else { panic!("{id}") };
+            let CudaRecipe::H3(r) = &m.recipe else {
+                panic!("{id}")
+            };
             assert!(r.ref2va && r.dense, "{id}");
             assert_eq!((r.recipe.as_str(), r.steps), (recipe, steps), "{id}");
-            assert!(r.ref_weights.as_ref().unwrap().ends_with("h3-ref2va"), "{id}");
+            assert!(
+                r.ref_weights.as_ref().unwrap().ends_with("h3-ref2va"),
+                "{id}"
+            );
             assert!(r.weights.ends_with("h3-base"), "{id}");
             let c = m.caps();
             assert!(c.supports(Task::Ref2V) && !c.supports(Task::T2V) && !c.supports(Task::I2V));
             assert_eq!(c.refs, fastvideo_protocol::RefLimits::h3());
             assert_eq!(c.tier, Some(tier));
             let d = m.describe();
-            assert_eq!((d.attention.as_str(), d.steps), ("dense", Some(steps)), "{id}");
+            assert_eq!(
+                (d.attention.as_str(), d.steps),
+                ("dense", Some(steps)),
+                "{id}"
+            );
         }
         // The tier aliases still name the base models; Ref2V requests on them
         // route to the companion, other tasks stay.
         let t = table(&cat);
         assert_eq!(t.tier(Family::H3, Tier::Max).unwrap().as_str(), "sol-h3");
-        assert_eq!(t.tier(Family::H3, Tier::Turbo).unwrap().as_str(), "fasth3-4step-vsa");
+        assert_eq!(
+            t.tier(Family::H3, Tier::Turbo).unwrap().as_str(),
+            "fasth3-4step-vsa"
+        );
         let models: Vec<&ModelCaps> = t.models().collect();
         for (alias, want) in [("h3-max", "h3-ref2v-max"), ("h3-turbo", "h3-ref2v-turbo")] {
             let base = t.resolve(alias).unwrap();
-            assert_eq!(fastvideo_protocol::route_task(base, Task::Ref2V, models.iter().copied()).id.as_str(), want);
-            assert_eq!(fastvideo_protocol::route_task(base, Task::I2V, models.iter().copied()).id, base.id);
-            assert_eq!(t.get(&ModelId::new(want)).unwrap().tier, base.tier, "{want} keeps its tier tag");
+            assert_eq!(
+                fastvideo_protocol::route_task(base, Task::Ref2V, models.iter().copied())
+                    .id
+                    .as_str(),
+                want
+            );
+            assert_eq!(
+                fastvideo_protocol::route_task(base, Task::I2V, models.iter().copied()).id,
+                base.id
+            );
+            assert_eq!(
+                t.get(&ModelId::new(want)).unwrap().tier,
+                base.tier,
+                "{want} keeps its tier tag"
+            );
         }
-        let tier_max = fastvideo_protocol::resolve_tier(Family::H3, Tier::Max, models.iter().copied()).unwrap();
+        let tier_max =
+            fastvideo_protocol::resolve_tier(Family::H3, Tier::Max, models.iter().copied())
+                .unwrap();
         assert_eq!(tier_max.id.as_str(), "sol-h3");
     }
 
@@ -2344,9 +2574,18 @@ mod tests {
     fn ltx_guided_a2v_is_the_task_companion_of_ltx_pro() {
         use fastvideo_protocol::*;
         let cat = catalog(&WeightLayout::default());
-        let m = cat.iter().find(|m| m.id.as_str() == "ltx25-a2v-guided").unwrap().clone();
-        let CudaRecipe::Ltx2(r) = &m.recipe else { panic!("ltx25-a2v-guided") };
-        assert_eq!((r.a2v, r.stage2, r.two_stage), (LtxA2v::Guided, LtxStage2::Dense, true));
+        let m = cat
+            .iter()
+            .find(|m| m.id.as_str() == "ltx25-a2v-guided")
+            .unwrap()
+            .clone();
+        let CudaRecipe::Ltx2(r) = &m.recipe else {
+            panic!("ltx25-a2v-guided")
+        };
+        assert_eq!(
+            (r.a2v, r.stage2, r.two_stage),
+            (LtxA2v::Guided, LtxStage2::Dense, true)
+        );
         assert_eq!((r.stage1_steps, r.refine_steps), (30, 3));
         assert!(r.dit.ends_with("ltx25-dev/transformer_full"));
         assert!(r.weights.ends_with("ltx25"));
@@ -2362,11 +2601,22 @@ mod tests {
         let base = t.resolve("ltx-pro").unwrap();
         assert_eq!(base.id.as_str(), "ltx25-distill-dense");
         assert!(!base.supports(Task::A2V));
-        assert_eq!(route_task(base, Task::A2V, models.iter().copied()).id.as_str(), "ltx25-a2v-guided");
-        assert_eq!(route_task(base, Task::I2V, models.iter().copied()).id, base.id);
+        assert_eq!(
+            route_task(base, Task::A2V, models.iter().copied())
+                .id
+                .as_str(),
+            "ltx25-a2v-guided"
+        );
+        assert_eq!(
+            route_task(base, Task::I2V, models.iter().copied()).id,
+            base.id
+        );
         let turbo = t.resolve("ltx-turbo").unwrap();
         assert!(turbo.supports(Task::A2V));
-        assert_eq!(route_task(turbo, Task::A2V, models.iter().copied()).id, turbo.id);
+        assert_eq!(
+            route_task(turbo, Task::A2V, models.iter().copied()).id,
+            turbo.id
+        );
         // A `[[models]]` weight root moves the dev DiT beside it; `dit` names it.
         let e = ModelEntryCfg {
             id: "ltx25-a2v-guided".into(),
@@ -2377,14 +2627,19 @@ mod tests {
             served_names: Vec::new(),
             extra: BTreeMap::new(),
         };
-        let recipe = |e: &ModelEntryCfg| match model_from_config(&WeightLayout::default(), e).unwrap().recipe {
+        let recipe = |e: &ModelEntryCfg| match model_from_config(&WeightLayout::default(), e)
+            .unwrap()
+            .recipe
+        {
             CudaRecipe::Ltx2(r) => r,
             _ => panic!("not ltx2"),
         };
         let r = recipe(&e);
         assert_eq!(r.dit, PathBuf::from("/w/ltx25-dev/transformer_full"));
         let r2 = recipe(&ModelEntryCfg {
-            extra: [("dit".to_owned(), "/x/dev".to_owned())].into_iter().collect(),
+            extra: [("dit".to_owned(), "/x/dev".to_owned())]
+                .into_iter()
+                .collect(),
             ..e.clone()
         });
         assert_eq!(r2.dit, PathBuf::from("/x/dev"));
@@ -2395,17 +2650,24 @@ mod tests {
     fn ltx_ref2v_is_the_task_companion_of_ltx_pro() {
         use fastvideo_protocol::*;
         let cat = catalog(&WeightLayout::default());
-        let m = cat.iter().find(|m| m.id.as_str() == "ltx25-ref2v").unwrap().clone();
-        let CudaRecipe::Ltx2(r) = &m.recipe else { panic!("ltx25-ref2v") };
+        let m = cat
+            .iter()
+            .find(|m| m.id.as_str() == "ltx25-ref2v")
+            .unwrap()
+            .clone();
+        let CudaRecipe::Ltx2(r) = &m.recipe else {
+            panic!("ltx25-ref2v")
+        };
         assert_eq!(r.stage2, LtxStage2::Dense);
         assert!(r.two_stage);
-        assert!(r
-            .ic_lora
-            .as_ref()
-            .unwrap()
-            .ends_with("ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors"));
+        assert!(r.ic_lora.as_ref().unwrap().ends_with(
+            "ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors"
+        ));
         let c = m.caps();
-        assert_eq!(c.tasks.iter().copied().collect::<Vec<_>>(), vec![Task::Ref2V]);
+        assert_eq!(
+            c.tasks.iter().copied().collect::<Vec<_>>(),
+            vec![Task::Ref2V]
+        );
         assert_eq!(c.refs, RefLimits::ltx_ingredients());
         assert!(c.knobs.seed && c.knobs.reference_strength && !c.knobs.steps);
         assert_eq!(c.canvas.short_edges[0], 896);
@@ -2413,21 +2675,42 @@ mod tests {
         assert_eq!(c.tier, Some(Tier::Max));
         assert!(m.describe().summary.starts_with("Reference-to-video"));
         // No other LTX model takes the reference knobs.
-        for other in cat.iter().filter(|o| o.family() == Family::Ltx2 && o.id != m.id) {
+        for other in cat
+            .iter()
+            .filter(|o| o.family() == Family::Ltx2 && o.id != m.id)
+        {
             assert!(!other.caps().knobs.reference_strength, "{}", other.id);
             assert!(!other.caps().supports(Task::Ref2V), "{}", other.id);
         }
         // `ltx-pro` still names the plain model; its Ref2V requests route here.
         let t = table(&cat);
-        assert_eq!(t.tier(Family::Ltx2, Tier::Max).unwrap().as_str(), "ltx25-distill-dense");
+        assert_eq!(
+            t.tier(Family::Ltx2, Tier::Max).unwrap().as_str(),
+            "ltx25-distill-dense"
+        );
         let models: Vec<&ModelCaps> = t.models().collect();
         let base = t.resolve("ltx-pro").unwrap();
-        assert_eq!(route_task(base, Task::Ref2V, models.iter().copied()).id.as_str(), "ltx25-ref2v");
-        assert_eq!(route_task(base, Task::T2V, models.iter().copied()).id, base.id);
+        assert_eq!(
+            route_task(base, Task::Ref2V, models.iter().copied())
+                .id
+                .as_str(),
+            "ltx25-ref2v"
+        );
+        assert_eq!(
+            route_task(base, Task::T2V, models.iter().copied()).id,
+            base.id
+        );
         // fal `ingredient`'s default: the sheet at 1536x896, 121 frames, strengths.
-        let mut req = GenerationRequest::text(ProtocolId::Fal, "ltx-pro", "Reference sheet: a crab. Generated video: it walks.");
+        let mut req = GenerationRequest::text(
+            ProtocolId::Fal,
+            "ltx-pro",
+            "Reference sheet: a crab. Generated video: it walks.",
+        );
         req.task = Task::Ref2V;
-        req.canvas = CanvasSpec::Exact { width: 1536, height: 896 };
+        req.canvas = CanvasSpec::Exact {
+            width: 1536,
+            height: 896,
+        };
         req.references = vec![Reference {
             kind: MediaKind::Image,
             media: MediaRef::parse("https://e.x/sheet.png", "references").unwrap(),
@@ -2441,7 +2724,11 @@ mod tests {
                     path: "/stage/sheet.png".into(),
                     mime: "image/png".into(),
                     bytes: 1,
-                    probe: MediaProbe { width: Some(1536), height: Some(896), ..Default::default() },
+                    probe: MediaProbe {
+                        width: Some(1536),
+                        height: Some(896),
+                        ..Default::default()
+                    },
                 },
             )],
             ..Default::default()
@@ -2455,12 +2742,18 @@ mod tests {
         assert!(negotiate(&two, &c, &staged).is_err());
         let mut hot = req.clone();
         hot.sampling.reference_strength = Some(1.2);
-        assert_eq!(negotiate(&hot, &c, &staged).unwrap_err().param.as_deref(), Some("reference_strength"));
+        assert_eq!(
+            negotiate(&hot, &c, &staged).unwrap_err().param.as_deref(),
+            Some("reference_strength")
+        );
         let plain = get_caps(&cat, "ltx25-distill-dense");
         let mut t2v = GenerationRequest::text(ProtocolId::Fal, "ltx-pro", "a cat");
         t2v.sampling.reference_lora_strength = Some(1.0);
         assert_eq!(
-            negotiate(&t2v, &plain, &StagedInputs::default()).unwrap_err().param.as_deref(),
+            negotiate(&t2v, &plain, &StagedInputs::default())
+                .unwrap_err()
+                .param
+                .as_deref(),
             Some("reference_lora_strength")
         );
     }
@@ -2476,9 +2769,19 @@ mod tests {
             path: "/stage/i.png".into(),
             mime: "image/png".into(),
             bytes: 1,
-            probe: MediaProbe { width: Some(w), height: Some(h), ..Default::default() },
+            probe: MediaProbe {
+                width: Some(w),
+                height: Some(h),
+                ..Default::default()
+            },
         };
-        let images = [("landscape", 1920, 1080), ("portrait", 1080, 1920), ("square", 1024, 1024), ("4:5", 1080, 1350), ("extreme", 6000, 500)];
+        let images = [
+            ("landscape", 1920, 1080),
+            ("portrait", 1080, 1920),
+            ("square", 1024, 1024),
+            ("4:5", 1080, 1350),
+            ("extreme", 6000, 500),
+        ];
         let mut table = String::new();
         for m in &cat {
             let caps = m.caps();
@@ -2489,24 +2792,40 @@ mod tests {
             } else {
                 continue;
             };
-            let mut row = format!("{:36} {:6}", m.id.as_str(), if task == Task::I2V { "i2v" } else { "ref2v" });
+            let mut row = format!(
+                "{:36} {:6}",
+                m.id.as_str(),
+                if task == Task::I2V { "i2v" } else { "ref2v" }
+            );
             for (name, w, h) in images {
                 let mut req = GenerationRequest::text(ProtocolId::Native, m.id.as_str(), "a cat");
                 req.task = task;
                 let media = MediaRef::parse("https://e.x/i.png", "image_url").unwrap();
                 let mut staged = StagedInputs::default();
                 if task == Task::I2V {
-                    req.keyframes = vec![Keyframe { at: Anchor::First, image: media }];
+                    req.keyframes = vec![Keyframe {
+                        at: Anchor::First,
+                        image: media,
+                    }];
                     staged.keyframes = vec![(Anchor::First, staged_image(w, h))];
                 } else {
-                    req.references = vec![Reference { kind: MediaKind::Image, media }];
+                    req.references = vec![Reference {
+                        kind: MediaKind::Image,
+                        media,
+                    }];
                     staged.references = vec![(MediaKind::Image, staged_image(w, h))];
                 }
-                let (j, notes) = negotiate_noted(&req, &caps, &staged).unwrap_or_else(|e| panic!("{} {name}: {e:?}", m.id));
+                let (j, notes) = negotiate_noted(&req, &caps, &staged)
+                    .unwrap_or_else(|e| panic!("{} {name}: {e:?}", m.id));
                 let (ow, oh) = j.output_size();
                 row.push_str(&format!(" {name}={ow}x{oh}"));
                 let c = &caps.canvas;
-                assert_eq!((j.width % c.multiple, j.height % c.multiple), (0, 0), "{} {name}", m.id);
+                assert_eq!(
+                    (j.width % c.multiple, j.height % c.multiple),
+                    (0, 0),
+                    "{} {name}",
+                    m.id
+                );
                 if m.family() == Family::Ltx2 && task == Task::Ref2V {
                     // The reference sheet does not set the canvas: 16:9.
                     assert!(notes.is_empty(), "{} {name}", m.id);
@@ -2516,12 +2835,32 @@ mod tests {
                 let want = (f64::from(w) / f64::from(h)).clamp(0.25, 4.0);
                 let got = f64::from(ow) / f64::from(oh);
                 // Within one snap step of the image's (clamped) aspect.
-                assert!((got / want).ln().abs() < 0.08, "{} {name}: {ow}x{oh} vs {want}", m.id);
-                assert_eq!(ow.cmp(&oh), want.total_cmp(&1.0), "{} {name}: {ow}x{oh}", m.id);
+                assert!(
+                    (got / want).ln().abs() < 0.08,
+                    "{} {name}: {ow}x{oh} vs {want}",
+                    m.id
+                );
+                assert_eq!(
+                    ow.cmp(&oh),
+                    want.total_cmp(&1.0),
+                    "{} {name}: {ow}x{oh}",
+                    m.id
+                );
                 let tier = c.short_edges[0];
-                assert!(ow.min(oh) <= tier.max(1088) && u64::from(j.width) * u64::from(j.height) <= c.max_area.max(c.hd.map_or(0, |t| t.max_area)), "{} {name}", m.id);
+                assert!(
+                    ow.min(oh) <= tier.max(1088)
+                        && u64::from(j.width) * u64::from(j.height)
+                            <= c.max_area.max(c.hd.map_or(0, |t| t.max_area)),
+                    "{} {name}",
+                    m.id
+                );
                 assert_eq!(notes.len(), 1, "{} {name}", m.id);
-                assert_eq!(notes[0].contains("clamped"), name == "extreme", "{} {name}: {notes:?}", m.id);
+                assert_eq!(
+                    notes[0].contains("clamped"),
+                    name == "extreme",
+                    "{} {name}: {notes:?}",
+                    m.id
+                );
             }
             table.push_str(&row);
             table.push('\n');
@@ -2559,7 +2898,8 @@ mod tests {
         // NVFP4 is load-time: the LTX draft needs its own process.
         assert!(ProcessPlan::for_models(&pick(&["ltx-turbo", "ltx-draft"])).is_err());
         // FastWan's VSA flag is process-wide; the TI2V-5B recipe runs without it.
-        let p = ProcessPlan::for_models(&pick(&["fastwan21-1.3b", "fastwan21-1.3b-taehv"])).unwrap();
+        let p =
+            ProcessPlan::for_models(&pick(&["fastwan21-1.3b", "fastwan21-1.3b-taehv"])).unwrap();
         assert_eq!(p.env.get("FASTVIDEO_VSA").map(String::as_str), Some("1"));
         assert!(ProcessPlan::for_models(&pick(&["fastwan21-1.3b", "wan-max"])).is_err());
         // The 5B tiers (FastWan2.2 FullAttn has no VSA) share one process.
@@ -2597,14 +2937,36 @@ mod tests {
         assert!(profile_settings(None).unwrap().is_empty());
         // An explicit f32-activation profile still needs its own process.
         let key = |m: &CudaModel, kv: &[(&str, &str)]| {
-            process_key(m, &kv.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())
+            process_key(
+                m,
+                &kv.iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+            )
         };
-        assert_eq!(key(&turbo, &[]), key(&turbo, &[("FASTVIDEO_BF16_ACT", "1"), ("FASTVIDEO_H3_QUANT", "mxfp8")]));
-        assert_ne!(key(&turbo, &[]), key(&turbo, &[("FASTVIDEO_BF16_ACT", "0")]));
-        assert_ne!(key(&turbo, &[]), key(&turbo, &[("FASTVIDEO_DIT_OFFLOAD", "streamed")]));
+        assert_eq!(
+            key(&turbo, &[]),
+            key(
+                &turbo,
+                &[("FASTVIDEO_BF16_ACT", "1"), ("FASTVIDEO_H3_QUANT", "mxfp8")]
+            )
+        );
+        assert_ne!(
+            key(&turbo, &[]),
+            key(&turbo, &[("FASTVIDEO_BF16_ACT", "0")])
+        );
+        assert_ne!(
+            key(&turbo, &[]),
+            key(&turbo, &[("FASTVIDEO_DIT_OFFLOAD", "streamed")])
+        );
         // Not for other families: Wan / LTX settings stay strict.
         let wan = find(&cat, "wan-max").unwrap();
-        assert_eq!(key(&wan, &[("FASTVIDEO_H3_QUANT", "x")]).get("FASTVIDEO_H3_QUANT").map(String::as_str), Some("x"));
+        assert_eq!(
+            key(&wan, &[("FASTVIDEO_H3_QUANT", "x")])
+                .get("FASTVIDEO_H3_QUANT")
+                .map(String::as_str),
+            Some("x")
+        );
         assert!(key(&wan, &[]).is_empty());
     }
 
@@ -2616,28 +2978,52 @@ mod tests {
         let cat = catalog(&l);
         for (id, recipe, steps, profile) in [
             (H3_LARRY_TURBO, "larry-turbo", 6, LARRY_TURBO_PROFILE),
-            (H3_LIGHTX2V_TURBO, "lightx2v-turbo", 4, LIGHTX2V_TURBO_PROFILE),
+            (
+                H3_LIGHTX2V_TURBO,
+                "lightx2v-turbo",
+                4,
+                LIGHTX2V_TURBO_PROFILE,
+            ),
         ] {
             let m = find(&cat, id).unwrap();
             assert_eq!(m.tier, None, "{id}");
-            let CudaRecipe::H3(r) = &m.recipe else { panic!("{id}") };
-            assert_eq!((r.recipe.as_str(), r.steps, r.dense, r.ref2va), (recipe, steps, true, false));
+            let CudaRecipe::H3(r) = &m.recipe else {
+                panic!("{id}")
+            };
+            assert_eq!(
+                (r.recipe.as_str(), r.steps, r.dense, r.ref2va),
+                (recipe, steps, true, false)
+            );
             assert_eq!(r.profile.as_deref(), Some(profile));
             assert!(r.weights.ends_with("h3-base"));
-            assert!(fastvideo_models::techniques::builtin::get(profile).is_some(), "{profile}");
+            assert!(
+                fastvideo_models::techniques::builtin::get(profile).is_some(),
+                "{profile}"
+            );
             let caps = m.caps();
-            assert_eq!(caps.tasks, [Task::T2V, Task::I2V, Task::Keyframes].into_iter().collect());
+            assert_eq!(
+                caps.tasks,
+                [Task::T2V, Task::I2V, Task::Keyframes]
+                    .into_iter()
+                    .collect()
+            );
             assert!(m.describe().summary.contains("Turbo LoRA"), "{id}");
             // Same load-time settings as h3-turbo / h3-max (MXFP8, bf16 activations).
             ProcessPlan::for_models(&[m.clone(), find(&cat, "h3-turbo").unwrap()]).unwrap();
         }
         // The tier aliases are unchanged.
-        assert_eq!(find(&cat, "h3-turbo").unwrap().id.as_str(), "fasth3-4step-vsa");
+        assert_eq!(
+            find(&cat, "h3-turbo").unwrap().id.as_str(),
+            "fasth3-4step-vsa"
+        );
         let entry = |recipe: &str, extra: &[(&str, &str)]| ModelEntryCfg {
             id: String::new(),
             family: "h3".into(),
             recipe: recipe.into(),
-            extra: extra.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            extra: extra
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
             ..Default::default()
         };
         let h3r = |m: CudaModel| match m.recipe {
@@ -2646,17 +3032,29 @@ mod tests {
         };
         let r = h3r(model_from_config(&l, &entry("h3-larry-turbo", &[("steps", "4")])).unwrap());
         assert_eq!((r.recipe.as_str(), r.steps), ("larry-turbo-4step", 4));
-        let r = h3r(model_from_config(&l, &entry("larry-turbo-5step", &[("lora_strength", "1.1")])).unwrap());
-        assert_eq!((r.recipe.as_str(), r.steps, r.lora_strength), ("larry-turbo-5step", 5, Some(1.1)));
+        let r = h3r(model_from_config(
+            &l,
+            &entry("larry-turbo-5step", &[("lora_strength", "1.1")]),
+        )
+        .unwrap());
+        assert_eq!(
+            (r.recipe.as_str(), r.steps, r.lora_strength),
+            ("larry-turbo-5step", 5, Some(1.1))
+        );
         let r = h3r(model_from_config(&l, &entry("lightx2v-turbo-v0.1", &[])).unwrap());
         assert_eq!((r.recipe.as_str(), r.steps), ("lightx2v-turbo-v0.1", 4));
         // Another step count or the v0.1 file keeps the family's profile and process plan.
-        for (rec, extra) in [("h3-larry-turbo", ("steps", "4")), ("lightx2v-turbo-v0.1", ("steps", "4"))] {
+        for (rec, extra) in [
+            ("h3-larry-turbo", ("steps", "4")),
+            ("lightx2v-turbo-v0.1", ("steps", "4")),
+        ] {
             let m = model_from_config(&l, &entry(rec, &[extra])).unwrap();
             ProcessPlan::for_models(&[m]).unwrap_or_else(|e| panic!("{rec}: {e}"));
         }
         assert!(model_from_config(&l, &entry("h3-larry-turbo", &[("steps", "12")])).is_err());
-        assert!(model_from_config(&l, &entry("h3-larry-turbo", &[("lora_strength", "nan")])).is_err());
+        assert!(
+            model_from_config(&l, &entry("h3-larry-turbo", &[("lora_strength", "nan")])).is_err()
+        );
         assert!(model_from_config(&l, &entry("h3-turbo", &[("steps", "4")])).is_err());
     }
 
@@ -2671,13 +3069,20 @@ mod tests {
             weights: Some("/w/h3-base".into()),
             resident: true,
             served_names: vec!["fasth3".into()],
-            extra: [("text_encoder".to_owned(), "streamed".to_owned())].into_iter().collect(),
+            extra: [("text_encoder".to_owned(), "streamed".to_owned())]
+                .into_iter()
+                .collect(),
         };
         let m = model_from_config(&l, &e).unwrap();
         assert_eq!(m.id.as_str(), "fasth3");
         assert_eq!(m.tier, Some(Tier::Turbo));
-        let CudaRecipe::H3(r) = &m.recipe else { panic!() };
-        assert_eq!((r.weights.as_path(), r.text_encoder.as_str()), (Path::new("/w/h3-base"), "streamed"));
+        let CudaRecipe::H3(r) = &m.recipe else {
+            panic!()
+        };
+        assert_eq!(
+            (r.weights.as_path(), r.text_encoder.as_str()),
+            (Path::new("/w/h3-base"), "streamed")
+        );
         assert_eq!((r.i2v_encoder.as_str(), r.warmup), ("auto", false));
         let with = |k: &str, v: &str| ModelEntryCfg {
             extra: [(k.to_owned(), v.to_owned())].into_iter().collect(),
@@ -2688,7 +3093,10 @@ mod tests {
             Ok(_) => panic!("not h3"),
             Err(e) => Err(e),
         };
-        assert_eq!(h3(&with("i2v_encoder", "stream")).unwrap().i2v_encoder, "stream");
+        assert_eq!(
+            h3(&with("i2v_encoder", "stream")).unwrap().i2v_encoder,
+            "stream"
+        );
         assert!(h3(&with("warmup", "true")).unwrap().warmup);
         assert!(!h3(&with("warmup", "false")).unwrap().warmup);
         assert!(h3(&with("warmup", "yes")).is_err());
@@ -2697,23 +3105,52 @@ mod tests {
         let bg = h3(&with("warmup", "true")).unwrap();
         let blocking = h3(&with("warmup", "blocking")).unwrap();
         assert_eq!(WarmupMode::resolve(&bg, None), WarmupMode::Background);
-        assert_eq!(WarmupMode::resolve(&h3(&with("warmup", "background")).unwrap(), None), WarmupMode::Background);
+        assert_eq!(
+            WarmupMode::resolve(&h3(&with("warmup", "background")).unwrap(), None),
+            WarmupMode::Background
+        );
         assert_eq!(WarmupMode::resolve(&blocking, None), WarmupMode::Blocking);
-        assert_eq!(WarmupMode::resolve(&bg, Some("blocking")), WarmupMode::Blocking);
-        assert_eq!(WarmupMode::resolve(&blocking, Some("background")), WarmupMode::Background);
+        assert_eq!(
+            WarmupMode::resolve(&bg, Some("blocking")),
+            WarmupMode::Blocking
+        );
+        assert_eq!(
+            WarmupMode::resolve(&blocking, Some("background")),
+            WarmupMode::Background
+        );
         assert_eq!(WarmupMode::resolve(&bg, Some("off")), WarmupMode::Off);
-        assert_eq!(WarmupMode::resolve(&bg, Some("bogus")), WarmupMode::Background);
-        assert_eq!(WarmupMode::resolve(r, Some("background")), WarmupMode::Off, "no warm-up configured stays off");
+        assert_eq!(
+            WarmupMode::resolve(&bg, Some("bogus")),
+            WarmupMode::Background
+        );
+        assert_eq!(
+            WarmupMode::resolve(r, Some("background")),
+            WarmupMode::Off,
+            "no warm-up configured stays off"
+        );
         assert!(r.hd_1080p);
         assert!(!h3(&with("h3_1080p", "false")).unwrap().hd_1080p);
         assert!(h3(&with("h3_1080p", "true")).unwrap().hd_1080p);
         assert!(h3(&with("h3_1080p", "on")).is_err());
-        let e8 = ModelEntryCfg { recipe: "8step".into(), ..with("h3_1080p", "true") };
-        assert!(model_from_config(&l, &e8).unwrap_err().contains("h3-max and h3-turbo"));
+        let e8 = ModelEntryCfg {
+            recipe: "8step".into(),
+            ..with("h3_1080p", "true")
+        };
+        assert!(model_from_config(&l, &e8)
+            .unwrap_err()
+            .contains("h3-max and h3-turbo"));
         // The memory gate: 96 GB and 80 GB cards keep the tier, 48 GB ones not.
         let gib = |g: f64| (g * f64::from(1u32 << 30)) as u64;
-        for (total, keep) in [(Some(gib(95.6)), true), (Some(gib(79.6)), true), (Some(gib(44.4)), false), (None, false)] {
-            let mut ms = vec![m.clone(), model_from_config(&l, &with("h3_1080p", "false")).unwrap()];
+        for (total, keep) in [
+            (Some(gib(95.6)), true),
+            (Some(gib(79.6)), true),
+            (Some(gib(44.4)), false),
+            (None, false),
+        ] {
+            let mut ms = vec![
+                m.clone(),
+                model_from_config(&l, &with("h3_1080p", "false")).unwrap(),
+            ];
             let off = gate_h3_1080p(&mut ms, total);
             assert_eq!(off.is_none(), keep, "{total:?}");
             assert_eq!(ms[0].caps().canvas.short_edges.contains(&1080), keep);
@@ -2721,13 +3158,30 @@ mod tests {
                 assert!(o.contains("fasth3") && o.contains("memory plan"), "{o}");
             }
         }
-        let t = CapabilityTable::build(vec![vec![(m.caps(), m.describe())]], &BTreeMap::new()).unwrap();
+        let t =
+            CapabilityTable::build(vec![vec![(m.caps(), m.describe())]], &BTreeMap::new()).unwrap();
         assert_eq!(t.resolve("h3-turbo").unwrap().id.as_str(), "fasth3");
-        for (fam, rec, want) in [("ltx2", "ltx-turbo", "ltx25-distill-sol"), ("wan", "", "fastwan22-ti2v-5b"), ("wan", "fastwan21-1.3b", "fastwan21-1.3b"), ("h3", "8step", "fasth3-8step-dense"), ("h3", "sol-h3", "sol-h3"), ("h3", "h3-max", "sol-h3")] {
-            let e = ModelEntryCfg { family: fam.into(), recipe: rec.into(), resident: true, ..Default::default() };
+        for (fam, rec, want) in [
+            ("ltx2", "ltx-turbo", "ltx25-distill-sol"),
+            ("wan", "", "fastwan22-ti2v-5b"),
+            ("wan", "fastwan21-1.3b", "fastwan21-1.3b"),
+            ("h3", "8step", "fasth3-8step-dense"),
+            ("h3", "sol-h3", "sol-h3"),
+            ("h3", "h3-max", "sol-h3"),
+        ] {
+            let e = ModelEntryCfg {
+                family: fam.into(),
+                recipe: rec.into(),
+                resident: true,
+                ..Default::default()
+            };
             assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), want);
         }
-        let bad = ModelEntryCfg { family: "wan".into(), recipe: "h3-turbo".into(), ..Default::default() };
+        let bad = ModelEntryCfg {
+            family: "wan".into(),
+            recipe: "h3-turbo".into(),
+            ..Default::default()
+        };
         assert!(model_from_config(&l, &bad).is_err());
     }
 
@@ -2745,7 +3199,10 @@ mod tests {
         let CudaRecipe::H3(r) = &m.recipe else {
             panic!()
         };
-        assert_eq!((r.weights.as_path(), r.recipe.as_str()), (Path::new("/w/h3-base"), "sol-h3"));
+        assert_eq!(
+            (r.weights.as_path(), r.recipe.as_str()),
+            (Path::new("/w/h3-base"), "sol-h3")
+        );
         assert!(!r.dense);
         let m = find(&cat, "fasth3-8step-dense").unwrap();
         let CudaRecipe::H3(r) = &m.recipe else {
@@ -2766,10 +3223,15 @@ mod tests {
             let m = find(&cat, name).unwrap();
             assert_eq!(m.id.as_str(), FASTH3_TRIM_ID, "{name}");
             assert!(m.tier.is_none());
-            let CudaRecipe::H3(r) = &m.recipe else { panic!() };
+            let CudaRecipe::H3(r) = &m.recipe else {
+                panic!()
+            };
             assert_eq!(r.weights, Path::new("/w/fasth3-trim-8step"));
             assert_eq!(r.text_weights.as_deref(), Some(Path::new("/w/h3-base")));
-            assert_eq!((r.recipe.as_str(), r.steps, r.dense, r.profile.as_deref()), ("trim-8step", 8, false, None));
+            assert_eq!(
+                (r.recipe.as_str(), r.steps, r.dense, r.profile.as_deref()),
+                ("trim-8step", 8, false, None)
+            );
             assert!(!r.ref2va && !r.hd_1080p && r.taeh3.is_none());
             // The recipe name is one the pipeline's contract resolver knows.
             assert_eq!(
@@ -2782,13 +3244,25 @@ mod tests {
             assert_eq!(c.canvas.short_edges, vec![768, 480]);
             assert_eq!(c.frames, FrameGrid::h3());
             let d = m.describe();
-            assert_eq!((d.steps, d.attention.as_str(), d.vae.as_str()), (Some(8), "vsa", "full"));
+            assert_eq!(
+                (d.steps, d.attention.as_str(), d.vae.as_str()),
+                (Some(8), "vsa", "full")
+            );
             assert!(d.summary.contains("Trim"), "{}", d.summary);
         }
         assert!(m_served(&cat, H3_TRIM));
         for rec in ["trim-8step", "fasth3-trim", H3_TRIM, FASTH3_TRIM_ID] {
-            let e = ModelEntryCfg { family: "h3".into(), recipe: rec.into(), resident: true, ..Default::default() };
-            assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), FASTH3_TRIM_ID, "{rec}");
+            let e = ModelEntryCfg {
+                family: "h3".into(),
+                recipe: rec.into(),
+                resident: true,
+                ..Default::default()
+            };
+            assert_eq!(
+                model_from_config(&l, &e).unwrap().id.as_str(),
+                FASTH3_TRIM_ID,
+                "{rec}"
+            );
         }
         // Its own process: it never co-resides with another H3 recipe's settings.
         assert!(is_trim_recipe("trim-8step") && !is_trim_recipe("8step"));
@@ -2805,10 +3279,15 @@ mod tests {
             let m = find(&cat, name).unwrap();
             assert_eq!(m.id.as_str(), FASTH3_TRIM_NVFP4_ID, "{name}");
             assert!(m.tier.is_none());
-            let CudaRecipe::H3(r) = &m.recipe else { panic!() };
+            let CudaRecipe::H3(r) = &m.recipe else {
+                panic!()
+            };
             assert_eq!(r.weights, Path::new("/w/fasth3-trim-8step"));
             assert_eq!(r.text_weights.as_deref(), Some(Path::new("/w/h3-base")));
-            assert_eq!((r.recipe.as_str(), r.steps, r.dense, r.profile.as_deref()), ("trim-8step-nvfp4", 8, false, None));
+            assert_eq!(
+                (r.recipe.as_str(), r.steps, r.dense, r.profile.as_deref()),
+                ("trim-8step-nvfp4", 8, false, None)
+            );
             assert_eq!(
                 h3cfg::H3InferenceContract::named(&r.recipe).unwrap(),
                 h3cfg::H3InferenceContract::fasth3_8step()
@@ -2820,11 +3299,22 @@ mod tests {
         }
         assert!(m_served(&cat, H3_TRIM_NVFP4));
         for rec in ["trim-8step-nvfp4", "fasth3-trim-nvfp4", H3_TRIM_NVFP4] {
-            let e = ModelEntryCfg { family: "h3".into(), recipe: rec.into(), resident: true, ..Default::default() };
-            assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), FASTH3_TRIM_NVFP4_ID, "{rec}");
+            let e = ModelEntryCfg {
+                family: "h3".into(),
+                recipe: rec.into(),
+                resident: true,
+                ..Default::default()
+            };
+            assert_eq!(
+                model_from_config(&l, &e).unwrap().id.as_str(),
+                FASTH3_TRIM_NVFP4_ID,
+                "{rec}"
+            );
         }
         // The default Trim stays the bf16 / MXFP8 checkpoint.
-        let CudaRecipe::H3(t) = &find(&cat, H3_TRIM).unwrap().recipe else { panic!() };
+        let CudaRecipe::H3(t) = &find(&cat, H3_TRIM).unwrap().recipe else {
+            panic!()
+        };
         assert_eq!(t.recipe, "trim-8step");
         assert!(is_trim_recipe("trim-8step-nvfp4"));
     }
@@ -2839,50 +3329,102 @@ mod tests {
         let cat = catalog(&l);
         let h3 = |name: &str| {
             let m = find(&cat, name).unwrap_or_else(|| panic!("{name}"));
-            let CudaRecipe::H3(r) = m.recipe.clone() else { panic!("{name}") };
+            let CudaRecipe::H3(r) = m.recipe.clone() else {
+                panic!("{name}")
+            };
             (m, r)
         };
         for (id, served, tree, recipe, steps) in [
-            (FASTH3_V2_NVFP4_ID, H3_V2_NVFP4, "fasth3-v2-nvfp4", "v2-nvfp4", 8),
-            (FASTH3_4STEP_NVFP4_ID, H3_TURBO_NVFP4, "fasth3-4step-vsa-nvfp4", "4step-vsa-nvfp4", 4),
+            (
+                FASTH3_V2_NVFP4_ID,
+                H3_V2_NVFP4,
+                "fasth3-v2-nvfp4",
+                "v2-nvfp4",
+                8,
+            ),
+            (
+                FASTH3_4STEP_NVFP4_ID,
+                H3_TURBO_NVFP4,
+                "fasth3-4step-vsa-nvfp4",
+                "4step-vsa-nvfp4",
+                4,
+            ),
         ] {
             for name in [id, served] {
                 let (m, r) = h3(name);
                 assert_eq!(m.id.as_str(), id);
                 assert!(m.tier.is_none(), "untiered: h3-turbo stays the default");
-                assert_eq!((r.recipe.as_str(), r.steps, r.profile.as_deref()), (recipe, steps, None));
+                assert_eq!(
+                    (r.recipe.as_str(), r.steps, r.profile.as_deref()),
+                    (recipe, steps, None)
+                );
                 assert_eq!(r.weights, Path::new("/w").join(tree));
-                assert_eq!(r.text_weights.as_deref(), Some(Path::new("/w/h3-base")), "text + vae shard 3");
+                assert_eq!(
+                    r.text_weights.as_deref(),
+                    Some(Path::new("/w/h3-base")),
+                    "text + vae shard 3"
+                );
                 assert!(r.taeh3.is_none(), "the official (NVFP4) decoder by default");
                 assert_eq!(
-                    h3cfg::H3InferenceContract::named(&r.recipe).unwrap().transformer_forwards as u32,
+                    h3cfg::H3InferenceContract::named(&r.recipe)
+                        .unwrap()
+                        .transformer_forwards as u32,
                     steps
                 );
                 assert!(m.requirements().nvfp4, "NVFP4 tensor cores only");
-                assert_eq!(m.caps().tasks.iter().copied().collect::<Vec<_>>(), [Task::T2V]);
+                assert_eq!(
+                    m.caps().tasks.iter().copied().collect::<Vec<_>>(),
+                    [Task::T2V]
+                );
                 let d = m.describe();
                 assert_eq!(d.vae, "full");
                 assert!(d.summary.contains("NVFP4 VAE"), "{}", d.summary);
             }
-            let e = ModelEntryCfg { family: "h3".into(), recipe: recipe.into(), resident: true, ..Default::default() };
-            assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), id, "{recipe}");
+            let e = ModelEntryCfg {
+                family: "h3".into(),
+                recipe: recipe.into(),
+                resident: true,
+                ..Default::default()
+            };
+            assert_eq!(
+                model_from_config(&l, &e).unwrap().id.as_str(),
+                id,
+                "{recipe}"
+            );
         }
         // Fast preview: the same recipe and canvases, TAEH3 decode, its own id.
-        let bases = [FASTH3_V2_NVFP4_ID, FASTH3_4STEP_NVFP4_ID, "fasth3-4step-vsa"];
+        let bases = [
+            FASTH3_V2_NVFP4_ID,
+            FASTH3_4STEP_NVFP4_ID,
+            "fasth3-4step-vsa",
+        ];
         for ((id, served), base) in H3_PREVIEWS.iter().zip(bases) {
             let (m, r) = h3(served);
             let (bm, b) = h3(base);
             assert_eq!(m.id.as_str(), *id);
             assert!(m.tier.is_none(), "never a default");
-            assert_eq!(r.taeh3.as_deref(), Some(Path::new("/w/auxiliary/tae/taeh3.safetensors")));
-            assert_eq!((&r.recipe, &r.weights, r.steps, &r.profile), (&b.recipe, &b.weights, b.steps, &b.profile));
-            assert_eq!(r.short_edge, b.short_edge, "the base's canvases, 768p default");
+            assert_eq!(
+                r.taeh3.as_deref(),
+                Some(Path::new("/w/auxiliary/tae/taeh3.safetensors"))
+            );
+            assert_eq!(
+                (&r.recipe, &r.weights, r.steps, &r.profile),
+                (&b.recipe, &b.weights, b.steps, &b.profile)
+            );
+            assert_eq!(
+                r.short_edge, b.short_edge,
+                "the base's canvases, 768p default"
+            );
             assert!(!r.hd_1080p);
             assert_eq!(m.caps().canvas.short_edges, [768, 480]);
             assert_eq!(m.caps().tasks, bm.caps().tasks);
             let d = m.describe();
             assert_eq!(d.vae, "taeh3");
-            assert!(d.summary.contains("fast preview") && d.summary.contains("sharpness"), "{}", d.summary);
+            assert!(
+                d.summary.contains("fast preview") && d.summary.contains("sharpness"),
+                "{}",
+                d.summary
+            );
         }
         // h3-turbo and the draft tier are unchanged.
         let (_, t) = h3("h3-turbo");
@@ -2896,18 +3438,40 @@ mod tests {
             assert!(m.tier.is_none());
             assert_eq!(r.recipe, FASTH3_TRIM_NVFP4_FAST_RECIPE);
             assert!(h3cfg::is_trim_nvfp4_fp4attn_recipe(&r.recipe) && is_trim_recipe(&r.recipe));
-            assert_eq!((&r.weights, &r.text_weights), (&trim_nv.weights, &trim_nv.text_weights));
-            assert!(m.recipe.process_env().is_empty(), "no process-wide variable");
+            assert_eq!(
+                (&r.weights, &r.text_weights),
+                (&trim_nv.weights, &trim_nv.text_weights)
+            );
+            assert!(
+                m.recipe.process_env().is_empty(),
+                "no process-wide variable"
+            );
             assert!(m.requirements().nvfp4);
             let d = m.describe();
-            assert!(d.summary.contains("sparse FP4") && d.summary.contains("not gate-equivalent"), "{}", d.summary);
+            assert!(
+                d.summary.contains("sparse FP4") && d.summary.contains("not gate-equivalent"),
+                "{}",
+                d.summary
+            );
         }
         for rec in ["trim-8step-nvfp4-fp4attn", H3_TRIM_NVFP4_FAST] {
-            let e = ModelEntryCfg { family: "h3".into(), recipe: rec.into(), resident: true, ..Default::default() };
-            assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), FASTH3_TRIM_NVFP4_FAST_ID, "{rec}");
+            let e = ModelEntryCfg {
+                family: "h3".into(),
+                recipe: rec.into(),
+                resident: true,
+                ..Default::default()
+            };
+            assert_eq!(
+                model_from_config(&l, &e).unwrap().id.as_str(),
+                FASTH3_TRIM_NVFP4_FAST_ID,
+                "{rec}"
+            );
         }
         let (_, slow) = h3(H3_TRIM_NVFP4);
-        assert!(!h3cfg::is_trim_nvfp4_fp4attn_recipe(&slow.recipe), "h3-trim-nvfp4 keeps bf16 VSA");
+        assert!(
+            !h3cfg::is_trim_nvfp4_fp4attn_recipe(&slow.recipe),
+            "h3-trim-nvfp4 keeps bf16 VSA"
+        );
     }
 
     /// VDN-H3: the stage-B hybrid over h3-base, 50 forwards, text-to-video
@@ -2918,14 +3482,19 @@ mod tests {
         let cat = catalog(&l);
         let m = find(&cat, VDN_H3_ID).unwrap();
         assert!(m.tier.is_none());
-        let CudaRecipe::H3(r) = &m.recipe else { panic!() };
+        let CudaRecipe::H3(r) = &m.recipe else {
+            panic!()
+        };
         assert_eq!(r.weights, Path::new("/w/h3-base"));
         assert_eq!(r.text_weights.as_deref(), Some(Path::new("/w/h3-base")));
         assert_eq!(
             r.vdn_weights.as_deref(),
             Some(Path::new("/w/vdn-h3-stage-b-2000/stage-b-step-2000"))
         );
-        assert_eq!((r.recipe.as_str(), r.steps, r.dense), ("vdn-h3-50step", 50, true));
+        assert_eq!(
+            (r.recipe.as_str(), r.steps, r.dense),
+            ("vdn-h3-50step", 50, true)
+        );
         assert_eq!(r.dit_offload.as_deref(), Some("resident"));
         assert_eq!(
             h3cfg::H3InferenceContract::named(&r.recipe).unwrap(),
@@ -2938,8 +3507,17 @@ mod tests {
         assert_eq!((d.steps, d.attention.as_str()), (Some(50), "dense"));
         assert!(d.summary.contains("VDN-H3"), "{}", d.summary);
         for rec in [VDN_H3_ID, VDN_H3_RECIPE] {
-            let e = ModelEntryCfg { family: "h3".into(), recipe: rec.into(), resident: true, ..Default::default() };
-            assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), VDN_H3_ID, "{rec}");
+            let e = ModelEntryCfg {
+                family: "h3".into(),
+                recipe: rec.into(),
+                resident: true,
+                ..Default::default()
+            };
+            assert_eq!(
+                model_from_config(&l, &e).unwrap().id.as_str(),
+                VDN_H3_ID,
+                "{rec}"
+            );
         }
     }
 
@@ -2951,7 +3529,9 @@ mod tests {
         let cat = catalog(&l);
         let m = find(&cat, VDN_H3_8STEP_ID).unwrap();
         assert!(m.tier.is_none());
-        let CudaRecipe::H3(r) = &m.recipe else { panic!() };
+        let CudaRecipe::H3(r) = &m.recipe else {
+            panic!()
+        };
         assert_eq!(r.weights, Path::new("/w/h3-base"));
         assert_eq!(
             r.vdn_weights.as_deref(),
@@ -2961,13 +3541,19 @@ mod tests {
             r.vdn_shared.as_deref(),
             Some(Path::new("/w/vdn-h3-stage-b-2000/stage-b-step-2000"))
         );
-        assert_eq!((r.recipe.as_str(), r.steps, r.dense), ("vdn-h3-8step", 8, true));
+        assert_eq!(
+            (r.recipe.as_str(), r.steps, r.dense),
+            ("vdn-h3-8step", 8, true)
+        );
         assert_eq!(r.dit_offload.as_deref(), Some("resident"));
         assert_eq!(
             h3cfg::H3InferenceContract::named(&r.recipe).unwrap(),
             h3cfg::H3InferenceContract::base(9)
         );
-        assert_eq!(m.caps().tasks.iter().copied().collect::<Vec<_>>(), [Task::T2V]);
+        assert_eq!(
+            m.caps().tasks.iter().copied().collect::<Vec<_>>(),
+            [Task::T2V]
+        );
         let d = m.describe();
         assert_eq!(d.steps, Some(8));
         assert!(d.summary.contains("turbo"), "{}", d.summary);
@@ -2977,9 +3563,14 @@ mod tests {
             resident: true,
             ..Default::default()
         };
-        assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), VDN_H3_8STEP_ID);
+        assert_eq!(
+            model_from_config(&l, &e).unwrap().id.as_str(),
+            VDN_H3_8STEP_ID
+        );
         // The 50-step entry carries no shared directory.
-        let CudaRecipe::H3(b) = &find(&cat, VDN_H3_ID).unwrap().recipe else { panic!() };
+        let CudaRecipe::H3(b) = &find(&cat, VDN_H3_ID).unwrap().recipe else {
+            panic!()
+        };
         assert!(b.vdn_shared.is_none());
     }
 
@@ -3003,28 +3594,43 @@ mod tests {
             extra: BTreeMap::new(),
         };
         let plain = model_from_config(&layout, &e).unwrap();
-        let CudaRecipe::SfWan(r) = &plain.recipe else { panic!() };
+        let CudaRecipe::SfWan(r) = &plain.recipe else {
+            panic!()
+        };
         assert!(r.longlive.is_none());
         assert!(!plain.served_names.iter().any(|n| n == LONGLIVE_NAME));
-        e.extra.insert("longlive".into(), "/w/longlive-1.3b-safetensors".into());
+        e.extra
+            .insert("longlive".into(), "/w/longlive-1.3b-safetensors".into());
         let m = model_from_config(&layout, &e).unwrap();
-        let CudaRecipe::SfWan(r) = &m.recipe else { panic!() };
+        let CudaRecipe::SfWan(r) = &m.recipe else {
+            panic!()
+        };
         let l = r.longlive.as_ref().unwrap();
         assert!(l.recache && l.lora && l.global_sink);
         assert_eq!((r.local_attn_frames, r.sink_frames), (12, 3));
         let caps = m.caps();
-        assert!(caps.served_names.iter().any(|n| n == LONGLIVE_NAME), "{:?}", caps.served_names);
+        assert!(
+            caps.served_names.iter().any(|n| n == LONGLIVE_NAME),
+            "{:?}",
+            caps.served_names
+        );
         assert_eq!(
             caps.stream,
             Some(StreamCaps::Causal {
                 block_frames: 12,
                 target_fps: 16,
-                context: Some(fastvideo_protocol::CausalContext { window_latent_frames: 12, sink_latent_frames: 3, prompt_recache: true }),
+                context: Some(fastvideo_protocol::CausalContext {
+                    window_latent_frames: 12,
+                    sink_latent_frames: 3,
+                    prompt_recache: true
+                }),
             })
         );
         e.extra.insert("longlive_recache".into(), "false".into());
         let m = model_from_config(&layout, &e).unwrap();
-        let CudaRecipe::SfWan(r) = &m.recipe else { panic!() };
+        let CudaRecipe::SfWan(r) = &m.recipe else {
+            panic!()
+        };
         assert!(!r.longlive.as_ref().unwrap().recache);
         e.extra.insert("longlive_recache".into(), "maybe".into());
         assert!(model_from_config(&layout, &e).is_err());
@@ -3035,8 +3641,13 @@ mod tests {
     #[test]
     fn sfwan_longlive_is_opt_in() {
         let cat = catalog(&WeightLayout::default());
-        let sf = cat.iter().find(|m| m.id.as_str() == "sfwan21-1.3b").unwrap();
-        let CudaRecipe::SfWan(r) = &sf.recipe else { panic!("sfwan recipe") };
+        let sf = cat
+            .iter()
+            .find(|m| m.id.as_str() == "sfwan21-1.3b")
+            .unwrap();
+        let CudaRecipe::SfWan(r) = &sf.recipe else {
+            panic!("sfwan recipe")
+        };
         assert!(r.longlive.is_none());
         let mut v = serde_json::to_value(r).unwrap();
         assert!(v.get("longlive").is_none());

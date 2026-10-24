@@ -48,7 +48,9 @@ pub struct Outbox {
 
 impl std::fmt::Debug for Outbox {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Outbox").field("conns", &self.len()).finish()
+        f.debug_struct("Outbox")
+            .field("conns", &self.len())
+            .finish()
     }
 }
 

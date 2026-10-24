@@ -305,11 +305,19 @@ pub struct PromptExpansion {
 impl PromptExpansion {
     /// The client asked for `mode` in `field`.
     pub fn explicit(mode: ExpansionMode, field: &'static str) -> Self {
-        Self { mode, explicit: true, field }
+        Self {
+            mode,
+            explicit: true,
+            field,
+        }
     }
     /// The protocol's default for an omitted `field`.
     pub fn default_for(mode: ExpansionMode, field: &'static str) -> Self {
-        Self { mode, explicit: false, field }
+        Self {
+            mode,
+            explicit: false,
+            field,
+        }
     }
     /// Whether to rewrite, given the server's `default_on`.
     pub fn wanted(&self, default_on: bool) -> bool {
@@ -626,7 +634,11 @@ pub enum RetakeMode {
 }
 
 impl RetakeMode {
-    pub const ALL: [RetakeMode; 3] = [RetakeMode::ReplaceAudio, RetakeMode::ReplaceVideo, RetakeMode::ReplaceAudioAndVideo];
+    pub const ALL: [RetakeMode; 3] = [
+        RetakeMode::ReplaceAudio,
+        RetakeMode::ReplaceVideo,
+        RetakeMode::ReplaceAudioAndVideo,
+    ];
 
     pub fn as_str(&self) -> &'static str {
         match self {

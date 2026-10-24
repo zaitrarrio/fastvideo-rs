@@ -67,13 +67,20 @@ fn dit_matches_reference() {
     };
     let net = MmAudioTransformer::load(cfg, &m).unwrap();
     let cond = net
-        .preprocess(&get(&m, "__in_clip"), &get(&m, "__in_sync"), &get(&m, "__in_text"), 11)
+        .preprocess(
+            &get(&m, "__in_clip"),
+            &get(&m, "__in_sync"),
+            &get(&m, "__in_text"),
+            11,
+        )
         .unwrap();
     check("clip_f", &cond.clip_f, &get(&m, "__out_clip_f"), 1e-5);
     check("sync_f", &cond.sync_f, &get(&m, "__out_sync_f"), 1e-5);
     check("text_f", &cond.text_f, &get(&m, "__out_text_f"), 1e-5);
     let rot = net.rotations(11, 4).unwrap();
-    let flow = net.predict_flow(&get(&m, "__in_latent"), 0.37, &cond, &rot).unwrap();
+    let flow = net
+        .predict_flow(&get(&m, "__in_latent"), 0.37, &cond, &rot)
+        .unwrap();
     check("flow", &flow, &get(&m, "__out_flow"), 1e-4);
 }
 
@@ -95,7 +102,12 @@ fn bigvgan_matches_reference() {
     let v = BigVgan::load(BigVganConfig::tiny(), &m).unwrap();
     let wav = v.forward(&get(&m, "__in_mel")).unwrap();
     let want = get(&m, "__out_wav");
-    check("bigvgan", &wav, &want.reshape(vec![1, want.numel()]).unwrap(), 1e-4);
+    check(
+        "bigvgan",
+        &wav,
+        &want.reshape(vec![1, want.numel()]).unwrap(),
+        1e-4,
+    );
 }
 
 #[test]
@@ -111,20 +123,38 @@ fn synchformer_matches_reference() {
 #[ignore]
 fn clip_matches_reference() {
     let Some(m) = map("clip") else { return };
-    let cfg = ClipTowerConfig { width: 32, layers: 2, heads: 2 };
+    let cfg = ClipTowerConfig {
+        width: 32,
+        layers: 2,
+        heads: 2,
+    };
     let vis = ClipVisual::load(cfg.clone(), &m, 14, 2, 16).unwrap();
-    check("clip image", &vis.encode(&get(&m, "__in_pixels")).unwrap(), &get(&m, "__out_image"), 1e-4);
+    check(
+        "clip image",
+        &vis.encode(&get(&m, "__in_pixels")).unwrap(),
+        &get(&m, "__out_image"),
+        1e-4,
+    );
     let txt = ClipText::load(cfg, &m, 49408, 77).unwrap();
     let ids = get(&m, "__in_ids").host_cow().unwrap().into_owned();
     let want = get(&m, "__out_text");
     let d = dir().unwrap();
     let prompt = std::fs::read_to_string(d.join("clip_prompt.txt")).unwrap();
     for (b, text) in [prompt.as_str(), ""].iter().enumerate() {
-        let ref_ids: Vec<u32> = ids[b * 77..(b + 1) * 77].iter().map(|&v| v as u32).collect();
-        let ours = fastvideo_models::mmaudio::tokenize::tokenize(&d.join("tokenizer.json"), text).unwrap();
+        let ref_ids: Vec<u32> = ids[b * 77..(b + 1) * 77]
+            .iter()
+            .map(|&v| v as u32)
+            .collect();
+        let ours =
+            fastvideo_models::mmaudio::tokenize::tokenize(&d.join("tokenizer.json"), text).unwrap();
         assert_eq!(ours, ref_ids, "token ids for {text:?}");
         let got = txt.encode(&ours).unwrap();
-        check(&format!("clip text {b}"), &got, &want.narrow(0, b, 1).unwrap(), 1e-4);
+        check(
+            &format!("clip text {b}"),
+            &got,
+            &want.narrow(0, b, 1).unwrap(),
+            1e-4,
+        );
     }
 }
 
@@ -135,16 +165,34 @@ fn frames_match_torchvision() {
     let Some(m) = map("frames") else { return };
     let (_, rgb) = m.get_f32("__in_rgb").unwrap();
     let (h, w) = (480, 832);
-    let frames: Vec<Vec<u8>> = rgb.chunks_exact(h * w * 3).map(|f| f.iter().map(|&v| v as u8).collect()).collect();
+    let frames: Vec<Vec<u8>> = rgb
+        .chunks_exact(h * w * 3)
+        .map(|f| f.iter().map(|&v| v as u8).collect())
+        .collect();
     let refs: Vec<&[u8]> = frames.iter().map(Vec::as_slice).collect();
     let cp = clip_pixels(&refs, h, w, false);
     let sp = sync_pixels(&refs, h, w);
-    for (name, ours, key, lsb) in [("clip", cp, "__out_clip", 1.0 / 255.0), ("sync", sp, "__out_sync", 2.0 / 255.0)] {
+    for (name, ours, key, lsb) in [
+        ("clip", cp, "__out_clip", 1.0 / 255.0),
+        ("sync", sp, "__out_sync", 2.0 / 255.0),
+    ] {
         let (_, want) = m.get_f32(key).unwrap();
-        let max = ours.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
-        let off = ours.iter().zip(&want).filter(|(a, b)| (*a - *b).abs() > 1e-6).count();
-        eprintln!("{name} pixels: max |d| {max:.4} ({:.2} lsb), {off} of {} differ, rel-L2 {:.3e}",
-            max / lsb, ours.len(), rel_l2(&ours, &want));
+        let max = ours
+            .iter()
+            .zip(&want)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0f32, f32::max);
+        let off = ours
+            .iter()
+            .zip(&want)
+            .filter(|(a, b)| (*a - *b).abs() > 1e-6)
+            .count();
+        eprintln!(
+            "{name} pixels: max |d| {max:.4} ({:.2} lsb), {off} of {} differ, rel-L2 {:.3e}",
+            max / lsb,
+            ours.len(),
+            rel_l2(&ours, &want)
+        );
         assert!(max <= lsb * 1.01, "{name}: more than one uint8 step off");
     }
 }

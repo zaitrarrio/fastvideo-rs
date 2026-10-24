@@ -117,9 +117,12 @@ fn load_module(
         "103a" => Some("sm_103a"),
         _ => None,
     });
-    let (module, origin) = super::nvrtc_sass::load(ctx, SRC, &opts, sass, &[arch], "attn-dc")
-        .map_err(msg)?;
-    Ok(Some((module, if origin.sass { "nvrtc sass" } else { "nvrtc" })))
+    let (module, origin) =
+        super::nvrtc_sass::load(ctx, SRC, &opts, sass, &[arch], "attn-dc").map_err(msg)?;
+    Ok(Some((
+        module,
+        if origin.sass { "nvrtc sass" } else { "nvrtc" },
+    )))
 }
 
 fn load(ctx: &Arc<cudarc::driver::CudaContext>, sm: u32) -> Result<Option<DcDense>> {
@@ -464,7 +467,12 @@ pub fn vsa_fine(
                 &dummy32, &dummy32, &dummy16, &nt_i, &topk_i, &qb_i, &qe_i, &seq_i, &sl2, &mode)
             .map_err(launch_err)?;
         }
-        VsaEpilogue::CombineRound16 { out, coarse, gate, seq } => {
+        VsaEpilogue::CombineRound16 {
+            out,
+            coarse,
+            gate,
+            seq,
+        } => {
             if out.len() < bh * seq * DC_HEAD_DIM || coarse.len() < bh * nt * DC_HEAD_DIM {
                 return Err(msg("attn_dc vsa: combine buffers too small"));
             }
@@ -560,7 +568,8 @@ pub fn vsa_prep(
     let mut vt = unsafe { dev.stream.alloc::<bf16>(tiled) }.map_err(err)?;
     let mut qc = unsafe { dev.stream.alloc::<f32>(means) }.map_err(err)?;
     let mut kc = unsafe { dev.stream.alloc::<f32>(means) }.map_err(err)?;
-    let mut vc = unsafe { dev.stream.alloc::<f32>(if want_vc { means } else { 1 }) }.map_err(err)?;
+    let mut vc =
+        unsafe { dev.stream.alloc::<f32>(if want_vc { means } else { 1 }) }.map_err(err)?;
     let cfg = LaunchConfig {
         grid_dim: (nt as u32, bh as u32, 3),
         block_dim: (DC_HEAD_DIM as u32, 1, 1),

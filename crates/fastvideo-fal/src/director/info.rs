@@ -34,7 +34,10 @@ use super::messages::{Resolution, CLIENT_MESSAGE_TYPES, SCRIPT_MAX_BEATS, SERVER
 /// Whether the director can run a model: clip streaming (H3, LTX) or a
 /// causal rollout (LongLive, SF-Wan).
 pub fn director_capable(caps: &ModelCaps) -> bool {
-    matches!(caps.stream, Some(StreamCaps::Clip { .. } | StreamCaps::Causal { .. }))
+    matches!(
+        caps.stream,
+        Some(StreamCaps::Clip { .. } | StreamCaps::Causal { .. })
+    )
 }
 
 /// Whether a causal model is LongLive (served as `longlive`): its weights are
@@ -50,7 +53,10 @@ pub const LONGLIVE_LICENCE: &str = "LongLive-1.3B weights (NVIDIA, HF card: CC-B
 /// 1080p (H3: 480p and 768p, 1080p with the opt-in 1080P tier; LTX: all
 /// four).
 pub fn served_resolutions(caps: &ModelCaps) -> Vec<Resolution> {
-    Resolution::ALL.into_iter().filter(|r| caps.canvas.short_edges.contains(&r.short_edge())).collect()
+    Resolution::ALL
+        .into_iter()
+        .filter(|r| caps.canvas.short_edges.contains(&r.short_edge()))
+        .collect()
 }
 
 /// The control limits for a model: a causal model's block-built director
@@ -59,7 +65,12 @@ pub fn served_resolutions(caps: &ModelCaps) -> Vec<Resolution> {
 /// `chunk_duration` option).
 pub fn model_limits(caps: &ModelCaps, default_seconds: f64, causal_chunk_blocks: u32) -> Limits {
     let fps = caps.fps.default;
-    if let Some(StreamCaps::Causal { block_frames, context, .. }) = caps.stream {
+    if let Some(StreamCaps::Causal {
+        block_frames,
+        context,
+        ..
+    }) = caps.stream
+    {
         let block_seconds = f64::from(block_frames) / f64::from(fps.max(1));
         let chunk_blocks = causal_chunk_blocks.max(1);
         let chunk = block_seconds * f64::from(chunk_blocks);
@@ -70,7 +81,12 @@ pub fn model_limits(caps: &ModelCaps, default_seconds: f64, causal_chunk_blocks:
             max_chunk_seconds: chunk,
             resolutions: served_resolutions(caps),
             script_max_end_images: 0,
-            causal: Some(CausalLimits { block_frames, block_seconds, chunk_blocks, context }),
+            causal: Some(CausalLimits {
+                block_frames,
+                block_seconds,
+                chunk_blocks,
+                context,
+            }),
             image_conditioning: false,
             ..Limits::default()
         };
@@ -99,7 +115,10 @@ pub fn model_limits(caps: &ModelCaps, default_seconds: f64, causal_chunk_blocks:
         ..Limits::default()
     };
     // The default is one of the served `chunk_duration` options.
-    Limits { chunk_seconds: l.chunk_for(default_seconds), ..l }
+    Limits {
+        chunk_seconds: l.chunk_for(default_seconds),
+        ..l
+    }
 }
 
 /// `(chunk_duration, generated frames)` for each option `limits` serve,
@@ -166,8 +185,16 @@ pub fn director_info(f: &InfoFacts) -> Value {
         return causal_info(f, c, &resolutions);
     }
     let playback = f64::from(f.default_chunk_frames.saturating_sub(1)) / f64::from(l.fps.max(1));
-    let by_res: serde_json::Map<String, Value> = l.resolutions.iter().map(|r| (r.as_str().to_owned(), json!(l.at(*r).chunk_options()))).collect();
-    let frames: serde_json::Map<String, Value> = f.chunk_frames.iter().map(|(s, n)| (s.to_string(), json!(n))).collect();
+    let by_res: serde_json::Map<String, Value> = l
+        .resolutions
+        .iter()
+        .map(|r| (r.as_str().to_owned(), json!(l.at(*r).chunk_options())))
+        .collect();
+    let frames: serde_json::Map<String, Value> = f
+        .chunk_frames
+        .iter()
+        .map(|(s, n)| (s.to_string(), json!(n)))
+        .collect();
     let mut v = json!({
         "app": f.app,
         "protocol_version": 1,
@@ -244,8 +271,15 @@ fn chunk_note(l: &Limits) -> Option<String> {
     for r in &l.resolutions {
         let o = l.at(*r).chunk_options();
         if o != options && !o.is_empty() {
-            let list = o.iter().map(|d| format!("{d}")).collect::<Vec<_>>().join(" or ");
-            notes.push(format!("at {} chunks are {list} s (the tier's clip cap)", r.as_str()));
+            let list = o
+                .iter()
+                .map(|d| format!("{d}"))
+                .collect::<Vec<_>>()
+                .join(" or ");
+            notes.push(format!(
+                "at {} chunks are {list} s (the tier's clip cap)",
+                r.as_str()
+            ));
         }
     }
     (!notes.is_empty()).then(|| notes.join("; "))
@@ -257,7 +291,13 @@ fn chunk_note(l: &Limits) -> Option<String> {
 fn causal_info(f: &InfoFacts, c: &super::control::CausalLimits, resolutions: &[&str]) -> Value {
     let l = &f.limits;
     let mut v = {
-        let clip = InfoFacts { limits: super::control::Limits { causal: None, ..l.clone() }, ..f.clone() };
+        let clip = InfoFacts {
+            limits: super::control::Limits {
+                causal: None,
+                ..l.clone()
+            },
+            ..f.clone()
+        };
         director_info(&clip)
     };
     let chunk_frames = c.block_frames * c.chunk_blocks.max(1);
@@ -267,7 +307,10 @@ fn causal_info(f: &InfoFacts, c: &super::control::CausalLimits, resolutions: &[&
     v["default_chunk_duration"] = whole.into();
     v["min_chunk_duration"] = whole.into();
     v["max_chunk_duration"] = whole.into();
-    v["continuation_context_frames"] = c.context.map_or(c.block_frames, |x| x.window_pixel_frames()).into();
+    v["continuation_context_frames"] = c
+        .context
+        .map_or(c.block_frames, |x| x.window_pixel_frames())
+        .into();
     v["continuation_playback_seconds"] = ((chunk_s * 1000.0).round() / 1000.0).into();
     v["resolutions"] = json!(resolutions);
     v["aspect_ratios"] = json!(["16:9"]);
@@ -278,7 +321,12 @@ fn causal_info(f: &InfoFacts, c: &super::control::CausalLimits, resolutions: &[&
     v["script_min_opening_chunk_seconds"] = 1.into();
     // One continuous rollout: no chunk length to choose.
     if let Some(o) = v.as_object_mut() {
-        for k in ["chunk_duration_options", "chunk_duration_options_by_resolution", "chunk_duration_frames", "chunk_duration_note"] {
+        for k in [
+            "chunk_duration_options",
+            "chunk_duration_options_by_resolution",
+            "chunk_duration_frames",
+            "chunk_duration_note",
+        ] {
             o.remove(k);
         }
     }
@@ -325,9 +373,18 @@ mod tests {
         assert_eq!(v["fps"], 24);
         assert_eq!(v["chunk_seconds"], 5);
         assert_eq!(v["default_chunk_duration"], 5);
-        assert_eq!((v["min_chunk_duration"].as_u64(), v["max_chunk_duration"].as_u64()), (Some(5), Some(15)));
+        assert_eq!(
+            (
+                v["min_chunk_duration"].as_u64(),
+                v["max_chunk_duration"].as_u64()
+            ),
+            (Some(5), Some(15))
+        );
         assert_eq!(v["chunk_duration_options"], json!([5, 10]));
-        assert_eq!(v["chunk_duration_options_by_resolution"], json!({"768p": [5, 10]}));
+        assert_eq!(
+            v["chunk_duration_options_by_resolution"],
+            json!({"768p": [5, 10]})
+        );
         assert_eq!(v["chunk_duration_frames"], json!({"5": 124, "10": 243}));
         assert_eq!(v["chunk_duration_note"], Value::Null);
         assert_eq!(v["continuation_context_frames"], 1);
@@ -339,49 +396,124 @@ mod tests {
         assert_eq!(v["one_session_per_machine"], true);
         assert_eq!(v["audio_conditioning"], false);
         assert_eq!(v["scripts"], true);
-        assert_eq!(v["client_message_types"], json!(["configure", "ping", "prompt", "stop"]));
+        assert_eq!(
+            v["client_message_types"],
+            json!(["configure", "ping", "prompt", "stop"])
+        );
         assert_eq!(v["server_message_types"].as_array().unwrap().len(), 16);
-        let l = Limits { resolutions: vec![Resolution::R480, Resolution::R768], ..Limits::default() };
-        let v = director_info(&InfoFacts { limits: l, ..f.clone() });
+        let l = Limits {
+            resolutions: vec![Resolution::R480, Resolution::R768],
+            ..Limits::default()
+        };
+        let v = director_info(&InfoFacts {
+            limits: l,
+            ..f.clone()
+        });
         assert_eq!(v["resolutions"], json!(["480p", "768p"]));
-        let l = Limits { resolutions: Resolution::ALL.to_vec(), ..Limits::default() };
-        let v = director_info(&InfoFacts { limits: l, ..f.clone() });
+        let l = Limits {
+            resolutions: Resolution::ALL.to_vec(),
+            ..Limits::default()
+        };
+        let v = director_info(&InfoFacts {
+            limits: l,
+            ..f.clone()
+        });
         assert_eq!(v["resolutions"], json!(["480p", "720p", "768p", "1080p"]));
         assert!(v.get("type").is_none());
         // The H3 1080P tier caps chunks at 5 s.
-        let l = Limits { resolutions: vec![Resolution::R768, Resolution::R1080], hd_max_chunk_seconds: Some(5.0), ..Limits::default() };
-        let v = director_info(&InfoFacts { limits: l, ..f.clone() });
+        let l = Limits {
+            resolutions: vec![Resolution::R768, Resolution::R1080],
+            hd_max_chunk_seconds: Some(5.0),
+            ..Limits::default()
+        };
+        let v = director_info(&InfoFacts {
+            limits: l,
+            ..f.clone()
+        });
         assert_eq!(v["chunk_duration_options"], json!([5, 10]));
-        assert_eq!(v["chunk_duration_options_by_resolution"], json!({"768p": [5, 10], "1080p": [5]}));
-        assert!(v["chunk_duration_note"].as_str().unwrap().contains("at 1080p chunks are 5 s"), "{v}");
+        assert_eq!(
+            v["chunk_duration_options_by_resolution"],
+            json!({"768p": [5, 10], "1080p": [5]})
+        );
+        assert!(
+            v["chunk_duration_note"]
+                .as_str()
+                .unwrap()
+                .contains("at 1080p chunks are 5 s"),
+            "{v}"
+        );
         // A model whose clips stop short of 10 s (Wan 2.2 5B: 161 frames).
-        let l = Limits { max_chunk_seconds: 161.0 / 24.0, resolutions: vec![Resolution::R480], ..Limits::default() };
-        let v = director_info(&InfoFacts { limits: l, chunk_frames: vec![(5, 121)], default_chunk_frames: 121, ..f });
-        assert_eq!((v["chunk_duration_options"].clone(), v["default_chunk_duration"].as_u64()), (json!([5]), Some(5)));
+        let l = Limits {
+            max_chunk_seconds: 161.0 / 24.0,
+            resolutions: vec![Resolution::R480],
+            ..Limits::default()
+        };
+        let v = director_info(&InfoFacts {
+            limits: l,
+            chunk_frames: vec![(5, 121)],
+            default_chunk_frames: 121,
+            ..f
+        });
+        assert_eq!(
+            (
+                v["chunk_duration_options"].clone(),
+                v["default_chunk_duration"].as_u64()
+            ),
+            (json!([5]), Some(5))
+        );
         assert_eq!(v["chunk_duration_frames"], json!({"5": 121}));
-        assert!(v["chunk_duration_note"].as_str().unwrap().contains("at most 6.71 s"), "{v}");
+        assert!(
+            v["chunk_duration_note"]
+                .as_str()
+                .unwrap()
+                .contains("at most 6.71 s"),
+            "{v}"
+        );
         assert_eq!(v["continuation_playback_seconds"], 5.0);
     }
 
     #[test]
     fn causal_constants() {
         use super::super::control::CausalLimits;
-        let ctx = fastvideo_protocol::CausalContext { window_latent_frames: 12, sink_latent_frames: 3, prompt_recache: true };
+        let ctx = fastvideo_protocol::CausalContext {
+            window_latent_frames: 12,
+            sink_latent_frames: 3,
+            prompt_recache: true,
+        };
         let l = Limits {
             fps: 16,
             chunk_seconds: 3.0,
             min_chunk_seconds: 3.0,
             max_chunk_seconds: 3.0,
             resolutions: vec![Resolution::R480],
-            causal: Some(CausalLimits { block_frames: 12, block_seconds: 0.75, chunk_blocks: 4, context: Some(ctx) }),
+            causal: Some(CausalLimits {
+                block_frames: 12,
+                block_seconds: 0.75,
+                chunk_blocks: 4,
+                context: Some(ctx),
+            }),
             ..Limits::default()
         };
-        let f = InfoFacts { app: app_name("fastvideo/longlive"), limits: l, default_chunk_frames: 48, chunk_frames: Vec::new(), max_session_seconds: Some(600), audio: false };
+        let f = InfoFacts {
+            app: app_name("fastvideo/longlive"),
+            limits: l,
+            default_chunk_frames: 48,
+            chunk_frames: Vec::new(),
+            max_session_seconds: Some(600),
+            audio: false,
+        };
         let v = session_info(&f);
         assert_eq!(v["type"], "session_info");
         assert_eq!(v["app"], "fastvideo-longlive-director");
         assert_eq!(v["fps"], 16);
-        assert_eq!((v["chunk_seconds"].as_u64(), v["min_chunk_duration"].as_u64(), v["max_chunk_duration"].as_u64()), (Some(3), Some(3), Some(3)));
+        assert_eq!(
+            (
+                v["chunk_seconds"].as_u64(),
+                v["min_chunk_duration"].as_u64(),
+                v["max_chunk_duration"].as_u64()
+            ),
+            (Some(3), Some(3), Some(3))
+        );
         assert_eq!(v["continuation_context_frames"], 48);
         assert_eq!(v["continuation_playback_seconds"], 3.0);
         assert_eq!(v["resolutions"], json!(["480p"]));
@@ -392,7 +524,12 @@ mod tests {
         assert_eq!(v["causal"]["block_seconds"], 0.75);
         assert_eq!(v["max_session_seconds"], 600);
         // No chunk length to choose on a causal model.
-        for k in ["chunk_duration_options", "chunk_duration_options_by_resolution", "chunk_duration_frames", "chunk_duration_note"] {
+        for k in [
+            "chunk_duration_options",
+            "chunk_duration_options_by_resolution",
+            "chunk_duration_frames",
+            "chunk_duration_note",
+        ] {
             assert!(v.get(k).is_none(), "{k}");
         }
         assert_eq!(v["default_chunk_duration"], 3);

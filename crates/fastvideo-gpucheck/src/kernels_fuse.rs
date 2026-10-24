@@ -96,7 +96,9 @@ pub fn dit_fusion(report: &mut Report, seed: &mut u64) -> StageResult<()> {
 
 /// The bytes of an NVFP4 operand: codes of the padded rows, every scale, the
 /// tensor amax.
-fn nvfp4_bytes(a: &fastvideo_cudarc::wan::nvfp4_linear::Nvfp4Operand) -> anyhow::Result<(Vec<u8>, Vec<u8>, f32)> {
+fn nvfp4_bytes(
+    a: &fastvideo_cudarc::wan::nvfp4_linear::Nvfp4Operand,
+) -> anyhow::Result<(Vec<u8>, Vec<u8>, f32)> {
     let d = dev()?;
     Ok((
         d.stream.memcpy_dtov(&a.packed)?,
@@ -135,7 +137,9 @@ fn check_nvfp4(
 fn h3_glue_parity(report: &mut Report, seed: &mut u64) -> StageResult<()> {
     use fastvideo_cudarc::wan::nvfp4_linear::quantize_bf16_operand_with;
     use fastvideo_models::nvfp4::ScaleRule;
-    let glue = |f: &mut dyn FnMut() -> StageResult<()>| fused16::with_fuse(true, || fused16::with_glue(true, f));
+    let glue = |f: &mut dyn FnMut() -> StageResult<()>| {
+        fused16::with_fuse(true, || fused16::with_glue(true, f))
+    };
 
     // q/k/v/gate heads in one launch vs qk_norm_rope + split_heads_bhsd.
     let (h2, d2, r2) = (3usize, 128usize, 96usize);
@@ -143,31 +147,60 @@ fn h3_glue_parity(report: &mut Report, seed: &mut u64) -> StageResult<()> {
     for (b, s2, gate) in [(1usize, 83usize, true), (1, 70, false), (2, 41, true)] {
         let width = 4 * inner + 8;
         let packed = t16(&bf16v(rand(seed, b * s2 * width, 1.3)), &[b, s2, width])?;
-        let nq = t32(&bf16v(rand(seed, d2, 0.1).into_iter().map(|v| 1.0 + v).collect()), &[d2])?;
-        let nk = t32(&bf16v(rand(seed, d2, 0.1).into_iter().map(|v| 1.0 + v).collect()), &[d2])?;
-        let ang: Vec<f32> = (0..s2 * r2).map(|i| (i as f32 * 0.013).sin() * 3.0).collect();
+        let nq = t32(
+            &bf16v(rand(seed, d2, 0.1).into_iter().map(|v| 1.0 + v).collect()),
+            &[d2],
+        )?;
+        let nk = t32(
+            &bf16v(rand(seed, d2, 0.1).into_iter().map(|v| 1.0 + v).collect()),
+            &[d2],
+        )?;
+        let ang: Vec<f32> = (0..s2 * r2)
+            .map(|i| (i as f32 * 0.013).sin() * 3.0)
+            .collect();
         let cos = t32(&ang.iter().map(|a| a.cos()).collect::<Vec<_>>(), &[s2, r2])?;
         let sin = t32(&ang.iter().map(|a| a.sin()).collect::<Vec<_>>(), &[s2, r2])?;
         for rope in [Some((&cos, &sin)), None] {
-            let tag = format!("b{b}_s{s2}_gate{}_rope{}", u8::from(gate), u8::from(rope.is_some()));
+            let tag = format!(
+                "b{b}_s{s2}_gate{}_rope{}",
+                u8::from(gate),
+                u8::from(rope.is_some())
+            );
             let mut got = None;
             glue(&mut || {
                 got = fused16::qkvg_heads(&packed, &nq, &nk, rope, h2, d2, gate, 1e-6)?;
                 Ok(())
             })?;
-            let (q, k, v, g) = got.ok_or_else(|| anyhow::anyhow!("qkvg_heads did not apply ({tag})"))?;
+            let (q, k, v, g) =
+                got.ok_or_else(|| anyhow::anyhow!("qkvg_heads did not apply ({tag})"))?;
             let want = [
                 fused16::qk_norm_rope(&packed, &nq, rope, h2, d2, 0, 1e-6)?,
                 fused16::qk_norm_rope(&packed, &nk, rope, h2, d2, inner, 1e-6)?,
                 packed.split_heads_bhsd(2 * inner, h2, d2)?,
             ];
-            for (name, got, want) in [("q", &q, &want[0]), ("k", &k, &want[1]), ("v", &v, &want[2])] {
-                check_ulps(report, &format!("h3_glue_heads_{name}_{tag}"), &host(got)?, &host(want)?, true)?;
+            for (name, got, want) in [
+                ("q", &q, &want[0]),
+                ("k", &k, &want[1]),
+                ("v", &v, &want[2]),
+            ] {
+                check_ulps(
+                    report,
+                    &format!("h3_glue_heads_{name}_{tag}"),
+                    &host(got)?,
+                    &host(want)?,
+                    true,
+                )?;
             }
             match (g, gate) {
                 (Some(g), true) => {
                     let w = packed.split_heads_bhsd(3 * inner, h2, d2)?;
-                    check_ulps(report, &format!("h3_glue_heads_gate_{tag}"), &host(&g)?, &host(&w)?, true)?;
+                    check_ulps(
+                        report,
+                        &format!("h3_glue_heads_gate_{tag}"),
+                        &host(&g)?,
+                        &host(&w)?,
+                        true,
+                    )?;
                 }
                 (None, false) => {}
                 _ => return Err(anyhow::anyhow!("qkvg_heads: gate output mismatch ({tag})").into()),
@@ -179,14 +212,24 @@ fn h3_glue_parity(report: &mut Report, seed: &mut u64) -> StageResult<()> {
     // the f32 feed `attend` widened and rounded.
     {
         use fastvideo_cudarc::h3::vsa::{H3Vsa, H3VsaConfig};
-        let layout = fastvideo_models::h3::packing::H3PackedLayout::new(70, (5, 8, 12), 33, [1, 2, 2])
-            .map_err(anyhow::Error::msg)?;
+        let layout =
+            fastvideo_models::h3::packing::H3PackedLayout::new(70, (5, 8, 12), 33, [1, 2, 2])
+                .map_err(anyhow::Error::msg)?;
         let (vh, vd) = (2usize, 128usize);
         let seq = layout.sequence_length();
         let shape = [1, vh, seq, vd];
         let n = vh * seq * vd;
         let parts: Vec<Vec<f32>> = (0..4).map(|_| bf16v(rand(seed, n, 1.0))).collect();
-        let vsa = H3Vsa::new(&layout, vh, vd, H3VsaConfig { sparsity: 0.5, group: 2, tile_size: 64 })?;
+        let vsa = H3Vsa::new(
+            &layout,
+            vh,
+            vd,
+            H3VsaConfig {
+                sparsity: 0.5,
+                group: 2,
+                tile_size: 64,
+            },
+        )?;
         report.check(
             "h3_glue_vsa_takes_bf16",
             vsa.takes_bf16(),
@@ -215,7 +258,13 @@ fn h3_glue_parity(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             json!({"got_bf16": got.is_bf16(), "shape": got.shape}),
             json!({"got_bf16": false}),
         )?;
-        check_ulps(report, "h3_glue_vsa_bf16_feed", &host(&got.quantize_bf16()?)?, &host(&want)?, true)?;
+        check_ulps(
+            report,
+            "h3_glue_vsa_bf16_feed",
+            &host(&got.quantize_bf16()?)?,
+            &host(&want)?,
+            true,
+        )?;
     }
 
     // SwiGLU -> NVFP4 (static activation amax) vs the bf16 SwiGLU quantized.
@@ -224,7 +273,10 @@ fn h3_glue_parity(report: &mut Report, seed: &mut u64) -> StageResult<()> {
         (200, 192, 0.25, ScaleRule::Static6),
         (130, 128, 2.0, ScaleRule::Static4),
     ] {
-        let h = t16(&bf16v(rand(seed, rows * 2 * half, 1.5)), &[1, rows, 2 * half])?;
+        let h = t16(
+            &bf16v(rand(seed, rows * 2 * half, 1.5)),
+            &[1, rows, 2 * half],
+        )?;
         let amax = dev()?.stream.memcpy_stod(&[amax_v])?;
         let mut got = None;
         glue(&mut || {
@@ -233,9 +285,17 @@ fn h3_glue_parity(report: &mut Report, seed: &mut u64) -> StageResult<()> {
         })?;
         let got = got.ok_or_else(|| anyhow::anyhow!("swiglu_nvfp4 did not apply"))?;
         let act = h.swiglu_value_first()?;
-        let a16 = act.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("swiglu not device bf16"))?;
-        let want = quantize_bf16_operand_with(quant::ptr(a16), rows, half, false, rule, Some(&amax))?;
-        check_nvfp4(report, &format!("h3_glue_swiglu_nvfp4_{rows}x{half}_{rule:?}"), &got, &want)?;
+        let a16 = act
+            .device_slice_bf16()
+            .ok_or_else(|| anyhow::anyhow!("swiglu not device bf16"))?;
+        let want =
+            quantize_bf16_operand_with(quant::ptr(a16), rows, half, false, rule, Some(&amax))?;
+        check_nvfp4(
+            report,
+            &format!("h3_glue_swiglu_nvfp4_{rows}x{half}_{rule:?}"),
+            &got,
+            &want,
+        )?;
     }
 
     // Head merge -> NVFP4 (measured or static amax) vs round + merge + quantize.
@@ -247,7 +307,11 @@ fn h3_glue_parity(report: &mut Report, seed: &mut u64) -> StageResult<()> {
     ] {
         let k = heads * d;
         let vals = rand(seed, heads * s * d, 2.0);
-        let o = if f32_in { t32(&vals, &[1, heads, s, d])? } else { t16(&bf16v(vals), &[1, heads, s, d])? };
+        let o = if f32_in {
+            t32(&vals, &[1, heads, s, d])?
+        } else {
+            t16(&bf16v(vals), &[1, heads, s, d])?
+        };
         let fixed_dev = match fixed {
             Some(v) => Some(dev()?.stream.memcpy_stod(&[v])?),
             None => None,
@@ -259,9 +323,26 @@ fn h3_glue_parity(report: &mut Report, seed: &mut u64) -> StageResult<()> {
         })?;
         let got = got.ok_or_else(|| anyhow::anyhow!("merge_heads_nvfp4 did not apply"))?;
         let merged = o.quantize_bf16()?.merge_heads()?;
-        let m16 = merged.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("merged heads not device bf16"))?;
-        let want = quantize_bf16_operand_with(quant::ptr(m16), s, k, false, ScaleRule::Static6, fixed_dev.as_ref())?;
-        let tag = format!("{s}x{k}_{}_{}", if f32_in { "f32" } else { "bf16" }, if fixed.is_some() { "static" } else { "measured" });
+        let m16 = merged
+            .device_slice_bf16()
+            .ok_or_else(|| anyhow::anyhow!("merged heads not device bf16"))?;
+        let want = quantize_bf16_operand_with(
+            quant::ptr(m16),
+            s,
+            k,
+            false,
+            ScaleRule::Static6,
+            fixed_dev.as_ref(),
+        )?;
+        let tag = format!(
+            "{s}x{k}_{}_{}",
+            if f32_in { "f32" } else { "bf16" },
+            if fixed.is_some() {
+                "static"
+            } else {
+                "measured"
+            }
+        );
         check_nvfp4(report, &format!("h3_glue_merge_nvfp4_{tag}"), &got, &want)?;
     }
 
@@ -271,7 +352,12 @@ fn h3_glue_parity(report: &mut Report, seed: &mut u64) -> StageResult<()> {
     let off = fused16::with_glue(false, || -> anyhow::Result<bool> {
         Ok(fused16::swiglu_nvfp4(&h, &amax, ScaleRule::Static6)?.is_none())
     })?;
-    report.check("h3_glue_off_declines", off, json!({"declined": off}), json!({"declined": true}))
+    report.check(
+        "h3_glue_off_declines",
+        off,
+        json!({"declined": off}),
+        json!({"declined": true}),
+    )
 }
 
 /// `ltx_rope`: the LTX-2 rotary tables gathered on the device from their
@@ -331,7 +417,10 @@ pub fn ltx_rope(report: &mut Report) -> StageResult<()> {
                 if a.len() != b.len() {
                     return usize::MAX;
                 }
-                a.iter().zip(b).filter(|(x, y)| x.to_bits() != y.to_bits()).count()
+                a.iter()
+                    .zip(b)
+                    .filter(|(x, y)| x.to_bits() != y.to_bits())
+                    .count()
             };
             let n = diff(&gc, &wc).saturating_add(diff(&gs, &ws));
             ok &= n == 0;

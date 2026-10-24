@@ -15,8 +15,12 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use fastvideo_models::mmaudio::frames::{clip_pixels, select_frames, sync_pixels, CLIP_SIZE, SYNC_SIZE};
-use fastvideo_models::mmaudio::{bf16_round, euler_times, MmAudioConfig, MmAudioPreset, SequenceConfig};
+use fastvideo_models::mmaudio::frames::{
+    clip_pixels, select_frames, sync_pixels, CLIP_SIZE, SYNC_SIZE,
+};
+use fastvideo_models::mmaudio::{
+    bf16_round, euler_times, MmAudioConfig, MmAudioPreset, SequenceConfig,
+};
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
 
@@ -90,7 +94,10 @@ impl VideoFrames {
             .output()
             .map_err(|e| msg(format!("ffmpeg decode: {e}")))?;
         if !out.status.success() {
-            return Err(msg(format!("ffmpeg decode failed: {}", String::from_utf8_lossy(&out.stderr))));
+            return Err(msg(format!(
+                "ffmpeg decode failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
         }
         let fsz = h * w * 3;
         let frames: Vec<Vec<u8>> = out.stdout.chunks_exact(fsz).map(<[u8]>::to_vec).collect();
@@ -160,7 +167,9 @@ pub struct MmAudioPaths {
 
 impl MmAudioPaths {
     fn st(&self, name: &str) -> PathBuf {
-        self.root.join("safetensors").join(format!("{name}.safetensors"))
+        self.root
+            .join("safetensors")
+            .join(format!("{name}.safetensors"))
     }
     fn map(&self, name: &str) -> Result<WeightMap> {
         let p = self.st(name);
@@ -170,7 +179,9 @@ impl MmAudioPaths {
         WeightMap::open_files(&[p]).map_err(|e| msg(e.to_string()))
     }
     fn tokenizer(&self) -> PathBuf {
-        self.root.join("DFN5B-CLIP-ViT-H-14-384").join("tokenizer.json")
+        self.root
+            .join("DFN5B-CLIP-ViT-H-14-384")
+            .join("tokenizer.json")
     }
 }
 
@@ -239,7 +250,8 @@ impl MmAudioPipeline {
 
     /// `[1, 77, 1024]` text features.
     pub fn encode_text(&self, text: &str) -> Result<CudaTensor> {
-        let ids = fastvideo_models::mmaudio::tokenize::tokenize(&self.paths.tokenizer(), text).map_err(msg)?;
+        let ids = fastvideo_models::mmaudio::tokenize::tokenize(&self.paths.tokenizer(), text)
+            .map_err(msg)?;
         self.clip_text.encode(&ids).map_err(Into::into)
     }
 
@@ -263,7 +275,9 @@ impl MmAudioPipeline {
         if let Some(v) = &req.video {
             let sel = select_frames(&v.times, req.duration_s);
             duration = sel.duration_sec;
-            let pick = |idx: &[usize]| -> Vec<&[u8]> { idx.iter().map(|&i| v.frames[i].as_slice()).collect() };
+            let pick = |idx: &[usize]| -> Vec<&[u8]> {
+                idx.iter().map(|&i| v.frames[i].as_slice()).collect()
+            };
             let cp = clip_pixels(&pick(&sel.clip_indices), v.height, v.width, true);
             let sp = sync_pixels(&pick(&sel.sync_indices), v.height, v.width);
             pixels = Some((sel.clip_indices.len(), cp, sel.sync_indices.len(), sp));
@@ -338,9 +352,12 @@ impl MmAudioPipeline {
         // Sampler.
         let t4 = Instant::now();
         let cond = self.dit.preprocess(&clip_f, &sync_f, &text_f, nl)?;
-        let empty = self
-            .dit
-            .preprocess(&self.dit.empty_clip(nc)?, &self.dit.empty_sync(ns)?, &neg_f, nl)?;
+        let empty = self.dit.preprocess(
+            &self.dit.empty_clip(nc)?,
+            &self.dit.empty_sync(ns)?,
+            &neg_f,
+            nl,
+        )?;
         let rot = self.dit.rotations(nl, nc)?;
         let ld = dcfg.latent_dim;
         let n = nl * ld;
@@ -440,7 +457,11 @@ impl MmAudioPipeline {
         cond: &Conditions,
         rot: &[(CudaTensor, CudaTensor); 2],
     ) -> Result<Vec<f32>> {
-        Ok(self.dit.predict_flow(lat, t, cond, rot)?.host_cow()?.into_owned())
+        Ok(self
+            .dit
+            .predict_flow(lat, t, cond, rot)?
+            .host_cow()?
+            .into_owned())
     }
 }
 

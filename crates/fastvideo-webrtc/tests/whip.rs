@@ -343,28 +343,45 @@ async fn rejected_post_is_an_error_without_delete() {
 async fn offers_only_the_chosen_vpx_codec() {
     for (codec, name) in [(VideoCodec::Vp8, "VP8"), (VideoCodec::Vp9, "VP9")] {
         let (url, mock) = start_mock("tok").await;
-        let host = RtcHost::bind(HostConfig::loopback(true, false)).await.unwrap();
+        let host = RtcHost::bind(HostConfig::loopback(true, false))
+            .await
+            .unwrap();
         let mut publisher = WhipPublisher::publish(
             &host,
             WhipConfig::new(url, WhipAuth::Bearer("tok".into()))
                 .with_target(WhipTarget::Cloudflare)
                 .with_codec(codec),
-            WhipPublishOptions { audio: None, stun: vec![], ..Default::default() },
+            WhipPublishOptions {
+                audio: None,
+                stun: vec![],
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
         {
             let seen = mock.seen.lock().unwrap();
             let o = Sdp::parse(&seen.posts[0].2).unwrap();
-            let video = o.media.iter().find(|m| m.kind() == MediaKind::Video).unwrap();
+            let video = o
+                .media
+                .iter()
+                .find(|m| m.kind() == MediaKind::Video)
+                .unwrap();
             let codecs = video.codecs();
-            assert!(codecs.iter().all(|c| c.is(name) || c.is("rtx")), "{name} only: {}", video.m_line);
+            assert!(
+                codecs.iter().all(|c| c.is(name) || c.is("rtx")),
+                "{name} only: {}",
+                video.m_line
+            );
             assert!(codecs.iter().any(|c| c.is(name)));
         }
         assert_eq!(publisher.negotiated_video_codec(), Some(name));
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
-            match tokio::time::timeout_at(deadline, publisher.peer().next_event()).await.unwrap() {
+            match tokio::time::timeout_at(deadline, publisher.peer().next_event())
+                .await
+                .unwrap()
+            {
                 Some(PeerEvent::Connected) => break,
                 Some(PeerEvent::Closed(r)) => panic!("{r:?}"),
                 _ => {}
@@ -379,7 +396,9 @@ async fn offers_only_the_chosen_vpx_codec() {
                 for i in 0..20u64 {
                     let mut f = vec![0x10, 0x02, 0x00, 0x9d, 0x01, 0x2a, 0x40, 0x01, 0xb4, 0x00];
                     f.extend(std::iter::repeat_n(i as u8, 1800));
-                    handle.send_video(VideoFrame::new(f, video_rtp_time(i, 24))).unwrap();
+                    handle
+                        .send_video(VideoFrame::new(f, video_rtp_time(i, 24)))
+                        .unwrap();
                     tokio::time::sleep(Duration::from_millis(15)).await;
                 }
             });

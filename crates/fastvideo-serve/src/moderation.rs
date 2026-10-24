@@ -34,12 +34,27 @@ pub struct NciiModerator {
 }
 
 impl NciiModerator {
-    pub fn new(guard: Arc<NciiGuard>, scope: ModerationScope, threshold: f32, concurrency: usize) -> Self {
-        Self { guard, scope, threshold, permits: Arc::new(Semaphore::new(concurrency.max(1))) }
+    pub fn new(
+        guard: Arc<NciiGuard>,
+        scope: ModerationScope,
+        threshold: f32,
+        concurrency: usize,
+    ) -> Self {
+        Self {
+            guard,
+            scope,
+            threshold,
+            permits: Arc::new(Semaphore::new(concurrency.max(1))),
+        }
     }
 
     /// Loads the guard from `dir` (blocking: about 1.4 s and 0.75 GB of RAM).
-    pub fn load(dir: &Path, scope: ModerationScope, threshold: f32, concurrency: usize) -> Result<Self, String> {
+    pub fn load(
+        dir: &Path,
+        scope: ModerationScope,
+        threshold: f32,
+        concurrency: usize,
+    ) -> Result<Self, String> {
         let guard = NciiGuard::load(dir).map_err(|e| {
             format!(
                 "[moderation] ncii = {}: the guard cannot be loaded from {} ({e}); fetch the R2 tree {} (or set ncii_dir)",
@@ -88,7 +103,8 @@ impl PromptModerator for NciiModerator {
             .map_err(|e| ApiError::internal(format!("ncii guard: {e}")))?;
         let ms = started.elapsed().as_millis() as u64;
         if verdict.ncii >= self.threshold {
-            metrics::counter!("fv_moderation_total", "check" => "ncii", "result" => "refused").increment(1);
+            metrics::counter!("fv_moderation_total", "check" => "ncii", "result" => "refused")
+                .increment(1);
             tracing::warn!(
                 score = verdict.ncii,
                 tokens = verdict.tokens,
@@ -99,20 +115,30 @@ impl PromptModerator for NciiModerator {
             );
             return Err(refusal(verdict.ncii));
         }
-        metrics::counter!("fv_moderation_total", "check" => "ncii", "result" => "passed").increment(1);
-        tracing::debug!(score = verdict.ncii, tokens = verdict.tokens, ms, "ncii guard: passed");
+        metrics::counter!("fv_moderation_total", "check" => "ncii", "result" => "passed")
+            .increment(1);
+        tracing::debug!(
+            score = verdict.ncii,
+            tokens = verdict.tokens,
+            ms,
+            "ncii guard: passed"
+        );
         Ok(())
     }
 }
 
 /// The moderator `[moderation]` configures, or `None` when it is off.
-pub fn from_config(c: &ModerationCfg, env: &dyn Env) -> anyhow::Result<Option<Arc<dyn PromptModerator>>> {
+pub fn from_config(
+    c: &ModerationCfg,
+    env: &dyn Env,
+) -> anyhow::Result<Option<Arc<dyn PromptModerator>>> {
     let scope = c.scope()?;
     if scope == ModerationScope::Off {
         return Ok(None);
     }
     let dir = c.ncii_dir(env);
-    let m = NciiModerator::load(&dir, scope, c.ncii_threshold, c.ncii_concurrency).map_err(anyhow::Error::msg)?;
+    let m = NciiModerator::load(&dir, scope, c.ncii_threshold, c.ncii_concurrency)
+        .map_err(anyhow::Error::msg)?;
     tracing::info!(
         scope = scope.as_str(),
         threshold = c.ncii_threshold,
@@ -133,7 +159,11 @@ mod tests {
     fn refusal_is_content_filtered_with_the_space_message() {
         let e = refusal(0.8749);
         assert_eq!(e.kind, ErrorKind::ContentFiltered);
-        assert!(e.message.starts_with("prompt refused (ncii 0.87)"), "{}", e.message);
+        assert!(
+            e.message.starts_with("prompt refused (ncii 0.87)"),
+            "{}",
+            e.message
+        );
     }
 
     #[test]
@@ -160,9 +190,15 @@ mod tests {
         };
         let err = from_config(&on, &NoEnv).err().unwrap().to_string();
         assert!(err.contains("auxiliary/ncii-light-guard"), "{err}");
-        let bad = ModerationCfg { ncii: "sometimes".into(), ..ModerationCfg::default() };
+        let bad = ModerationCfg {
+            ncii: "sometimes".into(),
+            ..ModerationCfg::default()
+        };
         assert!(bad.validate().is_err());
-        let thr = ModerationCfg { ncii_threshold: 0.0, ..ModerationCfg::default() };
+        let thr = ModerationCfg {
+            ncii_threshold: 0.0,
+            ..ModerationCfg::default()
+        };
         assert!(thr.validate().is_err());
         assert_eq!(
             ModerationCfg::default().ncii_dir(&NoEnv),

@@ -73,7 +73,11 @@ async fn app_with(extra: &[(&str, String)]) -> App {
 }
 
 async fn app_cfg(extra: &[(&str, String)], f: impl FnOnce(&mut Config)) -> App {
-    let dir = tempfile::Builder::new().prefix("fv-serve-outputs-live-").tempdir().unwrap().keep();
+    let dir = tempfile::Builder::new()
+        .prefix("fv-serve-outputs-live-")
+        .tempdir()
+        .unwrap()
+        .keep();
     let mut env = BTreeMap::new();
     env.insert("FV_API_KEYS".to_owned(), KeyRing::hash_hex(KEY));
     env.insert("FV_URL_SIGNING_KEY".to_owned(), "k".to_owned());
@@ -95,7 +99,10 @@ async fn app_cfg(extra: &[(&str, String)], f: impl FnOnce(&mut Config)) -> App {
 }
 
 async fn call(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
-    let mut b = Request::builder().method(method).uri(uri).header("authorization", format!("Bearer {KEY}"));
+    let mut b = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("authorization", format!("Bearer {KEY}"));
     let req = match body {
         Some(v) => {
             b = b.header("content-type", "application/json");
@@ -123,32 +130,58 @@ fn has_protocol(list: &str, p: &str) -> bool {
 
 /// Decodes `secs` of `url`'s video with ffprobe: (codec, decoded frames,
 /// keyframes, width, height of the last frame).
-fn decode(url: &str, extra: &[&str], secs: Option<u32>) -> Option<(String, usize, usize, u64, u64)> {
+fn decode(
+    url: &str,
+    extra: &[&str],
+    secs: Option<u32>,
+) -> Option<(String, usize, usize, u64, u64)> {
     let mut cmd = Command::new(fastvideo_media::tools::ffprobe_bin());
-    cmd.args(["-v", "error"]).args(extra).args(["-select_streams", "v:0"]);
+    cmd.args(["-v", "error"])
+        .args(extra)
+        .args(["-select_streams", "v:0"]);
     if let Some(s) = secs {
         cmd.args(["-read_intervals", &format!("%+{s}")]);
     }
     let out = cmd
-        .args(["-show_entries", "stream=codec_name:frame=width,height,key_frame", "-show_frames", "-of", "json", url])
+        .args([
+            "-show_entries",
+            "stream=codec_name:frame=width,height,key_frame",
+            "-show_frames",
+            "-of",
+            "json",
+            url,
+        ])
         .output()
         .ok()?;
     let v: Value = serde_json::from_slice(&out.stdout).ok()?;
     if v["frames"].as_array().is_none_or(|f| f.is_empty()) {
         let err = String::from_utf8_lossy(&out.stderr);
-        println!("decode {url}: no frames; ffprobe: {}", err.lines().take(6).collect::<Vec<_>>().join(" | "));
+        println!(
+            "decode {url}: no frames; ffprobe: {}",
+            err.lines().take(6).collect::<Vec<_>>().join(" | ")
+        );
     }
     let codec = v["streams"][0]["codec_name"].as_str()?.to_owned();
     let frames = v["frames"].as_array()?;
     let keys = frames.iter().filter(|f| f["key_frame"] == 1).count();
     let last = frames.last()?;
-    Some((codec, frames.len(), keys, last["width"].as_u64()?, last["height"].as_u64()?))
+    Some((
+        codec,
+        frames.len(),
+        keys,
+        last["width"].as_u64()?,
+        last["height"].as_u64()?,
+    ))
 }
 
 // ---- MediaMTX --------------------------------------------------------------------
 
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
 }
 
 async fn mediamtx_bin(work: &FsPath) -> PathBuf {
@@ -160,10 +193,25 @@ async fn mediamtx_bin(work: &FsPath) -> PathBuf {
         return bin;
     }
     let url = format!("https://github.com/bluenviron/mediamtx/releases/download/{MTX_VERSION}/mediamtx_{MTX_VERSION}_linux_amd64.tar.gz");
-    let bytes = reqwest::get(&url).await.unwrap().error_for_status().unwrap().bytes().await.unwrap();
+    let bytes = reqwest::get(&url)
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
     let tgz = work.join("mediamtx.tar.gz");
     std::fs::write(&tgz, &bytes).unwrap();
-    let ok = Command::new("tar").arg("xzf").arg(&tgz).arg("-C").arg(work).arg("mediamtx").status().unwrap().success();
+    let ok = Command::new("tar")
+        .arg("xzf")
+        .arg(&tgz)
+        .arg("-C")
+        .arg(work)
+        .arg("mediamtx")
+        .status()
+        .unwrap()
+        .success();
     assert!(ok, "extracting MediaMTX");
     bin
 }
@@ -171,8 +219,15 @@ async fn mediamtx_bin(work: &FsPath) -> PathBuf {
 fn pem(label: &str, der: &[u8]) -> String {
     use base64::Engine as _;
     let b = base64::engine::general_purpose::STANDARD.encode(der);
-    let lines: Vec<&str> = b.as_bytes().chunks(64).map(|c| std::str::from_utf8(c).unwrap()).collect();
-    format!("-----BEGIN {label}-----\n{}\n-----END {label}-----\n", lines.join("\n"))
+    let lines: Vec<&str> = b
+        .as_bytes()
+        .chunks(64)
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect();
+    format!(
+        "-----BEGIN {label}-----\n{}\n-----END {label}-----\n",
+        lines.join("\n")
+    )
 }
 
 /// Writes `ca.pem` (a fresh test CA) and `server.crt` / `server.key` (a
@@ -181,7 +236,9 @@ fn test_ca(dir: &FsPath) {
     let ca_key = rcgen::KeyPair::generate().unwrap();
     let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
     ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-    ca_params.distinguished_name.push(rcgen::DnType::CommonName, "fastvideo test CA");
+    ca_params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "fastvideo test CA");
     let ca = ca_params.self_signed(&ca_key).unwrap();
     let key = rcgen::KeyPair::generate().unwrap();
     let leaf = rcgen::CertificateParams::new(vec!["127.0.0.1".to_owned(), "localhost".to_owned()])
@@ -190,7 +247,11 @@ fn test_ca(dir: &FsPath) {
         .unwrap();
     std::fs::write(dir.join("ca.pem"), pem("CERTIFICATE", ca.der())).unwrap();
     std::fs::write(dir.join("server.crt"), pem("CERTIFICATE", leaf.der())).unwrap();
-    std::fs::write(dir.join("server.key"), pem("PRIVATE KEY", &key.serialize_der())).unwrap();
+    std::fs::write(
+        dir.join("server.key"),
+        pem("PRIVATE KEY", &key.serialize_der()),
+    )
+    .unwrap();
 }
 
 struct Mtx {
@@ -213,7 +274,10 @@ impl Drop for Mtx {
 }
 
 async fn start_mediamtx() -> Mtx {
-    let work = std::env::var("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|_| std::env::temp_dir()).join("fv-mediamtx");
+    let work = std::env::var("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join("fv-mediamtx");
     std::fs::create_dir_all(&work).unwrap();
     let bin = mediamtx_bin(&work).await;
     // RTMPS: a certificate for 127.0.0.1 issued by a test CA no system
@@ -224,7 +288,15 @@ async fn start_mediamtx() -> Mtx {
     let cfg = work.join("mediamtx.yml");
     // Settings from MTX_* env; every path accepts publishers.
     std::fs::write(&cfg, "paths:\n  all_others:\n").unwrap();
-    let (api, rtsp, rtmp, rtmps, srt, webrtc, udp) = (free_port(), free_port(), free_port(), free_port(), free_port(), free_port(), free_port());
+    let (api, rtsp, rtmp, rtmps, srt, webrtc, udp) = (
+        free_port(),
+        free_port(),
+        free_port(),
+        free_port(),
+        free_port(),
+        free_port(),
+        free_port(),
+    );
     let log = work.join(format!("mediamtx-{api}.log"));
     let mut cmd = Command::new(&bin);
     cmd.arg(&cfg)
@@ -246,10 +318,26 @@ async fn start_mediamtx() -> Mtx {
         .stdout(std::fs::File::create(&log).unwrap())
         .stderr(Stdio::inherit());
     let child = cmd.spawn().expect("starting MediaMTX");
-    let m = Mtx { ca: work.join("ca.pem"), child, api, rtsp, rtmp, rtmps: if tls { rtmps } else { 0 }, srt, webrtc, log };
+    let m = Mtx {
+        ca: work.join("ca.pem"),
+        child,
+        api,
+        rtsp,
+        rtmp,
+        rtmps: if tls { rtmps } else { 0 },
+        srt,
+        webrtc,
+        log,
+    };
     let t0 = Instant::now();
-    while reqwest::get(format!("http://127.0.0.1:{api}/v3/paths/list")).await.is_err() {
-        assert!(t0.elapsed() < Duration::from_secs(15), "MediaMTX API did not come up");
+    while reqwest::get(format!("http://127.0.0.1:{api}/v3/paths/list"))
+        .await
+        .is_err()
+    {
+        assert!(
+            t0.elapsed() < Duration::from_secs(15),
+            "MediaMTX API did not come up"
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     m
@@ -265,7 +353,8 @@ async fn mtx_ready(api: u16, path: &str) -> Result<Value, Value> {
             if let Ok(v) = r.json::<Value>().await {
                 let tracks = v["tracks"].to_string();
                 let video = ["H264", "VP8", "VP9"].iter().any(|c| tracks.contains(c));
-                if v["ready"] == true && video && v["bytesReceived"].as_u64().unwrap_or(0) > 50_000 {
+                if v["ready"] == true && video && v["bytesReceived"].as_u64().unwrap_or(0) > 50_000
+                {
                     return Ok(v);
                 }
                 last = v;
@@ -292,17 +381,30 @@ async fn mediamtx_whip_rtmp_rtmps_srt() {
     }
     std::env::set_var("FV_STREAM_STUN", "none");
     let protocols = ffmpeg_protocols();
-    println!("ffmpeg -protocols: {}", protocols.split_whitespace().collect::<Vec<_>>().join(" "));
+    println!(
+        "ffmpeg -protocols: {}",
+        protocols.split_whitespace().collect::<Vec<_>>().join(" ")
+    );
     let m = start_mediamtx().await;
     let a = app_with(&[("FV_OUTPUTS_ALLOW_PRIVATE", "1".into())]).await;
     // The same server trusting the test CA (`[outputs] rtmps_ca_file`).
-    let a_ca = app_with(&[("FV_OUTPUTS_ALLOW_PRIVATE", "1".into()), ("FV_OUTPUTS_RTMPS_CA_FILE", m.ca.display().to_string())]).await;
+    let a_ca = app_with(&[
+        ("FV_OUTPUTS_ALLOW_PRIVATE", "1".into()),
+        ("FV_OUTPUTS_RTMPS_CA_FILE", m.ca.display().to_string()),
+    ])
+    .await;
     if m.rtmps != 0 {
         rtmps_refuses_an_unknown_ca(&a, &m).await;
     }
     let mut kinds: Vec<(&str, Value)> = vec![
-        ("whip-h264", json!({"kind": "whip", "url": format!("http://127.0.0.1:{}/fvwhip/whip", m.webrtc)})),
-        ("rtmp", json!({"kind": "rtmps", "url": format!("rtmp://127.0.0.1:{}/live", m.rtmp), "stream_key": "fvrtmp"})),
+        (
+            "whip-h264",
+            json!({"kind": "whip", "url": format!("http://127.0.0.1:{}/fvwhip/whip", m.webrtc)}),
+        ),
+        (
+            "rtmp",
+            json!({"kind": "rtmps", "url": format!("rtmp://127.0.0.1:{}/live", m.rtmp), "stream_key": "fvrtmp"}),
+        ),
     ];
     if fastvideo_media::vp8::libvpx_available() {
         kinds.push(("whip-vp8", json!({"kind": "whip", "url": format!("http://127.0.0.1:{}/fvvp8/whip", m.webrtc), "codec": "vp8"})));
@@ -359,7 +461,13 @@ async fn mediamtx_whip_rtmp_rtmps_srt() {
         } {
             // WebRTC read-back too: MediaMTX (pion) → a str0m viewer → ffmpeg.
             let file = std::env::temp_dir().join(format!("fv-whep-{name}.bin"));
-            let (n, d) = whep_decode(&format!("http://127.0.0.1:{}/{path}/whep", m.webrtc), codec, 4, &file).await;
+            let (n, d) = whep_decode(
+                &format!("http://127.0.0.1:{}/{path}/whep", m.webrtc),
+                codec,
+                4,
+                &file,
+            )
+            .await;
             println!("RESULT {name}: WHEP read-back from MediaMTX: {n} frames received, decoded (codec, frames, keyframes, w, h) {d:?}");
             if probed.is_none() {
                 // ffmpeg's RTSP VP9 depacketizer: rely on the WHEP read-back.
@@ -372,12 +480,24 @@ async fn mediamtx_whip_rtmp_rtmps_srt() {
             info["tracks"], info["bytesReceived"], st["status"]["frames_sent"], st["status"]["video_codec"], st["status"]["encoder"], st["status"]["output_error"]
         );
         // fake-h3-turbo has audio: WHIP carries Opus, RTMP/SRT AAC.
-        let audio_track = if name.starts_with("whip") { "Opus" } else { "MPEG-4 Audio" };
-        assert!(info["tracks"].to_string().contains(audio_track), "{name}: no {audio_track} track: {}", info["tracks"]);
-        let (codec, frames, _, w, h) = probed.unwrap_or_else(|| panic!("{name}: ffprobe could not decode {rtsp}"));
+        let audio_track = if name.starts_with("whip") {
+            "Opus"
+        } else {
+            "MPEG-4 Audio"
+        };
+        assert!(
+            info["tracks"].to_string().contains(audio_track),
+            "{name}: no {audio_track} track: {}",
+            info["tracks"]
+        );
+        let (codec, frames, _, w, h) =
+            probed.unwrap_or_else(|| panic!("{name}: ffprobe could not decode {rtsp}"));
         assert!(frames >= 24, "{name}: {frames} frames decoded in 4 s");
         assert_eq!((w, h), (1344, 768), "{name}: native resolution");
-        assert!(["h264", "vp8", "vp9"].contains(&codec.as_str()), "{name}: {codec}");
+        assert!(
+            ["h264", "vp8", "vp9"].contains(&codec.as_str()),
+            "{name}: {codec}"
+        );
         let (s, _) = call(&a.router, "DELETE", &format!("/fv/v1/streams/{id}"), None).await;
         assert_eq!(s, StatusCode::OK);
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -391,14 +511,29 @@ fn audio_codecs(url: &str, extra: &[&str]) -> Vec<String> {
     let Ok(out) = Command::new(fastvideo_media::tools::ffprobe_bin())
         .args(["-v", "error"])
         .args(extra)
-        .args(["-select_streams", "a", "-show_entries", "stream=codec_name,sample_rate,channels", "-of", "json", url])
+        .args([
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=codec_name,sample_rate,channels",
+            "-of",
+            "json",
+            url,
+        ])
         .output()
     else {
         return Vec::new();
     };
     let v: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
     println!("ffprobe audio {url}: {}", v["streams"]);
-    v["streams"].as_array().map(|a| a.iter().filter_map(|s| s["codec_name"].as_str().map(str::to_owned)).collect()).unwrap_or_default()
+    v["streams"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s["codec_name"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The next control message of `type` on a director peer (others skipped).
@@ -443,7 +578,15 @@ struct StreamStats {
 fn av_report(file: &FsPath) -> Value {
     let f = file.to_string_lossy().into_owned();
     let out = Command::new(fastvideo_media::tools::ffprobe_bin())
-        .args(["-v", "error", "-show_entries", "packet=codec_type,pts_time,dts_time,size", "-of", "json", &f])
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "packet=codec_type,pts_time,dts_time,size",
+            "-of",
+            "json",
+            &f,
+        ])
         .output()
         .unwrap();
     let v: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
@@ -483,7 +626,10 @@ fn av_report(file: &FsPath) -> Value {
         .collect::<serde_json::Map<_, _>>()
         .into();
     let pcm = Command::new(fastvideo_media::tools::ffmpeg_bin())
-        .args(["-v", "error", "-nostdin", "-i", &f, "-map", "0:a:0", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"])
+        .args([
+            "-v", "error", "-nostdin", "-i", &f, "-map", "0:a:0", "-ac", "1", "-ar", "48000", "-f",
+            "s16le", "-",
+        ])
         .output()
         .map(|o| o.stdout)
         .unwrap_or_default();
@@ -502,25 +648,37 @@ async fn local_srt_and_rtmp_recordings_carry_audio() {
         eprintln!("skipping: FV_TEST_OUTPUTS_LOCAL_AV not set");
         return;
     }
-    let secs: u64 = std::env::var("FV_TEST_LOCAL_AV_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(40);
+    let secs: u64 = std::env::var("FV_TEST_LOCAL_AV_SECONDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(40);
     let protocols = ffmpeg_protocols();
     let a = app_with(&[("FV_OUTPUTS_ALLOW_PRIVATE", "1".into())]).await;
     let dir = tempfile::tempdir().unwrap();
     let mut failures = Vec::new();
     for kind in ["srt", "rtmp"] {
-        if kind == "srt" && !(has_protocol(&protocols, "srt") || has_protocol(&protocols, "libsrt")) {
+        if kind == "srt" && !(has_protocol(&protocols, "srt") || has_protocol(&protocols, "libsrt"))
+        {
             println!("RESULT srt: skipped (no libsrt)");
             continue;
         }
         let port = free_port();
         let (listen, output, file) = match kind {
             "srt" => (
-                vec!["-i".to_owned(), format!("srt://127.0.0.1:{port}?mode=listener")],
+                vec![
+                    "-i".to_owned(),
+                    format!("srt://127.0.0.1:{port}?mode=listener"),
+                ],
                 json!({"kind": "srt", "url": format!("srt://127.0.0.1:{port}")}),
                 dir.path().join("srt.ts"),
             ),
             _ => (
-                vec!["-listen".to_owned(), "1".to_owned(), "-i".to_owned(), format!("rtmp://127.0.0.1:{port}/live/fvlocal")],
+                vec![
+                    "-listen".to_owned(),
+                    "1".to_owned(),
+                    "-i".to_owned(),
+                    format!("rtmp://127.0.0.1:{port}/live/fvlocal"),
+                ],
                 json!({"kind": "rtmps", "url": format!("rtmp://127.0.0.1:{port}/live"), "stream_key": "fvlocal"}),
                 dir.path().join("rtmp.flv"),
             ),
@@ -534,7 +692,9 @@ async fn local_srt_and_rtmp_recordings_carry_audio() {
             .spawn()
             .unwrap();
         tokio::time::sleep(Duration::from_millis(800)).await;
-        let more: Vec<Value> = (0..19).map(|i| json!({"prompt": format!("a lighthouse, shot {i}")})).collect();
+        let more: Vec<Value> = (0..19)
+            .map(|i| json!({"prompt": format!("a lighthouse, shot {i}")}))
+            .collect();
         let body = json!({"model": "fake-h3-turbo", "prompt": "a lighthouse at dusk", "clips": more, "output": output});
         let (s, v) = call(&a.router, "POST", "/fv/v1/streams", Some(body)).await;
         assert_eq!(s, StatusCode::CREATED, "{kind}: {v}");
@@ -551,19 +711,32 @@ async fn local_srt_and_rtmp_recordings_carry_audio() {
         let r = av_report(&file);
         println!("RESULT {kind}: server {}; recording {r}", st["status"]);
         let l = &r["audio_levels"];
-        let per = l["rms_dbfs_per_second"].as_array().cloned().unwrap_or_default();
+        let per = l["rms_dbfs_per_second"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
         let a_first = r["streams"]["audio"]["first_pts"].as_f64();
         let v_first = r["streams"]["video"]["first_pts"].as_f64();
         let ok = l["audible_seconds"].as_u64().unwrap_or(0) as f64 >= (secs as f64 * 0.7)
-            && per.iter().take(5).filter(|d| d.as_f64().unwrap_or(-120.0) > hls::AUDIBLE_RMS_DBFS).count() >= 3
+            && per
+                .iter()
+                .take(5)
+                .filter(|d| d.as_f64().unwrap_or(-120.0) > hls::AUDIBLE_RMS_DBFS)
+                .count()
+                >= 3
             && matches!((a_first, v_first), (Some(x), Some(y)) if (x - y).abs() < 1.0)
-            && r["streams"]["audio"]["max_pts_step"].as_f64().is_some_and(|s| s < 0.5)
+            && r["streams"]["audio"]["max_pts_step"]
+                .as_f64()
+                .is_some_and(|s| s < 0.5)
             && r["max_interleave_s"].as_f64().is_some_and(|s| s < 1.0);
         if !ok {
             failures.push(kind);
         }
     }
-    assert!(failures.is_empty(), "recordings without clean audio: {failures:?}");
+    assert!(
+        failures.is_empty(),
+        "recordings without clean audio: {failures:?}"
+    );
 }
 
 /// Director output copies carry the session's audio (gpu-check-2026-10-13
@@ -579,13 +752,30 @@ async fn mediamtx_director_copy_carries_audio() {
     }
     std::env::set_var("FV_STREAM_STUN", "none");
     let m = start_mediamtx().await;
-    let a = app_cfg(&[("FV_OUTPUTS_ALLOW_PRIVATE", "1".into())], |c| c.webrtc.public_ip = "127.0.0.1".into()).await;
+    let a = app_cfg(&[("FV_OUTPUTS_ALLOW_PRIVATE", "1".into())], |c| {
+        c.webrtc.public_ip = "127.0.0.1".into()
+    })
+    .await;
     let copies = [
-        ("whip", "fvdirector", json!({"kind": "whip", "url": format!("http://127.0.0.1:{}/fvdirector/whip", m.webrtc), "target": "mediamtx"}), "Opus", "opus"),
-        ("rtmp", "live/fvdirrtmp", json!({"kind": "rtmps", "url": format!("rtmp://127.0.0.1:{}/live", m.rtmp), "stream_key": "fvdirrtmp"}), "MPEG-4 Audio", "aac"),
+        (
+            "whip",
+            "fvdirector",
+            json!({"kind": "whip", "url": format!("http://127.0.0.1:{}/fvdirector/whip", m.webrtc), "target": "mediamtx"}),
+            "Opus",
+            "opus",
+        ),
+        (
+            "rtmp",
+            "live/fvdirrtmp",
+            json!({"kind": "rtmps", "url": format!("rtmp://127.0.0.1:{}/live", m.rtmp), "stream_key": "fvdirrtmp"}),
+            "MPEG-4 Audio",
+            "aac",
+        ),
     ];
     for (name, path, out, mtx_track, codec) in copies {
-        let host = RtcHost::bind(HostConfig::loopback(true, false)).await.unwrap();
+        let host = RtcHost::bind(HostConfig::loopback(true, false))
+            .await
+            .unwrap();
         let (pending, offer) = host
             .offer(OfferOptions {
                 video: Some(Direction::RecvOnly),
@@ -601,30 +791,62 @@ async fn mediamtx_director_copy_carries_audio() {
             .uri("/wma/session")
             .header("authorization", format!("Key {KEY}"))
             .header("content-type", "application/json")
-            .body(Body::from(json!({"app_id": "minimax/h3-max/director", "sdp": offer, "type": "offer"}).to_string()))
+            .body(Body::from(
+                json!({"app_id": "minimax/h3-max/director", "sdp": offer, "type": "offer"})
+                    .to_string(),
+            ))
             .unwrap();
         let r = a.router.clone().oneshot(req).await.unwrap();
         assert_eq!(r.status(), StatusCode::OK, "{name}: /wma/session");
-        let v: Value = serde_json::from_slice(&axum::body::to_bytes(r.into_body(), 1 << 24).await.unwrap()).unwrap();
-        let mut peer = pending.accept_answer(v["sdp"].as_str().unwrap()).await.unwrap();
+        let v: Value =
+            serde_json::from_slice(&axum::body::to_bytes(r.into_body(), 1 << 24).await.unwrap())
+                .unwrap();
+        let mut peer = pending
+            .accept_answer(v["sdp"].as_str().unwrap())
+            .await
+            .unwrap();
         next_msg(&mut peer, "session_info").await;
-        let ctl = |m: Value| fastvideo_webrtc::channel::ChannelMessage::text("control", m.to_string());
+        let ctl =
+            |m: Value| fastvideo_webrtc::channel::ChannelMessage::text("control", m.to_string());
         peer.send_message(ctl(json!({"type": "configure", "prompt_version": 1, "prompt": "a lighthouse", "x_fv_output": out}))).await.unwrap();
         let c = next_msg(&mut peer, "configured").await;
         assert!(c["x_fv_output"].is_object(), "{name}: {c}");
         next_msg(&mut peer, "output_ready").await;
         let info = match mtx_ready(m.api, path).await {
             Ok(v) => v,
-            Err(last) => panic!("{name}: MediaMTX path {path} never became ready: {last}\nMediaMTX log:\n{}", tail(&m.log, 30)),
+            Err(last) => panic!(
+                "{name}: MediaMTX path {path} never became ready: {last}\nMediaMTX log:\n{}",
+                tail(&m.log, 30)
+            ),
         };
-        println!("RESULT director copy {name}: MediaMTX tracks {}, bytes {}", info["tracks"], info["bytesReceived"]);
-        let tracks: Vec<String> = info["tracks"].as_array().unwrap().iter().filter_map(|t| t.as_str().map(str::to_owned)).collect();
-        assert!(tracks.iter().any(|t| t == "H264"), "{name}: tracks {tracks:?}");
-        assert!(tracks.iter().any(|t| t == mtx_track), "{name}: the copy has no audio track ({tracks:?}); MediaMTX log:\n{}", tail(&m.log, 20));
+        println!(
+            "RESULT director copy {name}: MediaMTX tracks {}, bytes {}",
+            info["tracks"], info["bytesReceived"]
+        );
+        let tracks: Vec<String> = info["tracks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t.as_str().map(str::to_owned))
+            .collect();
+        assert!(
+            tracks.iter().any(|t| t == "H264"),
+            "{name}: tracks {tracks:?}"
+        );
+        assert!(
+            tracks.iter().any(|t| t == mtx_track),
+            "{name}: the copy has no audio track ({tracks:?}); MediaMTX log:\n{}",
+            tail(&m.log, 20)
+        );
         let rtsp = format!("rtsp://127.0.0.1:{}/{path}", m.rtsp);
         let audio = audio_codecs(&rtsp, &["-rtsp_transport", "tcp"]);
-        assert!(audio.iter().any(|a| a == codec), "{name}: ffprobe audio streams {audio:?}, want {codec}");
-        peer.send_message(ctl(json!({"type": "stop"}))).await.unwrap();
+        assert!(
+            audio.iter().any(|a| a == codec),
+            "{name}: ffprobe audio streams {audio:?}, want {codec}"
+        );
+        peer.send_message(ctl(json!({"type": "stop"})))
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(500)).await;
         peer.close();
         host.shutdown().await;
@@ -636,7 +858,13 @@ async fn mediamtx_director_copy_carries_audio() {
 /// nothing is retried unverified.
 async fn rtmps_refuses_an_unknown_ca(a: &App, m: &Mtx) {
     let output = json!({"kind": "rtmps", "url": format!("rtmps://127.0.0.1:{}/live", m.rtmps), "stream_key": "fvrefused"});
-    let (s, v) = call(&a.router, "POST", "/fv/v1/streams", Some(json!({"model": "fake-h3-turbo", "prompt": "x", "output": output}))).await;
+    let (s, v) = call(
+        &a.router,
+        "POST",
+        "/fv/v1/streams",
+        Some(json!({"model": "fake-h3-turbo", "prompt": "x", "output": output})),
+    )
+    .await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     let id = v["id"].as_str().unwrap().to_owned();
     let t0 = Instant::now();
@@ -647,13 +875,31 @@ async fn rtmps_refuses_an_unknown_ca(a: &App, m: &Mtx) {
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     };
-    let err = st["status"]["output_error"].as_str().unwrap_or_default().to_owned();
-    println!("RESULT rtmps-unknown-ca: output_state {} after {:.1}s, output_error {err:?}", st["status"]["output_state"], t0.elapsed().as_secs_f64());
+    let err = st["status"]["output_error"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    println!(
+        "RESULT rtmps-unknown-ca: output_state {} after {:.1}s, output_error {err:?}",
+        st["status"]["output_state"],
+        t0.elapsed().as_secs_f64()
+    );
     assert_eq!(st["status"]["output_state"], "failed", "{st}");
-    assert!(err.contains("failed verification") && err.contains("UnknownIssuer"), "{err}");
+    assert!(
+        err.contains("failed verification") && err.contains("UnknownIssuer"),
+        "{err}"
+    );
     assert!(!err.contains("fvrefused"), "the key is scrubbed: {err}");
     // Nothing reached MediaMTX on that path.
-    let r: Value = reqwest::get(format!("http://127.0.0.1:{}/v3/paths/get/live/fvrefused", m.api)).await.unwrap().json().await.unwrap_or(Value::Null);
+    let r: Value = reqwest::get(format!(
+        "http://127.0.0.1:{}/v3/paths/get/live/fvrefused",
+        m.api
+    ))
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap_or(Value::Null);
     assert_ne!(r["ready"], true, "{r}");
     call(&a.router, "DELETE", &format!("/fv/v1/streams/{id}"), None).await;
 }
@@ -661,8 +907,15 @@ async fn rtmps_refuses_an_unknown_ca(a: &App, m: &Mtx) {
 /// Plays `whep_url` for `secs`, writes what arrived to a file (IVF for
 /// VP8/VP9, Annex-B for H.264) and decodes it with ffprobe: (frames
 /// received, (codec, decoded frames, keyframes, w, h)).
-async fn whep_decode(whep_url: &str, codec: VideoCodec, secs: u64, out: &FsPath) -> (usize, Option<(String, usize, usize, u64, u64)>) {
-    let host = RtcHost::bind(HostConfig::loopback(true, false)).await.unwrap();
+async fn whep_decode(
+    whep_url: &str,
+    codec: VideoCodec,
+    secs: u64,
+    out: &FsPath,
+) -> (usize, Option<(String, usize, usize, u64, u64)>) {
+    let host = RtcHost::bind(HostConfig::loopback(true, false))
+        .await
+        .unwrap();
     let (pending, offer) = host
         .offer(OfferOptions {
             video: Some(Direction::RecvOnly),
@@ -674,15 +927,28 @@ async fn whep_decode(whep_url: &str, codec: VideoCodec, secs: u64, out: &FsPath)
         })
         .await
         .unwrap();
-    let resp = reqwest::Client::new().post(whep_url).header("content-type", "application/sdp").body(offer).send().await.unwrap();
-    assert!(resp.status().is_success(), "WHEP {whep_url}: {}", resp.status());
+    let resp = reqwest::Client::new()
+        .post(whep_url)
+        .header("content-type", "application/sdp")
+        .body(offer)
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "WHEP {whep_url}: {}",
+        resp.status()
+    );
     let answer = resp.text().await.unwrap();
     let mut peer = pending.accept_answer(&answer).await.unwrap();
     let mut frames: Vec<bytes::Bytes> = Vec::new();
     let end = Instant::now() + Duration::from_secs(secs);
     while Instant::now() < end {
-        if let Ok(Some(PeerEvent::Media { kind: TrackKind::Video, data, .. })) =
-            tokio::time::timeout(Duration::from_millis(300), peer.next_event()).await
+        if let Ok(Some(PeerEvent::Media {
+            kind: TrackKind::Video,
+            data,
+            ..
+        })) = tokio::time::timeout(Duration::from_millis(300), peer.next_event()).await
         {
             frames.push(data);
         }
@@ -691,7 +957,11 @@ async fn whep_decode(whep_url: &str, codec: VideoCodec, secs: u64, out: &FsPath)
     host.shutdown().await;
     let file = es_file(codec, &frames);
     std::fs::write(out, &file).unwrap();
-    let fmt: &[&str] = if codec == VideoCodec::H264 { &["-f", "h264"] } else { &["-f", "ivf"] };
+    let fmt: &[&str] = if codec == VideoCodec::H264 {
+        &["-f", "h264"]
+    } else {
+        &["-f", "ivf"]
+    };
     (frames.len(), decode(out.to_str().unwrap(), fmt, None))
 }
 
@@ -703,7 +973,11 @@ fn es_file(codec: VideoCodec, frames: &[bytes::Bytes]) -> Vec<u8> {
         VideoCodec::H264 => frames.iter().for_each(|f| file.extend_from_slice(f)),
         _ => {
             file.extend_from_slice(b"DKIF\0\0\x20\0");
-            file.extend_from_slice(if codec == VideoCodec::Vp9 { b"VP90" } else { b"VP80" });
+            file.extend_from_slice(if codec == VideoCodec::Vp9 {
+                b"VP90"
+            } else {
+                b"VP80"
+            });
             // width, height (unknown: 0), rate 90000 / scale 1, frames, unused.
             file.extend_from_slice(&[0u8; 4]);
             file.extend_from_slice(&90_000u32.to_le_bytes());
@@ -734,13 +1008,20 @@ struct Viewer {
 /// Plays `whep_url` for `secs` with a str0m recvonly peer; returns what
 /// arrived (resolution from the first keyframe's SPS / VP8 header).
 async fn whep_view(whep_url: &str, codec: VideoCodec, secs: u64) -> Result<Viewer, String> {
-    let host = RtcHost::bind(HostConfig::default()).await.map_err(|e| e.to_string())?;
+    let host = RtcHost::bind(HostConfig::default())
+        .await
+        .map_err(|e| e.to_string())?;
     let (pending, offer) = host
         .offer(OfferOptions {
             video: Some(Direction::RecvOnly),
             audio: Some((Direction::RecvOnly, AudioLayout::Stereo)),
             channels: vec![],
-            srflx: host.gather_srflx(&[fastvideo_webrtc::ice::IceServer::default_stun()], Duration::from_secs(2)).await,
+            srflx: host
+                .gather_srflx(
+                    &[fastvideo_webrtc::ice::IceServer::default_stun()],
+                    Duration::from_secs(2),
+                )
+                .await,
             h264_level: fastvideo_webrtc::profile::H264Level::L4_0,
             video_codecs: vec![codec],
         })
@@ -757,17 +1038,35 @@ async fn whep_view(whep_url: &str, codec: VideoCodec, secs: u64) -> Result<Viewe
     let status = resp.status();
     let answer = resp.text().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
-        return Err(format!("WHEP HTTP {status}: {}", answer.chars().take(200).collect::<String>()));
+        return Err(format!(
+            "WHEP HTTP {status}: {}",
+            answer.chars().take(200).collect::<String>()
+        ));
     }
-    let mut peer = pending.accept_answer(&answer).await.map_err(|e| e.to_string())?;
-    let mut v = Viewer { frames: Vec::new(), keyframes: 0, size: None, audio: 0, first_ms: None };
+    let mut peer = pending
+        .accept_answer(&answer)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut v = Viewer {
+        frames: Vec::new(),
+        keyframes: 0,
+        size: None,
+        audio: 0,
+        first_ms: None,
+    };
     let end = Instant::now() + Duration::from_secs(secs);
     while Instant::now() < end {
         match tokio::time::timeout(Duration::from_millis(500), peer.next_event()).await {
-            Ok(Some(PeerEvent::Media { kind: TrackKind::Video, data, .. })) => {
+            Ok(Some(PeerEvent::Media {
+                kind: TrackKind::Video,
+                data,
+                ..
+            })) => {
                 v.first_ms.get_or_insert(t0.elapsed().as_millis());
                 let size = match codec {
-                    VideoCodec::H264 => fastvideo_media::h264::find_sps(&data).map(|s| (s.width, s.height)),
+                    VideoCodec::H264 => {
+                        fastvideo_media::h264::find_sps(&data).map(|s| (s.width, s.height))
+                    }
                     VideoCodec::Vp8 => fastvideo_media::decode::vp8_keyframe_size(&data),
                     VideoCodec::Vp9 => None,
                 };
@@ -777,7 +1076,10 @@ async fn whep_view(whep_url: &str, codec: VideoCodec, secs: u64) -> Result<Viewe
                 }
                 v.frames.push(data);
             }
-            Ok(Some(PeerEvent::Media { kind: TrackKind::Audio, .. })) => v.audio += 1,
+            Ok(Some(PeerEvent::Media {
+                kind: TrackKind::Audio,
+                ..
+            })) => v.audio += 1,
             Ok(Some(PeerEvent::Closed(r))) => {
                 if v.frames.is_empty() {
                     return Err(format!("WHEP peer closed: {r:?}"));
@@ -802,7 +1104,17 @@ fn luma(input: &str, extra: &[&str], secs: Option<u32>) -> Option<(usize, f64, f
     if let Some(s) = secs {
         cmd.args(["-t", &s.to_string()]);
     }
-    let out = cmd.args(["-an", "-vf", "scale=64:36,format=gray", "-f", "rawvideo", "-"]).output().ok()?;
+    let out = cmd
+        .args([
+            "-an",
+            "-vf",
+            "scale=64:36,format=gray",
+            "-f",
+            "rawvideo",
+            "-",
+        ])
+        .output()
+        .ok()?;
     let px = 64 * 36;
     let n = out.stdout.len() / px;
     if n == 0 {
@@ -830,7 +1142,10 @@ fn iso_ms(s: &str) -> Option<i64> {
     let time = time.trim_end_matches('Z');
     let time = time.split(['+']).next()?;
     let mut t = time.split(':');
-    let (h, mi) = (t.next()?.parse::<i64>().ok()?, t.next()?.parse::<i64>().ok()?);
+    let (h, mi) = (
+        t.next()?.parse::<i64>().ok()?,
+        t.next()?.parse::<i64>().ok()?,
+    );
     let sec: f64 = t.next()?.parse().ok()?;
     // Days from civil (Howard Hinnant).
     let y2 = if mo <= 2 { y - 1 } else { y };
@@ -844,7 +1159,10 @@ fn iso_ms(s: &str) -> Option<i64> {
 }
 
 fn now_ms() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
 }
 
 /// What the HLS manifest serves now, fetched over HTTPS by the test (the
@@ -862,9 +1180,18 @@ struct HlsGrab {
     target_duration: Option<f64>,
 }
 
-async fn hls_grab(http: &reqwest::Client, master: &str, segments: usize, out: &FsPath) -> Result<HlsGrab, String> {
+async fn hls_grab(
+    http: &reqwest::Client,
+    master: &str,
+    segments: usize,
+    out: &FsPath,
+) -> Result<HlsGrab, String> {
     let get = |u: reqwest::Url| async move {
-        let r = http.get(u.clone()).send().await.map_err(|e| e.without_url().to_string())?;
+        let r = http
+            .get(u.clone())
+            .send()
+            .await
+            .map_err(|e| e.without_url().to_string())?;
         if !r.status().is_success() {
             return Err(format!("HTTP {} for {}", r.status(), u.path()));
         }
@@ -877,14 +1204,24 @@ async fn hls_grab(http: &reqwest::Client, master: &str, segments: usize, out: &F
     let mut lines = text.lines();
     while let Some(l) = lines.next() {
         if l.starts_with("#EXT-X-STREAM-INF") {
-            let bw = l.split("BANDWIDTH=").nth(1).and_then(|r| r.split(',').next()).and_then(|b| b.parse().ok()).unwrap_or(0);
+            let bw = l
+                .split("BANDWIDTH=")
+                .nth(1)
+                .and_then(|r| r.split(',').next())
+                .and_then(|b| b.parse().ok())
+                .unwrap_or(0);
             if let Some(u) = lines.next() {
                 vars.push((bw, l.to_owned(), u.trim().to_owned()));
             }
         }
     }
     vars.sort_by_key(|v| std::cmp::Reverse(v.0));
-    let (_, _, uri) = vars.first().cloned().ok_or_else(|| format!("no variant in the master playlist: {}", text.lines().take(4).collect::<Vec<_>>().join(" | ")))?;
+    let (_, _, uri) = vars.first().cloned().ok_or_else(|| {
+        format!(
+            "no variant in the master playlist: {}",
+            text.lines().take(4).collect::<Vec<_>>().join(" | ")
+        )
+    })?;
     let media_url = base.join(&uri).map_err(|e| e.to_string())?;
     let media = String::from_utf8_lossy(&get(media_url.clone()).await?).into_owned();
     let (mut pdt, mut dur, mut last_end, mut target) = (None::<i64>, 0.0f64, None::<i64>, None);
@@ -896,9 +1233,17 @@ async fn hls_grab(http: &reqwest::Client, master: &str, segments: usize, out: &F
         } else if let Some(t) = l.strip_prefix("#EXT-X-TARGETDURATION:") {
             target = t.trim().parse().ok();
         } else if let Some(m) = l.strip_prefix("#EXT-X-MAP:") {
-            init = m.split("URI=\"").nth(1).and_then(|r| r.split('"').next()).map(str::to_owned);
+            init = m
+                .split("URI=\"")
+                .nth(1)
+                .and_then(|r| r.split('"').next())
+                .map(str::to_owned);
         } else if let Some(d) = l.strip_prefix("#EXTINF:") {
-            dur = d.split(',').next().and_then(|x| x.parse().ok()).unwrap_or(0.0);
+            dur = d
+                .split(',')
+                .next()
+                .and_then(|x| x.parse().ok())
+                .unwrap_or(0.0);
         } else if !l.starts_with('#') && !l.trim().is_empty() {
             segs.push(l.trim().to_owned());
             if let Some(p) = pdt {
@@ -942,8 +1287,18 @@ async fn dash_manifest(http: &reqwest::Client, mpd: &str) -> String {
         .split("<Representation")
         .skip(1)
         .filter_map(|r| {
-            let attr = |n: &str| r.split(&format!(" {n}=\"")).nth(1).and_then(|x| x.split('"').next()).map(str::to_owned);
-            Some(format!("{}x{} {}", attr("width")?, attr("height")?, attr("codecs").unwrap_or_default()))
+            let attr = |n: &str| {
+                r.split(&format!(" {n}=\""))
+                    .nth(1)
+                    .and_then(|x| x.split('"').next())
+                    .map(str::to_owned)
+            };
+            Some(format!(
+                "{}x{} {}",
+                attr("width")?,
+                attr("height")?,
+                attr("codecs").unwrap_or_default()
+            ))
         })
         .collect();
     format!("DASH HTTP {st}, video representations {reps:?}")
@@ -957,9 +1312,14 @@ async fn cloudflare_live_each_kind() {
     }
     let account = std::env::var("FV_CF_ACCOUNT_ID").expect("FV_CF_ACCOUNT_ID");
     let token = std::env::var("FV_CF_STREAM_API_TOKEN").expect("FV_CF_STREAM_API_TOKEN");
-    let secs: u64 = std::env::var("FV_TEST_CF_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
+    let secs: u64 = std::env::var("FV_TEST_CF_SECONDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
     // FV_TEST_CF_CASES=whip-vp8,srt runs a subset.
-    let only: Option<Vec<String>> = std::env::var("FV_TEST_CF_CASES").ok().map(|s| s.split(',').map(|x| x.trim().to_owned()).collect());
+    let only: Option<Vec<String>> = std::env::var("FV_TEST_CF_CASES")
+        .ok()
+        .map(|s| s.split(',').map(|x| x.trim().to_owned()).collect());
     let a = app_with(&[
         ("FV_CF_ACCOUNT_ID", account.clone()),
         ("FV_CF_STREAM_API_TOKEN", token.clone()),
@@ -967,15 +1327,32 @@ async fn cloudflare_live_each_kind() {
     ])
     .await;
     let protocols = ffmpeg_protocols();
-    println!("ffmpeg {:?}: rtmps {}, srt {}", fastvideo_media::tools::ffmpeg_bin(), has_protocol(&protocols, "rtmps"), has_protocol(&protocols, "libsrt") || has_protocol(&protocols, "srt"));
+    println!(
+        "ffmpeg {:?}: rtmps {}, srt {}",
+        fastvideo_media::tools::ffmpeg_bin(),
+        has_protocol(&protocols, "rtmps"),
+        has_protocol(&protocols, "libsrt") || has_protocol(&protocols, "srt")
+    );
     let http = reqwest::Client::new();
     let api = format!("https://api.cloudflare.com/client/v4/accounts/{account}/stream/live_inputs");
     let mut uids = Vec::new();
     let mut failures = Vec::new();
     for (name, output, codec) in [
-        ("whip-h264", json!({"kind": "cloudflare"}), Some(VideoCodec::H264)),
-        ("whip-vp8", json!({"kind": "cloudflare", "codec": "vp8"}), Some(VideoCodec::Vp8)),
-        ("whip-vp9", json!({"kind": "cloudflare", "codec": "vp9"}), Some(VideoCodec::Vp9)),
+        (
+            "whip-h264",
+            json!({"kind": "cloudflare"}),
+            Some(VideoCodec::H264),
+        ),
+        (
+            "whip-vp8",
+            json!({"kind": "cloudflare", "codec": "vp8"}),
+            Some(VideoCodec::Vp8),
+        ),
+        (
+            "whip-vp9",
+            json!({"kind": "cloudflare", "codec": "vp9"}),
+            Some(VideoCodec::Vp9),
+        ),
         ("rtmps", json!({"kind": "cloudflare-rtmps"}), None),
         ("srt", json!({"kind": "cloudflare-srt"}), None),
     ] {
@@ -988,7 +1365,9 @@ async fn cloudflare_live_each_kind() {
             // HLS: the audio rendition is listed well after the video; keep
             // clips (and their audio) playing for ~100 s (20 is the queue's
             // generation capacity).
-            let more: Vec<Value> = (0..19).map(|i| json!({"prompt": format!("a lighthouse at dusk, shot {i}")})).collect();
+            let more: Vec<Value> = (0..19)
+                .map(|i| json!({"prompt": format!("a lighthouse at dusk, shot {i}")}))
+                .collect();
             json!({"model": "fake-h3-turbo", "prompt": "a lighthouse at dusk", "clips": more, "output": output})
         };
         let t0 = Instant::now();
@@ -1030,7 +1409,11 @@ async fn cloudflare_live_each_kind() {
                     Ok(w) => {
                         let file = std::env::temp_dir().join(format!("fv-cf-{name}.bin"));
                         std::fs::write(&file, es_file(c, &w.frames)).unwrap();
-                        let fmt: &[&str] = if c == VideoCodec::H264 { &["-f", "h264"] } else { &["-f", "ivf"] };
+                        let fmt: &[&str] = if c == VideoCodec::H264 {
+                            &["-f", "h264"]
+                        } else {
+                            &["-f", "ivf"]
+                        };
                         let d = decode(file.to_str().unwrap(), fmt, None);
                         let l = luma(file.to_str().unwrap(), fmt, None);
                         let playable = first_try.map(|t| t.as_millis() + w.first_ms.unwrap_or(0));
@@ -1063,17 +1446,24 @@ async fn cloudflare_live_each_kind() {
                 // RTMPS playback (a pass-through) from 15 s after the create, while
                 // the queued clips still play (their audio ends after ~100 s).
                 let mut ingest_task = Some({
-                    let (http, api, uid, token) = (http.clone(), api.clone(), uid.clone(), token.clone());
+                    let (http, api, uid, token) =
+                        (http.clone(), api.clone(), uid.clone(), token.clone());
                     tokio::spawn(async move {
                         tokio::time::sleep(Duration::from_secs(15)).await;
-                        let v: Value = match http.get(format!("{api}/{uid}")).bearer_auth(&token).send().await {
+                        let v: Value = match http
+                            .get(format!("{api}/{uid}"))
+                            .bearer_auth(&token)
+                            .send()
+                            .await
+                        {
                             Ok(r) => r.json().await.unwrap_or(Value::Null),
                             Err(_) => Value::Null,
                         };
                         let pb = &v["result"]["rtmpsPlayback"];
                         match (pb["url"].as_str(), pb["streamKey"].as_str()) {
                             (Some(u), Some(k)) => {
-                                let f = std::env::temp_dir().join(format!("fv-cf-{name}-ingest.flv"));
+                                let f =
+                                    std::env::temp_dir().join(format!("fv-cf-{name}-ingest.flv"));
                                 Some(hls::read_rtmps_playback(u, k, 30, &f).await)
                             }
                             _ => None,
@@ -1085,7 +1475,12 @@ async fn cloudflare_live_each_kind() {
                 while t0.elapsed() < Duration::from_secs(secs.max(180)) {
                     tokio::time::sleep(Duration::from_secs(3)).await;
                     if connected.is_none() {
-                        if let Ok(r) = http.get(format!("{api}/{uid}")).bearer_auth(&token).send().await {
+                        if let Ok(r) = http
+                            .get(format!("{api}/{uid}"))
+                            .bearer_auth(&token)
+                            .send()
+                            .await
+                        {
                             let v: Value = r.json().await.unwrap_or(Value::Null);
                             if v["result"]["status"]["current"]["state"] == "connected" {
                                 connected = Some(t0.elapsed());
@@ -1093,7 +1488,10 @@ async fn cloudflare_live_each_kind() {
                         }
                     }
                     match hls_grab(&http, &hls, 1, &file).await {
-                        Ok(g) if decode(g.file.to_str().unwrap(), &[], None).is_some_and(|d| d.1 > 0) => {
+                        Ok(g)
+                            if decode(g.file.to_str().unwrap(), &[], None)
+                                .is_some_and(|d| d.1 > 0) =>
+                        {
                             playable = Some(t0.elapsed());
                             break;
                         }
@@ -1125,15 +1523,24 @@ async fn cloudflare_live_each_kind() {
                         // The audio: Cloudflare's separate rendition (or muxed), from the oldest segment listed.
                         let afile = std::env::temp_dir().join(format!("fv-cf-{name}-audio.seg"));
                         let deadline = t0 + Duration::from_secs(secs.max(180) + 120);
-                        let a = hls::read_audio(&http, &hls, Duration::from_secs(30), deadline, &afile).await;
-                        let ingest = ingest_task.take().expect("one HLS read per case").await.ok().flatten();
+                        let a =
+                            hls::read_audio(&http, &hls, Duration::from_secs(30), deadline, &afile)
+                                .await;
+                        let ingest = ingest_task
+                            .take()
+                            .expect("one HLS read per case")
+                            .await
+                            .ok()
+                            .flatten();
                         // RTMPS: the HLS audio rendition must be audible. SRT: Cloudflare's
                         // SRT HLS lags and skips most of the input (docs/serve/stream-outputs.md
                         // "Cloudflare SRT HLS"), so there its rendition must be listed and decode
                         // as AAC, and the audio must be audible in what Cloudflare ingested.
                         let ingest_ok = ingest.as_ref().is_some_and(|i| i.audible);
                         let ok = match &a {
-                            Ok(a) if name == "srt" => a.codec.as_deref() == Some("aac") && ingest_ok,
+                            Ok(a) if name == "srt" => {
+                                a.codec.as_deref() == Some("aac") && ingest_ok
+                            }
                             Ok(a) => a.audible,
                             Err(_) => false,
                         };
@@ -1148,7 +1555,9 @@ async fn cloudflare_live_each_kind() {
                                 t0.elapsed().as_secs_f64(),
                                 serde_json::to_string(&a).unwrap_or_default()
                             ),
-                            Err(e) => format!("audio not read: {e}; ingest (RTMPS playback) {ingest}"),
+                            Err(e) => {
+                                format!("audio not read: {e}; ingest (RTMPS playback) {ingest}")
+                            }
                         };
                         format!(
                             "HLS: ingest-to-playable {:.1}s (create -> first segment that decodes; Cloudflare showed the input connected after {:?}); {info}; decoded (codec, frames, keyframes, w, h) {d:?}; luma {l:?}; {dash_info}; {audio}",
@@ -1179,10 +1588,18 @@ async fn cloudflare_live_each_kind() {
     tokio::time::sleep(Duration::from_secs(3)).await;
     let stream_api = api.trim_end_matches("/live_inputs").to_owned();
     for uid in uids {
-        let r = http.get(format!("{api}/{uid}")).bearer_auth(&token).send().await.unwrap();
+        let r = http
+            .get(format!("{api}/{uid}"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap();
         let st = r.status();
         let v: Value = r.json().await.unwrap_or(Value::Null);
-        println!("cleanup {uid}: HTTP {st}, enabled {}, recording {}", v["result"]["enabled"], v["result"]["recording"]["mode"]);
+        println!(
+            "cleanup {uid}: HTTP {st}, enabled {}, recording {}",
+            v["result"]["enabled"], v["result"]["recording"]["mode"]
+        );
         if st.is_success() {
             // `on_stop = auto` disabled it to keep the recording: delete the
             // recordings (stored minutes cost money) and the input here.
@@ -1200,19 +1617,41 @@ async fn cloudflare_live_each_kind() {
                     // A recording still being processed answers 409: retry.
                     let t = Instant::now();
                     let status = loop {
-                        let d = http.delete(format!("{stream_api}/{vid}")).bearer_auth(&token).send().await.unwrap();
-                        if d.status() != reqwest::StatusCode::CONFLICT || t.elapsed() > Duration::from_secs(180) {
+                        let d = http
+                            .delete(format!("{stream_api}/{vid}"))
+                            .bearer_auth(&token)
+                            .send()
+                            .await
+                            .unwrap();
+                        if d.status() != reqwest::StatusCode::CONFLICT
+                            || t.elapsed() > Duration::from_secs(180)
+                        {
                             break d.status();
                         }
                         tokio::time::sleep(Duration::from_secs(5)).await;
                     };
-                    println!("cleanup recording {vid} ({}s): HTTP {status} after {:.0}s", v["duration"], t.elapsed().as_secs_f64());
-                    assert!(status.is_success() || status == reqwest::StatusCode::NOT_FOUND, "deleting recording {vid}: {status}");
+                    println!(
+                        "cleanup recording {vid} ({}s): HTTP {status} after {:.0}s",
+                        v["duration"],
+                        t.elapsed().as_secs_f64()
+                    );
+                    assert!(
+                        status.is_success() || status == reqwest::StatusCode::NOT_FOUND,
+                        "deleting recording {vid}: {status}"
+                    );
                 }
             }
-            let d = http.delete(format!("{api}/{uid}")).bearer_auth(&token).send().await.unwrap();
+            let d = http
+                .delete(format!("{api}/{uid}"))
+                .bearer_auth(&token)
+                .send()
+                .await
+                .unwrap();
             assert!(d.status().is_success(), "deleting the test input {uid}");
         }
     }
-    assert!(failures.is_empty(), "cases without playback or audio: {failures:?}");
+    assert!(
+        failures.is_empty(),
+        "cases without playback or audio: {failures:?}"
+    );
 }

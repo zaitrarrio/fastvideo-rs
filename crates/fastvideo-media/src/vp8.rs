@@ -78,12 +78,20 @@ impl Vp8Config {
     /// VP9 profile 0 at the same real-time defaults (two threads: VP9's row
     /// multithreading does not spin like VP8's workers).
     pub fn vp9(width: u32, height: u32, fps: u32) -> Self {
-        Self { vp9: true, threads: 2, ..Self::new(width, height, fps) }
+        Self {
+            vp9: true,
+            threads: 2,
+            ..Self::new(width, height, fps)
+        }
     }
 
     /// The ffmpeg encoder name.
     pub fn encoder_name(&self) -> &'static str {
-        if self.vp9 { "libvpx-vp9" } else { "libvpx" }
+        if self.vp9 {
+            "libvpx-vp9"
+        } else {
+            "libvpx"
+        }
     }
 
     pub fn gop_frames(&self) -> u32 {
@@ -92,13 +100,22 @@ impl Vp8Config {
 
     pub fn validate(&self) -> Result<()> {
         if self.width == 0 || self.height == 0 || self.width > 16383 || self.height > 16383 {
-            return Err(MediaError::invalid(format!("VP8 cannot carry {}x{}", self.width, self.height)));
+            return Err(MediaError::invalid(format!(
+                "VP8 cannot carry {}x{}",
+                self.width, self.height
+            )));
         }
         if self.fps == 0 || self.fps > 240 {
-            return Err(MediaError::invalid(format!("fps {} out of range", self.fps)));
+            return Err(MediaError::invalid(format!(
+                "fps {} out of range",
+                self.fps
+            )));
         }
         if self.bitrate_bps < 50_000 {
-            return Err(MediaError::invalid(format!("bitrate {} b/s is too low", self.bitrate_bps)));
+            return Err(MediaError::invalid(format!(
+                "bitrate {} b/s is too low",
+                self.bitrate_bps
+            )));
         }
         if self.cpu_used > 16 {
             return Err(MediaError::invalid("cpu_used must be 0..=16"));
@@ -111,21 +128,56 @@ impl Vp8Config {
 pub fn ffmpeg_args(cfg: &Vp8Config) -> Vec<String> {
     let b = cfg.bitrate_bps.to_string();
     let g = cfg.gop_frames().to_string();
-    let mut a: Vec<String> = ["-f", "rawvideo", "-pix_fmt", "rgb24", "-s"].map(String::from).to_vec();
+    let mut a: Vec<String> = ["-f", "rawvideo", "-pix_fmt", "rgb24", "-s"]
+        .map(String::from)
+        .to_vec();
     a.push(format!("{}x{}", cfg.width, cfg.height));
-    a.extend(["-r".into(), cfg.fps.to_string(), "-i".into(), "pipe:0".into(), "-an".into()]);
+    a.extend([
+        "-r".into(),
+        cfg.fps.to_string(),
+        "-i".into(),
+        "pipe:0".into(),
+        "-an".into(),
+    ]);
     a.extend(["-c:v".into(), cfg.encoder_name().into()]);
     let v: &[&str] = &[
-        "-deadline", "realtime", "-error-resilient", "1", "-lag-in-frames", "0", "-auto-alt-ref", "0",
-        "-pix_fmt", "yuv420p", "-qmin", "4", "-qmax", "56", "-undershoot-pct", "95", "-overshoot-pct", "15",
+        "-deadline",
+        "realtime",
+        "-error-resilient",
+        "1",
+        "-lag-in-frames",
+        "0",
+        "-auto-alt-ref",
+        "0",
+        "-pix_fmt",
+        "yuv420p",
+        "-qmin",
+        "4",
+        "-qmax",
+        "56",
+        "-undershoot-pct",
+        "95",
+        "-overshoot-pct",
+        "15",
     ];
     a.extend(v.iter().map(|s| s.to_string()));
-    let cpu = if cfg.vp9 { cfg.cpu_used.min(8) } else { cfg.cpu_used };
+    let cpu = if cfg.vp9 {
+        cfg.cpu_used.min(8)
+    } else {
+        cfg.cpu_used
+    };
     a.extend(["-cpu-used".into(), cpu.to_string()]);
     if cfg.vp9 {
         a.extend(["-row-mt", "1", "-tile-columns", "2", "-frame-parallel", "0"].map(String::from));
     }
-    a.extend(["-b:v".into(), b.clone(), "-minrate".into(), b.clone(), "-maxrate".into(), b]);
+    a.extend([
+        "-b:v".into(),
+        b.clone(),
+        "-minrate".into(),
+        b.clone(),
+        "-maxrate".into(),
+        b,
+    ]);
     // One second of buffer (libvpx's `rc_buf_sz` default is 6 s, too slow
     // to react for live video).
     a.extend(["-bufsize".into(), cfg.bitrate_bps.to_string()]);
@@ -146,7 +198,9 @@ pub fn is_keyframe(frame: &[u8]) -> bool {
 /// header: `frame_marker` 2, the profile bits, a reserved zero bit for
 /// profile 3, `show_existing_frame` 0 and `frame_type` 0).
 pub fn vp9_is_keyframe(frame: &[u8]) -> bool {
-    let Some(&b) = frame.first() else { return false };
+    let Some(&b) = frame.first() else {
+        return false;
+    };
     if b >> 6 != 0b10 {
         return false;
     }
@@ -167,11 +221,17 @@ pub fn take_ivf_frames(buf: &mut Vec<u8>, header_done: &mut bool) -> Result<Vec<
             return Ok(out);
         }
         if &buf[0..4] != b"DKIF" {
-            return Err(MediaError::Parse { path: None, message: "ffmpeg output is not IVF".into() });
+            return Err(MediaError::Parse {
+                path: None,
+                message: "ffmpeg output is not IVF".into(),
+            });
         }
         let hlen = u16::from_le_bytes([buf[6], buf[7]]) as usize;
         if hlen < 32 {
-            return Err(MediaError::Parse { path: None, message: format!("IVF header length {hlen}") });
+            return Err(MediaError::Parse {
+                path: None,
+                message: format!("IVF header length {hlen}"),
+            });
         }
         if buf.len() < hlen {
             return Ok(out);
@@ -201,7 +261,10 @@ pub struct Vp8Encoder {
 
 impl std::fmt::Debug for Vp8Encoder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Vp8Encoder").field("cfg", &self.cfg).field("restarts", &self.restarts()).finish()
+        f.debug_struct("Vp8Encoder")
+            .field("cfg", &self.cfg)
+            .field("restarts", &self.restarts())
+            .finish()
     }
 }
 
@@ -215,7 +278,12 @@ impl Vp8Encoder {
     /// it holds this profile, and restarts into it ([`crate::pipe`]).
     pub fn with_pool(cfg: Vp8Config, pool: Option<SparePool>) -> Result<Self> {
         let procs = PipeProcs::new(SpareSpec::vp8(&cfg)?, pool)?;
-        Ok(Self { cfg, procs, out_index: 0, key_pending: false })
+        Ok(Self {
+            cfg,
+            procs,
+            out_index: 0,
+            key_pending: false,
+        })
     }
 
     pub fn config(&self) -> &Vp8Config {
@@ -246,8 +314,16 @@ impl Vp8Encoder {
         frames
             .into_iter()
             .map(|f| {
-                let key = if self.cfg.vp9 { vp9_is_keyframe(&f) } else { is_keyframe(&f) };
-                let e = EncodedFrame { keyframe: key, data: Bytes::from(f), index: self.out_index };
+                let key = if self.cfg.vp9 {
+                    vp9_is_keyframe(&f)
+                } else {
+                    is_keyframe(&f)
+                };
+                let e = EncodedFrame {
+                    keyframe: key,
+                    data: Bytes::from(f),
+                    index: self.out_index,
+                };
                 self.out_index += 1;
                 e
             })
@@ -303,7 +379,17 @@ fn encoder_probe(encoder: &str) -> std::result::Result<(), String> {
     let ffmpeg = tools::ffmpeg_bin();
     let out = std::process::Command::new(&ffmpeg)
         .args(["-hide_banner", "-loglevel", "error", "-nostats"])
-        .args(["-f", "lavfi", "-i", "color=c=black:s=64x48:r=24:d=0.1", "-c:v", encoder, "-f", "null", "-"])
+        .args([
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=64x48:r=24:d=0.1",
+            "-c:v",
+            encoder,
+            "-f",
+            "null",
+            "-",
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -313,8 +399,15 @@ fn encoder_probe(encoder: &str) -> std::result::Result<(), String> {
         return Ok(());
     }
     let err = String::from_utf8_lossy(&out.stderr);
-    let tail: Vec<&str> = err.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
-    Err(tail.last().map_or_else(|| format!("ffmpeg {encoder} exited with {}", out.status), |l| l.to_string()))
+    let tail: Vec<&str> = err
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    Err(tail.last().map_or_else(
+        || format!("ffmpeg {encoder} exited with {}", out.status),
+        |l| l.to_string(),
+    ))
 }
 
 /// Whether ffmpeg can encode `libvpx` here (probed once per process).
@@ -363,15 +456,34 @@ mod tests {
         let c = Vp8Config::new(1344, 768, 24);
         c.validate().unwrap();
         let a = ffmpeg_args(&c).join(" ");
-        for want in ["-c:v libvpx", "-deadline realtime", "-lag-in-frames 0", "-b:v 6000000", "-g 48", "-f ivf pipe:1"] {
+        for want in [
+            "-c:v libvpx",
+            "-deadline realtime",
+            "-lag-in-frames 0",
+            "-b:v 6000000",
+            "-g 48",
+            "-f ivf pipe:1",
+        ] {
             assert!(a.contains(want), "{want} missing from {a}");
         }
         assert!(!a.contains("libvpx-vp9") && !a.contains("-row-mt"));
-        assert!(Vp8Config { bitrate_bps: 10, ..c.clone() }.validate().is_err());
+        assert!(Vp8Config {
+            bitrate_bps: 10,
+            ..c.clone()
+        }
+        .validate()
+        .is_err());
         assert!(Vp8Config { width: 0, ..c }.validate().is_err());
         let v = Vp8Config::vp9(1344, 768, 24);
         let a = ffmpeg_args(&v).join(" ");
-        for want in ["-c:v libvpx-vp9", "-deadline realtime", "-cpu-used 8", "-row-mt 1", "-auto-alt-ref 0", "-f ivf pipe:1"] {
+        for want in [
+            "-c:v libvpx-vp9",
+            "-deadline realtime",
+            "-cpu-used 8",
+            "-row-mt 1",
+            "-auto-alt-ref 0",
+            "-f ivf pipe:1",
+        ] {
             assert!(a.contains(want), "{want} missing from {a}");
         }
     }

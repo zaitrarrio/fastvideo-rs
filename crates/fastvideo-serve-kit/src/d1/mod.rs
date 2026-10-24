@@ -15,9 +15,9 @@ pub mod mock;
 pub mod schema;
 mod store;
 
-pub use client::{D1Client, D1Config, D1Error, D1Transport, RetryPolicy, Stmt, StmtResult};
 #[cfg(feature = "fetch")]
 pub use client::HttpD1Transport;
+pub use client::{D1Client, D1Config, D1Error, D1Transport, RetryPolicy, Stmt, StmtResult};
 pub use store::{D1JobStore, D1Options, D1Stats};
 
 #[cfg(test)]

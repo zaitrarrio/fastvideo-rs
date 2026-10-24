@@ -440,7 +440,10 @@ impl H3LoraFuse {
                     LoraSideName::B => &mut b_keys,
                 };
                 if slot.insert(module.clone(), key.clone()).is_some() {
-                    return Err(msg(format!("{}: two {side:?} factors for {module}", path.display())));
+                    return Err(msg(format!(
+                        "{}: two {side:?} factors for {module}",
+                        path.display()
+                    )));
                 }
             }
             let mut modules: Vec<&String> = a_keys.keys().collect();
@@ -452,9 +455,9 @@ impl H3LoraFuse {
                 let b_key = b_keys
                     .get(module)
                     .ok_or_else(|| msg(format!("{}: no B for {module}", path.display())))?;
-                let base_shape = base
-                    .shape(&format!("{module}.weight"))
-                    .ok_or_else(|| msg(format!("VDN LoRA target is absent from the base: {module}")))?;
+                let base_shape = base.shape(&format!("{module}.weight")).ok_or_else(|| {
+                    msg(format!("VDN LoRA target is absent from the base: {module}"))
+                })?;
                 let (a_shape, a) = map.get_f32(&a_keys[module])?;
                 let (b_shape, b) = map.get_f32(b_key)?;
                 if base_shape.len() != 2
@@ -482,7 +485,15 @@ impl H3LoraFuse {
                         }
                         let mut ac = prev.a;
                         ac.extend_from_slice(&a);
-                        pairs.insert(module.clone(), Pair { b: bc, a: ac, out, inn });
+                        pairs.insert(
+                            module.clone(),
+                            Pair {
+                                b: bc,
+                                a: ac,
+                                out,
+                                inn,
+                            },
+                        );
                     }
                 }
             }
@@ -586,7 +597,8 @@ impl H3LoraFuse {
 
     /// Apply a pair (if `param` is `{module}.weight`) and then a `.diff`.
     pub fn fuse(&mut self, param: &str, data: &mut [f32], shape: &[usize]) -> Result<()> {
-        self.take_parts(param, shape)?.apply_host(param, data, shape)
+        self.take_parts(param, shape)?
+            .apply_host(param, data, shape)
     }
 
     /// Remove and return what [`Self::fuse`] would apply to `param` (as
@@ -780,7 +792,11 @@ mod tests {
     fn comfy_fold_matches_the_space() {
         use fastvideo_models::h3::turbo_lora::comfy_pairs;
         let (inner, hidden, ffn, r) = (2usize, 3usize, 2usize, 2usize);
-        let ramp = |n: usize, s: f32| (0..n).map(|i| ((i as f32 + s) * 0.61).cos()).collect::<Vec<f32>>();
+        let ramp = |n: usize, s: f32| {
+            (0..n)
+                .map(|i| ((i as f32 + s) * 0.61).cos())
+                .collect::<Vec<f32>>()
+        };
         let mm = |b: &[f32], a: &[f32], out: usize, r: usize| {
             let mut w = vec![0.0f32; out * hidden];
             for o in 0..out {
@@ -806,19 +822,44 @@ mod tests {
         let (a_fc1, b_fc1) = (ramp(r * hidden, 3.0), ramp(2 * ffn * r, 4.0));
         let (a_ada, b_ada) = (ramp(hidden, 5.0), ramp(2, 6.0));
         let adapter = WeightMap::from_f32_tensors([
-            ("blocks.0.attn.qkv_proj.lora_A.weight".to_string(), vec![r, hidden], a_qkv.clone()),
-            ("blocks.0.attn.qkv_proj.lora_B.weight".to_string(), vec![3 * inner, r], b_qkv.clone()),
-            ("blocks.0.mlp.fc1.lora_A.weight".to_string(), vec![r, hidden], a_fc1.clone()),
-            ("blocks.0.mlp.fc1.lora_B.weight".to_string(), vec![2 * ffn, r], b_fc1.clone()),
-            ("final_layer.adaln_proj.linear.lora_A.weight".to_string(), vec![1, hidden], a_ada.clone()),
-            ("final_layer.adaln_proj.linear.lora_B.weight".to_string(), vec![2, 1], b_ada.clone()),
+            (
+                "blocks.0.attn.qkv_proj.lora_A.weight".to_string(),
+                vec![r, hidden],
+                a_qkv.clone(),
+            ),
+            (
+                "blocks.0.attn.qkv_proj.lora_B.weight".to_string(),
+                vec![3 * inner, r],
+                b_qkv.clone(),
+            ),
+            (
+                "blocks.0.mlp.fc1.lora_A.weight".to_string(),
+                vec![r, hidden],
+                a_fc1.clone(),
+            ),
+            (
+                "blocks.0.mlp.fc1.lora_B.weight".to_string(),
+                vec![2 * ffn, r],
+                b_fc1.clone(),
+            ),
+            (
+                "final_layer.adaln_proj.linear.lora_A.weight".to_string(),
+                vec![1, hidden],
+                a_ada.clone(),
+            ),
+            (
+                "final_layer.adaln_proj.linear.lora_B.weight".to_string(),
+                vec![2, 1],
+                b_ada.clone(),
+            ),
         ]);
         let mut keys = adapter.raw_keys();
         keys.sort();
         let modules = comfy_pairs(&keys, "larry").unwrap();
         let strength = 0.5f32;
         let mut fuse =
-            H3LoraFuse::from_comfy(&base, &adapter, Path::new("larry"), &modules, strength).unwrap();
+            H3LoraFuse::from_comfy(&base, &adapter, Path::new("larry"), &modules, strength)
+                .unwrap();
         assert_eq!((fuse.pairs_total, fuse.rank), (5, 2));
         assert_eq!(fuse.effective_scale(), strength);
         let qkv = mm(&b_qkv, &a_qkv, 3 * inner, r);
@@ -827,9 +868,18 @@ mod tests {
         let swapped: Vec<f32> = value.iter().chain(gate).copied().collect();
         let ada = mm(&b_ada, &a_ada, 2, 1);
         let want: Vec<(&str, Vec<f32>)> = vec![
-            ("transformer_blocks.0.attn.to_q.weight", qkv[..inner * hidden].to_vec()),
-            ("transformer_blocks.0.attn.to_k.weight", qkv[inner * hidden..2 * inner * hidden].to_vec()),
-            ("transformer_blocks.0.attn.to_v.weight", qkv[2 * inner * hidden..].to_vec()),
+            (
+                "transformer_blocks.0.attn.to_q.weight",
+                qkv[..inner * hidden].to_vec(),
+            ),
+            (
+                "transformer_blocks.0.attn.to_k.weight",
+                qkv[inner * hidden..2 * inner * hidden].to_vec(),
+            ),
+            (
+                "transformer_blocks.0.attn.to_v.weight",
+                qkv[2 * inner * hidden..].to_vec(),
+            ),
             ("transformer_blocks.0.ff.net.0.proj.weight", swapped),
             ("norm_out.linear.weight", ada),
         ];
@@ -839,7 +889,11 @@ mod tests {
             assert!(fuse.touches(param), "{param}");
             fuse.fuse(param, &mut data, &shape).unwrap();
             for (g, w) in data.iter().zip(&delta) {
-                assert!((g - strength * w).abs() < 1e-6, "{param}: {g} vs {}", strength * w);
+                assert!(
+                    (g - strength * w).abs() < 1e-6,
+                    "{param}: {g} vs {}",
+                    strength * w
+                );
             }
         }
         fuse.finish().unwrap();

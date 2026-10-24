@@ -60,14 +60,18 @@ impl LingBotTextEncoder {
 
     /// `[1, L - crop, text_dim]` hidden states of `prompt`.
     pub fn encode(&self, prompt: &str) -> Result<CudaTensor> {
-        let (ids, crop) = tokenize_lingbot_prompt(&self.root, prompt, QWEN_MAX_LENGTH).map_err(msg)?;
+        let (ids, crop) =
+            tokenize_lingbot_prompt(&self.root, prompt, QWEN_MAX_LENGTH).map_err(msg)?;
         if crop != PROMPT_CROP_START {
             crate::wan::log::info(format_args!(
                 "lingbot text: template crop {crop} (reference processor: {PROMPT_CROP_START})"
             ));
         }
         if ids.len() <= crop {
-            return Err(msg(format!("lingbot qwen: {} tokens, crop {crop}", ids.len())));
+            return Err(msg(format!(
+                "lingbot qwen: {} tokens, crop {crop}",
+                ids.len()
+            )));
         }
         let attend = vec![true; ids.len()];
         let positions: Vec<u32> = (0..ids.len() as u32).collect();

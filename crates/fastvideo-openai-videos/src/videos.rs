@@ -548,7 +548,10 @@ impl SubmitEndpoint for VideosCreate {
         } else {
             CanvasSpec::ModelDefault
         };
-        if b.short_edge.is_some() && b.aspect_ratio.is_none() && !matches!(req.canvas, CanvasSpec::FollowImage { .. }) {
+        if b.short_edge.is_some()
+            && b.aspect_ratio.is_none()
+            && !matches!(req.canvas, CanvasSpec::FollowImage { .. })
+        {
             return Err(ApiError::invalid_param(
                 "short_edge",
                 "short_edge requires aspect_ratio",
@@ -860,7 +863,9 @@ pub fn video_response(job: &Job, cx: &ViewCtx) -> Value {
         echo_str(job, "seconds").unwrap_or_else(|| format!("{}", r.duration_s().round() as u64));
     let art = job.artifacts.first();
     let url = match (&job.state, art) {
-        (fastvideo_protocol::JobState::Succeeded, Some(a)) => Value::String(cx.urls.url_for(a, URL_TTL).to_string()),
+        (fastvideo_protocol::JobState::Succeeded, Some(a)) => {
+            Value::String(cx.urls.url_for(a, URL_TTL).to_string())
+        }
         _ => Value::Null,
     };
     let mut v = json!({

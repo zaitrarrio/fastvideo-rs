@@ -9,9 +9,7 @@ use fastvideo_engine_service::{
     EngineBackend, EngineConfig, EngineEvent, EngineService, FakeBackend, FakeConfig, FakeTiming,
     JobHandle, ManualClock, Mp4Mode, Readiness,
 };
-use fastvideo_protocol::{
-    AudioPlan, PostProcess, ResolvedJob, SamplingOverrides, Task,
-};
+use fastvideo_protocol::{AudioPlan, PostProcess, ResolvedJob, SamplingOverrides, Task};
 
 pub const T: Duration = Duration::from_secs(20);
 
@@ -68,7 +66,10 @@ pub fn start(cfg: EngineConfig, fakes: Vec<FakeConfig>) -> EngineService {
 /// Starts one fake backend and waits until ready.
 pub async fn ready(cfg: EngineConfig, fake: FakeConfig) -> EngineService {
     let e = start(cfg, vec![fake]);
-    assert_eq!(tokio::time::timeout(T, e.wait_ready()).await.unwrap(), Readiness::Ready);
+    assert_eq!(
+        tokio::time::timeout(T, e.wait_ready()).await.unwrap(),
+        Readiness::Ready
+    );
     e
 }
 

@@ -67,6 +67,8 @@ impl ModelVersion {
     }
 }
 
+// clap subcommand: one value per process, so the variant sizes do not matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(clap::Subcommand, Debug)]
 pub enum Stage {
     /// Print the configuration the port targets.
@@ -707,7 +709,9 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             }
             if !*guided
                 && !*hq
-                && (guidance_scale.is_some() || num_inference_steps.is_some() || negative_prompt.is_some())
+                && (guidance_scale.is_some()
+                    || num_inference_steps.is_some()
+                    || negative_prompt.is_some())
             {
                 return Err(anyhow::anyhow!(
                     "--guidance-scale / --num-inference-steps / --negative-prompt need --guided or --hq"
@@ -844,8 +848,9 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                         .transpose()
                         .map_err(|e| anyhow::anyhow!(e.to_string()))?,
                     guided: guided.then(|| GuidedArgs {
-                        guidance_scale: guidance_scale
-                            .unwrap_or(fastvideo_models::ltx2::guidance::ltx25_video_guider().cfg_scale),
+                        guidance_scale: guidance_scale.unwrap_or(
+                            fastvideo_models::ltx2::guidance::ltx25_video_guider().cfg_scale,
+                        ),
                         steps: *num_inference_steps,
                         negative_prompt: negative_prompt.clone().unwrap_or_default(),
                     }),
@@ -891,12 +896,16 @@ fn load_oracle(path: &Path, prefixes: &[&str]) -> anyhow::Result<HashMap<String,
         let data: Vec<f32> = match view.dtype() {
             Dtype::F32 => view
                 .data()
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| f32::from_le_bytes(word(c)))
                 .collect(),
             Dtype::I32 => view
                 .data()
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| i32::from_le_bytes(word(c)) as f32)
                 .collect(),
             other => anyhow::bail!(
@@ -2052,6 +2061,7 @@ fn vae_bench(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn gen(
     report: &mut Report,
     model_version: ModelVersion,
@@ -2460,7 +2470,7 @@ fn gen(
                 json!({"samples_per_channel": want, "sample_rate": rate, "channels": a2v::ENCODER_CHANNELS, "source": "driving audio"}),
             )?;
         } else {
-        report.check(
+            report.check(
         ck("gen.wav"),
         wav_bytes == 44 + (want_samples * cfg.vocoder.out_channels * 2) as u64,
         json!({"bytes": wav_bytes}),
@@ -2541,8 +2551,15 @@ fn parse_cond_image(
     Ok(fastvideo_cudarc::ltx2::i2v_encode::ConditioningImage {
         path: PathBuf::from(parts[0]),
         frame_idx,
-        strength: parts.get(2).map_or(Ok(1.0), |v| v.parse()).map_err(|_| bad())?,
-        crf: parts.get(3).map(|v| v.parse()).transpose().map_err(|_| bad())?,
+        strength: parts
+            .get(2)
+            .map_or(Ok(1.0), |v| v.parse())
+            .map_err(|_| bad())?,
+        crf: parts
+            .get(3)
+            .map(|v| v.parse())
+            .transpose()
+            .map_err(|_| bad())?,
     })
 }
 
@@ -2625,10 +2642,15 @@ pub(crate) fn sink_vs_pngs(
             let body = bytes.get(44..).unwrap_or_default();
             let quantized = |v: f32| (v.clamp(-1.0, 1.0) * 32767.0).round() as i16;
             let same = body.len() == pcm.len() * 2
-                && body.chunks_exact(2).zip(pcm.iter()).all(|(b, &v)| {
-                    let w = i16::from_le_bytes([b[0], b[1]]);
-                    (i32::from(w) - i32::from(quantized(v))).abs() <= 1
-                });
+                && body
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .zip(pcm.iter())
+                    .all(|(b, &v)| {
+                        let w = i16::from_le_bytes([b[0], b[1]]);
+                        (i32::from(w) - i32::from(quantized(v))).abs() <= 1
+                    });
             let header_rate = bytes
                 .get(24..28)
                 .map(|r| u32::from_le_bytes([r[0], r[1], r[2], r[3]]));

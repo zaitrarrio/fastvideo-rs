@@ -116,7 +116,9 @@ pub enum AutoMode {
 
 pub fn auto_mode() -> AutoMode {
     static MODE: std::sync::OnceLock<AutoMode> = std::sync::OnceLock::new();
-    *MODE.get_or_init(|| parse_auto_mode(&super::envflag::string_flag("FASTVIDEO_SDPA_AUTO", "rule")))
+    *MODE.get_or_init(|| {
+        parse_auto_mode(&super::envflag::string_flag("FASTVIDEO_SDPA_AUTO", "rule"))
+    })
 }
 
 pub fn parse_auto_mode(v: &str) -> AutoMode {
@@ -136,7 +138,11 @@ pub fn describe() -> String {
                 r.sm_major,
                 r.d,
                 r.min_sq,
-                if r.max_sq == usize::MAX { "inf".to_string() } else { r.max_sq.to_string() },
+                if r.max_sq == usize::MAX {
+                    "inf".to_string()
+                } else {
+                    r.max_sq.to_string()
+                },
                 r.min_sk,
                 r.max_sk,
                 r.pick.name()
@@ -157,7 +163,14 @@ mod tests {
             assert_eq!(pick(12, n, n, 128), DensePick::Cudnn, "{n}");
         }
         // fwd2 faster (4K 5 s, 23 616 at 24 heads) or a tie (512p, cross-attention).
-        for (sq, sk) in [(130_560, 130_560), (23_616, 23_616), (6_144, 6_144), (27_280, 512), (38_760, 1_024), (124_440, 151)] {
+        for (sq, sk) in [
+            (130_560, 130_560),
+            (23_616, 23_616),
+            (6_144, 6_144),
+            (27_280, 512),
+            (38_760, 1_024),
+            (124_440, 151),
+        ] {
             assert_eq!(pick(12, sq, sk, 128), DensePick::V2, "{sq} x {sk}");
         }
     }
@@ -171,8 +184,12 @@ mod tests {
 
     #[test]
     fn the_pick_is_a_pure_function_of_the_shape() {
-        let a: Vec<DensePick> = (0..64).map(|i| pick(12, 20_000 + i * 2_000, 20_000 + i * 2_000, 128)).collect();
-        let b: Vec<DensePick> = (0..64).map(|i| pick(12, 20_000 + i * 2_000, 20_000 + i * 2_000, 128)).collect();
+        let a: Vec<DensePick> = (0..64)
+            .map(|i| pick(12, 20_000 + i * 2_000, 20_000 + i * 2_000, 128))
+            .collect();
+        let b: Vec<DensePick> = (0..64)
+            .map(|i| pick(12, 20_000 + i * 2_000, 20_000 + i * 2_000, 128))
+            .collect();
         assert_eq!(a, b);
         assert!(describe().contains("cudnn"));
     }

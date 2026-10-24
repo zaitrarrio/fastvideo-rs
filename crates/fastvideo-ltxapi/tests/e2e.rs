@@ -66,7 +66,10 @@ impl EngineGate for Gate {
         }
     }
     async fn submit(&self, job: &Job) -> Result<(), ApiError> {
-        let mut h = self.engine.submit(job.id, job.resolved.clone(), Priority::Batch).await?;
+        let mut h = self
+            .engine
+            .submit(job.id, job.resolved.clone(), Priority::Batch)
+            .await?;
         let ctx = self.ctx.get().expect("ctx").clone();
         let (id, resolved) = (job.id, job.resolved.clone());
         tokio::spawn(async move {
@@ -74,7 +77,9 @@ impl EngineGate for Gate {
                 let ev = match ev {
                     EngineEvent::Queued { position } => JobEvent::Queued { position },
                     EngineEvent::Started => JobEvent::Started,
-                    EngineEvent::Stage { name } => JobEvent::Stage { name: name.to_owned() },
+                    EngineEvent::Stage { name } => JobEvent::Stage {
+                        name: name.to_owned(),
+                    },
                     EngineEvent::Progress { step, total } => JobEvent::Progress { step, total },
                     EngineEvent::Log(l) => JobEvent::Log(l),
                     EngineEvent::Failed(e) => JobEvent::Failed(e),
@@ -104,7 +109,11 @@ impl EngineGate for Gate {
                             fps: resolved.fps,
                             audio,
                         };
-                        JobEvent::Finished(FinishedOutput { file, meta, metrics: out.metrics })
+                        JobEvent::Finished(FinishedOutput {
+                            file,
+                            meta,
+                            metrics: out.metrics,
+                        })
                     }
                 };
                 let _ = apply_event(&ctx, id, ev).await;
@@ -136,21 +145,36 @@ async fn fixture(cfg: LtxConfig, aliases: bool) -> Fx {
 /// [`fixture`] with the fake's denoise steps on `clock` (the test decides
 /// when they end).
 async fn fixture_on(cfg: LtxConfig, aliases: bool, clock: Option<Arc<ManualClock>>) -> Fx {
-    let dir = std::env::temp_dir().join(format!("fv-ltxapi-{}", fastvideo_serve_kit::random_token()));
-    let mut fake = FakeConfig { mp4: Mp4Mode::Off, ..FakeConfig::default() }.with_models(&["fake-ltx-pro", "fake-ltx-turbo"]);
+    let dir =
+        std::env::temp_dir().join(format!("fv-ltxapi-{}", fastvideo_serve_kit::random_token()));
+    let mut fake = FakeConfig {
+        mp4: Mp4Mode::Off,
+        ..FakeConfig::default()
+    }
+    .with_models(&["fake-ltx-pro", "fake-ltx-turbo"]);
     if let Some(c) = clock {
         fake.clock = c;
     }
     let engine = EngineService::start(
-        EngineConfig { output_dir: dir.join("engine"), ..EngineConfig::default() },
+        EngineConfig {
+            output_dir: dir.join("engine"),
+            ..EngineConfig::default()
+        },
         vec![Box::new(FakeBackend::new(fake))],
     )
     .unwrap();
     assert!(engine.wait_ready().await.is_ready());
-    let gate = Arc::new(Gate { engine, ctx: OnceLock::new(), aliases });
+    let gate = Arc::new(Gate {
+        engine,
+        ctx: OnceLock::new(),
+        aliases,
+    });
     let scfg = ServeConfig::new(Url::parse("http://fv.test").unwrap(), &dir);
     let ctx = ServeCtx::builder(scfg, gate.clone())
-        .auth(Auth::new(AuthMode::Keys, KeyRing::from_plain(["sk-a", "sk-b"])))
+        .auth(Auth::new(
+            AuthMode::Keys,
+            KeyRing::from_plain(["sk-a", "sk-b"]),
+        ))
         .url_key(UrlKey::new("k"))
         .build()
         .await
@@ -184,11 +208,24 @@ async fn send(app: &Router, req: Request<Body>) -> Resp {
     let r = app.clone().oneshot(req).await.unwrap();
     let status = r.status();
     let headers = r.headers().clone();
-    let bytes = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap().to_vec();
-    Resp { status, headers, bytes }
+    let bytes = axum::body::to_bytes(r.into_body(), usize::MAX)
+        .await
+        .unwrap()
+        .to_vec();
+    Resp {
+        status,
+        headers,
+        bytes,
+    }
 }
 
-async fn call(app: &Router, method: &str, uri: &str, key: Option<&str>, body: Option<Value>) -> Resp {
+async fn call(
+    app: &Router,
+    method: &str,
+    uri: &str,
+    key: Option<&str>,
+    body: Option<Value>,
+) -> Resp {
     let mut b = Request::builder().method(method).uri(uri);
     if let Some(k) = key {
         b = b.header("authorization", format!("Bearer {k}"));
@@ -235,7 +272,14 @@ fn path_and_query(u: &str) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn v2_lifecycle() {
     let fx = fixture(LtxConfig::default(), true).await;
-    let r = call(&fx.app, "POST", "/v2/text-to-video", Some("sk-a"), Some(t2v("ltx-2-5-fast", "1280x720", 8))).await;
+    let r = call(
+        &fx.app,
+        "POST",
+        "/v2/text-to-video",
+        Some("sk-a"),
+        Some(t2v("ltx-2-5-fast", "1280x720", 8)),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::ACCEPTED, "{:?}", r.json());
     assert_rid(&r);
     let body = r.json();
@@ -246,9 +290,21 @@ async fn v2_lifecycle() {
     assert_eq!(r.header("x-fv-tier"), Some("turbo"));
 
     // Geometry went through pad-and-crop.
-    let job = fx.ctx.jobs().by_external(ProtocolId::LtxV2, &id).await.unwrap();
+    let job = fx
+        .ctx
+        .jobs()
+        .by_external(ProtocolId::LtxV2, &id)
+        .await
+        .unwrap();
     assert_eq!(job.resolved.model.0, "fake-ltx-turbo");
-    assert_eq!((job.resolved.width, job.resolved.height, job.resolved.num_frames), (1280, 768, 193));
+    assert_eq!(
+        (
+            job.resolved.width,
+            job.resolved.height,
+            job.resolved.num_frames
+        ),
+        (1280, 768, 193)
+    );
     assert_eq!(job.resolved.post.crop, Some((1280, 720)));
     assert_eq!(job.requested_model(), "ltx-2-5-fast");
 
@@ -268,7 +324,10 @@ async fn v2_lifecycle() {
     for (uri, key) in [
         (format!("/v2/image-to-video/{id}"), "sk-a"),
         (format!("/v2/retake/{id}"), "sk-a"),
-        ("/v2/text-to-video/00000000-0000-0000-0000-000000000000".to_owned(), "sk-a"),
+        (
+            "/v2/text-to-video/00000000-0000-0000-0000-000000000000".to_owned(),
+            "sk-a",
+        ),
         (format!("/v2/text-to-video/{id}"), "sk-b"),
     ] {
         let r = call(&fx.app, "GET", &uri, Some(key), None).await;
@@ -276,8 +335,18 @@ async fn v2_lifecycle() {
         assert_eq!(r.err_type(), "not_found_error");
         assert_rid(&r);
     }
-    let r = call(&fx.app, "GET", &format!("/v2/text-to-video/{id}"), None, None).await;
-    assert_eq!((r.status, r.err_type()), (StatusCode::UNAUTHORIZED, "authentication_error".into()));
+    let r = call(
+        &fx.app,
+        "GET",
+        &format!("/v2/text-to-video/{id}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        (r.status, r.err_type()),
+        (StatusCode::UNAUTHORIZED, "authentication_error".into())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -292,39 +361,81 @@ async fn v2_engine_failure() {
     let v = poll_terminal(&fx.app, "text-to-video", &id).await.json();
     assert_eq!(v["status"], "failed");
     assert_eq!(v["error"]["type"], "api_error");
-    assert!(v["error"]["message"].as_str().unwrap().contains("injected failure"));
+    assert!(v["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("injected failure"));
     assert!(v.get("result").is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn v1_sync_returns_mp4_bytes() {
     let fx = fixture(LtxConfig::default(), false).await;
-    let r = call(&fx.app, "POST", "/v1/text-to-video", Some("sk-a"), Some(t2v("ltx-turbo", "720x1280", 6))).await;
-    assert_eq!(r.status, StatusCode::OK, "{}", String::from_utf8_lossy(&r.bytes));
+    let r = call(
+        &fx.app,
+        "POST",
+        "/v1/text-to-video",
+        Some("sk-a"),
+        Some(t2v("ltx-turbo", "720x1280", 6)),
+    )
+    .await;
+    assert_eq!(
+        r.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&r.bytes)
+    );
     assert_eq!(r.header("content-type"), Some("video/mp4"));
     assert_rid(&r);
     assert_eq!(r.header("x-fv-tier"), Some("turbo"));
     assert_eq!(r.bytes, STUB_MP4);
     // A v1 job is not visible through the v2 status route.
     let jobs = fx.ctx.jobs().list(Default::default()).await;
-    let j = jobs.items.iter().find(|j| j.protocol == ProtocolId::LtxV1).unwrap();
-    assert_eq!((j.resolved.width, j.resolved.height, j.resolved.post.crop), (768, 1280, Some((720, 1280))));
-    let r = call(&fx.app, "GET", &format!("/v2/text-to-video/{}", j.external_id), Some("sk-a"), None).await;
+    let j = jobs
+        .items
+        .iter()
+        .find(|j| j.protocol == ProtocolId::LtxV1)
+        .unwrap();
+    assert_eq!(
+        (j.resolved.width, j.resolved.height, j.resolved.post.crop),
+        (768, 1280, Some((720, 1280)))
+    );
+    let r = call(
+        &fx.app,
+        "GET",
+        &format!("/v2/text-to-video/{}", j.external_id),
+        Some("sk-a"),
+        None,
+    )
+    .await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
 
     // Failures come back on the same request.
     let mut b = t2v("ltx-turbo", "1280x720", 6);
     b["prompt"] = json!("[fake:fail]");
     let r = call(&fx.app, "POST", "/v1/text-to-video", Some("sk-a"), Some(b)).await;
-    assert_eq!((r.status, r.err_type()), (StatusCode::INTERNAL_SERVER_ERROR, "api_error".into()));
+    assert_eq!(
+        (r.status, r.err_type()),
+        (StatusCode::INTERNAL_SERVER_ERROR, "api_error".into())
+    );
     assert_rid(&r);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn v1_timeout_is_504_and_cancels() {
-    let cfg = LtxConfig { sync_timeout: Some(Duration::from_millis(1)), ..LtxConfig::default() };
+    let cfg = LtxConfig {
+        sync_timeout: Some(Duration::from_millis(1)),
+        ..LtxConfig::default()
+    };
     let fx = fixture(cfg, true).await;
-    let r = call(&fx.app, "POST", "/v1/text-to-video", Some("sk-a"), Some(t2v("ltx-2-5-fast", "1280x720", 6))).await;
+    let r = call(
+        &fx.app,
+        "POST",
+        "/v1/text-to-video",
+        Some("sk-a"),
+        Some(t2v("ltx-2-5-fast", "1280x720", 6)),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::GATEWAY_TIMEOUT);
     assert_eq!(r.err_type(), "api_error");
     assert_rid(&r);
@@ -335,19 +446,39 @@ async fn v1_timeout_is_504_and_cancels() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn v1_concurrency_limit() {
-    let cfg = LtxConfig { v1_concurrency: Some(1), ..LtxConfig::default() };
+    let cfg = LtxConfig {
+        v1_concurrency: Some(1),
+        ..LtxConfig::default()
+    };
     // The first generation is parked on a manual clock, so it holds the one
     // v1 slot however fast or slow the host is.
     let clock = Arc::new(ManualClock::new());
     let fx = fixture_on(cfg, true, Some(clock.clone())).await;
     let app = fx.app.clone();
     let a = tokio::spawn(async move {
-        call(&app, "POST", "/v1/text-to-video", Some("sk-a"), Some(t2v("ltx-turbo", "1280x720", 6))).await
+        call(
+            &app,
+            "POST",
+            "/v1/text-to-video",
+            Some("sk-a"),
+            Some(t2v("ltx-turbo", "1280x720", 6)),
+        )
+        .await
     });
     let c2 = clock.clone();
-    let parked = tokio::task::spawn_blocking(move || c2.wait_for_sleepers(1, Duration::from_secs(30))).await.unwrap();
+    let parked =
+        tokio::task::spawn_blocking(move || c2.wait_for_sleepers(1, Duration::from_secs(30)))
+            .await
+            .unwrap();
     assert!(parked, "the first generation never reached a denoise step");
-    let b = call(&fx.app, "POST", "/v1/text-to-video", Some("sk-a"), Some(t2v("ltx-turbo", "1280x720", 6))).await;
+    let b = call(
+        &fx.app,
+        "POST",
+        "/v1/text-to-video",
+        Some("sk-a"),
+        Some(t2v("ltx-turbo", "1280x720", 6)),
+    )
+    .await;
     assert_eq!(b.status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(b.err_type(), "concurrency_limit_error");
     assert_eq!(b.header("retry-after"), Some("5"));
@@ -382,7 +513,10 @@ async fn upload_then_image_to_video() {
     assert!(storage.starts_with("ltx://uploads/"));
     assert!(u["expires_at"].as_str().unwrap().ends_with('Z'));
     let put_url = Url::parse(u["upload_url"].as_str().unwrap()).unwrap();
-    assert_eq!(put_url.path(), format!("/uploads/{}", &storage["ltx://uploads/".len()..]));
+    assert_eq!(
+        put_url.path(),
+        format!("/uploads/{}", &storage["ltx://uploads/".len()..])
+    );
     // Clients copy upstream's x-goog-* headers; they are accepted and ignored.
     let put = Request::put(put_url.path())
         .header("content-type", "image/png")
@@ -397,20 +531,39 @@ async fn upload_then_image_to_video() {
     let r = call(&fx.app, "POST", "/v2/image-to-video", Some("sk-a"), Some(b)).await;
     assert_eq!(r.status, StatusCode::ACCEPTED, "{:?}", r.json());
     let id = r.json()["id"].as_str().unwrap().to_owned();
-    let job = fx.ctx.jobs().by_external(ProtocolId::LtxV2, &id).await.unwrap();
+    let job = fx
+        .ctx
+        .jobs()
+        .by_external(ProtocolId::LtxV2, &id)
+        .await
+        .unwrap();
     assert_eq!(job.resolved.keyframes.len(), 1);
     assert_eq!((job.resolved.width, job.resolved.height), (768, 1280));
     let v = poll_terminal(&fx.app, "image-to-video", &id).await.json();
     assert_eq!(v["status"], "completed", "{v}");
     // The job is not visible under text-to-video.
-    let r = call(&fx.app, "GET", &format!("/v2/text-to-video/{id}"), Some("sk-a"), None).await;
+    let r = call(
+        &fx.app,
+        "GET",
+        &format!("/v2/text-to-video/{id}"),
+        Some("sk-a"),
+        None,
+    )
+    .await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
 
     // The same upload serves a v1 sync request and then another v2 job
     // (uploads are not single use; GPU E2E i2v-upload).
     let mut b = t2v("ltx-2-3-pro", "720x1280", 6);
     b["image_uri"] = json!(storage);
-    let r = call(&fx.app, "POST", "/v1/image-to-video", Some("sk-a"), Some(b.clone())).await;
+    let r = call(
+        &fx.app,
+        "POST",
+        "/v1/image-to-video",
+        Some("sk-a"),
+        Some(b.clone()),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::OK);
     let r = call(&fx.app, "POST", "/v2/image-to-video", Some("sk-a"), Some(b)).await;
     assert_eq!(r.status, StatusCode::ACCEPTED, "{:?}", r.json());
@@ -418,16 +571,40 @@ async fn upload_then_image_to_video() {
     // Data URIs work too; unknown upload tokens and plain http are refused.
     let mut b = t2v("ltx-2-3-pro", "1280x720", 6);
     b["image_uri"] = json!(format!("data:image/png;base64,{PNG_B64}"));
-    let r = call(&fx.app, "POST", "/v2/image-to-video", Some("sk-a"), Some(b.clone())).await;
+    let r = call(
+        &fx.app,
+        "POST",
+        "/v2/image-to-video",
+        Some("sk-a"),
+        Some(b.clone()),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::ACCEPTED, "{:?}", r.json());
-    for bad in ["ltx://uploads/0123456789abcdef0123456789abcdef", "http://example.com/a.png"] {
+    for bad in [
+        "ltx://uploads/0123456789abcdef0123456789abcdef",
+        "http://example.com/a.png",
+    ] {
         b["image_uri"] = json!(bad);
-        let r = call(&fx.app, "POST", "/v2/image-to-video", Some("sk-a"), Some(b.clone())).await;
-        assert_eq!((r.status, r.err_type()), (StatusCode::BAD_REQUEST, "invalid_request_error".into()), "{bad}");
+        let r = call(
+            &fx.app,
+            "POST",
+            "/v2/image-to-video",
+            Some("sk-a"),
+            Some(b.clone()),
+        )
+        .await;
+        assert_eq!(
+            (r.status, r.err_type()),
+            (StatusCode::BAD_REQUEST, "invalid_request_error".into()),
+            "{bad}"
+        );
     }
     // Upload needs auth.
     let r = call(&fx.app, "POST", "/v1/upload", None, None).await;
-    assert_eq!((r.status, r.err_type()), (StatusCode::UNAUTHORIZED, "authentication_error".into()));
+    assert_eq!(
+        (r.status, r.err_type()),
+        (StatusCode::UNAUTHORIZED, "authentication_error".into())
+    );
 }
 
 /// A silent 16-bit mono WAV of `secs` seconds at `rate`, as a data URI.
@@ -438,7 +615,11 @@ fn wav_uri(rate: u32, secs: f64) -> String {
     let mut v = b"RIFF".to_vec();
     v.extend((36 + data).to_le_bytes());
     v.extend(b"WAVEfmt ");
-    for x in [16u32.to_le_bytes().to_vec(), 1u16.to_le_bytes().to_vec(), 1u16.to_le_bytes().to_vec()] {
+    for x in [
+        16u32.to_le_bytes().to_vec(),
+        1u16.to_le_bytes().to_vec(),
+        1u16.to_le_bytes().to_vec(),
+    ] {
         v.extend(x);
     }
     v.extend(rate.to_le_bytes());
@@ -448,7 +629,10 @@ fn wav_uri(rate: u32, secs: f64) -> String {
     v.extend(b"data");
     v.extend(data.to_le_bytes());
     v.extend(vec![0u8; data as usize]);
-    format!("data:audio/wav;base64,{}", base64::engine::general_purpose::STANDARD.encode(v))
+    format!(
+        "data:audio/wav;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(v)
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -457,20 +641,45 @@ async fn audio_to_video() {
     // 7 s of audio: the longest 8k+1 clip within it at 24 fps is 161 frames;
     // the default model is ltx-2-3-pro (our max tier), 1920x1080.
     let b = json!({"audio_uri": wav_uri(16_000, 7.0), "prompt": "a man talks to the camera"});
-    let r = call(&fx.app, "POST", "/v2/audio-to-video", Some("sk-a"), Some(b.clone())).await;
+    let r = call(
+        &fx.app,
+        "POST",
+        "/v2/audio-to-video",
+        Some("sk-a"),
+        Some(b.clone()),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::ACCEPTED, "{:?}", r.json());
     assert_rid(&r);
     let id = r.json()["id"].as_str().unwrap().to_owned();
-    let job = fx.ctx.jobs().by_external(ProtocolId::LtxV2, &id).await.unwrap();
+    let job = fx
+        .ctx
+        .jobs()
+        .by_external(ProtocolId::LtxV2, &id)
+        .await
+        .unwrap();
     let j = &job.resolved;
-    assert_eq!((j.task, j.model.0.as_str(), j.num_frames, j.fps), (fastvideo_protocol::Task::A2V, "fake-ltx-pro", 161, 24));
-    assert_eq!((j.width, j.height, j.post.crop), (1920, 1088, Some((1920, 1080))));
+    assert_eq!(
+        (j.task, j.model.0.as_str(), j.num_frames, j.fps),
+        (fastvideo_protocol::Task::A2V, "fake-ltx-pro", 161, 24)
+    );
+    assert_eq!(
+        (j.width, j.height, j.post.crop),
+        (1920, 1088, Some((1920, 1080)))
+    );
     assert!(matches!(&j.audio_in, Some((fastvideo_protocol::AudioRole::Drive, p)) if p.is_file()));
     let v = poll_terminal(&fx.app, "audio-to-video", &id).await.json();
     assert_eq!(v["status"], "completed", "{v}");
     assert!(v["result"]["video_url"].is_string(), "{v}");
     // Not visible under another endpoint.
-    let r = call(&fx.app, "GET", &format!("/v2/image-to-video/{id}"), Some("sk-a"), None).await;
+    let r = call(
+        &fx.app,
+        "GET",
+        &format!("/v2/image-to-video/{id}"),
+        Some("sk-a"),
+        None,
+    )
+    .await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
     // v1 answers the video bytes.
     let r = call(&fx.app, "POST", "/v1/audio-to-video", Some("sk-a"), Some(b)).await;
@@ -480,8 +689,16 @@ async fn audio_to_video() {
     let b = json!({"audio_uri": wav_uri(16_000, 7.0), "image_uri": format!("data:image/png;base64,{PNG_B64}"), "prompt": "", "model": "ltx-2-5-fast"});
     let r = call(&fx.app, "POST", "/v2/audio-to-video", Some("sk-a"), Some(b)).await;
     assert_eq!(r.status, StatusCode::ACCEPTED, "{:?}", r.json());
-    let job = fx.ctx.jobs().by_external(ProtocolId::LtxV2, r.json()["id"].as_str().unwrap()).await.unwrap();
-    assert_eq!((job.resolved.model.0.as_str(), job.resolved.keyframes.len()), ("fake-ltx-turbo", 1));
+    let job = fx
+        .ctx
+        .jobs()
+        .by_external(ProtocolId::LtxV2, r.json()["id"].as_str().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        (job.resolved.model.0.as_str(), job.resolved.keyframes.len()),
+        ("fake-ltx-turbo", 1)
+    );
     // Audio validation: too short, too long for pro, too long at all.
     for (audio, model, what) in [
         (wav_uri(16_000, 1.5), "ltx-2-5-fast", "2 to 20"),
@@ -490,7 +707,11 @@ async fn audio_to_video() {
     ] {
         let b = json!({"audio_uri": audio, "prompt": "p", "model": model});
         let r = call(&fx.app, "POST", "/v2/audio-to-video", Some("sk-a"), Some(b)).await;
-        assert_eq!((r.status, r.err_type()), (StatusCode::BAD_REQUEST, "invalid_request_error".into()), "{what}");
+        assert_eq!(
+            (r.status, r.err_type()),
+            (StatusCode::BAD_REQUEST, "invalid_request_error".into()),
+            "{what}"
+        );
         let m = r.json()["error"]["message"].as_str().unwrap().to_owned();
         assert!(m.contains(what), "{m}");
     }
@@ -510,7 +731,10 @@ async fn auth_stubs_and_gaps() {
     // Auth: missing, wrong scheme, unknown key.
     for key in [None, Some("nope")] {
         let r = call(app, "POST", "/v2/text-to-video", key, Some(body.clone())).await;
-        assert_eq!((r.status, r.err_type()), (StatusCode::UNAUTHORIZED, "authentication_error".into()));
+        assert_eq!(
+            (r.status, r.err_type()),
+            (StatusCode::UNAUTHORIZED, "authentication_error".into())
+        );
         assert_rid(&r);
     }
     let req = Request::post("/v2/text-to-video")
@@ -524,9 +748,23 @@ async fn auth_stubs_and_gaps() {
     for api in ["v1", "v2"] {
         for ep in fastvideo_ltxapi::stubs::STUB_ENDPOINTS {
             let uri = format!("/{api}/{ep}");
-            let r = call(app, "POST", &uri, Some("sk-a"), Some(json!({"video_uri": "https://example.com/v.mp4"}))).await;
-            assert_eq!((r.status, r.err_type()), (StatusCode::FORBIDDEN, "permission_error".into()), "{uri}");
-            assert_eq!(r.json()["error"]["message"], "endpoint not available for the account");
+            let r = call(
+                app,
+                "POST",
+                &uri,
+                Some("sk-a"),
+                Some(json!({"video_uri": "https://example.com/v.mp4"})),
+            )
+            .await;
+            assert_eq!(
+                (r.status, r.err_type()),
+                (StatusCode::FORBIDDEN, "permission_error".into()),
+                "{uri}"
+            );
+            assert_eq!(
+                r.json()["error"]["message"],
+                "endpoint not available for the account"
+            );
             assert_rid(&r);
             let r = call(app, "POST", &uri, None, None).await;
             assert_eq!(r.status, StatusCode::UNAUTHORIZED, "{uri}");
@@ -545,22 +783,52 @@ async fn auth_stubs_and_gaps() {
         (with("camera_motion", json!("dolly_in")), "camera_motion"),
         (with("model", json!("ltx-2-pro")), "removed"),
         (with("model", json!("ltx-9")), "model must be one of"),
-        (with("duration", json!(12)).tap_res("3840x2160"), "allowed: 6, 8, 10"),
-        (with("resolution", json!("1920x1088")), "resolution must be one of"),
-        (json!({"model": "ltx-2-5-fast", "resolution": "1920x1080", "prompt": "p"}), "duration is required"),
+        (
+            with("duration", json!(12)).tap_res("3840x2160"),
+            "allowed: 6, 8, 10",
+        ),
+        (
+            with("resolution", json!("1920x1088")),
+            "resolution must be one of",
+        ),
+        (
+            json!({"model": "ltx-2-5-fast", "resolution": "1920x1080", "prompt": "p"}),
+            "duration is required",
+        ),
     ];
     for (b, needle) in cases {
-        let r = call(app, "POST", "/v2/text-to-video", Some("sk-a"), Some(b.clone())).await;
-        assert_eq!((r.status, r.err_type()), (StatusCode::BAD_REQUEST, "invalid_request_error".into()), "{b}");
+        let r = call(
+            app,
+            "POST",
+            "/v2/text-to-video",
+            Some("sk-a"),
+            Some(b.clone()),
+        )
+        .await;
+        assert_eq!(
+            (r.status, r.err_type()),
+            (StatusCode::BAD_REQUEST, "invalid_request_error".into()),
+            "{b}"
+        );
         let msg = r.json()["error"]["message"].as_str().unwrap().to_owned();
         assert!(msg.contains(needle), "{msg} !~ {needle}");
     }
-    let mut kf = with("image_uri", json!(format!("data:image/png;base64,{PNG_B64}")));
+    let mut kf = with(
+        "image_uri",
+        json!(format!("data:image/png;base64,{PNG_B64}")),
+    );
     kf["last_frame_uri"] = json!(format!("data:image/png;base64,{PNG_B64}"));
     // First + last frame (E9): accepted by an engine with keyframe conditioning.
     let r = call(app, "POST", "/v2/image-to-video", Some("sk-a"), Some(kf)).await;
     assert_eq!(r.status, StatusCode::ACCEPTED, "{:?}", r.json());
-    let r = call(app, "POST", "/v2/text-to-video", Some("sk-a"), Some(json!("nope"))).await;
+    let r = call(
+        app,
+        "POST",
+        "/v2/text-to-video",
+        Some("sk-a"),
+        Some(json!("nope")),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
     let req = Request::post("/v2/text-to-video")
         .header("authorization", "Bearer sk-a")
@@ -569,10 +837,27 @@ async fn auth_stubs_and_gaps() {
     assert_eq!(send(app, req).await.status, StatusCode::BAD_REQUEST);
 
     // A documented id whose tier is not served: 403 (no draft model here).
-    let r = call(app, "POST", "/v2/text-to-video", Some("sk-a"), Some(with("model", json!("ltx-draft")))).await;
-    assert_eq!((r.status, r.err_type()), (StatusCode::FORBIDDEN, "permission_error".into()));
+    let r = call(
+        app,
+        "POST",
+        "/v2/text-to-video",
+        Some("sk-a"),
+        Some(with("model", json!("ltx-draft"))),
+    )
+    .await;
+    assert_eq!(
+        (r.status, r.err_type()),
+        (StatusCode::FORBIDDEN, "permission_error".into())
+    );
     // Without gate aliases the tier still binds (resolve_tier).
-    let r = call(app, "POST", "/v2/text-to-video", Some("sk-a"), Some(body.clone())).await;
+    let r = call(
+        app,
+        "POST",
+        "/v2/text-to-video",
+        Some("sk-a"),
+        Some(body.clone()),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::ACCEPTED, "{:?}", r.json());
     // No job was stored for any refused request (the two are the keyframes
     // job and this one).

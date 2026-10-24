@@ -27,39 +27,43 @@ pub mod ingest;
 pub mod job;
 pub mod moderation;
 pub mod negotiate;
+pub mod quality;
 pub mod request;
 pub mod stream;
-pub mod quality;
 
 pub use av::{Pcm, RgbFrame};
 pub use caps::{
-    apply_feature_flags, AudioCaps, CanvasCaps, CausalContext, FpsCaps, FrameGrid, HdTier, KnobCaps, ModelCaps, RefLimits, StreamCaps, Tier,
-    FLAG_H3_1080P_LONG, H3_1080P_LONG_MAX_S, H3_1080P_MAX_S,
+    apply_feature_flags, AudioCaps, CanvasCaps, CausalContext, FpsCaps, FrameGrid, HdTier,
+    KnobCaps, ModelCaps, RefLimits, StreamCaps, Tier, FLAG_H3_1080P_LONG, H3_1080P_LONG_MAX_S,
+    H3_1080P_MAX_S,
 };
 pub use error::{ApiError, ErrorKind, GapId};
-pub use moderation::{has_visual_input, moderate, moderate_request, ModerationScope, PromptModerator};
 pub use http::{
     BatchProtocol, ErrorCtx, HttpReply, JobView, NormalizeCtx, ReplyBody, SseEvent, SseFollow,
     SseSpec, SubmitEndpoint, UrlSigner, ViewCtx,
 };
 pub use ingest::{
-    AudioInputCaps, DuplexCaps, DuplexSpec, InputAudio, InputCaps, InputFrame, InputVideoCodec, SessionContext,
-    VideoInputCaps, CONTEXT_MAX_CHARS,
+    AudioInputCaps, DuplexCaps, DuplexSpec, InputAudio, InputCaps, InputFrame, InputVideoCodec,
+    SessionContext, VideoInputCaps, CONTEXT_MAX_CHARS,
 };
 pub use job::{
     Artifact, ArtifactId, ArtifactLocation, CallbackSpec, Job, JobId, JobMetrics, JobSnapshot,
     JobState, JobStatus, JobStore, JobUpdate, KeyId, ListQuery, LogLevel, LogLine, Page, SortOrder,
     StoreError, TransitionError,
 };
-pub use negotiate::{
-    canvas_for_aspect, draw_seed, A2V_AUDIO_MAX_S, A2V_AUDIO_MIN_S, A2V_AUDIO_RATES, effective_canvas, h3_1080p_canvas, is_hd_canvas, negotiate, negotiate_noted, precheck,
-    resolve_canvas, resolve_canvas_noted, resolve_frames,
-    resolve_model, resolve_tier, route_task, AudioPlan, MediaProbe, PostProcess, ResolvedCanvas, ResolvedJob,
-    StagedInputs, StagedMedia,
+pub use moderation::{
+    has_visual_input, moderate, moderate_request, ModerationScope, PromptModerator,
 };
 pub use negotiate::{
-    ResolvedEdit, ResolvedEditOp, EDIT_DURATION_MAX_S, EDIT_DURATION_MIN_S, EDIT_FPS, EDIT_MAX_FRAMES, EDIT_MAX_PIXELS,
-    EDIT_SOURCE_MAX_S, EXTEND_CONTEXT_MAX_S, EXTEND_CONTEXT_MIN_S,
+    canvas_for_aspect, draw_seed, effective_canvas, h3_1080p_canvas, is_hd_canvas, negotiate,
+    negotiate_noted, precheck, resolve_canvas, resolve_canvas_noted, resolve_frames, resolve_model,
+    resolve_tier, route_task, AudioPlan, MediaProbe, PostProcess, ResolvedCanvas, ResolvedJob,
+    StagedInputs, StagedMedia, A2V_AUDIO_MAX_S, A2V_AUDIO_MIN_S, A2V_AUDIO_RATES,
+};
+pub use negotiate::{
+    ResolvedEdit, ResolvedEditOp, EDIT_DURATION_MAX_S, EDIT_DURATION_MIN_S, EDIT_FPS,
+    EDIT_MAX_FRAMES, EDIT_MAX_PIXELS, EDIT_SOURCE_MAX_S, EXTEND_CONTEXT_MAX_S,
+    EXTEND_CONTEXT_MIN_S,
 };
 pub use request::{
     Anchor, AudioInput, AudioOut, AudioRole, CanvasSpec, Family, GenerationRequest, Keyframe,
@@ -69,6 +73,6 @@ pub use request::{
 pub use request::{EditOp, ExtendAt, RetakeMode, VideoEdit};
 pub use request::{ExpansionMode, PromptExpansion};
 pub use stream::{
-    AudioTrack, CausalLimits, Continuity, EndReason, SessionSpec, SessionState, StreamProtocol, TrackSet,
-    VideoTrack, WIRE_AUDIO_RATE,
+    AudioTrack, CausalLimits, Continuity, EndReason, SessionSpec, SessionState, StreamProtocol,
+    TrackSet, VideoTrack, WIRE_AUDIO_RATE,
 };

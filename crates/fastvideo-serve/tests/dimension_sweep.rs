@@ -23,7 +23,12 @@
 //! the test fails listing them. `FV_SWEEP_REPORT=<path>` also writes the
 //! table as TSV.
 
-#![cfg(all(feature = "openai-videos", feature = "minimax", feature = "fal", feature = "ltxapi"))]
+#![cfg(all(
+    feature = "openai-videos",
+    feature = "minimax",
+    feature = "fal",
+    feature = "ltxapi"
+))]
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -34,10 +39,13 @@ use axum::http::{Request, StatusCode};
 use axum::Router;
 use base64::Engine as _;
 use fastvideo_engine_service::cuda::caps::{catalog, gate_h3_1080p, CudaModel, WeightLayout};
-use fastvideo_engine_service::{EngineConfig, EngineService, FakeBackend, FakeConfig, FakeTiming, JobValidator, Mp4Mode};
+use fastvideo_engine_service::{
+    EngineConfig, EngineService, FakeBackend, FakeConfig, FakeTiming, JobValidator, Mp4Mode,
+};
 use fastvideo_protocol::{
-    negotiate, Anchor, CanvasSpec, GenerationRequest, Job, Keyframe, Length, MediaKind, MediaProbe, MediaRef,
-    ModelCaps, ProtocolId, Ratio, Reference, Snap, StagedInputs, StagedMedia, Task, TimingSpec,
+    negotiate, Anchor, CanvasSpec, GenerationRequest, Job, Keyframe, Length, MediaKind, MediaProbe,
+    MediaRef, ModelCaps, ProtocolId, Ratio, Reference, Snap, StagedInputs, StagedMedia, Task,
+    TimingSpec,
 };
 use fastvideo_serve::config::{Config, JobBackend};
 use fastvideo_serve::{App, Overrides};
@@ -60,7 +68,10 @@ fn png(w: u32, h: u32) -> String {
     let img = image::RgbImage::from_pixel(w, h, image::Rgb([90, 120, 150]));
     let mut out = std::io::Cursor::new(Vec::new());
     img.write_to(&mut out, image::ImageFormat::Png).unwrap();
-    format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(out.into_inner()))
+    format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(out.into_inner())
+    )
 }
 
 fn jpeg(w: u32, h: u32, exif_orientation: Option<u8>) -> String {
@@ -69,11 +80,18 @@ fn jpeg(w: u32, h: u32, exif_orientation: Option<u8>) -> String {
     let mut out = Vec::new();
     let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 60);
     if let Some(o) = exif_orientation {
-        let exif = vec![0x49, 0x49, 0x2a, 0, 8, 0, 0, 0, 1, 0, 0x12, 0x01, 3, 0, 1, 0, 0, 0, o, 0, 0, 0, 0, 0, 0, 0];
+        let exif = vec![
+            0x49, 0x49, 0x2a, 0, 8, 0, 0, 0, 1, 0, 0x12, 0x01, 3, 0, 1, 0, 0, 0, o, 0, 0, 0, 0, 0,
+            0, 0,
+        ];
         enc.set_exif_metadata(exif).unwrap();
     }
-    enc.write_image(img.as_raw(), w, h, image::ExtendedColorType::Rgb8).unwrap();
-    format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(out))
+    enc.write_image(img.as_raw(), w, h, image::ExtendedColorType::Rgb8)
+        .unwrap();
+    format!(
+        "data:image/jpeg;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(out)
+    )
 }
 
 /// A silent 16-bit mono WAV of `secs` seconds at `rate`, as a data URI.
@@ -93,14 +111,27 @@ fn wav(rate: u32, secs: f64) -> String {
     v.extend(b"data");
     v.extend(data.to_le_bytes());
     v.extend(vec![0u8; data as usize]);
-    format!("data:audio/wav;base64,{}", base64::engine::general_purpose::STANDARD.encode(v))
+    format!(
+        "data:audio/wav;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(v)
+    )
 }
 
 /// A header-only MP4 (no frames can be decoded, but ingestion probes it
 /// exactly: size, sample count, rate, audio track), as a data URI.
 fn mp4(w: u16, h: u16, timescale: u32, delta: u32, frames: u32, audio: bool) -> String {
-    let b = fastvideo_media::mp4::inspect::header_only_mp4(w, h, timescale, delta, frames, audio.then_some(44_100));
-    format!("data:video/mp4;base64,{}", base64::engine::general_purpose::STANDARD.encode(b))
+    let b = fastvideo_media::mp4::inspect::header_only_mp4(
+        w,
+        h,
+        timescale,
+        delta,
+        frames,
+        audio.then_some(44_100),
+    );
+    format!(
+        "data:video/mp4;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(b)
+    )
 }
 
 /// One source video for retake / extend: its name, data URI and whether the
@@ -118,14 +149,46 @@ struct Vid {
 /// clip, and refusals: 8 frames, 120 fps and 70 s.
 fn videos() -> Vec<Vid> {
     vec![
-        Vid { name: "768x512-24fps-505f", uri: mp4(768, 512, 24_000, 1000, 505, true), ok: true },
-        Vid { name: "1080x1920-30fps-150f", uri: mp4(1080, 1920, 30_000, 1000, 150, true), ok: true },
-        Vid { name: "640x360-29.97fps-121f-silent", uri: mp4(640, 360, 30_000, 1001, 121, false), ok: true },
-        Vid { name: "3840x2160-25fps-125f", uri: mp4(3840, 2160, 25_000, 1000, 125, true), ok: true },
-        Vid { name: "1920x1080-24fps-24f", uri: mp4(1920, 1080, 24_000, 1000, 24, true), ok: true },
-        Vid { name: "8-frames", uri: mp4(768, 512, 24_000, 1000, 8, true), ok: false },
-        Vid { name: "120fps", uri: mp4(768, 512, 120_000, 1000, 240, true), ok: false },
-        Vid { name: "70s", uri: mp4(640, 360, 24_000, 1000, 1680, true), ok: false },
+        Vid {
+            name: "768x512-24fps-505f",
+            uri: mp4(768, 512, 24_000, 1000, 505, true),
+            ok: true,
+        },
+        Vid {
+            name: "1080x1920-30fps-150f",
+            uri: mp4(1080, 1920, 30_000, 1000, 150, true),
+            ok: true,
+        },
+        Vid {
+            name: "640x360-29.97fps-121f-silent",
+            uri: mp4(640, 360, 30_000, 1001, 121, false),
+            ok: true,
+        },
+        Vid {
+            name: "3840x2160-25fps-125f",
+            uri: mp4(3840, 2160, 25_000, 1000, 125, true),
+            ok: true,
+        },
+        Vid {
+            name: "1920x1080-24fps-24f",
+            uri: mp4(1920, 1080, 24_000, 1000, 24, true),
+            ok: true,
+        },
+        Vid {
+            name: "8-frames",
+            uri: mp4(768, 512, 24_000, 1000, 8, true),
+            ok: false,
+        },
+        Vid {
+            name: "120fps",
+            uri: mp4(768, 512, 120_000, 1000, 240, true),
+            ok: false,
+        },
+        Vid {
+            name: "70s",
+            uri: mp4(640, 360, 24_000, 1000, 1680, true),
+            ok: false,
+        },
     ]
 }
 
@@ -142,16 +205,46 @@ struct Img {
 /// stored landscape with EXIF orientation 6.
 fn images() -> Vec<Img> {
     vec![
-        Img { name: "landscape-16:9", uri: png(320, 180) },
-        Img { name: "portrait-9:16", uri: png(180, 320) },
-        Img { name: "square", uri: png(200, 200) },
-        Img { name: "4:5", uri: png(160, 200) },
-        Img { name: "phone-3024x4032", uri: jpeg(3024, 4032, None) },
-        Img { name: "phone-1080x1920", uri: jpeg(1080, 1920, None) },
-        Img { name: "tall-1080x2340", uri: png(108, 234) },
-        Img { name: "extreme-12:1", uri: png(600, 50) },
-        Img { name: "extreme-1:12", uri: png(50, 600) },
-        Img { name: "exif-rotated", uri: jpeg(320, 180, Some(6)) },
+        Img {
+            name: "landscape-16:9",
+            uri: png(320, 180),
+        },
+        Img {
+            name: "portrait-9:16",
+            uri: png(180, 320),
+        },
+        Img {
+            name: "square",
+            uri: png(200, 200),
+        },
+        Img {
+            name: "4:5",
+            uri: png(160, 200),
+        },
+        Img {
+            name: "phone-3024x4032",
+            uri: jpeg(3024, 4032, None),
+        },
+        Img {
+            name: "phone-1080x1920",
+            uri: jpeg(1080, 1920, None),
+        },
+        Img {
+            name: "tall-1080x2340",
+            uri: png(108, 234),
+        },
+        Img {
+            name: "extreme-12:1",
+            uri: png(600, 50),
+        },
+        Img {
+            name: "extreme-1:12",
+            uri: png(50, 600),
+        },
+        Img {
+            name: "exif-rotated",
+            uri: jpeg(320, 180, Some(6)),
+        },
     ]
 }
 
@@ -237,7 +330,11 @@ fn served_catalog(hd: bool) -> Vec<CudaModel> {
 
 /// `long`: the `h3_1080p_long` experimental flag on (H3 1080P up to 10 s).
 async fn harness_flagged(hd: bool, long: bool) -> Sweep {
-    let dir = tempfile::Builder::new().prefix("fv-serve-sweep-").tempdir().unwrap().keep();
+    let dir = tempfile::Builder::new()
+        .prefix("fv-serve-sweep-")
+        .tempdir()
+        .unwrap()
+        .keep();
     let mut env = BTreeMap::new();
     let hashes: Vec<String> = (0..KEYS).map(|i| KeyRing::hash_hex(&key(i))).collect();
     env.insert("FV_API_KEYS".to_owned(), hashes.join(","));
@@ -251,24 +348,50 @@ async fn harness_flagged(hd: bool, long: bool) -> Sweep {
     // `fastvideo/ltx-turbo`: an H3-schema app on LTX, whose director streams
     // LTX (480p / 720p / 768p / 1080p). `fastvideo/wan14b-turbo`: the same
     // kind of app on the Wan 14B fast tier (480P, up to 81 frames).
-    for a in ["lightricks/ltx-2.5", "fal-ai/wan", "fal-ai/ltx-2.3-quality", "fal-ai/ltx-2.3", "fastvideo/ltx-turbo", "fastvideo/wan14b-turbo"] {
+    for a in [
+        "lightricks/ltx-2.5",
+        "fal-ai/wan",
+        "fal-ai/ltx-2.3-quality",
+        "fal-ai/ltx-2.3",
+        "fastvideo/ltx-turbo",
+        "fastvideo/wan14b-turbo",
+    ] {
         c.protocols.fal_apps.push(a.to_owned());
     }
     c.validate().unwrap();
     let cat = served_catalog(hd);
     let fc = FakeConfig {
         // Jobs never finish within the sweep (each is cancelled once read).
-        timing: FakeTiming { load: Duration::ZERO, step: Duration::from_secs(600), ..FakeTiming::default() },
+        timing: FakeTiming {
+            load: Duration::ZERO,
+            step: Duration::from_secs(600),
+            ..FakeTiming::default()
+        },
         mp4: Mp4Mode::Off,
         ..FakeConfig::cuda_catalog(&cat)
     };
     let validator = fc.validator.clone().unwrap();
-    let cfg = EngineConfig { queue_max: 1_000_000, output_dir: dir.join("engine-out"), ..EngineConfig::default() };
+    let cfg = EngineConfig {
+        queue_max: 1_000_000,
+        output_dir: dir.join("engine-out"),
+        ..EngineConfig::default()
+    };
     let engine = EngineService::start(cfg, vec![Box::new(FakeBackend::new(fc))]).unwrap();
-    let app = App::build(c, Overrides { engine: Some(engine), ..Default::default() }).await.unwrap();
+    let app = App::build(
+        c,
+        Overrides {
+            engine: Some(engine),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     app.gate.engine().wait_ready().await;
     if long {
-        app.flags.set(fastvideo_protocol::FLAG_H3_1080P_LONG, true, None).await.unwrap();
+        app.flags
+            .set(fastvideo_protocol::FLAG_H3_1080P_LONG, true, None)
+            .await
+            .unwrap();
     }
     Sweep {
         app,
@@ -302,16 +425,31 @@ fn max_frames_at(caps: &ModelCaps, w: u32, h: u32) -> u32 {
     }
 }
 
-async fn call(router: &Router, method: &str, uri: &str, body: Option<&Value>, auth: &str) -> (StatusCode, Value) {
-    let mut req = Request::builder().method(method).uri(uri).header("content-type", "application/json");
+async fn call(
+    router: &Router,
+    method: &str,
+    uri: &str,
+    body: Option<&Value>,
+    auth: &str,
+) -> (StatusCode, Value) {
+    let mut req = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json");
     if !auth.is_empty() {
         req = req.header("authorization", auth);
     }
-    let req = req.body(body.map_or(Body::empty(), |b| Body::from(b.to_string()))).unwrap();
+    let req = req
+        .body(body.map_or(Body::empty(), |b| Body::from(b.to_string())))
+        .unwrap();
     let r = router.clone().oneshot(req).await.unwrap();
     let status = r.status();
     let bytes = axum::body::to_bytes(r.into_body(), 1 << 26).await.unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned())))
+    (
+        status,
+        serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned())),
+    )
 }
 
 /// A refusal "names what is valid": its message lists allowed values, a
@@ -319,9 +457,27 @@ async fn call(router: &Router, method: &str, uri: &str, body: Option<&Value>, au
 fn clear(body: &Value) -> bool {
     let s = body.to_string().to_ascii_lowercase();
     [
-        "supported", "allowed", "expected", "must be", "one of", "input should be", "nearest", "within", "maximum",
-        "at most", "at least", "use ", "longest", "required", "not served", "not available", "not enabled",
-        "is only", "only defined", "takes ", "needs ",
+        "supported",
+        "allowed",
+        "expected",
+        "must be",
+        "one of",
+        "input should be",
+        "nearest",
+        "within",
+        "maximum",
+        "at most",
+        "at least",
+        "use ",
+        "longest",
+        "required",
+        "not served",
+        "not available",
+        "not enabled",
+        "is only",
+        "only defined",
+        "takes ",
+        "needs ",
     ]
     .iter()
     .any(|k| s.contains(k))
@@ -332,13 +488,19 @@ fn clear(body: &Value) -> bool {
 fn range_named(s: &str) -> bool {
     let b = s.as_bytes();
     (0..b.len()).any(|i| {
-        b[i].is_ascii_digit() && [" to ", "..=", "..", " - "].iter().any(|sep| s[i + 1..].starts_with(sep) && s[i + 1 + sep.len()..].starts_with(|c: char| c.is_ascii_digit()))
+        b[i].is_ascii_digit()
+            && [" to ", "..=", "..", " - "].iter().any(|sep| {
+                s[i + 1..].starts_with(sep)
+                    && s[i + 1 + sep.len()..].starts_with(|c: char| c.is_ascii_digit())
+            })
     })
 }
 
 impl Sweep {
     fn key(&self) -> String {
-        let i = self.next_key.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let i = self
+            .next_key
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         key(i % KEYS)
     }
 
@@ -354,7 +516,13 @@ impl Sweep {
         }
         if let Some((kind, detail)) = violation {
             t.violations += 1;
-            r.violations.push(Violation { api: c.api, model: label, combo: c.combo.clone(), kind, detail });
+            r.violations.push(Violation {
+                api: c.api,
+                model: label,
+                combo: c.combo.clone(),
+                kind,
+                detail,
+            });
         }
     }
 
@@ -363,11 +531,20 @@ impl Sweep {
         let router = &self.app.router;
         let auth = c.auth.replace("{KEY}", &self.key());
         let sync = c.protocol == ProtocolId::LtxV1;
-        let before = if sync { self.newest(ProtocolId::LtxV1).await } else { None };
+        let before = if sync {
+            self.newest(ProtocolId::LtxV1).await
+        } else {
+            None
+        };
         let reply = if sync {
             // `/v1/*` blocks until the clip is done: a reply within the wait
             // is a refusal, a timeout an accepted (running) job.
-            tokio::time::timeout(Duration::from_millis(1500), call(router, "POST", &c.uri, Some(&c.body), &auth)).await.ok()
+            tokio::time::timeout(
+                Duration::from_millis(1500),
+                call(router, "POST", &c.uri, Some(&c.body), &auth),
+            )
+            .await
+            .ok()
         } else {
             Some(call(router, "POST", &c.uri, Some(&c.body), &auth).await)
         };
@@ -375,7 +552,10 @@ impl Sweep {
             None => {
                 let mut j = None;
                 for _ in 0..50 {
-                    j = self.newest(ProtocolId::LtxV1).await.filter(|j| Some(j.id) != before.as_ref().map(|b| b.id));
+                    j = self
+                        .newest(ProtocolId::LtxV1)
+                        .await
+                        .filter(|j| Some(j.id) != before.as_ref().map(|b| b.id));
                     if j.is_some() {
                         break;
                     }
@@ -394,7 +574,14 @@ impl Sweep {
             let violation = if s.is_server_error() || s.is_success() {
                 Some(("5xx/odd reply", format!("{s}: {}", short(&v))))
             } else if c.offer != Offer::Api {
-                Some((if c.offer == Offer::Console { "console offer refused" } else { "caps promise refused" }, format!("{s}: {}", short(&v))))
+                Some((
+                    if c.offer == Offer::Console {
+                        "console offer refused"
+                    } else {
+                        "caps promise refused"
+                    },
+                    format!("{s}: {}", short(&v)),
+                ))
             } else if !clear(&v) {
                 Some(("unclear 4xx", format!("{s}: {}", short(&v))))
             } else {
@@ -407,7 +594,10 @@ impl Sweep {
         let violation = self.validator.check(r).err().map(|e| {
             (
                 "accepted, engine refuses",
-                format!("{} {}x{} {} frames @{} fps: {}", r.model, r.width, r.height, r.num_frames, r.fps, e.message),
+                format!(
+                    "{} {}x{} {} frames @{} fps: {}",
+                    r.model, r.width, r.height, r.num_frames, r.fps, e.message
+                ),
             )
         });
         self.record(&c, true, violation);
@@ -415,41 +605,62 @@ impl Sweep {
     }
 
     async fn newest(&self, p: ProtocolId) -> Option<Job> {
-        let q = fastvideo_protocol::ListQuery { protocol: Some(p), limit: 1, ..Default::default() };
+        let q = fastvideo_protocol::ListQuery {
+            protocol: Some(p),
+            limit: 1,
+            ..Default::default()
+        };
         self.app.ctx.jobs().list(q).await.items.into_iter().next()
     }
 
     async fn run_all(&self, cases: Vec<Case>) {
         // `/v1/*` (LTX sync) runs one at a time: an accepted job is found as
         // the newest LTX v1 job.
-        let (sync, other): (Vec<Case>, Vec<Case>) = cases.into_iter().partition(|c| c.protocol == ProtocolId::LtxV1);
-        futures::stream::iter(other).for_each_concurrent(24, |c| self.run(c)).await;
+        let (sync, other): (Vec<Case>, Vec<Case>) = cases
+            .into_iter()
+            .partition(|c| c.protocol == ProtocolId::LtxV1);
+        futures::stream::iter(other)
+            .for_each_concurrent(24, |c| self.run(c))
+            .await;
         for c in sync {
             self.run(c).await;
         }
     }
 
-
     /// Prints the table; returns the violations.
     fn finish(&self, what: &str) -> Vec<Violation> {
         let r = self.report.lock().unwrap();
-        let mut table = format!("\n== {what}: model x API ==\nmodel\tapi\tcases\taccepted\trefused\tviolations\n");
+        let mut table = format!(
+            "\n== {what}: model x API ==\nmodel\tapi\tcases\taccepted\trefused\tviolations\n"
+        );
         for ((m, api), t) in &r.tally {
-            table += &format!("{m}\t{api}\t{}\t{}\t{}\t{}\n", t.cases, t.accepted, t.refused, t.violations);
+            table += &format!(
+                "{m}\t{api}\t{}\t{}\t{}\t{}\n",
+                t.cases, t.accepted, t.refused, t.violations
+            );
         }
         let mut kinds: BTreeMap<(String, &str, &str), (usize, String, String)> = BTreeMap::new();
         for v in &r.violations {
-            let e = kinds.entry((v.model.clone(), v.api, v.kind)).or_insert((0, v.combo.clone(), v.detail.clone()));
+            let e = kinds.entry((v.model.clone(), v.api, v.kind)).or_insert((
+                0,
+                v.combo.clone(),
+                v.detail.clone(),
+            ));
             e.0 += 1;
         }
-        table += "\n-- violations (grouped: model, api, kind, count, first combination, detail) --\n";
+        table +=
+            "\n-- violations (grouped: model, api, kind, count, first combination, detail) --\n";
         for ((m, api, kind), (n, combo, detail)) in &kinds {
             table += &format!("{m}\t{api}\t{kind}\t{n}\t{combo}\t{detail}\n");
         }
         println!("{table}");
         if let Ok(path) = std::env::var("FV_SWEEP_REPORT") {
             use std::io::Write as _;
-            let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .unwrap();
             f.write_all(table.as_bytes()).unwrap();
         }
         r.violations.clone()
@@ -459,7 +670,12 @@ impl Sweep {
 /// Runs `cases` on both catalogs (1080P tier on and off) and fails on any
 /// violation.
 fn check(what: &str, violations: Vec<Violation>) {
-    assert!(violations.is_empty(), "{} violations in {what}; first: {:#?}", violations.len(), &violations[..violations.len().min(20)]);
+    assert!(
+        violations.is_empty(),
+        "{} violations in {what}; first: {:#?}",
+        violations.len(),
+        &violations[..violations.len().min(20)]
+    );
 }
 
 fn short(v: &Value) -> String {
@@ -480,7 +696,9 @@ fn with(base: &Value, extra: &[(&str, Value)]) -> Value {
 }
 
 /// Standard aspects plus the ends of every range.
-const ASPECTS: [&str; 10] = ["21:9", "16:9", "4:3", "1:1", "4:5", "3:4", "9:16", "9:21", "4:1", "1:4"];
+const ASPECTS: [&str; 10] = [
+    "21:9", "16:9", "4:3", "1:1", "4:5", "3:4", "9:16", "9:21", "4:1", "1:4",
+];
 
 fn ratio(a: &str) -> f64 {
     let (w, h) = a.split_once(':').unwrap();
@@ -505,7 +723,11 @@ fn native_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
     let served = s.app.ctx.engine().models();
     for m in &s.catalog {
         // The caps as served: the experimental flags applied.
-        let caps = served.iter().find(|c| c.id == m.id).cloned().unwrap_or_else(|| m.caps());
+        let caps = served
+            .iter()
+            .find(|c| c.id == m.id)
+            .cloned()
+            .unwrap_or_else(|| m.caps());
         let id = m.id.as_str();
         let base = json!({"model": id, "prompt": "a fox runs"});
         // The input a task needs.
@@ -533,10 +755,20 @@ fn native_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
                 let promised = caps.canvas.aspect_ok((ratio(a) * 1e4) as u32, 10_000);
                 let mut extra = plain_in.clone();
                 extra.extend([("aspect_ratio", json!(a)), ("short_edge", json!(se))]);
-                out.push(case(id, format!("{plain} aspect {a} short_edge {se}"), with(&base, &extra), if promised { Offer::Caps } else { Offer::Api }));
+                out.push(case(
+                    id,
+                    format!("{plain} aspect {a} short_edge {se}"),
+                    with(&base, &extra),
+                    if promised { Offer::Caps } else { Offer::Api },
+                ));
             }
         }
-        out.push(case(id, format!("{plain} default canvas"), with(&base, &plain_in), Offer::Caps));
+        out.push(case(
+            id,
+            format!("{plain} default canvas"),
+            with(&base, &plain_in),
+            Offer::Caps,
+        ));
         // Image-conditioned: every image, default tier and every tier.
         for (task, _) in &task_inputs {
             let field = match *task {
@@ -545,16 +777,46 @@ fn native_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
                 _ => continue,
             };
             for img in imgs {
-                let v = if field == "reference_urls" { json!([img.uri]) } else { json!(img.uri) };
-                out.push(case(id, format!("{task} image {}", img.name), with(&base, &[(field, v.clone())]), Offer::Caps));
+                let v = if field == "reference_urls" {
+                    json!([img.uri])
+                } else {
+                    json!(img.uri)
+                };
+                out.push(case(
+                    id,
+                    format!("{task} image {}", img.name),
+                    with(&base, &[(field, v.clone())]),
+                    Offer::Caps,
+                ));
                 for &se in &caps.canvas.short_edges {
-                    out.push(case(id, format!("{task} image {} short_edge {se}", img.name), with(&base, &[(field, v.clone()), ("short_edge", json!(se))]), Offer::Caps));
+                    out.push(case(
+                        id,
+                        format!("{task} image {} short_edge {se}", img.name),
+                        with(&base, &[(field, v.clone()), ("short_edge", json!(se))]),
+                        Offer::Caps,
+                    ));
                 }
             }
             if caps.supports(Task::Keyframes) {
                 for img in imgs.iter().take(3) {
-                    out.push(case(id, format!("keyframes last {}", img.name), with(&base, &[("last_image_url", json!(img.uri))]), Offer::Caps));
-                    out.push(case(id, format!("keyframes first+last {}", img.name), with(&base, &[("image_url", json!(imgs[1].uri)), ("last_image_url", json!(img.uri))]), Offer::Caps));
+                    out.push(case(
+                        id,
+                        format!("keyframes last {}", img.name),
+                        with(&base, &[("last_image_url", json!(img.uri))]),
+                        Offer::Caps,
+                    ));
+                    out.push(case(
+                        id,
+                        format!("keyframes first+last {}", img.name),
+                        with(
+                            &base,
+                            &[
+                                ("image_url", json!(imgs[1].uri)),
+                                ("last_image_url", json!(img.uri)),
+                            ],
+                        ),
+                        Offer::Caps,
+                    ));
                 }
             }
         }
@@ -569,7 +831,12 @@ fn native_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
         while n <= g.max {
             let mut extra = plain_in.clone();
             extra.push(("num_frames", json!(n)));
-            out.push(case(id, format!("{plain} num_frames {n}"), with(&base, &extra), Offer::Caps));
+            out.push(case(
+                id,
+                format!("{plain} num_frames {n}"),
+                with(&base, &extra),
+                Offer::Caps,
+            ));
             n += g.step.max(1);
         }
         for &fps in &fpss {
@@ -578,58 +845,140 @@ fn native_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
                 let promised = g.align_up(frames).is_some();
                 let mut extra = plain_in.clone();
                 extra.extend([("seconds", json!(secs)), ("fps", json!(fps))]);
-                out.push(case(id, format!("{plain} {secs} s @ {fps} fps"), with(&base, &extra), if promised { Offer::Caps } else { Offer::Api }));
+                out.push(case(
+                    id,
+                    format!("{plain} {secs} s @ {fps} fps"),
+                    with(&base, &extra),
+                    if promised { Offer::Caps } else { Offer::Api },
+                ));
             }
             let mut extra = plain_in.clone();
             extra.extend([("num_frames", json!(g.max)), ("fps", json!(fps))]);
-            out.push(case(id, format!("{plain} max frames @ {fps} fps"), with(&base, &extra), Offer::Caps));
+            out.push(case(
+                id,
+                format!("{plain} max frames @ {fps} fps"),
+                with(&base, &extra),
+                Offer::Caps,
+            ));
         }
         // Retake / extend: every source video, the windows and extensions
         // the API allows. The default source takes every one of them.
         if caps.supports(Task::Retake) {
             for v in videos() {
                 let offer = if v.ok { Offer::Caps } else { Offer::Api };
-                let r = with(&base, &[("video_url", json!(v.uri)), ("start_s", json!(0.5)), ("end_s", json!(2.5))]);
+                let r = with(
+                    &base,
+                    &[
+                        ("video_url", json!(v.uri)),
+                        ("start_s", json!(0.5)),
+                        ("end_s", json!(2.5)),
+                    ],
+                );
                 out.push(case(id, format!("retake {}", v.name), r, offer));
-                let x = with(&base, &[("video_url", json!(v.uri)), ("extend_s", json!(2))]);
+                let x = with(
+                    &base,
+                    &[("video_url", json!(v.uri)), ("extend_s", json!(2))],
+                );
                 out.push(case(id, format!("extend {}", v.name), x, offer));
             }
             let src = &videos()[0].uri;
             for mode in ["replace_audio", "replace_video", "replace_audio_and_video"] {
                 for (a, b) in [(0.0, 2.0), (10.0, 30.0), (19.0, 21.0)] {
-                    let r = with(&base, &[("video_url", json!(src)), ("start_s", json!(a)), ("end_s", json!(b)), ("retake_mode", json!(mode))]);
-                    out.push(case(id, format!("retake [{a}, {b}) {mode}"), r, Offer::Caps));
+                    let r = with(
+                        &base,
+                        &[
+                            ("video_url", json!(src)),
+                            ("start_s", json!(a)),
+                            ("end_s", json!(b)),
+                            ("retake_mode", json!(mode)),
+                        ],
+                    );
+                    out.push(case(
+                        id,
+                        format!("retake [{a}, {b}) {mode}"),
+                        r,
+                        Offer::Caps,
+                    ));
                 }
             }
             for at in ["start", "end"] {
                 for secs in [2, 5, 10, 20] {
                     for ctx in [None, Some(1.0), Some(20.0)] {
-                        let mut x = with(&base, &[("video_url", json!(src)), ("extend_s", json!(secs)), ("extend_at", json!(at))]);
+                        let mut x = with(
+                            &base,
+                            &[
+                                ("video_url", json!(src)),
+                                ("extend_s", json!(secs)),
+                                ("extend_at", json!(at)),
+                            ],
+                        );
                         if let Some(c) = ctx {
                             x["context_s"] = json!(c);
                         }
-                        out.push(case(id, format!("extend {secs} s at {at} context {ctx:?}"), x, Offer::Caps));
+                        out.push(case(
+                            id,
+                            format!("extend {secs} s at {at} context {ctx:?}"),
+                            x,
+                            Offer::Caps,
+                        ));
                     }
                 }
             }
-            let dub = with(&base, &[("video_url", json!(src)), ("start_s", json!(1)), ("end_s", json!(4)), ("audio_url", json!(wav(16_000, 3.0)))]);
-            out.push(case(id, "retake with new window audio".into(), dub, Offer::Caps));
+            let dub = with(
+                &base,
+                &[
+                    ("video_url", json!(src)),
+                    ("start_s", json!(1)),
+                    ("end_s", json!(4)),
+                    ("audio_url", json!(wav(16_000, 3.0))),
+                ],
+            );
+            out.push(case(
+                id,
+                "retake with new window audio".into(),
+                dub,
+                Offer::Caps,
+            ));
         }
         // The largest canvas with the longest clip: the grid's (promised
         // below the 1080P tier), and the tier's own cap (5 s; 10 s with the
         // `h3_1080p_long` flag), which is promised.
         if let Some(&top) = caps.canvas.short_edges.iter().max() {
-            let cap = if caps.canvas.is_hd(top) { max_frames_at(&caps, 1920, 1088) } else { g.max };
+            let cap = if caps.canvas.is_hd(top) {
+                max_frames_at(&caps, 1920, 1088)
+            } else {
+                g.max
+            };
             for n in [g.max, cap] {
                 let mut extra = plain_in.clone();
-                extra.extend([("aspect_ratio", json!("16:9")), ("short_edge", json!(top)), ("num_frames", json!(n))]);
-                out.push(case(id, format!("{plain} 16:9 at {top}, {n} frames"), with(&base, &extra), if n <= cap { Offer::Caps } else { Offer::Api }));
+                extra.extend([
+                    ("aspect_ratio", json!("16:9")),
+                    ("short_edge", json!(top)),
+                    ("num_frames", json!(n)),
+                ]);
+                out.push(case(
+                    id,
+                    format!("{plain} 16:9 at {top}, {n} frames"),
+                    with(&base, &extra),
+                    if n <= cap { Offer::Caps } else { Offer::Api },
+                ));
             }
             for secs in [5u32, 10, 15] {
-                let promised = g.align_up(secs * caps.fps.default).is_some_and(|n| n <= cap);
+                let promised = g
+                    .align_up(secs * caps.fps.default)
+                    .is_some_and(|n| n <= cap);
                 let mut extra = plain_in.clone();
-                extra.extend([("aspect_ratio", json!("16:9")), ("short_edge", json!(top)), ("seconds", json!(secs))]);
-                out.push(case(id, format!("{plain} 16:9 at {top}, {secs} s"), with(&base, &extra), if promised { Offer::Caps } else { Offer::Api }));
+                extra.extend([
+                    ("aspect_ratio", json!("16:9")),
+                    ("short_edge", json!(top)),
+                    ("seconds", json!(secs)),
+                ]);
+                out.push(case(
+                    id,
+                    format!("{plain} 16:9 at {top}, {secs} s"),
+                    with(&base, &extra),
+                    if promised { Offer::Caps } else { Offer::Api },
+                ));
             }
         }
     }
@@ -658,8 +1007,13 @@ fn values_of(p: &Value) -> Vec<Value> {
     if let Some(list) = e.and_then(Value::as_array) {
         return list.clone();
     }
-    match (p.get("minimum").and_then(Value::as_i64), p.get("maximum").and_then(Value::as_i64)) {
-        (Some(lo), Some(hi)) if p["type"] == "integer" && hi - lo <= 600 => (lo..=hi).map(Value::from).collect(),
+    match (
+        p.get("minimum").and_then(Value::as_i64),
+        p.get("maximum").and_then(Value::as_i64),
+    ) {
+        (Some(lo), Some(hi)) if p["type"] == "integer" && hi - lo <= 600 => {
+            (lo..=hi).map(Value::from).collect()
+        }
         _ => Vec::new(),
     }
 }
@@ -697,10 +1051,19 @@ async fn fal_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
             // What the API lists (fal's own schema) and what the console form
             // offers (the schema this server serves for the form).
             let api = fastvideo_fal::catalog::input_schema_for(kind, endpoint);
-            let (st, served) = call(router, "GET", &format!("/fal/schema/{app_id}/{sub}"), None, "").await;
+            let (st, served) = call(
+                router,
+                "GET",
+                &format!("/fal/schema/{app_id}/{sub}"),
+                None,
+                "",
+            )
+            .await;
             assert_eq!(st, 200, "{served}");
             let offered = |k: &str, v: &Value| -> bool {
-                let Some(p) = served["properties"].get(k) else { return false };
+                let Some(p) = served["properties"].get(k) else {
+                    return false;
+                };
                 let vs = values_of(p);
                 vs.is_empty() || vs.contains(v)
             };
@@ -708,7 +1071,10 @@ async fn fal_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
             let label = format!("{app_id}/{sub}");
             // Retake / extend: a source video instead of images; its own
             // grid of start times, durations, modes and contexts.
-            if props.get("video_url").is_some_and(|p| p["x-fv-media"] == "video") {
+            if props
+                .get("video_url")
+                .is_some_and(|p| p["x-fv-media"] == "video")
+            {
                 let mut push = |combo: String, body: Value, offer: Offer| {
                     out.push(Case {
                         api: "fal",
@@ -725,15 +1091,31 @@ async fn fal_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
                 let base = json!({"prompt": "a huge wave crashes over the rocks"});
                 for v in videos() {
                     let offer = if v.ok { Offer::Console } else { Offer::Api };
-                    push(format!("video {}", v.name), with(&base, &[("video_url", json!(v.uri))]), offer);
+                    push(
+                        format!("video {}", v.name),
+                        with(&base, &[("video_url", json!(v.uri))]),
+                        offer,
+                    );
                 }
                 let src = json!(videos()[0].uri);
                 if endpoint == fastvideo_fal::Endpoint::LtxRetake {
                     for mode in ["replace_audio", "replace_video", "replace_audio_and_video"] {
                         for start in [0.0, 1.5, 10.0, 20.0] {
                             for dur in [2.0, 5.0, 20.0] {
-                                let b = with(&base, &[("video_url", src.clone()), ("start_time", json!(start)), ("duration", json!(dur)), ("retake_mode", json!(mode))]);
-                                push(format!("start {start} duration {dur} {mode}"), b, Offer::Console);
+                                let b = with(
+                                    &base,
+                                    &[
+                                        ("video_url", src.clone()),
+                                        ("start_time", json!(start)),
+                                        ("duration", json!(dur)),
+                                        ("retake_mode", json!(mode)),
+                                    ],
+                                );
+                                push(
+                                    format!("start {start} duration {dur} {mode}"),
+                                    b,
+                                    Offer::Console,
+                                );
                             }
                         }
                     }
@@ -741,8 +1123,20 @@ async fn fal_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
                     for mode in ["start", "end"] {
                         for dur in [2.0, 5.0, 10.0, 20.0] {
                             for ctx in [Value::Null, json!(1), json!(20)] {
-                                let b = with(&base, &[("video_url", src.clone()), ("duration", json!(dur)), ("mode", json!(mode)), ("context", ctx.clone())]);
-                                push(format!("duration {dur} mode {mode} context {ctx}"), b, Offer::Console);
+                                let b = with(
+                                    &base,
+                                    &[
+                                        ("video_url", src.clone()),
+                                        ("duration", json!(dur)),
+                                        ("mode", json!(mode)),
+                                        ("context", ctx.clone()),
+                                    ],
+                                );
+                                push(
+                                    format!("duration {dur} mode {mode} context {ctx}"),
+                                    b,
+                                    Offer::Console,
+                                );
                             }
                         }
                     }
@@ -751,14 +1145,20 @@ async fn fal_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
             }
             let base = json!({"prompt": "A reference sheet: a fox. Generated video: the fox runs"});
             // Image inputs this endpoint takes.
-            let required: Vec<&str> = api["required"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+            let required: Vec<&str> = api["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_str)
+                .collect();
             let image_fields: Vec<&str> = props
                 .iter()
                 .filter(|(_, p)| p["x-fv-media"] == "image")
                 .map(|(k, _)| k.as_str())
                 .collect();
             let mut inputs: Vec<(String, Vec<(String, Value)>)> = Vec::new();
-            let needs_image = image_fields.iter().any(|f| required.contains(f)) || api.get("x-fv-min-references").is_some();
+            let needs_image = image_fields.iter().any(|f| required.contains(f))
+                || api.get("x-fv-min-references").is_some();
             if !needs_image {
                 inputs.push(("no image".into(), vec![]));
             }
@@ -771,14 +1171,28 @@ async fn fal_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
                 .collect();
             for img in imgs {
                 for f in &image_fields {
-                    let v = if props[*f]["type"] == "array" { json!([img.uri]) } else { json!(img.uri) };
-                    let mut set: Vec<(String, Value)> = base_inputs.iter().filter(|(k, _)| k != f).cloned().collect();
+                    let v = if props[*f]["type"] == "array" {
+                        json!([img.uri])
+                    } else {
+                        json!(img.uri)
+                    };
+                    let mut set: Vec<(String, Value)> = base_inputs
+                        .iter()
+                        .filter(|(k, _)| k != f)
+                        .cloned()
+                        .collect();
                     set.push((f.to_string(), v));
                     inputs.push((format!("{f}={}", img.name), set));
                 }
             }
             if image_fields.contains(&"end_image_url") && image_fields.contains(&"image_url") {
-                inputs.push(("first+last".into(), vec![("image_url".into(), json!(imgs[0].uri)), ("end_image_url".into(), json!(imgs[1].uri))]));
+                inputs.push((
+                    "first+last".into(),
+                    vec![
+                        ("image_url".into(), json!(imgs[0].uri)),
+                        ("end_image_url".into(), json!(imgs[1].uri)),
+                    ],
+                ));
             }
             // A required audio input (audio-to-video): clips of several
             // lengths within the shortest limit (2..=10 s), with each input.
@@ -799,9 +1213,17 @@ async fn fal_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
                 }
                 inputs = with_audio;
             }
-            let first_input = inputs.iter().find(|(n, _)| n != "no image").cloned().unwrap_or_else(|| inputs[0].clone());
+            let first_input = inputs
+                .iter()
+                .find(|(n, _)| n != "no image")
+                .cloned()
+                .unwrap_or_else(|| inputs[0].clone());
             let dims = |fields: &[&str]| -> Vec<(String, Vec<Value>)> {
-                fields.iter().filter_map(|f| props.get(*f).map(|p| (f.to_string(), values_of(p)))).filter(|(_, v)| !v.is_empty()).collect()
+                fields
+                    .iter()
+                    .filter_map(|f| props.get(*f).map(|p| (f.to_string(), values_of(p))))
+                    .filter(|(_, v)| !v.is_empty())
+                    .collect()
             };
             let mut push = |combo: Vec<(String, Value)>, input: &(String, Vec<(String, Value)>)| {
                 let mut body = base.clone();
@@ -810,16 +1232,25 @@ async fn fal_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
                 }
                 // A value the form offers for the chosen resolution: the
                 // duration within `x-fv-max-by-resolution` (the H3 1080P cap).
-                let res = combo.iter().find(|(k, _)| k == "resolution").map(|(_, v)| v.clone());
+                let res = combo
+                    .iter()
+                    .find(|(k, _)| k == "resolution")
+                    .map(|(_, v)| v.clone());
                 let within_res_cap = combo.iter().all(|(k, v)| {
                     let by = &served["properties"][k.as_str()]["x-fv-max-by-resolution"];
                     match (res.as_ref().and_then(Value::as_str), v.as_i64()) {
-                        (Some(r), Some(n)) => by.get(r).and_then(Value::as_i64).is_none_or(|cap| n <= cap),
+                        (Some(r), Some(n)) => {
+                            by.get(r).and_then(Value::as_i64).is_none_or(|cap| n <= cap)
+                        }
                         _ => true,
                     }
                 });
                 let console = within_res_cap && combo.iter().all(|(k, v)| offered(k, v));
-                let desc = combo.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(" ");
+                let desc = combo
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 out.push(Case {
                     api: "fal",
                     model: label.clone(),
@@ -843,8 +1274,16 @@ async fn fal_cases(s: &Sweep, imgs: &[Img]) -> Vec<Case> {
             // and rates with a wide range are swept one at a time.
             let res = dims(&["resolution"]);
             let timing = dims(&TIMING_FIELDS);
-            let wide: Vec<_> = timing.iter().filter(|(_, v)| v.len() > 12).cloned().collect();
-            let narrow: Vec<_> = timing.iter().filter(|(_, v)| v.len() <= 12).cloned().collect();
+            let wide: Vec<_> = timing
+                .iter()
+                .filter(|(_, v)| v.len() > 12)
+                .cloned()
+                .collect();
+            let narrow: Vec<_> = timing
+                .iter()
+                .filter(|(_, v)| v.len() <= 12)
+                .cloned()
+                .collect();
             let mut grid = res.clone();
             grid.extend(narrow);
             for combo in product(&grid) {
@@ -897,9 +1336,21 @@ async fn director_sweep(s: &Sweep) {
     let router = &s.app.router;
     let (_, cat) = call(router, "GET", "/fal/schema", None, "").await;
     let cfg = fastvideo_fal::director::DirectorConfig::default();
-    for app in cat["apps"].as_array().unwrap().iter().filter(|a| a["director"] == true) {
+    for app in cat["apps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["director"] == true)
+    {
         let app_id = app["id"].as_str().unwrap();
-        let (st, form) = call(router, "GET", &format!("/fal/schema/{app_id}/director"), None, "").await;
+        let (st, form) = call(
+            router,
+            "GET",
+            &format!("/fal/schema/{app_id}/director"),
+            None,
+            "",
+        )
+        .await;
         let label = format!("{app_id}/director");
         let c = Case {
             api: "fal director",
@@ -913,24 +1364,51 @@ async fn director_sweep(s: &Sweep) {
             offer: Offer::Console,
         };
         if st != 200 {
-            s.record(&Case { combo: "form schema".into(), ..c.clone() }, false, Some(("console offer refused", format!("GET /fal/schema/{app_id}/director: {st} {form}"))));
+            s.record(
+                &Case {
+                    combo: "form schema".into(),
+                    ..c.clone()
+                },
+                false,
+                Some((
+                    "console offer refused",
+                    format!("GET /fal/schema/{app_id}/director: {st} {form}"),
+                )),
+            );
             continue;
         }
         let model = app["model"].as_str().unwrap();
         let models = s.app.ctx.engine().models();
-        let caps = fastvideo_protocol::resolve_model(model, |n| s.app.ctx.engine().alias(n), &models).ok().cloned().or_else(|| {
-            let tier = app["tier"].as_str().and_then(|t| serde_json::from_value(json!(t)).ok())?;
-            fastvideo_protocol::resolve_tier(fastvideo_protocol::Family::H3, tier, &models).ok().cloned()
-        });
+        let caps =
+            fastvideo_protocol::resolve_model(model, |n| s.app.ctx.engine().alias(n), &models)
+                .ok()
+                .cloned()
+                .or_else(|| {
+                    let tier = app["tier"]
+                        .as_str()
+                        .and_then(|t| serde_json::from_value(json!(t)).ok())?;
+                    fastvideo_protocol::resolve_tier(fastvideo_protocol::Family::H3, tier, &models)
+                        .ok()
+                        .cloned()
+                });
         let caps = caps.unwrap_or_else(|| panic!("{app_id}: no model"));
         let limits = limits_for(&cfg, &caps);
-        let res: Vec<Resolution> = values_of(&form["properties"]["resolution"]).iter().map(|v| serde_json::from_value(v.clone()).unwrap()).collect();
-        let aspects: Vec<String> = values_of(&form["properties"]["aspect_ratio"]).iter().map(|v| v.as_str().unwrap().to_owned()).collect();
+        let res: Vec<Resolution> = values_of(&form["properties"]["resolution"])
+            .iter()
+            .map(|v| serde_json::from_value(v.clone()).unwrap())
+            .collect();
+        let aspects: Vec<String> = values_of(&form["properties"]["aspect_ratio"])
+            .iter()
+            .map(|v| v.as_str().unwrap().to_owned())
+            .collect();
         assert!(!res.is_empty() && !aspects.is_empty(), "{form}");
         for r in &res {
             // The session's limits at this resolution (1080p: the tier's cap).
             let limits = limits.at(*r);
-            let chunk_s: Vec<f64> = (limits.min_chunk_seconds.ceil() as u32..=limits.max_chunk_seconds.floor() as u32).map(f64::from).collect();
+            let chunk_s: Vec<f64> = (limits.min_chunk_seconds.ceil() as u32
+                ..=limits.max_chunk_seconds.floor() as u32)
+                .map(f64::from)
+                .collect();
             let served = limits.resolutions.contains(r);
             for a in &aspects {
                 // `auto` follows the image at the nearest served aspect.
@@ -941,22 +1419,45 @@ async fn director_sweep(s: &Sweep) {
                 };
                 for asp in follow {
                     for &secs in &chunk_s {
-                        let combo = format!("resolution={} aspect_ratio={a} ({}) chunk {secs} s", r.as_str(), asp.as_str());
+                        let combo = format!(
+                            "resolution={} aspect_ratio={a} ({}) chunk {secs} s",
+                            r.as_str(),
+                            asp.as_str()
+                        );
                         let case = Case { combo, ..c.clone() };
                         if !served {
-                            s.record(&case, false, Some(("console offer refused", format!("{} is not served by {}", r.as_str(), caps.id))));
+                            s.record(
+                                &case,
+                                false,
+                                Some((
+                                    "console offer refused",
+                                    format!("{} is not served by {}", r.as_str(), caps.id),
+                                )),
+                            );
                             continue;
                         }
                         let (w, h, crop) = canvas_for(&caps, *r, asp);
-                        let frames = fastvideo_fal::director::engine::frames_for(&caps, limits.fps, secs).unwrap_or(caps.frames.default);
+                        let frames =
+                            fastvideo_fal::director::engine::frames_for(&caps, limits.fps, secs)
+                                .unwrap_or(caps.frames.default);
                         let job = chunk_job(&caps, w, h, frames, limits.fps);
-                        let mut v = s.validator.check(&job).err().map(|e| ("accepted, engine refuses", format!("{w}x{h} {frames} frames: {}", e.message)));
+                        let mut v = s.validator.check(&job).err().map(|e| {
+                            (
+                                "accepted, engine refuses",
+                                format!("{w}x{h} {frames} frames: {}", e.message),
+                            )
+                        });
                         // The delivered size: the tier on the short side, even
                         // sides (H.264 / VP8), within the generated canvas.
                         let (dw, dh) = crop.unwrap_or((w, h));
                         let tier_ok = dw.min(dh) == r.short_edge() || !caps.canvas.pad_and_crop;
-                        if v.is_none() && (dw > w || dh > h || dw % 2 != 0 || dh % 2 != 0 || !tier_ok) {
-                            v = Some(("accepted, wrong delivered size", format!("{dw}x{dh} from {w}x{h} at {}", r.as_str())));
+                        if v.is_none()
+                            && (dw > w || dh > h || dw % 2 != 0 || dh % 2 != 0 || !tier_ok)
+                        {
+                            v = Some((
+                                "accepted, wrong delivered size",
+                                format!("{dw}x{dh} from {w}x{h} at {}", r.as_str()),
+                            ));
                         }
                         s.record(&case, true, v);
                     }
@@ -966,20 +1467,54 @@ async fn director_sweep(s: &Sweep) {
     }
 }
 
-fn chunk_job(caps: &ModelCaps, w: u32, h: u32, frames: u32, fps: u32) -> fastvideo_protocol::ResolvedJob {
+fn chunk_job(
+    caps: &ModelCaps,
+    w: u32,
+    h: u32,
+    frames: u32,
+    fps: u32,
+) -> fastvideo_protocol::ResolvedJob {
     let mut req = GenerationRequest::text(ProtocolId::FalDirector, caps.id.0.clone(), "a fox");
-    req.canvas = CanvasSpec::Exact { width: w, height: h };
-    req.timing = TimingSpec { length: Length::ModelDefault, fps: Some(fps) };
-    let mut job = negotiate(&GenerationRequest { canvas: CanvasSpec::ModelDefault, ..req }, caps, &StagedInputs::default()).unwrap();
+    req.canvas = CanvasSpec::Exact {
+        width: w,
+        height: h,
+    };
+    req.timing = TimingSpec {
+        length: Length::ModelDefault,
+        fps: Some(fps),
+    };
+    let mut job = negotiate(
+        &GenerationRequest {
+            canvas: CanvasSpec::ModelDefault,
+            ..req
+        },
+        caps,
+        &StagedInputs::default(),
+    )
+    .unwrap();
     (job.width, job.height, job.num_frames, job.fps) = (w, h, frames, fps);
     job
 }
 
 // ---------------------------------------------------------------- MiniMax
 
-const MINIMAX_MODELS: [&str; 4] = ["MiniMax-H3", "MiniMax-H3-Max", "MiniMax-H3-Turbo", "MiniMax-H3-Draft"];
+const MINIMAX_MODELS: [&str; 4] = [
+    "MiniMax-H3",
+    "MiniMax-H3-Max",
+    "MiniMax-H3-Turbo",
+    "MiniMax-H3-Draft",
+];
 const MINIMAX_RES: [Option<&str>; 4] = [None, Some("480P"), Some("768P"), Some("2K")];
-const MINIMAX_RATIOS: [Option<&str>; 8] = [None, Some("adaptive"), Some("21:9"), Some("16:9"), Some("4:3"), Some("1:1"), Some("3:4"), Some("9:16")];
+const MINIMAX_RATIOS: [Option<&str>; 8] = [
+    None,
+    Some("adaptive"),
+    Some("21:9"),
+    Some("16:9"),
+    Some("4:3"),
+    Some("1:1"),
+    Some("3:4"),
+    Some("9:16"),
+];
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn minimax_v2() {
@@ -998,12 +1533,28 @@ async fn minimax_sweep(s: &Sweep) {
     let item = |uri: &str, role: &str| json!({"type": "image_url", "image_url": {"url": uri}, "role": role});
     let mut contents: Vec<(String, Value)> = vec![("text only".into(), json!([text]))];
     for img in &imgs {
-        contents.push((format!("first_frame {}", img.name), json!([text, item(&img.uri, "first_frame")])));
-        contents.push((format!("reference_image {}", img.name), json!([text, item(&img.uri, "reference_image")])));
+        contents.push((
+            format!("first_frame {}", img.name),
+            json!([text, item(&img.uri, "first_frame")]),
+        ));
+        contents.push((
+            format!("reference_image {}", img.name),
+            json!([text, item(&img.uri, "reference_image")]),
+        ));
     }
     for img in imgs.iter().take(3) {
-        contents.push((format!("last_frame {}", img.name), json!([text, item(&img.uri, "last_frame")])));
-        contents.push((format!("first+last {}", img.name), json!([text, item(&imgs[1].uri, "first_frame"), item(&img.uri, "last_frame")])));
+        contents.push((
+            format!("last_frame {}", img.name),
+            json!([text, item(&img.uri, "last_frame")]),
+        ));
+        contents.push((
+            format!("first+last {}", img.name),
+            json!([
+                text,
+                item(&imgs[1].uri, "first_frame"),
+                item(&img.uri, "last_frame")
+            ]),
+        ));
     }
     let mut cases = Vec::new();
     let case = |model: &str, combo: String, body: Value| Case {
@@ -1028,20 +1579,33 @@ async fn minimax_sweep(s: &Sweep) {
                     if let Some(r) = ratio {
                         b["ratio"] = json!(r);
                     }
-                    cases.push(case(model, format!("resolution={res:?} ratio={ratio:?} {cname}"), b));
+                    cases.push(case(
+                        model,
+                        format!("resolution={res:?} ratio={ratio:?} {cname}"),
+                        b,
+                    ));
                 }
             }
             for d in 3..=16 {
-                let mut b = json!({"model": model, "duration": d, "ratio": "16:9", "content": [text]});
+                let mut b =
+                    json!({"model": model, "duration": d, "ratio": "16:9", "content": [text]});
                 if let Some(r) = res {
                     b["resolution"] = json!(r);
                 }
-                cases.push(case(model, format!("resolution={res:?} duration={d} t2v"), b.clone()));
+                cases.push(case(
+                    model,
+                    format!("resolution={res:?} duration={d} t2v"),
+                    b.clone(),
+                ));
                 let mut b = json!({"model": model, "duration": d, "content": [text, item(&imgs[1].uri, "first_frame")]});
                 if let Some(r) = res {
                     b["resolution"] = json!(r);
                 }
-                cases.push(case(model, format!("resolution={res:?} duration={d} i2v"), b));
+                cases.push(case(
+                    model,
+                    format!("resolution={res:?} duration={d} i2v"),
+                    b,
+                ));
             }
         }
     }
@@ -1054,10 +1618,20 @@ async fn minimax_sweep(s: &Sweep) {
 async fn ltx_api() {
     let s = harness(true).await;
     let imgs = images();
-    let models = ["ltx-2-5-pro", "ltx-2-3-pro", "ltx-2-5-fast", "ltx-2-3-fast", "ltx-turbo", "ltx-draft"];
+    let models = [
+        "ltx-2-5-pro",
+        "ltx-2-3-pro",
+        "ltx-2-5-fast",
+        "ltx-2-3-fast",
+        "ltx-turbo",
+        "ltx-draft",
+    ];
     let resolutions = fastvideo_ltxapi::models::resolution_strings();
     let mut cases = Vec::new();
-    for (api, prefix, protocol, id_field) in [("ltx v2", "/v2", ProtocolId::LtxV2, "id"), ("ltx v1", "/v1", ProtocolId::LtxV1, "")] {
+    for (api, prefix, protocol, id_field) in [
+        ("ltx v2", "/v2", ProtocolId::LtxV2, "id"),
+        ("ltx v1", "/v1", ProtocolId::LtxV1, ""),
+    ] {
         for model in models {
             let case = |ep: &str, combo: String, body: Value| Case {
                 api,
@@ -1073,11 +1647,17 @@ async fn ltx_api() {
             for res in &resolutions {
                 for fps in [24, 25, 48, 50] {
                     for d in (6..=20).step_by(2) {
-                        if api == "ltx v1" && !(res == "1920x1080" && fps == 25 && (d == 6 || d == 20)) {
+                        if api == "ltx v1"
+                            && !(res == "1920x1080" && fps == 25 && (d == 6 || d == 20))
+                        {
                             continue; // v1 blocks per accepted job: a slice of the matrix
                         }
                         let b = json!({"prompt": "a fox", "model": model, "resolution": res, "fps": fps, "duration": d});
-                        cases.push(case("text-to-video", format!("t2v {res} {fps} fps {d} s"), b));
+                        cases.push(case(
+                            "text-to-video",
+                            format!("t2v {res} {fps} fps {d} s"),
+                            b,
+                        ));
                     }
                 }
                 for img in &imgs {
@@ -1085,7 +1665,11 @@ async fn ltx_api() {
                         continue;
                     }
                     let b = json!({"prompt": "a fox", "model": model, "resolution": res, "duration": 6, "image_uri": img.uri});
-                    cases.push(case("image-to-video", format!("i2v {res} image {}", img.name), b));
+                    cases.push(case(
+                        "image-to-video",
+                        format!("i2v {res} image {}", img.name),
+                        b,
+                    ));
                 }
                 if api == "ltx v2" {
                     let b = json!({"prompt": "a fox", "model": model, "resolution": res, "duration": 8, "image_uri": imgs[0].uri, "last_frame_uri": imgs[1].uri});
@@ -1093,33 +1677,56 @@ async fn ltx_api() {
                     for fps in [24, 25, 48, 50] {
                         for secs in [2.5, 7.0, 10.0] {
                             let b = json!({"prompt": "a fox talks", "model": model, "resolution": res, "fps": fps, "audio_uri": wav(16_000, secs)});
-                            cases.push(case("audio-to-video", format!("a2v {res} {fps} fps audio {secs} s"), b));
+                            cases.push(case(
+                                "audio-to-video",
+                                format!("a2v {res} {fps} fps audio {secs} s"),
+                                b,
+                            ));
                         }
                     }
                     for img in &imgs {
                         let b = json!({"prompt": "", "model": model, "resolution": res, "audio_uri": wav(16_000, 7.0), "image_uri": img.uri});
-                        cases.push(case("audio-to-video", format!("a2v {res} image {}", img.name), b));
+                        cases.push(case(
+                            "audio-to-video",
+                            format!("a2v {res} image {}", img.name),
+                            b,
+                        ));
                     }
                 }
             }
         }
     }
     // Retake / extend (their own schemas; `model` defaults to ltx-2-3-pro).
-    for (api, prefix, protocol, id_field) in [("ltx v2", "/v2", ProtocolId::LtxV2, "id"), ("ltx v1", "/v1", ProtocolId::LtxV1, "")] {
+    for (api, prefix, protocol, id_field) in [
+        ("ltx v2", "/v2", ProtocolId::LtxV2, "id"),
+        ("ltx v1", "/v1", ProtocolId::LtxV1, ""),
+    ] {
         for v in videos() {
             if api == "ltx v1" && v.name != "768x512-24fps-505f" {
                 continue;
             }
             for (ep, body) in [
-                ("retake", json!({"video_uri": v.uri, "start_time": 0.5, "duration": 2, "prompt": "rain starts"})),
-                ("retake", json!({"video_uri": v.uri, "start_time": 0, "duration": 20, "mode": "replace_audio", "resolution": "1920x1080"})),
+                (
+                    "retake",
+                    json!({"video_uri": v.uri, "start_time": 0.5, "duration": 2, "prompt": "rain starts"}),
+                ),
+                (
+                    "retake",
+                    json!({"video_uri": v.uri, "start_time": 0, "duration": 20, "mode": "replace_audio", "resolution": "1920x1080"}),
+                ),
                 ("extend", json!({"video_uri": v.uri, "duration": 2})),
-                ("extend", json!({"video_uri": v.uri, "duration": 20, "mode": "start", "context": 1, "model": "ltx-2-5-pro"})),
+                (
+                    "extend",
+                    json!({"video_uri": v.uri, "duration": 20, "mode": "start", "context": 1, "model": "ltx-2-5-pro"}),
+                ),
             ] {
                 cases.push(Case {
                     api,
                     model: "ltx-2-3-pro".into(),
-                    combo: format!("{ep} {} {body}", v.name).chars().take(160).collect(),
+                    combo: format!("{ep} {} {body}", v.name)
+                        .chars()
+                        .take(160)
+                        .collect(),
                     uri: format!("{prefix}/{ep}"),
                     body,
                     auth: "Bearer {KEY}".into(),
@@ -1149,14 +1756,33 @@ async fn openai_videos() {
 
 async fn openai_sweep(s: &Sweep) {
     let imgs = images();
-    let (st, list) = call(&s.app.router, "GET", "/v1/models", None, &format!("Bearer {}", key(0))).await;
+    let (st, list) = call(
+        &s.app.router,
+        "GET",
+        "/v1/models",
+        None,
+        &format!("Bearer {}", key(0)),
+    )
+    .await;
     assert_eq!(st, 200, "{list}");
-    let names: Vec<String> = list["data"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap().to_owned()).collect();
+    let names: Vec<String> = list["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap().to_owned())
+        .collect();
     let engine = s.app.ctx.engine().clone();
     let mut cases = Vec::new();
     for name in &names {
-        let Ok(caps) = fastvideo_openai_videos::models::resolve_public(engine.as_ref(), name) else { continue };
-        if matches!(caps.stream, Some(fastvideo_protocol::StreamCaps::Causal { .. })) && !caps.supports(Task::T2V) {
+        let Ok(caps) = fastvideo_openai_videos::models::resolve_public(engine.as_ref(), name)
+        else {
+            continue;
+        };
+        if matches!(
+            caps.stream,
+            Some(fastvideo_protocol::StreamCaps::Causal { .. })
+        ) && !caps.supports(Task::T2V)
+        {
             continue;
         }
         let h3 = caps.family == fastvideo_protocol::Family::H3;
@@ -1174,7 +1800,13 @@ async fn openai_sweep(s: &Sweep) {
         let (t2v, plain): (&str, Vec<(&str, Value)>) = if caps.supports(Task::T2V) {
             ("t2v", vec![])
         } else if h3 {
-            ("ref2v", vec![("task", json!("ref2va")), ("image_reference", json!([{"image_url": imgs[0].uri}]))])
+            (
+                "ref2v",
+                vec![
+                    ("task", json!("ref2va")),
+                    ("image_reference", json!([{"image_url": imgs[0].uri}])),
+                ],
+            )
         } else {
             continue; // LTX reference-to-video is not on this API (`task` is H3-only)
         };
@@ -1184,15 +1816,37 @@ async fn openai_sweep(s: &Sweep) {
                 let promised = caps.canvas.aspect_ok((ratio(a) * 1e4) as u32, 10_000);
                 let mut extra = plain.clone();
                 extra.extend([("aspect_ratio", json!(a)), ("short_edge", json!(se))]);
-                cases.push(case(format!("{t2v} aspect {a} short_edge {se}"), with(&base, &extra), if promised { Offer::Caps } else { Offer::Api }));
+                cases.push(case(
+                    format!("{t2v} aspect {a} short_edge {se}"),
+                    with(&base, &extra),
+                    if promised { Offer::Caps } else { Offer::Api },
+                ));
             }
         }
-        cases.push(case(format!("{t2v} default"), with(&base, &plain), Offer::Caps));
+        cases.push(case(
+            format!("{t2v} default"),
+            with(&base, &plain),
+            Offer::Caps,
+        ));
         if caps.supports(Task::I2V) {
             for img in &imgs {
-                cases.push(case(format!("i2v {}", img.name), with(&base, &[("input_reference", json!(img.uri))]), Offer::Caps));
+                cases.push(case(
+                    format!("i2v {}", img.name),
+                    with(&base, &[("input_reference", json!(img.uri))]),
+                    Offer::Caps,
+                ));
                 for &se in &caps.canvas.short_edges {
-                    cases.push(case(format!("i2v {} short_edge {se}", img.name), with(&base, &[("input_reference", json!(img.uri)), ("short_edge", json!(se))]), Offer::Caps));
+                    cases.push(case(
+                        format!("i2v {} short_edge {se}", img.name),
+                        with(
+                            &base,
+                            &[
+                                ("input_reference", json!(img.uri)),
+                                ("short_edge", json!(se)),
+                            ],
+                        ),
+                        Offer::Caps,
+                    ));
                 }
             }
         }
@@ -1203,7 +1857,11 @@ async fn openai_sweep(s: &Sweep) {
             let promised = g.align_up(f).is_some() && !(h3 && secs < 5);
             let mut extra = plain.clone();
             extra.push(("seconds", json!(secs.to_string())));
-            cases.push(case(format!("{t2v} seconds {secs}"), with(&base, &extra), if promised { Offer::Caps } else { Offer::Api }));
+            cases.push(case(
+                format!("{t2v} seconds {secs}"),
+                with(&base, &extra),
+                if promised { Offer::Caps } else { Offer::Api },
+            ));
         }
         let mut n = g.min;
         while n <= g.max {
@@ -1212,7 +1870,11 @@ async fn openai_sweep(s: &Sweep) {
             extra.push(("num_frames", json!(n)));
             let mut b = with(&base, &extra);
             b.as_object_mut().unwrap().remove("seconds");
-            cases.push(case(format!("{t2v} num_frames {n}"), b, if promised { Offer::Caps } else { Offer::Api }));
+            cases.push(case(
+                format!("{t2v} num_frames {n}"),
+                b,
+                if promised { Offer::Caps } else { Offer::Api },
+            ));
             n += g.step.max(1);
         }
     }
@@ -1240,20 +1902,37 @@ fn negotiate_sweep(cat: &[CudaModel]) {
         path: "/tmp/in.png".into(),
         mime: "image/png".into(),
         bytes: 1,
-        probe: MediaProbe { width: Some(w), height: Some(h), ..Default::default() },
+        probe: MediaProbe {
+            width: Some(w),
+            height: Some(h),
+            ..Default::default()
+        },
     };
     for m in cat {
         let caps = m.caps();
-        let task = [Task::I2V, Task::Ref2V].into_iter().find(|t| caps.supports(*t));
+        let task = [Task::I2V, Task::Ref2V]
+            .into_iter()
+            .find(|t| caps.supports(*t));
         let mut check = |req: &GenerationRequest, staged: &StagedInputs, what: String| {
             if let Ok(job) = negotiate(req, &caps, staged) {
                 checked += 1;
                 if let Err(e) = validator.check(&job) {
-                    bad.push(format!("{} {what}: {}x{} {} frames @{}: {}", caps.id, job.width, job.height, job.num_frames, job.fps, e.message));
+                    bad.push(format!(
+                        "{} {what}: {}x{} {} frames @{}: {}",
+                        caps.id, job.width, job.height, job.num_frames, job.fps, e.message
+                    ));
                 }
             }
         };
-        let t2v = if caps.supports(Task::T2V) { Some(GenerationRequest::text(ProtocolId::Native, caps.id.0.clone(), "a fox")) } else { None };
+        let t2v = if caps.supports(Task::T2V) {
+            Some(GenerationRequest::text(
+                ProtocolId::Native,
+                caps.id.0.clone(),
+                "a fox",
+            ))
+        } else {
+            None
+        };
         // Image-derived canvases.
         if let Some(task) = task {
             let mut req = GenerationRequest::text(ProtocolId::Native, caps.id.0.clone(), "a fox");
@@ -1261,12 +1940,28 @@ fn negotiate_sweep(cat: &[CudaModel]) {
             let media = MediaRef::DataUri("data:image/png;base64,".into());
             let mut staged = StagedInputs::default();
             if task == Task::I2V {
-                req.keyframes = vec![Keyframe { at: Anchor::First, image: media }];
+                req.keyframes = vec![Keyframe {
+                    at: Anchor::First,
+                    image: media,
+                }];
             } else {
-                req.references = vec![Reference { kind: MediaKind::Image, media }];
+                req.references = vec![Reference {
+                    kind: MediaKind::Image,
+                    media,
+                }];
             }
-            let mut dims: Vec<(u32, u32)> = (1..=48u32).flat_map(|n| (1..=48u32).map(move |d| (n * 97, d * 97))).collect();
-            dims.extend([(1080, 2340), (3024, 4032), (4032, 3024), (600, 50), (50, 600), (1, 1000), (1000, 1)]);
+            let mut dims: Vec<(u32, u32)> = (1..=48u32)
+                .flat_map(|n| (1..=48u32).map(move |d| (n * 97, d * 97)))
+                .collect();
+            dims.extend([
+                (1080, 2340),
+                (3024, 4032),
+                (4032, 3024),
+                (600, 50),
+                (50, 600),
+                (1, 1000),
+                (1000, 1),
+            ]);
             for &se in &caps.canvas.short_edges {
                 for &(w, h) in &dims {
                     if task == Task::I2V {
@@ -1283,8 +1978,15 @@ fn negotiate_sweep(cat: &[CudaModel]) {
             for &se in &caps.canvas.short_edges {
                 for n in 1..=24u32 {
                     for d in 1..=24u32 {
-                        req.canvas = CanvasSpec::Aspect { ratio: Ratio::new(n, d), short_edge: se };
-                        check(&req, &StagedInputs::default(), format!("aspect {n}:{d} at {se}"));
+                        req.canvas = CanvasSpec::Aspect {
+                            ratio: Ratio::new(n, d),
+                            short_edge: se,
+                        };
+                        check(
+                            &req,
+                            &StagedInputs::default(),
+                            format!("aspect {n}:{d} at {se}"),
+                        );
                     }
                 }
             }
@@ -1292,20 +1994,51 @@ fn negotiate_sweep(cat: &[CudaModel]) {
             let g = caps.frames.clone();
             for &fps in &caps.fps.allowed {
                 for n in 1..=g.max + 20 {
-                    req.timing = TimingSpec { length: Length::Frames { value: n, snap: Snap::AlignUp }, fps: Some(fps) };
-                    check(&req, &StagedInputs::default(), format!("{n} frames align-up @{fps}"));
-                    req.timing = TimingSpec { length: Length::Frames { value: n, snap: Snap::Exact }, fps: Some(fps) };
-                    check(&req, &StagedInputs::default(), format!("{n} frames exact @{fps}"));
+                    req.timing = TimingSpec {
+                        length: Length::Frames {
+                            value: n,
+                            snap: Snap::AlignUp,
+                        },
+                        fps: Some(fps),
+                    };
+                    check(
+                        &req,
+                        &StagedInputs::default(),
+                        format!("{n} frames align-up @{fps}"),
+                    );
+                    req.timing = TimingSpec {
+                        length: Length::Frames {
+                            value: n,
+                            snap: Snap::Exact,
+                        },
+                        fps: Some(fps),
+                    };
+                    check(
+                        &req,
+                        &StagedInputs::default(),
+                        format!("{n} frames exact @{fps}"),
+                    );
                 }
                 for secs in 1..=30u32 {
-                    req.timing = TimingSpec { length: Length::Seconds { value: f64::from(secs), snap: Snap::AlignUp }, fps: Some(fps) };
+                    req.timing = TimingSpec {
+                        length: Length::Seconds {
+                            value: f64::from(secs),
+                            snap: Snap::AlignUp,
+                        },
+                        fps: Some(fps),
+                    };
                     check(&req, &StagedInputs::default(), format!("{secs} s @{fps}"));
                 }
             }
         }
     }
     assert!(checked > 10_000, "{checked}");
-    assert!(bad.is_empty(), "{} of {checked} negotiated jobs fail the engine checks; first:\n{}", bad.len(), bad[..bad.len().min(40)].join("\n"));
+    assert!(
+        bad.is_empty(),
+        "{} of {checked} negotiated jobs fail the engine checks; first:\n{}",
+        bad.len(),
+        bad[..bad.len().min(40)].join("\n")
+    );
 }
 
 /// The fake backend runs the engine checks: a job the CUDA engine would
@@ -1314,16 +2047,50 @@ fn negotiate_sweep(cat: &[CudaModel]) {
 async fn the_fake_engine_runs_the_cuda_checks() {
     // A GPU without the 1080P tier: the trained 768x1344 budget applies.
     let cat = served_catalog(false);
-    let fc = FakeConfig { timing: FakeTiming { load: Duration::ZERO, step: Duration::ZERO, ..FakeTiming::default() }, mp4: Mp4Mode::Off, ..FakeConfig::cuda_catalog(&cat) };
-    let dir = tempfile::Builder::new().prefix("fv-sweep-wiring-").tempdir().unwrap().keep();
-    let cfg = EngineConfig { output_dir: dir, ..EngineConfig::default() };
+    let fc = FakeConfig {
+        timing: FakeTiming {
+            load: Duration::ZERO,
+            step: Duration::ZERO,
+            ..FakeTiming::default()
+        },
+        mp4: Mp4Mode::Off,
+        ..FakeConfig::cuda_catalog(&cat)
+    };
+    let dir = tempfile::Builder::new()
+        .prefix("fv-sweep-wiring-")
+        .tempdir()
+        .unwrap()
+        .keep();
+    let cfg = EngineConfig {
+        output_dir: dir,
+        ..EngineConfig::default()
+    };
     let engine = EngineService::start(cfg, vec![Box::new(FakeBackend::new(fc))]).unwrap();
     engine.wait_ready().await;
-    let caps = cat.iter().find(|m| m.id.as_str() == "sol-h3").unwrap().caps();
-    let mut job = negotiate(&GenerationRequest::text(ProtocolId::Native, "sol-h3", "a fox"), &caps, &StagedInputs::default()).unwrap();
+    let caps = cat
+        .iter()
+        .find(|m| m.id.as_str() == "sol-h3")
+        .unwrap()
+        .caps();
+    let mut job = negotiate(
+        &GenerationRequest::text(ProtocolId::Native, "sol-h3", "a fox"),
+        &caps,
+        &StagedInputs::default(),
+    )
+    .unwrap();
     // The D1 failure: 704x1504 is above the trained 768x1344 budget.
     (job.width, job.height) = (704, 1504);
-    let h = engine.submit(fastvideo_protocol::JobId::new(), job, fastvideo_engine_service::Priority::Batch).await.unwrap();
-    let e = h.wait().await.expect_err("the engine check refuses the canvas");
+    let h = engine
+        .submit(
+            fastvideo_protocol::JobId::new(),
+            job,
+            fastvideo_engine_service::Priority::Batch,
+        )
+        .await
+        .unwrap();
+    let e = h
+        .wait()
+        .await
+        .expect_err("the engine check refuses the canvas");
     assert!(e.message.contains("1058816 pixels"), "{}", e.message);
 }

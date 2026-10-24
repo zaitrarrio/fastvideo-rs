@@ -20,7 +20,9 @@ pub fn h264_backend(s: &str) -> anyhow::Result<H264Backend> {
         "openh264" => Ok(H264Backend::OpenH264),
         "off" => Ok(H264Backend::Off),
         "auto" => h264_backend(&crate::encoders::auto_selection().1.reactor),
-        other => Err(anyhow!("[reactor] h264 = {other:?} (auto | nvenc | openh264 | off)")),
+        other => Err(anyhow!(
+            "[reactor] h264 = {other:?} (auto | nvenc | openh264 | off)"
+        )),
     }
 }
 
@@ -75,7 +77,12 @@ pub fn ingest_auth(ctx: fastvideo_serve_kit::ServeCtx) -> IngestAuth {
 
 /// Builds the runtime on an already bound host (shared with the fal
 /// director in `App::build`); `auth` guards duplex sessions.
-pub fn build_on(c: &Config, engine: &EngineService, host: RtcHost, auth: Option<IngestAuth>) -> anyhow::Result<Reactor> {
+pub fn build_on(
+    c: &Config,
+    engine: &EngineService,
+    host: RtcHost,
+    auth: Option<IngestAuth>,
+) -> anyhow::Result<Reactor> {
     build_on_moderated(c, engine, host, auth, None)
 }
 
@@ -142,7 +149,13 @@ mod tests {
     fn config_maps() {
         let c = Config::default();
         let r = reactor_config(&c.reactor, &c.streams).unwrap();
-        assert_eq!(r.causal_limits, fastvideo_protocol::CausalLimits { default_max_s: 120, hard_max_s: 300 });
+        assert_eq!(
+            r.causal_limits,
+            fastvideo_protocol::CausalLimits {
+                default_max_s: 120,
+                hard_max_s: 300
+            }
+        );
         assert_eq!(r.orphan_timeout, Duration::from_secs(60));
         assert_eq!(r.ping_timeout, Duration::from_secs(20));
         assert_eq!(r.max_connections, 64);
@@ -150,7 +163,10 @@ mod tests {
         assert_eq!(r.avatar.size, (640, 352));
         let mut rc = c.reactor.clone();
         rc.mode = "avatar".into();
-        assert_eq!(reactor_config(&rc, &c.streams).unwrap().mode, Some(fastvideo_reactor::engine::Mode::Avatar));
+        assert_eq!(
+            reactor_config(&rc, &c.streams).unwrap().mode,
+            Some(fastvideo_reactor::engine::Mode::Avatar)
+        );
         assert_eq!(h264_backend("nvenc").unwrap(), H264Backend::Nvenc);
         assert!(h264_backend("x264").is_err());
         // `auto` follows the per-process NVENC probe.
@@ -177,7 +193,10 @@ mod tests {
         let h = host_config(&c, env);
         assert!(h.udp_bind.is_none());
         assert_eq!(h.tcp_bind.map(|a| a.port()), Some(41234));
-        assert_eq!(h.public.tcp.map(|a| a.to_string()).as_deref(), Some("203.0.113.9:41234"));
+        assert_eq!(
+            h.public.tcp.map(|a| a.to_string()).as_deref(),
+            Some("203.0.113.9:41234")
+        );
         assert_eq!(h.ice_servers, vec![IceServer::stun("stun:a.example:3478")]);
     }
 }

@@ -162,11 +162,7 @@ impl TensorBackend for HostBackend {
 
     fn silu(a: &Self::Tensor) -> Result<Self::Tensor, OpsError> {
         Ok(HostTensor {
-            data: a
-                .data
-                .iter()
-                .map(|x| x / (1.0 + (-x).exp()))
-                .collect(),
+            data: a.data.iter().map(|x| x / (1.0 + (-x).exp())).collect(),
             shape: a.shape.clone(),
         })
     }

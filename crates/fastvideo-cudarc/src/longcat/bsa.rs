@@ -167,6 +167,7 @@ pub fn flash_attn_bsa_3d(
     CudaTensor::from_vec(out_thw, vec![b, heads, sq, d])
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rearrange_thw_to_3d_block(
     x: &[f32],
     b: usize,
@@ -215,6 +216,7 @@ fn rearrange_thw_to_3d_block(
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rearrange_3d_block_to_thw(
     x: &[f32],
     b: usize,
@@ -273,7 +275,7 @@ mod tests {
         let w = 2usize;
         let seq = t * h * w;
         let d = 4usize;
-        let data: Vec<f32> = (0..1 * 1 * seq * d).map(|i| (i as f32) * 0.01).collect();
+        let data: Vec<f32> = (0..seq * d).map(|i| (i as f32) * 0.01).collect();
         let q = CudaTensor::from_vec(data.clone(), vec![1, 1, seq, d]).unwrap();
         let k = CudaTensor::from_vec(data.clone(), vec![1, 1, seq, d]).unwrap();
         let v = CudaTensor::from_vec(data, vec![1, 1, seq, d]).unwrap();

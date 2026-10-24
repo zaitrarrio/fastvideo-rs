@@ -303,7 +303,9 @@ impl AudioLevels {
     /// From signed 16-bit little-endian mono PCM.
     pub fn from_s16le(pcm: &[u8], rate: u32) -> Self {
         let s: Vec<f32> = pcm
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32768.0)
             .collect();
         Self::from_samples(&s, rate)

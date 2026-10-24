@@ -81,8 +81,8 @@ pub fn parse_bits(raw: &str) -> Option<u8> {
 pub fn packed_bytes(cols: usize, bits: u8) -> Result<usize> {
     match bits {
         8 => Ok(cols),
-        4 if cols % 2 == 0 => Ok(cols / 2),
-        6 if cols % 4 == 0 => Ok(cols * 3 / 4),
+        4 if cols.is_multiple_of(2) => Ok(cols / 2),
+        6 if cols.is_multiple_of(4) => Ok(cols * 3 / 4),
         _ => Err(msg(format!(
             "affine: cols {cols} is not packable at {bits}-bit"
         ))),
@@ -90,7 +90,7 @@ pub fn packed_bytes(cols: usize, bits: u8) -> Result<usize> {
 }
 
 pub fn n_groups(cols: usize, group: usize) -> Result<usize> {
-    if group == 0 || cols % group != 0 {
+    if group == 0 || !cols.is_multiple_of(group) {
         return Err(msg(format!(
             "affine: cols {cols} is not divisible by group {group}"
         )));
@@ -135,17 +135,22 @@ fn pack_row(codes: &[u8], bits: u8) -> Result<Vec<u8>> {
     match bits {
         8 => Ok(codes.to_vec()),
         4 => {
-            if codes.len() % 2 != 0 {
+            if !codes.len().is_multiple_of(2) {
                 return Err(msg("affine int4: odd number of codes"));
             }
-            Ok(codes.chunks_exact(2).map(|c| c[0] | (c[1] << 4)).collect())
+            Ok(codes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| c[0] | (c[1] << 4))
+                .collect())
         }
         6 => {
-            if codes.len() % 4 != 0 {
+            if !codes.len().is_multiple_of(4) {
                 return Err(msg("affine int6: codes not a multiple of 4"));
             }
             let mut out = Vec::with_capacity(codes.len() * 3 / 4);
-            for c in codes.chunks_exact(4) {
+            for c in codes.as_chunks::<4>().0 {
                 out.push(c[0] | ((c[1] & 0x03) << 6));
                 out.push(((c[1] >> 2) & 0x0f) | ((c[2] & 0x0f) << 4));
                 out.push(((c[2] >> 4) & 0x03) | (c[3] << 2));
@@ -161,7 +166,7 @@ fn unpack_code(packed: &[u8], col: usize, bits: u8) -> u8 {
         8 => packed[col],
         4 => {
             let b = packed[col / 2];
-            if col % 2 == 0 {
+            if col.is_multiple_of(2) {
                 b & 0x0f
             } else {
                 b >> 4
@@ -243,7 +248,7 @@ pub fn dequant_grouped(
     group: usize,
 ) -> Result<Vec<f32>> {
     let pb = packed_bytes(cols, bits)?;
-    if pb == 0 || codes.len() % pb != 0 {
+    if pb == 0 || !codes.len().is_multiple_of(pb) {
         return Err(msg(format!(
             "affine dequant: {} packed bytes, {pb} per row",
             codes.len()
@@ -271,6 +276,7 @@ pub fn dequant_grouped(
 
 /// `C = X @ Wᵀ` with `W_ij = scale[i, j/g] * q[i, j] + bias[i, j/g]`.
 /// `x` is `[m, k]`, weight is `[n, k]`.
+#[allow(clippy::too_many_arguments)]
 pub fn gemm(
     x: &[f32],
     codes: &[u8],
@@ -284,6 +290,7 @@ pub fn gemm(
     gemm_grouped(x, codes, scales, biases, m, n, k, bits, GROUP)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn gemm_grouped(
     x: &[f32],
     codes: &[u8],

@@ -36,15 +36,31 @@ pub struct AudioTarget {
 
 impl AudioTarget {
     /// fal / hosted H3: AAC-LC stereo 32 kHz (fal §6).
-    pub const FAL_H3: AudioTarget = AudioTarget { rate: 32_000, channels: 2, bitrate_bps: 128_000 };
+    pub const FAL_H3: AudioTarget = AudioTarget {
+        rate: 32_000,
+        channels: 2,
+        bitrate_bps: 128_000,
+    };
     /// RTMP/HLS reference client rate: 44.1 kHz stereo.
-    pub const CD: AudioTarget = AudioTarget { rate: 44_100, channels: 2, bitrate_bps: 128_000 };
+    pub const CD: AudioTarget = AudioTarget {
+        rate: 44_100,
+        channels: 2,
+        bitrate_bps: 128_000,
+    };
     /// RTMP/HLS in this design (§5.3): AAC 128k at 48 kHz stereo.
-    pub const BROADCAST: AudioTarget = AudioTarget { rate: 48_000, channels: 2, bitrate_bps: 128_000 };
+    pub const BROADCAST: AudioTarget = AudioTarget {
+        rate: 48_000,
+        channels: 2,
+        bitrate_bps: 128_000,
+    };
 
     /// Keep a model's native rate and layout (LTX, MMAudio).
     pub fn native(rate: u32, channels: u8) -> Self {
-        Self { rate, channels, bitrate_bps: 128_000 }
+        Self {
+            rate,
+            channels,
+            bitrate_bps: 128_000,
+        }
     }
 }
 
@@ -70,7 +86,16 @@ pub struct Mp4Spec {
 impl Mp4Spec {
     /// NVENC at quality 19, with the audio target given.
     pub fn new(width: u32, height: u32, fps: u32, audio: Option<AudioTarget>) -> Self {
-        Self { width, height, fps, quality: 19, encoder: FfmpegH264::Nvenc, audio, faststart: true, fragmented: false }
+        Self {
+            width,
+            height,
+            fps,
+            quality: 19,
+            encoder: FfmpegH264::Nvenc,
+            audio,
+            faststart: true,
+            fragmented: false,
+        }
     }
 
     /// What hosted H3 returns on fal: 24 fps, AAC-LC stereo 32 kHz, faststart.
@@ -97,8 +122,10 @@ impl Mp4Writer {
     /// `audio` is resampled and remixed to `spec.audio` here (not in ffmpeg),
     /// so the AAC track carries exactly the samples given.
     pub fn create(out: &Path, spec: Mp4Spec, audio: Option<&Pcm>) -> Result<Self> {
-        if spec.width % 2 != 0 || spec.height % 2 != 0 || spec.fps == 0 {
-            return Err(MediaError::invalid("mp4 needs even dimensions and a positive fps"));
+        if !spec.width.is_multiple_of(2) || !spec.height.is_multiple_of(2) || spec.fps == 0 {
+            return Err(MediaError::invalid(
+                "mp4 needs even dimensions and a positive fps",
+            ));
         }
         let mut cmd = tools::ffmpeg_command();
         cmd.args(["-f", "rawvideo", "-pix_fmt", "rgb24", "-s"])
@@ -110,14 +137,40 @@ impl Mp4Writer {
                 let pcm = resample::convert(pcm, t.rate, t.channels)?;
                 let af = out.with_extension("audio.f32");
                 std::fs::write(&af, f32_to_f32le(&pcm.samples))?;
-                cmd.args(["-f", "f32le", "-ar", &t.rate.to_string(), "-ac", &t.channels.to_string(), "-i"])
-                    .arg(&af)
-                    .args(["-map", "0:v", "-map", "1:a", "-c:a", "aac", "-profile:a", "aac_low"])
-                    .args(["-b:a", &t.bitrate_bps.to_string(), "-ar", &t.rate.to_string(), "-ac", &t.channels.to_string()]);
+                cmd.args([
+                    "-f",
+                    "f32le",
+                    "-ar",
+                    &t.rate.to_string(),
+                    "-ac",
+                    &t.channels.to_string(),
+                    "-i",
+                ])
+                .arg(&af)
+                .args([
+                    "-map",
+                    "0:v",
+                    "-map",
+                    "1:a",
+                    "-c:a",
+                    "aac",
+                    "-profile:a",
+                    "aac_low",
+                ])
+                .args([
+                    "-b:a",
+                    &t.bitrate_bps.to_string(),
+                    "-ar",
+                    &t.rate.to_string(),
+                    "-ac",
+                    &t.channels.to_string(),
+                ]);
                 audio_file = Some(af);
             }
             (Some(_), None) => {
-                return Err(MediaError::invalid("the spec asks for audio but none was given"));
+                return Err(MediaError::invalid(
+                    "the spec asks for audio but none was given",
+                ));
             }
             (None, _) => {
                 cmd.arg("-an");
@@ -130,19 +183,37 @@ impl Mp4Writer {
         } else if spec.faststart {
             cmd.args(["-movflags", "+faststart"]);
         }
-        cmd.arg(out).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
-        let mut child = cmd.spawn().map_err(|e| MediaError::tool("ffmpeg", format!("not available: {e}")))?;
+        cmd.arg(out)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| MediaError::tool("ffmpeg", format!("not available: {e}")))?;
         let stdin = child.stdin.take();
-        Ok(Self { spec, out: out.to_path_buf(), child: Some(child), stdin, audio_file, frames: 0 })
+        Ok(Self {
+            spec,
+            out: out.to_path_buf(),
+            child: Some(child),
+            stdin,
+            audio_file,
+            frames: 0,
+        })
     }
 
     pub fn push(&mut self, frame: &RgbFrame) -> Result<()> {
         frame.check()?;
         if frame.width != self.spec.width || frame.height != self.spec.height {
-            return Err(MediaError::invalid("frame size does not match the mp4 spec"));
+            return Err(MediaError::invalid(
+                "frame size does not match the mp4 spec",
+            ));
         }
-        let w = self.stdin.as_mut().ok_or_else(|| MediaError::invalid("writer finished"))?;
-        w.write_all(&frame.data).map_err(|e| MediaError::tool("ffmpeg", format!("stdin: {e}")))?;
+        let w = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| MediaError::invalid("writer finished"))?;
+        w.write_all(&frame.data)
+            .map_err(|e| MediaError::tool("ffmpeg", format!("stdin: {e}")))?;
         self.frames += 1;
         Ok(())
     }
@@ -150,7 +221,10 @@ impl Mp4Writer {
     /// Close ffmpeg, check its exit, remove the side file.
     pub fn finish(mut self) -> Result<PathBuf> {
         drop(self.stdin.take());
-        let child = self.child.take().ok_or_else(|| MediaError::invalid("writer finished"))?;
+        let child = self
+            .child
+            .take()
+            .ok_or_else(|| MediaError::invalid("writer finished"))?;
         let out = child.wait_with_output()?;
         if let Some(af) = self.audio_file.take() {
             let _ = std::fs::remove_file(af);
@@ -158,7 +232,11 @@ impl Mp4Writer {
         if !out.status.success() {
             return Err(MediaError::tool(
                 "ffmpeg",
-                format!("mp4 mux exited with {}: {}", out.status, String::from_utf8_lossy(&out.stderr).trim()),
+                format!(
+                    "mp4 mux exited with {}: {}",
+                    out.status,
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ),
             ));
         }
         Ok(self.out.clone())
@@ -183,7 +261,12 @@ impl Drop for Mp4Writer {
 
 /// Write a whole clip. With audio, the PCM is first fitted to exactly
 /// `round(frames/fps·rate)` samples at the target rate (A/V lockstep).
-pub fn write_mp4(out: &Path, spec: Mp4Spec, frames: &[RgbFrame], audio: Option<&Pcm>) -> Result<PathBuf> {
+pub fn write_mp4(
+    out: &Path,
+    spec: Mp4Spec,
+    frames: &[RgbFrame],
+    audio: Option<&Pcm>,
+) -> Result<PathBuf> {
     let fitted = match (spec.audio, audio) {
         (Some(t), Some(pcm)) => {
             let conv = resample::convert(pcm, t.rate, t.channels)?;
@@ -219,7 +302,12 @@ impl From<&fastvideo_protocol::PostProcess> for PostProcess {
     /// The protocol's crop is centred (pad-and-crop pads symmetrically).
     fn from(p: &fastvideo_protocol::PostProcess) -> Self {
         Self {
-            crop: p.crop.map(|(width, height)| Crop { width, height, x: None, y: None }),
+            crop: p.crop.map(|(width, height)| Crop {
+                width,
+                height,
+                x: None,
+                y: None,
+            }),
             drop_audio: p.drop_audio,
         }
     }
@@ -233,9 +321,20 @@ pub fn finalize_is_noop(input: &Path, post: &PostProcess) -> bool {
     if post.crop.is_some() || post.drop_audio {
         return false;
     }
-    let Ok(info) = inspect::inspect(input) else { return false };
-    let videos = info.tracks.iter().filter(|t| t.kind == inspect::TrackKind::Video).count();
-    info.faststart && videos == 1 && info.tracks.iter().all(|t| t.kind != inspect::TrackKind::Other)
+    let Ok(info) = inspect::inspect(input) else {
+        return false;
+    };
+    let videos = info
+        .tracks
+        .iter()
+        .filter(|t| t.kind == inspect::TrackKind::Video)
+        .count();
+    info.faststart
+        && videos == 1
+        && info
+            .tracks
+            .iter()
+            .all(|t| t.kind != inspect::TrackKind::Other)
 }
 
 /// Remux `input` to `output` with `+faststart`; `-an` when `drop_audio`;
@@ -245,7 +344,12 @@ pub fn finalize(input: &Path, output: &Path, post: &PostProcess) -> Result<()> {
 }
 
 /// [`finalize`] with an explicit encoder for the crop re-encode.
-pub fn finalize_with(input: &Path, output: &Path, post: &PostProcess, encoder: FfmpegH264) -> Result<()> {
+pub fn finalize_with(
+    input: &Path,
+    output: &Path,
+    post: &PostProcess,
+    encoder: FfmpegH264,
+) -> Result<()> {
     if input == output {
         return Err(MediaError::invalid("finalize needs a distinct output path"));
     }
@@ -259,8 +363,12 @@ pub fn finalize_with(input: &Path, output: &Path, post: &PostProcess, encoder: F
             if c.width % 2 != 0 || c.height % 2 != 0 {
                 return Err(MediaError::invalid("crop needs even dimensions"));
             }
-            let x = c.x.map(|v| v.to_string()).unwrap_or_else(|| "(in_w-out_w)/2".into());
-            let y = c.y.map(|v| v.to_string()).unwrap_or_else(|| "(in_h-out_h)/2".into());
+            let x =
+                c.x.map(|v| v.to_string())
+                    .unwrap_or_else(|| "(in_w-out_w)/2".into());
+            let y =
+                c.y.map(|v| v.to_string())
+                    .unwrap_or_else(|| "(in_h-out_h)/2".into());
             cmd.args(["-vf", &format!("crop={}:{}:{x}:{y}", c.width, c.height)])
                 .args(encoder.file_args(19));
             if !post.drop_audio {
@@ -286,7 +394,14 @@ mod tests {
     fn specs() {
         let s = Mp4Spec::fal_h3(1344, 768);
         assert_eq!(s.fps, 24);
-        assert_eq!(s.audio, Some(AudioTarget { rate: 32_000, channels: 2, bitrate_bps: 128_000 }));
+        assert_eq!(
+            s.audio,
+            Some(AudioTarget {
+                rate: 32_000,
+                channels: 2,
+                bitrate_bps: 128_000
+            })
+        );
         assert!(s.faststart);
         assert_eq!((s.quality, s.encoder), (19, FfmpegH264::Nvenc));
         assert_eq!(AudioTarget::CD.rate, 44_100);
@@ -296,10 +411,28 @@ mod tests {
     fn finalize_is_noop_only_for_a_faststart_file_left_as_is() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("a.mp4");
-        std::fs::write(&p, inspect::header_only_mp4(640, 360, 24_000, 1000, 24, Some(44_100))).unwrap();
+        std::fs::write(
+            &p,
+            inspect::header_only_mp4(640, 360, 24_000, 1000, 24, Some(44_100)),
+        )
+        .unwrap();
         assert!(finalize_is_noop(&p, &PostProcess::default()));
-        assert!(!finalize_is_noop(&p, &PostProcess { drop_audio: true, ..PostProcess::default() }));
-        let crop = PostProcess { crop: Some(Crop { width: 320, height: 180, x: None, y: None }), drop_audio: false };
+        assert!(!finalize_is_noop(
+            &p,
+            &PostProcess {
+                drop_audio: true,
+                ..PostProcess::default()
+            }
+        ));
+        let crop = PostProcess {
+            crop: Some(Crop {
+                width: 320,
+                height: 180,
+                x: None,
+                y: None,
+            }),
+            drop_audio: false,
+        };
         assert!(!finalize_is_noop(&p, &crop));
         // moov after mdat: remuxed.
         let b = std::fs::read(&p).unwrap();
@@ -311,17 +444,42 @@ mod tests {
         late.extend_from_slice(&b[moov..moov + moov_len]);
         std::fs::write(&p, late).unwrap();
         assert!(!finalize_is_noop(&p, &PostProcess::default()));
-        assert!(!finalize_is_noop(&dir.path().join("missing.mp4"), &PostProcess::default()));
+        assert!(!finalize_is_noop(
+            &dir.path().join("missing.mp4"),
+            &PostProcess::default()
+        ));
     }
 
     #[test]
     fn finalize_rejects_in_place_and_odd_crops() {
         let p = Path::new("/nonexistent/a.mp4");
         assert!(finalize(p, p, &PostProcess::default()).is_err());
-        let post = PostProcess { crop: Some(Crop { width: 1921, height: 1080, x: None, y: None }), drop_audio: false };
-        assert!(matches!(finalize(p, Path::new("/nonexistent/b.mp4"), &post), Err(MediaError::InvalidArgument(_))));
-        let from = PostProcess::from(&fastvideo_protocol::PostProcess { crop: Some((1920, 1080)), drop_audio: true });
-        assert_eq!(from.crop, Some(Crop { width: 1920, height: 1080, x: None, y: None }));
+        let post = PostProcess {
+            crop: Some(Crop {
+                width: 1921,
+                height: 1080,
+                x: None,
+                y: None,
+            }),
+            drop_audio: false,
+        };
+        assert!(matches!(
+            finalize(p, Path::new("/nonexistent/b.mp4"), &post),
+            Err(MediaError::InvalidArgument(_))
+        ));
+        let from = PostProcess::from(&fastvideo_protocol::PostProcess {
+            crop: Some((1920, 1080)),
+            drop_audio: true,
+        });
+        assert_eq!(
+            from.crop,
+            Some(Crop {
+                width: 1920,
+                height: 1080,
+                x: None,
+                y: None
+            })
+        );
         assert!(from.drop_audio);
     }
 }

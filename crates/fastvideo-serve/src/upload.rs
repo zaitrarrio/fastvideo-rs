@@ -94,19 +94,30 @@ pub struct Uploads {
 
 impl std::fmt::Debug for Uploads {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Uploads").field("part", &self.part).finish_non_exhaustive()
+        f.debug_struct("Uploads")
+            .field("part", &self.part)
+            .finish_non_exhaustive()
     }
 }
 
 impl Uploads {
     /// `part_bytes`: the part size (S3: ≥ 5 MiB except the last; tests use less).
     pub fn new(part_bytes: u64) -> Arc<Self> {
-        let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(10)).build().unwrap_or_default();
-        Arc::new(Self { jobs: Mutex::default(), part: part_bytes.max(1), http })
+        let http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .unwrap_or_default();
+        Arc::new(Self {
+            jobs: Mutex::default(),
+            part: part_bytes.max(1),
+            http,
+        })
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<JobId, mpsc::UnboundedSender<Ctl>>> {
-        self.jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Starts the job's upload thread (a second start of a job is ignored).
@@ -150,7 +161,10 @@ impl Uploads {
         if tx.send(Ctl::Finish(file.to_path_buf(), rtx)).is_err() {
             return Some(Err("the upload thread is gone".into()));
         }
-        Some(rrx.await.unwrap_or_else(|_| Err("the upload thread ended without an answer".into())))
+        Some(
+            rrx.await
+                .unwrap_or_else(|_| Err("the upload thread ended without an answer".into())),
+        )
     }
 
     /// The job ended without an output to store: its upload is aborted.
@@ -185,10 +199,18 @@ struct Job {
 }
 
 fn now_ms() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
-async fn run(spec: UploadSpec, part: u64, http: reqwest::Client, mut rx: mpsc::UnboundedReceiver<Ctl>) {
+async fn run(
+    spec: UploadSpec,
+    part: u64,
+    http: reqwest::Client,
+    mut rx: mpsc::UnboundedReceiver<Ctl>,
+) {
     let t0 = Instant::now();
     let job_id = spec.job;
     let mut job = Job {
@@ -247,17 +269,45 @@ async fn run(spec: UploadSpec, part: u64, http: reqwest::Client, mut rx: mpsc::U
 impl Job {
     async fn init(&mut self) -> Result<(), String> {
         let s = &self.spec;
-        let (job_id, attempt, lease, name, ct) = (s.job.to_string(), s.attempt, s.lease, s.name.clone(), s.content_type.clone());
+        let (job_id, attempt, lease, name, ct) = (
+            s.job.to_string(),
+            s.attempt,
+            s.lease,
+            s.name.clone(),
+            s.content_type.clone(),
+        );
         let mut last = String::new();
         for i in 0..3u32 {
             if i > 0 {
                 tokio::time::sleep(Duration::from_millis(500 << i)).await;
             }
             let (j, n, c) = (job_id.clone(), name.clone(), ct.clone());
-            let r = self.spec.link.request(move |req| WorkerMsg::UploadInit { req, job_id: j, attempt, lease, name: n, content_type: c, parts: GRANT_PARTS }, REQUEST_TIMEOUT).await;
+            let r = self
+                .spec
+                .link
+                .request(
+                    move |req| WorkerMsg::UploadInit {
+                        req,
+                        job_id: j,
+                        attempt,
+                        lease,
+                        name: n,
+                        content_type: c,
+                        parts: GRANT_PARTS,
+                    },
+                    REQUEST_TIMEOUT,
+                )
+                .await;
             match r {
                 Ok(DoMsg::UploadGrant { error: Some(e), .. }) => return Err(e),
-                Ok(DoMsg::UploadGrant { upload_id, key, bucket, part_urls, expires_ms, .. }) => {
+                Ok(DoMsg::UploadGrant {
+                    upload_id,
+                    key,
+                    bucket,
+                    part_urls,
+                    expires_ms,
+                    ..
+                }) => {
                     self.upload_id = upload_id;
                     self.key = key;
                     self.bucket = bucket;
@@ -285,15 +335,35 @@ impl Job {
             return Ok(u.clone());
         }
         let (job_id, upload_id) = (self.spec.job.to_string(), self.upload_id.clone());
-        let r = self.spec.link.request(move |req| WorkerMsg::UploadMore { req, job_id, upload_id, from: n, count: GRANT_PARTS }, REQUEST_TIMEOUT).await?;
+        let r = self
+            .spec
+            .link
+            .request(
+                move |req| WorkerMsg::UploadMore {
+                    req,
+                    job_id,
+                    upload_id,
+                    from: n,
+                    count: GRANT_PARTS,
+                },
+                REQUEST_TIMEOUT,
+            )
+            .await?;
         match r {
             DoMsg::UploadGrant { error: Some(e), .. } => Err(e),
-            DoMsg::UploadGrant { part_urls, expires_ms, .. } => {
+            DoMsg::UploadGrant {
+                part_urls,
+                expires_ms,
+                ..
+            } => {
                 if !fresh {
                     self.urls.clear();
                 }
                 self.add_urls(part_urls, expires_ms);
-                self.urls.get(&n).cloned().ok_or_else(|| format!("the grant has no URL for part {n}"))
+                self.urls
+                    .get(&n)
+                    .cloned()
+                    .ok_or_else(|| format!("the grant has no URL for part {n}"))
             }
             other => Err(format!("unexpected answer {other:?}")),
         }
@@ -308,10 +378,22 @@ impl Job {
                 tokio::time::sleep(Duration::from_millis(250 << i)).await;
             }
             let url = self.url(n).await?;
-            let r = self.http.put(&url).header("content-length", body.len()).body(body.clone()).timeout(Duration::from_secs(120)).send().await;
+            let r = self
+                .http
+                .put(&url)
+                .header("content-length", body.len())
+                .body(body.clone())
+                .timeout(Duration::from_secs(120))
+                .send()
+                .await;
             match r {
                 Ok(resp) if resp.status().is_success() => {
-                    let etag = resp.headers().get("etag").and_then(|v| v.to_str().ok()).unwrap_or_default().to_owned();
+                    let etag = resp
+                        .headers()
+                        .get("etag")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or_default()
+                        .to_owned();
                     if etag.is_empty() {
                         return Err(format!("part {n}: no ETag in the answer"));
                     }
@@ -339,11 +421,20 @@ impl Job {
             Err(_) => return Ok(()),
         };
         while len >= self.covered + self.part {
-            let n = u16::try_from(self.covered / self.part + 1).map_err(|_| "too many parts".to_owned())?;
-            let body = read_range(&self.spec.tail, self.covered, self.part).map_err(|e| format!("reading the output: {e}"))?;
+            let n = u16::try_from(self.covered / self.part + 1)
+                .map_err(|_| "too many parts".to_owned())?;
+            let body = read_range(&self.spec.tail, self.covered, self.part)
+                .map_err(|e| format!("reading the output: {e}"))?;
             let sha: [u8; 32] = Sha256::digest(&body).into();
             let etag = self.put(n, body).await?;
-            self.sent.insert(n, Sent { len: self.part, sha, etag });
+            self.sent.insert(
+                n,
+                Sent {
+                    len: self.part,
+                    sha,
+                    etag,
+                },
+            );
             self.covered += self.part;
             self.stats.bytes_early += self.part;
             self.stats.parts += 1;
@@ -354,19 +445,28 @@ impl Job {
     /// The pass over the finished file, then the commit.
     async fn finish(&mut self, file: &Path) -> Result<Committed, String> {
         let t0 = Instant::now();
-        let len = std::fs::metadata(file).map_err(|e| format!("the output: {e}"))?.len();
+        let len = std::fs::metadata(file)
+            .map_err(|e| format!("the output: {e}"))?
+            .len();
         let count = len.div_ceil(self.part).max(1);
-        let count = u16::try_from(count).map_err(|_| "too many parts for this part size".to_owned())?;
+        let count =
+            u16::try_from(count).map_err(|_| "too many parts for this part size".to_owned())?;
         let mut whole = Sha256::new();
         let mut f = std::fs::File::open(file).map_err(|e| format!("the output: {e}"))?;
         let mut parts = Vec::with_capacity(count as usize);
         for n in 1..=count {
-            let want = self.part.min(len.saturating_sub(u64::from(n - 1) * self.part));
+            let want = self
+                .part
+                .min(len.saturating_sub(u64::from(n - 1) * self.part));
             let mut body = vec![0u8; want as usize];
-            f.read_exact(&mut body).map_err(|e| format!("reading the output: {e}"))?;
+            f.read_exact(&mut body)
+                .map_err(|e| format!("reading the output: {e}"))?;
             whole.update(&body);
             let sha: [u8; 32] = Sha256::digest(&body).into();
-            let same = self.sent.get(&n).is_some_and(|s| s.len == want && s.sha == sha);
+            let same = self
+                .sent
+                .get(&n)
+                .is_some_and(|s| s.len == want && s.sha == sha);
             if !same {
                 if self.sent.contains_key(&n) {
                     self.stats.bytes_resent += want;
@@ -375,37 +475,85 @@ impl Job {
                 }
                 self.stats.bytes_late += want;
                 let etag = self.put(n, body).await?;
-                self.sent.insert(n, Sent { len: want, sha, etag });
+                self.sent.insert(
+                    n,
+                    Sent {
+                        len: want,
+                        sha,
+                        etag,
+                    },
+                );
             }
-            parts.push(Part { n, etag: self.sent[&n].etag.clone() });
+            parts.push(Part {
+                n,
+                etag: self.sent[&n].etag.clone(),
+            });
         }
         let sha256 = fastvideo_dispatch_proto::presign::hex(&whole.finalize());
-        let (job_id, attempt, lease, upload_id) = (self.spec.job.to_string(), self.spec.attempt, self.spec.lease, self.upload_id.clone());
+        let (job_id, attempt, lease, upload_id) = (
+            self.spec.job.to_string(),
+            self.spec.attempt,
+            self.spec.lease,
+            self.upload_id.clone(),
+        );
         let sha2 = sha256.clone();
         let r = self
             .spec
             .link
-            .request(move |req| WorkerMsg::UploadDone { req, job_id, attempt, lease, upload_id, parts, bytes: len, sha256: sha2 }, REQUEST_TIMEOUT)
+            .request(
+                move |req| WorkerMsg::UploadDone {
+                    req,
+                    job_id,
+                    attempt,
+                    lease,
+                    upload_id,
+                    parts,
+                    bytes: len,
+                    sha256: sha2,
+                },
+                REQUEST_TIMEOUT,
+            )
             .await?;
         self.stats.finish_to_commit_ms = t0.elapsed().as_millis() as u64;
         match r {
-            DoMsg::UploadCommitted { ok: true, key, bytes, .. } => {
+            DoMsg::UploadCommitted {
+                ok: true,
+                key,
+                bytes,
+                ..
+            } => {
                 let st = self.stats;
                 metrics::counter!("fv_worker_upload_bytes_early_total").increment(st.bytes_early);
                 metrics::counter!("fv_worker_upload_bytes_late_total").increment(st.bytes_late);
                 metrics::counter!("fv_worker_upload_bytes_resent_total").increment(st.bytes_resent);
-                metrics::histogram!("fv_worker_upload_tail_seconds").record(st.finish_to_commit_ms as f64 / 1e3);
+                metrics::histogram!("fv_worker_upload_tail_seconds")
+                    .record(st.finish_to_commit_ms as f64 / 1e3);
                 tracing::info!(job = %self.spec.job, key = %key, bytes, early = st.bytes_early, late = st.bytes_late, resent = st.bytes_resent, tail_ms = st.finish_to_commit_ms, "upload: committed");
-                Ok(Committed { bucket: self.bucket.clone(), key: if key.is_empty() { self.key.clone() } else { key }, bytes, sha256, stats: st })
+                Ok(Committed {
+                    bucket: self.bucket.clone(),
+                    key: if key.is_empty() {
+                        self.key.clone()
+                    } else {
+                        key
+                    },
+                    bytes,
+                    sha256,
+                    stats: st,
+                })
             }
-            DoMsg::UploadCommitted { error, .. } => Err(error.unwrap_or_else(|| "the object refused the upload".into())),
+            DoMsg::UploadCommitted { error, .. } => {
+                Err(error.unwrap_or_else(|| "the object refused the upload".into()))
+            }
             other => Err(format!("unexpected answer {other:?}")),
         }
     }
 
     fn abort(&self) {
         if !self.upload_id.is_empty() {
-            self.spec.link.send(WorkerMsg::UploadAbort { job_id: self.spec.job.to_string(), upload_id: self.upload_id.clone() });
+            self.spec.link.send(WorkerMsg::UploadAbort {
+                job_id: self.spec.job.to_string(),
+                upload_id: self.upload_id.clone(),
+            });
         }
     }
 }
@@ -462,7 +610,10 @@ impl ArtifactStore for DirectStore {
                             mime: meta.mime,
                             file_name: meta.file_name,
                             bytes: c.bytes,
-                            location: ArtifactLocation::Object { bucket: c.bucket, key: c.key },
+                            location: ArtifactLocation::Object {
+                                bucket: c.bucket,
+                                key: c.key,
+                            },
                             width: meta.width,
                             height: meta.height,
                             frames: meta.frames,
@@ -506,7 +657,11 @@ mod tests {
     /// serve-kit's `S3Config::presign` does.
     #[test]
     fn presigner_matches_serve_kit() {
-        for (endpoint, path_style) in [("https://acct.r2.cloudflarestorage.com", true), ("https://s3.amazonaws.com", false), ("http://127.0.0.1:9000/base", true)] {
+        for (endpoint, path_style) in [
+            ("https://acct.r2.cloudflarestorage.com", true),
+            ("https://s3.amazonaws.com", false),
+            ("http://127.0.0.1:9000/base", true),
+        ] {
             let kit = S3Config {
                 endpoint: url::Url::parse(endpoint).unwrap(),
                 region: "auto".into(),
@@ -516,7 +671,14 @@ mod tests {
                 path_style,
                 prefix: String::new(),
             };
-            let ours = S3Presign { endpoint: endpoint.into(), region: "auto".into(), bucket: "outs".into(), access_key: "AK".into(), secret_key: "SK/x+y".into(), path_style };
+            let ours = S3Presign {
+                endpoint: endpoint.into(),
+                region: "auto".into(),
+                bucket: "outs".into(),
+                access_key: "AK".into(),
+                secret_key: "SK/x+y".into(),
+                path_style,
+            };
             let now = time::OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap();
             for key in ["outputs/wan/j1/1-1/out.mp4", "a b/ü.mp4"] {
                 let a = kit.presign("PUT", key, Duration::from_secs(3600), now);
@@ -548,7 +710,10 @@ mod tests {
             mime: "video/mp4".into(),
             file_name: "output.mp4".into(),
             bytes: 1,
-            location: ArtifactLocation::Object { bucket: "outs".into(), key: "outputs/h3/j/1-1/output.mp4".into() },
+            location: ArtifactLocation::Object {
+                bucket: "outs".into(),
+                key: "outputs/h3/j/1-1/output.mp4".into(),
+            },
             width: 1,
             height: 1,
             frames: 1,
@@ -559,14 +724,29 @@ mod tests {
         let day = Duration::from_secs(86_400);
         let u1 = store.signer().url_issued(&a, issued, day);
         std::thread::sleep(Duration::from_millis(1100));
-        assert_eq!(store.signer().url_issued(&a, issued, day), u1, "same URL a second later");
-        assert_eq!(u1, inner.url_issued(&a, issued, day), "the inner store's URL");
+        assert_eq!(
+            store.signer().url_issued(&a, issued, day),
+            u1,
+            "same URL a second later"
+        );
+        assert_eq!(
+            u1,
+            inner.url_issued(&a, issued, day),
+            "the inner store's URL"
+        );
     }
 
     #[test]
     fn outputs_name_their_job() {
         let id = fastvideo_protocol::JobId::new();
-        assert_eq!(job_of(&std::path::Path::new("/s/engine-out").join(id.to_string()).join("output.mp4")), Some(id));
+        assert_eq!(
+            job_of(
+                &std::path::Path::new("/s/engine-out")
+                    .join(id.to_string())
+                    .join("output.mp4")
+            ),
+            Some(id)
+        );
         assert_eq!(job_of(std::path::Path::new("/s/outputs/x/final.mp4")), None);
     }
 }

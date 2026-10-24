@@ -4,7 +4,11 @@
 ///
 /// Upstream: `stack(layers, dim=1)` → `[B, L, S, D]` then
 /// `permute(0, 2, 1, 3).reshape(B, S, L*D)`.
-pub fn stack_hidden_layers(layers: &[&[f32]], seq: usize, hidden: usize) -> Result<Vec<f32>, String> {
+pub fn stack_hidden_layers(
+    layers: &[&[f32]],
+    seq: usize,
+    hidden: usize,
+) -> Result<Vec<f32>, String> {
     if layers.is_empty() {
         return Err("need at least one hidden-state layer".into());
     }
@@ -62,8 +66,13 @@ pub fn flux2_time_shift(t: f64, mu: f64) -> f64 {
 ///
 /// Pixel order matches Diffusers Flux pack: `(0,0), (0,1), (1,0), (1,1)`
 /// stacked along channels.
-pub fn pack_latents_2x2(input: &[f32], channels: usize, height: usize, width: usize) -> Result<Vec<f32>, String> {
-    if height % 2 != 0 || width % 2 != 0 {
+pub fn pack_latents_2x2(
+    input: &[f32],
+    channels: usize,
+    height: usize,
+    width: usize,
+) -> Result<Vec<f32>, String> {
+    if !height.is_multiple_of(2) || !width.is_multiple_of(2) {
         return Err(format!("pack wants even H/W, got {height}x{width}"));
     }
     let spatial = height * width;
@@ -93,7 +102,12 @@ pub fn pack_latents_2x2(input: &[f32], channels: usize, height: usize, width: us
 }
 
 /// Inverse of [`pack_latents_2x2`]: `[C*4, H/2, W/2]` → `[C, H, W]`.
-pub fn unpatchify_2x2(input: &[f32], channels: usize, packed_h: usize, packed_w: usize) -> Result<Vec<f32>, String> {
+pub fn unpatchify_2x2(
+    input: &[f32],
+    channels: usize,
+    packed_h: usize,
+    packed_w: usize,
+) -> Result<Vec<f32>, String> {
     let want = channels * 4 * packed_h * packed_w;
     if input.len() != want {
         return Err(format!("unpatchify want {want} got {}", input.len()));
@@ -173,7 +187,10 @@ mod tests {
         let a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let b = vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0];
         let out = stack_hidden_layers(&[&a, &b], seq, hidden).unwrap();
-        assert_eq!(out, vec![1.0, 2.0, 10.0, 20.0, 3.0, 4.0, 30.0, 40.0, 5.0, 6.0, 50.0, 60.0]);
+        assert_eq!(
+            out,
+            vec![1.0, 2.0, 10.0, 20.0, 3.0, 4.0, 30.0, 40.0, 5.0, 6.0, 50.0, 60.0]
+        );
     }
 
     #[test]

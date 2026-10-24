@@ -3,6 +3,7 @@ name = "fastvideo-cudarc"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 description = "cudarc CUDA Wan T2V backend for fastvideo-rs."
 
 [dependencies]

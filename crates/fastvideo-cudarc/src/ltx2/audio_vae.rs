@@ -721,7 +721,7 @@ fn log_mel(
     sample_rate: u32,
     cfg: &Ltx2AudioVaeConfig,
 ) -> Result<CudaTensor> {
-    if channels == 0 || planar.len() % channels != 0 {
+    if channels == 0 || !planar.len().is_multiple_of(channels) {
         return Err(msg(format!(
             "audio mel: {} samples is not {} channels",
             planar.len(),

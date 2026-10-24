@@ -41,6 +41,9 @@ fn relative_position_bucket(seq_len: usize, num_buckets: usize, max_distance: us
     buckets
 }
 
+// One per model block, built once; boxing the large variant would only add an
+// indirection on the forward path.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 enum DenseFf {
     Relu {

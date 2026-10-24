@@ -87,7 +87,9 @@ fn wanted(name: &str) -> bool {
 
 impl Discovery {
     /// From explicit pairs (tests, or a captured environment).
-    pub fn from_pairs<K: Into<String>, V: Into<String>>(pairs: impl IntoIterator<Item = (K, V)>) -> Self {
+    pub fn from_pairs<K: Into<String>, V: Into<String>>(
+        pairs: impl IntoIterator<Item = (K, V)>,
+    ) -> Self {
         let vars = pairs
             .into_iter()
             .map(|(k, v)| (k.into(), v.into()))
@@ -124,16 +126,21 @@ impl Discovery {
 
     /// The public IP the platform reports.
     pub fn public_ip(&self) -> Option<IpAddr> {
-        self.var("RUNPOD_PUBLIC_IP").or_else(|| self.var("PUBLIC_IPADDR")).and_then(|s| s.parse().ok())
+        self.var("RUNPOD_PUBLIC_IP")
+            .or_else(|| self.var("PUBLIC_IPADDR"))
+            .and_then(|s| s.parse().ok())
     }
 
     fn port(&self, var: &str) -> Option<u16> {
-        self.var(var).and_then(|s| s.parse().ok()).filter(|p| *p != 0)
+        self.var(var)
+            .and_then(|s| s.parse().ok())
+            .filter(|p| *p != 0)
     }
 
     /// External TCP port for internal port `internal` (Runpod or Vast).
     pub fn tcp_port(&self, internal: u32) -> Option<u16> {
-        self.port(&format!("RUNPOD_TCP_PORT_{internal}")).or_else(|| self.port(&format!("VAST_TCP_PORT_{internal}")))
+        self.port(&format!("RUNPOD_TCP_PORT_{internal}"))
+            .or_else(|| self.port(&format!("VAST_TCP_PORT_{internal}")))
     }
 
     /// External UDP port for internal port `internal` (Vast only; Runpod has
@@ -148,7 +155,12 @@ impl Discovery {
     ///
     /// Empty when the platform maps nothing (e.g. Runpod serverless without
     /// "Expose TCP ports"): streaming then has to go out over WHIP.
-    pub fn ice_candidates(&self, udp_port: u32, tcp_port: u32, public_ip: &str) -> Vec<IceCandidate> {
+    pub fn ice_candidates(
+        &self,
+        udp_port: u32,
+        tcp_port: u32,
+        public_ip: &str,
+    ) -> Vec<IceCandidate> {
         let ip = match public_ip.trim() {
             "" | "auto" => self.public_ip(),
             s => s.parse().ok(),
@@ -173,7 +185,11 @@ impl Discovery {
             }
         }
         if let Some(ext) = self.tcp_port(tcp_port) {
-            out.push(IceCandidate { proto: IceProto::Tcp, public: SocketAddr::new(ip, ext), local_port: local(tcp_port, ext) });
+            out.push(IceCandidate {
+                proto: IceProto::Tcp,
+                public: SocketAddr::new(ip, ext),
+                local_port: local(tcp_port, ext),
+            });
         }
         out
     }
@@ -241,14 +257,27 @@ mod tests {
         // Symmetric request: listen on the assigned port.
         assert_eq!(c[0].local_port, 41234);
         assert_eq!(c[1].proto, IceProto::Tcp);
-        assert_eq!(d.public_base_url(8000).as_deref(), Some("http://203.0.113.7:40001"));
+        assert_eq!(
+            d.public_base_url(8000).as_deref(),
+            Some("http://203.0.113.7:40001")
+        );
     }
 
     #[test]
     fn vast_mapped_port_listens_on_internal() {
-        let d = Discovery::from_pairs([("PUBLIC_IPADDR", "203.0.113.7"), ("VAST_UDP_PORT_5000", "41234")]);
+        let d = Discovery::from_pairs([
+            ("PUBLIC_IPADDR", "203.0.113.7"),
+            ("VAST_UDP_PORT_5000", "41234"),
+        ]);
         let c = d.ice_candidates(5000, 5001, "");
-        assert_eq!(c, vec![IceCandidate { proto: IceProto::Udp, public: "203.0.113.7:41234".parse().unwrap(), local_port: 5000 }]);
+        assert_eq!(
+            c,
+            vec![IceCandidate {
+                proto: IceProto::Udp,
+                public: "203.0.113.7:41234".parse().unwrap(),
+                local_port: 5000
+            }]
+        );
     }
 
     #[test]
@@ -270,19 +299,39 @@ mod tests {
             ("RUNPOD_TCP_PORT_70000", "40123"),
         ]);
         let c = d.ice_candidates(70010, 70000, "auto");
-        assert_eq!(c, vec![IceCandidate { proto: IceProto::Tcp, public: "198.51.100.2:40123".parse().unwrap(), local_port: 40123 }]);
-        assert_eq!(d.public_base_url(8000).as_deref(), Some("https://abc123-8000.proxy.runpod.net"));
+        assert_eq!(
+            c,
+            vec![IceCandidate {
+                proto: IceProto::Tcp,
+                public: "198.51.100.2:40123".parse().unwrap(),
+                local_port: 40123
+            }]
+        );
+        assert_eq!(
+            d.public_base_url(8000).as_deref(),
+            Some("https://abc123-8000.proxy.runpod.net")
+        );
     }
 
     #[test]
     fn serverless_lb_and_local() {
-        let q = Discovery::from_pairs([("RUNPOD_WEBHOOK_GET_JOB", "https://x/job-take/$ID?gpu=a"), ("RUNPOD_POD_ID", "w1")]);
+        let q = Discovery::from_pairs([
+            ("RUNPOD_WEBHOOK_GET_JOB", "https://x/job-take/$ID?gpu=a"),
+            ("RUNPOD_POD_ID", "w1"),
+        ]);
         assert_eq!(q.platform(), Platform::RunpodServerless);
         assert_eq!(q.public_base_url(8000), None);
         assert!(q.ice_candidates(70010, 70000, "auto").is_empty());
-        let lb = Discovery::from_pairs([("RUNPOD_ENDPOINT_ID", "ep1"), ("PORT", "8000"), ("RUNPOD_POD_ID", "w1")]);
+        let lb = Discovery::from_pairs([
+            ("RUNPOD_ENDPOINT_ID", "ep1"),
+            ("PORT", "8000"),
+            ("RUNPOD_POD_ID", "w1"),
+        ]);
         assert_eq!(lb.platform(), Platform::RunpodLoadBalancer);
-        assert_eq!(lb.public_base_url(8000).as_deref(), Some("https://ep1.api.runpod.ai"));
+        assert_eq!(
+            lb.public_base_url(8000).as_deref(),
+            Some("https://ep1.api.runpod.ai")
+        );
         let l = Discovery::from_pairs(Vec::<(String, String)>::new());
         assert_eq!(l.platform(), Platform::Local);
         // An explicit IP still yields nothing without mapped ports.

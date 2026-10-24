@@ -158,7 +158,12 @@ impl H3DitWeights {
 }
 
 /// Device bytes of DiT block `i` resident as `weights` stores it.
-pub fn block_bytes_as(cfg: &H3TransformerConfig, i: usize, gate: bool, weights: H3DitWeights) -> u64 {
+pub fn block_bytes_as(
+    cfg: &H3TransformerConfig,
+    i: usize,
+    gate: bool,
+    weights: H3DitWeights,
+) -> u64 {
     let (h, inner, f) = (
         cfg.hidden_size as u64,
         cfg.inner_dim() as u64,
@@ -279,7 +284,8 @@ pub fn video_vae_nvfp4_bytes(v: &H3VideoVaeConfig) -> u64 {
     let d = v.decoder_dim() as u64;
     let hid = d * v.decoder_ffn_mult as u64;
     let params = 4 * d * d + d * 2 * hid + hid * d;
-    video_vae_bytes(v) - video_vae_block_linear_bf16_bytes(v) + v.decoder_num_layers as u64 * (params / 2 + params / 16)
+    video_vae_bytes(v) - video_vae_block_linear_bf16_bytes(v)
+        + v.decoder_num_layers as u64 * (params / 2 + params / 16)
 }
 
 /// The video decoder held for `linears` ([`H3VaeLinears`]).
@@ -820,7 +826,8 @@ mod tests {
     #[test]
     fn the_nvfp4_video_decoder_is_priced_as_its_published_linears() {
         let v = H3VideoVaeConfig::fasth3_8step();
-        let linears = video_vae_nvfp4_bytes(&v) - (video_vae_bytes(&v) - video_vae_block_linear_bf16_bytes(&v));
+        let linears = video_vae_nvfp4_bytes(&v)
+            - (video_vae_bytes(&v) - video_vae_block_linear_bf16_bytes(&v));
         assert!((1.24..1.30).contains(&gib(linears)), "{:.3}", gib(linears));
         let (bf16, mx, nv) = (
             video_vae_held_bytes(&v, H3VaeLinears::Bf16),
@@ -828,15 +835,35 @@ mod tests {
             video_vae_held_bytes(&v, H3VaeLinears::Nvfp4),
         );
         assert!(nv < bf16 && bf16 < mx);
-        assert!((5.3..5.8).contains(&gib(mx - nv)), "mxfp8 - nvfp4 {:.2}", gib(mx - nv));
-        assert!((1.25..1.45).contains(&gib(nv)), "the whole NVFP4 decoder {:.3}", gib(nv));
+        assert!(
+            (5.3..5.8).contains(&gib(mx - nv)),
+            "mxfp8 - nvfp4 {:.2}",
+            gib(mx - nv)
+        );
+        assert!(
+            (1.25..1.45).contains(&gib(nv)),
+            "the whole NVFP4 decoder {:.3}",
+            gib(nv)
+        );
         let g = H3Geometry::default_16x9(5).unwrap();
-        let with = |vae| plan(&g, H3PlanOptions { vae, ..H3PlanOptions::default() });
+        let with = |vae| {
+            plan(
+                &g,
+                H3PlanOptions {
+                    vae,
+                    ..H3PlanOptions::default()
+                },
+            )
+        };
         let (m, n) = (with(H3VaeLinears::Mxfp8), with(H3VaeLinears::Nvfp4));
         for (a, b) in m.stages.iter().zip(&n.stages) {
             assert_eq!(a.total(), b.total() + (mx - nv), "resident {}", a.stage);
         }
-        assert_eq!(H3PlanOptions::default().vae, H3VaeLinears::Mxfp8, "the default stays bf16 + MXFP8");
+        assert_eq!(
+            H3PlanOptions::default().vae,
+            H3VaeLinears::Mxfp8,
+            "the default stays bf16 + MXFP8"
+        );
     }
 
     /// The resident FP8 encoder is 22.7 GiB, what the PRO 6000 run's
@@ -899,8 +926,16 @@ mod tests {
             );
             assert_eq!(bf16_vae.peak(), bf16_vae.stage("denoise").unwrap().total());
             let decode = streamed.stage("video_decode").unwrap();
-            assert!(decode.weights < 8 * GIB, "{name}: {:.2}", gib(decode.weights));
-            assert!(decode.total() < 16 * GIB, "{name}: {:.2}", gib(decode.total()));
+            assert!(
+                decode.weights < 8 * GIB,
+                "{name}: {:.2}",
+                gib(decode.weights)
+            );
+            assert!(
+                decode.total() < 16 * GIB,
+                "{name}: {:.2}",
+                gib(decode.total())
+            );
         }
     }
 
@@ -914,7 +949,9 @@ mod tests {
         eprintln!("1080P tier: planned resident peak {min:.2} GiB");
         assert!((60.0..79.0).contains(&min), "{min:.2}");
         let at = |h: usize, w: usize, s: usize| {
-            gib(measured_working_bytes(&H3Geometry::new(h, w, s * 24).unwrap()))
+            gib(measured_working_bytes(
+                &H3Geometry::new(h, w, s * 24).unwrap(),
+            ))
         };
         let (hd5, hd10, hd15, sd5, sd15) = (
             at(1088, 1920, 5),
@@ -931,7 +968,6 @@ mod tests {
         assert!(hd10 > 1.8 * hd5 - 2.0 && hd15 > hd10);
     }
 
-
     /// The resident DiT at the precision it loads with. MXFP8 (45 of 50
     /// blocks, gate rows bf16) is the 23.87 GiB `dit` the RTX PRO 6000 ledger
     /// reported for the VSA turbo recipe (docs/perf/raw-inference.md); NVFP4
@@ -941,14 +977,19 @@ mod tests {
         let cfg = H3TransformerConfig::fasth3_8step();
         let at = |w, gate| gib(dit_blocks_bytes(&cfg, gate, w));
         let bf16 = at(H3DitWeights::Bf16, true);
-        assert_eq!(dit_blocks_bytes(&cfg, true, H3DitWeights::Bf16), cfg.num_layers as u64 * block_bytes(&cfg, true));
+        assert_eq!(
+            dit_blocks_bytes(&cfg, true, H3DitWeights::Bf16),
+            cfg.num_layers as u64 * block_bytes(&cfg, true)
+        );
         let mx = at(H3DitWeights::Mxfp8, true);
         assert!((23.0..24.5).contains(&mx), "{mx:.2}");
         let w8 = at(H3DitWeights::W8a8, true);
         assert!(w8 < mx && w8 > bf16 / 2.0, "{w8:.2}");
         let nv = at(H3DitWeights::Nvfp4, true);
         assert!((10.5..11.5).contains(&nv), "{nv:.2}");
-        eprintln!("dit blocks (gated): bf16 {bf16:.2}, mxfp8 {mx:.2}, w8a8 {w8:.2}, nvfp4 {nv:.2} GiB");
+        eprintln!(
+            "dit blocks (gated): bf16 {bf16:.2}, mxfp8 {mx:.2}, w8a8 {w8:.2}, nvfp4 {nv:.2} GiB"
+        );
         // The plan's resident stages move by exactly the difference.
         let g = H3Geometry::default_16x9(5).unwrap();
         let p = |dit| {
@@ -1003,8 +1044,14 @@ mod tests {
         let rows = g.sequence_length(PLAN_TEXT_TOKENS);
         assert_eq!(d.rows, rows);
         assert_eq!(d.reserve, denoise_reserve_bytes(rows, true));
-        assert_eq!(d.encoder, text_encoder_fp8_bytes(&H3TextEncoderConfig::fasth3_8step()));
-        assert_eq!(d.need, d.encoder + (d.weights + d.reserve + RUNTIME_ALLOWANCE).max(d.plan_peak));
+        assert_eq!(
+            d.encoder,
+            text_encoder_fp8_bytes(&H3TextEncoderConfig::fasth3_8step())
+        );
+        assert_eq!(
+            d.need,
+            d.encoder + (d.weights + d.reserve + RUNTIME_ALLOWANCE).max(d.plan_peak)
+        );
         assert!(d.resident);
         let floor = AutoTextEncoderInputs {
             dit_need: Some(80 * GIB),

@@ -35,7 +35,11 @@ async fn python_fal_client() {
         return;
     };
     // A free port for the TLS side; the server must know it before it starts.
-    let tls_port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let tls_port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     let f = fixture(Opts {
         engine: Engine::Fake,
         public_base: format!("https://127.0.0.1:{tls_port}"),
@@ -49,12 +53,20 @@ async fn python_fal_client() {
     let app = f.app.clone();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/queue_compat/fal_client_compat.py");
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/queue_compat/fal_client_compat.py");
     let out = tokio::time::timeout(
         Duration::from_secs(600),
         tokio::process::Command::new(&python)
             .arg(&script)
-            .args(["--upstream", &upstream.to_string(), "--tls-port", &tls_port.to_string(), "--key", KEY])
+            .args([
+                "--upstream",
+                &upstream.to_string(),
+                "--tls-port",
+                &tls_port.to_string(),
+                "--key",
+                KEY,
+            ])
             .output(),
     )
     .await
@@ -62,10 +74,17 @@ async fn python_fal_client() {
     .expect("python runs");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success(), "fal-client compat failed\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        out.status.success(),
+        "fal-client compat failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
     eprintln!("fal-client compat: {stdout}");
-    let summary: serde_json::Value = serde_json::from_str(stdout.lines().last().unwrap_or("{}")).unwrap();
-    assert!(summary["checks"].as_array().is_some_and(|c| c.len() >= 10), "{summary}");
+    let summary: serde_json::Value =
+        serde_json::from_str(stdout.lines().last().unwrap_or("{}")).unwrap();
+    assert!(
+        summary["checks"].as_array().is_some_and(|c| c.len() >= 10),
+        "{summary}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -77,25 +96,48 @@ async fn js_fal_client() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let base = format!("http://127.0.0.1:{port}");
-    let f = fixture(Opts { engine: Engine::Fake, public_base: base.clone(), step: Duration::from_millis(60), ..Opts::default() }).await;
+    let f = fixture(Opts {
+        engine: Engine::Fake,
+        public_base: base.clone(),
+        step: Duration::from_millis(60),
+        ..Opts::default()
+    })
+    .await;
     let app = f.app.clone();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let png = f.dir.join("in.png");
-    image::RgbImage::from_pixel(96, 128, image::Rgb([200, 40, 40])).save(&png).unwrap();
+    image::RgbImage::from_pixel(96, 128, image::Rgb([200, 40, 40]))
+        .save(&png)
+        .unwrap();
 
     let node = std::env::var_os("FV_NODE").unwrap_or_else(|| "node".into());
-    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/queue_compat/fal_js_compat.mjs");
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/queue_compat/fal_js_compat.mjs");
     let out = tokio::time::timeout(
         Duration::from_secs(900),
-        tokio::process::Command::new(node).arg(&script).arg(&dir).arg(&base).arg(KEY).arg(&png).output(),
+        tokio::process::Command::new(node)
+            .arg(&script)
+            .arg(&dir)
+            .arg(&base)
+            .arg(KEY)
+            .arg(&png)
+            .output(),
     )
     .await
     .expect("compat script timed out")
     .expect("node runs");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success(), "@fal-ai/client compat failed\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        out.status.success(),
+        "@fal-ai/client compat failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
     eprintln!("@fal-ai/client compat: {stdout}");
-    let summary: serde_json::Value = serde_json::from_str(stdout.lines().last().unwrap_or("{}")).unwrap();
-    assert_eq!(summary["checks"].as_array().map(Vec::len), Some(12), "{summary}");
+    let summary: serde_json::Value =
+        serde_json::from_str(stdout.lines().last().unwrap_or("{}")).unwrap();
+    assert_eq!(
+        summary["checks"].as_array().map(Vec::len),
+        Some(12),
+        "{summary}"
+    );
 }

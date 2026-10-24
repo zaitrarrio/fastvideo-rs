@@ -267,7 +267,10 @@ pub fn write_tree(
     }
     let path = out_dir.join("model.safetensors");
     let layers_s = layers.to_string();
-    let data = |i: usize| -> std::result::Result<std::borrow::Cow<'_, [u8]>, fastvideo_loader::LoaderError> {
+    let data = |i: usize| -> std::result::Result<
+        std::borrow::Cow<'_, [u8]>,
+        fastvideo_loader::LoaderError,
+    > {
         Ok(match parts[i] {
             Part::Codes(c) => std::borrow::Cow::Borrowed(&captured[c].1[..]),
             Part::Scales(c) => std::borrow::Cow::Owned(

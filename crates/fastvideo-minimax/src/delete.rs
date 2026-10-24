@@ -47,8 +47,17 @@ pub async fn delete_task(ctx: &ServeCtx, job: Job) -> Result<HttpReply, ApiError
     }
 }
 
-pub(crate) async fn handle(mm: Arc<MiniMax>, State(ctx): State<ServeCtx>, Path(task_id): Path<String>, headers: HeaderMap) -> Response {
-    let ecx = ErrorCtx { request_id: Some(random_token()), route: Some("/v2/video_generation/{task_id}".into()), external_id: Some(task_id.clone()) };
+pub(crate) async fn handle(
+    mm: Arc<MiniMax>,
+    State(ctx): State<ServeCtx>,
+    Path(task_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let ecx = ErrorCtx {
+        request_id: Some(random_token()),
+        route: Some("/v2/video_generation/{task_id}".into()),
+        external_id: Some(task_id.clone()),
+    };
     let reply = async {
         let owner = ctx.auth().authenticate(ProtocolId::MiniMaxV2, &headers)?;
         let job = find_job(&ctx, &*mm, &task_id, owner.as_ref()).await?;

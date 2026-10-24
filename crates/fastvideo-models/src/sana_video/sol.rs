@@ -127,7 +127,11 @@ pub const ASPECT_RATIO_720_BIN: [(f64, usize, usize); 11] = [
 
 /// `VideoProcessor.classify_height_width_bin`: the bin whose ratio key is
 /// closest to `height / width`. Returns the binned `(height, width)`.
-pub fn classify_height_width_bin(height: usize, width: usize, sample_size: usize) -> (usize, usize) {
+pub fn classify_height_width_bin(
+    height: usize,
+    width: usize,
+    sample_size: usize,
+) -> (usize, usize) {
     let bins: &[(f64, usize, usize)] = if sample_size == 22 {
         &ASPECT_RATIO_720_BIN
     } else {

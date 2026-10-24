@@ -104,8 +104,9 @@ async fn two_hosts_exchange_data_and_av() {
     let udp_port = server.udp_addr().unwrap().port();
     let tcp_port = server.tcp_addr().unwrap().port();
     assert!(
-        a.candidates().iter().any(|c| c.contains(" udp ")
-            && c.contains(&format!(" 127.0.0.1 {udp_port} typ host"))),
+        a.candidates()
+            .iter()
+            .any(|c| c.contains(" udp ") && c.contains(&format!(" 127.0.0.1 {udp_port} typ host"))),
         "{answer}"
     );
     assert!(

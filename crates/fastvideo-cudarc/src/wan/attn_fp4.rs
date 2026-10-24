@@ -30,7 +30,8 @@ pub const P_ENV: &str = "FASTVIDEO_H3_VSA_FP4_P";
 /// The explicit setting: `Some(true)` for `1`, `Some(false)` for `0` / `false`
 /// / `off`, `None` when unset (the NVFP4 tier's default: on where available).
 pub fn setting() -> Option<bool> {
-    fastvideo_models::techniques::settings::var(ENV).map(|_| crate::wan::envflag::bool_flag(ENV, true))
+    fastvideo_models::techniques::settings::var(ENV)
+        .map(|_| crate::wan::envflag::bool_flag(ENV, true))
 }
 
 /// Single-level P quantization (upstream's `single_level_p_quant=True`).
@@ -191,24 +192,40 @@ mod imp {
             )));
         }
         let timer = std::time::Instant::now();
-        let (module, origin) = if let Some((_, cubin)) = aot::AOT_ATTN_FP4.iter().find(|(sm, _)| *sm == 120) {
-            let path = std::env::temp_dir().join(format!("fv-attn-fp4-{}-sm120a.cubin", std::process::id()));
-            std::fs::write(&path, cubin).map_err(err)?;
-            let loaded = dev.ctx.load_module(cudarc::nvrtc::Ptx::from_file(&path));
-            let _ = std::fs::remove_file(&path);
-            (loaded.map_err(err)?, "cubin sm_120a".to_string())
-        } else {
-            let opts = cudarc::nvrtc::CompileOptions {
-                arch: Some("compute_120a"),
-                use_fast_math: Some(true),
-                ftz: Some(true),
-                options: vec!["-std=c++17".into()],
-                ..Default::default()
-            };
-            let (m, o) = crate::wan::nvrtc_sass::load(&dev.ctx, SRC, &opts, Some("sm_120a"), &["compute_120a"], "attn-fp4")
+        let (module, origin) =
+            if let Some((_, cubin)) = aot::AOT_ATTN_FP4.iter().find(|(sm, _)| *sm == 120) {
+                let path = std::env::temp_dir()
+                    .join(format!("fv-attn-fp4-{}-sm120a.cubin", std::process::id()));
+                std::fs::write(&path, cubin).map_err(err)?;
+                let loaded = dev.ctx.load_module(cudarc::nvrtc::Ptx::from_file(&path));
+                let _ = std::fs::remove_file(&path);
+                (loaded.map_err(err)?, "cubin sm_120a".to_string())
+            } else {
+                let opts = cudarc::nvrtc::CompileOptions {
+                    arch: Some("compute_120a"),
+                    use_fast_math: Some(true),
+                    ftz: Some(true),
+                    options: vec!["-std=c++17".into()],
+                    ..Default::default()
+                };
+                let (m, o) = crate::wan::nvrtc_sass::load(
+                    &dev.ctx,
+                    SRC,
+                    &opts,
+                    Some("sm_120a"),
+                    &["compute_120a"],
+                    "attn-fp4",
+                )
                 .map_err(err)?;
-            (m, if o.sass { "nvrtc sass sm_120a".to_string() } else { "nvrtc ptx".to_string() })
-        };
+                (
+                    m,
+                    if o.sass {
+                        "nvrtc sass sm_120a".to_string()
+                    } else {
+                        "nvrtc ptx".to_string()
+                    },
+                )
+            };
         let f = |name: &str| module.load_function(name).map_err(err);
         let k = Kernels {
             quant: f("attn_fp4_quant_tile")?,
@@ -272,7 +289,12 @@ mod imp {
     }
 
     /// Quantize q / k / v into tile-slot FP4 ([`Fp4Tiles`]).
-    pub fn quantize(input: &Fp4In<'_>, plan: &VsaPlanDev, bh: usize, seq: usize) -> Result<Fp4Tiles> {
+    pub fn quantize(
+        input: &Fp4In<'_>,
+        plan: &VsaPlanDev,
+        bh: usize,
+        seq: usize,
+    ) -> Result<Fp4Tiles> {
         if plan.tile_elems != 64 {
             return Err(err(format!("64-slot tiles only (got {})", plan.tile_elems)));
         }
@@ -330,7 +352,9 @@ mod imp {
         let (bh, nb) = (tiles.bh, tiles.num_tiles);
         let q_tiles = q_tiles.min(nb.saturating_sub(q_base));
         if q_tiles == 0 || topk == 0 || topk > nb {
-            return Err(err(format!("empty query range or top-k {topk} of {nb} tiles")));
+            return Err(err(format!(
+                "empty query range or top-k {topk} of {nb} tiles"
+            )));
         }
         let padded = nb * 64;
         let mut out = if q_base == 0 && q_tiles == nb {
@@ -439,9 +463,13 @@ mod tests {
         // Thread t's accumulator columns 8n + 2t + j (n < 4) are keys 8t + 2n + j:
         // eight consecutive keys, in order, as the A fragment's register a0.
         for t in 0..4 {
-            let keys: Vec<usize> = (0..4).flat_map(|n| (0..2).map(move |j| kperm(8 * n + 2 * t + j))).collect();
+            let keys: Vec<usize> = (0..4)
+                .flat_map(|n| (0..2).map(move |j| kperm(8 * n + 2 * t + j)))
+                .collect();
             assert_eq!(keys, (8 * t..8 * t + 8).collect::<Vec<_>>());
-            let hi: Vec<usize> = (4..8).flat_map(|n| (0..2).map(move |j| kperm(8 * n + 2 * t + j))).collect();
+            let hi: Vec<usize> = (4..8)
+                .flat_map(|n| (0..2).map(move |j| kperm(8 * n + 2 * t + j)))
+                .collect();
             assert_eq!(hi, (32 + 8 * t..32 + 8 * t + 8).collect::<Vec<_>>());
         }
     }

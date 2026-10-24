@@ -65,7 +65,10 @@ pub struct Resolved {
 /// worker (no file, no log line).
 pub fn resolve(config: &Config, persist: bool) -> anyhow::Result<Resolved> {
     let (plain, source) = if !config.auth.admin_token.is_empty() {
-        (config.auth.admin_token.expose().trim().to_owned(), Source::Configured)
+        (
+            config.auth.admin_token.expose().trim().to_owned(),
+            Source::Configured,
+        )
     } else if !persist {
         (AdminToken::generate().1, Source::Ephemeral)
     } else {
@@ -84,11 +87,23 @@ pub fn resolve(config: &Config, persist: bool) -> anyhow::Result<Resolved> {
         Source::Configured => tracing::info!("admin token: from FV_ADMIN_TOKEN"),
         Source::Ephemeral => {}
     }
-    let sealed = match config.auth.admin_token_recipient.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
-        Some(r) => Some(seal(&plain, r).map_err(|e| anyhow::anyhow!("auth.admin_token_recipient: {e}"))?),
+    let sealed = match config
+        .auth
+        .admin_token_recipient
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+    {
+        Some(r) => {
+            Some(seal(&plain, r).map_err(|e| anyhow::anyhow!("auth.admin_token_recipient: {e}"))?)
+        }
         None => None,
     };
-    Ok(Resolved { token: AdminToken::from_secret(&plain), source, sealed })
+    Ok(Resolved {
+        token: AdminToken::from_secret(&plain),
+        source,
+        sealed,
+    })
 }
 
 /// Reads the token file, or creates it (mode 600, written under a temporary
@@ -99,7 +114,9 @@ fn load_or_create(path: &Path) -> anyhow::Result<(String, bool)> {
             restrict(path);
             return Ok((s.trim().to_owned(), false));
         }
-        Ok(_) => tracing::warn!(file = %path.display(), "admin token file is empty; generating a new token"),
+        Ok(_) => {
+            tracing::warn!(file = %path.display(), "admin token file is empty; generating a new token")
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
     }
@@ -117,13 +134,16 @@ fn load_or_create(path: &Path) -> anyhow::Result<(String, bool)> {
             use std::os::unix::fs::OpenOptionsExt;
             o.mode(0o600);
         }
-        let mut f = o.open(&tmp).with_context(|| format!("writing {}", tmp.display()))?;
+        let mut f = o
+            .open(&tmp)
+            .with_context(|| format!("writing {}", tmp.display()))?;
         f.write_all(plain.as_bytes())?;
         f.write_all(b"\n")?;
         f.sync_all()?;
     }
     restrict(&tmp);
-    std::fs::rename(&tmp, path).with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
     Ok((plain, true))
 }
 
@@ -154,9 +174,13 @@ pub fn seal(plain: &str, recipient: &str) -> Result<Value, String> {
     use sha2::Digest;
     let raw = base64::engine::general_purpose::STANDARD
         .decode(recipient)
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(recipient.trim_end_matches('=')))
+        .or_else(|_| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(recipient.trim_end_matches('='))
+        })
         .map_err(|_| "not base64".to_owned())?;
-    let rpk: [u8; 32] = raw.try_into().map_err(|_| "an X25519 public key is 32 bytes".to_owned())?;
+    let rpk: [u8; 32] = raw
+        .try_into()
+        .map_err(|_| "an X25519 public key is 32 bytes".to_owned())?;
     let esk: [u8; 32] = rand::random();
     let epk = x25519_dalek::x25519(esk, x25519_dalek::X25519_BASEPOINT_BYTES);
     let shared = x25519_dalek::x25519(esk, rpk);
@@ -173,7 +197,8 @@ pub fn seal(plain: &str, recipient: &str) -> Result<Value, String> {
     let mut ct = plain.as_bytes().to_vec();
     let mut c = ctr::Ctr128BE::<aes::Aes256>::new((&k[..32]).into(), (&iv).into());
     c.apply_keystream(&mut ct);
-    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(&k[32..]).map_err(|e| e.to_string())?;
+    let mut mac =
+        hmac::Hmac::<sha2::Sha256>::new_from_slice(&k[32..]).map_err(|e| e.to_string())?;
     mac.update(&iv);
     mac.update(&ct);
     let tag = mac.finalize().into_bytes();
@@ -217,10 +242,12 @@ pub fn open(sealed: &Value, secret: [u8; 32]) -> Result<String, String> {
     h.update(epk);
     h.update(rpk);
     let k = h.finalize();
-    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(&k[32..]).map_err(|e| e.to_string())?;
+    let mut mac =
+        hmac::Hmac::<sha2::Sha256>::new_from_slice(&k[32..]).map_err(|e| e.to_string())?;
     mac.update(&iv);
     mac.update(&ct);
-    mac.verify_slice(&tag).map_err(|_| "sealed token: bad tag".to_owned())?;
+    mac.verify_slice(&tag)
+        .map_err(|_| "sealed token: bad tag".to_owned())?;
     let mut c = ctr::Ctr128BE::<aes::Aes256>::new((&k[..32]).into(), (&iv).into());
     c.apply_keystream(&mut ct);
     String::from_utf8(ct).map_err(|_| "sealed token: not UTF-8".to_owned())
@@ -264,22 +291,38 @@ mod tests {
 
     #[test]
     fn stored_once_reused_and_overridden() {
-        let dir = std::env::temp_dir().join(format!("fv-admin-{}", fastvideo_serve_kit::random_token()));
+        let dir =
+            std::env::temp_dir().join(format!("fv-admin-{}", fastvideo_serve_kit::random_token()));
         let c = cfg(&dir);
         let a = resolve(&c, true).unwrap();
         let path = dir.join(FILE_NAME);
-        assert_eq!(a.source, Source::File { path: path.clone(), created: true });
+        assert_eq!(
+            a.source,
+            Source::File {
+                path: path.clone(),
+                created: true
+            }
+        );
         let plain = std::fs::read_to_string(&path).unwrap().trim().to_owned();
         assert!(plain.starts_with(fastvideo_serve_kit::keys::ADMIN_PREFIX));
         assert!(a.token.check(&plain));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
         // A restart reuses it.
         let b = resolve(&c, true).unwrap();
-        assert_eq!(b.source, Source::File { path: path.clone(), created: false });
+        assert_eq!(
+            b.source,
+            Source::File {
+                path: path.clone(),
+                created: false
+            }
+        );
         assert!(b.token.check(&plain));
         // FV_ADMIN_TOKEN overrides and leaves the file alone.
         let mut o = cfg(&dir);
@@ -309,6 +352,9 @@ mod tests {
         bad["ct"] = json!(b64(b"fvadm_other-value!"));
         assert!(open(&bad, sk).is_err(), "the tag covers the ciphertext");
         assert!(seal("x", "not base64!").is_err());
-        assert!(seal("x", &b64(&[0u8; 32])).is_err(), "low-order key refused");
+        assert!(
+            seal("x", &b64(&[0u8; 32])).is_err(),
+            "low-order key refused"
+        );
     }
 }

@@ -30,7 +30,7 @@ const FILTER_TAPS: usize = 12;
 const AA_RATIO: usize = 2;
 const UP_PAD: usize = FILTER_TAPS / AA_RATIO - 1; // 5
 const UP_CROP_LEFT: usize = UP_PAD * AA_RATIO + (FILTER_TAPS - AA_RATIO) / 2; // 15
-const UP_CROP_RIGHT: usize = UP_PAD * AA_RATIO + (FILTER_TAPS - AA_RATIO + 1) / 2; // 15
+const UP_CROP_RIGHT: usize = UP_PAD * AA_RATIO + (FILTER_TAPS - AA_RATIO).div_ceil(2); // 15
 const DOWN_PAD_LEFT: usize = FILTER_TAPS / 2 - 1; // 5
 const DOWN_PAD_RIGHT: usize = FILTER_TAPS / 2; // 6
 

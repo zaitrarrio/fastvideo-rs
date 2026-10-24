@@ -9,7 +9,10 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, watch, Notify};
 
-use super::{Cancel, InResp, JobCtx, JobError, JobHandler, JobInput, Method, OutReq, RawJob, RunpodEnv, Transport, Update};
+use super::{
+    Cancel, InResp, JobCtx, JobError, JobHandler, JobInput, Method, OutReq, RawJob, RunpodEnv,
+    Transport, Update,
+};
 
 /// Timing knobs (defaults follow `runpod-python`).
 #[derive(Clone, Debug)]
@@ -130,17 +133,23 @@ impl<T: Transport, H: JobHandler> Worker<T, H> {
         }
         s.shutting_down.send_replace(true);
         // Let running jobs finish.
-        let drained = tokio::time::timeout(s.opts.shutdown_grace, wait_idle(&s)).await.is_ok();
+        let drained = tokio::time::timeout(s.opts.shutdown_grace, wait_idle(&s))
+            .await
+            .is_ok();
         if !drained {
             let ids: Vec<String> = {
                 let m = s.inflight.lock().unwrap_or_else(|p| p.into_inner());
-                m.iter().map(|(id, c)| {
-                    c.cancel();
-                    id.clone()
-                }).collect()
+                m.iter()
+                    .map(|(id, c)| {
+                        c.cancel();
+                        id.clone()
+                    })
+                    .collect()
             };
             tracing::warn!(jobs = ?ids, "runpod worker: cancelling jobs still running after the grace period");
-            let _ = tokio::time::timeout(s.opts.cancel_grace + Duration::from_secs(30), wait_idle(&s)).await;
+            let _ =
+                tokio::time::timeout(s.opts.cancel_grace + Duration::from_secs(30), wait_idle(&s))
+                    .await;
         }
         stop_tx.send_replace(true);
         let _ = stopper.await;
@@ -184,13 +193,22 @@ fn report<T: Transport, H: JobHandler>(s: &Shared<T, H>) -> WorkerReport {
 }
 
 fn inflight_ids<T: Transport, H: JobHandler>(s: &Shared<T, H>) -> Vec<String> {
-    s.inflight.lock().unwrap_or_else(|p| p.into_inner()).keys().cloned().collect()
+    s.inflight
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .keys()
+        .cloned()
+        .collect()
 }
 
 async fn wait_idle<T: Transport, H: JobHandler>(s: &Shared<T, H>) {
     loop {
         let n = s.changed.notified();
-        if s.inflight.lock().unwrap_or_else(|p| p.into_inner()).is_empty() {
+        if s.inflight
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_empty()
+        {
             return;
         }
         n.await;
@@ -208,9 +226,23 @@ enum Taken {
 
 /// One job-take request.
 async fn take_once<T: Transport, H: JobHandler>(s: &Shared<T, H>, in_progress: bool) -> Taken {
-    let free = s.opts.concurrency.saturating_sub(inflight_ids(s).len()).max(1);
-    let url = if free > 1 { s.env.take_batch_url(in_progress, free) } else { s.env.take_url(in_progress) };
-    let req = OutReq { method: Method::Get, url, headers: auth_headers(s), body: None, timeout: s.opts.poll_timeout };
+    let free = s
+        .opts
+        .concurrency
+        .saturating_sub(inflight_ids(s).len())
+        .max(1);
+    let url = if free > 1 {
+        s.env.take_batch_url(in_progress, free)
+    } else {
+        s.env.take_url(in_progress)
+    };
+    let req = OutReq {
+        method: Method::Get,
+        url,
+        headers: auth_headers(s),
+        body: None,
+        timeout: s.opts.poll_timeout,
+    };
     match s.transport.send(req).await {
         Ok(InResp { status: 200, body }) => {
             let v: Value = match serde_json::from_slice(&body) {
@@ -242,7 +274,9 @@ async fn take_once<T: Transport, H: JobHandler>(s: &Shared<T, H>, in_progress: b
             }
         }
         // 204: no job; 400: expected under FlashBoot.
-        Ok(InResp { status: 204 | 400, .. }) => Taken::Wait(s.opts.idle_backoff),
+        Ok(InResp {
+            status: 204 | 400, ..
+        }) => Taken::Wait(s.opts.idle_backoff),
         Ok(InResp { status: 429, .. }) => Taken::Wait(s.opts.backoff_429),
         Ok(InResp { status, .. }) => {
             tracing::warn!(status, "job-take: unexpected status");
@@ -292,7 +326,10 @@ fn start_job<T: Transport, H: JobHandler>(s: &Arc<Shared<T, H>>, job: RawJob) {
     tokio::spawn(async move {
         let id = job.id.clone();
         run_job(&s, job, cancel).await;
-        s.inflight.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
+        s.inflight
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&id);
         s.changed.notify_waiters();
     });
 }
@@ -327,10 +364,20 @@ async fn run_job<T: Transport, H: JobHandler>(s: &Arc<Shared<T, H>>, job: RawJob
     let streamed = forwarder.await.unwrap_or(false);
     let res = match res {
         Err(e) if cancel.is_cancelled() && e.kind != "Cancelled" => {
-            let why = if *s.shutting_down.borrow() { "the worker is shutting down" } else { "the job was cancelled" };
-            Err(JobError { kind: "Cancelled".into(), message: format!("{why}: {}", e.message), output: e.output })
+            let why = if *s.shutting_down.borrow() {
+                "the worker is shutting down"
+            } else {
+                "the job was cancelled"
+            };
+            Err(JobError {
+                kind: "Cancelled".into(),
+                message: format!("{why}: {}", e.message),
+                output: e.output,
+            })
         }
-        Ok(_) if cancel.is_cancelled() && *s.shutting_down.borrow() => Err(JobError::new("Cancelled", "the worker is shutting down")),
+        Ok(_) if cancel.is_cancelled() && *s.shutting_down.borrow() => {
+            Err(JobError::new("Cancelled", "the worker is shutting down"))
+        }
         r => r,
     };
     let body = match &res {
@@ -369,11 +416,18 @@ fn error_body<T: Transport, H: JobHandler>(s: &Shared<T, H>, e: &JobError) -> Va
 
 /// Posts progress and stream chunks in order; returns whether any stream
 /// chunk was sent (the final job-done then carries `isStream=true`).
-async fn forward_updates<T: Transport, H: JobHandler>(s: Arc<Shared<T, H>>, id: String, mut rx: mpsc::UnboundedReceiver<Update>) -> bool {
+async fn forward_updates<T: Transport, H: JobHandler>(
+    s: Arc<Shared<T, H>>,
+    id: String,
+    mut rx: mpsc::UnboundedReceiver<Update>,
+) -> bool {
     let mut streamed = false;
     while let Some(u) = rx.recv().await {
         let (url, body) = match u {
-            Update::Progress(p) => (s.env.done_url(&id, false), json!({"status": "IN_PROGRESS", "output": p})),
+            Update::Progress(p) => (
+                s.env.done_url(&id, false),
+                json!({"status": "IN_PROGRESS", "output": p}),
+            ),
             Update::Stream(chunk) => match s.env.stream_url(&id) {
                 Some(u) => {
                     streamed = true;
@@ -393,12 +447,26 @@ async fn forward_updates<T: Transport, H: JobHandler>(s: Arc<Shared<T, H>>, id: 
     streamed
 }
 
-async fn post_json<T: Transport, H: JobHandler>(s: &Shared<T, H>, id: &str, url: String, body: &Value) -> Result<(), String> {
+async fn post_json<T: Transport, H: JobHandler>(
+    s: &Shared<T, H>,
+    id: &str,
+    url: String,
+    body: &Value,
+) -> Result<(), String> {
     let mut headers = auth_headers(s);
-    headers.push(("Content-Type".into(), "application/x-www-form-urlencoded".into()));
+    headers.push((
+        "Content-Type".into(),
+        "application/x-www-form-urlencoded".into(),
+    ));
     headers.push(("charset".into(), "utf-8".into()));
     headers.push(("X-Request-ID".into(), id.to_owned()));
-    let req = OutReq { method: Method::Post, url, headers, body: Some(body.to_string().into_bytes()), timeout: Duration::from_secs(60) };
+    let req = OutReq {
+        method: Method::Post,
+        url,
+        headers,
+        body: Some(body.to_string().into_bytes()),
+        timeout: Duration::from_secs(60),
+    };
     match s.transport.send(req).await {
         Ok(r) if (200..300).contains(&r.status) => Ok(()),
         Ok(r) => Err(format!("HTTP {}", r.status)),
@@ -407,7 +475,12 @@ async fn post_json<T: Transport, H: JobHandler>(s: &Shared<T, H>, id: &str, url:
 }
 
 /// job-done with `done_attempts` tries and Fibonacci back-off.
-async fn post_done<T: Transport, H: JobHandler>(s: &Shared<T, H>, id: &str, body: &Value, is_stream: bool) {
+async fn post_done<T: Transport, H: JobHandler>(
+    s: &Shared<T, H>,
+    id: &str,
+    body: &Value,
+    is_stream: bool,
+) {
     let attempts = s.opts.done_attempts.max(1);
     for attempt in 0..attempts {
         match post_json(s, id, s.env.done_url(id, is_stream), body).await {
@@ -424,10 +497,19 @@ async fn post_done<T: Transport, H: JobHandler>(s: &Shared<T, H>, id: &str, body
     tracing::error!(job = %id, "job-done was never accepted; the platform will time the job out");
 }
 
-async fn ping_loop<T: Transport, H: JobHandler>(s: Arc<Shared<T, H>>, mut stop: watch::Receiver<bool>) {
+async fn ping_loop<T: Transport, H: JobHandler>(
+    s: Arc<Shared<T, H>>,
+    mut stop: watch::Receiver<bool>,
+) {
     loop {
         if let Some(url) = s.env.ping_url(&inflight_ids(&s), &s.opts.version) {
-            let req = OutReq { method: Method::Get, url, headers: auth_headers(&s), body: None, timeout: s.env.ping_interval * 2 };
+            let req = OutReq {
+                method: Method::Get,
+                url,
+                headers: auth_headers(&s),
+                body: None,
+                timeout: s.env.ping_interval * 2,
+            };
             match s.transport.send(req).await {
                 Ok(r) if (200..300).contains(&r.status) => {}
                 Ok(r) => tracing::debug!(status = r.status, "ping"),
@@ -441,10 +523,19 @@ async fn ping_loop<T: Transport, H: JobHandler>(s: Arc<Shared<T, H>>, mut stop: 
     }
 }
 
-async fn stop_loop<T: Transport, H: JobHandler>(s: Arc<Shared<T, H>>, mut stop: watch::Receiver<bool>) {
+async fn stop_loop<T: Transport, H: JobHandler>(
+    s: Arc<Shared<T, H>>,
+    mut stop: watch::Receiver<bool>,
+) {
     let Some(url) = s.env.stop_url() else { return };
     loop {
-        let req = OutReq { method: Method::Get, url: url.clone(), headers: auth_headers(&s), body: None, timeout: s.opts.poll_timeout };
+        let req = OutReq {
+            method: Method::Get,
+            url: url.clone(),
+            headers: auth_headers(&s),
+            body: None,
+            timeout: s.opts.poll_timeout,
+        };
         let pause = tokio::select! {
             r = s.transport.send(req) => match r {
                 Ok(InResp { status: 200, body }) => {

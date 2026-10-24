@@ -22,7 +22,10 @@ pub fn ice_servers(c: &Config, env: impl Fn(&str) -> Option<String>) -> Vec<IceS
     if !configured.is_empty() {
         return configured;
     }
-    ice_servers_from_rt_env(env("STUN_SERVERS").as_deref(), env("TURN_SERVERS").as_deref())
+    ice_servers_from_rt_env(
+        env("STUN_SERVERS").as_deref(),
+        env("TURN_SERVERS").as_deref(),
+    )
 }
 
 /// The host config for this machine: `[webrtc]` ports resolved against the
@@ -54,7 +57,9 @@ pub fn host_config(c: &Config, env: impl Fn(&str) -> Option<String>) -> HostConf
 
 /// Binds the shared host from `[webrtc]` and the process environment.
 pub async fn bind(c: &Config) -> anyhow::Result<RtcHost> {
-    let host = RtcHost::bind(host_config(c, |k| std::env::var(k).ok())).await.context("binding the WebRTC host")?;
+    let host = RtcHost::bind(host_config(c, |k| std::env::var(k).ok()))
+        .await
+        .context("binding the WebRTC host")?;
     tracing::info!(udp = ?host.udp_addr(), tcp = ?host.tcp_addr(), "webrtc host bound");
     Ok(host)
 }

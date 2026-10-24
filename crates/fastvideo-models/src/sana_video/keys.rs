@@ -16,22 +16,46 @@ pub fn transformer_keys(cfg: &SanaVideoTransformerConfig) -> KeySpec {
     let mut put = |name: String, shape: Vec<usize>| {
         k.insert(name, shape);
     };
-    put("patch_embedding.weight".into(), vec![d, cfg.in_channels, pt, ph, pw]);
+    put(
+        "patch_embedding.weight".into(),
+        vec![d, cfg.in_channels, pt, ph, pw],
+    );
     put("patch_embedding.bias".into(), vec![d]);
-    put("time_embed.emb.timestep_embedder.linear_1.weight".into(), vec![d, 256]);
-    put("time_embed.emb.timestep_embedder.linear_1.bias".into(), vec![d]);
-    put("time_embed.emb.timestep_embedder.linear_2.weight".into(), vec![d, d]);
-    put("time_embed.emb.timestep_embedder.linear_2.bias".into(), vec![d]);
+    put(
+        "time_embed.emb.timestep_embedder.linear_1.weight".into(),
+        vec![d, 256],
+    );
+    put(
+        "time_embed.emb.timestep_embedder.linear_1.bias".into(),
+        vec![d],
+    );
+    put(
+        "time_embed.emb.timestep_embedder.linear_2.weight".into(),
+        vec![d, d],
+    );
+    put(
+        "time_embed.emb.timestep_embedder.linear_2.bias".into(),
+        vec![d],
+    );
     put("time_embed.linear.weight".into(), vec![6 * d, d]);
     put("time_embed.linear.bias".into(), vec![6 * d]);
-    put("caption_projection.linear_1.weight".into(), vec![d, cfg.caption_channels]);
+    put(
+        "caption_projection.linear_1.weight".into(),
+        vec![d, cfg.caption_channels],
+    );
     put("caption_projection.linear_1.bias".into(), vec![d]);
     put("caption_projection.linear_2.weight".into(), vec![d, d]);
     put("caption_projection.linear_2.bias".into(), vec![d]);
     put("caption_norm.weight".into(), vec![d]);
     put("scale_shift_table".into(), vec![2, d]);
-    put("proj_out.weight".into(), vec![cfg.patch_volume() * cfg.out_channels, d]);
-    put("proj_out.bias".into(), vec![cfg.patch_volume() * cfg.out_channels]);
+    put(
+        "proj_out.weight".into(),
+        vec![cfg.patch_volume() * cfg.out_channels, d],
+    );
+    put(
+        "proj_out.bias".into(),
+        vec![cfg.patch_volume() * cfg.out_channels],
+    );
     for i in 0..cfg.num_layers {
         let p = |n: &str| format!("transformer_blocks.{i}.{n}");
         put(p("scale_shift_table"), vec![6, d]);

@@ -145,7 +145,11 @@ pub struct VdnBranch {
 impl VdnBranch {
     /// `prefix` = `transformer_blocks.N.attn`.
     pub fn load(map: &WeightMap, prefix: &str, cfg: &H3TransformerConfig) -> Result<Self> {
-        let (hidden, heads, d) = (cfg.hidden_size, cfg.num_attention_heads, cfg.attention_head_dim);
+        let (hidden, heads, d) = (
+            cfg.hidden_size,
+            cfg.num_attention_heads,
+            cfg.attention_head_dim,
+        );
         let c = heads * d;
         let la = format!("{prefix}.linear_attention");
         let get = |key: &str, shape: &[usize]| -> Result<Vec<f32>> {
@@ -158,7 +162,10 @@ impl VdnBranch {
         let rank = d;
         let beta = get(&format!("{la}.beta_proj.weight"), &[heads, hidden])?;
         let og_down = get(&format!("{la}.output_gate.down.weight"), &[rank, hidden])?;
-        let sg = get(&format!("{prefix}.softmax_gate.up.weight"), &[heads, hidden])?;
+        let sg = get(
+            &format!("{prefix}.softmax_gate.up.weight"),
+            &[heads, hidden],
+        )?;
         let sg_bias = get(&format!("{prefix}.softmax_gate.up.bias"), &[heads])?;
         let cols = AuxCols {
             beta: 0,
@@ -177,7 +184,8 @@ impl VdnBranch {
             Some(CudaTensor::from_vec(bias, vec![cols.width])?),
         )?;
         let og_up = Linear::load(map, &format!("{la}.output_gate.up"), rank, c, true)?;
-        let to_out_linear = Linear::load(map, &format!("{prefix}.to_out_linear"), c, hidden, false)?;
+        let to_out_linear =
+            Linear::load(map, &format!("{prefix}.to_out_linear"), c, hidden, false)?;
         let flat = |key: &str, shape: &[usize]| get(key, shape);
         let small = Small {
             a_log: flat(&format!("{la}.alpha.A_log"), &[heads])?,
@@ -319,7 +327,13 @@ impl VdnBranch {
         let x = n.host_cow()?;
         let p = packed.host_cow()?;
         let a = aux.host_cow()?;
-        let cols = |row0: usize, rows: usize, off: usize, w: usize, stride: usize, src: &[f32]| -> Vec<f32> {
+        let cols = |row0: usize,
+                    rows: usize,
+                    off: usize,
+                    w: usize,
+                    stride: usize,
+                    src: &[f32]|
+         -> Vec<f32> {
             (0..rows)
                 .flat_map(|r| src[(row0 + r) * stride + off..][..w].iter().copied())
                 .collect()
@@ -368,7 +382,9 @@ impl VdnBranch {
         let mut mean = vec![0.0f32; frames * hidden];
         for f in 0..frames {
             for col in 0..hidden {
-                let sum: f64 = (0..s).map(|si| f64::from(xin[(f * s + si) * hidden + col])).sum();
+                let sum: f64 = (0..s)
+                    .map(|si| f64::from(xin[(f * s + si) * hidden + col]))
+                    .sum();
                 mean[f * hidden + col] = (sum / s as f64) as f32;
             }
         }
@@ -390,7 +406,15 @@ impl VdnBranch {
         let start: Vec<f32> = jt.iter().map(|&v| VDN_TEXT_STATE_SCALE * v).collect();
         let (tf, jf) = vref::vdn_factors(&am, &bm, Some(&alpha), frames * heads, d).map_err(msg)?;
         let (pb, qb) = vref::scans(&tf, &jf, &start, frames, heads, d);
-        let state = vref::gather(&pb, &qb, &alpha, &start, &gather_plan(&plan.inner_bounds()), heads, d);
+        let state = vref::gather(
+            &pb,
+            &qb,
+            &alpha,
+            &start,
+            &gather_plan(&plan.inner_bounds()),
+            heads,
+            d,
+        );
         let og_mid = CudaTensor::from_vec(
             cols(r0, rows, self.cols.og, self.rank, self.cols.width, &a),
             vec![rows, self.rank],
@@ -491,7 +515,10 @@ pub mod check {
     struct Rng(u64);
     impl Rng {
         fn next(&mut self) -> f32 {
-            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((self.0 >> 33) as f32 / (1u64 << 31) as f32) * 2.0 - 1.0
         }
         /// bf16-valued uniform `[-scale, scale)`.
@@ -514,16 +541,25 @@ pub mod check {
 
     fn up16(v: &[f32]) -> Result<CudaSlice<half::bf16>> {
         let h: Vec<half::bf16> = v.iter().map(|&x| half::bf16::from_f32(x)).collect();
-        dev_ctx()?.stream.memcpy_stod(&h).map_err(|e| msg(e.to_string()))
+        dev_ctx()?
+            .stream
+            .memcpy_stod(&h)
+            .map_err(|e| msg(e.to_string()))
     }
 
     fn down16(s: &CudaSlice<half::bf16>) -> Result<Vec<f32>> {
-        let h: Vec<half::bf16> = dev_ctx()?.stream.memcpy_dtov(s).map_err(|e| msg(e.to_string()))?;
+        let h: Vec<half::bf16> = dev_ctx()?
+            .stream
+            .memcpy_dtov(s)
+            .map_err(|e| msg(e.to_string()))?;
         Ok(h.iter().map(|x| x.to_f32()).collect())
     }
 
     fn down32(s: &CudaSlice<f32>) -> Result<Vec<f32>> {
-        dev_ctx()?.stream.memcpy_dtov(s).map_err(|e| msg(e.to_string()))
+        dev_ctx()?
+            .stream
+            .memcpy_dtov(s)
+            .map_err(|e| msg(e.to_string()))
     }
 
     fn compare(name: &str, got: &[f32], want: &[f32], tol: f64, note: &str) -> VdnCheck {
@@ -548,7 +584,10 @@ pub mod check {
     }
 
     fn sync() -> Result<()> {
-        dev_ctx()?.stream.synchronize().map_err(|e| msg(e.to_string()))
+        dev_ctx()?
+            .stream
+            .synchronize()
+            .map_err(|e| msg(e.to_string()))
     }
 
     /// f64 softmax of `[h, s, d]` q / k / v under `w`'s mask.
@@ -563,7 +602,11 @@ pub mod check {
                 for (j, pj) in p.iter_mut().enumerate() {
                     *pj = if w.allows(i, j) {
                         let kj = &k[(hh * s + j) * D..][..D];
-                        qi.iter().zip(kj).map(|(&a, &b)| f64::from(a) * f64::from(b)).sum::<f64>() * scale
+                        qi.iter()
+                            .zip(kj)
+                            .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                            .sum::<f64>()
+                            * scale
                     } else {
                         f64::NEG_INFINITY
                     };
@@ -571,11 +614,17 @@ pub mod check {
                 }
                 let mut z = 0.0;
                 for pj in p.iter_mut() {
-                    *pj = if pj.is_finite() { (*pj - mx).exp() } else { 0.0 };
+                    *pj = if pj.is_finite() {
+                        (*pj - mx).exp()
+                    } else {
+                        0.0
+                    };
                     z += *pj;
                 }
                 for e in 0..D {
-                    let acc: f64 = (0..s).map(|j| p[j] * f64::from(v[(hh * s + j) * D + e])).sum();
+                    let acc: f64 = (0..s)
+                        .map(|j| p[j] * f64::from(v[(hh * s + j) * D + e]))
+                        .sum();
                     out[(hh * s + i) * D + e] = (acc / z) as f32;
                 }
             }
@@ -586,11 +635,24 @@ pub mod check {
     fn window_checks(rng: &mut Rng, out: &mut Vec<VdnCheck>) -> Result<()> {
         // [text 37 | audio 21 | video 14 frames x 40 tokens]: frames straddle
         // the 64-key tiles; the chunk-5 window leaves frames out of view.
-        for (frames, name) in [(14usize, "window_attn_f64"), (8, "window_attn_full_cover_vs_dense")] {
+        for (frames, name) in [
+            (14usize, "window_attn_f64"),
+            (8, "window_attn_full_cover_vs_dense"),
+        ] {
             let (h, tpf, vs) = (2usize, 40usize, 58usize);
             let s = vs + frames * tpf;
-            let w = VdnWindow { video_start: vs, frame_tokens: tpf, frames, chunk: 5, radius: 1 };
-            let (q, k, v) = (rng.vec(h * s * D, 2.0), rng.vec(h * s * D, 2.0), rng.vec(h * s * D, 1.0));
+            let w = VdnWindow {
+                video_start: vs,
+                frame_tokens: tpf,
+                frames,
+                chunk: 5,
+                radius: 1,
+            };
+            let (q, k, v) = (
+                rng.vec(h * s * D, 2.0),
+                rng.vec(h * s * D, 2.0),
+                rng.vec(h * s * D, 1.0),
+            );
             let t = |x: &[f32]| -> Result<CudaTensor> {
                 CudaTensor::from_vec(x.to_vec(), vec![1, h, s, D])?.to_device()
             };
@@ -599,13 +661,28 @@ pub mod check {
                 .ok_or_else(|| msg("vdn check: the window kernel declined"))?;
             let got = got.host_cow()?.into_owned();
             if frames == 14 {
-                out.push(compare(name, &got, &masked_ref(&q, &k, &v, h, s, &w), 1e-2, "bf16 output vs f64"));
+                out.push(compare(
+                    name,
+                    &got,
+                    &masked_ref(&q, &k, &v, h, s, &w),
+                    1e-2,
+                    "bf16 output vs f64",
+                ));
             } else {
                 let dense = device_mma_sdpa_with(&qt, &kt, &vt, None, true, FlashKernel::V2)?
                     .ok_or_else(|| msg("vdn check: the dense kernel declined"))?;
                 let dense = dense.host_cow()?.into_owned();
-                let same = got.iter().zip(&dense).all(|(a, b)| a.to_bits() == b.to_bits());
-                let mut c = compare(name, &got, &dense, 0.0, "bitwise against the dense V2 kernel");
+                let same = got
+                    .iter()
+                    .zip(&dense)
+                    .all(|(a, b)| a.to_bits() == b.to_bits());
+                let mut c = compare(
+                    name,
+                    &got,
+                    &dense,
+                    0.0,
+                    "bitwise against the dense V2 kernel",
+                );
                 c.pass = same;
                 out.push(c);
             }
@@ -615,27 +692,67 @@ pub mod check {
 
     #[allow(clippy::too_many_lines)]
     fn stage_checks(rng: &mut Rng, out: &mut Vec<VdnCheck>) -> Result<()> {
-        let (heads, frames, gh, gw, hidden, tl) = (4usize, 6usize, 4usize, 6usize, 256usize, 10usize);
+        let (heads, frames, gh, gw, hidden, tl) =
+            (4usize, 6usize, 4usize, 6usize, 256usize, 10usize);
         let c = heads * D;
         let s = gh * gw;
         let n = frames * s;
         // a. q features
         let x = rng.vec(n * c, 2.0);
         let xd = up16(&x)?;
-        let got = down16(&dev::act_rows(crate::wan::quant::ptr(&xd), c, 0, n, heads, true)?)?;
-        out.push(compare("features_q", &got, &vref::activate(&x, heads, D, true), 1e-2, "bf16 out"));
+        let got = down16(&dev::act_rows(
+            crate::wan::quant::ptr(&xd),
+            c,
+            0,
+            n,
+            heads,
+            true,
+        )?)?;
+        out.push(compare(
+            "features_q",
+            &got,
+            &vref::activate(&x, heads, D, true),
+            1e-2,
+            "bf16 out",
+        ));
         // b. spatial conv
         let wsp = rng.vec(c * 25, 0.4);
-        let wsp_t: Vec<f32> = (0..25).flat_map(|t| (0..c).map(move |ch| (t, ch))).map(|(t, ch)| wsp[ch * 25 + t]).collect();
-        let sp = dev::sconv5(crate::wan::quant::ptr(&xd), c, 0, frames, gh, gw, c, &up16(&wsp_t)?)?;
+        let wsp_t: Vec<f32> = (0..25)
+            .flat_map(|t| (0..c).map(move |ch| (t, ch)))
+            .map(|(t, ch)| wsp[ch * 25 + t])
+            .collect();
+        let sp = dev::sconv5(
+            crate::wan::quant::ptr(&xd),
+            c,
+            0,
+            frames,
+            gh,
+            gw,
+            c,
+            &up16(&wsp_t)?,
+        )?;
         let sp_h = down16(&sp)?;
-        out.push(compare("sconv5", &sp_h, &vref::spatial_conv(&x, frames, gh, gw, c, &wsp), 1e-2, "bf16 out"));
+        out.push(compare(
+            "sconv5",
+            &sp_h,
+            &vref::spatial_conv(&x, frames, gh, gw, c, &wsp),
+            1e-2,
+            "bf16 out",
+        ));
         // c. temporal conv + SiLU + L2
         let wtm = rng.vec(c * 5, 0.5);
-        let wtm_t: Vec<f32> = (0..5).flat_map(|t| (0..c).map(move |ch| (t, ch))).map(|(t, ch)| wtm[ch * 5 + t]).collect();
+        let wtm_t: Vec<f32> = (0..5)
+            .flat_map(|t| (0..c).map(move |ch| (t, ch)))
+            .map(|(t, ch)| wtm[ch * 5 + t])
+            .collect();
         let kf = dev::tconv5_act(&sp, frames, s, heads, &up16(&wtm_t)?, true)?;
         let kf_h = down16(&kf)?;
-        let want = vref::activate(&vref::temporal_conv(&sp_h, frames, s, c, &wtm), heads, D, true);
+        let want = vref::activate(
+            &vref::temporal_conv(&sp_h, frames, s, c, &wtm),
+            heads,
+            D,
+            true,
+        );
         out.push(compare("tconv5_silu_l2", &kf_h, &want, 1e-2, "bf16 out"));
         // d. statistics (beta from the aux logits, bf16 rounded)
         let vf_h = rng.vec(n * c, 1.0);
@@ -643,12 +760,27 @@ pub mod check {
         let width = 2 * heads + D;
         let aux_h = rng.vec(n * width, 3.0);
         let auxd = up16(&aux_h)?;
-        let (a, b) = dev::frame_stats(&kf, &vf, crate::wan::quant::ptr(&auxd), width, 0, frames, s, heads)?;
+        let (a, b) = dev::frame_stats(
+            &kf,
+            &vf,
+            crate::wan::quant::ptr(&auxd),
+            width,
+            0,
+            frames,
+            s,
+            heads,
+        )?;
         let (a_h, b_h) = (down32(&a)?, down32(&b)?);
-        let beta: Vec<f32> = (0..n).flat_map(|r| (0..heads).map(move |hh| (r, hh))).map(|(r, hh)| bf(sig(aux_h[r * width + hh]))).collect();
+        let beta: Vec<f32> = (0..n)
+            .flat_map(|r| (0..heads).map(move |hh| (r, hh)))
+            .map(|(r, hh)| bf(sig(aux_h[r * width + hh])))
+            .collect();
         let (a_want, _) = vref::frame_statistics(&kf_h, &vf_h, &beta, frames, s, heads, D);
-        let vb: Vec<f32> = (0..n * c).map(|i| bf(vf_h[i] * beta[(i / c) * heads + (i % c) / D])).collect();
-        let (_, b_want) = vref::frame_statistics(&kf_h, &vb, &vec![1.0; n * heads], frames, s, heads, D);
+        let vb: Vec<f32> = (0..n * c)
+            .map(|i| bf(vf_h[i] * beta[(i / c) * heads + (i % c) / D]))
+            .collect();
+        let (_, b_want) =
+            vref::frame_statistics(&kf_h, &vb, &vec![1.0; n * heads], frames, s, heads, D);
         let b_want: Vec<f32> = b_want.into_iter().map(bf).collect();
         let a_sym: Vec<f32> = (0..frames * heads)
             .flat_map(|m| (0..D * D).map(move |e| (m, e)))
@@ -658,7 +790,13 @@ pub mod check {
             })
             .collect();
         out.push(compare("frame_stats_A", &a_sym, &a_want, 1e-5, "fp32"));
-        out.push(compare("frame_stats_B", &b_h, &b_want, 1e-3, "bf16-rounded GEMM output"));
+        out.push(compare(
+            "frame_stats_B",
+            &b_h,
+            &b_want,
+            1e-3,
+            "bf16-rounded GEMM output",
+        ));
         // i. decay
         let xin = rng.vec(n * hidden, 1.0);
         let xind = up16(&xin)?;
@@ -674,30 +812,69 @@ pub mod check {
             v_tm: wtm.clone(),
         };
         let sm = dev::DevSmall::upload(&small, heads)?;
-        let alpha = dev::alpha(crate::wan::quant::ptr(&xind), 0, frames, s, hidden, heads, &sm)?;
+        let alpha = dev::alpha(
+            crate::wan::quant::ptr(&xind),
+            0,
+            frames,
+            s,
+            hidden,
+            heads,
+            &sm,
+        )?;
         let alpha_h = down32(&alpha)?;
         let mut mean = vec![0.0f32; frames * hidden];
         for f in 0..frames {
             for col in 0..hidden {
-                let sum: f64 = (0..s).map(|si| f64::from(xin[(f * s + si) * hidden + col])).sum();
+                let sum: f64 = (0..s)
+                    .map(|si| f64::from(xin[(f * s + si) * hidden + col]))
+                    .sum();
                 mean[f * hidden + col] = (sum / s as f64) as f32;
             }
         }
-        let alpha_want = vref::kda_alpha(&mean, frames, hidden, &small.alpha_down, &small.alpha_up, &small.dt_bias, &small.a_log, heads, D);
+        let alpha_want = vref::kda_alpha(
+            &mean,
+            frames,
+            hidden,
+            &small.alpha_down,
+            &small.alpha_up,
+            &small.dt_bias,
+            &small.a_log,
+            heads,
+            D,
+        );
         out.push(compare("kda_alpha", &alpha_h, &alpha_want, 1e-4, "fp32"));
         // e. solve (from the device statistics)
         let (t, j) = dev::solve(&a, &b, Some(&alpha), frames * heads, 1.0)?;
         let t = t.ok_or_else(|| msg("vdn check: no T"))?;
-        let (t_want, j_want) = vref::vdn_factors(&a_sym, &b_h, Some(&alpha_h), frames * heads, D).map_err(msg)?;
+        let (t_want, j_want) =
+            vref::vdn_factors(&a_sym, &b_h, Some(&alpha_h), frames * heads, D).map_err(msg)?;
         let (t_h, j_h) = (down32(&t)?, down32(&j)?);
-        out.push(compare("solve_T", &t_h, &t_want, 1e-4, "Gauss-Jordan fp32 vs Cholesky f64"));
+        out.push(compare(
+            "solve_T",
+            &t_h,
+            &t_want,
+            1e-4,
+            "Gauss-Jordan fp32 vs Cholesky f64",
+        ));
         out.push(compare("solve_J", &j_h, &j_want, 1e-4, "fp32 vs f64"));
         // text state: one chunk, alpha = 1, scaled by 1/2
         let ktx = rng.vec(tl * c, 1.0);
-        let ktx = vref::activate(&ktx, heads, D, true).into_iter().map(bf).collect::<Vec<_>>();
+        let ktx = vref::activate(&ktx, heads, D, true)
+            .into_iter()
+            .map(bf)
+            .collect::<Vec<_>>();
         let vtx = rng.vec(tl * c, 1.0);
         let auxt = rng.vec(tl * width, 3.0);
-        let (at, bt) = dev::frame_stats(&up16(&ktx)?, &up16(&vtx)?, crate::wan::quant::ptr(&up16(&auxt)?), width, 0, 1, tl, heads)?;
+        let (at, bt) = dev::frame_stats(
+            &up16(&ktx)?,
+            &up16(&vtx)?,
+            crate::wan::quant::ptr(&up16(&auxt)?),
+            width,
+            0,
+            1,
+            tl,
+            heads,
+        )?;
         let (_, start) = dev::solve(&at, &bt, None, heads, VDN_TEXT_STATE_SCALE)?;
         let (at_h, bt_h) = (down32(&at)?, down32(&bt)?);
         let at_sym: Vec<f32> = (0..heads)
@@ -710,38 +887,97 @@ pub mod check {
         let (_, jt) = vref::vdn_factors(&at_sym, &bt_h, None, heads, D).map_err(msg)?;
         let start_want: Vec<f32> = jt.iter().map(|v| VDN_TEXT_STATE_SCALE * v).collect();
         let start_h = down32(&start)?;
-        out.push(compare("text_state", &start_h, &start_want, 1e-4, "fp32 vs f64"));
+        out.push(compare(
+            "text_state",
+            &start_h,
+            &start_want,
+            1e-4,
+            "fp32 vs f64",
+        ));
         // f. scans
         let (p, q) = dev::scans(&t, &j, &start, frames, heads)?;
         let (p_want, q_want) = vref::scans(&t_h, &j_h, &start_h, frames, heads, D);
-        out.push(compare("scan_forward", &down32(&p)?, &p_want, 1e-4, "fp32 vs f64"));
-        out.push(compare("scan_reverse", &down32(&q)?, &q_want, 1e-4, "fp32 vs f64"));
+        out.push(compare(
+            "scan_forward",
+            &down32(&p)?,
+            &p_want,
+            1e-4,
+            "fp32 vs f64",
+        ));
+        out.push(compare(
+            "scan_reverse",
+            &down32(&q)?,
+            &q_want,
+            1e-4,
+            "fp32 vs f64",
+        ));
         // g. gather on the chunk-5 windows of 8 frames (6 inner)
         let inner = inner_bounds(&VdnTransform::released().bounds(frames + 2));
         let plan_rows: Vec<i32> = gather_plan(&inner)
             .iter()
-            .flat_map(|r| [r.before.map_or(-1, |x| x as i32), r.after.map_or(-1, |x| x as i32), r.before_from as i32, r.after_to as i32])
+            .flat_map(|r| {
+                [
+                    r.before.map_or(-1, |x| x as i32),
+                    r.after.map_or(-1, |x| x as i32),
+                    r.before_from as i32,
+                    r.after_to as i32,
+                ]
+            })
             .collect();
-        let pl = dev_ctx()?.stream.memcpy_stod(&plan_rows).map_err(|e| msg(e.to_string()))?;
+        let pl = dev_ctx()?
+            .stream
+            .memcpy_stod(&plan_rows)
+            .map_err(|e| msg(e.to_string()))?;
         let state = dev::gather(&p, &q, &start, &alpha, &pl, frames, heads)?;
         let state_h = down16(&state)?;
-        let state_want = vref::gather(&down32(&p)?, &down32(&q)?, &alpha_h, &start_h, &gather_plan(&inner), heads, D);
-        out.push(compare("gather_bridge", &state_h, &state_want, 1e-2, "bf16 out"));
+        let state_want = vref::gather(
+            &down32(&p)?,
+            &down32(&q)?,
+            &alpha_h,
+            &start_h,
+            &gather_plan(&inner),
+            heads,
+            D,
+        );
+        out.push(compare(
+            "gather_bridge",
+            &state_h,
+            &state_want,
+            1e-2,
+            "bf16 out",
+        ));
         // h. readout + RMSNorm + gate
         let qf = rng.vec(n * c, 0.2);
         let og = rng.vec(n * c, 3.0);
         let ogd = up16(&og)?;
-        let r = dev::readout(&state, &up16(&qf)?, crate::wan::quant::ptr(&ogd), &up16(&small.norm)?, frames, s, heads)?;
+        let r = dev::readout(
+            &state,
+            &up16(&qf)?,
+            crate::wan::quant::ptr(&ogd),
+            &up16(&small.norm)?,
+            frames,
+            s,
+            heads,
+        )?;
         let gate: Vec<f32> = og.iter().map(|&g| bf(sig(g))).collect();
         let r_want = vref::readout(&state_h, &qf, &gate, &small.norm, frames, s, heads, D);
-        out.push(compare("readout_norm_gate", &down16(&r)?, &r_want, 1.5e-2, "bf16 GEMM output rounded"));
+        out.push(compare(
+            "readout_norm_gate",
+            &down16(&r)?,
+            &r_want,
+            1.5e-2,
+            "bf16 GEMM output rounded",
+        ));
         Ok(())
     }
 
     fn generated(seed: u64) -> WeightMap {
         WeightMap::generated(move |key, shape| {
             let n: usize = shape.iter().product();
-            let mut r = Rng(seed ^ key.bytes().fold(0xcbf2_9ce4_8422_2325u64, |a, b| (a ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)));
+            let mut r = Rng(seed
+                ^ key.bytes().fold(0xcbf2_9ce4_8422_2325u64, |a, b| {
+                    (a ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
+                }));
             let scale = if key.ends_with("A_log") {
                 return (0..n).map(|_| bf(1.0 + r.next())).collect();
             } else if key.ends_with("norm.weight") {
@@ -771,13 +1007,30 @@ pub mod check {
         let plan = VdnPlan::new(&layout, &VdnTransform::released())?;
         let sl = layout.sequence_length();
         let mut rng = Rng(77);
-        let n = CudaTensor::from_vec(rng.vec(sl * cfg.hidden_size, 1.5), vec![1, sl, cfg.hidden_size])?.to_device()?;
+        let n = CudaTensor::from_vec(
+            rng.vec(sl * cfg.hidden_size, 1.5),
+            vec![1, sl, cfg.hidden_size],
+        )?
+        .to_device()?;
         let c = cfg.num_attention_heads * D;
-        let packed = CudaTensor::from_vec(rng.vec(sl * 3 * c, 2.0), vec![1, sl, 3 * c])?.to_device()?;
+        let packed =
+            CudaTensor::from_vec(rng.vec(sl * 3 * c, 2.0), vec![1, sl, 3 * c])?.to_device()?;
         let aux = branch.aux(&n)?;
-        let dev_r = branch.readout(&n, &packed, &aux, &plan, false)?.host_cow()?.into_owned();
-        let host_r = branch.readout(&n, &packed, &aux, &plan, true)?.host_cow()?.into_owned();
-        out.push(compare("branch_end_to_end", &dev_r, &host_r, 3e-2, "device kernels vs host reference, 12 inner frames"));
+        let dev_r = branch
+            .readout(&n, &packed, &aux, &plan, false)?
+            .host_cow()?
+            .into_owned();
+        let host_r = branch
+            .readout(&n, &packed, &aux, &plan, true)?
+            .host_cow()?
+            .into_owned();
+        out.push(compare(
+            "branch_end_to_end",
+            &dev_r,
+            &host_r,
+            3e-2,
+            "device kernels vs host reference, 12 inner frames",
+        ));
         Ok(())
     }
 
@@ -787,23 +1040,38 @@ pub mod check {
         let map = generated(9);
         let branch = VdnBranch::load(&map, "transformer_blocks.0.attn", &cfg)?;
         let c = cfg.num_attention_heads * D;
-        for (label, latent) in [("480p_5s", (37usize, 30usize, 52usize)), ("768p_5s", (37, 48, 84))] {
+        for (label, latent) in [
+            ("480p_5s", (37usize, 30usize, 52usize)),
+            ("768p_5s", (37, 48, 84)),
+        ] {
             let layout = H3PackedLayout::new(256, latent, 207, cfg.patch_size).map_err(msg)?;
             let plan = VdnPlan::new(&layout, &VdnTransform::released())?;
             let sl = layout.sequence_length();
             let mut rng = Rng(3);
-            let n = CudaTensor::from_vec(rng.vec(sl * cfg.hidden_size, 1.0), vec![1, sl, cfg.hidden_size])?.to_device()?.quantize_bf16()?;
-            let packed = CudaTensor::from_vec(rng.vec(sl * 3 * c, 2.0), vec![1, sl, 3 * c])?.to_device()?.quantize_bf16()?;
+            let n = CudaTensor::from_vec(
+                rng.vec(sl * cfg.hidden_size, 1.0),
+                vec![1, sl, cfg.hidden_size],
+            )?
+            .to_device()?
+            .quantize_bf16()?;
+            let packed = CudaTensor::from_vec(rng.vec(sl * 3 * c, 2.0), vec![1, sl, 3 * c])?
+                .to_device()?
+                .quantize_bf16()?;
             let aux = branch.aux(&n)?;
             let _ = branch.readout(&n, &packed, &aux, &plan, false)?;
             sync()?;
             let t0 = std::time::Instant::now();
             let _ = branch.readout(&n, &packed, &aux, &plan, false)?;
             sync()?;
-            times.push(VdnTiming { name: format!("branch_{label}"), ms: t0.elapsed().as_secs_f64() * 1e3 });
+            times.push(VdnTiming {
+                name: format!("branch_{label}"),
+                ms: t0.elapsed().as_secs_f64() * 1e3,
+            });
             let hd = cfg.num_attention_heads;
             let qkv = |k: f32| -> Result<CudaTensor> {
-                CudaTensor::from_vec(Rng(k as u64).vec(hd * sl * D, 1.0), vec![1, hd, sl, D])?.to_device()?.quantize_bf16()
+                CudaTensor::from_vec(Rng(k as u64).vec(hd * sl * D, 1.0), vec![1, hd, sl, D])?
+                    .to_device()?
+                    .quantize_bf16()
             };
             let (q, k, v) = (qkv(1.0)?, qkv(2.0)?, qkv(3.0)?);
             for (name, window) in [("window", true), ("dense", false)] {
@@ -820,7 +1088,10 @@ pub mod check {
                 let t0 = std::time::Instant::now();
                 run()?;
                 sync()?;
-                times.push(VdnTiming { name: format!("attn_{name}_{label}"), ms: t0.elapsed().as_secs_f64() * 1e3 });
+                times.push(VdnTiming {
+                    name: format!("attn_{name}_{label}"),
+                    ms: t0.elapsed().as_secs_f64() * 1e3,
+                });
             }
         }
         Ok(())
@@ -905,13 +1176,16 @@ pub(crate) mod dev {
         })
     }
 
-    fn load_embedded(dev: &DeviceContext) -> Result<Option<(Arc<cudarc::driver::CudaModule>, String)>> {
+    fn load_embedded(
+        dev: &DeviceContext,
+    ) -> Result<Option<(Arc<cudarc::driver::CudaModule>, String)>> {
         let want = (dev.sm_major * 10 + dev.sm_minor) as u32;
         if crate::wan::envflag::string_flag("FASTVIDEO_KERNELS", "auto") == "nvrtc" {
             return Ok(None);
         }
         if let Some((_, cubin, _)) = aot::AOT_H3_VDN.iter().find(|(sm, _, _)| *sm == want) {
-            let path = std::env::temp_dir().join(format!("fv-h3-vdn-{}-sm{want}.cubin", std::process::id()));
+            let path = std::env::temp_dir()
+                .join(format!("fv-h3-vdn-{}-sm{want}.cubin", std::process::id()));
             std::fs::write(&path, cubin).map_err(err)?;
             let loaded = dev.ctx.load_module(cudarc::nvrtc::Ptx::from_file(&path));
             let _ = std::fs::remove_file(&path);
@@ -922,7 +1196,10 @@ pub(crate) mod dev {
             .filter(|(sm, _, _)| sm / 10 == want / 10 && *sm <= want)
             .max_by_key(|(sm, _, _)| *sm)
         {
-            let module = dev.ctx.load_module(cudarc::nvrtc::Ptx::from_src(*ptx)).map_err(err)?;
+            let module = dev
+                .ctx
+                .load_module(cudarc::nvrtc::Ptx::from_src(*ptx))
+                .map_err(err)?;
             return Ok(Some((module, format!("ptx compute{sm}"))));
         }
         Ok(None)
@@ -944,9 +1221,15 @@ pub(crate) mod dev {
                 options: vec!["-std=c++17".into()],
                 ..Default::default()
             };
-            let (module, origin) =
-                crate::wan::nvrtc_sass::load_for_device(&dev.ctx, dev.sm_major, dev.sm_minor, SRC, &opts, "h3-vdn")
-                    .map_err(err)?;
+            let (module, origin) = crate::wan::nvrtc_sass::load_for_device(
+                &dev.ctx,
+                dev.sm_major,
+                dev.sm_minor,
+                SRC,
+                &opts,
+                "h3-vdn",
+            )
+            .map_err(err)?;
             (module, origin.to_string())
         };
         let f = |name: &str| module.load_function(name).map_err(err);
@@ -1044,7 +1327,8 @@ pub(crate) mod dev {
 
     /// A bf16 device view of `t` (converted when stored as f32).
     fn bf16_of(t: &CudaTensor) -> Result<Arc<CudaSlice<half::bf16>>> {
-        t.dev_bf16()?.ok_or_else(|| msg("vdn: tensor not on the device"))
+        t.dev_bf16()?
+            .ok_or_else(|| msg("vdn: tensor not on the device"))
     }
 
     fn tensor16(s: CudaSlice<half::bf16>, shape: Vec<usize>) -> Result<CudaTensor> {
@@ -1169,7 +1453,13 @@ pub(crate) mod dev {
             &mp, &dp, &hi, &ri, &zp)
         .map_err(err)?;
         let mut alpha = alloc::<f32>(frames * c)?;
-        let (zp, up, dt, al, ap) = (ptr(&z), ptr(&sm.alpha_up), ptr(&sm.dt_bias), ptr(&sm.a_log), ptr_mut(&mut alpha));
+        let (zp, up, dt, al, ap) = (
+            ptr(&z),
+            ptr(&sm.alpha_up),
+            ptr(&sm.dt_bias),
+            ptr(&sm.a_log),
+            ptr_mut(&mut alpha),
+        );
         let (ci, fi) = (c as i32, frames as i32);
         launch!(dev.stream, &k.alpha_up, cfg((blocks(frames * c, 256), 1, 1), 0);
             &zp, &up, &dt, &al, &ri, &ci, &fi, &ap)
@@ -1245,14 +1535,27 @@ pub(crate) mod dev {
             .map_err(err)?;
         let n = frames * heads * D * D;
         let mut out = alloc::<half::bf16>(n)?;
-        let (pp, qp, sp, lpp, pl, op) = (ptr(p), ptr(q), ptr(start), ptr(&lp), ptr(plan), ptr_mut(&mut out));
+        let (pp, qp, sp, lpp, pl, op) = (
+            ptr(p),
+            ptr(q),
+            ptr(start),
+            ptr(&lp),
+            ptr(plan),
+            ptr_mut(&mut out),
+        );
         launch!(dev.stream, &k.gather, cfg((blocks(n / 2, 256), 1, 1), 0);
             &pp, &qp, &sp, &lpp, &pl, &f, &h, &op)
         .map_err(err)?;
         Ok(out)
     }
 
-    pub(crate) fn copy_cols(src: u64, stride: usize, off: usize, rows: usize, w: usize) -> Result<CudaSlice<half::bf16>> {
+    pub(crate) fn copy_cols(
+        src: u64,
+        stride: usize,
+        off: usize,
+        rows: usize,
+        w: usize,
+    ) -> Result<CudaSlice<half::bf16>> {
         let dev = ctx()?;
         let k = kernels()?;
         let mut out = alloc::<half::bf16>(rows * w)?;
@@ -1285,7 +1588,12 @@ pub(crate) mod dev {
         Ok(out)
     }
 
-    pub(crate) fn gate_heads(o: &CudaTensor, aux: &CudaTensor, cols: AuxCols, heads: usize) -> Result<Option<CudaTensor>> {
+    pub(crate) fn gate_heads(
+        o: &CudaTensor,
+        aux: &CudaTensor,
+        cols: AuxCols,
+        heads: usize,
+    ) -> Result<Option<CudaTensor>> {
         let [1, h, s, d] = o.shape[..] else {
             return Ok(None);
         };
@@ -1306,7 +1614,11 @@ pub(crate) mod dev {
         Ok(Some(tensor16(out, o.shape.clone())?))
     }
 
-    pub(crate) fn add_rows(out: &CudaTensor, add: &CudaTensor, row0: usize) -> Result<Option<CudaTensor>> {
+    pub(crate) fn add_rows(
+        out: &CudaTensor,
+        add: &CudaTensor,
+        row0: usize,
+    ) -> Result<Option<CudaTensor>> {
         if !crate::wan::stats::device_expected() {
             return Ok(None);
         }
@@ -1349,15 +1661,42 @@ pub(crate) mod dev {
         let row_ptr = |base: u64, row: usize, stride: usize| base + (row * stride * el) as u64;
         // 1. features
         let q = act_rows(row_ptr(pp, r0, width), width, 0, rows, heads, true)?;
-        let k_sp = sconv5(row_ptr(pp, r0, width), width, c, frames, l.grid_h, l.grid_w, c, &sm.k_sp)?;
+        let k_sp = sconv5(
+            row_ptr(pp, r0, width),
+            width,
+            c,
+            frames,
+            l.grid_h,
+            l.grid_w,
+            c,
+            &sm.k_sp,
+        )?;
         let k = tconv5_act(&k_sp, frames, s, heads, &sm.k_tm, true)?;
         drop(k_sp);
-        let v_sp = sconv5(row_ptr(pp, r0, width), width, 2 * c, frames, l.grid_h, l.grid_w, c, &sm.v_sp)?;
+        let v_sp = sconv5(
+            row_ptr(pp, r0, width),
+            width,
+            2 * c,
+            frames,
+            l.grid_h,
+            l.grid_w,
+            c,
+            &sm.v_sp,
+        )?;
         let v = tconv5_act(&v_sp, frames, s, heads, &sm.v_tm, false)?;
         drop(v_sp);
         // 2-4. statistics, decay
         let aw = b.cols.width;
-        let (a, bm) = frame_stats(&k, &v, row_ptr(ap, r0, aw), aw, b.cols.beta, frames, s, heads)?;
+        let (a, bm) = frame_stats(
+            &k,
+            &v,
+            row_ptr(ap, r0, aw),
+            aw,
+            b.cols.beta,
+            frames,
+            s,
+            heads,
+        )?;
         drop((k, v));
         let alpha = alpha(xp, r0, frames, s, b.hidden, heads, sm)?;
         // 6. the text state (both scans start from half of it)
@@ -1379,7 +1718,10 @@ pub(crate) mod dev {
         let state = gather(&pb, &qb, &start, &alpha, &planv, frames, heads)?;
         drop((pb, qb, alpha, start));
         // 9. output gate and readout
-        let og_mid = tensor16(copy_cols(row_ptr(ap, r0, aw), aw, b.cols.og, rows, b.rank)?, vec![rows, b.rank])?;
+        let og_mid = tensor16(
+            copy_cols(row_ptr(ap, r0, aw), aw, b.cols.og, rows, b.rank)?,
+            vec![rows, b.rank],
+        )?;
         let og = b.og_up.forward(&og_mid)?;
         drop(og_mid);
         let ogs = bf16_of(&og)?;
@@ -1464,9 +1806,18 @@ mod tests {
         let (v, _) = model
             .forward(
                 2,
-                &t(seeded(nv * cfg.video_patch_dim(), 0.41), vec![nv, cfg.video_patch_dim()]),
-                &t(seeded(na * cfg.audio_in_channels, 0.23), vec![na, cfg.audio_in_channels]),
-                &t(seeded(nt * cfg.hidden_size, 0.57), vec![1, nt, cfg.hidden_size]),
+                &t(
+                    seeded(nv * cfg.video_patch_dim(), 0.41),
+                    vec![nv, cfg.video_patch_dim()],
+                ),
+                &t(
+                    seeded(na * cfg.audio_in_channels, 0.23),
+                    vec![na, cfg.audio_in_channels],
+                ),
+                &t(
+                    seeded(nt * cfg.hidden_size, 0.57),
+                    vec![1, nt, cfg.hidden_size],
+                ),
                 &dl,
                 mode,
                 Some(&mut |name, t| {
@@ -1494,7 +1845,11 @@ mod tests {
     fn a_covered_clip_with_an_open_gate_is_dense_attention() {
         let (vdn, layout) = run(6, false, true);
         let (dense, _) = run(6, false, false);
-        assert!(VdnPlan::new(&layout, &VdnTransform::released()).unwrap().full_cover);
+        assert!(
+            VdnPlan::new(&layout, &VdnTransform::released())
+                .unwrap()
+                .full_cover
+        );
         let scale = dense.video.iter().fold(0f32, |m, v| m.max(v.abs()));
         assert!(scale > 1e-3);
         for (i, (a, b)) in vdn.video.iter().zip(&dense.video).enumerate() {
@@ -1530,7 +1885,10 @@ mod tests {
                 assert_eq!(a, b, "row {row} is outside the inner frames");
             }
         }
-        assert!(inner_diff > 1e-4, "the branch changed nothing ({inner_diff})");
+        assert!(
+            inner_diff > 1e-4,
+            "the branch changed nothing ({inner_diff})"
+        );
     }
 
     /// The window SDPA's host path is the reference's masked softmax, and the

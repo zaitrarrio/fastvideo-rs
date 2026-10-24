@@ -8,7 +8,9 @@
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use fastvideo_media::decode::{is_keyframe, keyframe_size, DecodedPicture, DecoderPool, VideoDecoder, VideoDecoderConfig};
+use fastvideo_media::decode::{
+    is_keyframe, keyframe_size, DecodedPicture, DecoderPool, VideoDecoder, VideoDecoderConfig,
+};
 use fastvideo_media::tools;
 use fastvideo_media::video::{EncodedFrame, FfmpegH264, H264Config, PipeEncoder, VideoEncoder};
 use fastvideo_media::vp8::{Vp8Config, Vp8Encoder};
@@ -16,8 +18,15 @@ use fastvideo_media::RgbFrame;
 use fastvideo_protocol::InputVideoCodec;
 
 fn has_encoder(name: &str) -> bool {
-    let out = Command::new(tools::ffmpeg_bin()).args(["-hide_banner", "-encoders"]).stderr(Stdio::null()).output();
-    let ok = out.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().any(|w| w == name));
+    let out = Command::new(tools::ffmpeg_bin())
+        .args(["-hide_banner", "-encoders"])
+        .stderr(Stdio::null())
+        .output();
+    let ok = out.is_ok_and(|o| {
+        String::from_utf8_lossy(&o.stdout)
+            .split_whitespace()
+            .any(|w| w == name)
+    });
     if !ok {
         eprintln!("skipping {name}: not in this ffmpeg (set FV_FFMPEG)");
     }
@@ -94,7 +103,9 @@ fn codecs() -> Vec<InputVideoCodec> {
 }
 
 fn close(a: [u8; 3], b: [u8; 3], tol: i32) -> bool {
-    a.iter().zip(b).all(|(x, y)| (i32::from(*x) - i32::from(y)).abs() <= tol)
+    a.iter()
+        .zip(b)
+        .all(|(x, y)| (i32::from(*x) - i32::from(y)).abs() <= tol)
 }
 
 fn decode_all(dec: &mut VideoDecoder, frames: &[EncodedFrame], pts0: u64) -> Vec<DecodedPicture> {
@@ -110,20 +121,41 @@ fn decode_all(dec: &mut VideoDecoder, frames: &[EncodedFrame], pts0: u64) -> Vec
 fn decodes_scales_and_keeps_order() {
     for codec in codecs() {
         let colours = [[200u8, 30, 30], [30, 200, 30], [30, 30, 200]];
-        let src: Vec<RgbFrame> = (0..30).map(|i| frame(320, 240, colours[i as usize / 10], i)).collect();
+        let src: Vec<RgbFrame> = (0..30)
+            .map(|i| frame(320, 240, colours[i as usize / 10], i))
+            .collect();
         let enc = Enc::new(codec, 320, 240).encode_all(&src);
-        assert!(enc[0].keyframe && is_keyframe(codec, &enc[0].data), "{codec:?}: first frame is a keyframe");
-        assert_eq!(keyframe_size(codec, &enc[0].data), Some((320, 240)), "{codec:?}");
-        let mut dec = VideoDecoder::new(VideoDecoderConfig { codec, width: 160, height: 120 }).unwrap();
+        assert!(
+            enc[0].keyframe && is_keyframe(codec, &enc[0].data),
+            "{codec:?}: first frame is a keyframe"
+        );
+        assert_eq!(
+            keyframe_size(codec, &enc[0].data),
+            Some((320, 240)),
+            "{codec:?}"
+        );
+        let mut dec = VideoDecoder::new(VideoDecoderConfig {
+            codec,
+            width: 160,
+            height: 120,
+        })
+        .unwrap();
         let mut got = decode_all(&mut dec, &enc, 1_000);
         got.extend(dec.finish().unwrap());
         assert_eq!(got.len(), 30, "{codec:?}: one picture per frame");
         for (i, p) in got.iter().enumerate() {
             assert_eq!((p.frame.width, p.frame.height), (160, 120));
-            assert_eq!(p.pts_us, 1_000 + i as u64 * 33_333, "{codec:?}: pts of picture {i}");
+            assert_eq!(
+                p.pts_us,
+                1_000 + i as u64 * 33_333,
+                "{codec:?}: pts of picture {i}"
+            );
             // Same aspect: no padding; the body colour survives.
             let c = p.frame.pixel(80, 100).unwrap();
-            assert!(close(c, colours[i / 10], 40), "{codec:?} picture {i}: {c:?}");
+            assert!(
+                close(c, colours[i / 10], 40),
+                "{codec:?} picture {i}: {c:?}"
+            );
         }
         let s = dec.stats();
         assert_eq!((s.frames_in, s.frames_out), (30, 30));
@@ -139,15 +171,28 @@ fn resolution_change_is_padded_into_the_same_size() {
         let second = Enc::new(codec, 240, 240).encode_all(&b);
         assert_eq!(keyframe_size(codec, &second[0].data), Some((240, 240)));
         enc.extend(second);
-        let mut dec = VideoDecoder::new(VideoDecoderConfig { codec, width: 160, height: 120 }).unwrap();
+        let mut dec = VideoDecoder::new(VideoDecoderConfig {
+            codec,
+            width: 160,
+            height: 120,
+        })
+        .unwrap();
         let mut got = decode_all(&mut dec, &enc, 0);
         got.extend(dec.finish().unwrap());
         assert_eq!(got.len(), 12, "{codec:?}");
         let last = &got[11].frame;
         assert_eq!((last.width, last.height), (160, 120));
         // A square picture in a 4:3 frame: black bars left and right.
-        assert!(close(last.pixel(5, 60).unwrap(), [0, 0, 0], 24), "{codec:?}: {:?}", last.pixel(5, 60));
-        assert!(close(last.pixel(80, 100).unwrap(), [40, 220, 220], 40), "{codec:?}: {:?}", last.pixel(80, 100));
+        assert!(
+            close(last.pixel(5, 60).unwrap(), [0, 0, 0], 24),
+            "{codec:?}: {:?}",
+            last.pixel(5, 60)
+        );
+        assert!(
+            close(last.pixel(80, 100).unwrap(), [40, 220, 220], 40),
+            "{codec:?}: {:?}",
+            last.pixel(80, 100)
+        );
     }
 }
 
@@ -173,7 +218,11 @@ fn one_frame_behind(realtime: bool) {
     let enc = Enc::new(InputVideoCodec::H264, 320, 240).encode_all(&src);
     // A pre-started process (as a session has), so ffmpeg's start on a
     // loaded host is not measured.
-    let cfg = VideoDecoderConfig { codec: InputVideoCodec::H264, width: 320, height: 240 };
+    let cfg = VideoDecoderConfig {
+        codec: InputVideoCodec::H264,
+        width: 320,
+        height: 240,
+    };
     let pool = DecoderPool::new(true);
     pool.prewarm(cfg);
     let t0 = Instant::now();
@@ -209,10 +258,16 @@ fn one_frame_behind(realtime: bool) {
 
 #[test]
 fn restart_swaps_in_the_warm_spare() {
-    let Some(codec) = codecs().first().copied() else { return };
+    let Some(codec) = codecs().first().copied() else {
+        return;
+    };
     let src: Vec<RgbFrame> = (0..4).map(|i| frame(160, 120, [10, 120, 250], i)).collect();
     let enc = Enc::new(codec, 160, 120).encode_all(&src);
-    let cfg = VideoDecoderConfig { codec, width: 160, height: 120 };
+    let cfg = VideoDecoderConfig {
+        codec,
+        width: 160,
+        height: 120,
+    };
     let pool = DecoderPool::new(true);
     // The session pre-starts a decoder before any frame; the first decoder
     // adopts it, and the pool starts the decoder's spare.
@@ -236,7 +291,11 @@ fn restart_swaps_in_the_warm_spare() {
     let mut got = decode_all(&mut dec, &enc, 0);
     got.extend(dec.finish().unwrap());
     assert_eq!(got.len(), 4);
-    assert!(close(got[3].frame.pixel(80, 100).unwrap(), [10, 120, 250], 40));
+    assert!(close(
+        got[3].frame.pixel(80, 100).unwrap(),
+        [10, 120, 250],
+        40
+    ));
     // Without a pool, a restart starts cold.
     let mut cold = VideoDecoder::with_spare(cfg, false).unwrap();
     cold.restart().unwrap();

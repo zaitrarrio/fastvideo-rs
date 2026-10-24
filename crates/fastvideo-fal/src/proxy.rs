@@ -43,7 +43,11 @@ pub fn map_target(target: &str) -> Result<String, String> {
         "fal.run" => format!("/run{path}"),
         "wma.fal.run" => format!("/wma{path}"),
         "rest.fal.ai" | "rest.alpha.fal.ai" => path.to_owned(),
-        other => return Err(format!("{TARGET_HEADER} host `{other}` is not routed by this server")),
+        other => {
+            return Err(format!(
+                "{TARGET_HEADER} host `{other}` is not routed by this server"
+            ))
+        }
     };
     Ok(match u.query() {
         Some(q) => format!("{mapped}?{q}"),
@@ -52,13 +56,23 @@ pub fn map_target(target: &str) -> Result<String, String> {
 }
 
 fn bad(detail: String) -> Response {
-    let mut r = (StatusCode::BAD_REQUEST, axum::Json(json!({"detail": detail, "error_type": "bad_request"}))).into_response();
-    r.headers_mut().insert("x-fal-error-type", HeaderValue::from_static("bad_request"));
+    let mut r = (
+        StatusCode::BAD_REQUEST,
+        axum::Json(json!({"detail": detail, "error_type": "bad_request"})),
+    )
+        .into_response();
+    r.headers_mut()
+        .insert("x-fal-error-type", HeaderValue::from_static("bad_request"));
     r
 }
 
 async fn proxy(inner: Router, req: Request) -> Response {
-    let Some(target) = req.headers().get(TARGET_HEADER).and_then(|v| v.to_str().ok()).map(str::to_owned) else {
+    let Some(target) = req
+        .headers()
+        .get(TARGET_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+    else {
         return bad(format!("Missing the {TARGET_HEADER} header"));
     };
     let path = match map_target(&target) {
@@ -80,7 +94,10 @@ async fn proxy(inner: Router, req: Request) -> Response {
 
 /// `ANY /fal/proxy`, dispatching into `inner` (a router with its state).
 pub fn proxy_router(inner: Router) -> Router {
-    Router::new().route("/fal/proxy", any(move |req: Request<Body>| proxy(inner.clone(), req)))
+    Router::new().route(
+        "/fal/proxy",
+        any(move |req: Request<Body>| proxy(inner.clone(), req)),
+    )
 }
 
 #[cfg(test)]
@@ -90,12 +107,27 @@ mod tests {
     #[test]
     fn targets() {
         let m = |s: &str| map_target(s);
-        assert_eq!(m("https://queue.fal.run/minimax/h3-max/text-to-video?fal_webhook=x").unwrap(), "/minimax/h3-max/text-to-video?fal_webhook=x");
-        assert_eq!(m("https://queue.fal.run/minimax/h3-max/requests/r1/status?logs=1").unwrap(), "/minimax/h3-max/requests/r1/status?logs=1");
-        assert_eq!(m("https://fal.run/minimax/h3-max/text-to-video").unwrap(), "/run/minimax/h3-max/text-to-video");
-        assert_eq!(m("https://fal.run/minimax/h3-max/director/ice").unwrap(), "/run/minimax/h3-max/director/ice");
+        assert_eq!(
+            m("https://queue.fal.run/minimax/h3-max/text-to-video?fal_webhook=x").unwrap(),
+            "/minimax/h3-max/text-to-video?fal_webhook=x"
+        );
+        assert_eq!(
+            m("https://queue.fal.run/minimax/h3-max/requests/r1/status?logs=1").unwrap(),
+            "/minimax/h3-max/requests/r1/status?logs=1"
+        );
+        assert_eq!(
+            m("https://fal.run/minimax/h3-max/text-to-video").unwrap(),
+            "/run/minimax/h3-max/text-to-video"
+        );
+        assert_eq!(
+            m("https://fal.run/minimax/h3-max/director/ice").unwrap(),
+            "/run/minimax/h3-max/director/ice"
+        );
         assert_eq!(m("https://wma.fal.run/session").unwrap(), "/wma/session");
-        assert_eq!(m("https://rest.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3").unwrap(), "/storage/upload/initiate?storage_type=fal-cdn-v3");
+        assert_eq!(
+            m("https://rest.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3").unwrap(),
+            "/storage/upload/initiate?storage_type=fal-cdn-v3"
+        );
         assert!(m("https://evil.example.com/x").is_err());
         assert!(m("not a url").is_err());
         assert!(m("ftp://queue.fal.run/x").is_err());

@@ -93,19 +93,25 @@ pub fn router(cfg: LtxConfig) -> Router<ServeCtx> {
             let s = st.clone();
             r = r.route(
                 &path,
-                post(move |State(ctx): State<ServeCtx>, headers: HeaderMap, body: Bytes| {
-                    let (s, route) = (s.clone(), route.clone());
-                    async move { generate(ctx, s, api, ep, route, headers, body).await }
-                }),
+                post(
+                    move |State(ctx): State<ServeCtx>, headers: HeaderMap, body: Bytes| {
+                        let (s, route) = (s.clone(), route.clone());
+                        async move { generate(ctx, s, api, ep, route, headers, body).await }
+                    },
+                ),
             );
             if api == Api::V2 {
                 let s = st.clone();
                 r = r.route(
                     &format!("{path}/{{id}}"),
-                    get(move |State(ctx): State<ServeCtx>, UrlPath(id): UrlPath<String>, headers: HeaderMap| {
-                        let s = s.clone();
-                        async move { status(ctx, s, Some(ep), id, headers).await }
-                    }),
+                    get(
+                        move |State(ctx): State<ServeCtx>,
+                              UrlPath(id): UrlPath<String>,
+                              headers: HeaderMap| {
+                            let s = s.clone();
+                            async move { status(ctx, s, Some(ep), id, headers).await }
+                        },
+                    ),
                 );
             }
         }
@@ -113,44 +119,51 @@ pub fn router(cfg: LtxConfig) -> Router<ServeCtx> {
             let path = format!("{}/{stub}", api.prefix());
             r = r.route(
                 &path,
-                post(move |State(ctx): State<ServeCtx>, headers: HeaderMap| async move {
-                    let rid = fastvideo_serve_kit::random_token();
-                    let reply = ctx
-                        .auth()
-                        .authenticate(api.protocol(), &headers)
-                        .and_then(|_| Err::<HttpReply, _>(refused()))
-                        .unwrap_or_else(|e| error::render(&e, api, &ecx(&rid, None)));
-                    finish(reply, &rid, &ctx).await
-                }),
+                post(
+                    move |State(ctx): State<ServeCtx>, headers: HeaderMap| async move {
+                        let rid = fastvideo_serve_kit::random_token();
+                        let reply = ctx
+                            .auth()
+                            .authenticate(api.protocol(), &headers)
+                            .and_then(|_| Err::<HttpReply, _>(refused()))
+                            .unwrap_or_else(|e| error::render(&e, api, &ecx(&rid, None)));
+                        finish(reply, &rid, &ctx).await
+                    },
+                ),
             );
             if api == Api::V2 {
                 let s = st.clone();
                 r = r.route(
                     &format!("{path}/{{id}}"),
-                    get(move |State(ctx): State<ServeCtx>, UrlPath(id): UrlPath<String>, headers: HeaderMap| {
-                        let s = s.clone();
-                        async move { status(ctx, s, None, id, headers).await }
-                    }),
+                    get(
+                        move |State(ctx): State<ServeCtx>,
+                              UrlPath(id): UrlPath<String>,
+                              headers: HeaderMap| {
+                            let s = s.clone();
+                            async move { status(ctx, s, None, id, headers).await }
+                        },
+                    ),
                 );
             }
         }
     }
     r.route(
         "/v1/upload",
-        post(|State(ctx): State<ServeCtx>, headers: HeaderMap| async move {
-            let rid = fastvideo_serve_kit::random_token();
-            let reply = async {
-                ctx.auth().authenticate(Api::V1.protocol(), &headers)?;
-                let t = ctx
-                    .uploads()
-                    .create(None, None, ctx.now())
-                    .map_err(|e| ApiError::internal(format!("creating the upload failed: {e}")))?;
-                Ok::<_, ApiError>(upload_reply(&t))
-            }
-            .await
-            .unwrap_or_else(|e| error::render(&e, Api::V1, &ecx(&rid, None)));
-            finish(reply, &rid, &ctx).await
-        }),
+        post(
+            |State(ctx): State<ServeCtx>, headers: HeaderMap| async move {
+                let rid = fastvideo_serve_kit::random_token();
+                let reply = async {
+                    ctx.auth().authenticate(Api::V1.protocol(), &headers)?;
+                    let t = ctx.uploads().create(None, None, ctx.now()).map_err(|e| {
+                        ApiError::internal(format!("creating the upload failed: {e}"))
+                    })?;
+                    Ok::<_, ApiError>(upload_reply(&t))
+                }
+                .await
+                .unwrap_or_else(|e| error::render(&e, Api::V1, &ecx(&rid, None)));
+                finish(reply, &rid, &ctx).await
+            },
+        ),
     )
     .layer(DefaultBodyLimit::max(body_max))
     .layer(axum::middleware::map_response(ensure_request_id))
@@ -166,7 +179,9 @@ fn ecx(rid: &str, external_id: Option<&str>) -> ErrorCtx {
 
 /// Stamps `rid` as the reply's only `x-request-id` and converts it.
 async fn finish(mut reply: HttpReply, rid: &str, ctx: &ServeCtx) -> Response {
-    reply.headers.retain(|(k, _)| !k.eq_ignore_ascii_case("x-request-id"));
+    reply
+        .headers
+        .retain(|(k, _)| !k.eq_ignore_ascii_case("x-request-id"));
     reply.push_header("x-request-id", rid);
     into_response(reply, ctx, None).await
 }
@@ -226,10 +241,15 @@ async fn generate(
         ncx.request_id = rid.clone();
         let submit = Submit::new(ep, api, st.models.clone());
         let mut req = submit.normalize(echo.clone(), &ncx)?;
-        let requested = echo.get("model").and_then(Value::as_str).unwrap_or_default();
+        let requested = echo
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         req.model = bind_model(&ctx, &req.model, requested)?;
         let _slot = match (api, &st.limit) {
-            (Api::V1, Some(l)) => Some(l.acquire(owner.as_ref().map(|k| k.0.as_str()).unwrap_or(""))?),
+            (Api::V1, Some(l)) => {
+                Some(l.acquire(owner.as_ref().map(|k| k.0.as_str()).unwrap_or(""))?)
+            }
             _ => None,
         };
         let job = submit_request(&ctx, &proto, req, owner, echo, &st.cfg.ingest).await?;

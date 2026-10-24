@@ -160,7 +160,10 @@ pub fn ic_lora_info(path: &Path) -> Result<IcLoraInfo> {
         )));
     }
     Ok(IcLoraInfo {
-        downscale: fastvideo_models::ltx2::lora::reference_scale(meta, "reference_downscale_factor"),
+        downscale: fastvideo_models::ltx2::lora::reference_scale(
+            meta,
+            "reference_downscale_factor",
+        ),
         temporal_scale: fastvideo_models::ltx2::lora::reference_scale(
             meta,
             "reference_temporal_scale_factor",
@@ -215,6 +218,7 @@ pub fn apply_bf16(key: &str, weight: &mut [half::bf16], shape: &[usize]) -> Resu
 }
 
 /// Host product used by [`apply_bf16`]: f32 fuse then round back to bf16.
+#[cfg(test)]
 pub(crate) fn apply_bf16_values(
     weight: &mut [half::bf16],
     shape: &[usize],
@@ -315,7 +319,7 @@ mod tests {
     #[test]
     fn set_strength_on_refuses_attached_linear() {
         let (out, inn, rank) = (3usize, 2usize, 1usize);
-        let w0 = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let w0 = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
         let a = vec![0.5f32, -0.25];
         let b = vec![2.0f32, 0.0, 1.0];
         let w0_bf: Vec<half::bf16> = w0.iter().copied().map(half::bf16::from_f32).collect();

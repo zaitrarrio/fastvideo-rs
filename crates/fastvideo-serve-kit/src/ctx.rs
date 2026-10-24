@@ -12,13 +12,15 @@ use std::time::Duration;
 
 use axum::Router;
 use fastvideo_protocol::{
-    ApiError, GenerationRequest, Job, JobId, JobStore, ModelCaps, PromptModerator, ProtocolId, UrlSigner,
-    ViewCtx,
+    ApiError, GenerationRequest, Job, JobId, JobStore, ModelCaps, PromptModerator, ProtocolId,
+    UrlSigner, ViewCtx,
 };
 use time::OffsetDateTime;
 use url::Url;
 
-use crate::artifacts::{files_router, ArtifactStore, FileServer, LocalArtifactStore, LocalUrls, UrlKey};
+use crate::artifacts::{
+    files_router, ArtifactStore, FileServer, LocalArtifactStore, LocalUrls, UrlKey,
+};
 use crate::auth::Auth;
 use crate::callback::{CallbackRender, CallbackSender};
 use crate::ingest::{DefaultProber, Ingestor, Prober};
@@ -209,8 +211,14 @@ impl ServeCtxBuilder {
     pub async fn build(self) -> std::io::Result<ServeCtx> {
         let dir = &self.cfg.state_dir;
         let key = self.url_key.unwrap_or_else(UrlKey::random);
-        let urls = LocalUrls { public_base: self.cfg.public_base.clone(), key: key.clone() };
-        let art_root = self.artifacts_root.clone().unwrap_or_else(|| dir.join("artifacts"));
+        let urls = LocalUrls {
+            public_base: self.cfg.public_base.clone(),
+            key: key.clone(),
+        };
+        let art_root = self
+            .artifacts_root
+            .clone()
+            .unwrap_or_else(|| dir.join("artifacts"));
         let up_root = dir.join("uploads");
         tokio::fs::create_dir_all(&art_root).await?;
         let artifacts: Arc<dyn ArtifactStore> = match self.artifacts {
@@ -228,11 +236,17 @@ impl ServeCtxBuilder {
         };
         let uploads = Arc::new(UploadStore::new(&up_root, urls)?);
         let callbacks = self.callbacks.unwrap_or_else(|| {
-            Arc::new(CallbackSender::new(CallbackSender::default_transport(), None))
+            Arc::new(CallbackSender::new(
+                CallbackSender::default_transport(),
+                None,
+            ))
         });
         Ok(ServeCtx {
             inner: Arc::new(Inner {
-                files: Arc::new(FileServer { key, roots: vec![art_root, up_root] }),
+                files: Arc::new(FileServer {
+                    key,
+                    roots: vec![art_root, up_root],
+                }),
                 ingest: Ingestor::new(Some(uploads.clone()), self.prober),
                 cfg: self.cfg,
                 auth: self.auth,
@@ -311,7 +325,11 @@ impl ServeCtx {
         }
     }
     /// The same for a bare prompt (the director's `configure` / `prompt`).
-    pub async fn moderate_prompt(&self, prompt: &str, has_visual_input: bool) -> Result<(), ApiError> {
+    pub async fn moderate_prompt(
+        &self,
+        prompt: &str,
+        has_visual_input: bool,
+    ) -> Result<(), ApiError> {
         match &self.inner.moderator {
             Some(m) => fastvideo_protocol::moderate(m.as_ref(), prompt, has_visual_input).await,
             None => Ok(()),
@@ -330,7 +348,11 @@ impl ServeCtx {
     }
     /// A scratch dir for engine outputs of job `id`.
     pub fn outputs_dir(&self, id: JobId) -> PathBuf {
-        self.inner.cfg.state_dir.join("outputs").join(id.to_string())
+        self.inner
+            .cfg
+            .state_dir
+            .join("outputs")
+            .join(id.to_string())
     }
     pub fn url_signer(&self) -> &dyn UrlSigner {
         self.inner.artifacts.signer()
@@ -348,8 +370,10 @@ impl ServeCtx {
 
     /// `GET /files/{id}/{name}` and `PUT /uploads/{token}` (design §9).
     pub fn routes<S: Clone + Send + Sync + 'static>(&self) -> Router<S> {
-        files_router(self.inner.files.clone())
-            .merge(uploads_router_with_clock(self.inner.uploads.clone(), self.inner.now.clone()))
+        files_router(self.inner.files.clone()).merge(uploads_router_with_clock(
+            self.inner.uploads.clone(),
+            self.inner.now.clone(),
+        ))
     }
 
     /// Sends the job's callback for its current state, if it has one and its

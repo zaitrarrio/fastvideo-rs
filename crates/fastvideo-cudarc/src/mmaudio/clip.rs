@@ -69,18 +69,28 @@ impl ResBlock {
                 .reshape(vec![b, n, h, hd])?
                 .permute(&[0, 2, 1, 3])
         };
-        let o = nn::scaled_dot_product_attention_masked(&part(0)?, &part(1)?, &part(2)?, None, mask)?;
+        let o =
+            nn::scaled_dot_product_attention_masked(&part(0)?, &part(1)?, &part(2)?, None, mask)?;
         let o = o.permute(&[0, 2, 1, 3])?.reshape(vec![b, n, d])?;
         let x = x.add(&self.out_proj.forward(&o)?)?;
         let xn = x.layer_norm(1e-5, Some(&self.ln2.0), Some(&self.ln2.1))?;
-        let m = self.c_proj.forward(&quick_gelu(&self.c_fc.forward(&xn)?)?)?;
+        let m = self
+            .c_proj
+            .forward(&quick_gelu(&self.c_fc.forward(&xn)?)?)?;
         x.add(&m)
     }
 }
 
 fn blocks(map: &WeightMap, prefix: &str, cfg: &ClipTowerConfig) -> Result<Vec<ResBlock>> {
     (0..cfg.layers)
-        .map(|i| ResBlock::load(map, &format!("{prefix}.resblocks.{i}"), cfg.width, cfg.heads))
+        .map(|i| {
+            ResBlock::load(
+                map,
+                &format!("{prefix}.resblocks.{i}"),
+                cfg.width,
+                cfg.heads,
+            )
+        })
         .collect()
 }
 
@@ -99,10 +109,20 @@ pub struct ClipVisual {
 
 impl ClipVisual {
     pub fn vit_h14() -> ClipTowerConfig {
-        ClipTowerConfig { width: 1280, layers: 32, heads: 16 }
+        ClipTowerConfig {
+            width: 1280,
+            layers: 32,
+            heads: 16,
+        }
     }
 
-    pub fn load(cfg: ClipTowerConfig, map: &WeightMap, patch: usize, grid: usize, embed: usize) -> Result<Self> {
+    pub fn load(
+        cfg: ClipTowerConfig,
+        map: &WeightMap,
+        patch: usize,
+        grid: usize,
+        embed: usize,
+    ) -> Result<Self> {
         let d = cfg.width;
         let proj = host_values(map, "visual.proj", &[d, embed])?;
         // x @ proj == Linear with weight proj^T.
@@ -166,13 +186,26 @@ pub struct ClipText {
 
 impl ClipText {
     pub fn h14_text() -> ClipTowerConfig {
-        ClipTowerConfig { width: 1024, layers: 24, heads: 16 }
+        ClipTowerConfig {
+            width: 1024,
+            layers: 24,
+            heads: 16,
+        }
     }
 
-    pub fn load(cfg: ClipTowerConfig, map: &WeightMap, vocab: usize, context: usize) -> Result<Self> {
+    pub fn load(
+        cfg: ClipTowerConfig,
+        map: &WeightMap,
+        vocab: usize,
+        context: usize,
+    ) -> Result<Self> {
         let d = cfg.width;
         Ok(Self {
-            token_embedding: crate::wan::weights::cuda_tensor_shaped(map, "token_embedding.weight", &[vocab, d])?,
+            token_embedding: crate::wan::weights::cuda_tensor_shaped(
+                map,
+                "token_embedding.weight",
+                &[vocab, d],
+            )?,
             pos: weight(map, "positional_embedding", &[context, d])?,
             blocks: blocks(map, "transformer", &cfg)?,
             ln_final: ln(map, "ln_final", d)?,
@@ -189,7 +222,10 @@ impl ClipText {
         }
         let d = self.cfg.width;
         let idx: Vec<usize> = ids.iter().map(|&i| i as usize).collect();
-        let x = self.token_embedding.embedding_rows(&idx)?.reshape(vec![1, n, d])?;
+        let x = self
+            .token_embedding
+            .embedding_rows(&idx)?
+            .reshape(vec![1, n, d])?;
         let mut x = x.add(&self.pos)?;
         let mut mask = vec![0.0f32; n * n];
         for i in 0..n {

@@ -134,7 +134,9 @@ pub fn scope(spec: &RouteSpec) -> Scope {
         Owner::Ltx => {
             if p == "/v1/upload" {
                 Scope::Pinned
-            } else if LTX_STUBS.iter().any(|s| p.split('/').nth(2) == Some(s)) || p.starts_with("/v1/") {
+            } else if LTX_STUBS.iter().any(|s| p.split('/').nth(2) == Some(s))
+                || p.starts_with("/v1/")
+            {
                 // 403/404 stubs, and v1 sync whose reply is the video itself.
                 Scope::Local
             } else {
@@ -200,7 +202,11 @@ impl Matcher {
     /// win over parameters, as in the router), or `None` when no route of
     /// the table matches.
     pub fn scope_of(&self, method: &Method, path: &str) -> Option<Scope> {
-        let method = if method == Method::HEAD { "GET" } else { method.as_str() };
+        let method = if method == Method::HEAD {
+            "GET"
+        } else {
+            method.as_str()
+        };
         let segs: Vec<&str> = path.split('/').skip(1).collect();
         self.entries
             .iter()
@@ -224,27 +230,35 @@ pub fn layer(router: Router, policy: Policy, fal_apps: &[String]) -> Router {
         return router;
     }
     let matcher = Arc::new(Matcher::new(fal_apps));
-    router.layer(axum::middleware::from_fn(move |req: Request<Body>, next: Next| {
-        let matcher = matcher.clone();
-        async move {
-            if req.method() == Method::OPTIONS {
-                return next.run(req).await;
+    router.layer(axum::middleware::from_fn(
+        move |req: Request<Body>, next: Next| {
+            let matcher = matcher.clone();
+            async move {
+                if req.method() == Method::OPTIONS {
+                    return next.run(req).await;
+                }
+                let found = matcher.scope_of(req.method(), req.uri().path());
+                let why = match found {
+                    Some(s) if policy.serves_route(s, req.uri().path()) => None,
+                    Some(s) => policy.refusal(s),
+                    None => Some("it is not a route of this server's table"),
+                };
+                match why {
+                    None => next.run(req).await,
+                    Some(why) => refuse(&policy, req.method(), req.uri().path(), found, why),
+                }
             }
-            let found = matcher.scope_of(req.method(), req.uri().path());
-            let why = match found {
-                Some(s) if policy.serves_route(s, req.uri().path()) => None,
-                Some(s) => policy.refusal(s),
-                None => Some("it is not a route of this server's table"),
-            };
-            match why {
-                None => next.run(req).await,
-                Some(why) => refuse(&policy, req.method(), req.uri().path(), found, why),
-            }
-        }
-    }))
+        },
+    ))
 }
 
-fn refuse(policy: &Policy, method: &Method, path: &str, scope: Option<Scope>, why: &str) -> Response {
+fn refuse(
+    policy: &Policy,
+    method: &Method,
+    path: &str,
+    scope: Option<Scope>,
+    why: &str,
+) -> Response {
     let body = json!({
         "error": {
             "type": "not_served_by_multi_worker_deployment",
@@ -256,13 +270,20 @@ fn refuse(policy: &Policy, method: &Method, path: &str, scope: Option<Scope>, wh
         }
     });
     let mut r = (StatusCode::NOT_FOUND, Json(body)).into_response();
-    r.headers_mut().insert("x-fv-multi-worker", HeaderValue::from_static("not-served"));
+    r.headers_mut()
+        .insert("x-fv-multi-worker", HeaderValue::from_static("not-served"));
     r
 }
 
 /// A startup summary of what is and is not served.
 pub fn summary(policy: &Policy) -> serde_json::Value {
-    let all = [Scope::Local, Scope::Sync, Scope::Jobs, Scope::Keys, Scope::Pinned];
+    let all = [
+        Scope::Local,
+        Scope::Sync,
+        Scope::Jobs,
+        Scope::Keys,
+        Scope::Pinned,
+    ];
     json!({
         "workers_max": policy.workers_max,
         "served": all.iter().filter(|s| policy.serves(**s)).collect::<Vec<_>>(),
@@ -286,11 +307,19 @@ mod tests {
             ("GET", "/ping", Scope::Local),
             ("GET", "/healthz", Scope::Local),
             ("GET", "/metrics", Scope::Local),
-            ("GET", "/console/models/minimax/h3-max/text-to-video", Scope::Local),
+            (
+                "GET",
+                "/console/models/minimax/h3-max/text-to-video",
+                Scope::Local,
+            ),
             ("GET", "/v1/models", Scope::Local),
             ("GET", "/fv/v1/capabilities", Scope::Local),
             ("GET", "/fv/v1/status", Scope::Local),
-            ("GET", "/fal/schema/minimax/h3-max/text-to-video", Scope::Local),
+            (
+                "GET",
+                "/fal/schema/minimax/h3-max/text-to-video",
+                Scope::Local,
+            ),
             ("GET", "/.well-known/jwks.json", Scope::Local),
             ("POST", "/v1/text-to-video", Scope::Local),
             ("POST", "/v2/video-to-video-hdr", Scope::Local),
@@ -317,7 +346,11 @@ mod tests {
             ("GET", "/fv/v1/jobs/fvjob_1/content", Scope::Jobs),
             ("POST", "/minimax/h3-max/text-to-video", Scope::Jobs),
             ("GET", "/minimax/h3-max/requests/abc/status", Scope::Jobs),
-            ("GET", "/minimax/h3-max/text-to-video/requests/abc/response", Scope::Jobs),
+            (
+                "GET",
+                "/minimax/h3-max/text-to-video/requests/abc/response",
+                Scope::Jobs,
+            ),
             ("GET", "/fv/v1/admin/keys", Scope::Keys),
             ("DELETE", "/fv/v1/admin/keys/key_1", Scope::Keys),
             ("DELETE", "/v1/videos/video_abc", Scope::Pinned),
@@ -325,7 +358,11 @@ mod tests {
             ("DELETE", "/v2/video_generation/123", Scope::Pinned),
             ("DELETE", "/fv/v1/jobs/fvjob_1", Scope::Pinned),
             ("PUT", "/minimax/h3-max/requests/abc/cancel", Scope::Pinned),
-            ("GET", "/minimax/h3-max/requests/abc/status/stream", Scope::Pinned),
+            (
+                "GET",
+                "/minimax/h3-max/requests/abc/status/stream",
+                Scope::Pinned,
+            ),
             ("GET", "/files/a/b.mp4", Scope::Pinned),
             ("PUT", "/uploads/tok", Scope::Pinned),
             ("POST", "/v1/upload", Scope::Pinned),
@@ -336,14 +373,27 @@ mod tests {
             ("POST", "/wma/session", Scope::Pinned),
             ("POST", "/minimax/h3-max/director/ice", Scope::Pinned),
             ("POST", "/start_session", Scope::Pinned),
-            ("GET", "/sessions/s/transport/webrtc/ice_servers", Scope::Pinned),
+            (
+                "GET",
+                "/sessions/s/transport/webrtc/ice_servers",
+                Scope::Pinned,
+            ),
         ];
         for (meth, path, want) in cases {
             let got = m.scope_of(&Method::from_bytes(meth.as_bytes()).unwrap(), path);
             assert_eq!(got, Some(*want), "{meth} {path}");
         }
-        for (meth, path) in [("GET", "/nope"), ("POST", "/minimax/h9/text-to-video"), ("PATCH", "/v1/videos"), ("GET", "/v1/videos/")] {
-            assert_eq!(m.scope_of(&Method::from_bytes(meth.as_bytes()).unwrap(), path), None, "{meth} {path}");
+        for (meth, path) in [
+            ("GET", "/nope"),
+            ("POST", "/minimax/h9/text-to-video"),
+            ("PATCH", "/v1/videos"),
+            ("GET", "/v1/videos/"),
+        ] {
+            assert_eq!(
+                m.scope_of(&Method::from_bytes(meth.as_bytes()).unwrap(), path),
+                None,
+                "{meth} {path}"
+            );
         }
     }
 
@@ -351,7 +401,12 @@ mod tests {
     fn the_whole_table_is_classified_and_matchable() {
         let m = Matcher::new(&apps());
         for s in route_table(&apps()) {
-            let uri = s.path.split('/').map(|seg| if seg.starts_with('{') { "x" } else { seg }).collect::<Vec<_>>().join("/");
+            let uri = s
+                .path
+                .split('/')
+                .map(|seg| if seg.starts_with('{') { "x" } else { seg })
+                .collect::<Vec<_>>()
+                .join("/");
             let got = m.scope_of(&Method::from_bytes(s.method.as_bytes()).unwrap(), &uri);
             assert_eq!(got, Some(scope(&s)), "{} {}", s.method, s.path);
         }
@@ -359,16 +414,30 @@ mod tests {
 
     #[test]
     fn policy_per_shared_state() {
-        let single = Policy { workers_max: 1, ..Default::default() };
+        let single = Policy {
+            workers_max: 1,
+            ..Default::default()
+        };
         assert!(single.serves(Scope::Pinned));
-        let bare = Policy { workers_max: 3, ..Default::default() };
+        let bare = Policy {
+            workers_max: 3,
+            ..Default::default()
+        };
         assert!(bare.serves(Scope::Local));
         for s in [Scope::Sync, Scope::Jobs, Scope::Keys, Scope::Pinned] {
             assert!(!bare.serves(s), "{s:?}");
         }
         let jobs_only = Policy { jobs: true, ..bare };
-        assert!(!jobs_only.serves(Scope::Jobs), "D1 jobs with local artifacts");
-        let shared = Policy { jobs: true, artifacts: true, keys: true, ..bare };
+        assert!(
+            !jobs_only.serves(Scope::Jobs),
+            "D1 jobs with local artifacts"
+        );
+        let shared = Policy {
+            jobs: true,
+            artifacts: true,
+            keys: true,
+            ..bare
+        };
         for s in [Scope::Local, Scope::Sync, Scope::Jobs, Scope::Keys] {
             assert!(shared.serves(s), "{s:?}");
         }

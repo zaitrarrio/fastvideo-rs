@@ -127,9 +127,32 @@ pub fn recompress(img: &RgbImage, crf: u32) -> Result<RgbImage> {
         use std::io::Write;
         let mut child = Command::new(&ffmpeg)
             .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo"])
-            .args(["-pix_fmt", "rgb24", "-s", &format!("{w}x{h}"), "-r", "1", "-i", "-"])
-            .args(["-sws_flags", "bilinear", "-frames:v", "1", "-c:v", "libx264"])
-            .args(["-preset", "veryfast", "-crf", &crf.to_string(), "-pix_fmt", "yuv420p"])
+            .args([
+                "-pix_fmt",
+                "rgb24",
+                "-s",
+                &format!("{w}x{h}"),
+                "-r",
+                "1",
+                "-i",
+                "-",
+            ])
+            .args([
+                "-sws_flags",
+                "bilinear",
+                "-frames:v",
+                "1",
+                "-c:v",
+                "libx264",
+            ])
+            .args([
+                "-preset",
+                "veryfast",
+                "-crf",
+                &crf.to_string(),
+                "-pix_fmt",
+                "yuv420p",
+            ])
             .args(["-f", "mp4"])
             .arg(&tmp)
             .stdin(std::process::Stdio::piped())
@@ -182,7 +205,9 @@ fn uuid_like() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
-    t ^ N.fetch_add(1, Ordering::Relaxed).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+    t ^ N
+        .fetch_add(1, Ordering::Relaxed)
+        .wrapping_mul(0x9e37_79b9_7f4a_7c15)
 }
 
 /// `torch.nn.functional.interpolate(mode="bilinear", align_corners=False)`
@@ -397,7 +422,12 @@ impl StageConditioning {
     pub fn pinned(rows: usize, frame_tokens: usize, segments: Vec<CondSegment>) -> Result<Self> {
         let mut at = 0usize;
         for s in &segments {
-            if s.start < at || s.start + s.len > rows || s.len == 0 || s.clean.shape.len() != 3 || s.clean.shape[1] != s.len {
+            if s.start < at
+                || s.start + s.len > rows
+                || s.len == 0
+                || s.clean.shape.len() != 3
+                || s.clean.shape[1] != s.len
+            {
                 return Err(msg(format!(
                     "ltx2 pinned rows {}..{} (clean {:?}) do not fit {rows} rows in order",
                     s.start,
@@ -406,7 +436,10 @@ impl StageConditioning {
                 )));
             }
             if !(0.0..=1.0).contains(&s.mask) {
-                return Err(msg(format!("ltx2 pinned mask {} is outside [0, 1]", s.mask)));
+                return Err(msg(format!(
+                    "ltx2 pinned mask {} is outside [0, 1]",
+                    s.mask
+                )));
             }
             at = s.start + s.len;
         }
@@ -554,7 +587,10 @@ impl StageConditioning {
         self.splice(&plain, |_, s| {
             let xs = x.narrow(1, s.start, s.len)?;
             let vs = v.narrow(1, s.start, s.len)?;
-            Ok(CudaTensor::lincomb(&[(1.0, &xs), (-(s.mask * sigma), &vs)])?)
+            Ok(CudaTensor::lincomb(&[
+                (1.0, &xs),
+                (-(s.mask * sigma), &vs),
+            ])?)
         })
     }
 
@@ -564,7 +600,10 @@ impl StageConditioning {
             if s.mask == 0.0 {
                 Ok(s.clean.clone())
             } else {
-                Ok(CudaTensor::lincomb(&[(s.mask, xs), (1.0 - s.mask, &s.clean)])?)
+                Ok(CudaTensor::lincomb(&[
+                    (s.mask, xs),
+                    (1.0 - s.mask, &s.clean),
+                ])?)
             }
         })
     }
@@ -626,7 +665,8 @@ mod tests {
         }
         let px = image_pixels(&img, 2, 2);
         assert_eq!(px.len(), 12);
-        let r = |x: u32| fastvideo_models::ltx2::schedule::bf16_round((x * 50) as f32 / 127.5 - 1.0);
+        let r =
+            |x: u32| fastvideo_models::ltx2::schedule::bf16_round((x * 50) as f32 / 127.5 - 1.0);
         assert_eq!(px[0], r(1));
         assert_eq!(px[1], r(2));
     }
@@ -653,7 +693,12 @@ mod tests {
         assert_eq!((segs[1].start, segs[1].len, segs[1].mask), (6, 2, 0.5));
 
         let noise = t(vec![1.0; 8 * 3], vec![1, 8, 3]);
-        let x = c.apply_initial(&noise).unwrap().host_cow().unwrap().into_owned();
+        let x = c
+            .apply_initial(&noise)
+            .unwrap()
+            .host_cow()
+            .unwrap()
+            .into_owned();
         assert_eq!(&x[..6], &[7.0; 6]);
         assert_eq!(&x[6..18], &[1.0; 12]);
         // lerp(9, 1, 0.5) = 1 − (1 − 9)·0.5 = 5
@@ -665,7 +710,12 @@ mod tests {
         assert_eq!(&x0[..6], &[3.0; 6]); // mask 0: timestep 0
         assert_eq!(&x0[6..18], &[2.0; 12]); // 3 − 0.5·2
         assert_eq!(&x0[18..], &[2.5; 6]); // 3 − 0.25·2
-        let p = c.post(&t(x0, vec![1, 8, 3])).unwrap().host_cow().unwrap().into_owned();
+        let p = c
+            .post(&t(x0, vec![1, 8, 3]))
+            .unwrap()
+            .host_cow()
+            .unwrap()
+            .into_owned();
         assert_eq!(&p[..6], &[7.0; 6]);
         assert_eq!(&p[18..], &[0.5 * 2.5 + 0.5 * 9.0; 6]);
         assert_eq!(c.clear(&noise).unwrap().shape, vec![1, 6, 3]);
@@ -693,14 +743,29 @@ mod tests {
         let segs = c.timestep_segments();
         assert_eq!((segs[1].start, segs[1].len, segs[1].mask), (8, 6, 0.0));
         let noise = t(vec![1.0; 14 * 3], vec![1, 14, 3]);
-        let x = c.apply_initial(&noise).unwrap().host_cow().unwrap().into_owned();
+        let x = c
+            .apply_initial(&noise)
+            .unwrap()
+            .host_cow()
+            .unwrap()
+            .into_owned();
         assert_eq!(&x[..18], &[1.0; 18]);
         assert_eq!(&x[18..24], &[9.0; 6]);
         assert_eq!(&x[24..], &[4.0; 18]);
         let v = t(vec![2.0; 14 * 3], vec![1, 14, 3]);
-        let x0 = c.x0(&noise, &v, 0.5).unwrap().host_cow().unwrap().into_owned();
+        let x0 = c
+            .x0(&noise, &v, 0.5)
+            .unwrap()
+            .host_cow()
+            .unwrap()
+            .into_owned();
         assert_eq!(&x0[24..], &[1.0; 18]); // mask 0: timestep 0, x0 = x
-        let p = c.post(&t(x0, vec![1, 14, 3])).unwrap().host_cow().unwrap().into_owned();
+        let p = c
+            .post(&t(x0, vec![1, 14, 3]))
+            .unwrap()
+            .host_cow()
+            .unwrap()
+            .into_owned();
         assert_eq!(&p[24..], &[4.0; 18]);
         assert_eq!(c.clear(&noise).unwrap().shape, vec![1, 6, 3]);
         // A second reference, or one outside [0, 1], is refused.

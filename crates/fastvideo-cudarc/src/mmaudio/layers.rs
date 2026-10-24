@@ -16,7 +16,9 @@ pub(crate) fn pinned(data: Vec<f32>, shape: Vec<usize>) -> Result<CudaTensor> {
 }
 
 pub(crate) fn host_values(map: &WeightMap, key: &str, shape: &[usize]) -> Result<Vec<f32>> {
-    Ok(cuda_tensor_shaped(map, key, shape)?.host_cow()?.into_owned())
+    Ok(cuda_tensor_shaped(map, key, shape)?
+        .host_cow()?
+        .into_owned())
 }
 
 pub(crate) fn weight(map: &WeightMap, key: &str, shape: &[usize]) -> Result<CudaTensor> {
@@ -34,7 +36,12 @@ pub(crate) fn linear(
 }
 
 /// `Linear` from explicit host values (`w`: `[out, in]`).
-pub(crate) fn linear_from(w: Vec<f32>, b: Option<Vec<f32>>, out_dim: usize, in_dim: usize) -> Result<Linear> {
+pub(crate) fn linear_from(
+    w: Vec<f32>,
+    b: Option<Vec<f32>>,
+    out_dim: usize,
+    in_dim: usize,
+) -> Result<Linear> {
     let wt = CudaTensor::from_vec(w, vec![out_dim, in_dim])?;
     let bt = match b {
         Some(b) => Some(CudaTensor::from_vec(b, vec![out_dim])?),
@@ -52,7 +59,14 @@ pub(crate) struct Conv1d {
 }
 
 impl Conv1d {
-    pub fn load(map: &WeightMap, prefix: &str, cin: usize, cout: usize, k: usize, bias: bool) -> Result<Self> {
+    pub fn load(
+        map: &WeightMap,
+        prefix: &str,
+        cin: usize,
+        cout: usize,
+        k: usize,
+        bias: bool,
+    ) -> Result<Self> {
         Ok(Self {
             weight: weight(map, &format!("{prefix}.weight"), &[cout, cin, k])?,
             bias: if bias {
@@ -64,7 +78,13 @@ impl Conv1d {
         })
     }
 
-    pub fn from_host(w: Vec<f32>, b: Option<Vec<f32>>, cout: usize, cin: usize, k: usize) -> Result<Self> {
+    pub fn from_host(
+        w: Vec<f32>,
+        b: Option<Vec<f32>>,
+        cout: usize,
+        cin: usize,
+        k: usize,
+    ) -> Result<Self> {
         Ok(Self {
             weight: pinned(w, vec![cout, cin, k])?,
             bias: match b {
@@ -108,7 +128,8 @@ impl Mlp {
     }
 
     pub fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
-        self.w2.forward(&swiglu(&self.w1.forward(x)?, &self.w3.forward(x)?)?)
+        self.w2
+            .forward(&swiglu(&self.w1.forward(x)?, &self.w3.forward(x)?)?)
     }
 }
 
@@ -120,7 +141,13 @@ pub(crate) struct ConvMlp {
 }
 
 impl ConvMlp {
-    pub fn load(map: &WeightMap, prefix: &str, dim: usize, hidden: usize, k: usize) -> Result<Self> {
+    pub fn load(
+        map: &WeightMap,
+        prefix: &str,
+        dim: usize,
+        hidden: usize,
+        k: usize,
+    ) -> Result<Self> {
         Ok(Self {
             w1: Conv1d::load(map, &format!("{prefix}.w1"), dim, hidden, k, false)?,
             w2: Conv1d::load(map, &format!("{prefix}.w2"), hidden, dim, k, false)?,
@@ -137,7 +164,11 @@ impl ConvMlp {
 }
 
 /// `x * (1 + scale) + shift`.
-pub(crate) fn modulate(x: &CudaTensor, shift: &CudaTensor, scale: &CudaTensor) -> Result<CudaTensor> {
+pub(crate) fn modulate(
+    x: &CudaTensor,
+    shift: &CudaTensor,
+    scale: &CudaTensor,
+) -> Result<CudaTensor> {
     x.mul(&scale.try_add_scalar(1.0)?)?.add(shift)
 }
 
@@ -159,7 +190,10 @@ pub(crate) fn quick_gelu(x: &CudaTensor) -> Result<CudaTensor> {
 /// Mean over axis 1 of `[B, N, D]` as a GEMM with a `1/N` row: `[B, 1, D]`.
 pub(crate) fn mean_seq(x: &CudaTensor) -> Result<CudaTensor> {
     let [b, n, d] = x.shape[..] else {
-        return Err(msg(format!("mean_seq expects [B, N, D], got {:?}", x.shape)));
+        return Err(msg(format!(
+            "mean_seq expects [B, N, D], got {:?}",
+            x.shape
+        )));
     };
     let ones = CudaTensor::from_vec(vec![1.0 / n as f32; n], vec![1, 1, n])?;
     let mut rows = Vec::with_capacity(b);
@@ -180,7 +214,11 @@ pub(crate) fn gather_rows(x: &CudaTensor, idx: &[usize]) -> Result<CudaTensor> {
 /// Half-split RoPE tables `[S, dim]` (cos, sin) for the interleaved angles
 /// `angles[s * dim/2 + i]` after the head channels were reordered to
 /// `(0, 2, 4, …, 1, 3, 5, …)`.
-pub(crate) fn rope_tables(angles: &[f32], len: usize, dim: usize) -> Result<(CudaTensor, CudaTensor)> {
+pub(crate) fn rope_tables(
+    angles: &[f32],
+    len: usize,
+    dim: usize,
+) -> Result<(CudaTensor, CudaTensor)> {
     let half = dim / 2;
     let mut cos = vec![0.0f32; len * dim];
     let mut sin = vec![0.0f32; len * dim];

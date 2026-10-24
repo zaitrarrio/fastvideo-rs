@@ -73,6 +73,7 @@ pub fn snapshot() -> Snapshot {
 
 /// Counted by the `launch!` macro, so no call site can forget.
 #[inline]
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 pub(crate) fn record_launch() {
     LAUNCHES.fetch_add(1, Relaxed);
 }
@@ -153,38 +154,6 @@ pub(crate) fn host_algorithm(op: &'static str, detail: impl std::fmt::Display) -
     host_fallback(op, detail)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn host_fallback_is_silent_without_a_device() {
-        reset();
-        host_fallback("add", "cpu run").unwrap();
-        assert_eq!(snapshot().total_fallbacks(), 0);
-        host_algorithm("sol_attn", "cpu oracle").unwrap();
-        assert_eq!(snapshot().total_fallbacks(), 0);
-    }
-
-    #[test]
-    fn since_subtracts_per_op() {
-        let a = Snapshot {
-            host_fallbacks: [("add", 2u64)].into_iter().collect(),
-            h2d_count: 1,
-            ..Snapshot::default()
-        };
-        let b = Snapshot {
-            host_fallbacks: [("add", 5u64), ("cat", 1)].into_iter().collect(),
-            h2d_count: 4,
-            ..Snapshot::default()
-        };
-        let d = b.since(&a);
-        assert_eq!(d.host_fallbacks.get("add"), Some(&3));
-        assert_eq!(d.host_fallbacks.get("cat"), Some(&1));
-        assert_eq!(d.h2d_count, 3);
-    }
-}
-
 // ---- phase profiling ------------------------------------------------------
 
 /// `FASTVIDEO_PROFILE=1`: accumulate wall time per named phase of the DiT
@@ -234,4 +203,36 @@ pub fn phase_report() -> Vec<(&'static str, u64, f64)> {
 /// the untimed pass into the report we quote.
 pub fn phase_reset() {
     PHASES.lock().expect("phase lock").clear();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_fallback_is_silent_without_a_device() {
+        reset();
+        host_fallback("add", "cpu run").unwrap();
+        assert_eq!(snapshot().total_fallbacks(), 0);
+        host_algorithm("sol_attn", "cpu oracle").unwrap();
+        assert_eq!(snapshot().total_fallbacks(), 0);
+    }
+
+    #[test]
+    fn since_subtracts_per_op() {
+        let a = Snapshot {
+            host_fallbacks: [("add", 2u64)].into_iter().collect(),
+            h2d_count: 1,
+            ..Snapshot::default()
+        };
+        let b = Snapshot {
+            host_fallbacks: [("add", 5u64), ("cat", 1)].into_iter().collect(),
+            h2d_count: 4,
+            ..Snapshot::default()
+        };
+        let d = b.since(&a);
+        assert_eq!(d.host_fallbacks.get("add"), Some(&3));
+        assert_eq!(d.host_fallbacks.get("cat"), Some(&1));
+        assert_eq!(d.h2d_count, 3);
+    }
 }

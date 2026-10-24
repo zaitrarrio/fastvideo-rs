@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use fastvideo_autoscale::admin::{admin_router, bearer, ADMIN_PATH};
-use fastvideo_autoscale::config::{AutoscaleConfig, PodConfig, PoolConfig, PoolKind, ServerlessConfig};
+use fastvideo_autoscale::config::{
+    AutoscaleConfig, PodConfig, PoolConfig, PoolKind, ServerlessConfig,
+};
 use fastvideo_autoscale::controller::Controller;
 use fastvideo_autoscale::lease::MemoryLease;
 use fastvideo_autoscale::provider::Providers;
@@ -18,7 +20,10 @@ use tower::ServiceExt;
 
 fn profile() -> FamilyProfile {
     // wan-like, no uncached pulls: deterministic cold starts of 120 s.
-    FamilyProfile { uncached_share: 0.0, ..FamilyProfile::wan() }
+    FamilyProfile {
+        uncached_share: 0.0,
+        ..FamilyProfile::wan()
+    }
 }
 
 fn serverless_pool() -> PoolConfig {
@@ -31,7 +36,12 @@ fn serverless_pool() -> PoolConfig {
         default_job_s: 6.4,
         cold_start_s: 120.0,
         idle_timeout_s: 300.0,
-        serverless: ServerlessConfig { endpoint_id: "sim".into(), scaler_value: 30, idle_timeout_s: 60, ..ServerlessConfig::default() },
+        serverless: ServerlessConfig {
+            endpoint_id: "sim".into(),
+            scaler_value: 30,
+            idle_timeout_s: 60,
+            ..ServerlessConfig::default()
+        },
         ..PoolConfig::default()
     }
 }
@@ -60,7 +70,13 @@ fn setup(pool: PoolConfig, arrivals: Vec<Arrival>, dry_run: bool) -> (SharedWorl
     (world, ctrl)
 }
 
-fn controller(pool: PoolConfig, world: &SharedWorld, lease: Arc<MemoryLease>, holder: &str, dry_run: bool) -> Controller {
+fn controller(
+    pool: PoolConfig,
+    world: &SharedWorld,
+    lease: Arc<MemoryLease>,
+    holder: &str,
+    dry_run: bool,
+) -> Controller {
     let cfg = AutoscaleConfig {
         enabled: true,
         dry_run,
@@ -70,8 +86,16 @@ fn controller(pool: PoolConfig, world: &SharedWorld, lease: Arc<MemoryLease>, ho
         ..AutoscaleConfig::default()
     };
     let sim = Arc::new(SimProvider(world.clone()));
-    let providers = Providers::new(sim.clone()).with(PoolKind::Serverless, sim.clone()).with(PoolKind::Pod, sim);
-    Controller::new(cfg, providers, Arc::new(SimSignals(world.clone())), lease, holder)
+    let providers = Providers::new(sim.clone())
+        .with(PoolKind::Serverless, sim.clone())
+        .with(PoolKind::Pod, sim);
+    Controller::new(
+        cfg,
+        providers,
+        Arc::new(SimSignals(world.clone())),
+        lease,
+        holder,
+    )
 }
 
 async fn run_for(world: &SharedWorld, ctrls: &[&Controller], from: f64, secs: f64) {
@@ -86,7 +110,9 @@ async fn run_for(world: &SharedWorld, ctrls: &[&Controller], from: f64, secs: f6
 }
 
 fn burst(at: f64, n: usize) -> Vec<Arrival> {
-    (0..n).map(|i| Arrival::job(SIM_EPOCH + at + i as f64)).collect()
+    (0..n)
+        .map(|i| Arrival::job(SIM_EPOCH + at + i as f64))
+        .collect()
 }
 
 #[tokio::test]
@@ -94,11 +120,18 @@ async fn serverless_burst_raises_min_then_returns_to_zero() {
     let (world, ctrl) = setup(serverless_pool(), burst(60.0, 30), false);
     run_for(&world, &[&ctrl], SIM_EPOCH, 90.0).await;
     let ep = world.lock().unwrap().endpoint("wan").unwrap();
-    assert!(ep.workers_min >= 2, "min raised ahead of Runpod's scaler: {ep:?}");
+    assert!(
+        ep.workers_min >= 2,
+        "min raised ahead of Runpod's scaler: {ep:?}"
+    );
     assert_eq!(ep.workers_max, 3);
     run_for(&world, &[&ctrl], SIM_EPOCH + 90.0, 1800.0).await;
     let w = world.lock().unwrap();
-    assert_eq!(w.endpoint("wan").unwrap().workers_min, 0, "back to zero after idle");
+    assert_eq!(
+        w.endpoint("wan").unwrap().workers_min,
+        0,
+        "back to zero after idle"
+    );
     assert_eq!(w.worker_count("wan"), 0, "Runpod reaped the idle workers");
     let st = w.stats("wan");
     assert_eq!(st.jobs, 30);
@@ -121,9 +154,16 @@ async fn pod_pool_creates_drains_and_deletes_never_busy() {
     let st = w.stats("wan");
     assert_eq!(st.jobs, 40);
     assert_eq!(st.streams, 1);
-    assert_eq!(st.busy_delete_attempts, 0, "the policy never asked to delete a busy pod");
+    assert_eq!(
+        st.busy_delete_attempts, 0,
+        "the policy never asked to delete a busy pod"
+    );
     assert!(st.max_workers >= 2);
-    assert_eq!(w.worker_count("wan"), 0, "all pods deleted after the stream ended and the idle timeout");
+    assert_eq!(
+        w.worker_count("wan"),
+        0,
+        "all pods deleted after the stream ended and the idle timeout"
+    );
     assert_eq!(w.outstanding("wan"), 0);
 }
 
@@ -139,7 +179,10 @@ async fn pods_past_max_lifetime_are_replaced() {
     // One warm pod at a time, each replaced about every 30 min.
     assert!((5..=8).contains(&st.cold_starts), "{}", st.cold_starts);
     assert!(w.worker_count("wan") >= 1);
-    assert!(st.max_workers <= 2, "replacement overlaps by one pod at most");
+    assert!(
+        st.max_workers <= 2,
+        "replacement overlaps by one pod at most"
+    );
 }
 
 #[tokio::test]
@@ -158,7 +201,10 @@ async fn only_the_lease_holder_applies() {
     let rb = b.tick(SIM_EPOCH + 1.0).await;
     assert!(ra.leader && !rb.leader);
     assert!(ra.pools[0].applied.is_some());
-    assert!(rb.pools[0].applied.is_none(), "the follower decides but does not apply");
+    assert!(
+        rb.pools[0].applied.is_none(),
+        "the follower decides but does not apply"
+    );
     assert_eq!(world.lock().unwrap().stats("wan").endpoint_patches, 1);
     // The leader stops renewing: after the TTL (60 s) the other replica takes over.
     let rb = b.tick(SIM_EPOCH + 30.0).await;
@@ -172,11 +218,19 @@ async fn dry_run_decides_without_applying() {
     let (world, ctrl) = setup(serverless_pool(), burst(0.0, 20), true);
     let r = ctrl.tick(SIM_EPOCH + 5.0).await;
     world.lock().unwrap().advance_to(SIM_EPOCH + 5.0);
-    let r = if r.pools[0].decision.target > 0 { r } else { ctrl.tick(SIM_EPOCH + 20.0).await };
+    let r = if r.pools[0].decision.target > 0 {
+        r
+    } else {
+        ctrl.tick(SIM_EPOCH + 20.0).await
+    };
     assert!(r.dry_run && r.leader);
     assert_eq!(r.pools[0].decision.action, Action::ScaleUp);
     assert!(r.pools[0].applied.is_none());
-    assert_eq!(world.lock().unwrap().endpoint("wan").unwrap().workers_min, 0, "nothing written");
+    assert_eq!(
+        world.lock().unwrap().endpoint("wan").unwrap().workers_min,
+        0,
+        "nothing written"
+    );
     // Switching dry run off applies the next decision.
     ctrl.set_dry_run(false);
     let r = ctrl.tick(SIM_EPOCH + 35.0).await;
@@ -204,17 +258,31 @@ async fn admin_route_needs_the_token() {
     let ctrl = Arc::new(ctrl);
     ctrl.tick(SIM_EPOCH).await;
     let app = admin_router(ctrl.clone(), bearer("s3cret"));
-    let r = app.clone().oneshot(Request::get(ADMIN_PATH).body(Body::empty()).unwrap()).await.unwrap();
-    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
     let r = app
         .clone()
-        .oneshot(Request::get(ADMIN_PATH).header("authorization", "Bearer wrong!").body(Body::empty()).unwrap())
+        .oneshot(Request::get(ADMIN_PATH).body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
     let r = app
         .clone()
-        .oneshot(Request::get(ADMIN_PATH).header("authorization", "Bearer s3cret").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::get(ADMIN_PATH)
+                .header("authorization", "Bearer wrong!")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    let r = app
+        .clone()
+        .oneshot(
+            Request::get(ADMIN_PATH)
+                .header("authorization", "Bearer s3cret")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
@@ -256,10 +324,18 @@ fn harness_autoscaler_beats_runpod_only_on_steady_h3() {
     let b = harness::run(&mk(Strategy::RunpodOnly));
     assert_eq!(a.jobs, b.jobs);
     assert_eq!(a.unfinished + b.unfinished, 0);
-    assert!(a.wait_p95_s < b.wait_p95_s, "p95 {} vs {}", a.wait_p95_s, b.wait_p95_s);
+    assert!(
+        a.wait_p95_s < b.wait_p95_s,
+        "p95 {} vs {}",
+        a.wait_p95_s,
+        b.wait_p95_s
+    );
     assert!(a.cold_starts < b.cold_starts);
     assert!(a.within_slo >= 0.95, "{}", a.within_slo);
     // Deterministic: the same scenario gives the same report.
     let a2 = harness::run(&mk(Strategy::Autoscaler));
-    assert_eq!((a.wait_p95_s, a.gpu_hours, a.cold_starts), (a2.wait_p95_s, a2.gpu_hours, a2.cold_starts));
+    assert_eq!(
+        (a.wait_p95_s, a.gpu_hours, a.cold_starts),
+        (a2.wait_p95_s, a2.gpu_hours, a2.cold_starts)
+    );
 }

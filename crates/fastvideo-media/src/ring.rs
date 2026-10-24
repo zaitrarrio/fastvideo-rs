@@ -59,7 +59,10 @@ pub struct TimedRing<T> {
 
 impl<T> std::fmt::Debug for TimedRing<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TimedRing").field("cap", &self.cap).field("stats", &self.stats()).finish()
+        f.debug_struct("TimedRing")
+            .field("cap", &self.cap)
+            .field("stats", &self.stats())
+            .finish()
     }
 }
 
@@ -67,7 +70,11 @@ impl<T> TimedRing<T> {
     /// At most `cap` items spanning at most `span` of presentation time.
     pub fn new(cap: usize, span: Duration) -> Self {
         Self {
-            st: Mutex::new(State { q: VecDeque::new(), closed: false, stats: RingStats::default() }),
+            st: Mutex::new(State {
+                q: VecDeque::new(),
+                closed: false,
+                stats: RingStats::default(),
+            }),
             notify: Notify::new(),
             cap: cap.max(1),
             span_us: span.as_micros().min(u128::from(u64::MAX)) as u64,
@@ -90,12 +97,19 @@ impl<T> TimedRing<T> {
             if st.closed {
                 return false;
             }
-            st.q.push_back(Timed { pts_us, arrived: Instant::now(), item });
+            st.q.push_back(Timed {
+                pts_us,
+                arrived: Instant::now(),
+                item,
+            });
             st.stats.pushed += 1;
             st.stats.last_pts_us = Some(pts_us);
             while st.q.len() > self.cap
                 || (st.q.len() > 1
-                    && st.q.front().is_some_and(|f| pts_us.saturating_sub(f.pts_us) > self.span_us))
+                    && st
+                        .q
+                        .front()
+                        .is_some_and(|f| pts_us.saturating_sub(f.pts_us) > self.span_us))
             {
                 st.q.pop_front();
                 st.stats.dropped_full += 1;
@@ -204,7 +218,10 @@ impl InputBufferConfig {
     /// 10 ms chunks (at least 4).
     pub fn from_caps(caps: &InputCaps) -> Self {
         let ms = u64::from(caps.buffer_ms.max(20));
-        let fps = caps.video.as_ref().map_or(30, |v| u64::from(v.max_fps.max(1)));
+        let fps = caps
+            .video
+            .as_ref()
+            .map_or(30, |v| u64::from(v.max_fps.max(1)));
         Self {
             video_frames: ((ms * fps).div_ceil(1000) as usize).max(2),
             audio_chunks: (ms.div_ceil(10) as usize).max(4),
@@ -263,7 +280,10 @@ mod tests {
         let s = r.stats();
         assert_eq!((s.pushed, s.dropped_full, s.buffered), (5, 2, 3));
         assert_eq!(r.pop().unwrap().item, 2);
-        assert_eq!(r.drain().iter().map(|t| t.item).collect::<Vec<_>>(), vec![3, 4]);
+        assert_eq!(
+            r.drain().iter().map(|t| t.item).collect::<Vec<_>>(),
+            vec![3, 4]
+        );
         assert!(r.is_empty());
     }
 
@@ -293,7 +313,10 @@ mod tests {
 
     #[test]
     fn closed_rings_refuse_pushes_and_end_waiters() {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let r = Arc::new(TimedRing::new(4, Duration::from_secs(1)));
             let r2 = r.clone();
@@ -330,6 +353,9 @@ mod tests {
             buffer_ms: 500,
         };
         let c = InputBufferConfig::from_caps(&caps);
-        assert_eq!((c.video_frames, c.audio_chunks, c.span), (15, 50, Duration::from_millis(500)));
+        assert_eq!(
+            (c.video_frames, c.audio_chunks, c.span),
+            (15, 50, Duration::from_millis(500))
+        );
     }
 }

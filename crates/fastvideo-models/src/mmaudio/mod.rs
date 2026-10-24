@@ -94,8 +94,7 @@ impl SequenceConfig {
     }
 
     pub fn num_audio_samples(&self) -> usize {
-        self.latent_seq_len()
-            * (self.spectrogram_frame_rate * self.latent_downsample_rate) as usize
+        self.latent_seq_len() * (self.spectrogram_frame_rate * self.latent_downsample_rate) as usize
     }
 }
 

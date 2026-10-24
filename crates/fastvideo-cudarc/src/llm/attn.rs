@@ -86,7 +86,9 @@ pub fn scaled_dot_product_attention_gqa_softcap(
 ) -> Result<CudaTensor> {
     let (_b, hq, hkv, _sq, _sk, _d) = gqa_layout(q, k, v)?;
     if cap <= 0.0 {
-        return Err(msg(format!("softcap attention: cap {cap} must be positive")));
+        return Err(msg(format!(
+            "softcap attention: cap {cap} must be positive"
+        )));
     }
     let g = hq / hkv;
     let (k, v) = if g == 1 {
@@ -110,7 +112,10 @@ fn tanh_scaled(x: &CudaTensor, s: f32) -> Result<CudaTensor> {
         );
     }
     let host = x.host_cow()?;
-    CudaTensor::from_vec(host.iter().map(|v| (v / s).tanh() * s).collect(), x.shape.clone())
+    CudaTensor::from_vec(
+        host.iter().map(|v| (v / s).tanh() * s).collect(),
+        x.shape.clone(),
+    )
 }
 
 /// Chunked `Q@Kᵀ` + mask + softmax + `P@V` over KV-head groups so K/V stay at
@@ -196,9 +201,18 @@ mod tests {
     #[test]
     fn softcap_limits_logits() {
         let (b, hq, hkv, s, d) = (1usize, 2, 1, 3, 2);
-        let q = t((0..b * hq * s * d).map(|i| i as f32).collect(), &[b, hq, s, d]);
-        let k = t((0..b * hkv * s * d).map(|i| i as f32 * 0.5).collect(), &[b, hkv, s, d]);
-        let v = t((0..b * hkv * s * d).map(|i| i as f32).collect(), &[b, hkv, s, d]);
+        let q = t(
+            (0..b * hq * s * d).map(|i| i as f32).collect(),
+            &[b, hq, s, d],
+        );
+        let k = t(
+            (0..b * hkv * s * d).map(|i| i as f32 * 0.5).collect(),
+            &[b, hkv, s, d],
+        );
+        let v = t(
+            (0..b * hkv * s * d).map(|i| i as f32).collect(),
+            &[b, hkv, s, d],
+        );
         let mut m = vec![f32::MIN; s * s];
         for i in 0..s {
             for j in 0..=i {
@@ -207,9 +221,13 @@ mod tests {
         }
         let mask = t(m, &[1, 1, s, s]);
         let plain = scaled_dot_product_attention_gqa(&q, &k, &v, Some(0.7), Some(&mask)).unwrap();
-        let wide =
-            scaled_dot_product_attention_gqa_softcap(&q, &k, &v, 0.7, 1e6, &mask).unwrap();
-        for (x, y) in plain.host_cow().unwrap().iter().zip(wide.host_cow().unwrap().iter()) {
+        let wide = scaled_dot_product_attention_gqa_softcap(&q, &k, &v, 0.7, 1e6, &mask).unwrap();
+        for (x, y) in plain
+            .host_cow()
+            .unwrap()
+            .iter()
+            .zip(wide.host_cow().unwrap().iter())
+        {
             assert!((x - y).abs() < 1e-4, "{x} vs {y}");
         }
         // cap → 0: all visible logits equal, so each row averages its visible V.

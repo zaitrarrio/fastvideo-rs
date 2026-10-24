@@ -17,7 +17,8 @@ use crate::wan::tensor::{CudaTensor, TensorError};
 use crate::wan::weights::WeightMap;
 
 use super::text::{
-    flux2_dummy_text, flux2_text_len, format_flux2_prompt, pad_token_ids, Flux2TextEncoder, Qwen3Encoder,
+    flux2_dummy_text, flux2_text_len, format_flux2_prompt, pad_token_ids, Flux2TextEncoder,
+    Qwen3Encoder,
 };
 use super::transformer::{self, Flux2Transformer2D};
 use super::vae::AutoencoderKlFlux2;
@@ -93,7 +94,9 @@ impl Flux2Pipeline {
             Flux2ArchConfig::tiny()
         };
         let text = match kind {
-            Flux2TextKind::Qwen3 => Flux2TextEncoder::qwen3(Qwen3Encoder::zeros(Qwen3Config::tiny())),
+            Flux2TextKind::Qwen3 => {
+                Flux2TextEncoder::qwen3(Qwen3Encoder::zeros(Qwen3Config::tiny()))
+            }
             Flux2TextKind::Mistral3 => Flux2TextEncoder::dummy(kind, cfg.joint_attention_dim),
         };
         Self {
@@ -140,7 +143,11 @@ impl Flux2Pipeline {
         let (height, width, steps) = if self.tiny {
             (16usize, 16, 2usize)
         } else {
-            (cfg.height.max(16), cfg.width.max(16), cfg.num_inference_steps.max(1))
+            (
+                cfg.height.max(16),
+                cfg.width.max(16),
+                cfg.num_inference_steps.max(1),
+            )
         };
         let (ph, pw) = if self.tiny {
             (2, 2)
@@ -160,12 +167,23 @@ impl Flux2Pipeline {
             pw,
             seq,
             steps,
-            if matches!(self.text.lm_config(), Some(_)) { "qwen3/mistral3" } else { "dummy" },
+            if self.text.lm_config().is_some() {
+                "qwen3/mistral3"
+            } else {
+                "dummy"
+            },
         ));
         let mut rng = rand::rngs::StdRng::seed_from_u64(cfg.seed);
-        let noise: Vec<f32> = (0..channels * seq).map(|_| rng.sample(StandardNormal)).collect();
+        let noise: Vec<f32> = (0..channels * seq)
+            .map(|_| rng.sample(StandardNormal))
+            .collect();
         let mut latents = CudaTensor::from_vec(noise, vec![1, channels, 1, ph, pw])?;
-        let (ids, valid_len) = encode_prompt_ids(&self.text, cfg, self.tiny, self.transformer.cfg.joint_attention_dim);
+        let (ids, valid_len) = encode_prompt_ids(
+            &self.text,
+            cfg,
+            self.tiny,
+            self.transformer.cfg.joint_attention_dim,
+        );
         let t_text = std::time::Instant::now();
         let encoder = {
             let _t = crate::wan::log::StepTimer::start("flux2.text.encode");
@@ -185,7 +203,10 @@ impl Flux2Pipeline {
         let mut euler_host_ms = 0u128;
         let t_denoise = std::time::Instant::now();
         {
-            let _denoise = crate::wan::log::StepTimer::start(format!("flux2.denoise {} steps", timesteps.len()));
+            let _denoise = crate::wan::log::StepTimer::start(format!(
+                "flux2.denoise {} steps",
+                timesteps.len()
+            ));
             for (i, t) in timesteps.iter().copied().enumerate() {
                 let t_step = std::time::Instant::now();
                 let _step = crate::wan::log::StepTimer::start(format!(
@@ -234,7 +255,8 @@ impl Flux2Pipeline {
         let t_write = std::time::Instant::now();
         let paths = {
             let _w = crate::wan::log::StepTimer::start("flux2.write_frames");
-            write_frames(&decoded, Path::new(&cfg.output_dir)).map_err(|e| PipelineError::Message(e.to_string()))?
+            write_frames(&decoded, Path::new(&cfg.output_dir))
+                .map_err(|e| PipelineError::Message(e.to_string()))?
         };
         let write_frames_ms = t_write.elapsed().as_millis();
         let rope = transformer::rope_host_stats();
@@ -294,7 +316,11 @@ impl Flux2Pipeline {
     }
 }
 
-fn load_text_encoder(root: &Path, kind: Flux2TextKind, joint_dim: usize) -> Result<Flux2TextEncoder> {
+fn load_text_encoder(
+    root: &Path,
+    kind: Flux2TextKind,
+    joint_dim: usize,
+) -> Result<Flux2TextEncoder> {
     if flux2_dummy_text() {
         return Ok(Flux2TextEncoder::dummy(kind, joint_dim));
     }
@@ -350,8 +376,11 @@ fn encode_prompt_ids(
 fn write_profile(dir: &Path, profile: &serde_json::Value) -> Result<()> {
     std::fs::create_dir_all(dir).map_err(|e| PipelineError::Message(e.to_string()))?;
     let path = dir.join("profile.json");
-    std::fs::write(&path, serde_json::to_string_pretty(profile).map_err(|e| PipelineError::Message(e.to_string()))?)
-        .map_err(|e| PipelineError::Message(e.to_string()))?;
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(profile).map_err(|e| PipelineError::Message(e.to_string()))?,
+    )
+    .map_err(|e| PipelineError::Message(e.to_string()))?;
     crate::wan::log::info(format_args!("wrote {}", path.display()));
     Ok(())
 }
@@ -372,12 +401,14 @@ mod tests {
     #[test]
     fn tiny_generate_writes_png() {
         let mut pipe = Flux2Pipeline::tiny();
-        let mut cfg = GenerateConfig::default();
-        cfg.tiny = true;
-        cfg.output_dir = std::env::temp_dir()
-            .join("fastvideo-cudarc-flux2-tiny")
-            .to_string_lossy()
-            .into();
+        let cfg = GenerateConfig {
+            tiny: true,
+            output_dir: std::env::temp_dir()
+                .join("fastvideo-cudarc-flux2-tiny")
+                .to_string_lossy()
+                .into(),
+            ..Default::default()
+        };
         let paths = pipe.generate(&cfg).unwrap();
         assert!(Path::new(&paths[0]).exists());
         let profile = Path::new(&cfg.output_dir).join("profile.json");
@@ -391,14 +422,16 @@ mod tests {
     #[test]
     fn tiny_klein_generate_writes_png() {
         let mut pipe = Flux2Pipeline::tiny_klein();
-        let mut cfg = GenerateConfig::default();
-        cfg.tiny = true;
-        cfg.embedded_cfg_scale = None;
-        cfg.preset = "flux2_klein_4b".into();
-        cfg.output_dir = std::env::temp_dir()
-            .join("fastvideo-cudarc-flux2-klein-tiny")
-            .to_string_lossy()
-            .into();
+        let cfg = GenerateConfig {
+            tiny: true,
+            embedded_cfg_scale: None,
+            preset: "flux2_klein_4b".into(),
+            output_dir: std::env::temp_dir()
+                .join("fastvideo-cudarc-flux2-klein-tiny")
+                .to_string_lossy()
+                .into(),
+            ..Default::default()
+        };
         let paths = pipe.generate(&cfg).unwrap();
         assert!(Path::new(&paths[0]).exists());
         assert_eq!(pipe.text_kind(), Flux2TextKind::Qwen3);

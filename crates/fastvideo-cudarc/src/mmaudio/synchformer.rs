@@ -139,7 +139,7 @@ impl DividedAttn {
         let bs = x.shape[0];
         let d = SYNC_DIM;
         let qkv = self.qkv.forward(x)?; // [bs, 1569, 3D]
-        // CLS query against every token of its segment.
+                                        // CLS query against every token of its segment.
         let q_cls = gather_rows(&qkv, &plan.cls)?.reshape(vec![bs, 1, 3 * d])?;
         let cls_out = nn::scaled_dot_product_attention(
             &heads(&q_cls, 0, 0)?,
@@ -154,7 +154,12 @@ impl DividedAttn {
             (&plan.space, bs * T_TOK, HW + 1)
         };
         let g = gather_rows(&qkv, idx)?.reshape(vec![groups, len, 3 * d])?;
-        let o = nn::scaled_dot_product_attention(&heads(&g, 0, 1)?, &heads(&g, 1, 0)?, &heads(&g, 2, 0)?, None)?;
+        let o = nn::scaled_dot_product_attention(
+            &heads(&g, 0, 1)?,
+            &heads(&g, 1, 0)?,
+            &heads(&g, 2, 0)?,
+            None,
+        )?;
         let o = merge(&o)?; // [groups, len - 1, D]
         let o = if time {
             gather_rows(&o, &plan.time_back)?
@@ -212,12 +217,22 @@ struct SpatialAgg {
 
 impl SpatialAgg {
     fn load(map: &WeightMap, p: &str) -> Result<Self> {
-        let w = host_values(map, &format!("{p}.self_attn.in_proj_weight"), &[3 * SYNC_DIM, SYNC_DIM])?;
+        let w = host_values(
+            map,
+            &format!("{p}.self_attn.in_proj_weight"),
+            &[3 * SYNC_DIM, SYNC_DIM],
+        )?;
         let b = host_values(map, &format!("{p}.self_attn.in_proj_bias"), &[3 * SYNC_DIM])?;
         Ok(Self {
             cls: host_values(map, &format!("{p}.cls_token"), &[1, 1, SYNC_DIM])?,
             in_proj: super::layers::linear_from(w, Some(b), 3 * SYNC_DIM, SYNC_DIM)?,
-            out_proj: linear(map, &format!("{p}.self_attn.out_proj"), SYNC_DIM, SYNC_DIM, true)?,
+            out_proj: linear(
+                map,
+                &format!("{p}.self_attn.out_proj"),
+                SYNC_DIM,
+                SYNC_DIM,
+                true,
+            )?,
             linear1: linear(map, &format!("{p}.linear1"), SYNC_DIM, 4 * SYNC_DIM, true)?,
             linear2: linear(map, &format!("{p}.linear2"), 4 * SYNC_DIM, SYNC_DIM, true)?,
             norm1: ln(map, &format!("{p}.norm1"))?,
@@ -233,7 +248,8 @@ impl SpatialAgg {
         let x = CudaTensor::cat(&[&cls, x], 1)?; // [G, 197, D]
         let qkv = self.in_proj.forward(&norm(&x, &self.norm1)?)?;
         let q = heads(&qkv.narrow(1, 0, 1)?, 0, 0)?;
-        let o = nn::scaled_dot_product_attention(&q, &heads(&qkv, 1, 0)?, &heads(&qkv, 2, 0)?, None)?;
+        let o =
+            nn::scaled_dot_product_attention(&q, &heads(&qkv, 1, 0)?, &heads(&qkv, 2, 0)?, None)?;
         let c = cls.add(&self.out_proj.forward(&merge(&o)?)?)?; // [G, 1, D]
         let h = self.linear1.forward(&norm(&c, &self.norm2)?)?.gelu_erf();
         c.add(&self.linear2.forward(&h)?)?.reshape(vec![g, d])
@@ -268,7 +284,11 @@ impl Synchformer {
             }
         }
         Ok(Self {
-            patch_w: weight(map, &format!("{p}.patch_embed_3d.proj.weight"), &[d, 3, 2, 16, 16])?,
+            patch_w: weight(
+                map,
+                &format!("{p}.patch_embed_3d.proj.weight"),
+                &[d, 3, 2, 16, 16],
+            )?,
             patch_b: weight(map, &format!("{p}.patch_embed_3d.proj.bias"), &[d])?,
             cls_token: host_values(map, &format!("{p}.cls_token"), &[1, 1, d])?,
             cls_pos: pos[..d].to_vec(),
@@ -294,13 +314,20 @@ impl Synchformer {
         let p = x.conv3d(&self.patch_w, Some(&self.patch_b), [0, 0, 0], [2, 16, 16])?;
         let tp = p.shape[2];
         let p = p.reshape(vec![d, tp * HW])?.transpose(0, 1)?; // [tp*196, D]
-        // Segment s: temporal patches 4s .. 4s+8.
+                                                               // Segment s: temporal patches 4s .. 4s+8.
         let idx: Vec<usize> = (0..segs)
             .flat_map(|s| (0..T_TOK * HW).map(move |r| 4 * s * HW + r))
             .collect();
-        let tokens = p.index_select_rows(&idx)?.reshape(vec![segs, T_TOK * HW, d])?;
+        let tokens = p
+            .index_select_rows(&idx)?
+            .reshape(vec![segs, T_TOK * HW, d])?;
         let tokens = tokens.add(&self.patch_pos)?;
-        let cls: Vec<f32> = self.cls_token.iter().zip(&self.cls_pos).map(|(a, b)| a + b).collect();
+        let cls: Vec<f32> = self
+            .cls_token
+            .iter()
+            .zip(&self.cls_pos)
+            .map(|(a, b)| a + b)
+            .collect();
         let cls = CudaTensor::from_vec(cls.repeat(segs), vec![segs, 1, d])?;
         let mut x = CudaTensor::cat(&[&cls, &tokens], 1)?; // [S, 1569, D]
         let plan = Plan::new(segs);

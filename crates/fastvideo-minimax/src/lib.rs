@@ -218,9 +218,21 @@ impl Default for MiniMaxConfig {
 pub fn ingest_policy() -> IngestPolicy {
     let d = IngestPolicy::default();
     IngestPolicy {
-        image: KindLimits { max_bytes: 30 * MB, data_uri_max_encoded: 41 * MB, ..d.image },
-        video: KindLimits { max_bytes: 50 * MB, data_uri_max_encoded: 64 * MB, ..d.video },
-        audio: KindLimits { max_bytes: 15 * MB, data_uri_max_encoded: 21 * MB, ..d.audio },
+        image: KindLimits {
+            max_bytes: 30 * MB,
+            data_uri_max_encoded: 41 * MB,
+            ..d.image
+        },
+        video: KindLimits {
+            max_bytes: 50 * MB,
+            data_uri_max_encoded: 64 * MB,
+            ..d.video
+        },
+        audio: KindLimits {
+            max_bytes: 15 * MB,
+            data_uri_max_encoded: 21 * MB,
+            ..d.audio
+        },
         ..d
     }
 }
@@ -240,7 +252,10 @@ impl Default for MiniMax {
 
 impl MiniMax {
     pub fn new(cfg: MiniMaxConfig) -> Self {
-        Self { limiter: limits::RateLimiter::new(cfg.rpm), cfg }
+        Self {
+            limiter: limits::RateLimiter::new(cfg.rpm),
+            cfg,
+        }
     }
 
     pub fn config(&self) -> &MiniMaxConfig {
@@ -249,7 +264,9 @@ impl MiniMax {
 
     /// The query / list / callback view.
     pub fn view(&self) -> TaskView {
-        TaskView { url_ttl: self.cfg.url_ttl }
+        TaskView {
+            url_ttl: self.cfg.url_ttl,
+        }
     }
 
     /// Picks the engine model for a MiniMax model name, in order:
@@ -274,7 +291,10 @@ impl MiniMax {
         let not_served = || {
             ApiError::invalid_param(
                 "model",
-                format!("model `{name}` is not served here ({})", self.served_summary(alias, models)),
+                format!(
+                    "model `{name}` is not served here ({})",
+                    self.served_summary(alias, models)
+                ),
             )
         };
         self.resolve_with(name, alias, models, &not_served)
@@ -283,7 +303,11 @@ impl MiniMax {
     /// `served: <model ids>; aliases: <name> -> <model>, …`: the served
     /// models and every MiniMax name (and `minimax.models` entry) that
     /// resolves to one of them, for the not-served error.
-    pub fn served_summary(&self, alias: &dyn Fn(&str) -> Option<String>, models: &[ModelCaps]) -> String {
+    pub fn served_summary(
+        &self,
+        alias: &dyn Fn(&str) -> Option<String>,
+        models: &[ModelCaps],
+    ) -> String {
         let quiet = || ApiError::internal("");
         let mut names: Vec<String> = Vec::new();
         let candidates = MiniMaxModel::ALL
@@ -299,7 +323,13 @@ impl MiniMax {
             }
         }
         let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
-        let list = |v: Vec<String>| if v.is_empty() { "none".to_owned() } else { v.join(", ") };
+        let list = |v: Vec<String>| {
+            if v.is_empty() {
+                "none".to_owned()
+            } else {
+                v.join(", ")
+            }
+        };
         format!(
             "served: {}; aliases: {}",
             list(ids.into_iter().map(str::to_owned).collect()),
@@ -315,10 +345,14 @@ impl MiniMax {
         not_served: &dyn Fn() -> ApiError,
     ) -> Result<(&'a ModelCaps, Option<Tier>), ApiError> {
         if let Some(target) = self.cfg.models.get(name) {
-            return resolve_model(target, alias, models).map(|c| (c, None)).map_err(|_| not_served());
+            return resolve_model(target, alias, models)
+                .map(|c| (c, None))
+                .map_err(|_| not_served());
         }
         if alias(name).is_some() {
-            return resolve_model(name, alias, models).map(|c| (c, None)).map_err(|_| not_served());
+            return resolve_model(name, alias, models)
+                .map(|c| (c, None))
+                .map_err(|_| not_served());
         }
         let model = MiniMaxModel::parse(name).ok_or_else(not_served)?;
         let tier = model.tier().unwrap_or(Tier::Max);
@@ -351,7 +385,13 @@ impl MiniMax {
     pub fn router(self: &Arc<Self>) -> Router<ServeCtx> {
         type St = State<ServeCtx>;
         type Id = Path<String>;
-        let (c, q, l, d, u) = (self.clone(), self.clone(), self.clone(), self.clone(), self.clone());
+        let (c, q, l, d, u) = (
+            self.clone(),
+            self.clone(),
+            self.clone(),
+            self.clone(),
+            self.clone(),
+        );
         let u2 = self.clone();
         Router::new()
             .route(
@@ -360,13 +400,17 @@ impl MiniMax {
             )
             .route(
                 "/v2/video_generation/{task_id}",
-                axum::routing::delete(move |st: St, p: Id, h: HeaderMap| delete::handle(d.clone(), st, p, h)),
+                axum::routing::delete(move |st: St, p: Id, h: HeaderMap| {
+                    delete::handle(d.clone(), st, p, h)
+                }),
             )
             .route(
                 "/v2/query/video_generation",
-                get(move |st: St, qs: Query<Vec<(String, String)>>, h: HeaderMap| {
-                    query::list_handle(l.clone(), st, qs, h)
-                }),
+                get(
+                    move |st: St, qs: Query<Vec<(String, String)>>, h: HeaderMap| {
+                        query::list_handle(l.clone(), st, qs, h)
+                    },
+                ),
             )
             .route(
                 "/v2/query/video_generation/{task_id}",
@@ -374,7 +418,9 @@ impl MiniMax {
             )
             .route(
                 "/v2/h3_context_ir",
-                post(move |st: St, h: HeaderMap| create::unsupported(u.clone(), st, h, "/v2/h3_context_ir")),
+                post(move |st: St, h: HeaderMap| {
+                    create::unsupported(u.clone(), st, h, "/v2/h3_context_ir")
+                }),
             )
             .route(
                 "/v2/video_regeneration",
@@ -446,18 +492,39 @@ mod tests {
         let mm = MiniMax::default();
         let models = vec![ModelCaps::h3("sol-h3", false).with_tier(Tier::Max, "h3-max")];
         let alias = |n: &str| (n == "MiniMax-H3-Max").then(|| "sol-h3".to_owned());
-        let e = mm.resolve_caps("MiniMax-H3-Turbo", &alias, &models).unwrap_err();
+        let e = mm
+            .resolve_caps("MiniMax-H3-Turbo", &alias, &models)
+            .unwrap_err();
         assert_eq!(e.param.as_deref(), Some("model"));
         assert!(
-            e.message.starts_with("model `MiniMax-H3-Turbo` is not served here (served: sol-h3; aliases: "),
+            e.message.starts_with(
+                "model `MiniMax-H3-Turbo` is not served here (served: sol-h3; aliases: "
+            ),
             "{}",
             e.message
         );
-        assert!(e.message.contains("MiniMax-H3-Max -> sol-h3"), "{}", e.message);
+        assert!(
+            e.message.contains("MiniMax-H3-Max -> sol-h3"),
+            "{}",
+            e.message
+        );
         assert!(!e.message.contains("MiniMax-H3-Turbo ->"), "{}", e.message);
         // What does resolve still does.
-        assert_eq!(mm.resolve_caps("MiniMax-H3-Max", &alias, &models).unwrap().0.id.as_str(), "sol-h3");
-        let e = mm.resolve_caps("nope", &|_: &str| -> Option<String> { None }, &[]).unwrap_err();
-        assert!(e.message.ends_with("(served: none; aliases: none)"), "{}", e.message);
+        assert_eq!(
+            mm.resolve_caps("MiniMax-H3-Max", &alias, &models)
+                .unwrap()
+                .0
+                .id
+                .as_str(),
+            "sol-h3"
+        );
+        let e = mm
+            .resolve_caps("nope", &|_: &str| -> Option<String> { None }, &[])
+            .unwrap_err();
+        assert!(
+            e.message.ends_with("(served: none; aliases: none)"),
+            "{}",
+            e.message
+        );
     }
 }

@@ -10,10 +10,9 @@
 use std::path::{Path, PathBuf};
 
 use fastvideo_models::h3::spark::{
-    align_h3_to_ltx, author_node_input, author_node_output, trilinear_ncdhw, upscaler_block_cadence,
-    upscaler_key_is_known, ADAPTER_CONFIG,
-    ADAPTER_OUTPUT, ADAPTER_WEIGHTS, H3_INPUT, H3_UPSCALED, PIXEL_FRAMES, PIXEL_HEIGHT,
-    PIXEL_WIDTH, REFINER_INPUT, UPSCALER_FILES,
+    align_h3_to_ltx, author_node_input, author_node_output, trilinear_ncdhw,
+    upscaler_block_cadence, upscaler_key_is_known, ADAPTER_CONFIG, ADAPTER_OUTPUT, ADAPTER_WEIGHTS,
+    H3_INPUT, H3_UPSCALED, PIXEL_FRAMES, PIXEL_HEIGHT, PIXEL_WIDTH, REFINER_INPUT, UPSCALER_FILES,
 };
 
 use crate::wan::nn::Linear;
@@ -160,7 +159,7 @@ impl Temporal {
         let dw = Conv3d::load(
             map,
             &format!("{prefix}.dwconv"),
-            [dw_pad(&map, prefix)?, 0, 0],
+            [dw_pad(map, prefix)?, 0, 0],
             1,
         )?;
         let channels = dw.weight.shape[0];
@@ -194,6 +193,9 @@ fn dw_pad(map: &WeightMap, prefix: &str) -> Result<usize> {
     Ok(k / 2)
 }
 
+// One per model block, built once; boxing the large variant would only add an
+// indirection on the forward path.
+#[allow(clippy::large_enum_variant)]
 enum Block {
     Res(ResBlock),
     Temporal(Temporal),
@@ -306,8 +308,14 @@ impl Upscaler {
             "h3 upscaler: {} channels {} in/out res blocks {}/{} temporal kernel {}",
             path.display(),
             conv_in.weight.shape[0],
-            in_blocks.iter().filter(|b| matches!(b, Block::Res(_))).count(),
-            out_blocks.iter().filter(|b| matches!(b, Block::Res(_))).count(),
+            in_blocks
+                .iter()
+                .filter(|b| matches!(b, Block::Res(_)))
+                .count(),
+            out_blocks
+                .iter()
+                .filter(|b| matches!(b, Block::Res(_)))
+                .count(),
             temporal_kernel
         ));
         Ok(Self {

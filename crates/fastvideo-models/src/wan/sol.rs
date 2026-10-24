@@ -94,6 +94,9 @@ pub fn pisa_a14b_dense_step(step: usize) -> bool {
 }
 
 /// Route for one `(step, layer)` on a published Wan profile.
+// `SOL_13B_DENSE_STEPS` is 0 today; the comparison keeps the 13B profile in the
+// same shape as the 14B one.
+#[allow(clippy::absurd_extreme_comparisons)]
 pub fn route(profile: WanAttnProfile, step: usize, layer: usize) -> WanAttnRoute {
     match profile {
         WanAttnProfile::Off => WanAttnRoute::Dense,

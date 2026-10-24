@@ -41,17 +41,17 @@ pub mod uploads;
 pub mod upsample;
 
 pub use artifacts::{
-    files_router, ArtifactBody, ArtifactMeta, ArtifactStore, LocalArtifactStore, S3ArtifactStore, S3Config,
-    UrlKey,
+    files_router, ArtifactBody, ArtifactMeta, ArtifactStore, LocalArtifactStore, S3ArtifactStore,
+    S3Config, UrlKey,
 };
 pub use auth::{Auth, AuthMode, AuthPolicy, EdgeVerdict, KeyRing, Scheme};
 pub use callback::{CallbackRender, CallbackSender, Delivery, RetrySchedule, WebhookSigner};
-pub use d1::{D1Client, D1Config, D1JobStore, D1Options};
 pub use ctx::{EngineGate, SafetyFilter, ServeConfig, ServeCtx};
+pub use d1::{D1Client, D1Config, D1JobStore, D1Options};
 pub use events::{apply_event, FinishedOutput, JobEvent};
 pub use handlers::{into_response, SubmitOpts};
-pub use keys::{admin_routes, AdminToken, KeyStore};
 pub use ingest::{IngestPolicy, Ingestor, KindLimits, Prober};
+pub use keys::{admin_routes, AdminToken, KeyStore};
 pub use store::MemJobStore;
 pub use uploads::{RemoteUploads, UploadStore, UploadTicket};
 pub use upsample::{expand_request, Expansion};
@@ -68,7 +68,7 @@ pub(crate) mod hex {
         s
     }
     pub fn decode(s: &str) -> Option<Vec<u8>> {
-        if s.len() % 2 != 0 {
+        if !s.len().is_multiple_of(2) {
             return None;
         }
         let nib = |c: u8| match c {

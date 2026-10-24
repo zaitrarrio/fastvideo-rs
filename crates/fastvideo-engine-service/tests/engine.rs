@@ -10,9 +10,9 @@ use std::time::Duration;
 use common::*;
 use fastvideo_engine_service::fake::{audio_len, decode_frame_index};
 use fastvideo_engine_service::{
-    CancelOutcome, CausalBlock, CausalSession, ClipBuild, EngineConfig, EngineEvent, FakeConfig, FakeFaults, FakeModel,
-    FakeTiming, FakeWarmup, ManualClock, Mp4Mode, Priority, Readiness, Residency, Tier, Warmup,
-    EVENT_CHANNEL_DEPTH, SOL_H3_4STEP_PROFILE,
+    CancelOutcome, CausalBlock, CausalSession, ClipBuild, EngineConfig, EngineEvent, FakeConfig,
+    FakeFaults, FakeModel, FakeTiming, FakeWarmup, ManualClock, Mp4Mode, Priority, Readiness,
+    Residency, Tier, Warmup, EVENT_CHANNEL_DEPTH, SOL_H3_4STEP_PROFILE,
 };
 use fastvideo_protocol::{
     AudioPlan, AudioTrack, Continuity, ErrorKind, Family, JobId, ModelId, SessionSpec, TrackSet,
@@ -134,7 +134,11 @@ async fn batch_file_mode_writes_mp4_when_ffmpeg_exists() {
     let e = ready(cfg, fake).await;
     let id = JobId::new();
     let out = e
-        .submit(id, job("fake-h3-turbo", 124, 24, h3_audio(), "p"), Priority::Batch)
+        .submit(
+            id,
+            job("fake-h3-turbo", 124, 24, h3_audio(), "p"),
+            Priority::Batch,
+        )
         .await
         .unwrap()
         .wait()
@@ -160,20 +164,38 @@ async fn batch_file_mode_writes_mp4_when_ffmpeg_exists() {
 async fn stream_priority_runs_before_queued_batch() {
     let clock = Arc::new(ManualClock::new());
     let e = ready(EngineConfig::default(), manual_fake(&clock)).await;
-    let mut a = e.submit(JobId::new(), wan("a"), Priority::Batch).await.unwrap();
+    let mut a = e
+        .submit(JobId::new(), wan("a"), Priority::Batch)
+        .await
+        .unwrap();
     until_started(&mut a).await;
     sleepers(&clock, 1).await;
 
-    let mut b = e.submit(JobId::new(), wan("b"), Priority::Batch).await.unwrap();
-    let mut c = e.submit(JobId::new(), wan("c"), Priority::Batch).await.unwrap();
-    let mut d = e.submit(JobId::new(), wan("d"), Priority::Stream).await.unwrap();
+    let mut b = e
+        .submit(JobId::new(), wan("b"), Priority::Batch)
+        .await
+        .unwrap();
+    let mut c = e
+        .submit(JobId::new(), wan("c"), Priority::Batch)
+        .await
+        .unwrap();
+    let mut d = e
+        .submit(JobId::new(), wan("d"), Priority::Stream)
+        .await
+        .unwrap();
     assert_eq!(
         pending(&mut b),
-        [EngineEvent::Queued { position: 0 }, EngineEvent::Queued { position: 1 }]
+        [
+            EngineEvent::Queued { position: 0 },
+            EngineEvent::Queued { position: 1 }
+        ]
     );
     assert_eq!(
         pending(&mut c),
-        [EngineEvent::Queued { position: 1 }, EngineEvent::Queued { position: 2 }]
+        [
+            EngineEvent::Queued { position: 1 },
+            EngineEvent::Queued { position: 2 }
+        ]
     );
     assert_eq!(pending(&mut d), [EngineEvent::Queued { position: 0 }]);
     assert_eq!(e.queue_position(d.id), Some(0));
@@ -182,11 +204,17 @@ async fn stream_priority_runs_before_queued_batch() {
     assert_eq!((s.queued_batch, s.queued_stream, s.running), (2, 1, 1));
 
     step_to(&clock, &mut a, 3).await;
-    assert!(matches!(until_terminal(&mut a).await.last(), Some(EngineEvent::Finished(_))));
+    assert!(matches!(
+        until_terminal(&mut a).await.last(),
+        Some(EngineEvent::Finished(_))
+    ));
     // The executor took D next and is parked on D's first step: B still waits.
     until_started(&mut d).await;
     let bv = pending(&mut b);
-    assert!(!has_started(&bv), "batch started before the stream build: {bv:?}");
+    assert!(
+        !has_started(&bv),
+        "batch started before the stream build: {bv:?}"
+    );
     let _drive = Driver::new(&clock);
     let dv = until_terminal(&mut d).await;
     assert!(matches!(dv.last(), Some(EngineEvent::Finished(_))));
@@ -200,10 +228,19 @@ async fn stream_priority_runs_before_queued_batch() {
 async fn cancel_queued_job_dequeues_and_repositions() {
     let clock = Arc::new(ManualClock::new());
     let e = ready(EngineConfig::default(), manual_fake(&clock)).await;
-    let mut a = e.submit(JobId::new(), wan("a"), Priority::Batch).await.unwrap();
+    let mut a = e
+        .submit(JobId::new(), wan("a"), Priority::Batch)
+        .await
+        .unwrap();
     until_started(&mut a).await;
-    let mut b = e.submit(JobId::new(), wan("b"), Priority::Batch).await.unwrap();
-    let mut c = e.submit(JobId::new(), wan("c"), Priority::Batch).await.unwrap();
+    let mut b = e
+        .submit(JobId::new(), wan("b"), Priority::Batch)
+        .await
+        .unwrap();
+    let mut c = e
+        .submit(JobId::new(), wan("c"), Priority::Batch)
+        .await
+        .unwrap();
     pending(&mut c);
 
     b.cancel.cancel();
@@ -220,20 +257,34 @@ async fn cancel_queued_job_dequeues_and_repositions() {
 
     // The running job is untouched.
     let _drive = Driver::new(&clock);
-    assert!(matches!(until_terminal(&mut a).await.last(), Some(EngineEvent::Finished(_))));
+    assert!(matches!(
+        until_terminal(&mut a).await.last(),
+        Some(EngineEvent::Finished(_))
+    ));
 }
 
 #[tokio::test]
 async fn cancel_running_job_stops_within_one_step() {
     let clock = Arc::new(ManualClock::new());
     let e = ready(EngineConfig::default(), manual_fake(&clock)).await;
-    let mut a = e.submit(JobId::new(), wan("a"), Priority::Batch).await.unwrap();
+    let mut a = e
+        .submit(JobId::new(), wan("a"), Priority::Batch)
+        .await
+        .unwrap();
     until_started(&mut a).await;
     sleepers(&clock, 1).await;
     clock.advance(Duration::from_secs(1));
-    assert_eq!(ev(&mut a).await, EngineEvent::Stage { name: "text_encode" });
+    assert_eq!(
+        ev(&mut a).await,
+        EngineEvent::Stage {
+            name: "text_encode"
+        }
+    );
     assert_eq!(ev(&mut a).await, EngineEvent::Stage { name: "denoise" });
-    assert_eq!(ev(&mut a).await, EngineEvent::Progress { step: 1, total: 3 });
+    assert_eq!(
+        ev(&mut a).await,
+        EngineEvent::Progress { step: 1, total: 3 }
+    );
     sleepers(&clock, 1).await;
 
     assert_eq!(e.cancel(a.id), CancelOutcome::Requested);
@@ -241,7 +292,10 @@ async fn cancel_running_job_stops_within_one_step() {
     let rest = until_terminal(&mut a).await;
     assert_eq!(
         rest,
-        [EngineEvent::Progress { step: 2, total: 3 }, EngineEvent::Cancelled],
+        [
+            EngineEvent::Progress { step: 2, total: 3 },
+            EngineEvent::Cancelled
+        ],
         "the step in flight reports, then the job unwinds"
     );
 
@@ -286,9 +340,15 @@ async fn queue_full_and_admission_errors() {
         ..EngineConfig::default()
     };
     let e = ready(cfg, manual_fake(&clock)).await;
-    let mut a = e.submit(JobId::new(), wan("a"), Priority::Batch).await.unwrap();
+    let mut a = e
+        .submit(JobId::new(), wan("a"), Priority::Batch)
+        .await
+        .unwrap();
     until_started(&mut a).await;
-    let _b = e.submit(JobId::new(), wan("b"), Priority::Batch).await.unwrap();
+    let _b = e
+        .submit(JobId::new(), wan("b"), Priority::Batch)
+        .await
+        .unwrap();
     let err = e
         .submit(JobId::new(), wan("c"), Priority::Batch)
         .await
@@ -296,10 +356,17 @@ async fn queue_full_and_admission_errors() {
     assert_eq!(err.kind, ErrorKind::QueueFull);
     assert!(err.retry_after_s.is_some());
     // Stream builds are not bounded by queue_max.
-    let _s = e.submit(JobId::new(), wan("s"), Priority::Stream).await.unwrap();
+    let _s = e
+        .submit(JobId::new(), wan("s"), Priority::Stream)
+        .await
+        .unwrap();
 
     let err = e
-        .submit(JobId::new(), job("nope", 49, 16, AudioPlan::None, "x"), Priority::Batch)
+        .submit(
+            JobId::new(),
+            job("nope", 49, 16, AudioPlan::None, "x"),
+            Priority::Batch,
+        )
         .await
         .unwrap_err();
     assert_eq!(err.kind, ErrorKind::InvalidRequest);
@@ -341,12 +408,20 @@ async fn readiness_tracks_loading() {
     // Progress is monotone (updates may coalesce, so `done: 1` can be skipped).
     tokio::time::timeout(
         T,
-        rx.wait_for(|r| matches!(r, Readiness::Loading { done: 1, total: 2 } | Readiness::Ready)),
+        rx.wait_for(|r| {
+            matches!(
+                r,
+                Readiness::Loading { done: 1, total: 2 } | Readiness::Ready
+            )
+        }),
     )
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(tokio::time::timeout(T, e.wait_ready()).await.unwrap(), Readiness::Ready);
+    assert_eq!(
+        tokio::time::timeout(T, e.wait_ready()).await.unwrap(),
+        Readiness::Ready
+    );
     assert_eq!(
         e.pool().resident_models(),
         vec![ModelId::new("fake-h3-turbo"), ModelId::new("fake-wan")]
@@ -363,7 +438,10 @@ async fn load_failure_is_reported() {
     };
     let e = start(EngineConfig::default(), vec![fake]);
     let r = tokio::time::timeout(T, e.wait_ready()).await.unwrap();
-    assert!(matches!(&r, Readiness::Failed(m) if m.contains("fake-wan")), "{r:?}");
+    assert!(
+        matches!(&r, Readiness::Failed(m) if m.contains("fake-wan")),
+        "{r:?}"
+    );
     let err = e
         .submit(JobId::new(), wan("x"), Priority::Batch)
         .await
@@ -425,7 +503,10 @@ async fn causal_session_holds_an_exclusive_lease() {
         .unwrap_err();
     assert_eq!(err.kind, ErrorKind::Conflict);
     // Wrong streaming shape.
-    assert!(e.open_causal_session(spec("fake-wan", 16, false)).await.is_err());
+    assert!(e
+        .open_causal_session(spec("fake-wan", 16, false))
+        .await
+        .is_err());
 
     assert_eq!(s.set_prompt("a"), 1);
     for want in 0..2u64 {
@@ -440,7 +521,10 @@ async fn causal_session_holds_an_exclusive_lease() {
     }
 
     // Batch work for the same executor waits while the lease is held.
-    let mut batch = e.submit(JobId::new(), wan("batch"), Priority::Batch).await.unwrap();
+    let mut batch = e
+        .submit(JobId::new(), wan("batch"), Priority::Batch)
+        .await
+        .unwrap();
     for _ in 0..6 {
         next_ok(&mut s).await;
     }
@@ -478,7 +562,10 @@ async fn causal_session_holds_an_exclusive_lease() {
     // Closing frees the executor: the batch job runs.
     s.close();
     let bv = until_terminal(&mut batch).await;
-    assert!(matches!(bv.last(), Some(EngineEvent::Finished(_))), "{bv:?}");
+    assert!(
+        matches!(bv.last(), Some(EngineEvent::Finished(_))),
+        "{bv:?}"
+    );
     // And a new session can open.
     let s2 = e
         .open_causal_session(spec("fake-sfwan", 16, false))
@@ -495,16 +582,24 @@ async fn causal_session_pauses_and_reports_block_failures() {
         .await
         .unwrap();
     // No prompt yet: nothing is generated.
-    assert!(tokio::time::timeout(Duration::from_millis(100), s.next_block())
-        .await
-        .is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), s.next_block())
+            .await
+            .is_err()
+    );
     s.set_paused(true);
     s.set_prompt("p");
-    assert!(tokio::time::timeout(Duration::from_millis(100), s.next_block())
-        .await
-        .is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), s.next_block())
+            .await
+            .is_err()
+    );
     s.set_paused(false);
-    let b = tokio::time::timeout(T, s.next_block()).await.unwrap().unwrap().unwrap();
+    let b = tokio::time::timeout(T, s.next_block())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     assert_eq!(b.index, 0);
 
     s.set_prompt("bad [fake:fail]");
@@ -521,7 +616,10 @@ async fn causal_session_pauses_and_reports_block_failures() {
         }
     }
     assert!(failed, "block failure delivered");
-    assert!(tokio::time::timeout(T, s.next_block()).await.unwrap().is_none());
+    assert!(tokio::time::timeout(T, s.next_block())
+        .await
+        .unwrap()
+        .is_none());
     // The lease was released by the failure.
     assert!(e
         .submit(JobId::new(), wan("after"), Priority::Batch)
@@ -543,10 +641,20 @@ async fn clip_session_builds_run_as_stream_jobs_in_memory() {
         .unwrap_err();
     assert_eq!(err.param.as_deref(), Some("fps"));
 
-    let session = e.open_clip_session(spec("fake-h3-turbo", 24, true)).await.unwrap();
+    let session = e
+        .open_clip_session(spec("fake-h3-turbo", 24, true))
+        .await
+        .unwrap();
     assert_eq!(session.frames_for(Some(5.0)).unwrap(), 124);
     assert_eq!(session.frames_for(None).unwrap(), 124);
-    assert_eq!(session.frames_for(Some(100.0)).unwrap_err().param.as_deref(), Some("seconds"));
+    assert_eq!(
+        session
+            .frames_for(Some(100.0))
+            .unwrap_err()
+            .param
+            .as_deref(),
+        Some("seconds")
+    );
     let r = session
         .resolve(&ClipBuild {
             prompt: "x".into(),
@@ -559,9 +667,15 @@ async fn clip_session_builds_run_as_stream_jobs_in_memory() {
     assert_eq!(r.tier, Some(Tier::Turbo));
     assert_eq!(r.recipe.as_deref(), Some("4step-vsa"));
 
-    let mut a = e.submit(JobId::new(), wan("a"), Priority::Batch).await.unwrap();
+    let mut a = e
+        .submit(JobId::new(), wan("a"), Priority::Batch)
+        .await
+        .unwrap();
     until_started(&mut a).await;
-    let mut b = e.submit(JobId::new(), wan("b"), Priority::Batch).await.unwrap();
+    let mut b = e
+        .submit(JobId::new(), wan("b"), Priority::Batch)
+        .await
+        .unwrap();
     let mut build = session
         .build(ClipBuild {
             prompt: "clip".into(),
@@ -572,7 +686,10 @@ async fn clip_session_builds_run_as_stream_jobs_in_memory() {
     assert_eq!(pending(&mut build), [EngineEvent::Queued { position: 0 }]);
     assert_eq!(
         pending(&mut b),
-        [EngineEvent::Queued { position: 0 }, EngineEvent::Queued { position: 1 }]
+        [
+            EngineEvent::Queued { position: 0 },
+            EngineEvent::Queued { position: 1 }
+        ]
     );
 
     step_to(&clock, &mut a, 3).await;
@@ -587,7 +704,10 @@ async fn clip_session_builds_run_as_stream_jobs_in_memory() {
     let frames = out.frames.as_ref().unwrap();
     assert_eq!(frames.len(), 124);
     assert_eq!(decode_frame_index(&frames[123]), Some(123));
-    assert_eq!(out.audio.as_ref().unwrap().frames(), audio_len(124, 24, 32_000));
+    assert_eq!(
+        out.audio.as_ref().unwrap().frames(),
+        audio_len(124, 24, 32_000)
+    );
     assert!(out.mp4.is_none());
     until_terminal(&mut b).await;
 
@@ -604,13 +724,22 @@ async fn executors_run_in_parallel() {
     let mut f2 = manual_fake(&clock).with_models(&["fake-wan", "fake-h3-turbo"]);
     f2.device.index = 1;
     let e = start(EngineConfig::default(), vec![f1, f2]);
-    assert_eq!(tokio::time::timeout(T, e.wait_ready()).await.unwrap(), Readiness::Ready);
+    assert_eq!(
+        tokio::time::timeout(T, e.wait_ready()).await.unwrap(),
+        Readiness::Ready
+    );
     assert_eq!(
         e.caps().entry(&"fake-wan".into()).unwrap().executors,
         vec![0, 1]
     );
-    let mut a = e.submit(JobId::new(), wan("a"), Priority::Batch).await.unwrap();
-    let mut b = e.submit(JobId::new(), wan("b"), Priority::Batch).await.unwrap();
+    let mut a = e
+        .submit(JobId::new(), wan("a"), Priority::Batch)
+        .await
+        .unwrap();
+    let mut b = e
+        .submit(JobId::new(), wan("b"), Priority::Batch)
+        .await
+        .unwrap();
     until_started(&mut a).await;
     until_started(&mut b).await;
     sleepers(&clock, 2).await;
@@ -626,7 +755,10 @@ async fn executors_run_in_parallel() {
         .unwrap();
     let _drive = Driver::new(&clock);
     for hd in [&mut a, &mut b, &mut h] {
-        assert!(matches!(until_terminal(hd).await.last(), Some(EngineEvent::Finished(_))));
+        assert!(matches!(
+            until_terminal(hd).await.last(),
+            Some(EngineEvent::Finished(_))
+        ));
     }
 }
 
@@ -640,7 +772,11 @@ async fn swap_mode_loads_on_demand() {
     }];
     let e = ready(EngineConfig::default(), fake.clone()).await;
     let err = e
-        .submit(JobId::new(), job("fake-h3-turbo", 124, 24, h3_audio(), "x"), Priority::Batch)
+        .submit(
+            JobId::new(),
+            job("fake-h3-turbo", 124, 24, h3_audio(), "x"),
+            Priority::Batch,
+        )
         .await
         .unwrap_err();
     assert_eq!(err.kind, ErrorKind::InvalidRequest);
@@ -651,15 +787,25 @@ async fn swap_mode_loads_on_demand() {
     };
     let e = ready(cfg, fake).await;
     let mut h = e
-        .submit(JobId::new(), job("fake-h3-turbo", 124, 24, h3_audio(), "x"), Priority::Batch)
+        .submit(
+            JobId::new(),
+            job("fake-h3-turbo", 124, 24, h3_audio(), "x"),
+            Priority::Batch,
+        )
         .await
         .unwrap();
     let evs = until_terminal(&mut h).await;
     assert!(evs.contains(&EngineEvent::Stage { name: "load" }));
     assert!(matches!(evs.last(), Some(EngineEvent::Finished(_))));
     let pool = e.pool();
-    assert_eq!(pool.model_state(&"fake-h3-turbo".into()), Some(Residency::Resident));
-    assert_eq!(pool.model_state(&"fake-wan".into()), Some(Residency::Unloaded));
+    assert_eq!(
+        pool.model_state(&"fake-h3-turbo".into()),
+        Some(Residency::Resident)
+    );
+    assert_eq!(
+        pool.model_state(&"fake-wan".into()),
+        Some(Residency::Unloaded)
+    );
     // And back.
     assert!(e
         .submit(JobId::new(), wan("w"), Priority::Batch)
@@ -668,7 +814,10 @@ async fn swap_mode_loads_on_demand() {
         .wait()
         .await
         .is_ok());
-    assert_eq!(e.pool().model_state(&"fake-h3-turbo".into()), Some(Residency::Unloaded));
+    assert_eq!(
+        e.pool().model_state(&"fake-h3-turbo".into()),
+        Some(Residency::Unloaded)
+    );
 }
 
 #[tokio::test]
@@ -677,10 +826,19 @@ async fn tiers_and_recipes_in_the_capability_table() {
     let caps = e.caps();
     let id = |f, t| caps.tier(f, t).map(|m| m.as_str().to_owned());
     assert_eq!(id(Family::H3, Tier::Max).as_deref(), Some("fake-h3-max"));
-    assert_eq!(id(Family::H3, Tier::Turbo).as_deref(), Some("fake-h3-turbo"));
+    assert_eq!(
+        id(Family::H3, Tier::Turbo).as_deref(),
+        Some("fake-h3-turbo")
+    );
     assert_eq!(id(Family::Ltx2, Tier::Max).as_deref(), Some("fake-ltx-pro"));
-    assert_eq!(id(Family::Ltx2, Tier::Turbo).as_deref(), Some("fake-ltx-turbo"));
-    assert_eq!(caps.resolve("h3-turbo").unwrap().id.as_str(), "fake-h3-turbo");
+    assert_eq!(
+        id(Family::Ltx2, Tier::Turbo).as_deref(),
+        Some("fake-ltx-turbo")
+    );
+    assert_eq!(
+        caps.resolve("h3-turbo").unwrap().id.as_str(),
+        "fake-h3-turbo"
+    );
     assert_eq!(caps.resolve("ltx-pro").unwrap().id.as_str(), "fake-ltx-pro");
     let aliases = caps.tier_aliases();
     assert!(aliases.contains(&("h3-max".to_owned(), ModelId::new("fake-h3-max"))));
@@ -696,7 +854,10 @@ async fn tiers_and_recipes_in_the_capability_table() {
     // §0.5: Sol-H3 4-step serves the tau-ladder profile.
     let sol = caps.recipe(&"fake-sol-h3".into()).unwrap();
     assert_eq!(sol.profile.as_deref(), Some(SOL_H3_4STEP_PROFILE));
-    assert_eq!(caps.get(&"fake-sol-h3".into()).unwrap().recipe.as_deref(), Some("sol-h3"));
+    assert_eq!(
+        caps.get(&"fake-sol-h3".into()).unwrap().recipe.as_deref(),
+        Some("sol-h3")
+    );
 
     // Overrides rebind a tier.
     let mut ov = BTreeMap::new();
@@ -706,7 +867,10 @@ async fn tiers_and_recipes_in_the_capability_table() {
         ..EngineConfig::default()
     };
     let e = start(cfg, vec![fast_fake()]);
-    assert_eq!(e.caps().resolve("h3-turbo").unwrap().id.as_str(), "fake-sol-h3");
+    assert_eq!(
+        e.caps().resolve("h3-turbo").unwrap().id.as_str(),
+        "fake-sol-h3"
+    );
     assert_eq!(e.caps().get(&"fake-h3-turbo".into()).unwrap().tier, None);
 
     // A bad override is a start error.
@@ -717,7 +881,9 @@ async fn tiers_and_recipes_in_the_capability_table() {
             tier_overrides: ov,
             ..EngineConfig::default()
         },
-        vec![Box::new(fastvideo_engine_service::FakeBackend::new(fast_fake()))],
+        vec![Box::new(fastvideo_engine_service::FakeBackend::new(
+            fast_fake(),
+        ))],
     );
     assert!(bad.is_err());
 }
@@ -732,14 +898,26 @@ async fn drain_cancels_queued_and_lets_running_finish() {
         ..fast_fake()
     };
     let e = ready(EngineConfig::default(), fake).await;
-    let mut a = e.submit(JobId::new(), wan("a"), Priority::Batch).await.unwrap();
+    let mut a = e
+        .submit(JobId::new(), wan("a"), Priority::Batch)
+        .await
+        .unwrap();
     until_started(&mut a).await;
-    let mut b = e.submit(JobId::new(), wan("b"), Priority::Batch).await.unwrap();
+    let mut b = e
+        .submit(JobId::new(), wan("b"), Priority::Batch)
+        .await
+        .unwrap();
     tokio::time::timeout(T, e.drain(Duration::from_secs(10)))
         .await
         .unwrap();
-    assert!(matches!(until_terminal(&mut a).await.last(), Some(EngineEvent::Finished(_))));
-    assert_eq!(until_terminal(&mut b).await.last(), Some(&EngineEvent::Cancelled));
+    assert!(matches!(
+        until_terminal(&mut a).await.last(),
+        Some(EngineEvent::Finished(_))
+    ));
+    assert_eq!(
+        until_terminal(&mut b).await.last(),
+        Some(&EngineEvent::Cancelled)
+    );
     let err = e
         .submit(JobId::new(), wan("late"), Priority::Batch)
         .await
@@ -752,7 +930,10 @@ async fn drain_cancels_queued_and_lets_running_finish() {
 async fn drain_cancels_running_after_grace() {
     let clock = Arc::new(ManualClock::new());
     let e = ready(EngineConfig::default(), manual_fake(&clock)).await;
-    let mut a = e.submit(JobId::new(), wan("a"), Priority::Batch).await.unwrap();
+    let mut a = e
+        .submit(JobId::new(), wan("a"), Priority::Batch)
+        .await
+        .unwrap();
     until_started(&mut a).await;
     let mut s = e
         .open_causal_session(spec("fake-sfwan", 16, false))
@@ -773,7 +954,10 @@ async fn drain_cancels_running_after_grace() {
         .unwrap();
     let av = until_terminal(&mut a).await;
     assert_eq!(av.last(), Some(&EngineEvent::Cancelled), "{av:?}");
-    assert!(tokio::time::timeout(T, s.next_block()).await.unwrap().is_none());
+    assert!(tokio::time::timeout(T, s.next_block())
+        .await
+        .unwrap()
+        .is_none());
     tick.abort();
 }
 
@@ -798,7 +982,10 @@ async fn background_warmup_is_ready_first_and_yields_to_jobs() {
     }
     .with_models(&["fake-wan"]);
     let e = start(EngineConfig::default(), vec![fake]);
-    assert_eq!(tokio::time::timeout(T, e.wait_ready()).await.unwrap(), Readiness::Ready);
+    assert_eq!(
+        tokio::time::timeout(T, e.wait_ready()).await.unwrap(),
+        Readiness::Ready
+    );
     assert_eq!(e.warmup(), "warming", "ready before the warm-up ran");
 
     // The warm-up's first run is on the executor (parked on its first step).
@@ -807,7 +994,10 @@ async fn background_warmup_is_ready_first_and_yields_to_jobs() {
         e.pool().entries().map(|p| p.warmup).collect::<Vec<_>>(),
         vec![Warmup::Running]
     );
-    let mut first = e.submit_frames(JobId::new(), wan("first"), Priority::Batch).await.unwrap();
+    let mut first = e
+        .submit_frames(JobId::new(), wan("first"), Priority::Batch)
+        .await
+        .unwrap();
     // The run in flight finishes its step, sees the cancel and yields.
     clock.advance(Duration::from_secs(1));
     let drive = Driver::new(&clock);
@@ -832,22 +1022,32 @@ async fn background_warmup_is_ready_first_and_yields_to_jobs() {
         .await
         .unwrap();
     drop(drive);
-    assert_eq!(after.frames, first.frames, "a job during warm-up renders what a warm job renders");
+    assert_eq!(
+        after.frames, first.frames,
+        "a job during warm-up renders what a warm job renders"
+    );
     assert_eq!(after.audio, first.audio);
 
     let j = journal.lock().unwrap().clone();
     // Never two things on the executor at once: strict begin/end pairs.
     for pair in j.chunks(2) {
         let (b, en) = (&pair[0], &pair[1]);
-        assert!(b.starts_with("begin ") && en.starts_with("end ") && b[6..] == en[4..], "overlap in {j:?}");
+        assert!(
+            b.starts_with("begin ") && en.starts_with("end ") && b[6..] == en[4..],
+            "overlap in {j:?}"
+        );
     }
-    let order: Vec<&str> = j.iter().filter(|l| l.starts_with("begin ")).map(|l| &l[6..]).collect();
+    let order: Vec<&str> = j
+        .iter()
+        .filter(|l| l.starts_with("begin "))
+        .map(|l| &l[6..])
+        .collect();
     assert_eq!(
         order,
         [
-            "warmup fake-wan i2v",    // cancelled by the job
+            "warmup fake-wan i2v",     // cancelled by the job
             "generate fake-wan first", // the job runs first
-            "warmup fake-wan i2v",    // retried while idle
+            "warmup fake-wan i2v",     // retried while idle
             "warmup fake-wan t2v",
             "generate fake-wan first",
         ]
@@ -857,7 +1057,11 @@ async fn background_warmup_is_ready_first_and_yields_to_jobs() {
 /// Without a configured warm-up nothing runs after the load and the state is `off`.
 #[tokio::test]
 async fn no_warmup_reports_off() {
-    let e = ready(EngineConfig::default(), fast_fake().with_models(&["fake-wan"])).await;
+    let e = ready(
+        EngineConfig::default(),
+        fast_fake().with_models(&["fake-wan"]),
+    )
+    .await;
     assert_eq!(e.warmup(), "off");
 }
 

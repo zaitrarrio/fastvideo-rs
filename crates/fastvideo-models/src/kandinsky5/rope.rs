@@ -113,6 +113,6 @@ mod tests {
     fn rope_3d_grid() {
         let cfg = Kandinsky5TransformerConfig::tiny();
         let r = rope_3d(&cfg, 1, 2, 2, 2, 10000.0);
-        assert_eq!(r.len(), 1 * 2 * 2 * 2 * (cfg.head_dim() / 2) * 4);
+        assert_eq!(r.len(), 2 * 2 * 2 * (cfg.head_dim() / 2) * 4);
     }
 }
