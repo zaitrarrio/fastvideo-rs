@@ -87,6 +87,11 @@ pub struct StartOptions {
     pub skip_tae: bool,
     /// The runner (`fv-lab` in the image).
     pub runner: String,
+    /// The pod's own wall cap (`FV_POD_CAP_S`, the tier's `wall_cap_s`): the
+    /// start command deletes the pod this many seconds after the container
+    /// starts, with the pod-scoped key, whatever the host that made it does
+    /// (docs/adr/0023-lab-report-and-ci-bridge.md §4).
+    pub cap_s: u64,
 }
 
 impl StartOptions {
@@ -106,10 +111,17 @@ impl StartOptions {
             min_driver: 580,
             skip_tae: !tier.tae,
             runner: format!("{FV_LAB_BIN} run"),
+            cap_s: tier.wall_cap_s,
         }
     }
 
     fn check(&self) -> Result<(), PodError> {
+        if self.cap_s == 0 {
+            return Err(PodError::Invalid(
+                "a pod without a wall cap (cap_s 0): every fv-lab pod deletes itself at its cap"
+                    .into(),
+            ));
+        }
         let safe = |s: &str| {
             !s.is_empty()
                 && s.bytes().all(|b| {
@@ -172,10 +184,56 @@ pub fn start_command(o: &StartOptions) -> Result<String, PodError> {
         ("@MIN_DRIVER@", o.min_driver.to_string()),
         ("@SKIP_TAE@", if o.skip_tae { "1" } else { "0" }.to_owned()),
         ("@RUNNER@", o.runner.clone()),
+        ("@CAP_S@", o.cap_s.to_string()),
     ] {
         s = s.replace(k, &v);
     }
     Ok(s)
+}
+
+/// `pod up --cells`: every name must be an arm of the tier (a typo or a
+/// flag-looking word would otherwise run nothing, silently, or worse).
+pub fn check_cells<'a>(
+    tier: &str,
+    arms: impl IntoIterator<Item = &'a str>,
+    cells: &[String],
+) -> Result<(), PodError> {
+    let arms: Vec<&str> = arms.into_iter().collect();
+    match cells.iter().find(|c| !arms.contains(&c.as_str())) {
+        Some(c) => Err(PodError::Invalid(format!(
+            "--cells `{c}` is not an arm of tier `{tier}`"
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// The pods a fv-deploy ledger (`<state>/ledger.tsv`, lines `<UTC>\t<kind>-created
+/// <id> …` and `<UTC>\t<kind>-deleted <id> …`) records as created and not
+/// since deleted, in creation order: what `fv-lab pod down --from-ledger`
+/// deletes. The ledger line is written right after the create, before the
+/// backstop and readiness, so a run interrupted at any point after the create
+/// leaves its pod here (docs/adr/0023-lab-report-and-ci-bridge.md §4). Only
+/// `runpod-pod` lines: fv-lab makes no other kind. A `delete-failed` line
+/// keeps the pod listed.
+pub fn undeleted_in_ledger(ledger: &str) -> Vec<String> {
+    let mut live: Vec<String> = Vec::new();
+    for line in ledger.lines() {
+        let event = line.split_once('\t').map_or(line, |(_, e)| e);
+        let mut words = event.split_whitespace();
+        let (Some(what), Some(id)) = (words.next(), words.next()) else {
+            continue;
+        };
+        match what {
+            "runpod-pod-created" => {
+                if !live.iter().any(|x| x == id) {
+                    live.push(id.to_owned());
+                }
+            }
+            "runpod-pod-deleted" => live.retain(|x| x != id),
+            _ => {}
+        }
+    }
+    live
 }
 
 /// A 7-hex-digit commit (`--sha`).
@@ -877,6 +935,71 @@ cells = ["c"]
         o.cells.clear();
         o.idle_min = 0;
         assert!(start_command(&o).unwrap().starts_with("set -u\n"));
+    }
+
+    #[test]
+    fn every_pod_deletes_itself_at_its_wall_cap() {
+        let t = tier();
+        let mut o = StartOptions::for_tier(&t, "abcdef1-1");
+        assert_eq!(o.cap_s, t.wall_cap_s);
+        // The self-delete is GraphQL podTerminate with the pod-scoped key: Runpod
+        // refuses that key a REST DELETE (HTTP 403, ADR-0023 §4). Success is an
+        // HTTP 200 without "errors"; anything else is retried.
+        let graphql = r#"-X POST https://api.runpod.io/graphql"#;
+        let mutation = r#"--data "{\"query\":\"mutation { podTerminate(input: {podId: \\\"$RUNPOD_POD_ID\\\"}) }\"}""#;
+        let success = r#"[ "$code" = 200 ] && ! grep -q '"errors"' "$1.resp""#;
+        for idle in [10, 0] {
+            o.idle_min = idle;
+            let s = start_command(&o).unwrap();
+            let cap = format!("    sleep {}\n    while :; do", t.wall_cap_s);
+            let at = s.find(&cap).expect("the cap watchdog");
+            // Started before anything that can block (the server, the run).
+            assert!(at < s.find("fv-gpucheck serve").unwrap());
+            assert!(
+                s.contains("      fv_self_delete /tmp/cap-watchdog.log && break\n      sleep 60\n")
+            );
+            // One definition per watchdog (the idle one only when it runs).
+            let defs = if idle == 0 { 1 } else { 2 };
+            assert_eq!(s.matches(graphql).count(), defs, "idle {idle}");
+            assert_eq!(s.matches(mutation).count(), defs, "idle {idle}");
+            assert_eq!(s.matches(success).count(), defs, "idle {idle}");
+            if idle != 0 {
+                assert!(s.contains("      fv_self_delete /tmp/idle-watchdog.log\n"));
+            }
+            // No REST delete anywhere (it never worked with the pod's key).
+            assert!(!s.contains("rest.runpod.io"));
+            assert!(!s.contains("-X DELETE"));
+            assert!(!s.contains("@CAP_S@"));
+        }
+        o.cap_s = 0;
+        assert!(start_command(&o).is_err());
+    }
+
+    #[test]
+    fn cells_must_be_arms_of_the_tier() {
+        let arms = ["sol-h3", "ltx25-distill-sol"];
+        assert!(check_cells("gold", arms, &["sol-h3".into()]).is_ok());
+        assert!(check_cells("gold", arms, &[]).is_ok());
+        for bad in ["--state-dir", "x", "sol-h3 "] {
+            assert!(check_cells("gold", arms, &[bad.into()]).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_ledger_lists_pods_created_and_not_deleted() {
+        let ledger = "2026-10-24T21:00:00Z\trunpod-pod-created aaa fv-lab-gold-x gpu=G image=I\n\
+            2026-10-24T21:00:01Z\trunpod-pod-created bbb fv-lab-gold-y gpu=G image=I\n\
+            2026-10-24T21:00:02Z\trunpod-pod-delete-failed bbb over-cap\n\
+            2026-10-24T21:00:03Z\trunpod-pod-created ccc fv-lab-gold-z gpu=G image=I\n\
+            2026-10-24T21:00:04Z\trunpod-pod-deleted aaa down\n\
+            2026-10-24T21:00:05Z\trunpod-serverless-created ddd ep gpu=G image=I\n\
+            garbage\n";
+        assert_eq!(undeleted_in_ledger(ledger), ["bbb", "ccc"]);
+        assert!(undeleted_in_ledger("").is_empty());
+        // Created again after a delete (an id is never reused, but the order holds).
+        let again =
+            "t\trunpod-pod-created a n\nt\trunpod-pod-deleted a x\nt\trunpod-pod-created a n\n";
+        assert_eq!(undeleted_in_ledger(again), ["a"]);
     }
 
     #[test]

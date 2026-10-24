@@ -213,3 +213,71 @@ fn pod_up_without_yes_is_the_plan_and_needs_no_key() {
     assert!(!nokey.status.success());
     assert!(String::from_utf8_lossy(&nokey.stderr).contains("RUNPOD_API_KEY"));
 }
+
+#[test]
+fn pod_down_from_the_ledger_needs_no_record() {
+    // An interrupted `pod up` leaves only its ledger line: `pod down
+    // --from-ledger` reads it (no pod record); nothing to delete needs no key.
+    let state = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("fv-lab-down-ledger");
+    let _ = std::fs::remove_dir_all(&state);
+    std::fs::create_dir_all(&state).unwrap();
+    let out = stdout(
+        fv_lab()
+            .args(["pod", "down", "--from-ledger", "--state-dir"])
+            .arg(&state),
+    );
+    assert!(out.contains("no pod to delete"), "{out}");
+    std::fs::write(
+        state.join("ledger.tsv"),
+        "2026-10-24T21:00:00Z\trunpod-pod-created abc123 fv-lab-gold-x gpu=G image=I\n\
+         2026-10-24T21:00:09Z\trunpod-pod-created def456 fv-lab-gold-y gpu=G image=I\n\
+         2026-10-24T21:01:00Z\trunpod-pod-deleted def456 down\n",
+    )
+    .unwrap();
+    // One pod left to delete: it gets as far as the key (none here), and fails.
+    let o = fv_lab()
+        .args(["pod", "down", "--from-ledger", "--state-dir"])
+        .arg(&state)
+        .output()
+        .unwrap();
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("RUNPOD_API_KEY"));
+    // Neither an id nor --from-ledger, or both: refused.
+    assert!(!fv_lab()
+        .args(["pod", "down"])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    assert!(!fv_lab()
+        .args(["pod", "down", "abc123", "--from-ledger"])
+        .output()
+        .unwrap()
+        .status
+        .success());
+}
+
+#[test]
+fn pod_up_cells_must_be_arms_of_the_tier() {
+    let ok = fv_lab()
+        .args([
+            "pod", "up", "--sha", "1234567", "--family", "gold", "--cells", "sol-h3",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        ok.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    for bad in ["sol-h3x", "x"] {
+        let o = fv_lab()
+            .args([
+                "pod", "up", "--sha", "1234567", "--family", "gold", "--cells", bad,
+            ])
+            .output()
+            .unwrap();
+        assert!(!o.status.success(), "{bad}");
+        assert!(String::from_utf8_lossy(&o.stderr).contains("is not an arm of tier `gold`"));
+    }
+}

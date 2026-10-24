@@ -1,0 +1,150 @@
+# The gold runs (plan D3/D4, docs/adr/0023-lab-report-and-ci-bridge.md §4):
+# `fv-lab run gold --all` on one RTX PRO 6000 pod, made by `fv-lab pod up` on
+# fv-deploy's money guards (the tier's $2.50/hr price cap on the quote and on
+# the billed price, the $8 balance floor projected over the 4 h wall cap, the
+# detached backstop at the cap, ready within 600 s in at most 3 cycles), then
+# fetched into artifacts/runpod/gold/<tag>/, the pod deleted, and
+# docs/perf/tiers.md rendered from that run set as an artifact and the job
+# summary. Nothing is committed: the owner commits the run set and the table.
+#
+# It SPENDS MONEY (about $2.49/hr; the EU-volume arms take roughly an hour),
+# and every "Re-run jobs" spends again. It needs the secret RUNPOD_API_KEY,
+# which this repository does not set: adding it is the owner's decision, best
+# in the `gold-runs` environment restricted to main with required reviewers
+# (ADR-0023 §4). Without it the job refuses before building anything.
+# workflow_dispatch only, never on push or pull request, one run at a time.
+#
+# The key is a step-level env of the steps that call Runpod (the refusal
+# check, `pod up`, `pod down`), never of the job: cargo build scripts and the
+# third-party actions do not see it. Third-party actions are pinned by commit
+# (read from their tags with `git ls-remote`, 2026-10-24).
+#
+# Pods cannot outlive the job unguarded: `pod up` writes the ledger line
+# `runpod-pod-created <id>` right after the create (before readiness), and the
+# always() step deletes every pod the ledger shows created and not deleted
+# (also after a cancel, whose second signal ends `pod up` without its own
+# cleanup); every fv-lab pod also deletes itself at the tier's wall cap
+# (the start command's cap watchdog), whatever happens to this runner.
+name: gold-run
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "7-hex commit whose runtime image (fastvideo-rs-runtime:sha-<7>) the pod boots; it must carry fv-lab and the gold tier"
+        required: true
+      cells:
+        description: "Only these arms (gold variant ids, space separated); empty: every gold variant (--all)"
+        required: false
+        default: ""
+      confirm:
+        description: "Type `spend` to create the pod (it costs money)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gold-run
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gold-run:
+    runs-on: ubuntu-22.04
+    # The owner's protection for the key: an environment restricted to main
+    # with required reviewers (ADR-0023 §4). Until it is configured GitHub
+    # creates it unprotected, and without the secret the job refuses anyway.
+    environment: gold-runs
+    # Over the gold tier's 4 h wall cap (the pod deletes itself then), plus
+    # the build, readiness and the fetch.
+    timeout-minutes: 300
+    env:
+      SHA: ${{ inputs.sha }}
+      CELLS: ${{ inputs.cells }}
+      CONFIRM: ${{ inputs.confirm }}
+      STATE: artifacts/fv-lab
+    steps:
+      - name: refuse without the secret, the confirmation or a commit
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: |
+          if [ -z "${RUNPOD_API_KEY}" ]; then
+            echo "::error::RUNPOD_API_KEY is not set: the gold runs spend money and need the owner to add the secret (docs/adr/0023-lab-report-and-ci-bridge.md §4). Nothing was created."
+            exit 1
+          fi
+          if [ "${CONFIRM}" != "spend" ]; then
+            echo "::error::confirm must be \`spend\` (this run creates a paid GPU pod). Nothing was created."
+            exit 1
+          fi
+          if ! [[ "${SHA}" =~ ^[0-9a-f]{7}$ ]]; then
+            echo "::error::sha must be 7 lowercase hex digits. Nothing was created."
+            exit 1
+          fi
+      # actions/checkout v4 (refs/tags/v4)
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: the arms must be gold variants (never flags)
+        run: |
+          for c in $CELLS; do
+            if ! [[ "$c" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || [ ! -f "lab/cells/gold-$c.toml" ]; then
+              echo "::error::cells: \`$c\` is not an arm of the gold tier (a gold variant id, lab/cells/gold-<id>.toml). Nothing was created."
+              exit 1
+            fi
+          done
+      # dtolnay/rust-toolchain, branch `stable` at the time of pinning
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: stable
+      # Swatinem/rust-cache v2 (refs/tags/v2, v2.9.3)
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+      - name: build fv-lab
+        run: cargo build --release --locked -p fastvideo-lab --features cli --bin fv-lab
+      - name: the run tag (unique per workflow run; the pattern `pod reap --account` knows)
+        run: |
+          printf -v hex '%04x' $(( GITHUB_RUN_ID % 65536 ))
+          echo "TAG=$SHA-$(date -u +%m%d%H%M%S)-$hex" >>"$GITHUB_ENV"
+      - name: the plan (no key, nothing created)
+        run: ./target/release/fv-lab pod up --sha "$SHA" --family gold --tag "$TAG" --root .
+      - name: fv-lab pod up --family gold --yes --wait (runs `fv-lab run gold --all`, fetches, deletes)
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: |
+          set -- --sha "$SHA" --family gold --tag "$TAG" --root . --state-dir "$STATE" --yes --wait
+          if [ -n "$CELLS" ]; then
+            # shellcheck disable=SC2086  # validated arm names, split on purpose
+            set -- "$@" --cells $CELLS
+          fi
+          ./target/release/fv-lab pod up "$@"
+      - name: delete every pod the ledger shows created and not deleted (also on failure or cancel)
+        if: always()
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: |
+          if [ -x ./target/release/fv-lab ]; then
+            ./target/release/fv-lab pod down --from-ledger --root . --state-dir "$STATE"
+          else
+            echo "fv-lab was not built: no pod was created"
+          fi
+      - name: docs/perf/tiers.md from this run's run set
+        if: always()
+        run: |
+          dir="artifacts/runpod/gold/${TAG:-none}"
+          if [ -n "${TAG:-}" ] && [ -d "$dir" ]; then
+            ./target/release/fv-lab report tiers --root . --runs "$dir"
+            cat docs/perf/tiers.md >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "no run set at $dir: no table" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+      # actions/upload-artifact v4 (refs/tags/v4, v4.6.2)
+      - name: upload the run set, the table and the ledger
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: gold-run-${{ inputs.sha }}-${{ github.run_id }}
+          path: |
+            artifacts/runpod/gold/
+            artifacts/fv-lab/
+            docs/perf/tiers.md
+          if-no-files-found: warn

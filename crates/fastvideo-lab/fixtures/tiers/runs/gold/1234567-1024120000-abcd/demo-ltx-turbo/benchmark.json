@@ -1,0 +1,3 @@
+{"schema_version":"fastvideo-rs.benchmark.v1","gpu":"NVIDIA RTX PRO 6000 Blackwell Server Edition",
+ "total_s":31.734,"text_s":1.25,"denoise_s":20.5,"decode_s":9.98,"load_s":124.99,"max_device_memory_used_mib":55628,
+ "workload":{"width":1920,"height":1088,"num_frames":121,"measured_steps":11}}

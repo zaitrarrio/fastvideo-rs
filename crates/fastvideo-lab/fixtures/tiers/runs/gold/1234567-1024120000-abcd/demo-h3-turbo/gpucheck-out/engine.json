@@ -1,0 +1,8 @@
+{"stage":"engine","status":"pass","elapsed_s":230.5,"git_sha":null,"error":null,"env":{},
+ "context":{"model":{"id":"demo-h3-turbo"},"job":{"width":832,"height":480,"num_frames":124,"seed":7}},
+ "checks":[
+  {"name":"timings","ok":true,"limits":{},"values":{"submit_to_mp4_s":9.876,"first_step_s":0.9,"load_s":182.05,
+    "metrics":{"inference_s":7.1,"peak_memory_mb":61440,"stage_durations":{"text":0.22,"denoise":6.5,"video_decode":2.71,"encode":0.3}}}},
+  {"name":"progress","ok":true,"limits":{"steps":4},"values":{"events":4,"last":[4,4]}},
+  {"name":"mp4","ok":true,"limits":{"width":832,"height":480,"frames":124,"audio":true},"values":{"width":832,"height":480,"frames":124}}
+ ]}

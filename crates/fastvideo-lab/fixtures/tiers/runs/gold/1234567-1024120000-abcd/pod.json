@@ -1,0 +1,11 @@
+{
+  "id": "fixture",
+  "name": "fv-lab-gold-1234567-1024120000-abcd",
+  "family": "gold",
+  "tag": "1234567-1024120000-abcd",
+  "sha": "1234567",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1792842276.0,
+  "cap_s": 14400
+}

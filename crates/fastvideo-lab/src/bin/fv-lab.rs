@@ -15,6 +15,13 @@
 //! fv-lab pod status <id> | fetch <id> [--wait] [--down] | down <id> | reap [--yes] [--account]
 //!                 reap: the pods recorded here past their cap; --account: every
 //!                 fv-lab-<tier>-<sha7>-<MMDDHHMMSS>-<hex4> pod past its tier's cap
+//! fv-lab gold check [--max-age-days N] [--today YYYY-MM-DD]
+//!                 every gold file parses and resolves against families/, a validated
+//!                 commit exists (git), and the per-variant validation age (Markdown)
+//! fv-lab gold cells [--write | --check]
+//!                 the `gold` tier's cells, generated from lab/gold/ and families/
+//! fv-lab report tiers [--runs artifacts/runpod/<tier>/<tag>] [--check] [--out F]
+//!                 docs/perf/tiers.md from the gold files and one run set
 //! fv-lab backstop --kind K --id ID --deadline T --armed-file F   (started by `pod up`)
 //! ```
 //!
@@ -44,12 +51,13 @@ use fastvideo_deploy::provider::{
 
 use fastvideo_lab::plan::{Lab, Paths, Tier};
 use fastvideo_lab::pod::{
-    baseline_for_pod, check_sha7_named, fetch_run, judge_run, launch, name_taken, random_suffix,
-    reap_account, reap_recorded, run_dir, run_tag, wait_done, Done, LabPod, PodRecord,
-    StartOptions,
+    baseline_for_pod, check_cells, check_sha7_named, fetch_run, judge_run, launch, name_taken,
+    random_suffix, reap_account, reap_recorded, run_dir, run_tag, undeleted_in_ledger, wait_done,
+    Done, LabPod, PodRecord, StartOptions,
 };
 use fastvideo_lab::run::{dry_run_lines, RunConfig, RunError, Runner};
 use fastvideo_lab::schema;
+use fastvideo_lab::{goldcell, goldcheck, report};
 
 /// `-V` / `--version`: the tools release this binary was built as
 /// (`FV_RELEASE_VERSION` at build time, docs/dev/tools-releases.md; the
@@ -84,6 +92,12 @@ enum Cmd {
     /// A Runpod pod for a tier.
     #[command(subcommand)]
     Pod(PodCmd),
+    /// The gold files: the CI check and the `gold` tier's cells.
+    #[command(subcommand)]
+    Gold(GoldCmd),
+    /// Reports generated from run sets.
+    #[command(subcommand)]
+    Report(ReportCmd),
     /// The detached backstop `pod up` starts (not for direct use).
     #[command(hide = true)]
     Backstop {
@@ -98,10 +112,66 @@ enum Cmd {
     },
 }
 
+#[derive(Subcommand)]
+enum GoldCmd {
+    /// Every gold file parses and resolves against families/*.toml, every
+    /// `last_validated.commit` is a commit here, and the validation age per
+    /// variant (Markdown on stdout, for $GITHUB_STEP_SUMMARY).
+    Check {
+        /// Fail when a validated variant is older than this (default: warn only).
+        #[arg(long)]
+        max_age_days: Option<i64>,
+        /// The day ages are counted to (default today, UTC).
+        #[arg(long)]
+        today: Option<String>,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// The `gold` tier's cells (lab/cells/gold-<variant>.toml), generated from
+    /// the gold and family files: print them, write them, or check them.
+    Cells {
+        #[arg(long, conflicts_with = "check")]
+        write: bool,
+        #[arg(long)]
+        check: bool,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ReportCmd {
+    /// docs/perf/tiers.md: the gold variants as one run set measured them.
+    Tiers {
+        /// The run set, relative to the root (artifacts/runpod/<tier>/<tag>);
+        /// with --check, default the one the committed file names.
+        #[arg(long)]
+        runs: Option<String>,
+        /// Fail when the committed file differs from the rendering.
+        #[arg(long)]
+        check: bool,
+        /// The table (default docs/perf/tiers.md under the root).
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Print instead of writing.
+        #[arg(long, conflicts_with = "check")]
+        stdout: bool,
+        /// The gold files (default lab/gold under the root).
+        #[arg(long)]
+        gold: Option<PathBuf>,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+}
+
 #[derive(Args)]
 struct RunArgs {
-    /// A tier of lab/tiers.toml (`rtx6000`) or a cell of lab/cells/.
+    /// A tier of lab/tiers.toml (`rtx6000`, `gold`) or a cell of lab/cells/.
     target: String,
+    /// Every arm of the tier (`fv-lab run gold --all`): the default for a
+    /// tier, said explicitly; not with --cells.
+    #[arg(long, conflicts_with = "cells")]
+    all: bool,
     /// Print the command lines (as runpod-matrix.sh FV_DRY_RUN=1); run and write nothing.
     #[arg(long)]
     dry_run: bool,
@@ -153,8 +223,9 @@ enum PodCmd {
         #[arg(long)]
         down: bool,
     },
-    /// Delete a pod.
-    Down(IdArgs),
+    /// Delete a pod (recorded here or not), or with --from-ledger every pod the
+    /// ledger shows created and not deleted.
+    Down(DownArgs),
     /// Delete the pods `pod up` recorded on this machine that are older than
     /// their wall cap (+10 min).
     Reap {
@@ -205,6 +276,25 @@ struct UpArgs {
     #[arg(long)]
     root: Option<PathBuf>,
     /// Ledger, pod records, backstop logs (default <root>/artifacts/fv-lab).
+    #[arg(long)]
+    state_dir: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct DownArgs {
+    /// The pod id (no record needed).
+    #[arg(
+        required_unless_present = "from_ledger",
+        conflicts_with = "from_ledger"
+    )]
+    id: Option<String>,
+    /// Every pod `<state>/ledger.tsv` records as created (`runpod-pod-created`)
+    /// and not deleted: the cleanup after an interrupted `pod up`, whose record
+    /// is only written once the pod is ready (docs/adr/0023-lab-report-and-ci-bridge.md §4).
+    #[arg(long)]
+    from_ledger: bool,
+    #[arg(long)]
+    root: Option<PathBuf>,
     #[arg(long)]
     state_dir: Option<PathBuf>,
 }
@@ -262,6 +352,12 @@ fn cmd_run(a: &RunArgs) -> Result<ExitCode, String> {
     let (tier, cells) = lab
         .resolve(&a.target, a.family.as_deref())
         .map_err(|e| e.to_string())?;
+    if a.all && tier.name != a.target {
+        return Err(format!(
+            "--all runs a whole tier; `{}` is a cell (of `{}`)",
+            a.target, tier.name
+        ));
+    }
     let mut cfg = RunConfig::new(&tier.name, &root);
     cfg.work = a
         .work
@@ -441,6 +537,14 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     so.cells = u.cells.iter().flat_map(|c| split_list(c)).collect();
     so.extra_env = u.extra_env.clone();
     let cells: Vec<_> = t.cells.iter().filter_map(|c| lab.cells.get(c)).collect();
+    check_cells(
+        &t.name,
+        cells
+            .iter()
+            .flat_map(|c| c.arms.iter().map(|a| a.name.as_str())),
+        &so.cells,
+    )
+    .map_err(|e| e.to_string())?;
     baseline_for_pod(
         &u.sha,
         u.baseline_sha.as_deref(),
@@ -678,6 +782,50 @@ fn deployer_down(p: &dyn Provider, state: &Path, id: &InstanceId) -> Result<(), 
     d.destroy_retry(id, "down").map_err(|e| e.to_string())
 }
 
+/// `pod down <id>` or `pod down --from-ledger`: deletes by id through
+/// fv-deploy's retries and ledger; no pod record is needed (a pod is deleted
+/// by id, and a 404 counts as deleted).
+fn cmd_down(a: &DownArgs) -> Result<bool, String> {
+    let root = find_root(a.root.as_ref())?;
+    let state = state_dir(a.state_dir.as_ref(), &root);
+    let ids = match (&a.id, a.from_ledger) {
+        (Some(id), false) => vec![id.clone()],
+        (None, true) => {
+            let p = state.join("ledger.tsv");
+            let text = match std::fs::read_to_string(&p) {
+                Ok(t) => t,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(e) => return Err(format!("{}: {e}", p.display())),
+            };
+            undeleted_in_ledger(&text)
+        }
+        _ => return Err("give a pod id or --from-ledger".into()),
+    };
+    if ids.is_empty() {
+        println!("no pod to delete (the ledger shows none created and not deleted)");
+        return Ok(true);
+    }
+    let env = BootEnv::from_process();
+    let http = ReqwestHttp::new().map_err(|e| e.to_string())?;
+    let api = RunpodApi::from_env(&http, &RealClock, &env).map_err(|e| e.to_string())?;
+    // The family only matters to readiness (`reach`), which a delete never asks.
+    let p = LabPod {
+        inner: Pod::new(api),
+        family: String::new(),
+    };
+    let mut ok = true;
+    for id in ids {
+        match deployer_down(&p, &state, &InstanceId::new(id.clone())) {
+            Ok(()) => println!("deleted {id}"),
+            Err(e) => {
+                eprintln!("[fv-lab] pod {id}: {e}");
+                ok = false;
+            }
+        }
+    }
+    Ok(ok)
+}
+
 fn cmd_pod(c: &PodCmd) -> Result<bool, String> {
     match c {
         PodCmd::Up(u) => cmd_up(u),
@@ -743,11 +891,7 @@ fn cmd_pod(c: &PodCmd) -> Result<bool, String> {
                 deployer_down(p, state, &InstanceId::new(rec.id.clone())),
             )
         }),
-        PodCmd::Down(id) => with_pod(id, |p, _, rec, _, state| {
-            deployer_down(p, state, &InstanceId::new(rec.id.clone()))?;
-            println!("deleted {}", rec.id);
-            Ok(true)
-        }),
+        PodCmd::Down(a) => cmd_down(a),
         PodCmd::Reap {
             yes,
             account,
@@ -902,12 +1046,198 @@ fn run() -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Pod(c) => cmd_pod(&c).map(b),
+        Cmd::Gold(c) => cmd_gold(&c),
+        Cmd::Report(c) => cmd_report(&c),
         Cmd::Backstop {
             kind,
             id,
             deadline,
             armed_file,
         } => cmd_backstop(&kind, &id, deadline, armed_file.as_ref()).map(b),
+    }
+}
+
+// ------------------------------------------------------------------ gold, report
+
+fn load_golds(root: &Path) -> Result<Vec<fastvideo_lab::Gold>, String> {
+    fastvideo_lab::load_dir(&root.join("lab/gold")).map_err(|e| e.to_string())
+}
+
+fn load_families(root: &Path) -> Result<fastvideo_manifest::FamilySet, String> {
+    fastvideo_manifest::family::load_dir(&root.join("families")).map_err(|e| e.to_string())
+}
+
+fn cmd_gold(c: &GoldCmd) -> Result<ExitCode, String> {
+    match c {
+        GoldCmd::Check {
+            max_age_days,
+            today,
+            root,
+        } => {
+            let root = find_root(root.as_ref())?;
+            let golds = load_golds(&root)?;
+            let families = load_families(&root)?;
+            let today = match today {
+                Some(t) => t.clone(),
+                None => fastvideo_deploy::launch::utc_iso(RealClock.now())
+                    .get(..10)
+                    .unwrap_or_default()
+                    .to_owned(),
+            };
+            let git = goldcheck::GitCli::detect(&root);
+            let git_ref: Result<&dyn goldcheck::Git, String> = match &git {
+                Ok(g) => Ok(g),
+                Err(e) => Err(e.clone()),
+            };
+            let rep = goldcheck::check(&golds, &families, git_ref, &today, *max_age_days)?;
+            print!("{}", rep.markdown());
+            for w in &rep.warnings {
+                eprintln!("[fv-lab] warning: {w}");
+            }
+            for e in &rep.errors {
+                eprintln!("[fv-lab] error: {e}");
+            }
+            Ok(if rep.ok() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            })
+        }
+        GoldCmd::Cells { write, check, root } => {
+            let root = find_root(root.as_ref())?;
+            let cells = goldcell::gold_cells(&load_golds(&root)?, &load_families(&root)?)?;
+            let dir = root.join("lab/cells");
+            let committed = committed_gold_cells(&dir)?;
+            let tiers_path = root.join(fastvideo_lab::plan::TIERS_PATH);
+            let tiers_text = std::fs::read_to_string(&tiers_path)
+                .map_err(|e| format!("{}: {e}", tiers_path.display()))?;
+            let tiers = fastvideo_lab::Tiers::parse(&tiers_text, fastvideo_lab::plan::TIERS_PATH)
+                .map_err(|e| e.to_string())?;
+            let tier_cells = tiers
+                .tiers
+                .iter()
+                .find(|t| t.name == goldcell::GOLD_TIER)
+                .map(|t| t.cells.as_slice());
+            if *write {
+                for (name, text) in &cells {
+                    let p = dir.join(format!("{name}.toml"));
+                    std::fs::write(&p, text).map_err(|e| format!("{}: {e}", p.display()))?;
+                    println!("wrote lab/cells/{name}.toml");
+                }
+                for name in committed.keys() {
+                    if !cells.iter().any(|(n, _)| n == name) {
+                        let p = dir.join(format!("{name}.toml"));
+                        std::fs::remove_file(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+                        println!("removed lab/cells/{name}.toml (no gold file generates it)");
+                    }
+                }
+                let now = committed_gold_cells(&dir)?;
+                let rest = goldcell::drift(&now, tier_cells, &cells);
+                for d in &rest {
+                    eprintln!("[fv-lab] {d}");
+                }
+                return Ok(if rest.is_empty() {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::FAILURE
+                });
+            }
+            if *check {
+                let d = goldcell::drift(&committed, tier_cells, &cells);
+                for x in &d {
+                    eprintln!("[fv-lab] {x} (fv-lab gold cells --write)");
+                }
+                if d.is_empty() {
+                    println!("{} gold cells current", cells.len());
+                }
+                return Ok(if d.is_empty() {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::FAILURE
+                });
+            }
+            for (name, text) in &cells {
+                println!("# ---- lab/cells/{name}.toml\n{text}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
+
+/// Every committed `lab/cells/gold-*.toml`, by stem.
+fn committed_gold_cells(dir: &Path) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let mut out = std::collections::BTreeMap::new();
+    let rd = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    for e in rd {
+        let p = e.map_err(|e| format!("{}: {e}", dir.display()))?.path();
+        let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if stem.starts_with("gold-") && p.extension().is_some_and(|x| x == "toml") {
+            let text = std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+            out.insert(stem.to_owned(), text);
+        }
+    }
+    Ok(out)
+}
+
+fn cmd_report(c: &ReportCmd) -> Result<ExitCode, String> {
+    match c {
+        ReportCmd::Tiers {
+            runs,
+            check,
+            out,
+            stdout,
+            gold,
+            root,
+        } => {
+            let root = find_root(root.as_ref())?;
+            let golds = match gold {
+                Some(d) => fastvideo_lab::load_dir(d).map_err(|e| e.to_string())?,
+                None => load_golds(&root)?,
+            };
+            let out = out.clone().unwrap_or_else(|| root.join(report::TIERS_MD));
+            let committed = if *check {
+                Some(std::fs::read_to_string(&out).map_err(|e| format!("{}: {e}", out.display()))?)
+            } else {
+                None
+            };
+            let label = match (runs, &committed) {
+                (Some(r), _) => Some(r.clone()),
+                (None, Some(text)) => {
+                    report::run_set_of(text).map_err(|e| format!("{}: {e}", out.display()))?
+                }
+                (None, None) => None,
+            };
+            let set = label
+                .as_deref()
+                .map(|l| report::RunSet::load(&root, l))
+                .transpose()?;
+            let text = report::render(&golds, set.as_ref());
+            if let Some(committed) = committed {
+                return Ok(match report::first_difference(&committed, &text) {
+                    None => {
+                        println!("{} is current ({} gold files)", out.display(), golds.len());
+                        ExitCode::SUCCESS
+                    }
+                    Some((line, ours, theirs)) => {
+                        eprintln!(
+                            "[fv-lab] {} differs from `fv-lab report tiers` at line {line}:\n  committed: {ours}\n  rendered:  {theirs}\nrerun `fv-lab report tiers{}` and commit it",
+                            out.display(),
+                            label.map(|l| format!(" --runs {l}")).unwrap_or_default()
+                        );
+                        ExitCode::FAILURE
+                    }
+                });
+            }
+            if *stdout {
+                print!("{text}");
+            } else {
+                std::fs::write(&out, &text).map_err(|e| format!("{}: {e}", out.display()))?;
+                println!("wrote {}", out.display());
+            }
+            Ok(ExitCode::SUCCESS)
+        }
     }
 }
 
