@@ -2,6 +2,26 @@
 
 Project code: FVID
 
+### FVID · 2026-10-24 · FVID-2026-10-24-gold-tier-gpu-and-settings
+- Trigger: review of PR #151 (plan D2): two gold files carried oracle numbers measured on an H100 for an RTX PRO 6000 tier (`fasth3-4step-vsa` PSNR / LPIPS, `ltx25-ref2v` PSNR), and H3 latencies measured before the MXFP8 video-decoder default (2026-10-14) sat in the fields while `fasth3-trim-nvfp4` gapped its numbers for the same reason
+- Options: keep the numbers with a note; gap every number not measured in the served configuration; keep a number measured under a non-default setting only when that exact setting is named
+- Decision: **(coordinator) a number measured on a GPU other than the tier's is a gap, its values kept in a cited `[[source]]` note and the gap reason ("measured on H100 only; D3 re-measures on the tier GPU"); a number measured under a non-default setting stays in the fields only when `workload.note` names the exact setting that reproduces it (here `FASTVIDEO_H3_VAE_MXFP8=0`, the bf16 video decode that was the default before 2026-10-14, and `FASTVIDEO_WAN_QUANT=mxfp8` for the Wan TAEHV arms), with the environment also in a new `workload.env` the parser checks the note names; every `[[source]]` carries a heading (checked to exist in the file) and a date.** ADR-0009 Choice 1 unchanged; Choice 5 added
+- Reason: one rule for every file; `fv-lab` can rerun a cell exactly; a gold number is only comparable on the tier's GPU
+- Reversibility: cheap (this repository's format)
+- Executed by: Executor (plan D2, review fixes)
+- ADR: docs/adr/0009-gold-standard-files.md (Choice 5)
+- Verification: `cargo test -p fastvideo-lab` (`sources_need_a_heading_and_a_date`, `workload_env_is_named_in_the_note`, `every_cited_heading_exists_in_its_file`)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-gold-standard-files
+- Trigger: plan D2 (docs/plan/2026-10-23-execution-plan.md): `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments, keyed by registry name and `@rev`; the profile comments stop carrying numbers
+- Options: bounds with margins as the review sketches them; the measured values as the sources report them, with the gate's tolerances applied by `fv-lab`; numbers copied from the nearest measured configuration when the variant itself has none; only cited numbers, with every absence declared
+- Decision: **a new library crate `fastvideo-lab` defines the format (`Gold`, `validate`, `load_dir`, `schemas/gold.v1.json`); every numeric field is optional, a present one must be cited by a `[[source]]` (path, heading, date) and an absent one declared by a `[[gap]]` with its reason, both enforced by the parser; the first 30 files hold the sources' measured values (no margins, no rescaling, no borrowing from nearby configurations, which are cited in notes); the most recent dated source wins and both are cited; `cost.usd_per_hr` is the class's most recent dated price ($2.49/hr, RTX PRO 6000, EU-RO-1, 2026-10-14) and `usd_per_clip` the one derived value; profile comments point to the gold files and `docs/techniques.md` and a CPU test rejects measurement-looking numbers in them; `lab/tiers.toml` is left to D1**
+- Reason: a gold standard that invents is worse than none; the gaps are D3's GPU work list; the gate's tolerances are already the repository's rule
+- Reversibility: cheap (this repository's format, versioned by `schema`; nothing published depends on it)
+- Executed by: Executor (plan D2)
+- ADR: docs/adr/0009-gold-standard-files.md
+- Verification: `cargo test -p fastvideo-lab` (unit tests; every gold file parses and validates; gold files == family variant ids both ways; family, tier and profile agree; cited paths exist; no measurement in a profile comment; schema drift); profiles' TOML values unchanged (comment-only diff)
+
 ### FVID · 2026-10-24 · FVID-2026-10-24-family-files-are-the-source
 - Trigger: plan A3 (docs/plan/2026-10-23-execution-plan.md): the engine projection of the family manifests; `catalog()` deleted, the serve TOMLs reduced to variants and residency
 - Options: load `families/` from disk at startup; embed the files at build time; embed with a run-time directory override

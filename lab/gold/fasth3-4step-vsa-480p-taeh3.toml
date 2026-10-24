@@ -1,0 +1,115 @@
+# Gold standard of `fasth3-4step-vsa-480p-taeh3` (h3, draft): docs/adr/0009-gold-standard-files.md.
+# Every number is copied from the [[source]] that cites it; absent numbers are listed under [[gap]].
+# `fv-lab run gold` (plan D1/D3) fills [last_validated] and replaces these with its own run record.
+
+schema = 1
+
+[model]
+variant = "fasth3-4step-vsa-480p-taeh3"
+family = "h3"
+profile = "h3/fasth3_4step_vsa"
+
+[tier]
+name = "draft"
+gpu = "RTX PRO 6000 Blackwell"
+sm = 120
+vram_gib = 96
+offer = "runpod: NVIDIA RTX PRO 6000 Blackwell Server Edition, EU-RO-1 (plan §1: the gold-standard GPU)"
+
+[workload]
+width = 832
+height = 480
+frames = 124
+fps = 24
+prompt_set = "raw5: one fox prompt x 5 (artifacts/perf/raw-inference/bench.sh)"
+seeds = [7]
+steps = 4
+note = "The turbo recipe (h3/fasth3_4step_vsa, 4step-vsa) decoded by TAEH3 at its 480p canvas. fv-gpucheck straight from the CLI: everything resident, one untimed warm-up, then 5 timed generations of the raw5 set (one fox prompt x 5, seed 7); gen = total_s - text_s (text cached, no MP4; PNG frames outside the timed region). Median (min-max) of the 5. Run before the MXFP8 video-decoder default: reproduce with FASTVIDEO_H3_VAE_MXFP8=0 (bf16 video decode, the default before 2026-10-14). TAEH3 decodes without the official decoder's linears, so the switch does not touch its decode (docs/techniques.md, H3 VAE decode speed); it is named so the cell is exact."
+
+[workload.env]
+FASTVIDEO_H3_VAE_MXFP8 = "0"
+
+[latency]
+measures = "gen"
+p50_s = 7.35
+min_s = 7.33
+max_s = 7.37
+denoise_s = 7.04
+decode_s = 0.24
+load_s = 117.4
+peak_gib = 57.6
+
+[quality]
+gate = "fail: TAEH3 fails the gate's sharpness floor against its official-VAE twin (the turbo recipe at 480p); the frames are the same picture, softer. Never a default: the draft / fast-preview decoder by design (owner decision 2026-10-14, docs/perf/h3-nvfp4-tier-options.md decision 2)."
+cell = "h3arms run 2c637f7 (RTX PRO 6000, 2026-09-27), 832x480x124, the five-prompt set, medians: TAEH3 against its twin with the official 36-block decoder in bf16 (the default before 2026-10-14)."
+sharpness_ratio = 0.87
+note = "vs the twin: LPIPS 0.123, PSNR 26.3 dB, sharpness 0.87 (docs/techniques.md, 2026-09-27). The TAEH3 measurements compare against our own official decode, not against upstream."
+
+[cost]
+usd_per_hr = 2.49
+usd_per_clip = 0.00508
+
+[last_validated]
+# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+
+[[source]]
+fields = ["latency.measures", "latency.p50_s", "latency.min_s", "latency.max_s", "latency.denoise_s", "latency.decode_s", "latency.peak_gib", "workload"]
+path = "docs/perf/raw-inference.md"
+heading = "RTX PRO 6000 (sm_120)"
+date = "2026-09-30"
+note = "Row 'H3 turbo, 832x480x124, max: TAEH3': gen 7.35 (7.33-7.37) s, denoise 7.04 s, decode 0.24 s, peak 57.6 GiB: the turbo recipe with --taeh3-weights taeh3.safetensors, which is this variant's configuration."
+
+[[source]]
+fields = ["latency.load_s"]
+path = "artifacts/perf/raw-inference/rtx-pro-6000-summary.json"
+heading = "h3t-max/tae"
+date = "2026-09-30"
+note = "load_s."
+
+[[source]]
+fields = ["workload"]
+path = "docs/techniques.md"
+heading = "H3 VAE decode speed (RTX PRO 6000, 2026-10-14)"
+date = "2026-10-14"
+note = "'TAEH3 is unaffected' by the MXFP8 decoder default."
+
+[[source]]
+fields = ["quality.gate", "quality.cell", "quality.sharpness_ratio"]
+path = "docs/techniques.md"
+heading = "FastH3 8-step technique arms (`h3arms`, RTX PRO 6000, 2026-09-27)"
+date = "2026-09-27"
+note = "TAEH3 table, row 'FastH3 4-step VSA 480p + TAEH3': denoise 7.50 s, total 8.72 s; vs twin LPIPS 0.123 / PSNR 26.3 / sharpness 0.87. TAEH3 fails the sharpness floor everywhere (0.84-0.93 against its twin) and saves decode time only."
+
+[[source]]
+fields = ["quality.gate"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "Decisions (2026-10-14) and what shipped"
+date = "2026-10-14"
+note = "Decision 2: TAEH3 is an explicit fast preview, never a default; it fails the sharpness gate (0.82-0.91 against the official decoder) and saves about 10-12 % end to end."
+
+[[source]]
+fields = ["cost.usd_per_hr", "cost.usd_per_clip"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
+date = "2026-10-14"
+note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
+
+[[gap]]
+field = "quality.psnr_vs_upstream_min_db"
+why = "no oracle run with the TAEH3 decoder; the oracle compares latents and the official decode"
+
+[[gap]]
+field = "quality.lpips_vs_upstream_max"
+why = "no oracle run with the TAEH3 decoder"
+
+[[gap]]
+field = "quality.jitter_ratio"
+why = "the 2026-09-27 TAEH3 table reports LPIPS, PSNR and sharpness only"
+
+[[gap]]
+field = "latency.fps"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "latency.ttff_s"
+why = "a clip, not a stream"

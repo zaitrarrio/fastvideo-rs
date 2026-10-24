@@ -1,0 +1,111 @@
+# Gold standard of `ltx25-a2v-guided` (ltx2, max): docs/adr/0009-gold-standard-files.md.
+# Every number is copied from the [[source]] that cites it; absent numbers are listed under [[gap]].
+# `fv-lab run gold` (plan D1/D3) fills [last_validated] and replaces these with its own run record.
+# Served as ltx25-a2v-guided (fal lightricks/ltx-2.5 audio-to-video/pro): the dev DiT with the multimodal guider at stage 1.
+
+schema = 1
+
+[model]
+variant = "ltx25-a2v-guided"
+family = "ltx2"
+profile = "ltx2/ltx25_distill_dense"
+
+[tier]
+name = "max"
+gpu = "RTX PRO 6000 Blackwell"
+sm = 120
+vram_gib = 96
+offer = "runpod: NVIDIA RTX PRO 6000 Blackwell Server Edition, EU-RO-1 (plan §1: the gold-standard GPU)"
+
+[workload]
+width = 768
+height = 512
+frames = 121
+fps = 24
+steps = 33
+prompt_set = "the ltx25-a2v talking-head prompt with scripts/gpu/fixtures/speech-flite-44k.flac"
+seeds = [1024]
+note = "steps = 30 guided stage-1 (4 passes each: cond, uncond, STG, modality) + 3 stage-2. The oracle cell of 2026-09-29 (runtime fe45a1b), ours and the reference (ltx_pipelines.a2vid_two_stage on the dev transformer, --offload cpu) on RTX PRO 6000 (EUR-IS-1, EU volume); noise and text injected, our own audio latent; stage 2 from the reference's entry state. Not the serving canvas (1920x1080)."
+
+[workload.upstream]
+target = "ltx25-a2v-guided"
+image = "sol-ltx25"
+rev = "fd4ded7"
+
+[latency]
+peak_gib = 56.9
+note = "Stage timings of the oracle cell (not a timed generation, so no p50_s): stage 1 30 steps x 4 passes in 21.2 s (0.705 s a step), stage 2 4.1 s of which 2.1 s is the LoRA switch (38.4 GB re-uploaded from pinned host memory and re-fused); the DiT and attached LoRA factors 52.0 GiB; DiT load 46 s cold. The reference: 117 s stage 1, 4 s stage 2, 168 s for the cell."
+
+[quality]
+cell = "decoded clip vs the reference's, 121 frames at 768x512: stage 2 (the distilled LoRA fused at 1.0 into the dev DiT, 3 Euler steps, dense) and the decode, from the reference's entry state."
+oracle = "pass at the bf16 floor per pass (the four passes' velocities at step 1 7.0e-3 to 9.3e-3; the STG and modality passes land with the cond pass); the guided stage-1 trajectory drifts late as a chaotic sampler does (0.29, cosine 0.958 at step 30) (docs/oracle.md)."
+psnr_vs_upstream_min_db = 40.5
+note = "SSIM 0.987, PSNR 40.5 dB (min 40.0) vs the reference's clip; our audio encoder is 7.5e-2 from theirs and does not move the video."
+
+[cost]
+usd_per_hr = 2.49
+
+[last_validated]
+# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+
+[[source]]
+fields = ["latency.peak_gib", "quality.psnr_vs_upstream_min_db", "quality.oracle", "quality.cell", "workload", "workload.upstream"]
+path = "docs/oracle.md"
+heading = "LTX-2.5 guided audio-to-video (2026-09-29)"
+date = "2026-09-29"
+note = "Table row 'decoded clip vs the reference's (121 frames)': SSIM 0.987, PSNR 40.5 dB (min 40.0). Timings paragraph: peak device memory 56.9 GiB (the DiT and the attached LoRA factors 52.0 GiB)."
+
+[[source]]
+fields = ["cost.usd_per_hr"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
+date = "2026-10-14"
+note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
+
+[[gap]]
+field = "latency.p50_s"
+why = "the oracle cell reports stage timings (stage 1 21.2 s, stage 2 4.1 s at 768x512), not a timed end-to-end generation at the serving canvas; see latency.note"
+
+[[gap]]
+field = "latency.min_s"
+why = "the oracle cell reports stage timings (stage 1 21.2 s, stage 2 4.1 s at 768x512), not a timed end-to-end generation at the serving canvas; see latency.note"
+
+[[gap]]
+field = "latency.max_s"
+why = "the oracle cell reports stage timings (stage 1 21.2 s, stage 2 4.1 s at 768x512), not a timed end-to-end generation at the serving canvas; see latency.note"
+
+[[gap]]
+field = "latency.denoise_s"
+why = "the oracle cell reports stage timings (stage 1 21.2 s, stage 2 4.1 s at 768x512), not a timed end-to-end generation at the serving canvas; see latency.note"
+
+[[gap]]
+field = "latency.decode_s"
+why = "the oracle cell reports stage timings (stage 1 21.2 s, stage 2 4.1 s at 768x512), not a timed end-to-end generation at the serving canvas; see latency.note"
+
+[[gap]]
+field = "latency.load_s"
+why = "the DiT load (46 s cold, 46.9 GB) is the oracle cell's, not a serving load; see latency.note"
+
+[[gap]]
+field = "quality.lpips_vs_upstream_max"
+why = "the oracle reports SSIM and PSNR of the decoded clip, no LPIPS"
+
+[[gap]]
+field = "quality.sharpness_ratio"
+why = "no gate run (the oracle is a parity run, not a gate)"
+
+[[gap]]
+field = "quality.jitter_ratio"
+why = "no gate run (the oracle is a parity run, not a gate)"
+
+[[gap]]
+field = "latency.fps"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "latency.ttff_s"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "cost.usd_per_clip"
+why = "derived from latency.p50_s, which has no measurement here"
