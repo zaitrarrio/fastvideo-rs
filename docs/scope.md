@@ -16,14 +16,15 @@ half. `--features cuda` needs a CUDA toolchain.
 | `fastvideo-ops` | Shared numeric helpers |
 | `fastvideo-models` | Configs, schedules, geometry, sol-engine contracts. No CUDA |
 | `fastvideo-loader` | Safetensors, lazy shards, bf16 views. `unsafe` allowed (mmap) |
-| `fastvideo-cudarc` | Pipelines, weights, NVRTC kernels. `unsafe` allowed (driver, cuBLAS, cuDNN FFI) |
+| `fastvideo-cudarc` | The runtime (`src/rt`: tensors, device, kernels, ops, weights) and the family pipelines. `unsafe` allowed (driver, cuBLAS, cuDNN FFI) |
 | `fastvideo-core` | Registry, workloads, `generate` dispatch |
 | `fastvideo-cli` | `generate` / `generate_av` |
 | `fastvideo-gpucheck` | Staged GPU checks (`kernels`, `parity`, `clip`). `unsafe` allowed |
 | `fastvideo-mlx` | Apple Silicon scaffold (`mlx-rs` behind `--features mlx` on aarch64 macOS); host stubs elsewhere. Not a generate path |
 
 Shared device types (`CudaTensor`, conv, the weight map, the frame writer)
-live under `cudarc/src/wan` and are used by every other model.
+live under `cudarc/src/rt` (the runtime, extracted from `wan` in plan B1; `wan`
+re-exports them under the old paths for now) and are used by every other model.
 
 Workloads: `t2v`, `i2v`, `t2av`, `fl2va`, `ref2va`, `t2i`, `t2a`, `v2a`,
 plus control/edit entries that carry an empty workload list in the registry.
