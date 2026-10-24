@@ -19,6 +19,8 @@ on:
       - "scripts/ci/base-images.sh"
       - ".dockerignore"
       - "scripts/gpu/**"
+      - "lab/tiers.toml"
+      - "lab/cells/**"
       - "scripts/ci/prebuilt.sh"
       - "scripts/ci/tools-release.sh"
       - ".github/workflows/gpucheck-runtime-image.yml"
@@ -155,13 +157,18 @@ jobs:
               real="$(readlink -f "$(ldconfig -p | grep -m1 -E "^[[:space:]]+${pair%%:*} " | sed "s/.*=> //")")"
               case "$real" in *".${pair#*:}") echo "${pair%%:*} -> $real" ;; *) bad "${pair%%:*} is $real, pinned ${pair#*:}" ;; esac
             done
-            for b in target/release/fv-gpucheck /usr/local/bin/ffmpeg /usr/local/bin/ffprobe /usr/local/bin/hf-fm; do
+            for b in target/release/fv-gpucheck target/release/fv-lab /usr/local/bin/ffmpeg /usr/local/bin/ffprobe /usr/local/bin/hf-fm; do
               ldd "$b" | grep "not found" && bad "$b: unresolved libraries"
             done
             for x in tileiras nvcc python3 gcc; do command -v "$x" && bad "$x is in the image"; done
             ldconfig -p | grep -E "libcudnn_adv|libcudnn_ext|libnvJitLink" && bad "unused CUDA libraries present"
             command -v sshd rsync curl hf-fm >/dev/null
             ./target/release/fv-gpucheck --out /tmp/out nvrtc
+            # fv-lab (docs/adr/0019-fv-lab.md) and the run plan it reads from /opt/fastvideo-rs/lab.
+            ./target/release/fv-lab --version
+            ./target/release/fv-lab check
+            ./target/release/fv-lab run rtx6000 --dry-run --work /workspace --scratch /fvscratch --tag smoke >/tmp/dry-run.txt
+            grep -q "dry-run sol-h3: " /tmp/dry-run.txt
             grep -q aot_sms /tmp/out/nvrtc.json && echo "embedded cubins present"
             # The oxide Tile-IR NVFP4 GEMM cubins must be embedded for both SMs.
             for sm in 100 120; do
@@ -176,6 +183,7 @@ jobs:
           mkdir -p dist && cid=$(docker create "$img") \
             && docker cp "$cid:/opt/fastvideo-rs/target/release/fv-gpucheck" dist/ \
             && docker cp "$cid:/opt/fastvideo-rs/target/release/fv-gpucheck.build-id" dist/ \
+            && docker cp "$cid:/opt/fastvideo-rs/target/release/fv-lab" dist/ \
             && docker rm "$cid" >/dev/null
       - uses: actions/upload-artifact@v4
         with:

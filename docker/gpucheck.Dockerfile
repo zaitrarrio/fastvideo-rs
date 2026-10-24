@@ -31,6 +31,7 @@
 #   --build-context boot-build=<dir>     <dir>/out/fv-boot (boot-build; scripts/ci/prebuilt.sh passes it
 #                                        when the release's serve set carries fv-boot: tools releases
 #                                        from before fv-boot do not, and this stage then compiles it)
+# lab-build (fv-lab, docs/adr/0019-fv-lab.md) always compiles here until a tools release carries it.
 # Without them (no usable tools release) the stages compile here.
 
 # The base of every runtime image, pinned so the shared layers only change
@@ -129,6 +130,20 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM scratch AS binary
 COPY --from=build /out/ /
+
+# lab-build: fv-lab (docs/adr/0019-fv-lab.md), the validation driver the runtime image runs on a GPU pod
+# (`fv-lab run <tier>`: lab/tiers.toml + lab/cells, calling fv-gpucheck and verify-weights.sh). No CUDA. It
+# compiles here, like boot-build before tools releases carried fv-boot, until a tools release carries it.
+FROM builder AS lab-build
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends cmake \
+ && rm -rf /var/lib/apt/lists/*
+COPY . /src
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/target \
+    cargo build --release --locked -p fastvideo-lab --features cli --bin fv-lab \
+ && mkdir -p /out \
+ && cp /target/release/fv-lab /out/fv-lab
 
 # ============================================================================
 # Runtime images: one shared layer stack (docs/serve/images.md "Layers").
@@ -361,7 +376,11 @@ COPY scripts/gpu /opt/fastvideo-rs/scripts/gpu
 # Provenance only: the cubins are already embedded in fv-gpucheck.
 COPY --from=oxide /out/oxide /opt/fastvideo-rs/oxide
 COPY --from=binary /fv-gpucheck /fv-gpucheck.build-id /opt/fastvideo-rs/target/release/
-LABEL org.opencontainers.image.description="fastvideo-rs cudarc GPU validation runtime (fv-gpucheck + CUDA runtime + hf-fm)"
+# fv-lab and the run plan it reads (fv-lab finds lab/ above its binary: /opt/fastvideo-rs/lab).
+COPY lab/tiers.toml /opt/fastvideo-rs/lab/tiers.toml
+COPY lab/cells /opt/fastvideo-rs/lab/cells
+COPY --from=lab-build /out/fv-lab /opt/fastvideo-rs/target/release/
+LABEL org.opencontainers.image.description="fastvideo-rs cudarc GPU validation runtime (fv-gpucheck + fv-lab + CUDA runtime + hf-fm)"
 WORKDIR /opt/fastvideo-rs
 
 # ---- serve: fv-serve on the runtime image (docs/serve/design.md §6.1, WP-16) --
