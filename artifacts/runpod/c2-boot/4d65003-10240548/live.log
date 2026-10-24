@@ -1,0 +1,4 @@
+[05:48:27] [c2-boot] fetched fv-boot: d1bb597f5c08e345 8473816 bytes; image FV_CONFIG=/etc/fv/runpod-ltx.toml
+[05:48:29] [c2-boot] ▶ smoke (results server down until it ends)
+[05:50:28] [c2-boot] smoke exit=0 117s
+[05:50:28] [c2-boot] all cells done

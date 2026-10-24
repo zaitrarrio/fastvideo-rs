@@ -436,3 +436,15 @@ ran (pod id, $/hr), result, cost.
   `check.sh` (exit 0), `scripts/gpu/lint.sh` green. Control: `--check`,
   typecheck, vitest 46 files / 602 tests. No new lockfile package. GPU gate
   (`scripts/gpu/fv-boot-smoke-pod.sh` on the EU volume) pending.
+- 2026-10-24 05:51Z: C2 GPU gate (coordinator): one boot of the promoted
+  serve image `fastvideo-rs-serve:ltx` (fv-serve 0.1.37) through the PR's
+  release `fv-boot` (built on build pod `pzocv1keasg3xn`), on an RTX PRO
+  6000 in EU-RO-1 with volume `bz0ofkfx45`: driver check (595.91) ok,
+  volume (9 trees), config `/etc/fv/runpod-ltx.toml` checked with
+  `--print-config`, exec fv-serve; ready, `ltx25-distill-sol` loaded; one
+  native job (480p 16:9, seed 1) succeeded in 108 s (pod `0qayz3a464wd7g`).
+  The first attempt (pod `1b7hdj1l6cwik2`) booted to ready in 122 s, but
+  the smoke script read the model id from the wrong key, so no job was
+  submitted; fixed in `4d65003f`. Evidence:
+  `artifacts/runpod/c2-boot/{bcde06c-10240544,4d65003-10240548}/`. Two
+  pods, about 7 GPU-minutes, deleted.
