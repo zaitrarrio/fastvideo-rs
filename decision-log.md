@@ -1382,3 +1382,53 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0020-step-cache.md "Evidence"
 - Verification: `FV_DRY_RUN=1 bash scripts/gpu/runpod-matrix.sh b4a`; GPU run by the coordinator; `h3::techniques::tests::b4a_gpu_cell_profile_reuses_the_middle_forwards`; review of PR #173 (the FBCache path)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-home
+- Trigger: plan B4c; three disk prompt caches (H3 `h3/text_cache.rs`, LTX-2 `ltx2/text_cache.rs`, Wan's key in `wan/pipeline.rs` over H3's store; review §3, §7.3 item 4)
+- Options: `fastvideo_models` beside B4a's `step_cache`; `fastvideo_cudarc::rt::prompt_cache`
+- Decision: `fastvideo_cudarc::rt::prompt_cache` (key, file identities, format, atomic store, load, get-or-compute); the families keep only their identity inputs, default directories and value types
+- Reason: keys and seals are SHA-256 and `sha2` is a cudarc dependency only (no new dependency); the identities read weight files and lazy checkpoints and the values are device tensors read back; every caller is a cudarc pipeline; `rt` is the shared runtime (B1) and builds without CUDA
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0021-prompt-cache.md
+- Verification: `cargo test -p fastvideo-cudarc prompt_cache`, cudarc/models/engine-service/core tests
+
+### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-parameters
+- Trigger: the copies differ in what is on disk: key domain and prompt trimming, file identities (framed head+tail MiB vs unframed 256 KiB head vs tensor fingerprint), two entry layouts, finite check, temporary names, fsync, cleanup, error text and log line
+- Options: normalise to one key and one format (orphaning or re-versioning every existing cache); keep each difference as a named parameter
+- Decision: named parameters: `KeyRecipe { domain, PromptNorm }` with the length and identity fields as arguments (one derivation for all three), `Format { magic, extension, Layout, TempName, Durability, TempCleanup, Finite, ErrorText, StoreLog }` with two instances, `H3` (H3 and Wan) and `LTX2`; keys, files and log lines unchanged
+- Reason: byte identity first (plan §1); existing cache directories must keep working
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0021-prompt-cache.md "Key", "On-disk format"
+- Verification: `rt/prompt_cache/equality.rs` against the pre-B4c caches in `legacy.rs` (verbatim): keys (pinned H3 / LTX / Wan values recomputed in Python), identities, byte-equal files, cross reads, identical accept / reject of every truncation and bit flip, hit / miss sequences, failure leftovers, concurrent writers; 18 mutations of key and format all caught
+
+### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-compatibility
+- Trigger: B4c brief: existing cache directories must be read exactly as before or ignored safely, never misread
+- Options: version the unified format (ignore old entries); read old entries as before
+- Decision: read as before, every family: same names, same format, same checks; nothing is versioned, so nothing is ignored by version; damaged or foreign files stay misses
+- Reason: the unification changes no byte on disk, so a version bump would only throw away warm caches
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0021-prompt-cache.md "Compatibility rule"
+- Verification: `equality.rs` cross reads both ways and byte-equal files; GPU `b4c` cells require the base and PR cache directories to hold byte-identical entries
+
+### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-gaps-kept
+- Trigger: B4c review of the keys: `FASTVIDEO_LTX2_TEXT_FP8=1` (FP8 Gemma, different numerics) is not in the LTX key, and Wan's UMT5 precision is not in the Wan key; no size cap; threads of one process share a temporary name
+- Options: fix in B4c; keep and record as follow-ups
+- Decision: keep unchanged in B4c, recorded as follow-ups in ADR-0021
+- Reason: each fix changes keys or behaviour, which B4c (byte identity) must not; each is its own reviewed decision
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0021-prompt-cache.md "Key", "Eviction and size", "Concurrency"
+- Verification: n/a (recorded gaps)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-gpu-cells
+- Trigger: B4c's exit criterion (byte identity per family) needs GPU cells; only H3 and LTX trees are on the EU volume
+- Options: one cell per family with a cache, base vs PR, a cold pass and a hit pass per arm; a shared cache across arms
+- Decision: `runpod-matrix.sh b4c`: `b4c-h3-4stepvsa` and `b4c-ltx25-512p`, each arm (baseline binary, PR build; same argv / env) over its own new cache directory, pass `-miss` then `-hit`; `--off-identity` base vs PR per pass; fails unless the passes report `miss` / `hit` in `benchmark.json` and both arms' cache directories hold byte-identical entries; `pr-miss` vs `pr-hit` compared for the record only; `FV_B4C_CELLS` narrows; Wan rests on the CPU fixtures (no EU-volume tree)
+- Reason: separate caches per arm compare like with like (a shared cache would compare a hit with a miss, the techniques LTX lesson); byte-equal entries prove the PR reads the baseline's cache as its own
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0021-prompt-cache.md "Evidence"
+- Verification: `FV_DRY_RUN=1 FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b4c`; GPU run by the coordinator

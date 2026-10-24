@@ -24,6 +24,7 @@ use super::umt5::{pad_prompt_embeds, Umt5Encoder};
 use super::vae::AutoencoderKlWan;
 use super::weights::WeightMap;
 use crate::hooks::{Hooks, Stage};
+use crate::rt::prompt_cache;
 
 /// TAEHV replaces the Wan VAE decode when `FASTVIDEO_TAEHV_WEIGHTS` names a
 /// directory holding `taew2_1.safetensors` (`taew2_2.safetensors` for the
@@ -219,7 +220,7 @@ pub struct GenerateConfig {
     pub fps: u32,
     /// Directory of the UMT5 prompt cache (`None`: encode every request).
     /// Entries are keyed by prompt, tokenizer, text length and encoder
-    /// weights; a damaged entry is a miss (see `h3::text_cache`).
+    /// weights; a damaged entry is a miss (`rt::prompt_cache`, ADR-0021).
     pub text_cache: Option<std::path::PathBuf>,
 }
 
@@ -710,61 +711,40 @@ impl WanPipeline {
             return Ok((text.forward(ids, 1, ids.len())?, false));
         };
         let key = self.text_cache_key(cfg, prompt)?;
-        let (entry, hit) = crate::h3::text_cache::get_or_compute(dir, &key, ids, WIDTH, || {
-            text.forward(ids, 1, ids.len())?
-                .host_cow()
-                .map(|h| h.into_owned())
-        })
-        .map_err(PipelineError::from)?;
+        let (entry, hit) =
+            prompt_cache::tokens_width::get_or_compute(dir, &key, ids, WIDTH, || {
+                text.forward(ids, 1, ids.len())?
+                    .host_cow()
+                    .map(|h| h.into_owned())
+            })
+            .map_err(PipelineError::from)?;
         Ok((
             CudaTensor::from_vec(entry.data, vec![1, ids.len(), WIDTH])?.to_device()?,
             hit,
         ))
     }
 
-    /// The disk-cache key of `prompt`: the text, `tokenizer.json`, the padded
-    /// length and an identity of the UMT5 weights (file names, sizes and each
-    /// file's first 256 KiB: the safetensors header and the start of the data).
+    /// The disk-cache key of `prompt` ([`prompt_cache::WAN_KEY`]): the text,
+    /// `tokenizer.json`, the padded length and an identity of the UMT5
+    /// weights ([`prompt_cache::identity::files_head`]: file names, sizes and
+    /// each file's first 256 KiB: the safetensors header and the start of the
+    /// data).
     fn text_cache_key(&self, cfg: &GenerateConfig, prompt: &str) -> Result<[u8; 32]> {
-        use sha2::{Digest, Sha256};
-        let identity = self.text_identity.get_or_init(|| {
-            let mut h = Sha256::new();
-            if let Some(dir) = &self.text_dir {
-                let mut files: Vec<_> = std::fs::read_dir(dir)
-                    .map(|rd| rd.flatten().map(|e| e.path()).collect())
-                    .unwrap_or_default();
-                files.retain(|p| p.extension().is_some_and(|e| e == "safetensors"));
-                files.sort();
-                for f in files {
-                    let name = f.file_name().map(|n| n.to_string_lossy().into_owned());
-                    h.update(name.unwrap_or_default().as_bytes());
-                    h.update(
-                        std::fs::metadata(&f)
-                            .map(|m| m.len())
-                            .unwrap_or(0)
-                            .to_le_bytes(),
-                    );
-                    if let Ok(mut file) = std::fs::File::open(&f) {
-                        use std::io::Read as _;
-                        let mut buf = vec![0u8; 256 << 10];
-                        let n = file.read(&mut buf).unwrap_or(0);
-                        h.update(&buf[..n]);
-                    }
-                }
-            }
-            h.finalize().into()
-        });
+        let identity = self
+            .text_identity
+            .get_or_init(|| prompt_cache::identity::files_head(self.text_dir.as_deref()));
         // tokenizer.json is ~16 MB: hash it once per path per process.
         static TOKENIZER_SHA: std::sync::OnceLock<
             std::sync::Mutex<std::collections::HashMap<String, [u8; 32]>>,
         > = std::sync::OnceLock::new();
+        let memo = || {
+            TOKENIZER_SHA
+                .get_or_init(Default::default)
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        };
         let path = cfg.tokenizer_path.clone().unwrap_or_default();
-        let known = TOKENIZER_SHA
-            .get_or_init(Default::default)
-            .lock()
-            .expect("tokenizer sha")
-            .get(&path)
-            .copied();
+        let known = memo().get(&path).copied();
         let tokenizer_sha = match known {
             Some(s) => s,
             None => {
@@ -774,27 +754,17 @@ impl WanPipeline {
                     std::fs::read(&path)
                         .map_err(|e| PipelineError::Message(format!("tokenizer: {e}")))?
                 };
-                let s = crate::h3::text_cache::sha256(&bytes);
-                TOKENIZER_SHA
-                    .get_or_init(Default::default)
-                    .lock()
-                    .expect("tokenizer sha")
-                    .insert(path, s);
+                let s = prompt_cache::sha256(&bytes);
+                memo().insert(path, s);
                 s
             }
         };
-        let mut h = Sha256::new();
-        for field in [
-            b"WANTEXT1".as_slice(),
-            prompt.as_bytes(),
-            tokenizer_sha.as_slice(),
-            (self.dit.cfg.text_len as u64).to_le_bytes().as_slice(),
-            identity.as_slice(),
-        ] {
-            h.update((field.len() as u64).to_le_bytes());
-            h.update(field);
-        }
-        Ok(h.finalize().into())
+        Ok(prompt_cache::WAN_KEY.key(
+            prompt,
+            &tokenizer_sha,
+            self.dit.cfg.text_len as u64,
+            &[identity.as_slice()],
+        ))
     }
 
     /// Prompt embeddings, `[neg, prompt]` or (`with_negative` false) the

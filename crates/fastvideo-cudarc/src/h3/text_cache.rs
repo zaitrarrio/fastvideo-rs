@@ -1,4 +1,7 @@
-//! A disk cache for H3 prompt conditioning.
+//! H3's use of the disk prompt cache ([`crate::rt::prompt_cache`], ADR-0021):
+//! its key inputs and its entry type. The cache itself — key derivation,
+//! file format, atomic write, hit and miss — is the shared one, with the
+//! [`prompt_cache::H3`] format and the [`prompt_cache::H3_KEY`] recipe.
 //!
 //! Encoding a new prompt costs ~10 s, and none of it is compute: a 35-token
 //! forward is milliseconds, the rest is 50 GB of bf16 weights streaming through
@@ -20,47 +23,16 @@
 //! the token ids of the prompt is a **miss**, not an error; a cache that cannot
 //! be written costs the next run time, not this run its result.
 
-use std::path::{Path, PathBuf};
-
 use fastvideo_loader::LazyStore;
-use sha2::{Digest, Sha256};
 
 use crate::llm::DecoderConfig;
+use crate::rt::prompt_cache::{self, Fields};
 use crate::rt::tensor::{Result, TensorError};
+
+pub use crate::rt::prompt_cache::{hex, sha256};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
-}
-
-/// Bump when the file layout or the key derivation changes.
-const MAGIC: &[u8; 8] = b"H3TEXT01";
-
-/// SHA-256 with length-prefixed fields, so `("ab", "c")` and `("a", "bc")`
-/// hash differently. `sha2` rather than std's hasher: these digests are file
-/// names on disk and must not change with the Rust version.
-struct Fields(Sha256);
-
-impl Fields {
-    fn new() -> Self {
-        Self(Sha256::new())
-    }
-
-    fn field(&mut self, data: &[u8]) {
-        self.0.update((data.len() as u64).to_le_bytes());
-        self.0.update(data);
-    }
-
-    fn finish(self) -> [u8; 32] {
-        self.0.finalize().into()
-    }
-}
-
-pub fn sha256(data: &[u8]) -> [u8; 32] {
-    Sha256::digest(data).into()
-}
-
-pub fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -137,149 +109,47 @@ pub fn encoder_identity(store: &LazyStore, cfg: &DecoderConfig, tap: usize) -> R
     Ok(h.finish())
 }
 
-/// The cache key. Every input is length-prefixed; the magic versions the scheme.
+/// The identity of the same encoder run with weight-only FP8 rows: a
+/// different function of the same weights (`h3/text.rs`).
+pub fn fp8_rows_identity(identity: &[u8; 32]) -> [u8; 32] {
+    sha256(&[identity.as_slice(), b"/fp8-rows".as_slice()].concat())
+}
+
+/// The identity of the recovered-8B encoder: its kind and tap. Its weights
+/// are not a `LazyStore` under `text_encoder/`, so the kind string stands in.
+pub fn recovered_identity(tap: usize) -> [u8; 32] {
+    sha256(format!("recovered-8b-tap{tap}").as_bytes())
+}
+
+/// The cache key ([`prompt_cache::H3_KEY`]): the format magic, the prompt,
+/// the tokenizer digest, the tap and the encoder identity, each a
+/// length-prefixed field.
 pub fn cache_key(
     prompt: &str,
     tokenizer_sha256: &[u8; 32],
     tap: usize,
     encoder_identity: &[u8; 32],
 ) -> [u8; 32] {
-    let mut h = Fields::new();
-    h.field(MAGIC);
-    h.field(prompt.as_bytes());
-    h.field(tokenizer_sha256);
-    h.field(&(tap as u64).to_le_bytes());
-    h.field(encoder_identity);
-    h.finish()
+    prompt_cache::H3_KEY.key(
+        prompt,
+        tokenizer_sha256,
+        tap as u64,
+        &[encoder_identity.as_slice()],
+    )
 }
 
 // ---------------------------------------------------------------------------
-// Entries
+// Entries: the shared `[tokens, width]` entry (H3 and Wan)
 // ---------------------------------------------------------------------------
 
-/// One cached conditioning: the token ids it was computed from and `[1, S, width]`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CachedText {
-    pub ids: Vec<u32>,
-    pub width: usize,
-    pub data: Vec<f32>,
-}
-
-pub fn entry_path(dir: &Path, key: &[u8; 32]) -> PathBuf {
-    dir.join(format!("{}.h3text", hex(key)))
-}
-
-/// `magic | tokens u64 | width u64 | ids u32[] | data f32[] | sha256 of all that`.
-fn serialize(entry: &CachedText) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(24 + entry.ids.len() * 4 + entry.data.len() * 4 + 32);
-    bytes.extend_from_slice(MAGIC);
-    bytes.extend_from_slice(&(entry.ids.len() as u64).to_le_bytes());
-    bytes.extend_from_slice(&(entry.width as u64).to_le_bytes());
-    bytes.extend(entry.ids.iter().flat_map(|v| v.to_le_bytes()));
-    bytes.extend(entry.data.iter().flat_map(|v| v.to_le_bytes()));
-    let digest = sha256(&bytes);
-    bytes.extend_from_slice(&digest);
-    bytes
-}
-
-fn deserialize(bytes: &[u8]) -> Option<CachedText> {
-    let (body, digest) = bytes.split_at_checked(bytes.len().checked_sub(32)?)?;
-    if body.len() < 24 || &body[..8] != MAGIC || sha256(body) != digest {
-        return None;
-    }
-    let word =
-        |at: usize| usize::try_from(u64::from_le_bytes(body[at..at + 8].try_into().ok()?)).ok();
-    let (tokens, width) = (word(8)?, word(16)?);
-    let ids_end = 24usize.checked_add(tokens.checked_mul(4)?)?;
-    if tokens == 0
-        || width == 0
-        || body.len() != ids_end.checked_add(tokens.checked_mul(width)?.checked_mul(4)?)?
-    {
-        return None;
-    }
-    let ids = body[24..ids_end]
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
-    let data = body[ids_end..]
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
-    Some(CachedText { ids, width, data })
-}
-
-/// The entry for `key`, if one exists, is intact, and was computed from
-/// exactly `ids`. Anything else is a miss.
-pub fn load(dir: &Path, key: &[u8; 32], ids: &[u32], width: usize) -> Option<CachedText> {
-    let entry = deserialize(&std::fs::read(entry_path(dir, key)).ok()?)?;
-    (entry.ids == ids && entry.width == width && entry.data.iter().all(|v| v.is_finite()))
-        .then_some(entry)
-}
-
-/// Write atomically (temp file + rename), so a run killed mid-write leaves no
-/// half entry under the final name. Returns the error as text for a log line:
-/// failing to cache is never fatal.
-pub fn store(
-    dir: &Path,
-    key: &[u8; 32],
-    entry: &CachedText,
-) -> std::result::Result<PathBuf, String> {
-    if entry.ids.is_empty() || entry.data.len() != entry.ids.len() * entry.width {
-        return Err(format!(
-            "{} values for {} tokens of width {}",
-            entry.data.len(),
-            entry.ids.len(),
-            entry.width
-        ));
-    }
-    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let path = entry_path(dir, key);
-    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
-    std::fs::write(&tmp, serialize(entry))
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| {
-            let _ = std::fs::remove_file(&tmp);
-            format!("{}: {e}", path.display())
-        })?;
-    Ok(path)
-}
-
-/// `load`, else `compute` and `store`. Returns the entry and whether it was a hit.
-pub fn get_or_compute(
-    dir: &Path,
-    key: &[u8; 32],
-    ids: &[u32],
-    width: usize,
-    compute: impl FnOnce() -> Result<Vec<f32>>,
-) -> Result<(CachedText, bool)> {
-    if let Some(hit) = load(dir, key, ids, width) {
-        return Ok((hit, true));
-    }
-    let entry = CachedText {
-        ids: ids.to_vec(),
-        width,
-        data: compute()?,
-    };
-    if entry.data.len() != ids.len() * width {
-        return Err(msg(format!(
-            "text encoder produced {} values for {} tokens of width {width}",
-            entry.data.len(),
-            ids.len()
-        )));
-    }
-    if let Err(e) = store(dir, key, &entry) {
-        crate::rt::log::info(format_args!("h3 text cache: not written ({e})"));
-    }
-    Ok((entry, false))
-}
+pub use crate::rt::prompt_cache::tokens_width::{
+    entry_path, get_or_compute, load, store, CachedText,
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir =

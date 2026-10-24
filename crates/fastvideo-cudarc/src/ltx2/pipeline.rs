@@ -2170,24 +2170,9 @@ pub fn open_distilled(path: &Path, component: &str) -> Result<WeightMap> {
     )))
 }
 
-/// Whether the conditioning cache answered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CacheOutcome {
-    /// No cache directory was given, or this call bypassed it.
-    Off,
-    Hit,
-    Miss,
-}
-
-impl CacheOutcome {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Off => "off",
-            Self::Hit => "hit",
-            Self::Miss => "miss",
-        }
-    }
-}
+/// Whether the conditioning cache answered (`off`, `hit`, `miss`; the shared
+/// [`crate::rt::prompt_cache::Outcome`]).
+pub use super::text_cache::CacheOutcome;
 
 /// What the text phase of one generation did.
 #[derive(Debug, Clone)]
@@ -2673,14 +2658,8 @@ fn cached_or(
     let (Some(cache), Some(key)) = (cache, key) else {
         return Ok((compute()?, CacheOutcome::Off));
     };
-    if let Some(hit) = cache.load(key, padded) {
-        return Ok((hit, CacheOutcome::Hit));
-    }
-    let fresh = compute()?;
-    if let Err(e) = cache.store(key, padded, &fresh.video, &fresh.audio) {
-        crate::rt::log::info(format_args!("ltx2 text cache: not stored: {e}"));
-    }
-    Ok((fresh, CacheOutcome::Miss))
+    // A failed store logs `ltx2 text cache: not stored: <error>`.
+    cache.get_or_compute(key, padded, compute)
 }
 
 /// How a pipeline is set up.

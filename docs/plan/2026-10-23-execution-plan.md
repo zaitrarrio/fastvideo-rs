@@ -108,7 +108,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | active (B4a pr #173: step caches, ADR-0020, GPU `b4a` cells pending; then B4b `fuse.rs`, B4c disk prompt cache) |
+| B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | active (B4a pr #173: step caches, ADR-0020, GPU `b4a` cells pending; then B4b `fuse.rs`; B4c pr #PRNUM: one disk prompt cache `rt::prompt_cache`, ADR-0021, GPU `b4c` cells pending) |
 | B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | merged (#161) |
 | B6 | `H3Pipeline::load` and `Ltx2Pipeline::load` split into plan, open, place, fuse; dead code (`TensorBackend`, mlx scaffold) retired | engine lifecycle testable on CPU | pod | B1 | merged (#170: plan/open/place/fuse, ADR-0017; `techniques` and `b6` GPU identity cells all byte-identical vs main; TensorBackend and the mlx scaffold retired) |
 
@@ -847,3 +847,23 @@ ran (pod id, $/hr), result, cost.
   (`<cell>-<arm>/cache-evidence.txt`, `<cell>.evidence.diff`, empty).
   About 35 GPU-minutes, ~$1.45. Evidence:
   `artifacts/runpod/b4a/abccc38-{10241423,10241424,10241425}/`.
+- 2026-10-24 15:40Z: B4c opened draft PR #PRNUM (`claude/b4c-prompt-cache`):
+  `fastvideo_cudarc::rt::prompt_cache` (ADR-0021), one key derivation
+  (`KeyRecipe`: domain and prompt trimming; H3 / Wan / LTX recipes) and one
+  store (`Format`: two instances, `H3` for H3 and Wan, `LTX2`; layout, temp
+  name, fsync, cleanup, finite check, error text and log line as named
+  parameters); keys, file names, bytes and log lines unchanged, so existing
+  cache directories are read as before. CPU evidence:
+  `prompt_cache/equality.rs` against the verbatim pre-B4c caches
+  (`legacy.rs`): keys (pinned values recomputed in Python), identities,
+  byte-equal files, cross reads, identical accept / reject of every
+  truncation and bit flip, hit / miss sequences, failure leftovers,
+  concurrent writers; 18 key / format mutations all caught. On build pod
+  `l3d75u8a8zhw47` (agent `b4c-prompt-cache`): fmt, workspace clippy
+  `-D warnings`, `--features cuda` check (cudarc, engine-service, gpucheck,
+  core), cudarc + models + engine-service + core tests (1414 passed),
+  `cargo test --workspace --lib` (2071 passed), `scripts/serve/check.sh`,
+  `scripts/gpu/lint.sh` green. GPU gate pending (coordinator):
+  `runpod-matrix.sh b4c` with `FV_BASELINE_SHA=e18ec010`, cells
+  `b4c-h3-4stepvsa` and `b4c-ltx25-512p` (`FV_B4C_CELLS`, one per pod),
+  each base and PR arm a cold miss pass then a hit pass over its own cache.

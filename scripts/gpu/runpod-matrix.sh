@@ -20,9 +20,9 @@
 # FV_DRY_RUN=1: no GPU and no weights needed. Each cell's command line is
 # logged instead of run (weights not verified, no baseline fetched), so a
 # family's cells can be read off-pod: FV_DRY_RUN=1 FV_WORK=/tmp/fv-dry
-# FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b6 (or b4a).
+# FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b6 (or b4a, b4c).
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|b6|b4a|h3arms|h3attn}"
+FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|b6|b4a|b4c|h3arms|h3attn}"
 DRY_RUN="${FV_DRY_RUN:-0}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
@@ -2193,6 +2193,112 @@ Audio: male speech, clear voice, quiet room"
     b4a_pair b4a-h3-4step-tea fasth3-4step-vsa - \
       "${h3_b4a[@]}" --techniques "$fx/b4a-h3-4step-teacache.toml" --clip-dir
     for f in "$RUNS"/compare/compare-clips-b4a-*.json; do
+      [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"
+    done
+    ;;
+  b4c)
+    # Plan B4c (docs/adr/0021-prompt-cache.md): byte identity of the disk
+    # prompt cache after the three per-family caches became the one
+    # rt::prompt_cache. Each cell runs the baseline binary (FV_BASELINE_SHA's
+    # runtime image, fetch-baseline.sh) and this build with the same command
+    # line and environment, each arm twice over its own new cache directory
+    # ($SCRATCH/b4c-cache/<cell>-<arm>, emptied first): pass -miss encodes
+    # the prompt and writes the entry cold, pass -hit reads it. Then
+    # compare-clips --off-identity base against pr for the miss pass and for
+    # the hit pass (run_cell writes each pass's frames.sha256.json), and the
+    # two arms' cache directories must hold byte-identical entries under the
+    # same names (so this build reads a cache the baseline wrote exactly as
+    # it reads its own). A cell fails (b4c-<cell>.verdict.json) when a pass's
+    # benchmark.json does not say "text_cache": "miss" / "hit" as planned,
+    # or the entries differ. pr-miss against pr-hit is compared too, for the
+    # record only: on LTX a hit feeds the stored f32 connector output (see
+    # the techniques ltx25-512p-sol cell and ADR-0021); it gates nothing.
+    # Only trees of the EU volume (H3, LTX); Wan's cache (same format as H3,
+    # its own key) rests on the CPU fixtures (rt/prompt_cache/equality.rs).
+    # FV_B4C_CELLS narrows the cells (default: both), one per pod when the
+    # coordinator runs them in parallel. Estimated wall time per cell on an
+    # RTX PRO 6000 (four cold-process runs plus the baseline fetch): H3
+    # ~12-15 min, LTX ~14-18 min.
+    base_sha="${FV_BASELINE_SHA:?b4c family needs FV_BASELINE_SHA (the commit before the prompt-cache unification)}"
+    BASE="$SCRATCH/baseline-$base_sha/fv-gpucheck"
+    if [[ "$DRY_RUN" != 1 ]]; then
+      if ! bash "$(dirname "${BASH_SOURCE[0]}")/fetch-baseline.sh" "$base_sha" "$(dirname "$BASE")" >>"$RUNS/baseline-fetch.log" 2>&1; then
+        log "FATAL: baseline binary sha-$base_sha unavailable (baseline-fetch.log)"
+        tee -a "$LOG" <"$RUNS/baseline-fetch.log"
+        exit 2
+      fi
+      log "baseline $(tail -1 "$RUNS/baseline-fetch.log")"
+    fi
+    # A cold H3 load reads ~70 GB from the volume before its first step.
+    export FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-900}"
+    b4c_cells="${FV_B4C_CELLS:-b4c-h3-4stepvsa b4c-ltx25-512p}"
+    # b4c_entries <dir>: the cache directory's files, name and SHA-256, in
+    # name order (no temporary or .part file may be left).
+    b4c_entries() {
+      (cd "$1" 2>/dev/null && find . -maxdepth 1 -type f -printf '%P\n' | LC_ALL=C sort | while IFS= read -r f; do
+        printf '%s %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$f"
+      done)
+    }
+    # b4c_cell <cell> <weight cell> <clip flag> <fv-gpucheck args ...>:
+    # <cell>-<arm>-<pass> for arm base (the baseline binary) and pr (this
+    # build), pass miss then hit over $SCRATCH/b4c-cache/<cell>-<arm>; the
+    # clip flag and the frames directory go last.
+    b4c_cell() {
+      local cell="$1" wcell="$2" clip="$3" arm bin pass dir state verdict=pass why=""
+      shift 3
+      [[ " $b4c_cells " == *" $cell "* ]] || { log "skip $cell (not in FV_B4C_CELLS)"; return 0; }
+      for arm in base pr; do
+        bin="$BIN"
+        [[ "$arm" == base ]] && bin="$BASE"
+        dir="$SCRATCH/b4c-cache/$cell-$arm"
+        if [[ "$DRY_RUN" == 1 ]]; then
+          log "dry-run $cell-$arm: rm -rf $dir (a cold cache for the miss pass)"
+        else
+          rm -rf "$dir"
+        fi
+        for pass in miss hit; do
+          gated_cell "$cell-$arm-$pass" "$wcell" \
+            "$bin" "$@" --text-cache "$dir" "$clip" "$RUNS/$cell-$arm-$pass/frames"
+          if [[ "$DRY_RUN" == 1 ]]; then
+            log "dry-run $cell-$arm-$pass: require \"text_cache\": \"$pass\" in $RUNS/$cell-$arm-$pass/benchmark.json"
+            continue
+          fi
+          state="$(grep -oE '"text_cache": *"[a-z]+"' "$RUNS/$cell-$arm-$pass/benchmark.json" 2>/dev/null | head -1 | grep -oE '"[a-z]+"$' | tr -d '"' || true)"
+          log "[$cell-$arm-$pass] text_cache: ${state:-none}"
+          [[ "$state" == "$pass" ]] || { verdict=fail; why+=" $arm-$pass:text_cache=${state:-none}"; }
+        done
+      done
+      compare_cells "$cell-base-miss" "$cell-pr-miss" --off-identity
+      compare_cells "$cell-base-hit" "$cell-pr-hit" --off-identity
+      compare_cells "$cell-pr-miss" "$cell-pr-hit"
+      if [[ "$DRY_RUN" == 1 ]]; then
+        log "dry-run $cell: entries of $SCRATCH/b4c-cache/$cell-base and $SCRATCH/b4c-cache/$cell-pr (name and sha256) must be equal and non-empty"
+        return 0
+      fi
+      b4c_entries "$SCRATCH/b4c-cache/$cell-base" >"$RUNS/$cell.cache-base.txt"
+      b4c_entries "$SCRATCH/b4c-cache/$cell-pr" >"$RUNS/$cell.cache-pr.txt"
+      tee -a "$LOG" <"$RUNS/$cell.cache-pr.txt" >/dev/null
+      if [[ ! -s "$RUNS/$cell.cache-base.txt" ]]; then
+        verdict=fail why+=" no-cache-entries"
+      elif ! diff "$RUNS/$cell.cache-base.txt" "$RUNS/$cell.cache-pr.txt" >"$RUNS/$cell.cache.diff"; then
+        verdict=fail why+=" cache-entries-differ"
+      fi
+      write_json "$RUNS/b4c-$cell.verdict.json" "$(printf '{"cell":"%s","verdict":"%s","why":"%s"}' "$cell" "$verdict" "${why# }")"
+      log "b4c $cell: $verdict${why:+ (${why# })}"
+    }
+    # 1. H3: FastH3 4-step VSA at 480p / 5 s, the auto text encoder
+    #    (resident FP8 on this card: the "/fp8-rows" identity), each arm's
+    #    own cache.
+    b4c_cell b4c-h3-4stepvsa fasth3-4step-vsa --clip-dir \
+      --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa --height 480 --width 832 \
+      --seconds 5 --prompt "$PROMPT" --seed "$SEED" --text-encoder auto --no-mp4
+    # 2. LTX-2.5 two-stage at 512p / 49 frames, Gemma streamed on the miss
+    #    pass and not opened on the hit pass.
+    b4c_cell b4c-ltx25-512p ltx25-two-stage --clip \
+      --mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25" \
+      --height 512 --width 768 --num-frames 49 --prompt "$PROMPT" --seed "$SEED" \
+      --two-stage --text streamed
+    for f in "$RUNS"/compare/compare-clips-b4c-*.json; do
       [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"
     done
     ;;
