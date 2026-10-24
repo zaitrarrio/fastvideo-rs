@@ -257,7 +257,7 @@ ran (pod id, $/hr), result, cost.
   Evidence: `artifacts/runpod/techniques/51898b8-10240107/compare/`. Main
   (A2, E4) merged into the branch: no cudarc or gpucheck file changed since
   the baseline, so the GPU evidence stands for the merged head.
-- 2026-10-24 02:55Z: B3a opened as a draft PR (`claude/b3-settings`): the
+- 2026-10-24 02:55Z: B3a opened as draft PR #153 (`claude/b3-settings`): the
   declarative `FASTVIDEO_*` list (`techniques::settings::SETTINGS`, 222 rows:
   112 layered, 108 env-only, 2 reserved), the 112 direct and 27 indirect
   reads routed through `settings::env_var` / `env_var_os` at the same call
