@@ -1,0 +1,105 @@
+# Gold standard of `fasth3-v2-nvfp4` (h3, untiered): docs/adr/0009-gold-standard-files.md.
+# Every number is copied from the [[source]] that cites it; absent numbers are listed under [[gap]].
+# `fv-lab run gold` (plan D1/D3) fills [last_validated] and replaces these with its own run record.
+# Served as h3-v2-nvfp4: the FastH3 V2 NVFP4 release (ModelOpt NVFP4 DiT, sparse FP4 VSA, NVFP4 VAE); opt-in.
+
+schema = 1
+
+[model]
+variant = "fasth3-v2-nvfp4"
+family = "h3"
+
+[tier]
+gpu = "RTX PRO 6000 Blackwell"
+sm = 120
+vram_gib = 96
+offer = "runpod: NVIDIA RTX PRO 6000 Blackwell Server Edition, EU-RO-1 (plan §1: the gold-standard GPU)"
+
+[workload]
+width = 832
+height = 480
+frames = 124
+fps = 24
+prompt_set = "talking-head, one prompt of scripts/gpu/prompts-hd5.json"
+seeds = [1024]
+steps = 8
+note = "GPU smoke of what shipped (2026-10-14): one RTX PRO 6000 (pod 2d8zzz9gsqsop3, US-NC-1, $2.49/hr), image fastvideo-rs-runtime:sha-b564268, recipe v2-nvfp4 on the R2 tree (--text-weights h3-base), sparse FP4 VSA, the published NVFP4 VAE decoder (the default since decision 1), --warm then one timed generation."
+
+[workload.upstream]
+target = "FastVideo V2-NVFP4 (docs/ports/fasth3-nvfp4.md §5; cited by docs/perf/h3-nvfp4-tier-options.md)"
+
+[latency]
+measures = "end_to_end"
+p50_s = 12.06
+denoise_s = 10.02
+decode_s = 1.77
+peak_gib = 25.7
+note = "One timed generation (n = 1). The five-prompt options run of the same day (option 6, NVFP4 VAE): 480p denoise 11.86 s, VAE 1.77 s, end to end 13.89 s, peak 27.1 GiB; 768p 31.93 / 4.12 / 36.22 / 33.3. Upstream V2-NVFP4 on the same GPU model: denoise 10.25 s (480p) / 29.3 s (768p), warm VAE decode about 8.8 s."
+
+[quality]
+gate = "fail: V2-NVFP4 fails the gate against bf16 V2 and against upstream's own output (docs/ports/fasth3-nvfp4.md §6, as cited by docs/perf/h3-nvfp4-tier-options.md option 7); the NVFP4 VAE decoder passes against the bf16 decode of the same latents (PSNR 35.9 dB, LPIPS 0.019, sharpness 1.027, jitter 1.016 at 480p)."
+note = "The decoder-only pass is not a gate of the variant; the DiT-level numbers live outside D2's sources."
+
+[cost]
+usd_per_hr = 2.49
+usd_per_clip = 0.00834
+
+[last_validated]
+# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+
+[[source]]
+fields = ["latency.measures", "latency.p50_s", "latency.denoise_s", "latency.decode_s", "latency.peak_gib", "workload", "workload.upstream"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "Decisions (2026-10-14) and what shipped"
+date = "2026-10-14"
+note = "GPU smoke table, row 'this branch, default': denoise 10.02 s, VAE 1.77 s, total 12.06 s, peak 25.7 GiB (the =0 arm with h3-base's MXFP8 VAE: 10.06 / 1.99 / 12.33 / 30.7, byte-identical to main's default)."
+
+[[source]]
+fields = ["quality.gate"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "Option 6: the published NVFP4 VAE decoder linears (`FASTVIDEO_H3_VAE_NVFP4`)"
+date = "2026-10-14"
+note = "Cells table: 480p NVFP4 decoder 1.77 s, e2e 13.89 s, peak 27.1 GiB, PSNR 35.9 dB / LPIPS 0.019 vs bf16, gate pass; 768p 4.12 / 36.22 / 33.3, 37.6 dB / 0.018."
+
+[[source]]
+fields = ["cost.usd_per_hr", "cost.usd_per_clip"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
+date = "2026-10-14"
+note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
+
+[[gap]]
+field = "latency.min_s"
+why = "one timed generation"
+
+[[gap]]
+field = "latency.max_s"
+why = "one timed generation"
+
+[[gap]]
+field = "latency.load_s"
+why = "not reported"
+
+[[gap]]
+field = "quality.psnr_vs_upstream_min_db"
+why = "the gate against upstream's output is in docs/ports/fasth3-nvfp4.md §6, outside D2's sources; docs/perf records only that it fails"
+
+[[gap]]
+field = "quality.lpips_vs_upstream_max"
+why = "see psnr_vs_upstream_min_db"
+
+[[gap]]
+field = "quality.sharpness_ratio"
+why = "the only gate numbers in D2's sources are the decoder-only option 6 pair, not the variant's"
+
+[[gap]]
+field = "quality.jitter_ratio"
+why = "see sharpness_ratio"
+
+[[gap]]
+field = "latency.fps"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "latency.ttff_s"
+why = "a clip, not a stream"

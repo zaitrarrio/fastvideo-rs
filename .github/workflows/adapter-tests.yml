@@ -1,7 +1,8 @@
 # Adapter tests with coverage (plan E4): `cargo test --locked` of the fv-serve
 # adapter crates (openai-videos, minimax, ltxapi, fal, reactor), the serve
 # crate that mounts them and the CPU crates they build on (protocol, trace,
-# engine-service, serve-kit, upsampler), instrumented by cargo-llvm-cov. The
+# engine-service, serve-kit, upsampler) and fastvideo-lab (the gold files of
+# lab/gold and the profile-comment lint), instrumented by cargo-llvm-cov. The
 # crate set lives in scripts/serve/coverage.sh, which also writes the reports:
 # lcov.info and an HTML report as the `adapter-coverage` artifact, and the
 # line / region / function totals in the job summary.
@@ -29,6 +30,10 @@ on:
       - "crates/fastvideo-serve/**"
       - "crates/fastvideo-media/**"
       - "crates/fastvideo-webrtc/**"
+      - "crates/fastvideo-lab/**"
+      - "lab/**"
+      - "profiles/**"
+      - "families/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
@@ -50,6 +55,10 @@ on:
       - "crates/fastvideo-serve/**"
       - "crates/fastvideo-media/**"
       - "crates/fastvideo-webrtc/**"
+      - "crates/fastvideo-lab/**"
+      - "lab/**"
+      - "profiles/**"
+      - "families/**"
       - "Cargo.lock"
       - "scripts/serve/coverage.sh"
       - ".github/workflows/adapter-tests.yml"
