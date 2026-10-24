@@ -6,6 +6,9 @@
 //!   [`ProcessPlan`] check for which models may share a process.
 //! - [`validate`] (always built): the checks each pipeline makes on a job
 //!   before it starts, shared with the fake backend.
+//! - [`families`] (always built): the projection of the family manifests
+//!   (`families/*.toml`, layer 2) onto [`caps::CudaModel`] rows and back
+//!   (plan A2, ADR-0008).
 //! - `h3`, `ltx2`, `wan` (feature `cuda`): one resident pipeline per model
 //!   (`H3Pipeline`, `Ltx2Pipeline`, `WanPipeline` incl. TI2V-5B), loaded
 //!   once and kept (the warm pool), and `generate` mapping a `ResolvedJob`
@@ -47,6 +50,7 @@
 //! its stage-2 route from its own profile per request.
 
 pub mod caps;
+pub mod families;
 pub mod validate;
 
 #[cfg(feature = "cuda")]

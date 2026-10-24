@@ -1,0 +1,1050 @@
+# Family manifest (layer 2, docs/adr/0008-family-manifest-layer-2.md): MiniMax-H3 / FastH3.
+# GENERATED from crates/fastvideo-engine-service/src/cuda/caps.rs `catalog()` by
+# `tests/families.rs` (`regenerate_family_files`); do not hand-edit until plan A3
+# makes this file the source. Paths: `${weights}/<tree>/...` and `${tae}/<file>`
+# are substituted with the engine's weight layout at load (families/README.md).
+
+schema = 1
+
+[family]
+id = "h3"
+display = "MiniMax-H3 / FastH3"
+licence = "MiniMax-H3 Community License"
+port_doc = "docs/ports/h3.md"
+
+[[variants]]
+id = "sol-h3"
+tier = "max"
+resident_default = true
+recipe_name = "sol-h3-4step-engine-ladder"
+trees = ["FastH3-4-step-Preview-v1-LoRA", "h3-base"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 89
+needs = ["fp8"]
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480, 1080]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+dense = false
+family = "h3"
+hd_1080p = true
+i2v_encoder = "auto"
+profile = "h3/sol_h3_4step_engine_ladder"
+recipe = "sol-h3"
+ref2va = false
+short_edge = 768
+steps = 4
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/h3-base"
+
+[[variants]]
+id = "fasth3-4step-vsa"
+tier = "turbo"
+served_names = ["fasth3"]
+resident_default = true
+recipe_name = "fasth3-4step-vsa"
+trees = ["FastH3-4-step-Preview-v1-LoRA", "h3-base"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 89
+needs = ["fp8"]
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480, 1080]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+dense = false
+family = "h3"
+hd_1080p = true
+i2v_encoder = "auto"
+profile = "h3/fasth3_4step_vsa"
+recipe = "4step-vsa"
+ref2va = false
+short_edge = 768
+steps = 4
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/h3-base"
+
+[[variants]]
+id = "fasth3-4step-vsa-480p-taeh3"
+tier = "draft"
+resident_default = true
+recipe_name = "fasth3-4step-vsa-480p-taeh3"
+trees = ["FastH3-4-step-Preview-v1-LoRA", "auxiliary/tae/taeh3.safetensors", "h3-base"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 89
+needs = ["fp8"]
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 403200
+aspect = [0.25, 4.0]
+short_edges = [480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+dense = false
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+profile = "h3/fasth3_4step_vsa"
+recipe = "4step-vsa"
+ref2va = false
+short_edge = 480
+steps = 4
+taeh3 = "${tae}/taeh3.safetensors"
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/h3-base"
+
+[[variants]]
+id = "fasth3-8step-dense"
+resident_default = true
+recipe_name = "fasth3-8step-dense"
+trees = ["h3-8step", "h3-base"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 80
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+dense = true
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+recipe = "8step"
+ref2va = false
+short_edge = 768
+steps = 8
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/h3-8step"
+
+[[variants]]
+id = "fasth3-trim-8step"
+served_names = ["h3-trim"]
+resident_default = true
+recipe_name = "fasth3-trim-8step-vsa"
+trees = ["fasth3-trim-8step", "h3-base"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 80
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+dense = false
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+recipe = "trim-8step"
+ref2va = false
+short_edge = 768
+steps = 8
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/fasth3-trim-8step"
+
+[[variants]]
+id = "fasth3-trim-nvfp4"
+served_names = ["h3-trim-nvfp4"]
+resident_default = true
+recipe_name = "fasth3-trim-8step-vsa-nvfp4"
+trees = ["fasth3-trim-8step", "fasth3-trim-8step-nvfp4", "h3-base"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 100
+needs = ["fp8", "nvfp4"]
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+dense = false
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+recipe = "trim-8step-nvfp4"
+ref2va = false
+short_edge = 768
+steps = 8
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/fasth3-trim-8step"
+
+[[variants]]
+id = "fasth3-trim-nvfp4-fast"
+served_names = ["h3-trim-nvfp4-fast"]
+resident_default = true
+recipe_name = "fasth3-trim-8step-vsa-fp4-nvfp4"
+trees = ["fasth3-trim-8step", "fasth3-trim-8step-nvfp4", "h3-base"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 100
+needs = ["fp8", "nvfp4"]
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+dense = false
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+recipe = "trim-8step-nvfp4-fp4attn"
+ref2va = false
+short_edge = 768
+steps = 8
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/fasth3-trim-8step"
+
+[[variants]]
+id = "fasth3-v2-nvfp4"
+served_names = ["h3-v2-nvfp4"]
+resident_default = true
+recipe_name = "fasth3-v2-8step-vsa-nvfp4"
+trees = ["fasth3-v2-nvfp4", "h3-base"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 100
+needs = ["fp8", "nvfp4"]
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+dense = false
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+recipe = "v2-nvfp4"
+ref2va = false
+short_edge = 768
+steps = 8
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/fasth3-v2-nvfp4"
+
+[[variants]]
+id = "fasth3-4step-vsa-nvfp4"
+served_names = ["h3-turbo-nvfp4"]
+resident_default = true
+recipe_name = "fasth3-4step-vsa-nvfp4"
+trees = ["fasth3-4step-vsa-nvfp4", "h3-base"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 100
+needs = ["fp8", "nvfp4"]
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+dense = false
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+recipe = "4step-vsa-nvfp4"
+ref2va = false
+short_edge = 768
+steps = 4
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/fasth3-4step-vsa-nvfp4"
+
+[[variants]]
+id = "h3-larry-turbo"
+resident_default = true
+recipe_name = "h3-larry-turbo-ckpt850-dense"
+trees = ["h3-base", "h3-turbo-loras/larry"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 89
+needs = ["fp8"]
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+dense = true
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+profile = "h3/larry_turbo_dense"
+recipe = "larry-turbo"
+ref2va = false
+short_edge = 768
+steps = 6
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/h3-base"
+
+[[variants]]
+id = "h3-lightx2v-turbo"
+resident_default = true
+recipe_name = "h3-lightx2v-turbo-v1.2-768p-dense"
+trees = ["h3-base", "h3-turbo-loras/lightx2v"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 89
+needs = ["fp8"]
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+dense = true
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+profile = "h3/lightx2v_turbo_dense"
+recipe = "lightx2v-turbo"
+ref2va = false
+short_edge = 768
+steps = 4
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/h3-base"
+
+[[variants]]
+id = "vdn-h3"
+resident_default = true
+recipe_name = "vdn-h3-50step"
+trees = ["h3-base", "vdn-h3-stage-b-2000"]
+
+[variants.gpu]
+min_vram_gib = 96
+min_sm = 80
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+dense = true
+dit_offload = "resident"
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+recipe = "vdn-h3-50step"
+ref2va = false
+short_edge = 768
+steps = 50
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+vdn_weights = "${weights}/vdn-h3-stage-b-2000/stage-b-step-2000"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/h3-base"
+
+[[variants]]
+id = "vdn-h3-8step"
+resident_default = true
+recipe_name = "vdn-h3-8step"
+trees = ["h3-base", "vdn-h3-dmd-250-turbo", "vdn-h3-stage-b-2000"]
+
+[variants.gpu]
+min_vram_gib = 96
+min_sm = 80
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+dense = true
+dit_offload = "resident"
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+recipe = "vdn-h3-8step"
+ref2va = false
+short_edge = 768
+steps = 8
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+vdn_shared = "${weights}/vdn-h3-stage-b-2000/stage-b-step-2000"
+vdn_weights = "${weights}/vdn-h3-dmd-250-turbo/stage-dmd-step-250"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/h3-base"
+
+[[variants]]
+id = "h3-ref2v-max"
+tier = "max"
+resident_default = true
+recipe_name = "h3-ref2va-base-49step"
+trees = ["h3-base", "h3-ref2va"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 89
+needs = ["fp8"]
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+dense = true
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+profile = "h3/h3_ref2va_base"
+recipe = "base"
+ref2va = true
+ref_weights = "${weights}/h3-ref2va"
+short_edge = 768
+steps = 49
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/h3-base"
+
+[[variants]]
+id = "h3-ref2v-turbo"
+tier = "turbo"
+resident_default = true
+recipe_name = "sol-h3-ref2va"
+trees = ["h3-base", "h3-ref2va"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 89
+needs = ["fp8"]
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+dense = true
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+profile = "h3/sol_h3_ref2va"
+recipe = "sol-h3-ref2va"
+ref2va = true
+ref_weights = "${weights}/h3-ref2va"
+short_edge = 768
+steps = 4
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/h3-base"
+
+[[variants]]
+id = "fasth3-v2-nvfp4-taeh3"
+served_names = ["h3-v2-nvfp4-preview"]
+resident_default = true
+recipe_name = "fasth3-v2-nvfp4-taeh3"
+trees = ["auxiliary/tae/taeh3.safetensors", "fasth3-v2-nvfp4", "h3-base"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 100
+needs = ["fp8", "nvfp4"]
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+dense = false
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+recipe = "v2-nvfp4"
+ref2va = false
+short_edge = 768
+steps = 8
+taeh3 = "${tae}/taeh3.safetensors"
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/fasth3-v2-nvfp4"
+
+[[variants]]
+id = "fasth3-4step-vsa-nvfp4-taeh3"
+served_names = ["h3-turbo-nvfp4-preview"]
+resident_default = true
+recipe_name = "fasth3-4step-vsa-nvfp4-taeh3"
+trees = ["auxiliary/tae/taeh3.safetensors", "fasth3-4step-vsa-nvfp4", "h3-base"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 100
+needs = ["fp8", "nvfp4"]
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+dense = false
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+recipe = "4step-vsa-nvfp4"
+ref2va = false
+short_edge = 768
+steps = 4
+taeh3 = "${tae}/taeh3.safetensors"
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/fasth3-4step-vsa-nvfp4"
+
+[[variants]]
+id = "fasth3-4step-vsa-taeh3"
+served_names = ["h3-turbo-preview"]
+resident_default = true
+recipe_name = "fasth3-4step-vsa-taeh3"
+trees = ["FastH3-4-step-Preview-v1-LoRA", "auxiliary/tae/taeh3.safetensors", "h3-base"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 89
+needs = ["fp8"]
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+dense = false
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+profile = "h3/fasth3_4step_vsa"
+recipe = "4step-vsa"
+ref2va = false
+short_edge = 768
+steps = 4
+taeh3 = "${tae}/taeh3.safetensors"
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/h3-base"
