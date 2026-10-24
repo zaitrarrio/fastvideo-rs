@@ -373,7 +373,7 @@
       "type": "object",
       "properties": {
         "date": {
-          "description": "The measurement date, `YYYY-MM-DD`.",
+          "description": "`YYYY-MM-DD`: the measurement date, or for a source that backs no\nfield the date of the document state cited. Required (`validate`).",
           "type": [
             "string",
             "null"
@@ -387,7 +387,7 @@
           }
         },
         "heading": {
-          "description": "The heading or table the numbers are under.",
+          "description": "The heading the numbers are under, exactly as the Markdown file writes\nit (without the `#`s), or the top-level key of a JSON file. Required\n(`validate`); `tests/gold_files.rs` checks that it exists in the file.",
           "type": [
             "string",
             "null"
@@ -506,6 +506,13 @@
       "description": "The `[workload]` table: the reference cell the numbers refer to.",
       "type": "object",
       "properties": {
+        "env": {
+          "description": "The `FASTVIDEO_*` environment the cell must run under to reproduce\nthe numbers, when it differs from the served default (for example\n`FASTVIDEO_H3_VAE_MXFP8 = \"0\"`, the bf16 video decode). `note` names\nevery key too.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "fps": {
           "type": [
             "integer",
@@ -529,7 +536,7 @@
           "minimum": 0
         },
         "note": {
-          "description": "Anything the cell needs said (warm process, text cache, no MP4).",
+          "description": "Anything the cell needs said (warm process, text cache, no MP4). A\nnumber measured under a non-default setting stays in the file only\nwhen this note names the exact setting that reproduces it.",
           "type": [
             "string",
             "null"

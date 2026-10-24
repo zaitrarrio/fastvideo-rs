@@ -149,6 +149,68 @@ fn family_files_parse_on_their_own() {
     }
 }
 
+/// The Markdown headings of a file (the text after the `#`s), outside fenced
+/// code blocks.
+fn markdown_headings(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut fenced = false;
+    for line in text.lines() {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        let hashes = t.chars().take_while(|c| *c == '#').count();
+        if (1..=6).contains(&hashes) && t[hashes..].starts_with(' ') {
+            out.push(t[hashes..].trim().to_owned());
+        }
+    }
+    out
+}
+
+#[test]
+fn every_cited_heading_exists_in_its_file() {
+    let root = repo_root();
+    let mut missing = Vec::new();
+    for g in gold_files() {
+        for (i, s) in g.source.iter().enumerate() {
+            let Some(heading) = &s.heading else {
+                missing.push(format!("{} source[{i}]: no heading", g.model.variant));
+                continue;
+            };
+            let path = root.join(&s.path);
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let found = if s.path.ends_with(".md") {
+                markdown_headings(&text).iter().any(|h| h == heading)
+            } else if s.path.ends_with(".json") {
+                serde_json::from_str::<serde_json::Value>(&text)
+                    .ok()
+                    .and_then(|v| v.as_object().map(|o| o.contains_key(heading)))
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+            if !found {
+                missing.push(format!(
+                    "{} source[{i}]: `{heading}` is not a heading (Markdown) or top-level key (JSON) of {}",
+                    g.model.variant, s.path
+                ));
+            }
+        }
+    }
+    assert!(missing.is_empty(), "{}", missing.join("\n"));
+}
+
+#[test]
+fn markdown_headings_skip_code_fences() {
+    let text = "# Title\n\n```bash\n# not a heading\n```\n## 2. Two (`x`)\n#nospace\n";
+    assert_eq!(markdown_headings(text), ["Title", "2. Two (`x`)"]);
+}
+
 /// Printed by `cargo test -p fastvideo-lab -- --nocapture coverage_table`:
 /// which variants carry which numbers (the D2 hand-back table).
 #[test]

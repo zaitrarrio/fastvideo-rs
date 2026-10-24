@@ -23,7 +23,7 @@
 //! with an invented margin; `fv-lab` (plan D1/D3) compares a new run to them
 //! with the gate's tolerance (`scripts/gpu/gate-policy.toml`).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -199,9 +199,17 @@ pub struct Workload {
     pub prompt_set: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub seeds: Vec<u64>,
-    /// Anything the cell needs said (warm process, text cache, no MP4).
+    /// Anything the cell needs said (warm process, text cache, no MP4). A
+    /// number measured under a non-default setting stays in the file only
+    /// when this note names the exact setting that reproduces it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// The `FASTVIDEO_*` environment the cell must run under to reproduce
+    /// the numbers, when it differs from the served default (for example
+    /// `FASTVIDEO_H3_VAE_MXFP8 = "0"`, the bf16 video decode). `note` names
+    /// every key too.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
     /// The upstream reference the quality numbers compare against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream: Option<Upstream>,
@@ -397,10 +405,13 @@ pub struct Source {
     pub fields: Vec<String>,
     /// Repository-relative path of the document or artifact.
     pub path: String,
-    /// The heading or table the numbers are under.
+    /// The heading the numbers are under, exactly as the Markdown file writes
+    /// it (without the `#`s), or the top-level key of a JSON file. Required
+    /// (`validate`); `tests/gold_files.rs` checks that it exists in the file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heading: Option<String>,
-    /// The measurement date, `YYYY-MM-DD`.
+    /// `YYYY-MM-DD`: the measurement date, or for a source that backs no
+    /// field the date of the document state cited. Required (`validate`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -630,6 +641,30 @@ impl Gold {
                 return Err(GoldError::field("workload.upstream.target", "empty"));
             }
         }
+        for (k, v) in &w.env {
+            let name_ok = k.strip_prefix("FASTVIDEO_").is_some_and(|rest| {
+                !rest.is_empty()
+                    && rest
+                        .chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            });
+            if !name_ok {
+                return Err(GoldError::field(
+                    "workload.env",
+                    format!("`{k}`: a FASTVIDEO_* variable (uppercase, digits, `_`)"),
+                ));
+            }
+            if v.trim().is_empty() {
+                return Err(GoldError::field("workload.env", format!("`{k}` is empty")));
+            }
+            let named = w.note.as_deref().is_some_and(|n| n.contains(k.as_str()));
+            if !named {
+                return Err(GoldError::field(
+                    "workload.note",
+                    format!("must name `{k}`, the setting the numbers were measured under"),
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -771,8 +806,23 @@ impl Gold {
         for (i, s) in self.source.iter().enumerate() {
             let p = |f: &str| format!("source[{i}].{f}");
             check_relative_path(&s.path).map_err(|e| GoldError::field(p("path"), e.to_string()))?;
-            if let Some(d) = &s.date {
-                check_date(d).map_err(|e| GoldError::field(p("date"), e))?;
+            match &s.heading {
+                Some(h) if !h.trim().is_empty() => {}
+                _ => {
+                    return Err(GoldError::field(
+                        p("heading"),
+                        "required: the heading (or JSON key) the numbers are under",
+                    ))
+                }
+            }
+            match &s.date {
+                Some(d) => check_date(d).map_err(|e| GoldError::field(p("date"), e))?,
+                None => {
+                    return Err(GoldError::field(
+                        p("date"),
+                        "required: the measurement date (or, for a source that backs no field, the date of the document cited)",
+                    ))
+                }
             }
             for f in &s.fields {
                 if !known.contains(f.as_str()) {
@@ -929,10 +979,13 @@ date = "2026-09-30"
 fields = ["quality.psnr_vs_upstream_min_db", "quality.lpips_vs_upstream_max"]
 path = "docs/oracle.md"
 heading = "Results: H3 turbo on H100"
+date = "2026-09-29"
 
 [[source]]
 fields = ["cost.usd_per_hr", "cost.usd_per_clip"]
 path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "Option 5"
+date = "2026-10-14"
 
 [[gap]]
 field = "latency.denoise_s"
@@ -1151,6 +1204,50 @@ why = "no gate run"
             (g.latency.measures, g.latency.fps),
             (Some(Measures::Stream), Some(15.2))
         );
+    }
+
+    #[test]
+    fn sources_need_a_heading_and_a_date() {
+        let e = with("heading = \"Option 5\"\n", "").unwrap_err();
+        assert_eq!(e.path(), Some("source[2].heading"));
+        let e = with("heading = \"Option 5\"\n", "heading = \"  \"\n").unwrap_err();
+        assert_eq!(e.path(), Some("source[2].heading"));
+        let e = with("date = \"2026-10-14\"\n", "").unwrap_err();
+        assert_eq!(e.path(), Some("source[2].date"));
+    }
+
+    #[test]
+    fn workload_env_is_named_in_the_note() {
+        let g = with(
+            "seeds = [7]",
+            "seeds = [7]\nnote = \"bf16 decode: FASTVIDEO_H3_VAE_MXFP8=0\"\nenv = { FASTVIDEO_H3_VAE_MXFP8 = \"0\" }",
+        )
+        .unwrap();
+        assert_eq!(
+            g.workload
+                .env
+                .get("FASTVIDEO_H3_VAE_MXFP8")
+                .map(String::as_str),
+            Some("0")
+        );
+        let e = with(
+            "seeds = [7]",
+            "seeds = [7]\nnote = \"bf16 decode\"\nenv = { FASTVIDEO_H3_VAE_MXFP8 = \"0\" }",
+        )
+        .unwrap_err();
+        assert_eq!(e.path(), Some("workload.note"));
+        let e = with(
+            "seeds = [7]",
+            "seeds = [7]\nnote = \"PATH=/x\"\nenv = { PATH = \"/x\" }",
+        )
+        .unwrap_err();
+        assert_eq!(e.path(), Some("workload.env"));
+        let e = with(
+            "seeds = [7]",
+            "seeds = [7]\nnote = \"FASTVIDEO_X\"\nenv = { FASTVIDEO_X = \"\" }",
+        )
+        .unwrap_err();
+        assert_eq!(e.path(), Some("workload.env"));
     }
 
     #[test]
