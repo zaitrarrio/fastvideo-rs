@@ -62,7 +62,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| A1 | `crates/fastvideo-manifest` layer 1: modules `name`, `model_toml`, `manifest`, `lineage`, `sig`, `schema`; the registry's WO-001 contracts verbatim plus the two widenings (`[variant]`, `[runtime]` recipe/profile, `[caps]`); fixtures under `crates/fastvideo-manifest/fixtures/` (valid and ≥25 invalid names with error kinds, model.toml valid/invalid, manifests with `.digest` siblings, test keys, lineage chains); proptest round-trip; `schemas/*.json` export with a drift test; ADR-0005 naming, ADR-0006 model.toml, ADR-0007 manifest/digest/lineage/signatures | all WO-001 acceptance tests green on CPU; no I/O, no CUDA, `unsafe` forbidden | `cargo test -p fastvideo-manifest` on the pod; clippy -D warnings | none | active |
+| A1 | `crates/fastvideo-manifest` layer 1: modules `name`, `model_toml`, `manifest`, `lineage`, `sig`, `schema`; the registry's WO-001 contracts verbatim plus the two widenings (`[variant]`, `[runtime]` recipe/profile, `[caps]`); fixtures under `crates/fastvideo-manifest/fixtures/` (valid and ≥25 invalid names with error kinds, model.toml valid/invalid, manifests with `.digest` siblings, test keys, lineage chains); proptest round-trip; `schemas/*.json` export with a drift test; ADR-0005 naming, ADR-0006 model.toml, ADR-0007 manifest/digest/lineage/signatures | all WO-001 acceptance tests green on CPU; no I/O, no CUDA, `unsafe` forbidden | `cargo test -p fastvideo-manifest` on the pod; clippy -D warnings | none | pr |
 | A2 | Layer 2 types (`family`, `variant`, `tiers`) and the first three family files `families/{h3,ltx2,wan}.toml` authored from `engine-service/src/cuda/caps.rs`; an equality test proving `catalog()` equals the manifest projection row for row | equality test green for every catalog row | pod | A1 | todo |
 | A3 | Engine projection: `model_from_config` resolves through the manifest; `validate.rs` and `protocol::ModelCaps` ranges come from it; `[aliases]`, `served_names`, `[protocols]` derived; the 35 serve TOMLs reduced to variant ids and residency; the fake backend serves the manifest; `catalog()` deleted | zero hand-written catalog rows; zero `[aliases]` blocks; `dimension_sweep.rs` and `tests/e2e.rs` green; `/fv/v1/capabilities` unchanged for every config (golden) | pod; serve-compat CI | A2 | todo |
 | A4 | Control-plane and script generation from the families: `control/gen-configs.mjs` emits presets, `enums.ts` ids, `recipe-trees.ts`, `r2-trees.ts`, `weights-sources.ts`, `volumes.ts`; `variants.sh` tables, `volumes.sh`, `gcp/families.tsv`, `autoscale.toml` pools, `verify-weights.sh` cells and `docs/serve/images.md` table generated with `--check` in CI | `gen-configs.mjs --check` green; control unit tests green | pod (node + vitest) | A2 | todo |
@@ -147,6 +147,16 @@ ran (pod id, $/hr), result, cost.
 - 2026-10-23 22:52Z: F3a opened #140 (13 code files, +902/-32): 338 crate
   tests and `scripts/serve/check.sh` (986 passed) green on the pod. `otel`
   deferred to a new F3c. Awaiting serve-compat CI.
+- 2026-10-24 00:10Z: A1 opened draft PR #143 (`claude/a1-fastvideo-manifest`):
+  `crates/fastvideo-manifest` layer 1 (modules `name`, `model_toml`,
+  `manifest`, `canonical`, `sig`, `lineage`, `schema`), ADR-0005..0007,
+  fixtures from an independent Python oracle (`fixtures/gen_fixtures.py`).
+  On build pod `i8tu0lpdb6nvov`: `cargo test -p fastvideo-manifest` 52 passed
+  (15 unit, 37 integration incl. 2 proptests x 512 cases), `cargo clippy
+  --all-targets -D warnings` and `cargo fmt --check` green for the crate.
+  Lockfile adds 17 packages (blake3 1.8.7, schemars 1.2.3, proptest 1.12.0
+  and their deps). Open questions in the PR: `seg-dot` and `--`,
+  `[defaults]` keys, `verify_lineage` for the model.toml-side checks.
 - Merge rule applied by the coordinator: when the base moved only by
   documentation since the branch point, the PR's own green CI stands;
   otherwise main is merged into the branch and CI re-run on that head.

@@ -1,0 +1,98 @@
+{
+  "schema": 1,
+  "name": "bo/wan2.2-t2v/dmd:2:nf4",
+  "parent": {
+    "name": "zay/wan2.2-t2v/dmd:4:fp8",
+    "digest": "888381ce1f82d64c579abf1680384b0bffc45019181432ff109ff04440ba9fc9"
+  },
+  "model_toml_blake3": "544883e45c1997707b66bff7f75d4af488a6cf346b173710a0acc2b938ca732c",
+  "files": [
+    {
+      "path": "model.toml",
+      "size": 64,
+      "blake3": "52c6c0e1dacff866dfe7beb8228da1acc7718e0d236281e24d8f7750547a3cb7",
+      "chunks": [
+        {
+          "id": "52c6c0e1dacff866dfe7beb8228da1acc7718e0d236281e24d8f7750547a3cb7",
+          "offset": 0,
+          "len": 64
+        }
+      ]
+    },
+    {
+      "path": "weights/text_encoder.safetensors",
+      "size": 270,
+      "blake3": "9f2056ea4176f94bb05c61eea894831b5e0a8c3b008b7e51b8acad9a5a929244",
+      "chunks": [
+        {
+          "id": "a9cc2909c7669a559718549874fd292eece06429679909437fd074f8b1c2d15b",
+          "offset": 0,
+          "len": 90
+        },
+        {
+          "id": "a9cc2909c7669a559718549874fd292eece06429679909437fd074f8b1c2d15b",
+          "offset": 90,
+          "len": 90
+        },
+        {
+          "id": "a9cc2909c7669a559718549874fd292eece06429679909437fd074f8b1c2d15b",
+          "offset": 180,
+          "len": 90
+        }
+      ]
+    },
+    {
+      "path": "weights/transformer.safetensors",
+      "size": 420,
+      "blake3": "16fabe7b7009a24b3bf8df528bdfe322af6e04eca24446cecf2084fa795604c5",
+      "chunks": [
+        {
+          "id": "de8013a7514e85eb7cbfe1fd2afd066ed9eba0049f03e824cf7cac719d337df6",
+          "offset": 0,
+          "len": 140
+        },
+        {
+          "id": "de8013a7514e85eb7cbfe1fd2afd066ed9eba0049f03e824cf7cac719d337df6",
+          "offset": 140,
+          "len": 140
+        },
+        {
+          "id": "de8013a7514e85eb7cbfe1fd2afd066ed9eba0049f03e824cf7cac719d337df6",
+          "offset": 280,
+          "len": 140
+        }
+      ]
+    },
+    {
+      "path": "weights/vae.safetensors",
+      "size": 68,
+      "blake3": "cd1fa2583692b9f21558c948d6d9ec23c656290ff03679147d3ddcca36645f25",
+      "chunks": [
+        {
+          "id": "eef5f164f7a8eb45fe674faefe5425751dbe0793c278aed9c1155e76159f2522",
+          "offset": 0,
+          "len": 50
+        },
+        {
+          "id": "766f7a4b623d1ed2885d60a3b604be5b5cd02d15e42130e167a86ca3d2240b45",
+          "offset": 50,
+          "len": 18
+        }
+      ]
+    }
+  ],
+  "chunking": {
+    "algorithm": "fastcdc-2020",
+    "min": 16,
+    "avg": 64,
+    "max": 256
+  },
+  "created_at_unix": 1761264000,
+  "signatures": [
+    {
+      "kid": "test-key-2",
+      "alg": "ed25519",
+      "sig": "uIZKK7M9kgVv4wYhuYRo8v16LA8w_XZwic1n4ktMYJRqrBEhLzJPxiD9bf4iH8PYmTfXsW3iVD6Y2RWzZVzAAw"
+    }
+  ]
+}

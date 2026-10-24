@@ -1,0 +1,47 @@
+# Each line: `name # ErrorKind` (NameError::kind). An empty name is `# Empty`.
+# Empty
+Zay/wan2.2-t2v # Uppercase
+zay/Wan2.2-t2v # Uppercase
+zay/wan2.2-t2v/DMD:4:fp8 # Uppercase
+zay//dmd:4:fp8 # EmptySegment
+/zay/wan2.2-t2v # EmptySegment
+zay # TooFewSegments
+zay/wan2.2-t2v/dmd:4:fp8/extra # TooManySegments
+zay/wan2.2-t2v/dmd:0:fp8 # BadSteps
+zay/wan2.2-t2v/dmd:abc:fp8 # BadSteps
+zay/wan2.2-t2v/dmd:65536:fp8 # BadSteps
+zay/wan2.2-t2v/dmd:1001:fp8 # BadSteps
+zay/wan2.2-t2v/dmd:04:fp8 # BadSteps
+zay/wan2.2-t2v/dmd::fp8 # BadSteps
+zay/wan2.2-t2v/dmd:4:fp4 # UnknownEncoder
+zay/wan2.2-t2v/dmd:4: # UnknownEncoder
+zay/wan2.2-t2v/turbo:4:fp8 # UnknownDistillation
+zay/wan2.2-t2v/dmd:4 # BadVariant
+zay/wan2.2-t2v/dmd:4:fp8:extra # BadVariant
+gia/wan2.2-t2v # ReservedNamespace
+admin/wan2.2-t2v # ReservedNamespace
+api/wan2.2-t2v # ReservedNamespace
+registry/wan2.2-t2v # ReservedNamespace
+official/wan2.2-t2v # ReservedNamespace
+zay/wan2..2-t2v # DoubleDot
+zay/.wan # BadDot
+zay/wan. # BadDot
+zay/wan2.2-t2v/ # TrailingSlash
+zay/wan2.2-t2v/dmd:4:fp8/ # TrailingSlash
+z/wan2.2-t2v # NamespaceTooShort
+some-very-long-namespace-name-of-39-chrs/wan2.2-t2v # OverLength
+zay/model-with-exactly-sixty-four-characters-in-its-identifier-v2.0xy # OverLength
+zay/wan2.2-t2v@0123 # BadRev
+zay/wan2.2-t2v@0123456789AB # BadRev
+zay/wan2.2-t2v@0123456789ag # BadRev
+zay/wan2.2-t2v@ # BadRev
+zay/wan2.2-t2v@0123456789ab@0123456789ab # BadRev
+zay_labs/wan2.2-t2v # InvalidChar
+zay/wan 2 # InvalidChar
+za.y/wan2.2-t2v # InvalidChar
+zay/wan2.2 t2v # InvalidChar
+-zay/wan2.2-t2v # BadHyphen
+zay-/wan2.2-t2v # BadHyphen
+za--y/wan2.2-t2v # BadHyphen
+zay/-wan2.2-t2v # BadHyphen
+zay/wan2.2-t2v- # BadHyphen

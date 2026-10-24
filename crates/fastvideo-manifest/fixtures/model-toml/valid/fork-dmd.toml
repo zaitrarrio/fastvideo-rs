@@ -1,0 +1,27 @@
+# The WO-001 example, verbatim: a fork with its parent pinned to a rev.
+schema = 1
+name = "zay/wan2.2-t2v/dmd:4:fp8"         # must equal the published name (without @rev)
+parent = "gia-labs/wan2.2-t2v/base:40:fp8@0123456789ab"   # required for forks; absent for vendor refs; MUST include @rev
+license = { spdx = "Apache-2.0", redistribution = true, url = "https://example.com/LICENSE" }
+
+[runtime]
+engine = "fastvideo-rs"
+min_version = "0.0.0"                     # semver
+pipeline = "wan"                          # fastvideo-rs pipeline id: "wan" | "ltx" | "h3" (open set, validated by runtime later)
+
+[defaults]
+steps = 4
+guidance = 1.0                            # floats are allowed in model.toml, never in manifests
+width = 832
+height = 480
+frames = 81
+fps = 16
+
+[components]                              # logical component -> relative path under weights/
+transformer = { path = "weights/transformer.safetensors", dtype = "bf16" }
+text_encoder = { path = "weights/text_encoder.safetensors", dtype = "fp8" }
+vae = { path = "weights/vae.safetensors", dtype = "bf16" }
+
+[change]                                  # required for forks
+summary = "Distilled to 4 steps"
+reason = "Drafts in a fraction of the time"

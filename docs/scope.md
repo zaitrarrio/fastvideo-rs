@@ -21,6 +21,7 @@ half. `--features cuda` needs a CUDA toolchain.
 | `fastvideo-cli` | `generate` / `generate_av` |
 | `fastvideo-gpucheck` | Staged GPU checks (`kernels`, `parity`, `clip`). `unsafe` allowed |
 | `fastvideo-mlx` | Apple Silicon scaffold (`mlx-rs` behind `--features mlx` on aarch64 macOS); host stubs elsewhere. Not a generate path |
+| `fastvideo-manifest` | The registry's public formats: model names, `model.toml` v1, the signed lineage manifest and its canonical BLAKE3 digest, JSON Schema export (ADR-0005..0007). Pure: no I/O, no CUDA |
 
 Shared device types (`CudaTensor`, conv, the weight map, the frame writer)
 live under `cudarc/src/wan` and are used by every other model.

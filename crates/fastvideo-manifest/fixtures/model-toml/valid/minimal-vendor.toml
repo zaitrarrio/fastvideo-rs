@@ -1,0 +1,11 @@
+schema = 1
+name = "ab/x"
+license = { spdx = "MIT", redistribution = true }
+
+[runtime]
+engine = "fastvideo-rs"
+min_version = "0.0.0"
+pipeline = "ltx"
+
+[components]
+transformer = { path = "t.safetensors", dtype = "fp8" }
