@@ -1,0 +1,103 @@
+# Gold standard of `longlive-1.3b` (wan, untiered): docs/adr/0009-gold-standard-files.md.
+# Every number is copied from the [[source]] that cites it; absent numbers are listed under [[gap]].
+# `fv-lab run gold` (plan D1/D3) fills [last_validated] and replaces these with its own run record.
+# LongLive-1.3B: the SF-Wan causal stream (window 12, sink 3, re-cache on prompt switch) with the LongLive weights; a 24 GB card.
+
+schema = 1
+
+[model]
+variant = "longlive-1.3b"
+family = "wan"
+
+[tier]
+gpu = "RTX PRO 6000 Blackwell"
+sm = 120
+vram_gib = 96
+offer = "runpod: NVIDIA RTX PRO 6000 Blackwell Server Edition, EU-RO-1 (plan §1: the gold-standard GPU)"
+
+[workload]
+width = 832
+height = 480
+seconds = 5.0
+fps = 16
+prompt_set = "scripts/gpu/prompts-eval.json (no run of this variant in D2's sources)"
+
+[latency]
+
+[quality]
+
+[cost]
+usd_per_hr = 2.49
+
+[last_validated]
+# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+
+[[source]]
+fields = []
+path = "docs/serve/research-longlive.md"
+heading = "12.9 Plug-fast: results (2026-10-06)"
+date = "2026-10-06"
+note = "The LongLive research notes; not a D2 source, named here so D3 knows where to look. The served stream shape (window 12, sink 3, re-cache) is the family file's engine table."
+
+[[source]]
+fields = ["cost.usd_per_hr"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
+date = "2026-10-14"
+note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class (see the other gold files for the older prices). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
+
+[[gap]]
+field = "latency.p50_s"
+why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+
+[[gap]]
+field = "latency.min_s"
+why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+
+[[gap]]
+field = "latency.max_s"
+why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+
+[[gap]]
+field = "latency.denoise_s"
+why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+
+[[gap]]
+field = "latency.decode_s"
+why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+
+[[gap]]
+field = "latency.load_s"
+why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+
+[[gap]]
+field = "latency.peak_gib"
+why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+
+[[gap]]
+field = "latency.fps"
+why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+
+[[gap]]
+field = "latency.ttff_s"
+why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+
+[[gap]]
+field = "quality.psnr_vs_upstream_min_db"
+why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+
+[[gap]]
+field = "quality.lpips_vs_upstream_max"
+why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+
+[[gap]]
+field = "quality.sharpness_ratio"
+why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+
+[[gap]]
+field = "quality.jitter_ratio"
+why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+
+[[gap]]
+field = "cost.usd_per_clip"
+why = "derived from latency.p50_s, which has no measurement here"
