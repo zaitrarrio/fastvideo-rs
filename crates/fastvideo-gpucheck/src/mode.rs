@@ -23,10 +23,10 @@ impl Mode {
                 ("FASTVIDEO_TF32", "0"),
                 ("FASTVIDEO_TEACACHE", "0"),
             ] {
-                if std::env::var(k).is_ok_and(|cur| cur != v) {
+                if fastvideo_models::settings::env_var(k).is_ok_and(|cur| cur != v) {
                     eprintln!(
                         "mode=exact overrides {k}={} → {v}",
-                        std::env::var(k).unwrap_or_default()
+                        fastvideo_models::settings::env_var(k).unwrap_or_default()
                     );
                 }
                 std::env::set_var(k, v);

@@ -192,7 +192,7 @@ impl EasyCacheProfile {
     /// `FASTVIDEO_WAN_EASYCACHE_PROFILE`, then `WAN22_EASYCACHE_PROFILE`.
     /// Unset is [`Self::CodeDefault`].
     pub fn from_env() -> Result<Self, String> {
-        let raw = std::env::var("FASTVIDEO_WAN_EASYCACHE_PROFILE")
+        let raw = crate::settings::env_var("FASTVIDEO_WAN_EASYCACHE_PROFILE")
             .or_else(|_| std::env::var("WAN22_EASYCACHE_PROFILE"))
             .unwrap_or_default();
         Self::parse(&raw)

@@ -29,7 +29,7 @@ fn msg(s: impl Into<String>) -> PipelineError {
 /// `FASTVIDEO_WAN_AUDIO`: `mmaudio` turns the sidecar on.
 pub fn requested() -> bool {
     matches!(
-        std::env::var("FASTVIDEO_WAN_AUDIO")
+        fastvideo_models::settings::env_var("FASTVIDEO_WAN_AUDIO")
             .unwrap_or_default()
             .trim(),
         "mmaudio" | "1"
@@ -37,7 +37,7 @@ pub fn requested() -> bool {
 }
 
 pub fn weights_root() -> PathBuf {
-    if let Some(p) = std::env::var_os("FASTVIDEO_MMAUDIO_WEIGHTS")
+    if let Some(p) = fastvideo_models::settings::env_var_os("FASTVIDEO_MMAUDIO_WEIGHTS")
         .or_else(|| std::env::var_os("MMAUDIO_MODEL_PATH"))
     {
         return PathBuf::from(p);
@@ -77,7 +77,7 @@ impl SidecarReport {
 }
 
 fn env_or<T: std::str::FromStr>(k: &str, d: T) -> T {
-    std::env::var(k)
+    fastvideo_models::settings::env_var(k)
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(d)
@@ -98,7 +98,8 @@ pub fn run_on_mp4(
     let clip_s = num_frames as f64 / f64::from(fps.max(1));
     let preset = MmAudioPreset::Large44kV2;
     let req = MmAudioRequest {
-        prompt: std::env::var("FASTVIDEO_WAN_AUDIO_PROMPT").unwrap_or_else(|_| prompt.to_string()),
+        prompt: fastvideo_models::settings::env_var("FASTVIDEO_WAN_AUDIO_PROMPT")
+            .unwrap_or_else(|_| prompt.to_string()),
         negative_prompt: String::new(),
         seed: env_or("FASTVIDEO_WAN_AUDIO_SEED", seed),
         duration_s: clip_s,

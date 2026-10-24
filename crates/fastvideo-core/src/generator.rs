@@ -170,7 +170,7 @@ impl VideoGenerator {
                 return Some(p);
             }
         }
-        if let Ok(path) = std::env::var("FASTVIDEO_WEIGHTS") {
+        if let Ok(path) = fastvideo_models::settings::env_var("FASTVIDEO_WEIGHTS") {
             let p = PathBuf::from(path);
             if p.join("transformer").is_dir() {
                 return Some(p);
@@ -197,7 +197,7 @@ impl VideoGenerator {
             std::env::remove_var("FASTVIDEO_SP_WORLD");
         }
         if self.model_id.to_ascii_lowercase().contains("vsa") {
-            let vsa_on = std::env::var("FASTVIDEO_VSA")
+            let vsa_on = fastvideo_models::settings::env_var("FASTVIDEO_VSA")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false);
             if !vsa_on {
@@ -225,7 +225,7 @@ impl VideoGenerator {
             self.sampling.height,
             self.sampling.num_frames,
             self.sampling.num_inference_steps,
-            std::env::var("FASTVIDEO_LOG").unwrap_or_else(|_| "info".into()),
+            fastvideo_models::settings::env_var("FASTVIDEO_LOG").unwrap_or_else(|_| "info".into()),
         );
         let mut gen_cfg = fastvideo_cudarc::GenerateConfig {
             prompt: prompt.to_string(),
@@ -249,7 +249,7 @@ impl VideoGenerator {
             guidance_scale_2: self.sampling.guidance_scale_2,
             boundary_ratio: self.pipeline.boundary_ratio,
             save_video: self.save_mp4
-                || std::env::var("FASTVIDEO_SAVE_MP4")
+                || fastvideo_models::settings::env_var("FASTVIDEO_SAVE_MP4")
                     .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                     .unwrap_or(false),
             fps: self.sampling.fps,
@@ -366,7 +366,9 @@ impl VideoGenerator {
     pub fn resolved_clip_dir(&self) -> Option<PathBuf> {
         let candidates = [
             self.weights_path.as_ref().map(PathBuf::from),
-            std::env::var("FASTVIDEO_WEIGHTS").ok().map(PathBuf::from),
+            fastvideo_models::settings::env_var("FASTVIDEO_WEIGHTS")
+                .ok()
+                .map(PathBuf::from),
             fastvideo_models::wan::weights::hf_snapshot(&self.model_id),
             fastvideo_models::wan::weights::hf_snapshot("Wan-AI/Wan2.1-I2V-14B-480P-Diffusers"),
         ];
@@ -382,7 +384,7 @@ impl VideoGenerator {
 /// The Wan UMT5 prompt cache: `FASTVIDEO_WAN_TEXT_CACHE=<dir>`, `off` (or
 /// `0`) to encode every request, default `~/.cache/fastvideo/wan-text`.
 fn wan_text_cache_dir() -> Option<PathBuf> {
-    match std::env::var("FASTVIDEO_WAN_TEXT_CACHE") {
+    match fastvideo_models::settings::env_var("FASTVIDEO_WAN_TEXT_CACHE") {
         Ok(v) if matches!(v.trim(), "off" | "0" | "false" | "none") => None,
         Ok(v) if !v.trim().is_empty() => Some(PathBuf::from(v.trim())),
         _ => std::env::var_os("XDG_CACHE_HOME")

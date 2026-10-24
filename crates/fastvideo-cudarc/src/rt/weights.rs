@@ -593,7 +593,7 @@ mod tests {
 
     #[test]
     fn gated_transformer_first_tensor_shapes() {
-        let Some(root) = std::env::var_os("FASTVIDEO_WEIGHTS") else {
+        let Some(root) = fastvideo_models::settings::env_var_os("FASTVIDEO_WEIGHTS") else {
             eprintln!("skip: set FASTVIDEO_WEIGHTS to exercise Diffusers DiT load");
             return;
         };

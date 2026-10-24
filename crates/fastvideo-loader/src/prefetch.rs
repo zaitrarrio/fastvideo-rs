@@ -48,7 +48,9 @@ pub struct PrefetchConfig {
 }
 
 fn env_usize(name: &str) -> Option<usize> {
-    std::env::var(name).ok().and_then(|v| v.trim().parse().ok())
+    fastvideo_models::settings::env_var(name)
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
 }
 
 /// `MemAvailable` from `/proc/meminfo`, in bytes.
@@ -62,7 +64,8 @@ pub fn mem_available() -> Option<u64> {
 
 impl PrefetchConfig {
     pub fn from_env() -> Self {
-        let enabled = std::env::var("FASTVIDEO_PREFETCH").map_or(true, |v| v.trim() != "0");
+        let enabled = fastvideo_models::settings::env_var("FASTVIDEO_PREFETCH")
+            .map_or(true, |v| v.trim() != "0");
         // While the weights are still arriving (FASTVIDEO_STREAMING_FETCH=1) fewer readers: they read the page cache
         // the fetcher just wrote, and the fetcher (hashing, TLS) needs the CPUs more.
         let threads = env_usize("FASTVIDEO_PREFETCH_THREADS")
@@ -78,7 +81,7 @@ impl PrefetchConfig {
             .unwrap_or(16)
             .clamp(1, 1024)
             << 20;
-        let window = match std::env::var("FASTVIDEO_PREFETCH_WINDOW_GB")
+        let window = match fastvideo_models::settings::env_var("FASTVIDEO_PREFETCH_WINDOW_GB")
             .ok()
             .and_then(|v| v.trim().parse::<f64>().ok())
         {
@@ -496,7 +499,8 @@ pub(crate) fn new_shared(entries: usize, files: usize) -> Arc<StoreShared> {
 fn memory_mode(bytes: u64) -> bool {
     static MODE: OnceLock<bool> = OnceLock::new();
     let on = *MODE.get_or_init(|| {
-        std::env::var("FASTVIDEO_PREFETCH_MODE").map_or(true, |v| v.trim() != "cache")
+        fastvideo_models::settings::env_var("FASTVIDEO_PREFETCH_MODE")
+            .map_or(true, |v| v.trim() != "cache")
     });
     on && mem_available().is_some_and(|a| MEM_RESERVED.load(Ordering::Acquire) + bytes < a / 2)
 }

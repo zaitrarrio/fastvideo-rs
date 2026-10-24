@@ -1622,7 +1622,7 @@ mod tests {
     /// `taeltx2_3_wide.safetensors` (`scripts/gpu/fetch-tae.sh`).
     #[test]
     fn real_checkpoints_match_reference_when_present() {
-        let Some(dir) = std::env::var_os("FASTVIDEO_TAE_TEST_DIR") else {
+        let Some(dir) = fastvideo_models::settings::env_var_os("FASTVIDEO_TAE_TEST_DIR") else {
             return;
         };
         let dir = std::path::PathBuf::from(dir);

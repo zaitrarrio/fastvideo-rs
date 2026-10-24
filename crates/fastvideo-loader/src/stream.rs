@@ -56,7 +56,7 @@ pub struct GateOptions {
 }
 
 fn env_secs(name: &str, default: f64) -> Duration {
-    let s = std::env::var(name)
+    let s = fastvideo_models::settings::env_var(name)
         .ok()
         .and_then(|v| v.trim().parse::<f64>().ok())
         .filter(|v| v.is_finite() && *v > 0.0)
@@ -67,7 +67,7 @@ fn env_secs(name: &str, default: f64) -> Duration {
 impl GateOptions {
     pub fn from_env() -> Self {
         Self {
-            status: std::env::var_os("FASTVIDEO_STREAMING_FETCH_STATUS")
+            status: fastvideo_models::settings::env_var_os("FASTVIDEO_STREAMING_FETCH_STATUS")
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from),
             stale: env_secs("FASTVIDEO_STREAMING_FETCH_STALE_S", 120.0),
@@ -79,7 +79,7 @@ impl GateOptions {
 /// `FASTVIDEO_STREAMING_FETCH=1`: the boot started this process while the
 /// weights are still arriving (the read-ahead takes fewer threads then).
 pub fn streaming_fetch_env() -> bool {
-    std::env::var("FASTVIDEO_STREAMING_FETCH").is_ok_and(|v| v.trim() == "1")
+    fastvideo_models::settings::env_var("FASTVIDEO_STREAMING_FETCH").is_ok_and(|v| v.trim() == "1")
 }
 
 /// The progress map of one file being fetched.

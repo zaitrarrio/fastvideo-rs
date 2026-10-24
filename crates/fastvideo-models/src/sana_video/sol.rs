@@ -85,7 +85,7 @@ impl SanaOptimizations {
     }
 
     pub fn from_env() -> Result<Self, String> {
-        let get = |k: &str| std::env::var(k).ok();
+        let get = |k: &str| crate::settings::env_var(k).ok();
         Self::parse(
             get("FASTVIDEO_SANA_OPT").as_deref(),
             get("FASTVIDEO_SANA_EASYCACHE").as_deref(),

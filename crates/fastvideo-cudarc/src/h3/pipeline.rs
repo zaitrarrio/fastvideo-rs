@@ -418,7 +418,7 @@ pub fn vdn_checkpoint(
     let dir = options
         .vdn
         .clone()
-        .or_else(|| std::env::var_os(H3_VDN_ENV).map(PathBuf::from));
+        .or_else(|| fastvideo_models::settings::env_var_os(H3_VDN_ENV).map(PathBuf::from));
     match (is_vdn, dir) {
         (false, None) => Ok(None),
         (false, Some(d)) if options.vdn.is_none() => {
@@ -441,7 +441,7 @@ pub fn vdn_checkpoint(
                 ));
             }
             let shared = options.vdn_shared.clone().or_else(|| {
-                std::env::var_os(H3_VDN_SHARED_ENV)
+                fastvideo_models::settings::env_var_os(H3_VDN_SHARED_ENV)
                     .filter(|s| !s.is_empty())
                     .map(PathBuf::from)
             });
@@ -604,7 +604,10 @@ fn inject_start_rows(
     }
     let tail = v[cond_n..].to_vec();
     let cond = match cond {
-        Some(c) if std::env::var("FASTVIDEO_INJECT_COND").is_ok_and(|x| x == "1") => {
+        Some(c)
+            if fastvideo_models::settings::env_var("FASTVIDEO_INJECT_COND")
+                .is_ok_and(|x| x == "1") =>
+        {
             crate::rt::log::info(format_args!(
                 "inject: {name} condition rows ({cond_n} values) from the reference"
             ));
@@ -1380,7 +1383,7 @@ impl H3Pipeline {
             for (k, v, source) in active.settings.iter() {
                 crate::rt::log::info(format_args!(
                     "h3 technique setting {k}={v} ({source}{})",
-                    if std::env::var_os(k).is_some() {
+                    if fastvideo_models::settings::env_var_os(k).is_some() {
                         "; overridden by env"
                     } else {
                         ""
@@ -2409,7 +2412,7 @@ impl H3Pipeline {
             }
             Some(bridge) => {
                 let refined = bridge.forward(latents).map_err(|e| msg(e.to_string()))?;
-                if std::env::var_os("FASTVIDEO_LTX2_WEIGHTS").is_none() {
+                if fastvideo_models::settings::env_var_os("FASTVIDEO_LTX2_WEIGHTS").is_none() {
                     crate::rt::log::info(format_args!(
                         "h3 sol-h3-spark: refiner video latent {:?}. Set FASTVIDEO_LTX2_WEIGHTS to run the 3-step LTX refiner. H3 decode continues.",
                         refined.shape
@@ -3554,7 +3557,7 @@ fn refine_spark(
 ) -> Result<crate::ltx2::pipeline::Ltx2Output> {
     use crate::ltx2::pipeline::{Ltx2Paths, Ltx2Pipeline, PipelineOptions};
 
-    let weights = match std::env::var("FASTVIDEO_LTX2_WEIGHTS") {
+    let weights = match fastvideo_models::settings::env_var("FASTVIDEO_LTX2_WEIGHTS") {
         Ok(raw) => PathBuf::from(raw),
         Err(_) => {
             return Err(msg(
@@ -3568,7 +3571,7 @@ fn refine_spark(
             weights.display()
         )));
     }
-    let dit = std::env::var("FASTVIDEO_LTX2_DIT")
+    let dit = fastvideo_models::settings::env_var("FASTVIDEO_LTX2_DIT")
         .ok()
         .map(PathBuf::from)
         .unwrap_or_else(|| weights.join("transformer"));

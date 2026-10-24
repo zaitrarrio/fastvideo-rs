@@ -41,6 +41,9 @@ pub mod zimage;
 pub use schedulers::{
     DmdSchedule, FlowMatchEulerDiscreteScheduler, FlowUniPCMultistepScheduler, RcmSchedule,
 };
+/// The `FASTVIDEO_*` settings layer (`techniques::settings`): every read of a
+/// `FASTVIDEO_*` name in the workspace goes through it.
+pub use techniques::settings;
 pub use wan::{
     causal_temporal_mask, i2v_first_frame_mask, moe_expert, tokenize_prompt, MoeExpert, Umt5Config,
     WanVaeConfig, WanVideoArchConfig,

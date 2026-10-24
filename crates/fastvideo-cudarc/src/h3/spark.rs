@@ -556,7 +556,7 @@ pub struct SparkBridge {
 
 impl SparkBridge {
     pub fn resolve(root: &Path) -> Result<Option<Self>> {
-        let up = match std::env::var("FASTVIDEO_H3_UPSCALER") {
+        let up = match fastvideo_models::settings::env_var("FASTVIDEO_H3_UPSCALER") {
             Ok(raw) => {
                 let path = PathBuf::from(raw);
                 if !path.is_file() {
@@ -569,7 +569,7 @@ impl SparkBridge {
             }
             Err(_) => find_upscaler(root),
         };
-        let adapter = match std::env::var("FASTVIDEO_H3_LTX_ADAPTER") {
+        let adapter = match fastvideo_models::settings::env_var("FASTVIDEO_H3_LTX_ADAPTER") {
             Ok(raw) => Some(adapter_paths(Path::new(&raw))?),
             Err(_) => find_adapter(root),
         };

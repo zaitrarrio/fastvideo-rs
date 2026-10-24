@@ -221,7 +221,7 @@ pub fn load_merged_transformer(
         return Err(msg(format!("{} is not a Wan recipe", recipe.name)));
     }
     let timer = std::time::Instant::now();
-    let env = std::env::var_os(PLUG_ROOT_ENV).map(PathBuf::from);
+    let env = fastvideo_models::settings::env_var_os(PLUG_ROOT_ENV).map(PathBuf::from);
     let plug_root = plug_root.map(Path::to_path_buf).or(env);
     let mut base = fastvideo_loader::load_raw_tensors_native(&root.join("transformer"))
         .map_err(|e| msg(format!("{}: {e}", root.join("transformer").display())))?;

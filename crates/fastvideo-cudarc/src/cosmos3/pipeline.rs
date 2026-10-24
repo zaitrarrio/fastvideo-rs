@@ -104,7 +104,7 @@ pub struct Cosmos3Pipeline {
 
 fn und_resident() -> bool {
     matches!(
-        std::env::var("FASTVIDEO_COSMOS3_UND")
+        fastvideo_models::settings::env_var("FASTVIDEO_COSMOS3_UND")
             .ok()
             .as_deref()
             .map(str::trim),

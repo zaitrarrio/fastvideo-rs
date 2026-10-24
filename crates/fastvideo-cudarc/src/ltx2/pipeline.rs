@@ -1731,7 +1731,7 @@ pub const UPSAMPLER_ENV: &str = "FASTVIDEO_LTX2_UPSAMPLER";
 /// The spatial upsampler's folder under `weights` (or the file / folder
 /// [`UPSAMPLER_ENV`] names), when there is one.
 pub fn upsampler_dir(weights: &Path) -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os(UPSAMPLER_ENV).map(PathBuf::from) {
+    if let Some(p) = fastvideo_models::settings::env_var_os(UPSAMPLER_ENV).map(PathBuf::from) {
         return p.exists().then_some(p);
     }
     ["latent_upsampler", "spatial_upscaler", "spatial_upsampler"]
@@ -1931,7 +1931,8 @@ pub fn decode_and_write(
 /// runs (`fv-gpucheck ltx2 vae-bench --latents <prefix>`). Downloads, so it
 /// synchronizes once before the decode.
 pub fn save_latents(latents: &CudaTensor) -> Result<()> {
-    let Some(prefix) = std::env::var_os("FASTVIDEO_LTX2_SAVE_LATENTS").filter(|v| !v.is_empty())
+    let Some(prefix) = fastvideo_models::settings::env_var_os("FASTVIDEO_LTX2_SAVE_LATENTS")
+        .filter(|v| !v.is_empty())
     else {
         return Ok(());
     };
@@ -2280,7 +2281,8 @@ impl TextEncoder {
             resident: None,
             booking: crate::rt::ledger::Booking::default(),
             identity: None,
-            fp8: std::env::var("FASTVIDEO_LTX2_TEXT_FP8").is_ok_and(|v| v.trim() == "1"),
+            fp8: fastvideo_models::settings::env_var("FASTVIDEO_LTX2_TEXT_FP8")
+                .is_ok_and(|v| v.trim() == "1"),
             warm: None,
         }
     }
@@ -2314,7 +2316,8 @@ impl TextEncoder {
     /// `FASTVIDEO_LTX2_TEXT_WARM=0` skips it.
     pub fn warm(&mut self) -> Result<()> {
         if self.warm.is_none()
-            && std::env::var("FASTVIDEO_LTX2_TEXT_WARM").map_or(true, |v| v.trim() != "0")
+            && fastvideo_models::settings::env_var("FASTVIDEO_LTX2_TEXT_WARM")
+                .map_or(true, |v| v.trim() != "0")
         {
             self.warm = Some(self.open_gemma()?);
         }
@@ -2468,7 +2471,7 @@ impl TextEncoder {
         if self.resident.is_some() || self.residency == TextResidency::Streamed {
             return Ok(());
         }
-        let env = std::env::var("FASTVIDEO_LTX2_TEXT").ok();
+        let env = fastvideo_models::settings::env_var("FASTVIDEO_LTX2_TEXT").ok();
         let free = crate::rt::device::free_memory().map(|(free, _)| free);
         let needed = self.resident_bytes() + RESIDENT_HEADROOM;
         let resident = self.fp8 || self.residency.resolve(env.as_deref(), free, needed)?;
@@ -2563,7 +2566,7 @@ impl TextEncoder {
         if self.residency != TextResidency::Auto || self.fp8 {
             return;
         }
-        let env = std::env::var("FASTVIDEO_LTX2_TEXT").ok();
+        let env = fastvideo_models::settings::env_var("FASTVIDEO_LTX2_TEXT").ok();
         if env
             .as_deref()
             .is_some_and(|v| v.trim().eq_ignore_ascii_case("resident"))
@@ -2717,7 +2720,7 @@ pub struct PipelineOptions {
 /// [`PipelineOptions::ic_lora`], else `FASTVIDEO_LTX2_IC_LORA`.
 fn resolve_ic_lora(explicit: Option<&Path>) -> Option<PathBuf> {
     explicit.map(Path::to_path_buf).or_else(|| {
-        std::env::var("FASTVIDEO_LTX2_IC_LORA")
+        fastvideo_models::settings::env_var("FASTVIDEO_LTX2_IC_LORA")
             .ok()
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
@@ -2960,7 +2963,7 @@ impl Ltx2Pipeline {
             for (k, v, source) in active.settings.iter() {
                 crate::rt::log::info(format_args!(
                     "ltx2 technique setting {k}={v} ({source}{})",
-                    if std::env::var_os(k).is_some() {
+                    if fastvideo_models::settings::env_var_os(k).is_some() {
                         "; overridden by env"
                     } else {
                         ""
@@ -2984,7 +2987,9 @@ impl Ltx2Pipeline {
         let text_residency = resolve_text_for_offload(
             offload,
             options.text_residency,
-            std::env::var("FASTVIDEO_LTX2_TEXT").ok().as_deref(),
+            fastvideo_models::settings::env_var("FASTVIDEO_LTX2_TEXT")
+                .ok()
+                .as_deref(),
         )?;
         let residency = {
             let policy = dit_policy_for_offload(
@@ -3091,7 +3096,7 @@ impl Ltx2Pipeline {
         } else {
             None
         };
-        let lora_base_host = match std::env::var("FASTVIDEO_LTX2_LORA_BASE")
+        let lora_base_host = match fastvideo_models::settings::env_var("FASTVIDEO_LTX2_LORA_BASE")
             .ok()
             .as_deref()
             .map(str::trim)
@@ -3366,19 +3371,23 @@ impl Ltx2Pipeline {
         };
         let version = self.cfg.version;
         if fastvideo_models::ltx2::fbcache::requested(
-            std::env::var("FASTVIDEO_LTX2_FBCACHE").ok().as_deref(),
+            fastvideo_models::settings::env_var("FASTVIDEO_LTX2_FBCACHE")
+                .ok()
+                .as_deref(),
         ) {
             fastvideo_models::ltx2::fbcache::scope(version, distilled, guided, 1).map_err(err)?;
             model.enable_fbcache();
         }
         if fastvideo_models::ltx2::pisa::stage1_cache_requested(
-            std::env::var("FASTVIDEO_LTX2_STAGE1_CACHE").ok().as_deref(),
+            fastvideo_models::settings::env_var("FASTVIDEO_LTX2_STAGE1_CACHE")
+                .ok()
+                .as_deref(),
         ) {
             fastvideo_models::ltx2::pisa::stage1_cache_scope(version).map_err(err)?;
             model.enable_stage1_cache();
         }
         if fastvideo_models::ltx2::pisa::midpoint_prune_requested(
-            std::env::var("FASTVIDEO_LTX2_MIDPOINT_PRUNE")
+            fastvideo_models::settings::env_var("FASTVIDEO_LTX2_MIDPOINT_PRUNE")
                 .ok()
                 .as_deref(),
         ) {
@@ -3415,7 +3424,8 @@ impl Ltx2Pipeline {
             self.cfg.vae.pixel_norm_eps,
         )?;
         let inject = crate::rt::inject::enabled()
-            && std::env::var("FASTVIDEO_INJECT_COND").map_or(true, |v| v != "0");
+            && fastvideo_models::settings::env_var("FASTVIDEO_INJECT_COND")
+                .map_or(true, |v| v != "0");
         let mut out = Vec::with_capacity(sizes.len());
         for &(h, w, tag) in sizes {
             let mut stage = Vec::with_capacity(rgbs.len());
@@ -3427,7 +3437,8 @@ impl Ltx2Pipeline {
                 // encode the reference's preprocessed pixels, so the latent diff
                 // is the encoder's alone.
                 if crate::rt::inject::enabled()
-                    && std::env::var("FASTVIDEO_INJECT_PIXELS").map_or(true, |v| v != "0")
+                    && fastvideo_models::settings::env_var("FASTVIDEO_INJECT_PIXELS")
+                        .map_or(true, |v| v != "0")
                 {
                     if let Some(v) = crate::rt::inject::load_numel(&pname, px.len())? {
                         crate::rt::log::info(format_args!("inject: {pname} (reference)"));
@@ -3467,7 +3478,8 @@ impl Ltx2Pipeline {
                 let pname = "s1_ref0_pixels";
                 crate::rt::dump::host(pname, &[3, h, w], &px)?;
                 if crate::rt::inject::enabled()
-                    && std::env::var("FASTVIDEO_INJECT_PIXELS").map_or(true, |v| v != "0")
+                    && fastvideo_models::settings::env_var("FASTVIDEO_INJECT_PIXELS")
+                        .map_or(true, |v| v != "0")
                 {
                     if let Some(v) = crate::rt::inject::load_numel(pname, px.len())? {
                         crate::rt::log::info(format_args!("inject: {pname} (reference)"));
@@ -3502,7 +3514,8 @@ impl Ltx2Pipeline {
         let wname = "a2v_audio_wave";
         crate::rt::dump::host(wname, &[wave.channels, wave.samples()], &wave.planar)?;
         if crate::rt::inject::enabled()
-            && std::env::var("FASTVIDEO_INJECT_PIXELS").map_or(true, |v| v != "0")
+            && fastvideo_models::settings::env_var("FASTVIDEO_INJECT_PIXELS")
+                .map_or(true, |v| v != "0")
         {
             if let Some(v) = crate::rt::inject::load_numel(wname, wave.planar.len())? {
                 crate::rt::log::info(format_args!("inject: {wname} (reference)"));
@@ -3536,7 +3549,8 @@ impl Ltx2Pipeline {
         crate::rt::dump::tensor(lname, &clean)?;
         crate::rt::dump::digest(lname, &clean)?;
         if crate::rt::inject::enabled()
-            && std::env::var("FASTVIDEO_INJECT_COND").map_or(true, |v| v != "0")
+            && fastvideo_models::settings::env_var("FASTVIDEO_INJECT_COND")
+                .map_or(true, |v| v != "0")
         {
             if let Some(v) = crate::rt::inject::load_numel(lname, clean.numel())? {
                 crate::rt::log::info(format_args!("inject: {lname} (reference)"));
@@ -3632,10 +3646,13 @@ impl Ltx2Pipeline {
         } else {
             None
         };
-        if fastvideo_models::ltx2::hq::requested(std::env::var("FASTVIDEO_LTX2_HQ").ok().as_deref())
-            || (req.two_stage
-                && req.stage1_steps() == fastvideo_models::ltx2::hq::STAGE1_STEPS
-                && (req.guidance_scale - fastvideo_models::ltx2::hq::GUIDANCE_SCALE).abs() < 1e-6)
+        if fastvideo_models::ltx2::hq::requested(
+            fastvideo_models::settings::env_var("FASTVIDEO_LTX2_HQ")
+                .ok()
+                .as_deref(),
+        ) || (req.two_stage
+            && req.stage1_steps() == fastvideo_models::ltx2::hq::STAGE1_STEPS
+            && (req.guidance_scale - fastvideo_models::ltx2::hq::GUIDANCE_SCALE).abs() < 1e-6)
         {
             crate::rt::log::info(format_args!(
                 "ltx2 hq: stage-1 {} steps, stage-2 sigmas {:?}, guidance {}, {}x{} {}f ({})",
@@ -3908,7 +3925,8 @@ impl Ltx2Pipeline {
             crate::rt::dump::tensor("s1_ref0_latent", &tokens.clean)?;
             crate::rt::dump::digest("s1_ref0_latent", &tokens.clean)?;
             if crate::rt::inject::enabled()
-                && std::env::var("FASTVIDEO_INJECT_COND").map_or(true, |v| v != "0")
+                && fastvideo_models::settings::env_var("FASTVIDEO_INJECT_COND")
+                    .map_or(true, |v| v != "0")
             {
                 if let Some(v) =
                     crate::rt::inject::load_numel("s1_ref0_latent", tokens.clean.numel())?
@@ -4312,7 +4330,9 @@ impl Ltx2Pipeline {
             if crate::rt::inject::enabled() {
                 crate::rt::dump::tensor("s2_entry_video", &video)?;
                 crate::rt::dump::tensor("s2_entry_audio", &audio)?;
-                if std::env::var("FASTVIDEO_INJECT_STAGE2").map_or(true, |v| v != "0") {
+                if fastvideo_models::settings::env_var("FASTVIDEO_INJECT_STAGE2")
+                    .map_or(true, |v| v != "0")
+                {
                     for (name, slot) in [
                         ("s2_video_step00_in", &mut video),
                         ("s2_audio_step00_in", &mut audio),
@@ -4711,7 +4731,7 @@ impl Ltx2Pipeline {
 }
 
 pub(super) fn open_audio_encoder(weights: &Path) -> Result<WeightMap> {
-    if let Ok(raw) = std::env::var("FASTVIDEO_LTX2_AUDIO_VAE") {
+    if let Ok(raw) = fastvideo_models::settings::env_var("FASTVIDEO_LTX2_AUDIO_VAE") {
         let path = PathBuf::from(raw);
         if path.is_file() {
             return Ok(WeightMap::open_files(&[path])?);

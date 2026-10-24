@@ -60,14 +60,14 @@ pub fn format_flux2_prompt(kind: Flux2TextKind, prompt: &str) -> String {
 /// `FASTVIDEO_FLUX2_DUMMY_TEXT=1` keeps the prompt-hash stand-in (A/B vs real text).
 pub fn flux2_dummy_text() -> bool {
     matches!(
-        std::env::var("FASTVIDEO_FLUX2_DUMMY_TEXT").as_deref(),
+        crate::settings::env_var("FASTVIDEO_FLUX2_DUMMY_TEXT").as_deref(),
         Ok("1") | Ok("true") | Ok("TRUE")
     )
 }
 
 /// Override stacked-encoder sequence length (`FASTVIDEO_FLUX2_TEXT_LEN`).
 pub fn flux2_text_len(default: usize) -> usize {
-    std::env::var("FASTVIDEO_FLUX2_TEXT_LEN")
+    crate::settings::env_var("FASTVIDEO_FLUX2_TEXT_LEN")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(default)

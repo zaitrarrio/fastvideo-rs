@@ -22,7 +22,7 @@ mod tests {
 
     #[test]
     fn residency_default_on() {
-        let prev = std::env::var("FASTVIDEO_RESIDENT").ok();
+        let prev = fastvideo_models::settings::env_var("FASTVIDEO_RESIDENT").ok();
         std::env::remove_var("FASTVIDEO_RESIDENT");
         RESIDENT_CACHE.reset();
         assert!(residency_enabled());
