@@ -1,0 +1,5 @@
+[fv-boot-smoke] 05:44:55 fv-boot fv-boot 0.1.1 --config /etc/fv/runpod-ltx.toml (weights volume at /workspace/weights)
+[fv-boot-smoke] 05:44:57 fv-serve answers /ping (204)
+[fv-boot-smoke] 05:46:57 ready
+[fv-boot-smoke] 05:46:57 job: {"model": "", "prompt": "a red fox trotting through fresh snow", "seed": 1, "short_edge": 480, "aspect_ratio": "16:9"}
+[fv-boot-smoke] 05:46:57 job : submit_failed

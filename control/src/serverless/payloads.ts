@@ -10,6 +10,7 @@ import type { EndpointSpec } from "./spec";
 import { SLS_HUB_SH, SLS_R2_SH } from "./weights";
 import { DRIVER_CHECK_SH } from "../driver-check";
 import { UPSAMPLER_START_SH, UPSAMPLER_WAIT_SH } from "../upsampler";
+import { PREFER_FV_BOOT_SH } from "../fv-boot";
 
 /** Every Runpod endpoint and template fv-control creates is named fvc-<name>…; nothing else is ever touched. */
 export const SLS_PREFIX = "fvc-";
@@ -19,9 +20,10 @@ export const templateName = (spec: Pick<EndpointSpec, "name">, at: number) => `$
 
 /** The worker's start when the spec names a config (or weights_source r2): the host's driver (driver-check.ts), the weights link (a serverless worker mounts the
  * volume at /runpod-volume; its HF-cache trees link into /workspace/weights) and an inline config, then
- * fv-serve. Without a config the image's own entrypoint (fv-entry) and baked FV_CONFIG run. */
+ * fv-serve. Without a config the image's own entrypoint (fv-boot; fv-entry on images from before it) and baked
+ * FV_CONFIG run. An image with fv-boot runs that instead of this script (PREFER_FV_BOOT_SH, fv-boot.ts). */
 export const SLS_BOOT = `set -eu
-FV_DRV_POD="\${RUNPOD_POD_ID:-}"
+${PREFER_FV_BOOT_SH}FV_DRV_POD="\${RUNPOD_POD_ID:-}"
 ${DRIVER_CHECK_SH}if [ -d /runpod-volume/weights ] && [ ! -e /workspace/weights ]; then mkdir -p /workspace && ln -s /runpod-volume/weights /workspace/weights; fi
 mkdir -p /fvstate
 ${UPSAMPLER_START_SH}cfg="\${FV_CONFIG:-}"
@@ -68,7 +70,7 @@ export function workerEnv(spec: EndpointSpec, image: string, weights: Record<str
   return { ...e, ...(spec.env || {}) };
 }
 
-// Without a config (and without r2) the image's entrypoint (fv-entry) runs, which starts the upsampler sidecar itself.
+// Without a config (and without r2) the image's entrypoint (fv-boot; fv-entry on older images) runs, which starts the upsampler sidecar itself.
 const bootFields = (spec: EndpointSpec) => {
   const bash = bashBoot(spec);
   return bash ? { dockerEntrypoint: ["bash", "-c", bash], dockerStartCmd: [] as string[] } : spec.config || spec.config_toml ? { dockerEntrypoint: ["/bin/sh", "-c", SLS_BOOT], dockerStartCmd: [] as string[] } : {};
@@ -150,7 +152,7 @@ export function v2CreatePayload(spec: EndpointSpec, image: string, pools: string
     name: endpointName(spec),
     type: lb ? "LOAD_BALANCER" : "QUEUE",
     image,
-    // The image's entrypoint (fv-entry: the weights link) passes these to fv-serve (runpod-endpoint.sh up-lb).
+    // The image's entrypoint (fv-boot, fv-entry on older images: the weights link) passes these to fv-serve (runpod-endpoint.sh up-lb).
     ...(lb && spec.config ? { args: `--config ${spec.config}` } : {}),
     ...(lb ? { ports: ["8000/http"] } : {}),
     disk: spec.container_disk_gb,
@@ -168,8 +170,8 @@ export function v2CreatePayload(spec: EndpointSpec, image: string, pools: string
 }
 /** What a v2-made template gets after create (REST v1 PATCH /templates): the boot of a named config. A queue
  * endpoint's config (a file or inline), and a load balancer's inline config: v2 create has no entrypoint field,
- * and the image's entrypoint (fv-entry) knows FV_CONFIG but not FV_WORKER_TOML_B64. A load balancer's config
- * file rides v2's `args` instead (`--config <path>` to fv-entry). */
+ * and the image's entrypoint (fv-entry, on images from before fv-boot) knows FV_CONFIG but not FV_WORKER_TOML_B64. A load balancer's config
+ * file rides v2's `args` instead (`--config <path>` to the entrypoint). */
 export function v2TemplateBoot(spec: EndpointSpec) {
   const bash = bashBoot(spec);
   if (bash) return { dockerEntrypoint: ["bash", "-c", bash], dockerStartCmd: [] as string[] };

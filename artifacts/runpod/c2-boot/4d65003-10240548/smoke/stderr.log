@@ -1,0 +1,5 @@
+[fv-boot-smoke] 05:48:29 fv-boot fv-boot 0.1.1 --config /etc/fv/runpod-ltx.toml (weights volume at /workspace/weights)
+[fv-boot-smoke] 05:48:31 fv-serve answers /ping (204)
+[fv-boot-smoke] 05:48:37 ready
+[fv-boot-smoke] 05:48:37 job: {"model": "ltx25-distill-sol", "prompt": "a red fox trotting through fresh snow", "seed": 1, "short_edge": 480, "aspect_ratio": "16:9"}
+[fv-boot-smoke] 05:50:25 job fvjob_ced908862b5c4bcf8a7f95460fa4e9d0: succeeded

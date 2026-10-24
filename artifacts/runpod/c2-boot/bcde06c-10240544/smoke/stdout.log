@@ -1,0 +1,51 @@
+{
+  "target": "fv-boot-smoke",
+  "pod": "1b7hdj1l6cwik2",
+  "config": "/etc/fv/runpod-ltx.toml",
+  "weights_source": "volume",
+  "image_variant": "ltx",
+  "fv_boot_failed": null,
+  "why": null,
+  "timings_s": {
+    "first_ping": 2.0,
+    "ready": 122.5,
+    "job_wall": 0.0
+  },
+  "boot_steps_s": {},
+  "boot_markers": [
+    {
+      "at_s": null,
+      "line": "start (image; fv-boot 0.1.1)"
+    },
+    {
+      "at_s": 0.2,
+      "line": "driver 595.91.07 ok"
+    },
+    {
+      "at_s": null,
+      "line": "volume: /workspace/weights (9 trees)"
+    },
+    {
+      "at_s": 0.2,
+      "line": "config ok: /etc/fv/runpod-ltx.toml (--config /etc/fv/runpod-ltx.toml)"
+    },
+    {
+      "at_s": 0.2,
+      "line": "exec /opt/fastvideo-rs/bin/fv-serve --config /etc/fv/runpod-ltx.toml (--config /etc/fv/runpod-ltx.toml); fv-serve 0.1.37"
+    }
+  ],
+  "reports": [],
+  "healthz": {
+    "state": "ready",
+    "loaded": [
+      "ltx25-distill-sol"
+    ],
+    "loading": []
+  },
+  "job": {
+    "status": "submit_failed",
+    "id": null,
+    "model": null,
+    "error": null
+  }
+}

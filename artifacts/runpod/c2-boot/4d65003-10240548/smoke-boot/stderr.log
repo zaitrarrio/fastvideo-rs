@@ -1,0 +1,16 @@
+fv-serve 0.1.37
+git:      b4fd1d98871bcb1f43a67f286ecf9597fcdc8c11
+built:    2026-10-24T01:12:57Z
+build-id: e7c2bb009585d3f7
+profile:  release
+features: cuda,fal,http-client,ltxapi,minimax,openai-videos,reactor,webrtc
+variant:  ltx
+fastvideo-rs serving: FastVideo, MiniMax, fal, LTX and Reactor APIs
+
+Usage: fv-serve [OPTIONS]
+
+Options:
+      --config <CONFIG>  TOML config (docs/serve/design.md §6.1, configs/serve/) [env: FV_CONFIG=/etc/fv/runpod-ltx.toml]
+      --print-config     Print the effective config (secrets redacted) and exit
+  -h, --help             Print help
+  -V, --version          Print version

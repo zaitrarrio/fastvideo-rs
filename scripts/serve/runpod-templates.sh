@@ -52,7 +52,7 @@ rest() {
 }
 
 # payload <variant> <sls|pod> <image> [create] -> template JSON. The image's
-# entrypoint (fv-entry) and baked FV_CONFIG start fv-serve; no start command.
+# entrypoint (fv-boot; fv-entry on older images) and baked FV_CONFIG start fv-serve; no start command.
 # `create` adds the fields the update API does not take (isServerless, category).
 payload() {
   local v="$1" flavour="$2" image="$3" mode="${4:-}"

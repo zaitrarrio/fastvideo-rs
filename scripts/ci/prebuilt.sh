@@ -24,9 +24,12 @@
 #         ok=true|false     every requested set is usable (false: compile)
 #         dir, tag, version, exact=true|false, build_id, source_commit
 #         contexts=<name=path lines>   Docker named build contexts that replace
-#                                      the compile stages (see CONTEXT below)
+#                                      the compile stages (see CONTEXT below;
+#                                      boot-build when a serve set has out/fv-boot)
 #       Fallback (ok=false, a loud ::warning::, the workflow compiles as
 #       before) unless FV_PREBUILT_REQUIRE=1, which fails instead.
+#   prebuilt.sh contexts <dir> <set>...
+#       The contexts lines fetch writes, for sets already in <dir> (tests).
 #   prebuilt.sh run-tests <dir>
 #       Run the gpucheck-tests set (gpucheck-t0's unit tests, compiled on the
 #       pod) from the checkout (or $FV_TESTS_ROOT), each in its crate directory.
@@ -93,11 +96,14 @@ cmd_fetch() {
       fallback "$tag: $s was built with features '$(jq -r --arg s "$s" '.sets[$s].features // ""' "$m")', '$f' requested"
     fi
   done
-  local set contexts=""
-  for set in "$@"; do
-    [[ -n "${CONTEXT[$set]:-}" ]] && contexts+="${CONTEXT[$set]}=$dir/$set"$'\n'
-  done
-  echo "::notice title=Prebuilt tools::$tag ($([[ $exact == true ]] && echo "built from this commit's tools inputs" || echo "older than this commit's tools inputs")) for $*: no cargo compile on this runner"
+  local contexts
+  contexts="$(cmd_contexts "$dir" "$@")"$'\n'
+  local compiles="no cargo compile on this runner"
+  if [[ "$contexts" != *"boot-build="* ]] && [[ " $* " == *" serve-cuda "* || " $* " == *" serve-cpu "* ]]; then
+    echo "::notice title=fv-boot not in $tag::the image's boot-build stage compiles fv-boot (one small crate) until a tools release carries it"
+    compiles="only the boot-build stage compiles (fv-boot)"
+  fi
+  echo "::notice title=Prebuilt tools::$tag ($([[ $exact == true ]] && echo "built from this commit's tools inputs" || echo "older than this commit's tools inputs")) for $*: $compiles"
   {
     echo "ok=true"
     echo "dir=$dir"
@@ -110,6 +116,18 @@ cmd_fetch() {
     printf '%s' "$contexts"
     echo "FV_EOF"
   } >>"$OUT"
+}
+
+# The named build contexts of fetched sets in <dir> (one name=path line each). fv-boot
+# (ADR-0014) rides in the serve sets of releases built after it and then replaces the
+# boot-build stage too; a release from before fv-boot has none, and boot-build compiles it.
+cmd_contexts() {
+  local dir="${1:?dir}" set boot=""; shift
+  for set in "$@"; do
+    [[ -n "${CONTEXT[$set]:-}" ]] && echo "${CONTEXT[$set]}=$dir/$set"
+    if [[ -z "$boot" && ( "$set" == serve-cuda || "$set" == serve-cpu ) && -x "$dir/$set/out/fv-boot" ]]; then boot="$dir/$set"; fi
+  done
+  [[ -z "$boot" ]] || echo "boot-build=$boot"
 }
 
 # Test binaries keep the pod's absolute source paths (file!(), CARGO_MANIFEST_DIR
@@ -149,6 +167,7 @@ cmd_run_tests() {
 
 case "${1:-}" in
   fetch) shift; cmd_fetch "$@" ;;
+  contexts) shift; cmd_contexts "$@" ;;
   run-tests) shift; cmd_run_tests "$@" ;;
   *) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac
