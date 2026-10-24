@@ -158,7 +158,7 @@ ran (pod id, $/hr), result, cost.
   Lockfile adds 17 packages (blake3 1.8.7, schemars 1.2.3, proptest 1.12.0
   and their deps). Open questions in the PR: `seg-dot` and `--`,
   `[defaults]` keys, `verify_lineage` for the model.toml-side checks.
-- 2026-10-24 01:05Z: A2 opened a draft PR (`claude/a2-family-manifests`):
+- 2026-10-24 01:05Z: A2 opened draft PR #147 (`claude/a2-family-manifests`):
   `fastvideo-manifest::family` (layer 2: `FamilyManifest`, `VariantManifest`,
   `FamilySet`, `schemas/family.v1.json`, the `fs` feature for `load_dir`),
   `families/{h3,ltx2,wan}.toml` generated from `catalog()` (18 + 5 + 7 = 30
