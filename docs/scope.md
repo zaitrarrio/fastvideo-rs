@@ -302,12 +302,12 @@ process: the first read is cached).
 | `FASTVIDEO_ATTENTION_BACKEND` | env, then profile | keyword | empty | per call | runtime | `attention_backend` | `SLA_ATTN` / `sla` / `sagesla` / `SAGE_SLA_ATTN` (any case) select sparse-linear attention. |
 | `FASTVIDEO_ATTN_FP8` | env, then profile | text: `0`, `1` / `all`, `dense` or `vsa` (H3 technique adapter) | the recipe's / profile's | per load | H3 | `attention` | FP8 attention ops (opt-in, lossy; H3). |
 | `FASTVIDEO_ATTN_PROBS_BF16` | env, then profile | flag | `1` | once per process | runtime | `activation_precision` | Attention probabilities in bf16 (default on); `0` keeps them f32. |
-| `FASTVIDEO_ATTN_SAGE` | env, then profile | text: `2` / `on` force, `0` / `off` disable, empty = unset (trimmed, any case); anything else is an error | unset | once per process | runtime | `attention_backend` | SageAttention-2 (INT8 QK + FP8 PV) for dense attention; unset leaves the dispatch rule. |
+| `FASTVIDEO_ATTN_SAGE` | env, then profile | text: `2` / `on` force, `0` / `off` disable, empty = unset (trimmed, any case); any other value turns it off with a one-time log line | unset | once per process | runtime | `attention_backend` | SageAttention-2 (INT8 QK + FP8 PV) for dense attention; unset leaves the dispatch rule. |
 | `FASTVIDEO_ATTN_SAGE_MIN_SEQ` | env, then profile | usize | `6144` | once per process | runtime | `attention_backend` | Shortest sequence SageAttention runs on. |
 | `FASTVIDEO_BF16` | env, then profile | flag | `1` | once per process | runtime | `ffn_precision` | cuBLAS tf32/bf16 compute. On unless set to `0`. |
 | `FASTVIDEO_BF16_ACT` | env, then profile | flag: set: a default-on flag | on for H3, LTX-2 and Wan on a GPU, f32 on the CPU | once per process | runtime | `activation_precision` | DiT activations (and residual) as bf16, as the reference runs them. On by default for H3, LTX-2 and Wan on a GPU (Wan's UMT5 and VAE stay f32, FastVideo's fp32 precisions); `0` restores f32, `1` forces bf16 for every model. CPU runs keep f32. FastWan 1.3B 480x832x81 on RTX PRO 6000: denoise 2.50 → 1.96 s, LPIPS 0.107 vs f32 (see [ports/wan.md](ports/wan.md)). |
 | `FASTVIDEO_CACHE` | env | text: a directory (empty = unset) | `$XDG_CACHE_HOME/fastvideo`, else `~/.cache/fastvideo` | per load | LTX-2 | `cache` | Root of the LTX text-conditioning cache (`<root>/ltx2-text`). |
-| `FASTVIDEO_CONV3D` | env, then profile | keyword | `auto` | per call | runtime | `kernel_choice` | 3D convolution kernel (profile `[kernels] conv3d`). |
+| `FASTVIDEO_CONV3D` | env, then profile | keyword | `auto` | once per process | runtime | `kernel_choice` | 3D convolution kernel (profile `[kernels] conv3d`). |
 | `FASTVIDEO_CONV3D_TIMED` | env, then profile | flag | `0` | once per process | runtime | `debug` | Time every 3D convolution and log it. |
 | `FASTVIDEO_CONV_BWD_DATA_NONDETERMINISTIC` | env, then profile | flag | `0` | per call | runtime | `debug` | Allow cuDNN's non-deterministic backward-data convolution algorithms. |
 | `FASTVIDEO_COSMOS3_GEN` | env | text: `auto` / empty, `resident`, `parked` / `park` (trimmed); anything else is an error | `auto` | per load | Cosmos3 | `residency` | Cosmos3 gen tower placement: `auto` parks it when the free memory does not cover it plus the decode headroom. |
@@ -471,7 +471,7 @@ process: the first read is cached).
 | `FASTVIDEO_TF32` | env, then profile | flag | `1` | once per process | runtime | `ffn_precision` | TF32 tensor-core math for f32 GEMMs. |
 | `FASTVIDEO_VAE_CHUNK` | env, then profile | usize: at least 1 | `2` | per call | Wan | `memory` | Latent frames per Wan VAE pass. |
 | `FASTVIDEO_VERIFY_UPLOAD` | env, then profile | flag | `0` | once per process | runtime | `debug` | Read back every staged upload and compare. |
-| `FASTVIDEO_VSA` | env, then profile | flag: the `fastvideo` CLI's VSA-id check reads `1` / `true` (any case, not trimmed) from the environment only | `0` | once per process | Wan | `attention_backend` | Wan block-sparse video attention. |
+| `FASTVIDEO_VSA` | env, then profile | flag: the `fastvideo` CLI's VSA-id check reads `1` / `true` (any case, not trimmed) from the environment only | `0` | once per process | runtime | `attention_backend` | Wan block-sparse video attention. |
 | `FASTVIDEO_VSA_BF16` | env, then profile | flag | `1` | per call | H3 | `activation_precision` | H3 VSA in bf16. |
 | `FASTVIDEO_VSA_FUSED` | env, then profile | flag | `0` | per call | runtime | `kernel_choice` | Fused scalar VSA fine kernel. |
 | `FASTVIDEO_VSA_GROUP` | env, then profile | usize: H3 technique adapter: its own parse | 8 for H3, 32 for Wan | per load | runtime | `attention` | VSA block group size. |
