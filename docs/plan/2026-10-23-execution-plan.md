@@ -109,7 +109,7 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | todo |
-| B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | todo |
+| B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | pr |
 | B6 | `H3Pipeline::load` and `Ltx2Pipeline::load` split into plan, open, place, fuse; dead code (`TensorBackend`, mlx scaffold) retired | engine lifecycle testable on CPU | pod | B1 | todo |
 
 ## 3. Order of execution
@@ -453,3 +453,25 @@ ran (pod id, $/hr), result, cost.
   `c898d2c4` changed only LTX's `--guidance-2` routing (same value, not
   passed by the cells) and test-only `Request::validate`; the evidence
   stands for it. Three pods, about 17 GPU-minutes at $2.49/hr, deleted.
+- 2026-10-24 06:10Z: B5 opened as a draft PR (`claude/b5-sdpa`, ADR-0015):
+  `rt::sdpa::sdpa(q, k, v, &Plan)` is the one dense-attention entry (every
+  family; nn's six SDPA functions, the ops wrapper, H3's FP8 chooser, H3
+  VAE's kernel parse and FLUX.2's `text_sdpa` copy removed) and
+  `rt::sdpa_rule` the one chooser (`dense_route`, `mma_kernel`, the masked
+  routes, over a `Probe`). Identity: `sdpa_rule_identity.rs` transcribes the
+  merge-base choosers; identical kernel / argument / effectful-probe traces
+  over 19 200 fused-kernel picks and 2.8 M entry cases (every setting, device
+  fact, production shape, output type and set of declining kernels).
+  Retired: `FASTVIDEO_SDPA=host|sparse` (host-only, already refused on a GPU
+  run); the sparse routes' host oracles and the composed SDPA stay. Features
+  `fastvideo-cudarc/nvfp4-gemm` and `oxide`, off by default (no served config
+  sets them), on in `fastvideo-gpucheck/cuda`; the serve binaries no longer
+  embed the oxide cubins. On build pod `pzocv1keasg3xn`: fmt, workspace
+  clippy `-D warnings` green; `-p fastvideo-cudarc -p fastvideo-models -p
+  fastvideo-gpucheck` 1220 passed (base 1211; +11 new, 2 removed with the
+  host twin); workspace lib 1891 passed; `scripts/serve/check.sh` 1004
+  passed; `--features cuda` clippy of cudarc (features off, `nvfp4-gemm`,
+  `oxide`), engine-service and gpucheck: the base's warnings and no new one
+  (cudarc 62 = 62). GPU pending (coordinator): `kernels` tier
+  (`no_host_fallback` now runs every `Plan` on device operands) and the
+  `techniques` byte-identity cells for H3 and LTX.

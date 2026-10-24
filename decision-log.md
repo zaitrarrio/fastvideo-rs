@@ -1082,3 +1082,33 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: 0013
 - Verification: `request::tests` (tasks, conflicts, canvas, frames, seconds, fps, refs, knobs)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-b5-sdpa-entry
+- Trigger: plan B5: one `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser, byte-identical dispatch
+- Options: (a) `Plan` = the resolved kernel, built by each caller from the settings and the device; (b) `Plan` = what the call site computes (dense / masked / FP8-first / block-causal / VDN window / KV window / composed), the kernel chosen inside the entry by `sdpa_rule` per query shard, over a `Probe` of the settings and the device
+- Decision: (b); `sdpa_rule::dense_route` / `mma_kernel` and the masked-route predicates are the only choosers, the kernels keep declining what they cannot run and `run_route` falls through as the old `if let Some` chain did; the H3 ViT decoder keeps launching the fused kernel (the rule's pick) in its fused chain
+- Reason: the kernel depends on the shard's query length and on the calling thread's device (sequence-parallel shards run on other threads), so it cannot be fixed at the call site; the effectful probes (attn_dc load, cuDNN plan build) stay lazy, in the old order
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: 0015
+- Verification: `rt::sdpa_rule::identity` (the merge-base choosers transcribed; identical kernel / argument / probe traces over every setting, device fact, shape, output type and set of declining kernels)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-b5-host-twins
+- Trigger: plan B5: retire the host attention twins once `no_host_fallback` proves them unreachable on CUDA
+- Options: retire every host attention path; retire only the host-only dense backends; keep all
+- Decision: retire `flash_style_sdpa_host` (`FASTVIDEO_SDPA=host`) and `block_sparse_sdpa` (`FASTVIDEO_SDPA=sparse`), refused with a named replacement; keep the composed SDPA (CPU / tiny and masked path) and the sparse routes' host oracles (`vsa_attention_host`, `h3::vsa::attention_host`, `sla_attention_host`, Sol / PISA), which gpucheck and the CPU tests judge the kernels against and which already error with a live device
+- Reason: both retired backends were host-only (refused with a live device), duplicated the composed reference on a CPU run, and no config sets them; the oracles are needed
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: 0015
+- Verification: `identity::only_unmasked_host_and_sparse_calls_are_refused`; GPU: `fv-gpucheck kernels` group `no_host_fallback` (every `Plan` on device operands, zero host fallbacks)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-b5-nvfp4-oxide-features
+- Trigger: plan B5: `nvfp4_gemm.rs` and the oxide AOT path behind features
+- Options: features on by default; off by default with every build that compiles the code today turning them on; off by default, on only where the code is measured
+- Decision: `fastvideo-cudarc/nvfp4-gemm` and `fastvideo-cudarc/oxide` (implies it), off by default; `fastvideo-gpucheck/cuda` enables `oxide`, the serve binaries do not
+- Reason: no served config, profile or family turns `FASTVIDEO_NVFP4_OXIDE_GEMM` or `[kernels] nvfp4_gemm` on; fv-gpucheck's nvfp4 groups and its nvrtc report (checked by the release pod and the gpucheck image workflow) need them, so every fv-gpucheck build keeps compiling and embedding them and no CI matrix changes; serve without the cubins behaves as any build without them did (the in-tree W4A4 kernel)
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: 0015
+- Verification: build pod: workspace clippy (features off), `-p fastvideo-cudarc --features cuda`, `cuda,nvfp4-gemm`, `cuda,oxide`, `-p fastvideo-gpucheck --features cuda`
