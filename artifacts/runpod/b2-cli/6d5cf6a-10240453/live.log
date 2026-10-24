@@ -1,0 +1,8 @@
+[04:54:17] [b2-cli] fetched b2-base: 3c9c9145ff0ad0bb 72648456 bytes
+[04:54:20] [b2-cli] fetched b2-head: 5c55939d805a91f9 72804520 bytes
+[04:54:20] [b2-cli] ▶ h3-4step-base
+[04:57:52] [b2-cli] h3-4step-base exit=0 files=125 212s
+[04:57:52] [b2-cli] ▶ h3-4step-head
+[04:59:51] [b2-cli] h3-4step-head exit=0 files=125 119s
+[04:59:51] [b2-cli] compare h3-4step: identical
+[04:59:51] [b2-cli] all cells done

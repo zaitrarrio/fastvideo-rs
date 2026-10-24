@@ -438,3 +438,18 @@ ran (pod id, $/hr), result, cost.
   `scripts/serve/check.sh` 1004 passed. GPU cells pending (coordinator):
   CLI A/B frame identity for H3 (`h3-base` + LoRA), LTX-2.5 (`ltx25`), Wan
   (R2 `fastwan21-1.3b`, or `--tiny --device cuda`).
+- 2026-10-24 05:00Z: B2 GPU gate (coordinator): CLI A/B frame identity,
+  release CUDA `fastvideo` built on build pod `pzocv1keasg3xn` at main
+  `6d5cf6a6` (base) and the PR at `9c56b15e` (head), the same command run
+  with both binaries on one RTX PRO 6000 pod (EU-RO-1, volume `bz0ofkfx45`,
+  runtime image `sha-6d5cf6a` for the CUDA libraries only), sha256 of every
+  output file compared. `ltx25` (LTX-2.5 T2V, seed 7): identical, 122
+  files; `wan-tiny-cuda`: identical, 2 files (pod `o6u0poa0uwoj38`);
+  `h3-4step` (FastH3 4-step dense LoRA on `h3-base`, 5 s, seed 7):
+  identical, 125 files (pod `txi9ybyb3uj24k`; two earlier H3 attempts on
+  `h6o3z35thydpey` and the first pod gave the LoRA directory instead of its
+  file, exit 2 on both arms, a script error). Evidence:
+  `artifacts/runpod/b2-cli/6d5cf6a-1024{0441,0453}/`. The review follow-up
+  `c898d2c4` changed only LTX's `--guidance-2` routing (same value, not
+  passed by the cells) and test-only `Request::validate`; the evidence
+  stands for it. Three pods, about 17 GPU-minutes at $2.49/hr, deleted.
