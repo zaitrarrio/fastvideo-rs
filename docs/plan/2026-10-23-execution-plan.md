@@ -109,7 +109,7 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | todo |
-| B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | pr |
+| B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | pr (#161) |
 | B6 | `H3Pipeline::load` and `Ltx2Pipeline::load` split into plan, open, place, fuse; dead code (`TensorBackend`, mlx scaffold) retired | engine lifecycle testable on CPU | pod | B1 | todo |
 
 ## 3. Order of execution
@@ -453,7 +453,7 @@ ran (pod id, $/hr), result, cost.
   `c898d2c4` changed only LTX's `--guidance-2` routing (same value, not
   passed by the cells) and test-only `Request::validate`; the evidence
   stands for it. Three pods, about 17 GPU-minutes at $2.49/hr, deleted.
-- 2026-10-24 06:10Z: B5 opened as a draft PR (`claude/b5-sdpa`, ADR-0015):
+- 2026-10-24 06:10Z: B5 opened as draft PR #161 (`claude/b5-sdpa`, ADR-0015):
   `rt::sdpa::sdpa(q, k, v, &Plan)` is the one dense-attention entry (every
   family; nn's six SDPA functions, the ops wrapper, H3's FP8 chooser, H3
   VAE's kernel parse and FLUX.2's `text_sdpa` copy removed) and
