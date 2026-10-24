@@ -141,8 +141,10 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends cmake \
  && rm -rf /var/lib/apt/lists/*
 COPY . /src
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/target \
+# Cache mounts of its own: BuildKit runs this stage beside `build`, and two cargos unpacking into one shared
+# registry mount race ("failed to unpack package … .cargo-ok: File exists", run 40088147003).
+RUN --mount=type=cache,id=fv-lab-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=fv-lab-target,target=/target \
     cargo build --release --locked -p fastvideo-lab --features cli --bin fv-lab \
  && mkdir -p /out \
  && cp /target/release/fv-lab /out/fv-lab
