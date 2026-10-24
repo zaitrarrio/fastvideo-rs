@@ -466,6 +466,14 @@ impl CapabilityTable {
 mod tests {
     use super::*;
 
+    /// The engine's LTX rates are the LTX product's wire set
+    /// (`fastvideo_protocol::params::rules::ltx::FPS`): a capability that
+    /// equals the contract by fact, kept separately (plan E2 census).
+    #[test]
+    fn ltx_rates_are_the_wire_set() {
+        assert_eq!(LTX_FPS, fastvideo_protocol::params::rules::ltx::FPS);
+    }
+
     fn rec(name: &str) -> Recipe {
         Recipe {
             name: name.into(),

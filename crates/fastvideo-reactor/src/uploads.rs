@@ -24,10 +24,12 @@ use crate::session::Refusal;
 
 /// How long a command waits for an upload's bytes.
 pub const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
-/// Largest accepted upload.
-pub const MAX_UPLOAD_BYTES: u64 = 64 * 1024 * 1024;
-/// Uploads a session may hold.
-pub const MAX_UPLOADS: usize = 64;
+use fastvideo_protocol::params::rules::reactor::UPLOAD_ID_MAX_CHARS;
+/// Largest accepted upload, and the uploads a session may hold
+/// (`fastvideo_protocol::params::rules::reactor`).
+pub use fastvideo_protocol::params::rules::reactor::{
+    UPLOADS_MAX as MAX_UPLOADS, UPLOAD_MAX_BYTES as MAX_UPLOAD_BYTES,
+};
 
 /// A completed upload.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,7 +59,7 @@ pub struct Uploads {
 
 fn valid_id(id: &str) -> bool {
     !id.is_empty()
-        && id.len() <= 64
+        && id.len() <= UPLOAD_ID_MAX_CHARS
         && id
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
@@ -92,7 +94,12 @@ impl Uploads {
         }
         let id = match id {
             Some(i) if valid_id(i) => i.to_owned(),
-            Some(_) => return Err(Refusal::new(422, "upload_id: 1-64 of [A-Za-z0-9_-]")),
+            Some(_) => {
+                return Err(Refusal::new(
+                    422,
+                    format!("upload_id: 1-{UPLOAD_ID_MAX_CHARS} of [A-Za-z0-9_-]"),
+                ))
+            }
             None => uuid::Uuid::new_v4().simple().to_string(),
         };
         let mut m = self.lock();

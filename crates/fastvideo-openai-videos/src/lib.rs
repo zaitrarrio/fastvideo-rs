@@ -8,6 +8,7 @@
 //! - [`fastwan`]: the FastWan Video API exactly as `fastwan_link.py` calls
 //!   it (`prompt_id`, `processing`, string `error`, `/health.model_loaded`).
 //! - [`error`]: the OpenAI and FastAPI error envelopes.
+//! - [`params`]: the `ParamSpec`s of both APIs (plan E2).
 //!
 //! Mount with [`router`] (both APIs) and `.with_state(ctx)`. `GET /` and
 //! `GET /health` belong to the binary (design §9); [`fastwan::service_routes`]
@@ -24,6 +25,7 @@ use fastvideo_serve_kit::{IngestPolicy, ServeCtx};
 pub mod error;
 pub mod fastwan;
 pub mod models;
+pub mod params;
 pub mod videos;
 
 pub use fastwan::{FastWanApi, FastWanGenerate, FastWanSubmit, FastWanView};

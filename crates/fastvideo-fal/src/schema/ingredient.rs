@@ -32,16 +32,22 @@ use serde_json::Value;
 use super::ltx::LTX_PROMPT_MAX_CHARS;
 use super::{bad, type_name, Fields};
 
-pub const INGREDIENT_FRAMES_MIN: i64 = 9;
-pub const INGREDIENT_FRAMES_MAX: i64 = 481;
-pub const INGREDIENT_FRAMES_DEFAULT: i64 = 121;
-pub const INGREDIENT_FPS_MIN: i64 = 1;
-pub const INGREDIENT_FPS_MAX: i64 = 60;
-pub const INGREDIENT_FPS_DEFAULT: i64 = 24;
+use fastvideo_protocol::params::rules::ltx as rules;
+
+pub const INGREDIENT_FRAMES_MIN: i64 = rules::INGREDIENT_FRAMES.range.min;
+pub const INGREDIENT_FRAMES_MAX: i64 = rules::INGREDIENT_FRAMES.range.max;
+pub const INGREDIENT_FRAMES_DEFAULT: i64 = rules::INGREDIENT_FRAMES.default;
+pub const INGREDIENT_FPS_MIN: i64 = rules::INGREDIENT_FPS.range.min;
+pub const INGREDIENT_FPS_MAX: i64 = rules::INGREDIENT_FPS.range.max;
+pub const INGREDIENT_FPS_DEFAULT: i64 = rules::INGREDIENT_FPS.default;
 /// `(min, max, default)` of `ingredient_strength` and `reference_strength`.
-pub const INGREDIENT_STRENGTH: (f64, f64, f64) = (0.0, 2.0, 1.0);
+pub const INGREDIENT_STRENGTH: (f64, f64, f64) = (
+    rules::INGREDIENT_STRENGTH.range.min,
+    rules::INGREDIENT_STRENGTH.range.max,
+    rules::INGREDIENT_STRENGTH.default,
+);
 /// fal's default output size (768x448 first stage + 2x refine).
-pub const INGREDIENT_CANVAS: (u32, u32) = (1536, 896);
+pub use fastvideo_protocol::params::rules::ltx::INGREDIENT_CANVAS;
 
 /// A validated `ingredient` input.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

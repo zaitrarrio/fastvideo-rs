@@ -450,12 +450,7 @@ pub struct RefLimits {
 impl RefLimits {
     /// H3 ref2va: 9 images / 3 videos / 3 audio / 12 total.
     pub fn h3() -> Self {
-        Self {
-            images: 9,
-            videos: 3,
-            audio: 3,
-            total: 12,
-        }
+        crate::params::rules::h3::REFERENCES
     }
     /// LTX-2.5 reference-to-video (the Ingredients IC-LoRA): one reference
     /// image, the reference sheet (`ic_lora.py` takes one reference per

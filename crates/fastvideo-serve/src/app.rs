@@ -1129,6 +1129,10 @@ pub fn assemble(
     let mcfg = mount_cfg(config);
     let mut kit: Router<ServeCtx> = ctx.routes();
     if config.protocols.native {
+        // `GET /fv/v1/params`: every mounted endpoint's ParamSpec (plan E2),
+        // with native auth: mounted with the native API, like
+        // `/fv/v1/capabilities`.
+        kit = kit.merge(crate::params::routes(mcfg.clone()));
         kit = kit.merge(native::routes(
             gate.clone(),
             mcfg.body_max,

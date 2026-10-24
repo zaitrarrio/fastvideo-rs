@@ -38,6 +38,11 @@
 //! (1 to 20 s, default as much as fits); context plus extension are at most
 //! 505 frames (the LTX API's limit).
 //!
+//! The bodies are typed ([`crate::body`]): each endpoint reads its JSON
+//! into its OpenAPI type, field by field in the order the errors are
+//! reported, then builds the request from the typed value. Every limit is
+//! a surface rule of `fastvideo_protocol::params::rules::ltx`.
+//!
 //! Media URIs must be `https://…`, `data:…;base64,…` or `ltx://uploads/<token>`
 //! (ltx §2.0). `image_uri` / `last_frame_uri` on text-to-video are refused
 //! rather than ignored. Other unknown fields are ignored (the OAS does not
@@ -45,6 +50,7 @@
 
 use std::sync::Arc;
 
+use fastvideo_protocol::params::rules::ltx as rules;
 use fastvideo_protocol::{
     Anchor, ApiError, AudioInput, AudioOut, AudioRole, CanvasSpec, EditOp, ExpansionMode, ExtendAt,
     GapId, GenerationRequest, HttpReply, Job, Keyframe, Length, MediaRef, NormalizeCtx,
@@ -52,23 +58,22 @@ use fastvideo_protocol::{
 };
 use serde_json::{Map, Value};
 
+use crate::body::{
+    AudioToVideoRequest, EditVideoRequest, ExtendVideoRequest, Fields, ImageToVideoRequest,
+    TextToVideoRequest,
+};
 use crate::error::Api;
-use crate::models::{self, LtxModels, ResTier, Resolution};
+use crate::models::{self, LtxModel, LtxModels, ResTier, Resolution};
 
-/// Longest prompt (OAS `maxLength`).
-pub const PROMPT_MAX_CHARS: usize = 5000;
-
-/// `camera_motion` values (OAS enum, ltx §2.0).
-pub const CAMERA_MOTIONS: [&str; 8] = [
-    "dolly_in",
-    "dolly_out",
-    "dolly_left",
-    "dolly_right",
-    "jib_up",
-    "jib_down",
-    "static",
-    "focus_shift",
-];
+/// `camera_motion` values (OAS enum, ltx §2.0; `rules::ltx::CAMERA_MOTIONS`).
+pub use fastvideo_protocol::params::rules::ltx::CAMERA_MOTIONS;
+/// Longest prompt (OAS `maxLength`; `rules::ltx::PROMPT_MAX_CHARS`).
+pub use fastvideo_protocol::params::rules::ltx::PROMPT_MAX_CHARS;
+/// Retake `resolution` values (OAS enum).
+pub use fastvideo_protocol::params::rules::ltx::RETAKE_RESOLUTIONS;
+/// Input audio ceilings (OAS `audio_uri`): 20 s at 720p/1080p, 10 s at
+/// 1440p/4K, and 10 s at every size on `ltx-2-5-pro`.
+pub use fastvideo_protocol::params::rules::ltx::{A2V_MAX_S_LONG, A2V_MAX_S_SHORT};
 
 /// The generation endpoints we serve.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -116,7 +121,8 @@ impl Endpoint {
 }
 
 /// One submit endpoint on one surface. `Body` is raw JSON so validation
-/// messages follow the LTX wording.
+/// messages follow the LTX wording; [`normalize`] reads it into the
+/// endpoint's typed body ([`crate::body`]).
 #[derive(Clone, Debug)]
 pub struct Submit {
     pub endpoint: Endpoint,
@@ -152,46 +158,6 @@ fn invalid(param: &str, msg: impl Into<String>) -> ApiError {
     ApiError::invalid_param(param, msg)
 }
 
-/// A present, non-null field.
-fn field<'a>(o: &'a Map<String, Value>, k: &str) -> Option<&'a Value> {
-    o.get(k).filter(|v| !v.is_null())
-}
-
-fn req_str<'a>(o: &'a Map<String, Value>, k: &str) -> Result<&'a str, ApiError> {
-    match field(o, k) {
-        None => Err(invalid(k, format!("{k} is required"))),
-        Some(Value::String(s)) => Ok(s),
-        Some(_) => Err(invalid(k, format!("{k} must be a string"))),
-    }
-}
-
-fn opt_str<'a>(o: &'a Map<String, Value>, k: &str) -> Result<Option<&'a str>, ApiError> {
-    match field(o, k) {
-        None => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s)),
-        Some(_) => Err(invalid(k, format!("{k} must be a string"))),
-    }
-}
-
-/// An integer (integral floats such as `8.0` accepted).
-fn as_int(v: &Value) -> Option<u64> {
-    v.as_u64().or_else(|| {
-        v.as_f64()
-            .filter(|f| f.is_finite() && *f >= 0.0 && f.fract() == 0.0 && *f <= u32::MAX as f64)
-            .map(|f| f as u64)
-    })
-}
-
-fn int_field(o: &Map<String, Value>, k: &str) -> Result<Option<u32>, ApiError> {
-    match field(o, k) {
-        None => Ok(None),
-        Some(v) => as_int(v)
-            .and_then(|n| u32::try_from(n).ok())
-            .map(Some)
-            .ok_or_else(|| invalid(k, format!("{k} must be an integer"))),
-    }
-}
-
 /// Classifies a media URI per ltx §2.0.
 pub fn media_uri(s: &str, param: &str) -> Result<MediaRef, ApiError> {
     let t = s.trim();
@@ -214,68 +180,19 @@ pub fn media_uri(s: &str, param: &str) -> Result<MediaRef, ApiError> {
     Err(bad())
 }
 
-/// Validates a request body for `endpoint`.
-pub fn normalize(
-    endpoint: Endpoint,
-    api: Api,
-    models: &LtxModels,
-    body: &Value,
-) -> Result<GenerationRequest, ApiError> {
-    let o = body
-        .as_object()
-        .ok_or_else(|| ApiError::invalid("request body must be a JSON object"))?;
-    match endpoint {
-        Endpoint::AudioToVideo => return normalize_a2v(api, models, o),
-        Endpoint::Retake => return normalize_retake(api, models, o),
-        Endpoint::Extend => return normalize_extend(api, models, o),
-        _ => {}
-    }
-
-    let prompt = req_str(o, "prompt")?;
+fn check_prompt(prompt: &str) -> Result<(), ApiError> {
     if prompt.chars().count() > PROMPT_MAX_CHARS {
         return Err(invalid(
             "prompt",
             format!("prompt must be at most {PROMPT_MAX_CHARS} characters"),
         ));
     }
-    let model_id = req_str(o, "model")?;
-    let model = models.lookup(model_id)?;
-    let res = Resolution::parse(req_str(o, "resolution")?)?;
+    Ok(())
+}
 
-    // `duration` must be present; `null` asks for automatic duration.
-    let duration = match o.get("duration") {
-        None => return Err(invalid("duration", "duration is required")),
-        Some(Value::Null) => None,
-        Some(v) => Some(
-            as_int(v)
-                .and_then(|n| u32::try_from(n).ok())
-                .ok_or_else(|| {
-                    invalid("duration", "duration must be an integer number of seconds")
-                })?,
-        ),
-    };
-    let fps = int_field(o, "fps")?.unwrap_or(models::DEFAULT_FPS);
-    models::check_fps(fps)?;
-    if let Some(d) = duration {
-        models::check_duration(model_id, model, res, fps, d)?;
-    } else if !model.auto_duration {
-        return Err(invalid(
-            "duration",
-            format!("duration must be an integer for {model_id}; automatic duration (null) is not available for this model"),
-        ));
-    }
-
-    let generate_audio = match field(o, "generate_audio") {
-        None => true,
-        Some(Value::Bool(b)) => *b,
-        Some(_) => {
-            return Err(invalid(
-                "generate_audio",
-                "generate_audio must be a boolean",
-            ))
-        }
-    };
-    if let Some(cm) = opt_str(o, "camera_motion")? {
+/// `camera_motion`: a listed value is an engine gap; another is refused.
+fn camera_motion(f: &Fields) -> Result<Option<String>, ApiError> {
+    if let Some(cm) = f.opt_str("camera_motion")? {
         if !CAMERA_MOTIONS.contains(&cm) {
             return Err(invalid(
                 "camera_motion",
@@ -287,56 +204,152 @@ pub fn normalize(
         }
         return Err(ApiError::unsupported(GapId::LtxCameraMotion).with_param("camera_motion"));
     }
+    Ok(None)
+}
 
-    let mut keyframes = Vec::new();
-    let task = match endpoint {
+/// Validates a request body for `endpoint`.
+pub fn normalize(
+    endpoint: Endpoint,
+    api: Api,
+    models: &LtxModels,
+    body: &Value,
+) -> Result<GenerationRequest, ApiError> {
+    let o = body
+        .as_object()
+        .ok_or_else(|| ApiError::invalid("request body must be a JSON object"))?;
+    match endpoint {
+        Endpoint::AudioToVideo => normalize_a2v(api, models, o),
+        Endpoint::Retake => normalize_retake(api, models, o),
+        Endpoint::Extend => normalize_extend(api, models, o),
         Endpoint::TextToVideo => {
-            for k in ["image_uri", "last_frame_uri"] {
-                if field(o, k).is_some() {
-                    return Err(invalid(
-                        k,
-                        format!("{k} is not accepted by text-to-video; use image-to-video"),
-                    ));
-                }
-            }
-            Task::T2V
-        }
-        Endpoint::AudioToVideo | Endpoint::Retake | Endpoint::Extend => {
-            unreachable!("normalized above")
+            let (b, m) = read_t2v(o, models, true)?;
+            t2v_request(api, &b, m, Task::T2V, Vec::new())
         }
         Endpoint::ImageToVideo => {
-            let first = media_uri(req_str(o, "image_uri")?, "image_uri")?;
-            keyframes.push(Keyframe {
-                at: Anchor::First,
-                image: first,
-            });
-            match opt_str(o, "last_frame_uri")? {
-                None => Task::I2V,
-                Some(last) => {
-                    if duration.is_none() {
-                        return Err(invalid(
-                            "duration",
-                            "automatic duration (null) cannot be combined with last_frame_uri",
-                        ));
-                    }
-                    keyframes.push(Keyframe {
-                        at: Anchor::Last,
-                        image: media_uri(last, "last_frame_uri")?,
-                    });
-                    Task::Keyframes
-                }
+            let (b, m) = read_i2v(o, models)?;
+            i2v_request(api, &b, m)
+        }
+    }
+}
+
+/// The fields text- and image-to-video share, in the LTX API's order:
+/// `prompt`, `model`, `resolution`, `duration`, `fps` (and the matrix),
+/// `generate_audio`, `camera_motion`. `t2v`: the image fields are refused.
+fn read_t2v<'m>(
+    o: &Map<String, Value>,
+    models: &'m LtxModels,
+    t2v: bool,
+) -> Result<(TextToVideoRequest, &'m LtxModel), ApiError> {
+    let f = Fields(o);
+    let prompt = f.req_str("prompt")?;
+    check_prompt(prompt)?;
+    let model_id = f.req_str("model")?;
+    let model = models.lookup(model_id)?;
+    let resolution = f.req_str("resolution")?;
+    let res = Resolution::parse(resolution)?;
+
+    // `duration` must be present; `null` asks for automatic duration.
+    let duration = match f.raw("duration") {
+        None => return Err(invalid("duration", "duration is required")),
+        Some(Value::Null) => None,
+        Some(v) => Some(
+            crate::body::as_int(v)
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| {
+                    invalid("duration", "duration must be an integer number of seconds")
+                })?,
+        ),
+    };
+    let fps = f.int("fps")?;
+    models::check_fps(fps.unwrap_or(rules::API_DEFAULT_FPS))?;
+    if let Some(d) = duration {
+        models::check_duration(
+            model_id,
+            model,
+            res,
+            fps.unwrap_or(rules::API_DEFAULT_FPS),
+            d,
+        )?;
+    } else if !model.auto_duration {
+        return Err(invalid(
+            "duration",
+            format!("duration must be an integer for {model_id}; automatic duration (null) is not available for this model"),
+        ));
+    }
+    let generate_audio = f.bool("generate_audio")?;
+    let camera_motion = camera_motion(&f)?;
+    if t2v {
+        for k in ["image_uri", "last_frame_uri"] {
+            if f.get(k).is_some() {
+                return Err(invalid(
+                    k,
+                    format!("{k} is not accepted by text-to-video; use image-to-video"),
+                ));
             }
         }
-    };
+    }
+    Ok((
+        TextToVideoRequest {
+            prompt: prompt.to_owned(),
+            model: model_id.to_owned(),
+            duration,
+            resolution: resolution.to_owned(),
+            fps,
+            generate_audio,
+            camera_motion,
+            enhance_prompt: f.lenient_bool("enhance_prompt"),
+        },
+        model,
+    ))
+}
 
-    let mut req = GenerationRequest::text(api.protocol(), model.target.engine_name(), prompt);
+/// `ImageToVideoRequest`: the shared fields, then `image_uri` and
+/// `last_frame_uri`.
+fn read_i2v<'m>(
+    o: &Map<String, Value>,
+    models: &'m LtxModels,
+) -> Result<(ImageToVideoRequest, &'m LtxModel), ApiError> {
+    let (base, model) = read_t2v(o, models, false)?;
+    let f = Fields(o);
+    let image_uri = f.req_str("image_uri")?;
+    media_uri(image_uri, "image_uri")?;
+    let last_frame_uri = f.opt_str("last_frame_uri")?;
+    if let Some(last) = last_frame_uri {
+        if base.duration.is_none() {
+            return Err(invalid(
+                "duration",
+                "automatic duration (null) cannot be combined with last_frame_uri",
+            ));
+        }
+        media_uri(last, "last_frame_uri")?;
+    }
+    Ok((
+        ImageToVideoRequest {
+            image_uri: image_uri.to_owned(),
+            last_frame_uri: last_frame_uri.map(str::to_owned),
+            base,
+        },
+        model,
+    ))
+}
+
+fn t2v_request(
+    api: Api,
+    b: &TextToVideoRequest,
+    model: &LtxModel,
+    task: Task,
+    keyframes: Vec<Keyframe>,
+) -> Result<GenerationRequest, ApiError> {
+    let res = Resolution::parse(&b.resolution)?;
+    let mut req =
+        GenerationRequest::text(api.protocol(), model.target.engine_name(), b.prompt.clone());
     req.task = task;
     req.canvas = CanvasSpec::Exact {
         width: res.width,
         height: res.height,
     };
     req.timing = TimingSpec {
-        length: match duration {
+        length: match b.duration {
             // The matrix's longest clips (20 s at 25 fps, 10 s at 50 fps)
             // are past the engine's 481-frame grid: they run at its longest.
             Some(d) => Length::Seconds {
@@ -345,14 +358,36 @@ pub fn normalize(
             },
             None => Length::Auto,
         },
-        fps: Some(fps),
+        fps: Some(b.fps.unwrap_or(rules::API_DEFAULT_FPS)),
     };
     req.keyframes = keyframes;
-    if !generate_audio {
+    if b.generate_audio == Some(false) {
         req.audio_out = AudioOut::Silent;
     }
-    req.prompt_expansion = Some(enhance_prompt(o));
+    req.prompt_expansion = Some(enhance_prompt(b.enhance_prompt));
     Ok(req)
+}
+
+fn i2v_request(
+    api: Api,
+    b: &ImageToVideoRequest,
+    model: &LtxModel,
+) -> Result<GenerationRequest, ApiError> {
+    let mut keyframes = vec![Keyframe {
+        at: Anchor::First,
+        image: media_uri(&b.image_uri, "image_uri")?,
+    }];
+    let task = match &b.last_frame_uri {
+        None => Task::I2V,
+        Some(last) => {
+            keyframes.push(Keyframe {
+                at: Anchor::Last,
+                image: media_uri(last, "last_frame_uri")?,
+            });
+            Task::Keyframes
+        }
+    };
+    t2v_request(api, &b.base, model, task, keyframes)
 }
 
 /// `enhance_prompt` (ours, named after the LTX CLI's `--enhance-prompt`;
@@ -361,8 +396,8 @@ pub fn normalize(
 /// default (on) applies only with `[upsampler] default_on`
 /// (docs/serve/prompt-upsampling.md). A non-boolean is ignored, like any
 /// unknown field.
-fn enhance_prompt(o: &Map<String, Value>) -> PromptExpansion {
-    match field(o, "enhance_prompt").and_then(Value::as_bool) {
+fn enhance_prompt(v: Option<bool>) -> PromptExpansion {
+    match v {
         Some(on) => PromptExpansion::explicit(
             if on {
                 ExpansionMode::Balanced
@@ -377,26 +412,6 @@ fn enhance_prompt(o: &Map<String, Value>) -> PromptExpansion {
 
 /// The A2V default model (OAS: `AudioToVideoRequest.model` defaults to it).
 pub const A2V_DEFAULT_MODEL: &str = "ltx-2-3-pro";
-/// Input audio ceilings (OAS `audio_uri`): 20 s at 720p/1080p, 10 s at
-/// 1440p/4K, and 10 s at every size on `ltx-2-5-pro`.
-pub const A2V_MAX_S_LONG: u32 = 20;
-pub const A2V_MAX_S_SHORT: u32 = 10;
-
-fn camera_motion(o: &Map<String, Value>) -> Result<(), ApiError> {
-    if let Some(cm) = opt_str(o, "camera_motion")? {
-        if !CAMERA_MOTIONS.contains(&cm) {
-            return Err(invalid(
-                "camera_motion",
-                format!(
-                    "camera_motion must be one of: {}",
-                    CAMERA_MOTIONS.join(", ")
-                ),
-            ));
-        }
-        return Err(ApiError::unsupported(GapId::LtxCameraMotion).with_param("camera_motion"));
-    }
-    Ok(())
-}
 
 /// `AudioToVideoRequest` (ltx §2.5) → an `A2V` request (see the module docs).
 pub fn normalize_a2v(
@@ -404,52 +419,87 @@ pub fn normalize_a2v(
     models: &LtxModels,
     o: &Map<String, Value>,
 ) -> Result<GenerationRequest, ApiError> {
-    let audio = media_uri(req_str(o, "audio_uri")?, "audio_uri")?;
-    let image = opt_str(o, "image_uri")?
-        .map(|s| media_uri(s, "image_uri"))
-        .transpose()?;
-    let last = opt_str(o, "last_frame_uri")?
-        .map(|s| media_uri(s, "last_frame_uri"))
-        .transpose()?;
-    if last.is_some() && image.is_none() {
+    let (b, model) = read_a2v(models, o)?;
+    a2v_request(api, &b, model)
+}
+
+fn read_a2v<'m>(
+    models: &'m LtxModels,
+    o: &Map<String, Value>,
+) -> Result<(AudioToVideoRequest, &'m LtxModel), ApiError> {
+    let f = Fields(o);
+    let audio_uri = f.req_str("audio_uri")?;
+    media_uri(audio_uri, "audio_uri")?;
+    let image_uri = f.opt_str("image_uri")?;
+    if let Some(s) = image_uri {
+        media_uri(s, "image_uri")?;
+    }
+    let last_frame_uri = f.opt_str("last_frame_uri")?;
+    if let Some(s) = last_frame_uri {
+        media_uri(s, "last_frame_uri")?;
+    }
+    if last_frame_uri.is_some() && image_uri.is_none() {
         return Err(invalid(
             "last_frame_uri",
             "last_frame_uri requires image_uri",
         ));
     }
-    let prompt = opt_str(o, "prompt")?.unwrap_or_default();
-    if prompt.trim().is_empty() && image.is_none() {
+    let prompt = f.opt_str("prompt")?;
+    let p = prompt.unwrap_or_default();
+    if p.trim().is_empty() && image_uri.is_none() {
         return Err(invalid(
             "prompt",
             "prompt is required if image_uri is not provided",
         ));
     }
-    if prompt.chars().count() > PROMPT_MAX_CHARS {
-        return Err(invalid(
-            "prompt",
-            format!("prompt must be at most {PROMPT_MAX_CHARS} characters"),
-        ));
-    }
-    let model_id = opt_str(o, "model")?.unwrap_or(A2V_DEFAULT_MODEL);
-    if model_id == "ltx-2-3-fast" {
+    check_prompt(p)?;
+    let model_id = f.opt_str("model")?;
+    let id = model_id.unwrap_or(A2V_DEFAULT_MODEL);
+    if id == "ltx-2-3-fast" {
         return Err(invalid("model", "ltx-2-3-fast does not support audio-to-video; use ltx-2-3-pro, ltx-2-5-fast or ltx-2-5-pro"));
     }
-    let model = models.lookup(model_id)?;
-    let res = opt_str(o, "resolution")?
-        .map(Resolution::parse)
-        .transpose()?;
-    let fps = int_field(o, "fps")?.unwrap_or(models::DEFAULT_FPS);
-    models::check_fps(fps)?;
-    camera_motion(o)?;
-    let short = matches!(res.map(|r| r.tier), Some(ResTier::P1440 | ResTier::K4))
-        || model_id == "ltx-2-5-pro";
+    let model = models.lookup(id)?;
+    let resolution = f.opt_str("resolution")?;
+    if let Some(r) = resolution {
+        Resolution::parse(r)?;
+    }
+    let fps = f.int("fps")?;
+    models::check_fps(fps.unwrap_or(rules::API_DEFAULT_FPS))?;
+    let camera_motion = camera_motion(&f)?;
+    Ok((
+        AudioToVideoRequest {
+            audio_uri: audio_uri.to_owned(),
+            image_uri: image_uri.map(str::to_owned),
+            last_frame_uri: last_frame_uri.map(str::to_owned),
+            prompt: prompt.map(str::to_owned),
+            model: model_id.map(str::to_owned),
+            resolution: resolution.map(str::to_owned),
+            fps,
+            camera_motion,
+        },
+        model,
+    ))
+}
+
+fn a2v_request(
+    api: Api,
+    b: &AudioToVideoRequest,
+    model: &LtxModel,
+) -> Result<GenerationRequest, ApiError> {
+    let res = b.resolution.as_deref().map(Resolution::parse).transpose()?;
+    let id = b.model.as_deref().unwrap_or(A2V_DEFAULT_MODEL);
+    let short =
+        matches!(res.map(|r| r.tier), Some(ResTier::P1440 | ResTier::K4)) || id == "ltx-2-5-pro";
     let max_s = if short {
         A2V_MAX_S_SHORT
     } else {
         A2V_MAX_S_LONG
     };
-
-    let mut req = GenerationRequest::text(api.protocol(), model.target.engine_name(), prompt);
+    let mut req = GenerationRequest::text(
+        api.protocol(),
+        model.target.engine_name(),
+        b.prompt.clone().unwrap_or_default(),
+    );
     req.task = Task::A2V;
     req.canvas = match res {
         Some(r) => CanvasSpec::Exact {
@@ -457,30 +507,30 @@ pub fn normalize_a2v(
             height: r.height,
         },
         // "Portrait image → 1080x1920, landscape → 1920x1080; no image → 1920x1080".
-        None => CanvasSpec::Oriented {
-            width: 1920,
-            height: 1080,
-        },
+        None => {
+            let (width, height) = ResTier::P1080.landscape();
+            CanvasSpec::Oriented { width, height }
+        }
     };
     // The audio sets the length (`negotiate`).
     req.timing = TimingSpec {
         length: Length::ModelDefault,
-        fps: Some(fps),
+        fps: Some(b.fps.unwrap_or(rules::API_DEFAULT_FPS)),
     };
-    if let Some(first) = image {
+    if let Some(first) = &b.image_uri {
         req.keyframes.push(Keyframe {
             at: Anchor::First,
-            image: first,
+            image: media_uri(first, "image_uri")?,
         });
     }
-    if let Some(l) = last {
+    if let Some(l) = &b.last_frame_uri {
         req.keyframes.push(Keyframe {
             at: Anchor::Last,
-            image: l,
+            image: media_uri(l, "last_frame_uri")?,
         });
     }
     req.audio_in = Some(AudioInput {
-        media: audio,
+        media: media_uri(&b.audio_uri, "audio_uri")?,
         role: AudioRole::Drive,
         max_s: Some(max_s),
     });
@@ -490,39 +540,47 @@ pub fn normalize_a2v(
 /// The retake / extend default model (OAS: `ltx-2-3-pro`, the only value
 /// listed; this server takes its other ids too).
 pub const EDIT_DEFAULT_MODEL: &str = "ltx-2-3-pro";
-/// Retake `resolution` values (OAS enum).
-pub const RETAKE_RESOLUTIONS: [&str; 2] = ["1920x1080", "1080x1920"];
 
-/// A number field (`start_time`, `duration`, `context`).
-fn num_field(o: &Map<String, Value>, k: &str) -> Result<Option<f64>, ApiError> {
-    match field(o, k) {
-        None => Ok(None),
-        Some(v) => v
-            .as_f64()
-            .filter(|f| f.is_finite())
-            .map(Some)
-            .ok_or_else(|| invalid(k, format!("{k} must be a number"))),
-    }
+/// The fields both edit bodies start with.
+struct EditCommon<'a, 'm> {
+    video_uri: &'a str,
+    prompt: Option<&'a str>,
+    model_id: Option<&'a str>,
+    model: &'m LtxModel,
 }
 
 /// `prompt` (optional on the edit endpoints), `model` and `video_uri`.
-fn edit_common(
+fn read_edit_common<'a, 'm>(
+    models: &'m LtxModels,
+    f: &Fields<'a>,
+) -> Result<EditCommon<'a, 'm>, ApiError> {
+    let video_uri = f.req_str("video_uri")?;
+    media_uri(video_uri, "video_uri")?;
+    let prompt = f.opt_str("prompt")?;
+    check_prompt(prompt.unwrap_or_default())?;
+    let model_id = f.opt_str("model")?;
+    let model = models.lookup(model_id.unwrap_or(EDIT_DEFAULT_MODEL))?;
+    Ok(EditCommon {
+        video_uri,
+        prompt,
+        model_id,
+        model,
+    })
+}
+
+fn edit_request(
     api: Api,
-    models: &LtxModels,
-    o: &Map<String, Value>,
+    model: &LtxModel,
+    prompt: Option<&str>,
+    video_uri: &str,
 ) -> Result<(GenerationRequest, MediaRef), ApiError> {
-    let video = media_uri(req_str(o, "video_uri")?, "video_uri")?;
-    let prompt = opt_str(o, "prompt")?.unwrap_or_default();
-    if prompt.chars().count() > PROMPT_MAX_CHARS {
-        return Err(invalid(
-            "prompt",
-            format!("prompt must be at most {PROMPT_MAX_CHARS} characters"),
-        ));
-    }
-    let model = models.lookup(opt_str(o, "model")?.unwrap_or(EDIT_DEFAULT_MODEL))?;
     Ok((
-        GenerationRequest::text(api.protocol(), model.target.engine_name(), prompt),
-        video,
+        GenerationRequest::text(
+            api.protocol(),
+            model.target.engine_name(),
+            prompt.unwrap_or_default(),
+        ),
+        media_uri(video_uri, "video_uri")?,
     ))
 }
 
@@ -532,45 +590,16 @@ pub fn normalize_retake(
     models: &LtxModels,
     o: &Map<String, Value>,
 ) -> Result<GenerationRequest, ApiError> {
-    let (mut req, video) = edit_common(api, models, o)?;
-    let start_s = num_field(o, "start_time")?
-        .ok_or_else(|| invalid("start_time", "start_time is required"))?;
-    if start_s < 0.0 {
-        return Err(invalid("start_time", "start_time must be at least 0"));
-    }
-    let duration_s =
-        num_field(o, "duration")?.ok_or_else(|| invalid("duration", "duration is required"))?;
-    if duration_s < fastvideo_protocol::EDIT_DURATION_MIN_S {
-        return Err(invalid(
-            "duration",
-            format!(
-                "duration must be at least {}",
-                fastvideo_protocol::EDIT_DURATION_MIN_S
-            ),
-        ));
-    }
+    let (b, model) = read_retake(models, o)?;
+    let (mut req, video) = edit_request(api, model, b.prompt.as_deref(), &b.video_uri)?;
     // "Clamped to video length": the window is clamped at negotiation; this
     // server regenerates at most 20 s at once.
-    let duration_s = duration_s.min(fastvideo_protocol::EDIT_DURATION_MAX_S);
-    let mode = match opt_str(o, "mode")? {
+    let duration_s = b.duration.min(fastvideo_protocol::EDIT_DURATION_MAX_S);
+    let mode = match b.mode.as_deref() {
         None => RetakeMode::default(),
-        Some(m) => RetakeMode::parse(m).ok_or_else(|| {
-            invalid(
-                "mode",
-                "mode must be one of: replace_audio, replace_video, replace_audio_and_video",
-            )
-        })?,
+        Some(m) => RetakeMode::parse(m).ok_or_else(|| invalid("mode", "mode is invalid"))?,
     };
-    if let Some(r) = opt_str(o, "resolution")? {
-        if !RETAKE_RESOLUTIONS.contains(&r) {
-            return Err(invalid(
-                "resolution",
-                format!(
-                    "resolution must be one of: {}",
-                    RETAKE_RESOLUTIONS.join(", ")
-                ),
-            ));
-        }
+    if let Some(r) = &b.resolution {
         let res = Resolution::parse(r)?;
         req.canvas = CanvasSpec::Exact {
             width: res.width,
@@ -581,12 +610,77 @@ pub fn normalize_retake(
     req.edit = Some(VideoEdit {
         video,
         op: EditOp::Retake {
-            start_s,
+            start_s: b.start_time,
             duration_s,
             mode,
         },
     });
     Ok(req)
+}
+
+fn read_retake<'m>(
+    models: &'m LtxModels,
+    o: &Map<String, Value>,
+) -> Result<(EditVideoRequest, &'m LtxModel), ApiError> {
+    let f = Fields(o);
+    let EditCommon {
+        video_uri,
+        prompt,
+        model_id,
+        model,
+    } = read_edit_common(models, &f)?;
+    let start_time = f
+        .num("start_time")?
+        .ok_or_else(|| invalid("start_time", "start_time is required"))?;
+    if start_time < 0.0 {
+        return Err(invalid("start_time", "start_time must be at least 0"));
+    }
+    let duration = f
+        .num("duration")?
+        .ok_or_else(|| invalid("duration", "duration is required"))?;
+    if duration < fastvideo_protocol::EDIT_DURATION_MIN_S {
+        return Err(invalid(
+            "duration",
+            format!(
+                "duration must be at least {}",
+                fastvideo_protocol::EDIT_DURATION_MIN_S
+            ),
+        ));
+    }
+    let mode = f.opt_str("mode")?;
+    if let Some(m) = mode {
+        if RetakeMode::parse(m).is_none() {
+            return Err(invalid(
+                "mode",
+                "mode must be one of: replace_audio, replace_video, replace_audio_and_video",
+            ));
+        }
+    }
+    let resolution = f.opt_str("resolution")?;
+    if let Some(r) = resolution {
+        if !RETAKE_RESOLUTIONS.contains(&r) {
+            return Err(invalid(
+                "resolution",
+                format!(
+                    "resolution must be one of: {}",
+                    RETAKE_RESOLUTIONS.join(", ")
+                ),
+            ));
+        }
+        Resolution::parse(r)?;
+    }
+    Ok((
+        EditVideoRequest {
+            video_uri: video_uri.to_owned(),
+            prompt: prompt.map(str::to_owned),
+            model: model_id.map(str::to_owned),
+            start_time,
+            duration,
+            mode: mode.map(str::to_owned),
+            resolution: resolution.map(str::to_owned),
+        },
+        model,
+    ))
 }
 
 /// `ExtendVideoRequest` (ltx §2.7) → an `Extend` request.
@@ -595,27 +689,56 @@ pub fn normalize_extend(
     models: &LtxModels,
     o: &Map<String, Value>,
 ) -> Result<GenerationRequest, ApiError> {
-    let (mut req, video) = edit_common(api, models, o)?;
+    let (b, model) = read_extend(models, o)?;
+    let (mut req, video) = edit_request(api, model, b.prompt.as_deref(), &b.video_uri)?;
+    let at = match b.mode.as_deref() {
+        None => ExtendAt::End,
+        Some(m) => ExtendAt::parse(m).ok_or_else(|| invalid("mode", "mode is invalid"))?,
+    };
+    req.task = Task::Extend;
+    req.edit = Some(VideoEdit {
+        video,
+        op: EditOp::Extend {
+            duration_s: b.duration,
+            at,
+            context_s: b.context,
+        },
+    });
+    Ok(req)
+}
+
+fn read_extend<'m>(
+    models: &'m LtxModels,
+    o: &Map<String, Value>,
+) -> Result<(ExtendVideoRequest, &'m LtxModel), ApiError> {
+    let f = Fields(o);
+    let EditCommon {
+        video_uri,
+        prompt,
+        model_id,
+        model,
+    } = read_edit_common(models, &f)?;
     let (lo, hi) = (
         fastvideo_protocol::EDIT_DURATION_MIN_S,
         fastvideo_protocol::EDIT_DURATION_MAX_S,
     );
-    let duration_s =
-        num_field(o, "duration")?.ok_or_else(|| invalid("duration", "duration is required"))?;
-    if !(lo..=hi).contains(&duration_s) {
+    let duration = f
+        .num("duration")?
+        .ok_or_else(|| invalid("duration", "duration is required"))?;
+    if !(lo..=hi).contains(&duration) {
         return Err(invalid(
             "duration",
             format!("duration must be between {lo} and {hi} seconds"),
         ));
     }
-    let at = match opt_str(o, "mode")? {
-        None => ExtendAt::End,
-        Some(m) => {
-            ExtendAt::parse(m).ok_or_else(|| invalid("mode", "mode must be one of: start, end"))?
+    let mode = f.opt_str("mode")?;
+    if let Some(m) = mode {
+        if ExtendAt::parse(m).is_none() {
+            return Err(invalid("mode", "mode must be one of: start, end"));
         }
-    };
-    let context_s = num_field(o, "context")?;
-    if let Some(c) = context_s {
+    }
+    let context = f.num("context")?;
+    if let Some(c) = context {
         let (clo, chi) = (
             fastvideo_protocol::EXTEND_CONTEXT_MIN_S,
             fastvideo_protocol::EXTEND_CONTEXT_MAX_S,
@@ -627,16 +750,17 @@ pub fn normalize_extend(
             ));
         }
     }
-    req.task = Task::Extend;
-    req.edit = Some(VideoEdit {
-        video,
-        op: EditOp::Extend {
-            duration_s,
-            at,
-            context_s,
+    Ok((
+        ExtendVideoRequest {
+            video_uri: video_uri.to_owned(),
+            prompt: prompt.map(str::to_owned),
+            model: model_id.map(str::to_owned),
+            duration,
+            mode: mode.map(str::to_owned),
+            context,
         },
-    });
-    Ok(req)
+        model,
+    ))
 }
 
 #[cfg(test)]

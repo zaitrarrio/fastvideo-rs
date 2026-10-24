@@ -190,8 +190,9 @@ pub(crate) async fn query_handle(
     into_response(reply, &ctx, None).await
 }
 
-/// Default and maximum `page_size`.
-pub const PAGE_SIZE: (usize, usize) = (20, 100);
+// Default and maximum `page_size`
+// (`fastvideo_protocol::params::rules::minimax::PAGE_SIZE`).
+use fastvideo_protocol::params::rules::minimax::PAGE_SIZE;
 
 /// Parses the list query string into a [`ListQuery`] for `owner`, or
 /// `Ok(None)` when the filter can match nothing (`filter.task_type` other
@@ -200,7 +201,7 @@ pub fn parse_list_query(params: &[(String, String)]) -> Result<Option<ListQuery>
     let mut q = ListQuery {
         protocol: Some(ProtocolId::MiniMaxV2),
         order: SortOrder::Desc,
-        limit: PAGE_SIZE.0,
+        limit: PAGE_SIZE.default_usize(),
         ..ListQuery::default()
     };
     let mut page = 1usize;
@@ -215,7 +216,9 @@ pub fn parse_list_query(params: &[(String, String)]) -> Result<Option<ListQuery>
     for (k, v) in params {
         match k.as_str() {
             "page_num" => page = num(k, v)?,
-            "page_size" => q.limit = num(k, v)?.min(PAGE_SIZE.1),
+            "page_size" => {
+                q.limit = num(k, v)?.min(usize::try_from(PAGE_SIZE.range.max).unwrap_or(usize::MAX))
+            }
             "filter.status" | "filter[status]" => {
                 for s in v.split(',').map(str::trim).filter(|s| !s.is_empty()) {
                     q.statuses.push(match s {

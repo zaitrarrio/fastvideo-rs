@@ -38,6 +38,7 @@
 pub mod catalog;
 pub mod director;
 pub mod error;
+pub mod params;
 pub mod proxy;
 pub mod queue;
 pub mod schema;
