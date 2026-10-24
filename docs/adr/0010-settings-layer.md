@@ -98,10 +98,10 @@ stripped, string literals located) and fails on:
 1. `std::env::var("FASTVIDEO_...")` / `var_os` anywhere outside the settings
    module;
 2. in the inference crates, a `std::env::var` / `var_os` whose argument is
-   not a string literal, except eight reviewed sites, none of which reads a
+   not a string literal, except ten reviewed sites, none of which reads a
    `FASTVIDEO_*` setting (`INDIRECT_ALLOWED`: an env save/restore guard, the
    process-plan check that compares before it sets, legacy `WAN22_*`
-   aliases, `FV_*` and `XDG`/`HOME` names);
+   aliases, `FV_*`, `FASTH3_*` and `XDG` / `HOME` names);
 3. a `FASTVIDEO_*` name in any string literal that is not a row
    (`FASTVIDEO_TEST_*` exempt), and a row no source names;
 4. a typed getter whose parse, literal default or reader disagrees with its
