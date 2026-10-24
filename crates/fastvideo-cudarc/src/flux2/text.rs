@@ -7,9 +7,9 @@ use fastvideo_models::flux2::{
     stack_layers_host, Flux2TextKind, Qwen3Config, FLUX2_SYSTEM_MESSAGE,
 };
 
-use crate::wan::nn::{self, Linear};
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{self, WeightMap};
+use crate::rt::nn::{self, Linear};
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{self, WeightMap};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())

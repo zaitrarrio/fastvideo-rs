@@ -21,7 +21,7 @@ use fastvideo_models::h3::config::H3TextEncoderConfig;
 
 use super::text_cache::tap_keys;
 use crate::llm::DecoderConfig;
-use crate::wan::tensor::{Result, TensorError};
+use crate::rt::tensor::{Result, TensorError};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -98,7 +98,7 @@ pub fn write_slim(
                 .map_err(|e| msg(e.to_string()))?;
         }
         writer.finish().map_err(|e| msg(e.to_string()))?;
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "slim text encoder: shard {}/{} written",
             n + 1,
             shards.len()
@@ -146,7 +146,7 @@ mod tests {
     use crate::h3::text::{encode_ids, HiddenStateEncoder, StreamedEncoder};
     use crate::h3::text_cache::{cache_key, encoder_identity, get_or_compute};
     use crate::llm::{Act, LayerAttn};
-    use crate::wan::weights::WeightMap;
+    use crate::rt::weights::WeightMap;
     use fastvideo_loader::LazyDType;
     use std::sync::{Arc, Mutex};
 

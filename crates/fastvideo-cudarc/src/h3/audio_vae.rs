@@ -26,9 +26,9 @@
 
 use fastvideo_models::h3::config::H3AudioVaeConfig;
 
-use crate::wan::ops::PadMode;
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
+use crate::rt::ops::PadMode;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{cuda_tensor_shaped, WeightMap};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -632,11 +632,11 @@ struct AudioPreBlock {
     qkv: CudaTensor,
     q_bias: CudaTensor,
     v_bias: CudaTensor,
-    proj: crate::wan::nn::Linear,
-    skip: crate::wan::nn::Linear,
-    mlp_w0: crate::wan::nn::Linear,
-    mlp_w1: crate::wan::nn::Linear,
-    mlp_w2: crate::wan::nn::Linear,
+    proj: crate::rt::nn::Linear,
+    skip: crate::rt::nn::Linear,
+    mlp_w0: crate::rt::nn::Linear,
+    mlp_w1: crate::rt::nn::Linear,
+    mlp_w2: crate::rt::nn::Linear,
     mlp_norm: (CudaTensor, CudaTensor),
     num_heads: usize,
     in_dim: usize,
@@ -653,8 +653,8 @@ impl AudioPreBlock {
                 pinned(host_values(map, &format!("{key}.bias"), &[n])?, vec![n])?,
             ))
         };
-        let linear = |prefix: &str, i: usize, o: usize| -> Result<crate::wan::nn::Linear> {
-            crate::wan::nn::Linear::load(map, prefix, i, o, true)
+        let linear = |prefix: &str, i: usize, o: usize| -> Result<crate::rt::nn::Linear> {
+            crate::rt::nn::Linear::load(map, prefix, i, o, true)
         };
         Ok(Self {
             norm1: ln("pre_block.norm1", idin)?,

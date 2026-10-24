@@ -9,9 +9,9 @@ use rand_distr::{Distribution, StandardNormal};
 
 use crate::hunyuan15::transformer::Hunyuan15Transformer;
 use crate::hunyuan15::vae::Hunyuan15Vae;
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::{frames_to_rgb8, PipelineError, Result};
-use crate::wan::tensor::CudaTensor;
-use crate::wan::weights::WeightMap;
 
 fn msg(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())

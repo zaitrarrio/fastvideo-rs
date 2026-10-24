@@ -4,7 +4,7 @@
 //! wires tensors into the scaffold graph or fails with a clear missing-key
 //! message (never silent zeros when a weight map was opened).
 
-use crate::wan::weights::WeightMap;
+use crate::rt::weights::WeightMap;
 
 /// SD3 / SD3.5 `transformer/` (see Diffusers `SD3Transformer2DModel`).
 pub mod sd35 {

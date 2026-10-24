@@ -19,9 +19,9 @@
 //! patch embedding runs once, not once per overlapping segment.
 
 use super::layers::{gather_rows, host_values, linear, msg, weight};
-use crate::wan::nn::{self, Linear};
-use crate::wan::tensor::{CudaTensor, Result};
-use crate::wan::weights::WeightMap;
+use crate::rt::nn::{self, Linear};
+use crate::rt::tensor::{CudaTensor, Result};
+use crate::rt::weights::WeightMap;
 
 pub const SYNC_DIM: usize = 768;
 pub const SEGMENT_SIZE: usize = 16;

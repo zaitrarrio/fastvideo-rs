@@ -14,8 +14,8 @@
 //! median of three synchronized calls after a warm-up.
 
 use super::*;
-use fastvideo_cudarc::wan::attn::FlashKernel;
-use fastvideo_cudarc::wan::ops::{SolFwdPick, SolKernel};
+use fastvideo_cudarc::rt::attn::FlashKernel;
+use fastvideo_cudarc::rt::ops::{SolFwdPick, SolKernel};
 use fastvideo_models::sol_attn::{num_blocks, SolParams};
 use half::bf16;
 
@@ -154,7 +154,7 @@ pub(super) fn parity(c: &mut Ctx<'_>) -> StageResult<()> {
                 .ok_or_else(|| anyhow::anyhow!("bf16 v"))?,
         );
         let mut o16 = unsafe { dev.stream.alloc::<bf16>(bh * sq * d) }?;
-        let ran = fastvideo_cudarc::wan::cudnn_sdpa::sdpa_bf16(
+        let ran = fastvideo_cudarc::rt::cudnn_sdpa::sdpa_bf16(
             qs, ks, vs, &mut o16, bh, sq, sk, d, scale,
         )?;
         if ran {
@@ -452,7 +452,7 @@ pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
         let d2 = dense(FlashKernel::V2)?;
         let dc = dense(FlashKernel::Cudnn)?;
         // attn_dc.cu (tcgen05 / wgmma) where this device has it, else V2 again.
-        let has_dc = fastvideo_cudarc::wan::attn_dc::dense().is_some();
+        let has_dc = fastvideo_cudarc::rt::attn_dc::dense().is_some();
         let ddc = dense(FlashKernel::Dc)?;
         let bits = |kernel| -> anyhow::Result<Vec<u16>> {
             let o = attn::device_mma_sdpa_with(&qt, &kt, &vt, None, true, kernel)?
@@ -617,7 +617,7 @@ fn vsa_bench(c: &mut Ctx<'_>, bh: usize) -> StageResult<()> {
 /// the usual 1e-2 vs f32. The bf16 output must be RNE of the f32 output.
 pub(super) fn dc_parity(c: &mut Ctx<'_>) -> StageResult<()> {
     let dev = dev()?;
-    let Some(k) = fastvideo_cudarc::wan::attn_dc::dense() else {
+    let Some(k) = fastvideo_cudarc::rt::attn_dc::dense() else {
         c.report.note(
             "attn_dc_skipped",
             json!({"sm": dev.sm_major * 10 + dev.sm_minor, "needs": "sm 9.0 or 10.0 with the attn_dc module"}),

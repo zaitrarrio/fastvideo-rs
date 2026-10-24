@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 use fastvideo_models::ltx2::config::ltx2_19b_distilled;
 
 use crate::llm::{self, DecoderConfig};
-use crate::wan::weights::WeightMap;
+use crate::rt::weights::WeightMap;
 
 use super::audio_vae::AudioDecoder;
 use super::audio_vae::AudioEncoder;

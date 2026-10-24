@@ -306,14 +306,14 @@ fn layer_distance_host(a: &[f32], b: &[f32], lin: &[f32], c: usize, hw: usize) -
 /// cubins carry no LPIPS kernel.
 #[cfg(feature = "cuda")]
 struct DeviceNet {
-    dev: std::sync::Arc<fastvideo_cudarc::wan::device::DeviceContext>,
+    dev: std::sync::Arc<fastvideo_cudarc::rt::device::DeviceContext>,
     convs: Vec<cudarc::driver::CudaSlice<f32>>,
 }
 
 #[cfg(feature = "cuda")]
 impl DeviceNet {
     fn new(net: &LpipsWeights) -> anyhow::Result<Self> {
-        let dev = fastvideo_cudarc::wan::device::global_device()
+        let dev = fastvideo_cudarc::rt::device::global_device()
             .ok_or_else(|| anyhow::anyhow!("lpips: no CUDA device"))?;
         let convs = net
             .convs
@@ -337,7 +337,7 @@ impl DeviceNet {
                 (x, h, w) = (p, ph, pw);
             }
             let xd = s.memcpy_stod(&x)?;
-            let (y, shape) = fastvideo_cudarc::wan::conv::cudnn_conv(
+            let (y, shape) = fastvideo_cudarc::rt::conv::cudnn_conv(
                 &xd,
                 &[1, c, h, w],
                 &self.convs[j],

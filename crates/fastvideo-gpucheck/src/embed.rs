@@ -5,8 +5,8 @@ use std::path::Path;
 use std::time::Instant;
 
 use anyhow::Context;
+use fastvideo_cudarc::rt::weights::WeightMap;
 use fastvideo_cudarc::wan::umt5::{pad_prompt_embeds, Umt5Encoder};
-use fastvideo_cudarc::wan::weights::WeightMap;
 use fastvideo_cudarc::CudaTensor;
 use fastvideo_models::wan::Umt5Config;
 use serde::Deserialize;

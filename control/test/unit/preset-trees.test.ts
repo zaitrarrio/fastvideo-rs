@@ -152,7 +152,7 @@ describe("recipe-trees.ts against the Rust sources", () => {
     for (const r of Object.values(RECIPE_TREES))
       for (const t of r.prequant) expect(t, "a prequant tree is text_encoder_fp8 or transformer_prequant_<recipe>_<quant>").toMatch(/^[a-z0-9-]+\/(text_encoder_fp8|transformer_prequant_[a-z0-9-]+_(mxfp8|w8a8))$/);
     // the MXFP8 DiT trees only help on sm_100+: QuantMode::for_device runs W8A8 below that (the boot skips them)
-    expect(rust("crates/fastvideo-cudarc/src/wan/quant.rs")).toMatch(/if d\.sm_major < 10 \{/);
+    expect(rust("crates/fastvideo-cudarc/src/rt/quant.rs")).toMatch(/if d\.sm_major < 10 \{/);
     expect(MXFP8_TREE_GLOB).toBe("*_mxfp8");
   });
 });

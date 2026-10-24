@@ -14,7 +14,7 @@
 //! reading ~26 GB instead of ~99 GB and doing no merge, no AdaLN evaluation
 //! and no quantization.
 //!
-//! **What is stored, per linear** ([`crate::wan::nn::Linear::snapshot`]):
+//! **What is stored, per linear** ([`crate::rt::nn::Linear::snapshot`]):
 //! `<p>.weight` (BF16 as resident on the device, or F32 off the bf16 route)
 //! or, for a reference-recipe weight, `<p>.qblob` (U8: the one byte blob the
 //! GEMM reads: E4M3 codes, bf16 rows of unquantized sections such as the VSA
@@ -46,10 +46,10 @@ use std::path::{Path, PathBuf};
 use fastvideo_loader::{LazyDType, TensorSpec};
 use serde::{Deserialize, Serialize};
 
-use crate::wan::nn::{Linear, LinearSnapshot, SnapshotRef, SnapshotWeight};
-use crate::wan::quant::{QuantLayout, QuantMode};
-use crate::wan::tensor::{CudaTensor, Result, TensorDType, TensorError};
-use crate::wan::weights::WeightMap;
+use crate::rt::nn::{Linear, LinearSnapshot, SnapshotRef, SnapshotWeight};
+use crate::rt::quant::{QuantLayout, QuantMode};
+use crate::rt::tensor::{CudaTensor, Result, TensorDType, TensorError};
+use crate::rt::weights::WeightMap;
 
 pub const FORMAT: &str = "fastvideo-rs/h3-dit-resident";
 pub const VERSION: u32 = 1;
@@ -299,11 +299,11 @@ pub fn select(
                 "h3 dit: {ENV}=require but no usable pre-quantized tree: {why}"
             )));
         }
-        crate::wan::log::info(format_args!("h3 dit: quantizing at load ({why})"));
+        crate::rt::log::info(format_args!("h3 dit: quantizing at load ({why})"));
         Ok(None)
     };
     if mode == TreeMode::Off {
-        crate::wan::log::info(format_args!("h3 dit: quantizing at load ({ENV}=off)"));
+        crate::rt::log::info(format_args!("h3 dit: quantizing at load ({ENV}=off)"));
         return Ok(None);
     }
     let Some(want) = want else {
@@ -316,7 +316,7 @@ pub fn select(
     }
     match check(transformer, &dir, want) {
         Ok(m) => {
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3 dit: pre-quantized tree {} ({} tensors, {} quantized linears, {:.2} GB, digest {})",
                 dir.display(),
                 m.tensors,
@@ -685,7 +685,7 @@ impl TreeReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wan::quant::{QuantKind, Section};
+    use crate::rt::quant::{QuantKind, Section};
 
     fn ramp(n: usize, seed: u32) -> Vec<f32> {
         (0..n)

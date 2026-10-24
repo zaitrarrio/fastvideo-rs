@@ -10,7 +10,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use fastvideo_cudarc::wan::writer::{PngMode, VideoWriter};
+use fastvideo_cudarc::rt::writer::{PngMode, VideoWriter};
 use serde_json::json;
 
 use crate::report::{Report, StageResult};
@@ -58,7 +58,7 @@ pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
         json!({
             "cpus": std::thread::available_parallelism().map(|n| n.get()).ok(),
             "rayon_threads": rayon::current_num_threads(),
-            "available_gib": fastvideo_cudarc::wan::writer::available_memory()
+            "available_gib": fastvideo_cudarc::rt::writer::available_memory()
                 .map(|b| b as f64 / f64::from(1u32 << 30)),
         }),
     );

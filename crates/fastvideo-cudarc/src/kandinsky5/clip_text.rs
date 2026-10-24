@@ -4,9 +4,9 @@ use std::path::Path;
 
 use fastvideo_models::kandinsky5::tokenize_clip;
 
-use crate::wan::nn::{self, Linear};
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{self, WeightMap};
+use crate::rt::nn::{self, Linear};
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{self, WeightMap};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())

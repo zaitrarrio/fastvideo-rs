@@ -1,12 +1,12 @@
 //! Resident-encoder attention: GQA without `repeat_kv`, and chunked dense SDPA
 //! that applies the causal/padding mask without a full composed score matrix.
 //!
-//! Device path reuses the same strided-batched GEMMs as [`crate::wan::attn`].
+//! Device path reuses the same strided-batched GEMMs as [`crate::rt::attn`].
 //! Host path falls back to `repeat_kv` + the existing composed SDPA so CPU
 //! tests stay bit-identical.
 
-use crate::wan::nn::scaled_dot_product_attention_masked;
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::nn::scaled_dot_product_attention_masked;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -107,7 +107,7 @@ fn tanh_scaled(x: &CudaTensor, s: f32) -> Result<CudaTensor> {
     #[cfg(feature = "cuda")]
     if let Some(d) = x.dev()? {
         return CudaTensor::from_dev_result(
-            crate::wan::ops::tanh_scaled_device(&d, s)?,
+            crate::rt::ops::tanh_scaled_device(&d, s)?,
             x.shape.clone(),
         );
     }
@@ -132,15 +132,15 @@ fn device_gqa_masked(
     let g = hq / hkv;
     // Unmasked MHA: the Wan kernel already chunks the score buffer.
     if mask.is_none() && g == 1 {
-        return crate::wan::attn::device_dense_sdpa(q, k, v, scale);
+        return crate::rt::attn::device_dense_sdpa(q, k, v, scale);
     }
     let (Some(kd), Some(vd)) = (k.dev()?, v.dev()?) else {
         return Ok(None);
     };
     let scale = scale.unwrap_or(1.0 / (d as f32).sqrt());
     let groups = b * hkv;
-    let chunk = (crate::wan::attn::DENSE_SCORE_BUDGET / (b * hq * sk).max(1)).clamp(1, sq.max(1));
-    let err = |e: crate::wan::device::DeviceError| msg(e.to_string());
+    let chunk = (crate::rt::attn::DENSE_SCORE_BUDGET / (b * hq * sk).max(1)).clamp(1, sq.max(1));
+    let err = |e: crate::rt::device::DeviceError| msg(e.to_string());
     let mut pieces = Vec::new();
     let mut start = 0usize;
     while start < sq {
@@ -155,8 +155,8 @@ fn device_gqa_masked(
         let Some(qd) = q_use.dev()? else {
             return Ok(None);
         };
-        let mut scores = crate::wan::ops::alloc((groups * g * qlen * sk).max(1))?;
-        crate::wan::device::matmul_linear_wt_strided_batched(
+        let mut scores = crate::rt::ops::alloc((groups * g * qlen * sk).max(1))?;
+        crate::rt::device::matmul_linear_wt_strided_batched(
             &qd,
             &kd,
             &mut scores,
@@ -179,8 +179,8 @@ fn device_gqa_masked(
         let Some(pd) = probs.dev()? else {
             return Ok(None);
         };
-        let mut out = crate::wan::ops::alloc((groups * g * qlen * d).max(1))?;
-        crate::wan::device::matmul_2d_strided_batched(&pd, &vd, &mut out, groups, g * qlen, sk, d)
+        let mut out = crate::rt::ops::alloc((groups * g * qlen * d).max(1))?;
+        crate::rt::device::matmul_2d_strided_batched(&pd, &vd, &mut out, groups, g * qlen, sk, d)
             .map_err(err)?;
         pieces.push(CudaTensor::from_device_slice(out, vec![b, hq, qlen, d])?);
         start += qlen;

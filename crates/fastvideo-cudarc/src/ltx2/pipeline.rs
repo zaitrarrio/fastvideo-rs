@@ -38,12 +38,12 @@ use rand_distr::StandardNormal;
 use crate::h3::drain::{DecodeSplit, FrameDrain};
 use crate::hooks::{Hooks, Stage};
 use crate::llm::{DecoderConfig, ResidentDecoder};
-use crate::wan::offload::{DitOffload, Residency};
+use crate::rt::offload::{DitOffload, Residency};
+use crate::rt::tensor::{CudaTensor, TensorError};
+use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::{
     frames_to_rgb8, interleave_audio, write_wav, PipelineError, Result, VideoWriter,
 };
-use crate::wan::tensor::{CudaTensor, TensorError};
-use crate::wan::weights::WeightMap;
 pub use fastvideo_models::ltx2::memory::LtxOffload;
 
 use super::a2v::{DrivingAudio, Waveform};
@@ -68,16 +68,16 @@ fn err(s: impl Into<String>) -> PipelineError {
 /// Kernel launches return when queued; a phase's clock stops only once the
 /// device has caught up, or the time lands on whoever synchronizes next.
 fn sync() -> Result<()> {
-    crate::wan::device::synchronize().map_err(|e| err(format!("device synchronize: {e}")))
+    crate::rt::device::synchronize().map_err(|e| err(format!("device synchronize: {e}")))
 }
 
 /// A denoise step's closing sync and its wall time, with the
 /// `FASTVIDEO_GPU_TRACE` window closed before the sync (no-op when off).
 fn step_sync(timer: &Instant) -> Result<f64> {
-    crate::wan::gpu_trace::step_before_sync();
+    crate::rt::gpu_trace::step_before_sync();
     sync()?;
     let secs = timer.elapsed().as_secs_f64();
-    crate::wan::gpu_trace::step_end(secs);
+    crate::rt::gpu_trace::step_end(secs);
     step_transfers();
     Ok(secs)
 }
@@ -87,9 +87,8 @@ fn step_sync(timer: &Instant) -> Result<f64> {
 /// round trip on the hot path, so they are logged. The first step of a stage
 /// also carries whatever ran between stages (text, upsampler).
 fn step_transfers() {
-    static LAST: std::sync::Mutex<Option<crate::wan::stats::Snapshot>> =
-        std::sync::Mutex::new(None);
-    let now = crate::wan::stats::snapshot();
+    static LAST: std::sync::Mutex<Option<crate::rt::stats::Snapshot>> = std::sync::Mutex::new(None);
+    let now = crate::rt::stats::snapshot();
     let mut last = LAST.lock().expect("ltx2 step transfers");
     if let Some(prev) = last.as_ref() {
         let d = now.since(prev);
@@ -444,10 +443,10 @@ pub struct Ltx2Timings {
     pub video_push_s: f64,
     pub video_wait_s: f64,
     /// `frame-NNN.png` written after the mp4 (deferred, synced; see
-    /// `wan::writer`), outside `decode_video_s`.
+    /// `rt::writer`), outside `decode_video_s`.
     pub write_s: f64,
     /// The writer's own account (PNG mode, ffmpeg blocking, buffer use).
-    pub writer: Option<crate::wan::writer::WriterStats>,
+    pub writer: Option<crate::rt::writer::WriterStats>,
 }
 
 #[derive(Debug, Clone)]
@@ -514,14 +513,14 @@ impl NoiseStream {
     fn injected(&mut self, sizes: &[usize]) -> Result<Option<Vec<f32>>> {
         let first = self.drawn;
         self.drawn += sizes.len();
-        if !crate::wan::inject::enabled() {
+        if !crate::rt::inject::enabled() {
             return Ok(None);
         }
         let mut out = Vec::with_capacity(sizes.iter().sum());
         let mut found = 0usize;
         for (k, &n) in sizes.iter().enumerate() {
             let name = format!("noise_seed{}_{:03}", self.seed, first + k);
-            if let Some(v) = crate::wan::inject::load_numel(&name, n)? {
+            if let Some(v) = crate::rt::inject::load_numel(&name, n)? {
                 out.extend_from_slice(&v);
                 found += 1;
             }
@@ -566,7 +565,7 @@ impl NoiseStream {
         };
         if let Some(host) = self.injected(&sizes)? {
             let t = CudaTensor::from_vec(host, vec![total])?;
-            let t = if crate::wan::stats::device_expected() {
+            let t = if crate::rt::stats::device_expected() {
                 t.to_device()?
             } else {
                 t
@@ -574,8 +573,8 @@ impl NoiseStream {
             return split(t);
         }
         #[cfg(feature = "cuda")]
-        if total > 0 && crate::wan::stats::device_expected() {
-            if let Some(dev) = crate::wan::device::global_device() {
+        if total > 0 && crate::rt::stats::device_expected() {
+            if let Some(dev) = crate::rt::device::global_device() {
                 if self.ensure_pinned(&dev, total) {
                     let flat = self
                         .upload_pinned(&dev, total)
@@ -594,7 +593,7 @@ impl NoiseStream {
     #[cfg(feature = "cuda")]
     fn ensure_pinned(
         &mut self,
-        dev: &std::sync::Arc<crate::wan::device::DeviceContext>,
+        dev: &std::sync::Arc<crate::rt::device::DeviceContext>,
         total: usize,
     ) -> bool {
         if self.pinned.as_ref().map(|p| p.len()) == Some(total) {
@@ -608,7 +607,7 @@ impl NoiseStream {
                 true
             }
             Err(e) => {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "ltx2 noise: no pinned buffer of {total} floats ({e}); pageable upload"
                 ));
                 false
@@ -619,7 +618,7 @@ impl NoiseStream {
     #[cfg(feature = "cuda")]
     fn upload_pinned(
         &mut self,
-        dev: &std::sync::Arc<crate::wan::device::DeviceContext>,
+        dev: &std::sync::Arc<crate::rt::device::DeviceContext>,
         total: usize,
     ) -> std::result::Result<cudarc::driver::CudaSlice<f32>, cudarc::driver::DriverError> {
         let pinned = self.pinned.as_mut().expect("pinned noise buffer");
@@ -627,7 +626,7 @@ impl NoiseStream {
         Self::fill(&mut self.rng, self.bf16, pinned.as_mut_slice()?);
         let mut flat = unsafe { dev.stream.alloc::<f32>(total) }?;
         dev.stream.memcpy_htod(&*pinned, &mut flat)?;
-        crate::wan::stats::record_h2d(total);
+        crate::rt::stats::record_h2d(total);
         Ok(flat)
     }
 }
@@ -852,7 +851,7 @@ pub fn initial_noise_with(
 }
 
 /// FASTVIDEO_DUMP_DIR, before step `i`'s forward, under the stage prefix
-/// ([`crate::wan::dump::set_prefix`]): the starting state and the sigmas at
+/// ([`crate::rt::dump::set_prefix`]): the starting state and the sigmas at
 /// the first step, and the block dump armed for that step's forward.
 fn dump_step_begin(
     i: usize,
@@ -860,7 +859,7 @@ fn dump_step_begin(
     audio: &CudaTensor,
     schedule: &Ltx2Schedule,
 ) -> Result<()> {
-    use crate::wan::dump;
+    use crate::rt::dump;
     if !dump::enabled() {
         return Ok(());
     }
@@ -888,7 +887,7 @@ fn dump_step_velocity(
     state: LatentState,
     cond: Option<&StageConditioning>,
 ) -> Result<()> {
-    use crate::wan::dump;
+    use crate::rt::dump;
     dump::set_blocks(false);
     if !dump::enabled() {
         return Ok(());
@@ -917,7 +916,7 @@ fn dump_step_velocity(
 
 /// FASTVIDEO_DUMP_DIR, after step `i`'s update: the new state.
 fn dump_step_end(i: usize, video: &CudaTensor, audio: &CudaTensor) -> Result<()> {
-    use crate::wan::dump;
+    use crate::rt::dump;
     if !dump::enabled() {
         return Ok(());
     }
@@ -994,7 +993,7 @@ pub fn denoise_with_cond(
     cond: Option<&StageConditioning>,
 ) -> Result<(CudaTensor, CudaTensor)> {
     for i in 0..schedule.num_steps() {
-        crate::wan::gpu_trace::step_begin();
+        crate::rt::gpu_trace::step_begin();
         let timer = Instant::now();
         model.begin_fbcache_step(i);
         model.arm_prune_step(i);
@@ -1039,7 +1038,7 @@ pub fn denoise_with_cond(
         audio = next;
         dump_step_end(i, &video, &audio)?;
         let secs = step_sync(&timer)?;
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "ltx2 step {}/{} sigma {:.6} ({secs:.2}s)",
             i + 1,
             schedule.num_steps(),
@@ -1074,7 +1073,7 @@ pub fn denoise_cfg(
         ));
     }
     for i in 0..schedule.num_steps() {
-        crate::wan::gpu_trace::step_begin();
+        crate::rt::gpu_trace::step_begin();
         let timer = Instant::now();
         let t = schedule.timestep_f32(i);
         let route = stage2.at(i);
@@ -1094,7 +1093,7 @@ pub fn denoise_cfg(
         video = CudaTensor::lincomb(&[(1.0, &video), (dt, &v_video)])?;
         audio = CudaTensor::lincomb(&[(1.0, &audio), (dt, &v_audio)])?;
         let secs = step_sync(&timer)?;
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "ltx2 cfg step {}/{} sigma {:.6} v_gs={video_scale} a_gs={audio_scale} ({secs:.2}s)",
             i + 1,
             schedule.num_steps(),
@@ -1255,7 +1254,7 @@ pub fn denoise_guided_cond(
     state: LatentState,
     cond: Option<&StageConditioning>,
 ) -> Result<(CudaTensor, CudaTensor)> {
-    use crate::wan::dump;
+    use crate::rt::dump;
     let passes = guided_passes(video_guider, audio_guider);
     if passes.contains(&GuidedPass::Uncond) && text_uncond.is_none() {
         return Err(err("ltx2 guided: CFG needs the negative prompt's context"));
@@ -1268,7 +1267,7 @@ pub fn denoise_guided_cond(
     };
     let mut last: Option<(CudaTensor, CudaTensor)> = None;
     for i in 0..schedule.num_steps() {
-        crate::wan::gpu_trace::step_begin();
+        crate::rt::gpu_trace::step_begin();
         let timer = Instant::now();
         let (sigma, next) = (schedule.sigmas[i] as f32, schedule.sigmas[i + 1] as f32);
         dump_step_begin(i, &video, &audio, schedule)?;
@@ -1345,7 +1344,7 @@ pub fn denoise_guided_cond(
         last = Some((x0_video, x0_audio));
         dump_step_end(i, &video, &audio)?;
         let secs = step_sync(&timer)?;
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "ltx2 guided step {}/{} sigma {:.6} passes {} cfg {} stg {} mod {} rescale {} ({secs:.2}s)",
             i + 1,
             schedule.num_steps(),
@@ -1491,7 +1490,7 @@ pub fn denoise_res2s_cond(
     };
     let mut call = 0usize;
     for i in 0..schedule.num_steps() {
-        crate::wan::gpu_trace::step_begin();
+        crate::rt::gpu_trace::step_begin();
         let timer = Instant::now();
         let sigma = schedule.sigmas[i];
         let sigma_next = schedule.sigmas[i + 1];
@@ -1548,7 +1547,7 @@ pub fn denoise_res2s_cond(
             audio = res2s_combine(&audio, &d_audio, &d2_a, h, b1, b2)?;
         }
         let secs = step_sync(&timer)?;
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "ltx2 res2s step {}/{} sigma {:.6} calls {call} ({secs:.2}s)",
             i + 1,
             schedule.num_steps(),
@@ -1602,7 +1601,7 @@ pub fn denoise_ancestral_cond(
 ) -> Result<(CudaTensor, CudaTensor)> {
     let mut noise = NoiseStream::new(opts.noise_seed, state == LatentState::Bf16);
     for i in 0..schedule.num_steps() {
-        crate::wan::gpu_trace::step_begin();
+        crate::rt::gpu_trace::step_begin();
         let timer = Instant::now();
         let sigma = schedule.sigmas[i];
         let sigma_next = schedule.sigmas[i + 1];
@@ -1675,7 +1674,7 @@ pub fn denoise_ancestral_cond(
         audio = next;
         dump_step_end(i, &video, &audio)?;
         let secs = step_sync(&timer)?;
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "ltx2 ancestral step {}/{} sigma {:.6} ({secs:.2}s)",
             i + 1,
             schedule.num_steps(),
@@ -1712,7 +1711,7 @@ impl Decoders {
                 &weights.join(sub),
             )?));
             m.prefetch_groups(&[&|k: &str| !k.starts_with("encoder.")]);
-            Ok::<_, crate::wan::tensor::TensorError>(m)
+            Ok::<_, crate::rt::tensor::TensorError>(m)
         };
         Ok(Self {
             video: VideoDecoder::load(&open("vae")?, &cfg.vae)?,
@@ -1756,12 +1755,12 @@ pub fn load_upsampler(weights: &Path, cfg: &Ltx2Config) -> Result<Option<LatentU
     }
 }
 
-pub use crate::wan::offload::{MemoryLog, PhaseMemory};
+pub use crate::rt::offload::{MemoryLog, PhaseMemory};
 
 /// Hand what the last phase freed back to the driver, as the reference's
 /// blocks do on exit (`AllocatorTrimStrategy.TRIM`: sync + `empty_cache`).
 fn trim() -> Result<()> {
-    crate::wan::device::trim_pool().map_err(|e| err(format!("device pool trim: {e}")))
+    crate::rt::device::trim_pool().map_err(|e| err(format!("device pool trim: {e}")))
 }
 
 /// What [`decode_and_write`] left on disk, and how long each part took.
@@ -1781,7 +1780,7 @@ pub struct Written {
     pub write_s: f64,
     /// Where the conv-VAE decode's time went (`None` for the other decoders).
     pub split: Option<DecodeSplit>,
-    pub writer: crate::wan::writer::WriterStats,
+    pub writer: crate::rt::writer::WriterStats,
 }
 
 /// Where and how the decoders write a clip.
@@ -1910,7 +1909,7 @@ pub fn decode_and_write(
         decode_video_drained_hooked(&dec.video, &latents, tiling, writer, out.hooks)?;
     let (frames, mp4_path, decode_video_s, encode_s, write_s) =
         finish_writer(&mut writer, frames_s, &out.hooks)?;
-    crate::wan::log::info(format_args!(
+    crate::rt::log::info(format_args!(
         "ltx2 video decode + mp4 {decode_video_s:.2}s (mp4 tail {encode_s:.2}s); png frames after it {write_s:.2}s"
     ));
     Ok(Written {
@@ -1937,8 +1936,8 @@ pub fn save_latents(latents: &CudaTensor) -> Result<()> {
         return Ok(());
     };
     let prefix = PathBuf::from(prefix);
-    crate::wan::dump::write_raw(&prefix, &latents.shape, &latents.host_cow()?)?;
-    crate::wan::log::info(format_args!(
+    crate::rt::dump::write_raw(&prefix, &latents.shape, &latents.host_cow()?)?;
+    crate::rt::log::info(format_args!(
         "ltx2: video latents {:?} saved to {}.f32",
         latents.shape,
         prefix.display()
@@ -1970,7 +1969,7 @@ fn decode_video_drained_hooked(
     hooks: Hooks<'_>,
 ) -> Result<(VideoWriter, f64, DecodeSplit)> {
     let timer = Instant::now();
-    crate::wan::gpu_trace::window_begin("ltx2/decode");
+    crate::rt::gpu_trace::window_begin("ltx2/decode");
     let mut drain = FrameDrain::new(writer)?;
     // The decoder's sink speaks tensor errors; carry the drain's own across.
     let mut sink_err: Option<PipelineError> = None;
@@ -1998,8 +1997,8 @@ fn decode_video_drained_hooked(
     }
     let (writer, split) = drain.finish()?;
     let decode_video_s = timer.elapsed().as_secs_f64();
-    crate::wan::gpu_trace::window_end(decode_video_s);
-    crate::wan::log::info(format_args!(
+    crate::rt::gpu_trace::window_end(decode_video_s);
+    crate::rt::log::info(format_args!(
         "ltx2 video decode {decode_video_s:.2}s: vae {:.2}s, rgb {:.2}s, push {:.2}s, wait {:.2}s",
         split.vae_s, split.rgb_s, split.push_s, split.wait_s
     ));
@@ -2011,7 +2010,7 @@ fn decode_video_drained_hooked(
 /// streams finished frames to the writer one latent frame at a time.
 pub fn decode_tae_and_write(
     dec: &Decoders,
-    tae: &crate::wan::taehv::TaeHv,
+    tae: &crate::rt::taehv::TaeHv,
     video: &CudaTensor,
     audio: &CudaTensor,
     grid: [usize; 3],
@@ -2258,7 +2257,7 @@ pub struct TextEncoder {
     /// Built on the first cache miss: a run of hits never loads Gemma at all.
     resident: Option<ResidentText>,
     /// The resident Gemma + connectors in the device ledger.
-    booking: crate::wan::ledger::Booking,
+    booking: crate::rt::ledger::Booking,
     /// `(sha256-able tokenizer bytes, gemma identity, connector identity)`.
     identity: Option<(Vec<u8>, [u8; 32], [u8; 32])>,
     /// `FASTVIDEO_LTX2_TEXT_FP8=1` (E13): Gemma resident with weight-only FP8
@@ -2279,7 +2278,7 @@ impl TextEncoder {
             cache: options.text_cache.clone().map(TextCache::new),
             residency: options.text_residency,
             resident: None,
-            booking: crate::wan::ledger::Booking::default(),
+            booking: crate::rt::ledger::Booking::default(),
             identity: None,
             fp8: std::env::var("FASTVIDEO_LTX2_TEXT_FP8").is_ok_and(|v| v.trim() == "1"),
             warm: None,
@@ -2365,7 +2364,7 @@ impl TextEncoder {
     fn resident_bytes(&self) -> u64 {
         let g = Self::decoder_config(&self.cfg);
         let c = &self.cfg.connectors;
-        let width: u64 = if crate::wan::nn::bf16_linears_active() {
+        let width: u64 = if crate::rt::nn::bf16_linears_active() {
             2
         } else {
             4
@@ -2470,11 +2469,11 @@ impl TextEncoder {
             return Ok(());
         }
         let env = std::env::var("FASTVIDEO_LTX2_TEXT").ok();
-        let free = crate::wan::device::free_memory().map(|(free, _)| free);
+        let free = crate::rt::device::free_memory().map(|(free, _)| free);
         let needed = self.resident_bytes() + RESIDENT_HEADROOM;
         let resident = self.fp8 || self.residency.resolve(env.as_deref(), free, needed)?;
         if !resident {
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "ltx2 text: streamed (free {:?} bytes, resident needs {needed})",
                 free
             ));
@@ -2491,7 +2490,7 @@ impl TextEncoder {
         };
         let mut booking = std::mem::take(&mut self.booking);
         let loaded = booking.track(
-            crate::wan::ledger::TEXT_ENCODER,
+            crate::rt::ledger::TEXT_ENCODER,
             || -> Result<(ResidentDecoder, TextConnectors)> {
                 let gemma = ResidentDecoder::load_with(&map, &cfg, cfg.num_layers(), precision)?;
                 let connectors = self.load_connectors()?;
@@ -2502,7 +2501,7 @@ impl TextEncoder {
         );
         self.booking = booking;
         let (gemma, connectors) = loaded?;
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "ltx2 text: resident, {:.1} GiB on device, loaded in {:.1}s",
             gemma.device_bytes() as f64 / f64::from(1u32 << 30),
             timer.elapsed().as_secs_f64()
@@ -2531,9 +2530,9 @@ impl TextEncoder {
             }
         };
         super::text::dump_stages(padded, &stack, &out)?;
-        if crate::wan::dump::digest_enabled() {
+        if crate::rt::dump::digest_enabled() {
             for (k, state) in stack.states.iter().enumerate() {
-                crate::wan::dump::digest_host(
+                crate::rt::dump::digest_host(
                     &format!("text_hidden_{k}"),
                     &[stack.tokens, stack.hidden],
                     state,
@@ -2571,7 +2570,7 @@ impl TextEncoder {
         {
             return;
         }
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "ltx2 text: streamed for two-stage (Gemma is not kept beside DiT reload)"
         ));
         self.residency = TextResidency::Streamed;
@@ -2580,8 +2579,8 @@ impl TextEncoder {
     /// Drop a resident Gemma + connectors after contexts are already in hand.
     pub fn unload_resident(&mut self) {
         if self.resident.take().is_some() {
-            self.booking.release(crate::wan::ledger::TEXT_ENCODER);
-            crate::wan::log::info(format_args!(
+            self.booking.release(crate::rt::ledger::TEXT_ENCODER);
+            crate::rt::log::info(format_args!(
                 "ltx2 text: dropped resident Gemma (contexts already encoded)"
             ));
         }
@@ -2671,7 +2670,7 @@ fn cached_or(
     }
     let fresh = compute()?;
     if let Err(e) = cache.store(key, padded, &fresh.video, &fresh.audio) {
-        crate::wan::log::info(format_args!("ltx2 text cache: not stored: {e}"));
+        crate::rt::log::info(format_args!("ltx2 text cache: not stored: {e}"));
     }
     Ok((fresh, CacheOutcome::Miss))
 }
@@ -2708,7 +2707,7 @@ pub struct PipelineOptions {
     pub ic_lora: Option<PathBuf>,
     /// A dev DiT with the distilled LoRA keeps its unfused base in pinned
     /// host memory, not beside the live weights on the device
-    /// ([`crate::wan::nn::with_lora_base_on_host`]): one device copy of the
+    /// ([`crate::rt::nn::with_lora_base_on_host`]): one device copy of the
     /// 22B DiT, and each base <-> fused switch (stage 1 <-> stage 2 of the
     /// guided audio-to-video) uploads the base again. `FASTVIDEO_LTX2_LORA_BASE`
     /// (`host` | `device`) overrides.
@@ -2825,7 +2824,7 @@ fn keep_dit_through_decode(residency: Residency, cfg: &Ltx2Config, req: &Ltx2Req
     let Some(decode) = plan.phase("decode") else {
         return false;
     };
-    let free = crate::wan::device::free_memory().map_or(0, |(f, _)| f);
+    let free = crate::rt::device::free_memory().map_or(0, |(f, _)| f);
     free >= decode.total() + (2u64 << 30)
 }
 
@@ -2866,7 +2865,7 @@ fn load_transformer_ic(
             path.display()
         )));
     }
-    crate::wan::log::info(format_args!(
+    crate::rt::log::info(format_args!(
         "ltx2 ic-lora: attached {hits} linears (base kept for the stage-2 unfuse) from {}",
         path.display()
     ));
@@ -2895,9 +2894,9 @@ pub struct Ltx2Pipeline {
     /// Seconds [`Self::load`] took.
     pub load_s: f64,
     /// The DiT and the decoders in the device ledger.
-    booking: crate::wan::ledger::Booking,
+    booking: crate::rt::ledger::Booking,
     /// Resident `taeltx2_3_wide` video decoder ([`PipelineOptions::tae`]).
-    tae: Option<crate::wan::taehv::TaeHv>,
+    tae: Option<crate::rt::taehv::TaeHv>,
     /// A DiT that loads on the first request (LoRA pipelines): its shards,
     /// opened at pipeline load with read-ahead queued behind Gemma's (E12).
     dit_warm: std::sync::Mutex<Option<WeightMap>>,
@@ -2912,10 +2911,10 @@ pub struct Ltx2Pipeline {
 
 impl Ltx2Pipeline {
     pub fn load(paths: &Ltx2Paths, cfg: &Ltx2Config, options: &PipelineOptions) -> Result<Self> {
-        crate::wan::tensor::default_bf16_activations();
+        crate::rt::tensor::default_bf16_activations();
         // FASTVIDEO_NVFP4 here is the video FFN only (sol-engine scope):
         // Gemma, the connectors and the other DiT linears stay dense.
-        crate::wan::nvfp4::enter_ltx_video_ffn_scope();
+        crate::rt::nvfp4::enter_ltx_video_ffn_scope();
         let timer = Instant::now();
         // A distilled checkpoint already carries the adapter: the RTX5090
         // distilled two-stage (`run_ltx25_gpu.sh`) passes no LoRA. Only a dev
@@ -2946,7 +2945,7 @@ impl Ltx2Pipeline {
                         info.temporal_scale
                     )));
                 }
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "ltx2 ic-lora: {} ({} pairs, reference downscale {}, stage 1 only)",
                     path.display(),
                     info.pairs,
@@ -2957,9 +2956,9 @@ impl Ltx2Pipeline {
         };
         let active = fastvideo_models::techniques::settings::active();
         if let Some(path) = active.path.as_ref() {
-            crate::wan::log::info(format_args!("ltx2 technique profile: {}", path.display()));
+            crate::rt::log::info(format_args!("ltx2 technique profile: {}", path.display()));
             for (k, v, source) in active.settings.iter() {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "ltx2 technique setting {k}={v} ({source}{})",
                     if std::env::var_os(k).is_some() {
                         "; overridden by env"
@@ -2993,9 +2992,9 @@ impl Ltx2Pipeline {
                 DitOffload::from_env_or(options.dit_offload).map_err(err)?,
             )?;
             if offload.is_cpu() {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "ltx2 offload cpu: DiT blocks streamed from pinned host memory ({} device slots), Gemma streamed per layer, connectors / upsampler / video VAE / audio VAE on the device only around their calls",
-                    crate::wan::offload::lookahead() + 1
+                    crate::rt::offload::lookahead() + 1
                 ));
             }
             let w = fastvideo_models::ltx2::Rtx5090Workload::DEFAULT;
@@ -3008,9 +3007,9 @@ impl Ltx2Pipeline {
                 fastvideo_models::ltx2::memory::PlanOptions::default(),
             )
             .peak();
-            let free = crate::wan::device::free_memory().map(|(f, _)| f);
+            let free = crate::rt::device::free_memory().map(|(f, _)| f);
             let residency = policy.resolve(need, free);
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "ltx2 dit offload: {} -> {} (resident {} plan {:.1} GiB, {} free before load)",
                 policy.as_str(),
                 residency.as_str(),
@@ -3023,13 +3022,13 @@ impl Ltx2Pipeline {
             ));
             residency
         };
-        let mut booking = crate::wan::ledger::Booking::default();
+        let mut booking = crate::rt::ledger::Booking::default();
         let io_base = fastvideo_loader::PrefetchStats::now();
         let model = if lora.is_none() {
             let map = open_distilled(&paths.dit, "transformer")?;
             map.prefetch_all();
             Some(booking.track(
-                crate::wan::ledger::DIT_NONLINEAR,
+                crate::rt::ledger::DIT_NONLINEAR,
                 || {
                     load_transformer_ic(
                         &map,
@@ -3047,7 +3046,7 @@ impl Ltx2Pipeline {
             None
         } else {
             Some(booking.track(
-                crate::wan::ledger::VAE,
+                crate::rt::ledger::VAE,
                 || Decoders::load_without_upsampler(&paths.weights, cfg),
                 |_| None,
             )?)
@@ -3056,7 +3055,7 @@ impl Ltx2Pipeline {
             cfg.latent_upsampler.is_some() && upsampler_dir(&paths.weights).is_some();
         let tae = match resolve_tae(options.tae.as_deref()) {
             Some(path) => {
-                use crate::wan::taehv::{TaeArch, TaeHv};
+                use crate::rt::taehv::{TaeArch, TaeHv};
                 if cfg.transformer.in_channels != TaeArch::LtxWide.latent_channels() {
                     return Err(err(format!(
                         "ltx2: the LTX tiny autoencoder decodes {}-channel latents, this line has {}",
@@ -3066,13 +3065,13 @@ impl Ltx2Pipeline {
                 }
                 let tae = TaeHv::load_from_path(&path, TaeArch::LtxWide)
                     .map_err(|e| err(format!("ltx2 tae {}: {e}", path.display())))?;
-                crate::wan::log::info(format_args!("ltx2 vae=taehv ({})", path.display()));
+                crate::rt::log::info(format_args!("ltx2 vae=taehv ({})", path.display()));
                 Some(tae)
             }
             None => None,
         };
         sync()?;
-        crate::wan::weights::log_load_io("ltx2 load", &io_base, timer.elapsed().as_secs_f64());
+        crate::rt::weights::log_load_io("ltx2 load", &io_base, timer.elapsed().as_secs_f64());
         let loaded_strength = model.as_ref().map(|_| 0.0);
         let mut text = TextEncoder::new(
             paths,
@@ -3143,7 +3142,7 @@ impl Ltx2Pipeline {
             return Ok(self.model.as_ref().expect("resident dit"));
         }
         if self.model.is_some() && self.lora.is_some() {
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "ltx2: set_lora_strength {strength} (resident DiT)"
             ));
             self.model
@@ -3154,19 +3153,19 @@ impl Ltx2Pipeline {
             return Ok(self.model.as_ref().expect("resident dit"));
         }
         if self.model.is_some() {
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "ltx2: loading DiT at lora strength {strength}"
             ));
             // Drop the old DiT before the next full load. Holding both plus
             // resident Gemma is what OOMed a 96 GB PRO 6000 (~95 GiB).
             self.model = None;
             self.loaded_strength = None;
-            self.booking.release(crate::wan::ledger::DIT_NONLINEAR);
+            self.booking.release(crate::rt::ledger::DIT_NONLINEAR);
             sync()?;
         }
         let mut booking = std::mem::take(&mut self.booking);
         let loaded = booking.track(
-            crate::wan::ledger::DIT_NONLINEAR,
+            crate::rt::ledger::DIT_NONLINEAR,
             || self.load_dit(strength),
             |_| None,
         );
@@ -3200,7 +3199,7 @@ impl Ltx2Pipeline {
         model.set_lora_strength(s)?;
         sync()?;
         self.ic_strength = s;
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "ltx2 ic-lora: fused at strength {s} ({:.2}s)",
             t.elapsed().as_secs_f64()
         ));
@@ -3230,7 +3229,7 @@ impl Ltx2Pipeline {
             if let Some((ic, _)) = &self.ic_lora {
                 let model = load_transformer_ic(&map, &self.cfg, self.residency, Some(ic))?;
                 sync()?;
-                crate::wan::weights::log_load_io(
+                crate::rt::weights::log_load_io(
                     "ltx2 dit",
                     &io_base,
                     timer.elapsed().as_secs_f64(),
@@ -3242,7 +3241,7 @@ impl Ltx2Pipeline {
             // Strength 0 so `apply_bf16` is a no-op and `attach_linear` snapshots
             // unfused `W0`. Device re-fuse walks the resident linears.
             let guard = super::lora::install(&path, 0.0)?;
-            let mut model = crate::wan::nn::with_lora_base_on_host(self.lora_base_host, || {
+            let mut model = crate::rt::nn::with_lora_base_on_host(self.lora_base_host, || {
                 Ltx2Transformer::load_with_residency(
                     &map,
                     &keys,
@@ -3260,7 +3259,7 @@ impl Ltx2Pipeline {
             }
             model.set_lora_strength(strength)?;
             drop(guard);
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "ltx2 lora: attached {hits} weights, fused at strength {strength}, unfused base on the {} ({})",
                 if self.lora_base_host { "host (pinned)" } else { "device" },
                 path.display()
@@ -3275,7 +3274,7 @@ impl Ltx2Pipeline {
             )?
         };
         sync()?;
-        crate::wan::weights::log_load_io("ltx2 dit", &io_base, timer.elapsed().as_secs_f64());
+        crate::rt::weights::log_load_io("ltx2 dit", &io_base, timer.elapsed().as_secs_f64());
         Ok(model)
     }
 
@@ -3289,12 +3288,12 @@ impl Ltx2Pipeline {
         if self.decoders.is_none() {
             let timer = Instant::now();
             let decoders = self.booking.track(
-                crate::wan::ledger::VAE,
+                crate::rt::ledger::VAE,
                 || Decoders::load_without_upsampler(&self.weights, &self.cfg),
                 |_| None,
             )?;
             self.decoders = Some(decoders);
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "ltx2 decoders: loaded for this call ({:.1}s)",
                 timer.elapsed().as_secs_f64()
             ));
@@ -3305,7 +3304,7 @@ impl Ltx2Pipeline {
     /// Streamed runs: drop the decoders until the next call that reads them.
     fn release_transient_decoders(&mut self) -> Result<()> {
         if self.residency.is_streamed() && self.decoders.take().is_some() {
-            self.booking.release(crate::wan::ledger::VAE);
+            self.booking.release(crate::rt::ledger::VAE);
             trim()?;
         }
         Ok(())
@@ -3415,7 +3414,7 @@ impl Ltx2Pipeline {
             self.cfg.vae.patch_size,
             self.cfg.vae.pixel_norm_eps,
         )?;
-        let inject = crate::wan::inject::enabled()
+        let inject = crate::rt::inject::enabled()
             && std::env::var("FASTVIDEO_INJECT_COND").map_or(true, |v| v != "0");
         let mut out = Vec::with_capacity(sizes.len());
         for &(h, w, tag) in sizes {
@@ -3423,27 +3422,27 @@ impl Ltx2Pipeline {
             for (i, rgb) in rgbs.iter().enumerate() {
                 let mut px = super::i2v_encode::image_pixels(rgb, h, w);
                 let pname = format!("{tag}_cond{i}_pixels");
-                crate::wan::dump::host(&pname, &[3, h, w], &px)?;
+                crate::rt::dump::host(&pname, &[3, h, w], &px)?;
                 // FASTVIDEO_INJECT_PIXELS (default on with FASTVIDEO_INJECT_DIR):
                 // encode the reference's preprocessed pixels, so the latent diff
                 // is the encoder's alone.
-                if crate::wan::inject::enabled()
+                if crate::rt::inject::enabled()
                     && std::env::var("FASTVIDEO_INJECT_PIXELS").map_or(true, |v| v != "0")
                 {
-                    if let Some(v) = crate::wan::inject::load_numel(&pname, px.len())? {
-                        crate::wan::log::info(format_args!("inject: {pname} (reference)"));
+                    if let Some(v) = crate::rt::inject::load_numel(&pname, px.len())? {
+                        crate::rt::log::info(format_args!("inject: {pname} (reference)"));
                         px = v;
                     }
                 }
                 let lat = encoder.encode_image(&px, h, w)?;
                 let lat = state.store(pack_video(&lat)?)?;
                 let name = format!("{tag}_cond{i}_latent");
-                crate::wan::dump::tensor(&name, &lat)?;
-                crate::wan::dump::digest(&name, &lat)?;
+                crate::rt::dump::tensor(&name, &lat)?;
+                crate::rt::dump::digest(&name, &lat)?;
                 let lat = if inject {
-                    match crate::wan::inject::load_numel(&name, lat.numel())? {
+                    match crate::rt::inject::load_numel(&name, lat.numel())? {
                         Some(v) => {
-                            crate::wan::log::info(format_args!("inject: {name} (reference)"));
+                            crate::rt::log::info(format_args!("inject: {name} (reference)"));
                             CudaTensor::from_vec(v, lat.shape.clone())?.to_device()?
                         }
                         None => lat,
@@ -3466,12 +3465,12 @@ impl Ltx2Pipeline {
                 let rgb = super::i2v_encode::decode_image(path)?;
                 let mut px = super::i2v_encode::image_pixels(&rgb, h, w);
                 let pname = "s1_ref0_pixels";
-                crate::wan::dump::host(pname, &[3, h, w], &px)?;
-                if crate::wan::inject::enabled()
+                crate::rt::dump::host(pname, &[3, h, w], &px)?;
+                if crate::rt::inject::enabled()
                     && std::env::var("FASTVIDEO_INJECT_PIXELS").map_or(true, |v| v != "0")
                 {
-                    if let Some(v) = crate::wan::inject::load_numel(pname, px.len())? {
-                        crate::wan::log::info(format_args!("inject: {pname} (reference)"));
+                    if let Some(v) = crate::rt::inject::load_numel(pname, px.len())? {
+                        crate::rt::log::info(format_args!("inject: {pname} (reference)"));
                         px = v;
                     }
                 }
@@ -3501,12 +3500,12 @@ impl Ltx2Pipeline {
         let mut wave =
             super::a2v::decode(&audio.path, Some(req.num_frames as f64 / req.frame_rate))?;
         let wname = "a2v_audio_wave";
-        crate::wan::dump::host(wname, &[wave.channels, wave.samples()], &wave.planar)?;
-        if crate::wan::inject::enabled()
+        crate::rt::dump::host(wname, &[wave.channels, wave.samples()], &wave.planar)?;
+        if crate::rt::inject::enabled()
             && std::env::var("FASTVIDEO_INJECT_PIXELS").map_or(true, |v| v != "0")
         {
-            if let Some(v) = crate::wan::inject::load_numel(wname, wave.planar.len())? {
-                crate::wan::log::info(format_args!("inject: {wname} (reference)"));
+            if let Some(v) = crate::rt::inject::load_numel(wname, wave.planar.len())? {
+                crate::rt::log::info(format_args!("inject: {wname} (reference)"));
                 wave.planar = v;
             }
         }
@@ -3534,13 +3533,13 @@ impl Ltx2Pipeline {
             )));
         }
         let lname = "a2v_audio_latent";
-        crate::wan::dump::tensor(lname, &clean)?;
-        crate::wan::dump::digest(lname, &clean)?;
-        if crate::wan::inject::enabled()
+        crate::rt::dump::tensor(lname, &clean)?;
+        crate::rt::dump::digest(lname, &clean)?;
+        if crate::rt::inject::enabled()
             && std::env::var("FASTVIDEO_INJECT_COND").map_or(true, |v| v != "0")
         {
-            if let Some(v) = crate::wan::inject::load_numel(lname, clean.numel())? {
-                crate::wan::log::info(format_args!("inject: {lname} (reference)"));
+            if let Some(v) = crate::rt::inject::load_numel(lname, clean.numel())? {
+                crate::rt::log::info(format_args!("inject: {lname} (reference)"));
                 clean = CudaTensor::from_vec(v, clean.shape.clone())?.to_device()?;
             }
         }
@@ -3581,7 +3580,7 @@ impl Ltx2Pipeline {
             model.set_video_frozen(false);
         }
         if matches!(&out, Err(e) if e.is_cancelled()) {
-            crate::wan::dump::set_prefix("");
+            crate::rt::dump::set_prefix("");
             if let Some(model) = self.model.as_ref() {
                 model.disarm_fbcache();
                 model.set_prune_active(false);
@@ -3603,7 +3602,7 @@ impl Ltx2Pipeline {
         req.validate()?;
         // FASTVIDEO_GPU_TRACE: one step of this generate (stage 1 and 2
         // count as one sequence; FASTVIDEO_GPU_TRACE_STEP picks it).
-        crate::wan::gpu_trace::pass_begin("ltx2");
+        crate::rt::gpu_trace::pass_begin("ltx2");
         let cfg = self.cfg.clone();
         // Audio-to-video on the LTX-2.5 dev transformer: `A2VidPipelineTwoStage`
         // proper, a guided stage 1 ([`denoise_guided_cond`]).
@@ -3638,7 +3637,7 @@ impl Ltx2Pipeline {
                 && req.stage1_steps() == fastvideo_models::ltx2::hq::STAGE1_STEPS
                 && (req.guidance_scale - fastvideo_models::ltx2::hq::GUIDANCE_SCALE).abs() < 1e-6)
         {
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "ltx2 hq: stage-1 {} steps, stage-2 sigmas {:?}, guidance {}, {}x{} {}f ({})",
                 req.stage1_steps(),
                 fastvideo_models::ltx2::hq::STAGE2_SIGMAS,
@@ -3719,21 +3718,21 @@ impl Ltx2Pipeline {
         timings.text_s = text_report.seconds;
         // FASTVIDEO_DUMP_DIR / FASTVIDEO_INJECT_DIR: ours first (so a diff
         // shows the text path's own parity), then the reference's contexts.
-        crate::wan::dump::tensor("text_video_ctx", &contexts.video)?;
-        crate::wan::dump::tensor("text_audio_ctx", &contexts.audio)?;
-        crate::wan::dump::digest("text_video_ctx", &contexts.video)?;
-        crate::wan::dump::digest("text_audio_ctx", &contexts.audio)?;
-        if crate::wan::inject::text_enabled() {
+        crate::rt::dump::tensor("text_video_ctx", &contexts.video)?;
+        crate::rt::dump::tensor("text_audio_ctx", &contexts.audio)?;
+        crate::rt::dump::digest("text_video_ctx", &contexts.video)?;
+        crate::rt::dump::digest("text_audio_ctx", &contexts.audio)?;
+        if crate::rt::inject::text_enabled() {
             for (name, slot) in [
                 ("text_video_ctx", &mut contexts.video),
                 ("text_audio_ctx", &mut contexts.audio),
             ] {
-                match crate::wan::inject::load(name)? {
+                match crate::rt::inject::load(name)? {
                     Some((_, v)) if v.len() == slot.numel() => {
                         let shape = slot.shape.clone();
                         *slot = CudaTensor::from_vec(v, shape)?.to_device()?;
                     }
-                    Some((shape, _)) => crate::wan::log::info(format_args!(
+                    Some((shape, _)) => crate::rt::log::info(format_args!(
                         "inject: {name} {shape:?} does not fit ours {:?}; ours kept",
                         slot.shape
                     )),
@@ -3754,19 +3753,19 @@ impl Ltx2Pipeline {
             };
             let (mut c, rep) = self.text.encode(negative, use_text_cache)?;
             timings.text_s += rep.seconds;
-            crate::wan::dump::tensor("text_video_ctx_neg", &c.video)?;
-            crate::wan::dump::tensor("text_audio_ctx_neg", &c.audio)?;
-            if crate::wan::inject::text_enabled() {
+            crate::rt::dump::tensor("text_video_ctx_neg", &c.video)?;
+            crate::rt::dump::tensor("text_audio_ctx_neg", &c.audio)?;
+            if crate::rt::inject::text_enabled() {
                 for (name, slot) in [
                     ("text_video_ctx_neg", &mut c.video),
                     ("text_audio_ctx_neg", &mut c.audio),
                 ] {
-                    match crate::wan::inject::load(name)? {
+                    match crate::rt::inject::load(name)? {
                         Some((_, v)) if v.len() == slot.numel() => {
                             let shape = slot.shape.clone();
                             *slot = CudaTensor::from_vec(v, shape)?.to_device()?;
                         }
-                        Some((shape, _)) => crate::wan::log::info(format_args!(
+                        Some((shape, _)) => crate::rt::log::info(format_args!(
                             "inject: {name} {shape:?} does not fit ours {:?}; ours kept",
                             slot.shape
                         )),
@@ -3832,7 +3831,7 @@ impl Ltx2Pipeline {
             cond_latents = Some((s1, s2));
             trim()?;
             timings.image_s = t.elapsed().as_secs_f64();
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "ltx2: {} conditioning image(s){} encoded in {:.2}s",
                 images.len(),
                 if ref_geom.is_some() {
@@ -3853,7 +3852,7 @@ impl Ltx2Pipeline {
                 let (clean, wave) = self.encode_driving_audio(a, req, audio_tokens)?;
                 trim()?;
                 timings.audio_encode_s = t.elapsed().as_secs_f64();
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "ltx2 a2v: {} ({} Hz, {:.3}s used) → {} audio tokens, encoded in {:.2}s",
                     a.path.display(),
                     wave.rate,
@@ -3906,20 +3905,20 @@ impl Ltx2Pipeline {
             let [rf, rh, rw] = cfg.transformer.latent_grid(req.num_frames, h, w);
             let mut tokens = ReferenceTokens::static_clip(&frame, rf, [rh, rw], d, r.strength)?;
             drop(frame);
-            crate::wan::dump::tensor("s1_ref0_latent", &tokens.clean)?;
-            crate::wan::dump::digest("s1_ref0_latent", &tokens.clean)?;
-            if crate::wan::inject::enabled()
+            crate::rt::dump::tensor("s1_ref0_latent", &tokens.clean)?;
+            crate::rt::dump::digest("s1_ref0_latent", &tokens.clean)?;
+            if crate::rt::inject::enabled()
                 && std::env::var("FASTVIDEO_INJECT_COND").map_or(true, |v| v != "0")
             {
                 if let Some(v) =
-                    crate::wan::inject::load_numel("s1_ref0_latent", tokens.clean.numel())?
+                    crate::rt::inject::load_numel("s1_ref0_latent", tokens.clean.numel())?
                 {
-                    crate::wan::log::info(format_args!("inject: s1_ref0_latent (reference)"));
+                    crate::rt::log::info(format_args!("inject: s1_ref0_latent (reference)"));
                     tokens.clean =
                         CudaTensor::from_vec(v, tokens.clean.shape.clone())?.to_device()?;
                 }
             }
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "ltx2 reference: {} at {w}x{h} (downscale {d}), {} tokens [{rf}, {rh}, {rw}], strength {}, ic-lora {}",
                 r.path.display(),
                 tokens.tokens(),
@@ -3984,8 +3983,8 @@ impl Ltx2Pipeline {
         let extra_tokens1 = cond1.as_ref().map_or(0, StageConditioning::appended_tokens);
         let (mut video, mut audio) =
             initial_noise_with(&cfg, grid1, extra_tokens1, audio_tokens, &mut noise)?;
-        crate::wan::dump::digest("noise_video", &video)?;
-        crate::wan::dump::digest("noise_audio", &audio)?;
+        crate::rt::dump::digest("noise_video", &video)?;
+        crate::rt::dump::digest("noise_audio", &audio)?;
         // Frozen audio: the noise was drawn (the stream stays aligned with the
         // reference's), `lerp(x, ε, 0)` and the zero mask leave it clean.
         if let Some((clean, _)) = &driving {
@@ -4017,8 +4016,8 @@ impl Ltx2Pipeline {
             .as_ref()
             .expect("dit")
             .set_video_frozen(video_frozen);
-        crate::wan::dump::digest("text_proj_video", &text.video)?;
-        crate::wan::dump::digest("text_proj_audio", &text.audio)?;
+        crate::rt::dump::digest("text_proj_video", &text.video)?;
+        crate::rt::dump::digest("text_proj_audio", &text.audio)?;
         if let Some(c) = &cond1 {
             // `GaussianNoiser`: lerp(clean, noised, mask) on the conditioned rows.
             // A frozen video (an edit that keeps it) stays at its noise until
@@ -4030,7 +4029,7 @@ impl Ltx2Pipeline {
                 .as_ref()
                 .expect("dit")
                 .set_video_conditioning(Some(c.timestep_segments()));
-            crate::wan::dump::digest("cond_noise_video", &video)?;
+            crate::rt::dump::digest("cond_noise_video", &video)?;
         }
         let mut step_s = Vec::new();
         let mut observer = observer;
@@ -4057,7 +4056,7 @@ impl Ltx2Pipeline {
         let res2s = cfg.version == Ltx2ModelVersion::V23;
         // An edit's one stage is the reference's first (and only)
         // `DiffusionStage`: its dumps are `s1_` as well.
-        crate::wan::dump::set_prefix(if req.two_stage || req.edit.is_some() {
+        crate::rt::dump::set_prefix(if req.two_stage || req.edit.is_some() {
             "s1_"
         } else {
             ""
@@ -4068,8 +4067,8 @@ impl Ltx2Pipeline {
             let model = self.model.as_ref().expect("ensure_dit");
             let mut record = |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
                 step_s.push(s);
-                crate::wan::dump::digest(&format!("s1_step{i}_video"), v)?;
-                crate::wan::dump::digest(&format!("s1_step{i}_audio"), a)?;
+                crate::rt::dump::digest(&format!("s1_step{i}_video"), v)?;
+                crate::rt::dump::digest(&format!("s1_step{i}_audio"), a)?;
                 match observer.as_mut() {
                     Some(obs) => obs(i, v, a, s),
                     None => Ok(()),
@@ -4169,8 +4168,8 @@ impl Ltx2Pipeline {
         }
         drop(cond1);
         timings.stage1_s = timer.elapsed().as_secs_f64();
-        crate::wan::dump::digest("stage1_video", &video)?;
-        crate::wan::dump::digest("stage1_audio", &audio)?;
+        crate::rt::dump::digest("stage1_video", &video)?;
+        crate::rt::dump::digest("stage1_audio", &audio)?;
         self.report_offload("stage1");
         if let Some(model) = self.model.as_ref() {
             model.disarm_fbcache();
@@ -4194,10 +4193,10 @@ impl Ltx2Pipeline {
                 if let Some(model) = self.model.as_ref() {
                     model.release_offload_device();
                 }
-                let mut up_booking = crate::wan::ledger::Booking::default();
+                let mut up_booking = crate::rt::ledger::Booking::default();
                 let up = up_booking
                     .track(
-                        crate::wan::ledger::UPSAMPLER,
+                        crate::rt::ledger::UPSAMPLER,
                         || load_upsampler(&self.weights, &cfg),
                         |_| None,
                     )?
@@ -4208,30 +4207,30 @@ impl Ltx2Pipeline {
                 let upsampled =
                     up.forward(&decoders.video.denormalize(&unpack_video(&video, grid1)?)?)?;
                 video = state.store(pack_video(&decoders.video.normalize(&upsampled)?)?)?;
-                crate::wan::dump::digest("upsampled_video", &video)?;
-                crate::wan::dump::rows_strided(
+                crate::rt::dump::digest("upsampled_video", &video)?;
+                crate::rt::dump::rows_strided(
                     "s2_upsampled",
                     &video,
-                    crate::wan::dump::BLOCK_ROW_STRIDE,
+                    crate::rt::dump::BLOCK_ROW_STRIDE,
                 )?;
             }
             self.release_transient_decoders()?;
             trim()?;
             timings.upsample_s = up_timer.elapsed().as_secs_f64();
             memory.mark("upsample")?;
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "ltx2 upsample {:.2}s → latent grid {:?}",
                 timings.upsample_s, grid_full
             ));
 
             if req.sol_stage2 {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "ltx2 sol stage-2: taus 1/1.25/1.5, layer 0 dense, layers 1-47 sol-attn kernel (thresh_type=diag), {}",
                     self.lora_note(true)
                 ));
             }
             if req.pisa_stage2 {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "ltx2 pisa stage-2: layers 0-1 dense, layers 2-47 pisa kernel sparsity 0.9 block 64 score-route first-order remainder, feat_norm prune steps 1,2 ratio 0.5 when FASTVIDEO_LTX2_MIDPOINT_PRUNE, {}, stage-1 SCSP res2s calls 16-28 of 29 when FASTVIDEO_LTX2_STAGE1_CACHE",
                     self.lora_note(true)
                 ));
@@ -4306,19 +4305,19 @@ impl Ltx2Pipeline {
                     .expect("dit")
                     .set_video_conditioning(Some(c.timestep_segments()));
             }
-            crate::wan::dump::set_prefix("s2_");
+            crate::rt::dump::set_prefix("s2_");
             // FASTVIDEO_INJECT_DIR: stage 2 starts from the reference's own
             // entry state, so its diff is stage 2's alone (our entry, from our
             // stage 1 and upsampler, is dumped first as `s2_entry`).
-            if crate::wan::inject::enabled() {
-                crate::wan::dump::tensor("s2_entry_video", &video)?;
-                crate::wan::dump::tensor("s2_entry_audio", &audio)?;
+            if crate::rt::inject::enabled() {
+                crate::rt::dump::tensor("s2_entry_video", &video)?;
+                crate::rt::dump::tensor("s2_entry_audio", &audio)?;
                 if std::env::var("FASTVIDEO_INJECT_STAGE2").map_or(true, |v| v != "0") {
                     for (name, slot) in [
                         ("s2_video_step00_in", &mut video),
                         ("s2_audio_step00_in", &mut audio),
                     ] {
-                        if let Some(v) = crate::wan::inject::load_numel(name, slot.numel())? {
+                        if let Some(v) = crate::rt::inject::load_numel(name, slot.numel())? {
                             let shape = slot.shape.clone();
                             *slot = CudaTensor::from_vec(v, shape)?.to_device()?;
                         }
@@ -4342,8 +4341,8 @@ impl Ltx2Pipeline {
                 let mut record2 =
                     |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
                         step_s.push(s);
-                        crate::wan::dump::digest(&format!("s2_step{i}_video"), v)?;
-                        crate::wan::dump::digest(&format!("s2_step{i}_audio"), a)?;
+                        crate::rt::dump::digest(&format!("s2_step{i}_video"), v)?;
+                        crate::rt::dump::digest(&format!("s2_step{i}_audio"), a)?;
                         match observer.as_mut() {
                             Some(obs) => obs(step_offset + i, v, a, s),
                             None => Ok(()),
@@ -4375,8 +4374,8 @@ impl Ltx2Pipeline {
             drop(cond2);
             video = v2;
             audio = a2;
-            crate::wan::dump::digest("stage2_video", &video)?;
-            crate::wan::dump::digest("stage2_audio", &audio)?;
+            crate::rt::dump::digest("stage2_video", &video)?;
+            crate::rt::dump::digest("stage2_audio", &audio)?;
             timings.stage2_s = s2_timer.elapsed().as_secs_f64();
             self.report_offload("stage2");
             self.end_stage();
@@ -4404,7 +4403,7 @@ impl Ltx2Pipeline {
         self.end_stage();
         if !keep_dit_through_decode(self.residency, &self.cfg, req) {
             release_dit_for_decode(&mut self.model, &mut self.loaded_strength);
-            self.booking.release(crate::wan::ledger::DIT_NONLINEAR);
+            self.booking.release(crate::rt::ledger::DIT_NONLINEAR);
             trim()?;
         }
         hooks.stage(Stage::VideoDecode, 0)?;
@@ -4427,7 +4426,7 @@ impl Ltx2Pipeline {
             }
             decode_tae_and_write(decoders, tae, &video, &audio, decode_grid, &out)?
         } else if req.diff_vae {
-            crate::wan::log::info(format_args!("ltx2: DiffVAE decode (DiT dropped)"));
+            crate::rt::log::info(format_args!("ltx2: DiffVAE decode (DiT dropped)"));
             let dd_cfg = cfg.diffusion_decoder.as_ref().expect("checked above");
             let diffvae = DiffusionDecoder::load(
                 &WeightMap::open(&self.weights.join("diffusion_decoder"))?,
@@ -4589,7 +4588,7 @@ impl Ltx2Pipeline {
         trim()?;
         memory.mark("text")?;
         let schedule = Ltx2Schedule::distilled_stage_2_steps(3).map_err(err)?;
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "ltx2 refine: 3 deterministic steps {:?}, sol stage-2, lora {strength} {}, grid {:?}, {} audio tokens",
             schedule.sigmas,
             self.lora.as_deref().map(Path::display).map(|d| d.to_string()).unwrap_or_default(),

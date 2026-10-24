@@ -26,9 +26,9 @@ use fastvideo_loader::{LazyDType, LazyStore, TensorSpec};
 use serde::{Deserialize, Serialize};
 
 use super::DecoderConfig;
-use crate::wan::nn::{Fp8Capture, FP8_ROWS_SCALE_SUFFIX};
-use crate::wan::tensor::{Result, TensorError};
-use crate::wan::weights::WeightMap;
+use crate::rt::nn::{Fp8Capture, FP8_ROWS_SCALE_SUFFIX};
+use crate::rt::tensor::{Result, TensorError};
+use crate::rt::weights::WeightMap;
 
 /// Directory name beside the source `text_encoder/`.
 pub const DIR_NAME: &str = "text_encoder_fp8";
@@ -160,7 +160,7 @@ pub fn open_tree(source_dir: &Path, layers: usize) -> Result<Option<WeightMap>> 
     }
     match check(source_dir, &dir, layers) {
         Ok(m) => {
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "text encoder: pre-quantized fp8 tree {} ({} linears, {} layers)",
                 dir.display(),
                 m.quantized_linears,
@@ -169,7 +169,7 @@ pub fn open_tree(source_dir: &Path, layers: usize) -> Result<Option<WeightMap>> 
             Ok(Some(WeightMap::open(&dir)?))
         }
         Err(why) => {
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "text encoder: ignoring {} ({why}); quantizing at load",
                 dir.display()
             ));
@@ -204,7 +204,7 @@ pub fn kept_keys(src: &LazyStore, cfg: &DecoderConfig, layers: usize) -> Vec<Str
 }
 
 /// Write the tree for `source_dir` into `out_dir` (created; must not hold a
-/// manifest already). `captured` is [`crate::wan::nn::capture_fp8_rows`] of a
+/// manifest already). `captured` is [`crate::rt::nn::capture_fp8_rows`] of a
 /// resident FP8 load of the same `cfg` / `layers` from `source_dir`.
 /// `source_hashes` maps source file names to their sha256.
 pub fn write_tree(

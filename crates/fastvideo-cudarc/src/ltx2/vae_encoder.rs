@@ -27,10 +27,10 @@
 
 use std::path::Path;
 
-use crate::wan::ops::PadMode;
+use crate::rt::ops::PadMode;
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::{cuda_tensor_shaped, WeightMap};
 use crate::wan::pipeline::{PipelineError, Result};
-use crate::wan::tensor::CudaTensor;
-use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
 
 fn msg(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())

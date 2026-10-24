@@ -15,10 +15,10 @@ use fastvideo_models::h3::spark::{
     H3_INPUT, H3_UPSCALED, PIXEL_FRAMES, PIXEL_HEIGHT, PIXEL_WIDTH, REFINER_INPUT, UPSCALER_FILES,
 };
 
-use crate::wan::nn::Linear;
-use crate::wan::ops::PadMode;
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{cuda_tensor, WeightMap};
+use crate::rt::nn::Linear;
+use crate::rt::ops::PadMode;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{cuda_tensor, WeightMap};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -304,7 +304,7 @@ impl Upscaler {
                 )));
             }
         }
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "h3 upscaler: {} channels {} in/out res blocks {}/{} temporal kernel {}",
             path.display(),
             conv_in.weight.shape[0],

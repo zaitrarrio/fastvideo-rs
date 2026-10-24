@@ -42,8 +42,8 @@ use std::process::Command;
 use fastvideo_models::ltx2::config::Ltx2ModelVersion;
 use image::RgbImage;
 
+use crate::rt::tensor::CudaTensor;
 use crate::wan::pipeline::{PipelineError, Result};
-use crate::wan::tensor::CudaTensor;
 
 use super::transformer::VideoTimestepSegment;
 

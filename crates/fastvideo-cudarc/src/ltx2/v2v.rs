@@ -55,8 +55,8 @@ use fastvideo_models::ltx2::edit::{self as e, ExtendAt};
 use fastvideo_models::ltx2::tiling::{EncodePlan, TileSizeConfig, VIDEO_SCALE};
 use image::RgbImage;
 
+use crate::rt::tensor::CudaTensor;
 use crate::wan::pipeline::{PipelineError, Result};
-use crate::wan::tensor::CudaTensor;
 
 use super::a2v::{self, Waveform, ENCODER_CHANNELS};
 use super::audio_vae::{conform_audio_time, pack_audio_latent, AudioEncoder};
@@ -582,11 +582,11 @@ fn pad_rows(x: CudaTensor, pad: usize, at: ExtendAt) -> Result<CudaTensor> {
 /// Replace `t` with the reference's dump of the same size when injecting
 /// (`FASTVIDEO_INJECT_COND`, default on).
 fn inject(name: &str, t: CudaTensor) -> Result<CudaTensor> {
-    if crate::wan::inject::enabled()
+    if crate::rt::inject::enabled()
         && std::env::var("FASTVIDEO_INJECT_COND").map_or(true, |v| v != "0")
     {
-        if let Some(v) = crate::wan::inject::load_numel(name, t.numel())? {
-            crate::wan::log::info(format_args!("inject: {name} (reference)"));
+        if let Some(v) = crate::rt::inject::load_numel(name, t.numel())? {
+            crate::rt::log::info(format_args!("inject: {name} (reference)"));
             return Ok(CudaTensor::from_vec(v, t.shape.clone())?.to_device()?);
         }
     }
@@ -659,7 +659,7 @@ pub fn prepare(
         height,
         width,
     )?;
-    crate::wan::dump::host("v2v_frame0_pixels", &[3, height, width], &px.frame(0))?;
+    crate::rt::dump::host("v2v_frame0_pixels", &[3, height, width], &px.frame(0))?;
     let encoder = VideoEncoder::load(
         &weights.join("vae"),
         cfg.vae.patch_size,
@@ -675,8 +675,8 @@ pub fn prepare(
         )));
     }
     let packed = state.store(pack_video(&latent.to_device()?)?)?;
-    crate::wan::dump::tensor("v2v_video_latent", &packed)?;
-    crate::wan::dump::digest("v2v_video_latent", &packed)?;
+    crate::rt::dump::tensor("v2v_video_latent", &packed)?;
+    crate::rt::dump::digest("v2v_video_latent", &packed)?;
     let packed = inject("v2v_video_latent", packed)?;
     let clean_v = match edit.kind {
         EditKind::Extend { frames, at } => pad_rows(packed, frames / e::TIME_FACTOR * hw, at)?,
@@ -698,7 +698,7 @@ pub fn prepare(
     };
     let segs = pinned_segments(&video_mask, hw, &clean_v)?;
     let mut cond = StageConditioning::pinned(lf * hw, hw, segs)?;
-    crate::wan::log::info(format_args!(
+    crate::rt::log::info(format_args!(
         "ltx2 edit: video {}x{} {target} frames at {fps:.3} fps, window {}+{} of {}, region [{r0:.3}, {r1:.3}) s, {}/{lf} latent frames regenerated, encoded in {video_s:.2}s",
         width,
         height,
@@ -741,12 +741,12 @@ pub fn prepare(
         None => None,
         Some(mut wave) => {
             let wname = "v2v_audio_wave";
-            crate::wan::dump::host(wname, &[wave.channels, wave.samples()], &wave.planar)?;
-            if crate::wan::inject::enabled()
+            crate::rt::dump::host(wname, &[wave.channels, wave.samples()], &wave.planar)?;
+            if crate::rt::inject::enabled()
                 && std::env::var("FASTVIDEO_INJECT_PIXELS").map_or(true, |v| v != "0")
             {
-                if let Some(v) = crate::wan::inject::load_numel(wname, wave.planar.len())? {
-                    crate::wan::log::info(format_args!("inject: {wname} (reference)"));
+                if let Some(v) = crate::rt::inject::load_numel(wname, wave.planar.len())? {
+                    crate::rt::log::info(format_args!("inject: {wname} (reference)"));
                     wave.planar = v;
                 }
             }
@@ -760,8 +760,8 @@ pub fn prepare(
             let packed = state.store(pack_audio_latent(
                 &conform_audio_time(&encoded, window_tokens)?.to_device()?,
             )?)?;
-            crate::wan::dump::tensor("v2v_audio_latent", &packed)?;
-            crate::wan::dump::digest("v2v_audio_latent", &packed)?;
+            crate::rt::dump::tensor("v2v_audio_latent", &packed)?;
+            crate::rt::dump::digest("v2v_audio_latent", &packed)?;
             let packed = inject("v2v_audio_latent", packed)?;
             let padded = match edit.kind {
                 EditKind::Extend { at, .. } => {
@@ -775,7 +775,7 @@ pub fn prepare(
                     padded.shape
                 )));
             }
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "ltx2 edit: audio {} Hz, {:.3}s{} → {window_tokens} of {audio_tokens} tokens",
                 wave.rate,
                 wave.duration_s(),

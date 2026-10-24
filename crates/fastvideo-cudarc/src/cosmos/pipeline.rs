@@ -7,10 +7,10 @@ use fastvideo_models::wan::WanVaeConfig;
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
 
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::{frames_to_rgb8, PipelineError, Result};
-use crate::wan::tensor::CudaTensor;
 use crate::wan::vae::AutoencoderKlWan;
-use crate::wan::weights::WeightMap;
 
 use super::text;
 use super::transformer::CosmosTransformer;
@@ -310,7 +310,7 @@ impl CosmosPipeline {
         );
         if sol_tea {
             dit.enable_sol_teacache();
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "cosmos sol: teacache thr {} start {} max {} (time-embed relative L1, block residual, nvfp4 not applied)",
                 fastvideo_models::cosmos::sol::TEACACHE_THRESHOLD,
                 fastvideo_models::cosmos::sol::TEACACHE_START_STEP,
@@ -320,7 +320,7 @@ impl CosmosPipeline {
         if fastvideo_models::cosmos::sol::official_requested(
             std::env::var("FASTVIDEO_COSMOS3_OFFICIAL").ok().as_deref(),
         ) {
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "cosmos3 official: {}x{} {}f {} steps guidance {} fps {} (flow_shift {} recorded, EDM schedule unchanged, nvfp4 not applied)",
                 request.width,
                 request.height,

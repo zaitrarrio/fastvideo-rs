@@ -5,7 +5,7 @@
 //! is bit-identical to FP32 and no faster was not honored by cuBLAS.
 
 use cudarc::driver::CudaSlice;
-use fastvideo_cudarc::wan::device::{self, GemmMath};
+use fastvideo_cudarc::rt::device::{self, GemmMath};
 use serde_json::json;
 
 use crate::metrics::diff;

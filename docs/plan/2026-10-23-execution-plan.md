@@ -73,7 +73,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| B1 | Extract the runtime: `cudarc/src/wan/{tensor,device,ops,kernels,nn,weights,offload,quant,log,dump,ledger,envflag,resident,stage_upload,hostmem,writer}` to `cudarc/src/rt/`; `kernels.cu` split by region and concatenated at build time; `gpucheck` and `engine-service` import `rt` | byte-identical SASS and clips | CPU tests + nvrtc gate on the pod; **GPU** `techniques` byte-identity cell for H3, LTX, Wan | F1 | active |
+| B1 | Extract the runtime: `cudarc/src/wan/{tensor,device,ops,kernels,nn,weights,offload,quant,log,dump,ledger,envflag,resident,stage_upload,hostmem,writer}` to `cudarc/src/rt/`; `kernels.cu` split by region and concatenated at build time; `gpucheck` and `engine-service` import `rt` | byte-identical SASS and clips | CPU tests + nvrtc gate on the pod; **GPU** `techniques` byte-identity cell for H3, LTX, Wan | F1 | pr |
 | B2 | `VideoFamily` trait, common `Request`/`Conditioning`, `Request::validate(&ModelCaps)`; the 21 registry tables, `resolve()`, `all_registered_ids()` and the 20 `generate_*` functions replaced by the manifest and a static family list; `AvGenerateOptions` reduced to common fields | CLI behaviour unchanged for every preset (golden `--help` and tiny CPU generations); 83 Hub ids resolve | pod; **GPU** one tiny generation per served family | A2, B1 | todo |
 | B3 | Settings layer: the `FASTVIDEO_*` table generated from one declarative list; the 111 direct reads routed through `settings::var`; a `Settings` snapshot passed to `load`; `model_spec` for Wan and the small families; `docs/scope.md` table generated | zero direct `env::var("FASTVIDEO_` outside `settings`; off-identity invariant tests | pod; **GPU** byte-identity cell | B1 | todo |
 
@@ -236,6 +236,27 @@ ran (pod id, $/hr), result, cost.
   hit yet): 69 test binaries, 720 passed, 0 failed; coverage over the instrumented
   workspace files: lines 62.42% (54115 / 86700), regions 62.96%, functions
   59.31%; `adapter-coverage` artifact 4.5 MB (lcov, HTML, summaries).
+- 2026-10-24 00:40Z: B1 opened as a draft PR (`claude/b1-runtime-extract`)
+  from the build pod `i8tu0lpdb6nvov`: 45 `wan/` modules moved to
+  `cudarc/src/rt/` with `wan::` re-export shims, `kernels.cu` split into 14
+  region files concatenated at build time (sha256 pinned by two tests). On
+  the pod: fmt and clippy `-D warnings` green, `--features cuda` type-check
+  green (nvcc embedded cubins for sm 75–120 from the concatenation), 1809
+  workspace lib tests passed, 0 failed (cudarc 606, models 544,
+  engine-service 75), `scripts/serve/check.sh` green. GPU byte-identity cell
+  pending (coordinator, before merge).
+- 2026-10-24 01:41Z: B1 GPU byte-identity gate green on one RTX PRO 6000
+  (EU-RO-1, volume `bz0ofkfx45`, pod `b4vz9cljstlvbc`, 34 min at $2.49/hr,
+  deleted): `techniques` family, baseline `42da257` against the PR image
+  `51898b8`; cells fasth3-4step-vsa-768p, h3-480p-fullopt and
+  ltx25-512p-sol, each base vs env and base vs prof: 124/124 (H3) and
+  121/121 (LTX) frames identical, max abs diff 0; the LTX cache arm
+  identical too. fasth3-8step-768p skipped (`h3-8step` is not on the 500 GB
+  EU volume, owner decision); no Wan cell (no Wan trees on the EU volume;
+  Wan is covered by the kernel-source sha256 pins and the shared runtime).
+  Evidence: `artifacts/runpod/techniques/51898b8-10240107/compare/`. Main
+  (A2, E4) merged into the branch: no cudarc or gpucheck file changed since
+  the baseline, so the GPU evidence stands for the merged head.
 - 2026-10-24 01:40Z: A4 opened a draft PR (`claude/a4-control-gen`): the
   family manifests are parsed by `control/gen-configs.mjs` (smol-toml 1.9.1,
   the one new devDependency) and generate `control/src/families-gen.ts`, the

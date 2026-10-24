@@ -18,11 +18,11 @@
 //! outputs (and `1 + scale` formed in f32, as the kernels do); row `r` reads
 //! table row `idx[r] + base`, `base = 3 * block`.
 //!
-//! Every function has a host twin built from [`crate::wan::quant`]'s row
+//! Every function has a host twin built from [`crate::rt::quant`]'s row
 //! references, so a CPU run with the flag on takes the same rounding points.
 
-use crate::wan::quant;
-use crate::wan::tensor::{CudaTensor, Result, TensorDType, TensorError};
+use crate::rt::quant;
+use crate::rt::tensor::{CudaTensor, Result, TensorDType, TensorError};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -56,7 +56,7 @@ pub enum NormOut {
 
 #[cfg(feature = "cuda")]
 fn device_ok(x: &CudaTensor, rows: &AdaRows) -> bool {
-    crate::wan::stats::device_expected() && rows.idx_dev.is_some() && x.is_device_fresh()
+    crate::rt::stats::device_expected() && rows.idx_dev.is_some() && x.is_device_fresh()
 }
 
 fn host_bf16(x: &CudaTensor) -> Result<Vec<f32>> {
@@ -207,7 +207,7 @@ pub fn qk_norm_rope(
         return Err(msg(format!("h3 qk norm: packed {:?}", packed.shape)));
     };
     #[cfg(feature = "cuda")]
-    if crate::wan::stats::device_expected() && packed.is_device_fresh() {
+    if crate::rt::stats::device_expected() && packed.is_device_fresh() {
         return dev::qk_norm_rope(
             packed, w, rope, batch, seq, heads, d, width, col_off, eps, false,
         );
@@ -305,7 +305,7 @@ pub fn fuse_enabled() -> bool {
         return v;
     }
     static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENV.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_H3_FUSE", true))
+    *ENV.get_or_init(|| crate::rt::envflag::bool_flag("FASTVIDEO_H3_FUSE", true))
 }
 
 /// Run `f` with [`fuse_enabled`] forced on or off (parity checks).
@@ -333,7 +333,7 @@ pub fn glue_enabled() -> bool {
         return v;
     }
     static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENV.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_H3_GLUE", true))
+    *ENV.get_or_init(|| crate::rt::envflag::bool_flag("FASTVIDEO_H3_GLUE", true))
 }
 
 /// Run `f` with [`glue_enabled`] forced on or off (parity checks).
@@ -459,7 +459,7 @@ pub fn swiglu_nvfp4(
     h: &CudaTensor,
     amax: &cudarc::driver::CudaSlice<f32>,
     rule: fastvideo_models::nvfp4::ScaleRule,
-) -> Result<Option<crate::wan::nvfp4_linear::Nvfp4Operand>> {
+) -> Result<Option<crate::rt::nvfp4_linear::Nvfp4Operand>> {
     let last = *h.shape.last().unwrap_or(&0);
     let half = last / 2;
     if !glue_enabled()
@@ -486,7 +486,7 @@ pub fn merge_heads_nvfp4(
     out: &CudaTensor,
     fixed_amax: Option<&cudarc::driver::CudaSlice<f32>>,
     rule: fastvideo_models::nvfp4::ScaleRule,
-) -> Result<Option<crate::wan::nvfp4_linear::Nvfp4Operand>> {
+) -> Result<Option<crate::rt::nvfp4_linear::Nvfp4Operand>> {
     let [1, heads, seq, d] = out.shape[..] else {
         return Ok(None);
     };
@@ -498,27 +498,27 @@ pub fn merge_heads_nvfp4(
 
 // `launch!` names `super::stats` / `super::device` from its call site.
 #[cfg(feature = "cuda")]
-use crate::wan::{device, stats};
+use crate::rt::{device, stats};
 
 #[cfg(feature = "cuda")]
 const _: () = assert!(
-    quant::NORM_THREADS == crate::wan::kernels::ROW_BLOCK_THREADS as usize,
+    quant::NORM_THREADS == crate::rt::kernels::ROW_BLOCK_THREADS as usize,
     "the host norm twin mirrors the kernel's block size"
 );
 
 #[cfg(feature = "cuda")]
 mod dev {
     use super::*;
-    use crate::wan::act16::{operand, OutBuf};
-    use crate::wan::device::global_device;
-    use crate::wan::kernels::{cfg_n, cfg_rows, launch};
-    use crate::wan::quant::{ptr, ptr_mut, MxAct};
+    use crate::rt::act16::{operand, OutBuf};
+    use crate::rt::device::global_device;
+    use crate::rt::kernels::{cfg_n, cfg_rows, launch};
+    use crate::rt::quant::{ptr, ptr_mut, MxAct};
 
     fn err(e: impl std::fmt::Display) -> TensorError {
         TensorError::Message(e.to_string())
     }
 
-    fn table_ptr(rows: &AdaRows) -> Result<(crate::wan::act16::Operand<'_>, u64)> {
+    fn table_ptr(rows: &AdaRows) -> Result<(crate::rt::act16::Operand<'_>, u64)> {
         let t = operand(&rows.tab)?.ok_or_else(|| msg("h3 fused: AdaLN table off device"))?;
         if t.is16 != 0 {
             return Err(msg("h3 fused: the AdaLN table must be f32"));
@@ -724,8 +724,8 @@ mod dev {
         let mut out = OutBuf::new(n, false)?;
         let (op, o16) = (out.ptr(), out.is16());
         let (sp, s16) = (ptr(src), 1i32);
-        if crate::wan::act16::split_rows_ok(d, width, col_off) {
-            crate::wan::act16::split_rows(
+        if crate::rt::act16::split_rows_ok(d, width, col_off) {
+            crate::rt::act16::split_rows(
                 &dev, sp, s16, op, o16, batch, seq, heads, d, width, col_off,
             )?;
             return out.into_tensor(vec![batch, heads, seq, d]);
@@ -890,7 +890,7 @@ mod dev {
 
     /// An empty NVFP4 operand for `rows x k` (`quantize_bf16_operand_with`'s
     /// buffers); every byte is written by the producer kernel.
-    fn nvfp4_alloc(rows: usize, k: usize) -> Result<crate::wan::nvfp4_linear::Nvfp4Operand> {
+    fn nvfp4_alloc(rows: usize, k: usize) -> Result<crate::rt::nvfp4_linear::Nvfp4Operand> {
         let dev = global_device().ok_or_else(|| msg("no device"))?;
         let rows_pack = rows.next_multiple_of(16);
         let rows_scale = rows.next_multiple_of(128);
@@ -899,7 +899,7 @@ mod dev {
         let packed = unsafe { dev.stream.alloc::<u8>(rows_pack * k / 2) }.map_err(err)?;
         let scales = unsafe { dev.stream.alloc::<u8>(rows_scale * (k / 16)) }.map_err(err)?;
         let amax = dev.stream.alloc_zeros::<f32>(1).map_err(err)?;
-        Ok(crate::wan::nvfp4_linear::Nvfp4Operand {
+        Ok(crate::rt::nvfp4_linear::Nvfp4Operand {
             packed,
             scales,
             amax,
@@ -923,7 +923,7 @@ mod dev {
         half: usize,
         amax: &cudarc::driver::CudaSlice<f32>,
         rule: fastvideo_models::nvfp4::ScaleRule,
-    ) -> Result<Option<crate::wan::nvfp4_linear::Nvfp4Operand>> {
+    ) -> Result<Option<crate::rt::nvfp4_linear::Nvfp4Operand>> {
         let Some(code) = rule_code(rule) else {
             return Ok(None);
         };
@@ -953,7 +953,7 @@ mod dev {
         d: usize,
         fixed_amax: Option<&cudarc::driver::CudaSlice<f32>>,
         rule: fastvideo_models::nvfp4::ScaleRule,
-    ) -> Result<Option<crate::wan::nvfp4_linear::Nvfp4Operand>> {
+    ) -> Result<Option<crate::rt::nvfp4_linear::Nvfp4Operand>> {
         let Some(code) = rule_code(rule) else {
             return Ok(None);
         };

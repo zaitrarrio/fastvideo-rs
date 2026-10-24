@@ -1,7 +1,7 @@
 //! Wan DiT kernel checks.
 //!
 //! * **wan_causal_attn** — the block-causal flash kernel
-//!   (`flash_mma_fwd2_causal_d*`, [`fastvideo_cudarc::wan::attn::device_mma_sdpa_causal`])
+//!   (`flash_mma_fwd2_causal_d*`, [`fastvideo_cudarc::rt::attn::device_mma_sdpa_causal`])
 //!   against an f64 host SDPA under the same additive mask and against the
 //!   device `sdpa_composed` path it replaces (masked `[S, S]` scores in f32),
 //!   on synthetic bf16 inputs: odd sequence lengths, frame sizes that do not
@@ -15,11 +15,11 @@
 //!   and the q/k norm + RoPE; fused / unfused timings at the FastWan 1.3B
 //!   81-frame shape.
 
-use fastvideo_cudarc::wan::attn::{self, BlockCausal, FlashKernel};
+use fastvideo_cudarc::rt::attn::{self, BlockCausal, FlashKernel};
+use fastvideo_cudarc::rt::fused::Rope;
+use fastvideo_cudarc::rt::nn;
+use fastvideo_cudarc::rt::tensor::with_bf16_act;
 use fastvideo_cudarc::wan::fuse;
-use fastvideo_cudarc::wan::fused::Rope;
-use fastvideo_cudarc::wan::nn;
-use fastvideo_cudarc::wan::tensor::with_bf16_act;
 use serde_json::json;
 
 use crate::kernels_fp8::{bf16v, check_ulps, host, rand, t16, t32, time_ms};

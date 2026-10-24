@@ -2,9 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::wan::affine;
-use crate::wan::tensor::{Result, TensorError};
-use crate::wan::weights::WeightMap;
+use crate::rt::affine;
+use crate::rt::tensor::{Result, TensorError};
+use crate::rt::weights::WeightMap;
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())

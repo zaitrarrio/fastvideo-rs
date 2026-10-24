@@ -29,7 +29,7 @@ on:
       - "crates/fastvideo-models/**"
       - "crates/fastvideo-cudarc/src/llm/prequant.rs"
       - "crates/fastvideo-cudarc/src/h3/dit_tree.rs"
-      - "crates/fastvideo-cudarc/src/wan/quant.rs"
+      - "crates/fastvideo-cudarc/src/rt/quant.rs"
       - ".github/workflows/control.yml"
   push:
     branches: ["main"]
@@ -50,7 +50,7 @@ on:
       - "crates/fastvideo-models/**"
       - "crates/fastvideo-cudarc/src/llm/prequant.rs"
       - "crates/fastvideo-cudarc/src/h3/dit_tree.rs"
-      - "crates/fastvideo-cudarc/src/wan/quant.rs"
+      - "crates/fastvideo-cudarc/src/rt/quant.rs"
       - ".github/workflows/control.yml"
 
 permissions:
