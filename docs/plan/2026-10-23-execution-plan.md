@@ -83,7 +83,7 @@ parallel agents.
 |---|---|---|---|---|---|
 | C1 | `[deploy]` section of the family manifest; presets, variant tables, `families.tsv`, autoscale pools and the Dockerfile variant stages generated from it | `--check` green; one image with boot-time config if the owner decides so | pod | A4 | merged (#156; single image: owner decision, ADR-0011) |
 | C2 | `fv-boot` in `fastvideo-deploy`: driver check, config materialization, weights plan (volume / registry `hydrate` / hub / none), sidecar, tunnel and phase reports, watchdog, exec; fake provider and fake chunk source tests; the ten boot variants deleted | one boot script in the tree; fv-control sends env only | pod; **GPU** one pod boot on the EU volume | C1, registry WO-002 for the `hydrate` source (volume and hub sources first) | merged (#159: fv-boot is the images' entrypoint and every fv-control boot prefers it, ADR-0014; GPU gate green for the image kind on the EU volume (ltx); open per-kind gates before lifting `FV_BOOT_LEGACY` (cluster worker, serverless r2 streaming, edge watchdog, GMI / Brev, upsampler; ADR-0014 §6); remaining: C2b deletes the shell boots and sends env only after the image promotion, the `registry` source after WO-002, the upsampler launcher in Rust) |
-| C3 | `fv-deploy` with the `Provider` trait (from `fastvideo-autoscale`): `runpod::{Pod,Serverless}`, `vast`, `gcp`; shared money guards, backstop, ledger, templates, release promote/rollback; fv-control on the shared `Launch` schema | `fv-deploy up` per provider with the same smoke | pod; **GPU** one `fv-deploy up` on Runpod EU | C2 | todo |
+| C3 | `fv-deploy` with the `Provider` trait (from `fastvideo-autoscale`): `runpod::{Pod,Serverless}`, `vast`, `gcp`; shared money guards, backstop, ledger, templates, release promote/rollback; fv-control on the shared `Launch` schema | `fv-deploy up` per provider with the same smoke | pod; **GPU** one `fv-deploy up` on Runpod EU | C2 | todo (C3a pr #169: Runpod pods and serverless queue endpoints, the `Provider` trait in `fastvideo-deploy`, the `Launch` schema, the shared guards and backstop, `fv-deploy plan|up|status|logs|smoke|down`, ADR-0018; live gate pending (coordinator); next: C3b Vast + GCP, C3c fv-control on the generated `Launch` types, C3d templates / release / D1 ledger) |
 
 ### Phase 5: validation driver and gold standards (Workstream D)
 
@@ -647,6 +647,48 @@ ran (pod id, $/hr), result, cost.
   shared price cap / balance floor / backstop / readiness-replace guards;
   ADR-0018 reserved); B6 (ADR-0017) still in progress. No GPU time in
   this step.
+
+- 2026-10-24 09:30Z: C3a (`claude/c3a-fv-deploy`, draft PR #169): `fv-deploy` with
+  the `Provider` trait in `fastvideo-deploy` (`runpod::{Pod, Serverless}`;
+  `fastvideo-autoscale` now depends on it), the `Launch` / `Instance` /
+  `Offer` / `Account` schemas, a launch from a `deploy/deploy.toml` preset,
+  the shared guards (EU-volume region guard, $8 floor, price cap, detached
+  backstop, 600 s / 3-cycle readiness) and `plan|up|status|logs|smoke|down`;
+  payload goldens from the scripts' own `plan` (ADR-0018). CPU only, on the
+  shared build pod (`pzocv1keasg3xn`, no pod created): `cargo test -p
+  fastvideo-deploy --all-features` (95 unit + 8 goldens + 2 schema + 4
+  binary + the existing suites), autoscale tests, workspace clippy, fmt,
+  lint green. No Runpod call, no GPU. Live gate for the coordinator:
+  `RUNPOD_API_KEY=… fv-deploy up --family h3 --preset h3-turbo --region eu
+  --channel latest --yes --cap-s 1800`.
+- 2026-10-24 09:50Z: C3a review fixes on #169 (coordinator's review): the
+  backstop is armed (with an armed-file handshake) right after every create,
+  before the billed check; deletes retried, a failed delete stops `up`; a
+  lost create answer stops and sweeps by the run's name, as does every exit;
+  the floor holds over the cap; a string or missing `costPerHr` handled;
+  serverless `workers_max > 1` refused (no serverless quote, ADR-0018 §5.3);
+  the backstop stands down only on two 404s a minute apart; `down` needs
+  `--kind` for a bare unrecorded id; interrupts reach the smoke; upper bounds
+  unless `--force-guards`; CI builds `--features deploy`. CPU only on the
+  build pod; no Runpod call.
+
+- 2026-10-24 09:46Z, coordinator: C3a live gate on Runpod EU with
+  `fv-deploy` built from `23e1500` (the review fixes) on the build pod:
+  `fv-deploy up --family h3 --preset h3-turbo --region eu --channel latest
+  --yes --cap-s 1800` from the session container. Balance $49.39 (floor
+  projection passed), image `serve:h3-turbo-latest` pinned to its digest
+  `sha256:54acd68a…` (built on main `8178a7a` from tools-v0.1.38, so fv-boot
+  is the entrypoint), one RTX PRO 6000 in EU-RO-1 on `bz0ofkfx45` at
+  $2.49/hr (cap $2.50), detached backstop armed (handshake), `/ping` at 49 s,
+  ready at 219 s (cycle 1 of 3), `/healthz` ready with `fasth3`, one native
+  job (480p 16:9) succeeded in 17.5 s, pod deleted at 09:50:40; the backstop
+  saw it gone and exited by itself at 09:51:52. About 4 GPU-minutes,
+  ~$0.17. Evidence: `artifacts/runpod/c3a-deploy/23e1500-10240946/`.
+  Side finding: main's serve images had not been rebuilt since #152
+  (tools-release on main kept queueing behind a `check-test` run on
+  `c7a6bb5` that hung for over an hour, before the #166/#167 fixes); the
+  coordinator cancelled it, tools-v0.1.38 published from `8178a7a` and
+  `serve-image` rebuilt every variant.
 
 - 2026-10-24 09:20Z: B6 opened as a draft PR (`claude/b6-loader-split`,
   ADR-0017): `H3Pipeline::load_with_settings` and

@@ -66,8 +66,8 @@ while [ "$n" -lt 720 ]; do
     continue
   fi
   if [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8000/health 2>/dev/null)" = 200 ]; then
-    hreport serve_ready "fv-serve /health 200, $(( $(date +%s) - tun )) s after the tunnel"
     clog 1000 > "$W/fv/container.log"
+    hreport serve_ready "fv-serve /health 200, $(( $(date +%s) - tun )) s after the tunnel"
     exit 0
   fi
   if [ $(( $(date +%s) - tun )) -ge 600 ]; then

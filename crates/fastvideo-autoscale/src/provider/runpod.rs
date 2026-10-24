@@ -94,9 +94,9 @@ impl RunpodApi {
         Ok(Self {
             http,
             key: api_key.into(),
-            rest: "https://rest.runpod.io/v1".into(),
-            queue: "https://api.runpod.ai/v2".into(),
-            graphql: "https://api.runpod.io/graphql".into(),
+            rest: fastvideo_deploy::provider::runpod::REST.into(),
+            queue: fastvideo_deploy::provider::runpod::QUEUE.into(),
+            graphql: fastvideo_deploy::provider::runpod::GRAPHQL.into(),
         })
     }
 
@@ -118,8 +118,9 @@ impl RunpodApi {
         let text = resp.text().await.map_err(|e| err(ctx, e.without_url()))?;
         if !status.is_success() {
             let snippet: String = text.chars().take(300).collect();
-            if snippet.contains("no instances currently available")
-                || snippet.contains("no longer any instances")
+            if fastvideo_deploy::provider::runpod::NO_CAPACITY
+                .iter()
+                .any(|m| snippet.contains(m))
             {
                 return Err(ProviderError::NoCapacity(format!("{ctx}: {snippet}")));
             }
@@ -529,33 +530,8 @@ impl WorkerRegistry for GatewayWorkers {
 
 // ---- Pods -------------------------------------------------------------
 
-/// Parses Runpod's `"2026-09-27 20:31:01.321 +0000 UTC"` (and RFC 3339
-/// `2026-09-27T20:31:01Z`) into unix seconds.
-pub fn parse_runpod_time(s: &str) -> Option<f64> {
-    let s = s.trim();
-    let (date, rest) = s.split_at_checked(10)?;
-    let mut d = date.split('-').map(|x| x.parse::<i64>().ok());
-    let (y, mo, da) = (d.next()??, d.next()??, d.next()??);
-    let time = rest.trim_start_matches([' ', 'T']);
-    let hms: String = time
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == ':' || *c == '.')
-        .collect();
-    let mut t = hms.split(':');
-    let (h, mi) = (
-        t.next()?.parse::<i64>().ok()?,
-        t.next()?.parse::<i64>().ok()?,
-    );
-    let sec: f64 = t.next()?.parse().ok()?;
-    // Days from civil (Howard Hinnant).
-    let y2 = if mo <= 2 { y - 1 } else { y };
-    let era = y2.div_euclid(400);
-    let yoe = y2 - era * 400;
-    let doy = (153 * (mo + if mo > 2 { -3 } else { 9 }) + 2) / 5 + da - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    Some((days * 86_400 + h * 3600 + mi * 60) as f64 + sec)
-}
+/// Shared with fv-deploy (`fastvideo_deploy::provider::runpod`).
+pub use fastvideo_deploy::provider::runpod::parse_runpod_time;
 
 #[derive(Default)]
 struct PodBook {

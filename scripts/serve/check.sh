@@ -116,9 +116,10 @@ stage test && run cargo test "${PKGS[@]}"
 # (docs/serve/gateway-cloudflare.md; scripts/serve/cf-edge.sh deploys it).
 stage lint && run cargo clippy -p fastvideo-dispatch-proto -p fastvideo-edge --target wasm32-unknown-unknown --no-deps -- -D warnings
 # fv-boot (docs/adr/0014-fv-boot.md): its binary, HTTP client and the r2 test with the real
-# fetcher only build with `boot`.
-stage lint && run cargo clippy -p fastvideo-deploy --features boot --all-targets --no-deps -- -D warnings
-stage test && run cargo test -p fastvideo-deploy --features boot
+# fetcher only build with `boot`; fv-deploy (docs/adr/0018-fv-deploy.md): its binary and the
+# binary tests (the detached backstop, the floor, plan) only with `deploy`, which includes `boot`.
+stage lint && run cargo clippy -p fastvideo-deploy --features deploy --all-targets --no-deps -- -D warnings
+stage test && run cargo test -p fastvideo-deploy --features deploy
 # The release / deployment scripts against a mocked API (docs/serve/releases.md;
 # skips without python3).
 stage test && run bash scripts/serve/tests/release.test.sh

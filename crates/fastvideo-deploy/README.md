@@ -2,6 +2,22 @@
 
 fv-serve deploy (WP-16, [docs/serve/design.md](../../docs/serve/design.md) §6):
 
+- `provider`, `launch`, `guard`, `lifecycle` and the `fv-deploy` binary (feature
+  `deploy`; [ADR-0018](../../docs/adr/0018-fv-deploy.md), usage
+  [docs/ops/fv-deploy.md](../../docs/ops/fv-deploy.md)): the `Provider` trait
+  (Runpod pods and serverless queue endpoints), the `Launch` / `Instance` /
+  `Offer` / `Account` types with their JSON Schemas (`schemas/*.v1.json`), a
+  launch built from a `deploy/deploy.toml` preset, the shared guards (EU-volume
+  region guard, balance floor, price cap, detached wall-clock backstop,
+  readiness with replace) and `plan | up | status | logs | smoke | down`. The
+  payloads equal the scripts' (`fixtures/deploy/*.json`, written by
+  `scripts/serve/tests/fv-deploy-goldens.sh`).
+
+  ```sh
+  cargo build --release --locked -p fastvideo-deploy --features deploy --bin fv-deploy
+  cargo test --locked -p fastvideo-deploy --all-features
+  ```
+
 - `boot` and the `fv-boot` binary (feature `boot`;
   [ADR-0014](../../docs/adr/0014-fv-boot.md)): the serve images' entrypoint,
   one boot sequence for every host (driver check, config materialization,

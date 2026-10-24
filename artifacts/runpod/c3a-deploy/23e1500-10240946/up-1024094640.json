@@ -1,0 +1,47 @@
+{
+  "name": "fv-deploy-h3-turbo-1024094640",
+  "provider": "runpod-pod",
+  "instance": {
+    "id": "5jeq42lc5cn8xa",
+    "provider": "runpod-pod",
+    "name": "fv-deploy-h3-turbo-1024094640",
+    "state": "running",
+    "url": "https://5jeq42lc5cn8xa-8000.proxy.runpod.net",
+    "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "data_center": "EU-RO-1",
+    "usd_per_hr": 2.49,
+    "created_at": 1792835202.5971196
+  },
+  "cycles": [
+    {
+      "n": 1,
+      "instance": "5jeq42lc5cn8xa",
+      "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "usd_per_hr": 2.49,
+      "ready_after_s": 218.73654699325562,
+      "outcome": "ready"
+    }
+  ],
+  "smoke": {
+    "ok": true,
+    "ping": "200",
+    "healthz_status": 200,
+    "healthz": {
+      "loaded": [
+        "fasth3"
+      ],
+      "loading": [],
+      "state": "ready"
+    },
+    "job": {
+      "id": "fvjob_f555b869c17947a9a04773d0f30df163",
+      "model": "fasth3",
+      "status": "succeeded",
+      "error": null,
+      "wall_s": 17.509560108184814
+    },
+    "why": null
+  },
+  "deleted": true,
+  "ok": true
+}

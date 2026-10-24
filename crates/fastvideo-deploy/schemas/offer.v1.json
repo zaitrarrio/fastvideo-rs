@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Offer",
+  "description": "One quote: a GPU type (in a data centre) at a price.",
+  "type": "object",
+  "properties": {
+    "cloud": {
+      "$ref": "#/$defs/CloudType"
+    },
+    "data_center": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "gpu_type": {
+      "type": "string"
+    },
+    "provider": {
+      "$ref": "#/$defs/ProviderKind"
+    },
+    "stock": {
+      "description": "The provider's stock word (`High`, `Low`, …) when it gives one.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "usd_per_hr": {
+      "description": "$/hr for one GPU; `None`: no quote (never created at an unknown price).",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "provider",
+    "gpu_type",
+    "cloud"
+  ],
+  "$defs": {
+    "CloudType": {
+      "description": "Runpod's cloud tier.",
+      "type": "string",
+      "enum": [
+        "SECURE",
+        "COMMUNITY"
+      ]
+    },
+    "ProviderKind": {
+      "description": "Which provider, and which kind of instance on it. Later slices add\n`vast` and `gcp` (plan C3b).",
+      "oneOf": [
+        {
+          "description": "A Runpod GPU pod (REST v1 `POST /pods`).",
+          "type": "string",
+          "const": "runpod-pod"
+        },
+        {
+          "description": "A Runpod serverless queue endpoint (REST v1 `POST /templates` +\n`POST /endpoints`).",
+          "type": "string",
+          "const": "runpod-serverless"
+        }
+      ]
+    }
+  }
+}

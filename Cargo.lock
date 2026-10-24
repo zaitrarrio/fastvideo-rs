@@ -1128,6 +1128,7 @@ version = "0.1.1"
 dependencies = [
  "async-trait",
  "axum",
+ "fastvideo-deploy",
  "fastvideo-serve-kit",
  "metrics",
  "reqwest",
@@ -1193,7 +1194,10 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "clap",
+ "fastvideo-manifest",
  "reqwest",
+ "schemars",
  "serde",
  "serde_json",
  "sha2",

@@ -24,6 +24,13 @@ on:
       - "scripts/gpu/weights-*.tsv"
       - "scripts/gpu/r2-fetch.py"
       - "crates/fastvideo-deploy/fixtures/**"
+      - "scripts/serve/runpod-pod.sh"
+      - "scripts/serve/runpod-endpoint.sh"
+      - "scripts/serve/tests/fv-deploy-goldens.sh"
+      - "scripts/gpu/runpod-cuda.sh"
+      - "scripts/gpu/lib.sh"
+      - "scripts/gpu/runpod-price.sh"
+      - "scripts/serve/lib/registry.sh"
       - "scripts/serve/variants.sh"
       - "docker/gpucheck.Dockerfile"
       - ".github/workflows/serve-image.yml"
@@ -49,6 +56,13 @@ on:
       - "scripts/gpu/weights-*.tsv"
       - "scripts/gpu/r2-fetch.py"
       - "crates/fastvideo-deploy/fixtures/**"
+      - "scripts/serve/runpod-pod.sh"
+      - "scripts/serve/runpod-endpoint.sh"
+      - "scripts/serve/tests/fv-deploy-goldens.sh"
+      - "scripts/gpu/runpod-cuda.sh"
+      - "scripts/gpu/lib.sh"
+      - "scripts/gpu/runpod-price.sh"
+      - "scripts/serve/lib/registry.sh"
       - "scripts/serve/variants.sh"
       - "docker/gpucheck.Dockerfile"
       - ".github/workflows/serve-image.yml"
@@ -91,3 +105,6 @@ jobs:
       - name: Shell lint (verify-weights.sh carries a generated region)
         working-directory: .
         run: bash scripts/gpu/lint.sh
+      - name: fv-deploy payload goldens are what runpod-pod.sh / runpod-endpoint.sh send (ADR-0018)
+        working-directory: .
+        run: bash scripts/serve/tests/fv-deploy-goldens.sh --check
