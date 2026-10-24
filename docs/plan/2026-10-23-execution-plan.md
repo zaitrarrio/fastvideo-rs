@@ -1065,3 +1065,15 @@ ran (pod id, $/hr), result, cost.
   pinned, a `gold-runs` environment recommended (owner), a same-named arm of
   another tier never counts as a gold measurement, `git rev-parse --verify`
   with ambiguity and ancestry. Build pod only.
+- 2026-10-24 21:54Z, coordinator: pod-side wall cap verified live on
+  #181's head 83c5d6e1 (GraphQL `podTerminate`). `runpod-http.sh run` with
+  `FV_POD_CAP_S=240` (b4b cell, image `sha-c493bd2`); the driver and its
+  detached backstop were killed right after create, so only the pod could
+  delete itself. Pod `qtqbwuyi2ypsab` created 21:49:29, gone (404) at
+  21:53:58: the cap after container start. Before the fix the same test
+  left pod `pq69qpoh5b0mxy` running (deleted by hand after 9 min); the probes
+  showed REST DELETE with the pod key is 403 and GraphQL `podTerminate` is
+  200 (ADR-0023 §4). The idle watchdogs use the same call now. Cost of the
+  tests about $0.80. Cargo gates on 83c5d6e1 (build pod): fmt, workspace
+  clippy, fastvideo-lab clippy (all features), fastvideo-lab tests (100),
+  `cargo test --workspace --lib` (2121) green.
