@@ -148,7 +148,9 @@ Each workflow then:
    `boot-build` stage: a release whose `serve-cuda` / `serve-cpu` set carries
    `out/fv-boot` replaces it too (`boot-build=<dir>`); a release from
    before fv-boot does not, and only that stage compiles (fv-boot's one
-   crate, from `builder`), with a notice in the job.
+   crate, from `builder`), with a notice in the job. fv-lab (the runtime
+   image's validation driver, [ADR-0019](../adr/0019-fv-lab.md)) rides in the
+   `gpucheck` set the same way (`out/fv-lab`, `lab-build=<dir>`).
 3. **Falls back** when there is no usable release (test workflows and
    branch images whose tools inputs have no release, other features
    requested on dispatch, a bad checksum): a `::warning::` names the reason,

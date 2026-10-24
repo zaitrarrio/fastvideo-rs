@@ -59,6 +59,8 @@ for c in "${CRATES[@]}"; do PKGS+=(-p "$c"); done
 # fv-deploy's binary and its tests (the detached backstop process, the floor
 # before any create; docs/adr/0018-fv-deploy.md) need the `deploy` feature.
 PKGS+=(--features fastvideo-deploy/deploy)
+# fv-lab's binary and its tests (docs/adr/0019-fv-lab.md) need fastvideo-lab's `cli`.
+PKGS+=(--features fastvideo-lab/cli)
 
 run() { printf '\n==> %s\n' "$*" >&2; "$@"; }
 

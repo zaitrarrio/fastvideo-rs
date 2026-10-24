@@ -1,0 +1,84 @@
+# The H3 arms of the rtx6000 tier (runpod-matrix.sh `rtx6000`, its h3_common
+# workload). Schema: crates/fastvideo-lab/schemas/cell.v1.json; placeholders
+# and the weights rule: docs/adr/0019-fv-lab.md §3, §4. Each arm runs only when
+# verify-weights.sh <gate> passes (an incomplete tree is recorded as skipped):
+# fasth3-8step reads h3-8step, which is not on the EU volume (volumes.sh
+# FV_EU_VOLUME_TREES), so on bz0ofkfx45 it is skipped, as the script skips it.
+schema = 1
+name = "rtx6000-h3"
+description = "H3 / FastH3 at the sol-engine single-GPU contract: 5 s at the recipe's default canvas, one prompt, seed 1024, warm (load untimed)"
+
+[workload]
+model = "h3"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+note = "runpod-matrix.sh's default PROMPT and SEED; the canvas and steps are each recipe's defaults (no --height / --width / --steps)"
+
+[lists]
+h3_common = [
+  "--prompt", "{prompt}",
+  "--seconds", "{seconds}",
+  "--seed", "{seed}",
+  "--text-encoder", "auto",
+  "--text-cache", "{scratch}/h3-text-cache",
+  "--text-weights", "{weights}/h3-base",
+  "--warm",
+]
+
+[[arm]]
+name = "fasth3-8step"
+gate = "fasth3-8step"
+trees = ["h3-8step", "h3-base"]
+steps = 8
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-8step", "--h3-recipe", "8step",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-4step-vsa"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-vsa",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "sol-h3"
+gate = "sol-h3"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+note = "Sol-H3 4-step on one GPU is dense upstream (engine.py refuses Sol at world_size 1)"
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "sol-h3",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "sol-h3-rtx"
+gate = "h3-base"
+trees = ["h3-base"]
+note = "the upstream single-GPU Sol-Attn + TeaCache route (RTX4090/5090 profile)"
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "sol-h3-rtx",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "sol-h3-rtx-teacache"
+gate = "h3-base"
+trees = ["h3-base"]
+note = "the RTX 5090 `fullopt` arm: the same Sol route plus TeaCache 0.10 / 5 / 1; shares sol-h3-rtx's AdaLN cache"
+env = ["FASTVIDEO_H3_SOL_CACHE=teacache"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "sol-h3-rtx",
+  "--adaln-cache", "{runs}/sol-h3-rtx-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "sol-h3-spark"
+gate = "sol-h3-spark"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA", "upscaler", "h3-to-ltx", "ltx25"]
+note = "the full Spark bridge (FASTVIDEO_LTX2_WEIGHTS set only here); upstream Spark stage 1 is W8A8 FP8 (stage1.py `W8A8_FP8_after_BF16_LoRA_merge`)"
+env = [
+  "FASTVIDEO_LTX2_WEIGHTS={weights}/ltx25",
+  "FASTVIDEO_H3_QUANT=w8a8",
+  "FASTVIDEO_BF16_ACT=1",
+  "FASTVIDEO_H3_UPSCALER={weights}/upscaler/minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors",
+  "FASTVIDEO_H3_LTX_ADAPTER={weights}/h3-to-ltx",
+]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "sol-h3-spark",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]

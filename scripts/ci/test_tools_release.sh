@@ -98,7 +98,9 @@ mkgroup() { # dir sets... : a fake build of those sets for HEAD; binaries print 
         # FAKE_BOOT_VERSION: the set also carries fv-boot (ADR-0014), whose `version` prints that.
         if [[ -n "${FAKE_BOOT_VERSION:-}" ]]; then printf '#!/bin/sh\n[ "$1" = version ] && echo "fv-boot %s"\n' "$FAKE_BOOT_VERSION" >"$st/out/fv-boot"; chmod +x "$st/out/fv-boot"; fi ;;
       serve-fake) printf '#!/bin/sh\necho "fv-serve 0.1.11"\n' >"$st/fv-serve"; chmod +x "$st/fv-serve" ;;
-      gpucheck) printf '#!/bin/sh\necho "fv-gpucheck 0.1.11"\n' >"$st/fv-gpucheck"; chmod +x "$st/fv-gpucheck" ;;
+      gpucheck) printf '#!/bin/sh\necho "fv-gpucheck 0.1.11"\n' >"$st/fv-gpucheck"; chmod +x "$st/fv-gpucheck"
+        # FAKE_LAB_VERSION: the set also carries fv-lab (ADR-0019), whose -V prints that.
+        if [[ -n "${FAKE_LAB_VERSION:-}" ]]; then mkdir -p "$st/out"; printf '#!/bin/sh\necho "fv-lab %s"\n' "$FAKE_LAB_VERSION" >"$st/out/fv-lab"; chmod +x "$st/out/fv-lab"; fi ;;
       *) echo "$set" >"$st/$set.txt" ;;
     esac
     tar -C "$st" -czf "$dir/$set.tar.gz" .
@@ -126,6 +128,13 @@ grep -q "serve-cpu/out/fv-boot: fv-boot 0.1.11" "$tmp/asm5.log" && echo "ok   (f
 FAKE_BOOT_VERSION=0.1.1 mkgroup "$tmp/inb/a" oxide serve-cuda serve-cpu
 check "assemble refuses an fv-boot with another version" 2 "$(bash "$T" assemble HEAD --version 0.1.11 --tag tools-v0.1.11 --in "$tmp/inb" --out "$tmp/asm6" >/dev/null 2>"$tmp/asm6.log"; echo $?)"
 grep -q "fv-boot version says 'fv-boot 0.1.1', expected fv-boot 0.1.11" "$tmp/asm6.log" && echo "ok   (because of fv-boot version)" || { echo "FAIL fv-boot reason"; tail -3 "$tmp/asm6.log"; fail=1; }
+# fv-lab in the gpucheck set: its -V must be the release's.
+rm -rf "$tmp/inl" && cp -a "$tmp/in" "$tmp/inl" && FAKE_LAB_VERSION=0.1.11 mkgroup "$tmp/inl/b" serve-fake gpucheck gpucheck-tests
+check "assemble checks fv-lab's version" 0 "$(bash "$T" assemble HEAD --version 0.1.11 --tag tools-v0.1.11 --in "$tmp/inl" --out "$tmp/asm7" >/dev/null 2>"$tmp/asm7.log"; echo $?)"
+grep -q "gpucheck/out/fv-lab: fv-lab 0.1.11" "$tmp/asm7.log" && echo "ok   (fv-lab 0.1.11 checked)" || { echo "FAIL fv-lab not checked"; tail -3 "$tmp/asm7.log"; fail=1; }
+FAKE_LAB_VERSION=0.1.1 mkgroup "$tmp/inl/b" serve-fake gpucheck gpucheck-tests
+check "assemble refuses an fv-lab with another version" 2 "$(bash "$T" assemble HEAD --version 0.1.11 --tag tools-v0.1.11 --in "$tmp/inl" --out "$tmp/asm8" >/dev/null 2>"$tmp/asm8.log"; echo $?)"
+grep -q "gpucheck/out/fv-lab -V says 'fv-lab 0.1.1', expected fv-lab 0.1.11" "$tmp/asm8.log" && echo "ok   (because of fv-lab version)" || { echo "FAIL fv-lab reason"; tail -3 "$tmp/asm8.log"; fail=1; }
 mkgroup "$tmp/in/d" hf-fm
 check "assemble refuses a set built twice" 2 "$(bash "$T" assemble HEAD --version 0.1.11 --tag tools-v0.1.11 --in "$tmp/in" --out "$tmp/asm2" >/dev/null 2>&1; echo $?)"
 rm -rf "$tmp/in/d"; rm "$tmp/in/c/hf-fm.tar.gz"
@@ -157,4 +166,12 @@ printf '#!/bin/sh\necho fv-boot 0.1.11\n' >"$tmp/pre/serve-cpu/out/fv-boot"; chm
 check "contexts: a release with fv-boot replaces boot-build" "oxide=$tmp/pre/oxide serve-build=$tmp/pre/serve-cuda cpu-build=$tmp/pre/serve-cpu boot-build=$tmp/pre/serve-cpu" \
   "$(bash "$P" contexts "$tmp/pre" oxide serve-cuda serve-cpu | paste -sd' ')"
 check "contexts: no serve set, no boot-build" "oxide=$tmp/pre/oxide" "$(bash "$P" contexts "$tmp/pre" oxide | paste -sd' ')"
+# fv-lab (ADR-0019) replaces the runtime image's lab-build stage only when the gpucheck set carries it.
+mkdir -p "$tmp/pre/gpucheck/out"
+check "contexts: a release from before fv-lab (lab-build compiles)" "oxide=$tmp/pre/oxide binary=$tmp/pre/gpucheck" \
+  "$(bash "$P" contexts "$tmp/pre" oxide gpucheck | paste -sd' ')"
+printf '#!/bin/sh\necho fv-lab 0.1.11\n' >"$tmp/pre/gpucheck/out/fv-lab"; chmod +x "$tmp/pre/gpucheck/out/fv-lab"
+check "contexts: a release with fv-lab replaces lab-build" "oxide=$tmp/pre/oxide binary=$tmp/pre/gpucheck lab-build=$tmp/pre/gpucheck" \
+  "$(bash "$P" contexts "$tmp/pre" oxide gpucheck | paste -sd' ')"
+check "contexts: no gpucheck set, no lab-build" "oxide=$tmp/pre/oxide" "$(bash "$P" contexts "$tmp/pre" oxide | paste -sd' ')"
 exit "$fail"

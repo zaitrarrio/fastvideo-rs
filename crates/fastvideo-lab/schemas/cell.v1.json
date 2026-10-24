@@ -1,0 +1,263 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CellFile",
+  "description": "`lab/cells/<name>.toml`: one workload and its arms.",
+  "type": "object",
+  "properties": {
+    "arm": {
+      "description": "The arms, in run order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Arm"
+      }
+    },
+    "compare": {
+      "description": "Paired-clip compares (`fv-gpucheck compare-clips`), after the arms.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Compare"
+      }
+    },
+    "description": {
+      "type": "string"
+    },
+    "gate": {
+      "description": "Promotion gates (`fv-gpucheck gate`), after the compares.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/GatePair"
+      }
+    },
+    "lists": {
+      "description": "Named argument lists an arm splices with an element `\"{@name}\"`.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "name": {
+      "description": "The file stem.",
+      "type": "string"
+    },
+    "schema": {
+      "description": "Always 1.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "workload": {
+      "$ref": "#/$defs/Workload"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "name",
+    "description",
+    "workload",
+    "arm"
+  ],
+  "$defs": {
+    "Arm": {
+      "description": "One arm: one run directory `runs/<family>/<tag>/<name>/`.",
+      "type": "object",
+      "properties": {
+        "argv": {
+          "description": "fv-gpucheck's arguments (the binary is the runner's).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "description": "`K=V` settings, in order, for `env K=V … fv-gpucheck …`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "gate": {
+          "description": "The `verify-weights.sh` cell that must pass before the arm runs (an\nincomplete tree is recorded as skipped, not run).",
+          "type": "string"
+        },
+        "name": {
+          "description": "The run directory (unique within a tier).",
+          "type": "string"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "steps": {
+          "description": "Denoising steps when the recipe fixes them (descriptive: the recipe\nflag sets them, no `--steps` is passed).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "trees": {
+          "description": "The weight trees the arm reads (weights-manifest.tsv `dest` names):\nthe roots of `gate` and every `{weights}/<tree>` of the command.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "gate",
+        "trees",
+        "argv"
+      ]
+    },
+    "Compare": {
+      "description": "`compare_cells <baseline> <candidate> [args]`.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "description": "Extra `compare-clips` arguments (`--off-identity`).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "baseline": {
+          "type": "string"
+        },
+        "candidate": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "baseline",
+        "candidate"
+      ]
+    },
+    "GateKind": {
+      "description": "The gate's kind (`fv-gpucheck gate --kind`).",
+      "type": "string",
+      "enum": [
+        "lossy",
+        "exact"
+      ]
+    },
+    "GatePair": {
+      "description": "`gate_cells <baseline> <candidate> [kind] [off]`.",
+      "type": "object",
+      "properties": {
+        "baseline": {
+          "type": "string"
+        },
+        "candidate": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/GateKind",
+          "default": "lossy"
+        },
+        "off": {
+          "description": "An OFF-arm whose compare with the baseline must be byte-identical.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "baseline",
+        "candidate"
+      ]
+    },
+    "Workload": {
+      "description": "What every arm of a cell generates. Each value is referenced from the\narms' command lines as a placeholder (`{prompt}`, `{seed}`, …), so the\ndeclared workload is the one that runs; a value no arm uses is an error.\nAn absent value is the pipeline's (or the recipe's) default.",
+      "type": "object",
+      "properties": {
+        "frames": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "height": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "model": {
+          "description": "The fv-gpucheck pipeline (`h3`, `ltx2`, `wan`, …).",
+          "type": "string"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt_set": {
+          "description": "A prompt-set JSON, relative to the root (`scripts/gpu/prompts-eval.json`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "steps": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "width": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "model"
+      ]
+    }
+  }
+}
