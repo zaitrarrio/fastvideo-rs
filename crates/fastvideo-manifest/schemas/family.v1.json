@@ -1,0 +1,401 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FamilyManifest",
+  "description": "One `families/<family>.toml`.",
+  "type": "object",
+  "properties": {
+    "family": {
+      "$ref": "#/$defs/FamilyHeader"
+    },
+    "schema": {
+      "description": "Always 1.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "variants": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/VariantManifest"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "family"
+  ],
+  "$defs": {
+    "CanvasCaps": {
+      "description": "Output canvas constraints.",
+      "type": "object",
+      "properties": {
+        "aspect": {
+          "description": "`[min, max]` width / height.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "max_area": {
+          "description": "Maximum pixels.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "multiple": {
+          "description": "Side multiple.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "short_edges": {
+          "description": "Short-edge tiers; the first is the default.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "multiple",
+        "max_area",
+        "aspect",
+        "short_edges"
+      ]
+    },
+    "Caps": {
+      "description": "Widening: the ranges the engine negotiates against.",
+      "type": "object",
+      "properties": {
+        "canvas": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CanvasCaps"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fps": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FpsCaps"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "frames": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FrameCaps"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "knobs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnobCaps"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "refs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RefCaps"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "FamilyHeader": {
+      "description": "The `[family]` table.",
+      "type": "object",
+      "properties": {
+        "display": {
+          "description": "Human name (`MiniMax-H3 / FastH3`).",
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "licence": {
+          "description": "The licence the family's weights are under (SPDX id or the vendor's\nlicence name); the per-tree detail is in each tree's layer-1 manifest.",
+          "type": "string"
+        },
+        "port_doc": {
+          "description": "The port document, relative to the repository root (`docs/ports/h3.md`).",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "display",
+        "licence",
+        "port_doc"
+      ]
+    },
+    "FpsCaps": {
+      "type": "object",
+      "properties": {
+        "allowed": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "default": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "allowed",
+        "default"
+      ]
+    },
+    "FrameCaps": {
+      "description": "Admissible frame counts: `offset + step * k` within `min..=max`.",
+      "type": "object",
+      "properties": {
+        "max": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "min": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "step": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "step",
+        "offset",
+        "min",
+        "max"
+      ]
+    },
+    "GpuNeeds": {
+      "description": "What a variant needs from the GPU, machine-readable.",
+      "type": "object",
+      "properties": {
+        "min_sm": {
+          "description": "Lowest compute capability as `major * 10 + minor` (`89` = sm_89).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "min_vram_gib": {
+          "description": "The smallest card class the variant is served on, in GiB.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "needs": {
+          "description": "Hardware features (`fp8`, `nvfp4`). Unique, non-empty entries.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "min_vram_gib",
+        "min_sm"
+      ]
+    },
+    "KnobCaps": {
+      "description": "Which sampling knobs a request may set.",
+      "type": "object",
+      "properties": {
+        "flow_shift": {
+          "type": "boolean",
+          "default": false
+        },
+        "guidance": {
+          "type": "boolean",
+          "default": false
+        },
+        "guidance_2": {
+          "type": "boolean",
+          "default": false
+        },
+        "negative": {
+          "type": "boolean",
+          "default": false
+        },
+        "seed": {
+          "type": "boolean",
+          "default": false
+        },
+        "steps": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "RefCaps": {
+      "description": "Reference input limits.",
+      "type": "object",
+      "properties": {
+        "audios": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "images": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "videos": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "images",
+        "videos",
+        "audios",
+        "total"
+      ]
+    },
+    "Tier": {
+      "description": "A served variant's quality tier (`fastvideo-protocol`'s `Tier`, as text).",
+      "oneOf": [
+        {
+          "description": "Faster configurations that do not pass the quality gate.",
+          "type": "string",
+          "const": "draft"
+        },
+        {
+          "description": "The fastest configuration that passes the gate.",
+          "type": "string",
+          "const": "turbo"
+        },
+        {
+          "description": "The highest-quality configuration.",
+          "type": "string",
+          "const": "max"
+        }
+      ]
+    },
+    "VariantManifest": {
+      "description": "One `[[variants]]` table: a servable configuration of the family.",
+      "type": "object",
+      "properties": {
+        "caps": {
+          "description": "The ranges the engine negotiates against (layer 1's `[caps]`).",
+          "$ref": "#/$defs/Caps",
+          "default": {}
+        },
+        "engine": {
+          "description": "Opaque to this crate: the runtime's recipe in its own serde form, with\npaths under the weights root written `${weights}/…` and tiny\nautoencoders `${tae}/…`.",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "gpu": {
+          "$ref": "#/$defs/GpuNeeds"
+        },
+        "id": {
+          "description": "The one id everything else derives from (the engine catalog id).",
+          "type": "string"
+        },
+        "recipe_name": {
+          "description": "The short recipe name the capabilities report.",
+          "type": "string"
+        },
+        "registry_name": {
+          "description": "The layer-1 name this variant publishes as, once it is published.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resident_default": {
+          "description": "Loaded before readiness when a deployment does not say otherwise.",
+          "type": "boolean",
+          "default": true
+        },
+        "served_names": {
+          "description": "Names the variant answers to besides its id.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tier": {
+          "description": "`draft` | `turbo` | `max`; absent for an untiered variant.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trees": {
+          "description": "The weights trees the variant reads, named as\n`scripts/gpu/weights-manifest.tsv` names them (relative to the weights\nroot, `/` separators). Sorted, unique.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "recipe_name",
+        "trees",
+        "gpu",
+        "engine"
+      ]
+    }
+  }
+}

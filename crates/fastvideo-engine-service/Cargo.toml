@@ -11,11 +11,15 @@ fastvideo-protocol.workspace = true
 fastvideo-trace.workspace = true
 fastvideo-models.workspace = true
 fastvideo-media.workspace = true
+# Layer 2 of the model family manifest (`families/*.toml`, plan A2): the
+# catalog projection in `cuda::families`; `fs` for the directory loader.
+fastvideo-manifest = { workspace = true, features = ["fs"] }
 image.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
+toml.workspace = true
 # `rt`/`macros`: the streaming cores (ClipPlayer, pacers) are tokio tasks.
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 tracing.workspace = true

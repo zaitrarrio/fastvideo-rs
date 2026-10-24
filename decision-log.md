@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-10-24 · FVID-2026-10-24-family-manifest-layer-2
+- Trigger: plan A2 (docs/plan/2026-10-23-execution-plan.md): layer 2 of the model family manifest and the first three family files, with the equality proof against the hand-written engine catalog
+- Options: the pure crate also owning the engine's recipe structs (one schema, the crate depends on the inference core); the engine's recipe as an opaque table the crate validates only around (ids, trees, GPU, caps); a separate crate for layer 2
+- Decision: **layer 2 lives in `fastvideo-manifest` as `family` with `engine` an opaque TOML table the engine interprets; trees are `weights-manifest.tsv` names and every path in `engine` is written `${weights}/<tree>/…` or `${tae}/<file>` and substituted with the engine's layout at load; the one directory reader is the default-off feature `fs`.** The files are generated from `catalog()` until A3 inverts the direction; `registry_name` stays empty until a model is published
+- Reason: the registry, `fv-boot`, `fv-lab` and the control-plane generator read family files without the inference core; one file serves every machine; the crate's no-I/O contract holds by default
+- Reversibility: cheap (layer 2 is this repository's format, versioned by `schema`; nothing published depends on it)
+- Executed by: Executor (plan A2)
+- ADR: docs/adr/0008-family-manifest-layer-2.md
+- Verification: `crates/fastvideo-engine-service/tests/families.rs` (projection equals the catalog row for row under two layouts, files equal the generator, id sets equal, every tier alias covered); `cargo test -p fastvideo-manifest` (unit tests, `schemas/family.v1.json` drift)
+
 ### FVID · 2026-10-23 · FVID-2026-10-23-manifest-crate-registry-formats
 - Trigger: the architecture review (docs/gaps/2026-10-22-architecture-review.md, merged as #137) proposed one family manifest as the source of truth; the sibling `zaitrarrio/model-registry-rs` had specified the same public formats as its own `registry-core` (WO-001: naming grammar, `model.toml`, signed file-and-chunk manifest, lineage, signatures); the owner asked (2026-10-23) to fold that work into the review and rescope the registry
 - Options: two schemas in two repositories kept equal by tests; the formats in the registry with the runtime depending on it; the formats with the runtime and the registry depending on it; everything in one repository

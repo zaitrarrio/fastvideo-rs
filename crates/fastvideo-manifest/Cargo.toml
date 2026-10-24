@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "The registry's public formats: model names, model.toml v1, the signed lineage manifest v1 with its canonical BLAKE3 digest, and their JSON Schemas. Pure: no I/O, no CUDA."
+description = "The registry's public formats (model names, model.toml v1, the signed lineage manifest v1 with its canonical BLAKE3 digest) and the runtime's family manifest (layer 2), with their JSON Schemas. Pure: no I/O, no CUDA."
 
 [dependencies]
 serde.workspace = true
@@ -17,6 +17,12 @@ base64.workspace = true
 thiserror.workspace = true
 semver.workspace = true
 schemars.workspace = true
+
+[features]
+default = []
+# `family::load_dir`: the one directory reader (families/*.toml) the runtime
+# consumers share. Off by default: the crate stays I/O-free for the registry.
+fs = []
 
 [dev-dependencies]
 proptest.workspace = true

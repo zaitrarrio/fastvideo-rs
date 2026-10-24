@@ -64,7 +64,7 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | A1 | `crates/fastvideo-manifest` layer 1: modules `name`, `model_toml`, `manifest`, `lineage`, `sig`, `schema`; the registry's WO-001 contracts verbatim plus the two widenings (`[variant]`, `[runtime]` recipe/profile, `[caps]`); fixtures under `crates/fastvideo-manifest/fixtures/` (valid and ≥25 invalid names with error kinds, model.toml valid/invalid, manifests with `.digest` siblings, test keys, lineage chains); proptest round-trip; `schemas/*.json` export with a drift test; ADR-0005 naming, ADR-0006 model.toml, ADR-0007 manifest/digest/lineage/signatures | all WO-001 acceptance tests green on CPU; no I/O, no CUDA, `unsafe` forbidden | `cargo test -p fastvideo-manifest` on the pod; clippy -D warnings | none | merged (#143) |
-| A2 | Layer 2 types (`family`, `variant`, `tiers`) and the first three family files `families/{h3,ltx2,wan}.toml` authored from `engine-service/src/cuda/caps.rs`; an equality test proving `catalog()` equals the manifest projection row for row | equality test green for every catalog row | pod | A1 | active |
+| A2 | Layer 2 types (`family`, `variant`, `tiers`) and the first three family files `families/{h3,ltx2,wan}.toml` authored from `engine-service/src/cuda/caps.rs`; an equality test proving `catalog()` equals the manifest projection row for row | equality test green for every catalog row | pod | A1 | pr |
 | A3 | Engine projection: `model_from_config` resolves through the manifest; `validate.rs` and `protocol::ModelCaps` ranges come from it; `[aliases]`, `served_names`, `[protocols]` derived; the 35 serve TOMLs reduced to variant ids and residency; the fake backend serves the manifest; `catalog()` deleted | zero hand-written catalog rows; zero `[aliases]` blocks; `dimension_sweep.rs` and `tests/e2e.rs` green; `/fv/v1/capabilities` unchanged for every config (golden) | pod; serve-compat CI | A2 | todo |
 | A4 | Control-plane and script generation from the families: `control/gen-configs.mjs` emits presets, `enums.ts` ids, `recipe-trees.ts`, `r2-trees.ts`, `weights-sources.ts`, `volumes.ts`; `variants.sh` tables, `volumes.sh`, `gcp/families.tsv`, `autoscale.toml` pools, `verify-weights.sh` cells and `docs/serve/images.md` table generated with `--check` in CI | `gen-configs.mjs --check` green; control unit tests green | pod (node + vitest) | A2 | todo |
 | A5 | Registry hand-off: publish layer 1 (git dependency at a pinned rev); the registry's WO-001 scaffolds against it | registry WO-001 green | registry repo | A1 | active |
@@ -158,6 +158,19 @@ ran (pod id, $/hr), result, cost.
   Lockfile adds 17 packages (blake3 1.8.7, schemars 1.2.3, proptest 1.12.0
   and their deps). Open questions in the PR: `seg-dot` and `--`,
   `[defaults]` keys, `verify_lineage` for the model.toml-side checks.
+- 2026-10-24 01:05Z: A2 opened draft PR #147 (`claude/a2-family-manifests`):
+  `fastvideo-manifest::family` (layer 2: `FamilyManifest`, `VariantManifest`,
+  `FamilySet`, `schemas/family.v1.json`, the `fs` feature for `load_dir`),
+  `families/{h3,ltx2,wan}.toml` generated from `catalog()` (18 + 5 + 7 = 30
+  variants, every catalog row), `cuda::families` (`catalog_from_manifests`,
+  the `${weights}` / `${tae}` substitution, the generator), ADR-0008. On
+  build pod `i8tu0lpdb6nvov`: `cargo test --locked -p fastvideo-manifest -p
+  fastvideo-engine-service` 59 + 136 passed (1 ignored: the generator),
+  `tests/families.rs` proves projection == catalog row for row under two
+  layouts; `cargo fmt --check`, `clippy --workspace --all-targets -D
+  warnings` and `scripts/serve/check.sh` green. No new lockfile package.
+  `registry_name` empty everywhere (nothing published); A3 blockers listed
+  in the PR.
 - Merge rule applied by the coordinator: when the base moved only by
   documentation since the branch point, the PR's own green CI stands;
   otherwise main is merged into the branch and CI re-run on that head.
