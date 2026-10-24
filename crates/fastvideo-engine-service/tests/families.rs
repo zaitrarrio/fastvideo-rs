@@ -204,10 +204,10 @@ fn regenerate_family_files() {
 fn render(fm: &FamilyManifest) -> String {
     let mut text = format!(
         "# Family manifest (layer 2, docs/adr/0008-family-manifest-layer-2.md): {}.\n\
-         # GENERATED from crates/fastvideo-engine-service/src/cuda/caps.rs `catalog()` by\n\
-         # `tests/families.rs` (`regenerate_family_files`); do not hand-edit until plan A3\n\
-         # makes this file the source. Paths: `${{weights}}/<tree>/...` and `${{tae}}/<file>`\n\
-         # are substituted with the engine's weight layout at load (families/README.md).\n\n",
+         # The source the engine catalog, the serve configs and the deployment tooling are\n\
+         # projected from (plan A3): hand-edited, validated by `cargo test -p fastvideo-manifest\n\
+         # -p fastvideo-engine-service` (families/README.md). Paths: `${{weights}}/<tree>/...` and\n\
+         # `${{tae}}/<file>` are substituted with the engine's weight layout at load.\n\n",
         fm.family.display
     );
     text.push_str(&fm.to_toml_string().expect("TOML"));

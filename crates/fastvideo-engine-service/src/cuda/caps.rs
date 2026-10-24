@@ -1527,7 +1527,7 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             "fasth3-trim-8step-vsa",
             CudaRecipe::H3(h3_trim),
         )
-        .with_served_names(&[H3_TRIM]),
+        .with_served_names(&[H3_TRIM, "fasth3-trim"]),
         CudaModel::new(
             FASTH3_TRIM_NVFP4_ID,
             None,
@@ -1569,7 +1569,8 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             "h3-lightx2v-turbo-v1.2-768p-dense",
             CudaRecipe::H3(h3_lightx),
         ),
-        CudaModel::new(VDN_H3_ID, None, VDN_H3_RECIPE, CudaRecipe::H3(vdn_h3)),
+        CudaModel::new(VDN_H3_ID, None, VDN_H3_RECIPE, CudaRecipe::H3(vdn_h3))
+            .with_served_names(&[VDN_H3_RECIPE]),
         CudaModel::new(
             VDN_H3_8STEP_ID,
             None,

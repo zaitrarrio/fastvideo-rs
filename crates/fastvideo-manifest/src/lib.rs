@@ -41,8 +41,8 @@ pub mod sig;
 
 pub use canonical::{to_canonical_bytes, to_canonical_string, CanonicalError};
 pub use family::{
-    FamilyError, FamilyHeader, FamilyId, FamilyManifest, FamilySet, GpuNeeds, Tier,
-    VariantManifest, FAMILY_SCHEMA, TAE_VAR, WEIGHTS_VAR,
+    FamilyError, FamilyHeader, FamilyId, FamilyManifest, FamilySet, GpuNeeds, HdTier, ServingCaps,
+    Tier, VariantManifest, FAMILY_SCHEMA, TAE_TREE_PREFIX, TAE_VAR, WEIGHTS_VAR,
 };
 pub use lineage::{verify_chain, verify_lineage, LineageEntry, LineageError};
 pub use manifest::{

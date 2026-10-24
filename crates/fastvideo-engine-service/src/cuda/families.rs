@@ -25,8 +25,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use fastvideo_manifest::family::{
-    FamilyHeader, FamilyManifest, GpuNeeds, Tier as ManifestTier, VariantManifest, FAMILY_SCHEMA,
-    TAE_VAR, WEIGHTS_VAR,
+    AudioCaps as ManifestAudioCaps, FamilyHeader, FamilyManifest, GpuNeeds, HdTier as ManifestHdTier,
+    ServingCaps, Tier as ManifestTier, VariantManifest, FAMILY_SCHEMA, TAE_VAR, WEIGHTS_VAR,
 };
 use fastvideo_manifest::{CanvasCaps, Caps, FpsCaps, FrameCaps, KnobCaps, RefCaps};
 use fastvideo_models::h3::config as h3cfg;
@@ -347,10 +347,65 @@ pub fn caps_of(c: &ModelCaps) -> Caps {
     }
 }
 
+/// The layer-2 `[serving]` table of a served model: what `ModelCaps`
+/// advertises beyond layer 1's `Caps`.
+pub fn serving_of(c: &ModelCaps) -> ServingCaps {
+    ServingCaps {
+        tasks: c
+            .tasks
+            .iter()
+            .filter_map(|t| serde_json::to_value(t).ok())
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect(),
+        frames_default: c.frames.default,
+        audio: c.audio.as_ref().map(|a| ManifestAudioCaps {
+            native_rate: a.native_rate,
+            channels: a.channels,
+            via_sidecar: a.via_sidecar,
+        }),
+        fps_container_only: c.fps.container_only,
+        pad_and_crop: c.canvas.pad_and_crop,
+        hd: c.canvas.hd.map(|t| ManifestHdTier {
+            short_edge: t.short_edge,
+            max_area: t.max_area,
+            max_frames: t.max_frames,
+            experimental_max_frames: t.experimental_max_frames,
+        }),
+        reference_strength: c.knobs.reference_strength,
+    }
+}
+
+/// The public API names of each catalog row: what the serve configs'
+/// `[aliases]` tables mapped onto the model by hand (the MiniMax `model`
+/// ids). A tier's name is also on its task companion, so a server serving
+/// only the companion (runpod-h3-ref2v.toml) still answers to it.
+fn public_names_of(id: &str) -> Vec<String> {
+    let names: &[&str] = match id {
+        "sol-h3" | "h3-ref2v-max" => &["MiniMax-H3-Max"],
+        "fasth3-4step-vsa" => &["MiniMax-H3", "MiniMax-H3-Turbo"],
+        "h3-ref2v-turbo" => &["MiniMax-H3-Turbo"],
+        "fasth3-4step-vsa-taeh3" => &["MiniMax-H3-Turbo-Preview"],
+        "fasth3-v2-nvfp4-taeh3" => &["MiniMax-H3-V2-NVFP4-Preview"],
+        "fasth3-4step-vsa-nvfp4-taeh3" => &["MiniMax-H3-Turbo-NVFP4-Preview"],
+        "fasth3-trim-8step" => &["MiniMax-H3-Trim"],
+        "fasth3-trim-nvfp4" => &["MiniMax-H3-Trim-NVFP4"],
+        "fasth3-trim-nvfp4-fast" => &["MiniMax-H3-Trim-NVFP4-Fast"],
+        "fasth3-v2-nvfp4" => &["MiniMax-H3-V2-NVFP4"],
+        "fasth3-4step-vsa-nvfp4" => &["MiniMax-H3-Turbo-NVFP4"],
+        "h3-larry-turbo" => &["MiniMax-H3-Turbo-Lora"],
+        "h3-lightx2v-turbo" => &["MiniMax-H3-Turbo-Lightx2v"],
+        "vdn-h3" => &["VDN-H3"],
+        "vdn-h3-8step" => &["VDN-H3-8step"],
+        _ => &[],
+    };
+    names.iter().map(|n| (*n).to_owned()).collect()
+}
+
 /// One catalog row as a `[[variants]]` table.
 pub fn variant_manifest(m: &CudaModel, layout: &WeightLayout) -> Result<VariantManifest, String> {
     let engine = engine_table(&m.recipe, layout)?;
     let trees = trees_of(&engine, &m.recipe);
+    let caps = m.caps();
     Ok(VariantManifest {
         id: m.id.as_str().to_owned(),
         registry_name: None,
@@ -361,11 +416,13 @@ pub fn variant_manifest(m: &CudaModel, layout: &WeightLayout) -> Result<VariantM
             .filter(|n| n.as_str() != m.id.as_str())
             .cloned()
             .collect(),
+        public_names: public_names_of(m.id.as_str()),
         resident_default: m.resident,
         recipe_name: m.recipe_name.clone(),
         trees,
         gpu: gpu_needs(m),
-        caps: caps_of(&m.caps()),
+        caps: caps_of(&caps),
+        serving: serving_of(&caps),
         engine,
     })
 }

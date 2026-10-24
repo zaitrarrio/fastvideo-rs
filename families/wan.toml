@@ -1,8 +1,8 @@
 # Family manifest (layer 2, docs/adr/0008-family-manifest-layer-2.md): Wan 2.1 / Wan 2.2 / FastWan.
-# GENERATED from crates/fastvideo-engine-service/src/cuda/caps.rs `catalog()` by
-# `tests/families.rs` (`regenerate_family_files`); do not hand-edit until plan A3
-# makes this file the source. Paths: `${weights}/<tree>/...` and `${tae}/<file>`
-# are substituted with the engine's weight layout at load (families/README.md).
+# The source the engine catalog, the serve configs and the deployment tooling are
+# projected from (plan A3): hand-edited, validated by `cargo test -p fastvideo-manifest
+# -p fastvideo-engine-service` (families/README.md). Paths: `${weights}/<tree>/...` and
+# `${tae}/<file>` are substituted with the engine's weight layout at load.
 
 schema = 1
 
@@ -52,6 +52,11 @@ steps = true
 guidance = true
 guidance_2 = false
 flow_shift = true
+
+[variants.serving]
+tasks = ["t2v", "i2v"]
+frames_default = 121
+fps_container_only = true
 
 [variants.engine]
 decoder = "full"
@@ -115,6 +120,11 @@ guidance = false
 guidance_2 = false
 flow_shift = true
 
+[variants.serving]
+tasks = ["t2v", "i2v"]
+frames_default = 121
+fps_container_only = true
+
 [variants.engine]
 decoder = "full"
 default = [1280, 704, 121, 24]
@@ -176,6 +186,11 @@ guidance = false
 guidance_2 = false
 flow_shift = true
 
+[variants.serving]
+tasks = ["t2v", "i2v"]
+frames_default = 121
+fps_container_only = true
+
 [variants.engine]
 decoder = "taehv"
 default = [1280, 704, 121, 24]
@@ -236,6 +251,11 @@ steps = false
 guidance = false
 guidance_2 = false
 flow_shift = false
+
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 81
+fps_container_only = true
 
 [variants.engine]
 decoder = "full"
@@ -299,6 +319,11 @@ guidance = false
 guidance_2 = false
 flow_shift = true
 
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 81
+fps_container_only = true
+
 [variants.engine]
 decoder = "full"
 default = [832, 480, 81, 16]
@@ -359,6 +384,11 @@ guidance = false
 guidance_2 = false
 flow_shift = true
 
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 81
+fps_container_only = true
+
 [variants.engine]
 decoder = "taehv"
 default = [832, 480, 81, 16]
@@ -418,6 +448,10 @@ steps = false
 guidance = false
 guidance_2 = false
 flow_shift = false
+
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 81
 
 [variants.engine]
 block_frames = 12

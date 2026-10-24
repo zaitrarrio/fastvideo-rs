@@ -26,6 +26,33 @@
     "family"
   ],
   "$defs": {
+    "AudioCaps": {
+      "description": "Native audio output of a variant.",
+      "type": "object",
+      "properties": {
+        "channels": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "native_rate": {
+          "description": "Hz.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "via_sidecar": {
+          "description": "The audio comes from a sidecar model; the variant itself is video-only.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "native_rate",
+        "channels"
+      ]
+    },
     "CanvasCaps": {
       "description": "Output canvas constraints.",
       "type": "object",
@@ -241,6 +268,47 @@
         "min_sm"
       ]
     },
+    "HdTier": {
+      "description": "An opt-in canvas tier with its own pixel budget ([`ServingCaps::hd`]).",
+      "type": "object",
+      "properties": {
+        "experimental_max_frames": {
+          "description": "The longer cap an experimental feature flag allows while it is off.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "max_area": {
+          "description": "Largest generation canvas area at this tier.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "max_frames": {
+          "description": "Longest clip at this tier, in frames (absent: the frame grid's).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "short_edge": {
+          "description": "The delivered short edge.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "short_edge",
+        "max_area"
+      ]
+    },
     "KnobCaps": {
       "description": "Which sampling knobs a request may set.",
       "type": "object",
@@ -305,6 +373,64 @@
         "total"
       ]
     },
+    "ServingCaps": {
+      "description": "The runtime's capabilities beside layer 1's `Caps`: what `ModelCaps`\nadvertises and `model.toml` does not carry (ADR-0008 amendment, plan\nA3). Layer 2 only; widening layer 1 is a pinned-format change.",
+      "type": "object",
+      "properties": {
+        "audio": {
+          "description": "Native audio output; absent for a video-only model.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AudioCaps"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fps_container_only": {
+          "description": "The fps only sets the container rate (Wan): the frames are generated\nthe same regardless.",
+          "type": "boolean"
+        },
+        "frames_default": {
+          "description": "The frame count of a request without a length; on `caps.frames`'s grid.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "hd": {
+          "description": "An opt-in canvas tier above the trained pixel budget (the H3 1080P\ntier), also listed in `caps.canvas.short_edges`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HdTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pad_and_crop": {
+          "description": "Canvases off the side multiple are generated padded and cropped back\n(LTX 1080 -> 1088).",
+          "type": "boolean"
+        },
+        "reference_strength": {
+          "description": "The reference-strength knobs (LTX reference-to-video) are honoured.",
+          "type": "boolean"
+        },
+        "tasks": {
+          "description": "The tasks the variant serves, as the protocol names them (`t2v`,\n`i2v`, `keyframes`, `ref2v`, `a2v`, `retake`, `extend`). Non-empty,\nunique.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tasks",
+        "frames_default"
+      ]
+    },
     "Tier": {
       "description": "A served variant's quality tier (`fastvideo-protocol`'s `Tier`, as text).",
       "oneOf": [
@@ -346,6 +472,13 @@
           "description": "The one id everything else derives from (the engine catalog id).",
           "type": "string"
         },
+        "public_names": {
+          "description": "The public API names (the MiniMax `model` ids, `MiniMax-H3-Turbo`) a\nserver maps onto this variant when it serves it: what the serve\nconfigs' `[aliases]` tables used to list by hand. Several variants may\nclaim one name (a tier and its task companion): the server gives it\nto the served model that generates from text, else the first listed.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "recipe_name": {
           "description": "The short recipe name the capabilities report.",
           "type": "string"
@@ -368,6 +501,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "serving": {
+          "description": "What the runtime advertises beside `caps` and layer 1 does not carry.",
+          "$ref": "#/$defs/ServingCaps"
         },
         "tier": {
           "description": "`draft` | `turbo` | `max`; absent for an untiered variant.",
@@ -394,6 +531,7 @@
         "recipe_name",
         "trees",
         "gpu",
+        "serving",
         "engine"
       ]
     }
