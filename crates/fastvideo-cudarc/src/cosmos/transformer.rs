@@ -10,9 +10,9 @@ use fastvideo_models::cosmos::{
     apply_rope_real, rope_cos_sin, CosmosTransformerConfig, ExtraPosEmbed,
 };
 
-use crate::wan::nn::{self, Linear};
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{self, WeightMap};
+use crate::rt::nn::{self, Linear};
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{self, WeightMap};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -142,11 +142,11 @@ fn rope_real(
     #[cfg(feature = "cuda")]
     if let (Some(xv), Some(c), Some(sn)) = (x.dev()?, cos.dev()?, sin.dev()?) {
         return CudaTensor::from_device_slice(
-            crate::wan::ops::rope_real_device(&xv, &c, &sn, seq, dim)?,
+            crate::rt::ops::rope_real_device(&xv, &c, &sn, seq, dim)?,
             x.shape.clone(),
         );
     }
-    crate::wan::stats::host_fallback("rope_real", format_args!("{:?}", x.shape))?;
+    crate::rt::stats::host_fallback("rope_real", format_args!("{:?}", x.shape))?;
     let out = apply_rope_real(
         &x.host_cow()?,
         &cos.host_cow()?,
@@ -555,7 +555,7 @@ impl CosmosTransformer {
         if compute {
             Ok(Some(false))
         } else {
-            crate::wan::log::debug(format_args!(
+            crate::rt::log::debug(format_args!(
                 "cosmos sol teacache reuse step {step} {}",
                 if cond { "cond" } else { "uncond" }
             ));

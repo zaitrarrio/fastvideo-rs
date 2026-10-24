@@ -6,7 +6,7 @@
 //! Wan backend already has, plus two host-side pieces that are input
 //! preparation rather than compute: the rotary tables
 //! (`fastvideo_models::ltx2::rope`) and the checkpoint key view ([`keys`]).
-//! Device tensors are f32; bf16 lives only inside [`crate::wan::nn::Linear`].
+//! Device tensors are f32; bf16 lives only inside [`crate::rt::nn::Linear`].
 
 pub mod a2v;
 pub mod attention;
@@ -32,7 +32,7 @@ mod manifest_tests;
 #[cfg(test)]
 mod reference_tests;
 
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
 
 pub(crate) fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -60,7 +60,7 @@ pub(crate) fn tanh(x: &CudaTensor) -> Result<CudaTensor> {
     #[cfg(feature = "cuda")]
     if let Some(d) = x.dev()? {
         return CudaTensor::from_dev_result(
-            crate::wan::ops::tanh_scaled_device(&d, 1.0)?,
+            crate::rt::ops::tanh_scaled_device(&d, 1.0)?,
             x.shape.clone(),
         );
     }

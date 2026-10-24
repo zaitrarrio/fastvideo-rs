@@ -34,9 +34,9 @@ use fastvideo_models::ltx2::rope::connector_fractions;
 use fastvideo_models::ltx2::SplitRope;
 
 use crate::llm::{self, DecoderConfig};
-use crate::wan::nn::Linear;
-use crate::wan::tensor::{CudaTensor, Result};
-use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
+use crate::rt::nn::Linear;
+use crate::rt::tensor::{CudaTensor, Result};
+use crate::rt::weights::{cuda_tensor_shaped, WeightMap};
 
 use super::attention::{Attention, AttentionDims, DeviceRope, FeedForward};
 use super::keys::Keys;
@@ -124,7 +124,7 @@ pub const DUMP_TAPS: [usize; 11] = [0, 1, 2, 5, 6, 7, 12, 24, 36, 47, 48];
 /// (the aggregate embeds, `[n, D]`), `text_{video,audio}_ctx_real` (the
 /// connector rows of the real tokens, which lead the context).
 pub fn dump_stages(prompt: &PaddedPrompt, stack: &HiddenStack, out: &TextContexts) -> Result<()> {
-    use crate::wan::dump;
+    use crate::rt::dump;
     use std::sync::atomic::{AtomicBool, Ordering};
     static DONE: AtomicBool = AtomicBool::new(false);
     if !dump::enabled() || DONE.swap(true, Ordering::SeqCst) {

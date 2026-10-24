@@ -24,7 +24,7 @@ use std::cell::Cell;
 use std::sync::OnceLock;
 
 use super::attention::DeviceRope;
-use crate::wan::tensor::{CudaTensor, Result};
+use crate::rt::tensor::{CudaTensor, Result};
 
 thread_local! {
     static OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
@@ -36,7 +36,7 @@ pub fn enabled() -> bool {
         return v;
     }
     static ENV: OnceLock<bool> = OnceLock::new();
-    *ENV.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_LTX_FUSE", true))
+    *ENV.get_or_init(|| crate::rt::envflag::bool_flag("FASTVIDEO_LTX_FUSE", true))
 }
 
 /// Run `f` with the LTX fusions forced on or off (parity checks).
@@ -78,7 +78,7 @@ pub enum Residual<'a> {
 
 #[cfg(feature = "cuda")]
 fn active() -> bool {
-    enabled() && crate::wan::tensor::bf16_activations() && crate::wan::stats::device_expected()
+    enabled() && crate::rt::tensor::bf16_activations() && crate::rt::stats::device_expected()
 }
 
 #[cfg(feature = "cuda")]
@@ -154,16 +154,16 @@ pub fn gate_merge(out: &CudaTensor, logits: &CudaTensor) -> Result<Option<CudaTe
 
 // `launch!` names `super::stats` / `super::device` from its call site.
 #[cfg(feature = "cuda")]
-use crate::wan::{device, stats};
+use crate::rt::{device, stats};
 
 #[cfg(feature = "cuda")]
 mod dev {
     use super::*;
-    use crate::wan::act16::{operand, OutBuf};
-    use crate::wan::device::global_device;
-    use crate::wan::kernels::{cfg_rows, launch};
-    use crate::wan::quant::ptr;
-    use crate::wan::tensor::TensorError;
+    use crate::rt::act16::{operand, OutBuf};
+    use crate::rt::device::global_device;
+    use crate::rt::kernels::{cfg_rows, launch};
+    use crate::rt::quant::ptr;
+    use crate::rt::tensor::TensorError;
 
     fn err(e: impl std::fmt::Display) -> TensorError {
         TensorError::Message(e.to_string())

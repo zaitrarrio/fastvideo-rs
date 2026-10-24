@@ -29,7 +29,7 @@ use fastvideo_models::h3::config::{H3AudioVaeConfig, H3TransformerConfig, H3Vide
 use fastvideo_models::h3::schedule::{H3JointSchedule, H3Schedule};
 
 use crate::llm::{self, DecoderConfig};
-use crate::wan::weights::WeightMap;
+use crate::rt::weights::WeightMap;
 
 use super::audio_vae::H3AudioDecoder;
 use super::transformer::{AdaLnTable, Block, H3TextRefiner, H3Transformer};

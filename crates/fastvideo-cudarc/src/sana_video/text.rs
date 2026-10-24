@@ -7,8 +7,8 @@ use fastvideo_models::sana_video::text::PromptLayout;
 use fastvideo_models::sana_video::Gemma2TextConfig;
 
 use crate::llm::{self, Act, DecoderConfig, LayerAttn};
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::WeightMap;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::WeightMap;
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())

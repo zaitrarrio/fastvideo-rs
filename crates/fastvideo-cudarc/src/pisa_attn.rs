@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use fastvideo_models::pisa_attn::pisa_attn_bhsd;
 use fastvideo_models::sol_attn::BLOCK_SIZE;
 
-use crate::wan::log;
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::log;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -48,10 +48,10 @@ pub fn pisa_attn(
     }
     let scale = scale.unwrap_or((dim as f32).sqrt().recip());
     log_once(sparsity, tokens);
-    if let Some(out) = crate::wan::sol_ops::try_pisa_device(q, k, v, sparsity, scale)? {
+    if let Some(out) = crate::rt::sol_ops::try_pisa_device(q, k, v, sparsity, scale)? {
         return Ok(out);
     }
-    crate::wan::stats::host_algorithm(
+    crate::rt::stats::host_algorithm(
         "pisa_attn",
         format_args!("BHSD {batch}x{heads}x{tokens}x{dim}"),
     )?;
@@ -86,7 +86,7 @@ fn pin_like(t: CudaTensor, like: &CudaTensor) -> Result<CudaTensor> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wan::nn::scaled_dot_product_attention;
+    use crate::rt::nn::scaled_dot_product_attention;
 
     fn seeded(n: usize, k: f32) -> Vec<f32> {
         (0..n).map(|i| (i as f32 * k + 0.41).sin()).collect()

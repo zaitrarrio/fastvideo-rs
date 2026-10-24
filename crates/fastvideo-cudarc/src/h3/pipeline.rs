@@ -19,7 +19,7 @@
 //! On a smaller card ([`H3PipelineOptions::dit_offload`], `auto` when the
 //! free memory does not cover [`fastvideo_models::h3::memory::plan`]) the
 //! refiner and DiT blocks are **streamed** from pinned host memory through a
-//! ring of device slots ([`crate::wan::offload`]) and the video and audio
+//! ring of device slots ([`crate::rt::offload`]) and the video and audio
 //! decoders are loaded for the decode only, as the reference's RTX 5090
 //! profile runs: only the active component is on the GPU.
 //!
@@ -90,11 +90,11 @@ use super::vae::H3VideoDecoder;
 use super::vae_encoder::H3VideoEncoder;
 use super::vsa::H3Vsa;
 use crate::hooks::{Hooks, Stage};
-use crate::wan::offload::{DitOffload, MemoryLog, OffloadStats, PhaseMemory, Residency};
+use crate::rt::offload::{DitOffload, MemoryLog, OffloadStats, PhaseMemory, Residency};
+use crate::rt::taehv::{TaeArch, TaeHv};
+use crate::rt::tensor::{CudaTensor, TensorError};
+use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::{interleave_audio, write_wav, PipelineError, Result};
-use crate::wan::taehv::{TaeArch, TaeHv};
-use crate::wan::tensor::{CudaTensor, TensorError};
-use crate::wan::weights::WeightMap;
 
 fn msg(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())
@@ -553,7 +553,7 @@ pub struct H3Timings {
     pub video_push_s: f64,
     /// Time the decode thread waited on the frame hand-off or the final drain.
     pub video_wait_s: f64,
-    /// `frame-NNN.png` written after the mp4 (see `wan::writer`).
+    /// `frame-NNN.png` written after the mp4 (see `rt::writer`).
     pub write_s: f64,
 }
 
@@ -588,7 +588,7 @@ fn inject_start_rows(
     target: Vec<f32>,
     cond: Option<CudaTensor>,
 ) -> Result<(Vec<f32>, Option<CudaTensor>)> {
-    let Some((shape, v)) = crate::wan::inject::load(name)? else {
+    let Some((shape, v)) = crate::rt::inject::load(name)? else {
         return Ok((target, cond));
     };
     let cond_n = cond.as_ref().map_or(0, CudaTensor::numel);
@@ -605,14 +605,14 @@ fn inject_start_rows(
     let tail = v[cond_n..].to_vec();
     let cond = match cond {
         Some(c) if std::env::var("FASTVIDEO_INJECT_COND").is_ok_and(|x| x == "1") => {
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "inject: {name} condition rows ({cond_n} values) from the reference"
             ));
             Some(CudaTensor::from_vec(v[..cond_n].to_vec(), c.shape.clone())?.to_device()?)
         }
         c => c,
     };
-    crate::wan::log::info(format_args!(
+    crate::rt::log::info(format_args!(
         "inject: {name} target rows from the reference"
     ));
     Ok((tail, cond))
@@ -718,14 +718,14 @@ pub fn denoise(
     let (mut video, mut audio) = (video_rows, audio_rows);
     // FASTVIDEO_DUMP_DIR: the inputs, each step's velocity and latents, and the
     // first step's block outputs, for a two-run comparison (compare-dumps).
-    let dumping = crate::wan::dump::enabled();
+    let dumping = crate::rt::dump::enabled();
     if dumping {
-        crate::wan::dump::tensor("text_refined", text_refined)?;
-        crate::wan::dump::tensor("video_step00_in", &video)?;
-        crate::wan::dump::tensor("audio_step00_in", &audio)?;
+        crate::rt::dump::tensor("text_refined", text_refined)?;
+        crate::rt::dump::tensor("video_step00_in", &video)?;
+        crate::rt::dump::tensor("audio_step00_in", &audio)?;
         for (tag, s) in [("video", &schedule.video), ("audio", &schedule.audio)] {
-            crate::wan::dump::host(&format!("{tag}_sigmas"), &[s.sigmas.len()], &s.sigmas)?;
-            crate::wan::dump::host(
+            crate::rt::dump::host(&format!("{tag}_sigmas"), &[s.sigmas.len()], &s.sigmas)?;
+            crate::rt::dump::host(
                 &format!("{tag}_timesteps"),
                 &[s.timesteps.len()],
                 &s.timesteps,
@@ -734,10 +734,10 @@ pub fn denoise(
     }
     for step in 0..schedule.num_steps() {
         let mut dump_blocks = |name: &str, x: &CudaTensor| {
-            crate::wan::dump::rows_strided(
+            crate::rt::dump::rows_strided(
                 &format!("step00_{name}"),
                 x,
-                crate::wan::dump::BLOCK_ROW_STRIDE,
+                crate::rt::dump::BLOCK_ROW_STRIDE,
             )
         };
         let observer: Option<crate::h3::transformer::Observer<'_>> =
@@ -762,10 +762,10 @@ pub fn denoise(
             audio = scheduler_step(&schedule.audio, step, &audio, &v_audio)?;
         }
         if dumping {
-            crate::wan::dump::tensor(&format!("video_vel_step{:02}", step + 1), &v_video)?;
-            crate::wan::dump::tensor(&format!("video_step{:02}", step + 1), &video)?;
-            crate::wan::dump::tensor(&format!("audio_vel_step{:02}", step + 1), &v_audio)?;
-            crate::wan::dump::tensor(&format!("audio_step{:02}", step + 1), &audio)?;
+            crate::rt::dump::tensor(&format!("video_vel_step{:02}", step + 1), &v_video)?;
+            crate::rt::dump::tensor(&format!("video_step{:02}", step + 1), &video)?;
+            crate::rt::dump::tensor(&format!("audio_vel_step{:02}", step + 1), &v_audio)?;
+            crate::rt::dump::tensor(&format!("audio_step{:02}", step + 1), &audio)?;
         }
         observe(step, &video, &audio)?;
     }
@@ -853,8 +853,7 @@ fn dit_tree_identity(
     cfg: &H3TransformerConfig,
     with_gate: bool,
 ) -> Result<Option<super::dit_tree::Identity>> {
-    if crate::wan::affine::bits_from_env().is_some()
-        || fastvideo_models::nvfp4::from_env().is_some()
+    if crate::rt::affine::bits_from_env().is_some() || fastvideo_models::nvfp4::from_env().is_some()
     {
         return Ok(None);
     }
@@ -868,9 +867,9 @@ fn dit_tree_identity(
         return Ok(None);
     }
     #[cfg(feature = "cuda")]
-    let route = if crate::wan::nn::Linear::device_bf16_route() {
+    let route = if crate::rt::nn::Linear::device_bf16_route() {
         "device-bf16"
-    } else if crate::wan::stats::device_expected() {
+    } else if crate::rt::stats::device_expected() {
         // Process-wide FASTVIDEO_FP8 or f32 GEMM math: not stored.
         return Ok(None);
     } else {
@@ -915,7 +914,7 @@ fn dit_tree_identity(
         }
         None => (None, 1.0f32),
     };
-    let quant = crate::wan::quant::QuantMode::from_env().map_err(msg)?;
+    let quant = crate::rt::quant::QuantMode::from_env().map_err(msg)?;
     Ok(Some(super::dit_tree::Identity {
         recipe: name.unwrap_or("auto").to_owned(),
         quant: quant.as_str().into(),
@@ -1022,7 +1021,7 @@ pub struct H3Pipeline {
     i2v_stream: bool,
     pub load_timings: H3LoadTimings,
     /// What this pipeline keeps on the device, by ledger category.
-    booking: std::sync::Mutex<crate::wan::ledger::Booking>,
+    booking: std::sync::Mutex<crate::rt::ledger::Booking>,
     /// VDN-H3: the hybrid transform every block runs (branch attached).
     vdn: Option<fastvideo_models::h3::vdn::VdnTransform>,
     /// The VSA fine stage on sparse FP4 tensor cores (`FASTVIDEO_H3_VSA_FP4`,
@@ -1046,12 +1045,12 @@ pub struct H3Pipeline {
 /// 2026-10-14, measured in docs/perf/h3-nvfp4-tier-options.md); any other DiT
 /// ignores it (with a note when it was set). `0` turns it off everywhere.
 fn vsa_fp4_choice(modelopt_nvfp4: bool, comfy_nvfp4: bool, recipe_fp4: bool) -> Result<bool> {
-    let setting = crate::wan::attn_fp4::setting();
+    let setting = crate::rt::attn_fp4::setting();
     if setting == Some(false) {
         if recipe_fp4 {
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3: {}=0 turns off the sparse FP4 VSA the recipe asks for (bf16 VSA)",
-                crate::wan::attn_fp4::ENV
+                crate::rt::attn_fp4::ENV
             ));
         }
         return Ok(false);
@@ -1063,38 +1062,38 @@ fn vsa_fp4_choice(modelopt_nvfp4: bool, comfy_nvfp4: bool, recipe_fp4: bool) -> 
         setting
     };
     if comfy_nvfp4 && setting.is_none() {
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "h3: VSA fine stage on bf16 for the Trim NVFP4 DiT ({}=1 opts into sparse FP4 attention)",
-            crate::wan::attn_fp4::ENV
+            crate::rt::attn_fp4::ENV
         ));
         return Ok(false);
     }
     if !modelopt_nvfp4 && !comfy_nvfp4 {
         if setting == Some(true) {
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3: {}=1 ignored: the sparse FP4 VSA tier is for the ModelOpt NVFP4 checkpoints only",
-                crate::wan::attn_fp4::ENV
+                crate::rt::attn_fp4::ENV
             ));
         }
         return Ok(false);
     }
     #[cfg(feature = "cuda")]
     {
-        if !crate::wan::attn_fp4::available() {
+        if !crate::rt::attn_fp4::available() {
             if setting == Some(true) {
                 return Err(msg(format!(
                     "h3: {}=1 needs the sm_120 sparse FP4 attention kernel (not available on this device)",
-                    crate::wan::attn_fp4::ENV
+                    crate::rt::attn_fp4::ENV
                 )));
             }
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3: VSA fine stage on bf16 (no sm_120 sparse FP4 attention kernel on this device)"
             ));
             return Ok(false);
         }
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "h3: VSA fine stage on sparse FP4 tensor cores ({}={}, P {})",
-            crate::wan::attn_fp4::ENV,
+            crate::rt::attn_fp4::ENV,
             if recipe_fp4 && comfy_nvfp4 {
                 "1 by the recipe"
             } else if setting == Some(true) {
@@ -1102,7 +1101,7 @@ fn vsa_fp4_choice(modelopt_nvfp4: bool, comfy_nvfp4: bool, recipe_fp4: bool) -> 
             } else {
                 "unset: NVFP4 default"
             },
-            if crate::wan::attn_fp4::p_single() {
+            if crate::rt::attn_fp4::p_single() {
                 "single-level"
             } else {
                 "two-level"
@@ -1115,7 +1114,7 @@ fn vsa_fp4_choice(modelopt_nvfp4: bool, comfy_nvfp4: bool, recipe_fp4: bool) -> 
         if setting == Some(true) {
             return Err(msg(format!(
                 "h3: {}=1 needs a CUDA build",
-                crate::wan::attn_fp4::ENV
+                crate::rt::attn_fp4::ENV
             )));
         }
         Ok(false)
@@ -1133,7 +1132,7 @@ fn vsa_fp4_choice(modelopt_nvfp4: bool, comfy_nvfp4: bool, recipe_fp4: bool) -> 
 /// asked for 40.9 GiB and released a 22.7 GiB encoder with 40.8 GiB free, so
 /// the warm request streamed it (~89 s of text encoding instead of ~0.5 s).
 pub fn denoise_reserve_bytes(rows: usize) -> u64 {
-    denoise_reserve_bytes_for(rows, crate::wan::tensor::bf16_activations())
+    denoise_reserve_bytes_for(rows, crate::rt::tensor::bf16_activations())
 }
 
 /// [`denoise_reserve_bytes`] for an explicit activation width
@@ -1235,7 +1234,7 @@ fn planned_dit_weights(
     nvfp4: bool,
     mlx: bool,
 ) -> Result<fastvideo_models::h3::memory::H3DitWeights> {
-    use crate::wan::quant::QuantMode;
+    use crate::rt::quant::QuantMode;
     use fastvideo_models::h3::memory::H3DitWeights;
     if nvfp4 {
         return Ok(H3DitWeights::Nvfp4);
@@ -1254,8 +1253,8 @@ fn planned_dit_weights(
 /// Free device memory plus what the pool has cached but not in use: what a
 /// denoise (or the DiT's load) can allocate. `None` without a device.
 fn device_available() -> Option<u64> {
-    let (free, _) = crate::wan::device::free_memory()?;
-    let cached = crate::wan::device::pool_usage().map_or(0, |p| p.reserved.saturating_sub(p.used));
+    let (free, _) = crate::rt::device::free_memory()?;
+    let cached = crate::rt::device::pool_usage().map_or(0, |p| p.reserved.saturating_sub(p.used));
     Some(free + cached)
 }
 
@@ -1296,7 +1295,7 @@ impl H3Pipeline {
     /// `root` is the FastH3 snapshot (`transformer/`, `vae/`, `audio_vae/`, and
     /// `tokenizer/` + `text_encoder/` unless `options.text_root` says otherwise).
     pub fn load(root: &Path, options: H3PipelineOptions) -> Result<Self> {
-        crate::wan::tensor::default_bf16_activations();
+        crate::rt::tensor::default_bf16_activations();
         let mut options = options;
         // The profile this pipeline runs: the caller's own (fv-serve, one per
         // model), else the process's.
@@ -1310,7 +1309,7 @@ impl H3Pipeline {
         if let Some(profile) = profile_in_use {
             match (&options.recipe, &profile.recipe) {
                 (None, Some(r)) => options.recipe = Some(r.clone()),
-                (Some(a), Some(b)) if a != b => crate::wan::log::info(format_args!(
+                (Some(a), Some(b)) if a != b => crate::rt::log::info(format_args!(
                     "h3 techniques: recipe {a} (command line) overrides profile {}'s {b}",
                     profile.name
                 )),
@@ -1331,9 +1330,9 @@ impl H3Pipeline {
         // cost 9 dB of clip PSNR against the reference, docs/ports/vdn-h3.md
         // §5). `FASTVIDEO_H3_QUANT=mxfp8` still opts in. The guard covers this
         // load (every QuantMode::from_env of the DiT and refiner) only.
-        let _vdn_bf16 = vdn_ckpt.as_ref().map(|_| {
-            crate::wan::quant::QuantMode::scoped_default(crate::wan::quant::QuantMode::Off)
-        });
+        let _vdn_bf16 = vdn_ckpt
+            .as_ref()
+            .map(|_| crate::rt::quant::QuantMode::scoped_default(crate::rt::quant::QuantMode::Off));
         let cfg = dit_config(root, &options)?;
         // The video VAE: the tree's own `vae/`, completed from h3-base's for
         // the shards an NVFP4 release does not carry, or h3-base's under
@@ -1366,20 +1365,20 @@ impl H3Pipeline {
             ));
         }
         if let Some(p) = own.as_ref().and_then(|p| p.as_ref()) {
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3 technique profile: {} (this model's own)",
                 p.name
             ));
             for note in &p.notes {
-                crate::wan::log::info(format_args!("h3 technique profile note: {note}"));
+                crate::rt::log::info(format_args!("h3 technique profile note: {note}"));
             }
         } else if let (None, Some(path)) = (&own, active.path.as_ref()) {
-            crate::wan::log::info(format_args!("h3 technique profile: {}", path.display()));
+            crate::rt::log::info(format_args!("h3 technique profile: {}", path.display()));
             for note in active.profile.iter().flat_map(|p| p.notes.iter()) {
-                crate::wan::log::info(format_args!("h3 technique profile note: {note}"));
+                crate::rt::log::info(format_args!("h3 technique profile note: {note}"));
             }
             for (k, v, source) in active.settings.iter() {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 technique setting {k}={v} ({source}{})",
                     if std::env::var_os(k).is_some() {
                         "; overridden by env"
@@ -1389,14 +1388,14 @@ impl H3Pipeline {
                 ));
             }
         }
-        crate::wan::log::info(format_args!("{}", techniques.describe()));
+        crate::rt::log::info(format_args!("{}", techniques.describe()));
         let mut load_timings = H3LoadTimings::default();
         let timed = |slot: &mut f64, timer: Instant| *slot = timer.elapsed().as_secs_f64();
 
         // The resident encoder goes first: its FP8 quantization runs on the
         // device with f32 transients (524 MB for the widest matrix), which
         // should happen while the card is otherwise empty.
-        let free = crate::wan::device::free_memory().map(|(free, _)| free);
+        let free = crate::rt::device::free_memory().map(|(free, _)| free);
         let auto_text_encoder = options.text_encoder == TextEncoderChoice::Auto;
         // `Auto`: resident when the memory plan at the DiT's real precision
         // fits the card with the encoder, else streamed.
@@ -1414,17 +1413,17 @@ impl H3Pipeline {
                     dit_loads_vsa_gate(&contract, None),
                     vae_linears,
                     options.auto_text_encoder_request.clone(),
-                    crate::wan::tensor::bf16_activations(),
+                    crate::rt::tensor::bf16_activations(),
                     options.i2v_encoder != I2vEncoderChoice::Stream,
                 );
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 text encoder: auto -> {}",
                     decision.describe(&inputs)
                 ));
                 decision.resident
             }
             (true, None) => {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 text encoder: auto -> streamed (free device memory unknown)"
                 ));
                 false
@@ -1434,7 +1433,7 @@ impl H3Pipeline {
         let (text_encoder_choice, load_text_encoder) =
             options.text_encoder.resolve(auto_resident, free);
         options.text_encoder = text_encoder_choice;
-        let mut booking = crate::wan::ledger::Booking::default();
+        let mut booking = crate::rt::ledger::Booking::default();
 
         // E12: open every component's shards up front (headers only) and
         // queue their tensors for read-ahead in load order — encoder, refiner,
@@ -1456,7 +1455,7 @@ impl H3Pipeline {
         let (map, mlx) = match super::mlx::find(root) {
             Some(dir) if !options.ref2va => {
                 let (map, spec) = super::mlx::open_map(&dir)?;
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 dit=mlx affine int{} g{} ({})",
                     spec.bits,
                     spec.group_size,
@@ -1477,7 +1476,7 @@ impl H3Pipeline {
                             p.display()
                         )));
                     }
-                    crate::wan::log::info(format_args!("h3 dit=transformer_ref"));
+                    crate::rt::log::info(format_args!("h3 dit=transformer_ref"));
                     p
                 } else {
                     root.join("transformer")
@@ -1498,7 +1497,7 @@ impl H3Pipeline {
                 super::nvfp4::require_tensor_cores()?;
                 let t = Instant::now();
                 let nv = super::nvfp4::Nvfp4Dit::open(&path, &cfg, &map)?;
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 nvfp4: {} ({} blocks x 5 NVFP4 linears, {:.2} GiB; checked against the bf16 tree in {:.1}s)",
                     nv.path().display(),
                     cfg.num_layers,
@@ -1524,7 +1523,7 @@ impl H3Pipeline {
                 let opts = super::nvfp4::ModelOptOptions::from_env()?;
                 let nv =
                     super::nvfp4::Nvfp4Dit::open_modelopt(&root.join("transformer"), &cfg, opts)?;
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 nvfp4: ModelOpt {} ({} blocks x 2 NVFP4 FFN linears, {:.2} GiB; attention {}; FFN activation scale {}; checked in {:.1}s)",
                     nv.path().display(),
                     cfg.num_layers,
@@ -1630,7 +1629,7 @@ impl H3Pipeline {
 
         let timer = Instant::now();
         let text_encoder = booking.track(
-            crate::wan::ledger::TEXT_ENCODER,
+            crate::rt::ledger::TEXT_ENCODER,
             || -> Result<Option<Box<dyn HiddenStateEncoder + Send>>> {
                 Ok(match options.text_encoder {
                     TextEncoderChoice::Recovered8b => {
@@ -1655,7 +1654,7 @@ impl H3Pipeline {
         drop(text_map);
         if text_encoder.is_some() {
             timed(&mut load_timings.text_encoder_s, timer);
-            crate::wan::weights::log_load_io(
+            crate::rt::weights::log_load_io(
                 "h3 text_encoder",
                 &io_base,
                 io_timer.elapsed().as_secs_f64(),
@@ -1663,7 +1662,7 @@ impl H3Pipeline {
         }
         // What the DiT placement decides on: the card as the encoder left it.
         let free = if text_encoder.is_some() {
-            crate::wan::device::free_memory().map(|(free, _)| free)
+            crate::rt::device::free_memory().map(|(free, _)| free)
         } else {
             free
         };
@@ -1677,7 +1676,7 @@ impl H3Pipeline {
         // `MXFP8=1` on a GPU without block-scaled FP8 fails here, before
         // anything loads.
         let vae_linears = vae_source.planned_linears(options.taeh3.as_deref())?;
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "h3 recipe={} steps={} video_shift={} vsa={} dense={}",
             options.recipe.as_deref().unwrap_or("auto"),
             contract.transformer_forwards,
@@ -1692,7 +1691,7 @@ impl H3Pipeline {
         let named = techniques.sol().is_some_and(|s| preset.as_ref() == Some(s));
         match techniques.sol_policy {
             _ if techniques.sol().is_some() && !named => {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 sol-attn: {}",
                     techniques
                         .sol()
@@ -1701,17 +1700,17 @@ impl H3Pipeline {
                 ));
             }
             H3SolAttnPolicy::Engine => {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 sol-attn: sol-h3 engine policy (opt-in): forward 0 dense, blocks 0-1 dense, blocks 2-49 sol-attn tau 1.0 (thresh_type=diag), prefix sink"
                 ));
             }
             H3SolAttnPolicy::Spark => {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 sol-attn: spark draft ladder (opt-in): update 0 dense, later updates block 0 dense and blocks 1-49 sol-attn tau 1/1.25/1.5 (thresh_type=diag), [visual | text+audio] suffix sink"
                 ));
             }
             H3SolAttnPolicy::Rtx => {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 sol-attn: rtx forwards 0-9 dense, later forwards blocks 0-1 dense and blocks 2-49 sol-attn tau 1.0 (thresh_type=diag), text sink"
                 ));
             }
@@ -1750,7 +1749,7 @@ impl H3Pipeline {
             variant
                 .check_adapter(&fuse.replacement_params())
                 .map_err(|e| msg(format!("{}: {e}", path.display())))?;
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3 fasth3-preview {}: fuse {} pairs rank={} strength={} diffs={} set_weight={} ({})",
                 variant.subdir(),
                 fuse.pairs_total,
@@ -1781,7 +1780,7 @@ impl H3Pipeline {
                 .resolve(adapter_root, options.adapter.as_deref())
                 .map_err(msg)?;
             let fuse = super::lora::H3LoraFuse::open(&map, &path, spec.alpha, spec.scale)?;
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3 sol-h3: fuse {} pairs rank={} alpha={} scale={} diffs={} ({})",
                 fuse.pairs_total,
                 fuse.rank,
@@ -1791,12 +1790,12 @@ impl H3Pipeline {
                 path.display()
             ));
             if spark {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 sol-h3-spark: stage-1 VSA {} tile {} BF16 FastH3_VSA_DataFree strength {}; DiT {} (upstream: W8A8 after the bf16 LoRA merge; FASTVIDEO_H3_QUANT=w8a8). Draft {}x{} {}f. H3×2 upscaler and H3-to-LTX adapter run when their checkpoints are set. Joint 3-step LTX refine uses the fixed prompt and cached Gemma",
                     contract.vsa_sparsity,
                     contract.vsa_tile_size,
                     spec.scale,
-                    crate::wan::quant::QuantMode::from_env()
+                    crate::rt::quant::QuantMode::from_env()
                         .map(|m| m.as_str())
                         .unwrap_or("invalid FASTVIDEO_H3_QUANT"),
                     fastvideo_models::h3::sol::SPARK_DRAFT_WIDTH,
@@ -1810,7 +1809,7 @@ impl H3Pipeline {
             // projections (M:merge_lora_state, scale 1); the branch attaches
             // after the blocks load.
             let fuse = super::lora::H3LoraFuse::open_vdn(&map, &ck.adapters)?;
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3 vdn: {} ({}): fuse {} pairs max rank {} scale 1, chunk {} radius {}{}",
                 ck.dir.display(),
                 ck.adapter_names().join(" + "),
@@ -1837,7 +1836,7 @@ impl H3Pipeline {
             }
             let fuse =
                 super::lora::H3LoraFuse::open_plug(&map, root, &plug, options.adapter.as_deref())?;
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3 {}: fuse {} pairs rank={} alpha={} scale={} ({}; licence: {})",
                 plug.name,
                 fuse.pairs_total,
@@ -1869,7 +1868,7 @@ impl H3Pipeline {
                 .resolve(root, options.adapter.as_deref())
                 .map_err(msg)?;
             let fuse = super::lora::H3LoraFuse::open_turbo(&map, &path, turbo, strength)?;
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3 {}: fuse {} pairs rank={} alpha={} multiplier={} strength={strength} forwards={forwards} ({}; {} @ {}; licence {})",
                 turbo.stem(),
                 fuse.pairs_total,
@@ -1976,12 +1975,12 @@ impl H3Pipeline {
             if load {
                 let timer = Instant::now();
                 let text_root = options.text_root.as_deref().unwrap_or(root);
-                let before = crate::wan::device::free_memory().map(|(f, _)| f);
+                let before = crate::rt::device::free_memory().map(|(f, _)| f);
                 let mm = super::text::MultimodalEncoder::load(text_root)?;
-                let after = crate::wan::device::free_memory().map(|(f, _)| f);
+                let after = crate::rt::device::free_memory().map(|(f, _)| f);
                 let held = before.zip(after).map(|(b, a)| b.saturating_sub(a));
                 load_timings.vision_s = timer.elapsed().as_secs_f64();
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 i2v encoder: resident ({why}): vision tower {} GiB loaded in {:.1} s; the language model is the resident text encoder ({:?}), {:.1} GiB free now",
                     held.map_or("?".into(), |b| format!("{:.2}", gib(b))),
                     load_timings.vision_s,
@@ -1990,7 +1989,7 @@ impl H3Pipeline {
                 ));
                 (Some(mm), after.or(free))
             } else {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 i2v encoder: stream ({why}): FL2VA/Ref2VA requests read the vision tower and the {} language model from the volume per request",
                     match options.text_encoder.precision() {
                         Some(crate::llm::WeightPrecision::Fp8Rows) => "fp8",
@@ -2014,7 +2013,7 @@ impl H3Pipeline {
                 )),
                 (Some(_), _) => Residency::Resident,
             };
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3 dit offload: {} -> {} (resident plan {:.1} GiB, {} free before load)",
                 policy.as_str(),
                 residency.as_str(),
@@ -2028,7 +2027,7 @@ impl H3Pipeline {
         };
         let timer = Instant::now();
         let refiner = booking.track(
-            crate::wan::ledger::TEXT_REFINER,
+            crate::rt::ledger::TEXT_REFINER,
             || match &dit_tree {
                 Some(tree) => H3TextRefiner::from_tree(&cfg, tree, residency),
                 None => H3TextRefiner::load_with_residency(&cfg, &map, &mut lora, residency),
@@ -2038,7 +2037,7 @@ impl H3Pipeline {
         timed(&mut load_timings.refiner_s, timer);
         let timer = Instant::now();
         let mut model = booking.track(
-            crate::wan::ledger::DIT_NONLINEAR,
+            crate::rt::ledger::DIT_NONLINEAR,
             || match &dit_tree {
                 Some(tree) => {
                     H3Transformer::from_tree(cfg.clone(), tree, &schedule, with_gate, residency)
@@ -2063,12 +2062,12 @@ impl H3Pipeline {
             .map_err(msg)?
         {
             if techniques.teacache_is_official() {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "{}",
                     fastvideo_models::h3::sol::TEACACHE_APPLIED
                 ));
             } else {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 teacache: threshold {} retain {} cooldown {} coefficients {:?}",
                     state.threshold, state.retain_steps, state.cooldown_steps, state.coefficients
                 ));
@@ -2084,7 +2083,7 @@ impl H3Pipeline {
             #[cfg(feature = "cuda")]
             {
                 use super::transformer::lora_device;
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 lora merge: {}",
                     if lora_device::enabled() {
                         "device"
@@ -2094,7 +2093,7 @@ impl H3Pipeline {
                 ));
                 if lora_device::verify_enabled() {
                     let (ok, bad) = lora_device::verify_counts();
-                    crate::wan::log::info(format_args!(
+                    crate::rt::log::info(format_args!(
                         "load/verify h3 lora {{\"device_equal\":{ok},\"device_different\":{bad}}}"
                     ));
                 }
@@ -2104,7 +2103,7 @@ impl H3Pipeline {
         load_timings.dit_from_tree = dit_tree.is_some();
         drop(dit_tree);
         drop(map);
-        crate::wan::weights::log_load_io("h3 dit", &io_base, io_timer.elapsed().as_secs_f64());
+        crate::rt::weights::log_load_io("h3 dit", &io_base, io_timer.elapsed().as_secs_f64());
         // Streamed: the decoders are loaded by each decode (the reference makes
         // the full VAE resident only for decoding).
         let (video_vae, audio_vae) = if residency.is_streamed() {
@@ -2112,14 +2111,14 @@ impl H3Pipeline {
         } else {
             let timer = Instant::now();
             let video_vae = booking.track(
-                crate::wan::ledger::VAE,
+                crate::rt::ledger::VAE,
                 || load_video_decoder_from(&vae_source, options.taeh3.as_deref(), vae_map.take()),
                 |_| None,
             )?;
             timed(&mut load_timings.video_vae_s, timer);
             let timer = Instant::now();
             let audio_vae = booking.track(
-                crate::wan::ledger::AUDIO_VAE,
+                crate::rt::ledger::AUDIO_VAE,
                 || load_audio_decoder_from(&audio_dir, audio_vae_map.take()),
                 |_| None,
             )?;
@@ -2127,7 +2126,7 @@ impl H3Pipeline {
             (Some(video_vae), Some(audio_vae))
         };
         drop((vae_map, audio_vae_map));
-        crate::wan::weights::log_load_io("h3 total", &io_base, io_timer.elapsed().as_secs_f64());
+        crate::rt::weights::log_load_io("h3 total", &io_base, io_timer.elapsed().as_secs_f64());
         let vsa_fp4 = vsa_fp4_choice(
             modelopt_nvfp4,
             comfy_nvfp4,
@@ -2370,7 +2369,7 @@ impl H3Pipeline {
         {
             self.model.enable_teacache(state)?;
         }
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "h3 arm {}: {}",
             profile.map_or("(none)", |p| p.name.as_str()),
             techniques.describe()
@@ -2401,7 +2400,7 @@ impl H3Pipeline {
         }
         match super::spark::SparkBridge::resolve(&self.root).map_err(|e| msg(e.to_string()))? {
             None => {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 sol-h3-spark: no upscaler ({}) or H3-to-LTX adapter beside {}; H3 decode continues",
                     fastvideo_models::h3::spark::UPSCALER_FILES.join(" | "),
                     self.root.display()
@@ -2411,13 +2410,13 @@ impl H3Pipeline {
             Some(bridge) => {
                 let refined = bridge.forward(latents).map_err(|e| msg(e.to_string()))?;
                 if std::env::var_os("FASTVIDEO_LTX2_WEIGHTS").is_none() {
-                    crate::wan::log::info(format_args!(
+                    crate::rt::log::info(format_args!(
                         "h3 sol-h3-spark: refiner video latent {:?}. Set FASTVIDEO_LTX2_WEIGHTS to run the 3-step LTX refiner. H3 decode continues.",
                         refined.shape
                     ));
                     return Ok(None);
                 }
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 sol-h3-spark: refiner video latent {:?}. 3-step LTX refiner follows H3 decode.",
                     refined.shape
                 ));
@@ -2445,7 +2444,7 @@ impl H3Pipeline {
         if matches!(&out, Err(e) if e.is_cancelled()) {
             self.model.end_denoise();
             self.model.release_offload_device();
-            crate::wan::device::trim_pool().map_err(|e| msg(e.to_string()))?;
+            crate::rt::device::trim_pool().map_err(|e| msg(e.to_string()))?;
         }
         out
     }
@@ -2576,8 +2575,8 @@ impl H3Pipeline {
                 self.booking
                     .lock()
                     .expect("h3 booking")
-                    .release(crate::wan::ledger::TEXT_ENCODER);
-                crate::wan::log::info(format_args!(
+                    .release(crate::rt::ledger::TEXT_ENCODER);
+                crate::rt::log::info(format_args!(
                     "h3 text encoder: auto released the resident encoder ({:.1} GiB) before the denoise ({rows} rows need {:.1} GiB, {:.1} GiB free incl. pool-cached); later prompts stream at the same numbers",
                     released as f64 / f64::from(1u32 << 30),
                     denoise_reserve_bytes(rows) as f64 / f64::from(1u32 << 30),
@@ -2591,14 +2590,14 @@ impl H3Pipeline {
         // parity); FASTVIDEO_INJECT_DIR: then the reference's Qwen hidden
         // states in place of ours (same tokenizer, so the same row count), so
         // a parity run measures the DiT and not the text-encoder precision.
-        crate::wan::dump::tensor("text_hidden", &text.hidden)?;
-        if crate::wan::inject::text_enabled() {
-            match crate::wan::inject::load("text_hidden")? {
+        crate::rt::dump::tensor("text_hidden", &text.hidden)?;
+        if crate::rt::inject::text_enabled() {
+            match crate::rt::inject::load("text_hidden")? {
                 Some((_, v)) if v.len() == text.hidden.numel() => {
                     let shape = text.hidden.shape.clone();
                     text.hidden = CudaTensor::from_vec(v, shape)?.to_device()?;
                 }
-                Some((shape, _)) => crate::wan::log::info(format_args!(
+                Some((shape, _)) => crate::rt::log::info(format_args!(
                     "inject: text_hidden {shape:?} does not fit ours {:?} (a different token count); ours kept",
                     text.hidden.shape
                 )),
@@ -2684,7 +2683,7 @@ impl H3Pipeline {
             && !uses_vsa(sol_kind, self.options.dense, force_dense, &self.contract)
         {
             if force_dense && !self.options.dense && sol_kind == H3SolAttnPolicy::Off {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 ref2va: dense attention (interleaved condition audio)"
                 ));
             }
@@ -2724,7 +2723,7 @@ impl H3Pipeline {
             H3Attention::Sol(technique) => {
                 let kind = sol_kind;
                 let policy = H3SolPolicy::from_technique(technique, &layout)?;
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "{}",
                     fastvideo_models::h3::sol::describe_sink(
                         kind,
@@ -2785,7 +2784,7 @@ impl H3Pipeline {
         let mut clock = super::step_graph::StepClock::start(steps)?;
         // fp8_attention (opt-in): dense calls of this denoise on the FP8 kernel;
         // the refiner above and the decoders below stay bf16.
-        crate::wan::attn_fp8::set_ops(self.techniques.fp8_attention.dense, false);
+        crate::rt::attn_fp8::set_ops(self.techniques.fp8_attention.dense, false);
         let mut observe = |step: usize, _: &CudaTensor, _: &CudaTensor| -> Result<()> {
             clock.step_queued(step)?;
             // Lazy clock: the step is queued, not finished; the host runs
@@ -2807,14 +2806,14 @@ impl H3Pipeline {
                 Some("a streamed DiT")
             } else if self.model.sol_teacache_enabled() {
                 Some("TeaCache")
-            } else if crate::wan::dump::enabled() {
+            } else if crate::rt::dump::enabled() {
                 Some("FASTVIDEO_DUMP_DIR")
             } else {
                 None
             };
             match why_not {
                 Some(why) => {
-                    crate::wan::log::info(format_args!("h3 graphs: off for this request ({why})"));
+                    crate::rt::log::info(format_args!("h3 graphs: off for this request ({why})"));
                     None
                 }
                 None => Some(super::step_graph::GraphKey {
@@ -2863,7 +2862,7 @@ impl H3Pipeline {
             ),
         };
         drop(observe);
-        crate::wan::attn_fp8::set_ops(false, false);
+        crate::rt::attn_fp8::set_ops(false, false);
         let (video_rows, audio_rows) = denoised?;
         timings.step_s = clock.finish()?;
         timings.denoise_s = timer.elapsed().as_secs_f64();
@@ -2883,17 +2882,17 @@ impl H3Pipeline {
             .then(|| self.model.report_offload("denoise"));
         // Streamed: the ring's slots go back before the decoders load.
         self.model.release_offload_device();
-        crate::wan::device::trim_pool().map_err(|e| msg(e.to_string()))?;
+        crate::rt::device::trim_pool().map_err(|e| msg(e.to_string()))?;
         memory.mark("denoise")?;
 
         // --- audio first: the WAV must exist before the muxer starts -------------------
         hooks.stage(Stage::AudioDecode, 0)?;
         let timer = Instant::now();
-        let mut transient_booking = crate::wan::ledger::Booking::default();
+        let mut transient_booking = crate::rt::ledger::Booking::default();
         let transient_audio = match self.audio_vae {
             Some(_) => None,
             None => Some(transient_booking.track(
-                crate::wan::ledger::AUDIO_VAE,
+                crate::rt::ledger::AUDIO_VAE,
                 || {
                     load_audio_decoder(&audio_vae_dir(
                         &self.root,
@@ -2914,7 +2913,7 @@ impl H3Pipeline {
             .host_cow()?
             .into_owned();
         drop(transient_audio);
-        transient_booking.release(crate::wan::ledger::AUDIO_VAE);
+        transient_booking.release(crate::rt::ledger::AUDIO_VAE);
         let wav = out_dir.join("audio.wav");
         let interleaved = interleave_audio(&wave, H3_AUDIO_CHANNELS)?;
         write_wav(&wav, &interleaved, H3_AUDIO_CHANNELS as u16, sample_rate)?;
@@ -2925,7 +2924,7 @@ impl H3Pipeline {
             samples: &interleaved,
         })?;
         drop(interleaved);
-        crate::wan::device::trim_pool().map_err(|e| msg(e.to_string()))?;
+        crate::rt::device::trim_pool().map_err(|e| msg(e.to_string()))?;
         memory.mark("audio_decode")?;
 
         // --- video: chunks go to the writer as they decode -------------------------------
@@ -2943,11 +2942,11 @@ impl H3Pipeline {
             None => {
                 let timer = Instant::now();
                 let vae = transient_booking.track(
-                    crate::wan::ledger::VAE,
+                    crate::rt::ledger::VAE,
                     || load_video_decoder(&self.vae_source, self.options.taeh3.as_deref()),
                     |_| None,
                 )?;
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 video vae: resident for the decode ({:.1}s load)",
                     timer.elapsed().as_secs_f64()
                 ));
@@ -2979,7 +2978,7 @@ impl H3Pipeline {
         };
         // FASTVIDEO_GPU_TRACE_DECODE=1: CUPTI trace of this decode (kernel
         // time by category, GPU idle); a no-op otherwise.
-        crate::wan::gpu_trace::window_begin("h3/decode");
+        crate::rt::gpu_trace::window_begin("h3/decode");
         let decoded = match video_vae {
             VideoDecoder::Official(vae) => vae.decode_streaming(&latents, &mut sink),
             VideoDecoder::Taeh3(tae) => tae
@@ -2997,9 +2996,9 @@ impl H3Pipeline {
             )));
         }
         let (mut writer, split) = drain.finish()?;
-        if crate::wan::gpu_trace::decode_enabled() {
-            crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
-            crate::wan::gpu_trace::window_end(timer.elapsed().as_secs_f64());
+        if crate::rt::gpu_trace::decode_enabled() {
+            crate::rt::device::synchronize().map_err(|e| msg(e.to_string()))?;
+            crate::rt::gpu_trace::window_end(timer.elapsed().as_secs_f64());
         }
         let tail = Instant::now();
         let mp4 = writer.finish_video()?;
@@ -3014,13 +3013,13 @@ impl H3Pipeline {
         timings.video_rgb_s = split.rgb_s;
         timings.video_push_s = split.push_s;
         timings.video_wait_s = split.wait_s;
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "h3 video decode + mp4 {:.2}s: vae {:.2}s, rgb+copy {:.2}s, writer push {:.2}s, decode waited {:.2}s, mp4 tail {:.2}s",
             timings.video_decode_s, split.vae_s, split.rgb_s, split.push_s, split.wait_s, timings.video_encode_s
         ));
         drop(transient_video);
         drop(transient_booking);
-        crate::wan::device::trim_pool().map_err(|e| msg(e.to_string()))?;
+        crate::rt::device::trim_pool().map_err(|e| msg(e.to_string()))?;
         memory.mark("video_decode")?;
         let timer = Instant::now();
         let (frame_paths, _) = writer.finish()?;
@@ -3030,7 +3029,7 @@ impl H3Pipeline {
         }
         if let Some(video) = refined_video {
             let refined = refine_spark(request, &video, &wave, sample_rate, out_dir)?;
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3 sol-h3-spark: refined {} ({} frames)",
                 refined.mp4.as_deref().unwrap_or(refined.wav.as_str()),
                 refined.frames.len()
@@ -3071,7 +3070,7 @@ fn load_video_decoder_from(
         Some(path) => {
             let tae = TaeHv::load_from_path(&path, TaeArch::H3)
                 .map_err(|e| msg(format!("FASTVIDEO_TAEH3_WEIGHTS={}: {e}", path.display())))?;
-            crate::wan::log::info(format_args!("h3 vae=taeh3 ({})", path.display()));
+            crate::rt::log::info(format_args!("h3 vae=taeh3 ({})", path.display()));
             VideoDecoder::Taeh3(tae)
         }
         None => VideoDecoder::Official(H3VideoDecoder::load_choice(
@@ -3121,7 +3120,7 @@ impl H3Pipeline {
         let vae = match self.video_vae.as_ref() {
             Some(VideoDecoder::Official(vae)) if vae.mxfp8_active() => vae,
             _ => {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 vae a/b: skipped (needs a resident official decoder running MXFP8)"
                 ));
                 return Ok(());
@@ -3129,7 +3128,7 @@ impl H3Pipeline {
         };
         let dir = out_dir.join("vae-bf16");
         std::fs::create_dir_all(&dir).map_err(|e| msg(format!("{}: {e}", dir.display())))?;
-        let writer = crate::wan::writer::VideoWriter::spawn_with_audio(
+        let writer = crate::rt::writer::VideoWriter::spawn_with_audio(
             &dir,
             crate::sink::mp4_fps(H3_FPS as f64),
             false,
@@ -3151,13 +3150,13 @@ impl H3Pipeline {
         };
         let (mut writer, split) = drain.finish()?;
         writer.finish()?;
-        crate::wan::device::trim_pool().map_err(|e| msg(e.to_string()))?;
+        crate::rt::device::trim_pool().map_err(|e| msg(e.to_string()))?;
         if emitted != frames {
             return Err(msg(format!(
                 "h3 vae a/b: bf16 re-decode emitted {emitted} frames, the clip has {frames}"
             )));
         }
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "h3 vae a/b: video vae mxfp8 {mxfp8_vae_s:.3}s, bf16 {:.3}s ({} frames to {})",
             split.vae_s,
             emitted,
@@ -3296,7 +3295,7 @@ pub fn completed_vae_files(dir: &Path, base: Option<&Path>) -> Result<Vec<PathBu
         }
         match base.map(|b| b.join(&name)).filter(|p| p.is_file()) {
             Some(shared) => {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 vae: {} from {} (not in {}; byte-identical in h3-base)",
                     name,
                     shared.display(),
@@ -3376,7 +3375,7 @@ pub fn resolve_video_vae_on(
         },
         VaeLinearsChoice::BaseOfficial => {
             let base = base.expect("resolve_nvfp4 picks h3-base's vae/ only when there is one");
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3 vae: {}=0: h3-base's vae/ {} (bf16 / MXFP8 linears), not the tree's NVFP4 vae/ {}",
                 super::vae::NVFP4_ENV,
                 base.display(),
@@ -3465,7 +3464,7 @@ pub fn transformer_config(dir: &Path) -> Result<H3TransformerConfig> {
         )
         .map_err(|e| msg(format!("{}: {e}", path.display())))?;
     if cfg.is_pruned() || cfg.adaln_rank.is_some() {
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "h3 dit: {} of {} source blocks (kept {:?}), adaln_rank {:?}",
             cfg.num_layers, cfg.source_num_layers, cfg.kept_block_indices, cfg.adaln_rank
         ));
@@ -3580,7 +3579,7 @@ fn refine_spark(
     // beside the weights); `refine_joint` refuses anything else.
     let cfg = fastvideo_models::ltx2::ltx2_5_22b_dev();
     let prompt = fastvideo_models::h3::spark::FIXED_PROMPT;
-    crate::wan::log::info(format_args!(
+    crate::rt::log::info(format_args!(
         "h3 sol-h3-spark: loading LTX-2.5 from {} (DiT {}) beside the resident H3 model; fixed prompt {prompt:?}; Gemma cache on",
         weights.display(),
         dit.display()
@@ -3699,7 +3698,7 @@ fn encode_request_multimodal(
                 width: *w,
             })
             .collect();
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "h3 ref2va: Qwen-VL multimodal ({} images, {} videos, {})",
             images.len(),
             videos.len(),
@@ -3727,7 +3726,7 @@ fn encode_request_multimodal(
             width: *w,
         })
         .collect();
-    crate::wan::log::info(format_args!(
+    crate::rt::log::info(format_args!(
         "h3 fl2va: Qwen-VL multimodal ({} images, {})",
         images.len(),
         where_
@@ -3755,7 +3754,7 @@ fn encode_fl2va_cond_rows(
                     msg("FL2VA last keyframe requested but last_image is missing")
                 })?,
             };
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "h3 fl2va: encode {} ({})",
             anchor.as_str(),
             path.display()
@@ -3853,7 +3852,7 @@ fn encode_ref2va_conditions(
     for (i, spec) in references.iter().enumerate() {
         match spec.kind {
             ReferenceKind::Audio => {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 ref2va: encode audio {} ({})",
                     i + 1,
                     spec.path.display()
@@ -3873,7 +3872,7 @@ fn encode_ref2va_conditions(
             ReferenceKind::Image => {
                 let (rgb, out_h, out_w, sw, sh) = load_reference_image(&spec.path, resize)?;
                 let prep = PreparedImageRef::from_pixel_size(out_h, out_w, ratio).map_err(msg)?;
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 ref2va: encode image {} {}x{} → {}x{} ({})",
                     i + 1,
                     sw,
@@ -3908,7 +3907,7 @@ fn encode_ref2va_conditions(
             ReferenceKind::Video => {
                 let max_src = ((geometry.num_frames as f64) * 2.0).ceil() as usize + 8;
                 let max_src = max_src.max(geometry.num_frames + H3_FPS);
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 ref2va: decode video {} ({})",
                     i + 1,
                     spec.path.display()
@@ -3925,7 +3924,7 @@ fn encode_ref2va_conditions(
                 let frames = super::media::resize_rgb_frames(
                     trimmed, trimmed_n, src_h, src_w, out_h, out_w,
                 )?;
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 ref2va: encode video {} {} frames @ {:.3}fps → {}x{} / {}f ({})",
                     i + 1,
                     src_frames,
@@ -3972,7 +3971,7 @@ fn encode_ref2va_conditions(
                     let arows = audio_encoder.encode_stereo_planar(&planar)?;
                     num_audio_latents = arows.shape[0] / H3_AUDIO_CHANNELS;
                     audio_parts.push(arows);
-                    crate::wan::log::info(format_args!(
+                    crate::rt::log::info(format_args!(
                         "h3 ref2va: encode soundtrack {} → {num_audio_latents} audio latents",
                         i + 1
                     ));

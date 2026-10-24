@@ -29,7 +29,7 @@ pub const GIB: u64 = 1 << 30;
 
 /// Dense attention's query chunk is sized so one score buffer holds at most
 /// this many float32 elements (1 GiB). Mirrors
-/// `fastvideo_cudarc::wan::attn::DENSE_SCORE_BUDGET`, which a test there
+/// `fastvideo_cudarc::rt::attn::DENSE_SCORE_BUDGET`, which a test there
 /// pins to this value.
 pub const DENSE_SCORE_BUDGET_ELEMS: usize = 256 * 1024 * 1024;
 
@@ -216,7 +216,7 @@ pub fn dit_weight_bytes(t: &Ltx2TransformerConfig, weight_bytes: u64) -> u64 {
     t.num_layers as u64 * dit_block_bytes(t, weight_bytes) + dit_global_bytes(t, weight_bytes)
 }
 
-/// Where the DiT's blocks live (`fastvideo_cudarc::wan::offload`).
+/// Where the DiT's blocks live (`fastvideo_cudarc::rt::offload`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DitPlacement {
     /// Every block on the device for the whole run.

@@ -12,8 +12,8 @@
 use std::time::Instant;
 
 use cudarc::driver::{CudaSlice, DevicePtr, DevicePtrMut};
-use fastvideo_cudarc::wan::nvfp4_gemm::{self as g, Nvfp4Dev};
-use fastvideo_cudarc::wan::{device, fp8, kernels::OxideGemm, ops};
+use fastvideo_cudarc::rt::nvfp4_gemm::{self as g, Nvfp4Dev};
+use fastvideo_cudarc::rt::{device, fp8, kernels::OxideGemm, ops};
 use fastvideo_models::nvfp4::{self, ScaleRule};
 use half::bf16;
 use serde_json::json;
@@ -98,7 +98,7 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
     let d = dev()?;
     report.set(
         "oxide_cubins",
-        fastvideo_cudarc::wan::kernels::oxide_cubins(),
+        fastvideo_cudarc::rt::kernels::oxide_cubins(),
     );
     report.set(
         "oxide_loaded",
@@ -174,7 +174,7 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
         "nvfp4_oxide_cubins_loaded",
         !d.kernels.oxide_gemms.is_empty() && d.kernels.oxide_error.is_none(),
         json!({"loaded": d.kernels.oxide_gemms.len(), "error": d.kernels.oxide_error,
-               "embedded": fastvideo_cudarc::wan::kernels::oxide_cubins()}),
+               "embedded": fastvideo_cudarc::rt::kernels::oxide_cubins()}),
         json!({"loaded": ">0"}),
     )?;
     let (m, n, k) = (512usize, 512usize, 1024usize);

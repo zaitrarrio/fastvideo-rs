@@ -1,80 +1,87 @@
 //! Native Wan graph on cudarc: UMT5 → DiT → feat-cache VAE, device-resident
 //! on CUDA (see [`tensor`]) with plain-Rust reference ops on CPU runs.
 
-#[cfg(feature = "cuda")]
-pub(crate) mod act16;
-pub mod affine;
 pub mod ar_cache;
-pub mod attn;
-#[cfg(feature = "cuda")]
-pub mod attn_dc;
-pub mod attn_fp4;
-pub mod attn_fp8;
-pub mod attn_sage;
-pub mod bf16_gemm;
 pub mod causal;
 pub mod clip;
-#[cfg(feature = "cuda")]
-pub mod conv;
-pub mod cudnn_sdpa;
-pub mod device;
-pub mod dump;
-pub mod envflag;
-pub mod evalstats;
-#[cfg(feature = "cuda")]
-pub mod fp8;
 pub mod fuse;
-pub mod fused;
-pub mod gpu_trace;
-pub mod graph;
-pub mod hopper;
-pub mod hostmem;
-pub mod inject;
-#[cfg(feature = "cuda")]
-pub mod kernels;
-pub mod ledger;
-pub mod log;
 pub mod longlive;
 #[cfg(test)]
 mod manifest_tests;
-pub mod nn;
-pub mod nvfp4;
-#[cfg(feature = "cuda")]
-pub mod nvfp4_gemm;
-#[cfg(feature = "cuda")]
-pub mod nvfp4_linear;
-#[cfg(feature = "cuda")]
-pub mod nvrtc_sass;
-pub mod offload;
-pub mod ops;
 pub mod pipeline;
 pub mod plug;
-pub mod quant;
-pub mod resident;
-pub mod sdpa_rule;
-pub mod sla;
 pub mod sol_cache;
-pub mod sol_ops;
-pub mod sp;
-#[cfg(feature = "cuda")]
-pub mod stage_upload;
-pub mod stats;
 pub mod stream;
-pub mod taehv;
-pub mod taehv_ref;
-pub mod tensor;
 pub mod transformer;
 pub mod umt5;
 pub mod vae;
 pub mod vae21_encode;
 pub mod vae22;
-pub mod vsa;
-pub mod weights;
-pub mod writer;
 
+// The runtime (`crate::rt`) under its old `wan::` paths. These re-exports keep
+// `crate::wan::<module>` and `fastvideo_cudarc::wan::<module>` compiling while
+// callers move to `crate::rt::<module>`; new code imports from `crate::rt`.
+// To be removed once nothing uses them (plan B1 follow-up).
+#[cfg(feature = "cuda")]
+#[allow(unused_imports)]
+pub(crate) use crate::rt::act16;
+pub use crate::rt::affine;
+pub use crate::rt::attn;
+#[cfg(feature = "cuda")]
+pub use crate::rt::attn_dc;
+pub use crate::rt::attn_fp4;
+pub use crate::rt::attn_fp8;
+pub use crate::rt::attn_sage;
+pub use crate::rt::bf16_gemm;
+#[cfg(feature = "cuda")]
+pub use crate::rt::conv;
+#[cfg(feature = "cuda")]
+pub use crate::rt::cudnn_sdpa;
+pub use crate::rt::device;
+pub use crate::rt::dump;
+pub use crate::rt::envflag;
+pub use crate::rt::evalstats;
+#[cfg(feature = "cuda")]
+pub use crate::rt::fp8;
+pub use crate::rt::fused;
+pub use crate::rt::gpu_trace;
+pub use crate::rt::graph;
+pub use crate::rt::hopper;
+pub use crate::rt::hostmem;
+pub use crate::rt::inject;
+#[cfg(feature = "cuda")]
+pub use crate::rt::kernels;
+pub use crate::rt::ledger;
+pub use crate::rt::log;
+pub use crate::rt::nn;
+pub use crate::rt::nvfp4;
+#[cfg(feature = "cuda")]
+pub use crate::rt::nvfp4_gemm;
+#[cfg(feature = "cuda")]
+pub use crate::rt::nvfp4_linear;
+#[cfg(feature = "cuda")]
+pub use crate::rt::nvrtc_sass;
+pub use crate::rt::offload;
+pub use crate::rt::ops;
+pub use crate::rt::quant;
+pub use crate::rt::resident;
+pub use crate::rt::sdpa_rule;
+pub use crate::rt::sla;
+pub use crate::rt::sol_ops;
+pub use crate::rt::sp;
+#[cfg(feature = "cuda")]
+pub use crate::rt::stage_upload;
+pub use crate::rt::stats;
+pub use crate::rt::taehv;
+pub use crate::rt::taehv_ref;
+pub use crate::rt::tensor;
+pub use crate::rt::vsa;
+pub use crate::rt::weights;
+pub use crate::rt::writer;
+
+pub use crate::rt::tensor::CudaTensor;
 pub use clip::{ClipVision, ClipVisionConfig};
 pub use pipeline::{DenoiseStep, GenerateConfig, LoadParts, StepObserver, WanPipeline};
-pub use tensor::CudaTensor;
 pub use transformer::WanTransformer3D;
 pub use vae::AutoencoderKlWan;
 

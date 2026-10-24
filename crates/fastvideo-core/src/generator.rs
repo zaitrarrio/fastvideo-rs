@@ -208,7 +208,7 @@ impl VideoGenerator {
                 ));
             }
             // FASTVIDEO_VSA=1 alone selects the device VSA kernels, and only in
-            // self-attention (wan::vsa, gated on the checkpoint's
+            // self-attention (rt::vsa, gated on the checkpoint's
             // to_gate_compress). FASTVIDEO_SDPA=sparse would instead route
             // *every* attention, cross-attention included, through the
             // host-only window prototype (attn::block_sparse_sdpa), which
@@ -342,7 +342,7 @@ impl VideoGenerator {
         fastvideo_cudarc::resolve_device(&self.device)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
         let t0 = Instant::now();
-        let map = fastvideo_cudarc::wan::weights::WeightMap::from_dir(&root.join("image_encoder"))
+        let map = fastvideo_cudarc::rt::weights::WeightMap::from_dir(&root.join("image_encoder"))
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
         let clip = fastvideo_cudarc::wan::ClipVision::load(
             fastvideo_cudarc::wan::ClipVisionConfig::vit_h_14(),

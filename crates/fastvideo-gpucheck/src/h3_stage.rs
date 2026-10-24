@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use fastvideo_cudarc::llm::DecoderConfig;
-use fastvideo_cudarc::wan::weights::WeightMap;
+use fastvideo_cudarc::rt::weights::WeightMap;
 use fastvideo_cudarc::CudaTensor;
 use serde_json::json;
 
@@ -476,7 +476,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 reference_image_resize: Default::default(),
                 dit_offload: dit_offload
                     .as_deref()
-                    .map(fastvideo_cudarc::wan::offload::DitOffload::parse)
+                    .map(fastvideo_cudarc::rt::offload::DitOffload::parse)
                     .transpose()
                     .map_err(|e| anyhow::anyhow!(e))?,
                 i2v_encoder: Default::default(),
@@ -889,17 +889,16 @@ fn vae(
     let (emitted, seconds) = measure(report, "vae_decode", || {
         Ok(decoder.decode_raw_streaming(&input, &mut |offset, chunk| {
             let [c, f, h, w] = chunk.shape[..] else {
-                return Err(fastvideo_cudarc::wan::tensor::TensorError::Message(
-                    format!("chunk shape {:?}", chunk.shape),
-                ));
+                return Err(fastvideo_cudarc::rt::tensor::TensorError::Message(format!(
+                    "chunk shape {:?}",
+                    chunk.shape
+                )));
             };
             if c != channels || h != height || w != width || offset + f > frames {
-                return Err(fastvideo_cudarc::wan::tensor::TensorError::Message(
-                    format!(
-                        "chunk {:?} at frame {offset} does not fit the reference {:?}",
-                        chunk.shape, want.shape
-                    ),
-                ));
+                return Err(fastvideo_cudarc::rt::tensor::TensorError::Message(format!(
+                    "chunk {:?} at frame {offset} does not fit the reference {:?}",
+                    chunk.shape, want.shape
+                )));
             }
             let host = chunk.host_cow()?;
             for ch in 0..c {
@@ -1397,7 +1396,7 @@ fn ladder(
 
 fn vsa(report: &mut Report, device: &str, seed: u64, max_rel: f64) -> StageResult<()> {
     use fastvideo_cudarc::h3::vsa::{attention_host, H3Vsa, H3VsaConfig};
-    use fastvideo_cudarc::wan::nn::scaled_dot_product_attention;
+    use fastvideo_cudarc::rt::nn::scaled_dot_product_attention;
     use fastvideo_models::h3::packing::H3PackedLayout;
 
     report.set("device", crate::gpu::init(device)?);
@@ -1625,8 +1624,9 @@ fn gen(
     );
     report.set(
         "device_budget_gib",
-        json!(fastvideo_cudarc::wan::device::device_budget()
-            .map(|b| b as f64 / f64::from(1u32 << 30))),
+        json!(
+            fastvideo_cudarc::rt::device::device_budget().map(|b| b as f64 / f64::from(1u32 << 30))
+        ),
     );
     let seconds = canvas.seconds;
     let (prompt, seed) = (prompts[0].prompt.as_str(), prompts[0].seed);
@@ -1821,7 +1821,7 @@ fn gen(
         );
         // The cold pass would otherwise sit in the same counters as the
         // measured one; dit_phases should describe the timed generate only.
-        fastvideo_cudarc::wan::stats::phase_reset();
+        fastvideo_cudarc::rt::stats::phase_reset();
     }
     let single = [(String::new(), None)];
     let run_arms: &[(String, Option<fastvideo_models::techniques::Profile>)] =
@@ -1845,7 +1845,7 @@ fn gen(
                 );
                 continue;
             }
-            fastvideo_cudarc::wan::stats::phase_reset();
+            fastvideo_cudarc::rt::stats::phase_reset();
         }
         let arm_result = (|| -> StageResult<()> {
             let clip_dir = arm_clip.as_path();
@@ -1884,12 +1884,12 @@ fn gen(
                     }
                 };
                 if index > 0 {
-                    fastvideo_cudarc::wan::stats::phase_reset();
+                    fastvideo_cudarc::rt::stats::phase_reset();
                 }
                 let mem = load_mem.take().unwrap_or_else(crate::gpu::PeakMem::start);
-                fastvideo_cudarc::wan::evalstats::reset();
+                fastvideo_cudarc::rt::evalstats::reset();
                 // FASTVIDEO_GPU_TRACE: the cold pass traces too; only the timed one is kept.
-                fastvideo_cudarc::wan::gpu_trace::reset_report();
+                fastvideo_cudarc::rt::gpu_trace::reset_report();
                 let timer = std::time::Instant::now();
                 // FV_SINK_CHECK=1 (serve E2): the timed run also feeds an in-memory
                 // frame sink (PNG frames kept), checked byte for byte against them.
@@ -1920,13 +1920,13 @@ fn gen(
                 json!({"frames": out.frames, "mismatched_frames": 0, "audio_matches_wav": true}),
             )?;
                 }
-                let counters = fastvideo_cudarc::wan::evalstats::snapshot();
+                let counters = fastvideo_cudarc::rt::evalstats::snapshot();
                 let mut values = timings(&out, total);
                 values["warm"] = json!(warm);
                 values["load_s"] = json!(load_s);
                 let peak_mib = mem.stop();
                 values["peak_mib"] = json!(peak_mib);
-                let gpu_trace = fastvideo_cudarc::wan::gpu_trace::last_report();
+                let gpu_trace = fastvideo_cudarc::rt::gpu_trace::last_report();
                 if let Some(trace) = &gpu_trace {
                     values["gpu_trace"] = trace.clone();
                 }
@@ -1983,7 +1983,7 @@ fn gen(
                 // where time goes, not a number to quote against an unprofiled clip.
                 // Nested names overlap (h3_2_attn contains h3_attn_* and vsa_h3_*), so
                 // each group's pct is of that group, not of a grand sum.
-                let phases = fastvideo_cudarc::wan::stats::phase_report();
+                let phases = fastvideo_cudarc::rt::stats::phase_report();
                 if !phases.is_empty() {
                     let row = |n: &str, c: u64, s: f64, total: f64| json!({"phase": n, "calls": c, "seconds": s, "pct": if total > 0.0 { 100.0 * s / total } else { 0.0 }});
                     let group = |pred: &dyn Fn(&str) -> bool| {
@@ -2165,7 +2165,7 @@ fn h3_benchmark(b: &H3Bench<'_>) -> serde_json::Value {
             "exposed_s": o.exposed_ms * 1e-3,
             "hidden_fraction": o.hidden_fraction(),
         })),
-        "gpu_trace": fastvideo_cudarc::wan::gpu_trace::last_report(),
+        "gpu_trace": fastvideo_cudarc::rt::gpu_trace::last_report(),
     });
     crate::benchmark::merge(crate::benchmark::common("h3", b.warm), doc)
 }

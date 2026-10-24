@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 use fastvideo_models::ltx2::config::Ltx2ModelVersion;
 use fastvideo_models::ltx2::lora::{fuse_into, weight_key_aliases, weight_key_for_lora_a};
 
-use crate::wan::nn::Linear;
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::WeightMap;
+use crate::rt::nn::Linear;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::WeightMap;
 
 use super::msg;
 

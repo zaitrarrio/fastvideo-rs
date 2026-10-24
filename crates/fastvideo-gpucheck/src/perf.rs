@@ -494,7 +494,7 @@ pub fn clip(report: &mut Report, args: ClipArgs<'_>) -> StageResult<()> {
     // whether the remaining gap to upstream is launch overhead or arithmetic,
     // and "how many launches per step" is only answerable from a real clip.
     {
-        let st = fastvideo_cudarc::wan::stats::snapshot();
+        let st = fastvideo_cudarc::rt::stats::snapshot();
         report.set(
             "device_stats",
             json!({
@@ -509,7 +509,7 @@ pub fn clip(report: &mut Report, args: ClipArgs<'_>) -> StageResult<()> {
         );
         // Empty unless FASTVIDEO_PROFILE=1: phase timing synchronizes, so a
         // profiled run is deliberately not the run we quote timings from.
-        let phases = fastvideo_cudarc::wan::stats::phase_report();
+        let phases = fastvideo_cudarc::rt::stats::phase_report();
         if !phases.is_empty() {
             let total: f64 = phases.iter().map(|(_, _, s)| s).sum();
             report.set(

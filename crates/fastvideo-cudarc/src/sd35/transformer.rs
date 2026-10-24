@@ -3,9 +3,9 @@
 use fastvideo_models::sd35::Sd35TransformerConfig;
 
 use crate::hub_keys::{self, sd35 as sdkeys};
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::{self, WeightMap};
 use crate::wan::pipeline::{PipelineError, Result};
-use crate::wan::tensor::CudaTensor;
-use crate::wan::weights::{self, WeightMap};
 
 fn msg(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())

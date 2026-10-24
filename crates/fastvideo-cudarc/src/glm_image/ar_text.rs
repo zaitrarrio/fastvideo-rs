@@ -13,10 +13,10 @@ use std::path::Path;
 use fastvideo_models::hunyuan15::tokenize_byt5;
 
 use crate::llm::{self, Act, DecoderConfig, LayerAttn};
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::{PipelineError, Result};
-use crate::wan::tensor::CudaTensor;
 use crate::wan::umt5::Umt5Encoder;
-use crate::wan::weights::WeightMap;
 use fastvideo_models::wan::Umt5Config;
 
 fn msg(s: impl Into<String>) -> PipelineError {

@@ -22,7 +22,7 @@
 use std::path::Path;
 
 use fastvideo_cudarc::llm::{self, DecoderConfig};
-use fastvideo_cudarc::wan::weights::WeightMap;
+use fastvideo_cudarc::rt::weights::WeightMap;
 use serde_json::json;
 
 use crate::metrics::diff;

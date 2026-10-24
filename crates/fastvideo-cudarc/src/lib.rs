@@ -1,8 +1,9 @@
 //! cudarc CUDA adapter.
 //!
-//! Native Wan T2V lives in [`wan`]: UMT5 → DiT → feat-cache VAE on host `CudaTensor`
-//! with optional cuBLAS matmul when the `cuda` feature is enabled and a global device
-//! context is set.
+//! The device runtime shared by every family (tensors, device context, kernels,
+//! ops, weights, offload) lives in [`rt`]. Native Wan T2V lives in [`wan`]: UMT5 →
+//! DiT → feat-cache VAE on host `CudaTensor` with optional cuBLAS matmul when the
+//! `cuda` feature is enabled and a global device context is set.
 //!
 //! [`CudarcBackend`] implements [`TensorBackend`] via host kernels for ops-unit tests;
 //! the Wan graph does **not** go through that trait.
@@ -35,6 +36,7 @@ pub mod ltx2;
 pub mod matrixgame;
 pub mod mmaudio;
 pub mod pisa_attn;
+pub mod rt;
 pub mod sana_video;
 pub mod sd35;
 pub mod sink;
@@ -48,11 +50,11 @@ pub mod world_fuse;
 pub mod zimage;
 
 pub use hooks::{CancelToken, Hooks, Progress, Stage};
+pub use rt::device::{resolve_device, DeviceError};
+pub use rt::tensor::CudaTensor;
 pub use sink::{AudioPcm, CollectFrames, FrameSink, SinkPort, VideoFrames};
-pub use wan::device::{resolve_device, DeviceError};
 pub use wan::{
-    ClipVision, ClipVisionConfig, CudaTensor, DenoiseStep, GenerateConfig, LoadParts, StepObserver,
-    WanPipeline,
+    ClipVision, ClipVisionConfig, DenoiseStep, GenerateConfig, LoadParts, StepObserver, WanPipeline,
 };
 
 use fastvideo_ops::{DType, Device, HostBackend, HostTensor, OpsError, TensorBackend};

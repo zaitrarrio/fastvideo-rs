@@ -10,8 +10,8 @@
 //! [`KernelChoice::setting`] is the process-wide setting the dispatch site
 //! reads ([`KernelOp::setting`], through [`super::settings::var`], so the
 //! existing `FASTVIDEO_*_KERNEL` env vars still win). The dispatch sites in
-//! `fastvideo-cudarc` (`wan::attn::flash_kernel_for`,
-//! `wan::ops::sol_kernel_choice`, the VSA pickers, `conv3d`) are the only
+//! `fastvideo-cudarc` (`rt::attn::flash_kernel_for`,
+//! `rt::ops::sol_kernel_choice`, the VSA pickers, `conv3d`) are the only
 //! readers: swapping a kernel touches neither a pipeline nor a model.
 
 use std::fmt;

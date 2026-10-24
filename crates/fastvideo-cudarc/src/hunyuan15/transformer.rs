@@ -5,10 +5,10 @@
 
 use fastvideo_models::hunyuan15::{Hunyuan15RopeTables, Hunyuan15TransformerConfig};
 
-use crate::wan::fused::Rope;
-use crate::wan::nn::{self, Linear};
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{self, WeightMap};
+use crate::rt::fused::Rope;
+use crate::rt::nn::{self, Linear};
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{self, WeightMap};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -199,7 +199,7 @@ impl DoubleBlock {
         let q = CudaTensor::cat(&[&iq, &tq], 2)?;
         let k = CudaTensor::cat(&[&ik, &tk], 2)?;
         let v = CudaTensor::cat(&[&iv, &tv], 2)?;
-        let (k, v) = crate::wan::nvfp4::maybe_kv(k, v)?;
+        let (k, v) = crate::rt::nvfp4::maybe_kv(k, v)?;
         let attn = nn::scaled_dot_product_attention_masked(&q, &k, &v, None, None)?;
         let img_len = img.shape[1];
         let txt_len = attn.shape[2] - img_len;

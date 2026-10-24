@@ -7,9 +7,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::llm::{conditioning_adapter_host, DecoderConfig, ResidentDecoder};
-use crate::wan::nn::Linear;
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
+use crate::rt::nn::Linear;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{cuda_tensor_shaped, WeightMap};
 
 use super::text::HiddenStateEncoder;
 
@@ -121,7 +121,7 @@ impl HiddenStateEncoder for Recovered8bEncoder {
     fn hidden_state(&self, ids: &[u32], tap: usize) -> Result<CudaTensor> {
         if tap != RECOVERED_8B_TAP && tap != 0 {
             // Pipeline may pass the stock tap 50; we always emit after layer 23.
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "recovered-8b: ignoring requested tap {tap}, using {RECOVERED_8B_TAP}"
             ));
         }

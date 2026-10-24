@@ -13,9 +13,9 @@ use fastvideo_models::kandinsky5::tokenize_clip_at;
 use crate::cosmos::t5::T5Encoder;
 use crate::kandinsky5::clip_text::{ClipTextConfig, ClipTextModel};
 use crate::llm::{self, DecoderConfig};
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::{PipelineError, Result};
-use crate::wan::tensor::CudaTensor;
-use crate::wan::weights::WeightMap;
 
 fn msg(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())

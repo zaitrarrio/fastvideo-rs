@@ -146,7 +146,7 @@ fn generate_ltx2(
         use fastvideo_cudarc::ltx2::pipeline::{
             Ltx2Paths, Ltx2Pipeline, Ltx2Request, PipelineOptions,
         };
-        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_models::ltx2::{
             ltx2_19b, ltx2_19b_distilled, ltx2_23_22b, ltx2_23_22b_distilled, ltx2_5_22b_distilled,
         };
@@ -310,7 +310,7 @@ fn generate_h3(
     #[cfg(feature = "cuda-cudarc")]
     {
         use fastvideo_cudarc::h3::pipeline::{generate, H3PipelineOptions, H3Request};
-        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_models::h3::reference::{infer_reference_kind, H3ReferenceSpec};
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -396,8 +396,8 @@ fn generate_h3(
 
 /// `--dit-offload`, parsed (`None` leaves the choice to the environment).
 #[cfg(feature = "cuda-cudarc")]
-fn dit_offload(name: Option<&str>) -> Result<Option<fastvideo_cudarc::wan::offload::DitOffload>> {
-    name.map(fastvideo_cudarc::wan::offload::DitOffload::parse)
+fn dit_offload(name: Option<&str>) -> Result<Option<fastvideo_cudarc::rt::offload::DitOffload>> {
+    name.map(fastvideo_cudarc::rt::offload::DitOffload::parse)
         .transpose()
         .map_err(FastVideoError::Message)
 }
@@ -410,7 +410,7 @@ fn generate_hunyuan15(
     #[cfg(feature = "cuda-cudarc")]
     {
         use fastvideo_cudarc::hunyuan15::pipeline::{Hunyuan15Pipeline, Hunyuan15Request};
-        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_models::hunyuan15::Hunyuan15Preset;
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -499,7 +499,7 @@ fn generate_kandinsky5(
     #[cfg(feature = "cuda-cudarc")]
     {
         use fastvideo_cudarc::kandinsky5::pipeline::{Kandinsky5Pipeline, Kandinsky5Request};
-        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_models::kandinsky5::Kandinsky5Preset;
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -564,7 +564,7 @@ fn generate_cosmos(
     #[cfg(feature = "cuda-cudarc")]
     {
         use fastvideo_cudarc::cosmos::pipeline::{CosmosPipeline, CosmosRequest};
-        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_models::cosmos::CosmosPreset;
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -667,7 +667,7 @@ fn generate_gen3c(
     #[cfg(feature = "cuda-cudarc")]
     {
         use fastvideo_cudarc::gen3c::pipeline::{Gen3CPipeline, Gen3CRequest};
-        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_models::gen3c::Gen3CPreset;
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -765,7 +765,7 @@ fn generate_matrixgame(
     #[cfg(feature = "cuda-cudarc")]
     {
         use fastvideo_cudarc::matrixgame::pipeline::{MatrixGamePipeline, MatrixGameRequest};
-        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_models::matrixgame::MatrixGamePreset;
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -836,7 +836,7 @@ fn generate_dreamx(
     #[cfg(feature = "cuda-cudarc")]
     {
         use fastvideo_cudarc::dreamx::pipeline::{DreamXPipeline, DreamXRequest};
-        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_models::dreamx::DreamXPreset;
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -904,7 +904,7 @@ fn generate_lingbotworld(
     #[cfg(feature = "cuda-cudarc")]
     {
         use fastvideo_cudarc::lingbotworld::pipeline::{LingBotWorldPipeline, LingBotWorldRequest};
-        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_models::lingbotworld::LingBotWorldPreset;
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -969,7 +969,7 @@ fn generate_gamecraft(
     #[cfg(feature = "cuda-cudarc")]
     {
         use fastvideo_cudarc::gamecraft::pipeline::{GameCraftPipeline, GameCraftRequest};
-        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_models::gamecraft::GameCraftPreset;
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -1036,7 +1036,7 @@ fn generate_hyworld(
     #[cfg(feature = "cuda-cudarc")]
     {
         use fastvideo_cudarc::hyworld::pipeline::{HyWorldPipeline, HyWorldRequest};
-        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_models::hyworld::HyWorldPreset;
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -1099,7 +1099,7 @@ fn generate_zimage(
     require_cuda(&opts.device)?;
     #[cfg(feature = "cuda-cudarc")]
     {
-        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_cudarc::zimage::pipeline::{ZImagePipeline, ZImageRequest};
         use fastvideo_models::zimage::ZImagePreset;
 
@@ -1170,8 +1170,8 @@ fn generate_sd35(
     require_cuda(&opts.device)?;
     #[cfg(feature = "cuda-cudarc")]
     {
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_cudarc::sd35::pipeline::{Sd35Pipeline, Sd35Request};
-        use fastvideo_cudarc::wan::device::resolve_device;
         use fastvideo_models::sd35::Sd35Preset;
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -1242,7 +1242,7 @@ fn generate_flux(
     #[cfg(feature = "cuda-cudarc")]
     {
         use fastvideo_cudarc::flux::pipeline::{Flux1Pipeline, GenerateConfig};
-        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_models::flux::FluxPreset;
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -1323,7 +1323,7 @@ fn generate_flux2(
     #[cfg(feature = "cuda-cudarc")]
     {
         use fastvideo_cudarc::flux2::pipeline::{Flux2Pipeline, GenerateConfig};
-        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_models::flux2::Flux2Preset;
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -1395,7 +1395,7 @@ fn generate_glm_image(
     #[cfg(feature = "cuda-cudarc")]
     {
         use fastvideo_cudarc::glm_image::pipeline::{GlmImagePipeline, GlmImageRequest};
-        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_models::glm_image::GlmImagePreset;
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -1465,8 +1465,8 @@ fn generate_stable_audio(
     require_cuda(&opts.device)?;
     #[cfg(feature = "cuda-cudarc")]
     {
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_cudarc::stable_audio::pipeline::{StableAudioPipeline, StableAudioRequest};
-        use fastvideo_cudarc::wan::device::resolve_device;
         use fastvideo_models::stable_audio::StableAudioPreset;
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -1524,7 +1524,7 @@ fn generate_mmaudio(
     #[cfg(feature = "cuda-cudarc")]
     {
         use fastvideo_cudarc::mmaudio::pipeline::{MmAudioPipeline, MmAudioRequest};
-        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_models::mmaudio::MmAudioPreset;
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -1583,7 +1583,7 @@ fn generate_longcat(
     #[cfg(feature = "cuda-cudarc")]
     {
         use fastvideo_cudarc::longcat::pipeline::{LongCatPipeline, LongCatRequest};
-        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_models::longcat::LongCatPreset;
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -1651,7 +1651,7 @@ fn generate_lingbot(
     #[cfg(feature = "cuda-cudarc")]
     {
         use fastvideo_cudarc::lingbot::pipeline::{LingBotPipeline, LingBotRequest};
-        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::rt::device::resolve_device;
         use fastvideo_models::lingbot::LingBotPreset;
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;

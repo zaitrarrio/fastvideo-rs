@@ -42,7 +42,7 @@ pub(super) fn run(c: &mut Ctx<'_>) -> StageResult<()> {
             runs.push(bits_of(&o)?);
         }
         let bad = same(&runs);
-        let pick = fastvideo_cudarc::wan::sdpa_rule::pick(dev.sm_major, sq, sk, d);
+        let pick = fastvideo_cudarc::rt::sdpa_rule::pick(dev.sm_major, sq, sk, d);
         c.report.check(
             format!("determinism_sdpa_{name}"),
             bad == 0,
@@ -88,7 +88,7 @@ pub(super) fn run(c: &mut Ctx<'_>) -> StageResult<()> {
     )?;
 
     // FP8 attention (opt-in profiles): its K column sums are two-pass now.
-    if fastvideo_cudarc::wan::attn_fp8::supported() {
+    if fastvideo_cudarc::rt::attn_fp8::supported() {
         let (bh, s, d) = (4usize, 4_160usize, 128usize);
         let mk = |c: &mut Ctx<'_>| -> anyhow::Result<CudaTensor> {
             let v: Vec<bf16> = c
@@ -104,7 +104,7 @@ pub(super) fn run(c: &mut Ctx<'_>) -> StageResult<()> {
         let (q, k, v) = (mk(c)?, mk(c)?, mk(c)?);
         let mut runs = Vec::new();
         for _ in 0..REPEATS {
-            match fastvideo_cudarc::wan::attn_fp8::dense_sdpa(&q, &k, &v, None, false)? {
+            match fastvideo_cudarc::rt::attn_fp8::dense_sdpa(&q, &k, &v, None, false)? {
                 Some(o) => runs.push(bits_of(&o)?),
                 None => break,
             }

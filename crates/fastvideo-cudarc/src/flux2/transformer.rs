@@ -5,9 +5,9 @@ use std::time::Instant;
 
 use fastvideo_models::flux2::Flux2ArchConfig;
 
-use crate::wan::nn::{self, Linear};
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{cuda_tensor_shaped, join_key, WeightMap};
+use crate::rt::nn::{self, Linear};
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{cuda_tensor_shaped, join_key, WeightMap};
 
 /// RoPE accounting. Host apply is the old Q/K D2H/H2D path; on a live CUDA
 /// device [`apply_rotary`] launches `apply_rotary_bshd` and host counters stay
@@ -138,7 +138,7 @@ fn rms_heads(xs: &CudaTensor, norm: &RmsNorm, heads: usize, dim_head: usize) -> 
 
 fn apply_rotary(xs: &CudaTensor, cos: &CudaTensor, sin: &CudaTensor) -> Result<CudaTensor> {
     let elems = xs.numel() as u64;
-    if crate::wan::stats::device_expected() {
+    if crate::rt::stats::device_expected() {
         let y = xs.apply_rotary_bshd(cos, sin)?;
         ROPE_DEVICE_CALLS.fetch_add(1, Ordering::Relaxed);
         ROPE_DEVICE_ELEMS.fetch_add(elems, Ordering::Relaxed);
@@ -785,7 +785,7 @@ mod tests {
             "cos=1 sin=0 is identity"
         );
         let stats = rope_host_stats();
-        if crate::wan::stats::device_expected() {
+        if crate::rt::stats::device_expected() {
             assert_eq!(stats.device_apply_calls, 1);
             assert_eq!(stats.device_apply_elems, 16);
             assert_eq!(stats.apply_calls, 0);

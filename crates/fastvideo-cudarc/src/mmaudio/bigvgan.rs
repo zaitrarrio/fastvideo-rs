@@ -12,9 +12,9 @@
 use fastvideo_models::mmaudio::BigVganConfig;
 
 use super::layers::{host_values, msg, pinned};
-use crate::wan::ops::PadMode;
-use crate::wan::tensor::{CudaTensor, Result};
-use crate::wan::weights::WeightMap;
+use crate::rt::ops::PadMode;
+use crate::rt::tensor::{CudaTensor, Result};
+use crate::rt::weights::WeightMap;
 
 const FILTER_TAPS: usize = 12;
 const RATIO: usize = 2;

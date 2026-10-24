@@ -13,8 +13,8 @@ use super::clip::{ClipText, ClipTowerConfig, ClipVisual};
 use super::synchformer::Synchformer;
 use super::transformer::MmAudioTransformer;
 use super::vae::MmAudioVaeDecoder;
-use crate::wan::tensor::CudaTensor;
-use crate::wan::weights::WeightMap;
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
 
 fn dir() -> Option<PathBuf> {
     std::env::var_os("FV_MMAUDIO_FIXTURES").map(PathBuf::from)

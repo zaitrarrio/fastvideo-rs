@@ -15,9 +15,9 @@ use fastvideo_models::sana_video::config::{
 };
 use fastvideo_models::sana_video::{rope, SanaOptimizations, SanaVideoTransformerConfig};
 
-use crate::wan::nn::{self, Linear};
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{self, WeightMap};
+use crate::rt::nn::{self, Linear};
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{self, WeightMap};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -230,7 +230,7 @@ impl Block {
         let p = self.ff_point.forward(&g)?;
         // x + conv_temp(x): taps over frames with zero padding.
         let pf = p.reshape(vec![1, f, hh * ww, d])?;
-        let padded = pf.pad(1, 1, 1, crate::wan::ops::PadMode::Zeros)?;
+        let padded = pf.pad(1, 1, 1, crate::rt::ops::PadMode::Zeros)?;
         let mut out = pf.clone();
         for (k, tap) in self.ff_temp.iter().enumerate() {
             out = out.add(&tap.forward(&padded.narrow(1, k, f)?)?)?;

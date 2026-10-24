@@ -18,9 +18,9 @@
 
 use fastvideo_models::ltx2::config::{Ltx2BweConfig, Ltx2VocoderConfig};
 
-use crate::wan::ops::PadMode;
-use crate::wan::tensor::{CudaTensor, Result};
-use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
+use crate::rt::ops::PadMode;
+use crate::rt::tensor::{CudaTensor, Result};
+use crate::rt::weights::{cuda_tensor_shaped, WeightMap};
 
 use super::{msg, tanh};
 
