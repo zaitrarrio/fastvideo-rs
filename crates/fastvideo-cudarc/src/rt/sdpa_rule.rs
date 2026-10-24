@@ -465,7 +465,9 @@ pub enum MmaKernel {
     Timed,
 }
 
-/// The kernel seam's choice for a `bh` x `sq` grid on `sms` SMs: a fixed
+/// The kernel seam's choice for a `bh` x `sq` grid on `sms` SMs
+/// (`FASTVIDEO_FLASH_KERNEL=v1|v2|cudnn|dc|auto`, also `v3|v3s`; the
+/// `[kernels] dense_attention` row): a fixed
 /// `v1|v2|v3|v3s|cudnn|dc`, else (`auto` or any other value) attn_dc where it
 /// is loaded (9.0 / 10.0; d = 128, V2 for other head dims), else V2 when its
 /// 128-query grid fills the GPU for many waves ([`flash_v2_fills`]), V1
