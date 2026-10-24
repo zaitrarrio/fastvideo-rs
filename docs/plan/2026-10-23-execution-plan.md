@@ -491,3 +491,12 @@ ran (pod id, $/hr), result, cost.
   check green, `scripts/serve/check.sh` 1004 passed (a timing test in
   `fastvideo-media` failed once on the shared pod, green on rerun). GPU
   `techniques` byte-identity family pending (coordinator).
+- 2026-10-24 06:55Z: B3b GPU gate (coordinator): `techniques` byte identity,
+  runtime image `sha-93696e5` (the PR's code; later commits change only the
+  spec scan, the `!Send` guard and docs) against main `sha-9a3c18b` (same
+  inference code as the merge base `71b658b`), one RTX PRO 6000 in EU-RO-1
+  with volume `bz0ofkfx45` (deleted): fasth3-4step-vsa-768p and
+  h3-480p-fullopt 124/124 frames, ltx25-512p-sol 121/121, env and prof
+  arms and the LTX cache arm, max abs diff 0; every H3 and LTX cell loads
+  through `load_with_settings`; fasth3-8step skipped (not on the EU
+  volume). Evidence: `artifacts/runpod/techniques/93696e5-10240625/`.
