@@ -52,6 +52,7 @@ pub mod nvfp4_linear;
 pub mod nvrtc_sass;
 pub mod offload;
 pub mod ops;
+pub mod prompt_cache;
 pub mod quant;
 pub mod resident;
 pub mod sdpa;

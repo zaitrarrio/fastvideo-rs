@@ -1,0 +1,27 @@
+[16:14:02] [b4c] matrix start image=29114694cfa737bd
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-46e5f2dc-340a-0e96-ab01-ee1529566385)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[16:14:06] [b4c] baseline baseline: sha-e18ec01 layer sha256:9917572b7da76d2a4569c61742d01861c3f2e80d63af246ea01ec3a1a7ccd83c -> /fvscratch/baseline-e18ec01/fv-gpucheck (f59052b105dfaea1)
+[16:14:06] [b4c] skip b4c-h3-4stepvsa (not in FV_B4C_CELLS)
+[16:14:08] [b4c] ▶ b4c-ltx25-512p-base-miss  /fvscratch/baseline-e18ec01/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 49 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text streamed --text-cache /fvscratch/b4c-cache/b4c-ltx25-512p-base --clip /fvscratch/runs/b4c/da9dbac-10241613/b4c-ltx25-512p-base-miss/frames  (wall cap 3600s; 0=none)
+[16:20:11] [b4c] ok b4c-ltx25-512p-base-miss  363s  
+[16:20:11] [b4c] [b4c-ltx25-512p-base-miss] text_cache: miss text_encoder: 
+[16:20:14] [b4c] ▶ b4c-ltx25-512p-base-hit  /fvscratch/baseline-e18ec01/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 49 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text streamed --text-cache /fvscratch/b4c-cache/b4c-ltx25-512p-base --clip /fvscratch/runs/b4c/da9dbac-10241613/b4c-ltx25-512p-base-hit/frames  (wall cap 3600s; 0=none)
+[16:22:24] [b4c] ok b4c-ltx25-512p-base-hit  130s  
+[16:22:25] [b4c] [b4c-ltx25-512p-base-hit] text_cache: hit text_encoder: 
+[16:22:26] [b4c] ▶ b4c-ltx25-512p-pr-miss  /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 49 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text streamed --text-cache /fvscratch/b4c-cache/b4c-ltx25-512p-pr --clip /fvscratch/runs/b4c/da9dbac-10241613/b4c-ltx25-512p-pr-miss/frames  (wall cap 3600s; 0=none)
+[16:24:06] [b4c] ok b4c-ltx25-512p-pr-miss  100s  
+[16:24:06] [b4c] [b4c-ltx25-512p-pr-miss] text_cache: miss text_encoder: 
+[16:24:07] [b4c] ▶ b4c-ltx25-512p-pr-hit  /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 49 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text streamed --text-cache /fvscratch/b4c-cache/b4c-ltx25-512p-pr --clip /fvscratch/runs/b4c/da9dbac-10241613/b4c-ltx25-512p-pr-hit/frames  (wall cap 3600s; 0=none)
+[16:24:34] [b4c] ok b4c-ltx25-512p-pr-hit  27s  
+[16:24:34] [b4c] [b4c-ltx25-512p-pr-hit] text_cache: hit text_encoder: 
+[16:24:34] [b4c] compare b4c-ltx25-512p-base-miss--b4c-ltx25-512p-pr-miss exit=0 "psnr_mean":null 
+[16:24:34] [b4c] compare b4c-ltx25-512p-base-hit--b4c-ltx25-512p-pr-hit exit=0 "psnr_mean":null 
+[16:24:35] [b4c] compare b4c-ltx25-512p-pr-miss--b4c-ltx25-512p-pr-hit exit=0 "psnr_mean":null 
+[16:24:35] [b4c] b4c b4c-ltx25-512p: pass
+c2a3abe302b494a8063f7991ea290291d4e780ffd40d4c9ae17706ef0bac1477 10660d1dd5aef52c5c0feaea43d01f9725b4e3eed91862076aef737a24aed947.ltx2text
+[16:24:35] [b4c] b4c family: pass
+[16:24:35] [b4c] compare-clips-b4c-ltx25-512p-base-hit--b4c-ltx25-512p-pr-hit.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 
+[16:24:35] [b4c] compare-clips-b4c-ltx25-512p-base-miss--b4c-ltx25-512p-pr-miss.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 
+[16:24:35] [b4c] compare-clips-b4c-ltx25-512p-pr-miss--b4c-ltx25-512p-pr-hit.json: "status": "ok" "max_abs_diff_uint8": 0 "status": "ok" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "not requested" "status": "pass" 
+[16:24:35] [b4c] matrix done
