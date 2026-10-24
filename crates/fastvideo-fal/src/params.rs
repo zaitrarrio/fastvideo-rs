@@ -245,14 +245,14 @@ pub fn director_specs() -> Vec<ParamSpec> {
                 .note("ours: `{id, kind, name, descriptor}`, unique ids"),
         )
         .push(
-            Param::new("output", T::Object, "output copy")
+            Param::new("output", T::Any, "output copy")
                 .nullable()
-                .note("ours: taken only with `[director] allow_output`"),
+                .note("ours: an output-copy object, taken only with `[director] allow_output`; the parser takes any JSON value"),
         )
         .push(
-            Param::new("x_fv_output", T::Object, "output copy")
+            Param::new("x_fv_output", T::Any, "output copy")
                 .nullable()
-                .note("ours"),
+                .note("ours: an output-copy object; the parser takes any JSON value"),
         );
     let mut prompt = spec("message prompt");
     prompt

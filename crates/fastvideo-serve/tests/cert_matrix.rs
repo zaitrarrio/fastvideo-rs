@@ -32,12 +32,15 @@
 //! - `every_param_has_a_valid_and_an_invalid_case` (fast, no server): the
 //!   plan of every parameter of `goldens/param_specs.json`, the director
 //!   and every Reactor mode has a valid case (or is refused) and an
-//!   invalid case, else an exemption; an exemption no parameter needs
-//!   fails too.
+//!   invalid case, else an exemption; the plans ignore the exemptions, so
+//!   an exempt parameter that has an invalid case (or an exemption matching
+//!   no parameter) fails as stale (`a_stale_exemption_fails_the_assertion`
+//!   tests the rule). `every_golden_spec_has_a_driver`: no served surface
+//!   is left out of the matrix.
 //! - `certification_matrix_is_golden`: runs the matrix and compares the
 //!   TSV with `docs/serve/certification.tsv`; `FV_CERT_WRITE=1` rewrites
 //!   it (`FV_CERT_WRITE=<file>` writes there instead; list the change in
-//!   the PR).
+//!   the PR). It fails after [`MATRIX_TIMEOUT`] instead of hanging.
 
 #![cfg(all(
     feature = "openai-videos",
@@ -264,30 +267,21 @@ struct Plan {
     invalid: Vec<Probe>,
 }
 
-/// Parameters with no invalid case, by (surface, name): every value of the
-/// field's type is accepted by design. A new parameter without an invalid
-/// case fails `every_param_has_a_valid_and_an_invalid_case`; so does an
-/// entry here no parameter needs.
+/// Parameters with no invalid case, by (surface, name): the plan (made
+/// without this table) has none, because the field takes any JSON value.
+/// A parameter with no invalid case and no entry fails
+/// `every_param_has_a_valid_and_an_invalid_case`; so does an entry whose
+/// parameter has an invalid case, or that matches no parameter (stale).
 const EXEMPT: &[(&str, &str, &str)] = &[
-    (
-        "minimax",
-        "prompt_optimizer",
-        "MiniMax V1's switch: a non-boolean is ignored, as the V1 API does (no value is refused)",
-    ),
-    (
-        "ltx",
-        "enhance_prompt",
-        "ours: a non-boolean is ignored (no value is refused)",
-    ),
     (
         "fal_director",
         "output",
-        "ours: an output-copy object checked by the session when `[director] allow_output`, not by the parser",
+        "ours: any JSON value; the output copy is checked by the session when `[director] allow_output`, not by the parser",
     ),
     (
         "fal_director",
         "x_fv_output",
-        "ours: an output-copy object checked by the session, not by the parser",
+        "ours: any JSON value; the output copy is checked by the session, not by the parser",
     ),
 ];
 
@@ -724,7 +718,9 @@ fn plan(spec: &ParamSpec, p: &Param) -> Plan {
         };
         push(&mut invalid, Probe::set(&p.name, bad));
     }
-    if invalid.is_empty() && exemption(surface, &p.name).is_none() {
+    // The exemption table is not consulted here: an exemption must not
+    // remove the case that would show it stale.
+    if invalid.is_empty() {
         if let Some(v) = wrong_type(p.ty) {
             push(
                 &mut invalid,
@@ -2212,8 +2208,17 @@ fn render(rows: &[Row]) -> String {
     out
 }
 
+/// The matrix's wall-clock limit: a hang fails here, not at the CI job's.
+const MATRIX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn certification_matrix_is_golden() {
+    tokio::time::timeout(MATRIX_TIMEOUT, matrix())
+        .await
+        .unwrap_or_else(|_| panic!("the certification matrix ran over {MATRIX_TIMEOUT:?}"));
+}
+
+async fn matrix() {
     let t0 = Instant::now();
     // Which config first serves each distinct spec, and every config
     // serving it.
@@ -2223,6 +2228,17 @@ async fn certification_matrix_is_golden() {
     for (name, path) in common::configs() {
         let (srv, specs, extra) = server(&name, &path).await;
         let mut jobs: Vec<Job> = Vec::new();
+        // Every served spec is driven: a surface the harness does not know
+        // fails here instead of being left out of the TSV.
+        let undriven: Vec<String> = specs
+            .iter()
+            .filter(|s| driver_of(s).is_none())
+            .map(spec_key)
+            .collect();
+        assert!(
+            undriven.is_empty(),
+            "{name}: served specs with no driver: {undriven:?}"
+        );
         let all: Vec<(ParamSpec, Driver)> = specs
             .into_iter()
             .filter_map(|s| driver_of(&s).map(|d| (s, d)))
@@ -2371,11 +2387,71 @@ fn reactor_specs() -> Vec<ParamSpec> {
         .collect()
 }
 
-/// The CI assertion (plan E3): every parameter of every spec has a valid
-/// case (or is refused / has an empty domain on the model) and an invalid
-/// case, else an exemption with its reason; every exemption is needed.
-#[test]
-fn every_param_has_a_valid_and_an_invalid_case() {
+/// Every parameter's plan against an exemption table: the parameters with
+/// no invalid case and no exemption (`missing`), and the exemptions that
+/// are stale (`stale`: the parameter has an invalid case, or the entry
+/// matches no parameter).
+fn coverage(specs: &[ParamSpec], exempt: &[(&str, &str, &str)]) -> (Vec<String>, Vec<String>) {
+    let is_exempt = |s: &str, n: &str| exempt.iter().any(|(es, en, _)| *es == s && *en == n);
+    let mut missing = Vec::new();
+    let mut stale = Vec::new();
+    let mut matched = BTreeSet::new();
+    for s in specs {
+        for p in &s.params {
+            let pl = plan(s, p);
+            if let Valid::Probe(pr) = &pl.valid {
+                assert!(
+                    !pr.assigns.is_empty(),
+                    "{} `{}`: an empty valid case",
+                    spec_key(s),
+                    p.name
+                );
+            }
+            if matches!(p.support, Support::Refused | Support::Gap { .. }) {
+                assert!(
+                    matches!(pl.valid, Valid::None(_)) && !pl.invalid.is_empty(),
+                    "{} `{}`: a refused parameter's case is any value, refused",
+                    spec_key(s),
+                    p.name
+                );
+            }
+            let exempted = is_exempt(&s.surface, &p.name);
+            if exempted {
+                matched.insert((s.surface.clone(), p.name.clone()));
+            }
+            match (pl.invalid.is_empty(), exempted) {
+                (true, false) => missing.push(format!(
+                    "{} `{}` ({:?}): no invalid case and no exemption",
+                    spec_key(s),
+                    p.name,
+                    p.domain
+                )),
+                (false, true) => stale.push(format!(
+                    "{} `{}`: exempt, but has {} invalid case(s) ({})",
+                    spec_key(s),
+                    p.name,
+                    pl.invalid.len(),
+                    pl.invalid
+                        .iter()
+                        .map(|x| x.label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ; ")
+                )),
+                _ => {}
+            }
+        }
+    }
+    for (s, n, _) in exempt {
+        if !matched.contains(&((*s).to_owned(), (*n).to_owned())) {
+            stale.push(format!("{s} `{n}`: the exemption matches no parameter"));
+        }
+    }
+    (missing, stale)
+}
+
+/// The specs the CI assertion plans: the golden's, the director's and
+/// every Reactor mode's.
+fn assertion_specs() -> Vec<ParamSpec> {
     let text = std::fs::read_to_string(golden_specs_path()).unwrap();
     let golden: Value = serde_json::from_str(&text).unwrap();
     let mut specs: Vec<ParamSpec> = golden["specs"]
@@ -2386,54 +2462,94 @@ fn every_param_has_a_valid_and_an_invalid_case() {
         .collect();
     specs.extend(fastvideo_fal::params::director_specs());
     specs.extend(reactor_specs());
-    let mut missing = Vec::new();
-    let mut used = BTreeSet::new();
-    let mut n = 0;
-    for s in &specs {
-        for p in &s.params {
-            n += 1;
-            let pl = plan(s, p);
-            if let Valid::Probe(pr) = &pl.valid {
-                assert!(
-                    !pr.assigns.is_empty(),
-                    "{} `{}`: an empty valid case",
-                    spec_key(s),
-                    p.name
-                );
-            }
-            let refused = matches!(p.support, Support::Refused | Support::Gap { .. });
-            if refused {
-                assert!(
-                    matches!(pl.valid, Valid::None(_)) && !pl.invalid.is_empty(),
-                    "{} `{}`: a refused parameter's case is any value, refused",
-                    spec_key(s),
-                    p.name
-                );
-            }
-            if pl.invalid.is_empty() {
-                match exemption(&s.surface, &p.name) {
-                    Some(_) => {
-                        used.insert((s.surface.clone(), p.name.clone()));
-                    }
-                    None => missing.push(format!(
-                        "{} `{}` ({:?}): no invalid case and no exemption",
-                        spec_key(s),
-                        p.name,
-                        p.domain
-                    )),
-                }
-            }
-        }
-    }
+    specs
+}
+
+/// The CI assertion (plan E3): every parameter of every spec has a valid
+/// case (or is refused / has an empty domain on the model) and an invalid
+/// case, else an exemption with its reason; no exemption is stale.
+#[test]
+fn every_param_has_a_valid_and_an_invalid_case() {
+    let specs = assertion_specs();
+    let n: usize = specs.iter().map(|s| s.params.len()).sum();
+    let (missing, stale) = coverage(&specs, EXEMPT);
     assert!(
         missing.is_empty(),
         "{} of {n} parameters:\n{}",
         missing.len(),
         missing.join("\n")
     );
-    let stale: Vec<_> = EXEMPT
-        .iter()
-        .filter(|(s, p, _)| !used.contains(&((*s).to_owned(), (*p).to_owned())))
+    assert!(stale.is_empty(), "stale exemptions:\n{}", stale.join("\n"));
+}
+
+/// The assertion's own rules: an exempt parameter that has an invalid case
+/// is stale, as is an exemption matching no parameter; a parameter with no
+/// invalid case needs one.
+#[test]
+fn a_stale_exemption_fails_the_assertion() {
+    let mut s = ParamSpec {
+        surface: "test".into(),
+        endpoint: "POST /x".into(),
+        model: "m".into(),
+        engine_model: "m".into(),
+        unknown_fields: UnknownFields::Ignore,
+        params: Vec::new(),
+    };
+    // A boolean has a wrong-type case; an untyped field has none.
+    s.push(Param::new("flag", ParamType::Boolean, "-"))
+        .push(Param::new("blob", ParamType::Any, "-"));
+    let specs = [s];
+    let (missing, stale) = coverage(&specs, &[("test", "blob", "any JSON value")]);
+    assert!(
+        missing.is_empty() && stale.is_empty(),
+        "{missing:?} {stale:?}"
+    );
+    let (missing, _) = coverage(&specs, &[]);
+    assert_eq!(missing.len(), 1, "{missing:?}");
+    assert!(missing[0].contains("`blob`"), "{missing:?}");
+    let (_, stale) = coverage(
+        &specs,
+        &[
+            ("test", "blob", "any JSON value"),
+            ("test", "flag", "would hide the wrong-type case"),
+            ("test", "gone", "no such parameter"),
+        ],
+    );
+    assert_eq!(stale.len(), 2, "{stale:?}");
+    assert!(
+        stale[0].contains("`flag`: exempt, but has 1 invalid case"),
+        "{stale:?}"
+    );
+    assert!(
+        stale[1].contains("`gone`: the exemption matches no parameter"),
+        "{stale:?}"
+    );
+}
+
+/// Every spec of every shipped config has a driver (the matrix also
+/// asserts it on the specs it is served).
+#[test]
+fn every_golden_spec_has_a_driver() {
+    let text = std::fs::read_to_string(golden_specs_path()).unwrap();
+    let golden: Value = serde_json::from_str(&text).unwrap();
+    let undriven: Vec<String> = golden["specs"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|v| serde_json::from_value::<ParamSpec>(v.clone()).unwrap())
+        .filter(|s| driver_of(s).is_none())
+        .map(|s| spec_key(&s))
         .collect();
-    assert!(stale.is_empty(), "exemptions no parameter needs: {stale:?}");
+    assert!(undriven.is_empty(), "specs with no driver: {undriven:?}");
+    let mut odd = ParamSpec {
+        surface: "not_a_surface".into(),
+        endpoint: "POST /x".into(),
+        model: "m".into(),
+        engine_model: "m".into(),
+        unknown_fields: UnknownFields::Ignore,
+        params: Vec::new(),
+    };
+    assert!(driver_of(&odd).is_none());
+    odd.surface = "native".into();
+    assert!(driver_of(&odd).is_some());
 }

@@ -79,9 +79,14 @@ and Reactor control-channel messages, and the census findings
 7. **The CI assertion** (`every_param_has_a_valid_and_an_invalid_case`,
    no server): the plan of every parameter of `goldens/param_specs.json`,
    the director and every Reactor mode has a valid case (or is refused, or
-   has an empty domain on the model) and an invalid case; a parameter with
-   no possible invalid value carries an exemption with its reason
-   (`EXEMPT`), and an exemption no parameter needs fails too.
+   has an empty domain on the model) and an invalid case. The plans are
+   made without the exemption table; a parameter whose plan has no invalid
+   case (it takes any JSON value) carries an exemption with its reason
+   (`EXEMPT`). An exempt parameter that has an invalid case, or an
+   exemption matching no parameter, is stale and fails
+   (`a_stale_exemption_fails_the_assertion`). Every served spec must have
+   a driver (`every_golden_spec_has_a_driver`, and the matrix asserts it
+   on what each config serves); the matrix has a 10-minute wall limit.
 8. **Output**: one row per (section, surface, endpoint, model,
    engine model, parameter), sections `base`, `param`, `unknown_field` (the
    surface's policy) and `pair`; no empty cell (`n/a (...)` with the

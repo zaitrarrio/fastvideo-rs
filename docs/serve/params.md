@@ -185,17 +185,20 @@ Media cases are data URIs (a 320x180 PNG, an 8 s WAV, a 21 s 768x512 MP4,
 
 ### Exemptions (parameters with no invalid case)
 
+The cases are planned without this table; an exemption holds only for a
+parameter whose plan has no invalid case (it takes any JSON value). An
+exempt parameter that has one, or an exemption that matches no parameter,
+fails the assertion as stale (`a_stale_exemption_fails_the_assertion`).
+
 | Surface | Parameter | Reason |
 |---|---|---|
-| `minimax` | `prompt_optimizer` | MiniMax V1's switch: a non-boolean is ignored (no value is refused) |
-| `ltx` | `enhance_prompt` | ours: a non-boolean is ignored |
-| `fal_director` | `output`, `x_fv_output` | an output-copy object checked by the session (`[director] allow_output`), not by the parser |
+| `fal_director` | `output`, `x_fv_output` | any JSON value: the output copy is checked by the session (`[director] allow_output`), not by the parser |
 
 ### Findings (2026-10-24) and candidate fixes
 
 No request produced a 5xx or a panic. Every finding is recorded, none is
 fixed here: each fix changes wire behaviour and is a separate decision.
-Counts are TSV rows with the finding (a row can carry several kinds; 1,070 of the 4,630 rows carry at least one).
+Counts are TSV rows with the finding (a row can carry several kinds; 1,114 of the 4,630 rows carry at least one).
 
 | # | Surface | Observed (request -> response) | Rows | Candidate fix |
 |---|---|---|---|---|
@@ -213,6 +216,7 @@ Counts are TSV rows with the finding (a row can carry several kinds; 1,070 of th
 | 12 | `/v1/videos` | `ltx25-ref2v`, `ltx25-a2v-guided`: every base routes to `ltx25-distill-dense`; then `seconds: 11`, `num_frames: 249` are accepted (the companion's caps) | 6 | specs for routed names describe the companion, or the surface lists only models it can run |
 | 13 | director | `configure` / `prompt` with `end_image_url: ""` or `audio_url: ""` -> accepted (only `image_url` and script beats are checked); enum and type errors name no field | 11 | `check_url` on those fields |
 | 14 | FastWan | `{"prompt", "height": 480}` -> 400 `width and height must both be positive`: the parser's param is `width` (invisible on FastWan's wire, which has no param field); a canvas over the pixel budget names neither side | 6 | name `height` in the parser (no wire change) |
+| 15 | MiniMax, LTX | `prompt_optimizer: "x"` (MiniMax), `enhance_prompt: "x"` (LTX) -> accepted: a non-boolean is ignored, as the notes say | 44 | none needed if intended (the notes document it); else refuse a non-boolean |
 
 The pairs section also records the mutual exclusions that hold: MiniMax
 first-frame + reference items, two text items; LTX audio-to-video

@@ -487,8 +487,8 @@ ran (pod id, $/hr), result, cost.
   `docs/serve/certification.tsv`: 4,630 rows (290 base, 3,863 parameter,
   290 unknown-field, 187 pair), 8 surfaces, 290 distinct specs, 36 engine
   models, no empty cell, drift-checked; CI assertion
-  `every_param_has_a_valid_and_an_invalid_case` with 4 reasoned exemptions.
-  No 5xx or panic; 1,070 rows carry findings (14 kinds, listed with
+  `every_param_has_a_valid_and_an_invalid_case` with 2 reasoned exemptions.
+  No 5xx or panic; 1,114 rows carry findings (15 kinds, listed with
   candidate fixes in docs/serve/params.md; no wire change). On build pod
   `pzocv1keasg3xn`: protocol + serve + fal + reactor 389 passed,
   `scripts/serve/check.sh` 1035 passed / 0 failed in 113 binaries,
