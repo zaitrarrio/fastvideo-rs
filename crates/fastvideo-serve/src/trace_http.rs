@@ -13,7 +13,8 @@
 //!   `waitUntil` shipment, the browser's beacon).
 //! - [`install`]: names this host in its events and ships each event as a
 //!   log line (target `fv_trace`) through the log shipper (`FV_TRACE_LOG=0`
-//!   turns that off).
+//!   turns that off) and, with the `otel` feature, as an OpenTelemetry
+//!   span (`crate::otel`, a no-op unless `[otel] enabled`).
 
 use std::time::Duration;
 
@@ -34,32 +35,47 @@ const MAX_INGEST_EVENTS: usize = 2000;
 /// Its body cap.
 const MAX_INGEST_BYTES: usize = 512 * 1024;
 
-/// Names this host (`pod:<id>`) and wires the log shipper.
+/// Names this host (`pod:<id>`) and wires the recorder's sink: the log
+/// shipper and, with the `otel` feature, the OpenTelemetry exporter.
 pub fn install(worker_id: &str) {
     let pod = std::env::var("RUNPOD_POD_ID")
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| worker_id.to_owned());
     fastvideo_trace::set_host(format!("pod:{pod}"));
-    if std::env::var("FV_TRACE_LOG").ok().is_none_or(|v| v != "0") {
-        fastvideo_trace::set_sink(|e: &Event| {
-            tracing::info!(
-                target: "fv_trace",
-                trace_id = %e.trace,
-                comp = %e.comp,
-                stage = %e.name,
-                clock = %e.clock,
-                t_wall_ns = e.t_wall_ns,
-                dur_ms = e.dur_ns as f64 / 1e6,
-                arg = e.arg.unwrap_or(0),
-                host = %e.host,
-                "trace {} {}.{}",
-                e.trace,
-                e.comp,
-                e.name
-            );
-        });
+    let log = std::env::var("FV_TRACE_LOG").ok().is_none_or(|v| v != "0");
+    #[cfg(not(feature = "otel"))]
+    {
+        if log {
+            fastvideo_trace::set_sink(log_event);
+        }
     }
+    #[cfg(feature = "otel")]
+    fastvideo_trace::set_sink(move |e: &Event| {
+        if log {
+            log_event(e);
+        }
+        crate::otel::export_event(e);
+    });
+}
+
+/// One event as a log line (target `fv_trace`; on the drain thread).
+fn log_event(e: &Event) {
+    tracing::info!(
+        target: "fv_trace",
+        trace_id = %e.trace,
+        comp = %e.comp,
+        stage = %e.name,
+        clock = %e.clock,
+        t_wall_ns = e.t_wall_ns,
+        dur_ms = e.dur_ns as f64 / 1e6,
+        arg = e.arg.unwrap_or(0),
+        host = %e.host,
+        "trace {} {}.{}",
+        e.trace,
+        e.comp,
+        e.name
+    );
 }
 
 /// The span name of a traced request (static: no formatting on the hot path).
