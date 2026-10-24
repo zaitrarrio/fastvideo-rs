@@ -273,3 +273,22 @@ ran (pod id, $/hr), result, cost.
   green. Lockfile: the new crate only. `lab/tiers.toml` and
   `lab/cells/*.toml` left to D1 (wall caps, stages and cells are not in any
   document).
+- 2026-10-24 02:25Z: D2 review fixes on #151 (coordinator decisions in the
+  decision log, FVID-2026-10-24-gold-tier-gpu-and-settings): quality numbers
+  measured on an H100 are gaps with the values in source notes
+  (`fasth3-4step-vsa`, `ltx25-ref2v`); numbers measured under a non-default
+  setting stay only with the setting named in `workload.note` and the new
+  `workload.env` (`FASTVIDEO_H3_VAE_MXFP8=0` on the pre-2026-10-14 H3 runs,
+  `FASTVIDEO_WAN_QUANT=mxfp8` on the Wan TAEHV arms; `fasth3-trim-nvfp4`
+  un-gapped under the same rule); `quality.cell` on the Trim and V2 TAEH3
+  files; `[[source]]` heading and date required, every heading checked
+  against its file; the profile lint catches ranges with a unit, `×` / `X`
+  / spaced speed-ups, more units and metric names up to three words before
+  the value, and lets scale factors and clip lengths pass;
+  `fastvideo-lab`, `lab/**`, `profiles/**`, `families/**` in the
+  adapter-tests workflow and `scripts/serve/coverage.sh`. Coverage now: p50
+  17/30, PSNR vs upstream 1/30, LPIPS 0/30, 11 variants with the price only.
+  On `i8tu0lpdb6nvov`: `cargo test --locked -p fastvideo-lab` 28 passed (17
+  unit, 8 gold-files, 1 profile lint, 2 schema); the coverage crate set
+  (`cargo test --locked` of its 12 crates) 748 passed, 0 failed; fmt, clippy
+  `-D warnings` and `scripts/gpu/lint.sh` green.

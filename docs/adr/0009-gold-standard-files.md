@@ -88,6 +88,24 @@ cited; `usd_per_clip = usd_per_hr * p50_s / 3600` is the one derived value
 and is checked to 1 %. A price is a property of the class at a date, not of
 the run that measured the latency, so it is not rescaled per source.
 
+### Choice 5: the tier's GPU, and the served configuration or its exact setting (review of #151)
+
+Two rules decide whether a measured number may sit in a variant's fields.
+A number measured on a GPU other than the tier's is a gap; its values stay
+in a cited `[[source]]` note and in the gap's reason ("measured on H100
+only; D3 re-measures on the tier GPU"). A number measured under a setting
+that is not the variant's served default stays in the fields only when
+`workload.note` names the exact setting that reproduces it; an environment
+setting also goes in `workload.env`, which the parser checks the note names,
+so `fv-lab` reruns the cell exactly. When the setting cannot be named
+exactly, the number is a gap. In the first files this applies to the H3
+runs from before 2026-10-14 (`FASTVIDEO_H3_VAE_MXFP8=0`, the bf16 video
+decode that was the default then) and to the Wan TAEHV arms
+(`FASTVIDEO_WAN_QUANT=mxfp8`). Every `[[source]]` names its heading (a
+Markdown heading or a top-level JSON key, checked to exist) and a date (the
+measurement date, or the cited document's last commit where the source
+states none).
+
 ### Not decided here
 
 `lab/tiers.toml` and `lab/cells/*.toml` (§7.5): their wall caps, stages and
@@ -96,18 +114,20 @@ writes them with the runner.
 
 ## Consequences
 
-- Every served variant has a gold file, and the gaps are explicit: 14 of 30
-  have a clip time, 3 a PSNR against upstream, none a `[last_validated]`.
-  The gaps are D3's GPU work list.
+- Every served variant has a gold file, and the gaps are explicit: 17 of 30
+  have a p50 time on the tier GPU, 1 a PSNR against upstream (none an
+  LPIPS), none a `[last_validated]`; 11 carry only the class price. The gaps are D3's GPU work list.
 - A new variant in a family file fails CI until it has a gold file, at
   least an all-gaps one with its workload and sources.
 - `fastvideo-lab` is CPU only and adds no package to the lockfile beyond
   itself.
 - Enforced by: `crates/fastvideo-lab/src/gold.rs` unit tests (every number
-  cited, every gap declared, paths named in errors, cost derivation, stream
-  fields), `tests/gold_files.rs` (every file parses and validates; the set of
-  gold files equals the set of family variant ids, both directions; family,
-  tier and profile agree with the family file; the tier's GPU meets the
-  variant's floor; every cited path exists), `tests/profiles.rs` (no
+  cited, every gap declared, sources carry a heading and a date, `workload.env`
+  named in the note, paths named in errors, cost derivation, stream fields),
+  `tests/gold_files.rs` (every file parses and validates; the set of gold
+  files equals the set of family variant ids, both directions; family, tier
+  and profile agree with the family file; the tier's GPU meets the variant's
+  floor; every cited path exists; every cited heading exists in its file),
+  `tests/profiles.rs` (no
   measurement in a profile comment), `tests/schema.rs`
   (`schemas/gold.v1.json` drift).

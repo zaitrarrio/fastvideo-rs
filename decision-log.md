@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-10-24 · FVID-2026-10-24-gold-tier-gpu-and-settings
+- Trigger: review of PR #151 (plan D2): two gold files carried oracle numbers measured on an H100 for an RTX PRO 6000 tier (`fasth3-4step-vsa` PSNR / LPIPS, `ltx25-ref2v` PSNR), and H3 latencies measured before the MXFP8 video-decoder default (2026-10-14) sat in the fields while `fasth3-trim-nvfp4` gapped its numbers for the same reason
+- Options: keep the numbers with a note; gap every number not measured in the served configuration; keep a number measured under a non-default setting only when that exact setting is named
+- Decision: **(coordinator) a number measured on a GPU other than the tier's is a gap, its values kept in a cited `[[source]]` note and the gap reason ("measured on H100 only; D3 re-measures on the tier GPU"); a number measured under a non-default setting stays in the fields only when `workload.note` names the exact setting that reproduces it (here `FASTVIDEO_H3_VAE_MXFP8=0`, the bf16 video decode that was the default before 2026-10-14, and `FASTVIDEO_WAN_QUANT=mxfp8` for the Wan TAEHV arms), with the environment also in a new `workload.env` the parser checks the note names; every `[[source]]` carries a heading (checked to exist in the file) and a date.** ADR-0009 Choice 1 unchanged; Choice 5 added
+- Reason: one rule for every file; `fv-lab` can rerun a cell exactly; a gold number is only comparable on the tier's GPU
+- Reversibility: cheap (this repository's format)
+- Executed by: Executor (plan D2, review fixes)
+- ADR: docs/adr/0009-gold-standard-files.md (Choice 5)
+- Verification: `cargo test -p fastvideo-lab` (`sources_need_a_heading_and_a_date`, `workload_env_is_named_in_the_note`, `every_cited_heading_exists_in_its_file`)
+
 ### FVID · 2026-10-24 · FVID-2026-10-24-gold-standard-files
 - Trigger: plan D2 (docs/plan/2026-10-23-execution-plan.md): `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments, keyed by registry name and `@rev`; the profile comments stop carrying numbers
 - Options: bounds with margins as the review sketches them; the measured values as the sources report them, with the gate's tolerances applied by `fv-lab`; numbers copied from the nearest measured configuration when the variant itself has none; only cited numbers, with every absence declared
