@@ -15,7 +15,9 @@
 //!   polls), since a lab pod serves files, not fv-serve's `/ping`;
 //! - [`fetch_run`] / [`wait_done`]: `runpod-http.sh fetch_results` and
 //!   `wait_done`, into `artifacts/runpod/<family>/<tag>/`;
-//! - [`reap_candidates`]: which `fv-lab-*` pods are past their cap.
+//! - [`reap_recorded`] / [`reap_account`]: which fv-lab pods are past their
+//!   cap (this machine's records by default; the full name pattern with
+//!   `--account`); [`judge_run`]: whether a fetched run succeeded.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -45,9 +47,6 @@ const START_TEMPLATE: &str = include_str!("pod-start.sh.in");
 /// What `reap` adds to a pod's cap before it deletes it (the backstop
 /// deletes at the cap; reap catches a pod whose backstop died with its host).
 pub const REAP_GRACE_S: u64 = 600;
-/// The cap `reap` assumes for an fv-lab pod whose tier it does not know
-/// (fv-deploy's 4 h bound, the longest any tier may ask for).
-pub const MAX_REAP_CAP_S: u64 = guard::MAX_CAP_S;
 
 /// Why a pod command failed.
 #[derive(thiserror::Error, Debug)]
@@ -194,10 +193,27 @@ pub fn check_sha7(sha: &str) -> Result<(), PodError> {
     }
 }
 
-/// `runpod-http.sh`'s run tag: `<sha>-<MMDDHHMM>` (UTC).
-pub fn run_tag(sha7: &str, unix: f64) -> String {
-    let (_, m, d, h, mi, _) = utc_parts(unix);
-    format!("{sha7}-{m:02}{d:02}{h:02}{mi:02}")
+/// fv-lab's run tag: `<sha>-<MMDDHHMMSS>-<4 hex>` (UTC, and a random
+/// suffix). `runpod-http.sh`'s `<sha>-<MMDDHHMM>` repeats within a minute,
+/// and two runs sharing a pod name would sweep each other's pod (fv-deploy's
+/// exit sweep deletes by exact name); `pod up` also refuses a name that is
+/// already live ([`name_taken`]).
+pub fn run_tag(sha7: &str, unix: f64, suffix: u16) -> String {
+    let (_, m, d, h, mi, sec) = utc_parts(unix);
+    format!("{sha7}-{m:02}{d:02}{h:02}{mi:02}{sec:02}-{suffix:04x}")
+}
+
+/// Two random bytes from `/dev/urandom`, for [`run_tag`].
+pub fn random_suffix() -> Result<u16, PodError> {
+    use std::io::Read as _;
+    let mut b = [0u8; 2];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut b))
+        .map_err(|e| PodError::Io {
+            path: PathBuf::from("/dev/urandom"),
+            why: e.to_string(),
+        })?;
+    Ok(u16::from_be_bytes(b))
 }
 
 /// `fv-lab-<family>-<tag>` (`runpod-http.sh` with `FV_POD_PREFIX=fv-lab`).
@@ -386,31 +402,127 @@ pub fn run_dir(root: &Path, family: &str, tag: &str) -> PathBuf {
 
 // ------------------------------------------------------------------ reap
 
-/// The `fv-lab-*` pods older than their cap plus [`REAP_GRACE_S`] (`cap_of`
-/// maps a pod name to its tier's wall cap). A pod without a readable
-/// creation time is never reaped (it is listed by `reap` instead).
-pub fn reap_candidates(
-    pods: &[PodListing],
-    now: f64,
-    cap_of: impl Fn(&str) -> u64,
-) -> Vec<&PodListing> {
+/// An fv-lab pod name, `fv-lab-<tier>-<sha7>-<MMDDHHMMSS>-<4 hex>`, taken apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PodName<'a> {
+    pub tier: &'a str,
+    pub sha: &'a str,
+    pub stamp: &'a str,
+    pub suffix: &'a str,
+}
+
+/// The full fv-lab pattern, or `None`. A `runpod-http.sh` pod made with
+/// `FV_POD_PREFIX=fv-lab` (`…-<sha>-<MMDDHHMM>`) does not match.
+pub fn parse_pod_name(name: &str) -> Option<PodName<'_>> {
+    let rest = name.strip_prefix(POD_PREFIX)?;
+    let mut parts = rest.rsplitn(4, '-');
+    let suffix = parts.next()?;
+    let stamp = parts.next()?;
+    let sha = parts.next()?;
+    let tier = parts.next()?;
+    let hex = |s: &str, n: usize| {
+        s.len() == n
+            && s.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    };
+    let ok = hex(suffix, 4)
+        && stamp.len() == 10
+        && stamp.bytes().all(|b| b.is_ascii_digit())
+        && hex(sha, 7)
+        && crate::plan::is_name(tier);
+    ok.then_some(PodName {
+        tier,
+        sha,
+        stamp,
+        suffix,
+    })
+}
+
+/// Whether a live pod (not terminated) already has this exact name.
+pub fn name_taken(pods: &[PodListing], name: &str) -> bool {
     pods.iter()
-        .filter(|p| p.name.starts_with(POD_PREFIX))
-        .filter(|p| p.state != InstanceState::Terminated)
+        .any(|p| p.name == name && p.state != InstanceState::Terminated)
+}
+
+fn past_cap(p: &PodListing, created: Option<f64>, cap_s: u64, now: f64) -> bool {
+    p.state != InstanceState::Terminated
+        && created.is_some_and(|t| now - t > (cap_s + REAP_GRACE_S) as f64)
+}
+
+/// `pod reap` (the default): the pods this machine's `pod up` recorded
+/// (`artifacts/fv-lab/pods/<id>.json`) that are still live and older than
+/// their recorded cap plus [`REAP_GRACE_S`]. Nothing else is touched
+/// (CLAUDE.md: only pods you created).
+pub fn reap_recorded<'a>(
+    pods: &'a [PodListing],
+    now: f64,
+    records: &[PodRecord],
+) -> Vec<&'a PodListing> {
+    pods.iter()
         .filter(|p| {
-            p.created_at
-                .is_some_and(|t| now - t > (cap_of(&p.name) + REAP_GRACE_S) as f64)
+            records
+                .iter()
+                .find(|r| r.id == p.id.as_str())
+                .is_some_and(|r| past_cap(p, p.created_at.or(r.created_at), r.cap_s, now))
         })
         .collect()
 }
 
-/// The tier of an fv-lab pod name (`fv-lab-<family>-<sha7>-<MMDDHHMM>`).
-pub fn family_of(name: &str) -> Option<&str> {
-    let rest = name.strip_prefix(POD_PREFIX)?;
-    let mut parts = rest.rsplitn(3, '-');
-    let _stamp = parts.next()?;
-    let _sha = parts.next()?;
-    parts.next()
+/// `pod reap --account`: every pod whose name is the full fv-lab pattern of a
+/// known tier ([`parse_pod_name`]; `caps` maps tier name to its wall cap),
+/// older than that cap plus [`REAP_GRACE_S`]. A pod without a readable
+/// creation time is never taken.
+pub fn reap_account<'a>(
+    pods: &'a [PodListing],
+    now: f64,
+    caps: &[(&str, u64)],
+) -> Vec<&'a PodListing> {
+    pods.iter()
+        .filter(|p| {
+            parse_pod_name(&p.name)
+                .and_then(|n| caps.iter().find(|(t, _)| *t == n.tier))
+                .is_some_and(|(_, cap)| past_cap(p, p.created_at, *cap, now))
+        })
+        .collect()
+}
+
+/// What makes a fetched run a success (`runpod-http.sh run`'s verdicts, made
+/// strict): `DONE` says `done <tag>`, `matrix.out` holds `matrix_exit=0` and
+/// no other exit, and the host's driver was not too old. The problems; empty
+/// when none.
+pub fn judge_run(dir: &Path, tag: &str) -> Vec<String> {
+    let read = |f: &str| std::fs::read_to_string(dir.join(f)).ok();
+    let mut bad = Vec::new();
+    match read("DONE") {
+        Some(t) if t.lines().next() == Some(format!("done {tag}").as_str()) => {}
+        Some(t) => bad.push(format!("DONE says {:?}, not `done {tag}`", t.trim())),
+        None => bad.push("no DONE: the run did not finish (or was not fetched)".into()),
+    }
+    match read("matrix.out") {
+        None => bad.push("no matrix.out fetched".into()),
+        Some(t) => {
+            let exits: Vec<&str> = t
+                .lines()
+                .filter(|l| l.starts_with("matrix_exit="))
+                .collect();
+            if exits.is_empty() {
+                bad.push("matrix.out has no matrix_exit line".into());
+            } else if exits.iter().any(|l| *l != "matrix_exit=0") {
+                bad.push(format!(
+                    "the runner exited abnormally: {}",
+                    exits.join(", ")
+                ));
+            }
+        }
+    }
+    if let Some(l) = read("box.txt")
+        .unwrap_or_default()
+        .lines()
+        .find(|l| l.starts_with("driver_too_old"))
+    {
+        bad.push(format!("host driver too old ({l}); rerun"));
+    }
+    bad
 }
 
 // ------------------------------------------------------------------ fetch
@@ -477,7 +589,8 @@ pub const RUN_FILES: [&str; 10] = [
 
 /// `runpod-http.sh fetch_results`: the run files, then per directory of the
 /// run its `summary.json`, `stderr.log`, `stdout.log`, `gpucheck-out/*.json`
-/// and every JSON directly in it (benchmark.json, compare/, gate/). The
+/// and every JSON directly in it (benchmark.json, `frames.sha256.json`,
+/// compare/, gate/), plus `DONE`. The
 /// listing is retried (one failed read once lost a whole run). Returns the
 /// directories fetched.
 pub fn fetch_run(
@@ -498,6 +611,8 @@ pub fn fetch_run(
     for f in RUN_FILES {
         save(http, &format!("{run}/{f}"), &dest.join(f));
     }
+    // The finish marker, which `judge_run` reads (runpod-http.sh only polls it).
+    save(http, &format!("{run}/DONE"), &dest.join("DONE"));
     let mut cells = Vec::new();
     for attempt in 1..=5 {
         if let Some(l) = get_text(http, &format!("{run}/")) {
@@ -672,50 +787,260 @@ cells = ["c"]
     }
 
     #[test]
-    fn tags_names_and_families() {
+    fn tags_are_unique_per_second_and_suffix() {
         // 2026-10-24 12:05:09 UTC.
-        assert_eq!(run_tag("abcdef1", 1_792_843_509.0), "abcdef1-10241205");
+        let t = 1_792_843_509.0;
+        assert_eq!(run_tag("abcdef1", t, 0x00af), "abcdef1-1024120509-00af");
+        assert_ne!(run_tag("abcdef1", t, 1), run_tag("abcdef1", t, 2));
+        assert_ne!(run_tag("abcdef1", t, 1), run_tag("abcdef1", t + 1.0, 1));
+        let n = pod_name("sol-h3x", &run_tag("abcdef1", t, 0xbeef));
         assert_eq!(
-            family_of("fv-lab-rtx6000-abcdef1-10241205"),
-            Some("rtx6000")
+            parse_pod_name(&n),
+            Some(PodName {
+                tier: "sol-h3x",
+                sha: "abcdef1",
+                stamp: "1024120509",
+                suffix: "beef"
+            })
         );
-        assert_eq!(
-            family_of("fv-lab-sol-h3x-abcdef1-10241205"),
-            Some("sol-h3x")
-        );
-        assert_eq!(family_of("fv-rtx6000-x"), None);
+        // runpod-http.sh's names (FV_POD_PREFIX=fv-lab) and others never parse.
+        for other in [
+            "fv-lab-rtx6000-abcdef1-10241205",
+            "fv-rtx6000-abcdef1-1024120509-beef",
+            "fv-lab-rtx6000-ABCDEF1-1024120509-beef",
+            "fv-lab-rtx6000-abcdef1-1024120509-xyz1",
+            "fv-lab--abcdef1-1024120509-beef",
+        ] {
+            assert_eq!(parse_pod_name(other), None, "{other}");
+        }
+        assert!(random_suffix().is_ok());
     }
 
-    #[test]
-    fn reap_takes_only_old_fv_lab_pods() {
-        let p = |name: &str, created: Option<f64>, state| PodListing {
-            id: InstanceId::new(name),
+    fn listing(id: &str, name: &str, created: Option<f64>, state: InstanceState) -> PodListing {
+        PodListing {
+            id: InstanceId::new(id),
             name: name.into(),
             state,
             created_at: created,
             usd_per_hr: None,
-        };
-        let now = 100_000.0;
+        }
+    }
+
+    #[test]
+    fn a_live_pod_with_the_name_blocks_a_create() {
         let pods = vec![
-            p(
-                "fv-lab-rtx6000-a-1",
-                Some(now - 14_400.0 - 601.0),
-                InstanceState::Running,
-            ),
-            p(
-                "fv-lab-rtx6000-b-1",
+            listing("a", "fv-lab-x", Some(0.0), InstanceState::Running),
+            listing("b", "fv-lab-y", Some(0.0), InstanceState::Terminated),
+        ];
+        assert!(name_taken(&pods, "fv-lab-x"));
+        assert!(!name_taken(&pods, "fv-lab-y"));
+        assert!(!name_taken(&pods, "fv-lab-z"));
+    }
+
+    fn record(id: &str, cap_s: u64, created: Option<f64>) -> PodRecord {
+        PodRecord {
+            id: id.into(),
+            name: format!("fv-lab-rtx6000-{id}"),
+            family: "rtx6000".into(),
+            tag: "t".into(),
+            sha: "abcdef1".into(),
+            image: "i".into(),
+            url: "u".into(),
+            gpu: None,
+            usd_per_hr: None,
+            created_at: created,
+            cap_s,
+        }
+    }
+
+    #[test]
+    fn reap_by_default_takes_only_recorded_pods_past_their_cap() {
+        let now = 100_000.0;
+        let old = Some(now - 14_400.0 - 601.0);
+        let n = |i: u16| pod_name("rtx6000", &format!("abcdef1-1024120509-{i:04x}"));
+        let pods = vec![
+            listing("mine-old", &n(1), old, InstanceState::Running),
+            listing(
+                "mine-young",
+                &n(2),
                 Some(now - 14_400.0),
                 InstanceState::Running,
             ),
-            p("fv-lab-rtx6000-c-1", None, InstanceState::Running),
-            p("fv-lab-rtx6000-d-1", Some(0.0), InstanceState::Terminated),
-            p("fv-serve-x", Some(0.0), InstanceState::Running),
+            listing("theirs-old", &n(3), old, InstanceState::Running),
+            listing("mine-no-time", &n(4), None, InstanceState::Running),
+            listing("mine-gone", &n(5), old, InstanceState::Terminated),
         ];
-        let r: Vec<&str> = reap_candidates(&pods, now, |_| 14_400)
+        let records = vec![
+            record("mine-old", 14_400, None),
+            record("mine-young", 14_400, None),
+            record("mine-no-time", 14_400, old),
+            record("mine-gone", 14_400, None),
+        ];
+        let r: Vec<&str> = reap_recorded(&pods, now, &records)
             .iter()
-            .map(|p| p.name.as_str())
+            .map(|p| p.id.as_str())
             .collect();
-        assert_eq!(r, ["fv-lab-rtx6000-a-1"]);
+        // Another session's pod is never taken; the record's own creation time
+        // stands in for a missing createdAt.
+        assert_eq!(r, ["mine-old", "mine-no-time"]);
+    }
+
+    #[test]
+    fn reap_account_needs_the_full_pattern_of_a_known_tier() {
+        let now = 100_000.0;
+        let old = Some(now - 20_000.0);
+        let pods = vec![
+            listing(
+                "a",
+                "fv-lab-rtx6000-abcdef1-1024120509-0001",
+                old,
+                InstanceState::Running,
+            ),
+            // runpod-http.sh with FV_POD_PREFIX=fv-lab: it may carry a cap over 4 h.
+            listing(
+                "b",
+                "fv-lab-rtx6000-abcdef1-10241205",
+                old,
+                InstanceState::Running,
+            ),
+            listing(
+                "c",
+                "fv-lab-unknown-abcdef1-1024120509-0001",
+                old,
+                InstanceState::Running,
+            ),
+            listing("d", "fv-serve-x", old, InstanceState::Running),
+            listing(
+                "e",
+                "fv-lab-rtx6000-abcdef1-1024120509-0002",
+                None,
+                InstanceState::Running,
+            ),
+            listing(
+                "f",
+                "fv-lab-rtx6000-abcdef1-1024120509-0003",
+                Some(now - 100.0),
+                InstanceState::Running,
+            ),
+        ];
+        let r: Vec<&str> = reap_account(&pods, now, &[("rtx6000", 14_400)])
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert_eq!(r, ["a"]);
+    }
+
+    #[test]
+    fn a_run_is_good_only_with_done_and_matrix_exit_zero() {
+        let d = std::env::temp_dir().join(format!("fv-lab-judge-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let w = |f: &str, t: &str| std::fs::write(d.join(f), t).unwrap();
+        assert_eq!(judge_run(&d, "t1").len(), 2, "nothing fetched");
+        w("DONE", "done t1\n");
+        assert!(judge_run(&d, "t1")[0].contains("no matrix.out"));
+        w("matrix.out", "log\n");
+        assert!(judge_run(&d, "t1")[0].contains("no matrix_exit"));
+        w("matrix.out", "log\nmatrix_exit=2\n");
+        assert!(judge_run(&d, "t1")[0].contains("abnormally"));
+        w("matrix.out", "log\nmatrix_exit=0\n");
+        assert!(judge_run(&d, "t1").is_empty());
+        w("DONE", "done other\n");
+        assert!(judge_run(&d, "t1")[0].contains("not `done t1`"));
+        w("DONE", "done t1\n");
+        w("box.txt", "x\ndriver_too_old=570\n");
+        assert!(judge_run(&d, "t1")[0].contains("driver too old"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    struct Files(std::collections::BTreeMap<String, String>);
+
+    impl Http for Files {
+        fn send(
+            &self,
+            req: &Request,
+        ) -> Result<fastvideo_deploy::boot::sys::Response, fastvideo_deploy::boot::sys::SysError>
+        {
+            Ok(match self.0.get(&req.url) {
+                Some(b) => fastvideo_deploy::boot::sys::Response {
+                    status: 200,
+                    body: b.clone().into_bytes(),
+                },
+                None => fastvideo_deploy::boot::sys::Response {
+                    status: 404,
+                    body: Vec::new(),
+                },
+            })
+        }
+        fn download(
+            &self,
+            url: &str,
+            _: &Path,
+            _: Duration,
+        ) -> Result<u64, fastvideo_deploy::boot::sys::SysError> {
+            Err(fastvideo_deploy::boot::sys::SysError::Http {
+                url: url.into(),
+                why: "no".into(),
+            })
+        }
+    }
+
+    struct Still;
+    impl Clock for Still {
+        fn now(&self) -> f64 {
+            0.0
+        }
+        fn sleep(&self, _: Duration) {}
+    }
+    struct Quiet;
+    impl LogSink for Quiet {
+        fn line(&self, _: &str) {}
+    }
+
+    #[test]
+    fn fetch_takes_done_summaries_and_the_frames_digest_but_not_frames() {
+        let run = "https://p/rtx6000/t1";
+        let files: std::collections::BTreeMap<String, String> = [
+            (format!("{run}/DONE"), "done t1\n"),
+            (format!("{run}/matrix.out"), "matrix_exit=0\n"),
+            (format!("{run}/"), "<a href=\"a/\">a/</a><a href=\"live.log\">l</a>"),
+            (
+                format!("{run}/a/"),
+                "<a href=\"summary.json\">s</a><a href=\"frames.sha256.json\">f</a><a href=\"benchmark.json\">b</a><a href=\"frames/\">d</a>",
+            ),
+            (format!("{run}/a/summary.json"), "{\"exit\":0}"),
+            (format!("{run}/a/frames.sha256.json"), "{\"arm\":\"a\"}"),
+            (format!("{run}/a/benchmark.json"), "{}"),
+            (format!("{run}/a/frames/frame-000.png"), "png"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k, v.to_owned()))
+        .collect();
+        let dest = std::env::temp_dir().join(format!("fv-lab-fetch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dest);
+        let cells = fetch_run(
+            &Files(files),
+            "https://p",
+            "rtx6000",
+            "t1",
+            &dest,
+            &Still,
+            &Quiet,
+        )
+        .unwrap();
+        assert_eq!(cells, ["a"]);
+        for f in [
+            "DONE",
+            "matrix.out",
+            "a/summary.json",
+            "a/frames.sha256.json",
+            "a/benchmark.json",
+        ] {
+            assert!(dest.join(f).is_file(), "{f}");
+        }
+        assert!(!dest.join("a/frames").exists());
+        assert!(judge_run(&dest, "t1").is_empty());
+        let _ = std::fs::remove_dir_all(&dest);
     }
 
     #[test]

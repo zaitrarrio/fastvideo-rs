@@ -10,7 +10,9 @@
 //!                 one pod of the tier on fv-deploy's guards: price cap, $8 floor, EU
 //!                 volume, backstop at the tier's wall cap, ready within 600 s (3 cycles);
 //!                 without --yes it prints the plan; --wait also waits, fetches and deletes
-//! fv-lab pod status <id> | fetch <id> [--wait] [--down] | down <id> | reap [--yes]
+//! fv-lab pod status <id> | fetch <id> [--wait] [--down] | down <id> | reap [--yes] [--account]
+//!                 reap: the pods recorded here past their cap; --account: every
+//!                 fv-lab-<tier>-<sha7>-<MMDDHHMMSS>-<hex4> pod past its tier's cap
 //! fv-lab backstop --kind K --id ID --deadline T --armed-file F   (started by `pod up`)
 //! ```
 //!
@@ -40,16 +42,24 @@ use fastvideo_deploy::provider::{
 
 use fastvideo_lab::plan::{Lab, Paths, Tier};
 use fastvideo_lab::pod::{
-    self, family_of, fetch_run, launch, reap_candidates, run_dir, run_tag, wait_done, Done, LabPod,
-    PodRecord, StartOptions,
+    fetch_run, judge_run, launch, name_taken, random_suffix, reap_account, reap_recorded, run_dir,
+    run_tag, wait_done, Done, LabPod, PodRecord, StartOptions,
 };
 use fastvideo_lab::run::{dry_run_lines, RunConfig, RunError, Runner};
 use fastvideo_lab::schema;
 
+/// `-V` / `--version`: the tools release this binary was built as
+/// (`FV_RELEASE_VERSION` at build time, docs/dev/tools-releases.md; the
+/// release gate checks it), else the workspace version.
+const VERSION: &str = match option_env!("FV_RELEASE_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 #[derive(Parser)]
 #[command(
     name = "fv-lab",
-    version,
+    version = VERSION,
     about = "The lab's validation driver: run a tier's cells on a pod, and the pod itself (docs/dev/fv-lab.md)"
 )]
 struct Cli {
@@ -138,11 +148,16 @@ enum PodCmd {
     },
     /// Delete a pod.
     Down(IdArgs),
-    /// Delete fv-lab-* pods older than their tier's wall cap (+10 min).
+    /// Delete the pods `pod up` recorded on this machine that are older than
+    /// their wall cap (+10 min).
     Reap {
         /// Delete (without it, only list).
         #[arg(long)]
         yes: bool,
+        /// Account-wide instead: every pod named fv-lab-<known tier>-<sha7>-<MMDDHHMMSS>-<4 hex>
+        /// past its tier's cap, whoever created it.
+        #[arg(long)]
+        account: bool,
         #[arg(long)]
         root: Option<PathBuf>,
         #[arg(long)]
@@ -173,7 +188,7 @@ struct UpArgs {
     /// LPIPS in the compares (FV_LPIPS=1).
     #[arg(long)]
     lpips: bool,
-    /// The run tag (default <sha>-<MMDDHHMM>).
+    /// The run tag (default <sha>-<MMDDHHMMSS>-<4 random hex>).
     #[arg(long)]
     tag: Option<String>,
     #[arg(long)]
@@ -282,10 +297,12 @@ fn cmd_run(a: &RunArgs) -> Result<ExitCode, String> {
         }
         return Ok(ExitCode::SUCCESS);
     }
-    if let Some(p) = env_nonempty("FV_PROMPTS") {
-        eprintln!(
-            "[fv-lab] FV_PROMPTS={p} is ignored: a cell's prompts are its workload (lab/cells)"
-        );
+    for k in ["FV_PROMPTS", "FV_PROMPT", "FV_SEED"] {
+        if let Some(v) = env_nonempty(k) {
+            eprintln!(
+                "[fv-lab] {k}={v} is ignored: a cell's prompts and seeds are its workload (lab/cells)"
+            );
+        }
     }
     let mut runner = Runner::new(cfg);
     match runner.run(&steps) {
@@ -388,7 +405,11 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     let clock = RealClock;
     let tag = match &u.tag {
         Some(t) => t.clone(),
-        None => run_tag(&u.sha, clock.now()),
+        None => run_tag(
+            &u.sha,
+            clock.now(),
+            random_suffix().map_err(|e| e.to_string())?,
+        ),
     };
     let mut so = StartOptions::for_tier(t, &tag);
     so.cells = u.cells.iter().flat_map(|c| split_list(c)).collect();
@@ -421,6 +442,17 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     let http = ReqwestHttp::new().map_err(|e| e.to_string())?;
     let log = StderrLog;
     let api = RunpodApi::from_env(&http, &clock, &env).map_err(|e| e.to_string())?;
+    // Never two live pods with one name: fv-deploy's exit sweep deletes by
+    // exact name, so a second run would delete the first run's pod.
+    let live = Pod::new(RunpodApi::from_env(&http, &clock, &env).map_err(|e| e.to_string())?)
+        .list()
+        .map_err(|e| e.to_string())?;
+    if name_taken(&live, &l.name) {
+        return Err(format!(
+            "a live pod is already named {}: not creating another (pick another --tag)",
+            l.name
+        ));
+    }
     let state = state_dir(u.state_dir.as_ref(), &root);
     std::fs::create_dir_all(&state).map_err(|e| format!("{}: {e}", state.display()))?;
     let tag_image = l.image.clone();
@@ -497,7 +529,7 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     if !u.wait {
         return Ok(true);
     }
-    let ok = finish(
+    let result = finish(
         &provider,
         &http,
         &rec,
@@ -506,14 +538,25 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
         &clock,
         &log,
         &interrupted,
-    )?;
-    if let Err(e) = d.destroy_retry(&inst.id, "done") {
-        return Err(format!(
+    );
+    // The pod goes whatever the wait or the fetch did.
+    let deleted = d.destroy_retry(&inst.id, "done").map_err(|e| {
+        format!(
             "could not delete {}: {e} (the backstop deletes it at the cap)",
             inst.id
-        ));
+        )
+    });
+    after_delete(result, deleted)
+}
+
+/// A run's result once its pod's delete was attempted: the delete's error
+/// wins only when the run itself had none (both are reported).
+fn after_delete(result: Result<bool, String>, deleted: Result<(), String>) -> Result<bool, String> {
+    match (result, deleted) {
+        (r, Ok(())) => r,
+        (Ok(_), Err(d)) => Err(d),
+        (Err(r), Err(d)) => Err(format!("{r}; and {d}")),
     }
-    Ok(ok)
 }
 
 /// Wait (optionally), fetch, and judge the run as `runpod-http.sh run` does.
@@ -555,19 +598,9 @@ fn finish(
     let dest = run_dir(root, &rec.family, &rec.tag);
     fetch_run(http, &rec.url, &rec.family, &rec.tag, &dest, clock, log)
         .map_err(|e| e.to_string())?;
-    let read = |f: &str| std::fs::read_to_string(dest.join(f)).unwrap_or_default();
-    if let Some(l) = read("box.txt")
-        .lines()
-        .find(|l| l.starts_with("driver_too_old"))
-    {
-        log.line(&format!("[fv-lab] host driver too old ({l}); rerun"));
-        ok = false;
-    }
-    if let Some(l) = read("matrix.out")
-        .lines()
-        .find(|l| l.starts_with("matrix_exit=") && l != &"matrix_exit=0")
-    {
-        log.line(&format!("[fv-lab] the runner exited abnormally: {l}"));
+    // A success needs the fetched DONE and `matrix_exit=0` (pod::judge_run).
+    for problem in judge_run(&dest, &rec.tag) {
+        log.line(&format!("[fv-lab] {problem}"));
         ok = false;
     }
     Ok(ok)
@@ -657,7 +690,7 @@ fn cmd_pod(c: &PodCmd) -> Result<bool, String> {
         PodCmd::Fetch { id, wait, down } => with_pod(id, |p, http, rec, root, state| {
             let flag = interrupt_flag();
             let interrupted = || flag.load(Ordering::SeqCst);
-            let ok = finish(
+            let result = finish(
                 p,
                 http,
                 &rec,
@@ -666,11 +699,15 @@ fn cmd_pod(c: &PodCmd) -> Result<bool, String> {
                 &RealClock,
                 &StderrLog,
                 &interrupted,
-            )?;
-            if *down {
-                deployer_down(p, state, &InstanceId::new(rec.id.clone()))?;
+            );
+            if !*down {
+                return result;
             }
-            Ok(ok)
+            // --down deletes whatever the wait or the fetch did.
+            after_delete(
+                result,
+                deployer_down(p, state, &InstanceId::new(rec.id.clone())),
+            )
         }),
         PodCmd::Down(id) => with_pod(id, |p, _, rec, _, state| {
             deployer_down(p, state, &InstanceId::new(rec.id.clone()))?;
@@ -679,6 +716,7 @@ fn cmd_pod(c: &PodCmd) -> Result<bool, String> {
         }),
         PodCmd::Reap {
             yes,
+            account,
             root,
             state_dir: sd,
         } => {
@@ -690,22 +728,19 @@ fn cmd_pod(c: &PodCmd) -> Result<bool, String> {
             let api = RunpodApi::from_env(&http, &RealClock, &env).map_err(|e| e.to_string())?;
             let pod = Pod::new(api);
             let pods = pod.list().map_err(|e| e.to_string())?;
-            let cap_of = |name: &str| {
-                family_of(name)
-                    .and_then(|f| lab.tier(f))
-                    .map_or(pod::MAX_REAP_CAP_S, |t| t.wall_cap_s)
-            };
             let now = RealClock.now();
-            let old = reap_candidates(&pods, now, cap_of);
-            for p in pods
-                .iter()
-                .filter(|p| p.name.starts_with(pod::POD_PREFIX) && p.created_at.is_none())
-            {
-                eprintln!(
-                    "[fv-lab] {} ({}) has no readable creation time; not reaped",
-                    p.id, p.name
-                );
-            }
+            let old = if *account {
+                let caps: Vec<(&str, u64)> = lab
+                    .tiers
+                    .tiers
+                    .iter()
+                    .map(|t| (t.name.as_str(), t.wall_cap_s))
+                    .collect();
+                reap_account(&pods, now, &caps)
+            } else {
+                let records = read_records(&state)?;
+                reap_recorded(&pods, now, &records)
+            };
             let mut ok = true;
             for p in &old {
                 let age = p.created_at.map_or(0.0, |t| now - t);
@@ -725,11 +760,35 @@ fn cmd_pod(c: &PodCmd) -> Result<bool, String> {
                 }
             }
             if old.is_empty() {
-                println!("nothing to reap");
+                println!(
+                    "nothing to reap ({})",
+                    if *account {
+                        "no fv-lab-<tier>-<sha7>-<stamp>-<suffix> pod past its tier's cap"
+                    } else {
+                        "no pod recorded here is past its cap; --account for the account-wide sweep"
+                    }
+                );
             }
             Ok(ok)
         }
     }
+}
+
+/// Every pod record of this machine (`<state>/pods/*.json`).
+fn read_records(state: &Path) -> Result<Vec<PodRecord>, String> {
+    let dir = state.join("pods");
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.extension().is_some_and(|x| x == "json") {
+            let t = std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+            out.push(serde_json::from_str(&t).map_err(|e| format!("{}: {e}", p.display()))?);
+        }
+    }
+    Ok(out)
 }
 
 fn cmd_backstop(
@@ -825,5 +884,25 @@ fn main() -> ExitCode {
             eprintln!("[fv-lab] FAILED: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::after_delete;
+
+    #[test]
+    fn the_delete_is_reported_with_the_runs_own_result() {
+        assert_eq!(after_delete(Ok(true), Ok(())), Ok(true));
+        assert_eq!(after_delete(Ok(false), Ok(())), Ok(false));
+        assert_eq!(
+            after_delete(Err("fetch".into()), Ok(())),
+            Err("fetch".into())
+        );
+        assert_eq!(after_delete(Ok(true), Err("del".into())), Err("del".into()));
+        assert_eq!(
+            after_delete(Err("fetch".into()), Err("del".into())),
+            Err("fetch; and del".into())
+        );
     }
 }
