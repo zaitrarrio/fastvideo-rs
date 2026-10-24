@@ -311,11 +311,22 @@ impl H3Techniques {
         contract: &H3InferenceContract,
         ref2va: bool,
     ) -> Result<Self, String> {
+        Self::from_settings(recipe, contract, ref2va, &crate::techniques::settings::Live)
+    }
+
+    /// [`Self::from_process`] with the legacy flags from `settings` (the
+    /// load's [`crate::techniques::settings::Snapshot`]): the env var, else a
+    /// profile's raw `[env]` entry of the same name; the active profile's
+    /// techniques.
+    pub fn from_settings(
+        recipe: Option<&str>,
+        contract: &H3InferenceContract,
+        ref2va: bool,
+        settings: &dyn crate::techniques::settings::Source,
+    ) -> Result<Self, String> {
         let active = crate::techniques::settings::active();
-        // The legacy flags through the settings table: the env var, else a
-        // profile's raw `[env]` entry of the same name.
         Self::resolve(recipe, contract, ref2va, active.profile.as_ref(), &|k| {
-            crate::techniques::settings::var(k)
+            settings.var(k)
         })
     }
 
@@ -518,6 +529,80 @@ mod tests {
 
     fn profile(text: &str) -> Profile {
         Profile::parse(text).unwrap()
+    }
+
+    /// Plan B3: the load's snapshot resolves the same techniques as the
+    /// readers it replaced (`env > profile table > default` through
+    /// `settings::var`), for every recipe, with and without a profile, over
+    /// env and profile arms of each setting `resolve` reads; and an empty
+    /// snapshot is the legacy no-env resolution.
+    #[test]
+    fn a_snapshot_resolves_what_the_live_readers_resolved() {
+        use crate::techniques::settings::{var_in, Settings, Snapshot, Source};
+        use std::ffi::OsString;
+        let arms: &[(&str, &str)] = &[
+            ("FASTVIDEO_H3_SOL_ATTN", "rtx"),
+            ("FASTVIDEO_H3_SOL_ATTN", "off"),
+            ("FASTVIDEO_H3_SOL_CACHE", "teacache"),
+            ("FASTVIDEO_VSA_SPARSITY", "0.9"),
+            ("FASTVIDEO_VSA_GROUP", "16"),
+            ("FASTVIDEO_VSA_GROUP", "junk"),
+            ("FASTVIDEO_ATTN_FP8", "dense"),
+        ];
+        let p = profile(
+            "[id]\nname='p'\n[pipeline]\nmodel='h3'\n\
+             [techniques.sol_attn]\npreset='rtx'\ndense_steps=3\n[techniques.teacache]\nthreshold=0.2\n",
+        );
+        let mut checked = 0;
+        for recipe in RECIPES {
+            let r = (recipe != "auto").then_some(recipe);
+            let c = contract(recipe);
+            for prof in [None, Some(&p)] {
+                // No arm, then each arm from the environment, then from the table.
+                type Pairs<'a> = Vec<(&'a str, &'a str)>;
+                let mut cases: Vec<(Pairs, Pairs)> = vec![(vec![], vec![])];
+                for &arm in arms {
+                    cases.push((vec![arm], vec![]));
+                    cases.push((vec![], vec![arm]));
+                }
+                for (env, table) in cases {
+                    let env: BTreeMap<String, String> = env
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect();
+                    let mut t = Settings::default();
+                    for (k, v) in &table {
+                        t.set(k, v, "test").unwrap();
+                    }
+                    let live = |k: &str| var_in(&t, &|n: &str| env.get(n).cloned(), k);
+                    let snap = Snapshot::from_parts(&|k| env.get(k).map(OsString::from), &t);
+                    let before = H3Techniques::resolve(r, &c, false, prof, &live);
+                    let after = H3Techniques::resolve(r, &c, false, prof, &|k| snap.var(k));
+                    assert_eq!(
+                        format!("{before:?}"),
+                        format!("{after:?}"),
+                        "{recipe} profile={} env={env:?} table={table:?}",
+                        prof.is_some()
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, RECIPES.len() * 2 * (1 + 2 * arms.len()));
+        let empty = Snapshot::from_parts(&|_| None, &Settings::default());
+        let none = |_: &str| None;
+        for recipe in RECIPES {
+            let r = (recipe != "auto").then_some(recipe);
+            let c = contract(recipe);
+            assert_eq!(
+                format!("{:?}", H3Techniques::resolve(r, &c, false, None, &none)),
+                format!(
+                    "{:?}",
+                    H3Techniques::resolve(r, &c, false, None, &|k| empty.var(k))
+                ),
+                "{recipe}"
+            );
+        }
     }
 
     #[test]

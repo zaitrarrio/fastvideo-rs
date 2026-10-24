@@ -41,6 +41,17 @@
 //!   `[env]` entry for one of them has no effect, as before. Moving a name to
 //!   the layered reader is a behaviour change (a profile could then set it)
 //!   and gets its own byte-identity cell.
+//!
+//! # The load snapshot
+//!
+//! The H3, LTX-2 and Wan loaders capture a [`Snapshot`] of both readers when
+//! they start and take it as a parameter (`load_with_settings`); their
+//! load-time helpers read a [`Source`] (the snapshot, or [`Live`] outside a
+//! load). While a loader runs, [`Snapshot::scope`] makes this thread's four
+//! readers return the snapshot's values, so the shared code a load calls
+//! reads them too. Values, parse and precedence are unchanged; a read inside
+//! a load sees the value as it was when the load started
+//! (`docs/adr/0010-settings-layer.md`, "The snapshot passed to `load`").
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -51,11 +62,13 @@ use super::profile::Profile;
 
 mod doc;
 pub mod parse;
+pub mod snapshot;
 pub mod table;
 #[cfg(test)]
 mod workspace_check;
 
 pub use doc::{render_markdown, DOC_BEGIN, DOC_END};
+pub use snapshot::{Captured, Live, LoadScope, Snapshot, Source};
 pub use table::{lookup, DefaultValue, Family, Parse, Reader, Setting, Timing, SETTINGS};
 
 /// Env var naming a technique profile to load when no binary installed one.
@@ -210,7 +223,12 @@ fn table_get(name: &str) -> Option<String> {
 
 /// A `FASTVIDEO_*` setting: the env var, else the active profile's value
 /// (inside [`scope_model`]: the scoped model's).
+///
+/// Inside a [`Snapshot::scope`] (a model load), the snapshot's value.
 pub fn var(name: &str) -> Option<String> {
+    if let Some(v) = snapshot::scoped(name, Captured::var) {
+        return v;
+    }
     match std::env::var(name) {
         Ok(v) => Some(v),
         Err(_) => table_get(name),
@@ -218,19 +236,44 @@ pub fn var(name: &str) -> Option<String> {
 }
 
 /// Whether the setting is present (env or profile), as `var_os().is_some()`.
+/// Inside a [`Snapshot::scope`], the snapshot's.
 pub fn is_set(name: &str) -> bool {
+    if let Some(v) = snapshot::scoped(name, Captured::is_set) {
+        return v;
+    }
     std::env::var_os(name).is_some() || table_get(name).is_some()
 }
 
 /// A `FASTVIDEO_*` setting read from the process environment only
-/// (`Reader::Env` rows): exactly `std::env::var(name)`, read when called.
+/// (`Reader::Env` rows): exactly `std::env::var(name)`, read when called;
+/// inside a [`Snapshot::scope`] (a model load), `std::env::var(name)` as the
+/// snapshot captured it at load start.
 pub fn env_var(name: &str) -> Result<String, std::env::VarError> {
+    if let Some(v) = snapshot::scoped(name, Captured::env_var) {
+        return v;
+    }
     std::env::var(name)
 }
 
-/// [`env_var`] as an `OsString`: exactly `std::env::var_os(name)`.
+/// [`env_var`] as an `OsString`: exactly `std::env::var_os(name)` (inside a
+/// [`Snapshot::scope`], as captured).
 pub fn env_var_os(name: &str) -> Option<OsString> {
+    if let Some(v) = snapshot::scoped(name, Captured::env_var_os) {
+        return v;
+    }
     std::env::var_os(name)
+}
+
+/// Set a `FASTVIDEO_*` variable in the process environment
+/// (`std::env::set_var`) and, inside a [`Snapshot::scope`], in the scoped
+/// snapshot too, so the rest of a running load reads it as it would have
+/// read the environment. The one setting a load writes while it runs goes
+/// through here (`rt::affine::apply_env`, the MLX H3 tree's
+/// `FASTVIDEO_H3_AFFINE`); everything else sets the environment before a
+/// load starts.
+pub fn set_env(name: &str, value: &str) {
+    std::env::set_var(name, value);
+    snapshot::set_scoped_env(name, value);
 }
 
 /// [`var`] against an explicit table instead of the global one (tests,

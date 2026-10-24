@@ -154,6 +154,46 @@ mod tests {
         std::env::remove_var(key);
     }
 
+    /// Plan B3 (`docs/adr/0010-settings-layer.md`, "Read timing"): a getter
+    /// cached once per process keeps the value of its first read. When that
+    /// read happens inside a load, it is the load's snapshot value (what the
+    /// environment said when the load started), and the cache then keeps it
+    /// for every later load and generate: the snapshot does not remove the
+    /// order dependence of the cached getters (`FASTVIDEO_BF16`,
+    /// `FASTVIDEO_TF32`, ... must still be set before their first read, as
+    /// `fv-gpucheck --mode` does at process start). An uncached read inside
+    /// a load sees the snapshot; outside one, the environment now.
+    #[test]
+    fn a_cache_filled_inside_a_load_keeps_the_snapshot_value() {
+        use fastvideo_models::settings::{Settings, Snapshot};
+        // A reserved row: nothing in the workspace reads it.
+        const NAME: &str = "FASTVIDEO_NVFP4_COSMOS_STEPS";
+        static CACHE: CachedBool = CachedBool::new();
+        let mut on = Settings::default();
+        on.set(NAME, "1", "test").unwrap();
+        let load = Snapshot::from_parts(&|_| None, &on);
+        {
+            let _scope = load.scope();
+            assert!(CACHE.get_or_init(|| bool_flag(NAME, false)));
+            assert!(bool_flag(NAME, false), "an uncached read in the load");
+        }
+        // After the load: the snapshot is gone, the cache is not.
+        assert!(
+            !bool_flag(NAME, false),
+            "an uncached read sees the environment"
+        );
+        assert!(
+            CACHE.get_or_init(|| bool_flag(NAME, false)),
+            "the cache kept it"
+        );
+        // A second load with another snapshot does not refill it.
+        let off = Snapshot::from_parts(&|_| None, &Settings::default());
+        let _scope = off.scope();
+        assert!(CACHE.get_or_init(|| bool_flag(NAME, false)));
+        CACHE.reset();
+        assert!(!CACHE.get_or_init(|| bool_flag(NAME, false)));
+    }
+
     #[test]
     fn bool_flag_default_off() {
         let key = "FASTVIDEO_TEST_FLAG_OFF";

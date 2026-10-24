@@ -32,6 +32,7 @@ use fastvideo_models::ltx2::config::{Ltx2Config, Ltx2ModelVersion, Ltx2TextNorm}
 use fastvideo_models::ltx2::guidance::{self, GuiderParams};
 use fastvideo_models::ltx2::tiling::TileSizeConfig;
 use fastvideo_models::ltx2::{AncestralOpts, Ltx2Schedule};
+use fastvideo_models::settings::{Snapshot, Source};
 use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
@@ -2718,9 +2719,10 @@ pub struct PipelineOptions {
 }
 
 /// [`PipelineOptions::ic_lora`], else `FASTVIDEO_LTX2_IC_LORA`.
-fn resolve_ic_lora(explicit: Option<&Path>) -> Option<PathBuf> {
+fn resolve_ic_lora(explicit: Option<&Path>, settings: &dyn Source) -> Option<PathBuf> {
     explicit.map(Path::to_path_buf).or_else(|| {
-        fastvideo_models::settings::env_var("FASTVIDEO_LTX2_IC_LORA")
+        settings
+            .env_var("FASTVIDEO_LTX2_IC_LORA")
             .ok()
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
@@ -2728,10 +2730,11 @@ fn resolve_ic_lora(explicit: Option<&Path>) -> Option<PathBuf> {
 }
 
 /// [`PipelineOptions::tae`], else `FASTVIDEO_LTX2_TAE_WEIGHTS`.
-fn resolve_tae(explicit: Option<&Path>) -> Option<PathBuf> {
+fn resolve_tae(explicit: Option<&Path>, settings: &dyn Source) -> Option<PathBuf> {
     // `FASTVIDEO_LTX2_TAE_WEIGHTS`, or a profile's `[techniques.taehv] weights`.
     explicit.map(Path::to_path_buf).or_else(|| {
-        fastvideo_models::techniques::settings::var("FASTVIDEO_LTX2_TAE_WEIGHTS")
+        settings
+            .var("FASTVIDEO_LTX2_TAE_WEIGHTS")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
     })
@@ -2913,7 +2916,24 @@ pub struct Ltx2Pipeline {
 }
 
 impl Ltx2Pipeline {
+    /// The load's settings are captured when it starts
+    /// ([`Self::load_with_settings`]).
     pub fn load(paths: &Ltx2Paths, cfg: &Ltx2Config, options: &PipelineOptions) -> Result<Self> {
+        Self::load_with_settings(paths, cfg, options, &Snapshot::capture())
+    }
+
+    /// [`Self::load`] with its `FASTVIDEO_*` settings from `settings`, a
+    /// snapshot of the readers taken when the load starts
+    /// (`docs/adr/0010-settings-layer.md`): the reads below take it as a
+    /// parameter, and while the load runs this thread's readers serve it to
+    /// the code the load calls ([`Snapshot::scope`]).
+    pub fn load_with_settings(
+        paths: &Ltx2Paths,
+        cfg: &Ltx2Config,
+        options: &PipelineOptions,
+        settings: &Snapshot,
+    ) -> Result<Self> {
+        let _load_scope = settings.scope();
         crate::rt::tensor::default_bf16_activations();
         // FASTVIDEO_NVFP4 here is the video FFN only (sol-engine scope):
         // Gemma, the connectors and the other DiT linears stay dense.
@@ -2927,7 +2947,7 @@ impl Ltx2Pipeline {
         } else {
             None
         };
-        let ic_lora = match resolve_ic_lora(options.ic_lora.as_deref()) {
+        let ic_lora = match resolve_ic_lora(options.ic_lora.as_deref(), settings) {
             None => None,
             Some(path) => {
                 if lora.is_some() || cfg.version != Ltx2ModelVersion::V25 {
@@ -2963,7 +2983,7 @@ impl Ltx2Pipeline {
             for (k, v, source) in active.settings.iter() {
                 crate::rt::log::info(format_args!(
                     "ltx2 technique setting {k}={v} ({source}{})",
-                    if fastvideo_models::settings::env_var_os(k).is_some() {
+                    if settings.env_var_os(k).is_some() {
                         "; overridden by env"
                     } else {
                         ""
@@ -2977,24 +2997,22 @@ impl Ltx2Pipeline {
                 .any(|t| {
                     t.name() == "taehv" && t.active_somewhere(fastvideo_models::techniques::HORIZON)
                 });
-            if has_taehv && resolve_tae(options.tae.as_deref()).is_none() {
+            if has_taehv && resolve_tae(options.tae.as_deref(), settings).is_none() {
                 return Err(err(
                     "techniques.taehv: no weights (pass --ltx-tae-weights, set FASTVIDEO_LTX2_TAE_WEIGHTS, or give techniques.taehv.weights)",
                 ));
             }
         }
-        let offload = LtxOffload::from_env_or(options.offload).map_err(err)?;
+        let offload = LtxOffload::from_settings_or(settings, options.offload).map_err(err)?;
         let text_residency = resolve_text_for_offload(
             offload,
             options.text_residency,
-            fastvideo_models::settings::env_var("FASTVIDEO_LTX2_TEXT")
-                .ok()
-                .as_deref(),
+            settings.env_var("FASTVIDEO_LTX2_TEXT").ok().as_deref(),
         )?;
         let residency = {
             let policy = dit_policy_for_offload(
                 offload,
-                DitOffload::from_env_or(options.dit_offload).map_err(err)?,
+                DitOffload::from_settings_or(settings, options.dit_offload).map_err(err)?,
             )?;
             if offload.is_cpu() {
                 crate::rt::log::info(format_args!(
@@ -3058,7 +3076,7 @@ impl Ltx2Pipeline {
         };
         let has_upsampler =
             cfg.latent_upsampler.is_some() && upsampler_dir(&paths.weights).is_some();
-        let tae = match resolve_tae(options.tae.as_deref()) {
+        let tae = match resolve_tae(options.tae.as_deref(), settings) {
             Some(path) => {
                 use crate::rt::taehv::{TaeArch, TaeHv};
                 if cfg.transformer.in_channels != TaeArch::LtxWide.latent_channels() {
@@ -3096,7 +3114,8 @@ impl Ltx2Pipeline {
         } else {
             None
         };
-        let lora_base_host = match fastvideo_models::settings::env_var("FASTVIDEO_LTX2_LORA_BASE")
+        let lora_base_host = match settings
+            .env_var("FASTVIDEO_LTX2_LORA_BASE")
             .ok()
             .as_deref()
             .map(str::trim)
@@ -5744,5 +5763,82 @@ mod tests {
             ..paths
         };
         assert_eq!(slim.text_root(), Path::new("/slim"));
+    }
+}
+
+/// Plan B3: the LTX-2 load's settings from its snapshot resolve what the
+/// readers they replaced resolved from the same sources.
+#[cfg(test)]
+mod load_settings_tests {
+    use super::*;
+    use crate::h3::pipeline::load_settings_tests::cases;
+
+    #[test]
+    fn ltx2_load_settings_resolve_as_before() {
+        let arms: &[(&str, &[&str], bool)] = &[
+            (
+                "FASTVIDEO_LTX_OFFLOAD",
+                &["none", "cpu", "disk", "junk"],
+                true,
+            ),
+            (
+                "FASTVIDEO_DIT_OFFLOAD",
+                &["auto", "resident", "streamed", "junk"],
+                true,
+            ),
+            ("FASTVIDEO_LTX2_TEXT", &["streamed", "resident", ""], false),
+            (
+                "FASTVIDEO_LTX2_LORA_BASE",
+                &["host", "device", "", "junk"],
+                false,
+            ),
+            ("FASTVIDEO_LTX2_IC_LORA", &["", "/ic.safetensors"], false),
+            ("FASTVIDEO_LTX2_TAE_WEIGHTS", &["", "/taeltx"], true),
+        ];
+        for case in cases(arms) {
+            let s = case.snapshot();
+            let what = format!("env={:?} table={:?}", case.env, case.table);
+            // LtxOffload::from_env_or: layered.
+            for explicit in [None, Some(LtxOffload::Cpu)] {
+                let before = match explicit {
+                    Some(m) => Ok(m),
+                    None => match case.layered(LtxOffload::ENV) {
+                        Some(v) => {
+                            LtxOffload::parse(&v).map_err(|e| format!("{}: {e}", LtxOffload::ENV))
+                        }
+                        None => Ok(LtxOffload::None),
+                    },
+                };
+                assert_eq!(before, LtxOffload::from_settings_or(&s, explicit), "{what}");
+            }
+            let before = match case.layered(crate::rt::offload::ENV) {
+                Some(v) => {
+                    DitOffload::parse(&v).map_err(|e| format!("{}: {e}", crate::rt::offload::ENV))
+                }
+                None => Ok(DitOffload::Auto),
+            };
+            assert_eq!(before, DitOffload::from_settings_or(&s, None), "{what}");
+            // The env-only reads of the load body.
+            for name in ["FASTVIDEO_LTX2_TEXT", "FASTVIDEO_LTX2_LORA_BASE"] {
+                assert_eq!(case.env(name), s.env_var(name).ok(), "{what}");
+            }
+            // resolve_ic_lora: env only, empty = none; resolve_tae: layered.
+            let ic = case
+                .env("FASTVIDEO_LTX2_IC_LORA")
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from);
+            assert_eq!(ic, resolve_ic_lora(None, &s), "{what}");
+            let tae = case
+                .layered("FASTVIDEO_LTX2_TAE_WEIGHTS")
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from);
+            assert_eq!(tae, resolve_tae(None, &s), "{what}");
+            let explicit = Path::new("/explicit");
+            assert_eq!(
+                resolve_tae(Some(explicit), &s),
+                Some(explicit.to_path_buf()),
+                "{what}"
+            );
+        }
     }
 }

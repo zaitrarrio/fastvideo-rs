@@ -62,9 +62,11 @@ pub fn bits_from_env() -> Option<u8> {
 }
 
 /// Apply a manifest / CLI choice before the first Linear load. No-op when `bits` is `None`.
+/// Called inside the H3 load (`h3::mlx::open_map`): [`fastvideo_models::settings::set_env`]
+/// also updates the load's settings snapshot, so the linear loads after it see the value.
 pub fn apply_env(bits: Option<u8>) {
     if let Some(b) = bits {
-        std::env::set_var("FASTVIDEO_H3_AFFINE", b.to_string());
+        fastvideo_models::settings::set_env("FASTVIDEO_H3_AFFINE", &b.to_string());
     }
 }
 

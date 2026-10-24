@@ -17,9 +17,16 @@
 //!   frame N+1's record arrives).
 //!
 //! Flags: `-probesize 32 -analyzeduration 0 -flags low_delay -threads 1`
-//! (frame threading would add a frame per thread), `-fps_mode passthrough`
-//! (one picture out per decoded frame, no duplication). `-fflags nobuffer`
-//! breaks both demuxers and is not used.
+//! on the input (frame threading would add a frame per thread),
+//! `-fps_mode passthrough` (one picture out per decoded frame, no
+//! duplication) and `-threads 1` again on the output. The output's
+//! `rawvideo` encoder is frame-threaded too, with one thread per core by
+//! default: libavcodec's frame-thread encoder returns a picture only if its
+//! worker finished it before the next call, so on a loaded host pictures
+//! stay inside ffmpeg until more input pushes them out (a live stream falls
+//! behind by up to that many frames, and the first pictures wait for frames
+//! the client has not sent). `-fflags nobuffer` breaks both demuxers and is
+//! not used.
 //!
 //! **Warm processes.** Starting ffmpeg costs 50 ms to several seconds on a
 //! loaded host, as for the pipe encoders ([`crate::pipe`]), and the first
@@ -113,6 +120,9 @@ impl VideoDecoderConfig {
             "passthrough",
             "-pix_fmt",
             "rgb24",
+            // The encoder's own threads (see the module docs).
+            "-threads",
+            "1",
             "-f",
             "rawvideo",
             "pipe:1",
@@ -604,7 +614,15 @@ mod tests {
             a.contains("scale=64:36:force_original_aspect_ratio=decrease"),
             "{a}"
         );
-        assert!(a.ends_with("-pix_fmt rgb24 -f rawvideo pipe:1"), "{a}");
+        // One thread for the decoder (an input option) and for the rawvideo
+        // encoder (an output option): a frame-threaded stage holds pictures.
+        let (input, output) = a.split_once("-i pipe:0").expect("one input");
+        assert!(input.contains("-threads 1"), "{a}");
+        assert!(output.contains("-threads 1"), "{a}");
+        assert!(
+            a.ends_with("-pix_fmt rgb24 -threads 1 -f rawvideo pipe:1"),
+            "{a}"
+        );
         assert_eq!(c.frame_len(), 64 * 36 * 3);
         assert!(VideoDecoderConfig { width: 63, ..c }.validate().is_err());
     }

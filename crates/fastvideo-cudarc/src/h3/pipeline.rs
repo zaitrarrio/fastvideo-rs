@@ -79,6 +79,7 @@ use fastvideo_models::h3::turbo_lora::{
     parse_turbo_recipe, turbo_strength, TURBO_LORA_STRENGTH_ENV,
 };
 use fastvideo_models::plug::PlugRecipe;
+use fastvideo_models::settings::{Live, Snapshot, Source};
 use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
@@ -412,13 +413,14 @@ impl I2vEncoderChoice {
 /// [`H3_VDN_ENV`]); `None` for other recipes, which may not name one.
 pub fn vdn_checkpoint(
     options: &H3PipelineOptions,
+    settings: &dyn Source,
 ) -> Result<Option<fastvideo_models::h3::vdn::VdnCheckpoint>> {
     let recipe = options.recipe.as_deref();
     let is_vdn = recipe.is_some_and(fastvideo_models::h3::vdn::is_vdn_recipe);
     let dir = options
         .vdn
         .clone()
-        .or_else(|| fastvideo_models::settings::env_var_os(H3_VDN_ENV).map(PathBuf::from));
+        .or_else(|| settings.env_var_os(H3_VDN_ENV).map(PathBuf::from));
     match (is_vdn, dir) {
         (false, None) => Ok(None),
         (false, Some(d)) if options.vdn.is_none() => {
@@ -441,7 +443,8 @@ pub fn vdn_checkpoint(
                 ));
             }
             let shared = options.vdn_shared.clone().or_else(|| {
-                fastvideo_models::settings::env_var_os(H3_VDN_SHARED_ENV)
+                settings
+                    .env_var_os(H3_VDN_SHARED_ENV)
                     .filter(|s| !s.is_empty())
                     .map(PathBuf::from)
             });
@@ -855,8 +858,10 @@ fn dit_tree_identity(
     schedule: &H3JointSchedule,
     cfg: &H3TransformerConfig,
     with_gate: bool,
+    settings: &dyn Source,
 ) -> Result<Option<super::dit_tree::Identity>> {
-    if crate::rt::affine::bits_from_env().is_some() || fastvideo_models::nvfp4::from_env().is_some()
+    if crate::rt::affine::bits_from_env().is_some()
+        || fastvideo_models::nvfp4::from_settings(settings).is_some()
     {
         return Ok(None);
     }
@@ -917,7 +922,7 @@ fn dit_tree_identity(
         }
         None => (None, 1.0f32),
     };
-    let quant = crate::rt::quant::QuantMode::from_env().map_err(msg)?;
+    let quant = crate::rt::quant::QuantMode::from_settings(settings).map_err(msg)?;
     Ok(Some(super::dit_tree::Identity {
         recipe: name.unwrap_or("auto").to_owned(),
         quant: quant.as_str().into(),
@@ -954,6 +959,7 @@ pub fn dit_tree_identity_for(
         &schedule,
         &dit_config(root, options)?,
         dit_loads_vsa_gate(&contract, None),
+        &Live,
     )
 }
 
@@ -976,13 +982,12 @@ fn dit_config(root: &Path, options: &H3PipelineOptions) -> Result<H3TransformerC
     transformer_config(&root.join("transformer"))
 }
 
-fn resolve_taeh3(explicit: Option<&Path>) -> Option<PathBuf> {
+fn resolve_taeh3(explicit: Option<&Path>, settings: &dyn Source) -> Option<PathBuf> {
     if let Some(p) = explicit {
         return Some(p.to_path_buf());
     }
     // `FASTVIDEO_TAEH3_WEIGHTS`, or a profile's `[techniques.taeh3] weights`.
-    let env =
-        fastvideo_models::techniques::settings::var("FASTVIDEO_TAEH3_WEIGHTS").unwrap_or_default();
+    let env = settings.var("FASTVIDEO_TAEH3_WEIGHTS").unwrap_or_default();
     if env.is_empty() {
         None
     } else {
@@ -1236,6 +1241,7 @@ pub fn auto_text_encoder_plan(
 fn planned_dit_weights(
     nvfp4: bool,
     mlx: bool,
+    settings: &dyn Source,
 ) -> Result<fastvideo_models::h3::memory::H3DitWeights> {
     use crate::rt::quant::QuantMode;
     use fastvideo_models::h3::memory::H3DitWeights;
@@ -1245,7 +1251,7 @@ fn planned_dit_weights(
     if mlx {
         return Ok(H3DitWeights::Bf16);
     }
-    Ok(match QuantMode::from_env().map_err(msg)? {
+    Ok(match QuantMode::from_settings(settings).map_err(msg)? {
         QuantMode::Off => H3DitWeights::Bf16,
         QuantMode::W8A8 => H3DitWeights::W8a8,
         QuantMode::Mxfp8 => H3DitWeights::Mxfp8,
@@ -1297,7 +1303,23 @@ impl H3Pipeline {
 
     /// `root` is the FastH3 snapshot (`transformer/`, `vae/`, `audio_vae/`, and
     /// `tokenizer/` + `text_encoder/` unless `options.text_root` says otherwise).
+    /// The load's settings are captured when it starts
+    /// ([`Self::load_with_settings`]).
     pub fn load(root: &Path, options: H3PipelineOptions) -> Result<Self> {
+        Self::load_with_settings(root, options, &Snapshot::capture())
+    }
+
+    /// [`Self::load`] with its `FASTVIDEO_*` settings from `settings`, a
+    /// snapshot of the readers taken when the load starts
+    /// (`docs/adr/0010-settings-layer.md`): the reads below take it as a
+    /// parameter, and while the load runs this thread's readers serve it to
+    /// the code the load calls ([`Snapshot::scope`]).
+    pub fn load_with_settings(
+        root: &Path,
+        options: H3PipelineOptions,
+        settings: &Snapshot,
+    ) -> Result<Self> {
+        let _load_scope = settings.scope();
         crate::rt::tensor::default_bf16_activations();
         let mut options = options;
         // The profile this pipeline runs: the caller's own (fv-serve, one per
@@ -1328,7 +1350,7 @@ impl H3Pipeline {
             options.reference_image_resize = ReferenceImageResize::Match;
         }
         let contract = resolve_contract(root, options.recipe.as_deref())?;
-        let vdn_ckpt = vdn_checkpoint(&options)?;
+        let vdn_ckpt = vdn_checkpoint(&options, settings)?;
         // VDN-H3 defaults to bf16 linears (owner decision 2026-10-14; MXFP8
         // cost 9 dB of clip PSNR against the reference, docs/ports/vdn-h3.md
         // §5). `FASTVIDEO_H3_QUANT=mxfp8` still opts in. The guard covers this
@@ -1346,15 +1368,18 @@ impl H3Pipeline {
             options.dense = true;
         }
         let techniques = match &own {
-            None => {
-                H3Techniques::from_process(options.recipe.as_deref(), &contract, options.ref2va)
-            }
+            None => H3Techniques::from_settings(
+                options.recipe.as_deref(),
+                &contract,
+                options.ref2va,
+                settings,
+            ),
             Some(p) => H3Techniques::resolve(
                 options.recipe.as_deref(),
                 &contract,
                 options.ref2va,
                 p.as_ref(),
-                &|k| fastvideo_models::techniques::settings::var(k),
+                &|k| settings.var(k),
             ),
         }
         .map_err(msg)?;
@@ -1362,7 +1387,8 @@ impl H3Pipeline {
         if techniques.forces_dense() {
             options.dense = true;
         }
-        if techniques.taeh3.is_some() && resolve_taeh3(options.taeh3.as_deref()).is_none() {
+        if techniques.taeh3.is_some() && resolve_taeh3(options.taeh3.as_deref(), settings).is_none()
+        {
             return Err(msg(
                 "techniques.taeh3: no TAEH3 weights (pass --taeh3-weights, set FASTVIDEO_TAEH3_WEIGHTS, or give techniques.taeh3.weights)",
             ));
@@ -1383,7 +1409,7 @@ impl H3Pipeline {
             for (k, v, source) in active.settings.iter() {
                 crate::rt::log::info(format_args!(
                     "h3 technique setting {k}={v} ({source}{})",
-                    if fastvideo_models::settings::env_var_os(k).is_some() {
+                    if settings.env_var_os(k).is_some() {
                         "; overridden by env"
                     } else {
                         ""
@@ -1407,10 +1433,14 @@ impl H3Pipeline {
                 // As the decoder load below resolves its linears.
                 let vae_linears = vae_source.planned_linears(options.taeh3.as_deref())?;
                 let mlx_dit = !options.ref2va && super::mlx::find(root).is_some();
-                let dit = planned_dit_weights(nvfp4_dit_file(root, &options)?.is_some(), mlx_dit)?;
+                let dit = planned_dit_weights(
+                    nvfp4_dit_file(root, &options)?.is_some(),
+                    mlx_dit,
+                    settings,
+                )?;
                 let (inputs, decision) = auto_text_encoder_plan(
                     f,
-                    DitOffload::from_env_or(options.dit_offload).map_err(msg)?,
+                    DitOffload::from_settings_or(settings, options.dit_offload).map_err(msg)?,
                     dit,
                     // An MLX tree may not carry the gate; pricing it is the safe side.
                     dit_loads_vsa_gate(&contract, None),
@@ -1523,7 +1553,7 @@ impl H3Pipeline {
                 }
                 super::nvfp4::require_tensor_cores()?;
                 let t = Instant::now();
-                let opts = super::nvfp4::ModelOptOptions::from_env()?;
+                let opts = super::nvfp4::ModelOptOptions::from_settings(settings)?;
                 let nv =
                     super::nvfp4::Nvfp4Dit::open_modelopt(&root.join("transformer"), &cfg, opts)?;
                 crate::rt::log::info(format_args!(
@@ -1566,6 +1596,7 @@ impl H3Pipeline {
                     &schedule,
                     &cfg,
                     dit_loads_vsa_gate(&contract, None),
+                    settings,
                 )?;
                 match super::dit_tree::select(root, &root.join("transformer"), identity.as_ref())? {
                     Some((dir, _)) => Some(super::dit_tree::TreeReader::open(&dir)?),
@@ -1617,7 +1648,7 @@ impl H3Pipeline {
             }
         }
         let not_encoder = |k: &str| !k.starts_with("encoder.");
-        let mut vae_map = match resolve_taeh3(options.taeh3.as_deref()) {
+        let mut vae_map = match resolve_taeh3(options.taeh3.as_deref(), settings) {
             Some(_) => None,
             None => vae_source.open().ok(),
         };
@@ -1798,7 +1829,7 @@ impl H3Pipeline {
                     contract.vsa_sparsity,
                     contract.vsa_tile_size,
                     spec.scale,
-                    crate::rt::quant::QuantMode::from_env()
+                    crate::rt::quant::QuantMode::from_settings(settings)
                         .map(|m| m.as_str())
                         .unwrap_or("invalid FASTVIDEO_H3_QUANT"),
                     fastvideo_models::h3::sol::SPARK_DRAFT_WIDTH,
@@ -1911,7 +1942,8 @@ impl H3Pipeline {
                     .peak()
                 })
                 .map_err(msg)?;
-            let dit_policy = DitOffload::from_env_or(options.dit_offload).map_err(msg)?;
+            let dit_policy =
+                DitOffload::from_settings_or(settings, options.dit_offload).map_err(msg)?;
             let gib = |b: u64| b as f64 / f64::from(1u32 << 30);
             let (load, why) = match (options.i2v_encoder, lm) {
                 (I2vEncoderChoice::Stream, _) => (false, "configured".to_owned()),
@@ -2003,7 +2035,8 @@ impl H3Pipeline {
             }
         };
         let residency = {
-            let policy = DitOffload::from_env_or(options.dit_offload).map_err(msg)?;
+            let policy =
+                DitOffload::from_settings_or(settings, options.dit_offload).map_err(msg)?;
             // What the default request (768p, 5 s) needs with everything resident.
             let need = dit_placement_need(with_gate, vae_linears);
             let residency = policy.resolve(need, free);
@@ -3069,7 +3102,7 @@ fn load_video_decoder_from(
     taeh3: Option<&Path>,
     opened: Option<WeightMap>,
 ) -> Result<VideoDecoder> {
-    Ok(match resolve_taeh3(taeh3) {
+    Ok(match resolve_taeh3(taeh3, &Live) {
         Some(path) => {
             let tae = TaeHv::load_from_path(&path, TaeArch::H3)
                 .map_err(|e| msg(format!("FASTVIDEO_TAEH3_WEIGHTS={}: {e}", path.display())))?;
@@ -3241,7 +3274,7 @@ impl VideoVaeSource {
         taeh3: Option<&Path>,
     ) -> Result<fastvideo_models::h3::memory::H3VaeLinears> {
         use fastvideo_models::h3::memory::H3VaeLinears;
-        if resolve_taeh3(taeh3).is_some() {
+        if resolve_taeh3(taeh3, &Live).is_some() {
             return Ok(H3VaeLinears::Bf16);
         }
         if self.nvfp4() {
@@ -4736,5 +4769,202 @@ mod tests {
         let a: f32 = fresh_noise_rng(7, 0).sample(StandardNormal);
         let b: f32 = fresh_noise_rng(7, 1).sample(StandardNormal);
         assert_ne!(a, b);
+    }
+}
+
+/// Plan B3: the H3 load's settings from its snapshot resolve what the
+/// readers they replaced resolved from the same sources.
+#[cfg(test)]
+pub(crate) mod load_settings_tests {
+    use std::collections::BTreeMap;
+    use std::ffi::OsString;
+
+    use fastvideo_models::settings::{var_in, Settings};
+
+    use super::*;
+    use crate::rt::quant::QuantMode;
+
+    /// One case: names set in the environment, names set by the profile
+    /// table.
+    pub(crate) struct Case {
+        pub(crate) env: BTreeMap<String, String>,
+        pub(crate) table: Settings,
+    }
+
+    impl Case {
+        pub(crate) fn snapshot(&self) -> Snapshot {
+            Snapshot::from_parts(&|k| self.env.get(k).map(OsString::from), &self.table)
+        }
+        /// `settings::var` before the snapshot: env, else the table.
+        pub(crate) fn layered(&self, k: &str) -> Option<String> {
+            var_in(&self.table, &|n: &str| self.env.get(n).cloned(), k)
+        }
+        /// `settings::env_var(_os)` before the snapshot: env only.
+        pub(crate) fn env(&self, k: &str) -> Option<String> {
+            self.env.get(k).cloned()
+        }
+    }
+
+    /// No setting; each value of each name from the environment; each value
+    /// of each layered name from the table.
+    pub(crate) fn cases(arms: &[(&str, &[&str], bool)]) -> Vec<Case> {
+        let mut out = vec![Case {
+            env: BTreeMap::new(),
+            table: Settings::default(),
+        }];
+        for &(name, values, layered) in arms {
+            for v in values {
+                out.push(Case {
+                    env: [(name.to_string(), v.to_string())].into(),
+                    table: Settings::default(),
+                });
+                if layered {
+                    let mut t = Settings::default();
+                    t.set(name, v, "test").unwrap();
+                    out.push(Case {
+                        env: BTreeMap::new(),
+                        table: t,
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn h3_load_settings_resolve_as_before() {
+        let arms: &[(&str, &[&str], bool)] = &[
+            (
+                "FASTVIDEO_H3_QUANT",
+                &["off", "w8a8", "mxfp8", "junk"],
+                true,
+            ),
+            (
+                "FASTVIDEO_DIT_OFFLOAD",
+                &["auto", "resident", "streamed", "junk"],
+                true,
+            ),
+            ("FASTVIDEO_H3_NVFP4_ATTN", &["0", "1", "junk"], true),
+            (
+                "FASTVIDEO_H3_NVFP4_ACT",
+                &["static", "dynamic", "junk"],
+                true,
+            ),
+            ("FASTVIDEO_TAEH3_WEIGHTS", &["", "/taeh3"], true),
+            ("FASTVIDEO_NVFP4", &["1", "0"], true),
+            ("FASTVIDEO_H3_VDN", &["/no/such/vdn"], false),
+        ];
+        let empty = Snapshot::from_parts(&|_| None, &Settings::default());
+        let unset_quant = QuantMode::from_settings(&empty).unwrap();
+        let vdn_recipe = H3PipelineOptions {
+            recipe: Some("vdn-h3-8step".into()),
+            ..Default::default()
+        };
+        for case in cases(arms) {
+            let s = case.snapshot();
+            let what = format!("env={:?} table={:?}", case.env, case.table);
+            // QuantMode::from_env: the layered value parsed, else the default.
+            let quant = case
+                .layered(crate::rt::quant::ENV)
+                .map_or(Ok(unset_quant), |v| QuantMode::parse(&v));
+            assert_eq!(quant, QuantMode::from_settings(&s), "{what}");
+            // planned_dit_weights prices that recipe.
+            use fastvideo_models::h3::memory::H3DitWeights;
+            let weights = quant.as_ref().ok().map(|q| match q {
+                QuantMode::Off => H3DitWeights::Bf16,
+                QuantMode::W8A8 => H3DitWeights::W8a8,
+                QuantMode::Mxfp8 => H3DitWeights::Mxfp8,
+                QuantMode::Nvfp4 => H3DitWeights::Nvfp4,
+            });
+            assert_eq!(
+                weights,
+                planned_dit_weights(false, false, &s).ok(),
+                "{what}"
+            );
+            // DitOffload::from_env_or.
+            for explicit in [None, Some(DitOffload::Resident)] {
+                let before = match explicit {
+                    Some(p) => Ok(p),
+                    None => match case.layered(crate::rt::offload::ENV) {
+                        Some(v) => DitOffload::parse(&v)
+                            .map_err(|e| format!("{}: {e}", crate::rt::offload::ENV)),
+                        None => Ok(DitOffload::Auto),
+                    },
+                };
+                assert_eq!(before, DitOffload::from_settings_or(&s, explicit), "{what}");
+            }
+            // ModelOptOptions::from_env.
+            let attention = match case
+                .layered(super::super::nvfp4::ATTN_ENV)
+                .as_deref()
+                .map(str::trim)
+            {
+                None | Some("" | "0" | "off" | "false" | "bf16") => Ok(false),
+                Some("1" | "on" | "true" | "nvfp4") => Ok(true),
+                Some(_) => Err(()),
+            };
+            let static_act = match case
+                .layered(super::super::nvfp4::ACT_ENV)
+                .as_deref()
+                .map(str::trim)
+            {
+                None | Some("" | "static") => Ok(true),
+                Some("dynamic") => Ok(false),
+                Some(_) => Err(()),
+            };
+            let got = super::super::nvfp4::ModelOptOptions::from_settings(&s);
+            match (attention, static_act) {
+                (Ok(a), Ok(b)) => {
+                    let got = got.unwrap();
+                    assert_eq!((got.attention, got.static_act), (a, b), "{what}");
+                }
+                _ => assert!(got.is_err(), "{what}"),
+            }
+            // resolve_taeh3: the layered value, empty = none.
+            let taeh3 = case
+                .layered("FASTVIDEO_TAEH3_WEIGHTS")
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from);
+            assert_eq!(taeh3, resolve_taeh3(None, &s), "{what}");
+            // vdn_checkpoint: the environment only; other recipes ignore it.
+            assert!(
+                matches!(vdn_checkpoint(&H3PipelineOptions::default(), &s), Ok(None)),
+                "{what}"
+            );
+            let vdn = vdn_checkpoint(&vdn_recipe, &s)
+                .map(|c| c.is_some())
+                .map_err(|e| e.to_string());
+            match case.env(H3_VDN_ENV) {
+                None => assert!(
+                    vdn.as_ref().is_err_and(|e| e.contains("no VDN checkpoint")),
+                    "{what}: {vdn:?}"
+                ),
+                Some(_) => assert!(
+                    vdn.as_ref()
+                        .is_err_and(|e| !e.contains("no VDN checkpoint")),
+                    "{what}: {vdn:?}"
+                ),
+            }
+            // nvfp4::from_env (dit_tree_identity's gate).
+            assert_eq!(
+                fastvideo_models::nvfp4::requested(case.layered("FASTVIDEO_NVFP4").as_deref()),
+                fastvideo_models::nvfp4::from_settings(&s),
+                "{what}"
+            );
+        }
+    }
+
+    /// Inside the load's scope the readers the load's callees use (`QuantMode::from_env`,
+    /// `DitOffload::from_env_or`) return the snapshot's values.
+    #[test]
+    fn the_load_scope_serves_the_callees() {
+        let mut t = Settings::default();
+        t.set("FASTVIDEO_DIT_OFFLOAD", "streamed", "test").unwrap();
+        t.set("FASTVIDEO_H3_QUANT", "w8a8", "test").unwrap();
+        let s = Snapshot::from_parts(&|_| None, &t);
+        let _scope = s.scope();
+        assert_eq!(DitOffload::from_env_or(None), Ok(DitOffload::Streamed));
+        assert_eq!(QuantMode::from_env(), Ok(QuantMode::W8A8));
+        assert_eq!(QuantMode::from_env(), QuantMode::from_settings(&s));
     }
 }

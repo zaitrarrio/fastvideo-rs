@@ -75,7 +75,7 @@ parallel agents.
 |---|---|---|---|---|---|
 | B1 | Extract the runtime: `cudarc/src/wan/{tensor,device,ops,kernels,nn,weights,offload,quant,log,dump,ledger,envflag,resident,stage_upload,hostmem,writer}` to `cudarc/src/rt/`; `kernels.cu` split by region and concatenated at build time; `gpucheck` and `engine-service` import `rt` | byte-identical SASS and clips | CPU tests + nvrtc gate on the pod; **GPU** `techniques` byte-identity cell for H3, LTX, Wan | F1 | merged (#146) |
 | B2 | `VideoFamily` trait, common `Request`/`Conditioning`, `Request::validate(&ModelCaps)`; the 21 registry tables, `resolve()`, `all_registered_ids()` and the 20 `generate_*` functions replaced by the manifest and a static family list; `AvGenerateOptions` reduced to common fields | CLI behaviour unchanged for every preset (golden `--help` and tiny CPU generations); 83 Hub ids resolve | pod; **GPU** one tiny generation per served family | A2, B1 | merged (#157) |
-| B3 | Settings layer: the `FASTVIDEO_*` table generated from one declarative list; the 111 direct reads routed through `settings::var`; a `Settings` snapshot passed to `load`; `model_spec` for Wan and the small families; `docs/scope.md` table generated | zero direct `env::var("FASTVIDEO_` outside `settings`; off-identity invariant tests | pod; **GPU** byte-identity cell | B1 | pr (B3a merged #153; B3b agent running) |
+| B3 | Settings layer: the `FASTVIDEO_*` table generated from one declarative list; the 111 direct reads routed through `settings::var`; a `Settings` snapshot passed to `load`; `model_spec` for Wan and the small families; `docs/scope.md` table generated | zero direct `env::var("FASTVIDEO_` outside `settings`; off-identity invariant tests | pod; **GPU** byte-identity cell | B1 | pr (B3a merged #153; B3b #162) |
 
 ### Phase 3 and 4: deployment (Workstream C)
 
@@ -545,6 +545,30 @@ ran (pod id, $/hr), result, cost.
   arms and the LTX cache arm, max abs diff 0; fasth3-8step skipped (not
   on the EU volume). Evidence: `artifacts/runpod/techniques/1de80f1-10240618/`,
   `artifacts/runpod/kernels/{1de80f1-10240616,326c879-10240623}/`.
+
+- 2026-10-24 06:20Z: B3b opened draft PR #162 (`claude/b3b-settings-load`):
+  `settings::Snapshot` captured at load start and passed to new
+  `load_with_settings` entries of H3, LTX-2 and Wan (old entries capture
+  one); load bodies and load-only helpers read it through
+  `settings::Source`, the unchanged callees through `Snapshot::scope`;
+  the MLX tree's in-load `FASTVIDEO_H3_AFFINE` write via `settings::set_env`.
+  `ModelSpec` with its techniques-layer reads; `family_spec` for H3, LTX-2,
+  Wan and the 18 small families; profiles still H3 / LTX-2 only (minimal
+  spec, ADR-0010 amendment with the per-site classification). On build pod
+  (agent `b3b-settings`): fmt, clippy `-D warnings`, models + cudarc +
+  gpucheck + core 1264 passed, workspace lib 1903 passed, `--features cuda`
+  check green, `scripts/serve/check.sh` 1004 passed (a timing test in
+  `fastvideo-media` failed once on the shared pod, green on rerun). GPU
+  `techniques` byte-identity family pending (coordinator).
+- 2026-10-24 06:55Z: B3b GPU gate (coordinator): `techniques` byte identity,
+  runtime image `sha-93696e5` (the PR's code; later commits change only the
+  spec scan, the `!Send` guard and docs) against main `sha-9a3c18b` (same
+  inference code as the merge base `71b658b`), one RTX PRO 6000 in EU-RO-1
+  with volume `bz0ofkfx45` (deleted): fasth3-4step-vsa-768p and
+  h3-480p-fullopt 124/124 frames, ltx25-512p-sol 121/121, env and prof
+  arms and the LTX cache arm, max abs diff 0; every H3 and LTX cell loads
+  through `load_with_settings`; fasth3-8step skipped (not on the EU
+  volume). Evidence: `artifacts/runpod/techniques/93696e5-10240625/`.
 
 - 2026-10-24 05:40Z: C2 opened draft PR #159 (`claude/c2-fv-boot`): `fv-boot`
   in `fastvideo-deploy` (feature `boot`), the `ENTRYPOINT` of every serve
