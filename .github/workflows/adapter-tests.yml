@@ -39,6 +39,10 @@ on:
       - "crates/fastvideo-deploy/**"
       - "deploy/deploy.toml"
       - "lab/**"
+      # fastvideo-lab's tests/lab_files.rs reads these (trees, gates, the EU volume).
+      - "scripts/gpu/weights-manifest.tsv"
+      - "scripts/gpu/verify-weights.sh"
+      - "scripts/gpu/volumes.sh"
       - "profiles/**"
       - "families/**"
       # The shipped serve configs and the certification matrix's TSV (plan
@@ -72,6 +76,10 @@ on:
       - "crates/fastvideo-deploy/**"
       - "deploy/deploy.toml"
       - "lab/**"
+      # fastvideo-lab's tests/lab_files.rs reads these (trees, gates, the EU volume).
+      - "scripts/gpu/weights-manifest.tsv"
+      - "scripts/gpu/verify-weights.sh"
+      - "scripts/gpu/volumes.sh"
       - "profiles/**"
       - "families/**"
       - "configs/serve/**"

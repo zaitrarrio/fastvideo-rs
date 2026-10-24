@@ -7,6 +7,7 @@
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
+  `scripts/gpu/fv-lab-compare-runs.sh` (the GPU gate's comparison); fv-lab in the tools release's `gpucheck` set;
   schemas `crates/fastvideo-lab/schemas/{tiers,cell}.v1.json`; data `lab/tiers.toml`, `lab/cells/rtx6000-*.toml`;
   goldens `crates/fastvideo-lab/fixtures/*` (written by `scripts/gpu/tests/fv-lab-goldens.sh`); one seam in
   `fastvideo-deploy` (`runpod::Pod::list`, §6)
@@ -130,8 +131,26 @@ failure excerpt, the peak line, `summary.json`), `compare_cells` and `gate_cells
 ```text
 <scratch>/runs/<tier>/<tag>/  live.log  done.json  <arm>.weights.log  lpips-fetch.log
   <arm>/summary.json stdout.log stderr.log nvidia-smi-{start,end}.txt frames/ benchmark.json gpucheck-out/
+  <arm>/frames.sha256.json
   compare/compare-clips-<b>--<c>[-<prompt>].json  gate/gate-<b>--<c>.json
 ```
+
+`frames.sha256.json` is new on both sides (review of #171): after every arm that ran, both runners write every `*.png`
+under `<arm>/frames` (recursive, byte order of the path, symlinks not followed) with its SHA-256, and the count:
+
+```json
+{"arm":"sol-h3","frames":[
+{"path":"frame-000.png","sha256":"…"},
+…
+],"count":124}
+```
+
+`runpod-matrix.sh` gains `frames_digest` (called at the end of `run_cell`; it merges cleanly with #170) and `fv-lab
+run` writes the same bytes (`run::frames_digest`; `tests/frames_digest.rs` compares it with the script's own function
+run by the goldens script on `fixtures/frames-sample`). Both fetches already take every JSON directly in an arm
+directory, so the record reaches `artifacts/` without the frames (which neither fetch takes), and two runs are compared
+byte for byte after their pods are gone (§8). The runner's `nvidia-smi -L` and query lines are fatal when they fail,
+as under the script's `set -e -o pipefail`.
 
 and `pod fetch` mirrors it into `artifacts/runpod/<tier>/<tag>/` the way `runpod-http.sh fetch_results` does (plus a
 `pod.json` record), so every existing summary script, `compare` and evidence reader keeps working on fv-lab runs.
@@ -144,11 +163,15 @@ merge-checked against #170 to resolve to #170's file) makes the script log each 
 %q`, tested character by character). `scripts/gpu/tests/fv-lab-goldens.sh` runs the script's dry run for `rtx6000`
 (volume `/workspace`, disk `/fvscratch`, tag `1234567-10241200`) into `fixtures/rtx6000-dry-run.txt`; `tests/dry_run.rs`
 and `tests/fv_lab_bin.rs` assert fv-lab's lines equal it, all nine (`matrix start`, seven arms, `matrix done`);
-`--check` regenerates and diffs (CI: `control.yml`).
+`--check` regenerates and diffs (CI: `control.yml`). Every script runs under `env -i` there (PATH, HOME, `LC_ALL=C`),
+so the caller's `FV_*` / `RUNPOD_*` cannot change a fixture.
 
 ### 6. `fv-lab pod`: fv-deploy's lifecycle, reused
 
-`pod up --sha <7> --family <tier> [--yes]` builds a `Launch` (the runtime image at that commit, the tier's GPU, disk and
+`pod up --sha <7> --family <tier> [--yes]` names the run `<sha>-<MMDDHHMMSS>-<4 random hex>` (the pod
+`fv-lab-<tier>-<tag>`; `runpod-http.sh`'s minute stamp repeats, and fv-deploy's exit sweep deletes by exact name, so two
+runs in one minute would delete each other's pod), refuses to create when a live pod already has that name, and builds
+a `Launch` (the runtime image at that commit, the tier's GPU, disk and
 caps, the EU volume in `EU-RO-1`, ports `8000/http`, `dockerStartCmd ["/bin/bash", "-c", <start command>]`) and runs
 `fastvideo_deploy::lifecycle::Deployer::up` with `keep` and no smoke: the region guard, the $8 floor projected over
 the cap, the price cap on the quote and on the billed price, the detached backstop (this binary as `fv-lab backstop`,
@@ -171,13 +194,21 @@ check; `pod_payload` factored out of `create_pod` unchanged) with `FV_POD_PREFIX
 3. at `up` only, the image pinned to its digest (`ghcr_resolve`), as fv-deploy does.
 
 `pod fetch <id> [--wait] [--down]` is `wait_done` (the `DONE` marker carries the tag; the pod's state; new `live.log`
-lines) plus `fetch_results`, with the script's verdicts (`driver_too_old`, `matrix_exit≠0` fail the command);
+lines) plus `fetch_results` (and `DONE` itself). A run is a success only when the fetched `DONE` says `done <tag>`,
+`matrix.out` holds `matrix_exit=0` and no other exit, and the driver was not too old (`pod::judge_run`); anything else
+fails the command. `--down` (and `up --wait`) delete the pod whatever the wait or the fetch did, then report both.
 `pod status` reads the provider state, the server and the last log lines; `pod down` deletes with fv-deploy's retries
-and ledger (`artifacts/fv-lab/ledger.tsv`); `pod reap [--yes]` deletes `fv-lab-*` pods older than their tier's wall
-cap plus 10 minutes (only fv-lab's pods: CLAUDE.md "only touch pods you created").
+and ledger (`artifacts/fv-lab/ledger.tsv`).
+
+`pod reap [--yes]` takes only the pods this machine's `pod up` recorded (`artifacts/fv-lab/pods/<id>.json`) that are
+live and older than their recorded cap plus 10 minutes (CLAUDE.md "only touch pods you created"). The account-wide
+sweep is explicit, `--account`, and takes only names of the full pattern `fv-lab-<known tier>-<sha7>-<MMDDHHMMSS>-<4
+hex>`, past that tier's cap: a `runpod-http.sh` pod made with `FV_POD_PREFIX=fv-lab` (minute stamp, any cap) never
+matches.
 
 The one seam in `fastvideo-deploy`: `runpod::Pod::list()` (`GET /pods` as `PodListing { id, name, state, created_at,
-usd_per_hr }`), because `reap` selects by name prefix and age and the trait's `sweep` deletes by exact name only.
+usd_per_hr }`), because `reap` selects by id or name pattern and age, `up` checks that its name is free, and the trait's
+`sweep` deletes by exact name only.
 `RunpodApi::rest` stays crate-private; the method is 40 lines with a unit test.
 
 ### 7. Differences from the scripts, and why
@@ -190,17 +221,34 @@ usd_per_hr }`), because `reap` selects by name prefix and age and the trait's `s
 | backstop | `nohup sleep; curl` | fv-deploy's detached backstop | handshake, early stand-down only on two 404s |
 | image | tag | digest-pinned at `up` | the run names the binary it ran |
 | `remote.sh env` | called, output unused (`/tmp/fv-env.json`) | not called | its only effect is a JSON nobody reads |
-| `FV_PROMPTS`, `FV_PROMPT`, `FV_SEED` | override the family's commands | ignored with a warning | a cell's prompts and seeds are its workload |
+| `FV_PROMPTS`, `FV_PROMPT`, `FV_SEED` | override the family's commands | ignored, each with a warning | a cell's prompts and seeds are its workload |
+| run tag | `<sha>-<MMDDHHMM>` | `<sha>-<MMDDHHMMSS>-<4 hex>`, name checked free | unique pod names (§6) |
+| run verdict | `matrix_exit≠0` or an old driver fail | also no `DONE` or no `matrix_exit=0` fail | a run that did not finish is not a success |
 | `FV_POD_FILES`, `FV_POD_SCRIPT`, `kernels` / `all` modes | yes | no | not used by `rtx6000`; later slices if needed |
 | `FV_FETCH_TREE` mirror | yes | no | D1c with `report` |
 
-### 8. What retires when (later slices)
+### 8. The GPU gate, and what retires when
 
-Nothing is deleted in D1a. After the coordinator's GPU run shows `fv-lab run rtx6000` reproduces the family (same files
-per arm, same exit / skip per arm, same compare verdicts where the family has compares; the `rtx6000` family has none,
-so: the same `summary.json` exits and skips, `benchmark.json` per arm, and frames that `compare-clips --off-identity`
-against a `runpod-http.sh` run of the same commit calls byte-identical, which `docs/perf/determinism.md` promises for
-the same request and seed on the same GPU class):
+Nothing is deleted in D1a. The gate is the coordinator's: one `fv-lab pod up` run and one `runpod-http.sh run` of the
+same commit, compared by `scripts/gpu/fv-lab-compare-runs.sh <fv-lab run dir> <runpod-http run dir>`: the same arm
+directories, the same `summary.json` `exit` / `skipped`, `benchmark.json` in both or neither, and byte-identical
+`frames.sha256.json` (which `docs/perf/determinism.md` promises for the same request and seed on the same GPU class).
+`rtx6000` has no compares, so there are no compare verdicts to match.
+
+The commit must be one whose runtime image carries `fv-lab` **and** whose `runpod-matrix.sh` writes the frames record:
+the head of PR #171 after the review fixes (or its merge commit on main), once `gpucheck-runtime-image` has published
+`fastvideo-rs-runtime:sha-<7>` for it. From the repository root, with `fv-lab` built on the build pod:
+
+```sh
+SHA=<7>                                                            # that commit
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family rtx6000 --yes --wait
+#   -> artifacts/runpod/rtx6000/$SHA-<MMDDHHMMSS>-<hex>/   (the pod is deleted at the end)
+RUNPOD_API_KEY=… bash scripts/gpu/runpod-http.sh run $SHA       # FV_FAMILY defaults to rtx6000
+#   -> artifacts/runpod/rtx6000/$SHA-<MMDDHHMM>/
+bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/rtx6000/$SHA-<MMDDHHMMSS>-<hex> artifacts/runpod/rtx6000/$SHA-<MMDDHHMM>
+```
+
+Pass: exit 0, every arm `same`, `fasth3-8step` skipped (`weights incomplete`) in both. Then:
 
 - **D1b**: the other families as tiers and cells (`rtx5090`, `fastvideo`, `techniques`, `b6`, `h3arms`, … one PR per
   few families, each with its dry-run golden; TAE gating and prompt sets join the cell schema); `runpod-http.sh run`
@@ -216,9 +264,12 @@ the same request and seed on the same GPU class):
 
 1. **The tier price cap**: $2.50/hr (fv-deploy's guard) instead of the script's $5. A PRO 6000 quote above $2.50 refuses
    the run; raising `max_usd_per_hr` is one line.
-2. **`fv-lab` in the tools release**: the image compiles `fv-lab` in a `lab-build` stage (like `boot-build` before
-   tools releases carried fv-boot), which builds the `builder` stage on every runtime image. Adding `fv-lab` to
-   `scripts/ci/tools-release.sh`'s sets removes that compile.
+2. **Until the next tools release**: `fv-lab` rides in the tools release's `gpucheck` set (`out/fv-lab`; built by
+   `release-artifacts-pod.sh build_gpucheck`, cooked by `tools-deps.sh gpucheck`, its `-V` checked by
+   `tools-release.sh`'s gate, handed to the image as `lab-build=<set>` by `prebuilt.sh`), as fv-boot rides in the
+   serve sets. Releases from before this one lack it, so the first runtime (and debug serve) images after the merge
+   still compile the `lab-build` stage (a notice in the job says so) until a tools release is published from a commit
+   with fv-lab; branch images, which compile everything anyway, are unaffected.
 3. **Gate placement in a cell**: compares and gates run after a cell's arms; a family that interleaves them (rtx5090
    per resolution) splits into one cell per loop iteration. Acceptable until D1b shows otherwise.
 
@@ -228,8 +279,11 @@ the same request and seed on the same GPU class):
 - `fv-lab run` and `runpod-matrix.sh` produce the same commands (tested), the same files and logs (tested on fakes),
   and their pods differ only as listed (tested); the GPU run decides the retirement.
 - The pod's money and readiness guards are fv-deploy's, so a fix there covers fv-lab.
-- The runtime image grows by one CPU binary and `lab/`; CI checks the goldens (`control.yml`), the crate's tests with
-  `cli` (`coverage.sh`), and the image's `fv-lab --version`, `check` and a dry run.
+- The runtime image grows by one CPU binary and `lab/`; CI checks the goldens (`control.yml`, which also self-tests
+  `fv-lab-compare-runs.sh`), the crate's tests with `cli` (`coverage.sh`), and the image's `fv-lab --version`, `check`
+  and a dry run. With a tools release that carries fv-lab, no runtime image compiles it.
+- Every `rtx6000` run (either runner) now carries per-arm frame hashes, so byte identity is checkable after the pod is
+  gone.
 
 ## Validation
 
@@ -238,14 +292,6 @@ CPU, on the build pod: `cargo test --locked -p fastvideo-lab --all-features`, `c
 fastvideo-lab/cli`), `cargo fmt --all --check`, `bash scripts/gpu/lint.sh`, `bash scripts/gpu/tests/fv-lab-goldens.sh
 --check`.
 
-GPU (the coordinator's): on a commit whose runtime image is published (`gpucheck-runtime-image` built
-`fastvideo-rs-runtime:sha-<7>` with `fv-lab` in it), from the repository root with `fv-lab` built on the build pod:
-
-```sh
-RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family rtx6000 --yes
-./fv-lab pod fetch <pod id> --wait --down
-```
-
-(or `pod up … --yes --wait` in one command). Expected: the six arms whose trees are on the EU volume run, `fasth3-8step`
-is recorded as skipped (`weights incomplete`), `artifacts/runpod/rtx6000/<sha>-<MMDDHHMM>/` holds the files of §5, and
-a `runpod-http.sh run <sha>` of the same commit produces the same exits, skips and byte-identical frames.
+GPU (the coordinator's): the procedure of §8, on a commit whose runtime image is published with `fv-lab` in it and
+whose `runpod-matrix.sh` writes `frames.sha256.json`. Expected: the six arms whose trees are on the EU volume run, `fasth3-8step` is recorded as skipped
+(`weights incomplete`), each run directory holds the files of §5, and `fv-lab-compare-runs.sh` exits 0.

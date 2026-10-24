@@ -14,7 +14,8 @@ bash scripts/dev/build-pod.sh run . -- cargo build --release --locked -p fastvid
 bash scripts/dev/build-pod.sh fetch . release/fv-lab ./fv-lab
 ```
 
-The runtime image `ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-<7>` carries it at
+The tools release carries it in its `gpucheck` set, and the runtime image `ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-<7>`
+at
 `/opt/fastvideo-rs/target/release/fv-lab` with `lab/` at `/opt/fastvideo-rs/lab` (and the image workflow uploads it
 beside `fv-gpucheck` as an artifact). `fv-lab` finds `lab/tiers.toml` above the current directory, then above its own
 binary; `--root DIR` (or `FV_LAB_ROOT`) elsewhere.
@@ -61,20 +62,35 @@ RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family rtx6000 --yes
 RUNPOD_API_KEY=… ./fv-lab pod status <pod id>           # provider state, server, last log lines
 RUNPOD_API_KEY=… ./fv-lab pod fetch <pod id> --wait --down   # wait for DONE, fetch, delete
 RUNPOD_API_KEY=… ./fv-lab pod down <pod id>             # delete now
-RUNPOD_API_KEY=… ./fv-lab pod reap [--yes]              # fv-lab-* pods past their tier's cap + 10 min
+RUNPOD_API_KEY=… ./fv-lab pod reap [--yes]              # pods recorded here, past their cap + 10 min
+RUNPOD_API_KEY=… ./fv-lab pod reap --account [--yes]    # any fv-lab-<tier>-<sha7>-<MMDDHHMMSS>-<hex4> pod past its tier's cap
 
 # Or all of it in one command (as runpod-http.sh run):
 RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family rtx6000 --yes --wait
 ```
 
 Options of `up`: `--cells a b` (only these arms), `--extra-env K=V …` (`FV_EXTRA_ENV`), `--lpips`, `--tag`,
-`--state-dir`. Results land in `artifacts/runpod/<tier>/<sha>-<MMDDHHMM>/` (the same place and files as
+`--state-dir`. The run tag is `<sha>-<MMDDHHMMSS>-<4 random hex>`, and `up` refuses to create when a live pod already
+has the name. Results land in `artifacts/runpod/<tier>/<tag>/` (the same place and files as
 `runpod-http.sh`, plus `pod.json`); the ledger, pod records and backstop logs in `artifacts/fv-lab/`. Run `up` from a
 host that outlives the tier's wall cap (4 h for `rtx6000`): the backstop process runs there. The pod also deletes
 itself after 10 idle GPU minutes (the start command's idle watchdog, with the pod-scoped key Runpod injects).
 
-`fetch` fails (exit 1) when the host's driver was too old, the runner exited abnormally, or the run did not finish;
-the files fetched so far are kept.
+`fetch` (and `up --wait`) fail (exit 1) unless the fetched `DONE` says `done <tag>` and `matrix.out` holds
+`matrix_exit=0`, and when the host's driver was too old; the files fetched so far are kept. `--down` and `up --wait`
+delete the pod whatever happened, then report.
+
+Every arm leaves `<arm>/frames.sha256.json` (each frame's SHA-256, written by `fv-lab run` and by `runpod-matrix.sh`
+alike, fetched by both drivers). Two runs of one commit compare with
+
+```sh
+bash scripts/gpu/fv-lab-compare-runs.sh <fv-lab run dir> <runpod-http run dir>
+```
+
+(same arms, same exits and skips, byte-identical frames records); the D1a GPU gate is that command after one `fv-lab
+pod up --sha <7> --family rtx6000 --yes --wait` and one `runpod-http.sh run <7>` of the same commit
+([ADR-0019 §8](../adr/0019-fv-lab.md)). The commit must be one whose runtime image carries fv-lab and the frames record:
+the final head of PR #171 or later.
 
 ## Keeping it equal to the scripts
 
@@ -83,5 +99,6 @@ bash scripts/gpu/tests/fv-lab-goldens.sh           # regenerate crates/fastvideo
 bash scripts/gpu/tests/fv-lab-goldens.sh --check   # CI (control.yml)
 ```
 
-The fixtures are the script's dry run, its weight gates (`verify-weights.sh --list`) and `runpod-http.sh plan`'s pod
-body; `tests/dry_run.rs`, `tests/payload_golden.rs` and `tests/fv_lab_bin.rs` hold fv-lab to them.
+The fixtures are the script's dry run, its weight gates (`verify-weights.sh --list`), `runpod-http.sh plan`'s pod
+body and its `frames_digest` of a sample; `tests/{dry_run,payload_golden,frames_digest,fv_lab_bin}.rs` hold fv-lab to
+them. The script runs every script under `env -i`, so your `FV_*` / `RUNPOD_*` settings do not leak in.

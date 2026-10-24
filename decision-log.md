@@ -1322,3 +1322,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §6, §7
 - Verification: `tests/payload_golden.rs`, `pod::tests`, `runpod::pod::tests::list_reads_names_states_ages_and_prices`; GPU run by the coordinator
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-lab-review
+- Trigger: the independent review of PR #171: the GPU byte-identity evidence could not be produced (no fetch takes frames, the pod is deleted); `pod reap` could delete pods this session did not create; two `pod up` in one UTC minute shared a pod name (fv-deploy's exit sweep deletes by exact name); the runtime image build went from about 2 to about 10 minutes on main; a failing nvidia-smi was not fatal; a fetch without `matrix.out` / `DONE` counted as success; early returns skipped the pod delete; CI path filters; the goldens read the caller's environment
+- Options: fix each with a test; defer to D1b
+- Decision: both runners write `<arm>/frames.sha256.json` (every frame's SHA-256 by path; `frames_digest` in runpod-matrix.sh's `run_cell`, byte-identical in fv-lab, fixture from the script's own function) and both fetches take it; the gate is `scripts/gpu/fv-lab-compare-runs.sh` between an `fv-lab pod up` run and a `runpod-http.sh run` of one commit; `reap` takes only this machine's recorded pods, `--account` only full `fv-lab-<known tier>-<sha7>-<MMDDHHMMSS>-<hex4>` names; the run tag is `<sha>-<MMDDHHMMSS>-<4 random hex>` and `up` refuses a live name; fv-lab rides in the tools release's `gpucheck` set (`out/fv-lab`, `-V` gated, `lab-build=<set>` context) like fv-boot, the stage compiling only as a fallback; nvidia-smi failures fatal; success needs the fetched `DONE` and `matrix_exit=0`; the pod is deleted before any error returns; adapter-tests watches the scripts lab_files.rs reads; the goldens run under `env -i`
+- Reason: the GPU gate must be checkable after the pods are gone; only touch pods you created; one name per run; images on main must not compile fv-lab once a release carries it
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §5, §6, §7, §8, open decision 2
+- Verification: `tests/frames_digest.rs`, `tests/runner.rs` (`a_failing_nvidia_smi_is_fatal`, the digest of an arm), `pod::tests` (tags, `name_taken`, `reap_recorded`, `reap_account`, `judge_run`, the fetch), the bin's `after_delete` test, `scripts/ci/test_tools_release.sh` (fv-lab version gate, lab-build contexts), `fv-lab-goldens.sh --check` (compare-runs self-test)
