@@ -1,0 +1,74 @@
+# The rtx5090 family's h3-768p cell (runpod-matrix.sh `rtx5090`, one loop
+# iteration: ADR-0019 open decision 3 splits a family whose compares follow
+# each iteration into one cell per iteration). The sol-engine RTX 5090
+# single-GPU suite (config/minimax_h3/rtx5090_*.toml, models/ltx25/RTX5090);
+# on this tier's 96 GB card the cells run resident. TAE arms read {tae} (the
+# volume's auxiliary/tae, else the pod's fetch). Schema:
+# crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md (D1b).
+schema = 1
+name = "rtx5090-h3-768p"
+description = "H3 at the recipe canvas (768p): dense, Sol-Attn, fullopt (Sol + TeaCache) and fullopt decoded by TAEH3"
+
+[workload]
+model = "h3"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+note = "runpod-matrix.sh's default PROMPT and SEED; the canvas is the sol-h3-rtx recipe's"
+
+[lists]
+h3_common = ["--prompt", "{prompt}", "--seconds", "{seconds}", "--seed", "{seed}", "--text-encoder", "auto",
+  "--text-cache", "{scratch}/h3-text-cache", "--text-weights", "{weights}/h3-base", "--warm"]
+
+[[arm]]
+name = "h3-768p-dense"
+gate = "h3-base"
+trees = ["h3-base"]
+note = "rtx5090_dense.toml"
+env = ["FASTVIDEO_H3_SOL_ATTN=off"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "sol-h3-rtx",
+  "--adaln-cache", "{runs}/h3-768p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "h3-768p-sol"
+gate = "h3-base"
+trees = ["h3-base"]
+note = "rtx5090_sol.toml"
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "sol-h3-rtx",
+  "--adaln-cache", "{runs}/h3-768p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "h3-768p-fullopt"
+gate = "h3-base"
+trees = ["h3-base"]
+note = "rtx5090_fullopt: Sol + TeaCache"
+env = ["FASTVIDEO_H3_SOL_CACHE=teacache"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "sol-h3-rtx",
+  "--adaln-cache", "{runs}/h3-768p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "h3-768p-fullopt-taeh3"
+gate = "h3-base"
+trees = ["h3-base"]
+note = "sol-engine super_acceleration stage 1 decodes with TAEH3"
+tae = "taeh3.safetensors"
+env = ["FASTVIDEO_H3_SOL_CACHE=teacache"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "sol-h3-rtx",
+  "--taeh3-weights", "{tae}/taeh3.safetensors", "--adaln-cache", "{runs}/h3-768p-adaln.cache", "--clip-dir",
+  "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[compare]]
+baseline = "h3-768p-dense"
+candidate = "h3-768p-sol"
+
+[[compare]]
+baseline = "h3-768p-sol"
+candidate = "h3-768p-fullopt"
+
+[[compare]]
+baseline = "h3-768p-dense"
+candidate = "h3-768p-fullopt"
+
+[[compare]]
+baseline = "h3-768p-fullopt"
+candidate = "h3-768p-fullopt-taeh3"

@@ -1,0 +1,16 @@
+b6-solh3-tree-base	sol-h3	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:dense-datafree/adapter_model.safetensors
+b6-solh3-tree-pr	sol-h3	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:dense-datafree/adapter_model.safetensors
+b6-solh3-merge-base	sol-h3	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:dense-datafree/adapter_model.safetensors
+b6-solh3-merge-pr	sol-h3	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:dense-datafree/adapter_model.safetensors
+b6-4stepvsa-merge-base	fasth3-4step-vsa	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:vsa-datafree/adapter_model.safetensors
+b6-4stepvsa-merge-pr	fasth3-4step-vsa	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:vsa-datafree/adapter_model.safetensors
+b6-h3-streamed-base	fasth3-4step-vsa	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:vsa-datafree/adapter_model.safetensors
+b6-h3-streamed-pr	fasth3-4step-vsa	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:vsa-datafree/adapter_model.safetensors
+b6-h3-ref2va-base	h3-ref2va	h3-ref2va:transformer_ref h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder
+b6-h3-ref2va-pr	h3-ref2va	h3-ref2va:transformer_ref h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder
+b6-ltx25-ref2v-base	ltx25-ref2v	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer :ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors
+b6-ltx25-ref2v-pr	ltx25-ref2v	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer :ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors
+b6-ltx25-a2v-guided-base	ltx25-a2v-guided	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer ltx25-dev:transformer_full :ltx25/ltx-2.5-22b-distilled-lora-450-bf16.safetensors
+b6-ltx25-a2v-guided-pr	ltx25-a2v-guided	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer ltx25-dev:transformer_full :ltx25/ltx-2.5-22b-distilled-lora-450-bf16.safetensors
+b6-ltx25-offload-cpu-base	ltx25-two-stage	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+b6-ltx25-offload-cpu-pr	ltx25-two-stage	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer

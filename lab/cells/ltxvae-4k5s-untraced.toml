@@ -1,0 +1,43 @@
+# The ltxvae family's 4k5s cell (runpod-matrix.sh `ltxvae`): the LTX-2.5 conv
+# VAE decode alone (`ltx2 vae-bench`) on synthetic latents at the sol-engine
+# geometry, tiled as gen tiles. Schema:
+# crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md (D1b).
+# Untraced timings (FV_VAE_UNTRACED's default), the fast decoder with gen's
+# writer (PNG frames + ffmpeg mp4) behind the drain, and with every cuDNN
+# algorithm timed per shape during the warm-up.
+schema = 1
+name = "ltxvae-4k5s-untraced"
+description = "LTX-2.5 VAE decode at 4k5s, untraced: fast, streaming, fast with the mp4 writer, fast with tuned conv algorithms"
+
+[workload]
+model = "ltx2"
+note = "synthetic latents at the 4k5s geometry (--workload); no prompt, no seed"
+
+[[arm]]
+name = "ltxvae-4k5s-fast-untraced"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = ["--mode", "fast", "ltx2", "vae-bench", "--weights", "{weights}/ltx25", "--workload", "4k5s",
+  "--decoder", "fast", "--warm"]
+
+[[arm]]
+name = "ltxvae-4k5s-streaming-untraced"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = ["--mode", "fast", "ltx2", "vae-bench", "--weights", "{weights}/ltx25", "--workload", "4k5s",
+  "--decoder", "streaming", "--warm"]
+
+[[arm]]
+name = "ltxvae-4k5s-fast-mp4"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = ["--mode", "fast", "ltx2", "vae-bench", "--weights", "{weights}/ltx25", "--workload", "4k5s",
+  "--decoder", "fast", "--warm", "--mp4", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "ltxvae-4k5s-fast-tune"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = ["FASTVIDEO_LTX_VAE_CONV_ALGO=tune"]
+argv = ["--mode", "fast", "ltx2", "vae-bench", "--weights", "{weights}/ltx25", "--workload", "4k5s",
+  "--decoder", "fast", "--warm"]

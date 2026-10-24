@@ -2,11 +2,13 @@
 //!
 //! ```text
 //! fv-lab run <tier|cell> [--dry-run] [--cells a,b] [--work D] [--scratch D] [--tag T]
+//!                 [--baseline-sha <7>]
 //!                 the on-pod runner (runpod-matrix.sh's frame, the cells of lab/);
 //!                 --dry-run prints each arm's command line and writes nothing
 //! fv-lab check    parse and validate lab/tiers.toml and lab/cells/*.toml
 //! fv-lab schema tiers|cell
 //! fv-lab pod up --sha <7> --family <tier> [--yes] [--wait] [--cells …] [--extra-env K=V …]
+//!                 [--baseline-sha <7>]   (required by a tier with `bin = "baseline"` arms)
 //!                 one pod of the tier on fv-deploy's guards: price cap, $8 floor, EU
 //!                 volume, backstop at the tier's wall cap, ready within 600 s (3 cycles);
 //!                 without --yes it prints the plan; --wait also waits, fetches and deletes
@@ -42,8 +44,8 @@ use fastvideo_deploy::provider::{
 
 use fastvideo_lab::plan::{Lab, Paths, Tier};
 use fastvideo_lab::pod::{
-    fetch_run, judge_run, launch, name_taken, random_suffix, reap_account, reap_recorded, run_dir,
-    run_tag, wait_done, Done, LabPod, PodRecord, StartOptions,
+    check_sha7, fetch_run, judge_run, launch, name_taken, random_suffix, reap_account,
+    reap_recorded, run_dir, run_tag, wait_done, Done, LabPod, PodRecord, StartOptions,
 };
 use fastvideo_lab::run::{dry_run_lines, RunConfig, RunError, Runner};
 use fastvideo_lab::schema;
@@ -123,6 +125,10 @@ struct RunArgs {
     /// Per-arm wall cap in s, 0 = none (FV_GEN_TIMEOUT_S; default the tier's).
     #[arg(long)]
     cell_timeout_s: Option<u64>,
+    /// The commit whose runtime image's fv-gpucheck the `bin = "baseline"`
+    /// arms run (FV_BASELINE_SHA; fetched by scripts/gpu/fetch-baseline.sh).
+    #[arg(long)]
+    baseline_sha: Option<String>,
     /// The root holding lab/ and scripts/gpu (FV_LAB_ROOT; default: found above
     /// the current directory, then above this binary).
     #[arg(long)]
@@ -188,6 +194,10 @@ struct UpArgs {
     /// LPIPS in the compares (FV_LPIPS=1).
     #[arg(long)]
     lpips: bool,
+    /// The baseline commit of a tier with `bin = "baseline"` arms
+    /// (FV_BASELINE_SHA on the pod; required for such a tier).
+    #[arg(long)]
+    baseline_sha: Option<String>,
     /// The run tag (default <sha>-<MMDDHHMMSS>-<4 random hex>).
     #[arg(long)]
     tag: Option<String>,
@@ -284,6 +294,21 @@ fn cmd_run(a: &RunArgs) -> Result<ExitCode, String> {
         .map(|s| split_list(&s));
     cfg.lpips = env_nonempty("FV_LPIPS").as_deref() == Some("1");
     cfg.gate_policy = env_nonempty("FV_GATE_POLICY").map(PathBuf::from);
+    cfg.aux_dir = env_nonempty("FV_AUX_DIR").map(PathBuf::from);
+    cfg.tae_dir = env_nonempty("FV_TAE_DIR").map(PathBuf::from);
+    cfg.baseline_sha = a
+        .baseline_sha
+        .clone()
+        .or_else(|| env_nonempty("FV_BASELINE_SHA"));
+    if let Some(sha) = &cfg.baseline_sha {
+        check_sha7(sha).map_err(|e| format!("FV_BASELINE_SHA / --baseline-sha: {e}"))?;
+    }
+    if Lab::needs_baseline(&cells) && cfg.baseline_sha.is_none() {
+        return Err(format!(
+            "{} runs baseline arms: pass --baseline-sha <7> (FV_BASELINE_SHA), the baseline commit",
+            a.target
+        ));
+    }
     let paths: Paths = cfg.paths();
     let steps = Lab::steps(&cells, &cfg.bin, &paths).map_err(|e| e.to_string())?;
     if a.dry_run {
@@ -414,6 +439,21 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     let mut so = StartOptions::for_tier(t, &tag);
     so.cells = u.cells.iter().flat_map(|c| split_list(c)).collect();
     so.extra_env = u.extra_env.clone();
+    let cells: Vec<_> = t.cells.iter().filter_map(|c| lab.cells.get(c)).collect();
+    if let Some(sha) = &u.baseline_sha {
+        check_sha7(sha).map_err(|e| format!("--baseline-sha: {e}"))?;
+        so.extra_env.push(format!("FV_BASELINE_SHA={sha}"));
+    } else if Lab::needs_baseline(&cells)
+        && !so
+            .extra_env
+            .iter()
+            .any(|e| e.starts_with("FV_BASELINE_SHA="))
+    {
+        return Err(format!(
+            "tier `{}` runs baseline arms: pass --baseline-sha <7>, the baseline commit",
+            t.name
+        ));
+    }
     so.lpips = u.lpips;
     let mut l = launch(t, &u.sha, &so).map_err(|e| e.to_string())?;
     guard::check_guards(&l.guards).map_err(|e| e.to_string())?;

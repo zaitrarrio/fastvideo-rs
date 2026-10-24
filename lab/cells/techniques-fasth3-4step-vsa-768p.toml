@@ -1,0 +1,60 @@
+# The techniques family's fasth3-4step-vsa-768p cell (runpod-matrix.sh
+# `techniques`, tech_h3): the baseline binary (FV_BASELINE_SHA's runtime
+# image, fetch-baseline.sh) with the legacy flags, this build with the same
+# command line, and this build from the matching --techniques profile; base vs
+# env and base vs prof must be byte-identical (compare-clips --off-identity).
+# `env = []` keeps the script's bare `env` before the binary. Schema:
+# crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md (D1b).
+schema = 1
+name = "techniques-fasth3-4step-vsa-768p"
+description = "FastH3 4-step VSA at the recipe's canvas: baseline binary, this build, this build from profiles/h3/fasth3_4step_vsa; byte identity"
+
+[workload]
+model = "h3"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+note = "runpod-matrix.sh's default PROMPT and SEED; the canvas and steps are the recipe's defaults"
+
+[lists]
+h3_common = ["--prompt", "{prompt}", "--seconds", "{seconds}", "--seed", "{seed}", "--text-encoder", "auto",
+  "--text-cache", "{scratch}/h3-text-cache", "--text-weights", "{weights}/h3-base", "--warm"]
+
+[[arm]]
+name = "fasth3-4step-vsa-768p-base"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+bin = "baseline"
+env = []
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-vsa",
+  "--adaln-cache", "{runs}/fasth3-4step-vsa-768p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames",
+  "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-4step-vsa-768p-env"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = []
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-vsa",
+  "--adaln-cache", "{runs}/fasth3-4step-vsa-768p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames",
+  "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-4step-vsa-768p-prof"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+note = "the profile replaces --h3-recipe 4step-vsa"
+env = []
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--techniques", "h3/fasth3_4step_vsa",
+  "--adaln-cache", "{runs}/fasth3-4step-vsa-768p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames",
+  "{@h3_common}"]
+
+[[compare]]
+baseline = "fasth3-4step-vsa-768p-base"
+candidate = "fasth3-4step-vsa-768p-env"
+args = ["--off-identity"]
+
+[[compare]]
+baseline = "fasth3-4step-vsa-768p-base"
+candidate = "fasth3-4step-vsa-768p-prof"
+args = ["--off-identity"]

@@ -1,0 +1,44 @@
+# The b6 family's b6-solh3-merge pair (runpod-matrix.sh `b6`, plan B6,
+# docs/adr/0017-loader-stages.md): the baseline binary (FV_BASELINE_SHA's
+# runtime image, fetch-baseline.sh) and this build with the same command line
+# and environment, every arm encoding its prompt (--no-text-cache), then
+# compare-clips --off-identity. `env = []` keeps the script's bare `env`
+# before the binary. Schema: crates/fastvideo-lab/schemas/cell.v1.json;
+# docs/adr/0019-fv-lab.md (D1b).
+schema = 1
+name = "b6-solh3-merge"
+description = "Sol-H3 without the tree: the Sol-H3 adapter merged in place; baseline vs this build, byte identity"
+
+[workload]
+model = "h3"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+width = 832
+height = 480
+note = "runpod-matrix.sh's default PROMPT and SEED; 480p / 5 s, the auto text encoder (resident FP8 on this card)"
+
+[lists]
+h3_b6 = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--height", "{height}", "--width",
+  "{width}", "--seconds", "{seconds}", "--prompt", "{prompt}", "--seed", "{seed}", "--text-encoder", "auto",
+  "--no-text-cache", "--no-mp4"]
+
+[[arm]]
+name = "b6-solh3-merge-base"
+gate = "sol-h3"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+bin = "baseline"
+env = ["FASTVIDEO_H3_DIT_TREE=off"]
+argv = ["{@h3_b6}", "--h3-recipe", "sol-h3", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "b6-solh3-merge-pr"
+gate = "sol-h3"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = ["FASTVIDEO_H3_DIT_TREE=off"]
+argv = ["{@h3_b6}", "--h3-recipe", "sol-h3", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[compare]]
+baseline = "b6-solh3-merge-base"
+candidate = "b6-solh3-merge-pr"
+args = ["--off-identity"]

@@ -1,0 +1,27 @@
+# The fastvideo family's fasth3-4step-dense cell (runpod-matrix.sh
+# `fastvideo`): our optimized stack with no sol-engine technique (no Sol-Attn,
+# no TeaCache), the FastH3 recipes against their TAEH3-decoded twins and
+# LTX-2.5 dense stage 2 against its TAE-decoded twin (compare-clips, then the
+# lossy gate). One loop iteration per cell (ADR-0019 open decision 3). Schema:
+# crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md (D1b).
+schema = 1
+name = "fastvideo-fasth3-4step-dense"
+description = "FastH3 4-step dense at the recipe's canvas"
+
+[workload]
+model = "h3"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+note = "runpod-matrix.sh's default PROMPT and SEED; the recipe's default canvas"
+
+[lists]
+h3_common = ["--prompt", "{prompt}", "--seconds", "{seconds}", "--seed", "{seed}", "--text-encoder", "auto",
+  "--text-cache", "{scratch}/h3-text-cache", "--text-weights", "{weights}/h3-base", "--warm"]
+
+[[arm]]
+name = "fasth3-4step-dense-768p"
+gate = "fasth3-4step-dense"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-dense",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]

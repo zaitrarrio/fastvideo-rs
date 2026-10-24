@@ -1382,3 +1382,63 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0020-step-cache.md "Evidence"
 - Verification: `FV_DRY_RUN=1 bash scripts/gpu/runpod-matrix.sh b4a`; GPU run by the coordinator; `h3::techniques::tests::b4a_gpu_cell_profile_reuses_the_middle_forwards`; review of PR #173 (the FBCache path)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-lab-d1b-families
+- Trigger: plan D1b moves more `runpod-matrix.sh` families into fv-lab so that their `case` branches can be deleted one at a time; the byte-identity families come first
+- Options: every family at once with a richer schema (steps, probes, hashing); only the families whose branches are arms, compares and gates, with minimal typed additions, and the rest left in the script with a reason
+- Decision: move `techniques`, `b6`, `rtx5090`, `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae` and `precision` (its default mode) as tiers and cells (10 tiers, 38 cells, 113 arms with `rtx6000`), each on the `rtx6000` tier's pod, as `runpod-http.sh` gives every family; every other family stays, its reason and retire-when recorded in ADR-0019 §9.1; no branch is deleted until that family's GPU run through both runners matches (§9.5)
+- Reason: the moved families are lists of arms, compares and gates, so they fit the schema; the others interleave steps that the schema should not grow for one family (Lanczos upscales, verdict files, data-dependent branches, probes, venvs)
+- Reversibility: cheap (the script keeps every branch until its family's GPU run)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §9, §9.1
+- Verification: `tests/dry_run.rs` (every tier against its script fixture), `bash scripts/gpu/tests/fv-lab-goldens.sh --check`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-lab-baseline-arm
+- Trigger: `techniques` and `b6` (and `b4a`) run every cell with a baseline commit's fv-gpucheck and with this build, then `compare-clips --off-identity`
+- Options: a second tier binary setting; a per-arm `bin` naming the baseline binary; the baseline path as a placeholder in the argv
+- Decision: `[[arm]] bin = "baseline"` (`ArmBin`, default `gpucheck`) runs `<scratch>/baseline-<sha>/fv-gpucheck`, fetched by `fetch-baseline.sh` into the script's path once per run when a cell has a baseline arm; the commit comes from `--baseline-sha` / `FV_BASELINE_SHA`; a failed fetch is FATAL (exit 2) as in the script; `pod up --baseline-sha` passes it to the pod (`FV_EXTRA_ENV`), and `pod up` refuses a baseline tier without it
+- Reason: the pair differs only in `bin`, so the off-identity compare stays a check of the two binaries; the fetch and the path stay the script's
+- Reversibility: cheap (additive optional field)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §9.2 (1)
+- Verification: `plan::tests::baseline_arms_bare_env_tae_and_paired_gates`, `tests/dry_run.rs::baseline_arms_run_the_fetched_binary`, `tests/runner.rs` (baseline pair, failed fetch), `tests/fv_lab_bin.rs::a_baseline_tier_needs_the_baseline_commit`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-lab-tae-and-bare-env
+- Trigger: `rtx5090`, `fastvideo` and `h3arms` have TAE-decoded twins (the script's `tae_gated_cell`), and `techniques` / `b6` write a bare `env` before the binary
+- Options: TAE paths hard-coded to `/fvscratch/tae`; a `{tae}` placeholder resolved like the script's `$TAE` with a per-arm file gate; for `env`, accept one word of difference or make the prefix explicit
+- Decision: `[[arm]] tae = "<file>"` and `{tae}`: `FV_TAE_DIR`, else the volume's `auxiliary/tae` when `.complete`, else `<scratch>/tae`; one `fetch-tae.sh` per run for a missing file, still missing → skipped (`tae weights missing`), then the weight gate; such an arm must read `{tae}/<file>`, and `{tae}` may not appear in an arm without `tae`. `env` becomes optional: absent means no prefix, `env = []` renders a bare `env`
+- Reason: the command lines stay equal word for word with the script, and the TAE location follows the volume as the script's does
+- Reversibility: cheap (additive)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §9.2 (2), (3)
+- Verification: `tests/runner.rs::baseline_arms_and_tae_arms`, `tests/lab_files.rs::every_tae_file_is_one_fetch_tae_sh_fetches`, the `rtx5090` / `fastvideo` / `h3arms` dry-run goldens
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-lab-gate-placement
+- Trigger: ADR-0019 open decision 3; `h3arms` and `precision` loop `compare; gate` per pair, `fastvideo` loops `compare; compare; gate; gate`, and `rtx5090` compares after each resolution
+- Options: a general ordered step list in a cell; one cell per loop iteration plus a compare's optional paired gate
+- Decision: one cell per loop iteration or helper call (`rtx5090`, `fastvideo`, `ltxvae`, `techniques`, `b6`), and `[[compare]] gate = { kind, off }` runs that pair's gate right after its compare; `[[gate]]` keeps running after all compares
+- Reason: both script orders are expressible with one small typed field, and the dry run and `live.log` keep the script's order
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §9.2 (4), open decision 3
+- Verification: `plan::tests::baseline_arms_bare_env_tae_and_paired_gates`, the `h3arms` / `precision` / `fastvideo` dry-run goldens
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-lab-goldens-per-tier
+- Trigger: D1a's goldens covered `rtx6000` only, and took the gate pairs from an awk over the branch, which cannot expand loops
+- Options: per-family hand-written fixtures; the script's own dry run for every tier, with the gated cells reported by the script
+- Decision: `fv-lab-goldens.sh` reads the tier names from `lab/tiers.toml` and writes `<tier>-dry-run.txt`, `<tier>-gates.tsv` and `runpod-http-<tier>.json` for each (`FV_BASELINE_SHA=7654321`, the repository path written as `/opt/fastvideo-rs`); `runpod-matrix.sh` gains dry-run-only behaviour: `FV_DRY_RUN_GATES=<file>`, no TAE fetch and no `techniques` baseline fetch when dry; `fv-lab-compare-runs.sh` also requires equal compare-report verdicts (status, off-identity) and gate reports in both runs (a gate verdict weighs timings, so only its presence)
+- Reason: the fixture is the script's behaviour for every family that moves, and a new tier without fixtures fails CI
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §9.3, §9.5
+- Verification: `bash scripts/gpu/tests/fv-lab-goldens.sh --check` (rtx6000 fixtures unchanged; compare-runs self-test with reports), `tests/{dry_run,payload_golden}.rs` over every tier
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-lab-b4a-stays
+- Trigger: `b4a` is a byte-identity family like `b6`, but each pair also computes a verdict from the arms' TeaCache evidence (reuse count > 0 per arm, equal `cache-evidence.log`, `b4a-<cell>.verdict.json`)
+- Options: move the arms and compares and drop the verdict; add a typed evidence/verdict step now; leave the family in the script
+- Decision: `b4a` stays in `runpod-matrix.sh`; the evidence step is designed with D1d (`gate` moved into fv-lab)
+- Reason: without the verdict, fv-lab would pass a run the script fails; a verdict step is more than a minimal schema addition, and B4a's GPU gate has already passed (#173)
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §9.1
+- Verification: n/a (no change)

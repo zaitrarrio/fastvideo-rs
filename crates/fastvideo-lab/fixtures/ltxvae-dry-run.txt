@@ -1,0 +1,16 @@
+[ltxvae] matrix start image=unknown
+[ltxvae] dry-run ltxvae-4k5s-fast: env FASTVIDEO_GPU_TRACE_DECODE=1 FASTVIDEO_LTX_VAE_CHECK=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /workspace/weights/ltx25 --workload 4k5s --decoder fast --warm --clip /fvscratch/runs/ltxvae/1234567-10241200/ltxvae-4k5s-fast/frames 
+[ltxvae] dry-run ltxvae-4k5s-streaming: env FASTVIDEO_GPU_TRACE_DECODE=1 FASTVIDEO_LTX_VAE_CHECK=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /workspace/weights/ltx25 --workload 4k5s --decoder streaming --warm --clip /fvscratch/runs/ltxvae/1234567-10241200/ltxvae-4k5s-streaming/frames 
+[ltxvae] dry-run compare ltxvae-4k5s-streaming--ltxvae-4k5s-fast 
+[ltxvae] dry-run ltxvae-4k5s-fast-untraced: /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /workspace/weights/ltx25 --workload 4k5s --decoder fast --warm 
+[ltxvae] dry-run ltxvae-4k5s-streaming-untraced: /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /workspace/weights/ltx25 --workload 4k5s --decoder streaming --warm 
+[ltxvae] dry-run ltxvae-4k5s-fast-mp4: /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /workspace/weights/ltx25 --workload 4k5s --decoder fast --warm --mp4 --clip /fvscratch/runs/ltxvae/1234567-10241200/ltxvae-4k5s-fast-mp4/frames 
+[ltxvae] dry-run ltxvae-4k5s-fast-tune: env FASTVIDEO_LTX_VAE_CONV_ALGO=tune /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /workspace/weights/ltx25 --workload 4k5s --decoder fast --warm 
+[ltxvae] dry-run ltxvae-1080p20s-fast: env FASTVIDEO_GPU_TRACE_DECODE=1 FASTVIDEO_LTX_VAE_CHECK=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /workspace/weights/ltx25 --workload 1080p20s --decoder fast --warm --clip /fvscratch/runs/ltxvae/1234567-10241200/ltxvae-1080p20s-fast/frames 
+[ltxvae] dry-run ltxvae-1080p20s-streaming: env FASTVIDEO_GPU_TRACE_DECODE=1 FASTVIDEO_LTX_VAE_CHECK=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /workspace/weights/ltx25 --workload 1080p20s --decoder streaming --warm --clip /fvscratch/runs/ltxvae/1234567-10241200/ltxvae-1080p20s-streaming/frames 
+[ltxvae] dry-run compare ltxvae-1080p20s-streaming--ltxvae-1080p20s-fast 
+[ltxvae] dry-run ltxvae-1080p20s-fast-untraced: /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /workspace/weights/ltx25 --workload 1080p20s --decoder fast --warm 
+[ltxvae] dry-run ltxvae-1080p20s-streaming-untraced: /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /workspace/weights/ltx25 --workload 1080p20s --decoder streaming --warm 
+[ltxvae] dry-run ltxvae-1080p20s-fast-mp4: /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /workspace/weights/ltx25 --workload 1080p20s --decoder fast --warm --mp4 --clip /fvscratch/runs/ltxvae/1234567-10241200/ltxvae-1080p20s-fast-mp4/frames 
+[ltxvae] dry-run ltxvae-1080p20s-fast-tune: env FASTVIDEO_LTX_VAE_CONV_ALGO=tune /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /workspace/weights/ltx25 --workload 1080p20s --decoder fast --warm 
+[ltxvae] matrix done

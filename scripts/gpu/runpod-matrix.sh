@@ -20,7 +20,10 @@
 # FV_DRY_RUN=1: no GPU and no weights needed. Each cell's command line is
 # logged instead of run (weights not verified, no baseline fetched), so a
 # family's cells can be read off-pod: FV_DRY_RUN=1 FV_WORK=/tmp/fv-dry
-# FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b6 (or b4a).
+# FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b6 (or b4a). A dry
+# run neither fetches the baseline binary nor the TAE files, and with
+# FV_DRY_RUN_GATES=<file> it appends "<cell>\t<verify-weights.sh cell>" per
+# gated cell (fv-lab's goldens, scripts/gpu/tests/fv-lab-goldens.sh).
 set -euo pipefail
 FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|b6|b4a|h3arms|h3attn}"
 DRY_RUN="${FV_DRY_RUN:-0}"
@@ -213,6 +216,11 @@ gated_cell() {
     log "skip $name (not in FV_CELLS)"
     return 0
   fi
+  # FV_DRY_RUN_GATES=<file> (dry run only): one "<name>\t<weight cell>" line
+  # per gated cell, for the goldens of fv-lab (scripts/gpu/tests/fv-lab-goldens.sh).
+  if [[ "$DRY_RUN" == 1 && -n "${FV_DRY_RUN_GATES:-}" ]]; then
+    printf '%s\t%s\n' "$name" "$wcell" >>"$FV_DRY_RUN_GATES"
+  fi
   if [[ "$DRY_RUN" != 1 ]] && ! FV_WEIGHTS="$W" bash "$VERIFY" "$wcell" >"$RUNS/$name.weights.log" 2>&1; then
     mkdir -p "$RUNS/$name"
     log "SKIP $name: weights incomplete"
@@ -245,11 +253,12 @@ tae_gated_cell() {
     log "skip $name (not in FV_CELLS)"
     return 0
   fi
-  if [[ ! -f "$file" && -z "$tae_fetched" ]]; then
+  # A dry run neither fetches nor checks the file: it logs the command.
+  if [[ "$DRY_RUN" != 1 && ! -f "$file" && -z "$tae_fetched" ]]; then
     tae_fetched=1
     bash "$(dirname "${BASH_SOURCE[0]}")/fetch-tae.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 || true
   fi
-  if [[ ! -f "$file" ]]; then
+  if [[ "$DRY_RUN" != 1 && ! -f "$file" ]]; then
     mkdir -p "$RUNS/$name"
     log "SKIP $name: $file missing (see tae-fetch.log)"
     write_json "$RUNS/$name/summary.json" "$(printf '{"cell":"%s","family":"%s","exit":null,"skipped":"tae weights missing"}' "$name" "$FAMILY")"
@@ -1912,12 +1921,14 @@ Audio: male speech, clear voice, quiet room"
     # FV_TECH_CELLS narrows the cells (default: all four).
     base_sha="${FV_BASELINE_SHA:?techniques family needs FV_BASELINE_SHA (the pre-refactor commit)}"
     BASE="$SCRATCH/baseline-$base_sha/fv-gpucheck"
-    if ! bash "$(dirname "${BASH_SOURCE[0]}")/fetch-baseline.sh" "$base_sha" "$(dirname "$BASE")" >>"$RUNS/baseline-fetch.log" 2>&1; then
-      log "FATAL: baseline binary sha-$base_sha unavailable (baseline-fetch.log)"
-      tee -a "$LOG" <"$RUNS/baseline-fetch.log"
-      exit 2
+    if [[ "$DRY_RUN" != 1 ]]; then
+      if ! bash "$(dirname "${BASH_SOURCE[0]}")/fetch-baseline.sh" "$base_sha" "$(dirname "$BASE")" >>"$RUNS/baseline-fetch.log" 2>&1; then
+        log "FATAL: baseline binary sha-$base_sha unavailable (baseline-fetch.log)"
+        tee -a "$LOG" <"$RUNS/baseline-fetch.log"
+        exit 2
+      fi
+      log "baseline $(tail -1 "$RUNS/baseline-fetch.log")"
     fi
-    log "baseline $(tail -1 "$RUNS/baseline-fetch.log")"
     h3_common=(
       --prompt "$PROMPT"
       --seconds 5

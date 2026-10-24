@@ -29,3 +29,182 @@ weights = "volume"
 preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
 tae = true
 cells = ["rtx6000-h3", "rtx6000-ltx25"]
+
+# ---- D1b (docs/adr/0019-fv-lab.md "D1b"): more runpod-matrix.sh families, each
+# held equal to the script's dry run by a golden (scripts/gpu/tests/fv-lab-goldens.sh).
+# Every tier below is the rtx6000 tier's pod (runpod-http.sh's defaults for any
+# FV_FAMILY: the PRO 6000, its preflight cells, FV_GEN_TIMEOUT_S 3600, the TAE fetch).
+
+# runpod-matrix.sh `techniques`: the baseline binary (FV_BASELINE_SHA, fetch-baseline.sh) against this build
+# and its profile, compare-clips --off-identity; one cell per tech_h3 call (its compares follow it).
+[[tier]]
+name = "techniques"
+description = "The technique composition layer against the build before it (docs/techniques.md): every cell from the baseline binary, this build and its --techniques profile, byte identity (needs --baseline-sha)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["techniques-fasth3-8step-768p", "techniques-fasth3-4step-vsa-768p", "techniques-h3-480p-fullopt", "techniques-ltx25-512p-sol"]
+
+# runpod-matrix.sh `b6` (docs/adr/0017-loader-stages.md): one cell per b6_pair, baseline vs this build,
+# compare-clips --off-identity. The script's FV_GEN_TIMEOUT_S default of 900 never applies under
+# runpod-http.sh (which passes 3600), so cell_timeout_s is 3600 here as there.
+[[tier]]
+name = "b6"
+description = "Plan B6: byte identity of the load paths the loader split moved, baseline binary against this build (needs --baseline-sha)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["b6-solh3-tree", "b6-solh3-merge", "b6-4stepvsa-merge", "b6-h3-streamed", "b6-h3-ref2va", "b6-ltx25-ref2v", "b6-ltx25-a2v-guided", "b6-ltx25-offload-cpu"]
+
+# runpod-matrix.sh `rtx5090`: one cell per loop iteration (its compares follow each iteration).
+[[tier]]
+name = "rtx5090"
+description = "The sol-engine RTX 5090 single-GPU suite (dense, Sol, fullopt, TAE decoders; LTX-2.5 at 4k5s, 1080p20s, 512p), resident on the PRO 6000"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["rtx5090-h3-768p", "rtx5090-h3-480p", "rtx5090-ltx25-4k5s", "rtx5090-ltx25-1080p20s", "rtx5090-ltx25-512p"]
+
+# runpod-matrix.sh `fastvideo`: one cell per loop iteration.
+[[tier]]
+name = "fastvideo"
+description = "Our optimized stack without sol-engine techniques: H3 base dense, FastH3 recipes and their TAEH3 twins, LTX-2.5 dense stage 2 and its TAE twin"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["fastvideo-h3-768p", "fastvideo-h3-480p", "fastvideo-fasth3-4step-dense", "fastvideo-ltx25-4k5s", "fastvideo-ltx25-1080p20s", "fastvideo-ltx25-512p"]
+
+# runpod-matrix.sh `h3arms` (one prompt: FV_PROMPTS / FV_LPIPS are the script's, ADR-0019 §7).
+[[tier]]
+name = "h3arms"
+description = "FastH3 technique arms (Sol-Attn, TeaCache, both) gated against the plain recipe, plus TAEH3 twins"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["h3arms-fasth3-8step-768p", "h3arms-fasth3-8step-480p", "h3arms-fasth3-4step-vsa-480p"]
+
+# runpod-matrix.sh `trace`.
+[[tier]]
+name = "trace"
+description = "One CUPTI-traced warm step of FastH3 (three recipes) and LTX-2.5 Sol (4k5s, 1080p20s)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["trace-h3", "trace-ltx25"]
+
+# runpod-matrix.sh `ltxfps` (serve E4).
+[[tier]]
+name = "ltxfps"
+description = "LTX-2.5 at 25 / 48 / 50 fps and silent (ffprobe and frame-sink checks), FastH3 8-step with the sink check"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["ltxfps-ltx25", "ltxfps-h3"]
+
+# runpod-matrix.sh `ltxvae` (FV_VAE_TRACE=1, FV_VAE_UNTRACED=1, FV_VAE_GEN=0: its defaults).
+[[tier]]
+name = "ltxvae"
+description = "The LTX-2.5 conv VAE decode alone: fast vs streaming decoder, traced and untraced, mp4 writer, tuned algorithms"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["ltxvae-4k5s", "ltxvae-4k5s-untraced", "ltxvae-1080p20s", "ltxvae-1080p20s-untraced"]
+
+# runpod-matrix.sh `precision`, its default mode (the FV_PRECISION_ARM=ltx-nvfp4 mode stays in the script).
+[[tier]]
+name = "precision"
+description = "Precision switches against f32 activations: FastH3 8-step (bf16 act, W8A8, MXFP8) and LTX-2.5 4k5s Sol (bf16 act, FP8)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["precision-h3", "precision-ltx25"]

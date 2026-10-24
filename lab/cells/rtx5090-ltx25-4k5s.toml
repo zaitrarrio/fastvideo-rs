@@ -1,0 +1,51 @@
+# The rtx5090 family's ltx25-4k5s cell (runpod-matrix.sh `rtx5090`, one loop
+# iteration: ADR-0019 open decision 3 splits a family whose compares follow
+# each iteration into one cell per iteration). The sol-engine RTX 5090
+# single-GPU suite (config/minimax_h3/rtx5090_*.toml, models/ltx25/RTX5090);
+# on this tier's 96 GB card the cells run resident. TAE arms read {tae} (the
+# volume's auxiliary/tae, else the pod's fetch). Schema:
+# crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md (D1b).
+schema = 1
+name = "rtx5090-ltx25-4k5s"
+description = "LTX-2.5 distilled two-stage at the reference's 4k5s workload (--workload 4k5s): Sol stage 2, dense stage 2, and Sol decoded by the wide LTX TAE"
+
+[workload]
+model = "ltx2"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+note = "runpod-matrix.sh's default PROMPT and SEED; the reference's 4k5s workload (--workload 4k5s)"
+
+[[arm]]
+name = "ltx25-4k5s-sol"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--workload", "4k5s", "--prompt", "{prompt}", "--seed", "{seed}", "--two-stage", "--text",
+  "streamed", "--warm", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "ltx25-4k5s-dense"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--workload", "4k5s", "--dense-stage2", "--prompt", "{prompt}", "--seed", "{seed}",
+  "--two-stage", "--text", "streamed", "--warm", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "ltx25-4k5s-sol-taehv"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+note = "sol-engine models/ltx2.5-refiner: taeltx2_3_wide replaces the conv VAE decode"
+tae = "taeltx2_3_wide.safetensors"
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--workload", "4k5s", "--ltx-tae-weights", "{tae}/taeltx2_3_wide.safetensors", "--prompt",
+  "{prompt}", "--seed", "{seed}", "--two-stage", "--text", "streamed", "--warm", "--clip",
+  "{runs}/{arm}/frames"]
+
+[[compare]]
+baseline = "ltx25-4k5s-dense"
+candidate = "ltx25-4k5s-sol"
+
+[[compare]]
+baseline = "ltx25-4k5s-sol"
+candidate = "ltx25-4k5s-sol-taehv"

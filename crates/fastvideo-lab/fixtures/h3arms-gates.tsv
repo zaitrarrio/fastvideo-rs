@@ -1,0 +1,13 @@
+fasth3-8step-768p	fasth3-8step	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+fasth3-8step-768p-sol	fasth3-8step	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+fasth3-8step-768p-tea	fasth3-8step	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+fasth3-8step-768p-soltea	fasth3-8step	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+fasth3-8step-480p	fasth3-8step	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+fasth3-8step-480p-sol	fasth3-8step	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+fasth3-8step-480p-tea	fasth3-8step	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+fasth3-8step-480p-soltea	fasth3-8step	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+fasth3-8step-480p-sol-taeh3	fasth3-8step	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+fasth3-8step-480p-tea-taeh3	fasth3-8step	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+fasth3-8step-480p-soltea-taeh3	fasth3-8step	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+fasth3-4step-vsa-480p	fasth3-4step-vsa	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:vsa-datafree/adapter_model.safetensors
+fasth3-4step-vsa-480p-taeh3	fasth3-4step-vsa	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:vsa-datafree/adapter_model.safetensors

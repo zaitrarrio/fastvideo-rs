@@ -1,0 +1,87 @@
+# The precision family's H3 cell (runpod-matrix.sh `precision`, its default
+# mode; the FV_PRECISION_ARM=ltx-nvfp4 mode stays in the script): the
+# precision switches on the current build against the f32-activation baseline,
+# same prompt, seed, warm. `gate` on a compare runs that pair's gate right
+# after it, as the script's loop does. Schema:
+# crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md (D1b).
+schema = 1
+name = "precision-h3"
+description = "FastH3 8-step at its 768p canvas: f32 activations, bf16 activations, W8A8 (Spark stage 1), MXFP8 (Sol-H3 blocks)"
+
+[workload]
+model = "h3"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+note = "runpod-matrix.sh's default PROMPT and SEED; the recipe's canvas; skipped on the EU volume (h3-8step is R2-only)"
+
+[lists]
+h3_common = ["--prompt", "{prompt}", "--seconds", "{seconds}", "--seed", "{seed}", "--text-encoder", "auto",
+  "--text-cache", "{scratch}/h3-text-cache", "--text-weights", "{weights}/h3-base", "--warm"]
+
+[[arm]]
+name = "fasth3-8step-768p-f32act"
+gate = "fasth3-8step"
+trees = ["h3-8step", "h3-base"]
+env = [
+  "FASTVIDEO_BF16_ACT=0",
+  "FASTVIDEO_H3_QUANT=off",
+]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-8step", "--h3-recipe", "8step",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-8step-768p-bf16act"
+gate = "fasth3-8step"
+trees = ["h3-8step", "h3-base"]
+env = [
+  "FASTVIDEO_BF16_ACT=1",
+  "FASTVIDEO_H3_QUANT=off",
+]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-8step", "--h3-recipe", "8step",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-8step-768p-w8a8"
+gate = "fasth3-8step"
+trees = ["h3-8step", "h3-base"]
+env = [
+  "FASTVIDEO_BF16_ACT=1",
+  "FASTVIDEO_H3_QUANT=w8a8",
+]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-8step", "--h3-recipe", "8step",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-8step-768p-mxfp8"
+gate = "fasth3-8step"
+trees = ["h3-8step", "h3-base"]
+env = [
+  "FASTVIDEO_BF16_ACT=1",
+  "FASTVIDEO_H3_QUANT=mxfp8",
+]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-8step", "--h3-recipe", "8step",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[compare]]
+baseline = "fasth3-8step-768p-f32act"
+candidate = "fasth3-8step-768p-bf16act"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "fasth3-8step-768p-f32act"
+candidate = "fasth3-8step-768p-w8a8"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "fasth3-8step-768p-f32act"
+candidate = "fasth3-8step-768p-mxfp8"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "fasth3-8step-768p-bf16act"
+candidate = "fasth3-8step-768p-w8a8"
+
+[[compare]]
+baseline = "fasth3-8step-768p-bf16act"
+candidate = "fasth3-8step-768p-mxfp8"

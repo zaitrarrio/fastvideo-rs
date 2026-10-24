@@ -1,0 +1,38 @@
+# The trace family's LTX-2.5 cell (runpod-matrix.sh `trace`):
+# FASTVIDEO_GPU_TRACE=1, a CUPTI activity trace of one warm denoise step (the
+# `/gpu_trace` line in stderr.log, `gpu_trace` in gpucheck-out/*.json).
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md
+# (D1b).
+schema = 1
+name = "trace-ltx25"
+description = "LTX-2.5 Sol two-stage at 4k5s and 1080p20s, step 9 (the second full-resolution stage-2 step) CUPTI-traced"
+
+[workload]
+model = "ltx2"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+note = "runpod-matrix.sh's default PROMPT and SEED; the reference's 4k5s and 1080p20s workloads (--workload)"
+
+[[arm]]
+name = "ltx25-4k5s-sol"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = [
+  "FASTVIDEO_GPU_TRACE=1",
+  "FASTVIDEO_GPU_TRACE_STEP=9",
+]
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--workload", "4k5s", "--prompt", "{prompt}", "--seed", "{seed}", "--two-stage", "--text",
+  "streamed", "--warm", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "ltx25-1080p20s-sol"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = [
+  "FASTVIDEO_GPU_TRACE=1",
+  "FASTVIDEO_GPU_TRACE_STEP=9",
+]
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--workload", "1080p20s", "--prompt", "{prompt}", "--seed", "{seed}", "--two-stage",
+  "--text", "streamed", "--warm", "--clip", "{runs}/{arm}/frames"]

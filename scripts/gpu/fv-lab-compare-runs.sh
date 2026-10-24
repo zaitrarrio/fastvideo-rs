@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# The D1a GPU gate (docs/adr/0019-fv-lab.md §8): does an `fv-lab pod up` run
-# reproduce a `runpod-http.sh run` of the same commit? Both run directories are
-# what the fetches wrote under artifacts/runpod/<family>/<tag>/.
+# The GPU gate of D1a / D1b (docs/adr/0019-fv-lab.md §8): does an `fv-lab pod
+# up` run reproduce a `runpod-http.sh run` of the same commit? Both run
+# directories are what the fetches wrote under artifacts/runpod/<family>/<tag>/.
 #
 #   fv-lab-compare-runs.sh <fv-lab run dir> <runpod-http run dir>
 #
@@ -12,7 +12,16 @@
 #   - frames.sha256.json is byte-identical (both runners write it after an arm:
 #     every frame's SHA-256; docs/perf/determinism.md promises the same bytes
 #     for the same request and seed on the same GPU class), or absent in both;
-#   - benchmark.json is present in both or in neither.
+#   - benchmark.json is present in both or in neither;
+# and for every compare / gate report (compare/compare-clips-*.json,
+# gate/gate-*.json, D1b's families) of either run:
+#   - the report exists in both;
+#   - a compare report's `status` and off-identity status
+#     (context.off_identity.status: the byte-identity verdict of a
+#     --off-identity compare) agree: both follow from the frames, which are
+#     byte-identical on one GPU class. A gate's verdict also weighs the two
+#     arms' timings, which differ from pod to pod, so a gate report is only
+#     required in both runs.
 # Exit 0 when the runs agree, 1 (with one line per difference) otherwise.
 # Needs bash and jq.
 set -euo pipefail
@@ -43,5 +52,21 @@ while IFS= read -r arm; do
   echo "same $arm: $ea, $frames"
   same=$((same + 1))
 done < <({ arms "$A"; arms "$B"; } | LC_ALL=C sort -u)
-echo "$same arm(s) the same, $diffs difference(s)"
+reports() { (cd "$1" && for r in compare/compare-clips-*.json gate/gate-*.json; do [[ -f "$r" ]] && echo "$r"; done) | LC_ALL=C sort; }
+verdict() {
+  case "$1" in
+    */gate/*) echo present ;;
+    *) jq -c '{status: .status, off_identity: (.context.off_identity.status? // null)}' "$1" 2>/dev/null || echo unreadable ;;
+  esac
+}
+nrep=0
+while IFS= read -r r; do
+  if [[ ! -f "$A/$r" ]]; then say "DIFF $r: only in the runpod-http run"; continue; fi
+  if [[ ! -f "$B/$r" ]]; then say "DIFF $r: only in the fv-lab run"; continue; fi
+  va="$(verdict "$A/$r")" vb="$(verdict "$B/$r")"
+  [[ "$va" == "$vb" ]] || { say "DIFF $r: $va (fv-lab) vs $vb (runpod-http)"; continue; }
+  echo "same $r: $va"
+  nrep=$((nrep + 1))
+done < <({ reports "$A"; reports "$B"; } | LC_ALL=C sort -u)
+echo "$same arm(s) and $nrep report(s) the same, $diffs difference(s)"
 (( same > 0 && diffs == 0 ))
