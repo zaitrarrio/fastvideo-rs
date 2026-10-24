@@ -1051,3 +1051,12 @@ ran (pod id, $/hr), result, cost.
   `trace`, `ltxfps` and `ltxvae` tiers still to compare on GPU before their
   script branches go), B4 merged. Spend today since 15:55Z about $13 (D1b
   $5.50, B4c $0.80, B4c2 $2.30, B4b $1.35, build pod); balance about $21.
+- 2026-10-24, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): `stream_causal`
+  session-limit hang root-caused and fixed on `claude/fix-causal-limit-hang`
+  (draft PR): `Metronome::poll` could ask for a sub-nanosecond wait that
+  tokio's paused clock never gets past (first block at a wheel slot
+  boundary, then f64 deadline a few ulps after the clock); it now ticks
+  within 1 µs of the deadline, and the paused-time tests run under a 60 s
+  real-time guard. Build pod `l3d75u8a8zhw47` answered 404, so the
+  200-iteration loop and the gates were not run; analysis and a Python
+  replay of the paused clock only. No cost.

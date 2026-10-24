@@ -319,8 +319,52 @@ async fn max_seconds_ends_the_causal_stream_in_video_time() {
     assert!(e.open_causal_session(spec()).await.is_ok());
 }
 
+/// Wall-clock bound on one paused-time test (a pass takes well under a
+/// second; coverage builds take a few).
+const REAL_TIME_GUARD: Duration = Duration::from_secs(60);
+
+/// Runs `body` in a current-thread runtime with paused (virtual) time, on
+/// its own thread, and fails the test if it has not finished after
+/// [`REAL_TIME_GUARD`] of real time. Paused time cannot bound itself (a
+/// tokio timeout fires in virtual time, e.g. while the real-time fake
+/// executor loads), so the guard waits on a std channel. It is a safety
+/// net: a hang shows up as this failure instead of a stuck CI job.
+fn paused_time<F, Fut>(body: F)
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()>,
+{
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let worker = std::thread::Builder::new()
+        .name("paused-time".into())
+        .spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .start_paused(true)
+                .build()
+                .unwrap();
+            rt.block_on(body());
+            let _ = done_tx.send(());
+        })
+        .unwrap();
+    match done_rx.recv_timeout(REAL_TIME_GUARD) {
+        Ok(()) => worker.join().unwrap(),
+        // The body panicked (a failed assertion): report its panic.
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            if let Err(p) = worker.join() {
+                std::panic::resume_unwind(p);
+            }
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!(
+            "the paused-time causal session did not end within {REAL_TIME_GUARD:?} of real \
+             time: the pacer is stuck (the session limit was never reached or `ticks` never closed)"
+        ),
+    }
+}
+
 /// Runs a causal session under `limits` in tokio's paused (virtual) time
-/// until the pacer ends it; returns the stats at the end.
+/// until the pacer ends it; returns the stats at the end. Call it inside
+/// [`paused_time`], which bounds it in real time.
 async fn run_limited(
     limits: CausalLimits,
     requested: Option<u32>,
@@ -353,43 +397,47 @@ async fn run_limited(
 
 // Simulated clock: tokio's paused time drives the pacer's metronome, so
 // minutes of video play out in milliseconds (the fake executor is real).
-#[tokio::test(start_paused = true)]
-async fn the_default_limit_ends_a_live_session_at_120_s() {
-    let st = run_limited(CausalLimits::default(), None).await;
-    assert_eq!(st.ended, Some(EndReason::SessionLimit));
-    assert!(
-        (120.0..121.0).contains(&st.video_seconds),
-        "{}",
-        st.video_seconds
-    );
+#[test]
+fn the_default_limit_ends_a_live_session_at_120_s() {
+    paused_time(|| async {
+        let st = run_limited(CausalLimits::default(), None).await;
+        assert_eq!(st.ended, Some(EndReason::SessionLimit));
+        assert!(
+            (120.0..121.0).contains(&st.video_seconds),
+            "{}",
+            st.video_seconds
+        );
+    });
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_requested_limit_is_honoured_and_clamped_to_the_ceiling() {
-    let l = CausalLimits::default();
-    let st = run_limited(l, Some(30)).await;
-    assert_eq!(st.ended, Some(EndReason::SessionLimit));
-    assert!(
-        (30.0..31.0).contains(&st.video_seconds),
-        "{}",
-        st.video_seconds
-    );
-    let st = run_limited(l, Some(200)).await;
-    assert!(
-        (200.0..201.0).contains(&st.video_seconds),
-        "{}",
-        st.video_seconds
-    );
-    // 3600 asked, 300 served.
-    assert_eq!(l.resolve(Some(3600)).unwrap(), 300);
-    let st = run_limited(l, Some(3600)).await;
-    assert_eq!(st.ended, Some(EndReason::SessionLimit));
-    assert!(
-        (300.0..301.0).contains(&st.video_seconds),
-        "{}",
-        st.video_seconds
-    );
-    assert!(l.resolve(Some(0)).is_err());
+#[test]
+fn a_requested_limit_is_honoured_and_clamped_to_the_ceiling() {
+    paused_time(|| async {
+        let l = CausalLimits::default();
+        let st = run_limited(l, Some(30)).await;
+        assert_eq!(st.ended, Some(EndReason::SessionLimit));
+        assert!(
+            (30.0..31.0).contains(&st.video_seconds),
+            "{}",
+            st.video_seconds
+        );
+        let st = run_limited(l, Some(200)).await;
+        assert!(
+            (200.0..201.0).contains(&st.video_seconds),
+            "{}",
+            st.video_seconds
+        );
+        // 3600 asked, 300 served.
+        assert_eq!(l.resolve(Some(3600)).unwrap(), 300);
+        let st = run_limited(l, Some(3600)).await;
+        assert_eq!(st.ended, Some(EndReason::SessionLimit));
+        assert!(
+            (300.0..301.0).contains(&st.video_seconds),
+            "{}",
+            st.video_seconds
+        );
+        assert!(l.resolve(Some(0)).is_err());
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]

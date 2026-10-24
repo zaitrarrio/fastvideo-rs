@@ -505,6 +505,17 @@ impl<T: Clone> AvPacer<T> {
 /// Periods behind schedule before the metronome resnaps instead of bursting.
 pub const RESNAP_PERIODS: f64 = 8.0;
 
+/// Seconds before a deadline at which [`Metronome::poll`] already ticks.
+///
+/// The schedule is f64 seconds and callers measure `now` from a `Duration`,
+/// so a clock that wakes exactly at the deadline can still read a few ulps
+/// short of it. Without this slack the metronome asks for a sub-nanosecond
+/// wait, which rounds to a zero-length sleep: tokio's paused clock never
+/// advances past it and the tick loop spins forever. 1 µs is far below any
+/// period and any timer's resolution, and far above f64 noise at any
+/// practical session length.
+pub const DEADLINE_SLACK_S: f64 = 1e-6;
+
 /// A drift-free, re-anchoring tick schedule.
 ///
 /// Deadlines advance by exactly one period per tick, so there is no drift
@@ -538,9 +549,11 @@ impl Metronome {
 
     /// `Ok(())` means tick now (the schedule has advanced); `Err(dt)` means
     /// sleep `dt` seconds and poll again. The first poll ticks immediately.
+    /// A deadline within [`DEADLINE_SLACK_S`] counts as reached, so `dt` is
+    /// always at least that long and a sleep of `dt` moves any clock.
     pub fn poll(&mut self, now: f64) -> std::result::Result<(), f64> {
         let next = *self.next.get_or_insert(now);
-        if now < next {
+        if now + DEADLINE_SLACK_S < next {
             return Err(next - now);
         }
         let mut due = next;
@@ -959,5 +972,45 @@ mod tests {
         let wait = m.poll(5.0).unwrap_err();
         assert!((wait - 1.0 / 24.0).abs() < 1e-9);
         assert_eq!(m.resnaps(), 1);
+    }
+
+    /// Replays the causal pacer on tokio's paused clock, which wakes a sleep
+    /// exactly at its deadline rounded up to the millisecond: every wait the
+    /// metronome asks for must move that clock. Regression: the first block
+    /// arrived at 1.984 s (a timer-wheel slot boundary), and at 64.109 s the
+    /// f64 schedule ran 7e-15 s ahead of the clock; the wait rounded to a
+    /// zero-length sleep, the paused clock never advanced, and the pacer
+    /// spun forever (`stream_causal`'s session-limit tests hung).
+    #[test]
+    fn metronome_waits_always_move_a_millisecond_clock() {
+        use std::time::Duration;
+        const MS: u64 = 1_000_000;
+        let secs = |ns: u64| Duration::from_nanos(ns).as_secs_f64();
+        let anchors = (0..1000u64).chain([1984, 2048, 64 * 997]);
+        for anchor_ms in anchors {
+            // The causal pacer: 4 fps until the first block, then 16 fps,
+            // 120 s of video.
+            let mut m = Metronome::new(4.0);
+            let mut now = anchor_ms * MS;
+            assert!(m.poll(secs(now)).is_ok());
+            m.set_fps(16.0);
+            let mut ticks = 1u32;
+            while ticks < 120 * 16 {
+                match m.poll(secs(now)) {
+                    Ok(()) => ticks += 1,
+                    Err(dt) => {
+                        let wait = Duration::from_secs_f64(dt).as_nanos() as u64;
+                        assert!(
+                            wait > 0,
+                            "anchor {anchor_ms} ms: a {dt:e} s wait at {} s cannot move the clock",
+                            secs(now)
+                        );
+                        // tokio: the deadline rounds up to a whole ms tick.
+                        now = (now + wait).div_ceil(MS) * MS;
+                    }
+                }
+            }
+            assert_eq!(m.resnaps(), 0, "anchor {anchor_ms} ms");
+        }
     }
 }
