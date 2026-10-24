@@ -147,7 +147,7 @@ ran (pod id, $/hr), result, cost.
 - 2026-10-23 22:52Z: F3a opened #140 (13 code files, +902/-32): 338 crate
   tests and `scripts/serve/check.sh` (986 passed) green on the pod. `otel`
   deferred to a new F3c. Awaiting serve-compat CI.
-- 2026-10-24 00:10Z: A1 opened a draft PR (`claude/a1-fastvideo-manifest`):
+- 2026-10-24 00:10Z: A1 opened draft PR #143 (`claude/a1-fastvideo-manifest`):
   `crates/fastvideo-manifest` layer 1 (modules `name`, `model_toml`,
   `manifest`, `canonical`, `sig`, `lineage`, `schema`), ADR-0005..0007,
   fixtures from an independent Python oracle (`fixtures/gen_fixtures.py`).
