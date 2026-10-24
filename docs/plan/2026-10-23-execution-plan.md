@@ -346,3 +346,29 @@ ran (pod id, $/hr), result, cost.
   merging main and regenerating control), B3a (#153, GPU byte-identity run
   pending), A5 (blocked on the `FASTVIDEO_RS_TOKEN` secret). Next: B2, C1, E2
   after A3; B3b after B3a.
+- 2026-10-24 02:26Z: A3 opened a draft PR (`claude/a3-engine-projection`):
+  the engine embeds `families/*.toml` (`FV_FAMILIES_DIR` overrides) and
+  `catalog()` is their projection; the hand-written rows and recipe-derived
+  caps are deleted; `[variants.serving]` and `public_names` added to layer 2;
+  `longlive-1.3b` and `h3-lightx2v-turbo-v01` are variants; the 35 serve
+  TOMLs and the compat config name `variant` + residency (zero `[aliases]`).
+  Golden `/fv/v1/capabilities` + `/v1/models` for 36 configs taken on the
+  unchanged tree first: identical for every CUDA config; one listed
+  exception (`fake.toml`, `tests/compat/serve.toml` gain `fastwan-1.3b`).
+  On build pod `i8tu0lpdb6nvov`, merged head: manifest + engine-service +
+  protocol 292 tests, `scripts/serve/check.sh` 999 passed / 0 failed in 106
+  binaries (dimension_sweep 8, e2e 14, capabilities_golden 1), fmt, clippy
+  `-D warnings`, cuda-feature check green. Control-side follow-up for A4:
+  `gen-configs.mjs --check` and `serverless/serves.ts` must read the new
+  `[[models]]` form.
+- 2026-10-24 02:55Z: A3 merged main (A4 #149, F3c #150) and brought the
+  control plane in line: `gen-configs.mjs` regenerated (worker and image
+  configs, `families-gen.ts` with `public_names`, `tasks`, `main_tree` and
+  the two new variants), `CATALOG_EXCEPTIONS`, `ENGINE_RECIPE_ALIASES`, the
+  `recipe-trees.ts` override and the LongLive `weights_extra` removed,
+  `serverless/serves.ts` reads `[[models]] variant` and public names. Review
+  fixes: e2e scripts write and edit the variant form (with guards), retired
+  config forms get named refusals, `[[models]]` resolve against one manifest
+  snapshot. Control: `gen-configs.mjs --check`, typecheck, vitest 580/580;
+  pod: `check.sh` 1000 passed / 0 failed, serve `--features otel` 143
+  passed, manifest + engine + protocol 292, fmt, clippy, cuda check green.

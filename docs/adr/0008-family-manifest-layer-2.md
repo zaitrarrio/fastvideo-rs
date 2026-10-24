@@ -1,6 +1,6 @@
 # ADR-0008: The family manifest, layer 2
 
-- Status: Accepted
+- Status: Accepted; amended 2026-10-24 by plan A3 (section "Amendment: the files are the source")
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-family-manifest-layer-2
 - Crate: `fastvideo-manifest`, module `family`; schema
@@ -44,7 +44,7 @@ tier = "turbo"                         # draft | turbo | max; absent when untier
 served_names = ["fasth3"]              # names besides the id
 resident_default = true
 recipe_name = "fasth3-4step-vsa"       # the short recipe name the capabilities report
-trees = ["FastH3-4-step-Preview-v1-LoRA", "h3-base"]   # weights-manifest.tsv names, sorted
+trees = ["FastH3-4-step-Preview-v1-LoRA", "h3-base"]   # weights-store tree names, sorted
 
 [variants.gpu]
 min_vram_gib = 80
@@ -88,10 +88,14 @@ file deserialises and equals the catalog).
 
 ### Choice 2: trees are names, not paths
 
-A family file names what a variant reads as weights trees, exactly as
-`scripts/gpu/weights-manifest.tsv` names them (`h3-base`,
-`longlive-plug/wan21-t2v-14b-cfg`, `auxiliary/tae/taeh3.safetensors`), and
-never where they are. Inside `engine`, every path under the engine's
+A family file names what a variant reads as weights trees, as the weights
+store names them under the weights root (`h3-base`,
+`longlive-plug/wan21-t2v-14b-cfg`, `auxiliary/tae/taeh3.safetensors`): a
+`scripts/gpu/weights-manifest.tsv` row, or a tree that file documents
+without a Hub row (`h3-ref2va`, two repositories fetched by
+`scripts/gpu/fetch-h3-ref2va.sh`; `longlive-1.3b-safetensors`, converted on
+the volume; both are `scripts/gpu/weights-r2.tsv` rows), and never where
+they are. Inside `engine`, every path under the engine's
 `WeightLayout` is written with a placeholder: a path under `tae_dir`
 becomes `${tae}/<rest>` (`${tae}` alone for the directory), any other path
 under `root` becomes `${weights}/<rest>`; the engine substitutes its own
@@ -110,7 +114,7 @@ cargo feature `fs`, which the engine enables and the registry never does.
 `FamilySet::parse_all` takes `(label, text)` pairs for callers that read
 their own files.
 
-### What A2 leaves to A3
+### What A2 left to A3 (resolved by the amendment below)
 
 - `registry_name` is `None` in every variant: no model is published yet.
 - `caps` is the layer-1 subset of the engine's `ModelCaps`: the H3 1080P
@@ -135,3 +139,71 @@ their own files.
   `tests/schema.rs`, `crates/fastvideo-engine-service/src/cuda/families.rs`
   unit tests and `tests/families.rs` (projection equality row for row,
   file-generator equality, id-set equality, tier-alias coverage).
+
+## Amendment: the files are the source (plan A3, 2026-10-24)
+
+A3 inverts the direction: `families/*.toml` are hand-edited and the engine
+catalog is their projection. `catalog()`'s hand-written rows, the
+`ModelCaps` derivations from the recipe (`h3_caps`, `ltx2_caps`,
+`wan_caps`, `sfwan_caps`), the A2 generator and the `implicit_trees` rule
+are deleted. Five decisions:
+
+1. **Embedded, with a run-time override.** The engine embeds the three
+   files with `include_str!` (`cuda::families::EMBEDDED_FAMILIES`), so
+   `fv-serve`, `fv-gpucheck` and the serve images carry the manifests they
+   were built with and nothing new ships beside the binary;
+   `FV_FAMILIES_DIR=<dir>` reads a directory instead (a lab run with an
+   unreleased variant). A test keeps the embedded copies equal to the
+   committed files.
+2. **`[variants.serving]`, layer 2 only.** What `ModelCaps` advertises and
+   layer 1's `Caps` does not carry lives beside `caps`, not in layer 1:
+   `tasks`, `frames_default`, `audio` (`native_rate`, `channels`,
+   `via_sidecar`), `fps_container_only`, `pad_and_crop`, `hd` (the H3 1080P
+   tier's short edge, pixel budget and clip caps) and `reference_strength`.
+   Widening layer 1 is a pinned-format change for every published model;
+   these fields describe how this runtime serves a variant, which a
+   registry clone does not need to load it. If the registry later wants
+   them on a model page, they move into a versioned layer-1 widening then.
+   Two things stay derived from the recipe at `CudaModel::caps` time because
+   they change per deployment: whether the 1080P tier is offered
+   (`h3_1080p = false`, the device memory gate) and the stream shape (an
+   SF-Wan rollout's blocks and KV window, the LongLive re-cache).
+3. **`public_names`.** The public API names a server maps onto a variant
+   (`MiniMax-H3-Turbo`) are a variant field; `EngineBackend::public_names`
+   carries them to `CapabilityTable::public_aliases`, which replaces the 23
+   `[aliases]` tables of the serve configs. A name several served models
+   claim goes to the one that serves text-to-video, else the first by id
+   (`MiniMax-H3-Turbo` names `h3-ref2v-turbo` only where the turbo model is
+   not served).
+4. **Trees are data.** The trees a recipe reads without naming a path (the
+   FastH3 Preview adapters, the Trim NVFP4 file, the Turbo LoRAs, the
+   LongLive-Plug adapters, a TAEHV file in a `tae_dir`) are listed in
+   `trees` like the others; `tests/families.rs`
+   (`trees_name_what_the_recipes_read`) checks them against the recipes.
+5. **Placeholder rules.** `${weights}/<rel>` needs a covering `trees` entry
+   (unchanged); `${tae}/<file>` needs `auxiliary/tae/<file>` in `trees`; a
+   bare `${tae}` is the directory as a search path (the file the recipe
+   reads there, if any, is listed by name); a bare `${weights}` is refused.
+
+Layer 2 is not yet a pinned public format: nothing outside this repository
+reads it, so A3 adds the required `serving` table and `public_names` within
+`schema = 1`; once a consumer outside the repository depends on it (the
+registry, a published runtime), such a change bumps `schema`.
+
+`engine.family` stays the recipe kind (`h3`, `ltx2`, `wan`, `sf_wan`), not
+the family id; there is no separate `kind` key. Two serve-config special
+cases became variants: `h3-lightx2v-turbo-v01` (the v0.1 Turbo LoRA, tree
+`h3-turbo-loras/lightx2v-v0.1`) and `longlive-1.3b` (the SF-Wan recipe with
+LongLive's window 12, sink 3 and re-cache, tree
+`longlive-1.3b-safetensors`). A serve TOML names a variant, its residency
+and the deployment's overrides (`weights` when not the variant's tree,
+`warmup`, `text_encoder`, `i2v_encoder`, `h3_1080p`, `steps` /
+`lora_strength`, `longlive` / `longlive_recache`, `continuity`); `family`,
+`recipe` and `[aliases]` are refused with the replacement named.
+
+Enforced by: `crates/fastvideo-manifest/src/family.rs` (serving and
+placeholder rules), `crates/fastvideo-engine-service/tests/families.rs`
+(embedded = committed, projection under any layout, names, trees, serving
+caps), `crates/fastvideo-serve/tests/capabilities_golden.rs` (the served
+`/fv/v1/capabilities` and `/v1/models` of every shipped config against the
+pre-A3 goldens).

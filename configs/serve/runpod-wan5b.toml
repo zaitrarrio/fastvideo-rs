@@ -33,17 +33,11 @@ post_encoder = "auto"
 swap = true
 
 [[models]]
-id = "fastwan22-ti2v-5b"
-family = "wan"
-recipe = "wan-turbo"
-weights = "${FV_WEIGHTS}/fastwan22-ti2v-5b"
+variant = "fastwan22-ti2v-5b"
 resident = true
 
 [[models]]
-id = "wan22-ti2v-5b"
-family = "wan"
-recipe = "wan-max"
-weights = "${FV_WEIGHTS}/wan22-ti2v-5b"
+variant = "wan22-ti2v-5b"
 resident = false
 
 [protocols]

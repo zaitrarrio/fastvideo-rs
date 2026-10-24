@@ -4,13 +4,21 @@
 //!
 //! A family file is a `[family]` header and one `[[variants]]` table per
 //! servable configuration. Everything a variant says is pure data this
-//! crate validates (ids, served names, tier, weights trees, GPU needs, the
-//! layer-1 [`Caps`]), except `engine`: an opaque TOML table the runtime
-//! interprets (today: the serde form of the engine's `CudaRecipe`). Paths in
-//! that table are written relative to the weights root as `${weights}/<tree>/…`
+//! crate validates (ids, served names, public names, tier, weights trees,
+//! GPU needs, the layer-1 [`Caps`] and the runtime's [`ServingCaps`] beside
+//! them), except `engine`: an opaque TOML table the runtime interprets
+//! (today: the serde form of the engine's `CudaRecipe`). Paths in that table
+//! are written relative to the weights root as `${weights}/<tree>/…`
 //! ([`WEIGHTS_VAR`]) and tiny-autoencoder files as `${tae}/<file>`
-//! ([`TAE_VAR`]); the runtime substitutes its own layout when it loads the
-//! table, so a family file names trees, never machines.
+//! ([`TAE_VAR`], `${tae}` alone for the directory); the runtime substitutes
+//! its own layout when it loads the table, so a family file names trees,
+//! never machines. Every such reference must be covered by `trees`: a
+//! `${weights}/<rel>` by an entry equal to it or a component prefix of it, a
+//! `${tae}/<file>` by `auxiliary/tae/<file>`. A bare `${tae}` names the
+//! tiny-autoencoder directory as a search path (which file a recipe reads
+//! there, if any, is the runtime's choice, so `trees` lists that file when
+//! the recipe does read one); a bare `${weights}` (the whole root) is
+//! refused.
 //!
 //! Pure: no I/O by default. The optional `fs` feature adds [`load_dir`], the
 //! one directory reader every runtime consumer shares.
@@ -35,6 +43,9 @@ pub const WEIGHTS_VAR: &str = "${weights}";
 pub const TAE_VAR: &str = "${tae}";
 /// Longest family id.
 pub const FAMILY_ID_MAX_LEN: usize = 32;
+/// Where the tiny autoencoders live under the weights root: the `trees`
+/// entry a `${tae}/<file>` reference needs is `auxiliary/tae/<file>`.
+pub const TAE_TREE_PREFIX: &str = "auxiliary/tae";
 
 /// Why a family file, or a set of them, is not valid.
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
@@ -232,6 +243,14 @@ pub struct VariantManifest {
     /// Names the variant answers to besides its id.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub served_names: Vec<String>,
+    /// The public API names (the MiniMax `model` ids, `MiniMax-H3-Turbo`) a
+    /// server maps onto this variant when it serves it: what the serve
+    /// configs' `[aliases]` tables used to list by hand. Several variants may
+    /// claim one name (a tier and its task companion): the server gives it
+    /// to the served model that generates from text, else to the first by
+    /// model id.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub public_names: Vec<String>,
     /// Loaded before readiness when a deployment does not say otherwise.
     #[serde(default = "default_true")]
     pub resident_default: bool,
@@ -245,6 +264,8 @@ pub struct VariantManifest {
     /// The ranges the engine negotiates against (layer 1's `[caps]`).
     #[serde(default)]
     pub caps: Caps,
+    /// What the runtime advertises beside `caps` and layer 1 does not carry.
+    pub serving: ServingCaps,
     /// Opaque to this crate: the runtime's recipe in its own serde form, with
     /// paths under the weights root written `${weights}/…` and tiny
     /// autoencoders `${tae}/…`.
@@ -269,6 +290,66 @@ pub struct GpuNeeds {
     pub needs: Vec<String>,
 }
 
+/// The runtime's capabilities beside layer 1's `Caps`: what `ModelCaps`
+/// advertises and `model.toml` does not carry (ADR-0008 amendment, plan
+/// A3). Layer 2 only; widening layer 1 is a pinned-format change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ServingCaps {
+    /// The tasks the variant serves, as the protocol names them (`t2v`,
+    /// `i2v`, `keyframes`, `ref2v`, `a2v`, `retake`, `extend`). Non-empty,
+    /// unique.
+    pub tasks: Vec<String>,
+    /// The frame count of a request without a length; on `caps.frames`'s grid.
+    pub frames_default: u32,
+    /// Native audio output; absent for a video-only model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<AudioCaps>,
+    /// The fps only sets the container rate (Wan): the frames are generated
+    /// the same regardless.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fps_container_only: bool,
+    /// Canvases off the side multiple are generated padded and cropped back
+    /// (LTX 1080 -> 1088).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pad_and_crop: bool,
+    /// An opt-in canvas tier above the trained pixel budget (the H3 1080P
+    /// tier), also listed in `caps.canvas.short_edges`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hd: Option<HdTier>,
+    /// The reference-strength knobs (LTX reference-to-video) are honoured.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reference_strength: bool,
+}
+
+/// Native audio output of a variant.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AudioCaps {
+    /// Hz.
+    pub native_rate: u32,
+    pub channels: u8,
+    /// The audio comes from a sidecar model; the variant itself is video-only.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub via_sidecar: bool,
+}
+
+/// An opt-in canvas tier with its own pixel budget ([`ServingCaps::hd`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HdTier {
+    /// The delivered short edge.
+    pub short_edge: u32,
+    /// Largest generation canvas area at this tier.
+    pub max_area: u64,
+    /// Longest clip at this tier, in frames (absent: the frame grid's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_frames: Option<u32>,
+    /// The longer cap an experimental feature flag allows while it is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experimental_max_frames: Option<u32>,
+}
+
 /// `${weights}/<rel>` references in an engine table, as `<rel>`, sorted
 /// and unique.
 pub fn weights_refs(table: &toml::Table) -> Vec<String> {
@@ -289,6 +370,42 @@ fn collect_weights_refs(v: &toml::Value, out: &mut BTreeSet<String>) {
         toml::Value::Array(items) => items.iter().for_each(|i| collect_weights_refs(i, out)),
         toml::Value::Table(t) => t.values().for_each(|i| collect_weights_refs(i, out)),
         _ => {}
+    }
+}
+
+/// `${tae}` references in an engine table: `Some(<file>)` for
+/// `${tae}/<file>`, `None` for the bare directory. Sorted and unique.
+pub fn tae_refs(table: &toml::Table) -> Vec<Option<String>> {
+    let mut out = BTreeSet::new();
+    collect_tae_refs(&toml::Value::Table(table.clone()), &mut out);
+    out.into_iter().collect()
+}
+
+fn collect_tae_refs(v: &toml::Value, out: &mut BTreeSet<Option<String>>) {
+    match v {
+        toml::Value::String(s) => {
+            if let Some(rest) = s.strip_prefix(TAE_VAR) {
+                if rest.is_empty() {
+                    out.insert(None);
+                } else if let Some(file) = rest.strip_prefix('/') {
+                    out.insert(Some(file.to_owned()));
+                }
+            }
+        }
+        toml::Value::Array(items) => items.iter().for_each(|i| collect_tae_refs(i, out)),
+        toml::Value::Table(t) => t.values().for_each(|i| collect_tae_refs(i, out)),
+        _ => {}
+    }
+}
+
+/// Whether any string of an engine table is the bare `${weights}` (the whole
+/// weights root), which no recipe may reference.
+fn has_bare_weights(v: &toml::Value) -> bool {
+    match v {
+        toml::Value::String(s) => s == WEIGHTS_VAR,
+        toml::Value::Array(items) => items.iter().any(has_bare_weights),
+        toml::Value::Table(t) => t.values().any(has_bare_weights),
+        _ => false,
     }
 }
 
@@ -406,6 +523,20 @@ impl VariantManifest {
                 ));
             }
         }
+        for (i, n) in self.public_names.iter().enumerate() {
+            if n.trim().is_empty() {
+                return Err(FamilyError::field(
+                    p("public_names"),
+                    format!("entry {i} is empty"),
+                ));
+            }
+            if self.public_names[..i].contains(n) {
+                return Err(FamilyError::field(
+                    p("public_names"),
+                    format!("`{n}` repeats"),
+                ));
+            }
+        }
         if let Some(n) = &self.registry_name {
             if n.rev().is_some() {
                 return Err(FamilyError::field(
@@ -462,8 +593,34 @@ impl VariantManifest {
                 },
                 other => other,
             })?;
+        self.serving.validate(&self.caps, &p("serving."))?;
         if self.engine.is_empty() {
             return Err(FamilyError::field(p("engine"), "empty table"));
+        }
+        if has_bare_weights(&toml::Value::Table(self.engine.clone())) {
+            return Err(FamilyError::field(
+                p("engine"),
+                format!("references `{WEIGHTS_VAR}` alone (the whole weights root)"),
+            ));
+        }
+        // A bare `${tae}` (the directory) is a search path (module doc);
+        // every `${tae}/<file>` needs its tree.
+        for file in tae_refs(&self.engine).into_iter().flatten() {
+            if file.is_empty() {
+                return Err(FamilyError::field(
+                    p("engine"),
+                    format!("`{TAE_VAR}/` with nothing after it"),
+                ));
+            }
+            check_relative_path(&file)
+                .map_err(|e| FamilyError::field(p("engine"), format!("{file:?}: {e}")))?;
+            let want = format!("{TAE_TREE_PREFIX}/{file}");
+            if !self.trees.contains(&want) {
+                return Err(FamilyError::field(
+                    p("engine"),
+                    format!("references `{TAE_VAR}/{file}`; `trees` lacks `{want}`"),
+                ));
+            }
         }
         for rel in weights_refs(&self.engine) {
             if rel.is_empty() {
@@ -487,6 +644,78 @@ impl VariantManifest {
     /// The variant's tier as text, `None` when untiered.
     pub fn tier_str(&self) -> Option<&'static str> {
         self.tier.map(|t| t.as_str())
+    }
+}
+
+impl ServingCaps {
+    /// `prefix` is the dotted path of this table (`variants[0].serving.`).
+    fn validate(&self, caps: &Caps, prefix: &str) -> Result<(), FamilyError> {
+        let p = |field: &str| format!("{prefix}{field}");
+        if self.tasks.is_empty() {
+            return Err(FamilyError::field(p("tasks"), "at least one task"));
+        }
+        for (i, t) in self.tasks.iter().enumerate() {
+            if t.is_empty()
+                || !t
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            {
+                return Err(FamilyError::field(
+                    p("tasks"),
+                    format!("entry {i} {t:?}: lowercase letters and digits only"),
+                ));
+            }
+            if self.tasks[..i].contains(t) {
+                return Err(FamilyError::field(p("tasks"), format!("`{t}` repeats")));
+            }
+        }
+        if let Some(f) = &caps.frames {
+            let on_grid = self.frames_default >= f.offset
+                && (self.frames_default - f.offset).is_multiple_of(f.step.max(1));
+            if !on_grid || self.frames_default < f.min || self.frames_default > f.max {
+                return Err(FamilyError::field(
+                    p("frames_default"),
+                    format!(
+                        "{} is not on the frame grid {}k+{} within {}..={}",
+                        self.frames_default, f.step, f.offset, f.min, f.max
+                    ),
+                ));
+            }
+        }
+        if let Some(a) = &self.audio {
+            if a.native_rate == 0 {
+                return Err(FamilyError::field(
+                    p("audio.native_rate"),
+                    "must be positive",
+                ));
+            }
+            if a.channels == 0 {
+                return Err(FamilyError::field(p("audio.channels"), "must be positive"));
+            }
+        }
+        if let Some(hd) = &self.hd {
+            if hd.max_area == 0 {
+                return Err(FamilyError::field(p("hd.max_area"), "must be positive"));
+            }
+            match &caps.canvas {
+                Some(c) if c.short_edges.contains(&hd.short_edge) => {}
+                _ => {
+                    return Err(FamilyError::field(
+                        p("hd.short_edge"),
+                        format!("{} is not listed in caps.canvas.short_edges", hd.short_edge),
+                    ))
+                }
+            }
+            if let (Some(m), Some(x)) = (hd.max_frames, hd.experimental_max_frames) {
+                if x < m {
+                    return Err(FamilyError::field(
+                        p("hd.experimental_max_frames"),
+                        "below max_frames",
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -630,6 +859,7 @@ port_doc = "docs/ports/demo.md"
 id = "demo-turbo"
 tier = "turbo"
 served_names = ["demo", "demo-fast"]
+public_names = ["Demo-Turbo"]
 recipe_name = "demo-4step"
 trees = ["auxiliary/tae/taedemo.safetensors", "demo-base", "demo-lora"]
 
@@ -648,6 +878,14 @@ max = 81
 allowed = [16, 24]
 default = 16
 
+[variants.serving]
+tasks = ["t2v", "i2v"]
+frames_default = 81
+
+[variants.serving.audio]
+native_rate = 16000
+channels = 1
+
 [variants.engine]
 family = "demo"
 weights = "${weights}/demo-base"
@@ -663,6 +901,12 @@ steps = 4
         let v = fm.find("demo-fast").unwrap();
         assert_eq!((v.id.as_str(), v.tier), ("demo-turbo", Some(Tier::Turbo)));
         assert!(v.resident_default);
+        assert_eq!(v.public_names, ["Demo-Turbo"]);
+        assert_eq!(v.serving.tasks, ["t2v", "i2v"]);
+        assert_eq!(
+            tae_refs(&v.engine),
+            [Some("taedemo.safetensors".to_owned())]
+        );
         assert_eq!(
             weights_refs(&v.engine),
             vec![
@@ -729,6 +973,68 @@ steps = 4
             with("tier = \"turbo\"", "tier = \"pro\"").unwrap_err(),
             FamilyError::Syntax(_)
         ));
+        // A `${tae}/<file>` reference needs `auxiliary/tae/<file>` in trees.
+        let e = with("${tae}/taedemo.safetensors", "${tae}/other.safetensors").unwrap_err();
+        assert_eq!(e.path(), Some("variants[0].engine"));
+        assert!(
+            e.to_string().contains("auxiliary/tae/other.safetensors"),
+            "{e}"
+        );
+        // The bare directory is a search path (no tree needed); the bare root is refused.
+        assert!(with("${tae}/taedemo.safetensors", "${tae}").is_ok());
+        let e = with(
+            "weights = \"${weights}/demo-base\"",
+            "weights = \"${weights}\"",
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("alone"), "{e}");
+        // Serving caps: tasks, the default frame count on the grid, the HD tier.
+        assert_eq!(
+            with("tasks = [\"t2v\", \"i2v\"]", "tasks = []")
+                .unwrap_err()
+                .path(),
+            Some("variants[0].serving.tasks")
+        );
+        assert_eq!(
+            with("tasks = [\"t2v\", \"i2v\"]", "tasks = [\"t2v\", \"T2V\"]")
+                .unwrap_err()
+                .path(),
+            Some("variants[0].serving.tasks")
+        );
+        assert_eq!(
+            with("frames_default = 81", "frames_default = 80")
+                .unwrap_err()
+                .path(),
+            Some("variants[0].serving.frames_default")
+        );
+        assert_eq!(
+            with("frames_default = 81", "frames_default = 85")
+                .unwrap_err()
+                .path(),
+            Some("variants[0].serving.frames_default")
+        );
+        assert_eq!(
+            with("channels = 1", "channels = 0").unwrap_err().path(),
+            Some("variants[0].serving.audio.channels")
+        );
+        assert_eq!(
+            with(
+                "frames_default = 81",
+                "frames_default = 81\n[variants.serving.hd]\nshort_edge = 1080\nmax_area = 100"
+            )
+            .unwrap_err()
+            .path(),
+            Some("variants[0].serving.hd.short_edge")
+        );
+        assert_eq!(
+            with(
+                "public_names = [\"Demo-Turbo\"]",
+                "public_names = [\"Demo-Turbo\", \"Demo-Turbo\"]"
+            )
+            .unwrap_err()
+            .path(),
+            Some("variants[0].public_names")
+        );
         assert!(matches!(
             with("display = ", "displai = ").unwrap_err(),
             FamilyError::Syntax(_)

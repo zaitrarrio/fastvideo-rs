@@ -16,14 +16,21 @@ export interface ManifestVariant {
   tier: Tier | null;
   /** Names besides the id the variant answers to. */
   served_names: string[];
+  /** The public API names a server maps onto the variant when it serves it (MiniMax-H3-Turbo): the serve configs'
+   * old [aliases]. A name several served variants claim goes to the one serving t2v, else the first by id. */
+  public_names: string[];
+  /** The tasks the variant serves (serving.tasks: t2v, i2v, keyframes, ref2v, a2v, retake, extend). */
+  tasks: string[];
   resident_default: boolean;
   /** The short recipe name the capabilities report. */
   recipe_name: string;
-  /** Every weight tree the variant reads, as scripts/gpu/weights-manifest.tsv names them (sorted). */
+  /** Every weight tree the variant reads, as the weights store names them (sorted). */
   trees: string[];
   /** `trees` without the auxiliary/ files (TAE decoders, LPIPS), which every boot fetches as the aux trees:
    * what a preset lists as its weights and a weights plan fetches. */
   weight_trees: string[];
+  /** The tree the recipe's `weights` names: what a serve config's `weights` path replaces. */
+  main_tree: string;
   gpu: { min_vram_gib: number; min_sm: number; needs: string[] };
 }
 export const MANIFEST_FAMILIES: ManifestFamily[] = [
@@ -44,6 +51,7 @@ export const MANIFEST_FAMILIES: ManifestFamily[] = [
       "fasth3-4step-vsa-nvfp4",
       "h3-larry-turbo",
       "h3-lightx2v-turbo",
+      "h3-lightx2v-turbo-v01",
       "vdn-h3",
       "vdn-h3-8step",
       "h3-ref2v-max",
@@ -78,7 +86,8 @@ export const MANIFEST_FAMILIES: ManifestFamily[] = [
       "wan14b-plug-4step",
       "fastwan21-1.3b",
       "fastwan21-1.3b-taehv",
-      "sfwan21-1.3b"
+      "sfwan21-1.3b",
+      "longlive-1.3b"
     ]
   }
 ];
@@ -87,6 +96,14 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "h3",
     "tier": "max",
     "served_names": [],
+    "public_names": [
+      "MiniMax-H3-Max"
+    ],
+    "tasks": [
+      "t2v",
+      "i2v",
+      "keyframes"
+    ],
     "resident_default": true,
     "recipe_name": "sol-h3-4step-engine-ladder",
     "trees": [
@@ -97,6 +114,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "FastH3-4-step-Preview-v1-LoRA",
       "h3-base"
     ],
+    "main_tree": "h3-base",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 89,
@@ -111,6 +129,15 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "served_names": [
       "fasth3"
     ],
+    "public_names": [
+      "MiniMax-H3",
+      "MiniMax-H3-Turbo"
+    ],
+    "tasks": [
+      "t2v",
+      "i2v",
+      "keyframes"
+    ],
     "resident_default": true,
     "recipe_name": "fasth3-4step-vsa",
     "trees": [
@@ -121,6 +148,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "FastH3-4-step-Preview-v1-LoRA",
       "h3-base"
     ],
+    "main_tree": "h3-base",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 89,
@@ -133,6 +161,12 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "h3",
     "tier": "draft",
     "served_names": [],
+    "public_names": [],
+    "tasks": [
+      "t2v",
+      "i2v",
+      "keyframes"
+    ],
     "resident_default": true,
     "recipe_name": "fasth3-4step-vsa-480p-taeh3",
     "trees": [
@@ -144,6 +178,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "FastH3-4-step-Preview-v1-LoRA",
       "h3-base"
     ],
+    "main_tree": "h3-base",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 89,
@@ -156,6 +191,12 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "h3",
     "tier": null,
     "served_names": [],
+    "public_names": [],
+    "tasks": [
+      "t2v",
+      "i2v",
+      "keyframes"
+    ],
     "resident_default": true,
     "recipe_name": "fasth3-8step-dense",
     "trees": [
@@ -166,6 +207,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "h3-8step",
       "h3-base"
     ],
+    "main_tree": "h3-8step",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 80,
@@ -176,7 +218,14 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "h3",
     "tier": null,
     "served_names": [
-      "h3-trim"
+      "h3-trim",
+      "fasth3-trim"
+    ],
+    "public_names": [
+      "MiniMax-H3-Trim"
+    ],
+    "tasks": [
+      "t2v"
     ],
     "resident_default": true,
     "recipe_name": "fasth3-trim-8step-vsa",
@@ -188,6 +237,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "fasth3-trim-8step",
       "h3-base"
     ],
+    "main_tree": "fasth3-trim-8step",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 80,
@@ -199,6 +249,12 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "tier": null,
     "served_names": [
       "h3-trim-nvfp4"
+    ],
+    "public_names": [
+      "MiniMax-H3-Trim-NVFP4"
+    ],
+    "tasks": [
+      "t2v"
     ],
     "resident_default": true,
     "recipe_name": "fasth3-trim-8step-vsa-nvfp4",
@@ -212,6 +268,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "fasth3-trim-8step-nvfp4",
       "h3-base"
     ],
+    "main_tree": "fasth3-trim-8step",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 100,
@@ -227,6 +284,12 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "served_names": [
       "h3-trim-nvfp4-fast"
     ],
+    "public_names": [
+      "MiniMax-H3-Trim-NVFP4-Fast"
+    ],
+    "tasks": [
+      "t2v"
+    ],
     "resident_default": true,
     "recipe_name": "fasth3-trim-8step-vsa-fp4-nvfp4",
     "trees": [
@@ -239,6 +302,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "fasth3-trim-8step-nvfp4",
       "h3-base"
     ],
+    "main_tree": "fasth3-trim-8step",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 100,
@@ -254,6 +318,12 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "served_names": [
       "h3-v2-nvfp4"
     ],
+    "public_names": [
+      "MiniMax-H3-V2-NVFP4"
+    ],
+    "tasks": [
+      "t2v"
+    ],
     "resident_default": true,
     "recipe_name": "fasth3-v2-8step-vsa-nvfp4",
     "trees": [
@@ -264,6 +334,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "fasth3-v2-nvfp4",
       "h3-base"
     ],
+    "main_tree": "fasth3-v2-nvfp4",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 100,
@@ -279,6 +350,12 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "served_names": [
       "h3-turbo-nvfp4"
     ],
+    "public_names": [
+      "MiniMax-H3-Turbo-NVFP4"
+    ],
+    "tasks": [
+      "t2v"
+    ],
     "resident_default": true,
     "recipe_name": "fasth3-4step-vsa-nvfp4",
     "trees": [
@@ -289,6 +366,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "fasth3-4step-vsa-nvfp4",
       "h3-base"
     ],
+    "main_tree": "fasth3-4step-vsa-nvfp4",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 100,
@@ -302,6 +380,14 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "h3",
     "tier": null,
     "served_names": [],
+    "public_names": [
+      "MiniMax-H3-Turbo-Lora"
+    ],
+    "tasks": [
+      "t2v",
+      "i2v",
+      "keyframes"
+    ],
     "resident_default": true,
     "recipe_name": "h3-larry-turbo-ckpt850-dense",
     "trees": [
@@ -312,6 +398,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "h3-base",
       "h3-turbo-loras/larry"
     ],
+    "main_tree": "h3-base",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 89,
@@ -324,6 +411,14 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "h3",
     "tier": null,
     "served_names": [],
+    "public_names": [
+      "MiniMax-H3-Turbo-Lightx2v"
+    ],
+    "tasks": [
+      "t2v",
+      "i2v",
+      "keyframes"
+    ],
     "resident_default": true,
     "recipe_name": "h3-lightx2v-turbo-v1.2-768p-dense",
     "trees": [
@@ -334,6 +429,38 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "h3-base",
       "h3-turbo-loras/lightx2v"
     ],
+    "main_tree": "h3-base",
+    "gpu": {
+      "min_vram_gib": 80,
+      "min_sm": 89,
+      "needs": [
+        "fp8"
+      ]
+    }
+  },
+  "h3-lightx2v-turbo-v01": {
+    "family": "h3",
+    "tier": null,
+    "served_names": [],
+    "public_names": [
+      "MiniMax-H3-Turbo-Lightx2v-v0.1"
+    ],
+    "tasks": [
+      "t2v",
+      "i2v",
+      "keyframes"
+    ],
+    "resident_default": true,
+    "recipe_name": "h3-lightx2v-turbo-v1.2-768p-dense",
+    "trees": [
+      "h3-base",
+      "h3-turbo-loras/lightx2v-v0.1"
+    ],
+    "weight_trees": [
+      "h3-base",
+      "h3-turbo-loras/lightx2v-v0.1"
+    ],
+    "main_tree": "h3-base",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 89,
@@ -345,7 +472,15 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
   "vdn-h3": {
     "family": "h3",
     "tier": null,
-    "served_names": [],
+    "served_names": [
+      "vdn-h3-50step"
+    ],
+    "public_names": [
+      "VDN-H3"
+    ],
+    "tasks": [
+      "t2v"
+    ],
     "resident_default": true,
     "recipe_name": "vdn-h3-50step",
     "trees": [
@@ -356,6 +491,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "h3-base",
       "vdn-h3-stage-b-2000"
     ],
+    "main_tree": "h3-base",
     "gpu": {
       "min_vram_gib": 96,
       "min_sm": 80,
@@ -366,6 +502,12 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "h3",
     "tier": null,
     "served_names": [],
+    "public_names": [
+      "VDN-H3-8step"
+    ],
+    "tasks": [
+      "t2v"
+    ],
     "resident_default": true,
     "recipe_name": "vdn-h3-8step",
     "trees": [
@@ -378,6 +520,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "vdn-h3-dmd-250-turbo",
       "vdn-h3-stage-b-2000"
     ],
+    "main_tree": "h3-base",
     "gpu": {
       "min_vram_gib": 96,
       "min_sm": 80,
@@ -388,6 +531,12 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "h3",
     "tier": "max",
     "served_names": [],
+    "public_names": [
+      "MiniMax-H3-Max"
+    ],
+    "tasks": [
+      "ref2v"
+    ],
     "resident_default": true,
     "recipe_name": "h3-ref2va-base-49step",
     "trees": [
@@ -398,6 +547,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "h3-base",
       "h3-ref2va"
     ],
+    "main_tree": "h3-base",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 89,
@@ -410,6 +560,12 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "h3",
     "tier": "turbo",
     "served_names": [],
+    "public_names": [
+      "MiniMax-H3-Turbo"
+    ],
+    "tasks": [
+      "ref2v"
+    ],
     "resident_default": true,
     "recipe_name": "sol-h3-ref2va",
     "trees": [
@@ -420,6 +576,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "h3-base",
       "h3-ref2va"
     ],
+    "main_tree": "h3-base",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 89,
@@ -434,6 +591,12 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "served_names": [
       "h3-v2-nvfp4-preview"
     ],
+    "public_names": [
+      "MiniMax-H3-V2-NVFP4-Preview"
+    ],
+    "tasks": [
+      "t2v"
+    ],
     "resident_default": true,
     "recipe_name": "fasth3-v2-nvfp4-taeh3",
     "trees": [
@@ -445,6 +608,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "fasth3-v2-nvfp4",
       "h3-base"
     ],
+    "main_tree": "fasth3-v2-nvfp4",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 100,
@@ -460,6 +624,12 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "served_names": [
       "h3-turbo-nvfp4-preview"
     ],
+    "public_names": [
+      "MiniMax-H3-Turbo-NVFP4-Preview"
+    ],
+    "tasks": [
+      "t2v"
+    ],
     "resident_default": true,
     "recipe_name": "fasth3-4step-vsa-nvfp4-taeh3",
     "trees": [
@@ -471,6 +641,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "fasth3-4step-vsa-nvfp4",
       "h3-base"
     ],
+    "main_tree": "fasth3-4step-vsa-nvfp4",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 100,
@@ -486,6 +657,14 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "served_names": [
       "h3-turbo-preview"
     ],
+    "public_names": [
+      "MiniMax-H3-Turbo-Preview"
+    ],
+    "tasks": [
+      "t2v",
+      "i2v",
+      "keyframes"
+    ],
     "resident_default": true,
     "recipe_name": "fasth3-4step-vsa-taeh3",
     "trees": [
@@ -497,6 +676,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "FastH3-4-step-Preview-v1-LoRA",
       "h3-base"
     ],
+    "main_tree": "h3-base",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 89,
@@ -509,6 +689,14 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "ltx2",
     "tier": "max",
     "served_names": [],
+    "public_names": [],
+    "tasks": [
+      "t2v",
+      "i2v",
+      "keyframes",
+      "extend",
+      "retake"
+    ],
     "resident_default": true,
     "recipe_name": "ltx25-distill-two-stage-dense",
     "trees": [
@@ -517,6 +705,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "weight_trees": [
       "ltx25"
     ],
+    "main_tree": "ltx25",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 80,
@@ -527,6 +716,15 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "ltx2",
     "tier": "turbo",
     "served_names": [],
+    "public_names": [],
+    "tasks": [
+      "t2v",
+      "i2v",
+      "keyframes",
+      "a2v",
+      "extend",
+      "retake"
+    ],
     "resident_default": true,
     "recipe_name": "ltx25-distill-two-stage-sol",
     "trees": [
@@ -535,6 +733,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "weight_trees": [
       "ltx25"
     ],
+    "main_tree": "ltx25",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 80,
@@ -545,6 +744,15 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "ltx2",
     "tier": "draft",
     "served_names": [],
+    "public_names": [],
+    "tasks": [
+      "t2v",
+      "i2v",
+      "keyframes",
+      "a2v",
+      "extend",
+      "retake"
+    ],
     "resident_default": true,
     "recipe_name": "ltx25-distill-two-stage-sol-nvfp4-taehv",
     "trees": [
@@ -554,6 +762,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "weight_trees": [
       "ltx25"
     ],
+    "main_tree": "ltx25",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 100,
@@ -567,6 +776,10 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "ltx2",
     "tier": "max",
     "served_names": [],
+    "public_names": [],
+    "tasks": [
+      "ref2v"
+    ],
     "resident_default": true,
     "recipe_name": "ltx25-ic-lora-ingredients-dense",
     "trees": [
@@ -577,6 +790,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "ltx25",
       "ltx25-ic-lora-ingredients"
     ],
+    "main_tree": "ltx25",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 80,
@@ -587,6 +801,10 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "ltx2",
     "tier": "max",
     "served_names": [],
+    "public_names": [],
+    "tasks": [
+      "a2v"
+    ],
     "resident_default": true,
     "recipe_name": "ltx25-dev-a2v-guided",
     "trees": [
@@ -597,6 +815,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "ltx25",
       "ltx25-dev"
     ],
+    "main_tree": "ltx25",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 80,
@@ -607,6 +826,11 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "wan",
     "tier": "max",
     "served_names": [],
+    "public_names": [],
+    "tasks": [
+      "t2v",
+      "i2v"
+    ],
     "resident_default": true,
     "recipe_name": "wan22-ti2v-5b-unipc50",
     "trees": [
@@ -615,6 +839,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "weight_trees": [
       "wan22-ti2v-5b"
     ],
+    "main_tree": "wan22-ti2v-5b",
     "gpu": {
       "min_vram_gib": 32,
       "min_sm": 80,
@@ -627,6 +852,11 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "served_names": [
       "FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers"
     ],
+    "public_names": [],
+    "tasks": [
+      "t2v",
+      "i2v"
+    ],
     "resident_default": true,
     "recipe_name": "fastwan22-ti2v-5b-dmd3",
     "trees": [
@@ -635,6 +865,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "weight_trees": [
       "fastwan22-ti2v-5b"
     ],
+    "main_tree": "fastwan22-ti2v-5b",
     "gpu": {
       "min_vram_gib": 32,
       "min_sm": 80,
@@ -645,6 +876,11 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "wan",
     "tier": "draft",
     "served_names": [],
+    "public_names": [],
+    "tasks": [
+      "t2v",
+      "i2v"
+    ],
     "resident_default": true,
     "recipe_name": "fastwan22-ti2v-5b-dmd3-taehv",
     "trees": [
@@ -654,6 +890,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "weight_trees": [
       "fastwan22-ti2v-5b"
     ],
+    "main_tree": "fastwan22-ti2v-5b",
     "gpu": {
       "min_vram_gib": 32,
       "min_sm": 80,
@@ -665,6 +902,10 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "tier": null,
     "served_names": [
       "wan14b-turbo"
+    ],
+    "public_names": [],
+    "tasks": [
+      "t2v"
     ],
     "resident_default": true,
     "recipe_name": "wan14b-plug-4step",
@@ -678,6 +919,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "longlive-plug/wan21-t2v-14b-few-step",
       "wan21-t2v-14b"
     ],
+    "main_tree": "wan21-t2v-14b",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 80,
@@ -690,6 +932,10 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "served_names": [
       "FastVideo/FastWan2.1-T2V-1.3B-Diffusers"
     ],
+    "public_names": [],
+    "tasks": [
+      "t2v"
+    ],
     "resident_default": true,
     "recipe_name": "fastwan21-1.3b-dmd3-vsa",
     "trees": [
@@ -698,6 +944,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "weight_trees": [
       "fastwan21-1.3b"
     ],
+    "main_tree": "fastwan21-1.3b",
     "gpu": {
       "min_vram_gib": 24,
       "min_sm": 80,
@@ -708,6 +955,10 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "wan",
     "tier": null,
     "served_names": [],
+    "public_names": [],
+    "tasks": [
+      "t2v"
+    ],
     "resident_default": true,
     "recipe_name": "fastwan21-1.3b-dmd3-vsa-taehv",
     "trees": [
@@ -717,6 +968,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "weight_trees": [
       "fastwan21-1.3b"
     ],
+    "main_tree": "fastwan21-1.3b",
     "gpu": {
       "min_vram_gib": 24,
       "min_sm": 80,
@@ -727,6 +979,10 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "wan",
     "tier": null,
     "served_names": [],
+    "public_names": [],
+    "tasks": [
+      "t2v"
+    ],
     "resident_default": true,
     "recipe_name": "sfwan21-1.3b-causal",
     "trees": [
@@ -736,6 +992,35 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "weight_trees": [
       "sfwan21-1.3b"
     ],
+    "main_tree": "sfwan21-1.3b",
+    "gpu": {
+      "min_vram_gib": 24,
+      "min_sm": 80,
+      "needs": []
+    }
+  },
+  "longlive-1.3b": {
+    "family": "wan",
+    "tier": null,
+    "served_names": [
+      "longlive"
+    ],
+    "public_names": [],
+    "tasks": [
+      "t2v"
+    ],
+    "resident_default": true,
+    "recipe_name": "sfwan21-1.3b-causal",
+    "trees": [
+      "auxiliary/tae/taew2_1.safetensors",
+      "longlive-1.3b-safetensors",
+      "sfwan21-1.3b"
+    ],
+    "weight_trees": [
+      "longlive-1.3b-safetensors",
+      "sfwan21-1.3b"
+    ],
+    "main_tree": "sfwan21-1.3b",
     "gpu": {
       "min_vram_gib": 24,
       "min_sm": 80,
@@ -743,9 +1028,9 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     }
   }
 };
-/** Every name a serve config's `recipe` (or `id`) may use for a variant, as the engine resolves it (caps.rs `find`,
- * `parse_tier_alias`): a tier alias (`h3-turbo`: the first variant of its tier), the variant id or a served name. A
- * variant's `recipe_name` is what the capabilities report, not a config name, and is not here. */
+/** Every name a serve config's `variant` (or a pool model's `recipe`) may use, as the engine resolves it
+ * (`model_from_config`): a tier alias (`h3-turbo`: the first variant of its tier), the variant id or a served name.
+ * A variant's `recipe_name` is what the capabilities report, not a config name, and is not here. */
 export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" | "served" }> = {
   "FastVideo/FastWan2.1-T2V-1.3B-Diffusers": {
     "variant": "fastwan21-1.3b",
@@ -782,6 +1067,10 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
   "fasth3-8step-dense": {
     "variant": "fasth3-8step-dense",
     "kind": "id"
+  },
+  "fasth3-trim": {
+    "variant": "fasth3-trim-8step",
+    "kind": "served"
   },
   "fasth3-trim-8step": {
     "variant": "fasth3-trim-8step",
@@ -829,6 +1118,10 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
   },
   "h3-lightx2v-turbo": {
     "variant": "h3-lightx2v-turbo",
+    "kind": "id"
+  },
+  "h3-lightx2v-turbo-v01": {
+    "variant": "h3-lightx2v-turbo-v01",
     "kind": "id"
   },
   "h3-max": {
@@ -879,6 +1172,14 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
     "variant": "fasth3-v2-nvfp4-taeh3",
     "kind": "served"
   },
+  "longlive": {
+    "variant": "longlive-1.3b",
+    "kind": "served"
+  },
+  "longlive-1.3b": {
+    "variant": "longlive-1.3b",
+    "kind": "id"
+  },
   "ltx-draft": {
     "variant": "ltx25-distill-sol-nvfp4-taehv",
     "kind": "tier"
@@ -923,6 +1224,10 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
     "variant": "vdn-h3",
     "kind": "id"
   },
+  "vdn-h3-50step": {
+    "variant": "vdn-h3",
+    "kind": "served"
+  },
   "vdn-h3-8step": {
     "variant": "vdn-h3-8step",
     "kind": "id"
@@ -951,11 +1256,4 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
     "variant": "wan22-ti2v-5b",
     "kind": "id"
   }
-};
-/** Recipe aliases the engine resolves besides MODEL_NAMES (caps.rs `model_from_config` arms a config here uses);
- * `variantOf` does not consult them, `recipeVariant` does. The engine also accepts contract names neither table
- * lists (`4step-vsa`, `8step`, `sol-h3` / `sol_h3`, `trim-8step`, an empty recipe, family `ltx`): plan A3 settles
- * which the manifests carry. */
-export const ENGINE_RECIPE_ALIASES: Record<string, string> = {
-  "vdn-h3-50step": "vdn-h3"
 };

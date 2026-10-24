@@ -46,19 +46,12 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
+variant = "fasth3-4step-vsa"
 id = "fasth3"
-family = "h3"
-recipe = "h3-turbo"
-weights = "${FV_WEIGHTS}/h3-base"
 resident = true
-served_names = ["fasth3"]
 continuity = "anchor-last-frame"
 i2v_encoder = "auto"
 warmup = true
-
-[aliases]
-"MiniMax-H3" = "fasth3"
-"MiniMax-H3-Turbo" = "fasth3"
 
 [protocols]
 openai_videos = true

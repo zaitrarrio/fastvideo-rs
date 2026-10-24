@@ -31,12 +31,14 @@ re-exports them under the old paths for now) and are used by every other model.
 The served families are described once in `families/*.toml` (layer 2 of the
 model family manifest, `docs/adr/0008-family-manifest-layer-2.md`): one file
 per family (`h3`, `ltx2`, `wan`), one `[[variants]]` table per servable
-configuration with its id, served names, tier, weights trees, GPU needs,
-layer-1 `[caps]` and the engine recipe. Plan A2 generates them from the
-engine catalog (`crates/fastvideo-engine-service/src/cuda/caps.rs`) and
-proves equality row for row (`tests/families.rs`); plan A3 makes them the
-source and the catalog, the serve `[aliases]` blocks and the per-model
-tables below become projections of them.
+configuration with its id, served and public names, tier, weights trees, GPU
+needs, layer-1 `[caps]`, the runtime's `[serving]` caps and the engine
+recipe. They are the source (plan A3): the engine has no hand-written
+catalog, it embeds the files and projects them
+(`crates/fastvideo-engine-service/src/cuda/families.rs`), the serve configs
+name a variant and its residency (`[[models]] variant = ...`, no
+`[aliases]`), and the per-model tables below are being turned into
+projections of them (plan A4).
 
 Workloads: `t2v`, `i2v`, `t2av`, `fl2va`, `ref2va`, `t2i`, `t2a`, `v2a`,
 plus control/edit entries that carry an empty workload list in the registry.

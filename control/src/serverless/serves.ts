@@ -4,11 +4,13 @@
 // MiniMax tier names), the mounted APIs and fal apps, and the weight trees
 // they load. The config is the preset's, the inline config_toml, a config
 // file of the image (src/cluster/image-configs.ts, generated from the
-// Dockerfile) or the variant's baked default. The tasks and tiers per recipe
-// mirror crates/fastvideo-engine-service/src/cuda/caps.rs (and fake.rs for
-// the fake engine); a worker's /fv/v1/capabilities is the truth, and
-// compareCapabilities flags a difference once one is up.
+// Dockerfile) or the variant's baked default. A config's [[models]] name
+// variants of families/*.toml (families-gen.ts: family, tier, trees, public
+// names); RECIPES keeps the task view per name (fake.rs for the fake engine);
+// a worker's /fv/v1/capabilities is the truth, and compareCapabilities flags a
+// difference once one is up.
 import { BAKED_CONFIGS, IMAGE_CONFIGS } from "../cluster/image-configs";
+import { variantOf } from "../families";
 
 // ---------------------------------------------------------------- a small TOML reader
 /** Reads the subset of TOML the serve configs use: tables, [[arrays of tables]], quoted keys, strings,
@@ -99,7 +101,7 @@ export const RECIPES: Record<string, { tasks: string[]; tier: Tier | null }> = {
   "h3-trim": { tasks: ["t2v"], tier: null },
   "h3-larry-turbo": { tasks: H3, tier: null },
   "h3-lightx2v-turbo": { tasks: H3, tier: null },
-  "lightx2v-turbo-v0.1": { tasks: H3, tier: null },
+  "h3-lightx2v-turbo-v01": { tasks: H3, tier: null },
   "fasth3-trim-8step": { tasks: ["t2v"], tier: null },
   "h3-trim-nvfp4": { tasks: ["t2v"], tier: null },
   "fasth3-trim-nvfp4": { tasks: ["t2v"], tier: null },
@@ -140,15 +142,17 @@ export const RECIPES: Record<string, { tasks: string[]; tier: Tier | null }> = {
   "fastwan21-1.3b-taehv": { tasks: ["t2v"], tier: null },
   "wan14b-turbo": { tasks: ["t2v"], tier: null },
   "sfwan21-1.3b": { tasks: ["stream"], tier: null },
+  "longlive-1.3b": { tasks: ["stream"], tier: null },
 };
-/** The fake engine's models (crates/fastvideo-engine-service/src/fake.rs). */
-const FAKE: Record<string, { family: string; recipe: string }> = {
-  "fake-h3-max": { family: "h3", recipe: "h3-max" },
+/** The fake engine's built-in models and their public API names (crates/fastvideo-engine-service/src/fake.rs
+ * FakeModel::default_set; a fake config with [[models]] serves those variants instead). */
+const FAKE: Record<string, { family: string; recipe: string; public_names?: string[] }> = {
+  "fake-h3-max": { family: "h3", recipe: "h3-max", public_names: ["MiniMax-H3-Max"] },
   "fake-sol-h3": { family: "h3", recipe: "h3-max" },
-  "fake-h3-turbo": { family: "h3", recipe: "h3-turbo" },
+  "fake-h3-turbo": { family: "h3", recipe: "h3-turbo", public_names: ["MiniMax-H3", "MiniMax-H3-Turbo"] },
   "fake-ltx-pro": { family: "ltx2", recipe: "ltx-pro" },
   "fake-ltx-turbo": { family: "ltx2", recipe: "ltx-turbo" },
-  "fake-wan": { family: "wan", recipe: "fastwan21-1.3b" },
+  "fake-wan": { family: "wan", recipe: "fastwan21-1.3b", public_names: ["fastwan-1.3b"] },
   "fake-sfwan": { family: "wan", recipe: "sfwan21-1.3b" },
 };
 
@@ -183,8 +187,9 @@ export interface Serves {
   engine: string;
   swap: boolean;
   models: ServedModel[];
-  /** API names that reach a model: config [aliases] and the MiniMax names (tier resolution, as fv-serve's MiniMax adapter does). */
-  aliases: { name: string; model: string; via: "config" | "tier" }[];
+  /** API names that reach a model: the served variants' public names (families/*.toml public_names; the fake
+   * engine's own) and the MiniMax names (tier resolution, as fv-serve's MiniMax adapter does). */
+  aliases: { name: string; model: string; via: "manifest" | "tier" }[];
   protocols: string[];
   fal_apps: string[];
   tasks: string[];
@@ -202,35 +207,53 @@ export function servesOfToml(text: string, source: Serves["source"]): Serves {
   const t = readToml(text);
   const engine = String(t.engine?.backend ?? "cuda");
   const models: ServedModel[] = [];
-  if (engine === "fake") {
+  // Public API names per served model, in model order (CapabilityTable::public_aliases).
+  const publicNames: { model: string; names: string[]; t2v: boolean }[] = [];
+  const cfgModels = Array.isArray(t.models) ? t.models : [];
+  if (engine === "fake" && !cfgModels.length) {
     for (const [id, f] of Object.entries(FAKE)) {
       const r = RECIPES[f.recipe];
       models.push({ id, family: f.family, recipe: f.recipe, tier: r?.tier ?? null, tasks: r?.tasks ?? [], served_names: [id], resident: true, weights: [] });
+      publicNames.push({ model: id, names: f.public_names ?? [], t2v: (r?.tasks ?? []).includes("t2v") });
     }
   }
-  for (const m of Array.isArray(t.models) ? t.models : []) {
-    const recipe = String(m.recipe ?? m.id ?? "");
-    const r = RECIPES[recipe];
-    const weights = [treeOf(m.weights), treeOf(m.longlive)].filter((x): x is string => !!x);
+  for (const m of cfgModels) {
+    // [[models]] names a variant of families/*.toml (plan A3): its id, a served name or a tier alias; `id` defaults
+    // to the variant's id, `weights` to its trees (a path names another tree for the variant's own).
+    const name = String(m.variant ?? "");
+    const v = variantOf(name);
+    const id = typeof m.id === "string" && m.id ? m.id : v?.id ?? name;
+    const r = RECIPES[name] ?? (v ? RECIPES[v.id] : undefined);
+    // A `weights` path replaces the variant's own tree (its recipe's `weights`); the other trees stay.
+    const own = treeOf(m.weights);
+    const weights = v ? v.weight_trees.map((t) => (own && t === v.main_tree ? own : t)) : own ? [own] : [];
+    const served = [id, ...(v ? [v.id] : []), ...(Array.isArray(m.served_names) ? m.served_names.map(String) : []), ...(v?.served_names ?? [])];
     models.push({
-      id: String(m.id),
-      family: String(m.family ?? ""),
-      recipe,
-      tier: r?.tier ?? null,
-      tasks: r?.tasks ?? [],
-      served_names: Array.isArray(m.served_names) ? m.served_names.map(String) : [String(m.id)],
+      id,
+      family: v?.family ?? "",
+      recipe: name,
+      tier: v ? v.tier : r?.tier ?? null,
+      tasks: r?.tasks ?? v?.tasks ?? [],
+      served_names: [...new Set(served)],
       resident: m.resident === true,
       weights: [...new Set(weights)],
     });
+    publicNames.push({ model: id, names: v?.public_names ?? [], t2v: (v?.tasks ?? []).includes("t2v") });
   }
   const p = t.protocols && typeof t.protocols === "object" ? t.protocols : {};
   const protocols = Object.keys(PROTOCOL_DEFAULTS).filter((k) => (typeof p[k] === "boolean" ? p[k] : PROTOCOL_DEFAULTS[k]));
   const fal_apps = protocols.includes("fal") ? (Array.isArray(p.fal_apps) ? p.fal_apps.map(String) : DEFAULT_FAL_APPS) : [];
   const aliases: Serves["aliases"] = [];
-  const cfgAliases: Record<string, string> = t.aliases && typeof t.aliases === "object" ? t.aliases : {};
-  for (const [name, model] of Object.entries(cfgAliases)) aliases.push({ name, model: String(model), via: "config" });
+  const claimed = new Map<string, { model: string; t2v: boolean }>();
+  for (const p of [...publicNames].sort((a, b) => (a.model < b.model ? -1 : a.model > b.model ? 1 : 0)))
+    for (const n of p.names) {
+      const have = claimed.get(n);
+      if (!have || (!have.t2v && p.t2v)) claimed.set(n, { model: p.model, t2v: p.t2v });
+    }
+  for (const [name, c] of [...claimed].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) aliases.push({ name, model: c.model, via: "manifest" });
+  const cfgAliases: Record<string, string> = Object.fromEntries(aliases.map((a) => [a.name, a.model]));
   if (protocols.includes("minimax")) {
-    // crates/fastvideo-minimax resolve_caps: a config alias, else the canonical tier alias, else the H3 model of that tier.
+    // crates/fastvideo-minimax resolve_caps: a public name, else the canonical tier alias, else the H3 model of that tier.
     const h3 = models.filter((m) => m.family === "h3");
     const ofTier = (tier: Tier) => {
       const at = h3.filter((m) => m.tier === tier);

@@ -146,8 +146,9 @@ The Reactor's `set_prompt` and the director's prompt updates both go through
 - Pod `b4g43foab0yp4v`, runtime image `fastvideo-rs-runtime@sha256:dccdf956…`,
   EU volume read-only, 707 s, about $0.41.
 - `fv-serve` built from this branch (`--features cuda,http-client`).
-- `[[models]] longlive-1.3b` (`recipe = "sfwan21-1.3b"`,
-  `longlive = ".../longlive-1.3b-safetensors"`),
+- `[[models]] longlive-1.3b` (then `recipe = "sfwan21-1.3b"`,
+  `longlive = ".../longlive-1.3b-safetensors"`; since plan A3 the
+  `longlive-1.3b` variant of `families/wan.toml`, `variant = "longlive-1.3b"`),
   `fal_apps = ["fastvideo/longlive"]`.
 - HTTP and WebRTC on loopback only. NVENC H.264.
 - Driven on the pod by `examples/director_client`, with LongLive's
@@ -199,12 +200,9 @@ reported that the clip director "stops after the first chunk".
 
    ```toml
    [[models]]
-   id = "longlive-1.3b"
-   family = "wan"
-   recipe = "sfwan21-1.3b"
-   weights = "${FV_WEIGHTS}/sfwan21-1.3b"
+   variant = "longlive-1.3b"    # families/wan.toml: SF-Wan + LongLive, its trees under $FV_WEIGHTS
    resident = true
-   longlive = "${FV_WEIGHTS}/longlive-1.3b-safetensors"
+   # longlive = "<dir>"         # only when the converted checkpoint is elsewhere
 
    [protocols]
    fal = true

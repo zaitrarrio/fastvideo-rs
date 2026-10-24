@@ -3,7 +3,7 @@
 //! negotiates on the model its endpoint runs (LTX durations past the
 //! engine's frame ceiling run at it), and H3 2K/4K is a clean gap.
 
-use fastvideo_engine_service::cuda::caps::{catalog, WeightLayout, WAN5B_FRAMES_MAX};
+use fastvideo_engine_service::cuda::caps::{catalog, WeightLayout};
 use fastvideo_fal::schema::ltx::{self, LtxClass, LtxResolution, LTX_FRAMES_MAX};
 use fastvideo_fal::schema::wan::{WanVariant, WAN_FPS_MAX, WAN_FPS_MIN, WAN_FRAMES_MAX};
 use fastvideo_fal::{AppKind, Endpoint, FalApp, FalInput};
@@ -15,6 +15,7 @@ use time::macros::datetime;
 
 fn caps_of(tier: (fastvideo_protocol::Family, Tier)) -> ModelCaps {
     catalog(&WeightLayout::default())
+        .unwrap()
         .into_iter()
         .find(|m| m.family() == tier.0 && m.tier == Some(tier.1))
         .unwrap_or_else(|| panic!("no {tier:?} model in the catalog"))
@@ -130,7 +131,13 @@ fn ltx_matrix_matches_the_engine() {
 
 #[test]
 fn wan_schema_matches_the_engine() {
-    assert_eq!(WAN_FRAMES_MAX as u32, WAN5B_FRAMES_MAX);
+    assert_eq!(
+        WAN_FRAMES_MAX as u32,
+        caps_of((fastvideo_protocol::Family::Wan, Tier::Turbo))
+            .frames
+            .max,
+        "fal's Wan 5B frame ceiling is the wan-turbo variant's"
+    );
     for (e, v) in [
         (Endpoint::WanTextToVideo, WanVariant::TextToVideo),
         (Endpoint::WanFastWan, WanVariant::FastWan),

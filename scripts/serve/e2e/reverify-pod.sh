@@ -17,7 +17,8 @@ case "${1:-}" in
   cfgs)
     { state </etc/fv/runpod-h3-max.toml; printf '%s' "$WEBRTC"; } >$E/cfg-h3max.toml
     # h3-draft alone (a second H3 DiT does not fit next to turbo on 80 GB).
-    state <$E/fv.toml | sed -e 's/^recipe = "h3-turbo"/recipe = "h3-draft"/' >$E/cfg-h3draft.toml
+    state <$E/fv.toml | sed -e 's/^variant = "fasth3-4step-vsa"/variant = "h3-draft"/' >$E/cfg-h3draft.toml
+    grep -q '^variant = "h3-draft"$' $E/cfg-h3draft.toml || { echo "cfg-h3draft.toml: the h3-turbo [[models]] variant line was not found" >&2; exit 1; }
     { state </etc/fv/runpod-ltx.toml; printf '%s' "$WEBRTC"; } >$E/cfg-ltx.toml
     cat >$E/cfg-sfwan.toml <<EOF
 [server]
@@ -39,9 +40,8 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
+variant = "sfwan21-1.3b"
 id = "sf-wan"
-family = "wan"
-recipe = "sfwan21-1.3b"
 weights = "\${FV_WEIGHTS}/sfwan21-1.3b"
 resident = true
 
@@ -59,7 +59,7 @@ native = true
 model = "sf-wan"
 $WEBRTC
 EOF
-    grep -H -E '^(recipe|id|fal_apps|state_dir)' $E/cfg-*.toml
+    grep -H -E '^(variant|id|fal_apps|state_dir)' $E/cfg-*.toml
     ;;
   switch)
     cfg=$E/cfg-$2.toml; [ "$2" = fv ] && cfg=$E/fv.toml

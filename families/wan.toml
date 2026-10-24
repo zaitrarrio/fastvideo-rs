@@ -1,8 +1,8 @@
 # Family manifest (layer 2, docs/adr/0008-family-manifest-layer-2.md): Wan 2.1 / Wan 2.2 / FastWan.
-# GENERATED from crates/fastvideo-engine-service/src/cuda/caps.rs `catalog()` by
-# `tests/families.rs` (`regenerate_family_files`); do not hand-edit until plan A3
-# makes this file the source. Paths: `${weights}/<tree>/...` and `${tae}/<file>`
-# are substituted with the engine's weight layout at load (families/README.md).
+# The source the engine catalog, the serve configs and the deployment tooling are
+# projected from (plan A3): hand-edited, validated by `cargo test -p fastvideo-manifest
+# -p fastvideo-engine-service` (families/README.md). Paths: `${weights}/<tree>/...` and
+# `${tae}/<file>` are substituted with the engine's weight layout at load.
 
 schema = 1
 
@@ -52,6 +52,11 @@ steps = true
 guidance = true
 guidance_2 = false
 flow_shift = true
+
+[variants.serving]
+tasks = ["t2v", "i2v"]
+frames_default = 121
+fps_container_only = true
 
 [variants.engine]
 decoder = "full"
@@ -115,6 +120,11 @@ guidance = false
 guidance_2 = false
 flow_shift = true
 
+[variants.serving]
+tasks = ["t2v", "i2v"]
+frames_default = 121
+fps_container_only = true
+
 [variants.engine]
 decoder = "full"
 default = [1280, 704, 121, 24]
@@ -176,6 +186,11 @@ guidance = false
 guidance_2 = false
 flow_shift = true
 
+[variants.serving]
+tasks = ["t2v", "i2v"]
+frames_default = 121
+fps_container_only = true
+
 [variants.engine]
 decoder = "taehv"
 default = [1280, 704, 121, 24]
@@ -236,6 +251,11 @@ steps = false
 guidance = false
 guidance_2 = false
 flow_shift = false
+
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 81
+fps_container_only = true
 
 [variants.engine]
 decoder = "full"
@@ -299,6 +319,11 @@ guidance = false
 guidance_2 = false
 flow_shift = true
 
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 81
+fps_container_only = true
+
 [variants.engine]
 decoder = "full"
 default = [832, 480, 81, 16]
@@ -358,6 +383,11 @@ steps = true
 guidance = false
 guidance_2 = false
 flow_shift = true
+
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 81
+fps_container_only = true
 
 [variants.engine]
 decoder = "taehv"
@@ -419,11 +449,92 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 81
+
 [variants.engine]
 block_frames = 12
 family = "sf_wan"
 local_attn_frames = 21
 sink_frames = 15
+
+[variants.engine.wan]
+decoder = "taehv"
+default = [832, 480, 81, 16]
+flow_shift = 5.0
+frames_max = 81
+i2v = false
+max_area = 399360
+multiple = 16
+negative = "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards"
+preset = "sf_wan_t2v_1_3b"
+short_edges = [480]
+tae_dir = "${tae}"
+vsa = false
+weights = "${weights}/sfwan21-1.3b"
+
+[variants.engine.wan.sampler]
+kind = "dmd"
+steps = 4
+
+[[variants]]
+id = "longlive-1.3b"
+served_names = ["longlive"]
+resident_default = true
+recipe_name = "sfwan21-1.3b-causal"
+trees = ["auxiliary/tae/taew2_1.safetensors", "longlive-1.3b-safetensors", "sfwan21-1.3b"]
+
+[variants.gpu]
+min_vram_gib = 24
+min_sm = 80
+
+[variants.caps.frames]
+step = 12
+offset = 9
+min = 9
+max = 81
+
+[variants.caps.canvas]
+multiple = 16
+max_area = 399360
+aspect = [0.25, 4.0]
+short_edges = [480]
+
+[variants.caps.fps]
+allowed = [16]
+default = 16
+
+[variants.caps.refs]
+images = 0
+videos = 0
+audios = 0
+total = 0
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 81
+
+[variants.engine]
+block_frames = 12
+family = "sf_wan"
+local_attn_frames = 12
+sink_frames = 3
+
+[variants.engine.longlive]
+global_sink = true
+lora = true
+recache = true
+relative_rope = false
+weights = "${weights}/longlive-1.3b-safetensors"
 
 [variants.engine.wan]
 decoder = "taehv"

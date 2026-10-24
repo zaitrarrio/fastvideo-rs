@@ -15,6 +15,8 @@ import {
 } from "../../src/cluster/payloads";
 import { assertRegionsAvailable, AVAILABLE_REGIONS, defaultSpec, migrateSpec, normalizeSpec, POOL_PRESETS, REGIONS, TEMPLATES, type RegionId } from "../../src/cluster/spec";
 import CATALOG from "../../src/cluster/catalog.json";
+import { mustVariant } from "../../src/families";
+import { configModelRefs } from "../../src/presets";
 import { OUTPUTS } from "../../gen-configs.mjs";
 import { WORKER_CONFIGS } from "../../src/cluster/worker-configs";
 
@@ -127,6 +129,20 @@ describe("spec", () => {
     const m = migrateSpec(stored);
     expect([m.control_plane, m.auth, m.pools[0]!.variant, (m as any).gateway]).toEqual(["direct", "none", "cpu", undefined]);
   });
+  it("specs stored before plan A3: the v0.1 Turbo LoRA and LongLive recipes read as their variants and validate", () => {
+    const stored: any = normalizeSpec({ name: "o", pools: [{ id: "h3-lightx2v-turbo-v01" }, { id: "longlive" }, { id: "sfwan" }] });
+    stored.pools[0].models = [{ id: "h3-lightx2v-turbo-v01", family: "h3", recipe: "lightx2v-turbo-v0.1" }];
+    stored.pools[1].models = [{ id: "longlive-1.3b", family: "wan", recipe: "sfwan21-1.3b" }];
+    expect(() => normalizeSpec(JSON.parse(JSON.stringify(stored)))).toThrow(/pools\.0\.models\.0\.recipe/);
+    const m = migrateSpec(JSON.parse(JSON.stringify(stored)));
+    expect(m.pools.map((p) => p.models)).toEqual([
+      [{ id: "h3-lightx2v-turbo-v01", family: "h3", recipe: "h3-lightx2v-turbo-v01" }],
+      [{ id: "longlive-1.3b", family: "wan", recipe: "longlive-1.3b" }],
+      // The SF-Wan model keeps its recipe (only the LongLive id was renamed).
+      [{ id: "sfwan21-1.3b", family: "wan", recipe: "sfwan21-1.3b" }],
+    ]);
+    expect(normalizeSpec(m).pools.map((p) => p.id)).toEqual(["h3-lightx2v-turbo-v01", "longlive", "sfwan"]);
+  });
 });
 
 // The inline config file of each preset (by its content's [gateway] pool line).
@@ -141,7 +157,7 @@ describe("templates and pool presets", () => {
     }
     const s = normalizeSpec({ name: "a", pools: [{ id: "ltx-pro", count: 2 }, { id: "longlive" }] });
     expect(s.pools[0]).toMatchObject({ id: "ltx-pro", variant: "ltx", count: 2, models: [{ id: "ltx25-distill-dense", family: "ltx2", recipe: "ltx-pro" }] });
-    expect(s.pools[0]!.config_toml).toMatch(/^recipe = "ltx-pro"$/m);
+    expect(s.pools[0]!.config_toml).toMatch(/^variant = "ltx25-distill-dense"$/m);
     expect(s.pools[1]).toMatchObject({ id: "longlive", variant: "sfwan", count: 1 });
     // A pool's own config wins over the preset's inline one.
     const own = normalizeSpec({ name: "b", pools: [{ id: "ltx-pro", config: "/etc/fv/runpod-ltx-pro.toml" }] }).pools[0]!;
@@ -162,8 +178,10 @@ describe("templates and pool presets", () => {
         expect(stage, `${pr.id}: the ${p.variant} image carries ${file}`).toContain(`configs/serve/${file}`);
         toml = readFileSync(join(repo, "configs/serve", file), "utf8");
       }
-      const ids = [...toml.matchAll(/^\[\[models\]\]\nid = "([^"]+)"\nfamily = "([^"]+)"\nrecipe = "([^"]+)"/gm)].map((m) => ({ id: m[1], family: m[2], recipe: m[3] }));
-      expect(p.models, pr.id).toEqual(ids);
+      // The worker config names variants (plan A3); the preset's models are the same ids, families and variants.
+      const cfg = configModelRefs(toml);
+      expect(p.models!.map((m) => [m.id, m.family]), pr.id).toEqual(cfg.map((m) => [m.id, m.family]));
+      for (const [i, m] of p.models!.entries()) expect(mustVariant(m.recipe).id, `${pr.id}: ${m.id}`).toBe(mustVariant(cfg[i]!.recipe).id);
       for (const m of p.models!) expect(CATALOG.recipes.find((r) => r.id === m.recipe)?.serve, `${pr.id}: ${m.recipe}`).toBe(true);
       expect(pr.description.length).toBeGreaterThan(10);
     }

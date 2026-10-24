@@ -16,14 +16,21 @@ export interface ManifestVariant {
   tier: Tier | null;
   /** Names besides the id the variant answers to. */
   served_names: string[];
+  /** The public API names a server maps onto the variant when it serves it (MiniMax-H3-Turbo): the serve configs'
+   * old [aliases]. A name several served variants claim goes to the one serving t2v, else the first by id. */
+  public_names: string[];
+  /** The tasks the variant serves (serving.tasks: t2v, i2v, keyframes, ref2v, a2v, retake, extend). */
+  tasks: string[];
   resident_default: boolean;
   /** The short recipe name the capabilities report. */
   recipe_name: string;
-  /** Every weight tree the variant reads, as scripts/gpu/weights-manifest.tsv names them (sorted). */
+  /** Every weight tree the variant reads, as the weights store names them (sorted). */
   trees: string[];
   /** `trees` without the auxiliary/ files (TAE decoders, LPIPS), which every boot fetches as the aux trees:
    * what a preset lists as its weights and a weights plan fetches. */
   weight_trees: string[];
+  /** The tree the recipe's `weights` names: what a serve config's `weights` path replaces. */
+  main_tree: string;
   gpu: { min_vram_gib: number; min_sm: number; needs: string[] };
 }
 export const MANIFEST_FAMILIES: ManifestFamily[] = [
@@ -46,6 +53,13 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "fix",
       "fixture-turbo"
     ],
+    "public_names": [
+      "Fixture-Turbo"
+    ],
+    "tasks": [
+      "t2v",
+      "i2v"
+    ],
     "resident_default": true,
     "recipe_name": "fix-turbo-4step",
     "trees": [
@@ -56,6 +70,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "fix-adapter",
       "fix-base"
     ],
+    "main_tree": "fix-base",
     "gpu": {
       "min_vram_gib": 80,
       "min_sm": 89,
@@ -68,6 +83,10 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "family": "h3",
     "tier": null,
     "served_names": [],
+    "public_names": [],
+    "tasks": [
+      "t2v"
+    ],
     "resident_default": false,
     "recipe_name": "fix-draft-tae",
     "trees": [
@@ -77,6 +96,7 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "weight_trees": [
       "fix-base"
     ],
+    "main_tree": "fix-base",
     "gpu": {
       "min_vram_gib": 24,
       "min_sm": 80,
@@ -84,9 +104,9 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     }
   }
 };
-/** Every name a serve config's `recipe` (or `id`) may use for a variant, as the engine resolves it (caps.rs `find`,
- * `parse_tier_alias`): a tier alias (`h3-turbo`: the first variant of its tier), the variant id or a served name. A
- * variant's `recipe_name` is what the capabilities report, not a config name, and is not here. */
+/** Every name a serve config's `variant` (or a pool model's `recipe`) may use, as the engine resolves it
+ * (`model_from_config`): a tier alias (`h3-turbo`: the first variant of its tier), the variant id or a served name.
+ * A variant's `recipe_name` is what the capabilities report, not a config name, and is not here. */
 export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" | "served" }> = {
   "fix": {
     "variant": "fix-turbo",
@@ -109,8 +129,3 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
     "kind": "tier"
   }
 };
-/** Recipe aliases the engine resolves besides MODEL_NAMES (caps.rs `model_from_config` arms a config here uses);
- * `variantOf` does not consult them, `recipeVariant` does. The engine also accepts contract names neither table
- * lists (`4step-vsa`, `8step`, `sol-h3` / `sol_h3`, `trim-8step`, an empty recipe, family `ltx`): plan A3 settles
- * which the manifests carry. */
-export const ENGINE_RECIPE_ALIASES: Record<string, string> = {};

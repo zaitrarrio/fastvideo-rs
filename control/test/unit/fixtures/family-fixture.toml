@@ -12,6 +12,7 @@ port_doc = "docs/ports/fixture.md"
 id = "fix-turbo"
 tier = "turbo"
 served_names = ["fix", "fixture-turbo"]
+public_names = ["Fixture-Turbo"]
 resident_default = true
 recipe_name = "fix-turbo-4step"
 trees = ["fix-adapter", "fix-base"]
@@ -26,6 +27,10 @@ step = 17
 offset = 5
 min = 107
 max = 362
+
+[variants.serving]
+tasks = ["t2v", "i2v"]
+frames_default = 124
 
 [variants.engine]
 family = "h3"
@@ -47,6 +52,10 @@ step = 17
 offset = 5
 min = 107
 max = 362
+
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 124
 
 [variants.engine]
 family = "h3"

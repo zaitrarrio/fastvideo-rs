@@ -76,6 +76,7 @@ pub fn fastwan_model() -> FakeModel {
             summary: "fake: FastWan 3-step".into(),
             ..Recipe::default()
         },
+        public_names: Vec::new(),
     }
 }
 

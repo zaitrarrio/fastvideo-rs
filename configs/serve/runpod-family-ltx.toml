@@ -36,33 +36,21 @@ post_encoder = "auto"
 swap = true
 
 [[models]]
-id = "ltx25-distill-sol"
-family = "ltx2"
-recipe = "ltx-turbo"
-weights = "${FV_WEIGHTS}/ltx25"
+variant = "ltx25-distill-sol"
 resident = true
 
 [[models]]
-id = "ltx25-distill-dense"
-family = "ltx2"
-recipe = "ltx-pro"
-weights = "${FV_WEIGHTS}/ltx25"
+variant = "ltx25-distill-dense"
 resident = false
 
-# The dev DiT: ${FV_WEIGHTS}/ltx25-dev/transformer_full (the catalog's layout).
+# The dev DiT: ${FV_WEIGHTS}/ltx25-dev/transformer_full (the variant's layout).
 [[models]]
-id = "ltx25-a2v-guided"
-family = "ltx2"
-recipe = "ltx25-a2v-guided"
-weights = "${FV_WEIGHTS}/ltx25"
+variant = "ltx25-a2v-guided"
 resident = false
 
 # The IC-LoRA: ${FV_WEIGHTS}/ltx25-ic-lora-ingredients.
 [[models]]
-id = "ltx25-ref2v"
-family = "ltx2"
-recipe = "ltx25-ref2v"
-weights = "${FV_WEIGHTS}/ltx25"
+variant = "ltx25-ref2v"
 resident = false
 
 [protocols]

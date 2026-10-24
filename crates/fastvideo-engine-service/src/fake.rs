@@ -49,6 +49,12 @@ use crate::clock::{Clock, SystemClock};
 pub struct FakeModel {
     pub caps: ModelCaps,
     pub recipe: Recipe,
+    /// The public API names a server maps onto it (`EngineBackend::public_names`).
+    pub public_names: Vec<String>,
+}
+
+fn names(list: &[&str]) -> Vec<String> {
+    list.iter().map(|n| (*n).to_owned()).collect()
 }
 
 fn recipe(name: &str, steps: u32, attention: &str, vae: &str, summary: &str) -> Recipe {
@@ -74,6 +80,7 @@ impl FakeModel {
                 "full",
                 "fake: full step count, dense attention, full VAE",
             ),
+            public_names: names(&["MiniMax-H3-Max"]),
         }
     }
 
@@ -88,6 +95,7 @@ impl FakeModel {
                 "full",
                 "fake: 4-step distilled, sparse attention",
             ),
+            public_names: names(&["MiniMax-H3", "MiniMax-H3-Turbo"]),
         }
     }
 
@@ -149,6 +157,7 @@ impl FakeModel {
                 profile: None,
                 ..Recipe::sol_h3_4step()
             },
+            public_names: Vec::new(),
         }
     }
 
@@ -163,6 +172,7 @@ impl FakeModel {
                 "full",
                 "fake: two-stage, dense stage 2",
             ),
+            public_names: Vec::new(),
         }
     }
 
@@ -177,6 +187,7 @@ impl FakeModel {
                 "full",
                 "fake: distilled two-stage, sparse stage 2",
             ),
+            public_names: Vec::new(),
         }
     }
 
@@ -217,7 +228,8 @@ impl FakeModel {
         }
     }
 
-    /// Video-only Wan clip model (4k+1 grid, 16 fps container rate).
+    /// Video-only Wan clip model (4k+1 grid, 16 fps container rate); the
+    /// FastWan API's `fastwan-1.3b` names it.
     pub fn wan() -> Self {
         Self {
             caps: Self::wan_caps("fake-wan"),
@@ -228,6 +240,7 @@ impl FakeModel {
                 "full",
                 "fake: video-only clip model",
             ),
+            public_names: names(&["fastwan-1.3b"]),
         }
     }
 
@@ -253,6 +266,7 @@ impl FakeModel {
                 "tiny",
                 "fake: causal block rollout",
             ),
+            public_names: Vec::new(),
         }
     }
 
@@ -457,6 +471,7 @@ impl FakeConfig {
                 FakeModel {
                     caps,
                     recipe: m.describe(),
+                    public_names: m.public_names.clone(),
                 }
             })
             .collect();
@@ -760,6 +775,13 @@ impl EngineBackend for FakeBackend {
         self.models
             .get(model)
             .map(|m| m.recipe.clone())
+            .unwrap_or_default()
+    }
+
+    fn public_names(&self, model: &ModelId) -> Vec<String> {
+        self.models
+            .get(model)
+            .map(|m| m.public_names.clone())
             .unwrap_or_default()
     }
 

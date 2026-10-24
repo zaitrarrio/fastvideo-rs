@@ -31,18 +31,11 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "fasth3-trim-8step"
-family = "h3"
-recipe = "h3-trim"
-weights = "${FV_WEIGHTS}/fasth3-trim-8step"
-# The text encoder, tokenizer and audio VAE: the catalog's text_weights,
+variant = "fasth3-trim-8step"
+# The text encoder, tokenizer and audio VAE: the variant's text_weights,
 # ${FV_WEIGHTS}/h3-base.
 resident = true
-served_names = ["h3-trim", "fasth3-trim"]
 warmup = true
-
-[aliases]
-"MiniMax-H3-Trim" = "fasth3-trim-8step"
 
 [protocols]
 openai_videos = true

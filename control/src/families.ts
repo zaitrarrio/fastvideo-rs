@@ -2,7 +2,7 @@
 // families/*.toml by gen-configs.mjs): what a serve config's `recipe` or model
 // name resolves to, as the engine resolves it, and the variants' GPU needs.
 // Imports only the generated leaf, so every module may import this one.
-import { ENGINE_RECIPE_ALIASES, MANIFEST_FAMILIES, MANIFEST_VARIANTS, MODEL_NAMES, type ManifestVariant } from "./families-gen";
+import { MANIFEST_FAMILIES, MANIFEST_VARIANTS, MODEL_NAMES, type ManifestVariant } from "./families-gen";
 
 /** The model families the manifests serve (h3, ltx2, wan): the `family` of a pool model. */
 export const MODEL_FAMILY_IDS: string[] = MANIFEST_FAMILIES.map((f) => f.id);
@@ -17,16 +17,15 @@ const byId = (id: string | undefined): Variant | undefined => {
 export function variantOf(name: string): Variant | undefined {
   return byId(MODEL_NAMES[name]?.variant);
 }
-/** The variant a serve config's `recipe` resolves to: variantOf, else an engine recipe alias (ENGINE_RECIPE_ALIASES,
- * the caps.rs `model_from_config` arms a config here uses). The engine's contract names (`4step-vsa`, `8step`,
- * `sol-h3`, `trim-8step`, an empty recipe) are neither: plan A3. */
+/** The variant a pool model's `recipe` or a serve config's `variant` resolves to. Since plan A3 the engine resolves
+ * exactly the manifest names (fastvideo-engine-service `model_from_config`), so this is variantOf. */
 export function recipeVariant(recipe: string): Variant | undefined {
-  return variantOf(recipe) ?? byId(ENGINE_RECIPE_ALIASES[recipe]);
+  return variantOf(recipe);
 }
 /** recipeVariant, or an error naming the sources. */
 export function mustVariant(name: string): Variant {
   const v = recipeVariant(name);
-  if (!v) throw new Error(`${name} is not a name the family manifests know (families/*.toml: a tier alias, variant id, served name) nor an engine recipe alias`);
+  if (!v) throw new Error(`${name} is not a name the family manifests know (families/*.toml: a tier alias, variant id, served name)`);
   return v;
 }
 /** The GPU memory (GiB) the largest of these variants needs (families/*.toml gpu.min_vram_gib). */

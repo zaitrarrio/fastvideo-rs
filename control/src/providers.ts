@@ -39,6 +39,7 @@ import { OTHER_PROVIDERS, type OtherProviderId, type ProviderId } from "./enums"
 import type { Env } from "./env";
 import { FV_NAME_RE, gmi, gmiDefaultIdc, gmiEnabled, gmiProducts } from "./gmi";
 import { POOL_PRESETS } from "./presets";
+import { servesOfToml } from "./serverless/serves";
 import { HttpError, now, parseJson, putSetting, rateLimit, utcDay } from "./util";
 import { AUX_FILES, HUB_TREES } from "./weights-sources";
 import { REGIONS } from "./cluster/regions";
@@ -373,10 +374,13 @@ export interface WeightsPlan {
   /** TSV for FV_WEIGHTS_TREES_B64: tree<TAB>dest<TAB>repo<TAB>rev<TAB>globs, aux<TAB>path<TAB>url<TAB>sha256<TAB>size. */
   tsv: string;
 }
-/** The weight trees a pool loads: `${FV_WEIGHTS}/<tree>` in its worker config, plus its preset's list. */
+/** The weight trees a pool loads: its worker config's [[models]] variants' trees (families/*.toml, with a `weights`
+ * path replacing the variant's own tree), any other `${FV_WEIGHTS}/<tree>` path in it, plus its preset's list. */
 export function poolTrees(pool: PoolSpec): string[] {
   const out = new Set<string>();
-  for (const line of configText(pool).split("\n")) {
+  const text = configText(pool);
+  for (const t of servesOfToml(text, { kind: "inline", config: null }).weights) out.add(t);
+  for (const line of text.split("\n")) {
     if (/^\s*#/.test(line)) continue;
     for (const m of line.matchAll(/\$\{FV_WEIGHTS\}\/([A-Za-z0-9._-]+)(?:\/([A-Za-z0-9._-]+))?/g)) out.add(m[2] && HUB_TREES[`${m[1]}/${m[2]}`] ? `${m[1]}/${m[2]}` : m[1]!);
   }

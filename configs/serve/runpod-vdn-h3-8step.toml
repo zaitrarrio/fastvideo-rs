@@ -3,7 +3,7 @@
 # $FV_WEIGHTS/h3-base (the MiniMax-H3 DiT, both VAEs, the text encoder and
 # tokenizer), $FV_WEIGHTS/vdn-h3-dmd-250-turbo/stage-dmd-step-250 (the turbo
 # LoRA) and $FV_WEIGHTS/vdn-h3-stage-b-2000/stage-b-step-2000 (the linear branch
-# and the default LoRA, byte-identical in both stages; the catalog's
+# and the default LoRA, byte-identical in both stages; the variant's
 # vdn_shared). Both LoRAs merge into h3-base at load.
 #
 # 8 forwards on the uniform grid, shifts 12 / 3, no CFG; every block attends
@@ -33,17 +33,11 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "vdn-h3-8step"
-family = "h3"
-recipe = "vdn-h3-8step"
-weights = "${FV_WEIGHTS}/h3-base"
-# The VDN checkpoint: the catalog's vdn_weights / vdn_shared.
+variant = "vdn-h3-8step"
+# The VDN checkpoint: the variant's vdn_weights / vdn_shared.
 resident = true
 # No warm-up: it runs an image-to-video generation (not offered here).
 warmup = false
-
-[aliases]
-"VDN-H3-8step" = "vdn-h3-8step"
 
 [protocols]
 openai_videos = true

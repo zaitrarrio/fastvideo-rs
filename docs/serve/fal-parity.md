@@ -563,9 +563,8 @@ Deviations kept (each a server limit, named in the schema descriptions):
   5B tiers run without VSA, so they share one process.
 - `fastwan21-1.3b` and `fastwan21-1.3b-taehv` are untiered ids now (they
   were `wan-turbo` / `wan-draft`); `configs/serve/runpod-wan.toml` names
-  `recipe = "fastwan21-1.3b"`. A
-  `[[models]] family = "wan"` entry without `recipe` resolves to the 5B
-  turbo.
+  `variant = "fastwan21-1.3b"` (plan A3: a `[[models]]` entry always names
+  its variant; `wan-turbo` is the 5B turbo).
 
 ### 5.3 Weights
 
