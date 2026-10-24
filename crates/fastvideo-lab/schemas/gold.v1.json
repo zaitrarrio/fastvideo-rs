@@ -1,0 +1,592 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Gold",
+  "description": "One `lab/gold/<variant>.toml`.",
+  "type": "object",
+  "properties": {
+    "cost": {
+      "$ref": "#/$defs/Cost",
+      "default": {}
+    },
+    "gap": {
+      "description": "The numeric fields that have no measurement yet, and why.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Gap"
+      }
+    },
+    "last_validated": {
+      "$ref": "#/$defs/LastValidated",
+      "default": {}
+    },
+    "latency": {
+      "$ref": "#/$defs/Latency",
+      "default": {}
+    },
+    "model": {
+      "$ref": "#/$defs/Model"
+    },
+    "quality": {
+      "$ref": "#/$defs/Quality",
+      "default": {}
+    },
+    "schema": {
+      "description": "Always 1.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "source": {
+      "description": "Where every number came from (file path plus heading). At least one.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Source"
+      }
+    },
+    "tier": {
+      "$ref": "#/$defs/TierSpec"
+    },
+    "workload": {
+      "$ref": "#/$defs/Workload"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "model",
+    "tier",
+    "workload"
+  ],
+  "$defs": {
+    "Cost": {
+      "description": "The `[cost]` table.",
+      "type": "object",
+      "properties": {
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usd_per_clip": {
+          "description": "`usd_per_hr * latency.p50_s / 3600`, derived.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "usd_per_hr": {
+          "description": "The rented price of the tier's GPU class.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Gap": {
+      "description": "One `[[gap]]`: a numeric field with no measurement, and why.",
+      "type": "object",
+      "properties": {
+        "field": {
+          "description": "A dotted path of [`NUMERIC_FIELDS`].",
+          "type": "string"
+        },
+        "why": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "why"
+      ]
+    },
+    "LastValidated": {
+      "description": "The `[last_validated]` table: the last `fv-lab run gold` of this file.\nEmpty until `fv-lab` (plan D1) has run.",
+      "type": "object",
+      "properties": {
+        "commit": {
+          "description": "The commit the run validated (7 to 40 hex digits).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "date": {
+          "description": "`YYYY-MM-DD`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "description": "The run record, relative to the repository root.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Latency": {
+      "description": "The `[latency]` table. Seconds, medians where the source gives medians.",
+      "type": "object",
+      "properties": {
+        "decode_s": {
+          "description": "The video decode (audio decode included where the source includes it).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "denoise_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "fps": {
+          "description": "Steady frame rate of a stream.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "load_s": {
+          "description": "Model load in the process that measured, outside the timed region.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "max_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "measures": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Measures"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "p50_s": {
+          "description": "The median of the timed runs.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "peak_gib": {
+          "description": "Peak device memory of the process, GiB.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "ttff_s": {
+          "description": "Time to first frame of a stream.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Measures": {
+      "description": "What a wall-clock number measures.",
+      "oneOf": [
+        {
+          "description": "The denoise stage alone.",
+          "type": "string",
+          "const": "denoise"
+        },
+        {
+          "description": "Denoise + decode + host glue; text encoding and the MP4 excluded\n(`total_s - text_s`, `docs/perf/raw-inference.md`).",
+          "type": "string",
+          "const": "gen"
+        },
+        {
+          "description": "The whole generation in one process, text excluded, MP4 included.",
+          "type": "string",
+          "const": "end_to_end"
+        },
+        {
+          "description": "An fv-serve job as the API reports it (encode and job overhead included).",
+          "type": "string",
+          "const": "serve_job"
+        },
+        {
+          "description": "A causal stream: `p50_s` is seconds of compute per `workload.seconds`\nof video, `fps` the steady frame rate.",
+          "type": "string",
+          "const": "stream"
+        }
+      ]
+    },
+    "Model": {
+      "description": "The `[model]` table: which variant this file certifies.",
+      "type": "object",
+      "properties": {
+        "family": {
+          "description": "The family id (`h3`, `ltx2`, `wan`).",
+          "type": "string"
+        },
+        "profile": {
+          "description": "The technique profile the variant runs (`profiles/<profile>.toml`),\nwhen the recipe has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "registry_name": {
+          "description": "The layer-1 name the variant publishes as, once published; without\n`@rev` (that is `rev`). Absent until a model is published.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rev": {
+          "description": "The published manifest's `@rev` (12 hex digits) this file certifies.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "variant": {
+          "description": "The variant id of `families/<family>.toml`; also the file's stem.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "variant",
+        "family"
+      ]
+    },
+    "Quality": {
+      "description": "The `[quality]` table: the oracle result versus upstream\n(`docs/oracle.md`) and the gate verdict.",
+      "type": "object",
+      "properties": {
+        "byte_identical": {
+          "description": "Whether the same request gives the same bytes across processes\n(`docs/perf/determinism.md`), when measured for this variant.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cell": {
+          "description": "The cell the quality numbers refer to, when it is not `[workload]`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gate": {
+          "description": "The `fv-gpucheck gate` verdict and its baseline, in words.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "jitter_ratio": {
+          "description": "Temporal-jitter ratio of the gate's quality section against its baseline.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "lpips_vs_upstream_max": {
+          "description": "LPIPS of our clip against the upstream reference's.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "oracle": {
+          "description": "The oracle verdict (`docs/oracle.md`): how ours relates to the\nreference at the tensor level.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "psnr_vs_upstream_min_db": {
+          "description": "PSNR of our clip against the upstream reference's, dB.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "sharpness_ratio": {
+          "description": "Sharpness ratio of the gate's quality section against its baseline.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Source": {
+      "description": "One `[[source]]`: where the named fields' values come from.",
+      "type": "object",
+      "properties": {
+        "date": {
+          "description": "The measurement date, `YYYY-MM-DD`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "description": "Dotted field paths this source backs (`latency.p50_s`); empty for a\nnote that cites a related measurement without backing a field.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "heading": {
+          "description": "The heading or table the numbers are under.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "Repository-relative path of the document or artifact.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ]
+    },
+    "Tier": {
+      "description": "A served variant's quality tier (`fastvideo-protocol`'s `Tier`, as text).",
+      "oneOf": [
+        {
+          "description": "Faster configurations that do not pass the quality gate.",
+          "type": "string",
+          "const": "draft"
+        },
+        {
+          "description": "The fastest configuration that passes the gate.",
+          "type": "string",
+          "const": "turbo"
+        },
+        {
+          "description": "The highest-quality configuration.",
+          "type": "string",
+          "const": "max"
+        }
+      ]
+    },
+    "TierSpec": {
+      "description": "The `[tier]` table: the public tier and the GPU class it is defined on.",
+      "type": "object",
+      "properties": {
+        "gpu": {
+          "description": "The GPU class (`RTX PRO 6000 Blackwell`).",
+          "type": "string"
+        },
+        "name": {
+          "description": "`draft` | `turbo` | `max`; absent for an untiered variant.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "offer": {
+          "description": "The provider offer the class is rented as, when one is pinned.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sm": {
+          "description": "Compute capability as `major * 10 + minor` (`120` = sm_120).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "vram_gib": {
+          "description": "Device memory of the class, GiB.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "gpu",
+        "sm",
+        "vram_gib"
+      ]
+    },
+    "Upstream": {
+      "description": "The upstream (Python) reference of a cell.",
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rev": {
+          "description": "The upstream commit.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "description": "The oracle target (`fasth3-4step-vsa`) or the upstream cell name.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "target"
+      ]
+    },
+    "Workload": {
+      "description": "The `[workload]` table: the reference cell the numbers refer to.",
+      "type": "object",
+      "properties": {
+        "fps": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "frames": {
+          "description": "Frames of the clip (absent for a stream, which gives `seconds`).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "note": {
+          "description": "Anything the cell needs said (warm process, text cache, no MP4).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt_set": {
+          "description": "The prompt set by name or path (`scripts/gpu/prompts-eval.json`).",
+          "type": "string"
+        },
+        "seconds": {
+          "description": "Length in seconds of video.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "seeds": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "steps": {
+          "description": "Denoising forwards.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "upstream": {
+          "description": "The upstream reference the quality numbers compare against.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Upstream"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "width",
+        "height",
+        "prompt_set"
+      ]
+    }
+  }
+}

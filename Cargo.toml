@@ -34,6 +34,9 @@ members = [
     "crates/fastvideo-edge",
     # The registry's public formats (docs/adr/0005..0007): pure, no I/O, no CUDA.
     "crates/fastvideo-manifest",
+    # The lab's gold standards (docs/adr/0009): lab/gold/*.toml types, validation,
+    # schema export and the profile-comment lint. CPU only; D1 adds `fv-lab`.
+    "crates/fastvideo-lab",
 ]
 
 [workspace.package]
@@ -116,6 +119,7 @@ fastvideo-deploy = { path = "crates/fastvideo-deploy" }
 fastvideo-autoscale = { path = "crates/fastvideo-autoscale" }
 fastvideo-dispatch-proto = { path = "crates/fastvideo-dispatch-proto" }
 fastvideo-manifest = { path = "crates/fastvideo-manifest" }
+fastvideo-lab = { path = "crates/fastvideo-lab" }
 
 # ---- fastvideo-manifest (docs/adr/0005..0007) --------------------------------
 blake3 = "1"
