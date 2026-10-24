@@ -527,3 +527,16 @@ ran (pod id, $/hr), result, cost.
   the build pod); now `grep >/dev/null`. fv-boot reports
   `FV_RELEASE_VERSION` as fv-serve does (the gates check `fv-boot version`;
   a mismatch case added to `test_tools_release.sh`).
+- 2026-10-24 06:46Z: C2 real-entrypoint gate (coordinator): the branch's
+  serve image `fastvideo-rs-serve:ltx-sha-0975761` (built by serve-image.yml
+  dispatched on the branch: sha tags only, no `latest`, no templates),
+  started with its own ENTRYPOINT `fv-boot` and no start-command override,
+  on an RTX PRO 6000 in EU-RO-1 with volume `bz0ofkfx45` (pod
+  `gnpypqun6ueyv1`, deleted): `/ping` after 42 s, `/healthz` ready after 94
+  s more with `ltx25-distill-sol` loaded (build `0975761`, variant `ltx`);
+  auth on (a throwaway key, hash only in `FV_API_KEYS`): an unauthenticated
+  submit got 401; one native job (480p 16:9) succeeded in 100 s. The head
+  since then changes `fv-boot --version` (release version), the libclang
+  check in `release-artifacts-pod.sh`, docs, and merges main (#163); the
+  boot path is unchanged. Evidence:
+  `artifacts/runpod/c2-boot/entry-0975761-10240642/`.
