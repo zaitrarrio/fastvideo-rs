@@ -1553,7 +1553,11 @@ executor, busy answers (Reactor 409, `/fv/v1/streams/ingest` 429 +
 records, H.264 access units as Annex-B each followed by an access unit
 delimiter (the h264 parser then ends the unit at once). Flags
 `-probesize 32 -analyzeduration 0 -flags low_delay -threads 1 -fps_mode
-passthrough`; RGB24 out at a fixed size. Measured: H.264 ~1 ms per frame
+passthrough`; RGB24 out at a fixed size, with `-threads 1` on the output
+too: the `rawvideo` encoder is frame-threaded (a thread per core), and a
+picture its worker has not finished by the next call stays in ffmpeg until
+more input arrives, so a loaded host fell up to two frames behind and the
+first picture could wait forever (2026-10-24). Measured: H.264 ~1 ms per frame
 with ffmpeg 6.1 (one frame held by 5.1), VP8 one frame (the IVF demuxer);
 the first picture waits for the second frame (the stream probe). A cold
 ffmpeg start took seconds on the loaded build pod and the first frames
