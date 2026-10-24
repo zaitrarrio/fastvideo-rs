@@ -36,7 +36,7 @@ usd_per_hr = 2.49
 [[source]]
 fields = []
 path = "docs/techniques.md"
-heading = "H3 attention arms (h3attn, RTX PRO 6000, 2026-09-27)"
+heading = "H3 attention arms (`h3attn`, RTX PRO 6000, 2026-09-27)"
 date = "2026-09-27"
 note = "The measured FastH3 8-step cells run profile h3/fasth3_8step (VSA 0.8, MXFP8): 768p denoise 45.76 s, and the h3arms baselines 46.52 s (768p) / 16.48 s (480p). That is the VSA recipe, not this dense variant; no number here is this variant's."
 

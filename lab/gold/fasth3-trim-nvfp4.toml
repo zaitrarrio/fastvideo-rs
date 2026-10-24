@@ -23,42 +23,46 @@ fps = 24
 prompt_set = "scripts/gpu/prompts-hd5.json (5 prompts, each with its own seed: talking-head 1024, three at 42, h3-demo 0)"
 seeds = [1024, 42, 0]
 steps = 8
-note = "One RTX PRO 6000 pod (EU-RO-1, $2.49/hr), image fastvideo-rs-runtime:sha-b564268 with the branch's fv-gpucheck at c56aac4, one process per arm and canvas, --warm, medians over the five prompts; end to end = total_s minus text time; peak = in-process device maximum. The 2026-10-14 options run decoded with the bf16 26-block VAE; since that day the served decoder is MXFP8 (docs/perf/h3-vae-decode-speed.md §6)."
+note = "One RTX PRO 6000 pod (EU-RO-1, $2.49/hr), image fastvideo-rs-runtime:sha-b564268 with the branch's fv-gpucheck at c56aac4, one process per arm and canvas, --warm, medians over the five prompts; end to end = total_s minus text time; peak = in-process device maximum. The options run (c56aac4) decoded with the Trim's 26-block VAE in bf16; reproduce with FASTVIDEO_H3_VAE_MXFP8=0 (bf16 video decode, the default before 2026-10-14; the 26-block decoder's MXFP8 default came later the same day, docs/perf/h3-vae-decode-speed.md §6)."
+
+[workload.env]
+FASTVIDEO_H3_VAE_MXFP8 = "0"
 
 [latency]
 measures = "end_to_end"
+p50_s = 13.04
 denoise_s = 11.02
+decode_s = 1.91
+peak_gib = 20.3
 note = "Row 'Trim NVFP4 (bf16 VSA, as wired by #105)', 480p: denoise 11.02 s (1.374 s per forward), VAE 1.91 s (bf16 decoder), end to end 13.04 s, peak 20.3 GiB; 768p 32.65 / 4.51 / 37.35 / 27.9. Before the glue fusions and lazy step events that cut the fast variant's denoise from 9.21 to 7.53 s."
 
 [quality]
 gate = "fail vs Trim bf16 (the same DiT in bf16): a different sample (PSNR 12.1 dB, LPIPS 0.60 at 480p; 2 of 5 prompts fail at 480p, 5 of 5 at 768p), as docs/ports/h3-trim.md §5.4 found. vs V2-NVFP4: another model (PSNR 10.2 dB, LPIPS 0.66)."
+cell = "c56aac4 options run, bf16 26-block decoder: 832x480x124, scripts/gpu/prompts-hd5.json, medians over the five prompts (480p values); Trim NVFP4 against Trim bf16 (FASTVIDEO_H3_QUANT=off), each in its own process."
 sharpness_ratio = 1.01
 jitter_ratio = 1.08
 note = "Gate medians at 480p vs Trim bf16: sharpness 1.01 [0.96-1.43], jitter 1.08 [0.85-1.31]."
 
 [cost]
 usd_per_hr = 2.49
+usd_per_clip = 0.00902
 
 [last_validated]
 # empty: never validated by fv-lab (plan D1); commit, run and date land here.
 
 [[source]]
-fields = ["latency.measures", "latency.denoise_s", "quality.gate", "quality.sharpness_ratio", "quality.jitter_ratio", "workload"]
+fields = ["latency.measures", "latency.p50_s", "latency.denoise_s", "latency.decode_s", "latency.peak_gib", "quality.gate", "quality.cell", "quality.sharpness_ratio", "quality.jitter_ratio", "workload"]
 path = "docs/perf/h3-nvfp4-tier-options.md"
 heading = "Option 7: FastH3 Trim 8-step NVFP4 (`fasth3-trim-8step-nvfp4`)"
 date = "2026-10-14"
 note = "Speed table row 'Trim NVFP4 (bf16 VSA, as wired by #105)' and quality table row 'Trim bf16 -> Trim NVFP4'."
 
 [[source]]
-fields = ["cost.usd_per_hr"]
+fields = ["cost.usd_per_hr", "cost.usd_per_clip"]
 path = "docs/perf/h3-nvfp4-tier-options.md"
 heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
 date = "2026-10-14"
 note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
-
-[[gap]]
-field = "latency.p50_s"
-why = "the measured end to end (13.04 s at 480p) decoded with the bf16 26-block VAE, replaced by the MXFP8 default the same day; not the served configuration"
 
 [[gap]]
 field = "latency.min_s"
@@ -69,16 +73,8 @@ field = "latency.max_s"
 why = "medians over prompts only"
 
 [[gap]]
-field = "latency.decode_s"
-why = "the measured decode (1.91 s) is the bf16 decoder, not the served MXFP8 one"
-
-[[gap]]
 field = "latency.load_s"
 why = "not reported"
-
-[[gap]]
-field = "latency.peak_gib"
-why = "measured with the bf16 decoder (20.3 GiB at 480p); the MXFP8 copies add about 1.8 GiB"
 
 [[gap]]
 field = "quality.psnr_vs_upstream_min_db"
@@ -95,7 +91,3 @@ why = "a clip, not a stream"
 [[gap]]
 field = "latency.ttff_s"
 why = "a clip, not a stream"
-
-[[gap]]
-field = "cost.usd_per_clip"
-why = "derived from latency.p50_s, which has no measurement here"

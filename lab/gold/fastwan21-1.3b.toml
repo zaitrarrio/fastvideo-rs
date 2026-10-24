@@ -55,8 +55,9 @@ note = "Row 'FastWan 1.3B, 832x480x81, default': gen 4.85 (4.85-4.86) s, denoise
 [[source]]
 fields = ["latency.load_s"]
 path = "artifacts/perf/raw-inference/rtx-pro-6000-summary.json"
+heading = "w13-def"
 date = "2026-09-30"
-note = "w13-def load_s."
+note = "load_s."
 
 [[source]]
 fields = []

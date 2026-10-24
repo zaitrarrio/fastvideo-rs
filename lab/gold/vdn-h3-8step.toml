@@ -36,6 +36,8 @@ usd_per_hr = 2.49
 [[source]]
 fields = []
 path = "docs/ports/vdn-h3.md"
+heading = "8. The 8-step model (`vdn-h3-8step`, 2026-10-14)"
+date = "2026-10-14"
 note = "The port document of VDN-H3; not a D2 source, named here so D3 knows where to look."
 
 [[source]]

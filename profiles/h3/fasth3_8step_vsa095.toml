@@ -1,4 +1,4 @@
-# Measured in the h3attn matrix family: numbers in docs/techniques.md "H3 attention arms" (h3attn, RTX PRO 6000, 2026-09-27). Verdict: gate FAIL (sharpness on 3 of 5 prompts) vs FastH3 8-step 768p.
+# Measured in the h3attn matrix family: numbers in docs/techniques.md "H3 attention arms" (h3attn, RTX PRO 6000, 2026-09-27). Verdict: gate FAIL (sharpness on some prompts) vs FastH3 8-step 768p.
 # FastH3 8-step, VSA sparsity 0.95 everywhere (recipe 0.8), MXFP8.
 # An arm of the h3attn matrix family (docs/techniques.md, "H3 attention arms").
 

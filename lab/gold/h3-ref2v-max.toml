@@ -39,11 +39,14 @@ usd_per_hr = 2.49
 fields = []
 path = "docs/oracle.md"
 heading = "What it compares"
+date = "2026-10-12"
 note = "The H3 Ref2VA oracle target exists (FastVideo MiniMaxH3Ref2VAModularPipeline on transformer_ref, target h3-ref2va-<N>step; ours h3 gen --h3-recipe base-<N>step --ref <image>); its results are in docs/ports/h3-ref2v.md §8, outside D2's sources."
 
 [[source]]
 fields = []
 path = "docs/ports/h3-ref2v.md"
+heading = "8.2 Parity against FastVideo (RTX PRO 6000, EUR-IS-1)"
+date = "2026-10-11"
 note = "The port document of H3 reference-to-video; not a D2 source, named here so D3 knows where to look."
 
 [[source]]

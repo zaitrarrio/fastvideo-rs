@@ -37,8 +37,7 @@ rev = "fd4ded7"
 [quality]
 cell = "decoded clip vs the reference's, 121 frames at 1536x896: stage 2 (dense, the LoRA fused on the distilled DiT) and the decode, from the reference's stage-2 entry state."
 oracle = "pass at the bf16 floor: the conditioned stage 1 with the LoRA fused starts at the floor (block 0 2.1e-3) and its latents follow the T2V profile; stage 2 and the decode match as for T2V; a stage-1 mid-block bump at step 1 (video blocks 25-33 at 6e-2 to 0.12, back to 3.5e-2 by block 47) is noted and not isolated (docs/oracle.md)."
-psnr_vs_upstream_min_db = 38.9
-note = "SSIM 0.982, PSNR 38.9 dB (min 32.2) vs the reference's clip. Our reference encoder is 1.7e-2 from theirs (f32 vs bf16), preprocessing exact (1.6e-6)."
+note = "Measured on an H100 80GB HBM3 only: SSIM 0.982, PSNR 38.9 dB (min 32.2) vs the reference's clip; kept as a note, D3 re-measures on the tier GPU. Our reference encoder is 1.7e-2 from theirs (f32 vs bf16), preprocessing exact (1.6e-6)."
 
 [cost]
 usd_per_hr = 2.49
@@ -47,7 +46,7 @@ usd_per_hr = 2.49
 # empty: never validated by fv-lab (plan D1); commit, run and date land here.
 
 [[source]]
-fields = ["quality.psnr_vs_upstream_min_db", "quality.oracle", "quality.cell", "workload", "workload.upstream"]
+fields = ["quality.oracle", "quality.cell", "workload", "workload.upstream"]
 path = "docs/oracle.md"
 heading = "LTX-2.5 reference-to-video (Ingredients IC-LoRA)"
 date = "2026-09-28"
@@ -87,6 +86,10 @@ why = "measured only inside the 2026-09-28 oracle run on an H100 (per-step stage
 [[gap]]
 field = "latency.peak_gib"
 why = "measured only inside the 2026-09-28 oracle run on an H100 (per-step stage timings, peak 70 GiB), not on the tier's GPU and not as a timed generation; see the source note"
+
+[[gap]]
+field = "quality.psnr_vs_upstream_min_db"
+why = "measured on H100 only (oracle clip vs the reference: PSNR 38.9 dB, min 32.2, SSIM 0.982); D3 re-measures on the tier GPU"
 
 [[gap]]
 field = "quality.lpips_vs_upstream_max"

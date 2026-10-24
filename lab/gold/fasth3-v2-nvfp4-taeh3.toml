@@ -35,6 +35,7 @@ note = "One timed generation (n = 1). Option 5 (five prompts, same day): 480p de
 
 [quality]
 gate = "fail: sharpness floor against the official decoder on every prompt at both canvases (0.894 at 480p, 0.882 at 768p; floor 0.95); the frames are the same picture, softer. The fast preview by design (owner decision 2026-10-14, decision 2), never a default."
+cell = "c56aac4 options run (option 5): 832x480x124, scripts/gpu/prompts-hd5.json, medians over the five prompts; TAEH3 against the official 36-block decoder with MXFP8 linears on the same latents (the tier's decoder then; the published NVFP4 VAE since decision 1). Not the ship-smoke cell the latency comes from."
 sharpness_ratio = 0.894
 jitter_ratio = 0.989
 note = "vs the official VAE at 480p: PSNR 24.8 dB, LPIPS 0.170 [0.11-0.20], sharpness 0.894 [0.855-0.905], jitter 0.989; 768p 27.3 dB / 0.149 / 0.882 / 0.965. Against our own decode, not upstream."
@@ -54,7 +55,7 @@ date = "2026-10-14"
 note = "GPU smoke table, row 'this branch, preview (TAEH3)': denoise 10.09 s, VAE 0.13 s, total 10.55 s, peak 25.5 GiB."
 
 [[source]]
-fields = ["quality.gate", "quality.sharpness_ratio", "quality.jitter_ratio"]
+fields = ["quality.gate", "quality.cell", "quality.sharpness_ratio", "quality.jitter_ratio"]
 path = "docs/perf/h3-nvfp4-tier-options.md"
 heading = "Option 5: TAEH3 decode on V2-NVFP4"
 date = "2026-10-14"

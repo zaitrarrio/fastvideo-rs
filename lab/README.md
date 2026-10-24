@@ -19,8 +19,12 @@ fails when a variant has no gold file or a gold file has no variant
 Every numeric field is optional, and the format enforces two things:
 
 - **A number is cited.** A numeric field that is present is named in the
-  `fields` of a `[[source]]` (a repository path plus the heading or table it
-  is under, and the measurement date). Without one, the file does not parse.
+  `fields` of a `[[source]]`: a repository path, the heading it is under
+  (exactly as the Markdown file writes it, or the top-level key of a JSON
+  file) and a date (the measurement date; where the source states none, the
+  date of the document as cited, its last commit). `heading` and `date` are
+  required on every source, and a test checks that each heading exists in
+  its file. Without a citing source, the file does not parse.
 - **A missing number is declared.** A numeric field that is absent is named
   by a `[[gap]]` with the reason (`no oracle run of this variant`, `one timed
   generation`, `measured with another decoder`). Without one, the file does
@@ -29,9 +33,25 @@ Every numeric field is optional, and the format enforces two things:
 So "not yet measured" and "forgotten" can be told apart, and a reader can
 always trace a value back to the run it came from. Where sources disagree,
 the file keeps the most recent dated one and cites both: the older one goes
-in a `[[source]]` with empty `fields` and a `note`. Measurements of the same
-recipe on another GPU, canvas or configuration are cited the same way (with
-a note) and never copied into the variant's fields.
+in a `[[source]]` with empty `fields` and a `note`.
+
+Two rules decide whether a measured number may sit in a variant's fields:
+
+- **The tier's GPU.** A number measured on a GPU other than the tier's
+  (`[tier].gpu`) is a gap, never a field. Its values (for example both
+  kernels of an H100 oracle run) stay in a cited `[[source]]` note and in
+  the gap's reason ("measured on H100 only; D3 re-measures on the tier
+  GPU").
+- **The served configuration, or the exact setting.** A number measured
+  under a setting that is not the variant's served default stays in the
+  fields only when `workload.note` names the exact setting that reproduces
+  it, and an environment setting also goes in `workload.env` (which the
+  parser checks the note names), so `fv-lab` reruns the cell exactly. Two
+  cases in the first files: H3 runs from before 2026-10-14 decoded in bf16
+  (`FASTVIDEO_H3_VAE_MXFP8 = "0"`, "bf16 video decode, the default before
+  2026-10-14"), and the Wan TAEHV numbers come from the MXFP8-DiT arm
+  (`FASTVIDEO_WAN_QUANT = "mxfp8"`). When the setting cannot be named
+  exactly (another checkpoint, another decoder file), the number is a gap.
 
 The first files (plan D2) were filled from `docs/perf/`, `docs/oracle.md`,
 `docs/techniques.md`, `artifacts/perf/` and the numbers that used to be in
@@ -66,7 +86,8 @@ fps = 24
 steps = 4
 prompt_set = "..."
 seeds = [7]
-note = "..."
+note = "... reproduce with FASTVIDEO_H3_VAE_MXFP8=0 (bf16 video decode, the default before 2026-10-14) ..."
+env = { FASTVIDEO_H3_VAE_MXFP8 = "0" }  # the settings the note names, for fv-lab
 upstream = { target = "fasth3-4step-vsa", image = "...", rev = "e90be59" }
 
 [latency]
@@ -83,8 +104,9 @@ peak_gib = 60.3
 [quality]
 cell = "..."                           # when the quality cell is not [workload]
 oracle = "..."                         # the docs/oracle.md verdict
-psnr_vs_upstream_min_db = 19.73        # the measured value, the floor until D3 sets a tolerance
-lpips_vs_upstream_max = 0.236          # the measured value, the ceiling until D3 sets one
+# psnr_vs_upstream_min_db: the measured value, the floor until D3 sets a tolerance
+# lpips_vs_upstream_max: the measured value, the ceiling until D3 sets one
+# (both gaps here: the oracle clip of this variant was measured on an H100 only)
 # sharpness_ratio, jitter_ratio: the gate's quality section against the baseline `gate` names
 # byte_identical: docs/perf/determinism.md, when measured for this variant
 gate = "..."

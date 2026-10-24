@@ -37,6 +37,8 @@ usd_per_hr = 2.49
 [[source]]
 fields = []
 path = "docs/ports/h3-turbo-loras.md"
+heading = "7. Speed and quality"
+date = "2026-10-23"
 note = "The port document of the MiniMax-H3 Turbo LoRAs; not a D2 source, named here so D3 knows where to look."
 
 [[source]]

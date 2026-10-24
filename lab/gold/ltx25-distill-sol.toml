@@ -65,14 +65,15 @@ note = "Row 'LTX-2.5 turbo (two-stage, Sol), 1280x768x121 (720p), default': gen 
 [[source]]
 fields = ["latency.load_s"]
 path = "artifacts/perf/raw-inference/rtx-pro-6000-summary.json"
+heading = "ltx-def"
 date = "2026-09-30"
-note = "ltx-def load_s."
+note = "load_s."
 
 [[source]]
 fields = ["quality.oracle", "quality.cell", "workload.upstream"]
 path = "docs/oracle.md"
 heading = "LTX-2.5 distilled two-stage, 512p (sol-engine gpu_infer.py, bf16 pipeline)"
-date = "2026-09-27"
+date = "2026-10-12"
 note = "Sol stage 2 column of the table; verdict 'LTX-2.5 passes'."
 
 [[source]]

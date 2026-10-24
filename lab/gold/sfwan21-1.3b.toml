@@ -61,6 +61,7 @@ note = "H100 SXM wan stream 832x480: 23.8 frames/s (docs/perf/datacenter-profile
 fields = []
 path = "docs/oracle.md"
 heading = "What it compares"
+date = "2026-10-12"
 note = "SF-Wan 1.3B oracle target sfwan13: sf_latents_in, per causal block and step sf_c<c>_s<i>_{flow,x0}; results in docs/ports/wan.md."
 
 [[source]]

@@ -24,7 +24,10 @@ fps = 24
 prompt_set = "raw5: one fox prompt x 5 (artifacts/perf/raw-inference/bench.sh)"
 seeds = [7]
 steps = 4
-note = "fv-gpucheck h3 gen --techniques h3/sol_h3_4step_engine_ladder --h3-recipe sol-h3 (Sol engine route, tau 1.0 / 1.25 / 1.5, MXFP8), official ViT VAE, --text-encoder resident-fp8, --dit-offload resident. fv-gpucheck straight from the CLI: everything resident, one untimed warm-up, then 5 timed generations of the raw5 set (one fox prompt x 5, seed 7); gen = total_s - text_s (text cached, no MP4; PNG frames outside the timed region). Median (min-max) of the 5. The serving default canvas is 1344x768; this run measured every model at its smallest size."
+note = "fv-gpucheck h3 gen --techniques h3/sol_h3_4step_engine_ladder --h3-recipe sol-h3 (Sol engine route, tau 1.0 / 1.25 / 1.5, MXFP8), official ViT VAE, --text-encoder resident-fp8, --dit-offload resident. fv-gpucheck straight from the CLI: everything resident, one untimed warm-up, then 5 timed generations of the raw5 set (one fox prompt x 5, seed 7); gen = total_s - text_s (text cached, no MP4; PNG frames outside the timed region). Median (min-max) of the 5. The serving default canvas is 1344x768; this run measured every model at its smallest size. Run before the MXFP8 video-decoder default: reproduce with FASTVIDEO_H3_VAE_MXFP8=0 (bf16 video decode, the default before 2026-10-14). Since 2026-10-14 the 36-block decoder runs MXFP8 block linears by default (docs/perf/h3-vae-decode-speed.md §5)."
+
+[workload.env]
+FASTVIDEO_H3_VAE_MXFP8 = "0"
 
 [latency]
 measures = "gen"
@@ -61,13 +64,14 @@ note = "Row 'H3 max (Sol-H3 4-step), 832x480x124, default': gen 8.87 (8.82-8.89)
 [[source]]
 fields = ["latency.load_s"]
 path = "artifacts/perf/raw-inference/rtx-pro-6000-summary.json"
+heading = "h3m-def"
 date = "2026-09-30"
-note = "h3m-def load_s (warm page cache after the first H3 load of the pod)."
+note = "load_s (warm page cache after the first H3 load of the pod)."
 
 [[source]]
 fields = ["quality.gate", "quality.cell", "quality.sharpness_ratio", "quality.jitter_ratio"]
 path = "docs/techniques.md"
-heading = "H3 attention arms (h3attn, RTX PRO 6000, 2026-09-27)"
+heading = "H3 attention arms (`h3attn`, RTX PRO 6000, 2026-09-27)"
 date = "2026-09-27"
 note = "b299214, 1344x768x124, five prompts (scripts/gpu/prompts-eval.json), medians: denoise 21.80 s against 33.45 s for Sol-H3 4-step dense (1.53x), total 28.7 s against 40.3 s, LPIPS 0.375, PSNR 15.2 dB, sharpness 1.02, jitter 1.05, gate PASS. Was the first line of profiles/h3/sol_h3_4step_engine_ladder.toml."
 
@@ -77,6 +81,13 @@ path = "docs/perf/raw-inference.md"
 heading = "H100 / H200: older figures only (not this run)"
 date = "2026-09-29"
 note = "H100 SXM, 768p, fv-serve job (x264 and job overhead included): run 23.65 s (docs/perf/datacenter-profile.md). Another GPU; not a number of this file."
+
+[[source]]
+fields = ["workload"]
+path = "docs/perf/h3-vae-decode-speed.md"
+heading = "5. Default flip (2026-10-14)"
+date = "2026-10-14"
+note = "The MXFP8 decoder linears became the default on 2026-10-14; FASTVIDEO_H3_VAE_MXFP8=0 restores the bf16 decode byte for byte. Runs before that date decoded in bf16."
 
 [[source]]
 fields = []

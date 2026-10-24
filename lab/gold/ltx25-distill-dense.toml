@@ -62,7 +62,7 @@ note = "Arms table: cud 22.85 / 34.29 s, fw2 22.74 / 34.33 s, sage 20.00 / 31.73
 fields = ["quality.oracle", "quality.cell", "workload.upstream"]
 path = "docs/oracle.md"
 heading = "LTX-2.5 distilled two-stage, 512p (sol-engine gpu_infer.py, bf16 pipeline)"
-date = "2026-09-27"
+date = "2026-10-12"
 note = "Dense stage 2 column: s1 blocks 3.3e-3 (0) to 2.3e-2 (47), s2 latents 1.3e-2 / 4.8e-2 / 8.0e-2; the f32 floor table gives ours-bf16 vs ours-f32 0.44 at s1 step 8 against 0.34 vs the reference."
 
 [[source]]

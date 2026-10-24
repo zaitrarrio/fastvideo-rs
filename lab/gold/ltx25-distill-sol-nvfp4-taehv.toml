@@ -58,8 +58,9 @@ note = "Row 'LTX-2.5 turbo, 1280x768x121, max: NVFP4 FFN + TAE': gen 7.38 (7.25-
 [[source]]
 fields = ["latency.load_s"]
 path = "artifacts/perf/raw-inference/rtx-pro-6000-summary.json"
+heading = "ltx-max"
 date = "2026-09-30"
-note = "ltx-max load_s."
+note = "load_s."
 
 [[source]]
 fields = []

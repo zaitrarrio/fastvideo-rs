@@ -44,11 +44,14 @@ note = "Wan2.1 T2V-14B 720p (1280x720x81, 50 steps): base 1797.48 s (extrapolate
 fields = []
 path = "docs/techniques.md"
 heading = "LongLive-Plug recipes"
+date = "2026-10-14"
 note = "wan14b-plug-4step is the Wan 2.1 T2V-14B fast tier (owner decision 2026-10-02), public name wan14b-turbo; LightX2V step-distill timesteps [1000, 750, 500, 250] with shift 5, guidance 1.0. Results and verdicts: docs/serve/research-longlive.md §12."
 
 [[source]]
 fields = []
 path = "docs/serve/research-longlive.md"
+heading = "12.4 Verdicts and catalog proposal"
+date = "2026-10-02"
 note = "Not a D2 source; named here so D3 knows where to look."
 
 [[source]]

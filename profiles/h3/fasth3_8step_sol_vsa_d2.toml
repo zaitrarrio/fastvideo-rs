@@ -1,4 +1,4 @@
-# Measured in the h3attn matrix family: numbers in docs/techniques.md "H3 attention arms" (h3attn, RTX PRO 6000, 2026-09-27). Verdict: gate FAIL (sharpness and jitter on 5 of 5 prompts) vs FastH3 8-step 768p.
+# Measured in the h3attn matrix family: numbers in docs/techniques.md "H3 attention arms" (h3attn, RTX PRO 6000, 2026-09-27). Verdict: gate FAIL (sharpness and jitter on every prompt) vs FastH3 8-step 768p.
 # FastH3 8-step, Sol-Attn (tau 1.0) except VSA on steps 0-1 and blocks 0-1 / 48-49, MXFP8.
 # An arm of the h3attn matrix family (docs/techniques.md, "H3 attention arms").
 

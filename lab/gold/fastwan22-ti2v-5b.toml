@@ -57,8 +57,9 @@ note = "Row 'Wan 2.2 TI2V-5B turbo, 832x480x121, default': gen 7.11 (7.10-7.12) 
 [[source]]
 fields = ["latency.load_s"]
 path = "artifacts/perf/raw-inference/rtx-pro-6000-summary.json"
+heading = "w5-def"
 date = "2026-09-30"
-note = "w5-def load_s."
+note = "load_s."
 
 [[source]]
 fields = []
