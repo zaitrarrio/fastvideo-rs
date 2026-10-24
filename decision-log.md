@@ -1272,3 +1272,53 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0018-fv-deploy.md §2, §5
 - Verification: the tests named in ADR-0018 "Consequences"; `cargo test --locked -p fastvideo-deploy --all-features`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-lab
+- Trigger: plan D1 asks for `fv-lab` (review §7.5); D1a is `run` + `pod` for the `rtx6000` family, proven equal to the scripts
+- Options: a binary beside `fv-gpucheck` (CUDA crate); a binary of `fastvideo-lab`; a new crate
+- Decision: `fv-lab` is a binary of `fastvideo-lab` behind feature `cli` (clap, tokio signals, `fastvideo-deploy/boot`; all in Cargo.lock), CPU only, calling `fv-gpucheck` and `verify-weights.sh` as processes; `fastvideo-lab` depends on `fastvideo-deploy`'s library half
+- Reason: it runs on the GPU box and on hosts without CUDA (`pod`, `--dry-run`, `check`); the gold files, run plan and reports share one crate
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §2
+- Verification: `cargo test --locked -p fastvideo-lab --all-features`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-lab-plan
+- Trigger: D1 needs the run plan as data (`lab/tiers.toml`, `lab/cells/*.toml`) instead of `runpod-matrix.sh` `case` branches
+- Options: per-pipeline command builders from a structured workload; argv templates with placeholders over a structured workload
+- Decision: `[[tier]]` (GPU, count 1, cloud, region `eu`, image flavour `runtime`, `max_usd_per_hr`, `wall_cap_s` ≤ 4 h, `cell_timeout_s`, disk, weights `volume`, `preflight`, `tae`, `cells`) and cell files (`[workload]` whose every value an arm must read as a placeholder, `[lists]` spliced by `"{@name}"`, `[[arm]]` name / gate / trees / steps / env / argv, `[[compare]]`, `[[gate]]`), `deny_unknown_fields`, schemas `tiers.v1.json` / `cell.v1.json` with a drift test; `rtx6000` ported value for value from runpod-http.sh's defaults and the script's branch (two cells, seven arms)
+- Reason: argv templates keep each family's argument order (byte equality with the script) while the workload values have one source
+- Reversibility: cheap until D3 reads the cells; then a versioned schema
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §3
+- Verification: `tests/schema.rs`, `plan::tests`, `tests/lab_files.rs`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-lab-weights
+- Trigger: a cell must name its weights so the volume works today and the registry's `hydrate` later
+- Options: paths in commands only; tree names per arm plus the tier's weights source
+- Decision: each arm lists its trees by weights-manifest.tsv `dest` and its `verify-weights.sh` gate; tests hold `trees` equal to the gate's roots (`verify-weights.sh --list`) and to every `{weights}/<tree>` the command reads; the tier's `weights = "volume"` maps `{weights}` to `/workspace/weights` on `bz0ofkfx45` (the only value accepted in D1a); `registry` will stage the same trees with `hydrate`; an arm whose tree is not on the volume is gated and recorded as skipped, as the script does (`fasth3-8step`: `h3-8step` is R2-only)
+- Reason: the cells do not change when the weights source does
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §4
+- Verification: `tests/dry_run.rs` (`arms_gate_on_the_scripts_cells_and_name_their_trees`), `tests/lab_files.rs`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-lab-equality
+- Trigger: D1's exit is "`fv-lab run rtx6000` reproduces today's family"; CPU evidence is needed before the GPU run
+- Options: hand-written expected commands; the script's own dry run as the fixture
+- Decision: `runpod-matrix.sh` gets B6's `FV_DRY_RUN=1` hunks verbatim (the usage line too, so a merge with #170 resolves to #170's file; checked with `git merge-file`); `scripts/gpu/tests/fv-lab-goldens.sh` writes the script's dry run, its gate pairs and `runpod-http.sh plan`'s pod body (new `plan` mode, `pod_payload` factored out of `create_pod`) into `crates/fastvideo-lab/fixtures/`; `fv-lab run --dry-run` prints the same lines (bash 5.2 `printf %q` in `quote.rs`); `--check` in `control.yml`; the runner's files and logs are tested on a fake fv-gpucheck / verify-weights / nvidia-smi / timeout
+- Reason: the fixture is the script's behaviour, not a copy of it
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §5
+- Verification: `bash scripts/gpu/tests/fv-lab-goldens.sh --check`, `tests/dry_run.rs`, `tests/fv_lab_bin.rs`, `tests/runner.rs`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-lab-pod
+- Trigger: D1's `pod` must run on C3's `Provider` and guards, not copy them
+- Options: copy runpod-http.sh's create/wait/fetch/delete into Rust; reuse `fastvideo_deploy::lifecycle::Deployer::up` with `keep` and no smoke
+- Decision: reuse: fv-deploy's region guard, $8 floor over the cap, price cap on quote and bill, detached backstop (`fv-lab backstop`, same handshake) and 600 s / 3-cycle readiness; `LabPod` wraps `runpod::Pod` and overrides only `reach` (ready = `GET /<tier>/` 200, the run directory's server, as `wait_up`); the start command is runpod-http.sh's (template generated from the script) with `bash runpod-matrix.sh` → `fv-lab run`; payload golden equal but that line and `env: {}` (image digest-pinned at `up`); `pod fetch` ports `wait_done` / `fetch_results` into `artifacts/runpod/<tier>/<tag>/`; `pod reap` deletes `fv-lab-*` pods past their tier's cap + 10 min, which needs one seam in fastvideo-deploy, `runpod::Pod::list()`; the tier's price cap is fv-deploy's $2.50/hr, not the script's $5 (open decision)
+- Reason: one tested set of money guards for every launcher; the pod body stays the script's
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §6, §7
+- Verification: `tests/payload_golden.rs`, `pod::tests`, `runpod::pod::tests::list_reads_names_states_ages_and_prices`; GPU run by the coordinator
