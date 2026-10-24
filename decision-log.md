@@ -1042,3 +1042,23 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: none
 - Verification: the workflow on the A4 PR
+
+### FVID · 2026-10-24 · FVID-2026-10-24-b2-family-trait
+- Trigger: plan B2: replace the 21 registry tables, `resolve()`, `all_registered_ids()` and the 20 `generate_*` functions with one trait and a static family list, CLI behaviour unchanged
+- Options: (a) the review's sketch verbatim (`Conditioning` one enum value, `load` places weights, Hub ids from the manifest); (b) the same trait with `conditioning: Vec<Conditioning>`, `load` that plans and `generate` that loads, the Hub-id tables in one Rust module per family
+- Decision: (b), all 21 families moved in one PR (no stack needed: the moves are verbatim and the CPU goldens pass unmodified)
+- Reason: the CLI takes `--image`, `--last-image`, `--ref`, `--control` together and each family has always picked its own (LTX with `--image --ref` runs I2V, H3 refuses FL2VA with Ref2VA); one enum value would drop inputs and change those behaviours. Every family but Wan loads and generates in one call today (B6 splits the loaders). The family files describe the 30 served variants, not the CLI's 63 Hub presets, and `family.rs` / `families/*.toml` are C1's this round
+- Reversibility: cheap (the trait does not change when `variants()` reads Hub ids from a widened manifest)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: 0013
+- Verification: `crates/fastvideo-cli/tests/cli_golden.rs` and `crates/fastvideo-core/tests/resolve_golden.rs`, taken on the unchanged tree, pass unmodified; `family::tests` (83 Hub ids resolve to their family)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-b2-validate-not-in-cli
+- Trigger: `Request::validate(&ModelCaps)` is the one check the review asks for; the CLI's presets have no `ModelCaps`
+- Options: validate CLI requests against the nearest served variant's caps; leave the CLI on each family's own checks and make validate the serve path's
+- Decision: the CLI does not call `validate`; `engine-service` adopting it is left to E2 (it owns `validate.rs` and `fastvideo-protocol` this round)
+- Reason: caps on the CLI would refuse what it accepts today (the tiny goldens run at 64x64x5, below every served grid)
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: 0013
+- Verification: `request::tests` (tasks, conflicts, canvas, frames, seconds, fps, refs, knobs)
