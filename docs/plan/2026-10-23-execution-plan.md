@@ -108,7 +108,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | active (B4a pr #173: step caches, ADR-0020, GPU `b4a` cells pending; then B4b `fuse.rs`; B4c pr #PRNUM: one disk prompt cache `rt::prompt_cache`, ADR-0021, GPU `b4c` cells pending) |
+| B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | active (B4a pr #173: step caches, ADR-0020, GPU `b4a` cells pending; then B4b `fuse.rs`; B4c pr #177: one disk prompt cache `rt::prompt_cache`, ADR-0021, GPU `b4c` cells pending) |
 | B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | merged (#161) |
 | B6 | `H3Pipeline::load` and `Ltx2Pipeline::load` split into plan, open, place, fuse; dead code (`TensorBackend`, mlx scaffold) retired | engine lifecycle testable on CPU | pod | B1 | merged (#170: plan/open/place/fuse, ADR-0017; `techniques` and `b6` GPU identity cells all byte-identical vs main; TensorBackend and the mlx scaffold retired) |
 
@@ -847,7 +847,7 @@ ran (pod id, $/hr), result, cost.
   (`<cell>-<arm>/cache-evidence.txt`, `<cell>.evidence.diff`, empty).
   About 35 GPU-minutes, ~$1.45. Evidence:
   `artifacts/runpod/b4a/abccc38-{10241423,10241424,10241425}/`.
-- 2026-10-24 15:40Z: B4c opened draft PR #PRNUM (`claude/b4c-prompt-cache`):
+- 2026-10-24 15:40Z: B4c opened draft PR #177 (`claude/b4c-prompt-cache`):
   `fastvideo_cudarc::rt::prompt_cache` (ADR-0021), one key derivation
   (`KeyRecipe`: domain and prompt trimming; H3 / Wan / LTX recipes) and one
   store (`Format`: two instances, `H3` for H3 and Wan, `LTX2`; layout, temp
