@@ -1,0 +1,373 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Launch",
+  "description": "One instance to create: the provider-neutral request. Built from a family\npreset plus a provider section (`crate::launch`), turned into the\nprovider's exact payload by [`crate::provider::Provider::payload`].",
+  "type": "object",
+  "properties": {
+    "args": {
+      "description": "Its arguments (Runpod `dockerStartCmd`).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "disk": {
+      "$ref": "#/$defs/Disk"
+    },
+    "entrypoint": {
+      "description": "The container entrypoint (`/opt/fastvideo-rs/bin/fv-boot`); empty: the\nimage's own.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "env": {
+      "description": "The container environment: plain values and provider secret\nreferences only, never a secret value.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {}
+    },
+    "gpu": {
+      "$ref": "#/$defs/GpuSpec"
+    },
+    "guards": {
+      "$ref": "#/$defs/Guards"
+    },
+    "image": {
+      "description": "A digest-pinned image reference (`…@sha256:…`) when launched; `plan`\nmay show a tag.",
+      "type": "string"
+    },
+    "name": {
+      "description": "The instance name (`fv-deploy-<preset>-<MMDDHHMMSS>`).",
+      "type": "string"
+    },
+    "placement": {
+      "$ref": "#/$defs/Placement"
+    },
+    "ports": {
+      "description": "Published ports (`8000/http`, `70000/tcp`).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "provider": {
+      "$ref": "#/$defs/ProviderKind"
+    },
+    "schema": {
+      "description": "Always 1.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "serverless": {
+      "description": "Serverless endpoints only.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ServerlessSpec"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LaunchSource"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "weights": {
+      "$ref": "#/$defs/WeightsSource",
+      "default": "volume"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "name",
+    "provider",
+    "image",
+    "gpu",
+    "placement",
+    "disk",
+    "guards"
+  ],
+  "$defs": {
+    "CloudType": {
+      "description": "Runpod's cloud tier.",
+      "type": "string",
+      "enum": [
+        "SECURE",
+        "COMMUNITY"
+      ]
+    },
+    "Disk": {
+      "description": "Disks, in GB.",
+      "type": "object",
+      "properties": {
+        "container_gb": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "volume_gb": {
+          "description": "A pod's own volume (0: none; the network volume is separate).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "container_gb",
+        "volume_gb"
+      ]
+    },
+    "GpuSpec": {
+      "description": "The GPU request.",
+      "type": "object",
+      "properties": {
+        "allowed_cuda": {
+          "description": "Runpod `allowedCudaVersions` (exact labels); empty = no filter (the\ndefault: REST cannot name the 13.1 / 13.2 hosts,\n`scripts/gpu/runpod-cuda.sh`).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "min_cuda": {
+          "description": "Runpod serverless `minCudaVersion`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "types": {
+          "description": "Provider GPU type ids in fallback order (one is tried at a time for a\npod; a serverless endpoint gets the whole list).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "types",
+        "count"
+      ]
+    },
+    "Guards": {
+      "description": "The money and readiness guards of one launch (docs/adr/0018-fv-deploy.md §5).",
+      "type": "object",
+      "properties": {
+        "cap_s": {
+          "description": "Wall-clock cap: the detached backstop deletes the instance this many\nseconds after its creation, whatever happens to the CLI.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "max_usd_per_hr": {
+          "description": "Price cap: an offer quoted above it is never created; a created\ninstance billed above it is deleted at once.",
+          "type": "number",
+          "format": "double"
+        },
+        "min_balance_usd": {
+          "description": "Balance floor: nothing is created while the account balance is below\nit (CLAUDE.md: $8).",
+          "type": "number",
+          "format": "double"
+        },
+        "ready_cycles": {
+          "description": "At most this many instances are created for one `up` (the owner's\nrule: 3), then it gives up.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "ready_timeout_s": {
+          "description": "An instance not ready (`/ping` 200) this long after its creation is\ndeleted and replaced (the owner's rule: 600 s).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "max_usd_per_hr",
+        "min_balance_usd",
+        "cap_s",
+        "ready_timeout_s",
+        "ready_cycles"
+      ]
+    },
+    "LaunchSource": {
+      "description": "Where a launch came from in the deployment data (`deploy/deploy.toml`).",
+      "type": "object",
+      "properties": {
+        "config": {
+          "description": "The worker config (a `configs/serve` file name).",
+          "type": "string"
+        },
+        "config_baked": {
+          "description": "Whether the image carries the config (else it is sent inline as\n`FV_WORKER_TOML_B64`).",
+          "type": "boolean"
+        },
+        "family": {
+          "description": "The model family (`families/<family>.toml`).",
+          "type": "string"
+        },
+        "image_variant": {
+          "description": "The image variant (`[[images]]` id).",
+          "type": "string"
+        },
+        "preset": {
+          "description": "The preset id (a `[[presets]]` or `[[family_presets]]` id).",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "preset",
+        "image_variant",
+        "config",
+        "config_baked"
+      ]
+    },
+    "Placement": {
+      "description": "Where the instance runs.",
+      "type": "object",
+      "properties": {
+        "cloud": {
+          "$ref": "#/$defs/CloudType",
+          "default": "SECURE"
+        },
+        "data_centers": {
+          "description": "Provider data centre ids in order (`EU-RO-1`).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "region": {
+          "description": "fv-control's region id (`eu`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "volume": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VolumeMount"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProviderKind": {
+      "description": "Which provider, and which kind of instance on it. Later slices add\n`vast` and `gcp` (plan C3b).",
+      "oneOf": [
+        {
+          "description": "A Runpod GPU pod (REST v1 `POST /pods`).",
+          "type": "string",
+          "const": "runpod-pod"
+        },
+        {
+          "description": "A Runpod serverless queue endpoint (REST v1 `POST /templates` +\n`POST /endpoints`).",
+          "type": "string",
+          "const": "runpod-serverless"
+        }
+      ]
+    },
+    "ServerlessSpec": {
+      "description": "A Runpod serverless queue endpoint's scaling fields.",
+      "type": "object",
+      "properties": {
+        "execution_timeout_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "flashboot": {
+          "type": "boolean"
+        },
+        "idle_timeout_s": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "scaler_type": {
+          "type": "string"
+        },
+        "scaler_value": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "workers_max": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "workers_min": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "workers_min",
+        "workers_max",
+        "idle_timeout_s",
+        "flashboot",
+        "execution_timeout_ms",
+        "scaler_type",
+        "scaler_value"
+      ]
+    },
+    "VolumeMount": {
+      "description": "A network volume and where it is mounted.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "mount_path": {
+          "description": "`/workspace` on a pod (a serverless worker always sees `/runpod-volume`).",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "mount_path"
+      ]
+    },
+    "WeightsSource": {
+      "description": "Where the weights come from (fv-boot's `FV_WEIGHTS_SOURCE`, ADR-0014 §3.3).\nC3a launches `volume` only (the region guard's rule); the other sources\nare typed so the schema does not change when they are allowed.",
+      "type": "string",
+      "enum": [
+        "volume",
+        "r2",
+        "hub",
+        "none",
+        "registry"
+      ]
+    }
+  }
+}

@@ -46,6 +46,7 @@ impl Http for ReqwestHttp {
             Method::Get => reqwest::Method::GET,
             Method::Post => reqwest::Method::POST,
             Method::Delete => reqwest::Method::DELETE,
+            Method::Patch => reqwest::Method::PATCH,
         };
         let mut b = self.client.request(m, &req.url).timeout(req.timeout);
         for (k, v) in &req.headers {

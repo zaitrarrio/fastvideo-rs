@@ -151,12 +151,24 @@ pub trait Spawner {
     fn spawn(&self, cmd: &Cmd) -> Result<u32, SysError>;
 }
 
-/// An HTTP method the boot uses.
+/// An HTTP method the boot (and fv-deploy, `crate::provider`) uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Method {
     Get,
     Post,
     Delete,
+    Patch,
+}
+
+impl Method {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Method::Get => "GET",
+            Method::Post => "POST",
+            Method::Delete => "DELETE",
+            Method::Patch => "PATCH",
+        }
+    }
 }
 
 /// One HTTP request.

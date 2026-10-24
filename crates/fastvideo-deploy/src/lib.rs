@@ -14,11 +14,22 @@
 //!   check, config, weights plan, sidecar, tunnel and phase reports,
 //!   watchdog, exec fv-serve; docs/adr/0014-fv-boot.md). The binary needs the
 //!   `boot` feature (its HTTP client).
+//! - [`provider`], [`launch`], [`guard`], [`lifecycle`]: `fv-deploy`
+//!   (docs/adr/0018-fv-deploy.md): the `Provider` trait with Runpod pods and
+//!   serverless endpoints, the `Launch` schema built from a deployment
+//!   preset, the shared money / region guards and the detached backstop, and
+//!   the `up` / `smoke` / `down` lifecycle. The binary needs the `deploy`
+//!   feature (its command line and HTTP client); the library is tested on
+//!   the seams without it.
 //!
 //! Deploy scripts: `scripts/serve/{runpod-pod,runpod-endpoint,vast,vast-serverless}.sh`.
 
 pub mod boot;
 pub mod dispatch;
 pub mod env;
+pub mod guard;
+pub mod launch;
+pub mod lifecycle;
+pub mod provider;
 pub mod runpod;
 pub mod vast;
