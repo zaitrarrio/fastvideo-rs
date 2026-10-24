@@ -1371,14 +1371,14 @@ Project code: FVID
 - Reversibility: cheap
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0020-step-cache.md "The arithmetic each implementation preserves"
-- Verification: `step_cache/equality.rs` against the verbatim pre-B4a controllers in `step_cache/legacy.rs` (decisions and latents bit for bit; mutations of H3 `ResetOn` and A14B `Estimator` fail it)
+- Verification: `step_cache/equality.rs` against the pre-B4a controllers in `step_cache/legacy.rs` (verbatim; TeaCache4Wan2.1 a hand reduction of its decision): decisions and latents bit for bit, one exact threshold tie per comparison family, the TeaCache4Wan2.1 f32 accumulator bits and an f32-vs-f64 split; mutations caught: H3 `ResetOn`, A14B `Estimator`, f64 accumulation, `>=` → `>`, the `!(acc < thr)` tie flip
 
 ### FVID · 2026-10-24 · FVID-2026-10-24-step-cache-gpu-cells
 - Trigger: B4a's exit criterion (byte identity per family) needs GPU cells; only H3 and LTX trees are on the EU volume
 - Options: cells for every family (R2 trees, large downloads); EU-volume families only, CPU fixtures for the rest
-- Decision: `runpod-matrix.sh b4a`, four cells (H3 fullopt TeaCache from the flag and from the profile, a 4-step VSA TeaCache reuse fixture, LTX-2.5 dev guided FBCache), base vs PR with `--off-identity` and each arm's `frames.sha256.json`; `FV_B4A_CELLS` narrows; Wan / SANA / LingBot / Cosmos / Cosmos3 (EasyCache, Taylor, their TeaCaches) rest on the CPU equality fixtures
-- Reason: the owner's EU-volume-only GPU rule (plan §1); new weight downloads need approval
+- Decision: `runpod-matrix.sh b4a`, three H3 TeaCache cells (fullopt from the flag, fullopt from the profile, a 4-step VSA reuse fixture), base vs PR with `--off-identity` and each arm's `frames.sha256.json`; a cell fails when either arm reused no forward or the arms' cache evidence lines differ; `FV_B4A_CELLS` narrows. No LTX-2.5 FBCache cell: `fbcache::scope` admits only dev guided stage 1 and no LTX-2.5 generate route reaches it (guided A2V runs with `use_cfg = false`, other guided requests fail `check_generate_contract`), and `scope` is not widened, so FBCache rests on its CPU fixture like Wan / SANA / LingBot / Cosmos / Cosmos3 (no EU-volume tree)
+- Reason: the owner's EU-volume-only GPU rule (plan §1); new weight downloads need approval; widening `scope` would change outputs
 - Reversibility: cheap
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0020-step-cache.md "Evidence"
-- Verification: `FV_DRY_RUN=1 bash scripts/gpu/runpod-matrix.sh b4a`; GPU run by the coordinator; `h3::techniques::tests::b4a_gpu_cell_profile_reuses_the_middle_forwards`
+- Verification: `FV_DRY_RUN=1 bash scripts/gpu/runpod-matrix.sh b4a`; GPU run by the coordinator; `h3::techniques::tests::b4a_gpu_cell_profile_reuses_the_middle_forwards`; review of PR #173 (the FBCache path)

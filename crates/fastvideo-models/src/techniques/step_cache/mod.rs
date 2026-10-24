@@ -2,7 +2,7 @@
 //! (ADR-0020, plan B4a).
 //!
 //! A step cache decides, per denoise step (or per forward) and per *lane*
-//! (a CFG branch, a CFG pass ordinal, a MoE expert), whether the expensive
+//! (a CFG branch, a CFG pass ordinal), whether the expensive
 //! part of the transformer runs (`Compute`), is replaced by a stored residual
 //! (`Reuse`), or is forecast from a derivative history (`Extrapolate`).
 //!
@@ -62,6 +62,11 @@ pub enum StepCacheError {
     NoFactors { cache: &'static str },
     #[error("{cache} forecast before the first proj_out")]
     ForecastBeforeUpdate { cache: &'static str },
+    #[error("{cache}: a computed step needs a {expected} refresh")]
+    WrongRefresh {
+        cache: &'static str,
+        expected: &'static str,
+    },
     #[error("{cache}: step {step} needs a {expected} signal")]
     WrongSignal {
         cache: &'static str,
@@ -80,8 +85,11 @@ pub enum Algorithm {
 }
 
 /// Which independent state a decision belongs to: a CFG branch (Wan Sol
-/// TeaCache), a CFG pass ordinal (LTX FBCache), a MoE expert (Wan A14B), or
-/// the only lane of a single-branch family. Lanes are created on first use.
+/// TeaCache), a CFG pass ordinal (LTX FBCache), or the only lane of a
+/// single-branch family. A controller can also key lanes by MoE expert
+/// (`wan::sol_cache::A14bExpert::lane`); the Wan A14B runtime instead keeps
+/// one controller per expert's transformer and uses the high-noise lane in
+/// both. Lanes are created on first use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Lane(pub usize);
 
@@ -434,6 +442,15 @@ mod tests {
         }
         assert!(!Comparison::ComputeAtOrAbove.compute_f64(f64::NAN, 0.1));
         assert!(Comparison::ReuseBelow.compute_f64(f64::NAN, 0.1));
+        // A tie computes in both forms and both precisions.
+        for c in [Comparison::ComputeAtOrAbove, Comparison::ReuseBelow] {
+            assert!(c.compute_f64(0.125, 0.125));
+            assert!(c.compute_f32(0.125, 0.125));
+            assert!(!c.compute_f32(0.0625, 0.125));
+            assert!(c.compute_f32(0.25, 0.125));
+        }
+        assert!(!Comparison::ComputeAtOrAbove.compute_f32(f32::NAN, 0.1));
+        assert!(Comparison::ReuseBelow.compute_f32(f32::NAN, 0.1));
     }
 
     #[test]

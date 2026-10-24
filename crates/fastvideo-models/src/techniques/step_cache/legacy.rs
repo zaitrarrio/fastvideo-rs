@@ -1,7 +1,12 @@
-//! The pre-B4a step-cache controllers, verbatim (main `2e3c71b1`), kept as
-//! regression fixtures for the equality tests in `equality.rs`. Each module
-//! names the file and lines it was copied from. Test-only: nothing outside
-//! `equality.rs` uses them.
+//! The pre-B4a step-cache controllers (main `2e3c71b1`), kept as regression
+//! fixtures for the equality tests in `equality.rs`. Each module names the
+//! file and lines it comes from. Every module is copied verbatim (only the
+//! constants it reads are restated) except `wan_teacache4wan21`: that
+//! controller lived inside a cudarc runtime with its tensors, so it is a
+//! hand reduction of `maybe_reuse` / `store` to the decision, with every
+//! arithmetic line (the f32 accumulator, the written-out quartic, the
+//! `step <= 1` warm-up, `accumulated < thresh`) kept as written. Test-only:
+//! nothing outside `equality.rs` uses them.
 #![allow(dead_code, clippy::all)]
 
 /// `crates/fastvideo-models/src/wan/sol_cache.rs:13-146`.
@@ -1142,7 +1147,8 @@ pub mod lingbot_easy {
 }
 
 /// `crates/fastvideo-cudarc/src/wan/pipeline.rs:1571-1671` (`TeaCache`,
-/// `FASTVIDEO_TEACACHE`), the decision with its tensors replaced by a flag:
+/// `FASTVIDEO_TEACACHE`). Not verbatim: a hand reduction to the decision,
+/// its tensors replaced by a flag (the arithmetic lines are as written):
 /// `maybe_reuse(rel)` returns `true` for a reuse, `rel` being the
 /// `num / (den + 1e-6)` the runtime reduces; `store` records a computed step.
 pub mod wan_teacache4wan21 {

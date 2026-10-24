@@ -272,7 +272,10 @@ pub const A14B_START_STEP: usize = 5;
 pub const A14B_TAIL_STEPS: usize = 3;
 pub const A14B_MAX_REUSE: usize = 1;
 
-/// The MoE expert a decision belongs to (one lane each).
+/// A MoE expert as a lane of one controller. The cudarc A14B runtime does
+/// not key lanes by expert: each expert's transformer owns its controller
+/// and decides on `HighNoise.lane()` (as the pre-B4a runtime passed
+/// `A14bExpert::HighNoise`); the CPU equality fixture uses both lanes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum A14bExpert {
     HighNoise,

@@ -10,10 +10,10 @@ pub mod rope;
 pub mod schedule;
 
 pub use crate::cosmos::sol::{
-    fp4_linear, official_requested, teacache_requested, teacache_window, teacache_window_official,
-    SolCosmosTea, FP4_SKIP_FIRST, FP4_SKIP_LAST, OFFICIAL_FLOW_SHIFT, OFFICIAL_FPS,
-    OFFICIAL_FRAMES, OFFICIAL_GUIDANCE, OFFICIAL_HEIGHT, OFFICIAL_STEPS, OFFICIAL_WIDTH,
-    TEACACHE_MAX_CONSECUTIVE, TEACACHE_START_STEP, TEACACHE_THRESHOLD,
+    fp4_linear, official_requested, teacache_requested, SolCosmosTea, FP4_SKIP_FIRST,
+    FP4_SKIP_LAST, OFFICIAL_FLOW_SHIFT, OFFICIAL_FPS, OFFICIAL_FRAMES, OFFICIAL_GUIDANCE,
+    OFFICIAL_HEIGHT, OFFICIAL_STEPS, OFFICIAL_WIDTH, TEACACHE_MAX_CONSECUTIVE, TEACACHE_START_STEP,
+    TEACACHE_THRESHOLD,
 };
 pub use config::{Cosmos3Preset, Cosmos3TransformerConfig};
 

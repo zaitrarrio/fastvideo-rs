@@ -2100,17 +2100,20 @@ Audio: male speech, clear voice, quiet room"
     ;;
   b4a)
     # Plan B4a (docs/adr/0020-step-cache.md): byte identity of every step
-    # cache a family on the EU volume ships, after the per-family TeaCache /
-    # FBCache controllers became parameter sets of the one implementation.
-    # Each cell runs the baseline binary (FV_BASELINE_SHA's runtime image,
+    # cache a family on the EU volume ships, after the per-family controllers
+    # became parameter sets of the one implementation per algorithm. Each
+    # cell runs the baseline binary (FV_BASELINE_SHA's runtime image,
     # fetch-baseline.sh) and this build with the same command line and
     # environment, then compare-clips --off-identity; run_cell writes each
     # arm's frames.sha256.json. Every arm encodes its prompt
-    # (--no-text-cache). Only trees of the EU volume (volumes.sh
-    # FV_EU_VOLUME_TREES): Wan / SANA / LingBot / Cosmos caches (EasyCache,
-    # Taylor, Wan and Cosmos TeaCache) have no tree there; their evidence is
-    # the CPU equality fixtures (step_cache/equality.rs).
-    # FV_B4A_CELLS narrows the cells (default: all four), one per pod when
+    # (--no-text-cache). A cell also fails (b4a-<cell>.verdict) when either
+    # arm reused no forward or the arms' cache evidence lines differ.
+    # Only H3 TeaCache: Wan / SANA / LingBot / Cosmos caches have no tree
+    # on the EU volume (volumes.sh FV_EU_VOLUME_TREES), and LTX-2.5 FBCache
+    # has no reachable path (fbcache::scope admits only dev guided stage 1,
+    # which no LTX-2.5 generate route runs today); their evidence is the CPU
+    # equality fixtures (step_cache/equality.rs).
+    # FV_B4A_CELLS narrows the cells (default: all three), one per pod when
     # the coordinator runs them in parallel.
     base_sha="${FV_BASELINE_SHA:?b4a family needs FV_BASELINE_SHA (the commit before the step-cache unification)}"
     BASE="$SCRATCH/baseline-$base_sha/fv-gpucheck"
@@ -2125,12 +2128,20 @@ Audio: male speech, clear voice, quiet room"
     # A cold H3 load reads ~70 GB from the volume before its first step.
     export FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-900}"
     fx="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures"
-    b4a_cells="${FV_B4A_CELLS:-b4a-h3-fullopt-env b4a-h3-fullopt-prof b4a-h3-4step-tea b4a-ltx25-fbcache}"
+    b4a_cells="${FV_B4A_CELLS:-b4a-h3-fullopt-env b4a-h3-fullopt-prof b4a-h3-4step-tea}"
+    # b4a_evidence <cell>-<arm>: the step cache's lines of that arm's
+    # stderr.log (what was installed, every H3 decision), without the
+    # timestamp a log line starts with, into cache-evidence.log.
+    b4a_evidence() {
+      grep -h 'h3 sol teacache\|h3 teacache:\|h3 teacache step\|fuse step cache' "$RUNS/$1/stderr.log" \
+        | sed -E 's/^(\[[^]]*\] *)+//' >"$RUNS/$1/cache-evidence.log" || true
+    }
     # b4a_pair <cell> <weight cell> <env K=V ... or -> <fv-gpucheck args ...>:
     # <cell>-base (the baseline binary) and <cell>-pr (this build), the
-    # frames under <cell>-<arm>/frames, then the byte-identity compare.
+    # frames under <cell>-<arm>/frames, then the byte-identity compare and
+    # the cell's verdict.
     b4a_pair() {
-      local cell="$1" wcell="$2" envs="$3" arm bin
+      local cell="$1" wcell="$2" envs="$3" arm bin reuses verdict=pass why=""
       shift 3
       [[ " $b4a_cells " == *" $cell "* ]] || { log "skip $cell (not in FV_B4A_CELLS)"; return 0; }
       # shellcheck disable=SC2206
@@ -2141,14 +2152,26 @@ Audio: male speech, clear voice, quiet room"
         [[ "$arm" == base ]] && bin="$BASE"
         gated_cell "$cell-$arm" "$wcell" \
           env ${e[@]+"${e[@]}"} "$bin" "$@" "$RUNS/$cell-$arm/frames"
-        # The cache's evidence lines (both arms): what was installed, every H3
-        # decision, the LTX skips (debug), and how many forwards reused.
-        [[ -f "$RUNS/$cell-$arm/stderr.log" ]] || continue
-        grep -h 'h3 sol teacache\|h3 teacache:\|h3 teacache step\|ltx2 sol: GB200 FBCache\|ltx2 fbcache reuse\|fuse step cache' \
-          "$RUNS/$cell-$arm/stderr.log" | sed "s/^/[$cell-$arm] /" >"$RUNS/$cell-$arm/cache-evidence.log" || true
-        log "[$cell-$arm] step-cache reuses: $(grep -c 'REUSE\|fbcache reuse' "$RUNS/$cell-$arm/stderr.log" || true)"
+        [[ "$DRY_RUN" == 1 ]] && continue
+        if [[ ! -f "$RUNS/$cell-$arm/stderr.log" ]]; then
+          verdict=fail why+=" $arm:no-run"
+          continue
+        fi
+        b4a_evidence "$cell-$arm"
+        reuses="$(grep -c 'h3 teacache step .*REUSE' "$RUNS/$cell-$arm/stderr.log" || true)"
+        log "[$cell-$arm] teacache reused forwards: ${reuses:-0}"
+        (( ${reuses:-0} > 0 )) || { verdict=fail; why+=" $arm:no-reuse"; }
       done
       compare_cells "$cell-base" "$cell-pr" --off-identity
+      [[ "$DRY_RUN" == 1 ]] && return 0
+      if [[ -f "$RUNS/$cell-base/cache-evidence.log" && -f "$RUNS/$cell-pr/cache-evidence.log" ]]; then
+        if ! diff "$RUNS/$cell-base/cache-evidence.log" "$RUNS/$cell-pr/cache-evidence.log" \
+          >"$RUNS/$cell.evidence.diff"; then
+          verdict=fail why+=" evidence-differs"
+        fi
+      fi
+      write_json "$RUNS/b4a-$cell.verdict.json" "$(printf '{"cell":"%s","verdict":"%s","why":"%s"}' "$cell" "$verdict" "${why# }")"
+      log "b4a $cell: $verdict${why:+ (${why# })}"
     }
     # H3 at 480p / 5 s, the auto text encoder, each arm encoding its prompt.
     h3_b4a=(--mode fast h3 gen --weights "$W/h3-base" --height 480 --width 832 --seconds 5
@@ -2162,22 +2185,13 @@ Audio: male speech, clear voice, quiet room"
     #    profile log line), MXFP8 linears as in the techniques -prof arm.
     b4a_pair b4a-h3-fullopt-prof h3-base "FASTVIDEO_H3_QUANT=mxfp8" \
       "${h3_b4a[@]}" --techniques h3/rtx5090_fullopt --clip-dir
-    # 3. FastH3 4-step VSA with a TeaCache that reuses forwards 1 and 2
-    #    (fixtures/b4a-h3-4step-teacache.toml: threshold 1.0, retain 1,
-    #    cooldown 1): two reuses in a row, the decision-reset accumulator.
+    # 3. FastH3 4-step VSA with a loose TeaCache
+    #    (fixtures/b4a-h3-4step-teacache.toml: threshold 4.0, retain 1,
+    #    cooldown 1): forwards 1 and 2 are the only candidates and reuse
+    #    while the accumulated rel-L1 of the block-0 probe stays under 4.0.
+    #    Unmeasured on a GPU before this family; the reuse assertion says.
     b4a_pair b4a-h3-4step-tea fasth3-4step-vsa - \
       "${h3_b4a[@]}" --techniques "$fx/b4a-h3-4step-teacache.toml" --clip-dir
-    # 4. LTX-2.5 dev guided audio-to-video with the GB200 stage-1 FBCache
-    #    (FASTVIDEO_LTX2_FBCACHE=1; the only scope fbcache::scope allows),
-    #    20 stage-1 steps at 512p for 49 frames. FASTVIDEO_LOG=debug prints
-    #    each skip ("ltx2 fbcache reuse step pass N"); both arms run it.
-    b4a_pair b4a-ltx25-fbcache ltx25-a2v-guided "FASTVIDEO_LTX2_FBCACHE=1 FASTVIDEO_LOG=debug" \
-      --mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --seed "$SEED" \
-      --two-stage --text streamed --no-text-cache --dit "$W/ltx25-dev/transformer_full" \
-      --height 512 --width 768 --num-frames 49 --dense-stage2 --guided --num-inference-steps 20 \
-      --audio "$fx/speech-flite-44k.flac" \
-      --prompt "A close-up of a woman with short dark hair talking directly to the camera in a bright living room." \
-      --clip
     for f in "$RUNS"/compare/compare-clips-b4a-*.json; do
       [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"
     done

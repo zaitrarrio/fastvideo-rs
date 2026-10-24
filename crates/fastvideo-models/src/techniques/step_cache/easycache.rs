@@ -10,9 +10,10 @@
 //!   `estimate = k · mean|x − x_prev| / max(mean|out_last|, 1e-8)`,
 //!   accumulated; `k = mean|Δout| / max(mean|Δin|, 1e-8)` between the last
 //!   two computed steps. Cond decides, uncond follows.
-//! * Wan 2.2 A14B (`A14bCacheController`): the same estimate per MoE
-//!   expert, the output norm stored at the compute, `reuse = acc <
-//!   threshold`, at most `max_reuse` reuses in a row.
+//! * Wan 2.2 A14B (the pre-B4a `A14bCacheController`): the same estimate,
+//!   one controller per MoE expert's transformer, the output norm stored at
+//!   the compute, `reuse = acc < threshold`, at most `max_reuse` reuses in
+//!   a row.
 //! * LingBot (`lingbot/sol.rs` `EasyCache`): the relative L1 of the latent
 //!   against the last computed step's latent, compared directly (no
 //!   accumulation), at most `max_reuse` in a row.
@@ -294,10 +295,9 @@ impl StepCache for EasyCache {
                 },
             ) => {
                 if estimator == Estimator::KScaledStoredNorm && output_norm.is_none() {
-                    return Err(StepCacheError::WrongSignal {
+                    return Err(StepCacheError::WrongRefresh {
                         cache: name,
-                        step: 0,
-                        expected: "output-norm refresh",
+                        expected: "drift with output norm",
                     });
                 }
                 if state.has_payload {
@@ -310,10 +310,9 @@ impl StepCache for EasyCache {
                 }
             }
             (Estimator::KScaled | Estimator::KScaledStoredNorm, Refresh::None) => {
-                return Err(StepCacheError::WrongSignal {
+                return Err(StepCacheError::WrongRefresh {
                     cache: name,
-                    step: 0,
-                    expected: "drift refresh",
+                    expected: "drift",
                 });
             }
             (Estimator::Raw, _) => {

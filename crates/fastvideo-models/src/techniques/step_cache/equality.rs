@@ -856,7 +856,14 @@ fn cosmos_teacache_matches_the_pre_b4a_controller() {
 
 /// TeaCache4Wan2.1 `dit_cfg`: decide on the latents once a previous step
 /// exists; a reuse returns `latents + prev_residual`.
-fn tea4wan_run(new: bool, thresh: f32, ret: bool, n: usize) -> (Vec<bool>, Vec<u32>) {
+/// Per decision: reuse and the f32 accumulator's bits (the legacy field,
+/// the new state's f64 accumulator cast back to f32).
+fn tea4wan_run(
+    new: bool,
+    thresh: f32,
+    ret: bool,
+    n: usize,
+) -> (Vec<(bool, Option<u32>)>, Vec<u32>) {
     let coefficients = if ret {
         legacy::wan_teacache4wan21::RET_COEFFICIENTS
     } else {
@@ -869,20 +876,25 @@ fn tea4wan_run(new: bool, thresh: f32, ret: bool, n: usize) -> (Vec<bool>, Vec<u
     let mut x = rng.vec(32, 1.0);
     let (mut prev, mut residual) = (None::<Vec<f32>>, None::<Vec<f32>>);
     let mut seen = Vec::new();
+    let mut acc = None;
     for step in 0..n {
         let reuse = match &prev {
             Some(p) => {
                 let (num, den) = super::distance::abs_sums(&x, p);
                 let rel = num / (den + 1e-6);
                 if new {
-                    neu.reuse(rel).unwrap()
+                    let r = neu.reuse(rel).unwrap();
+                    acc = Some((neu.state().accumulator(Lane::ONLY) as f32).to_bits());
+                    r
                 } else {
-                    old.maybe_reuse(rel)
+                    let r = old.maybe_reuse(rel);
+                    acc = Some(old.accumulated.to_bits());
+                    r
                 }
             }
             None => false,
         };
-        seen.push(reuse);
+        seen.push((reuse, acc.take()));
         let out = if reuse {
             add(&x, residual.as_deref().unwrap())
         } else {
@@ -913,7 +925,292 @@ fn teacache4wan21_matches_the_pre_b4a_controller() {
             assert_eq!(a, tea4wan_run(true, thresh, ret, n), "{thresh} {ret} {n}");
         }
     }
-    assert!(tea4wan_run(false, 5.0, true, 50).0.iter().any(|r| *r));
+    assert!(tea4wan_run(false, 5.0, true, 50).0.iter().any(|r| r.0));
+}
+
+/// TeaCache4Wan2.1 accumulates in f32 and compares `acc_f32 < thr_f32`. On
+/// a recorded signal, find the decision where the f32 running sum lies
+/// above the f64 one, and put the threshold exactly on the f32 sum: the
+/// f32 rule computes there (a tie, `!(acc < thr)`), an f64 accumulator
+/// would reuse. Old and new must agree on every decision and every
+/// accumulator bit.
+#[test]
+fn teacache4wan21_f32_accumulator_ties_and_disagrees_with_f64() {
+    let poly = |x: f64| {
+        let c = legacy::wan_teacache4wan21::COEFFICIENTS;
+        ((((c[0] * x + c[1]) * x + c[2]) * x + c[3]) * x) + c[4]
+    };
+    let mut rng = Lcg(101);
+    let rels: Vec<f64> = (0..64)
+        .map(|_| f64::from(rng.next().abs()) * 0.02)
+        .collect();
+    // The running sums (the warm-up decision accumulates too).
+    let (mut s32, mut s64) = (0.0f32, 0.0f64);
+    let mut split = None;
+    for (k, &r) in rels.iter().enumerate() {
+        let ind = poly(r);
+        assert!(ind > 0.0);
+        s32 += ind as f32;
+        s64 += ind;
+        if k >= 2 && s64 < f64::from(s32) {
+            split = Some((k, s32));
+            break;
+        }
+    }
+    let (k, thr) = split.unwrap();
+    // An f64 accumulator would reuse at decision k; the f32 rule computes.
+    assert!(s64 < f64::from(thr));
+    let mut old =
+        legacy::wan_teacache4wan21::TeaCache::new(thr, legacy::wan_teacache4wan21::COEFFICIENTS);
+    old.store();
+    let mut neu = wan::TeaCache4Wan21::new(thr, false).unwrap();
+    let mut decided = Vec::new();
+    for &r in &rels[..=k] {
+        let a = old.maybe_reuse(r);
+        let b = neu.reuse(r).unwrap();
+        let acc = neu.state().accumulator(Lane::ONLY);
+        assert_eq!(a, b);
+        decided.push(b);
+        if a {
+            // The stored accumulator is exactly the f32 sum, not a wider one.
+            assert_eq!(acc.to_bits(), f64::from(old.accumulated).to_bits());
+        }
+    }
+    // Decisions 1..k reuse (0 is the warm-up), k computes on the tie.
+    assert!(!decided[0]);
+    assert!(decided[1..k].iter().all(|&r| r), "{decided:?}");
+    assert!(!decided[k], "the f32 tie computes");
+    // The threshold compute cleared both accumulators.
+    assert_eq!(old.accumulated, 0.0);
+    assert_eq!(neu.state().accumulator(Lane::ONLY), 0.0);
+}
+
+/// One exact tie per comparison family, old against new: dyadic distances
+/// that sum to the threshold exactly, so `acc >= thr` (H3, Wan Sol, Cosmos,
+/// Wan EasyCache) and `!(acc < thr)` (LTX FBCache, A14B, LingBot) both
+/// compute on the tie.
+#[test]
+fn threshold_ties_match_the_pre_b4a_controllers() {
+    // H3: retain 1, no cool-down, threshold 0.125, distances 0.0625.
+    let mut old = legacy::h3_tea::H3TeaCache::new(0.125, 1, 0, 8, vec![1.0, 0.0]).unwrap();
+    let mut neu = h3::teacache(0.125, 1, 0, 8, vec![1.0, 0.0]).unwrap();
+    let mut seq = Vec::new();
+    for step in 0..6 {
+        let a = old.decide(step, if old.needs_signal(step) { 0.0625 } else { 0.0 });
+        let s = if neu.needs_signal(Lane::ONLY, step) {
+            Signal::Distance(0.0625)
+        } else {
+            Signal::None
+        };
+        let b = neu.decide(Lane::ONLY, step, s).unwrap();
+        assert_eq!(
+            (a.compute, a.reason, a.accumulator),
+            (b.compute(), b.reason, b.accumulator)
+        );
+        if a.compute {
+            old.note_computed();
+            neu.note_computed(Lane::ONLY, Refresh::None).unwrap();
+        }
+        seq.push(b.compute());
+    }
+    assert_eq!(seq, [true, false, true, false, true, false], "h3");
+
+    // Wan Sol: start 1, threshold 0.125, the accumulator cleared by the compute.
+    let mut old = legacy::wan_tea::SolTeaCache::new(0.125, 1, 100, 0, 0, vec![1.0, 0.0]).unwrap();
+    let mut neu = wan::sol_teacache(0.125, 1, 100, 0, 0, vec![1.0, 0.0]).unwrap();
+    let cond = legacy::wan_tea::TeaBranch::Cond;
+    let mut seq = Vec::new();
+    for step in 0..6 {
+        let a = old.decide(
+            cond,
+            step,
+            if old.needs_signal(cond, step) {
+                0.0625
+            } else {
+                0.0
+            },
+        );
+        let s = if neu.needs_signal(Lane::COND, step) {
+            Signal::Distance(0.0625)
+        } else {
+            Signal::None
+        };
+        let b = neu.decide(Lane::COND, step, s).unwrap();
+        assert_eq!(
+            (a.compute, a.reason, a.accumulator),
+            (b.compute(), b.reason, b.accumulator)
+        );
+        if a.compute {
+            old.note_computed(cond);
+            neu.note_computed(Lane::COND, Refresh::None).unwrap();
+        } else {
+            old.note_reused(cond);
+            neu.note_reused(Lane::COND);
+        }
+        seq.push(b.compute());
+    }
+    assert_eq!(seq, [true, false, true, false, true, false], "wan sol");
+
+    // Cosmos window: start 1, cap 10, threshold 0.125.
+    let mut old = legacy::cosmos_tea::TeaCacheWindow::official();
+    old.threshold = 0.125;
+    old.start_step = 1;
+    old.max_consecutive = 10;
+    let mut neu = cosmos::teacache_window(0.125, 1, 10);
+    let mut seq = Vec::new();
+    for step in 0..6 {
+        let a = old.decide(step, 0.0625);
+        let b = neu
+            .decide(Lane::ONLY, step, Signal::Distance(0.0625))
+            .unwrap();
+        if b.reuse() {
+            neu.note_reused(Lane::ONLY);
+        }
+        assert_eq!(a, b.compute());
+        seq.push(a);
+    }
+    assert_eq!(seq, [true, false, true, false, true, false], "cosmos");
+
+    // Wan EasyCache: k = 0.5, input change 0.125, norm 1: estimate 0.0625,
+    // threshold 0.125.
+    let mut old = legacy::wan_easy::EasyCache::new(8, 0.125, 1, 0).unwrap();
+    let mut neu = wan::easycache(8, 0.125, 1, 0).unwrap();
+    let mut seq = Vec::new();
+    for step in 0..6 {
+        let a = old.decide_cond(step, 0.125, 1.0);
+        let b = neu
+            .decide(
+                Lane::COND,
+                step,
+                Signal::Drift {
+                    input_change: 0.125,
+                    output_norm: 1.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            (a.compute, a.reason, a.accumulator),
+            (b.compute(), b.reason, b.accumulator)
+        );
+        if a.compute {
+            old.note_cond_computed(1.0, 0.5);
+            neu.note_computed(
+                Lane::COND,
+                Refresh::Drift {
+                    full_input_change: 1.0,
+                    output_change: 0.5,
+                    output_norm: None,
+                },
+            )
+            .unwrap();
+        }
+        seq.push(b.compute());
+    }
+    assert_eq!(seq, [true, true, false, true, false, true], "wan easycache");
+
+    // LTX FBCache: warm-up 1, threshold 0.09375, distances 0.046875.
+    let mut old = legacy::ltx_fb::FbCache::official();
+    old.threshold = 0.09375;
+    let mut neu = super::FbCache::new(ltx::FbCacheParams {
+        name: "ltx2 fbcache",
+        threshold: 0.09375,
+        warmup: 1,
+        max_consecutive: 10,
+    });
+    let mut seq = Vec::new();
+    for step in 0..6 {
+        old.begin_step(step);
+        neu.begin_step(step);
+        let a = old.decide(if old.needs_signal() { 0.046875 } else { 0.0 });
+        let s = if neu.needs_signal_next() {
+            Signal::Distance(0.046875)
+        } else {
+            Signal::None
+        };
+        let b = neu.decide_next(s).unwrap();
+        assert_eq!(
+            (!a.skip, a.reason, a.accumulator),
+            (b.compute(), b.reason, b.accumulator)
+        );
+        if a.skip {
+            old.note_reused(0);
+            neu.note_reused(Lane(0));
+        } else {
+            old.note_computed(0);
+            neu.note_computed(Lane(0), Refresh::None).unwrap();
+        }
+        seq.push(b.compute());
+    }
+    assert_eq!(seq, [true, false, true, false, true, false], "ltx fbcache");
+
+    // A14B: start 1, no tail, no reuse cap; k = 0.5, input change 0.25,
+    // norm 1: estimate 0.125, threshold 0.25.
+    use legacy::wan_a14b::{A14bCacheController, A14bExpert as Old};
+    let mut old = A14bCacheController::new(8, 0.25, 1, 0, 0).unwrap();
+    let mut neu = wan::a14b_easycache(8, 0.25, 1, 0, 0).unwrap();
+    let lane = wan::A14bExpert::HighNoise.lane();
+    let mut seq = Vec::new();
+    for step in 0..7 {
+        let needs = old.needs_input_signal(Old::HighNoise, step);
+        assert_eq!(needs, neu.needs_signal(lane, step));
+        let a = old.decide(Old::HighNoise, step, if needs { 0.25 } else { 0.0 });
+        let s = if needs {
+            Signal::Distance(0.25)
+        } else {
+            Signal::None
+        };
+        let b = neu.decide(lane, step, s).unwrap();
+        assert_eq!(
+            (a.compute, a.reason, a.accumulator),
+            (b.compute(), b.reason, b.accumulator)
+        );
+        if a.compute {
+            old.note_computed(Old::HighNoise, 1.0, 0.5, 1.0);
+            neu.note_computed(
+                lane,
+                Refresh::Drift {
+                    full_input_change: 1.0,
+                    output_change: 0.5,
+                    output_norm: Some(1.0),
+                },
+            )
+            .unwrap();
+        } else {
+            old.note_reused(Old::HighNoise);
+            neu.note_reused(lane);
+        }
+        seq.push(b.compute());
+    }
+    assert_eq!(seq, [true, true, false, true, false, true, false], "a14b");
+
+    // LingBot: the threshold is exactly the relative L1 of the step's latent.
+    let reference = vec![1.0f32; 4];
+    let latent = vec![1.25f32; 4];
+    let rel = lingbot::EasyCache::relative_l1(&latent, &reference);
+    let cfg = lingbot::EasyCacheConfig {
+        threshold: rel,
+        head_steps: 0,
+        tail_steps: 0,
+        max_reuse: 5,
+    };
+    let mut old = legacy::lingbot_easy::EasyCache::new(
+        legacy::lingbot_easy::EasyCacheConfig {
+            threshold: rel,
+            head_steps: 0,
+            tail_steps: 0,
+            max_reuse: 5,
+        },
+        8,
+    );
+    let mut neu = lingbot::EasyCache::new(cfg, 8);
+    old.computed(&reference);
+    neu.computed(&reference).unwrap();
+    let a = old.reuse(1, &latent);
+    let b = neu.reuse(1, &latent).unwrap();
+    assert_eq!(a, b);
+    assert!(!b, "lingbot: rel == threshold computes");
+    let nearer = vec![1.125f32; 4];
+    assert!(old.reuse(2, &nearer) && neu.reuse(2, &nearer).unwrap());
 }
 
 // ---------------------------------------------------------------------------

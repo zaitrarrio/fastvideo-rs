@@ -69,7 +69,9 @@ const TEA_NAME: &str = "cosmos teacache";
 /// or not) clears the accumulator and the reuse run, and at
 /// `max_consecutive` reuses in a row the step computes (no zero guard).
 /// No initialize guard: the caller hands `0.0` until it has a previous
-/// embed.
+/// embed. The caller must call `note_reused` after every reuse, or the
+/// consecutive-reuse cap never fires; [`SolCosmosTea`] does, and is what
+/// the runtimes use.
 pub fn teacache_window(threshold: f64, start_step: usize, max_consecutive: usize) -> TeaCache {
     TeaCache::new(TeaCacheParams {
         name: TEA_NAME,

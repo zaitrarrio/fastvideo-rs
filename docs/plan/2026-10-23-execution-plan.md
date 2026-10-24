@@ -820,7 +820,14 @@ ran (pod id, $/hr), result, cost.
   `scripts/serve/check.sh` green; cudarc + models + engine-service + core
   1396 passed, 1 failed: `settings::workspace_check` on fastvideo-lab's
   `FASTVIDEO_X` test names, failing identically on main `3da5cab4` (D1a).
-  GPU gate pending (coordinator): `runpod-matrix.sh b4a`, four cells (H3
-  fullopt TeaCache env / profile, H3 4-step TeaCache fixture, LTX-2.5 dev
-  guided FBCache), `FV_B4A_CELLS` for one cell per pod; Wan / SANA /
-  LingBot / Cosmos caches rest on the CPU fixtures (no EU-volume tree).
+  GPU gate pending (coordinator): `runpod-matrix.sh b4a`, three H3
+  TeaCache cells (fullopt env / profile, a 4-step reuse fixture),
+  `FV_B4A_CELLS` for one cell per pod; Wan / SANA / LingBot / Cosmos caches
+  (no EU-volume tree) and LTX-2.5 FBCache (no reachable path) rest on the
+  CPU fixtures.
+- 2026-10-24 14:10Z: B4a review fixes on #173: the unreachable LTX FBCache
+  cell dropped (ADR-0020 and decision log corrected); b4a cells fail on
+  zero reuses or differing cache evidence; exact threshold-tie fixtures per
+  comparison family and the TeaCache4Wan2.1 f32 accumulator pinned (five
+  comparison / precision mutations now caught); `dit_cfg_easy` without
+  `expect`; `Forced` enum, `WrongRefresh`; docs.

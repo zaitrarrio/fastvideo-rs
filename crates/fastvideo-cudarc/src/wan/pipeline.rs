@@ -1791,16 +1791,18 @@ fn dit_cfg_easy(
         let easy = ctx.easy_cache.as_mut().expect("easycache");
         let step = easy.step;
         easy.step += 1;
-        let signal = if easy.state.needs_signal(Lane::COND, step) {
-            Signal::Drift {
-                input_change: mean_abs_delta(
-                    &latent_in,
-                    easy.previous_step_input.as_ref().expect("prev"),
-                )?,
-                output_norm: mean_abs(easy.last_full_output.as_ref().expect("last out"))?,
-            }
-        } else {
-            Signal::None
+        // A needed signal always has both tensors (a computed step stored
+        // them); without them the cache's own error reports the step.
+        let signal = match (
+            easy.state.needs_signal(Lane::COND, step),
+            &easy.previous_step_input,
+            &easy.last_full_output,
+        ) {
+            (true, Some(prev), Some(last_out)) => Signal::Drift {
+                input_change: mean_abs_delta(&latent_in, prev)?,
+                output_norm: mean_abs(last_out)?,
+            },
+            _ => Signal::None,
         };
         easy.previous_step_input = Some(latent_in.clone());
         easy.state

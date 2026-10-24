@@ -18,7 +18,10 @@
   module; GPU: `scripts/gpu/runpod-matrix.sh b4a`
 
 Line references to "pre-B4a" code are to main `2e3c71b1`, where the
-copies lived; `legacy.rs` holds them verbatim under the same names.
+copies lived; `legacy.rs` holds them verbatim under the same names, except
+TeaCache4Wan2.1, which lived inside a cudarc runtime with its tensors and
+is there as a hand reduction to its decision (every arithmetic line as
+written).
 
 ## Context
 
@@ -88,8 +91,13 @@ pub trait StepCache {
   `"online_error_seed"`, ...), so every log line that printed it prints the
   same text.
 - **Lanes** are independent states: a CFG branch (Wan Sol: `Lane::COND`,
-  `Lane::UNCOND`), a CFG pass ordinal (LTX: `Lane(pass)`), a MoE expert
-  (A14B: `A14bExpert::lane()`), or `Lane::ONLY`. Created on first use.
+  `Lane::UNCOND`), a CFG pass ordinal (LTX: `Lane(pass)`), or `Lane::ONLY`.
+  Created on first use. A14B keeps one controller per expert, not one lane
+  per expert: each expert's transformer owns its runtime and controller,
+  and both call it with `A14bExpert::HighNoise.lane()`, as the pre-B4a
+  runtime passed `A14bExpert::HighNoise` (`wan/transformer.rs:1838-1898`).
+  The controller's per-expert lanes (`A14bExpert::lane()`) are exercised
+  only by the CPU fixture.
 - **The protocol**, per forward: `needs_signal` (measure only when true;
   a forced step's signal is never read, as before), `decide`, then
   `note_computed` after a computed forward or `note_reused` after a reused
@@ -97,7 +105,8 @@ pub trait StepCache {
 - **Errors** are typed (`StepCacheError`, `thiserror`): bad parameters with
   the old messages (`"h3 teacache requires a positive threshold"`), a needed
   signal of the wrong kind (`WrongSignal`, where the old runtimes passed `0.0`
-  or `expect`ed), Taylor's zero delta and forecast-before-update.
+  or `expect`ed), a missing refresh (`WrongRefresh`), Taylor's zero delta
+  and forecast-before-update.
 
 ### The state each keeps
 
@@ -242,7 +251,7 @@ easycache: ...`, `wan a14b easycache: ...`, `wan sol taylorseer: ...`,
 ### Evidence
 
 - **CPU, every algorithm and family** (`step_cache/equality.rs`): the
-  verbatim pre-B4a controller and the new one are driven through the
+  pre-B4a controller (`legacy.rs`) and the new one are driven through the
   family's runtime protocol on the same synthetic tensors (a stand-in
   transformer whose outputs feed the next step's latent, so one diverging
   decision diverges everything after it); every decision (compute or
@@ -254,16 +263,34 @@ easycache: ...`, `wan a14b easycache: ...`, `wan sol taylorseer: ...`,
   Cosmos and the bare window (zero cap included), TeaCache4Wan2.1 (both
   coefficient sets, five thresholds including 0), LTX FbCache (three
   passes, an `inf` distance, zero cap), Taylor (four schedules, orders
-  1-3). Each suite also asserts that reuse actually happens. Flipping H3's
-  `ResetOn` or A14B's `Estimator` makes them fail.
+  1-3). Each suite also asserts that reuse actually happens. Two tests
+  pin the comparisons themselves: one exact tie (`acc == threshold` on
+  dyadic values) per comparison family, old against new (H3, Wan Sol,
+  Cosmos, Wan EasyCache with `>=`; LTX FBCache, A14B, LingBot with
+  `!(<)`), and TeaCache4Wan2.1 on a signal where its f32 running sum lies
+  above the f64 one with the threshold exactly on the f32 sum (the f32
+  rule computes on the tie, an f64 accumulator would reuse); its fixture
+  also compares the f32 accumulator's bits per decision. Mutations caught:
+  H3's `ResetOn`, A14B's `Estimator`, f64 instead of f32 accumulation,
+  `>=` → `>` (f64 and f32), and the `!(acc < thr)` tie flipped (f64 and
+  f32).
 - **GPU** (`scripts/gpu/runpod-matrix.sh b4a`): the baseline binary and the
   PR build with the same argv and env, `compare-clips --off-identity`, each
-  arm's `frames.sha256.json`. Only families with a tree on the EU volume:
-  H3 TeaCache (legacy flag, profile, and a 4-step reuse fixture) and LTX-2.5
-  FbCache. **Not on the GPU:** Wan (EasyCache, A14B, Sol TeaCache,
-  TeaCache4Wan2.1, Taylor), SANA, LingBot, Cosmos and Cosmos3 have no tree
-  on the EU volume (`volumes.sh` `FV_EU_VOLUME_TREES`); for them the CPU
-  equality fixtures above are the evidence.
+  arm's `frames.sha256.json`; a cell also fails when either arm reused no
+  forward or the arms' step-cache evidence lines (install line, every
+  `h3 teacache step` decision, the load plan's `fuse step cache`) differ.
+  Three H3 TeaCache cells: the legacy flag, the profile, and a 4-step
+  reuse fixture. **Not on the GPU:**
+  - LTX-2.5 FBCache has no reachable path today: `fbcache::scope` admits
+    only LTX-2.5 dev *guided* stage 1, but the only guided LTX-2.5 route,
+    A2V, runs with `use_cfg = false` (`ltx2/pipeline.rs:3452`) so
+    `arm_requested(_, false)` is refused, every other guided LTX-2.5
+    request fails `check_generate_contract`, and `denoise_guided_cond`
+    never calls `begin_fbcache_step`. `scope` is not widened here (that
+    would change outputs); FBCache's evidence is the CPU fixture.
+  - Wan (EasyCache, A14B, Sol TeaCache, TeaCache4Wan2.1, Taylor), SANA,
+    LingBot, Cosmos and Cosmos3 have no tree on the EU volume (`volumes.sh`
+    `FV_EU_VOLUME_TREES`); their evidence is the CPU equality fixtures.
 
 ## Consequences
 
@@ -276,7 +303,11 @@ easycache: ...`, `wan a14b easycache: ...`, `wan sol taylorseer: ...`,
   `FbDecision` and the per-family decision structs are gone; their callers
   (cudarc runtimes, tests) use the trait. `SolCosmosTea::decide` and
   LingBot's `reuse` / `computed` return `Result`.
-- Runtimes that `expect`ed a stored signal now return a typed error.
+- Where a runtime `expect`ed the previous signal a decision needs (H3, Wan
+  Sol, Wan / SANA EasyCache, A14B, LTX), it now hands `Signal::None` and
+  the cache returns a typed `WrongSignal` error naming the step. The
+  `expect`s on stored residuals and pending tensors in the reuse paths are
+  unchanged.
 - `legacy.rs` is test-only and frozen: it is the reference the fixtures
   hold the implementation to, not code to maintain.
 - Fusion (B4b) and the disk prompt cache (B4c) are separate packages.

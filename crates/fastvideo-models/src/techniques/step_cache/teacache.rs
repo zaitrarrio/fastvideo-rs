@@ -56,6 +56,28 @@ pub struct TeaCacheParams {
     pub hit_cap: Option<Cap>,
 }
 
+/// Why a step must compute (its reason string is what the family logs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Forced {
+    Warmup,
+    Cooldown,
+    Initialize,
+    Periodic,
+    HitCap(&'static str),
+}
+
+impl Forced {
+    fn reason(self) -> &'static str {
+        match self {
+            Forced::Warmup => "warmup",
+            Forced::Cooldown => "cooldown",
+            Forced::Initialize => "initialize",
+            Forced::Periodic => "periodic",
+            Forced::HitCap(reason) => reason,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 struct LaneState {
     has_signal: bool,
@@ -109,20 +131,20 @@ impl TeaCache {
 
     /// Why `step` must compute, if it must. Order: warm-up, cool-down,
     /// initialize, periodic, hit cap (Wan `sol_cache.rs:564`).
-    fn force_reason(&self, lane: Lane, step: usize) -> Option<&'static str> {
+    fn forced(&self, lane: Lane, step: usize) -> Option<Forced> {
         let state = self.lane(lane);
         match self.params.window.edge(step) {
-            Some(Edge::Head) => return Some("warmup"),
-            Some(Edge::Tail) => return Some("cooldown"),
+            Some(Edge::Head) => return Some(Forced::Warmup),
+            Some(Edge::Tail) => return Some(Forced::Cooldown),
             None => {}
         }
         if self.params.require_signal && (!state.has_signal || !state.has_residual) {
-            Some("initialize")
+            Some(Forced::Initialize)
         } else if self.params.periodic.is_some_and(|p| state.since >= p) {
-            Some("periodic")
+            Some(Forced::Periodic)
         } else {
             match self.params.hit_cap {
-                Some(cap) if state.hits >= cap.limit => Some(cap.reason),
+                Some(cap) if state.hits >= cap.limit => Some(Forced::HitCap(cap.reason)),
                 _ => None,
             }
         }
@@ -161,8 +183,8 @@ impl StepCache for TeaCache {
     fn needs_signal(&self, lane: Lane, step: usize) -> bool {
         match self.params.reset {
             // Every decision but an uninitialized one integrates the signal.
-            ResetOn::Threshold => self.force_reason(lane, step) != Some("initialize"),
-            ResetOn::Computed | ResetOn::Decision => self.force_reason(lane, step).is_none(),
+            ResetOn::Threshold => self.forced(lane, step) != Some(Forced::Initialize),
+            ResetOn::Computed | ResetOn::Decision => self.forced(lane, step).is_none(),
         }
     }
 
@@ -172,17 +194,17 @@ impl StepCache for TeaCache {
         step: usize,
         signal: Signal,
     ) -> Result<Decision, StepCacheError> {
-        let forced = self.force_reason(lane, step);
+        let forced = self.forced(lane, step);
         let reset = self.params.reset;
         let (action, reason, distance, indicator) = match (reset, forced) {
-            (ResetOn::Threshold, Some("initialize")) | (ResetOn::Computed, Some(_)) => {
-                (Action::Compute, forced.unwrap_or("initialize"), None, None)
-            }
-            (ResetOn::Decision, Some(reason)) => {
+            (ResetOn::Threshold, Some(why @ Forced::Initialize))
+            | (ResetOn::Computed, Some(why)) => (Action::Compute, why.reason(), None, None),
+            (ResetOn::Decision, Some(why)) => {
                 self.lane_mut(lane).clear_counters();
-                (Action::Compute, reason, None, None)
+                (Action::Compute, why.reason(), None, None)
             }
-            (ResetOn::Threshold, Some(reason)) => {
+            (ResetOn::Threshold, Some(why)) => {
+                let reason = why.reason();
                 let x = signal.distance(self.params.name, step)?;
                 let indicator = self.params.rescale.apply(x);
                 let acc = self.add(self.lane(lane).acc, indicator);
