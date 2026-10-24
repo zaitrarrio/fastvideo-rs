@@ -1,0 +1,79 @@
+# Weekly drift check of the upstream API specifications vendored under
+# docs/serve/specs/ (plan E1). On drift it opens or updates one issue titled
+# "Upstream API spec drift"; it never runs on pull requests and never fails.
+name: specs-drift
+
+on:
+  schedule:
+    - cron: "23 6 * * 1" # Mondays 06:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: specs-drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the drift check
+        id: drift
+        continue-on-error: true
+        run: |
+          set +e
+          bash scripts/serve/specs-drift.sh > drift.txt 2>&1
+          status=$?
+          cat drift.txt
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Open or update the drift issue
+        if: steps.drift.outputs.status != '0'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Upstream API spec drift"
+          {
+            echo "\`bash scripts/serve/specs-drift.sh\` found drift against the specifications vendored under \`docs/serve/specs/\` (run: $RUN_URL, $(date -u +%Y-%m-%dT%H:%M:%SZ), commit \`$GITHUB_SHA\`)."
+            echo
+            echo "To accept the upstream changes: \`bash scripts/serve/specs-drift.sh --update\`, review the diff, update the prose research docs that cite the changed files (docs/serve/specs/README.md) and open a PR. A spec listed as UNREACHABLE may be a transient failure; re-run the workflow before acting on it."
+            echo
+            echo '```'
+            cat drift.txt
+            echo '```'
+          } > body.md
+          number="$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
+            --jq "[.[] | select(.title == \"$title\")][0].number // empty")"
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --body-file body.md
+            gh issue comment "$number" --body "Still drifting on $(date -u +%Y-%m-%d) ($RUN_URL); the description holds the latest report."
+            echo "updated issue #$number"
+          else
+            gh issue create --title "$title" --body-file body.md
+          fi
+
+      - name: Close the drift issue when the check is green
+        if: steps.drift.outputs.status == '0'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Upstream API spec drift"
+          number="$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
+            --jq "[.[] | select(.title == \"$title\")][0].number // empty")"
+          if [ -n "$number" ]; then
+            gh issue close "$number" --comment "The drift check is green again ($RUN_URL)."
+            echo "closed issue #$number"
+          fi

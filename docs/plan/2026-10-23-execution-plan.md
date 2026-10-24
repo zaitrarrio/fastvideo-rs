@@ -97,7 +97,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| E1 | Vendored upstream specs under `docs/serve/specs/` with a drift script; `schemars` schemas for native and director | drift script green | CI | none | todo |
+| E1 | Vendored upstream specs under `docs/serve/specs/` with a drift script; `schemars` schemas for native and director | drift script green | CI | none | pr (vendoring + drift script + weekly workflow; `schemars` schemas deferred to E2) |
 | E2 | `ParamSpec` per (surface, model) derived from the manifest caps; adapters validate from it; duplicated constants deleted; LTX body typed | one source for every limit | pod; serve-compat | A3 | todo |
 | E3 | Certification matrix harness over every surface, parameter x surface x model TSV, CI assertion that every parameter has a valid and an invalid case | TSV with no empty cell | pod | E2 | todo |
 | E4 | `cargo-llvm-cov` on the pod; adapter `cargo test` in a GitHub workflow | coverage artifact in CI | CI | none | todo |
@@ -160,3 +160,17 @@ ran (pod id, $/hr), result, cost.
 - Merge rule applied by the coordinator: when the base moved only by
   documentation since the branch point, the PR's own green CI stands;
   otherwise main is merged into the branch and CI re-run on that head.
+- 2026-10-24 00:30Z: E1 opened as a draft PR (docs and scripts only, no
+  Rust, no pod). Vendored under `docs/serve/specs/`: LTX `openapi.json`;
+  21 fal queue OpenAPIs (H3 max/max-turbo/base t2v, i2v, r2v; LTX-2.5
+  t2v/i2v fast and pro; LTX-2.5 a2v fast and pro; LTX-2.3 extend and
+  retake; LTX-2.3-quality ingredient; LTX-2.3-22b t2v; Wan 2.2-5B t2v, i2v,
+  fast-wan) plus the director `asyncapi.json`; MiniMax
+  `v2-video-generation.json`; the OpenAI `openapi.yaml` `/videos*` trim
+  (openai-openapi `main` 0938b0f0); FastVideo `protocol.py` and
+  `api_server.py` verbatim at `main` 8db2d71e plus a DERIVED
+  `videos.schema.json`. Unavailable (recorded, re-probed weekly): the
+  director's queue OpenAPI (404 `null`) and the director app's own
+  OpenAPI (405 without a key). `scripts/serve/specs-drift.sh` green (30
+  specs); `.github/workflows/specs-drift.yml` runs it weekly and files
+  one issue on drift.

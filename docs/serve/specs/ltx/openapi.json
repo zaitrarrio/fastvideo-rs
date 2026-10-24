@@ -1,0 +1,2346 @@
+{
+  "components": {
+    "schemas": {
+      "AudioToVideoRequest": {
+        "properties": {
+          "audio_uri": {
+            "description": "Audio file to be used as the soundtrack for the video. The audio sets the length of the\ngenerated video, so its duration must be at least 2 seconds and must not exceed the\nmaximum the selected model supports at the chosen resolution.\n\n| Model | Resolution | Maximum audio duration |\n| --- | --- | --- |\n| `ltx-2-5-fast` | 720p, 1080p | 20 seconds |\n| `ltx-2-5-fast` | 1440p, 4K | 10 seconds |\n| `ltx-2-5-pro` | 720p, 1080p | 10 seconds |\n| `ltx-2-5-pro` | 1440p, 4K | 10 seconds |\n| `ltx-2-3-pro` | 720p, 1080p | 20 seconds |\n| `ltx-2-3-pro` | 1440p, 4K | 10 seconds |\n\nSee [Input Formats](/input-formats#audio) for supported formats and size limits.\n",
+            "type": "string"
+          },
+          "camera_motion": {
+            "$ref": "#/components/schemas/AudioToVideoRequestCameraMotion",
+            "description": "Apply camera motion effects to the generated video."
+          },
+          "fps": {
+            "default": 24,
+            "description": "Frame rate in frames per second. See [Supported Models](/models) for available FPS per model and resolution.",
+            "type": "integer"
+          },
+          "image_uri": {
+            "description": "Input image to be used as the first frame of the video. Required if prompt is not provided. See [Input Formats](/input-formats#images) for supported formats and size limits.",
+            "type": "string"
+          },
+          "last_frame_uri": {
+            "description": "Image to be used as the last frame of the video. Requires `image_uri`. When provided, the video interpolates between the first and last frame. See [Input Formats](/input-formats#images) for supported formats and size limits.",
+            "type": "string"
+          },
+          "model": {
+            "$ref": "#/components/schemas/AudioToVideoRequestModel",
+            "description": "Model to use for video generation."
+          },
+          "prompt": {
+            "description": "Text description of how the video should be generated. Required if image_uri is not provided. Can be empty string when image_uri is provided. If image_uri is provided, this describes how the image should be animated. If no image_uri is provided, this describes the video content.",
+            "maxLength": 5000,
+            "type": "string"
+          },
+          "resolution": {
+            "description": "The resolution of the generated video in WIDTHxHEIGHT format. When omitted, the resolution is automatically determined based on the input image orientation — portrait images produce 1080x1920 video, landscape images produce 1920x1080 video. If no image is provided, defaults to 1920x1080.\n\nSupported resolutions depend on the model — see [Supported Models](/models) for the full matrix. `ltx-2-5-fast`, `ltx-2-5-pro`, and `ltx-2-3-pro` support 720p through 4K.\n",
+            "type": "string"
+          }
+        },
+        "required": [
+          "audio_uri"
+        ],
+        "title": "AudioToVideoRequest",
+        "type": "object"
+      },
+      "AudioToVideoRequestCameraMotion": {
+        "description": "Apply camera motion effects to the generated video.",
+        "enum": [
+          "dolly_in",
+          "dolly_out",
+          "dolly_left",
+          "dolly_right",
+          "jib_up",
+          "jib_down",
+          "static",
+          "focus_shift"
+        ],
+        "title": "AudioToVideoRequestCameraMotion",
+        "type": "string"
+      },
+      "AudioToVideoRequestModel": {
+        "default": "ltx-2-3-pro",
+        "description": "Model to use for video generation.",
+        "enum": [
+          "ltx-2-3-pro",
+          "ltx-2-5-fast",
+          "ltx-2-5-pro"
+        ],
+        "title": "AudioToVideoRequestModel",
+        "type": "string"
+      },
+      "EditVideoRequest": {
+        "properties": {
+          "duration": {
+            "description": "Duration in seconds, defines the duration of the section to be edited\nin the input video. Must be at least 2 seconds. The edited section can be at most\n505 frames at the input video's frame rate (about 21 seconds at 24fps).\n\nThe section defined by `start_time` and `duration` should be within the duration of the input video.\nIf the section extends beyond the duration of the video, it will be clamped to the video duration.\n",
+            "format": "double",
+            "minimum": 2,
+            "type": "number"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/EditVideoRequestMode",
+            "description": "Can be any of the following:\n- `replace_audio` - Replace only the audio track\n- `replace_video` - Replace only the video track\n- `replace_audio_and_video` - Replace both audio and video tracks\n\nThe default value is `replace_audio_and_video` if not specified.\n"
+          },
+          "model": {
+            "$ref": "#/components/schemas/EditVideoRequestModel",
+            "description": "Model to use for video generation."
+          },
+          "prompt": {
+            "description": "Describing what needs to happen in the generated video in a section\ndefined by `start_time` and `duration`.\n",
+            "maxLength": 5000,
+            "type": "string"
+          },
+          "resolution": {
+            "$ref": "#/components/schemas/EditVideoRequestResolution",
+            "description": "The resolution of the generated video in WIDTHxHEIGHT format. When omitted, the resolution is automatically determined based on the input video orientation — portrait videos produce 1080x1920 output, landscape videos produce 1920x1080 output.\n"
+          },
+          "start_time": {
+            "description": "Start time in seconds, defines the section to be edited in the input video. At least 2 seconds of video must remain after it.\n\nThe section defined by `start_time` and `duration` should be within the duration of the input video.\nIf the section extends beyond the duration of the video, it will be clamped to the video duration.\n",
+            "format": "double",
+            "minimum": 0,
+            "type": "number"
+          },
+          "video_uri": {
+            "description": "Input video for editing. See [Input Formats](/input-formats#videos) for supported formats and codecs.\n\n- Maximum resolution: 3840x2160 (4K)\n- Minimum frame count: 73 (around 3 seconds at 24fps)\n",
+            "type": "string"
+          }
+        },
+        "required": [
+          "video_uri",
+          "start_time",
+          "duration"
+        ],
+        "title": "EditVideoRequest",
+        "type": "object"
+      },
+      "EditVideoRequestMode": {
+        "default": "replace_audio_and_video",
+        "description": "Can be any of the following:\n- `replace_audio` - Replace only the audio track\n- `replace_video` - Replace only the video track\n- `replace_audio_and_video` - Replace both audio and video tracks\n\nThe default value is `replace_audio_and_video` if not specified.\n",
+        "enum": [
+          "replace_audio",
+          "replace_video",
+          "replace_audio_and_video"
+        ],
+        "title": "EditVideoRequestMode",
+        "type": "string"
+      },
+      "EditVideoRequestModel": {
+        "default": "ltx-2-3-pro",
+        "description": "Model to use for video generation.",
+        "enum": [
+          "ltx-2-3-pro"
+        ],
+        "title": "EditVideoRequestModel",
+        "type": "string"
+      },
+      "EditVideoRequestResolution": {
+        "description": "The resolution of the generated video in WIDTHxHEIGHT format. When omitted, the resolution is automatically determined based on the input video orientation — portrait videos produce 1080x1920 output, landscape videos produce 1920x1080 output.\n",
+        "enum": [
+          "1920x1080",
+          "1080x1920"
+        ],
+        "title": "EditVideoRequestResolution",
+        "type": "string"
+      },
+      "Error": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorError"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ErrorType",
+            "description": "Response type indicator"
+          }
+        },
+        "required": [
+          "type",
+          "error"
+        ],
+        "title": "Error",
+        "type": "object"
+      },
+      "ErrorError": {
+        "properties": {
+          "message": {
+            "description": "Human-readable error description",
+            "type": "string"
+          },
+          "type": {
+            "description": "Error type for programmatic handling",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "message"
+        ],
+        "title": "ErrorError",
+        "type": "object"
+      },
+      "ErrorType": {
+        "description": "Response type indicator",
+        "enum": [
+          "error"
+        ],
+        "title": "ErrorType",
+        "type": "string"
+      },
+      "ExtendVideoRequest": {
+        "properties": {
+          "context": {
+            "description": "**Advanced parameter:** Number of seconds from the input video to use as context for the extension (maximum 20 seconds).\n\nThe model uses context frames from the input video to generate a more coherent extension.\nThe sum of `context` + `duration` (converted to frames using the input video's FPS) cannot exceed 505 frames (~21 seconds at 24fps). For higher-FPS inputs, the maximum total duration in seconds will be proportionally lower; for lower-FPS inputs, it will be proportionally higher.\n\nIf not provided, defaults to maximize available context within the 505 frame limit while respecting the 20-second cap.\n",
+            "format": "double",
+            "maximum": 20,
+            "minimum": 1,
+            "type": "number"
+          },
+          "duration": {
+            "description": "Duration in seconds to extend the video. Minimum 2 seconds, maximum 20 seconds (480 frames at 24fps).\n",
+            "format": "double",
+            "maximum": 20,
+            "minimum": 2,
+            "type": "number"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExtendVideoRequestMode",
+            "description": "Where to extend the video:\n- `end` (default): Extends the video at the end.\n- `start`: Extends the video at the beginning.\n"
+          },
+          "model": {
+            "$ref": "#/components/schemas/ExtendVideoRequestModel",
+            "description": "Model to use for video generation."
+          },
+          "prompt": {
+            "description": "Description of what should happen in the extended portion of the video.\n",
+            "maxLength": 5000,
+            "type": "string"
+          },
+          "video_uri": {
+            "description": "Input video for extending. See [Input Formats](/input-formats#videos) for supported formats and codecs.\n\n- Maximum resolution: 3840x2160 (4K)\n- Minimum frame count: 73 (around 3 seconds at 24fps)\n",
+            "type": "string"
+          }
+        },
+        "required": [
+          "video_uri",
+          "duration"
+        ],
+        "title": "ExtendVideoRequest",
+        "type": "object"
+      },
+      "ExtendVideoRequestMode": {
+        "default": "end",
+        "description": "Where to extend the video:\n- `end` (default): Extends the video at the end.\n- `start`: Extends the video at the beginning.\n",
+        "enum": [
+          "start",
+          "end"
+        ],
+        "title": "ExtendVideoRequestMode",
+        "type": "string"
+      },
+      "ExtendVideoRequestModel": {
+        "default": "ltx-2-3-pro",
+        "description": "Model to use for video generation.",
+        "enum": [
+          "ltx-2-3-pro"
+        ],
+        "title": "ExtendVideoRequestModel",
+        "type": "string"
+      },
+      "ImageToVideoRequest": {
+        "properties": {
+          "camera_motion": {
+            "$ref": "#/components/schemas/ImageToVideoRequestCameraMotion",
+            "description": "Apply camera motion effects to the generated video."
+          },
+          "duration": {
+            "description": "Video duration in seconds. See [Supported Models](/models) for available durations per model. Pass `null` to let `ltx-2-5-fast` or `ltx-2-5-pro` choose the length from your prompt — see [Automatic duration](/models/ltx-2-5#automatic-duration). Cannot be combined with `last_frame_uri`.",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "fps": {
+            "default": 24,
+            "description": "Frame rate in frames per second. See [Supported Models](/models) for available FPS per model and resolution.",
+            "type": "integer"
+          },
+          "generate_audio": {
+            "default": true,
+            "description": "Generate audio for the video. When true, the generated video will include AI-generated audio matching the scene. When false, only silent video is generated.",
+            "type": "boolean"
+          },
+          "image_uri": {
+            "description": "Image to be used as the first frame of the video. See [Input Formats](/input-formats#images) for supported formats and size limits.",
+            "type": "string"
+          },
+          "last_frame_uri": {
+            "description": "Image to be used as the last frame of the video. When provided, the video will interpolate between the first frame (image_uri) and this last frame. See [Input Formats](/input-formats#images) for supported formats and size limits.",
+            "type": "string"
+          },
+          "model": {
+            "$ref": "#/components/schemas/ImageToVideoRequestModel",
+            "description": "Model to use for generation. See [Supported Models](/models) for details."
+          },
+          "prompt": {
+            "description": "Text description of how the image should be animated, can relate to the details in the image",
+            "maxLength": 5000,
+            "type": "string"
+          },
+          "resolution": {
+            "description": "Output video resolution. See [Supported Models](/models) for available resolutions per model.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "image_uri",
+          "prompt",
+          "model",
+          "duration",
+          "resolution"
+        ],
+        "title": "ImageToVideoRequest",
+        "type": "object"
+      },
+      "ImageToVideoRequestCameraMotion": {
+        "description": "Apply camera motion effects to the generated video.",
+        "enum": [
+          "dolly_in",
+          "dolly_out",
+          "dolly_left",
+          "dolly_right",
+          "jib_up",
+          "jib_down",
+          "static",
+          "focus_shift"
+        ],
+        "title": "ImageToVideoRequestCameraMotion",
+        "type": "string"
+      },
+      "ImageToVideoRequestModel": {
+        "description": "Model to use for generation. See [Supported Models](/models) for details.",
+        "enum": [
+          "ltx-2-3-fast",
+          "ltx-2-3-pro",
+          "ltx-2-5-fast",
+          "ltx-2-5-pro"
+        ],
+        "title": "ImageToVideoRequestModel",
+        "type": "string"
+      },
+      "TextToVideoRequest": {
+        "properties": {
+          "camera_motion": {
+            "$ref": "#/components/schemas/TextToVideoRequestCameraMotion",
+            "description": "Apply camera motion effects to the generated video."
+          },
+          "duration": {
+            "description": "Video duration in seconds. See [Supported Models](/models) for available durations per model. Pass `null` to let `ltx-2-5-fast` or `ltx-2-5-pro` choose the length from your prompt — see [Automatic duration](/models/ltx-2-5#automatic-duration).",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "fps": {
+            "default": 24,
+            "description": "Frame rate in frames per second. See [Supported Models](/models) for available FPS per model and resolution.",
+            "type": "integer"
+          },
+          "generate_audio": {
+            "default": true,
+            "description": "Generate audio for the video. When true, the generated video will include AI-generated audio matching the scene. When false, only silent video is generated.",
+            "type": "boolean"
+          },
+          "model": {
+            "$ref": "#/components/schemas/TextToVideoRequestModel",
+            "description": "Model to use for generation. See [Supported Models](/models) for details."
+          },
+          "prompt": {
+            "description": "Text prompt describing the desired video content",
+            "maxLength": 5000,
+            "type": "string"
+          },
+          "resolution": {
+            "description": "Output video resolution. See [Supported Models](/models) for available resolutions per model.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt",
+          "model",
+          "duration",
+          "resolution"
+        ],
+        "title": "TextToVideoRequest",
+        "type": "object"
+      },
+      "TextToVideoRequestCameraMotion": {
+        "description": "Apply camera motion effects to the generated video.",
+        "enum": [
+          "dolly_in",
+          "dolly_out",
+          "dolly_left",
+          "dolly_right",
+          "jib_up",
+          "jib_down",
+          "static",
+          "focus_shift"
+        ],
+        "title": "TextToVideoRequestCameraMotion",
+        "type": "string"
+      },
+      "TextToVideoRequestModel": {
+        "description": "Model to use for generation. See [Supported Models](/models) for details.",
+        "enum": [
+          "ltx-2-3-fast",
+          "ltx-2-3-pro",
+          "ltx-2-5-fast",
+          "ltx-2-5-pro"
+        ],
+        "title": "TextToVideoRequestModel",
+        "type": "string"
+      },
+      "UploadResponse": {
+        "properties": {
+          "expires_at": {
+            "description": "ISO 8601 timestamp indicating when the signed URL expires (1 hour from creation).\n",
+            "format": "date-time",
+            "type": "string"
+          },
+          "required_headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Headers that must be included unchanged in the upload request to cloud storage.\nThese headers enforce the file size limit and prevent overwriting an existing object.\n",
+            "type": "object"
+          },
+          "storage_uri": {
+            "description": "Storage URI that can be used to reference the uploaded file in subsequent API requests.\nUse this value in image_uri or video_uri parameters.\nThe uploaded file will be available for 24 hours.\n",
+            "type": "string"
+          },
+          "upload_url": {
+            "description": "Pre-signed URL for uploading the file. Use PUT request to upload your file to this URL.\nThe URL includes all necessary authentication and expires after 1 hour.\n",
+            "type": "string"
+          }
+        },
+        "required": [
+          "upload_url",
+          "storage_uri",
+          "expires_at",
+          "required_headers"
+        ],
+        "title": "UploadResponse",
+        "type": "object"
+      },
+      "V2EndpointIdGetParametersEndpoint": {
+        "enum": [
+          "text-to-video",
+          "image-to-video",
+          "audio-to-video",
+          "retake",
+          "extend",
+          "video-to-video-hdr",
+          "video-to-video-reframe"
+        ],
+        "title": "V2EndpointIdGetParametersEndpoint",
+        "type": "string"
+      },
+      "V2JobCompletedStatus": {
+        "enum": [
+          "completed"
+        ],
+        "title": "V2JobCompletedStatus",
+        "type": "string"
+      },
+      "V2JobCreatedResponse": {
+        "description": "Response returned when a V2 async job is successfully submitted.",
+        "properties": {
+          "created_at": {
+            "description": "ISO 8601 timestamp of when the job was created.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "Unique job identifier. Use this to poll for status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "created_at"
+        ],
+        "title": "V2JobCreatedResponse",
+        "type": "object"
+      },
+      "V2JobError": {
+        "description": "Error details for a failed job. Uses the same error types as HTTP error responses\n(`api_error`, `content_filtered_error`, `insufficient_funds_error`, etc.).\n",
+        "properties": {
+          "message": {
+            "description": "Human-readable error description.",
+            "type": "string"
+          },
+          "type": {
+            "description": "Error type for programmatic handling. Same values as HTTP error types.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "message"
+        ],
+        "title": "V2JobError",
+        "type": "object"
+      },
+      "V2JobFailedStatus": {
+        "enum": [
+          "failed"
+        ],
+        "title": "V2JobFailedStatus",
+        "type": "string"
+      },
+      "V2JobPendingStatus": {
+        "enum": [
+          "pending"
+        ],
+        "title": "V2JobPendingStatus",
+        "type": "string"
+      },
+      "V2JobProcessingStatus": {
+        "enum": [
+          "processing"
+        ],
+        "title": "V2JobProcessingStatus",
+        "type": "string"
+      },
+      "V2JobResult": {
+        "additionalProperties": {
+          "format": "uri",
+          "type": "string"
+        },
+        "description": "Result object for a completed job. Contains output URLs — the available keys depend on the endpoint. Output URLs expire independently of job-status retention. Download or re-host outputs as soon as the job completes. See [retention](/async-jobs#retention).\n",
+        "title": "V2JobResult",
+        "type": "object"
+      },
+      "V2JobStatusResponse": {
+        "description": "Job status response. The shape depends on the current status:\n- `pending` — job is queued\n- `processing` — generation in progress\n- `completed` — done, `result` contains output URLs (keys depend on the endpoint)\n- `failed` — error occurred, `error` contains details\n",
+        "discriminator": {
+          "propertyName": "status"
+        },
+        "oneOf": [
+          {
+            "description": "pending variant",
+            "properties": {
+              "created_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/components/schemas/V2JobPendingStatus"
+              }
+            },
+            "required": [
+              "status",
+              "id",
+              "created_at"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "processing variant",
+            "properties": {
+              "created_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/components/schemas/V2JobProcessingStatus"
+              }
+            },
+            "required": [
+              "status",
+              "id",
+              "created_at"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "completed variant",
+            "properties": {
+              "completed_at": {
+                "description": "ISO 8601 timestamp of when the job completed.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "created_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "result": {
+                "$ref": "#/components/schemas/V2JobResult"
+              },
+              "status": {
+                "$ref": "#/components/schemas/V2JobCompletedStatus"
+              }
+            },
+            "required": [
+              "status",
+              "id",
+              "created_at",
+              "completed_at",
+              "result"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "failed variant",
+            "properties": {
+              "completed_at": {
+                "description": "ISO 8601 timestamp of when the job failed.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "created_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "error": {
+                "$ref": "#/components/schemas/V2JobError"
+              },
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/components/schemas/V2JobFailedStatus"
+              }
+            },
+            "required": [
+              "status",
+              "id",
+              "created_at",
+              "completed_at",
+              "error"
+            ],
+            "type": "object"
+          }
+        ],
+        "title": "V2JobStatusResponse"
+      },
+      "VideoToVideoHdrRequest": {
+        "properties": {
+          "video_uri": {
+            "description": "SDR source video in HTTPS URL or base64 data URI format. See [Input Formats](/input-formats#videos) for supported formats and codecs.\n\nMax frames (and max duration at 24 fps) depend on the input resolution tier — inputs are snapped to the smallest tier that fits by pixel count:\n\n| Input resolution tier | Max frames | Max duration (at 24 fps) |\n| --- | --- | --- |\n| Up to 1080p (≤ 1920×1080) | 181 | ~7 seconds |\n| Up to 1440p (≤ 2560×1440) | 101 | ~4 seconds |\n| Up to 4K (≤ 3840×2160) | 41 | ~2 seconds |\n",
+            "type": "string"
+          }
+        },
+        "required": [
+          "video_uri"
+        ],
+        "title": "VideoToVideoHdrRequest",
+        "type": "object"
+      },
+      "VideoToVideoReframeRequest": {
+        "properties": {
+          "placement": {
+            "$ref": "#/components/schemas/VideoToVideoReframeRequestPlacement",
+            "description": "Where the source video lands on the output frame: an **Anchor** such as `{ \"anchor\": \"top\" }` to fit and align it, or a **Rectangle** such as `{ \"x\": 0, \"y\": 0.35, \"width\": 1 }` to set its position and size exactly (see both below). The whole source is always kept and never stretched; the model generates the rest of the frame. Omit to center it at the largest size that fits.\n"
+          },
+          "resolution": {
+            "$ref": "#/components/schemas/VideoToVideoReframeRequestResolution",
+            "description": "Target output resolution. The source video is extended to fill this frame. Pass one of the values below; each maps to an aspect ratio:\n\n| Aspect ratio | Resolutions |\n| --- | --- |\n| 1:1 (square) | `720x720`, `1080x1080` |\n| 4:5 (portrait) | `720x900`, `1080x1350` |\n| 5:4 (landscape) | `900x720`, `1350x1080` |\n| 9:16 (portrait) | `720x1280`, `1080x1920` |\n| 16:9 (landscape) | `1280x720`, `1920x1080` |\n"
+          },
+          "video_uri": {
+            "description": "Input video in HTTPS URL or base64 data URI format. See [Input Formats](/input-formats#videos) for supported formats and codecs.\n\nMax 60 seconds and 1800 frames (e.g. 60s at 30fps, or 30s at 60fps). Width and height must each be between 64 and 4096 pixels.\n",
+            "type": "string"
+          }
+        },
+        "required": [
+          "video_uri",
+          "resolution"
+        ],
+        "title": "VideoToVideoReframeRequest",
+        "type": "object"
+      },
+      "VideoToVideoReframeRequestPlacement": {
+        "description": "Where the source video lands on the output frame: an **Anchor** such as `{ \"anchor\": \"top\" }` to fit and align it, or a **Rectangle** such as `{ \"x\": 0, \"y\": 0.35, \"width\": 1 }` to set its position and size exactly (see both below). The whole source is always kept and never stretched; the model generates the rest of the frame. Omit to center it at the largest size that fits.\n",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/VideoToVideoReframeRequestPlacement0"
+          },
+          {
+            "$ref": "#/components/schemas/VideoToVideoReframeRequestPlacement1"
+          }
+        ],
+        "title": "VideoToVideoReframeRequestPlacement"
+      },
+      "VideoToVideoReframeRequestPlacement0": {
+        "description": "Fits the video inside the frame and aligns it, e.g. `{ \"anchor\": \"top\" }`:\n\n| `anchor` | Where the video lands |\n| --- | --- |\n| `center` | Middle (same as omitting `placement`) |\n| `top` | Top edge |\n| `bottom` | Bottom edge |\n| `left` | Left edge |\n| `right` | Right edge |\n| `top_left` | Top-left corner |\n| `top_right` | Top-right corner |\n| `bottom_left` | Bottom-left corner |\n| `bottom_right` | Bottom-right corner |\n\nThe fitted video always fills the frame along one axis, so an anchor only moves it along the other:\n\n<pre>\nlandscape source → portrait frame\nfills the width, so it moves up or down\n\n top       center     bottom\n┌────┐     ┌────┐     ┌────┐\n│████│     │    │     │    │\n│    │     │████│     │    │\n│    │     │    │     │████│\n└────┘     └────┘     └────┘\n\nportrait source → landscape frame\nfills the height, so it moves left or right\n\n   left        center       right\n┌──┬──────┐   ┌───┬──┬───┐   ┌──────┬──┐\n│██│      │   │   │██│   │   │      │██│\n│██│      │   │   │██│   │   │      │██│\n└──┴──────┘   └───┴──┴───┘   └──────┴──┘\n\n████ = your video, the rest is generated\n</pre>\n\nA corner anchor such as `bottom_left` works whatever the video's orientation, and a video with the frame's aspect ratio fills it, so every anchor gives the same result.\n\nAnchors other than `center` can't enlarge the video more than 2× its original pixel size, so they may be rejected for a small video; use `center` (or omit `placement`) to fit it at any size, or use a rectangle.\n",
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/VideoToVideoReframeRequestPlacementOneOf0Anchor"
+          }
+        },
+        "required": [
+          "anchor"
+        ],
+        "title": "VideoToVideoReframeRequestPlacement0",
+        "type": "object"
+      },
+      "VideoToVideoReframeRequestPlacement1": {
+        "description": "- `x`, `y`: the video's top-left corner, as fractions of the output frame (`0, 0` is its top-left).\n- Send `width`, `height`, or both, as fractions of the frame. With one, the other follows the video's aspect ratio; with both, they must match it to within a pixel.\n- The video must stay inside the frame, be at least one pixel on each side, and can't be enlarged more than 2×.\n\nFor a 1920x1080 video in a `1080x1920` frame:\n\n| `placement` | Result |\n| --- | --- |\n| `{ \"x\": 0, \"y\": 0.35, \"width\": 1 }` | Full width, top edge 35% down; height follows the video |\n| `{ \"x\": 0.1, \"y\": 0.1, \"height\": 0.25 }` | A quarter of the frame tall; width follows the video |\n",
+        "properties": {
+          "height": {
+            "description": "Height of the placed video, as a fraction of the output height.",
+            "exclusiveMinimum": 0,
+            "format": "double",
+            "maximum": 1,
+            "type": "number"
+          },
+          "width": {
+            "description": "Width of the placed video, as a fraction of the output width.",
+            "exclusiveMinimum": 0,
+            "format": "double",
+            "maximum": 1,
+            "type": "number"
+          },
+          "x": {
+            "description": "Left edge of the placed video, as a fraction of the output width.",
+            "exclusiveMaximum": 1,
+            "format": "double",
+            "minimum": 0,
+            "type": "number"
+          },
+          "y": {
+            "description": "Top edge of the placed video, as a fraction of the output height.",
+            "exclusiveMaximum": 1,
+            "format": "double",
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y"
+        ],
+        "title": "VideoToVideoReframeRequestPlacement1",
+        "type": "object"
+      },
+      "VideoToVideoReframeRequestPlacementOneOf0Anchor": {
+        "enum": [
+          "center",
+          "top",
+          "bottom",
+          "left",
+          "right",
+          "top_left",
+          "top_right",
+          "bottom_left",
+          "bottom_right"
+        ],
+        "title": "VideoToVideoReframeRequestPlacementOneOf0Anchor",
+        "type": "string"
+      },
+      "VideoToVideoReframeRequestResolution": {
+        "description": "Target output resolution. The source video is extended to fill this frame. Pass one of the values below; each maps to an aspect ratio:\n\n| Aspect ratio | Resolutions |\n| --- | --- |\n| 1:1 (square) | `720x720`, `1080x1080` |\n| 4:5 (portrait) | `720x900`, `1080x1350` |\n| 5:4 (landscape) | `900x720`, `1350x1080` |\n| 9:16 (portrait) | `720x1280`, `1080x1920` |\n| 16:9 (landscape) | `1280x720`, `1920x1080` |\n",
+        "enum": [
+          "720x720",
+          "1080x1080",
+          "720x900",
+          "1080x1350",
+          "900x720",
+          "1350x1080",
+          "720x1280",
+          "1080x1920",
+          "1280x720",
+          "1920x1080"
+        ],
+        "title": "VideoToVideoReframeRequestResolution",
+        "type": "string"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "description": "API key authentication",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "API Reference",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/audio-to-video": {
+      "post": {
+        "deprecated": true,
+        "description": "> **Deprecated:** After October 26, 2026 at 11:59 PM UTC, requests to this endpoint will no longer work. See [Migrate from V1 to V2](/migrate-v1-to-v2).\n\nGenerate a video driven by an audio track. Supply dialogue, music, or ambient sound and the model produces visuals synchronized to the audio. Optionally condition on a reference image for visual direction, a last frame for interpolation, and camera motion. Output frame rate defaults to 24 fps; its length is set by the audio.\n\nReturns the generated video directly in the response. For an asynchronous version that returns a job to poll, see [v2/audio-to-video](/api-documentation/api-reference/async-video-generation/submit-audio-to-video).\n\nBilled per second of input audio. See [Pricing](/pricing).\n",
+        "operationId": "videoGeneration_audioToVideo",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudioToVideoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Video generated successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request is invalid or malformed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Authentication failed"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body exceeds 32 MB"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Content rejected by safety filters"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Concurrency or queue limit exceeded"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "An unexpected error occurred"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Service temporarily unavailable"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Request timeout"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Generate video from audio",
+        "tags": [
+          "videoGeneration"
+        ]
+      }
+    },
+    "/v1/extend": {
+      "post": {
+        "deprecated": true,
+        "description": "> **Deprecated:** After October 26, 2026 at 11:59 PM UTC, requests to this endpoint will no longer work. See [Migrate from V1 to V2](/migrate-v1-to-v2).\n\nExtend a video by generating additional frames at the beginning or end. The model uses context frames from the input to produce a seamless continuation with consistent motion and audio.\n> Audio is generated for the extended portion if the input video has audio.\n\nThe output video is 1080x1920 for portrait input and 1920x1080 otherwise. Inputs with other aspect ratios are center-cropped to 9:16 or 16:9.\n\nReturns the generated video directly in the response. For an asynchronous version that returns a job to poll, see [v2/extend](/api-documentation/api-reference/async-video-generation/submit-extend).\n\nBilled per second, based on the extended portion plus the context frames used from the input video. See [Pricing](/pricing).\n",
+        "operationId": "videoGeneration_extend",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtendVideoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Video extended successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request is invalid or malformed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Authentication failed"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body exceeds 32 MB"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Content rejected by safety filters"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Concurrency or queue limit exceeded"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "An unexpected error occurred"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Service temporarily unavailable"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Request timeout"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Extend video duration",
+        "tags": [
+          "videoGeneration"
+        ]
+      }
+    },
+    "/v1/image-to-video": {
+      "post": {
+        "deprecated": true,
+        "description": "> **Deprecated:** After October 26, 2026 at 11:59 PM UTC, requests to this endpoint will no longer work. See [Migrate from V1 to V2](/migrate-v1-to-v2).\n\nAnimate a still image with realistic motion, depth, and audio. Provide a reference image plus a prompt describing the desired motion. The output preserves the visual identity of the source image.\n\nReturns the generated video directly in the response. For an asynchronous version that returns a job to poll, see [v2/image-to-video](/api-documentation/api-reference/async-video-generation/submit-image-to-video).\n\nBilled per second of generated video. See [Pricing](/pricing).\n",
+        "operationId": "videoGeneration_imageToVideo",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageToVideoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Video generated successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request is invalid or malformed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Authentication failed"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body exceeds 32 MB"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Content rejected by safety filters"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Concurrency or queue limit exceeded"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "An unexpected error occurred"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Service temporarily unavailable"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Request timeout"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Generate video from image",
+        "tags": [
+          "videoGeneration"
+        ]
+      }
+    },
+    "/v1/retake": {
+      "post": {
+        "deprecated": true,
+        "description": "> **Deprecated:** After October 26, 2026 at 11:59 PM UTC, requests to this endpoint will no longer work. See [Migrate from V1 to V2](/migrate-v1-to-v2).\n\nRe-generate a section of an existing video by replacing either its audio, its video, or both. Iterate on part of a generation without starting over — the rest of the video is preserved. The edited section is defined by the `start_time` and `duration` parameters.\n\nThe output video is 1920x1080 or 1080x1920 (see `resolution`). The input video is center-cropped to that aspect ratio.\n\nReturns the generated video directly in the response. For an asynchronous version that returns a job to poll, see [v2/retake](/api-documentation/api-reference/async-video-generation/submit-retake).\n\nBilled per second of the input video. See [Pricing](/pricing).\n",
+        "operationId": "videoGeneration_retake",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditVideoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Video edited successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request is invalid or malformed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Authentication failed"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body exceeds 32 MB"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Content rejected by safety filters"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Concurrency or queue limit exceeded"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "An unexpected error occurred"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Service temporarily unavailable"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Request timeout"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Retake video section",
+        "tags": [
+          "videoGeneration"
+        ]
+      }
+    },
+    "/v1/text-to-video": {
+      "post": {
+        "deprecated": true,
+        "description": "> **Deprecated:** After October 26, 2026 at 11:59 PM UTC, requests to this endpoint will no longer work. See [Migrate from V1 to V2](/migrate-v1-to-v2).\n\nGenerate a video from a text prompt. Describe the scene, camera motion, and mood — the model returns a video with matching audio.\n\nReturns the generated video directly in the response. For an asynchronous version that returns a job to poll, see [v2/text-to-video](/api-documentation/api-reference/async-video-generation/submit-text-to-video).\n\nBilled per second of generated video. See [Pricing](/pricing).\n",
+        "operationId": "videoGeneration_textToVideo",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TextToVideoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Video generated successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request is invalid or malformed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Authentication failed"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body exceeds 32 MB"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Content rejected by safety filters"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Concurrency or queue limit exceeded"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "An unexpected error occurred"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Service temporarily unavailable"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Request timeout"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Generate video from text",
+        "tags": [
+          "videoGeneration"
+        ]
+      }
+    },
+    "/v1/upload": {
+      "post": {
+        "description": "Generate a signed URL for uploading media files to use as input for video generation.\n\nReturns a pre-signed URL that can be used to upload files directly to cloud storage.\nThe URL creates a new object and cannot overwrite an existing object. Include every header returned in `required_headers` in the upload request.\nUse the returned `storage_uri` in subsequent video generation requests (e.g., `image_uri` or `video_uri` parameters).\nThe URL expires after 1 hour.\n",
+        "operationId": "upload_createUpload",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            },
+            "description": "Upload URL generated successfully"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Authentication failed"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Insufficient credits"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "An unexpected error occurred"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Service temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Upload file",
+        "tags": [
+          "upload"
+        ]
+      }
+    },
+    "/v2/audio-to-video": {
+      "post": {
+        "description": "Generate a video driven by an audio track. Supply dialogue, music, or ambient sound and the model produces visuals synchronized to the audio. Optionally condition on a reference image for visual direction, a last frame for interpolation, and camera motion. Output frame rate defaults to 24 fps; its length is set by the audio.\n\nResponds immediately with the job `id` and `created_at` timestamp. Poll `GET /v2/audio-to-video/{id}` until the status is `completed`, then download from `result.video_url`.\n\nBilled per second of input audio. See [Pricing](/pricing).\n",
+        "operationId": "asyncVideoGeneration_submitAudioToVideo",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudioToVideoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2JobCreatedResponse"
+                }
+              }
+            },
+            "description": "Job submitted successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request is invalid or malformed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Authentication failed"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Insufficient credits"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body exceeds 32 MB"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Content rejected by safety filters"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Concurrency or queue limit exceeded"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "An unexpected error occurred"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Service temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Generate video from audio",
+        "tags": [
+          "asyncVideoGeneration"
+        ]
+      }
+    },
+    "/v2/extend": {
+      "post": {
+        "description": "Extend a video by generating additional frames at the beginning or end. The model uses context frames from the input to produce a seamless continuation with consistent motion and audio.\n\nThe output video is 1080x1920 for portrait input and 1920x1080 otherwise. Inputs with other aspect ratios are center-cropped to 9:16 or 16:9.\n\nResponds immediately with the job `id` and `created_at` timestamp. Poll `GET /v2/extend/{id}` until the status is `completed`, then download from `result.video_url`.\n\nBilled per second, based on the extended portion plus the context frames used from the input video. See [Pricing](/pricing).\n",
+        "operationId": "asyncVideoGeneration_submitExtend",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtendVideoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2JobCreatedResponse"
+                }
+              }
+            },
+            "description": "Job submitted successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request is invalid or malformed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Authentication failed"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Insufficient credits"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body exceeds 32 MB"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Content rejected by safety filters"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Concurrency or queue limit exceeded"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "An unexpected error occurred"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Service temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Extend video duration",
+        "tags": [
+          "asyncVideoGeneration"
+        ]
+      }
+    },
+    "/v2/image-to-video": {
+      "post": {
+        "description": "Animate a still image with realistic motion, depth, and audio. Provide a reference image plus a prompt describing the desired motion. The output preserves the visual identity of the source image.\n\nResponds immediately with the job `id` and `created_at` timestamp. Poll `GET /v2/image-to-video/{id}` until the status is `completed`, then download from `result.video_url`.\n\nBilled per second of generated video. See [Pricing](/pricing).\n",
+        "operationId": "asyncVideoGeneration_submitImageToVideo",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageToVideoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2JobCreatedResponse"
+                }
+              }
+            },
+            "description": "Job submitted successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request is invalid or malformed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Authentication failed"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Insufficient credits"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body exceeds 32 MB"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Content rejected by safety filters"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Concurrency or queue limit exceeded"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "An unexpected error occurred"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Service temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Generate video from image",
+        "tags": [
+          "asyncVideoGeneration"
+        ]
+      }
+    },
+    "/v2/retake": {
+      "post": {
+        "description": "Re-generate a section of an existing video by replacing either its audio, its video, or both. Select a time range and mode to iterate on part of a generation without starting over — the rest of the video is preserved.\n\nThe output video is 1920x1080 or 1080x1920 (see `resolution`). The input video is center-cropped to that aspect ratio.\n\nResponds immediately with the job `id` and `created_at` timestamp. Poll `GET /v2/retake/{id}` until the status is `completed`, then download from `result.video_url`.\n\nBilled per second of the input video. See [Pricing](/pricing).\n",
+        "operationId": "asyncVideoGeneration_submitRetake",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditVideoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2JobCreatedResponse"
+                }
+              }
+            },
+            "description": "Job submitted successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request is invalid or malformed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Authentication failed"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Insufficient credits"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body exceeds 32 MB"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Content rejected by safety filters"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Concurrency or queue limit exceeded"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "An unexpected error occurred"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Service temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Retake video section",
+        "tags": [
+          "asyncVideoGeneration"
+        ]
+      }
+    },
+    "/v2/text-to-video": {
+      "post": {
+        "description": "Generate a video from a text prompt. Describe the scene, camera motion, and mood — the model returns a video with matching audio.\n\nResponds immediately with the job `id` and `created_at` timestamp. Poll `GET /v2/text-to-video/{id}` until the status is `completed`, then download from `result.video_url`.\n\nBilled per second of generated video. See [Pricing](/pricing).\n",
+        "operationId": "asyncVideoGeneration_submitTextToVideo",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TextToVideoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2JobCreatedResponse"
+                }
+              }
+            },
+            "description": "Job submitted successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request is invalid or malformed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Authentication failed"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Insufficient credits"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body exceeds 32 MB"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Content rejected by safety filters"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Concurrency or queue limit exceeded"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "An unexpected error occurred"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Service temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Generate video from text",
+        "tags": [
+          "asyncVideoGeneration"
+        ]
+      }
+    },
+    "/v2/video-to-video-hdr": {
+      "post": {
+        "description": "Convert an SDR video into HDR. On completion, the result contains `exr_frames_url` — a ZIP of per-frame EXR images suitable for color grading or HDR rendering pipelines. The frames keep the input video's resolution.\n\nResponds immediately with the job `id` and `created_at` timestamp. Poll `GET /v2/video-to-video-hdr/{id}` until the status is `completed`.\n\nBilled per second of input video, by input resolution tier. See [Pricing](/pricing).\n",
+        "operationId": "asyncVideoGeneration_submitVideoToVideoHdr",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VideoToVideoHdrRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2JobCreatedResponse"
+                }
+              }
+            },
+            "description": "Job submitted successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request is invalid or malformed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Authentication failed"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Insufficient credits"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body exceeds 32 MB"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Content rejected by safety filters"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Concurrency or queue limit exceeded"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "An unexpected error occurred"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Service temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Upscale video to HDR",
+        "tags": [
+          "asyncVideoGeneration"
+        ]
+      }
+    },
+    "/v2/video-to-video-reframe": {
+      "post": {
+        "description": "Reframe a video to a new resolution. The model fills in the missing areas with generated content that matches the original. On completion, the result contains `video_url`, the source video reframed to the requested resolution.\n\nResponds immediately with the job `id` and `created_at` timestamp. Poll `GET /v2/video-to-video-reframe/{id}` until the status is `completed`.\n\nBilled per second of input video, by output resolution. See [Pricing](/pricing).\n",
+        "operationId": "asyncVideoGeneration_submitVideoToVideoReframe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VideoToVideoReframeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2JobCreatedResponse"
+                }
+              }
+            },
+            "description": "Job submitted successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request is invalid or malformed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Authentication failed"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Insufficient credits"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body exceeds 32 MB"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Content rejected by safety filters"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Concurrency or queue limit exceeded"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "An unexpected error occurred"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Service temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Reframe a video to a new resolution",
+        "tags": [
+          "asyncVideoGeneration"
+        ]
+      }
+    },
+    "/v2/{endpoint}/{id}": {
+      "get": {
+        "description": "Poll the status of an async generation job. Status transitions through `pending` → `processing` → `completed` or `failed`. When completed, the `result` object contains output URLs (see each endpoint's documentation for the available keys).\n\nWe recommend waiting at least 5 seconds between polls. Choose a slightly different delay each time, for example between 5 and 6 seconds, to spread out requests when polling multiple jobs. Stop when the status reaches `completed` or `failed`.\n\nJob status is available for up to 24 hours after the job reaches a terminal state, and can be removed sooner. Once a job is removed, this endpoint returns `404`. Output URLs expire independently of job status; download or re-host outputs as soon as the job completes. See [retention](/async-jobs#retention).\n",
+        "operationId": "asyncVideoGeneration_getJobStatus",
+        "parameters": [
+          {
+            "description": "Job ID returned from the submit endpoint.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The endpoint type used when submitting the job (e.g., `text-to-video`, `image-to-video`, `audio-to-video`, `retake`, `extend`, `video-to-video-hdr`, `video-to-video-reframe`).",
+            "in": "path",
+            "name": "endpoint",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/V2EndpointIdGetParametersEndpoint"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2JobStatusResponse"
+                }
+              }
+            },
+            "description": "Current job status"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Authentication failed"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "An unexpected error occurred"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get job status",
+        "tags": [
+          "asyncVideoGeneration"
+        ]
+      }
+    }
+  },
+  "servers": [
+    {
+      "description": "Production server",
+      "url": "https://api.ltx.io"
+    }
+  ],
+  "tags": [
+    {
+      "name": "asyncVideoGeneration"
+    },
+    {
+      "name": "videoGeneration"
+    },
+    {
+      "name": "upload"
+    }
+  ]
+}

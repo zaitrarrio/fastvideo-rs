@@ -1,0 +1,31 @@
+# Vendored FastVideo (hao-ai-lab/FastVideo) OpenAI-compatible server sources, verbatim at a
+# pinned commit, plus a JSON Schema DERIVED from them. Prose: docs/serve/research-minimax-fastvideo.md §2
+# (written against the older pin e90be598, see the notes). Maintained by `bash scripts/serve/specs-drift.sh --update`.
+
+[[source]]
+file = "protocol.py"
+status = "ok"
+url = "https://raw.githubusercontent.com/hao-ai-lab/FastVideo/8db2d71ef217e84bec7dbb6e4ab65c92b144df4f/fastvideo/entrypoints/openai/protocol.py"
+drift_url = "https://raw.githubusercontent.com/hao-ai-lab/FastVideo/main/fastvideo/entrypoints/openai/protocol.py"
+normalize = "verbatim"
+fetched_at = "2026-10-24T00:21:36Z"
+sha256 = "efe01d6ce26a119f7193a50f9d7b26945c0e888a4ca5ba183644a30a12c96d58"
+note = "fastvideo/entrypoints/openai/protocol.py at main commit 8db2d71e (resolved with `git ls-remote` on 2026-10-24), byte for byte. Against the research pin e90be598 (scripts/gpu/upstream/setup.sh FV_REV) it adds `VideoGenerationRequest.audio_start_in_s` / `audio_end_in_s` and `audio/wav` to `VideoResponse.media_type`. Reference source: never executed."
+
+[[source]]
+file = "api_server.py"
+status = "ok"
+url = "https://raw.githubusercontent.com/hao-ai-lab/FastVideo/8db2d71ef217e84bec7dbb6e4ab65c92b144df4f/fastvideo/entrypoints/openai/api_server.py"
+drift_url = "https://raw.githubusercontent.com/hao-ai-lab/FastVideo/main/fastvideo/entrypoints/openai/api_server.py"
+normalize = "verbatim"
+fetched_at = "2026-10-24T00:21:36Z"
+sha256 = "a79cbe18d013b87b0011d25c7ba71f94f0461b730c156c83e343843687c2c5e8"
+note = "fastvideo/entrypoints/openai/api_server.py at main commit 8db2d71e, byte for byte (route mounting, error handlers: validation errors answer 400). Reference source: never executed."
+
+[[source]]
+file = "videos.schema.json"
+status = "derived"
+normalize = "json"
+fetched_at = "2026-10-24T00:22:49Z"
+sha256 = "945bdde8cc48995553f43f2b8dab182cbf8eb521c9c8cc119bce3f876246109b"
+note = "DERIVED by hand from the pydantic fields of `VideoGenerationRequest` in protocol.py above (name, type, default, bounds, required, extra=forbid). Not fetched; when protocol.py drifts, re-derive it and bump its `$comment`."

@@ -1,0 +1,11 @@
+# Vendored LTX API (api.ltx.io) specification. Prose: docs/serve/research-ltx-api.md (tag OAS).
+# Maintained by `bash scripts/serve/specs-drift.sh --update`; see docs/serve/specs/README.md.
+
+[[source]]
+file = "openapi.json"
+status = "ok"
+url = "https://docs.ltx.io/openapi.json"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:37Z"
+sha256 = "4451a319c19a1f38514b445635feb68b458c84efdb8014ccffd1607aa995a9cf"
+note = "OpenAPI 3.1.0 of api.ltx.io as published by docs.ltx.io; stored pretty-printed with sorted keys, otherwise complete."

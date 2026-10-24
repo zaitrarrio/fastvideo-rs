@@ -1,0 +1,216 @@
+# Vendored fal.ai contracts. Prose: docs/serve/research-fal.md (tags OA-*, ASYNC-DIR, API-DIR) and
+# docs/serve/fal-parity.md §0-2. One queue OpenAPI per endpoint this server mirrors
+# (crates/fastvideo-fal/src/schema.rs and schema/{ltx,a2v,edit,ingredient,wan}.rs) plus the
+# director's AsyncAPI. Maintained by `bash scripts/serve/specs-drift.sh --update`.
+
+[[source]]
+file = "minimax/h3-max/text-to-video.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=minimax/h3-max/text-to-video"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:20Z"
+sha256 = "bce10e60a305109a591e1f10beba9adddbc11586d8e6bd30321009c3c250d0a2"
+note = "fal queue OpenAPI for endpoint minimax/h3-max/text-to-video; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "minimax/h3-max/image-to-video.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=minimax/h3-max/image-to-video"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:21Z"
+sha256 = "cd0613988e3f11f42ff03d59b7453f39115b0d915deab7662bf4bdfe38bb7309"
+note = "fal queue OpenAPI for endpoint minimax/h3-max/image-to-video; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "minimax/h3-max/reference-to-video.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=minimax/h3-max/reference-to-video"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:22Z"
+sha256 = "28d9d3d95f04bdc9eee46a959fa2f1baab9b05b7c72db9fd2ac8d82c524192c0"
+note = "fal queue OpenAPI for endpoint minimax/h3-max/reference-to-video; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "minimax/h3-max-turbo/text-to-video.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=minimax/h3-max-turbo/text-to-video"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:23Z"
+sha256 = "aa297979209a98cead64c1f9985dc608f9b1e89bde76f87a8e090c8ac2569734"
+note = "fal queue OpenAPI for endpoint minimax/h3-max-turbo/text-to-video; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "minimax/h3-max-turbo/image-to-video.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=minimax/h3-max-turbo/image-to-video"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:23Z"
+sha256 = "00b4b0b11b4106f1e231f77c078d75d5101ea5832337a06f1529458f41a16b24"
+note = "fal queue OpenAPI for endpoint minimax/h3-max-turbo/image-to-video; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "minimax/h3/text-to-video.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=minimax/h3/text-to-video"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:24Z"
+sha256 = "a795830232ab007faa9911b57db9e6f5a1b19bb7bc160d043645e389463d4e25"
+note = "fal queue OpenAPI for endpoint minimax/h3/text-to-video; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "minimax/h3/image-to-video.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=minimax/h3/image-to-video"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:25Z"
+sha256 = "7dc867df807d63021b887f6a4db68910aade8fb40d70e257fbaf27471da501b1"
+note = "fal queue OpenAPI for endpoint minimax/h3/image-to-video; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "minimax/h3/reference-to-video.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=minimax/h3/reference-to-video"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:26Z"
+sha256 = "4947d280458cded5c204816429e29f28045cd17ce9a4163b006c3e443030773b"
+note = "fal queue OpenAPI for endpoint minimax/h3/reference-to-video; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "lightricks/ltx-2.5/text-to-video/fast.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=lightricks/ltx-2.5/text-to-video/fast"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:27Z"
+sha256 = "620a3085bf4fa93620e222614309150fe2925e6d64bfd74be1cb57101cabaa10"
+note = "fal queue OpenAPI for endpoint lightricks/ltx-2.5/text-to-video/fast; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "lightricks/ltx-2.5/text-to-video/pro.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=lightricks/ltx-2.5/text-to-video/pro"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:27Z"
+sha256 = "a44337f5ee74c9b105dfd2297b8d05b33ea6ecee748271306e6e4e73991ce4fe"
+note = "fal queue OpenAPI for endpoint lightricks/ltx-2.5/text-to-video/pro; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "lightricks/ltx-2.5/image-to-video/fast.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=lightricks/ltx-2.5/image-to-video/fast"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:28Z"
+sha256 = "81a87bd579f1378d6944934b9e9f34962310e9ac7bdaa523288f230f302fd778"
+note = "fal queue OpenAPI for endpoint lightricks/ltx-2.5/image-to-video/fast; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "lightricks/ltx-2.5/image-to-video/pro.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=lightricks/ltx-2.5/image-to-video/pro"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:28Z"
+sha256 = "7aefdf4d2af06a6cd66ff94ad1ae9d0e1ae06fab31dc7b22f9a521cda675eccd"
+note = "fal queue OpenAPI for endpoint lightricks/ltx-2.5/image-to-video/pro; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "lightricks/ltx-2.5/audio-to-video/fast.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=lightricks/ltx-2.5/audio-to-video/fast"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:29Z"
+sha256 = "2dbafaddbe7482f57818d3e3cd20bd00e3c781af56e787f3af80968eb358ea5a"
+note = "fal queue OpenAPI for endpoint lightricks/ltx-2.5/audio-to-video/fast; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "lightricks/ltx-2.5/audio-to-video/pro.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=lightricks/ltx-2.5/audio-to-video/pro"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:30Z"
+sha256 = "de7c8c7ccef3fbfac60574283f315f1db9b7030b02d3084f7a2aed3f505d40f5"
+note = "fal queue OpenAPI for endpoint lightricks/ltx-2.5/audio-to-video/pro; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "fal-ai/ltx-2.3/extend-video.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=fal-ai/ltx-2.3/extend-video"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:30Z"
+sha256 = "894a512615398f5307fe980b5cdd5429fd811311eec68823418de0b9ce050616"
+note = "fal queue OpenAPI for endpoint fal-ai/ltx-2.3/extend-video; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "fal-ai/ltx-2.3/retake-video.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=fal-ai/ltx-2.3/retake-video"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:31Z"
+sha256 = "d593c67a701f59151376c3aa2179daf4bfc835c2a91131595cf5b3d1e16a12be"
+note = "fal queue OpenAPI for endpoint fal-ai/ltx-2.3/retake-video; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "fal-ai/ltx-2.3-quality/ingredient.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=fal-ai/ltx-2.3-quality/ingredient"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:31Z"
+sha256 = "cf14ffc295117d86886e74585988a8bed575bee99aef736d34dddef296f385d5"
+note = "fal queue OpenAPI for endpoint fal-ai/ltx-2.3-quality/ingredient; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "fal-ai/ltx-2.3-22b/text-to-video.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=fal-ai/ltx-2.3-22b/text-to-video"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:32Z"
+sha256 = "fed3ad0756faa226dff0afe97128c2d3b0038c86c3912b4b686b884a6be3a5fd"
+note = "fal queue OpenAPI for endpoint fal-ai/ltx-2.3-22b/text-to-video; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "fal-ai/wan/v2.2-5b/text-to-video.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=fal-ai/wan/v2.2-5b/text-to-video"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:32Z"
+sha256 = "3dad2c45f09e92e7cacc467aa5ad8f075c09a4be6134fd363b8610aae3b2c69f"
+note = "fal queue OpenAPI for endpoint fal-ai/wan/v2.2-5b/text-to-video; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "fal-ai/wan/v2.2-5b/image-to-video.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=fal-ai/wan/v2.2-5b/image-to-video"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:33Z"
+sha256 = "0328278cacf39e255117e1ca2fe822fa1784eef12d49136d3c6e5667021f55f5"
+note = "fal queue OpenAPI for endpoint fal-ai/wan/v2.2-5b/image-to-video; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "fal-ai/wan/v2.2-5b/text-to-video/fast-wan.openapi.json"
+status = "ok"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=fal-ai/wan/v2.2-5b/text-to-video/fast-wan"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:34Z"
+sha256 = "5e22762962ea41d0729c6aa30764242bc4bb95f37dce751a0299f1a01f8be023"
+note = "fal queue OpenAPI for endpoint fal-ai/wan/v2.2-5b/text-to-video/fast-wan; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "fal-ai/minimax-h3-max-director/asyncapi.json"
+status = "ok"
+url = "https://fal.ai/api/apps/fal-ai/minimax-h3-max-director/asyncapi.json"
+normalize = "json"
+fetched_at = "2026-10-24T00:21:35Z"
+sha256 = "9ae796cbb9d295f1b95468f4fd6f2bbebcc438594bae3e3e4179c5c3cb146ffe"
+note = "AsyncAPI 3.1.0 of the director's WebRTC (WMA) control channel; stored pretty-printed with sorted keys, otherwise complete."
+
+[[source]]
+file = "minimax/h3-max/director.openapi.json"
+status = "unavailable"
+url = "https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=minimax/h3-max/director"
+normalize = "json"
+note = "The director has no queue OpenAPI: the URL answers HTTP 404 with the body `null` (research-fal.md §1; re-confirmed 2026-10-24). The contract is the AsyncAPI above plus the WMA session HTTP calls described in research-fal.md §8."
+
+[[source]]
+file = "fal-ai/minimax-h3-max-director/openapi.json"
+status = "unavailable"
+url = "https://fal.ai/api/apps/fal-ai/minimax-h3-max-director/openapi.json"
+normalize = "json"
+note = "The director app's own FastAPI OpenAPI (`/start-session`, `/info`, `/health`) needs a fal API key: HTTP 405 unauthenticated (research-fal.md tag API-DIR; re-confirmed 2026-10-24). Its content is paraphrased in research-fal.md §8 from the model page's /api tab."

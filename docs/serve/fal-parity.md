@@ -1,5 +1,7 @@
 # fal.ai parity matrix: modes and resolutions per model family
 
+Machine-readable source: `docs/serve/specs/fal/` (queue OpenAPI per fal endpoint this server mirrors; see `docs/serve/specs/README.md`).
+
 Status: research note, 2026-09-28. Goal (owner): serve the same modes and
 resolutions that fal.ai offers for each model family we serve (MiniMax H3,
 LTX, Wan). This note lists every relevant fal endpoint, compares it with what
