@@ -1,0 +1,19 @@
+[11:46:52] [b6] matrix start image=414de85108d422e8
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-d2195f54-8040-3d8c-997a-de5a4a349394)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[11:46:55] [b6] baseline baseline: sha-d061c68 layer sha256:088a1dcb4abb6ca49ac3a9af17dc9db1438df513743b04f1177c0eb041748f23 -> /fvscratch/baseline-d061c68/fv-gpucheck (a568234263b97c27)
+[11:46:55] [b6] skip b6-solh3-tree (not in FV_B6_CELLS)
+[11:46:55] [b6] skip b6-solh3-merge (not in FV_B6_CELLS)
+[11:46:55] [b6] skip b6-4stepvsa-merge (not in FV_B6_CELLS)
+[11:46:56] [b6] ▶ b6-h3-streamed-base  env FASTVIDEO_DEVICE_BUDGET_GIB=32 /fvscratch/baseline-d061c68/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --height 480 --width 832 --seconds 5 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --text-encoder auto --no-text-cache --no-mp4 --h3-recipe 4step-vsa --clip-dir /fvscratch/runs/b6/a2ca568-10241146/b6-h3-streamed-base/frames  (wall cap 3600s; 0=none)
+[11:52:28] [b6] ok b6-h3-streamed-base  332s  /fvscratch/runs/b6/a2ca568-10241146/b6-h3-streamed-base/stderr.log:[INFO] h3/timings {"audio_decode_s":2.149096144,"decode_s":47.939251741999996,"denoise_s":6.313706587,"load_s":82.779667464,"peak_mib":9142,"refine_s":0.032661034,"step_s":[1.6305457763671876,1.5835572509765625,1.5487529296875,1.55071484375],"text_cache":"disabled","text_encoder":"streamed","text_s":192.201052979,"total_s":246.624512197,"video_decode_s":45.790155598,"video_encode_s":0.00006642,"video_push_s":0.000021859999999999997,"video_rgb_s":0.04273932499977046,"video_vae_s":1.948717231333256,"video_wait_s":0.156725825,"warm":false,"write_s":0.058898582}
+[11:52:29] [b6] ▶ b6-h3-streamed-pr  env FASTVIDEO_DEVICE_BUDGET_GIB=32 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --height 480 --width 832 --seconds 5 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --text-encoder auto --no-text-cache --no-mp4 --h3-recipe 4step-vsa --clip-dir /fvscratch/runs/b6/a2ca568-10241146/b6-h3-streamed-pr/frames  (wall cap 3600s; 0=none)
+[11:55:07] [b6] ok b6-h3-streamed-pr  158s  /fvscratch/runs/b6/a2ca568-10241146/b6-h3-streamed-pr/stderr.log:[INFO] h3/timings {"audio_decode_s":0.274333129,"decode_s":4.308955464,"denoise_s":6.316951695,"load_s":84.063364363,"peak_mib":9110,"refine_s":0.032621774,"step_s":[1.629394287109375,1.5888544921875,1.5482818603515625,1.5501669921875],"text_cache":"disabled","text_encoder":"streamed","text_s":60.297715745,"total_s":71.094786403,"video_decode_s":4.034622335,"video_encode_s":0.00005905,"video_push_s":0.000042340000000000005,"video_rgb_s":0.03729871600589406,"video_vae_s":1.9520953338444234,"video_wait_s":0.156825005,"warm":false,"write_s":0.056156974}
+[11:55:07] [b6] compare b6-h3-streamed-base--b6-h3-streamed-pr exit=0 "psnr_mean":null 
+[11:55:07] [b6] skip b6-h3-ref2va (not in FV_B6_CELLS)
+[11:55:07] [b6] skip b6-ltx25-ref2v (not in FV_B6_CELLS)
+[11:55:07] [b6] skip b6-ltx25-a2v-guided (not in FV_B6_CELLS)
+[11:55:07] [b6] skip b6-ltx25-offload-cpu (not in FV_B6_CELLS)
+[11:55:07] [b6] compare-clips-b6-h3-streamed-base--b6-h3-streamed-pr.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "failed" "status": "failed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 
+[11:55:07] [b6] matrix done
+matrix_exit=0

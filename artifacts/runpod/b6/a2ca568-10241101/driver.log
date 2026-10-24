@@ -1,0 +1,33 @@
+[11:01:22] create pod gpu="NVIDIA RTX PRO 6000 Blackwell Server Edition" image=ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-a2ca568 volume=bz0ofkfx45 dc=EU-RO-1 cloud=SECURE quoted=$2.49/hr
+[11:01:23] pod 5958a6402sbba3  $2.49/hr  (hard cap 2700s)
+[11:02:29] pod: [11:02:04] [b6] ▶ b6-ltx25-a2v-guided-base  env /fvscratch/baseline-d061c68/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --seed 1024 --two-stage --text streamed --no-text-cache --dit /workspace/weights/ltx25-dev/transformer_full --height 512 --width 768 --num-frames 49 --dense-stage2 --guided --num-inference-steps 8 --audio /opt/fastvideo-rs/scripts/gpu/fixtures/speech-flite-44k.flac --prompt A close-up of a woman with short dark hair talking directly to the camera in a bright living room. --clip /fvscratch/runs/b6/a2ca568-10241101/b6-ltx25-a2v-guided-base/frames  (wall cap 3600s; 0=none)
+[11:11:05] pod: [11:10:55] [b6] ▶ b6-ltx25-a2v-guided-pr  env /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --seed 1024 --two-stage --text streamed --no-text-cache --dit /workspace/weights/ltx25-dev/transformer_full --height 512 --width 768 --num-frames 49 --dense-stage2 --guided --num-inference-steps 8 --audio /opt/fastvideo-rs/scripts/gpu/fixtures/speech-flite-44k.flac --prompt A close-up of a woman with short dark hair talking directly to the camera in a bright living room. --clip /fvscratch/runs/b6/a2ca568-10241101/b6-ltx25-a2v-guided-pr/frames  (wall cap 3600s; 0=none)
+[11:15:57] pod: [11:15:56] [b6] matrix done
+[11:16:42] results → /home/user/wt/b6-loader/artifacts/runpod/b6/a2ca568-10241101
+[11:16:42] destroy pod 5958a6402sbba3
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+weights ok: fasth3-4step-vsa
+weights ok: fasth3-4step-dense
+weights ok: sol-h3
+weights ok: sol-h3-spark
+weights ok: ltx25-two-stage
+exit=1
+[11:01:29] create pod gpu="NVIDIA RTX PRO 6000 Blackwell Server Edition" image=ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-a2ca568 volume=bz0ofkfx45 dc=EU-RO-1 cloud=SECURE quoted=$2.49/hr
+[11:01:31] pod m719tkokuv3lc4  $2.49/hr  (hard cap 2700s)
+[11:02:04] pod: [11:02:02] [b6] ▶ b6-ltx25-offload-cpu-base  env /fvscratch/baseline-d061c68/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --seed 1024 --two-stage --text streamed --no-text-cache --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 121 --offload cpu --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --clip /fvscratch/runs/b6/a2ca568-10241101/b6-ltx25-offload-cpu-base/frames  (wall cap 3600s; 0=none)
+[11:15:57] pod: [11:15:39] [b6] ▶ b6-ltx25-offload-cpu-pr  env /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --seed 1024 --two-stage --text streamed --no-text-cache --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 121 --offload cpu --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --clip /fvscratch/runs/b6/a2ca568-10241101/b6-ltx25-offload-cpu-pr/frames  (wall cap 3600s; 0=none)
+[11:20:59] results → /home/user/wt/b6-loader/artifacts/runpod/b6/a2ca568-10241101
+[11:20:59] destroy pod m719tkokuv3lc4
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+weights ok: fasth3-4step-vsa
+weights ok: fasth3-4step-dense
+weights ok: sol-h3
+weights ok: sol-h3-spark
+weights ok: ltx25-two-stage
+exit=1

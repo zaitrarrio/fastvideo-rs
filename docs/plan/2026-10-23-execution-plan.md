@@ -689,3 +689,24 @@ ran (pod id, $/hr), result, cost.
   workspace lib 1971 passed; fmt, clippy `-D warnings`, the `--features
   cuda` check, `scripts/serve/check.sh` (1177 passed) and
   `scripts/gpu/lint.sh` green.
+
+- 2026-10-24 10:22-12:10Z, coordinator: B6 GPU gate, runtime image
+  `sha-a2ca568` (the PR head) against main `sha-d061c68`, RTX PRO 6000s in
+  EU-RO-1 with `bz0ofkfx45`, every comparison `compare-clips
+  --off-identity` (max abs diff 0):
+  `techniques` (`artifacts/runpod/techniques/a2ca568-10241022/`):
+  fasth3-4step-vsa-768p and h3-480p-fullopt base vs env and prof,
+  ltx25-512p-sol base vs env and prof, env vs cache: all pass
+  (fasth3-8step skipped, not on the EU volume). `b6` family (ADR-0017):
+  b6-solh3-tree (loads `transformer_prequant_sol-h3_mxfp8`, 180
+  pre-quantized linears), b6-solh3-merge (tree off, Sol-H3 LoRA fused at
+  load), b6-h3-streamed (32 GiB budget), b6-ltx25-ref2v (IC-LoRA),
+  b6-ltx25-a2v-guided (49 frames), b6-ltx25-offload-cpu (121 frames): all
+  pass, evidence `artifacts/runpod/b6/a2ca568-{10241101,10241146,10241147,10241148,10241149}/`;
+  b6-4stepvsa-merge and b6-h3-ref2va passed on the first `b6` pod
+  (`compare … exit=0` in its driver log) but that pod reached its cap and
+  deleted itself before the driver fetched their JSON
+  (`artifacts/runpod/b6/a2ca568-10241022/driver.log`), so those two are
+  recorded from the log only. The first `b6` pod ran the eight cells in
+  series at ~7 min per arm (longer than the PR's estimate); the missing
+  cells were rerun one per pod. About 3.7 GPU-hours in all, ~$9.
