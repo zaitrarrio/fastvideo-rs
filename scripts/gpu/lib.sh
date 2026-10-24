@@ -111,7 +111,7 @@ FV_SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null
   -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o ConnectTimeout=15 -o BatchMode=yes)
 
 # CPU-path reference key: a hash of exactly the sources that determine the
-# outputs `fv-gpucheck --device cpu --dump` writes (host math, model graphs,
+# outputs `fv-gpucheck --src/rt/(kernels|device|conv|stats|log) cpu --dump` writes (host math, model graphs,
 # schedulers, weight loading, the seeded test inputs and the dump format).
 # GPU-only files are excluded so kernel work keeps cached references valid;
 # anything that changes CPU results changes the key and forces a re-dump.
@@ -122,7 +122,8 @@ FV_REF_SOURCES=(
   crates/fastvideo-gpucheck/src/rand_weights.rs crates/fastvideo-gpucheck/src/reference.rs
   crates/fastvideo-gpucheck/src/st.rs
 )
-FV_REF_GPU_ONLY='^crates/fastvideo-cudarc/src/wan/(kernels|device|conv|stats|log)\.rs$'
+FV_REF_GPU_ONLY='^crates/fastvideo-cudarc/src/rt/(kernels|device|conv|stats|log)\.rs$'
+
 fv_ref_key() {
   (cd "$FV_ROOT" && git ls-files -z -co --exclude-standard -- "${FV_REF_SOURCES[@]}" \
     | tr '\0' '\n' | grep -Ev "$FV_REF_GPU_ONLY" | LC_ALL=C sort \

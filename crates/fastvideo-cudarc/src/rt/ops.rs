@@ -909,7 +909,7 @@ pub fn vsa_topk_device(
     // vsa_topk2 (radix select, row in shared memory, parallel ordered
     // compaction): the same indices in the same order.
     // FASTVIDEO_VSA_TOPK=v1 keeps the bisection kernel.
-    if n <= 4096 && crate::wan::envflag::string_flag("FASTVIDEO_VSA_TOPK", "v2") != "v1" {
+    if n <= 4096 && crate::rt::envflag::string_flag("FASTVIDEO_VSA_TOPK", "v2") != "v1" {
         let cfg = LaunchConfig {
             grid_dim: (rows as u32, 1, 1),
             block_dim: (THREADS, 1, 1),
@@ -1157,7 +1157,7 @@ pub fn vsa_mma_attn_range_device(
     q_base: usize,
     q_tiles: usize,
 ) -> Result<CudaSlice<f32>> {
-    use crate::wan::stats::phase;
+    use crate::rt::stats::phase;
     let (qt, kt, vt) = phase("vsa_mma_tile", || {
         Ok::<_, TensorError>((
             vsa_tile_qkv_device(q, plan, bh, seq, dim)?,
@@ -1313,8 +1313,8 @@ pub fn vsa_mma_attn_tiled_device(
     };
     // 9.0 / 10.0: the datacenter KV-tile-list kernel (attn_dc.cu, WP-D);
     // `FASTVIDEO_VSA_KERNEL=tma2` (or mma / tma) keeps the mma.sync kernels.
-    if crate::wan::attn_dc::vsa_enabled()
-        && crate::wan::attn_dc::vsa_fine(
+    if crate::rt::attn_dc::vsa_enabled()
+        && crate::rt::attn_dc::vsa_fine(
             qt,
             kt,
             vt,
@@ -1325,7 +1325,7 @@ pub fn vsa_mma_attn_tiled_device(
             scale,
             q_base,
             q_tiles,
-            crate::wan::attn_dc::VsaEpilogue::Sparse(&mut out),
+            crate::rt::attn_dc::VsaEpilogue::Sparse(&mut out),
         )?
     {
         log_vsa_dc_once();
@@ -1351,7 +1351,7 @@ pub fn vsa_mma_attn_tiled_device(
                 opt_in_dynamic_shared(func, shared)?;
                 static LOGGED: std::sync::atomic::AtomicBool =
                     std::sync::atomic::AtomicBool::new(false);
-                crate::wan::log::info_once(
+                crate::rt::log::info_once(
                     &LOGGED,
                     format_args!(
                         "vsa fine kernel: {} (sm{}, 128B swizzle)",
@@ -1373,7 +1373,7 @@ pub fn vsa_mma_attn_tiled_device(
             Err(e) => {
                 static LOGGED: std::sync::atomic::AtomicBool =
                     std::sync::atomic::AtomicBool::new(false);
-                crate::wan::log::info_once(
+                crate::rt::log::info_once(
                     &LOGGED,
                     format_args!("vsa TMA encode failed, using cp.async: {e}"),
                 );
@@ -1396,8 +1396,8 @@ pub fn vsa_mma_attn_tiled_device(
 #[cfg(feature = "cuda")]
 pub(crate) fn log_vsa_dc_once() {
     static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if let Some(k) = crate::wan::attn_dc::vsa() {
-        crate::wan::log::info_once(
+    if let Some(k) = crate::rt::attn_dc::vsa() {
+        crate::rt::log::info_once(
             &LOGGED,
             format_args!(
                 "vsa fine kernel: dc KV-tile-list (sm{}, {}, {})",
@@ -1411,7 +1411,7 @@ pub(crate) fn log_vsa_dc_once() {
 
 #[cfg(feature = "cuda")]
 fn tma_requested(sm_major: i32) -> bool {
-    use crate::wan::envflag::string_flag;
+    use crate::rt::envflag::string_flag;
     if string_flag("FASTVIDEO_VSA_TMA", "1") == "0" {
         return false;
     }
@@ -3661,7 +3661,7 @@ pub fn sol_fwd_core(
             .map_err(err)?;
         }
         SolKernel::Ws => {
-            let env = crate::wan::envflag::string_flag("FASTVIDEO_SOL_SPLITS", "auto");
+            let env = crate::rt::envflag::string_flag("FASTVIDEO_SOL_SPLITS", "auto");
             let splits = match pick.splits {
                 Some(s) => sol_splits_for(nt, bh, 1, &s.to_string()),
                 None => sol_splits_for(nt, bh, sm_count(&dev), &env),
@@ -3950,7 +3950,7 @@ pub fn pisa_attn_device(
     scale: f32,
 ) -> Result<CudaSlice<f32>> {
     let dev = ctx()?;
-    let legacy = crate::wan::envflag::string_flag("FASTVIDEO_PISA_KERNEL", "fused") == "legacy";
+    let legacy = crate::rt::envflag::string_flag("FASTVIDEO_PISA_KERNEL", "fused") == "legacy";
     if !legacy && dim == SOL_HEAD_DIM && dev.sm_major >= 8 && batch * heads <= 65_535 {
         return pisa_fused_device(q, k, v, batch * heads, tokens, dim, sparsity, scale);
     }
@@ -4073,7 +4073,7 @@ pub fn pisa_fused_device(
 /// (zeroth-order remainder only, `pisa_attn_head_zeroth`).
 #[cfg(feature = "cuda")]
 fn pisa_first_order_weight(scale: f32) -> f32 {
-    if crate::wan::envflag::string_flag("FASTVIDEO_PISA_FIRST_ORDER", "1") == "0" {
+    if crate::rt::envflag::string_flag("FASTVIDEO_PISA_FIRST_ORDER", "1") == "0" {
         0.0
     } else {
         scale
@@ -5609,7 +5609,7 @@ pub mod h3v_host {
 #[cfg(test)]
 mod h3v_tests {
     use super::h3v_host;
-    use crate::wan::tensor::CudaTensor;
+    use crate::rt::tensor::CudaTensor;
     use half::bf16;
 
     fn seeded(n: usize, k: f32) -> Vec<f32> {

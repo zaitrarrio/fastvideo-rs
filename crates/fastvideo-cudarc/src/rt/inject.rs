@@ -75,14 +75,14 @@ pub fn load_numel(name: &str, numel: usize) -> Result<Option<Vec<f32>>> {
     let Some(dir) = dir() else { return Ok(None) };
     match read(dir, name)? {
         None => {
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "inject: {} has no {name}; not injected",
                 dir.display()
             ));
             Ok(None)
         }
         Some((shape, v)) if v.len() == numel => {
-            crate::wan::log::info(format_args!("inject: {name} {shape:?} from the reference"));
+            crate::rt::log::info(format_args!("inject: {name} {shape:?} from the reference"));
             Ok(Some(v))
         }
         Some((shape, v)) => Err(err(format!(
@@ -98,9 +98,9 @@ pub fn load(name: &str) -> Result<Option<(Vec<usize>, Vec<f32>)>> {
     let got = read(dir, name)?;
     match &got {
         Some((shape, _)) => {
-            crate::wan::log::info(format_args!("inject: {name} {shape:?} from the reference"))
+            crate::rt::log::info(format_args!("inject: {name} {shape:?} from the reference"))
         }
-        None => crate::wan::log::info(format_args!(
+        None => crate::rt::log::info(format_args!(
             "inject: {} has no {name}; not injected",
             dir.display()
         )),

@@ -546,7 +546,7 @@ mod tests {
             cuda_tensor_shaped(&map, "proj.weight", &[3, 2]).is_err(),
             "shape must be checked"
         );
-        let lin = crate::wan::nn::Linear::load(&map, "proj", 3, 2, true).unwrap();
+        let lin = crate::rt::nn::Linear::load(&map, "proj", 3, 2, true).unwrap();
         let x = CudaTensor::from_vec(vec![1.0, 1.0, 1.0], vec![1, 3]).unwrap();
         let y = lin.forward(&x).unwrap();
         assert_eq!(&*y.host_cow().unwrap(), &[16.0, 19.75]);

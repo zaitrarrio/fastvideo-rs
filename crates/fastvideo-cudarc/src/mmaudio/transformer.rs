@@ -23,10 +23,10 @@ use super::layers::{
     chunk_last, gather_rows, host_values, interleave_to_half, linear, linear_from, mean_seq,
     modulate, msg, pinned, rope_tables, Conv1d, ConvMlp, Mlp,
 };
-use crate::wan::dump;
-use crate::wan::nn::{self, Linear};
-use crate::wan::tensor::{CudaTensor, Result};
-use crate::wan::weights::WeightMap;
+use crate::rt::dump;
+use crate::rt::nn::{self, Linear};
+use crate::rt::tensor::{CudaTensor, Result};
+use crate::rt::weights::WeightMap;
 
 /// `SelfAttention` + the rest of `MMDitSingleBlock`.
 struct SingleBlock {

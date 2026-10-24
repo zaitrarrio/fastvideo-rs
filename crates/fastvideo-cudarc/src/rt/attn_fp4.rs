@@ -31,12 +31,12 @@ pub const P_ENV: &str = "FASTVIDEO_H3_VSA_FP4_P";
 /// / `off`, `None` when unset (the NVFP4 tier's default: on where available).
 pub fn setting() -> Option<bool> {
     fastvideo_models::techniques::settings::var(ENV)
-        .map(|_| crate::wan::envflag::bool_flag(ENV, true))
+        .map(|_| crate::rt::envflag::bool_flag(ENV, true))
 }
 
 /// Single-level P quantization (upstream's `single_level_p_quant=True`).
 pub fn p_single() -> bool {
-    crate::wan::envflag::string_flag(P_ENV, "two-level") == "single"
+    crate::rt::envflag::string_flag(P_ENV, "two-level") == "single"
 }
 
 /// Host E4M3 (OCP FN) value of a byte; scales are never negative.
@@ -134,10 +134,10 @@ mod imp {
     use cudarc::driver::{CudaFunction, CudaSlice, LaunchConfig};
 
     use super::HEAD_DIM;
-    use crate::wan::device::{self, DeviceContext};
-    use crate::wan::kernels::launch;
-    use crate::wan::ops::VsaPlanDev;
-    use crate::wan::tensor::{Result, TensorError};
+    use crate::rt::device::{self, DeviceContext};
+    use crate::rt::kernels::launch;
+    use crate::rt::ops::VsaPlanDev;
+    use crate::rt::tensor::{Result, TensorError};
 
     const SRC: &str = include_str!("attn_fp4.cu");
     /// Q (4 KB + 512 B) and three (K, V) stages of 9 KB.
@@ -208,7 +208,7 @@ mod imp {
                     options: vec!["-std=c++17".into()],
                     ..Default::default()
                 };
-                let (m, o) = crate::wan::nvrtc_sass::load(
+                let (m, o) = crate::rt::nvrtc_sass::load(
                     &dev.ctx,
                     SRC,
                     &opts,
@@ -233,8 +233,8 @@ mod imp {
             probe: f("attn_fp4_mma_probe")?,
             _module: module,
         };
-        crate::wan::ops::opt_in_dynamic_shared(&k.vsa, SMEM)?;
-        crate::wan::log::info(format_args!(
+        crate::rt::ops::opt_in_dynamic_shared(&k.vsa, SMEM)?;
+        crate::rt::log::info(format_args!(
             "attn_fp4: kernels loaded ({origin}, {:.1}s)",
             timer.elapsed().as_secs_f64()
         ));
@@ -247,7 +247,7 @@ mod imp {
         match supported().then(kernels) {
             Some(Ok(_)) => true,
             Some(Err(e)) => {
-                crate::wan::log::info_once(&ONCE, format_args!("attn_fp4: unavailable: {e}"));
+                crate::rt::log::info_once(&ONCE, format_args!("attn_fp4: unavailable: {e}"));
                 false
             }
             None => false,
@@ -335,7 +335,7 @@ mod imp {
 
     /// The fine stage on quantized tiles: f32 `[bh, padded, 128]` in
     /// tile-slot order for query tiles `[q_base, q_base + q_tiles)`, zero
-    /// elsewhere (the contract of [`crate::wan::ops::vsa_mma_attn_range_device`]).
+    /// elsewhere (the contract of [`crate::rt::ops::vsa_mma_attn_range_device`]).
     #[allow(clippy::too_many_arguments)]
     pub fn fine(
         tiles: &Fp4Tiles,
@@ -360,7 +360,7 @@ mod imp {
         let mut out = if q_base == 0 && q_tiles == nb {
             unsafe { dev.stream.alloc::<f32>(bh * padded * HEAD_DIM) }.map_err(err)?
         } else {
-            crate::wan::ops::fill_device(bh * padded * HEAD_DIM, 0.0)?
+            crate::rt::ops::fill_device(bh * padded * HEAD_DIM, 0.0)?
         };
         let cfg = LaunchConfig {
             grid_dim: (q_tiles as u32, bh as u32, 1),
@@ -391,7 +391,7 @@ mod imp {
     ) -> Result<CudaSlice<f32>> {
         static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         let single = super::p_single();
-        crate::wan::log::info_once(
+        crate::rt::log::info_once(
             &ONCE,
             format_args!(
                 "vsa fine kernel: sparse FP4 Q K^T + P V (attn_fp4_vsa), {} tiles, top-k {topk}, P {}",

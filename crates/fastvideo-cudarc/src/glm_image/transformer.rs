@@ -3,9 +3,9 @@
 use fastvideo_models::glm_image::GlmImageTransformerConfig;
 
 use crate::hub_keys::{self, glm_image as gkeys};
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::{PipelineError, Result};
-use crate::wan::tensor::CudaTensor;
-use crate::wan::weights::WeightMap;
 
 fn msg(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())

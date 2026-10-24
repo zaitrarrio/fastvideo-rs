@@ -772,11 +772,11 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
         Cmd::Nvrtc { sm } => {
             // Which SMs this binary carries real SASS for. Empty means it was
             // built without nvcc and will NVRTC-compile on every box.
-            report.set("aot_sms", fastvideo_cudarc::wan::kernels::aot_sms());
+            report.set("aot_sms", fastvideo_cudarc::rt::kernels::aot_sms());
             // Tile-IR NVFP4 GEMM cubins (fv-oxide-aot) embedded beside them.
             report.set(
                 "oxide_cubins",
-                fastvideo_cudarc::wan::kernels::oxide_cubins(),
+                fastvideo_cudarc::rt::kernels::oxide_cubins(),
             );
             let archs = sm
                 .split(',')

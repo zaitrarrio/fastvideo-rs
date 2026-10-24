@@ -28,10 +28,10 @@
 use super::{
     linear_specs, max_layer_linear_elems, norm_from, norm_specs, DecoderConfig, Layer, LayerSource,
 };
-use crate::wan::nn::Linear;
-use crate::wan::stats;
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{fill_bf16, WeightMap};
+use crate::rt::nn::Linear;
+use crate::rt::stats;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{fill_bf16, WeightMap};
 use cudarc::driver::{CudaSlice, CudaStream, PinnedHostSlice};
 use fastvideo_loader::LazyStore;
 use half::bf16;
@@ -45,7 +45,7 @@ fn msg(s: impl Into<String>) -> TensorError {
 
 fn enabled() -> bool {
     std::env::var("FASTVIDEO_LLM_PREFETCH").map_or(true, |v| v != "0")
-        && crate::wan::nn::bf16_linears_active()
+        && crate::rt::nn::bf16_linears_active()
 }
 
 /// One layer, uploaded and complete on the device.
@@ -76,7 +76,7 @@ impl<'a> Stage<'a> {
         if !enabled() {
             return None;
         }
-        let dev = crate::wan::device::global_device()?;
+        let dev = crate::rt::device::global_device()?;
         let elems = max_layer_linear_elems(cfg);
         let made = dev.ctx.new_stream().and_then(|copy| {
             // Every element is written before it is read.
@@ -91,7 +91,7 @@ impl<'a> Stage<'a> {
                 pinned,
             }),
             Err(e) => {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "llm prefetch off: {e} ({} MiB of pinned memory asked for)",
                     (elems * 2) >> 20
                 ));
@@ -246,7 +246,7 @@ pub(super) struct Prefetched<'a> {
 
 impl Prefetched<'_> {
     fn report(&self) {
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "llm prefetch: {} layers, host read+convert {:.2}s, upload wait {:.2}s, compute starved {:.2}s",
             self.next,
             self.fill.as_secs_f64(),

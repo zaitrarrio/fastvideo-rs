@@ -7,7 +7,7 @@ use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::wan::tensor::{Result, TensorError};
+use crate::rt::tensor::{Result, TensorError};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())

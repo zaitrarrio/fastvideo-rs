@@ -2,7 +2,7 @@
 //!
 //! When an `nvcc` is reachable (`NVCC=/path` or on `PATH`) and the `cuda`
 //! feature is on, every SM in `FV_CUBIN_SMS` (default: Turing through
-//! Blackwell) gets a cubin and a PTX compiled from `src/wan/kernels.cu`, and a
+//! Blackwell) gets a cubin and a PTX compiled from `src/rt/kernels.cu`, and a
 //! generated `aot.rs` embeds them. The runtime then loads real SASS for the
 //! device it finds — no NVRTC on the box, no driver JIT, and the target list is
 //! decided here where CI can check it, not at runtime where a missing mapping
@@ -28,18 +28,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const SRC: &str = "src/wan/kernels.cu";
-/// The FP8 attention module (`wan::attn_fp8`): its own cubins, sm_89 and newer.
-const SRC_FP8: &str = "src/wan/attn_fp8.cu";
-/// The SageAttention2-style module (`wan::attn_sage`): same options, sm_89+.
-const SRC_SAGE: &str = "src/wan/attn_sage.cu";
+const SRC: &str = "src/rt/kernels.cu";
+/// The FP8 attention module (`rt::attn_fp8`): its own cubins, sm_89 and newer.
+const SRC_FP8: &str = "src/rt/attn_fp8.cu";
+/// The SageAttention2-style module (`rt::attn_sage`): same options, sm_89+.
+const SRC_SAGE: &str = "src/rt/attn_sage.cu";
 /// The VDN-H3 linear-branch module (`h3::vdn`): IEEE math (no fast math), sm_80+.
 const SRC_VDN: &str = "src/h3/vdn.cu";
 /// Datacenter attention kernels (tcgen05 / wgmma): arch-specific targets only.
-const DC_SRC: &str = "src/wan/attn_dc.cu";
-/// Sparse FP4 VSA attention (`wan::attn_fp4`, block-scaled `mma.sync` FP4):
+const DC_SRC: &str = "src/rt/attn_dc.cu";
+/// Sparse FP4 VSA attention (`rt::attn_fp4`, block-scaled `mma.sync` FP4):
 /// sm_120a only, built when 120 is in FV_CUBIN_SMS.
-const SRC_FP4: &str = "src/wan/attn_fp4.cu";
+const SRC_FP4: &str = "src/rt/attn_fp4.cu";
 /// (SM, nvcc arch) pairs attn_dc.cu is built for, when their SM is in
 /// FV_CUBIN_SMS. sm_103a (B300) rides on 100: it is the same tcgen05 code,
 /// built so a B300 can opt in (`FASTVIDEO_DC_SM103=1`; never run on one).

@@ -439,7 +439,7 @@ pub(crate) fn block_copy_into(
 /// storage of `dst` (row strides and element offsets as in
 /// [`block_copy_into`]), converting to `dst`'s dtype. An in-place write:
 /// the persistent buffers of the static KV cache and of CUDA-graph inputs
-/// (`wan::causal`, `wan::graph`) keep their address. `dst` must live on the
+/// (`wan::causal`, `rt::graph`) keep their address. `dst` must live on the
 /// device; bounds are the caller's.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn copy_rows_into(

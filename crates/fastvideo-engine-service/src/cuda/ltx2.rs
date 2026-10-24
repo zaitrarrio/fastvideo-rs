@@ -214,7 +214,7 @@ impl Ltx2Model {
         obs("ltx2_pipeline");
         let pipe = Ltx2Pipeline::load(&paths, &cfg, &options)
             .map_err(|e| api_err(&format!("ltx2 load {}", recipe.weights.display()), e))?;
-        let _ = fastvideo_cudarc::wan::device::trim_pool();
+        let _ = fastvideo_cudarc::rt::device::trim_pool();
         Ok(Self {
             pipe,
             cfg,
@@ -317,7 +317,7 @@ impl Ltx2Model {
         let req = self.request(job, dir)?;
         // Per-recipe SageAttention2 (sm_120 only; `FASTVIDEO_ATTN_SAGE`
         // overrides): the gated two-stage generation, not the edit routes.
-        let _sage = fastvideo_cudarc::wan::attn_sage::recipe_scope(
+        let _sage = fastvideo_cudarc::rt::attn_sage::recipe_scope(
             self.recipe.sage_attention && req.two_stage && req.edit.is_none(),
         );
         let out = self

@@ -399,13 +399,13 @@ impl QuantMode {
 
     fn for_device(self) -> Self {
         #[cfg(feature = "cuda")]
-        if self == Self::Mxfp8 && crate::wan::stats::device_expected() {
-            if let Some(d) = crate::wan::device::global_device() {
+        if self == Self::Mxfp8 && crate::rt::stats::device_expected() {
+            if let Some(d) = crate::rt::device::global_device() {
                 if d.sm_major < 10 {
                     static SAID: std::sync::atomic::AtomicBool =
                         std::sync::atomic::AtomicBool::new(false);
                     if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                        crate::wan::log::info(format_args!(
+                        crate::rt::log::info(format_args!(
                             "{ENV}=mxfp8 needs sm_100+ (this GPU is sm_{}{}); running W8A8",
                             d.sm_major, d.sm_minor
                         ));
@@ -419,8 +419,8 @@ impl QuantMode {
 
     fn default_for_device() -> Self {
         #[cfg(feature = "cuda")]
-        if crate::wan::stats::device_expected()
-            && crate::wan::device::global_device().is_some_and(|d| d.sm_major >= 10)
+        if crate::rt::stats::device_expected()
+            && crate::rt::device::global_device().is_some_and(|d| d.sm_major >= 10)
         {
             return Self::Mxfp8;
         }
@@ -535,8 +535,8 @@ impl WanQuantPlan {
 
     fn default_mode() -> QuantMode {
         #[cfg(feature = "cuda")]
-        if crate::wan::stats::device_expected()
-            && crate::wan::device::global_device().is_some_and(|d| d.sm_major == 10)
+        if crate::rt::stats::device_expected()
+            && crate::rt::device::global_device().is_some_and(|d| d.sm_major == 10)
         {
             return QuantMode::Mxfp8;
         }
@@ -552,7 +552,7 @@ impl WanQuantPlan {
     pub fn announce(&self) {
         static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if self.mode != QuantMode::Off {
-            crate::wan::log::info_once(
+            crate::rt::log::info_once(
                 &SAID,
                 format_args!(
                     "{WAN_ENV}={}: {} recipe on the attention + FFN linears of all {} blocks",

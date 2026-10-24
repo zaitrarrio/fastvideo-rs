@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
-use super::pipeline::{PipelineError, Result};
+use crate::wan::pipeline::{PipelineError, Result};
 
 fn msg(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())

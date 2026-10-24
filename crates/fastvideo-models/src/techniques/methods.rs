@@ -245,7 +245,7 @@ impl Fp8AttentionOps {
 
 /// SageAttention-style FP8 attention (opt-in, lossy): Q and smoothed K
 /// quantized to E4M3 per 64-row block, `Q K^T` on FP8 tensor cores with f32
-/// accumulation, `P V` in bf16 (`cudarc::wan::attn_fp8`).
+/// accumulation, `P V` in bf16 (`cudarc::rt::attn_fp8`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Fp8Attention {
     pub enabled: Schedule<bool>,

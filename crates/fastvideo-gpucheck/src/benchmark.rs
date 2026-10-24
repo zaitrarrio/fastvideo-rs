@@ -198,7 +198,7 @@ pub fn env_switches() -> Value {
 pub fn gpu_name() -> Option<String> {
     #[cfg(feature = "cuda")]
     {
-        let dev = fastvideo_cudarc::wan::device::global_device()?;
+        let dev = fastvideo_cudarc::rt::device::global_device()?;
         dev.ctx.name().ok()
     }
     #[cfg(not(feature = "cuda"))]
@@ -217,7 +217,7 @@ pub fn common(pipeline: &str, warm: bool) -> Value {
         "warm_steady_state": warm,
         "warmup_requests": u32::from(warm),
         "includes_model_load": false,
-        "activations": if fastvideo_cudarc::wan::tensor::bf16_activations() { "bf16" } else { "f32" },
+        "activations": if fastvideo_cudarc::rt::tensor::bf16_activations() { "bf16" } else { "f32" },
         "gpu": gpu_name(),
         "hardware": gpu_name().map(|g| format!("1x {g}")),
         "env": env_switches(),

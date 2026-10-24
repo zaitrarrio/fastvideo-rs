@@ -16,10 +16,10 @@ use rand_distr::{Distribution, StandardNormal};
 
 use crate::cosmos::text;
 use crate::cosmos::transformer::CosmosTransformer;
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::{frames_to_rgb8, PipelineError, Result};
-use crate::wan::tensor::CudaTensor;
 use crate::wan::vae::AutoencoderKlWan;
-use crate::wan::weights::WeightMap;
 
 fn msg(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())

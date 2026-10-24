@@ -10,8 +10,8 @@
 use fastvideo_cudarc::h3::fused16::{self, AdaRows, NormOut};
 use fastvideo_cudarc::ltx2::attention::DeviceRope;
 use fastvideo_cudarc::ltx2::fuse::{self, Mod, Norm, Residual};
-use fastvideo_cudarc::wan::quant;
-use fastvideo_cudarc::wan::tensor::with_bf16_act;
+use fastvideo_cudarc::rt::quant;
+use fastvideo_cudarc::rt::tensor::with_bf16_act;
 use fastvideo_cudarc::CudaTensor;
 use fastvideo_models::ltx2::SplitRope;
 use serde_json::json;
@@ -97,7 +97,7 @@ pub fn dit_fusion(report: &mut Report, seed: &mut u64) -> StageResult<()> {
 /// The bytes of an NVFP4 operand: codes of the padded rows, every scale, the
 /// tensor amax.
 fn nvfp4_bytes(
-    a: &fastvideo_cudarc::wan::nvfp4_linear::Nvfp4Operand,
+    a: &fastvideo_cudarc::rt::nvfp4_linear::Nvfp4Operand,
 ) -> anyhow::Result<(Vec<u8>, Vec<u8>, f32)> {
     let d = dev()?;
     Ok((
@@ -110,8 +110,8 @@ fn nvfp4_bytes(
 fn check_nvfp4(
     report: &mut Report,
     name: &str,
-    got: &fastvideo_cudarc::wan::nvfp4_linear::Nvfp4Operand,
-    want: &fastvideo_cudarc::wan::nvfp4_linear::Nvfp4Operand,
+    got: &fastvideo_cudarc::rt::nvfp4_linear::Nvfp4Operand,
+    want: &fastvideo_cudarc::rt::nvfp4_linear::Nvfp4Operand,
 ) -> StageResult<()> {
     let (gq, gs, ga) = nvfp4_bytes(got)?;
     let (wq, ws, wa) = nvfp4_bytes(want)?;
@@ -135,7 +135,7 @@ fn check_nvfp4(
 /// FASTVIDEO_H3_GLUE: every glue fusion against the ops it replaces, bit for
 /// bit (bf16 values, NVFP4 codes / scales / amax).
 fn h3_glue_parity(report: &mut Report, seed: &mut u64) -> StageResult<()> {
-    use fastvideo_cudarc::wan::nvfp4_linear::quantize_bf16_operand_with;
+    use fastvideo_cudarc::rt::nvfp4_linear::quantize_bf16_operand_with;
     use fastvideo_models::nvfp4::ScaleRule;
     let glue = |f: &mut dyn FnMut() -> StageResult<()>| {
         fused16::with_fuse(true, || fused16::with_glue(true, f))

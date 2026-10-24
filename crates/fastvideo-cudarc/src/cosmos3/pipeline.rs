@@ -20,10 +20,10 @@ use fastvideo_models::wan::WanVaeConfig;
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
 
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::{frames_to_rgb8, PipelineError, Result, VideoWriter};
-use crate::wan::tensor::CudaTensor;
 use crate::wan::vae::AutoencoderKlWan;
-use crate::wan::weights::WeightMap;
 
 use super::transformer::{Cosmos3Transformer, GenCache, UndCache};
 
@@ -174,7 +174,7 @@ impl Cosmos3Pipeline {
             }
             .into(),
             und_resident: und_resident(),
-            fp8: crate::wan::envflag::bool_flag("FASTVIDEO_FP8", false),
+            fp8: crate::rt::envflag::bool_flag("FASTVIDEO_FP8", false),
             load_s: t.elapsed().as_secs_f64(),
             ..Default::default()
         };
@@ -276,7 +276,7 @@ impl Cosmos3Pipeline {
             }
             let v = v.host_cow()?.into_owned();
             latents = sched.step(&v, &latents).map_err(msg)?;
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "cosmos3 step {}/{} t={tstep}{} {:.2}s",
                 i + 1,
                 ts.len(),
@@ -294,10 +294,10 @@ impl Cosmos3Pipeline {
         // the official canvas ran out of memory on 96 GB (sol-bench phase B).
         drop((cond, uncond, rope_c, rope_u, res_c, res_u));
         dit.park_gen();
-        crate::wan::device::trim_pool().map_err(terr)?;
+        crate::rt::device::trim_pool().map_err(terr)?;
         timing.gen_residency = dit.gen_residency().as_str().into();
-        if let Some((free, _)) = crate::wan::device::free_memory() {
-            crate::wan::log::info(format_args!(
+        if let Some((free, _)) = crate::rt::device::free_memory() {
+            crate::rt::log::info(format_args!(
                 "cosmos3 decode: {:.1} GiB free (gen tower {})",
                 free as f64 / f64::from(1u32 << 30),
                 timing.gen_residency,
@@ -326,7 +326,7 @@ impl Cosmos3Pipeline {
         timing.request_s = request_start.elapsed().as_secs_f64();
         let text = serde_json::to_string_pretty(&timing).map_err(terr)?;
         std::fs::write(out_dir.join("cosmos3_timing.json"), &text).map_err(terr)?;
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "cosmos3 timing {}",
             serde_json::to_string(&timing).map_err(terr)?
         ));

@@ -8,10 +8,10 @@ use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
 
 use super::transformer::Sd35Transformer;
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
 use crate::vae::AutoencoderKl;
 use crate::wan::pipeline::{PipelineError, Result};
-use crate::wan::tensor::CudaTensor;
-use crate::wan::weights::WeightMap;
 
 fn msg(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())

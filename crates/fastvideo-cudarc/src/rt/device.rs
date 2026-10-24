@@ -138,7 +138,7 @@ impl DeviceContext {
     /// A second context on the same device and CUDA context with a new
     /// non-blocking stream of its own, and its own cuBLAS / cuDNN handles on
     /// it: loaded kernels are shared, the convolution plan cache starts
-    /// empty. What `wan::graph` captures on (the default stream cannot be
+    /// empty. What `rt::graph` captures on (the default stream cannot be
     /// captured). Work on it is not ordered with this context's stream:
     /// synchronize at the boundaries.
     pub fn on_new_stream(&self) -> Result<Self> {
@@ -241,7 +241,7 @@ pub fn set_thread_device(ctx: Option<Arc<DeviceContext>>) {
 }
 
 /// [`set_thread_device`] returning the override it replaced, so a scope can
-/// put it back (`wan::graph` runs a block on its own stream this way).
+/// put it back (`rt::graph` runs a block on its own stream this way).
 #[cfg(feature = "cuda")]
 pub fn replace_thread_device(ctx: Option<Arc<DeviceContext>>) -> Option<Arc<DeviceContext>> {
     THREAD_DEVICE.with(|d| std::mem::replace(&mut *d.borrow_mut(), ctx))

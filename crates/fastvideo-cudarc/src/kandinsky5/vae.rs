@@ -3,10 +3,10 @@
 //! Diffusers `AutoencoderKLHunyuanVideo`: GroupNorm ResNets, nearest causal
 //! upsample, mid-block causal attention. Spec: docs/ports/kandinsky5.md.
 
-use crate::wan::nn;
-use crate::wan::ops::PadMode;
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{self, WeightMap};
+use crate::rt::nn;
+use crate::rt::ops::PadMode;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{self, WeightMap};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())

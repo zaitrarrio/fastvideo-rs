@@ -58,10 +58,10 @@ mod imp {
     use cudarc::driver::{CudaFunction, CudaSlice, LaunchConfig};
 
     use super::HEAD_DIM;
-    use crate::wan::device::{self, DeviceContext};
-    use crate::wan::kernels::launch;
-    use crate::wan::ops::VsaPlanDev;
-    use crate::wan::tensor::{CudaTensor, Result, TensorError};
+    use crate::rt::device::{self, DeviceContext};
+    use crate::rt::kernels::launch;
+    use crate::rt::ops::VsaPlanDev;
+    use crate::rt::tensor::{CudaTensor, Result, TensorError};
 
     const SRC: &str = include_str!("attn_fp8.cu");
     /// Two (K8, V) stages: 2 x (8 KB + 16 KB).
@@ -118,7 +118,7 @@ mod imp {
         dev: &DeviceContext,
     ) -> Result<Option<(Arc<cudarc::driver::CudaModule>, String)>> {
         let want = (dev.sm_major * 10 + dev.sm_minor) as u32;
-        if crate::wan::envflag::string_flag("FASTVIDEO_KERNELS", "auto") == "nvrtc" {
+        if crate::rt::envflag::string_flag("FASTVIDEO_KERNELS", "auto") == "nvrtc" {
             return Ok(None);
         }
         if let Some((_, cubin, _)) = aot::AOT_ATTN_FP8.iter().find(|(sm, _, _)| *sm == want) {
@@ -158,7 +158,7 @@ mod imp {
             options: vec!["-std=c++17".into()],
             ..Default::default()
         };
-        let (module, origin) = crate::wan::nvrtc_sass::load_for_device(
+        let (module, origin) = crate::rt::nvrtc_sass::load_for_device(
             &dev.ctx,
             dev.sm_major,
             dev.sm_minor,
@@ -187,9 +187,9 @@ mod imp {
             vsa: f("attn_fp8_vsa")?,
             _module: module,
         };
-        crate::wan::ops::opt_in_dynamic_shared(&k.fwd_d128, SMEM)?;
-        crate::wan::ops::opt_in_dynamic_shared(&k.vsa, SMEM)?;
-        crate::wan::log::info(format_args!(
+        crate::rt::ops::opt_in_dynamic_shared(&k.fwd_d128, SMEM)?;
+        crate::rt::ops::opt_in_dynamic_shared(&k.vsa, SMEM)?;
+        crate::rt::log::info(format_args!(
             "attn_fp8: kernels loaded ({origin}, {:.1}s, sm{}{})",
             timer.elapsed().as_secs_f64(),
             dev.sm_major,
@@ -322,7 +322,7 @@ mod imp {
         let scale = scale.unwrap_or(1.0 / (d as f32).sqrt());
         let sl2 = scale * std::f32::consts::LOG2_E;
         static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        crate::wan::log::info_once(
+        crate::rt::log::info_once(
             &ONCE,
             format_args!("sdpa: FP8 Q K^T (attn_fp8) B={b} H={h} Sq={sq} Sk={sk} D={d}"),
         );
@@ -356,7 +356,7 @@ mod imp {
     }
 
     /// The VSA fine stage with FP8 `Q K^T`: the contract of
-    /// [`crate::wan::ops::vsa_mma_attn_range_device`] (f32 `[bh, seq, 128]`
+    /// [`crate::rt::ops::vsa_mma_attn_range_device`] (f32 `[bh, seq, 128]`
     /// q/k/v in packed order, `selected` key tiles per query tile, f32 output
     /// `[bh, padded, 128]` in tile-slot order, query tiles
     /// `[q_base, q_base + q_tiles)`; the rest zero).
@@ -415,14 +415,14 @@ mod imp {
         };
         let (q8, qs) = quant(q, false, 16)?;
         let (k8, ks) = quant(k, true, 64)?;
-        let vt = crate::wan::ops::vsa_tile_qkv_device(v, plan, bh, seq, dim)?;
+        let vt = crate::rt::ops::vsa_tile_qkv_device(v, plan, bh, seq, dim)?;
         let mut out = if q_base == 0 && q_tiles == nb {
             alloc_f32(bh * padded * dim)?
         } else {
-            crate::wan::ops::fill_device(bh * padded * dim, 0.0)?
+            crate::rt::ops::fill_device(bh * padded * dim, 0.0)?
         };
         static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        crate::wan::log::info_once(
+        crate::rt::log::info_once(
             &ONCE,
             format_args!("vsa fine kernel: FP8 Q K^T (attn_fp8_vsa), {nb} tiles, top-k {topk}"),
         );

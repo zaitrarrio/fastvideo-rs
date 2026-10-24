@@ -559,7 +559,7 @@ mod ring {
     //! The device side: slots, the copy stream and the events between them.
 
     use super::{msg, HostBlock, HostPart, OffloadStats};
-    use crate::wan::tensor::Result;
+    use crate::rt::tensor::Result;
     use cudarc::driver::sys::CUevent_flags;
     use cudarc::driver::{CudaEvent, CudaSlice, CudaStream};
     use half::bf16;
@@ -607,7 +607,7 @@ mod ring {
     impl DeviceRing {
         pub(super) fn new(slots: usize, ledger: &'static str) -> Result<Self> {
             let dev =
-                crate::wan::device::global_device().ok_or_else(|| msg("offload: no device"))?;
+                crate::rt::device::global_device().ok_or_else(|| msg("offload: no device"))?;
             let copy = dev
                 .ctx
                 .new_stream()
@@ -682,13 +682,13 @@ mod ring {
             if !fits {
                 let freed: u64 = slot.parts.iter().map(|p| p.len() as u64 * 2).sum();
                 slot.parts.clear();
-                crate::wan::ledger::add(self.ledger, -(freed as i64));
+                crate::rt::ledger::add(self.ledger, -(freed as i64));
                 self.booked -= freed;
                 for (_, len) in &lens {
                     // Written by the copy below before any kernel reads it.
                     let buf = unsafe { self.copy.alloc::<bf16>(*len) }.map_err(err)?;
                     slot.parts.push(Arc::new(buf));
-                    crate::wan::ledger::add(self.ledger, *len as i64 * 2);
+                    crate::rt::ledger::add(self.ledger, *len as i64 * 2);
                     self.booked += *len as u64 * 2;
                 }
             }
@@ -702,7 +702,7 @@ mod ring {
                 self.copy
                     .memcpy_htod(&pinned[*offset..*offset + *len], dst)
                     .map_err(err)?;
-                crate::wan::stats::record_h2d(*len / 2);
+                crate::rt::stats::record_h2d(*len / 2);
                 bytes += *len as u64 * 2;
             }
             let end = timed(&self.copy)?;
@@ -802,7 +802,7 @@ mod ring {
             // Slot buffers are freed on the copy stream; nothing may still read them.
             let _ = self.compute.synchronize();
             let _ = self.copy.synchronize();
-            crate::wan::ledger::add(self.ledger, -(self.booked as i64));
+            crate::rt::ledger::add(self.ledger, -(self.booked as i64));
         }
     }
 }
@@ -897,7 +897,7 @@ impl MemoryLog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wan::tensor::CudaTensor;
+    use crate::rt::tensor::CudaTensor;
 
     #[derive(Clone)]
     struct Toy {

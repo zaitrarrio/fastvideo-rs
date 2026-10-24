@@ -48,8 +48,8 @@ use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
+use crate::rt::writer::{PngMode, VideoWriter, WriterOptions};
 use crate::wan::pipeline::{PipelineError, Result};
-use crate::wan::writer::{PngMode, VideoWriter, WriterOptions};
 
 /// One decoded chunk: `len()` packed RGB8 frames of `width x height`.
 #[derive(Debug, Clone)]

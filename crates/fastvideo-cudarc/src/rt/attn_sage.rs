@@ -43,7 +43,7 @@ pub fn forced() -> Option<u8> {
             "0" | "off" => 0,
             "2" | "on" => 2,
             other => {
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "FASTVIDEO_ATTN_SAGE={other}: only 2 (INT8 QK + FP8 PV) is implemented; \
                      3 (NVFP4) failed the accuracy tolerance. Sage attention is off."
                 ));
@@ -108,7 +108,7 @@ pub fn recipe_scope(on: bool) -> RecipeScope {
 /// Smallest `Sq` and `Sk` routed to the kernel.
 pub fn min_seq() -> usize {
     static MIN: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *MIN.get_or_init(|| crate::wan::envflag::usize_flag("FASTVIDEO_ATTN_SAGE_MIN_SEQ", 6144))
+    *MIN.get_or_init(|| crate::rt::envflag::usize_flag("FASTVIDEO_ATTN_SAGE_MIN_SEQ", 6144))
 }
 
 #[cfg(feature = "cuda")]
@@ -141,9 +141,9 @@ mod imp {
     use cudarc::driver::{CudaFunction, CudaSlice, LaunchConfig};
 
     use super::HEAD_DIM;
-    use crate::wan::device::{self, DeviceContext};
-    use crate::wan::kernels::launch;
-    use crate::wan::tensor::{CudaTensor, Result, TensorError};
+    use crate::rt::device::{self, DeviceContext};
+    use crate::rt::kernels::launch;
+    use crate::rt::tensor::{CudaTensor, Result, TensorError};
 
     const SRC: &str = include_str!("attn_sage.cu");
     /// Two (K8, V8^T) stages: 2 x (8 KB + 8 KB); Q (16 KB) is staged in one.
@@ -208,7 +208,7 @@ mod imp {
         dev: &DeviceContext,
     ) -> Result<Option<(Arc<cudarc::driver::CudaModule>, String)>> {
         let want = (dev.sm_major * 10 + dev.sm_minor) as u32;
-        if crate::wan::envflag::string_flag("FASTVIDEO_KERNELS", "auto") == "nvrtc" {
+        if crate::rt::envflag::string_flag("FASTVIDEO_KERNELS", "auto") == "nvrtc" {
             return Ok(None);
         }
         if let Some((_, cubin, _)) = aot::AOT_ATTN_SAGE.iter().find(|(sm, _, _)| *sm == want) {
@@ -250,7 +250,7 @@ mod imp {
                 options: vec!["-std=c++17".into()],
                 ..Default::default()
             };
-            let (module, origin) = crate::wan::nvrtc_sass::load_for_device(
+            let (module, origin) = crate::rt::nvrtc_sass::load_for_device(
                 &dev.ctx,
                 dev.sm_major,
                 dev.sm_minor,
@@ -271,8 +271,8 @@ mod imp {
             fwd_d128: f("attn_sage_fwd_d128")?,
             _module: module,
         };
-        crate::wan::ops::opt_in_dynamic_shared(&k.fwd_d128, SMEM)?;
-        crate::wan::log::info(format_args!(
+        crate::rt::ops::opt_in_dynamic_shared(&k.fwd_d128, SMEM)?;
+        crate::rt::log::info(format_args!(
             "attn_sage: kernels loaded ({origin}, {:.1}s, sm{}{})",
             timer.elapsed().as_secs_f64(),
             dev.sm_major,
@@ -413,7 +413,7 @@ mod imp {
         let scale = scale.unwrap_or(1.0 / (d as f32).sqrt());
         let sl2 = scale * std::f32::consts::LOG2_E;
         static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        crate::wan::log::info_once(
+        crate::rt::log::info_once(
             &ONCE,
             format_args!("sdpa: SageAttention2 INT8 QK / FP8 PV (attn_sage) B={b} H={h} Sq={sq} Sk={sk} D={d}"),
         );

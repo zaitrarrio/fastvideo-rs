@@ -169,7 +169,7 @@ fn gen(
             "cold_generation",
             timings(&cold, timer.elapsed().as_secs_f64()),
         );
-        fastvideo_cudarc::wan::stats::phase_reset();
+        fastvideo_cudarc::rt::stats::phase_reset();
     }
 
     let timer = std::time::Instant::now();

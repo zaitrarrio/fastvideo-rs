@@ -1634,7 +1634,7 @@ mod tests {
             let map = WeightMap::open_files(std::slice::from_ref(&file)).expect("open");
             let tae = TaeHv::load_arch(&map, arch).expect("load real weights");
             let ws = |k: &str, s: &[usize]| -> Vec<f32> {
-                crate::wan::weights::cuda_tensor_shaped(&map, k, s)
+                crate::rt::weights::cuda_tensor_shaped(&map, k, s)
                     .unwrap()
                     .host_cow()
                     .unwrap()

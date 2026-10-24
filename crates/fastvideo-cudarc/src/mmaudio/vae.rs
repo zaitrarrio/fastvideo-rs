@@ -14,8 +14,8 @@
 use fastvideo_models::mmaudio::{MmAudioVaeConfig, DATA_MEAN_128D, DATA_STD_128D};
 
 use super::layers::{host_values, msg, pinned, Conv1d};
-use crate::wan::tensor::{CudaTensor, Result};
-use crate::wan::weights::WeightMap;
+use crate::rt::tensor::{CudaTensor, Result};
+use crate::rt::weights::WeightMap;
 
 const MP_SILU: f32 = 1.0 / 0.596;
 
@@ -130,7 +130,7 @@ impl AttnBlock {
             y.narrow(1, j, 1) // [B, 1, L, C]
         };
         let (q, k, v) = (part(0)?, part(1)?, part(2)?);
-        let h = crate::wan::nn::scaled_dot_product_attention(&q, &k, &v, None)?; // [B, 1, L, C]
+        let h = crate::rt::nn::scaled_dot_product_attention(&q, &k, &v, None)?; // [B, 1, L, C]
         let h = h.reshape(vec![b, l, c])?.transpose(1, 2)?;
         mp_sum(x, &self.proj.forward(&h)?, 0.3)
     }

@@ -4,8 +4,8 @@ use std::path::Path;
 
 use fastvideo_models::cosmos::{tokenize_t5, T5Config};
 
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::WeightMap;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::WeightMap;
 
 use super::t5::T5Encoder;
 

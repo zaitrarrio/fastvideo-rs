@@ -8,7 +8,7 @@
 //! step caches). What the pool holds beyond the booked total is
 //! `activations`: the tensors of the running forward or decode.
 //!
-//! [`crate::wan::offload::MemoryLog::mark`] appends it to each phase's
+//! [`crate::rt::offload::MemoryLog::mark`] appends it to each phase's
 //! `memory` line (numbers illustrative):
 //!
 //! ```text

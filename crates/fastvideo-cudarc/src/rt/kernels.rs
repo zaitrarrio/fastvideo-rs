@@ -1,6 +1,6 @@
 //! NVRTC-compiled CUDA kernels.
 //!
-//! Compiled once into [`crate::wan::device::DeviceContext`] when CUDA is initialized.
+//! Compiled once into [`crate::rt::device::DeviceContext`] when CUDA is initialized.
 //! Every kernel has a plain-Rust twin in [`super::ops`] (the CPU path) and a
 //! parity check in `fv-gpucheck kernels`. Indices are `long` so no tensor this
 //! crate sees can overflow them.

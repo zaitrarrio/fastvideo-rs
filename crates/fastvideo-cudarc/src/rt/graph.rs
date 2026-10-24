@@ -1,6 +1,6 @@
 //! CUDA graphs for the causal SF-Wan block loop (serve design §8, E7).
 //!
-//! A block of the open-ended rollout ([`super::stream`]) is five DiT
+//! A block of the open-ended rollout ([`crate::wan::stream`]) is five DiT
 //! forwards (the Self-Forcing steps and the clean-context pass) of a few
 //! thousand kernel launches each. Captured once and replayed, the host
 //! enqueues one graph launch where it enqueued every kernel.

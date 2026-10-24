@@ -2742,7 +2742,7 @@ mod conv1d_tests {
 #[cfg(test)]
 mod vae_op_tests {
     use super::*;
-    use crate::wan::ops::PadMode;
+    use crate::rt::ops::PadMode;
 
     #[test]
     fn pad_modes_match_torch() {

@@ -3,9 +3,9 @@
 use fastvideo_models::flux::{flux1_dummy_text, flux1_t5_len, ClipTextConfig, T5Config};
 pub use fastvideo_models::flux::{pad_token_ids, tokenize_flux1};
 
-use crate::wan::nn::{self, Linear};
-use crate::wan::tensor::{CudaTensor, Result};
-use crate::wan::weights::{self, WeightMap};
+use crate::rt::nn::{self, Linear};
+use crate::rt::tensor::{CudaTensor, Result};
+use crate::rt::weights::{self, WeightMap};
 
 pub fn dummy_text() -> bool {
     flux1_dummy_text()

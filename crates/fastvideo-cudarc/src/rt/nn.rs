@@ -2139,7 +2139,7 @@ pub fn scaled_dot_product_attention_masked(
     let run = |q: &CudaTensor| -> Result<CudaTensor> {
         if mask.is_none() {
             // FASTVIDEO_VSA now selects the real video sparse attention in
-            // self-attention (see wan::vsa); this window-sparse host prototype
+            // self-attention (see rt::vsa); this window-sparse host prototype
             // keeps its own opt-in so enabling VSA does not route cross
             // attention into a path with no device kernel.
             if sdpa_backend() == "sparse" {
@@ -2360,7 +2360,7 @@ pub(crate) fn host_only_op(op: &'static str, detail: impl std::fmt::Display) -> 
 #[cfg(test)]
 mod fp8_rows_tests {
     use super::*;
-    use crate::wan::weights::WeightMap;
+    use crate::rt::weights::WeightMap;
 
     fn map() -> WeightMap {
         WeightMap::generated(|key, shape| {
@@ -2381,12 +2381,12 @@ mod fp8_rows_tests {
         let (i, o) = (7usize, 5usize);
         let lin = Linear::load_fp8_rows(&map(), "p", i, o, true).unwrap();
         assert!(lin.is_fp8_rows());
-        let w = crate::wan::weights::cuda_tensor_shaped(&map(), "p.weight", &[o, i])
+        let w = crate::rt::weights::cuda_tensor_shaped(&map(), "p.weight", &[o, i])
             .unwrap()
             .host_cow()
             .unwrap()
             .into_owned();
-        let b = crate::wan::weights::cuda_tensor_shaped(&map(), "p.bias", &[o])
+        let b = crate::rt::weights::cuda_tensor_shaped(&map(), "p.bias", &[o])
             .unwrap()
             .host_cow()
             .unwrap()
@@ -2434,18 +2434,18 @@ mod fp8_rows_tests {
         });
         let lin = Linear::load_affine(&map, "p", i, o, true, 8).unwrap();
         assert!(lin.is_affine());
-        let w = crate::wan::weights::cuda_tensor_shaped(&map, "p.weight", &[o, i])
+        let w = crate::rt::weights::cuda_tensor_shaped(&map, "p.weight", &[o, i])
             .unwrap()
             .host_cow()
             .unwrap()
             .into_owned();
-        let b = crate::wan::weights::cuda_tensor_shaped(&map, "p.bias", &[o])
+        let b = crate::rt::weights::cuda_tensor_shaped(&map, "p.bias", &[o])
             .unwrap()
             .host_cow()
             .unwrap()
             .into_owned();
-        let (q, s, bi) = crate::wan::affine::quantize(&w, o, i, 8).unwrap();
-        let wd = crate::wan::affine::dequant(&q, &s, &bi, i, 8).unwrap();
+        let (q, s, bi) = crate::rt::affine::quantize(&w, o, i, 8).unwrap();
+        let wd = crate::rt::affine::dequant(&q, &s, &bi, i, 8).unwrap();
         let x: Vec<f32> = (0..3 * i).map(|k| (k as f32 * 0.37).sin()).collect();
         let y = lin
             .forward(&CudaTensor::from_vec(x.clone(), vec![3, i]).unwrap())
@@ -2477,7 +2477,7 @@ mod fp8_rows_tests {
             let lin = Linear::load(&map(), "blocks.0.attn1.to_q", i, o, true).unwrap();
             assert!(lin.is_nvfp4());
             assert_eq!(lin.weight.shape, vec![o, i]);
-            let w = crate::wan::weights::cuda_tensor_shaped(
+            let w = crate::rt::weights::cuda_tensor_shaped(
                 &map(),
                 "blocks.0.attn1.to_q.weight",
                 &[o, i],
@@ -2487,7 +2487,7 @@ mod fp8_rows_tests {
             .unwrap()
             .into_owned();
             let b =
-                crate::wan::weights::cuda_tensor_shaped(&map(), "blocks.0.attn1.to_q.bias", &[o])
+                crate::rt::weights::cuda_tensor_shaped(&map(), "blocks.0.attn1.to_q.bias", &[o])
                     .unwrap()
                     .host_cow()
                     .unwrap()
@@ -2594,7 +2594,7 @@ mod lora_runtime_tests {
 #[cfg(test)]
 mod bf16_act_tests {
     use super::*;
-    use crate::wan::tensor::{with_bf16_act, TensorDType};
+    use crate::rt::tensor::{with_bf16_act, TensorDType};
 
     fn psnr_db(actual: &[f32], reference: &[f32]) -> f64 {
         let peak = reference.iter().fold(0.0f32, |a, &v| a.max(v.abs()));
@@ -2711,7 +2711,7 @@ mod bf16_act_tests {
         let ltx = run_family("ltx25", 16, 2, 6);
         let wan = run_family("wan", 16, 2, 5);
         assert!(
-            crate::wan::tensor::with_bf16_act(true, crate::wan::tensor::bf16_residual),
+            crate::rt::tensor::with_bf16_act(true, crate::rt::tensor::bf16_residual),
             "residual-as-bf16 adopted after ≥ 35 dB (h3 {h3:.2}, ltx {ltx:.2}, wan {wan:.2})"
         );
     }

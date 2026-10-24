@@ -38,16 +38,16 @@ pub fn init_with_budget(spec: &str, budget_gib: Option<f64>) -> anyhow::Result<D
 /// `FASTVIDEO_DEVICE_BUDGET_GIB`; applied to the device when it comes up (or
 /// at once when it is up already). `0` turns it off.
 pub fn set_budget_gib(gib: f64) -> anyhow::Result<()> {
-    let bytes = fastvideo_cudarc::wan::device::parse_budget_gib(&gib.to_string())
+    let bytes = fastvideo_cudarc::rt::device::parse_budget_gib(&gib.to_string())
         .map_err(|e| anyhow::anyhow!(e))?;
-    fastvideo_cudarc::wan::device::set_device_budget(bytes)
+    fastvideo_cudarc::rt::device::set_device_budget(bytes)
         .map_err(|e| anyhow::anyhow!("device budget: {e}"))?;
     Ok(())
 }
 
 #[cfg(feature = "cuda")]
 pub fn info(spec: &str) -> DeviceInfo {
-    let Some(dev) = fastvideo_cudarc::wan::device::global_device() else {
+    let Some(dev) = fastvideo_cudarc::rt::device::global_device() else {
         return cpu_info(spec);
     };
     let (free, total) = mem_info().unwrap_or((0, 0));
@@ -81,7 +81,7 @@ fn cpu_info(spec: &str) -> DeviceInfo {
 /// holding the rest back does not count as used.
 #[cfg(feature = "cuda")]
 pub fn mem_info() -> Option<(u64, u64)> {
-    fastvideo_cudarc::wan::device::free_memory()
+    fastvideo_cudarc::rt::device::free_memory()
 }
 
 #[cfg(not(feature = "cuda"))]
@@ -138,23 +138,23 @@ impl PeakMem {
 /// launches return when queued, so both ends synchronize the device.
 pub struct Span {
     start: std::time::Instant,
-    stats: fastvideo_cudarc::wan::stats::Snapshot,
+    stats: fastvideo_cudarc::rt::stats::Snapshot,
 }
 
 pub fn span() -> anyhow::Result<Span> {
-    fastvideo_cudarc::wan::device::synchronize()?;
+    fastvideo_cudarc::rt::device::synchronize()?;
     Ok(Span {
         start: std::time::Instant::now(),
-        stats: fastvideo_cudarc::wan::stats::snapshot(),
+        stats: fastvideo_cudarc::rt::stats::snapshot(),
     })
 }
 
 impl Span {
     /// `(seconds, transfers during the span)` as JSON-ready values.
     pub fn finish(self) -> anyhow::Result<(f64, serde_json::Value)> {
-        fastvideo_cudarc::wan::device::synchronize()?;
+        fastvideo_cudarc::rt::device::synchronize()?;
         let secs = self.start.elapsed().as_secs_f64();
-        let d = fastvideo_cudarc::wan::stats::snapshot().since(&self.stats);
+        let d = fastvideo_cudarc::rt::stats::snapshot().since(&self.stats);
         Ok((
             secs,
             serde_json::json!({

@@ -1,5 +1,5 @@
 // Standalone parity + timing harness for the datacenter attention kernels
-// (crates/fastvideo-cudarc/src/wan/attn_dc.cu) against the mma.sync kernel
+// (crates/fastvideo-cudarc/src/rt/attn_dc.cu) against the mma.sync kernel
 // they replace (flash_mma_fwd2_d128 in kernels.cu). No Rust, no weights:
 // pod.sh step `bench:attn_dc` builds it with the pod's nvcc for the GPU's
 // arch-specific target (sm_100a / sm_90a) and runs it.
@@ -25,8 +25,8 @@
 #include <string>
 #include <vector>
 
-#include "../../../crates/fastvideo-cudarc/src/wan/kernels.cu"
-#include "../../../crates/fastvideo-cudarc/src/wan/attn_dc.cu"
+#include "../../../crates/fastvideo-cudarc/src/rt/kernels.cu"
+#include "../../../crates/fastvideo-cudarc/src/rt/attn_dc.cu"
 
 #define CK(x)                                                                                   \
     do {                                                                                        \

@@ -9,9 +9,9 @@
 use fastvideo_models::h3::config::H3VisionConfig;
 use fastvideo_models::h3::vision_preprocess::{PreparedVisionImage, VisionGrid};
 
-use crate::wan::nn::{scaled_dot_product_attention, Linear};
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
+use crate::rt::nn::{scaled_dot_product_attention, Linear};
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{cuda_tensor_shaped, WeightMap};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())

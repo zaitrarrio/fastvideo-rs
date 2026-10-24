@@ -15,8 +15,8 @@ use fastvideo_models::sol_attn::{
     BLOCK_SIZE,
 };
 
-use crate::wan::log;
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::log;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -29,7 +29,7 @@ fn log_once(tau: f64, thresh: SolThresh, tokens: usize, sink_tokens: usize) {
         return;
     }
     let n = tokens.div_ceil(BLOCK_SIZE);
-    let path = if crate::wan::stats::device_expected() {
+    let path = if crate::rt::stats::device_expected() {
         "fused device"
     } else {
         "host oracle"
@@ -66,10 +66,10 @@ pub fn sol_attn(
         sink_tokens,
         ..SolParams::diag(tau as f32, scale)
     };
-    if let Some(out) = crate::wan::sol_ops::try_sol_device_params(q, k, v, &p)? {
+    if let Some(out) = crate::rt::sol_ops::try_sol_device_params(q, k, v, &p)? {
         return Ok(out);
     }
-    crate::wan::stats::host_algorithm(
+    crate::rt::stats::host_algorithm(
         "sol_attn",
         format_args!("BHSD {batch}x{heads}x{tokens}x{dim}"),
     )?;
@@ -117,10 +117,10 @@ pub fn sol_attn_sunk(
     let scale = scale.unwrap_or((dim as f32).sqrt().recip());
     let sink_tokens: usize = sinks.iter().map(|(_, len)| *len).sum();
     log_once(tau, SolThresh::Diag, tokens, sink_tokens);
-    if let Some(out) = crate::wan::sol_ops::try_sol_device(q, k, v, tau as f32, scale, sinks)? {
+    if let Some(out) = crate::rt::sol_ops::try_sol_device(q, k, v, tau as f32, scale, sinks)? {
         return Ok(out);
     }
-    crate::wan::stats::host_algorithm(
+    crate::rt::stats::host_algorithm(
         "sol_attn",
         format_args!("BHSD sunk {batch}x{heads}x{tokens}x{dim}"),
     )?;
@@ -196,10 +196,10 @@ pub fn sol_attn_params(
         sink_start,
         sink_tokens,
     };
-    if let Some(out) = crate::wan::sol_ops::try_sol_device_params(q, k, v, &p)? {
+    if let Some(out) = crate::rt::sol_ops::try_sol_device_params(q, k, v, &p)? {
         return Ok(out);
     }
-    crate::wan::stats::host_algorithm(
+    crate::rt::stats::host_algorithm(
         "sol_attn",
         format_args!("BHSD {thresh:?} {batch}x{heads}x{tokens}x{dim}"),
     )?;
@@ -299,7 +299,7 @@ pub fn splice_dense_prefix(
         return Ok(sol_out.clone());
     }
     let q_pre = q.narrow(2, 0, keep)?;
-    let dense = crate::wan::nn::scaled_dot_product_attention(&q_pre, k, v, scale)?;
+    let dense = crate::rt::nn::scaled_dot_product_attention(&q_pre, k, v, scale)?;
     if keep == tokens {
         return Ok(dense);
     }
@@ -351,7 +351,7 @@ pub fn splice_dense_ranges(
             pieces.push(sol_out.narrow(2, cursor, start - cursor)?);
         }
         let q_r = q.narrow(2, start, len)?;
-        pieces.push(crate::wan::nn::scaled_dot_product_attention(
+        pieces.push(crate::rt::nn::scaled_dot_product_attention(
             &q_r, k, v, scale,
         )?);
         cursor = start + len;
@@ -366,7 +366,7 @@ pub fn splice_dense_ranges(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wan::nn::scaled_dot_product_attention;
+    use crate::rt::nn::scaled_dot_product_attention;
     use fastvideo_models::sol_attn::dense_attn_head;
 
     fn seeded(n: usize, k: f32) -> Vec<f32> {
@@ -451,9 +451,9 @@ mod sol_gpu_tests {
         threshold_faithful, SolNumerics, SolParams, SolThresh, ROUTE_GROUP,
     };
 
-    use crate::wan::device::{set_thread_device, DeviceContext};
-    use crate::wan::ops;
-    use crate::wan::tensor::CudaTensor;
+    use crate::rt::device::{set_thread_device, DeviceContext};
+    use crate::rt::ops;
+    use crate::rt::tensor::CudaTensor;
 
     const D: usize = 128;
     const FAITHFUL: SolNumerics = SolNumerics {
@@ -739,7 +739,7 @@ mod sol_gpu_tests {
             .unwrap()
             .to_device()
             .unwrap();
-        let dense = crate::wan::nn::scaled_dot_product_attention(&qt, &kt, &vt, None).unwrap();
+        let dense = crate::rt::nn::scaled_dot_product_attention(&qt, &kt, &vt, None).unwrap();
         let sol = super::sol_attn(&qt, &kt, &vt, 1.0, None, Some(0), t).unwrap();
         let err = rel_l2(&sol.host_cow().unwrap(), &dense.host_cow().unwrap());
         assert!(err <= 5e-3, "all-exact vs dense rel-L2 {err}");

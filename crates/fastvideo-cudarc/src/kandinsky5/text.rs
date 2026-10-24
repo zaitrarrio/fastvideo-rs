@@ -7,8 +7,8 @@ use fastvideo_models::kandinsky5::Kandinsky5TransformerConfig;
 
 use crate::hunyuan15::text::{encode_qwen_ids, Hunyuan15TextConditioning};
 use crate::llm::DecoderConfig;
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::WeightMap;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::WeightMap;
 
 use super::clip_text::{ClipTextConfig, ClipTextModel};
 

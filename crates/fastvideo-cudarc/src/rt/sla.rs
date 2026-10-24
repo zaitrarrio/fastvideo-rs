@@ -65,7 +65,7 @@ pub fn sla_attention(
     {
         return Ok(out);
     }
-    crate::wan::stats::host_algorithm("sla", format_args!("BHSD {b}x{h}x{s}x{d}"))?;
+    crate::rt::stats::host_algorithm("sla", format_args!("BHSD {b}x{h}x{s}x{d}"))?;
     let qh = q.host_cow()?.into_owned();
     let kh = k.host_cow()?.into_owned();
     let vh = v.host_cow()?.into_owned();

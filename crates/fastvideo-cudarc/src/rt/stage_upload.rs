@@ -99,7 +99,7 @@ fn upload_parts<T: cudarc::driver::DeviceRepr + cudarc::driver::ValidAsZeroBits>
                     })
                 }
                 Err(e) => {
-                    crate::wan::log::info(format_args!("staged upload off: {e}"));
+                    crate::rt::log::info(format_args!("staged upload off: {e}"));
                     return Ok(None);
                 }
             }
@@ -162,7 +162,7 @@ pub fn record_verify(what: &str, equal: bool) {
     let i = usize::from(!equal);
     let n = VERIFY[i].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if !equal && n < 5 {
-        crate::wan::log::info(format_args!("staged upload MISMATCH: {what}"));
+        crate::rt::log::info(format_args!("staged upload MISMATCH: {what}"));
     }
 }
 

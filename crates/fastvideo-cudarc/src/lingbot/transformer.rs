@@ -29,9 +29,9 @@ use fastvideo_models::lingbot::{
     joint_positions, rope_tables, LingBotTransformerConfig, RouterSpec,
 };
 
-use crate::wan::nn::{self, Linear};
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{self, WeightMap};
+use crate::rt::nn::{self, Linear};
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{self, WeightMap};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -161,14 +161,14 @@ fn stacked_linears(
                     "{key}: shape {shape:?} != [{experts}, {out_dim}, {in_dim}]"
                 )));
             }
-            let dev = crate::wan::device::global_device().ok_or_else(|| msg("no device"))?;
+            let dev = crate::rt::device::global_device().ok_or_else(|| msg("no device"))?;
             let mut out = Vec::with_capacity(experts);
             for e in 0..experts {
                 let slice = dev
                     .stream
                     .memcpy_stod(&values[e * per..(e + 1) * per])
                     .map_err(|err| msg(err.to_string()))?;
-                crate::wan::stats::record_h2d(per / 2);
+                crate::rt::stats::record_h2d(per / 2);
                 out.push(Linear::from_device_bf16(slice, in_dim, out_dim)?);
             }
             return Ok(out);
@@ -188,15 +188,15 @@ fn stacked_linears(
 
 /// Which router implementation runs (`FASTVIDEO_LINGBOT_ROUTER=host|device`).
 fn router_on_host() -> bool {
-    static FLAG: crate::wan::envflag::CachedString = crate::wan::envflag::CachedString::new();
-    FLAG.get_or_init(|| crate::wan::envflag::string_flag("FASTVIDEO_LINGBOT_ROUTER", "device"))
+    static FLAG: crate::rt::envflag::CachedString = crate::rt::envflag::CachedString::new();
+    FLAG.get_or_init(|| crate::rt::envflag::string_flag("FASTVIDEO_LINGBOT_ROUTER", "device"))
         == "host"
 }
 
 /// Tokens per MoE dispatch chunk (`FASTVIDEO_LINGBOT_MOE_CHUNK`, default 32768):
 /// bounds the `[tokens · k, D]` gathered activations.
 fn moe_chunk() -> usize {
-    crate::wan::envflag::usize_flag("FASTVIDEO_LINGBOT_MOE_CHUNK", 32_768).max(1)
+    crate::rt::envflag::usize_flag("FASTVIDEO_LINGBOT_MOE_CHUNK", 32_768).max(1)
 }
 
 struct Moe {
@@ -285,7 +285,7 @@ impl Moe {
         }
         #[cfg(feature = "cuda")]
         if let (Some(l), Some(b)) = (logits.dev()?, self.bias_dev.dev()?) {
-            let p = crate::wan::ops::GroupTopk {
+            let p = crate::rt::ops::GroupTopk {
                 experts: self.spec.num_experts,
                 top_k: self.spec.top_k,
                 n_group: self.spec.n_group.unwrap_or(1),
@@ -295,8 +295,8 @@ impl Moe {
                 scale: self.spec.route_scale,
                 round_bf16: self.spec.round_bf16,
             };
-            let got = crate::wan::ops::moe_group_topk_device(&l, &b, p)?;
-            if crate::wan::envflag::bool_flag("FASTVIDEO_LINGBOT_ROUTER_CHECK", false)
+            let got = crate::rt::ops::moe_group_topk_device(&l, &b, p)?;
+            if crate::rt::envflag::bool_flag("FASTVIDEO_LINGBOT_ROUTER_CHECK", false)
                 && !ROUTER_CHECKED.swap(true, std::sync::atomic::Ordering::Relaxed)
             {
                 let want = host(&logits)?;
@@ -317,7 +317,7 @@ impl Moe {
                         }
                     }
                 }
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "lingbot router check: {set_diff}/{rows} rows chose a different expert set; \
                      max |w| diff on matching rows {w_err:.3e}"
                 ));
@@ -380,12 +380,12 @@ fn combine(
     #[cfg(feature = "cuda")]
     if let Some(y) = ys.dev()? {
         return CudaTensor::from_device_slice(
-            crate::wan::ops::moe_combine_device(&y, pos, w, n, k, d)?,
+            crate::rt::ops::moe_combine_device(&y, pos, w, n, k, d)?,
             vec![n, d],
         );
     }
     CudaTensor::from_vec(
-        crate::wan::ops::moe_combine_host(&ys.host_cow()?, pos, w, n, k, d),
+        crate::rt::ops::moe_combine_host(&ys.host_cow()?, pos, w, n, k, d),
         vec![n, d],
     )
 }

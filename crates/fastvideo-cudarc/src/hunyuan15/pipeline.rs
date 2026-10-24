@@ -13,9 +13,9 @@ use fastvideo_models::hunyuan15::{
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
 
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::{PipelineError, Result};
-use crate::wan::tensor::CudaTensor;
-use crate::wan::weights::WeightMap;
 
 use super::text::{self, Hunyuan15TextConditioning};
 use super::transformer::Hunyuan15Transformer;
@@ -178,14 +178,14 @@ impl Hunyuan15Pipeline {
         if fastvideo_models::hunyuan15::sol::teacache_requested(
             std::env::var("FASTVIDEO_HUNYUAN15_SOL").ok().as_deref(),
         ) {
-            crate::wan::log::info(format_args!("{}", fastvideo_models::hunyuan15::sol::GAP));
+            crate::rt::log::info(format_args!("{}", fastvideo_models::hunyuan15::sol::GAP));
         }
         if fastvideo_models::hunyuan15::sol::official_requested(
             std::env::var("FASTVIDEO_HUNYUAN15_OFFICIAL")
                 .ok()
                 .as_deref(),
         ) {
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "hunyuan15 official: {}x{} {}f {} steps (guidance {} recorded, no CFG; 13B TeaCache not applied)",
                 request.width,
                 request.height,

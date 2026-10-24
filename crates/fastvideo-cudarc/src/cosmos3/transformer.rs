@@ -22,10 +22,10 @@
 use fastvideo_models::cosmos3::rope::rope_tables;
 use fastvideo_models::cosmos3::Cosmos3TransformerConfig;
 
-use crate::wan::nn::{self, Linear};
-use crate::wan::offload::{BlockWeights, OffloadBlock, Residency};
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{self, WeightMap};
+use crate::rt::nn::{self, Linear};
+use crate::rt::offload::{BlockWeights, OffloadBlock, Residency};
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{self, WeightMap};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -46,7 +46,7 @@ fn norm_weight(map: &WeightMap, key: &str, dim: usize) -> Result<CudaTensor> {
 /// Tokens per MLP chunk (`FASTVIDEO_COSMOS3_MLP_CHUNK`, default 8192): bounds
 /// the `[tokens, 25600]` SwiGLU intermediates.
 fn mlp_chunk() -> usize {
-    crate::wan::envflag::usize_flag("FASTVIDEO_COSMOS3_MLP_CHUNK", 8192).max(1)
+    crate::rt::envflag::usize_flag("FASTVIDEO_COSMOS3_MLP_CHUNK", 8192).max(1)
 }
 
 #[derive(Clone)]
@@ -231,7 +231,7 @@ impl OffloadBlock for TowerLayer {
 /// `resident`: on the device for good. `parked`: in pinned host memory, on
 /// the device as a whole from the first layer of a request's first forward
 /// until [`Cosmos3Transformer::park_gen`] (the Wan 2.2 A14B expert swap's
-/// mechanism, `wan::offload` whole ring), so the VAE decode gets the 62 GB
+/// mechanism, `rt::offload` whole ring), so the VAE decode gets the 62 GB
 /// back. `auto` (default): parked when the bf16 gen tower plus
 /// [`DECODE_HEADROOM_GIB`] does not fit in the free device memory at load
 /// (a 96 GB card in BF16; sol-bench phase B's BF16 decode ran out of memory
@@ -426,8 +426,8 @@ impl Cosmos3Transformer {
         map: &WeightMap,
         und_resident: bool,
     ) -> Result<Self> {
-        let fp8 = crate::wan::envflag::bool_flag("FASTVIDEO_FP8", false);
-        let free = crate::wan::device::free_memory().map(|(f, _)| f);
+        let fp8 = crate::rt::envflag::bool_flag("FASTVIDEO_FP8", false);
+        let free = crate::rt::device::free_memory().map(|(f, _)| f);
         let residency = GenResidency::from_env(gen_linear_bytes(&cfg, fp8), free)?;
         Self::load_with(cfg, map, und_resident, residency)
     }
@@ -455,7 +455,7 @@ impl Cosmos3Transformer {
             }
         }
         if gen_residency == GenResidency::Parked {
-            crate::wan::log::info(format_args!("{}", gen.describe()));
+            crate::rt::log::info(format_args!("{}", gen.describe()));
         }
         Ok(Self {
             gen,

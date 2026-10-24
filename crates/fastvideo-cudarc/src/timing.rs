@@ -23,7 +23,7 @@ impl EventMarks {
     pub fn new(n: usize) -> Option<Self> {
         #[cfg(feature = "cuda")]
         {
-            let dev = crate::wan::device::global_device()?;
+            let dev = crate::rt::device::global_device()?;
             let mut events = Vec::with_capacity(n);
             for _ in 0..n {
                 events.push(

@@ -1228,13 +1228,13 @@ mod tests {
             vec![1, 2, 3, 4],
         )
         .unwrap();
-        let f32_out = crate::wan::tensor::with_bf16_act(false, || {
+        let f32_out = crate::rt::tensor::with_bf16_act(false, || {
             scaled_dot_product_attention(&q, &q, &q, None).unwrap()
         });
-        let bf16_out = crate::wan::tensor::with_bf16_act(true, || {
+        let bf16_out = crate::rt::tensor::with_bf16_act(true, || {
             scaled_dot_product_attention(&q, &q, &q, None).unwrap()
         });
-        assert_eq!(bf16_out.dtype(), crate::wan::tensor::TensorDType::Bf16);
+        assert_eq!(bf16_out.dtype(), crate::rt::tensor::TensorDType::Bf16);
         let p = psnr_db(&bf16_out.host_cow().unwrap(), &f32_out.host_cow().unwrap());
         assert!(p >= 35.0, "sdpa bf16-act PSNR {p:.2} dB < 35");
     }
