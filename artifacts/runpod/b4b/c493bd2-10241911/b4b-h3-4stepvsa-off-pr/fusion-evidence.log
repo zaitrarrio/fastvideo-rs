@@ -1,0 +1,11 @@
+fvf_split_heads_rows 100
+h3_gate_residual 50
+h3_norm_mod 50
+h3_qk_norm_rope 100
+h3_res_gate_norm_mod 50
+h3_swiglu_mx 45
+mx_binary 104
+mx_block_copy 105
+mx_merge_heads 50
+mx_rms_norm 2
+mx_swiglu 5

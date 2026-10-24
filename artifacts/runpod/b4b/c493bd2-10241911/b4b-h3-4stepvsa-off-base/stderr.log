@@ -1,0 +1,297 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+h3 gen 832x480x124: planned peak 53.88 GiB resident, 11.87 GiB streamed
+[fastvideo] h3 techniques: vsa (sparsity recipe, group default) [attention_backend from recipe]
+[fastvideo] h3 text encoder: auto -> resident-fp8: 94.3 GiB free before load >= need 91.7 GiB = fp8 encoder 22.7 + max(resident weights 34.4 [dit mxfp8 resident, vae bf16+mxfp8, extra 2.0] + denoise reserve 27.6 for 1344x768x124 (38734 rows) + runtime 2.0; plan peak 53.3; the DiT placement's 66.9 + extra)
+[fastvideo] h3 dit: pre-quantized tree /workspace/weights/h3-base/transformer_prequant_4step-vsa_mxfp8 (792 tensors, 180 quantized linears, 27.29 GB, digest 494b51821272)
+[fastvideo] h3 recipe=4step-vsa steps=4 video_shift=12 vsa=0.9 dense=false
+[fastvideo] text encoder: pre-quantized fp8 tree /workspace/weights/h3-base/text_encoder_fp8 (350 linears, 50 layers)
+[fastvideo] llm resident layer 1/50
+[fastvideo] llm resident layer 2/50
+[fastvideo] llm resident layer 3/50
+[fastvideo] llm resident layer 4/50
+[fastvideo] llm resident layer 5/50
+[fastvideo] llm resident layer 6/50
+[fastvideo] llm resident layer 7/50
+[fastvideo] llm resident layer 8/50
+[fastvideo] llm resident layer 9/50
+[fastvideo] llm resident layer 10/50
+[fastvideo] llm resident layer 11/50
+[fastvideo] llm resident layer 12/50
+[fastvideo] llm resident layer 13/50
+[fastvideo] llm resident layer 14/50
+[fastvideo] llm resident layer 15/50
+[fastvideo] llm resident layer 16/50
+[fastvideo] llm resident layer 17/50
+[fastvideo] llm resident layer 18/50
+[fastvideo] llm resident layer 19/50
+[fastvideo] llm resident layer 20/50
+[fastvideo] llm resident layer 21/50
+[fastvideo] llm resident layer 22/50
+[fastvideo] llm resident layer 23/50
+[fastvideo] llm resident layer 24/50
+[fastvideo] llm resident layer 25/50
+[fastvideo] llm resident layer 26/50
+[fastvideo] llm resident layer 27/50
+[fastvideo] llm resident layer 28/50
+[fastvideo] llm resident layer 29/50
+[fastvideo] llm resident layer 30/50
+[fastvideo] llm resident layer 31/50
+[fastvideo] llm resident layer 32/50
+[fastvideo] llm resident layer 33/50
+[fastvideo] llm resident layer 34/50
+[fastvideo] llm resident layer 35/50
+[fastvideo] llm resident layer 36/50
+[fastvideo] llm resident layer 37/50
+[fastvideo] llm resident layer 38/50
+[fastvideo] llm resident layer 39/50
+[fastvideo] llm resident layer 40/50
+[fastvideo] llm resident layer 41/50
+[fastvideo] llm resident layer 42/50
+[fastvideo] llm resident layer 43/50
+[fastvideo] llm resident layer 44/50
+[fastvideo] llm resident layer 45/50
+[fastvideo] llm resident layer 46/50
+[fastvideo] llm resident layer 47/50
+[fastvideo] llm resident layer 48/50
+[fastvideo] llm resident layer 49/50
+[fastvideo] llm resident layer 50/50
+[fastvideo] load/io h3 text_encoder {"wall_s":76.29,"viewed_gb":25.95,"prefetch_read_gb":27.01,"prefetch_skipped_gb":0.00,"prefetch_busy_s":1247.2,"viewed_gbps":0.34,"window_wait_s":0.0,"fill_s":0.3,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":63.3,"fetch_wait_s":0.0,"mem_mode":true,"prefetch":true}
+[fastvideo] h3 i2v encoder: resident (71.5 GiB free covers the vision tower (2.0 GiB) and the resident plan (66.9 GiB)): vision tower 1.09 GiB loaded in 64.9 s; the language model is the resident text encoder (ResidentFp8), 70.4 GiB free now
+[fastvideo] h3 dit offload: auto -> resident (resident plan 66.9 GiB, 70.4 GiB free before load)
+[fastvideo] h3 adaln table: from the pre-quantized tree
+[fastvideo] h3 dit: 50 blocks from the pre-quantized tree (mxfp8, 180 reference linears)
+[fastvideo] h3 dit: 50 blocks resident
+[fastvideo] load/io h3 dit {"wall_s":239.70,"viewed_gb":54.43,"prefetch_read_gb":53.45,"prefetch_skipped_gb":0.00,"prefetch_busy_s":3902.9,"viewed_gbps":0.23,"window_wait_s":0.0,"fill_s":64.8,"h2d_wait_s":0.1,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":159.6,"fetch_wait_s":0.0,"mem_mode":true,"prefetch":true}
+[fastvideo] h3 vae: FASTVIDEO_H3_VAE_MXFP8 default: 36 blocks x 4 linears as MXFP8 (E4M3, E8M0 per 32); FASTVIDEO_H3_VAE_MXFP8=0 for bf16
+[fastvideo] load/io h3 total {"wall_s":301.65,"viewed_gb":64.38,"prefetch_read_gb":63.24,"prefetch_skipped_gb":0.00,"prefetch_busy_s":4892.4,"viewed_gbps":0.21,"window_wait_s":0.0,"fill_s":64.8,"h2d_wait_s":0.1,"h2d_pageable_s":0.3,"convert_s":0.0,"lora_s":0.0,"read_wait_s":217.7,"fetch_wait_s":0.0,"mem_mode":false,"prefetch":true}
+[INFO] h3/text_encoder {"chosen":"resident-fp8","device_gib":22.72038459777832,"free_gib_before_load":94.28277587890625,"load_seconds":65.676198076,"requested":"Auto"}
+[INFO] h3/load {"audio_vae_s":1.525852584,"dit_residency":"resident","dit_s":97.244959792,"refiner_s":0.144657675,"seconds":301.686358081,"text_encoder_s":65.676198076,"video_vae_s":60.424038915}
+[fastvideo] h3 memory text: peak 56.50 GiB used, 56.75 GiB reserved; 56.24 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.84 | vae 6.84 | audio_vae 0.24 | activations 1.38 | pool_reserved 0.25 | non_pool 0.69 | total 57.19 GiB
+[fastvideo] sdpa: fused mma B=1 H=56 Sq=46 Sk=46 D=128
+[fastvideo] h3 memory refine: peak 56.28 GiB used, 56.75 GiB reserved; 56.27 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.84 | vae 6.84 | audio_vae 0.24 | activations 1.16 | pool_reserved 0.47 | non_pool 0.69 | total 56.97 GiB
+[fastvideo] vsa-h3: 8 prefix + 280 video tiles, k_vid 28, 460 of 14890 rows dense
+[fastvideo] vsa-h3: bf16 inputs read in place (no f32 widening)
+[fastvideo] vsa fine kernel: Tma ring (3 slots) (sm12, 128B swizzle)
+[fastvideo] h3 dit step 0: block 1/50
+[fastvideo] h3 dit step 0: block 2/50
+[fastvideo] h3 dit step 0: block 3/50
+[fastvideo] h3 dit step 0: block 4/50
+[fastvideo] h3 dit step 0: block 5/50
+[fastvideo] h3 dit step 0: block 6/50
+[fastvideo] h3 dit step 0: block 7/50
+[fastvideo] h3 dit step 0: block 8/50
+[fastvideo] h3 dit step 0: block 9/50
+[fastvideo] h3 dit step 0: block 10/50
+[fastvideo] h3 dit step 0: block 11/50
+[fastvideo] h3 dit step 0: block 12/50
+[fastvideo] h3 dit step 0: block 13/50
+[fastvideo] h3 dit step 0: block 14/50
+[fastvideo] h3 dit step 0: block 15/50
+[fastvideo] h3 dit step 0: block 16/50
+[fastvideo] h3 dit step 0: block 17/50
+[fastvideo] h3 dit step 0: block 18/50
+[fastvideo] h3 dit step 0: block 19/50
+[fastvideo] h3 dit step 0: block 20/50
+[fastvideo] h3 dit step 0: block 21/50
+[fastvideo] h3 dit step 0: block 22/50
+[fastvideo] h3 dit step 0: block 23/50
+[fastvideo] h3 dit step 0: block 24/50
+[fastvideo] h3 dit step 0: block 25/50
+[fastvideo] h3 dit step 0: block 26/50
+[fastvideo] h3 dit step 0: block 27/50
+[fastvideo] h3 dit step 0: block 28/50
+[fastvideo] h3 dit step 0: block 29/50
+[fastvideo] h3 dit step 0: block 30/50
+[fastvideo] h3 dit step 0: block 31/50
+[fastvideo] h3 dit step 0: block 32/50
+[fastvideo] h3 dit step 0: block 33/50
+[fastvideo] h3 dit step 0: block 34/50
+[fastvideo] h3 dit step 0: block 35/50
+[fastvideo] h3 dit step 0: block 36/50
+[fastvideo] h3 dit step 0: block 37/50
+[fastvideo] h3 dit step 0: block 38/50
+[fastvideo] h3 dit step 0: block 39/50
+[fastvideo] h3 dit step 0: block 40/50
+[fastvideo] h3 dit step 0: block 41/50
+[fastvideo] h3 dit step 0: block 42/50
+[fastvideo] h3 dit step 0: block 43/50
+[fastvideo] h3 dit step 0: block 44/50
+[fastvideo] h3 dit step 0: block 45/50
+[fastvideo] h3 dit step 0: block 46/50
+[fastvideo] h3 dit step 0: block 47/50
+[fastvideo] h3 dit step 0: block 48/50
+[fastvideo] h3 dit step 0: block 49/50
+[fastvideo] h3 dit step 0: block 50/50
+[fastvideo] h3 step 1/4: 1.7s
+[fastvideo] h3 dit step 1: block 1/50
+[fastvideo] h3 dit step 1: block 2/50
+[fastvideo] h3 dit step 1: block 3/50
+[fastvideo] h3 dit step 1: block 4/50
+[fastvideo] h3 dit step 1: block 5/50
+[fastvideo] h3 dit step 1: block 6/50
+[fastvideo] h3 dit step 1: block 7/50
+[fastvideo] h3 dit step 1: block 8/50
+[fastvideo] h3 dit step 1: block 9/50
+[fastvideo] h3 dit step 1: block 10/50
+[fastvideo] h3 dit step 1: block 11/50
+[fastvideo] h3 dit step 1: block 12/50
+[fastvideo] h3 dit step 1: block 13/50
+[fastvideo] h3 dit step 1: block 14/50
+[fastvideo] h3 dit step 1: block 15/50
+[fastvideo] h3 dit step 1: block 16/50
+[fastvideo] h3 dit step 1: block 17/50
+[fastvideo] h3 dit step 1: block 18/50
+[fastvideo] h3 dit step 1: block 19/50
+[fastvideo] h3 dit step 1: block 20/50
+[fastvideo] h3 dit step 1: block 21/50
+[fastvideo] h3 dit step 1: block 22/50
+[fastvideo] h3 dit step 1: block 23/50
+[fastvideo] h3 dit step 1: block 24/50
+[fastvideo] h3 dit step 1: block 25/50
+[fastvideo] h3 dit step 1: block 26/50
+[fastvideo] h3 dit step 1: block 27/50
+[fastvideo] h3 dit step 1: block 28/50
+[fastvideo] h3 dit step 1: block 29/50
+[fastvideo] h3 dit step 1: block 30/50
+[fastvideo] h3 dit step 1: block 31/50
+[fastvideo] h3 dit step 1: block 32/50
+[fastvideo] h3 dit step 1: block 33/50
+[fastvideo] h3 dit step 1: block 34/50
+[fastvideo] h3 dit step 1: block 35/50
+[fastvideo] h3 dit step 1: block 36/50
+[fastvideo] h3 dit step 1: block 37/50
+[fastvideo] h3 dit step 1: block 38/50
+[fastvideo] h3 dit step 1: block 39/50
+[fastvideo] h3 dit step 1: block 40/50
+[fastvideo] h3 dit step 1: block 41/50
+[fastvideo] h3 dit step 1: block 42/50
+[fastvideo] h3 dit step 1: block 43/50
+[fastvideo] h3 dit step 1: block 44/50
+[fastvideo] h3 dit step 1: block 45/50
+[fastvideo] h3 dit step 1: block 46/50
+[fastvideo] h3 dit step 1: block 47/50
+[fastvideo] h3 dit step 1: block 48/50
+[fastvideo] h3 dit step 1: block 49/50
+[fastvideo] h3 dit step 1: block 50/50
+[INFO] h3/gpu_trace {"busy_s":1.652277687,"by_category":[{"calls":351,"category":"gemm","share":0.574507657569707,"total_s":0.9480987120000001},{"calls":550,"category":"attention","share":0.21300645547154765,"total_s":0.351520373},{"calls":460,"category":"norm_modulate_elementwise","share":0.11765700608156175,"total_s":0.194167048},{"calls":459,"category":"layout","share":0.06164411914650813,"total_s":0.10173008},{"calls":254,"category":"cast","share":0.03318476173067547,"total_s":0.054764161000000006}],"dropped_records":0,"gap_count":2185,"gap_histogram":[{"bucket":"<5us","count":2182,"idle_s":0.000653351},{"bucket":"5-50us","count":1,"idle_s":0.00003472},{"bucket":"50-500us","count":0,"idle_s":0.0},{"bucket":">500us","count":2,"idle_s":0.041017819000000004}],"host":{"device_tail_s":0.7122294902801514,"enqueue_s":0.982141534,"first_activity_lag_s":0.00038743019104003906},"host_launches":1723,"idle_frac":0.0246200084618648,"idle_s":0.04170589,"kernel_count":2074,"kernel_s":1.650280374,"largest_gaps":[{"after":"memcpy HtoD","at_s":0.003354175,"before":"mx_block_copy","gap_us":38741.052},{"after":"nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN","at_s":4.864e-6,"before":"cast_f32_bf16","gap_us":2276.767},{"after":"h3_norm_mod","at_s":0.043547034000000005,"before":"memcpy HtoD","gap_us":34.72},{"after":"cast_bf16_f32_bias_act","at_s":0.002388607,"before":"nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN","gap_us":0.32},{"after":"cast_bf16_f32_bias_act","at_s":0.0028574390000000002,"before":"nvjet_sm120_tst_mma_128x128x64_3_64x64x64_tmaAB_alignCD4_bz_TNNN","gap_us":0.32},{"after":"mx_block_copy","at_s":0.002872959,"before":"mx_block_copy","gap_us":0.32},{"after":"h3_qk_norm_rope","at_s":0.054219129000000005,"before":"nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN","gap_us":0.32},{"after":"fvf_split_heads_rows","at_s":0.055983833000000004,"before":"fvf_split_heads_rows","gap_us":0.32},{"after":"vsa_tile_mean_b16","at_s":0.056476313,"before":"vsa_tile_mean_b16","gap_us":0.32},{"after":"magma_sgemmEx_kernel<…>","at_s":0.056631609000000006,"before":"vsa_tile_mean_b16","gap_us":0.32}],"memcpy":{"HtoD":{"bytes":38707200,"count":1}},"memset":{"bytes":688020480,"count":360},"pass":"h3","step":1,"sync_count":0,"top_kernels":[{"calls":90,"category":"gemm","name":"cutlass3x_sm120_bstensorop_s16832gemm_block_scaled_ue8m0xe4m3_ue8m0xe4m3_f32_bf16_bf16_128x128x128_1x1x1_0_tnn_align16_q…","share":0.1694782670911167,"total_s":0.27968665800000003},{"calls":66,"category":"gemm","name":"nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN","share":0.1631034582006124,"total_s":0.269166436},{"calls":45,"category":"gemm","name":"nvjet_sm120_qqtst_mma_256x128x64_3_128x32x64_tmaAB_alignCD4_bz_vec32_ue8m0_TNNN","share":0.15856059741276424,"total_s":0.26166944200000003},{"calls":50,"category":"attention","name":"vsa_mma_attn_tma2","share":0.11306939713990685,"total_s":0.18659620700000001},{"calls":45,"category":"gemm","name":"nvjet_sm120_qqtst_mma_128x256x64_3_32x128x64_tmaAB_alignCD4_bz_vec32_ue8m0_TNNN","share":0.08127659282216004,"total_s":0.13412916600000002},{"calls":100,"category":"norm_modulate_elementwise","name":"h3_qk_norm_rope","share":0.04488929709588851,"total_s":0.074079926},{"calls":150,"category":"attention","name":"vsa_tile_qkv_b16","share":0.02989501467585168,"total_s":0.049335156000000005},{"calls":50,"category":"attention","name":"flash_mma_fwd_d128","share":0.028329998790860008,"total_s":0.046752441000000006},{"calls":50,"category":"layout","name":"mx_merge_heads","share":0.02332050577970456,"total_s":0.038485373},{"calls":45,"category":"norm_modulate_elementwise","name":"h3_swiglu_mx","share":0.022921699000948065,"total_s":0.03782723},{"calls":50,"category":"attention","name":"vsa_combine_g16","share":0.02243377100235696,"total_s":0.037022012},{"calls":50,"category":"norm_modulate_elementwise","name":"h3_gate_residual","share":0.02012713749936409,"total_s":0.03321542},{"calls":100,"category":"layout","name":"fill_f","share":0.017949742641731253,"total_s":0.029622108},{"calls":100,"category":"layout","name":"fvf_split_heads_rows","share":0.017576399414903302,"total_s":0.029005987},{"calls":108,"category":"cast","name":"cast_f32_bf16","share":0.01730975805690579,"total_s":0.028565954},{"calls":150,"category":"attention","name":"vsa_tile_mean_b16","share":0.015610319558947866,"total_s":0.025761404},{"calls":90,"category":"cast","name":"mxfp8_quantize","share":0.015009345315040388,"total_s":0.024769628000000002},{"calls":50,"category":"norm_modulate_elementwise","name":"h3_res_gate_norm_mod","share":0.014804852184468868,"total_s":0.024432157000000003},{"calls":50,"category":"norm_modulate_elementwise","name":"h3_norm_mod","share":0.008388257061099849,"total_s":0.013842976000000002},{"calls":5,"category":"norm_modulate_elementwise","name":"mx_swiglu","share":0.0041119800652734415,"total_s":0.006785920000000001},{"calls":50,"category":"attention","name":"vsa_topk2","share":0.002331280224023315,"total_s":0.0038472660000000002},{"calls":105,"category":"layout","name":"mx_block_copy","share":0.0017395965226451877,"total_s":0.0028708220000000003},{"calls":104,"category":"norm_modulate_elementwise","name":"mx_binary","share":0.0017031766506362149,"total_s":0.002810719},{"calls":50,"category":"attention","name":"softmax_last","share":0.0013366740796009733,"total_s":0.002205887},{"calls":50,"category":"gemm","name":"magma_sgemmEx_kernel<…>","share":0.0010666211800928803,"total_s":0.0017602240000000001}],"wall_s":1.694484154,"window_s":1.693983577}
+[fastvideo] h3 step 2/4: 1.7s
+[fastvideo] h3 dit step 2: block 1/50
+[fastvideo] h3 dit step 2: block 2/50
+[fastvideo] h3 dit step 2: block 3/50
+[fastvideo] h3 dit step 2: block 4/50
+[fastvideo] h3 dit step 2: block 5/50
+[fastvideo] h3 dit step 2: block 6/50
+[fastvideo] h3 dit step 2: block 7/50
+[fastvideo] h3 dit step 2: block 8/50
+[fastvideo] h3 dit step 2: block 9/50
+[fastvideo] h3 dit step 2: block 10/50
+[fastvideo] h3 dit step 2: block 11/50
+[fastvideo] h3 dit step 2: block 12/50
+[fastvideo] h3 dit step 2: block 13/50
+[fastvideo] h3 dit step 2: block 14/50
+[fastvideo] h3 dit step 2: block 15/50
+[fastvideo] h3 dit step 2: block 16/50
+[fastvideo] h3 dit step 2: block 17/50
+[fastvideo] h3 dit step 2: block 18/50
+[fastvideo] h3 dit step 2: block 19/50
+[fastvideo] h3 dit step 2: block 20/50
+[fastvideo] h3 dit step 2: block 21/50
+[fastvideo] h3 dit step 2: block 22/50
+[fastvideo] h3 dit step 2: block 23/50
+[fastvideo] h3 dit step 2: block 24/50
+[fastvideo] h3 dit step 2: block 25/50
+[fastvideo] h3 dit step 2: block 26/50
+[fastvideo] h3 dit step 2: block 27/50
+[fastvideo] h3 dit step 2: block 28/50
+[fastvideo] h3 dit step 2: block 29/50
+[fastvideo] h3 dit step 2: block 30/50
+[fastvideo] h3 dit step 2: block 31/50
+[fastvideo] h3 dit step 2: block 32/50
+[fastvideo] h3 dit step 2: block 33/50
+[fastvideo] h3 dit step 2: block 34/50
+[fastvideo] h3 dit step 2: block 35/50
+[fastvideo] h3 dit step 2: block 36/50
+[fastvideo] h3 dit step 2: block 37/50
+[fastvideo] h3 dit step 2: block 38/50
+[fastvideo] h3 dit step 2: block 39/50
+[fastvideo] h3 dit step 2: block 40/50
+[fastvideo] h3 dit step 2: block 41/50
+[fastvideo] h3 dit step 2: block 42/50
+[fastvideo] h3 dit step 2: block 43/50
+[fastvideo] h3 dit step 2: block 44/50
+[fastvideo] h3 dit step 2: block 45/50
+[fastvideo] h3 dit step 2: block 46/50
+[fastvideo] h3 dit step 2: block 47/50
+[fastvideo] h3 dit step 2: block 48/50
+[fastvideo] h3 dit step 2: block 49/50
+[fastvideo] h3 dit step 2: block 50/50
+[fastvideo] h3 step 3/4: 1.7s
+[fastvideo] h3 dit step 3: block 1/50
+[fastvideo] h3 dit step 3: block 2/50
+[fastvideo] h3 dit step 3: block 3/50
+[fastvideo] h3 dit step 3: block 4/50
+[fastvideo] h3 dit step 3: block 5/50
+[fastvideo] h3 dit step 3: block 6/50
+[fastvideo] h3 dit step 3: block 7/50
+[fastvideo] h3 dit step 3: block 8/50
+[fastvideo] h3 dit step 3: block 9/50
+[fastvideo] h3 dit step 3: block 10/50
+[fastvideo] h3 dit step 3: block 11/50
+[fastvideo] h3 dit step 3: block 12/50
+[fastvideo] h3 dit step 3: block 13/50
+[fastvideo] h3 dit step 3: block 14/50
+[fastvideo] h3 dit step 3: block 15/50
+[fastvideo] h3 dit step 3: block 16/50
+[fastvideo] h3 dit step 3: block 17/50
+[fastvideo] h3 dit step 3: block 18/50
+[fastvideo] h3 dit step 3: block 19/50
+[fastvideo] h3 dit step 3: block 20/50
+[fastvideo] h3 dit step 3: block 21/50
+[fastvideo] h3 dit step 3: block 22/50
+[fastvideo] h3 dit step 3: block 23/50
+[fastvideo] h3 dit step 3: block 24/50
+[fastvideo] h3 dit step 3: block 25/50
+[fastvideo] h3 dit step 3: block 26/50
+[fastvideo] h3 dit step 3: block 27/50
+[fastvideo] h3 dit step 3: block 28/50
+[fastvideo] h3 dit step 3: block 29/50
+[fastvideo] h3 dit step 3: block 30/50
+[fastvideo] h3 dit step 3: block 31/50
+[fastvideo] h3 dit step 3: block 32/50
+[fastvideo] h3 dit step 3: block 33/50
+[fastvideo] h3 dit step 3: block 34/50
+[fastvideo] h3 dit step 3: block 35/50
+[fastvideo] h3 dit step 3: block 36/50
+[fastvideo] h3 dit step 3: block 37/50
+[fastvideo] h3 dit step 3: block 38/50
+[fastvideo] h3 dit step 3: block 39/50
+[fastvideo] h3 dit step 3: block 40/50
+[fastvideo] h3 dit step 3: block 41/50
+[fastvideo] h3 dit step 3: block 42/50
+[fastvideo] h3 dit step 3: block 43/50
+[fastvideo] h3 dit step 3: block 44/50
+[fastvideo] h3 dit step 3: block 45/50
+[fastvideo] h3 dit step 3: block 46/50
+[fastvideo] h3 dit step 3: block 47/50
+[fastvideo] h3 dit step 3: block 48/50
+[fastvideo] h3 dit step 3: block 49/50
+[fastvideo] h3 dit step 3: block 50/50
+[fastvideo] h3 step 4/4: 1.7s
+[fastvideo] h3 memory denoise: peak 60.00 GiB used, 60.47 GiB reserved; 56.28 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.84 | vae 6.84 | audio_vae 0.24 | activations 4.88 | pool_reserved 0.47 | non_pool 0.70 | total 60.71 GiB
+[fastvideo] h3 memory audio_decode: peak 56.49 GiB used, 56.59 GiB reserved; 56.36 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.84 | vae 6.84 | audio_vae 0.24 | activations 1.37 | pool_reserved 0.10 | non_pool 0.70 | total 57.20 GiB
+[fastvideo] h3 vae fused ViT: gemm mxfp8 (cuBLASLt algo #0), sdpa auto, vector kernels on
+[fastvideo] h3 vae chunk 1/7
+[fastvideo] h3 vae chunk 2/7
+[fastvideo] h3 vae chunk 3/7
+[fastvideo] h3 vae chunk 4/7
+[fastvideo] h3 vae chunk 5/7
+[fastvideo] h3 vae chunk 6/7
+[fastvideo] h3 vae chunk 7/7
+[fastvideo] h3 video decode + mp4 1.97s: vae 1.96s, rgb+copy 0.05s, writer push 0.00s, decode waited 0.16s, mp4 tail 0.00s
+[fastvideo] h3 memory video_decode: peak 57.16 GiB used, 57.44 GiB reserved; 56.37 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.84 | vae 6.84 | audio_vae 0.24 | activations 2.04 | pool_reserved 0.28 | non_pool 0.71 | total 57.87 GiB
+[fastvideo] video writer: 124 frames, png deferred (0 inline, 124 after the mp4 in 0.13s, 0.06 GiB, synced), ffmpeg feed blocked 0.00s, mp4 tail 0.00s, buffered peak 0.14 GiB of 42.65
+[INFO] h3/timings {"audio_decode_s":0.146876435,"decode_s":2.115796757,"denoise_s":6.785878703,"gpu_trace":{"busy_s":1.652277687,"by_category":[{"calls":351,"category":"gemm","share":0.574507657569707,"total_s":0.9480987120000001},{"calls":550,"category":"attention","share":0.21300645547154765,"total_s":0.351520373},{"calls":460,"category":"norm_modulate_elementwise","share":0.11765700608156175,"total_s":0.194167048},{"calls":459,"category":"layout","share":0.06164411914650813,"total_s":0.10173008},{"calls":254,"category":"cast","share":0.03318476173067547,"total_s":0.054764161000000006}],"dropped_records":0,"gap_count":2185,"gap_histogram":[{"bucket":"<5us","count":2182,"idle_s":0.000653351},{"bucket":"5-50us","count":1,"idle_s":0.00003472},{"bucket":"50-500us","count":0,"idle_s":0.0},{"bucket":">500us","count":2,"idle_s":0.041017819000000004}],"host":{"device_tail_s":0.7122294902801514,"enqueue_s":0.982141534,"first_activity_lag_s":0.00038743019104003906},"host_launches":1723,"idle_frac":0.0246200084618648,"idle_s":0.04170589,"kernel_count":2074,"kernel_s":1.650280374,"largest_gaps":[{"after":"memcpy HtoD","at_s":0.003354175,"before":"mx_block_copy","gap_us":38741.052},{"after":"nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN","at_s":4.864e-6,"before":"cast_f32_bf16","gap_us":2276.767},{"after":"h3_norm_mod","at_s":0.043547034000000005,"before":"memcpy HtoD","gap_us":34.72},{"after":"cast_bf16_f32_bias_act","at_s":0.002388607,"before":"nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN","gap_us":0.32},{"after":"cast_bf16_f32_bias_act","at_s":0.0028574390000000002,"before":"nvjet_sm120_tst_mma_128x128x64_3_64x64x64_tmaAB_alignCD4_bz_TNNN","gap_us":0.32},{"after":"mx_block_copy","at_s":0.002872959,"before":"mx_block_copy","gap_us":0.32},{"after":"h3_qk_norm_rope","at_s":0.054219129000000005,"before":"nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN","gap_us":0.32},{"after":"fvf_split_heads_rows","at_s":0.055983833000000004,"before":"fvf_split_heads_rows","gap_us":0.32},{"after":"vsa_tile_mean_b16","at_s":0.056476313,"before":"vsa_tile_mean_b16","gap_us":0.32},{"after":"magma_sgemmEx_kernel<…>","at_s":0.056631609000000006,"before":"vsa_tile_mean_b16","gap_us":0.32}],"memcpy":{"HtoD":{"bytes":38707200,"count":1}},"memset":{"bytes":688020480,"count":360},"pass":"h3","step":1,"sync_count":0,"top_kernels":[{"calls":90,"category":"gemm","name":"cutlass3x_sm120_bstensorop_s16832gemm_block_scaled_ue8m0xe4m3_ue8m0xe4m3_f32_bf16_bf16_128x128x128_1x1x1_0_tnn_align16_q…","share":0.1694782670911167,"total_s":0.27968665800000003},{"calls":66,"category":"gemm","name":"nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN","share":0.1631034582006124,"total_s":0.269166436},{"calls":45,"category":"gemm","name":"nvjet_sm120_qqtst_mma_256x128x64_3_128x32x64_tmaAB_alignCD4_bz_vec32_ue8m0_TNNN","share":0.15856059741276424,"total_s":0.26166944200000003},{"calls":50,"category":"attention","name":"vsa_mma_attn_tma2","share":0.11306939713990685,"total_s":0.18659620700000001},{"calls":45,"category":"gemm","name":"nvjet_sm120_qqtst_mma_128x256x64_3_32x128x64_tmaAB_alignCD4_bz_vec32_ue8m0_TNNN","share":0.08127659282216004,"total_s":0.13412916600000002},{"calls":100,"category":"norm_modulate_elementwise","name":"h3_qk_norm_rope","share":0.04488929709588851,"total_s":0.074079926},{"calls":150,"category":"attention","name":"vsa_tile_qkv_b16","share":0.02989501467585168,"total_s":0.049335156000000005},{"calls":50,"category":"attention","name":"flash_mma_fwd_d128","share":0.028329998790860008,"total_s":0.046752441000000006},{"calls":50,"category":"layout","name":"mx_merge_heads","share":0.02332050577970456,"total_s":0.038485373},{"calls":45,"category":"norm_modulate_elementwise","name":"h3_swiglu_mx","share":0.022921699000948065,"total_s":0.03782723},{"calls":50,"category":"attention","name":"vsa_combine_g16","share":0.02243377100235696,"total_s":0.037022012},{"calls":50,"category":"norm_modulate_elementwise","name":"h3_gate_residual","share":0.02012713749936409,"total_s":0.03321542},{"calls":100,"category":"layout","name":"fill_f","share":0.017949742641731253,"total_s":0.029622108},{"calls":100,"category":"layout","name":"fvf_split_heads_rows","share":0.017576399414903302,"total_s":0.029005987},{"calls":108,"category":"cast","name":"cast_f32_bf16","share":0.01730975805690579,"total_s":0.028565954},{"calls":150,"category":"attention","name":"vsa_tile_mean_b16","share":0.015610319558947866,"total_s":0.025761404},{"calls":90,"category":"cast","name":"mxfp8_quantize","share":0.015009345315040388,"total_s":0.024769628000000002},{"calls":50,"category":"norm_modulate_elementwise","name":"h3_res_gate_norm_mod","share":0.014804852184468868,"total_s":0.024432157000000003},{"calls":50,"category":"norm_modulate_elementwise","name":"h3_norm_mod","share":0.008388257061099849,"total_s":0.013842976000000002},{"calls":5,"category":"norm_modulate_elementwise","name":"mx_swiglu","share":0.0041119800652734415,"total_s":0.006785920000000001},{"calls":50,"category":"attention","name":"vsa_topk2","share":0.002331280224023315,"total_s":0.0038472660000000002},{"calls":105,"category":"layout","name":"mx_block_copy","share":0.0017395965226451877,"total_s":0.0028708220000000003},{"calls":104,"category":"norm_modulate_elementwise","name":"mx_binary","share":0.0017031766506362149,"total_s":0.002810719},{"calls":50,"category":"attention","name":"softmax_last","share":0.0013366740796009733,"total_s":0.002205887},{"calls":50,"category":"gemm","name":"magma_sgemmEx_kernel<…>","share":0.0010666211800928803,"total_s":0.0017602240000000001}],"wall_s":1.694484154,"window_s":1.693983577},"load_s":301.686358081,"peak_mib":62640,"refine_s":0.006485797,"step_s":[1.712047343,1.694484154,1.6864906039999998,1.689111598],"text_cache":"disabled","text_encoder":"resident-fp8","text_s":0.669102282,"total_s":9.834511969,"video_decode_s":1.968920322,"video_encode_s":0.00010568,"video_push_s":0.00004887,"video_rgb_s":0.05022606700217378,"video_vae_s":1.961199237704277,"video_wait_s":0.158437858,"warm":false,"write_s":0.13296596}
+[PASS] h3/frames {"decoded":124} (limits {"expected":124})
+[PASS] h3/middle_frame_not_flat {"frame":"/fvscratch/runs/b4b/c493bd2-10241911/b4b-h3-4stepvsa-off-base/frames/frame-062.png","mean":0.49303766764967094,"std":0.27122045018847} (limits {"std_min":0.02})
+benchmark.json → /fvscratch/runs/b4b/c493bd2-10241911/b4b-h3-4stepvsa-off-base/benchmark.json
+[PASS] stage h3 → gpucheck-out/h3.json (312.1s)

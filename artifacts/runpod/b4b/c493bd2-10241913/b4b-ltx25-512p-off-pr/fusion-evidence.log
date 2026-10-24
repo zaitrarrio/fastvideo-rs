@@ -1,0 +1,10 @@
+fvf_split_heads_rows 864
+mx_binary 1634
+mx_block_copy 1440
+mx_gather_nd 288
+mx_ln_adaln_e 2
+mx_merge_heads 288
+mx_residual_gate 288
+mx_rms_norm 1056
+mx_rope_half 384
+mx_unary 1264

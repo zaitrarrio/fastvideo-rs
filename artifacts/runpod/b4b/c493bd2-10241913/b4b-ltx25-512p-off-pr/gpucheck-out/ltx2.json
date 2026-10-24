@@ -1,0 +1,803 @@
+{
+  "checks": [
+    {
+      "limits": {
+        "has_audio": true,
+        "r_frame_rate": "24/1",
+        "video_frames": 49
+      },
+      "name": "gen.mp4_frames_and_rate",
+      "ok": true,
+      "values": {
+        "audio": {
+          "channels": 2,
+          "codec_name": "aac",
+          "duration": "2.010000",
+          "sample_rate": "48000"
+        },
+        "avg_frame_rate": "24/1",
+        "ffprobe": true,
+        "has_audio": true,
+        "height": 512,
+        "path": "/fvscratch/runs/b4b/c493bd2-10241913/b4b-ltx25-512p-off-pr/frames/output.mp4",
+        "r_frame_rate": "24/1",
+        "video_duration_s": 2.041667,
+        "video_frames": 49,
+        "width": 768
+      }
+    },
+    {
+      "limits": {
+        "non_finite": 0,
+        "steps": 11
+      },
+      "name": "gen.latents_finite",
+      "ok": true,
+      "values": {
+        "steps": 11
+      }
+    },
+    {
+      "limits": {
+        "frames": 49
+      },
+      "name": "gen.frames",
+      "ok": true,
+      "values": {
+        "frames": 49
+      }
+    },
+    {
+      "limits": {
+        "channels": 2,
+        "sample_rate": 48000,
+        "samples_per_channel": 96480
+      },
+      "name": "gen.wav",
+      "ok": true,
+      "values": {
+        "bytes": 385964
+      }
+    },
+    {
+      "limits": {
+        "bytes_min": 1
+      },
+      "name": "gen.mp4",
+      "ok": true,
+      "values": {
+        "bytes": 207781,
+        "path": "/fvscratch/runs/b4b/c493bd2-10241913/b4b-ltx25-512p-off-pr/frames/output.mp4"
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/fvscratch/runs/b4b/c493bd2-10241913/b4b-ltx25-512p-off-pr/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "diff_vae": false,
+    "gpu_trace": {
+      "busy_s": 0.125006844,
+      "by_category": [
+        {
+          "calls": 2492,
+          "category": "gemm",
+          "share": 0.6161313627908479,
+          "total_s": 0.07723376500000001
+        },
+        {
+          "calls": 4634,
+          "category": "norm_modulate_elementwise",
+          "share": 0.24859993306728786,
+          "total_s": 0.031162687
+        },
+        {
+          "calls": 2882,
+          "category": "layout",
+          "share": 0.06450261799985779,
+          "total_s": 0.008085581
+        },
+        {
+          "calls": 288,
+          "category": "attention",
+          "share": 0.039360554311541784,
+          "total_s": 0.004933954
+        },
+        {
+          "calls": 1776,
+          "category": "cast",
+          "share": 0.03140553183046465,
+          "total_s": 0.00393677
+        }
+      ],
+      "dropped_records": 0,
+      "gap_count": 11167,
+      "gap_histogram": [
+        {
+          "bucket": "<5us",
+          "count": 11162,
+          "idle_s": 0.003251706
+        },
+        {
+          "bucket": "5-50us",
+          "count": 4,
+          "idle_s": 0.000048192
+        },
+        {
+          "bucket": "50-500us",
+          "count": 1,
+          "idle_s": 0.00015584
+        },
+        {
+          "bucket": ">500us",
+          "count": 0,
+          "idle_s": 0.0
+        }
+      ],
+      "host": {
+        "device_tail_s": 0.010705947875976562,
+        "enqueue_s": 0.117792093,
+        "first_activity_lag_s": 0.00003552436828613281
+      },
+      "host_launches": 9580,
+      "idle_frac": 0.026900735966835853,
+      "idle_s": 0.0034557380000000003,
+      "kernel_count": 12072,
+      "kernel_s": 0.125352757,
+      "largest_gaps": [
+        {
+          "after": "cast_f32_bf16",
+          "at_s": 3.5200000000000003e-7,
+          "before": "memcpy HtoD",
+          "gap_us": 155.84
+        },
+        {
+          "after": "internal::gemvx::kernel<…>",
+          "at_s": 0.000170624,
+          "before": "cast_f32_bf16",
+          "gap_us": 18.336000000000002
+        },
+        {
+          "after": "cast_f32_bf16",
+          "at_s": 0.000157152,
+          "before": "cast_f32_bf16",
+          "gap_us": 12.064
+        },
+        {
+          "after": "nvjet_sm120_tst_mma_192x8x64_3_48x8x64_tmaAB_alignCD4_splitK_TNNN",
+          "at_s": 0.0002032,
+          "before": "cast_f32_bf16",
+          "gap_us": 11.584
+        },
+        {
+          "after": "block_copy",
+          "at_s": 0.128430774,
+          "before": "memcpy HtoD",
+          "gap_us": 6.208
+        },
+        {
+          "after": "cast_f32_bf16",
+          "at_s": 0.00019772800000000002,
+          "before": "mx_unary",
+          "gap_us": 4.256
+        },
+        {
+          "after": "mx_unary",
+          "at_s": 0.00019334400000000002,
+          "before": "internal::gemvx::kernel<…>",
+          "gap_us": 3.2
+        },
+        {
+          "after": "memcpy HtoD",
+          "at_s": 0.128420534,
+          "before": "cublasLt::splitKreduce_kernel<…>",
+          "gap_us": 2.528
+        },
+        {
+          "after": "mx_unary",
+          "at_s": 0.026721157000000002,
+          "before": "flash_mma_fwd_d64",
+          "gap_us": 0.384
+        },
+        {
+          "after": "mx_unary",
+          "at_s": 0.029370405000000002,
+          "before": "flash_mma_fwd_d64",
+          "gap_us": 0.384
+        }
+      ],
+      "memcpy": {
+        "HtoD": {
+          "bytes": 371200,
+          "count": 2
+        }
+      },
+      "memset": {
+        "bytes": 0,
+        "count": 0
+      },
+      "pass": "ltx2",
+      "step": 1,
+      "sync_count": 2,
+      "top_kernels": [
+        {
+          "calls": 336,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_128x144x64_2_32x72x64_tmaAB_alignCD4_bx_biast_TNNN",
+          "share": 0.1812602653805213,
+          "total_s": 0.022721474000000002
+        },
+        {
+          "calls": 48,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_128x144x64_2_32x72x64_tmaAB_alignCD4_bz_TNNN",
+          "share": 0.10546701417983172,
+          "total_s": 0.013220581
+        },
+        {
+          "calls": 1634,
+          "category": "norm_modulate_elementwise",
+          "name": "mx_binary",
+          "share": 0.09696432125541522,
+          "total_s": 0.012154745000000002
+        },
+        {
+          "calls": 48,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_128x176x64_2_32x88x64_tmaAB_alignCD4_bz_TNNN",
+          "share": 0.0963021818498974,
+          "total_s": 0.012071744
+        },
+        {
+          "calls": 96,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_192x128x64_2_48x64x64_tmaAB_alignCD4_bx_biast_TNNN",
+          "share": 0.07209938749093488,
+          "total_s": 0.009037857
+        },
+        {
+          "calls": 1056,
+          "category": "norm_modulate_elementwise",
+          "name": "mx_rms_norm",
+          "share": 0.06936788793564388,
+          "total_s": 0.008695456
+        },
+        {
+          "calls": 144,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_128x64x64_4_64x32x64_tmaAB_alignCD4_bx_biast_TNNN",
+          "share": 0.053694000523658206,
+          "total_s": 0.0067306910000000005
+        },
+        {
+          "calls": 480,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_96x64x64_4_96x16x64_tmaAB_alignCD4_splitK_TNNN",
+          "share": 0.034914062560267425,
+          "total_s": 0.004376574
+        },
+        {
+          "calls": 1770,
+          "category": "cast",
+          "name": "cast_f32_bf16",
+          "share": 0.031354475913122515,
+          "total_s": 0.00393037
+        },
+        {
+          "calls": 384,
+          "category": "norm_modulate_elementwise",
+          "name": "mx_rope_half",
+          "share": 0.02884458297155762,
+          "total_s": 0.0036157480000000002
+        },
+        {
+          "calls": 1264,
+          "category": "norm_modulate_elementwise",
+          "name": "mx_unary",
+          "share": 0.027777984970845118,
+          "total_s": 0.0034820470000000003
+        },
+        {
+          "calls": 96,
+          "category": "attention",
+          "name": "flash_mma_fwd_d128",
+          "share": 0.025845279174832987,
+          "total_s": 0.003239777
+        },
+        {
+          "calls": 288,
+          "category": "norm_modulate_elementwise",
+          "name": "mx_residual_gate",
+          "share": 0.025461865190567767,
+          "total_s": 0.0031917150000000004
+        },
+        {
+          "calls": 96,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_128x96x64_3_64x24x64_tmaAB_alignCD4_bx_biast_TNNN",
+          "share": 0.023071905789834365,
+          "total_s": 0.002892127
+        },
+        {
+          "calls": 864,
+          "category": "layout",
+          "name": "fvf_split_heads_rows",
+          "share": 0.019725780742102066,
+          "total_s": 0.002472681
+        },
+        {
+          "calls": 288,
+          "category": "layout",
+          "name": "mx_merge_heads",
+          "share": 0.017719522515168933,
+          "total_s": 0.002221191
+        },
+        {
+          "calls": 1440,
+          "category": "layout",
+          "name": "mx_block_copy",
+          "share": 0.016620974678682177,
+          "total_s": 0.002083485
+        },
+        {
+          "calls": 832,
+          "category": "gemm",
+          "name": "cublasLt::splitKreduce_kernel<…>",
+          "share": 0.014463511161545494,
+          "total_s": 0.001813041
+        },
+        {
+          "calls": 192,
+          "category": "attention",
+          "name": "flash_mma_fwd_d64",
+          "share": 0.0135152751367088,
+          "total_s": 0.001694177
+        },
+        {
+          "calls": 48,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_128x80x64_3_32x40x64_tmaAB_alignCD4_splitK_TNNN",
+          "share": 0.01112099991546257,
+          "total_s": 0.0013940480000000002
+        },
+        {
+          "calls": 48,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_64x56x128_3_16x56x128_tmaAB_alignCD4_bx_biast_TNNN",
+          "share": 0.010787636685166805,
+          "total_s": 0.00135226
+        },
+        {
+          "calls": 288,
+          "category": "layout",
+          "name": "mx_gather_nd",
+          "share": 0.010416938815314608,
+          "total_s": 0.001305792
+        },
+        {
+          "calls": 144,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_32x64x128_4_16x32x128_tmaAB_alignCD4_splitK_TNNN",
+          "share": 0.005261854751228168,
+          "total_s": 0.000659588
+        },
+        {
+          "calls": 144,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_32x16x128_8_16x8x128_tmaAB_alignCD4_splitK_TNNN",
+          "share": 0.002560733466755741,
+          "total_s": 0.000320995
+        },
+        {
+          "calls": 9,
+          "category": "gemm",
+          "name": "internal::gemvx::kernel<…>",
+          "share": 0.001823198830800347,
+          "total_s": 0.00022854300000000002
+        },
+        {
+          "calls": 10,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_192x8x64_3_48x8x64_tmaAB_alignCD4_splitK_TNNN",
+          "share": 0.001307031483958506,
+          "total_s": 0.00016384
+        },
+        {
+          "calls": 3,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_320x8x64_2_80x8x64_tmaAB_alignCD4_splitK_TNNN",
+          "share": 0.0012886593312024242,
+          "total_s": 0.000161537
+        },
+        {
+          "calls": 1,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_128x8x64_5_32x8x64_tmaAB_alignCD4_bx_biast_TNNN",
+          "share": 0.0004495473521974471,
+          "total_s": 0.000056352000000000005
+        },
+        {
+          "calls": 2,
+          "category": "norm_modulate_elementwise",
+          "name": "mx_ln_adaln_e",
+          "share": 0.00012712923418190157,
+          "total_s": 0.000015936
+        },
+        {
+          "calls": 1,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_256x8x64_2_64x8x64_tmaAB_alignCD4_splitK_TNNN",
+          "share": 0.00010237509175805364,
+          "total_s": 0.000012833
+        },
+        {
+          "calls": 1,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_64x72x64_5_16x72x64_tmaAB_alignCD4_splitK_TNNN",
+          "share": 0.00005743790700989528,
+          "total_s": 7.2000000000000005e-6
+        },
+        {
+          "calls": 1,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_192x96x64_2_48x48x64_tmaAB_alignCD4_bx_biast_TNNN",
+          "share": 0.000056408811175967996,
+          "total_s": 7.0710000000000006e-6
+        },
+        {
+          "calls": 6,
+          "category": "norm_modulate_elementwise",
+          "name": "lincomb3",
+          "share": 0.000056161509076342055,
+          "total_s": 7.04e-6
+        },
+        {
+          "calls": 6,
+          "category": "cast",
+          "name": "cast_bf16_f32_bias_act",
+          "share": 0.000051055917342129144,
+          "total_s": 6.4000000000000006e-6
+        },
+        {
+          "calls": 1,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_64x32x128_4_16x32x128_tmaAB_alignCD4_bx_biast_TNNN",
+          "share": 0.000023238419877753466,
+          "total_s": 2.9130000000000003e-6
+        },
+        {
+          "calls": 1,
+          "category": "gemm",
+          "name": "nvjet_sm120_tst_mma_32x32x128_6_16x16x128_tmaAB_alignCD4_splitK_TNNN",
+          "share": 0.000019911807763430366,
+          "total_s": 2.4960000000000003e-6
+        },
+        {
+          "calls": 2,
+          "category": "layout",
+          "name": "block_copy",
+          "share": 0.000019401248590009074,
+          "total_s": 2.432e-6
+        }
+      ],
+      "wall_s": 0.128529442,
+      "window_s": 0.12846258200000002
+    },
+    "guided": null,
+    "hq": null,
+    "memory_plan": {
+      "peak_gib": 44.26482981443405,
+      "phases": [
+        {
+          "gib": 44.26482981443405,
+          "phase": "text"
+        },
+        {
+          "gib": 39.14765423536301,
+          "phase": "stage1"
+        },
+        {
+          "gib": 40.86074322462082,
+          "phase": "upsample"
+        },
+        {
+          "gib": 40.71554058790207,
+          "phase": "stage2"
+        },
+        {
+          "gib": 4.869790256023407,
+          "phase": "decode"
+        }
+      ],
+      "streamed": {
+        "peak_gib": 9.636526584625244,
+        "phases": [
+          {
+            "gib": 9.636526584625244,
+            "phase": "text"
+          },
+          {
+            "gib": 4.519351005554199,
+            "phase": "stage1"
+          },
+          {
+            "gib": 7.749263942241669,
+            "phase": "upsample"
+          },
+          {
+            "gib": 6.087237358093262,
+            "phase": "stage2"
+          },
+          {
+            "gib": 4.869790256023407,
+            "phase": "decode"
+          }
+        ]
+      }
+    },
+    "mode": "fast",
+    "model_version": "2.5",
+    "mp4_probe": {
+      "audio": {
+        "channels": 2,
+        "codec_name": "aac",
+        "duration": "2.010000",
+        "sample_rate": "48000"
+      },
+      "avg_frame_rate": "24/1",
+      "ffprobe": true,
+      "has_audio": true,
+      "height": 512,
+      "path": "/fvscratch/runs/b4b/c493bd2-10241913/b4b-ltx25-512p-off-pr/frames/output.mp4",
+      "r_frame_rate": "24/1",
+      "video_duration_s": 2.041667,
+      "video_frames": 49,
+      "width": 768
+    },
+    "outputs": {
+      "first_frame": "/fvscratch/runs/b4b/c493bd2-10241913/b4b-ltx25-512p-off-pr/frames/frame-000.png",
+      "frames": 49,
+      "mp4": "/fvscratch/runs/b4b/c493bd2-10241913/b4b-ltx25-512p-off-pr/frames/output.mp4",
+      "wav": "/fvscratch/runs/b4b/c493bd2-10241913/b4b-ltx25-512p-off-pr/frames/audio.wav"
+    },
+    "peak_vram_mib": 45328,
+    "phase_memory": {
+      "dit_residency": "resident",
+      "load_used_gib": 37.4951391145587,
+      "offload": "none",
+      "phases": [
+        {
+          "end_used_gib": 37.5498266145587,
+          "peak_reserved_gib": 43.625,
+          "peak_used_gib": 43.55536746233702,
+          "phase": "text"
+        },
+        {
+          "end_used_gib": 37.550365917384624,
+          "peak_reserved_gib": 37.71875,
+          "peak_used_gib": 37.637518398463726,
+          "phase": "stage1"
+        },
+        {
+          "end_used_gib": 37.71648994740099,
+          "peak_reserved_gib": 39.8125,
+          "peak_used_gib": 39.7269922895357,
+          "phase": "upsample"
+        },
+        {
+          "end_used_gib": 37.71648994740099,
+          "peak_reserved_gib": 38.34375,
+          "peak_used_gib": 38.04651466663927,
+          "phase": "stage2"
+        },
+        {
+          "end_used_gib": 38.45020470675081,
+          "peak_reserved_gib": 40.25,
+          "peak_used_gib": 39.730178544297814,
+          "phase": "decode"
+        }
+      ]
+    },
+    "request": {
+      "cond_images": [],
+      "diff_vae": false,
+      "frame_rate": 24.0,
+      "height": 512,
+      "image": null,
+      "num_frames": 49,
+      "pisa_stage2": false,
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "prompt_set": null,
+      "seed": 1024,
+      "sol_stage2": true,
+      "two_stage": true,
+      "width": 768
+    },
+    "sink_check": false,
+    "skip_audio_decode": false,
+    "steps": [
+      {
+        "audio_mean": -0.015445312083351845,
+        "audio_std": 1.0064783287434078,
+        "non_finite": 0,
+        "seconds": 0.156638323,
+        "step": 0,
+        "video_mean": -0.0024139078696818962,
+        "video_std": 0.9964509968265803
+      },
+      {
+        "audio_mean": -0.015826184193001074,
+        "audio_std": 0.9880812547153203,
+        "non_finite": 0,
+        "seconds": 0.128529442,
+        "step": 1,
+        "video_mean": -0.0020654245509788218,
+        "video_std": 0.9897086548065703
+      },
+      {
+        "audio_mean": -0.0033430781434564028,
+        "audio_std": 0.9872125151542976,
+        "non_finite": 0,
+        "seconds": 0.123935988,
+        "step": 2,
+        "video_mean": -0.0006057679091186618,
+        "video_std": 0.9824711847044035
+      },
+      {
+        "audio_mean": -0.006089276451544434,
+        "audio_std": 0.9728043466923993,
+        "non_finite": 0,
+        "seconds": 0.122456667,
+        "step": 3,
+        "video_mean": 0.003583360824406901,
+        "video_std": 0.9737238751523208
+      },
+      {
+        "audio_mean": 0.002976696938276291,
+        "audio_std": 0.8976003613032093,
+        "non_finite": 0,
+        "seconds": 0.122483307,
+        "step": 4,
+        "video_mean": -0.0006299628571252383,
+        "video_std": 0.9191159721338087
+      },
+      {
+        "audio_mean": 0.03789968994519144,
+        "audio_std": 0.7471569097940489,
+        "non_finite": 0,
+        "seconds": 0.122389487,
+        "step": 5,
+        "video_mean": -0.008758827290009884,
+        "video_std": 0.7787977265073415
+      },
+      {
+        "audio_mean": 0.06824844286722295,
+        "audio_std": 0.7796897818972437,
+        "non_finite": 0,
+        "seconds": 0.122552567,
+        "step": 6,
+        "video_mean": -0.016478793655724508,
+        "video_std": 0.6997544959942885
+      },
+      {
+        "audio_mean": 0.11678143342336018,
+        "audio_std": 1.1187799921708572,
+        "non_finite": 0,
+        "seconds": 0.122293767,
+        "step": 7,
+        "video_mean": -0.025509341198596217,
+        "video_std": 0.948529101966394
+      },
+      {
+        "audio_mean": 0.02054427250051031,
+        "audio_std": 0.7660680651803959,
+        "non_finite": 0,
+        "seconds": 0.330013651,
+        "step": 8,
+        "video_mean": -0.007966261815189076,
+        "video_std": 0.7847448829216045
+      },
+      {
+        "audio_mean": 0.04741909077354506,
+        "audio_std": 0.855624731010279,
+        "non_finite": 0,
+        "seconds": 0.31665714,
+        "step": 9,
+        "video_mean": -0.015194921824678161,
+        "video_std": 0.7021102659085106
+      },
+      {
+        "audio_mean": 0.08385453621546428,
+        "audio_std": 1.2413488620827258,
+        "non_finite": 0,
+        "seconds": 0.31503548,
+        "step": 10,
+        "video_mean": -0.024091862358285913,
+        "video_std": 0.9126235280168773
+      }
+    ],
+    "text": {
+      "cache": "off",
+      "cache_dir": null,
+      "key": null,
+      "mode": "streamed",
+      "seconds": 3.133767498,
+      "text_weights": null,
+      "tokens": 48
+    },
+    "timings": {
+      "decode_audio_s": 0.15196829,
+      "decode_video_s": 0.272892456,
+      "denoise_s": 2.4598623959999997,
+      "generate_s": 6.089818365,
+      "image_s": 0.0,
+      "load_s": 8.917973524,
+      "stage1_s": 1.034142698,
+      "stage2_s": 0.965875084,
+      "step_s": [
+        0.156638323,
+        0.128529442,
+        0.123935988,
+        0.122456667,
+        0.122483307,
+        0.122389487,
+        0.122552567,
+        0.122293767,
+        0.330013651,
+        0.31665714,
+        0.31503548
+      ],
+      "text_s": 3.133767498,
+      "upsample_s": 0.459844614,
+      "video_encode_s": 0.051221081,
+      "video_push_s": 0.046482097,
+      "video_rgb_s": 0.016158153000630768,
+      "video_vae_s": 0.16961242002248766,
+      "video_wait_s": 0.056493354999999995,
+      "wall_s": 15.00803016,
+      "warm": false,
+      "write_s": 0.022555677,
+      "writer": {
+        "active_at_spawn": 0,
+        "buffer_budget_gib": 43.31953048706055,
+        "buffered_peak_gib": 0.0538330078125,
+        "ffmpeg_feed_s": 0.077356771,
+        "frames": 49,
+        "png_deferred": 49,
+        "png_gib": 0.01943553425371647,
+        "png_inline": 0,
+        "png_mode": "deferred",
+        "png_s": 0.022523007,
+        "video_tail_s": 0.051213891
+      }
+    },
+    "tokens": {
+      "audio": 51,
+      "prompt": 48,
+      "video": 2688
+    },
+    "two_stage": true,
+    "video_vae": {
+      "decoder": "conv_vae"
+    }
+  },
+  "elapsed_s": 15.271937268,
+  "env": {
+    "FASTVIDEO_GPU_TRACE": "1",
+    "FASTVIDEO_GPU_TRACE_TOP": "100000",
+    "FASTVIDEO_LTX_FUSE": "0"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "ltx2",
+  "status": "pass"
+}

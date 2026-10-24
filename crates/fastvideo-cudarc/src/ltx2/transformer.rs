@@ -582,6 +582,9 @@ pub struct Ltx2Transformer {
     video_frozen: std::sync::atomic::AtomicBool,
     /// A guided pass's perturbation ([`Self::set_perturbation`]).
     perturbation: Mutex<Ltx2Perturbation>,
+    /// The block fusions the load plan decided ([`Self::install_kernel_fusion`]);
+    /// `None`: the process-wide settings (a DiT built outside a plan).
+    kernel_fusion: Option<crate::rt::fuse::BlockFusion>,
 }
 
 /// One guided pass's perturbation (`ltx_core.guidance.perturbations`,
@@ -1097,6 +1100,7 @@ impl Ltx2Transformer {
             mods: Mutex::new(None),
             audio_frozen: std::sync::atomic::AtomicBool::new(false),
             perturbation: Mutex::new(Ltx2Perturbation::default()),
+            kernel_fusion: None,
             video_segments: Mutex::new(None),
             audio_segments: Mutex::new(None),
             video_frozen: std::sync::atomic::AtomicBool::new(false),
@@ -1664,9 +1668,32 @@ impl Ltx2Transformer {
         self.forward_probed(video, audio, text, timestep, ropes, observer, None, route)
     }
 
+    /// Run every following forward under the block fusions a load plan
+    /// decided (the fuse stage, ADR-0017; `crate::rt::fuse::installed`).
+    pub fn install_kernel_fusion(&mut self, fusion: crate::rt::fuse::BlockFusion) {
+        self.kernel_fusion = Some(fusion);
+    }
+
     /// [`Self::forward`] with sub-layer taps handed to `probe`.
     #[allow(clippy::too_many_arguments)]
     pub fn forward_probed(
+        &self,
+        video: &CudaTensor,
+        audio: &CudaTensor,
+        text: &TextConditioning,
+        timestep: f32,
+        ropes: &Ropes,
+        observer: Option<BlockObserver<'_>>,
+        probe: Option<Probe<'_>>,
+        route: Ltx2VideoAttn,
+    ) -> Result<(CudaTensor, CudaTensor)> {
+        crate::rt::fuse::installed(self.kernel_fusion, || {
+            self.forward_probed_inner(video, audio, text, timestep, ropes, observer, probe, route)
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn forward_probed_inner(
         &self,
         video: &CudaTensor,
         audio: &CudaTensor,

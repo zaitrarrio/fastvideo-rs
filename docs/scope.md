@@ -346,6 +346,7 @@ process: the first read is cached).
 | `FASTVIDEO_GPU_TRACE` | env, then profile | flag | `0` | once per process | runtime | `trace` | CUPTI trace of one denoise step (kernel time by category, GPU idle). |
 | `FASTVIDEO_GPU_TRACE_DECODE` | env, then profile | flag | `0` | once per process | runtime | `trace` | CUPTI trace of a whole video decode (kernel time by category, GPU idle). |
 | `FASTVIDEO_GPU_TRACE_STEP` | env, then profile | usize | `1` | per call | runtime | `trace` | Denoise step `FASTVIDEO_GPU_TRACE` traces. |
+| `FASTVIDEO_GPU_TRACE_TOP` | env, then profile | usize | `25` | per call | runtime | `trace` | Kernels a `FASTVIDEO_GPU_TRACE` report lists (`top_kernels`, by time); the report only. |
 | `FASTVIDEO_H2D_TRACE_BYTES` | env | text: a `usize` (not trimmed); unset or unparsable = off | unset | once per process | runtime | `trace` | Log host-to-device copies of at least this many bytes. |
 | `FASTVIDEO_H2D_TRACE_SKIP` | env, then profile | usize | `0` | per call | runtime | `trace` | Host-to-device copies skipped before `FASTVIDEO_H2D_TRACE_BYTES` logs. |
 | `FASTVIDEO_H3_AFFINE` | env, then profile | keyword: bit list | empty | once per process | H3 | `kernel_fusion` | H3 affine-fusion bits (`fv-gpucheck --h3-affine`). |

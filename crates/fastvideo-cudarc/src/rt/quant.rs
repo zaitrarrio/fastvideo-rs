@@ -204,11 +204,6 @@ pub fn w8a8_dequantize(q: &[u8], scale: f32) -> Vec<f32> {
 // bf16 fused-op references (the rounding points of Sol-H3 fusions.py)
 // ---------------------------------------------------------------------------
 
-fn rms_factor(x: &[f32], eps: f32) -> f32 {
-    let ss: f32 = x.iter().map(|v| v * v).sum();
-    1.0 / (ss / x.len() as f32 + eps).sqrt()
-}
-
 /// Threads per row of the fused H3 norm kernels (`cfg_rows`).
 pub const NORM_THREADS: usize = 256;
 
@@ -242,38 +237,18 @@ pub fn row_rsqrt(x: &[f32], eps: f32) -> f32 {
 }
 
 /// One row of `_rmsnorm_modulate_kernel`: `bf16(rms(x) * w * scale1p + shift)`
-/// with `scale1p = 1 + scale` already formed in f32.
+/// with `scale1p = 1 + scale` already formed in f32 (the host reference's
+/// [`crate::rt::fuse::policy::H3_NORM_MOD`]).
 pub fn norm_mod_row(x: &[f32], w: &[f32], scale1p: &[f32], shift: &[f32], eps: f32) -> Vec<f32> {
-    let r = row_rsqrt(x, eps);
-    x.iter()
-        .enumerate()
-        .map(|(j, &v)| bf16_round((v * r * w[j]).mul_add(scale1p[j], shift[j])))
-        .collect()
+    use crate::rt::fuse::host;
+    host::modulate_weight_fma(&host::normalize_rms_lanes(x, eps), w, scale1p, shift)
 }
 
-/// One row of `_residual_gate_rmsnorm_modulate_kernel`: returns
-/// `(bf16(res + gate * branch), bf16(norm_mod(f32 hidden)))` — the norm sees
-/// the unrounded f32 hidden.
-#[allow(clippy::too_many_arguments)]
-pub fn res_gate_norm_mod_row(
-    res: &[f32],
-    branch: &[f32],
-    gate: &[f32],
-    w: &[f32],
-    scale1p: &[f32],
-    shift: &[f32],
-    eps: f32,
-) -> (Vec<f32>, Vec<f32>) {
-    let h: Vec<f32> = (0..res.len())
-        .map(|j| gate[j].mul_add(branch[j], res[j]))
-        .collect();
-    let normed = norm_mod_row(&h, w, scale1p, shift, eps);
-    (h.into_iter().map(bf16_round).collect(), normed)
-}
-
-/// Eager `residual + gate * branch` in bf16: the product rounds first.
+/// Eager `residual + gate * branch` in bf16: the product rounds first
+/// ([`crate::rt::fuse::policy::H3_GATE_RESIDUAL`]).
 pub fn gate_residual_eager(res: f32, gate: f32, branch: f32) -> f32 {
-    bf16_round(res + bf16_round(gate * branch))
+    use crate::rt::fuse::{host, Residual};
+    bf16_round(host::combine(Residual::RoundedProduct, res, branch, gate))
 }
 
 /// `_swiglu_kernel`: `bf16(value * (gate * sigmoid(gate)))`, value half first.
@@ -286,39 +261,6 @@ pub fn swiglu_row(x: &[f32]) -> Vec<f32> {
             bf16_round(v * (g * sg))
         })
         .collect()
-}
-
-/// `_qknorm_partial_rope_kernel` for one head vector: RMS over `d`, weight,
-/// then rotate_half over the leading `r` channels with f32 `cos`/`sin`.
-pub fn qk_norm_rope_row(
-    x: &[f32],
-    w: &[f32],
-    rope: Option<(&[f32], &[f32])>,
-    eps: f32,
-) -> Vec<f32> {
-    let r_f = rms_factor(x, eps);
-    let normed: Vec<f32> = x.iter().zip(w).map(|(&v, &wv)| v * r_f * wv).collect();
-    match rope {
-        None => normed.into_iter().map(bf16_round).collect(),
-        Some((cos, sin)) => {
-            let r = cos.len();
-            let half = r / 2;
-            (0..x.len())
-                .map(|p| {
-                    if p >= r {
-                        return bf16_round(normed[p]);
-                    }
-                    let partner = if p < half { p + half } else { p - half };
-                    let rot = if p < half {
-                        -normed[partner]
-                    } else {
-                        normed[partner]
-                    };
-                    bf16_round(normed[p] * cos[p] + rot * sin[p])
-                })
-                .collect()
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2125,7 +2067,21 @@ mod tests {
             .map(|i| bf16_round((i as f32 * 0.11).cos()))
             .collect();
         let g: Vec<f32> = vec![bf16_round(0.3337); d];
-        let (h, n2) = res_gate_norm_mod_row(&x, &br, &g, &w, &sc, &sh, 1e-6);
+        let out = crate::rt::fuse::host::res_norm_row(
+            &crate::rt::fuse::policy::H3_RES_GATE_NORM_MOD,
+            &crate::rt::fuse::host::RowOperands {
+                x: &x,
+                u: Some(&br),
+                gate: Some(&g),
+                w: Some(&w),
+                scale: Some(&sc),
+                shift: Some(&sh),
+                eps: 1e-6,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let (h, n2) = (out.hidden.unwrap(), out.normed.unwrap());
         let h32: Vec<f32> = (0..d).map(|j| g[j].mul_add(br[j], x[j])).collect();
         assert_eq!(n2, norm_mod_row(&h32, &w, &sc, &sh, 1e-6));
         assert_eq!(h, h32.iter().map(|&v| bf16_round(v)).collect::<Vec<_>>());

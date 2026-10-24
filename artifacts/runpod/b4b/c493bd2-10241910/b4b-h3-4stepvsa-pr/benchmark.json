@@ -1,0 +1,597 @@
+{
+  "activations": "bf16",
+  "attention": {
+    "dense_video_calls": 0,
+    "forwards": 4,
+    "per_forward": [
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 0,
+        "layers": 50,
+        "pisa": 0,
+        "sol": 0,
+        "step": 0,
+        "tau_calls": {},
+        "vsa": 50
+      },
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 1,
+        "layers": 50,
+        "pisa": 0,
+        "sol": 0,
+        "step": 1,
+        "tau_calls": {},
+        "vsa": 50
+      },
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 2,
+        "layers": 50,
+        "pisa": 0,
+        "sol": 0,
+        "step": 2,
+        "tau_calls": {},
+        "vsa": 50
+      },
+      {
+        "dense": 0,
+        "dense_layers": [],
+        "forward": 3,
+        "layers": 50,
+        "pisa": 0,
+        "sol": 0,
+        "step": 3,
+        "tau_calls": {},
+        "vsa": 50
+      }
+    ],
+    "pisa_calls": 0,
+    "pisa_sparsity_calls": {},
+    "sol_calls": 0,
+    "tau_calls": {},
+    "video_calls": 200,
+    "vsa_calls": 200
+  },
+  "decode_s": 2.12522706,
+  "denoise_s": 6.381763676,
+  "dit_offload": null,
+  "dtype": "bfloat16",
+  "e2e_seconds": 9.043137818,
+  "env": {
+    "FASTVIDEO_GPU_TRACE": "1",
+    "FASTVIDEO_GPU_TRACE_TOP": "100000",
+    "FASTVIDEO_H3_FUSE": "1"
+  },
+  "ffn_chunking": {
+    "calls": 202,
+    "chunked_calls": 0,
+    "chunks": 202
+  },
+  "generate_wall_s": 9.170695233,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "gpu_trace": {
+    "busy_s": 1.5495411650000002,
+    "by_category": [
+      {
+        "calls": 351,
+        "category": "gemm",
+        "share": 0.6253008165310198,
+        "total_s": 0.9679825740000001
+      },
+      {
+        "calls": 550,
+        "category": "attention",
+        "share": 0.22900176621785281,
+        "total_s": 0.354500927
+      },
+      {
+        "calls": 311,
+        "category": "norm_modulate_elementwise",
+        "share": 0.06190598700025423,
+        "total_s": 0.09583214200000001
+      },
+      {
+        "calls": 50,
+        "category": "other",
+        "share": 0.036886805859243636,
+        "total_s": 0.057101773
+      },
+      {
+        "calls": 359,
+        "category": "layout",
+        "share": 0.036672978845370206,
+        "total_s": 0.056770763
+      },
+      {
+        "calls": 164,
+        "category": "cast",
+        "share": 0.010231645546259362,
+        "total_s": 0.015838864
+      }
+    ],
+    "dropped_records": 0,
+    "gap_count": 1895,
+    "gap_histogram": [
+      {
+        "bucket": "<5us",
+        "count": 1892,
+        "idle_s": 0.000571495
+      },
+      {
+        "bucket": "5-50us",
+        "count": 1,
+        "idle_s": 0.000036416000000000005
+      },
+      {
+        "bucket": "50-500us",
+        "count": 0,
+        "idle_s": 0.0
+      },
+      {
+        "bucket": ">500us",
+        "count": 2,
+        "idle_s": 0.03940656
+      }
+    ],
+    "host": {
+      "device_tail_s": 0.7472827434539795,
+      "enqueue_s": 0.842308213,
+      "first_activity_lag_s": 0.00003504753112792969
+    },
+    "host_launches": 1434,
+    "idle_frac": 0.02517336926985046,
+    "idle_s": 0.040014471,
+    "kernel_count": 1785,
+    "kernel_s": 1.548027043,
+    "largest_gaps": [
+      {
+        "after": "memcpy HtoD",
+        "at_s": 0.0031505310000000003,
+        "before": "mx_block_copy",
+        "gap_us": 37334.974
+      },
+      {
+        "after": "nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN",
+        "at_s": 4.864e-6,
+        "before": "cast_f32_bf16",
+        "gap_us": 2071.5860000000002
+      },
+      {
+        "after": "h3_norm_mod",
+        "at_s": 0.04147741,
+        "before": "memcpy HtoD",
+        "gap_us": 36.416000000000004
+      },
+      {
+        "after": "h3_res_gate_norm_mod",
+        "at_s": 0.49620168600000003,
+        "before": "memset",
+        "gap_us": 0.352
+      },
+      {
+        "after": "h3_res_gate_norm_mod",
+        "at_s": 0.5851460470000001,
+        "before": "memset",
+        "gap_us": 0.352
+      },
+      {
+        "after": "h3_res_gate_norm_mod",
+        "at_s": 0.733595832,
+        "before": "memset",
+        "gap_us": 0.352
+      },
+      {
+        "after": "fvf_merge_heads_mx",
+        "at_s": 0.731591478,
+        "before": "memset",
+        "gap_us": 0.321
+      },
+      {
+        "after": "memset",
+        "at_s": 1.248644061,
+        "before": "fvf_h3_gate_res_norm_mod",
+        "gap_us": 0.321
+      },
+      {
+        "after": "vsa_mma_attn_tma2",
+        "at_s": 1.557729114,
+        "before": "fill_f",
+        "gap_us": 0.321
+      },
+      {
+        "after": "cast_bf16_f32_bias_act",
+        "at_s": 0.002184674,
+        "before": "nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN",
+        "gap_us": 0.32
+      }
+    ],
+    "memcpy": {
+      "HtoD": {
+        "bytes": 38707200,
+        "count": 1
+      }
+    },
+    "memset": {
+      "bytes": 688020480,
+      "count": 360
+    },
+    "pass": "h3",
+    "step": 1,
+    "sync_count": 0,
+    "top_kernels": [
+      {
+        "calls": 90,
+        "category": "gemm",
+        "name": "cutlass3x_sm120_bstensorop_s16832gemm_block_scaled_ue8m0xe4m3_ue8m0xe4m3_f32_bf16_bf16_128x128x128_1x1x1_0_tnn_align16_q…",
+        "share": 0.184545327093488,
+        "total_s": 0.285681157
+      },
+      {
+        "calls": 66,
+        "category": "gemm",
+        "name": "nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN",
+        "share": 0.1764429344016311,
+        "total_s": 0.27313843400000004
+      },
+      {
+        "calls": 45,
+        "category": "gemm",
+        "name": "nvjet_sm120_qqtst_mma_256x128x64_3_128x32x64_tmaAB_alignCD4_bz_vec32_ue8m0_TNNN",
+        "share": 0.17348229878436303,
+        "total_s": 0.26855529
+      },
+      {
+        "calls": 50,
+        "category": "attention",
+        "name": "vsa_mma_attn_tma2",
+        "share": 0.12296905332551093,
+        "total_s": 0.19035942
+      },
+      {
+        "calls": 45,
+        "category": "gemm",
+        "name": "nvjet_sm120_qqtst_mma_128x256x64_3_32x128x64_tmaAB_alignCD4_bz_vec32_ue8m0_TNNN",
+        "share": 0.08859490641340172,
+        "total_s": 0.13714731100000002
+      },
+      {
+        "calls": 50,
+        "category": "other",
+        "name": "fvf_h3_qkvg_heads",
+        "share": 0.036886805859243636,
+        "total_s": 0.057101773
+      },
+      {
+        "calls": 150,
+        "category": "attention",
+        "name": "vsa_tile_qkv_b16",
+        "share": 0.03189306557869997,
+        "total_s": 0.049371328000000006
+      },
+      {
+        "calls": 50,
+        "category": "attention",
+        "name": "flash_mma_fwd_d128",
+        "share": 0.029997825432045763,
+        "total_s": 0.046437445
+      },
+      {
+        "calls": 45,
+        "category": "norm_modulate_elementwise",
+        "name": "h3_swiglu_mx",
+        "share": 0.024453753680322494,
+        "total_s": 0.037855072000000003
+      },
+      {
+        "calls": 50,
+        "category": "attention",
+        "name": "vsa_combine_g16",
+        "share": 0.023879169402856486,
+        "total_s": 0.0369656
+      },
+      {
+        "calls": 100,
+        "category": "layout",
+        "name": "fill_f",
+        "share": 0.019101447312377475,
+        "total_s": 0.029569557000000003
+      },
+      {
+        "calls": 150,
+        "category": "attention",
+        "name": "vsa_tile_mean_b16",
+        "share": 0.01635458444636487,
+        "total_s": 0.025317339
+      },
+      {
+        "calls": 50,
+        "category": "norm_modulate_elementwise",
+        "name": "h3_res_gate_norm_mod",
+        "share": 0.015853730147012683,
+        "total_s": 0.024542003000000003
+      },
+      {
+        "calls": 49,
+        "category": "norm_modulate_elementwise",
+        "name": "fvf_h3_gate_res_norm_mod",
+        "share": 0.01402693001920639,
+        "total_s": 0.021714067
+      },
+      {
+        "calls": 45,
+        "category": "layout",
+        "name": "fvf_merge_heads_mx",
+        "share": 0.01210578141043496,
+        "total_s": 0.018740077
+      },
+      {
+        "calls": 45,
+        "category": "cast",
+        "name": "mxfp8_quantize",
+        "share": 0.00691103624344113,
+        "total_s": 0.010698471000000001
+      },
+      {
+        "calls": 5,
+        "category": "norm_modulate_elementwise",
+        "name": "mx_swiglu",
+        "share": 0.00438785422432701,
+        "total_s": 0.0067925170000000005
+      },
+      {
+        "calls": 5,
+        "category": "layout",
+        "name": "mx_merge_heads",
+        "share": 0.0024854559339891327,
+        "total_s": 0.003847553
+      },
+      {
+        "calls": 50,
+        "category": "attention",
+        "name": "vsa_topk2",
+        "share": 0.002485001807555632,
+        "total_s": 0.00384685
+      },
+      {
+        "calls": 63,
+        "category": "cast",
+        "name": "cast_f32_bf16",
+        "share": 0.002399299816366322,
+        "total_s": 0.0037141810000000004
+      },
+      {
+        "calls": 105,
+        "category": "layout",
+        "name": "mx_block_copy",
+        "share": 0.0018537796306443465,
+        "total_s": 0.002869701
+      },
+      {
+        "calls": 104,
+        "category": "norm_modulate_elementwise",
+        "name": "mx_binary",
+        "share": 0.0018176840079918424,
+        "total_s": 0.0028138240000000004
+      },
+      {
+        "calls": 50,
+        "category": "attention",
+        "name": "softmax_last",
+        "share": 0.0014230662248191745,
+        "total_s": 0.002202945
+      },
+      {
+        "calls": 50,
+        "category": "gemm",
+        "name": "magma_sgemmEx_kernel<…>",
+        "share": 0.0011455516930526904,
+        "total_s": 0.0017733450000000002
+      },
+      {
+        "calls": 50,
+        "category": "gemm",
+        "name": "cutlass::Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>",
+        "share": 0.0010036400895097283,
+        "total_s": 0.0015536620000000001
+      },
+      {
+        "calls": 56,
+        "category": "cast",
+        "name": "cast_bf16_f32_bias_act",
+        "share": 0.0009213094864519108,
+        "total_s": 0.001426212
+      },
+      {
+        "calls": 50,
+        "category": "layout",
+        "name": "index_select_rows",
+        "share": 0.0007002061139057246,
+        "total_s": 0.001083938
+      },
+      {
+        "calls": 50,
+        "category": "norm_modulate_elementwise",
+        "name": "bcast_binary",
+        "share": 0.0005834542775490776,
+        "total_s": 0.0009032030000000001
+      },
+      {
+        "calls": 1,
+        "category": "norm_modulate_elementwise",
+        "name": "h3_gate_residual",
+        "share": 0.00042934650463984173,
+        "total_s": 0.0006646400000000001
+      },
+      {
+        "calls": 54,
+        "category": "layout",
+        "name": "block_copy",
+        "share": 0.00042630844401857134,
+        "total_s": 0.0006599370000000001
+      },
+      {
+        "calls": 1,
+        "category": "norm_modulate_elementwise",
+        "name": "h3_norm_mod",
+        "share": 0.0001775266144365412,
+        "total_s": 0.000274816
+      },
+      {
+        "calls": 2,
+        "category": "norm_modulate_elementwise",
+        "name": "mx_rms_norm",
+        "share": 0.0001651857447557523,
+        "total_s": 0.000255712
+      },
+      {
+        "calls": 1,
+        "category": "gemm",
+        "name": "nvjet_sm120_tst_mma_112x256x64_2_112x32x64_tmaAB_alignCD4_splitK_TNNN",
+        "share": 0.00007354910272068161,
+        "total_s": 0.000113856
+      },
+      {
+        "calls": 4,
+        "category": "norm_modulate_elementwise",
+        "name": "lincomb3",
+        "share": 0.000010521780012598914,
+        "total_s": 0.000016288
+      },
+      {
+        "calls": 2,
+        "category": "gemm",
+        "name": "cublasLt::splitKreduce_kernel<…>",
+        "share": 6.035424279083476e-6,
+        "total_s": 9.343e-6
+      },
+      {
+        "calls": 1,
+        "category": "gemm",
+        "name": "nvjet_sm120_tst_mma_128x128x64_3_64x64x64_tmaAB_alignCD4_bz_TNNN",
+        "share": 3.98959438591668e-6,
+        "total_s": 6.176000000000001e-6
+      },
+      {
+        "calls": 1,
+        "category": "gemm",
+        "name": "nvjet_sm120_tst_mma_32x64x128_4_16x32x128_tmaAB_alignCD4_splitK_TNNN",
+        "share": 2.5839341877698708e-6,
+        "total_s": 4.000000000000001e-6
+      }
+    ],
+    "wall_s": 1.589686943,
+    "window_s": 1.589555636
+  },
+  "hardware": "1x NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "includes_model_load": false,
+  "inference_time_s": 9.043137818,
+  "load_s": 11.545370365,
+  "max_device_memory_used_mib": 62640,
+  "memory": {
+    "dit_residency": "resident",
+    "stages": [
+      {
+        "end_allocated_gib": 56.2429079785943,
+        "peak_allocated_gib": 56.501664869487286,
+        "peak_reserved_gib": 56.75,
+        "stage": "text"
+      },
+      {
+        "end_allocated_gib": 56.27461860328913,
+        "peak_allocated_gib": 56.279685474932194,
+        "peak_reserved_gib": 56.75,
+        "stage": "refine"
+      },
+      {
+        "end_allocated_gib": 56.27936790138483,
+        "peak_allocated_gib": 60.00240804255009,
+        "peak_reserved_gib": 60.46875,
+        "stage": "denoise"
+      },
+      {
+        "end_allocated_gib": 56.36223246809095,
+        "peak_allocated_gib": 56.49388482328504,
+        "peak_reserved_gib": 56.59375,
+        "stage": "audio_decode"
+      },
+      {
+        "end_allocated_gib": 56.367393038235605,
+        "peak_allocated_gib": 57.1622966742143,
+        "peak_reserved_gib": 57.53125,
+        "stage": "video_decode"
+      }
+    ]
+  },
+  "model": "MiniMaxAI/MiniMax-H3",
+  "peak_allocated_gib": 60.00240804255009,
+  "peak_memory_mb": 61920.0,
+  "peak_reserved_gib": 60.46875,
+  "pipeline": "h3",
+  "png_frames_s": 0.127557415,
+  "quantized_linears": {
+    "calls": {
+      "fp8_rows_weight_only": 350,
+      "mxfp8": 720
+    },
+    "modules": {}
+  },
+  "recipe": "4step-vsa",
+  "schema_version": "fastvideo-rs.benchmark.v1",
+  "stage_seconds": {
+    "audio_decode": 0.14345272,
+    "denoise": 6.381763676,
+    "png_frames": 0.127557415,
+    "refine": 0.004894935,
+    "text": 0.407203937,
+    "video_decode": 1.9817743399999999,
+    "video_encode_tail": 0.00007773,
+    "video_push": 0.000022159999999999998,
+    "video_rgb": 0.0424947790062784,
+    "video_vae": 1.973769153177738,
+    "video_wait": 0.16000718
+  },
+  "step_seconds": [
+    1.613503651,
+    1.589686943,
+    1.585648172,
+    1.589682613
+  ],
+  "task": "t2va",
+  "teacache": {
+    "enabled": false
+  },
+  "text_cache": "disabled",
+  "text_encoder": "resident-fp8",
+  "text_s": 0.407203937,
+  "timing_note": "total_s = inference_time_s = e2e_seconds = generate_wall_s - png_frames_s (the PNG frames for compare-clips are written after the mp4, outside every timed number); load_s is separate",
+  "timing_scope": "one warm generate() call: text + denoise + decode, the decode through a finished mp4 (x264 encode included, as sol-engine's video_vae_seconds); PNG frames and model load excluded",
+  "total_s": 9.043137818,
+  "vsa": {
+    "calls": 200,
+    "density": 0.14930555555555555,
+    "selected_tiles": 138700800.0,
+    "total_tiles": 928972800.0,
+    "video_density": 0.1,
+    "video_selected_tiles": 87808000.0,
+    "video_total_tiles": 878080000.0
+  },
+  "warm_steady_state": false,
+  "warmup_requests": 0,
+  "workload": {
+    "duration_s": 5,
+    "height": 480,
+    "measured_steps": 4,
+    "num_frames": 124,
+    "prompt_name": "default",
+    "prompt_sha256": "2ace2f9d38833121232f53b2370134915944f561f2b954ac519d180afbce6091",
+    "seed": 1024,
+    "sequence_length": 14890,
+    "task": "t2va",
+    "text_tokens": 46,
+    "width": 832
+  }
+}

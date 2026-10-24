@@ -332,7 +332,12 @@ fn demangle_head(s: &str) -> Option<String> {
     .name()
 }
 
-const TOP_KERNELS: usize = 25;
+/// `FASTVIDEO_GPU_TRACE_TOP` (default 25): how many kernels `top_kernels`
+/// lists, by time. The report only; nothing it measures changes. The plan
+/// B4b byte-identity cells raise it to list every kernel of the step.
+fn top_kernels_limit() -> usize {
+    super::envflag::usize_flag("FASTVIDEO_GPU_TRACE_TOP", 25)
+}
 const TOP_GAPS: usize = 10;
 
 /// The `h3/gpu_trace` JSON from one step's records.
@@ -400,7 +405,7 @@ pub fn analyze(label: &str, step: usize, input: &TraceInput) -> Value {
         }
     };
     let rows: Vec<(&str, u64, u64)> = kernels.iter().map(|(n, v)| (*n, v.0, v.1)).collect();
-    let top_kernels: Vec<Value> = top_k(&rows, TOP_KERNELS, |r| r.2)
+    let top_kernels: Vec<Value> = top_k(&rows, top_kernels_limit(), |r| r.2)
         .into_iter()
         .map(|(n, c, ns)| {
             json!({"name": n, "category": category(n), "calls": c, "total_s": s(ns), "share": share(ns)})

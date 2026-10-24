@@ -1512,6 +1512,35 @@ Project code: FVID
 - ADR: docs/adr/0021-prompt-cache.md "Evidence"
 - Verification: `FV_DRY_RUN=1 FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b4c`; GPU run by the coordinator
 
+### FVID · 2026-10-24 · FVID-2026-10-24-block-fusion
+- Trigger: plan B4b: the DiT block fusion written three times (`wan/fuse.rs`, `h3/fused16.rs`, `ltx2/fuse.rs`); one module parameterized by rounding policy, byte-identical
+- Options: one templated kernel per op; one Rust module whose typed rounding policy selects the existing kernels, with one host reference and one switch; stop after the inventory
+- Decision: `rt::fuse`: `RoundingPolicy` / `QkPolicy` (one named constant per family op) selecting the kernel and its mode arguments, one host reference (`rt::fuse::host`) the Wan and H3 CPU twins run, one switch implementation; the kernels, the launchers' operand and table handling and the one-family ops (LTX head gates, H3 MXFP8 / NVFP4 producers, q/k/v/gate split) stay with their families
+- Reason: the residual + modulated norm and the q/k norm + RoPE are one computation per op with different rounding points, but the kernels also differ in normalizer, reduction order and rsqrt, and their source is pinned (`KERNELS_CU_SHA256`): one templated kernel would move bits
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0022-block-fusion.md
+- Verification: `rt/fuse/equality.rs` against the verbatim pre-B4b code (`legacy.rs`), bit for bit, and ten mutations each caught; GPU `b4b` cells
+
+### FVID · 2026-10-24 · FVID-2026-10-24-block-fusion-plan-value
+- Trigger: ADR-0017 "How B4 and a lazy cold start plug in": the fusion switch becomes a value the plan decides and the fuse stage installs, instead of the process-wide cached getters
+- Options: thread the value through every fused call; install it on the DiT and run its forwards under it (a scoped value, as `with_quant_act` does for H3's activations); keep the getters
+- Decision: `kernel_fusions` is an `rt::fuse::BlockFusion` (read from the snapshot); the H3 fuse stage installs it on the DiT and the text refiner, the LTX-2 fuse stage on the placed DiT and the pipeline on every DiT it loads later and around its text encodes (the connectors); `forward` / `forward_probed` / the refiner and the encodes run under it, restored by a drop guard; forced values (parity checks) still win; the cached process value remains for DiTs built outside a plan and for Wan (no loader stages)
+- Reason: no fused call signature changes; the installed value equals the cached one in every process the tooling permits (settings set before a load, fv-serve's `ProcessPlan` requires one value per process), so outputs do not move
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0022-block-fusion.md "The plan's value installed on the DiT"
+- Verification: `the_plans_read_what_the_old_plans_read`, `the_switches_resolve_as_the_old_getters`, `the_family_getters_are_the_switches`; the load-plan goldens unchanged
+
+### FVID · 2026-10-24 · FVID-2026-10-24-block-fusion-gpu-cells
+- Trigger: B4b's exit criterion (byte identity per family) needs GPU cells that also prove the fused kernels ran in both arms; no log line names them, and a new line would exist in the PR arm only
+- Options: a new log line (absent from the baseline); the plan description (not logged at run time); the CUPTI step trace both builds have (`FASTVIDEO_GPU_TRACE=1`)
+- Decision: `runpod-matrix.sh b4b`: `b4b-h3-4stepvsa`, `b4b-h3-4stepvsa-off`, `b4b-ltx25-512p`, `b4b-ltx25-512p-off` (and `b4b-h3-fullopt` when named), baseline binary against this build with the same argv / env, every arm traced; a new `FASTVIDEO_GPU_TRACE_TOP` (report only, default 25) lists every kernel of the step in the PR arm (the baseline predates it and lists 25), so after review: `b4b_verdict` passes only when both arms exited 0, `--off-identity` passed (not skipped), both traces have a kernel table, `dropped_records` 0 and equal `kernel_count`, the PR table is complete, every fused / bf16-chain kernel the base lists matches the PR call for call, rule `on` finds every named gated kernel in the PR arm (H3 `fvf_h3_gate_res_norm_mod`, `fvf_h3_qkvg_heads`; LTX `fvf_ltx_res_norm_mod`, `fvf_ltx_qk_norm_rope`, `fvf_ltx_gate_merge`), rule `off` finds none and finds the unfused path's kernels, and H3's call counts keep the block structure; `FV_B4B_CELLS` narrows; Wan rests on the CPU fixtures (no EU-volume tree)
+- Reason: positive evidence from both arms with one mechanism; the fusion-off controls show the switch reaches the kernels the same way in both builds
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0022-block-fusion.md "Evidence"
+- Verification: `bash scripts/gpu/tests/b4-verdict.test.sh`; `FV_DRY_RUN=1 FV_BASELINE_SHA=17e4a1d bash scripts/gpu/runpod-matrix.sh b4b`; GPU run by the coordinator
 ### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-b4c2-fields
 - Trigger: B4c2 brief: close the six key gaps of ADR-0021 so a hit never returns conditioning a fresh encode under the current settings would not
 - Options: key the requested settings (environment, CLI); key the values the run resolved; full hashes of the recovered-8B files

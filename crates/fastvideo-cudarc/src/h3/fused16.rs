@@ -18,14 +18,26 @@
 //! outputs (and `1 + scale` formed in f32, as the kernels do); row `r` reads
 //! table row `idx[r] + base`, `base = 3 * block`.
 //!
-//! Every function has a host twin built from [`crate::rt::quant`]'s row
-//! references, so a CPU run with the flag on takes the same rounding points.
+//! The rounding points of 1, 2, 4 and 5 are the `H3_*` policies of
+//! [`crate::rt::fuse::policy`] (plan B4b, `docs/adr/0022-block-fusion.md`).
+//! Every function has a host twin, [`crate::rt::fuse::host`] under the same
+//! policy, so a CPU run with the flag on takes the same rounding points.
 
+use crate::rt::fuse::host::{self, HostError, RowOperands};
+use crate::rt::fuse::policy::{
+    H3_GATE_RESIDUAL, H3_NORM_MOD, H3_QK_NORM_ROPE, H3_RES_GATE_NORM_MOD,
+};
+use crate::rt::fuse::{self, Switch};
+#[cfg(any(feature = "cuda", test))]
 use crate::rt::quant;
 use crate::rt::tensor::{CudaTensor, Result, TensorDType, TensorError};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
+}
+
+fn host_err(e: HostError) -> TensorError {
+    msg(e.to_string())
 }
 
 /// One step's AdaLN rows for the fused kernels.
@@ -59,13 +71,6 @@ fn device_ok(x: &CudaTensor, rows: &AdaRows) -> bool {
     crate::rt::stats::device_expected() && rows.idx_dev.is_some() && x.is_device_fresh()
 }
 
-fn host_bf16(x: &CudaTensor) -> Result<Vec<f32>> {
-    Ok(x.host_cow()?
-        .iter()
-        .map(|&v| quant::bf16_round(v))
-        .collect())
-}
-
 /// Step 1. `mx` asks for an MXFP8 output (device only; the host returns bf16,
 /// which a quantized linear's host emulation then quantizes identically).
 #[allow(clippy::too_many_arguments)]
@@ -86,16 +91,24 @@ pub fn norm_mod(
         return dev::norm_mod(x, w, rows, base, scale_slot, shift_slot, eps, mx, n, dim);
     }
     let _ = mx;
-    let (xh, wh, tab) = (host_bf16(x)?, w.host_cow()?, rows.tab.host_cow()?);
+    let (xh, wh, tab) = (x.host_cow()?, w.host_cow()?, rows.tab.host_cow()?);
     let mut out = vec![0.0f32; n * dim];
     for r in 0..n {
-        let o = quant::norm_mod_row(
-            &xh[r * dim..(r + 1) * dim],
-            &wh,
-            rows.row(&tab, r, base, scale_slot),
-            rows.row(&tab, r, base, shift_slot),
-            eps,
-        );
+        let o = host::res_norm_row(
+            &H3_NORM_MOD,
+            &RowOperands {
+                x: &xh[r * dim..(r + 1) * dim],
+                w: Some(&wh),
+                scale: Some(rows.row(&tab, r, base, scale_slot)),
+                shift: Some(rows.row(&tab, r, base, shift_slot)),
+                eps,
+                ..RowOperands::default()
+            },
+        )
+        .map_err(host_err)?;
+        let o = o
+            .normed
+            .ok_or_else(|| msg("h3 fused: host twin returned no norm"))?;
         out[r * dim..(r + 1) * dim].copy_from_slice(&o);
     }
     Ok(NormOut::T(CudaTensor::host_only_dtype(
@@ -132,8 +145,8 @@ pub fn res_gate_norm_mod(
     let _ = mx;
     let (gate_slot, scale_slot, shift_slot) = slots;
     let (rh, bh, wh, tab) = (
-        host_bf16(res)?,
-        host_bf16(branch)?,
+        res.host_cow()?,
+        branch.host_cow()?,
         w.host_cow()?,
         rows.tab.host_cow()?,
     );
@@ -141,15 +154,23 @@ pub fn res_gate_norm_mod(
     let mut normed = vec![0.0f32; n * dim];
     for r in 0..n {
         let span = r * dim..(r + 1) * dim;
-        let (h, o) = quant::res_gate_norm_mod_row(
-            &rh[span.clone()],
-            &bh[span.clone()],
-            rows.row(&tab, r, base, gate_slot),
-            &wh,
-            rows.row(&tab, r, base, scale_slot),
-            rows.row(&tab, r, base, shift_slot),
-            eps,
-        );
+        let o = host::res_norm_row(
+            &H3_RES_GATE_NORM_MOD,
+            &RowOperands {
+                x: &rh[span.clone()],
+                u: Some(&bh[span.clone()]),
+                gate: Some(rows.row(&tab, r, base, gate_slot)),
+                w: Some(&wh),
+                scale: Some(rows.row(&tab, r, base, scale_slot)),
+                shift: Some(rows.row(&tab, r, base, shift_slot)),
+                eps,
+                ..RowOperands::default()
+            },
+        )
+        .map_err(host_err)?;
+        let (Some(h), Some(o)) = (o.hidden, o.normed) else {
+            return Err(msg("h3 fused: host twin returned no hidden / norm"));
+        };
         hidden[span.clone()].copy_from_slice(&h);
         normed[span].copy_from_slice(&o);
     }
@@ -176,13 +197,32 @@ pub fn gate_residual(
     if device_ok(res, rows) {
         return dev::gate_residual(res, branch, rows, base, gate_slot, dim);
     }
-    let (rh, bh, tab) = (host_bf16(res)?, host_bf16(branch)?, rows.tab.host_cow()?);
-    let out: Vec<f32> = (0..rh.len())
-        .map(|i| {
-            let (r, j) = (i / dim, i % dim);
-            quant::gate_residual_eager(rh[i], rows.row(&tab, r, base, gate_slot)[j], bh[i])
-        })
-        .collect();
+    let (rh, bh, tab) = (res.host_cow()?, branch.host_cow()?, rows.tab.host_cow()?);
+    if dim == 0 || !rh.len().is_multiple_of(dim) || bh.len() != rh.len() {
+        return Err(msg(format!(
+            "h3 fused gate residual: {:?} and {:?} are not rows of {dim}",
+            res.shape, branch.shape
+        )));
+    }
+    let n = rh.len() / dim;
+    let mut out = vec![0.0f32; rh.len()];
+    for r in 0..n {
+        let span = r * dim..(r + 1) * dim;
+        let o = host::res_norm_row(
+            &H3_GATE_RESIDUAL,
+            &RowOperands {
+                x: &rh[span.clone()],
+                u: Some(&bh[span.clone()]),
+                gate: Some(rows.row(&tab, r, base, gate_slot)),
+                ..RowOperands::default()
+            },
+        )
+        .map_err(host_err)?;
+        let h = o
+            .hidden
+            .ok_or_else(|| msg("h3 fused: host twin returned no hidden"))?;
+        out[span].copy_from_slice(&h);
+    }
     Ok(CudaTensor::host_only_dtype(
         out,
         res.shape.clone(),
@@ -212,7 +252,7 @@ pub fn qk_norm_rope(
             packed, w, rope, batch, seq, heads, d, width, col_off, eps, false,
         );
     }
-    let x = host_bf16(packed)?;
+    let x = packed.host_cow()?;
     let wh = w.host_cow()?;
     let tables = match rope {
         Some((c, s)) => Some((c.host_cow()?, s.host_cow()?)),
@@ -227,7 +267,8 @@ pub fn qk_norm_rope(
                 let rot = tables
                     .as_ref()
                     .map(|(c, sn)| (&c[s * r..(s + 1) * r], &sn[s * r..(s + 1) * r]));
-                let o = quant::qk_norm_rope_row(src, &wh, rot, eps);
+                let n = host::qk_norm(&H3_QK_NORM_ROPE, src, &wh, eps).map_err(host_err)?;
+                let o = host::qk_rope_head(&H3_QK_NORM_ROPE, &n, rot).map_err(host_err)?;
                 out[((b * heads + h) * seq + s) * d..][..d].copy_from_slice(&o);
             }
         }
@@ -291,57 +332,35 @@ pub fn swiglu_mx(h: &CudaTensor) -> Result<Option<quant::MxAct>> {
     dev::swiglu_mx(h)
 }
 
-thread_local! {
-    static FUSE_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-}
-
 /// `FASTVIDEO_H3_FUSE` (default on): the Phase 3c fusions on top of the
 /// Sol-H3 chain above — the head merge written straight into `to_out`'s
 /// MXFP8 activation ([`merge_heads_mx`]) and a block's last residual fused
 /// with the next block's norm ([`gate_res_norm_mod`]). Both are
-/// bit-identical to the ops they replace; `=0` runs those ops.
+/// bit-identical to the ops they replace; `=0` runs those ops. Resolved by
+/// [`crate::rt::fuse::Switch::H3`] (forced, else the DiT's installed plan
+/// value, else the process setting).
 pub fn fuse_enabled() -> bool {
-    if let Some(v) = FUSE_OVERRIDE.with(|c| c.get()) {
-        return v;
-    }
-    static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENV.get_or_init(|| crate::rt::envflag::bool_flag("FASTVIDEO_H3_FUSE", true))
+    fuse::enabled(Switch::H3)
 }
 
 /// Run `f` with [`fuse_enabled`] forced on or off (parity checks).
 pub fn with_fuse<R>(on: bool, f: impl FnOnce() -> R) -> R {
-    let prev = FUSE_OVERRIDE.with(|c| c.replace(Some(on)));
-    let out = f();
-    FUSE_OVERRIDE.with(|c| c.set(prev));
-    out
-}
-
-thread_local! {
-    static GLUE_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    fuse::with_forced(Switch::H3, on, f)
 }
 
 /// `FASTVIDEO_H3_GLUE` (default on; needs [`fuse_enabled`]): the glue
 /// fusions around the block's GEMMs and attention (docs/perf/h3-glue-fusion.md)
 /// — VSA fed bf16 q/k/v/gate in place, the q/k/v/gate heads in one kernel,
 /// and the NVFP4 activations written by their producers. Each writes the
-/// bytes of the ops it replaces; `=0` runs those ops.
+/// bytes of the ops it replaces; `=0` runs those ops
+/// ([`crate::rt::fuse::Switch::H3Glue`]).
 pub fn glue_enabled() -> bool {
-    if !fuse_enabled() {
-        return false;
-    }
-    if let Some(v) = GLUE_OVERRIDE.with(|c| c.get()) {
-        return v;
-    }
-    static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENV.get_or_init(|| crate::rt::envflag::bool_flag("FASTVIDEO_H3_GLUE", true))
+    fuse::enabled(Switch::H3Glue)
 }
 
 /// Run `f` with [`glue_enabled`] forced on or off (parity checks).
 pub fn with_glue<R>(on: bool, f: impl FnOnce() -> R) -> R {
-    let prev = GLUE_OVERRIDE.with(|c| c.replace(Some(on)));
-    let out = f();
-    GLUE_OVERRIDE.with(|c| c.set(prev));
-    out
+    fuse::with_forced(Switch::H3Glue, on, f)
 }
 
 /// `merge_heads(out)` as the MXFP8 activation of a linear over `heads * d`
@@ -649,7 +668,15 @@ mod dev {
         let n = res.numel();
         let mut out = OutBuf::new(n, true)?;
         let (op, o16) = (out.ptr(), out.is16());
-        let (b, gs, n_i, dim_i, rp) = (base as i64, gate_slot as i32, n as i64, dim as i64, 1i32);
+        let rp = match H3_GATE_RESIDUAL.kernel() {
+            Ok(crate::rt::fuse::Kernel::H3GateResidual { round_product }) => round_product,
+            _ => {
+                return Err(msg(
+                    "h3 fused: the gate residual's policy selects no h3_gate_residual",
+                ))
+            }
+        };
+        let (b, gs, n_i, dim_i) = (base as i64, gate_slot as i32, n as i64, dim as i64);
         launch!(dev.stream, &dev.kernels.h3_gate_residual, cfg_n(n);
             &ro.ptr, &ro.is16, &bo.ptr, &bo.is16, &to.ptr, &ip, &b, &gs, &op, &o16, &n_i, &dim_i, &rp)
         .map_err(err)?;
@@ -1050,6 +1077,16 @@ mod tests {
         assert_eq!(out[0], 35.0);
         assert_eq!(out[h], 45.0);
         assert_eq!(out[2 * h], 45.0);
+    }
+
+    #[test]
+    fn a_residual_that_is_not_whole_rows_is_an_error() {
+        let ada = rows(4, 2, vec![0, 0]);
+        let res = CudaTensor::from_vec(vec![0.0; 6], vec![1, 6]).unwrap();
+        assert!(gate_residual(&res, &res, &ada, 0, 5).is_err());
+        let short = CudaTensor::from_vec(vec![0.0; 4], vec![1, 1, 4]).unwrap();
+        let two = CudaTensor::from_vec(vec![0.0; 8], vec![1, 2, 4]).unwrap();
+        assert!(gate_residual(&two, &short, &ada, 0, 5).is_err());
     }
 
     #[test]

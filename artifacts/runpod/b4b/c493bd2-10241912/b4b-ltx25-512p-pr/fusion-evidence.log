@@ -1,0 +1,9 @@
+fvf_ltx_gate_merge 288
+fvf_ltx_qk_norm_rope 576
+fvf_ltx_res_norm_mod 480
+fvf_split_heads_rows 288
+mx_binary 578
+mx_block_copy 384
+mx_ln_adaln_e 2
+mx_residual_gate 96
+mx_unary 208

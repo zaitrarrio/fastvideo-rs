@@ -129,7 +129,9 @@ a later pass would need a second copy of the DiT. So the plan decides the
 merge, place applies it per linear as it loads (and checks every target was
 applied), and fuse holds what runs over the finished model. The kernel-level
 block fusions (`h3/fused16.rs`, `ltx2/fuse.rs`) are chosen per call at run
-time; the plan records the setting so a golden shows it.
+time; the plan records the setting so a golden shows it, and since B4b the
+fuse stage installs that value on the DiT, whose forwards run under it
+(`rt::fuse::BlockFusion`, ADR-0022).
 
 ### Byte identity
 
@@ -254,7 +256,10 @@ Kept, because they are reachable:
 - B4's one `fuse.rs` (a rounding-point policy) becomes a value the plan
   decides (today `kernel_fusions`, read from the snapshot) and the fuse stage
   installs on the pipeline, instead of the process-wide cached getters
-  (`fused16::fuse_enabled`, `ltx2::fuse::enabled`). B4's `StepCache` trait
+  (`fused16::fuse_enabled`, `ltx2::fuse::enabled`). Done in B4b
+  (ADR-0022): `kernel_fusions` is an `rt::fuse::BlockFusion`, installed on
+  the H3 DiT by the fuse stage and on every LTX-2 DiT the pipeline holds;
+  the cached process value remains for DiTs built outside a plan. B4's `StepCache` trait
   replaces `H3LoadPlan::teacache` with a boxed step cache the fuse stage
   installs; LTX-2's FBCache and the Wan caches can take the same seam.
 - A lazy or streamed cold start needs exactly this split: the plan runs

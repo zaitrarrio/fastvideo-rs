@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Verdicts of the plan B4 byte-identity families of runpod-matrix.sh (b4a,
-# b4c, b4c2), sourced by it. Pure functions over a run directory ($RUNS) and,
-# for b4c / b4c2, the cache root ($B4C_CACHE), so scripts/gpu/tests/b4-verdict.test.sh
+# b4b, b4c, b4c2), sourced by it. Pure functions over a run directory ($RUNS)
+# and, for b4c / b4c2, the cache root ($B4C_CACHE), so scripts/gpu/tests/b4-verdict.test.sh
 # holds them to stub trees. A verdict passes only on positive evidence: a
 # missing file, a skipped compare or a run that did not exit 0 fails it.
 
@@ -83,6 +83,156 @@ b4c_verdict() {
   printf '{"cell":"%s","verdict":"%s","why":"%s"}\n' "$cell" "$verdict" "${why# }" \
     >"$RUNS/b4c-$cell.verdict.json"
   printf 'b4c %s: %s%s\n' "$cell" "$verdict" "${why:+ (${why# })}"
+}
+
+# b4b_trace <cell>: the last "/gpu_trace " report of <cell>'s stderr.log (a
+# CUPTI trace of one denoise step, rt/gpu_trace.rs) on one line; empty when
+# none was logged.
+b4b_trace() {
+  grep -h '/gpu_trace ' "$RUNS/$1/stderr.log" 2>/dev/null | tail -1
+}
+
+# b4b_number <report> <key>: the integer value of "key" in the report.
+b4b_number() {
+  printf '%s' "$1" | grep -oE "\"$2\": *[0-9]+" | head -1 | grep -oE '[0-9]+$' || true
+}
+
+# b4b_kernels <report>: one "name calls" line per kernel of its
+# "top_kernels" table, in name order.
+b4b_kernels() {
+  local obj name calls
+  printf '%s' "$1" | grep -oE '"top_kernels":\[[^]]*\]' | head -1 | grep -oE '\{[^{}]*\}' |
+    while IFS= read -r obj; do
+      name="$(printf '%s' "$obj" | grep -oE '"name": *"[^"]*"' | sed -E 's/.*"([^"]*)"$/\1/')"
+      calls="$(printf '%s' "$obj" | grep -oE '"calls": *[0-9]+' | grep -oE '[0-9]+$')"
+      [[ -n "$name" ]] && printf '%s %s\n' "$name" "${calls:-0}"
+    done | LC_ALL=C sort
+}
+
+# b4b_evidence <cell>: <cell>/fusion-evidence.log, the fused kernels of the
+# traced step (fvf_* / h3_* / wan_*) and the bf16 activation kernels the
+# unfused chains run (mx_*), "name calls" in name order; and
+# <cell>/trace-meta.txt: "kernel_count dropped_records listed_calls" (the
+# step's kernel launches, CUPTI's dropped records, the calls the table
+# lists; "-" for a field the report lacks). Returns 1 when no report with a kernel table was logged (tracing
+# off, libcupti missing, the run died first).
+b4b_evidence() {
+  local report all
+  : >"$RUNS/$1/fusion-evidence.log" 2>/dev/null || return 1
+  : >"$RUNS/$1/trace-meta.txt"
+  report="$(b4b_trace "$1")"
+  [[ "$report" == *'"top_kernels":['* ]] || return 1
+  all="$(b4b_kernels "$report")"
+  printf '%s\n' "$all" | grep -E '^(fvf_|h3_|wan_|mx_)' >"$RUNS/$1/fusion-evidence.log" || true
+  local kc dr
+  kc="$(b4b_number "$report" kernel_count)"
+  dr="$(b4b_number "$report" dropped_records)"
+  printf '%s %s %s\n' "${kc:--}" "${dr:--}" \
+    "$(printf '%s\n' "$all" | awk '{ s += $2 } END { print s + 0 }')" >"$RUNS/$1/trace-meta.txt"
+  return 0
+}
+
+# b4b_gated <evidence file>: the switch-gated fused kernels in it (every
+# fvf_* kernel but fvf_split_heads_rows, which FASTVIDEO_SPLIT_ROWS drives).
+b4b_gated() {
+  grep -E '^fvf_' "$1" 2>/dev/null | grep -v '^fvf_split_heads_rows ' || true
+}
+
+# b4b_calls <evidence file> <kernel>: its calls (0 when not listed).
+b4b_calls() {
+  awk -v k="$2" '$1 == k { print $2; found = 1 } END { if (!found) print 0 }' "$1" 2>/dev/null
+}
+
+# b4b_relations <evidence file> <rule> <relation set>: why the call counts
+# break the block structure, or nothing. "h3": one block runs one
+# h3_res_gate_norm_mod; fused (on), its first norm is h3_norm_mod (block 0)
+# or the previous block's deferred fvf_h3_gate_res_norm_mod, and its last
+# residual is deferred into that kernel or (last block) h3_gate_residual;
+# unfused (off), every block runs h3_norm_mod and h3_gate_residual.
+b4b_relations() {
+  local f="$1" rule="$2" rel="$3" nm rg gr fg
+  [[ "$rel" == h3 ]] || return 0
+  nm="$(b4b_calls "$f" h3_norm_mod)"
+  rg="$(b4b_calls "$f" h3_res_gate_norm_mod)"
+  gr="$(b4b_calls "$f" h3_gate_residual)"
+  fg="$(b4b_calls "$f" fvf_h3_gate_res_norm_mod)"
+  (( rg > 0 )) || { printf ' relation:no-blocks'; return 0; }
+  case "$rule" in
+    on)
+      (( nm + fg == rg )) || printf ' relation:norm%s+fused%s!=blocks%s' "$nm" "$fg" "$rg"
+      (( gr + fg == rg )) || printf ' relation:residual%s+fused%s!=blocks%s' "$gr" "$fg" "$rg"
+      ;;
+    off)
+      (( nm == rg && gr == rg )) || printf ' relation:norm%s,residual%s!=blocks%s' "$nm" "$gr" "$rg"
+      ;;
+  esac
+}
+
+# b4b_verdict <cell> <rule on|off> <relations h3|-> <kernel...>:
+# $RUNS/b4b-<cell>.verdict.json from the arms <cell>-base (the baseline
+# binary, whose trace lists its 25 slowest kernels) and <cell>-pr (this
+# build, FASTVIDEO_GPU_TRACE_TOP raised: every kernel of the step). Fails
+# unless:
+#   both arms exited 0 and --off-identity passed (not skipped);
+#   both arms logged a trace with a kernel table, no dropped record, and
+#     the same kernel_count (the step's launches);
+#   the PR arm's table is complete (its calls sum to kernel_count);
+#   every fused / bf16-chain kernel the base arm lists is in the PR arm
+#     with the same calls;
+#   rule on: every named kernel ran in the PR arm (and so, by the line
+#     above, in the base arm wherever it lists it); rule off: no
+#     switch-gated kernel ran in the PR arm and every named (unfused-path)
+#     kernel did;
+#   the PR arm's calls keep the block structure (b4b_relations).
+# Prints the verdict line.
+b4b_verdict() {
+  local cell="$1" rule="$2" rel="$3" arm c k kc dr listed base_kc="" pr_kc="" verdict=pass why=""
+  shift 3
+  case "$rule" in on | off) ;; *) why+=" rule:$rule" ;; esac
+  for arm in base pr; do
+    c="$cell-$arm"
+    b4_exit_ok "$c" || why+=" $arm:exit"
+    if ! b4b_evidence "$c"; then
+      why+=" $arm:no-trace"
+      continue
+    fi
+    read -r kc dr listed <"$RUNS/$c/trace-meta.txt"
+    [[ "$kc" != - ]] || why+=" $arm:no-kernel-count"
+    [[ "$dr" == 0 ]] || why+=" $arm:dropped-records=$([[ "$dr" == - ]] && echo none || echo "$dr")"
+    [[ "$arm" == base ]] && base_kc="$kc" || pr_kc="$kc"
+    if [[ "$arm" == pr && "$listed" != "$kc" ]]; then
+      why+=" pr:incomplete-trace($listed/$kc)"
+    fi
+  done
+  b4_identical "$cell-base" "$cell-pr" || why+=" not-identical"
+  local base_ev="$RUNS/$cell-base/fusion-evidence.log" pr_ev="$RUNS/$cell-pr/fusion-evidence.log"
+  if [[ -n "$base_kc" && -n "$pr_kc" && "$base_kc" != - && "$base_kc" != "$pr_kc" ]]; then
+    why+=" kernel-count-differs($base_kc/$pr_kc)"
+  fi
+  if [[ -s "$base_ev" && -f "$pr_ev" ]]; then
+    LC_ALL=C comm -23 "$base_ev" "$pr_ev" >"$RUNS/$cell.fusion-evidence.diff"
+    [[ -s "$RUNS/$cell.fusion-evidence.diff" ]] && why+=" evidence-differs"
+  fi
+  if [[ -f "$pr_ev" ]]; then
+    case "$rule" in
+      on)
+        for k in "$@"; do
+          (( $(b4b_calls "$pr_ev" "$k") > 0 )) || why+=" pr:missing:$k"
+        done
+        ;;
+      off)
+        [[ -z "$(b4b_gated "$pr_ev")" ]] || why+=" pr:fused-kernel-ran:$(b4b_gated "$pr_ev" | cut -d' ' -f1 | tr '\n' ',' | sed 's/,$//')"
+        for k in "$@"; do
+          (( $(b4b_calls "$pr_ev" "$k") > 0 )) || why+=" pr:missing:$k"
+        done
+        ;;
+    esac
+    why+="$(b4b_relations "$pr_ev" "$rule" "$rel")"
+  fi
+  [[ -n "$why" ]] && verdict=fail
+  printf '{"cell":"%s","verdict":"%s","why":"%s"}\n' "$cell" "$verdict" "${why# }" \
+    >"$RUNS/b4b-$cell.verdict.json"
+  printf 'b4b %s: %s%s\n' "$cell" "$verdict" "${why:+ (${why# })}"
 }
 
 # b4c2_state_is <cell> <state...>: the pass's benchmark.json "text_cache"
