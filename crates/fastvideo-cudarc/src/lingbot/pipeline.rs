@@ -537,7 +537,7 @@ fn denoise(
     for (i, &t) in ts.iter().enumerate() {
         let step_t = Instant::now();
         let reuse = match cache.as_mut() {
-            Some(c) => last_v.is_some() && c.reuse(i, &latents),
+            Some(c) => last_v.is_some() && c.reuse(i, &latents).map_err(|e| msg(e.to_string()))?,
             None => false,
         };
         let v = if reuse {
@@ -562,7 +562,7 @@ fn denoise(
             };
             let v = v.host_cow()?.into_owned();
             if let Some(c) = cache.as_mut() {
-                c.computed(&latents);
+                c.computed(&latents).map_err(|e| msg(e.to_string()))?;
             }
             stats.computed += 1;
             last_v = Some(v.clone());

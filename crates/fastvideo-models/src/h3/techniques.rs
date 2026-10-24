@@ -23,13 +23,13 @@ use super::config::H3InferenceContract;
 use super::lora::is_sol_h3_spark_recipe;
 use super::sol::{
     policy_technique, recipe_sol_attn_policy, sink_policy, teacache_requested, H3SolAttnPolicy,
-    H3TeaCache,
 };
 use crate::techniques::methods::{
     DenseAttention, Fp8Attention, Fp8AttentionOps, SinkMode, SolAttn, TeaCache, TinyDecoder,
     TinyDecoderKind, Vsa,
 };
 use crate::techniques::registry::h3_spec;
+use crate::techniques::step_cache;
 use crate::techniques::VsaSchedule;
 use crate::techniques::{compose, Plan, Profile, Schedule, Technique, HORIZON};
 
@@ -357,17 +357,21 @@ impl H3Techniques {
     }
 
     /// The TeaCache controller for a denoise of `num_forwards` forwards.
-    pub fn teacache_state(&self, num_forwards: usize) -> Result<Option<H3TeaCache>, String> {
+    pub fn teacache_state(
+        &self,
+        num_forwards: usize,
+    ) -> Result<Option<step_cache::TeaCache>, String> {
         self.teacache
             .as_ref()
             .map(|tc| {
-                H3TeaCache::new(
+                super::sol::teacache(
                     tc.threshold,
                     tc.retain_steps,
                     tc.cooldown_steps,
                     tc.num_forwards.unwrap_or(num_forwards),
                     tc.coefficients.clone(),
                 )
+                .map_err(|e| e.to_string())
             })
             .transpose()
     }
@@ -400,8 +404,11 @@ impl H3Techniques {
 #[cfg(test)]
 mod tests {
     use super::super::packing::{H3PackedLayout, KeyframeAnchor};
-    use super::super::sol::{policy_route, sink_spec, sink_spec_for, technique_route, H3TeaCache};
+    use super::super::sol::{
+        policy_route, rtx_teacache, sink_spec, sink_spec_for, technique_route,
+    };
     use super::*;
+    use crate::techniques::step_cache::{Lane, Refresh, Signal, StepCache};
     use std::collections::BTreeMap;
 
     const RECIPES: [&str; 8] = [
@@ -522,7 +529,7 @@ mod tests {
         let c = contract("sol-h3-rtx");
         let t = H3Techniques::resolve(Some("sol-h3-rtx"), &c, false, None, &env_of(m)).unwrap();
         let a = t.teacache_state(49).unwrap().unwrap();
-        let b = H3TeaCache::official(49).unwrap();
+        let b = rtx_teacache(49).unwrap();
         assert_eq!(format!("{a:?}"), format!("{b:?}"));
         assert!(t.teacache_is_official());
     }
@@ -727,11 +734,16 @@ mod tests {
             // Every step's signal is tiny: exactly the middle steps reuse.
             let reused: Vec<usize> = (0..8)
                 .filter(|&s| {
-                    let d = tc.decide(s, 0.01);
-                    if d.compute {
-                        tc.note_computed();
+                    let signal = if tc.needs_signal(Lane::ONLY, s) {
+                        Signal::Distance(0.01)
+                    } else {
+                        Signal::None
+                    };
+                    let d = tc.decide(Lane::ONLY, s, signal).unwrap();
+                    if d.compute() {
+                        tc.note_computed(Lane::ONLY, Refresh::None).unwrap();
                     }
-                    !d.compute
+                    !d.compute()
                 })
                 .collect();
             assert_eq!(reused, vec![3, 4], "{name}");

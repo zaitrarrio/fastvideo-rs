@@ -22,6 +22,8 @@
 //! CP4 / FSDP / batched CFG are topology, not algorithms: a one-GPU run does
 //! not reproduce them (see docs/ports/lingbot.md, "Comparison").
 
+use crate::techniques::step_cache::{self, StepCache, StepCacheError};
+
 /// Official base canvas (`[official_config]`).
 pub const OFFICIAL_WIDTH: usize = 832;
 pub const OFFICIAL_HEIGHT: usize = 480;
@@ -145,13 +147,18 @@ impl EasyCacheConfig {
 
 /// Step-reuse controller. The caller asks [`Self::reuse`] before a step's
 /// transformer pass; on `false` it computes and calls [`Self::computed`].
+///
+/// The decision is the one EasyCache implementation (ADR-0020) with the
+/// LingBot parameters: the relative L1 of the latent against the last
+/// computed step's latent, compared directly (`reuse = rel < threshold`, no
+/// accumulation), inside `[head_steps, num_steps − tail_steps)`, at most
+/// `max_reuse` reuses in a row (`run >= max_reuse` computes, no zero guard).
 #[derive(Debug, Clone)]
 pub struct EasyCache {
     pub cfg: EasyCacheConfig,
-    num_steps: usize,
+    cache: step_cache::EasyCache,
     /// Latent at the last computed step (`_ec["ref"]`).
     reference: Option<Vec<f32>>,
-    run: usize,
     pub computed_steps: usize,
     pub reused_steps: usize,
 }
@@ -160,9 +167,25 @@ impl EasyCache {
     pub fn new(cfg: EasyCacheConfig, num_steps: usize) -> Self {
         Self {
             cfg,
-            num_steps,
+            cache: step_cache::EasyCache::new(step_cache::EasyCacheParams {
+                name: "lingbot easycache",
+                threshold: cfg.threshold,
+                window: step_cache::Window {
+                    warmup: cfg.head_steps,
+                    cooldown: step_cache::Cooldown::Last {
+                        steps: cfg.tail_steps,
+                        of: num_steps,
+                    },
+                },
+                estimator: step_cache::Estimator::Raw,
+                comparison: step_cache::Comparison::ReuseBelow,
+                reuse_cap: Some(step_cache::Cap {
+                    limit: cfg.max_reuse,
+                    reason: "max_reuse",
+                }),
+                labels: step_cache::EasyLabels::WAN,
+            }),
             reference: None,
-            run: 0,
             computed_steps: 0,
             reused_steps: 0,
         }
@@ -182,28 +205,31 @@ impl EasyCache {
     }
 
     /// Whether step `i` may reuse the cached outputs for `latent`.
-    pub fn reuse(&mut self, i: usize, latent: &[f32]) -> bool {
+    pub fn reuse(&mut self, i: usize, latent: &[f32]) -> Result<bool, StepCacheError> {
         let Some(reference) = self.reference.as_deref() else {
-            return false;
+            return Ok(false);
         };
-        let window =
-            self.cfg.head_steps <= i && i < self.num_steps.saturating_sub(self.cfg.tail_steps);
-        if !window || self.run >= self.cfg.max_reuse {
-            return false;
-        }
-        let ok = Self::relative_l1(latent, reference) < self.cfg.threshold;
+        let lane = step_cache::Lane::ONLY;
+        let signal = if self.cache.needs_signal(lane, i) {
+            step_cache::Signal::Distance(Self::relative_l1(latent, reference))
+        } else {
+            step_cache::Signal::None
+        };
+        let ok = self.cache.decide(lane, i, signal)?.reuse();
         if ok {
-            self.run += 1;
+            self.cache.note_reused(lane);
             self.reused_steps += 1;
         }
-        ok
+        Ok(ok)
     }
 
     /// Record a computed step: its input latent becomes the reference.
-    pub fn computed(&mut self, latent: &[f32]) {
+    pub fn computed(&mut self, latent: &[f32]) -> Result<(), StepCacheError> {
         self.reference = Some(latent.to_vec());
-        self.run = 0;
+        self.cache
+            .note_computed(step_cache::Lane::ONLY, step_cache::Refresh::None)?;
         self.computed_steps += 1;
+        Ok(())
     }
 }
 
@@ -301,22 +327,22 @@ mod tests {
         let mut ec = EasyCache::new(EasyCacheConfig::BASE, 40);
         let x = vec![1.0f32; 16];
         // No cache yet.
-        assert!(!ec.reuse(5, &x));
-        ec.computed(&x);
+        assert!(!ec.reuse(5, &x).unwrap());
+        ec.computed(&x).unwrap();
         // Inside the head: always compute.
-        assert!(!ec.reuse(3, &x));
+        assert!(!ec.reuse(3, &x).unwrap());
         // Small change in the window: reuse twice, then forced compute.
         let y: Vec<f32> = x.iter().map(|v| v * 1.05).collect();
-        assert!(ec.reuse(4, &y));
-        assert!(ec.reuse(5, &y));
-        assert!(!ec.reuse(6, &y), "max_reuse 2");
-        ec.computed(&y);
+        assert!(ec.reuse(4, &y).unwrap());
+        assert!(ec.reuse(5, &y).unwrap());
+        assert!(!ec.reuse(6, &y).unwrap(), "max_reuse 2");
+        ec.computed(&y).unwrap();
         // Large change: compute.
         let z: Vec<f32> = y.iter().map(|v| v * 1.5).collect();
-        assert!(!ec.reuse(7, &z));
+        assert!(!ec.reuse(7, &z).unwrap());
         // Tail: steps 38, 39 always compute.
-        ec.computed(&z);
-        assert!(!ec.reuse(38, &z));
+        ec.computed(&z).unwrap();
+        assert!(!ec.reuse(38, &z).unwrap());
         assert_eq!((ec.reused_steps, ec.computed_steps), (2, 3));
         assert_eq!(EasyCacheConfig::for_schedule(9), EasyCacheConfig::REFINER);
         assert_eq!(EasyCacheConfig::for_schedule(40), EasyCacheConfig::BASE);

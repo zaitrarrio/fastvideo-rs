@@ -15,7 +15,7 @@ use fastvideo_models::sana_video::{
     Gemma2TextConfig, SanaDpmSolver, SanaOptimizations, SanaVideoTransformerConfig,
     SANA_FLOW_SHIFT, SANA_MAX_SEQUENCE_LENGTH,
 };
-use fastvideo_models::wan::sol_cache::EasyCache;
+use fastvideo_models::techniques::step_cache::{Lane, Refresh, Signal, StepCache};
 use fastvideo_models::wan::WanVaeConfig;
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
@@ -217,13 +217,13 @@ impl SanaVideoPipeline {
         let timesteps = solver.timesteps().to_vec();
         let mut cache = match self.opt.easycache {
             Some(th) => Some(
-                EasyCache::new(
+                fastvideo_models::wan::sol_cache::easycache(
                     timesteps.len(),
                     th,
                     EASYCACHE_RETAIN_STEPS,
                     EASYCACHE_COOLDOWN_STEPS,
                 )
-                .map_err(msg)?,
+                .map_err(|e| msg(e.to_string()))?,
             ),
             None => None,
         };
@@ -240,16 +240,17 @@ impl SanaVideoPipeline {
             let compute = match cache.as_mut() {
                 None => true,
                 Some(c) => {
-                    let (dx, onorm) = if c.needs_cond_signal(step) {
-                        let (pi, (_, lo)) = (
-                            prev_input.as_ref().expect("signal implies a previous step"),
-                            last_full.as_ref().expect("signal implies a full step"),
-                        );
-                        (mean_abs_delta(&x, pi)?, mean_abs(lo)?)
-                    } else {
-                        (0.0, 0.0)
+                    let signal = match (c.needs_signal(Lane::COND, step), &prev_input, &last_full) {
+                        (true, Some(pi), Some((_, lo))) => Signal::Drift {
+                            input_change: mean_abs_delta(&x, pi)?,
+                            output_norm: mean_abs(lo)?,
+                        },
+                        _ => Signal::None,
                     };
-                    c.decide_cond(step, dx, onorm).compute || residual.is_none()
+                    c.decide(Lane::COND, step, signal)
+                        .map_err(|e| msg(e.to_string()))?
+                        .compute()
+                        || residual.is_none()
                 }
             };
             let noise_pred = if compute {
@@ -266,7 +267,15 @@ impl SanaVideoPipeline {
                         Some((li, lo)) => (mean_abs_delta(&x, li)?, mean_abs_delta(&out, lo)?),
                         None => (0.0, 0.0),
                     };
-                    c.note_cond_computed(din, dout);
+                    c.note_computed(
+                        Lane::COND,
+                        Refresh::Drift {
+                            full_input_change: din,
+                            output_change: dout,
+                            output_norm: None,
+                        },
+                    )
+                    .map_err(|e| msg(e.to_string()))?;
                     residual = Some(out.sub(&x)?);
                     last_full = Some((x.clone(), out.clone()));
                 }

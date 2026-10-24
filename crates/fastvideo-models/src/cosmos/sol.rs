@@ -8,6 +8,11 @@
 //! first 3 and last 3 dense. This module decides those steps and compares the
 //! time-embed; it does not quantize.
 
+use crate::techniques::step_cache::{
+    distance, Accumulate, Cap, Comparison, Cooldown, Lane, Rescale, ResetOn, Signal, StepCache,
+    StepCacheError, TeaCache, TeaCacheParams, Window,
+};
+
 pub const TEACACHE_THRESHOLD: f64 = 1.15;
 pub const TEACACHE_START_STEP: usize = 10;
 pub const TEACACHE_MAX_CONSECUTIVE: usize = 3;
@@ -52,59 +57,53 @@ pub fn fp4_linear(step: usize, num_steps: usize) -> bool {
 
 /// Mean |current − previous| / mean |previous|. Matches Wan / generic TeaCache.
 pub fn relative_l1(current: &[f32], previous: &[f32]) -> f64 {
-    let n = current.len().max(1) as f64;
-    let mut num = 0.0;
-    let mut den = 0.0;
-    for (a, b) in current.iter().zip(previous.iter()) {
-        num += (f64::from(*a) - f64::from(*b)).abs();
-        den += f64::from(*b).abs();
-    }
-    (num / n) / (den / n).max(1e-8)
+    let (num, den) = distance::abs_sums(current, previous);
+    distance::mean_over_mean_clamped(num, den, current.len())
 }
 
-#[derive(Debug, Clone)]
-pub struct TeaCacheWindow {
-    pub threshold: f64,
-    pub start_step: usize,
-    pub max_consecutive: usize,
-    hits: usize,
-    acc: f64,
+const TEA_NAME: &str = "cosmos teacache";
+
+/// The Cosmos time-embed TeaCache window on the one step-cache
+/// implementation (ADR-0020): steps `< start_step` compute, the indicator
+/// is the distance itself, `compute = acc >= threshold`, a compute (forced
+/// or not) clears the accumulator and the reuse run, and at
+/// `max_consecutive` reuses in a row the step computes (no zero guard).
+/// No initialize guard: the caller hands `0.0` until it has a previous
+/// embed.
+pub fn teacache_window(threshold: f64, start_step: usize, max_consecutive: usize) -> TeaCache {
+    TeaCache::new(TeaCacheParams {
+        name: TEA_NAME,
+        threshold,
+        window: Window {
+            warmup: start_step,
+            cooldown: Cooldown::None,
+        },
+        rescale: Rescale::Identity,
+        comparison: Comparison::ComputeAtOrAbove,
+        accumulate: Accumulate::F64,
+        reset: ResetOn::Decision,
+        require_signal: false,
+        periodic: None,
+        hit_cap: Some(Cap {
+            limit: max_consecutive,
+            reason: "max_consecutive",
+        }),
+    })
 }
 
-impl TeaCacheWindow {
-    pub fn official() -> Self {
-        Self {
-            threshold: TEACACHE_THRESHOLD,
-            start_step: TEACACHE_START_STEP,
-            max_consecutive: TEACACHE_MAX_CONSECUTIVE,
-            hits: 0,
-            acc: 0.0,
-        }
-    }
-
-    /// `indicator` is the rescaled distance of this step's TeaCache signal.
-    /// A reuse accumulates it. Crossing the threshold, the warmup, or the
-    /// consecutive cap forces a compute and clears the accumulator.
-    pub fn decide(&mut self, step: usize, indicator: f64) -> bool {
-        let compute = step < self.start_step || self.hits >= self.max_consecutive || {
-            self.acc += indicator;
-            self.acc >= self.threshold
-        };
-        if compute {
-            self.hits = 0;
-            self.acc = 0.0;
-            true
-        } else {
-            self.hits += 1;
-            false
-        }
-    }
+/// Threshold 1.15, start 10, at most 3 consecutive reuses.
+pub fn teacache_window_official() -> TeaCache {
+    teacache_window(
+        TEACACHE_THRESHOLD,
+        TEACACHE_START_STEP,
+        TEACACHE_MAX_CONSECUTIVE,
+    )
 }
 
 /// Time-embed TeaCache. The first forward of a step decides; CFG uncond follows.
 #[derive(Debug, Clone)]
 pub struct SolCosmosTea {
-    window: TeaCacheWindow,
+    window: TeaCache,
     previous: Option<Vec<f32>>,
     last_compute: bool,
 }
@@ -112,22 +111,29 @@ pub struct SolCosmosTea {
 impl SolCosmosTea {
     pub fn official() -> Self {
         Self {
-            window: TeaCacheWindow::official(),
+            window: teacache_window_official(),
             previous: None,
             last_compute: true,
         }
     }
 
     /// Cond (or the only CFG branch) decision from this step's time embed.
-    pub fn decide(&mut self, step: usize, signal: &[f32]) -> bool {
+    pub fn decide(&mut self, step: usize, signal: &[f32]) -> Result<bool, StepCacheError> {
+        let start = self.window.params().window.warmup;
         let indicator = match &self.previous {
-            Some(prev) if step >= self.window.start_step => relative_l1(signal, prev),
+            Some(prev) if step >= start => relative_l1(signal, prev),
             _ => 0.0,
         };
-        let compute = self.window.decide(step, indicator);
+        let decision = self
+            .window
+            .decide(Lane::ONLY, step, Signal::Distance(indicator))?;
+        if decision.reuse() {
+            self.window.note_reused(Lane::ONLY);
+        }
+        let compute = decision.compute();
         self.previous = Some(signal.to_vec());
         self.last_compute = compute;
-        compute
+        Ok(compute)
     }
 
     /// Uncond follows the cond pair of the same step.
@@ -152,16 +158,25 @@ mod tests {
 
     #[test]
     fn teacache_waits_then_caps_consecutive_reuses() {
-        let mut cache = TeaCacheWindow::official();
+        let mut cache = teacache_window_official();
+        let mut decide = |step: usize, indicator: f64| {
+            let d = cache
+                .decide(Lane::ONLY, step, Signal::Distance(indicator))
+                .unwrap();
+            if d.reuse() {
+                cache.note_reused(Lane::ONLY);
+            }
+            d.compute()
+        };
         for step in 0..10 {
-            assert!(cache.decide(step, 0.0), "{step}");
+            assert!(decide(step, 0.0), "{step}");
         }
-        assert!(!cache.decide(10, 0.1));
-        assert!(!cache.decide(11, 0.1));
-        assert!(!cache.decide(12, 0.1));
-        assert!(cache.decide(13, 0.1));
-        assert!(!cache.decide(14, 0.1));
-        assert!(cache.decide(15, 1.15));
+        assert!(!decide(10, 0.1));
+        assert!(!decide(11, 0.1));
+        assert!(!decide(12, 0.1));
+        assert!(decide(13, 0.1));
+        assert!(!decide(14, 0.1));
+        assert!(decide(15, 1.15));
     }
 
     #[test]
@@ -195,14 +210,14 @@ mod tests {
         let mut cache = SolCosmosTea::official();
         let signal = [0.25f32, -0.5, 1.0];
         for step in 0..10 {
-            assert!(cache.decide(step, &signal), "{step}");
+            assert!(cache.decide(step, &signal).unwrap(), "{step}");
             assert!(cache.follow());
         }
-        assert!(!cache.decide(10, &signal));
+        assert!(!cache.decide(10, &signal).unwrap());
         assert!(!cache.follow());
-        assert!(!cache.decide(11, &signal));
-        assert!(!cache.decide(12, &signal));
-        assert!(cache.decide(13, &signal));
+        assert!(!cache.decide(11, &signal).unwrap());
+        assert!(!cache.decide(12, &signal).unwrap());
+        assert!(cache.decide(13, &signal).unwrap());
     }
 
     #[test]

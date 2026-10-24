@@ -7,6 +7,10 @@
 //! Stage 2 is out of scope. Default-off:
 //! `FASTVIDEO_LTX2_FBCACHE` unset leaves stage-1 dense.
 
+use crate::techniques::step_cache::distance;
+pub use crate::techniques::step_cache::fbcache::FbCacheParams;
+pub use crate::techniques::step_cache::FbCache;
+
 /// Residual-diff threshold from the GB200 `fullopt.toml` delivery row.
 pub const THRESHOLD: f64 = 0.08;
 
@@ -52,141 +56,24 @@ pub fn scope(
 pub const APPLIED: &str = "ltx2 sol: GB200 FBCache 0.08 warmup 1 max_consecutive 10 \
 (block-0 residual signal, whole-stack residual reuse, stage-1 only)";
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct FbDecision {
-    pub skip: bool,
-    pub reason: &'static str,
-    pub distance: Option<f64>,
-    pub accumulator: f64,
-}
-
-#[derive(Debug, Clone)]
-struct PassState {
-    has_signal: bool,
-    has_residual: bool,
-    acc: f64,
-    consecutive: usize,
-}
-
-impl Default for PassState {
-    fn default() -> Self {
-        Self {
-            has_signal: false,
-            has_residual: false,
-            acc: 0.0,
-            consecutive: 0,
-        }
-    }
-}
-
-/// Stage-1 First-Block Cache. State is keyed by CFG pass ordinal.
-#[derive(Debug, Clone)]
-pub struct FbCache {
-    pub threshold: f64,
-    pub warmup: usize,
-    pub max_consecutive: usize,
-    step_index: usize,
-    pass: usize,
-    states: Vec<PassState>,
-}
-
-impl FbCache {
-    pub fn official() -> Self {
-        Self {
-            threshold: THRESHOLD,
-            warmup: WARMUP,
-            max_consecutive: MAX_CONSECUTIVE,
-            step_index: 0,
-            pass: 0,
-            states: Vec::new(),
-        }
-    }
-
-    pub fn begin_step(&mut self, step_index: usize) {
-        self.step_index = step_index;
-        self.pass = 0;
-    }
-
-    pub fn needs_signal(&self) -> bool {
-        let state = self.states.get(self.pass);
-        match state {
-            Some(state) => {
-                self.step_index >= self.warmup
-                    && state.has_signal
-                    && state.has_residual
-                    && state.consecutive < self.max_consecutive
-            }
-            None => false,
-        }
-    }
-
-    /// `distance` is mean |signal − previous| / mean |previous|.
-    /// Ignored when the pass must compute.
-    pub fn decide(&mut self, distance: f64) -> FbDecision {
-        while self.states.len() <= self.pass {
-            self.states.push(PassState::default());
-        }
-        let p = self.pass;
-        self.pass += 1;
-        let state = &mut self.states[p];
-        let (skip, reason, distance) = if self.step_index < self.warmup {
-            (false, "warmup", None)
-        } else if !state.has_signal || !state.has_residual {
-            (false, "initialize", None)
-        } else if state.consecutive >= self.max_consecutive {
-            (false, "max_consecutive", None)
-        } else {
-            state.acc += distance;
-            if state.acc < self.threshold {
-                (true, "below_threshold", Some(distance))
-            } else {
-                (false, "threshold", Some(distance))
-            }
-        };
-        state.has_signal = true;
-        FbDecision {
-            skip,
-            reason,
-            distance,
-            accumulator: state.acc,
-        }
-    }
-
-    pub fn note_computed(&mut self, pass: usize) {
-        let state = &mut self.states[pass];
-        state.acc = 0.0;
-        state.consecutive = 0;
-        state.has_residual = true;
-    }
-
-    pub fn note_reused(&mut self, pass: usize) {
-        self.states[pass].consecutive += 1;
-    }
-
-    pub fn current_pass(&self) -> usize {
-        self.pass
-    }
-
-    pub fn last_pass(&self) -> usize {
-        self.pass.saturating_sub(1)
-    }
+/// The GB200 stage-1 FBCache on the one step-cache implementation
+/// (ADR-0020): one lane per CFG pass, `step_index < warmup` computes,
+/// `reuse = acc < threshold` on the accumulated distance, the accumulator
+/// cleared when the pass computes, `consecutive >= max_consecutive` forces
+/// a compute.
+pub fn official() -> FbCache {
+    FbCache::new(FbCacheParams {
+        name: "ltx2 fbcache",
+        threshold: THRESHOLD,
+        warmup: WARMUP,
+        max_consecutive: MAX_CONSECUTIVE,
+    })
 }
 
 /// Mean |current − previous| / mean |previous|. `inf` when previous is zero.
 pub fn relative_l1(current: &[f32], previous: &[f32]) -> f64 {
-    let n = current.len().max(1) as f64;
-    let mut num = 0.0;
-    let mut den = 0.0;
-    for (a, b) in current.iter().zip(previous.iter()) {
-        num += (f64::from(*a) - f64::from(*b)).abs();
-        den += f64::from(*b).abs();
-    }
-    let den = den / n;
-    if den == 0.0 {
-        f64::INFINITY
-    } else {
-        (num / n) / den
-    }
+    let (num, den) = distance::abs_sums(current, previous);
+    distance::mean_over_mean_or_inf(num, den, current.len())
 }
 
 #[cfg(test)]
@@ -211,63 +98,76 @@ mod tests {
         assert!(APPLIED.contains("block-0 residual"));
     }
 
+    use crate::techniques::step_cache::{Lane, Refresh, Signal, StepCache};
+
+    fn distance(cache: &FbCache, d: f64) -> Signal {
+        if cache.needs_signal_next() {
+            Signal::Distance(d)
+        } else {
+            Signal::None
+        }
+    }
+
     #[test]
     fn warmup_then_skip_until_threshold() {
-        let mut cache = FbCache::official();
+        let mut cache = official();
         cache.begin_step(0);
-        let first = cache.decide(0.0);
-        assert!(!first.skip);
+        let first = cache.decide_next(distance(&cache, 0.0)).unwrap();
+        assert!(!first.reuse());
         assert_eq!(first.reason, "warmup");
-        cache.note_computed(0);
+        cache.note_computed(Lane(0), Refresh::None).unwrap();
 
         cache.begin_step(1);
-        let skip = cache.decide(0.03);
-        assert!(skip.skip);
+        let skip = cache.decide_next(distance(&cache, 0.03)).unwrap();
+        assert!(skip.reuse());
         assert_eq!(skip.reason, "below_threshold");
-        cache.note_reused(0);
+        cache.note_reused(Lane(0));
 
         cache.begin_step(2);
-        let hit = cache.decide(0.06);
-        assert!(!hit.skip);
+        let hit = cache.decide_next(distance(&cache, 0.06)).unwrap();
+        assert!(!hit.reuse());
         assert_eq!(hit.reason, "threshold");
-        assert_eq!(hit.accumulator, 0.09);
-        cache.note_computed(0);
-        assert_eq!(cache.states[0].acc, 0.0);
-        assert_eq!(cache.states[0].consecutive, 0);
+        assert_eq!(hit.accumulator, 0.03 + 0.06);
+        cache.note_computed(Lane(0), Refresh::None).unwrap();
+        cache.begin_step(3);
+        let fresh = cache.decide_next(distance(&cache, 0.01)).unwrap();
+        assert_eq!(fresh.accumulator, 0.01, "the compute cleared the pass");
     }
 
     #[test]
     fn cfg_passes_do_not_share_state() {
-        let mut cache = FbCache::official();
+        let mut cache = official();
         cache.begin_step(0);
-        assert!(!cache.decide(0.0).skip);
-        cache.note_computed(0);
-        assert!(!cache.decide(0.0).skip);
-        cache.note_computed(1);
+        assert!(!cache.decide_next(distance(&cache, 0.0)).unwrap().reuse());
+        cache.note_computed(Lane(0), Refresh::None).unwrap();
+        assert!(!cache.decide_next(distance(&cache, 0.0)).unwrap().reuse());
+        cache.note_computed(Lane(1), Refresh::None).unwrap();
 
         cache.begin_step(1);
-        assert!(cache.decide(0.02).skip);
-        cache.note_reused(0);
-        let uncond = cache.decide(0.09);
-        assert!(!uncond.skip);
+        assert!(cache.decide_next(distance(&cache, 0.02)).unwrap().reuse());
+        cache.note_reused(Lane(0));
+        let uncond = cache.decide_next(distance(&cache, 0.09)).unwrap();
+        assert!(!uncond.reuse());
         assert_eq!(uncond.reason, "threshold");
     }
 
     #[test]
     fn max_consecutive_forces_a_recompute() {
-        let mut cache = FbCache {
+        let mut cache = FbCache::new(FbCacheParams {
+            name: "ltx2 fbcache",
+            threshold: THRESHOLD,
+            warmup: WARMUP,
             max_consecutive: 1,
-            ..FbCache::official()
-        };
+        });
         cache.begin_step(0);
-        cache.decide(0.0);
-        cache.note_computed(0);
+        cache.decide_next(distance(&cache, 0.0)).unwrap();
+        cache.note_computed(Lane(0), Refresh::None).unwrap();
         cache.begin_step(1);
-        assert!(cache.decide(0.01).skip);
-        cache.note_reused(0);
+        assert!(cache.decide_next(distance(&cache, 0.01)).unwrap().reuse());
+        cache.note_reused(Lane(0));
         cache.begin_step(2);
-        let forced = cache.decide(0.01);
-        assert!(!forced.skip);
+        let forced = cache.decide_next(distance(&cache, 0.01)).unwrap();
+        assert!(!forced.reuse());
         assert_eq!(forced.reason, "max_consecutive");
     }
 
