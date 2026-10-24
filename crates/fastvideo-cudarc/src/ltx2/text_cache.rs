@@ -42,6 +42,7 @@ use super::text::PaddedPrompt;
 /// ([`prompt_cache::identity::files_head_tail`]).
 pub use crate::rt::prompt_cache::identity::files_head_tail as weights_identity;
 pub use crate::rt::prompt_cache::Outcome as CacheOutcome;
+pub use crate::rt::prompt_cache::{EncodeSettings, Gemm, Numerics, TextMode, WeightsRead};
 
 /// The two contexts of one prompt, as the connectors emit them.
 pub struct CachedContexts {
@@ -89,10 +90,11 @@ fn with_host<R>(
     ]))
 }
 
-/// Everything the conditioning depends on, hashed ([`prompt_cache::LTX2_KEY`]):
-/// the stripped prompt, the tokenizer file's digest, the padded length, the
-/// encoder kind and the Gemma and connector identities. Hex.
-pub fn cache_key(
+/// The pre-B4c2 key ([`prompt_cache::LTX2_KEY_V1`]): the stripped prompt,
+/// the tokenizer file's digest, the padded length, the encoder kind and the
+/// Gemma and connector identities. Hex. Entries on disk written before B4c2
+/// have these names; the pipeline no longer computes it.
+pub fn cache_key_v1(
     prompt: &str,
     tokenizer_json: &[u8],
     max_len: usize,
@@ -100,11 +102,39 @@ pub fn cache_key(
     gemma: &[u8; 32],
     connectors: &[u8; 32],
 ) -> String {
-    prompt_cache::hex(&prompt_cache::LTX2_KEY.key(
+    prompt_cache::hex(&prompt_cache::LTX2_KEY_V1.key(
         prompt,
         &prompt_cache::sha256(tokenizer_json),
         max_len as u64,
         &[text_encoder_kind, gemma.as_slice(), connectors.as_slice()],
+    ))
+}
+
+/// Everything the conditioning depends on, hashed ([`prompt_cache::LTX2_KEY`]):
+/// the fields of [`cache_key_v1`], then the weights read, the tree's
+/// identity (an empty field unless read), the mode and the numerics. Hex.
+pub fn cache_key(
+    prompt: &str,
+    tokenizer_json: &[u8],
+    max_len: usize,
+    text_encoder_kind: &[u8],
+    gemma: &[u8; 32],
+    connectors: &[u8; 32],
+    settings: &EncodeSettings<'_>,
+) -> String {
+    prompt_cache::hex(&prompt_cache::LTX2_KEY.key(
+        prompt,
+        &prompt_cache::sha256(tokenizer_json),
+        max_len as u64,
+        &[
+            text_encoder_kind,
+            gemma.as_slice(),
+            connectors.as_slice(),
+            settings.weights.field(),
+            settings.tree.map_or(&[][..], |t| t.as_slice()),
+            settings.mode.field(),
+            &settings.numerics.field(),
+        ],
     ))
 }
 
@@ -214,30 +244,172 @@ mod tests {
     }
 
     #[test]
-    fn the_key_is_stable_and_moves_with_every_input() {
+    fn the_v1_key_is_still_the_pre_b4c2_key() {
         let (g, c, kind) = ([1u8; 32], [2u8; 32], b"gemma3-12b");
-        let key = cache_key("a red fox", b"tokenizer", 1024, kind, &g, &c);
+        let key = cache_key_v1("a red fox", b"tokenizer", 1024, kind, &g, &c);
         assert_eq!(key.len(), 64);
-        // Pinned: a changed key format silently orphans every cache on disk.
+        // Pinned: the names entries written before B4c2 have on disk.
         assert_eq!(
             key,
             "b944238de5c5d7fd7b54990f15928a65e4930ef0da2b4a78241a1035c7d9d27c"
         );
         assert_eq!(
             key,
-            cache_key("  a red fox\n", b"tokenizer", 1024, kind, &g, &c),
+            cache_key_v1("  a red fox\n", b"tokenizer", 1024, kind, &g, &c),
             "the prompt is stripped, as the pipeline strips it"
         );
         for other in [
-            cache_key("a red fox.", b"tokenizer", 1024, kind, &g, &c),
-            cache_key("a red fox", b"tokenizer2", 1024, kind, &g, &c),
-            cache_key("a red fox", b"tokenizer", 512, kind, &g, &c),
-            cache_key("a red fox", b"tokenizer", 1024, b"gemma4-12b", &g, &c),
-            cache_key("a red fox", b"tokenizer", 1024, kind, &c, &c),
-            cache_key("a red fox", b"tokenizer", 1024, kind, &g, &g),
+            cache_key_v1("a red fox.", b"tokenizer", 1024, kind, &g, &c),
+            cache_key_v1("a red fox", b"tokenizer2", 1024, kind, &g, &c),
+            cache_key_v1("a red fox", b"tokenizer", 512, kind, &g, &c),
+            cache_key_v1("a red fox", b"tokenizer", 1024, b"gemma4-12b", &g, &c),
+            cache_key_v1("a red fox", b"tokenizer", 1024, kind, &c, &c),
+            cache_key_v1("a red fox", b"tokenizer", 1024, kind, &g, &g),
         ] {
             assert_ne!(key, other);
         }
+    }
+
+    /// The settings of the pinned keys: bf16 Gemma streamed on an H100-class
+    /// card with the defaults.
+    const BF16_STREAMED: EncodeSettings<'static> = EncodeSettings {
+        weights: WeightsRead::Checkpoint,
+        tree: None,
+        mode: TextMode::Streamed,
+        numerics: Numerics {
+            gemm: Gemm::Bf16,
+            arch: Some((9, 0)),
+            bf16_act: true,
+        },
+    };
+
+    #[test]
+    fn the_key_is_stable_and_moves_with_every_input() {
+        let (g, c, kind) = ([1u8; 32], [2u8; 32], b"gemma3-12b");
+        let s = BF16_STREAMED;
+        let key = cache_key("a red fox", b"tokenizer", 1024, kind, &g, &c, &s);
+        assert_eq!(key.len(), 64);
+        // Pinned (recomputed independently with Python hashlib, ADR-0021
+        // "B4c2"): a changed key format silently orphans every cache on disk.
+        assert_eq!(
+            key,
+            "f961d9c7c4c55c628c74bf5c8c0e8d186afd55a2da24fe43907f86da65f912e9"
+        );
+        let tree = [5u8; 32];
+        let fp8_tree_resident = EncodeSettings {
+            weights: WeightsRead::Fp8RowsTree,
+            tree: Some(&tree),
+            mode: TextMode::Resident,
+            ..s
+        };
+        assert_eq!(
+            cache_key(
+                "a red fox",
+                b"tokenizer",
+                1024,
+                kind,
+                &g,
+                &c,
+                &fp8_tree_resident
+            ),
+            "d3ec427e9e0dbe0c1a4834fab62ecc8df6c2af0185175519d419748ffe446979"
+        );
+        assert_eq!(
+            key,
+            cache_key("  a red fox\n", b"tokenizer", 1024, kind, &g, &c, &s),
+            "the prompt is stripped, as the pipeline strips it"
+        );
+        let other_tree = [6u8; 32];
+        let with = |settings: EncodeSettings<'_>| {
+            cache_key("a red fox", b"tokenizer", 1024, kind, &g, &c, &settings)
+        };
+        let others = [
+            cache_key("a red fox.", b"tokenizer", 1024, kind, &g, &c, &s),
+            cache_key("a red fox", b"tokenizer2", 1024, kind, &g, &c, &s),
+            cache_key("a red fox", b"tokenizer", 512, kind, &g, &c, &s),
+            cache_key("a red fox", b"tokenizer", 1024, b"gemma4-12b", &g, &c, &s),
+            cache_key("a red fox", b"tokenizer", 1024, kind, &c, &c, &s),
+            cache_key("a red fox", b"tokenizer", 1024, kind, &g, &g, &s),
+            // Gap 1 and 6: FP8 rows at load, from the tree, from another tree.
+            with(EncodeSettings {
+                weights: WeightsRead::Fp8RowsAtLoad,
+                ..s
+            }),
+            with(EncodeSettings {
+                weights: WeightsRead::Fp8RowsTree,
+                tree: Some(&tree),
+                ..s
+            }),
+            with(EncodeSettings {
+                weights: WeightsRead::Fp8RowsTree,
+                tree: Some(&other_tree),
+                ..s
+            }),
+            // Gap 5: resident.
+            with(EncodeSettings {
+                mode: TextMode::Resident,
+                ..s
+            }),
+            // Gap 4: GEMM math, card, activations.
+            with(EncodeSettings {
+                numerics: Numerics {
+                    gemm: Gemm::Tf32,
+                    ..s.numerics
+                },
+                ..s
+            }),
+            with(EncodeSettings {
+                numerics: Numerics {
+                    arch: Some((12, 0)),
+                    ..s.numerics
+                },
+                ..s
+            }),
+            with(EncodeSettings {
+                numerics: Numerics {
+                    bf16_act: false,
+                    ..s.numerics
+                },
+                ..s
+            }),
+        ];
+        for (i, a) in others.iter().enumerate() {
+            assert_ne!(*a, key, "{i}");
+            for (j, b) in others.iter().enumerate().skip(i + 1) {
+                assert_ne!(a, b, "{i} vs {j}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_new_domain_alone_keeps_old_entries_out() {
+        // The v2 key with the v1 fields only is not the v1 key: the domain
+        // moves every name, so no entry written before B4c2 is looked up.
+        let (g, c, kind) = ([1u8; 32], [2u8; 32], b"gemma3-12b");
+        let v1 = cache_key_v1("a red fox", b"tokenizer", 1024, kind, &g, &c);
+        let new_domain_old_fields = prompt_cache::hex(&prompt_cache::LTX2_KEY.key(
+            "a red fox",
+            &prompt_cache::sha256(b"tokenizer"),
+            1024,
+            &[kind, g.as_slice(), c.as_slice()],
+        ));
+        assert_ne!(v1, new_domain_old_fields);
+        assert_ne!(
+            v1,
+            cache_key(
+                "a red fox",
+                b"tokenizer",
+                1024,
+                kind,
+                &g,
+                &c,
+                &BF16_STREAMED
+            )
+        );
+        assert_ne!(
+            prompt_cache::LTX2_KEY.domain,
+            prompt_cache::LTX2_KEY_V1.domain
+        );
     }
 
     #[test]

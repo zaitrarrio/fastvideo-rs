@@ -1,0 +1,33 @@
+[18:40:00] [b4c2] matrix start image=afb1b42a66d9b30b
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-3c50997c-701b-df9e-bf67-32d59bae87c4)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[18:40:06] [b4c2] baseline baseline: sha-17e4a1d layer sha256:ab9734049547ebe95fb68424437953b06afac4638cb5d01afcd00eb14cbc8648 -> /fvscratch/baseline-17e4a1d/fv-gpucheck (29114694cfa737bd)
+[18:40:07] [b4c2] ▶ b4c2-ltx25-fp8-base-write  env FASTVIDEO_LTX2_TEXT_FP8=1 /fvscratch/baseline-17e4a1d/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 49 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text resident --text-cache /fvscratch/b4c2-cache/b4c2-ltx25-fp8-base --clip /fvscratch/runs/b4c2/072f0b3-10241839/b4c2-ltx25-fp8-base-write/frames  (wall cap 3600s; 0=none)
+[18:43:59] [b4c2] ok b4c2-ltx25-fp8-base-write  231s  
+[18:43:59] [b4c2] [b4c2-ltx25-fp8-base-write] text_cache: miss text_encoder: 
+[18:44:00] [b4c2] ▶ b4c2-ltx25-fp8-base-read  env /fvscratch/baseline-17e4a1d/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 49 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text resident --text-cache /fvscratch/b4c2-cache/b4c2-ltx25-fp8-base --clip /fvscratch/runs/b4c2/072f0b3-10241839/b4c2-ltx25-fp8-base-read/frames  (wall cap 3600s; 0=none)
+[18:44:34] [b4c2] ok b4c2-ltx25-fp8-base-read  34s  
+[18:44:34] [b4c2] [b4c2-ltx25-fp8-base-read] text_cache: hit text_encoder: 
+[18:44:35] [b4c2] ▶ b4c2-ltx25-fp8-pr-write  env FASTVIDEO_LTX2_TEXT_FP8=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 49 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text resident --text-cache /fvscratch/b4c2-cache/b4c2-ltx25-fp8-pr --clip /fvscratch/runs/b4c2/072f0b3-10241839/b4c2-ltx25-fp8-pr-write/frames  (wall cap 3600s; 0=none)
+[18:46:28] [b4c2] ok b4c2-ltx25-fp8-pr-write  113s  
+[18:46:28] [b4c2] [b4c2-ltx25-fp8-pr-write] text_cache: miss text_encoder: 
+[18:46:29] [b4c2] ▶ b4c2-ltx25-fp8-pr-read  env /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 49 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text resident --text-cache /fvscratch/b4c2-cache/b4c2-ltx25-fp8-pr --clip /fvscratch/runs/b4c2/072f0b3-10241839/b4c2-ltx25-fp8-pr-read/frames  (wall cap 3600s; 0=none)
+[18:47:29] [b4c2] ok b4c2-ltx25-fp8-pr-read  60s  
+[18:47:29] [b4c2] [b4c2-ltx25-fp8-pr-read] text_cache: miss text_encoder: 
+[18:47:30] [b4c2] ▶ b4c2-ltx25-fp8-pr-fresh  env /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 49 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text resident --text-cache /fvscratch/b4c2-cache/b4c2-ltx25-fp8-pr-fresh --clip /fvscratch/runs/b4c2/072f0b3-10241839/b4c2-ltx25-fp8-pr-fresh/frames  (wall cap 3600s; 0=none)
+[18:48:48] [b4c2] ok b4c2-ltx25-fp8-pr-fresh  78s  
+[18:48:48] [b4c2] [b4c2-ltx25-fp8-pr-fresh] text_cache: miss text_encoder: 
+[18:48:48] [b4c2] compare b4c2-ltx25-fp8-pr-fresh--b4c2-ltx25-fp8-pr-read exit=0 "psnr_mean":null 
+[18:48:48] [b4c2] compare b4c2-ltx25-fp8-pr-write--b4c2-ltx25-fp8-pr-read exit=1 "psnr_mean":24.720618714878487 
+[18:48:49] [b4c2] compare b4c2-ltx25-fp8-base-read--b4c2-ltx25-fp8-pr-read exit=1 "psnr_mean":24.720618714878487 
+[18:48:49] [b4c2] b4c2 b4c2-ltx25-fp8: pass
+[18:48:49] [b4c2] skip b4c2-ltx25-mode (not in FV_B4C2_CELLS)
+[18:48:49] [b4c2] skip b4c2-h3-numerics (not in FV_B4C2_CELLS)
+[18:48:49] [b4c2] skip b4c2-h3-tree (not in FV_B4C2_CELLS)
+[18:48:49] [b4c2] skip b4c2-h3-noop (not in FV_B4C2_CELLS)
+[18:48:49] [b4c2] b4c2 family: pass
+[18:48:49] [b4c2] compare-clips-b4c2-ltx25-fp8-base-read--b4c2-ltx25-fp8-pr-read.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 218 "status": "different" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 218 "status": "different" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "fail" 
+[18:48:49] [b4c2] compare-clips-b4c2-ltx25-fp8-pr-fresh--b4c2-ltx25-fp8-pr-read.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 
+[18:48:49] [b4c2] compare-clips-b4c2-ltx25-fp8-pr-write--b4c2-ltx25-fp8-pr-read.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 218 "status": "different" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 218 "status": "different" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "fail" 
+[18:48:49] [b4c2] matrix done
+matrix_exit=0

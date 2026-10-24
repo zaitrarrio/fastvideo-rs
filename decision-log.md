@@ -1541,3 +1541,63 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0022-block-fusion.md "Evidence"
 - Verification: `bash scripts/gpu/tests/b4-verdict.test.sh`; `FV_DRY_RUN=1 FV_BASELINE_SHA=17e4a1d bash scripts/gpu/runpod-matrix.sh b4b`; GPU run by the coordinator
+### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-b4c2-fields
+- Trigger: B4c2 brief: close the six key gaps of ADR-0021 so a hit never returns conditioning a fresh encode under the current settings would not
+- Options: key the requested settings (environment, CLI); key the values the run resolved; full hashes of the recovered-8B files
+- Decision: resolved values, one field each: `Numerics` (the device context's GEMM math and compute capability, the resolved bf16 activations, `host` without a device) read by `Numerics::live()` at the lookup, not by threading the device through signatures; `WeightsRead` (checkpoint, FP8 rows at load, FP8 tree) plus the tree's `files_head_tail`, from what the encoder read (`ResidentDecoder::prequantized`, the streamed tree, LTX `gemma_read`); LTX `TextMode` from `planned_mode`; recovered 8B: `files_head_tail` of base, LoRA and adapter (head and tail MiB, as LTX, not full hashes)
+- Reason: a spurious miss costs one encode, a wrong hit is silent wrong output; the device context is the one the encode runs on, so reading it at the lookup is exact without a signature change
+- Reversibility: cheap (another domain)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0021-prompt-cache.md "B4c2"
+- Verification: the families' key tests (pinned keys recomputed in Python), `numerics` tests, `equality.rs` `b4c2_keys_never_name_a_legacy_entry`, mutations; GPU `b4c2` cells (coordinator)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-b4c2-versioning
+- Trigger: every key derivation changes; ADR-0021 "Versioning" said a changed key gets a new magic and a new domain, the B4c2 brief says a new domain and no magic change unless necessary
+- Options: new magics and domains; new domains only
+- Decision: new domains only (`fastvideo h3 text conditioning v2`, `WANTEXT2`, `fastvideo ltx2 text conditioning v2`); magics and layout unchanged; the pre-B4c2 recipes stay as `*_KEY_V1` for the tests; ADR "Versioning" amended (a changed layout: magic and domain; a changed key alone: domain)
+- Reason: the layout did not change; every name moves with the domain, so an old entry is never looked up; only a SHA-256 collision could name one, which a magic bump would also turn into a miss (accepted, recorded in the ADR)
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0021-prompt-cache.md "On-disk format" (Versioning), "B4c2"
+- Verification: `b4c2_keys_never_name_a_legacy_entry`, the `the_new_domain_alone_keeps_old_entries_out` tests; every existing entry misses once
+
+### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-b4c2-ltx-decisions
+- Trigger: LTX's mode (resident / streamed) was decided at the miss, after the lookup, and the FP8 tree at every open of Gemma; a key field must be known before the lookup and match what the miss runs
+- Options: decide at the lookup and pass the decision to the miss; key the requested residency
+- Decision: `planned_mode` (the decision `ensure_backend` made, without loading) before the lookup, passed to `compute`; `gemma_read` decided once per `TextEncoder`, used by the key and by every open
+- Reason: the key then names exactly what a miss runs; a hit queries free memory once more and an invalid `FASTVIDEO_LTX2_TEXT` now fails a hit as it failed a miss
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0021-prompt-cache.md "B4c2"
+- Verification: `ltx2::pipeline` cache tests; GPU `b4c2-ltx25-fp8`, `b4c2-ltx25-mode`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-b4c2-gaps-found
+- Trigger: closing the six gaps showed two more settings that may change text conditioning: `FASTVIDEO_FP8` (FP8 `Linear`s; Wan UMT5, possibly LTX connectors) and `FASTVIDEO_SDPA` (attention backend; routing of the text encoders unverified)
+- Options: close them in B4c2; record them
+- Decision: recorded as ADR-0021 "B4c2" rows 7 and 8, not closed (the brief: a gap larger than the table is reported, not widened into the PR)
+- Reason: each needs its own verification of what the encoders actually do
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0021-prompt-cache.md "B4c2"
+- Verification: n/a (recorded)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-b4c2-gpu-cells
+- Trigger: B4c2 needs GPU evidence that each fix changes a wrong hit into a correct miss, and that default settings move no output bit
+- Options: extend `b4c`; a `b4c2` family beside it
+- Decision: `runpod-matrix.sh b4c2` (`FV_B4C2_CELLS`): switch cells `b4c2-ltx25-fp8`, `b4c2-ltx25-mode`, `b4c2-h3-numerics`, `b4c2-h3-tree` (write under one setting, read under another, plus a fresh encode over a new cache; verdict `b4c2_switch_verdict`: main's read hits, the PR's misses, equals the fresh encode in frames and stored entry) and `b4c2-h3-noop` (`b4c2_noop_verdict`: base and PR byte-identical on miss and hit, PR hit equals its miss, same entry bytes under a new name); the mode and tree cells also record whether those paths are bit-equal on the device
+- Reason: positive evidence on both sides (the gap reproduced on main, closed here); only EU-volume trees (no recovered 8B, no Wan)
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0021-prompt-cache.md "B4c2"
+- Verification: `bash scripts/gpu/tests/b4-verdict.test.sh`; `FV_DRY_RUN=1 FV_BASELINE_SHA=17e4a1dc bash scripts/gpu/runpod-matrix.sh b4c2`; GPU run by the coordinator
+
+### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-b4c2-review
+- Trigger: independent review of PR #178 (coordinator): H3 resident and streamed FP8 shared a key (the same unproven equality as LTX gap 5); Wan's `act` field was read outside UMT5's f32 scope; the field choices had no tests; LTX FP8 with an explicit streamed residency was keyed as FP8 though it streams bf16; identities re-read per prompt
+- Options: fix on the branch; record
+- Decision: (coordinator) fix on the branch, domain-only versioning and rows 7 / 8 as follow-ups confirmed. H3 key gets the `TextMode` field (`EncodeSettings`, shared with LTX); `EncoderRun` (`h3/text.rs`) is the pure choice of weights and mode, table-tested; Wan reads `Numerics::live` inside `with_bf16_act(false, ..)`; LTX `plan_mode`, `gemma_tree`, `gemma_weights_read` are pure and tested, FP8 + explicit streamed is keyed `weights=checkpoint` (computation unchanged); H3 tree and recovered identities through `identity::files_head_tail_cached` (re-read when a file's size, modification time or the file set changes); no H3 streamed-FP8 GPU cell (no flag forces it)
+- Reason: the key names what ran; a spurious miss costs one encode, a wrong hit is silent wrong output
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0021-prompt-cache.md "B4c2"
+- Verification: pins recomputed in Python (H3 `29d517fd…`, `9556f05a…`, `59ddcb14…`, recovered `1af19d5f…`, Wan `1f09144a…`); 31 mutations; gates on the build pod
+

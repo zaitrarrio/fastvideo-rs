@@ -4,6 +4,14 @@
 //! hit and miss on the same calls, and leave the same files behind when a
 //! write fails. Plus the properties the format promises: atomic writes and
 //! concurrent writers that can never produce a misread.
+//!
+//! B4c2 (ADR-0021 "B4c2") intentionally moved every key: new domains and
+//! more identity fields. The key tests below therefore compare the
+//! *pre-B4c2* derivations (`*_KEY_V1`, `cache_key_v1`) with legacy — they
+//! pin the names entries already on disk have — and
+//! `b4c2_keys_never_name_a_legacy_entry` shows the new keys never name one.
+//! The entry format did not change in B4c2, so every format, protocol and
+//! failure test below still compares the one implementation with legacy.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -11,7 +19,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use fastvideo_loader::{LazyDType, LazyStore, SafetensorsWriter, TensorSpec};
 
 use super::legacy;
-use super::{identity, sha256, tokens_width, PromptCache, H3_KEY, LTX2, WAN_KEY};
+use super::{
+    identity, sha256, tokens_width, EncodeSettings, Gemm, Numerics, PromptCache, TextMode,
+    WeightsRead, H3_KEY, H3_KEY_V1, LTX2, LTX2_KEY, LTX2_KEY_V1, WAN_KEY, WAN_KEY_V1,
+};
 use crate::h3::text_cache as h3;
 use crate::llm::{Act, DecoderConfig, LayerAttn};
 use crate::ltx2::text::PaddedPrompt;
@@ -77,7 +88,7 @@ fn h3_keys_equal_legacy() {
             for tap in [0usize, 1, 24, 50, usize::MAX] {
                 for enc in &ids {
                     assert_eq!(
-                        h3::cache_key(prompt, &tok, tap, enc),
+                        h3::cache_key_v1(prompt, &tok, tap, enc),
                         legacy::h3::cache_key(prompt, &tok, tap, enc),
                         "{prompt:?} tap {tap}"
                     );
@@ -97,7 +108,7 @@ fn h3_keys_equal_legacy() {
     );
     // Pinned, and recomputed independently (Python hashlib) when written.
     assert_eq!(
-        super::hex(&h3::cache_key("a dog <d>hi</d>", &[1; 32], 50, &[2; 32])),
+        super::hex(&h3::cache_key_v1("a dog <d>hi</d>", &[1; 32], 50, &[2; 32])),
         "86ae3a4c85ef1725102bce88852a0d444061550701b8b40f29a6e3cca11652b5"
     );
 }
@@ -117,7 +128,7 @@ fn ltx2_keys_equal_legacy() {
                 ] {
                     for (g, c) in [([1u8; 32], [2u8; 32]), ([2; 32], [1; 32])] {
                         assert_eq!(
-                            ltx2::cache_key(prompt, tok, max_len, kind, &g, &c),
+                            ltx2::cache_key_v1(prompt, tok, max_len, kind, &g, &c),
                             legacy::ltx2::cache_key(prompt, tok, max_len, kind, &g, &c),
                             "{prompt:?}"
                         );
@@ -127,7 +138,7 @@ fn ltx2_keys_equal_legacy() {
         }
     }
     assert_eq!(
-        ltx2::cache_key(
+        ltx2::cache_key_v1(
             "a red fox",
             b"tokenizer",
             1024,
@@ -139,7 +150,7 @@ fn ltx2_keys_equal_legacy() {
     );
     // The prompt is trimmed (LTX), not elsewhere.
     assert_eq!(
-        ltx2::cache_key(
+        ltx2::cache_key_v1(
             "  a red fox\n",
             b"tokenizer",
             1024,
@@ -147,7 +158,7 @@ fn ltx2_keys_equal_legacy() {
             &[1; 32],
             &[2; 32]
         ),
-        ltx2::cache_key(
+        ltx2::cache_key_v1(
             "a red fox",
             b"tokenizer",
             1024,
@@ -157,8 +168,8 @@ fn ltx2_keys_equal_legacy() {
         ),
     );
     assert_ne!(
-        h3::cache_key("  a red fox\n", &[1; 32], 50, &[2; 32]),
-        h3::cache_key("a red fox", &[1; 32], 50, &[2; 32]),
+        h3::cache_key_v1("  a red fox\n", &[1; 32], 50, &[2; 32]),
+        h3::cache_key_v1("a red fox", &[1; 32], 50, &[2; 32]),
     );
 }
 
@@ -198,7 +209,7 @@ fn wan_keys_equal_legacy() {
         for prompt in PROMPTS {
             for text_len in [0usize, 226, 512] {
                 for (path, sha) in [(tok_path.clone(), tok_sha), (None, sha256(b""))] {
-                    let new = WAN_KEY.key(prompt, &sha, text_len as u64, &[id.as_slice()]);
+                    let new = WAN_KEY_V1.key(prompt, &sha, text_len as u64, &[id.as_slice()]);
                     let old = legacy::wan::text_cache_key(dir, path, text_len, prompt).unwrap();
                     assert_eq!(new, old, "{dir:?} {prompt:?} {text_len}");
                 }
@@ -206,7 +217,7 @@ fn wan_keys_equal_legacy() {
         }
     }
     assert_eq!(
-        super::hex(&WAN_KEY.key(
+        super::hex(&WAN_KEY_V1.key(
             "a red fox",
             &sha256(b"tokenizer"),
             512,
@@ -214,15 +225,191 @@ fn wan_keys_equal_legacy() {
         )),
         "032905eeac0252b0e0917e1567ef0550d7b54cc9691b0ec405701e1ded1bc120"
     );
-    // Same inputs, three domains: the families never share an entry name.
+    // Same inputs, six domains (three families, before and since B4c2):
+    // no two recipes ever share an entry name.
     let (t, e) = (sha256(b"t"), [5u8; 32]);
-    let keys = [
-        H3_KEY.key("p", &t, 50, &[&e]),
-        WAN_KEY.key("p", &t, 50, &[&e]),
-        super::LTX2_KEY.key("p", &t, 50, &[&e]),
-    ];
-    assert!(keys[0] != keys[1] && keys[1] != keys[2] && keys[0] != keys[2]);
+    let keys: Vec<[u8; 32]> = [
+        H3_KEY_V1,
+        WAN_KEY_V1,
+        LTX2_KEY_V1,
+        H3_KEY,
+        WAN_KEY,
+        LTX2_KEY,
+    ]
+    .iter()
+    .map(|r| r.key("p", &t, 50, &[&e]))
+    .collect();
+    for (i, a) in keys.iter().enumerate() {
+        for b in &keys[i + 1..] {
+            assert_ne!(a, b);
+        }
+    }
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// B4c2: no key the new code computes names an entry written before B4c2,
+/// whatever the new fields hold — the domain alone separates them — and an
+/// entry written by the legacy code under its key is never read by the new
+/// code for the same prompt and weights: a miss that computes, leaves the old
+/// file alone and stores under its own name.
+#[test]
+fn b4c2_keys_never_name_a_legacy_entry() {
+    let numerics = [
+        Numerics {
+            gemm: Gemm::Bf16,
+            arch: Some((9, 0)),
+            bf16_act: true,
+        },
+        Numerics {
+            gemm: Gemm::Host,
+            arch: None,
+            bf16_act: false,
+        },
+    ];
+    let weights = [
+        WeightsRead::Checkpoint,
+        WeightsRead::Fp8RowsAtLoad,
+        WeightsRead::Fp8RowsTree,
+        WeightsRead::Fp8RowsUnknown,
+    ];
+    let tree = [7u8; 32];
+    let (tok, enc) = ([1u8; 32], [2u8; 32]);
+    for prompt in PROMPTS {
+        let old_h3 = [
+            legacy::h3::cache_key(prompt, &tok, 50, &enc),
+            legacy::h3::cache_key(prompt, &tok, 50, &h3::fp8_rows_identity(&enc)),
+            legacy::h3::cache_key(prompt, &tok, 24, &h3::recovered_identity(24)),
+        ];
+        let old_ltx =
+            legacy::ltx2::cache_key(prompt, b"tokenizer", 1024, b"gemma3-12b", &enc, &tok);
+        for n in &numerics {
+            for w in weights {
+                let t = (w == WeightsRead::Fp8RowsTree).then_some(&tree);
+                for mode in [TextMode::Resident, TextMode::Streamed] {
+                    let s = EncodeSettings {
+                        weights: w,
+                        tree: t,
+                        mode,
+                        numerics: *n,
+                    };
+                    for tap in [24, 50] {
+                        let new = h3::cache_key(prompt, &tok, tap, &enc, &s);
+                        assert!(!old_h3.contains(&new), "{prompt:?}");
+                    }
+                    let new =
+                        ltx2::cache_key(prompt, b"tokenizer", 1024, b"gemma3-12b", &enc, &tok, &s);
+                    assert_ne!(new, old_ltx, "{prompt:?}");
+                }
+            }
+            let wan = WAN_KEY.key(prompt, &tok, 512, &[enc.as_slice(), &n.field()]);
+            assert_ne!(wan, WAN_KEY_V1.key(prompt, &tok, 512, &[enc.as_slice()]));
+        }
+        // The domain alone: the new recipes over the *old* fields.
+        assert_ne!(
+            WAN_KEY.key(prompt, &tok, 512, &[enc.as_slice()]),
+            WAN_KEY_V1.key(prompt, &tok, 512, &[enc.as_slice()])
+        );
+        assert_ne!(H3_KEY.key(prompt, &tok, 50, &[enc.as_slice()]), old_h3[0]);
+        assert_ne!(
+            super::hex(&LTX2_KEY.key(
+                prompt,
+                &sha256(b"tokenizer"),
+                1024,
+                &[b"gemma3-12b".as_slice(), enc.as_slice(), tok.as_slice()]
+            )),
+            old_ltx
+        );
+    }
+
+    // The Wan v2 key, pinned (recomputed independently with Python hashlib):
+    // UMT5 runs with f32 activations, so that is what its key says.
+    let wan_numerics = Numerics {
+        bf16_act: false,
+        ..numerics[0]
+    };
+    assert_eq!(
+        super::hex(&WAN_KEY.key(
+            "a cat",
+            &sha256(b""),
+            512,
+            &[[3u8; 32].as_slice(), &wan_numerics.field()]
+        )),
+        "1f09144a175a39a3fe78a56c6b6f2cadaf75940662b82baa30096b62ffde2f0e"
+    );
+
+    // On disk, H3 format (H3 and Wan): a legacy entry for this prompt is not
+    // what the new key looks up.
+    let dir = scratch("b4c2-h3");
+    let ids = [7u32, 8, 9];
+    let old_key = legacy::h3::cache_key("p", &tok, 50, &enc);
+    let (_, hit) =
+        legacy::h3::get_or_compute(&dir, &old_key, &ids, 2, || Ok(vec![1.0; 6])).unwrap();
+    assert!(!hit);
+    let old_file = std::fs::read(legacy::h3::entry_path(&dir, &old_key)).unwrap();
+    let new_key = h3::cache_key(
+        "p",
+        &tok,
+        50,
+        &enc,
+        &EncodeSettings {
+            weights: WeightsRead::Checkpoint,
+            tree: None,
+            mode: TextMode::Resident,
+            numerics: numerics[0],
+        },
+    );
+    let mut computed = 0;
+    let (entry, hit) = h3::get_or_compute(&dir, &new_key, &ids, 2, || {
+        computed += 1;
+        Ok(vec![2.0; 6])
+    })
+    .unwrap();
+    assert!(!hit && computed == 1, "the legacy entry was not read");
+    assert_eq!(entry.data, vec![2.0; 6]);
+    assert_eq!(
+        std::fs::read(legacy::h3::entry_path(&dir, &old_key)).unwrap(),
+        old_file,
+        "and is left as it was"
+    );
+    assert_eq!(names(&dir).len(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // On disk, LTX format.
+    let dir = scratch("b4c2-ltx");
+    let (prompt, video, audio) = &ltx_entries()[0];
+    let old_key =
+        legacy::ltx2::cache_key("a red fox", b"tokenizer", 1024, b"gemma3-12b", &enc, &tok);
+    legacy::ltx2::TextCache::new(&dir)
+        .store(&old_key, prompt, video, audio)
+        .unwrap();
+    let new_key = ltx2::cache_key(
+        "a red fox",
+        b"tokenizer",
+        1024,
+        b"gemma3-12b",
+        &enc,
+        &tok,
+        &EncodeSettings {
+            weights: WeightsRead::Checkpoint,
+            tree: None,
+            mode: TextMode::Streamed,
+            numerics: numerics[0],
+        },
+    );
+    let mut computed = 0;
+    let (_, outcome) = ltx2::TextCache::new(&dir)
+        .get_or_compute(&new_key, prompt, || -> crate::rt::tensor::Result<_> {
+            computed += 1;
+            Ok(ltx2::CachedContexts {
+                video: video.clone(),
+                audio: audio.clone(),
+            })
+        })
+        .unwrap();
+    assert_eq!(outcome, super::Outcome::Miss);
+    assert_eq!(computed, 1, "the legacy entry was not read");
+    assert_eq!(names(&dir).len(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -674,7 +861,7 @@ fn ltx2_readers_accept_and_reject_the_same_files() {
 #[test]
 fn h3_hits_and_misses_equal_legacy() {
     let (old_dir, new_dir) = (scratch("h3-proto-old"), scratch("h3-proto-new"));
-    let key = h3::cache_key("p", &[0; 32], 50, &[0; 32]);
+    let key = h3::cache_key_v1("p", &[0; 32], 50, &[0; 32]);
     let values =
         |ids: &[u32]| -> Vec<f32> { ids.iter().flat_map(|&i| [i as f32, -(i as f32)]).collect() };
     // (ids, width, values the encoder returns)

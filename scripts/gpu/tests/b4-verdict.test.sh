@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The b4a / b4b / b4c verdicts (scripts/gpu/b4-verdict.sh) on stub run
+# The b4a / b4b / b4c / b4c2 verdicts (scripts/gpu/b4-verdict.sh) on stub run
 # trees: a passing cell, and one failing case per rule (exit codes, the
 # planned hit / miss, the H3 FP8 encoder, skipped / failed / missing
 # compares, cache entries, temporary files, the fused kernels of the traced
@@ -297,6 +297,121 @@ fresh; good_b4b $b 25 "${h3_on[@]}"; good_b4b b4b-ltx 25 "${ltx_on[@]}"
 b4b_verdict $b on h3 "${on_named[@]}" >/dev/null; b4b_verdict b4b-ltx on - fvf_ltx_res_norm_mod >/dev/null
 expect pass - "b4b family: both cells passed" b4_family_verdict b4b $b b4b-ltx
 expect fail "b4b-ltx-off:no-verdict" "b4b family: a named cell that never ran" b4_family_verdict b4b $b b4b-ltx b4b-ltx-off
+
+# b4c2: a setting switched between a write and a read.
+good_switch() { # <cell>
+  summary "$1-base-write" 0; bench "$1-base-write" miss resident-fp8
+  summary "$1-base-read" 0; bench "$1-base-read" hit cache
+  summary "$1-pr-write" 0; bench "$1-pr-write" miss resident-fp8
+  summary "$1-pr-read" 0; bench "$1-pr-read" miss resident-bf16
+  summary "$1-pr-fresh" 0; bench "$1-pr-fresh" miss resident-bf16
+  compare "$1-pr-fresh" "$1-pr-read" ok
+  cache "$1-base" "aa.ltx2text" "fp8"
+  cache "$1-pr" "bb.ltx2text" "fp8"
+  cache "$1-pr" "cc.ltx2text" "bf16"
+  cache "$1-pr-fresh" "cc.ltx2text" "bf16"
+}
+s2=b4c2-ltx-fp8
+
+fresh; good_switch $s2
+expect pass - "b4c2 switch: all evidence present" b4c2_switch_verdict $s2
+[[ -f "$RUNS/b4c2-$s2.verdict.json" ]] || { echo "FAIL no b4c2 verdict file" >&2; fails=$((fails + 1)); }
+
+fresh; good_switch $s2; cache $s2-pr-fresh "cc.ltx2text" "other"
+expect fail "fresh-entry-not-stored-by-read" "b4c2 switch: the fresh encode stored other bytes" b4c2_switch_verdict $s2
+
+fresh; good_switch $s2; rm "$B4C_CACHE/$s2-pr-fresh/cc.ltx2text"; cache $s2-pr-fresh "ee.ltx2text" "bf16"
+expect fail "fresh-entry-not-stored-by-read" "b4c2 switch: the fresh encode stored under another name" b4c2_switch_verdict $s2
+
+fresh; good_switch $s2; rm -rf "$B4C_CACHE/$s2-pr-fresh"
+expect fail "pr-fresh:entries=0" "b4c2 switch: the fresh encode stored nothing" b4c2_switch_verdict $s2
+
+fresh; good_switch $s2; summary $s2-pr-fresh 1
+expect fail "$s2-pr-fresh:exit" "b4c2 switch: the fresh pass failed" b4c2_switch_verdict $s2
+
+fresh; good_switch $s2; rm "$RUNS/$s2-base-read/summary.json"
+expect fail "$s2-base-read:exit" "b4c2 switch: a pass that never ran" b4c2_switch_verdict $s2
+
+fresh; good_switch $s2; bench $s2-pr-write hit cache
+expect fail "$s2-pr-write:text_cache=hit" "b4c2 switch: the write hit (a stale cache)" b4c2_switch_verdict $s2
+
+fresh; good_switch $s2; bench $s2-base-read miss resident-bf16
+expect fail "$s2-base-read:text_cache=miss" "b4c2 switch: main did not reproduce the gap" b4c2_switch_verdict $s2
+
+fresh; good_switch $s2; bench $s2-pr-read hit cache
+expect fail "$s2-pr-read:text_cache=hit" "b4c2 switch: this build served the other setting" b4c2_switch_verdict $s2
+
+fresh; good_switch $s2; bench $s2-pr-fresh hit cache
+expect fail "$s2-pr-fresh:text_cache=hit" "b4c2 switch: the fresh pass hit (not a cold cache)" b4c2_switch_verdict $s2
+
+fresh; good_switch $s2; compare $s2-pr-fresh $s2-pr-read different
+expect fail "read-vs-fresh:not-identical" "b4c2 switch: the miss differs from a fresh encode" b4c2_switch_verdict $s2
+
+fresh; good_switch $s2; compare $s2-pr-fresh $s2-pr-read skipped
+expect fail "read-vs-fresh:not-identical" "b4c2 switch: a skipped compare" b4c2_switch_verdict $s2
+
+fresh; good_switch $s2; rm "$B4C_CACHE/$s2-pr/cc.ltx2text"
+expect fail "pr:entries=1" "b4c2 switch: this build stored one entry" b4c2_switch_verdict $s2
+
+fresh; good_switch $s2; cache $s2-base "dd.ltx2text" "x"
+expect fail "base:entries=2" "b4c2 switch: main stored two entries" b4c2_switch_verdict $s2
+
+fresh; good_switch $s2; cache $s2-pr "k.1.part" "half"
+expect fail "pr:temporary-files" "b4c2 switch: a .part left" b4c2_switch_verdict $s2
+
+# b4c2: the no-change cell.
+good_noop() { # <cell>
+  local arm
+  for arm in base pr; do
+    summary "$1-$arm-miss" 0; bench "$1-$arm-miss" miss resident-fp8
+    summary "$1-$arm-hit" 0; bench "$1-$arm-hit" hit cache
+  done
+  cache "$1-base" "aa.h3text" "entry"
+  cache "$1-pr" "bb.h3text" "entry"
+  compare "$1-base-miss" "$1-pr-miss" ok
+  compare "$1-base-hit" "$1-pr-hit" ok
+  compare "$1-pr-miss" "$1-pr-hit" ok
+}
+s3=b4c2-h3-noop
+
+fresh; good_noop $s3
+expect pass - "b4c2 noop: all evidence present" b4c2_noop_verdict $s3
+
+fresh; good_noop $s3; summary $s3-pr-hit 1
+expect fail "$s3-pr-hit:exit" "b4c2 noop: a pass that exited 1" b4c2_noop_verdict $s3
+
+fresh; good_noop $s3; bench $s3-pr-hit miss resident-fp8
+expect fail "$s3-pr-hit:text_cache=miss" "b4c2 noop: the hit missed" b4c2_noop_verdict $s3
+
+fresh; good_noop $s3; compare $s3-base-miss $s3-pr-miss different
+expect fail "miss:not-identical" "b4c2 noop: the miss moved an output bit" b4c2_noop_verdict $s3
+
+fresh; good_noop $s3; compare $s3-pr-miss $s3-pr-hit different
+expect fail "pr-hit-vs-miss:not-identical" "b4c2 noop: the hit differs from the miss" b4c2_noop_verdict $s3
+
+fresh; good_noop $s3; rm "$RUNS/compare/compare-clips-$s3-base-hit--$s3-pr-hit.json"
+expect fail "hit:not-identical" "b4c2 noop: a missing compare" b4c2_noop_verdict $s3
+
+fresh; good_noop $s3; cache $s3-pr "bb.h3text" "other"
+expect fail "entry-bytes-differ" "b4c2 noop: different conditioning bytes" b4c2_noop_verdict $s3
+
+fresh; good_noop $s3; rm "$B4C_CACHE/$s3-pr/bb.h3text"; cache $s3-pr "aa.h3text" "entry"
+expect fail "entry-name-unchanged" "b4c2 noop: the key did not move" b4c2_noop_verdict $s3
+
+fresh; good_noop $s3; cache $s3-pr "cc.h3text" "entry"
+expect fail "pr:entries=2" "b4c2 noop: an extra entry" b4c2_noop_verdict $s3
+
+fresh; good_noop $s3; rm -rf "$B4C_CACHE/$s3-base" "$B4C_CACHE/$s3-pr"
+expect fail "no-cache-entries" "b4c2 noop: no cache written" b4c2_noop_verdict $s3
+
+fresh; good_noop $s3; cache $s3-base "aa.tmp9" "half"
+expect fail "base:temporary-files" "b4c2 noop: a .tmp left" b4c2_noop_verdict $s3
+
+fresh; good_noop $s3; good_switch $s2
+b4c2_noop_verdict $s3 >/dev/null; b4c2_switch_verdict $s2 >/dev/null
+expect pass - "b4c2 family: both cells passed" b4_family_verdict b4c2 $s3 $s2
+bench $s2-pr-read hit cache; b4c2_switch_verdict $s2 >/dev/null
+expect fail "$s2:fail" "b4c2 family: a failed cell" b4_family_verdict b4c2 $s3 $s2
 
 # b4a's pieces: exit and identity.
 fresh; summary b4a-x-base 0; summary b4a-x-pr 0; compare b4a-x-base b4a-x-pr ok

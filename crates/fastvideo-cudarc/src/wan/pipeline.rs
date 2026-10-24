@@ -728,7 +728,7 @@ impl WanPipeline {
     /// `tokenizer.json`, the padded length and an identity of the UMT5
     /// weights ([`prompt_cache::identity::files_head`]: file names, sizes and
     /// each file's first 256 KiB: the safetensors header and the start of the
-    /// data).
+    /// data) and, since B4c2, the [`prompt_cache::Numerics`] of the encode.
     fn text_cache_key(&self, cfg: &GenerateConfig, prompt: &str) -> Result<[u8; 32]> {
         let identity = self
             .text_identity
@@ -759,11 +759,14 @@ impl WanPipeline {
                 s
             }
         };
-        Ok(prompt_cache::WAN_KEY.key(
+        // The GEMM math, card and activations this encode runs with
+        // (ADR-0021 "B4c2", gap 3): resolved by the live device context.
+        Ok(wan_text_key(
             prompt,
             &tokenizer_sha,
-            self.dit.cfg.text_len as u64,
-            &[identity.as_slice()],
+            self.dit.cfg.text_len,
+            identity,
+            &umt5_numerics(),
         ))
     }
 
@@ -2560,6 +2563,107 @@ pub fn mux_mp4(dir: &Path, fps: u32) -> Result<String> {
         )));
     }
     Ok(out.to_string_lossy().into_owned())
+}
+
+/// The numerics a UMT5 encode runs with: resolved inside the f32-activation
+/// scope [`Umt5Encoder::forward`] runs in, so the `act` field is what the
+/// encode used, not the DiT's default.
+fn umt5_numerics() -> prompt_cache::Numerics {
+    super::tensor::with_bf16_act(false, prompt_cache::Numerics::live)
+}
+
+/// Wan's prompt-cache key ([`prompt_cache::WAN_KEY`]): the prompt, the
+/// tokenizer digest, the padded length, then the UMT5 file identity
+/// ([`prompt_cache::identity::files_head`]) and the numerics of the encode.
+fn wan_text_key(
+    prompt: &str,
+    tokenizer_sha: &[u8; 32],
+    text_len: usize,
+    identity: &[u8; 32],
+    numerics: &prompt_cache::Numerics,
+) -> [u8; 32] {
+    prompt_cache::WAN_KEY.key(
+        prompt,
+        tokenizer_sha,
+        text_len as u64,
+        &[identity.as_slice(), &numerics.field()],
+    )
+}
+
+#[cfg(test)]
+mod text_key_tests {
+    use super::*;
+    use crate::rt::prompt_cache::{Gemm, Numerics};
+
+    /// An H100-class card with the default GEMM math; UMT5's f32
+    /// activations.
+    const NUM: Numerics = Numerics {
+        gemm: Gemm::Bf16,
+        arch: Some((9, 0)),
+        bf16_act: false,
+    };
+
+    #[test]
+    fn the_umt5_numerics_are_its_f32_activations_whatever_the_default() {
+        for default in [true, false] {
+            let n = super::super::tensor::with_bf16_act(default, umt5_numerics);
+            assert!(!n.bf16_act, "default {default}");
+            assert!(n.field().ends_with(b";act=f32"));
+        }
+    }
+
+    #[test]
+    fn the_wan_key_is_pinned_and_follows_the_numerics() {
+        let tok = prompt_cache::sha256(b"");
+        let key = wan_text_key("a cat", &tok, 512, &[3; 32], &NUM);
+        // Pinned (recomputed independently with Python hashlib, ADR-0021 "B4c2").
+        assert_eq!(
+            prompt_cache::hex(&key),
+            "1f09144a175a39a3fe78a56c6b6f2cadaf75940662b82baa30096b62ffde2f0e"
+        );
+        assert_eq!(key, wan_text_key("a cat", &tok, 512, &[3; 32], &NUM));
+        // Gap 3: the resolved GEMM math (FASTVIDEO_BF16 / FASTVIDEO_TF32 on a
+        // tensor-core card), the card, the activations.
+        let others = [
+            Numerics {
+                gemm: Gemm::Tf32,
+                ..NUM
+            },
+            Numerics {
+                gemm: Gemm::F32,
+                ..NUM
+            },
+            Numerics {
+                gemm: Gemm::Host,
+                arch: None,
+                ..NUM
+            },
+            Numerics {
+                arch: Some((12, 0)),
+                ..NUM
+            },
+            Numerics {
+                bf16_act: true,
+                ..NUM
+            },
+        ]
+        .map(|n| wan_text_key("a cat", &tok, 512, &[3; 32], &n));
+        for (i, a) in others.iter().enumerate() {
+            assert_ne!(*a, key, "{i}");
+            for b in &others[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
+        // The rest still moves it.
+        assert_ne!(key, wan_text_key("a cat ", &tok, 512, &[3; 32], &NUM));
+        assert_ne!(key, wan_text_key("a cat", &tok, 226, &[3; 32], &NUM));
+        assert_ne!(key, wan_text_key("a cat", &tok, 512, &[4; 32], &NUM));
+        // And it is never the pre-B4c2 key of the same prompt and weights.
+        assert_ne!(
+            key,
+            prompt_cache::WAN_KEY_V1.key("a cat", &tok, 512, &[[3u8; 32].as_slice()])
+        );
+    }
 }
 
 #[cfg(test)]

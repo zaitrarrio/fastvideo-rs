@@ -87,11 +87,10 @@ impl Recovered8bEncoder {
     /// `root` is the SearchingMan `recovered_8b/` directory (or a parent that
     /// holds the four files).
     pub fn load(root: &Path) -> Result<Self> {
-        let dir = resolve_recovered_dir(root)?;
-        let base =
-            WeightMap::open_files(&[dir.join("qwen3vl_8b_minimax_h3_recovered_bf16.safetensors")])?;
-        let ara = WeightMap::open_files(&[dir.join("ara.safetensors")])?;
-        let adapter_map = WeightMap::open_files(&[dir.join("conditioning_adapter.safetensors")])?;
+        let [base, ara, adapter] = weight_files(root)?;
+        let base = WeightMap::open_files(&[base])?;
+        let ara = WeightMap::open_files(&[ara])?;
+        let adapter_map = WeightMap::open_files(&[adapter])?;
         let cfg = DecoderConfig::qwen3_vl_8b_text().for_bf16_reference();
         let decoder = ResidentDecoder::load_with_comfy_lora(
             &base,
@@ -145,6 +144,11 @@ impl HiddenStateEncoder for Recovered8bEncoder {
     }
 }
 
+/// The 8B base checkpoint's file name.
+const BASE_FILE: &str = "qwen3vl_8b_minimax_h3_recovered_bf16.safetensors";
+const ARA_FILE: &str = "ara.safetensors";
+const ADAPTER_FILE: &str = "conditioning_adapter.safetensors";
+
 fn resolve_recovered_dir(root: &Path) -> Result<PathBuf> {
     let candidates = [
         root.to_path_buf(),
@@ -152,15 +156,27 @@ fn resolve_recovered_dir(root: &Path) -> Result<PathBuf> {
         root.join("text_encoders").join("recovered_8b"),
     ];
     for dir in candidates {
-        let base = dir.join("qwen3vl_8b_minimax_h3_recovered_bf16.safetensors");
+        let base = dir.join(BASE_FILE);
         if base.is_file() {
             return Ok(dir);
         }
     }
     Err(msg(format!(
-        "recovered-8b: no qwen3vl_8b_minimax_h3_recovered_bf16.safetensors under {}",
+        "recovered-8b: no {BASE_FILE} under {}",
         root.display()
     )))
+}
+
+/// The three files [`Recovered8bEncoder::load`] reads for `root`, in the
+/// order base, ARA LoRA, conditioning adapter: what the prompt-cache key
+/// fingerprints (ADR-0021 "B4c2", gap 2).
+pub fn weight_files(root: &Path) -> Result<[PathBuf; 3]> {
+    let dir = resolve_recovered_dir(root)?;
+    Ok([
+        dir.join(BASE_FILE),
+        dir.join(ARA_FILE),
+        dir.join(ADAPTER_FILE),
+    ])
 }
 
 /// Host-only adapter identity used by unit tests (no CUDA).

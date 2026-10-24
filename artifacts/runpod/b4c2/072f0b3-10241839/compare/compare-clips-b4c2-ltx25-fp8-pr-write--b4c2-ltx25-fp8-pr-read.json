@@ -1,0 +1,206 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "frame_counts",
+      "ok": true,
+      "values": {
+        "baseline": 49,
+        "candidate": 49,
+        "match": true,
+        "pairs": 49
+      }
+    },
+    {
+      "limits": {},
+      "name": "frame_shape",
+      "ok": true,
+      "values": {
+        "shape_mismatch": null
+      }
+    },
+    {
+      "limits": {},
+      "name": "pixel_metrics",
+      "ok": true,
+      "values": {
+        "mean_abs_pixel_diff": 8.058843392093168,
+        "mse_max": 256.65031263563367,
+        "mse_mean": 219.60042656792538,
+        "pairs": 49,
+        "patch_boundary_ratio_by_size_max": {
+          "16": 1.0307409596276738,
+          "32": 1.0468584982915883,
+          "8": 0.9981895911175607
+        },
+        "patch_boundary_ratio_by_size_mean": {
+          "16": 1.0060559222034022,
+          "32": 1.0057763381531641,
+          "8": 0.9684868766510021
+        },
+        "patch_boundary_ratio_max": 1.0468584982915883,
+        "patch_boundary_ratio_mean": 1.0110168381180238,
+        "psnr_mean": 24.720618714878487,
+        "psnr_min": 24.037385632399662,
+        "sharpness_ratio_mean": 0.9723085753688545,
+        "status": "ok",
+        "temporal_delta_error_max": 2.5770899454752603,
+        "temporal_delta_error_mean": 1.4510222894174074,
+        "temporal_jitter_ratio_max": 1.1645569730680383,
+        "temporal_jitter_ratio_mean": 0.9912113157992617,
+        "temporal_jitter_ratio_min": 0.790768987760827
+      }
+    },
+    {
+      "limits": {
+        "max_abs_diff_uint8": 0
+      },
+      "name": "off_identity",
+      "ok": false,
+      "values": {
+        "max_abs_diff_uint8": 218,
+        "nonidentical_frames": 49,
+        "pairs": 49,
+        "status": "different"
+      }
+    }
+  ],
+  "context": {
+    "baseline": {
+      "dir": "/fvscratch/runs/b4c2/072f0b3-10241839/b4c2-ltx25-fp8-pr-write/frames",
+      "frames": 49,
+      "frames_dir": "/fvscratch/runs/b4c2/072f0b3-10241839/b4c2-ltx25-fp8-pr-write/frames",
+      "log": "/fvscratch/runs/b4c2/072f0b3-10241839/b4c2-ltx25-fp8-pr-write/stderr.log",
+      "mp4": "/fvscratch/runs/b4c2/072f0b3-10241839/b4c2-ltx25-fp8-pr-write/frames/output.mp4",
+      "notes": [],
+      "status": "completed"
+    },
+    "candidate": {
+      "dir": "/fvscratch/runs/b4c2/072f0b3-10241839/b4c2-ltx25-fp8-pr-read/frames",
+      "frames": 49,
+      "frames_dir": "/fvscratch/runs/b4c2/072f0b3-10241839/b4c2-ltx25-fp8-pr-read/frames",
+      "log": "/fvscratch/runs/b4c2/072f0b3-10241839/b4c2-ltx25-fp8-pr-read/stderr.log",
+      "mp4": "/fvscratch/runs/b4c2/072f0b3-10241839/b4c2-ltx25-fp8-pr-read/frames/output.mp4",
+      "notes": [],
+      "status": "completed"
+    },
+    "cuda_feature": true,
+    "lpips": {
+      "reason": "disabled (pass --lpips <weights dir>)",
+      "status": "deferred"
+    },
+    "mode": "exact",
+    "off_identity": {
+      "max_abs_diff_uint8": 218,
+      "nonidentical_frames": 49,
+      "pairs": 49,
+      "status": "different"
+    },
+    "pixel_metrics": {
+      "mean_abs_pixel_diff": 8.058843392093168,
+      "mse_max": 256.65031263563367,
+      "mse_mean": 219.60042656792538,
+      "pairs": 49,
+      "patch_boundary_ratio_by_size_max": {
+        "16": 1.0307409596276738,
+        "32": 1.0468584982915883,
+        "8": 0.9981895911175607
+      },
+      "patch_boundary_ratio_by_size_mean": {
+        "16": 1.0060559222034022,
+        "32": 1.0057763381531641,
+        "8": 0.9684868766510021
+      },
+      "patch_boundary_ratio_max": 1.0468584982915883,
+      "patch_boundary_ratio_mean": 1.0110168381180238,
+      "psnr_mean": 24.720618714878487,
+      "psnr_min": 24.037385632399662,
+      "psnr_per_frame": [
+        25.025558353857736,
+        24.86059624084345,
+        24.721794500960673,
+        24.625425574791162,
+        24.624588708490197,
+        24.708887861865485,
+        24.72614377439921,
+        24.701487149067816,
+        24.5791700840204,
+        24.567296553606997,
+        24.628767470462947,
+        24.537629014935504,
+        24.037385632399662,
+        24.33550514981495,
+        24.59195767743487,
+        24.910190618411793,
+        24.98251736635971,
+        24.946795668502016,
+        24.93369202915899,
+        24.94417773593627,
+        24.739490231898177,
+        24.587330281328043,
+        24.38417416803977,
+        24.227323533900964,
+        24.399346947511763,
+        24.422715931915672,
+        24.530748976807665,
+        24.44688631173158,
+        24.51735412548142,
+        24.887456253315033,
+        24.924797226463866,
+        24.92606166304435,
+        24.895988298275412,
+        24.968571551979508,
+        24.985755836433547,
+        24.969488676851196,
+        24.94450539721455,
+        24.936064056111537,
+        25.005253523532627,
+        25.039481770164763,
+        24.955826569071103,
+        24.76717902351053,
+        24.540428618432397,
+        24.632748053760032,
+        24.83131972632688,
+        24.865489576225727,
+        24.731120834621336,
+        24.67234115319719,
+        24.58550154657951
+      ],
+      "sharpness_ratio_mean": 0.9723085753688545,
+      "status": "ok",
+      "temporal_delta_error_max": 2.5770899454752603,
+      "temporal_delta_error_mean": 1.4510222894174074,
+      "temporal_jitter_ratio_max": 1.1645569730680383,
+      "temporal_jitter_ratio_mean": 0.9912113157992617,
+      "temporal_jitter_ratio_min": 0.790768987760827
+    },
+    "thresholds": {
+      "gemini_absolute_threshold": "disabled_for_lossy_generative_dimensions",
+      "lpips_absolute_threshold": "disabled_for_lossy_generative_dimensions",
+      "off_identity": "hard gate: max_abs_diff_uint8 == 0",
+      "pixel_metrics": "telemetry (no absolute threshold)",
+      "quality_ranking": {
+        "primary": "aligned_pairwise_gemini_max_artifact_severity",
+        "secondary": "aligned_lpips_max",
+        "tie_breaker": "higher_speedup"
+      },
+      "selection": "best_quality_at_or_above_speed_target",
+      "source": "sol-engine evals/tiers.toml",
+      "speedup_targets": {
+        "high": 3.0,
+        "low": 1.5,
+        "medium": 2.0
+      }
+    }
+  },
+  "elapsed_s": 0.086868702,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": "check failed: compare-clips-b4c2-ltx25-fp8-pr-write--b4c2-ltx25-fp8-pr-read/off_identity: {\"max_abs_diff_uint8\":218,\"nonidentical_frames\":49,\"pairs\":49,\"status\":\"different\"} vs limits {\"max_abs_diff_uint8\":0}",
+  "git_sha": null,
+  "stage": "compare-clips-b4c2-ltx25-fp8-pr-write--b4c2-ltx25-fp8-pr-read",
+  "status": "fail"
+}
