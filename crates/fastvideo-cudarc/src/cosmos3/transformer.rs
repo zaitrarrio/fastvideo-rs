@@ -19,10 +19,11 @@
 //! is exact, not an approximation, and is what makes the 62 GB gen tower the
 //! only resident weight set on a 96 GB card.
 
+use crate::rt::sdpa::{sdpa, Plan};
 use fastvideo_models::cosmos3::rope::rope_tables;
 use fastvideo_models::cosmos3::Cosmos3TransformerConfig;
 
-use crate::rt::nn::{self, Linear};
+use crate::rt::nn::Linear;
 use crate::rt::offload::{BlockWeights, OffloadBlock, Residency};
 use crate::rt::tensor::{CudaTensor, Result, TensorError};
 use crate::rt::weights::{self, WeightMap};
@@ -622,7 +623,7 @@ impl Cosmos3Transformer {
                     let (ku, vu) = &und.layers[i];
                     let k_all = CudaTensor::cat(&[ku, &k], 2)?.repeat_kv(g)?;
                     let v_all = CudaTensor::cat(&[vu, &v], 2)?.repeat_kv(g)?;
-                    let a = nn::scaled_dot_product_attention(&q, &k_all, &v_all, Some(scale))?;
+                    let a = sdpa(&q, &k_all, &v_all, &Plan::dense(Some(scale)))?;
                     let x = x.add(&layer.out.forward(&a.merge_heads()?)?)?;
                     let xn = x.rms_norm(&layer.ln_post, cfg.rms_norm_eps)?;
                     x.add(&layer.mlp.forward(&xn)?)

@@ -10,6 +10,7 @@
 //!
 //! Batch is 1: the pipeline runs the CFG branches as two calls.
 
+use crate::rt::sdpa::{sdpa, Plan};
 use fastvideo_models::sana_video::config::{
     SANA_CAPTION_NORM_EPS, SANA_LINEAR_ATTN_EPS, SANA_QK_NORM_EPS,
 };
@@ -194,7 +195,7 @@ impl Block {
         let kv = self.kv2.forward(text)?;
         let k = kv.qk_norm_rope_bhsd(0, heads, &self.norm_k2, None, SANA_QK_NORM_EPS)?;
         let v = kv.split_heads_bhsd(d, heads, d / heads)?;
-        let a = nn::scaled_dot_product_attention(&q, &k, &v, None)?.merge_heads()?;
+        let a = sdpa(&q, &k, &v, &Plan::dense(None))?.merge_heads()?;
         let x = x.add(&self.out2.forward(&a)?)?;
 
         // 3. GLUMBTempConv.

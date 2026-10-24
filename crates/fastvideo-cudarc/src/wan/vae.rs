@@ -1,5 +1,6 @@
 //! Wan VAE decode with Diffusers/Wan feat-cache (`CACHE_T=2`, Rep sentinel).
 
+use crate::rt::sdpa::{sdpa, Plan};
 use fastvideo_models::wan::WanVaeConfig;
 
 use super::tensor::{CudaTensor, Result, TensorError};
@@ -389,7 +390,7 @@ impl AttentionBlock {
         let q = qkv.split_heads_bhsd(0, 1, c)?;
         let k = qkv.split_heads_bhsd(c, 1, c)?;
         let v = qkv.split_heads_bhsd(2 * c, 1, c)?;
-        let attn = super::nn::scaled_dot_product_attention(&q, &k, &v, None)?
+        let attn = sdpa(&q, &k, &v, &Plan::dense(None))?
             .reshape(vec![b * t, hw, c])?
             .permute(&[0, 2, 1])?
             .reshape(vec![b * t, c, h, w])?;

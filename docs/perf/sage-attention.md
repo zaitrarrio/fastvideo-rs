@@ -262,7 +262,8 @@ considered. At kernel level it is ~25x the bf16 error.
 * **Footprint.** Shared memory is 32 KB (half of fwd2's). ptxas (sm_120):
   213 registers, no spills.
 * **Knob.** `FASTVIDEO_ATTN_SAGE=2` (opt-in, default off) routes DiT
-  self-attention through it in `nn::scaled_dot_product_attention` (H3,
+  self-attention through it in the dense SDPA entry (`rt::sdpa::sdpa`,
+  route chosen by `rt::sdpa_rule::dense_route`; H3,
   LTX-2.5, Wan; not the VAE). It applies when `Sq, Sk >=
   FASTVIDEO_ATTN_SAGE_MIN_SEQ` (default 6144); everything else keeps the
   bf16 kernels. `=3` is refused with a message.

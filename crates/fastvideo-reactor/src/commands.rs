@@ -276,6 +276,92 @@ impl CommandTable {
             Mode::Duplex => duplex_table(),
         }
     }
+
+    /// The table as [`fastvideo_protocol::ParamSpec`]s (plan E3, ADR-0016):
+    /// one per command, surface `reactor`, endpoint `command <name>
+    /// (<mode>)`, for the served model `caps`. `Command.data` is checked by
+    /// [`CommandTable::validate`] (unknown fields ignored); an upload
+    /// reference is a non-empty `upload_id` string (or `{upload_id, ...}`).
+    pub fn param_specs(
+        &self,
+        caps: &fastvideo_protocol::ModelCaps,
+    ) -> Vec<fastvideo_protocol::ParamSpec> {
+        use fastvideo_protocol::params::{
+            Domain, Param as SpecParam, ParamSpec, ParamType as T, UnknownFields,
+        };
+        let mode = match self.mode {
+            Mode::Clip => "clip",
+            Mode::Causal => "causal",
+            Mode::Avatar => "avatar",
+            Mode::Duplex => "duplex",
+        };
+        let upstream = match self.mode {
+            Mode::Clip => "docs/serve/research-reactor.md §4bis (fast-h3)",
+            _ => "docs/serve/research-reactor.md (reactor_sdk InputField)",
+        };
+        self.commands
+            .iter()
+            .map(|c| {
+                let mut s = ParamSpec::new(
+                    "reactor",
+                    format!("command {} ({mode})", c.name),
+                    caps.id.0.clone(),
+                    caps,
+                    UnknownFields::Ignore,
+                );
+                for p in &c.params {
+                    let (ty, domain) = match &p.ty {
+                        ParamType::String { max_len } => (
+                            T::String,
+                            match max_len {
+                                Some(m) => Domain::Text {
+                                    min_chars: 0,
+                                    max_chars: Some(*m),
+                                    non_blank: false,
+                                },
+                                None => Domain::Any,
+                            },
+                        ),
+                        ParamType::Integer { min, max } => (
+                            T::Integer,
+                            Domain::Int {
+                                min: *min,
+                                max: *max,
+                            },
+                        ),
+                        ParamType::Number { min, max } => (
+                            T::Number,
+                            Domain::Number {
+                                min: *min,
+                                max: *max,
+                                exclusive_min: false,
+                            },
+                        ),
+                        ParamType::Boolean => (T::Boolean, Domain::Any),
+                        ParamType::Choice(v) => (T::String, Domain::one_of(v.iter().cloned())),
+                        ParamType::File { .. } => (
+                            T::String,
+                            Domain::Text {
+                                min_chars: 1,
+                                max_chars: None,
+                                non_blank: false,
+                            },
+                        ),
+                    };
+                    let mut q =
+                        SpecParam::new(p.name, ty, format!("command {}.{}", c.name, p.name))
+                            .domain(domain)
+                            .upstream(upstream)
+                            .note(p.description);
+                    q.required = p.required;
+                    q.nullable = p.nullable;
+                    q.default = p.default.clone().filter(|d| !d.is_null());
+                    s.push(q);
+                }
+                s
+            })
+            .collect()
+    }
 }
 
 /// Clip-length bounds and default from the model caps (design §5.7).

@@ -1113,6 +1113,56 @@ Project code: FVID
 - ADR: ADR-0012
 - Verification: `param_rules` (fails if either side moves)
 
+### FVID · 2026-10-24 · FVID-2026-10-24-cert-matrix
+- Trigger: plan E3: a parameter x surface x model certification matrix over every surface, as a TSV, with a CI assertion that every parameter has a valid and an invalid case (review §7.6 item 3)
+- Options: a new test crate; a test in `fastvideo-serve` over the assembled router; per-adapter tests at parse time only
+- Decision: a `fastvideo-serve` integration test (`tests/cert_matrix.rs`) driving the specs each shipped config serves at `/fv/v1/params` through the real router on the fake engine (job checks of the CUDA pipelines, accepted jobs cancelled); the director and Reactor channels through their parsers, with `ParamSpec`s built by their crates; cases from `Domain::valid_example` / `invalid_examples` plus explicit plans for composite fields; output `docs/serve/certification.tsv` with a drift check; the CI assertion plans the golden's specs without a server and requires a reasoned exemption for a parameter with no invalid case (planned without the exemptions, so an exempt parameter with a case is stale)
+- Reason: reuses the e2e machinery and the CI that already runs serve tests (no new crate, workflow or dependency); the served specs, not hand-written lists, decide the matrix
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: ADR-0016
+- Verification: `cert_matrix::certification_matrix_is_golden`, `cert_matrix::every_param_has_a_valid_and_an_invalid_case`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-cert-findings-recorded
+- Trigger: the matrix: 1,114 of 4,630 rows disagree with their spec (naming, spec support, routing, director empty URLs, the two census findings); no 5xx or panic
+- Options: fix the wire behaviour in the E3 PR; record each finding in the TSV and list the candidate fixes
+- Decision: record and list (docs/serve/params.md "Findings and candidate fixes"); no wire behaviour changes in E3
+- Reason: each fix changes what clients see and is the coordinator's / owner's decision; the TSV shows the change when one lands
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: ADR-0016
+- Verification: `docs/serve/certification.tsv` `finding` column
+
+### FVID · 2026-10-24 · FVID-2026-10-24-b5-sdpa-entry
+- Trigger: plan B5: one `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser, byte-identical dispatch
+- Options: (a) `Plan` = the resolved kernel, built by each caller from the settings and the device; (b) `Plan` = what the call site computes (dense / masked / FP8-first / block-causal / VDN window / KV window / composed), the kernel chosen inside the entry by `sdpa_rule` per query shard, over a `Probe` of the settings and the device
+- Decision: (b); `sdpa_rule::dense_route` / `mma_kernel` and the masked-route predicates are the only choosers, the kernels keep declining what they cannot run and `run_route` falls through as the old `if let Some` chain did; the H3 ViT decoder keeps launching the fused kernel (the rule's pick) in its fused chain
+- Reason: the kernel depends on the shard's query length and on the calling thread's device (sequence-parallel shards run on other threads), so it cannot be fixed at the call site; the effectful probes (attn_dc load, cuDNN plan build) stay lazy, in the old order
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: 0015
+- Verification: `rt::sdpa_rule::identity` (the merge-base choosers transcribed; identical kernel / argument / probe traces over every setting, device fact, shape, output type and set of declining kernels)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-b5-host-twins
+- Trigger: plan B5: retire the host attention twins once `no_host_fallback` proves them unreachable on CUDA
+- Options: retire every host attention path; retire only the host-only dense backends; keep all
+- Decision: retire `flash_style_sdpa_host` (`FASTVIDEO_SDPA=host`) and `block_sparse_sdpa` (`FASTVIDEO_SDPA=sparse`), refused with a named replacement; keep the composed SDPA (CPU / tiny and masked path) and the sparse routes' host oracles (`vsa_attention_host`, `h3::vsa::attention_host`, `sla_attention_host`, Sol / PISA), which gpucheck and the CPU tests judge the kernels against and which already error with a live device
+- Reason: both retired backends were host-only (refused with a live device), duplicated the composed reference on a CPU run, and no config sets them; the oracles are needed
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: 0015
+- Verification: `identity::only_unmasked_host_and_sparse_calls_are_refused`; GPU: `fv-gpucheck kernels` group `no_host_fallback` (every `Plan` on device operands, zero host fallbacks)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-b5-nvfp4-oxide-features
+- Trigger: plan B5: `nvfp4_gemm.rs` and the oxide AOT path behind features
+- Options: features on by default; off by default with every build that compiles the code today turning them on; off by default, on only where the code is measured
+- Decision: `fastvideo-cudarc/nvfp4-gemm` and `fastvideo-cudarc/oxide` (implies it), off by default; `fastvideo-gpucheck/cuda` enables `oxide`, the serve binaries do not
+- Reason: no served config, profile or family turns `FASTVIDEO_NVFP4_OXIDE_GEMM` or `[kernels] nvfp4_gemm` on; fv-gpucheck's nvfp4 groups and its nvrtc report (checked by the release pod and the gpucheck image workflow) need them, so every fv-gpucheck build keeps compiling and embedding them and no CI matrix changes; serve without the cubins behaves as any build without them did (the in-tree W4A4 kernel)
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: 0015
+- Verification: build pod: workspace clippy (features off), `-p fastvideo-cudarc --features cuda`, `cuda,nvfp4-gemm`, `cuda,oxide`, `-p fastvideo-gpucheck --features cuda`
+
 ### FVID · 2026-10-24 · FVID-2026-10-24-b3b-load-snapshot
 - Trigger: plan B3, second half: a `Settings` snapshot passed to the H3 / LTX-2 / Wan `load` instead of process globals, byte-identical, without restructuring the loaders (B6's)
 - Options: thread a snapshot parameter through every helper a load calls (the shared runtime included, B5's attention files among them); a snapshot parameter for the load bodies and their load-only helpers plus a thread-local scope that serves the snapshot to the unchanged callees; a scope alone

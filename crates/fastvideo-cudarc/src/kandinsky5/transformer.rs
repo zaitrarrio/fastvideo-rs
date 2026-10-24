@@ -3,9 +3,10 @@
 //! Diffusers `Kandinsky5Transformer3DModel`. Latents arrive as `[B,T,H,W,C]`
 //! (channel-last). Tiny configs exercise the regular-attention path.
 
+use crate::rt::sdpa::{sdpa, Plan};
 use fastvideo_models::kandinsky5::{apply_rope, rope_1d, rope_3d, Kandinsky5TransformerConfig};
 
-use crate::rt::nn::{self, Linear};
+use crate::rt::nn::Linear;
 use crate::rt::tensor::{CudaTensor, Result, TensorError};
 use crate::rt::weights::{self, WeightMap};
 
@@ -115,7 +116,7 @@ impl Attn {
         let q = to_bhsd(&q, b, s, self.heads, self.head_dim)?;
         let k = to_bhsd(&k, b, ks, self.heads, self.head_dim)?;
         let v = to_bhsd(&v, b, ks, self.heads, self.head_dim)?;
-        let attn = nn::scaled_dot_product_attention_masked(&q, &k, &v, None, None)?;
+        let attn = sdpa(&q, &k, &v, &Plan::dense(None))?;
         let flat = attn.merge_heads()?;
         self.out.forward(&flat)
     }

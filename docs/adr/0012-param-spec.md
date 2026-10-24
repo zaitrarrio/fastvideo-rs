@@ -1,7 +1,7 @@
 # ADR-0012: `ParamSpec`: one source for every request limit
 
-- Status: Accepted (plan E2; the director and Reactor control channels and
-  the certification matrix follow in E3, see "Not in this change")
+- Status: Accepted (plan E2); amended 2026-10-24 by plan E3 (ADR-0016:
+  the certification matrix, the director and Reactor specs)
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-param-spec
 - Code: `crates/fastvideo-protocol/src/params/` (`mod.rs` the types and the
@@ -118,6 +118,10 @@ Enforced by tests:
 - The director `configure` / `prompt` and Reactor command specs (the
   director's limits moved to `rules::fal_director`; Reactor's command tables
   were already declarative), the certification matrix and its TSV: E3.
+  **Done in E3 (ADR-0016)**: `fastvideo_fal::params::director_specs` and
+  `CommandTable::param_specs` build them (not served at `/fv/v1/params`,
+  which lists submit endpoints); `crates/fastvideo-serve/tests/cert_matrix.rs`
+  drives every served spec and writes `docs/serve/certification.tsv`.
 - `schemars` schemas for native and director (deferred from E1): the native
   request is described by its `ParamSpec`; generating JSON Schema from the
   Rust types adds a dependency to `fastvideo-protocol` / `fastvideo-serve`

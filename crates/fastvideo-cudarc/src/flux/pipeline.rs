@@ -253,7 +253,7 @@ impl Flux1Pipeline {
             "d2h_count": xfer.d2h_count,
             "d2h_mib": xfer.d2h_bytes >> 20,
             "host_fallbacks": xfer.host_fallbacks,
-            "sdpa": crate::rt::nn::sdpa_backend(),
+            "sdpa": crate::rt::sdpa_rule::backend_setting(),
             "profile_run": "this generate (last timed run when used from bench --runs)",
         });
         crate::rt::log::info(format_args!(

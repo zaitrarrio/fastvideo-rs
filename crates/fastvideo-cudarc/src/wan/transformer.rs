@@ -5,6 +5,7 @@
 //! residuals read from the `[b, 6, dim]` modulation table without chunk
 //! copies, and a bias+GELU fused FFN.
 
+use crate::rt::sdpa::{sdpa, Plan};
 use fastvideo_models::wan::sol::{
     morton3d_on_route, pisa_requested, route, sol_attn_requested, WanAttnProfile, WanAttnRoute,
 };
@@ -181,8 +182,8 @@ impl WanAttention {
         mask: Option<&BlockCausal>,
     ) -> Result<CudaTensor> {
         let attn = match mask {
-            Some(m) => nn::sdpa_block_causal(q, k, v, None, *m)?,
-            None => nn::scaled_dot_product_attention_masked(q, k, v, None, None)?,
+            Some(m) => sdpa(q, k, v, &Plan::block_causal(None, *m))?,
+            None => sdpa(q, k, v, &Plan::dense(None))?,
         };
         self.to_out.forward(&attn.merge_heads()?)
     }
@@ -253,7 +254,7 @@ impl WanAttention {
             &table.1.narrow(0, window - n, n)?,
         )?;
         let kw = super::causal::rope_bhsd(&kw, &table.0, &table.1)?;
-        let out = nn::sdpa_kv_window(&q, &kw, &vw)?.merge_heads()?;
+        let out = sdpa(&q, &kw, &vw, &Plan::kv_window())?.merge_heads()?;
         self.to_out.forward(&out)
     }
 
@@ -287,7 +288,7 @@ impl WanAttention {
         // queries against the cache window, unmasked (super::causal).
         if let Some(at) = kv {
             let (kw, vw) = at.cache.update(at.layer, &k, &v, at.current_start)?;
-            let out = nn::sdpa_kv_window(&q, &kw, &vw)?.merge_heads()?;
+            let out = sdpa(&q, &kw, &vw, &Plan::kv_window())?.merge_heads()?;
             if super::dump::op_block() == Some(at.layer) {
                 let [b, h, sk, d] = kw.shape[..] else {
                     return Err(TensorError::Message("kv window rank".into()));
@@ -2220,7 +2221,7 @@ impl WanTransformer3D {
         // full-sequence causal forward, `_prepare_blockwise_causal_attn_mask`;
         // its inference is `forward_kv`) as a kernel parameter: the flash
         // kernel skips invisible key tiles and never builds the [S, S] mask
-        // (`nn::sdpa_block_causal` materializes it only on its fallback).
+        // (`Plan::block_causal` materializes it only on its fallback).
         let mask = if self.cfg.causal && ar.is_none() {
             let p = self.cfg.patch_size;
             let frame_tokens = (h / p[1].max(1)) * (w / p[2].max(1));

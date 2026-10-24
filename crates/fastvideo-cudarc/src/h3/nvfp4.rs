@@ -870,7 +870,7 @@ mod tests {
         assert!(seen.iter().all(|&s| s));
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(feature = "nvfp4-gemm")]
     #[test]
     fn blocked_offset_is_cublas_to_blocked() {
         // The cuBLASLt operand quantizer's layout (wan/nvfp4_gemm.rs swizzle_scales_host).

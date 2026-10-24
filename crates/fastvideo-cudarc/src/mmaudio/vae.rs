@@ -11,6 +11,7 @@
 //! 1e-4 / rms difference; the activations are unit-scale by construction).
 //! Runs in f32 (upstream runs this module in bf16).
 
+use crate::rt::sdpa::{sdpa, Plan};
 use fastvideo_models::mmaudio::{MmAudioVaeConfig, DATA_MEAN_128D, DATA_STD_128D};
 
 use super::layers::{host_values, msg, pinned, Conv1d};
@@ -130,7 +131,7 @@ impl AttnBlock {
             y.narrow(1, j, 1) // [B, 1, L, C]
         };
         let (q, k, v) = (part(0)?, part(1)?, part(2)?);
-        let h = crate::rt::nn::scaled_dot_product_attention(&q, &k, &v, None)?; // [B, 1, L, C]
+        let h = sdpa(&q, &k, &v, &Plan::dense(None))?; // [B, 1, L, C]
         let h = h.reshape(vec![b, l, c])?.transpose(1, 2)?;
         mp_sum(x, &self.proj.forward(&h)?, 0.3)
     }

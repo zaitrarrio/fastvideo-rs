@@ -117,6 +117,172 @@ pub fn param_specs(
     out
 }
 
+/// The director control channel's client messages `configure` and `prompt`
+/// (plan E3, ADR-0016) as [`ParamSpec`]s, surface `fal_director`, for any
+/// director app (`model` `*`): what [`crate::director::messages::parse`]
+/// accepts. Values the schema allows but a model cannot serve
+/// (`resolution: "1080p"` without the tier, `audio_url` on a model without
+/// audio-to-video) are refused later by the control state machine with
+/// their own codes; the spec describes the parse.
+pub fn director_specs() -> Vec<ParamSpec> {
+    use crate::director::messages::{Resolution, CHUNK_DURATIONS};
+    use fastvideo_protocol::params::rules::fal_director as rules;
+    use fastvideo_protocol::params::{Domain, IntRange, MediaField, Param, ParamType as T};
+    const UPSTREAM: &str = "docs/serve/specs/fal/fal-ai/minimax-h3-max-director/asyncapi.json";
+    let spec = |endpoint: &str| ParamSpec {
+        surface: "fal_director".into(),
+        endpoint: endpoint.into(),
+        model: "*".into(),
+        engine_model: "*".into(),
+        unknown_fields: UnknownFields::Reject,
+        params: Vec::new(),
+    };
+    let p = |name: &str, ty: T, maps_to: &str| Param::new(name, ty, maps_to).upstream(UPSTREAM);
+    let version = |what: &str| {
+        p("prompt_version", T::Integer, what)
+            .required()
+            .domain(Domain::int(IntRange::new(
+                1,
+                i64::try_from(rules::PROMPT_VERSION_MAX).unwrap_or(i64::MAX),
+            )))
+    };
+    let text = Domain::chars(rules::PROMPT_MAX_CHARS);
+    let script = || {
+        p("script", T::Array, "script beats")
+            .nullable()
+            .domain(Domain::items(
+                u32::try_from(rules::SCRIPT_MAX_BEATS).unwrap_or(u32::MAX),
+            ))
+            .note("1 or more beats `{offset, prompt?, end_image_url?, audio_url?}`")
+    };
+    let resolutions: Vec<&str> = Resolution::ALL.iter().map(|r| r.as_str()).collect();
+    let mut configure = spec("message configure");
+    configure
+        .push(version("correlation"))
+        .push(
+            p("prompt", T::String, "prompt")
+                .required()
+                .domain(text.clone()),
+        )
+        .push(
+            p("resolution", T::String, "canvas.short_edge")
+                .nullable()
+                .domain(Domain::strings(&resolutions))
+                .note("a tier the model lacks is refused by the session, not the parser"),
+        )
+        .push(
+            p("aspect_ratio", T::String, "canvas.ratio")
+                .nullable()
+                .domain(Domain::strings(&["16:9", "9:16", "1:1"])),
+        )
+        .push(
+            p("image_url", T::String, "keyframes (first)")
+                .nullable()
+                .domain(Domain::media(MediaField::Image)),
+        )
+        .push(
+            p("end_image_url", T::String, "keyframes (last)")
+                .nullable()
+                .domain(Domain::media(MediaField::Image)),
+        )
+        .push(
+            p("audio_url", T::String, "audio_in")
+                .nullable()
+                .domain(Domain::media(MediaField::Audio)),
+        )
+        .push(
+            p("memory", T::Integer, "session memory")
+                .nullable()
+                .domain(Domain::int(rules::MEMORY)),
+        )
+        .push(
+            p("audio_bitrate", T::Integer, "audio encoder bitrate")
+                .nullable()
+                .domain(Domain::one_of(rules::AUDIO_BITRATES)),
+        )
+        .push(
+            p("seed", T::Integer, "seed")
+                .nullable()
+                .domain(Domain::Int {
+                    min: None,
+                    max: None,
+                }),
+        )
+        .push(script())
+        .push(
+            p("protocol_version", T::Integer, "-")
+                .nullable()
+                .domain(Domain::one_of([rules::PROTOCOL_VERSION])),
+        )
+        .push(
+            Param::new("chunk_duration", T::Integer, "chunk length (s)")
+                .nullable()
+                .with_default(rules::DEFAULT_CHUNK_DURATION)
+                .domain(Domain::one_of(CHUNK_DURATIONS))
+                .note("ours: clip models only"),
+        )
+        .push(
+            Param::new("upsample", T::Boolean, "prompt_expansion")
+                .nullable()
+                .note("ours"),
+        )
+        .push(
+            Param::new("style", T::String, "world bible style")
+                .nullable()
+                .domain(Domain::Text {
+                    min_chars: 0,
+                    max_chars: Some(rules::STYLE_MAX_CHARS),
+                    non_blank: false,
+                })
+                .note("ours"),
+        )
+        .push(
+            Param::new("entities", T::Array, "world bible cast")
+                .nullable()
+                .domain(Domain::items(
+                    u32::try_from(rules::ENTITIES_MAX).unwrap_or(u32::MAX),
+                ))
+                .note("ours: `{id, kind, name, descriptor}`, unique ids"),
+        )
+        .push(
+            Param::new("output", T::Any, "output copy")
+                .nullable()
+                .note("ours: an output-copy object, taken only with `[director] allow_output`; the parser takes any JSON value"),
+        )
+        .push(
+            Param::new("x_fv_output", T::Any, "output copy")
+                .nullable()
+                .note("ours: an output-copy object; the parser takes any JSON value"),
+        );
+    let mut prompt = spec("message prompt");
+    prompt
+        .push(version("correlation"))
+        .push(p("prompt", T::String, "prompt").nullable().domain(text))
+        .push(
+            p("end_image_url", T::String, "keyframes (last)")
+                .nullable()
+                .domain(Domain::media(MediaField::Image)),
+        )
+        .push(
+            p("audio_url", T::String, "audio_in")
+                .nullable()
+                .domain(Domain::media(MediaField::Audio)),
+        )
+        .push(
+            p("audio_behavior", T::String, "audio queueing")
+                .nullable()
+                .domain(Domain::strings(&["replace", "queue"])),
+        )
+        .push(p("replan", T::Boolean, "-").nullable())
+        .push(script())
+        .push(
+            p("script_mode", T::String, "script queueing")
+                .nullable()
+                .domain(Domain::strings(&["replace", "append"])),
+        );
+    vec![configure, prompt]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

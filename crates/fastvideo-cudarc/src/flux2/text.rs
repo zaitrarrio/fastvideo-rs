@@ -3,6 +3,7 @@
 //! Mirrors `fastvideo_models::flux2::text`: RMSNorm + GQA + SwiGLU + NeoX RoPE,
 //! QK-Norm only for Qwen3, then stack hidden layers `(9,18,27)` / `(10,20,30)`.
 
+use crate::rt::sdpa::{sdpa, Plan};
 use fastvideo_models::flux2::{
     stack_layers_host, Flux2TextKind, Qwen3Config, FLUX2_SYSTEM_MESSAGE,
 };
@@ -162,19 +163,6 @@ fn apply_rope_neox(xs: &CudaTensor, theta: f32) -> Result<CudaTensor> {
     CudaTensor::cat(&[&y1, &y2], 3)
 }
 
-fn text_sdpa(
-    q: &CudaTensor,
-    k: &CudaTensor,
-    v: &CudaTensor,
-    mask: &CudaTensor,
-) -> Result<CudaTensor> {
-    let d = q.shape[3] as f32;
-    let scale = 1.0 / d.sqrt();
-    let mut scores = q.matmul(&k.transpose(2, 3)?)?.try_mul_scalar(scale)?;
-    scores = scores.add(mask)?;
-    scores.softmax(-1)?.matmul(v)
-}
-
 fn causal_pad_mask(
     batch: usize,
     heads: usize,
@@ -321,8 +309,9 @@ impl DecoderAttention {
         let k = k.transpose(1, 2)?;
         let v = v.transpose(1, 2)?;
         let mask = causal_pad_mask(b, self.heads, s, valid_len)?;
-        // Local SDPA — do not use Wan sequence-parallel `scaled_dot_product_attention`.
-        let attn = text_sdpa(&q, &k, &v, &mask)?;
+        // Composed SDPA on the operands as given: no bf16 rounding, no
+        // sequence-parallel shards (`Plan::composed`).
+        let attn = sdpa(&q, &k, &v, &Plan::composed(None, Some(&mask)))?;
         let attn = attn
             .transpose(1, 2)?
             .reshape(vec![b, s, self.heads * self.head_dim])?;

@@ -5,6 +5,7 @@
 
 use crate::rt::nn;
 use crate::rt::ops::PadMode;
+use crate::rt::sdpa::{sdpa, Plan};
 use crate::rt::tensor::{CudaTensor, Result, TensorError};
 use crate::rt::weights::{self, WeightMap};
 
@@ -316,12 +317,11 @@ impl AttnBlock {
         // single head [B,1,S,C]
         let to_bhsd = |t: CudaTensor| -> Result<CudaTensor> { t.unsqueeze(1) };
         let mask = causal_frame_mask(t, n_hw)?;
-        let attn = nn::scaled_dot_product_attention_masked(
+        let attn = sdpa(
             &to_bhsd(q)?,
             &to_bhsd(k)?,
             &to_bhsd(v)?,
-            None,
-            Some(&mask),
+            &Plan::masked(None, Some(&mask)),
         )?;
         let out = attn.squeeze(1)?;
         let out = self.to_out.forward(&out)?.add(&residual)?;

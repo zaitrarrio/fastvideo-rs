@@ -9,7 +9,8 @@
 use fastvideo_models::h3::config::H3VisionConfig;
 use fastvideo_models::h3::vision_preprocess::{PreparedVisionImage, VisionGrid};
 
-use crate::rt::nn::{scaled_dot_product_attention, Linear};
+use crate::rt::nn::Linear;
+use crate::rt::sdpa::{sdpa, Plan};
 use crate::rt::tensor::{CudaTensor, Result, TensorError};
 use crate::rt::weights::{cuda_tensor_shaped, WeightMap};
 
@@ -245,7 +246,7 @@ impl VisionBlock {
                 v[offset * nh * hd..(offset + slen) * nh * hd].to_vec(),
                 vec![1, nh, slen, hd],
             )?;
-            let a = scaled_dot_product_attention(&q_t, &k_t, &v_t, Some(scale))?;
+            let a = sdpa(&q_t, &k_t, &v_t, &Plan::dense(Some(scale)))?;
             let ah = a.host_cow()?.into_owned();
             // [1, H, S, D] → [S, H, D]
             for t in 0..slen {

@@ -38,9 +38,10 @@ use fastvideo_models::h3::schedule::H3JointSchedule;
 use fastvideo_models::h3::sol::H3TeaCache;
 
 use super::fused16::{self, AdaRows, NormOut};
-use crate::rt::nn::{scaled_dot_product_attention, Linear};
+use crate::rt::nn::Linear;
 use crate::rt::offload::{BlockWeights, OffloadBlock, Residency};
 use crate::rt::quant::{H3QuantPlan, QuantKind, QuantMode, Section};
+use crate::rt::sdpa::{sdpa, Plan};
 use crate::rt::stats::phase;
 use crate::rt::tensor::bf16_activations;
 use crate::rt::tensor::{CudaTensor, Result, TensorError};
@@ -627,16 +628,9 @@ pub enum AttnMode<'a> {
 
 /// A dense block's attention: the FP8 `Q K^T` kernel when the request runs
 /// `fp8_attention` on dense calls ([`crate::rt::attn_fp8`]), otherwise (and
-/// wherever that kernel cannot run) the bf16 SDPA.
+/// wherever that kernel cannot run) the bf16 SDPA ([`Plan::fp8_first`]).
 fn dense_attention(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor) -> Result<CudaTensor> {
-    #[cfg(feature = "cuda")]
-    if crate::rt::attn_fp8::dense_enabled() {
-        let out_bf16 = crate::rt::tensor::bf16_activations();
-        if let Some(out) = crate::rt::attn_fp8::dense_sdpa(q, k, v, None, out_bf16)? {
-            return Ok(out);
-        }
-    }
-    scaled_dot_product_attention(q, k, v, None)
+    sdpa(q, k, v, &Plan::dense(None).fp8_first())
 }
 
 /// `benchmark.json` attention route of one block (see [`crate::rt::evalstats`]).
@@ -1922,7 +1916,7 @@ impl Attention {
             packed.split_heads_bhsd(2 * inner, self.heads, self.head_dim)
         })?;
         let o = phase("h3_vdn_window", || {
-            crate::rt::nn::sdpa_vdn_window(&q, &k, &v, None, plan.window)
+            sdpa(&q, &k, &v, &Plan::vdn_window(None, plan.window))
         })?;
         drop((q, k, v));
         let o = phase("h3_vdn_gate", || branch.gate_heads(o, &aux))?;

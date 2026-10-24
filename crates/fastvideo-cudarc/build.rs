@@ -9,10 +9,10 @@
 //! decided here where CI can check it, not at runtime where a missing mapping
 //! once compiled every guarded kernel body out on Blackwell.
 //!
-//! Tile-IR NVFP4 GEMM cubins from `fv-oxide-aot` (crates/fastvideo-oxide-kernels,
-//! cutile-rs compiled ahead of time through `tileiras`) are embedded beside the
-//! nvcc cubins when `manifest.tsv` exists under `artifacts/oxide/` (or
-//! `FV_OXIDE_CUBIN_DIR`). Missing artifacts are skipped so `cargo test` on a
+//! With the `oxide` feature, Tile-IR NVFP4 GEMM cubins from `fv-oxide-aot`
+//! (crates/fastvideo-oxide-kernels, cutile-rs compiled ahead of time through
+//! `tileiras`) are embedded beside the nvcc cubins when `manifest.tsv` exists
+//! under `artifacts/oxide/` (or `FV_OXIDE_CUBIN_DIR`). Missing artifacts are skipped so `cargo test` on a
 //! Mac still works; `FV_REQUIRE_OXIDE=100,120` (the image build) makes a
 //! missing SM a hard error instead.
 //!
@@ -227,6 +227,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=NVCC");
     println!("cargo:rerun-if-env-changed=FV_CUBIN_SMS");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_CUDA");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_OXIDE");
     println!("cargo:rerun-if-env-changed=FV_OXIDE_CUBIN_DIR");
     println!("cargo:rerun-if-env-changed=FV_REQUIRE_OXIDE");
     println!("cargo:rerun-if-env-changed=FV_DC_PTXAS_VERBOSE");
@@ -240,8 +241,21 @@ fn main() {
     let fp4_table = out.join("aot_attn_fp4.rs");
     let cuda_on = env::var_os("CARGO_FEATURE_CUDA").is_some();
     let nvcc = if cuda_on { find_nvcc() } else { None };
-    let oxide_rows = find_oxide_cubins();
-    require_oxide(&oxide_rows);
+    // The oxide Tile-IR cubins are embedded with the `oxide` feature only
+    // (ADR-0015); without it FV_REQUIRE_OXIDE has nothing to check.
+    let oxide_on = env::var_os("CARGO_FEATURE_OXIDE").is_some();
+    let oxide_rows = if oxide_on {
+        find_oxide_cubins()
+    } else {
+        Vec::new()
+    };
+    if oxide_on {
+        require_oxide(&oxide_rows);
+    } else if env::var_os("FV_REQUIRE_OXIDE").is_some() {
+        println!(
+            "cargo:warning=fastvideo-cudarc: FV_REQUIRE_OXIDE ignored: built without the `oxide` feature (no Tile-IR cubins embedded)"
+        );
+    }
     if !oxide_rows.is_empty() {
         println!(
             "cargo:warning=fastvideo-cudarc: embedded {} oxide Tile-IR cubins for sm {:?}",

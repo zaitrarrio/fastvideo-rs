@@ -32,11 +32,12 @@ mod tests {
 
     /// nvcc's input (`$OUT_DIR/kernels.cu`, written by `build.rs` from the same
     /// list) is the same bytes, so the ahead-of-time path sees what NVRTC sees.
+    /// Embedded at compile time: CI runs the test binaries on other runners,
+    /// where the build's `OUT_DIR` does not exist.
     #[test]
     fn nvcc_input_is_the_same_bytes() {
-        let path = concat!(env!("OUT_DIR"), "/kernels.cu");
-        let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-        assert_eq!(sha256_hex(&bytes), KERNELS_CU_SHA256);
+        let bytes: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/kernels.cu"));
+        assert_eq!(sha256_hex(bytes), KERNELS_CU_SHA256);
         assert_eq!(bytes, super::KERNEL_SRC.as_bytes());
     }
 }

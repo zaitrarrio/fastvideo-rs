@@ -11,7 +11,7 @@
 //! comparison and the accuracy / speed numbers.
 //!
 //! Routing: the dense self-attention of the DiTs
-//! (`nn::scaled_dot_product_attention`: H3, LTX-2.5, Wan) goes through
+//! (`sdpa::sdpa`: H3, LTX-2.5, Wan; `sdpa_rule::dense_route`) goes through
 //! [`dense_sdpa`] when it is enabled (below), the head dim is 128, the device
 //! is sm_89+ and both sequences are at least `FASTVIDEO_ATTN_SAGE_MIN_SEQ`
 //! (default 6144: below that the bf16 kernels are as fast).

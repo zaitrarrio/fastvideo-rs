@@ -19,6 +19,7 @@ use fastvideo_cudarc::h3::fused16::{self, AdaRows, NormOut};
 use fastvideo_cudarc::rt::device;
 use fastvideo_cudarc::rt::nn::Linear;
 use fastvideo_cudarc::rt::quant::{self, QuantKind, QuantLayout, Section};
+use fastvideo_cudarc::rt::sdpa;
 use fastvideo_cudarc::rt::tensor::with_bf16_act;
 use fastvideo_cudarc::CudaTensor;
 use serde_json::json;
@@ -758,7 +759,7 @@ fn block_timing(report: &mut Report, seed: &mut u64) -> StageResult<()> {
                 let q = p.split_heads_bhsd(0, heads, d)?;
                 let k = p.split_heads_bhsd(dm, heads, d)?;
                 let v = p.split_heads_bhsd(2 * dm, heads, d)?;
-                let a = fastvideo_cudarc::rt::nn::scaled_dot_product_attention(&q, &k, &v, None)?;
+                let a = sdpa::sdpa(&q, &k, &v, &sdpa::Plan::dense(None))?;
                 let a = out.forward(&a.merge_heads()?)?;
                 let x1 = x0.residual_gate_add_e(&a, &e, 2)?;
                 let h = up.forward_gelu(&x1.rms_norm(&w, 1e-6)?)?;
@@ -790,7 +791,7 @@ pub fn bf16_attention_routes(report: &mut Report, seed: &mut u64) -> StageResult
 
 #[allow(clippy::type_complexity)]
 fn routes_inner(report: &mut Report, seed: &mut u64) -> StageResult<()> {
-    use fastvideo_cudarc::rt::{attn, nn};
+    use fastvideo_cudarc::rt::attn;
     let (b, h, s, d) = (1usize, 4usize, 1000usize, 128usize);
     let mk = |seed: &mut u64, n: usize| bf16v(rand(seed, n, 1.0));
     let (q, k, v) = (
@@ -844,7 +845,7 @@ fn routes_inner(report: &mut Report, seed: &mut u64) -> StageResult<()> {
     let fl = (&q32, &k32, &v32);
     route(
         "sdpa_default",
-        &|q, k, v| Ok(Some(nn::scaled_dot_product_attention(q, k, v, None)?)),
+        &|q, k, v| Ok(Some(sdpa::sdpa(q, k, v, &sdpa::Plan::dense(None))?)),
         bf,
         fl,
     )?;
@@ -903,7 +904,7 @@ fn routes_inner(report: &mut Report, seed: &mut u64) -> StageResult<()> {
     );
     route(
         "cross_attention",
-        &|q, k, v| Ok(Some(nn::scaled_dot_product_attention(q, k, v, None)?)),
+        &|q, k, v| Ok(Some(sdpa::sdpa(q, k, v, &sdpa::Plan::dense(None))?)),
         (&q16, &kc16, &vc16),
         (&q32, &kc32, &vc32),
     )?;

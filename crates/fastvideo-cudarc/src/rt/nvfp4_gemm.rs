@@ -1,12 +1,13 @@
 //! NVFP4 (E2M1 + E4M3 16-block scales) GEMM backends on Blackwell, at kernel
-//! level only — no model path calls these yet.
+//! level only — no model path calls these yet (feature `nvfp4-gemm`, off by
+//! default; ADR-0015).
 //!
 //! - **cuBLASLt block-scaled FP4** ([`LtNvfp4Plan`]): `CUDA_R_4F_E2M1` A/B
 //!   with `CUBLASLT_MATMUL_DESC_{A,B}_SCALE_MODE = VEC16_UE4M3`, FP32
 //!   accumulate, bf16 out. cuBLASLt wants the scales in its 128x4 tiled
 //!   layout ([`swizzle_scales_device`]); the tensor-level decode factors ride
 //!   in `alpha`.
-//! - **oxide Tile-IR** ([`oxide_gemm`]): the cutile-rs kernel in
+//! - **oxide Tile-IR** (`oxide_gemm`, feature `oxide`): the cutile-rs kernel in
 //!   `crates/fastvideo-oxide-kernels`, compiled ahead of time to cubins by
 //!   `fv-oxide-aot` and embedded by build.rs. It reads the plain row-major
 //!   scales, so it needs no swizzle.
@@ -17,12 +18,16 @@
 
 use cudarc::cublaslt::sys as lt;
 use cudarc::driver::sys::CUdeviceptr;
-use cudarc::driver::{CudaSlice, DevicePtr, LaunchConfig, PushKernelArg};
+#[cfg(feature = "oxide")]
+use cudarc::driver::PushKernelArg;
+use cudarc::driver::{CudaSlice, DevicePtr, LaunchConfig};
 use fastvideo_models::nvfp4::ScaleRule;
 
 use super::device::{self, DeviceContext};
 use super::fp8::{check, set_attr, Desc, Layout, LtContext, Pref};
-use super::kernels::{cfg_n, launch, OxideGemm};
+#[cfg(feature = "oxide")]
+use super::kernels::OxideGemm;
+use super::kernels::{cfg_n, launch};
 use super::tensor::{Result, TensorError};
 
 fn err(e: impl std::fmt::Display) -> TensorError {
@@ -160,6 +165,7 @@ pub fn fill_uniform_device(n: usize, seed: u64, scale: f32) -> Result<CudaSlice<
 
 // ---- oxide Tile-IR -----------------------------------------------------------
 
+#[cfg(feature = "oxide")]
 /// Loaded oxide GEMMs with output type `out` (`"bf16"` / `"f32"`).
 pub fn oxide_variants(out: &str) -> Result<Vec<OxideGemm>> {
     let d = dev()?;
@@ -174,6 +180,7 @@ pub fn oxide_variants(out: &str) -> Result<Vec<OxideGemm>> {
         .collect())
 }
 
+#[cfg(feature = "oxide")]
 /// Whether `g` can run `[m, k] @ [n, k]ᵀ` (the divisibility the cubin was
 /// compiled to assume; see `fastvideo_oxide_kernels::Variant`).
 pub fn oxide_fits(g: &OxideGemm, m: usize, n: usize, k: usize) -> std::result::Result<(), String> {
@@ -200,6 +207,7 @@ pub fn oxide_fits(g: &OxideGemm, m: usize, n: usize, k: usize) -> std::result::R
     Ok(())
 }
 
+#[cfg(feature = "oxide")]
 /// `z[m, n] = alpha * x[m, k] @ y[n, k]ᵀ` through an oxide cubin. `z` must
 /// hold `m * n` elements of the variant's output type.
 ///

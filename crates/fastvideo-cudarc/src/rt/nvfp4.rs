@@ -226,6 +226,9 @@ impl Nvfp4Weight {
         };
         let a = nvfp4::quantize(&host, m, self.cols, self.rule).map_err(msg)?;
         let a_decode = nvfp4::dequant_factor(a.amax, a.rule);
+        // Without the `oxide` feature no Tile-IR cubin is embedded and the
+        // setting falls to the kernel below, as a build without them did.
+        #[cfg(feature = "oxide")]
         if nvfp4::oxide_gemm_enabled() {
             if let Ok(c) = super::ops::nvfp4_oxide_gemm_device(
                 &a.packed, &a.scales, a_decode, &d.packed, &d.scales, &d.decode, m, self.rows,
