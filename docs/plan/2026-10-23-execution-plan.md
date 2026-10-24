@@ -972,3 +972,23 @@ ran (pod id, $/hr), result, cost.
   engine-service + core tests 1430, `--workspace --lib` 2087). No H3
   streamed-FP8 GPU cell: no flag makes H3 stream FP8. Merged main
   `1100c35f` (D1b).
+- 2026-10-24 18:58Z, coordinator: B4c2 GPU gate, runtime image
+  `sha-072f0b3` (#178's head after the review fixes and the main merge)
+  against main `sha-17e4a1d` (B4c, before B4c2). Five single-cell RTX PRO 6000
+  pods in EU-RO-1 with `bz0ofkfx45` (`FV_B4C2_CELLS=<cell>`), all `pass`:
+  - `b4c2-ltx25-fp8` (gap 1/6): main's bf16 read hits the FP8 entry and its
+    frames differ from a fresh bf16 encode (PSNR 24.7 dB, max abs diff 218):
+    the gap gave silently wrong output. The PR's read misses and is
+    byte-identical to the fresh encode.
+  - `b4c2-h3-numerics` (gap 4): written under `FASTVIDEO_BF16_ACT=0` (the
+    encoder ran `streamed-fp8`), main's default read hits it, PSNR 18.2 dB
+    against the correct output; the PR misses and equals the fresh encode.
+  - `b4c2-ltx25-mode` (gap 5): main hits, the PR misses and equals the fresh
+    encode; streamed and resident Gemma were also bit-equal on this card.
+  - `b4c2-h3-tree` (gap 6): main hits, the PR misses and equals the fresh
+    encode; the FP8 tree and quantise-at-load were also bit-equal.
+  - `b4c2-h3-noop`: base and PR byte-identical on the miss and the hit, the
+    PR's hit equals its miss.
+  Gaps 2 (recovered 8B) and 3 (Wan) are CPU evidence only (no trees on the
+  EU volume). About 56 GPU-minutes, ~$2.30. Evidence:
+  `artifacts/runpod/b4c2/072f0b3-1024184{0,1,2,3}/`, `072f0b3-10241839/`.
