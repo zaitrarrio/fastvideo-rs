@@ -1,0 +1,153 @@
+ltx2 ltx2 techniques: none [attention_backend from command line]
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+ltx2 gen 768x512x49: planned peak 44.26 GiB resident, 9.64 GiB streamed
+[fastvideo] ltx2 dit offload: auto -> resident (resident 4k5s plan 59.6 GiB, 94.3 GiB free before load)
+ltx2 vocoder: SnakeBeta main (`vocoder.`) + BWE (Hann-sinc ×3 + MelSTFT + bwe_generator)
+[fastvideo] load/io ltx2 load {"wall_s":6.49,"viewed_gb":1.14,"prefetch_read_gb":1.14,"prefetch_skipped_gb":0.00,"prefetch_busy_s":1.2,"viewed_gbps":0.18,"window_wait_s":0.0,"fill_s":0.0,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":0.0,"fetch_wait_s":0.0,"mem_mode":false,"prefetch":true}
+[fastvideo] llm layer 1/48
+[fastvideo] llm layer 2/48
+[fastvideo] llm layer 3/48
+[fastvideo] llm layer 4/48
+[fastvideo] llm layer 5/48
+[fastvideo] llm layer 6/48
+[fastvideo] llm layer 7/48
+[fastvideo] llm layer 8/48
+[fastvideo] llm layer 9/48
+[fastvideo] llm layer 10/48
+[fastvideo] llm layer 11/48
+[fastvideo] llm layer 12/48
+[fastvideo] llm layer 13/48
+[fastvideo] llm layer 14/48
+[fastvideo] llm layer 15/48
+[fastvideo] llm layer 16/48
+[fastvideo] llm layer 17/48
+[fastvideo] llm layer 18/48
+[fastvideo] llm layer 19/48
+[fastvideo] llm layer 20/48
+[fastvideo] llm layer 21/48
+[fastvideo] llm layer 22/48
+[fastvideo] llm layer 23/48
+[fastvideo] llm layer 24/48
+[fastvideo] llm layer 25/48
+[fastvideo] llm layer 26/48
+[fastvideo] llm layer 27/48
+[fastvideo] llm layer 28/48
+[fastvideo] llm layer 29/48
+[fastvideo] llm layer 30/48
+[fastvideo] llm layer 31/48
+[fastvideo] llm layer 32/48
+[fastvideo] llm layer 33/48
+[fastvideo] llm layer 34/48
+[fastvideo] llm layer 35/48
+[fastvideo] llm layer 36/48
+[fastvideo] llm layer 37/48
+[fastvideo] llm layer 38/48
+[fastvideo] llm layer 39/48
+[fastvideo] llm layer 40/48
+[fastvideo] llm layer 41/48
+[fastvideo] llm layer 42/48
+[fastvideo] llm layer 43/48
+[fastvideo] llm layer 44/48
+[fastvideo] llm layer 45/48
+[fastvideo] llm layer 46/48
+[fastvideo] llm layer 47/48
+[fastvideo] llm layer 48/48
+[fastvideo] llm prefetch: 48 layers, host read+convert 35.67s, upload wait 0.18s, compute starved 35.82s
+[fastvideo] sdpa: fused mma B=1 H=32 Sq=1024 Sk=1024 D=128
+[fastvideo] llm layer 1/48
+[fastvideo] llm layer 2/48
+[fastvideo] llm layer 3/48
+[fastvideo] llm layer 4/48
+[fastvideo] llm layer 5/48
+[fastvideo] llm layer 6/48
+[fastvideo] llm layer 7/48
+[fastvideo] llm layer 8/48
+[fastvideo] llm layer 9/48
+[fastvideo] llm layer 10/48
+[fastvideo] llm layer 11/48
+[fastvideo] llm layer 12/48
+[fastvideo] llm layer 13/48
+[fastvideo] llm layer 14/48
+[fastvideo] llm layer 15/48
+[fastvideo] llm layer 16/48
+[fastvideo] llm layer 17/48
+[fastvideo] llm layer 18/48
+[fastvideo] llm layer 19/48
+[fastvideo] llm layer 20/48
+[fastvideo] llm layer 21/48
+[fastvideo] llm layer 22/48
+[fastvideo] llm layer 23/48
+[fastvideo] llm layer 24/48
+[fastvideo] llm layer 25/48
+[fastvideo] llm layer 26/48
+[fastvideo] llm layer 27/48
+[fastvideo] llm layer 28/48
+[fastvideo] llm layer 29/48
+[fastvideo] llm layer 30/48
+[fastvideo] llm layer 31/48
+[fastvideo] llm layer 32/48
+[fastvideo] llm layer 33/48
+[fastvideo] llm layer 34/48
+[fastvideo] llm layer 35/48
+[fastvideo] llm layer 36/48
+[fastvideo] llm layer 37/48
+[fastvideo] llm layer 38/48
+[fastvideo] llm layer 39/48
+[fastvideo] llm layer 40/48
+[fastvideo] llm layer 41/48
+[fastvideo] llm layer 42/48
+[fastvideo] llm layer 43/48
+[fastvideo] llm layer 44/48
+[fastvideo] llm layer 45/48
+[fastvideo] llm layer 46/48
+[fastvideo] llm layer 47/48
+[fastvideo] llm layer 48/48
+[fastvideo] llm prefetch: 48 layers, host read+convert 16.09s, upload wait 0.07s, compute starved 16.12s
+[fastvideo] ltx2 memory text: peak 8.40 GiB used, 8.44 GiB reserved; 2.20 GiB live after; ledger: vae 2.12 | activations 6.28 | pool_reserved 0.04 | non_pool 0.69 | total 9.09 GiB
+[fastvideo] ltx2 a2v: /opt/fastvideo-rs/scripts/gpu/fixtures/speech-flite-44k.flac (44100 Hz, 2.042s used) → 51 audio tokens, encoded in 1.41s
+[fastvideo] ltx2 memory audio_encode: peak 2.34 GiB used, 2.41 GiB reserved; 2.26 GiB live after; ledger: vae 2.12 | activations 0.22 | pool_reserved 0.07 | non_pool 0.69 | total 3.03 GiB
+[fastvideo] ltx2 dit: loaded block 8/48 (83.5 GiB free)
+[fastvideo] ltx2 dit: loaded block 16/48 (75.0 GiB free)
+[fastvideo] ltx2 dit: loaded block 24/48 (66.6 GiB free)
+[fastvideo] ltx2 dit: loaded block 32/48 (58.1 GiB free)
+[fastvideo] ltx2 dit: loaded block 40/48 (49.6 GiB free)
+[fastvideo] ltx2 dit: loaded block 48/48 (41.1 GiB free)
+[fastvideo] ltx2 dit: 48 blocks resident
+[fastvideo] ltx2 lora: attached 1660 weights, fused at strength 0, unfused base on the host (pinned) (/workspace/weights/ltx25/ltx-2.5-22b-distilled-lora-450-bf16.safetensors)
+[fastvideo] load/io ltx2 dit {"wall_s":17.72,"viewed_gb":46.88,"prefetch_read_gb":2.57,"prefetch_skipped_gb":0.00,"prefetch_busy_s":267.4,"viewed_gbps":2.65,"window_wait_s":0.0,"fill_s":5.1,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":0.0,"fetch_wait_s":0.0,"mem_mode":true,"prefetch":true}
+[fastvideo] ltx2 guided step 1/8 sigma 1.000000 passes 4 cfg 3 stg 1 mod 3 rescale 0.7 (0.45s)
+[fastvideo] ltx2 guided step 2/8 sigma 0.965712 passes 4 cfg 3 stg 1 mod 3 rescale 0.7 (0.41s)
+[fastvideo] ltx2 guided step 3/8 sigma 0.921875 passes 4 cfg 3 stg 1 mod 3 rescale 0.7 (0.41s)
+[fastvideo] ltx2 guided step 4/8 sigma 0.863856 passes 4 cfg 3 stg 1 mod 3 rescale 0.7 (0.41s)
+[fastvideo] ltx2 guided step 5/8 sigma 0.783445 passes 4 cfg 3 stg 1 mod 3 rescale 0.7 (0.41s)
+[fastvideo] ltx2 guided step 6/8 sigma 0.664579 passes 4 cfg 3 stg 1 mod 3 rescale 0.7 (0.41s)
+[fastvideo] ltx2 guided step 7/8 sigma 0.471003 passes 4 cfg 3 stg 1 mod 3 rescale 0.7 (0.41s)
+[fastvideo] ltx2 guided step 8/8 sigma 0.100000 passes 4 cfg 3 stg 1 mod 3 rescale 0.7 (0.41s)
+[fastvideo] ltx2 memory stage1: peak 54.30 GiB used, 54.34 GiB reserved; 54.21 GiB live after; ledger: vae 2.12 | dit_nonlinear 51.95 | activations 0.23 | pool_reserved 0.04 | non_pool 0.76 | total 55.06 GiB
+[fastvideo] ltx2 memory upsample: peak 56.33 GiB used, 56.38 GiB reserved; 54.32 GiB live after; ledger: vae 2.12 | dit_nonlinear 51.95 | upsampler 0.00 (max 1.85) | activations 0.40 | pool_reserved 0.05 | non_pool 0.76 | total 57.09 GiB
+[fastvideo] ltx2 upsample 0.47s → latent grid [7, 16, 24]
+[fastvideo] ltx2: set_lora_strength 1 (resident DiT)
+[fastvideo] ltx2 step transfers: d2h 0 MiB in 2 copies, h2d 38098 MiB in 1747 copies
+[fastvideo] ltx2 step 1/3 sigma 0.909375 (0.29s)
+[fastvideo] ltx2 step 2/3 sigma 0.725000 (0.28s)
+[fastvideo] ltx2 step 3/3 sigma 0.421875 (0.28s)
+[fastvideo] ltx2 memory stage2: peak 56.00 GiB used, 56.19 GiB reserved; 54.32 GiB live after; ledger: vae 2.12 | dit_nonlinear 51.95 | activations 1.93 | pool_reserved 0.18 | non_pool 0.76 | total 56.76 GiB
+[fastvideo] ltx vae: channels-last bf16 decoder (0.01s to convert weights)
+[fastvideo] ltx2 video decode 0.23s: vae 0.17s, rgb 0.02s, push 0.05s, wait 0.06s
+[fastvideo] video writer: 49 frames, png deferred (0 inline, 49 after the mp4 in 0.03s, 0.02 GiB, synced), ffmpeg feed blocked 0.09s, mp4 tail 0.06s, buffered peak 0.05 GiB of 43.39
+[fastvideo] ltx2 video decode + mp4 0.29s (mp4 tail 0.06s); png frames after it 0.03s
+[fastvideo] ltx2 memory decode: peak 56.33 GiB used, 57.00 GiB reserved; 55.05 GiB live after; ledger: vae 2.12 | dit_nonlinear 51.95 | activations 2.26 | pool_reserved 0.67 | non_pool 0.76 | total 57.09 GiB
+ltx2 memory load: 2.12 GiB live after load
+ltx2 memory     text: peak   8.40 GiB used,   8.44 GiB reserved,   2.20 GiB live after
+ltx2 memory audio_encode: peak   2.34 GiB used,   2.41 GiB reserved,   2.26 GiB live after
+ltx2 memory   stage1: peak  54.30 GiB used,  54.34 GiB reserved,  54.21 GiB live after
+ltx2 memory upsample: peak  56.33 GiB used,  56.38 GiB reserved,  54.32 GiB live after
+ltx2 memory   stage2: peak  56.00 GiB used,  56.19 GiB reserved,  54.32 GiB live after
+ltx2 memory   decode: peak  56.33 GiB used,  57.00 GiB reserved,  55.05 GiB live after
+[PASS] ltx2/gen.mp4_frames_and_rate {"audio":{"channels":2,"codec_name":"aac","duration":"2.040998","sample_rate":"44100"},"avg_frame_rate":"24/1","ffprobe":true,"has_audio":true,"height":512,"path":"/fvscratch/runs/b6/a2ca568-10241101/b6-ltx25-a2v-guided-pr/frames/output.mp4","r_frame_rate":"24/1","video_duration_s":2.041667,"video_frames":49,"width":768} (limits {"has_audio":true,"r_frame_rate":"24/1","video_frames":49})
+[PASS] ltx2/gen.latents_finite {"steps":11} (limits {"non_finite":0,"steps":11})
+[PASS] ltx2/gen.frames {"frames":49} (limits {"frames":49})
+[PASS] ltx2/gen.wav {"bytes":360196} (limits {"channels":2,"sample_rate":44100,"samples_per_channel":90038,"source":"driving audio"})
+[PASS] ltx2/gen.mp4 {"bytes":298508,"path":"/fvscratch/runs/b6/a2ca568-10241101/b6-ltx25-a2v-guided-pr/frames/output.mp4"} (limits {"bytes_min":1})
+benchmark.json → /fvscratch/runs/b6/a2ca568-10241101/b6-ltx25-a2v-guided-pr/benchmark.json
+[PASS] stage ltx2 → gpucheck-out/ltx2.json (300.9s)

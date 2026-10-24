@@ -92,7 +92,7 @@ compile for every SM in Docker (`task nvrtc`).
 
 ```
 crates/
-  fastvideo-ops        TensorBackend trait + host CPU reference
+  fastvideo-ops        shared numeric helpers (FP8 E4M3 conversions)
   fastvideo-core       registry, SamplingParam, VideoGenerator
   fastvideo-models     schedulers, packing, architecture configs
   fastvideo-loader     Diffusers safetensors (mmap / lazy)

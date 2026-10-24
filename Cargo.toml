@@ -10,7 +10,6 @@ members = [
     "crates/fastvideo-cudarc",
     "crates/fastvideo-cli",
     "crates/fastvideo-gpucheck",
-    "crates/fastvideo-mlx",
     # fv-serve (docs/serve/design.md §2). CPU-only by default; only
     # fastvideo-engine-service reaches CUDA, behind its `cuda` feature.
     "crates/fastvideo-protocol",

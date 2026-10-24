@@ -1,0 +1,258 @@
+== fasth3-4step-vsa (served: profile h3/fasth3_4step_vsa) on an RTX PRO 6000 ==
+facts: free=95.0GiB sm=120 device_expected=true bf16_act=true linear_route=device-bf16
+recipe: 4step-vsa ref2va=false dense=false base_dense=false
+contract: forwards=4 steps=5 video_shift=12 audio_shift=3 vsa=0.9 tile=64 sigmas=Uniform fresh_noise=false
+dit: transformer <root>/transformer layers=50 refiner_layers=2 gate=true
+dit precision: quant=mxfp8 nvfp4=none tree=<root>/transformer_prequant_4step-vsa_mxfp8
+text encoder: ResidentFp8 auto=true load=true
+i2v encoder: auto
+dit offload: auto resident_need=66.95GiB streamed_need=20.53GiB; at the load-start free memory -> resident (place re-measures after the encoders)
+video vae: <root>/vae Official linears=Mxfp8 taeh3=none
+audio vae: <root>/audio_vae
+fuse adapter: pre-merged tree
+fuse step cache: none
+fuse kernels: fused16=true glue=true
+adaln projections: read
+techniques: h3 techniques: bf16_activations (transform/Load); mxfp8 (transform/Load); vsa (sparsity recipe, group default) [attention_backend from profile]
+== fasth3-4step-vsa-768p (techniques cell, -env arm) on an RTX PRO 6000 ==
+facts: free=95.0GiB sm=120 device_expected=true bf16_act=true linear_route=device-bf16
+recipe: 4step-vsa ref2va=false dense=false base_dense=false
+contract: forwards=4 steps=5 video_shift=12 audio_shift=3 vsa=0.9 tile=64 sigmas=Uniform fresh_noise=false
+dit: transformer <root>/transformer layers=50 refiner_layers=2 gate=true
+dit precision: quant=mxfp8 nvfp4=none tree=<root>/transformer_prequant_4step-vsa_mxfp8
+text encoder: ResidentFp8 auto=true load=true
+i2v encoder: auto
+dit offload: auto resident_need=66.95GiB streamed_need=20.53GiB; at the load-start free memory -> resident (place re-measures after the encoders)
+video vae: <root>/vae Official linears=Mxfp8 taeh3=none
+audio vae: <root>/audio_vae
+fuse adapter: pre-merged tree
+fuse step cache: none
+fuse kernels: fused16=true glue=true
+adaln projections: read
+techniques: h3 techniques: vsa (sparsity recipe, group default) [attention_backend from recipe]
+== fasth3-4step-vsa, FASTVIDEO_H3_DIT_TREE=off (the Preview merge at load) ==
+facts: free=95.0GiB sm=120 device_expected=true bf16_act=true linear_route=device-bf16
+recipe: 4step-vsa ref2va=false dense=false base_dense=false
+contract: forwards=4 steps=5 video_shift=12 audio_shift=3 vsa=0.9 tile=64 sigmas=Uniform fresh_noise=false
+dit: transformer <root>/transformer layers=50 refiner_layers=2 gate=true
+dit precision: quant=mxfp8 nvfp4=none tree=none
+text encoder: ResidentFp8 auto=true load=true
+i2v encoder: auto
+dit offload: auto resident_need=66.95GiB streamed_need=20.53GiB; at the load-start free memory -> resident (place re-measures after the encoders)
+video vae: <root>/vae Official linears=Mxfp8 taeh3=none
+audio vae: <root>/audio_vae
+fuse adapter: fasth3-preview vsa-datafree
+fuse step cache: none
+fuse kernels: fused16=true glue=true
+adaln projections: read
+techniques: h3 techniques: vsa (sparsity recipe, group default) [attention_backend from recipe]
+== fasth3-4step-vsa on a B200 ==
+facts: free=178.0GiB sm=100 device_expected=true bf16_act=true linear_route=device-bf16
+recipe: 4step-vsa ref2va=false dense=false base_dense=false
+contract: forwards=4 steps=5 video_shift=12 audio_shift=3 vsa=0.9 tile=64 sigmas=Uniform fresh_noise=false
+dit: transformer <root>/transformer layers=50 refiner_layers=2 gate=true
+dit precision: quant=mxfp8 nvfp4=none tree=<root>/transformer_prequant_4step-vsa_mxfp8
+text encoder: ResidentFp8 auto=true load=true
+i2v encoder: auto
+dit offload: auto resident_need=66.95GiB streamed_need=20.53GiB; at the load-start free memory -> resident (place re-measures after the encoders)
+video vae: <root>/vae Official linears=Mxfp8 taeh3=none
+audio vae: <root>/audio_vae
+fuse adapter: pre-merged tree
+fuse step cache: none
+fuse kernels: fused16=true glue=true
+adaln projections: read
+techniques: h3 techniques: vsa (sparsity recipe, group default) [attention_backend from recipe]
+== fasth3-4step-vsa on an H100 ==
+facts: free=79.0GiB sm=90 device_expected=true bf16_act=true linear_route=device-bf16
+recipe: 4step-vsa ref2va=false dense=false base_dense=false
+contract: forwards=4 steps=5 video_shift=12 audio_shift=3 vsa=0.9 tile=64 sigmas=Uniform fresh_noise=false
+dit: transformer <root>/transformer layers=50 refiner_layers=2 gate=true
+dit precision: quant=off nvfp4=none tree=none
+text encoder: Streamed auto=true load=false
+i2v encoder: auto
+dit offload: auto resident_need=64.63GiB streamed_need=20.53GiB; at the load-start free memory -> resident (place re-measures after the encoders)
+video vae: <root>/vae Official linears=Bf16 taeh3=none
+audio vae: <root>/audio_vae
+fuse adapter: fasth3-preview vsa-datafree
+fuse step cache: none
+fuse kernels: fused16=true glue=true
+adaln projections: read
+techniques: h3 techniques: vsa (sparsity recipe, group default) [attention_backend from recipe]
+== fasth3-4step-vsa on the CPU ==
+facts: free=unknown sm=none device_expected=false bf16_act=false linear_route=f32
+recipe: 4step-vsa ref2va=false dense=false base_dense=false
+contract: forwards=4 steps=5 video_shift=12 audio_shift=3 vsa=0.9 tile=64 sigmas=Uniform fresh_noise=false
+dit: transformer <root>/transformer layers=50 refiner_layers=2 gate=true
+dit precision: quant=off nvfp4=none tree=none
+text encoder: Streamed auto=true load=false
+i2v encoder: auto
+dit offload: auto resident_need=64.63GiB streamed_need=20.53GiB; at the load-start free memory -> resident (place re-measures after the encoders)
+video vae: <root>/vae Official linears=Bf16 taeh3=none
+audio vae: <root>/audio_vae
+fuse adapter: fasth3-preview vsa-datafree
+fuse step cache: none
+fuse kernels: fused16=true glue=true
+adaln projections: read
+techniques: h3 techniques: vsa (sparsity recipe, group default) [attention_backend from recipe]
+== sol-h3 (served: profile h3/sol_h3_4step_engine_ladder) on an RTX PRO 6000 ==
+facts: free=95.0GiB sm=120 device_expected=true bf16_act=true linear_route=device-bf16
+recipe: sol-h3 ref2va=false dense=true base_dense=true
+contract: forwards=4 steps=5 video_shift=12 audio_shift=3 vsa=0 tile=64 sigmas=Uniform fresh_noise=false
+dit: transformer <root>/transformer layers=50 refiner_layers=2 gate=false
+dit precision: quant=mxfp8 nvfp4=none tree=<root>/transformer_prequant_sol-h3_mxfp8
+text encoder: ResidentFp8 auto=true load=true
+i2v encoder: auto
+dit offload: auto resident_need=62.32GiB streamed_need=19.36GiB; at the load-start free memory -> resident (place re-measures after the encoders)
+video vae: <root>/vae Official linears=Mxfp8 taeh3=none
+audio vae: <root>/audio_vae
+fuse adapter: pre-merged tree
+fuse step cache: none
+fuse kernels: fused16=true glue=true
+adaln projections: read
+techniques: h3 techniques: bf16_activations (transform/Load); mxfp8 (transform/Load); sol_attn [engine] (dense steps 0, dense layers 0-1, tau 1:1,2:1.25,3:1.5, sink prefix, thresh diag) [attention_backend from profile]
+== sol-h3, FASTVIDEO_H3_QUANT=mxfp8 on an H100 (W8A8 below sm_100) ==
+facts: free=79.0GiB sm=90 device_expected=true bf16_act=true linear_route=device-bf16
+recipe: sol-h3 ref2va=false dense=true base_dense=true
+contract: forwards=4 steps=5 video_shift=12 audio_shift=3 vsa=0 tile=64 sigmas=Uniform fresh_noise=false
+dit: transformer <root>/transformer layers=50 refiner_layers=2 gate=false
+dit precision: quant=w8a8 nvfp4=none tree=none
+text encoder: Streamed auto=true load=false
+i2v encoder: auto
+dit offload: auto resident_need=60.00GiB streamed_need=19.36GiB; at the load-start free memory -> resident (place re-measures after the encoders)
+video vae: <root>/vae Official linears=Bf16 taeh3=none
+audio vae: <root>/audio_vae
+fuse adapter: sol-h3 alpha=64 scale=1
+fuse step cache: none
+fuse kernels: fused16=true glue=true
+adaln projections: read
+techniques: h3 techniques: none [attention_backend from recipe]
+== fasth3-8step on an RTX PRO 6000 ==
+facts: free=95.0GiB sm=120 device_expected=true bf16_act=true linear_route=device-bf16
+recipe: 8step ref2va=false dense=false base_dense=false
+contract: forwards=8 steps=9 video_shift=10 audio_shift=3 vsa=0.8 tile=64 sigmas=Dmd fresh_noise=false
+dit: transformer <root>/transformer layers=50 refiner_layers=2 gate=true
+dit precision: quant=mxfp8 nvfp4=none tree=none
+text encoder: ResidentFp8 auto=true load=true
+i2v encoder: auto
+dit offload: auto resident_need=66.95GiB streamed_need=20.53GiB; at the load-start free memory -> resident (place re-measures after the encoders)
+video vae: <root>/vae Official linears=Mxfp8 taeh3=none
+audio vae: <root>/audio_vae
+fuse adapter: none
+fuse step cache: none
+fuse kernels: fused16=true glue=true
+adaln projections: read
+techniques: h3 techniques: vsa (sparsity recipe, group default) [attention_backend from recipe]
+== fasth3-8step on a 32 GiB card ==
+facts: free=30.0GiB sm=120 device_expected=true bf16_act=true linear_route=device-bf16
+recipe: 8step ref2va=false dense=false base_dense=false
+contract: forwards=8 steps=9 video_shift=10 audio_shift=3 vsa=0.8 tile=64 sigmas=Dmd fresh_noise=false
+dit: transformer <root>/transformer layers=50 refiner_layers=2 gate=true
+dit precision: quant=mxfp8 nvfp4=none tree=none
+text encoder: Streamed auto=true load=false
+i2v encoder: auto
+dit offload: auto resident_need=66.95GiB streamed_need=20.53GiB; at the load-start free memory -> streamed (place re-measures after the encoders)
+video vae: <root>/vae Official linears=Mxfp8 taeh3=none
+audio vae: <root>/audio_vae
+fuse adapter: none
+fuse step cache: none
+fuse kernels: fused16=true glue=true
+adaln projections: read
+techniques: h3 techniques: vsa (sparsity recipe, group default) [attention_backend from recipe]
+== fasth3-8step, FASTVIDEO_DIT_OFFLOAD=streamed, FASTVIDEO_H3_QUANT=w8a8 ==
+facts: free=95.0GiB sm=120 device_expected=true bf16_act=true linear_route=device-bf16
+recipe: 8step ref2va=false dense=false base_dense=false
+contract: forwards=8 steps=9 video_shift=10 audio_shift=3 vsa=0.8 tile=64 sigmas=Dmd fresh_noise=false
+dit: transformer <root>/transformer layers=50 refiner_layers=2 gate=true
+dit precision: quant=w8a8 nvfp4=none tree=none
+text encoder: ResidentFp8 auto=true load=true
+i2v encoder: auto
+dit offload: streamed resident_need=66.95GiB streamed_need=20.53GiB; at the load-start free memory -> streamed (place re-measures after the encoders)
+video vae: <root>/vae Official linears=Mxfp8 taeh3=none
+audio vae: <root>/audio_vae
+fuse adapter: none
+fuse step cache: none
+fuse kernels: fused16=true glue=true
+adaln projections: read
+techniques: h3 techniques: vsa (sparsity recipe, group default) [attention_backend from recipe]
+== h3-480p-fullopt (techniques cell, -env arm: sol-h3-rtx + FASTVIDEO_H3_SOL_CACHE=teacache) ==
+facts: free=95.0GiB sm=120 device_expected=true bf16_act=true linear_route=device-bf16
+recipe: sol-h3-rtx ref2va=false dense=true base_dense=true
+contract: forwards=49 steps=50 video_shift=12 audio_shift=3 vsa=0 tile=64 sigmas=Uniform fresh_noise=false
+dit: transformer <root>/transformer layers=50 refiner_layers=2 gate=false
+dit precision: quant=mxfp8 nvfp4=none tree=none
+text encoder: ResidentFp8 auto=true load=true
+i2v encoder: auto
+dit offload: auto resident_need=62.32GiB streamed_need=19.36GiB; at the load-start free memory -> resident (place re-measures after the encoders)
+video vae: <root>/vae Official linears=Mxfp8 taeh3=none
+audio vae: <root>/audio_vae
+fuse adapter: none
+fuse step cache: teacache threshold=0.1 retain=5 cooldown=1
+fuse kernels: fused16=true glue=true
+adaln projections: read
+techniques: h3 techniques: sol_attn [rtx] (dense steps 0-9, dense layers 0-1, tau 1, sink text, thresh diag); teacache (threshold 0.1, retain 5, cooldown 1, coefficients [1.0, 0.0]) [attention_backend from recipe, step_output from env FASTVIDEO_H3_SOL_CACHE]
+== h3-480p-fullopt (techniques cell, -prof arm: profile h3/rtx5090_fullopt + FASTVIDEO_H3_QUANT=mxfp8) ==
+facts: free=95.0GiB sm=120 device_expected=true bf16_act=true linear_route=device-bf16
+recipe: sol-h3-rtx ref2va=false dense=true base_dense=true
+contract: forwards=49 steps=50 video_shift=12 audio_shift=3 vsa=0 tile=64 sigmas=Uniform fresh_noise=false
+dit: transformer <root>/transformer layers=50 refiner_layers=2 gate=false
+dit precision: quant=mxfp8 nvfp4=none tree=none
+text encoder: ResidentFp8 auto=true load=true
+i2v encoder: auto
+dit offload: auto resident_need=62.32GiB streamed_need=19.36GiB; at the load-start free memory -> resident (place re-measures after the encoders)
+video vae: <root>/vae Official linears=Mxfp8 taeh3=none
+audio vae: <root>/audio_vae
+fuse adapter: none
+fuse step cache: teacache threshold=0.1 retain=5 cooldown=1
+fuse kernels: fused16=true glue=true
+adaln projections: read
+techniques: h3 techniques: bf16_linears (transform/Load); sol_attn [rtx] (dense steps 0-9, dense layers 0-1, tau 1, sink text, thresh diag); teacache (threshold 0.1, retain 5, cooldown 1, coefficients [1.0, 0.0]) [attention_backend from profile, step_output from profile]
+== fasth3-trim-nvfp4 (trim-8step-nvfp4: the Trim's ComfyUI NVFP4 file) on an RTX PRO 6000 ==
+facts: free=95.0GiB sm=120 device_expected=true bf16_act=true linear_route=device-bf16
+recipe: trim-8step-nvfp4 ref2va=false dense=false base_dense=false
+contract: forwards=8 steps=9 video_shift=10 audio_shift=3 vsa=0.8 tile=64 sigmas=Dmd fresh_noise=false
+dit: transformer <root>/transformer layers=50 refiner_layers=2 gate=true
+dit precision: quant=mxfp8 nvfp4=comfy <weights>/fasth3-trim-8step-nvfp4/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors tree=none
+text encoder: ResidentFp8 auto=true load=true
+i2v encoder: auto
+dit offload: auto resident_need=66.95GiB streamed_need=20.53GiB; at the load-start free memory -> resident (place re-measures after the encoders)
+video vae: <root>/vae Official linears=Mxfp8 taeh3=none
+audio vae: <root>/audio_vae
+fuse adapter: none
+fuse step cache: none
+fuse kernels: fused16=true glue=true
+adaln projections: read
+techniques: h3 techniques: vsa (sparsity recipe, group default) [attention_backend from recipe]
+== fasth3-trim-nvfp4 on an H100 (no NVFP4 tensor cores) ==
+error: h3 nvfp4: this GPU is sm_90; the published NVFP4 DiT runs only on NVFP4 tensor cores (sm_100 / sm_120: B200, RTX PRO 6000, RTX 50xx). No bf16 fallback: serve the bf16 / MXFP8 Trim instead
+== fasth3-4step-vsa-nvfp4 (a ModelOpt NVFP4 transformer/) on a B200 ==
+facts: free=178.0GiB sm=100 device_expected=true bf16_act=true linear_route=device-bf16
+recipe: 4step-vsa-nvfp4 ref2va=false dense=false base_dense=false
+contract: forwards=4 steps=5 video_shift=12 audio_shift=3 vsa=0.9 tile=64 sigmas=Dmd fresh_noise=false
+dit: transformer <root>/transformer layers=50 refiner_layers=2 gate=true
+dit precision: quant=mxfp8 nvfp4=modelopt attention=false static_act=true tree=none
+text encoder: ResidentFp8 auto=true load=true
+i2v encoder: auto
+dit offload: auto resident_need=66.95GiB streamed_need=20.53GiB; at the load-start free memory -> resident (place re-measures after the encoders)
+video vae: <root>/vae Official linears=Mxfp8 taeh3=none
+audio vae: <root>/audio_vae
+fuse adapter: none
+fuse step cache: none
+fuse kernels: fused16=true glue=true
+adaln projections: read
+techniques: h3 techniques: vsa (sparsity recipe, group default) [attention_backend from recipe]
+== vdn-h3 (vdn-h3-50step, the stage-B checkpoint) on an RTX PRO 6000 ==
+facts: free=95.0GiB sm=120 device_expected=true bf16_act=true linear_route=device-bf16
+recipe: vdn-h3-50step ref2va=false dense=true base_dense=true
+contract: forwards=50 steps=51 video_shift=12 audio_shift=3 vsa=0 tile=64 sigmas=Uniform fresh_noise=false
+dit: transformer <root>/transformer layers=50 refiner_layers=2 gate=false
+dit precision: quant=off nvfp4=none tree=none
+text encoder: ResidentFp8 auto=true load=false
+i2v encoder: auto
+dit offload: auto resident_need=62.32GiB streamed_need=19.36GiB; at the load-start free memory -> resident (place re-measures after the encoders)
+video vae: <root>/vae Official linears=Mxfp8 taeh3=none
+audio vae: <root>/audio_vae
+fuse adapter: vdn
+fuse step cache: none
+fuse kernels: fused16=true glue=true
+adaln projections: read
+techniques: h3 techniques: none [attention_backend from recipe]

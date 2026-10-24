@@ -110,7 +110,7 @@ parallel agents.
 |---|---|---|---|---|---|
 | B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | todo |
 | B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | merged (#161) |
-| B6 | `H3Pipeline::load` and `Ltx2Pipeline::load` split into plan, open, place, fuse; dead code (`TensorBackend`, mlx scaffold) retired | engine lifecycle testable on CPU | pod | B1 | todo |
+| B6 | `H3Pipeline::load` and `Ltx2Pipeline::load` split into plan, open, place, fuse; dead code (`TensorBackend`, mlx scaffold) retired | engine lifecycle testable on CPU | pod | B1 | pr |
 
 ## 3. Order of execution
 
@@ -689,6 +689,69 @@ ran (pod id, $/hr), result, cost.
   `c7a6bb5` that hung for over an hour, before the #166/#167 fixes); the
   coordinator cancelled it, tools-v0.1.38 published from `8178a7a` and
   `serve-image` rebuilt every variant.
+
+- 2026-10-24 09:20Z: B6 opened as a draft PR (`claude/b6-loader-split`,
+  ADR-0017): `H3Pipeline::load_with_settings` and
+  `Ltx2Pipeline::load_with_settings` are the composition of four typed
+  stages (`h3/pipeline/load.rs`, `ltx2/pipeline/load.rs`): the plan (pure
+  over the options, the settings snapshot, configs and manifests and a
+  `rt::load_stages::DeviceFacts` measured once), open (maps and read-ahead),
+  place (the device; adapter merge per linear) and fuse (TeaCache, the merge
+  report; LTX-2's LoRAs fuse per request). Same tensors, order, precisions,
+  placements, `load/io` lines and ledger bookings; only non-evidence log
+  lines and failure timing moved (listed in the ADR). CPU lifecycle:
+  plan goldens for 9 H3 and 7 LTX-2 served / `techniques` configurations,
+  H3 plan + open on a tiny snapshot, the full LTX-2 plan → open → place →
+  fuse on the tiny fixtures (H3 place needs production dims; neither
+  family's generate runs on the CPU). Retired: `fastvideo-ops::TensorBackend`
+  and its host twin, `CudarcBackend`, the `fastvideo-mlx` crate (and the
+  `mlx-rs` lock tree); kept: `fastvideo-ops::fp8`, the CUDA reader of the
+  MLX H3 export (`h3/mlx.rs`, chosen by the checkpoint). On build pod
+  (agent `b6-loader`): models + cudarc + core + engine-service 1378 passed,
+  0 failed; workspace lib 1916 passed (1971 after merging main at
+  `8178a7a`); fmt and workspace clippy `-D
+  warnings` green; `--features cuda` check of cudarc, engine-service,
+  gpucheck and core green (the base's warnings only); `scripts/serve/check.sh`
+  1037 passed; `scripts/gpu/lint.sh` green. GPU `techniques` byte-identity
+  family pending (coordinator).
+- 2026-10-24 10:10Z: B6 review follow-ups on the PR: ADR-0017 corrected
+  (h3-480p-fullopt is `sol-h3-rtx`, no adapter merge) and extended (the
+  `load/io` wall seconds exclude tree selection; `dit_tree_identity_for`
+  resolves the quant mode eagerly; NVFP4, VDN and MLX loads have no EU tree,
+  so no GPU cell); new `b6` family in `scripts/gpu/runpod-matrix.sh` (8 cells,
+  baseline vs this build, `--off-identity`: sol-h3 from its prequant tree,
+  sol-h3 and 4step-vsa merged at load, H3 under a 32 GiB budget, H3 Ref2VA,
+  LTX-2.5 IC-LoRA, dev a2v guided, `--offload cpu`; about 40 min on one RTX
+  PRO 6000) and `FV_DRY_RUN=1` for the matrix; the H3 plan goldens grew to
+  17 cases on a synthetic EU-volume layout (the served prequant trees
+  selected, B200, H100 with W8A8, Trim NVFP4, ModelOpt NVFP4, VDN), the
+  H3 placement line labelled, `FV_GOLDEN_BLESS=1` writes the goldens, the
+  plan resolves the techniques under the `active` it is given. On build pod
+  (agent `b6-loader`): models + cudarc + core + engine-service 1379 passed;
+  workspace lib 1971 passed; fmt, clippy `-D warnings`, the `--features
+  cuda` check, `scripts/serve/check.sh` (1177 passed) and
+  `scripts/gpu/lint.sh` green.
+
+- 2026-10-24 10:22-12:10Z, coordinator: B6 GPU gate, runtime image
+  `sha-a2ca568` (the PR head) against main `sha-d061c68`, RTX PRO 6000s in
+  EU-RO-1 with `bz0ofkfx45`, every comparison `compare-clips
+  --off-identity` (max abs diff 0):
+  `techniques` (`artifacts/runpod/techniques/a2ca568-10241022/`):
+  fasth3-4step-vsa-768p and h3-480p-fullopt base vs env and prof,
+  ltx25-512p-sol base vs env and prof, env vs cache: all pass
+  (fasth3-8step skipped, not on the EU volume). `b6` family (ADR-0017):
+  b6-solh3-tree (loads `transformer_prequant_sol-h3_mxfp8`, 180
+  pre-quantized linears), b6-solh3-merge (tree off, Sol-H3 LoRA fused at
+  load), b6-h3-streamed (32 GiB budget), b6-ltx25-ref2v (IC-LoRA),
+  b6-ltx25-a2v-guided (49 frames), b6-ltx25-offload-cpu (121 frames): all
+  pass, evidence `artifacts/runpod/b6/a2ca568-{10241101,10241146,10241147,10241148,10241149}/`;
+  b6-4stepvsa-merge and b6-h3-ref2va passed on the first `b6` pod
+  (`compare … exit=0` in its driver log) but that pod reached its cap and
+  deleted itself before the driver fetched their JSON
+  (`artifacts/runpod/b6/a2ca568-10241022/driver.log`), so those two are
+  recorded from the log only. The first `b6` pod ran the eight cells in
+  series at ~7 min per arm (longer than the PR's estimate); the missing
+  cells were rerun one per pod. About 3.7 GPU-hours in all, ~$9.
 
 - 2026-10-24 10:50Z: D1a (`claude/d1a-fv-lab`, draft PR #171): `fv-lab`
   (binary of `fastvideo-lab`, feature `cli`) with `run <tier|cell>

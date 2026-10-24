@@ -1,7 +1,14 @@
 # FastMetal / FastH3 MLX — port notes
 
+> **Retired (plan B6, `docs/adr/0017-loader-stages.md`).** The crate
+> `fastvideo-mlx` described below was a scaffold (host stubs, an `mlx-rs`
+> gate, no DiT or TAEHV graph, no user) and was removed from the workspace.
+> This page is kept as the design record; the code is in git history before
+> B6. The CUDA runtime's reader of FastVideo's MLX H3 export
+> (`crates/fastvideo-cudarc/src/h3/mlx.rs`) is a different thing and stays.
+
 Apple Silicon native runtime for FastVideo FastMetal-QAD and FastH3 Preview.
-Lives in crate `fastvideo-mlx` (not `fastvideo-cudarc`).
+Lived in crate `fastvideo-mlx` (not `fastvideo-cudarc`).
 
 ---
 

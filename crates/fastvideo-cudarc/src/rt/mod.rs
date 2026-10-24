@@ -40,6 +40,7 @@ pub(crate) mod kernel_src;
 #[cfg(feature = "cuda")]
 pub mod kernels;
 pub mod ledger;
+pub mod load_stages;
 pub mod log;
 pub mod nn;
 pub mod nvfp4;

@@ -97,6 +97,10 @@ use crate::rt::tensor::{CudaTensor, TensorError};
 use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::{interleave_audio, write_wav, PipelineError, Result};
 
+mod load;
+use crate::rt::load_stages::DeviceFacts;
+pub use load::{H3AdapterPlan, H3DitSource, H3LoadPlan, H3Nvfp4Plan, H3Opened, H3Placed};
+
 fn msg(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())
 }
@@ -852,6 +856,7 @@ fn dit_loads_vsa_gate(contract: &H3InferenceContract, mlx_vsa_capable: Option<bo
 /// LongLive-Plug or Ref2VA adapter, or process settings that change how
 /// linears load (affine, NVFP4, process-wide FP8). Resolves the adapter
 /// exactly as the load does, without opening it.
+#[allow(clippy::too_many_arguments)]
 fn dit_tree_identity(
     root: &Path,
     options: &H3PipelineOptions,
@@ -859,6 +864,8 @@ fn dit_tree_identity(
     cfg: &H3TransformerConfig,
     with_gate: bool,
     settings: &dyn Source,
+    quant: &std::result::Result<crate::rt::quant::QuantMode, String>,
+    linear_route: Option<&'static str>,
 ) -> Result<Option<super::dit_tree::Identity>> {
     if crate::rt::affine::bits_from_env().is_some()
         || fastvideo_models::nvfp4::from_settings(settings).is_some()
@@ -874,17 +881,10 @@ fn dit_tree_identity(
     {
         return Ok(None);
     }
-    #[cfg(feature = "cuda")]
-    let route = if crate::rt::nn::Linear::device_bf16_route() {
-        "device-bf16"
-    } else if crate::rt::stats::device_expected() {
-        // Process-wide FASTVIDEO_FP8 or f32 GEMM math: not stored.
+    // Process-wide FASTVIDEO_FP8 or f32 GEMM math on a device: not stored.
+    let Some(route) = linear_route else {
         return Ok(None);
-    } else {
-        "f32"
     };
-    #[cfg(not(feature = "cuda"))]
-    let route = "f32";
     let name = options.recipe.as_deref();
     let spec = if let Some(variant) = name.and_then(FastH3PreviewVariant::from_recipe) {
         let strength =
@@ -922,7 +922,7 @@ fn dit_tree_identity(
         }
         None => (None, 1.0f32),
     };
-    let quant = crate::rt::quant::QuantMode::from_settings(settings).map_err(msg)?;
+    let quant = quant.clone().map_err(msg)?;
     Ok(Some(super::dit_tree::Identity {
         recipe: name.unwrap_or("auto").to_owned(),
         quant: quant.as_str().into(),
@@ -960,6 +960,8 @@ pub fn dit_tree_identity_for(
         &dit_config(root, options)?,
         dit_loads_vsa_gate(&contract, None),
         &Live,
+        &crate::rt::quant::QuantMode::from_settings(&Live),
+        crate::rt::load_stages::linear_route(),
     )
 }
 
@@ -1241,7 +1243,7 @@ pub fn auto_text_encoder_plan(
 fn planned_dit_weights(
     nvfp4: bool,
     mlx: bool,
-    settings: &dyn Source,
+    quant: &std::result::Result<crate::rt::quant::QuantMode, String>,
 ) -> Result<fastvideo_models::h3::memory::H3DitWeights> {
     use crate::rt::quant::QuantMode;
     use fastvideo_models::h3::memory::H3DitWeights;
@@ -1251,7 +1253,7 @@ fn planned_dit_weights(
     if mlx {
         return Ok(H3DitWeights::Bf16);
     }
-    Ok(match QuantMode::from_settings(settings).map_err(msg)? {
+    Ok(match quant.clone().map_err(msg)? {
         QuantMode::Off => H3DitWeights::Bf16,
         QuantMode::W8A8 => H3DitWeights::W8a8,
         QuantMode::Mxfp8 => H3DitWeights::Mxfp8,
@@ -1311,9 +1313,15 @@ impl H3Pipeline {
 
     /// [`Self::load`] with its `FASTVIDEO_*` settings from `settings`, a
     /// snapshot of the readers taken when the load starts
-    /// (`docs/adr/0010-settings-layer.md`): the reads below take it as a
-    /// parameter, and while the load runs this thread's readers serve it to
-    /// the code the load calls ([`Snapshot::scope`]).
+    /// (`docs/adr/0010-settings-layer.md`): the reads take it as a parameter,
+    /// and while the load runs this thread's readers serve it to the code the
+    /// load calls ([`Snapshot::scope`]).
+    ///
+    /// The load is four stages (`docs/adr/0017-loader-stages.md`): the plan
+    /// ([`H3LoadPlan::new`]: pure, from the options, the snapshot, the
+    /// snapshot's configs and the [`DeviceFacts`] measured here), open
+    /// ([`H3LoadPlan::open`]: the mappings and their read-ahead), place
+    /// ([`H3LoadPlan::place`]: the device) and fuse ([`H3LoadPlan::fuse`]).
     pub fn load_with_settings(
         root: &Path,
         options: H3PipelineOptions,
@@ -1321,881 +1329,20 @@ impl H3Pipeline {
     ) -> Result<Self> {
         let _load_scope = settings.scope();
         crate::rt::tensor::default_bf16_activations();
-        let mut options = options;
-        // The profile this pipeline runs: the caller's own (fv-serve, one per
-        // model), else the process's.
-        let active = fastvideo_models::techniques::settings::active();
-        let own = options.profile.take();
-        let profile_in_use = match &own {
-            Some(p) => p.as_ref(),
-            None => active.profile.as_ref(),
-        };
-        // A technique profile names its recipe; the caller's wins.
-        if let Some(profile) = profile_in_use {
-            match (&options.recipe, &profile.recipe) {
-                (None, Some(r)) => options.recipe = Some(r.clone()),
-                (Some(a), Some(b)) if a != b => crate::rt::log::info(format_args!(
-                    "h3 techniques: recipe {a} (command line) overrides profile {}'s {b}",
-                    profile.name
-                )),
-                _ => {}
-            }
-        }
-        if options.recipe.as_deref().is_some_and(sol_h3_forces_ref2va) {
-            options.ref2va = true;
-        }
-        if options.recipe.as_deref().is_some_and(is_sol_h3_recipe)
-            && options.reference_image_resize == ReferenceImageResize::Auto
-        {
-            options.reference_image_resize = ReferenceImageResize::Match;
-        }
-        let contract = resolve_contract(root, options.recipe.as_deref())?;
-        let vdn_ckpt = vdn_checkpoint(&options, settings)?;
-        // VDN-H3 defaults to bf16 linears (owner decision 2026-10-14; MXFP8
-        // cost 9 dB of clip PSNR against the reference, docs/ports/vdn-h3.md
-        // §5). `FASTVIDEO_H3_QUANT=mxfp8` still opts in. The guard covers this
-        // load (every QuantMode::from_env of the DiT and refiner) only.
-        let _vdn_bf16 = vdn_ckpt
-            .as_ref()
-            .map(|_| crate::rt::quant::QuantMode::scoped_default(crate::rt::quant::QuantMode::Off));
-        let cfg = dit_config(root, &options)?;
-        // The video VAE: the tree's own `vae/`, completed from h3-base's for
-        // the shards an NVFP4 release does not carry, or h3-base's under
-        // `FASTVIDEO_H3_VAE_NVFP4=0` (docs/perf/h3-nvfp4-tier-options.md).
-        let vae_source = resolve_video_vae(root, options.text_root.as_deref())?;
-        let schedule = H3JointSchedule::from_contract(&contract).map_err(msg)?;
-        if contract.dense {
-            options.dense = true;
-        }
-        let techniques = match &own {
-            None => H3Techniques::from_settings(
-                options.recipe.as_deref(),
-                &contract,
-                options.ref2va,
-                settings,
-            ),
-            Some(p) => H3Techniques::resolve(
-                options.recipe.as_deref(),
-                &contract,
-                options.ref2va,
-                p.as_ref(),
-                &|k| settings.var(k),
-            ),
-        }
-        .map_err(msg)?;
-        let base_dense = options.dense;
-        if techniques.forces_dense() {
-            options.dense = true;
-        }
-        if techniques.taeh3.is_some() && resolve_taeh3(options.taeh3.as_deref(), settings).is_none()
-        {
-            return Err(msg(
-                "techniques.taeh3: no TAEH3 weights (pass --taeh3-weights, set FASTVIDEO_TAEH3_WEIGHTS, or give techniques.taeh3.weights)",
-            ));
-        }
-        if let Some(p) = own.as_ref().and_then(|p| p.as_ref()) {
-            crate::rt::log::info(format_args!(
-                "h3 technique profile: {} (this model's own)",
-                p.name
-            ));
-            for note in &p.notes {
-                crate::rt::log::info(format_args!("h3 technique profile note: {note}"));
-            }
-        } else if let (None, Some(path)) = (&own, active.path.as_ref()) {
-            crate::rt::log::info(format_args!("h3 technique profile: {}", path.display()));
-            for note in active.profile.iter().flat_map(|p| p.notes.iter()) {
-                crate::rt::log::info(format_args!("h3 technique profile note: {note}"));
-            }
-            for (k, v, source) in active.settings.iter() {
-                crate::rt::log::info(format_args!(
-                    "h3 technique setting {k}={v} ({source}{})",
-                    if settings.env_var_os(k).is_some() {
-                        "; overridden by env"
-                    } else {
-                        ""
-                    }
-                ));
-            }
-        }
-        crate::rt::log::info(format_args!("{}", techniques.describe()));
-        let mut load_timings = H3LoadTimings::default();
-        let timed = |slot: &mut f64, timer: Instant| *slot = timer.elapsed().as_secs_f64();
-
-        // The resident encoder goes first: its FP8 quantization runs on the
-        // device with f32 transients (524 MB for the widest matrix), which
-        // should happen while the card is otherwise empty.
-        let free = crate::rt::device::free_memory().map(|(free, _)| free);
-        let auto_text_encoder = options.text_encoder == TextEncoderChoice::Auto;
-        // `Auto`: resident when the memory plan at the DiT's real precision
-        // fits the card with the encoder, else streamed.
-        let auto_resident = match (auto_text_encoder, free) {
-            (true, Some(f)) => {
-                // As the decoder load below resolves its linears.
-                let vae_linears = vae_source.planned_linears(options.taeh3.as_deref())?;
-                let mlx_dit = !options.ref2va && super::mlx::find(root).is_some();
-                let dit = planned_dit_weights(
-                    nvfp4_dit_file(root, &options)?.is_some(),
-                    mlx_dit,
-                    settings,
-                )?;
-                let (inputs, decision) = auto_text_encoder_plan(
-                    f,
-                    DitOffload::from_settings_or(settings, options.dit_offload).map_err(msg)?,
-                    dit,
-                    // An MLX tree may not carry the gate; pricing it is the safe side.
-                    dit_loads_vsa_gate(&contract, None),
-                    vae_linears,
-                    options.auto_text_encoder_request.clone(),
-                    crate::rt::tensor::bf16_activations(),
-                    options.i2v_encoder != I2vEncoderChoice::Stream,
-                );
-                crate::rt::log::info(format_args!(
-                    "h3 text encoder: auto -> {}",
-                    decision.describe(&inputs)
-                ));
-                decision.resident
-            }
-            (true, None) => {
-                crate::rt::log::info(format_args!(
-                    "h3 text encoder: auto -> streamed (free device memory unknown)"
-                ));
-                false
-            }
-            (false, _) => false,
-        };
-        let (text_encoder_choice, load_text_encoder) =
-            options.text_encoder.resolve(auto_resident, free);
-        options.text_encoder = text_encoder_choice;
-        let mut booking = crate::rt::ledger::Booking::default();
-
-        // E12: open every component's shards up front (headers only) and
-        // queue their tensors for read-ahead in load order — encoder, refiner,
-        // AdaLN projections, blocks, decoders — so the volume stays busy
-        // across component boundaries. The loads below read the same mappings.
-        let io_base = fastvideo_loader::PrefetchStats::now();
-        let io_timer = Instant::now();
-        let text_map = match options
-            .text_encoder
-            .precision()
-            .filter(|_| load_text_encoder)
-        {
-            Some(precision) => Some(super::text::open_resident_encoder(
-                options.text_root.as_deref().unwrap_or(root),
-                precision,
-            )?),
-            None => None,
-        };
-        let (map, mlx) = match super::mlx::find(root) {
-            Some(dir) if !options.ref2va => {
-                let (map, spec) = super::mlx::open_map(&dir)?;
-                crate::rt::log::info(format_args!(
-                    "h3 dit=mlx affine int{} g{} ({})",
-                    spec.bits,
-                    spec.group_size,
-                    spec.weights.display()
-                ));
-                (map, Some(spec))
-            }
-            _ => {
-                let dit = if options.ref2va {
-                    let p = options
-                        .ref_root
-                        .as_deref()
-                        .unwrap_or(root)
-                        .join("transformer_ref");
-                    if !p.is_dir() {
-                        return Err(msg(format!(
-                            "Ref2VA needs {} (MiniMax-H3 Base Ref2VA partition)",
-                            p.display()
-                        )));
-                    }
-                    crate::rt::log::info(format_args!("h3 dit=transformer_ref"));
-                    p
-                } else {
-                    root.join("transformer")
-                };
-                (WeightMap::open(&dit)?, None)
-            }
-        };
-        // FastH3 Trim NVFP4 (docs/ports/h3-trim.md §5): the published block
-        // linears replace the snapshot's. Refused without NVFP4 tensor cores.
-        let mut modelopt_nvfp4 = false;
-        let nvfp4_dit = match nvfp4_dit_file(root, &options)? {
-            Some(path) => {
-                if mlx.is_some() || options.ref2va {
-                    return Err(msg(
-                        "h3 nvfp4: the published NVFP4 DiT is the Trim T2V transformer; not with an MLX snapshot or Ref2VA",
-                    ));
-                }
-                super::nvfp4::require_tensor_cores()?;
-                let t = Instant::now();
-                let nv = super::nvfp4::Nvfp4Dit::open(&path, &cfg, &map)?;
-                crate::rt::log::info(format_args!(
-                    "h3 nvfp4: {} ({} blocks x 5 NVFP4 linears, {:.2} GiB; checked against the bf16 tree in {:.1}s)",
-                    nv.path().display(),
-                    cfg.num_layers,
-                    nv.linear_bytes(&cfg, dit_loads_vsa_gate(&contract, None)) as f64 / f64::from(1u32 << 30),
-                    t.elapsed().as_secs_f64()
-                ));
-                Some(nv)
-            }
-            // FastH3 V2 / 4-step NVFP4 releases (docs/ports/fasth3-nvfp4.md):
-            // a `transformer/` in ModelOpt's unified layout is read as such.
-            None if mlx.is_none()
-                && !options.ref2va
-                && super::nvfp4::is_modelopt_dir(&root.join("transformer"))? =>
-            {
-                modelopt_nvfp4 = true;
-                if vdn_ckpt.is_some() {
-                    return Err(msg(
-                        "h3 nvfp4: a ModelOpt NVFP4 DiT takes no VDN checkpoint",
-                    ));
-                }
-                super::nvfp4::require_tensor_cores()?;
-                let t = Instant::now();
-                let opts = super::nvfp4::ModelOptOptions::from_settings(settings)?;
-                let nv =
-                    super::nvfp4::Nvfp4Dit::open_modelopt(&root.join("transformer"), &cfg, opts)?;
-                crate::rt::log::info(format_args!(
-                    "h3 nvfp4: ModelOpt {} ({} blocks x 2 NVFP4 FFN linears, {:.2} GiB; attention {}; FFN activation scale {}; checked in {:.1}s)",
-                    nv.path().display(),
-                    cfg.num_layers,
-                    nv.linear_bytes(&cfg, false) as f64 / f64::from(1u32 << 30),
-                    if opts.attention { "NVFP4 (quantized at load)" } else { "as FASTVIDEO_H3_QUANT" },
-                    if opts.static_act { "static (calibrated)" } else { "dynamic" },
-                    t.elapsed().as_secs_f64()
-                ));
-                Some(nv)
-            }
-            None => None,
-        };
-        // A V2 / 4-step NVFP4 release recipe runs the release's ModelOpt DiT,
-        // never another `transformer/` under its contract.
-        if let Some(r) = options
-            .recipe
-            .as_deref()
-            .filter(|r| fastvideo_models::h3::config::is_nvfp4_release_recipe(r))
-        {
-            if !modelopt_nvfp4 {
-                return Err(msg(format!(
-                    "h3 recipe {r}: {} is not a ModelOpt NVFP4 transformer/ (the fasth3-v2-nvfp4 / fasth3-4step-vsa-nvfp4 tree's); point weights at that tree",
-                    root.join("transformer").display()
-                )));
-            }
-        }
-        // The Trim's ComfyUI NVFP4 file: sparse FP4 VSA only when asked (`=1`).
-        let comfy_nvfp4 = nvfp4_dit.is_some() && !modelopt_nvfp4;
-        // Fast boot (A): the recipe's resident DiT, pre-merged and
-        // pre-quantized beside `transformer/` (`super::dit_tree`), when a
-        // valid one is there; otherwise the checkpoint as below.
-        let dit_tree =
-            if mlx.is_none() && !options.ref2va && vdn_ckpt.is_none() && nvfp4_dit.is_none() {
-                let identity = dit_tree_identity(
-                    root,
-                    &options,
-                    &schedule,
-                    &cfg,
-                    dit_loads_vsa_gate(&contract, None),
-                    settings,
-                )?;
-                match super::dit_tree::select(root, &root.join("transformer"), identity.as_ref())? {
-                    Some((dir, _)) => Some(super::dit_tree::TreeReader::open(&dir)?),
-                    None => None,
-                }
-            } else {
-                None
-            };
-        if dit_tree.is_none() {
-            // A fused adapter rebuilds the AdaLN table from the projections;
-            // otherwise a valid cache file means they are never read.
-            let adapter = vdn_ckpt.is_some()
-                || options.recipe.as_deref().is_some_and(|r| {
-                    FastH3PreviewVariant::from_recipe(r).is_some()
-                        || is_sol_h3_recipe(r)
-                        || PlugRecipe::is_plug(r)
-                        || parse_turbo_recipe(r).is_some()
-                });
-            let skip_adaln = !adapter && options.adaln_cache.as_deref().is_some_and(Path::is_file);
-            let adaln = |k: &str| k.contains(".adaln_proj.");
-            let refiner = |k: &str| {
-                k.starts_with("token_refiner")
-                    || k.starts_with("context_embedder")
-                    || k.starts_with("refiner.")
-            };
-            let table = |k: &str| {
-                k.starts_with("time_embedder")
-                    || k.starts_with("norm_out.linear")
-                    || (!skip_adaln && adaln(k))
-            };
-            // Under the Trim's NVFP4 file the snapshot's block linears are never
-            // read; a ModelOpt DiT is the snapshot's own `transformer/`.
-            let nv = nvfp4_dit
-                .as_ref()
-                .is_some_and(|n| n.layout() == super::nvfp4::Nvfp4Layout::Comfy);
-            let nv_linear = |k: &str| {
-                nv && k.starts_with("transformer_blocks.")
-                    && (k.contains(".attn.to_") || k.contains(".ff.net."))
-            };
-            let blocks = |k: &str| {
-                (k.starts_with("transformer_blocks.") || k.starts_with("blocks."))
-                    && !adaln(k)
-                    && !nv_linear(k)
-            };
-            let rest = |k: &str| !adaln(k) && !nv_linear(k);
-            map.prefetch_groups(&[&refiner, &table, &blocks, &rest]);
-            if let Some(nv) = nvfp4_dit.as_ref().filter(|_| nv) {
-                nv.map().prefetch_all();
-            }
-        }
-        let not_encoder = |k: &str| !k.starts_with("encoder.");
-        let mut vae_map = match resolve_taeh3(options.taeh3.as_deref(), settings) {
-            Some(_) => None,
-            None => vae_source.open().ok(),
-        };
-        if let Some(m) = &vae_map {
-            m.prefetch_groups(&[&not_encoder]);
-        }
-        let audio_dir = audio_vae_dir(root, options.text_root.as_deref());
-        let mut audio_vae_map = WeightMap::open(&audio_dir).ok();
-        if let Some(m) = &audio_vae_map {
-            m.prefetch_groups(&[&not_encoder]);
-        }
-
-        let timer = Instant::now();
-        let text_encoder = booking.track(
-            crate::rt::ledger::TEXT_ENCODER,
-            || -> Result<Option<Box<dyn HiddenStateEncoder + Send>>> {
-                Ok(match options.text_encoder {
-                    TextEncoderChoice::Recovered8b => {
-                        let text_root = options.text_root.as_deref().unwrap_or(root);
-                        Some(Box::new(super::recovered_8b::Recovered8bEncoder::load(
-                            text_root,
-                        )?))
-                    }
-                    other => match (other.precision(), text_map.as_ref()) {
-                        (Some(precision), Some(map)) => Some(Box::new(
-                            super::text::load_resident_encoder_from(map, precision)?,
-                        )),
-                        _ => None,
-                    },
-                })
-            },
-            |r| match r {
-                Ok(Some(e)) => Some(e.resident_bytes()),
-                _ => None,
-            },
-        )?;
-        drop(text_map);
-        if text_encoder.is_some() {
-            timed(&mut load_timings.text_encoder_s, timer);
-            crate::rt::weights::log_load_io(
-                "h3 text_encoder",
-                &io_base,
-                io_timer.elapsed().as_secs_f64(),
-            );
-        }
-        // What the DiT placement decides on: the card as the encoder left it.
-        let free = if text_encoder.is_some() {
-            crate::rt::device::free_memory().map(|(free, _)| free)
-        } else {
-            free
-        };
-
-        // Gate lives on VSA checkpoints and VSA-DataFree replacements. Sol-H3
-        // + MiniMax-H3 is Sol-Attn on a dense backbone (`vsa_sparsity == 0`).
-        let with_gate = dit_loads_vsa_gate(&contract, mlx.as_ref().map(|s| s.vsa_capable));
-        // The official video decoder's linears are part of the memory plan:
-        // its MXFP8 copies (`FASTVIDEO_H3_VAE_MXFP8`, default on sm_100+), or
-        // the published NVFP4 linears alone (the NVFP4 tier's default);
-        // `MXFP8=1` on a GPU without block-scaled FP8 fails here, before
-        // anything loads.
-        let vae_linears = vae_source.planned_linears(options.taeh3.as_deref())?;
-        crate::rt::log::info(format_args!(
-            "h3 recipe={} steps={} video_shift={} vsa={} dense={}",
-            options.recipe.as_deref().unwrap_or("auto"),
-            contract.transformer_forwards,
-            contract.video_scheduler_shift,
-            contract.vsa_sparsity,
-            options.dense
-        ));
-        let preset = techniques
-            .sol()
-            .and_then(|s| s.preset.as_deref())
-            .and_then(fastvideo_models::techniques::methods::SolAttn::preset);
-        let named = techniques.sol().is_some_and(|s| preset.as_ref() == Some(s));
-        match techniques.sol_policy {
-            _ if techniques.sol().is_some() && !named => {
-                crate::rt::log::info(format_args!(
-                    "h3 sol-attn: {}",
-                    techniques
-                        .sol()
-                        .map(|s| s.route.describe())
-                        .unwrap_or_default()
-                ));
-            }
-            H3SolAttnPolicy::Engine => {
-                crate::rt::log::info(format_args!(
-                    "h3 sol-attn: sol-h3 engine policy (opt-in): forward 0 dense, blocks 0-1 dense, blocks 2-49 sol-attn tau 1.0 (thresh_type=diag), prefix sink"
-                ));
-            }
-            H3SolAttnPolicy::Spark => {
-                crate::rt::log::info(format_args!(
-                    "h3 sol-attn: spark draft ladder (opt-in): update 0 dense, later updates block 0 dense and blocks 1-49 sol-attn tau 1/1.25/1.5 (thresh_type=diag), [visual | text+audio] suffix sink"
-                ));
-            }
-            H3SolAttnPolicy::Rtx => {
-                crate::rt::log::info(format_args!(
-                    "h3 sol-attn: rtx forwards 0-9 dense, later forwards blocks 0-1 dense and blocks 2-49 sol-attn tau 1.0 (thresh_type=diag), text sink"
-                ));
-            }
-            H3SolAttnPolicy::Off => {}
-        }
-        let preview = options
-            .recipe
-            .as_deref()
-            .and_then(FastH3PreviewVariant::from_recipe);
-        let mut lora = if dit_tree.is_some() {
-            // The tree holds the merged (and quantized) weights already.
-            None
-        } else if let Some(variant) = preview {
-            // FastH3 Preview v1 = base MiniMax-H3 + one Preview LoRA
-            // (`run_fasth3_lora_preview_*_datafree.sh`).
-            let has_gate = map.has_tensor("transformer_blocks.0.attn.to_gate_compress.weight");
-            let has_json = [
-                "fastvideo_inference.json",
-                "transformer/fastvideo_inference.json",
-            ]
-            .iter()
-            .any(|rel| root.join(rel).is_file());
-            check_preview_base(has_gate, has_json).map_err(msg)?;
-            let strength =
-                preview_lora_strength(std::env::var(FASTH3_LORA_STRENGTH_ENV).ok().as_deref())
-                    .map_err(msg)?;
-            let spec = variant.adapter_spec(strength);
-            let recipe = options.recipe.as_deref().unwrap_or_default();
-            let path = spec.resolve(root, options.adapter.as_deref()).map_err(|e| {
-                msg(format!(
-                    "recipe {recipe} needs the FastH3 Preview v1 {} adapter (FastVideo/FastVideo-FastH3-4-step-Preview-v1-LoRA): {e}",
-                    variant.subdir()
-                ))
-            })?;
-            let fuse = super::lora::H3LoraFuse::open(&map, &path, spec.alpha, spec.scale)?;
-            variant
-                .check_adapter(&fuse.replacement_params())
-                .map_err(|e| msg(format!("{}: {e}", path.display())))?;
-            crate::rt::log::info(format_args!(
-                "h3 fasth3-preview {}: fuse {} pairs rank={} strength={} diffs={} set_weight={} ({})",
-                variant.subdir(),
-                fuse.pairs_total,
-                fuse.rank,
-                fuse.effective_scale(),
-                fuse.diffs_total,
-                fuse.replacements_total,
-                path.display()
-            ));
-            Some(fuse)
-        } else if options.recipe.as_deref().is_some_and(is_sol_h3_recipe) {
-            let spark = options
-                .recipe
-                .as_deref()
-                .is_some_and(fastvideo_models::h3::lora::is_sol_h3_spark_recipe);
-            let spec = if options.ref2va {
-                SolH3AdapterSpec::ref2va()
-            } else if spark {
-                fastvideo_models::h3::spark::spark_adapter_spec()
-            } else {
-                SolH3AdapterSpec::t2v_i2v()
-            };
-            let adapter_root = match (options.ref2va, options.ref_root.as_deref()) {
-                (true, Some(r)) => r,
-                _ => root,
-            };
-            let path = spec
-                .resolve(adapter_root, options.adapter.as_deref())
-                .map_err(msg)?;
-            let fuse = super::lora::H3LoraFuse::open(&map, &path, spec.alpha, spec.scale)?;
-            crate::rt::log::info(format_args!(
-                "h3 sol-h3: fuse {} pairs rank={} alpha={} scale={} diffs={} ({})",
-                fuse.pairs_total,
-                fuse.rank,
-                fuse.alpha,
-                fuse.effective_scale(),
-                fuse.diffs_total,
-                path.display()
-            ));
-            if spark {
-                crate::rt::log::info(format_args!(
-                    "h3 sol-h3-spark: stage-1 VSA {} tile {} BF16 FastH3_VSA_DataFree strength {}; DiT {} (upstream: W8A8 after the bf16 LoRA merge; FASTVIDEO_H3_QUANT=w8a8). Draft {}x{} {}f. H3×2 upscaler and H3-to-LTX adapter run when their checkpoints are set. Joint 3-step LTX refine uses the fixed prompt and cached Gemma",
-                    contract.vsa_sparsity,
-                    contract.vsa_tile_size,
-                    spec.scale,
-                    crate::rt::quant::QuantMode::from_settings(settings)
-                        .map(|m| m.as_str())
-                        .unwrap_or("invalid FASTVIDEO_H3_QUANT"),
-                    fastvideo_models::h3::sol::SPARK_DRAFT_WIDTH,
-                    fastvideo_models::h3::sol::SPARK_DRAFT_HEIGHT,
-                    fastvideo_models::h3::sol::SPARK_DRAFT_FRAMES,
-                ));
-            }
-            Some(fuse)
-        } else if let Some(ck) = &vdn_ckpt {
-            // VDN-H3: the checkpoint's LoRA adapters merged into the base
-            // projections (M:merge_lora_state, scale 1); the branch attaches
-            // after the blocks load.
-            let fuse = super::lora::H3LoraFuse::open_vdn(&map, &ck.adapters)?;
-            crate::rt::log::info(format_args!(
-                "h3 vdn: {} ({}): fuse {} pairs max rank {} scale 1, chunk {} radius {}{}",
-                ck.dir.display(),
-                ck.adapter_names().join(" + "),
-                fuse.pairs_total,
-                fuse.rank,
-                ck.transform.chunk,
-                ck.transform.radius,
-                if ck.is_distilled() || contract.transformer_forwards >= 40 {
-                    String::new()
-                } else {
-                    format!(
-                        "; NOTE: {} forwards on the 50-step stage-B model (the 8-step model adds adapters/turbo)",
-                        contract.transformer_forwards
-                    )
-                }
-            ));
-            Some(fuse)
-        } else if let Some(plug) = options.recipe.as_deref().and_then(PlugRecipe::named) {
-            if options.ref2va {
-                return Err(msg(format!(
-                    "recipe {}: the LongLive-Plug H3 adapters are T2VA (base transformer), not Ref2VA",
-                    plug.name
-                )));
-            }
-            let fuse =
-                super::lora::H3LoraFuse::open_plug(&map, root, &plug, options.adapter.as_deref())?;
-            crate::rt::log::info(format_args!(
-                "h3 {}: fuse {} pairs rank={} alpha={} scale={} ({}; licence: {})",
-                plug.name,
-                fuse.pairs_total,
-                fuse.rank,
-                fuse.alpha,
-                fuse.effective_scale(),
-                fuse.path,
-                plug.licence
-            ));
-            Some(fuse)
-        } else if let Some(turbo) = options.recipe.as_deref().and_then(parse_turbo_recipe) {
-            // MiniMax-H3 Turbo LoRA (the MiniMax-H3-Turbo-Lora Space): base
-            // MiniMax-H3 + one adapter folded into the bf16 weights here, before
-            // any quantization of the linears (`load_linear` merges, the block
-            // loader quantizes what it returns).
-            let (turbo, forwards) = turbo.map_err(msg)?;
-            if options.ref2va {
-                return Err(msg(format!(
-                    "recipe {}: the Turbo LoRAs are T2VA / FL2VA (base transformer), not Ref2VA",
-                    turbo.stem()
-                )));
-            }
-            let strength = turbo_strength(
-                options.adapter_strength,
-                std::env::var(TURBO_LORA_STRENGTH_ENV).ok().as_deref(),
-            )
-            .map_err(msg)?;
-            let path = turbo
-                .resolve(root, options.adapter.as_deref())
-                .map_err(msg)?;
-            let fuse = super::lora::H3LoraFuse::open_turbo(&map, &path, turbo, strength)?;
-            crate::rt::log::info(format_args!(
-                "h3 {}: fuse {} pairs rank={} alpha={} multiplier={} strength={strength} forwards={forwards} ({}; {} @ {}; licence {})",
-                turbo.stem(),
-                fuse.pairs_total,
-                fuse.rank,
-                turbo.alpha().map_or("rank".to_owned(), |a| a.to_string()),
-                fuse.effective_scale(),
-                fuse.path,
-                turbo.hub_repo(),
-                &turbo.hub_revision()[..7],
-                turbo.licence()
-            ));
-            Some(fuse)
-        } else {
-            None
-        };
-        // The multimodal (FL2VA / Ref2VA) text encoder: the vision tower
-        // beside the resident language model, decided before the DiT
-        // placement so the placement sees what it leaves.
-        let (multimodal, free) = {
-            let lm = text_encoder
-                .as_deref()
-                .and_then(|e| e.decoder())
-                .map(|d| d.precision());
-            let need = dit_placement_need(with_gate, vae_linears);
-            // The DiT's working set when its blocks stream from host memory.
-            let streamed_need = H3Geometry::default_16x9(5)
-                .map(|g| {
-                    fastvideo_models::h3::memory::plan(
-                        &g,
-                        fastvideo_models::h3::memory::H3PlanOptions {
-                            placement: fastvideo_models::h3::memory::H3Placement::STREAMED,
-                            gate: with_gate,
-                            vae: vae_linears,
-                            ..Default::default()
-                        },
-                    )
-                    .peak()
-                })
-                .map_err(msg)?;
-            let dit_policy =
-                DitOffload::from_settings_or(settings, options.dit_offload).map_err(msg)?;
-            let gib = |b: u64| b as f64 / f64::from(1u32 << 30);
-            let (load, why) = match (options.i2v_encoder, lm) {
-                (I2vEncoderChoice::Stream, _) => (false, "configured".to_owned()),
-                (I2vEncoderChoice::Resident | I2vEncoderChoice::Auto, None) => {
-                    if options.i2v_encoder == I2vEncoderChoice::Resident {
-                        return Err(msg(format!(
-                            "i2v_encoder = resident needs a resident Qwen3-VL text encoder (text_encoder = resident-fp8 | resident-bf16, or auto when the memory plan keeps it resident); it resolved to {:?}{}",
-                            options.text_encoder,
-                            if text_encoder.is_none() { " (not loaded)" } else { "" }
-                        )));
-                    }
-                    (false, format!("the text encoder is {:?}{}, not a resident Qwen3-VL", options.text_encoder, if text_encoder.is_none() { " (streamed)" } else { "" }))
-                }
-                (I2vEncoderChoice::Resident, Some(_)) => (true, "configured".to_owned()),
-                (I2vEncoderChoice::Auto, Some(_)) => match free {
-                    Some(f) if f >= need + I2V_VISION_RESERVE_BYTES => (
-                        true,
-                        format!(
-                            "{:.1} GiB free covers the vision tower ({:.1} GiB) and the resident plan ({:.1} GiB)",
-                            gib(f),
-                            gib(I2V_VISION_RESERVE_BYTES),
-                            gib(need)
-                        ),
-                    ),
-                    // The DiT streams with or without the tower (e.g. the
-                    // upsampler sidecar holds 11 GB of a 96 GB card): the
-                    // tower is 2 GiB beside the streamed plan, while
-                    // streaming it re-reads the vision tower and the whole
-                    // language model (~26 GB FP8) from the volume for every
-                    // image-conditioned build (every anchored director
-                    // chunk; gpu-check-2026-10-13: 160-214 s chunks).
-                    Some(f)
-                        if i2v_tower_beside_streamed_dit(
-                            dit_policy,
-                            f,
-                            need,
-                            streamed_need,
-                        ) =>
-                    {
-                        (
-                            true,
-                            format!(
-                                "the DiT streams either way ({:.1} GiB free < the resident plan {:.1} GiB): {:.1} GiB free covers the vision tower ({:.1} GiB) and the streamed plan ({:.1} GiB)",
-                                gib(f),
-                                gib(need),
-                                gib(f),
-                                gib(I2V_VISION_RESERVE_BYTES),
-                                gib(streamed_need)
-                            ),
-                        )
-                    }
-                    Some(f) => (
-                        false,
-                        format!(
-                            "{:.1} GiB free does not cover the vision tower ({:.1} GiB) and the resident plan ({:.1} GiB)",
-                            gib(f),
-                            gib(I2V_VISION_RESERVE_BYTES),
-                            gib(need)
-                        ),
-                    ),
-                    None => (false, "free device memory unknown".to_owned()),
-                },
-            };
-            if load {
-                let timer = Instant::now();
-                let text_root = options.text_root.as_deref().unwrap_or(root);
-                let before = crate::rt::device::free_memory().map(|(f, _)| f);
-                let mm = super::text::MultimodalEncoder::load(text_root)?;
-                let after = crate::rt::device::free_memory().map(|(f, _)| f);
-                let held = before.zip(after).map(|(b, a)| b.saturating_sub(a));
-                load_timings.vision_s = timer.elapsed().as_secs_f64();
-                crate::rt::log::info(format_args!(
-                    "h3 i2v encoder: resident ({why}): vision tower {} GiB loaded in {:.1} s; the language model is the resident text encoder ({:?}), {:.1} GiB free now",
-                    held.map_or("?".into(), |b| format!("{:.2}", gib(b))),
-                    load_timings.vision_s,
-                    options.text_encoder,
-                    after.map_or(0.0, gib),
-                ));
-                (Some(mm), after.or(free))
-            } else {
-                crate::rt::log::info(format_args!(
-                    "h3 i2v encoder: stream ({why}): FL2VA/Ref2VA requests read the vision tower and the {} language model from the volume per request",
-                    match options.text_encoder.precision() {
-                        Some(crate::llm::WeightPrecision::Fp8Rows) => "fp8",
-                        _ => "bf16",
-                    }
-                ));
-                (None, free)
-            }
-        };
-        let residency = {
-            let policy =
-                DitOffload::from_settings_or(settings, options.dit_offload).map_err(msg)?;
-            // What the default request (768p, 5 s) needs with everything resident.
-            let need = dit_placement_need(with_gate, vae_linears);
-            let residency = policy.resolve(need, free);
-            // The NVFP4 blocks (about 10 GiB) stay resident: their device
-            // operands have no host-streamed form.
-            let residency = match (&nvfp4_dit, policy) {
-                (None, _) => residency,
-                (Some(_), DitOffload::Streamed) => return Err(msg(
-                    "h3 nvfp4: the NVFP4 DiT is resident only (dit_offload = streamed was asked)",
-                )),
-                (Some(_), _) => Residency::Resident,
-            };
-            crate::rt::log::info(format_args!(
-                "h3 dit offload: {} -> {} (resident plan {:.1} GiB, {} free before load)",
-                policy.as_str(),
-                residency.as_str(),
-                need as f64 / f64::from(1u32 << 30),
-                free.map_or("unknown".into(), |f| format!(
-                    "{:.1} GiB",
-                    f as f64 / f64::from(1u32 << 30)
-                )),
-            ));
-            residency
-        };
-        let timer = Instant::now();
-        let refiner = booking.track(
-            crate::rt::ledger::TEXT_REFINER,
-            || match &dit_tree {
-                Some(tree) => H3TextRefiner::from_tree(&cfg, tree, residency),
-                None => H3TextRefiner::load_with_residency(&cfg, &map, &mut lora, residency),
-            },
-            |_| None,
-        )?;
-        timed(&mut load_timings.refiner_s, timer);
-        let timer = Instant::now();
-        let mut model = booking.track(
-            crate::rt::ledger::DIT_NONLINEAR,
-            || match &dit_tree {
-                Some(tree) => {
-                    H3Transformer::from_tree(cfg.clone(), tree, &schedule, with_gate, residency)
-                }
-                None => H3Transformer::load_with_nvfp4(
-                    cfg.clone(),
-                    &map,
-                    &schedule,
-                    with_gate,
-                    options.adaln_cache.as_deref(),
-                    &mut lora,
-                    residency,
-                    nvfp4_dit.as_ref(),
-                ),
-            },
-            |_| None,
-        )?;
-        // The step-output seam: TeaCache over the recipe's forwards unless
-        // the technique names its own count.
-        if let Some(state) = techniques
-            .teacache_state(schedule.num_steps())
-            .map_err(msg)?
-        {
-            if techniques.teacache_is_official() {
-                crate::rt::log::info(format_args!(
-                    "{}",
-                    fastvideo_models::h3::sol::TEACACHE_APPLIED
-                ));
-            } else {
-                crate::rt::log::info(format_args!(
-                    "h3 teacache: threshold {} retain {} cooldown {} coefficients {:?}",
-                    state.threshold, state.retain_steps, state.cooldown_steps, state.coefficients
-                ));
-            }
-            model.enable_teacache(state)?;
-        }
-        if let Some(ck) = &vdn_ckpt {
-            let branch = WeightMap::open_files(std::slice::from_ref(&ck.branch))?;
-            model.attach_vdn(&branch)?;
-        }
-        if let Some(fuse) = lora.as_ref() {
-            fuse.finish()?;
-            #[cfg(feature = "cuda")]
-            {
-                use super::transformer::lora_device;
-                crate::rt::log::info(format_args!(
-                    "h3 lora merge: {}",
-                    if lora_device::enabled() {
-                        "device"
-                    } else {
-                        "host"
-                    }
-                ));
-                if lora_device::verify_enabled() {
-                    let (ok, bad) = lora_device::verify_counts();
-                    crate::rt::log::info(format_args!(
-                        "load/verify h3 lora {{\"device_equal\":{ok},\"device_different\":{bad}}}"
-                    ));
-                }
-            }
-        }
-        timed(&mut load_timings.dit_s, timer);
-        load_timings.dit_from_tree = dit_tree.is_some();
-        drop(dit_tree);
-        drop(map);
-        crate::rt::weights::log_load_io("h3 dit", &io_base, io_timer.elapsed().as_secs_f64());
-        // Streamed: the decoders are loaded by each decode (the reference makes
-        // the full VAE resident only for decoding).
-        let (video_vae, audio_vae) = if residency.is_streamed() {
-            (None, None)
-        } else {
-            let timer = Instant::now();
-            let video_vae = booking.track(
-                crate::rt::ledger::VAE,
-                || load_video_decoder_from(&vae_source, options.taeh3.as_deref(), vae_map.take()),
-                |_| None,
-            )?;
-            timed(&mut load_timings.video_vae_s, timer);
-            let timer = Instant::now();
-            let audio_vae = booking.track(
-                crate::rt::ledger::AUDIO_VAE,
-                || load_audio_decoder_from(&audio_dir, audio_vae_map.take()),
-                |_| None,
-            )?;
-            timed(&mut load_timings.audio_vae_s, timer);
-            (Some(video_vae), Some(audio_vae))
-        };
-        drop((vae_map, audio_vae_map));
-        crate::rt::weights::log_load_io("h3 total", &io_base, io_timer.elapsed().as_secs_f64());
-        let vsa_fp4 = vsa_fp4_choice(
-            modelopt_nvfp4,
-            comfy_nvfp4,
-            options
-                .recipe
-                .as_deref()
-                .is_some_and(fastvideo_models::h3::config::is_trim_nvfp4_fp4attn_recipe),
-        )?;
-        Ok(Self {
-            root: root.to_path_buf(),
-            vae_source,
+        let facts = DeviceFacts::measure();
+        let plan = H3LoadPlan::new(
+            root,
             options,
-            cfg,
-            contract,
-            techniques,
-            base_dense,
-            schedule,
-            refiner,
-            model,
-            video_vae,
-            audio_vae,
-            residency,
-            text_encoder: std::sync::Mutex::new(text_encoder),
-            auto_text_encoder,
-            multimodal,
-            i2v_stream: false,
-            load_timings,
-            booking: std::sync::Mutex::new(booking),
-            vdn: vdn_ckpt.map(|c| c.transform),
-            vsa_fp4,
-            #[cfg(feature = "cuda")]
-            graphs: std::sync::Mutex::new(None),
-        })
+            settings,
+            fastvideo_models::techniques::settings::active(),
+            facts,
+        )?;
+        // VDN-H3's bf16 default covers every QuantMode read of the stages
+        // below (the DiT's and the refiner's linears).
+        let _quant_default = plan.quant_default_guard();
+        let opened = plan.open()?;
+        let placed = plan.place(opened)?;
+        plan.fuse(placed)
     }
 
     /// [`denoise`] through the graph cache ([`super::step_graph::H3Graphs`]).
@@ -3273,17 +2420,30 @@ impl VideoVaeSource {
         &self,
         taeh3: Option<&Path>,
     ) -> Result<fastvideo_models::h3::memory::H3VaeLinears> {
+        self.planned_linears_on(taeh3, &Live, super::vae::device_sm())
+    }
+
+    /// [`Self::planned_linears`] with the settings from `settings` and the
+    /// device given as the compute capability major ops run on (`None`:
+    /// host ops): a load's plan.
+    pub fn planned_linears_on(
+        &self,
+        taeh3: Option<&Path>,
+        settings: &dyn Source,
+        live_sm: Option<i32>,
+    ) -> Result<fastvideo_models::h3::memory::H3VaeLinears> {
         use fastvideo_models::h3::memory::H3VaeLinears;
-        if resolve_taeh3(taeh3, &Live).is_some() {
+        if resolve_taeh3(taeh3, settings).is_some() {
             return Ok(H3VaeLinears::Bf16);
         }
+        let layers = |dir: &Path| video_vae_config(dir).map(|c| c.decoder_num_layers);
         if self.nvfp4() {
             // MXFP8=1 together with the NVFP4 linears fails here, before anything loads.
-            super::vae::mxfp8_wanted(video_vae_config(&self.dir)?.decoder_num_layers, true)?;
+            super::vae::mxfp8_wanted_on(layers(&self.dir)?, true, settings, live_sm)?;
             return Ok(H3VaeLinears::Nvfp4);
         }
         Ok(
-            if super::vae::mxfp8_wanted(video_vae_config(&self.dir)?.decoder_num_layers, false)? {
+            if super::vae::mxfp8_wanted_on(layers(&self.dir)?, false, settings, live_sm)? {
                 H3VaeLinears::Mxfp8
             } else {
                 H3VaeLinears::Bf16
@@ -4878,7 +4038,7 @@ pub(crate) mod load_settings_tests {
             });
             assert_eq!(
                 weights,
-                planned_dit_weights(false, false, &s).ok(),
+                planned_dit_weights(false, false, &QuantMode::from_settings(&s)).ok(),
                 "{what}"
             );
             // DitOffload::from_env_or.

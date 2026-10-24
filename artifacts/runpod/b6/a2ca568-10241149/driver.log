@@ -1,0 +1,16 @@
+[11:49:30] create pod gpu="NVIDIA RTX PRO 6000 Blackwell Server Edition" image=ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-a2ca568 volume=bz0ofkfx45 dc=EU-RO-1 cloud=SECURE quoted=$2.49/hr
+[11:49:32] pod 1i3w2xdw001l0c  $2.49/hr  (hard cap 3600s)
+[11:50:05] pod: [11:49:57] [b6] ▶ b6-ltx25-ref2v-base  env /fvscratch/baseline-d061c68/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --seed 1024 --two-stage --text streamed --no-text-cache --dit /workspace/weights/ltx25 --height 896 --width 1536 --num-frames 49 --dense-stage2 --reference /opt/fastvideo-rs/scripts/gpu/fixtures/ltx-ref-sheet-768x448.png --ic-lora /workspace/weights/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors --prompt Reference sheet: a rocky coastline at golden hour and a cartoon orange crab. Generated video: the crab scuttles across the wet sand. --clip /fvscratch/runs/b6/a2ca568-10241149/b6-ltx25-ref2v-base/frames  (wall cap 3600s; 0=none)
+[11:59:43] pod: [11:59:35] [b6] ▶ b6-ltx25-ref2v-pr  env /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --seed 1024 --two-stage --text streamed --no-text-cache --dit /workspace/weights/ltx25 --height 896 --width 1536 --num-frames 49 --dense-stage2 --reference /opt/fastvideo-rs/scripts/gpu/fixtures/ltx-ref-sheet-768x448.png --ic-lora /workspace/weights/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors --prompt Reference sheet: a rocky coastline at golden hour and a cartoon orange crab. Generated video: the crab scuttles across the wet sand. --clip /fvscratch/runs/b6/a2ca568-10241149/b6-ltx25-ref2v-pr/frames  (wall cap 3600s; 0=none)
+[12:09:06] results → /home/user/wt/b6-loader/artifacts/runpod/b6/a2ca568-10241149
+[12:09:06] destroy pod 1i3w2xdw001l0c
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+weights ok: fasth3-4step-vsa
+weights ok: fasth3-4step-dense
+weights ok: sol-h3
+weights ok: sol-h3-spark
+weights ok: ltx25-two-stage
+exit=1
