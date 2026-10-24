@@ -912,7 +912,7 @@ common = ["--prompt", "{prompt}", "--seed", "{seed}"]
 name = "a1"
 gate = "h3-base"
 trees = ["h3-base"]
-env = ["FASTVIDEO_X={weights}/h3-base/x"]
+env = ["FASTVIDEO_TEST_X={weights}/h3-base/x"]
 argv = ["h3", "gen", "--weights", "{weights}/h3-base", "--clip-dir", "{runs}/{arm}/frames", "{@common}"]
 
 [[arm]]
@@ -945,7 +945,7 @@ candidate = "a2"
             cmd,
             [
                 "env",
-                "FASTVIDEO_X=/workspace/weights/h3-base/x",
+                "FASTVIDEO_TEST_X=/workspace/weights/h3-base/x",
                 "/bin/fv",
                 "h3",
                 "gen",
@@ -994,7 +994,7 @@ candidate = "a2"
             "not an arm",
         );
         bad(|s| s.replace("name = \"a2\"", "name = \"a1\""), "twice");
-        bad(|s| s.replace("FASTVIDEO_X=", "lower="), "not K=V");
+        bad(|s| s.replace("FASTVIDEO_TEST_X=", "lower="), "not K=V");
         bad(
             |s| s.replace("[lists]\n", "[lists]\nextra = [\"x\"]\n"),
             "no arm splices",
