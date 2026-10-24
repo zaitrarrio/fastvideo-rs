@@ -750,6 +750,47 @@ mod tests {
         }
     }
 
+    /// The B4a GPU identity cell's profile (`scripts/gpu/fixtures/
+    /// b4a-h3-4step-teacache.toml`) resolves on FastH3 4-step VSA and reuses
+    /// exactly forwards 1 and 2 of 4 on small signals.
+    #[test]
+    fn b4a_gpu_cell_profile_reuses_the_middle_forwards() {
+        let none = |_: &str| None;
+        let p = Profile::parse(include_str!(
+            "../../../../scripts/gpu/fixtures/b4a-h3-4step-teacache.toml"
+        ))
+        .unwrap();
+        let c = contract("4step-vsa");
+        let t = H3Techniques::resolve(None, &c, false, Some(&p), &none).unwrap();
+        // The served FastH3 4-step VSA techniques plus the TeaCache.
+        let fasth3 =
+            Profile::parse(crate::techniques::builtin::get("h3/fasth3_4step_vsa").unwrap())
+                .unwrap();
+        let base = H3Techniques::resolve(None, &c, false, Some(&fasth3), &none).unwrap();
+        let mut want = base.plan.names();
+        want.push("teacache");
+        want.sort_unstable();
+        let mut got = t.plan.names();
+        got.sort_unstable();
+        assert_eq!(got, want);
+        let mut tc = t.teacache_state(4).unwrap().unwrap();
+        let reused: Vec<usize> = (0..4)
+            .filter(|&s| {
+                let signal = if tc.needs_signal(Lane::ONLY, s) {
+                    Signal::Distance(0.05)
+                } else {
+                    Signal::None
+                };
+                let d = tc.decide(Lane::ONLY, s, signal).unwrap();
+                if d.compute() {
+                    tc.note_computed(Lane::ONLY, Refresh::None).unwrap();
+                }
+                !d.compute()
+            })
+            .collect();
+        assert_eq!(reused, vec![1, 2]);
+    }
+
     /// `h3/plug_h3_4step_engine_ladder` is h3-max's technique set on the
     /// LongLive-Plug recipe: the same Sol route, plan and settings as
     /// `h3/sol_h3_4step_engine_ladder`, and the same resolution as that

@@ -20,9 +20,9 @@
 # FV_DRY_RUN=1: no GPU and no weights needed. Each cell's command line is
 # logged instead of run (weights not verified, no baseline fetched), so a
 # family's cells can be read off-pod: FV_DRY_RUN=1 FV_WORK=/tmp/fv-dry
-# FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b6.
+# FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b6 (or b4a).
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|b6|h3arms|h3attn}"
+FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|b6|b4a|h3arms|h3attn}"
 DRY_RUN="${FV_DRY_RUN:-0}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
@@ -2095,6 +2095,90 @@ Audio: male speech, clear voice, quiet room"
     b6_pair b6-ltx25-offload-cpu ltx25-two-stage - "${ltx_b6[@]}" --dit "$W/ltx25" \
       --height 512 --width 768 --num-frames 121 --offload cpu --prompt "$PROMPT" --clip
     for f in "$RUNS"/compare/compare-clips-b6-*.json; do
+      [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"
+    done
+    ;;
+  b4a)
+    # Plan B4a (docs/adr/0020-step-cache.md): byte identity of every step
+    # cache a family on the EU volume ships, after the per-family TeaCache /
+    # FBCache controllers became parameter sets of the one implementation.
+    # Each cell runs the baseline binary (FV_BASELINE_SHA's runtime image,
+    # fetch-baseline.sh) and this build with the same command line and
+    # environment, then compare-clips --off-identity; run_cell writes each
+    # arm's frames.sha256.json. Every arm encodes its prompt
+    # (--no-text-cache). Only trees of the EU volume (volumes.sh
+    # FV_EU_VOLUME_TREES): Wan / SANA / LingBot / Cosmos caches (EasyCache,
+    # Taylor, Wan and Cosmos TeaCache) have no tree there; their evidence is
+    # the CPU equality fixtures (step_cache/equality.rs).
+    # FV_B4A_CELLS narrows the cells (default: all four), one per pod when
+    # the coordinator runs them in parallel.
+    base_sha="${FV_BASELINE_SHA:?b4a family needs FV_BASELINE_SHA (the commit before the step-cache unification)}"
+    BASE="$SCRATCH/baseline-$base_sha/fv-gpucheck"
+    if [[ "$DRY_RUN" != 1 ]]; then
+      if ! bash "$(dirname "${BASH_SOURCE[0]}")/fetch-baseline.sh" "$base_sha" "$(dirname "$BASE")" >>"$RUNS/baseline-fetch.log" 2>&1; then
+        log "FATAL: baseline binary sha-$base_sha unavailable (baseline-fetch.log)"
+        tee -a "$LOG" <"$RUNS/baseline-fetch.log"
+        exit 2
+      fi
+      log "baseline $(tail -1 "$RUNS/baseline-fetch.log")"
+    fi
+    # A cold H3 load reads ~70 GB from the volume before its first step.
+    export FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-900}"
+    fx="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures"
+    b4a_cells="${FV_B4A_CELLS:-b4a-h3-fullopt-env b4a-h3-fullopt-prof b4a-h3-4step-tea b4a-ltx25-fbcache}"
+    # b4a_pair <cell> <weight cell> <env K=V ... or -> <fv-gpucheck args ...>:
+    # <cell>-base (the baseline binary) and <cell>-pr (this build), the
+    # frames under <cell>-<arm>/frames, then the byte-identity compare.
+    b4a_pair() {
+      local cell="$1" wcell="$2" envs="$3" arm bin
+      shift 3
+      [[ " $b4a_cells " == *" $cell "* ]] || { log "skip $cell (not in FV_B4A_CELLS)"; return 0; }
+      # shellcheck disable=SC2206
+      local e=($envs)
+      [[ "$envs" == - ]] && e=()
+      for arm in base pr; do
+        bin="$BIN"
+        [[ "$arm" == base ]] && bin="$BASE"
+        gated_cell "$cell-$arm" "$wcell" \
+          env ${e[@]+"${e[@]}"} "$bin" "$@" "$RUNS/$cell-$arm/frames"
+        # The cache's evidence lines (both arms): what was installed, every H3
+        # decision, the LTX skips (debug), and how many forwards reused.
+        [[ -f "$RUNS/$cell-$arm/stderr.log" ]] || continue
+        grep -h 'h3 sol teacache\|h3 teacache:\|h3 teacache step\|ltx2 sol: GB200 FBCache\|ltx2 fbcache reuse\|fuse step cache' \
+          "$RUNS/$cell-$arm/stderr.log" | sed "s/^/[$cell-$arm] /" >"$RUNS/$cell-$arm/cache-evidence.log" || true
+        log "[$cell-$arm] step-cache reuses: $(grep -c 'REUSE\|fbcache reuse' "$RUNS/$cell-$arm/stderr.log" || true)"
+      done
+      compare_cells "$cell-base" "$cell-pr" --off-identity
+    }
+    # H3 at 480p / 5 s, the auto text encoder, each arm encoding its prompt.
+    h3_b4a=(--mode fast h3 gen --weights "$W/h3-base" --height 480 --width 832 --seconds 5
+      --prompt "$PROMPT" --seed "$SEED" --text-encoder auto --no-text-cache --no-mp4)
+    # 1. The RTX 5090 fullopt route from the legacy flag: sol-h3-rtx over 49
+    #    forwards with FASTVIDEO_H3_SOL_CACHE=teacache (rtx_teacache: 0.10 /
+    #    retain 5 / cooldown 1), the `techniques` family's h3-480p-fullopt -env arm.
+    b4a_pair b4a-h3-fullopt-env h3-base "FASTVIDEO_H3_SOL_CACHE=teacache" \
+      "${h3_b4a[@]}" --h3-recipe sol-h3-rtx --clip-dir
+    # 2. The same route from the profile (H3Techniques::teacache_state, the
+    #    profile log line), MXFP8 linears as in the techniques -prof arm.
+    b4a_pair b4a-h3-fullopt-prof h3-base "FASTVIDEO_H3_QUANT=mxfp8" \
+      "${h3_b4a[@]}" --techniques h3/rtx5090_fullopt --clip-dir
+    # 3. FastH3 4-step VSA with a TeaCache that reuses forwards 1 and 2
+    #    (fixtures/b4a-h3-4step-teacache.toml: threshold 1.0, retain 1,
+    #    cooldown 1): two reuses in a row, the decision-reset accumulator.
+    b4a_pair b4a-h3-4step-tea fasth3-4step-vsa - \
+      "${h3_b4a[@]}" --techniques "$fx/b4a-h3-4step-teacache.toml" --clip-dir
+    # 4. LTX-2.5 dev guided audio-to-video with the GB200 stage-1 FBCache
+    #    (FASTVIDEO_LTX2_FBCACHE=1; the only scope fbcache::scope allows),
+    #    20 stage-1 steps at 512p for 49 frames. FASTVIDEO_LOG=debug prints
+    #    each skip ("ltx2 fbcache reuse step pass N"); both arms run it.
+    b4a_pair b4a-ltx25-fbcache ltx25-a2v-guided "FASTVIDEO_LTX2_FBCACHE=1 FASTVIDEO_LOG=debug" \
+      --mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --seed "$SEED" \
+      --two-stage --text streamed --no-text-cache --dit "$W/ltx25-dev/transformer_full" \
+      --height 512 --width 768 --num-frames 49 --dense-stage2 --guided --num-inference-steps 20 \
+      --audio "$fx/speech-flite-44k.flac" \
+      --prompt "A close-up of a woman with short dark hair talking directly to the camera in a bright living room." \
+      --clip
+    for f in "$RUNS"/compare/compare-clips-b4a-*.json; do
       [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"
     done
     ;;

@@ -1352,3 +1352,33 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §5, §6, §7, §8, open decision 2
 - Verification: `tests/frames_digest.rs`, `tests/runner.rs` (`a_failing_nvidia_smi_is_fatal`, the digest of an arm), `pod::tests` (tags, `name_taken`, `reap_recorded`, `reap_account`, `judge_run`, the fetch), the bin's `after_delete` test, `scripts/ci/test_tools_release.sh` (fv-lab version gate, lab-build contexts), `fv-lab-goldens.sh --check` (compare-runs self-test)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-step-cache-home
+- Trigger: plan B4a; nine step-cache controllers in five families (review §3, §5.2)
+- Options: a `StepCache` module in fastvideo-cudarc (`rt/`); `fastvideo_models::techniques::step_cache`
+- Decision: `fastvideo_models::techniques::step_cache`: the trait and one `EasyCache` / `TeaCache` / `FbCache` / `Taylor`, scalars only; signals, residuals, factors and the device reductions stay in each family's cudarc runtime
+- Reason: every copy already lived in fastvideo-models and holds only scalars, so it tests without CUDA; the techniques layer owns the `step_output` seam and the settings; cudarc depends on models
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0020-step-cache.md
+- Verification: `cargo test -p fastvideo-models step_cache`, cudarc/models/engine-service/core tests
+
+### FVID · 2026-10-24 · FVID-2026-10-24-step-cache-parameters
+- Trigger: the per-family copies differ in arithmetic (accumulator reset point, `>=` vs `<`, f32 accumulator, Horner form, forced steps, zero-guarded caps, EasyCache estimators)
+- Options: normalise to one rule; keep each behaviour as a named parameter
+- Decision: named parameters (`ResetOn`, `Accumulate`, `Rescale`, `Comparison`, `Cooldown`, `Cap`, `Estimator`, `EasyLabels`), each family a parameter set; two uniform writings only where provably the same numbers (Wan EasyCache's `initialize` clear; Cosmos counting a reuse in `note_reused`)
+- Reason: byte identity first (plan §1); a normalisation changes clips
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0020-step-cache.md "The arithmetic each implementation preserves"
+- Verification: `step_cache/equality.rs` against the verbatim pre-B4a controllers in `step_cache/legacy.rs` (decisions and latents bit for bit; mutations of H3 `ResetOn` and A14B `Estimator` fail it)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-step-cache-gpu-cells
+- Trigger: B4a's exit criterion (byte identity per family) needs GPU cells; only H3 and LTX trees are on the EU volume
+- Options: cells for every family (R2 trees, large downloads); EU-volume families only, CPU fixtures for the rest
+- Decision: `runpod-matrix.sh b4a`, four cells (H3 fullopt TeaCache from the flag and from the profile, a 4-step VSA TeaCache reuse fixture, LTX-2.5 dev guided FBCache), base vs PR with `--off-identity` and each arm's `frames.sha256.json`; `FV_B4A_CELLS` narrows; Wan / SANA / LingBot / Cosmos / Cosmos3 (EasyCache, Taylor, their TeaCaches) rest on the CPU equality fixtures
+- Reason: the owner's EU-volume-only GPU rule (plan §1); new weight downloads need approval
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0020-step-cache.md "Evidence"
+- Verification: `FV_DRY_RUN=1 bash scripts/gpu/runpod-matrix.sh b4a`; GPU run by the coordinator; `h3::techniques::tests::b4a_gpu_cell_profile_reuses_the_middle_forwards`
