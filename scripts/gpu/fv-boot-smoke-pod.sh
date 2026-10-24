@@ -104,7 +104,7 @@ JOB_STATUS="skipped"; T_JOB0=""; T_JOB1=""
 if [ -n "$T_READY" ] && [ "${FV_SMOKE_GENERATE:-1}" = 1 ]; then
   model="${FV_SMOKE_MODEL:-$(curl -s --max-time 10 "$BASE/fv/v1/capabilities" | python3 -c 'import json,sys
 m = (json.load(sys.stdin).get("models") or [{}])[0]
-print(m.get("id") or m.get("name") or "")' 2>/dev/null)}"
+print(m.get("id") or (m.get("caps") or {}).get("id") or "")' 2>/dev/null)}"
   body="$(python3 -c 'import json,sys
 b = {"model": sys.argv[1], "prompt": "a red fox trotting through fresh snow", "seed": 1, "short_edge": 480, "aspect_ratio": "16:9"}
 b.update(json.loads(sys.argv[2] or "{}"))
