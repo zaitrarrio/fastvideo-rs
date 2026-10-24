@@ -22,8 +22,9 @@
 # family's cells can be read off-pod: FV_DRY_RUN=1 FV_WORK=/tmp/fv-dry
 # FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b6 (or b4a). A dry
 # run neither fetches the baseline binary nor the TAE files, and with
-# FV_DRY_RUN_GATES=<file> it appends "<cell>\t<verify-weights.sh cell>" per
-# gated cell (fv-lab's goldens, scripts/gpu/tests/fv-lab-goldens.sh).
+# FV_DRY_RUN_GATES=<file> it appends one line per gated cell ("arm", its
+# verify-weights.sh cell, its TAE file or -) and per promotion gate ("gate",
+# kind, OFF arm or -), for fv-lab's goldens (scripts/gpu/tests/fv-lab-goldens.sh).
 set -euo pipefail
 FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|b6|b4a|h3arms|h3attn}"
 DRY_RUN="${FV_DRY_RUN:-0}"
@@ -216,10 +217,11 @@ gated_cell() {
     log "skip $name (not in FV_CELLS)"
     return 0
   fi
-  # FV_DRY_RUN_GATES=<file> (dry run only): one "<name>\t<weight cell>" line
-  # per gated cell, for the goldens of fv-lab (scripts/gpu/tests/fv-lab-goldens.sh).
+  # FV_DRY_RUN_GATES=<file> (dry run only): one "arm\t<name>\t<weight
+  # cell>\t<TAE file or ->" line per gated cell, for the goldens of fv-lab
+  # (scripts/gpu/tests/fv-lab-goldens.sh); gate_cells adds its "gate" lines.
   if [[ "$DRY_RUN" == 1 && -n "${FV_DRY_RUN_GATES:-}" ]]; then
-    printf '%s\t%s\n' "$name" "$wcell" >>"$FV_DRY_RUN_GATES"
+    printf 'arm\t%s\t%s\t%s\n' "$name" "$wcell" "${dry_tae:--}" >>"$FV_DRY_RUN_GATES"
   fi
   if [[ "$DRY_RUN" != 1 ]] && ! FV_WEIGHTS="$W" bash "$VERIFY" "$wcell" >"$RUNS/$name.weights.log" 2>&1; then
     mkdir -p "$RUNS/$name"
@@ -246,6 +248,7 @@ fi
 TAEH3="$TAE/taeh3.safetensors"
 TAELTX="$TAE/taeltx2_3_wide.safetensors"
 tae_fetched=""
+dry_tae=""
 tae_gated_cell() {
   local name="$1" file="$2"
   shift 2
@@ -264,7 +267,9 @@ tae_gated_cell() {
     write_json "$RUNS/$name/summary.json" "$(printf '{"cell":"%s","family":"%s","exit":null,"skipped":"tae weights missing"}' "$name" "$FAMILY")"
     return 0
   fi
+  dry_tae="$file"
   gated_cell "$name" "$@"
+  dry_tae=""
 }
 
 # Paired-clip quality gate (`fv-gpucheck compare-clips`): the candidate
@@ -324,6 +329,10 @@ compare_cells() {
 gate_cells() {
   local base="$1" cand="$2" kind="${3:-lossy}" off="${4:-}" tag="$1--$2" dir="$RUNS/gate" f
   local cmp=() offs=()
+  # FV_DRY_RUN_GATES (dry run only): "gate\t<baseline>\t<candidate>\t<kind>\t<off or ->".
+  if [[ "$DRY_RUN" == 1 && -n "${FV_DRY_RUN_GATES:-}" ]]; then
+    printf 'gate\t%s\t%s\t%s\t%s\n' "$base" "$cand" "$kind" "${off:--}" >>"$FV_DRY_RUN_GATES"
+  fi
   mkdir -p "$dir"
   # A prompt set's reports are <tag>-<prompt>.json, one per prompt directory
   # of the candidate's frames. Globbing <tag>-* instead would also take the
@@ -1918,6 +1927,13 @@ Audio: male speech, clear voice, quiet room"
     #   <cell>-prof: this build, the matching --techniques profile.
     # compare-clips --off-identity: base vs env and base vs prof must be
     # byte-identical; benchmark.json carries the timings of each arm.
+    # Every H3 arm has its own text cache and AdaLN cache (keyed by the arm):
+    # its warm-up encodes the prompt and computes the AdaLN projections with
+    # its own binary, its timed pass reads them back. Before 2026-10-24 the
+    # arms shared both caches, so the candidate build's -env / -prof arms read
+    # embeddings and projections the baseline binary wrote, and the identity
+    # did not cover the candidate's H3 text-encoder or AdaLN paths
+    # (docs/techniques.md, docs/adr/0019-fv-lab.md §9.4).
     # FV_TECH_CELLS narrows the cells (default: all four).
     base_sha="${FV_BASELINE_SHA:?techniques family needs FV_BASELINE_SHA (the pre-refactor commit)}"
     BASE="$SCRATCH/baseline-$base_sha/fv-gpucheck"
@@ -1929,15 +1945,6 @@ Audio: male speech, clear voice, quiet room"
       fi
       log "baseline $(tail -1 "$RUNS/baseline-fetch.log")"
     fi
-    h3_common=(
-      --prompt "$PROMPT"
-      --seconds 5
-      --seed "$SEED"
-      --text-encoder auto
-      --text-cache "$SCRATCH/h3-text-cache"
-      --text-weights "$W/h3-base"
-      --warm
-    )
     tech_cells="${FV_TECH_CELLS:-fasth3-8step-768p fasth3-4step-vsa-768p h3-480p-fullopt ltx25-512p-sol}"
     want() { [[ " $tech_cells " == *" $1 "* ]]; }
     # tech_h3 <cell> <weight cell> <weights dir> <profile> <env for base/env arms> -- <recipe args>
@@ -1965,8 +1972,10 @@ Audio: male speech, clear voice, quiet room"
         gated_cell "$cell-$arm" "$wcell" \
           env ${e[@]+"${e[@]}"} \
           "$bin" --mode fast h3 gen --weights "$W/$weights" "${extra[@]}" \
-            --adaln-cache "$RUNS/$cell-adaln.cache" \
-            --clip-dir "$RUNS/$cell-$arm/frames" "${h3_common[@]}"
+            --adaln-cache "$RUNS/$cell-$arm-adaln.cache" \
+            --clip-dir "$RUNS/$cell-$arm/frames" \
+            --prompt "$PROMPT" --seconds 5 --seed "$SEED" --text-encoder auto \
+            --text-cache "$SCRATCH/h3-text-cache-$cell-$arm" --text-weights "$W/h3-base" --warm
       done
       compare_cells "$cell-base" "$cell-env" --off-identity
       compare_cells "$cell-base" "$cell-prof" --off-identity

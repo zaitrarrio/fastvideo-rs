@@ -10,12 +10,13 @@
 # Fixtures, per family <f> (every [[tier]] name of lab/tiers.toml):
 #   <f>-dry-run.txt            FV_DRY_RUN=1 runpod-matrix.sh <f>: every log line of the
 #                              family without its [HH:MM:SS] stamp, the volume at
-#                              /workspace, the container disk at /fvscratch, the
+#                              /workspace (its auxiliary/tae complete), the container disk at /fvscratch, the
 #                              repository at /opt/fastvideo-rs (the image's root), run
 #                              tag $TAG, baseline commit $BASELINE_SHA
-#   <f>-gates.tsv              <arm> <verify-weights.sh cell> <its needs>: the cells
-#                              gated_cell saw in that dry run (FV_DRY_RUN_GATES), and
-#                              `verify-weights.sh --list` for each cell
+#   <f>-gates.tsv              in run order (FV_DRY_RUN_GATES): `arm <name> <verify-weights.sh
+#                              cell> <TAE file or -> <the cell's needs>` per gated cell
+#                              (`verify-weights.sh --list`), `gate <baseline> <candidate>
+#                              <kind> <OFF arm or ->` per promotion gate
 #   runpod-http-<f>.json       FV_FAMILY=<f> runpod-http.sh plan $SHA $TAG with
 #                              FV_POD_PREFIX=fv-lab: the PodCreateInput of the run (jq -S)
 # and once:
@@ -57,7 +58,11 @@ list="$(clean bash "$ROOT/scripts/gpu/verify-weights.sh" --list)"
 FIXTURES=()
 for FAMILY in $FAMILIES; do
   rm -rf "$TMP/work" "$TMP/scratch" "$TMP/pairs.txt"
-  mkdir -p "$TMP/work" "$TMP/scratch"
+  # The volume's TAE copy is complete, as on bz0ofkfx45 (auxiliary/tae): the
+  # script's $TAE is then /workspace/weights/auxiliary/tae, not the container
+  # disk, so a cell that hard-codes {scratch}/tae differs.
+  mkdir -p "$TMP/work/weights/auxiliary/tae" "$TMP/scratch"
+  : >"$TMP/work/weights/auxiliary/tae/.complete"
   # 1. The dry run: the commands, in order (the family's own log lines).
   clean FV_DRY_RUN=1 FV_DRY_RUN_GATES="$TMP/pairs.txt" FV_WORK="$TMP/work" FV_SCRATCH="$TMP/scratch" \
     FV_RUN_TAG="$TAG" FV_BASELINE_SHA="$BASELINE_SHA" \
@@ -67,13 +72,20 @@ for FAMILY in $FAMILIES; do
     | sed -e "s#$TMP/scratch#/fvscratch#g" -e "s#$TMP/work#/workspace#g" -e "s#$ROOT#/opt/fastvideo-rs#g" \
       >"$TMP/new/$FAMILY-dry-run.txt"
 
-  # 2. The weight gates: every `gated_cell <arm> <cell>` the dry run reached.
+  # 2. The gates, in run order: every `gated_cell` the dry run reached
+  #    (arm, weight cell, TAE file or -, the cell's needs) and every
+  #    `gate_cells` (gate, baseline, candidate, kind, OFF arm or -).
   [[ -s "$TMP/pairs.txt" ]] || { echo "fv-lab-goldens: $FAMILY gated no cell" >&2; exit 2; }
-  while IFS=$'\t' read -r arm cell; do
-    needs="$(awk -v c="$cell" '$1 == c { $1 = ""; sub(/^ +/, ""); print; exit }' <<<"$list")"
-    [[ -n "$needs" ]] || { echo "fv-lab-goldens: verify-weights.sh --list has no cell $cell" >&2; exit 2; }
-    printf '%s\t%s\t%s\n' "$arm" "$cell" "$needs"
-  done <"$TMP/pairs.txt" >"$TMP/new/$FAMILY-gates.tsv"
+  while IFS=$'\t' read -r what a b c d; do
+    case "$what" in
+      arm)
+        needs="$(awk -v x="$b" '$1 == x { $1 = ""; sub(/^ +/, ""); print; exit }' <<<"$list")"
+        [[ -n "$needs" ]] || { echo "fv-lab-goldens: verify-weights.sh --list has no cell $b" >&2; exit 2; }
+        printf 'arm\t%s\t%s\t%s\t%s\n' "$a" "$b" "$c" "$needs" ;;
+      gate) printf 'gate\t%s\t%s\t%s\t%s\n' "$a" "$b" "$c" "$d" ;;
+      *) echo "fv-lab-goldens: unknown FV_DRY_RUN_GATES line $what" >&2; exit 2 ;;
+    esac
+  done <"$TMP/pairs.txt" | sed -e "s#$TMP/scratch#/fvscratch#g" -e "s#$TMP/work#/workspace#g" >"$TMP/new/$FAMILY-gates.tsv"
 
   # 3. The pod body.
   clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY="$FAMILY" \
@@ -121,6 +133,25 @@ cp -a "$TMP/rb" "$TMP/rg"; rep "$TMP/rg" gate/gate-a--s.json fail ok fail
 clean bash "$CMP" "$TMP/ra" "$TMP/rg" >/dev/null || { echo "fv-lab-goldens: compare-runs failed on another gate verdict (timings)" >&2; rc=1; }
 cp -a "$TMP/rb" "$TMP/rh"; rm "$TMP/rh/compare/compare-clips-a--s.json"
 cp -a "$TMP/rb" "$TMP/ri"; rm "$TMP/ri/gate/gate-a--s.json"
+# Nothing compared: both runs skipped every arm, both crashed every arm, or
+# both summaries are unreadable. Equal, but no evidence: must fail.
+for r in sa sb; do
+  mkdir -p "$TMP/$r/s"; echo '{"cell":"s","exit":null,"skipped":"weights incomplete"}' >"$TMP/$r/s/summary.json"
+done
+for r in ca cb; do
+  mkdir -p "$TMP/$r/a"; echo '{"cell":"a","exit":101,"seconds":3}' >"$TMP/$r/a/summary.json"
+done
+for r in ua ub; do
+  mkdir -p "$TMP/$r/a"; echo 'not json' >"$TMP/$r/a/summary.json"
+done
+for pair in "sa sb" "ca cb" "ua ub"; do
+  read -r x y <<<"$pair"
+  if clean bash "$CMP" "$TMP/$x" "$TMP/$y" >/dev/null; then echo "fv-lab-goldens: compare-runs passed with nothing compared ($pair)" >&2; rc=1; fi
+done
+# Unreadable reports on both sides are a difference too.
+cp -a "$TMP/rb" "$TMP/rj"; cp -a "$TMP/rb" "$TMP/rk"
+echo 'not json' >"$TMP/rj/compare/compare-clips-a--s.json"; echo 'not json' >"$TMP/rk/compare/compare-clips-a--s.json"
+if clean bash "$CMP" "$TMP/rj" "$TMP/rk" >/dev/null; then echo "fv-lab-goldens: compare-runs passed two unreadable reports" >&2; rc=1; fi
 for bad in rc rd re rf rh ri; do
   if clean bash "$CMP" "$TMP/ra" "$TMP/$bad" >/dev/null; then echo "fv-lab-goldens: compare-runs missed a difference ($bad)" >&2; rc=1; fi
 done

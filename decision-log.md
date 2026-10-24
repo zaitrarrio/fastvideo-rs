@@ -1442,3 +1442,23 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §9.1
 - Verification: n/a (no change)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-techniques-per-arm-caches
+- Trigger: review of #176. The `techniques` H3 arms shared `--text-cache $SCRATCH/h3-text-cache` (no code version in the key) and `--adaln-cache $RUNS/<cell>-adaln.cache` (skips the projections when the file exists), so the candidate build's `-env` / `-prof` read what the baseline binary wrote
+- Options: `--no-text-cache` and no AdaLN cache (as `b6`); a text cache and an AdaLN cache per arm
+- Decision: per arm (`h3-text-cache-<arm>`, `<arm>-adaln.cache`), in `runpod-matrix.sh` and the `techniques-*` cells in lockstep. Each arm's warm-up computes both with its own binary, and its timed pass reads them; the goldens are regenerated from the changed script. Before this, `techniques` gates did not cover the candidate's H3 text-encoder or AdaLN paths (noted in docs/techniques.md and ADR-0019 §9.4)
+- Reason: keeps the family's intent (one warm process per arm, cache-on timings comparable with earlier runs) while the compared pass uses only the candidate's own encoder and AdaLN output
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §9.4
+- Verification: the `techniques` dry-run golden (per-arm paths on both runners); the coordinator's `techniques` GPU run
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-lab-gates-fail-closed
+- Trigger: review of #176. `fv-lab-compare-runs.sh` passed two all-skipped runs, and two unreadable reports compared equal. `pod up` accepted a baseline equal to the run's commit, and an unchecked `FV_BASELINE_SHA` in `--extra-env`. The goldens could not see a gate's kind / OFF arm or an arm's TAE gating
+- Options: document the gaps; close them
+- Decision: compare-runs fails unless at least one arm ran (exit 0) with byte-identical frames in both runs, treats anything unreadable as a difference, and prints the ran / skipped / failed counts. `pod::baseline_for_pod` refuses a baseline equal to `--sha`, a malformed or empty `FV_BASELINE_SHA` in `--extra-env`, and the commit given twice; the runner stops when the baseline's build-id is the image's. `FV_DRY_RUN_GATES` records `arm … <TAE file or ->` and `gate … <kind> <off or ->` in run order, and the golden volume's `auxiliary/tae` is complete, as on `bz0ofkfx45`
+- Reason: a gate must fail when it did not compare anything, and a hard-coded path or a changed gate kind must fail the goldens
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §9.2, §9.3, §9.5
+- Verification: `fv-lab-goldens.sh --check` (negative cases: all-skipped, all-crashed, unreadable summaries and reports), `pod::tests::the_baseline_commit_of_a_pod_fails_closed`, `tests/fv_lab_bin.rs::a_baseline_tier_needs_the_baseline_commit`, `tests/runner.rs::a_baseline_that_is_this_build_is_fatal`, `tests/dry_run.rs::arms_and_gates_are_the_scripts_and_arms_name_their_trees`

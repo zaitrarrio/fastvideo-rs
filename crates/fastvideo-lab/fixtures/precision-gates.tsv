@@ -1,8 +1,14 @@
-fasth3-8step-768p-f32act	fasth3-8step	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
-fasth3-8step-768p-bf16act	fasth3-8step	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
-fasth3-8step-768p-w8a8	fasth3-8step	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
-fasth3-8step-768p-mxfp8	fasth3-8step	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
-ltx25-4k5s-sol-f32act	ltx25-two-stage	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
-ltx25-4k5s-sol-bf16act	ltx25-two-stage	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
-ltx25-4k5s-sol-fp8	ltx25-two-stage	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
-ltx25-4k5s-sol-bf16act-fp8	ltx25-two-stage	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	fasth3-8step-768p-f32act	fasth3-8step	-	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	fasth3-8step-768p-bf16act	fasth3-8step	-	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	fasth3-8step-768p-w8a8	fasth3-8step	-	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	fasth3-8step-768p-mxfp8	fasth3-8step	-	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+gate	fasth3-8step-768p-f32act	fasth3-8step-768p-bf16act	lossy	-
+gate	fasth3-8step-768p-f32act	fasth3-8step-768p-w8a8	lossy	-
+gate	fasth3-8step-768p-f32act	fasth3-8step-768p-mxfp8	lossy	-
+arm	ltx25-4k5s-sol-f32act	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	ltx25-4k5s-sol-bf16act	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	ltx25-4k5s-sol-fp8	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	ltx25-4k5s-sol-bf16act-fp8	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+gate	ltx25-4k5s-sol-f32act	ltx25-4k5s-sol-bf16act	lossy	-
+gate	ltx25-4k5s-sol-f32act	ltx25-4k5s-sol-fp8	lossy	-
+gate	ltx25-4k5s-sol-f32act	ltx25-4k5s-sol-bf16act-fp8	lossy	-

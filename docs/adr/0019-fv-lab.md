@@ -335,7 +335,15 @@ test (`tests/schema.rs`) also names the new keys.
    runner fetches it after `matrix start` and the GPU checks, once, when any selected cell has a baseline arm. It logs
    `baseline <the fetch's last line>`. A failed fetch is the script's FATAL (exit 2, before any arm). The commit
    comes from `fv-lab run --baseline-sha` / `FV_BASELINE_SHA`. `fv-lab pod up --baseline-sha <7>` puts it in the pod's
-   run environment (`FV_EXTRA_ENV`), and refuses a tier with baseline arms without it. The arm is the same file as its
+   run environment (`FV_EXTRA_ENV`), and refuses a tier with baseline arms without it.
+
+   The baseline fails closed (review of #176):
+   - `pod up` refuses a baseline equal to `--sha`. A byte-identity gate of a build against itself passes whatever
+     the build does.
+   - `pod up` refuses a `FV_BASELINE_SHA` in `--extra-env` that is not 7 hex digits, including an empty value.
+   - `pod up` refuses the commit given twice (`pod::baseline_for_pod`).
+   - The runner logs the baseline's `fv-gpucheck.build-id` beside the image's, and stops (FATAL) when they are the
+     same build. The script has no such check. The arm is the same file as its
    `-pr` / `-env` twin but for `bin`, so `--off-identity` compares stay a byte-identity check of the two binaries.
    Why: the script's identity families have a baseline binary, and a cell arm needs a way to name it.
 2. **`env = []`** (`env: Option<Vec<String>>`). If `env` is absent, the command line has no `env` prefix. If it is
@@ -364,9 +372,19 @@ cell's note names it.
 `scripts/gpu/tests/fv-lab-goldens.sh` now reads the tier names from `lab/tiers.toml`, so a new tier with no fixture
 fails `--check`. It writes `<tier>-dry-run.txt`, `<tier>-gates.tsv` and `runpod-http-<tier>.json` for every tier,
 under `env -i` as before, with `FV_BASELINE_SHA=7654321`. The repository path is written as `/opt/fastvideo-rs`, the
-image's root, which is what `{root}` renders on a pod (the b6 fixtures under `scripts/gpu/fixtures/`). The gate pairs
-come from the dry run itself: `FV_DRY_RUN_GATES=<file>` makes `gated_cell` append `<arm>\t<cell>`. This replaces
-D1a's awk over the branch, which cannot expand loops. The `rtx6000` fixtures come out byte-identical.
+image's root, which is what `{root}` renders on a pod (the b6 fixtures under `scripts/gpu/fixtures/`). The fake
+volume's `auxiliary/tae` is marked complete, as on `bz0ofkfx45`, so `$TAE` is `/workspace/weights/auxiliary/tae`.
+A cell that hard-coded `{scratch}/tae` would differ.
+
+`<tier>-gates.tsv` comes from the dry run itself, in run order, through `FV_DRY_RUN_GATES=<file>`:
+- each `gated_cell` writes `arm <name> <verify-weights.sh cell> <TAE file or ->`, and the goldens add that cell's
+  needs;
+- each `gate_cells` writes `gate <baseline> <candidate> <kind> <OFF arm or ->`, which the dry run's log never
+  showed.
+
+So a gate's `kind` / `off`, and whether an arm is TAE-gated, are checked too. A cell that wrote the TAE path into
+its argv without `tae` would match the dry run and fail here. This replaces D1a's awk over the branch, which cannot
+expand loops.
 
 Script changes, dry run only: `FV_DRY_RUN_GATES`; a dry `tae_gated_cell` neither fetches nor checks the file, it logs
 the command (before this change a dry `rtx5090` would download the TAE files); and `techniques` skips the baseline
@@ -389,19 +407,42 @@ is `h3-8step`, and that a cell belongs to exactly one tier.
 |---|---|---|---|
 | summaries copied into `live.log` after arms (b6 stage lines, techniques / b6 compare fields, h3arms reuse counts and gate verdicts, trace `/gpu_trace`, ltxfps PASS/FAIL, ltxvae decode lines) | yes | no | log only: each is a `grep` of a file both runners write and both fetches take (`stderr.log`, `compare/*.json`, `gate/*.json`). Nothing reads them from `live.log`. D1c's `report` reads the files |
 | `FV_TECH_CELLS`, `FV_B6_CELLS` (narrow by pair) | yes | `--cells` / `FV_CELLS` by arm (`<pair>-base,<pair>-pr`), or `fv-lab run <cell> --family <tier>` | arms are the unit of a run directory |
+| `techniques` H3 caches | shared by the three arms until this PR | per arm, both sides | see below |
 | `FV_GEN_TIMEOUT_S` default 900 (`b6`) | when run by hand | the tier's 3600 | `runpod-http.sh` passes 3600 to every family, so 900 never applied on a pod |
 | `FV_PROMPTS`, `FV_LPIPS` defaults meant for `h3arms` | honoured | `FV_PROMPTS` ignored (§7), `--lpips` | a prompt set is a cell's workload; a `h3arms-eval` tier with `prompt_set` is one cell file each when wanted |
 | `FV_VAE_*` (`ltxvae`), `FV_LTXFPS*`, `FV_PRECISION_ARM` | change the arms | not read | the cells are the defaults; another variant is another tier |
+
+**`techniques`: the H3 caches were shared, and the identity missed two code paths (review of #176).**
+- **What was wrong:** the three H3 arms of a `tech_h3` cell shared `--text-cache $SCRATCH/h3-text-cache` (keyed by
+  prompt, tokenizer and encoder weights, with no code version: fastvideo-cudarc `h3/text_cache.rs`) and
+  `--adaln-cache $RUNS/<cell>-adaln.cache` (it skips the AdaLN projections when the file exists). `-base` ran first
+  and wrote both, and the candidate build's `-env` / `-prof` read them.
+- **Consequence:** `techniques` gates before this fix did not cover the candidate build's H3 text encoder or its
+  AdaLN path. A regression in either would have passed `--off-identity`.
+- **Fix, in the script and the cells in lockstep:** every H3 arm has its own `h3-text-cache-<arm>` and
+  `<arm>-adaln.cache`. Its warm-up encodes and projects with its own binary, and its timed pass (the compared one)
+  reads them back. The cache-on path is still exercised, now within each arm. The family's intent (one warm process
+  per arm, timings comparable with earlier `techniques` runs) is kept.
+- **Not chosen:** `--no-text-cache` and no AdaLN cache, as `b6` runs. That would change what `-prof`'s timings
+  measure.
+- **Not affected:** the LTX cell already encodes per arm.
+- This is the one real-run change to `runpod-matrix.sh` in D1b. The goldens are regenerated from the changed script.
+  `docs/techniques.md` notes the gap.
 
 #### 9.5 The GPU gate per family (the coordinator's)
 
 The procedure is §8's. Use one commit for both sides: this PR's head or its merge, once
 `fastvideo-rs-runtime:sha-<7>` is published (the image carries the new `lab/` and fv-lab). Use the cheapest cells
 that exercise the new parts. Both runners honour `FV_CELLS`. An unselected arm is logged `skip`. A compare whose
-frames are missing writes the same `skipped` report on both sides. `fv-lab-compare-runs.sh` now also requires each
-compare report (`compare/compare-clips-*.json`) to agree on `status` and the off-identity status, and each gate
-report to exist in both runs. A gate's verdict weighs timings, which differ between pods, so only its presence is
-compared. The baseline families need `BASE`, a commit whose runtime image is published (e.g. `e93e357`, the B4a gate's
+frames are missing writes the same `skipped` report on both sides.
+
+`fv-lab-compare-runs.sh` now also checks:
+- each compare report (`compare/compare-clips-*.json`) agrees on `status` and the off-identity status;
+- each gate report exists in both runs (a gate's verdict weighs timings, which differ between pods, so only its
+  presence is compared);
+- any unreadable summary, frames record or report is a difference;
+- it fails unless at least one arm ran (exit 0) with byte-identical frames in both runs, because two all-skipped or
+  all-crashed runs are equal but prove nothing. It prints how many arms ran, were skipped and failed alike. The baseline families need `BASE`, a commit whose runtime image is published (e.g. `e93e357`, the B4a gate's
 baseline).
 
 ```sh
@@ -416,7 +457,7 @@ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/$FAMILY/$SHA-<MMDDHHMMS
 
 | family | `CELLS` (cheapest that exercises it) | what it proves | est. per side | est. total |
 |---|---|---|---|---|
-| `techniques` | `h3-480p-fullopt-base h3-480p-fullopt-env h3-480p-fullopt-prof` | baseline fetch, bare `env`, the profile arm, 2 `--off-identity` reports | ~20 min | ~$1.70 |
+| `techniques` | `h3-480p-fullopt-base h3-480p-fullopt-env h3-480p-fullopt-prof` | baseline fetch, bare `env`, the profile arm, per-arm text and AdaLN caches (each arm encodes with its own binary), 2 `--off-identity` reports | ~22 min | ~$1.85 |
 | `b6` | `b6-solh3-tree-base b6-solh3-tree-pr` | a baseline pair, 1 `--off-identity` report | ~20 min | ~$1.70 |
 | `rtx5090` | `h3-480p-dense h3-480p-sol h3-480p-fullopt h3-480p-fullopt-taeh3` | TAE arm via `{tae}`, 4 compares | ~25 min | ~$2.10 |
 | `fastvideo` | `fasth3-4step-vsa-480p fasth3-4step-vsa-480p-taeh3 fasth3-8step-480p fasth3-8step-480p-taeh3` | a standalone `[[gate]]`, TAE, 2 skipped arms | ~15 min | ~$1.25 |
@@ -428,7 +469,7 @@ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/$FAMILY/$SHA-<MMDDHHMMS
 
 The estimates are for the PRO 6000 at about $2.49/hr. They come from the D1a gate (two arms, ~15 min per side), b6
 (~7 min per arm) and B4a (one 480p pair per pod, ~12 min). Pod boot and the preflight add ~5 min per side. All nine
-come to about $13. Run both sides of a family in parallel. Pass, for each family: `fv-lab-compare-runs.sh` exits 0,
+come to about $13. Run both sides of a family in parallel. Pass, for each family: `fv-lab-compare-runs.sh` exits 0 (at least one arm ran with byte-identical frames),
 both `matrix_exit=0`. That family's `case` branch is then deleted in the next D1 PR. Once a family's branch is gone,
 `runpod-http.sh run` for it calls `fv-lab pod up --wait` (§8 D1b).
 

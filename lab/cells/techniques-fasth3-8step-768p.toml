@@ -3,8 +3,12 @@
 # image, fetch-baseline.sh) with the legacy flags, this build with the same
 # command line, and this build from the matching --techniques profile; base vs
 # env and base vs prof must be byte-identical (compare-clips --off-identity).
-# `env = []` keeps the script's bare `env` before the binary. Schema:
-# crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md (D1b).
+# Each arm has its own text cache and AdaLN cache ({arm} in both paths): its
+# warm-up computes them with its own binary, so the identity covers the
+# candidate's H3 text-encoder and AdaLN paths (ADR-0019 §9.4; before
+# 2026-10-24 the arms shared both). `env = []` keeps the script's bare `env`
+# before the binary. Schema: crates/fastvideo-lab/schemas/cell.v1.json;
+# docs/adr/0019-fv-lab.md (D1b).
 schema = 1
 name = "techniques-fasth3-8step-768p"
 description = "FastH3 8-step at the recipe's canvas: baseline binary, this build, this build from profiles/h3/fasth3_8step; byte identity"
@@ -18,7 +22,7 @@ note = "runpod-matrix.sh's default PROMPT and SEED; the canvas and steps are the
 
 [lists]
 h3_common = ["--prompt", "{prompt}", "--seconds", "{seconds}", "--seed", "{seed}", "--text-encoder", "auto",
-  "--text-cache", "{scratch}/h3-text-cache", "--text-weights", "{weights}/h3-base", "--warm"]
+  "--text-cache", "{scratch}/h3-text-cache-{arm}", "--text-weights", "{weights}/h3-base", "--warm"]
 
 [[arm]]
 name = "fasth3-8step-768p-base"
@@ -27,7 +31,7 @@ trees = ["h3-8step", "h3-base"]
 bin = "baseline"
 env = []
 argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-8step", "--h3-recipe", "8step",
-  "--adaln-cache", "{runs}/fasth3-8step-768p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
 
 [[arm]]
 name = "fasth3-8step-768p-env"
@@ -35,7 +39,7 @@ gate = "fasth3-8step"
 trees = ["h3-8step", "h3-base"]
 env = []
 argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-8step", "--h3-recipe", "8step",
-  "--adaln-cache", "{runs}/fasth3-8step-768p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
 
 [[arm]]
 name = "fasth3-8step-768p-prof"
@@ -44,7 +48,7 @@ trees = ["h3-8step", "h3-base"]
 note = "the profile replaces --h3-recipe 8step"
 env = []
 argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-8step", "--techniques", "h3/fasth3_8step",
-  "--adaln-cache", "{runs}/fasth3-8step-768p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
 
 [[compare]]
 baseline = "fasth3-8step-768p-base"

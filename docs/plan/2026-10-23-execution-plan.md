@@ -863,3 +863,13 @@ ran (pod id, $/hr), result, cost.
   workspace clippy, fmt, lint and goldens `--check` all green. No Runpod call.
   GPU runs (coordinator), one per family, cheapest cells, about $13 in all:
   ADR-0019 §9.5.
+- 2026-10-24 16:20Z: D1b review fixes on #176 (main merged in):
+  - `fv-lab-compare-runs.sh` fails unless an arm ran with byte-identical frames, treats unreadable files as
+    differences and prints ran / skipped / failed counts;
+  - `pod up` refuses a baseline equal to `--sha` and a malformed or empty `FV_BASELINE_SHA` in `--extra-env`, and the
+    runner refuses a baseline that is this build;
+  - the goldens record gate kind / OFF arm and each arm's TAE file, with the volume's TAE copy complete;
+  - the `techniques` H3 arms get their own text and AdaLN caches in the script and the cells. Before this, those
+    gates did not cover the candidate's H3 text-encoder or AdaLN paths (docs/techniques.md);
+  - CI path filters and the control.yml step name fixed.
+  CPU only, build pod `l3d75u8a8zhw47`: lab tests, workspace clippy, fmt, lint and goldens all green.

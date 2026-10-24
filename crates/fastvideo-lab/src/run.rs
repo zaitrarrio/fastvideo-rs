@@ -567,6 +567,19 @@ impl Runner {
             return Err(RunError::Fatal(why));
         }
         self.log(&format!("baseline {}", text.lines().last().unwrap_or("")));
+        // A baseline that is this build makes every byte-identity compare
+        // pass whatever the build does: refuse it (fv-lab only; `pod up`
+        // also refuses a baseline commit equal to the run's).
+        let base_id = build_id(&dir.join("fv-gpucheck"));
+        let image_id = build_id(&self.cfg.bin);
+        self.log(&format!(
+            "baseline build-id {base_id}, image build-id {image_id}"
+        ));
+        if base_id != "unknown" && base_id == image_id {
+            let why = format!("the baseline binary sha-{sha} is this build ({base_id})");
+            self.log(&format!("FATAL: {why}"));
+            return Err(RunError::Fatal(why));
+        }
         Ok(())
     }
 

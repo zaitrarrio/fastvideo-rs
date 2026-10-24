@@ -422,6 +422,20 @@ the host, and a hit feeds those to the DiT where a miss passes the device
 tensors, which is the likely cause (not yet isolated: a process never hits
 an entry it stored itself). The technique layer does not touch that code.
 
+**The H3 cells shared their caches until 2026-10-24.** The three H3 arms of a
+cell used one text cache (`$SCRATCH/h3-text-cache`, keyed by prompt,
+tokenizer and encoder weights, with no code version) and one AdaLN cache
+(`<cell>-adaln.cache`, which skips the AdaLN projections when the file
+exists). `-base` ran first and wrote both, and `-env` / `-prof` read them. So
+the H3 identities above, and every `techniques` run before the fix, do not
+cover the candidate build's H3 text-encoder or AdaLN paths. A regression there
+would still have passed `--off-identity`. Since D1b (ADR-0019 §9.4) every H3
+arm has its own caches (`h3-text-cache-<arm>`, `<arm>-adaln.cache`). Its
+warm-up computes them with its own binary, and its timed pass, the compared
+one, reads them back. The cache-on path is still exercised, now within each
+arm. The LTX cell is unaffected: it encodes per arm (`--no-text-cache`), and
+`-cache` has its own cache.
+
 ### FastH3 8-step technique arms (`h3arms`, RTX PRO 6000, 2026-09-27)
 
 `2c637f7`, five-prompt set (`FV_PROMPTS=5`), medians over the prompts, warm

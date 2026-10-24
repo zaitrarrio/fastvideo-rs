@@ -32,9 +32,10 @@ fn config(family: &str) -> RunConfig {
     c.scratch = "/fvscratch".into();
     c.tag = Some(TAG.into());
     c.baseline_sha = Some(BASELINE_SHA.into());
-    // The script's $TAE without a complete volume copy (the goldens' volume
-    // is empty): the container disk.
-    c.tae_dir = Some("/fvscratch/tae".into());
+    // The script's $TAE as the goldens' volume has it: its auxiliary/tae copy
+    // is complete (as on bz0ofkfx45), so the volume's directory
+    // (RunConfig::tae resolves the same; `run::tests::pins_and_paths`).
+    c.tae_dir = Some("/workspace/weights/auxiliary/tae".into());
     c
 }
 
@@ -118,28 +119,71 @@ fn baseline_arms_run_the_fetched_binary() {
     assert!(!Lab::needs_baseline(&cells));
 }
 
+/// One row of `<tier>-gates.tsv`, what `FV_DRY_RUN_GATES` recorded.
+fn gate_row(s: &Step) -> Option<Vec<String>> {
+    match s {
+        Step::Arm {
+            name, gate, tae, ..
+        } => Some(vec![
+            "arm".into(),
+            name.clone(),
+            gate.clone(),
+            tae.as_ref()
+                .map_or_else(|| "-".to_owned(), |t| t.display().to_string()),
+        ]),
+        Step::Gate {
+            baseline,
+            candidate,
+            kind,
+            off,
+        } => Some(vec![
+            "gate".into(),
+            baseline.clone(),
+            candidate.clone(),
+            kind.as_str().to_owned(),
+            off.clone().unwrap_or_else(|| "-".into()),
+        ]),
+        Step::Compare { .. } => None,
+    }
+}
+
 #[test]
-fn arms_gate_on_the_scripts_cells_and_name_their_trees() {
+fn arms_and_gates_are_the_scripts_and_arms_name_their_trees() {
+    // Every gated cell (its verify-weights.sh cell and its TAE file, or `-`)
+    // and every promotion gate (kind, OFF arm), in run order, as the script's
+    // dry run recorded them; then each arm's trees against its cell's needs.
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let mut tae_arms = 0;
+    let mut gates_seen = 0;
     for family in families(&lab) {
         let cfg = config(&family);
-        let arms: Vec<(String, String, Vec<String>)> = steps(&lab, &cfg)
-            .into_iter()
-            .filter_map(|s| match s {
-                Step::Arm {
-                    name, gate, trees, ..
-                } => Some((name, gate, trees)),
-                _ => None,
-            })
-            .collect();
-        let gates = fixture(&format!("{family}-gates.tsv"));
-        let rows: Vec<Vec<&str>> = gates.lines().map(|l| l.split('\t').collect()).collect();
-        assert_eq!(arms.len(), rows.len(), "{family}");
-        for ((name, gate, trees), row) in arms.iter().zip(&rows) {
-            assert_eq!((name.as_str(), gate.as_str()), (row[0], row[1]), "{family}");
+        let steps = steps(&lab, &cfg);
+        let fixture = fixture(&format!("{family}-gates.tsv"));
+        let rows: Vec<Vec<&str>> = fixture.lines().map(|l| l.split('\t').collect()).collect();
+        let ours: Vec<Vec<String>> = steps.iter().filter_map(gate_row).collect();
+        assert_eq!(ours.len(), rows.len(), "{family}: rows");
+        for (o, row) in ours.iter().zip(&rows) {
+            let width = o.len().min(row.len());
+            assert_eq!(
+                o.iter().map(String::as_str).collect::<Vec<_>>(),
+                row[..width].to_vec(),
+                "{family}"
+            );
+            assert!(row.len() >= o.len(), "{family}: short row {row:?}");
+            tae_arms += usize::from(o[0] == "arm" && o[3] != "-");
+            gates_seen += usize::from(o[0] == "gate");
+        }
+        let arms = steps.iter().filter_map(|s| match s {
+            Step::Arm {
+                name, gate, trees, ..
+            } => Some((name, gate, trees)),
+            _ => None,
+        });
+        let needs = rows.iter().filter(|r| r[0] == "arm").map(|r| r[4]);
+        for ((name, gate, trees), needs) in arms.zip(needs) {
             // The roots of the cell's needs (`root:component`; `:path` reads a
             // file directly under the weight root, whose first part is the tree).
-            let roots: BTreeSet<String> = row[2]
+            let roots: BTreeSet<String> = needs
                 .split_whitespace()
                 .map(|n| match n.split_once(':') {
                     Some(("", path)) => path.split('/').next().unwrap_or("").to_owned(),
@@ -154,4 +198,7 @@ fn arms_gate_on_the_scripts_cells_and_name_their_trees() {
             );
         }
     }
+    // rtx5090 (5), fastvideo (7), h3arms (4) read a tiny autoencoder;
+    // fastvideo (7), h3arms (10), precision (6) gate.
+    assert_eq!((tae_arms, gates_seen), (16, 23));
 }

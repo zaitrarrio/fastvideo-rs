@@ -44,8 +44,9 @@ use fastvideo_deploy::provider::{
 
 use fastvideo_lab::plan::{Lab, Paths, Tier};
 use fastvideo_lab::pod::{
-    check_sha7, fetch_run, judge_run, launch, name_taken, random_suffix, reap_account,
-    reap_recorded, run_dir, run_tag, wait_done, Done, LabPod, PodRecord, StartOptions,
+    baseline_for_pod, check_sha7_named, fetch_run, judge_run, launch, name_taken, random_suffix,
+    reap_account, reap_recorded, run_dir, run_tag, wait_done, Done, LabPod, PodRecord,
+    StartOptions,
 };
 use fastvideo_lab::run::{dry_run_lines, RunConfig, RunError, Runner};
 use fastvideo_lab::schema;
@@ -301,7 +302,7 @@ fn cmd_run(a: &RunArgs) -> Result<ExitCode, String> {
         .clone()
         .or_else(|| env_nonempty("FV_BASELINE_SHA"));
     if let Some(sha) = &cfg.baseline_sha {
-        check_sha7(sha).map_err(|e| format!("FV_BASELINE_SHA / --baseline-sha: {e}"))?;
+        check_sha7_named("--baseline-sha / FV_BASELINE_SHA", sha).map_err(|e| e.to_string())?;
     }
     if Lab::needs_baseline(&cells) && cfg.baseline_sha.is_none() {
         return Err(format!(
@@ -440,20 +441,13 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     so.cells = u.cells.iter().flat_map(|c| split_list(c)).collect();
     so.extra_env = u.extra_env.clone();
     let cells: Vec<_> = t.cells.iter().filter_map(|c| lab.cells.get(c)).collect();
-    if let Some(sha) = &u.baseline_sha {
-        check_sha7(sha).map_err(|e| format!("--baseline-sha: {e}"))?;
-        so.extra_env.push(format!("FV_BASELINE_SHA={sha}"));
-    } else if Lab::needs_baseline(&cells)
-        && !so
-            .extra_env
-            .iter()
-            .any(|e| e.starts_with("FV_BASELINE_SHA="))
-    {
-        return Err(format!(
-            "tier `{}` runs baseline arms: pass --baseline-sha <7>, the baseline commit",
-            t.name
-        ));
-    }
+    baseline_for_pod(
+        &u.sha,
+        u.baseline_sha.as_deref(),
+        &mut so.extra_env,
+        Lab::needs_baseline(&cells),
+    )
+    .map_err(|e| format!("tier `{}`: {e}", t.name))?;
     so.lpips = u.lpips;
     let mut l = launch(t, &u.sha, &so).map_err(|e| e.to_string())?;
     guard::check_guards(&l.guards).map_err(|e| e.to_string())?;

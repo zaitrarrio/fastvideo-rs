@@ -325,7 +325,7 @@ fn fetchers(f: &Fake, baseline_ok: bool) {
     let root = f.dir.join("root/scripts/gpu");
     let body = if baseline_ok {
         format!(
-            "mkdir -p \"$2\" && cp {} \"$2/fv-gpucheck\" && echo \"baseline ok: $1 into $2\"\n",
+            "mkdir -p \"$2\" && cp {} \"$2/fv-gpucheck\" && echo \"base-$1\" > \"$2/fv-gpucheck.build-id\" && echo \"baseline ok: $1 into $2\"\n",
             f.dir.join("bin/fv-gpucheck").display()
         )
     } else {
@@ -375,6 +375,7 @@ fn baseline_arms_and_tae_arms() {
     let log = read(&runs.join("live.log"));
     for want in [
         "[fam] baseline baseline ok: 7654321 into ",
+        "[fam] baseline build-id base-7654321, image build-id unknown",
         "[fam] SKIP y-tae: ",
         "t2.safetensors missing (see tae-fetch.log)",
         "[fam] gate x-base--x-pr exit=0",
@@ -401,4 +402,20 @@ fn an_unavailable_baseline_is_fatal_before_any_arm() {
     let log = read(&runs.join("live.log"));
     assert!(log.contains("FATAL: baseline binary sha-7654321 unavailable (baseline-fetch.log)"));
     assert!(log.contains("no amd64 manifest for sha-7654321"), "{log}");
+}
+
+#[test]
+fn a_baseline_that_is_this_build_is_fatal() {
+    let f = fake("selfbase");
+    fetchers(&f, true);
+    // The image's build-id equals the one the fetched baseline carries.
+    std::fs::write(f.dir.join("bin/fv-gpucheck.build-id"), "base-7654321\n").unwrap();
+    let cell = CellFile::parse(PAIRS, "p.toml").unwrap();
+    let mut cfg = config(&f);
+    cfg.baseline_sha = Some("7654321".into());
+    let steps = Lab::steps(&[&cell], &cfg.bin, &cfg.paths()).unwrap();
+    let e = Runner::new(cfg).run(&steps).unwrap_err().to_string();
+    assert!(e.contains("is this build (base-7654321)"), "{e}");
+    let runs = f.dir.join("scratch/runs/fam/t1");
+    assert!(!runs.join("x-base").exists());
 }

@@ -22,8 +22,8 @@ fn fv_lab() -> Command {
         .env_remove("FV_GEN_TIMEOUT_S")
         .env_remove("FV_BASELINE_SHA")
         .env_remove("FV_AUX_DIR")
-        // The goldens' `$TAE` (no complete volume copy): the container disk.
-        .env("FV_TAE_DIR", "/fvscratch/tae");
+        // The goldens' `$TAE` (the volume's complete auxiliary/tae copy).
+        .env("FV_TAE_DIR", "/workspace/weights/auxiliary/tae");
     c
 }
 
@@ -109,6 +109,41 @@ fn a_baseline_tier_needs_the_baseline_commit() {
         "{cmd}"
     );
     assert!(cmd.contains("fv-lab run b6 >"), "{cmd}");
+    // Refused: the run's own commit as its baseline, a bad or empty
+    // FV_BASELINE_SHA in --extra-env, and the commit given twice.
+    for (extra, want) in [
+        (vec!["--baseline-sha", "1234567"], "own commit"),
+        (vec!["--extra-env", "FV_BASELINE_SHA=1234567"], "own commit"),
+        (
+            vec!["--extra-env", "FV_BASELINE_SHA="],
+            "FV_BASELINE_SHA ``",
+        ),
+        (
+            vec!["--extra-env", "FV_BASELINE_SHA=main"],
+            "7 lower-case hex",
+        ),
+        (vec!["--baseline-sha", "xyz"], "--baseline-sha `xyz`"),
+        (
+            vec![
+                "--baseline-sha",
+                "7654321",
+                "--extra-env",
+                "FV_BASELINE_SHA=7654321",
+            ],
+            "twice",
+        ),
+    ] {
+        let o = fv_lab().args(up).args(&extra).output().unwrap();
+        assert!(!o.status.success(), "{extra:?}");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(err.contains(want), "{extra:?}: {err}");
+    }
+    let o = fv_lab()
+        .args(args)
+        .args(["--baseline-sha", "main"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&o.stderr).contains("--baseline-sha / FV_BASELINE_SHA `main`"));
 }
 
 #[test]
