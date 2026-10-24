@@ -706,3 +706,16 @@ ran (pod id, $/hr), result, cost.
   green. No Runpod call, no GPU. GPU run for the coordinator:
   `RUNPOD_API_KEY=… fv-lab pod up --sha <7> --family rtx6000 --yes`, then
   `fv-lab pod fetch <id> --wait --down`.
+- 2026-10-24 11:35Z: D1a review fixes on #171 (coordinator's review): both
+  runners write `<arm>/frames.sha256.json` (byte-identical, fetched by both)
+  and `scripts/gpu/fv-lab-compare-runs.sh` is the GPU gate; `pod reap` takes
+  only this machine's recorded pods (`--account` for full-pattern names);
+  run tags `<sha>-<MMDDHHMMSS>-<hex4>` with a live-name check; fv-lab in the
+  tools release's `gpucheck` set (`lab-build=` context, `-V` gated); a
+  failing nvidia-smi is fatal; success needs `DONE` and `matrix_exit=0`; the
+  pod is deleted before errors return; goldens under `env -i`. The first
+  image run on 9a9dc55 failed (lab-build and build raced on one cargo
+  registry cache mount); lab-build has its own cache ids since 492e28a,
+  whose checks are all green (image 12 m 53 s, a branch compile; the
+  PR's tools-release assemble gated `fv-lab 0.1.40`). CPU only, build pod;
+  no Runpod call. GPU gate: ADR-0019 §8 on `492e28a` or later.
