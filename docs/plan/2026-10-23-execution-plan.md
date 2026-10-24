@@ -74,7 +74,7 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | B1 | Extract the runtime: `cudarc/src/wan/{tensor,device,ops,kernels,nn,weights,offload,quant,log,dump,ledger,envflag,resident,stage_upload,hostmem,writer}` to `cudarc/src/rt/`; `kernels.cu` split by region and concatenated at build time; `gpucheck` and `engine-service` import `rt` | byte-identical SASS and clips | CPU tests + nvrtc gate on the pod; **GPU** `techniques` byte-identity cell for H3, LTX, Wan | F1 | merged (#146) |
-| B2 | `VideoFamily` trait, common `Request`/`Conditioning`, `Request::validate(&ModelCaps)`; the 21 registry tables, `resolve()`, `all_registered_ids()` and the 20 `generate_*` functions replaced by the manifest and a static family list; `AvGenerateOptions` reduced to common fields | CLI behaviour unchanged for every preset (golden `--help` and tiny CPU generations); 83 Hub ids resolve | pod; **GPU** one tiny generation per served family | A2, B1 | todo |
+| B2 | `VideoFamily` trait, common `Request`/`Conditioning`, `Request::validate(&ModelCaps)`; the 21 registry tables, `resolve()`, `all_registered_ids()` and the 20 `generate_*` functions replaced by the manifest and a static family list; `AvGenerateOptions` reduced to common fields | CLI behaviour unchanged for every preset (golden `--help` and tiny CPU generations); 83 Hub ids resolve | pod; **GPU** one tiny generation per served family | A2, B1 | pr (#157) |
 | B3 | Settings layer: the `FASTVIDEO_*` table generated from one declarative list; the 111 direct reads routed through `settings::var`; a `Settings` snapshot passed to `load`; `model_spec` for Wan and the small families; `docs/scope.md` table generated | zero direct `env::var("FASTVIDEO_` outside `settings`; off-identity invariant tests | pod; **GPU** byte-identity cell | B1 | pr (B3a #153; B3b todo) |
 
 ### Phase 3 and 4: deployment (Workstream C)
@@ -398,3 +398,18 @@ ran (pod id, $/hr), result, cost.
   `artifacts/runpod/techniques/90dd3f8-10240259/compare/`. Review: no
   blocking finding; three documentation-only table rows corrected. Main
   merged in since then changed no inference crate, so the evidence stands.
+- 2026-10-24 04:30Z: B2 opened draft PR #157 (`claude/b2-video-family`):
+  `fastvideo-core::family` (`VideoFamily`, `Pipeline`, the static `FAMILIES`
+  list of 21 families, one module each with its Hub-id table and run),
+  `fastvideo-core::request` (`Request`, `Conditioning`,
+  `Request::validate(&ModelCaps)`), `AvGenerateOptions` reduced to the
+  common fields plus `Wan/Ltx2/H3Options`; `registry.rs` and
+  `av_generate.rs` deleted; ADR-0013. Goldens taken first on the unchanged
+  tree (CLI `--help`, `list-models` 83 ids, generate/schedule for every id
+  and preset, tiny CPU frames, a 459-input resolution table) pass
+  unmodified. On build pod `pzocv1keasg3xn`: workspace lib tests 1881
+  passed, models + cli + core 595 passed, fmt, clippy `-D warnings`, the
+  cuda check and a `--features cuda` check of core and cli green,
+  `scripts/serve/check.sh` 1004 passed. GPU cells pending (coordinator):
+  CLI A/B frame identity for H3 (`h3-base` + LoRA), LTX-2.5 (`ltx25`), Wan
+  (R2 `fastwan21-1.3b`, or `--tiny --device cuda`).
