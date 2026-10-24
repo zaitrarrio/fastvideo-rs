@@ -33,7 +33,7 @@ import { MXFP8_TREE_GLOB } from "../recipe-trees";
 import { parseJson } from "../util";
 import { upsamplerIssue } from "../upsampler";
 import { slsPreset } from "./presets";
-import { configOf } from "./serves";
+import { configOf, servesOfToml } from "./serves";
 import type { EndpointSpec } from "./spec";
 
 type SpecLike = Pick<EndpointSpec, "variant" | "compute"> & Partial<Pick<EndpointSpec, "preset" | "config" | "config_toml" | "image" | "weights_source" | "network_volume" | "data_centers" | "container_disk_gb" | "upsampler_local" | "weights_download_approved">>;
@@ -45,14 +45,16 @@ export const SLS_R2_WEIGHTS = "/workspace/weights";
 /** On an R2 cache volume: the trees under this directory of /runpod-volume (never the volume's weights/). */
 export const SLS_R2_CACHE_ROOT = "/runpod-volume/fv-r2-cache";
 
-/** The weight trees an endpoint's workers load: `${FV_WEIGHTS}/<tree>` (or /workspace/weights/<tree>) in its worker
- * config, plus its preset's list and (published) pre-quantized trees; a nested published tree (longlive-plug/x,
+/** The weight trees an endpoint's workers load: its worker config's [[models]] variants' trees (families/*.toml, a
+ * `weights` path replacing the variant's own tree) and any other `${FV_WEIGHTS}/<tree>` (or /workspace/weights/<tree>)
+ * path in it, plus its preset's list and (published) pre-quantized trees; a nested published tree (longlive-plug/x,
  * h3-base/text_encoder_fp8) by its full name: the fetcher places it inside its parent, as on the volume. */
 export function slsTrees(spec: SpecLike, prequant = true): string[] {
   if (spec.compute !== "GPU") return [];
   const p = slsPreset(spec.preset);
   const out = new Set<string>([...(p?.weights ?? []), ...(prequant ? (p?.prequant ?? []).filter((t) => R2_TREES[t]) : [])]);
   const text = configOf({ variant: spec.variant, config: spec.config, config_toml: spec.config_toml, image: spec.image }).text || "";
+  for (const t of servesOfToml(text, { kind: "inline", config: null }).weights) out.add(t);
   for (const line of text.split("\n")) {
     if (/^\s*#/.test(line)) continue;
     for (const m of line.matchAll(/(?:\$\{FV_WEIGHTS\}|\/workspace\/weights|\/runpod-volume\/weights)\/([A-Za-z0-9._-]+)(?:\/([A-Za-z0-9._-]+))?/g)) {

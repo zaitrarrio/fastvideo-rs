@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { BAKED_CONFIGS, IMAGE_CONFIGS } from "../../src/cluster/image-configs";
 import { WORKER_CONFIGS } from "../../src/cluster/worker-configs";
 import { POOL_PRESETS } from "../../src/presets";
-import { weightsPlan, weightsSource } from "../../src/providers";
+import { poolTrees, weightsPlan, weightsSource } from "../../src/providers";
 import { R2_AUX_TREES } from "../../src/r2weights";
 import { R2_TREES } from "../../src/r2-trees";
 import { MANIFEST_VARIANTS, MODEL_NAMES } from "../../src/families-gen";
@@ -153,6 +153,29 @@ describe("recipe-trees.ts against the Rust sources", () => {
     // the MXFP8 DiT trees only help on sm_100+: QuantMode::for_device runs W8A8 below that (the boot skips them)
     expect(rust("crates/fastvideo-cudarc/src/rt/quant.rs")).toMatch(/if d\.sm_major < 10 \{/);
     expect(MXFP8_TREE_GLOB).toBe("*_mxfp8");
+  });
+});
+
+describe("the trees a config without a preset loads (plan A3: [[models]] name variants)", () => {
+  const larry = `[engine]\nbackend = "cuda"\n[[models]]\nvariant = "h3-larry-turbo"\nresident = true\n`;
+  it("pools: a custom inline config and a baked /etc/fv config resolve their variants' trees", () => {
+    expect(poolTrees({ id: "c", variant: "h3-max", count: 1, compute: "GPU", config_toml: larry } as any)).toEqual(["h3-base", "h3-turbo-loras/larry"]);
+    expect(poolTrees({ id: "c", variant: "wan5b", count: 1, compute: "GPU", config: "/etc/fv/runpod-wan14b.toml" } as any)).toEqual([
+      "longlive-plug/wan21-t2v-14b-cfg",
+      "longlive-plug/wan21-t2v-14b-few-step",
+      "wan21-t2v-14b",
+    ]);
+    // A `weights` path replaces the variant's own tree.
+    const moved = `[[models]]\nvariant = "wan-max"\nweights = "\${FV_WEIGHTS}/my-wan"\nresident = true\n`;
+    expect(poolTrees({ id: "c", variant: "wan5b", count: 1, compute: "GPU", config_toml: moved } as any)).toEqual(["my-wan"]);
+  });
+  it("serverless: the same for an endpoint's custom inline and baked configs", () => {
+    expect(slsTrees({ variant: "h3-max", compute: "GPU", config_toml: larry, image: { channel: "stable" } })).toEqual(["h3-base", "h3-turbo-loras/larry"]);
+    expect(slsTrees({ variant: "wan5b", compute: "GPU", config: "/etc/fv/runpod-wan14b.toml", image: { channel: "stable" } })).toEqual([
+      "longlive-plug/wan21-t2v-14b-cfg",
+      "longlive-plug/wan21-t2v-14b-few-step",
+      "wan21-t2v-14b",
+    ]);
   });
 });
 

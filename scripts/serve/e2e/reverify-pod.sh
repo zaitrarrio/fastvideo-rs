@@ -59,7 +59,7 @@ native = true
 model = "sf-wan"
 $WEBRTC
 EOF
-    grep -H -E '^(recipe|id|fal_apps|state_dir)' $E/cfg-*.toml
+    grep -H -E '^(variant|id|fal_apps|state_dir)' $E/cfg-*.toml
     ;;
   switch)
     cfg=$E/cfg-$2.toml; [ "$2" = fv ] && cfg=$E/fv.toml

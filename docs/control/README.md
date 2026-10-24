@@ -97,27 +97,26 @@ control-plane and script copies from it (plan A4). What the generator owns:
 
 | output | what |
 |---|---|
-| `control/src/families-gen.ts` (whole file) | `MANIFEST_FAMILIES`, `MANIFEST_VARIANTS` (tier, served names, recipe name, `trees`, `weight_trees` = trees without `auxiliary/`, `gpu`), `MODEL_NAMES` (every name a serve config's `recipe` or `id` may use, resolved as `caps.rs find` does: tier alias → first variant of its tier in file order, variant id, served name; a variant's `recipe_name` is what the capabilities report, not a config name), `ENGINE_RECIPE_ALIASES` (the `caps.rs model_from_config` recipe arms a config here uses: `vdn-h3-50step`; `recipeVariant` consults them, `variantOf` does not) |
+| `control/src/families-gen.ts` (whole file) | `MANIFEST_FAMILIES`, `MANIFEST_VARIANTS` (tier, served names, public names, tasks, recipe name, `trees`, `weight_trees` = trees without `auxiliary/`, `main_tree` = the tree a config's `weights` path replaces, `gpu`), `MODEL_NAMES` (every name a serve config's `[[models]] variant` or a pool model's `recipe` may use, resolved as the engine's `model_from_config` does since plan A3: tier alias → first variant of its tier in file order, variant id, served name; a variant's `recipe_name` is what the capabilities report, not a config name). There is no recipe-alias table: the engine resolves exactly these names |
 | `control/src/volumes.ts` region `EU_TREES` | copied from `scripts/gpu/volumes.sh` `FV_EU_VOLUME_TREES` (an ops fact: what `r2-fill-volume.sh` wrote; the shell stays the hand-written source) |
-| `scripts/gcp/families.tsv` columns `weight_trees`, `served` | from each row's Runpod twin config's `[[models]]` recipes, resolved to variants |
+| `scripts/gcp/families.tsv` columns `weight_trees`, `served` | from each row's Runpod twin config's `[[models]] variant`s |
 | `scripts/gpu/verify-weights.sh` region `variant_trees` | the `variant:<id>` cells: a variant's trees as the manifest names them |
 
 Consumers derive from the tables instead of restating: `recipe-trees.ts`
 (`required` = the variant's `weight_trees`; hand-written: the pre-quantized
-trees, the notes, the one recipe alias the manifests do not know),
+trees and the notes),
 `presets.ts` (`weights` and `min_vram_gb` of every model preset come from
 its models' recipes), `schemas.ts` (the `family` enum).
 
 Cross-checks (`crossChecks`, run by `--check`): every manifest tree is a dest
 of `weights-manifest.tsv` / `weights-r2.tsv`; `cluster/catalog.json` names
-only families, models and recipes the manifests know, except
-`CATALOG_EXCEPTIONS` (`longlive-1.3b`, `lightx2v-turbo-v0.1` and its served
-id: no variant in `wan.toml` / `h3.toml` yet, a question for plan A3);
+only families, models and recipes the manifests know (no exceptions since
+plan A3 made `longlive-1.3b` and `h3-lightx2v-turbo-v01` variants);
 `configs/autoscale.toml` pools name a dispatch family; `volumes.sh` names
 published trees; `serverless/serves.ts` `RECIPES` gives every name the
-manifests' tier. The engine also accepts contract names neither table lists
-(`4step-vsa`, `8step`, `sol-h3` / `sol_h3`, `trim-8step`, an empty recipe,
-family `ltx`): plan A3 settles which the manifests carry.
+manifests' tier. Since plan A3 the engine accepts no other names (the
+contract names `4step-vsa`, `8step`, `sol_h3`, `trim-8step`, an empty recipe
+and the `family` key are gone; a config names the variant).
 
 Still hand-written, because the manifests carry no deployment data (plan C1,
 the `[deploy]` section): preset ids, titles, image variants, configs, queue

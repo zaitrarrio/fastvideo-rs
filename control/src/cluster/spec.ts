@@ -184,9 +184,24 @@ export function migrateSpec(spec: ClusterSpec): ClusterSpec {
   if (any.control_plane === "gateway" || (any.control_plane === undefined && legacy)) any.control_plane = legacy && legacy.enabled === false ? "direct" : "edge";
   if (any.auth === undefined) any.auth = legacy?.auth ?? "keys";
   for (const p of any.pools || []) if (p?.variant === "gateway") p.variant = "cpu";
+  // Plan A3: the two models that were serve-config special cases are variants of their own; a pool model stored
+  // with the old recipe names them by the variant (the old names are no longer manifest names, or name another tree).
+  for (const p of any.pools || [])
+    for (const m of Array.isArray(p?.models) ? p.models : []) {
+      if (!m || typeof m !== "object") continue;
+      const renamed = RENAMED_RECIPES[`${m.id}|${m.recipe}`] ?? RENAMED_RECIPES[`*|${m.recipe}`];
+      if (renamed) m.recipe = renamed;
+    }
   delete any.gateway;
   return spec;
 }
+/** Recipe names stored specs may carry that plan A3 replaced: `<model id or *>\0<old recipe>` -> the variant. The
+ * v0.1 Turbo LoRA was the recipe `lightx2v-turbo-v0.1` of the h3-lightx2v-turbo model; LongLive was the SF-Wan
+ * variant with a `longlive` path (`sfwan21-1.3b`, only for the model id longlive-1.3b). */
+export const RENAMED_RECIPES: Record<string, string> = {
+  "*|lightx2v-turbo-v0.1": "h3-lightx2v-turbo-v01",
+  "longlive-1.3b|sfwan21-1.3b": "longlive-1.3b",
+};
 
 /** The edge family DO a pool's model queues on (docs/serve/edge-control-plane.md §5.2). */
 export function modelFamily(pool: PoolSpec, m?: ModelRef): string {

@@ -129,6 +129,20 @@ describe("spec", () => {
     const m = migrateSpec(stored);
     expect([m.control_plane, m.auth, m.pools[0]!.variant, (m as any).gateway]).toEqual(["direct", "none", "cpu", undefined]);
   });
+  it("specs stored before plan A3: the v0.1 Turbo LoRA and LongLive recipes read as their variants and validate", () => {
+    const stored: any = normalizeSpec({ name: "o", pools: [{ id: "h3-lightx2v-turbo-v01" }, { id: "longlive" }, { id: "sfwan" }] });
+    stored.pools[0].models = [{ id: "h3-lightx2v-turbo-v01", family: "h3", recipe: "lightx2v-turbo-v0.1" }];
+    stored.pools[1].models = [{ id: "longlive-1.3b", family: "wan", recipe: "sfwan21-1.3b" }];
+    expect(() => normalizeSpec(JSON.parse(JSON.stringify(stored)))).toThrow(/pools\.0\.models\.0\.recipe/);
+    const m = migrateSpec(JSON.parse(JSON.stringify(stored)));
+    expect(m.pools.map((p) => p.models)).toEqual([
+      [{ id: "h3-lightx2v-turbo-v01", family: "h3", recipe: "h3-lightx2v-turbo-v01" }],
+      [{ id: "longlive-1.3b", family: "wan", recipe: "longlive-1.3b" }],
+      // The SF-Wan model keeps its recipe (only the LongLive id was renamed).
+      [{ id: "sfwan21-1.3b", family: "wan", recipe: "sfwan21-1.3b" }],
+    ]);
+    expect(normalizeSpec(m).pools.map((p) => p.id)).toEqual(["h3-lightx2v-turbo-v01", "longlive", "sfwan"]);
+  });
 });
 
 // The inline config file of each preset (by its content's [gateway] pool line).
