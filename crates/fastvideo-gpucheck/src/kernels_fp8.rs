@@ -1,4 +1,4 @@
-//! Kernel checks for the reference FP8 recipes ([`fastvideo_cudarc::wan::quant`])
+//! Kernel checks for the reference FP8 recipes ([`fastvideo_cudarc::rt::quant`])
 //! and the bf16-native activation kernels (`FASTVIDEO_BF16_ACT`).
 //!
 //! * **fp8_recipes** — the W8A8 and MXFP8 quantizers bit for bit against the
@@ -16,10 +16,10 @@
 
 use cudarc::driver::CudaSlice;
 use fastvideo_cudarc::h3::fused16::{self, AdaRows, NormOut};
-use fastvideo_cudarc::wan::device;
-use fastvideo_cudarc::wan::nn::Linear;
-use fastvideo_cudarc::wan::quant::{self, QuantKind, QuantLayout, Section};
-use fastvideo_cudarc::wan::tensor::with_bf16_act;
+use fastvideo_cudarc::rt::device;
+use fastvideo_cudarc::rt::nn::Linear;
+use fastvideo_cudarc::rt::quant::{self, QuantKind, QuantLayout, Section};
+use fastvideo_cudarc::rt::tensor::with_bf16_act;
 use fastvideo_cudarc::CudaTensor;
 use serde_json::json;
 
@@ -298,8 +298,7 @@ pub fn fp8_recipes(report: &mut Report, seed: &mut u64) -> StageResult<()> {
         let (blob, scales) = layout.quantize_host(&w)?;
         let emu = layout.forward_host(&blob, &scales, &x, m);
         for (act16, gelu) in [(false, false), (false, true), (true, false), (true, true)] {
-            let want =
-                fastvideo_cudarc::wan::ops::host::quant_linear_epilogue(&emu, Some(&b), gelu);
+            let want = fastvideo_cudarc::rt::ops::host::quant_linear_epilogue(&emu, Some(&b), gelu);
             let xt = if act16 {
                 t16(&x, &[1, m, k])?
             } else {
@@ -759,7 +758,7 @@ fn block_timing(report: &mut Report, seed: &mut u64) -> StageResult<()> {
                 let q = p.split_heads_bhsd(0, heads, d)?;
                 let k = p.split_heads_bhsd(dm, heads, d)?;
                 let v = p.split_heads_bhsd(2 * dm, heads, d)?;
-                let a = fastvideo_cudarc::wan::nn::scaled_dot_product_attention(&q, &k, &v, None)?;
+                let a = fastvideo_cudarc::rt::nn::scaled_dot_product_attention(&q, &k, &v, None)?;
                 let a = out.forward(&a.merge_heads()?)?;
                 let x1 = x0.residual_gate_add_e(&a, &e, 2)?;
                 let h = up.forward_gelu(&x1.rms_norm(&w, 1e-6)?)?;
@@ -791,7 +790,7 @@ pub fn bf16_attention_routes(report: &mut Report, seed: &mut u64) -> StageResult
 
 #[allow(clippy::type_complexity)]
 fn routes_inner(report: &mut Report, seed: &mut u64) -> StageResult<()> {
-    use fastvideo_cudarc::wan::{attn, nn};
+    use fastvideo_cudarc::rt::{attn, nn};
     let (b, h, s, d) = (1usize, 4usize, 1000usize, 128usize);
     let mk = |seed: &mut u64, n: usize| bf16v(rand(seed, n, 1.0));
     let (q, k, v) = (

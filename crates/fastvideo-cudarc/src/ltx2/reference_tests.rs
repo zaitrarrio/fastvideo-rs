@@ -19,8 +19,8 @@ use fastvideo_models::ltx2::config::{
 };
 use fastvideo_models::ltx2::{Ltx2RopeTables, ScalarDivision};
 
-use crate::wan::tensor::CudaTensor;
-use crate::wan::weights::WeightMap;
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
 
 use super::audio_vae::AudioDecoder;
 use super::keys::{Keys, Layout};
@@ -109,14 +109,13 @@ fn dit_matches_diffusers_on_a_tiny_config() {
         )
         .expect("text");
     let mut taps = Vec::new();
-    let mut observe =
-        |i: usize, v: &CudaTensor, a: &CudaTensor| -> crate::wan::tensor::Result<()> {
-            taps.push((i, v.clone(), a.clone()));
-            Ok(())
-        };
+    let mut observe = |i: usize, v: &CudaTensor, a: &CudaTensor| -> crate::rt::tensor::Result<()> {
+        taps.push((i, v.clone(), a.clone()));
+        Ok(())
+    };
     // Every sub-layer tap the oracle's hooks produce, under the oracle's names.
     let mut probed = Vec::new();
-    let mut probe = |name: &str, t: &CudaTensor| -> crate::wan::tensor::Result<()> {
+    let mut probe = |name: &str, t: &CudaTensor| -> crate::rt::tensor::Result<()> {
         probed.push((name.to_string(), t.clone()));
         Ok(())
     };

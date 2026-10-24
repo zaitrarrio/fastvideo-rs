@@ -8,11 +8,11 @@
 //! blocks, chunked attention, rank-6 permutes and B=2.
 
 use cudarc::driver::CudaSlice;
-use fastvideo_cudarc::wan::device::GemmMath;
-use fastvideo_cudarc::wan::fused::Rope;
-use fastvideo_cudarc::wan::nn::Linear;
-use fastvideo_cudarc::wan::ops::{self, host, BcastOp};
-use fastvideo_cudarc::wan::{attn, conv, device, kernels as k, vsa};
+use fastvideo_cudarc::rt::device::GemmMath;
+use fastvideo_cudarc::rt::fused::Rope;
+use fastvideo_cudarc::rt::nn::Linear;
+use fastvideo_cudarc::rt::ops::{self, host, BcastOp};
+use fastvideo_cudarc::rt::{attn, conv, device, kernels as k, vsa};
 use fastvideo_cudarc::CudaTensor;
 use serde_json::json;
 
@@ -840,7 +840,7 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
             // twins. Outputs are rounded to bf16 on both sides; only a
             // reduction-order difference may flip a rounding, so the limit is
             // bf16 round-off. Odd seq and a partial last warp-block included.
-            use fastvideo_cudarc::wan::ops::h3v_host;
+            use fastvideo_cudarc::rt::ops::h3v_host;
             let bf = |v: &[f32]| {
                 v.iter()
                     .map(|&x| half::bf16::from_f32(x))
@@ -1143,7 +1143,7 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
             // Ops the decoder-only text encoders and the audio decoders add.
             // Each is held to its host twin, which the unit tests hold to an
             // independent formula, so the chain reaches the kernel.
-            use fastvideo_cudarc::wan::ops::host;
+            use fastvideo_cudarc::rt::ops::host;
             let x = c.rand(4099, 2.0);
             let got = down(&ops::unary_device(&up(&x)?, ops::ElemUnary::GeluErf)?)?;
             c.cmp("gelu_erf", &got, &host::map1(&x, host::gelu_erf), op)?;
@@ -1216,7 +1216,7 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
             // H3 DiT). Codes and scales must equal the host quantizer's EXACTLY —
             // the host twin is what the unit tests hold to the format — and the
             // dequantized bf16 weight must equal the host's, bit for bit.
-            use fastvideo_cudarc::wan::ops::host;
+            use fastvideo_cudarc::rt::ops::host;
             for (rows, cols) in [(64usize, 5120usize), (257, 1000), (3, 25600)] {
                 // Rows of very different magnitude, plus one dead row.
                 let mut w = c.rand(rows * cols, 1.0);
@@ -1261,7 +1261,7 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
         {
             // MLX affine group-64: codes/scales/biases match the host twin, and
             // the fused W8A16 GEMM equals dequant-then-matmul (no full weight).
-            use fastvideo_cudarc::wan::affine;
+            use fastvideo_cudarc::rt::affine;
             for bits in [8u8, 6, 4] {
                 let (rows, cols) = (5usize, 128usize);
                 let mut w = c.rand(rows * cols, 1.0);
@@ -1334,7 +1334,7 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
                 std::env::temp_dir().join(format!("fv-gpucheck-prefetch-{}", std::process::id()));
             // Prefetching needs bf16 linears, which exact mode turns off: the
             // fast-mode kernels stage is where this runs.
-            let stored_kinds: &[bool] = if fastvideo_cudarc::wan::nn::bf16_linears_active() {
+            let stored_kinds: &[bool] = if fastvideo_cudarc::rt::nn::bf16_linears_active() {
                 &[true, false]
             } else {
                 &[]
@@ -1354,7 +1354,7 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
             // Padding modes and GroupNorm for the VAE decoders. GroupNorm at a
             // group size in the millions is the case that needs the f64
             // reduction; a small group exercises the narrow-block path.
-            use fastvideo_cudarc::wan::ops::{host, PadMode};
+            use fastvideo_cudarc::rt::ops::{host, PadMode};
             let (outer, len, inner) = (6usize, 37usize, 29usize);
             let x = c.rand(outer * len * inner, 1.0);
             for (mode, name) in [
@@ -2198,7 +2198,7 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
             let (qt, kt, vt) = (t(q, &shape)?, t(k, &shape)?, t(v, &shape)?);
             let dense_s = median(
                 &mut || {
-                    fastvideo_cudarc::wan::nn::scaled_dot_product_attention(&qt, &kt, &vt, None)?;
+                    fastvideo_cudarc::rt::nn::scaled_dot_product_attention(&qt, &kt, &vt, None)?;
                     Ok(())
                 },
                 3,
@@ -2338,14 +2338,14 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
                 t(v, &[b, h, sk, d])?,
             );
             let routed =
-                fastvideo_cudarc::wan::nn::scaled_dot_product_attention(&qt, &kt, &vt, None)?;
+                fastvideo_cudarc::rt::nn::scaled_dot_product_attention(&qt, &kt, &vt, None)?;
             let direct = attn::device_mma_sdpa(&qt, &kt, &vt, None, false)?
                 .ok_or_else(|| anyhow::anyhow!("fused mma sdpa declined"))?;
             let (routed, direct) = (host_of(&routed)?, host_of(&direct)?);
             let identical = routed == direct;
             let expect_fused = attn::mma_sdpa_default()
-                && fastvideo_cudarc::wan::nn::sdpa_backend() == "dense"
-                && !fastvideo_cudarc::wan::tensor::bf16_activations();
+                && fastvideo_cudarc::rt::nn::sdpa_backend() == "dense"
+                && !fastvideo_cudarc::rt::tensor::bf16_activations();
             c.report.check(
                 "mma_sdpa_default_dispatch",
                 !expect_fused || identical,
@@ -2422,7 +2422,7 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
     // sm_120 dense tuning (fwd3, cuDNN SDPA graphs) and the VSA stage breakdown.
     group(&mut c, "attn3_parity", attn3::parity)?;
     group(&mut c, "attn3_bench", attn3::bench)?;
-    // The offline generator of the fixed dense-SDPA rule (wan::sdpa_rule).
+    // The offline generator of the fixed dense-SDPA rule (rt::sdpa_rule).
     group(&mut c, "sdpa_rule", attn3::sdpa_rule)?;
     // Repeat runs of the order- or selection-sensitive kernels, bit for bit.
     group(&mut c, "determinism", determinism::run)?;
@@ -2691,14 +2691,14 @@ pub fn nvrtc(report: &mut Report, archs: &[(i32, i32)]) -> StageResult<()> {
         // The LingBot MoE kernels as SASS for the real SM, the path
         // `ops::load_moe_kernels` takes first (`nvrtc_sass`): NVRTC's PTX is
         // newer than some pods' drivers can JIT.
-        if let Some(arch) = fastvideo_cudarc::wan::nvrtc_sass::sass_arch(maj, min) {
+        if let Some(arch) = fastvideo_cudarc::rt::nvrtc_sass::sass_arch(maj, min) {
             let timer = std::time::Instant::now();
             let opts = cudarc::nvrtc::CompileOptions {
                 use_fast_math: Some(true),
                 ftz: Some(true),
                 ..Default::default()
             };
-            let result = fastvideo_cudarc::wan::nvrtc_sass::compile_cubin(
+            let result = fastvideo_cudarc::rt::nvrtc_sass::compile_cubin(
                 &ops::moe_kernel_src(),
                 &opts,
                 arch,

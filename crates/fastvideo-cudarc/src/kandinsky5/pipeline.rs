@@ -8,9 +8,9 @@ use fastvideo_models::kandinsky5::{
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
 
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::{PipelineError, Result};
-use crate::wan::tensor::CudaTensor;
-use crate::wan::weights::WeightMap;
 
 use super::text::{self, Kandinsky5TextConditioning};
 use super::transformer::Kandinsky5Transformer;

@@ -506,7 +506,7 @@ fn gen(report: &mut Report, a: &GenArgs<'_>) -> StageResult<()> {
             "guidance": a.base.guidance_scale, "guidance_2": a.base.guidance_scale_2,
             "flow_shift": a.base.flow_shift, "warm": a.warm,
             "unipc_sigmas": std::env::var("FASTVIDEO_WAN_UNIPC_SIGMAS").unwrap_or_else(|_| "fastvideo".into()),
-            "vsa": fastvideo_cudarc::wan::nn::vsa_enabled(),
+            "vsa": fastvideo_cudarc::rt::nn::vsa_enabled(),
             "text_cache": a.base.text_cache,
             "vae": std::env::var("FASTVIDEO_WAN_VAE").unwrap_or_else(|_| "auto".into()),
             "cond_cache": std::env::var("FASTVIDEO_WAN_COND_CACHE").map_or(true, |v| !matches!(v.trim(), "0" | "false" | "off")),
@@ -579,7 +579,7 @@ fn gen(report: &mut Report, a: &GenArgs<'_>) -> StageResult<()> {
             "cold_generation",
             timings_json(&cold, timer.elapsed().as_secs_f64()),
         );
-        fastvideo_cudarc::wan::stats::phase_reset();
+        fastvideo_cudarc::rt::stats::phase_reset();
     }
     let mut docs: Vec<(PromptSpec, serde_json::Value)> = Vec::new();
     for spec in a.set {
@@ -596,7 +596,7 @@ fn gen(report: &mut Report, a: &GenArgs<'_>) -> StageResult<()> {
             }
         };
         let mem = load_mem.take().unwrap_or_else(crate::gpu::PeakMem::start);
-        fastvideo_cudarc::wan::evalstats::reset();
+        fastvideo_cudarc::rt::evalstats::reset();
         let timer = std::time::Instant::now();
         let out = pipe
             .generate_to(&request(spec), &dir, a.mp4)
@@ -605,7 +605,7 @@ fn gen(report: &mut Report, a: &GenArgs<'_>) -> StageResult<()> {
         let peak_mib = mem.stop();
         // Expert-swap / streaming copy throughput of this generation (logged).
         pipe.report_offload(&spec.name);
-        let counters = fastvideo_cudarc::wan::evalstats::snapshot();
+        let counters = fastvideo_cudarc::rt::evalstats::snapshot();
         let t = &out.timings;
         let total = wall - t.write_s;
         let digest = frames_sha256(&out.frame_paths)?;

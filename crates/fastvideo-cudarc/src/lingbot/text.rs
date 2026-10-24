@@ -12,8 +12,8 @@ use std::path::Path;
 use fastvideo_models::lingbot::{tokenize_lingbot_prompt, PROMPT_CROP_START};
 
 use crate::llm::{DecoderConfig, ResidentDecoder};
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::WeightMap;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::WeightMap;
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -63,7 +63,7 @@ impl LingBotTextEncoder {
         let (ids, crop) =
             tokenize_lingbot_prompt(&self.root, prompt, QWEN_MAX_LENGTH).map_err(msg)?;
         if crop != PROMPT_CROP_START {
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "lingbot text: template crop {crop} (reference processor: {PROMPT_CROP_START})"
             ));
         }

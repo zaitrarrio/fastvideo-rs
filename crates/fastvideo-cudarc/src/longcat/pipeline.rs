@@ -7,11 +7,11 @@ use fastvideo_models::wan::{Umt5Config, WanVaeConfig};
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
 
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::{frames_to_rgb8, PipelineError, Result};
-use crate::wan::tensor::CudaTensor;
 use crate::wan::umt5::Umt5Encoder;
 use crate::wan::vae::AutoencoderKlWan;
-use crate::wan::weights::WeightMap;
 
 use super::transformer::LongCatTransformer;
 

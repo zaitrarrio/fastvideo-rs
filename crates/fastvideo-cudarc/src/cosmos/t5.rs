@@ -2,9 +2,9 @@
 
 use fastvideo_models::cosmos::T5Config;
 
-use crate::wan::nn::{self, Linear};
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{self, WeightMap};
+use crate::rt::nn::{self, Linear};
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{self, WeightMap};
 
 fn t5_layer_norm(xs: &CudaTensor, weight: &CudaTensor, eps: f32) -> Result<CudaTensor> {
     xs.rms_norm(weight, eps)

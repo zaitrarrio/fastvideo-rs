@@ -16,9 +16,9 @@
 //! differences (norm offset, sandwich norms, activation, per-layer rope and
 //! window, embedding scale, key prefix).
 
-use crate::wan::nn::Linear;
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
+use crate::rt::nn::Linear;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{cuda_tensor_shaped, WeightMap};
 
 pub(crate) mod attn;
 pub use attn::{scaled_dot_product_attention_gqa, scaled_dot_product_attention_gqa_softcap};
@@ -1171,7 +1171,7 @@ fn encode<S: LayerSource>(
             }
         }
         if progress {
-            crate::wan::log::info(format_args!("llm layer {}/{last}", i + 1));
+            crate::rt::log::info(format_args!("llm layer {}/{last}", i + 1));
         }
     }
     if last == n {
@@ -1826,7 +1826,7 @@ impl ResidentDecoder {
                 },
             )?;
             loaded.push(layer);
-            crate::wan::log::info(format_args!("llm resident layer {}/{layers}", i + 1));
+            crate::rt::log::info(format_args!("llm resident layer {}/{layers}", i + 1));
         }
         Ok(Self {
             cfg: cfg.clone(),
@@ -1854,7 +1854,7 @@ impl ResidentDecoder {
         let mut loaded = Vec::with_capacity(layers);
         for i in 0..layers {
             loaded.push(Layer::load(map, cfg, i, precision)?);
-            crate::wan::log::info(format_args!("llm resident layer {}/{layers}", i + 1));
+            crate::rt::log::info(format_args!("llm resident layer {}/{layers}", i + 1));
         }
         let final_norm = if layers == n {
             Some(norm_weight(
@@ -2556,7 +2556,7 @@ mod tests {
         let gen = weights();
         let recording = WeightMap::generated(move |key, shape| {
             rec.lock().unwrap().push((key.to_string(), shape.to_vec()));
-            crate::wan::weights::cuda_tensor_shaped(&gen, key, shape)
+            crate::rt::weights::cuda_tensor_shaped(&gen, key, shape)
                 .unwrap()
                 .host_cow()
                 .unwrap()
@@ -2577,7 +2577,7 @@ mod tests {
         let mut w = SafetensorsWriter::create(&src.join("model.safetensors"), &specs, &[]).unwrap();
         let gen = weights();
         for (k, s) in &tensors {
-            let t = crate::wan::weights::cuda_tensor_shaped(&gen, k, s).unwrap();
+            let t = crate::rt::weights::cuda_tensor_shaped(&gen, k, s).unwrap();
             let bytes: Vec<u8> = t
                 .host_cow()
                 .unwrap()
@@ -2589,7 +2589,7 @@ mod tests {
         w.finish().unwrap();
 
         let map = WeightMap::open(&src).unwrap();
-        let (quantized, captured) = crate::wan::nn::capture_fp8_rows(|| {
+        let (quantized, captured) = crate::rt::nn::capture_fp8_rows(|| {
             ResidentDecoder::load_with(&map, &cfg, 2, WeightPrecision::Fp8Rows)
         })
         .unwrap();
@@ -2607,7 +2607,7 @@ mod tests {
             "an existing tree is never overwritten"
         );
         let opened = prequant::open_tree(&src, 2).unwrap().expect("valid tree");
-        let (from_tree, again) = crate::wan::nn::capture_fp8_rows(|| {
+        let (from_tree, again) = crate::rt::nn::capture_fp8_rows(|| {
             ResidentDecoder::load_with(&opened, &cfg, 2, WeightPrecision::Fp8Rows)
         })
         .unwrap();

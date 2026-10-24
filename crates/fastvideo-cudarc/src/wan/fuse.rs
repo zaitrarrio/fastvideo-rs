@@ -322,9 +322,9 @@ use super::{device, stats};
 #[cfg(feature = "cuda")]
 pub(crate) mod dev {
     use super::*;
-    use crate::wan::act16::{operand, OutBuf};
-    use crate::wan::device::global_device;
-    use crate::wan::kernels::{cfg_n, cfg_rows, launch};
+    use crate::rt::act16::{operand, OutBuf};
+    use crate::rt::device::global_device;
+    use crate::rt::kernels::{cfg_n, cfg_rows, launch};
 
     fn err(e: impl std::fmt::Display) -> TensorError {
         TensorError::Message(e.to_string())
@@ -520,7 +520,7 @@ pub(crate) mod dev {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wan::tensor::with_bf16_act;
+    use crate::rt::tensor::with_bf16_act;
 
     fn t16(v: Vec<f32>, shape: &[usize]) -> CudaTensor {
         let v = v.into_iter().map(bf16_round).collect();

@@ -7,9 +7,9 @@
 use fastvideo_models::vae::AutoencoderKlConfig;
 
 use crate::hub_keys::{self, autoencoder_kl as vakeys};
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::{PipelineError, Result};
-use crate::wan::tensor::CudaTensor;
-use crate::wan::weights::WeightMap;
 
 fn msg(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())

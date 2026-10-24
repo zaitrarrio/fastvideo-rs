@@ -17,8 +17,8 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
+use crate::rt::tensor::CudaTensor;
 use crate::wan::pipeline::{frames_to_rgb8, PipelineError, Result, VideoWriter};
-use crate::wan::tensor::CudaTensor;
 
 /// Chunks that may wait between the decode and the drain thread. A 17-frame
 /// 1344x768 chunk is 53 MB of RGB8 on the device until it is copied down.
@@ -85,7 +85,7 @@ pub struct FrameDrain {
 }
 
 #[cfg(feature = "cuda")]
-fn timing_event(dev: &crate::wan::device::DeviceContext) -> Result<cudarc::driver::CudaEvent> {
+fn timing_event(dev: &crate::rt::device::DeviceContext) -> Result<cudarc::driver::CudaEvent> {
     dev.stream
         .record_event(Some(cudarc::driver::sys::CUevent_flags::CU_EVENT_DEFAULT))
         .map_err(|e| msg(format!("frame drain event: {e}")))
@@ -96,7 +96,7 @@ impl FrameDrain {
     pub fn new(writer: VideoWriter) -> Result<Self> {
         let (tx, rx) = sync_channel::<Job>(QUEUE);
         #[cfg(feature = "cuda")]
-        let (copy, marks) = match crate::wan::device::global_device() {
+        let (copy, marks) = match crate::rt::device::global_device() {
             Some(dev) => {
                 let copy = dev
                     .ctx
@@ -148,13 +148,13 @@ impl FrameDrain {
             )));
         };
         #[cfg(feature = "cuda")]
-        if let (Some(marks), Some(dev)) = (self.marks.as_mut(), crate::wan::device::global_device())
+        if let (Some(marks), Some(dev)) = (self.marks.as_mut(), crate::rt::device::global_device())
         {
             let mut on_device = frames.clone();
             on_device.ensure_device()?;
             if let Some(slice) = on_device.device_slice() {
                 let before = timing_event(&dev)?;
-                let bytes = crate::wan::ops::pack_rgb_u8_launch_device(
+                let bytes = crate::rt::ops::pack_rgb_u8_launch_device(
                     slice,
                     frames.shape[0],
                     h,
@@ -290,7 +290,7 @@ fn drain(
                 let rgb = copy
                     .memcpy_dtov(&bytes)
                     .map_err(|e| msg(format!("frame drain copy: {e}")))?;
-                crate::wan::stats::record_d2h(rgb.len() / 4);
+                crate::rt::stats::record_d2h(rgb.len() / 4);
                 // Freed on the compute stream, after the copy that read it.
                 drop(bytes);
                 times.copy_s += timer.elapsed().as_secs_f64();

@@ -11,10 +11,10 @@ use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 use thiserror::Error;
 
+use crate::rt::stats;
+use crate::rt::tensor::{CudaTensor, TensorError};
+use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::write_frames;
-use crate::wan::stats;
-use crate::wan::tensor::{CudaTensor, TensorError};
-use crate::wan::weights::WeightMap;
 
 use super::text::{
     flux2_dummy_text, flux2_text_len, format_flux2_prompt, pad_token_ids, Flux2TextEncoder,
@@ -137,7 +137,7 @@ impl Flux2Pipeline {
     }
 
     pub fn generate(&mut self, cfg: &GenerateConfig) -> Result<Vec<String>> {
-        let _gen = crate::wan::log::StepTimer::start("flux2.generate");
+        let _gen = crate::rt::log::StepTimer::start("flux2.generate");
         transformer::reset_rope_host_stats();
         let xfer0 = stats::snapshot();
         let (height, width, steps) = if self.tiny {
@@ -156,7 +156,7 @@ impl Flux2Pipeline {
         };
         let channels = self.transformer.cfg.in_channels;
         let seq = ph * pw;
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "flux2 generate preset={} tiny={} kind={} {}x{} packed={}x{} seq={} steps={} text={}",
             cfg.preset,
             self.tiny,
@@ -186,7 +186,7 @@ impl Flux2Pipeline {
         );
         let t_text = std::time::Instant::now();
         let encoder = {
-            let _t = crate::wan::log::StepTimer::start("flux2.text.encode");
+            let _t = crate::rt::log::StepTimer::start("flux2.text.encode");
             self.text.encode_ids(&ids, valid_len)?
         };
         let text_encode_ms = t_text.elapsed().as_millis();
@@ -203,13 +203,13 @@ impl Flux2Pipeline {
         let mut euler_host_ms = 0u128;
         let t_denoise = std::time::Instant::now();
         {
-            let _denoise = crate::wan::log::StepTimer::start(format!(
+            let _denoise = crate::rt::log::StepTimer::start(format!(
                 "flux2.denoise {} steps",
                 timesteps.len()
             ));
             for (i, t) in timesteps.iter().copied().enumerate() {
                 let t_step = std::time::Instant::now();
-                let _step = crate::wan::log::StepTimer::start(format!(
+                let _step = crate::rt::log::StepTimer::start(format!(
                     "flux2.dit step {}/{} t={t:.1}",
                     i + 1,
                     timesteps.len()
@@ -245,7 +245,7 @@ impl Flux2Pipeline {
         let unpack_ms = t_unpack.elapsed().as_millis();
         let t_vae = std::time::Instant::now();
         let decoded = {
-            let _vae = crate::wan::log::StepTimer::start("flux2.vae.decode");
+            let _vae = crate::rt::log::StepTimer::start("flux2.vae.decode");
             match &unpacked {
                 Some(u) => self.vae.decode(u)?,
                 None => self.vae.decode(&latents)?,
@@ -254,7 +254,7 @@ impl Flux2Pipeline {
         let vae_decode_ms = t_vae.elapsed().as_millis();
         let t_write = std::time::Instant::now();
         let paths = {
-            let _w = crate::wan::log::StepTimer::start("flux2.write_frames");
+            let _w = crate::rt::log::StepTimer::start("flux2.write_frames");
             write_frames(&decoded, Path::new(&cfg.output_dir))
                 .map_err(|e| PipelineError::Message(e.to_string()))?
         };
@@ -291,10 +291,10 @@ impl Flux2Pipeline {
             "d2h_count": xfer.d2h_count,
             "d2h_mib": xfer.d2h_bytes >> 20,
             "host_fallbacks": xfer.host_fallbacks,
-            "sdpa": crate::wan::nn::sdpa_backend(),
+            "sdpa": crate::rt::nn::sdpa_backend(),
             "profile_run": "this generate (last timed run when used from bench --runs)",
         });
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "flux2.profile text_ms={text_encode_ms} denoise_ms={denoise_ms} vae_ms={vae_decode_ms} \
              write_ms={write_frames_ms} euler_host_ms={euler_host_ms} rope_host_ms={} rope_calls={} \
              rope_device_calls={} rope_table_ms={} h2d={} ({} MiB) d2h={} ({} MiB)",
@@ -381,7 +381,7 @@ fn write_profile(dir: &Path, profile: &serde_json::Value) -> Result<()> {
         serde_json::to_string_pretty(profile).map_err(|e| PipelineError::Message(e.to_string()))?,
     )
     .map_err(|e| PipelineError::Message(e.to_string()))?;
-    crate::wan::log::info(format_args!("wrote {}", path.display()));
+    crate::rt::log::info(format_args!("wrote {}", path.display()));
     Ok(())
 }
 

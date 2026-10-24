@@ -35,7 +35,7 @@ use fastvideo_loader::{LazyDType, LazyStore, SafetensorsWriter, TensorSpec};
 use rayon::prelude::*;
 
 use crate::llm::DecoderConfig;
-use crate::wan::tensor::Result;
+use crate::rt::tensor::Result;
 
 use super::msg;
 
@@ -261,7 +261,7 @@ pub fn write_slim_decoder(
         }
         writer.finish().map_err(|e| msg(format!("slim: {e}")))?;
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "slim: wrote {} ({:.2} GiB)",
             path.display(),
             size as f64 / f64::from(1u32 << 30)
@@ -294,7 +294,7 @@ mod tests {
 
     use super::*;
     use crate::llm::{self, Act, LayerAttn};
-    use crate::wan::weights::WeightMap;
+    use crate::rt::weights::WeightMap;
 
     fn tiny(sandwich: bool) -> DecoderConfig {
         DecoderConfig {

@@ -277,7 +277,7 @@ pub fn decode_range(
         wave.truncate(max_samples(d, rate));
     }
     if native != ENCODER_CHANNELS {
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "ltx2 a2v: {} has {native} channel(s); decoded as stereo (ffmpeg -ac 2)",
             path.display()
         ));

@@ -13,10 +13,10 @@ use rand_distr::StandardNormal;
 use thiserror::Error;
 
 use crate::flux2::vae::AutoencoderKlFlux2;
+use crate::rt::stats;
+use crate::rt::tensor::{CudaTensor, TensorError};
+use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::write_frames;
-use crate::wan::stats;
-use crate::wan::tensor::{CudaTensor, TensorError};
-use crate::wan::weights::WeightMap;
 
 use super::text::{dummy_text, pad_token_ids, t5_len, tokenize_flux1, Flux1TextEncoder};
 use super::transformer::Flux1Transformer2D;
@@ -122,7 +122,7 @@ impl Flux1Pipeline {
     }
 
     pub fn generate(&mut self, cfg: &GenerateConfig) -> Result<Vec<String>> {
-        let _gen = crate::wan::log::StepTimer::start("flux1.generate");
+        let _gen = crate::rt::log::StepTimer::start("flux1.generate");
         let xfer0 = stats::snapshot();
         let (height, width, steps) = if self.tiny {
             (16usize, 16, 2usize)
@@ -140,7 +140,7 @@ impl Flux1Pipeline {
         };
         let channels = self.transformer.cfg.in_channels;
         let seq = ph * pw;
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "flux1 generate preset={} tiny={} {}x{} packed={}x{} seq={} steps={} text={}",
             cfg.preset,
             self.tiny,
@@ -160,7 +160,7 @@ impl Flux1Pipeline {
         let (clip_ids, t5_ids) = encode_prompt_ids(&self.text, cfg, self.tiny);
         let t_text = std::time::Instant::now();
         let (encoder, pooled) = {
-            let _t = crate::wan::log::StepTimer::start("flux1.text.encode");
+            let _t = crate::rt::log::StepTimer::start("flux1.text.encode");
             self.text.encode(&clip_ids, &t5_ids)?
         };
         let text_encode_ms = t_text.elapsed().as_millis();
@@ -177,13 +177,13 @@ impl Flux1Pipeline {
         let mut euler_host_ms = 0u128;
         let t_denoise = std::time::Instant::now();
         {
-            let _denoise = crate::wan::log::StepTimer::start(format!(
+            let _denoise = crate::rt::log::StepTimer::start(format!(
                 "flux1.denoise {} steps",
                 timesteps.len()
             ));
             for (i, t) in timesteps.iter().copied().enumerate() {
                 let t_step = std::time::Instant::now();
-                let _step = crate::wan::log::StepTimer::start(format!(
+                let _step = crate::rt::log::StepTimer::start(format!(
                     "flux1.dit step {}/{} t={t:.1}",
                     i + 1,
                     timesteps.len()
@@ -214,7 +214,7 @@ impl Flux1Pipeline {
         let unpack_ms = t_unpack.elapsed().as_millis();
         let t_vae = std::time::Instant::now();
         let decoded = {
-            let _vae = crate::wan::log::StepTimer::start("flux1.vae.decode");
+            let _vae = crate::rt::log::StepTimer::start("flux1.vae.decode");
             match &unpacked {
                 Some(u) => self.vae.decode(u)?,
                 None => self.vae.decode(&latents)?,
@@ -223,7 +223,7 @@ impl Flux1Pipeline {
         let vae_decode_ms = t_vae.elapsed().as_millis();
         let t_write = std::time::Instant::now();
         let paths = {
-            let _w = crate::wan::log::StepTimer::start("flux1.write_frames");
+            let _w = crate::rt::log::StepTimer::start("flux1.write_frames");
             write_frames(&decoded, Path::new(&cfg.output_dir))
                 .map_err(|e| PipelineError::Message(e.to_string()))?
         };
@@ -253,10 +253,10 @@ impl Flux1Pipeline {
             "d2h_count": xfer.d2h_count,
             "d2h_mib": xfer.d2h_bytes >> 20,
             "host_fallbacks": xfer.host_fallbacks,
-            "sdpa": crate::wan::nn::sdpa_backend(),
+            "sdpa": crate::rt::nn::sdpa_backend(),
             "profile_run": "this generate (last timed run when used from bench --runs)",
         });
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "flux1.profile text_ms={text_encode_ms} denoise_ms={denoise_ms} vae_ms={vae_decode_ms} \
              write_ms={write_frames_ms} euler_host_ms={euler_host_ms} h2d={} ({} MiB) d2h={} ({} MiB)",
             xfer.h2d_count,
@@ -330,7 +330,7 @@ fn write_profile(dir: &Path, profile: &serde_json::Value) -> Result<()> {
         serde_json::to_string_pretty(profile).map_err(|e| PipelineError::Message(e.to_string()))?,
     )
     .map_err(|e| PipelineError::Message(e.to_string()))?;
-    crate::wan::log::info(format_args!("wrote {}", path.display()));
+    crate::rt::log::info(format_args!("wrote {}", path.display()));
     Ok(())
 }
 

@@ -26,7 +26,7 @@ use fastvideo_loader::LazyStore;
 use sha2::{Digest, Sha256};
 
 use crate::llm::DecoderConfig;
-use crate::wan::tensor::{Result, TensorError};
+use crate::rt::tensor::{Result, TensorError};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -272,7 +272,7 @@ pub fn get_or_compute(
         )));
     }
     if let Err(e) = store(dir, key, &entry) {
-        crate::wan::log::info(format_args!("h3 text cache: not written ({e})"));
+        crate::rt::log::info(format_args!("h3 text cache: not written ({e})"));
     }
     Ok((entry, false))
 }

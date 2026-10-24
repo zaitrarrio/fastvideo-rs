@@ -240,7 +240,7 @@ fn lingbot_gen(
         }
         let t = pipe.generate(&r, &clip.join(format!("prompt{i}")))?;
         runs.push(serde_json::to_value(&t)?);
-        fastvideo_cudarc::wan::stats::phase_reset();
+        fastvideo_cudarc::rt::stats::phase_reset();
     }
     let req: Vec<f64> = runs
         .iter()
@@ -289,7 +289,7 @@ fn cosmos3_gen(
         w.num_steps = 1;
         let t = pipe.generate(&w, &clip.join("warmup"))?;
         report.note("warmup", serde_json::to_value(&t)?);
-        fastvideo_cudarc::wan::stats::phase_reset();
+        fastvideo_cudarc::rt::stats::phase_reset();
     }
     let t = pipe.generate(r, clip)?;
     let mut v = serde_json::to_value(&t)?;
@@ -327,12 +327,12 @@ fn router_check(report: &mut Report, tokens: usize, device: &str) -> StageResult
     let (hi, hw) = route(&logits, &bias, &spec);
     #[cfg(feature = "cuda")]
     {
-        use fastvideo_cudarc::wan::tensor::CudaTensor;
+        use fastvideo_cudarc::rt::tensor::CudaTensor;
         let mut l = CudaTensor::from_vec(logits, vec![tokens, e])?;
         l.pin_device()?;
         let mut b = CudaTensor::from_vec(bias, vec![e])?;
         b.pin_device()?;
-        let p = fastvideo_cudarc::wan::ops::GroupTopk {
+        let p = fastvideo_cudarc::rt::ops::GroupTopk {
             experts: e,
             top_k: spec.top_k,
             n_group: spec.n_group.unwrap_or(1),
@@ -343,7 +343,7 @@ fn router_check(report: &mut Report, tokens: usize, device: &str) -> StageResult
             round_bf16: spec.round_bf16,
         };
         let t = std::time::Instant::now();
-        let (di, dw) = fastvideo_cudarc::wan::ops::moe_group_topk_device(
+        let (di, dw) = fastvideo_cudarc::rt::ops::moe_group_topk_device(
             l.device_slice()
                 .ok_or_else(|| anyhow::anyhow!("logits not on device"))?,
             b.device_slice()

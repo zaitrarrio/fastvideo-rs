@@ -46,11 +46,11 @@ use std::sync::mpsc::sync_channel;
 use std::time::Instant;
 
 use anyhow::{anyhow, bail};
+use fastvideo_cudarc::rt::tensor::CudaTensor;
 use fastvideo_cudarc::wan::longlive::LongLiveConfig;
 use fastvideo_cudarc::wan::stream::{
     CausalRollout, HostBlock, PromptSwitch, Recache, RolloutConfig, RopePolicy,
 };
-use fastvideo_cudarc::wan::tensor::CudaTensor;
 use fastvideo_cudarc::{GenerateConfig, LoadParts, WanPipeline};
 use serde_json::{json, Value};
 
@@ -889,7 +889,7 @@ fn dump_frames(dir: &std::path::Path, b: &HostBlock) {
 /// chunks through one carried state, a fresh one) against the streamed
 /// frames (3-latent blocks), per window of video time.
 fn whole_clip_check(
-    tae: &fastvideo_cudarc::wan::taehv::TaeHv,
+    tae: &fastvideo_cudarc::rt::taehv::TaeHv,
     lats: &[CudaTensor],
     streamed: &[u8],
     (h, w): (usize, usize),

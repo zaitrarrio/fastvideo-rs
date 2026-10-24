@@ -26,7 +26,7 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use crate::wan::tensor::{CudaTensor, Result};
+use crate::rt::tensor::{CudaTensor, Result};
 
 use sha2::{Digest, Sha256};
 

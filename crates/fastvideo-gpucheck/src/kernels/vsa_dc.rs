@@ -21,7 +21,7 @@
 //! old kernels against new, and the mean union size per query-tile pair.
 
 use super::*;
-use fastvideo_cudarc::wan::attn_dc::{self, VsaEpilogue, VsaGate, VsaPrepIn};
+use fastvideo_cudarc::rt::attn_dc::{self, VsaEpilogue, VsaGate, VsaPrepIn};
 use half::bf16;
 
 const D: usize = 128;

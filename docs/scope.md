@@ -16,7 +16,7 @@ half. `--features cuda` needs a CUDA toolchain.
 | `fastvideo-ops` | Shared numeric helpers |
 | `fastvideo-models` | Configs, schedules, geometry, sol-engine contracts. No CUDA |
 | `fastvideo-loader` | Safetensors, lazy shards, bf16 views. `unsafe` allowed (mmap) |
-| `fastvideo-cudarc` | Pipelines, weights, NVRTC kernels. `unsafe` allowed (driver, cuBLAS, cuDNN FFI) |
+| `fastvideo-cudarc` | The runtime (`src/rt`: tensors, device, kernels, ops, weights) and the family pipelines. `unsafe` allowed (driver, cuBLAS, cuDNN FFI) |
 | `fastvideo-core` | Registry, workloads, `generate` dispatch |
 | `fastvideo-cli` | `generate` / `generate_av` |
 | `fastvideo-gpucheck` | Staged GPU checks (`kernels`, `parity`, `clip`). `unsafe` allowed |
@@ -25,7 +25,8 @@ half. `--features cuda` needs a CUDA toolchain.
 | `fastvideo-lab` | The lab's gold standards: `lab/gold/<variant>.toml` types, validation, directory reader and JSON Schema (ADR-0009), and the lint that keeps measurements out of `profiles/` comments. CPU only; plan D1 adds the `fv-lab` binary |
 
 Shared device types (`CudaTensor`, conv, the weight map, the frame writer)
-live under `cudarc/src/wan` and are used by every other model.
+live under `cudarc/src/rt` (the runtime, extracted from `wan` in plan B1; `wan`
+re-exports them under the old paths for now) and are used by every other model.
 
 The served families are described once in `families/*.toml` (layer 2 of the
 model family manifest, `docs/adr/0008-family-manifest-layer-2.md`): one file

@@ -8,10 +8,10 @@
 //! (the ones docs/ports/ltx2.md §g documents) and this view spells them the way
 //! the file on disk does. Nothing is copied or rewritten.
 
-use crate::wan::weights::WeightMap;
+use crate::rt::weights::WeightMap;
 
 use super::msg;
-use crate::wan::tensor::Result;
+use crate::rt::tensor::Result;
 
 /// How the checkpoint on disk names its tensors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

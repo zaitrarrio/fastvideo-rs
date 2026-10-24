@@ -29,10 +29,10 @@ use super::clip::{ClipText, ClipVisual};
 use super::synchformer::Synchformer;
 use super::transformer::{Conditions, MmAudioTransformer};
 use super::vae::MmAudioVaeDecoder;
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
+use crate::rt::{dump, inject};
 use crate::wan::pipeline::{PipelineError, Result};
-use crate::wan::tensor::CudaTensor;
-use crate::wan::weights::WeightMap;
-use crate::wan::{dump, inject};
 
 fn msg(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())
@@ -198,7 +198,7 @@ pub struct MmAudioPipeline {
 }
 
 fn sync() -> Result<()> {
-    crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))
+    crate::rt::device::synchronize().map_err(|e| msg(e.to_string()))
 }
 
 fn dump_host(name: &str, shape: &[usize], data: &[f32]) -> Result<()> {

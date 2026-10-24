@@ -1,7 +1,7 @@
 //! FP8 attention checks (`fv-gpucheck kernels --groups attn_fp8`).
 //!
 //! * **attn_fp8** — the SageAttention-style kernels of
-//!   [`fastvideo_cudarc::wan::attn_fp8`] (FP8 `Q K^T`, bf16 `P V`) against
+//!   [`fastvideo_cudarc::rt::attn_fp8`] (FP8 `Q K^T`, bf16 `P V`) against
 //!   the bf16 flash kernel and an f64 host SDPA, dense and VSA fine stage,
 //!   on synthetic inputs in two regimes: unit-variance q/k ("flat" scores)
 //!   and q x 3 with a per-channel K offset ("peaked", the case K smoothing
@@ -11,10 +11,10 @@
 //!   (dense: 56 heads x 37 966 rows; VSA: 660 video tiles at
 //!   top-k 132 and 66, the 8-step and 4-step recipes' 0.8 / 0.9).
 
-use fastvideo_cudarc::wan::attn::{self, FlashKernel};
-use fastvideo_cudarc::wan::attn_fp8;
-use fastvideo_cudarc::wan::attn_sage;
-use fastvideo_cudarc::wan::ops;
+use fastvideo_cudarc::rt::attn::{self, FlashKernel};
+use fastvideo_cudarc::rt::attn_fp8;
+use fastvideo_cudarc::rt::attn_sage;
+use fastvideo_cudarc::rt::ops;
 use serde_json::json;
 
 use crate::kernels_fp8::{bf16v, dev, host, rand, t16, t32, time_ms};
@@ -185,7 +185,7 @@ pub fn attn_fp8_group(report: &mut Report, seed: &mut u64) -> StageResult<()> {
                     topk: usize,
                     peaked: bool|
      -> anyhow::Result<(Err3, f64, f64)> {
-        let plan = fastvideo_cudarc::wan::vsa::TilePlan::new(grid)?;
+        let plan = fastvideo_cudarc::rt::vsa::TilePlan::new(grid)?;
         let (nb, seq) = (plan.num_tiles(), plan.seq);
         let dp = ops::vsa_plan_upload(&plan.slot_src, &plan.block_sizes, 64)?;
         let (q, k, v) = inputs(seed, heads, seq, d, peaked);

@@ -130,7 +130,7 @@ fn longlive_config(r: &SfWanRecipe) -> Option<fastvideo_cudarc::wan::longlive::L
 /// The LongLive transformer of a recipe (renamed, LoRA merged), if any.
 fn longlive_dit(
     r: &SfWanRecipe,
-) -> Result<Option<fastvideo_cudarc::wan::weights::WeightMap>, ApiError> {
+) -> Result<Option<fastvideo_cudarc::rt::weights::WeightMap>, ApiError> {
     let (Some(l), Some(cfg)) = (r.longlive.as_ref(), longlive_config(r)) else {
         return Ok(None);
     };
@@ -229,7 +229,7 @@ impl CudaBackend {
             .iter()
             .any(|m| matches!(&m.recipe, CudaRecipe::H3(r) if r.hd_1080p))
         {
-            let total = fastvideo_cudarc::wan::device::device_total_memory(cfg.device as usize);
+            let total = fastvideo_cudarc::rt::device::device_total_memory(cfg.device as usize);
             match super::caps::gate_h3_1080p(&mut cfg.models, total) {
                 Some(off) => tracing::warn!("{off}"),
                 None => tracing::info!(
@@ -256,9 +256,9 @@ impl CudaBackend {
         // of loading and reporting ready.
         let mut unsupported = BTreeMap::new();
         if let Some((name, (major, minor))) =
-            fastvideo_cudarc::wan::device::device_identity(cfg.device as usize)
+            fastvideo_cudarc::rt::device::device_identity(cfg.device as usize)
         {
-            let total = fastvideo_cudarc::wan::device::device_total_memory(cfg.device as usize);
+            let total = fastvideo_cudarc::rt::device::device_total_memory(cfg.device as usize);
             let dev = crate::device::DeviceProfile::new(
                 name,
                 (major.max(0) as u32, minor.max(0) as u32),
@@ -302,16 +302,16 @@ impl CudaBackend {
             fastvideo_cudarc::resolve_device("cuda:0")
                 .map_err(|e| ApiError::engine_failed(format!("cuda:0: {e}")))?;
         } else {
-            let dev = fastvideo_cudarc::wan::device::device_for_index(idx)
+            let dev = fastvideo_cudarc::rt::device::device_for_index(idx)
                 .map_err(|e| ApiError::engine_failed(format!("cuda:{idx}: {e}")))?;
-            fastvideo_cudarc::wan::device::set_thread_device(Some(dev));
+            fastvideo_cudarc::rt::device::set_thread_device(Some(dev));
         }
-        if let Some(dev) = fastvideo_cudarc::wan::device::global_device() {
+        if let Some(dev) = fastvideo_cudarc::rt::device::global_device() {
             if let Ok(name) = dev.ctx.name() {
                 self.info.name = name;
             }
         }
-        if let Some((_, total)) = fastvideo_cudarc::wan::device::free_memory() {
+        if let Some((_, total)) = fastvideo_cudarc::rt::device::free_memory() {
             self.info.total_memory_mb = total >> 20;
         }
         self.device_up = true;
@@ -537,7 +537,7 @@ impl EngineBackend for CudaBackend {
         // Co-residency check: the DiT alone must fit in what is free now
         // (the models already resident hold the rest).
         if let (Some(need), Some((free, total))) =
-            (m.dit_bytes(), fastvideo_cudarc::wan::device::free_memory())
+            (m.dit_bytes(), fastvideo_cudarc::rt::device::free_memory())
         {
             if need > free {
                 let gb = |b: u64| b as f64 / 1e9;
@@ -630,7 +630,7 @@ impl EngineBackend for CudaBackend {
             if self.causal_pipes.contains_key(model) {
                 tracing::warn!(model = %model, "SF-Wan pipeline stays resident (borrowed by rollouts)");
             }
-            let _ = fastvideo_cudarc::wan::device::trim_pool();
+            let _ = fastvideo_cudarc::rt::device::trim_pool();
         }
     }
 

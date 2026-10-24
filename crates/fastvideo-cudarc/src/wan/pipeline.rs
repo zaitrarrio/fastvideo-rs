@@ -433,7 +433,7 @@ impl WanPipeline {
         // bf16); UMT5 and the VAE keep f32 (`text_encoder_precisions` /
         // `vae_precision` fp32), see umt5.rs / vae.rs. FASTVIDEO_BF16_ACT=0
         // restores f32 activations everywhere.
-        crate::wan::tensor::default_bf16_activations();
+        crate::rt::tensor::default_bf16_activations();
         let mut cfg = WanVideoArchConfig::from_preset(preset);
         if cfg.causal {
             // Diagnostic: FASTVIDEO_WAN_CAUSAL_FPB=1 with FASTVIDEO_WAN_CAUSAL_AR=0

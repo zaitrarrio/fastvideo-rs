@@ -24,9 +24,9 @@ use std::sync::Arc;
 
 use std::path::Path;
 
+use crate::rt::writer::VideoWriter;
 use crate::sink::{AudioPcm, Port};
 use crate::wan::pipeline::{PipelineError, Result};
-use crate::wan::writer::VideoWriter;
 
 /// A shared cancel flag. Clones share the flag; any holder may trip it from
 /// any thread, and the pipeline sees it at its next check.
@@ -305,8 +305,8 @@ mod tests {
     /// present, and a cancel tripped from the progress callback.
     mod wan_end_to_end {
         use super::*;
+        use crate::rt::weights::WeightMap;
         use crate::wan::umt5::Umt5Encoder;
-        use crate::wan::weights::WeightMap;
         use crate::wan::{AutoencoderKlWan, WanTransformer3D};
         use crate::{GenerateConfig, WanPipeline};
         use fastvideo_models::wan::{Umt5Config, WanVaeConfig, WanVideoArchConfig};
@@ -434,8 +434,8 @@ mod tests {
         /// The default pool's live bytes after the stream drains (`None` on a
         /// CPU build, where there is no device allocator to check).
         fn live_bytes() -> Option<u64> {
-            crate::wan::device::synchronize().unwrap();
-            crate::wan::device::pool_usage().map(|u| u.used)
+            crate::rt::device::synchronize().unwrap();
+            crate::rt::device::pool_usage().map(|u| u.used)
         }
 
         /// Bind CUDA device 0 to this thread when the build and the box have
@@ -443,10 +443,10 @@ mod tests {
         /// `FV_HOOKS_REQUIRE_GPU=1` fails instead of falling back to the CPU.
         fn bind_gpu() -> bool {
             #[cfg(feature = "cuda")]
-            if let Ok(dev) = crate::wan::device::device_for_index(0) {
-                crate::wan::device::set_thread_device(Some(dev));
+            if let Ok(dev) = crate::rt::device::device_for_index(0) {
+                crate::rt::device::set_thread_device(Some(dev));
             }
-            let live = crate::wan::device::has_live_device();
+            let live = crate::rt::device::has_live_device();
             if std::env::var_os("FV_HOOKS_REQUIRE_GPU").is_some() {
                 assert!(
                     live,
@@ -565,7 +565,7 @@ mod tests {
             eprintln!("hooks e2e: gpu={on_gpu} resident_pool_bytes={resident:?}");
             drop(pipe);
             #[cfg(feature = "cuda")]
-            crate::wan::device::set_thread_device(None);
+            crate::rt::device::set_thread_device(None);
             let _ = std::fs::remove_dir_all(&root);
         }
     }

@@ -13,9 +13,9 @@
 //! open_clip's (`visual.*`, `transformer.*`, `token_embedding`, …).
 
 use super::layers::{gather_rows, host_values, linear, msg, pinned, quick_gelu, weight};
-use crate::wan::nn::{self, Linear};
-use crate::wan::tensor::{CudaTensor, Result};
-use crate::wan::weights::WeightMap;
+use crate::rt::nn::{self, Linear};
+use crate::rt::tensor::{CudaTensor, Result};
+use crate::rt::weights::WeightMap;
 
 #[derive(Debug, Clone)]
 pub struct ClipTowerConfig {
@@ -201,7 +201,7 @@ impl ClipText {
     ) -> Result<Self> {
         let d = cfg.width;
         Ok(Self {
-            token_embedding: crate::wan::weights::cuda_tensor_shaped(
+            token_embedding: crate::rt::weights::cuda_tensor_shaped(
                 map,
                 "token_embedding.weight",
                 &[vocab, d],

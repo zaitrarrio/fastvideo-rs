@@ -9,8 +9,8 @@
 
 use std::path::Path;
 
-use fastvideo_cudarc::wan::taehv::TaeHv;
-use fastvideo_cudarc::wan::weights::WeightMap;
+use fastvideo_cudarc::rt::taehv::TaeHv;
+use fastvideo_cudarc::rt::weights::WeightMap;
 use fastvideo_cudarc::CudaTensor;
 use serde_json::json;
 
@@ -100,8 +100,8 @@ pub fn run(
 
 // ---- device path vs the plain-Rust transcription ----------------------------
 
-use fastvideo_cudarc::wan::taehv::TaeArch;
-use fastvideo_cudarc::wan::taehv_ref as reference;
+use fastvideo_cudarc::rt::taehv::TaeArch;
+use fastvideo_cudarc::rt::taehv_ref as reference;
 
 fn parse_arch(arch: &str) -> anyhow::Result<TaeArch> {
     match arch {
@@ -200,12 +200,12 @@ pub fn run_device(
     let map = weight_map(arch, weights)?;
     // The reference reads the same tensors as host f32.
     let ws = |key: &str, shape: &[usize]| -> Vec<f32> {
-        fastvideo_cudarc::wan::weights::cuda_tensor_shaped(&map, key, shape)
+        fastvideo_cudarc::rt::weights::cuda_tensor_shaped(&map, key, shape)
             .and_then(|t| Ok(t.host_cow()?.into_owned()))
             .unwrap_or_else(|e| panic!("reference weight {key}: {e}"))
     };
     let (tae, load_s) = measure(report, "load", || {
-        Ok(fastvideo_cudarc::wan::taehv::TaeHv::load_arch(&map, arch)?)
+        Ok(fastvideo_cudarc::rt::taehv::TaeHv::load_arch(&map, arch)?)
     })?;
     report.note("load", json!({ "seconds": load_s }));
 
