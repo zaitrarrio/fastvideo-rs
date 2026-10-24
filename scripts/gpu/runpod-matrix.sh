@@ -2488,8 +2488,13 @@ Audio: male speech, clear voice, quiet room"
     b4c2_switch b4c2-h3-numerics fasth3-4step-vsa --clip-dir \
       "FASTVIDEO_BF16_ACT=0" - - - "${h3_b4c2[@]}"
     # 4. Gap 6 (H3): FP8 rows quantised at load (FASTVIDEO_TEXT_FP8_TREE=0)
-    #    write, the pre-quantised tree reads. -write vs -read measures whether
-    #    the tree is the load-time quantisation bit for bit on the device.
+    #    write, the pre-quantised tree reads, both with the resident FP8
+    #    encoder (auto on this card). -write vs -read measures whether the
+    #    tree is the load-time quantisation bit for bit on the device. No
+    #    streamed-FP8 variant: no flag makes H3 stream FP8 (auto does only
+    #    when its memory plan rejects the resident encoder for a larger
+    #    request); the streamed tree decision is CPU-tested (h3::text
+    #    EncoderRun).
     b4c2_switch b4c2-h3-tree fasth3-4step-vsa --clip-dir \
       "FASTVIDEO_TEXT_FP8_TREE=0" - - - "${h3_b4c2[@]}"
     # 5. No change: default settings, H3 (a hit there equals its miss).

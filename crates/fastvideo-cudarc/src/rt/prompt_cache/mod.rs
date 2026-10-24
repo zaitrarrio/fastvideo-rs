@@ -47,7 +47,7 @@ pub use key::{
     hex, sha256, Fields, KeyRecipe, PromptNorm, H3_KEY, H3_KEY_V1, LTX2_KEY, LTX2_KEY_V1, WAN_KEY,
     WAN_KEY_V1,
 };
-pub use numerics::{Gemm, Numerics, WeightsRead};
+pub use numerics::{EncodeSettings, Gemm, Numerics, TextMode, WeightsRead};
 
 /// H3's entry magic, also the first field of its pre-B4c2 key
 /// ([`H3_KEY_V1`]). Bump when the H3 file layout changes; a changed key

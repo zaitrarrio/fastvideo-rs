@@ -116,6 +116,40 @@ impl WeightsRead {
     }
 }
 
+/// Where the encoder's forward ran: a decoder kept on the device, or layer
+/// by layer (streamed). Equal numbers are expected, not proven (LTX gap 5,
+/// H3 resident vs streamed FP8), so the two are keyed apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextMode {
+    Resident,
+    Streamed,
+}
+
+impl TextMode {
+    /// The key field.
+    pub fn field(self) -> &'static [u8] {
+        match self {
+            Self::Resident => b"mode=resident",
+            Self::Streamed => b"mode=streamed",
+        }
+    }
+}
+
+/// How an encode runs, beyond which encoder it is (ADR-0021 "B4c2"): every
+/// value is what the run resolved, not what was asked for. H3 and LTX put
+/// these four after their encoder identity, in this order.
+#[derive(Debug, Clone, Copy)]
+pub struct EncodeSettings<'a> {
+    /// The encoder's linears: the checkpoint, FP8 rows quantised at load, or
+    /// the pre-quantised `text_encoder_fp8/` tree (gaps 1 and 6).
+    pub weights: WeightsRead,
+    /// The tree's file identity when the tree is what was read (gap 1).
+    pub tree: Option<&'a [u8; 32]>,
+    pub mode: TextMode,
+    /// GEMM math, card and activations (gaps 3 and 4).
+    pub numerics: Numerics,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

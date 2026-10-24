@@ -1482,3 +1482,14 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0021-prompt-cache.md "B4c2"
 - Verification: `bash scripts/gpu/tests/b4-verdict.test.sh`; `FV_DRY_RUN=1 FV_BASELINE_SHA=17e4a1dc bash scripts/gpu/runpod-matrix.sh b4c2`; GPU run by the coordinator
+
+### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-b4c2-review
+- Trigger: independent review of PR #178 (coordinator): H3 resident and streamed FP8 shared a key (the same unproven equality as LTX gap 5); Wan's `act` field was read outside UMT5's f32 scope; the field choices had no tests; LTX FP8 with an explicit streamed residency was keyed as FP8 though it streams bf16; identities re-read per prompt
+- Options: fix on the branch; record
+- Decision: (coordinator) fix on the branch, domain-only versioning and rows 7 / 8 as follow-ups confirmed. H3 key gets the `TextMode` field (`EncodeSettings`, shared with LTX); `EncoderRun` (`h3/text.rs`) is the pure choice of weights and mode, table-tested; Wan reads `Numerics::live` inside `with_bf16_act(false, ..)`; LTX `plan_mode`, `gemma_tree`, `gemma_weights_read` are pure and tested, FP8 + explicit streamed is keyed `weights=checkpoint` (computation unchanged); H3 tree and recovered identities through `identity::files_head_tail_cached` (re-read when a file's size, modification time or the file set changes); no H3 streamed-FP8 GPU cell (no flag forces it)
+- Reason: the key names what ran; a spurious miss costs one encode, a wrong hit is silent wrong output
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0021-prompt-cache.md "B4c2"
+- Verification: pins recomputed in Python (H3 `29d517fd…`, `9556f05a…`, `59ddcb14…`, recovered `1af19d5f…`, Wan `1f09144a…`); 31 mutations; gates on the build pod
+

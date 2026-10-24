@@ -386,9 +386,12 @@ mod tests {
                 &[5; 32],
                 tap,
                 &encoder_identity(store, &cfg, tap).unwrap(),
-                crate::rt::prompt_cache::WeightsRead::Checkpoint,
-                None,
-                &crate::rt::prompt_cache::Numerics::live(),
+                &crate::rt::prompt_cache::EncodeSettings {
+                    weights: crate::rt::prompt_cache::WeightsRead::Checkpoint,
+                    tree: None,
+                    mode: crate::rt::prompt_cache::TextMode::Streamed,
+                    numerics: crate::rt::prompt_cache::Numerics::live(),
+                },
             )
         };
         let encoder = StreamedEncoder {

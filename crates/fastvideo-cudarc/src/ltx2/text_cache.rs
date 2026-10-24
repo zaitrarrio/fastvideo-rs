@@ -42,7 +42,7 @@ use super::text::PaddedPrompt;
 /// ([`prompt_cache::identity::files_head_tail`]).
 pub use crate::rt::prompt_cache::identity::files_head_tail as weights_identity;
 pub use crate::rt::prompt_cache::Outcome as CacheOutcome;
-pub use crate::rt::prompt_cache::{Gemm, Numerics, WeightsRead};
+pub use crate::rt::prompt_cache::{EncodeSettings, Gemm, Numerics, TextMode, WeightsRead};
 
 /// The two contexts of one prompt, as the connectors emit them.
 pub struct CachedContexts {
@@ -108,39 +108,6 @@ pub fn cache_key_v1(
         max_len as u64,
         &[text_encoder_kind, gemma.as_slice(), connectors.as_slice()],
     ))
-}
-
-/// Where Gemma's forward ran (ADR-0021 "B4c2", gap 5): the resident decoder
-/// or layer by layer. Equal numbers are expected, not proven, so the two are
-/// keyed apart.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextMode {
-    Resident,
-    Streamed,
-}
-
-impl TextMode {
-    /// The key field.
-    pub fn field(self) -> &'static [u8] {
-        match self {
-            Self::Resident => b"mode=resident",
-            Self::Streamed => b"mode=streamed",
-        }
-    }
-}
-
-/// How an encode runs, beyond which encoder it is (ADR-0021 "B4c2"): every
-/// value is what the run resolved, not what was asked for.
-#[derive(Debug, Clone, Copy)]
-pub struct EncodeSettings<'a> {
-    /// Gemma's linears: bf16 checkpoint, FP8 rows quantised at load, or the
-    /// pre-quantised `text_encoder_fp8/` tree (gaps 1 and 6).
-    pub weights: WeightsRead,
-    /// The tree's file identity when `weights` is the tree (gap 1).
-    pub tree: Option<&'a [u8; 32]>,
-    pub mode: TextMode,
-    /// GEMM math, card and activations (gap 4).
-    pub numerics: Numerics,
 }
 
 /// Everything the conditioning depends on, hashed ([`prompt_cache::LTX2_KEY`]):

@@ -29,7 +29,7 @@ use crate::llm::DecoderConfig;
 use crate::rt::prompt_cache::{self, Fields};
 use crate::rt::tensor::{Result, TensorError};
 
-pub use crate::rt::prompt_cache::{hex, sha256, Numerics, WeightsRead};
+pub use crate::rt::prompt_cache::{hex, sha256, EncodeSettings, Numerics, TextMode, WeightsRead};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -164,15 +164,14 @@ pub fn cache_key_v1(
 /// The cache key ([`prompt_cache::H3_KEY`], ADR-0021 "B4c2"): the prompt, the
 /// tokenizer digest, the tap, then the encoder identity, the weights the
 /// encoder's linears were read from, the FP8 tree's identity (an empty field
-/// unless `weights` is the tree) and the numerics the encode runs with.
+/// unless the tree was read), the mode (resident or streamed) and the
+/// numerics the encode runs with.
 pub fn cache_key(
     prompt: &str,
     tokenizer_sha256: &[u8; 32],
     tap: usize,
     encoder_identity: &[u8; 32],
-    weights: WeightsRead,
-    tree_identity: Option<&[u8; 32]>,
-    numerics: &Numerics,
+    settings: &EncodeSettings<'_>,
 ) -> [u8; 32] {
     prompt_cache::H3_KEY.key(
         prompt,
@@ -180,9 +179,10 @@ pub fn cache_key(
         tap as u64,
         &[
             encoder_identity.as_slice(),
-            weights.field(),
-            tree_identity.map_or(&[][..], |t| t.as_slice()),
-            &numerics.field(),
+            settings.weights.field(),
+            settings.tree.map_or(&[][..], |t| t.as_slice()),
+            settings.mode.field(),
+            &settings.numerics.field(),
         ],
     )
 }
@@ -207,15 +207,21 @@ mod tests {
         dir
     }
 
-    /// The numerics of the pinned keys (an H100-class card, the defaults).
-    const NUM: Numerics = Numerics {
-        gemm: prompt_cache::Gemm::Bf16,
-        arch: Some((9, 0)),
-        bf16_act: true,
+    /// The settings of the pinned keys: the checkpoint, resident, on an
+    /// H100-class card with the defaults.
+    const RESIDENT: EncodeSettings<'static> = EncodeSettings {
+        weights: WeightsRead::Checkpoint,
+        tree: None,
+        mode: TextMode::Resident,
+        numerics: Numerics {
+            gemm: prompt_cache::Gemm::Bf16,
+            arch: Some((9, 0)),
+            bf16_act: true,
+        },
     };
 
     fn key(enc: &[u8; 32]) -> [u8; 32] {
-        cache_key("p", &[0; 32], 50, enc, WeightsRead::Checkpoint, None, &NUM)
+        cache_key("p", &[0; 32], 50, enc, &RESIDENT)
     }
 
     #[test]
@@ -239,147 +245,77 @@ mod tests {
 
     #[test]
     fn the_key_is_stable_and_every_input_moves_it() {
-        let (tok, enc, tree) = ([1u8; 32], [2u8; 32], [5u8; 32]);
-        let k = |prompt: &str,
-                 tok: &[u8; 32],
-                 tap,
-                 enc: &[u8; 32],
-                 w,
-                 t: Option<&[u8; 32]>,
-                 n: &Numerics| { cache_key(prompt, tok, tap, enc, w, t, n) };
-        let base = k(
-            "a dog <d>hi</d>",
-            &tok,
-            50,
-            &enc,
-            WeightsRead::Checkpoint,
-            None,
-            &NUM,
-        );
+        let (tok, enc, tree, other_tree) = ([1u8; 32], [2u8; 32], [5u8; 32], [6u8; 32]);
+        let s = RESIDENT;
+        let k =
+            |settings: &EncodeSettings<'_>| cache_key("a dog <d>hi</d>", &tok, 50, &enc, settings);
+        let base = k(&s);
         // Pinned (recomputed independently with Python hashlib, ADR-0021
         // "B4c2"): changing the derivation silently would orphan every entry.
-        assert_eq!(
-            base,
-            k(
-                "a dog <d>hi</d>",
-                &tok,
-                50,
-                &enc,
-                WeightsRead::Checkpoint,
-                None,
-                &NUM
-            )
-        );
+        assert_eq!(base, k(&s));
         assert_eq!(
             hex(&base),
-            "fb7e2e6cc4d67ddf1886f58830373bee7c9dbefef539c47cbc0fe7a39a2bc367"
+            "29d517fd583af66d3cb0c210b3b6381b8d1b1f1ebeab95ff17dd9bb6377f69c9"
         );
-        let tree_key = k(
-            "a dog <d>hi</d>",
-            &tok,
-            50,
-            &enc,
-            WeightsRead::Fp8RowsTree,
-            Some(&tree),
-            &NUM,
-        );
-        assert_eq!(
-            hex(&tree_key),
-            "54bb0f5f248d9335e299059ee8abac7ccceb022be13e004daf4832ef1108ee90"
-        );
-        let numerics = |n: Numerics| {
-            k(
-                "a dog <d>hi</d>",
-                &tok,
-                50,
-                &enc,
-                WeightsRead::Checkpoint,
-                None,
-                &n,
-            )
+        let tree_resident = EncodeSettings {
+            weights: WeightsRead::Fp8RowsTree,
+            tree: Some(&tree),
+            ..s
         };
+        assert_eq!(
+            hex(&k(&tree_resident)),
+            "9556f05aa27f7cf373b253fb09b7ba83cfdc04a2d0e4f7bd4248bfd9ea38d6c0"
+        );
+        let tree_streamed = EncodeSettings {
+            mode: TextMode::Streamed,
+            ..tree_resident
+        };
+        assert_eq!(
+            hex(&k(&tree_streamed)),
+            "59ddcb146e3899bf18eeeddc3bd9cd6549a8c7bbb421a53d430bfee25cf4fef1"
+        );
+        let with_numerics = |n: Numerics| k(&EncodeSettings { numerics: n, ..s });
         let others = [
-            k(
-                "a dog <d>hi</d> ",
-                &tok,
-                50,
-                &enc,
-                WeightsRead::Checkpoint,
-                None,
-                &NUM,
-            ),
-            k(
-                "a dog <d>hi</d>",
-                &[3; 32],
-                50,
-                &enc,
-                WeightsRead::Checkpoint,
-                None,
-                &NUM,
-            ),
-            k(
-                "a dog <d>hi</d>",
-                &tok,
-                49,
-                &enc,
-                WeightsRead::Checkpoint,
-                None,
-                &NUM,
-            ),
-            k(
-                "a dog <d>hi</d>",
-                &tok,
-                50,
-                &[4; 32],
-                WeightsRead::Checkpoint,
-                None,
-                &NUM,
-            ),
+            cache_key("a dog <d>hi</d> ", &tok, 50, &enc, &s),
+            cache_key("a dog <d>hi</d>", &[3; 32], 50, &enc, &s),
+            cache_key("a dog <d>hi</d>", &tok, 49, &enc, &s),
+            cache_key("a dog <d>hi</d>", &tok, 50, &[4; 32], &s),
             // Gap 6 (and H3's FP8 rows): bf16, FP8 quantised at load, the tree.
-            k(
-                "a dog <d>hi</d>",
-                &tok,
-                50,
-                &enc,
-                WeightsRead::Fp8RowsAtLoad,
-                None,
-                &NUM,
-            ),
-            tree_key,
-            k(
-                "a dog <d>hi</d>",
-                &tok,
-                50,
-                &enc,
-                WeightsRead::Fp8RowsTree,
-                Some(&[6; 32]),
-                &NUM,
-            ),
-            k(
-                "a dog <d>hi</d>",
-                &tok,
-                50,
-                &enc,
-                WeightsRead::Fp8RowsUnknown,
-                None,
-                &NUM,
-            ),
+            k(&EncodeSettings {
+                weights: WeightsRead::Fp8RowsAtLoad,
+                ..s
+            }),
+            k(&tree_resident),
+            k(&EncodeSettings {
+                tree: Some(&other_tree),
+                ..tree_resident
+            }),
+            k(&EncodeSettings {
+                weights: WeightsRead::Fp8RowsUnknown,
+                ..s
+            }),
+            // Resident vs streamed (the same FP8 numbers expected, unproven).
+            k(&tree_streamed),
+            k(&EncodeSettings {
+                mode: TextMode::Streamed,
+                ..s
+            }),
             // Gap 4: GEMM math, card and activations.
-            numerics(Numerics {
+            with_numerics(Numerics {
                 gemm: prompt_cache::Gemm::Tf32,
-                ..NUM
+                ..s.numerics
             }),
-            numerics(Numerics {
+            with_numerics(Numerics {
                 gemm: prompt_cache::Gemm::F32,
-                ..NUM
+                ..s.numerics
             }),
-            numerics(Numerics {
+            with_numerics(Numerics {
                 arch: Some((12, 0)),
-                ..NUM
+                ..s.numerics
             }),
-            numerics(Numerics {
+            with_numerics(Numerics {
                 bf16_act: false,
-                ..NUM
+                ..s.numerics
             }),
         ];
         for (i, a) in others.iter().enumerate() {
@@ -400,24 +336,24 @@ mod tests {
         let same_fields_new_domain =
             prompt_cache::H3_KEY.key("a dog <d>hi</d>", &tok, 50, &[enc.as_slice()]);
         assert_ne!(v1, same_fields_new_domain);
-        for w in [WeightsRead::Checkpoint, WeightsRead::Fp8RowsAtLoad] {
-            assert_ne!(
-                v1,
-                cache_key("a dog <d>hi</d>", &tok, 50, &enc, w, None, &NUM)
-            );
+        for weights in [WeightsRead::Checkpoint, WeightsRead::Fp8RowsAtLoad] {
+            for mode in [TextMode::Resident, TextMode::Streamed] {
+                let s = EncodeSettings {
+                    weights,
+                    mode,
+                    ..RESIDENT
+                };
+                assert_ne!(v1, cache_key("a dog <d>hi</d>", &tok, 50, &enc, &s));
+            }
         }
         let fp8_v1 = cache_key_v1("a dog <d>hi</d>", &tok, 50, &fp8_rows_identity(&enc));
+        let at_load = EncodeSettings {
+            weights: WeightsRead::Fp8RowsAtLoad,
+            ..RESIDENT
+        };
         assert_ne!(
             fp8_v1,
-            cache_key(
-                "a dog <d>hi</d>",
-                &tok,
-                50,
-                &enc,
-                WeightsRead::Fp8RowsAtLoad,
-                None,
-                &NUM
-            )
+            cache_key("a dog <d>hi</d>", &tok, 50, &enc, &at_load)
         );
         assert_ne!(prompt_cache::H3_KEY.domain, prompt_cache::H3_KEY_V1.domain);
     }
@@ -431,16 +367,8 @@ mod tests {
             "21417c188db91150d1636cdc8d0772690946b5a85a632682ec4b9e7a428d9d6a"
         );
         assert_eq!(
-            hex(&cache_key(
-                "a dog <d>hi</d>",
-                &[1; 32],
-                24,
-                &id,
-                WeightsRead::Checkpoint,
-                None,
-                &NUM
-            )),
-            "bc19c451fbf060f6df2b4de3c67402abdbc9fb615eb6654a2182202f9495a91f"
+            hex(&cache_key("a dog <d>hi</d>", &[1; 32], 24, &id, &RESIDENT)),
+            "1af19d5facbc3caac54274d5651b6ccf7f98cb4297100d1f414a859c6daa3d40"
         );
         let others = [
             recovered_weights_identity(24, &[9; 32], &ara, &adapter),

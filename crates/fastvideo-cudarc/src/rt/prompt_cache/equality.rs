@@ -20,8 +20,8 @@ use fastvideo_loader::{LazyDType, LazyStore, SafetensorsWriter, TensorSpec};
 
 use super::legacy;
 use super::{
-    identity, sha256, tokens_width, Gemm, Numerics, PromptCache, WeightsRead, H3_KEY, H3_KEY_V1,
-    LTX2, LTX2_KEY, LTX2_KEY_V1, WAN_KEY, WAN_KEY_V1,
+    identity, sha256, tokens_width, EncodeSettings, Gemm, Numerics, PromptCache, TextMode,
+    WeightsRead, H3_KEY, H3_KEY_V1, LTX2, LTX2_KEY, LTX2_KEY_V1, WAN_KEY, WAN_KEY_V1,
 };
 use crate::h3::text_cache as h3;
 use crate::llm::{Act, DecoderConfig, LayerAttn};
@@ -285,17 +285,17 @@ fn b4c2_keys_never_name_a_legacy_entry() {
         for n in &numerics {
             for w in weights {
                 let t = (w == WeightsRead::Fp8RowsTree).then_some(&tree);
-                for tap in [24, 50] {
-                    let new = h3::cache_key(prompt, &tok, tap, &enc, w, t, n);
-                    assert!(!old_h3.contains(&new), "{prompt:?}");
-                }
-                for mode in [ltx2::TextMode::Resident, ltx2::TextMode::Streamed] {
-                    let s = ltx2::EncodeSettings {
+                for mode in [TextMode::Resident, TextMode::Streamed] {
+                    let s = EncodeSettings {
                         weights: w,
                         tree: t,
                         mode,
                         numerics: *n,
                     };
+                    for tap in [24, 50] {
+                        let new = h3::cache_key(prompt, &tok, tap, &enc, &s);
+                        assert!(!old_h3.contains(&new), "{prompt:?}");
+                    }
                     let new =
                         ltx2::cache_key(prompt, b"tokenizer", 1024, b"gemma3-12b", &enc, &tok, &s);
                     assert_ne!(new, old_ltx, "{prompt:?}");
@@ -321,15 +321,20 @@ fn b4c2_keys_never_name_a_legacy_entry() {
         );
     }
 
-    // The Wan v2 key, pinned (recomputed independently with Python hashlib).
+    // The Wan v2 key, pinned (recomputed independently with Python hashlib):
+    // UMT5 runs with f32 activations, so that is what its key says.
+    let wan_numerics = Numerics {
+        bf16_act: false,
+        ..numerics[0]
+    };
     assert_eq!(
         super::hex(&WAN_KEY.key(
             "a cat",
             &sha256(b""),
             512,
-            &[[3u8; 32].as_slice(), &numerics[0].field()]
+            &[[3u8; 32].as_slice(), &wan_numerics.field()]
         )),
-        "febc3c3ac5eb10bfb317fb196e46b7e6430eb56396de9ad3f7eed79678185a01"
+        "1f09144a175a39a3fe78a56c6b6f2cadaf75940662b82baa30096b62ffde2f0e"
     );
 
     // On disk, H3 format (H3 and Wan): a legacy entry for this prompt is not
@@ -346,9 +351,12 @@ fn b4c2_keys_never_name_a_legacy_entry() {
         &tok,
         50,
         &enc,
-        WeightsRead::Checkpoint,
-        None,
-        &numerics[0],
+        &EncodeSettings {
+            weights: WeightsRead::Checkpoint,
+            tree: None,
+            mode: TextMode::Resident,
+            numerics: numerics[0],
+        },
     );
     let mut computed = 0;
     let (entry, hit) = h3::get_or_compute(&dir, &new_key, &ids, 2, || {
@@ -381,10 +389,10 @@ fn b4c2_keys_never_name_a_legacy_entry() {
         b"gemma3-12b",
         &enc,
         &tok,
-        &ltx2::EncodeSettings {
+        &EncodeSettings {
             weights: WeightsRead::Checkpoint,
             tree: None,
-            mode: ltx2::TextMode::Streamed,
+            mode: TextMode::Streamed,
             numerics: numerics[0],
         },
     );
