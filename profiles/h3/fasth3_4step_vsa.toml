@@ -1,5 +1,10 @@
-# Measured (RTX PRO 6000, image fastvideo-rs-runtime@sha256:efa9348a (sha-632742a) + branch fv-gpucheck, h3-demo x 3 seeds, medians; 1080p seed 0): video VAE 480p 2.671 s / 768p 6.306 s / 1080p 13.482 s; FASTVIDEO_H3_VAE_VEC (now default) 768p 6.203 s (-1.6%, frames byte-identical); FASTVIDEO_H3_VAE_MXFP8 (default on since 2026-10-14, owner decision; =0 restores the bf16 decode byte for byte) 1.986 / 4.679 / 9.906 s (-25.6 / -25.8 / -26.5%), vs the bf16 decode LPIPS 0.001, PSNR 51 dB, gate quality pass (5 prompts x 3 seeds: LPIPS 0.002, PSNR 50 dB, sharpness / jitter 1.00 vs the bf16 decode; unchanged vs the 49-forward base); TILE_BATCH=196 at 1080p +2.8% (docs/perf/h3-vae-decode-speed.md).
-# Measured (RTX PRO 6000, image fastvideo-rs-runtime@sha256:efa9348a (fv-gpucheck 0.1.15), h3-demo x 3 seeds, medians): VAE tile batch default (7/forward) vs FASTVIDEO_H3_VAE_TILE_BATCH=196 (28/forward, the per-chunk cap): 768p video VAE 6.292 -> 6.192 s (-1.6%), generate 26.88 -> 26.80 s; 480p 2.666 -> 2.669 s (0%); frames byte-identical (parity pass, gate unchanged by construction); default kept (docs/perf/h3-vae-tile-batching.md).
+# Numbers: lab/gold/fasth3-4step-vsa.toml (served as h3-turbo); the decoder's in
+# docs/perf/h3-vae-decode-speed.md and docs/perf/h3-vae-tile-batching.md. The video
+# decoder's block linears run MXFP8 by default since 2026-10-14 (owner decision;
+# FASTVIDEO_H3_VAE_MXFP8=0 restores the bf16 decode byte for byte, and the MXFP8
+# decode passes the gate against it); FASTVIDEO_H3_VAE_VEC is the default (frames
+# byte-identical); the tile-batch default is kept (batching every tile of a chunk
+# changes no frame and buys too little).
 # FastH3 Preview v1 4-step VSA: base MiniMax-H3 + the Preview VSA LoRA,
 # VSA-H3, MXFP8 linears, bf16 activations.
 

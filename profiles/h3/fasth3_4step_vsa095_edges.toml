@@ -1,4 +1,4 @@
-# Measured (RTX PRO 6000, b299214, 5 prompts, medians): 768p denoise 18.72 s (1.06x), LPIPS 0.424, PSNR 14.4 dB, sharpness 1.00 (min 0.99); quality passes, gate FAIL (speedup < 1.10) vs FastH3 4-step VSA 768p (denoise 19.81 s).
+# Measured in the h3attn matrix family: numbers in docs/techniques.md "H3 attention arms" (h3attn, RTX PRO 6000, 2026-09-27); the served variant's are in lab/gold/fasth3-4step-vsa.toml. Verdict: quality passes, gate FAIL (speedup below the promotion bar) vs FastH3 4-step VSA 768p.
 # FastH3 4-step VSA, 0.95 with step 0 and blocks 0-1 / 48-49 at 0.9, MXFP8.
 # An arm of the h3attn matrix family (docs/techniques.md, "H3 attention arms").
 
