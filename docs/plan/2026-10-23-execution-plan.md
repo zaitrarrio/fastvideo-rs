@@ -217,3 +217,9 @@ ran (pod id, $/hr), result, cost.
   merge). On pod `i8tu0lpdb6nvov`: `cargo test --locked` of the set, 711
   passed, 0 failed, 10 ignored, 171 s; no Rust change. Not done:
   `cargo-llvm-cov` in `docker/build-base.Dockerfile` (re-pins the image).
+- 2026-10-24 01:25Z: E4's `adapter-tests` run on the PR head (PR #148,
+  run 40049075337) green on the first attempt, 8 min wall clock (container
+  pull 55 s, the instrumented `cargo test` 6.5 min cold, no rust-cache
+  hit yet): 69 test binaries, 0 failures; coverage over the instrumented
+  workspace files: lines 62.42% (54115 / 86700), regions 62.96%, functions
+  59.31%; `adapter-coverage` artifact 4.5 MB (lcov, HTML, summaries).
