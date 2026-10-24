@@ -1096,7 +1096,7 @@ Project code: FVID
 ### FVID · 2026-10-24 · FVID-2026-10-24-guidance-scale-2-bound
 - Trigger: E2 census: `/v1/videos` bounds `guidance_scale` to 0..=20 but `guidance_scale_2` only to >= 0 (negotiation); FastVideo's `protocol.py` gives both `ge=0, le=20`
 - Options: keep the gap; bound `guidance_scale_2` to 0..=20 like upstream
-- Decision: bound it (400 `guidance_scale_2 must be within 0..=20`, the `guidance_scale` wording)
+- Decision: bound it at parse time (400 `guidance_scale_2 must be within 0..=20`, the `guidance_scale` wording). Full list of message changes, same status and code in each: above 20 refused (was accepted); a negative value gets the range message instead of "must be a non-negative number"; on a model without the `guidance_2` knob an out-of-range value gets the range message instead of "not supported by model"; reported before `boundary_ratio`, the task / image checks and negotiation errors
 - Reason: the vendored upstream contract wins where two places disagree (specs README rule); only upstream-invalid requests change
 - Reversibility: cheap
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)

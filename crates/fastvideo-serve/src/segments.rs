@@ -68,8 +68,11 @@ use tokio::sync::{mpsc, Notify};
 
 use crate::gate::ServiceGate;
 
-// Longest accepted prompt (the causal control's own limit).
-use fastvideo_protocol::params::rules::fast_h3::PROMPT_MAX_CHARS as MAX_PROMPT_CHARS;
+// Longest accepted prompt (the causal control's own limit) and the segment
+// length (`fastvideo_protocol::params::rules::segments`).
+use fastvideo_protocol::params::rules::segments::{
+    ASPECT_SIDE_MAX, DURATION_SEC, PROMPT_MAX_CHARS as MAX_PROMPT_CHARS, STREAM_ID_MAX_CHARS,
+};
 
 /// `[segments]` resolved.
 #[derive(Clone, Debug)]
@@ -411,7 +414,7 @@ fn err_reply(e: &ApiError) -> Response {
 fn parse_ratio(s: &str) -> Option<(u32, u32)> {
     let (w, h) = s.split_once(':')?;
     let (w, h): (u32, u32) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
-    (w > 0 && h > 0 && w <= 64 && h <= 64).then_some((w, h))
+    (w > 0 && h > 0 && w <= ASPECT_SIDE_MAX && h <= ASPECT_SIDE_MAX).then_some((w, h))
 }
 
 fn parse_short_edge(s: &str) -> Option<u32> {
@@ -573,7 +576,7 @@ const CAN_FETCH: bool = cfg!(feature = "http-client");
 
 fn validate(r: &SegmentRequest, caps: &ModelCaps, path: SegPath) -> Result<Vec<String>, ApiError> {
     if r.stream_id.trim().is_empty()
-        || r.stream_id.len() > 128
+        || r.stream_id.len() > STREAM_ID_MAX_CHARS
         || !r
             .stream_id
             .chars()
@@ -581,7 +584,7 @@ fn validate(r: &SegmentRequest, caps: &ModelCaps, path: SegPath) -> Result<Vec<S
     {
         return Err(ApiError::invalid_param(
             "stream_id",
-            "stream_id is 1–128 characters of [A-Za-z0-9_-]",
+            format!("stream_id is 1–{STREAM_ID_MAX_CHARS} characters of [A-Za-z0-9_-]"),
         ));
     }
     if r.prompt.trim().is_empty() {
@@ -590,13 +593,16 @@ fn validate(r: &SegmentRequest, caps: &ModelCaps, path: SegPath) -> Result<Vec<S
     if r.prompt.chars().count() > MAX_PROMPT_CHARS {
         return Err(ApiError::invalid_param(
             "prompt",
-            "the prompt is longer than 800 characters",
+            format!("the prompt is longer than {MAX_PROMPT_CHARS} characters"),
         ));
     }
-    if !(r.duration_sec.is_finite() && (0.5..=30.0).contains(&r.duration_sec)) {
+    if !(r.duration_sec.is_finite() && DURATION_SEC.contains(r.duration_sec)) {
         return Err(ApiError::invalid_param(
             "duration_sec",
-            "duration_sec is 0.5 to 30 seconds",
+            format!(
+                "duration_sec is {} to {} seconds",
+                DURATION_SEC.min, DURATION_SEC.max
+            ),
         ));
     }
     let mut warnings = Vec::new();

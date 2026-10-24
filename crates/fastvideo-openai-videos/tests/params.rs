@@ -114,3 +114,43 @@ fn videos_domains_are_negotiations() {
         assert!(bad.is_empty(), "{}: {bad:#?}", caps.id);
     }
 }
+
+/// Plan E2's one behaviour change: `guidance_scale_2` is bounded to
+/// FastVideo's `0..=20` at parse time (the `guidance_scale` wording), on
+/// every model, ahead of `boundary_ratio`, the task checks and negotiation.
+#[test]
+fn guidance_scale_2_is_bounded_like_upstream() {
+    let normalize = |v: Value| {
+        let Value::Object(m) = v else { unreachable!() };
+        let ncx = NormalizeCtx::new(OffsetDateTime::UNIX_EPOCH);
+        VideosCreate.normalize(parse_request(m)?, &ncx)
+    };
+    for bad in [json!(20.5), json!(-1), json!(25)] {
+        let e = normalize(json!({"prompt": "a cat", "guidance_scale_2": bad, "boundary_ratio": 2}))
+            .unwrap_err();
+        assert_eq!(
+            e.kind,
+            fastvideo_protocol::ErrorKind::InvalidRequest,
+            "{bad}"
+        );
+        assert_eq!(e.param.as_deref(), Some("guidance_scale_2"));
+        assert_eq!(e.message, "guidance_scale_2 must be within 0..=20");
+        let r = fastvideo_openai_videos::error::openai_error(&e);
+        assert_eq!(r.status, 400);
+        assert_eq!(
+            r.json_body().unwrap(),
+            &json!({"error": {
+                "message": "guidance_scale_2 must be within 0..=20",
+                "type": "invalid_request_error",
+                "param": "guidance_scale_2",
+                "code": 400,
+            }})
+        );
+    }
+    for ok in [json!(0), json!(20), json!(7.5)] {
+        assert!(
+            normalize(json!({"prompt": "a cat", "guidance_scale_2": ok})).is_ok(),
+            "{ok}"
+        );
+    }
+}

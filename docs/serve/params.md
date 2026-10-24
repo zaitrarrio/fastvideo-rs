@@ -17,7 +17,8 @@ against its specs (`parse_agreement`).
 
 ## Reading the specs
 
-`GET /fv/v1/params` (native auth) answers `{"object": "fv.param_specs",
+`GET /fv/v1/params` (native auth; mounted only when the native API is,
+like `/fv/v1/capabilities`) answers `{"object": "fv.param_specs",
 "specs": [...]}` for every mounted submit endpoint and every served model:
 
 | Surface | Endpoint | One spec per |
@@ -72,6 +73,7 @@ where it lives now. "Dup" marks a value restated in more than one place;
 | fal Wan | frames 17..=161 (81), fps 4..=60 (24), steps 2..=50 (40), guidance 1..=10 (3.5), shift 1..=10 (5), interpolated 0..=4, interpolators | `fal/src/schema/wan.rs:39-51` | fal Wan OpenAPIs | `rules::fal_wan` |
 | fal director | `memory` 1..=50; `audio_bitrate` set; `protocol_version` 1; `prompt_version` <= 2^53-1; script beats 64, style 2000, entities 32 / 64 / 200 / 1000 (ours); `chunk_duration` 5 or 10 (ours) | `fal/src/director/messages.rs:18-40, 485-498` | director AsyncAPI | `rules::fal_director` |
 | Reactor | `stop_session.reason` <= 64; uploads 64 MiB, 64 per session, id 1..=64 chars | `reactor/src/http.rs:116`, `uploads.rs:28-30, 60` | reactor_sdk | `rules::reactor` |
+| `/v1/segments` | `duration_sec` 0.5..=30; `stream_id` 1..=128 chars; `aspect_ratio` sides 1..=64; prompt 800 (fast-h3) | `serve/src/segments.rs:417, 579, 590-596` | ours (docs/serve/segments.md) | `rules::segments` |
 
 ### Limits from the caps or the protocol (already one source, unchanged)
 
@@ -92,7 +94,7 @@ limits, media byte limits, timeouts, the `[upsampler]` config's own
 
 | Where | Upstream | This server | Resolution |
 |---|---|---|---|
-| `/v1/videos` `guidance_scale_2` | 0..=20 | >= 0 (negotiation only) | **Changed** to 0..=20, the upstream value: a value above 20 now answers 400 `guidance_scale_2 must be within 0..=20` (the `guidance_scale` message) |
+| `/v1/videos` `guidance_scale_2` | 0..=20 | >= 0 (negotiation only) | **Changed** to 0..=20 at parse time, the upstream value (see "Message changes" below) |
 | fal `minimax/h3-max*` `duration` | number 0.92..=15, default 5 (the vendored schema moved from integer 5..15) | integer 5..=15 | Kept (widening would accept requests refused today); pinned in `param_rules`; for the owner / E3 |
 | fal `minimax/h3-max/reference-to-video` | `middle_image_url`, `middle_frame_time`, `reference_conditions` | not read (unknown fields are ignored) | Kept; E3 |
 | FastVideo `seed` | any int64 | >= 0 | Kept (seeds are u64 inside); pinned |
@@ -100,6 +102,25 @@ limits, media byte limits, timeouts, the `[upsampler]` config's own
 | OpenAI `GET /videos?limit` | 0..=100 | 1..=100 | Kept; pinned |
 | fal ingredient `reference_strength` | 0..=2 | parsed 0..=2, negotiation refuses > 1 | Kept (documented in the schema description) |
 | MiniMax `model` | `MiniMax-H3`, `-Highspeed`, `-Lite`, `-Max` | `MiniMax-H3`, `-Max`, `-Turbo`, `-Draft` | Kept (design §0.3) |
+| MiniMax `GET ?page_size` | example 20, no bounds | rule 1..=100 default 20; the parser refuses 0 but clamps values above 100 to 100 instead of refusing them | Kept (behaviour unchanged); the rule's maximum is the clamp |
+
+### Message changes (the full list)
+
+All on `/v1/videos` `guidance_scale_2`, all keeping status 400, type
+`invalid_request_error` and param `guidance_scale_2`
+(`tests/params.rs::guidance_scale_2_is_bounded_like_upstream`):
+
+1. above 20: refused with `guidance_scale_2 must be within 0..=20` (the
+   `guidance_scale` wording) where it was accepted on a model with the
+   `guidance_2` knob;
+2. negative: that range message instead of negotiation's
+   `guidance_scale_2 must be a non-negative number`;
+3. on a model without the `guidance_2` knob, an out-of-range value gets
+   the range message instead of `` `guidance_scale_2` is not supported by
+   model `<id>` `` (an in-range value still gets the latter);
+4. order: the check now runs at parse time, so for a body with several
+   faults it is reported before `boundary_ratio`, the task / image checks
+   and every negotiation error.
 
 ### Found while testing the specs (for E3)
 

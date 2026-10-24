@@ -44,6 +44,8 @@ const SCOPE: &[&str] = &[
     "crates/fastvideo-reactor/src/session.rs",
     "crates/fastvideo-serve/src/native.rs",
     "crates/fastvideo-serve/src/params.rs",
+    "crates/fastvideo-serve/src/segments.rs",
+    "crates/fastvideo-engine-service/src/stream/player.rs",
 ];
 
 /// `(file, text on the line, reason)`: numbers that are not request limits.
@@ -77,6 +79,21 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "fastvideo-reactor/src/uploads.rs",
         "const RESOLVE_TIMEOUT: Duration",
         "how long a command waits for an upload's bytes (a service setting)",
+    ),
+    (
+        "fastvideo-serve/src/segments.rs",
+        "const MAX_BYTES: usize",
+        "the fetched image's byte cap (a media limit, not a request parameter)",
+    ),
+    (
+        "fastvideo-serve/src/segments.rs",
+        "as_chunks::<3>()",
+        "the RGB pixel stride",
+    ),
+    (
+        "fastvideo-engine-service/src/stream/player.rs",
+        "abs() < 0.03",
+        "the tolerance naming a canvas's aspect label (presentation)",
     ),
     (
         "fastvideo-openai-videos/src/videos.rs",

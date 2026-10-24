@@ -281,3 +281,24 @@ fn first_diff(want: &Value, got: &Value, path: &str) -> String {
         _ => format!("{path}: golden {want}, now {got}"),
     }
 }
+
+/// `/fv/v1/params` carries native auth and lists engine ids: it is mounted
+/// with the native API only (a fal-only server does not expose it).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn params_route_is_mounted_only_with_the_native_api() {
+    let path = root().join("configs/serve/fake.toml");
+    for native in [true, false] {
+        let dir = tempfile::Builder::new()
+            .prefix("fv-params-native-")
+            .tempdir()
+            .unwrap();
+        let mut c = load("fake", &path, dir.path());
+        c.protocols.native = native;
+        let app = App::build(c, Overrides::default()).await.unwrap();
+        app.gate.engine().wait_ready().await;
+        let (s, body) = get(&app.router, "/fv/v1/params").await;
+        let want = if native { 200 } else { 404 };
+        assert_eq!(s, want, "native = {native}: {body}");
+        drop(app);
+    }
+}

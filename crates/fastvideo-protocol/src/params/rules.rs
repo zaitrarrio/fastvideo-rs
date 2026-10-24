@@ -283,3 +283,19 @@ pub mod reactor {
     /// `upload_id`: 1 to 64 of `[A-Za-z0-9_-]`.
     pub const UPLOAD_ID_MAX_CHARS: usize = 64;
 }
+
+/// Pull-based segments of a causal session (`/v1/segments`,
+/// docs/serve/segments.md; ours, no upstream): the fast-h3 prompt limit and
+/// the segment length.
+pub mod segments {
+    use super::*;
+
+    /// `prompt`: at most the fast-h3 limit.
+    pub const PROMPT_MAX_CHARS: usize = fast_h3::PROMPT_MAX_CHARS;
+    /// `duration_sec`: 0.5 to 30 seconds.
+    pub const DURATION_SEC: NumRange = NumRange::new(0.5, 30.0);
+    /// `stream_id`: 1 to 128 of `[A-Za-z0-9_-]`.
+    pub const STREAM_ID_MAX_CHARS: usize = 128;
+    /// `aspect_ratio` `W:H`: each side 1 to 64.
+    pub const ASPECT_SIDE_MAX: u32 = 64;
+}

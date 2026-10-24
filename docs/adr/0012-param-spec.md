@@ -56,7 +56,8 @@ certification matrix and needs a machine-readable list of every parameter.
    the JSON Schema the endpoint is served with (`/fal/schema`, already
    narrowed to the caps and tested against the parser).
 4. **Served at `GET /fv/v1/params`** (`{"object": "fv.param_specs",
-   "specs": [...]}`, native auth). `/fv/v1/capabilities` is unchanged (its
+   "specs": [...]}`, native auth, mounted only with the native API, like
+   `/fv/v1/capabilities`). `/fv/v1/capabilities` is unchanged (its
    golden is byte-identical).
 5. **The LTX bodies are typed** (`TextToVideoRequest`,
    `ImageToVideoRequest`, `AudioToVideoRequest`, `EditVideoRequest`,
@@ -70,7 +71,9 @@ Enforced by tests:
 - `fastvideo-protocol/tests/param_scan.rs`: no numeric limit literal in the
   adapters' request-validation sources (a `const` with a numeric
   initializer, a range or comparison with a literal of 2 or more), with a
-  five-entry allow-list of service settings and JSON-precision constants;
+  ten-entry allow-list of service settings, media byte caps, the RGB
+  stride, a presentation tolerance and JSON-precision constants (a stale
+  entry fails the test);
 - `fastvideo-protocol/tests/param_rules.rs`: the rules equal the vendored
   specs (FastVideo, OpenAI, MiniMax, LTX, 14 fal endpoints, the director
   AsyncAPI); where this server differs on purpose, the upstream value is
@@ -92,9 +95,21 @@ Enforced by tests:
 - Surfaces still differ where their upstreams do (fal pro rates, MiniMax
   4 s, OpenAI 5 s); that is now visible in one file.
 - One behaviour change, where two places disagreed: `/v1/videos`
-  `guidance_scale_2` is bounded to `0..=20` as FastVideo's schema says (it
-  was only non-negative). Every other valid request and every error keep
-  their status, code and message.
+  `guidance_scale_2` is bounded to `0..=20` at parse time as FastVideo's
+  schema says (it was only non-negative, at negotiation). This is
+  the full list of message changes, all with the same status (400) and
+  code (`invalid_request_error`, param `guidance_scale_2`) as before:
+  (1) a value above 20 is refused (`guidance_scale_2 must be within
+  0..=20`, the `guidance_scale` wording) where it was accepted; (2) a
+  negative value gets that range message instead of negotiation's
+  `guidance_scale_2 must be a non-negative number`; (3) on a model without
+  the `guidance_2` knob, an out-of-range value gets the range message
+  instead of `` `guidance_scale_2` is not supported by model ...``
+  (an in-range one still gets the latter); (4) order: the check runs at
+  parse time, so it is reported before `boundary_ratio`, the task / image
+  checks and every negotiation error of the same body.
+  Every other valid request and every other error keep their status, code
+  and message.
 - The golden is 1.1 MB (182 distinct specs over 36 configs); a change shows
   as line diffs, one parameter per line.
 

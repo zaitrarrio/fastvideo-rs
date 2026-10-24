@@ -11,7 +11,8 @@
 //! | `ltx` | `POST /v2/<endpoint>` per (endpoint, `model` id) whose target serves the task |
 //! | `fal` | one per configured (app, endpoint) whose model is served |
 //!
-//! The body is `{"object": "fv.param_specs", "specs": [...]}`; the
+//! Mounted with the native API only (it carries native auth and lists
+//! engine ids). The body is `{"object": "fv.param_specs", "specs": [...]}`; the
 //! `param_spec_golden` test pins it for every shipped config. The director
 //! and Reactor control channels are not in it yet (plan E3).
 
@@ -236,8 +237,9 @@ pub fn all_specs(
     out
 }
 
-/// `GET /fv/v1/params` (auth as the native API).
-pub fn routes(mcfg: MountCfg, native: bool) -> Router<ServeCtx> {
+/// `GET /fv/v1/params` (auth as the native API; mounted with the native
+/// API, so its own specs are always listed).
+pub fn routes(mcfg: MountCfg) -> Router<ServeCtx> {
     Router::new().route(
         "/fv/v1/params",
         get(move |State(ctx): State<ServeCtx>, headers: HeaderMap| {
@@ -248,7 +250,7 @@ pub fn routes(mcfg: MountCfg, native: bool) -> Router<ServeCtx> {
                 }
                 let models = ctx.engine().models();
                 let engine = ctx.engine().clone();
-                let specs = all_specs(&mcfg, native, &models, &|n| engine.alias(n));
+                let specs = all_specs(&mcfg, true, &models, &|n| engine.alias(n));
                 Json(json!({"object": "fv.param_specs", "specs": specs})).into_response()
             }
         }),
