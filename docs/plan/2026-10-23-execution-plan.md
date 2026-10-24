@@ -66,7 +66,7 @@ parallel agents.
 | A1 | `crates/fastvideo-manifest` layer 1: modules `name`, `model_toml`, `manifest`, `lineage`, `sig`, `schema`; the registry's WO-001 contracts verbatim plus the two widenings (`[variant]`, `[runtime]` recipe/profile, `[caps]`); fixtures under `crates/fastvideo-manifest/fixtures/` (valid and ≥25 invalid names with error kinds, model.toml valid/invalid, manifests with `.digest` siblings, test keys, lineage chains); proptest round-trip; `schemas/*.json` export with a drift test; ADR-0005 naming, ADR-0006 model.toml, ADR-0007 manifest/digest/lineage/signatures | all WO-001 acceptance tests green on CPU; no I/O, no CUDA, `unsafe` forbidden | `cargo test -p fastvideo-manifest` on the pod; clippy -D warnings | none | merged (#143) |
 | A2 | Layer 2 types (`family`, `variant`, `tiers`) and the first three family files `families/{h3,ltx2,wan}.toml` authored from `engine-service/src/cuda/caps.rs`; an equality test proving `catalog()` equals the manifest projection row for row | equality test green for every catalog row | pod | A1 | pr |
 | A3 | Engine projection: `model_from_config` resolves through the manifest; `validate.rs` and `protocol::ModelCaps` ranges come from it; `[aliases]`, `served_names`, `[protocols]` derived; the 35 serve TOMLs reduced to variant ids and residency; the fake backend serves the manifest; `catalog()` deleted | zero hand-written catalog rows; zero `[aliases]` blocks; `dimension_sweep.rs` and `tests/e2e.rs` green; `/fv/v1/capabilities` unchanged for every config (golden) | pod; serve-compat CI | A2 | todo |
-| A4 | Control-plane and script generation from the families: `control/gen-configs.mjs` emits presets, `enums.ts` ids, `recipe-trees.ts`, `r2-trees.ts`, `weights-sources.ts`, `volumes.ts`; `variants.sh` tables, `volumes.sh`, `gcp/families.tsv`, `autoscale.toml` pools, `verify-weights.sh` cells and `docs/serve/images.md` table generated with `--check` in CI | `gen-configs.mjs --check` green; control unit tests green | pod (node + vitest) | A2 | todo |
+| A4 | Control-plane and script generation from the families: `control/gen-configs.mjs` emits presets, `enums.ts` ids, `recipe-trees.ts`, `r2-trees.ts`, `weights-sources.ts`, `volumes.ts`; `variants.sh` tables, `volumes.sh`, `gcp/families.tsv`, `autoscale.toml` pools, `verify-weights.sh` cells and `docs/serve/images.md` table generated with `--check` in CI | `gen-configs.mjs --check` green; control unit tests green | pod (node + vitest) | A2 | pr |
 | A5 | Registry hand-off: publish layer 1 (git dependency at a pinned rev); the registry's WO-001 scaffolds against it | registry WO-001 green | registry repo | A1 | active |
 
 ### Phase 2: inference core structure (Workstream B, first half)
@@ -257,3 +257,20 @@ ran (pod id, $/hr), result, cost.
   Evidence: `artifacts/runpod/techniques/51898b8-10240107/compare/`. Main
   (A2, E4) merged into the branch: no cudarc or gpucheck file changed since
   the baseline, so the GPU evidence stands for the merged head.
+- 2026-10-24 01:40Z: A4 opened a draft PR (`claude/a4-control-gen`): the
+  family manifests are parsed by `control/gen-configs.mjs` (smol-toml 1.9.1,
+  the one new devDependency) and generate `control/src/families-gen.ts`, the
+  `EU_TREES` region of `volumes.ts` (from `volumes.sh`), the `weight_trees` /
+  `served` columns of `scripts/gcp/families.tsv` and the `variant_trees`
+  region of `verify-weights.sh` (new `variant:<id>` cells); `recipe-trees.ts`
+  and every model preset's `weights` / `min_vram_gb` derive from them;
+  cross-checks tie `catalog.json`, `autoscale.toml` and `volumes.sh` to the
+  manifests. Byte-identical except the two H3 `weight_trees` cells of
+  `families.tsv` (order). Found: `longlive-1.3b` and the lightx2v v0.1 recipe
+  have no variant in the manifests (recorded as exceptions, for A3). In this
+  container (node 22, no Rust): `gen-configs.mjs --check`, `npm run
+  typecheck`, 43 vitest files (one pre-existing failure fixed: a test grepped
+  a `caps.rs` line F2 reformatted), `scripts/gpu/lint.sh` green. New workflow
+  `.github/workflows/control.yml` runs them. Deployment data stays hand-written
+  for C1 (presets, image variants, `variants.sh`, autoscale pools, the
+  component cells, the `images.md` table).

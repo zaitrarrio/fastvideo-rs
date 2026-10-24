@@ -1,0 +1,85 @@
+# fv-control and the family-manifest generation (plan A4): everything
+# control/gen-configs.mjs derives from families/*.toml, configs/serve, the
+# weights TSVs and the shell tables must be current (`--check`), the
+# cross-checks between the manifests and their hand-written copies must agree,
+# and fv-control's typecheck and unit tests must pass. No Rust, no GPU: node
+# only (control/package-lock.json pins the tools). The shell lint runs here
+# too, since the generator writes scripts/gpu/verify-weights.sh. The engine
+# and model crates are inputs as well: test/unit/preset-trees.test.ts and
+# templates.test.ts check the tables' claims against their sources.
+name: control
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "families/**"
+      - "control/**"
+      - "configs/serve/**"
+      - "configs/autoscale.toml"
+      - "scripts/gcp/families.tsv"
+      - "scripts/gpu/volumes.sh"
+      - "scripts/gpu/verify-weights.sh"
+      - "scripts/gpu/weights-*.tsv"
+      - "scripts/gpu/r2-fetch.py"
+      - "scripts/serve/variants.sh"
+      - "docker/gpucheck.Dockerfile"
+      - "crates/fastvideo-serve/console/**"
+      - "crates/fastvideo-engine-service/**"
+      - "crates/fastvideo-models/**"
+      - "crates/fastvideo-cudarc/src/llm/prequant.rs"
+      - "crates/fastvideo-cudarc/src/h3/dit_tree.rs"
+      - "crates/fastvideo-cudarc/src/rt/quant.rs"
+      - ".github/workflows/control.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "families/**"
+      - "control/**"
+      - "configs/serve/**"
+      - "configs/autoscale.toml"
+      - "scripts/gcp/families.tsv"
+      - "scripts/gpu/volumes.sh"
+      - "scripts/gpu/verify-weights.sh"
+      - "scripts/gpu/weights-*.tsv"
+      - "scripts/gpu/r2-fetch.py"
+      - "scripts/serve/variants.sh"
+      - "docker/gpucheck.Dockerfile"
+      - "crates/fastvideo-serve/console/**"
+      - "crates/fastvideo-engine-service/**"
+      - "crates/fastvideo-models/**"
+      - "crates/fastvideo-cudarc/src/llm/prequant.rs"
+      - "crates/fastvideo-cudarc/src/h3/dit_tree.rs"
+      - "crates/fastvideo-cudarc/src/rt/quant.rs"
+      - ".github/workflows/control.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: control-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gen-check:
+    name: gen-configs --check, typecheck, unit tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: control
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: control/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Generated files are current and the cross-checks agree
+        run: node gen-configs.mjs --check
+      - run: npm run typecheck
+      - run: npx vitest run test/unit
+      - name: Shell lint (verify-weights.sh carries a generated region)
+        working-directory: .
+        run: bash scripts/gpu/lint.sh

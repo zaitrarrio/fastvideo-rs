@@ -10,6 +10,7 @@ import { POOL_PRESETS } from "../../src/presets";
 import { weightsPlan, weightsSource } from "../../src/providers";
 import { R2_AUX_TREES } from "../../src/r2weights";
 import { R2_TREES } from "../../src/r2-trees";
+import { MANIFEST_VARIANTS, MODEL_NAMES } from "../../src/families-gen";
 import { FASTH3_LORA, MXFP8_TREE_GLOB, RECIPE_TREES } from "../../src/recipe-trees";
 import { readToml } from "../../src/serverless/serves";
 import { SLS_PRESETS } from "../../src/serverless/presets";
@@ -127,11 +128,21 @@ describe("recipe-trees.ts against the Rust sources", () => {
     expect(lora).toContain(`"${FASTH3_LORA}/dense-datafree/adapter_model.safetensors"`);
     expect(lora).toMatch(/"4step-vsa" \| "preview-vsa" \| "fasth3-4step-vsa" => Some\(Self::Vsa\)/);
   });
-  it("the tier aliases resolve to the catalog entries the table names, on h3-base", () => {
-    expect(caps).toContain('h3(layout, "h3-base", "4step-vsa", Some("h3/fasth3_4step_vsa"), 4)');
-    expect(caps).toContain('h3(layout, "h3-base", "sol-h3", Some(SOL_H3_4STEP_PROFILE), 4)');
+  it("the tier aliases resolve to the manifest variants the table names, on h3-base", () => {
+    // The manifests (families/*.toml, generated from caps.rs catalog() until A3 inverts the direction) are the source;
+    // caps.rs is grepped only for what they do not carry (the Ref2VA tree's role).
+    expect(MODEL_NAMES["h3-turbo"]).toEqual({ variant: "fasth3-4step-vsa", kind: "tier" });
+    expect(MODEL_NAMES["h3-max"]).toEqual({ variant: "sol-h3", kind: "tier" });
+    expect(MANIFEST_VARIANTS["fasth3-4step-vsa"]!.trees).toEqual([FASTH3_LORA, "h3-base"]);
+    expect(MANIFEST_VARIANTS["sol-h3"]!.trees).toEqual([FASTH3_LORA, "h3-base"]);
     expect(caps).toContain('ref_weights: Some(layout.at("h3-ref2va"))');
-    for (const [recipe, r] of Object.entries(RECIPE_TREES)) expect(caps, `${recipe} -> ${r.catalog}`).toContain(`"${r.catalog}"`);
+    for (const [recipe, r] of Object.entries(RECIPE_TREES)) {
+      const v = MANIFEST_VARIANTS[r.catalog];
+      expect(v, `${recipe} -> ${r.catalog} is a manifest variant`).toBeTruthy();
+      // The recipe's trees are the variant's (the one exception reads another adapter the manifests lack).
+      if (recipe !== "lightx2v-turbo-v0.1") expect(r.required, recipe).toEqual(v!.weight_trees);
+      for (const t of r.required) if (recipe === "lightx2v-turbo-v0.1") expect(R2_TREES[t], `${recipe}: ${t} is published`).toBeTruthy();
+    }
     expect(caps).toContain('pub const LTX25_DEV_DIT: &str = "ltx25-dev/transformer_full"');
     expect(rust("crates/fastvideo-models/src/ltx2/lora.rs")).toContain('pub const LTX25_INGREDIENTS_DIR: &str = "ltx25-ic-lora-ingredients"');
   });
