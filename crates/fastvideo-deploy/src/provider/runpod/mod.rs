@@ -15,7 +15,7 @@
 mod pod;
 mod serverless;
 
-pub use pod::{create_body as pod_create_body, Pod, PodReach};
+pub use pod::{create_body as pod_create_body, Pod, PodListing, PodReach};
 pub use serverless::{
     endpoint_body, template_body, QueueReach, Serverless, SERVERLESS_DELETE_ATTEMPTS,
 };
