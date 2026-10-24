@@ -5,8 +5,9 @@
 //! profile-selected EasyCache knobs, the A14B block-0 / tail-39 controller,
 //! and the host Morton3D gather used only on the 14B Sol route.
 
+use fastvideo_models::techniques::step_cache::{EasyCache, StepCacheError};
 use fastvideo_models::wan::sol::{morton3d_inverse, morton3d_perm};
-use fastvideo_models::wan::sol_cache::{A14bCacheController, EasyCacheProfile};
+use fastvideo_models::wan::sol_cache::EasyCacheProfile;
 
 use super::tensor::{CudaTensor, Result, TensorError};
 
@@ -14,8 +15,13 @@ fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
 }
 
-/// Whole-stack EasyCache is the 5B / 14B path. A14B uses
-/// [`A14bCacheController`] (block-0 prefix + blocks 1..=39 residual).
+/// A step-cache error as a tensor error (its message is the family's).
+pub fn cache_err(e: StepCacheError) -> TensorError {
+    TensorError::Message(e.to_string())
+}
+
+/// Whole-stack EasyCache is the 5B / 14B path. A14B uses the per-expert
+/// controller ([`a14b_controller`]: block-0 prefix + blocks 1..=39 residual).
 pub fn uses_a14b_cache(is_moe: bool) -> bool {
     is_moe
 }
@@ -45,8 +51,8 @@ pub fn easy_cache_params() -> Result<(f64, usize, usize)> {
     Ok((threshold, retain, cooldown))
 }
 
-pub fn a14b_controller(num_steps: usize) -> Result<A14bCacheController> {
-    A14bCacheController::official(num_steps).map_err(msg)
+pub fn a14b_controller(num_steps: usize) -> Result<EasyCache> {
+    fastvideo_models::wan::sol_cache::a14b_easycache_official(num_steps).map_err(cache_err)
 }
 
 fn env_f64(primary: &str, fallback: &str, default: f64) -> f64 {
@@ -215,9 +221,10 @@ fn pin_like(t: CudaTensor, like: &CudaTensor) -> Result<CudaTensor> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fastvideo_models::techniques::step_cache::{Refresh, Signal, StepCache};
     use fastvideo_models::wan::sol_cache::{
-        A14bExpert, EasyCache, A14B_EASY_THRESHOLD, A14B_MAX_REUSE, A14B_START_STEP,
-        A14B_TAIL_STEPS,
+        a14b_placement, easycache_official, A14bExpert, A14B_EASY_THRESHOLD, A14B_MAX_REUSE,
+        A14B_START_STEP, A14B_TAIL_STEPS,
     };
 
     #[test]
@@ -225,28 +232,42 @@ mod tests {
         assert!(uses_a14b_cache(true));
         assert!(!uses_a14b_cache(false));
         let a14b = a14b_controller(40).unwrap();
-        assert!((a14b.threshold - A14B_EASY_THRESHOLD).abs() < 1e-12);
+        let p = *a14b.params();
+        assert!((p.threshold - A14B_EASY_THRESHOLD).abs() < 1e-12);
         assert_eq!(
-            (a14b.start_step, a14b.tail_steps, a14b.max_reuse),
-            (A14B_START_STEP, A14B_TAIL_STEPS, A14B_MAX_REUSE)
+            (
+                p.window.warmup,
+                p.window.cooldown.steps(),
+                p.reuse_cap.map(|c| c.limit)
+            ),
+            (A14B_START_STEP, A14B_TAIL_STEPS, Some(A14B_MAX_REUSE))
         );
-        let whole = EasyCache::official(40).unwrap();
-        assert_ne!(a14b.threshold, whole.threshold);
-        assert_ne!(a14b.start_step, whole.retain_steps);
-        assert_eq!(A14bCacheController::placement(), (1, 39, 40));
+        let whole = easycache_official(40).unwrap();
+        assert_ne!(p.threshold, whole.params().threshold);
+        assert_ne!(p.window.warmup, whole.params().window.warmup);
+        assert_eq!(a14b_placement(), (1, 39, 40));
         let mut cache = a14b;
+        let refresh = |out: f64| Refresh::Drift {
+            full_input_change: 1.0,
+            output_change: out,
+            output_norm: Some(1.0),
+        };
         for expert in [A14bExpert::HighNoise, A14bExpert::LowNoise] {
-            cache.decide(expert, 0, 0.0);
-            cache.note_computed(expert, 1.0, 0.0, 1.0);
-            cache.decide(expert, 5, 0.0);
-            cache.note_computed(expert, 1.0, 0.10, 1.0);
+            cache.decide(expert.lane(), 0, Signal::None).unwrap();
+            cache.note_computed(expert.lane(), refresh(0.0)).unwrap();
+            cache.decide(expert.lane(), 5, Signal::None).unwrap();
+            cache.note_computed(expert.lane(), refresh(0.10)).unwrap();
         }
-        let high = cache.decide(A14bExpert::HighNoise, 6, 2.0);
-        let low = cache.decide(A14bExpert::LowNoise, 6, 0.5);
-        assert!(!high.compute);
-        assert!(!low.compute);
-        assert!((high.estimate.unwrap() - 0.20).abs() < 1e-12);
-        assert!((low.estimate.unwrap() - 0.05).abs() < 1e-12);
+        let high = cache
+            .decide(A14bExpert::HighNoise.lane(), 6, Signal::Distance(2.0))
+            .unwrap();
+        let low = cache
+            .decide(A14bExpert::LowNoise.lane(), 6, Signal::Distance(0.5))
+            .unwrap();
+        assert!(!high.compute());
+        assert!(!low.compute());
+        assert!((high.indicator.unwrap() - 0.20).abs() < 1e-12);
+        assert!((low.indicator.unwrap() - 0.05).abs() < 1e-12);
     }
 
     #[test]

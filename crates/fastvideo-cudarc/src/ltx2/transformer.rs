@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex};
 use fastvideo_models::ltx2::config::Ltx2TransformerConfig;
 use fastvideo_models::ltx2::fbcache::FbCache;
 use fastvideo_models::ltx2::Ltx2RopeTables;
+use fastvideo_models::techniques::step_cache::{Lane, Refresh, Signal, StepCache};
 
 use crate::rt::nn::{sinusoidal_timesteps, Linear};
 use crate::rt::offload::{BlockWeights, OffloadBlock, Residency};
@@ -1105,7 +1106,7 @@ impl Ltx2Transformer {
 
     pub fn enable_fbcache(&self) {
         *self.fbcache.lock().expect("ltx2 fbcache") = Some(LtxFbRuntime {
-            state: FbCache::official(),
+            state: fastvideo_models::ltx2::fbcache::official(),
             armed: true,
             signals: Vec::new(),
             res_v: Vec::new(),
@@ -1454,15 +1455,20 @@ impl Ltx2Transformer {
         let runtime = slot.as_mut().expect("ltx2 fbcache");
         let v_in = runtime.pending_v.as_ref().expect("ltx2 fb v_in");
         let signal = xv.sub(v_in)?;
-        let distance = if runtime.state.needs_signal() {
-            let prev = runtime.signals[runtime.state.current_pass()]
-                .as_ref()
-                .expect("ltx2 fb signal");
-            relative_l1(&signal, prev)?
+        let distance = if runtime.state.needs_signal_next() {
+            let prev = runtime
+                .signals
+                .get(runtime.state.current_pass())
+                .and_then(Option::as_ref)
+                .ok_or_else(|| msg("ltx2 fbcache: no previous signal"))?;
+            Signal::Distance(relative_l1(&signal, prev)?)
         } else {
-            0.0
+            Signal::None
         };
-        let decision = runtime.state.decide(distance);
+        let decision = runtime
+            .state
+            .decide_next(distance)
+            .map_err(|e| msg(e.to_string()))?;
         let pass = runtime.state.last_pass();
         while runtime.signals.len() <= pass {
             runtime.signals.push(None);
@@ -1471,8 +1477,8 @@ impl Ltx2Transformer {
         }
         runtime.signals[pass] = Some(signal);
         runtime.active_pass = Some(pass);
-        if decision.skip {
-            runtime.state.note_reused(pass);
+        if decision.reuse() {
+            runtime.state.note_reused(Lane(pass));
             crate::rt::log::debug(format_args!(
                 "ltx2 fbcache reuse step pass {pass} reason {}",
                 decision.reason
@@ -1507,7 +1513,10 @@ impl Ltx2Transformer {
         }
         runtime.res_v[pass] = Some(xv.sub(&v_in)?);
         runtime.res_a[pass] = Some(xa.sub(&a_in)?);
-        runtime.state.note_computed(pass);
+        runtime
+            .state
+            .note_computed(Lane(pass), Refresh::None)
+            .map_err(|e| msg(e.to_string()))?;
         Ok(())
     }
 

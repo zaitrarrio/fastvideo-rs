@@ -1,0 +1,16 @@
+[14:24:41] create pod gpu="NVIDIA RTX PRO 6000 Blackwell Server Edition" image=ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-abccc38 volume=bz0ofkfx45 dc=EU-RO-1 cloud=SECURE quoted=$2.49/hr
+[14:24:42] pod s84eaxuf7tw4fd  $2.49/hr  (hard cap 3600s)
+[14:25:15] pod: [14:25:01] [b4a] ▶ b4a-h3-fullopt-prof-base  env FASTVIDEO_H3_QUANT=mxfp8 /fvscratch/baseline-e93e357/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --height 480 --width 832 --seconds 5 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --text-encoder auto --no-text-cache --no-mp4 --techniques h3/rtx5090_fullopt --clip-dir /fvscratch/runs/b4a/abccc38-10241424/b4a-h3-fullopt-prof-base/frames  (wall cap 3600s; 0=none)
+[14:33:19] pod: [14:33:13] [b4a] ▶ b4a-h3-fullopt-prof-pr  env FASTVIDEO_H3_QUANT=mxfp8 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --height 480 --width 832 --seconds 5 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --text-encoder auto --no-text-cache --no-mp4 --techniques h3/rtx5090_fullopt --clip-dir /fvscratch/runs/b4a/abccc38-10241424/b4a-h3-fullopt-prof-pr/frames  (wall cap 3600s; 0=none)
+[14:37:52] results → /home/user/wt/b4a-stepcache/artifacts/runpod/b4a/abccc38-10241424
+[14:37:52] destroy pod s84eaxuf7tw4fd
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+weights ok: fasth3-4step-vsa
+weights ok: fasth3-4step-dense
+weights ok: sol-h3
+weights ok: sol-h3-spark
+weights ok: ltx25-two-stage
+exit=1

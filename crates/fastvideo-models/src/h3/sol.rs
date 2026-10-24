@@ -30,6 +30,10 @@ use super::config::{TAG_AUDIO, TAG_TEXT, TAG_VIDEO};
 use super::packing::H3PackedLayout;
 use crate::techniques::methods::{SinkMode, SolAttn};
 use crate::techniques::schedule::Route;
+use crate::techniques::step_cache::{
+    distance, Accumulate, Coefficients, Comparison, Cooldown, Rescale, ResetOn, StepCacheError,
+    TeaCache, TeaCacheParams, Window,
+};
 
 /// Body layers in MiniMax-H3.
 pub const LAYERS_PER_FORWARD: usize = 50;
@@ -402,159 +406,83 @@ pub fn sink_plan(layout: &H3PackedLayout) -> Result<H3SolSinkPlan, String> {
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct H3TeaDecision {
-    pub compute: bool,
-    pub reason: &'static str,
-    pub relative_l1: Option<f64>,
-    pub indicator: Option<f64>,
-    pub accumulator: f64,
-}
+const TEA_NAME: &str = "h3 teacache";
 
-/// RTX TeaCache from `models/minimax_h3/RTX4090/teacache.py`.
+/// RTX TeaCache from `models/minimax_h3/RTX4090/teacache.py` on the one
+/// step-cache implementation (ADR-0020).
 ///
 /// The signal is block 0's AdaLN-modulated RMS-norm hidden. The reuse
 /// payload is the residual across the 50-block stack (`hidden - input`).
-/// H3 is guidance-distilled: one accumulator, no CFG pair, no Wan
-/// timestep-projection.
-#[derive(Debug, Clone)]
-pub struct H3TeaCache {
-    pub threshold: f64,
-    pub retain_steps: usize,
-    pub cooldown_steps: usize,
-    pub num_forwards: usize,
-    pub coefficients: Vec<f64>,
-    has_signal: bool,
-    has_residual: bool,
-    acc: f64,
+/// H3 is guidance-distilled: one lane ([`Lane::ONLY`](crate::techniques::step_cache::Lane::ONLY)), no CFG pair, no Wan
+/// timestep-projection. Forwards `< retain_steps` and the last
+/// `cooldown_steps` of `num_forwards` compute; the indicator is the Horner
+/// polynomial of the relative L1 (from zero); `compute = acc >= threshold`;
+/// every compute decision clears the accumulator (so a threshold compute
+/// reports `0`).
+pub fn teacache(
+    threshold: f64,
+    retain_steps: usize,
+    cooldown_steps: usize,
+    num_forwards: usize,
+    coefficients: Vec<f64>,
+) -> Result<TeaCache, StepCacheError> {
+    if threshold <= 0.0 {
+        return Err(StepCacheError::NonPositiveThreshold { cache: TEA_NAME });
+    }
+    Ok(TeaCache::new(TeaCacheParams {
+        name: TEA_NAME,
+        threshold,
+        window: Window {
+            warmup: retain_steps,
+            cooldown: Cooldown::Last {
+                steps: cooldown_steps,
+                of: num_forwards,
+            },
+        },
+        rescale: Rescale::Horner(Coefficients::new(TEA_NAME, coefficients)?),
+        comparison: Comparison::ComputeAtOrAbove,
+        accumulate: Accumulate::F64,
+        reset: ResetOn::Decision,
+        require_signal: true,
+        periodic: None,
+        hit_cap: None,
+    }))
 }
 
-impl H3TeaCache {
-    pub fn official(num_forwards: usize) -> Result<Self, String> {
-        Self::new(
-            RTX_TEACACHE_THRESHOLD,
-            RTX_TEACACHE_RETAIN_STEPS,
-            RTX_TEACACHE_COOLDOWN_STEPS,
-            num_forwards,
-            RTX_TEACACHE_COEFFICIENTS.to_vec(),
-        )
-    }
+/// The RTX run script's TeaCache (threshold 0.10, retain 5, cooldown 1,
+/// identity polynomial) over `num_forwards` forwards.
+pub fn rtx_teacache(num_forwards: usize) -> Result<TeaCache, StepCacheError> {
+    teacache(
+        RTX_TEACACHE_THRESHOLD,
+        RTX_TEACACHE_RETAIN_STEPS,
+        RTX_TEACACHE_COOLDOWN_STEPS,
+        num_forwards,
+        RTX_TEACACHE_COEFFICIENTS.to_vec(),
+    )
+}
 
-    pub fn new(
-        threshold: f64,
-        retain_steps: usize,
-        cooldown_steps: usize,
-        num_forwards: usize,
-        coefficients: Vec<f64>,
-    ) -> Result<Self, String> {
-        if threshold <= 0.0 {
-            return Err("h3 teacache requires a positive threshold".into());
-        }
-        if coefficients.is_empty() {
-            return Err("h3 teacache requires at least one coefficient".into());
-        }
-        Ok(Self {
-            threshold,
-            retain_steps,
-            cooldown_steps,
-            num_forwards,
-            coefficients,
-            has_signal: false,
-            has_residual: false,
-            acc: 0.0,
-        })
-    }
-
-    pub fn needs_signal(&self, step: usize) -> bool {
-        self.force_reason(step).is_none()
-    }
-
-    /// `relative_l1` is sum |signal − previous| / sum |previous|.
-    /// Ignored on a forced step.
-    pub fn decide(&mut self, step: usize, relative_l1: f64) -> H3TeaDecision {
-        let (compute, reason, relative_l1, indicator) =
-            if let Some(reason) = self.force_reason(step) {
-                if reason == "warmup" || reason == "cooldown" {
-                    self.acc = 0.0;
-                }
-                (true, reason, None, None)
-            } else {
-                let indicator = poly(&self.coefficients, relative_l1);
-                self.acc += indicator;
-                let compute = self.acc >= self.threshold;
-                if compute {
-                    self.acc = 0.0;
-                }
-                (
-                    compute,
-                    if compute {
-                        "threshold"
-                    } else {
-                        "below_threshold"
-                    },
-                    Some(relative_l1),
-                    Some(indicator),
-                )
-            };
-        self.has_signal = true;
-        H3TeaDecision {
-            compute,
-            reason,
-            relative_l1,
-            indicator,
-            accumulator: self.acc,
-        }
-    }
-
-    pub fn note_computed(&mut self) {
-        self.acc = 0.0;
-        self.has_residual = true;
-    }
-
-    /// Forget the signal, the residual and the accumulator: the next
-    /// request starts as the first one did (its buffers were freed).
-    pub fn reset(&mut self) {
-        self.acc = 0.0;
-        self.has_signal = false;
-        self.has_residual = false;
-    }
-
-    fn force_reason(&self, step: usize) -> Option<&'static str> {
-        if step < self.retain_steps {
-            Some("warmup")
-        } else if step >= self.num_forwards.saturating_sub(self.cooldown_steps) {
-            Some("cooldown")
-        } else if !self.has_signal || !self.has_residual {
-            Some("initialize")
-        } else {
-            None
-        }
-    }
+/// `(threshold, retain, cooldown, coefficients)` of an H3 TeaCache, as the
+/// load logs print them.
+pub fn teacache_knobs(t: &TeaCache) -> (f64, usize, usize, &[f64]) {
+    let p = t.params();
+    (
+        p.threshold,
+        p.window.warmup,
+        p.window.cooldown.steps(),
+        p.rescale.coefficients(),
+    )
 }
 
 /// Sum |current − previous| / sum |previous|. Matches RTX `teacache.py`.
 pub fn relative_l1(current: &[f32], previous: &[f32]) -> f64 {
-    let mut num = 0.0;
-    let mut den = 0.0;
-    for (a, b) in current.iter().zip(previous.iter()) {
-        num += (f64::from(*a) - f64::from(*b)).abs();
-        den += f64::from(*b).abs();
-    }
+    let (num, den) = distance::abs_sums(current, previous);
     relative_l1_from_sums(num, den)
 }
 
 /// `sum|current - previous| / clamp_min(sum|previous|, 1e-8)` from the two
 /// sums (the device reduction returns exactly these).
 pub fn relative_l1_from_sums(abs_diff_sum: f64, abs_prev_sum: f64) -> f64 {
-    abs_diff_sum / abs_prev_sum.max(1.0e-8)
-}
-
-fn poly(coefficients: &[f64], x: f64) -> f64 {
-    let mut value = 0.0;
-    for coefficient in coefficients {
-        value = value * x + coefficient;
-    }
-    value
+    distance::sum_over_sum_clamped(abs_diff_sum, abs_prev_sum)
 }
 
 #[cfg(test)]
@@ -753,27 +681,38 @@ mod tests {
 
     #[test]
     fn teacache_warms_then_skips_then_cools() {
-        let mut cache = H3TeaCache::official(10).unwrap();
+        use crate::techniques::step_cache::{Lane, Refresh, Signal, StepCache};
+        let mut cache = rtx_teacache(10).unwrap();
+        let only = Lane::ONLY;
         for step in 0..5 {
-            assert!(!cache.needs_signal(step));
-            let d = cache.decide(step, 9.0);
-            assert!(d.compute, "{step}");
+            assert!(!cache.needs_signal(only, step));
+            let d = cache.decide(only, step, Signal::Distance(9.0)).unwrap();
+            assert!(d.compute(), "{step}");
             assert_eq!(d.reason, "warmup");
-            cache.note_computed();
+            cache.note_computed(only, Refresh::None).unwrap();
         }
-        assert!(cache.needs_signal(5));
-        let skip = cache.decide(5, 0.01);
-        assert!(!skip.compute);
+        assert!(cache.needs_signal(only, 5));
+        let skip = cache.decide(only, 5, Signal::Distance(0.01)).unwrap();
+        assert!(!skip.compute());
         assert_eq!(skip.reason, "below_threshold");
-        let hit = cache.decide(6, 0.10);
-        assert!(hit.compute, "0.01 + 0.10 reaches 0.10");
+        let hit = cache.decide(only, 6, Signal::Distance(0.10)).unwrap();
+        assert!(hit.compute(), "0.01 + 0.10 reaches 0.10");
         assert_eq!(hit.reason, "threshold");
         assert_eq!(hit.accumulator, 0.0);
-        cache.note_computed();
-        assert!(!cache.needs_signal(9));
-        let tail = cache.decide(9, 0.0);
-        assert!(tail.compute);
+        cache.note_computed(only, Refresh::None).unwrap();
+        assert!(!cache.needs_signal(only, 9));
+        let tail = cache.decide(only, 9, Signal::None).unwrap();
+        assert!(tail.compute());
         assert_eq!(tail.reason, "cooldown");
+        assert_eq!(teacache_knobs(&cache), (0.10, 5, 1, &[1.0, 0.0][..]));
+        assert_eq!(
+            teacache(0.0, 5, 1, 10, vec![1.0]).unwrap_err().to_string(),
+            "h3 teacache requires a positive threshold"
+        );
+        assert_eq!(
+            teacache(0.1, 5, 1, 10, vec![]).unwrap_err().to_string(),
+            "h3 teacache requires at least one coefficient"
+        );
     }
 
     #[test]

@@ -1,0 +1,5 @@
+h3 teacache: threshold 4 retain 1 cooldown 1 coefficients [1.0, 0.0]
+h3 teacache step 0: compute (warmup; rel_l1 - indicator - acc 0.0000)
+h3 teacache step 1: REUSE (below_threshold; rel_l1 0.1282 indicator 0.1282 acc 0.1282)
+h3 teacache step 2: REUSE (below_threshold; rel_l1 0.1600 indicator 0.1600 acc 0.2881)
+h3 teacache step 3: compute (cooldown; rel_l1 - indicator - acc 0.0000)

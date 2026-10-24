@@ -26,7 +26,7 @@ pub use config::{
     Ltx2VideoVaeConfig, Ltx2VocoderConfig,
 };
 pub use fbcache::{
-    requested as fbcache_requested, FbCache, FbDecision, APPLIED as FBCACHE_APPLIED,
+    requested as fbcache_requested, FbCache, APPLIED as FBCACHE_APPLIED,
     THRESHOLD as FBCACHE_THRESHOLD,
 };
 pub use hq::{requested as hq_requested, STAGE1_STEPS as HQ_STAGE1_STEPS};

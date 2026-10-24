@@ -35,7 +35,9 @@ use fastvideo_models::h3::config::{
 };
 use fastvideo_models::h3::packing::{H3PackedLayout, RowRange, KEYFRAME_NOISE_AUG};
 use fastvideo_models::h3::schedule::H3JointSchedule;
-use fastvideo_models::h3::sol::H3TeaCache;
+use fastvideo_models::techniques::step_cache::{
+    Lane, Refresh, Signal, StepCache, StepCacheError, TeaCache,
+};
 
 use super::fused16::{self, AdaRows, NormOut};
 use crate::rt::nn::Linear;
@@ -425,6 +427,11 @@ const CACHE_MAGIC: u64 = u64::from_le_bytes(*b"H3ADALN3");
 /// Called with a name and a tensor at the points the oracle hooks
 /// (`block_<i>`: that block's `[1, S, hidden]` output).
 pub type Observer<'a> = &'a mut dyn FnMut(&str, &CudaTensor) -> Result<()>;
+
+/// A step-cache error as this module's error (the family's message).
+fn cache_err(e: StepCacheError) -> TensorError {
+    msg(e.to_string())
+}
 
 /// TeaCache `sum|current - previous| / sum|previous|` (`teacache.py`
 /// `_relative_l1`). On the device only the two sums come back.
@@ -2871,7 +2878,7 @@ pub struct H3Transformer {
 }
 
 struct H3TeaRuntime {
-    state: H3TeaCache,
+    state: TeaCache,
     signal: Option<CudaTensor>,
     residual: Option<CudaTensor>,
     pending: Option<CudaTensor>,
@@ -3209,7 +3216,7 @@ impl H3Transformer {
     /// Install RTX TeaCache with the run script's parameters. The default
     /// path leaves this empty.
     pub fn enable_sol_teacache(&self, num_forwards: usize) -> Result<()> {
-        let state = H3TeaCache::official(num_forwards).map_err(msg)?;
+        let state = fastvideo_models::h3::sol::rtx_teacache(num_forwards).map_err(cache_err)?;
         crate::rt::log::info(format_args!(
             "{}",
             fastvideo_models::h3::sol::TEACACHE_APPLIED
@@ -3219,7 +3226,7 @@ impl H3Transformer {
 
     /// Install a TeaCache controller (the `teacache` technique's step-output
     /// seam: the whole-stack residual is reused while it says so).
-    pub fn enable_teacache(&self, state: H3TeaCache) -> Result<()> {
+    pub fn enable_teacache(&self, state: TeaCache) -> Result<()> {
         *self.sol_tea.lock().expect("h3 sol tea") = Some(H3TeaRuntime {
             state,
             signal: None,
@@ -3272,33 +3279,41 @@ impl H3Transformer {
             SCALE_MSA,
             SHIFT_MSA,
         )?;
-        let rel = if runtime.state.needs_signal(step) {
-            let previous = runtime.signal.as_ref().expect("h3 teacache signal");
-            tea_relative_l1(&probe, previous)?
+        let signal = if runtime.state.needs_signal(Lane::ONLY, step) {
+            let previous = runtime
+                .signal
+                .as_ref()
+                .ok_or_else(|| msg("h3 teacache: no previous signal"))?;
+            Signal::Distance(tea_relative_l1(&probe, previous)?)
         } else {
-            0.0
+            Signal::None
         };
-        let decision = runtime.state.decide(step, rel);
+        let decision = runtime
+            .state
+            .decide(Lane::ONLY, step, signal)
+            .map_err(cache_err)?;
         crate::rt::evalstats::teacache_decision(
             step,
-            decision.compute,
+            decision.compute(),
             decision.reason,
-            decision.relative_l1,
+            decision.distance,
             decision.indicator,
             decision.accumulator,
         );
         runtime.signal = Some(probe);
         crate::rt::log::info(format_args!(
             "h3 teacache step {step}: {} ({}; rel_l1 {} indicator {} acc {:.4})",
-            if decision.compute { "compute" } else { "REUSE" },
+            if decision.compute() {
+                "compute"
+            } else {
+                "REUSE"
+            },
             decision.reason,
-            decision
-                .relative_l1
-                .map_or("-".into(), |v| format!("{v:.4}")),
+            decision.distance.map_or("-".into(), |v| format!("{v:.4}")),
             decision.indicator.map_or("-".into(), |v| format!("{v:.4}")),
             decision.accumulator
         ));
-        if decision.compute {
+        if decision.compute() {
             runtime.pending = Some(hidden.clone());
             runtime.book();
             Ok(Some(false))
@@ -3324,7 +3339,10 @@ impl H3Transformer {
         let mut slot = self.sol_tea.lock().expect("h3 sol tea");
         let runtime = slot.as_mut().expect("h3 sol tea");
         let before = runtime.pending.take().expect("h3 sol tea pending");
-        runtime.state.note_computed();
+        runtime
+            .state
+            .note_computed(Lane::ONLY, Refresh::None)
+            .map_err(cache_err)?;
         runtime.residual = Some(after.sub(&before)?);
         runtime.book();
         Ok(())
@@ -4568,8 +4586,7 @@ pub(crate) mod tests {
             "all-dense sol_attn"
         );
         let cached = H3Transformer::load(cfg.clone(), &map, &schedule, false).unwrap();
-        let warm_only =
-            fastvideo_models::h3::sol::H3TeaCache::new(0.1, 8, 0, 8, vec![1.0, 0.0]).unwrap();
+        let warm_only = fastvideo_models::h3::sol::teacache(0.1, 8, 0, 8, vec![1.0, 0.0]).unwrap();
         cached.enable_teacache(warm_only).unwrap();
         assert_eq!(
             bits(&cached, AttnMode::Dense),

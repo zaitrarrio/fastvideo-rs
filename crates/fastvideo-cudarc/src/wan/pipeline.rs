@@ -1289,7 +1289,7 @@ impl WanPipeline {
         } else {
             cfg.num_inference_steps.max(1)
         };
-        let tea_cache = TeaCache::from_env();
+        let tea_cache = TeaCache::from_env()?;
         let a14b = super::sol_cache::uses_a14b_cache(self.dit.cfg.is_moe());
         self.dit.configure_attn_route();
         self.dit.configure_sol_teacache(n_steps)?;
@@ -1306,7 +1306,7 @@ impl WanPipeline {
         } else {
             EasyCacheRuntime::from_env(n_steps)?
         };
-        if tea_cache.enabled
+        if tea_cache.enabled()
             && (easy_cache.is_some()
                 || self.dit.sol_teacache_enabled()
                 || self.dit.sol_taylor_enabled()
@@ -1567,21 +1567,20 @@ impl Drop for TextCacheScope<'_> {
 
 /// Simple residual TeaCache with Wan2.1-1.3B poly rescale (upstream TeaCache4Wan2.1).
 /// Gate with `FASTVIDEO_TEACACHE=1`. Threshold via `FASTVIDEO_TEACACHE_THRESH`
-/// (default 0.08 = upstream "fast" for 1.3B without ret_steps).
+/// (default 0.08 = upstream "fast" for 1.3B without ret_steps). The decision
+/// is the one TeaCache implementation with the TeaCache4Wan2.1 parameters
+/// ([`fastvideo_models::wan::sol_cache::teacache4wan21`], ADR-0020); this
+/// runtime keeps the tensors.
 struct TeaCache {
-    enabled: bool,
-    thresh: f32,
-    /// Accumulated rescaled relative L1 (upstream policy).
-    accumulated: f32,
-    step: usize,
-    coefficients: [f64; 5],
+    /// `None` unless `FASTVIDEO_TEACACHE` is on.
+    state: Option<fastvideo_models::wan::sol_cache::TeaCache4Wan21>,
     prev_modulated: Option<CudaTensor>,
     prev_residual: Option<CudaTensor>,
     cached: Option<CudaTensor>,
 }
 
 impl TeaCache {
-    fn from_env() -> Self {
+    fn from_env() -> Result<Self> {
         let enabled = fastvideo_models::settings::env_var("FASTVIDEO_TEACACHE")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
@@ -1589,78 +1588,57 @@ impl TeaCache {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(0.08);
-        // Wan2.1 T2V 1.3B coefficients (use_ret_steps=False) from TeaCache4Wan2.1.
-        let coefficients = [
-            2.39676752e3,
-            -1.31110545e3,
-            2.01331979e2,
-            -8.29855975,
-            1.37887774e-1,
-        ];
+        // Wan2.1 T2V 1.3B coefficients (use_ret_steps=False) from TeaCache4Wan2.1;
+        // `FASTVIDEO_TEACACHE_RET` picks the use_ret_steps=True ones.
         let ret_steps = fastvideo_models::settings::env_var("FASTVIDEO_TEACACHE_RET")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
-        let coefficients = if ret_steps {
-            // use_ret_steps=True coeffs for 1.3B
-            [
-                -5.21862437e4,
-                9.23041404e3,
-                -5.28275948e2,
-                1.36987616e1,
-                -4.99875664e-2,
-            ]
+        let state = if enabled {
+            Some(
+                fastvideo_models::wan::sol_cache::TeaCache4Wan21::new(thresh, ret_steps)
+                    .map_err(|e| PipelineError::Message(e.to_string()))?,
+            )
         } else {
-            coefficients
+            None
         };
-        Self {
-            enabled,
-            thresh,
-            accumulated: 0.0,
-            step: 0,
-            coefficients,
+        Ok(Self {
+            state,
             prev_modulated: None,
             prev_residual: None,
             cached: None,
-        }
+        })
     }
 
-    fn poly_rescale(&self, x: f64) -> f64 {
-        let c = &self.coefficients;
-        ((((c[0] * x + c[1]) * x + c[2]) * x + c[3]) * x) + c[4]
+    fn enabled(&self) -> bool {
+        self.state.is_some()
     }
 
-    fn maybe_reuse(&mut self, latents: &CudaTensor) -> Option<CudaTensor> {
-        if !self.enabled {
-            return None;
-        }
+    fn maybe_reuse(&mut self, latents: &CudaTensor) -> TensorResult<Option<CudaTensor>> {
+        let Some(state) = self.state.as_mut() else {
+            return Ok(None);
+        };
         let (Some(prev), Some(cached)) = (&self.prev_modulated, &self.cached) else {
-            return None;
+            return Ok(None);
         };
         if prev.shape != latents.shape {
-            return None;
+            return Ok(None);
         }
         let Ok((num, den, _)) = super::sol_cache::abs_sums(latents, prev) else {
-            return None;
+            return Ok(None);
         };
         let rel = num / (den + 1e-6);
-        self.accumulated += self.poly_rescale(rel) as f32;
-        self.step += 1;
         // Always compute first / last-ish steps; skip when accumulated below thresh.
-        if self.step <= 1 {
-            return None;
+        if !state.reuse(rel).map_err(super::sol_cache::cache_err)? {
+            return Ok(None);
         }
-        if self.accumulated < self.thresh {
-            if let Some(res) = &self.prev_residual {
-                return Some(latents.add(res).unwrap_or_else(|_| cached.clone()));
-            }
-            return Some(cached.clone());
+        if let Some(res) = &self.prev_residual {
+            return Ok(Some(latents.add(res).unwrap_or_else(|_| cached.clone())));
         }
-        self.accumulated = 0.0;
-        None
+        Ok(Some(cached.clone()))
     }
 
     fn store(&mut self, latents: &CudaTensor, out: &CudaTensor) {
-        if !self.enabled {
+        if !self.enabled() {
             return;
         }
         self.prev_modulated = Some(latents.clone());
@@ -1674,7 +1652,7 @@ impl TeaCache {
 /// Sol-engine EasyCache (`WAN22_CACHE_FAMILY=easycache`). Off unless
 /// `FASTVIDEO_WAN_SOL_CACHE=easycache`. Cond decides; uncond follows.
 struct EasyCacheRuntime {
-    state: fastvideo_models::wan::sol_cache::EasyCache,
+    state: fastvideo_models::techniques::step_cache::EasyCache,
     step: usize,
     previous_step_input: Option<CudaTensor>,
     last_full_input: Option<CudaTensor>,
@@ -1685,6 +1663,7 @@ struct EasyCacheRuntime {
 
 // Device reductions (two scalars back), host loops only off-device.
 use super::sol_cache::{mean_abs, mean_abs_delta};
+use fastvideo_models::techniques::step_cache::{Lane, Refresh, Signal, StepCache};
 
 impl EasyCacheRuntime {
     fn from_env(num_steps: usize) -> Result<Option<Self>> {
@@ -1703,10 +1682,9 @@ impl EasyCacheRuntime {
             )));
         }
         let (threshold, retain, cooldown) = super::sol_cache::easy_cache_params()?;
-        let state = fastvideo_models::wan::sol_cache::EasyCache::new(
-            num_steps, threshold, retain, cooldown,
-        )
-        .map_err(PipelineError::Message)?;
+        let state =
+            fastvideo_models::wan::sol_cache::easycache(num_steps, threshold, retain, cooldown)
+                .map_err(|e| PipelineError::Message(e.to_string()))?;
         super::log::info(format_args!(
             "wan sol easycache: threshold {threshold} retain {retain} cooldown {cooldown} steps {num_steps} (cond decides, uncond follows)"
         ));
@@ -1813,23 +1791,30 @@ fn dit_cfg_easy(
         let easy = ctx.easy_cache.as_mut().expect("easycache");
         let step = easy.step;
         easy.step += 1;
-        let (change, norm) = if easy.state.needs_cond_signal(step) {
-            (
-                mean_abs_delta(&latent_in, easy.previous_step_input.as_ref().expect("prev"))?,
-                mean_abs(easy.last_full_output.as_ref().expect("last out"))?,
-            )
-        } else {
-            (0.0, 1.0)
+        // A needed signal always has both tensors (a computed step stored
+        // them); without them the cache's own error reports the step.
+        let signal = match (
+            easy.state.needs_signal(Lane::COND, step),
+            &easy.previous_step_input,
+            &easy.last_full_output,
+        ) {
+            (true, Some(prev), Some(last_out)) => Signal::Drift {
+                input_change: mean_abs_delta(&latent_in, prev)?,
+                output_norm: mean_abs(last_out)?,
+            },
+            _ => Signal::None,
         };
         easy.previous_step_input = Some(latent_in.clone());
-        easy.state.decide_cond(step, change, norm)
+        easy.state
+            .decide(Lane::COND, step, signal)
+            .map_err(super::sol_cache::cache_err)?
     };
     let rows = encoder_hs.shape[0];
     let cond_hs = ctx.cond_hs.clone();
     let t1 = timestep_input(ctx, latents, t, 1)?;
     let (scale, cond) = {
         let (dit, scale) = pick_expert(ctx, t);
-        if decision.compute {
+        if decision.compute() {
             let out = dit.forward_ctx(&latent_in, &t1, &cond_hs, ctx.image)?;
             (scale, Some(out))
         } else {
@@ -1845,7 +1830,16 @@ fn dit_cfg_easy(
             ),
             _ => (0.0, 0.0),
         };
-        let _ = easy.state.note_cond_computed(full_in, out_change);
+        easy.state
+            .note_computed(
+                Lane::COND,
+                Refresh::Drift {
+                    full_input_change: full_in,
+                    output_change: out_change,
+                    output_norm: None,
+                },
+            )
+            .map_err(super::sol_cache::cache_err)?;
         easy.last_full_input = Some(latent_in.clone());
         easy.last_full_output = Some(out.clone());
         easy.cond_residual = Some(out.sub(&latent_in)?);
@@ -1869,7 +1863,8 @@ fn dit_cfg_easy(
     }
     let follow = {
         let easy = ctx.easy_cache.as_ref().expect("easycache");
-        easy.state.uncond_compute(easy.uncond_residual.is_some())
+        easy.state
+            .uncond_compute(Lane::COND, easy.uncond_residual.is_some())
     };
     let uncond_hs = uncond_row(ctx)?;
     let uncond = if follow {
@@ -1943,7 +1938,7 @@ fn dit_cfg(
     let clock = ctx.attn_clock;
     ctx.attn_clock += forwards_per_step(ctx, t);
     arm_attn(ctx, clock);
-    if let Some(cached) = ctx.tea_cache.maybe_reuse(latents) {
+    if let Some(cached) = ctx.tea_cache.maybe_reuse(latents)? {
         static TEA: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = TEA.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         super::log::debug(format_args!("teacache hit #{n}"));

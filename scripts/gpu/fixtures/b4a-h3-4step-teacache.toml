@@ -1,0 +1,33 @@
+# B4a GPU identity cell b4a-h3-4step-tea (scripts/gpu/runpod-matrix.sh b4a,
+# docs/adr/0020-step-cache.md): FastH3 Preview 4-step VSA (as
+# profiles/h3/fasth3_4step_vsa) with a TeaCache loose enough to reuse.
+# Forward 0 warms up, forward 3 cools down, forwards 1 and 2 reuse the
+# whole-stack residual while the accumulated rel-L1 (sum|d| / sum|prev|) of
+# the block-0 modulated input stays under 4.0. The only GPU measurement of
+# that signal is 0.08 per step at steps 3-4 of FastH3 8-step
+# (docs/techniques.md); a value above 1 would mean the probe moved by more
+# than its own L1 mass, so 4.0 leaves a wide margin for the larger 4-step
+# moves. Not measured on 4-step: the b4a cell fails if no forward reuses.
+# Not a served profile: it exists so the baseline and the PR build run the
+# reuse path on a short recipe.
+
+[id]
+name = "b4a_h3_4step_teacache"
+family = "minimax_h3"
+description = "FastH3 4-step VSA with TeaCache on forwards 1-2 (B4a identity cell)."
+
+[pipeline]
+model = "h3"
+recipe = "4step-vsa"
+
+[techniques.vsa]
+
+[techniques.teacache]
+threshold = 4.0
+retain_steps = 1
+cooldown_steps = 1
+coefficients = [1.0, 0.0]
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]
