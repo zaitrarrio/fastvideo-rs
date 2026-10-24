@@ -1,0 +1,45 @@
+# The h3arms family's fasth3-4step-vsa-480p cell (runpod-matrix.sh `h3arms`):
+# FastH3 technique arms on the technique layer (docs/techniques.md), each
+# compared with and gated (lossy) against the plain recipe cell of the same
+# run; at 480p also each arm decoded by TAEH3. `gate` on a compare runs that
+# pair's gate right after it, as the script's loop does. The fasth3-8step arms
+# are skipped on the EU volume (h3-8step is R2-only). Schema:
+# crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md (D1b).
+schema = 1
+name = "h3arms-fasth3-4step-vsa-480p"
+description = "FastH3 4-step VSA at 832x480 against its TAEH3-decoded twin"
+
+[workload]
+model = "h3"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+width = 832
+height = 480
+note = "runpod-matrix.sh's default PROMPT and SEED; streamed text encoder; 832x480"
+
+[lists]
+h3_common = ["--prompt", "{prompt}", "--seconds", "{seconds}", "--seed", "{seed}", "--text-encoder", "streamed",
+  "--text-cache", "{scratch}/h3-text-cache", "--text-weights", "{weights}/h3-base", "--warm"]
+
+[[arm]]
+name = "fasth3-4step-vsa-480p"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-vsa", "--height",
+  "{height}", "--width", "{width}", "--adaln-cache", "{runs}/fasth3-4step-vsa-480p-adaln.cache", "--clip-dir",
+  "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-4step-vsa-480p-taeh3"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+tae = "taeh3.safetensors"
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-vsa", "--height",
+  "{height}", "--width", "{width}", "--taeh3-weights", "{tae}/taeh3.safetensors", "--adaln-cache",
+  "{runs}/fasth3-4step-vsa-480p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[compare]]
+baseline = "fasth3-4step-vsa-480p"
+candidate = "fasth3-4step-vsa-480p-taeh3"
+gate = { kind = "lossy" }

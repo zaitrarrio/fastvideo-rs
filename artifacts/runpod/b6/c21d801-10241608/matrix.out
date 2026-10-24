@@ -1,0 +1,40 @@
+[16:09:12] [b6] matrix start image=e010afe97d6c058c
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-46e5f2dc-340a-0e96-ab01-ee1529566385)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[16:09:16] [b6] baseline baseline: sha-e93e357 layer sha256:0681fa50ff708cf228545488fb1799c2ec14316801ed2558af105cb6abccdf2b -> /fvscratch/baseline-e93e357/fv-gpucheck (aa3db80460bf11cb)
+[16:09:16] [b6] ▶ b6-solh3-tree-base  env /fvscratch/baseline-e93e357/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --height 480 --width 832 --seconds 5 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --text-encoder auto --no-text-cache --no-mp4 --h3-recipe sol-h3 --clip-dir /fvscratch/runs/b6/c21d801-10241608/b6-solh3-tree-base/frames  (wall cap 3600s; 0=none)
+[16:12:20] [b6] ok b6-solh3-tree-base  184s  /fvscratch/runs/b6/c21d801-10241608/b6-solh3-tree-base/stderr.log:[INFO] h3/timings {"audio_decode_s":0.132276944,"decode_s":2.12301,"denoise_s":7.692950799,"load_s":171.84225962,"peak_mib":57188,"refine_s":0.004936978,"step_s":[1.943005126953125,1.932681884765625,1.9054820556640626,1.911614501953125],"text_cache":"disabled","text_encoder":"resident-fp8","text_s":0.423776226,"total_s":10.51430205,"video_decode_s":1.9907330559999998,"video_encode_s":0.00010489,"video_push_s":0.000027189,"video_rgb_s":0.041524408005590735,"video_vae_s":1.9830278271138668,"video_wait_s":0.160591674,"warm":false,"write_s":0.150083201}
+[16:12:21] [b6] ▶ b6-solh3-tree-pr  env /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --height 480 --width 832 --seconds 5 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --text-encoder auto --no-text-cache --no-mp4 --h3-recipe sol-h3 --clip-dir /fvscratch/runs/b6/c21d801-10241608/b6-solh3-tree-pr/frames  (wall cap 3600s; 0=none)
+[16:13:05] [b6] ok b6-solh3-tree-pr  44s  /fvscratch/runs/b6/c21d801-10241608/b6-solh3-tree-pr/stderr.log:[INFO] h3/timings {"audio_decode_s":0.131330517,"decode_s":2.122702351,"denoise_s":7.709057739,"load_s":32.15775866,"peak_mib":57188,"refine_s":0.004781568,"step_s":[1.9524390869140626,1.936379638671875,1.911987548828125,1.9081481933593751],"text_cache":"disabled","text_encoder":"resident-fp8","text_s":0.400558143,"total_s":10.480640831,"video_decode_s":1.991371834,"video_encode_s":0.0000522,"video_push_s":0.000017599999999999998,"video_rgb_s":0.04142925200259077,"video_vae_s":1.9838699189126487,"video_wait_s":0.16026473600000002,"warm":false,"write_s":0.126870037}
+[16:13:05] [b6] compare b6-solh3-tree-base--b6-solh3-tree-pr exit=0 "psnr_mean":null 
+[16:13:05] [b6] skip b6-solh3-merge-base (not in FV_CELLS)
+[16:13:05] [b6] skip b6-solh3-merge-pr (not in FV_CELLS)
+[16:13:05] [b6] skip compare b6-solh3-merge-base--b6-solh3-merge-pr (frames missing)
+[16:13:05] [b6] skip b6-4stepvsa-merge-base (not in FV_CELLS)
+[16:13:05] [b6] skip b6-4stepvsa-merge-pr (not in FV_CELLS)
+[16:13:05] [b6] skip compare b6-4stepvsa-merge-base--b6-4stepvsa-merge-pr (frames missing)
+[16:13:05] [b6] skip b6-h3-streamed-base (not in FV_CELLS)
+[16:13:05] [b6] skip b6-h3-streamed-pr (not in FV_CELLS)
+[16:13:05] [b6] skip compare b6-h3-streamed-base--b6-h3-streamed-pr (frames missing)
+[16:13:05] [b6] skip b6-h3-ref2va-base (not in FV_CELLS)
+[16:13:05] [b6] skip b6-h3-ref2va-pr (not in FV_CELLS)
+[16:13:05] [b6] skip compare b6-h3-ref2va-base--b6-h3-ref2va-pr (frames missing)
+[16:13:05] [b6] skip b6-ltx25-ref2v-base (not in FV_CELLS)
+[16:13:05] [b6] skip b6-ltx25-ref2v-pr (not in FV_CELLS)
+[16:13:05] [b6] skip compare b6-ltx25-ref2v-base--b6-ltx25-ref2v-pr (frames missing)
+[16:13:05] [b6] skip b6-ltx25-a2v-guided-base (not in FV_CELLS)
+[16:13:05] [b6] skip b6-ltx25-a2v-guided-pr (not in FV_CELLS)
+[16:13:05] [b6] skip compare b6-ltx25-a2v-guided-base--b6-ltx25-a2v-guided-pr (frames missing)
+[16:13:05] [b6] skip b6-ltx25-offload-cpu-base (not in FV_CELLS)
+[16:13:05] [b6] skip b6-ltx25-offload-cpu-pr (not in FV_CELLS)
+[16:13:05] [b6] skip compare b6-ltx25-offload-cpu-base--b6-ltx25-offload-cpu-pr (frames missing)
+[16:13:05] [b6] compare-clips-b6-4stepvsa-merge-base--b6-4stepvsa-merge-pr.json: "status":"skipped" 
+[16:13:05] [b6] compare-clips-b6-h3-ref2va-base--b6-h3-ref2va-pr.json: "status":"skipped" 
+[16:13:05] [b6] compare-clips-b6-h3-streamed-base--b6-h3-streamed-pr.json: "status":"skipped" 
+[16:13:05] [b6] compare-clips-b6-ltx25-a2v-guided-base--b6-ltx25-a2v-guided-pr.json: "status":"skipped" 
+[16:13:05] [b6] compare-clips-b6-ltx25-offload-cpu-base--b6-ltx25-offload-cpu-pr.json: "status":"skipped" 
+[16:13:05] [b6] compare-clips-b6-ltx25-ref2v-base--b6-ltx25-ref2v-pr.json: "status":"skipped" 
+[16:13:05] [b6] compare-clips-b6-solh3-merge-base--b6-solh3-merge-pr.json: "status":"skipped" 
+[16:13:05] [b6] compare-clips-b6-solh3-tree-base--b6-solh3-tree-pr.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "failed" "status": "failed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 
+[16:13:05] [b6] matrix done
+matrix_exit=0

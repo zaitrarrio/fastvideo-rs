@@ -1,0 +1,50 @@
+# The b6 family's b6-ltx25-a2v-guided pair (runpod-matrix.sh `b6`, plan B6,
+# docs/adr/0017-loader-stages.md): the baseline binary (FV_BASELINE_SHA's
+# runtime image, fetch-baseline.sh) and this build with the same command line
+# and environment, every arm encoding its prompt (--no-text-cache), then
+# compare-clips --off-identity. `env = []` keeps the script's bare `env`
+# before the binary. Schema: crates/fastvideo-lab/schemas/cell.v1.json;
+# docs/adr/0019-fv-lab.md (D1b).
+schema = 1
+name = "b6-ltx25-a2v-guided"
+description = "LTX-2.5 guided audio-to-video on the dev DiT (the distilled LoRA pipeline): 8 stage-1 steps at 768x512, 49 frames; byte identity"
+
+[workload]
+model = "ltx2"
+prompt = "A close-up of a woman with short dark hair talking directly to the camera in a bright living room."
+seed = 1024
+frames = 49
+width = 768
+height = 512
+steps = 8
+note = "runpod-matrix.sh's SEED and the b6 a2v prompt; 8 stage-1 steps, dense stage 2, the speech fixture as the audio"
+
+[lists]
+ltx_b6 = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--seed",
+  "{seed}", "--two-stage", "--text", "streamed", "--no-text-cache"]
+
+[[arm]]
+name = "b6-ltx25-a2v-guided-base"
+gate = "ltx25-a2v-guided"
+trees = ["ltx25", "ltx25-dev"]
+bin = "baseline"
+env = []
+argv = ["{@ltx_b6}", "--dit", "{weights}/ltx25-dev/transformer_full", "--height", "{height}", "--width",
+  "{width}", "--num-frames", "{frames}", "--dense-stage2", "--guided", "--num-inference-steps", "{steps}",
+  "--audio", "{root}/scripts/gpu/fixtures/speech-flite-44k.flac", "--prompt", "{prompt}", "--clip",
+  "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "b6-ltx25-a2v-guided-pr"
+gate = "ltx25-a2v-guided"
+trees = ["ltx25", "ltx25-dev"]
+env = []
+argv = ["{@ltx_b6}", "--dit", "{weights}/ltx25-dev/transformer_full", "--height", "{height}", "--width",
+  "{width}", "--num-frames", "{frames}", "--dense-stage2", "--guided", "--num-inference-steps", "{steps}",
+  "--audio", "{root}/scripts/gpu/fixtures/speech-flite-44k.flac", "--prompt", "{prompt}", "--clip",
+  "{runs}/{arm}/frames"]
+
+[[compare]]
+baseline = "b6-ltx25-a2v-guided-base"
+candidate = "b6-ltx25-a2v-guided-pr"
+args = ["--off-identity"]

@@ -72,9 +72,16 @@
             "type": "string"
           }
         },
+        "bin": {
+          "description": "The binary: `gpucheck` (default) or `baseline` ([`ArmBin`]).",
+          "$ref": "#/$defs/ArmBin"
+        },
         "env": {
-          "description": "`K=V` settings, in order, for `env K=V … fv-gpucheck …`.",
-          "type": "array",
+          "description": "`K=V` settings, in order, for `env K=V … fv-gpucheck …`. Absent: no\n`env`; `env = []`: a bare `env` before the binary, as the script's\n`env ${e[@]} \"$bin\"` renders an empty list (the command line equal\nword for word).",
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "type": "string"
           }
@@ -102,6 +109,13 @@
           "format": "uint32",
           "minimum": 0
         },
+        "tae": {
+          "description": "A tiny-autoencoder file the arm reads as `{tae}/<file>` (the script's\n`tae_gated_cell`): fetched once with `fetch-tae.sh` when missing, and\nthe arm recorded as skipped (`tae weights missing`) when still absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "trees": {
           "description": "The weight trees the arm reads (weights-manifest.tsv `dest` names):\nthe roots of `gate` and every `{weights}/<tree>` of the command.",
           "type": "array",
@@ -116,6 +130,21 @@
         "gate",
         "trees",
         "argv"
+      ]
+    },
+    "ArmBin": {
+      "description": "Which fv-gpucheck an arm runs (docs/adr/0019-fv-lab.md, D1b).",
+      "oneOf": [
+        {
+          "description": "The image's own (`FV_GPUCHECK`, `/opt/fastvideo-rs/target/release/fv-gpucheck`).",
+          "type": "string",
+          "const": "gpucheck"
+        },
+        {
+          "description": "The baseline commit's: `FV_BASELINE_SHA`'s runtime image binary,\nfetched by `scripts/gpu/fetch-baseline.sh` into\n`<scratch>/baseline-<sha>/fv-gpucheck` before the first arm, as the\nscript's `techniques` / `b6` / `b4a` families do. The byte-identity\nfamilies pair a `baseline` arm with a `gpucheck` arm and compare them\nwith `--off-identity`.",
+          "type": "string",
+          "const": "baseline"
+        }
       ]
     },
     "Compare": {
@@ -134,6 +163,17 @@
         },
         "candidate": {
           "type": "string"
+        },
+        "gate": {
+          "description": "The promotion gate of the same pair, run right after this compare\n(the script's `compare_cells b c; gate_cells b c …` in one loop\niteration). A `[[gate]]` runs after every compare of the cell instead.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PairedGate"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
@@ -177,6 +217,24 @@
         "baseline",
         "candidate"
       ]
+    },
+    "PairedGate": {
+      "description": "The gate of a compare's own pair (`Compare::gate`).",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/GateKind",
+          "default": "lossy"
+        },
+        "off": {
+          "description": "An OFF-arm whose compare with the baseline must be byte-identical.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "Workload": {
       "description": "What every arm of a cell generates. Each value is referenced from the\narms' command lines as a placeholder (`{prompt}`, `{seed}`, …), so the\ndeclared workload is the one that runs; a value no arm uses is an error.\nAn absent value is the pipeline's (or the recipe's) default.",

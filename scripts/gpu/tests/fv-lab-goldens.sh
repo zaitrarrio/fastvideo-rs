@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
-# The goldens of fv-lab (docs/adr/0019-fv-lab.md §5, §6): what today's scripts
-# do for the rtx6000 family, from the scripts themselves, for fixed inputs.
+# The goldens of fv-lab (docs/adr/0019-fv-lab.md §5, §6, D1b): what today's
+# scripts do for every family lab/tiers.toml carries as a tier (rtx6000 since
+# D1a, the D1b families since), from the scripts themselves, for fixed inputs.
 # fv-lab must do the same (crates/fastvideo-lab/tests/{dry_run,payload_golden}.rs).
 #
 #   fv-lab-goldens.sh           regenerate crates/fastvideo-lab/fixtures/*
 #   fv-lab-goldens.sh --check   fail when a script's output differs from the fixture
 #
-# Fixtures:
-#   rtx6000-dry-run.txt        FV_DRY_RUN=1 runpod-matrix.sh rtx6000: every log line
-#                              without its [HH:MM:SS] stamp, the volume at /workspace,
-#                              the container disk at /fvscratch, run tag $TAG
-#   rtx6000-gates.tsv          <arm> <verify-weights.sh cell> <its needs>: the
-#                              gated_cell pairs of the family's `case` branch, and
-#                              `verify-weights.sh --list` for each cell
-#   runpod-http-rtx6000.json   runpod-http.sh plan $SHA $TAG with FV_POD_PREFIX=fv-lab:
-#                              the PodCreateInput of the run (jq -S)
+# Fixtures, per family <f> (every [[tier]] name of lab/tiers.toml):
+#   <f>-dry-run.txt            FV_DRY_RUN=1 runpod-matrix.sh <f>: every log line of the
+#                              family without its [HH:MM:SS] stamp, the volume at
+#                              /workspace (its auxiliary/tae complete), the container disk at /fvscratch, the
+#                              repository at /opt/fastvideo-rs (the image's root), run
+#                              tag $TAG, baseline commit $BASELINE_SHA
+#   <f>-gates.tsv              in run order (FV_DRY_RUN_GATES): `arm <name> <verify-weights.sh
+#                              cell> <TAE file or -> <the cell's needs>` per gated cell
+#                              (`verify-weights.sh --list`), `gate <baseline> <candidate>
+#                              <kind> <OFF arm or ->` per promotion gate
+#   runpod-http-<f>.json       FV_FAMILY=<f> runpod-http.sh plan $SHA $TAG with
+#                              FV_POD_PREFIX=fv-lab: the PodCreateInput of the run (jq -S)
+# and once:
 #   frames-sample.sha256.json  runpod-matrix.sh's frames_digest over frames-sample/frames
 #                              (the per-arm byte-identity record, ADR-0019 §8)
 #
@@ -32,39 +37,61 @@ CHECK=0
 export LC_ALL=C
 
 # The inputs (the Rust tests use the same).
-FAMILY=rtx6000
 SHA=1234567
 TAG="$SHA-10241200"
+BASELINE_SHA=7654321
 VOLUME="bz0ofkfx45 EU-RO-1"
+# The families: the tiers of lab/tiers.toml, in order.
+FAMILIES="$(awk '/^\[\[tier\]\]/ { t = 1; next } t && /^name = "/ { gsub(/^name = "|"$/, ""); print; t = 0 }' "$ROOT/lab/tiers.toml")"
+[[ -n "$FAMILIES" ]] || { echo "fv-lab-goldens: no [[tier]] in lab/tiers.toml" >&2; exit 2; }
+[[ "$ROOT" =~ ^[A-Za-z0-9/._-]+$ ]] || { echo "fv-lab-goldens: repository path $ROOT has shell-special characters" >&2; exit 2; }
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 [[ "$TMP" =~ ^[A-Za-z0-9/._-]+$ ]] || { echo "fv-lab-goldens: temp dir $TMP has shell-special characters" >&2; exit 2; }
-mkdir -p "$TMP/work" "$TMP/scratch" "$TMP/new"
+mkdir -p "$TMP/new"
 
 # A clean environment for every script run.
 clean() { env -i PATH="$PATH" HOME="$HOME" LC_ALL=C "$@"; }
 
-# 1. The dry run: the commands, in order.
-clean FV_DRY_RUN=1 FV_WORK="$TMP/work" FV_SCRATCH="$TMP/scratch" FV_RUN_TAG="$TAG" \
-  bash "$ROOT/scripts/gpu/runpod-matrix.sh" "$FAMILY" 2>/dev/null \
-  | sed -E 's/^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] //' \
-  | grep -F "[$FAMILY] " \
-  | sed -e "s#$TMP/scratch#/fvscratch#g" -e "s#$TMP/work#/workspace#g" >"$TMP/new/$FAMILY-dry-run.txt"
-
-# 2. The weight gates: `gated_cell <arm> <cell>` of the family's branch.
-awk -v f="  $FAMILY)" '$0 == f {on=1; next} on && /^    ;;/ {exit} on' "$ROOT/scripts/gpu/runpod-matrix.sh" \
-  | grep -oE 'gated_cell [^ ]+ [^ ]+' >"$TMP/pairs.txt"
 list="$(clean bash "$ROOT/scripts/gpu/verify-weights.sh" --list)"
-while read -r _ arm cell; do
-  needs="$(awk -v c="$cell" '$1 == c { $1 = ""; sub(/^ +/, ""); print; exit }' <<<"$list")"
-  [[ -n "$needs" ]] || { echo "fv-lab-goldens: verify-weights.sh --list has no cell $cell" >&2; exit 2; }
-  printf '%s\t%s\t%s\n' "$arm" "$cell" "$needs"
-done <"$TMP/pairs.txt" >"$TMP/new/$FAMILY-gates.tsv"
+FIXTURES=()
+for FAMILY in $FAMILIES; do
+  rm -rf "$TMP/work" "$TMP/scratch" "$TMP/pairs.txt"
+  # The volume's TAE copy is complete, as on bz0ofkfx45 (auxiliary/tae): the
+  # script's $TAE is then /workspace/weights/auxiliary/tae, not the container
+  # disk, so a cell that hard-codes {scratch}/tae differs.
+  mkdir -p "$TMP/work/weights/auxiliary/tae" "$TMP/scratch"
+  : >"$TMP/work/weights/auxiliary/tae/.complete"
+  # 1. The dry run: the commands, in order (the family's own log lines).
+  clean FV_DRY_RUN=1 FV_DRY_RUN_GATES="$TMP/pairs.txt" FV_WORK="$TMP/work" FV_SCRATCH="$TMP/scratch" \
+    FV_RUN_TAG="$TAG" FV_BASELINE_SHA="$BASELINE_SHA" \
+    bash "$ROOT/scripts/gpu/runpod-matrix.sh" "$FAMILY" 2>/dev/null \
+    | sed -E 's/^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] //' \
+    | grep -F "[$FAMILY] " \
+    | sed -e "s#$TMP/scratch#/fvscratch#g" -e "s#$TMP/work#/workspace#g" -e "s#$ROOT#/opt/fastvideo-rs#g" \
+      >"$TMP/new/$FAMILY-dry-run.txt"
 
-# 3. The pod body.
-clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY="$FAMILY" \
-  bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-$FAMILY.json"
+  # 2. The gates, in run order: every `gated_cell` the dry run reached
+  #    (arm, weight cell, TAE file or -, the cell's needs) and every
+  #    `gate_cells` (gate, baseline, candidate, kind, OFF arm or -).
+  [[ -s "$TMP/pairs.txt" ]] || { echo "fv-lab-goldens: $FAMILY gated no cell" >&2; exit 2; }
+  while IFS=$'\t' read -r what a b c d; do
+    case "$what" in
+      arm)
+        needs="$(awk -v x="$b" '$1 == x { $1 = ""; sub(/^ +/, ""); print; exit }' <<<"$list")"
+        [[ -n "$needs" ]] || { echo "fv-lab-goldens: verify-weights.sh --list has no cell $b" >&2; exit 2; }
+        printf 'arm\t%s\t%s\t%s\t%s\n' "$a" "$b" "$c" "$needs" ;;
+      gate) printf 'gate\t%s\t%s\t%s\t%s\n' "$a" "$b" "$c" "$d" ;;
+      *) echo "fv-lab-goldens: unknown FV_DRY_RUN_GATES line $what" >&2; exit 2 ;;
+    esac
+  done <"$TMP/pairs.txt" | sed -e "s#$TMP/scratch#/fvscratch#g" -e "s#$TMP/work#/workspace#g" >"$TMP/new/$FAMILY-gates.tsv"
+
+  # 3. The pod body.
+  clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY="$FAMILY" \
+    bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-$FAMILY.json"
+  FIXTURES+=("$FAMILY-dry-run.txt" "$FAMILY-gates.tsv" "runpod-http-$FAMILY.json")
+done
 
 # 4. The frames digest: the script's own function, on a copy of the sample.
 sed -n '/^frames_digest() {$/,/^}$/p' "$ROOT/scripts/gpu/runpod-matrix.sh" >"$TMP/digest.sh"
@@ -85,15 +112,51 @@ CMP="$ROOT/scripts/gpu/fv-lab-compare-runs.sh"
 mk "$TMP/ra" a 0 x; mk "$TMP/rb" a 0 x
 mkdir -p "$TMP/ra/s" "$TMP/rb/s"
 echo '{"cell":"s","exit":null,"skipped":"weights incomplete"}' | tee "$TMP/ra/s/summary.json" >"$TMP/rb/s/summary.json"
+# A compare and a gate report (D1b): equal compare verdicts pass, and so does
+# another gate verdict (it weighs timings); another off-identity status or a
+# missing report fails.
+rep() { # dir file status off verdict
+  mkdir -p "$(dirname "$1/$2")"
+  printf '{"stage":"x","status":"%s","elapsed_s":%s,"context":{"off_identity":{"status":"%s"},"verdict":{"verdict":"%s"}}}\n' \
+    "$3" "$RANDOM" "$4" "$5" >"$1/$2"
+}
+for r in ra rb; do
+  rep "$TMP/$r" compare/compare-clips-a--s.json pass ok null
+  rep "$TMP/$r" gate/gate-a--s.json pass ok pass
+done
 clean bash "$CMP" "$TMP/ra" "$TMP/rb" >/dev/null || { echo "fv-lab-goldens: compare-runs failed on equal runs" >&2; rc=1; }
 cp -a "$TMP/rb" "$TMP/rc"; mk "$TMP/rc" a 0 y
 cp -a "$TMP/rb" "$TMP/rd"; mk "$TMP/rd" a 3 x
 cp -a "$TMP/rb" "$TMP/re"; rm -rf "$TMP/re/s"
-for bad in rc rd re; do
+cp -a "$TMP/rb" "$TMP/rf"; rep "$TMP/rf" compare/compare-clips-a--s.json fail fail null
+cp -a "$TMP/rb" "$TMP/rg"; rep "$TMP/rg" gate/gate-a--s.json fail ok fail
+clean bash "$CMP" "$TMP/ra" "$TMP/rg" >/dev/null || { echo "fv-lab-goldens: compare-runs failed on another gate verdict (timings)" >&2; rc=1; }
+cp -a "$TMP/rb" "$TMP/rh"; rm "$TMP/rh/compare/compare-clips-a--s.json"
+cp -a "$TMP/rb" "$TMP/ri"; rm "$TMP/ri/gate/gate-a--s.json"
+# Nothing compared: both runs skipped every arm, both crashed every arm, or
+# both summaries are unreadable. Equal, but no evidence: must fail.
+for r in sa sb; do
+  mkdir -p "$TMP/$r/s"; echo '{"cell":"s","exit":null,"skipped":"weights incomplete"}' >"$TMP/$r/s/summary.json"
+done
+for r in ca cb; do
+  mkdir -p "$TMP/$r/a"; echo '{"cell":"a","exit":101,"seconds":3}' >"$TMP/$r/a/summary.json"
+done
+for r in ua ub; do
+  mkdir -p "$TMP/$r/a"; echo 'not json' >"$TMP/$r/a/summary.json"
+done
+for pair in "sa sb" "ca cb" "ua ub"; do
+  read -r x y <<<"$pair"
+  if clean bash "$CMP" "$TMP/$x" "$TMP/$y" >/dev/null; then echo "fv-lab-goldens: compare-runs passed with nothing compared ($pair)" >&2; rc=1; fi
+done
+# Unreadable reports on both sides are a difference too.
+cp -a "$TMP/rb" "$TMP/rj"; cp -a "$TMP/rb" "$TMP/rk"
+echo 'not json' >"$TMP/rj/compare/compare-clips-a--s.json"; echo 'not json' >"$TMP/rk/compare/compare-clips-a--s.json"
+if clean bash "$CMP" "$TMP/rj" "$TMP/rk" >/dev/null; then echo "fv-lab-goldens: compare-runs passed two unreadable reports" >&2; rc=1; fi
+for bad in rc rd re rf rh ri; do
   if clean bash "$CMP" "$TMP/ra" "$TMP/$bad" >/dev/null; then echo "fv-lab-goldens: compare-runs missed a difference ($bad)" >&2; rc=1; fi
 done
 mkdir -p "$OUT"
-for f in "$FAMILY-dry-run.txt" "$FAMILY-gates.tsv" "runpod-http-$FAMILY.json" frames-sample.sha256.json; do
+for f in "${FIXTURES[@]}" frames-sample.sha256.json; do
   [[ -s "$TMP/new/$f" ]] || { echo "fv-lab-goldens: $f came out empty" >&2; rc=1; continue; }
   if [[ "$CHECK" == 1 ]]; then
     if ! diff -u "$OUT/$f" "$TMP/new/$f"; then

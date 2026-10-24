@@ -1,0 +1,43 @@
+# The trace family's H3 cell (runpod-matrix.sh `trace`):
+# FASTVIDEO_GPU_TRACE=1, a CUPTI activity trace of one warm denoise step (the
+# `/gpu_trace` line in stderr.log, `gpu_trace` in gpucheck-out/*.json).
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md
+# (D1b).
+schema = 1
+name = "trace-h3"
+description = "FastH3 4-step VSA, 8-step and 4-step dense at the recipe canvas, each with one warm step CUPTI-traced"
+
+[workload]
+model = "h3"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+note = "runpod-matrix.sh's default PROMPT and SEED; each recipe's default canvas; the fasth3-8step arm is skipped on the EU volume (h3-8step is R2-only)"
+
+[lists]
+h3_common = ["--prompt", "{prompt}", "--seconds", "{seconds}", "--seed", "{seed}", "--text-encoder", "auto",
+  "--text-cache", "{scratch}/h3-text-cache", "--text-weights", "{weights}/h3-base", "--warm"]
+
+[[arm]]
+name = "fasth3-4step-vsa-768p"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = ["FASTVIDEO_GPU_TRACE=1"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-vsa",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-8step-768p"
+gate = "fasth3-8step"
+trees = ["h3-8step", "h3-base"]
+env = ["FASTVIDEO_GPU_TRACE=1"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-8step", "--h3-recipe", "8step",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-4step-dense-768p"
+gate = "fasth3-4step-dense"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = ["FASTVIDEO_GPU_TRACE=1"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-dense",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]

@@ -1,0 +1,32 @@
+[16:00:37] [b6] matrix start image=e010afe97d6c058c
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-4198d55f-89d0-b0e6-422c-7a3be1994446)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[16:00:42] [b6] baseline baseline: sha-e93e357 layer sha256:0681fa50ff708cf228545488fb1799c2ec14316801ed2558af105cb6abccdf2b -> /fvscratch/baseline-e93e357/fv-gpucheck (aa3db80460bf11cb)
+[16:00:42] [b6] baseline build-id aa3db80460bf11cb, image build-id e010afe97d6c058c
+[16:00:43] [b6] ▶ b6-solh3-tree-base  env /fvscratch/baseline-e93e357/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --height 480 --width 832 --seconds 5 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --text-encoder auto --no-text-cache --no-mp4 --h3-recipe sol-h3 --clip-dir /fvscratch/runs/b6/c21d801-1024155958-468a/b6-solh3-tree-base/frames  (wall cap 3600s; 0=none)
+[16:03:59] [b6] ok b6-solh3-tree-base  196s  /fvscratch/runs/b6/c21d801-1024155958-468a/b6-solh3-tree-base/stderr.log:[INFO] h3/timings {"audio_decode_s":0.131027553,"decode_s":2.085140552,"denoise_s":7.510512621,"load_s":185.463020302,"peak_mib":57188,"refine_s":0.00481245,"step_s":[1.8976319580078125,1.9008209228515625,1.8551697998046874,1.8566512451171875],"text_cache":"disabled","text_encoder":"resident-fp8","text_s":0.428204775,"total_s":10.23579654,"video_decode_s":1.954112999,"video_encode_s":0.00013481,"video_push_s":0.00002724,"video_rgb_s":0.04301161399959714,"video_vae_s":1.9458809698820112,"video_wait_s":0.157766826,"warm":false,"write_s":0.091477517}
+[16:04:01] [b6] ▶ b6-solh3-tree-pr  env /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --height 480 --width 832 --seconds 5 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --text-encoder auto --no-text-cache --no-mp4 --h3-recipe sol-h3 --clip-dir /fvscratch/runs/b6/c21d801-1024155958-468a/b6-solh3-tree-pr/frames  (wall cap 3600s; 0=none)
+[16:04:29] [b6] ok b6-solh3-tree-pr  28s  /fvscratch/runs/b6/c21d801-1024155958-468a/b6-solh3-tree-pr/stderr.log:[INFO] h3/timings {"audio_decode_s":0.129282367,"decode_s":2.084791673,"denoise_s":7.548308432,"load_s":17.6150174,"peak_mib":57188,"refine_s":0.005308798,"step_s":[1.9189061279296875,1.90865185546875,1.8590220947265625,1.8614210205078126],"text_cache":"disabled","text_encoder":"resident-fp8","text_s":0.432736985,"total_s":10.26441444,"video_decode_s":1.955509306,"video_encode_s":0.00015046,"video_push_s":0.00002816,"video_rgb_s":0.03649779899911481,"video_vae_s":1.94819021114707,"video_wait_s":0.156625089,"warm":false,"write_s":0.077624676}
+[16:04:30] [b6] compare b6-solh3-tree-base--b6-solh3-tree-pr exit=0 "psnr_mean":null 
+[16:04:30] [b6] skip b6-solh3-merge-base (not in FV_CELLS)
+[16:04:30] [b6] skip b6-solh3-merge-pr (not in FV_CELLS)
+[16:04:30] [b6] skip compare b6-solh3-merge-base--b6-solh3-merge-pr (frames missing)
+[16:04:30] [b6] skip b6-4stepvsa-merge-base (not in FV_CELLS)
+[16:04:30] [b6] skip b6-4stepvsa-merge-pr (not in FV_CELLS)
+[16:04:30] [b6] skip compare b6-4stepvsa-merge-base--b6-4stepvsa-merge-pr (frames missing)
+[16:04:30] [b6] skip b6-h3-streamed-base (not in FV_CELLS)
+[16:04:30] [b6] skip b6-h3-streamed-pr (not in FV_CELLS)
+[16:04:30] [b6] skip compare b6-h3-streamed-base--b6-h3-streamed-pr (frames missing)
+[16:04:30] [b6] skip b6-h3-ref2va-base (not in FV_CELLS)
+[16:04:30] [b6] skip b6-h3-ref2va-pr (not in FV_CELLS)
+[16:04:30] [b6] skip compare b6-h3-ref2va-base--b6-h3-ref2va-pr (frames missing)
+[16:04:30] [b6] skip b6-ltx25-ref2v-base (not in FV_CELLS)
+[16:04:30] [b6] skip b6-ltx25-ref2v-pr (not in FV_CELLS)
+[16:04:30] [b6] skip compare b6-ltx25-ref2v-base--b6-ltx25-ref2v-pr (frames missing)
+[16:04:30] [b6] skip b6-ltx25-a2v-guided-base (not in FV_CELLS)
+[16:04:30] [b6] skip b6-ltx25-a2v-guided-pr (not in FV_CELLS)
+[16:04:30] [b6] skip compare b6-ltx25-a2v-guided-base--b6-ltx25-a2v-guided-pr (frames missing)
+[16:04:30] [b6] skip b6-ltx25-offload-cpu-base (not in FV_CELLS)
+[16:04:30] [b6] skip b6-ltx25-offload-cpu-pr (not in FV_CELLS)
+[16:04:30] [b6] skip compare b6-ltx25-offload-cpu-base--b6-ltx25-offload-cpu-pr (frames missing)
+[16:04:30] [b6] matrix done

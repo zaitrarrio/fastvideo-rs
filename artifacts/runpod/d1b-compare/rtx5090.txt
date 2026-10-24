@@ -1,0 +1,21 @@
+$ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/rtx5090/c21d801-1024165627-a3e1 artifacts/runpod/rtx5090/c21d801-10241629
+same h3-480p-dense: {"exit":0,"skipped":null}, 248 frames byte-identical
+same h3-480p-fullopt: {"exit":0,"skipped":null}, 248 frames byte-identical
+same h3-480p-fullopt-taeh3: {"exit":0,"skipped":null}, 248 frames byte-identical
+same h3-480p-sol: {"exit":0,"skipped":null}, 248 frames byte-identical
+same compare/compare-clips-h3-480p-dense--h3-480p-fullopt.json: {"status":"pass","off_identity":"different"}
+same compare/compare-clips-h3-480p-dense--h3-480p-sol.json: {"status":"pass","off_identity":"different"}
+same compare/compare-clips-h3-480p-fullopt--h3-480p-fullopt-taeh3.json: {"status":"pass","off_identity":"different"}
+same compare/compare-clips-h3-480p-sol--h3-480p-fullopt.json: {"status":"pass","off_identity":"different"}
+same compare/compare-clips-h3-768p-dense--h3-768p-fullopt.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-h3-768p-dense--h3-768p-sol.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-h3-768p-fullopt--h3-768p-fullopt-taeh3.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-h3-768p-sol--h3-768p-fullopt.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-ltx25-1080p20s-dense--ltx25-1080p20s-sol.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-ltx25-1080p20s-sol--ltx25-1080p20s-sol-taehv.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-ltx25-4k5s-dense--ltx25-4k5s-sol.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-ltx25-4k5s-sol--ltx25-4k5s-sol-taehv.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-ltx25-512p-dense--ltx25-512p-sol.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-ltx25-512p-sol--ltx25-512p-sol-taehv.json: {"status":"skipped","off_identity":null}
+4 arm(s) the same (4 ran with byte-identical frames, 0 skipped in both, 0 failed in both), 14 report(s) the same, 0 difference(s)
+exit=0

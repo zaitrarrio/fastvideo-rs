@@ -21,12 +21,16 @@ fn read(rel: &str) -> String {
 #[test]
 fn trees_and_gates_exist() {
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
-    let manifest: BTreeSet<String> = read("scripts/gpu/weights-manifest.tsv")
+    // A tree is a weights-manifest.tsv row, or a tree of the EU volume
+    // (volumes.sh FV_EU_VOLUME_TREES) that is no hub row there (h3-ref2va:
+    // two repos of plain files, recorded by hash in weights-sha256.tsv).
+    let mut manifest: BTreeSet<String> = read("scripts/gpu/weights-manifest.tsv")
         .lines()
         .filter(|l| !l.starts_with('#'))
         .filter_map(|l| l.split('\t').next())
         .map(str::to_owned)
         .collect();
+    manifest.extend(parse_eu_trees(&read("scripts/gpu/volumes.sh")));
     let verify = read("scripts/gpu/verify-weights.sh");
     let cells_line = verify
         .split("CELLS=(")
@@ -50,7 +54,7 @@ fn trees_and_gates_exist() {
             for tree in &a.trees {
                 assert!(
                     manifest.contains(tree),
-                    "{}: tree {tree} not in weights-manifest.tsv",
+                    "{}: tree {tree} not in weights-manifest.tsv or the EU volume's trees",
                     a.name
                 );
             }
@@ -76,6 +80,67 @@ fn only_fasth3_8step_needs_a_tree_the_eu_volume_lacks() {
     // h3-8step is R2-only since 2026-10-13: runpod-matrix.sh records the arm
     // as skipped ("weights incomplete") on bz0ofkfx45, and so does fv-lab.
     assert_eq!(missing, ["fasth3-8step"]);
+}
+
+#[test]
+fn the_only_tree_any_tier_lacks_on_the_eu_volume_is_h3_8step() {
+    // Every other tree an arm reads is on bz0ofkfx45 (volumes.sh
+    // FV_EU_VOLUME_TREES): the D1b families' GPU runs exercise every arm but
+    // the h3-8step ones, which both runners record as skipped there.
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let eu: BTreeSet<String> = parse_eu_trees(&read("scripts/gpu/volumes.sh"))
+        .into_iter()
+        .collect();
+    let lacking: BTreeSet<&str> = lab
+        .cells
+        .values()
+        .flat_map(|c| &c.arms)
+        .flat_map(|a| &a.trees)
+        .filter(|t| !eu.contains(t.as_str()))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(lacking, BTreeSet::from(["h3-8step"]));
+}
+
+#[test]
+fn every_tae_file_is_one_fetch_tae_sh_fetches() {
+    // The pod's start command runs fetch-tae.sh (the tier's `tae = true`), and
+    // the runner runs it again when an arm's file is missing.
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let fetch = read("scripts/gpu/fetch-tae.sh");
+    let mut n = 0;
+    for c in lab.cells.values() {
+        for a in &c.arms {
+            if let Some(f) = &a.tae {
+                assert!(fetch.contains(&format!("\nfetch {f} ")), "{}: {f}", a.name);
+                n += 1;
+            }
+        }
+    }
+    assert!(n > 0, "some arm reads a tiny autoencoder");
+    let tiers_with_tae_arms = lab.tiers.tiers.iter().filter(|t| {
+        t.cells
+            .iter()
+            .filter_map(|c| lab.cells.get(c))
+            .any(|c| c.arms.iter().any(|a| a.tae.is_some()))
+    });
+    for t in tiers_with_tae_arms {
+        assert!(t.tae, "tier {} has TAE arms: tae = true", t.name);
+    }
+}
+
+#[test]
+fn every_cell_file_belongs_to_exactly_one_tier() {
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let mut seen = BTreeSet::new();
+    for t in &lab.tiers.tiers {
+        for c in &t.cells {
+            assert!(
+                seen.insert(c.as_str()),
+                "lab/cells/{c}.toml is in two tiers"
+            );
+        }
+    }
 }
 
 #[test]

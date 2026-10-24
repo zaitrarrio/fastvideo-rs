@@ -1,0 +1,15 @@
+$ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/techniques/c21d801-1024155754-31bc artifacts/runpod/techniques/c21d801-10241607
+same h3-480p-fullopt-base: {"exit":0,"skipped":null}, 248 frames byte-identical
+same h3-480p-fullopt-env: {"exit":0,"skipped":null}, 248 frames byte-identical
+same h3-480p-fullopt-prof: {"exit":0,"skipped":null}, 248 frames byte-identical
+same compare/compare-clips-fasth3-4step-vsa-768p-base--fasth3-4step-vsa-768p-env.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-fasth3-4step-vsa-768p-base--fasth3-4step-vsa-768p-prof.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-fasth3-8step-768p-base--fasth3-8step-768p-env.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-fasth3-8step-768p-base--fasth3-8step-768p-prof.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-h3-480p-fullopt-base--h3-480p-fullopt-env.json: {"status":"pass","off_identity":"ok"}
+same compare/compare-clips-h3-480p-fullopt-base--h3-480p-fullopt-prof.json: {"status":"pass","off_identity":"ok"}
+same compare/compare-clips-ltx25-512p-sol-base--ltx25-512p-sol-env.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-ltx25-512p-sol-base--ltx25-512p-sol-prof.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-ltx25-512p-sol-env--ltx25-512p-sol-cache.json: {"status":"skipped","off_identity":null}
+3 arm(s) the same (3 ran with byte-identical frames, 0 skipped in both, 0 failed in both), 9 report(s) the same, 0 difference(s)
+exit=0

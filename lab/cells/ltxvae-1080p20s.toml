@@ -1,0 +1,40 @@
+# The ltxvae family's 1080p20s cell (runpod-matrix.sh `ltxvae`): the LTX-2.5
+# conv VAE decode alone (`ltx2 vae-bench`) on synthetic latents at the
+# sol-engine geometry, tiled as gen tiles. Schema:
+# crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md (D1b).
+# The channels-last bf16 decoder against the f32 streaming one, CUPTI-traced
+# (FASTVIDEO_GPU_TRACE_DECODE=1, FV_VAE_TRACE's default), the fast one's first
+# tile checked against the streaming decoder.
+schema = 1
+name = "ltxvae-1080p20s"
+description = "LTX-2.5 VAE decode at 1080p20s: fast vs streaming decoder, traced, with frames for compare-clips"
+
+[workload]
+model = "ltx2"
+note = "synthetic latents at the 1080p20s geometry (--workload); no prompt, no seed"
+
+[[arm]]
+name = "ltxvae-1080p20s-fast"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = [
+  "FASTVIDEO_GPU_TRACE_DECODE=1",
+  "FASTVIDEO_LTX_VAE_CHECK=1",
+]
+argv = ["--mode", "fast", "ltx2", "vae-bench", "--weights", "{weights}/ltx25", "--workload", "1080p20s",
+  "--decoder", "fast", "--warm", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "ltxvae-1080p20s-streaming"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = [
+  "FASTVIDEO_GPU_TRACE_DECODE=1",
+  "FASTVIDEO_LTX_VAE_CHECK=1",
+]
+argv = ["--mode", "fast", "ltx2", "vae-bench", "--weights", "{weights}/ltx25", "--workload", "1080p20s",
+  "--decoder", "streaming", "--warm", "--clip", "{runs}/{arm}/frames"]
+
+[[compare]]
+baseline = "ltxvae-1080p20s-streaming"
+candidate = "ltxvae-1080p20s-fast"

@@ -1,0 +1,38 @@
+# The fastvideo family's ltx25-1080p20s cell (runpod-matrix.sh `fastvideo`):
+# our optimized stack with no sol-engine technique (no Sol-Attn, no TeaCache),
+# the FastH3 recipes against their TAEH3-decoded twins and LTX-2.5 dense stage
+# 2 against its TAE-decoded twin (compare-clips, then the lossy gate). One
+# loop iteration per cell (ADR-0019 open decision 3). Schema:
+# crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md (D1b).
+schema = 1
+name = "fastvideo-ltx25-1080p20s"
+description = "LTX-2.5 distilled two-stage, dense stage 2, at the reference's 1080p20s workload (--workload 1080p20s), and the same decoded by the wide LTX TAE"
+
+[workload]
+model = "ltx2"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+note = "runpod-matrix.sh's default PROMPT and SEED; the reference's 1080p20s workload (--workload 1080p20s)"
+
+[[arm]]
+name = "ltx25-1080p20s"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--workload", "1080p20s", "--dense-stage2", "--prompt", "{prompt}", "--seed", "{seed}",
+  "--two-stage", "--text", "streamed", "--warm", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "ltx25-1080p20s-taehv"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+tae = "taeltx2_3_wide.safetensors"
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--workload", "1080p20s", "--dense-stage2", "--ltx-tae-weights",
+  "{tae}/taeltx2_3_wide.safetensors", "--prompt", "{prompt}", "--seed", "{seed}", "--two-stage", "--text",
+  "streamed", "--warm", "--clip", "{runs}/{arm}/frames"]
+
+[[compare]]
+baseline = "ltx25-1080p20s"
+candidate = "ltx25-1080p20s-taehv"
+gate = { kind = "lossy" }
