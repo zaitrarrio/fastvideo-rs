@@ -43,7 +43,7 @@ pub mod ledger;
 pub mod log;
 pub mod nn;
 pub mod nvfp4;
-#[cfg(feature = "cuda")]
+#[cfg(feature = "nvfp4-gemm")]
 pub mod nvfp4_gemm;
 #[cfg(feature = "cuda")]
 pub mod nvfp4_linear;
@@ -53,6 +53,7 @@ pub mod offload;
 pub mod ops;
 pub mod quant;
 pub mod resident;
+pub mod sdpa;
 pub mod sdpa_rule;
 pub mod sla;
 pub mod sol_ops;

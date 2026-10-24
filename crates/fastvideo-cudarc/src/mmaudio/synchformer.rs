@@ -19,7 +19,8 @@
 //! patch embedding runs once, not once per overlapping segment.
 
 use super::layers::{gather_rows, host_values, linear, msg, weight};
-use crate::rt::nn::{self, Linear};
+use crate::rt::nn::Linear;
+use crate::rt::sdpa::sdpa;
 use crate::rt::tensor::{CudaTensor, Result};
 use crate::rt::weights::WeightMap;
 
@@ -141,11 +142,11 @@ impl DividedAttn {
         let qkv = self.qkv.forward(x)?; // [bs, 1569, 3D]
                                         // CLS query against every token of its segment.
         let q_cls = gather_rows(&qkv, &plan.cls)?.reshape(vec![bs, 1, 3 * d])?;
-        let cls_out = nn::scaled_dot_product_attention(
+        let cls_out = sdpa(
             &heads(&q_cls, 0, 0)?,
             &heads(&qkv, 1, 0)?,
             &heads(&qkv, 2, 0)?,
-            None,
+            &crate::rt::sdpa::Plan::dense(None),
         )?;
         let cls_out = merge(&cls_out)?; // [bs, 1, D]
         let (idx, groups, len) = if time {
@@ -154,11 +155,11 @@ impl DividedAttn {
             (&plan.space, bs * T_TOK, HW + 1)
         };
         let g = gather_rows(&qkv, idx)?.reshape(vec![groups, len, 3 * d])?;
-        let o = nn::scaled_dot_product_attention(
+        let o = sdpa(
             &heads(&g, 0, 1)?,
             &heads(&g, 1, 0)?,
             &heads(&g, 2, 0)?,
-            None,
+            &crate::rt::sdpa::Plan::dense(None),
         )?;
         let o = merge(&o)?; // [groups, len - 1, D]
         let o = if time {
@@ -248,8 +249,12 @@ impl SpatialAgg {
         let x = CudaTensor::cat(&[&cls, x], 1)?; // [G, 197, D]
         let qkv = self.in_proj.forward(&norm(&x, &self.norm1)?)?;
         let q = heads(&qkv.narrow(1, 0, 1)?, 0, 0)?;
-        let o =
-            nn::scaled_dot_product_attention(&q, &heads(&qkv, 1, 0)?, &heads(&qkv, 2, 0)?, None)?;
+        let o = sdpa(
+            &q,
+            &heads(&qkv, 1, 0)?,
+            &heads(&qkv, 2, 0)?,
+            &crate::rt::sdpa::Plan::dense(None),
+        )?;
         let c = cls.add(&self.out_proj.forward(&merge(&o)?)?)?; // [G, 1, D]
         let h = self.linear1.forward(&norm(&c, &self.norm2)?)?.gelu_erf();
         c.add(&self.linear2.forward(&h)?)?.reshape(vec![g, d])

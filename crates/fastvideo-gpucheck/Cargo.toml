@@ -40,6 +40,8 @@ default = []
 # Device checks (nvrtc, device, kernels) and GPU runs of every other stage.
 cuda = [
     "fastvideo-cudarc/cuda",
+    # The nvfp4_gemm / nvfp4_linear groups and the nvrtc report's oxide cubins.
+    "fastvideo-cudarc/oxide",
     "dep:cudarc",
     "dep:half",
     "dep:fastvideo-engine-service",

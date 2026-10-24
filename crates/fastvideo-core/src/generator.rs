@@ -221,10 +221,8 @@ impl VideoGenerator {
             }
             // FASTVIDEO_VSA=1 alone selects the device VSA kernels, and only in
             // self-attention (rt::vsa, gated on the checkpoint's
-            // to_gate_compress). FASTVIDEO_SDPA=sparse would instead route
-            // *every* attention, cross-attention included, through the
-            // host-only window prototype (attn::block_sparse_sdpa), which
-            // errors on a GPU run.
+            // to_gate_compress). FASTVIDEO_SDPA=sparse, the host-only window
+            // prototype that routed every attention, is retired (ADR-0015).
             eprintln!("info: VSA id → video sparse attention in self-attention (FASTVIDEO_VSA=1)");
         }
         fastvideo_cudarc::resolve_device(&self.device)

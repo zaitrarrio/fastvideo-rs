@@ -17,6 +17,7 @@
 //! network. Batch size 1 per call: classifier-free guidance runs the
 //! conditional and the empty conditions as two calls, as upstream does.
 
+use crate::rt::sdpa::{sdpa, Plan};
 use fastvideo_models::mmaudio::{nearest_exact_indices, rope_angles, MmAudioDiTConfig};
 
 use super::layers::{
@@ -24,7 +25,7 @@ use super::layers::{
     modulate, msg, pinned, rope_tables, Conv1d, ConvMlp, Mlp,
 };
 use crate::rt::dump;
-use crate::rt::nn::{self, Linear};
+use crate::rt::nn::Linear;
 use crate::rt::tensor::{CudaTensor, Result};
 use crate::rt::weights::WeightMap;
 
@@ -444,7 +445,7 @@ impl MmAudioTransformer {
             let q = CudaTensor::cat(&[&xq.q, &cq.q, &tq.q], 2)?;
             let k = CudaTensor::cat(&[&xq.k, &cq.k, &tq.k], 2)?;
             let v = CudaTensor::cat(&[&xq.v, &cq.v, &tq.v], 2)?;
-            let o = merge_heads(&nn::scaled_dot_product_attention(&q, &k, &v, None)?)?;
+            let o = merge_heads(&sdpa(&q, &k, &v, &Plan::dense(None))?)?;
             x = blk.latent.post_attention(&x, &o.narrow(1, 0, n)?, xm)?;
             if !blk.clip.pre_only {
                 clip = blk.clip.post_attention(&clip, &o.narrow(1, n, nc)?, cm)?;
@@ -458,7 +459,7 @@ impl MmAudioTransformer {
         }
         for (i, blk) in self.fused.iter().enumerate() {
             let (q, m) = blk.pre_attention(&x, &extended_c, Some(&rot[0]), cfg)?;
-            let o = merge_heads(&nn::scaled_dot_product_attention(&q.q, &q.k, &q.v, None)?)?;
+            let o = merge_heads(&sdpa(&q.q, &q.k, &q.v, &Plan::dense(None))?)?;
             x = blk.post_attention(&x, &o, m)?;
             if blocks {
                 let idx = self.joint.len() + i;

@@ -731,11 +731,11 @@ impl H3Vsa {
         // 5. Text / audio query rows are dense: recompute those few rows
         //    against all keys and add their compression term.
         phase("vsa_h3_4_prefix_dense", || {
-            let mut dense = crate::rt::nn::scaled_dot_product_attention(
+            let mut dense = crate::rt::sdpa::sdpa(
                 &q.narrow(2, 0, prefix)?,
                 &k,
                 &v,
-                Some(scale),
+                &crate::rt::sdpa::Plan::dense(Some(scale)),
             )?;
             if let Some(g) = &gate {
                 let branch = dp.prefix_branch(&coarse, dim)?;
@@ -993,11 +993,11 @@ impl H3Vsa {
         //    compression term (the bf16 path's code; the SDPA quantizes its
         //    operands to bf16 whatever they are stored as).
         phase("vsa_h3_4_prefix_dense", || {
-            let mut dense = crate::rt::nn::scaled_dot_product_attention(
+            let mut dense = crate::rt::sdpa::sdpa(
                 &q.narrow(2, 0, prefix)?,
                 k,
                 v,
-                Some(scale),
+                &crate::rt::sdpa::Plan::dense(Some(scale)),
             )?;
             if let Some(g) = gate {
                 let branch = dp.prefix_branch(&coarse, dim)?;
@@ -1189,11 +1189,11 @@ impl H3Vsa {
         // compression term, exactly as the f32 path (the SDPA quantizes its
         // operands to bf16 either way).
         phase("vsa_h3_4_prefix_dense", || {
-            let mut dense = crate::rt::nn::scaled_dot_product_attention(
+            let mut dense = crate::rt::sdpa::sdpa(
                 &q.narrow(2, 0, prefix)?,
                 k,
                 v,
-                Some(scale),
+                &crate::rt::sdpa::Plan::dense(Some(scale)),
             )?;
             if let Some(g) = gate {
                 let branch = dp.prefix_branch(&coarse, dim)?;
@@ -1303,7 +1303,7 @@ impl H3Vsa {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rt::nn::scaled_dot_product_attention;
+    use crate::rt::sdpa::{sdpa, Plan};
 
     fn seeded(n: usize, k: f32) -> Vec<f32> {
         (0..n)
@@ -1452,7 +1452,7 @@ mod tests {
         let shape = vec![1, heads, seq, dim];
         let t = |k: f32| CudaTensor::from_vec(seeded(heads * seq * dim, k), shape.clone()).unwrap();
         let (q, k, v) = (t(0.37), t(0.71), t(0.19));
-        let dense = scaled_dot_product_attention(&q, &k, &v, None).unwrap();
+        let dense = sdpa(&q, &k, &v, &Plan::dense(None)).unwrap();
         let vsa = H3Vsa::new(
             &l,
             heads,
@@ -1499,7 +1499,7 @@ mod tests {
         )
         .unwrap();
         let plan = vsa.plan().clone();
-        let dense = scaled_dot_product_attention(&q, &k, &v, None).unwrap();
+        let dense = sdpa(&q, &k, &v, &Plan::dense(None)).unwrap();
         let (qh, kh, vh, gh) = (
             q.host_cow().unwrap().into_owned(),
             k.host_cow().unwrap().into_owned(),

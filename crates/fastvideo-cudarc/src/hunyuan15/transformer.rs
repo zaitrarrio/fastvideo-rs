@@ -3,10 +3,11 @@
 //! Custom weight prefix `Hunyuan15.*` (FastVideo remap from HF
 //! `transformer_blocks`). Tiny configs exercise the joint-attention path.
 
+use crate::rt::sdpa::{sdpa, Plan};
 use fastvideo_models::hunyuan15::{Hunyuan15RopeTables, Hunyuan15TransformerConfig};
 
 use crate::rt::fused::Rope;
-use crate::rt::nn::{self, Linear};
+use crate::rt::nn::Linear;
 use crate::rt::tensor::{CudaTensor, Result, TensorError};
 use crate::rt::weights::{self, WeightMap};
 
@@ -200,7 +201,7 @@ impl DoubleBlock {
         let k = CudaTensor::cat(&[&ik, &tk], 2)?;
         let v = CudaTensor::cat(&[&iv, &tv], 2)?;
         let (k, v) = crate::rt::nvfp4::maybe_kv(k, v)?;
-        let attn = nn::scaled_dot_product_attention_masked(&q, &k, &v, None, None)?;
+        let attn = sdpa(&q, &k, &v, &Plan::dense(None))?;
         let img_len = img.shape[1];
         let txt_len = attn.shape[2] - img_len;
         let img_attn = attn.narrow(2, 0, img_len)?.merge_heads()?;

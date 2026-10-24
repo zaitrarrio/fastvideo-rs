@@ -35,7 +35,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use fastvideo_models::h3::config::{H3VideoVaeConfig, H3_PIXEL_MEAN, H3_PIXEL_STD};
 
-use crate::rt::nn::{scaled_dot_product_attention, Linear};
+use crate::rt::nn::Linear;
+use crate::rt::sdpa::{sdpa, Plan};
 use crate::rt::tensor::{CudaTensor, Result, TensorError};
 use crate::rt::weights::{cuda_tensor_shaped, WeightMap};
 
@@ -393,25 +394,6 @@ fn parse_algo(v: &str, prefix: &str) -> Option<usize> {
     v.strip_prefix(prefix)
         .map(|r| r.strip_prefix(':').unwrap_or(r))
         .and_then(|n| n.parse().ok())
-}
-
-/// `FASTVIDEO_H3_VAE_SDPA=auto|v1|v2|cudnn` (default `auto`, the dense-SDPA
-/// seam's pick): the fused kernel for the ViT's attention only.
-#[cfg(feature = "cuda")]
-fn sdpa_kernel() -> Option<crate::rt::attn::FlashKernel> {
-    use crate::rt::attn::FlashKernel;
-    static FLAG: crate::rt::envflag::CachedString = crate::rt::envflag::CachedString::new();
-    match FLAG
-        .get_or_init(|| crate::rt::envflag::string_flag("FASTVIDEO_H3_VAE_SDPA", "auto"))
-        .trim()
-    {
-        "v1" => Some(FlashKernel::V1),
-        "v2" => Some(FlashKernel::V2),
-        "v3" => Some(FlashKernel::V3),
-        "v3s" => Some(FlashKernel::V3s),
-        "cudnn" => Some(FlashKernel::Cudnn),
-        _ => None,
-    }
 }
 
 /// A fused-ViT GEMM operand: bf16 rows, or MXFP8 codes + scales.
@@ -1180,9 +1162,7 @@ impl H3VideoDecoder {
                 ))
             })?;
             drop(qkv);
-            let a = prof.time("vae_sdpa", || {
-                scaled_dot_product_attention(&q, &k, &v, None)
-            })?;
+            let a = prof.time("vae_sdpa", || sdpa(&q, &k, &v, &Plan::dense(None)))?;
             let a = prof.time("vae_out_linear", || {
                 block
                     .to_out
@@ -1239,7 +1219,7 @@ impl H3VideoDecoder {
         let vec = vec_enabled();
         let algo = gemm_algo();
         let mx_nth = mx_algo();
-        let sdpa = sdpa_kernel();
+        let sdpa = crate::rt::sdpa_rule::h3_vae_kernel();
         // Once per process and GEMM kind (the check runs both kinds).
         static SAID: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
         if !SAID[usize::from(mx)].swap(true, Ordering::Relaxed) {

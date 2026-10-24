@@ -1,5 +1,6 @@
 //! LongCat DiT (`LongCatVideoTransformer3DModel`) with optional BSA.
 
+use crate::rt::sdpa::{sdpa, Plan};
 use fastvideo_models::longcat::LongCatTransformerConfig;
 
 use crate::rt::nn::{self, Linear};
@@ -77,7 +78,7 @@ impl Attn {
             (None, Some((thw, params))) if thw[0] > 1 => {
                 flash_attn_bsa_3d(&q, &k, &v, thw, params)?
             }
-            _ => nn::scaled_dot_product_attention_masked(&q, &k, &v, None, None)?,
+            _ => sdpa(&q, &k, &v, &Plan::dense(None))?,
         };
         self.to_out.forward(&out.merge_heads()?)
     }

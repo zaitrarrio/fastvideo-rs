@@ -8,6 +8,7 @@
 //! [`fastvideo_models::sol_attn::sol_attn_head_faithful`]. Without a device
 //! the f32 host oracle runs. Logs once when the op first executes.
 
+use crate::rt::sdpa::{sdpa, Plan};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use fastvideo_models::sol_attn::{
@@ -299,7 +300,7 @@ pub fn splice_dense_prefix(
         return Ok(sol_out.clone());
     }
     let q_pre = q.narrow(2, 0, keep)?;
-    let dense = crate::rt::nn::scaled_dot_product_attention(&q_pre, k, v, scale)?;
+    let dense = sdpa(&q_pre, k, v, &Plan::dense(scale))?;
     if keep == tokens {
         return Ok(dense);
     }
@@ -351,9 +352,7 @@ pub fn splice_dense_ranges(
             pieces.push(sol_out.narrow(2, cursor, start - cursor)?);
         }
         let q_r = q.narrow(2, start, len)?;
-        pieces.push(crate::rt::nn::scaled_dot_product_attention(
-            &q_r, k, v, scale,
-        )?);
+        pieces.push(sdpa(&q_r, k, v, &Plan::dense(scale))?);
         cursor = start + len;
     }
     if cursor < tokens {
@@ -366,7 +365,6 @@ pub fn splice_dense_ranges(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rt::nn::scaled_dot_product_attention;
     use fastvideo_models::sol_attn::dense_attn_head;
 
     fn seeded(n: usize, k: f32) -> Vec<f32> {
@@ -381,7 +379,7 @@ mod tests {
         let v = CudaTensor::from_vec(seeded(b * h * t * d, 0.23), vec![b, h, t, d]).unwrap();
         let scale = Some((d as f32).sqrt().recip());
         let sol = sol_attn(&q, &k, &v, 1.0, scale, Some(0), t).unwrap();
-        let dense = scaled_dot_product_attention(&q, &k, &v, scale).unwrap();
+        let dense = sdpa(&q, &k, &v, &Plan::dense(scale)).unwrap();
         let (a, b) = (sol.host_cow().unwrap(), dense.host_cow().unwrap());
         for (x, y) in a.iter().zip(b.iter()) {
             assert!((x - y).abs() < 3e-5, "{x} vs {y}");
@@ -453,6 +451,7 @@ mod sol_gpu_tests {
 
     use crate::rt::device::{set_thread_device, DeviceContext};
     use crate::rt::ops;
+    use crate::rt::sdpa::{sdpa, Plan};
     use crate::rt::tensor::CudaTensor;
 
     const D: usize = 128;
@@ -739,7 +738,7 @@ mod sol_gpu_tests {
             .unwrap()
             .to_device()
             .unwrap();
-        let dense = crate::rt::nn::scaled_dot_product_attention(&qt, &kt, &vt, None).unwrap();
+        let dense = sdpa(&qt, &kt, &vt, &Plan::dense(None)).unwrap();
         let sol = super::sol_attn(&qt, &kt, &vt, 1.0, None, Some(0), t).unwrap();
         let err = rel_l2(&sol.host_cow().unwrap(), &dense.host_cow().unwrap());
         assert!(err <= 5e-3, "all-exact vs dense rel-L2 {err}");

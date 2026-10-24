@@ -5,7 +5,7 @@
 //! Host path falls back to `repeat_kv` + the existing composed SDPA so CPU
 //! tests stay bit-identical.
 
-use crate::rt::nn::scaled_dot_product_attention_masked;
+use crate::rt::sdpa::{sdpa, Plan};
 use crate::rt::tensor::{CudaTensor, Result, TensorError};
 
 fn msg(s: impl Into<String>) -> TensorError {
@@ -69,7 +69,7 @@ fn host_gqa_masked(
     } else {
         (k.repeat_kv(g)?, v.repeat_kv(g)?)
     };
-    scaled_dot_product_attention_masked(q, &k, &v, scale, mask)
+    sdpa(q, &k, &v, &Plan::masked(scale, mask))
 }
 
 /// Gemma-2 attention: `softmax(tanh(scale · QKᵀ / cap) · cap + mask) · V`
@@ -265,12 +265,11 @@ mod tests {
         let mask = t(mask, &[1, 1, s, s]);
         let scale = Some(0.5);
         let got = scaled_dot_product_attention_gqa(&q, &k, &v, scale, Some(&mask)).unwrap();
-        let want = scaled_dot_product_attention_masked(
+        let want = sdpa(
             &q,
             &k.repeat_kv(hq / hkv).unwrap(),
             &v.repeat_kv(hq / hkv).unwrap(),
-            scale,
-            Some(&mask),
+            &Plan::masked(scale, Some(&mask)),
         )
         .unwrap();
         let (a, b) = (got.host_cow().unwrap(), want.host_cow().unwrap());

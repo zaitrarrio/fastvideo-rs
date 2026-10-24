@@ -12,6 +12,7 @@ use fastvideo_cudarc::rt::device::GemmMath;
 use fastvideo_cudarc::rt::fused::Rope;
 use fastvideo_cudarc::rt::nn::Linear;
 use fastvideo_cudarc::rt::ops::{self, host, BcastOp};
+use fastvideo_cudarc::rt::sdpa;
 use fastvideo_cudarc::rt::{attn, conv, device, kernels as k, vsa};
 use fastvideo_cudarc::CudaTensor;
 use serde_json::json;
@@ -2198,7 +2199,7 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
             let (qt, kt, vt) = (t(q, &shape)?, t(k, &shape)?, t(v, &shape)?);
             let dense_s = median(
                 &mut || {
-                    fastvideo_cudarc::rt::nn::scaled_dot_product_attention(&qt, &kt, &vt, None)?;
+                    sdpa::sdpa(&qt, &kt, &vt, &sdpa::Plan::dense(None))?;
                     Ok(())
                 },
                 3,
@@ -2337,14 +2338,14 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
                 t(kk, &[b, h, sk, d])?,
                 t(v, &[b, h, sk, d])?,
             );
-            let routed =
-                fastvideo_cudarc::rt::nn::scaled_dot_product_attention(&qt, &kt, &vt, None)?;
+            let routed = sdpa::sdpa(&qt, &kt, &vt, &sdpa::Plan::dense(None))?;
             let direct = attn::device_mma_sdpa(&qt, &kt, &vt, None, false)?
                 .ok_or_else(|| anyhow::anyhow!("fused mma sdpa declined"))?;
             let (routed, direct) = (host_of(&routed)?, host_of(&direct)?);
             let identical = routed == direct;
             let expect_fused = attn::mma_sdpa_default()
-                && fastvideo_cudarc::rt::nn::sdpa_backend() == "dense"
+                && fastvideo_cudarc::rt::sdpa_rule::backend()
+                    == fastvideo_cudarc::rt::sdpa_rule::Backend::Dense
                 && !fastvideo_cudarc::rt::tensor::bf16_activations();
             c.report.check(
                 "mma_sdpa_default_dispatch",
@@ -2666,6 +2667,90 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
             json!({"refused": refused}),
             json!({}),
         )?;
+        // Every dense-attention plan the families call (ADR-0015: one
+        // `sdpa` entry, `sdpa_rule` the chooser) runs on the device: no host
+        // fallback is counted and the output is device-resident, for f32 and
+        // bf16 activations, self- and cross-attention, the fused head dims
+        // and one the fused kernels decline (d = 80, the cuBLAS route). This
+        // is what retiring the host attention backends rests on.
+        use fastvideo_cudarc::rt::attn::{BlockCausal, VdnWindow};
+        use fastvideo_cudarc::rt::sdpa::Plan;
+        use fastvideo_cudarc::rt::stats;
+        use fastvideo_cudarc::rt::tensor::with_bf16_act;
+        for (b, h, sq, sk, d) in [
+            (1usize, 4usize, 256usize, 256usize, 128usize),
+            (1, 4, 256, 77, 128),
+            (2, 2, 130, 130, 64),
+            (1, 2, 96, 96, 80),
+        ] {
+            let q = t(c.rand(b * h * sq * d, 1.0), &[b, h, sq, d])?;
+            let k = t(c.rand(b * h * sk * d, 1.0), &[b, h, sk, d])?;
+            let v = t(c.rand(b * h * sk * d, 1.0), &[b, h, sk, d])?;
+            let mask = t(vec![0.0; sq * sk], &[1, 1, sq, sk])?;
+            let mut plans: Vec<(&str, Plan<'_>)> = vec![
+                ("dense", Plan::dense(None)),
+                ("dense_fp8_first", Plan::dense(None).fp8_first()),
+                ("masked", Plan::masked(None, Some(&mask))),
+                ("kv_window", Plan::kv_window()),
+                ("kv_window_reference", Plan::kv_window_with(false)),
+            ];
+            if sq == sk {
+                plans.push((
+                    "block_causal",
+                    Plan::block_causal(
+                        None,
+                        BlockCausal {
+                            block_tokens: 64,
+                            window: 0,
+                            sink: 0,
+                        },
+                    ),
+                ));
+            }
+            if sq == sk && d == 128 {
+                plans.push((
+                    "vdn_window",
+                    Plan::vdn_window(
+                        None,
+                        VdnWindow {
+                            video_start: 16,
+                            frame_tokens: 16,
+                            frames: 15,
+                            chunk: 0,
+                            radius: 1,
+                        },
+                    ),
+                ));
+            }
+            for act16 in [false, true] {
+                for (name, plan) in &plans {
+                    let before = stats::snapshot();
+                    let out = with_bf16_act(act16, || sdpa::sdpa(&q, &k, &v, plan));
+                    let delta = stats::snapshot().since(&before);
+                    let fallbacks = delta.total_fallbacks();
+                    let (ran, on_device, error) = match &out {
+                        Ok(o) => (true, o.is_device_fresh(), serde_json::Value::Null),
+                        Err(e) => (false, false, json!(e.to_string())),
+                    };
+                    c.report.check(
+                        format!(
+                            "sdpa_{name}_{b}x{h}x{sq}x{sk}x{d}_act{}_on_device",
+                            if act16 { 16 } else { 32 }
+                        ),
+                        ran && on_device && fallbacks == 0,
+                        json!({
+                            "ran": ran,
+                            "on_device": on_device,
+                            "host_fallbacks": fallbacks,
+                            "fallback_ops": delta.host_fallbacks.keys().collect::<Vec<_>>(),
+                            "d2h_count": delta.d2h_count,
+                            "error": error,
+                        }),
+                        json!({"host_fallbacks": 0, "on_device": true}),
+                    )?;
+                }
+            }
+        }
         Ok(())
     })?;
     Ok(())

@@ -1396,7 +1396,7 @@ fn ladder(
 
 fn vsa(report: &mut Report, device: &str, seed: u64, max_rel: f64) -> StageResult<()> {
     use fastvideo_cudarc::h3::vsa::{attention_host, H3Vsa, H3VsaConfig};
-    use fastvideo_cudarc::rt::nn::scaled_dot_product_attention;
+    use fastvideo_cudarc::rt::sdpa;
     use fastvideo_models::h3::packing::H3PackedLayout;
 
     report.set("device", crate::gpu::init(device)?);
@@ -1492,9 +1492,14 @@ fn vsa(report: &mut Report, device: &str, seed: u64, max_rel: f64) -> StageResul
         .attend(tensor(&q)?, tensor(&k)?, tensor(&v)?, None)?
         .host_cow()?
         .into_owned();
-    let dense = scaled_dot_product_attention(&tensor(&q)?, &tensor(&k)?, &tensor(&v)?, None)?
-        .host_cow()?
-        .into_owned();
+    let dense = sdpa::sdpa(
+        &tensor(&q)?,
+        &tensor(&k)?,
+        &tensor(&v)?,
+        &sdpa::Plan::dense(None),
+    )?
+    .host_cow()?
+    .into_owned();
     let d = diff(&got, &dense);
     report.check(
         "all_tiles_ungated_is_dense",
