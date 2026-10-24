@@ -743,10 +743,10 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     }
   }
 };
-/** Every name a serve config's `recipe` (or `id`) may use for a variant, as the engine resolves it (caps.rs find,
- * parse_tier_alias): a tier alias (`h3-turbo`: the first variant of its tier), the variant id, a served name or the
- * recipe name. */
-export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" | "served" | "recipe" }> = {
+/** Every name a serve config's `recipe` (or `id`) may use for a variant, as the engine resolves it (caps.rs `find`,
+ * `parse_tier_alias`): a tier alias (`h3-turbo`: the first variant of its tier), the variant id or a served name. A
+ * variant's `recipe_name` is what the capabilities report, not a config name, and is not here. */
+export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" | "served" }> = {
   "FastVideo/FastWan2.1-T2V-1.3B-Diffusers": {
     "variant": "fastwan21-1.3b",
     "kind": "served"
@@ -787,18 +787,6 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
     "variant": "fasth3-trim-8step",
     "kind": "id"
   },
-  "fasth3-trim-8step-vsa": {
-    "variant": "fasth3-trim-8step",
-    "kind": "recipe"
-  },
-  "fasth3-trim-8step-vsa-fp4-nvfp4": {
-    "variant": "fasth3-trim-nvfp4-fast",
-    "kind": "recipe"
-  },
-  "fasth3-trim-8step-vsa-nvfp4": {
-    "variant": "fasth3-trim-nvfp4",
-    "kind": "recipe"
-  },
   "fasth3-trim-nvfp4": {
     "variant": "fasth3-trim-nvfp4",
     "kind": "id"
@@ -806,10 +794,6 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
   "fasth3-trim-nvfp4-fast": {
     "variant": "fasth3-trim-nvfp4-fast",
     "kind": "id"
-  },
-  "fasth3-v2-8step-vsa-nvfp4": {
-    "variant": "fasth3-v2-nvfp4",
-    "kind": "recipe"
   },
   "fasth3-v2-nvfp4": {
     "variant": "fasth3-v2-nvfp4",
@@ -823,14 +807,6 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
     "variant": "fastwan21-1.3b",
     "kind": "id"
   },
-  "fastwan21-1.3b-dmd3-vsa": {
-    "variant": "fastwan21-1.3b",
-    "kind": "recipe"
-  },
-  "fastwan21-1.3b-dmd3-vsa-taehv": {
-    "variant": "fastwan21-1.3b-taehv",
-    "kind": "recipe"
-  },
   "fastwan21-1.3b-taehv": {
     "variant": "fastwan21-1.3b-taehv",
     "kind": "id"
@@ -838,14 +814,6 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
   "fastwan22-ti2v-5b": {
     "variant": "fastwan22-ti2v-5b",
     "kind": "id"
-  },
-  "fastwan22-ti2v-5b-dmd3": {
-    "variant": "fastwan22-ti2v-5b",
-    "kind": "recipe"
-  },
-  "fastwan22-ti2v-5b-dmd3-taehv": {
-    "variant": "fastwan22-ti2v-5b-taehv",
-    "kind": "recipe"
   },
   "fastwan22-ti2v-5b-taehv": {
     "variant": "fastwan22-ti2v-5b-taehv",
@@ -859,17 +827,9 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
     "variant": "h3-larry-turbo",
     "kind": "id"
   },
-  "h3-larry-turbo-ckpt850-dense": {
-    "variant": "h3-larry-turbo",
-    "kind": "recipe"
-  },
   "h3-lightx2v-turbo": {
     "variant": "h3-lightx2v-turbo",
     "kind": "id"
-  },
-  "h3-lightx2v-turbo-v1.2-768p-dense": {
-    "variant": "h3-lightx2v-turbo",
-    "kind": "recipe"
   },
   "h3-max": {
     "variant": "sol-h3",
@@ -882,10 +842,6 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
   "h3-ref2v-turbo": {
     "variant": "h3-ref2v-turbo",
     "kind": "id"
-  },
-  "h3-ref2va-base-49step": {
-    "variant": "h3-ref2v-max",
-    "kind": "recipe"
   },
   "h3-trim": {
     "variant": "fasth3-trim-8step",
@@ -939,10 +895,6 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
     "variant": "ltx25-a2v-guided",
     "kind": "id"
   },
-  "ltx25-dev-a2v-guided": {
-    "variant": "ltx25-a2v-guided",
-    "kind": "recipe"
-  },
   "ltx25-distill-dense": {
     "variant": "ltx25-distill-dense",
     "kind": "id"
@@ -955,22 +907,6 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
     "variant": "ltx25-distill-sol-nvfp4-taehv",
     "kind": "id"
   },
-  "ltx25-distill-two-stage-dense": {
-    "variant": "ltx25-distill-dense",
-    "kind": "recipe"
-  },
-  "ltx25-distill-two-stage-sol": {
-    "variant": "ltx25-distill-sol",
-    "kind": "recipe"
-  },
-  "ltx25-distill-two-stage-sol-nvfp4-taehv": {
-    "variant": "ltx25-distill-sol-nvfp4-taehv",
-    "kind": "recipe"
-  },
-  "ltx25-ic-lora-ingredients-dense": {
-    "variant": "ltx25-ref2v",
-    "kind": "recipe"
-  },
   "ltx25-ref2v": {
     "variant": "ltx25-ref2v",
     "kind": "id"
@@ -979,29 +915,13 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
     "variant": "sfwan21-1.3b",
     "kind": "id"
   },
-  "sfwan21-1.3b-causal": {
-    "variant": "sfwan21-1.3b",
-    "kind": "recipe"
-  },
   "sol-h3": {
     "variant": "sol-h3",
     "kind": "id"
   },
-  "sol-h3-4step-engine-ladder": {
-    "variant": "sol-h3",
-    "kind": "recipe"
-  },
-  "sol-h3-ref2va": {
-    "variant": "h3-ref2v-turbo",
-    "kind": "recipe"
-  },
   "vdn-h3": {
     "variant": "vdn-h3",
     "kind": "id"
-  },
-  "vdn-h3-50step": {
-    "variant": "vdn-h3",
-    "kind": "recipe"
   },
   "vdn-h3-8step": {
     "variant": "vdn-h3-8step",
@@ -1030,9 +950,12 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
   "wan22-ti2v-5b": {
     "variant": "wan22-ti2v-5b",
     "kind": "id"
-  },
-  "wan22-ti2v-5b-unipc50": {
-    "variant": "wan22-ti2v-5b",
-    "kind": "recipe"
   }
+};
+/** Recipe aliases the engine resolves besides MODEL_NAMES (caps.rs `model_from_config` arms a config here uses);
+ * `variantOf` does not consult them, `recipeVariant` does. The engine also accepts contract names neither table
+ * lists (`4step-vsa`, `8step`, `sol-h3` / `sol_h3`, `trim-8step`, an empty recipe, family `ltx`): plan A3 settles
+ * which the manifests carry. */
+export const ENGINE_RECIPE_ALIASES: Record<string, string> = {
+  "vdn-h3-50step": "vdn-h3"
 };

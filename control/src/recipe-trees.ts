@@ -14,7 +14,7 @@ import { MANIFEST_VARIANTS } from "./families-gen";
 import { mustVariant } from "./families";
 
 export interface RecipeTrees {
-  /** The variant (engine catalog id) the recipe resolves to (families-gen.ts MODEL_NAMES; caps.rs find). */
+  /** The variant (engine catalog id) the recipe resolves to (families-gen.ts MODEL_NAMES or ENGINE_RECIPE_ALIASES). */
   catalog: string;
   required: string[];
   prequant: string[];

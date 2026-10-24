@@ -6,12 +6,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import CATALOG from "../../src/cluster/catalog.json";
-import { MANIFEST_FAMILIES, MANIFEST_VARIANTS, MODEL_NAMES } from "../../src/families-gen";
-import { minVramGib, MODEL_FAMILY_IDS, mustVariant, variantOf } from "../../src/families";
+import { ENGINE_RECIPE_ALIASES, MANIFEST_FAMILIES, MANIFEST_VARIANTS, MODEL_NAMES } from "../../src/families-gen";
+import { minVramGib, MODEL_FAMILY_IDS, mustVariant, recipeVariant, variantOf } from "../../src/families";
 import { MODEL_PRESETS, POOL_PRESETS, recipeTrees, recipeVramGb } from "../../src/presets";
 import { RECIPE_TREES } from "../../src/recipe-trees";
 import { EU_TREES } from "../../src/volumes";
-import { CATALOG_EXCEPTIONS, configModels, crossChecks, DISPATCH_FAMILY, euVolumeTrees, familiesGenTs, familySet, isAuxTree, loadFamilies, parseFamily, TIER_ALIAS } from "../../gen-configs.mjs";
+import { CATALOG_EXCEPTIONS, configModels, crossChecks, DISPATCH_FAMILY, ENGINE_RECIPE_ALIASES as GEN_ALIASES, euVolumeTrees, familiesGenTs, familySet, isAuxTree, loadFamilies, parseFamily, TIER_ALIAS } from "../../gen-configs.mjs";
 
 const repo = new URL("../../../", import.meta.url).pathname;
 const fixture = readFileSync(join(repo, "control/test/unit/fixtures/family-fixture.toml"), "utf8");
@@ -34,14 +34,19 @@ describe("families/*.toml: parse and derive", () => {
     expect(MANIFEST_FAMILIES.map((f) => f.id)).toEqual(MODEL_FAMILY_IDS);
     expect(Object.keys(MANIFEST_VARIANTS)).toEqual([...set.variants.keys()]);
     expect(Object.keys(MODEL_NAMES).length).toBe(set.names.size);
+    // Ids, served names and the nine tier aliases; never a recipe_name (what the capabilities report, not a config name).
+    expect(Object.values(MODEL_NAMES).map((n) => n.kind).sort()).toEqual([...Array(30).fill("id"), ...Array(12).fill("served"), ...Array(9).fill("tier")]);
+    for (const v of set.variants.values()) if (v.recipe_name !== v.id) expect(MODEL_NAMES[v.recipe_name], v.recipe_name).toBeUndefined();
+    expect(ENGINE_RECIPE_ALIASES).toEqual(GEN_ALIASES);
+    expect(ENGINE_RECIPE_ALIASES).toEqual({ "vdn-h3-50step": "vdn-h3" });
   });
-  it("a name resolves as the engine does (caps.rs find): tier alias first of its tier, then id, served name, recipe name", () => {
+  it("a name resolves as the engine does (caps.rs find): tier alias first of its tier, then id, then served name", () => {
     // catalog.json's recipe details state each alias's target; the manifests must agree.
     for (const r of CATALOG.recipes) {
       const tier = /^tier alias: (\S+)/.exec(r.detail)?.[1];
       const alias = /^alias: (\S+)/.exec(r.detail)?.[1];
       if (tier) expect(MODEL_NAMES[r.id], r.id).toEqual({ variant: tier, kind: "tier" });
-      else if (alias) expect(MODEL_NAMES[r.id]?.variant, r.id).toBe(alias);
+      else if (alias) expect(recipeVariant(r.id)?.id, r.id).toBe(alias);
       else if (/^catalog model/.test(r.detail)) expect(MODEL_NAMES[r.id], r.id).toEqual({ variant: r.id, kind: "id" });
     }
     for (const f of set.families) for (const [tier, alias] of Object.entries(TIER_ALIAS[f.id as keyof typeof TIER_ALIAS])) {
@@ -50,7 +55,10 @@ describe("families/*.toml: parse and derive", () => {
       else expect(variantOf(alias), alias).toBeUndefined();
     }
     expect(variantOf("fasth3")).toMatchObject({ id: "fasth3-4step-vsa", family: "h3", tier: "turbo" });
-    expect(variantOf("vdn-h3-50step")?.id).toBe("vdn-h3");
+    // An engine recipe alias (caps.rs model_from_config VDN_H3_RECIPE), not a manifest name: recipeVariant only.
+    expect(variantOf("vdn-h3-50step")).toBeUndefined();
+    expect(recipeVariant("vdn-h3-50step")?.id).toBe("vdn-h3");
+    expect(variantOf("sol-h3-4step-engine-ladder"), "a recipe_name is not a config name").toBeUndefined();
     expect(variantOf("wan14b-turbo")?.id).toBe("wan14b-plug-4step");
     expect(variantOf("lightx2v-turbo-v0.1")).toBeUndefined();
     expect(() => mustVariant("nope")).toThrow(/family manifests/);
@@ -112,7 +120,7 @@ describe("presets from the manifests", () => {
   it("every pool model's recipe is a manifest name of the model's family (or a documented exception), and its id too", () => {
     for (const p of POOL_PRESETS) {
       for (const m of p.pool.models ?? []) {
-        const v = variantOf(m.recipe) ?? MANIFEST_VARIANTS[RECIPE_TREES[m.recipe]!.catalog]!;
+        const v = recipeVariant(m.recipe) ?? MANIFEST_VARIANTS[RECIPE_TREES[m.recipe]!.catalog]!;
         expect(v.family, `${p.id}: ${m.recipe}`).toBe(m.family);
         if (!CATALOG_EXCEPTIONS[m.id as keyof typeof CATALOG_EXCEPTIONS]) expect(variantOf(m.id)?.family, `${p.id}: model id ${m.id}`).toBe(m.family);
       }

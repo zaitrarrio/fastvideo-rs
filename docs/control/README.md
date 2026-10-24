@@ -97,7 +97,7 @@ control-plane and script copies from it (plan A4). What the generator owns:
 
 | output | what |
 |---|---|
-| `control/src/families-gen.ts` (whole file) | `MANIFEST_FAMILIES`, `MANIFEST_VARIANTS` (tier, served names, recipe name, `trees`, `weight_trees` = trees without `auxiliary/`, `gpu`), `MODEL_NAMES` (every name a serve config's `recipe` or `id` may use, resolved as `caps.rs find` does: tier alias → first variant of its tier in file order, variant id, served name, recipe name) |
+| `control/src/families-gen.ts` (whole file) | `MANIFEST_FAMILIES`, `MANIFEST_VARIANTS` (tier, served names, recipe name, `trees`, `weight_trees` = trees without `auxiliary/`, `gpu`), `MODEL_NAMES` (every name a serve config's `recipe` or `id` may use, resolved as `caps.rs find` does: tier alias → first variant of its tier in file order, variant id, served name; a variant's `recipe_name` is what the capabilities report, not a config name), `ENGINE_RECIPE_ALIASES` (the `caps.rs model_from_config` recipe arms a config here uses: `vdn-h3-50step`; `recipeVariant` consults them, `variantOf` does not) |
 | `control/src/volumes.ts` region `EU_TREES` | copied from `scripts/gpu/volumes.sh` `FV_EU_VOLUME_TREES` (an ops fact: what `r2-fill-volume.sh` wrote; the shell stays the hand-written source) |
 | `scripts/gcp/families.tsv` columns `weight_trees`, `served` | from each row's Runpod twin config's `[[models]]` recipes, resolved to variants |
 | `scripts/gpu/verify-weights.sh` region `variant_trees` | the `variant:<id>` cells: a variant's trees as the manifest names them |
@@ -114,7 +114,10 @@ only families, models and recipes the manifests know, except
 `CATALOG_EXCEPTIONS` (`longlive-1.3b`, `lightx2v-turbo-v0.1` and its served
 id: no variant in `wan.toml` / `h3.toml` yet, a question for plan A3);
 `configs/autoscale.toml` pools name a dispatch family; `volumes.sh` names
-published trees.
+published trees; `serverless/serves.ts` `RECIPES` gives every name the
+manifests' tier. The engine also accepts contract names neither table lists
+(`4step-vsa`, `8step`, `sol-h3` / `sol_h3`, `trim-8step`, an empty recipe,
+family `ltx`): plan A3 settles which the manifests carry.
 
 Still hand-written, because the manifests carry no deployment data (plan C1,
 the `[deploy]` section): preset ids, titles, image variants, configs, queue

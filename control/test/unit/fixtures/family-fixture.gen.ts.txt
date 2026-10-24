@@ -84,10 +84,10 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     }
   }
 };
-/** Every name a serve config's `recipe` (or `id`) may use for a variant, as the engine resolves it (caps.rs find,
- * parse_tier_alias): a tier alias (`h3-turbo`: the first variant of its tier), the variant id, a served name or the
- * recipe name. */
-export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" | "served" | "recipe" }> = {
+/** Every name a serve config's `recipe` (or `id`) may use for a variant, as the engine resolves it (caps.rs `find`,
+ * `parse_tier_alias`): a tier alias (`h3-turbo`: the first variant of its tier), the variant id or a served name. A
+ * variant's `recipe_name` is what the capabilities report, not a config name, and is not here. */
+export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" | "served" }> = {
   "fix": {
     "variant": "fix-turbo",
     "kind": "served"
@@ -100,10 +100,6 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
     "variant": "fix-turbo",
     "kind": "id"
   },
-  "fix-turbo-4step": {
-    "variant": "fix-turbo",
-    "kind": "recipe"
-  },
   "fixture-turbo": {
     "variant": "fix-turbo",
     "kind": "served"
@@ -113,3 +109,8 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
     "kind": "tier"
   }
 };
+/** Recipe aliases the engine resolves besides MODEL_NAMES (caps.rs `model_from_config` arms a config here uses);
+ * `variantOf` does not consult them, `recipeVariant` does. The engine also accepts contract names neither table
+ * lists (`4step-vsa`, `8step`, `sol-h3` / `sol_h3`, `trim-8step`, an empty recipe, family `ltx`): plan A3 settles
+ * which the manifests carry. */
+export const ENGINE_RECIPE_ALIASES: Record<string, string> = {};

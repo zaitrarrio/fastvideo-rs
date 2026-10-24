@@ -4,7 +4,9 @@
 # cross-checks between the manifests and their hand-written copies must agree,
 # and fv-control's typecheck and unit tests must pass. No Rust, no GPU: node
 # only (control/package-lock.json pins the tools). The shell lint runs here
-# too, since the generator writes scripts/gpu/verify-weights.sh.
+# too, since the generator writes scripts/gpu/verify-weights.sh. The engine
+# and model crates are inputs as well: test/unit/preset-trees.test.ts and
+# templates.test.ts check the tables' claims against their sources.
 name: control
 
 on:
@@ -23,6 +25,11 @@ on:
       - "scripts/serve/variants.sh"
       - "docker/gpucheck.Dockerfile"
       - "crates/fastvideo-serve/console/**"
+      - "crates/fastvideo-engine-service/**"
+      - "crates/fastvideo-models/**"
+      - "crates/fastvideo-cudarc/src/llm/prequant.rs"
+      - "crates/fastvideo-cudarc/src/h3/dit_tree.rs"
+      - "crates/fastvideo-cudarc/src/wan/quant.rs"
       - ".github/workflows/control.yml"
   push:
     branches: ["main"]
@@ -39,6 +46,11 @@ on:
       - "scripts/serve/variants.sh"
       - "docker/gpucheck.Dockerfile"
       - "crates/fastvideo-serve/console/**"
+      - "crates/fastvideo-engine-service/**"
+      - "crates/fastvideo-models/**"
+      - "crates/fastvideo-cudarc/src/llm/prequant.rs"
+      - "crates/fastvideo-cudarc/src/h3/dit_tree.rs"
+      - "crates/fastvideo-cudarc/src/wan/quant.rs"
       - ".github/workflows/control.yml"
 
 permissions:
