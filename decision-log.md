@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-10-24 · FVID-2026-10-24-gold-standard-files
+- Trigger: plan D2 (docs/plan/2026-10-23-execution-plan.md): `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments, keyed by registry name and `@rev`; the profile comments stop carrying numbers
+- Options: bounds with margins as the review sketches them; the measured values as the sources report them, with the gate's tolerances applied by `fv-lab`; numbers copied from the nearest measured configuration when the variant itself has none; only cited numbers, with every absence declared
+- Decision: **a new library crate `fastvideo-lab` defines the format (`Gold`, `validate`, `load_dir`, `schemas/gold.v1.json`); every numeric field is optional, a present one must be cited by a `[[source]]` (path, heading, date) and an absent one declared by a `[[gap]]` with its reason, both enforced by the parser; the first 30 files hold the sources' measured values (no margins, no rescaling, no borrowing from nearby configurations, which are cited in notes); the most recent dated source wins and both are cited; `cost.usd_per_hr` is the class's most recent dated price ($2.49/hr, RTX PRO 6000, EU-RO-1, 2026-10-14) and `usd_per_clip` the one derived value; profile comments point to the gold files and `docs/techniques.md` and a CPU test rejects measurement-looking numbers in them; `lab/tiers.toml` is left to D1**
+- Reason: a gold standard that invents is worse than none; the gaps are D3's GPU work list; the gate's tolerances are already the repository's rule
+- Reversibility: cheap (this repository's format, versioned by `schema`; nothing published depends on it)
+- Executed by: Executor (plan D2)
+- ADR: docs/adr/0009-gold-standard-files.md
+- Verification: `cargo test -p fastvideo-lab` (unit tests; every gold file parses and validates; gold files == family variant ids both ways; family, tier and profile agree; cited paths exist; no measurement in a profile comment; schema drift); profiles' TOML values unchanged (comment-only diff)
+
 ### FVID · 2026-10-24 · FVID-2026-10-24-family-manifest-layer-2
 - Trigger: plan A2 (docs/plan/2026-10-23-execution-plan.md): layer 2 of the model family manifest and the first three family files, with the equality proof against the hand-written engine catalog
 - Options: the pure crate also owning the engine's recipe structs (one schema, the crate depends on the inference core); the engine's recipe as an opaque table the crate validates only around (ids, trees, GPU, caps); a separate crate for layer 2

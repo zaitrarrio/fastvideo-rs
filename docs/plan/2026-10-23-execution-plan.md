@@ -90,7 +90,7 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | todo |
-| D2 | `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments; keyed by registry name and `@rev` | every served variant has a gold file; comments in `profiles/` no longer carry numbers | pod | A2 | todo |
+| D2 | `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments; keyed by registry name and `@rev` | every served variant has a gold file; comments in `profiles/` no longer carry numbers | pod | A2 | pr |
 | D3 | `fv-lab report tiers` and the generated `docs/perf/tiers.md` | table generated from one run set | pod; **GPU** the gold runs | D1, D2 | todo |
 | D4 | CI bridge: gold files parse and resolve; `last_validated.commit` age check; an on-demand `fv-lab run gold --all` workflow | visible per-model validation age in CI | CI | D3 | todo |
 
@@ -236,3 +236,19 @@ ran (pod id, $/hr), result, cost.
   hit yet): 69 test binaries, 720 passed, 0 failed; coverage over the instrumented
   workspace files: lines 62.42% (54115 / 86700), regions 62.96%, functions
   59.31%; `adapter-coverage` artifact 4.5 MB (lcov, HTML, summaries).
+- 2026-10-24 02:10Z: D2 opened a draft PR (`claude/d2-gold-files`):
+  `crates/fastvideo-lab` (lib: `gold` types, `validate`, `load_dir`,
+  `schemas/gold.v1.json`, the `profiles` comment lint), 30
+  `lab/gold/<variant>.toml` (one per family variant id), `lab/README.md`,
+  ADR-0009; the measurement lines of 20 `profiles/h3/*.toml` comments
+  replaced by pointers (comment-only: every profile parses to the same TOML).
+  Every number in a gold file is cited by a `[[source]]` and every absent one
+  declared by a `[[gap]]`, both enforced by the parser: 14 of 30 variants
+  carry a clip time, 3 a PSNR against upstream, 0 a `[last_validated]`; 10
+  variants carry no measurement but the class price (the D3 work list). On
+  build pod `i8tu0lpdb6nvov`: `cargo test --locked -p fastvideo-lab` 19
+  passed (10 unit, 6 gold-files, 1 profile lint, 2 schema), `cargo fmt --all
+  --check` and `cargo clippy --locked --workspace --all-targets -D warnings`
+  green. Lockfile: the new crate only. `lab/tiers.toml` and
+  `lab/cells/*.toml` left to D1 (wall caps, stages and cells are not in any
+  document).

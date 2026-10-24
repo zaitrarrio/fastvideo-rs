@@ -22,6 +22,7 @@ half. `--features cuda` needs a CUDA toolchain.
 | `fastvideo-gpucheck` | Staged GPU checks (`kernels`, `parity`, `clip`). `unsafe` allowed |
 | `fastvideo-mlx` | Apple Silicon scaffold (`mlx-rs` behind `--features mlx` on aarch64 macOS); host stubs elsewhere. Not a generate path |
 | `fastvideo-manifest` | The registry's public formats: model names, `model.toml` v1, the signed lineage manifest and its canonical BLAKE3 digest, JSON Schema export (ADR-0005..0007); layer 2, the family manifest `families/*.toml` (ADR-0008). Pure: no I/O, no CUDA (`fs` feature: the one directory reader) |
+| `fastvideo-lab` | The lab's gold standards: `lab/gold/<variant>.toml` types, validation, directory reader and JSON Schema (ADR-0009), and the lint that keeps measurements out of `profiles/` comments. CPU only; plan D1 adds the `fv-lab` binary |
 
 Shared device types (`CudaTensor`, conv, the weight map, the frame writer)
 live under `cudarc/src/wan` and are used by every other model.
