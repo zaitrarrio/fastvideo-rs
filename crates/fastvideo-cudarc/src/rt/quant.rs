@@ -382,7 +382,15 @@ impl QuantMode {
     /// [`QuantMode::scoped_default`]: unset then means that default instead of
     /// the device's; an explicit `FASTVIDEO_H3_QUANT` still wins.
     pub fn from_env() -> std::result::Result<Self, String> {
-        match fastvideo_models::techniques::settings::var(ENV) {
+        Self::from_settings(&fastvideo_models::settings::Live)
+    }
+
+    /// [`Self::from_env`] reading [`ENV`] from `settings` (a load's
+    /// snapshot); the scoped default and the device decide the rest.
+    pub fn from_settings(
+        settings: &dyn fastvideo_models::settings::Source,
+    ) -> std::result::Result<Self, String> {
+        match settings.var(ENV) {
             Some(v) => Ok(Self::parse(&v)?.for_device()),
             None => Ok(SCOPED_DEFAULT
                 .with(|d| d.get())

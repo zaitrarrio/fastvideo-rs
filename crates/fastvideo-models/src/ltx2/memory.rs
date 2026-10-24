@@ -584,10 +584,19 @@ impl LtxOffload {
 
     /// `explicit` (a CLI flag) wins, then [`Self::ENV`], then `None`.
     pub fn from_env_or(explicit: Option<Self>) -> Result<Self, String> {
+        Self::from_settings_or(&crate::techniques::settings::Live, explicit)
+    }
+
+    /// [`Self::from_env_or`] reading [`Self::ENV`] from `settings` (a load's
+    /// snapshot).
+    pub fn from_settings_or(
+        settings: &dyn crate::techniques::settings::Source,
+        explicit: Option<Self>,
+    ) -> Result<Self, String> {
         if let Some(m) = explicit {
             return Ok(m);
         }
-        match crate::techniques::settings::var(Self::ENV) {
+        match settings.var(Self::ENV) {
             Some(v) => Self::parse(&v).map_err(|e| format!("{}: {e}", Self::ENV)),
             None => Ok(Self::None),
         }

@@ -177,13 +177,29 @@ pub enum Capability {
     SupportsLayerOffload,
 }
 
-/// A model's declaration of the seams it exposes (`spec.py:20-55`).
+/// A model's declaration of the seams it exposes (`spec.py:20-55`) and of
+/// the techniques-layer inputs its runtime reads: the layered `FASTVIDEO_*`
+/// settings (what a profile's techniques, `[kernels]` and `[env]` can set)
+/// and the `[kernels]` ops it dispatches (`docs/adr/0010-settings-layer.md`
+/// "`model_spec`").
 #[derive(Clone, Debug)]
 pub struct ModelSpec {
     pub name: &'static str,
     pub capabilities: Vec<Capability>,
     /// Transformer blocks per forward (the layer axis of a route).
     pub layers: usize,
+    /// Whether a technique profile may name this model (`[pipeline].model`,
+    /// [`super::registry::model_spec`]). Only H3 and LTX-2 have a profile
+    /// adapter; the other specs describe what their runtime reads.
+    pub profiles: bool,
+    /// The settings families ([`super::settings::Family`]) whose `Layered`
+    /// rows this model's runtime may read.
+    pub families: &'static [super::settings::Family],
+    /// `Layered` rows of other families it reads too.
+    pub extra_settings: &'static [&'static str],
+    /// The `[kernels]` ops its runtime dispatches through
+    /// [`super::kernels::choice`].
+    pub kernels: &'static [super::kernels::KernelOp],
 }
 
 impl ModelSpec {
@@ -193,6 +209,31 @@ impl ModelSpec {
 
     pub fn missing(&self, required: &[Capability]) -> Vec<Capability> {
         required.iter().copied().filter(|c| !self.has(*c)).collect()
+    }
+
+    /// Whether `name` is a techniques-layer setting this model reads: a
+    /// `Layered` row of one of [`Self::families`], or one of
+    /// [`Self::extra_settings`].
+    pub fn reads(&self, name: &str) -> bool {
+        use super::settings::{lookup, Reader};
+        lookup(name).is_some_and(|row| {
+            row.reader == Reader::Layered
+                && (self.families.contains(&row.family) || self.extra_settings.contains(&name))
+        })
+    }
+
+    /// Every setting [`Self::reads`], in table order.
+    pub fn settings(&self) -> Vec<&'static str> {
+        super::settings::SETTINGS
+            .iter()
+            .filter(|s| self.reads(s.name))
+            .map(|s| s.name)
+            .collect()
+    }
+
+    /// Whether the runtime dispatches `op` through `kernels::choice`.
+    pub fn dispatches(&self, op: super::kernels::KernelOp) -> bool {
+        self.kernels.contains(&op)
     }
 }
 

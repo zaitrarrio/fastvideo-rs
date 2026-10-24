@@ -445,7 +445,7 @@ process: the first read is cached).
 | `FASTVIDEO_SANA_OPT` | env | text: `baseline` or `full` | `baseline` | per load | SANA-Video | `step_output` | SANA-Video optimization arm. |
 | `FASTVIDEO_SANA_QKV_MERGE` | env | text: a SANA-Video flag | the `FASTVIDEO_SANA_OPT` arm's | per load | SANA-Video | `kernel_fusion` | SANA-Video merged QKV projection. |
 | `FASTVIDEO_SAVE_MP4` | env | text: `1` or `true` (any case, not trimmed) | `0` | per generate | harness | `io` | Mux frames with ffmpeg. |
-| `FASTVIDEO_SDPA` | env, then profile | keyword | `dense` | once per process | runtime | `attention_backend` | Wan self-attention backend. |
+| `FASTVIDEO_SDPA` | env, then profile | keyword: `dense` (default), `cublas` or `flash`; `host` and `sparse` are retired and refused | `dense` | once per process | runtime | `attention_backend` | Dense attention backend for every family (`rt::sdpa_rule`): the dense rule's pick, or a forced `cublas` / `flash` route. |
 | `FASTVIDEO_SDPA_AUTO` | env, then profile | keyword | `rule` | once per process | runtime | `kernel_choice` | How the dense attention backend is chosen. |
 | `FASTVIDEO_SDPA_CHUNK` | env | text: a `usize` (not trimmed), at least 64 | by device | once per process | runtime | `memory` | Query rows per SDPA chunk. |
 | `FASTVIDEO_SLA_BLKK` | env, then profile | usize: at least 1 | `64` | per call | runtime | `attention` | SLA key block. |
@@ -484,7 +484,7 @@ process: the first read is cached).
 | `FASTVIDEO_VSA_TMA` | env, then profile | keyword | `1` | per call | runtime | `kernel_choice` | `0` turns the VSA TMA kernels off. |
 | `FASTVIDEO_VSA_TOPK` | env, then profile | keyword | `v2` | per call | runtime | `kernel_choice` | `v1` runs the first VSA top-k kernel. |
 | `FASTVIDEO_VSA_UNION_LOG` | env, then profile | flag | `0` | per call | H3 | `debug` | Log the VSA block-union statistics. |
-| `FASTVIDEO_VSA_WINDOW` | env, then profile | usize | `128` | per call | runtime | `attention` | Masked-attention window of the VSA fallback. |
+| `FASTVIDEO_VSA_WINDOW` | retired (not read) | text: not read | unset | per call | runtime | `attention` | Retired with the host block-sparse prototype (`FASTVIDEO_SDPA=sparse`, plan B5): not read. `FASTVIDEO_SDPA=sparse` is refused, and the refusal names this variable. |
 | `FASTVIDEO_WAN_AUDIO` | env | text: `mmaudio` or `1` (trimmed) | unset | per generate | MMAudio | `audio` | MMAudio soundtrack for Wan clips. |
 | `FASTVIDEO_WAN_AUDIO_CFG` | env | text: parsed as the preset's number (not trimmed); unparsable = default | the MMAudio preset's | per generate | MMAudio | `audio` | MMAudio guidance. |
 | `FASTVIDEO_WAN_AUDIO_PROMPT` | env | text: text | the video prompt | per generate | MMAudio | `audio` | MMAudio prompt. |

@@ -22,6 +22,7 @@ fn reader(s: &Setting) -> &'static str {
         Reader::Layered => "env, then profile",
         Reader::Env => "env",
         Reader::Reserved => "reserved (not read)",
+        Reader::Retired => "retired (not read)",
     }
 }
 
