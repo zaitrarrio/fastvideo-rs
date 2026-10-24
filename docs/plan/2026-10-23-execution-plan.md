@@ -108,7 +108,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | todo (B4a step caches in progress, ADR-0020; then B4b `fuse.rs`, B4c disk prompt cache) |
+| B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | active (B4a pr #173: step caches, ADR-0020, GPU `b4a` cells pending; then B4b `fuse.rs`, B4c disk prompt cache) |
 | B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | merged (#161) |
 | B6 | `H3Pipeline::load` and `Ltx2Pipeline::load` split into plan, open, place, fuse; dead code (`TensorBackend`, mlx scaffold) retired | engine lifecycle testable on CPU | pod | B1 | merged (#170: plan/open/place/fuse, ADR-0017; `techniques` and `b6` GPU identity cells all byte-identical vs main; TensorBackend and the mlx scaffold retired) |
 
@@ -799,6 +799,23 @@ ran (pod id, $/hr), result, cost.
   sol-h3-spark; fasth3-8step is skipped on the EU volume) were not run on
   GPU here; their command lines are covered by the dry-run golden.
 
+- 2026-10-24 13:25Z: B4a opened draft PR #173 (`claude/b4a-stepcache`):
+  `fastvideo_models::techniques::step_cache` (ADR-0020), one `StepCache`
+  trait and one `EasyCache` / `TeaCache` / `FbCache` / `Taylor`; the nine
+  per-family controllers (Wan / SANA / A14B / LingBot EasyCache, H3 / Wan
+  Sol / Cosmos(3) / TeaCache4Wan2.1 TeaCache, LTX FBCache, Wan Taylor) are
+  parameter sets, their arithmetic differences named parameters. CPU
+  evidence: `step_cache/equality.rs` against the verbatim pre-B4a
+  controllers (`legacy.rs`), decisions and latents bit for bit. On build
+  pod `l3d75u8a8zhw47` (agent `b4a-stepcache`): fmt, workspace clippy
+  `-D warnings`, `--features cuda` check, `scripts/gpu/lint.sh`,
+  `scripts/serve/check.sh` green; cudarc + models + engine-service + core
+  1396 passed, 1 failed: `settings::workspace_check` on fastvideo-lab's
+  `FASTVIDEO_X` test names, failing identically on main `3da5cab4` (D1a).
+  GPU gate pending (coordinator): `runpod-matrix.sh b4a`, four cells (H3
+  fullopt TeaCache env / profile, H3 4-step TeaCache fixture, LTX-2.5 dev
+  guided FBCache), `FV_B4A_CELLS` for one cell per pod; Wan / SANA /
+  LingBot / Cosmos caches rest on the CPU fixtures (no EU-volume tree).
 - 2026-10-24 12:58Z, coordinator: merged C3a #169 (10:05Z), B6 #170
   (12:31Z) and D1a #171 (12:58Z), each with main merged in and CI green
   on that head. Started B4a (step caches, ADR-0020). The build pod
