@@ -329,6 +329,22 @@ thread_local! {
     static SCOPED_DEFAULT: std::cell::Cell<Option<QuantMode>> = const { std::cell::Cell::new(None) };
 }
 
+/// The compute capability major of the device ops run on (a live device
+/// with residency on), `None` for host ops.
+fn live_sm() -> Option<i32> {
+    #[cfg(feature = "cuda")]
+    {
+        crate::rt::stats::device_expected()
+            .then(crate::rt::device::global_device)
+            .flatten()
+            .map(|d| d.sm_major)
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        None
+    }
+}
+
 /// Restores the previous [`QuantMode::scoped_default`] when dropped.
 #[must_use = "the default applies only while the guard lives"]
 pub struct ScopedQuantDefault(Option<QuantMode>);
@@ -405,34 +421,70 @@ impl QuantMode {
         ScopedQuantDefault(SCOPED_DEFAULT.with(|d| d.replace(Some(mode))))
     }
 
+    /// [`Self::from_settings`] over given inputs, for a load's plan
+    /// (`docs/adr/0017-loader-stages.md`): the setting's value, the thread's
+    /// scoped default, and the compute capability major of the device ops
+    /// run on (`None`: host ops; [`crate::rt::load_stages::DeviceFacts::live_sm_major`]).
+    /// Reads no device and logs nothing; [`Self::from_settings`] is this
+    /// with the live device.
+    pub fn resolve_on(
+        setting: Option<&str>,
+        scoped_default: Option<Self>,
+        live_sm: Option<i32>,
+    ) -> std::result::Result<Self, String> {
+        match setting {
+            Some(v) => Ok(Self::parse(v)?.for_sm(live_sm)),
+            None => {
+                Ok(scoped_default
+                    .map_or_else(|| Self::default_for_sm(live_sm), |m| m.for_sm(live_sm)))
+            }
+        }
+    }
+
+    /// The scoped default of this thread ([`Self::scoped_default`]).
+    pub fn current_scoped_default() -> Option<Self> {
+        SCOPED_DEFAULT.with(|d| d.get())
+    }
+
+    /// `mxfp8` on a device below sm_100 runs W8A8 (cuBLASLt has no MXFP8
+    /// kernels there); everything else as asked.
+    fn for_sm(self, live_sm: Option<i32>) -> Self {
+        if self == Self::Mxfp8 && live_sm.is_some_and(|sm| sm < 10) {
+            Self::W8A8
+        } else {
+            self
+        }
+    }
+
+    /// Unset: MXFP8 on a device with block-scaled FP8 (sm_100+), else off.
+    fn default_for_sm(live_sm: Option<i32>) -> Self {
+        if live_sm.is_some_and(|sm| sm >= 10) {
+            Self::Mxfp8
+        } else {
+            Self::Off
+        }
+    }
+
     fn for_device(self) -> Self {
+        let out = self.for_sm(live_sm());
         #[cfg(feature = "cuda")]
-        if self == Self::Mxfp8 && crate::rt::stats::device_expected() {
+        if out != self {
             if let Some(d) = crate::rt::device::global_device() {
-                if d.sm_major < 10 {
-                    static SAID: std::sync::atomic::AtomicBool =
-                        std::sync::atomic::AtomicBool::new(false);
-                    if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                        crate::rt::log::info(format_args!(
-                            "{ENV}=mxfp8 needs sm_100+ (this GPU is sm_{}{}); running W8A8",
-                            d.sm_major, d.sm_minor
-                        ));
-                    }
-                    return Self::W8A8;
+                static SAID: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    crate::rt::log::info(format_args!(
+                        "{ENV}=mxfp8 needs sm_100+ (this GPU is sm_{}{}); running W8A8",
+                        d.sm_major, d.sm_minor
+                    ));
                 }
             }
         }
-        self
+        out
     }
 
     fn default_for_device() -> Self {
-        #[cfg(feature = "cuda")]
-        if crate::rt::stats::device_expected()
-            && crate::rt::device::global_device().is_some_and(|d| d.sm_major >= 10)
-        {
-            return Self::Mxfp8;
-        }
-        Self::Off
+        Self::default_for_sm(live_sm())
     }
 
     pub fn kind(self) -> Option<QuantKind> {
@@ -1926,6 +1978,48 @@ mod tests {
     /// VDN-H3 loads under a bf16 scoped default; an explicit
     /// `FASTVIDEO_H3_QUANT` would still win, and the guard restores the
     /// previous default (nested guards unwind in order).
+    /// The plan's resolver (`docs/adr/0017-loader-stages.md`): the device
+    /// rule as a table, and on this (host) process the live reader's answer
+    /// for every value of the setting, with and without a scoped default.
+    #[test]
+    fn resolve_on_is_the_device_rule_and_the_live_reader() {
+        use QuantMode::*;
+        let r = |v: Option<&str>, d: Option<QuantMode>, sm: Option<i32>| {
+            QuantMode::resolve_on(v, d, sm)
+        };
+        // Unset: MXFP8 on sm_100+, off below and on the host.
+        assert_eq!(r(None, None, Some(12)), Ok(Mxfp8));
+        assert_eq!(r(None, None, Some(10)), Ok(Mxfp8));
+        assert_eq!(r(None, None, Some(9)), Ok(Off));
+        assert_eq!(r(None, None, None), Ok(Off));
+        // A scoped default replaces the device's; mxfp8 below sm_100 is W8A8.
+        assert_eq!(r(None, Some(Off), Some(12)), Ok(Off));
+        assert_eq!(r(None, Some(Mxfp8), Some(8)), Ok(W8A8));
+        // An explicit value wins over the default and is held to the device.
+        assert_eq!(r(Some("w8a8"), Some(Off), Some(12)), Ok(W8A8));
+        assert_eq!(r(Some("mxfp8"), None, Some(9)), Ok(W8A8));
+        assert_eq!(r(Some("mxfp8"), None, None), Ok(Mxfp8));
+        assert_eq!(r(Some("off"), None, Some(12)), Ok(Off));
+        assert!(r(Some("junk"), None, Some(12)).is_err());
+
+        let live_sm = crate::rt::load_stages::DeviceFacts::measure().live_sm_major();
+        for value in [None, Some("off"), Some("w8a8"), Some("mxfp8"), Some("junk")] {
+            let mut table = fastvideo_models::settings::Settings::default();
+            if let Some(v) = value {
+                table.set(ENV, v, "test").unwrap();
+            }
+            let s = fastvideo_models::settings::Snapshot::from_parts(&|_| None, &table);
+            for default in [None, Some(Off), Some(Mxfp8)] {
+                let _guard = default.map(QuantMode::scoped_default);
+                assert_eq!(
+                    QuantMode::from_settings(&s),
+                    r(value, default, live_sm),
+                    "{value:?} under {default:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_scoped_default_applies_only_while_its_guard_lives() {
         if fastvideo_models::techniques::settings::var(ENV).is_some() {

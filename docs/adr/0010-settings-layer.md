@@ -101,7 +101,8 @@ stripped, string literals located) and fails on:
 1. `std::env::var("FASTVIDEO_...")` / `var_os` anywhere outside the settings
    module;
 2. in the inference crates, a `std::env::var` / `var_os` whose argument is
-   not a string literal, except ten reviewed sites, none of which reads a
+   not a string literal, except the reviewed sites (twelve since B6 split the
+   H3 load across two files), none of which reads a
    `FASTVIDEO_*` setting (`INDIRECT_ALLOWED`: an env save/restore guard, the
    process-plan check that compares before it sets, legacy `WAN22_*`
    aliases, `FV_*`, `FASTH3_*` and `XDG` / `HOME` names);
@@ -467,13 +468,29 @@ the name scan needs it) and shows it as "retired (not read)" in
 `docs/scope.md`. The counts above become 111 `Layered`, 108 `Env`, 2
 `Reserved`, 1 `Retired`.
 
+### After plan B6
+
+B6 (`docs/adr/0017-loader-stages.md`) moved the H3 and LTX-2 load bodies into
+`h3/pipeline/load.rs` and `ltx2/pipeline/load.rs` as four stages; the line
+numbers in the classification above are those before the move. The classes
+are unchanged: the a1 reads are the plan's (`H3LoadPlan::new`,
+`Ltx2LoadPlan::new`, which take the snapshot), and the plan runs its a2
+callees under a nested scope of the same snapshot, so it can be called on its
+own (a test, a dry run). The place stage's callees (the DiT, refiner, decoder
+and encoder loaders, quantization, the weight loader) still read through the
+load scope: making them explicit means changing those loaders' signatures
+across the runtime, which B6 did not need for its acceptance (the plan is the
+part that decides). The device-dependent part of the load-time precision rules
+moved from the reads to `DeviceFacts`: `QuantMode::resolve_on`,
+`h3::vae::mxfp8_wanted_on`, `VideoVaeSource::planned_linears_on`.
+
 ### Not in this change
 
 - **Explicit parameters all the way down.** The callees served by the load
-  scope (a2) keep reading through the readers; plan B6, which splits
+  scope (a2) keep reading through the readers. Plan B6 split
   `H3Pipeline::load` and `Ltx2Pipeline::load` into plan, open, place and
-  fuse, is where each stage takes the snapshot as a parameter and the scope
-  can go.
+  fuse with the plan taking the snapshot ("After plan B6" above); the place
+  stage's callees still read through the scope, so it stays.
 - **fv-serve's decoder `EnvGuard`** (`engine-service/src/cuda/wan.rs`) still
   sets `FASTVIDEO_WAN_VAE` / `FASTVIDEO_TAE_DIR` in the process environment
   around a Wan load; with the snapshot it could pass them in a snapshot

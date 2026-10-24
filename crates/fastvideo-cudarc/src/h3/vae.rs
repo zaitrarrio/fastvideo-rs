@@ -137,8 +137,33 @@ pub fn mxfp8_wanted(layers: usize, nvfp4: bool) -> Result<bool> {
     mxfp8_resolved(layers, nvfp4).map(|(on, _)| on)
 }
 
+/// [`mxfp8_wanted`] with [`MXFP8_ENV`] read from `settings` and the device
+/// given as the compute capability major ops run on (`None`: host ops): a
+/// load's plan (`docs/adr/0017-loader-stages.md`).
+pub fn mxfp8_wanted_on(
+    layers: usize,
+    nvfp4: bool,
+    settings: &dyn fastvideo_models::settings::Source,
+    live_sm: Option<i32>,
+) -> Result<bool> {
+    mxfp8_resolved_on(layers, nvfp4, settings.var(MXFP8_ENV), live_sm).map(|(on, _)| on)
+}
+
 fn mxfp8_resolved(layers: usize, nvfp4: bool) -> Result<(bool, Option<String>)> {
-    let mx = fastvideo_models::techniques::settings::var(MXFP8_ENV);
+    mxfp8_resolved_on(
+        layers,
+        nvfp4,
+        fastvideo_models::techniques::settings::var(MXFP8_ENV),
+        live_sm(),
+    )
+}
+
+fn mxfp8_resolved_on(
+    layers: usize,
+    nvfp4: bool,
+    mx: Option<String>,
+    live_sm: Option<i32>,
+) -> Result<(bool, Option<String>)> {
     // The published NVFP4 linears replace the bf16 ones: nothing to quantize.
     if nvfp4 {
         return match mx.as_deref().map(str::trim).map(str::to_ascii_lowercase).as_deref() {
@@ -149,7 +174,7 @@ fn mxfp8_resolved(layers: usize, nvfp4: bool) -> Result<(bool, Option<String>)> 
             _ => Ok((false, Some("NVFP4 decoder linears (the tree's published vae/)".to_owned()))),
         };
     }
-    resolve_mxfp8(mx.as_deref(), live_sm(), layers)
+    resolve_mxfp8(mx.as_deref(), live_sm, layers)
 }
 
 /// The live device's compute capability major, `None` without one.
@@ -217,7 +242,15 @@ pub fn carries_nvfp4(map: &WeightMap) -> bool {
 /// [`NVFP4_ENV`] as set (or a technique profile's value): `None` unset (the
 /// tree decides), `Some(on)` for `1` / `0`.
 pub fn nvfp4_setting() -> Result<Option<bool>> {
-    match fastvideo_models::techniques::settings::var(NVFP4_ENV)
+    nvfp4_setting_from(&fastvideo_models::settings::Live)
+}
+
+/// [`nvfp4_setting`] read from `settings` (a load's snapshot).
+pub fn nvfp4_setting_from(
+    settings: &dyn fastvideo_models::settings::Source,
+) -> Result<Option<bool>> {
+    match settings
+        .var(NVFP4_ENV)
         .as_deref()
         .map(str::trim)
         .map(str::to_ascii_lowercase)

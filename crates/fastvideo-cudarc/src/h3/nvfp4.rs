@@ -99,21 +99,38 @@ pub fn sibling_tree(root: &Path) -> PathBuf {
 pub fn require_tensor_cores() -> Result<()> {
     #[cfg(feature = "cuda")]
     {
-        let Some(d) = crate::rt::device::global_device() else {
+        require_tensor_cores_on(
+            crate::rt::device::global_device().map(|d| (d.sm_major, d.sm_minor)),
+        )
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        require_tensor_cores_on(None)
+    }
+}
+
+/// [`require_tensor_cores`] for a global device of compute capability
+/// `device_sm` (`None`: no device), as a load's plan decides it
+/// ([`crate::rt::load_stages::DeviceFacts::device_sm`]). A build without
+/// CUDA refuses whatever the device.
+pub fn require_tensor_cores_on(device_sm: Option<(i32, i32)>) -> Result<()> {
+    #[cfg(feature = "cuda")]
+    {
+        let Some((sm_major, sm_minor)) = device_sm else {
             return Err(msg(
                 "h3 nvfp4: needs a CUDA device (NVFP4 tensor cores, sm_100 / sm_120)",
             ));
         };
-        if d.sm_major < 10 {
+        if sm_major < 10 {
             return Err(msg(format!(
-                "h3 nvfp4: this GPU is sm_{}{}; the published NVFP4 DiT runs only on NVFP4 tensor cores (sm_100 / sm_120: B200, RTX PRO 6000, RTX 50xx). No bf16 fallback: serve the bf16 / MXFP8 Trim instead",
-                d.sm_major, d.sm_minor
+                "h3 nvfp4: this GPU is sm_{sm_major}{sm_minor}; the published NVFP4 DiT runs only on NVFP4 tensor cores (sm_100 / sm_120: B200, RTX PRO 6000, RTX 50xx). No bf16 fallback: serve the bf16 / MXFP8 Trim instead"
             )));
         }
         Ok(())
     }
     #[cfg(not(feature = "cuda"))]
     {
+        let _ = device_sm;
         Err(msg(
             "h3 nvfp4: needs a CUDA build and NVFP4 tensor cores (sm_100 / sm_120)",
         ))
