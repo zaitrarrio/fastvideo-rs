@@ -10,9 +10,9 @@ use std::time::Duration;
 use common::*;
 use fastvideo_engine_service::fake::{audio_len, decode_frame_index};
 use fastvideo_engine_service::{
-    CancelOutcome, CausalBlock, CausalSession, ClipBuild, EngineConfig, EngineEvent, FakeConfig,
-    FakeFaults, FakeModel, FakeTiming, FakeWarmup, ManualClock, Mp4Mode, Priority, Readiness,
-    Residency, Tier, Warmup, EVENT_CHANNEL_DEPTH, SOL_H3_4STEP_PROFILE,
+    CancelOutcome, CausalBlock, CausalSession, ClipBuild, EngineConfig, EngineEvent, EngineService,
+    FakeConfig, FakeFaults, FakeModel, FakeTiming, FakeWarmup, ManualClock, Mp4Mode, Priority,
+    Readiness, Residency, Tier, Warmup, EVENT_CHANNEL_DEPTH, SOL_H3_4STEP_PROFILE,
 };
 use fastvideo_protocol::{
     AudioPlan, AudioTrack, Continuity, ErrorKind, Family, JobId, ModelId, SessionSpec, TrackSet,
@@ -876,7 +876,7 @@ async fn tiers_and_recipes_in_the_capability_table() {
     // A bad override is a start error.
     let mut ov = BTreeMap::new();
     ov.insert("h3-turbo".to_owned(), ModelId::new("fake-wan"));
-    let bad = fastvideo_engine_service::EngineService::start(
+    let bad = EngineService::start(
         EngineConfig {
             tier_overrides: ov,
             ..EngineConfig::default()
@@ -1157,9 +1157,14 @@ async fn job_within_its_deadline_succeeds_and_zero_means_none() {
     assert!(out.is_ok(), "{out:?}");
 }
 
-/// One fake step on a manual clock without reading the job's events:
-/// waits for the executor to park, advances, then waits until that sleep
-/// completed (so its progress event is out before the next step).
+/// One fake step on a manual clock without reading the job's events: waits
+/// for the executor to park, advances, waits until that sleep completed and
+/// then until the executor parked on the next step's sleep.
+///
+/// The fake reports a step after its sleep returns, so a completed sleep
+/// alone does not mean the step's progress event was sent: on a loaded host
+/// the executor can still be between the two. Parking again on the next
+/// sleep (same thread, after the send) does. The job needs a next step.
 async fn step_unread(clock: &Arc<ManualClock>) {
     sleepers(clock, 1).await;
     let target = clock.wakeups() + 1;
@@ -1169,6 +1174,20 @@ async fn step_unread(clock: &Arc<ManualClock>) {
         .await
         .unwrap();
     assert!(woke, "executor never left the clock");
+    sleepers(clock, 1).await;
+}
+
+/// Waits until the engine runs no job. The executor sends a job's terminal
+/// event under the engine lock that also removes the job, so once this
+/// returns that event is in the job's channel.
+async fn until_idle(e: &EngineService) {
+    let idle = tokio::time::timeout(T, async {
+        while e.stats().running > 0 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await;
+    assert!(idle.is_ok(), "the job never finished: {:?}", e.stats());
 }
 
 #[tokio::test]
@@ -1185,7 +1204,9 @@ async fn slow_consumer_sees_coalesced_progress_and_the_terminal_event() {
     }
     let e = ready(EngineConfig::default(), fake).await;
     let mut j = job("fake-h3-turbo", 124, 24, h3_audio(), "many steps");
-    let steps = 100u32;
+    // Enough steps to overflow the channel twice: once before the consumer
+    // catches up and once more before the job ends.
+    let steps = 200u32;
     j.sampling.steps = Some(steps);
     let mut h = e
         .submit_frames(JobId::new(), j, Priority::Batch)
@@ -1225,11 +1246,16 @@ async fn slow_consumer_sees_coalesced_progress_and_the_terminal_event() {
         }
     );
     assert!(pending(&mut h).is_empty());
-    // Let it finish unread: the terminal event always arrives.
+    // Let it finish unread, the channel full again when the job ends: the
+    // parked events (the last step's progress among them) still reach the
+    // consumer, in order, and the terminal event comes last.
     let _drive = Driver::new(&clock);
-    let rest = until_terminal(&mut h).await;
+    until_idle(&e).await;
+    let rest = pending(&mut h);
+    assert!(rest.len() > EVENT_CHANNEL_DEPTH, "it overflowed: {rest:?}");
     let got = progress_steps(&rest);
     assert!(got.windows(2).all(|w| w[0] < w[1]), "in order: {got:?}");
+    assert_eq!(got.last(), Some(&steps), "the last step is never lost");
     assert!(
         matches!(rest.last(), Some(EngineEvent::Finished(_))),
         "{rest:?}"

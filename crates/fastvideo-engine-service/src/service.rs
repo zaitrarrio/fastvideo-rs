@@ -21,9 +21,14 @@
 //! `Progress` event each in a one-slot buffer (an older parked event of the
 //! same kind is replaced: progress is coalesced to the latest step), drops
 //! `Log` lines, and flushes the parked events in that order as soon as the
-//! channel has room again (at the next send). The terminal event uses a
-//! permit reserved when the job was submitted, so it is never dropped and
-//! never waits.
+//! channel has room again (at the next send). The order is by kind, not by
+//! emission: a lagging consumer can see a `Stage` before the last `Progress`
+//! that was emitted ahead of it. The end of the stream uses
+//! slots reserved when the job was submitted: one per parkable kind, so
+//! events still parked when the job ends are flushed ahead of the terminal
+//! event even if the consumer never caught up (a lagging consumer still sees
+//! the job's last progress step, and `Started` before `Finished`), and one
+//! for the terminal event itself. Neither is ever dropped nor waits.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -114,8 +119,13 @@ impl EngineEvent {
 
 /// Depth of a job's event channel ([`JobHandle::events`]): the events a
 /// consumer may leave unread before the overflow policy (module docs)
-/// coalesces progress and drops logs. Terminal events are never dropped.
+/// coalesces progress and drops logs. Terminal events are never dropped, and
+/// neither are the events parked when the job ends.
 pub const EVENT_CHANNEL_DEPTH: usize = 64;
+
+/// Event kinds [`EventSender`] parks while the consumer lags, one slot each:
+/// queued, started, stage, progress.
+const PARKED_KINDS: usize = 4;
 
 /// A submitted job.
 ///
@@ -139,6 +149,9 @@ struct Parked {
     progress: Option<EngineEvent>,
     /// The terminal event's reserved slot (`None` once it was sent).
     terminal: Option<mpsc::OwnedPermit<EngineEvent>>,
+    /// Slots reserved for the parked events the terminal event finds (one
+    /// per parked kind); released once the terminal event was sent.
+    tail: Vec<mpsc::OwnedPermit<EngineEvent>>,
     /// Nothing is sent after the terminal event.
     done: bool,
     /// Progress / queued / stage / started events replaced while parked.
@@ -181,8 +194,8 @@ impl Parked {
 }
 
 /// The executor side of a job's event channel (module docs: the overflow
-/// policy). Cheap to clone; every clone shares the parked events and the
-/// terminal permit. Never blocks.
+/// policy). Cheap to clone; every clone shares the parked events, the
+/// terminal permit and the tail permits. Never blocks.
 #[derive(Clone)]
 pub(crate) struct EventSender {
     id: JobId,
@@ -191,15 +204,20 @@ pub(crate) struct EventSender {
 }
 
 impl EventSender {
-    /// A job's channel: `EVENT_CHANNEL_DEPTH` slots for the stream plus one
-    /// reserved for the terminal event.
+    /// A job's channel: `EVENT_CHANNEL_DEPTH` slots for the stream plus
+    /// the end of it, reserved: one per parked kind and one for the
+    /// terminal event.
     pub(crate) fn channel(id: JobId) -> (Self, mpsc::Receiver<EngineEvent>) {
-        let (tx, rx) = mpsc::channel(EVENT_CHANNEL_DEPTH + 1);
-        // The channel is empty, so the reservation cannot fail; `.ok()`
-        // only keeps the `None` arm of `send` honest.
+        let (tx, rx) = mpsc::channel(EVENT_CHANNEL_DEPTH + PARKED_KINDS + 1);
+        // The channel is empty, so the reservations cannot fail; `.ok()`
+        // only keeps the fallback arms of `send` and `flush` honest.
         let terminal = tx.clone().try_reserve_owned().ok();
+        let tail = (0..PARKED_KINDS)
+            .filter_map(|_| tx.clone().try_reserve_owned().ok())
+            .collect();
         let parked = Arc::new(Mutex::new(Parked {
             terminal,
+            tail,
             ..Parked::default()
         }));
         (Self { id, tx, parked }, rx)
@@ -212,9 +230,12 @@ impl EventSender {
         if p.done {
             return;
         }
-        self.flush(&mut p);
-        if ev.is_terminal() {
+        let terminal = ev.is_terminal();
+        self.flush(&mut p, terminal);
+        if terminal {
             p.done = true;
+            // Nothing is sent after this: give the unused slots back.
+            p.tail.clear();
             if p.coalesced > 0 || p.dropped > 0 {
                 tracing::debug!(
                     job = %self.id,
@@ -245,13 +266,16 @@ impl EventSender {
     }
 
     /// Re-sends the parked events (queued, started, stage, progress) while
-    /// the channel has room.
-    fn flush(&self, p: &mut Parked) {
+    /// the channel has room. Before the terminal event (`last`), an event
+    /// that does not fit takes one of the slots reserved for it, so the
+    /// terminal event never overtakes, or discards, a parked event.
+    fn flush(&self, p: &mut Parked, last: bool) {
         let Parked {
             queued,
             started,
             stage,
             progress,
+            tail,
             ..
         } = p;
         for slot in [queued, started, stage, progress] {
@@ -259,8 +283,16 @@ impl EventSender {
             match self.tx.try_send(ev) {
                 Ok(()) | Err(TrySendError::Closed(_)) => {}
                 Err(TrySendError::Full(ev)) => {
-                    *slot = Some(ev);
-                    return;
+                    let reserved = if last { tail.pop() } else { None };
+                    match reserved {
+                        Some(permit) => {
+                            permit.send(ev);
+                        }
+                        None => {
+                            *slot = Some(ev);
+                            return;
+                        }
+                    }
                 }
             }
         }
@@ -1023,8 +1055,8 @@ mod tests {
         assert!(coalesced > 0, "progress was coalesced");
         assert!(dropped > 0, "logs were dropped");
 
-        // Fill it again and finish without reading: the terminal event
-        // still arrives, last, and nothing after it.
+        // Fill it again and finish without reading: the latest progress
+        // and then the terminal event still arrive, last, and nothing after.
         for s in 1..=n {
             tx.send(progress(s));
         }
@@ -1032,12 +1064,52 @@ mod tests {
         tx.send(progress(n + 1));
         tx.send(EngineEvent::Finished(ClipOutput::default()));
         let got = drain(&mut rx);
-        assert_eq!(got.last(), Some(&EngineEvent::Cancelled));
         assert_eq!(
             got.len(),
-            EVENT_CHANNEL_DEPTH + 1,
-            "the stream plus the reserved terminal slot"
+            EVENT_CHANNEL_DEPTH + 2,
+            "the stream, then the parked progress and the terminal event in reserved slots"
         );
+        assert_eq!(
+            got[EVENT_CHANNEL_DEPTH - 1..],
+            [
+                progress(EVENT_CHANNEL_DEPTH as u32),
+                progress(n),
+                EngineEvent::Cancelled
+            ]
+        );
+    }
+
+    #[test]
+    fn events_parked_when_the_job_ends_arrive_before_the_terminal_event() {
+        // A consumer that reads nothing until the job is over: every kind
+        // is parked when the terminal event comes.
+        let (tx, mut rx) = EventSender::channel(JobId::new());
+        for position in (1..=EVENT_CHANNEL_DEPTH as u32).rev() {
+            tx.send(EngineEvent::Queued { position });
+        }
+        tx.send(EngineEvent::Queued { position: 0 });
+        tx.send(EngineEvent::Started);
+        tx.send(EngineEvent::Stage { name: "denoise" });
+        for s in 1..=10 {
+            tx.send(progress(s));
+        }
+        tx.send(EngineEvent::Stage { name: "decode" });
+        tx.send(EngineEvent::Finished(ClipOutput::default()));
+        tx.send(progress(11));
+        let got = drain(&mut rx);
+        assert_eq!(
+            got[EVENT_CHANNEL_DEPTH..],
+            [
+                EngineEvent::Queued { position: 0 },
+                EngineEvent::Started,
+                EngineEvent::Stage { name: "decode" },
+                progress(10),
+                EngineEvent::Finished(ClipOutput::default()),
+            ],
+            "the newest of each kind, in kind order, then the terminal event"
+        );
+        assert_eq!(got.len(), EVENT_CHANNEL_DEPTH + PARKED_KINDS + 1);
+        assert_eq!(tx.lag(), (10, 0));
     }
 
     #[test]
