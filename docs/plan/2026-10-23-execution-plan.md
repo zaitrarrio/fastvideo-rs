@@ -257,3 +257,17 @@ ran (pod id, $/hr), result, cost.
   Evidence: `artifacts/runpod/techniques/51898b8-10240107/compare/`. Main
   (A2, E4) merged into the branch: no cudarc or gpucheck file changed since
   the baseline, so the GPU evidence stands for the merged head.
+- 2026-10-24 02:55Z: B3a opened as a draft PR (`claude/b3-settings`): the
+  declarative `FASTVIDEO_*` list (`techniques::settings::SETTINGS`, 222 rows:
+  112 layered, 108 env-only, 2 reserved), the 112 direct and 27 indirect
+  reads routed through `settings::env_var` / `env_var_os` at the same call
+  sites, the runtime's typed getters on the shared `settings::parse`,
+  `docs/scope.md`'s table generated, ADR-0010. On build pod
+  `i8tu0lpdb6nvov`: fmt and clippy `-D warnings` green, `cargo test
+  --workspace --lib` 1847 passed, `-p fastvideo-models -p fastvideo-cudarc
+  -p fastvideo-gpucheck` 1211 passed, `--features cuda` type-check green,
+  `scripts/serve/check.sh` 995 passed. One pre-existing race seen once and
+  not reproduced: `wan/vae.rs`'s chunking test sets `FASTVIDEO_VAE_CHUNK`
+  while `hooks.rs`'s Wan end-to-end test decodes. B3b (`load` snapshot,
+  `model_spec`s) is a second PR. GPU byte-identity cell pending
+  (coordinator).
