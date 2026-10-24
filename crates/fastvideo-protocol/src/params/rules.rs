@@ -13,6 +13,7 @@
 //! is silent; each says so.
 
 use fastvideo_models::h3::config as h3cfg;
+use fastvideo_models::h3::reference as h3ref;
 
 use super::{IntField, IntRange, NumField, NumRange};
 use crate::caps::RefLimits;
@@ -38,12 +39,13 @@ pub mod h3 {
     /// Reference inputs of reference-to-video: 9 images, 3 videos, 3 audio
     /// clips, 12 in total (MiniMax README; fal
     /// `minimax/h3*/reference-to-video` `maxItems` 9 / 3 / 3 and
-    /// `reference_conditions` 12). The caps' [`RefLimits::h3`] is this.
+    /// `reference_conditions` 12): `fastvideo_models::h3::reference`'s
+    /// limits. The caps' [`RefLimits::h3`] is this.
     pub const REFERENCES: RefLimits = RefLimits {
-        images: 9,
-        videos: 3,
-        audio: 3,
-        total: 12,
+        images: h3ref::MAX_REFERENCE_IMAGES as u32,
+        videos: h3ref::MAX_REFERENCE_VIDEOS as u32,
+        audio: h3ref::MAX_REFERENCE_AUDIOS as u32,
+        total: h3ref::MAX_REFERENCES as u32,
     };
     /// The fixed aspect ratios (MiniMax `ratio` without `adaptive`; fal
     /// `aspect_ratio` of `text-to-video`), in schema order.

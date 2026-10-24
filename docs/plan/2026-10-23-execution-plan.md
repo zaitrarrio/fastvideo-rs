@@ -99,7 +99,7 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | E1 | Vendored upstream specs under `docs/serve/specs/` with a drift script; `schemars` schemas for native and director | drift script green | CI | none | merged (#144; schemars schemas deferred to E2) |
-| E2 | `ParamSpec` per (surface, model) derived from the manifest caps; adapters validate from it; duplicated constants deleted; LTX body typed | one source for every limit | pod; serve-compat | A3 | todo |
+| E2 | `ParamSpec` per (surface, model) derived from the manifest caps; adapters validate from it; duplicated constants deleted; LTX body typed | one source for every limit | pod; serve-compat | A3 | pr |
 | E3 | Certification matrix harness over every surface, parameter x surface x model TSV, CI assertion that every parameter has a valid and an invalid case | TSV with no empty cell | pod | E2 | todo |
 | E4 | `cargo-llvm-cov` on the pod; adapter `cargo test` in a GitHub workflow | coverage artifact in CI | CI | none | merged (#148) |
 | E5 | Upstream captures as fixtures | depends on owner keys | manual | owner | blocked |
@@ -398,3 +398,18 @@ ran (pod id, $/hr), result, cost.
   `artifacts/runpod/techniques/90dd3f8-10240259/compare/`. Review: no
   blocking finding; three documentation-only table rows corrected. Main
   merged in since then changed no inference crate, so the evidence stands.
+- 2026-10-24 05:10Z: E2 opened a draft PR (`claude/e2-paramspec`):
+  `fastvideo-protocol::params` (`ParamSpec`, the surface rules: every
+  upstream limit once, cited, H3 facts derived from `fastvideo_models`), the
+  five adapters and the native API validate with them and build their specs
+  (`params.rs`), the LTX bodies typed against `ltx/openapi.json`, `GET
+  /fv/v1/params` with a golden for all 36 configs (182 distinct specs).
+  Census in docs/serve/params.md: 9 duplicated limits (H3 5-15 s x3, H3
+  references x4, LTX matrix / motions / prompt / rates, fal prompt, fast-h3
+  x3) now one source; one disagreement resolved (`guidance_scale_2` 0..=20,
+  FastVideo's bound); 8 upstream divergences kept and pinned. On build pod
+  `pzocv1keasg3xn` (main #153 merged in): `scripts/serve/check.sh` 1031
+  passed / 0 failed in 110 binaries (capabilities golden unchanged),
+  protocol + engine-service + manifest 308 passed, `tests/compat/run.sh`
+  10/10 suites, fmt and clippy `-D warnings` green. Left for E3: director /
+  Reactor control-channel specs, the matrix and TSV, `schemars`.

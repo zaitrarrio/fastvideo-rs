@@ -270,7 +270,7 @@ fn reply_err(e: ApiError) -> Response {
 mod tests {
     use super::*;
     use crate::native::NativeSubmit;
-    use fastvideo_protocol::params::parse_agreement;
+    use fastvideo_protocol::params::{model_agreement, parse_agreement};
     use fastvideo_protocol::{NormalizeCtx, SubmitEndpoint};
 
     /// The native parser enforces exactly the spec's parse-time domains.
@@ -289,6 +289,64 @@ mod tests {
         // The edit fields need `video_url` (checked together).
         let skip = ["retake_mode", "extend_at"];
         let bad = parse_agreement(&native_spec(&caps), &base, &parse, &skip);
+        assert!(bad.is_empty(), "{bad:#?}");
+    }
+
+    /// The caps-derived domains are negotiation's own (`precheck`), on a
+    /// model honouring every knob. Negotiation names fields in the
+    /// normalized vocabulary (`duration`, `num_inference_steps`,
+    /// `guidance_scale`), which the native API reports as is: mapped here
+    /// to the native field names (an E3 finding, see docs/serve/params.md).
+    #[test]
+    fn native_domains_are_negotiations() {
+        use fastvideo_protocol::{FpsCaps, FrameGrid, KnobCaps};
+        let mut caps = ModelCaps::h3("wan", false);
+        caps.family = fastvideo_protocol::Family::Wan;
+        caps.tasks = [Task::T2V].into_iter().collect();
+        caps.audio = None;
+        caps.fps = FpsCaps {
+            allowed: vec![16, 24],
+            default: 24,
+            container_only: true,
+        };
+        caps.frames = FrameGrid::new(4, 1, 17, 161, 81);
+        caps.knobs = KnobCaps::all();
+        caps.stream = None;
+        let Value::Object(base) = json!({"model": "wan", "prompt": "a cat"}) else {
+            unreachable!()
+        };
+        let check = |v: Value| {
+            let b = serde_json::from_value(v).map_err(|e| ApiError::invalid(e.to_string()))?;
+            let req =
+                NativeSubmit.normalize(b, &NormalizeCtx::new(time::OffsetDateTime::UNIX_EPOCH))?;
+            fastvideo_protocol::precheck(&req, &caps).map_err(|mut e| {
+                e.param = e.param.map(|p| {
+                    match p.as_str() {
+                        "duration" => "seconds",
+                        "num_inference_steps" => "steps",
+                        "guidance_scale" => "guidance",
+                        other => other,
+                    }
+                    .to_owned()
+                });
+                e
+            })
+        };
+        // Checked with other fields: the canvas pair and tier, the edit
+        // fields (they need `video_url`). `seed` is a u64: a negative one
+        // is a body (type) error.
+        let skip = [
+            "seed",
+            "width",
+            "height",
+            "short_edge",
+            "retake_mode",
+            "extend_at",
+            "start_s",
+            "extend_s",
+            "context_s",
+        ];
+        let bad = model_agreement(&native_spec(&caps), &base, &check, &skip);
         assert!(bad.is_empty(), "{bad:#?}");
     }
 }

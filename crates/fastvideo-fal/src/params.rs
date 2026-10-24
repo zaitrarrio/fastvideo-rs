@@ -116,3 +116,55 @@ pub fn param_specs(
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schema::AspectRatio;
+    use fastvideo_protocol::params::rules::h3;
+
+    /// fal's typed H3 aspect enums are the shared H3 set (with `adaptive`
+    /// first on reference-to-video).
+    #[test]
+    fn h3_aspects_are_the_shared_set() {
+        let t2v: Vec<&str> = AspectRatio::T2V.iter().map(AspectRatio::as_str).collect();
+        assert_eq!(t2v, h3::ASPECT_RATIOS);
+        let r2v: Vec<&str> = AspectRatio::R2V.iter().map(AspectRatio::as_str).collect();
+        let mut want = vec![h3::ADAPTIVE];
+        want.extend(h3::ASPECT_RATIOS);
+        assert_eq!(r2v, want);
+    }
+
+    #[test]
+    fn every_field_of_every_schema_has_a_mapping() {
+        use crate::schema::AppKind;
+        for kind in [
+            AppKind::H3,
+            AppKind::H3Base,
+            AppKind::Ltx25,
+            AppKind::Wan,
+            AppKind::LtxQuality,
+            AppKind::Ltx23,
+        ] {
+            for &e in kind.endpoints() {
+                let s = input_schema_for(kind, e);
+                for name in s["properties"].as_object().unwrap().keys() {
+                    let (to, _) = field_map(e, name);
+                    assert!(
+                        to != "-"
+                            || matches!(
+                                name.as_str(),
+                                "enable_safety_checker"
+                                    | "camera_motion"
+                                    | "interpolator_model"
+                                    | "num_interpolated_frames"
+                                    | "negative_prompt"
+                                    | "guidance_scale"
+                            ),
+                        "{kind:?} {e:?} {name}: unmapped"
+                    );
+                }
+            }
+        }
+    }
+}

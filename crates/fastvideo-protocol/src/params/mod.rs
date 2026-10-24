@@ -209,7 +209,11 @@ pub enum Domain {
     /// An output canvas (`WxH`, or the width / height of one) the model's
     /// [`CanvasCaps`] admit: sides on `multiple` (or padded to it when
     /// `pad_and_crop`), `width / height` within `aspect`, at most
-    /// `max_area` pixels at the largest tier.
+    /// `max_area` pixels at the largest tier. The canvas itself is decided
+    /// by `negotiate::resolve_canvas` (per-tier budgets, the H3 1080P tier,
+    /// pad-and-crop); [`Domain::contains`] checks only the form, the aspect
+    /// and the pixel ceiling, and the examples come from
+    /// `negotiate::canvas_for_aspect`.
     Canvas {
         multiple: u32,
         max_area: u64,
@@ -630,7 +634,9 @@ impl Domain {
                 }
             }
             Domain::OneOf { values } => {
-                let probe = if values.iter().all(Value::is_number) {
+                let probe = if !values.is_empty() && values.iter().all(Value::is_boolean) {
+                    Value::Bool(!values.contains(&Value::Bool(true)))
+                } else if values.iter().all(Value::is_number) {
                     let top = values.iter().filter_map(Value::as_i64).max().unwrap_or(0);
                     Value::from(top + 1)
                 } else {
@@ -795,12 +801,34 @@ pub fn parse_agreement(
     parse: &dyn Fn(Value) -> Result<(), crate::ApiError>,
     skip: &[&str],
 ) -> Vec<String> {
+    agreement(spec, base, parse, skip, Param::parse_domain)
+}
+
+/// [`parse_agreement`] for the model's domain ([`Param::domain`]): `check`
+/// runs the parser *and* the caps checks (`negotiate::precheck`), so the
+/// spec's caps-derived domains are shown to be negotiation's own.
+pub fn model_agreement(
+    spec: &ParamSpec,
+    base: &serde_json::Map<String, Value>,
+    check: &dyn Fn(Value) -> Result<(), crate::ApiError>,
+    skip: &[&str],
+) -> Vec<String> {
+    agreement(spec, base, check, skip, |p| &p.domain)
+}
+
+fn agreement(
+    spec: &ParamSpec,
+    base: &serde_json::Map<String, Value>,
+    parse: &dyn Fn(Value) -> Result<(), crate::ApiError>,
+    skip: &[&str],
+    domain_of: fn(&Param) -> &Domain,
+) -> Vec<String> {
     let mut out = Vec::new();
     for p in &spec.params {
         let nested = p.name.contains(['.', '(', '[']);
         let served = matches!(p.support, Support::Honoured | Support::NoOp);
         let bounded = matches!(
-            p.parse_domain(),
+            domain_of(p),
             Domain::Int { .. } | Domain::Number { .. } | Domain::OneOf { .. } | Domain::Text { .. }
         );
         if nested || !served || !bounded || skip.contains(&p.name.as_str()) {
@@ -811,12 +839,12 @@ pub fn parse_agreement(
             b.insert(p.name.clone(), v);
             Value::Object(b)
         };
-        if let Some(v) = p.parse_domain().valid_example() {
+        if let Some(v) = domain_of(p).valid_example() {
             if let Err(e) = parse(with(v.clone())) {
                 out.push(format!("{}: valid {v} refused: {}", p.name, e.message));
             }
         }
-        for v in p.parse_domain().invalid_examples() {
+        for v in domain_of(p).invalid_examples() {
             match parse(with(v.clone())) {
                 Ok(()) => out.push(format!("{}: invalid {v} accepted", p.name)),
                 Err(e) if e.param.as_deref() != Some(p.name.as_str()) => out.push(format!(

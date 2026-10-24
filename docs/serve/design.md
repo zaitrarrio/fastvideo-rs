@@ -573,6 +573,12 @@ at the next step. H3 has no observer yet; package E1 adds one.
 
 ## 4. Per-API mappings
 
+Every request parameter of every API below is described by a `ParamSpec`
+per (surface, endpoint, model), served at `GET /fv/v1/params`; every limit
+an upstream contract fixes is one constant in
+`fastvideo_protocol::params::rules` (plan E2, ADR-0012,
+[params.md](params.md)).
+
 Common conventions for every API:
 
 - Output files are served at native `GET /files/{artifact_id}/{file_name}?exp=&sig=`,

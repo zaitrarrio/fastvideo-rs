@@ -3,10 +3,12 @@
 
 use std::collections::BTreeSet;
 
+use fastvideo_openai_videos::error::fastvideo_param;
 use fastvideo_openai_videos::params::{fastwan_spec, videos_spec};
+use fastvideo_openai_videos::videos::apply_model;
 use fastvideo_openai_videos::videos::{merge_extra, parse_request};
 use fastvideo_openai_videos::{FastWanSubmit, VideosCreate};
-use fastvideo_protocol::params::parse_agreement;
+use fastvideo_protocol::params::{model_agreement, parse_agreement};
 use fastvideo_protocol::{
     CanvasCaps, Family, FpsCaps, FrameGrid, KnobCaps, ModelCaps, ModelId, NormalizeCtx, RefLimits,
     SubmitEndpoint, Task,
@@ -86,4 +88,29 @@ fn fastwan_parser_enforces_the_spec() {
     // `width` and `height` are checked together (one error on `width`).
     let bad = parse_agreement(&fastwan_spec(&wan()), &base(), &parse, &["width", "height"]);
     assert!(bad.is_empty(), "{bad:#?}");
+}
+
+/// The caps-derived domains are negotiation's own: parsing, the FastVideo
+/// model rules (`apply_model`) and `negotiate::precheck` refuse exactly the
+/// values outside them, naming the field as this API reports it.
+#[test]
+fn videos_domains_are_negotiations() {
+    for caps in [ModelCaps::h3("h3", true), wan()] {
+        let check = |v: Value| {
+            let Value::Object(mut m) = v else {
+                unreachable!()
+            };
+            merge_extra(&mut m)?;
+            let ncx = NormalizeCtx::new(OffsetDateTime::UNIX_EPOCH);
+            let mut req = VideosCreate.normalize(parse_request(m)?, &ncx)?;
+            apply_model(&mut req, &caps, false)?;
+            fastvideo_protocol::precheck(&req, &caps).map_err(|mut e| {
+                e.param = e.param.as_deref().map(fastvideo_param);
+                e
+            })
+        };
+        let skip = ["task", "width", "height", "short_edge"];
+        let bad = model_agreement(&videos_spec(&caps), &base(), &check, &skip);
+        assert!(bad.is_empty(), "{}: {bad:#?}", caps.id);
+    }
 }
