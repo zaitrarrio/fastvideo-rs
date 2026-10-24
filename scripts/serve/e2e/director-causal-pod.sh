@@ -1,6 +1,6 @@
 #!/bin/bash
 # Causal director GPU smoke on the pod (docs/serve/director-causal.md):
-# fv-serve (this branch) with LongLive-1.3B via [[models]] longlive = ...,
+# fv-serve (this branch) with LongLive-1.3B via [[models]] variant = "longlive-1.3b",
 # HTTP and WebRTC on loopback only, driven by director_client on the pod.
 #   bash dc.sh setup|serve|client|report
 set -u
@@ -33,9 +33,7 @@ mode = "none"
 backend = "cuda"
 post_encoder = "auto"
 [[models]]
-id = "longlive-1.3b"
-family = "wan"
-recipe = "sfwan21-1.3b"
+variant = "longlive-1.3b"
 weights = "/workspace/weights/sfwan21-1.3b"
 resident = true
 longlive = "/workspace/weights/longlive-1.3b-safetensors"

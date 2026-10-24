@@ -2,6 +2,56 @@
 
 Project code: FVID
 
+### FVID · 2026-10-24 · FVID-2026-10-24-family-files-are-the-source
+- Trigger: plan A3 (docs/plan/2026-10-23-execution-plan.md): the engine projection of the family manifests; `catalog()` deleted, the serve TOMLs reduced to variants and residency
+- Options: load `families/` from disk at startup; embed the files at build time; embed with a run-time directory override
+- Decision: **the engine embeds `families/*.toml` (`include_str!`) and `FV_FAMILIES_DIR=<dir>` overrides them at run time**; a test keeps the embedded copies equal to the committed files
+- Reason: the binary and the serve images stay self-contained (no new file to ship or mount), and a lab run can still try an unreleased variant without a rebuild
+- Reversibility: cheap (one function, `cuda::families::family_set`)
+- Executed by: Executor (plan A3)
+- ADR: docs/adr/0008-family-manifest-layer-2.md (amendment, decision 1)
+- Verification: `crates/fastvideo-engine-service/tests/families.rs` `the_embedded_files_are_the_committed_ones`; `cuda::families` unit test of the override
+
+### FVID · 2026-10-24 · FVID-2026-10-24-serving-caps-in-layer-2
+- Trigger: plan A3 / A2 review follow-up (b): the parts of `ModelCaps` layer 1's `Caps` does not carry (tasks, default frame count, audio, container-only fps, pad-and-crop, the H3 1080P tier, the reference-strength knobs)
+- Options: widen layer-1 `[caps]` (a pinned public format, before the first publish); a `[variants.serving]` table in layer 2 beside `caps`; keep them derived by the engine from the recipe
+- Decision: **`[variants.serving]` in layer 2**; only the 1080P on/off switch and the stream shape stay recipe-derived (they change per deployment)
+- Reason: these fields describe how this runtime serves a variant, which a registry clone does not need; widening layer 1 later is a versioned change made only if the registry wants them
+- Reversibility: cheap (layer 2 is versioned by `schema`)
+- Executed by: Executor (plan A3)
+- ADR: docs/adr/0008-family-manifest-layer-2.md (amendment, decision 2)
+- Verification: `crates/fastvideo-serve/tests/capabilities_golden.rs` (every shipped config's `/fv/v1/capabilities` unchanged); `tests/families.rs` `serving_caps_project_onto_model_caps`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-public-names-replace-aliases
+- Trigger: plan A3: zero `[aliases]` blocks in the serve configs
+- Options: keep `[aliases]` per config; derive the API names from tier rules in the adapters; a `public_names` list per variant carried by the engine
+- Decision: **`public_names` per variant, carried by `EngineBackend::public_names` into `CapabilityTable::public_aliases`; `[aliases]`, `[[models]] family` and `[[models]] recipe` are refused**; a name claimed by a tier and its task companion goes to the model that serves text-to-video
+- Reason: the names are facts about the variant, not the deployment; one place instead of 23 hand-kept tables
+- Reversibility: cheap before any external config depends on the new form
+- Executed by: Executor (plan A3)
+- ADR: docs/adr/0008-family-manifest-layer-2.md (amendment, decision 3)
+- Verification: the capabilities golden; listed exception: `fake.toml` and `tests/compat/serve.toml` gain `fastwan-1.3b -> fake-wan` (the fake model set now declares it, as `runpod-fake.toml` did by hand)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-trees-explicit-tae-rules
+- Trigger: A2 review follow-ups (a), (c), (e): `implicit_trees` was an engine rule, `${tae}/<file>` was not checked against `trees`, the ADR called every tree a `weights-manifest.tsv` row
+- Options: keep the rule in the engine; write the trees in the files and check them by test
+- Decision: **trees are data in the files (rule deleted, a test checks them against the recipes); `${tae}/<file>` needs `auxiliary/tae/<file>` in `trees`, a bare `${tae}` is a search path, a bare `${weights}` is refused; the ADR and README name non-Hub trees (`h3-ref2va`, `longlive-1.3b-safetensors`) as weights-store trees**
+- Reason: A4's generators and the registry read `trees` without the engine
+- Reversibility: cheap
+- Executed by: Executor (plan A3)
+- ADR: docs/adr/0008-family-manifest-layer-2.md (amendment, decisions 4 and 5)
+- Verification: `fastvideo-manifest` unit tests (`rejects_bad_files_with_paths`); `tests/families.rs` `trees_name_what_the_recipes_read`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-longlive-and-lightx2v-v01-variants
+- Trigger: plan A4 (#149) found two served models with no variant: `longlive-1.3b` (an SF-Wan entry with a `longlive` path) and `h3-lightx2v-turbo-v01` (a `model_from_config` special case of `h3-lightx2v-turbo`)
+- Options: keep them as serve-config special cases; make them variants
+- Decision: **both are variants** (`families/wan.toml` `longlive-1.3b`, tree `longlive-1.3b-safetensors`; `families/h3.toml` `h3-lightx2v-turbo-v01`, tree `h3-turbo-loras/lightx2v-v0.1`); their configs keep the old id of the base variant as a compatibility served name so the API is unchanged
+- Reason: the file is the source; A4's `CATALOG_EXCEPTIONS` and the `recipe-trees.ts` override can be removed
+- Reversibility: cheap
+- Executed by: Executor (plan A3)
+- ADR: docs/adr/0008-family-manifest-layer-2.md (amendment)
+- Verification: the capabilities golden for `runpod-longlive`, `runpod-family-streaming`, `runpod-h3-lightx2v-turbo-v01`, `runpod-family-h3`; `cuda::caps` tests `longlive_variant_and_its_overrides`, `turbo_lora_models`
+
 ### FVID · 2026-10-24 · FVID-2026-10-24-family-manifest-layer-2
 - Trigger: plan A2 (docs/plan/2026-10-23-execution-plan.md): layer 2 of the model family manifest and the first three family files, with the equality proof against the hand-written engine catalog
 - Options: the pure crate also owning the engine's recipe structs (one schema, the crate depends on the inference core); the engine's recipe as an opaque table the crate validates only around (ids, trees, GPU, caps); a separate crate for layer 2

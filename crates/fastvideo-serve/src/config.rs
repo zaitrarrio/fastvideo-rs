@@ -435,7 +435,9 @@ pub struct ModelCfg {
     /// The family-file variant: its id (`fasth3-4step-vsa`), one of its
     /// served names (`fasth3`) or a tier alias (`h3-turbo`).
     pub variant: String,
-    /// The id this deployment serves the model under (default: the variant id).
+    /// The id this deployment serves the model under (default: the id of
+    /// the variant `variant` resolves to, so `variant = "h3-max"` serves
+    /// `sol-h3`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     /// The weight directory when it is not the variant's tree under
@@ -454,8 +456,8 @@ pub struct ModelCfg {
 }
 
 impl ModelCfg {
-    /// The served id: the entry's `id`, else the variant name.
-    pub fn served_id(&self) -> &str {
+    /// The entry's name in messages: its `id`, else the variant as written.
+    pub fn label(&self) -> &str {
         self.id.as_deref().unwrap_or(&self.variant)
     }
 
@@ -473,14 +475,14 @@ impl ModelCfg {
         if self.variant.trim().is_empty() {
             return Err(ConfigError::Invalid(format!(
                 "[[models]] `{}`: `variant` is empty (a variant id, a served name or a tier alias of families/*.toml)",
-                self.served_id()
+                self.label()
             )));
         }
         for (k, why) in Self::RETIRED_KEYS {
             if self.extra.contains_key(k) {
                 return Err(ConfigError::Invalid(format!(
                     "[[models]] `{}`: `{k}` is no longer a key: {why}",
-                    self.served_id()
+                    self.label()
                 )));
             }
         }
@@ -2254,7 +2256,7 @@ body_max_mb = 64
         );
         assert_eq!(c.server.bind, "0.0.0.0:8080");
         assert_eq!(
-            (c.models[0].variant.as_str(), c.models[0].served_id()),
+            (c.models[0].variant.as_str(), c.models[0].label()),
             ("h3-turbo", "fasth3")
         );
         assert!(!c.protocols.ltx && c.protocols.minimax);

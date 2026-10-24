@@ -13,14 +13,9 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::Request;
-use fastvideo_engine_service::{
-    EngineConfig, EngineService, FakeBackend, FakeConfig, FakeTiming, Mp4Mode,
-};
-use fastvideo_protocol::ModelId;
 use fastvideo_serve::config::{Config, EngineBackendKind};
 use fastvideo_serve::{App, Overrides};
 use fastvideo_serve_kit::KeyRing;
@@ -90,35 +85,6 @@ fn load(name: &str, path: &Path, state_dir: &Path) -> Config {
     c
 }
 
-/// The engine of a CUDA config: the fake backend serving the config's
-/// models (real caps, real recipes, the pipelines' job checks), as an 80 GB
-/// class GPU would (the H3 1080P tier on).
-fn cuda_engine(c: &Config, state_dir: &Path) -> EngineService {
-    let models = fastvideo_serve::app::cuda_models(c).unwrap();
-    let fc = FakeConfig {
-        timing: FakeTiming {
-            load: Duration::ZERO,
-            ..FakeTiming::default()
-        },
-        mp4: Mp4Mode::Off,
-        ..FakeConfig::cuda_catalog(&models)
-    };
-    let cfg = EngineConfig {
-        queue_max: c.limits.queue_max,
-        swap: c.engine.swap,
-        tier_overrides: c
-            .engine
-            .tier_overrides
-            .iter()
-            .map(|(k, v)| (k.clone(), ModelId::new(v)))
-            .collect(),
-        output_dir: state_dir.join("engine-out"),
-        job_deadline: c.engine.job_deadline(),
-        ..EngineConfig::default()
-    };
-    EngineService::start(cfg, vec![Box::new(FakeBackend::new(fc))]).unwrap()
-}
-
 /// What this config serves: the capabilities body and, where the OpenAI
 /// videos API is mounted, `/v1/models` without its `created` stamps.
 async fn render(name: &str, path: &Path) -> Value {
@@ -126,18 +92,19 @@ async fn render(name: &str, path: &Path) -> Value {
         .prefix(&format!("fv-golden-{name}-"))
         .tempdir()
         .unwrap();
-    let c = load(name, path, dir.path());
+    let mut c = load(name, path, dir.path());
     let openai = c.protocols.openai_videos;
-    let engine = (c.engine.backend == EngineBackendKind::Cuda).then(|| cuda_engine(&c, dir.path()));
-    let app = App::build(
-        c,
-        Overrides {
-            engine,
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap_or_else(|e| panic!("{name}: {e}"));
+    // A CUDA config runs on the fake engine serving its `[[models]]` (the
+    // variants' real caps and recipes), as an 80 GB class GPU would: the
+    // H3 1080P tier on, no MP4 writing.
+    if c.engine.backend == EngineBackendKind::Cuda {
+        c.engine.backend = EngineBackendKind::Fake;
+        c.engine.fake = Default::default();
+        c.engine.fake.mp4 = false;
+    }
+    let app = App::build(c, Overrides::default())
+        .await
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
     app.gate.engine().wait_ready().await;
     let (s, caps) = get(&app.router, "/fv/v1/capabilities").await;
     assert_eq!(s, 200, "{name}: {caps}");

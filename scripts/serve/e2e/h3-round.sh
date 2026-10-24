@@ -121,19 +121,17 @@ model_toml() { # <model>: the [[models]] block, as the shipped configs (configs/
   case $1 in
     turbo) cat <<EOF
 [[models]]
+variant = "h3-turbo"
 id = "fasth3"
-family = "h3"
-recipe = "h3-turbo"
 weights = "$W/h3-base"
 resident = true
-served_names = ["fasth3"]
 continuity = "anchor-last-frame"
 i2v_encoder = "auto"
 EOF
     ;;
-    max) printf '[[models]]\nid = "sol-h3"\nfamily = "h3"\nrecipe = "h3-max"\nweights = "%s/h3-base"\nresident = true\ni2v_encoder = "auto"\n' $W ;;
-    draft) printf '[[models]]\nid = "fasth3-4step-vsa-480p-taeh3"\nfamily = "h3"\nrecipe = "h3-draft"\nweights = "%s/h3-base"\nresident = true\ni2v_encoder = "auto"\n' $W ;;
-    v2) printf '[[models]]\nid = "fasth3-8step-dense"\nfamily = "h3"\nrecipe = "fasth3-8step-dense"\nweights = "%s/h3-8step"\nresident = true\ni2v_encoder = "auto"\n' $W ;;
+    max) printf '[[models]]\nvariant = "h3-max"\nweights = "%s/h3-base"\nresident = true\ni2v_encoder = "auto"\n' $W ;;
+    draft) printf '[[models]]\nvariant = "h3-draft"\nweights = "%s/h3-base"\nresident = true\ni2v_encoder = "auto"\n' $W ;;
+    v2) printf '[[models]]\nvariant = "fasth3-8step-dense"\nweights = "%s/h3-8step"\nresident = true\ni2v_encoder = "auto"\n' $W ;;
     larry) printf '[[models]]\nid = "h3-larry-turbo"\nfamily = "h3"\nrecipe = "h3-larry-turbo"\nweights = "%s/h3-base"\nresident = true\nsteps = 6\nlora_strength = 1.0\ni2v_encoder = "auto"\n' $W ;;
     lightx) printf '[[models]]\nid = "h3-lightx2v-turbo"\nfamily = "h3"\nrecipe = "h3-lightx2v-turbo"\nweights = "%s/h3-base"\nresident = true\nsteps = 4\nlora_strength = 1.0\ni2v_encoder = "auto"\n' $W ;;
     ref2v-turbo) printf '[[models]]\nid = "h3-ref2v-turbo"\nfamily = "h3"\nrecipe = "h3-ref2v-turbo"\nweights = "%s/h3-base"\nresident = true\n' $W ;;

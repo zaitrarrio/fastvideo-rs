@@ -148,7 +148,15 @@ pub fn build_engine_with_clock(
     let mut backends: Vec<Box<dyn EngineBackend>> = match c.engine.backend {
         EngineBackendKind::Fake => {
             let f = &c.engine.fake;
-            let mut fc = FakeConfig::default();
+            // With `[[models]]`, the fake serves those variants of the family
+            // manifests (their real caps, recipes, public names and the CUDA
+            // pipelines' job checks): a GPU config runs on CPU unchanged
+            // but for `engine.backend`. Without, the built-in fake set.
+            let mut fc = if c.models.is_empty() {
+                FakeConfig::default()
+            } else {
+                FakeConfig::cuda_catalog(&cuda_models(c)?)
+            };
             if !f.models.is_empty() {
                 let ids: Vec<&str> = f.models.iter().map(String::as_str).collect();
                 fc = fc.with_models(&ids);
@@ -290,7 +298,8 @@ pub fn catalog_models(
             model_from_config(
                 &layout,
                 &ModelEntryCfg {
-                    id: m.served_id().to_owned(),
+                    // Empty: the resolved variant's id (not the alias named).
+                    id: m.id.clone().unwrap_or_default(),
                     variant: m.variant.clone(),
                     weights: m.weights.as_ref().map(Into::into),
                     resident: m.resident,
