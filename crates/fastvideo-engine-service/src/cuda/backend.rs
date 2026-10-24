@@ -515,6 +515,13 @@ impl EngineBackend for CudaBackend {
             .unwrap_or_default()
     }
 
+    fn public_names(&self, model: &ModelId) -> Vec<String> {
+        self.models
+            .get(model)
+            .map(|m| m.public_names.clone())
+            .unwrap_or_default()
+    }
+
     fn load(&mut self, model: &ModelId, obs: &mut dyn FnMut(LoadEvent)) -> Result<(), ApiError> {
         if self.loaded.contains_key(model) {
             return Ok(());

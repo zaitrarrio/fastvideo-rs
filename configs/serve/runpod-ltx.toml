@@ -23,10 +23,7 @@ post_encoder = "auto"
 
 # ltx-turbo: LTX-2.5 distilled two-stage, Sol stage 2 (one GPU).
 [[models]]
-id = "ltx25-distill-sol"
-family = "ltx2"
-recipe = "ltx-turbo"
-weights = "${FV_WEIGHTS}/ltx25"
+variant = "ltx25-distill-sol"
 resident = true
 
 [protocols]

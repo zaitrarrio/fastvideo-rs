@@ -41,19 +41,12 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "fasth3-v2-nvfp4"
-family = "h3"
-recipe = "h3-v2-nvfp4"
-weights = "${FV_WEIGHTS}/fasth3-v2-nvfp4"
+variant = "fasth3-v2-nvfp4"
 # The ModelOpt NVFP4 DiT and the published NVFP4 vae/ (shards 1-2): this
 # tree. The text encoder, tokenizer, audio VAE and the vae/'s third shard
-# (byte-identical): the catalog's text_weights, ${FV_WEIGHTS}/h3-base.
+# (byte-identical): the variant's text_weights, ${FV_WEIGHTS}/h3-base.
 resident = true
-served_names = ["h3-v2-nvfp4"]
 warmup = true
-
-[aliases]
-"MiniMax-H3-V2-NVFP4" = "fasth3-v2-nvfp4"
 
 [protocols]
 openai_videos = true

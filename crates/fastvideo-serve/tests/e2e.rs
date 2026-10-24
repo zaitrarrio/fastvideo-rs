@@ -590,7 +590,7 @@ fn shipped_configs_parse() {
 
 /// The Google Cloud configs (`configs/serve/gcp-*.toml`, scripts/gcp/families.tsv,
 /// docs/serve/deploy-gcp.md): each parses under today's schema, serves the same
-/// `[[models]]`, aliases and `[protocols]` as its Runpod twin, and validates
+/// `[[models]]` and `[protocols]` as its Runpod twin, and validates
 /// standalone, as a family Durable Object worker (the env scripts/gcp/vm.sh
 /// `worker` sets) and as a gateway-less direct worker.
 #[test]
@@ -661,20 +661,19 @@ fn gcp_configs_mirror_runpod_and_join_family_dos() {
             serde_json::to_value(&r.models).unwrap(),
             "{cfg} vs {twin}: [[models]]"
         );
-        assert_eq!(c.aliases, r.aliases, "{cfg} vs {twin}: [aliases]");
         assert_eq!(
             serde_json::to_value(&c.protocols).unwrap(),
             serde_json::to_value(&r.protocols).unwrap(),
             "{cfg} vs {twin}: [protocols]"
         );
         // The family object the table names is the models' family.
-        for m in &c.models {
+        for m in fastvideo_serve::app::cuda_models(&c).unwrap() {
+            let fam = fastvideo_engine_service::cuda::families::family_id(m.family()).unwrap();
             assert_eq!(
-                do_family(&m.family),
+                do_family(fam),
                 dfam,
-                "{cfg}: model {} (family {}) vs dispatch family {dfam}",
-                m.id,
-                m.family
+                "{cfg}: model {} (family {fam}) vs dispatch family {dfam}",
+                m.id
             );
         }
         // A family Durable Object worker (vm.sh worker).

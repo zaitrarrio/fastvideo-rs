@@ -31,16 +31,9 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "fasth3-4step-vsa-taeh3"
-family = "h3"
-recipe = "h3-turbo-preview"
-weights = "${FV_WEIGHTS}/h3-base"
+variant = "fasth3-4step-vsa-taeh3"
 resident = true
-served_names = ["h3-turbo-preview"]
 warmup = true
-
-[aliases]
-"MiniMax-H3-Turbo-Preview" = "fasth3-4step-vsa-taeh3"
 
 [protocols]
 openai_videos = true

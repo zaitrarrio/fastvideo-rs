@@ -4,7 +4,7 @@
 # enough for an L4 (G2): FV_GCP_MACHINE_WAN=g2-standard-16.
 #
 # Not the `wan-turbo` tier: since the 5B FastWan2.2 became wan-turbo
-# (runpod-wan5b.toml), this model is named by its catalog id.
+# (runpod-wan5b.toml), this model is named by its variant id.
 
 [server]
 bind = "0.0.0.0:8000"
@@ -28,10 +28,7 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "fastwan21-1.3b"
-family = "wan"
-recipe = "fastwan21-1.3b"
-weights = "${FV_WEIGHTS}/fastwan21-1.3b"
+variant = "fastwan21-1.3b"
 resident = true
 
 [protocols]

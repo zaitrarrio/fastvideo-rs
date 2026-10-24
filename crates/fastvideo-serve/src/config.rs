@@ -427,22 +427,65 @@ impl EngineCfg {
     }
 }
 
-/// One `[[models]]` entry (consumed by the CUDA backend, WP-11).
+/// One `[[models]]` entry (consumed by the CUDA backend, WP-11): a variant
+/// of the family manifests (`families/*.toml`, plan A3) and the
+/// deployment's choices about it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModelCfg {
-    pub id: String,
-    pub family: String,
-    #[serde(default)]
+    /// The family-file variant: its id (`fasth3-4step-vsa`), one of its
+    /// served names (`fasth3`) or a tier alias (`h3-turbo`).
+    pub variant: String,
+    /// The id this deployment serves the model under (default: the variant id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// The weight directory when it is not the variant's tree under
+    /// `FV_WEIGHTS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weights: Option<String>,
     #[serde(default)]
-    pub recipe: Option<String>,
-    #[serde(default)]
     pub resident: bool,
-    #[serde(default)]
+    /// Extra names this deployment serves the model under (the variant's
+    /// own served names always apply).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub served_names: Vec<String>,
-    /// Anything else the backend reads (`continuity`, `profile`, ...).
+    /// Anything else the backend reads (`continuity`, `warmup`, ...).
     #[serde(flatten)]
     pub extra: BTreeMap<String, toml::Value>,
+}
+
+impl ModelCfg {
+    /// The served id: the entry's `id`, else the variant name.
+    pub fn served_id(&self) -> &str {
+        self.id.as_deref().unwrap_or(&self.variant)
+    }
+
+    /// The keys an entry no longer takes (plan A3): the family and the
+    /// recipe are the variant's, the public names come from the family file.
+    const RETIRED_KEYS: [(&'static str, &'static str); 2] = [
+        ("family", "the variant's family is in families/*.toml"),
+        (
+            "recipe",
+            "name the variant (its id, a served name or a tier alias) in `variant`",
+        ),
+    ];
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.variant.trim().is_empty() {
+            return Err(ConfigError::Invalid(format!(
+                "[[models]] `{}`: `variant` is empty (a variant id, a served name or a tier alias of families/*.toml)",
+                self.served_id()
+            )));
+        }
+        for (k, why) in Self::RETIRED_KEYS {
+            if self.extra.contains_key(k) {
+                return Err(ConfigError::Invalid(format!(
+                    "[[models]] `{}`: `{k}` is no longer a key: {why}",
+                    self.served_id()
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Which APIs are mounted (design §6.1 `[protocols]`).
@@ -1280,7 +1323,6 @@ pub struct Config {
     pub jobs: JobsCfg,
     pub engine: EngineCfg,
     pub models: Vec<ModelCfg>,
-    pub aliases: BTreeMap<String, String>,
     pub protocols: ProtocolsCfg,
     pub ltx: LtxCfg,
     pub limits: LimitsCfg,
@@ -1772,6 +1814,9 @@ impl Config {
     /// Consistency checks that do not need I/O.
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.bind_addr()?;
+        for m in &self.models {
+            m.validate()?;
+        }
         if let Some(u) = &self.upsampler {
             u.validate()?;
         }
@@ -2170,16 +2215,11 @@ mode = "keys"
 backend = "local"
 url_ttl_s = 86400
 [[models]]
+variant = "h3-turbo"
 id = "fasth3"
-family = "h3"
 weights = "${FV_WEIGHTS}/FastH3"
-recipe = "4step-vsa"
 resident = true
-served_names = ["fasth3"]
 continuity = "anchor-last-frame"
-[aliases]
-"MiniMax-H3" = "fasth3"
-"MiniMax-H3-Max" = "fasth3"
 [protocols]
 openai_videos = true
 fastwan = false
@@ -2213,7 +2253,10 @@ body_max_mb = 64
             Some("anchor-last-frame")
         );
         assert_eq!(c.server.bind, "0.0.0.0:8080");
-        assert_eq!(c.aliases["MiniMax-H3-Max"], "fasth3");
+        assert_eq!(
+            (c.models[0].variant.as_str(), c.models[0].served_id()),
+            ("h3-turbo", "fasth3")
+        );
         assert!(!c.protocols.ltx && c.protocols.minimax);
         assert_eq!(c.job_backend(), JobBackend::File);
         assert_eq!(c.artifact_backend(), ArtifactBackend::Local);
@@ -2223,6 +2266,17 @@ body_max_mb = 64
     fn unknown_keys_are_refused() {
         let e = Config::from_toml("[server]\nbindd = \"x\"\n", "t").unwrap_err();
         assert!(e.to_string().contains("bindd"), "{e}");
+        // The pre-A3 model keys and the `[aliases]` table name their replacement.
+        let e = Config::from_toml("[aliases]\n\"MiniMax-H3\" = \"fasth3\"\n", "t").unwrap_err();
+        assert!(e.to_string().contains("aliases"), "{e}");
+        for old in ["family = \"h3\"", "recipe = \"h3-turbo\""] {
+            let c = Config::from_toml(&format!("[[models]]\nvariant = \"h3-turbo\"\n{old}\n"), "t")
+                .unwrap();
+            let e = c.validate().unwrap_err().to_string();
+            assert!(e.contains("no longer a key"), "{old}: {e}");
+        }
+        let c = Config::from_toml("[[models]]\nvariant = \"\"\n", "t").unwrap();
+        assert!(c.validate().is_err());
     }
 
     #[test]

@@ -25,10 +25,7 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "ltx25-distill-sol"
-family = "ltx2"
-recipe = "ltx-turbo"
-weights = "${FV_WEIGHTS}/ltx25"
+variant = "ltx25-distill-sol"
 resident = true
 
 [protocols]

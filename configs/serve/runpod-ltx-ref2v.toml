@@ -28,12 +28,9 @@ post_encoder = "auto"
 # on this pod. The DiT keeps an unfused copy of the weights the LoRA touches
 # (~26 GB): an 80-96 GB card.
 [[models]]
-id = "ltx25-ref2v"
-family = "ltx2"
-recipe = "ltx25-ref2v"
-weights = "${FV_WEIGHTS}/ltx25"
+variant = "ltx25-ref2v"
 resident = true
-# The IC-LoRA is ${FV_WEIGHTS}/ltx25-ic-lora-ingredients/<file> (the catalog's
+# The IC-LoRA is ${FV_WEIGHTS}/ltx25-ic-lora-ingredients/<file> (the variant's
 # layout); `ic_lora = "/abs/path.safetensors"` overrides it.
 
 [protocols]

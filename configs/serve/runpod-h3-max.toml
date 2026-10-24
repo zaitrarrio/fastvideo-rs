@@ -23,10 +23,7 @@ post_encoder = "auto"
 
 # h3-max: Sol-H3 4-step on the tau-ladder engine route (one GPU).
 [[models]]
-id = "sol-h3"
-family = "h3"
-recipe = "h3-max"
-weights = "${FV_WEIGHTS}/h3-base"
+variant = "sol-h3"
 resident = true
 # Image-to-video text: keep the Qwen-VL vision tower resident beside the
 # resident text encoder (`auto`: when it fits; `stream` reads it from the
@@ -39,9 +36,6 @@ i2v_encoder = "auto"
 warmup = true
 # The native 1080P tier is on (80 GB-class GPUs and up): see runpod.toml.
 # h3_1080p = false
-
-[aliases]
-"MiniMax-H3-Max" = "sol-h3"
 
 [protocols]
 openai_videos = true

@@ -58,13 +58,12 @@ impl std::fmt::Debug for ServiceGate {
 }
 
 impl ServiceGate {
-    /// `aliases`: the config's `[aliases]`; the engine's tier aliases
-    /// (`h3-max`, `ltx-turbo`, ...) are added unless the config names them.
-    pub fn new(
-        engine: EngineService,
-        mut aliases: BTreeMap<String, String>,
-        output: OutputPolicy,
-    ) -> Arc<Self> {
+    /// The alias map is derived from the engine (plan A3): the public API
+    /// names the served models' family files declare
+    /// (`CapabilityTable::public_aliases`, `MiniMax-H3-Turbo` -> the turbo
+    /// model) and the engine's tier aliases (`h3-max`, `ltx-turbo`, ...).
+    pub fn new(engine: EngineService, output: OutputPolicy) -> Arc<Self> {
+        let mut aliases = engine.caps().public_aliases();
         for (alias, model) in engine.caps().tier_aliases() {
             aliases.entry(alias).or_insert(model.0);
         }

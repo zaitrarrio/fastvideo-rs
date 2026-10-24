@@ -177,8 +177,12 @@ async fn capabilities_are_golden_for_every_shipped_config() {
         return;
     }
     let golden = golden_path();
-    let want_text = std::fs::read_to_string(&golden)
-        .unwrap_or_else(|e| panic!("{}: {e} (FV_GOLDEN_WRITE=<file> writes it)", golden.display()));
+    let want_text = std::fs::read_to_string(&golden).unwrap_or_else(|e| {
+        panic!(
+            "{}: {e} (FV_GOLDEN_WRITE=<file> writes it)",
+            golden.display()
+        )
+    });
     if want_text == text {
         return;
     }

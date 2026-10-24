@@ -24,16 +24,10 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "sol-h3"
-family = "h3"
-recipe = "h3-max"
-weights = "${FV_WEIGHTS}/h3-base"
+variant = "sol-h3"
 resident = true
 i2v_encoder = "auto"
 warmup = true
-
-[aliases]
-"MiniMax-H3-Max" = "sol-h3"
 
 [protocols]
 openai_videos = true

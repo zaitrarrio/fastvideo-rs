@@ -74,7 +74,7 @@ pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
     if let Some(t) = a.tae_dir {
         layout = layout.with_tae_dir(t);
     }
-    let cat = cuda::catalog(&layout);
+    let cat = cuda::catalog(&layout).map_err(|e| anyhow::anyhow!("{e}"))?;
     let mut model =
         cuda::find(&cat, a.model).ok_or_else(|| anyhow::anyhow!("unknown model {}", a.model))?;
     match &mut model.recipe {

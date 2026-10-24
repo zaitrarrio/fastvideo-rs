@@ -25,10 +25,7 @@ post_encoder = "auto"
 # FastWan2.1 1.3B DMD 3-step, VSA (one GPU; small, add more FASTVIDEO_VSA=1
 # Wan models here). Untiered since the 5B FastWan2.2 became wan-turbo.
 [[models]]
-id = "fastwan21-1.3b"
-family = "wan"
-recipe = "fastwan21-1.3b"
-weights = "${FV_WEIGHTS}/fastwan21-1.3b"
+variant = "fastwan21-1.3b"
 resident = true
 
 [protocols]

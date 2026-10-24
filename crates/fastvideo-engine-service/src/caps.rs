@@ -183,6 +183,11 @@ pub struct ModelEntry {
 pub struct CapabilityTable {
     models: BTreeMap<ModelId, ModelEntry>,
     tiers: BTreeMap<String, TierBinding>,
+    /// The public API names each model's backend declares
+    /// (`EngineBackend::public_names`), by model id; models without any
+    /// are absent.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    public_names: BTreeMap<ModelId, Vec<String>>,
 }
 
 impl CapabilityTable {
@@ -322,7 +327,51 @@ impl CapabilityTable {
                 _ => held.first().copied(),
             };
         }
-        Ok(Self { models, tiers })
+        Ok(Self {
+            models,
+            tiers,
+            public_names: BTreeMap::new(),
+        })
+    }
+
+    /// The public API names the backends declared for their models.
+    pub fn with_public_names(mut self, names: BTreeMap<ModelId, Vec<String>>) -> Self {
+        self.public_names = names
+            .into_iter()
+            .filter(|(id, n)| !n.is_empty() && self.models.contains_key(id))
+            .collect();
+        self
+    }
+
+    pub fn public_names(&self, id: &ModelId) -> &[String] {
+        self.public_names.get(id).map_or(&[], Vec::as_slice)
+    }
+
+    /// The public API names of the served models (`EngineBackend::public_names`)
+    /// mapped onto them: what a serve config's `[aliases]` table listed by
+    /// hand before plan A3. A name several served models claim (a tier and
+    /// its task companion, `MiniMax-H3-Turbo` on `fasth3-4step-vsa` and
+    /// `h3-ref2v-turbo`) goes to the one that generates from text, else to
+    /// the first by id, so a server that serves only the companion still
+    /// answers to the name.
+    pub fn public_aliases(&self) -> BTreeMap<String, String> {
+        let mut out: BTreeMap<String, &ModelCaps> = BTreeMap::new();
+        for (id, names) in &self.public_names {
+            let Some(e) = self.models.get(id) else {
+                continue;
+            };
+            for n in names {
+                match out.get(n) {
+                    Some(have) if have.supports(Task::T2V) || !e.caps.supports(Task::T2V) => {}
+                    _ => {
+                        out.insert(n.clone(), &e.caps);
+                    }
+                }
+            }
+        }
+        out.into_iter()
+            .map(|(n, c)| (n, c.id.as_str().to_owned()))
+            .collect()
     }
 
     pub fn get(&self, id: &ModelId) -> Option<&ModelCaps> {

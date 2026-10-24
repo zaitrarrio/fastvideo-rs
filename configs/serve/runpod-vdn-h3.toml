@@ -33,20 +33,13 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "vdn-h3"
-family = "h3"
-recipe = "vdn-h3-50step"
-weights = "${FV_WEIGHTS}/h3-base"
-# The VDN checkpoint: the catalog's vdn_weights,
+variant = "vdn-h3"
+# The VDN checkpoint: the variant's vdn_weights,
 # ${FV_WEIGHTS}/vdn-h3-stage-b-2000/stage-b-step-2000.
 resident = true
-served_names = ["vdn-h3-50step"]
 # No warm-up: it runs an image-to-video generation (not offered here) and a
 # text-to-video one, each 50 forwards.
 warmup = false
-
-[aliases]
-"VDN-H3" = "vdn-h3"
 
 [protocols]
 openai_videos = true

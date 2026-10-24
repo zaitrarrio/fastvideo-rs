@@ -36,22 +36,12 @@ post_encoder = "auto"
 swap = true
 
 [[models]]
-id = "h3-ref2v-turbo"
-family = "h3"
-recipe = "h3-ref2v-turbo"
-weights = "${FV_WEIGHTS}/h3-base"
+variant = "h3-ref2v-turbo"
 resident = true
 
 [[models]]
-id = "h3-ref2v-max"
-family = "h3"
-recipe = "h3-ref2v-max"
-weights = "${FV_WEIGHTS}/h3-base"
+variant = "h3-ref2v-max"
 resident = false
-
-[aliases]
-"MiniMax-H3-Max" = "h3-ref2v-max"
-"MiniMax-H3-Turbo" = "h3-ref2v-turbo"
 
 [protocols]
 openai_videos = true

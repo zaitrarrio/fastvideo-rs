@@ -1,14 +1,14 @@
 //! The CUDA backend (WP-11, design §3.6): `CudaBackend` implements
 //! `EngineBackend` over the fastvideo-cudarc pipelines, one backend per GPU.
 //!
-//! - [`caps`] (always built): the model catalog, tiers, recipes, technique
-//!   profiles and the `ModelCaps` derived from the model configs, plus the
-//!   [`ProcessPlan`] check for which models may share a process.
+//! - [`caps`] (always built): the recipe and model types, the serve-config
+//!   resolution (`model_from_config`) and the [`ProcessPlan`] check for
+//!   which models may share a process.
 //! - [`validate`] (always built): the checks each pipeline makes on a job
 //!   before it starts, shared with the fake backend.
-//! - [`families`] (always built): the projection of the family manifests
-//!   (`families/*.toml`, layer 2) onto [`caps::CudaModel`] rows and back
-//!   (plan A2, ADR-0008).
+//! - [`families`] (always built): the catalog, the projection of the family
+//!   manifests (`families/*.toml`, layer 2, embedded at build; plan A3,
+//!   ADR-0008) onto [`caps::CudaModel`] rows.
 //! - `h3`, `ltx2`, `wan` (feature `cuda`): one resident pipeline per model
 //!   (`H3Pipeline`, `Ltx2Pipeline`, `WanPipeline` incl. TI2V-5B), loaded
 //!   once and kept (the warm pool), and `generate` mapping a `ResolvedJob`
@@ -69,7 +69,8 @@ pub mod wan;
 #[cfg(feature = "cuda")]
 pub use backend::{install_process_plan, CudaBackend, CudaBackendConfig, Mp4Encoder};
 pub use caps::{
-    catalog, find, gate_h3_1080p, model_from_config, CudaModel, CudaRecipe, H3Recipe, Ltx2Recipe,
-    LtxStage2, LtxVersion, ModelEntryCfg, ProcessPlan, SfWanRecipe, WanDecoder, WanRecipe,
-    WanSampler, WarmupMode, WeightLayout, WARMUP_ENV,
+    catalog, find, gate_h3_1080p, model_from_config, CatalogError, CudaModel, CudaRecipe, H3Recipe,
+    Ltx2Recipe, LtxStage2, LtxVersion, ModelEntryCfg, ProcessPlan, SfWanRecipe, WanDecoder,
+    WanRecipe, WanSampler, WarmupMode, WeightLayout, WARMUP_ENV,
 };
+pub use families::FAMILIES_DIR_ENV;

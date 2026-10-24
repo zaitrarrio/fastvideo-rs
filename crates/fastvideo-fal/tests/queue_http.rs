@@ -1081,12 +1081,14 @@ async fn family_apps_and_multi_segment_subs() {
     use fastvideo_engine_service::FakeModel;
     use fastvideo_protocol::{Family, Tier};
     let models: Vec<FakeModel> = catalog(&WeightLayout::default())
+        .unwrap()
         .into_iter()
         .filter(|m| matches!(m.tier, Some(Tier::Max | Tier::Turbo)))
         .filter(|m| m.family() != Family::H3 || m.tier == Some(Tier::Turbo))
         .map(|m| FakeModel {
             caps: m.caps(),
             recipe: m.describe(),
+            public_names: m.public_names.clone(),
         })
         .collect();
     let f = fixture(Opts {

@@ -346,7 +346,7 @@ pub fn quantize_dit(
     };
 
     let layout = WeightLayout::new(weights_root);
-    let cat = cuda::catalog(&layout);
+    let cat = cuda::catalog(&layout).map_err(|e| anyhow::anyhow!("{e}"))?;
     let m = cuda::find(&cat, model).ok_or_else(|| anyhow::anyhow!("unknown model {model}"))?;
     let CudaRecipe::H3(r) = &m.recipe else {
         return Err(StageError::Error(anyhow::anyhow!(

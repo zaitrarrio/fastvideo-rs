@@ -32,10 +32,7 @@ post_encoder = "auto"
 
 # SF-Wan 1.3B causal rollout (StreamCaps::Causal), one session per GPU.
 [[models]]
-id = "sfwan21-1.3b"
-family = "wan"
-recipe = "sfwan21-1.3b"
-weights = "${FV_WEIGHTS}/sfwan21-1.3b"
+variant = "sfwan21-1.3b"
 resident = true
 
 [protocols]

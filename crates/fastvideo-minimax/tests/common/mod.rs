@@ -54,6 +54,7 @@ pub fn fake_models() -> Vec<FakeModel> {
             summary: "fake: below the quality gate".into(),
             ..Recipe::default()
         },
+        public_names: Vec::new(),
     };
     vec![max, turbo, draft]
 }

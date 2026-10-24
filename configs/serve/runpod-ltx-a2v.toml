@@ -32,12 +32,9 @@ post_encoder = "auto"
 # (the unfused base in pinned host memory, ~38 GB of host RAM) plus the LoRA
 # factors: an 80-96 GB card.
 [[models]]
-id = "ltx25-a2v-guided"
-family = "ltx2"
-recipe = "ltx25-a2v-guided"
-weights = "${FV_WEIGHTS}/ltx25"
+variant = "ltx25-a2v-guided"
 resident = true
-# The dev DiT is ${FV_WEIGHTS}/ltx25-dev/transformer_full (the catalog's
+# The dev DiT is ${FV_WEIGHTS}/ltx25-dev/transformer_full (the variant's
 # layout); `dit = "/abs/path"` overrides it.
 
 [protocols]

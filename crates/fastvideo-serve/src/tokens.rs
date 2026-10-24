@@ -3,10 +3,10 @@
 //! family's DiT prompt in that encoder's tokens.
 //!
 //! The tokenizer of a family is `[upsampler.tokenizers] <family>` when set,
-//! else `<weights>/tokenizer/tokenizer.json` of the first `[[models]]`
-//! entry of that family (for an H3 model, of its text tree: `text_weights`
-//! when the entry sets it, and for FastH3 Trim, whose tree has no tokenizer,
-//! the `h3-base` tree beside it, as the engine catalog reads it). It is loaded on first use and, while the file is
+//! else `<text tree>/tokenizer/tokenizer.json` of the first `[[models]]`
+//! entry of that family, the text tree being the resolved recipe's
+//! `text_weights` (FastH3 Trim and the NVFP4 releases, whose own trees carry
+//! no tokenizer, read `h3-base`) or its weights. It is loaded on first use and, while the file is
 //! missing (weights still streaming from R2), looked for again at most
 //! every 30 s; meanwhile the limit is in characters. H3 uses
 //! [`H3Tokenizer`] (the `<d>` markers as single tokens, no template);
@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use fastvideo_engine_service::cuda::{CudaModel, CudaRecipe};
 use fastvideo_models::h3::tokenizer::H3Tokenizer;
 use fastvideo_upsampler::{rewrite::PromptFamily, TokenCounter};
 
@@ -97,56 +98,38 @@ fn under(weights: &str) -> PathBuf {
     Path::new(weights).join("tokenizer").join("tokenizer.json")
 }
 
-/// The tree that holds a model's text-encoder tokenizer. H3: the entry's
-/// `text_weights` when set; FastH3 Trim (`fasth3-trim-8step`, recipe
-/// `h3-trim` / `trim-8step`) ships no tokenizer and the engine reads it from
-/// `h3-base` beside its tree (caps.rs `catalog`). Else the model's weights.
-fn text_tree(m: &crate::config::ModelCfg, fam: PromptFamily) -> Option<PathBuf> {
-    let weights = m.weights.as_deref()?;
-    if fam == PromptFamily::H3 {
-        if let Some(t) = m
-            .extra
-            .get("text_weights")
-            .and_then(|v| v.as_str())
-            .filter(|t| !t.trim().is_empty())
-        {
-            return Some(PathBuf::from(t));
-        }
-        let w = Path::new(weights.trim_end_matches('/'));
-        // FastH3 Trim and the V2 / 4-step NVFP4 release trees carry no
-        // tokenizer either: h3-base beside them.
-        let trim = w.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-            n.starts_with("fasth3-trim") || n == "fasth3-v2-nvfp4" || n == "fasth3-4step-vsa-nvfp4"
-        }) || m.recipe.as_deref().is_some_and(|r| {
-            matches!(r, "h3-trim" | "trim-8step" | "fasth3-trim-8step")
-                || fastvideo_models::h3::config::is_trim_nvfp4_recipe(r)
-                || fastvideo_models::h3::config::is_nvfp4_release_recipe(r)
-                || r.starts_with("fasth3-v2-nvfp4")
-                || r.starts_with("fasth3-4step-vsa-nvfp4")
-                || r.starts_with("h3-v2-nvfp4")
-                || r.starts_with("h3-turbo-nvfp4")
-        });
-        if trim {
-            if let Some(parent) = w.parent() {
-                return Some(parent.join("h3-base"));
-            }
-        }
+/// The tree that holds a model's text-encoder tokenizer: the recipe's text
+/// tree (`text_weights`, which the H3 models whose own tree carries no
+/// tokenizer, FastH3 Trim and the NVFP4 releases, point at `h3-base`), else
+/// its weights.
+fn text_tree(m: &CudaModel) -> PathBuf {
+    match &m.recipe {
+        CudaRecipe::H3(r) => r.text_weights.clone().unwrap_or_else(|| r.weights.clone()),
+        CudaRecipe::Ltx2(r) => r.text_weights.clone().unwrap_or_else(|| r.weights.clone()),
+        CudaRecipe::Wan(r) => r.weights.clone(),
+        CudaRecipe::SfWan(r) => r.wan.weights.clone(),
     }
-    Some(PathBuf::from(weights))
 }
 
-/// The family of a `[[models]]` entry (`h3`, `wan`, `ltx`/`ltx2`).
-fn family_of(f: &str) -> Option<PromptFamily> {
-    match f.trim().to_ascii_lowercase().as_str() {
-        "h3" | "minimax_h3" => Some(PromptFamily::H3),
-        "wan" => Some(PromptFamily::Wan),
-        "ltx" | "ltx2" => Some(PromptFamily::Ltx),
-        _ => None,
+fn prompt_family(f: fastvideo_protocol::Family) -> Option<PromptFamily> {
+    match f {
+        fastvideo_protocol::Family::H3 => Some(PromptFamily::H3),
+        fastvideo_protocol::Family::Wan => Some(PromptFamily::Wan),
+        fastvideo_protocol::Family::Ltx2 => Some(PromptFamily::Ltx),
+        fastvideo_protocol::Family::MmAudio | fastvideo_protocol::Family::Loopback => None,
     }
 }
 
 /// The counters `[upsampler]` and `[[models]]` point at.
 pub fn counters(c: &Config) -> fastvideo_upsampler::Counters {
+    // The resolved models; a config that does not resolve was refused
+    // before the engine started (no counters from it here).
+    let models = crate::app::catalog_models(&c.models).unwrap_or_default();
+    counters_for(c, &models)
+}
+
+/// [`counters`] over already resolved models.
+pub fn counters_for(c: &Config, models: &[CudaModel]) -> fastvideo_upsampler::Counters {
     let explicit = c
         .upsampler
         .as_ref()
@@ -156,11 +139,10 @@ pub fn counters(c: &Config) -> fastvideo_upsampler::Counters {
         if let Some(p) = set.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
             return Some(PathBuf::from(p));
         }
-        c.models
+        models
             .iter()
-            .find(|m| family_of(&m.family) == Some(fam))
-            .and_then(|m| text_tree(m, fam))
-            .map(|t| under(&t.to_string_lossy()))
+            .find(|m| prompt_family(m.family()) == Some(fam))
+            .map(|m| under(&text_tree(m).to_string_lossy()))
     };
     let make = |fam: PromptFamily, set: &Option<String>| -> Option<Arc<dyn TokenCounter>> {
         path(fam, set).map(|p| Arc::new(FileCounter::new(p, fam)) as Arc<dyn TokenCounter>)
@@ -200,54 +182,79 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// `(id, variant, extra settings)` of one `[[models]]` entry.
+    type Entry<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
+    fn models(entries: &[Entry<'_>]) -> Vec<CudaModel> {
+        use fastvideo_engine_service::cuda::{model_from_config, ModelEntryCfg, WeightLayout};
+        entries
+            .iter()
+            .map(|(id, variant, extra)| {
+                model_from_config(
+                    &WeightLayout::new("/w"),
+                    &ModelEntryCfg {
+                        id: (*id).to_owned(),
+                        variant: (*variant).to_owned(),
+                        resident: true,
+                        extra: extra
+                            .iter()
+                            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                            .collect(),
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+
     #[test]
     fn counters_follow_config_and_models() {
         let mut c = Config::default();
-        c.models.push(
-            toml::from_str("id = \"fasth3\"\nfamily = \"h3\"\nweights = \"/w/FastH3\"").unwrap(),
-        );
-        let k = counters(&c);
+        let m = models(&[("fasth3", "h3-turbo", &[])]);
+        let k = counters_for(&c, &m);
         assert_eq!(
             k.h3.map(|x| x.describe()).as_deref(),
-            Some("/w/FastH3/tokenizer/tokenizer.json")
+            Some("/w/h3-base/tokenizer/tokenizer.json")
         );
         assert!(k.wan.is_none() && k.ltx.is_none());
         let mut u = crate::config::UpsamplerCfg::default();
         u.tokenizers.h3 = Some("/t/h3.json".into());
         u.tokenizers.wan = Some("/t/wan.json".into());
         c.upsampler = Some(u);
-        let k = counters(&c);
+        let k = counters_for(&c, &m);
         assert_eq!(k.h3.map(|x| x.describe()).as_deref(), Some("/t/h3.json"));
         assert_eq!(k.wan.map(|x| x.describe()).as_deref(), Some("/t/wan.json"));
+        // Without models (a fake deployment) and without explicit paths: characters.
+        assert!(counters_for(&Config::default(), &[]).h3.is_none());
     }
 
     /// FastH3 Trim's tree has no tokenizer: its prompts are measured with
-    /// h3-base's (the engine's text tree), or the entry's `text_weights`.
+    /// h3-base's (the recipe's text tree), or the entry's `text_weights`.
     #[test]
     fn trim_counts_with_the_h3_base_tokenizer() {
-        let mut c = Config::default();
-        c.models.push(
-            toml::from_str("id = \"fasth3-trim-8step\"\nfamily = \"h3\"\nrecipe = \"h3-trim\"\nweights = \"/w/fasth3-trim-8step\"").unwrap(),
-        );
-        let k = counters(&c);
+        let c = Config::default();
+        let m = models(&[("fasth3-trim-8step", "h3-trim", &[])]);
+        let k = counters_for(&c, &m);
         assert_eq!(
             k.h3.map(|x| x.describe()).as_deref(),
             Some("/w/h3-base/tokenizer/tokenizer.json")
         );
-        c.models[0] =
-            toml::from_str("id = \"t\"\nfamily = \"h3\"\nweights = \"/w/fasth3-trim-8step/\"")
-                .unwrap();
-        let k = counters(&c);
-        assert_eq!(
-            k.h3.map(|x| x.describe()).as_deref(),
-            Some("/w/h3-base/tokenizer/tokenizer.json")
-        );
-        c.models[0] =
-            toml::from_str("id = \"t\"\nfamily = \"h3\"\nweights = \"/w/fasth3-trim-8step\"\ntext_weights = \"/v/h3-base\"").unwrap();
-        let k = counters(&c);
+        let m = models(&[("t", "h3-trim", &[("text_weights", "/v/h3-base")])]);
+        let k = counters_for(&c, &m);
         assert_eq!(
             k.h3.map(|x| x.describe()).as_deref(),
             Some("/v/h3-base/tokenizer/tokenizer.json")
+        );
+        let m = models(&[("ltx", "ltx-turbo", &[]), ("wan", "wan-turbo", &[])]);
+        let k = counters_for(&c, &m);
+        assert_eq!(
+            k.ltx.map(|x| x.describe()).as_deref(),
+            Some("/w/ltx25/tokenizer/tokenizer.json")
+        );
+        assert_eq!(
+            k.wan.map(|x| x.describe()).as_deref(),
+            Some("/w/fastwan22-ti2v-5b/tokenizer/tokenizer.json")
         );
     }
 }

@@ -602,27 +602,39 @@ impl VariantManifest {
                 format!("references `{WEIGHTS_VAR}` alone (the whole weights root)"),
             ));
         }
-        for r in tae_refs(&self.engine) {
-            match r {
-                Some(file) => {
-                    if file.is_empty() {
-                        return Err(FamilyError::field(
-                            p("engine"),
-                            format!("`{TAE_VAR}/` with nothing after it"),
-                        ));
-                    }
-                    check_relative_path(&file)
-                        .map_err(|e| FamilyError::field(p("engine"), format!("{file:?}: {e}")))?;
-                    let want = format!("{TAE_TREE_PREFIX}/{file}");
-                    if !self.trees.iter().any(|t| *t == want) {
-                        return Err(FamilyError::field(
-                            p("engine"),
-                            format!("references `{TAE_VAR}/{file}`; `trees` lacks `{want}`"),
-                        ));
-                    }
-                }
-                // The bare directory is a search path (module doc).
-                None => {}
+        // A bare `${tae}` (the directory) is a search path (module doc);
+        // every `${tae}/<file>` needs its tree.
+        for file in tae_refs(&self.engine).into_iter().flatten() {
+            if file.is_empty() {
+                return Err(FamilyError::field(
+                    p("engine"),
+                    format!("`{TAE_VAR}/` with nothing after it"),
+                ));
+            }
+            check_relative_path(&file)
+                .map_err(|e| FamilyError::field(p("engine"), format!("{file:?}: {e}")))?;
+            let want = format!("{TAE_TREE_PREFIX}/{file}");
+            if !self.trees.contains(&want) {
+                return Err(FamilyError::field(
+                    p("engine"),
+                    format!("references `{TAE_VAR}/{file}`; `trees` lacks `{want}`"),
+                ));
+            }
+        }
+        for rel in weights_refs(&self.engine) {
+            if rel.is_empty() {
+                return Err(FamilyError::field(
+                    p("engine"),
+                    format!("`{WEIGHTS_VAR}/` with nothing after it"),
+                ));
+            }
+            check_relative_path(&rel)
+                .map_err(|e| FamilyError::field(p("engine"), format!("{rel:?}: {e}")))?;
+            if !self.trees.iter().any(|t| tree_covers(t, &rel)) {
+                return Err(FamilyError::field(
+                    p("engine"),
+                    format!("references `{WEIGHTS_VAR}/{rel}`, which no entry of `trees` covers"),
+                ));
             }
         }
         Ok(())
@@ -689,10 +701,7 @@ impl ServingCaps {
                 _ => {
                     return Err(FamilyError::field(
                         p("hd.short_edge"),
-                        format!(
-                            "{} is not listed in caps.canvas.short_edges",
-                            hd.short_edge
-                        ),
+                        format!("{} is not listed in caps.canvas.short_edges", hd.short_edge),
                     ))
                 }
             }
@@ -893,7 +902,10 @@ steps = 4
         assert!(v.resident_default);
         assert_eq!(v.public_names, ["Demo-Turbo"]);
         assert_eq!(v.serving.tasks, ["t2v", "i2v"]);
-        assert_eq!(tae_refs(&v.engine), [Some("taedemo.safetensors".to_owned())]);
+        assert_eq!(
+            tae_refs(&v.engine),
+            [Some("taedemo.safetensors".to_owned())]
+        );
         assert_eq!(
             weights_refs(&v.engine),
             vec![
@@ -963,14 +975,23 @@ steps = 4
         // A `${tae}/<file>` reference needs `auxiliary/tae/<file>` in trees.
         let e = with("${tae}/taedemo.safetensors", "${tae}/other.safetensors").unwrap_err();
         assert_eq!(e.path(), Some("variants[0].engine"));
-        assert!(e.to_string().contains("auxiliary/tae/other.safetensors"), "{e}");
+        assert!(
+            e.to_string().contains("auxiliary/tae/other.safetensors"),
+            "{e}"
+        );
         // The bare directory is a search path (no tree needed); the bare root is refused.
         assert!(with("${tae}/taedemo.safetensors", "${tae}").is_ok());
-        let e = with("weights = \"${weights}/demo-base\"", "weights = \"${weights}\"").unwrap_err();
+        let e = with(
+            "weights = \"${weights}/demo-base\"",
+            "weights = \"${weights}\"",
+        )
+        .unwrap_err();
         assert!(e.to_string().contains("alone"), "{e}");
         // Serving caps: tasks, the default frame count on the grid, the HD tier.
         assert_eq!(
-            with("tasks = [\"t2v\", \"i2v\"]", "tasks = []").unwrap_err().path(),
+            with("tasks = [\"t2v\", \"i2v\"]", "tasks = []")
+                .unwrap_err()
+                .path(),
             Some("variants[0].serving.tasks")
         );
         assert_eq!(
@@ -980,11 +1001,15 @@ steps = 4
             Some("variants[0].serving.tasks")
         );
         assert_eq!(
-            with("frames_default = 81", "frames_default = 80").unwrap_err().path(),
+            with("frames_default = 81", "frames_default = 80")
+                .unwrap_err()
+                .path(),
             Some("variants[0].serving.frames_default")
         );
         assert_eq!(
-            with("frames_default = 81", "frames_default = 85").unwrap_err().path(),
+            with("frames_default = 81", "frames_default = 85")
+                .unwrap_err()
+                .path(),
             Some("variants[0].serving.frames_default")
         );
         assert_eq!(
@@ -1001,9 +1026,12 @@ steps = 4
             Some("variants[0].serving.hd.short_edge")
         );
         assert_eq!(
-            with("public_names = [\"Demo-Turbo\"]", "public_names = [\"Demo-Turbo\", \"Demo-Turbo\"]")
-                .unwrap_err()
-                .path(),
+            with(
+                "public_names = [\"Demo-Turbo\"]",
+                "public_names = [\"Demo-Turbo\", \"Demo-Turbo\"]"
+            )
+            .unwrap_err()
+            .path(),
             Some("variants[0].public_names")
         );
         assert!(matches!(

@@ -241,13 +241,12 @@ pub fn build_engine_with_clock(
     EngineService::start(cfg, backends).map_err(|e| anyhow!("starting the engine: {e}"))
 }
 
-/// The CUDA catalog models for `[[models]]`: each entry resolves against
-/// the catalog (`recipe` = tier alias, catalog id or H3 recipe name, empty =
-/// the family's turbo tier); weights default under `FV_WEIGHTS`
-/// (`/workspace/weights`) and the tiny decoders under `FV_TAE_DIR`
-/// (`$FV_WEIGHTS/auxiliary/tae`). Also checks that the set can share one
-/// process (process-wide technique settings). Built without `cuda` so the
-/// shipped configs are tested on CPU.
+/// The models of `[[models]]`: each entry names a variant of the family
+/// manifests (`families/*.toml`: its id, a served name or a tier alias),
+/// resolved under `FV_WEIGHTS` (`/workspace/weights`) with the tiny decoders
+/// under `FV_TAE_DIR` (`$FV_WEIGHTS/auxiliary/tae`). Also checks that the set
+/// can share one process (process-wide technique settings). Built without
+/// `cuda` so the shipped configs are tested on CPU.
 pub fn cuda_models(c: &Config) -> anyhow::Result<Vec<fastvideo_engine_service::cuda::CudaModel>> {
     use fastvideo_engine_service::cuda::ProcessPlan;
     let models = catalog_models(&c.models)?;
@@ -260,8 +259,8 @@ pub fn cuda_models(c: &Config) -> anyhow::Result<Vec<fastvideo_engine_service::c
     Ok(models)
 }
 
-/// `[[models]]`-style entries resolved against the CUDA catalog (CPU-only:
-/// no weights are read).
+/// `[[models]]`-style entries resolved against the family manifests
+/// (CPU-only: no weights are read).
 pub fn catalog_models(
     entries: &[crate::config::ModelCfg],
 ) -> anyhow::Result<Vec<fastvideo_engine_service::cuda::CudaModel>> {
@@ -291,9 +290,8 @@ pub fn catalog_models(
             model_from_config(
                 &layout,
                 &ModelEntryCfg {
-                    id: m.id.clone(),
-                    family: m.family.clone(),
-                    recipe: m.recipe.clone().unwrap_or_default(),
+                    id: m.served_id().to_owned(),
+                    variant: m.variant.clone(),
                     weights: m.weights.as_ref().map(Into::into),
                     resident: m.resident,
                     served_names: m.served_names.clone(),
@@ -432,7 +430,6 @@ impl App {
         };
         let gate = ServiceGate::new(
             engine,
-            config.aliases.clone(),
             OutputPolicy {
                 placeholder: config.engine.backend == EngineBackendKind::Fake
                     && config.engine.fake.placeholder_output,
