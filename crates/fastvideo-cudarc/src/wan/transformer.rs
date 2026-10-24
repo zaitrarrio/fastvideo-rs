@@ -1212,7 +1212,7 @@ enum TaylorPhase {
 }
 
 fn env_usize_alt(primary: &str, fallback: &str, default: usize) -> usize {
-    std::env::var(primary)
+    fastvideo_models::settings::env_var(primary)
         .ok()
         .and_then(|s| s.parse().ok())
         .or_else(|| std::env::var(fallback).ok().and_then(|s| s.parse().ok()))
@@ -1337,14 +1337,14 @@ fn predict_factors(factors: &[CudaTensor], step_offset: isize) -> Result<CudaTen
 }
 
 fn env_usize(name: &str, default: usize) -> usize {
-    std::env::var(name)
+    fastvideo_models::settings::env_var(name)
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(default)
 }
 
 fn env_f64(name: &str, default: f64) -> f64 {
-    std::env::var(name)
+    fastvideo_models::settings::env_var(name)
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(default)
@@ -1561,15 +1561,16 @@ impl WanTransformer3D {
     /// Install or clear Sol TeaCache for this denoise. `teacache` reads the
     /// published defaults (threshold 0.12, warmup 2, cooldown the last 2).
     pub fn configure_sol_teacache(&self, num_steps: usize) -> Result<()> {
-        let family = std::env::var("FASTVIDEO_WAN_SOL_CACHE").unwrap_or_default();
+        let family =
+            fastvideo_models::settings::env_var("FASTVIDEO_WAN_SOL_CACHE").unwrap_or_default();
         let family = family.trim().to_ascii_lowercase();
         let mut slot = self.sol_tea.lock().expect("sol tea");
         if family != "teacache" {
             *slot = None;
             return Ok(());
         }
-        let coefficients =
-            std::env::var("FASTVIDEO_WAN_TEACACHE_COEFFS").unwrap_or_else(|_| "1.0,0.0".into());
+        let coefficients = fastvideo_models::settings::env_var("FASTVIDEO_WAN_TEACACHE_COEFFS")
+            .unwrap_or_else(|_| "1.0,0.0".into());
         let coefficients: Vec<f64> = coefficients
             .split(',')
             .filter_map(|part| part.trim().parse().ok())
@@ -1680,14 +1681,15 @@ impl WanTransformer3D {
 
     /// Install or clear TaylorSeer lite. Off unless the cache family is `taylorseer`.
     pub fn configure_sol_taylor(&self, num_steps: usize) -> Result<()> {
-        let family = std::env::var("FASTVIDEO_WAN_SOL_CACHE").unwrap_or_default();
+        let family =
+            fastvideo_models::settings::env_var("FASTVIDEO_WAN_SOL_CACHE").unwrap_or_default();
         let family = family.trim().to_ascii_lowercase();
         let mut slot = self.sol_taylor.lock().expect("sol taylor");
         if family != "taylorseer" {
             *slot = None;
             return Ok(());
         }
-        let lite = std::env::var("FASTVIDEO_WAN_TAYLOR_LITE")
+        let lite = fastvideo_models::settings::env_var("FASTVIDEO_WAN_TAYLOR_LITE")
             .or_else(|_| std::env::var("WAN22_TAYLOR_LITE"))
             .unwrap_or_else(|_| "1".into());
         if matches!(lite.trim(), "0" | "false" | "off") {
@@ -1725,7 +1727,8 @@ impl WanTransformer3D {
 
     /// A14B EasyCache only. 5B / 14B keep the whole-stack controller.
     pub fn configure_a14b_cache(&self, num_steps: usize) -> Result<()> {
-        let family = std::env::var("FASTVIDEO_WAN_SOL_CACHE").unwrap_or_default();
+        let family =
+            fastvideo_models::settings::env_var("FASTVIDEO_WAN_SOL_CACHE").unwrap_or_default();
         let family = family.trim().to_ascii_lowercase();
         let mut slot = self.sol_a14b.lock().expect("sol a14b");
         if family != "easycache" || !self.cfg.is_moe() {
@@ -1769,12 +1772,12 @@ impl WanTransformer3D {
     }
 
     pub fn configure_attn_route(&self) {
-        let sol_value = std::env::var("FASTVIDEO_WAN_SOL_ATTN")
+        let sol_value = fastvideo_models::settings::env_var("FASTVIDEO_WAN_SOL_ATTN")
             .ok()
             .or_else(|| std::env::var("WAN22_SOL_ATTN").ok());
         let sol = sol_attn_requested(sol_value.as_deref());
         let pisa = pisa_requested(
-            std::env::var("FASTVIDEO_WAN_PISA")
+            fastvideo_models::settings::env_var("FASTVIDEO_WAN_PISA")
                 .ok()
                 .or_else(|| std::env::var("WAN22_PISA").ok())
                 .as_deref(),

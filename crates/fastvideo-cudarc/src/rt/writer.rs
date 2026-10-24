@@ -48,7 +48,7 @@ pub enum PngMode {
 impl PngMode {
     /// `FASTVIDEO_PNG`, default [`PngMode::Deferred`].
     pub fn from_env() -> Self {
-        match std::env::var("FASTVIDEO_PNG")
+        match fastvideo_models::settings::env_var("FASTVIDEO_PNG")
             .unwrap_or_default()
             .trim()
             .to_ascii_lowercase()
@@ -609,7 +609,7 @@ fn write_png(
 /// limit less its anonymous memory), else 8 GiB.
 fn buffer_budget() -> usize {
     const GIB: f64 = (1u64 << 30) as f64;
-    if let Some(g) = std::env::var("FASTVIDEO_PNG_BUFFER_GIB")
+    if let Some(g) = fastvideo_models::settings::env_var("FASTVIDEO_PNG_BUFFER_GIB")
         .ok()
         .and_then(|v| v.trim().parse::<f64>().ok())
     {

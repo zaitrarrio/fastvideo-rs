@@ -1244,7 +1244,7 @@ why = "no gate run"
         assert_eq!(e.path(), Some("workload.env"));
         let e = with(
             "seeds = [7]",
-            "seeds = [7]\nnote = \"FASTVIDEO_X\"\nenv = { FASTVIDEO_X = \"\" }",
+            "seeds = [7]\nnote = \"FASTVIDEO_TEST_X\"\nenv = { FASTVIDEO_TEST_X = \"\" }",
         )
         .unwrap_err();
         assert_eq!(e.path(), Some("workload.env"));

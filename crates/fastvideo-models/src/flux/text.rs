@@ -98,13 +98,13 @@ impl T5Config {
 
 pub fn flux1_dummy_text() -> bool {
     matches!(
-        std::env::var("FASTVIDEO_FLUX1_DUMMY_TEXT").as_deref(),
+        crate::settings::env_var("FASTVIDEO_FLUX1_DUMMY_TEXT").as_deref(),
         Ok("1") | Ok("true") | Ok("TRUE")
     )
 }
 
 pub fn flux1_t5_len(default: usize) -> usize {
-    std::env::var("FASTVIDEO_FLUX1_TEXT_LEN")
+    crate::settings::env_var("FASTVIDEO_FLUX1_TEXT_LEN")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(default)

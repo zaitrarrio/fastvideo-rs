@@ -12,51 +12,43 @@
 //! the environment variable first (unchanged behaviour), then the value the
 //! active technique profile installed for that name, then the default.
 
-use fastvideo_models::techniques::settings::var;
+use fastvideo_models::techniques::settings::{parse, var};
 
-/// Parse a boolean env flag that defaults to `true` when unset (`FASTVIDEO_RESIDENT`,
-/// `FASTVIDEO_BF16`, `FASTVIDEO_TF32`, `FASTVIDEO_TWO_STREAMS`, …): explicit
+// The parse rules live in `fastvideo_models::settings::parse`, the one
+// implementation the declarative settings table and its off-identity tests
+// check; these getters only add the layered read ([`var`]).
+
+/// A boolean flag ([`parse::flag`]). With `default = true`
+/// (`FASTVIDEO_RESIDENT`, `FASTVIDEO_BF16`, `FASTVIDEO_TF32`, ...): explicit
 /// `0` / `false` / `off` (case-insensitive, trimmed) turn it off, anything
-/// else (including unset) leaves it on.
+/// else (including unset) leaves it on. With `default = false`: `1` / `true`
+/// / `on` turn it on, anything else leaves it off.
 pub fn bool_flag(name: &str, default: bool) -> bool {
-    match var(name) {
-        Some(v) => {
-            let v = v.trim();
-            if default {
-                !(v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off"))
-            } else {
-                v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on")
-            }
-        }
-        None => default,
-    }
+    parse::flag(var(name).as_deref(), default)
 }
 
-/// Parse a `usize` env flag, falling back to `default` when unset or invalid.
+/// Parse an `f64` env flag (trimmed), falling back to `default` when unset or
+/// invalid ([`parse::f64_or`]).
 pub fn f64_flag(name: &str, default: f64) -> f64 {
-    var(name)
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(default)
+    parse::f64_or(var(name).as_deref(), default)
 }
 
+/// Parse a `usize` env flag (not trimmed), falling back to `default` when
+/// unset or invalid ([`parse::usize_or`]).
 pub fn usize_flag(name: &str, default: usize) -> usize {
-    var(name)
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(default)
+    parse::usize_or(var(name).as_deref(), default)
 }
 
-/// Parse a `f32` env flag, falling back to `default` when unset or invalid.
+/// Parse a `f32` env flag (not trimmed), falling back to `default` when unset
+/// or invalid ([`parse::f32_or`]).
 pub fn f32_flag(name: &str, default: f32) -> f32 {
-    var(name)
-        .and_then(|s| s.parse::<f32>().ok())
-        .unwrap_or(default)
+    parse::f32_or(var(name).as_deref(), default)
 }
 
-/// Read a string env flag, lower-cased, falling back to `default` when unset.
+/// Read a string env flag, lower-cased, falling back to `default` when unset
+/// ([`parse::lower_or`]).
 pub fn string_flag(name: &str, default: &'static str) -> String {
-    var(name)
-        .unwrap_or_else(|| default.to_string())
-        .to_ascii_lowercase()
+    parse::lower_or(var(name).as_deref(), default)
 }
 
 /// A once-computed `bool` cache with a relaxed-atomic fast path.

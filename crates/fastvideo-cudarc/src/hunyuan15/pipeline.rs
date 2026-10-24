@@ -176,12 +176,14 @@ impl Hunyuan15Pipeline {
         let pad_c = c_in.saturating_sub(c_out);
 
         if fastvideo_models::hunyuan15::sol::teacache_requested(
-            std::env::var("FASTVIDEO_HUNYUAN15_SOL").ok().as_deref(),
+            fastvideo_models::settings::env_var("FASTVIDEO_HUNYUAN15_SOL")
+                .ok()
+                .as_deref(),
         ) {
             crate::rt::log::info(format_args!("{}", fastvideo_models::hunyuan15::sol::GAP));
         }
         if fastvideo_models::hunyuan15::sol::official_requested(
-            std::env::var("FASTVIDEO_HUNYUAN15_OFFICIAL")
+            fastvideo_models::settings::env_var("FASTVIDEO_HUNYUAN15_OFFICIAL")
                 .ok()
                 .as_deref(),
         ) {

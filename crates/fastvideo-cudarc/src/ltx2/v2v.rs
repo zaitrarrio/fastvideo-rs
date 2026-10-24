@@ -583,7 +583,7 @@ fn pad_rows(x: CudaTensor, pad: usize, at: ExtendAt) -> Result<CudaTensor> {
 /// (`FASTVIDEO_INJECT_COND`, default on).
 fn inject(name: &str, t: CudaTensor) -> Result<CudaTensor> {
     if crate::rt::inject::enabled()
-        && std::env::var("FASTVIDEO_INJECT_COND").map_or(true, |v| v != "0")
+        && fastvideo_models::settings::env_var("FASTVIDEO_INJECT_COND").map_or(true, |v| v != "0")
     {
         if let Some(v) = crate::rt::inject::load_numel(name, t.numel())? {
             crate::rt::log::info(format_args!("inject: {name} (reference)"));
@@ -743,7 +743,8 @@ pub fn prepare(
             let wname = "v2v_audio_wave";
             crate::rt::dump::host(wname, &[wave.channels, wave.samples()], &wave.planar)?;
             if crate::rt::inject::enabled()
-                && std::env::var("FASTVIDEO_INJECT_PIXELS").map_or(true, |v| v != "0")
+                && fastvideo_models::settings::env_var("FASTVIDEO_INJECT_PIXELS")
+                    .map_or(true, |v| v != "0")
             {
                 if let Some(v) = crate::rt::inject::load_numel(wname, wave.planar.len())? {
                     crate::rt::log::info(format_args!("inject: {wname} (reference)"));

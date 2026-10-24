@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use super::FluxTransformerConfig;
 
 pub fn local_flux1(repo: &str) -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("FASTVIDEO_WEIGHTS") {
+    if let Ok(path) = crate::settings::env_var("FASTVIDEO_WEIGHTS") {
         let p = PathBuf::from(path);
         if looks_like_flux1(&p) {
             return Some(p);

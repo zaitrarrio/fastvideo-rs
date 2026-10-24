@@ -66,7 +66,7 @@ pub fn nvrtc_arch(sm_major: i32, sm_minor: i32) -> Option<&'static str> {
 pub fn sdpa_query_chunk(sm_major: i32) -> usize {
     static CACHE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *CACHE.get_or_init(|| {
-        if let Ok(v) = std::env::var("FASTVIDEO_SDPA_CHUNK") {
+        if let Ok(v) = fastvideo_models::settings::env_var("FASTVIDEO_SDPA_CHUNK") {
             if let Ok(n) = v.parse::<usize>() {
                 return n.max(64);
             }

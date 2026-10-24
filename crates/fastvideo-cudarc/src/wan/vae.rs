@@ -1209,7 +1209,7 @@ mod tests {
         let vae = AutoencoderKlWan::zeros(cfg);
         let latent_frames = 5;
         let z = CudaTensor::zeros(&[1, 4, latent_frames, 2, 2]);
-        let prev = std::env::var("FASTVIDEO_VAE_CHUNK").ok();
+        let prev = fastvideo_models::settings::env_var("FASTVIDEO_VAE_CHUNK").ok();
 
         let mut shapes = Vec::new();
         for chunk in ["1", "2", "4", "16"] {

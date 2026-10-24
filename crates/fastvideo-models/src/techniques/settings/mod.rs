@@ -19,11 +19,44 @@
 //! parsed flags on first use, so a later install would be ignored by some
 //! and seen by others; [`install`] refuses it instead.
 
+//!
+//! # The declarative list
+//!
+//! Every `FASTVIDEO_*` name the workspace reads is one row of [`SETTINGS`]
+//! ([`table`]): its reader, type and parse rule, default, family, seam, read
+//! timing and doc string. `docs/scope.md`'s settings table is rendered from
+//! it ([`render_markdown`]) and a test fails when the committed doc drifts. A
+//! second test scans the workspace sources and fails on any read of a
+//! `FASTVIDEO_*` name outside this module (`std::env::var("FASTVIDEO_...")`,
+//! a `const` name passed to `std::env::var`, a lookup closure) and on any
+//! `"FASTVIDEO_..."` literal that is not a row (`docs/adr/0010-settings-layer.md`).
+//!
+//! Two readers, chosen per row ([`Reader`]):
+//!
+//! * [`var`] / [`is_set`] (`Reader::Layered`): the environment, then the
+//!   technique profile's table, then the caller's default (above);
+//! * [`env_var`] / [`env_var_os`] (`Reader::Env`): the process environment
+//!   only, exactly `std::env::var` / `std::env::var_os`. These are the names
+//!   that were read with `std::env::var` before the table existed; a profile's
+//!   `[env]` entry for one of them has no effect, as before. Moving a name to
+//!   the layered reader is a behaviour change (a profile could then set it)
+//!   and gets its own byte-identity cell.
+
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use super::profile::Profile;
+
+mod doc;
+pub mod parse;
+pub mod table;
+#[cfg(test)]
+mod workspace_check;
+
+pub use doc::{render_markdown, DOC_BEGIN, DOC_END};
+pub use table::{lookup, DefaultValue, Family, Parse, Reader, Setting, Timing, SETTINGS};
 
 /// Env var naming a technique profile to load when no binary installed one.
 pub const PROFILE_ENV: &str = "FASTVIDEO_TECHNIQUES";
@@ -189,6 +222,17 @@ pub fn is_set(name: &str) -> bool {
     std::env::var_os(name).is_some() || table_get(name).is_some()
 }
 
+/// A `FASTVIDEO_*` setting read from the process environment only
+/// (`Reader::Env` rows): exactly `std::env::var(name)`, read when called.
+pub fn env_var(name: &str) -> Result<String, std::env::VarError> {
+    std::env::var(name)
+}
+
+/// [`env_var`] as an `OsString`: exactly `std::env::var_os(name)`.
+pub fn env_var_os(name: &str) -> Option<OsString> {
+    std::env::var_os(name)
+}
+
 /// [`var`] against an explicit table instead of the global one (tests,
 /// dry runs).
 pub fn var_in(
@@ -206,12 +250,15 @@ mod tests {
     #[test]
     fn env_beats_profile_beats_default() {
         let mut s = Settings::default();
-        s.set("FASTVIDEO_X", "profile", "t").unwrap();
+        s.set("FASTVIDEO_TEST_X", "profile", "t").unwrap();
         let none = |_: &str| None;
         let env = |_: &str| Some("env".to_string());
-        assert_eq!(var_in(&s, &none, "FASTVIDEO_X").as_deref(), Some("profile"));
-        assert_eq!(var_in(&s, &env, "FASTVIDEO_X").as_deref(), Some("env"));
-        assert_eq!(var_in(&s, &none, "FASTVIDEO_Y"), None);
+        assert_eq!(
+            var_in(&s, &none, "FASTVIDEO_TEST_X").as_deref(),
+            Some("profile")
+        );
+        assert_eq!(var_in(&s, &env, "FASTVIDEO_TEST_X").as_deref(), Some("env"));
+        assert_eq!(var_in(&s, &none, "FASTVIDEO_TEST_Y"), None);
     }
 
     #[test]

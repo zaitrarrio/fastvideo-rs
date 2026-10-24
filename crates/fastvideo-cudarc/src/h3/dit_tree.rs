@@ -86,7 +86,7 @@ impl TreeMode {
     }
 
     pub fn from_env() -> std::result::Result<Self, String> {
-        match std::env::var(ENV) {
+        match fastvideo_models::settings::env_var(ENV) {
             Ok(v) => Self::parse(&v),
             Err(_) => Ok(Self::Auto),
         }
@@ -289,7 +289,7 @@ pub fn select(
     let mode = TreeMode::from_env().map_err(msg)?;
     let quant = want.map_or("?", |w| w.quant.as_str());
     let recipe = want.map_or("?", |w| w.recipe.as_str());
-    let dir = match std::env::var(DIR_ENV) {
+    let dir = match fastvideo_models::settings::env_var(DIR_ENV) {
         Ok(d) if !d.trim().is_empty() => PathBuf::from(d.trim()),
         _ => root.join(format!("transformer_prequant_{recipe}_{quant}")),
     };

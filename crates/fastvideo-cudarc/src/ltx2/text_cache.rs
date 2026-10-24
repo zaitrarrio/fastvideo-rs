@@ -141,7 +141,9 @@ pub fn default_dir() -> Option<PathBuf> {
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
     };
-    let root = var("FASTVIDEO_CACHE")
+    let root = fastvideo_models::settings::env_var_os("FASTVIDEO_CACHE")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
         .or_else(|| var("XDG_CACHE_HOME").map(|p| p.join("fastvideo")))
         .or_else(|| var("HOME").map(|p| p.join(".cache").join("fastvideo")))?;
     Some(root.join("ltx2-text"))

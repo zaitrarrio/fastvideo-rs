@@ -349,7 +349,7 @@ pub fn device_budget() -> Option<u64> {
         return v;
     }
     static ENV: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
-    *ENV.get_or_init(|| match std::env::var(BUDGET_ENV) {
+    *ENV.get_or_init(|| match fastvideo_models::settings::env_var(BUDGET_ENV) {
         Ok(v) => parse_budget_gib(&v).unwrap_or_else(|e| {
             super::log::info(format_args!("{e}; no budget"));
             None
