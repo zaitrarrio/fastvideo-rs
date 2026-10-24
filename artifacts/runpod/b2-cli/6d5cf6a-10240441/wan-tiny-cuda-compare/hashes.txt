@@ -1,0 +1,7 @@
+== base (wan-tiny-cuda)
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  ./frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  ./frame-001.png
+== head (wan-tiny-cuda)
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  ./frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  ./frame-001.png
+== diff

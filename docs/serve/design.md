@@ -229,7 +229,7 @@ Rules:
 - The engine service drives `fastvideo-cudarc` pipelines directly
   (`H3Pipeline::load/generate`, `Ltx2Pipeline::load/generate`,
   `WanPipeline::load/generate_to`). It bypasses `fastvideo-core`'s per-call
-  `VideoGenerator`/`generate_av`, because those reload per call
+  `VideoGenerator` and the per-family runs (`crates/fastvideo-core/src/family/<fam>.rs`; `generate_av` before plan B2), because those reload per call
   (minimax-fastvideo §3.5 #7). One side effect: Wan per-request `fps` and
   `flow_shift` come for free, since `GenerateConfig` has both.
 - Workspace lints still apply (`unsafe_code = "forbid"`). FFI stays inside
@@ -2294,7 +2294,7 @@ additions and readings; everything is re-exported from the crate root.
 
 | WP | Owns | Order | Acceptance |
 |---|---|---|---|
-| **E5 LTX-2.5 I2V** | `ltx2/{i2v_encode.rs,pipeline.rs}`, the preset entry in `crates/fastvideo-core/src/registry.rs` | E4 → E5 | First-frame I2V on the 2.5 distilled two-stage; CLIP frame-0 similarity ≥ the 2.3 baseline; caps add `I2V` |
+| **E5 LTX-2.5 I2V** | `ltx2/{i2v_encode.rs,pipeline.rs}`, the preset entry in `crates/fastvideo-core/src/family/ltx2.rs` (`registry.rs` before plan B2) | E4 → E5 | First-frame I2V on the 2.5 distilled two-stage; CLIP frame-0 similarity ≥ the 2.3 baseline; caps add `I2V` |
 | **E9 LTX last-frame keyframes** | `ltx2/pipeline.rs` | E5 → E9 | `last_frame_uri` interpolation; `Keyframes` in caps |
 | **E10 H3 target-audio conditioning** | `h3/{pipeline.rs,audio_vae.rs}` | after E2 | Research first: upstream FL2VA target-audio semantics. Then `target_audio_url` and director `audio_url` support |
 | **E11 H3 fl2va + ref2va co-residency** | `h3/pipeline.rs` (load options) | after E10 | Both DiTs served by one process within the memory budget, or a documented swap cost; caps advertise `Ref2V`. **Built**: catalog `h3-ref2v-max` (base, 49 forwards) and `h3-ref2v-turbo` (Sol-H3 Ref2VA, 4 forwards), weights `h3-ref2va` on both volumes; docs/ports/h3-ref2v.md |

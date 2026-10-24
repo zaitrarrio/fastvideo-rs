@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "FastVideo-rs pipeline core: registry, sampling, VideoGenerator."
+description = "FastVideo-rs pipeline core: the VideoFamily list, the common Request, sampling, VideoGenerator."
 
 [dependencies]
 thiserror.workspace = true
@@ -12,6 +12,7 @@ fastvideo-models.workspace = true
 fastvideo-loader.workspace = true
 fastvideo-ops.workspace = true
 fastvideo-cudarc.workspace = true
+fastvideo-protocol.workspace = true
 serde_json.workspace = true
 
 [features]

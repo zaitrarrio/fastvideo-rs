@@ -1,9 +1,11 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+use fastvideo_cudarc::hooks::Hooks;
 
 use crate::backend_kind::BackendKind;
 use crate::error::{FastVideoError, Result};
-use crate::registry::{resolve_wan, SamplingAlgorithm, WanModelDefinition};
+use crate::family::wan::{resolve_wan, SamplingAlgorithm, WanModelDefinition};
 use crate::sampling::{
     pipeline_defaults, sampling_from_definition, PipelineDefaults, SamplingParam,
 };
@@ -150,13 +152,23 @@ impl VideoGenerator {
 
     /// Generate video frames via cudarc CUDA.
     pub fn generate_video(&self, prompt: &str) -> Result<GenerateOutput> {
+        self.generate_video_with_hooks(prompt, Hooks::NONE)
+    }
+
+    /// [`Self::generate_video`] with cancellation and progress
+    /// ([`Hooks::NONE`] is exactly the un-hooked run).
+    pub fn generate_video_with_hooks(
+        &self,
+        prompt: &str,
+        hooks: Hooks<'_>,
+    ) -> Result<GenerateOutput> {
         if self.backend != BackendKind::Cudarc {
             return Err(FastVideoError::Message(format!(
                 "backend {} is removed; use --backend cudarc",
                 self.backend
             )));
         }
-        Ok(self.run_cudarc(prompt)?.0)
+        Ok(self.run_cudarc(prompt, hooks)?.0)
     }
 
     /// Local Diffusers root: `--weights`, `FASTVIDEO_WEIGHTS`, or the HF hub snapshot.
@@ -181,7 +193,7 @@ impl VideoGenerator {
     }
 
     /// Returns `(output, load_ms, generate_ms)`.
-    fn run_cudarc(&self, prompt: &str) -> Result<(GenerateOutput, u128, u128)> {
+    fn run_cudarc(&self, prompt: &str, hooks: Hooks<'_>) -> Result<(GenerateOutput, u128, u128)> {
         let is_dmd = matches!(
             self.definition.sampling,
             SamplingAlgorithm::Dmd | SamplingAlgorithm::CausalDmd
@@ -264,10 +276,8 @@ impl VideoGenerator {
             gen_cfg.is_dmd = true;
             gen_cfg.flow_shift = 8.0;
             let t_gen = Instant::now();
-            let mut pipe = fastvideo_cudarc::WanPipeline::tiny();
-            let frames = pipe
-                .generate(&gen_cfg)
-                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+            let pipe = fastvideo_cudarc::WanPipeline::tiny();
+            let frames = run_wan(&pipe, &gen_cfg, hooks)?;
             let generate_ms = t_gen.elapsed().as_millis();
             return Ok((
                 GenerateOutput {
@@ -292,13 +302,11 @@ impl VideoGenerator {
         }
         gen_cfg.tokenizer_path = Some(tok.to_string_lossy().into_owned());
         let t_load = Instant::now();
-        let mut pipe = fastvideo_cudarc::WanPipeline::load(&root, self.definition.preset)
+        let pipe = fastvideo_cudarc::WanPipeline::load(&root, self.definition.preset)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
         let load_ms = t_load.elapsed().as_millis();
         let t_gen = Instant::now();
-        let frames = pipe
-            .generate(&gen_cfg)
-            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let frames = run_wan(&pipe, &gen_cfg, hooks)?;
         let generate_ms = t_gen.elapsed().as_millis();
         Ok((
             GenerateOutput {
@@ -312,7 +320,7 @@ impl VideoGenerator {
 
     /// Split weight materialization from sampling.
     pub fn bench_video(&self, prompt: &str) -> Result<(GenerateOutput, BenchStats)> {
-        let (out, load_ms, generate_ms) = self.run_cudarc(prompt)?;
+        let (out, load_ms, generate_ms) = self.run_cudarc(prompt, Hooks::NONE)?;
         Ok((
             out.clone(),
             BenchStats {
@@ -379,6 +387,18 @@ impl VideoGenerator {
                     .unwrap_or(false)
         })
     }
+}
+
+/// One clip into `cfg.output_dir` (exactly `WanPipeline::generate` with
+/// `hooks`); returns the PNG frame paths.
+fn run_wan(
+    pipe: &fastvideo_cudarc::WanPipeline,
+    cfg: &fastvideo_cudarc::GenerateConfig,
+    hooks: Hooks<'_>,
+) -> Result<Vec<String>> {
+    pipe.generate_to_with_hooks(cfg, Path::new(&cfg.output_dir), cfg.save_video, hooks)
+        .map(|out| out.frame_paths)
+        .map_err(|e| FastVideoError::Message(e.to_string()))
 }
 
 /// The Wan UMT5 prompt cache: `FASTVIDEO_WAN_TEXT_CACHE=<dir>`, `off` (or
