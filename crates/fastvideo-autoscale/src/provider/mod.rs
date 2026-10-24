@@ -1,5 +1,12 @@
 //! Where workers come from.
 //!
+//! This is the pool-steering interface (observe a pool, apply a scaling
+//! decision). The instance lifecycle every provider implements (offers,
+//! create, status, logs, destroy, account) is `fastvideo_deploy::provider::
+//! Provider` (docs/adr/0018-fv-deploy.md §2), which this crate builds on: the
+//! Runpod API constants and helpers come from there, and the pod / endpoint
+//! implementations here move onto it in a later slice of plan C3.
+//!
 //! - [`runpod`] (feature `runpod`): a Runpod serverless endpoint steered
 //!   through `workersMin`/`workersMax`/scaler/idle timeout, and Runpod pods
 //!   created from a template with GPU-type and region fallback.

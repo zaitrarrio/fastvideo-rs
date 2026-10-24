@@ -22,6 +22,9 @@ reqwest = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 # D1 client for the leader lease row (fastvideo-serve-kit::d1).
 fastvideo-serve-kit.workspace = true
+# The provider layer it builds on (docs/adr/0018-fv-deploy.md §2): the Runpod
+# API constants and helpers shared with fv-deploy's `Provider` trait.
+fastvideo-deploy.workspace = true
 
 [dev-dependencies]
 fastvideo-serve-kit = { workspace = true, features = ["d1-mock"] }

@@ -1222,3 +1222,53 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0014-fv-boot.md (§2, §3.2, §4, §5, §6, §8)
 - Verification: `cargo test --locked -p fastvideo-deploy --features boot` (a real process stopped through the shell builtin, the legacy path, the kinds, the reports), `scripts/ci/test_tools_release.sh` (the `prebuilt.sh contexts` cases), `prebuilt.sh fetch` against tools-v0.1.37, `fv-boot-protocol.test.ts` (a refused config is a crash loop)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-deploy
+- Trigger: plan C3 asks for one `Provider` trait promoted from `fastvideo-autoscale` (review §7.4) and the money guards written once; C3a is Runpod plus everything shared
+- Options: the trait in `fastvideo-autoscale` with `fastvideo-deploy` depending on it; the trait in `fastvideo-deploy` with the autoscaler depending on it; a new crate; async or blocking
+- Decision: the trait in `fastvideo-deploy::provider` (offers / payload / create / status / logs / destroy / account / reach), blocking on fv-boot's `Http` / `Clock` seams; `fastvideo-autoscale` depends on `fastvideo-deploy` (shared Runpod constants and `parse_runpod_time`), its pool-steering `Provider` stays until its pod / endpoint providers move onto the new trait; `runpod::{Pod, Serverless}` implemented; the binary `fv-deploy` behind feature `deploy` (clap, already in the lockfile)
+- Reason: the instance lifecycle is the lower layer (fv-deploy, fv-lab, fv-control's schema and the autoscaler consume it); every caller is sequential, and blocking seams run the whole lifecycle in tests in milliseconds
+- Reversibility: cheap (no format published; the autoscaler's API kept by re-export)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0018-fv-deploy.md §2
+- Verification: `cargo test --locked -p fastvideo-deploy --all-features`, `cargo test --locked -p fastvideo-autoscale` (and `--all-features`), workspace clippy `-D warnings`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-deploy-launch
+- Trigger: C3 needs a provider-neutral `Launch` / `Instance` schema that fv-control can generate types from (C3c), built from the deployment data of C1
+- Options: provider payloads straight from the presets; a `Launch` type with a schema, turned into payloads by each provider
+- Decision: `Launch` (schema 1), `Instance`, `InstanceState`, `Offer`, `Account` (serde + schemars, `deny_unknown_fields`) with JSON Schemas in `crates/fastvideo-deploy/schemas/*.v1.json` under a drift test; a launch = a `deploy/deploy.toml` preset (image variant, config baked as `--config /etc/fv/…` or inline `FV_WORKER_TOML_B64`, disk, variants and their trees) plus a provider section (region `eu` → `EU-RO-1`, volume `bz0ofkfx45`, RTX PRO 6000; channel; guards); fv-boot as the entrypoint; volume weights only, a preset whose trees are not all on the EU volume is refused; never a secret value in a launch (Runpod secret references, the run key's hash)
+- Reason: one schema for the CLI and fv-control; the presets stay the single source (ADR-0011)
+- Reversibility: cheap until C3c generates TS from the schema; then a versioned schema change
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0018-fv-deploy.md §3
+- Verification: `tests/schema.rs`, `tests/payload_goldens.rs` (`every_preset_builds_or_is_refused_for_its_trees`, `wrong_family_unknown_preset_and_us_are_refused`)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-deploy-guards
+- Trigger: the price check, balance floor, wall-clock backstop, readiness wait and EU-only rule were repeated in three scripts, fv-control and the autoscaler, with different numbers
+- Options: keep them per tool; one implementation in the lifecycle over the trait
+- Decision: written once (`guard.rs`, `lifecycle.rs`): region guard (Runpod GPU instances only on `bz0ofkfx45` in `EU-RO-1`; the US volume and region refused), balance floor before every create (default and minimum $8), price cap on the quote before the create and on the billed price after (default $2.50/hr, a guard choice), the env guard (the provider key never in a launch), the detached backstop (this binary as `fv-deploy backstop` in its own process group, SIGHUP ignored, key only in its env, early exit when the instance is gone), readiness `/ping` with replace after 600 s and at most 3 cycles (the owner's rule), delete on failure / smoke failure / SIGINT unless `--keep`; a local TSV ledger (D1 is C3d); the in-pod watchdog not used (it would put the account key in the pod's env: owner decision)
+- Reason: one tested set of rules for every provider; the backstop survives the CLI as the scripts' `nohup … curl -X DELETE` did
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0018-fv-deploy.md §5
+- Verification: `lifecycle/tests.rs` (provider-neutral fake), `provider/tests.rs` (fake Runpod), `tests/fv_deploy_bin.rs` (the real detached backstop deletes on a local fake Runpod; `up --yes` below the floor creates nothing)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-deploy-goldens
+- Trigger: C3a must prove its Runpod payloads equal what the scripts send before any script is retired
+- Options: hand-written expected JSON; the scripts' own `plan` output as the fixture
+- Decision: `scripts/serve/tests/fv-deploy-goldens.sh` runs `runpod-pod.sh plan` and `runpod-endpoint.sh plan` offline (a fake `curl` answers the volume lookup only) into `crates/fastvideo-deploy/fixtures/deploy/*.json`; `tests/payload_goldens.rs` asserts the Rust bodies equal them, and that a preset pod differs only in name, fv-boot entrypoint, 40 GB disk, `FV_WEIGHTS_SOURCE` and `FV_RELEASE_CHANNEL`; `control.yml` runs the script with `--check`; no script is deleted until the coordinator's live gate (ADR-0018 §6 lists which and when)
+- Reason: the fixture is the script's behaviour, not a copy of it
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0018-fv-deploy.md §4, §6
+- Verification: `bash scripts/serve/tests/fv-deploy-goldens.sh --check`, `cargo test --locked -p fastvideo-deploy --test payload_goldens`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-deploy-review
+- Trigger: the independent review of PR #169 found leak and guard-bypass paths before the live run (a billed-over-cap pod deleted before its backstop existed; a lost create answer treated as "no instance"; a failed arm or replace-delete followed by more creates; `down <endpoint>` deleting nothing; a string `costPerHr`; the floor not projected over the cap; serverless prices unchecked; the backstop trusting a spawn and a single "gone" reading; interrupts not reaching the smoke; no upper bounds; CI not building `deploy`)
+- Options: fix each in the lifecycle and providers with a test; defer to C3b
+- Decision: backstop armed (with an `armed` file handshake, 15 s) right after every create, before the billed check; deletes retried 3 × 5 s, the ledger says deleted only on success, a failed delete stops `up`; a create error other than 4xx / no capacity stops the fallback and sweeps by the run's unique name, and every exit of `up` sweeps it (but a `--keep` instance); a missing / unreadable billed price fails the cap (numbers and numeric strings accepted); the floor holds over the cap (`balance − (quote + spend) × cap_s/3600 ≥ floor`); serverless `workers_max > 1` refused (no serverless quote: a documented gap); the backstop stands down only on two 404 readings ≥ 60 s apart; `down` needs `--kind` for an unrecorded bare id and infers serverless from `/`; interrupts polled in the smoke and queue calls, a second signal exits; `cap_s ≤ 4 h`, `ready_cycles ≤ 3`, `ready_timeout_s ≤ 600` unless `--force-guards`, every create counts against the cycles; CI builds and tests `--features deploy` (check.sh, coverage.sh) and the goldens' path filter covers what the scripts source
+- Reason: no path may leave a billed instance without a backstop or create more after a delete failed; the floor rule is "would drop", not "is"
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0018-fv-deploy.md §2, §5
+- Verification: the tests named in ADR-0018 "Consequences"; `cargo test --locked -p fastvideo-deploy --all-features`

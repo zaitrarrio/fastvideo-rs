@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Account",
+  "description": "The account, for the balance floor.",
+  "type": "object",
+  "properties": {
+    "balance_usd": {
+      "type": "number",
+      "format": "double"
+    },
+    "provider": {
+      "$ref": "#/$defs/ProviderKind"
+    },
+    "spend_per_hr_usd": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "provider",
+    "balance_usd"
+  ],
+  "$defs": {
+    "ProviderKind": {
+      "description": "Which provider, and which kind of instance on it. Later slices add\n`vast` and `gcp` (plan C3b).",
+      "oneOf": [
+        {
+          "description": "A Runpod GPU pod (REST v1 `POST /pods`).",
+          "type": "string",
+          "const": "runpod-pod"
+        },
+        {
+          "description": "A Runpod serverless queue endpoint (REST v1 `POST /templates` +\n`POST /endpoints`).",
+          "type": "string",
+          "const": "runpod-serverless"
+        }
+      ]
+    }
+  }
+}

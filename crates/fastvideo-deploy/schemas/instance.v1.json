@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Instance",
+  "description": "A created instance.",
+  "type": "object",
+  "properties": {
+    "created_at": {
+      "description": "Unix seconds (fv-deploy's clock when it created it).",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double"
+    },
+    "data_center": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "gpu": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "$ref": "#/$defs/InstanceId"
+    },
+    "name": {
+      "type": "string"
+    },
+    "provider": {
+      "$ref": "#/$defs/ProviderKind"
+    },
+    "state": {
+      "$ref": "#/$defs/InstanceState"
+    },
+    "url": {
+      "description": "The instance's HTTP base (a pod's `https://<id>-8000.proxy.runpod.net`;\na serverless endpoint's queue API base).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "usd_per_hr": {
+      "description": "Billed $/hr when the provider says.",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "provider",
+    "name",
+    "state"
+  ],
+  "$defs": {
+    "InstanceId": {
+      "description": "A provider's instance id (a Runpod pod id; a serverless endpoint id,\n`<endpoint>/<template>` when fv-deploy created the template too).",
+      "type": "string"
+    },
+    "InstanceState": {
+      "description": "What the provider says about an instance (readiness is not the\nprovider's: it is the instance's own `/ping`, `crate::provider::Probe`).",
+      "oneOf": [
+        {
+          "description": "Created; no container running yet.",
+          "type": "string",
+          "const": "pending"
+        },
+        {
+          "description": "The container (or the endpoint) is up.",
+          "type": "string",
+          "const": "running"
+        },
+        {
+          "description": "Stopped; it still exists (and may still bill its disk).",
+          "type": "string",
+          "const": "exited"
+        },
+        {
+          "description": "Deleted, or unknown to the provider.",
+          "type": "string",
+          "const": "terminated"
+        },
+        {
+          "description": "A provider state fv-deploy does not map.",
+          "type": "string",
+          "const": "unknown"
+        }
+      ]
+    },
+    "ProviderKind": {
+      "description": "Which provider, and which kind of instance on it. Later slices add\n`vast` and `gcp` (plan C3b).",
+      "oneOf": [
+        {
+          "description": "A Runpod GPU pod (REST v1 `POST /pods`).",
+          "type": "string",
+          "const": "runpod-pod"
+        },
+        {
+          "description": "A Runpod serverless queue endpoint (REST v1 `POST /templates` +\n`POST /endpoints`).",
+          "type": "string",
+          "const": "runpod-serverless"
+        }
+      ]
+    }
+  }
+}

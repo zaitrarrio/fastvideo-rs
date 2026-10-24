@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "fv-serve deploy: fv-boot (the serve containers' boot), Runpod queue worker, RUNPOD_*/VAST_* environment discovery, Vast forwarder assets."
+description = "fv-serve deploy: fv-deploy (the Provider trait, Launch schema, money guards and lifecycle), fv-boot (the serve containers' boot), Runpod queue worker, RUNPOD_*/VAST_* environment discovery, Vast forwarder assets."
 
 [dependencies]
 async-trait.workspace = true
@@ -18,8 +18,14 @@ tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "net"] }
 tower = { workspace = true, features = ["util"] }
 tracing.workspace = true
 url.workspace = true
+# fv-deploy (docs/adr/0018-fv-deploy.md): a Launch is built from deploy/deploy.toml
+# and families/*.toml; its types export a JSON Schema.
+fastvideo-manifest = { workspace = true, features = ["fs"] }
+schemars.workspace = true
 
 reqwest = { workspace = true, optional = true }
+# The fv-deploy binary's command line (feature `deploy`).
+clap = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
@@ -34,10 +40,19 @@ runpod = ["dep:reqwest"]
 # (reports, aux files, cloudflared, the watchdog) over reqwest. The `boot`
 # module itself always builds; only the binary needs this.
 boot = ["runpod"]
+# fv-deploy (docs/adr/0018-fv-deploy.md): the binary (its command line, the
+# reqwest client of `boot`, SIGINT / SIGHUP handling). The library half
+# (`provider`, `launch`, `guard`, `lifecycle`) always builds and is tested on
+# the HTTP / clock / process seams without it.
+deploy = ["boot", "dep:clap", "tokio/signal", "tokio/rt-multi-thread"]
 
 [[bin]]
 name = "fv-boot"
 required-features = ["boot"]
+
+[[bin]]
+name = "fv-deploy"
+required-features = ["deploy"]
 
 [lints]
 workspace = true
