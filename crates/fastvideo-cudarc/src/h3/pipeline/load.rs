@@ -155,8 +155,9 @@ pub struct H3LoadPlan {
     pub teacache: Option<TeaCache>,
     /// The runtime's block fusions under bf16 activations, as the snapshot
     /// sets them: `FASTVIDEO_H3_FUSE` and, with it, `FASTVIDEO_H3_GLUE`
-    /// (`crate::h3::fused16`).
-    pub kernel_fusions: (bool, bool),
+    /// (`crate::h3::fused16`). The fuse stage installs it on the DiT, whose
+    /// forwards run under it (`crate::rt::fuse::installed`, ADR-0022).
+    pub kernel_fusions: crate::rt::fuse::BlockFusion,
 }
 
 /// The planned DiT tensors' mappings and the decoders', opened ([`H3LoadPlan::open`]).
@@ -637,10 +638,7 @@ impl H3LoadPlan {
             adapter,
             skip_adaln,
             teacache,
-            kernel_fusions: {
-                let fuse = settings.bool_flag("FASTVIDEO_H3_FUSE", true);
-                (fuse, fuse && settings.bool_flag("FASTVIDEO_H3_GLUE", true))
-            },
+            kernel_fusions: crate::rt::fuse::BlockFusion::h3(settings),
         })
     }
 
@@ -845,7 +843,8 @@ impl H3LoadPlan {
             ),
             format!(
                 "fuse kernels: fused16={} glue={}",
-                self.kernel_fusions.0, self.kernel_fusions.1
+                self.kernel_fusions.on(crate::rt::fuse::Switch::H3),
+                self.kernel_fusions.on(crate::rt::fuse::Switch::H3Glue)
             ),
             format!("adaln projections: {}", if self.skip_adaln { "cached" } else { "read" }),
             format!("techniques: {}", self.techniques.describe()),
@@ -1386,6 +1385,10 @@ impl H3LoadPlan {
             }
             model.enable_teacache(state)?;
         }
+        // The block fusions this plan decided: the DiT's forwards run under
+        // them instead of the process-wide setting (ADR-0017, ADR-0022).
+        let mut model = model;
+        model.install_kernel_fusion(self.kernel_fusions);
         #[cfg(feature = "cuda")]
         if lora.is_some() {
             use crate::h3::transformer::lora_device;

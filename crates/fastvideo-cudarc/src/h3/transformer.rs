@@ -2875,6 +2875,9 @@ pub struct H3Transformer {
     sol_tea: Arc<Mutex<Option<H3TeaRuntime>>>,
     /// `FASTVIDEO_H3_QUANT`: the reference FP8 recipe on the block linears.
     quant: QuantMode,
+    /// The block fusions the load plan decided ([`Self::install_kernel_fusion`]);
+    /// `None`: the process-wide settings (a DiT built outside a plan).
+    kernel_fusion: Option<crate::rt::fuse::BlockFusion>,
 }
 
 struct H3TeaRuntime {
@@ -3118,6 +3121,7 @@ impl H3Transformer {
             table,
             has_gate: with_gate,
             sol_tea: Default::default(),
+            kernel_fusion: None,
             quant,
             cfg,
         })
@@ -3208,6 +3212,7 @@ impl H3Transformer {
             table,
             has_gate: with_gate,
             sol_tea: Default::default(),
+            kernel_fusion: None,
             quant,
             cfg,
         })
@@ -3253,6 +3258,12 @@ impl H3Transformer {
 
     pub fn sol_teacache_enabled(&self) -> bool {
         self.sol_tea.lock().expect("h3 sol tea").is_some()
+    }
+
+    /// Run every following forward under the block fusions a load plan
+    /// decided (the fuse stage, ADR-0017; `crate::rt::fuse::installed`).
+    pub fn install_kernel_fusion(&mut self, fusion: crate::rt::fuse::BlockFusion) {
+        self.kernel_fusion = Some(fusion);
     }
 
     /// Remove the TeaCache controller (a multi-arm run switching arms).
@@ -3422,18 +3433,20 @@ impl H3Transformer {
         cond_rows: Option<&CudaTensor>,
         cond_audio_rows: Option<&CudaTensor>,
     ) -> Result<(CudaTensor, CudaTensor)> {
-        with_quant_act(self.quant, || {
-            self.forward_inner(
-                step,
-                video_rows,
-                audio_rows,
-                text,
-                layout,
-                mode,
-                observer,
-                cond_rows,
-                cond_audio_rows,
-            )
+        crate::rt::fuse::installed(self.kernel_fusion, || {
+            with_quant_act(self.quant, || {
+                self.forward_inner(
+                    step,
+                    video_rows,
+                    audio_rows,
+                    text,
+                    layout,
+                    mode,
+                    observer,
+                    cond_rows,
+                    cond_audio_rows,
+                )
+            })
         })
     }
 

@@ -18,33 +18,35 @@
 //! activations, an operand not stored as device bf16, a host run) and the
 //! caller runs the unfused chain. `FASTVIDEO_LTX_FUSE=0` turns all of them off;
 //! `fv-gpucheck kernels` (group `dit_fusion`) checks each against its chain,
-//! bit for bit.
-
-use std::cell::Cell;
-use std::sync::OnceLock;
+//! bit for bit. The rounding points are the LTX policies of
+//! [`crate::rt::fuse::policy`] ([`policy`], `LTX_QK_NORM_ROPE`), which select
+//! the kernels' modes (plan B4b, `docs/adr/0022-block-fusion.md`).
 
 use super::attention::DeviceRope;
+use crate::rt::fuse::{self, Switch};
 use crate::rt::tensor::{CudaTensor, Result};
 
-thread_local! {
-    static OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
-}
-
-/// `FASTVIDEO_LTX_FUSE` (default on).
+/// `FASTVIDEO_LTX_FUSE` (default on; [`crate::rt::fuse::Switch::Ltx`]:
+/// forced, else the DiT's installed plan value, else the process setting).
 pub fn enabled() -> bool {
-    if let Some(v) = OVERRIDE.with(|c| c.get()) {
-        return v;
-    }
-    static ENV: OnceLock<bool> = OnceLock::new();
-    *ENV.get_or_init(|| crate::rt::envflag::bool_flag("FASTVIDEO_LTX_FUSE", true))
+    fuse::enabled(Switch::Ltx)
 }
 
 /// Run `f` with the LTX fusions forced on or off (parity checks).
 pub fn with_fuse<R>(on: bool, f: impl FnOnce() -> R) -> R {
-    let prev = OVERRIDE.with(|c| c.replace(Some(on)));
-    let out = f();
-    OVERRIDE.with(|c| c.set(prev));
-    out
+    fuse::with_forced(Switch::Ltx, on, f)
+}
+
+/// The rounding policy of a fused [`Norm`] behind `res`
+/// ([`crate::rt::fuse::policy::ltx_res_norm_mod`]).
+pub fn policy(res: Option<&Residual<'_>>, norm: &Norm<'_>) -> crate::rt::fuse::RoundingPolicy {
+    use crate::rt::fuse::Residual as R;
+    let residual = match res {
+        None => R::None,
+        Some(Residual::Gated { .. }) => R::RoundedProduct,
+        Some(Residual::Plain(_)) => R::Add,
+    };
+    crate::rt::fuse::policy::ltx_res_norm_mod(residual, matches!(norm, Norm::ThenMod(..)))
 }
 
 /// Rows of a bf16 `[rows, width]` modulation table.
@@ -179,9 +181,13 @@ mod dev {
             return Ok(None);
         };
         let Some(xs) = b16(x) else { return Ok(None) };
-        let (m, w, mode) = match norm {
-            Norm::AdaLn(m) => (m, None, 0i32),
-            Norm::ThenMod(w, m) => (m, Some(w), 1i32),
+        let (res_mode, mode) = match super::policy(res.as_ref(), &norm).kernel() {
+            Ok(crate::rt::fuse::Kernel::LtxResNormMod { res_mode, mode }) => (res_mode, mode),
+            _ => return Err(err("ltx fuse: the policy selects no fvf_ltx_res_norm_mod")),
+        };
+        let (m, w) = match norm {
+            Norm::AdaLn(m) => (m, None),
+            Norm::ThenMod(w, m) => (m, Some(w)),
         };
         let Some(ts) = b16(m.tab) else {
             return Ok(None);
@@ -190,13 +196,13 @@ mod dev {
             Some(r) if m.scale < r && m.shift < r => {}
             _ => return Ok(None),
         }
-        let (us, gs, grow, res_mode) = match res {
-            None => (xs, ts, 0usize, 0i32),
+        let (us, gs, grow) = match res {
+            None => (xs, ts, 0usize),
             Some(Residual::Plain(u)) => {
                 let Some(us) = b16(u).filter(|_| u.shape == x.shape) else {
                     return Ok(None);
                 };
-                (us, ts, 0, 2)
+                (us, ts, 0)
             }
             Some(Residual::Gated { u, gates, row }) => {
                 let (Some(us), Some(gs)) = (b16(u).filter(|_| u.shape == x.shape), b16(gates))
@@ -207,7 +213,7 @@ mod dev {
                     Some(r) if row < r => {}
                     _ => return Ok(None),
                 }
-                (us, gs, row, 1)
+                (us, gs, row)
             }
         };
         // The norm weight is read as stored (f32 ones or a bf16 parameter).

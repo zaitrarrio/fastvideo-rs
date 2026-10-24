@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Verdicts of the plan B4 byte-identity families of runpod-matrix.sh (b4a,
-# b4c), sourced by it. Pure functions over a run directory ($RUNS) and, for
+# b4b, b4c), sourced by it. Pure functions over a run directory ($RUNS) and, for
 # b4c, the cache root ($B4C_CACHE), so scripts/gpu/tests/b4-verdict.test.sh
 # holds them to stub trees. A verdict passes only on positive evidence: a
 # missing file, a skipped compare or a run that did not exit 0 fails it.
@@ -83,6 +83,64 @@ b4c_verdict() {
   printf '{"cell":"%s","verdict":"%s","why":"%s"}\n' "$cell" "$verdict" "${why# }" \
     >"$RUNS/b4c-$cell.verdict.json"
   printf 'b4c %s: %s%s\n' "$cell" "$verdict" "${why:+ (${why# })}"
+}
+
+# b4b_evidence <cell>: the fused kernels of <cell>'s CUPTI-traced step (the
+# last "/gpu_trace " line of its stderr.log, "top_kernels"): one "name
+# calls" line per fvf_* / h3_* / wan_* kernel, in name order, into
+# <cell>/fusion-evidence.log. Returns 1 when no trace with a kernel table
+# was logged (tracing off, libcupti missing, the run died first).
+b4b_evidence() {
+  local line table obj name calls
+  line="$(grep -h '/gpu_trace ' "$RUNS/$1/stderr.log" 2>/dev/null | tail -1)"
+  table="$(printf '%s' "$line" | grep -oE '"top_kernels":\[[^]]*\]' | head -1)"
+  : >"$RUNS/$1/fusion-evidence.log" 2>/dev/null || return 1
+  [[ -n "$table" ]] || return 1
+  printf '%s\n' "$table" | grep -oE '\{[^{}]*\}' | while IFS= read -r obj; do
+    name="$(printf '%s' "$obj" | grep -oE '"name": *"[^"]*"' | sed -E 's/.*"([^"]*)"$/\1/')"
+    calls="$(printf '%s' "$obj" | grep -oE '"calls": *[0-9]+' | grep -oE '[0-9]+$')"
+    [[ "$name" =~ ^(fvf_|h3_|wan_) ]] && printf '%s %s\n' "$name" "${calls:-?}"
+  done | LC_ALL=C sort >"$RUNS/$1/fusion-evidence.log"
+  return 0
+}
+
+# b4b_gated <evidence file>: the switch-gated fused kernels in it (every
+# fvf_* kernel but fvf_split_heads_rows, which FASTVIDEO_SPLIT_ROWS drives).
+b4b_gated() {
+  grep -E '^fvf_' "$1" 2>/dev/null | grep -v '^fvf_split_heads_rows ' || true
+}
+
+# b4b_verdict <cell> <rule on|off>: $RUNS/b4b-<cell>.verdict.json from the
+# arms <cell>-base and <cell>-pr. Fails unless both exited 0, the
+# --off-identity compare passed (not skipped), both traced steps logged a
+# kernel table, the arms' fused-kernel evidence (b4b_evidence) is identical
+# and, rule on, holds a switch-gated fused kernel in both arms or, rule
+# off, holds none. Prints the verdict line.
+b4b_verdict() {
+  local cell="$1" rule="$2" arm c verdict=pass why=""
+  for arm in base pr; do
+    c="$cell-$arm"
+    b4_exit_ok "$c" || why+=" $arm:exit"
+    if ! b4b_evidence "$c"; then
+      why+=" $arm:no-trace"
+      continue
+    fi
+    case "$rule" in
+      on) [[ -n "$(b4b_gated "$RUNS/$c/fusion-evidence.log")" ]] || why+=" $arm:no-fused-kernel" ;;
+      off) [[ -z "$(b4b_gated "$RUNS/$c/fusion-evidence.log")" ]] || why+=" $arm:fused-kernel-ran" ;;
+      *) why+=" rule:$rule" ;;
+    esac
+  done
+  b4_identical "$cell-base" "$cell-pr" || why+=" not-identical"
+  if [[ -f "$RUNS/$cell-base/fusion-evidence.log" && -f "$RUNS/$cell-pr/fusion-evidence.log" ]] &&
+    ! diff "$RUNS/$cell-base/fusion-evidence.log" "$RUNS/$cell-pr/fusion-evidence.log" \
+      >"$RUNS/$cell.fusion-evidence.diff"; then
+    why+=" evidence-differs"
+  fi
+  [[ -n "$why" ]] && verdict=fail
+  printf '{"cell":"%s","verdict":"%s","why":"%s"}\n' "$cell" "$verdict" "${why# }" \
+    >"$RUNS/b4b-$cell.verdict.json"
+  printf 'b4b %s: %s%s\n' "$cell" "$verdict" "${why:+ (${why# })}"
 }
 
 # b4_family_verdict <family> <cell...>: $RUNS/<family>.verdict.json, a pass

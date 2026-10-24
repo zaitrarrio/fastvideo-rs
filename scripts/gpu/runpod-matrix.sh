@@ -20,13 +20,13 @@
 # FV_DRY_RUN=1: no GPU and no weights needed. Each cell's command line is
 # logged instead of run (weights not verified, no baseline fetched), so a
 # family's cells can be read off-pod: FV_DRY_RUN=1 FV_WORK=/tmp/fv-dry
-# FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b6 (or b4a, b4c). A
+# FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b6 (or b4a, b4b, b4c). A
 # dry run neither fetches the baseline binary nor the TAE files, and with
 # FV_DRY_RUN_GATES=<file> it appends one line per gated cell ("arm", its
 # verify-weights.sh cell, its TAE file or -) and per promotion gate ("gate",
 # kind, OFF arm or -), for fv-lab's goldens (scripts/gpu/tests/fv-lab-goldens.sh).
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|b6|b4a|b4c|h3arms|h3attn}"
+FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|b6|b4a|b4b|b4c|h3arms|h3attn}"
 DRY_RUN="${FV_DRY_RUN:-0}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
@@ -2238,6 +2238,108 @@ Audio: male speech, clear voice, quiet room"
       log "$(b4_family_verdict b4a $b4a_cells)"
     fi
     for f in "$RUNS"/compare/compare-clips-b4a-*.json; do
+      [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"
+    done
+    ;;
+  b4b)
+    # Plan B4b (docs/adr/0022-block-fusion.md): byte identity of the DiT
+    # block fusions after the three families' copies became rt::fuse (one
+    # rounding-policy table, one host reference, one switch, the plan's
+    # value installed on the DiT). Each cell runs the baseline binary
+    # (FV_BASELINE_SHA's runtime image, fetch-baseline.sh) and this build
+    # with the same command line and environment, then compare-clips
+    # --off-identity; run_cell writes each arm's frames.sha256.json. Every
+    # arm encodes its prompt (--no-text-cache) and is CUPTI-traced for one
+    # warm denoise step (FASTVIDEO_GPU_TRACE=1, the second step): the trace's
+    # kernel table is the evidence of which fused kernels ran (no log line
+    # names them; the trace exists in both builds). The verdict
+    # (b4b-<cell>.verdict.json, b4-verdict.sh b4b_verdict) passes only when
+    # both arms exited 0, the --off-identity compare passed (not skipped),
+    # both arms' fused-kernel evidence (fvf_* / h3_* / wan_* kernels of the
+    # traced step, name and calls) is identical and, rule "on", holds a
+    # switch-gated fused kernel (fvf_*, the FASTVIDEO_H3_FUSE / _LTX_FUSE
+    # ones) or, rule "off", holds none while the trace ran.
+    # Only trees of the EU volume (H3, LTX; volumes.sh FV_EU_VOLUME_TREES):
+    # Wan's fusions rest on the CPU fixtures (rt/fuse/equality.rs).
+    # FV_B4B_CELLS narrows the cells (default: the four below; b4b-h3-fullopt,
+    # the MXFP8 route, only when named), one per pod when the coordinator
+    # runs them in parallel. Estimated wall time per cell on an RTX PRO 6000
+    # (two cold-process runs plus the baseline fetch): H3 4-step ~7-9 min,
+    # LTX ~8-10 min, H3 fullopt (49 forwards) ~15-20 min.
+    base_sha="${FV_BASELINE_SHA:?b4b family needs FV_BASELINE_SHA (the commit before the fusion unification)}"
+    BASE="$SCRATCH/baseline-$base_sha/fv-gpucheck"
+    if [[ "$DRY_RUN" != 1 ]]; then
+      if ! bash "$(dirname "${BASH_SOURCE[0]}")/fetch-baseline.sh" "$base_sha" "$(dirname "$BASE")" >>"$RUNS/baseline-fetch.log" 2>&1; then
+        log "FATAL: baseline binary sha-$base_sha unavailable (baseline-fetch.log)"
+        tee -a "$LOG" <"$RUNS/baseline-fetch.log"
+        exit 2
+      fi
+      log "baseline $(tail -1 "$RUNS/baseline-fetch.log")"
+    fi
+    # A cold H3 load reads ~70 GB from the volume before its first step.
+    export FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-900}"
+    b4b_cells="${FV_B4B_CELLS:-b4b-h3-4stepvsa b4b-h3-4stepvsa-off b4b-ltx25-512p b4b-ltx25-512p-off}"
+    # No verdict of an earlier run in this directory may stand in for this one.
+    [[ "$DRY_RUN" == 1 ]] || rm -f "$RUNS"/b4b-*.verdict.json "$RUNS/b4b.verdict.json"
+    # b4b_pair <cell> <weight cell> <rule on|off> <env K=V ... or -> <clip
+    # flag> <fv-gpucheck args ...>: <cell>-base (the baseline binary) and
+    # <cell>-pr (this build), each traced (FASTVIDEO_GPU_TRACE=1), the clip
+    # flag and the frames directory last; then the byte-identity compare and
+    # the cell's verdict (b4b_verdict).
+    b4b_pair() {
+      local cell="$1" wcell="$2" rule="$3" envs="$4" clip="$5" arm bin
+      shift 5
+      [[ " $b4b_cells " == *" $cell "* ]] || { log "skip $cell (not in FV_B4B_CELLS)"; return 0; }
+      # shellcheck disable=SC2206
+      local e=($envs)
+      [[ "$envs" == - ]] && e=()
+      for arm in base pr; do
+        bin="$BIN"
+        [[ "$arm" == base ]] && bin="$BASE"
+        if [[ "$DRY_RUN" == 1 ]]; then
+          log "dry-run $cell-$arm: rm -rf $RUNS/$cell-$arm"
+        else
+          rm -rf "${RUNS:?}/$cell-$arm"
+        fi
+        gated_cell "$cell-$arm" "$wcell" \
+          env FASTVIDEO_GPU_TRACE=1 ${e[@]+"${e[@]}"} "$bin" "$@" "$clip" "$RUNS/$cell-$arm/frames"
+      done
+      [[ "$DRY_RUN" == 1 ]] || rm -f "$RUNS/compare/compare-clips-$cell-base--$cell-pr.json"
+      compare_cells "$cell-base" "$cell-pr" --off-identity
+      if [[ "$DRY_RUN" == 1 ]]; then
+        log "dry-run $cell: verdict b4b_verdict $cell $rule: both arms exit 0 (summary.json); --off-identity passed; the arms' fused kernels of the traced step (stderr.log /gpu_trace top_kernels: fvf_* / h3_* / wan_*, name and calls) identical and $([[ "$rule" == on ]] && echo 'holding a switch-gated fvf_* kernel' || echo 'holding no switch-gated fvf_* kernel')"
+        return 0
+      fi
+      log "$(b4b_verdict "$cell" "$rule")"
+      tee -a "$LOG" <"$RUNS/$cell-pr/fusion-evidence.log" >/dev/null || true
+    }
+    # H3: FastH3 4-step VSA at 480p / 5 s, the auto text encoder, each arm
+    # encoding its prompt; fusions on (the default, set explicitly), then the
+    # control with FASTVIDEO_H3_FUSE=0 (the glue follows it off).
+    h3_b4b=(--mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa --height 480 --width 832
+      --seconds 5 --prompt "$PROMPT" --seed "$SEED" --text-encoder auto --no-text-cache --no-mp4)
+    b4b_pair b4b-h3-4stepvsa fasth3-4step-vsa on "FASTVIDEO_H3_FUSE=1" --clip-dir "${h3_b4b[@]}"
+    b4b_pair b4b-h3-4stepvsa-off fasth3-4step-vsa off "FASTVIDEO_H3_FUSE=0" --clip-dir "${h3_b4b[@]}"
+    # LTX-2.5 two-stage at 512p / 49 frames, streamed Gemma; fusions on,
+    # then the control with FASTVIDEO_LTX_FUSE=0.
+    ltx_b4b=(--mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25"
+      --height 512 --width 768 --num-frames 49 --prompt "$PROMPT" --seed "$SEED"
+      --two-stage --text streamed --no-text-cache)
+    b4b_pair b4b-ltx25-512p ltx25-two-stage on "FASTVIDEO_LTX_FUSE=1" --clip "${ltx_b4b[@]}"
+    b4b_pair b4b-ltx25-512p-off ltx25-two-stage off "FASTVIDEO_LTX_FUSE=0" --clip "${ltx_b4b[@]}"
+    # Named only: the RTX 5090 fullopt route (MXFP8 linears: the norms write
+    # MXFP8, the head merge feeds to_out's MXFP8 activation), 49 forwards.
+    b4b_pair b4b-h3-fullopt h3-base on "FASTVIDEO_H3_QUANT=mxfp8" --clip-dir \
+      --mode fast h3 gen --weights "$W/h3-base" --techniques h3/rtx5090_fullopt --height 480 --width 832 \
+      --seconds 5 --prompt "$PROMPT" --seed "$SEED" --text-encoder auto --no-text-cache --no-mp4
+    # The family: every cell named in FV_B4B_CELLS must have passed.
+    if [[ "$DRY_RUN" == 1 ]]; then
+      log "dry-run b4b: family verdict b4_family_verdict b4b $b4b_cells -> $RUNS/b4b.verdict.json (a named cell without a passing verdict fails)"
+    else
+      # shellcheck disable=SC2086
+      log "$(b4_family_verdict b4b $b4b_cells)"
+    fi
+    for f in "$RUNS"/compare/compare-clips-b4b-*.json; do
       [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"
     done
     ;;

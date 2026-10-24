@@ -663,6 +663,16 @@ const RUNTIME_FAMILY_ROWS: &[(&str, &[&str], &str)] = &[
         "rt::affine::bits_from_env: H3's linear loads (h3/transformer.rs) and the MLX tree",
     ),
     (
+        "FASTVIDEO_H3_FUSE",
+        &["h3"],
+        "rt::fuse::switch (Switch::H3, BlockFusion::h3; legacy.rs: the pre-B4b getter): h3/fused16.rs and the H3 load plan",
+    ),
+    (
+        "FASTVIDEO_H3_GLUE",
+        &["h3"],
+        "rt::fuse::switch (Switch::H3Glue, BlockFusion::h3; legacy.rs: the pre-B4b getter): h3/fused16.rs and the H3 load plan",
+    ),
+    (
         "FASTVIDEO_H3_QUANT",
         &["h3"],
         "rt::quant::QuantMode::from_env / from_settings: H3's loads only (h3/pipeline.rs, h3/transformer.rs)",
@@ -683,9 +693,19 @@ const RUNTIME_FAMILY_ROWS: &[(&str, &[&str], &str)] = &[
         "rt::sdpa_rule::h3_vae_kernel: the H3 ViT decoder's attention (h3/vae.rs)",
     ),
     (
+        "FASTVIDEO_LTX_FUSE",
+        &["ltx2"],
+        "rt::fuse::switch (Switch::Ltx, BlockFusion::ltx; legacy.rs: the pre-B4b getter): ltx2/fuse.rs and the LTX-2 load plan",
+    ),
+    (
         "FASTVIDEO_WAN_CAUSAL_FLASH",
         &["wan"],
         "rt::sdpa_rule::causal_flash_enabled (Probe::causal_flash): the block-causal and KV-window plans, which only causal Wan builds (wan/transformer.rs)",
+    ),
+    (
+        "FASTVIDEO_WAN_FUSE",
+        &["wan"],
+        "rt::fuse::switch (Switch::Wan; legacy.rs: the pre-B4b getter): wan/fuse.rs",
     ),
     (
         "FASTVIDEO_WAN_GRAPH",

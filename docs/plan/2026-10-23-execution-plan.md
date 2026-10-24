@@ -108,7 +108,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | active (B4a pr #173: step caches, ADR-0020, GPU `b4a` cells pending; then B4b `fuse.rs`; B4c pr #177: one disk prompt cache `rt::prompt_cache`, ADR-0021, GPU `b4c` cells passed; B4c2 closes the pre-existing key gaps) |
+| B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | active (B4a pr #173: step caches, ADR-0020, GPU `b4a` cells pending; B4b pr #PRNUM: one `rt::fuse` (rounding policies selecting the existing kernels, one host reference, one switch, the plan's value installed on the DiT), ADR-0022, GPU `b4b` cells pending; B4c pr #177: one disk prompt cache `rt::prompt_cache`, ADR-0021, GPU `b4c` cells passed; B4c2 closes the pre-existing key gaps) |
 | B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | merged (#161) |
 | B6 | `H3Pipeline::load` and `Ltx2Pipeline::load` split into plan, open, place, fuse; dead code (`TensorBackend`, mlx scaffold) retired | engine lifecycle testable on CPU | pod | B1 | merged (#170: plan/open/place/fuse, ADR-0017; `techniques` and `b6` GPU identity cells all byte-identical vs main; TensorBackend and the mlx scaffold retired) |
 
@@ -929,3 +929,19 @@ ran (pod id, $/hr), result, cost.
   quoting error on my side). About 133 GPU-minutes, ~$5.50. Evidence:
   `artifacts/runpod/{b6,techniques,precision,rtx5090}/c21d801-*` and the
   comparison outputs in `artifacts/runpod/d1b-compare/`.
+- 2026-10-24 18:30Z: B4b opened draft PR #PRNUM (`claude/b4b-fuse`, from main
+  `17e4a1dc`, merged with `1100c35f`): `rt::fuse` with ADR-0022. The
+  inventory found one computation per op (residual + modulated norm, q/k
+  norm + RoPE) whose families differ in rounding points, contraction,
+  normalizer, reduction order and RoPE pairing; the kernels stay as they
+  are (their source is pinned) and a typed `RoundingPolicy` / `QkPolicy`
+  per family op selects the kernel and its mode arguments; Wan's and H3's
+  CPU twins run one host reference under their policies; the four switches
+  are one implementation, and the H3 / LTX-2 plans' `kernel_fusions` (an
+  `rt::fuse::BlockFusion`) is installed on the DiT by the fuse stage
+  (ADR-0017). CPU evidence: `rt/fuse/equality.rs` against the verbatim
+  pre-B4b code, bit for bit, and ten mutations each caught. GPU gate
+  prepared, not run: `runpod-matrix.sh b4b` (`b4b-h3-4stepvsa`,
+  `-off`, `b4b-ltx25-512p`, `-off`; `b4b-h3-fullopt` when named;
+  `FV_B4B_CELLS`), every arm CUPTI-traced so the verdict sees the fused
+  kernels run in both arms. Wan: CPU evidence only (no EU-volume tree).

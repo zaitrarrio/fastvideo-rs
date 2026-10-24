@@ -2866,6 +2866,9 @@ pub struct Ltx2Pipeline {
     dit: PathBuf,
     weights: PathBuf,
     model: Option<Ltx2Transformer>,
+    /// The block fusions the load plan decided, installed on every DiT this
+    /// pipeline loads (`crate::rt::fuse::installed`, ADR-0022).
+    kernel_fusion: crate::rt::fuse::BlockFusion,
     /// Distilled LoRA file, when one is next to the weights or `FASTVIDEO_LTX2_LORA` points at it.
     /// Only resolved for a dev (dynamic-shift) checkpoint; distilled ones never fuse.
     lora: Option<PathBuf>,
@@ -2980,7 +2983,8 @@ impl Ltx2Pipeline {
             |_| None,
         );
         self.booking = booking;
-        let model = loaded?;
+        let mut model = loaded?;
+        model.install_kernel_fusion(self.kernel_fusion);
         self.loaded_strength = Some(strength);
         self.model = Some(model);
         self.ic_strength = 0.0;

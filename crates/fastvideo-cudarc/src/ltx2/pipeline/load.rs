@@ -62,8 +62,10 @@ pub struct Ltx2LoadPlan {
     /// everything else stays dense), as the snapshot sets it.
     pub video_ffn_nvfp4: Option<fastvideo_models::nvfp4::ScaleRule>,
     /// The runtime's DiT block fusions (`FASTVIDEO_LTX_FUSE`, applied under
-    /// bf16 activations), as the snapshot sets them.
-    pub kernel_fusions: bool,
+    /// bf16 activations), as the snapshot sets them. The fuse stage installs
+    /// it on the pipeline, which installs it on every DiT it holds
+    /// (`crate::rt::fuse::installed`, ADR-0022).
+    pub kernel_fusions: crate::rt::fuse::BlockFusion,
 }
 
 /// The DiT's map, opened ([`Ltx2LoadPlan::open`]).
@@ -269,7 +271,7 @@ impl Ltx2LoadPlan {
             tae,
             lora_base_host,
             video_ffn_nvfp4: fastvideo_models::nvfp4::from_settings(settings),
-            kernel_fusions: settings.bool_flag("FASTVIDEO_LTX_FUSE", true),
+            kernel_fusions: crate::rt::fuse::BlockFusion::ltx(settings),
         })
     }
 
@@ -354,7 +356,10 @@ impl Ltx2LoadPlan {
                         i.downscale
                     ))
             ),
-            format!("fuse kernels: dit block fusions={}", self.kernel_fusions),
+            format!(
+                "fuse kernels: dit block fusions={}",
+                self.kernel_fusions.on(crate::rt::fuse::Switch::Ltx)
+            ),
             String::new(),
         ];
         out.join("\n")
@@ -464,7 +469,14 @@ impl Ltx2LoadPlan {
             dit_warm,
         } = placed;
         let loaded_strength = model.as_ref().map(|_| 0.0);
+        // The block fusions this plan decided: every DiT the pipeline holds
+        // runs its forwards under them (ADR-0017, ADR-0022).
+        let mut model = model;
+        if let Some(m) = model.as_mut() {
+            m.install_kernel_fusion(self.kernel_fusions);
+        }
         Ok(Ltx2Pipeline {
+            kernel_fusion: self.kernel_fusions,
             lora_base_host: self.lora_base_host,
             ic_lora: self.ic_lora,
             ic_strength: 0.0,

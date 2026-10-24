@@ -311,7 +311,7 @@ Lines are on this PR's head; `crates/fastvideo-cudarc/src/` is omitted.
 | `h3/transformer.rs:1658`, `:2154` | `Attention::load`, `FeedForward::load` | `FASTVIDEO_H3_AFFINE` | b |
 | `h3/transformer.rs:198`, `:338` | `lora_device::enabled`, `verify_enabled` | `FASTVIDEO_H3_LORA_DEVICE`, `_LORA_VERIFY` | b |
 | `h3/transformer.rs:634`, `:1478`, `:1763`, `:1879`, `:2067`, `:2078`, `:2091`, `:2224`, `:3537`, `:3693`; `h3/vdn.rs:242`, `:472`; `h3/vae.rs:1042` | forwards | `FASTVIDEO_BF16_ACT` | b |
-| `h3/fused16.rs:308`, `:336` | `fuse_enabled`, `glue_enabled` | `FASTVIDEO_H3_FUSE`, `FASTVIDEO_H3_GLUE` | b |
+| `rt/fuse/switch.rs` (`Switch::process`, behind `h3/fused16.rs` `fuse_enabled`, `glue_enabled`; since B4b the plan's value, read from the snapshot by `BlockFusion::h3`, is installed on the DiT, ADR-0022) | `fuse_enabled`, `glue_enabled` | `FASTVIDEO_H3_FUSE`, `FASTVIDEO_H3_GLUE` | b |
 | `h3/vdn.rs:1183` | `Small::load_embedded` (VDN branch attach) | `FASTVIDEO_KERNELS` | a2 |
 | `llm/prefetch.rs:47`, `llm/prequant.rs:151` | resident text encoder open | `FASTVIDEO_LLM_PREFETCH`, `FASTVIDEO_TEXT_FP8_TREE` | a2; c when the encoder streams per request |
 | `rt/offload.rs:139` (`BlockWeights::new`, `:227`) | streamed blocks | `FASTVIDEO_DIT_OFFLOAD_LOOKAHEAD` | a2 |
@@ -339,7 +339,7 @@ Lines are on this PR's head; `crates/fastvideo-cudarc/src/` is omitted.
 | `ltx2/pipeline.rs:2285`, `:2320` | `TextEncoder::new`, `warm` | `FASTVIDEO_LTX2_TEXT_FP8`, `_LTX2_TEXT_WARM` | a2 |
 | `llm/prequant.rs:151`, `llm/prefetch.rs:47` | Gemma open | `FASTVIDEO_TEXT_FP8_TREE`, `_LLM_PREFETCH` | a2; c per request when streamed |
 | `rt/nvfp4.rs:43`, `models nvfp4.rs:233` | video FFN linear loads | `FASTVIDEO_NVFP4` | a2; c per call |
-| `ltx2/fuse.rs:39`; `ltx2/vae_fast.rs:258`, `:281`; `rt/tensor.rs:66` (`ltx2/fuse.rs:81`, `ltx2/transformer.rs:759`) | getters | `FASTVIDEO_LTX_FUSE`, `_LTX_VAE_FAST`, `_LTX_VAE_CHECK`, `_BF16_ACT` | b |
+| `rt/fuse/switch.rs` (behind `ltx2/fuse.rs` `enabled`; the plan's value installed on the DiT since B4b, ADR-0022); `ltx2/vae_fast.rs:258`, `:281`; `rt/tensor.rs:66` (`ltx2/fuse.rs:81`, `ltx2/transformer.rs:759`) | getters | `FASTVIDEO_LTX_FUSE`, `_LTX_VAE_FAST`, `_LTX_VAE_CHECK`, `_BF16_ACT` | b |
 | the runtime and loader getters listed under H3 | | | b |
 | `ltx2/pipeline.rs:1935`, `:2475`, `:2570`, `:3393`, `:3401`, `:3409`, `:3446`, `:3459`, `:3500`, `:3536`, `:3571`, `:3669`, `:3947`, `:4352`, `:4753`; `ltx2/text_cache.rs:144`; `ltx2/i2v_encode.rs:121`; `ltx2/transformer.rs:463`; `ltx2/v2v.rs:586`, `:746`; `ltx2/vae.rs:526`, `:569`; `ltx2/vae_fast.rs:782`, `:783`, `:1057` | generate, encode, decode | `FASTVIDEO_LTX2_SAVE_LATENTS`, `_LTX2_TEXT`, `_LTX2_FBCACHE`, `_LTX2_STAGE1_CACHE`, `_LTX2_MIDPOINT_PRUNE`, `_INJECT_*`, `_LTX2_HQ`, `_LTX2_AUDIO_VAE`, `_CACHE`, `_FFMPEG`, `_LTX2_HOST_ROPE`, `_LTX2_VAE_CHUNK`, `_LTX2_VAE_LATENT_CHUNK`, `_LTX_VAE_CHUNK_FRAMES`, `_LTX_VAE_CHUNK_MB`, `_LTX_VAE_CONV_ALGO` | c |
 
@@ -359,7 +359,7 @@ Lines are on this PR's head; `crates/fastvideo-cudarc/src/` is omitted.
 | `wan/transformer.rs:1410` (`rt/quant.rs:530`) | `load_with_residency` | `FASTVIDEO_WAN_QUANT` | a2 |
 | `rt/offload.rs:139` | streamed / parked blocks | `FASTVIDEO_DIT_OFFLOAD_LOOKAHEAD` | a2 |
 | `wan/plug.rs:224` | `load_merged_transformer` (fv-serve, before `load_with_dit`) | `FASTVIDEO_PLUG_ROOT` | read by the caller before the load starts, live, unchanged |
-| `wan/fuse.rs:47`; `wan/transformer.rs:793`; `wan/pipeline.rs:2131`; `rt/graph.rs:40`; `rt/nn.rs:2033`, `:2041`, `:2045`, `:2202`; `rt/tensor.rs:66` (`wan/fuse.rs:60`, `wan/pipeline.rs:2174`, `:2271`, `wan/stream.rs:706`, `:1042`) | getters | `FASTVIDEO_WAN_FUSE`, `_WAN_COND_CACHE`, `_WAN_CAUSAL_AR`, `_WAN_GRAPH`, `_SP_WORLD`, `_SDPA`, `_VSA`, `_WAN_CAUSAL_FLASH`, `_BF16_ACT` | b |
+| `rt/fuse/switch.rs` (behind `wan/fuse.rs` `enabled`, ADR-0022); `wan/transformer.rs:793`; `wan/pipeline.rs:2131`; `rt/graph.rs:40`; `rt/nn.rs:2033`, `:2041`, `:2045`, `:2202`; `rt/tensor.rs:66` (`wan/fuse.rs:60`, `wan/pipeline.rs:2174`, `:2271`, `wan/stream.rs:706`, `:1042`) | getters | `FASTVIDEO_WAN_FUSE`, `_WAN_COND_CACHE`, `_WAN_CAUSAL_AR`, `_WAN_GRAPH`, `_SP_WORLD`, `_SDPA`, `_VSA`, `_WAN_CAUSAL_FLASH`, `_BF16_ACT` | b |
 | the runtime and loader getters listed under H3 | | | b |
 | `wan/pipeline.rs:144`, `:1001`, `:1292`, `:1307`, `:1388`, `:1585`, `:1588`, `:1600`, `:1692`, `:2311`; `wan/transformer.rs:325`, `:1215`, `:1340`, `:1347`, `:1565`, `:1572`, `:1685`, `:1692`, `:1731`, `:1775`, `:1780`, `:1965`, `:2147`, `:2148`; `wan/sol_cache.rs:24`, `:53`, `:61`; `wan/vae.rs:1135`; `rt/graph.rs:101` | generate, steps, per-generate configuration of the caches and routes, decode | `FASTVIDEO_DEVICE_STATS`, `_NVFP4`, `_TEACACHE`, `_TEACACHE_THRESH`, `_TEACACHE_RET`, `_WAN_SOL_CACHE`, `_WAN_UNIPC_SIGMAS`, `_SLA_*`, `_WAN_EASYCACHE_*`, `_WAN_TEACACHE_COEFFS`, `_WAN_TAYLOR_LITE`, `_WAN_SOL_ATTN`, `_WAN_PISA`, `_VSA_SPARSITY`, `_VSA_GROUP`, `_VAE_CHUNK`, `_WAN_GRAPH_CUBLAS_WS_MIB` | c |
 

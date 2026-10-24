@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# The b4a / b4c verdicts (scripts/gpu/b4-verdict.sh) on stub run trees: a
-# passing cell, and one failing case per rule (exit codes, the planned
-# hit / miss, the H3 FP8 encoder, skipped / failed / missing compares,
-# cache entries, temporary files, cells without a verdict).
+# The b4a / b4b / b4c verdicts (scripts/gpu/b4-verdict.sh) on stub run
+# trees: a passing cell, and one failing case per rule (exit codes, the
+# planned hit / miss, the H3 FP8 encoder, skipped / failed / missing
+# compares, cache entries, temporary files, the fused kernels of the traced
+# step, cells without a verdict).
 #   bash scripts/gpu/tests/b4-verdict.test.sh
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -164,6 +165,82 @@ expect fail "b4c-typo:no-verdict" "family: a name that matches no cell" b4_famil
 expect fail "no-cells" "family: no cells" b4_family_verdict b4c
 printf '{"cell":"x","verdict":"fail","why":"y"}\n' >"$RUNS/b4c-b4c-ltx.verdict.json"
 expect fail "b4c-ltx:fail" "family: a failed cell" b4_family_verdict b4c $c b4c-ltx
+
+# b4b: the fused kernels of the CUPTI-traced step (stderr.log "/gpu_trace"
+# line, as rt/gpu_trace.rs prints it: compact JSON, keys in order).
+trace() { # <cell> <kernel:calls ...> (none: a trace without fused kernels)
+  mkdir -p "$RUNS/$1"
+  local cell="$1" k objs="" sep=""
+  shift
+  for k in gemm_bf16:200 vsa_mma_attn:50 "$@"; do
+    objs+="$sep{\"calls\":${k#*:},\"category\":\"x\",\"name\":\"${k%%:*}\",\"share\":0.1,\"total_s\":0.01}"
+    sep=","
+  done
+  {
+    printf '[INFO] loading\n'
+    printf '[INFO] h3/gpu_trace {"by_category":[{"calls":3,"category":"gemm"}],"pass":"h3","step":1,"top_kernels":[%s],"wall_s":1.0}\n' "$objs"
+    printf '[INFO] done\n'
+  } >"$RUNS/$cell/stderr.log"
+}
+good_b4b() { # <cell> <kernel:calls ...>
+  local arm
+  for arm in base pr; do
+    summary "$1-$arm" 0
+    trace "$1-$arm" "${@:2}"
+  done
+  compare "$1-base" "$1-pr" ok
+}
+on_kernels=(fvf_h3_gate_res_norm_mod:100 h3_norm_mod:2 fvf_h3_qkvg_heads:50 fvf_split_heads_rows:10)
+off_kernels=(h3_norm_mod:2 h3_res_gate_norm_mod:100 fvf_split_heads_rows:10)
+b=b4b-h3
+
+fresh; good_b4b $b "${on_kernels[@]}"
+expect pass - "b4b: fused kernels in both arms, identical" b4b_verdict $b on
+[[ -f "$RUNS/b4b-$b.verdict.json" ]] || { echo "FAIL no b4b verdict file" >&2; fails=$((fails + 1)); }
+if [[ "$(cat "$RUNS/$b-pr/fusion-evidence.log")" == $'fvf_h3_gate_res_norm_mod 100\nfvf_h3_qkvg_heads 50\nfvf_split_heads_rows 10\nh3_norm_mod 2' ]]; then
+  echo "ok   b4b evidence: fused kernels only, name order, with calls"
+else
+  echo "FAIL b4b evidence: $(cat "$RUNS/$b-pr/fusion-evidence.log")" >&2
+  fails=$((fails + 1))
+fi
+
+fresh; good_b4b $b "${off_kernels[@]}"
+expect pass - "b4b off: no gated kernel, split rows allowed" b4b_verdict $b off
+
+fresh; good_b4b $b "${off_kernels[@]}"
+expect fail "base:no-fused-kernel" "b4b on: fusion did not run" b4b_verdict $b on
+
+fresh; good_b4b $b "${on_kernels[@]}"
+expect fail "pr:fused-kernel-ran" "b4b off: a gated kernel ran" b4b_verdict $b off
+
+fresh; good_b4b $b "${on_kernels[@]}"; trace $b-pr fvf_h3_gate_res_norm_mod:99 h3_norm_mod:2 fvf_h3_qkvg_heads:50
+expect fail "evidence-differs" "b4b: different call counts" b4b_verdict $b on
+
+fresh; good_b4b $b "${on_kernels[@]}"; trace $b-base fvf_h3_gate_res_norm_mod:100 h3_norm_mod:2
+expect fail "evidence-differs" "b4b: a fused kernel missing in one arm" b4b_verdict $b on
+
+fresh; good_b4b $b "${on_kernels[@]}"; printf '[INFO] h3/gpu_trace {"pass":"h3","step":1,"error":"libcupti not found"}\n' >"$RUNS/$b-pr/stderr.log"
+expect fail "pr:no-trace" "b4b: the trace failed (no kernel table)" b4b_verdict $b on
+
+fresh; good_b4b $b "${on_kernels[@]}"; rm "$RUNS/$b-base/stderr.log"
+expect fail "base:no-trace" "b4b: an arm that never ran" b4b_verdict $b off
+
+fresh; good_b4b $b "${on_kernels[@]}"; summary $b-base 1
+expect fail "base:exit" "b4b: an arm that exited 1" b4b_verdict $b on
+
+fresh; good_b4b $b "${on_kernels[@]}"; compare $b-base $b-pr skipped
+expect fail "not-identical" "b4b: a skipped compare" b4b_verdict $b on
+
+fresh; good_b4b $b "${on_kernels[@]}"; compare $b-base $b-pr different
+expect fail "not-identical" "b4b: a failed --off-identity" b4b_verdict $b on
+
+fresh; good_b4b $b "${on_kernels[@]}"
+expect fail "rule:maybe" "b4b: an unknown rule" b4b_verdict $b maybe
+
+fresh; good_b4b $b "${on_kernels[@]}"; good_b4b b4b-ltx fvf_ltx_res_norm_mod:300 fvf_ltx_qk_norm_rope:200
+b4b_verdict $b on >/dev/null; b4b_verdict b4b-ltx on >/dev/null
+expect pass - "b4b family: both cells passed" b4_family_verdict b4b $b b4b-ltx
+expect fail "b4b-ltx-off:no-verdict" "b4b family: a named cell that never ran" b4_family_verdict b4b $b b4b-ltx b4b-ltx-off
 
 # b4a's pieces: exit and identity.
 fresh; summary b4a-x-base 0; summary b4a-x-pr 0; compare b4a-x-base b4a-x-pr ok

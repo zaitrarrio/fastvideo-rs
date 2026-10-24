@@ -22,37 +22,45 @@
 //! byte-identical. Every function returns `None` when the block is not on the
 //! bf16 path (f32 activations), and the caller keeps its f32 chain.
 //!
-//! On CPU runs the host twins take the same rounding points (the LayerNorm
+//! The rounding points of 2-5 are the `WAN_*` policies of
+//! [`crate::rt::fuse::policy`] (plan B4b, `docs/adr/0022-block-fusion.md`),
+//! which also select the kernels' mode arguments; the switch is
+//! [`crate::rt::fuse::Switch::Wan`]. On CPU runs the host twins are
+//! [`crate::rt::fuse::host`] under the same policies (the LayerNorm
 //! reduction order differs from the kernels', so host and device agree to
 //! within a bf16 ulp, not bit for bit).
 
 use super::fused::Rope;
-use super::quant::bf16_round;
 use super::tensor::{CudaTensor, Result, TensorDType, TensorError};
+use crate::rt::fuse::host::{self, RowOperands, RowOut};
+use crate::rt::fuse::policy::{
+    WAN_CROSS_RESIDUAL_NORM_MOD, WAN_GATE_RESIDUAL, WAN_QK_NORM_ROPE, WAN_SELF_RESIDUAL_NORM,
+};
+use crate::rt::fuse::{self, Switch};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
 }
 
-thread_local! {
-    static FUSE_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+/// One row's `(hidden, normed)` from the host reference.
+fn both(out: std::result::Result<RowOut, host::HostError>) -> Result<(Vec<f32>, Vec<f32>)> {
+    match out.map_err(|e| msg(e.to_string()))? {
+        RowOut {
+            hidden: Some(h),
+            normed: Some(n),
+        } => Ok((h, n)),
+        _ => Err(msg("wan fuse: host twin returned no hidden / normed")),
+    }
 }
 
-/// `FASTVIDEO_WAN_FUSE` (default on).
+/// `FASTVIDEO_WAN_FUSE` (default on; [`crate::rt::fuse::Switch::Wan`]).
 pub fn enabled() -> bool {
-    if let Some(v) = FUSE_OVERRIDE.with(|c| c.get()) {
-        return v;
-    }
-    static FLAG: super::envflag::CachedBool = super::envflag::CachedBool::new();
-    FLAG.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_WAN_FUSE", true))
+    fuse::enabled(Switch::Wan)
 }
 
 /// Run `f` with [`enabled`] forced on or off (parity checks).
 pub fn with_fuse<R>(on: bool, f: impl FnOnce() -> R) -> R {
-    let prev = FUSE_OVERRIDE.with(|c| c.replace(Some(on)));
-    let out = f();
-    FUSE_OVERRIDE.with(|c| c.set(prev));
-    out
+    fuse::with_forced(Switch::Wan, on, f)
 }
 
 /// Whether the block's residual stream `h` is on the bf16 path.
@@ -121,7 +129,18 @@ pub fn self_residual_norm(
             dim,
             e_rows,
         };
-        return dev::res_ln(h, attn, e, gate_slot, Some((w, b)), (0, 0), 0, 0, g, eps).map(Some);
+        return dev::res_ln(
+            h,
+            attn,
+            e,
+            gate_slot,
+            Some((w, b)),
+            (0, 0),
+            &WAN_SELF_RESIDUAL_NORM,
+            g,
+            eps,
+        )
+        .map(Some);
     }
     let (hh, ah, eh) = (h.host_cow()?, attn.host_cow()?, e.host_cow()?);
     let (wh, bh) = (w.host_cow()?, b.host_cow()?);
@@ -130,17 +149,20 @@ pub fn self_residual_norm(
     for r in 0..batch * seq {
         let g = &eh[((r / seq) * e_rows + gate_slot) * dim..][..dim];
         let span = r * dim..(r + 1) * dim;
-        let v: Vec<f32> = hh[span.clone()]
-            .iter()
-            .zip(&ah[span.clone()])
-            .zip(g)
-            .map(|((&x, &y), &gv)| x + y * gv)
-            .collect();
-        let (mean, inv) = ln_stats(&v, eps);
-        for j in 0..dim {
-            hid[r * dim + j] = bf16_round(v[j]);
-            out[r * dim + j] = bf16_round((v[j] - mean) * inv * wh[j] + bh[j]);
-        }
+        let (rh, rn) = both(host::res_norm_row(
+            &WAN_SELF_RESIDUAL_NORM,
+            &RowOperands {
+                x: &hh[span.clone()],
+                u: Some(&ah[span.clone()]),
+                gate: Some(g),
+                w: Some(&wh),
+                b: Some(&bh),
+                eps,
+                ..RowOperands::default()
+            },
+        ))?;
+        hid[span.clone()].copy_from_slice(&rh);
+        out[span].copy_from_slice(&rn);
     }
     Ok(Some((host16(hid, &h.shape), host16(out, &h.shape))))
 }
@@ -170,7 +192,18 @@ pub fn cross_residual_norm_mod(
             dim,
             e_rows,
         };
-        return dev::res_ln(h, cross, e, 0, None, (scale_slot, shift_slot), 1, 1, g, eps).map(Some);
+        return dev::res_ln(
+            h,
+            cross,
+            e,
+            0,
+            None,
+            (scale_slot, shift_slot),
+            &WAN_CROSS_RESIDUAL_NORM_MOD,
+            g,
+            eps,
+        )
+        .map(Some);
     }
     let (hh, ch, eh) = (h.host_cow()?, cross.host_cow()?, e.host_cow()?);
     let mut hid = vec![0.0f32; h.numel()];
@@ -180,17 +213,19 @@ pub fn cross_residual_norm_mod(
         let sc = &eh[(tb + scale_slot) * dim..][..dim];
         let sh = &eh[(tb + shift_slot) * dim..][..dim];
         let span = r * dim..(r + 1) * dim;
-        let v: Vec<f32> = hh[span.clone()]
-            .iter()
-            .zip(&ch[span])
-            .map(|(&x, &y)| bf16_round(x + y))
-            .collect();
-        let (mean, inv) = ln_stats(&v, eps);
-        for j in 0..dim {
-            hid[r * dim + j] = v[j];
-            let n = bf16_round((v[j] - mean) * inv);
-            out[r * dim + j] = bf16_round(n * (1.0 + sc[j]) + sh[j]);
-        }
+        let (rh, rn) = both(host::res_norm_row(
+            &WAN_CROSS_RESIDUAL_NORM_MOD,
+            &RowOperands {
+                x: &hh[span.clone()],
+                u: Some(&ch[span.clone()]),
+                scale: Some(sc),
+                shift: Some(sh),
+                eps,
+                ..RowOperands::default()
+            },
+        ))?;
+        hid[span.clone()].copy_from_slice(&rh);
+        out[span].copy_from_slice(&rn);
     }
     Ok(Some((host16(hid, &h.shape), host16(out, &h.shape))))
 }
@@ -217,16 +252,35 @@ pub fn gate_residual(
             dim,
             e_rows,
         };
-        return dev::res_gate(h, ff, e, gate_slot, 0, false, g).map(|(hid, _)| Some(hid));
+        let Kernel::WanResGate { res_mode, keep_f32 } =
+            WAN_GATE_RESIDUAL.kernel().map_err(|e| msg(e.to_string()))?
+        else {
+            return Err(msg(
+                "wan fuse: the gate residual's policy selects no wan_res_gate",
+            ));
+        };
+        return dev::res_gate(h, ff, e, gate_slot, res_mode, keep_f32, g).map(|(hid, _)| Some(hid));
     }
     let (hh, fh, eh) = (h.host_cow()?, ff.host_cow()?, e.host_cow()?);
-    let out: Vec<f32> = (0..h.numel())
-        .map(|i| {
-            let (r, j) = (i / dim, i % dim);
-            bf16_round(hh[i] + fh[i] * eh[((r / seq) * e_rows + gate_slot) * dim + j])
-        })
-        .collect();
-    let _ = batch;
+    let mut out = vec![0.0f32; h.numel()];
+    for r in 0..batch * seq {
+        let g = &eh[((r / seq) * e_rows + gate_slot) * dim..][..dim];
+        let span = r * dim..(r + 1) * dim;
+        let o = host::res_norm_row(
+            &WAN_GATE_RESIDUAL,
+            &RowOperands {
+                x: &hh[span.clone()],
+                u: Some(&fh[span.clone()]),
+                gate: Some(g),
+                ..RowOperands::default()
+            },
+        )
+        .map_err(|e| msg(e.to_string()))?;
+        let rh = o
+            .hidden
+            .ok_or_else(|| msg("wan fuse: host twin returned no hidden"))?;
+        out[span].copy_from_slice(&rh);
+    }
     Ok(Some(host16(out, &h.shape)))
 }
 
@@ -270,45 +324,22 @@ pub fn qk_norm_rope(
         None => None,
     };
     let mut out = vec![0.0f32; batch * heads * seq * d];
+    let herr = |e: host::HostError| msg(e.to_string());
     for b in 0..batch {
         for s in 0..seq {
             let row = &x[(b * seq + s) * width + col_off..][..proj_w];
-            let ss: f32 = row.iter().map(|v| v * v).sum();
-            let inv = 1.0 / (ss / proj_w as f32 + eps).sqrt();
-            let n: Vec<f32> = row
-                .iter()
-                .zip(w.iter())
-                .map(|(&v, &wv)| bf16_round(bf16_round(v * inv) * wv))
-                .collect();
+            let n = host::qk_norm(&WAN_QK_NORM_ROPE, row, &w, eps).map_err(herr)?;
+            let rot = tables
+                .as_ref()
+                .map(|(c, sn)| (&c[s * d..(s + 1) * d], &sn[s * d..(s + 1) * d]));
             for h in 0..heads {
-                for p in 0..d {
-                    let j = h * d + p;
-                    let o = ((b * heads + h) * seq + s) * d + p;
-                    out[o] = match &tables {
-                        Some((c, sn)) => {
-                            let even = p - (p & 1);
-                            let (x1, x2) = (n[h * d + even], n[h * d + even + 1]);
-                            let (cv, sv) = (c[s * d + even], sn[s * d + even + 1]);
-                            bf16_round(if p & 1 == 1 {
-                                x2 * cv + x1 * sv
-                            } else {
-                                x1 * cv - x2 * sv
-                            })
-                        }
-                        None => n[j],
-                    };
-                }
+                let o = host::qk_rope_head(&WAN_QK_NORM_ROPE, &n[h * d..(h + 1) * d], rot)
+                    .map_err(herr)?;
+                out[((b * heads + h) * seq + s) * d..][..d].copy_from_slice(&o);
             }
         }
     }
     Ok(Some(host16(out, &[batch, heads, seq, d])))
-}
-
-fn ln_stats(v: &[f32], eps: f32) -> (f32, f32) {
-    let n = v.len() as f32;
-    let mean = v.iter().sum::<f32>() / n;
-    let var = v.iter().map(|x| (x - mean) * (x - mean)).sum::<f32>() / n;
-    (mean, 1.0 / (var + eps).sqrt())
 }
 
 fn host16(v: Vec<f32>, shape: &[usize]) -> CudaTensor {
@@ -318,12 +349,15 @@ fn host16(v: Vec<f32>, shape: &[usize]) -> CudaTensor {
 // `launch!` names `super::stats` / `super::device` from its call site.
 #[cfg(feature = "cuda")]
 use super::{device, stats};
+#[cfg(feature = "cuda")]
+use crate::rt::fuse::Kernel;
 
 #[cfg(feature = "cuda")]
 pub(crate) mod dev {
     use super::*;
     use crate::rt::act16::{operand, OutBuf};
     use crate::rt::device::global_device;
+    use crate::rt::fuse::{Kernel, RoundingPolicy};
     use crate::rt::kernels::{cfg_n, cfg_rows, launch};
 
     fn err(e: impl std::fmt::Display) -> TensorError {
@@ -355,19 +389,29 @@ pub(crate) mod dev {
         gate_slot: usize,
         affine: Option<(&CudaTensor, &CudaTensor)>,
         (scale_slot, shift_slot): (usize, usize),
-        res_mode: i32,
-        ln_mode: i32,
+        policy: &RoundingPolicy,
         g: Geo,
         eps: f32,
     ) -> Result<(CudaTensor, CudaTensor)> {
+        let perr = |e: crate::rt::fuse::PolicyError| msg(e.to_string());
         if !super::enabled() {
             // Unfused: the residual kernel stores what the norm reads (the
             // f32 sum for res_mode 0, the bf16 hidden for res_mode 1).
-            let (hid, tmp) = res_gate(h, a, e, gate_slot, res_mode, res_mode == 0, g)?;
+            let (Kernel::WanResGate { res_mode, keep_f32 }, Kernel::WanLn { ln_mode }) =
+                policy.split().map_err(perr)?
+            else {
+                return Err(msg(
+                    "wan fuse: the policy splits into no wan_res_gate + wan_ln",
+                ));
+            };
+            let (hid, tmp) = res_gate(h, a, e, gate_slot, res_mode, keep_f32, g)?;
             let src = tmp.as_ref().unwrap_or(&hid);
             let normed = ln(src, e, affine, (scale_slot, shift_slot), ln_mode, g, eps)?;
             return Ok((hid, normed));
         }
+        let Kernel::WanResLn { res_mode, ln_mode } = policy.kernel().map_err(perr)? else {
+            return Err(msg("wan fuse: the policy selects no wan_res_ln"));
+        };
         let dev = global_device().ok_or_else(|| msg("no device"))?;
         let (ho, ao, eo) = (
             operand(h)?.ok_or_else(|| msg("wan fuse: h off device"))?,
@@ -520,6 +564,7 @@ pub(crate) mod dev {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rt::quant::bf16_round;
     use crate::rt::tensor::with_bf16_act;
 
     fn t16(v: Vec<f32>, shape: &[usize]) -> CudaTensor {
