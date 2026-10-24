@@ -117,7 +117,8 @@ pub fn recompress(img: &RgbImage, crf: u32) -> Result<RgbImage> {
     }
     let (w, h) = (img.width() / 2 * 2, img.height() / 2 * 2);
     let cropped = image::imageops::crop_imm(img, 0, 0, w, h).to_image();
-    let ffmpeg = std::env::var("FASTVIDEO_FFMPEG").unwrap_or_else(|_| "ffmpeg".into());
+    let ffmpeg =
+        fastvideo_models::settings::env_var("FASTVIDEO_FFMPEG").unwrap_or_else(|_| "ffmpeg".into());
     let tmp = std::env::temp_dir().join(format!(
         "ltx2-crf-{}-{}.mp4",
         std::process::id(),

@@ -63,7 +63,7 @@ pub enum Stage {
 }
 
 fn arm(name: &str) -> anyhow::Result<SanaOptimizations> {
-    let get = |k: &str| std::env::var(k).ok();
+    let get = |k: &str| fastvideo_models::settings::env_var(k).ok();
     SanaOptimizations::parse(
         Some(name),
         get("FASTVIDEO_SANA_EASYCACHE").as_deref(),

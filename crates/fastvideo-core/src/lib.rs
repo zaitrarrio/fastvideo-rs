@@ -26,7 +26,7 @@ mod tests {
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn persist_dir(name: &str) -> String {
-        let root = std::env::var("FASTVIDEO_ARTIFACT_DIR")
+        let root = fastvideo_models::settings::env_var("FASTVIDEO_ARTIFACT_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| std::env::temp_dir());
         let dir = root.join(name);
@@ -55,8 +55,8 @@ mod tests {
     #[test]
     fn cudarc_vsa_ids_hard_fail_without_flag() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let prev = std::env::var("FASTVIDEO_VSA").ok();
-        let prev_sdpa = std::env::var("FASTVIDEO_SDPA").ok();
+        let prev = fastvideo_models::settings::env_var("FASTVIDEO_VSA").ok();
+        let prev_sdpa = fastvideo_models::settings::env_var("FASTVIDEO_SDPA").ok();
         std::env::remove_var("FASTVIDEO_VSA");
         std::env::remove_var("FASTVIDEO_SDPA");
         let gen = VideoGenerator::from_pretrained(
@@ -87,8 +87,8 @@ mod tests {
     #[test]
     fn cudarc_vsa_sparse_runs_when_enabled() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let prev = std::env::var("FASTVIDEO_VSA").ok();
-        let prev_sdpa = std::env::var("FASTVIDEO_SDPA").ok();
+        let prev = fastvideo_models::settings::env_var("FASTVIDEO_VSA").ok();
+        let prev_sdpa = fastvideo_models::settings::env_var("FASTVIDEO_SDPA").ok();
         std::env::set_var("FASTVIDEO_VSA", "1");
         std::env::remove_var("FASTVIDEO_SDPA");
         let gen = VideoGenerator::from_pretrained(
@@ -107,9 +107,9 @@ mod tests {
         // included) to the host-only window prototype: VSA is self-attention
         // only, on the device kernels.
         assert!(
-            std::env::var("FASTVIDEO_SDPA").is_err(),
+            fastvideo_models::settings::env_var("FASTVIDEO_SDPA").is_err(),
             "a VSA model id set FASTVIDEO_SDPA={:?}",
-            std::env::var("FASTVIDEO_SDPA")
+            fastvideo_models::settings::env_var("FASTVIDEO_SDPA")
         );
         match prev {
             Some(v) => std::env::set_var("FASTVIDEO_VSA", v),
@@ -280,7 +280,11 @@ mod tests {
     #[cfg(feature = "cuda")]
     #[test]
     fn cuda_1_3b_smoke_gated() {
-        if std::env::var("FASTVIDEO_GPU_SMOKE").ok().as_deref() != Some("1") {
+        if fastvideo_models::settings::env_var("FASTVIDEO_GPU_SMOKE")
+            .ok()
+            .as_deref()
+            != Some("1")
+        {
             return;
         }
         let gen = VideoGenerator::from_pretrained(

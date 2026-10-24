@@ -211,7 +211,7 @@ fn dump_host(name: &str, shape: &[usize], data: &[f32]) -> Result<()> {
 /// (the reference's f32 decode `mm_mel_f32`, for the vocoder).
 fn inject_on(stage: &str) -> bool {
     inject::enabled()
-        && std::env::var("FASTVIDEO_MMAUDIO_INJECT")
+        && fastvideo_models::settings::env_var("FASTVIDEO_MMAUDIO_INJECT")
             .unwrap_or_default()
             .split(',')
             .any(|s| s.trim() == stage)

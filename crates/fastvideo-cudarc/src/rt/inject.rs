@@ -19,7 +19,7 @@ use super::tensor::{Result, TensorError};
 pub fn dir() -> Option<&'static PathBuf> {
     static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
     DIR.get_or_init(|| {
-        std::env::var_os("FASTVIDEO_INJECT_DIR")
+        fastvideo_models::settings::env_var_os("FASTVIDEO_INJECT_DIR")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
     })
@@ -32,7 +32,8 @@ pub fn enabled() -> bool {
 
 /// Whether text conditioning is injected too (`FASTVIDEO_INJECT_TEXT`, default on).
 pub fn text_enabled() -> bool {
-    enabled() && std::env::var("FASTVIDEO_INJECT_TEXT").map_or(true, |v| v != "0")
+    enabled()
+        && fastvideo_models::settings::env_var("FASTVIDEO_INJECT_TEXT").map_or(true, |v| v != "0")
 }
 
 fn err(e: impl std::fmt::Display) -> TensorError {

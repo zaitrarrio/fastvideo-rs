@@ -148,7 +148,8 @@ pub fn check(
 /// The pre-quantized map for `source_dir` (`…/text_encoder`) when a valid
 /// sibling tree exists, else `None` (logged).
 pub fn open_tree(source_dir: &Path, layers: usize) -> Result<Option<WeightMap>> {
-    if std::env::var("FASTVIDEO_TEXT_FP8_TREE").is_ok_and(|v| v.trim() == "0") {
+    if fastvideo_models::settings::env_var("FASTVIDEO_TEXT_FP8_TREE").is_ok_and(|v| v.trim() == "0")
+    {
         return Ok(None);
     }
     let Some(parent) = source_dir.parent() else {

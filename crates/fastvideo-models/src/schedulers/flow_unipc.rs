@@ -39,7 +39,7 @@ impl UniPcSigmas {
     }
 
     pub fn from_env() -> Result<Self, String> {
-        std::env::var(Self::ENV).map_or(Ok(Self::FastVideo), |v| Self::parse(&v))
+        crate::settings::env_var(Self::ENV).map_or(Ok(Self::FastVideo), |v| Self::parse(&v))
     }
 
     pub fn as_str(self) -> &'static str {

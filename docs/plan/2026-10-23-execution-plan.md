@@ -372,3 +372,29 @@ ran (pod id, $/hr), result, cost.
   snapshot. Control: `gen-configs.mjs --check`, typecheck, vitest 580/580;
   pod: `check.sh` 1000 passed / 0 failed, serve `--features otel` 143
   passed, manifest + engine + protocol 292, fmt, clippy, cuda check green.
+- 2026-10-24 02:55Z: B3a opened as draft PR #153 (`claude/b3-settings`): the
+  declarative `FASTVIDEO_*` list (`techniques::settings::SETTINGS`, 222 rows:
+  112 layered, 108 env-only, 2 reserved), the 112 direct and 27 indirect
+  reads routed through `settings::env_var` / `env_var_os` at the same call
+  sites, the runtime's typed getters on the shared `settings::parse`,
+  `docs/scope.md`'s table generated, ADR-0010. On build pod
+  `i8tu0lpdb6nvov`: fmt and clippy `-D warnings` green, `cargo test
+  --workspace --lib` 1847 passed, `-p fastvideo-models -p fastvideo-cudarc
+  -p fastvideo-gpucheck` 1211 passed, `--features cuda` type-check green,
+  `scripts/serve/check.sh` 995 passed. One pre-existing race seen once and
+  not reproduced: `wan/vae.rs`'s chunking test sets `FASTVIDEO_VAE_CHUNK`
+  while `hooks.rs`'s Wan end-to-end test decodes. B3b (`load` snapshot,
+  `model_spec`s) is a second PR. GPU byte-identity cell pending
+  (coordinator).
+- 2026-10-24 03:40Z: B3a GPU byte-identity gate green on one RTX PRO 6000
+  (EU-RO-1, volume `bz0ofkfx45`, pod `3nbse01c0zav0e`, deleted): the
+  `techniques` family, baseline `1ea846f` (main) against the PR image
+  `90dd3f8`; fasth3-4step-vsa-768p and h3-480p-fullopt 124/124 frames, and
+  ltx25-512p-sol 121/121, identical for base vs env and base vs prof (max
+  abs diff 0); the LTX cache arm identical too. fasth3-8step-768p skipped
+  (`h3-8step` is not on the 500 GB EU volume); no Wan cell (no Wan trees on
+  the volume; Wan's reads are `std::env::var` at the same call sites,
+  checked by script in the review). Evidence:
+  `artifacts/runpod/techniques/90dd3f8-10240259/compare/`. Review: no
+  blocking finding; three documentation-only table rows corrected. Main
+  merged in since then changed no inference crate, so the evidence stands.

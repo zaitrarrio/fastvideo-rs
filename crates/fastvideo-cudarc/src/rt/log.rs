@@ -21,7 +21,7 @@ fn level() -> u8 {
     if c != 255 {
         return c;
     }
-    let v = match std::env::var("FASTVIDEO_LOG") {
+    let v = match fastvideo_models::settings::env_var("FASTVIDEO_LOG") {
         Ok(s) => {
             let s = s.trim().to_ascii_lowercase();
             match s.as_str() {
@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn level_parses() {
-        let prev = std::env::var("FASTVIDEO_LOG").ok();
+        let prev = fastvideo_models::settings::env_var("FASTVIDEO_LOG").ok();
         // Reset cache by writing through env then forcing re-read is hard with
         // AtomicU8 cache; just smoke the helpers.
         info(format_args!("test info"));

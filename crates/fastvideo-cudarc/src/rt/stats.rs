@@ -99,7 +99,7 @@ pub(crate) fn record_h2d(elems: usize) {
 fn h2d_trace(bytes: usize) {
     static WANT: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
     let Some(want) = *WANT.get_or_init(|| {
-        std::env::var("FASTVIDEO_H2D_TRACE_BYTES")
+        fastvideo_models::settings::env_var("FASTVIDEO_H2D_TRACE_BYTES")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
     }) else {

@@ -187,7 +187,7 @@ pub fn from_env() -> Option<ScaleRule> {
 pub fn with_env<R>(value: Option<&str>, f: impl FnOnce() -> R) -> R {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let prev = std::env::var(ENV).ok();
+    let prev = crate::settings::env_var(ENV).ok();
     match value {
         Some(v) => std::env::set_var(ENV, v),
         None => std::env::remove_var(ENV),
