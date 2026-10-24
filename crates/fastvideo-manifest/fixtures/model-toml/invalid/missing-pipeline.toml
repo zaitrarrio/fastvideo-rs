@@ -1,0 +1,10 @@
+schema = 1
+name = "wan-ai/wan2.2-t2v"
+license = { spdx = "Apache-2.0", redistribution = true }
+
+[runtime]
+engine = "fastvideo-rs"
+min_version = "0.1.0"
+
+[components]
+transformer = { path = "weights/transformer.safetensors", dtype = "bf16" }

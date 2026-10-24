@@ -1,0 +1,13 @@
+# Vendored OpenAI `/v1/videos*` subset (the reference shape FastVideo's server and our
+# `openai-videos` crate follow). Prose: docs/serve/research-minimax-fastvideo.md §2.3.
+# Maintained by `bash scripts/serve/specs-drift.sh --update`.
+
+[[source]]
+file = "videos.openapi.yaml"
+status = "ok"
+url = "https://raw.githubusercontent.com/openai/openai-openapi/0938b0f003300cd4c6ec39191532df81b04dfae1/openapi.yaml"
+drift_url = "https://raw.githubusercontent.com/openai/openai-openapi/main/openapi.yaml"
+normalize = "openai-videos"
+fetched_at = "2026-10-24T00:21:38Z"
+sha256 = "23b0acfccd491841f1d9be594d8aa4abfab6350eefd0dd17761c4fdea1304e44"
+note = "TRIMMED from the 4.2 MB `openapi.yaml` of github.com/openai/openai-openapi (branch main, commit 0938b0f0 resolved with `git ls-remote` on 2026-10-24): the `openapi`/`info`/`servers`/`security` preamble, every `paths` entry under `/videos`, the transitive `components.schemas` closure those paths reference and `components.securitySchemes`. The extraction is `trim_openai_videos` in scripts/serve/lib/specs-drift.py and is re-applied to the branch head on every drift check."

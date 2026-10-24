@@ -1,0 +1,21 @@
+schema = 1
+name = "bo/wan2.2-t2v/dmd:2:nf4"
+parent = "zay/wan2.2-t2v/dmd:4:fp8@682e1f27ca83"
+license = { spdx = "Apache-2.0", redistribution = true }
+
+[runtime]
+engine = "fastvideo-rs"
+min_version = "0.1.1"
+pipeline = "wan"
+
+[defaults]
+steps = 2
+
+[components]
+transformer = { path = "weights/transformer.safetensors", dtype = "bf16" }
+text_encoder = { path = "weights/text_encoder.safetensors", dtype = "nf4" }
+vae = { path = "weights/vae.safetensors", dtype = "bf16" }
+
+[change]
+summary = "Two-step distillation, nf4 text encoder"
+reason = "Fits a 24 GB card"

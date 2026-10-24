@@ -1,0 +1,499 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ModelToml",
+  "description": "A clone's `model.toml`.",
+  "type": "object",
+  "properties": {
+    "caps": {
+      "description": "Widening (2026-10-23): the ranges the engine negotiates against.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Caps"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "change": {
+      "description": "Required for forks.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Change"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "components": {
+      "description": "Logical component -> file under the tree. At least one.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Component"
+      }
+    },
+    "defaults": {
+      "$ref": "#/$defs/Defaults"
+    },
+    "license": {
+      "$ref": "#/$defs/License"
+    },
+    "name": {
+      "description": "The published name, without `@rev`.",
+      "type": "string"
+    },
+    "parent": {
+      "description": "Required for forks (with `@rev`); absent for vendor refs.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "runtime": {
+      "$ref": "#/$defs/Runtime"
+    },
+    "schema": {
+      "description": "Always 1.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "variant": {
+      "description": "Widening (2026-10-23): what the name grammar does not carry.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VariantTable"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "name",
+    "license",
+    "runtime",
+    "components"
+  ],
+  "$defs": {
+    "CanvasCaps": {
+      "description": "Output canvas constraints.",
+      "type": "object",
+      "properties": {
+        "aspect": {
+          "description": "`[min, max]` width / height.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "max_area": {
+          "description": "Maximum pixels.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "multiple": {
+          "description": "Side multiple.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "short_edges": {
+          "description": "Short-edge tiers; the first is the default.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "multiple",
+        "max_area",
+        "aspect",
+        "short_edges"
+      ]
+    },
+    "Caps": {
+      "description": "Widening: the ranges the engine negotiates against.",
+      "type": "object",
+      "properties": {
+        "canvas": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CanvasCaps"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fps": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FpsCaps"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "frames": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FrameCaps"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "knobs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnobCaps"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "refs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RefCaps"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Change": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "summary",
+        "reason"
+      ]
+    },
+    "Component": {
+      "type": "object",
+      "properties": {
+        "dtype": {
+          "description": "Storage dtype (`bf16`, `fp8`, ...).",
+          "type": "string"
+        },
+        "path": {
+          "description": "Relative path under the tree, `/` separators.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "dtype"
+      ]
+    },
+    "Defaults": {
+      "description": "Generation defaults. Every key optional.",
+      "type": "object",
+      "properties": {
+        "fps": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "frames": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "guidance": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "height": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "steps": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "width": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "FpsCaps": {
+      "type": "object",
+      "properties": {
+        "allowed": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "default": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "allowed",
+        "default"
+      ]
+    },
+    "FrameCaps": {
+      "description": "Admissible frame counts: `offset + step * k` within `min..=max`.",
+      "type": "object",
+      "properties": {
+        "max": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "min": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "step": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "step",
+        "offset",
+        "min",
+        "max"
+      ]
+    },
+    "KnobCaps": {
+      "description": "Which sampling knobs a request may set.",
+      "type": "object",
+      "properties": {
+        "flow_shift": {
+          "type": "boolean",
+          "default": false
+        },
+        "guidance": {
+          "type": "boolean",
+          "default": false
+        },
+        "guidance_2": {
+          "type": "boolean",
+          "default": false
+        },
+        "negative": {
+          "type": "boolean",
+          "default": false
+        },
+        "seed": {
+          "type": "boolean",
+          "default": false
+        },
+        "steps": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "License": {
+      "type": "object",
+      "properties": {
+        "redistribution": {
+          "description": "Whether the registry may mirror these weights.",
+          "type": "boolean"
+        },
+        "spdx": {
+          "description": "SPDX identifier, or the vendor's own licence name.",
+          "type": "string"
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "spdx",
+        "redistribution"
+      ]
+    },
+    "RefCaps": {
+      "description": "Reference input limits.",
+      "type": "object",
+      "properties": {
+        "audios": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "images": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "videos": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "images",
+        "videos",
+        "audios",
+        "total"
+      ]
+    },
+    "Runtime": {
+      "type": "object",
+      "properties": {
+        "engine": {
+          "description": "`fastvideo-rs`.",
+          "type": "string"
+        },
+        "min_version": {
+          "description": "Semver of the oldest engine that runs this model.",
+          "type": "string"
+        },
+        "pipeline": {
+          "description": "Pipeline / family id (`wan`, `ltx`, `h3`); open set, validated by the runtime.",
+          "type": "string"
+        },
+        "profile": {
+          "description": "Widening: the technique profile (e.g. `h3/fasth3_4step_vsa`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recipe": {
+          "description": "Widening: the runtime recipe id (e.g. `4step-vsa`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "engine",
+        "min_version",
+        "pipeline"
+      ]
+    },
+    "VariantTable": {
+      "description": "Widening: the dimensions of a served variant the name does not carry.",
+      "type": "object",
+      "properties": {
+        "adapters": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "attention_route": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decoder": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dit_quant": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stages": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "tiers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

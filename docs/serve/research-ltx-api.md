@@ -1,5 +1,7 @@
 # LTX API (api.ltx.io): wire-compatibility research
 
+Machine-readable source: `docs/serve/specs/ltx/openapi.json` (see `docs/serve/specs/README.md`).
+
 Status: research note, 2026-09-27. Scope: the exact HTTP contract a Rust server
 in front of the fastvideo-rs CUDA engine has to speak so that existing LTX API
 clients (plain HTTP code written against the LTX docs, LTX-Desktop's API

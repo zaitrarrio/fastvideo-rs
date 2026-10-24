@@ -1,0 +1,1636 @@
+{
+  "components": {
+    "responses": {
+      "Err400": {
+        "content": {
+          "application/json": {
+            "example": {
+              "error": {
+                "http_code": "400",
+                "message": "invalid params, content must include a non-empty text item (prompt is required) (2013)",
+                "type": "bad_request_error"
+              },
+              "request_id": "021785229015510a2c883cf675b9804d",
+              "type": "error"
+            },
+            "schema": {
+              "$ref": "#/components/schemas/OaiError"
+            }
+          }
+        },
+        "description": "Invalid parameters"
+      },
+      "Err401": {
+        "content": {
+          "application/json": {
+            "example": {
+              "error": {
+                "http_code": "401",
+                "message": "login fail: Please carry the API secret key in the 'Authorization' field of the request header (1004)",
+                "type": "authorized_error"
+              },
+              "request_id": "021785229015510a2c883cf675b9804d",
+              "type": "error"
+            },
+            "schema": {
+              "$ref": "#/components/schemas/OaiError"
+            }
+          }
+        },
+        "description": "Authentication failed"
+      },
+      "Err402": {
+        "content": {
+          "application/json": {
+            "example": {
+              "error": {
+                "http_code": "402",
+                "message": "insufficient balance (1008)",
+                "type": "insufficient_balance_error"
+              },
+              "request_id": "021785229015510a2c883cf675b9804d",
+              "type": "error"
+            },
+            "schema": {
+              "$ref": "#/components/schemas/OaiError"
+            }
+          }
+        },
+        "description": "Insufficient balance/quota"
+      },
+      "Err422": {
+        "content": {
+          "application/json": {
+            "example": {
+              "error": {
+                "http_code": "422",
+                "message": "video description contains sensitive content (1026)",
+                "type": "unprocessable_entity_error"
+              },
+              "request_id": "021785229015510a2c883cf675b9804d",
+              "type": "error"
+            },
+            "schema": {
+              "$ref": "#/components/schemas/OaiError"
+            }
+          }
+        },
+        "description": "Input contains sensitive content"
+      },
+      "Err429": {
+        "content": {
+          "application/json": {
+            "example": {
+              "error": {
+                "http_code": "429",
+                "message": "rate limit, please retry later (1002)",
+                "type": "rate_limit_error"
+              },
+              "request_id": "021785229015510a2c883cf675b9804d",
+              "type": "error"
+            },
+            "schema": {
+              "$ref": "#/components/schemas/OaiError"
+            }
+          }
+        },
+        "description": "Rate limit triggered"
+      },
+      "Err500": {
+        "content": {
+          "application/json": {
+            "example": {
+              "error": {
+                "http_code": "500",
+                "message": "internal error (1000)",
+                "type": "server_error"
+              },
+              "request_id": "021785229015510a2c883cf675b9804d",
+              "type": "error"
+            },
+            "schema": {
+              "$ref": "#/components/schemas/OaiError"
+            }
+          }
+        },
+        "description": "Server error"
+      }
+    },
+    "schemas": {
+      "ContentItem": {
+        "properties": {
+          "audio_url": {
+            "description": "Audio object when `type=audio_url` (reference audio, reference scenario only; see the content description above for format / size / duration limits).",
+            "properties": {
+              "url": {
+                "description": "Audio location. Supported: a public URL; `mm_file://{file_id}` (reference an existing platform file's file_id); a `data:audio/<format>;base64,<Base64>` data URI (`<format>` lowercase).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          },
+          "image_url": {
+            "description": "Image object when `type=image_url` (see the content description above for format / size / dimension / count limits).",
+            "properties": {
+              "url": {
+                "description": "Image location. Supported: a public URL; `mm_file://{file_id}` (reference an existing platform file, e.g. an uploaded file or a previous output's file_id); a `data:image/<format>;base64,<Base64>` data URI (`<format>` lowercase).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          },
+          "role": {
+            "description": "Position or purpose of the content, conditionally required:\n- `first_frame`: first-frame image (image-to-video; when there is a single image and no role is set, it defaults to first_frame).\n- `last_frame`: last-frame image (image-to-video first & last frame, must be paired with first_frame).\n- `reference_image`: reference image (reference-to-video).\n- `reference_video`: reference video (reference-to-video).\n- `reference_audio`: reference audio (reference-to-video).",
+            "enum": [
+              "first_frame",
+              "last_frame",
+              "reference_image",
+              "reference_video",
+              "reference_audio"
+            ],
+            "type": "string"
+          },
+          "text": {
+            "description": "Text prompt, **required**: every scenario must include one non-empty `text` describing the desired video. Length is counted by characters, with a maximum of 7000 characters per `text`.",
+            "type": "string"
+          },
+          "type": {
+            "description": "Type of the input content.",
+            "enum": [
+              "text",
+              "image_url",
+              "video_url",
+              "audio_url"
+            ],
+            "type": "string"
+          },
+          "video_url": {
+            "description": "Video object when `type=video_url` (reference video, reference scenario only; see the content description above for format / size / duration limits).",
+            "properties": {
+              "url": {
+                "description": "Video location. Supported: a public URL; `mm_file://{file_id}` (reference an existing platform file's file_id); a `data:video/mp4;base64,<Base64>` data URI. Note the total request body must be ≤ 64 MB and Base64 inflates size by about 33%, so use a public URL or mm_file:// for large videos.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "DeleteVideoGenerationV2Resp": {
+        "example": {
+          "action": "cancelled",
+          "status": "cancelled",
+          "task_id": "424010985738629"
+        },
+        "properties": {
+          "action": {
+            "description": "The action actually performed: `cancelled` (only for the queued state) or `deleted` (remove a succeeded or failed task record).",
+            "enum": [
+              "cancelled",
+              "deleted"
+            ],
+            "type": "string"
+          },
+          "status": {
+            "description": "Operation result: `cancelled` or `deleted`.",
+            "enum": [
+              "cancelled",
+              "deleted"
+            ],
+            "type": "string"
+          },
+          "task_id": {
+            "description": "ID of the affected task.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetVideoGenerationV2Resp": {
+        "example": {
+          "task": {
+            "content": {
+              "url": "https://video-product.cdn.minimax.io/inference_output/rollout/2026-07-27/6c68f487-4b33-48cb-8c92-1631f63f6682/output.mp4"
+            },
+            "created_at": 1785125529,
+            "duration": 5,
+            "id": "424010985738629",
+            "model": "MiniMax-H3",
+            "ratio": "16:9",
+            "resolution": "2K",
+            "status": "succeeded",
+            "task_type": "generation",
+            "updated_at": 1785125946,
+            "usage": {
+              "completion_tokens": 260390,
+              "input_audio_seconds": 6,
+              "input_image_count": 1,
+              "input_seconds": 0,
+              "output_seconds": 5,
+              "prompt_tokens": 13500,
+              "total_seconds": 5,
+              "total_tokens": 273890
+            }
+          }
+        },
+        "properties": {
+          "task": {
+            "$ref": "#/components/schemas/VideoTask"
+          }
+        },
+        "type": "object"
+      },
+      "H3ContextIRReq": {
+        "description": "Request parameters for creating an H3-Context-IR task.",
+        "example": {
+          "content": [
+            {
+              "text": "A boy playing basketball by the sea",
+              "type": "text"
+            }
+          ],
+          "duration": 5,
+          "model": "MiniMax-H3",
+          "ratio": "16:9"
+        },
+        "properties": {
+          "callback_url": {
+            "description": "Callback URL for task status changes. Once configured, the MiniMax server first sends a verification request containing a `challenge` field (you must return the `challenge` unchanged within 3 seconds to complete verification); after verification succeeds, it POSTs an update to this URL whenever the task status changes. The push body has the same structure as the response of the [Query Task](/api-reference/video-generation-v2-query) endpoint.\n\nCallback `status` values: `queued`, `running`, `succeeded`, `failed`, `cancelled`.",
+            "type": "string"
+          },
+          "content": {
+            "description": "Array of multimodal context describing the intended video and the relationships among the inputs. Each element is distinguished by `type` (`text` / `image_url` / `video_url` / `audio_url`) and can be labeled with a `role`.\n\n**Every request must include one non-empty `text` item (the prompt is required)**; otherwise a parameter error is returned.\n\nSupported input combinations (corresponding to different generation scenarios):\n- **Text-to-video**: a single `text` element only.\n- **Image-to-video, first frame**: `text` + 1 `image_url` (`role=first_frame`, or omitted).\n- **Image-to-video, last frame**: `text` + 1 `image_url` (`role=last_frame`).\n- **Image-to-video, first & last frame**: `text` + 2 `image_url` items with `role` set to `first_frame` and `last_frame` respectively.\n- **Reference-to-video**: `text` + any combination of reference images (`role=reference_image`), reference videos (`role=reference_video`), and reference audio (`role=reference_audio`).\n\n> **Image-to-video and reference-to-video are mutually exclusive**: if any `reference_image` / `reference_video` / `reference_audio` role appears in content, then `first_frame` / `last_frame` must not appear (and vice versa); the two cannot be mixed.\n\n---\n\n**Input media limits** (total request body ≤ 64 MB; use public URLs for large files, avoid Base64)\n\nImage `image_url`:\n\n| Item | Limit |\n| :--- | :--- |\n| Format | JPG, JPEG, PNG, WEBP, HEIC, HEIF |\n| Single file size | ≤ 30 MB |\n| Width/height range | [256, 5760] px |\n| Aspect ratio (w/h) | [0.4, 2.5] |\n| Count | first frame ≤ 1, last frame ≤ 1, reference images ≤ 9 |\n\nVideo `video_url` (reference scenario only):\n\n| Item | Limit |\n| :--- | :--- |\n| Container / format | MP4 (`.mp4`), MOV (`.mov`) |\n| Codec | Video H.264/AVC, H.265/HEVC; audio AAC, MP3 |\n| Single file size | ≤ 50 MB |\n| Count | ≤ 3 |\n| Per-clip duration | [2, 15] s; total ≤ 15 s |\n| Width/height range | [256, 5760] px |\n| Aspect ratio (w/h) | [0.4, 2.5] |\n| Frame rate | [23.976, 60] |\n\nAudio `audio_url` (reference scenario only):\n\n| Item | Limit |\n| :--- | :--- |\n| Format | WAV, MP3 |\n| Single file size | ≤ 15 MB |\n| Count | ≤ 3 |\n| Per-clip duration | [2, 15] s; total ≤ 15 s |",
+            "items": {
+              "$ref": "#/components/schemas/ContentItem"
+            },
+            "type": "array"
+          },
+          "duration": {
+            "description": "Target video duration in seconds. Required, integer. Available values: `4`-`15`.",
+            "enum": [
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15
+            ],
+            "type": "integer"
+          },
+          "model": {
+            "description": "Model name. Currently available: `MiniMax-H3`.",
+            "enum": [
+              "MiniMax-H3"
+            ],
+            "type": "string"
+          },
+          "ratio": {
+            "description": "Aspect ratio of the target video. Defaults to `adaptive`. Available values: `adaptive`, `21:9`, `16:9`, `4:3`, `1:1`, `3:4`, `9:16`.\n\n**Text-to-video (t2va, content contains only `text`)**: `ratio` is required and cannot be `adaptive`; available values `21:9`, `16:9`, `4:3`, `1:1`, `3:4`, `9:16`.\n\n**Image-to-video (i2va, content contains a `first_frame` / `last_frame` image)**: the aspect ratio is determined by the input image and `ratio` is always `adaptive`; passing another valid value does not error but is ignored and treated as `adaptive`.\n\n**Reference-to-video (r2va, content contains `reference_image` / `reference_video` / `reference_audio`)**: `ratio` is optional and defaults to `adaptive`; you may also explicitly specify any of the concrete ratios above.",
+            "enum": [
+              "adaptive",
+              "21:9",
+              "16:9",
+              "4:3",
+              "1:1",
+              "3:4",
+              "9:16"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "content",
+          "duration"
+        ],
+        "type": "object"
+      },
+      "ListVideoGenerationV2Resp": {
+        "example": {
+          "items": [
+            {
+              "content": {
+                "url": "https://video-product.cdn.minimax.io/inference_output/rollout/2026-07-28/5fe7ec4a-6f51-4d69-880e-220e59535d98/output.mp4"
+              },
+              "created_at": 1785225940,
+              "duration": 5,
+              "id": "424635601932571",
+              "model": "MiniMax-H3",
+              "ratio": "adaptive",
+              "resolution": "2K",
+              "status": "succeeded",
+              "task_type": "generation",
+              "updated_at": 1785226100,
+              "usage": {
+                "completion_tokens": 260390,
+                "input_audio_seconds": 6,
+                "input_image_count": 1,
+                "input_seconds": 0,
+                "output_seconds": 5,
+                "prompt_tokens": 13500,
+                "total_seconds": 5,
+                "total_tokens": 273890
+              }
+            },
+            {
+              "created_at": 1785225940,
+              "duration": 10,
+              "id": "424635601932588",
+              "model": "MiniMax-H3",
+              "ratio": "9:16",
+              "resolution": "2K",
+              "status": "running",
+              "task_type": "generation",
+              "updated_at": 1785226100,
+              "usage": {}
+            },
+            {
+              "created_at": 1785225940,
+              "duration": 8,
+              "id": "424635601932587",
+              "model": "MiniMax-H3",
+              "ratio": "9:16",
+              "resolution": "2K",
+              "status": "queued",
+              "task_type": "generation",
+              "updated_at": 1785226100,
+              "usage": {}
+            },
+            {
+              "created_at": 1785225940,
+              "duration": 12,
+              "error": {
+                "code": "1026",
+                "message": "video description contains sensitive content"
+              },
+              "id": "424635601932586",
+              "model": "MiniMax-H3",
+              "ratio": "9:16",
+              "resolution": "2K",
+              "status": "failed",
+              "task_type": "generation",
+              "updated_at": 1785226100,
+              "usage": {}
+            }
+          ],
+          "total": 476
+        },
+        "properties": {
+          "items": {
+            "description": "Task list.",
+            "items": {
+              "$ref": "#/components/schemas/VideoTask"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "Total number of tasks matching the filter (counting only tasks from the last 7 days).",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "MediaURL": {
+        "properties": {
+          "url": {
+            "description": "Media location, in one of two forms:\n- **Public URL**: a directly accessible URL of the image / video / audio.\n- **Base64 data URI**: `data:<mime>;base64,<Base64>`, e.g. `data:image/jpeg;base64,/9j/4AAQ...` (`<mime>` lowercase).\n\n> The total request body is capped at 64 MB; use a public URL instead of Base64 for large files.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
+      "OaiError": {
+        "description": "OpenAI-style error response. On error the HTTP status is the real error code (401/400/429/402/422/500…) and the body is this object.",
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/OaiErrorDetail"
+          },
+          "request_id": {
+            "description": "Request trace ID (for troubleshooting).",
+            "type": "string"
+          },
+          "type": {
+            "description": "Always `error`.",
+            "example": "error",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "OaiErrorDetail": {
+        "properties": {
+          "http_code": {
+            "description": "HTTP status code as a string, e.g. `401`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "Error detail; the trailing parenthesis holds the internal error code (e.g. `... (1004)`).",
+            "type": "string"
+          },
+          "type": {
+            "description": "Error type: `authorized_error`(401)/`bad_request_error`(400)/`rate_limit_error`(429)/`insufficient_balance_error`(402)/`unprocessable_entity_error`(422)/`overloaded_error`(529)/`server_error`(500), etc.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RegenContentItem": {
+        "description": "Video regeneration input item: either an item from the original generation content (text / image_url / video_url / audio_url) or the base_video that marks the source video. The base_video item must contain `type`, `video_url`, and `role=base_video`.",
+        "properties": {
+          "audio_url": {
+            "description": "Audio object when `type=audio_url` (reference audio, reference scenario only; for format / size / duration limits, see the content field of the [Create Video Generation Task](/api-reference/video-generation-v2-create#body-content) endpoint).",
+            "properties": {
+              "url": {
+                "description": "Audio location. Supported: a public URL; `mm_file://{file_id}` (reference an existing platform file's file_id); a `data:audio/<format>;base64,<Base64>` data URI (`<format>` lowercase).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          },
+          "image_url": {
+            "description": "Image object when `type=image_url` (for format / size / dimension / count limits, see the content field of the [Create Video Generation Task](/api-reference/video-generation-v2-create#body-content) endpoint).",
+            "properties": {
+              "url": {
+                "description": "Image location. Supported: a public URL; `mm_file://{file_id}` (reference an existing platform file, e.g. an uploaded file or a previous output's file_id); a `data:image/<format>;base64,<Base64>` data URI (`<format>` lowercase).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          },
+          "role": {
+            "description": "Position or purpose of the content, conditionally required:\n- **`base_video`: source video for video regeneration** (`/v2/video_regeneration` only). **The source-video item must explicitly set this `role`, and `content` must contain exactly one such item.**\n- `first_frame`: first-frame image (image-to-video; when there is a single image and no role is set, it defaults to first_frame).\n- `last_frame`: last-frame image (image-to-video first & last frame, must be paired with first_frame).\n- `reference_image`: reference image (reference-to-video).\n- `reference_video`: reference video (reference-to-video).\n- `reference_audio`: reference audio (reference-to-video).",
+            "enum": [
+              "base_video",
+              "first_frame",
+              "last_frame",
+              "reference_image",
+              "reference_video",
+              "reference_audio"
+            ],
+            "type": "string"
+          },
+          "text": {
+            "description": "**Must be the final prompt actually sent to the model when generating the 768P source video, not the original prompt from before H3-Context-IR processing**. Length is counted by characters, with a maximum of 40000 characters per `text`.",
+            "type": "string"
+          },
+          "type": {
+            "description": "Type of the input content.",
+            "enum": [
+              "text",
+              "image_url",
+              "video_url",
+              "audio_url"
+            ],
+            "type": "string"
+          },
+          "video_url": {
+            "description": "Video object when `type=video_url` (reference video, reference scenario only; for format / size / duration limits, see the content field of the [Create Video Generation Task](/api-reference/video-generation-v2-create#body-content) endpoint).",
+            "properties": {
+              "url": {
+                "description": "Video location. Supported: a public URL; `mm_file://{file_id}` (reference an existing platform file's file_id); a `data:video/mp4;base64,<Base64>` data URI. Note the total request body must be ≤ 64 MB and Base64 inflates size by about 33%, so use a public URL or mm_file:// for large videos.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "VideoGenerationV2Req": {
+        "example": {
+          "content": [
+            {
+              "text": "A boy playing basketball by the sea",
+              "type": "text"
+            }
+          ],
+          "duration": 5,
+          "model": "MiniMax-H3",
+          "ratio": "16:9",
+          "resolution": "2K"
+        },
+        "properties": {
+          "callback_url": {
+            "description": "Callback URL for task status changes. Once configured, the MiniMax server first sends a verification request containing a `challenge` field (you must return the `challenge` unchanged within 3 seconds to complete verification); after verification succeeds, it POSTs an update to this URL whenever the task status changes. The push body has the same structure as the response of the [Query Task](/api-reference/video-generation-v2-query) endpoint.\n\nCallback `status` values: `queued`, `running`, `succeeded`, `failed`, `cancelled`.",
+            "type": "string"
+          },
+          "content": {
+            "description": "Array of multimodal input describing the information used to generate the video. Each element is distinguished by `type` (`text` / `image_url` / `video_url` / `audio_url`) and can be labeled with a `role`.\n\n**Every request must include one non-empty `text` item (the prompt is required)**; otherwise a parameter error is returned.\n\nSupported input combinations (corresponding to different generation scenarios):\n- **Text-to-video**: a single `text` element only.\n- **Image-to-video, first frame**: `text` + 1 `image_url` (`role=first_frame`, or omitted).\n- **Image-to-video, last frame**: `text` + 1 `image_url` (`role=last_frame`).\n- **Image-to-video, first & last frame**: `text` + 2 `image_url` items with `role` set to `first_frame` and `last_frame` respectively.\n- **Reference-to-video**: `text` + any combination of reference images (`role=reference_image`), reference videos (`role=reference_video`), and reference audio (`role=reference_audio`).\n\n> **Image-to-video and reference-to-video are mutually exclusive**: if any `reference_image` / `reference_video` / `reference_audio` role appears in content, then `first_frame` / `last_frame` must not appear (and vice versa); the two cannot be mixed.\n\n---\n\n**Input media limits** (total request body ≤ 64 MB; use public URLs for large files, avoid Base64)\n\nImage `image_url`:\n\n| Item | Limit |\n| :--- | :--- |\n| Format | JPG, JPEG, PNG, WEBP, HEIC, HEIF |\n| Single file size | ≤ 30 MB |\n| Width/height range | [256, 5760] px |\n| Aspect ratio (w/h) | [0.4, 2.5] |\n| Count | first frame ≤ 1, last frame ≤ 1, reference images ≤ 9 |\n\nVideo `video_url` (reference scenario only):\n\n| Item | Limit |\n| :--- | :--- |\n| Container / format | MP4 (`.mp4`), MOV (`.mov`) |\n| Codec | Video H.264/AVC, H.265/HEVC; audio AAC, MP3 |\n| Single file size | ≤ 50 MB |\n| Count | ≤ 3 |\n| Per-clip duration | [2, 15] s; total ≤ 15 s |\n| Width/height range | [256, 5760] px |\n| Aspect ratio (w/h) | [0.4, 2.5] |\n| Frame rate | [23.976, 60] |\n\nAudio `audio_url` (reference scenario only):\n\n| Item | Limit |\n| :--- | :--- |\n| Format | WAV, MP3 |\n| Single file size | ≤ 15 MB |\n| Count | ≤ 3 |\n| Per-clip duration | [2, 15] s; total ≤ 15 s |",
+            "items": {
+              "$ref": "#/components/schemas/ContentItem"
+            },
+            "type": "array"
+          },
+          "duration": {
+            "description": "Duration of the generated video in seconds. Required, integer. Available values differ by model:\n\n- **`MiniMax-H3`**: `4`–`15`\n- **`MiniMax-H3-Highspeed`**: `4`–`15`\n- **`MiniMax-H3-Lite`**: `4`–`15`\n- **`MiniMax-H3-Max`**: `5`–`15` (4 seconds is not supported)",
+            "enum": [
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15
+            ],
+            "type": "integer"
+          },
+          "extra": {
+            "additionalProperties": false,
+            "description": "Additional generation options for `MiniMax-H3-Max`. Currently only `prompt_expansion_mode` is supported. If `extra` or this property is omitted, `balanced` is used. Do not pass `balance`, an empty string, a Boolean value, or other undeclared fields.",
+            "properties": {
+              "prompt_expansion_mode": {
+                "default": "balanced",
+                "description": "Prompt expansion mode. `disabled` disables prompt expansion; `balanced` uses balanced expansion and is the default; `quality` prioritizes expansion quality.",
+                "enum": [
+                  "disabled",
+                  "balanced",
+                  "quality"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "model": {
+            "description": "Model name. Currently available: `MiniMax-H3`, `MiniMax-H3-Highspeed`, `MiniMax-H3-Lite`, `MiniMax-H3-Max`.\n\n- **`MiniMax-H3`**: **the variant for high-quality video creation.** Supports text-to-video, image-to-video (first / last frame), and reference-to-video; `768P` / `2K` resolution, 4–15s duration.\n- **`MiniMax-H3-Highspeed`**: **balances generation quality and speed.** Supports text-to-video, image-to-video (first / last frame), and reference-to-video (reference image / video / audio); `768P` resolution, **`2K` is not supported**; 4–15s duration.\n- **`MiniMax-H3-Lite`**: **the lightweight variant.** Supports text-to-video, image-to-video (first / last frame), and reference-to-video (reference image / video / audio); `480P` / `768P` resolution, **`2K` is not supported**; 4–15s duration.\n- **`MiniMax-H3-Max`**: **the fast generation variant.** Supports text-to-video, image-to-video (first / last frame), and reference-to-video (reference image / video / audio); `480P` / `768P` resolution, **`2K` is not supported**; 5–15s duration.",
+            "enum": [
+              "MiniMax-H3",
+              "MiniMax-H3-Highspeed",
+              "MiniMax-H3-Lite",
+              "MiniMax-H3-Max"
+            ],
+            "type": "string"
+          },
+          "ratio": {
+            "description": "Aspect ratio of the generated video. Defaults to `adaptive` (the most suitable ratio is chosen automatically based on the input; the actual ratio can be read from the `ratio` field of the query endpoint). Available values: `adaptive`, `21:9`, `16:9`, `4:3`, `1:1`, `3:4`, `9:16`.\n\n**Text-to-video (t2va, content contains only `text`)**: `ratio` is required and cannot be `adaptive`; available values `21:9`, `16:9`, `4:3`, `1:1`, `3:4`, `9:16`.\n\n**Image-to-video (i2va, content contains a `first_frame` / `last_frame` image)**: the aspect ratio is determined by the input image and `ratio` is always `adaptive`; passing another valid value does not error but is ignored and treated as `adaptive`.\n\n**Reference-to-video (r2va, content contains `reference_image` / `reference_video` / `reference_audio`)**: `ratio` is optional and defaults to `adaptive`; you may also explicitly specify any of the concrete ratios above. `MiniMax-H3-Lite` does not support `adaptive` yet; specify a concrete ratio.",
+            "enum": [
+              "adaptive",
+              "21:9",
+              "16:9",
+              "4:3",
+              "1:1",
+              "3:4",
+              "9:16"
+            ],
+            "type": "string"
+          },
+          "resolution": {
+            "description": "Video resolution. Availability differs by model:\n\n- **`MiniMax-H3`**: `768P`, `2K`\n- **`MiniMax-H3-Highspeed`**: `768P` (`2K` is not supported)\n- **`MiniMax-H3-Lite`**: `480P`, `768P` (defaults to `768P`; `2K` is not supported)\n- **`MiniMax-H3-Max`**: `480P`, `768P` (defaults to `768P`; `2K` is not supported)",
+            "enum": [
+              "480P",
+              "768P",
+              "2K"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "content",
+          "resolution",
+          "duration"
+        ],
+        "type": "object"
+      },
+      "VideoGenerationV2Resp": {
+        "example": {
+          "task_id": "424010985738629"
+        },
+        "properties": {
+          "task_id": {
+            "description": "ID of the task, used to query the task status and result later.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "VideoRegenerationBaseVideoReq": {
+        "properties": {
+          "aigc_watermark": {
+            "default": false,
+            "description": "Whether to add an AIGC label watermark to the generated video. Optional. Defaults to `false`.",
+            "type": "boolean"
+          },
+          "callback_url": {
+            "description": "Callback URL for task status changes. Optional. Same behavior as `callback_url` of the create video generation task endpoint.",
+            "type": "string"
+          },
+          "content": {
+            "contains": {
+              "properties": {
+                "role": {
+                  "const": "base_video"
+                },
+                "type": {
+                  "const": "video_url"
+                }
+              },
+              "required": [
+                "type",
+                "video_url",
+                "role"
+              ],
+              "type": "object"
+            },
+            "description": "Video regeneration input array. Include:\n\n- **Submit exactly the same inputs that were actually sent to the model when generating the 768P source video**. **The `text` must be the final prompt actually sent to the model, not the original prompt from before H3-Context-IR processing**. All reference images, videos, and audio must also match the original generation inputs. **Any mismatch may prevent regeneration from producing the expected result**\n- One 768P source-video item with `type=video_url` and `role=base_video`; exactly one such item is required\n\n`base_video` must meet the following MiniMax-H3 768P output specifications. This endpoint does not regenerate arbitrary videos.\n\n| Item | Specification |\n| :--- | :--- |\n| Audio track | Must be present; videos without an audio track are not supported |\n| Frame rate | 24 fps |\n| Width / Height | Both must be divisible by 32 |\n| Area (W × H) | 768 × 768 (589,824 px) ≤ area ≤ 768 × 1344 (1,032,192 px) |\n| Total frames | 107–362 frames in increments of 17 (about 4–15 seconds) |\n\n---\n\n**Input media limits**: the total request body must be ≤ 64 MB; use public URLs for large files and avoid Base64. Format and per-file size limits for reference images / videos / audio are the same as the [Create Video Generation Task](/api-reference/video-generation-v2-create) endpoint.",
+            "items": {
+              "$ref": "#/components/schemas/RegenContentItem"
+            },
+            "maxContains": 1,
+            "minContains": 1,
+            "type": "array"
+          },
+          "model": {
+            "description": "Model name. Required. Currently supports `MiniMax-H3`.",
+            "enum": [
+              "MiniMax-H3"
+            ],
+            "type": "string"
+          },
+          "resolution": {
+            "description": "Target resolution for video regeneration. Required. Currently supports `2K`.",
+            "enum": [
+              "2K"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "content",
+          "resolution"
+        ],
+        "title": "Regenerate by source video (base_video)",
+        "type": "object"
+      },
+      "VideoRegenerationSourceTaskReq": {
+        "properties": {
+          "aigc_watermark": {
+            "default": false,
+            "description": "Whether to add an AIGC label watermark to the generated video. Optional. Defaults to `false`.",
+            "type": "boolean"
+          },
+          "callback_url": {
+            "description": "Callback URL for task status changes. Optional. Same behavior as `callback_url` of the create video generation task endpoint.",
+            "type": "string"
+          },
+          "model": {
+            "description": "Model name. Required. Currently supports `MiniMax-H3`.",
+            "enum": [
+              "MiniMax-H3"
+            ],
+            "type": "string"
+          },
+          "resolution": {
+            "description": "Target resolution for video regeneration. Required. Currently supports `2K`.",
+            "enum": [
+              "2K"
+            ],
+            "type": "string"
+          },
+          "source_task_id": {
+            "description": "The `task_id` of an existing **succeeded** `/v2/video_generation` task; its output is used as the source for regeneration. Constraints: requires whitelist access; the source task must be owned by the current account, in `succeeded` status, and still queryable via `/v2/query/video_generation` (created within 7 days).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "source_task_id",
+          "resolution"
+        ],
+        "title": "Regenerate by task ID (source_task_id)",
+        "type": "object"
+      },
+      "VideoTask": {
+        "description": "Task object returned by the shared H3 task query and list endpoints.",
+        "properties": {
+          "content": {
+            "$ref": "#/components/schemas/VideoTaskContent",
+            "description": "Task output content, returned after the task succeeds."
+          },
+          "created_at": {
+            "description": "Unix timestamp (seconds) when the task was created.",
+            "type": "integer"
+          },
+          "duration": {
+            "description": "Duration of the task output (seconds).",
+            "type": "integer"
+          },
+          "error": {
+            "$ref": "#/components/schemas/VideoTaskError",
+            "description": "Error information. Not returned when the task succeeds; returns `code` and `message` when the task fails."
+          },
+          "id": {
+            "description": "Task ID.",
+            "type": "string"
+          },
+          "modality": {
+            "description": "Output modality. Video generation and video regeneration tasks return `video`; H3-Context-IR tasks return `text`.",
+            "enum": [
+              "video",
+              "text"
+            ],
+            "type": "string"
+          },
+          "model": {
+            "description": "Model name used by the task, e.g. `MiniMax-H3`.",
+            "type": "string"
+          },
+          "ratio": {
+            "description": "Aspect ratio of the task output. This can be an empty string when it does not apply to the task type.",
+            "type": "string"
+          },
+          "resolution": {
+            "description": "Resolution of the task output.",
+            "type": "string"
+          },
+          "status": {
+            "description": "Task status:\n- `queued`: waiting in queue\n- `running`: in progress\n- `succeeded`: succeeded\n- `failed`: failed\n- `cancelled`: cancelled",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "task_type": {
+            "description": "Task type:\n- `generation`: video generation\n- `h3_context_ir`: H3-Context-IR (`/v2/h3_context_ir`)\n- `regeneration`: video regeneration (`/v2/video_regeneration`)",
+            "enum": [
+              "generation",
+              "h3_context_ir",
+              "regeneration"
+            ],
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "Unix timestamp (seconds) when the task status was last updated.",
+            "type": "integer"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/VideoTaskUsage",
+            "description": "Usage of this request. Video tasks return fields measured in seconds; H3-Context-IR tasks return Token-usage fields. Returned only when the task has succeeded."
+          }
+        },
+        "type": "object"
+      },
+      "VideoTaskContent": {
+        "properties": {
+          "prompt": {
+            "description": "Structured, enhanced video prompt generated by an H3-Context-IR task. Returned only when `task_type=h3_context_ir` and the task succeeds.",
+            "type": "string"
+          },
+          "url": {
+            "description": "Time-limited download URL of a video task output. Download or store it promptly; query again to obtain a new URL after it expires.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "VideoTaskError": {
+        "properties": {
+          "code": {
+            "description": "Error code.",
+            "type": "string"
+          },
+          "message": {
+            "description": "Error message.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "VideoTaskUsage": {
+        "description": "Usage of this request. Video tasks return fields measured in seconds; H3-Context-IR tasks return Token-usage fields. Returned only when the task has succeeded.",
+        "properties": {
+          "completion_tokens": {
+            "description": "Output tokens.\n- Video tasks = output video seconds converted;\n- H3-Context-IR tasks: output tokens of the task.",
+            "type": "integer"
+          },
+          "input_audio_seconds": {
+            "description": "Input reference-audio seconds (sum of segments, rounded); not returned when there is no reference audio.",
+            "type": "integer"
+          },
+          "input_image_count": {
+            "description": "Total number of input images (first_frame + last_frame + reference_image combined).",
+            "type": "integer"
+          },
+          "input_seconds": {
+            "description": "Input reference-video seconds (counted when a reference video is present).",
+            "type": "integer"
+          },
+          "output_seconds": {
+            "description": "Output video seconds.",
+            "type": "integer"
+          },
+          "prompt_tokens": {
+            "description": "Input tokens.\n- Video tasks = input reference-video seconds + all input images + input reference-audio seconds, 0 when none;\n- H3-Context-IR tasks: input tokens of the task.",
+            "type": "integer"
+          },
+          "total_seconds": {
+            "description": "Total metered seconds = input seconds + output seconds.",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "description": "Total tokens = prompt_tokens + completion_tokens.\n- Video tasks: converted from usage;\n- H3-Context-IR tasks: total tokens used by the task.",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "bearerFormat": "JWT",
+        "description": "`HTTP: Bearer Auth`\n- Security Scheme Type: http\n- HTTP Authorization Scheme: `Bearer API_key`, used to verify account information, can be found in [Account Management>API Keys](https://platform.minimax.io/user-center/basic-information/interface-key).",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "MiniMax video generation V2 (Hailuo-03) API",
+    "license": {
+      "name": "MIT"
+    },
+    "title": "MiniMax API",
+    "version": "2.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v2/h3_context_ir": {
+      "post": {
+        "description": "H3-Context-IR deeply interprets multimodal context across text, images, audio, and video. It analyzes relationships among the inputs and between those inputs and the intended output, performs complex reasoning, and converts that understanding into a structured representation with richer semantic detail while preserving the user's original intent as much as possible. This endpoint only returns an enhanced prompt; it does not create a video generation task.\n\nH3-Context-IR is a complex system and its implementation is not open sourced. This API can be used both to validate the official Full 2K-Workflow results and in production workflows.",
+        "operationId": "h3ContextIRV2Create",
+        "parameters": [
+          {
+            "description": "Media type of the request body. Set it to `application/json`.",
+            "in": "header",
+            "name": "Content-Type",
+            "required": true,
+            "schema": {
+              "default": "application/json",
+              "enum": [
+                "application/json"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "Image-to-video (i2va)": {
+                  "value": {
+                    "content": [
+                      {
+                        "text": "Pull focus to the people in the background and add more steam to the ramen bowl.",
+                        "type": "text"
+                      },
+                      {
+                        "image_url": {
+                          "url": "https://cdn.hailuoai.com/prod/hailuo_demo/testsets/H3_AA_I2VA/gallery/sr_v17_variants_seed42_43_20260724/inputs/4a3a90bf9100_KDmcbkhzYo5sjjxr9FqcVmWVnzb.png"
+                        },
+                        "role": "first_frame",
+                        "type": "image_url"
+                      }
+                    ],
+                    "duration": 5,
+                    "model": "MiniMax-H3",
+                    "ratio": "adaptive"
+                  }
+                },
+                "Reference-to-video (r2va)": {
+                  "value": {
+                    "content": [
+                      {
+                        "text": "Character speaks: Follow the wind, live free. Leave worries behind, enjoy the moment. Voice timbre follows reference audio 1.",
+                        "type": "text"
+                      },
+                      {
+                        "role": "reference_video",
+                        "type": "video_url",
+                        "video_url": {
+                          "url": "https://cdn.hailuoai.com/prod/hailuo_demo/testsets/h3_promo_eval_ref2va/gallery/sr_v2p26_trio_seed42_20260724/inputs/297573323635_00_%E8%A7%86%E9%A2%911_YnyRbxEwio_video_20260525_163755_1927e9d3.mp4"
+                        }
+                      },
+                      {
+                        "audio_url": {
+                          "url": "https://cdn.hailuoai.com/prod/hailuo_demo/testsets/h3_promo_eval_ref2va/gallery/sr_v2p26_trio_seed42_20260724/inputs/f463d523c5ce_01_%E9%9F%B3%E9%A2%911_RSLcbpzJPo_6%E6%9C%885%E6%97%A5(1).mp3"
+                        },
+                        "role": "reference_audio",
+                        "type": "audio_url"
+                      }
+                    ],
+                    "duration": 5,
+                    "model": "MiniMax-H3",
+                    "ratio": "adaptive"
+                  }
+                },
+                "Text-to-video (t2va)": {
+                  "value": {
+                    "content": [
+                      {
+                        "text": "Epic space-opera theatrical teaser: a female captain stands alone before a massive observation window as the last fleet gathers and jumps away in a blinding flash, the bridge shaking, leaving her behind.",
+                        "type": "text"
+                      }
+                    ],
+                    "duration": 5,
+                    "model": "MiniMax-H3",
+                    "ratio": "16:9"
+                  }
+                }
+              },
+              "schema": {
+                "$ref": "#/components/schemas/H3ContextIRReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VideoGenerationV2Resp"
+                }
+              }
+            },
+            "description": "The create endpoint returns a `task_id`. Use this `task_id` with the [Query Task](/api-reference/video-generation-v2-query) endpoint to retrieve the task status and result. When the task succeeds, retrieve the enhanced prompt from `content.prompt`.\n\n**Successful Query Task response example**\n\n```json\n{\n  \"task\": {\n    \"id\": \"426586401755526\",\n    \"model\": \"MiniMax-H3\",\n    \"status\": \"succeeded\",\n    \"created_at\": 1785702855,\n    \"updated_at\": 1785702884,\n    \"content\": {\n      \"prompt\": \"integrated_multimodal_description: [Shot 1] Cinematic, wide shot with a slow push in on a female captain standing center frame with her back to the camera. She has a slender build and short, swept-back silver hair, wearing a crisp, dark navy-blue futuristic military uniform adorned with rigid silver epaulets. Before her stretches a colossal, curved glass observation window dominating the dimly lit starship bridge. The interior features sleek metallic consoles on the left and right emitting soft cyan light. Outside the window, a massive fleet of dark-grey, heavily armored dreadnoughts and cruisers is assembling against a backdrop of a swirling deep-purple and magenta nebula. The rear thrusters of the distant ships glow intensely with fiery orange light. [Shot 2] At 00:02.800, the camera cuts to a medium close-up of the captain from Shot 1 in profile facing right, while the camera shakes strongly. Her facial features are now visible, revealing a woman in her late forties with sharp cheekbones and a stoic expression. A sudden, blinding flash of brilliant cyan and white light bursts through the window as the fleet outside simultaneously jumps into warp, casting harsh, overexposed illumination across her face. The bridge vibrates violently, causing her shoulders to tense and her uniform collar to tremble. The intense light instantly fades into deep shadow, leaving her completely alone against the newly emptied, pitch-black void of space.\\noverall_soundscape: Deep, resonant low-frequency thrumming of ship engines, overlaid with rhythmic, high-pitched electronic beeps from the consoles, followed by a sudden, deafening sub-bass boom and a loud, sizzling crackle as the warp drives engage. The immense acoustic impact causes a heavy, metallic clattering of the bridge panels, which instantly drops off into a stark, quiet mechanical hum.\\nnon_diegetic_music: Symphonic orchestral score, beginning with a slow, rising brass and string crescendo that abruptly cuts off, instantly transitioning into a single, sustained, low-register solo cello note with no dynamic swell.\"\n    },\n    \"duration\": 5,\n    \"usage\": {\n      \"total_tokens\": 9090,\n      \"prompt_tokens\": 5664,\n      \"completion_tokens\": 3426\n    },\n    \"ratio\": \"16:9\",\n    \"task_type\": \"h3_context_ir\",\n    \"modality\": \"text\"\n  }\n}\n```"
+          },
+          "400": {
+            "$ref": "#/components/responses/Err400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Err401"
+          },
+          "402": {
+            "$ref": "#/components/responses/Err402"
+          },
+          "422": {
+            "$ref": "#/components/responses/Err422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Err429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Err500"
+          }
+        },
+        "summary": "Create H3-Context-IR Task",
+        "tags": [
+          "Video V2"
+        ]
+      }
+    },
+    "/v2/query/video_generation": {
+      "get": {
+        "description": "List tasks from the last 7 days with pagination. Supports filtering by status, task ID, model, and task type.",
+        "operationId": "videoGenerationV2List",
+        "parameters": [
+          {
+            "description": "Page number, starting from 1.",
+            "example": 1,
+            "in": "query",
+            "name": "page_num",
+            "required": false,
+            "schema": {
+              "example": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Number of items per page.",
+            "example": 20,
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "example": 20,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Filter by task status. Available values: `queued`, `running`, `succeeded`, `failed`, `cancelled`.",
+            "in": "query",
+            "name": "filter.status",
+            "required": false,
+            "schema": {
+              "enum": [
+                "queued",
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by task ID; multiple values are allowed.",
+            "in": "query",
+            "name": "filter.task_ids",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "description": "Filter by model name, e.g. `MiniMax-H3`.",
+            "in": "query",
+            "name": "filter.model",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by task type. Available values: `generation` (video generation), `h3_context_ir` (H3-Context-IR), `regeneration` (video regeneration).",
+            "in": "query",
+            "name": "filter.task_type",
+            "required": false,
+            "schema": {
+              "enum": [
+                "generation",
+                "h3_context_ir",
+                "regeneration"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListVideoGenerationV2Resp"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "$ref": "#/components/responses/Err400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Err401"
+          },
+          "429": {
+            "$ref": "#/components/responses/Err429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Err500"
+          }
+        },
+        "summary": "List tasks",
+        "tags": [
+          "Video V2"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "cURL",
+            "source": "curl --request GET \\\n  --url 'https://api.minimax.io/v2/query/video_generation?page_num=1&page_size=4' \\\n  --header 'Authorization: Bearer <token>'"
+          }
+        ]
+      }
+    },
+    "/v2/query/video_generation/{task_id}": {
+      "get": {
+        "description": "Query the status and result of a single video generation, H3-Context-IR, or video regeneration task. Once the task succeeds (`status=succeeded`), retrieve video output from `content.url` or an enhanced prompt from `content.prompt`.\n\n> Only tasks from the last 7 days can be queried (window `[T-7d, T)`, where `T` is the request time as a UTC timestamp in seconds); a `task_id` outside this window returns `invalid task_id`. Video output URLs are time-limited, so download or store them promptly.",
+        "operationId": "videoGenerationV2Query",
+        "parameters": [
+          {
+            "description": "ID of the task to query (the `task_id` returned when the task was created).",
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "Failure": {
+                    "value": {
+                      "task": {
+                        "created_at": 1785125529,
+                        "duration": 5,
+                        "error": {
+                          "code": "1026",
+                          "message": "video description contains sensitive content"
+                        },
+                        "id": "424010985738630",
+                        "modality": "video",
+                        "model": "MiniMax-H3",
+                        "ratio": "16:9",
+                        "resolution": "2K",
+                        "status": "failed",
+                        "task_type": "generation",
+                        "updated_at": 1785125700,
+                        "usage": {}
+                      }
+                    }
+                  },
+                  "H3-Context-IR succeeded": {
+                    "value": {
+                      "task": {
+                        "content": {
+                          "prompt": "integrated_multimodal_description: [Shot 1] Cinematic, wide shot with a slow push in on a female captain standing center frame with her back to the camera. She has a slender build and short, swept-back silver hair, wearing a crisp, dark navy-blue futuristic military uniform adorned with rigid silver epaulets. Before her stretches a colossal, curved glass observation window dominating the dimly lit starship bridge. The interior features sleek metallic consoles on the left and right emitting soft cyan light. Outside the window, a massive fleet of dark-grey, heavily armored dreadnoughts and cruisers is assembling against a backdrop of a swirling deep-purple and magenta nebula. The rear thrusters of the distant ships glow intensely with fiery orange light. [Shot 2] At 00:02.800, the camera cuts to a medium close-up of the captain from Shot 1 in profile facing right, while the camera shakes strongly. Her facial features are now visible, revealing a woman in her late forties with sharp cheekbones and a stoic expression. A sudden, blinding flash of brilliant cyan and white light bursts through the window as the fleet outside simultaneously jumps into warp, casting harsh, overexposed illumination across her face. The bridge vibrates violently, causing her shoulders to tense and her uniform collar to tremble. The intense light instantly fades into deep shadow, leaving her completely alone against the newly emptied, pitch-black void of space.\noverall_soundscape: Deep, resonant low-frequency thrumming of ship engines, overlaid with rhythmic, high-pitched electronic beeps from the consoles, followed by a sudden, deafening sub-bass boom and a loud, sizzling crackle as the warp drives engage. The immense acoustic impact causes a heavy, metallic clattering of the bridge panels, which instantly drops off into a stark, quiet mechanical hum.\nnon_diegetic_music: Symphonic orchestral score, beginning with a slow, rising brass and string crescendo that abruptly cuts off, instantly transitioning into a single, sustained, low-register solo cello note with no dynamic swell."
+                        },
+                        "created_at": 1785702855,
+                        "duration": 5,
+                        "id": "426586401755526",
+                        "modality": "text",
+                        "model": "MiniMax-H3",
+                        "ratio": "16:9",
+                        "status": "succeeded",
+                        "task_type": "h3_context_ir",
+                        "updated_at": 1785702884,
+                        "usage": {
+                          "completion_tokens": 3426,
+                          "prompt_tokens": 5664,
+                          "total_tokens": 9090
+                        }
+                      }
+                    }
+                  },
+                  "Video generation succeeded": {
+                    "value": {
+                      "task": {
+                        "content": {
+                          "url": "https://cdn.hailuoai.com/prod/hailuo_demo/testsets/h3_promo_eval_ref2va/gallery/sr_v2p26_trio_seed42_20260724/inputs/89f8c0bbee5b_denoise_ids_0_final.mp4"
+                        },
+                        "created_at": 1785125529,
+                        "duration": 5,
+                        "id": "424010985738629",
+                        "modality": "video",
+                        "model": "MiniMax-H3",
+                        "ratio": "16:9",
+                        "resolution": "2K",
+                        "status": "succeeded",
+                        "task_type": "generation",
+                        "updated_at": 1785125946,
+                        "usage": {
+                          "completion_tokens": 260390,
+                          "input_audio_seconds": 6,
+                          "input_image_count": 1,
+                          "input_seconds": 0,
+                          "output_seconds": 5,
+                          "prompt_tokens": 13500,
+                          "total_seconds": 5,
+                          "total_tokens": 273890
+                        }
+                      }
+                    }
+                  },
+                  "Video regeneration succeeded": {
+                    "value": {
+                      "task": {
+                        "content": {
+                          "url": "https://your-cdn.example.com/h3-regenerated-2k-output.mp4"
+                        },
+                        "created_at": 1785126000,
+                        "duration": 5,
+                        "id": "424010985738631",
+                        "modality": "video",
+                        "model": "MiniMax-H3",
+                        "ratio": "",
+                        "resolution": "2K",
+                        "status": "succeeded",
+                        "task_type": "regeneration",
+                        "updated_at": 1785126300,
+                        "usage": {
+                          "completion_tokens": 97645,
+                          "input_image_count": 0,
+                          "input_seconds": 0,
+                          "output_seconds": 5,
+                          "prompt_tokens": 0,
+                          "total_seconds": 5,
+                          "total_tokens": 97645
+                        }
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/GetVideoGenerationV2Resp"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "$ref": "#/components/responses/Err400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Err401"
+          },
+          "429": {
+            "$ref": "#/components/responses/Err429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Err500"
+          }
+        },
+        "summary": "Query Task",
+        "tags": [
+          "Video V2"
+        ]
+      }
+    },
+    "/v2/video_generation": {
+      "post": {
+        "description": "Create a video generation task. The model generates a video from the multimodal input you provide (text / image / video / audio). This is an asynchronous endpoint: on success it returns a `task_id`, and you should poll the [Query Task](/api-reference/video-generation-v2-query) endpoint for the task status and retrieve the generated video once it succeeds.\n\nCurrently supported models: `MiniMax-H3`, `MiniMax-H3-Highspeed`, `MiniMax-H3-Lite`, `MiniMax-H3-Max`.",
+        "operationId": "videoGenerationV2Create",
+        "parameters": [
+          {
+            "description": "Media type of the request body. Set it to `application/json`.",
+            "in": "header",
+            "name": "Content-Type",
+            "required": true,
+            "schema": {
+              "default": "application/json",
+              "enum": [
+                "application/json"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "Image-to-video (i2va)": {
+                  "value": {
+                    "content": [
+                      {
+                        "text": "Pull focus to the people in the background and add more steam to the ramen bowl.",
+                        "type": "text"
+                      },
+                      {
+                        "image_url": {
+                          "url": "https://cdn.hailuoai.com/prod/hailuo_demo/testsets/H3_AA_I2VA/gallery/sr_v17_variants_seed42_43_20260724/inputs/4a3a90bf9100_KDmcbkhzYo5sjjxr9FqcVmWVnzb.png"
+                        },
+                        "role": "first_frame",
+                        "type": "image_url"
+                      }
+                    ],
+                    "duration": 5,
+                    "model": "MiniMax-H3",
+                    "ratio": "adaptive",
+                    "resolution": "2K"
+                  }
+                },
+                "Reference-to-video (r2va)": {
+                  "value": {
+                    "content": [
+                      {
+                        "text": "Character speaks: Follow the wind, live free. Leave worries behind, enjoy the moment. Voice timbre follows reference audio 1.",
+                        "type": "text"
+                      },
+                      {
+                        "role": "reference_video",
+                        "type": "video_url",
+                        "video_url": {
+                          "url": "https://cdn.hailuoai.com/prod/hailuo_demo/testsets/h3_promo_eval_ref2va/gallery/sr_v2p26_trio_seed42_20260724/inputs/297573323635_00_%E8%A7%86%E9%A2%911_YnyRbxEwio_video_20260525_163755_1927e9d3.mp4"
+                        }
+                      },
+                      {
+                        "audio_url": {
+                          "url": "https://cdn.hailuoai.com/prod/hailuo_demo/testsets/h3_promo_eval_ref2va/gallery/sr_v2p26_trio_seed42_20260724/inputs/f463d523c5ce_01_%E9%9F%B3%E9%A2%911_RSLcbpzJPo_6%E6%9C%885%E6%97%A5(1).mp3"
+                        },
+                        "role": "reference_audio",
+                        "type": "audio_url"
+                      }
+                    ],
+                    "duration": 5,
+                    "model": "MiniMax-H3",
+                    "ratio": "adaptive",
+                    "resolution": "2K"
+                  }
+                },
+                "Text-to-video (t2va)": {
+                  "value": {
+                    "content": [
+                      {
+                        "text": "Epic space-opera theatrical teaser: a female captain stands alone before a massive observation window as the last fleet gathers and jumps away in a blinding flash, the bridge shaking, leaving her behind.",
+                        "type": "text"
+                      }
+                    ],
+                    "duration": 5,
+                    "model": "MiniMax-H3",
+                    "ratio": "16:9",
+                    "resolution": "2K"
+                  }
+                }
+              },
+              "schema": {
+                "$ref": "#/components/schemas/VideoGenerationV2Req"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VideoGenerationV2Resp"
+                }
+              }
+            },
+            "description": "The create endpoint returns a `task_id`. Use this `task_id` with the [Query Task](/api-reference/video-generation-v2-query) endpoint to retrieve the task status and result.\n\n**Successful Query Task response example**\n\n```json\n{\n  \"task\": {\n    \"id\": \"424010985738629\",\n    \"model\": \"MiniMax-H3\",\n    \"status\": \"succeeded\",\n    \"created_at\": 1785125529,\n    \"updated_at\": 1785125946,\n    \"content\": {\n      \"url\": \"https://your-cdn.example.com/h3-generated-2k-output.mp4\"\n    },\n    \"resolution\": \"2K\",\n    \"duration\": 5,\n    \"usage\": {\n      \"total_seconds\": 5,\n      \"input_seconds\": 0,\n      \"output_seconds\": 5,\n      \"input_image_count\": 0\n    },\n    \"ratio\": \"16:9\",\n    \"task_type\": \"generation\",\n    \"modality\": \"video\"\n  }\n}\n```"
+          },
+          "400": {
+            "$ref": "#/components/responses/Err400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Err401"
+          },
+          "402": {
+            "$ref": "#/components/responses/Err402"
+          },
+          "422": {
+            "$ref": "#/components/responses/Err422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Err429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Err500"
+          }
+        },
+        "summary": "Create video generation task",
+        "tags": [
+          "Video V2"
+        ]
+      }
+    },
+    "/v2/video_generation/{task_id}": {
+      "delete": {
+        "description": "Cancel or delete a video generation, H3-Context-IR, or video regeneration task based on its current status:\n- `queued`: cancel the task (`action=cancelled`); processing has not started yet.\n- `succeeded` / `failed`: delete the task record (`action=deleted`).\n- `running` / `cancelled`: not allowed, an error is returned.",
+        "operationId": "videoGenerationV2Delete",
+        "parameters": [
+          {
+            "description": "ID of the task to cancel or delete.",
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteVideoGenerationV2Resp"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "$ref": "#/components/responses/Err400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Err401"
+          },
+          "429": {
+            "$ref": "#/components/responses/Err429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Err500"
+          }
+        },
+        "summary": "Cancel or delete task",
+        "tags": [
+          "Video V2"
+        ]
+      }
+    },
+    "/v2/video_regeneration": {
+      "post": {
+        "description": "Create a video regeneration task: regenerate a source video that meets the MiniMax-H3 768P output specifications as a 2K video. Two input modes are supported; you must provide **exactly one** of `source_task_id` or `content` (with a `base_video` item) — providing both or neither returns a parameter error:\n\n- **Regenerate by task ID (`source_task_id`)**: pass the `source_task_id` of an existing succeeded `/v2/video_generation` task to regenerate from its output. This mode requires whitelist access; the source task must be owned by the current account, in `succeeded` status, and still within the 7-day query window of `/v2/query/video_generation`. No `content` is needed.\n- **Regenerate by source video (`base_video`)**: provide exactly one `type=video_url`, `role=base_video` source-video item in `content`, along with the other inputs used to generate that 768P video.\n\nThis is an asynchronous endpoint: on success it returns a `task_id`; poll [Query Task](/api-reference/video-generation-v2-query) for status. `task_type` is `regeneration`. Currently supported model: `MiniMax-H3`.",
+        "operationId": "videoRegenerationV2Create",
+        "parameters": [
+          {
+            "description": "Media type of the request body. Set it to `application/json`.",
+            "in": "header",
+            "name": "Content-Type",
+            "required": true,
+            "schema": {
+              "default": "application/json",
+              "enum": [
+                "application/json"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "Regenerate by source video (base_video) · i2va": {
+                  "value": {
+                    "content": [
+                      {
+                        "text": "Pull focus to the people in the background and add more steam to the ramen bowl.",
+                        "type": "text"
+                      },
+                      {
+                        "image_url": {
+                          "url": "https://cdn.hailuoai.com/prod/hailuo_demo/testsets/H3_AA_I2VA/gallery/sr_v17_variants_seed42_43_20260724/inputs/4a3a90bf9100_KDmcbkhzYo5sjjxr9FqcVmWVnzb.png"
+                        },
+                        "role": "first_frame",
+                        "type": "image_url"
+                      },
+                      {
+                        "role": "base_video",
+                        "type": "video_url",
+                        "video_url": {
+                          "url": "https://your-cdn.example.com/h3-i2va-768p.mp4"
+                        }
+                      }
+                    ],
+                    "model": "MiniMax-H3",
+                    "resolution": "2K"
+                  }
+                },
+                "Regenerate by source video (base_video) · r2va": {
+                  "value": {
+                    "content": [
+                      {
+                        "text": "Character speaks: Follow the wind, live free. Leave worries behind, enjoy the moment. Voice timbre follows reference audio 1.",
+                        "type": "text"
+                      },
+                      {
+                        "role": "reference_video",
+                        "type": "video_url",
+                        "video_url": {
+                          "url": "https://cdn.hailuoai.com/prod/hailuo_demo/testsets/h3_promo_eval_ref2va/gallery/sr_v2p26_trio_seed42_20260724/inputs/297573323635_00_%E8%A7%86%E9%A2%911_YnyRbxEwio_video_20260525_163755_1927e9d3.mp4"
+                        }
+                      },
+                      {
+                        "audio_url": {
+                          "url": "https://cdn.hailuoai.com/prod/hailuo_demo/testsets/h3_promo_eval_ref2va/gallery/sr_v2p26_trio_seed42_20260724/inputs/f463d523c5ce_01_%E9%9F%B3%E9%A2%911_RSLcbpzJPo_6%E6%9C%885%E6%97%A5(1).mp3"
+                        },
+                        "role": "reference_audio",
+                        "type": "audio_url"
+                      },
+                      {
+                        "role": "base_video",
+                        "type": "video_url",
+                        "video_url": {
+                          "url": "https://your-cdn.example.com/h3-r2va-768p.mp4"
+                        }
+                      }
+                    ],
+                    "model": "MiniMax-H3",
+                    "resolution": "2K"
+                  }
+                },
+                "Regenerate by source video (base_video) · t2va": {
+                  "value": {
+                    "content": [
+                      {
+                        "text": "Epic space-opera theatrical teaser: a female captain stands alone before a massive observation window as the last fleet gathers and jumps away in a blinding flash, the bridge shaking, leaving her behind.",
+                        "type": "text"
+                      },
+                      {
+                        "role": "base_video",
+                        "type": "video_url",
+                        "video_url": {
+                          "url": "https://your-cdn.example.com/h3-t2va-768p.mp4"
+                        }
+                      }
+                    ],
+                    "model": "MiniMax-H3",
+                    "resolution": "2K"
+                  }
+                },
+                "Regenerate by task ID (source_task_id)": {
+                  "value": {
+                    "model": "MiniMax-H3",
+                    "resolution": "2K",
+                    "source_task_id": "424010985738629"
+                  }
+                }
+              },
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/VideoRegenerationSourceTaskReq"
+                  },
+                  {
+                    "$ref": "#/components/schemas/VideoRegenerationBaseVideoReq"
+                  }
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VideoGenerationV2Resp"
+                }
+              }
+            },
+            "description": "The create endpoint returns a `task_id`. Use this `task_id` with the [Query Task](/api-reference/video-generation-v2-query) endpoint to retrieve the task status and result.\n\n**Successful Query Task response example**\n\n```json\n{\n  \"task\": {\n    \"id\": \"424010985738631\",\n    \"model\": \"MiniMax-H3\",\n    \"status\": \"succeeded\",\n    \"created_at\": 1785126000,\n    \"updated_at\": 1785126300,\n    \"content\": {\n      \"url\": \"https://your-cdn.example.com/h3-regenerated-2k-output.mp4\"\n    },\n    \"resolution\": \"2K\",\n    \"duration\": 5,\n    \"usage\": {\n      \"total_seconds\": 5,\n      \"input_seconds\": 0,\n      \"output_seconds\": 5,\n      \"input_image_count\": 0\n    },\n    \"ratio\": \"\",\n    \"task_type\": \"regeneration\",\n    \"modality\": \"video\"\n  }\n}\n```"
+          },
+          "400": {
+            "$ref": "#/components/responses/Err400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Err401"
+          },
+          "402": {
+            "$ref": "#/components/responses/Err402"
+          },
+          "422": {
+            "$ref": "#/components/responses/Err422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Err429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Err500"
+          }
+        },
+        "summary": "Create Video Regeneration Task",
+        "tags": [
+          "Video V2"
+        ]
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "url": "https://api.minimax.io"
+    }
+  ]
+}

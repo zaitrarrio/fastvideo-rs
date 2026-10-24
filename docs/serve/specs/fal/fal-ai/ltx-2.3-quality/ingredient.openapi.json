@@ -1,0 +1,506 @@
+{
+  "components": {
+    "schemas": {
+      "File": {
+        "properties": {
+          "content_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The mime type of the file.",
+            "examples": [
+              "image/png"
+            ],
+            "title": "Content Type"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The name of the file. It will be auto-generated if not provided.",
+            "examples": [
+              "z9RV14K95DvU.png"
+            ],
+            "title": "File Name"
+          },
+          "file_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The size of the file in bytes.",
+            "examples": [
+              4404019
+            ],
+            "title": "File Size"
+          },
+          "url": {
+            "description": "The URL where the file can be downloaded from.",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "File",
+        "type": "object",
+        "x-fal-order-properties": [
+          "url",
+          "content_type",
+          "file_name",
+          "file_size"
+        ]
+      },
+      "ImageSize": {
+        "properties": {
+          "height": {
+            "default": 512,
+            "description": "The height of the generated image.",
+            "exclusiveMinimum": 0,
+            "maximum": 14142,
+            "title": "Height",
+            "type": "integer"
+          },
+          "width": {
+            "default": 512,
+            "description": "The width of the generated image.",
+            "exclusiveMinimum": 0,
+            "maximum": 14142,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "title": "ImageSize",
+        "type": "object",
+        "x-fal-order-properties": [
+          "width",
+          "height"
+        ]
+      },
+      "Ltx23QualityIngredientInput": {
+        "description": "Image-to-video generation conditioned on an Ingredient reference sheet.",
+        "properties": {
+          "enable_prompt_expansion": {
+            "default": true,
+            "description": "Whether to enable prompt expansion.",
+            "title": "Enable Prompt Expansion",
+            "type": "boolean"
+          },
+          "enable_safety_checker": {
+            "default": true,
+            "description": "Whether to enable the safety checker.",
+            "title": "Enable Safety Checker",
+            "type": "boolean"
+          },
+          "frames_per_second": {
+            "default": 24,
+            "description": "Frames per second of the generated video.",
+            "maximum": 60,
+            "minimum": 1,
+            "title": "FPS",
+            "type": "number"
+          },
+          "generate_audio": {
+            "default": true,
+            "description": "Whether to include audio in the returned video. When disabled, the final MP4 is returned without an audio track.",
+            "title": "Generate Audio",
+            "type": "boolean"
+          },
+          "guidance_scale": {
+            "default": 1,
+            "description": "Classifier-free guidance scale.",
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Guidance Scale",
+            "type": "number"
+          },
+          "image_url": {
+            "description": "URL of the Ingredient reference sheet image. The sheet should contain clean panels for the characters, props, and location to preserve.",
+            "examples": [
+              "https://storage.googleapis.com/falserverless/example_inputs/ltxv-2-i2v-input.jpg"
+            ],
+            "title": "Image URL",
+            "type": "string"
+          },
+          "ingredient_strength": {
+            "default": 1,
+            "description": "Strength of the built-in Ingredient IC-LoRA. Higher values make the reference sheet identities and props more dominant.",
+            "maximum": 2,
+            "minimum": 0,
+            "title": "Ingredient Strength",
+            "type": "number"
+          },
+          "negative_prompt": {
+            "default": "worst quality, inconsistent motion, blurry, jittery, distorted",
+            "description": "The negative prompt to steer generation away from.",
+            "title": "Negative Prompt",
+            "type": "string"
+          },
+          "num_frames": {
+            "default": 121,
+            "description": "The number of frames to generate.",
+            "maximum": 481,
+            "minimum": 9,
+            "title": "Number of Frames",
+            "type": "integer"
+          },
+          "prompt": {
+            "description": "The prompt to guide the generated video. For best results, use a 'Reference sheet: ... Generated video: ...' structure.",
+            "examples": [
+              "Reference sheet: a chef in a white jacket, a copper pan, fresh basil, and a bright studio kitchen. Generated video: the chef tosses pasta in the copper pan, steam rising, cinematic food commercial."
+            ],
+            "title": "Prompt",
+            "type": "string"
+          },
+          "reference_strength": {
+            "default": 1,
+            "description": "Strength of the reference-sheet guide. 1.0 uses the sheet fully; lower values give the model more freedom.",
+            "maximum": 2,
+            "minimum": 0,
+            "title": "Reference Strength",
+            "type": "number"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageSize"
+              },
+              {
+                "enum": [
+                  "auto",
+                  "square_hd",
+                  "square",
+                  "portrait_4_3",
+                  "portrait_16_9",
+                  "landscape_4_3",
+                  "landscape_16_9"
+                ],
+                "type": "string"
+              }
+            ],
+            "default": {
+              "height": 896,
+              "width": 1536
+            },
+            "description": "The final generated video size. The default keeps the workflow's first stage at the Ingredient LoRA's trained 768x448 bucket before the official 2x refinement stage.",
+            "title": "Resolution"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Random seed for reproducibility. If None, a random seed is chosen.",
+            "title": "Seed"
+          },
+          "sync_mode": {
+            "default": false,
+            "description": "If True, the media is returned as a data URI inline in the response. Useful for short-lived requests and tests.",
+            "title": "Sync Mode",
+            "type": "boolean"
+          },
+          "video_quality": {
+            "default": "high",
+            "description": "The quality preset of the generated video.",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "maximum"
+            ],
+            "title": "Video Quality",
+            "type": "string"
+          },
+          "video_write_mode": {
+            "default": "balanced",
+            "description": "The write mode of the generated video.",
+            "enum": [
+              "fast",
+              "balanced",
+              "small"
+            ],
+            "title": "Video Write Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt",
+          "image_url"
+        ],
+        "title": "LTX23QualityIngredientInput",
+        "type": "object",
+        "x-fal-order-properties": [
+          "prompt",
+          "image_url",
+          "num_frames",
+          "resolution",
+          "frames_per_second",
+          "guidance_scale",
+          "ingredient_strength",
+          "reference_strength",
+          "generate_audio",
+          "negative_prompt",
+          "seed",
+          "enable_prompt_expansion",
+          "enable_safety_checker",
+          "video_quality",
+          "video_write_mode",
+          "sync_mode"
+        ]
+      },
+      "Ltx23QualityIngredientOutput": {
+        "description": "Standard output for every endpoint on this app.",
+        "properties": {
+          "prompt": {
+            "description": "The prompt used for generation (after any expansion).",
+            "title": "Prompt",
+            "type": "string"
+          },
+          "seed": {
+            "description": "The seed actually used for generation.",
+            "title": "Seed",
+            "type": "integer"
+          },
+          "video": {
+            "$ref": "#/components/schemas/File",
+            "description": "The generated video."
+          }
+        },
+        "required": [
+          "video",
+          "seed",
+          "prompt"
+        ],
+        "title": "LTX23QualityOutput",
+        "type": "object",
+        "x-fal-order-properties": [
+          "video",
+          "seed",
+          "prompt"
+        ]
+      },
+      "QueueStatus": {
+        "properties": {
+          "cancel_url": {
+            "description": "The cancel url.",
+            "type": "string"
+          },
+          "logs": {
+            "additionalProperties": true,
+            "description": "The logs.",
+            "type": "object"
+          },
+          "metrics": {
+            "additionalProperties": true,
+            "description": "The metrics.",
+            "type": "object"
+          },
+          "queue_position": {
+            "description": "The queue position.",
+            "type": "integer"
+          },
+          "request_id": {
+            "description": "The request id.",
+            "type": "string"
+          },
+          "response_url": {
+            "description": "The response url.",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "IN_QUEUE",
+              "IN_PROGRESS",
+              "COMPLETED"
+            ],
+            "type": "string"
+          },
+          "status_url": {
+            "description": "The status url.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "request_id"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "apiKeyAuth": {
+        "description": "Fal Key",
+        "in": "header",
+        "name": "Authorization",
+        "type": "apiKey"
+      }
+    }
+  },
+  "info": {
+    "description": "The OpenAPI schema for the fal-ai/ltx-2.3-quality/ingredient queue.",
+    "title": "Queue OpenAPI for fal-ai/ltx-2.3-quality/ingredient",
+    "version": "1.0.0",
+    "x-fal-metadata": {
+      "about": "Generate video from an Ingredient reference sheet.",
+      "category": "image-to-video",
+      "documentationUrl": "https://fal.ai/models/fal-ai/ltx-2.3-quality/ingredient/api",
+      "endpointId": "fal-ai/ltx-2.3-quality/ingredient",
+      "playgroundUrl": "https://fal.ai/models/fal-ai/ltx-2.3-quality/ingredient",
+      "thumbnailUrl": "https://v3b.fal.media/files/b/0a9ed9c6/wZu25U8DGi5RA-AFBsH-T_25fea6b72edc4b6ba45e1fea25be1bfc.jpg"
+    }
+  },
+  "openapi": "3.0.4",
+  "paths": {
+    "/fal-ai/ltx-2.3-quality/ingredient": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Ltx23QualityIngredientInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueStatus"
+                }
+              }
+            },
+            "description": "The request status."
+          }
+        }
+      }
+    },
+    "/fal-ai/ltx-2.3-quality/ingredient/requests/{request_id}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "description": "Request ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ltx23QualityIngredientOutput"
+                }
+              }
+            },
+            "description": "Result of the request."
+          }
+        }
+      }
+    },
+    "/fal-ai/ltx-2.3-quality/ingredient/requests/{request_id}/cancel": {
+      "put": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "description": "Request ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "success": {
+                      "description": "Whether the request was cancelled successfully.",
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The request was cancelled."
+          }
+        }
+      }
+    },
+    "/fal-ai/ltx-2.3-quality/ingredient/requests/{request_id}/status": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "description": "Request ID",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "logs",
+            "required": false,
+            "schema": {
+              "description": "Whether to include logs (`1`) in the response or not (`0`).",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueStatus"
+                }
+              }
+            },
+            "description": "The request status."
+          }
+        }
+      }
+    }
+  },
+  "security": [
+    {
+      "apiKeyAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "url": "https://queue.fal.run"
+    }
+  ]
+}
