@@ -1,5 +1,6 @@
 //! CLIP-L + T5-XXL on `CudaTensor` (mirrors `fastvideo_models::flux::text`).
 
+use crate::rt::sdpa::{sdpa, Plan};
 use fastvideo_models::flux::{flux1_dummy_text, flux1_t5_len, ClipTextConfig, T5Config};
 pub use fastvideo_models::flux::{pad_token_ids, tokenize_flux1};
 
@@ -82,7 +83,7 @@ impl ClipAttn {
             .forward(xs)?
             .reshape(vec![b, s, self.heads, self.dim_head])?
             .transpose(1, 2)?;
-        let attn = nn::scaled_dot_product_attention_masked(&q, &k, &v, None, Some(mask))?;
+        let attn = sdpa(&q, &k, &v, &Plan::masked(None, Some(mask)))?;
         let attn = attn
             .transpose(1, 2)?
             .reshape(vec![b, s, self.heads * self.dim_head])?;

@@ -22,6 +22,7 @@
 //! `scale_shift_table`) runs in f32 on the host, as the reference keeps those
 //! modules in fp32. The router GEMM is f32 too (routing is discrete).
 
+use crate::rt::sdpa::{sdpa, Plan};
 use std::sync::Mutex;
 
 use fastvideo_models::lingbot::sol::PisaPolicy;
@@ -488,7 +489,7 @@ impl Attention {
             .transpose(1, 2)?;
         let out = match pisa_sparsity {
             Some(sp) => crate::pisa_attn::pisa_attn(&q, &k, &v, sp, None)?,
-            None => nn::scaled_dot_product_attention(&q, &k, &v, None)?,
+            None => sdpa(&q, &k, &v, &Plan::dense(None))?,
         };
         self.to_out.forward(&out.merge_heads()?)
     }

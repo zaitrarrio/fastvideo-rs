@@ -86,7 +86,7 @@ fn pin_like(t: CudaTensor, like: &CudaTensor) -> Result<CudaTensor> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rt::nn::scaled_dot_product_attention;
+    use crate::rt::sdpa::{sdpa, Plan};
 
     fn seeded(n: usize, k: f32) -> Vec<f32> {
         (0..n).map(|i| (i as f32 * k + 0.41).sin()).collect()
@@ -100,7 +100,7 @@ mod tests {
         let v = CudaTensor::from_vec(seeded(b * h * t * d, 0.23), vec![b, h, t, d]).unwrap();
         let scale = Some((d as f32).sqrt().recip());
         let pisa = pisa_attn(&q, &k, &v, 0.0, scale).unwrap();
-        let dense = scaled_dot_product_attention(&q, &k, &v, scale).unwrap();
+        let dense = sdpa(&q, &k, &v, &Plan::dense(scale)).unwrap();
         let (a, b) = (pisa.host_cow().unwrap(), dense.host_cow().unwrap());
         for (x, y) in a.iter().zip(b.iter()) {
             assert!((x - y).abs() < 3e-5, "{x} vs {y}");

@@ -55,7 +55,7 @@ pub use crate::rt::ledger;
 pub use crate::rt::log;
 pub use crate::rt::nn;
 pub use crate::rt::nvfp4;
-#[cfg(feature = "cuda")]
+#[cfg(feature = "nvfp4-gemm")]
 pub use crate::rt::nvfp4_gemm;
 #[cfg(feature = "cuda")]
 pub use crate::rt::nvfp4_linear;

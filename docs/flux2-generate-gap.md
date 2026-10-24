@@ -97,7 +97,8 @@ still leaving the device. CPU unit tests still take the host twin and increment
 
 ### Dense SDPA (confirmed)
 
-`nn::scaled_dot_product_attention` defaults to `FASTVIDEO_SDPA=dense`:
+The dense SDPA (`rt::sdpa::sdpa` with `Plan::dense`, ADR-0015; then
+`nn::scaled_dot_product_attention`) defaults to `FASTVIDEO_SDPA=dense`:
 strided-batched cuBLAS `Q@Kᵀ` + softmax + `P@V`, query-chunked so the score
 buffer stays under 256M elements (`query_chunk = 256M / (B·H·Sk) = 2427` at
 this shape). bf16 probabilities when `gemm=Bf16`. **Leave this as the
@@ -169,7 +170,7 @@ at 128×128 (`Sq=Sk=16384`):
 ```203:214:crates/fastvideo-cudarc/src/flux2/vae.rs
         let q = self.to_q.forward(&seq)?.reshape(vec![b, 1, h * w, c])?;
         // ...
-        let attn = nn::scaled_dot_product_attention(&q, &k, &v, None)?;
+        let attn = sdpa(&q, &k, &v, &Plan::dense(None))?;
 ```
 
 That is a second, larger dense SDPA than the DiT line in the log

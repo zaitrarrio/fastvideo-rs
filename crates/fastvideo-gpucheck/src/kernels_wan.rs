@@ -17,7 +17,7 @@
 
 use fastvideo_cudarc::rt::attn::{self, BlockCausal, FlashKernel};
 use fastvideo_cudarc::rt::fused::Rope;
-use fastvideo_cudarc::rt::nn;
+use fastvideo_cudarc::rt::sdpa;
 use fastvideo_cudarc::rt::tensor::with_bf16_act;
 use fastvideo_cudarc::wan::fuse;
 use serde_json::json;
@@ -197,7 +197,7 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
         let dense = t32(&mask.dense_mask(s, s), &[1, 1, s, s])?;
         let (q32, k32, v32) = (t32(&q, &shape)?, t32(&k, &shape)?, t32(&v, &shape)?);
         let composed = with_bf16_act(false, || {
-            nn::scaled_dot_product_attention_masked(&q32, &k32, &v32, None, Some(&dense))
+            sdpa::sdpa(&q32, &k32, &v32, &sdpa::Plan::masked(None, Some(&dense)))
         })?;
         let e_comp = max_abs(&got, &host(&composed)?);
         report.check(
@@ -210,8 +210,9 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
         // where the fused kernels are the default (bf16 GEMM math, `--mode
         // fast`); in an exact-math context it takes the composed fallback.
         if attn::mma_sdpa_default() {
-            let routed =
-                with_bf16_act(true, || nn::sdpa_block_causal(&q16, &k16, &v16, None, mask))?;
+            let routed = with_bf16_act(true, || {
+                sdpa::sdpa(&q16, &k16, &v16, &sdpa::Plan::block_causal(None, mask))
+            })?;
             let got16 = need(
                 attn::device_mma_sdpa_causal(&q16, &k16, &v16, None, true, mask)?,
                 "causal flash bf16",
@@ -290,7 +291,7 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             let (q32, k32, v32) = (q16.to_f32_act()?, k16.to_f32_act()?, v16.to_f32_act()?);
             Some(time_ms(3, || {
                 with_bf16_act(false, || {
-                    nn::scaled_dot_product_attention_masked(&q32, &k32, &v32, None, Some(&dm))
+                    sdpa::sdpa(&q32, &k32, &v32, &sdpa::Plan::masked(None, Some(&dm)))
                 })?;
                 Ok(())
             })?)
@@ -306,7 +307,7 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
     }
 
     // The autoregressive path (FastVideo's inference): one 3-frame block of
-    // queries against the KV cache window, unmasked (`nn::sdpa_kv_window`).
+    // queries against the KV cache window, unmasked (`Plan::kv_window`).
     // Correctness of the flash route against the composed reference on a
     // small odd shape, then the timing of the last block of an 81-frame clip
     // (4 680 queries x 32 760 keys).
@@ -326,7 +327,9 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             attn::device_mma_sdpa(&q16, &k16, &v16, None, true)?,
             "kv window flash",
         )?;
-        let composed = with_bf16_act(true, || nn::sdpa_kv_window_with(&q16, &k16, &v16, false))?;
+        let composed = with_bf16_act(true, || {
+            sdpa::sdpa(&q16, &k16, &v16, &sdpa::Plan::kv_window_with(false))
+        })?;
         let e = max_abs(&host(&flash)?, &host(&composed)?);
         report.check(
             "kv_window_flash_vs_sdpa_composed",
@@ -347,7 +350,9 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             Ok(())
         })?;
         let composed = time_ms(3, || {
-            with_bf16_act(true, || nn::sdpa_kv_window_with(&q16, &k16, &v16, false))?;
+            with_bf16_act(true, || {
+                sdpa::sdpa(&q16, &k16, &v16, &sdpa::Plan::kv_window_with(false))
+            })?;
             Ok(())
         })?;
         report.note(

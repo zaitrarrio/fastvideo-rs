@@ -14,20 +14,11 @@ use super::device::{self, DeviceContext};
 #[cfg(feature = "cuda")]
 use super::kernels::{cfg_n, cfg_rows, cfg_rows_with_row, launch};
 #[cfg(feature = "cuda")]
+use super::tensor::Result;
+#[cfg(feature = "cuda")]
 use super::tensor::TensorError;
-use super::tensor::{CudaTensor, Result};
 #[cfg(feature = "cuda")]
 use cudarc::driver::LaunchConfig;
-
-/// Dense SDPA via [`CudaTensor`].
-pub fn scaled_dot_product_attention(
-    query: &CudaTensor,
-    key: &CudaTensor,
-    value: &CudaTensor,
-    scale: Option<f32>,
-) -> Result<CudaTensor> {
-    super::nn::scaled_dot_product_attention(query, key, value, scale)
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ElemBinary {
@@ -2936,8 +2927,8 @@ pub fn nvfp4_reconstruct_device(
 /// Tile-IR W4A4 GEMM (oxide f32-out cubin). Default **off**
 /// ([`fastvideo_models::nvfp4::ENV_OXIDE_GEMM`]). The kernel takes one
 /// scalar `alpha`, so a weight whose rows carry different decode factors
-/// (fused prefixes) is refused and the caller falls back.
-#[cfg(feature = "cuda")]
+/// (fused prefixes) is refused and the caller falls back. Feature `oxide`.
+#[cfg(feature = "oxide")]
 #[allow(clippy::too_many_arguments)]
 pub fn nvfp4_oxide_gemm_device(
     a_packed: &[u8],

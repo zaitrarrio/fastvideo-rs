@@ -1,5 +1,6 @@
 //! CLIP ViT-L/14 text encoder (`text_encoder_2`) for Kandinsky 5 pooled embeds.
 
+use crate::rt::sdpa::{sdpa, Plan};
 use std::path::Path;
 
 use fastvideo_models::kandinsky5::tokenize_clip;
@@ -123,7 +124,7 @@ impl ClipTextAttention {
         let q = reshape(self.q.forward(xs)?)?;
         let k = reshape(self.k.forward(xs)?)?;
         let v = reshape(self.v.forward(xs)?)?;
-        let attn = nn::scaled_dot_product_attention_masked(&q, &k, &v, None, Some(mask))?;
+        let attn = sdpa(&q, &k, &v, &Plan::masked(None, Some(mask)))?;
         let attn = attn
             .transpose(1, 2)?
             .reshape(vec![b, s, self.heads * self.dim_head])?;

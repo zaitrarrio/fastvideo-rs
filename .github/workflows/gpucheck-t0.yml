@@ -8,6 +8,7 @@ on:
     paths:
       - "crates/fastvideo-cudarc/**"
       - "crates/fastvideo-gpucheck/**"
+      - "crates/fastvideo-engine-service/**"
       - "scripts/gpu/**"
       - "scripts/gpu/cuda-13.pins"
       - "scripts/ci/prebuilt.sh"
@@ -69,6 +70,23 @@ jobs:
         env:
           CUDARC_CUDA_VERSION: "13000"
         run: cargo check -p fastvideo-gpucheck --features cuda
+
+  # The serve binaries' feature set: `cuda` without `oxide` / `nvfp4-gemm`
+  # (ADR-0015). The type-check above builds fv-gpucheck, whose `cuda`
+  # feature turns `oxide` on for the whole build, so it never compiles this.
+  serve-cuda-check:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      CUDARC_CUDA_VERSION: "13000"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cudarc, cuda without oxide
+        run: cargo check --locked -p fastvideo-cudarc --features cuda
+      - name: engine-service, cuda (the serve feature set)
+        run: cargo check --locked -p fastvideo-engine-service --features cuda
 
   nvrtc-compile:
     runs-on: ubuntu-22.04

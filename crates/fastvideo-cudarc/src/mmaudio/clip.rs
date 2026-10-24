@@ -14,6 +14,7 @@
 
 use super::layers::{gather_rows, host_values, linear, msg, pinned, quick_gelu, weight};
 use crate::rt::nn::{self, Linear};
+use crate::rt::sdpa::{sdpa, Plan};
 use crate::rt::tensor::{CudaTensor, Result};
 use crate::rt::weights::WeightMap;
 
@@ -69,8 +70,7 @@ impl ResBlock {
                 .reshape(vec![b, n, h, hd])?
                 .permute(&[0, 2, 1, 3])
         };
-        let o =
-            nn::scaled_dot_product_attention_masked(&part(0)?, &part(1)?, &part(2)?, None, mask)?;
+        let o = sdpa(&part(0)?, &part(1)?, &part(2)?, &Plan::masked(None, mask))?;
         let o = o.permute(&[0, 2, 1, 3])?.reshape(vec![b, n, d])?;
         let x = x.add(&self.out_proj.forward(&o)?)?;
         let xn = x.layer_norm(1e-5, Some(&self.ln2.0), Some(&self.ln2.1))?;

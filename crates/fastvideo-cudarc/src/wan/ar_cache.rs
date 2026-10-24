@@ -4,10 +4,10 @@
 //! forward. Packed slots are the resident form when `FASTVIDEO_NVFP4` is on;
 //! the span returned to attention is already dequantized.
 
+use crate::rt::sdpa::{sdpa, Plan};
 use fastvideo_models::nvfp4::ScaleRule;
 use fastvideo_models::wan::{ArKvCache, ArKvSpec};
 
-use super::nn;
 use super::tensor::{CudaTensor, Result, TensorError};
 
 fn msg(s: impl Into<String>) -> TensorError {
@@ -94,7 +94,7 @@ pub fn attend_cached(
         }
         let k_cat = CudaTensor::cat(&k_win.iter().collect::<Vec<_>>(), 0)?;
         let v_cat = CudaTensor::cat(&v_win.iter().collect::<Vec<_>>(), 0)?;
-        parts.push(nn::scaled_dot_product_attention(&qn, &k_cat, &v_cat, None)?);
+        parts.push(sdpa(&qn, &k_cat, &v_cat, &Plan::dense(None))?);
         start += n;
     }
     CudaTensor::cat(&parts.iter().collect::<Vec<_>>(), 2)

@@ -7,6 +7,7 @@
 //! 3. Score = Q_cmp @ K_cmp^T; keep top `(1 - sparsity)` KV blocks per Q block.
 //! 4. Softmax-attend each query token only to tokens in selected KV blocks.
 
+use crate::rt::sdpa::{sdpa, Plan};
 use crate::rt::tensor::{CudaTensor, Result, TensorError};
 
 fn msg(s: impl Into<String>) -> TensorError {
@@ -55,7 +56,7 @@ pub fn flash_attn_bsa_3d(
     }
     if t % tq != 0 || h % hq != 0 || w % wq != 0 || t % tk != 0 || h % hk != 0 || w % wk != 0 {
         // Fall back to dense when shapes are not divisible (tiny graphs).
-        return crate::rt::nn::scaled_dot_product_attention_masked(q, k, v, None, None);
+        return sdpa(q, k, v, &Plan::dense(None));
     }
 
     let nt_q = t / tq;
@@ -279,8 +280,7 @@ mod tests {
         let q = CudaTensor::from_vec(data.clone(), vec![1, 1, seq, d]).unwrap();
         let k = CudaTensor::from_vec(data.clone(), vec![1, 1, seq, d]).unwrap();
         let v = CudaTensor::from_vec(data, vec![1, 1, seq, d]).unwrap();
-        let dense =
-            crate::rt::nn::scaled_dot_product_attention_masked(&q, &k, &v, None, None).unwrap();
+        let dense = sdpa(&q, &k, &v, &Plan::dense(None)).unwrap();
         let sparse = flash_attn_bsa_3d(
             &q,
             &k,

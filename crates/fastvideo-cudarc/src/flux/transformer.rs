@@ -1,5 +1,6 @@
 //! FluxTransformer2DModel on `CudaTensor` (FLUX.1: AdaLN-Zero, GELU, 3-axis RoPE).
 
+use crate::rt::sdpa::{sdpa, Plan};
 use fastvideo_models::flux::Flux1ArchConfig;
 
 use crate::rt::nn::{self, Linear};
@@ -238,11 +239,11 @@ impl Flux1Attention {
             };
         q = apply_rotary(&q, &rope.0, &rope.1)?;
         k = apply_rotary(&k, &rope.0, &rope.1)?;
-        let attn = nn::scaled_dot_product_attention(
+        let attn = sdpa(
             &q.transpose(1, 2)?,
             &k.transpose(1, 2)?,
             &v.transpose(1, 2)?,
-            None,
+            &Plan::dense(None),
         )?;
         let attn = attn.transpose(1, 2)?;
         let b = attn.shape[0];

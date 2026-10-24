@@ -365,7 +365,7 @@ still run mma.sync on these GPUs.
 SF-Wan's self-attention takes one of two routes (see "SF-Wan: FastVideo's
 causal inference" below). The default, block by block through the KV cache,
 is unmasked attention of a block's queries against the cache window: the
-dense flash kernel with `Sq != Sk` (`nn::sdpa_kv_window`). The whole-clip
+dense flash kernel with `Sq != Sk` (`rt::sdpa::Plan::kv_window`). The whole-clip
 route (`FASTVIDEO_WAN_CAUSAL_AR=0`) uses the masked kernel
 `flash_mma_fwd2_causal_d{64,128}`. It takes the mask as parameters
 (`BlockCausal`: tokens per block, window in blocks counting the query's
@@ -444,7 +444,7 @@ All pass (the composed path itself is within 1e-6 of f64 in exact math; the
 kernel's error is its bf16 P). With one frame spanning the sequence the
 causal kernel equals the dense V2 kernel bit for bit (d = 64 and 128). The
 `*_routed_bf16` checks in that run failed by construction: in an exact-math
-context `nn::sdpa_block_causal` takes the composed fallback, not the
+context `rt::sdpa::Plan::block_causal` takes the composed fallback, not the
 kernel; the check now runs only where the fused kernels are the default.
 
 Timing, 12 heads x d 128, 1560 tokens per frame (SF-Wan 1.3B 480x832):
