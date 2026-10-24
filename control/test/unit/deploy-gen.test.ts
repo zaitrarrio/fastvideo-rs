@@ -1,8 +1,10 @@
 // The deployment data (plan C1, deploy/deploy.toml, docs/adr/0011-deploy-section.md): it parses against the family
 // manifests, refuses what would deploy wrongly (an unknown variant, a recipe naming another variant, a card below its
 // variants' floor, a volume other than the EU one), and fv-control's presets and enums are exactly what it says.
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEPLOY_FAMILY_PRESETS, DEPLOY_IMAGES, DEPLOY_PRESETS } from "../../src/deploy-gen";
 import { POOL_PRESET_IDS, VARIANTS } from "../../src/enums";
@@ -91,4 +93,35 @@ describe("deploy/deploy.toml refusals", () => {
   it("a GCP row names served ids only without a Runpod twin", () => {
     expect(edited('served = ["fake-h3-turbo"]\n', "")).toThrow(/served/);
   });
+});
+
+describe("an image change regenerates in one run (gen-configs.mjs on a copy of the tree)", () => {
+  // Everything the generator reads or writes, copied; control/node_modules linked.
+  const PATHS = ["control/gen-configs.mjs", "control/package.json", "control/src", "families", "deploy", "configs", "docker", "docs/serve/images.md", "scripts/gpu", "scripts/serve/variants.sh", "scripts/gcp", ".github/workflows/serve-image.yml", "crates/fastvideo-serve/console"];
+  it("adding a config to an image: one plain run, then --check is clean", () => {
+    const root = mkdtempSync(join(tmpdir(), "c1-gen-"));
+    try {
+      for (const p of PATHS) {
+        mkdirSync(dirname(join(root, p)), { recursive: true });
+        cpSync(join(repo, p), join(root, p), { recursive: true });
+      }
+      symlinkSync(join(repo, "control/node_modules"), join(root, "control/node_modules"), "dir");
+      const deploy = join(root, "deploy/deploy.toml");
+      const before = readFileSync(deploy, "utf8");
+      const from = 'id = "sfwan"\nconfig = "runpod-sfwan.toml"\n';
+      expect(before.includes(from)).toBe(true);
+      writeFileSync(deploy, before.replace(from, `${from}also = ["runpod-longlive.toml"]\n`));
+      const gen = (...args: string[]) => execFileSync(process.execPath, ["gen-configs.mjs", ...args], { cwd: join(root, "control"), encoding: "utf8", stdio: "pipe" });
+      gen();
+      gen("--check");
+      const df = readFileSync(join(root, "docker/gpucheck.Dockerfile"), "utf8");
+      expect(df).toContain("COPY configs/serve/runpod-sfwan.toml configs/serve/runpod-longlive.toml configs/serve/runpod-fake.toml /etc/fv/");
+      expect(readFileSync(join(root, "control/src/cluster/image-configs.ts"), "utf8")).toMatch(/"sfwan": \{\n\s+"default": "\/etc\/fv\/runpod-sfwan.toml",\n\s+"files": \[\n\s+"runpod-sfwan.toml",\n\s+"runpod-longlive.toml"/);
+      // The longlive preset's config is now in its image: it no longer rides inline.
+      expect(readFileSync(join(root, "control/src/cluster/worker-configs.ts"), "utf8")).not.toContain('"runpod-longlive.toml":');
+      expect(readFileSync(join(root, "control/src/deploy-gen.ts"), "utf8")).toMatch(/"config": "runpod-longlive.toml",\n\s+"inline": false/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 60000);
 });

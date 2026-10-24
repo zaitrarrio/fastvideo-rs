@@ -171,11 +171,18 @@ for the first variant of its tier; a family preset serves one model family
 and its `min_vram_gb` meets its variants' `gpu.min_vram_gib`; `prequant`
 entries are nested strictly inside one of the preset's weight trees.
 
+The Rust recipe rule is deliberately loose for tier aliases: the crate does
+not know the engine's alias spellings (`tier_alias`: `h3-turbo`, `ltx-pro`,
+…), so `check_recipe` accepts any name the manifests do not know for the
+first variant of a tier. The exact spelling is checked in JavaScript only.
+
 `control/gen-configs.mjs` repeats what it needs to generate and adds what
 only it can see (`deployChecks`, run by `--check`): the exact tier-alias
-spelling (the engine's `tier_alias`), the named configs exist, the
-hand-written `serve-cpu` stage and `.github/workflows/serve-image.yml`'s two
-build lists name the image variants, GCP `verify_cells` are
+spelling (the engine's `tier_alias`, resolved through `MODEL_NAMES`), the named configs exist, the
+hand-written `serve-cpu` stage (read from the Dockerfile as the run generates
+it, so an image edit regenerates in one run) and
+`.github/workflows/serve-image.yml`'s two build lists name the image
+variants, GCP `verify_cells` are
 `verify-weights.sh` cells, `configs/autoscale.toml`'s prices cover every
 pool's GPU types. fv-control's unit tests check its presets against the
 family rules (`templates.test.ts`: the listed members equal
@@ -203,7 +210,10 @@ identical. Intended differences: one preset order for `POOL_PRESET_IDS`,
 `FV_POOL_PRESETS` and the inline-config list (the dashboard's); the
 `variants.sh` / `images.md` tables rendered uniformly from the data (the
 stale "(wan-turbo)" label of the `wan` image dropped: `wan-turbo` resolves
-to `fastwan22-ti2v-5b`, served by `wan5b`); region markers.
+to `fastwan22-ti2v-5b`, served by `wan5b`; what an extra config serves is
+derived from its `[[models]]`, so `wan5b`'s row reads "serving
+`wan14b-plug-4step` / `wan14b-turbo`" where it said "the `wan14b-turbo`
+tier"); region markers.
 
 ### 7. Still hand-written, and why
 
@@ -265,7 +275,13 @@ size of a worker config in a Runpod template's env (the largest family
 config is a few KB; the template env limit is UNVERIFIED); (4) stored specs
 that name a variant migrate (the field becomes ignored, or maps to the one
 image); (5) the CPU image stays separate: a different binary (no CUDA), so
-"one image" is one CUDA image plus `cpu`. C2's `fv-boot` (config
+"one image" is one CUDA image plus `cpu`; (6) the one CUDA image still carries
+`runpod-fake.toml` for CI's no-GPU smoke check (`ci-images.sh smoke`), as
+every variant image does today; (7) the autoscaler's pod pools name a
+Runpod template (`[autoscale.pools.pod] template_id`, today a placeholder for
+`sfwan-live`), and every template id that names a variant template
+(`fv-serve-<variant>-pod`) is re-pointed at the one image's template, with
+the worker config in the pool's env. C2's `fv-boot` (config
 materialization from `FV_WORKER_TOML_B64` / `FV_WORKER_CONFIG` / baked) is
 the natural place for (1).
 

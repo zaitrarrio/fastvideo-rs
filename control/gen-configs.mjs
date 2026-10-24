@@ -65,9 +65,10 @@ ${entries.join("\n")}
 `;
 }
 
-/** The per-variant serve images' configs, read from the Dockerfile's serve-<variant> stages. */
-export function imageConfigs() {
-  const df = readFileSync(join(HERE, "../docker/gpucheck.Dockerfile"), "utf8");
+/** The per-variant serve images' configs, read from the Dockerfile's serve-<variant> stages: by default the Dockerfile
+ * as this run generates it (dockerfile(): the hand-written stages from disk, the CUDA variant stages from
+ * deploy/deploy.toml), so an image change regenerates image-configs.ts in the same run. */
+export function imageConfigs(df = dockerfile()) {
   const out = {};
   let cur = null;
   for (const line of df.split("\n")) {
@@ -827,7 +828,15 @@ export function autoscaleToml() {
 export const IMAGES_MD_BEGIN = `<!-- BEGIN ${DEPLOY_HEADER} -->`;
 export const IMAGES_MD_END = "<!-- END GENERATED -->";
 /** docs/serve/images.md: the image table. */
-export function imagesMd(dep = loadDeploy()) {
+export function imagesMd(set = loadFamilies(), dep = loadDeploy(set)) {
+  // What an extra config serves: its [[models]] ids and their variants' served names (`wan14b-turbo`).
+  const serves = (cfg) =>
+    configModels(readFileSync(join(SERVE, cfg), "utf8"), set)
+      .map((m) => {
+        const names = [m.id, ...set.variants.get(m.catalog).served_names].filter((n, i, a) => a.indexOf(n) === i);
+        return names.map((n) => `\`${n}\``).join(" / ");
+      })
+      .join(", ");
   const rows = ["| variant | config baked as `FV_CONFIG` | GHCR tags | Runpod templates |", "|---|---|---|---|"];
   for (const i of dep.images) {
     const name = i.note ? `${i.id} (${i.note})` : i.id;
@@ -835,7 +844,7 @@ export function imagesMd(dep = loadDeploy()) {
       rows.push(`| ${name} | every config, \`${i.config}\` default | \`:sha-<sha>\`, \`:latest\`, \`:stable\` | none |`);
       continue;
     }
-    const cfg = `\`${i.config}\`${i.also.map((a) => ` (also carries \`${a}\`: set \`FV_CONFIG=/etc/fv/${a}\`)`).join("")}`;
+    const cfg = `\`${i.config}\`${i.also.map((a) => ` (also carries \`${a}\`, serving ${serves(a)}: set \`FV_CONFIG=/etc/fv/${a}\`)`).join("")}`;
     const tags = `\`:${i.id}-sha-<sha>\`, \`:${i.id}\` / \`:${i.id}-latest\`, \`:${i.id}-stable\``;
     const tpl = i.compute === "cpu" ? `\`fv-serve-${i.id}-pod\`` : `\`fv-serve-${i.id}-sls\`, \`fv-serve-${i.id}-pod\``;
     rows.push(`| ${name} | ${cfg} | ${tags} | ${tpl} |`);
@@ -898,7 +907,8 @@ export function deployChecks(set = loadFamilies()) {
     ...dep.gcp.flatMap((r) => [[`gcp ${r.name}`, r.config], ...(r.runpod_twin ? [[`gcp ${r.name} runpod_twin`, r.runpod_twin]] : [])]),
   ];
   for (const [where, c] of named) if (!configs.has(c)) out.push(`deploy/deploy.toml ${where}: configs/serve/${c} does not exist`);
-  // The Dockerfile: a serve-<id> stage per image variant, baking its config and carrying its configs.
+  // The Dockerfile as this run writes it (the CUDA stages generated from the data): a serve-<id> stage per image
+  // variant baking its config and carrying its configs. Only the hand-written serve-cpu stage can disagree.
   const stages = imageConfigs();
   const built = builtImages(dep);
   for (const i of built) {

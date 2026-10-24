@@ -21,7 +21,7 @@ deploy scripts pull anonymously).
 | h3-max | `runpod-h3-max.toml` | `:h3-max-sha-<sha>`, `:h3-max` / `:h3-max-latest`, `:h3-max-stable` | `fv-serve-h3-max-sls`, `fv-serve-h3-max-pod` |
 | ltx | `runpod-ltx.toml` | `:ltx-sha-<sha>`, `:ltx` / `:ltx-latest`, `:ltx-stable` | `fv-serve-ltx-sls`, `fv-serve-ltx-pod` |
 | wan | `runpod-wan.toml` | `:wan-sha-<sha>`, `:wan` / `:wan-latest`, `:wan-stable` | `fv-serve-wan-sls`, `fv-serve-wan-pod` |
-| wan5b | `runpod-wan5b.toml` (also carries `runpod-wan14b.toml`: set `FV_CONFIG=/etc/fv/runpod-wan14b.toml`) | `:wan5b-sha-<sha>`, `:wan5b` / `:wan5b-latest`, `:wan5b-stable` | `fv-serve-wan5b-sls`, `fv-serve-wan5b-pod` |
+| wan5b | `runpod-wan5b.toml` (also carries `runpod-wan14b.toml`, serving `wan14b-plug-4step` / `wan14b-turbo`: set `FV_CONFIG=/etc/fv/runpod-wan14b.toml`) | `:wan5b-sha-<sha>`, `:wan5b` / `:wan5b-latest`, `:wan5b-stable` | `fv-serve-wan5b-sls`, `fv-serve-wan5b-pod` |
 | sfwan | `runpod-sfwan.toml` | `:sfwan-sha-<sha>`, `:sfwan` / `:sfwan-latest`, `:sfwan-stable` | `fv-serve-sfwan-sls`, `fv-serve-sfwan-pod` |
 | cpu (CPU only, fake engine; `gateway` until 2026-10-06) | `runpod-fake.toml` | `:cpu-sha-<sha>`, `:cpu` / `:cpu-latest`, `:cpu-stable` | `fv-serve-cpu-pod` |
 | debug (the old all-in-one tags; since 2026-10-06 the `runtime` image + fv-serve, on the shared layers) | every config, `runpod.toml` default | `:sha-<sha>`, `:latest`, `:stable` | none |
