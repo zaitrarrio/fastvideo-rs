@@ -374,15 +374,21 @@ over the v1 fields), and, on disk, that an entry the legacy code wrote is
 not read by the new code for the same prompt and weights (a miss that
 computes, leaves the old file and stores its own).
 
-Mutations (each applied alone, the tests rerun, all 20 caught): each new
+Mutations (each applied alone, the tests rerun, all 31 caught): each new
 field dropped from the H3, LTX and Wan keys (weights read, tree identity,
-numerics, mode); each recovered-8B file dropped from its identity; each
+mode, numerics); each recovered-8B file dropped from its identity; each
 domain reverted to its v1 value; the arch, the activations or the GEMM
 math dropped from `Numerics`; `ResidentDecoder::prequantized` never set;
-the tree keyed as quantise-at-load; one field for both LTX modes. Fields that are selected at a call site
-on the device (which weights an encoder read, the mode, the numerics on a
-GPU) are held by the `b4c2` GPU cells instead: each cell fails when this
-build's read pass hits.
+the tree keyed as quantise-at-load; one field for both modes; H3
+`EncoderRun` ignoring the streamed tree, keying streamed as resident, or
+ignoring whether a resident encoder ran; LTX `plan_mode` with FP8 not
+resident, an explicit streamed residency losing to FP8, or no device
+counted as room; `gemma_tree` looking for a tree without FP8;
+`gemma_weights_read` keying FP8 + streamed as FP8; Wan's numerics read
+outside UMT5's f32 scope; the identity memo ignoring a file's size. What
+remains device-only — the live values `Numerics::live` reads, and that the
+pipelines pass the runs these functions describe — is held by the `b4c2`
+GPU cells: each fails when this build's read pass hits.
 
 GPU (`scripts/gpu/runpod-matrix.sh b4c2`, `FV_BASELINE_SHA` = main before
 B4c2): switch cells write the cache under one setting and read it under
