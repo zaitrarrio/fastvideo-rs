@@ -41,28 +41,7 @@ pub const PROBE: u64 = 1 << 20;
 /// No timestamps: a re-download of the same files keeps its cache.
 pub fn files_head_tail(path: &Path, prefix: Option<&str>) -> Result<[u8; 32]> {
     let io = |e: std::io::Error, p: &Path| msg(format!("{}: {e}", p.display()));
-    let mut files: Vec<PathBuf> = if path.is_file() {
-        vec![path.to_path_buf()]
-    } else {
-        std::fs::read_dir(path)
-            .map_err(|e| io(e, path))?
-            .filter_map(|entry| entry.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|x| x == "safetensors"))
-            .filter(|p| {
-                prefix.is_none_or(|pre| {
-                    p.file_name()
-                        .is_some_and(|n| n.to_string_lossy().starts_with(pre))
-                })
-            })
-            .collect()
-    };
-    if files.is_empty() {
-        return Err(msg(format!(
-            "{}: no safetensors files to identify",
-            path.display()
-        )));
-    }
-    files.sort();
+    let files = head_tail_files(path, prefix)?;
     let mut h = Sha256::new();
     for file in &files {
         let mut f = std::fs::File::open(file).map_err(|e| io(e, file))?;
@@ -88,6 +67,75 @@ pub fn files_head_tail(path: &Path, prefix: Option<&str>) -> Result<[u8; 32]> {
         }
     }
     Ok(h.finalize().into())
+}
+
+/// The files [`files_head_tail`] identifies, sorted: `path` itself, or every
+/// `.safetensors` directly under it whose name starts with `prefix`.
+fn head_tail_files(path: &Path, prefix: Option<&str>) -> Result<Vec<PathBuf>> {
+    let mut files: Vec<PathBuf> = if path.is_file() {
+        vec![path.to_path_buf()]
+    } else {
+        std::fs::read_dir(path)
+            .map_err(|e| msg(format!("{}: {e}", path.display())))?
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "safetensors"))
+            .filter(|p| {
+                prefix.is_none_or(|pre| {
+                    p.file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with(pre))
+                })
+            })
+            .collect()
+    };
+    if files.is_empty() {
+        return Err(msg(format!(
+            "{}: no safetensors files to identify",
+            path.display()
+        )));
+    }
+    files.sort();
+    Ok(files)
+}
+
+/// What the memo of [`files_head_tail_cached`] is keyed by: the path, the
+/// prefix and every identified file's path, size and modification time.
+type Stamp = (
+    PathBuf,
+    Option<String>,
+    Vec<(PathBuf, u64, Option<std::time::SystemTime>)>,
+);
+
+/// [`files_head_tail`], computed once per process for the same files: the
+/// heads and tails are read again only when a file's size or modification
+/// time changed, or the set of files did (a weight swap under the same
+/// path). Each call lists and stats the files, which is cheap; reading
+/// 2 MiB per file on every prompt is not. The digest is the same as
+/// [`files_head_tail`]'s.
+pub fn files_head_tail_cached(path: &Path, prefix: Option<&str>) -> Result<[u8; 32]> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock, PoisonError};
+    static MEMO: OnceLock<Mutex<HashMap<Stamp, [u8; 32]>>> = OnceLock::new();
+    let files = head_tail_files(path, prefix)?;
+    let mut stat = Vec::with_capacity(files.len());
+    for file in files {
+        let meta = std::fs::metadata(&file).map_err(|e| msg(format!("{}: {e}", file.display())))?;
+        stat.push((file, meta.len(), meta.modified().ok()));
+    }
+    let stamp: Stamp = (path.to_path_buf(), prefix.map(str::to_owned), stat);
+    let memo = MEMO.get_or_init(Default::default);
+    let known = memo
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&stamp)
+        .copied();
+    if let Some(digest) = known {
+        return Ok(digest);
+    }
+    let digest = files_head_tail(path, prefix)?;
+    memo.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(stamp, digest);
+    Ok(digest)
 }
 
 /// How many leading bytes of each file [`files_head`] reads (in one `read`).
@@ -123,4 +171,44 @@ pub fn files_head(dir: Option<&Path>) -> [u8; 32] {
         }
     }
     h.finalize().into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cached_identity_is_the_identity_and_follows_a_changed_file() {
+        let dir = std::env::temp_dir().join(format!("fv-identity-memo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.safetensors");
+        std::fs::write(&file, vec![1u8; 3 * PROBE as usize]).unwrap();
+        std::fs::write(dir.join("b.safetensors"), b"bb").unwrap();
+        let first = files_head_tail_cached(&dir, None).unwrap();
+        assert_eq!(first, files_head_tail(&dir, None).unwrap());
+        assert_eq!(first, files_head_tail_cached(&dir, None).unwrap());
+        // One file of the pair alone, by prefix and by path.
+        assert_eq!(
+            files_head_tail_cached(&dir, Some("a")).unwrap(),
+            files_head_tail(&file, None).unwrap()
+        );
+        assert_eq!(
+            files_head_tail_cached(&file, None).unwrap(),
+            files_head_tail(&file, None).unwrap()
+        );
+        // A changed size is read again, whatever the clock's resolution.
+        std::fs::write(&file, vec![2u8; 3 * PROBE as usize + 1]).unwrap();
+        let second = files_head_tail_cached(&dir, None).unwrap();
+        assert_ne!(second, first);
+        assert_eq!(second, files_head_tail(&dir, None).unwrap());
+        // A new file is a new set.
+        std::fs::write(dir.join("c.safetensors"), b"c").unwrap();
+        assert_eq!(
+            files_head_tail_cached(&dir, None).unwrap(),
+            files_head_tail(&dir, None).unwrap()
+        );
+        assert!(files_head_tail_cached(&dir.join("missing"), None).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

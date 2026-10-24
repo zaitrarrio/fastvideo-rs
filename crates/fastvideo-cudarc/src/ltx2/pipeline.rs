@@ -58,7 +58,9 @@ use super::i2v_encode::{ConditioningImage, ReferenceTokens, StageConditioning};
 use super::keys::Keys;
 use super::latent_upsampler::LatentUpsampler;
 use super::text::{HiddenStack, PaddedPrompt, TextConnectors};
-use super::text_cache::{cache_key, weights_identity, CachedContexts, TextCache};
+use super::text_cache::{
+    cache_key, weights_identity, CachedContexts, EncodeSettings, TextCache, TextMode, WeightsRead,
+};
 use super::transformer::{
     pack_video, unpack_video, Ltx2Stage2Attn, Ltx2Transformer, Ltx2VideoAttn, Ropes,
     TextConditioning,
@@ -2235,6 +2237,68 @@ struct ResidentText {
     connectors: TextConnectors,
 }
 
+/// Where the next miss's Gemma forward runs ([`TextEncoder::planned_mode`]):
+/// resident when a resident Gemma is loaded; streamed when the residency is
+/// streamed (explicitly or already decided), even with FP8; else resident
+/// for FP8 (always resident), and for `auto` resident only when `free`
+/// covers `needed` (no device to ask: streamed); `FASTVIDEO_LTX2_TEXT`
+/// (`env`) overrides the residency asked for.
+fn plan_mode(
+    resident_loaded: bool,
+    residency: TextResidency,
+    fp8: bool,
+    env: Option<&str>,
+    free: Option<u64>,
+    needed: u64,
+) -> Result<TextMode> {
+    if resident_loaded {
+        return Ok(TextMode::Resident);
+    }
+    if residency == TextResidency::Streamed {
+        return Ok(TextMode::Streamed);
+    }
+    Ok(if fp8 || residency.resolve(env, free, needed)? {
+        TextMode::Resident
+    } else {
+        TextMode::Streamed
+    })
+}
+
+/// [`TextEncoder::gemma_tree`]: the tree `resolve` finds when `fp8`, never
+/// looked for otherwise.
+fn gemma_tree(fp8: bool, resolve: impl FnOnce() -> Option<PathBuf>) -> Option<PathBuf> {
+    if fp8 {
+        resolve()
+    } else {
+        None
+    }
+}
+
+/// What Gemma's linears are read as, for the key: the checkpoint at bf16
+/// without `fp8`; with it, the pre-quantized tree when Gemma's map is one
+/// (resident or streamed: both are handed that map); else FP8 rows
+/// quantized at load when resident, and the checkpoint when streamed (the
+/// streamed path, `HiddenStack::encode`, runs Native over the map it is
+/// given whatever `fp8` says; ADR-0021 "B4c2").
+fn gemma_weights_read(fp8: bool, tree: bool, mode: TextMode) -> WeightsRead {
+    match (fp8, tree, mode) {
+        (false, _, _) => WeightsRead::Checkpoint,
+        (true, true, _) => WeightsRead::Fp8RowsTree,
+        (true, false, TextMode::Resident) => WeightsRead::Fp8RowsAtLoad,
+        (true, false, TextMode::Streamed) => WeightsRead::Checkpoint,
+    }
+}
+
+/// The file identities in an LTX key, computed once per encoder.
+struct TextIdentity {
+    /// `tokenizer.json`'s bytes (hashed into the key).
+    tokenizer: Vec<u8>,
+    gemma: [u8; 32],
+    connectors: [u8; 32],
+    /// The pre-quantized FP8 tree's, when that is what Gemma is read from.
+    tree: Option<[u8; 32]>,
+}
+
 /// Prompt → connector contexts, with the conditioning cache in front.
 ///
 /// On a hit neither Gemma nor the connectors are opened: the key is made from
@@ -2249,8 +2313,12 @@ pub struct TextEncoder {
     resident: Option<ResidentText>,
     /// The resident Gemma + connectors in the device ledger.
     booking: crate::rt::ledger::Booking,
-    /// `(sha256-able tokenizer bytes, gemma identity, connector identity)`.
-    identity: Option<(Vec<u8>, [u8; 32], [u8; 32])>,
+    /// `(sha256-able tokenizer bytes, gemma identity, connector identity,
+    /// FP8 tree identity when the tree is what Gemma is read from)`.
+    identity: Option<TextIdentity>,
+    /// The pre-quantized FP8 tree Gemma is read from, if any, decided once
+    /// ([`Self::gemma_tree`]): the key and every open of Gemma use it.
+    gemma_tree: Option<Option<PathBuf>>,
     /// `FASTVIDEO_LTX2_TEXT_FP8=1` (E13): Gemma resident with weight-only FP8
     /// rows, read from the pre-quantized `text_encoder_fp8/` tree when one is
     /// valid (else quantized at load), instead of streamed at bf16. Opt-in:
@@ -2271,25 +2339,39 @@ impl TextEncoder {
             resident: None,
             booking: crate::rt::ledger::Booking::default(),
             identity: None,
+            gemma_tree: None,
             fp8: fastvideo_models::settings::env_var("FASTVIDEO_LTX2_TEXT_FP8")
                 .is_ok_and(|v| v.trim() == "1"),
             warm: None,
         }
     }
 
-    /// The Gemma map the next encode reads: the FP8 tree when `fp8` and one
-    /// is valid, else `text_encoder/`. Its tensors are queued for read-ahead.
-    fn open_gemma(&self) -> Result<WeightMap> {
-        let cfg = Self::decoder_config(&self.cfg);
+    /// The pre-quantized `text_encoder_fp8/` tree Gemma's map is, decided
+    /// on first use and kept ([`gemma_tree`]): with `fp8`, the valid tree
+    /// when there is one, else `None` (`text_encoder/`). Part of the cache
+    /// key (ADR-0021 "B4c2", gaps 1 and 6), so it is decided once and every
+    /// open reads what the key says.
+    fn gemma_tree(&mut self) -> Option<PathBuf> {
+        if let Some(tree) = &self.gemma_tree {
+            return tree.clone();
+        }
+        let layers = Self::decoder_config(&self.cfg).num_layers();
         let source = self.paths.text_root().join("text_encoder");
-        let tree = if self.fp8 {
-            crate::llm::prequant::open_tree(&source, cfg.num_layers())?
-        } else {
-            None
-        };
-        let map = match tree {
-            Some(m) => m,
-            None => WeightMap::open(&source)?,
+        let tree = gemma_tree(self.fp8, || {
+            crate::llm::prequant::resolve_tree(&source, layers)
+        });
+        self.gemma_tree = Some(tree.clone());
+        tree
+    }
+
+    /// The Gemma map the next encode reads ([`Self::gemma_tree`]): the FP8
+    /// tree when `fp8` and one is valid, else `text_encoder/`. Its tensors
+    /// are queued for read-ahead.
+    fn open_gemma(&mut self) -> Result<WeightMap> {
+        let cfg = Self::decoder_config(&self.cfg);
+        let map = match self.gemma_tree() {
+            Some(tree) => WeightMap::open(&tree)?,
+            None => WeightMap::open(&self.paths.text_root().join("text_encoder"))?,
         };
         if let Some(lazy) = map.lazy() {
             lazy.prefetch(&crate::llm::prequant::kept_keys(
@@ -2382,7 +2464,7 @@ impl TextEncoder {
         (per_layer + connector as u64) * width
     }
 
-    fn key(&mut self, prompt: &str) -> Result<String> {
+    fn key(&mut self, prompt: &str, mode: TextMode) -> Result<String> {
         if self.identity.is_none() {
             let tokenizer = std::fs::read(self.tokenizer_path())
                 .map_err(|e| err(format!("{}: {e}", self.tokenizer_path().display())))?;
@@ -2424,19 +2506,39 @@ impl TextEncoder {
             } else {
                 weights_identity(&self.paths.dit, None)?
             };
-            self.identity = Some((tokenizer, gemma, connectors));
+            // The tree Gemma is read from, when it is (gap 1): its own files.
+            let tree = match self.gemma_tree() {
+                Some(dir) => Some(weights_identity(&dir, None)?),
+                None => None,
+            };
+            self.identity = Some(TextIdentity {
+                tokenizer,
+                gemma,
+                connectors,
+                tree,
+            });
         }
-        let (tokenizer, gemma, connectors) = self
+        let weights = gemma_weights_read(self.fp8, self.gemma_tree().is_some(), mode);
+        let id = self
             .identity
             .as_ref()
             .ok_or_else(|| err("ltx2: text identity missing"))?;
         Ok(cache_key(
             prompt,
-            tokenizer,
+            &id.tokenizer,
             self.cfg.defaults.max_sequence_length,
             Self::text_encoder_kind(&self.cfg),
-            gemma,
-            connectors,
+            &id.gemma,
+            &id.connectors,
+            &EncodeSettings {
+                weights,
+                tree: id.tree.as_ref(),
+                mode,
+                // The GEMM math, card and activations of this encode (gap
+                // 4), resolved by the device context: read on the thread
+                // and in the call that encodes on a miss.
+                numerics: crate::rt::prompt_cache::Numerics::live(),
+            },
         ))
     }
 
@@ -2457,15 +2559,41 @@ impl TextEncoder {
 
     /// Decide once, on the first prompt that actually has to be encoded, and
     /// load the resident models if that is the answer.
-    fn ensure_backend(&mut self) -> Result<()> {
+    /// Where the next miss's Gemma forward will run, decided as
+    /// [`Self::ensure_backend`] decides it but without loading anything: a
+    /// key field (ADR-0021 "B4c2", gap 5), so the decision is made before
+    /// the lookup and the miss then runs exactly it.
+    fn planned_mode(&self) -> Result<TextMode> {
         if self.resident.is_some() || self.residency == TextResidency::Streamed {
-            return Ok(());
+            return plan_mode(
+                self.resident.is_some(),
+                self.residency,
+                self.fp8,
+                None,
+                None,
+                0,
+            );
         }
         let env = fastvideo_models::settings::env_var("FASTVIDEO_LTX2_TEXT").ok();
         let free = crate::rt::device::free_memory().map(|(free, _)| free);
         let needed = self.resident_bytes() + RESIDENT_HEADROOM;
-        let resident = self.fp8 || self.residency.resolve(env.as_deref(), free, needed)?;
-        if !resident {
+        plan_mode(
+            false,
+            self.residency,
+            self.fp8,
+            env.as_deref(),
+            free,
+            needed,
+        )
+    }
+
+    fn ensure_backend(&mut self, mode: TextMode) -> Result<()> {
+        if self.resident.is_some() || self.residency == TextResidency::Streamed {
+            return Ok(());
+        }
+        if mode == TextMode::Streamed {
+            let free = crate::rt::device::free_memory().map(|(free, _)| free);
+            let needed = self.resident_bytes() + RESIDENT_HEADROOM;
             crate::rt::log::info(format_args!(
                 "ltx2 text: streamed (free {:?} bytes, resident needs {needed})",
                 free
@@ -2506,8 +2634,8 @@ impl TextEncoder {
 
     /// Resident: one forward. Streamed: Gemma layer by layer, the connectors
     /// loaded, used and dropped.
-    fn compute(&mut self, padded: &PaddedPrompt) -> Result<CachedContexts> {
-        self.ensure_backend()?;
+    fn compute(&mut self, padded: &PaddedPrompt, mode: TextMode) -> Result<CachedContexts> {
+        self.ensure_backend(mode)?;
         let (stack, out) = match &self.resident {
             Some(r) => {
                 let stack = HiddenStack::encode_resident(&r.gemma, padded)?;
@@ -2592,15 +2720,17 @@ impl TextEncoder {
             prompt,
             self.cfg.defaults.max_sequence_length,
         )?;
+        // Decided before the lookup: the key names it and a miss runs it.
+        let mode = self.planned_mode()?;
         let key = if use_cache && self.cache.is_some() {
-            Some(self.key(prompt)?)
+            Some(self.key(prompt, mode)?)
         } else {
             None
         };
         // Taken out so the compute closure can borrow the encoder mutably.
         let cache = self.cache.take();
         let result = cached_or(cache.as_ref(), key.as_deref(), &padded, || {
-            self.compute(&padded)
+            self.compute(&padded, mode)
         });
         self.cache = cache;
         let (contexts, outcome) = result?;
@@ -4597,6 +4727,114 @@ mod tests {
         ltx2_19b_distilled, Ltx2AudioVaeConfig, Ltx2TransformerConfig, Ltx2VideoVaeConfig,
         Ltx2VocoderConfig,
     };
+
+    /// The mode an LTX key names ([`plan_mode`], ADR-0021 "B4c2", gap 5).
+    #[test]
+    fn the_planned_mode_is_the_backend_decision() {
+        use TextResidency::{Auto, Resident, Streamed};
+        let gib = 1u64 << 30;
+        let plan = |loaded, residency, fp8, env, free| {
+            plan_mode(loaded, residency, fp8, env, free, 30 * gib).unwrap()
+        };
+        // No device to ask (a CPU run): auto streams.
+        assert_eq!(plan(false, Auto, false, None, None), TextMode::Streamed);
+        // Auto: resident only when the free memory covers what it needs.
+        assert_eq!(
+            plan(false, Auto, false, None, Some(31 * gib)),
+            TextMode::Resident
+        );
+        assert_eq!(
+            plan(false, Auto, false, None, Some(29 * gib)),
+            TextMode::Streamed
+        );
+        // FP8 Gemma is always resident...
+        assert_eq!(plan(false, Auto, true, None, None), TextMode::Resident);
+        assert_eq!(
+            plan(false, Resident, true, None, Some(0)),
+            TextMode::Resident
+        );
+        // ...except that an explicit (or decided) streamed residency wins.
+        assert_eq!(
+            plan(false, Streamed, true, None, Some(100 * gib)),
+            TextMode::Streamed
+        );
+        assert_eq!(
+            plan(false, Streamed, false, Some("resident"), None),
+            TextMode::Streamed
+        );
+        // A loaded resident Gemma is used whatever else is set.
+        assert_eq!(plan(true, Streamed, false, None, None), TextMode::Resident);
+        assert_eq!(
+            plan(true, Auto, false, Some("streamed"), None),
+            TextMode::Resident
+        );
+        // FASTVIDEO_LTX2_TEXT overrides what auto would decide.
+        assert_eq!(
+            plan(false, Auto, false, Some("streamed"), Some(100 * gib)),
+            TextMode::Streamed
+        );
+        assert_eq!(
+            plan(false, Auto, false, Some("resident"), None),
+            TextMode::Resident
+        );
+        assert_eq!(plan(false, Resident, false, None, None), TextMode::Resident);
+        assert!(plan_mode(false, Auto, false, Some("sideways"), None, 0).is_err());
+    }
+
+    /// Which tree Gemma is read from ([`gemma_tree`]) and what the key calls
+    /// the weights ([`gemma_weights_read`]), ADR-0021 "B4c2" gaps 1 and 6.
+    #[test]
+    fn gemma_is_keyed_as_what_it_reads() {
+        let tree = PathBuf::from("/w/text_encoder_fp8");
+        let mut looked = false;
+        assert_eq!(
+            gemma_tree(false, || {
+                looked = true;
+                Some(tree.clone())
+            }),
+            None
+        );
+        assert!(!looked, "bf16 never looks for a tree");
+        assert_eq!(gemma_tree(true, || Some(tree.clone())), Some(tree.clone()));
+        assert_eq!(gemma_tree(true, || None), None);
+        // An invalid or missing tree is no tree.
+        let dir = std::env::temp_dir().join(format!("fv-ltx-gemma-tree-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("text_encoder")).unwrap();
+        let source = dir.join("text_encoder");
+        assert_eq!(
+            gemma_tree(true, || crate::llm::prequant::resolve_tree(&source, 48)),
+            None
+        );
+        std::fs::create_dir_all(dir.join("text_encoder_fp8")).unwrap();
+        assert_eq!(
+            gemma_tree(true, || crate::llm::prequant::resolve_tree(&source, 48)),
+            None,
+            "a tree without a valid manifest is ignored"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        use TextMode::{Resident, Streamed};
+        use WeightsRead::*;
+        for (fp8, tree, mode, want) in [
+            (false, false, Resident, Checkpoint),
+            (false, false, Streamed, Checkpoint),
+            (false, true, Resident, Checkpoint),
+            (false, true, Streamed, Checkpoint),
+            (true, false, Resident, Fp8RowsAtLoad),
+            // FP8 asked for, streamed explicitly: the streamed path runs
+            // bf16 over text_encoder/, and is keyed as that.
+            (true, false, Streamed, Checkpoint),
+            (true, true, Resident, Fp8RowsTree),
+            (true, true, Streamed, Fp8RowsTree),
+        ] {
+            assert_eq!(
+                gemma_weights_read(fp8, tree, mode),
+                want,
+                "fp8 {fp8} tree {tree} {mode:?}"
+            );
+        }
+    }
 
     #[test]
     fn sol_stage2_is_the_25_distilled_two_stage_default() {

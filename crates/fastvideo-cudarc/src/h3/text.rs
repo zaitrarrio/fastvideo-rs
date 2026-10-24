@@ -271,6 +271,98 @@ pub fn encode_prompt_with(
     )
 }
 
+/// What an H3 encode ran, as its cache key names it (ADR-0021 "B4c2"):
+/// which weights the linears were read from and whether the decoder was
+/// resident or streamed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncoderRun {
+    /// A resident [`crate::llm::ResidentDecoder`]: its precision and whether
+    /// its FP8 rows came pre-quantized from the map it was loaded from.
+    Decoder {
+        precision: crate::llm::WeightPrecision,
+        prequantized: bool,
+    },
+    /// Another resident encoder, which does not say where its rows came
+    /// from: whether its kind is FP8.
+    OtherResident { fp8: bool },
+    /// Streamed at `precision`; `tree`: the pre-quantized tree was opened
+    /// for the layers.
+    Streamed {
+        precision: crate::llm::WeightPrecision,
+        tree: bool,
+    },
+}
+
+impl EncoderRun {
+    /// `encoder` as [`encode_prompt_with_at`] chose it: the resident one when
+    /// `resident`, else the streamed encoder at `streamed`, over the tree
+    /// when `tree`.
+    pub fn of(
+        encoder: &dyn HiddenStateEncoder,
+        resident: bool,
+        streamed: crate::llm::WeightPrecision,
+        tree: bool,
+    ) -> Self {
+        if !resident {
+            return Self::Streamed {
+                precision: streamed,
+                tree,
+            };
+        }
+        match encoder.decoder() {
+            Some(d) => Self::Decoder {
+                precision: d.precision(),
+                prequantized: d.prequantized(),
+            },
+            None => Self::OtherResident {
+                fp8: encoder.kind().contains("fp8"),
+            },
+        }
+    }
+
+    /// The weights the linears were read from.
+    pub fn weights(self) -> crate::rt::prompt_cache::WeightsRead {
+        use crate::llm::WeightPrecision::{Fp8Rows, Native};
+        use crate::rt::prompt_cache::WeightsRead;
+        match self {
+            Self::Decoder {
+                precision: Native, ..
+            }
+            | Self::Streamed {
+                precision: Native, ..
+            }
+            | Self::OtherResident { fp8: false } => WeightsRead::Checkpoint,
+            Self::Decoder {
+                precision: Fp8Rows,
+                prequantized: true,
+            }
+            | Self::Streamed {
+                precision: Fp8Rows,
+                tree: true,
+            } => WeightsRead::Fp8RowsTree,
+            Self::Decoder {
+                precision: Fp8Rows,
+                prequantized: false,
+            }
+            | Self::Streamed {
+                precision: Fp8Rows,
+                tree: false,
+            } => WeightsRead::Fp8RowsAtLoad,
+            Self::OtherResident { fp8: true } => WeightsRead::Fp8RowsUnknown,
+        }
+    }
+
+    /// Resident or streamed.
+    pub fn mode(self) -> crate::rt::prompt_cache::TextMode {
+        match self {
+            Self::Streamed { .. } => crate::rt::prompt_cache::TextMode::Streamed,
+            Self::Decoder { .. } | Self::OtherResident { .. } => {
+                crate::rt::prompt_cache::TextMode::Resident
+            }
+        }
+    }
+}
+
 /// [`encode_prompt_with`], streaming at `streamed` when there is no
 /// resident encoder (`Fp8Rows`: [`StreamedFp8Encoder`], the resident FP8
 /// numbers). Cache entries of FP8 numbers are keyed apart from bf16 ones,
@@ -307,7 +399,6 @@ pub fn encode_prompt_with_at(
         (None, crate::llm::WeightPrecision::Fp8Rows) => &streamed_fp8,
         (None, crate::llm::WeightPrecision::Native) => &streamed_native,
     };
-    let fp8_numbers = encoder.kind().contains("fp8");
     let Some(dir) = cache_dir else {
         let hidden = encoder.hidden_state(&ids, tap)?;
         return Ok(TextConditioning {
@@ -325,12 +416,38 @@ pub fn encode_prompt_with_at(
     let store = map
         .lazy()
         .ok_or_else(|| msg("h3 text: the encoder checkpoint was not opened lazily"))?;
-    let mut identity = cache::encoder_identity(store, &cfg, tap)?;
-    if fp8_numbers {
-        // Weight-only FP8 rows are a different function of the same weights.
-        identity = cache::fp8_rows_identity(&identity);
-    }
-    let key = cache::cache_key(prompt, &cache::sha256(&tokenizer_bytes), tap, &identity);
+    let identity = cache::encoder_identity(store, &cfg, tap)?;
+    // Weight-only FP8 rows are a different function of the same weights, and
+    // the pre-quantized tree is keyed apart from quantizing at load until the
+    // two are proven equal on the device (ADR-0021 "B4c2", gap 6); so are a
+    // resident and a streamed encode. What actually ran: [`EncoderRun`].
+    let run = EncoderRun::of(encoder, resident.is_some(), streamed, fp8_tree.is_some());
+    let weights = run.weights();
+    let tree_identity = match weights {
+        cache::WeightsRead::Fp8RowsTree => {
+            let dir = crate::llm::prequant::tree_dir(&root.join("text_encoder"))
+                .ok_or_else(|| msg("h3 text: no FP8 tree directory"))?;
+            Some(crate::rt::prompt_cache::identity::files_head_tail_cached(
+                &dir, None,
+            )?)
+        }
+        _ => None,
+    };
+    let key = cache::cache_key(
+        prompt,
+        &cache::sha256(&tokenizer_bytes),
+        tap,
+        &identity,
+        &cache::EncodeSettings {
+            weights,
+            tree: tree_identity.as_ref(),
+            mode: run.mode(),
+            // The numerics this encode runs with (gap 4): resolved by the
+            // device context and the activation policy, read where the
+            // encode runs.
+            numerics: crate::rt::prompt_cache::Numerics::live(),
+        },
+    );
     let (entry, hit) = cache::get_or_compute(dir, &key, &ids, cfg.hidden, || {
         Ok(encoder.hidden_state(&ids, tap)?.host_cow()?.into_owned())
     })?;
@@ -356,10 +473,11 @@ pub fn encode_prompt(root: &Path, prompt: &str) -> Result<(Vec<u32>, CudaTensor)
 
 /// SearchingMan recovered-8B path: tokenize with the DiT snapshot's H3
 /// tokenizer, encode with a resident [`super::recovered_8b::Recovered8bEncoder`]
-/// (tap 24 + adapter → `[1, S, 5120]`). Cache entries are keyed as width 5120.
+/// (tap 24 + adapter → `[1, S, 5120]`). Cache entries are keyed as width 5120,
+/// by the base, LoRA and adapter files under `encoder_root`.
 pub fn encode_prompt_recovered(
     tokenizer_root: &Path,
-    _encoder_root: &Path,
+    encoder_root: &Path,
     prompt: &str,
     cache_dir: Option<&Path>,
     resident: Option<&dyn HiddenStateEncoder>,
@@ -383,10 +501,29 @@ pub fn encode_prompt_recovered(
     let tokenizer_path = tokenizer_root.join("tokenizer").join("tokenizer.json");
     let tokenizer_bytes = std::fs::read(&tokenizer_path)
         .map_err(|e| msg(format!("{}: {e}", tokenizer_path.display())))?;
-    // Identity is the encoder kind + tap; recovered weights are not a LazyStore
-    // under text_encoder/, so we fingerprint the kind string instead.
-    let identity = cache::recovered_identity(tap);
-    let key = cache::cache_key(prompt, &cache::sha256(&tokenizer_bytes), tap, &identity);
+    // The kind and tap, and the three weight files the encoder was loaded
+    // from (`encoder_root` is the root `Recovered8bEncoder::load` was given):
+    // file identities as LTX's (ADR-0021 "B4c2", gap 2).
+    let [base, ara, adapter] = super::recovered_8b::weight_files(encoder_root)?;
+    let file_id = |p: &Path| crate::rt::prompt_cache::identity::files_head_tail_cached(p, None);
+    let identity = cache::recovered_weights_identity(
+        tap,
+        &file_id(&base)?,
+        &file_id(&ara)?,
+        &file_id(&adapter)?,
+    );
+    let key = cache::cache_key(
+        prompt,
+        &cache::sha256(&tokenizer_bytes),
+        tap,
+        &identity,
+        &cache::EncodeSettings {
+            weights: cache::WeightsRead::Checkpoint,
+            tree: None,
+            mode: cache::TextMode::Resident,
+            numerics: crate::rt::prompt_cache::Numerics::live(),
+        },
+    );
     let (entry, hit) = cache::get_or_compute(dir, &key, &ids, out_hidden, || {
         Ok(encoder.hidden_state(&ids, tap)?.host_cow()?.into_owned())
     })?;
@@ -858,6 +995,137 @@ mod tests {
     use super::*;
     use crate::llm::{Act, LayerAttn};
 
+    /// The whole table of what an H3 encode is keyed as (ADR-0021 "B4c2").
+    #[test]
+    fn every_encoder_run_is_keyed_as_what_it_read_and_where_it_ran() {
+        use crate::llm::WeightPrecision::{Fp8Rows, Native};
+        use crate::rt::prompt_cache::{TextMode::*, WeightsRead::*};
+        let table = [
+            (
+                EncoderRun::Decoder {
+                    precision: Native,
+                    prequantized: false,
+                },
+                Checkpoint,
+                Resident,
+            ),
+            (
+                EncoderRun::Decoder {
+                    precision: Native,
+                    prequantized: true,
+                },
+                Checkpoint,
+                Resident,
+            ),
+            (
+                EncoderRun::Decoder {
+                    precision: Fp8Rows,
+                    prequantized: false,
+                },
+                Fp8RowsAtLoad,
+                Resident,
+            ),
+            (
+                EncoderRun::Decoder {
+                    precision: Fp8Rows,
+                    prequantized: true,
+                },
+                Fp8RowsTree,
+                Resident,
+            ),
+            (
+                EncoderRun::OtherResident { fp8: false },
+                Checkpoint,
+                Resident,
+            ),
+            (
+                EncoderRun::OtherResident { fp8: true },
+                Fp8RowsUnknown,
+                Resident,
+            ),
+            (
+                EncoderRun::Streamed {
+                    precision: Native,
+                    tree: false,
+                },
+                Checkpoint,
+                Streamed,
+            ),
+            (
+                EncoderRun::Streamed {
+                    precision: Native,
+                    tree: true,
+                },
+                Checkpoint,
+                Streamed,
+            ),
+            (
+                EncoderRun::Streamed {
+                    precision: Fp8Rows,
+                    tree: false,
+                },
+                Fp8RowsAtLoad,
+                Streamed,
+            ),
+            (
+                EncoderRun::Streamed {
+                    precision: Fp8Rows,
+                    tree: true,
+                },
+                Fp8RowsTree,
+                Streamed,
+            ),
+        ];
+        for (run, weights, mode) in table {
+            assert_eq!(run.weights(), weights, "{run:?}");
+            assert_eq!(run.mode(), mode, "{run:?}");
+        }
+    }
+
+    /// A resident encoder that is not a decoder, for [`EncoderRun::of`].
+    struct Other(&'static str);
+
+    impl HiddenStateEncoder for Other {
+        fn hidden_state(&self, _: &[u32], _: usize) -> Result<CudaTensor> {
+            Err(msg("not run"))
+        }
+
+        fn kind(&self) -> &'static str {
+            self.0
+        }
+    }
+
+    #[test]
+    fn the_encoder_run_is_the_encoder_that_was_chosen() {
+        use crate::llm::WeightPrecision::{Fp8Rows, Native};
+        let fp8 = Other("resident-fp8");
+        // Streamed: the precision asked for and whether the tree was opened,
+        // whatever the encoder value says.
+        assert_eq!(
+            EncoderRun::of(&fp8, false, Fp8Rows, true),
+            EncoderRun::Streamed {
+                precision: Fp8Rows,
+                tree: true
+            }
+        );
+        assert_eq!(
+            EncoderRun::of(&fp8, false, Native, false),
+            EncoderRun::Streamed {
+                precision: Native,
+                tree: false
+            }
+        );
+        // Resident without a decoder: its kind.
+        assert_eq!(
+            EncoderRun::of(&fp8, true, Native, false),
+            EncoderRun::OtherResident { fp8: true }
+        );
+        assert_eq!(
+            EncoderRun::of(&Other("resident-bf16"), true, Fp8Rows, true),
+            EncoderRun::OtherResident { fp8: false }
+        );
+    }
+
     fn tiny() -> DecoderConfig {
         DecoderConfig {
             vocab: 16,
@@ -977,6 +1245,32 @@ mod tests {
         let again = streamed_fp8.hidden_state(&ids, 2).unwrap();
         assert_eq!(&*again.host_cow().unwrap(), &*quantized.host_cow().unwrap());
         assert_eq!(streamed_fp8.kind(), "streamed-fp8");
+        // Equal here on the host, and still keyed apart (resident vs
+        // streamed; ADR-0021 "B4c2"): what each encoder is keyed as.
+        use crate::llm::WeightPrecision::{Fp8Rows, Native};
+        assert_eq!(
+            EncoderRun::of(&resident, true, Fp8Rows, false),
+            EncoderRun::Decoder {
+                precision: Native,
+                prequantized: false
+            }
+        );
+        assert_eq!(
+            EncoderRun::of(&fp8, true, Native, false),
+            EncoderRun::Decoder {
+                precision: Fp8Rows,
+                prequantized: false
+            }
+        );
+        let streamed_run = EncoderRun::of(&streamed_fp8, false, Fp8Rows, false);
+        assert_eq!(
+            streamed_run.weights(),
+            EncoderRun::of(&fp8, true, Native, false).weights()
+        );
+        assert_ne!(
+            streamed_run.mode(),
+            EncoderRun::of(&fp8, true, Native, false).mode()
+        );
     }
 
     #[test]

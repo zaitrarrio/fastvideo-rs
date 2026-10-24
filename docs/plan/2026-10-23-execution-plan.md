@@ -108,7 +108,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | active (B4a pr #173: step caches, ADR-0020, GPU `b4a` cells pending; then B4b `fuse.rs`; B4c pr #177: one disk prompt cache `rt::prompt_cache`, ADR-0021, GPU `b4c` cells passed; B4c2 closes the pre-existing key gaps) |
+| B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | active (B4a pr #173: step caches, ADR-0020, GPU `b4a` cells pending; then B4b `fuse.rs`; B4c pr #177: one disk prompt cache `rt::prompt_cache`, ADR-0021, GPU `b4c` cells passed; B4c2 pr #178: the six pre-existing key gaps closed, GPU `b4c2` cells pending) |
 | B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | merged (#161) |
 | B6 | `H3Pipeline::load` and `Ltx2Pipeline::load` split into plan, open, place, fuse; dead code (`TensorBackend`, mlx scaffold) retired | engine lifecycle testable on CPU | pod | B1 | merged (#170: plan/open/place/fuse, ADR-0017; `techniques` and `b6` GPU identity cells all byte-identical vs main; TensorBackend and the mlx scaffold retired) |
 
@@ -929,3 +929,66 @@ ran (pod id, $/hr), result, cost.
   quoting error on my side). About 133 GPU-minutes, ~$5.50. Evidence:
   `artifacts/runpod/{b6,techniques,precision,rtx5090}/c21d801-*` and the
   comparison outputs in `artifacts/runpod/d1b-compare/`.
+- 2026-10-24 17:40Z: B4c2 opened draft PR #178 (`claude/b4c2-prompt-key-gaps`):
+  the six key gaps of ADR-0021 closed. New key fields, each the value the
+  run resolved: `Numerics` (GEMM math, compute capability, bf16
+  activations; `Numerics::live` at the lookup), `WeightsRead` plus the FP8
+  tree's identity (H3 `ResidentDecoder::prequantized`, the streamed tree;
+  LTX `gemma_read`), LTX `TextMode` (`planned_mode`, taken before the
+  lookup and run by the miss), recovered-8B file identities of base, LoRA
+  and adapter. New domains (`fastvideo h3 text conditioning v2`,
+  `WANTEXT2`, `fastvideo ltx2 text conditioning v2`); layout and magics
+  unchanged; every existing entry misses once. CPU evidence: pinned keys
+  recomputed in Python, the families' key tests, `numerics` tests,
+  `b4c2_keys_never_name_a_legacy_entry` (no new key names a legacy entry;
+  an entry legacy wrote is a miss for the new code), the v1 derivations
+  still equal to `legacy.rs`; 20 mutations (each new field dropped, each
+  recovered file dropped, each domain reverted, `Numerics` parts dropped,
+  `prequantized` never set, tree keyed as at-load, one mode field) all
+  caught. On build pod `l3d75u8a8zhw47` (agent `b4c2-keys`): fmt, workspace
+  clippy `-D warnings`, `--features cuda` check (cudarc, engine-service,
+  gpucheck, core), cudarc + models + engine-service + core tests (1424
+  passed), `cargo test --workspace --lib` (2081 passed),
+  `scripts/gpu/lint.sh`, `b4-verdict.test.sh`, `scripts/serve/check.sh`
+  green. Found and recorded, not closed: `FASTVIDEO_FP8` linears and
+  `FASTVIDEO_SDPA` (ADR-0021 "B4c2" rows 7, 8). GPU gate pending
+  (coordinator): `runpod-matrix.sh b4c2` with `FV_BASELINE_SHA=17e4a1dc`,
+  cells `b4c2-ltx25-fp8`, `b4c2-ltx25-mode`, `b4c2-h3-numerics`,
+  `b4c2-h3-tree`, `b4c2-h3-noop` (`FV_B4C2_CELLS`); recovered 8B and Wan are
+  CPU evidence only (not on the EU volume).
+- 2026-10-24 17:56Z: B4c2 review fixes on #178 (coordinator's review: all
+  six gaps closed, nothing blocking): the H3 key gets the resident /
+  streamed mode (`EncodeSettings`, shared with LTX); `EncoderRun`
+  (`h3/text.rs`) is the pure choice of weights read and mode, its table
+  tested; Wan reads `Numerics::live` inside UMT5's `with_bf16_act(false, ..)`
+  scope; LTX `plan_mode`, `gemma_tree`, `gemma_weights_read` pure and tested,
+  FP8 with an explicit streamed residency keyed as the bf16 checkpoint it
+  streams (computation unchanged; ADR notes the tree-map case); H3 tree and
+  recovered identities through `files_head_tail_cached`; ADR: in LTX `auto`
+  the key depends on free memory at the lookup (spurious misses only). New
+  pins (Python): H3 `29d517fd…` / tree `9556f05a…` / streamed tree
+  `59ddcb14…`, recovered `1af19d5f…`, Wan `1f09144a…` (LTX unchanged). 31
+  mutations all caught. Gates on the build pod green (cudarc + models +
+  engine-service + core tests 1430, `--workspace --lib` 2087). No H3
+  streamed-FP8 GPU cell: no flag makes H3 stream FP8. Merged main
+  `1100c35f` (D1b).
+- 2026-10-24 18:58Z, coordinator: B4c2 GPU gate, runtime image
+  `sha-072f0b3` (#178's head after the review fixes and the main merge)
+  against main `sha-17e4a1d` (B4c, before B4c2). Five single-cell RTX PRO 6000
+  pods in EU-RO-1 with `bz0ofkfx45` (`FV_B4C2_CELLS=<cell>`), all `pass`:
+  - `b4c2-ltx25-fp8` (gap 1/6): main's bf16 read hits the FP8 entry and its
+    frames differ from a fresh bf16 encode (PSNR 24.7 dB, max abs diff 218):
+    the gap gave silently wrong output. The PR's read misses and is
+    byte-identical to the fresh encode.
+  - `b4c2-h3-numerics` (gap 4): written under `FASTVIDEO_BF16_ACT=0` (the
+    encoder ran `streamed-fp8`), main's default read hits it, PSNR 18.2 dB
+    against the correct output; the PR misses and equals the fresh encode.
+  - `b4c2-ltx25-mode` (gap 5): main hits, the PR misses and equals the fresh
+    encode; streamed and resident Gemma were also bit-equal on this card.
+  - `b4c2-h3-tree` (gap 6): main hits, the PR misses and equals the fresh
+    encode; the FP8 tree and quantise-at-load were also bit-equal.
+  - `b4c2-h3-noop`: base and PR byte-identical on the miss and the hit, the
+    PR's hit equals its miss.
+  Gaps 2 (recovered 8B) and 3 (Wan) are CPU evidence only (no trees on the
+  EU volume). About 56 GPU-minutes, ~$2.30. Evidence:
+  `artifacts/runpod/b4c2/072f0b3-1024184{0,1,2,3}/`, `072f0b3-10241839/`.
