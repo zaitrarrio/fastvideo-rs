@@ -14,11 +14,13 @@ use fastvideo_engine_service::{
     CausalControl, CausalSession, ClipBuild, ClipSession, EngineBackend, EngineConfig,
     EngineService, FakeBackend, FakeConfig, FakeModel, FakeTiming, Mp4Mode, Readiness,
 };
+use fastvideo_fal::director::media::PlayoutClock;
 use fastvideo_fal::director::{
     ChunkBuild, ChunkOutput, DirectorClips, DirectorConfig, DirectorEngine, DirectorService,
     DirectorStream, StreamBlock,
 };
 use fastvideo_fal::{router_with, FalApp, FalConfig};
+use fastvideo_media::clock::{Clock, ManualClock};
 use fastvideo_media::video::EncoderBackend;
 use fastvideo_protocol::{ApiError, Job, JobId, ModelCaps, SessionSpec, Tier};
 use fastvideo_serve_kit::{Auth, AuthMode, EngineGate, KeyRing, ServeConfig, ServeCtx, UrlKey};
@@ -298,6 +300,9 @@ pub struct Opts {
     /// `upsample_wait` (the server's default is off; the upsampling tests
     /// pin the expansions to their chunks).
     pub upsample_wait: bool,
+    /// Playout ticks by this clock instead of wall time: a test holds or
+    /// steps playout by hand, whatever the machine's speed.
+    pub playout_clock: Option<Arc<ManualClock>>,
 }
 
 impl Default for Opts {
@@ -317,6 +322,7 @@ impl Default for Opts {
             buffer_chunks: 1,
             buffer_max_bytes: fastvideo_fal::director::service::DEFAULT_BUFFER_MAX_BYTES,
             upsample_wait: true,
+            playout_clock: None,
         }
     }
 }
@@ -379,6 +385,10 @@ pub async fn fixture(o: Opts) -> Fixture {
         buffer_chunks: o.buffer_chunks,
         buffer_max_bytes: o.buffer_max_bytes,
         upsample_wait: o.upsample_wait,
+        playout_clock: o
+            .playout_clock
+            .clone()
+            .map(|c| PlayoutClock::new(c as Arc<dyn Clock>)),
         ice_servers: Vec::new(),
         chunk_seconds: o.chunk_seconds,
         max_session_seconds: o.max_session_seconds,
