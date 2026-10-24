@@ -1,0 +1,40 @@
+# fastvideo-models' library tests, which hold the workspace-wide settings
+# checks (techniques::settings::workspace_check: every FASTVIDEO_* literal in
+# the workspace is a settings row, no stray env reads) and the CPU fixtures of
+# the techniques layer (step caches, ADR-0020). No other workflow runs them:
+# gpucheck-t0 tests gpucheck and cudarc, adapter-tests its adapter crates.
+# The settings check scans every crate, so any crate change triggers it.
+name: models-lib-tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/models-lib-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+concurrency:
+  group: models-lib-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  models-lib:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test -p fastvideo-models --lib
+        run: cargo test --locked -p fastvideo-models --lib
