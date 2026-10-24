@@ -49,7 +49,7 @@ use str0m::media::{
     MediaTime, Mid, Pt,
 };
 use str0m::net::{Protocol, Receive, TcpType};
-use str0m::{Candidate, Event, IceConnectionState, IceCreds, Input, Output, Rtc};
+use str0m::{Candidate, Event, IceConnectionState, IceCreds, Input, Output, Rtc, RtcConfig};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -1454,33 +1454,7 @@ impl HostLoop {
         level: H264Level,
         video: &[VideoCodec],
     ) -> Rtc {
-        // `video`: every codec we send or receive.
-        let mut cfg = Rtc::builder()
-            .clear_codecs()
-            .enable_opus(true, false)
-            .set_stats_interval(Some(self.cfg.stats_interval));
-        if video.contains(&VideoCodec::H264) {
-            // Constrained Baseline first (what OpenH264 emits, §5.9), then
-            // Baseline as a fallback match; both FU-A (packetization-mode=1).
-            cfg.codec_config().add_h264(
-                108.into(),
-                Some(109.into()),
-                true,
-                level.constrained_baseline_plid(),
-            );
-            cfg.codec_config()
-                .add_h264(127.into(), Some(121.into()), true, level.baseline_plid());
-        }
-        if video.contains(&VideoCodec::Vp8) {
-            cfg.codec_config().enable_vp8(true);
-        }
-        if video.contains(&VideoCodec::Vp9) {
-            cfg.codec_config().enable_vp9(true);
-        }
-        if let Some((ufrag, pass)) = creds {
-            cfg = cfg.set_local_ice_credentials(IceCreds { ufrag, pass });
-        }
-        cfg.build(now)
+        rtc_config(self.cfg.stats_interval, creds, level, video).build(now)
     }
 
     fn add_candidates(&self, rtc: &mut Rtc, srflx: &[SocketAddr]) {
@@ -1714,30 +1688,11 @@ impl HostLoop {
         if self.peers.len() >= self.cfg.max_peers {
             return Err(WebrtcError::PeerLimit(self.cfg.max_peers));
         }
-        let mut rtc = self.new_rtc(now, None, opts.h264_level, &opts.video_codecs);
-        self.add_candidates(&mut rtc, &opts.srflx);
-        let mut api = rtc.sdp_api();
-        let mut mids = Vec::new();
-        if let Some(dir) = opts.video {
-            let mid = api.add_media(RtcMediaKind::Video, to_rtc_dir(dir), None, None, None);
-            mids.push(mid_state(mid, TrackKind::Video, dir, false));
-        }
-        if let Some((dir, _)) = opts.audio {
-            let mid = api.add_media(RtcMediaKind::Audio, to_rtc_dir(dir), None, None, None);
-            mids.push(mid_state(mid, TrackKind::Audio, dir, false));
-        }
-        for label in &opts.channels {
-            api.add_channel(label.clone());
-        }
-        let (offer, pending) = api.apply().ok_or_else(|| {
-            WebrtcError::Config("offer has no m-lines (no media and no channels)".into())
+        let (Offered { rtc, pending, mids }, sdp) = offer_with_unique_mids(|| {
+            let mut rtc = self.new_rtc(now, None, opts.h264_level, &opts.video_codecs);
+            self.add_candidates(&mut rtc, &opts.srflx);
+            build_offer(rtc, &opts)
         })?;
-        let mut sdp = Sdp::parse(&offer.to_sdp_string())?;
-        sdp.finish_candidates();
-        sdp.prefer_h264();
-        if let Some((_, layout)) = opts.audio {
-            sdp.set_opus_stereo(layout == AudioLayout::Stereo);
-        }
         let policy = ChannelPolicy::Only(opts.channels.clone());
         let (id, handle, events) = self.new_slot(
             rtc,
@@ -1759,6 +1714,113 @@ impl HostLoop {
             sdp.to_string(),
         ))
     }
+}
+
+/// The `Rtc` of every peer: Opus, and the video codecs in `video` (every
+/// codec we send or receive).
+fn rtc_config(
+    stats_interval: Duration,
+    creds: Option<(String, String)>,
+    level: H264Level,
+    video: &[VideoCodec],
+) -> RtcConfig {
+    let mut cfg = Rtc::builder()
+        .clear_codecs()
+        .enable_opus(true, false)
+        .set_stats_interval(Some(stats_interval));
+    if video.contains(&VideoCodec::H264) {
+        // Constrained Baseline first (what OpenH264 emits, §5.9), then
+        // Baseline as a fallback match; both FU-A (packetization-mode=1).
+        cfg.codec_config().add_h264(
+            108.into(),
+            Some(109.into()),
+            true,
+            level.constrained_baseline_plid(),
+        );
+        cfg.codec_config()
+            .add_h264(127.into(), Some(121.into()), true, level.baseline_plid());
+    }
+    if video.contains(&VideoCodec::Vp8) {
+        cfg.codec_config().enable_vp8(true);
+    }
+    if video.contains(&VideoCodec::Vp9) {
+        cfg.codec_config().enable_vp9(true);
+    }
+    if let Some((ufrag, pass)) = creds {
+        cfg = cfg.set_local_ice_credentials(IceCreds { ufrag, pass });
+    }
+    cfg
+}
+
+/// An offer [`build_offer`] made: the offering `Rtc`, its pending offer and
+/// our audio/video m-lines.
+struct Offered {
+    rtc: Rtc,
+    pending: SdpPendingOffer,
+    mids: Vec<MidState>,
+}
+
+/// Adds the m-lines of `opts` to a fresh `rtc` and makes the offer, with
+/// our SDP edits (end-of-candidates, H.264 first, Opus stereo).
+fn build_offer(mut rtc: Rtc, opts: &OfferOptions) -> Result<(Offered, Sdp), WebrtcError> {
+    let mut api = rtc.sdp_api();
+    let mut mids = Vec::new();
+    if let Some(dir) = opts.video {
+        let mid = api.add_media(RtcMediaKind::Video, to_rtc_dir(dir), None, None, None);
+        mids.push(mid_state(mid, TrackKind::Video, dir, false));
+    }
+    if let Some((dir, _)) = opts.audio {
+        let mid = api.add_media(RtcMediaKind::Audio, to_rtc_dir(dir), None, None, None);
+        mids.push(mid_state(mid, TrackKind::Audio, dir, false));
+    }
+    for label in &opts.channels {
+        api.add_channel(label.clone());
+    }
+    let (offer, pending) = api.apply().ok_or_else(|| {
+        WebrtcError::Config("offer has no m-lines (no media and no channels)".into())
+    })?;
+    let mut sdp = Sdp::parse(&offer.to_sdp_string())?;
+    sdp.finish_candidates();
+    sdp.prefer_h264();
+    if let Some((_, layout)) = opts.audio {
+        sdp.set_opus_stereo(layout == AudioLayout::Stereo);
+    }
+    Ok((Offered { rtc, pending, mids }, sdp))
+}
+
+/// Offers [`offer_with_unique_mids`] makes before giving up. One attempt
+/// repeats a shared mid with probability about 1.4e-5, so eight never all
+/// do in practice; the bound only rules out an endless loop.
+const OFFER_ATTEMPTS: usize = 8;
+
+/// Makes offers with `attempt` (each with a fresh `Rtc`) until one has a
+/// distinct `a=mid` on every m-line.
+///
+/// str0m (0.24) draws each new m-line's mid as 3 random characters out of
+/// 60 and checks it only against the m-lines already negotiated in the
+/// session, not against the ones added earlier to the same `SdpApi`
+/// (`Rtc::new_mid`). The m-lines of one offer can therefore share a mid:
+/// with video, audio and a data channel, 3 pairs out of 60^3 = 216 000
+/// values, about one offer in 72 000. RFC 5888 requires the mids of one
+/// description to be distinct, and every answerer refuses such an offer
+/// (ours: `validate_offer`, "duplicate a=mid"). str0m lets no caller pick
+/// the mids, so a colliding offer is thrown away with its `Rtc` (nothing
+/// was sent) and made again.
+fn offer_with_unique_mids<T>(
+    mut attempt: impl FnMut() -> Result<(T, Sdp), WebrtcError>,
+) -> Result<(T, Sdp), WebrtcError> {
+    for _ in 0..OFFER_ATTEMPTS {
+        let (made, sdp) = attempt()?;
+        match sdp.duplicate_mid() {
+            None => return Ok((made, sdp)),
+            Some(mid) => {
+                tracing::debug!(mid, "offer m-lines share a mid; making a fresh offer")
+            }
+        }
+    }
+    Err(WebrtcError::Rtc(format!(
+        "no offer with distinct mids in {OFFER_ATTEMPTS} attempts"
+    )))
 }
 
 fn mid_state(mid: Mid, kind: TrackKind, direction: Direction, paused: bool) -> MidState {
@@ -2192,4 +2254,95 @@ fn _assert_send() {
     is_send::<RtcHost>();
     is_send::<Peer>();
     is_send::<PeerHandle>();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A two-m-line SDP with the given mids.
+    fn sdp_with(video: &str, app: &str) -> Sdp {
+        Sdp::parse(&format!(
+            "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n\
+             m=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:{video}\r\n\
+             m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\na=mid:{app}\r\n"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn an_offer_whose_m_lines_share_a_mid_is_made_again() {
+        let mut made = 0;
+        let (n, sdp) = offer_with_unique_mids(|| {
+            made += 1;
+            Ok(match made {
+                1 => (made, sdp_with("KMa", "KMa")),
+                _ => (made, sdp_with("KMa", "e1u")),
+            })
+        })
+        .unwrap();
+        assert_eq!((n, made), (2, 2));
+        assert_eq!(sdp.duplicate_mid(), None);
+    }
+
+    #[test]
+    fn offers_that_always_share_a_mid_end_in_an_error() {
+        let mut made = 0;
+        let r = offer_with_unique_mids(|| {
+            made += 1;
+            Ok(((), sdp_with("BJy", "BJy")))
+        });
+        assert!(matches!(r, Err(WebrtcError::Rtc(_))), "{r:?}");
+        assert_eq!(made, OFFER_ATTEMPTS);
+    }
+
+    #[test]
+    fn an_attempt_error_is_returned_at_once() {
+        let mut made = 0;
+        let r: Result<((), Sdp), _> = offer_with_unique_mids(|| {
+            made += 1;
+            Err(WebrtcError::Config("no m-lines".into()))
+        });
+        assert!(matches!(r, Err(WebrtcError::Config(_))), "{r:?}");
+        assert_eq!(made, 1);
+    }
+
+    /// Real str0m offers (video, audio and a data channel, as the director
+    /// clients make them): every one has three distinct mids. str0m alone
+    /// repeats a mid in about one such offer in 72 000.
+    #[test]
+    fn many_offers_have_distinct_mids() {
+        let cert = str0m::crypto::from_feature_flags()
+            .dtls_provider
+            .generate_certificate()
+            .expect("a DTLS certificate");
+        let opts = OfferOptions {
+            video: Some(Direction::RecvOnly),
+            audio: Some((Direction::RecvOnly, AudioLayout::Stereo)),
+            channels: vec!["control".into()],
+            ..Default::default()
+        };
+        for _ in 0..5_000 {
+            let (offered, sdp) = offer_with_unique_mids(|| {
+                let rtc = rtc_config(
+                    Duration::from_secs(1),
+                    None,
+                    opts.h264_level,
+                    &opts.video_codecs,
+                )
+                .set_dtls_cert(cert.clone())
+                .build(Instant::now());
+                build_offer(rtc, &opts)
+            })
+            .unwrap();
+            let mids: Vec<&str> = sdp.media.iter().filter_map(|m| m.mid()).collect();
+            assert_eq!(mids.len(), 3, "{sdp:?}");
+            assert_eq!(sdp.duplicate_mid(), None, "{mids:?}");
+            assert_eq!(offered.mids.len(), 2);
+            assert!(offered
+                .mids
+                .iter()
+                .all(|m| mids.contains(&m.info.mid.as_str())));
+        }
+    }
 }
