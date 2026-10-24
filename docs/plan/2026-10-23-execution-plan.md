@@ -719,3 +719,18 @@ ran (pod id, $/hr), result, cost.
   whose checks are all green (image 12 m 53 s, a branch compile; the
   PR's tools-release assemble gated `fv-lab 0.1.40`). CPU only, build pod;
   no Runpod call. GPU gate: ADR-0019 §8 on `492e28a` or later.
+
+- 2026-10-24 11:44Z, coordinator: D1a GPU gate on `492e28a` (runtime
+  image carrying `fv-lab`), cells `sol-h3` and `ltx25-two-stage` of the
+  `rtx6000` family, each side on its own RTX PRO 6000 in EU-RO-1 with
+  `bz0ofkfx45`: `fv-lab pod up --sha 492e28a --family rtx6000 --cells
+  sol-h3 ltx25-two-stage --yes --wait` (ready 32 s, fv-deploy backstop,
+  pod deleted by `--wait`) against `runpod-http.sh run 492e28a` with
+  `FV_CELLS="sol-h3 ltx25-two-stage"`. `scripts/gpu/fv-lab-compare-runs.sh`:
+  2 arms the same, 0 differences; `sol-h3` 248 and `ltx25-two-stage` 242
+  frames byte-identical (`frames.sha256.json` equal), both
+  `matrix_exit=0`. About 15 GPU-minutes per side, ~$1.25 in all.
+  Evidence: `artifacts/runpod/rtx6000/492e28a-1024114432-9d08/` (fv-lab,
+  with `compare-vs-script.txt`) and `artifacts/runpod/rtx6000/492e28a-10241144/`
+  (script). The other four `rtx6000` arms are not part of this gate (D1b
+  moves the remaining families with their own goldens).

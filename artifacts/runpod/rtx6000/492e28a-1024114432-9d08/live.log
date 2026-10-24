@@ -1,0 +1,13 @@
+[11:45:05] [rtx6000] matrix start image=e3e7bdf4be69201b
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-fee51482-46e9-0931-fb4c-cb59ab301eb4)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[11:45:05] [rtx6000] skip fasth3-8step (not in FV_CELLS)
+[11:45:05] [rtx6000] skip fasth3-4step-vsa (not in FV_CELLS)
+[11:45:06] [rtx6000] ▶ sol-h3  /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --h3-recipe sol-h3 --adaln-cache /fvscratch/runs/rtx6000/492e28a-1024114432-9d08/sol-h3-adaln.cache --clip-dir /fvscratch/runs/rtx6000/492e28a-1024114432-9d08/sol-h3/frames --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seconds 5 --seed 1024 --text-encoder auto --text-cache /fvscratch/h3-text-cache --text-weights /workspace/weights/h3-base --warm  (wall cap 3600s; 0=none)
+[11:49:23] [rtx6000] ok sol-h3  257s  /fvscratch/runs/rtx6000/492e28a-1024114432-9d08/sol-h3/stderr.log:[INFO] h3/timings {"audio_decode_s":0.05291585,"decode_s":4.853672167,"denoise_s":31.742809357,"load_s":182.057788375,"peak_mib":60940,"refine_s":0.00043242,"step_s":[7.941341796875,7.9214482421875,7.931931640625,7.94769287109375],"text_cache":"hit","text_encoder":"cache","text_s":0.221258018,"total_s":37.029728041,"video_decode_s":4.800756317,"video_encode_s":0.10270325,"video_push_s":0.00003261,"video_rgb_s":0.0958218640099181,"video_vae_s":4.681723747611045,"video_wait_s":0.131920975,"warm":true,"write_s":0.134363014}
+[11:49:23] [rtx6000] skip sol-h3-rtx (not in FV_CELLS)
+[11:49:23] [rtx6000] skip sol-h3-rtx-teacache (not in FV_CELLS)
+[11:49:23] [rtx6000] skip sol-h3-spark (not in FV_CELLS)
+[11:49:24] [rtx6000] ▶ ltx25-two-stage  /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text streamed --warm --clip /fvscratch/runs/rtx6000/492e28a-1024114432-9d08/ltx25-two-stage/frames  (wall cap 3600s; 0=none)
+[11:58:27] [rtx6000] ok ltx25-two-stage  542s  
+[11:58:28] [rtx6000] matrix done

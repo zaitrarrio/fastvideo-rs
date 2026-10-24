@@ -1,0 +1,40 @@
+[fv-lab] fv-lab-rtx6000-492e28a-1024114432-9d08 on NVIDIA RTX PRO 6000 Blackwell Server Edition: image ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:2b701e7c51dcfdb50b0aa5d2f6d43c07fa3a981abc643f9dc61621fc719f7283 (ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-492e28a)
+[fv-deploy] balance $40.54 (floor $8.00)
+[fv-deploy] backstop armed for 73npthddx36hfn (pid 14795): deleted at the latest 14400 s after create
+[fv-deploy] runpod-pod 73npthddx36hfn on NVIDIA RTX PRO 6000 Blackwell Server Edition at $2.490/hr
+[fv-deploy] 73npthddx36hfn ready 32.5 s after create
+[fv-deploy] keeping 73npthddx36hfn (the backstop deletes it 14400 s after create; `fv-deploy down 73npthddx36hfn` now)
+{
+  "name": "fv-lab-rtx6000-492e28a-1024114432-9d08",
+  "provider": "runpod-pod",
+  "instance": {
+    "id": "73npthddx36hfn",
+    "provider": "runpod-pod",
+    "name": "fv-lab-rtx6000-492e28a-1024114432-9d08",
+    "state": "running",
+    "url": "https://73npthddx36hfn-8000.proxy.runpod.net",
+    "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "data_center": "EU-RO-1",
+    "usd_per_hr": 2.49,
+    "created_at": 1792842276.0182352
+  },
+  "cycles": [
+    {
+      "n": 1,
+      "instance": "73npthddx36hfn",
+      "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "usd_per_hr": 2.49,
+      "ready_after_s": 32.451889514923096,
+      "outcome": "ready"
+    }
+  ],
+  "smoke": null,
+  "deleted": false,
+  "ok": true
+}
+[fv-lab] pod 73npthddx36hfn runs `fv-lab run rtx6000` (tag 492e28a-1024114432-9d08); results: fv-lab pod fetch 73npthddx36hfn --wait --down
+[fv-lab] pod: [11:45:06] [rtx6000] ▶ sol-h3  /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --h3-recipe sol-h3 --adaln-cache /fvscratch/runs/rtx6000/492e28a-1024114432-9d08/sol-h3-adaln.cache --clip-dir /fvscratch/runs/rtx6000/492e28a-1024114432-9d08/sol-h3/frames --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seconds 5 --seed 1024 --text-encoder auto --text-cache /fvscratch/h3-text-cache --text-weights /workspace/weights/h3-base --warm  (wall cap 3600s; 0=none)
+[fv-lab] pod: [11:49:23] [rtx6000] ok sol-h3  257s  /fvscratch/runs/rtx6000/492e28a-1024114432-9d08/sol-h3/stderr.log:[INFO] h3/timings {"audio_decode_s":0.05291585,"decode_s":4.853672167,"denoise_s":31.742809357,"load_s":182.057788375,"peak_mib":60940,"refine_s":0.00043242,"step_s":[7.941341796875,7.9214482421875,7.931931640625,7.94769287109375],"text_cache":"hit","text_encoder":"cache","text_s":0.221258018,"total_s":37.029728041,"video_decode_s":4.800756317,"video_encode_s":0.10270325,"video_push_s":0.00003261,"video_rgb_s":0.0958218640099181,"video_vae_s":4.681723747611045,"video_wait_s":0.131920975,"warm":true,"write_s":0.134363014}
+[fv-lab] pod: [11:49:24] [rtx6000] ▶ ltx25-two-stage  /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text streamed --warm --clip /fvscratch/runs/rtx6000/492e28a-1024114432-9d08/ltx25-two-stage/frames  (wall cap 3600s; 0=none)
+[fv-lab] results -> /home/user/wt/d1a-lab/artifacts/runpod/rtx6000/492e28a-1024114432-9d08
+[fv-deploy] deleted 73npthddx36hfn (done)
