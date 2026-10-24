@@ -14,8 +14,15 @@
 //! - [`lineage`]: [`verify_chain`] over `[vendor, fork1, fork2, ...]` and
 //!   [`verify_lineage`] with each clone's `model.toml`.
 //! - [`schema`]: JSON Schema export, checked for drift against `schemas/`.
+//! - [`family`]: layer 2 (ADR-0008), [`FamilyManifest`] and
+//!   [`VariantManifest`]: `families/<family>.toml`, the runtime's superset
+//!   the engine catalog and the deployment tooling are generated from. Not
+//!   a public format: it is this repository's, versioned by `schema`.
 //!
 //! Pure: no I/O (callers read files), no CUDA, no other fastvideo crate.
+//! The optional `fs` feature adds the one directory reader
+//! (`family::load_dir`) the runtime consumers share; the registry never
+//! enables it.
 //! The registry (`zaitrarrio/model-registry-rs`) depends on this crate and
 //! never re-implements a format; a change here is a change to every
 //! published model, so widenings happen only before the first publish, each
@@ -23,6 +30,7 @@
 //! §7.2, §7.10).
 
 pub mod canonical;
+pub mod family;
 pub mod lineage;
 pub mod manifest;
 pub mod model_toml;
@@ -32,6 +40,10 @@ pub mod schema;
 pub mod sig;
 
 pub use canonical::{to_canonical_bytes, to_canonical_string, CanonicalError};
+pub use family::{
+    FamilyError, FamilyHeader, FamilyId, FamilyManifest, FamilySet, GpuNeeds, Tier,
+    VariantManifest, FAMILY_SCHEMA, TAE_VAR, WEIGHTS_VAR,
+};
 pub use lineage::{verify_chain, verify_lineage, LineageEntry, LineageError};
 pub use manifest::{
     blake3_hex, canonical_body, canonical_digest, ChunkRef, ChunkingParams, FileEntry, Manifest,

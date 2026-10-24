@@ -21,11 +21,21 @@ half. `--features cuda` needs a CUDA toolchain.
 | `fastvideo-cli` | `generate` / `generate_av` |
 | `fastvideo-gpucheck` | Staged GPU checks (`kernels`, `parity`, `clip`). `unsafe` allowed |
 | `fastvideo-mlx` | Apple Silicon scaffold (`mlx-rs` behind `--features mlx` on aarch64 macOS); host stubs elsewhere. Not a generate path |
-| `fastvideo-manifest` | The registry's public formats: model names, `model.toml` v1, the signed lineage manifest and its canonical BLAKE3 digest, JSON Schema export (ADR-0005..0007). Pure: no I/O, no CUDA |
+| `fastvideo-manifest` | The registry's public formats: model names, `model.toml` v1, the signed lineage manifest and its canonical BLAKE3 digest, JSON Schema export (ADR-0005..0007); layer 2, the family manifest `families/*.toml` (ADR-0008). Pure: no I/O, no CUDA (`fs` feature: the one directory reader) |
 
 Shared device types (`CudaTensor`, conv, the weight map, the frame writer)
 live under `cudarc/src/rt` (the runtime, extracted from `wan` in plan B1; `wan`
 re-exports them under the old paths for now) and are used by every other model.
+
+The served families are described once in `families/*.toml` (layer 2 of the
+model family manifest, `docs/adr/0008-family-manifest-layer-2.md`): one file
+per family (`h3`, `ltx2`, `wan`), one `[[variants]]` table per servable
+configuration with its id, served names, tier, weights trees, GPU needs,
+layer-1 `[caps]` and the engine recipe. Plan A2 generates them from the
+engine catalog (`crates/fastvideo-engine-service/src/cuda/caps.rs`) and
+proves equality row for row (`tests/families.rs`); plan A3 makes them the
+source and the catalog, the serve `[aliases]` blocks and the per-model
+tables below become projections of them.
 
 Workloads: `t2v`, `i2v`, `t2av`, `fl2va`, `ref2va`, `t2i`, `t2a`, `v2a`,
 plus control/edit entries that carry an empty workload list in the registry.

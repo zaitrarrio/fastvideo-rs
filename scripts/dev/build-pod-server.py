@@ -239,6 +239,9 @@ AGENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 CARGO_SUBCOMMANDS = {"check", "build", "test", "clippy", "fmt", "doc", "tree", "metadata"}
 SCRIPTS = {
     "scripts/serve/check.sh",
+    # Plan E4: the adapter crates' tests under cargo-llvm-cov (`--tests` runs
+    # them plain; the instrumented mode needs cargo-llvm-cov in the image).
+    "scripts/serve/coverage.sh",
     "scripts/gpu/lint.sh",
     "tests/compat/run.sh",
     "tests/console/run.sh",

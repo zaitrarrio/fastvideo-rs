@@ -64,7 +64,7 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | A1 | `crates/fastvideo-manifest` layer 1: modules `name`, `model_toml`, `manifest`, `lineage`, `sig`, `schema`; the registry's WO-001 contracts verbatim plus the two widenings (`[variant]`, `[runtime]` recipe/profile, `[caps]`); fixtures under `crates/fastvideo-manifest/fixtures/` (valid and ≥25 invalid names with error kinds, model.toml valid/invalid, manifests with `.digest` siblings, test keys, lineage chains); proptest round-trip; `schemas/*.json` export with a drift test; ADR-0005 naming, ADR-0006 model.toml, ADR-0007 manifest/digest/lineage/signatures | all WO-001 acceptance tests green on CPU; no I/O, no CUDA, `unsafe` forbidden | `cargo test -p fastvideo-manifest` on the pod; clippy -D warnings | none | merged (#143) |
-| A2 | Layer 2 types (`family`, `variant`, `tiers`) and the first three family files `families/{h3,ltx2,wan}.toml` authored from `engine-service/src/cuda/caps.rs`; an equality test proving `catalog()` equals the manifest projection row for row | equality test green for every catalog row | pod | A1 | active |
+| A2 | Layer 2 types (`family`, `variant`, `tiers`) and the first three family files `families/{h3,ltx2,wan}.toml` authored from `engine-service/src/cuda/caps.rs`; an equality test proving `catalog()` equals the manifest projection row for row | equality test green for every catalog row | pod | A1 | pr |
 | A3 | Engine projection: `model_from_config` resolves through the manifest; `validate.rs` and `protocol::ModelCaps` ranges come from it; `[aliases]`, `served_names`, `[protocols]` derived; the 35 serve TOMLs reduced to variant ids and residency; the fake backend serves the manifest; `catalog()` deleted | zero hand-written catalog rows; zero `[aliases]` blocks; `dimension_sweep.rs` and `tests/e2e.rs` green; `/fv/v1/capabilities` unchanged for every config (golden) | pod; serve-compat CI | A2 | todo |
 | A4 | Control-plane and script generation from the families: `control/gen-configs.mjs` emits presets, `enums.ts` ids, `recipe-trees.ts`, `r2-trees.ts`, `weights-sources.ts`, `volumes.ts`; `variants.sh` tables, `volumes.sh`, `gcp/families.tsv`, `autoscale.toml` pools, `verify-weights.sh` cells and `docs/serve/images.md` table generated with `--check` in CI | `gen-configs.mjs --check` green; control unit tests green | pod (node + vitest) | A2 | todo |
 | A5 | Registry hand-off: publish layer 1 (git dependency at a pinned rev); the registry's WO-001 scaffolds against it | registry WO-001 green | registry repo | A1 | active |
@@ -101,7 +101,7 @@ parallel agents.
 | E1 | Vendored upstream specs under `docs/serve/specs/` with a drift script; `schemars` schemas for native and director | drift script green | CI | none | merged (#144; schemars schemas deferred to E2) |
 | E2 | `ParamSpec` per (surface, model) derived from the manifest caps; adapters validate from it; duplicated constants deleted; LTX body typed | one source for every limit | pod; serve-compat | A3 | todo |
 | E3 | Certification matrix harness over every surface, parameter x surface x model TSV, CI assertion that every parameter has a valid and an invalid case | TSV with no empty cell | pod | E2 | todo |
-| E4 | `cargo-llvm-cov` on the pod; adapter `cargo test` in a GitHub workflow | coverage artifact in CI | CI | none | todo |
+| E4 | `cargo-llvm-cov` on the pod; adapter `cargo test` in a GitHub workflow | coverage artifact in CI | CI | none | pr |
 | E5 | Upstream captures as fixtures | depends on owner keys | manual | owner | blocked |
 
 ### Phase 7: inference core unification (Workstream B, second half)
@@ -158,6 +158,19 @@ ran (pod id, $/hr), result, cost.
   Lockfile adds 17 packages (blake3 1.8.7, schemars 1.2.3, proptest 1.12.0
   and their deps). Open questions in the PR: `seg-dot` and `--`,
   `[defaults]` keys, `verify_lineage` for the model.toml-side checks.
+- 2026-10-24 01:05Z: A2 opened draft PR #147 (`claude/a2-family-manifests`):
+  `fastvideo-manifest::family` (layer 2: `FamilyManifest`, `VariantManifest`,
+  `FamilySet`, `schemas/family.v1.json`, the `fs` feature for `load_dir`),
+  `families/{h3,ltx2,wan}.toml` generated from `catalog()` (18 + 5 + 7 = 30
+  variants, every catalog row), `cuda::families` (`catalog_from_manifests`,
+  the `${weights}` / `${tae}` substitution, the generator), ADR-0008. On
+  build pod `i8tu0lpdb6nvov`: `cargo test --locked -p fastvideo-manifest -p
+  fastvideo-engine-service` 59 + 136 passed (1 ignored: the generator),
+  `tests/families.rs` proves projection == catalog row for row under two
+  layouts; `cargo fmt --check`, `clippy --workspace --all-targets -D
+  warnings` and `scripts/serve/check.sh` green. No new lockfile package.
+  `registry_name` empty everywhere (nothing published); A3 blockers listed
+  in the PR.
 - Merge rule applied by the coordinator: when the base moved only by
   documentation since the branch point, the PR's own green CI stands;
   otherwise main is merged into the branch and CI re-run on that head.
@@ -203,6 +216,26 @@ ran (pod id, $/hr), result, cost.
 - 2026-10-24 00:36Z: A2, A5 (registry WO-001 against the merged crate, built
   in the coordinator's container since that workspace is small) and B1
   started. Balance $21.6, pod `i8tu0lpdb6nvov` at 4.4 h uptime.
+- 2026-10-24 01:20Z: E4 opened as a draft PR (`claude/e4-adapter-ci`): the
+  `adapter-tests` workflow runs `scripts/serve/coverage.sh` (new) in the build
+  base image on pull requests and main pushes touching the serve crates:
+  `cargo test --locked` of 11 crates (the five adapters, `fastvideo-serve`,
+  protocol, trace, engine-service, serve-kit, upsampler) under
+  `cargo-llvm-cov` 0.9.1, with `lcov.info`, an HTML report and the totals as
+  the `adapter-coverage` artifact and job summary. Before: no workflow ran
+  these crates' Rust tests on pull requests (serve-compat runs the client
+  libraries against the binary; tools-release runs `check.sh` on main only).
+  `task coverage` / `task coverage:tests` added; `coverage.sh` allowlisted
+  for new build pods (the running pod's server from main refuses it until
+  merge). On pod `i8tu0lpdb6nvov`: `cargo test --locked` of the set, 711
+  passed, 0 failed, 10 ignored, 171 s; no Rust change. Not done:
+  `cargo-llvm-cov` in `docker/build-base.Dockerfile` (re-pins the image).
+- 2026-10-24 01:25Z: E4's `adapter-tests` run on the PR head (PR #148,
+  run 40049075337) green on the first attempt, 8 min wall clock (container
+  pull 55 s, the instrumented `cargo test` 6.5 min cold, no rust-cache
+  hit yet): 69 test binaries, 720 passed, 0 failed; coverage over the instrumented
+  workspace files: lines 62.42% (54115 / 86700), regions 62.96%, functions
+  59.31%; `adapter-coverage` artifact 4.5 MB (lcov, HTML, summaries).
 - 2026-10-24 00:40Z: B1 opened as a draft PR (`claude/b1-runtime-extract`)
   from the build pod `i8tu0lpdb6nvov`: 45 `wan/` modules moved to
   `cudarc/src/rt/` with `wan::` re-export shims, `kernels.cu` split into 14
@@ -212,3 +245,15 @@ ran (pod id, $/hr), result, cost.
   workspace lib tests passed, 0 failed (cudarc 606, models 544,
   engine-service 75), `scripts/serve/check.sh` green. GPU byte-identity cell
   pending (coordinator, before merge).
+- 2026-10-24 01:41Z: B1 GPU byte-identity gate green on one RTX PRO 6000
+  (EU-RO-1, volume `bz0ofkfx45`, pod `b4vz9cljstlvbc`, 34 min at $2.49/hr,
+  deleted): `techniques` family, baseline `42da257` against the PR image
+  `51898b8`; cells fasth3-4step-vsa-768p, h3-480p-fullopt and
+  ltx25-512p-sol, each base vs env and base vs prof: 124/124 (H3) and
+  121/121 (LTX) frames identical, max abs diff 0; the LTX cache arm
+  identical too. fasth3-8step-768p skipped (`h3-8step` is not on the 500 GB
+  EU volume, owner decision); no Wan cell (no Wan trees on the EU volume;
+  Wan is covered by the kernel-source sha256 pins and the shared runtime).
+  Evidence: `artifacts/runpod/techniques/51898b8-10240107/compare/`. Main
+  (A2, E4) merged into the branch: no cudarc or gpucheck file changed since
+  the baseline, so the GPU evidence stands for the merged head.
