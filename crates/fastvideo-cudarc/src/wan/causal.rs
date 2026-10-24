@@ -166,7 +166,7 @@ struct KvLayer {
 /// K and V in the keys' dtype, valid over `[0, local_end)`, and the f32
 /// un-roped sink `[B, H, sink, D]` of [`KvRope::RebasedSink`]. Every write
 /// lands in place, so the addresses never change: what a CUDA graph of a
-/// block forward needs (`wan::graph`).
+/// block forward needs (`rt::graph`).
 struct StaticKv {
     k: CudaTensor,
     v: CudaTensor,
@@ -360,7 +360,7 @@ pub struct KvPointers {
 
 /// What decides the device work of one block forward through a static
 /// cache: two forwards with the same key run the same kernels on the same
-/// buffers with the same shapes (one CUDA graph per key, `wan::graph`).
+/// buffers with the same shapes (one CUDA graph per key, `rt::graph`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct KvBlockKey {
     /// Valid cached tokens before the forward.
@@ -914,8 +914,8 @@ mod tests {
     /// each block's RoPE starts at its first frame.
     #[test]
     fn cached_blocks_equal_the_masked_whole_clip() {
+        use crate::rt::weights::WeightMap;
         use crate::wan::transformer::WanTransformer3D;
-        use crate::wan::weights::WeightMap;
         let mut cfg = WanVideoArchConfig::tiny();
         cfg.causal = true;
         cfg.num_layers = 2;
@@ -975,8 +975,8 @@ mod tests {
         crate::wan::transformer::WanTransformer3D,
         WanVideoArchConfig,
     ) {
+        use crate::rt::weights::WeightMap;
         use crate::wan::transformer::WanTransformer3D;
-        use crate::wan::weights::WeightMap;
         let mut cfg = WanVideoArchConfig::tiny();
         cfg.causal = true;
         cfg.num_layers = 2;

@@ -26,8 +26,8 @@ fn msg(s: impl Into<String>) -> PipelineError {
 /// `FASTVIDEO_H3_STEP_SYNC=1` (default off), or a GPU trace: synchronize
 /// after every denoise step.
 pub fn step_sync() -> bool {
-    crate::wan::envflag::bool_flag("FASTVIDEO_H3_STEP_SYNC", false)
-        || crate::wan::gpu_trace::enabled()
+    crate::rt::envflag::bool_flag("FASTVIDEO_H3_STEP_SYNC", false)
+        || crate::rt::gpu_trace::enabled()
         || !cfg!(feature = "cuda")
 }
 
@@ -56,8 +56,8 @@ impl StepClock {
         };
         if sync {
             // FASTVIDEO_GPU_TRACE: one step's device activity (a no-op when off).
-            crate::wan::gpu_trace::pass_begin("h3");
-            crate::wan::gpu_trace::step_begin();
+            crate::rt::gpu_trace::pass_begin("h3");
+            crate::rt::gpu_trace::step_begin();
         } else {
             clock.record()?;
         }
@@ -71,7 +71,7 @@ impl StepClock {
 
     #[cfg(feature = "cuda")]
     fn record(&mut self) -> Result<()> {
-        let dev = crate::wan::device::global_device()
+        let dev = crate::rt::device::global_device()
             .ok_or_else(|| msg("h3 step clock: no CUDA device"))?;
         let event = dev
             .stream
@@ -90,14 +90,14 @@ impl StepClock {
     pub fn step_queued(&mut self, step: usize) -> Result<()> {
         if self.sync {
             // The trace window closes before the step-timing sync.
-            crate::wan::gpu_trace::step_before_sync();
-            crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
+            crate::rt::gpu_trace::step_before_sync();
+            crate::rt::device::synchronize().map_err(|e| msg(e.to_string()))?;
             let s = self.last.elapsed().as_secs_f64();
             self.step_s.push(s);
-            crate::wan::gpu_trace::step_end(s);
+            crate::rt::gpu_trace::step_end(s);
             self.log(step, s);
             if step + 1 < self.steps {
-                crate::wan::gpu_trace::step_begin();
+                crate::rt::gpu_trace::step_begin();
             }
             self.last = Instant::now();
             return Ok(());
@@ -107,7 +107,7 @@ impl StepClock {
     }
 
     fn log(&self, step: usize, s: f64) {
-        crate::wan::log::info(format_args!("h3 step {}/{}: {s:.1}s", step + 1, self.steps));
+        crate::rt::log::info(format_args!("h3 step {}/{}: {s:.1}s", step + 1, self.steps));
     }
 
     /// Lazy mode: time and log every step whose event has completed (all of
@@ -138,7 +138,7 @@ impl StepClock {
     /// return the per-step seconds.
     pub fn finish(mut self) -> Result<Vec<f64>> {
         if !self.sync {
-            crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
+            crate::rt::device::synchronize().map_err(|e| msg(e.to_string()))?;
             self.collect(true)?;
         }
         Ok(self.step_s)
@@ -150,7 +150,7 @@ impl StepClock {
 /// `FASTVIDEO_H3_GRAPHS=1` (default off): replay a CUDA graph of each denoise
 /// step (forward + scheduler step) once a request shape has been seen twice.
 pub fn graphs_enabled() -> bool {
-    crate::wan::envflag::bool_flag("FASTVIDEO_H3_GRAPHS", false)
+    crate::rt::envflag::bool_flag("FASTVIDEO_H3_GRAPHS", false)
 }
 
 /// The VSA settings a captured step bakes in (k_vid per block, the fine
@@ -187,8 +187,8 @@ mod imp {
     use crate::h3::pipeline::scheduler_step;
     use crate::h3::transformer::{AttnMode, DeviceLayout, H3Transformer};
     use crate::h3::vsa::H3Vsa;
-    use crate::wan::graph::{assign, duplicate, Graph, GraphStream};
-    use crate::wan::tensor::{CudaTensor, TensorError};
+    use crate::rt::graph::{assign, duplicate, Graph, GraphStream};
+    use crate::rt::tensor::{CudaTensor, TensorError};
 
     /// Request shapes kept (each holds a graph per step and its slots). With
     /// four (2 x 480p + 2 x 768p V2-NVFP4, 32 graphs) the fourth shape's
@@ -241,7 +241,7 @@ mod imp {
         slots: &Slots,
         schedule: &H3JointSchedule,
         step: usize,
-    ) -> crate::wan::tensor::Result<()> {
+    ) -> crate::rt::tensor::Result<()> {
         let (v_video, v_audio) = model.forward(
             step,
             &slots.video,
@@ -299,7 +299,7 @@ mod imp {
         }
 
         fn give_up(&mut self, why: String) {
-            crate::wan::log::info(format_args!("h3 graphs: {why}; eager from here"));
+            crate::rt::log::info(format_args!("h3 graphs: {why}; eager from here"));
             self.failed.get_or_insert(why);
         }
 
@@ -446,7 +446,7 @@ mod imp {
                         Some(Ok(graph)) => {
                             // The launch is this step.
                             graph.launch()?;
-                            crate::wan::log::info(format_args!(
+                            crate::rt::log::info(format_args!(
                                 "h3 graphs: step {step} captured: {:?}, graph pool high {:.2} GiB",
                                 graph.stats,
                                 graph_mem_high_gib(&self.gs)
@@ -489,7 +489,7 @@ mod imp {
                     .expect("h3 graphs: slots");
                 observe(step, &slots.video, &slots.audio)?;
             }
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3 graphs: {steps} steps: {replayed} replayed, {captured} captured, {eager} eager"
             ));
             let slots = self.entries[index]

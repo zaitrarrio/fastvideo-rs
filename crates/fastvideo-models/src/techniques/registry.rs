@@ -276,7 +276,7 @@ fn tiny(name: &str, t: &toml::Table, kind: TinyDecoderKind) -> Result<Box<dyn Te
     }))
 }
 
-/// `dit` is a `FASTVIDEO_DIT_OFFLOAD` spelling; `wan::offload::DitOffload::parse`
+/// `dit` is a `FASTVIDEO_DIT_OFFLOAD` spelling; `rt::offload::DitOffload::parse`
 /// validates it at load (it owns the list of placements).
 fn offload(name: &str, t: &toml::Table) -> Result<Box<dyn Technique>, String> {
     let mut p = Params::new(name, t);

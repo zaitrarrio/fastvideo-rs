@@ -1,4 +1,4 @@
-//! The NVFP4 linear of the model path (`wan::nvfp4_linear`, the LTX-2 video
+//! The NVFP4 linear of the model path (`rt::nvfp4_linear`, the LTX-2 video
 //! FFN under `FASTVIDEO_NVFP4`):
 //!
 //! 1. the bf16 operand quantizer (plain and GELU-fused) writes exactly the
@@ -17,10 +17,10 @@
 use std::time::Instant;
 
 use cudarc::driver::CudaSlice;
-use fastvideo_cudarc::wan::nvfp4_gemm::swizzle_scales_host;
-use fastvideo_cudarc::wan::nvfp4_linear::{self as nl, Nvfp4Linear};
-use fastvideo_cudarc::wan::quant::{self, ptr, QuantKind, QuantLayout, QuantWeight, Section};
-use fastvideo_cudarc::wan::{device, ops};
+use fastvideo_cudarc::rt::nvfp4_gemm::swizzle_scales_host;
+use fastvideo_cudarc::rt::nvfp4_linear::{self as nl, Nvfp4Linear};
+use fastvideo_cudarc::rt::quant::{self, ptr, QuantKind, QuantLayout, QuantWeight, Section};
+use fastvideo_cudarc::rt::{device, ops};
 use fastvideo_models::nvfp4::{self, ScaleRule};
 use half::bf16;
 use serde_json::json;
@@ -202,7 +202,7 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
         let name = "nvfp4_published_stack_matches_host";
         let r = (|| -> anyhow::Result<serde_json::Value> {
             use fastvideo_cudarc::h3::nvfp4::{swap_nibbles, PublishedLinear};
-            use fastvideo_cudarc::wan::nvfp4_linear::{Nvfp4Operand, Nvfp4Stack};
+            use fastvideo_cudarc::rt::nvfp4_linear::{Nvfp4Operand, Nvfp4Stack};
             let n_part = 256usize;
             let mut parts = Vec::new();
             let mut wdq = Vec::new();
@@ -285,7 +285,7 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
     {
         let name = "nvfp4_static_act_scale_matches_dynamic";
         let r = (|| -> anyhow::Result<serde_json::Value> {
-            use fastvideo_cudarc::wan::nvfp4_linear::Nvfp4Stack;
+            use fastvideo_cudarc::rt::nvfp4_linear::Nvfp4Stack;
             let n = 256usize;
             let wf = randn(seed ^ 0x51a7, n * k, 0.05);
             let wd = d
@@ -330,10 +330,10 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
         let r = (|| -> anyhow::Result<serde_json::Value> {
             let (m, k, n) = (2048usize, 4096usize, 16384usize);
             let x = ops::cast_f32_bf16_device(
-                &fastvideo_cudarc::wan::nvfp4_gemm::fill_uniform_device(m * k, seed ^ 3, 1.0)?,
+                &fastvideo_cudarc::rt::nvfp4_gemm::fill_uniform_device(m * k, seed ^ 3, 1.0)?,
             )?;
             let w = ops::cast_f32_bf16_device(
-                &fastvideo_cudarc::wan::nvfp4_gemm::fill_uniform_device(n * k, seed ^ 4, 0.05)?,
+                &fastvideo_cudarc::rt::nvfp4_gemm::fill_uniform_device(n * k, seed ^ 4, 0.05)?,
             )?;
             let mut yb = unsafe { d.stream.alloc::<bf16>(m * n)? };
             device::matmul_linear_wt_bf16(&x, &w, &mut yb, m, k, n)?;
@@ -433,13 +433,13 @@ fn bench(seed: u64, m: usize, k: usize, n: usize, gelu: bool) -> anyhow::Result<
     row.insert("n".into(), json!(n));
     row.insert("gelu_in".into(), json!(gelu));
     let x: CudaSlice<bf16> = ops::cast_f32_bf16_device(
-        &fastvideo_cudarc::wan::nvfp4_gemm::fill_uniform_device(m * k, seed, 1.0)?,
+        &fastvideo_cudarc::rt::nvfp4_gemm::fill_uniform_device(m * k, seed, 1.0)?,
     )?;
     let w: CudaSlice<bf16> = ops::cast_f32_bf16_device(
-        &fastvideo_cudarc::wan::nvfp4_gemm::fill_uniform_device(n * k, seed ^ 1, 0.05)?,
+        &fastvideo_cudarc::rt::nvfp4_gemm::fill_uniform_device(n * k, seed ^ 1, 0.05)?,
     )?;
     let b16 = std::sync::Arc::new(ops::cast_f32_bf16_device(
-        &fastvideo_cudarc::wan::nvfp4_gemm::fill_uniform_device(n, seed ^ 2, 0.1)?,
+        &fastvideo_cudarc::rt::nvfp4_gemm::fill_uniform_device(n, seed ^ 2, 0.1)?,
     )?);
     // bf16: the GEMM alone, then the linear the bf16 FFN runs (GELU pass on
     // the input for the down projection, bias in the epilogue).
@@ -452,14 +452,14 @@ fn bench(seed: u64, m: usize, k: usize, n: usize, gelu: bool) -> anyhow::Result<
         row.insert("bf16_gemm_ms".into(), json!(ms));
         row.insert("bf16_gemm_tflops".into(), json!(tflops(ms)));
         drop(out);
-        let xt = fastvideo_cudarc::wan::tensor::CudaTensor::from_device_slice_bf16(
+        let xt = fastvideo_cudarc::rt::tensor::CudaTensor::from_device_slice_bf16(
             d.stream.clone_dtod(&x)?,
             vec![m, k],
         )?;
         let ms = time_ms(|| {
             // The bf16 FFN's GELU: a bf16 pass over the up projection's output.
             let src = if gelu {
-                fastvideo_cudarc::wan::tensor::with_bf16_act(true, || xt.gelu_tanh())
+                fastvideo_cudarc::rt::tensor::with_bf16_act(true, || xt.gelu_tanh())
                     .quantize_bf16()?
             } else {
                 xt.clone()

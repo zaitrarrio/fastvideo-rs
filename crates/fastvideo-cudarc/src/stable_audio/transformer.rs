@@ -3,9 +3,9 @@
 use fastvideo_models::stable_audio::StableAudioDiTConfig;
 
 use crate::hub_keys::{self, stable_audio as sakeys};
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::{PipelineError, Result};
-use crate::wan::tensor::CudaTensor;
-use crate::wan::weights::WeightMap;
 
 fn msg(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())

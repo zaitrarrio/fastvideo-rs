@@ -2,7 +2,7 @@
 //! `attention/backends/video_sparse_attn_h3.py`), over the packed
 //! `[text | audio | video]` sequence.
 //!
-//! It is Wan's VSA ([`crate::wan::vsa`]) with three differences, all of which
+//! It is Wan's VSA ([`crate::rt::vsa`]) with three differences, all of which
 //! follow from the sequence not being a pure video grid:
 //!
 //! 1. **Tiles.** Text and audio rows come first and are cut into 64-row tiles
@@ -40,8 +40,8 @@
 use fastvideo_models::h3::config::H3InferenceContract;
 use fastvideo_models::h3::packing::H3PackedLayout;
 
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::vsa::{TilePlan, TILE_ELEMS};
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::vsa::{TilePlan, TILE_ELEMS};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -64,7 +64,7 @@ impl H3VsaConfig {
         let contract = H3InferenceContract::fasth3_8step();
         Self {
             sparsity: contract.vsa_sparsity,
-            group: crate::wan::envflag::usize_flag("FASTVIDEO_VSA_GROUP", 8).max(1),
+            group: crate::rt::envflag::usize_flag("FASTVIDEO_VSA_GROUP", 8).max(1),
             tile_size: contract.vsa_tile_size,
         }
     }
@@ -147,7 +147,7 @@ impl H3TilePlan {
 
     /// `clamp(ceil((1 - sparsity) * video_tiles), 1, video_tiles)`.
     pub fn k_vid(&self, sparsity: f64) -> usize {
-        crate::wan::vsa::topk_for(sparsity, self.video_tiles)
+        crate::rt::vsa::topk_for(sparsity, self.video_tiles)
     }
 }
 
@@ -309,7 +309,7 @@ pub struct H3Vsa {
     current: std::sync::atomic::AtomicUsize,
     /// The fine stage on the FP8 kernel (`fp8_attention` with `vsa`).
     fp8: bool,
-    /// The fine stage on the sparse FP4 kernel ([`crate::wan::attn_fp4`],
+    /// The fine stage on the sparse FP4 kernel ([`crate::rt::attn_fp4`],
     /// `FASTVIDEO_H3_VSA_FP4=1` with a ModelOpt NVFP4 DiT).
     fp4: bool,
     heads: usize,
@@ -322,7 +322,7 @@ pub struct H3Vsa {
 
 #[cfg(feature = "cuda")]
 struct DevicePlan {
-    plan: crate::wan::ops::VsaPlanDev,
+    plan: crate::rt::ops::VsaPlanDev,
     /// `[n]`: huge on the prefix columns, zero on the video ones.
     prefix_bias: CudaTensor,
     /// For each head and prefix row, the row of the `[heads * n, dim]`
@@ -344,7 +344,7 @@ impl DevicePlan {
     ) -> Result<CudaTensor> {
         let rows = self.prefix_branch_idx.len();
         CudaTensor::from_device_slice(
-            crate::wan::ops::index_select_rows_idx_device(coarse, dim, &self.prefix_branch_idx)?,
+            crate::rt::ops::index_select_rows_idx_device(coarse, dim, &self.prefix_branch_idx)?,
             vec![rows, dim],
         )
     }
@@ -375,12 +375,12 @@ impl H3Vsa {
         }
         let plan = H3TilePlan::new(layout)?;
         let k_vid = plan.k_vid(cfg.sparsity);
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "vsa-h3: {} prefix + {} video tiles, k_vid {k_vid}, {} of {} rows dense",
             plan.prefix_tiles, plan.video_tiles, plan.prefix_rows, plan.seq
         ));
         #[cfg(feature = "cuda")]
-        let device = if crate::wan::stats::device_expected() {
+        let device = if crate::rt::stats::device_expected() {
             let n = plan.num_tiles();
             let mut bias = CudaTensor::from_vec(
                 (0..n)
@@ -403,13 +403,13 @@ impl H3Vsa {
                 })
                 .collect();
             Some(DevicePlan {
-                plan: crate::wan::ops::vsa_plan_upload(
+                plan: crate::rt::ops::vsa_plan_upload(
                     &plan.slot_src,
                     &plan.block_sizes,
                     TILE_ELEMS,
                 )?,
                 prefix_bias: bias,
-                prefix_branch_idx: crate::wan::ops::upload_row_indices(&prefix_branch_rows)?,
+                prefix_branch_idx: crate::rt::ops::upload_row_indices(&prefix_branch_rows)?,
             })
         } else {
             None
@@ -446,7 +446,7 @@ impl H3Vsa {
         schedule: fastvideo_models::techniques::VsaSchedule,
     ) -> Self {
         if !schedule.is_uniform() {
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "vsa-h3 schedule: {}",
                 schedule.describe(sparsity)
             ));
@@ -455,13 +455,13 @@ impl H3Vsa {
         self
     }
 
-    /// The fine stage on the FP8 kernel ([`crate::wan::attn_fp8`]).
+    /// The fine stage on the FP8 kernel ([`crate::rt::attn_fp8`]).
     pub fn with_fp8(mut self, on: bool) -> Self {
         self.fp8 = on;
         self
     }
 
-    /// The fine stage on the sparse FP4 kernel ([`crate::wan::attn_fp4`]):
+    /// The fine stage on the sparse FP4 kernel ([`crate::rt::attn_fp4`]):
     /// Q K^T and P V on block-scaled FP4 tensor cores, the selection, the
     /// compression branch, the combine and the dense prefix rows unchanged.
     pub fn with_fp4(mut self, on: bool) -> Self {
@@ -514,7 +514,7 @@ impl H3Vsa {
                 self.plan.video_tiles as u64,
             );
             let kv = (self.k_vid() as u64).min(v);
-            crate::wan::evalstats::vsa(self.heads, v * (p + kv) + p * n, n * n, v * kv, v * v);
+            crate::rt::evalstats::vsa(self.heads, v * (p + kv) + p * n, n * n, v * kv, v * v);
         }
         #[cfg(feature = "cuda")]
         if let Some(device) = &self.device {
@@ -526,7 +526,7 @@ impl H3Vsa {
             return like.keep_dtype(out);
         }
         // CPU runs and tests only; with a device live this is an error, not a fallback.
-        crate::wan::stats::host_fallback("vsa_h3", format_args!("{shape:?}"))?;
+        crate::rt::stats::host_fallback("vsa_h3", format_args!("{shape:?}"))?;
         let g = match &gate {
             Some(g) => Some(g.host_cow()?),
             None => None,
@@ -553,8 +553,8 @@ impl H3Vsa {
         v: CudaTensor,
         gate: Option<CudaTensor>,
     ) -> Result<CudaTensor> {
-        use crate::wan::stats::phase;
-        use crate::wan::{device, ops};
+        use crate::rt::stats::phase;
+        use crate::rt::{device, ops};
         let (bh, seq, dim, n) = (
             self.heads,
             self.plan.seq,
@@ -651,7 +651,7 @@ impl H3Vsa {
             };
             let sparse = phase("vsa_h3_3_mma", || {
                 if self.fp4 {
-                    use crate::wan::attn_fp4::{vsa_fine, Fp4In};
+                    use crate::rt::attn_fp4::{vsa_fine, Fp4In};
                     return vsa_fine(
                         &Fp4In::F32 {
                             q: qd,
@@ -668,8 +668,8 @@ impl H3Vsa {
                         q_tiles,
                     );
                 }
-                if self.fp8 && crate::wan::attn_fp8::supported() {
-                    return crate::wan::attn_fp8::vsa_fine(
+                if self.fp8 && crate::rt::attn_fp8::supported() {
+                    return crate::rt::attn_fp8::vsa_fine(
                         qd, kd, vd, &selected, &dp.plan, bh, seq, dim, topk, scale, q_base, q_tiles,
                     );
                 }
@@ -731,7 +731,7 @@ impl H3Vsa {
         // 5. Text / audio query rows are dense: recompute those few rows
         //    against all keys and add their compression term.
         phase("vsa_h3_4_prefix_dense", || {
-            let mut dense = crate::wan::nn::scaled_dot_product_attention(
+            let mut dense = crate::rt::nn::scaled_dot_product_attention(
                 &q.narrow(2, 0, prefix)?,
                 &k,
                 &v,
@@ -792,9 +792,9 @@ impl H3Vsa {
         v: &CudaTensor,
         gate: Option<&CudaTensor>,
     ) -> Result<Option<CudaTensor>> {
-        use crate::wan::attn_dc::{self, VsaEpilogue, VsaGate, VsaPrepIn};
-        use crate::wan::stats::phase;
-        use crate::wan::{device, ops};
+        use crate::rt::attn_dc::{self, VsaEpilogue, VsaGate, VsaPrepIn};
+        use crate::rt::stats::phase;
+        use crate::rt::{device, ops};
         let (bh, seq, dim, n) = (
             self.heads,
             self.plan.seq,
@@ -803,7 +803,7 @@ impl H3Vsa {
         );
         if dim != attn_dc::DC_HEAD_DIM
             || self.fp4
-            || (self.fp8 && crate::wan::attn_fp8::supported())
+            || (self.fp8 && crate::rt::attn_fp8::supported())
             || !attn_dc::vsa_enabled()
         {
             return Ok(None);
@@ -888,7 +888,7 @@ impl H3Vsa {
                 .ok_or_else(|| msg("vsa-h3: biased scores have no device buffer"))?;
             ops::vsa_topk_device(b, bh * n, n, topk)
         })?;
-        if crate::wan::envflag::bool_flag("FASTVIDEO_VSA_UNION_LOG", false) {
+        if crate::rt::envflag::bool_flag("FASTVIDEO_VSA_UNION_LOG", false) {
             // Diagnostic: how much larger the sm_100 kernel's union of two
             // query tiles' selections is than one selection (1.0 = identical).
             let sel = device::global_device()
@@ -909,7 +909,7 @@ impl H3Vsa {
                     t += 2;
                 }
             }
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "vsa-h3 union: {:.3} x topk {topk} over {pairs} query-tile pairs",
                 sum / pairs.max(1) as f64
             ));
@@ -993,7 +993,7 @@ impl H3Vsa {
         //    compression term (the bf16 path's code; the SDPA quantizes its
         //    operands to bf16 whatever they are stored as).
         phase("vsa_h3_4_prefix_dense", || {
-            let mut dense = crate::wan::nn::scaled_dot_product_attention(
+            let mut dense = crate::rt::nn::scaled_dot_product_attention(
                 &q.narrow(2, 0, prefix)?,
                 k,
                 v,
@@ -1058,9 +1058,9 @@ impl H3Vsa {
         v: &CudaTensor,
         gate: Option<&CudaTensor>,
     ) -> Result<Option<CudaTensor>> {
-        use crate::wan::stats::phase;
-        use crate::wan::{device, ops};
-        if !crate::wan::envflag::bool_flag("FASTVIDEO_VSA_BF16", true) {
+        use crate::rt::stats::phase;
+        use crate::rt::{device, ops};
+        if !crate::rt::envflag::bool_flag("FASTVIDEO_VSA_BF16", true) {
             return Ok(None);
         }
         let (bh, seq, dim, n) = (
@@ -1091,7 +1091,7 @@ impl H3Vsa {
             None => None,
         };
         static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        crate::wan::log::info_once(
+        crate::rt::log::info_once(
             &LOGGED,
             format_args!("vsa-h3: bf16 inputs read in place (no f32 widening)"),
         );
@@ -1148,7 +1148,7 @@ impl H3Vsa {
         };
         let sparse = phase("vsa_h3_3_mma", || {
             if self.fp4 {
-                use crate::wan::attn_fp4::{vsa_fine, Fp4In};
+                use crate::rt::attn_fp4::{vsa_fine, Fp4In};
                 return vsa_fine(
                     &Fp4In::Bf16 {
                         q: qd,
@@ -1189,7 +1189,7 @@ impl H3Vsa {
         // compression term, exactly as the f32 path (the SDPA quantizes its
         // operands to bf16 either way).
         phase("vsa_h3_4_prefix_dense", || {
-            let mut dense = crate::wan::nn::scaled_dot_product_attention(
+            let mut dense = crate::rt::nn::scaled_dot_product_attention(
                 &q.narrow(2, 0, prefix)?,
                 k,
                 v,
@@ -1249,17 +1249,17 @@ impl H3Vsa {
     /// widened to f32: the same conditions those two check. The FP8 fine
     /// stage only exists on the f32 path.
     pub fn takes_bf16(&self) -> bool {
-        if self.device.is_none() || (self.fp8 && crate::wan::attn_fp8::supported()) {
+        if self.device.is_none() || (self.fp8 && crate::rt::attn_fp8::supported()) {
             return false;
         }
-        if crate::wan::attn_dc::vsa_enabled() && self.head_dim == crate::wan::attn_dc::DC_HEAD_DIM {
+        if crate::rt::attn_dc::vsa_enabled() && self.head_dim == crate::rt::attn_dc::DC_HEAD_DIM {
             return true;
         }
-        let sm = crate::wan::device::global_device().map_or(0, |d| d.sm_major);
+        let sm = crate::rt::device::global_device().map_or(0, |d| d.sm_major);
         let forced_gather = fastvideo_models::techniques::kernels::choice(
             fastvideo_models::techniques::kernels::KernelOp::VsaAttention,
         ) == "gather";
-        crate::wan::envflag::bool_flag("FASTVIDEO_VSA_BF16", true)
+        crate::rt::envflag::bool_flag("FASTVIDEO_VSA_BF16", true)
             && sm >= 8
             && self.head_dim == 128
             && !forced_gather
@@ -1295,7 +1295,7 @@ impl H3Vsa {
             self.plan.video_tiles as u64,
         );
         let kv = (self.k_vid() as u64).min(vt);
-        crate::wan::evalstats::vsa(self.heads, vt * (p + kv) + p * n, n * n, vt * kv, vt * vt);
+        crate::rt::evalstats::vsa(self.heads, vt * (p + kv) + p * n, n * n, vt * kv, vt * vt);
         self.attend_device(device, q, k, v, gate).map(Some)
     }
 }
@@ -1303,7 +1303,7 @@ impl H3Vsa {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wan::nn::scaled_dot_product_attention;
+    use crate::rt::nn::scaled_dot_product_attention;
 
     fn seeded(n: usize, k: f32) -> Vec<f32> {
         (0..n)

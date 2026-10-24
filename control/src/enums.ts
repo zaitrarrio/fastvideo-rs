@@ -185,7 +185,7 @@ export const CONFIG_PATH_RE = /^\/[A-Za-z0-9._/-]+\.toml$/;
  * editors offer as a select or a toggle, and what the server accepts.
  */
 export const ENV_VALUE_TYPES: Record<string, { kind: "enum" | "bool" | "path" | "secret"; values?: readonly string[] }> = {
-  FASTVIDEO_ATTN_SAGE: { kind: "enum", values: ["0", "2", "off", "on"] }, // crates/fastvideo-cudarc/src/wan/attn_sage.rs forced()
+  FASTVIDEO_ATTN_SAGE: { kind: "enum", values: ["0", "2", "off", "on"] }, // crates/fastvideo-cudarc/src/rt/attn_sage.rs forced()
   FASTVIDEO_FLASH_KERNEL: { kind: "enum", values: ["auto", "v1", "v2", "cudnn", "dc"] },
   FASTVIDEO_NVFP4: { kind: "enum", values: ["1", "static_6", "static_4", "mse"] },
   FASTVIDEO_FP8: { kind: "bool" }, // envflag::bool_flag

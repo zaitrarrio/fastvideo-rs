@@ -25,11 +25,11 @@ use fastvideo_models::wan::WanVaeConfig;
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
 
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::{frames_to_rgb8, PipelineError, Result, VideoWriter};
-use crate::wan::tensor::CudaTensor;
 use crate::wan::vae::AutoencoderKlWan;
 use crate::wan::vae21_encode::Wan21ChunkedEncoder;
-use crate::wan::weights::WeightMap;
 
 use super::text::LingBotTextEncoder;
 use super::transformer::{AttnRoute, LingBotTransformer};
@@ -39,9 +39,9 @@ fn msg(s: impl Into<String>) -> PipelineError {
 }
 
 /// Return the pool's cached free memory to the driver between phases
-/// ([`crate::wan::device::trim_pool`]).
+/// ([`crate::rt::device::trim_pool`]).
 fn trim() -> Result<()> {
-    crate::wan::device::trim_pool().map_err(terr)
+    crate::rt::device::trim_pool().map_err(terr)
 }
 
 fn terr(e: impl std::fmt::Display) -> PipelineError {
@@ -392,7 +392,7 @@ impl LingBotPipeline {
         // ---- refiner stage ----
         if self.residency == Residency::Swap {
             // The base DiT leaves in hundreds of pieces; the pool keeps them
-            // (`wan::device` release threshold) and the refiner's weights did
+            // (`rt::device` release threshold) and the refiner's weights did
             // not fit between them: CUDA out of memory right after the base
             // stage on a 96 GB card (sol-bench phase B2). Hand them back first.
             // The 1080p VAE encode below also runs before the refiner arrives.
@@ -569,7 +569,7 @@ fn denoise(
             v
         };
         latents = sched.step(&v, &latents).map_err(msg)?;
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "lingbot {label} step {}/{n_steps} t={t}{} {:.2}s",
             i + 1,
             if reuse { " (reused)" } else { "" },
@@ -649,7 +649,7 @@ fn write_video(dir: &Path, fps: u32, rgb: &Rgb) -> Result<()> {
 fn write_timing(out_dir: &Path, timing: &LingBotTiming) -> Result<()> {
     let text = serde_json::to_string_pretty(timing).map_err(terr)?;
     std::fs::write(out_dir.join("lingbot_timing.json"), text).map_err(terr)?;
-    crate::wan::log::info(format_args!(
+    crate::rt::log::info(format_args!(
         "lingbot timing {}",
         serde_json::to_string(timing).map_err(terr)?
     ));

@@ -21,15 +21,16 @@ runtime error, not a compile error. Where a port's write-up exists
 4. **Model definition** (`crates/fastvideo-models/src/<fam>/`): configs,
    schedules, geometry and host reference math, with no CUDA.
 5. **Runtime port** (`crates/fastvideo-cudarc/src/<fam>/`): the pipeline,
-   its weight loading and its device ops on `cudarc/src/wan` (the runtime
-   that is still named after Wan), plus the checkpoint key mapping in one of
+   its weight loading and its device ops on `cudarc/src/rt` (the runtime;
+   `wan/` is only the Wan family), plus the checkpoint key mapping in one of
    `cudarc/src/hub_keys.rs`, `cudarc/src/ltx2/keys.rs` or
    `cudarc/src/h3/dit_tree.rs` (three conventions today; a new family picks
    one or adds a fourth).
-6. **Kernels** (`crates/fastvideo-cudarc/src/wan/`): the family's region of
-   `kernels.cu` (the `// ==== region: <name> ====` and `// ---- ` markers),
-   and its arms in `fuse.rs` (block fusion) and `quant.rs` (quantization
-   plans), when the family needs either.
+6. **Kernels** (`crates/fastvideo-cudarc/src/<fam>/kernels/*.cu`): the
+   family's region files, appended to `KERNEL_PARTS` in `cudarc/build.rs`
+   (one list for nvcc and NVRTC; `rt/kernel_src.rs` pins the concatenation's
+   sha256), and its arms in `wan/fuse.rs` (block fusion) and `rt/quant.rs`
+   (quantization plans), when the family needs either.
 7. **Techniques** (`crates/fastvideo-models/src/techniques/`): the family's
    `ModelSpec` in `registry.rs::model_spec` (only H3 and LTX-2 have one
    today; Wan reads the techniques layer without a spec) and its profiles

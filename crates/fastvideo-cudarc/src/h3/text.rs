@@ -18,8 +18,8 @@ use fastvideo_models::h3::config::H3TextEncoderConfig;
 use fastvideo_models::h3::tokenizer::H3Tokenizer;
 
 use crate::llm::{self, DecoderConfig};
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::WeightMap;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::WeightMap;
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -916,7 +916,7 @@ mod tests {
         let normed = llm::hidden_states(&weights(), &two, &ids, &pos, &[true; 4], &[2])
             .unwrap()
             .remove(0);
-        let w = crate::wan::weights::cuda_tensor_shaped(&weights(), "m.norm.weight", &[8]).unwrap();
+        let w = crate::rt::weights::cuda_tensor_shaped(&weights(), "m.norm.weight", &[8]).unwrap();
         let want = got.rms_norm(&w, cfg.rms_eps).unwrap();
         let (a, b) = (want.host_cow().unwrap(), normed.host_cow().unwrap());
         assert!(a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < 1e-6));

@@ -6,7 +6,7 @@
 //! RTX5090`: "the 33B DiT, Qwen3-VL conditioner, and VAEs use layerwise
 //! component offload so only the active component resides on the GPU", and
 //! the full video VAE becomes resident only for decoding. In Rust terms
-//! (`fastvideo_cudarc::wan::offload`):
+//! (`fastvideo_cudarc::rt::offload`):
 //!
 //! * the text encoder streams one layer at a time (its prefetcher keeps up to
 //!   three on the device) and is gone before the DiT runs;
@@ -47,7 +47,7 @@ pub const GIB: u64 = 1 << 30;
 pub const RUNTIME_ALLOWANCE: u64 = 2 * GIB;
 
 /// Dense attention's score chunk: 1 GiB of float32 scores plus its bf16
-/// probabilities (`fastvideo_cudarc::wan::attn::DENSE_SCORE_BUDGET`).
+/// probabilities (`fastvideo_cudarc::rt::attn::DENSE_SCORE_BUDGET`).
 pub const SCORE_CHUNK_BYTES: u64 = GIB + GIB / 2;
 
 /// Rows per FFN pass when the whole `[S, 2 ffn]` float32 buffer would exceed
@@ -140,7 +140,7 @@ impl H3VaeLinears {
     }
 }
 
-/// The MXFP8 block range of `fastvideo_cudarc::wan::quant::H3QuantPlan`.
+/// The MXFP8 block range of `fastvideo_cudarc::rt::quant::H3QuantPlan`.
 pub const MXFP8_FIRST_BLOCK: usize = 2;
 pub const MXFP8_LAST_BLOCK: usize = 46;
 /// bf16 blocks a pruned stack always keeps at its end.

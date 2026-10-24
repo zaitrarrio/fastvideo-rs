@@ -22,7 +22,7 @@ use fastvideo_cudarc::Hooks;
 /// refused before any work, naming the sizes (the long 1080P clips on a card
 /// that also keeps the text encoder resident).
 fn check_hd_memory(req: &H3Request) -> Result<(), ApiError> {
-    use fastvideo_cudarc::wan::device::{free_memory, pool_usage};
+    use fastvideo_cudarc::rt::device::{free_memory, pool_usage};
     use fastvideo_models::h3::config::H3Geometry;
     let g = H3Geometry::new(req.height, req.width, req.num_frames)
         .map_err(|e| ApiError::invalid(format!("h3: {e}")))?;
@@ -92,7 +92,7 @@ impl H3Model {
             dit_offload: recipe
                 .dit_offload
                 .as_deref()
-                .map(fastvideo_cudarc::wan::offload::DitOffload::parse)
+                .map(fastvideo_cudarc::rt::offload::DitOffload::parse)
                 .transpose()
                 .map_err(ApiError::internal)?,
             i2v_encoder: fastvideo_cudarc::h3::pipeline::I2vEncoderChoice::parse(

@@ -11,9 +11,9 @@ use fastvideo_models::h3::lora::{
     add_diff, add_low_rank, lora_multiplier, plan_from_keys, LoraFormat, LoraPlan,
 };
 
-use crate::wan::nn::Linear;
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::WeightMap;
+use crate::rt::nn::Linear;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::WeightMap;
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -289,7 +289,7 @@ impl H3LoraFuse {
             &|p| base.shape(p),
         )
         .map_err(msg)?;
-        crate::wan::log::info(format_args!("plug lora {}", report.summary()));
+        crate::rt::log::info(format_args!("plug lora {}", report.summary()));
         report.require_complete().map_err(msg)?;
         let names: Vec<String> = keys.into_iter().map(|(k, _)| k).collect();
         let plan =
@@ -739,7 +739,7 @@ pub fn set_strength<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wan::weights::WeightMap;
+    use crate::rt::weights::WeightMap;
     use fastvideo_models::h3::lora::plan_from_keys;
     use std::collections::HashMap;
     use std::path::Path;

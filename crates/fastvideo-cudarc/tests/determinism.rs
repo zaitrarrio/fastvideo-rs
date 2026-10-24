@@ -111,7 +111,7 @@ fn digest() -> String {
     feed_f32(&mut h, "h3_noise_audio", &ha);
 
     // The dense-SDPA kernel rule over a shape sweep (every class boundary).
-    use fastvideo_cudarc::wan::sdpa_rule;
+    use fastvideo_cudarc::rt::sdpa_rule;
     let mut picks = Vec::new();
     for sm in [8, 9, 10, 12] {
         for n in (512..140_000).step_by(1_531) {
@@ -127,7 +127,7 @@ fn digest() -> String {
     let pairs: Vec<f64> = (0..8192)
         .map(|i| ((i * 7919) % 1000) as f64 * 1e-3 + 1e-9 * i as f64)
         .collect();
-    let (a, b) = fastvideo_cudarc::wan::ops::sum_pairs_in_order(&pairs);
+    let (a, b) = fastvideo_cudarc::rt::ops::sum_pairs_in_order(&pairs);
     feed_f64(&mut h, "pair_sums", &[a, b]);
 
     hex(&h.finalize())
@@ -191,7 +191,7 @@ fn same_seed_same_bytes_across_processes() {
 #[test]
 fn a_cached_conditioning_reads_back_bit_for_bit() {
     use fastvideo_cudarc::ltx2::text_cache::TextCache;
-    use fastvideo_cudarc::wan::tensor::CudaTensor;
+    use fastvideo_cudarc::rt::tensor::CudaTensor;
     let dir = std::env::temp_dir().join(format!("fv-determinism-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let cache = TextCache::new(&dir);

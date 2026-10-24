@@ -28,10 +28,10 @@ use fastvideo_models::ltx2::config::Ltx2TransformerConfig;
 use fastvideo_models::ltx2::fbcache::FbCache;
 use fastvideo_models::ltx2::Ltx2RopeTables;
 
-use crate::wan::nn::{sinusoidal_timesteps, Linear};
-use crate::wan::offload::{BlockWeights, OffloadBlock, Residency};
-use crate::wan::tensor::{CudaTensor, Result};
-use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
+use crate::rt::nn::{sinusoidal_timesteps, Linear};
+use crate::rt::offload::{BlockWeights, OffloadBlock, Residency};
+use crate::rt::tensor::{CudaTensor, Result};
+use crate::rt::weights::{cuda_tensor_shaped, WeightMap};
 
 use super::attention::{Attention, AttentionDims, DeviceRope, FeedForward, VideoAttnKernel};
 use super::fuse;
@@ -326,7 +326,7 @@ fn video_self_attn(
         Ltx2VideoAttn::Off => VideoAttnKernel::Dense,
     };
     {
-        use crate::wan::evalstats::{attn as record, AttnKind};
+        use crate::rt::evalstats::{attn as record, AttnKind};
         let kind = match kernel {
             VideoAttnKernel::Dense => AttnKind::Dense,
             VideoAttnKernel::Sol { tau } => AttnKind::Sol { tau },
@@ -403,7 +403,7 @@ fn relative_l1(cur: &CudaTensor, prev: &CudaTensor) -> Result<f64> {
     }
     #[cfg(feature = "cuda")]
     if let (Some(a), Some(b)) = (cur.dev()?, prev.dev()?) {
-        let (num, den) = crate::wan::ops::ltx_abs_diff_sums_device(&a, &b)?;
+        let (num, den) = crate::rt::ops::ltx_abs_diff_sums_device(&a, &b)?;
         return Ok(if den == 0.0 { f64::INFINITY } else { num / den });
     }
     Ok(fastvideo_models::ltx2::fbcache::relative_l1(
@@ -460,7 +460,7 @@ impl Ropes {
         fps: f32,
     ) -> Result<Self> {
         let division = fastvideo_models::ltx2::rope::ScalarDivision::Reciprocal;
-        if crate::wan::envflag::bool_flag("FASTVIDEO_LTX2_HOST_ROPE", false) {
+        if crate::rt::envflag::bool_flag("FASTVIDEO_LTX2_HOST_ROPE", false) {
             return Self::upload(&Ltx2RopeTables::with_conditioning(
                 cfg,
                 grid,
@@ -756,7 +756,7 @@ fn table(map: &WeightMap, key: &str, rows: usize, dim: usize) -> Result<CudaTens
     let t = cuda_tensor_shaped(map, key, &[rows, dim])?;
     // bf16 activations: the reference's tables are bf16 parameters, so
     // `table + modulation` (and `1 + scale`) round to bf16 as there.
-    let mut t = if crate::wan::tensor::bf16_activations() {
+    let mut t = if crate::rt::tensor::bf16_activations() {
         t.quantize_bf16()?
     } else {
         t
@@ -848,7 +848,7 @@ impl Ltx2Transformer {
     }
 
     /// [`Self::load`] with the blocks resident or streamed
-    /// ([`crate::wan::offload`]): streamed, each block leaves the device as
+    /// ([`crate::rt::offload`]): streamed, each block leaves the device as
     /// soon as it is loaded and a forward holds `lookahead + 1` of them.
     pub fn load_with_residency(
         map: &WeightMap,
@@ -887,7 +887,7 @@ impl Ltx2Transformer {
         residency: Residency,
     ) -> Result<Self> {
         // FASTVIDEO_NVFP4 on LTX-2 is sol-engine's video-FFN scope only.
-        crate::wan::nvfp4::enter_ltx_video_ffn_scope();
+        crate::rt::nvfp4::enter_ltx_video_ffn_scope();
         if cfg.norm_elementwise_affine
             || cfg.patch_size != 1
             || cfg.patch_size_t != 1
@@ -957,7 +957,7 @@ impl Ltx2Transformer {
                         dv,
                         cfg.ff_inner_dim(),
                         cfg.ff_bias,
-                        crate::wan::nvfp4::ltx_video_ffn_rule(),
+                        crate::rt::nvfp4::ltx_video_ffn_rule(),
                     )?,
                     scale_shift_table: table(
                         map,
@@ -1022,9 +1022,9 @@ impl Ltx2Transformer {
                 video_to_audio: attn("video_to_audio_attn", v2a_dims, audio_gated)?,
             })?;
             if (i + 1) % 8 == 0 || i + 1 == cfg.num_layers {
-                let free = crate::wan::device::free_memory()
+                let free = crate::rt::device::free_memory()
                     .map_or(-1.0, |(f, _)| f as f64 / f64::from(1u32 << 30));
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "ltx2 dit: loaded block {}/{} ({free:.1} GiB free)",
                     i + 1,
                     cfg.num_layers
@@ -1052,7 +1052,7 @@ impl Ltx2Transformer {
             }
         };
         let keyframes = load_keyframes_abs_pos(map, keys, cfg, dv)?;
-        crate::wan::log::info(format_args!("{}", blocks.describe()));
+        crate::rt::log::info(format_args!("{}", blocks.describe()));
         Ok(Self {
             proj_in: Linear::load(map, &keys.key("proj_in"), cfg.in_channels, dv, true)?,
             audio_proj_in: Linear::load(
@@ -1114,7 +1114,7 @@ impl Ltx2Transformer {
             pending_a: None,
             active_pass: None,
         });
-        crate::wan::log::info(format_args!("{}", fastvideo_models::ltx2::fbcache::APPLIED));
+        crate::rt::log::info(format_args!("{}", fastvideo_models::ltx2::fbcache::APPLIED));
     }
 
     pub fn begin_fbcache_step(&self, step: usize) {
@@ -1164,7 +1164,7 @@ impl Ltx2Transformer {
             pass: 0,
             prev: Vec::new(),
         });
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "{}",
             fastvideo_models::ltx2::pisa::PRUNE_APPLIED
         ));
@@ -1264,7 +1264,7 @@ impl Ltx2Transformer {
             last_v: None,
             last_a: None,
         });
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "{}",
             fastvideo_models::ltx2::pisa::STAGE1_CACHE_APPLIED
         ));
@@ -1339,7 +1339,7 @@ impl Ltx2Transformer {
         let ratio = fastvideo_models::ltx2::pisa::PRUNE_RATIO;
         #[cfg(feature = "cuda")]
         if let Some(x) = xv.dev()? {
-            let scores = crate::wan::ops::ltx_row_sumsq_device(&x, seq, dim)?;
+            let scores = crate::rt::ops::ltx_row_sumsq_device(&x, seq, dim)?;
             let scores = CudaTensor::from_device_slice(scores, vec![seq])?
                 .host_cow()?
                 .into_owned();
@@ -1347,15 +1347,15 @@ impl Ltx2Transformer {
             if idx.len() >= seq {
                 return Ok((Some(pass), None));
             }
-            let dev = crate::wan::device::global_device()
+            let dev = crate::rt::device::global_device()
                 .ok_or_else(|| msg("ltx2 prune: no global CUDA device"))?;
             let idx32: Vec<u32> = idx.iter().map(|&i| i as u32).collect();
             let idx_dev = dev
                 .stream
                 .memcpy_stod(&idx32)
                 .map_err(|e| msg(e.to_string()))?;
-            crate::wan::stats::record_h2d(idx32.len());
-            let rows = crate::wan::ops::index_select_rows_dev_idx(&x, dim, &idx_dev)?;
+            crate::rt::stats::record_h2d(idx32.len());
+            let rows = crate::rt::ops::index_select_rows_dev_idx(&x, dim, &idx_dev)?;
             let kept = xv.keep_dtype(CudaTensor::from_device_slice(
                 rows,
                 vec![1, idx.len(), dim],
@@ -1403,7 +1403,7 @@ impl Ltx2Transformer {
         #[cfg(feature = "cuda")]
         if let (Some(idx_dev), Some(base), Some(src)) = (idx.dev.as_ref(), prev.dev()?, kept.dev()?)
         {
-            let full = crate::wan::ops::ltx_index_copy_rows_device(&base, &src, idx_dev, dim)?;
+            let full = crate::rt::ops::ltx_index_copy_rows_device(&base, &src, idx_dev, dim)?;
             let out = prev.keep_dtype(CudaTensor::from_device_slice(full, vec![1, seq, dim])?)?;
             runtime.prev[pass] = Some(out.clone());
             return Ok(out);
@@ -1473,7 +1473,7 @@ impl Ltx2Transformer {
         runtime.active_pass = Some(pass);
         if decision.skip {
             runtime.state.note_reused(pass);
-            crate::wan::log::debug(format_args!(
+            crate::rt::log::debug(format_args!(
                 "ltx2 fbcache reuse step pass {pass} reason {}",
                 decision.reason
             ));
@@ -1588,7 +1588,7 @@ impl Ltx2Transformer {
 
     /// Log (and reset) the block streaming counters: H2D throughput and how
     /// much of each copy the previous block's compute hid.
-    pub fn report_offload(&self, what: &str) -> crate::wan::offload::OffloadStats {
+    pub fn report_offload(&self, what: &str) -> crate::rt::offload::OffloadStats {
         self.blocks.report(what)
     }
 
@@ -1721,9 +1721,9 @@ impl Ltx2Transformer {
         let mut skipped = false;
         // FASTVIDEO_DUMP_DIR, first step of a stage: the packed inputs and each
         // block's output (video every 64th row, audio whole).
-        let dump_blocks = crate::wan::dump::blocks();
+        let dump_blocks = crate::rt::dump::blocks();
         if dump_blocks {
-            use crate::wan::dump::{named, rows_strided, BLOCK_ROW_STRIDE};
+            use crate::rt::dump::{named, rows_strided, BLOCK_ROW_STRIDE};
             rows_strided(&named("step00_video_in"), &xv, BLOCK_ROW_STRIDE)?;
             rows_strided(&named("step00_audio_in"), &xa, 1)?;
         }
@@ -1752,7 +1752,7 @@ impl Ltx2Transformer {
                 obs(i, &xv, &xa)?;
             }
             if dump_blocks {
-                use crate::wan::dump::{named, rows_strided, BLOCK_ROW_STRIDE};
+                use crate::rt::dump::{named, rows_strided, BLOCK_ROW_STRIDE};
                 rows_strided(
                     &named(&format!("step00_video_block_{i}")),
                     &xv,
@@ -1906,9 +1906,9 @@ impl Ltx2Transformer {
 
         let mut xv = self.proj_in.forward(video)?;
         let mut xa = self.audio_proj_in.forward(audio)?;
-        let dump_blocks = crate::wan::dump::blocks();
+        let dump_blocks = crate::rt::dump::blocks();
         if dump_blocks {
-            use crate::wan::dump::{named, rows_strided, BLOCK_ROW_STRIDE};
+            use crate::rt::dump::{named, rows_strided, BLOCK_ROW_STRIDE};
             rows_strided(&named("step00_video_in"), &xv, BLOCK_ROW_STRIDE)?;
             rows_strided(&named("step00_audio_in"), &xa, 1)?;
         }
@@ -1932,7 +1932,7 @@ impl Ltx2Transformer {
                 obs(i, &xv, &xa)?;
             }
             if dump_blocks {
-                use crate::wan::dump::{named, rows_strided, BLOCK_ROW_STRIDE};
+                use crate::rt::dump::{named, rows_strided, BLOCK_ROW_STRIDE};
                 rows_strided(
                     &named(&format!("step00_video_block_{i}")),
                     &xv,
@@ -2616,7 +2616,7 @@ mod tests {
     };
     use super::super::keys::Layout;
     use super::*;
-    use crate::wan::weights::WeightMap;
+    use crate::rt::weights::WeightMap;
 
     fn tiny() -> Ltx2TransformerConfig {
         Ltx2TransformerConfig {

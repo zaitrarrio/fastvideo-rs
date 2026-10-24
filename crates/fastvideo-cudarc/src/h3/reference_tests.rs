@@ -25,8 +25,8 @@ use fastvideo_models::h3::config::{
 use fastvideo_models::h3::packing::{patchify, H3PackedLayout};
 use fastvideo_models::h3::schedule::H3JointSchedule;
 
-use crate::wan::tensor::CudaTensor;
-use crate::wan::weights::WeightMap;
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
 
 use super::audio_vae::H3AudioDecoder;
 use super::pipeline::denoise;

@@ -14,8 +14,8 @@
 
 use std::path::Path;
 
-use fastvideo_cudarc::wan::dump;
-use fastvideo_cudarc::wan::weights::WeightMap;
+use fastvideo_cudarc::rt::dump;
+use fastvideo_cudarc::rt::weights::WeightMap;
 use fastvideo_cudarc::wan::{AutoencoderKlWan, CudaTensor, WanTransformer3D};
 use fastvideo_models::wan::{WanVaeConfig, WanVideoArchConfig};
 use serde_json::json;
@@ -48,7 +48,7 @@ fn write(dir: &Path, name: &str, t: &CudaTensor) -> anyhow::Result<Vec<f32>> {
 }
 
 fn sync() -> anyhow::Result<()> {
-    fastvideo_cudarc::wan::device::synchronize()?;
+    fastvideo_cudarc::rt::device::synchronize()?;
     Ok(())
 }
 
@@ -117,7 +117,7 @@ pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
             // TAEHV (taew2_2) on the same latents: it reads DiT space.
             if let Some(path) = a.taehv {
                 let arch = fastvideo_cudarc::wan::pipeline::taehv_arch(z.shape[1]);
-                let tae = fastvideo_cudarc::wan::taehv::TaeHv::load_from_path(path, arch)?;
+                let tae = fastvideo_cudarc::rt::taehv::TaeHv::load_from_path(path, arch)?;
                 let t = std::time::Instant::now();
                 let tv = tae.decode(&vae.normalize_latents(&z)?)?;
                 sync()?;
@@ -133,7 +133,7 @@ pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
     }
 
     if !a.skip_dit {
-        fastvideo_cudarc::wan::tensor::default_bf16_activations();
+        fastvideo_cudarc::rt::tensor::default_bf16_activations();
         let cfg = WanVideoArchConfig::from_preset(a.preset);
         let dit =
             WanTransformer3D::load(cfg, &WeightMap::from_dir(&a.weights.join("transformer"))?)

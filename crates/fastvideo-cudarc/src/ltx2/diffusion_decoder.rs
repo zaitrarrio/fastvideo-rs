@@ -10,10 +10,10 @@ use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 use rayon::prelude::*;
 
-use crate::wan::nn::{self, sinusoidal_timesteps, Linear};
-use crate::wan::ops::host as host_ops;
-use crate::wan::tensor::{CudaTensor, Result};
-use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
+use crate::rt::nn::{self, sinusoidal_timesteps, Linear};
+use crate::rt::ops::host as host_ops;
+use crate::rt::tensor::{CudaTensor, Result};
+use crate::rt::weights::{cuda_tensor_shaped, WeightMap};
 
 use super::{msg, pinned};
 

@@ -2,7 +2,7 @@
 //!
 //! - [`Mp4Writer`] / [`write_mp4`]: RGB24 frames plus optional PCM to an MP4
 //!   through ffmpeg, following the engine's `VideoWriter` shape
-//!   (`crates/fastvideo-cudarc/src/wan/writer.rs`: rgb24 on stdin, audio from
+//!   (`crates/fastvideo-cudarc/src/rt/writer.rs`: rgb24 on stdin, audio from
 //!   a side file, AAC, yuv420p), plus `+faststart`. Video is encoded on NVENC
 //!   (design §0: no x264) at constant quality 19. [`Mp4Spec::fal_h3`] is the fal/H3 shape: H.264, 24 fps,
 //!   AAC-LC stereo 32 kHz, faststart.

@@ -1,5 +1,5 @@
 //! `h3_fp4_attn`: the sparse FP4 VSA attention kernel
-//! ([`fastvideo_cudarc::wan::attn_fp4`], docs/ports/fasth3-sparse-fp4-attn.md)
+//! ([`fastvideo_cudarc::rt::attn_fp4`], docs/ports/fasth3-sparse-fp4-attn.md)
 //! on synthetic data, sm_120 only.
 //!
 //! 1. **mma layout**: one block-scaled FP4 `mma.sync` on random fragments
@@ -22,8 +22,8 @@
 
 use cudarc::driver::CudaSlice;
 use fastvideo_cudarc::h3::vsa::H3TilePlan;
-use fastvideo_cudarc::wan::attn_fp4::{self as fp4, Fp4In};
-use fastvideo_cudarc::wan::{device, ops};
+use fastvideo_cudarc::rt::attn_fp4::{self as fp4, Fp4In};
+use fastvideo_cudarc::rt::{device, ops};
 use fastvideo_models::h3::config::H3Geometry;
 use fastvideo_models::h3::packing::H3PackedLayout;
 use rayon::prelude::*;

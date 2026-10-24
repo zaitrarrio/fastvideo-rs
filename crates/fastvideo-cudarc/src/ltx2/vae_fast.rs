@@ -216,9 +216,9 @@ mod device {
 
     use super::super::{Block, TemporalConv, VideoDecoder};
     use super::flags;
-    use crate::wan::device::{global_device, DeviceContext};
-    use crate::wan::ops::PadMode;
-    use crate::wan::tensor::{CudaTensor, Result, TensorError};
+    use crate::rt::device::{global_device, DeviceContext};
+    use crate::rt::ops::PadMode;
+    use crate::rt::tensor::{CudaTensor, Result, TensorError};
 
     fn msg(s: impl Into<String>) -> TensorError {
         TensorError::Message(s.into())
@@ -254,8 +254,8 @@ mod device {
             2 => return true,
             _ => {}
         }
-        static ON: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
-        ON.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_LTX_VAE_FAST", true))
+        static ON: crate::rt::envflag::CachedBool = crate::rt::envflag::CachedBool::new();
+        ON.get_or_init(|| crate::rt::envflag::bool_flag("FASTVIDEO_LTX_VAE_FAST", true))
     }
 
     static OVERRIDE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
@@ -276,9 +276,9 @@ mod device {
     /// ways (true once; later decodes, e.g. a timed one after a warm-up, run
     /// unperturbed).
     pub fn check_enabled() -> bool {
-        static ON: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
+        static ON: crate::rt::envflag::CachedBool = crate::rt::envflag::CachedBool::new();
         static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        ON.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_LTX_VAE_CHECK", false))
+        ON.get_or_init(|| crate::rt::envflag::bool_flag("FASTVIDEO_LTX_VAE_CHECK", false))
             && !DONE.swap(true, std::sync::atomic::Ordering::Relaxed)
     }
 
@@ -312,7 +312,7 @@ mod device {
         };
         let (p_i, c_i, t0_i, nt_i, t_i) =
             (p as i64, c as i32, t0 as i32, nt as i32, t_total as i32);
-        crate::wan::stats::record_launch();
+        crate::rt::stats::record_launch();
         let mut b = dev.stream.launch_builder(&dev.kernels.ltxv_norm_silu);
         b.arg(&y)
             .arg(&bias)
@@ -341,7 +341,7 @@ mod device {
         let dev = ctx()?;
         let n = (f + 2) * p * c;
         let (p_i, c_i, f_i) = (p as i64, c as i32, f as i32);
-        crate::wan::stats::record_launch();
+        crate::rt::stats::record_launch();
         let mut b = dev.stream.launch_builder(&dev.kernels.ltxv_latent_in);
         b.arg(&z)
             .arg(&std)
@@ -370,7 +370,7 @@ mod device {
         let dev = ctx()?;
         let n = nt * st * sh * h * sw * w * c;
         let a = [h, w, c, st, sh, sw, t0, nt, drop].map(|v| v as i32);
-        crate::wan::stats::record_launch();
+        crate::rt::stats::record_launch();
         let mut b = dev.stream.launch_builder(&dev.kernels.ltxv_d2s_bias);
         b.arg(&y).arg(&bias).arg(&out);
         for v in &a {
@@ -395,7 +395,7 @@ mod device {
         let dev = ctx()?;
         let n = nt * co * pz * h * pz * w;
         let a = [h, w, co, pz, t0, nt].map(|v| v as i32);
-        crate::wan::stats::record_launch();
+        crate::rt::stats::record_launch();
         let mut b = dev.stream.launch_builder(&dev.kernels.ltxv_out_unpatch);
         b.arg(&y).arg(&bias).arg(&out);
         for v in &a {
@@ -779,8 +779,8 @@ mod device {
     /// output of at most `FASTVIDEO_LTX_VAE_CHUNK_MB` (default 1024); cuDNN's
     /// 32-bit tensor index caps the input.
     fn chunk_frames(p: usize, cin: usize, cout: usize) -> usize {
-        let max_f = crate::wan::envflag::usize_flag("FASTVIDEO_LTX_VAE_CHUNK_FRAMES", 16).max(1);
-        let mb = crate::wan::envflag::usize_flag("FASTVIDEO_LTX_VAE_CHUNK_MB", 1024).max(1);
+        let max_f = crate::rt::envflag::usize_flag("FASTVIDEO_LTX_VAE_CHUNK_FRAMES", 16).max(1);
+        let mb = crate::rt::envflag::usize_flag("FASTVIDEO_LTX_VAE_CHUNK_MB", 1024).max(1);
         let by_bytes = (mb << 20) / (2 * p * cout).max(1);
         let by_index = (i32::MAX as usize / (p * cin.max(cout)).max(1)).saturating_sub(2);
         max_f.min(by_bytes).min(by_index).max(1)
@@ -882,7 +882,7 @@ mod device {
                     None => op.pick_algorithm().map_err(err)?,
                 };
                 let ws = op.get_workspace_size(algo).map_err(err)?;
-                crate::wan::log::debug(format_args!(
+                crate::rt::log::debug(format_args!(
                     "ltx vae conv plan {key:?}: {algo:?}, workspace {ws} B"
                 ));
                 self.plans.insert(
@@ -1039,7 +1039,7 @@ mod device {
                 }
             }
             let pick = best.map_or(heuristic, |b| b.1);
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "ltx vae conv {key:?}: heuristic {heuristic:?}; {} → {pick:?}",
                 report.join(", ")
             ));
@@ -1054,6 +1054,6 @@ mod device {
     }
 
     fn tune_enabled() -> bool {
-        crate::wan::envflag::string_flag("FASTVIDEO_LTX_VAE_CONV_ALGO", "heuristic") == "tune"
+        crate::rt::envflag::string_flag("FASTVIDEO_LTX_VAE_CONV_ALGO", "heuristic") == "tune"
     }
 }
