@@ -591,6 +591,15 @@ cmd_assemble() {
     [[ "$got" == "fv-boot $v" ]] || die "${bin#"$d/"} version says '$got', expected fv-boot $v"
     log "  ${bin#"$d/"}: $got"
   done
+  # fv-lab (ADR-0019) in the gpucheck set, from the commits that have it.
+  bin="$d/gpucheck/out/fv-lab"
+  if [[ -e "$bin" ]]; then
+    got="$("$bin" -V 2>&1 | head -1)" || true
+    [[ "$got" == "fv-lab $v" ]] || die "gpucheck/out/fv-lab -V says '$got', expected fv-lab $v"
+    log "  gpucheck/out/fv-lab: $got"
+  else
+    log "  gpucheck/out/fv-lab: not built at this commit"
+  fi
   rm -rf "$d"
   local nt; nt="$(cat "$in"/*/gate-unit-tests.count 2>/dev/null | head -1)"
   GATE_SUMMARY="scripts/serve/check.sh (lint and test stages) passed in parallel GitHub-hosted jobs in the build-base image; the ${nt:-?} shipped gpucheck/cudarc unit-test binaries passed; the binaries report $v; the builds' fv-gpucheck nvrtc gate (AOT + oxide cubins for sm_100/120) and glibc <= 2.35 check passed"
@@ -764,6 +773,15 @@ run_gate() {
     [[ "$got" == "fv-boot $v" ]] || { log "${bin#"$d/"} version says '$got', expected fv-boot $v"; return 1; }
     log "  ${bin#"$d/"}: $got"
   done
+  # fv-lab (ADR-0019) in the gpucheck set, from the commits that have it.
+  bin="$d/gpucheck/out/fv-lab"
+  if [[ -e "$bin" ]]; then
+    got="$("$bin" -V 2>&1 | head -1)" || true
+    [[ "$got" == "fv-lab $v" ]] || { log "gpucheck/out/fv-lab -V says '$got', expected fv-lab $v"; return 1; }
+    log "  gpucheck/out/fv-lab: $got"
+  else
+    log "  gpucheck/out/fv-lab: not built at this commit"
+  fi
   local ntests; ntests="$(wc -l <"$d/gpucheck-tests/tests.tsv")"
   rm -rf "$d"
   GATE_SUMMARY="scripts/serve/check.sh passed $where; the $ntests shipped gpucheck/cudarc unit-test binaries passed; the binaries report $v$note; the build's fv-gpucheck nvrtc gate (AOT + oxide cubins for sm_100/120) and glibc <= 2.35 check passed"

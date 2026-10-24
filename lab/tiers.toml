@@ -1,0 +1,31 @@
+# lab/tiers.toml: fv-lab's run plans (docs/adr/0019-fv-lab.md §3, schema
+# crates/fastvideo-lab/schemas/tiers.v1.json). One [[tier]] per run plan on one
+# GPU class: what scripts/gpu/runpod-matrix.sh calls a family. `fv-lab run
+# <name>` runs its cells on a GPU box; `fv-lab pod up --family <name>` makes
+# the box (fv-deploy's guards: price cap, $8 floor, EU volume, backstop at
+# wall_cap_s, ready within 600 s in at most 3 cycles).
+schema = 1
+
+# The RTX PRO 6000 parity baseline (runpod-matrix.sh `rtx6000`, the family
+# runpod-http.sh runs by default): H3, FastH3 and LTX-2.5 on the sol-engine
+# single-GPU contracts. Ported value for value from runpod-http.sh's defaults
+# (RUNPOD_GPU_TYPE, FV_POD_CAP_S, FV_GEN_TIMEOUT_S, FV_CONTAINER_DISK_GB, the
+# weights.log cells, fetch-tae.sh) except the price cap: fv-deploy's $2.50/hr
+# guard, not the script's $5 (ADR-0019 §7).
+[[tier]]
+name = "rtx6000"
+description = "RTX PRO 6000 parity baseline: H3, FastH3 and LTX-2.5 on the sol-engine single-GPU contracts"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["rtx6000-h3", "rtx6000-ltx25"]

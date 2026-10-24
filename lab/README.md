@@ -168,10 +168,10 @@ carries a measurement-looking number (seconds, ms, dB, GiB, %, `1.5x`,
 `LPIPS 0.5`, `$2.09`); settings (`tau 1.0`, `sparsity 0.925`), sizes
 (`832x480`), card classes (`a 96 GB card`) and dates pass.
 
-## Not here yet
+## The run plan (plan D1)
 
-- `lab/tiers.toml` (per tier and family: GPU class, offer query, `$/hr` cap,
-  wall cap, disk, image flavour, stages, cells) and `lab/cells/*.toml`:
-  the wall caps, stages and cells are `fv-lab`'s run plan, which no
-  document defines today. Plan D1 writes them with the runner; D3 derives
-  the tier table from one run set.
+`lab/tiers.toml` (one `[[tier]]` per run plan on a GPU class: GPU, price and wall caps, disk, image flavour, weights
+source, cells) and `lab/cells/<cell>.toml` (one workload and its arms, compares and gates) are what `fv-lab run`
+executes and `fv-lab pod` provisions: [ADR-0019](../docs/adr/0019-fv-lab.md), usage
+[docs/dev/fv-lab.md](../docs/dev/fv-lab.md), schemas `crates/fastvideo-lab/schemas/{tiers,cell}.v1.json`. Today:
+the `rtx6000` tier (`runpod-matrix.sh rtx6000`, ported value for value and held equal by the dry-run golden).

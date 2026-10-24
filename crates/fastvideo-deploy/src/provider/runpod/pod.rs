@@ -61,6 +61,47 @@ impl<'a> Pod<'a> {
     }
 }
 
+/// One pod of `GET /pods` ([`Pod::list`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PodListing {
+    pub id: InstanceId,
+    pub name: String,
+    pub state: InstanceState,
+    /// Unix seconds of `createdAt`, when Runpod gave a readable one.
+    pub created_at: Option<f64>,
+    pub usd_per_hr: Option<f64>,
+}
+
+impl Pod<'_> {
+    /// Every pod of the account (`GET /pods`), for a caller that selects by
+    /// name prefix and age (fv-lab `pod reap`, docs/adr/0019-fv-lab.md §6);
+    /// entries without an id are left out.
+    pub fn list(&self) -> Result<Vec<PodListing>, ProviderError> {
+        let v = self.api.rest(Method::Get, "/pods", None, "GET pods")?;
+        Ok(v.as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|p| {
+                Some(PodListing {
+                    id: InstanceId::new(p.get("id")?.as_str()?),
+                    name: p
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned(),
+                    state: pod_state(p.get("desiredStatus").and_then(Value::as_str).unwrap_or("")),
+                    created_at: p
+                        .get("createdAt")
+                        .and_then(Value::as_str)
+                        .and_then(super::parse_runpod_time),
+                    usd_per_hr: parse_usd(p.get("costPerHr")),
+                })
+            })
+            .collect())
+    }
+}
+
 /// `desiredStatus` → [`InstanceState`].
 pub fn pod_state(desired: &str) -> InstanceState {
     match desired {
@@ -315,5 +356,68 @@ impl Reach for PodReach<'_> {
                 .map_or_else(|| e.to_string(), |k| scrub(&e.to_string(), k, 300)),
         })?;
         Ok((r.status, body_json(&r.body)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::boot::sys::{Clock, Http, Response, SysError};
+    use crate::provider::runpod::RunpodUrls;
+
+    struct OneAnswer(&'static str);
+
+    impl Http for OneAnswer {
+        fn send(&self, req: &Request) -> Result<Response, SysError> {
+            assert_eq!(
+                (req.method, req.url.as_str()),
+                (Method::Get, "https://rest.test/v1/pods")
+            );
+            Ok(Response {
+                status: 200,
+                body: self.0.as_bytes().to_vec(),
+            })
+        }
+        fn download(&self, url: &str, _: &std::path::Path, _: Duration) -> Result<u64, SysError> {
+            Err(SysError::Http {
+                url: url.into(),
+                why: "no".into(),
+            })
+        }
+    }
+
+    struct Zero;
+    impl Clock for Zero {
+        fn now(&self) -> f64 {
+            0.0
+        }
+        fn sleep(&self, _: Duration) {}
+    }
+
+    #[test]
+    fn list_reads_names_states_ages_and_prices() {
+        let http = OneAnswer(
+            r#"[{"id":"a","name":"fv-lab-rtx6000-x","desiredStatus":"RUNNING","createdAt":"2026-10-24 10:00:00.000 +0000 UTC","costPerHr":"2.49"},
+                {"name":"no-id"},
+                {"id":"b","desiredStatus":"TERMINATED"}]"#,
+        );
+        let urls = RunpodUrls {
+            rest: "https://rest.test/v1".into(),
+            ..RunpodUrls::default()
+        };
+        let pod = Pod::new(RunpodApi::new(&http, &Zero, "k", urls));
+        let l = pod.list().unwrap();
+        assert_eq!(l.len(), 2);
+        assert_eq!(l[0].name, "fv-lab-rtx6000-x");
+        assert_eq!(l[0].state, InstanceState::Running);
+        assert_eq!(l[0].usd_per_hr, Some(2.49));
+        assert_eq!(
+            l[0].created_at,
+            super::super::parse_runpod_time("2026-10-24T10:00:00Z")
+        );
+        assert_eq!(
+            (l[1].name.as_str(), l[1].state),
+            ("", InstanceState::Terminated)
+        );
     }
 }

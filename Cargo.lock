@@ -1315,11 +1315,15 @@ dependencies = [
 name = "fastvideo-lab"
 version = "0.1.1"
 dependencies = [
+ "clap",
+ "fastvideo-deploy",
  "fastvideo-manifest",
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
+ "tokio",
  "toml",
 ]
 

@@ -46,7 +46,9 @@ opt-level = 3
 opt-level = 3
 EOF
     CARGO_PROFILE_DEV_DEBUG=0 rel cook -p fastvideo-serve --features fake,full --bin fv-serve ;;
-  gpucheck) rel cook --release -p fastvideo-gpucheck --features cuda ;;
+  # The gpucheck set also carries fv-lab (release-artifacts-pod.sh build_gpucheck).
+  gpucheck) rel cook --release -p fastvideo-gpucheck --features cuda
+    rel cook --release -p fastvideo-lab --features cli ;;
   gpucheck-tests) rel cook --tests -p fastvideo-gpucheck -p fastvideo-cudarc ;;
   gpucheck-vast)
     PATH="$(tr ':' '\n' <<<"$PATH" | grep -v "^$CUDA_HOME/bin$" | paste -sd:)" \

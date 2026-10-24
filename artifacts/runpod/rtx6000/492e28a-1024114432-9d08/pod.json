@@ -1,0 +1,13 @@
+{
+  "id": "73npthddx36hfn",
+  "name": "fv-lab-rtx6000-492e28a-1024114432-9d08",
+  "family": "rtx6000",
+  "tag": "492e28a-1024114432-9d08",
+  "sha": "492e28a",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:2b701e7c51dcfdb50b0aa5d2f6d43c07fa3a981abc643f9dc61621fc719f7283",
+  "url": "https://73npthddx36hfn-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1792842276.0182352,
+  "cap_s": 14400
+}

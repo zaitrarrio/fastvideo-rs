@@ -4,15 +4,34 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "The lab's gold standards: `lab/gold/<variant>.toml` (types, validation, directory reader, JSON Schema export) and the profile-comment measurement lint. CPU only, no CUDA; plan D1 adds the `fv-lab` binary."
+description = "The lab: gold standards (`lab/gold/<variant>.toml`), the run plan (`lab/tiers.toml`, `lab/cells/*.toml`) and `fv-lab`, the validation driver (on-pod runner and the pod on fv-deploy's guards). CPU only, no CUDA."
 
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 thiserror.workspace = true
+# The frames digest (`run::frames_digest`).
+sha2.workspace = true
 schemars.workspace = true
 fastvideo-manifest.workspace = true
+# The Provider trait, Launch schema, guards and lifecycle fv-lab's pod runs on
+# (docs/adr/0019-fv-lab.md §6); the library half builds without features.
+fastvideo-deploy.workspace = true
+
+# The fv-lab binary's command line, signal handling and HTTP client (feature `cli`).
+clap = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["rt", "signal", "macros"] }
+
+[features]
+default = []
+# fv-lab (docs/adr/0019-fv-lab.md): the binary (clap, SIGINT / SIGTERM, the
+# reqwest client of fastvideo-deploy's `boot`). The library is tested without it.
+cli = ["dep:clap", "dep:tokio", "fastvideo-deploy/boot"]
+
+[[bin]]
+name = "fv-lab"
+required-features = ["cli"]
 
 [lints]
 workspace = true

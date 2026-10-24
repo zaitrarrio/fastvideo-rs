@@ -1,5 +1,5 @@
-//! The lab: gold standards per served variant (ADR-0009) and, with plan D1,
-//! the `fv-lab` validation driver that updates them.
+//! The lab: gold standards per served variant (ADR-0009) and `fv-lab`, the
+//! validation driver that runs them (ADR-0019).
 //!
 //! - [`gold`]: [`Gold`], one `lab/gold/<variant>.toml`: the variant and the
 //!   registry name and `@rev` it certifies, the tier and its GPU class, the
@@ -10,19 +10,32 @@
 //! - [`profiles`]: the measurement lint over `profiles/**/*.toml` comments,
 //!   which keeps the numbers in gold files and `docs/perf`, not in profile
 //!   comments.
+//! - [`plan`]: the run plan, `lab/tiers.toml` and `lab/cells/*.toml`
+//!   ([`Lab`]): types, validation and the rendering of a tier into command
+//!   lines.
+//! - [`run`]: `fv-lab run`, the on-pod cell runner (the port of
+//!   `scripts/gpu/runpod-matrix.sh`'s frame) and its `--dry-run`.
+//! - [`pod`]: `fv-lab pod`, a tier's Runpod pod on fv-deploy's `Provider`
+//!   trait, guards and lifecycle.
+//! - [`quote`]: bash's `printf %q`, for the dry-run equality.
 //! - [`schema`]: the JSON Schema export, committed under `schemas/` and
 //!   drift-checked.
 //!
-//! CPU only, no CUDA. Reads files (`gold::load_dir`); the registry's pure
-//! crate is `fastvideo-manifest`, which this one builds on for the family
-//! id, tier and model-name types.
+//! No CUDA: `fv-lab` calls `fv-gpucheck` and `verify-weights.sh` as
+//! processes. The binary needs the `cli` feature (its command line and the
+//! HTTP client of `fastvideo-deploy`).
 
 pub mod gold;
+pub mod plan;
+pub mod pod;
 pub mod profiles;
+pub mod quote;
+pub mod run;
 pub mod schema;
 
 pub use gold::{
     check_date, load_dir, Cost, Gap, Gold, GoldError, LastValidated, Latency, Measures, Model,
     Quality, Source, TierSpec, Upstream, Workload, CITABLE_FIELDS, GOLD_SCHEMA, NUMERIC_FIELDS,
 };
+pub use plan::{Arm, CellFile, Lab, LabError, Step, Tier, Tiers};
 pub use profiles::{comment_of, measurement_claims, Claim};

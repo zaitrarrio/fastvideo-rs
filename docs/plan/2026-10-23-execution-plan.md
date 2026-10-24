@@ -89,7 +89,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | todo |
+| D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | todo (D1a pr #171: `fv-lab run` + `pod` on fv-deploy's guards, `lab/tiers.toml` and `lab/cells/rtx6000-*.toml`, dry-run and payload goldens from the scripts, ADR-0019; GPU run pending (coordinator); next: D1b other families, D1c `report`, D1d `gate`/`oracle`, D1e one-offs) |
 | D2 | `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments; keyed by registry name and `@rev` | every served variant has a gold file; comments in `profiles/` no longer carry numbers | pod | A2 | merged (#151) |
 | D3 | `fv-lab report tiers` and the generated `docs/perf/tiers.md` | table generated from one run set | pod; **GPU** the gold runs | D1, D2 | todo |
 | D4 | CI bridge: gold files parse and resolve; `last_validated.commit` age check; an on-demand `fv-lab run gold --all` workflow | visible per-model validation age in CI | CI | D3 | todo |
@@ -752,3 +752,49 @@ ran (pod id, $/hr), result, cost.
   recorded from the log only. The first `b6` pod ran the eight cells in
   series at ~7 min per arm (longer than the PR's estimate); the missing
   cells were rerun one per pod. About 3.7 GPU-hours in all, ~$9.
+
+- 2026-10-24 10:50Z: D1a (`claude/d1a-fv-lab`, draft PR #171): `fv-lab`
+  (binary of `fastvideo-lab`, feature `cli`) with `run <tier|cell>
+  [--dry-run]` (runpod-matrix.sh's frame, the same run directory) and `pod
+  {up,status,fetch,down,reap}` on fv-deploy's `Provider`, guards and
+  lifecycle; `lab/tiers.toml` (`rtx6000`) and `lab/cells/rtx6000-{h3,ltx25}.toml`
+  (seven arms) with schemas; B6's `FV_DRY_RUN=1` hunks and a new
+  `runpod-http.sh plan`; goldens from the scripts (`fv-lab-goldens.sh`): the
+  dry run equals runpod-matrix.sh's, the pod body equals runpod-http.sh's but
+  the runner line and `env {}`; `fv-lab` in the runtime image; one seam in
+  fastvideo-deploy (`runpod::Pod::list`); ADR-0019. CPU only, on the shared
+  build pod (`pzocv1keasg3xn`, no pod created): `cargo test -p fastvideo-lab
+  --all-features` (33 unit + 25 integration), fastvideo-deploy tests,
+  workspace clippy (with and without `cli`), fmt, lint, goldens `--check`
+  green. No Runpod call, no GPU. GPU run for the coordinator:
+  `RUNPOD_API_KEY=… fv-lab pod up --sha <7> --family rtx6000 --yes`, then
+  `fv-lab pod fetch <id> --wait --down`.
+- 2026-10-24 11:35Z: D1a review fixes on #171 (coordinator's review): both
+  runners write `<arm>/frames.sha256.json` (byte-identical, fetched by both)
+  and `scripts/gpu/fv-lab-compare-runs.sh` is the GPU gate; `pod reap` takes
+  only this machine's recorded pods (`--account` for full-pattern names);
+  run tags `<sha>-<MMDDHHMMSS>-<hex4>` with a live-name check; fv-lab in the
+  tools release's `gpucheck` set (`lab-build=` context, `-V` gated); a
+  failing nvidia-smi is fatal; success needs `DONE` and `matrix_exit=0`; the
+  pod is deleted before errors return; goldens under `env -i`. The first
+  image run on 9a9dc55 failed (lab-build and build raced on one cargo
+  registry cache mount); lab-build has its own cache ids since 492e28a,
+  whose checks are all green (image 12 m 53 s, a branch compile; the
+  PR's tools-release assemble gated `fv-lab 0.1.40`). CPU only, build pod;
+  no Runpod call. GPU gate: ADR-0019 §8 on `492e28a` or later.
+
+- 2026-10-24 11:44Z, coordinator: D1a GPU gate on `492e28a` (runtime
+  image carrying `fv-lab`), cells `sol-h3` and `ltx25-two-stage` of the
+  `rtx6000` family, each side on its own RTX PRO 6000 in EU-RO-1 with
+  `bz0ofkfx45`: `fv-lab pod up --sha 492e28a --family rtx6000 --cells
+  sol-h3 ltx25-two-stage --yes --wait` (ready 32 s, fv-deploy backstop,
+  pod deleted by `--wait`) against `runpod-http.sh run 492e28a` with
+  `FV_CELLS="sol-h3 ltx25-two-stage"`. `scripts/gpu/fv-lab-compare-runs.sh`:
+  2 arms the same, 0 differences; `sol-h3` 248 and `ltx25-two-stage` 242
+  frames byte-identical (`frames.sha256.json` equal), both
+  `matrix_exit=0`. About 15 GPU-minutes per side, ~$1.25 in all.
+  Evidence: `artifacts/runpod/rtx6000/492e28a-1024114432-9d08/` (fv-lab,
+  with `compare-vs-script.txt`) and `artifacts/runpod/rtx6000/492e28a-10241144/`
+  (script). The other `rtx6000` arms (fasth3-4step-vsa, fasth3-4step-dense,
+  sol-h3-spark; fasth3-8step is skipped on the EU volume) were not run on
+  GPU here; their command lines are covered by the dry-run golden.

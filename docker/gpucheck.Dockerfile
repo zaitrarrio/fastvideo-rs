@@ -31,6 +31,8 @@
 #   --build-context boot-build=<dir>     <dir>/out/fv-boot (boot-build; scripts/ci/prebuilt.sh passes it
 #                                        when the release's serve set carries fv-boot: tools releases
 #                                        from before fv-boot do not, and this stage then compiles it)
+#   --build-context lab-build=<dir>      <dir>/out/fv-lab (lab-build; prebuilt.sh passes it when the
+#                                        release's gpucheck set carries fv-lab, ADR-0019; else it compiles)
 # Without them (no usable tools release) the stages compile here.
 
 # The base of every runtime image, pinned so the shared layers only change
@@ -129,6 +131,23 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM scratch AS binary
 COPY --from=build /out/ /
+
+# lab-build: fv-lab (docs/adr/0019-fv-lab.md), the validation driver the runtime image runs on a GPU pod
+# (`fv-lab run <tier>`: lab/tiers.toml + lab/cells, calling fv-gpucheck and verify-weights.sh). No CUDA. A tools
+# release whose gpucheck set carries out/fv-lab replaces this stage (prebuilt.sh lab-build=…); a release from
+# before fv-lab does not, and only this stage compiles (as boot-build did before releases carried fv-boot).
+FROM builder AS lab-build
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends cmake \
+ && rm -rf /var/lib/apt/lists/*
+COPY . /src
+# Cache mounts of its own: BuildKit runs this stage beside `build`, and two cargos unpacking into one shared
+# registry mount race ("failed to unpack package … .cargo-ok: File exists", run 40088147003).
+RUN --mount=type=cache,id=fv-lab-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=fv-lab-target,target=/target \
+    cargo build --release --locked -p fastvideo-lab --features cli --bin fv-lab \
+ && mkdir -p /out \
+ && cp /target/release/fv-lab /out/fv-lab
 
 # ============================================================================
 # Runtime images: one shared layer stack (docs/serve/images.md "Layers").
@@ -361,7 +380,11 @@ COPY scripts/gpu /opt/fastvideo-rs/scripts/gpu
 # Provenance only: the cubins are already embedded in fv-gpucheck.
 COPY --from=oxide /out/oxide /opt/fastvideo-rs/oxide
 COPY --from=binary /fv-gpucheck /fv-gpucheck.build-id /opt/fastvideo-rs/target/release/
-LABEL org.opencontainers.image.description="fastvideo-rs cudarc GPU validation runtime (fv-gpucheck + CUDA runtime + hf-fm)"
+# fv-lab and the run plan it reads (fv-lab finds lab/ above its binary: /opt/fastvideo-rs/lab).
+COPY lab/tiers.toml /opt/fastvideo-rs/lab/tiers.toml
+COPY lab/cells /opt/fastvideo-rs/lab/cells
+COPY --from=lab-build /out/fv-lab /opt/fastvideo-rs/target/release/
+LABEL org.opencontainers.image.description="fastvideo-rs cudarc GPU validation runtime (fv-gpucheck + fv-lab + CUDA runtime + hf-fm)"
 WORKDIR /opt/fastvideo-rs
 
 # ---- serve: fv-serve on the runtime image (docs/serve/design.md §6.1, WP-16) --

@@ -133,6 +133,26 @@ gpu_clean() {
   return 1
 }
 
+# frames_digest <cell dir> <name>: <cell>/frames.sha256.json, every *.png
+# under <cell>/frames (by path, LC_ALL=C order) with its SHA-256 and the
+# count. The fetches take it (a JSON in the cell directory), so two runs of
+# one commit compare byte for byte without the frames; fv-lab run writes the
+# same file (docs/adr/0019-fv-lab.md §8, crates/fastvideo-lab run.rs).
+frames_digest() {
+  local cell="$1" name="$2" n=0 sep="" p
+  [[ -d "$cell/frames" ]] || return 0
+  {
+    printf '{"arm":"%s","frames":[' "$name"
+    while IFS= read -r p; do
+      printf '%s\n{"path":"%s","sha256":"%s"}' "$sep" "$p" "$(sha256sum "$cell/frames/$p" 2>/dev/null | cut -d' ' -f1)"
+      sep=","
+      n=$((n + 1))
+    done < <(cd "$cell/frames" && find . -type f -name '*.png' -printf '%P\n' | LC_ALL=C sort)
+    printf '\n],"count":%s}\n' "$n"
+  } >"$cell/frames.sha256.json" 2>/dev/null || true
+  return 0
+}
+
 run_cell() {
   local name="$1"
   shift
@@ -180,6 +200,7 @@ run_cell() {
   fi
   write_json "$cell/summary.json" "$(printf '{"cell":"%s","family":"%s","exit":%s,"seconds":%s,"ended":"%s"}' \
     "$name" "$FAMILY" "$rc" "$secs" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+  frames_digest "$cell" "$name"
   return 0
 }
 

@@ -25,7 +25,8 @@
 #         dir, tag, version, exact=true|false, build_id, source_commit
 #         contexts=<name=path lines>   Docker named build contexts that replace
 #                                      the compile stages (see CONTEXT below;
-#                                      boot-build when a serve set has out/fv-boot)
+#                                      boot-build when a serve set has out/fv-boot,
+#                                      lab-build when the gpucheck set has out/fv-lab)
 #       Fallback (ok=false, a loud ::warning::, the workflow compiles as
 #       before) unless FV_PREBUILT_REQUIRE=1, which fails instead.
 #   prebuilt.sh contexts <dir> <set>...
@@ -103,6 +104,11 @@ cmd_fetch() {
     echo "::notice title=fv-boot not in $tag::the image's boot-build stage compiles fv-boot (one small crate) until a tools release carries it"
     compiles="only the boot-build stage compiles (fv-boot)"
   fi
+  if [[ "$contexts" != *"lab-build="* ]] && [[ " $* " == *" gpucheck "* ]]; then
+    echo "::notice title=fv-lab not in $tag::the image's lab-build stage compiles fv-lab (ADR-0019) until a tools release carries it"
+    compiles="${compiles/no cargo compile on this runner/only the lab-build stage compiles (fv-lab)}"
+    [[ "$compiles" == *fv-lab* ]] || compiles="$compiles; the lab-build stage compiles (fv-lab)"
+  fi
   echo "::notice title=Prebuilt tools::$tag ($([[ $exact == true ]] && echo "built from this commit's tools inputs" || echo "older than this commit's tools inputs")) for $*: $compiles"
   {
     echo "ok=true"
@@ -121,13 +127,16 @@ cmd_fetch() {
 # The named build contexts of fetched sets in <dir> (one name=path line each). fv-boot
 # (ADR-0014) rides in the serve sets of releases built after it and then replaces the
 # boot-build stage too; a release from before fv-boot has none, and boot-build compiles it.
+# fv-lab (ADR-0019) rides in the gpucheck set the same way and replaces lab-build.
 cmd_contexts() {
-  local dir="${1:?dir}" set boot=""; shift
+  local dir="${1:?dir}" set boot="" lab=""; shift
   for set in "$@"; do
     [[ -n "${CONTEXT[$set]:-}" ]] && echo "${CONTEXT[$set]}=$dir/$set"
     if [[ -z "$boot" && ( "$set" == serve-cuda || "$set" == serve-cpu ) && -x "$dir/$set/out/fv-boot" ]]; then boot="$dir/$set"; fi
+    if [[ "$set" == gpucheck && -x "$dir/$set/out/fv-lab" ]]; then lab="$dir/$set"; fi
   done
   [[ -z "$boot" ]] || echo "boot-build=$boot"
+  [[ -z "$lab" ]] || echo "lab-build=$lab"
 }
 
 # Test binaries keep the pod's absolute source paths (file!(), CARGO_MANIFEST_DIR
