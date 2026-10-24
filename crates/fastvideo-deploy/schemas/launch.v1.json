@@ -177,6 +177,10 @@
           "format": "uint64",
           "minimum": 0
         },
+        "force": {
+          "description": "Lifts the upper bounds (cap ≤ 4 h, ≤ 3 cycles, ≤ 600 s readiness;\n`--force-guards`). The $8 floor is never lifted.",
+          "type": "boolean"
+        },
         "max_usd_per_hr": {
           "description": "Price cap: an offer quoted above it is never created; a created\ninstance billed above it is deleted at once.",
           "type": "number",
@@ -188,7 +192,7 @@
           "format": "double"
         },
         "ready_cycles": {
-          "description": "At most this many instances are created for one `up` (the owner's\nrule: 3), then it gives up.",
+          "description": "At most this many instances are created for one `up` (the owner's\nrule: 3), then it gives up. Every create counts, a GPU-type fallback\nafter a billed-over-cap delete included.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0

@@ -12,7 +12,7 @@ use crate::guard::{check_region, run_backstop, BackstopOutcome, GuardError};
 use crate::provider::tests::{eu_pod_launch, FakeClock, Lines, RecBackstop};
 use crate::provider::{
     Account, ApiCall, Cursor, Instance, InstanceId, InstanceState, Launch, LogPage, Offer,
-    OfferQuery, Probe, Provider, ProviderError, ProviderKind, Reach, VolumeMount,
+    OfferQuery, Probe, Provider, ProviderError, ProviderKind, Reach, ReachOptions, VolumeMount,
 };
 
 /// A provider with programmable money and readiness.
@@ -27,6 +27,13 @@ struct FakeProvider<'c> {
     created: RefCell<Vec<(InstanceId, f64)>>,
     destroyed: RefCell<Vec<InstanceId>>,
     calls: RefCell<Vec<String>>,
+    /// The billed price `create` reports (default: the quote).
+    billed: Cell<Option<Option<f64>>>,
+    /// `status` alternates gone / running (a flapping API).
+    flap: Cell<bool>,
+    flips: Cell<u32>,
+    /// The job never finishes.
+    stuck_job: Cell<bool>,
 }
 
 impl<'c> FakeProvider<'c> {
@@ -40,6 +47,10 @@ impl<'c> FakeProvider<'c> {
             created: RefCell::new(Vec::new()),
             destroyed: RefCell::new(Vec::new()),
             calls: RefCell::new(Vec::new()),
+            billed: Cell::new(None),
+            flap: Cell::new(false),
+            flips: Cell::new(0),
+            stuck_job: Cell::new(false),
         }
     }
 
@@ -73,6 +84,7 @@ impl Reach for FakeReach<'_> {
         method: crate::boot::sys::Method,
         path: &str,
         _body: Option<&Value>,
+        _stop: &dyn Fn() -> bool,
     ) -> Result<(u16, Value), ProviderError> {
         self.p
             .calls
@@ -87,9 +99,10 @@ impl Reach for FakeReach<'_> {
             "/fv/v1/jobs" => (202, json!({"id": "j1"})),
             _ => {
                 self.polls += 1;
+                let done = self.polls > 1 && !self.p.stuck_job.get();
                 (
                     200,
-                    json!({"id": "j1", "status": if self.polls > 1 { "succeeded" } else { "running" }}),
+                    json!({"id": "j1", "status": if done { "succeeded" } else { "running" }}),
                 )
             }
         })
@@ -130,11 +143,19 @@ impl Provider for FakeProvider<'_> {
             url: None,
             gpu: l.gpu.types.first().cloned(),
             data_center: None,
-            usd_per_hr: self.price.get(),
+            usd_per_hr: self.billed.get().unwrap_or(self.price.get()),
             created_at: Some(now),
         })
     }
     fn status(&self, id: &InstanceId) -> Result<InstanceState, ProviderError> {
+        if self.flap.get() {
+            self.flips.set(self.flips.get() + 1);
+            return Ok(if self.flips.get() % 2 == 1 {
+                InstanceState::Terminated
+            } else {
+                InstanceState::Running
+            });
+        }
         Ok(if self.destroyed.borrow().contains(id) {
             InstanceState::Terminated
         } else {
@@ -159,10 +180,31 @@ impl Provider for FakeProvider<'_> {
             spend_per_hr_usd: None,
         })
     }
+    fn sweep(
+        &self,
+        name: &str,
+        keep: Option<&InstanceId>,
+    ) -> Result<Vec<InstanceId>, ProviderError> {
+        self.calls.borrow_mut().push(format!("sweep {name}"));
+        let live: Vec<InstanceId> = self
+            .created
+            .borrow()
+            .iter()
+            .map(|(id, _)| id.clone())
+            .filter(|id| !self.destroyed.borrow().contains(id) && Some(id) != keep)
+            .collect();
+        for id in &live {
+            self.destroy(id)?;
+        }
+        Ok(live)
+    }
+    fn bills_at_create(&self) -> bool {
+        true
+    }
     fn reach<'a>(
         &'a self,
         i: &Instance,
-        _key: Option<&str>,
+        _opts: &ReachOptions<'_>,
     ) -> Result<Box<dyn Reach + 'a>, ProviderError> {
         Ok(Box::new(FakeReach {
             p: self,
@@ -249,7 +291,8 @@ fn create_ready_smoke_down() {
             "POST /fv/v1/jobs",
             "GET /fv/v1/jobs/j1",
             "GET /fv/v1/jobs/j1",
-            "destroy i1"
+            "destroy i1",
+            "sweep fv-deploy-test"
         ]
     );
 }
@@ -307,7 +350,11 @@ fn balance_floor_refuses_before_create() {
         r,
         Err(DeployError::Guard(GuardError::BalanceBelowFloor { .. }))
     ));
-    assert_eq!(p.calls.borrow().clone(), ["account"]);
+    // Nothing created: the floor came first (the exit sweep only lists).
+    assert_eq!(
+        p.calls.borrow().clone(),
+        ["account", "sweep fv-deploy-test"]
+    );
     assert!(armed.is_empty());
 }
 
@@ -400,10 +447,8 @@ fn backstop_fires_at_the_deadline_through_the_provider() {
 
 #[test]
 fn the_backstop_command_is_detached_and_keyless() {
-    let b = crate::guard::DetachedBackstop {
-        exe: "/opt/fv-deploy".into(),
-        log: None,
-    };
+    let b =
+        crate::guard::DetachedBackstop::new("/opt/fv-deploy".into(), None, "/state/armed".into());
     let c = b.command(
         ProviderKind::RunpodServerless,
         &InstanceId::new("ep1/tpl1"),
@@ -422,8 +467,11 @@ fn the_backstop_command_is_detached_and_keyless() {
             "--id",
             "ep1/tpl1",
             "--deadline",
-            "1235"
+            "1235",
+            "--armed-file",
+            "/state/armed/armed-ep1_tpl1-PID"
         ]
+        .map(|a| a.replace("PID", &std::process::id().to_string()))
     );
     assert_eq!(c.get_program(), "/opt/fv-deploy");
     // The key is inherited from the environment, never set on the command.
@@ -462,4 +510,94 @@ fn ledger_appends_tsv_lines() {
         "2026-09-28T00:00:00Z\trunpod-pod-created pod1 x\n2026-09-28T00:00:01Z\trunpod-pod-deleted pod1 done\n"
     );
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn guard_upper_bounds_unless_forced() {
+    let mut g = crate::guard::default_guards();
+    assert_eq!(crate::guard::check_guards(&g), Ok(()));
+    for (cap, cycles, timeout) in [(14_401, 3, 600), (1800, 4, 600), (1800, 3, 601)] {
+        g.cap_s = cap;
+        g.ready_cycles = cycles;
+        g.ready_timeout_s = timeout;
+        assert!(
+            matches!(crate::guard::check_guards(&g), Err(GuardError::Invalid(_))),
+            "{cap} {cycles} {timeout}"
+        );
+        g.force = true;
+        assert_eq!(crate::guard::check_guards(&g), Ok(()));
+        g.force = false;
+    }
+    // Never the floor.
+    g = crate::guard::default_guards();
+    g.force = true;
+    g.min_balance_usd = 7.0;
+    assert!(crate::guard::check_guards(&g).is_err());
+}
+
+#[test]
+fn every_create_counts_against_the_cycles() {
+    let clock = FakeClock::at(0.0);
+    let p = FakeProvider::new(&clock);
+    // Every create is billed over the cap: each one is deleted, and a GPU-type
+    // fallback is a create too.
+    p.billed.set(Some(Some(9.0)));
+    let mut l = eu_pod_launch();
+    l.gpu.types = vec!["A".into(), "B".into(), "C".into(), "D".into()];
+    l.guards.ready_cycles = 2;
+    let (r, armed) = run(&p, &clock, &l, &smoke_up());
+    assert!(r.is_err());
+    assert_eq!(p.created.borrow().len(), 2);
+    assert_eq!(armed.len(), 2);
+    assert_eq!(p.live(), 0);
+}
+
+#[test]
+fn unknown_billed_price_fails_the_cap() {
+    let clock = FakeClock::at(0.0);
+    let p = FakeProvider::new(&clock);
+    p.billed.set(Some(None));
+    let (r, armed) = run(&p, &clock, &eu_pod_launch(), &smoke_up());
+    assert!(
+        matches!(r, Err(DeployError::NoCapacity(ref m)) if m.contains("no (or no readable) billed price")),
+        "{r:?}"
+    );
+    assert_eq!(armed.len(), 1);
+    assert_eq!(p.live(), 0);
+}
+
+#[test]
+fn the_backstop_does_not_stand_down_on_a_flapping_gone() {
+    let clock = FakeClock::at(0.0);
+    let p = FakeProvider::new(&clock);
+    let i = p.create(&eu_pod_launch()).expect("create");
+    p.flap.set(true);
+    let log = Lines::default();
+    let out = run_backstop(&p, &i.id, 600.0, &clock, &log).expect("backstop");
+    assert_eq!(out, BackstopOutcome::Deleted);
+    assert_eq!(clock.now(), 600.0);
+}
+
+#[test]
+fn an_interrupt_during_the_smoke_deletes_the_instance() {
+    let clock = FakeClock::at(0.0);
+    let p = FakeProvider::new(&clock);
+    p.stuck_job.set(true);
+    let (log, bs) = (Lines::default(), RecBackstop::default());
+    let stop = || clock.now() > 100.0;
+    let d = Deployer {
+        provider: &p,
+        clock: &clock,
+        log: &log,
+        backstop: &bs,
+        ledger: None,
+        interrupted: &stop,
+        leaks: &no_leak,
+        poll: Duration::from_secs(5),
+    };
+    let r = d.up(&eu_pod_launch(), &smoke_up());
+    assert!(matches!(r, Err(DeployError::Interrupted)), "{r:?}");
+    assert_eq!(p.live(), 0);
+    // Stopped within a poll of the signal, not at the 600 s job wait.
+    assert!(clock.now() < 110.0, "{}", clock.now());
 }

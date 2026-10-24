@@ -661,3 +661,13 @@ ran (pod id, $/hr), result, cost.
   lint green. No Runpod call, no GPU. Live gate for the coordinator:
   `RUNPOD_API_KEY=… fv-deploy up --family h3 --preset h3-turbo --region eu
   --channel latest --yes --cap-s 1800`.
+- 2026-10-24 09:50Z: C3a review fixes on #169 (coordinator's review): the
+  backstop is armed (with an armed-file handshake) right after every create,
+  before the billed check; deletes retried, a failed delete stops `up`; a
+  lost create answer stops and sweeps by the run's name, as does every exit;
+  the floor holds over the cap; a string or missing `costPerHr` handled;
+  serverless `workers_max > 1` refused (no serverless quote, ADR-0018 §5.3);
+  the backstop stands down only on two 404s a minute apart; `down` needs
+  `--kind` for a bare unrecorded id; interrupts reach the smoke; upper bounds
+  unless `--force-guards`; CI builds `--features deploy`. CPU only on the
+  build pod; no Runpod call.

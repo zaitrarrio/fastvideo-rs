@@ -22,6 +22,8 @@ pub mod types;
 #[cfg(test)]
 pub(crate) mod tests;
 
+use std::time::Duration;
+
 use serde_json::Value;
 
 use crate::boot::sys::Method;
@@ -54,6 +56,54 @@ pub enum ProviderError {
     MissingKey(&'static str),
 }
 
+impl ProviderError {
+    /// Whether the provider certainly created nothing: a 4xx answer, no
+    /// capacity, or a request never sent (no key, unsupported). Anything else
+    /// (a transport error after the request may have gone out, a 5xx, a 2xx
+    /// without an id) may have created an instance the caller does not know
+    /// about: `crate::lifecycle` then stops and sweeps by name.
+    pub fn is_definite_refusal(&self) -> bool {
+        match self {
+            ProviderError::NoCapacity(_)
+            | ProviderError::MissingKey(_)
+            | ProviderError::Unsupported(_) => true,
+            ProviderError::Api { status, .. } => (400..500).contains(status),
+            ProviderError::Transport { .. } | ProviderError::Decode { .. } => false,
+        }
+    }
+}
+
+/// How a [`Reach`] talks to an instance.
+#[derive(Clone, Copy, Debug)]
+pub struct ReachOptions<'a> {
+    /// The run's API key for fv-serve, when the launch set `FV_API_KEYS`.
+    pub key: Option<&'a str>,
+    /// How long one call may take (a serverless queue job's execution
+    /// timeout and polling limit: the smoke's job wait).
+    pub call_timeout: Duration,
+}
+
+impl Default for ReachOptions<'_> {
+    fn default() -> Self {
+        Self {
+            key: None,
+            call_timeout: Duration::from_secs(600),
+        }
+    }
+}
+
+/// A price the API gave as a number or a numeric string (Runpod's REST
+/// docs show `costPerHr` as `'0.74'`); `None` when missing, unparseable,
+/// negative or not finite.
+pub fn parse_usd(v: Option<&Value>) -> Option<f64> {
+    let x = match v? {
+        Value::Number(n) => n.as_f64()?,
+        Value::String(s) => s.trim().parse::<f64>().ok()?,
+        _ => return None,
+    };
+    (x.is_finite() && x >= 0.0).then_some(x)
+}
+
 /// One readiness probe of a running instance (`/ping`: 502 / 404 while the
 /// container starts, 204 while fv-serve loads, 200 ready).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,12 +121,14 @@ pub trait Reach {
     /// One readiness probe.
     fn ping(&mut self) -> Probe;
     /// One native API call: the HTTP status and the JSON body (`Value::Null`
-    /// when empty, a string when not JSON).
+    /// when empty, a string when not JSON). `stop` is polled while the call
+    /// waits (a queue job), so an interrupt ends it.
     fn call(
         &mut self,
         method: Method,
         path: &str,
         body: Option<&Value>,
+        stop: &dyn Fn() -> bool,
     ) -> Result<(u16, Value), ProviderError>;
 }
 
@@ -98,13 +150,24 @@ pub trait Provider {
     fn destroy(&self, id: &InstanceId) -> Result<(), ProviderError>;
     /// The balance, for the shared balance floor.
     fn account(&self) -> Result<Account, ProviderError>;
-    /// The instance's API (`key`: the run's API key for fv-serve, when the
-    /// launch set `FV_API_KEYS`).
+    /// The instance's API.
     fn reach<'a>(
         &'a self,
         instance: &Instance,
-        key: Option<&str>,
+        opts: &ReachOptions<'_>,
     ) -> Result<Box<dyn Reach + 'a>, ProviderError>;
+    /// Deletes every live instance named `name` but `keep` (a create whose
+    /// answer was lost; the exit of every `up`: launch names are unique per
+    /// run). The ids deleted; an error when one could not be deleted (the
+    /// others are still attempted).
+    fn sweep(
+        &self,
+        name: &str,
+        keep: Option<&InstanceId>,
+    ) -> Result<Vec<InstanceId>, ProviderError>;
+    /// Whether [`Provider::create`] reports the billed price of the instance
+    /// (then the price cap checks it, and an unknown price fails the check).
+    fn bills_at_create(&self) -> bool;
 }
 
 /// `text` with every occurrence of `secret` replaced (no-op for an empty

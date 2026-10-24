@@ -13,7 +13,7 @@ use super::RunpodApi;
 use crate::boot::sys::Method;
 use crate::provider::{
     Account, ApiCall, Cursor, Instance, InstanceId, InstanceState, Launch, LogPage, Offer,
-    OfferQuery, Probe, Provider, ProviderError, ProviderKind, Reach,
+    OfferQuery, Probe, Provider, ProviderError, ProviderKind, Reach, ReachOptions,
 };
 
 /// DELETE attempts on an endpoint (`runpod-endpoint.sh down`: 6, `i * 5` s apart).
@@ -166,18 +166,17 @@ impl Provider for Serverless<'_> {
         ) {
             Ok(e) => e,
             Err(err) => {
-                // The template alone costs nothing, but it is ours: remove it.
-                let _ = self.delete_template(&tpl);
+                // Refused for sure: the template alone costs nothing, but it is
+                // ours, remove it. Otherwise the endpoint may exist: the
+                // caller's sweep by name removes both.
+                if err.is_definite_refusal() {
+                    let _ = self.delete_template(&tpl);
+                }
                 return Err(err);
             }
         };
-        let ep = match id_of(&e, "POST endpoints") {
-            Ok(ep) => ep,
-            Err(err) => {
-                let _ = self.delete_template(&tpl);
-                return Err(err);
-            }
-        };
+        // A 2xx without an id: the endpoint may exist (the caller sweeps).
+        let ep = id_of(&e, "POST endpoints")?;
         Ok(Instance {
             id: InstanceId::new(format!("{ep}/{tpl}")),
             provider: self.kind(),
@@ -201,14 +200,19 @@ impl Provider for Serverless<'_> {
             Duration::from_secs(30),
             "GET endpoint",
         )?;
-        if r.status == 404 || r.status == 400 {
+        // Only a 404 is "gone" (the backstop must not stand down on a 400 or
+        // an answer without an id).
+        if r.status == 404 {
             return Ok(InstanceState::Terminated);
+        }
+        if r.status == 400 {
+            return Ok(InstanceState::Unknown);
         }
         let v = self.api.json_or_error(r, "GET endpoint")?;
         Ok(if v.get("id").and_then(Value::as_str).is_some() {
             InstanceState::Running
         } else {
-            InstanceState::Terminated
+            InstanceState::Unknown
         })
     }
 
@@ -276,16 +280,75 @@ impl Provider for Serverless<'_> {
         self.api.account(self.kind())
     }
 
+    /// Endpoints named `name` (with their templates), then templates named
+    /// `name` that no endpoint uses any more (a create whose endpoint answer
+    /// was lost).
+    fn sweep(
+        &self,
+        name: &str,
+        keep: Option<&InstanceId>,
+    ) -> Result<Vec<InstanceId>, ProviderError> {
+        let (keep_ep, keep_tpl) = keep.map(split_id).unwrap_or(("", None));
+        let mut gone = Vec::new();
+        let mut last = None;
+        let eps = self
+            .api
+            .rest(Method::Get, "/endpoints", None, "GET endpoints")?;
+        for e in eps.as_array().map(Vec::as_slice).unwrap_or_default() {
+            let Some(ep) = e.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            if e.get("name").and_then(Value::as_str) != Some(name) || ep == keep_ep {
+                continue;
+            }
+            let id = match e.get("templateId").and_then(Value::as_str) {
+                Some(t) if !t.is_empty() && Some(t) != keep_tpl => {
+                    InstanceId::new(format!("{ep}/{t}"))
+                }
+                _ => InstanceId::new(ep),
+            };
+            match self.destroy(&id) {
+                Ok(()) => gone.push(id),
+                Err(err) => last = Some(err),
+            }
+        }
+        let tpls = self
+            .api
+            .rest(Method::Get, "/templates", None, "GET templates")?;
+        for t in tpls.as_array().map(Vec::as_slice).unwrap_or_default() {
+            let Some(tid) = t.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            if t.get("name").and_then(Value::as_str) != Some(name) || Some(tid) == keep_tpl {
+                continue;
+            }
+            match self.delete_template(tid) {
+                Ok(()) => gone.push(InstanceId::new(format!("template:{tid}"))),
+                Err(err) => last = Some(err),
+            }
+        }
+        match last {
+            Some(e) => Err(e),
+            None => Ok(gone),
+        }
+    }
+
+    /// The endpoint's price is per worker-second, not reported at create:
+    /// the price cap checks the quote only (docs/adr/0018-fv-deploy.md §5.3).
+    fn bills_at_create(&self) -> bool {
+        false
+    }
+
     fn reach<'b>(
         &'b self,
         instance: &Instance,
-        _key: Option<&str>,
+        opts: &ReachOptions<'_>,
     ) -> Result<Box<dyn Reach + 'b>, ProviderError> {
         let (ep, _) = split_id(&instance.id);
         Ok(Box::new(QueueReach {
             api: &self.api,
             endpoint: ep.to_owned(),
-            execution_timeout_ms: 1_800_000,
+            execution_timeout_ms: u64::try_from(opts.call_timeout.as_millis()).unwrap_or(u64::MAX),
             info_job: None,
             poll: Duration::from_secs(2),
         }))
@@ -369,6 +432,7 @@ impl Reach for QueueReach<'_> {
         method: Method,
         path: &str,
         body: Option<&Value>,
+        stop: &dyn Fn() -> bool,
     ) -> Result<(u16, Value), ProviderError> {
         let mut input = json!({"kind": "http", "method": method.as_str(), "path": path});
         if let Some(b) = body {
@@ -398,6 +462,12 @@ impl Reach for QueueReach<'_> {
                     status: 0,
                     body: format!("{s}: {}", v.get("error").cloned().unwrap_or(Value::Null)),
                 });
+            }
+            if stop() {
+                return Err(ProviderError::Unsupported(format!(
+                    "queue job {job} ({} {path}): interrupted",
+                    method.as_str()
+                )));
             }
             if clock.now() > deadline {
                 return Err(ProviderError::Api {

@@ -1262,3 +1262,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0018-fv-deploy.md §4, §6
 - Verification: `bash scripts/serve/tests/fv-deploy-goldens.sh --check`, `cargo test --locked -p fastvideo-deploy --test payload_goldens`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-deploy-review
+- Trigger: the independent review of PR #169 found leak and guard-bypass paths before the live run (a billed-over-cap pod deleted before its backstop existed; a lost create answer treated as "no instance"; a failed arm or replace-delete followed by more creates; `down <endpoint>` deleting nothing; a string `costPerHr`; the floor not projected over the cap; serverless prices unchecked; the backstop trusting a spawn and a single "gone" reading; interrupts not reaching the smoke; no upper bounds; CI not building `deploy`)
+- Options: fix each in the lifecycle and providers with a test; defer to C3b
+- Decision: backstop armed (with an `armed` file handshake, 15 s) right after every create, before the billed check; deletes retried 3 × 5 s, the ledger says deleted only on success, a failed delete stops `up`; a create error other than 4xx / no capacity stops the fallback and sweeps by the run's unique name, and every exit of `up` sweeps it (but a `--keep` instance); a missing / unreadable billed price fails the cap (numbers and numeric strings accepted); the floor holds over the cap (`balance − (quote + spend) × cap_s/3600 ≥ floor`); serverless `workers_max > 1` refused (no serverless quote: a documented gap); the backstop stands down only on two 404 readings ≥ 60 s apart; `down` needs `--kind` for an unrecorded bare id and infers serverless from `/`; interrupts polled in the smoke and queue calls, a second signal exits; `cap_s ≤ 4 h`, `ready_cycles ≤ 3`, `ready_timeout_s ≤ 600` unless `--force-guards`, every create counts against the cycles; CI builds and tests `--features deploy` (check.sh, coverage.sh) and the goldens' path filter covers what the scripts source
+- Reason: no path may leave a billed instance without a backstop or create more after a delete failed; the floor rule is "would drop", not "is"
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0018-fv-deploy.md §2, §5
+- Verification: the tests named in ADR-0018 "Consequences"; `cargo test --locked -p fastvideo-deploy --all-features`

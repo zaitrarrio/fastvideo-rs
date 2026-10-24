@@ -10,7 +10,8 @@
 //!                 without --yes it is `plan`
 //! fv-deploy status <id> | logs <id> [--follow] | smoke <id> | down <id>  [--kind …]
 //! fv-deploy schema launch|instance|offer|account
-//! fv-deploy backstop --kind K --id ID --deadline T   (started by `up`, detached)
+//! fv-deploy backstop --kind K --id ID --deadline T --armed-file F
+//!                 (started by `up`, detached; writes F once armed)
 //! ```
 //!
 //! The provider's key comes from `RUNPOD_API_KEY` and is never printed.
@@ -32,7 +33,7 @@ use fastvideo_deploy::launch::{self, PresetRequest, Repo, KEY_HASH_PLACEHOLDER};
 use fastvideo_deploy::lifecycle::{smoke, Deployer, Ledger, SmokeOptions, UpOptions};
 use fastvideo_deploy::provider::runpod::{Pod, RunpodApi, Serverless};
 use fastvideo_deploy::provider::{
-    schema, Cursor, Guards, Instance, InstanceId, Provider, ProviderKind,
+    schema, Cursor, Guards, Instance, InstanceId, Provider, ProviderKind, ReachOptions,
 };
 
 #[derive(Parser)]
@@ -82,6 +83,9 @@ enum Cmd {
         /// Unix seconds.
         #[arg(long)]
         deadline: f64,
+        /// Written (`armed`) once the backstop can delete: `up` waits for it.
+        #[arg(long)]
+        armed_file: Option<PathBuf>,
     },
 }
 
@@ -121,6 +125,9 @@ struct LaunchArgs {
     ready_timeout_s: u64,
     #[arg(long, default_value_t = guard::READY_CYCLES)]
     ready_cycles: u32,
+    /// Lift the upper bounds (cap 4 h, 3 cycles, 600 s readiness); never the $8 floor.
+    #[arg(long)]
+    force_guards: bool,
     /// The repository root (default: the nearest parent with deploy/deploy.toml).
     #[arg(long)]
     root: Option<PathBuf>,
@@ -231,6 +238,7 @@ fn request(a: &LaunchArgs, key_hash: &str) -> Result<PresetRequest, String> {
             cap_s: a.cap_s,
             ready_timeout_s: a.ready_timeout_s,
             ready_cycles: a.ready_cycles,
+            force: a.force_guards,
         },
         key_hash: key_hash.to_owned(),
     })
@@ -243,7 +251,9 @@ fn provider<'a>(kind: ProviderKind, api: RunpodApi<'a>) -> Box<dyn Provider + 'a
     }
 }
 
-/// SIGINT / SIGTERM set the flag (the lifecycle then deletes what it created).
+/// The first SIGINT / SIGTERM sets the flag (the lifecycle then deletes
+/// what it created); a second one ends the process at once (exit 130: the
+/// backstops still delete at their caps).
 fn interrupt_flag() -> Arc<AtomicBool> {
     let flag = Arc::new(AtomicBool::new(false));
     let f = Arc::clone(&flag);
@@ -263,8 +273,16 @@ fn interrupt_flag() -> Arc<AtomicBool> {
                 _ = tokio::signal::ctrl_c() => {}
                 _ = term.recv() => {}
             }
-            eprintln!("[fv-deploy] interrupted: deleting what this run created");
+            eprintln!(
+                "[fv-deploy] interrupted: deleting what this run created (again to quit now)"
+            );
             f.store(true, Ordering::SeqCst);
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+            eprintln!("[fv-deploy] second signal: quitting; the backstop deletes at the cap");
+            std::process::exit(130);
         });
     });
     flag
@@ -388,10 +406,11 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     let leaks = |s: &str| !api_key.is_empty() && s.contains(api_key.as_str());
     let p = provider(l.provider, api);
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let backstop = DetachedBackstop {
+    let backstop = DetachedBackstop::new(
         exe,
-        log: Some(state.join(format!("backstop-{stamp}.log"))),
-    };
+        Some(state.join(format!("backstop-{stamp}.log"))),
+        state.join("armed"),
+    );
     std::fs::create_dir_all(&state).map_err(|e| format!("{}: {e}", state.display()))?;
     let ledger = Ledger {
         path: state.join("ledger.tsv"),
@@ -447,17 +466,31 @@ fn recorded(state: &Path, id: &str) -> Option<Instance> {
     serde_json::from_value(v.get("instance")?.clone()).ok()
 }
 
+/// The kind of an id: `--kind`, else what `up` recorded, else a serverless
+/// id (`<endpoint>/<template>`); a bare id with neither is refused (a pod
+/// `down` of an endpoint id would "succeed" on its 404).
+fn id_kind(
+    flag: Option<&str>,
+    recorded: Option<ProviderKind>,
+    id: &str,
+) -> Result<ProviderKind, String> {
+    match (flag, recorded) {
+        (Some(k), _) => kind_of(k),
+        (None, Some(k)) => Ok(k),
+        (None, None) if id.contains('/') => Ok(ProviderKind::RunpodServerless),
+        (None, None) => Err(format!(
+            "no local record of {id}: pass --kind pod or --kind serverless"
+        )),
+    }
+}
+
 fn with_provider<T>(
     a: &IdArgs,
     f: impl FnOnce(&dyn Provider, Instance, &Path, &RealClock) -> Result<T, String>,
 ) -> Result<T, String> {
     let state = state_dir(a.state_dir.as_ref(), a.root.as_ref());
     let rec = recorded(&state, &a.id);
-    let kind = match (&a.kind, &rec) {
-        (Some(k), _) => kind_of(k)?,
-        (None, Some(r)) => r.provider,
-        (None, None) => ProviderKind::RunpodPod,
-    };
+    let kind = id_kind(a.kind.as_deref(), rec.as_ref().map(|r| r.provider), &a.id)?;
     let env = BootEnv::from_process();
     let http = ReqwestHttp::new().map_err(|e| e.to_string())?;
     let clock = RealClock;
@@ -490,8 +523,12 @@ fn run() -> Result<bool, String> {
             let st = p.status(&inst.id).map_err(|e| e.to_string())?;
             let key =
                 std::fs::read_to_string(state.join(format!("keys/{}.key", file_id(&a.id)))).ok();
+            let ro = ReachOptions {
+                key: key.as_deref().map(str::trim),
+                ..ReachOptions::default()
+            };
             let ping = p
-                .reach(&inst, key.as_deref().map(str::trim))
+                .reach(&inst, &ro)
                 .map(|mut r| format!("{:?}", r.ping()))
                 .unwrap_or_else(|e| e.to_string());
             print_json(
@@ -516,10 +553,15 @@ fn run() -> Result<bool, String> {
         Cmd::Smoke { id, smoke: s } => with_provider(&id, |p, inst, state, clock| {
             let key =
                 std::fs::read_to_string(state.join(format!("keys/{}.key", file_id(&id.id)))).ok();
-            let mut reach = p
-                .reach(&inst, key.as_deref().map(str::trim))
-                .map_err(|e| e.to_string())?;
-            let r = smoke(reach.as_mut(), &smoke_options(&s)?, clock, &StderrLog);
+            let so = smoke_options(&s)?;
+            let ro = ReachOptions {
+                key: key.as_deref().map(str::trim),
+                call_timeout: Duration::from_secs(so.job_wait_s),
+            };
+            let mut reach = p.reach(&inst, &ro).map_err(|e| e.to_string())?;
+            let flag = interrupt_flag();
+            let stop = || flag.load(Ordering::SeqCst);
+            let r = smoke(reach.as_mut(), &so, clock, &StderrLog, &stop);
             print_json(&r);
             Ok(r.ok)
         }),
@@ -529,10 +571,7 @@ fn run() -> Result<bool, String> {
             };
             let never = || false;
             let leaks = |_: &str| false;
-            let none = DetachedBackstop {
-                exe: PathBuf::new(),
-                log: None,
-            };
+            let none = DetachedBackstop::new(PathBuf::new(), None, state.join("armed"));
             let d = Deployer {
                 provider: p,
                 clock,
@@ -553,26 +592,41 @@ fn run() -> Result<bool, String> {
             print!("{}", schema::text(&s));
             Ok(true)
         }
-        Cmd::Backstop { kind, id, deadline } => {
+        Cmd::Backstop {
+            kind,
+            id,
+            deadline,
+            armed_file,
+        } => {
             // As nohup: a hangup (or a Ctrl-C to a group it is not in) never
             // stops it; the handlers stay installed for the process's life.
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .map_err(|e| e.to_string())?;
-            let _guards = rt.block_on(async {
+            let (hup, int) = rt.block_on(async {
                 use tokio::signal::unix::{signal, SignalKind};
                 (
-                    signal(SignalKind::hangup()).ok(),
-                    signal(SignalKind::interrupt()).ok(),
+                    signal(SignalKind::hangup()),
+                    signal(SignalKind::interrupt()),
                 )
             });
+            let _guards = (
+                hup.map_err(|e| format!("SIGHUP handler: {e}"))?,
+                int.map_err(|e| format!("SIGINT handler: {e}"))?,
+            );
             let kind = kind_of(&kind)?;
             let env = BootEnv::from_process();
             let http = ReqwestHttp::new().map_err(|e| e.to_string())?;
             let clock = RealClock;
             let api = RunpodApi::from_env(&http, &clock, &env).map_err(|e| e.to_string())?;
             let p = provider(kind, api);
+            // Armed: the client exists, the key is there, the handlers are in
+            // place. `up` waits for this line before it trusts the backstop.
+            if let Some(f) = &armed_file {
+                guard::report_armed(f).map_err(|e| format!("{}: {e}", f.display()))?;
+            }
+            eprintln!("[backstop] armed (pid {})", std::process::id());
             run_backstop(
                 p.as_ref(),
                 &InstanceId::new(id),

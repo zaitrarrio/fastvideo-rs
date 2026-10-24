@@ -71,12 +71,19 @@ pub trait Provider {
     fn logs(&self, id: &InstanceId, since: Option<&Cursor>) -> Result<LogPage, ProviderError>;
     fn destroy(&self, id: &InstanceId) -> Result<(), ProviderError>;          // gone is not an error
     fn account(&self) -> Result<Account, ProviderError>;                       // balance, for the floor
-    fn reach<'a>(&'a self, i: &Instance, key: Option<&str>) -> Result<Box<dyn Reach + 'a>, ProviderError>;
+    fn reach<'a>(&'a self, i: &Instance, opts: &ReachOptions) -> Result<Box<dyn Reach + 'a>, ProviderError>;
+    fn sweep(&self, name: &str, keep: Option<&InstanceId>) -> Result<Vec<InstanceId>, ProviderError>; // lost answers, every exit
+    fn bills_at_create(&self) -> bool;                                          // pods: the billed price is checked
 }
-pub trait Reach { fn ping(&mut self) -> Probe; fn call(&mut self, m: Method, path: &str, body: Option<&Value>) -> Result<(u16, Value), ProviderError>; }
+pub trait Reach {
+    fn ping(&mut self) -> Probe;
+    fn call(&mut self, m: Method, path: &str, body: Option<&Value>, stop: &dyn Fn() -> bool) -> Result<(u16, Value), ProviderError>;
+}
 ```
 
-Two additions to the review's sketch: `payload` (so `plan` prints the provider's exact requests from the provider's
+`ProviderError::is_definite_refusal` tells a create the provider certainly refused (4xx, no capacity) from one whose
+answer was lost (transport, 5xx, 2xx without an id: §5.6). Additions to the review's sketch: `sweep`, `bills_at_create`,
+`payload` (so `plan` prints the provider's exact requests from the provider's
 own builder, with no network) and `reach` (how the readiness poll and the smoke reach the instance: a pod through
 Runpod's HTTPS proxy, a serverless endpoint through its queue, one native job per call, so the smoke is the same
 sequence on both).
@@ -144,35 +151,64 @@ completes (`runpod-endpoint.sh`'s first job).
 ### 5. The shared guards (`guard.rs`, `lifecycle.rs`)
 
 Written once, tested with a provider-neutral fake (`lifecycle/tests.rs`) and through the Runpod code on a fake Runpod
-(`provider/tests.rs`):
+(`provider/tests.rs`). Amended after the PR #169 review (leak and bypass paths closed, each with a test).
 
 1. **Region guard** (no network): a Runpod GPU instance mounts the EU weights volume `bz0ofkfx45` in `EU-RO-1` and
    nothing else; no volume, another volume, another data centre or a weights source other than `volume` is refused;
    the deleted US volume (`s2k01690bi`, by id or by name) and region `us` are refused with `volumes.sh`'s `FV_US_GONE`
    text (CLAUDE.md; plan §1, owner instruction 2026-10-23).
-2. **Balance floor**: `account()` before every create (a replacement included); below `min_balance_usd` (default and
-   minimum $8, CLAUDE.md) nothing is created.
+2. **Balance floor, over the whole cap**: `account()` before every create (a replacement included); the balance must be
+   at least `min_balance_usd` (default and minimum $8, CLAUDE.md) **and** stay there over the cap:
+   `balance − (quote + currentSpendPerHr) × cap_s / 3600 ≥ floor` (CLAUDE.md: stop before the balance *would* drop
+   below $8). A GPU type whose projection fails is skipped; when none passes, `up` refuses before any create.
 3. **Price cap**: quotes before any create; no quote or a quote over `max_usd_per_hr` (default $2.50 for one GPU,
-   `--max-usd-per-hr`) skips the GPU type, never creating at an unknown price (`runpod-price.sh`); a created instance
-   billed over the cap is deleted at once (`runpod-pod.sh`). A pod tries the GPU types in order; a serverless
-   endpoint gets every type whose quote passes.
-4. **Detached wall-clock backstop**: right after a create, `up` starts this binary again as `fv-deploy backstop --kind
-   K --id ID --deadline T` (`T` = creation + `cap_s`, default 1800 s) in a **process group of its own**
-   (`process_group(0)`: a Ctrl-C to the terminal's foreground group does not reach it), stdin closed, output appended
-   to `artifacts/fv-deploy/backstop-<stamp>.log`, ignoring SIGHUP and SIGINT (as `nohup`); it inherits the
-   environment, so `RUNPOD_API_KEY` is never on a command line. It sleeps to the deadline, checking once a minute
-   whether the instance is already gone (then it exits), and at the deadline deletes it (3 attempts, 5 s apart; a
-   serverless endpoint as `runpod-endpoint.sh down`: workers to 0, the endpoint, then its template). It is what the
-   scripts' `nohup bash -c 'sleep $CAP; curl -X DELETE …' &` does, plus the early exit. Not used: fv-boot's in-pod
-   watchdog (it needs the account key in the pod's env, `FV_BACKSTOP_API_KEY`, which Runpod's `GET /pods` returns in
-   clear; open decision below) and fv-control's cron (fv-deploy runs without fv-control).
-5. **Readiness and replace** (the owner's rule, plan §1): `/ping` every 5 s; not 200 within `ready_timeout_s` (600)
-   of the creation, or the provider reports the instance exited or gone → delete it and create a new one, balance
-   floor first; at most `ready_cycles` (3) instances, then stop with `NotReady` and the last reason.
-6. **Env guard**: a launch whose env, command, image or name contains the provider key is refused before any request.
-7. **Delete on exit**: any failure after a create, a failed smoke, or SIGINT / SIGTERM (the binary sets a flag every
-   wait polls) deletes the instance; `--keep` leaves it to the backstop. A local ledger
-   (`artifacts/fv-deploy/ledger.tsv`, the scripts' format) records every create, ready and delete.
+   `--max-usd-per-hr`) skips the GPU type, never creating at an unknown price (`runpod-price.sh`). A pod's billed
+   `costPerHr` (a number or a numeric string: Runpod's REST docs show `'0.74'`) over the cap, **or missing /
+   unreadable**, fails the check and the pod is deleted. A pod tries the GPU types in order; a serverless endpoint gets
+   every type whose quote passes.
+   **Known gap (serverless):** Runpod reports no price for a serverless endpoint at create, and fv-deploy reads no
+   serverless quote: the cap and the projection use the GPU's *pod* quote for one worker, and a serverless worker's
+   per-second price is not checked against it. The guard therefore refuses a serverless launch with `workers_max > 1`
+   (the projection multiplies the quote by `workers_max` regardless). A serverless quote is a C3b/C3d follow-up.
+4. **Detached wall-clock backstop, armed before anything else**: right after **every** successful create (before the
+   billed-price check), `up` starts this binary again as `fv-deploy backstop --kind K --id ID --deadline T
+   --armed-file F` (`T` = creation + `cap_s`, default 1800 s) in a **process group of its own** (`process_group(0)`: a
+   Ctrl-C to the terminal's foreground group does not reach it), stdin closed, output appended to
+   `artifacts/fv-deploy/backstop-<stamp>.log`, ignoring SIGHUP and SIGINT (as `nohup`); it inherits the environment,
+   so `RUNPOD_API_KEY` is never on a command line. **Handshake:** the child writes `armed` to `F` once its API client
+   exists, the key is there and its signal handlers are installed; `up` waits up to 15 s for it, and a child that
+   exits or stays silent (it is then killed) means **no backstop**. It sleeps to the deadline and deletes the instance
+   (3 attempts, 5 s apart; a serverless endpoint as `runpod-endpoint.sh down`: workers to 0, the endpoint, then its
+   template). It stands down early only after **two "gone" readings at least 60 s apart** (only a 404 is "gone": a 400
+   or an answer without an id is not). It is the scripts' `nohup bash -c 'sleep $CAP; curl -X DELETE …' &` plus the
+   handshake and the early exit. **It dies with its host**: run `up` from a machine that outlives `cap_s` (not a
+   laptop about to sleep, not a container about to be recycled). Not used: fv-boot's in-pod watchdog (it needs the
+   account key in the pod's env, `FV_BACKSTOP_API_KEY`, which Runpod's `GET /pods` returns in clear; open decision
+   below) and fv-control's cron (fv-deploy runs without fv-control).
+5. **No backstop, no instance**: when arming fails, the instance is deleted at once (3 attempts, 5 s apart) and `up`
+   stops with `NoBackstop { id, deleted }`; when the delete failed too, the error says to delete that id by hand.
+6. **A create whose answer was lost**: any create error other than a 4xx answer or "no capacity" (a transport error
+   after the request may have gone out, a 5xx, a 2xx without an id) stops the GPU-type fallback and `up`
+   (`CreateUncertain`): the provider's `sweep` lists pods (or endpoints and templates) and deletes those named
+   `launch.name` (unique per `up`: `fv-deploy-<preset>-<MMDDHHMMSS>`). **Every exit of `up`** sweeps the name the
+   same way (all but an instance kept with `--keep`).
+7. **Readiness and replace** (the owner's rule, plan §1): `/ping` every 5 s; not 200 within `ready_timeout_s` (600)
+   of the creation, or the provider reports the instance exited or gone → delete it (3 attempts) and create a new
+   one, balance floor first; **if that delete fails, `up` stops** (`DeleteFailed`) instead of creating another. At
+   most `ready_cycles` (3) instances per `up`: **every create counts**, a GPU-type fallback after a billed-over-cap
+   delete included. Then `up` stops with `NotReady` and the last reason.
+8. **Upper bounds**: `cap_s ≤ 4 h`, `ready_cycles ≤ 3`, `ready_timeout_s ≤ 600` unless `--force-guards`; the $8 floor is
+   never lifted.
+9. **Env guard**: a launch whose env, command, image or name contains the provider key is refused before any request.
+10. **Delete on exit, and interrupts**: any failure after a create, a failed smoke, or SIGINT / SIGTERM deletes the
+    instance (with retries; the ledger says "deleted" only when it was, "delete-failed" otherwise); `--keep` leaves it
+    to the backstop (an interrupt deletes it even then). The interrupt is polled in the readiness wait, in the
+    smoke's waits and inside a serverless queue call (whose execution timeout is the smoke's `job_wait_s`, not a fixed
+    30 min); a **second** SIGINT / SIGTERM ends the process at once (exit 130; the backstops still delete at their
+    caps). A local ledger (`artifacts/fv-deploy/ledger.tsv`, the scripts' format) records every create, ready, delete
+    and failed delete.
+11. **Serverless template leftovers**: `destroy` deletes the endpoint, then its template; a failed template delete
+    leaves a template behind (no cost; the exit sweep retries it by name).
 
 ### 6. The smoke and the commands
 
@@ -207,6 +243,7 @@ Kept: `runpod-cuda.sh` (constants), `runpod-templates.sh` and `release.sh` (C3d)
 - **The default price cap** ($2.50/hr for one GPU): a guard choice, not a price fact (the RTX PRO 6000 Secure quote
   is UNVERIFIED here: no live call was made); the quote is checked live before every create, so a cap below the quote
   refuses rather than overspends (`--max-usd-per-hr` raises it).
+- **Serverless price**: no serverless quote is read (§5.3); `workers_max > 1` is refused until one is.
 - **In-pod backstop**: fv-boot's watchdog could repeat the deadline inside the pod (as fv-control's standalone pods
   do) if fv-deploy sent `FV_CLUSTER_DEADLINE` and the account key as `FV_BACKSTOP_API_KEY`; that puts the account key
   in the pod's env, readable through `GET /pods`. C3a does not; the owner decides.
@@ -221,6 +258,16 @@ Kept: `runpod-cuda.sh` (constants), `runpod-templates.sh` and `release.sh` (C3d)
   until the live gate and are then deleted one by one.
 - `fastvideo-autoscale` is no longer orphaned: it depends on the provider layer it will run on.
 - Four more schemas under drift check; fv-control can generate its types from them (C3c).
+- Review fixes (PR #169) are pinned by: `a_lost_create_answer_stops_and_sweeps_by_name`,
+  `a_lost_endpoint_answer_sweeps_the_endpoint_and_its_template`, `the_exit_sweep_removes_a_stray_instance_of_the_run`,
+  `billed_price_as_a_string_passes_and_unreadable_fails`, `over_cap_pod_whose_delete_fails_stops_with_its_backstop_armed`,
+  `not_ready_pod_whose_delete_fails_is_not_replaced`, `no_backstop_deletes_with_retries_and_says_so`,
+  `the_floor_holds_over_the_whole_cap`, `serverless_with_more_than_one_worker_is_refused`,
+  `prices_parse_from_numbers_and_strings`, `create_refusals_are_told_from_lost_answers` (`provider/tests.rs`);
+  `guard_upper_bounds_unless_forced`, `every_create_counts_against_the_cycles`, `unknown_billed_price_fails_the_cap`,
+  `the_backstop_does_not_stand_down_on_a_flapping_gone`, `an_interrupt_during_the_smoke_deletes_the_instance`
+  (`lifecycle/tests.rs`); `detached_backstop_deletes_the_pod_on_its_own` (the armed handshake, and a child without a
+  key fails `arm`), `down_needs_a_kind_for_a_bare_id_and_infers_serverless_from_a_slash` (`tests/fv_deploy_bin.rs`).
 - Enforced by: `provider/tests.rs` (Runpod over a fake Runpod: the create body is what goes out, no stock, the key
   never in a URL / body / error / `Debug`, serverless create and delete order, `up` end to end on both kinds, 3
   replace cycles then give up, the floor before any create, over-cap and unquoted types never created, billed over
@@ -247,5 +294,8 @@ RUNPOD_API_KEY=… ./fv-deploy up --family h3 --preset h3-turbo --region eu --ch
 
 Expected: balance ≥ $8 checked, the RTX PRO 6000 quote ≤ $2.50/hr, one pod on `bz0ofkfx45` in `EU-RO-1` with fv-boot,
 the backstop armed (pid in the log), ready within 600 s (else replaced, at most 3), the smoke's job `succeeded`, the
-pod deleted, `artifacts/fv-deploy/{ledger.tsv,up-<stamp>.json}` written. Worst case cost at the cap: three pods ×
-600 s plus a smoke of at most 600 s, about 40 GPU-minutes, about $1.70 at $2.50/hr.
+pod deleted, `artifacts/fv-deploy/{ledger.tsv,up-<stamp>.json}` written. Worst case at the cap: three pods × 600 s
+of readiness, then on the third a smoke of at most `PING_WAIT` (120 s) plus the job wait (600 s; on a serverless
+endpoint the job's POST runs as one queue job bounded by the same 600 s), about 42 GPU-minutes, about $1.75 at
+$2.50/hr; the projection guard needs `balance − (quote + current spend) × 0.5 h ≥ $8` first. Run it from a host that
+outlives `--cap-s` (the backstop runs there). Recommended: `--cap-s 1800`, the default.

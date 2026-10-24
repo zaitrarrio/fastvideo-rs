@@ -8,8 +8,9 @@ use serde_json::{json, Map, Value};
 use super::RunpodApi;
 use crate::boot::sys::{Method, Request};
 use crate::provider::{
-    body_json, scrub, Account, ApiCall, Cursor, Instance, InstanceId, InstanceState, Launch,
-    LogPage, Offer, OfferQuery, Probe, Provider, ProviderError, ProviderKind, Reach,
+    body_json, parse_usd, scrub, Account, ApiCall, Cursor, Instance, InstanceId, InstanceState,
+    Launch, LogPage, Offer, OfferQuery, Probe, Provider, ProviderError, ProviderKind, Reach,
+    ReachOptions,
 };
 
 /// The `PodCreateInput` of a launch: `runpod-pod.sh payload()` field for
@@ -141,7 +142,9 @@ impl Provider for Pod<'_> {
             url: Some(self.api.urls.pod_url(id)),
             gpu: launch.gpu.types.first().cloned(),
             data_center: dc,
-            usd_per_hr: v.get("costPerHr").and_then(Value::as_f64),
+            // A number or a numeric string; missing or unparseable is `None`
+            // and fails the billed-price check.
+            usd_per_hr: parse_usd(v.get("costPerHr")),
             created_at: Some(self.api.clock().now()),
         })
     }
@@ -151,13 +154,17 @@ impl Provider for Pod<'_> {
         let r = self
             .api
             .raw(Method::Get, &url, None, Duration::from_secs(30), "GET pod")?;
-        // fv-control's rule: 404 / 400 = gone.
-        if r.status == 404 || r.status == 400 {
+        // Only a 404 is "gone"; a 400 or an answer without an id is not
+        // proof (the backstop must not stand down on it).
+        if r.status == 404 {
             return Ok(InstanceState::Terminated);
+        }
+        if r.status == 400 {
+            return Ok(InstanceState::Unknown);
         }
         let v = self.api.json_or_error(r, "GET pod")?;
         if v.get("id").and_then(Value::as_str).is_none() {
-            return Ok(InstanceState::Terminated);
+            return Ok(InstanceState::Unknown);
         }
         Ok(pod_state(
             v.get("desiredStatus").and_then(Value::as_str).unwrap_or(""),
@@ -210,10 +217,43 @@ impl Provider for Pod<'_> {
         self.api.account(self.kind())
     }
 
+    fn sweep(
+        &self,
+        name: &str,
+        keep: Option<&InstanceId>,
+    ) -> Result<Vec<InstanceId>, ProviderError> {
+        let v = self.api.rest(Method::Get, "/pods", None, "GET pods")?;
+        let mut gone = Vec::new();
+        let mut last = None;
+        for p in v.as_array().map(Vec::as_slice).unwrap_or_default() {
+            let Some(id) = p.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let named = p.get("name").and_then(Value::as_str) == Some(name);
+            let dead = p.get("desiredStatus").and_then(Value::as_str) == Some("TERMINATED");
+            if !named || dead || keep.is_some_and(|k| k.as_str() == id) {
+                continue;
+            }
+            let id = InstanceId::new(id);
+            match self.destroy(&id) {
+                Ok(()) => gone.push(id),
+                Err(e) => last = Some(e),
+            }
+        }
+        match last {
+            Some(e) => Err(e),
+            None => Ok(gone),
+        }
+    }
+
+    fn bills_at_create(&self) -> bool {
+        true
+    }
+
     fn reach<'b>(
         &'b self,
         instance: &Instance,
-        key: Option<&str>,
+        opts: &ReachOptions<'_>,
     ) -> Result<Box<dyn Reach + 'b>, ProviderError> {
         let base = instance
             .url
@@ -222,7 +262,7 @@ impl Provider for Pod<'_> {
         Ok(Box::new(PodReach {
             http: self.api.http(),
             base,
-            key: key.map(str::to_owned),
+            key: opts.key.map(str::to_owned),
         }))
     }
 }
@@ -254,6 +294,7 @@ impl Reach for PodReach<'_> {
         method: Method,
         path: &str,
         body: Option<&Value>,
+        _stop: &dyn Fn() -> bool,
     ) -> Result<(u16, Value), ProviderError> {
         let mut req = Request::new(
             method,

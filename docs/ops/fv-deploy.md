@@ -44,8 +44,8 @@ Options of `plan` / `up`: `--region eu` (the only region with a weights volume; 
 `--image REF` (instead of `ghcr.io/zaitrarrio/fastvideo-rs-serve:<variant>-<channel>`), `--channel stable|latest`
 (default `stable`; the preset launch runs fv-boot, so use `latest` or a digest built after #159 until `stable` is
 promoted), `--gpu TYPE` (repeatable, fallback order; default `NVIDIA RTX PRO 6000 Blackwell Server Edition`),
-`--cap-s` (1800), `--max-usd-per-hr` (2.5), `--min-balance` (8, the minimum), `--ready-timeout-s` (600),
-`--ready-cycles` (3). `up` only: `--yes`, `--no-smoke`, `--keep`, `--model`, `--params`, `--job-wait-s` (600),
+`--cap-s` (1800, ≤ 14400), `--max-usd-per-hr` (2.5), `--min-balance` (8, the minimum), `--ready-timeout-s` (600, ≤ 600),
+`--ready-cycles` (3, ≤ 3), `--force-guards` (lifts those upper bounds). `up` only: `--yes`, `--no-smoke`, `--keep`, `--model`, `--params`, `--job-wait-s` (600),
 `--state-dir`.
 
 ## Environment
@@ -61,15 +61,35 @@ promoted), `--gpu TYPE` (repeatable, fallback order; default `NVIDIA RTX PRO 600
    `s2k01690bi` and region `us` are refused. The preset's weight trees must be on the EU volume
    (`scripts/gpu/volumes.sh FV_EU_VOLUME_TREES`): H3 and LTX presets launch, Wan presets are refused (r2 / hub weights
    are not in fv-deploy yet).
-2. **Balance floor**: the Runpod balance is read before every create; below $8 nothing is created.
-3. **Price cap**: Runpod's quote for the GPU type is checked before the create; no quote or a quote over the cap skips
-   the type; a pod billed over the cap is deleted at once.
-4. **Backstop**: after each create, `fv-deploy backstop` runs detached (its own process group, SIGHUP ignored, the key
-   only in its environment) and deletes the instance `--cap-s` seconds after its creation even if `up` is killed; it
-   exits early once the instance is gone. Its log is `artifacts/fv-deploy/backstop-<stamp>.log`.
-5. **Readiness**: an instance not answering `/ping` 200 within 600 s of its creation is deleted and replaced, at most
-   3 instances, then `up` stops and reports.
-6. **Delete on exit**: a failure after the create, a failed smoke, Ctrl-C or SIGTERM delete what `up` created.
+2. **Balance floor over the cap**: the Runpod balance is read before every create; it must be at least $8 and stay at
+   least $8 over the whole cap: `balance − (quote + current spend/hr) × cap_s/3600 ≥ 8`.
+3. **Price cap**: Runpod's quote is checked before the create; no quote or a quote over the cap skips the type; a pod
+   billed over the cap, or whose billed price is missing or unreadable, is deleted at once. Serverless: the pod quote
+   of one worker is the only price checked (no serverless quote), so `workers_max > 1` is refused (ADR-0018 §5.3).
+4. **Backstop**: after each create, before anything else, `fv-deploy backstop` runs detached (its own process group,
+   SIGHUP ignored, the key only in its environment) and deletes the instance `--cap-s` seconds after its creation even
+   if `up` is killed. `up` waits for it to report "armed"; without that the instance is deleted and `up` stops. It
+   stands down early only after two "gone" readings a minute apart. Its log is
+   `artifacts/fv-deploy/backstop-<stamp>.log`. **It runs on the host that ran `up` and dies with it**: run the live
+   gate from a machine that stays up for `--cap-s`.
+5. **Lost answers**: a create whose answer was lost (a network error, a 5xx, no id) stops `up`; the run's pods /
+   endpoints / templates are found by name and deleted. Every exit of `up` does the same sweep (but a `--keep` pod).
+6. **Readiness**: an instance not answering `/ping` 200 within 600 s of its creation is deleted and replaced, at most
+   3 instances per `up` (every create counts); if a delete fails, `up` stops instead of creating another.
+7. **Bounds**: `--cap-s` ≤ 4 h, `--ready-cycles` ≤ 3, `--ready-timeout-s` ≤ 600 unless `--force-guards` (never the $8
+   floor).
+8. **Delete on exit**: a failure after the create, a failed smoke, Ctrl-C or SIGTERM delete what `up` created (with
+   retries; the ledger records `deleted` only when it was). A second Ctrl-C quits at once; the backstop still deletes
+   at the cap.
+9. **Serverless**: `down` deletes the endpoint, then its template; a template left behind costs nothing (the exit
+   sweep retries it).
+
+`status`, `logs`, `smoke` and `down` need `--kind` for an id `up` did not record, unless the id is a serverless
+`<endpoint>/<template>` (a pod `down` of an endpoint id would report success on its 404 and leave the endpoint).
+
+Worst case of one `up` at the defaults: three pods × 600 s of readiness, then a smoke of at most 120 s (`/ping` wait)
+plus 600 s (the job; on serverless its POST is one queue job of at most 600 s): about 42 GPU-minutes, about $1.75 at
+the $2.50/hr cap.
 
 ## Files
 

@@ -8,11 +8,11 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use fastvideo_deploy::guard::DetachedBackstop;
+use fastvideo_deploy::guard::{Backstop, DetachedBackstop};
 use fastvideo_deploy::provider::{InstanceId, ProviderKind};
 
 const BIN: &str = env!("CARGO_BIN_EXE_fv-deploy");
@@ -105,6 +105,31 @@ fn fake_env(c: &mut Command, base: &str) {
         .env("RUNPOD_GRAPHQL", format!("{base}/graphql"));
 }
 
+fn backstop_with_fake_env(base: &str, tag: &str) -> DetachedBackstop {
+    let dir = std::env::temp_dir().join(format!("fv-deploy-armed-{tag}-{}", std::process::id()));
+    let mut b = DetachedBackstop::new(PathBuf::from(BIN), None, dir);
+    b.ready_timeout = Duration::from_secs(20);
+    b.env_remove = [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    b.env = vec![
+        ("NO_PROXY".into(), "127.0.0.1".into()),
+        ("no_proxy".into(), "127.0.0.1".into()),
+        ("RUNPOD_API_KEY".into(), KEY.into()),
+        ("RUNPOD_API_BASE".into(), format!("{base}/v1")),
+        ("RUNPOD_GRAPHQL".into(), format!("{base}/graphql")),
+    ];
+    b
+}
+
 fn now() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -115,26 +140,25 @@ fn now() -> f64 {
 #[test]
 fn detached_backstop_deletes_the_pod_on_its_own() {
     let (base, seen) = fake_runpod(20.0);
-    let b = DetachedBackstop {
-        exe: PathBuf::from(BIN),
-        log: None,
-    };
-    let mut c = b.command(
-        ProviderKind::RunpodPod,
-        &InstanceId::new("podbs1"),
-        now() + 2.0,
-    );
-    fake_env(&mut c, &base);
-    // Started and forgotten: nothing here waits on it or keeps it alive.
-    let child = c
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    let pid = child
-        .map(|ch| ch.id())
-        .unwrap_or_else(|e| panic!("spawn: {e}"));
+    let mut b = backstop_with_fake_env(&base, "bs1");
+    // The handshake: arm returns once the child wrote its armed file.
+    let pid = b
+        .arm(
+            ProviderKind::RunpodPod,
+            &InstanceId::new("podbs1"),
+            now() + 3.0,
+        )
+        .unwrap_or_else(|e| panic!("arm: {e}"));
     assert!(pid > 0);
+    // A child that cannot arm (no key) makes arm fail, not succeed.
+    b.env_remove.push("RUNPOD_API_KEY".into());
+    b.env.retain(|(k, _)| k != "RUNPOD_API_KEY");
+    let e = b.arm(
+        ProviderKind::RunpodPod,
+        &InstanceId::new("podbs2"),
+        now() + 3.0,
+    );
+    assert!(e.is_err(), "{e:?}");
     let t0 = Instant::now();
     let deleted = loop {
         let hit = seen
@@ -240,4 +264,46 @@ fn plan_refuses_the_us_volume() {
     let out = c.output().unwrap_or_else(|e| panic!("run: {e}"));
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("US weights volume deleted"));
+}
+
+#[test]
+fn down_needs_a_kind_for_a_bare_id_and_infers_serverless_from_a_slash() {
+    let (base, seen) = fake_runpod(20.0);
+    let state = std::env::temp_dir().join(format!("fv-deploy-down-{}", std::process::id()));
+    let mut c = Command::new(BIN);
+    c.args(["down", "abc123"])
+        .arg("--state-dir")
+        .arg(&state)
+        .arg("--root")
+        .arg(repo_root());
+    fake_env(&mut c, &base);
+    let out = c.output().unwrap_or_else(|e| panic!("run: {e}"));
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("pass --kind"));
+    assert!(seen.lock().map(|g| g.is_empty()).unwrap_or(false));
+    let mut c = Command::new(BIN);
+    c.args(["down", "ep9/tpl9"])
+        .arg("--state-dir")
+        .arg(&state)
+        .arg("--root")
+        .arg(repo_root());
+    fake_env(&mut c, &base);
+    let out = c.output().unwrap_or_else(|e| panic!("run: {e}"));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let reqs = seen.lock().map(|g| g.clone()).unwrap_or_default();
+    assert!(
+        reqs.iter()
+            .any(|r| r.starts_with("DELETE /v1/endpoints/ep9 ")),
+        "{reqs:?}"
+    );
+    assert!(
+        reqs.iter()
+            .any(|r| r.starts_with("DELETE /v1/templates/tpl9 ")),
+        "{reqs:?}"
+    );
+    assert!(!reqs.iter().any(|r| r.contains("/pods/")), "{reqs:?}");
 }

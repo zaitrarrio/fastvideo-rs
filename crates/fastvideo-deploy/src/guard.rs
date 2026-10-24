@@ -24,6 +24,12 @@ pub const READY_TIMEOUT_S: u64 = 600;
 pub const READY_CYCLES: u32 = 3;
 /// The scripts' wall-clock cap (`FV_POD_CAP_S`, `FV_ENDPOINT_CAP_S`).
 pub const CAP_S: u64 = 1800;
+/// The longest wall-clock cap without `--force-guards` (4 h).
+pub const MAX_CAP_S: u64 = 4 * 3600;
+/// How long `arm` waits for the backstop process to say it is armed.
+pub const ARM_TIMEOUT: Duration = Duration::from_secs(15);
+/// The line the backstop writes to its armed file once it can delete.
+pub const ARMED: &str = "armed";
 /// The default price cap for one GPU ($/hr). Runpod's quote is checked
 /// before every create; the RTX PRO 6000 Secure quote is below it (the
 /// number itself is a guard choice, not a price fact).
@@ -44,6 +50,7 @@ pub fn default_guards() -> Guards {
         cap_s: CAP_S,
         ready_timeout_s: READY_TIMEOUT_S,
         ready_cycles: READY_CYCLES,
+        force: false,
     }
 }
 
@@ -62,6 +69,19 @@ pub enum GuardError {
     OverCap { gpu: String, usd: f64, cap: f64 },
     #[error("{id} is billed ${usd:.3}/hr, over the cap ${cap:.3}/hr")]
     BilledOverCap { id: String, usd: f64, cap: f64 },
+    #[error(
+        "{id}: the provider reported no (or no readable) billed price; refused as over the cap"
+    )]
+    BilledUnknown { id: String },
+    #[error("balance ${balance:.2} would drop to ${projected:.2} (< the floor ${floor:.2}) over the {cap_s} s cap at ${usd_per_hr:.3}/hr plus the account's current ${spend_per_hr:.3}/hr")]
+    BalanceWouldDropBelowFloor {
+        balance: f64,
+        projected: f64,
+        floor: f64,
+        usd_per_hr: f64,
+        spend_per_hr: f64,
+        cap_s: u64,
+    },
     #[error(
         "the launch's {0} contains the API key: refused (secrets are references, never values)"
     )]
@@ -131,6 +151,62 @@ pub fn check_guards(g: &Guards) -> Result<(), GuardError> {
     if g.ready_timeout_s == 0 || g.ready_cycles == 0 {
         return bad("the readiness timeout and cycles must be positive");
     }
+    // The owner's rules are upper bounds too (plan §1); `--force-guards`
+    // lifts them (never the $8 floor).
+    if !g.force {
+        if g.cap_s > MAX_CAP_S {
+            return bad("the wall-clock cap is at most 4 h (14400 s) without --force-guards");
+        }
+        if g.ready_cycles > READY_CYCLES {
+            return bad("at most 3 readiness cycles (the owner's rule) without --force-guards");
+        }
+        if g.ready_timeout_s > READY_TIMEOUT_S {
+            return bad(
+                "the readiness timeout is at most 600 s (the owner's rule) without --force-guards",
+            );
+        }
+    }
+    Ok(())
+}
+
+/// A serverless endpoint's price cap is checked on the GPU's pod quote for one
+/// worker (docs/adr/0018-fv-deploy.md §5.3: no serverless quote is read), so
+/// more than one worker is refused.
+pub fn check_serverless(l: &Launch) -> Result<(), GuardError> {
+    if let Some(s) = &l.serverless {
+        if s.workers_max > 1 {
+            return Err(GuardError::Invalid(format!(
+                "workers_max {}: the price cap covers one worker (ADR-0018 §5.3)",
+                s.workers_max
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The floor over the whole cap (CLAUDE.md: stop before the balance *would*
+/// drop below $8): `balance − (usd_per_hr + current spend) × cap_s / 3600 ≥ floor`.
+pub fn check_projection(
+    a: &Account,
+    usd_per_hr: f64,
+    cap_s: u64,
+    floor: f64,
+) -> Result<(), GuardError> {
+    let spend = a
+        .spend_per_hr_usd
+        .filter(|x| x.is_finite() && *x > 0.0)
+        .unwrap_or(0.0);
+    let projected = a.balance_usd - (usd_per_hr + spend) * cap_s as f64 / 3600.0;
+    if projected < floor {
+        return Err(GuardError::BalanceWouldDropBelowFloor {
+            balance: a.balance_usd,
+            projected,
+            floor,
+            usd_per_hr,
+            spend_per_hr: spend,
+            cap_s,
+        });
+    }
     Ok(())
 }
 
@@ -175,8 +251,8 @@ pub fn check_quote(o: &Offer, cap: f64) -> Result<f64, GuardError> {
     }
 }
 
-/// The price cap on what the created instance is billed (only when it
-/// differs from the quote).
+/// The price cap on what the created instance is billed (a provider that
+/// bills at create): over the cap, or no readable price, fails.
 pub fn check_billed(i: &Instance, cap: f64) -> Result<(), GuardError> {
     match i.usd_per_hr {
         Some(p) if p > cap => Err(GuardError::BilledOverCap {
@@ -184,7 +260,10 @@ pub fn check_billed(i: &Instance, cap: f64) -> Result<(), GuardError> {
             usd: p,
             cap,
         }),
-        _ => Ok(()),
+        Some(_) => Ok(()),
+        None => Err(GuardError::BilledUnknown {
+            id: i.id.to_string(),
+        }),
     }
 }
 
@@ -198,7 +277,12 @@ pub trait Backstop {
 }
 
 /// `fv-deploy backstop` arguments.
-pub fn backstop_args(kind: ProviderKind, id: &InstanceId, deadline: f64) -> Vec<String> {
+pub fn backstop_args(
+    kind: ProviderKind,
+    id: &InstanceId,
+    deadline: f64,
+    armed: &std::path::Path,
+) -> Vec<String> {
     vec![
         "backstop".into(),
         "--kind".into(),
@@ -207,25 +291,63 @@ pub fn backstop_args(kind: ProviderKind, id: &InstanceId, deadline: f64) -> Vec<
         id.to_string(),
         "--deadline".into(),
         format!("{:.0}", deadline.ceil()),
+        "--armed-file".into(),
+        armed.display().to_string(),
     ]
 }
 
 /// The detached backstop (docs/adr/0018-fv-deploy.md §5.4): this binary
-/// again, as `fv-deploy backstop --kind K --id ID --deadline T`, in a process
-/// group of its own (a Ctrl-C to the terminal's foreground group does not
-/// reach it), stdin closed, output to a log file; it ignores SIGHUP (as
-/// `nohup` did) and inherits the environment, so the API key is never on a
-/// command line. It is what `runpod-pod.sh` / `runpod-http.sh` do with
-/// `nohup bash -c 'sleep $CAP; curl -X DELETE …' &`, plus an early exit once
-/// the instance is gone.
+/// again, as `fv-deploy backstop --kind K --id ID --deadline T --armed-file F`,
+/// in a process group of its own (a Ctrl-C to the terminal's foreground group
+/// does not reach it), stdin closed, output to a log file; it ignores SIGHUP
+/// (as `nohup` did) and inherits the environment, so the API key is never on
+/// a command line. It is what `runpod-pod.sh` / `runpod-http.sh` do with
+/// `nohup bash -c 'sleep $CAP; curl -X DELETE …' &`, plus a handshake (the
+/// child writes [`ARMED`] to `F` once its client is built and its signal
+/// handlers are in place; `arm` fails unless that happens within
+/// `ready_timeout`) and an early exit once the instance is gone.
 #[derive(Clone, Debug)]
 pub struct DetachedBackstop {
     pub exe: PathBuf,
     /// Appended to; `None`: `/dev/null`.
     pub log: Option<PathBuf>,
+    /// Where the armed files go (a private directory: the state dir).
+    pub armed_dir: PathBuf,
+    pub ready_timeout: Duration,
+    /// Set on the child (tests point it at a fake API).
+    pub env: Vec<(String, String)>,
+    /// Removed from the child's environment.
+    pub env_remove: Vec<String>,
 }
 
 impl DetachedBackstop {
+    pub fn new(exe: PathBuf, log: Option<PathBuf>, armed_dir: PathBuf) -> Self {
+        Self {
+            exe,
+            log,
+            armed_dir,
+            ready_timeout: ARM_TIMEOUT,
+            env: Vec::new(),
+            env_remove: Vec::new(),
+        }
+    }
+
+    pub fn armed_file(&self, id: &InstanceId) -> PathBuf {
+        let safe: String = id
+            .as_str()
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        self.armed_dir
+            .join(format!("armed-{safe}-{}", std::process::id()))
+    }
+
     pub fn command(
         &self,
         kind: ProviderKind,
@@ -234,7 +356,13 @@ impl DetachedBackstop {
     ) -> std::process::Command {
         use std::os::unix::process::CommandExt as _;
         let mut c = std::process::Command::new(&self.exe);
-        c.args(backstop_args(kind, id, deadline));
+        c.args(backstop_args(kind, id, deadline, &self.armed_file(id)));
+        for k in &self.env_remove {
+            c.env_remove(k);
+        }
+        for (k, v) in &self.env {
+            c.env(k, v);
+        }
         c.process_group(0);
         c
     }
@@ -255,15 +383,46 @@ impl Backstop for DetachedBackstop {
                 None => Stdio::null(),
             })
         };
-        let child = self
+        std::fs::create_dir_all(&self.armed_dir)
+            .map_err(|e| GuardError::Backstop(format!("{}: {e}", self.armed_dir.display())))?;
+        let armed = self.armed_file(id);
+        let _ = std::fs::remove_file(&armed);
+        let mut child = self
             .command(kind, id, deadline)
             .stdin(Stdio::null())
             .stdout(out()?)
             .stderr(out()?)
             .spawn()
             .map_err(|e| GuardError::Backstop(format!("{}: {e}", self.exe.display())))?;
-        Ok(child.id())
+        let t0 = std::time::Instant::now();
+        loop {
+            if std::fs::read_to_string(&armed).is_ok_and(|t| t.trim() == ARMED) {
+                let _ = std::fs::remove_file(&armed);
+                return Ok(child.id());
+            }
+            if let Ok(Some(st)) = child.try_wait() {
+                return Err(GuardError::Backstop(format!(
+                    "the backstop for {id} exited at start ({st}); see its log"
+                )));
+            }
+            if t0.elapsed() >= self.ready_timeout {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(GuardError::Backstop(format!(
+                    "the backstop for {id} did not report armed within {} s",
+                    self.ready_timeout.as_secs()
+                )));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
+}
+
+/// The backstop's side of the handshake.
+pub fn report_armed(path: &std::path::Path) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, format!("{ARMED}\n"))?;
+    std::fs::rename(&tmp, path)
 }
 
 /// What a backstop run did.
@@ -280,8 +439,9 @@ pub const BACKSTOP_CHECK: Duration = Duration::from_secs(60);
 /// Delete attempts at the deadline (fv-control's watchdog: 3, 5 s apart).
 pub const BACKSTOP_ATTEMPTS: u32 = 3;
 
-/// The backstop process's body: wait for the deadline (checking every
-/// minute whether the instance is already gone), then delete it.
+/// The backstop process's body: wait for the deadline, then delete it. It
+/// stands down early only after two "gone" readings (a 404) at least a minute
+/// apart, never on a single answer.
 pub fn run_backstop(
     p: &dyn Provider,
     id: &InstanceId,
@@ -294,6 +454,7 @@ pub fn run_backstop(
         p.kind(),
         (deadline - clock.now()).max(0.0)
     ));
+    let mut gone_since: Option<f64> = None;
     loop {
         let left = deadline - clock.now();
         if left <= 0.0 {
@@ -303,9 +464,16 @@ pub fn run_backstop(
             left.min(BACKSTOP_CHECK.as_secs_f64()),
         ));
         if deadline - clock.now() > 0.0 {
-            if let Ok(InstanceState::Terminated) = p.status(id) {
-                log.line(&format!("[backstop] {id} is gone; nothing to do"));
-                return Ok(BackstopOutcome::AlreadyGone);
+            match p.status(id) {
+                Ok(InstanceState::Terminated) => match gone_since {
+                    Some(t) if clock.now() - t >= BACKSTOP_CHECK.as_secs_f64() => {
+                        log.line(&format!("[backstop] {id} is gone; nothing to do"));
+                        return Ok(BackstopOutcome::AlreadyGone);
+                    }
+                    Some(_) => {}
+                    None => gone_since = Some(clock.now()),
+                },
+                _ => gone_since = None,
             }
         }
     }

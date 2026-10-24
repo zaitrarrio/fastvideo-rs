@@ -192,8 +192,13 @@ pub struct Guards {
     /// deleted and replaced (the owner's rule: 600 s).
     pub ready_timeout_s: u64,
     /// At most this many instances are created for one `up` (the owner's
-    /// rule: 3), then it gives up.
+    /// rule: 3), then it gives up. Every create counts, a GPU-type fallback
+    /// after a billed-over-cap delete included.
     pub ready_cycles: u32,
+    /// Lifts the upper bounds (cap ≤ 4 h, ≤ 3 cycles, ≤ 600 s readiness;
+    /// `--force-guards`). The $8 floor is never lifted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force: bool,
 }
 
 /// A Runpod serverless queue endpoint's scaling fields.

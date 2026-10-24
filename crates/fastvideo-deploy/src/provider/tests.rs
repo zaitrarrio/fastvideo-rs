@@ -76,6 +76,7 @@ impl Backstop for RecBackstop {
 }
 
 struct FakePod {
+    name: String,
     desired: String,
     /// `/ping` answers in order; the last one repeats.
     pings: Vec<u16>,
@@ -89,13 +90,21 @@ pub(crate) struct FakeRunpod {
     pub prices: RefCell<BTreeMap<String, f64>>,
     /// GPU types with no stock.
     pub no_stock: RefCell<Vec<String>>,
-    /// The `costPerHr` the create answers (default: the quote).
-    pub billed: Cell<Option<f64>>,
+    /// The `costPerHr` the create answers (default: the quote as a number).
+    pub billed: RefCell<Option<Value>>,
+    /// `currentSpendPerHr` of the account.
+    pub spend: Cell<f64>,
+    /// The create is carried out but its answer is lost (a transport error).
+    pub lose_create_answer: Cell<bool>,
+    /// Every DELETE of a pod answers 500.
+    pub delete_fails: Cell<bool>,
     /// The `/ping` sequence of each new pod.
     pub pings: RefCell<Vec<u16>>,
     pods: RefCell<BTreeMap<String, FakePod>>,
-    endpoints: RefCell<BTreeMap<String, String>>,
-    templates: RefCell<Vec<String>>,
+    /// endpoint id → (template id, name).
+    endpoints: RefCell<BTreeMap<String, (String, String)>>,
+    /// (template id, name).
+    templates: RefCell<Vec<(String, String)>>,
     jobs: RefCell<BTreeMap<String, Value>>,
     job_polls: Cell<u32>,
     seq: Cell<u32>,
@@ -110,7 +119,10 @@ impl FakeRunpod {
             balance: Cell::new(20.0),
             prices: RefCell::new(prices),
             no_stock: RefCell::new(Vec::new()),
-            billed: Cell::new(None),
+            billed: RefCell::new(None),
+            spend: Cell::new(0.5),
+            lose_create_answer: Cell::new(false),
+            delete_fails: Cell::new(false),
             pings: RefCell::new(vec![502, 204, 200]),
             pods: RefCell::new(BTreeMap::new()),
             endpoints: RefCell::new(BTreeMap::new()),
@@ -205,7 +217,7 @@ impl FakeRunpod {
     fn graphql(&self, q: &str) -> Response {
         if q.contains("clientBalance") {
             return Self::ok(
-                json!({"data": {"myself": {"clientBalance": self.balance.get(), "currentSpendPerHr": 0.5}}}),
+                json!({"data": {"myself": {"clientBalance": self.balance.get(), "currentSpendPerHr": self.spend.get()}}}),
             );
         }
         if q.contains("gpuTypes") {
@@ -237,12 +249,14 @@ impl FakeRunpod {
                 let id = self.next("pod");
                 let price = self
                     .billed
-                    .get()
-                    .or_else(|| self.prices.borrow().get(&gpu).copied())
-                    .unwrap_or(9.0);
+                    .borrow()
+                    .clone()
+                    .or_else(|| self.prices.borrow().get(&gpu).map(|p| json!(p)))
+                    .unwrap_or(json!(9.0));
                 self.pods.borrow_mut().insert(
                     id.clone(),
                     FakePod {
+                        name: body["name"].as_str().unwrap_or("").to_owned(),
                         desired: "RUNNING".into(),
                         pings: self.pings.borrow().clone(),
                         pinged: 0,
@@ -251,6 +265,30 @@ impl FakeRunpod {
                 Self::ok(
                     json!({"id": id, "costPerHr": price, "machine": {"dataCenterId": "EU-RO-1"}}),
                 )
+            }
+            ("GET", "/pods") => Self::ok(Value::Array(
+                self.pods
+                    .borrow()
+                    .iter()
+                    .map(|(id, p)| json!({"id": id, "name": p.name, "desiredStatus": p.desired}))
+                    .collect(),
+            )),
+            ("GET", "/endpoints") => Self::ok(Value::Array(
+                self.endpoints
+                    .borrow()
+                    .iter()
+                    .map(|(id, (t, n))| json!({"id": id, "name": n, "templateId": t}))
+                    .collect(),
+            )),
+            ("GET", "/templates") => Self::ok(Value::Array(
+                self.templates
+                    .borrow()
+                    .iter()
+                    .map(|(id, n)| json!({"id": id, "name": n}))
+                    .collect(),
+            )),
+            ("DELETE", p) if p.starts_with("/pods/") && self.delete_fails.get() => {
+                Self::status(500, json!({"error": "internal"}))
             }
             ("GET", p) if p.starts_with("/pods/") => match self.pods.borrow().get(&p[6..]) {
                 Some(pod) => Self::ok(json!({"id": &p[6..], "desiredStatus": pod.desired})),
@@ -264,14 +302,16 @@ impl FakeRunpod {
             }
             ("POST", "/templates") => {
                 let id = self.next("tpl");
-                self.templates.borrow_mut().push(id.clone());
+                self.templates
+                    .borrow_mut()
+                    .push((id.clone(), body["name"].as_str().unwrap_or("").to_owned()));
                 Self::ok(json!({"id": id, "name": body["name"]}))
             }
             ("DELETE", p) if p.starts_with("/templates/") => {
                 let id = &p["/templates/".len()..];
                 let mut t = self.templates.borrow_mut();
                 let n = t.len();
-                t.retain(|x| x != id);
+                t.retain(|(x, _)| x != id);
                 if t.len() < n {
                     Self::ok(Value::Null)
                 } else {
@@ -282,14 +322,17 @@ impl FakeRunpod {
                 let id = self.next("ep");
                 self.endpoints.borrow_mut().insert(
                     id.clone(),
-                    body["templateId"].as_str().unwrap_or("").to_owned(),
+                    (
+                        body["templateId"].as_str().unwrap_or("").to_owned(),
+                        body["name"].as_str().unwrap_or("").to_owned(),
+                    ),
                 );
                 Self::ok(json!({"id": id, "templateId": body["templateId"]}))
             }
             ("PATCH", p) if p.starts_with("/endpoints/") => Self::ok(json!({"id": &p[11..]})),
             ("GET", p) if p.starts_with("/endpoints/") => {
                 match self.endpoints.borrow().get(&p[11..]) {
-                    Some(t) => Self::ok(json!({"id": &p[11..], "templateId": t})),
+                    Some((t, _)) => Self::ok(json!({"id": &p[11..], "templateId": t})),
                     None => Self::status(404, json!({"error": "no endpoint"})),
                 }
             }
@@ -369,7 +412,17 @@ impl Http for FakeRunpod {
             .any(|(k, v)| k == "authorization" && v == &format!("Bearer {KEY}"));
         if let Some(p) = u.strip_prefix("https://rest.test/v1") {
             assert!(authed, "REST call without the key: {u}");
-            return Ok(self.rest(req, p));
+            let r = self.rest(req, p);
+            if self.lose_create_answer.get()
+                && req.method == Method::Post
+                && (p == "/pods" || p == "/endpoints")
+            {
+                return Err(SysError::Http {
+                    url: u.clone(),
+                    why: "connection reset after the request was sent".into(),
+                });
+            }
+            return Ok(r);
         }
         if u.starts_with("https://gql.test/graphql") {
             assert!(authed);
@@ -583,11 +636,11 @@ fn serverless_create_and_destroy_like_the_script() {
     assert_eq!(ep["templateId"], "tpl1");
     assert_eq!(sls.status(&inst.id).ok(), Some(InstanceState::Running));
     // Ready once the cold info job completes; one native call through the queue.
-    let mut r = sls.reach(&inst, None).expect("reach");
+    let mut r = sls.reach(&inst, &ReachOptions::default()).expect("reach");
     assert_eq!(r.ping(), Probe::Loading);
     assert_eq!(r.ping(), Probe::Ready);
     let (s, caps) = r
-        .call(Method::Get, "/fv/v1/capabilities", None)
+        .call(Method::Get, "/fv/v1/capabilities", None, &never)
         .expect("call");
     assert_eq!((s, caps["models"][0]["id"].as_str()), (200, Some("fasth3")));
     drop(r);
@@ -779,7 +832,7 @@ fn over_cap_or_unquoted_gpu_is_never_created() {
     assert!(rp.calls(Method::Post, "/pods").is_empty());
     // Billed over the cap (the quote passed): deleted at once.
     rp.prices.borrow_mut().insert(GPU.into(), 1.5);
-    rp.billed.set(Some(3.0));
+    *rp.billed.borrow_mut() = Some(json!(3.0));
     let e = deployer(&pod, &clock, &log, &bs).up(&l, &up_opts());
     assert!(matches!(e, Err(DeployError::NoCapacity(_))), "{e:?}");
     assert_eq!(rp.calls(Method::Post, "/pods").len(), 1);
@@ -837,7 +890,12 @@ fn backstop_exits_early_when_the_pod_is_gone() {
     let log = Lines::default();
     let out = guard::run_backstop(&pod, &inst.id, 1800.0, &clock, &log).expect("backstop");
     assert_eq!(out, guard::BackstopOutcome::AlreadyGone);
-    assert!(clock.now() <= 61.0);
+    // Two "gone" readings a minute apart, never one.
+    assert!(
+        clock.now() >= 120.0 && clock.now() <= 121.0,
+        "{}",
+        clock.now()
+    );
     assert!(rp.calls(Method::Delete, "/pods/").len() == 1);
 }
 
@@ -895,4 +953,294 @@ fn launch_with_the_key_in_its_env_is_refused() {
         "{e:?}"
     );
     assert!(rp.log.borrow().is_empty());
+}
+
+// ------------------------------------------------------------------ review fixes
+
+/// A backstop that refuses to arm.
+struct NoArm;
+
+impl Backstop for NoArm {
+    fn arm(&self, _k: ProviderKind, _id: &InstanceId, _d: f64) -> Result<u32, GuardError> {
+        Err(GuardError::Backstop("the child exited at start".into()))
+    }
+}
+
+fn ledger_at(tag: &str) -> crate::lifecycle::Ledger {
+    let dir = std::env::temp_dir().join(format!("fv-deploy-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    crate::lifecycle::Ledger {
+        path: dir.join("ledger.tsv"),
+    }
+}
+
+#[test]
+fn a_lost_create_answer_stops_and_sweeps_by_name() {
+    let rp = FakeRunpod::new();
+    rp.lose_create_answer.set(true);
+    let clock = FakeClock::at(0.0);
+    let pod = Pod::new(api(&rp, &clock));
+    let (log, bs) = (Lines::default(), RecBackstop::default());
+    let mut l = eu_pod_launch();
+    l.gpu.types = vec![GPU.into(), "NVIDIA H200".into()];
+    rp.prices.borrow_mut().insert("NVIDIA H200".into(), 2.0);
+    let e = deployer(&pod, &clock, &log, &bs).up(&l, &up_opts());
+    match e {
+        Err(DeployError::CreateUncertain { swept, .. }) => assert_eq!(swept, "pod1"),
+        other => panic!("{other:?}"),
+    }
+    // No fallback create on the next GPU type; the pod the lost answer
+    // created is gone.
+    assert_eq!(rp.calls(Method::Post, "/pods").len(), 1);
+    assert!(rp.live_pods().is_empty());
+}
+
+#[test]
+fn a_lost_endpoint_answer_sweeps_the_endpoint_and_its_template() {
+    let rp = FakeRunpod::new();
+    rp.lose_create_answer.set(true);
+    let clock = FakeClock::at(0.0);
+    let sls = Serverless::new(api(&rp, &clock));
+    let mut l = script_endpoint(&ScriptEndpoint {
+        name: "fv-deploy-q-lost",
+        image: IMAGE,
+        gpus: &[GPU],
+        config: "/etc/fv/runpod.toml",
+        volume: "bz0ofkfx45",
+        data_center: "EU-RO-1",
+        guards: guards(),
+    });
+    l.placement.region = Some("eu".into());
+    let (log, bs) = (Lines::default(), RecBackstop::default());
+    let mut o = up_opts();
+    o.run_key = None;
+    let e = deployer(&sls, &clock, &log, &bs).up(&l, &o);
+    assert!(
+        matches!(e, Err(DeployError::CreateUncertain { .. })),
+        "{e:?}"
+    );
+    assert_eq!((rp.live_endpoints(), rp.live_templates()), (0, 0));
+}
+
+#[test]
+fn the_exit_sweep_removes_a_stray_instance_of_the_run() {
+    let rp = FakeRunpod::new();
+    let clock = FakeClock::at(0.0);
+    let pod = Pod::new(api(&rp, &clock));
+    // A pod of this run's name that `up` never heard of (a lost answer of
+    // an earlier attempt in the same run).
+    let stray = pod.create(&eu_pod_launch()).expect("create");
+    let (log, bs) = (Lines::default(), RecBackstop::default());
+    let r = deployer(&pod, &clock, &log, &bs)
+        .up(&eu_pod_launch(), &up_opts())
+        .expect("up");
+    assert!(r.ok);
+    assert!(rp.live_pods().is_empty(), "{:?}", rp.live_pods());
+    assert!(log
+        .0
+        .borrow()
+        .iter()
+        .any(|l| l.contains(&format!("swept {}", stray.id))));
+    // With --keep, the kept pod survives the sweep.
+    let mut o = up_opts();
+    o.keep = true;
+    let r = deployer(&pod, &clock, &log, &bs)
+        .up(&eu_pod_launch(), &o)
+        .expect("up");
+    let kept = r.instance.map(|i| i.id.to_string()).unwrap_or_default();
+    assert_eq!(rp.live_pods(), [kept]);
+}
+
+#[test]
+fn billed_price_as_a_string_passes_and_unreadable_fails() {
+    let rp = FakeRunpod::new();
+    *rp.billed.borrow_mut() = Some(json!("0.74"));
+    let clock = FakeClock::at(0.0);
+    let pod = Pod::new(api(&rp, &clock));
+    let inst = pod.create(&eu_pod_launch()).expect("create");
+    assert_eq!(inst.usd_per_hr, Some(0.74));
+    pod.destroy(&inst.id).expect("destroy");
+    for bad in [json!("n/a"), json!(null), json!(-1)] {
+        *rp.billed.borrow_mut() = Some(bad.clone());
+        let (log, bs) = (Lines::default(), RecBackstop::default());
+        let e = deployer(&pod, &clock, &log, &bs).up(&eu_pod_launch(), &up_opts());
+        assert!(
+            matches!(e, Err(DeployError::NoCapacity(ref m)) if m.contains("no (or no readable) billed price")),
+            "{bad}: {e:?}"
+        );
+        // Backstopped before the check, deleted after it.
+        assert_eq!(bs.0.borrow().len(), 1, "{bad}");
+        assert!(rp.live_pods().is_empty(), "{bad}");
+    }
+}
+
+#[test]
+fn over_cap_pod_whose_delete_fails_stops_with_its_backstop_armed() {
+    let rp = FakeRunpod::new();
+    *rp.billed.borrow_mut() = Some(json!(3.0));
+    rp.delete_fails.set(true);
+    let clock = FakeClock::at(0.0);
+    let pod = Pod::new(api(&rp, &clock));
+    let (log, bs) = (Lines::default(), RecBackstop::default());
+    let ledger = ledger_at("overcap");
+    let mut d = deployer(&pod, &clock, &log, &bs);
+    d.ledger = Some(&ledger);
+    let e = d.up(&eu_pod_launch(), &up_opts());
+    assert!(
+        matches!(e, Err(DeployError::DeleteFailed { ref id, .. }) if id.as_str() == "pod1"),
+        "{e:?}"
+    );
+    assert_eq!(bs.0.borrow().len(), 1);
+    // Three delete attempts, 5 s apart (plus the exit sweep's own attempt).
+    assert!(rp.calls(Method::Delete, "/pods/pod1").len() >= 3);
+    let t = std::fs::read_to_string(&ledger.path).unwrap_or_default();
+    assert!(
+        t.contains("delete-failed pod1") && !t.contains("deleted pod1"),
+        "{t}"
+    );
+}
+
+#[test]
+fn not_ready_pod_whose_delete_fails_is_not_replaced() {
+    let rp = FakeRunpod::new();
+    *rp.pings.borrow_mut() = vec![502];
+    rp.delete_fails.set(true);
+    let clock = FakeClock::at(0.0);
+    let pod = Pod::new(api(&rp, &clock));
+    let (log, bs) = (Lines::default(), RecBackstop::default());
+    let e = deployer(&pod, &clock, &log, &bs).up(&eu_pod_launch(), &up_opts());
+    assert!(matches!(e, Err(DeployError::DeleteFailed { .. })), "{e:?}");
+    assert_eq!(rp.calls(Method::Post, "/pods").len(), 1);
+}
+
+#[test]
+fn no_backstop_deletes_with_retries_and_says_so() {
+    let rp = FakeRunpod::new();
+    let clock = FakeClock::at(0.0);
+    let pod = Pod::new(api(&rp, &clock));
+    let log = Lines::default();
+    let d = Deployer {
+        provider: &pod,
+        clock: &clock,
+        log: &log,
+        backstop: &NoArm,
+        ledger: None,
+        interrupted: &never,
+        leaks: &leaks,
+        poll: Duration::from_secs(5),
+    };
+    match d.up(&eu_pod_launch(), &up_opts()) {
+        Err(DeployError::NoBackstop { id, deleted, .. }) => {
+            assert_eq!((id.as_str(), deleted), ("pod1", true))
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(rp.live_pods().is_empty());
+    assert!(!log
+        .0
+        .borrow()
+        .iter()
+        .any(|l| l.contains("the backstop retries")));
+    // When the delete fails too, the error says so (and names the id).
+    rp.delete_fails.set(true);
+    let e = d.up(&eu_pod_launch(), &up_opts());
+    match &e {
+        Err(DeployError::NoBackstop {
+            id, deleted: false, ..
+        }) => {
+            assert_eq!(id.as_str(), "pod2");
+            assert!(e
+                .as_ref()
+                .err()
+                .map(|x| x.to_string())
+                .unwrap_or_default()
+                .contains("delete it by hand"));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(rp.calls(Method::Delete, "/pods/pod2").len() >= 3);
+}
+
+#[test]
+fn the_floor_holds_over_the_whole_cap() {
+    let rp = FakeRunpod::new();
+    // 9 − (1.84 + 0.5) × 1800 / 3600 = 7.83 < 8: refused before any create.
+    rp.balance.set(9.0);
+    let clock = FakeClock::at(0.0);
+    let pod = Pod::new(api(&rp, &clock));
+    let (log, bs) = (Lines::default(), RecBackstop::default());
+    let e = deployer(&pod, &clock, &log, &bs).up(&eu_pod_launch(), &up_opts());
+    assert!(
+        matches!(
+            e,
+            Err(DeployError::Guard(
+                GuardError::BalanceWouldDropBelowFloor { .. }
+            ))
+        ),
+        "{e:?}"
+    );
+    assert!(rp.calls(Method::Post, "/pods").is_empty());
+    // With no other spend it fits: 9 − 1.84 × 0.5 = 8.08.
+    rp.spend.set(0.0);
+    assert!(deployer(&pod, &clock, &log, &bs)
+        .up(&eu_pod_launch(), &up_opts())
+        .is_ok());
+}
+
+#[test]
+fn serverless_with_more_than_one_worker_is_refused() {
+    let mut l = script_endpoint(&ScriptEndpoint {
+        name: "fv-deploy-q2",
+        image: IMAGE,
+        gpus: &[GPU],
+        config: "/etc/fv/runpod.toml",
+        volume: "bz0ofkfx45",
+        data_center: "EU-RO-1",
+        guards: guards(),
+    });
+    if let Some(s) = l.serverless.as_mut() {
+        s.workers_max = 2;
+    }
+    assert!(matches!(
+        guard::check_serverless(&l),
+        Err(GuardError::Invalid(_))
+    ));
+}
+
+#[test]
+fn prices_parse_from_numbers_and_strings() {
+    assert_eq!(parse_usd(Some(&json!(0.74))), Some(0.74));
+    assert_eq!(parse_usd(Some(&json!("0.74"))), Some(0.74));
+    assert_eq!(parse_usd(Some(&json!(" 1.5 "))), Some(1.5));
+    assert_eq!(parse_usd(Some(&json!("n/a"))), None);
+    assert_eq!(parse_usd(Some(&json!(-2))), None);
+    assert_eq!(parse_usd(Some(&json!(null))), None);
+    assert_eq!(parse_usd(None), None);
+}
+
+#[test]
+fn create_refusals_are_told_from_lost_answers() {
+    let api4 = ProviderError::Api {
+        what: "x".into(),
+        status: 422,
+        body: String::new(),
+    };
+    let api5 = ProviderError::Api {
+        what: "x".into(),
+        status: 502,
+        body: String::new(),
+    };
+    assert!(api4.is_definite_refusal());
+    assert!(ProviderError::NoCapacity("x".into()).is_definite_refusal());
+    assert!(!api5.is_definite_refusal());
+    assert!(!ProviderError::Transport {
+        what: "x".into(),
+        why: "reset".into()
+    }
+    .is_definite_refusal());
+    assert!(!ProviderError::Decode {
+        what: "x".into(),
+        why: "no id".into()
+    }
+    .is_definite_refusal());
 }
