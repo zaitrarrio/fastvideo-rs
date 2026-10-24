@@ -404,6 +404,13 @@ impl LogSink for StderrLog {
     }
 }
 
+/// A signal to a process through the shell's `kill` builtin (`sh -c 'kill -s
+/// SIG "$1"'`): the serve images have no procps, so no `kill` / `pkill`
+/// binary can be assumed.
+pub fn kill_cmd(sig: &str, pid: u32) -> Cmd {
+    Cmd::new("sh").args(["-c", "kill -s \"$0\" \"$1\"", sig, &pid.to_string()])
+}
+
 /// `HH:MM:SS` (UTC) of a unix time.
 pub fn utc_hms(unix: f64) -> String {
     let s = if unix.is_finite() && unix > 0.0 {

@@ -1141,3 +1141,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: none
 - Verification: `bash scripts/serve/coverage.sh --tests` on the build pod
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-boot-review
+- Trigger: the independent review of #159: serve-image.yml on main replaces serve-build / cpu-build with a tools release that has no fv-boot; the streaming guard and the watchdog used `kill` / `pkill` binaries the images lack; a refused config hid fv-serve's own line from the boot diagnosis; the rollback switch did not reach the image entrypoint; GCP / CloudRift workers and role endpoints were detected as cluster workers
+- Options: (image build) compile fv-boot inside serve-build / cpu-build and fall back to compiling them whole with an old release; a fv-boot-only `boot-build` stage that a release carrying fv-boot replaces through prebuilt.sh; an optional COPY (an image without its entrypoint)
+- Decision: a `boot-build` stage (`FROM builder`, fv-boot only) that every serve stage copies from, replaced by `boot-build=<serve set>` when the tools release has `out/fv-boot` (release-artifacts-pod.sh, tools-deps.sh and the tools-release.sh gates ship and check it from now on); signals by pid through `sh -c 'kill -s SIG "$1"'`; fv-serve's stderr logged verbatim; `FV_BOOT_LEGACY=1` honoured by fv-boot with fv-entry.sh's steps only; kind precedence provider > serverless (`RUNPOD_ENDPOINT_ID` / `FV_CONTROL_ENDPOINT`) > cluster worker (`FV_SERVE_ROLE=worker` and `RUNPOD_POD_ID`) > image; a controller worker without a config fails; pod reports end on any HTTP answer; `FV_BACKSTOP_API_KEY` only in the watchdog's env; recommended rollout: fv-control deployed with `FV_BOOT_LEGACY=1`, lifted per kind after a per-kind check
+- Reason: serve-image.yml stays green with today's newest release (only one small crate compiles) and with every later one (nothing compiles); the other fixes restore the shell boots' behaviour where fv-boot had drifted
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0014-fv-boot.md (§2, §3.2, §4, §5, §6, §8)
+- Verification: `cargo test --locked -p fastvideo-deploy --features boot` (a real process stopped through the shell builtin, the legacy path, the kinds, the reports), `scripts/ci/test_tools_release.sh` (the `prebuilt.sh contexts` cases), `prebuilt.sh fetch` against tools-v0.1.37, `fv-boot-protocol.test.ts` (a refused config is a crash loop)

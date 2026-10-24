@@ -91,11 +91,20 @@ image entrypoint knew none of r2, hub, tunnel or reports, so fv-control had to r
 8. the sidecar **wait** (its exports go to fv-serve), the serverless `serve` report, then **exec** fv-serve (same pid,
    the environment exactly as computed, `FV_TUNNEL_TOKEN` removed).
 
-The kind of host (`Kind`) comes from the environment fv-control already sends, never from a new switch:
-`FV_PROVIDER` ≠ `runpod` → provider pod; `FV_SERVE_ROLE=worker` → cluster worker; `RUNPOD_ENDPOINT_ID` or
-`FV_CONTROL_ENDPOINT` → serverless worker; else the image on its own (GCP, CloudRift, Vast, scripts). It selects only
-what the legacy boots did differently: the `/fv-worker.toml` handling of controller workers, `FV_WORKER_ID`, the
-tunnel and the fail sleep of provider pods, the Runpod watchdog.
+The kind of host (`Kind`) comes from the environment fv-control already sends, never from a new switch. Precedence,
+first match wins:
+
+1. `FV_PROVIDER` set and not `runpod` → **provider pod** (GMI / Brev);
+2. `RUNPOD_ENDPOINT_ID` (Runpod's own) or `FV_CONTROL_ENDPOINT` (fv-control's) → **serverless worker**, even with
+   `FV_SERVE_ROLE=worker` (`scripts/serve/runpod-endpoint.sh` lets a queue endpoint carry the worker role env);
+3. `FV_SERVE_ROLE=worker` **and** `RUNPOD_POD_ID` → **cluster worker** (fv-control's cluster and standalone pods);
+4. else **the image on its own**: GCP and CloudRift workers (they set `FV_SERVE_ROLE=worker` but are not Runpod pods),
+   Vast, the scripts.
+
+It selects only what the legacy boots did differently: the `/fv-worker.toml` handling of controller workers (cluster,
+provider), `FV_WORKER_ID`, the tunnel and the fail sleep of provider pods, the Runpod watchdog. GCP / CloudRift
+workers therefore boot as the old `fv-entry.sh` did for them (their `--config` argument, no gateway edit, no Runpod
+watchdog), and a role endpoint as any serverless worker.
 
 `fv-boot --version`, `--help` and `--print-config` exec fv-serve directly (CI's image smoke, `docker run <image>
 --version`). `fv-boot version` prints fv-boot's own version. Arguments are fv-serve's, as the entrypoint passed them.
@@ -108,8 +117,8 @@ KILL), as the shell subshell did.
 
 ### 3. The environment contract
 
-Every variable fv-boot reads, with its source today. No new name was invented except `FV_BOOT_LEGACY` (§6), which
-only fv-control's shell preamble reads.
+Every variable fv-boot reads, with its source today. No new name was invented except `FV_BOOT_LEGACY` (§6), the
+rollback switch fv-control's shell preamble and fv-boot itself read.
 
 #### 3.1 Identity, kind, paths
 
@@ -139,7 +148,8 @@ only fv-control's shell preamble reads.
 | `FV_CONFIG` | baked (3rd) | images (`ENV`), fv-control (serverless `spec.config`) |
 
 A controller worker's (cluster or provider) inline or `FV_WORKER_CONFIG` copy gets `register = false` under
-`[gateway]` (idempotent).
+`[gateway]` (idempotent). A controller worker with neither (and no `--config` argument) fails, as the shell boots did
+(`set -u` on the unset `FV_WORKER_CONFIG`); it never falls back to the baked `FV_CONFIG` without the edit.
 
 #### 3.3 Weights
 
@@ -174,7 +184,8 @@ Two protocols exist and fv-control parses both; fv-boot speaks the one its envir
 
 - **pod** (`FV_ENDPOINT_REPORT_URL`, `Bearer $FV_ENDPOINT_REPORT_TOKEN`; providers.ts `endpointReport`): body
   `{"pod":"$FV_POD_ID","phase":…,"url":…,"detail":…}`, phases `weights` (`checking`, `downloading <tree>`), `tunnel`
-  (with the URL), `failed`, `upsampler`; retried 5 × 20 s.
+  (with the URL), `failed`, `upsampler`; up to 5 × 20 s, retried only when no HTTP answer came (`curl -sS` in the
+  shell: a 401 / 404 / 429 is an answer and ends the report).
 - **serverless** (`FV_SLS_REPORT_URL`, `Bearer $FV_WEIGHTS_TOKEN`; serverless/ingest.ts `slsReport`): the same body
   with `pod = "<RUNPOD_POD_ID>@<boot start, unix s>"`, `url = ""`, phases `boot`, `cache` (`hit` / `miss: <trees>`),
   `weights` (hub's `weights ready: hub X GB fetched in Ys (Z MB/s)`), `step` (`<name> <secs>s (<note>)`: `tools`,
@@ -206,7 +217,14 @@ warning. A `registry` source or an unknown `FV_WEIGHTS_SOURCE` fails loudly inst
 Behaviour changes against the shell boots, all on the side of failing earlier or saying more: the driver check and
 the `--print-config` preflight now run on every path (the image entrypoint included); the volume marker names
 `FV_WEIGHTS`; the serverless driver failure carries the boot's own id; pod reports are retried on Runpod too (Runpod
-pods get no report URL from fv-control, so nothing changes there today).
+pods get no report URL from fv-control, so nothing changes there today). A refused config's `fv-serve: …` lines are
+copied to the log verbatim before the `FAILED:` line, so fv-control's boot diagnosis (podlogs.ts `CONTAINER_FATAL`)
+sees a restarting container as a crash loop. The streaming guard and the watchdog stop fv-serve by pid through the
+shell's `kill` builtin (`sh -c 'kill -s SIG "$1"'`): the images have no procps, so the shell boots' `kill` / `pkill`
+binaries cannot be assumed. `FV_BACKSTOP_API_KEY` is removed from fv-serve's environment and every child's but the
+watchdog's, as `FV_TUNNEL_TOKEN` is. A GMI / Brev pod on r2 cleans `.*.partial-*` / `.stale-*` leftovers and reports
+`weights checking` after the fetch, as PROVIDER_BOOT's weights loop did; an unset `FV_R2_SKIP_TREES` that resolves to
+nothing stays unset.
 
 ### 6. Staging (deploy compatibility) and what is deleted when
 
@@ -220,8 +238,19 @@ caveat). Every combination keeps working:
 | new | old | each shell boot starts with `PREFER_FV_BOOT_SH` (`control/src/fv-boot.ts`): `fv-boot` is not there, so the rest of the script runs as before |
 | new | new | the preamble execs fv-boot, which reads the env fv-control sent |
 
-`FV_BOOT_LEGACY=1` (any env layer of a cluster, pool, pod or endpoint) makes the preamble skip fv-boot on a new image:
-the rollback switch without a new fv-control or image. Vast's onstart prefers fv-boot the same way.
+`FV_BOOT_LEGACY=1` (any env layer of a cluster, pool, pod or endpoint, or a template's / VM's env) is the rollback
+switch, on every path:
+
+- fv-control's shell boots (cluster, standalone, edge, GMI / Brev, serverless with a config or r2 / hub): the preamble
+  skips fv-boot and the shell body runs, exactly as on an old image;
+- the image entrypoint (serverless without a boot override, v2 load balancers' `args`, GCP / CloudRift `docker run`,
+  Vast's onstart, the scripts): fv-boot itself sees it and runs only what `fv-entry.sh` did (the serverless volume
+  link, the `FV_WEIGHTS` default, the upsampler sidecar), then execs fv-serve with its arguments (no driver check,
+  config step, weights plan, tunnel, watchdog or report).
+
+It needs no new fv-control or image, but it does need the env to reach the container: a new pod, worker or VM (an
+fv-control env change rolls a pool's pods; a serverless template update rolls its workers). A running container keeps
+the boot it started with. Vast's onstart prefers fv-boot the same way.
 
 Deleted in this change: `deploy/runpod/fv-entry.sh` (the images' `ENTRYPOINT` is fv-boot; nothing named the path),
 the Vast onstart's direct `fv-serve` start (one fallback line remains). Already gone: `scripts/gpu/serverless-worker.sh`
@@ -242,9 +271,33 @@ through `start` / `wait` and the shell boots still call it; a Rust port needs it
 `brevHostScript`, `scripts/gcp/startup.sh` and CloudRift's `vm_boot` (they install Docker, mount disks, front TLS and
 start the image, whose entrypoint is now fv-boot: the provider layer of C3, not a container boot).
 
-Deploy order: (1) merge; CI builds every serve image with fv-boot as the entrypoint (`ci-images.sh` checks it); (2)
-the GPU gate (§8); (3) promote the images (`release.sh promote`), safe with the deployed fv-control; (4) deploy
-fv-control at any time before or after (3); (5) C2b once (3) has reached every channel and running pod.
+**The image build.** fv-boot has its own Dockerfile stage, `boot-build` (`FROM builder`, `cargo build --release -p
+fastvideo-deploy --features boot --bin fv-boot`), which every serve stage copies from. Tools releases built after this
+change carry `out/fv-boot` in their `serve-cuda` and `serve-cpu` sets (`release-artifacts-pod.sh build_serve`,
+`tools-deps.sh`, the `tools-release.sh` gates), and `scripts/ci/prebuilt.sh` then passes `boot-build=<that set>` as a
+named context, so nothing compiles. With a release from before fv-boot (the newest today, `tools-v0.1.37`) the
+`serve-build` / `cpu-build` contexts stay prebuilt and only `boot-build` compiles on the runner (one crate and its
+dependencies), with a notice in the job. `serve-image.yml` therefore builds with both kinds of release.
+
+**Deploy order (recommended).** The GPU gate covered one kind (the image on its own, `:ltx`, volume weights). So:
+
+1. merge; CI builds every serve image with fv-boot as the entrypoint (`ci-images.sh` and the debug smoke assert it);
+2. publish a tools release from the merged commit (it carries fv-boot; optional, it only saves the runner compile);
+3. deploy fv-control with `FV_BOOT_LEGACY=1` in the account env layer (every boot it sends keeps the shell path);
+4. promote the images (`release.sh promote`): pods and endpoints fv-control starts still run the shell boots; image
+   entrypoints run fv-boot (GPU-checked kind);
+5. lift `FV_BOOT_LEGACY` per pool / endpoint after a check of that kind (the open gates below);
+6. C2b once every pool runs fv-boot and no channel, pinned spec or running pod can start a pre-fv-boot image.
+
+Open per-kind gates (each one pod or worker, its boot log, timeline and reports checked against the shell boot's):
+
+- a cluster worker (inline config, `[gateway]` edit, `FV_WORKER_ID`, volume weights);
+- a serverless worker with weights_source r2 and streaming (cache miss, `fetch-guard`, `load_overlap`, the
+  serverless reports in the endpoint's boots view);
+- an edge front (its `FV_DISPATCH_ENDPOINT`, the watchdog's balance check and self-delete at a short deadline);
+- a GMI pod and a Brev pod (hub or r2 weights, the tunnel and its report, the Brev host watcher's `tunnel` grep, the
+  GMI watchdog);
+- the upsampler sidecar on any of these (`FV_UPSAMPLER_LOCAL=1`).
 
 ### 7. Not in this change
 
@@ -261,9 +314,11 @@ provider per kind and source, the config forms, driver verdicts, report bodies, 
 the real `fv-boot fetch-guard` binary); control: `fv-boot-protocol.test.ts` and the existing boot tests (the shell
 boots still run in bash in CI).
 
-GPU (coordinator): one pod boot on the EU volume (`bz0ofkfx45`, EU-RO-1) with a release fv-boot downloaded onto a pod
-of a current serve image: `scripts/gpu/fv-boot-smoke-pod.sh` (weights plan, config, exec fv-serve, `/ping` ready,
-`/healthz`, one tiny job, `summary.json`).
+GPU (coordinator, done 2026-10-24): one pod boot on the EU volume (`bz0ofkfx45`, EU-RO-1) with the PR's release
+fv-boot on the promoted `fastvideo-rs-serve:ltx` image (fv-serve 0.1.37), RTX PRO 6000:
+`scripts/gpu/fv-boot-smoke-pod.sh`: driver 595.91 ok, volume (9 trees), `--print-config` ok, exec fv-serve, ready,
+one native job (480p 16:9) succeeded in 108 s. Evidence: `artifacts/runpod/c2-boot/`. Only the image kind with volume
+weights; the other kinds are the open gates of §6.
 
 ## Consequences
 

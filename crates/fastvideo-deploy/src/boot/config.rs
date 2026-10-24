@@ -6,7 +6,8 @@
 //! 2. **named**: an explicit `--config <path>` argument (the image entrypoint's
 //!    arguments: GCP, CloudRift, Vast, a v2 load balancer's `args`), or, for a
 //!    controller worker (cluster / GMI / Brev), `FV_WORKER_CONFIG`: a file in
-//!    the image, copied to `/fv-worker.toml`;
+//!    the image, copied to `/fv-worker.toml` (a controller worker with neither
+//!    an inline config nor this fails, as the shell boots did);
 //! 3. **baked**: the image's `FV_CONFIG`.
 //!
 //! A controller worker's config gets `register = false` in its `[gateway]`
@@ -156,7 +157,14 @@ pub fn materialize(
             serve_args: args.to_vec(),
         });
     }
-    if let (true, Some(p)) = (kind.controller_worker(), env.get("FV_WORKER_CONFIG")) {
+    if kind.controller_worker() {
+        // fv-control always sends one of the two; the shell boots died on the
+        // unset variable (`set -u`) rather than serve a config without the edit.
+        let p = env.get("FV_WORKER_CONFIG").ok_or_else(|| {
+            BootError::Config(
+                "no worker config: neither FV_WORKER_TOML_B64 nor FV_WORKER_CONFIG is set".into(),
+            )
+        })?;
         let src = Path::new(p);
         let text = std::fs::read_to_string(src)
             .map_err(|_| BootError::Config(format!("no worker config {p} in the image")))?;

@@ -178,6 +178,21 @@ pub fn tree_present(root: &Path, dest: &str, rev: &str) -> bool {
             .unwrap_or(false)
 }
 
+/// Leftovers of an interrupted fetch in a root on the pod's own disk
+/// (`.*.partial-*`, `.stale-*`; the shell's WEIGHTS_LOOP_SH). Never on an
+/// add-only cache volume.
+pub fn clean_leftovers(root: &Path) {
+    if let Ok(rd) = std::fs::read_dir(root) {
+        for e in rd.filter_map(Result::ok) {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if n.starts_with(".stale-") || (n.starts_with('.') && n.contains(".partial-")) {
+                let _ =
+                    std::fs::remove_dir_all(e.path()).or_else(|_| std::fs::remove_file(e.path()));
+            }
+        }
+    }
+}
+
 /// Whether `python3` is on `PATH`.
 pub fn has_python(c: &Ctx<'_>) -> bool {
     super::sys::which("python3", c.get("PATH")).is_some()

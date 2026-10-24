@@ -73,6 +73,14 @@ describe("fv-boot's protocol (the shared fixture)", () => {
       if (m.volume) expect(got?.volume).toBe(m.volume);
       // brev-host.ts: grep -q '\[fv-boot\] tunnel '
       if (m.brev_tunnel) expect(/\[fv-boot\] tunnel /.test(m.line)).toBe(true);
+      if (m.fv_serve_fatal) {
+        // fv-boot logs fv-serve's refusal verbatim; Runpod restarts the container, so a bad config shows twice: a crash loop.
+        const boot = ["[fv-boot] start (cluster worker; fv-boot 0.1.1)", "[fv-boot] 10:00:00 +0.0s driver 595.91.07 ok", m.line, "[fv-boot] 10:00:00 +0.1s FAILED: fv-serve config: x"];
+        expect(diagnose({ ageMs: 60_000, container: boot, system: [] }).phase).toBe("error");
+        const d = diagnose({ ageMs: 120_000, container: [...boot, ...boot], system: [] });
+        expect(d.phase).toBe("crashloop");
+        expect(d.fatal).toBe(true);
+      }
       if (m.driver_too_old) {
         const d = diagnose({ ageMs: 60_000, container: [m.line], system: [] });
         expect(d.phase).toBe("driver_too_old");

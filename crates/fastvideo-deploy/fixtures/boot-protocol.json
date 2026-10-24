@@ -19,7 +19,8 @@
     { "line": "[fv-boot] volume: /workspace/weights (12 trees)", "milestone": "volume", "volume": "/workspace/weights (12 trees)" },
     { "line": "[fv-boot] volume: /workspace/weights missing", "milestone": "volume", "volume": "/workspace/weights missing" },
     { "line": "[fv-boot] tunnel https://brave-fox-12.trycloudflare.com", "brev_tunnel": true },
-    { "line": "[fv-boot] 10:00:00 +0.4s FAILED: driver_too_old: host driver 550.54.15 < 580 (the image needs CUDA 13)", "driver_too_old": true }
+    { "line": "[fv-boot] 10:00:00 +0.4s FAILED: driver_too_old: host driver 550.54.15 < 580 (the image needs CUDA 13)", "driver_too_old": true },
+    { "line": "fv-serve: config: TOML parse error at line 3, column 1: unknown field `bogus`", "fv_serve_fatal": true }
   ],
   "pod_reports": [
     { "pod": "gmi:fv-pod-a-1", "phase": "weights", "url": "", "detail": "checking", "body": "{\"pod\":\"gmi:fv-pod-a-1\",\"phase\":\"weights\",\"url\":\"\",\"detail\":\"checking\"}" },

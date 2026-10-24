@@ -227,7 +227,11 @@ impl WeightsSource for R2 {
             std::os::unix::fs::symlink(&root, &weights).map_err(|e| SysError::io(&weights, e))?;
         }
         let skip = skip_trees(c, add_only);
-        c.export("FV_R2_SKIP_TREES", skip.clone());
+        // Exported only when it says something (or was given): an unset
+        // FV_R2_SKIP_TREES stays unset for the fetcher and fv-serve.
+        if !skip.is_empty() || c.env.is_set("FV_R2_SKIP_TREES") {
+            c.export("FV_R2_SKIP_TREES", skip.clone());
+        }
 
         let revs = plan::tree_revs(c.get("FV_R2_TREE_REVS"));
         let fetch = if revs.is_empty() {
@@ -388,6 +392,13 @@ impl WeightsSource for R2 {
             }
         }
 
+        // A GMI / Brev pod (pod protocol): PROVIDER_BOOT ran its weights loop
+        // after the fetch: leftovers cleaned, `weights checking` reported, then
+        // the aux rows.
+        if c.rep.protocol() == Some(super::super::report::Protocol::Pod) && !add_only {
+            super::clean_leftovers(&root);
+            c.pod_report("weights", "", "checking");
+        }
         let rows = aux_rows(c)?;
         if !rows.is_empty() {
             let t = c.now();
@@ -447,12 +458,17 @@ pub fn guard(c: &Ctx<'_>, boot_pid: u32, state: &Path, program: &str, args: &[St
         ));
         c.rep
             .failed(c.deps.http, c.deps.clock, &format!("r2 weights: {why}"));
-        let pid = boot_pid.to_string();
-        let _ = c.deps.spawner.output(&c.cmd("kill").args(["-TERM", &pid]));
+        let _ = c
+            .deps
+            .spawner
+            .output(&super::super::sys::kill_cmd("TERM", boot_pid));
         c.deps.clock.sleep(Duration::from_secs_f64(
             c.env.secs("FV_STREAM_KILL_GRACE_S", 20.0),
         ));
-        let _ = c.deps.spawner.output(&c.cmd("kill").args(["-KILL", &pid]));
+        let _ = c
+            .deps
+            .spawner
+            .output(&super::super::sys::kill_cmd("KILL", boot_pid));
     }
     let code = rc.unwrap_or(1);
     let _ = std::fs::write(state.join(FETCH_RC), code.to_string());

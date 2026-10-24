@@ -422,6 +422,7 @@ fn the_three_config_forms_and_explicit_arguments() {
     let p = go(
         base(&[
             ("FV_SERVE_ROLE", s("worker")),
+            ("RUNPOD_POD_ID", s("p1")),
             ("FV_WORKER_CONFIG", baked.display().to_string()),
             ("FV_CONFIG", s("/etc/fv/other.toml")),
         ]),
@@ -435,10 +436,24 @@ fn the_three_config_forms_and_explicit_arguments() {
 
     //    ... and the entrypoint's own `--config` (GCP, CloudRift, Vast, a v2 load balancer's args): as given
     let p = go(
-        base(&[("FV_SERVE_ROLE", s("worker")), ("FV_CONFIG", s("/x.toml"))]),
+        base(&[
+            ("FV_SERVE_ROLE", s("worker")),
+            ("RUNPOD_POD_ID", s("p1")),
+            ("FV_CONFIG", s("/x.toml")),
+        ]),
         &["--config", "/etc/fv-gcp/serve.toml"],
     );
     assert_eq!(p.args, vec![s("--config"), s("/etc/fv-gcp/serve.toml")]);
+
+    //    ... a GCP / CloudRift worker (the role, no Runpod pod) is the image on its own: its baked config, no edit
+    let p = go(
+        base(&[
+            ("FV_SERVE_ROLE", s("worker")),
+            ("FV_CONFIG", baked.display().to_string()),
+        ]),
+        &[],
+    );
+    assert_eq!(p.args, vec![s("--config"), baked.display().to_string()]);
 
     // 3. baked FV_CONFIG
     let p = go(base(&[("FV_CONFIG", baked.display().to_string())]), &[]);
@@ -512,6 +527,7 @@ fn config_failures_stop_the_boot_before_the_weights() {
         &[
             ("FV_SKIP_DRIVER_CHECK", s("1")),
             ("FV_SERVE_ROLE", s("worker")),
+            ("RUNPOD_POD_ID", s("p1")),
             ("FV_WORKER_CONFIG", s("/nope.toml")),
         ],
         &[],
@@ -843,6 +859,7 @@ fn r2_failures_and_a_fetcher_from_control() {
             && *k != "FV_CONTROL_ENDPOINT"
     });
     env.push(("FV_SERVE_ROLE", s("worker")));
+    env.push(("FV_WORKER_TOML_B64", b64("[server]\n")));
     env.push(("FV_ENDPOINT_REPORT_TOKEN", s("ingest_tok")));
     let sp = FakeSpawner::new(|c| {
         if c.program == "python3" {
@@ -1024,11 +1041,9 @@ fn the_guard_times_the_fetch_or_stops_fv_serve() {
     };
     let c = Ctx::with_t0(env, deps, img.paths.clone(), 1, 1_761_300_000.0);
     assert_eq!(weights::r2::guard(&c, 999, &st, "python3", &args), 1);
-    let kills: Vec<Vec<String>> = bad.ran("kill").into_iter().map(|c| c.args).collect();
-    assert_eq!(
-        kills,
-        vec![vec![s("-TERM"), s("999")], vec![s("-KILL"), s("999")]]
-    );
+    let kills: Vec<Vec<String>> = bad.ran("kill -s").into_iter().map(|c| c.args).collect();
+    let k = |sig: &str| vec![s("-c"), s("kill -s \"$0\" \"$1\""), s(sig), s("999")];
+    assert_eq!(kills, vec![k("TERM"), k("KILL")]);
     assert_eq!(clock.slept(), vec![Duration::from_secs(20)]);
     assert_eq!(
         http.bodies(SLS_URL)[0]["detail"],
@@ -1173,7 +1188,8 @@ fn gmi_pod_hub_weights_tunnel_watchdog() {
     );
     let w = sp.ran("watchdog");
     assert_eq!(w.len(), 1);
-    assert_eq!(w[0].args, vec![s("watchdog")]);
+    assert_eq!(w[0].args, vec![s("watchdog"), s("--serve-pid"), s("777")]);
+    assert!(w[0].env.contains(&(s("FV_BACKSTOP_API_KEY"), s("gmi-key"))));
     // The tools were set up once: apt, venv, pip.
     assert_eq!(sp.ran("huggingface_hub").len(), 1);
 
@@ -1193,6 +1209,7 @@ fn gmi_pod_hub_weights_tunnel_watchdog() {
             ("FV_SKIP_DRIVER_CHECK", s("1")),
             ("FV_PROVIDER", s("brev")),
             ("FV_POD_ID", s("brev:fv-pod-b-1")),
+            ("FV_WORKER_TOML_B64", b64("[server]\n")),
             ("FV_WEIGHTS", img.weights().display().to_string()),
             ("FV_STATE_DIR", img.paths.state.display().to_string()),
             ("FV_WEIGHTS_SOURCE", s("hub")),
@@ -1241,6 +1258,7 @@ fn named_tunnel_registers_and_its_token_never_reaches_fv_serve() {
             ("FV_SKIP_DRIVER_CHECK", s("1")),
             ("FV_PROVIDER", s("brev")),
             ("FV_POD_ID", s("brev:fv-pod-b-1")),
+            ("FV_WORKER_TOML_B64", b64("[server]\n")),
             ("FV_STATE_DIR", img.paths.state.display().to_string()),
             ("FV_TUNNEL_TOKEN", s("eyJhIjoisecret")),
             ("FV_TUNNEL_URL", s("https://fv-pod-b-1.tunnels.example")),
@@ -1270,7 +1288,11 @@ fn named_tunnel_registers_and_its_token_never_reaches_fv_serve() {
     std::fs::remove_file(&img.paths.cloudflared).unwrap();
     let r = boot(
         &img,
-        &[("FV_SKIP_DRIVER_CHECK", s("1")), ("FV_PROVIDER", s("brev"))],
+        &[
+            ("FV_SKIP_DRIVER_CHECK", s("1")),
+            ("FV_PROVIDER", s("brev")),
+            ("FV_WORKER_TOML_B64", b64("[server]\n")),
+        ],
         &[],
         &FakeSpawner::new(default_handler),
         &http,
@@ -1281,7 +1303,11 @@ fn named_tunnel_registers_and_its_token_never_reaches_fv_serve() {
     let clock = FakeClock::new();
     let _ = boot(
         &img,
-        &[("FV_SKIP_DRIVER_CHECK", s("1")), ("FV_PROVIDER", s("brev"))],
+        &[
+            ("FV_SKIP_DRIVER_CHECK", s("1")),
+            ("FV_PROVIDER", s("brev")),
+            ("FV_WORKER_TOML_B64", b64("[server]\n")),
+        ],
         &[],
         &FakeSpawner::new(default_handler),
         &FakeHttp::new(),
@@ -1319,6 +1345,14 @@ fn edge_front_on_runpod_and_its_watchdog() {
     );
     assert_eq!(sp.ran("watchdog").len(), 1);
     assert!(sp.ran("cloudflared").is_empty());
+    // The backstop key: the watchdog's alone; fv-serve and the other children never see it.
+    let w = &sp.ran("watchdog")[0];
+    assert!(w.env.contains(&(s("FV_BACKSTOP_API_KEY"), s("rp-key"))));
+    assert!(!plan.env.contains_key("FV_BACKSTOP_API_KEY"));
+    assert!(sp.ran("--print-config")[0]
+        .env_remove
+        .contains(&s("FV_BACKSTOP_API_KEY")));
+    assert_eq!(plan.env["FV_CLUSTER_DEADLINE"], "1761400000");
 }
 
 #[test]
@@ -1353,7 +1387,7 @@ fn watchdog_loops() {
         deadline: 1_761_400_000.0,
         min_balance: 8.0,
     };
-    watchdog::run(&c, &m, Some(3));
+    watchdog::run(&c, &m, Some(4321), Some(3));
     let sent = http.sent();
     let gq = sent
         .iter()
@@ -1385,7 +1419,7 @@ fn watchdog_loops() {
         deadline: 0.0,
         min_balance: 0.0,
     };
-    watchdog::run(&c, &m, Some(1));
+    watchdog::run(&c, &m, Some(4321), Some(1));
     assert_eq!(
         http.sent()
             .iter()
@@ -1422,7 +1456,7 @@ fn watchdog_loops() {
         name: "fv-pod-a-1".into(),
         deadline: 0.0,
     };
-    watchdog::run(&c, &m, Some(1));
+    watchdog::run(&c, &m, Some(4321), Some(1));
     let urls: Vec<String> = http
         .sent()
         .iter()
@@ -1435,7 +1469,17 @@ fn watchdog_loops() {
             s("Delete https://gmi/api/v1/containers/c-1")
         ]
     );
-    assert_eq!(sp.ran("pkill -f fv-serve").len(), 1);
+    // fv-serve (the boot's pid) through the shell's kill builtin: no procps in the images.
+    let kills: Vec<Vec<String>> = sp.ran("kill -s").into_iter().map(|c| c.args).collect();
+    assert_eq!(
+        kills,
+        vec![vec![
+            s("-c"),
+            s("kill -s \"$0\" \"$1\""),
+            s("TERM"),
+            s("4321")
+        ]]
+    );
 }
 
 #[test]
@@ -1615,6 +1659,265 @@ fn informational_flags_skip_the_boot() {
     assert!(!passthrough(&[]));
 }
 
+#[test]
+fn a_controller_worker_without_a_config_fails_like_the_shell() {
+    let img = Image::new("noconf");
+    let r = boot(
+        &img,
+        &[
+            ("FV_SKIP_DRIVER_CHECK", s("1")),
+            ("FV_SERVE_ROLE", s("worker")),
+            ("RUNPOD_POD_ID", s("p1")),
+            ("FV_CONFIG", s("/etc/fv/runpod.toml")),
+        ],
+        &[],
+        &FakeSpawner::new(default_handler),
+        &FakeHttp::new(),
+        &FakeClock::new(),
+    );
+    assert!(
+        matches!(&r.result, Err(BootError::Config(m)) if m.starts_with("no worker config: neither FV_WORKER_TOML_B64 nor FV_WORKER_CONFIG"))
+    );
+    let r = boot(
+        &img,
+        &[
+            ("FV_SKIP_DRIVER_CHECK", s("1")),
+            ("FV_PROVIDER", s("gmi")),
+            ("FV_CONFIG", s("/etc/fv/runpod.toml")),
+        ],
+        &[],
+        &FakeSpawner::new(default_handler),
+        &FakeHttp::new(),
+        &FakeClock::new(),
+    );
+    assert!(matches!(&r.result, Err(BootError::Config(_))));
+}
+
+#[test]
+fn a_refused_config_logs_fv_serves_own_lines() {
+    let img = Image::new("cfglines");
+    let line = fixture()["log_markers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["fv_serve_fatal"] == true)
+        .unwrap()["line"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let l2 = line.clone();
+    let sp = FakeSpawner::new(move |c| {
+        if c.args.iter().any(|a| a == "--print-config") {
+            return Did {
+                code: 2,
+                stderr: format!("{l2}\n"),
+                ..Did::default()
+            };
+        }
+        default_handler(c)
+    });
+    let r = boot(
+        &img,
+        &[
+            ("FV_SKIP_DRIVER_CHECK", s("1")),
+            ("FV_CONFIG", s("/etc/fv/x.toml")),
+        ],
+        &[],
+        &sp,
+        &FakeHttp::new(),
+        &FakeClock::new(),
+    );
+    assert!(r.result.is_err());
+    // Verbatim, at the start of a line: podlogs.ts CONTAINER_FATAL `^fv-serve: `.
+    assert!(r.log.lines().contains(&line), "{:?}", r.log.lines());
+}
+
+#[test]
+fn reports_stop_on_any_http_answer() {
+    let http = FakeHttp::new().answer(|_| Response {
+        status: 401,
+        body: Vec::new(),
+    });
+    let clock = FakeClock::new();
+    let rep = Reporter::from_env(
+        &BootEnv::from_pairs([
+            ("FV_ENDPOINT_REPORT_URL", "https://c/e"),
+            ("FV_POD_ID", "gmi:fv-a-1"),
+        ]),
+        1.0,
+    );
+    rep.failed(&http, &clock, "x");
+    assert_eq!(http.sent().len(), 1);
+    assert!(clock.slept().is_empty());
+    // No answer at all (a connection error): retried, 5 x with 5 s pauses.
+    struct Down(Mutex<usize>);
+    impl Http for Down {
+        fn send(&self, _r: &Request) -> Result<Response, SysError> {
+            *self.0.lock().unwrap() += 1;
+            Err(SysError::Http {
+                url: "u".into(),
+                why: "connection refused".into(),
+            })
+        }
+        fn download(&self, url: &str, _d: &Path, _t: Duration) -> Result<u64, SysError> {
+            Err(SysError::Status {
+                url: url.into(),
+                status: 404,
+            })
+        }
+    }
+    let down = Down(Mutex::new(0));
+    let clock = FakeClock::new();
+    rep.failed(&down, &clock, "x");
+    assert_eq!(*down.0.lock().unwrap(), 5);
+    assert_eq!(clock.slept().len(), 4);
+}
+
+#[test]
+fn fv_boot_legacy_runs_only_fv_entrys_steps() {
+    let img = Image::new("legacy");
+    std::fs::create_dir_all(&img.paths.runpod_volume_weights).unwrap();
+    let sp = FakeSpawner::new(default_handler);
+    let log = CaptureLog::default();
+    let clock = FakeClock::new();
+    let http = FakeHttp::new();
+    let deps = Deps {
+        spawner: &sp,
+        http: &http,
+        clock: &clock,
+        log: &log,
+    };
+    let env = BootEnv::from_pairs([
+        ("FV_BOOT_LEGACY", "1"),
+        ("FV_CONFIG", "/etc/fv/runpod.toml"),
+        ("FV_WEIGHTS_SOURCE", "registry"),
+    ]);
+    assert!(legacy_requested(&env));
+    assert!(!legacy_requested(&BootEnv::from_pairs([(
+        "FV_BOOT_LEGACY",
+        "0"
+    )])));
+    let mut c = Ctx::new(env, deps, img.paths.clone(), 1);
+    let plan = legacy(&mut c, &[s("--config"), s("/etc/fv/x.toml")]);
+    assert_eq!(plan.program, img.paths.serve_bin);
+    assert_eq!(plan.args, vec![s("--config"), s("/etc/fv/x.toml")]);
+    assert_eq!(
+        plan.env["FV_WEIGHTS"],
+        img.paths.runpod_volume_weights.display().to_string()
+    );
+    assert_eq!(
+        std::fs::read_link(&img.paths.workspace_weights).unwrap(),
+        img.paths.runpod_volume_weights
+    );
+    // Nothing else: no driver check, no config check, no weights plan (registry would fail), no report.
+    assert!(sp.calls().is_empty(), "{:?}", sp.calls());
+    assert!(http.sent().is_empty());
+}
+
+#[test]
+fn provider_r2_reports_checking_and_cleans_leftovers() {
+    let img = Image::new("provr2");
+    let sha = r2_fetcher(&img);
+    std::fs::create_dir_all(img.weights().join(".demo.partial-123")).unwrap();
+    std::fs::create_dir_all(img.weights().join(".stale-x-1")).unwrap();
+    let report = "https://control/ingest/v1/endpoint";
+    let sp = FakeSpawner::new(|c| {
+        if c.program == "python3" {
+            fake_fetch(c, false)
+        } else {
+            default_handler(c)
+        }
+    });
+    let http = FakeHttp::new();
+    let r = boot(
+        &img,
+        &[
+            ("FV_SKIP_DRIVER_CHECK", s("1")),
+            ("FV_PROVIDER", s("brev")),
+            ("FV_POD_ID", s("brev:fv-pod-b-1")),
+            ("FV_WORKER_TOML_B64", b64("[server]\n")),
+            ("FV_WEIGHTS", img.weights().display().to_string()),
+            ("FV_STATE_DIR", img.paths.state.display().to_string()),
+            ("FV_WEIGHTS_SOURCE", s("r2")),
+            ("FV_WEIGHTS_PLAN_URL", s(PLAN_URL)),
+            ("FV_R2_FETCH_SHA256", sha),
+            ("FV_ENDPOINT_REPORT_URL", s(report)),
+            ("FV_ENDPOINT_REPORT_TOKEN", s("ingest_tok")),
+            ("FV_TUNNEL_URL", s("")),
+        ],
+        &[],
+        &sp,
+        &http,
+        &FakeClock::new(),
+    );
+    // The tunnel fails here (no cloudflared download in this fake), after the weights.
+    assert!(
+        matches!(&r.result, Err(BootError::Tunnel(_))),
+        "{:?}",
+        r.result
+    );
+    let b = http.bodies(report);
+    assert_eq!(b[0]["phase"], "weights");
+    assert_eq!(b[0]["detail"], "checking");
+    assert!(!img.weights().join(".demo.partial-123").exists());
+    assert!(!img.weights().join(".stale-x-1").exists());
+    // FV_R2_SKIP_TREES was unset and nvidia-smi says nothing: it stays unset for the fetcher.
+    let f = &sp.ran("--plan-url")[0];
+    assert!(
+        !f.env.iter().any(|(k, _)| k == "FV_R2_SKIP_TREES"),
+        "{:?}",
+        f.env
+    );
+}
+
+#[test]
+fn signals_go_through_the_shell_builtin_to_a_real_process() {
+    // A real child, a real `sh -c 'kill -s TERM "$1"'` (RealSpawner): no kill / pkill binary needed.
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let o = sys::RealSpawner
+        .output(&sys::kill_cmd("TERM", pid))
+        .unwrap();
+    assert!(o.ok(), "{}", o.stderr_text());
+    let st = child.wait().unwrap();
+    assert!(!st.success());
+
+    // The guard stopping a "fv-serve" (a real process) after a failed streaming fetch.
+    let img = Image::new("realkill");
+    let st_dir = img.paths.state.clone();
+    std::fs::create_dir_all(&st_dir).unwrap();
+    std::fs::write(st_dir.join("r2-stream-ready"), b"").unwrap();
+    let mut serve = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let log = CaptureLog::default();
+    let clock = FakeClock::new();
+    let http = FakeHttp::new();
+    let sp = sys::RealSpawner;
+    let deps = Deps {
+        spawner: &sp,
+        http: &http,
+        clock: &clock,
+        log: &log,
+    };
+    let c = Ctx::with_t0(BootEnv::default(), deps, img.paths.clone(), 1, 1.0);
+    let code = weights::r2::guard(
+        &c,
+        serve.id(),
+        &st_dir,
+        "sh",
+        &[s("-c"), s("echo 'r2-fetch: FAILED: part 9'; exit 3")],
+    );
+    assert_eq!(code, 3);
+    let st = serve.wait().unwrap();
+    assert!(!st.success(), "fv-serve was stopped");
+    assert!(log.has("FAILED: r2 weights while fv-serve was loading: r2-fetch: FAILED: part 9: stopping fv-serve"));
+}
+
 // ------------------------------------------------------------------ the protocol fixture
 
 fn fixture() -> Value {
@@ -1703,6 +2006,9 @@ fn fixture_constants_and_markers_match_the_code() {
                 got.starts_with("[fv-boot] ") && got.ends_with(&format!("FAILED: {msg}")),
                 "{got}"
             );
+        } else if m["fv_serve_fatal"] == true {
+            // fv-serve's own line, logged verbatim by the config check (a_refused_config_logs_fv_serves_own_lines).
+            assert!(line.starts_with("fv-serve: "));
         } else {
             assert!(line.starts_with("[fv-boot] start ("));
         }

@@ -275,16 +275,7 @@ impl WeightsSource for Hub {
             c.sls_report("cache", &format!("miss: {}", miss.join(" ")));
         }
         let missed: Vec<String> = miss.iter().map(|s| (*s).to_owned()).collect();
-        // Leftovers of an interrupted fetch (the pod's own disk).
-        if let Ok(rd) = std::fs::read_dir(&root) {
-            for e in rd.filter_map(Result::ok) {
-                let n = e.file_name().to_string_lossy().into_owned();
-                if n.starts_with(".stale-") || (n.starts_with('.') && n.contains(".partial-")) {
-                    let _ = std::fs::remove_dir_all(e.path())
-                        .or_else(|_| std::fs::remove_file(e.path()));
-                }
-            }
-        }
+        super::clean_leftovers(&root);
         c.pod_report("weights", "", "checking");
         let t0 = c.now();
         let mut f = Fetcher {

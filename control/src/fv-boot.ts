@@ -6,7 +6,8 @@
 // images. So every shell boot fv-control still sends (cluster/payloads.ts WORKER_BOOT, EDGE_WORKER_BOOT,
 // WATCHDOG_WORKER_BOOT; providers.ts PROVIDER_BOOT; serverless/payloads.ts SLS_BOOT, SLS_R2_BOOT, SLS_HUB_BOOT) starts
 // with PREFER_FV_BOOT_SH: an image that carries fv-boot runs it, an older image runs the rest of the script as before.
-// FV_BOOT_LEGACY=1 (any env layer) forces the shell boot on a new image too (the rollback switch). Once every image a
+// FV_BOOT_LEGACY=1 (any env layer) forces the shell boot on a new image too (the rollback switch; fv-boot itself honours
+// it where the image entrypoint runs, with fv-entry.sh's steps only). Once every image a
 // pool, endpoint or channel can run carries fv-boot, the shell bodies are deleted and fv-control sends env only.
 
 /** fv-boot's path in the serve images (crates/fastvideo-deploy/fixtures/boot-protocol.json `fv_boot_bin`). */

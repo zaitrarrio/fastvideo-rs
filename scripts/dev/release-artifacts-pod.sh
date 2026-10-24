@@ -12,8 +12,8 @@
 #   gpucheck-vast  vast-pytorch.Dockerfile's fv-gpucheck: no nvcc on the
 #                  builder there, so no AOT/oxide cubins (binary)          fv-gpucheck, .build-id
 #   hf-fm          cargo install hf-fetch-model --features cli (hf-fm)     out/hf-fm, out/hf-fetch-model
-#   serve-cuda     fv-serve --features $FV_SERVE_FEATURES (serve-build)    out/fv-serve, out/fv-serve.features
-#   serve-cpu      fv-serve --features $FV_CPU_FEATURES (cpu-build)     out/fv-serve, out/fv-serve.features
+#   serve-cuda     fv-serve --features $FV_SERVE_FEATURES (serve-build)    out/fv-serve, out/fv-serve.features, out/fv-boot
+#   serve-cpu      fv-serve --features $FV_CPU_FEATURES (cpu-build)     out/fv-serve, out/fv-serve.features, out/fv-boot
 #   serve-fake     serve-compat.yml's debug fv-serve --features fake,full  fv-serve
 #   gpucheck-tests gpucheck-t0.yml's `cargo test -p fastvideo-gpucheck
 #                  -p fastvideo-cudarc --lib --bins`, --no-run            tests.tsv, bin/*
@@ -197,6 +197,11 @@ build_serve() { # <set> <features>
   mkdir -p "$STAGE/$set/out"
   cp "$T/release/fv-serve" "$STAGE/$set/out/fv-serve"
   echo "$feats" >"$STAGE/$set/out/fv-serve.features"
+  # fv-boot (docs/adr/0014-fv-boot.md), the serve images' entrypoint: no CUDA, the same binary in both serve sets;
+  # prebuilt.sh hands it to the image's boot-build stage.
+  log "$set: cargo build --release -p fastvideo-deploy --features boot --bin fv-boot"
+  cargo build --release -p fastvideo-deploy --features boot --bin fv-boot >&2
+  cp "$T/release/fv-boot" "$STAGE/$set/out/fv-boot"
 }
 
 # serve-compat.yml's build job (debug profile, its env and --config flags).

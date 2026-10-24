@@ -88,11 +88,16 @@ impl BootEnv {
         if let Some(p) = self.get("FV_PROVIDER").filter(|p| *p != "runpod") {
             return Kind::Provider(Provider::parse(p));
         }
-        if self.get("FV_SERVE_ROLE") == Some("worker") {
-            return Kind::ClusterWorker;
-        }
+        // Runpod's own serverless marker (or fv-control's endpoint name) first: a
+        // serverless worker given the worker role (scripts/serve/runpod-endpoint.sh's
+        // role env) is still a serverless worker.
         if self.get("RUNPOD_ENDPOINT_ID").is_some() || self.get("FV_CONTROL_ENDPOINT").is_some() {
             return Kind::Serverless;
+        }
+        // A cluster worker is a Runpod *pod* with the worker role; GCP and CloudRift
+        // workers (also FV_SERVE_ROLE=worker, no RUNPOD_POD_ID) are the image on its own.
+        if self.get("FV_SERVE_ROLE") == Some("worker") && self.get("RUNPOD_POD_ID").is_some() {
+            return Kind::ClusterWorker;
         }
         Kind::Image
     }
@@ -129,8 +134,8 @@ impl Provider {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kind {
     /// A Runpod pod fv-control placed in a cluster or as a standalone pod
-    /// (`FV_SERVE_ROLE=worker`; the legacy `WORKER_BOOT`, `EDGE_WORKER_BOOT`,
-    /// `WATCHDOG_WORKER_BOOT`).
+    /// (`FV_SERVE_ROLE=worker` and `RUNPOD_POD_ID`, not serverless; the legacy
+    /// `WORKER_BOOT`, `EDGE_WORKER_BOOT`, `WATCHDOG_WORKER_BOOT`).
     ClusterWorker,
     /// A GMI / Brev pod (`FV_PROVIDER`; the legacy `PROVIDER_BOOT`).
     Provider(Provider),
@@ -228,10 +233,28 @@ mod tests {
             Kind::Provider(Provider::Gmi)
         );
         assert_eq!(
-            k(&[("FV_PROVIDER", "runpod"), ("FV_SERVE_ROLE", "worker")]),
+            k(&[
+                ("FV_PROVIDER", "runpod"),
+                ("FV_SERVE_ROLE", "worker"),
+                ("RUNPOD_POD_ID", "p")
+            ]),
             Kind::ClusterWorker
         );
-        assert_eq!(k(&[("FV_SERVE_ROLE", "worker")]), Kind::ClusterWorker);
+        assert_eq!(
+            k(&[("FV_SERVE_ROLE", "worker"), ("RUNPOD_POD_ID", "p")]),
+            Kind::ClusterWorker
+        );
+        // GCP / CloudRift workers: the role without a Runpod pod.
+        assert_eq!(k(&[("FV_SERVE_ROLE", "worker")]), Kind::Image);
+        // runpod-endpoint.sh's role endpoints: serverless first.
+        assert_eq!(
+            k(&[
+                ("FV_SERVE_ROLE", "worker"),
+                ("RUNPOD_POD_ID", "w"),
+                ("RUNPOD_ENDPOINT_ID", "ep")
+            ]),
+            Kind::Serverless
+        );
         assert_eq!(k(&[("RUNPOD_ENDPOINT_ID", "ep")]), Kind::Serverless);
         assert_eq!(k(&[("FV_CONTROL_ENDPOINT", "x")]), Kind::Serverless);
         assert_eq!(k(&[("RUNPOD_POD_ID", "p")]), Kind::Image);

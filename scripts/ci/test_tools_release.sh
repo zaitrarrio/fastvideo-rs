@@ -139,4 +139,13 @@ check "unchanged inputs: nothing to publish" 0 "$(
   jq --arg h "$h" '.[0].body |= sub("input-hash: aaa10"; "input-hash: \($h)")' "$tmp/rels.json" >"$tmp/same.json"
   FV_TOOLS_RELEASES_FILE="$tmp/same.json" FV_GITHUB_TOKEN_FILE=/dev/null bash "$T" publish HEAD --prerelease --dry-run 2>"$tmp/log" >/dev/null; echo $?)"
 grep -q "nothing to publish" "$tmp/log" && echo "ok   (said nothing to publish)" || { echo "FAIL unchanged message"; fail=1; }
+# prebuilt.sh contexts: fv-boot (ADR-0014) replaces the image's boot-build stage only when a serve set carries it.
+P="$HERE/prebuilt.sh"
+mkdir -p "$tmp/pre/serve-cuda/out" "$tmp/pre/serve-cpu/out" "$tmp/pre/oxide"
+check "contexts: a release from before fv-boot (boot-build compiles)" "oxide=$tmp/pre/oxide serve-build=$tmp/pre/serve-cuda cpu-build=$tmp/pre/serve-cpu" \
+  "$(bash "$P" contexts "$tmp/pre" oxide serve-cuda serve-cpu | paste -sd' ')"
+printf '#!/bin/sh\necho fv-boot 0.1.11\n' >"$tmp/pre/serve-cpu/out/fv-boot"; chmod +x "$tmp/pre/serve-cpu/out/fv-boot"
+check "contexts: a release with fv-boot replaces boot-build" "oxide=$tmp/pre/oxide serve-build=$tmp/pre/serve-cuda cpu-build=$tmp/pre/serve-cpu boot-build=$tmp/pre/serve-cpu" \
+  "$(bash "$P" contexts "$tmp/pre" oxide serve-cuda serve-cpu | paste -sd' ')"
+check "contexts: no serve set, no boot-build" "oxide=$tmp/pre/oxide" "$(bash "$P" contexts "$tmp/pre" oxide | paste -sd' ')"
 exit "$fail"

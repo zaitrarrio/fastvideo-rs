@@ -144,6 +144,11 @@ Each workflow then:
    as before: no toolkit, no compiler in any runtime image. BuildKit never
    runs a replaced stage or its `builder` parent, so the log shows no
    `cargo` step (the C ffmpeg build stays, from the registry cache).
+   fv-boot (the entrypoint, [ADR-0014](../adr/0014-fv-boot.md)) has its own
+   `boot-build` stage: a release whose `serve-cuda` / `serve-cpu` set carries
+   `out/fv-boot` replaces it too (`boot-build=<dir>`); a release from
+   before fv-boot does not, and only that stage compiles (fv-boot's one
+   crate, from `builder`), with a notice in the job.
 3. **Falls back** when there is no usable release (test workflows and
    branch images whose tools inputs have no release, other features
    requested on dispatch, a bad checksum): a `::warning::` names the reason,

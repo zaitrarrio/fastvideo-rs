@@ -105,7 +105,10 @@ impl<'a> Ctx<'a> {
         Self {
             env,
             exports: BTreeMap::new(),
-            unset: Vec::new(),
+            unset: watchdog::BACKSTOP_SECRETS
+                .iter()
+                .map(|k| (*k).to_owned())
+                .collect(),
             kind,
             deps,
             paths,
@@ -304,6 +307,11 @@ fn config_check(c: &Ctx<'_>, m: &config::Materialized) -> Result<(), BootError> 
     )?;
     if !o.ok() {
         let err = o.stderr_text();
+        // fv-serve's own lines, verbatim (`fv-serve: config: …`): fv-control's
+        // boot diagnosis (podlogs.ts CONTAINER_FATAL) keys on them.
+        for l in err.lines().filter(|l| !l.trim().is_empty()) {
+            c.log.raw(l);
+        }
         let tail: Vec<&str> = err
             .lines()
             .rev()
@@ -334,6 +342,47 @@ fn tree_preflight(c: &Ctx<'_>, m: &config::Materialized) {
                 root.display()
             ));
         }
+    }
+}
+
+/// `FV_BOOT_LEGACY=1`: the rollback switch on every path (ADR-0014 §6). fv-control's shell
+/// boots skip fv-boot with it; the image entrypoint (serverless without a boot override,
+/// v2 load balancers, GCP / CloudRift `docker run`, Vast) gets the old `fv-entry.sh`
+/// behaviour here: the serverless volume link, the `FV_WEIGHTS` default, the upsampler
+/// sidecar, then exec fv-serve with the arguments as given. No driver check, config
+/// step, weights plan, tunnel, watchdog or report.
+pub fn legacy_requested(env: &BootEnv) -> bool {
+    env.flag("FV_BOOT_LEGACY")
+}
+
+/// The `FV_BOOT_LEGACY=1` entrypoint (see [`legacy_requested`]).
+pub fn legacy(c: &mut Ctx<'_>, args: &[String]) -> ExecPlan {
+    c.say("FV_BOOT_LEGACY=1: fv-entry's steps only (volume link, FV_WEIGHTS, upsampler), then fv-serve");
+    let rv = c.paths.runpod_volume_weights.clone();
+    let ws = c.paths.workspace_weights.clone();
+    if rv.is_dir() && std::fs::symlink_metadata(&ws).is_err() {
+        if let Some(parent) = ws.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::os::unix::fs::symlink(&rv, &ws);
+    }
+    if c.get("FV_WEIGHTS").is_none() {
+        if rv.is_dir() {
+            c.export("FV_WEIGHTS", rv.display().to_string());
+        } else if ws.is_dir() {
+            c.export("FV_WEIGHTS", ws.display().to_string());
+        }
+    }
+    sidecar::start(c);
+    sidecar::wait(c);
+    let mut env = c.env.vars().clone();
+    for (k, v) in &c.exports {
+        env.insert(k.clone(), v.clone());
+    }
+    ExecPlan {
+        program: c.serve_bin(),
+        args: args.to_vec(),
+        env,
     }
 }
 

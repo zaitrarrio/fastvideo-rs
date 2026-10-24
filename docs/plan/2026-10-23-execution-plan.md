@@ -82,7 +82,7 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | C1 | `[deploy]` section of the family manifest; presets, variant tables, `families.tsv`, autoscale pools and the Dockerfile variant stages generated from it | `--check` green; one image with boot-time config if the owner decides so | pod | A4 | merged (#156; single image: owner decision, ADR-0011) |
-| C2 | `fv-boot` in `fastvideo-deploy`: driver check, config materialization, weights plan (volume / registry `hydrate` / hub / none), sidecar, tunnel and phase reports, watchdog, exec; fake provider and fake chunk source tests; the ten boot variants deleted | one boot script in the tree; fv-control sends env only | pod; **GPU** one pod boot on the EU volume | C1, registry WO-002 for the `hydrate` source (volume and hub sources first) | pr (#159: fv-boot is the images' entrypoint and every fv-control boot prefers it, ADR-0014; GPU gate green for the image kind on the EU volume (ltx); remaining: C2b deletes the shell boots and sends env only after the image promotion, the `registry` source after WO-002, the upsampler launcher in Rust) |
+| C2 | `fv-boot` in `fastvideo-deploy`: driver check, config materialization, weights plan (volume / registry `hydrate` / hub / none), sidecar, tunnel and phase reports, watchdog, exec; fake provider and fake chunk source tests; the ten boot variants deleted | one boot script in the tree; fv-control sends env only | pod; **GPU** one pod boot on the EU volume | C1, registry WO-002 for the `hydrate` source (volume and hub sources first) | pr (#159: fv-boot is the images' entrypoint and every fv-control boot prefers it, ADR-0014; GPU gate green for the image kind on the EU volume (ltx); open per-kind gates before lifting `FV_BOOT_LEGACY` (cluster worker, serverless r2 streaming, edge watchdog, GMI / Brev, upsampler; ADR-0014 §6); remaining: C2b deletes the shell boots and sends env only after the image promotion, the `registry` source after WO-002, the upsampler launcher in Rust) |
 | C3 | `fv-deploy` with the `Provider` trait (from `fastvideo-autoscale`): `runpod::{Pod,Serverless}`, `vast`, `gcp`; shared money guards, backstop, ledger, templates, release promote/rollback; fv-control on the shared `Launch` schema | `fv-deploy up` per provider with the same smoke | pod; **GPU** one `fv-deploy up` on Runpod EU | C2 | todo |
 
 ### Phase 5: validation driver and gold standards (Workstream D)
@@ -503,3 +503,18 @@ ran (pod id, $/hr), result, cost.
   submitted; fixed in `4d65003f`. Evidence:
   `artifacts/runpod/c2-boot/{bcde06c-10240544,4d65003-10240548}/`. Two
   pods, about 7 GPU-minutes, deleted.
+- 2026-10-24 06:30Z: C2 review fixes on #159 (main with B2 #157, E2 #158 and
+  #160 merged in): fv-boot gets its own `boot-build` Dockerfile stage, which
+  `prebuilt.sh` replaces when a tools release's serve set carries `out/fv-boot`
+  (`release-artifacts-pod.sh`, `tools-deps.sh` and the `tools-release.sh`
+  gates ship and check it from now on); with today's newest release
+  (tools-v0.1.37, checked with a real `prebuilt.sh fetch`) only that stage
+  compiles. Also: signals by pid through the shell builtin (no procps in the
+  images), fv-serve's config refusal logged verbatim (a crash loop in the
+  diagnosis), `FV_BOOT_LEGACY=1` honoured by fv-boot itself, kind precedence
+  fixed for GCP / CloudRift workers and role endpoints, a controller worker
+  without a config fails, reports end on any HTTP answer, the backstop key
+  only in the watchdog's env, provider r2 parity, `--features boot` clippy
+  and tests in `check.sh`, the image entrypoint asserted in CI. Recommended
+  rollout: fv-control with `FV_BOOT_LEGACY=1`, lifted per kind after the
+  open per-kind gates (ADR-0014 §6).

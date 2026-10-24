@@ -2,13 +2,16 @@
 //!
 //! ```text
 //! fv-boot [fv-serve args…]   the boot sequence, then exec fv-serve
-//! fv-boot watchdog           the deadline / balance backstop (started by the boot)
+//! fv-boot watchdog --serve-pid P
+//!                            the deadline / balance backstop (started by the boot)
 //! fv-boot fetch-guard --boot-pid P --t0 T --state DIR -- <program> <args…>
 //!                            a streaming R2 fetch run to its end (started by the boot)
 //! fv-boot version            this binary's version
 //! fv-boot --version | --help | --print-config [args…]
 //!                            fv-serve's own flags: exec fv-serve directly, no boot
 //! ```
+//!
+//! `FV_BOOT_LEGACY=1` runs only the old `fv-entry.sh` steps, then fv-serve.
 //!
 //! Every input is the environment (ADR-0014 §3); arguments other than the
 //! subcommands above are fv-serve's (`--config <path>`, as the image
@@ -67,9 +70,14 @@ fn main() -> ExitCode {
         }
         Some("watchdog") => {
             let c = Ctx::new(env, deps, Paths::image(), pid);
+            let serve_pid = args
+                .iter()
+                .skip_while(|a| *a != "--serve-pid")
+                .nth(1)
+                .and_then(|p| p.parse::<u32>().ok());
             match watchdog::mode(&c.env) {
                 Some(m) => {
-                    watchdog::run(&c, &m, None);
+                    watchdog::run(&c, &m, serve_pid, None);
                     ExitCode::SUCCESS
                 }
                 None => {
@@ -98,6 +106,17 @@ fn main() -> ExitCode {
             let e = Command::new(&bin).args(&args).exec();
             eprintln!("[fv-boot] FAILED: exec {}: {e}", bin.display());
             ExitCode::from(127)
+        }
+        _ if boot::legacy_requested(&env) => {
+            let mut c = Ctx::new(env, deps, Paths::image(), pid);
+            let plan = boot::legacy(&mut c, &args);
+            let e = Command::new(&plan.program)
+                .args(&plan.args)
+                .env_clear()
+                .envs(&plan.env)
+                .exec();
+            let err = BootError::Config(format!("exec {}: {e}", plan.program.display()));
+            ExitCode::from(u8::try_from(c.fail(&err)).unwrap_or(1))
         }
         _ => {
             let mut c = Ctx::new(env, deps, Paths::image(), pid);

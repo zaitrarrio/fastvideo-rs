@@ -601,7 +601,10 @@ driven by the env fv-control already sends. Every shell boot fv-control sends
 (`src/fv-boot.ts`): an image with fv-boot runs it, an image from before it
 runs the rest of the script, so fv-control and the images can be deployed in
 either order. `FV_BOOT_LEGACY=1` in any env layer forces the shell boot (the
-rollback switch). The shell bodies are deleted, and fv-control sends env
+rollback switch; fv-boot honours it too where the image entrypoint runs, with
+`fv-entry.sh`'s steps only). Recommended rollout (ADR-0014 §6): deploy with
+`FV_BOOT_LEGACY=1` in the account layer and lift it per pool after a check of
+that kind of host. The shell bodies are deleted, and fv-control sends env
 only, once every image a pool, endpoint or channel can start carries fv-boot
 (plan C2b). `test/unit/fv-boot-protocol.test.ts` checks fv-control against
 the report bodies and log markers fv-boot sends

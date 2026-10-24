@@ -201,8 +201,10 @@ impl Reporter {
         let (Some(t), Some(body)) = (self.target.as_ref(), self.body(phase, url, detail)) else {
             return;
         };
-        // Pod reports are retried as PROVIDER_BOOT's `report` did (5 x 20 s);
-        // serverless ones are best effort once (the shell's `rep`).
+        // Pod reports are retried as PROVIDER_BOOT's `report` did (5 x 20 s),
+        // and like `curl -sS` there only when no HTTP answer came (a 401 / 404 /
+        // 429 is an answer: retrying it would only cost the pauses); serverless
+        // ones are best effort once (the shell's `rep`).
         let (tries, timeout) = match t.protocol {
             Protocol::Pod => (5, Duration::from_secs(20)),
             Protocol::Serverless => (1, Duration::from_secs(10)),
@@ -211,7 +213,7 @@ impl Reporter {
             let req = Request::new(Method::Post, &t.url, timeout)
                 .bearer(&t.token)
                 .json(body.clone());
-            if matches!(http.send(&req), Ok(r) if r.ok()) {
+            if http.send(&req).is_ok() {
                 return;
             }
             if i + 1 < tries {

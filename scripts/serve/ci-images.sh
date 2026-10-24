@@ -93,6 +93,9 @@ smoke() {
   local v="$1" img="$2" cid ok=0
   docker pull -q "$img" >/dev/null
   docker image inspect "$img" --format "size={{.Size}} entrypoint={{json .Config.Entrypoint}} env={{json .Config.Env}}"
+  # The entrypoint is fv-boot (docs/adr/0014-fv-boot.md).
+  local ep; ep="$(docker image inspect "$img" --format '{{json .Config.Entrypoint}}')"
+  [[ "$ep" == '["/opt/fastvideo-rs/bin/fv-boot"]' ]] || die "serve-$v: entrypoint $ep, expected [\"/opt/fastvideo-rs/bin/fv-boot\"]"
   docker run --rm "$img" --version
   # Every dynamic library resolves; ffmpeg does what the code asks of it;
   # the baked config parses; CUDA variants have the CUDA libraries, the
