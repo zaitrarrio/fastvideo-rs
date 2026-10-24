@@ -145,7 +145,8 @@ build_oxide() {
   cat "$STAGE/oxide/out/oxide/manifest.tsv" >&2
 }
 
-# The `build` stage's ENV, inherited by serve-build and cpu-build.
+# The `build` stage's ENV for fv-gpucheck, the one binary built with the
+# `oxide` feature (ADR-0015; the serve binaries embed no Tile-IR cubins).
 with_oxide() { FV_OXIDE_CUBIN_DIR="$OXIDE_DIR" FV_REQUIRE_OXIDE=100,120 "$@"; }
 
 build_gpucheck() {
@@ -193,7 +194,7 @@ build_hf_fm() {
 build_serve() { # <set> <features>
   local set="$1" feats="$2"
   log "$set: cargo build --release -p fastvideo-serve --features $feats"
-  with_oxide cargo build --release -p fastvideo-serve --features "$feats" >&2
+  cargo build --release -p fastvideo-serve --features "$feats" >&2
   mkdir -p "$STAGE/$set/out"
   cp "$T/release/fv-serve" "$STAGE/$set/out/fv-serve"
   echo "$feats" >"$STAGE/$set/out/fv-serve.features"

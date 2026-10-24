@@ -238,7 +238,7 @@ pub fn device_mma_sdpa(
 /// the per-shape rule's (logged once per shape; bf16 out), or the timed
 /// pick of `FASTVIDEO_SDPA_AUTO=timed`.
 #[cfg(feature = "cuda")]
-pub fn device_mma_sdpa_pick(
+fn device_mma_sdpa_pick(
     q: &CudaTensor,
     k: &CudaTensor,
     v: &CudaTensor,

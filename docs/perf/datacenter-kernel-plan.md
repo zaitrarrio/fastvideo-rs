@@ -103,7 +103,7 @@ seam (`[kernels]` profile key, else env) is
 | VSA top-k | ours `vsa_topk2` (radix select) | same | same | rule (`FASTVIDEO_VSA_TOPK`) | `wan/ops.rs:877-893` |
 | VSA fine | **ours-dc `fa_dc90_vsa`** (wgmma, KV-tile-list producer; WP-D) | **ours-dc `fa_dc100_vsa`** (tcgen05 + TMEM; log: `vsa fine kernel: dc KV-tile-list (sm100, tcgen05, cubin)`) | ours-mma `vsa_mma_attn_tma2` (TMA 128B swizzle, 3-slot ring, mma.sync; the 9.0 / 10.0 escape hatch `tma2`) | rule: `tma_requested` is `sm_major >= 9`, ring default on | `wan/ops.rs:1096` `vsa_mma_attn_device`, `:1292`, `:1348` `tma_requested`, `:1382` `vsa_ring_default`; `wan/vsa.rs:293` `fine_kernel`; `h3/vsa.rs:600`, `:729` |
 | Block-causal full-sequence (causal Wan clip forward) | ours-mma `flash_mma_fwd2_causal_d{64,128}` | same | same | rule | `wan/attn.rs:548` `device_mma_sdpa_causal`; `wan/nn.rs:1754` |
-| SF-Wan streaming (queries vs sink + rolling window, no mask) | **ours-dc** (plain dense via `sdpa_kv_window`, d = 128) | **ours-dc** | timed cuDNN / V2 | same as dense | `wan/nn.rs:1793` `sdpa_kv_window`, `:1749` `causal_flash_enabled`; `wan/transformer.rs:257`, `:290` |
+| SF-Wan streaming (queries vs sink + rolling window, no mask) | **ours-dc** (plain dense via `Plan::kv_window`, d = 128) | **ours-dc** | timed cuDNN / V2 | same as dense | `rt/sdpa.rs` `Plan::kv_window`, `rt/sdpa_rule.rs` `causal_flash_enabled`; `wan/transformer.rs:257`, `:290` |
 | FP8 attention (Sage-style, opt-in, H3 `fp8_attention`) | ours `attn_fp8.cu` (mma.sync e4m3 QK, bf16 PV) | same | same | opt-in; `supported()` = sm >= 8.9 | `wan/attn_fp8.rs:79`, build.rs `fp8_entries` |
 
 ### 1.2 GEMMs

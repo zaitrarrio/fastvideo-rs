@@ -499,3 +499,15 @@ ran (pod id, $/hr), result, cost.
   (cudarc 62 = 62). GPU pending (coordinator): `kernels` tier
   (`no_host_fallback` now runs every `Plan` on device operands) and the
   `techniques` byte-identity cells for H3 and LTX.
+- 2026-10-24 06:40Z: B5 review follow-ups on #161 (no dispatch change; GPU
+  evidence on `1de80f1`): main merged (B2 #157, E2 #158, plan #160);
+  `gpucheck-t0` job `serve-cuda-check` type-checks the serve feature set
+  (`-p fastvideo-cudarc --features cuda`, `-p fastvideo-engine-service
+  --features cuda`; fv-gpucheck's own check pulls `oxide` in);
+  `release-artifacts-pod.sh` builds serve without the oxide environment;
+  stale `nn::` SDPA pointers in five docs fixed; `device_mma_sdpa_pick`
+  private. The `sdpa_rule` tests (the 2.8 M-case enumeration included) take
+  2.0 s in a debug build, so all stay in the default run. On build pod
+  `pzocv1keasg3xn`: fmt, workspace clippy `-D warnings`, `scripts/gpu/lint.sh`
+  green; cudarc + models + gpucheck 1220 passed, 0 failed; both new checks
+  green with no warning; `scripts/serve/check.sh` 1033 passed, 0 failed.

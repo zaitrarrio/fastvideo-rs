@@ -101,7 +101,9 @@ only, opt-in `--diff-vae`, no device kernel), H3's audio VAE causal pre-block
    fused-kernel contexts, the ten shapes, both output types and every set of
    declining kernels among those the entry can try (2.8 M cases). Each side
    records every kernel tried with its arguments and every effectful probe,
-   in order; the traces are equal.
+   in order; the traces are equal. The whole `sdpa_rule` test set, the full
+   enumeration included, takes 2.0 s in a debug build on the build pod, so
+   it runs in the default `cargo test`.
 4. **Host twins.** Retired: `flash_style_sdpa_host` (`FASTVIDEO_SDPA=host`)
    and `block_sparse_sdpa` (`FASTVIDEO_SDPA=sparse`). Both were host-only
    and already refused with a live device (`host_only_op`), so no CUDA run
@@ -135,7 +137,12 @@ only, opt-in `--diff-vae`, no device kernel), H3's audio VAE causal pre-block
    what it did; the serve binaries (`fastvideo-engine-service/cuda`) no longer
    embed the cubins, and `FASTVIDEO_NVFP4_OXIDE_GEMM=1` there falls back to the
    in-tree W4A4 kernel, as any build without the cubins always did (a build
-   without the feature that sees `FV_REQUIRE_OXIDE` prints a warning).
+   without the feature that sees `FV_REQUIRE_OXIDE` prints a warning;
+   `release-artifacts-pod.sh` no longer passes the oxide environment to the
+   serve builds). Because fv-gpucheck's `cuda` turns `oxide` on for any build
+   it is part of, `gpucheck-t0`'s `serve-cuda-check` job type-checks the serve
+   feature set on its own: `cargo check -p fastvideo-cudarc --features cuda`
+   and `cargo check -p fastvideo-engine-service --features cuda`.
 
 ## Consequences
 
