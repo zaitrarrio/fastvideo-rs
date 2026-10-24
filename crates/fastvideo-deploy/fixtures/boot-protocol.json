@@ -1,0 +1,45 @@
+{
+  "_doc": "What fv-boot says that fv-control parses (docs/adr/0014-fv-boot.md §4). Read by crates/fastvideo-deploy/src/boot/tests.rs (fv-boot produces these bytes) and control/test/unit/fv-boot-protocol.test.ts (fv-control accepts and parses them). Change both sides together.",
+  "constants": {
+    "min_driver_major": 580,
+    "cuda13_symbol": "cuCtxGetDevice_v2",
+    "driver_too_old": "driver_too_old",
+    "cloudflared_url": "https://github.com/cloudflare/cloudflared/releases/download/2026.9.0/cloudflared-linux-amd64",
+    "cloudflared_sha256": "53b7a7a5420d188758d24341294acb0d1bca54296548ac05e38811a694ac6134",
+    "mxfp8_tree_glob": "*_mxfp8",
+    "streaming_fetch_marker": "fv-streaming-fetch/1",
+    "fv_boot_bin": "/opt/fastvideo-rs/bin/fv-boot",
+    "serve_bin": "/opt/fastvideo-rs/bin/fv-serve",
+    "upsampler_bin": "/opt/fastvideo-rs/bin/fv-upsampler",
+    "r2_fetch_image": "/opt/fastvideo-rs/bin/r2-fetch.py",
+    "worker_toml": "/fv-worker.toml"
+  },
+  "log_markers": [
+    { "line": "[fv-boot] start (cluster worker; fv-boot 0.1.1)", "milestone": "boot_script" },
+    { "line": "[fv-boot] volume: /workspace/weights (12 trees)", "milestone": "volume", "volume": "/workspace/weights (12 trees)" },
+    { "line": "[fv-boot] volume: /workspace/weights missing", "milestone": "volume", "volume": "/workspace/weights missing" },
+    { "line": "[fv-boot] tunnel https://brave-fox-12.trycloudflare.com", "brev_tunnel": true },
+    { "line": "[fv-boot] 10:00:00 +0.4s FAILED: driver_too_old: host driver 550.54.15 < 580 (the image needs CUDA 13)", "driver_too_old": true },
+    { "line": "fv-serve: config: TOML parse error at line 3, column 1: unknown field `bogus`", "fv_serve_fatal": true }
+  ],
+  "pod_reports": [
+    { "pod": "gmi:fv-pod-a-1", "phase": "weights", "url": "", "detail": "checking", "body": "{\"pod\":\"gmi:fv-pod-a-1\",\"phase\":\"weights\",\"url\":\"\",\"detail\":\"checking\"}" },
+    { "pod": "brev:fv-pod-b-1", "phase": "weights", "url": "", "detail": "downloading h3-base", "body": "{\"pod\":\"brev:fv-pod-b-1\",\"phase\":\"weights\",\"url\":\"\",\"detail\":\"downloading h3-base\"}" },
+    { "pod": "brev:fv-pod-b-1", "phase": "tunnel", "url": "https://brave-fox-12.trycloudflare.com", "detail": "", "body": "{\"pod\":\"brev:fv-pod-b-1\",\"phase\":\"tunnel\",\"url\":\"https://brave-fox-12.trycloudflare.com\",\"detail\":\"\"}" },
+    { "pod": "gmi:fv-pod-a-1", "phase": "upsampler", "url": "", "detail": "step upsampler: 41.2s (llama-server 127.0.0.1:18080, qwen3-vl-4b-instruct)", "body": "{\"pod\":\"gmi:fv-pod-a-1\",\"phase\":\"upsampler\",\"url\":\"\",\"detail\":\"step upsampler: 41.2s (llama-server 127.0.0.1:18080, qwen3-vl-4b-instruct)\"}" },
+    { "pod": "gmi:fv-pod-a-1", "phase": "failed", "url": "", "detail": "driver_too_old: host driver 550.54.15 < 580 (the image needs CUDA 13)", "body": "{\"pod\":\"gmi:fv-pod-a-1\",\"phase\":\"failed\",\"url\":\"\",\"detail\":\"driver_too_old: host driver 550.54.15 < 580 (the image needs CUDA 13)\"}" },
+    { "pod": "brev:fv-pod-b-1", "phase": "failed", "url": "", "detail": "tree \"h3-base\": a\\b\nc", "body": "{\"pod\":\"brev:fv-pod-b-1\",\"phase\":\"failed\",\"url\":\"\",\"detail\":\"tree h3-base: ab c\"}" }
+  ],
+  "sls_reports": [
+    { "pod": "wkr-abc123@1761300000", "phase": "boot", "detail": "container started; driver 595.91.07 ok", "body": "{\"pod\":\"wkr-abc123@1761300000\",\"phase\":\"boot\",\"url\":\"\",\"detail\":\"container started; driver 595.91.07 ok\"}" },
+    { "pod": "wkr-abc123@1761300000", "phase": "cache", "detail": "miss: h3-base ltx25", "body": "{\"pod\":\"wkr-abc123@1761300000\",\"phase\":\"cache\",\"url\":\"\",\"detail\":\"miss: h3-base ltx25\"}", "cache": "miss", "missing": "h3-base ltx25" },
+    { "pod": "wkr-abc123@1761300000", "phase": "cache", "detail": "hit", "body": "{\"pod\":\"wkr-abc123@1761300000\",\"phase\":\"cache\",\"url\":\"\",\"detail\":\"hit\"}", "cache": "hit" },
+    { "pod": "wkr-abc123@1761300000", "phase": "step", "detail": "tools 0.0s (python3 in the image)", "body": "{\"pod\":\"wkr-abc123@1761300000\",\"phase\":\"step\",\"url\":\"\",\"detail\":\"tools 0.0s (python3 in the image)\"}", "step": ["tools", 0] },
+    { "pod": "wkr-abc123@1761300000", "phase": "step", "detail": "fetch 61.3s (weights ready: 2 tree(s), 41.20 GB fetched in 61.2s (673 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 0)", "body": "{\"pod\":\"wkr-abc123@1761300000\",\"phase\":\"step\",\"url\":\"\",\"detail\":\"fetch 61.3s (weights ready: 2 tree(s), 41.20 GB fetched in 61.2s (673 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 0)\"}", "step": ["fetch", 61.3] },
+    { "pod": "wkr-abc123@1761300000", "phase": "step", "detail": "hub_h3-base 120.0s", "body": "{\"pod\":\"wkr-abc123@1761300000\",\"phase\":\"step\",\"url\":\"\",\"detail\":\"hub_h3-base 120.0s\"}", "step": ["hub_h3-base", 120] },
+    { "pod": "wkr-abc123@1761300000", "phase": "step", "detail": "upsampler 41.2s (llama-server 127.0.0.1:18080, qwen3-vl-4b-instruct)", "body": "{\"pod\":\"wkr-abc123@1761300000\",\"phase\":\"step\",\"url\":\"\",\"detail\":\"upsampler 41.2s (llama-server 127.0.0.1:18080, qwen3-vl-4b-instruct)\"}", "step": ["upsampler", 41.2] },
+    { "pod": "wkr-abc123@1761300000", "phase": "weights", "detail": "weights ready: hub 41.20 GB fetched in 120.0s (343 MB/s)", "body": "{\"pod\":\"wkr-abc123@1761300000\",\"phase\":\"weights\",\"url\":\"\",\"detail\":\"weights ready: hub 41.20 GB fetched in 120.0s (343 MB/s)\"}", "fetch": { "bytes": 41200000000, "s": 120, "mbps": 343 } },
+    { "pod": "wkr-abc123@1761300000", "phase": "serve", "detail": "weights ready under /workspace/weights after 75.2s: starting fv-serve", "body": "{\"pod\":\"wkr-abc123@1761300000\",\"phase\":\"serve\",\"url\":\"\",\"detail\":\"weights ready under /workspace/weights after 75.2s: starting fv-serve\"}" },
+    { "pod": "wkr-abc123@1761300000", "phase": "failed", "detail": "r2 weights: r2-fetch: FAILED: demo/transformer/model.safetensors part 3: sha256 mismatch", "body": "{\"pod\":\"wkr-abc123@1761300000\",\"phase\":\"failed\",\"url\":\"\",\"detail\":\"r2 weights: r2-fetch: FAILED: demo/transformer/model.safetensors part 3: sha256 mismatch\"}" }
+  ]
+}

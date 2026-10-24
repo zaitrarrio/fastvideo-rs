@@ -93,17 +93,23 @@ smoke() {
   local v="$1" img="$2" cid ok=0
   docker pull -q "$img" >/dev/null
   docker image inspect "$img" --format "size={{.Size}} entrypoint={{json .Config.Entrypoint}} env={{json .Config.Env}}"
+  # The entrypoint is fv-boot (docs/adr/0014-fv-boot.md).
+  local ep; ep="$(docker image inspect "$img" --format '{{json .Config.Entrypoint}}')"
+  [[ "$ep" == '["/opt/fastvideo-rs/bin/fv-boot"]' ]] || die "serve-$v: entrypoint $ep, expected [\"/opt/fastvideo-rs/bin/fv-boot\"]"
   docker run --rm "$img" --version
   # Every dynamic library resolves; ffmpeg does what the code asks of it;
   # the baked config parses; CUDA variants have the CUDA libraries, the
   # cpu image none; none has the debug tooling.
   docker run --rm --entrypoint bash -e V="$v" "$img" -euo pipefail -c '
     bad() { echo "FAIL: $*"; exit 1; }
-    for b in /opt/fastvideo-rs/bin/fv-serve /usr/local/bin/ffmpeg /usr/local/bin/ffprobe; do
+    for b in /opt/fastvideo-rs/bin/fv-serve /opt/fastvideo-rs/bin/fv-boot /usr/local/bin/ffmpeg /usr/local/bin/ffprobe; do
       ldd "$b" | grep "not found" && bad "$b: unresolved libraries"
     done
     test "$FV_VARIANT" = "$V"
     test -f "$FV_CONFIG"
+    # the entrypoint is fv-boot (docs/adr/0014-fv-boot.md); fv-entry.sh is gone
+    /opt/fastvideo-rs/bin/fv-boot version
+    test -e /opt/fastvideo-rs/bin/fv-entry && bad "fv-entry is in the image"
     cat /opt/fastvideo-rs/bin/fv-serve.features
     FV_ENGINE=fake /opt/fastvideo-rs/bin/fv-serve --config "$FV_CONFIG" --print-config >/dev/null
     FV_ENGINE=fake /opt/fastvideo-rs/bin/fv-serve --config /etc/fv/runpod-fake.toml --print-config >/dev/null

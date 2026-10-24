@@ -26,8 +26,11 @@ serve_pkgs=(-p fastvideo-protocol -p fastvideo-engine-service -p fastvideo-media
   -p fastvideo-edge)
 case "$group" in
   oxide) ;;   # its own stage (fv-oxide-aot), cached by its inputs
-  serve-cuda) rel cook --release -p fastvideo-serve --features cuda,http-client ;;
-  serve-cpu) rel cook --release -p fastvideo-serve --features http-client ;;
+  # Each serve set also carries fv-boot (release-artifacts-pod.sh build_serve).
+  serve-cuda) rel cook --release -p fastvideo-serve --features cuda,http-client
+    rel cook --release -p fastvideo-deploy --features boot ;;
+  serve-cpu) rel cook --release -p fastvideo-serve --features http-client
+    rel cook --release -p fastvideo-deploy --features boot ;;
   serve-fake)
     # The recipe's `--config profile.dev.package.<C crate>.opt-level=3`, for
     # the cook and the build alike.

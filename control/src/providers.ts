@@ -47,6 +47,7 @@ import { missingTrees } from "./volumes";
 import { DRIVER_CHECK_SH } from "./driver-check";
 import { R2_AUX_TREES, r2AuxTrees, R2_DOWNLOAD_GBPS, R2_FETCH_SH, r2Bytes, r2Cfg, r2DiskGb, r2Manifest, r2PodEnv, r2Trees } from "./r2weights";
 import { UPSAMPLER_START_SH, UPSAMPLER_WAIT_SH } from "./upsampler";
+import { PREFER_FV_BOOT_SH } from "./fv-boot";
 import { policies, type Policies } from "./alerts";
 
 // ---------------------------------------------------------------- ids
@@ -710,9 +711,10 @@ fetch_tree() { # dest repo revision globs n: one tree into $FV_WEIGHTS/<dest> (t
 
 // The start command of a GMI / Brev worker (inside our image, as root): the
 // weights (hub), the tunnel and its report, the deadline watchdog, then
-// fv-serve with the same config handling as WORKER_BOOT (payloads.ts).
+// fv-serve with the same config handling as WORKER_BOOT (payloads.ts). An image with fv-boot runs that instead
+// (PREFER_FV_BOOT_SH, fv-boot.ts).
 export const PROVIDER_BOOT = `set -u
-say() { echo "[fv-boot] $*" >&2; }
+${PREFER_FV_BOOT_SH}say() { echo "[fv-boot] $*" >&2; }
 echo "[fv-boot] start ($FV_PROVIDER $FV_POD_ID)" >&2
 mkdir -p /fvstate "$FV_WEIGHTS"
 report() {

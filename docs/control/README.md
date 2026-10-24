@@ -592,6 +592,24 @@ workers, the backstop (`FV_CLUSTER_DEADLINE`, `FV_MIN_BALANCE`,
 `FV_BACKSTOP_API_KEY`). Unit tests check the boot commands
 (`EDGE_WORKER_BOOT`, the direct worker's) and the generated configs.
 
+**fv-boot** ([ADR-0014](../adr/0014-fv-boot.md)). The serve images carry
+`/opt/fastvideo-rs/bin/fv-boot`, the one boot sequence in Rust (driver check,
+config, weights plan, sidecar, tunnel and reports, watchdog, exec fv-serve),
+driven by the env fv-control already sends. Every shell boot fv-control sends
+(`WORKER_BOOT`, `EDGE_WORKER_BOOT`, `WATCHDOG_WORKER_BOOT`, `PROVIDER_BOOT`,
+`SLS_BOOT`, `SLS_R2_BOOT`, `SLS_HUB_BOOT`) starts with `PREFER_FV_BOOT_SH`
+(`src/fv-boot.ts`): an image with fv-boot runs it, an image from before it
+runs the rest of the script, so fv-control and the images can be deployed in
+either order. `FV_BOOT_LEGACY=1` in any env layer forces the shell boot (the
+rollback switch; fv-boot honours it too where the image entrypoint runs, with
+`fv-entry.sh`'s steps only). Recommended rollout (ADR-0014 §6): deploy with
+`FV_BOOT_LEGACY=1` in the account layer and lift it per pool after a check of
+that kind of host. The shell bodies are deleted, and fv-control sends env
+only, once every image a pool, endpoint or channel can start carries fv-boot
+(plan C2b). `test/unit/fv-boot-protocol.test.ts` checks fv-control against
+the report bodies and log markers fv-boot sends
+(`crates/fastvideo-deploy/fixtures/boot-protocol.json`).
+
 **Price check and floor.** `POST /api/clusters/<id>/price` and every
 `start`:
 
@@ -767,7 +785,7 @@ when each phase happened, from the lines the controller already sees.
 | machine assigned | first system line (`create container …`) |
 | image pull start / end | system `… Pulling from …` / `Digest:` or `Status: … up to date` |
 | container start | system `start container …: begin` |
-| boot script, volume visible | the boot command's `[fv-boot] start` and `[fv-boot] volume: /workspace/weights (N trees)` (stderr) |
+| boot script, volume visible | the boot command's `[fv-boot] start` and `[fv-boot] volume: /workspace/weights (N trees)` (stderr; fv-boot prints both, naming `$FV_WEIGHTS`) |
 | fv-serve process start | fv-serve's first line (`fv_serve: fv-serve <version>`) |
 | connected to the edge | `edge_link: worker: connected to the dispatcher` |
 | weights per component | the engine's `[fastvideo] load/io <family> <component> {wall_s, viewed_gb, viewed_gbps}` (text encoder, DiT) and the vision tower line; `loading` / `model resident … seconds=` for the whole model |

@@ -28,6 +28,9 @@
 #   --build-context hf-fm=<dir>          <dir>/out/hf-fm, hf-fetch-model (hf-fm)
 #   --build-context serve-build=<dir>    <dir>/out/fv-serve{,.features} (serve-build)
 #   --build-context cpu-build=<dir>      <dir>/out/fv-serve{,.features} (cpu-build)
+#   --build-context boot-build=<dir>     <dir>/out/fv-boot (boot-build; scripts/ci/prebuilt.sh passes it
+#                                        when the release's serve set carries fv-boot: tools releases
+#                                        from before fv-boot do not, and this stage then compiles it)
 # Without them (no usable tools release) the stages compile here.
 
 # The base of every runtime image, pinned so the shared layers only change
@@ -385,6 +388,20 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cp /target/release/fv-serve /out/fv-serve \
  && echo "$FV_SERVE_FEATURES" > /out/fv-serve.features
 
+# boot-build: fv-boot (docs/adr/0014-fv-boot.md), the serve images' entrypoint. No CUDA: one binary for the CUDA and
+# cpu images. Its own stage, so a tools release that carries it replaces only this (prebuilt.sh boot-build=…), and
+# one from before fv-boot leaves this stage compiling it while serve-build / cpu-build stay prebuilt.
+FROM builder AS boot-build
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends cmake \
+ && rm -rf /var/lib/apt/lists/*
+COPY . /src
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/target \
+    cargo build --release -p fastvideo-deploy --features boot --bin fv-boot \
+ && mkdir -p /out \
+ && cp /target/release/fv-boot /out/fv-boot
+
 
 # serve: the `debug` flavour (ghcr.io/zaitrarrio/fastvideo-rs-serve:latest /
 # :sha-…; the legacy all-in-one tags): the runtime image (ssh, rsync,
@@ -400,9 +417,12 @@ ENV FV_CONFIG=/etc/fv/runpod.toml
 COPY configs/serve /etc/fv
 COPY deploy/vast/worker.py /opt/fastvideo-rs/deploy/vast/worker.py
 COPY --from=serve-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
+COPY --from=boot-build /out/fv-boot /opt/fastvideo-rs/bin/
 LABEL org.opencontainers.image.description="fv-serve: FastVideo, MiniMax, fal and LTX APIs over the fastvideo-rs CUDA engines"
 EXPOSE 8000
-ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-serve"]
+# fv-boot (docs/adr/0014-fv-boot.md): the boot sequence, then exec fv-serve with the same arguments
+# (`--version`, `--help` and `--print-config` go straight to fv-serve).
+ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-boot"]
 
 # >>> llama-server: everything from here to "<<< llama-server", the UBUNTU ARG,
 # scripts/gpu/cuda-13.pins and cuda-13-runtime.pins are hashed into the
@@ -478,16 +498,18 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY scripts/gpu/r2-fetch.py /opt/fastvideo-rs/bin/r2-fetch.py
 # The prompt upsampler's local sidecar (docs/serve/upsampler-local.md): llama-server (the llama-server stage above,
-# or its published fastvideo-rs-runtime:llama-server-<hash> image) and its launcher, which fv-entry and fv-control's
-# boots run when FV_UPSAMPLER_LOCAL=1. Its libraries must all resolve from base-cuda (no libcuda: the host's).
+# or its published fastvideo-rs-runtime:llama-server-<hash> image) and its launcher, which fv-boot (and fv-control's
+# legacy shell boots, until every image carries fv-boot) run when FV_UPSAMPLER_LOCAL=1. Its libraries must all resolve from base-cuda (no libcuda: the host's).
 COPY --from=llama-server /llama-server /llama-server.version /opt/fastvideo-rs/bin/
 COPY deploy/runpod/fv-upsampler.sh /opt/fastvideo-rs/bin/fv-upsampler
 RUN if ldd /opt/fastvideo-rs/bin/llama-server | grep 'not found'; then echo "llama-server: unresolved libraries"; exit 1; fi \
  && cat /opt/fastvideo-rs/bin/llama-server.version
 COPY --from=serve-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
-COPY deploy/runpod/fv-entry.sh /opt/fastvideo-rs/bin/fv-entry
+COPY --from=boot-build /out/fv-boot /opt/fastvideo-rs/bin/
 EXPOSE 8000
-ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-entry"]
+# fv-boot (docs/adr/0014-fv-boot.md; it replaced deploy/runpod/fv-entry.sh): driver check, config, weights plan,
+# the upsampler sidecar, then exec fv-serve with the entrypoint's arguments.
+ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-boot"]
 
 # ---- one thin stage per variant: its config (plus the fake config for the
 # CI smoke check) and the variant's identity for the entrypoint.
@@ -547,9 +569,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM base-os AS serve-cpu
 COPY --from=cpu-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
-COPY deploy/runpod/fv-entry.sh /opt/fastvideo-rs/bin/fv-entry
+COPY --from=boot-build /out/fv-boot /opt/fastvideo-rs/bin/
 COPY configs/serve/runpod-fake.toml /etc/fv/
 ENV FV_VARIANT=cpu FV_CONFIG=/etc/fv/runpod-fake.toml
 LABEL org.opencontainers.image.description="fv-serve cpu: fake engine, CPU only (configs/serve/runpod-fake.toml)"
 EXPOSE 8000
-ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-entry"]
+ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-boot"]

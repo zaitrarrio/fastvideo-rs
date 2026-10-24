@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "fv-serve deploy: Runpod queue worker, RUNPOD_*/VAST_* environment discovery, Vast forwarder assets."
+description = "fv-serve deploy: fv-boot (the serve containers' boot), Runpod queue worker, RUNPOD_*/VAST_* environment discovery, Vast forwarder assets."
 
 [dependencies]
 async-trait.workspace = true
@@ -12,6 +12,7 @@ axum.workspace = true
 base64.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "net"] }
 tower = { workspace = true, features = ["util"] }
@@ -29,6 +30,14 @@ default = []
 # over reqwest. Without it the worker runs on any `Transport` (the in-process
 # simulator transport is always built).
 runpod = ["dep:reqwest"]
+# fv-boot (docs/adr/0014-fv-boot.md): the boot sequence's HTTP client
+# (reports, aux files, cloudflared, the watchdog) over reqwest. The `boot`
+# module itself always builds; only the binary needs this.
+boot = ["runpod"]
+
+[[bin]]
+name = "fv-boot"
+required-features = ["boot"]
 
 [lints]
 workspace = true

@@ -1183,6 +1183,46 @@ Project code: FVID
 - ADR: docs/adr/0010-settings-layer.md (amendment B3b)
 - Verification: `techniques::registry::tests` (a Wan profile is refused as before, small families compose nothing), `workspace_check::family_specs_declare_their_techniques_reads`, `fastvideo-core` `family::tests::every_family_has_a_model_spec`
 
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-boot
+- Trigger: plan C2 asks for one boot sequence (review §7.4) instead of the ten in bash, TypeScript strings and Rust (`fv-entry.sh`, fv-control's `*_BOOT` / `PROVIDER_BOOT` / `SLS_*`, the host scripts, Vast's onstart)
+- Options: keep bash and share snippets; one shell script in the image; a Rust binary beside fv-serve driven by the env fv-control already sends
+- Decision: `fv-boot` in `fastvideo-deploy` (feature `boot`), the `ENTRYPOINT` of every serve image (`serve`, `serve-<variant>`, `serve-cpu`); typed steps on four seams (processes, HTTP, clock, log); the host kind from existing env (`FV_PROVIDER`, `FV_SERVE_ROLE`, `RUNPOD_ENDPOINT_ID` / `FV_CONTROL_ENDPOINT`), no new switch; r2 stays on `r2-fetch.py` (streaming under `fv-boot fetch-guard`); `registry` typed and refused until `hydrate`; the upsampler launcher (`fv-upsampler.sh`) kept as the sidecar's supervisor; the report protocols and log markers byte-compatible, pinned by a fixture both the Rust test and a control vitest read; the driver check and `--print-config` preflight on every path; `deploy/runpod/fv-entry.sh` deleted
+- Reason: CPU-testable end to end (fake provider, real fetcher against a fake chunk source); one place for every provider's boot; the env contract is already what fv-control sends
+- Reversibility: cheap (the shell boots remain until C2b; `FV_BOOT_LEGACY=1` selects them)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0014-fv-boot.md
+- Verification: `cargo test --locked -p fastvideo-deploy --features boot`, `control/test/unit/fv-boot-protocol.test.ts`; GPU: `scripts/gpu/fv-boot-smoke-pod.sh` on the EU volume (pending, coordinator)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-boot-staging
+- Trigger: images already deployed have no fv-boot, and fv-control is deployed by hand separately from the images (plan A3 caveat), so fv-control cannot require fv-boot yet
+- Options: wait with fv-control until every image is promoted; payloads that require fv-boot; payloads that prefer fv-boot when the image has it
+- Decision: every shell boot fv-control sends starts with `PREFER_FV_BOOT_SH` (`exec fv-boot` when it is executable and `FV_BOOT_LEGACY` is not 1, else the shell body as before); Vast's onstart prefers fv-boot the same way; the shell bodies are deleted and fv-control sends env only in a follow-up (C2b) once no pool, endpoint, channel or pinned spec can start a pre-fv-boot image; deploy order: merge, GPU gate, promote, fv-control at any time, C2b
+- Reason: all four combinations of old / new fv-control and old / new image keep working; one env switch rolls back without a deploy
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0014-fv-boot.md §6
+- Verification: `fv-boot-protocol.test.ts` (the preamble in every boot; fv-boot runs when present, the shell boot otherwise or with `FV_BOOT_LEGACY=1`); the existing bash boot tests unchanged
+
+### FVID · 2026-10-24 · FVID-2026-10-24-deploy-tests-in-ci
+- Trigger: no workflow ran `fastvideo-deploy`'s tests (fv-boot's fake-provider tests, the Runpod queue simulator)
+- Options: a new workflow; the adapter-tests set
+- Decision: the adapter-tests set (`scripts/serve/coverage.sh`, `crates/fastvideo-deploy/**` in its paths); control.yml also runs on `crates/fastvideo-deploy/fixtures/**` (its vitest reads the fixture)
+- Reason: as for `fastvideo-manifest` and `fastvideo-lab`
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: none
+- Verification: `bash scripts/serve/coverage.sh --tests` on the build pod
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-boot-review
+- Trigger: the independent review of #159: serve-image.yml on main replaces serve-build / cpu-build with a tools release that has no fv-boot; the streaming guard and the watchdog used `kill` / `pkill` binaries the images lack; a refused config hid fv-serve's own line from the boot diagnosis; the rollback switch did not reach the image entrypoint; GCP / CloudRift workers and role endpoints were detected as cluster workers
+- Options: (image build) compile fv-boot inside serve-build / cpu-build and fall back to compiling them whole with an old release; a fv-boot-only `boot-build` stage that a release carrying fv-boot replaces through prebuilt.sh; an optional COPY (an image without its entrypoint)
+- Decision: a `boot-build` stage (`FROM builder`, fv-boot only) that every serve stage copies from, replaced by `boot-build=<serve set>` when the tools release has `out/fv-boot` (release-artifacts-pod.sh, tools-deps.sh and the tools-release.sh gates ship and check it from now on); signals by pid through `sh -c 'kill -s SIG "$1"'`; fv-serve's stderr logged verbatim; `FV_BOOT_LEGACY=1` honoured by fv-boot with fv-entry.sh's steps only; kind precedence provider > serverless (`RUNPOD_ENDPOINT_ID` / `FV_CONTROL_ENDPOINT`) > cluster worker (`FV_SERVE_ROLE=worker` and `RUNPOD_POD_ID`) > image; a controller worker without a config fails; pod reports end on any HTTP answer; `FV_BACKSTOP_API_KEY` only in the watchdog's env; recommended rollout: fv-control deployed with `FV_BOOT_LEGACY=1`, lifted per kind after a per-kind check
+- Reason: serve-image.yml stays green with today's newest release (only one small crate compiles) and with every later one (nothing compiles); the other fixes restore the shell boots' behaviour where fv-boot had drifted
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0014-fv-boot.md (§2, §3.2, §4, §5, §6, §8)
+- Verification: `cargo test --locked -p fastvideo-deploy --features boot` (a real process stopped through the shell builtin, the legacy path, the kinds, the reports), `scripts/ci/test_tools_release.sh` (the `prebuilt.sh contexts` cases), `prebuilt.sh fetch` against tools-v0.1.37, `fv-boot-protocol.test.ts` (a refused config is a crash loop)
+
 ### FVID · 2026-10-24 · FVID-2026-10-24-loader-stages
 - Trigger: plan B6: split `H3Pipeline::load` (one ~880-line function) and `Ltx2Pipeline::load` into plan, open, place, fuse; "engine lifecycle testable on CPU"
 - Options: extract helper functions inside the existing bodies; four typed stages with the device read once into a facts value the plan decides on; four stages with the plan reading the device itself

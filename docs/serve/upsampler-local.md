@@ -79,8 +79,10 @@ boot ── mkdir /fvstate ── fv-upsampler start ─┐ (background)
 
 - **Where the boot runs it**: Runpod cluster / standalone pods (`cluster/payloads.ts bootFor`: only when the env has
   `FV_UPSAMPLER_LOCAL=1`), GMI / Brev (`PROVIDER_BOOT`), serverless workers with a config or r2 (`SLS_BOOT`,
-  `SLS_R2_BOOT`), and the image entrypoint `fv-entry` (serverless workers on the image's own config). The snippets are
-  no-ops without `FV_UPSAMPLER_LOCAL=1`.
+  `SLS_R2_BOOT`), and the image entrypoint (serverless workers on the image's own config). The snippets are
+  no-ops without `FV_UPSAMPLER_LOCAL=1`. Images with `fv-boot` ([ADR-0014](../adr/0014-fv-boot.md)) run it instead
+  of every one of these boots; it drives the same launcher (`fv-upsampler start` early, `wait` before fv-serve, the
+  same reports).
 - **The fetch** is the weights' own R2 path: `POST /ingest/v1/weights-plan?set=upsampler` answers the sidecar's tree
   only, for a pool / endpoint whose spec has `upsampler_local` (409 otherwise), with any weights source; `r2-fetch.py`
   checks every part against the manifest. Where it lands: `$FV_WEIGHTS` when the pod's weights are on its own disk
@@ -106,7 +108,7 @@ boot ── mkdir /fvstate ── fv-upsampler start ─┐ (background)
   (docs/serve/e2e/gpu-check-2026-10-13.md): while H3 denoises beside it the sidecar decodes at 32-38 tok/s (76-88
   idle), a director segment is 600-1 050 tokens of JSON, so a segment takes 9-28 s and one crossed the old 30 s timeout;
   and a deck of 6 made 17 LLM calls for 3 played segments, each competing with the chunk being built. The defaults
-  live in fv-serve rather than in the launcher's exports so that they apply however fv-serve is started (fv-entry,
+  live in fv-serve rather than in the launcher's exports so that they apply however fv-serve is started (fv-boot,
   fv-control's boots, a hand-written config) and an operator's TOML value is never overridden by an exported env
   default (the launcher used to export `FV_UPSAMPLER_HEDGE` / `FV_UPSAMPLER_TIMEOUT_MS`, which beat the TOML). The
   director also plans nothing beyond the next segment while a chunk waits for its prompt, and only the next segment
@@ -247,7 +249,7 @@ is dropped again.
 
 ## 7. Files
 
-`deploy/runpod/fv-upsampler.sh` (launcher), `deploy/runpod/fv-entry.sh`, `docker/gpucheck.Dockerfile` (llama-build,
+`deploy/runpod/fv-upsampler.sh` (launcher), `crates/fastvideo-deploy/src/boot/sidecar.rs` (fv-boot's start / wait), `docker/gpucheck.Dockerfile` (llama-build,
 llama-server, serve-cuda-bin), `scripts/ci/base-images.sh` (`ensure llama-server`), `.github/workflows/serve-image.yml`,
 `control/src/upsampler.ts` (env, boot snippets, checks), `control/src/weights-plan.ts` (`?set=upsampler`),
 `control/test/unit/upsampler.test.ts`, `scripts/serve/upsampler-bench.py` (the measurement), the weights records in

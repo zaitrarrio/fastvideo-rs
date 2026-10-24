@@ -50,6 +50,9 @@ CRATES=(
   # The family manifests' and the deployment data's types, validation and schema drift
   # (ADR-0008, ADR-0011): its tests read families/ and deploy/deploy.toml.
   fastvideo-manifest
+  # fv-boot's sequence against a fake provider and the protocol fixture fv-control's
+  # vitest shares (ADR-0014), and the Runpod queue worker's simulator tests.
+  fastvideo-deploy
 )
 PKGS=()
 for c in "${CRATES[@]}"; do PKGS+=(-p "$c"); done
