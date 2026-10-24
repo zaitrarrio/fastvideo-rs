@@ -4,7 +4,9 @@
 # engine-service, serve-kit, upsampler), fastvideo-lab (the gold files of
 # lab/gold and the profile-comment lint) and fastvideo-manifest (the family
 # manifests and deploy/deploy.toml: validation, schema drift), instrumented by
-# cargo-llvm-cov. The
+# cargo-llvm-cov. The parameter certification matrix (plan E3,
+# crates/fastvideo-serve/tests/cert_matrix.rs) runs here as a serve test and
+# checks docs/serve/certification.tsv. The
 # crate set lives in scripts/serve/coverage.sh, which also writes the reports:
 # lcov.info and an HTML report as the `adapter-coverage` artifact, and the
 # line / region / function totals in the job summary.
@@ -39,6 +41,11 @@ on:
       - "lab/**"
       - "profiles/**"
       - "families/**"
+      # The shipped serve configs and the certification matrix's TSV (plan
+      # E3): param_spec_golden and cert_matrix read them.
+      - "configs/serve/**"
+      - "tests/compat/serve.toml"
+      - "docs/serve/certification.tsv"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
@@ -67,6 +74,9 @@ on:
       - "lab/**"
       - "profiles/**"
       - "families/**"
+      - "configs/serve/**"
+      - "tests/compat/serve.toml"
+      - "docs/serve/certification.tsv"
       - "Cargo.lock"
       - "scripts/serve/coverage.sh"
       - ".github/workflows/adapter-tests.yml"
