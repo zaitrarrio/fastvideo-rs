@@ -287,10 +287,11 @@ pub struct ClipBounds {
 }
 
 /// `set_canvas` aspects (fast-h3).
-pub const ASPECTS: [&str; 4] = ["16:9", "1:1", "9:16", "4:3"];
-/// fast-h3 limits.
-pub const PROMPT_MAX: usize = 800;
-pub const METADATA_MAX: usize = 2000;
+pub use fastvideo_protocol::params::rules::fast_h3::ASPECTS;
+/// fast-h3 limits (`fastvideo_protocol::params::rules::fast_h3`).
+pub use fastvideo_protocol::params::rules::fast_h3::{
+    METADATA_MAX_CHARS as METADATA_MAX, PROMPT_MAX_CHARS as PROMPT_MAX,
+};
 
 fn s(max: usize) -> ParamType {
     ParamType::String { max_len: Some(max) }

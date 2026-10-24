@@ -14,20 +14,18 @@
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+use fastvideo_protocol::params::rules::fal_director as rules;
+
 /// JS `Number.MAX_SAFE_INTEGER`: versions must stay within it (fal §8.3).
-pub const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
-/// `prompt` / beat prompt length bounds.
-pub const PROMPT_MAX_CHARS: usize = 50_000;
-/// `script` beat count bounds.
-pub const SCRIPT_MAX_BEATS: usize = 64;
-/// `configure.style` length bound (ours, with `upsample`).
-pub const STYLE_MAX_CHARS: usize = 2_000;
+pub use fastvideo_protocol::params::rules::fal_director::PROMPT_VERSION_MAX as MAX_SAFE_INTEGER;
+/// `prompt` / beat prompt length bounds; `script` beat count bounds;
+/// `configure.style` length bound (ours, with `upsample`);
 /// `configure.entities` bounds (ours, with `upsample`): entries, id, name
-/// and descriptor lengths.
-pub const ENTITIES_MAX: usize = 32;
-pub const ENTITY_ID_MAX_CHARS: usize = 64;
-pub const ENTITY_NAME_MAX_CHARS: usize = 200;
-pub const ENTITY_DESCRIPTOR_MAX_CHARS: usize = 1_000;
+/// and descriptor lengths (`rules::fal_director`).
+pub use fastvideo_protocol::params::rules::fal_director::{
+    ENTITIES_MAX, ENTITY_DESCRIPTOR_MAX_CHARS, ENTITY_ID_MAX_CHARS, ENTITY_NAME_MAX_CHARS,
+    PROMPT_MAX_CHARS, SCRIPT_MAX_BEATS, STYLE_MAX_CHARS,
+};
 /// Server messages of the prompt upsampler (ours, sent only to sessions
 /// that turned it on; not in fal's list above).
 pub const UPSAMPLE_SERVER_MESSAGE_TYPES: [&str; 1] = ["segment_expanded"];
@@ -35,9 +33,9 @@ pub const UPSAMPLE_SERVER_MESSAGE_TYPES: [&str; 1] = ["segment_expanded"];
 /// fal's schema, which echoes the session's chunk length as
 /// `configured.chunk_duration` but takes none. Clip models only; a causal
 /// model ignores it.
-pub const CHUNK_DURATIONS: [u32; 2] = [5, 10];
+pub use fastvideo_protocol::params::rules::fal_director::CHUNK_DURATIONS;
 /// `configure.chunk_duration` when absent (the director's default).
-pub const DEFAULT_CHUNK_DURATION: u32 = 5;
+pub use fastvideo_protocol::params::rules::fal_director::DEFAULT_CHUNK_DURATION;
 /// Reserved WMA network-info vocabulary (JS `wma.ts`).
 pub const NETWORK_INFO_REQUEST: &str = "wma.network-info.request";
 pub const NETWORK_INFO_RESPONSE: &str = "wma.network-info.response";
@@ -471,10 +469,14 @@ pub fn parse(text: &str) -> Result<ClientMessage, Invalid> {
                     if d.as_u64()
                         .is_some_and(|d| CHUNK_DURATIONS.iter().any(|&c| u64::from(c) == d)) => {}
                 Some(d) => {
+                    let list: Vec<String> = CHUNK_DURATIONS.iter().map(u32::to_string).collect();
                     return Err(invalid(
-                        format!("`chunk_duration` must be 5 or 10 (whole seconds), got {d}"),
+                        format!(
+                            "`chunk_duration` must be {} (whole seconds), got {d}",
+                            list.join(" or ")
+                        ),
                         &v,
-                    ))
+                    ));
                 }
             }
             let m: Configure = serde_json::from_value(v.clone()).map_err(de)?;
@@ -482,20 +484,35 @@ pub fn parse(text: &str) -> Result<ClientMessage, Invalid> {
             check_text("prompt", &m.prompt, &v)?;
             check_url("image_url", &m.image_url, &v)?;
             if let Some(mem) = m.memory {
-                if !(1..=50).contains(&mem) {
-                    return Err(invalid("`memory` must be in 1..50", &v));
-                }
-            }
-            if let Some(b) = m.audio_bitrate {
-                if !matches!(b, 96_000 | 128_000 | 192_000) {
+                if !rules::MEMORY.contains(i64::from(mem)) {
                     return Err(invalid(
-                        "`audio_bitrate` must be 96000, 128000 or 192000",
+                        format!(
+                            "`memory` must be in {}..{}",
+                            rules::MEMORY.min,
+                            rules::MEMORY.max
+                        ),
                         &v,
                     ));
                 }
             }
-            if m.protocol_version.is_some_and(|p| p != 1) {
-                return Err(invalid("`protocol_version` must be 1", &v));
+            if let Some(b) = m.audio_bitrate {
+                if !rules::AUDIO_BITRATES.contains(&b) {
+                    let [a, rest @ ..] = rules::AUDIO_BITRATES;
+                    let mut list = a.to_string();
+                    for (i, r) in rest.iter().enumerate() {
+                        list += if i + 1 == rest.len() { " or " } else { ", " };
+                        list += &r.to_string();
+                    }
+                    return Err(invalid(format!("`audio_bitrate` must be {list}"), &v));
+                }
+            }
+            if m.protocol_version
+                .is_some_and(|p| p != rules::PROTOCOL_VERSION)
+            {
+                return Err(invalid(
+                    format!("`protocol_version` must be {}", rules::PROTOCOL_VERSION),
+                    &v,
+                ));
             }
             check_script(&m.script, &v)?;
             check_world(&m, &v)?;

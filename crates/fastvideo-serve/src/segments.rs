@@ -68,8 +68,8 @@ use tokio::sync::{mpsc, Notify};
 
 use crate::gate::ServiceGate;
 
-/// Longest accepted prompt (the causal control's own limit).
-const MAX_PROMPT_CHARS: usize = 800;
+// Longest accepted prompt (the causal control's own limit).
+use fastvideo_protocol::params::rules::fast_h3::PROMPT_MAX_CHARS as MAX_PROMPT_CHARS;
 
 /// `[segments]` resolved.
 #[derive(Clone, Debug)]

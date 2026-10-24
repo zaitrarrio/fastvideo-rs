@@ -106,6 +106,8 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Serve, "GET", "/metrics"),
         // Public status view (single server and gateway, src/status.rs).
         r(Serve, "GET", "/fv/v1/status"),
+        // Every mounted endpoint's ParamSpec (plan E2, src/params.rs).
+        r(Serve, "GET", "/fv/v1/params"),
         // Request traces (docs/serve/tracing.md, src/trace_http.rs).
         r(Serve, "GET", "/fv/v1/traces/{id}"),
         r(Serve, "POST", "/fv/v1/traces/{id}/events"),

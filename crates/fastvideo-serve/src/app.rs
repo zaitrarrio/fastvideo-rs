@@ -1148,6 +1148,8 @@ pub fn assemble(
             ));
         }
     }
+    // `GET /fv/v1/params`: every mounted endpoint's ParamSpec (plan E2).
+    kit = kit.merge(crate::params::routes(mcfg.clone(), config.protocols.native));
     let (adapters, stateful) = adapters::mount(&mcfg, ctx, fal_extra);
     kit = kit.merge(adapters);
     let artifacts_kind = match config.artifact_backend() {

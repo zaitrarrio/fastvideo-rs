@@ -24,6 +24,7 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use axum::Router;
 use base64::Engine as _;
+use fastvideo_protocol::params::rules::openai_videos as rules;
 use fastvideo_protocol::{
     Anchor, ApiError, ArtifactLocation, BatchProtocol, CanvasSpec, ErrorCtx, Family,
     GenerationRequest, HttpReply, Job, JobId, JobStatus, JobView, KeyId, Keyframe, Length,
@@ -43,9 +44,6 @@ use crate::VideosConfig;
 /// `Aspect { short_edge }` placeholder for "the model's default short edge";
 /// [`apply_model`] replaces it.
 pub const DEFAULT_SHORT_EDGE: u32 = 0;
-
-/// FastVideo's H3 minimum clip length (5-15 s, `packing.py:21-29`).
-pub const H3_MIN_SECONDS: u32 = 5;
 
 /// How long signed URLs handed out by redirects stay valid.
 const URL_TTL: Duration = Duration::from_secs(3600);
@@ -218,8 +216,6 @@ pub const EXTRA_PARAMS: [&str; 8] = [
     "vsa_dense_layers",
 ];
 
-const QUALITIES: [&str; 4] = ["auto", "default", "standard", "hd"];
-
 /// Form fields that carry JSON strings (minimax-fastvideo §2.1).
 const FORM_JSON: [&str; 8] = [
     "image_reference",
@@ -384,9 +380,10 @@ impl SubmitEndpoint for VideosCreate {
             ("n", b.n),
             ("num_outputs_per_prompt", b.num_outputs_per_prompt),
         ] {
-            match v {
-                None | Some(1) => {}
-                Some(2..=10) => {
+            match v.map(i64::from) {
+                None => {}
+                Some(n) if n == rules::OUTPUTS_SERVED => {}
+                Some(n) if rules::OUTPUTS.contains(n) => {
                     return Err(ApiError::invalid_param(
                         field,
                         "exactly one video output per request is supported",
@@ -395,7 +392,7 @@ impl SubmitEndpoint for VideosCreate {
                 Some(_) => {
                     return Err(ApiError::invalid_param(
                         field,
-                        format!("`{field}` must be within 1..=10"),
+                        format!("`{field}` must be within {}", rules::OUTPUTS),
                     ))
                 }
             }
@@ -458,34 +455,43 @@ impl SubmitEndpoint for VideosCreate {
             ));
         }
         if let Some(q) = &b.quality {
-            if !QUALITIES.contains(&q.as_str()) {
+            if !rules::QUALITIES.contains(&q.as_str()) {
                 return Err(ApiError::invalid_param(
                     "quality",
-                    "quality must be one of auto, default, standard, hd",
+                    format!("quality must be one of {}", rules::QUALITIES.join(", ")),
                 ));
             }
         }
         if let Some(s) = b.num_inference_steps {
-            if !(1..=200).contains(&s) {
+            if !rules::NUM_INFERENCE_STEPS.contains(i64::from(s)) {
                 return Err(ApiError::invalid_param(
                     "num_inference_steps",
-                    "num_inference_steps must be within 1..=200",
+                    format!(
+                        "num_inference_steps must be within {}",
+                        rules::NUM_INFERENCE_STEPS
+                    ),
                 ));
             }
         }
-        if let Some(g) = b.guidance_scale {
-            if !(0.0..=20.0).contains(&g) {
-                return Err(ApiError::invalid_param(
-                    "guidance_scale",
-                    "guidance_scale must be within 0..=20",
-                ));
+        // `guidance_scale_2` has the same `ge=0, le=20` upstream.
+        for (field, g) in [
+            ("guidance_scale", b.guidance_scale),
+            ("guidance_scale_2", b.guidance_scale_2),
+        ] {
+            if let Some(g) = g {
+                if !rules::GUIDANCE_SCALE.contains(f64::from(g)) {
+                    return Err(ApiError::invalid_param(
+                        field,
+                        format!("{field} must be within {}", rules::GUIDANCE_SCALE),
+                    ));
+                }
             }
         }
         if let Some(r) = b.boundary_ratio {
-            if !(0.0..=1.0).contains(&r) {
+            if !rules::BOUNDARY_RATIO.contains(f64::from(r)) {
                 return Err(ApiError::invalid_param(
                     "boundary_ratio",
-                    "boundary_ratio must be within 0..=1",
+                    format!("boundary_ratio must be within {}", rules::BOUNDARY_RATIO),
                 ));
             }
         }
@@ -689,10 +695,14 @@ impl SubmitEndpoint for VideosCreate {
                 }
             }
             Some("fl2va") => {
-                if !no_av || !(1..=2).contains(&images.len()) {
+                let k = rules::KEYFRAME_IMAGES;
+                if !no_av || !k.contains_u64(images.len() as u64) {
                     return Err(ApiError::invalid_param(
                         "task",
-                        "fl2va takes 1 or 2 images and no video or audio references",
+                        format!(
+                            "fl2va takes {} or {} images and no video or audio references",
+                            k.min, k.max
+                        ),
                     ));
                 }
                 (req.task, req.keyframes) = frames_task(images);
@@ -708,7 +718,9 @@ impl SubmitEndpoint for VideosCreate {
                 ))
             }
             None if images.is_empty() && no_av => {}
-            None if no_av && images.len() <= 2 => (req.task, req.keyframes) = frames_task(images),
+            None if no_av && rules::KEYFRAME_IMAGES.contains_u64(images.len() as u64) => {
+                (req.task, req.keyframes) = frames_task(images)
+            }
             None => {
                 req.task = Task::Ref2V;
                 req.references = refs_task(images, videos, audio)?;
@@ -782,16 +794,23 @@ pub fn apply_model(
         req.note_noop("negative_prompt");
     }
     let fps = req.timing.fps.unwrap_or(caps.fps.default);
-    let min = caps.frames.next_on_grid(H3_MIN_SECONDS * fps).unwrap_or(0);
+    let secs = rules::H3_SECONDS;
+    let min = caps
+        .frames
+        .next_on_grid(secs.min_u32().saturating_mul(fps))
+        .unwrap_or(0);
     let (short, param) = match req.timing.length {
-        Length::Seconds { value, .. } => (value < H3_MIN_SECONDS as f64, "seconds"),
+        Length::Seconds { value, .. } => (value < secs.min as f64, "seconds"),
         Length::Frames { value, .. } => (value < min, "num_frames"),
         _ => (false, ""),
     };
     if short {
         return Err(ApiError::invalid_param(
             param,
-            format!("H3 clips are 5 to 15 seconds long ({min} frames or more at {fps} fps)"),
+            format!(
+                "H3 clips are {} to {} seconds long ({min} frames or more at {fps} fps)",
+                secs.min, secs.max
+            ),
         ));
     }
     Ok(())
@@ -1169,14 +1188,15 @@ pub struct ListParams {
 /// Parses the list query: `limit` 1..=100 (default 20), `order` asc|desc
 /// (default desc).
 pub fn list_query(p: &ListParams) -> Result<ListQuery, ApiError> {
+    let l = rules::LIST_LIMIT;
     let limit = match &p.limit {
-        None => 20,
+        None => l.default_usize(),
         Some(s) => match s.parse::<usize>() {
-            Ok(n) if (1..=100).contains(&n) => n,
+            Ok(n) if l.range.contains_u64(n as u64) => n,
             _ => {
                 return Err(ApiError::invalid_param(
                     "limit",
-                    "limit must be within 1..=100",
+                    format!("limit must be within {}", l.range),
                 ))
             }
         },

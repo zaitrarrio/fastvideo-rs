@@ -55,6 +55,7 @@ pub mod create;
 pub mod delete;
 pub mod error;
 mod limits;
+pub mod params;
 pub mod query;
 
 pub use callback::callback_renderer;
@@ -110,15 +111,21 @@ impl MiniMaxModel {
     /// Shortest `duration` in seconds: 4 for `MiniMax-H3` (and our Turbo /
     /// Draft), 5 for `MiniMax-H3-Max` (research §1.3: "4 is rejected").
     pub fn min_duration(&self) -> u32 {
-        match self {
-            MiniMaxModel::H3Max => 5,
-            _ => 4,
-        }
+        self.durations().min_u32()
     }
 
     /// Longest `duration` in seconds.
     pub fn max_duration(&self) -> u32 {
-        15
+        self.durations().max_u32()
+    }
+
+    /// The `duration` range (`fastvideo_protocol::params::rules::minimax`).
+    pub fn durations(&self) -> fastvideo_protocol::IntRange {
+        use fastvideo_protocol::params::rules::minimax::{DURATION, DURATION_MAX_MODEL};
+        match self {
+            MiniMaxModel::H3Max => DURATION_MAX_MODEL,
+            _ => DURATION,
+        }
     }
 
     /// Resolutions the model's schema lists.

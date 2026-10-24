@@ -57,12 +57,12 @@ use super::queue::{
 };
 use super::rules::valid_commands;
 
-/// `enqueue.prompt` limit (fast-h3 `MAX_PROMPT_CHARS`).
-pub const MAX_PROMPT_CHARS: usize = 800;
-/// `enqueue.metadata` limit (fast-h3 `MAX_METADATA_CHARS`).
-pub const MAX_METADATA_CHARS: usize = 2000;
 /// The aspect ratios fast-h3 offers for `set_canvas`.
-pub const ASPECT_CHOICES: [&str; 4] = ["16:9", "1:1", "9:16", "4:3"];
+pub use fastvideo_protocol::params::rules::fast_h3::ASPECTS as ASPECT_CHOICES;
+/// `enqueue.metadata` limit (fast-h3 `MAX_METADATA_CHARS`).
+pub use fastvideo_protocol::params::rules::fast_h3::METADATA_MAX_CHARS as MAX_METADATA_CHARS;
+/// `enqueue.prompt` limit (fast-h3 `MAX_PROMPT_CHARS`).
+pub use fastvideo_protocol::params::rules::fast_h3::PROMPT_MAX_CHARS as MAX_PROMPT_CHARS;
 
 /// A clip-session command (design §5.5; fast-h3 verbatim plus the director's
 /// `Chunk`).

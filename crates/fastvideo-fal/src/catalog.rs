@@ -1008,7 +1008,7 @@ pub fn director_schema(caps: &ModelCaps) -> Value {
             let labels: Map<String, Value> = options
                 .iter()
                 .map(|d| {
-                    let what = if *d <= 5 {
+                    let what = if *d <= crate::director::messages::DEFAULT_CHUNK_DURATION {
                         "prompt changes land sooner"
                     } else {
                         "fewer joins"

@@ -36,19 +36,29 @@ use serde_json::Value;
 
 use super::{bad, parse_enum, type_name, Fields, PROMPT_MAX_CHARS};
 
-pub const WAN_FRAMES_MIN: i64 = 17;
-pub const WAN_FRAMES_MAX: i64 = 161;
-pub const WAN_FRAMES_DEFAULT: i64 = 81;
-pub const WAN_FPS_MIN: i64 = 4;
-pub const WAN_FPS_MAX: i64 = 60;
-pub const WAN_FPS_DEFAULT: i64 = 24;
-pub const WAN_STEPS_MIN: i64 = 2;
-pub const WAN_STEPS_MAX: i64 = 50;
-pub const WAN_STEPS_DEFAULT: i64 = 40;
-pub const WAN_GUIDANCE: (f64, f64, f64) = (1.0, 10.0, 3.5);
-pub const WAN_SHIFT: (f64, f64, f64) = (1.0, 10.0, 5.0);
-pub const WAN_INTERPOLATED_MAX: i64 = 4;
-pub const INTERPOLATORS: [&str; 3] = ["none", "film", "rife"];
+use fastvideo_protocol::params::rules::fal_wan as rules;
+
+pub const WAN_FRAMES_MIN: i64 = rules::NUM_FRAMES.range.min;
+pub const WAN_FRAMES_MAX: i64 = rules::NUM_FRAMES.range.max;
+pub const WAN_FRAMES_DEFAULT: i64 = rules::NUM_FRAMES.default;
+pub const WAN_FPS_MIN: i64 = rules::FRAMES_PER_SECOND.range.min;
+pub const WAN_FPS_MAX: i64 = rules::FRAMES_PER_SECOND.range.max;
+pub const WAN_FPS_DEFAULT: i64 = rules::FRAMES_PER_SECOND.default;
+pub const WAN_STEPS_MIN: i64 = rules::NUM_INFERENCE_STEPS.range.min;
+pub const WAN_STEPS_MAX: i64 = rules::NUM_INFERENCE_STEPS.range.max;
+pub const WAN_STEPS_DEFAULT: i64 = rules::NUM_INFERENCE_STEPS.default;
+pub const WAN_GUIDANCE: (f64, f64, f64) = (
+    rules::GUIDANCE_SCALE.range.min,
+    rules::GUIDANCE_SCALE.range.max,
+    rules::GUIDANCE_SCALE.default,
+);
+pub const WAN_SHIFT: (f64, f64, f64) = (
+    rules::SHIFT.range.min,
+    rules::SHIFT.range.max,
+    rules::SHIFT.default,
+);
+pub const WAN_INTERPOLATED_MAX: i64 = rules::INTERPOLATED_FRAMES.range.max;
+pub use fastvideo_protocol::params::rules::fal_wan::INTERPOLATORS;
 
 /// Which 5B endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -288,7 +298,14 @@ pub(super) fn parse(f: &Fields, variant: WanVariant) -> Result<WanInput, ApiErro
             ));
         }
     };
-    let num_interpolated_frames = int_in(f, "num_interpolated_frames", 0, WAN_INTERPOLATED_MAX, 0)?;
+    let i = rules::INTERPOLATED_FRAMES;
+    let num_interpolated_frames = int_in(
+        f,
+        "num_interpolated_frames",
+        i.range.min,
+        i.range.max,
+        i.default,
+    )?;
     if interpolator_model != "none" && num_interpolated_frames > 0 {
         return Err(bad(
             "interpolator_model",
