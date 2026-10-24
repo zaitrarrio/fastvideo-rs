@@ -350,8 +350,12 @@ over the v1 fields), and, on disk, that an entry the legacy code wrote is
 not read by the new code for the same prompt and weights (a miss that
 computes, leaves the old file and stores its own).
 
-Mutations (each applied alone, the tests rerun; listed in the plan's
-execution log with the results). Fields that are selected at a call site
+Mutations (each applied alone, the tests rerun, all 20 caught): each new
+field dropped from the H3, LTX and Wan keys (weights read, tree identity,
+numerics, mode); each recovered-8B file dropped from its identity; each
+domain reverted to its v1 value; the arch, the activations or the GEMM
+math dropped from `Numerics`; `ResidentDecoder::prequantized` never set;
+the tree keyed as quantise-at-load; one field for both LTX modes. Fields that are selected at a call site
 on the device (which weights an encoder read, the mode, the numerics on a
 GPU) are held by the `b4c2` GPU cells instead: each cell fails when this
 build's read pass hits.

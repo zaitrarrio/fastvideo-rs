@@ -108,7 +108,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | active (B4a pr #173: step caches, ADR-0020, GPU `b4a` cells pending; then B4b `fuse.rs`; B4c pr #177: one disk prompt cache `rt::prompt_cache`, ADR-0021, GPU `b4c` cells passed; B4c2 closes the pre-existing key gaps) |
+| B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | active (B4a pr #173: step caches, ADR-0020, GPU `b4a` cells pending; then B4b `fuse.rs`; B4c pr #177: one disk prompt cache `rt::prompt_cache`, ADR-0021, GPU `b4c` cells passed; B4c2 pr #178: the six pre-existing key gaps closed, GPU `b4c2` cells pending) |
 | B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | merged (#161) |
 | B6 | `H3Pipeline::load` and `Ltx2Pipeline::load` split into plan, open, place, fuse; dead code (`TensorBackend`, mlx scaffold) retired | engine lifecycle testable on CPU | pod | B1 | merged (#170: plan/open/place/fuse, ADR-0017; `techniques` and `b6` GPU identity cells all byte-identical vs main; TensorBackend and the mlx scaffold retired) |
 
@@ -881,3 +881,30 @@ ran (pod id, $/hr), result, cost.
   363 s / 130 s, PR 100 s / 27 s (the base arms run first and pay the cold
   volume reads). About 19 GPU-minutes, ~$0.80. Evidence:
   `artifacts/runpod/b4c/da9dbac-{10241612,10241613}/`.
+- 2026-10-24 17:40Z: B4c2 opened draft PR #178 (`claude/b4c2-prompt-key-gaps`):
+  the six key gaps of ADR-0021 closed. New key fields, each the value the
+  run resolved: `Numerics` (GEMM math, compute capability, bf16
+  activations; `Numerics::live` at the lookup), `WeightsRead` plus the FP8
+  tree's identity (H3 `ResidentDecoder::prequantized`, the streamed tree;
+  LTX `gemma_read`), LTX `TextMode` (`planned_mode`, taken before the
+  lookup and run by the miss), recovered-8B file identities of base, LoRA
+  and adapter. New domains (`fastvideo h3 text conditioning v2`,
+  `WANTEXT2`, `fastvideo ltx2 text conditioning v2`); layout and magics
+  unchanged; every existing entry misses once. CPU evidence: pinned keys
+  recomputed in Python, the families' key tests, `numerics` tests,
+  `b4c2_keys_never_name_a_legacy_entry` (no new key names a legacy entry;
+  an entry legacy wrote is a miss for the new code), the v1 derivations
+  still equal to `legacy.rs`; 20 mutations (each new field dropped, each
+  recovered file dropped, each domain reverted, `Numerics` parts dropped,
+  `prequantized` never set, tree keyed as at-load, one mode field) all
+  caught. On build pod `l3d75u8a8zhw47` (agent `b4c2-keys`): fmt, workspace
+  clippy `-D warnings`, `--features cuda` check (cudarc, engine-service,
+  gpucheck, core), cudarc + models + engine-service + core tests (1424
+  passed), `cargo test --workspace --lib` (2081 passed),
+  `scripts/gpu/lint.sh`, `b4-verdict.test.sh`, `scripts/serve/check.sh`
+  green. Found and recorded, not closed: `FASTVIDEO_FP8` linears and
+  `FASTVIDEO_SDPA` (ADR-0021 "B4c2" rows 7, 8). GPU gate pending
+  (coordinator): `runpod-matrix.sh b4c2` with `FV_BASELINE_SHA=17e4a1dc`,
+  cells `b4c2-ltx25-fp8`, `b4c2-ltx25-mode`, `b4c2-h3-numerics`,
+  `b4c2-h3-tree`, `b4c2-h3-noop` (`FV_B4C2_CELLS`); recovered 8B and Wan are
+  CPU evidence only (not on the EU volume).
