@@ -1042,3 +1042,23 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: none
 - Verification: the workflow on the A4 PR
+
+### FVID · 2026-10-24 · FVID-2026-10-24-deploy-section
+- Trigger: plan C1 asks for the deployment half of the family manifest (review §7.4) and the deployment tables A4 left hand-written (presets, `enums.ts` `VARIANTS` / `POOL_PRESET_IDS`, `variants.sh`, `families.tsv` rows, autoscale pools, the `images.md` table, the Dockerfile variant stages) generated from it
+- Options: a `[deploy]` table per variant in `families/*.toml`; one `deploy/<family>.toml` per family; one `deploy/deploy.toml`; types in `fastvideo-manifest` or in `fastvideo-deploy`
+- Decision: one `deploy/deploy.toml` (images, model presets = one pool each, family presets, GCP rows, dispatch map, autoscale pools), typed and validated in `fastvideo_manifest::deploy` against the `FamilySet` (variant ids exist, recipe names resolve to them, family-preset card class meets the variants' floor, only the EU volume `bz0ofkfx45` in `EU-RO-1`), schema `deploy.v1.json` with a drift test; `control/gen-configs.mjs` generates every table from it with `--check`; the single CUDA image with boot-time config is analysed in the ADR and left to the owner
+- Reason: the engine embeds the family files, so deployment edits there would rebuild it; the deployment unit is a pool, not a variant; the dashboard and the autoscaler keep cross-family orders and some entries have no family; validation needs the family types and no server stack (`fastvideo-deploy` is the fv-serve queue worker)
+- Reversibility: cheap (this repository's format, versioned by `schema`; not a registry contract)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0011-deploy-section.md
+- Verification: `cargo test -p fastvideo-manifest` (`deploy::tests`, `tests/deploy.rs`, `tests/schema.rs`), `gen-configs.mjs --check`, `control/test/unit/deploy-gen.test.ts`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-manifest-tests-in-ci
+- Trigger: no workflow ran `fastvideo-manifest`'s tests, so the deployment file's Rust validation and the schema drift would only run on the build pod
+- Options: a new workflow; add the crate to the adapter-tests set (`scripts/serve/coverage.sh`) with `crates/fastvideo-manifest/**` and `deploy/deploy.toml` in its paths
+- Decision: the adapter-tests set (one more crate, no new workflow), as D2 did for `fastvideo-lab`
+- Reason: one place for the CPU crates' tests and coverage; `families/**` already triggers it
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: none
+- Verification: `bash scripts/serve/coverage.sh --tests` on the build pod (13 crates, 819 passed)

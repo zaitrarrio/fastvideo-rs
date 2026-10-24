@@ -67,6 +67,22 @@ and its `serving` table, and the `engine` table in the serde form of the
 engine's `CudaRecipe`. The control plane and the scripts are generated from
 these files (plan A4, `control/gen-configs.mjs`).
 
+## Deploying a variant: `deploy/deploy.toml`
+
+These files say what a variant is; how it is deployed lives in
+`deploy/deploy.toml` (plan C1, [ADR-0011](../docs/adr/0011-deploy-section.md)),
+not here: the engine embeds these files, and the deployment unit is a
+preset (one pool: a set of variants on one image variant with one worker
+config, queue and timeouts), not a variant. To serve a new variant, add a
+`[[presets]]` table there whose `models` name its variant id (and a
+`configs/serve` worker config naming it), then run `node
+control/gen-configs.mjs`: the presets, image and preset tables, the GCP rows,
+the autoscale pools and the Dockerfile stages are generated from that file.
+`crates/fastvideo-manifest` (module `deploy`) checks it against these
+files: every variant id exists, every recipe name resolves to its variant,
+a family preset's card class meets its variants' `gpu.min_vram_gib`, the
+only volume is the EU one.
+
 ## Reading a file
 
 - `id` is the variant id (the engine model id unless a serve config renames

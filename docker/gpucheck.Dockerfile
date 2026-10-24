@@ -491,6 +491,7 @@ ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-entry"]
 
 # ---- one thin stage per variant: its config (plus the fake config for the
 # CI smoke check) and the variant's identity for the entrypoint.
+# BEGIN GENERATED from deploy/deploy.toml by control/gen-configs.mjs; do not edit
 FROM serve-cuda-bin AS serve-h3-turbo
 COPY configs/serve/runpod.toml configs/serve/runpod-fake.toml /etc/fv/
 ENV FV_VARIANT=h3-turbo FV_CONFIG=/etc/fv/runpod.toml
@@ -511,8 +512,7 @@ COPY configs/serve/runpod-wan.toml configs/serve/runpod-fake.toml /etc/fv/
 ENV FV_VARIANT=wan FV_CONFIG=/etc/fv/runpod-wan.toml
 LABEL org.opencontainers.image.description="fv-serve wan (configs/serve/runpod-wan.toml)"
 
-# Also carries runpod-wan14b.toml (the Wan 14B fast tier, same binary):
-# FV_CONFIG=/etc/fv/runpod-wan14b.toml selects it.
+# Also carries runpod-wan14b.toml: FV_CONFIG=/etc/fv/runpod-wan14b.toml selects it.
 FROM serve-cuda-bin AS serve-wan5b
 COPY configs/serve/runpod-wan5b.toml configs/serve/runpod-wan14b.toml configs/serve/runpod-fake.toml /etc/fv/
 ENV FV_VARIANT=wan5b FV_CONFIG=/etc/fv/runpod-wan5b.toml
@@ -522,6 +522,7 @@ FROM serve-cuda-bin AS serve-sfwan
 COPY configs/serve/runpod-sfwan.toml configs/serve/runpod-fake.toml /etc/fv/
 ENV FV_VARIANT=sfwan FV_CONFIG=/etc/fv/runpod-sfwan.toml
 LABEL org.opencontainers.image.description="fv-serve sfwan (configs/serve/runpod-sfwan.toml)"
+# END GENERATED
 
 
 # ---- cpu: CPU only. fv-serve without `cuda` (no CUDA libraries at all) on

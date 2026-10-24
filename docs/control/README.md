@@ -99,7 +99,7 @@ control-plane and script copies from it (plan A4). What the generator owns:
 |---|---|
 | `control/src/families-gen.ts` (whole file) | `MANIFEST_FAMILIES`, `MANIFEST_VARIANTS` (tier, served names, public names, tasks, recipe name, `trees`, `weight_trees` = trees without `auxiliary/`, `main_tree` = the tree a config's `weights` path replaces, `gpu`), `MODEL_NAMES` (every name a serve config's `[[models]] variant` or a pool model's `recipe` may use, resolved as the engine's `model_from_config` does since plan A3: tier alias → first variant of its tier in file order, variant id, served name; a variant's `recipe_name` is what the capabilities report, not a config name). There is no recipe-alias table: the engine resolves exactly these names |
 | `control/src/volumes.ts` region `EU_TREES` | copied from `scripts/gpu/volumes.sh` `FV_EU_VOLUME_TREES` (an ops fact: what `r2-fill-volume.sh` wrote; the shell stays the hand-written source) |
-| `scripts/gcp/families.tsv` columns `weight_trees`, `served` | from each row's Runpod twin config's `[[models]] variant`s |
+| `scripts/gcp/families.tsv` columns `weight_trees`, `served` | from each row's Runpod twin config's `[[models]] variant`s (the rows themselves: `deploy/deploy.toml`, below) |
 | `scripts/gpu/verify-weights.sh` region `variant_trees` | the `variant:<id>` cells: a variant's trees as the manifest names them |
 
 Consumers derive from the tables instead of restating: `recipe-trees.ts`
@@ -112,18 +112,50 @@ Cross-checks (`crossChecks`, run by `--check`): every manifest tree is a dest
 of `weights-manifest.tsv` / `weights-r2.tsv`; `cluster/catalog.json` names
 only families, models and recipes the manifests know (no exceptions since
 plan A3 made `longlive-1.3b` and `h3-lightx2v-turbo-v01` variants);
-`configs/autoscale.toml` pools name a dispatch family; `volumes.sh` names
+`volumes.sh` names
 published trees; `serverless/serves.ts` `RECIPES` gives every name the
 manifests' tier. Since plan A3 the engine accepts no other names (the
 contract names `4step-vsa`, `8step`, `sol_h3`, `trim-8step`, an empty recipe
 and the `family` key are gone; a config names the variant).
 
-Still hand-written, because the manifests carry no deployment data (plan C1,
-the `[deploy]` section): preset ids, titles, image variants, configs, queue
-sizes and timeouts (`presets.ts`, `enums.ts` `VARIANTS` / `POOL_PRESET_IDS`,
-`scripts/serve/variants.sh`), `families.tsv`'s machine, cells and API names,
-autoscale pool sizes, the component-level `verify-weights.sh` cells, the
-image table of `docs/serve/images.md`, `catalog.json`'s descriptions.
+### Generated from the deployment data
+
+`deploy/deploy.toml` ([ADR-0011](../adr/0011-deploy-section.md), plan C1) is
+the source of deployment data: the image variants, the pool presets (the
+deployment unit: one pool, one image variant, one worker config, its models,
+queue, timeouts and disk), the family presets (members, hand-chosen card
+class, what they leave out), the GCP rows, the dispatch family of each model
+family and the autoscale pools. `crates/fastvideo-manifest` (module
+`deploy`) types and validates it against the family manifests; the generator
+owns:
+
+| output | what |
+|---|---|
+| `control/src/deploy-gen.ts` (whole file) | `DEPLOY_IMAGES`, `DEPLOY_PRESETS` (each model resolved to its variant and family; `inline`: the image does not carry the config), `DEPLOY_FAMILY_PRESETS`, `DISPATCH_FAMILY` |
+| `control/src/enums.ts` regions | `VARIANTS` (the built image variants), `POOL_PRESET_IDS` (model presets, then family presets) |
+| `control/src/cluster/worker-configs.ts` | which configs ride inline (`FV_WORKER_TOML_B64`): every preset config its image does not carry |
+| `scripts/serve/variants.sh` region | the image and preset tables, `FV_VARIANTS`, `FV_POOL_PRESETS`, `fv_variant_config` |
+| `docker/gpucheck.Dockerfile` region | the thin `serve-<variant>` stages of the CUDA image variants |
+| `configs/autoscale.toml` region | the `[[autoscale.pools]]`, copied with their comments |
+| `docs/serve/images.md` region | the image table |
+| `scripts/gcp/families.tsv` (whole file) | the `[[gcp]]` rows; `weight_trees` / `served` from each row's Runpod twin config |
+
+`presets.ts` builds `STANDARD_POOLS`, `MODEL_PRESETS` and `FAMILY_PRESETS`
+from `deploy-gen.ts` (weights and `min_vram_gb` of a model preset still come
+from the family manifests); its family rules (`H3_FAMILY_MEMBERS`, …) stay
+code and `test/unit/templates.test.ts` compares them with the listed
+members. `deployChecks` (run by `--check`): the named configs exist, the
+hand-written `serve-cpu` stage and `serve-image.yml`'s build lists name the
+image variants, the GCP cells are `verify-weights.sh` cells, the autoscale
+prices cover the pools' GPU types, the only volume is the EU one.
+
+Still hand-written (ADR-0011 §7): the autoscaler's own settings and prices,
+the `serve-cpu` stage and the CI build lists (cross-checked), the
+component-level `verify-weights.sh` cells, `EDGE_FAMILIES` (routing code),
+`TEMPLATES` / `WAN_FAMILY_LEFT_OUT` / `H3_DRAFT`, `regions.ts`,
+`catalog.json`'s descriptions. Adding a preset: a `[[presets]]` table in
+`deploy/deploy.toml` naming variant ids, its config under `configs/serve`,
+then `node gen-configs.mjs`.
 
 ```bash
 cd control
