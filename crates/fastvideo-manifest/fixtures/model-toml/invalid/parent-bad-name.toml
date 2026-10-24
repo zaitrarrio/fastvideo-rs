@@ -1,0 +1,16 @@
+schema = 1
+name = "zay/wan2.2-t2v/dmd:4:fp8"
+parent = "Wan-AI/wan2.2-t2v@0123456789ab"
+license = { spdx = "Apache-2.0", redistribution = true }
+
+[runtime]
+engine = "fastvideo-rs"
+min_version = "0.1.0"
+pipeline = "wan"
+
+[components]
+transformer = { path = "weights/transformer.safetensors", dtype = "bf16" }
+
+[change]
+summary = "Distilled to 4 steps"
+reason = "Drafts"

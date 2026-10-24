@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manifest",
+  "description": "A model tree's manifest.",
+  "type": "object",
+  "properties": {
+    "chunking": {
+      "description": "Recorded so readers never assume.",
+      "$ref": "#/$defs/ChunkingParams"
+    },
+    "created_at_unix": {
+      "description": "Seconds since the Unix epoch.",
+      "type": "integer",
+      "format": "int64"
+    },
+    "files": {
+      "description": "Sorted by `path` (byte order), unique.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FileEntry"
+      }
+    },
+    "model_toml_blake3": {
+      "description": "Lowercase hex BLAKE3 of the exact `model.toml` bytes.",
+      "type": "string"
+    },
+    "name": {
+      "description": "Canonical [`ModelName`] without `@rev`.",
+      "type": "string"
+    },
+    "parent": {
+      "description": "`None` for a vendor ref. Serialised as `null` when absent.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ParentLink"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "schema": {
+      "description": "Always 1.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "signatures": {
+      "description": "Excluded from the digest. May be empty before signing.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Signature"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "name",
+    "model_toml_blake3",
+    "files",
+    "chunking",
+    "created_at_unix"
+  ],
+  "$defs": {
+    "ChunkRef": {
+      "description": "One content-defined chunk of a file.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Lowercase hex BLAKE3 of the chunk bytes.",
+          "type": "string"
+        },
+        "len": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "offset",
+        "len"
+      ]
+    },
+    "ChunkingParams": {
+      "description": "How the files were chunked.",
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "description": "e.g. `fastcdc-2020`.",
+          "type": "string"
+        },
+        "avg": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "max": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "min": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "min",
+        "avg",
+        "max"
+      ]
+    },
+    "FileEntry": {
+      "description": "One file of the tree.",
+      "type": "object",
+      "properties": {
+        "blake3": {
+          "description": "Lowercase hex BLAKE3 of the whole file.",
+          "type": "string"
+        },
+        "chunks": {
+          "description": "Contiguous from offset 0 to `size`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChunkRef"
+          }
+        },
+        "path": {
+          "description": "Relative, `/` separators, no `..`.",
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "size",
+        "blake3",
+        "chunks"
+      ]
+    },
+    "ParentLink": {
+      "description": "The link from a fork to the manifest it was forked from.",
+      "type": "object",
+      "properties": {
+        "digest": {
+          "description": "Full lowercase hex BLAKE3 canonical digest of the parent manifest.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The parent's canonical name; an `@rev`, if present, must be the\nprefix of `digest`.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "digest"
+      ]
+    },
+    "Signature": {
+      "description": "One signature over the canonical digest (see [`crate::sig`]).",
+      "type": "object",
+      "properties": {
+        "alg": {
+          "description": "`ed25519`.",
+          "type": "string"
+        },
+        "kid": {
+          "type": "string"
+        },
+        "sig": {
+          "description": "base64url without padding.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kid",
+        "alg",
+        "sig"
+      ]
+    }
+  }
+}

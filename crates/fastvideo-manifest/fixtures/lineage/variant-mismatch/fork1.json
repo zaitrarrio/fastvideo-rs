@@ -1,0 +1,103 @@
+{
+  "schema": 1,
+  "name": "zay/wan2.2-t2v/dmd:4:fp8",
+  "parent": {
+    "name": "wan-ai/wan2.2-t2v",
+    "digest": "b0306589fa1a1181dfa406c47992655e6e06e21a7d4c5e32cf96566a9f9dbbb4"
+  },
+  "model_toml_blake3": "18307558bf8d513b4733f162ad32aa0f958a2908efe245f9a87b22b0be468c1e",
+  "files": [
+    {
+      "path": "model.toml",
+      "size": 64,
+      "blake3": "52c6c0e1dacff866dfe7beb8228da1acc7718e0d236281e24d8f7750547a3cb7",
+      "chunks": [
+        {
+          "id": "52c6c0e1dacff866dfe7beb8228da1acc7718e0d236281e24d8f7750547a3cb7",
+          "offset": 0,
+          "len": 64
+        }
+      ]
+    },
+    {
+      "path": "weights/text_encoder.safetensors",
+      "size": 330,
+      "blake3": "2233f21036c70b3a3c3d2a07aea8911e8f0eb2b542fae1925a5a6cbbc6781f0e",
+      "chunks": [
+        {
+          "id": "ed37cabf639c279fc5a37da33ce98c161dd4fd1c0400524c75333a877c6c8aae",
+          "offset": 0,
+          "len": 120
+        },
+        {
+          "id": "902ab8af38a8aaea3b29f7ac581ca623e5db581389037e7aa92ac01bfbc807a0",
+          "offset": 120,
+          "len": 120
+        },
+        {
+          "id": "cb51d64b7dc1aa65b7f9f075629ea37fd57b18ab8cb84da10090cd01a39f2c4b",
+          "offset": 240,
+          "len": 90
+        }
+      ]
+    },
+    {
+      "path": "weights/transformer.safetensors",
+      "size": 462,
+      "blake3": "3d38b324647dced804c56d422e351c370948f73115593e068f8ddecc60de7bd9",
+      "chunks": [
+        {
+          "id": "ef7c5ae1cfd59e8c6ad9f74afcfd030be05d88beeec1d55f52e1ffb0adab7b92",
+          "offset": 0,
+          "len": 150
+        },
+        {
+          "id": "24bffc77fa2a91db61fad7c03a4661045415f7152b74cfcdf14958a756289e06",
+          "offset": 150,
+          "len": 150
+        },
+        {
+          "id": "0e60ea9fdd5ad24833dc8f692272131c5c74720bd731d2ec7d50cc4ee8d73b2b",
+          "offset": 300,
+          "len": 150
+        },
+        {
+          "id": "fc31ab90ed5c6acbdffdcb1f1f10dc87e017ce2879ca3df369a13bb8daf77b14",
+          "offset": 450,
+          "len": 12
+        }
+      ]
+    },
+    {
+      "path": "weights/vae.safetensors",
+      "size": 68,
+      "blake3": "cd1fa2583692b9f21558c948d6d9ec23c656290ff03679147d3ddcca36645f25",
+      "chunks": [
+        {
+          "id": "eef5f164f7a8eb45fe674faefe5425751dbe0793c278aed9c1155e76159f2522",
+          "offset": 0,
+          "len": 50
+        },
+        {
+          "id": "766f7a4b623d1ed2885d60a3b604be5b5cd02d15e42130e167a86ca3d2240b45",
+          "offset": 50,
+          "len": 18
+        }
+      ]
+    }
+  ],
+  "chunking": {
+    "algorithm": "fastcdc-2020",
+    "min": 16,
+    "avg": 64,
+    "max": 256
+  },
+  "created_at_unix": 1761264000,
+  "signatures": [
+    {
+      "kid": "test-key-1",
+      "alg": "ed25519",
+      "sig": "7wd6neuzICXUihcu4jb8F9onHtUTf6R1oPmGEQXYmGFS21zXKzcBHZzBqG2k4J3KW2HEg1gbM3owf6FYP9PTDw"
+    }
+  ]
+}
