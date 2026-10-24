@@ -8,7 +8,8 @@
 #
 #   set            what (Dockerfile stage it replaces)                    tarball root
 #   oxide          Tile-IR NVFP4 cubins, fv-oxide-aot --sm 100,120 (oxide)  out/oxide/
-#   gpucheck       fv-gpucheck --features cuda + oxide embedded (binary)   fv-gpucheck, .build-id
+#   gpucheck       fv-gpucheck --features cuda + oxide embedded (binary)   fv-gpucheck, .build-id, out/fv-lab
+#                  and fv-lab --features cli (lab-build, ADR-0019; no CUDA)
 #   gpucheck-vast  vast-pytorch.Dockerfile's fv-gpucheck: no nvcc on the
 #                  builder there, so no AOT/oxide cubins (binary)          fv-gpucheck, .build-id
 #   hf-fm          cargo install hf-fetch-model --features cli (hf-fm)     out/hf-fm, out/hf-fetch-model
@@ -165,6 +166,12 @@ build_gpucheck() {
   mkdir -p "$STAGE/gpucheck"
   cp "$T/release/fv-gpucheck" "$STAGE/gpucheck/fv-gpucheck"
   echo "$FV_BUILD_ID" >"$STAGE/gpucheck/fv-gpucheck.build-id"
+  # fv-lab (docs/adr/0019-fv-lab.md), the runtime image's validation driver: no CUDA; prebuilt.sh hands
+  # out/fv-lab to the image's lab-build stage, as the serve sets' out/fv-boot to boot-build.
+  log "gpucheck: cargo build --release -p fastvideo-lab --features cli --bin fv-lab"
+  cargo build --release -p fastvideo-lab --features cli --bin fv-lab >&2
+  mkdir -p "$STAGE/gpucheck/out"
+  cp "$T/release/fv-lab" "$STAGE/gpucheck/out/fv-lab"
 }
 
 # vast-pytorch.Dockerfile's builder points NVCC at /usr/local/cuda-13.0/bin/nvcc,

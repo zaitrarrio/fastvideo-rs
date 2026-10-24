@@ -31,7 +31,8 @@
 #   --build-context boot-build=<dir>     <dir>/out/fv-boot (boot-build; scripts/ci/prebuilt.sh passes it
 #                                        when the release's serve set carries fv-boot: tools releases
 #                                        from before fv-boot do not, and this stage then compiles it)
-# lab-build (fv-lab, docs/adr/0019-fv-lab.md) always compiles here until a tools release carries it.
+#   --build-context lab-build=<dir>      <dir>/out/fv-lab (lab-build; prebuilt.sh passes it when the
+#                                        release's gpucheck set carries fv-lab, ADR-0019; else it compiles)
 # Without them (no usable tools release) the stages compile here.
 
 # The base of every runtime image, pinned so the shared layers only change
@@ -132,8 +133,9 @@ FROM scratch AS binary
 COPY --from=build /out/ /
 
 # lab-build: fv-lab (docs/adr/0019-fv-lab.md), the validation driver the runtime image runs on a GPU pod
-# (`fv-lab run <tier>`: lab/tiers.toml + lab/cells, calling fv-gpucheck and verify-weights.sh). No CUDA. It
-# compiles here, like boot-build before tools releases carried fv-boot, until a tools release carries it.
+# (`fv-lab run <tier>`: lab/tiers.toml + lab/cells, calling fv-gpucheck and verify-weights.sh). No CUDA. A tools
+# release whose gpucheck set carries out/fv-lab replaces this stage (prebuilt.sh lab-build=…); a release from
+# before fv-lab does not, and only this stage compiles (as boot-build did before releases carried fv-boot).
 FROM builder AS lab-build
 RUN apt-get update \
  && apt-get install -y --no-install-recommends cmake \
