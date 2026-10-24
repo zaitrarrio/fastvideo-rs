@@ -21,7 +21,9 @@
 //! `Progress` event each in a one-slot buffer (an older parked event of the
 //! same kind is replaced: progress is coalesced to the latest step), drops
 //! `Log` lines, and flushes the parked events in that order as soon as the
-//! channel has room again (at the next send). The end of the stream uses
+//! channel has room again (at the next send). The order is by kind, not by
+//! emission: a lagging consumer can see a `Stage` before the last `Progress`
+//! that was emitted ahead of it. The end of the stream uses
 //! slots reserved when the job was submitted: one per parkable kind, so
 //! events still parked when the job ends are flushed ahead of the terminal
 //! event even if the consumer never caught up (a lagging consumer still sees
@@ -192,8 +194,8 @@ impl Parked {
 }
 
 /// The executor side of a job's event channel (module docs: the overflow
-/// policy). Cheap to clone; every clone shares the parked events and the
-/// terminal permit. Never blocks.
+/// policy). Cheap to clone; every clone shares the parked events, the
+/// terminal permit and the tail permits. Never blocks.
 #[derive(Clone)]
 pub(crate) struct EventSender {
     id: JobId,
