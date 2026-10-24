@@ -3,7 +3,7 @@
 //! Ported from FastVideo `fastvideo/api/sampling_param.py` and
 //! `fastvideo/pipelines/basic/wan/presets.py`.
 
-use crate::registry::{SamplingAlgorithm, WanModelDefinition};
+use crate::family::wan::{SamplingAlgorithm, WanModelDefinition};
 
 pub const NEGATIVE_PROMPT_EN: &str = "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards";
 

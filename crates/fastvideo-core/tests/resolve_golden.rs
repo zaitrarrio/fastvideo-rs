@@ -13,9 +13,8 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use fastvideo_core::{
-    resolve, sampling::pipeline_defaults, sampling_from_definition, ResolvedModel,
-};
+use fastvideo_core::family::{ltx2, wan};
+use fastvideo_core::{resolve, sampling::pipeline_defaults, sampling_from_definition};
 
 fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -34,24 +33,30 @@ fn render() -> String {
                 let _ = writeln!(out, "{input}\t-\t-\t-\terror: {e}");
             }
             Ok(r) => {
-                let workloads: Vec<&str> = r.workload_types().iter().map(|w| w.as_str()).collect();
-                let detail = match r {
-                    ResolvedModel::Wan(d) => {
-                        if !wan_presets.contains(&d.preset) {
-                            wan_presets.push(d.preset);
-                        }
-                        format!(
-                            "pipeline_config={} sampling={}",
-                            d.pipeline_config,
-                            d.sampling.as_str()
-                        )
+                let workloads: Vec<&str> = r.workloads().iter().map(|w| w.as_str()).collect();
+                let detail = if r.family.name() == wan::NAME {
+                    let d = wan::definition(r.preset())
+                        .unwrap_or_else(|| panic!("no Wan definition for {}", r.preset()));
+                    if !wan_presets.contains(&d.preset) {
+                        wan_presets.push(d.preset);
                     }
-                    ResolvedModel::Family(d) => format!("ltx_line={:?}", d.ltx_line),
+                    format!(
+                        "pipeline_config={} sampling={}",
+                        d.pipeline_config,
+                        d.sampling.as_str()
+                    )
+                } else {
+                    let line = if r.family.name() == ltx2::NAME {
+                        ltx2::line(r.preset())
+                    } else {
+                        None
+                    };
+                    format!("ltx_line={line:?}")
                 };
                 let _ = writeln!(
                     out,
                     "{input}\t{}\t{}\t{}\t{detail}",
-                    r.family().as_str(),
+                    r.family.name(),
                     r.preset(),
                     workloads.join(",")
                 );
