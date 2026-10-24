@@ -101,7 +101,7 @@ parallel agents.
 | E1 | Vendored upstream specs under `docs/serve/specs/` with a drift script; `schemars` schemas for native and director | drift script green | CI | none | merged (#144; schemars schemas deferred to E2) |
 | E2 | `ParamSpec` per (surface, model) derived from the manifest caps; adapters validate from it; duplicated constants deleted; LTX body typed | one source for every limit | pod; serve-compat | A3 | todo |
 | E3 | Certification matrix harness over every surface, parameter x surface x model TSV, CI assertion that every parameter has a valid and an invalid case | TSV with no empty cell | pod | E2 | todo |
-| E4 | `cargo-llvm-cov` on the pod; adapter `cargo test` in a GitHub workflow | coverage artifact in CI | CI | none | todo |
+| E4 | `cargo-llvm-cov` on the pod; adapter `cargo test` in a GitHub workflow | coverage artifact in CI | CI | none | pr |
 | E5 | Upstream captures as fixtures | depends on owner keys | manual | owner | blocked |
 
 ### Phase 7: inference core unification (Workstream B, second half)
@@ -216,3 +216,23 @@ ran (pod id, $/hr), result, cost.
 - 2026-10-24 00:36Z: A2, A5 (registry WO-001 against the merged crate, built
   in the coordinator's container since that workspace is small) and B1
   started. Balance $21.6, pod `i8tu0lpdb6nvov` at 4.4 h uptime.
+- 2026-10-24 01:20Z: E4 opened as a draft PR (`claude/e4-adapter-ci`): the
+  `adapter-tests` workflow runs `scripts/serve/coverage.sh` (new) in the build
+  base image on pull requests and main pushes touching the serve crates:
+  `cargo test --locked` of 11 crates (the five adapters, `fastvideo-serve`,
+  protocol, trace, engine-service, serve-kit, upsampler) under
+  `cargo-llvm-cov` 0.9.1, with `lcov.info`, an HTML report and the totals as
+  the `adapter-coverage` artifact and job summary. Before: no workflow ran
+  these crates' Rust tests on pull requests (serve-compat runs the client
+  libraries against the binary; tools-release runs `check.sh` on main only).
+  `task coverage` / `task coverage:tests` added; `coverage.sh` allowlisted
+  for new build pods (the running pod's server from main refuses it until
+  merge). On pod `i8tu0lpdb6nvov`: `cargo test --locked` of the set, 711
+  passed, 0 failed, 10 ignored, 171 s; no Rust change. Not done:
+  `cargo-llvm-cov` in `docker/build-base.Dockerfile` (re-pins the image).
+- 2026-10-24 01:25Z: E4's `adapter-tests` run on the PR head (PR #148,
+  run 40049075337) green on the first attempt, 8 min wall clock (container
+  pull 55 s, the instrumented `cargo test` 6.5 min cold, no rust-cache
+  hit yet): 69 test binaries, 720 passed, 0 failed; coverage over the instrumented
+  workspace files: lines 62.42% (54115 / 86700), regions 62.96%, functions
+  59.31%; `adapter-coverage` artifact 4.5 MB (lcov, HTML, summaries).
