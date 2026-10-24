@@ -167,6 +167,13 @@ fn writes_what_runpod_matrix_sh_writes() {
         assert!(runs.join("a").join(file).is_file(), "a/{file}");
     }
     assert!(read(&runs.join("a.weights.log")).contains("verify ok in"));
+    // The byte-identity record: the empty frame-000.png's SHA-256.
+    assert_eq!(
+        read(&runs.join("a/frames.sha256.json")),
+        "{\"arm\":\"a\",\"frames\":[\n{\"path\":\"frame-000.png\",\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"}\n],\"count\":1}\n"
+    );
+    assert!(read(&runs.join("b/frames.sha256.json")).contains("\"count\":1}"));
+    assert!(!runs.join("c/frames.sha256.json").exists());
 
     assert!(read(&runs.join("b/summary.json")).contains("\"exit\":3,"));
     assert_eq!(
@@ -225,6 +232,24 @@ fn fv_cells_and_missing_frames_and_benchmarks() {
     assert!(log.contains("[fam] skip b (not in FV_CELLS)"));
     assert!(log.contains("[fam] skip compare a--b (frames missing)"));
     assert!(log.contains("[fam] skip gate a--b (benchmark.json missing)"));
+}
+
+#[test]
+fn a_failing_nvidia_smi_is_fatal() {
+    // The script runs `nvidia-smi -L | tee` under set -e -o pipefail.
+    let f = fake("smi");
+    script(
+        &f.dir.join("bin/nvidia-smi"),
+        "case \"$1\" in\n  -L) echo 'NVIDIA-SMI has failed' >&2; exit 9 ;;\n  *) echo 0 ;;\nesac\n",
+    );
+    let cell = CellFile::parse(CELL, "t.toml").unwrap();
+    let cfg = config(&f);
+    let steps = Lab::steps(&[&cell], &cfg.bin, &cfg.paths()).unwrap();
+    let e = Runner::new(cfg).run(&steps).unwrap_err().to_string();
+    assert!(e.contains("nvidia-smi -L failed (exit 9)"), "{e}");
+    let runs = f.dir.join("scratch/runs/fam/t1");
+    assert!(!runs.join("a").exists(), "no arm ran");
+    assert!(!runs.join("done.json").exists());
 }
 
 #[test]

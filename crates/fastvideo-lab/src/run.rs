@@ -427,6 +427,17 @@ impl Runner {
                     for l in String::from_utf8_lossy(&o.stdout).lines() {
                         self.raw(l);
                     }
+                    // The script runs these under `set -e -o pipefail`: a
+                    // failing nvidia-smi ends the run with its status.
+                    if !o.status.success() {
+                        let why = format!(
+                            "nvidia-smi {} failed (exit {})",
+                            args.join(" "),
+                            exit_code(o.status)
+                        );
+                        self.log(&format!("FATAL: {why}"));
+                        return Err(RunError::Fatal(why));
+                    }
                 }
                 Err(_) => {
                     self.log("FATAL: nvidia-smi missing");
@@ -623,6 +634,9 @@ impl Runner {
                 Self::now_iso()
             ),
         );
+        if let Some(d) = frames_digest(&cell, name) {
+            let _ = fs::write(cell.join(FRAMES_DIGEST), d);
+        }
     }
 
     /// Runs `command` in `cell` with stdout / stderr to its logs; bash's exit
@@ -848,6 +862,66 @@ fn append(p: &Path) -> Result<File, RunError> {
         .append(true)
         .open(p)
         .map_err(io(p))
+}
+
+/// The per-arm frames record (docs/adr/0019-fv-lab.md §8): what both runners
+/// write after an arm and both fetches take, so two runs of one commit are
+/// compared byte for byte without fetching frames.
+pub const FRAMES_DIGEST: &str = "frames.sha256.json";
+
+/// `<arm>/frames.sha256.json`: every `*.png` file under `<arm>/frames`
+/// (recursive, symlinks not followed), in byte order of its path relative to
+/// `frames/`, with its SHA-256, and the count. Byte-identical to
+/// `runpod-matrix.sh`'s `frames_digest` (`tests/frames_digest.rs` against the
+/// script's output). `None` when the arm wrote no `frames/` directory.
+pub fn frames_digest(cell: &Path, arm: &str) -> Option<String> {
+    use sha2::{Digest as _, Sha256};
+    let frames = cell.join("frames");
+    if !frames.is_dir() {
+        return None;
+    }
+    let mut files = Vec::new();
+    collect_png(&frames, "", &mut files);
+    files.sort();
+    let mut out = format!("{{\"arm\":\"{arm}\",\"frames\":[");
+    let mut sep = "";
+    for rel in &files {
+        let hash = fs::read(frames.join(rel))
+            .map(|b| {
+                Sha256::digest(&b)
+                    .iter()
+                    .map(|x| format!("{x:02x}"))
+                    .collect::<String>()
+            })
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "{sep}\n{{\"path\":\"{rel}\",\"sha256\":\"{hash}\"}}"
+        ));
+        sep = ",";
+    }
+    out.push_str(&format!("\n],\"count\":{}}}\n", files.len()));
+    Some(out)
+}
+
+/// `find . -type f -name '*.png' -printf '%P\n'`.
+fn collect_png(dir: &Path, prefix: &str, out: &mut Vec<String>) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let Ok(name) = e.file_name().into_string() else {
+            continue;
+        };
+        let Ok(ft) = e.file_type() else { continue };
+        let rel = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        if ft.is_dir() {
+            collect_png(&e.path(), &rel, out);
+        } else if ft.is_file() && name.ends_with(".png") {
+            out.push(rel);
+        }
+    }
 }
 
 /// `ln -sf "$(readlink -f "$src")" "$dst"` when `src` exists.

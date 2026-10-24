@@ -1,0 +1,7 @@
+{"arm":"sample","frames":[
+{"path":"B.png","sha256":"df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c"},
+{"path":"cold/frame-000.png","sha256":"50e721e49c013f00c62cf59f2163542a9d8df02464efeb615d31051b0fddc326"},
+{"path":"frame-000.png","sha256":"ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"},
+{"path":"frame-001.png","sha256":"3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d"},
+{"path":"p1/frame-000.png","sha256":"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6"}
+],"count":5}
