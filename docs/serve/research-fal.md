@@ -1,5 +1,7 @@
 # fal.ai MiniMax H3 Max: wire-compatibility research
 
+Machine-readable source: `docs/serve/specs/fal/` (queue OpenAPI per endpoint, director `asyncapi.json`; see `docs/serve/specs/README.md`).
+
 Status: research note, 2026-09-27. Scope: the exact contract a Rust server in
 front of the fastvideo-rs CUDA engine has to speak so that unmodified fal
 clients (`@fal-ai/client`, Python `fal_client`, plain HTTP) can use it in place

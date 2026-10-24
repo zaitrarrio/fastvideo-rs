@@ -9,7 +9,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-LOCAL_SCRIPTS=(scripts/gpu/validate.sh scripts/gpu/lib.sh scripts/gpu/docker.sh scripts/gpu/timings.sh scripts/gpu/lint.sh)
+LOCAL_SCRIPTS=(scripts/gpu/validate.sh scripts/gpu/lib.sh scripts/gpu/docker.sh scripts/gpu/timings.sh scripts/gpu/lint.sh scripts/serve/specs-drift.sh)
 fail=0
 
 note() { printf '%s\n' "$*" >&2; }

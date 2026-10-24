@@ -1,5 +1,7 @@
 # Research: MiniMax H3 API and FastVideo API wire contracts
 
+Machine-readable source: `docs/serve/specs/minimax/v2-video-generation.json`, `docs/serve/specs/fastvideo/{protocol.py,api_server.py,videos.schema.json}` and `docs/serve/specs/openai/videos.openapi.yaml` (see `docs/serve/specs/README.md`).
+
 Status: research notes. They record the external contracts before any server
 code exists. Gathered 2026-09-27 against fastvideo-rs `6ed09d1`.
 

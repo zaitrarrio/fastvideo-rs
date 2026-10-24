@@ -1,0 +1,11 @@
+# Vendored MiniMax platform specification for the V2 video API (MiniMax-H3 / H3-Max).
+# Prose: docs/serve/research-minimax-fastvideo.md §1. Maintained by `bash scripts/serve/specs-drift.sh --update`.
+
+[[source]]
+file = "v2-video-generation.json"
+status = "ok"
+url = "https://platform.minimax.io/docs/api-reference/video/generation/api/v2-video-generation.json"
+normalize = "json"
+fetched_at = "2026-10-24T00:24:42Z"
+sha256 = "1193ec9001d3985d7e6080f022d839826e6a88d429083761cd7f7a0b26860ca5"
+note = "OpenAPI 3.1.0 of `POST /v2/video_generation` and `GET /v2/query/video_generation/{task_id}` as published by platform.minimax.io; stored pretty-printed with sorted keys, otherwise complete."

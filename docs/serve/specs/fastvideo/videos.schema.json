@@ -1,0 +1,148 @@
+{
+  "$comment": "DERIVED: hand-written JSON Schema of FastVideo's `VideoGenerationRequest` (the `POST /v1/videos` and `/v1/videos/sync` body), derived from the pydantic fields in docs/serve/specs/fastvideo/protocol.py at hao-ai-lab/FastVideo commit 8db2d71ef217e84bec7dbb6e4ab65c92b144df4f (fetched 2026-10-24; see SOURCES.toml). Not fetched from upstream: when protocol.py drifts, re-derive this file. Field order follows protocol.py. `_INT64_MAX` = 9223372036854775807, `_INT64_MIN` = -9223372036854775808. Pydantic unions are `anyOf`; `X | None` is written as a type array with `null`.",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zaitrarrio/fastvideo-rs/docs/serve/specs/fastvideo/videos.schema.json",
+  "title": "VideoGenerationRequest",
+  "description": "OpenAI/vLLM-Omni-compatible video generation request (FastVideo `fastvideo serve`). `model_config = ConfigDict(extra=\"forbid\")`: unknown fields are rejected (HTTP 400 per api_server.py's validation handler). `VideoGenerationsRequest` is an alias of this model.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["prompt"],
+  "properties": {
+    "prompt": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "Required. `Field(min_length=1)`; the `validate_prompt` field validator also rejects a whitespace-only value (`pattern` \\S expresses that)."
+    },
+    "model": { "type": ["string", "null"], "default": null },
+    "seconds": {
+      "anyOf": [
+        { "type": "integer", "minimum": 1, "maximum": 9223372036854775807 },
+        { "type": "string", "pattern": "^[1-9]\\d*$", "description": "SecondStr" },
+        { "type": "null" }
+      ],
+      "default": null
+    },
+    "size": {
+      "type": ["string", "null"],
+      "pattern": "^\\d+x\\d+$",
+      "default": null,
+      "description": "SizeStr `<width>x<height>`; overrides `width`/`height` in `resolve_video_params`."
+    },
+    "image_reference": {
+      "anyOf": [
+        { "$ref": "#/$defs/ImageReference" },
+        { "type": "array", "items": { "$ref": "#/$defs/ImageReference" } },
+        { "type": "null" }
+      ],
+      "default": null
+    },
+    "video_reference": {
+      "anyOf": [
+        { "$ref": "#/$defs/VideoReference" },
+        { "type": "array", "items": { "$ref": "#/$defs/VideoReference" } },
+        { "type": "null" }
+      ],
+      "default": null
+    },
+    "audio_reference": {
+      "anyOf": [
+        { "$ref": "#/$defs/AudioReference" },
+        { "type": "array", "items": { "$ref": "#/$defs/AudioReference" } },
+        { "type": "null" }
+      ],
+      "default": null
+    },
+    "input_reference": { "type": ["string", "null"], "default": null, "description": "Legacy FastVideo field kept for clients that predate the typed reference objects." },
+    "reference_url": { "type": ["string", "null"], "default": null, "description": "Legacy FastVideo field." },
+    "video_path": { "type": ["string", "null"], "default": null, "description": "SGLang's legacy direct-video spelling." },
+    "video_url": { "type": ["string", "null"], "default": null, "description": "SGLang's legacy direct-video spelling." },
+    "video_params": {
+      "anyOf": [ { "$ref": "#/$defs/VideoParams" }, { "type": "null" } ],
+      "default": null
+    },
+    "user": { "type": ["string", "null"], "default": null },
+    "task": { "type": ["string", "null"], "default": null },
+    "width": { "type": ["integer", "null"], "minimum": 1, "maximum": 9223372036854775807, "default": null },
+    "height": { "type": ["integer", "null"], "minimum": 1, "maximum": 9223372036854775807, "default": null },
+    "fps": { "type": ["integer", "null"], "minimum": 1, "maximum": 9223372036854775807, "default": null, "description": "`resolve_video_params` falls back to DEFAULT_FPS = 24." },
+    "num_frames": { "type": ["integer", "null"], "minimum": 1, "maximum": 9223372036854775807, "default": null, "description": "`resolve_video_params` falls back to `int(seconds) * fps` when `seconds` is set." },
+    "aspect_ratio": { "type": ["string", "null"], "default": null },
+    "short_edge": { "type": ["integer", "null"], "minimum": 1, "maximum": 9223372036854775807, "default": null },
+    "num_outputs_per_prompt": { "type": "integer", "minimum": 1, "maximum": 10, "default": 1 },
+    "n": { "type": ["integer", "null"], "minimum": 1, "maximum": 10, "default": null, "description": "SGLang spelling; `resolved_num_outputs` prefers `n` when set." },
+    "start_time_seconds": { "type": ["number", "null"], "minimum": 0.0, "default": null },
+    "audio_start_in_s": { "type": ["number", "null"], "minimum": 0.0, "default": null },
+    "audio_end_in_s": { "type": ["number", "null"], "exclusiveMinimum": 0.0, "default": null },
+    "quality": { "type": ["string", "null"], "enum": ["auto", "default", "standard", "hd", null], "default": null },
+    "negative_prompt": { "type": ["string", "null"], "default": null },
+    "num_inference_steps": { "type": ["integer", "null"], "minimum": 1, "maximum": 200, "default": null },
+    "guidance_scale": { "type": ["number", "null"], "minimum": 0.0, "maximum": 20.0, "default": null },
+    "guidance_scale_2": { "type": ["number", "null"], "minimum": 0.0, "maximum": 20.0, "default": null },
+    "boundary_ratio": { "type": ["number", "null"], "minimum": 0.0, "maximum": 1.0, "default": null },
+    "flow_shift": { "type": ["number", "null"], "default": null },
+    "true_cfg_scale": { "type": ["number", "null"], "minimum": 0.0, "maximum": 20.0, "default": null },
+    "seed": { "type": ["integer", "null"], "minimum": -9223372036854775808, "maximum": 9223372036854775807, "default": null },
+    "generate_sound": { "type": "boolean", "default": false },
+    "sound_duration": { "type": ["number", "null"], "exclusiveMinimum": 0.0, "default": null },
+    "enable_teacache": { "type": "boolean", "default": false },
+    "max_sequence_length": { "type": ["integer", "null"], "minimum": 1, "default": null },
+    "enable_frame_interpolation": { "type": "boolean", "default": false },
+    "frame_interpolation_exp": { "type": "integer", "minimum": 1, "maximum": 9223372036854775807, "default": 1 },
+    "frame_interpolation_scale": { "type": "number", "exclusiveMinimum": 0.0, "default": 1.0 },
+    "frame_interpolation_model_path": { "type": ["string", "null"], "default": null },
+    "lora": { "type": ["object", "null"], "default": null, "description": "`dict[str, Any]`." },
+    "extra_params": { "type": ["object", "null"], "default": null, "description": "`dict[str, Any]`: model-specific parameters belong here." }
+  },
+  "$defs": {
+    "VideoParams": {
+      "type": "object",
+      "description": "Optional vLLM-Omni-compatible video parameter block. Pydantic default `extra=\"ignore\"`: unknown keys are dropped, not rejected.",
+      "properties": {
+        "width": { "type": ["integer", "null"], "minimum": 1, "maximum": 9223372036854775807, "default": null },
+        "height": { "type": ["integer", "null"], "minimum": 1, "maximum": 9223372036854775807, "default": null },
+        "num_frames": { "type": ["integer", "null"], "minimum": 1, "maximum": 9223372036854775807, "default": null },
+        "fps": { "type": ["integer", "null"], "minimum": 1, "maximum": 9223372036854775807, "default": null }
+      }
+    },
+    "UrlImageReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image_url"],
+      "properties": { "image_url": { "type": "string", "minLength": 1 } }
+    },
+    "FileImageReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_id"],
+      "properties": { "file_id": { "type": "string" } }
+    },
+    "ImageReference": {
+      "anyOf": [ { "$ref": "#/$defs/UrlImageReference" }, { "$ref": "#/$defs/FileImageReference" } ]
+    },
+    "UrlVideoReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["video_url"],
+      "properties": { "video_url": { "type": "string", "minLength": 1 } }
+    },
+    "FileVideoReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_id"],
+      "properties": { "file_id": { "type": "string" } }
+    },
+    "VideoReference": {
+      "anyOf": [ { "$ref": "#/$defs/UrlVideoReference" }, { "$ref": "#/$defs/FileVideoReference" } ]
+    },
+    "UrlAudioReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["audio_url"],
+      "properties": { "audio_url": { "type": "string", "minLength": 1 } }
+    },
+    "AudioReference": {
+      "$ref": "#/$defs/UrlAudioReference"
+    }
+  }
+}
