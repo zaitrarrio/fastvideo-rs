@@ -1,6 +1,6 @@
 # sol-engine config/minimax_h3/rtx5090_dense.toml: released BF16 MiniMax-H3
 # on one card, dense attention, no cache (H3_RTX5090_PROFILE=dense).
-# Workload (1344x768, 5 s, seed 0, 50 sigma points = 49 forwards) is set on
+# Workload (1344x768, a 5-second clip, seed 0, 50 sigma points = 49 forwards) is set on
 # the command line; this file carries the techniques only.
 
 [id]

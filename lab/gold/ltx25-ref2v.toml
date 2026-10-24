@@ -1,0 +1,116 @@
+# Gold standard of `ltx25-ref2v` (ltx2, max): docs/adr/0009-gold-standard-files.md.
+# Every number is copied from the [[source]] that cites it; absent numbers are listed under [[gap]].
+# `fv-lab run gold` (plan D1/D3) fills [last_validated] and replaces these with its own run record.
+# Served as ltx25-ref2v (fal fal-ai/ltx-2.3-quality ingredient): the Ingredients IC-LoRA on the distilled DiT, dense stage 2.
+
+schema = 1
+
+[model]
+variant = "ltx25-ref2v"
+family = "ltx2"
+profile = "ltx2/ltx25_distill_dense"
+
+[tier]
+name = "max"
+gpu = "RTX PRO 6000 Blackwell"
+sm = 120
+vram_gib = 96
+offer = "runpod: NVIDIA RTX PRO 6000 Blackwell Server Edition, EU-RO-1 (plan §1: the gold-standard GPU)"
+
+[workload]
+width = 1536
+height = 896
+frames = 121
+fps = 24
+steps = 11
+prompt_set = "the reference-sheet prompt of scripts/gpu/upstream/oracle.sh (LTX_REF_PROMPT) with scripts/gpu/fixtures/ltx-ref-sheet-768x448.png as the reference clip"
+seeds = [1024]
+note = "steps = 8 stage-1 (at the LoRA's 768x448 bucket) + 3 stage-2. The oracle cell of 2026-09-28 (runtime b38a408): ours and the reference (ltx_pipelines.ic_lora with the Ingredients IC-LoRA at 1.0, --offload cpu) both on H100 80GB HBM3 in US-CA-2; noise, text and the reference latent injected, stage 2 from the reference's entry state. Not the tier's GPU, so no latency number is this file's."
+
+[workload.upstream]
+target = "ltx25-ref2v"
+image = "sol-ltx25"
+rev = "fd4ded7"
+
+[latency]
+
+[quality]
+cell = "decoded clip vs the reference's, 121 frames at 1536x896: stage 2 (dense, the LoRA fused on the distilled DiT) and the decode, from the reference's stage-2 entry state."
+oracle = "pass at the bf16 floor: the conditioned stage 1 with the LoRA fused starts at the floor (block 0 2.1e-3) and its latents follow the T2V profile; stage 2 and the decode match as for T2V; a stage-1 mid-block bump at step 1 (video blocks 25-33 at 6e-2 to 0.12, back to 3.5e-2 by block 47) is noted and not isolated (docs/oracle.md)."
+note = "Measured on an H100 80GB HBM3 only: SSIM 0.982, PSNR 38.9 dB (min 32.2) vs the reference's clip; kept as a note, D3 re-measures on the tier GPU. Our reference encoder is 1.7e-2 from theirs (f32 vs bf16), preprocessing exact (1.6e-6)."
+
+[cost]
+usd_per_hr = 2.49
+
+[last_validated]
+# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+
+[[source]]
+fields = ["quality.oracle", "quality.cell", "workload", "workload.upstream"]
+path = "docs/oracle.md"
+heading = "LTX-2.5 reference-to-video (Ingredients IC-LoRA)"
+date = "2026-09-28"
+note = "Table row 'decoded clip vs the reference's (121 frames)': SSIM 0.982, PSNR 38.9 dB (min 32.2). Timings on the H100 (not this file's GPU): stage 1 about 1.0 s per step at 10752 tokens, stage 2 1.8-2.1 s per step at 21504, upsample 2.8 s, decode 1.6 s, IC-LoRA fuse 0.20 s / unfuse 0.10 s; device memory 64 GiB live, peak 70 GiB. Upstream (--offload cpu) 116 s for the cell, peak 9.3 GiB."
+
+[[source]]
+fields = ["cost.usd_per_hr"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
+date = "2026-10-14"
+note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
+
+[[gap]]
+field = "latency.p50_s"
+why = "measured only inside the 2026-09-28 oracle run on an H100 (per-step stage timings, peak 70 GiB), not on the tier's GPU and not as a timed generation; see the source note"
+
+[[gap]]
+field = "latency.min_s"
+why = "measured only inside the 2026-09-28 oracle run on an H100 (per-step stage timings, peak 70 GiB), not on the tier's GPU and not as a timed generation; see the source note"
+
+[[gap]]
+field = "latency.max_s"
+why = "measured only inside the 2026-09-28 oracle run on an H100 (per-step stage timings, peak 70 GiB), not on the tier's GPU and not as a timed generation; see the source note"
+
+[[gap]]
+field = "latency.denoise_s"
+why = "measured only inside the 2026-09-28 oracle run on an H100 (per-step stage timings, peak 70 GiB), not on the tier's GPU and not as a timed generation; see the source note"
+
+[[gap]]
+field = "latency.decode_s"
+why = "measured only inside the 2026-09-28 oracle run on an H100 (per-step stage timings, peak 70 GiB), not on the tier's GPU and not as a timed generation; see the source note"
+
+[[gap]]
+field = "latency.load_s"
+why = "measured only inside the 2026-09-28 oracle run on an H100 (per-step stage timings, peak 70 GiB), not on the tier's GPU and not as a timed generation; see the source note"
+
+[[gap]]
+field = "latency.peak_gib"
+why = "measured only inside the 2026-09-28 oracle run on an H100 (per-step stage timings, peak 70 GiB), not on the tier's GPU and not as a timed generation; see the source note"
+
+[[gap]]
+field = "quality.psnr_vs_upstream_min_db"
+why = "measured on H100 only (oracle clip vs the reference: PSNR 38.9 dB, min 32.2, SSIM 0.982); D3 re-measures on the tier GPU"
+
+[[gap]]
+field = "quality.lpips_vs_upstream_max"
+why = "the oracle reports SSIM and PSNR of the decoded clip, no LPIPS"
+
+[[gap]]
+field = "quality.sharpness_ratio"
+why = "no gate run (the oracle is a parity run, not a gate)"
+
+[[gap]]
+field = "quality.jitter_ratio"
+why = "no gate run (the oracle is a parity run, not a gate)"
+
+[[gap]]
+field = "latency.fps"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "latency.ttff_s"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "cost.usd_per_clip"
+why = "derived from latency.p50_s, which has no measurement here"

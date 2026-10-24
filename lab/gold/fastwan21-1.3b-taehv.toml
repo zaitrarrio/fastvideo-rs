@@ -1,0 +1,95 @@
+# Gold standard of `fastwan21-1.3b-taehv` (wan, untiered): docs/adr/0009-gold-standard-files.md.
+# Every number is copied from the [[source]] that cites it; absent numbers are listed under [[gap]].
+# `fv-lab run gold` (plan D1/D3) fills [last_validated] and replaces these with its own run record.
+# FastWan 2.1 1.3B with the TAEHV decoder (the CLI's default decoder for the distilled presets).
+
+schema = 1
+
+[model]
+variant = "fastwan21-1.3b-taehv"
+family = "wan"
+
+[tier]
+gpu = "RTX PRO 6000 Blackwell"
+sm = 120
+vram_gib = 96
+offer = "runpod: NVIDIA RTX PRO 6000 Blackwell Server Edition, EU-RO-1 (plan §1: the gold-standard GPU)"
+
+[workload]
+width = 832
+height = 480
+frames = 81
+fps = 16
+steps = 3
+prompt_set = "raw5: one fox prompt x 5 (artifacts/perf/raw-inference/bench.sh)"
+seeds = [7]
+note = "The FastWan 2.1 recipe decoded by TAEHV (taew2_1). Measured as the max-speed arm of docs/perf/raw-inference.md: reproduce with FASTVIDEO_WAN_QUANT=mxfp8 (MXFP8 DiT linears on sm_120; the served variant's default DiT is bf16) and the TAEHV decoder. The decode does not depend on the DiT precision; denoise, gen and peak do. fv-gpucheck straight from the CLI: everything resident, one untimed warm-up, then 5 timed generations of the raw5 set (one fox prompt x 5, seed 7); gen = total_s - text_s (text cached, no MP4; PNG frames outside the timed region). Median (min-max) of the 5."
+
+[workload.env]
+FASTVIDEO_WAN_QUANT = "mxfp8"
+
+[latency]
+measures = "gen"
+p50_s = 2.26
+min_s = 2.26
+max_s = 2.29
+denoise_s = 1.99
+decode_s = 0.26
+load_s = 36.5
+peak_gib = 21.5
+note = "MXFP8 cost 3 % of the denoise against the bf16 DiT here (1.92 -> 1.99 s), as docs/ports/wan.md found (docs/perf/raw-inference.md, Notes)."
+
+[quality]
+note = "No quality measured in the raw-inference run."
+
+[cost]
+usd_per_hr = 2.49
+usd_per_clip = 0.00156
+
+[last_validated]
+# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+
+[[source]]
+fields = ["latency.measures", "latency.p50_s", "latency.min_s", "latency.max_s", "latency.denoise_s", "latency.decode_s", "latency.peak_gib", "workload"]
+path = "docs/perf/raw-inference.md"
+heading = "RTX PRO 6000 (sm_120)"
+date = "2026-09-30"
+note = "Row 'FastWan 1.3B, 832x480x81, max: TAEHV + MXFP8': gen 2.26 (2.26-2.29) s, denoise 1.99 s, decode 0.26 s, peak 21.5 GiB."
+
+[[source]]
+fields = ["latency.load_s"]
+path = "artifacts/perf/raw-inference/rtx-pro-6000-summary.json"
+heading = "w13-max"
+date = "2026-09-30"
+note = "load_s."
+
+[[source]]
+fields = ["cost.usd_per_hr", "cost.usd_per_clip"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
+date = "2026-10-14"
+note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
+
+[[gap]]
+field = "quality.psnr_vs_upstream_min_db"
+why = "no oracle run of the FastWan 2.1 checkpoint"
+
+[[gap]]
+field = "quality.lpips_vs_upstream_max"
+why = "no oracle run of the FastWan 2.1 checkpoint"
+
+[[gap]]
+field = "quality.sharpness_ratio"
+why = "no gate run of this variant against a baseline in D2's sources"
+
+[[gap]]
+field = "quality.jitter_ratio"
+why = "no gate run of this variant against a baseline in D2's sources"
+
+[[gap]]
+field = "latency.fps"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "latency.ttff_s"
+why = "a clip, not a stream"

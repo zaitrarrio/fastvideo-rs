@@ -1,0 +1,122 @@
+# Gold standard of `ltx25-distill-sol` (ltx2, turbo): docs/adr/0009-gold-standard-files.md.
+# Every number is copied from the [[source]] that cites it; absent numbers are listed under [[gap]].
+# `fv-lab run gold` (plan D1/D3) fills [last_validated] and replaces these with its own run record.
+# Served as ltx-turbo (fal lightricks/ltx-2.5 /fast): LTX-2.5 distilled two-stage, Sol stage 2.
+
+schema = 1
+
+[model]
+variant = "ltx25-distill-sol"
+family = "ltx2"
+profile = "ltx2/ltx25_distill_sol"
+
+[tier]
+name = "turbo"
+gpu = "RTX PRO 6000 Blackwell"
+sm = 120
+vram_gib = 96
+offer = "runpod: NVIDIA RTX PRO 6000 Blackwell Server Edition, EU-RO-1 (plan §1: the gold-standard GPU)"
+
+[workload]
+width = 1280
+height = 768
+frames = 121
+fps = 24
+steps = 11
+prompt_set = "raw5: one fox prompt x 5 (artifacts/perf/raw-inference/bench.sh)"
+seeds = [7]
+note = "steps = 8 stage-1 + 3 stage-2. The 720p tier generated at 1280x768 (two-stage canvas multiple of 64, padded and cropped as the server does). fv-gpucheck ltx2 gen --techniques ltx2/ltx25_distill_sol --model-version 2.5 --two-stage --text resident --offload none, conv VAE, audio on. fv-gpucheck straight from the CLI: everything resident, one untimed warm-up, then 5 timed generations of the raw5 set (one fox prompt x 5, seed 7); gen = total_s - text_s (text cached, no MP4; PNG frames outside the timed region). Median (min-max) of the 5."
+
+[workload.upstream]
+target = "ltx25-512p"
+image = "sol-ltx25"
+rev = "fd4ded7"
+
+[latency]
+measures = "gen"
+p50_s = 10.04
+min_s = 9.69
+max_s = 10.08
+denoise_s = 8.53
+decode_s = 1.46
+load_s = 66.1
+peak_gib = 66.0
+note = "peak_gib is the process peak with Gemma resident before it is dropped after encoding; the timed-run peak is 43.3 GiB. Denoise covers stage 1, the upsample (0.49-0.55 s, the one weight transfer in the timed region) and stage 2."
+
+[quality]
+cell = "oracle: 768x512x121, Sol stage 2 (the arms differ only in stage 2), the matrix prompt, seed 1024; sol-engine gpu_infer.py on Lightricks/LTX-2 fd4ded7, draws, text and the stage-2 entry state injected."
+oracle = "pass: stage 1 is the dense arm's (identical run); the Sol stage 2 adds the expected top-k selection spread on top of dense (s2 blocks 2.9e-3 / 8.7e-3 / 2.9e-2 / 2.3e-2, s2 latents 1.8e-2 / 7.4e-2 / 0.125) and stays within the bf16/f32 floor (docs/oracle.md)."
+note = "This tier is the baseline of the LTX draft; no gate run of it against a baseline."
+
+[cost]
+usd_per_hr = 2.49
+usd_per_clip = 0.00694
+
+[last_validated]
+# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+
+[[source]]
+fields = ["latency.measures", "latency.p50_s", "latency.min_s", "latency.max_s", "latency.denoise_s", "latency.decode_s", "latency.peak_gib", "workload"]
+path = "docs/perf/raw-inference.md"
+heading = "RTX PRO 6000 (sm_120)"
+date = "2026-09-30"
+note = "Row 'LTX-2.5 turbo (two-stage, Sol), 1280x768x121 (720p), default': gen 10.04 (9.69-10.08) s, denoise 8.53 s, decode 1.46 s (audio included), peak 66.0 GiB (timed 43.3)."
+
+[[source]]
+fields = ["latency.load_s"]
+path = "artifacts/perf/raw-inference/rtx-pro-6000-summary.json"
+heading = "ltx-def"
+date = "2026-09-30"
+note = "load_s."
+
+[[source]]
+fields = ["quality.oracle", "quality.cell", "workload.upstream"]
+path = "docs/oracle.md"
+heading = "LTX-2.5 distilled two-stage, 512p (sol-engine gpu_infer.py, bf16 pipeline)"
+date = "2026-10-12"
+note = "Sol stage 2 column of the table; verdict 'LTX-2.5 passes'."
+
+[[source]]
+fields = []
+path = "docs/perf/sol-bench.md"
+heading = "Phase A results (2026-10-06)"
+date = "2026-10-06"
+note = "One prompt, seed 1024, RTX PRO 6000 ($2.09/hr): 1080p 20 s Sol BF16 total 106.14 s (load 56.76 / text 1.99 cached / denoise 90.03 / decode 13.89), stage 2 50.61 s against 122.27 s published on RTX 5090; 4K 5 s 154.86 s (text 38.49 s streamed, stage 2 54.18 s vs 130.32 s). Other canvases; not this cell."
+
+[[source]]
+fields = []
+path = "docs/perf/raw-inference.md"
+heading = "H100 / H200: older figures only (not this run)"
+date = "2026-09-29"
+note = "H100 SXM, LTX-2.5 1080p 6 s fv-serve job (runpod-ltx.toml = this tier): run 28.16 s (docs/perf/datacenter-profile.md). Another GPU; not a number of this file."
+
+[[source]]
+fields = ["cost.usd_per_hr", "cost.usd_per_clip"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
+date = "2026-10-14"
+note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
+
+[[gap]]
+field = "quality.psnr_vs_upstream_min_db"
+why = "the T2V oracle reports per-tensor rel-L2, no decoded-clip PSNR against the reference"
+
+[[gap]]
+field = "quality.lpips_vs_upstream_max"
+why = "the T2V oracle reports per-tensor rel-L2, no LPIPS against the reference"
+
+[[gap]]
+field = "quality.sharpness_ratio"
+why = "no gate run of this variant against a baseline in D2's sources: this tier is the baseline the LTX arms are compared against"
+
+[[gap]]
+field = "quality.jitter_ratio"
+why = "no gate run of this variant against a baseline in D2's sources: this tier is the baseline the LTX arms are compared against"
+
+[[gap]]
+field = "latency.fps"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "latency.ttff_s"
+why = "a clip, not a stream"

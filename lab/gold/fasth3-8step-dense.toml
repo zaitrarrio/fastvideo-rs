@@ -1,0 +1,111 @@
+# Gold standard of `fasth3-8step-dense` (h3, untiered): docs/adr/0009-gold-standard-files.md.
+# Every number is copied from the [[source]] that cites it; absent numbers are listed under [[gap]].
+# `fv-lab run gold` (plan D1/D3) fills [last_validated] and replaces these with its own run record.
+# No preset serves it (control/src/presets.ts NOT_8STEP: its 148 GB h3-8step tree does not fit the family pod).
+
+schema = 1
+
+[model]
+variant = "fasth3-8step-dense"
+family = "h3"
+
+[tier]
+gpu = "RTX PRO 6000 Blackwell"
+sm = 120
+vram_gib = 96
+offer = "runpod: NVIDIA RTX PRO 6000 Blackwell Server Edition, EU-RO-1 (plan §1: the gold-standard GPU)"
+
+[workload]
+width = 1344
+height = 768
+frames = 124
+fps = 24
+prompt_set = "scripts/gpu/prompts-eval.json (the five gate prompts; no run of this variant yet)"
+steps = 8
+
+[latency]
+
+[quality]
+
+[cost]
+usd_per_hr = 2.49
+
+[last_validated]
+# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+
+[[source]]
+fields = []
+path = "docs/techniques.md"
+heading = "H3 attention arms (`h3attn`, RTX PRO 6000, 2026-09-27)"
+date = "2026-09-27"
+note = "The measured FastH3 8-step cells run profile h3/fasth3_8step (VSA 0.8, MXFP8): 768p denoise 45.76 s, and the h3arms baselines 46.52 s (768p) / 16.48 s (480p). That is the VSA recipe, not this dense variant; no number here is this variant's."
+
+[[source]]
+fields = []
+path = "docs/oracle.md"
+heading = "Results: H3 (2026-09-26, RTX PRO 6000, runtime f49db62 / 5312e4b / b1226e9)"
+date = "2026-09-26"
+note = "The oracle's 8-step target is FastH3 8-step V2 with VSA 0.8 (matches the reference to the bf16/f32 noise floor); the dense control is the 4-step dense LoRA. Neither is this variant."
+
+[[source]]
+fields = ["cost.usd_per_hr"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
+date = "2026-10-14"
+note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
+
+[[gap]]
+field = "latency.p50_s"
+why = "no measurement of the dense 8-step recipe in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments); the measured 8-step cells run VSA 0.8"
+
+[[gap]]
+field = "latency.min_s"
+why = "no measurement of the dense 8-step recipe in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments); the measured 8-step cells run VSA 0.8"
+
+[[gap]]
+field = "latency.max_s"
+why = "no measurement of the dense 8-step recipe in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments); the measured 8-step cells run VSA 0.8"
+
+[[gap]]
+field = "latency.denoise_s"
+why = "no measurement of the dense 8-step recipe in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments); the measured 8-step cells run VSA 0.8"
+
+[[gap]]
+field = "latency.decode_s"
+why = "no measurement of the dense 8-step recipe in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments); the measured 8-step cells run VSA 0.8"
+
+[[gap]]
+field = "latency.load_s"
+why = "no measurement of the dense 8-step recipe in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments); the measured 8-step cells run VSA 0.8"
+
+[[gap]]
+field = "latency.peak_gib"
+why = "no measurement of the dense 8-step recipe in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments); the measured 8-step cells run VSA 0.8"
+
+[[gap]]
+field = "quality.psnr_vs_upstream_min_db"
+why = "no measurement of the dense 8-step recipe in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments); the measured 8-step cells run VSA 0.8"
+
+[[gap]]
+field = "quality.lpips_vs_upstream_max"
+why = "no measurement of the dense 8-step recipe in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments); the measured 8-step cells run VSA 0.8"
+
+[[gap]]
+field = "quality.sharpness_ratio"
+why = "no measurement of the dense 8-step recipe in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments); the measured 8-step cells run VSA 0.8"
+
+[[gap]]
+field = "quality.jitter_ratio"
+why = "no measurement of the dense 8-step recipe in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments); the measured 8-step cells run VSA 0.8"
+
+[[gap]]
+field = "latency.fps"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "latency.ttff_s"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "cost.usd_per_clip"
+why = "derived from latency.p50_s, which has no measurement here"

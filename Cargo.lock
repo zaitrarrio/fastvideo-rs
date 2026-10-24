@@ -1382,6 +1382,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastvideo-lab"
+version = "0.1.1"
+dependencies = [
+ "fastvideo-manifest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "fastvideo-loader"
 version = "0.1.1"
 dependencies = [

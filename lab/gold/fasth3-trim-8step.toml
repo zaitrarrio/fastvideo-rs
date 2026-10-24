@@ -1,0 +1,110 @@
+# Gold standard of `fasth3-trim-8step` (h3, untiered): docs/adr/0009-gold-standard-files.md.
+# Every number is copied from the [[source]] that cites it; absent numbers are listed under [[gap]].
+# `fv-lab run gold` (plan D1/D3) fills [last_validated] and replaces these with its own run record.
+# Served as h3-trim: 42 of the 50 H3 blocks, 8 DMD steps, VSA; T2V with audio only.
+
+schema = 1
+
+[model]
+variant = "fasth3-trim-8step"
+family = "h3"
+
+[tier]
+gpu = "RTX PRO 6000 Blackwell"
+sm = 120
+vram_gib = 96
+offer = "runpod: NVIDIA RTX PRO 6000 Blackwell Server Edition, EU-RO-1 (plan §1: the gold-standard GPU)"
+
+[workload]
+width = 832
+height = 480
+frames = 124
+fps = 24
+prompt_set = "the #106 gate set: 5 prompts x 3 seeds (docs/perf/h3-vae-decode-speed.md §6)"
+seeds = []
+steps = 8
+note = "h3-trim as served: --h3-recipe trim-8step, the MXFP8 DiT resident, the FP8 text encoder resident, 5 s clips, --warm, --no-mp4; two decodes of the same latents per clip (FASTVIDEO_H3_VAE_AB=1, measurement only). RTX PRO 6000 Blackwell Workstation Edition pods, EU-RO-1, 2026-10-14."
+
+[latency]
+measures = "end_to_end"
+decode_s = 1.65
+peak_gib = 55.6
+note = "decode_s is the 26-block video VAE with MXFP8 block linears (the default since 2026-10-14), median of 15 clips (run 2: 1.652 s; run 1: 1.627 s; bf16: 2.104-2.135 s, -22.6 %). peak_gib is the denoise run peak (allocated) at 480p with MXFP8; nvidia-smi 58 504 MiB. 768p: decode 3.944 s, peak 62.24 GiB."
+
+[quality]
+gate = "pass: the MXFP8 26-block decoder against the bf16 decode of the same latents (LPIPS 0.0008 / 0.0011 mean at 480p / 768p, PSNR 49.8 / 50.4 dB, 105 / 105 quality checks each). A decoder gate: no gate of the Trim DiT itself in D2's sources."
+
+[cost]
+usd_per_hr = 2.49
+
+[last_validated]
+# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+
+[[source]]
+fields = ["latency.measures", "latency.decode_s", "latency.peak_gib", "quality.gate", "workload"]
+path = "docs/perf/h3-vae-decode-speed.md"
+heading = "6. The 26-block decoder (h3-trim, 2026-10-14)"
+date = "2026-10-14"
+note = "Video VAE time table (480p run 2: bf16 2.135 s, MXFP8 1.652 s), peak memory table (480p MXFP8 denoise run peak 55.60 GiB), quality table (LPIPS / PSNR / 105 of 105). The doc gives the end to end only approximately (about 19 s at 480p, about 49 s at 768p), so p50_s stays a gap."
+
+[[source]]
+fields = []
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "Option 7: FastH3 Trim 8-step NVFP4 (`fasth3-trim-8step-nvfp4`)"
+date = "2026-10-14"
+note = "'Trim bf16' rows ran FASTVIDEO_H3_QUANT=off (not the served MXFP8 DiT) with the then-bf16 decoder: 480p denoise 17.17 s, e2e 19.19 s, peak 44.1 GiB; 768p 48.55 / 53.24 / 51.3. Another configuration."
+
+[[source]]
+fields = ["cost.usd_per_hr"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
+date = "2026-10-14"
+note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
+
+[[gap]]
+field = "latency.p50_s"
+why = "the source states the end to end as an approximation only (about 19 s at 480p, about 49 s at 768p), not a measured median"
+
+[[gap]]
+field = "latency.min_s"
+why = "no per-run band in the source"
+
+[[gap]]
+field = "latency.max_s"
+why = "no per-run band in the source"
+
+[[gap]]
+field = "latency.denoise_s"
+why = "not reported separately for the served MXFP8 DiT (the bf16 Trim denoise of option 7 is another configuration)"
+
+[[gap]]
+field = "latency.load_s"
+why = "not reported"
+
+[[gap]]
+field = "quality.psnr_vs_upstream_min_db"
+why = "no upstream Trim run: FastVideo does not load the ComfyUI file (docs/perf/h3-nvfp4-tier-options.md option 7)"
+
+[[gap]]
+field = "quality.lpips_vs_upstream_max"
+why = "no upstream Trim run"
+
+[[gap]]
+field = "quality.sharpness_ratio"
+why = "the decoder gate table reports LPIPS and PSNR; no DiT-level gate"
+
+[[gap]]
+field = "quality.jitter_ratio"
+why = "the decoder gate table reports LPIPS and PSNR; no DiT-level gate"
+
+[[gap]]
+field = "latency.fps"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "latency.ttff_s"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "cost.usd_per_clip"
+why = "derived from latency.p50_s, which has no measurement here"
