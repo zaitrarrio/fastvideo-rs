@@ -666,7 +666,8 @@ ran (pod id, $/hr), result, cost.
   `mlx-rs` lock tree); kept: `fastvideo-ops::fp8`, the CUDA reader of the
   MLX H3 export (`h3/mlx.rs`, chosen by the checkpoint). On build pod
   (agent `b6-loader`): models + cudarc + core + engine-service 1378 passed,
-  0 failed; workspace lib 1916 passed; fmt and workspace clippy `-D
+  0 failed; workspace lib 1916 passed (1971 after merging main at
+  `8178a7a`); fmt and workspace clippy `-D
   warnings` green; `--features cuda` check of cudarc, engine-service,
   gpucheck and core green (the base's warnings only); `scripts/serve/check.sh`
   1037 passed; `scripts/gpu/lint.sh` green. GPU `techniques` byte-identity
