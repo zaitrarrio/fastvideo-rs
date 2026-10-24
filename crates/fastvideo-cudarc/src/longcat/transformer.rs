@@ -2,9 +2,9 @@
 
 use fastvideo_models::longcat::LongCatTransformerConfig;
 
-use crate::wan::nn::{self, Linear};
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{self, WeightMap};
+use crate::rt::nn::{self, Linear};
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{self, WeightMap};
 
 use super::bsa::{flash_attn_bsa_3d, BsaParams};
 

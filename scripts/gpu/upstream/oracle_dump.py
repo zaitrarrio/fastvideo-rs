@@ -2,7 +2,7 @@
 """GPU oracle dumps from the Python references, in fastvideo-rs's dump format.
 
 Writes exactly what our ``FASTVIDEO_DUMP_DIR`` writes
-(crates/fastvideo-cudarc/src/wan/dump.rs): ``<dir>/<name>.f32`` (raw
+(crates/fastvideo-cudarc/src/rt/dump.rs): ``<dir>/<name>.f32`` (raw
 little-endian float32, a bf16 tensor widened exactly) plus ``<dir>/<name>.shape``
 (space-separated dims), under the same names and with the same row subsampling,
 so ``fv-gpucheck compare-dumps`` diffs a reference run against ours tensor by

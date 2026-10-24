@@ -110,6 +110,16 @@ tasks:
     cmds:
       - '{{if .HEAVY}}FV_SERVE_HEAVY=1 {{end}}{{if .CUDA}}FV_SERVE_CUDA=1 {{end}}bash scripts/serve/check.sh'
 
+  # Plan E4: the adapter-tests workflow runs the same script; the build pod
+  # runs it once its image has cargo-llvm-cov (docs/dev/testing.md "Coverage").
+  coverage:
+    desc: 'Adapter crates under cargo-llvm-cov: lcov, HTML and totals in target/llvm-cov (needs cargo-llvm-cov + llvm-tools-preview)'
+    cmds: ['bash scripts/serve/coverage.sh']
+
+  coverage:tests:
+    desc: 'The coverage crate set with plain `cargo test --locked`, no instrumentation'
+    cmds: ['bash scripts/serve/coverage.sh --tests']
+
   test:docker:
     desc: Unit tests inside the builder image
     deps: [docker:up]

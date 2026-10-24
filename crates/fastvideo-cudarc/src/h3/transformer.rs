@@ -38,13 +38,13 @@ use fastvideo_models::h3::schedule::H3JointSchedule;
 use fastvideo_models::h3::sol::H3TeaCache;
 
 use super::fused16::{self, AdaRows, NormOut};
-use crate::wan::nn::{scaled_dot_product_attention, Linear};
-use crate::wan::offload::{BlockWeights, OffloadBlock, Residency};
-use crate::wan::quant::{H3QuantPlan, QuantKind, QuantMode, Section};
-use crate::wan::stats::phase;
-use crate::wan::tensor::bf16_activations;
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
+use crate::rt::nn::{scaled_dot_product_attention, Linear};
+use crate::rt::offload::{BlockWeights, OffloadBlock, Residency};
+use crate::rt::quant::{H3QuantPlan, QuantKind, QuantMode, Section};
+use crate::rt::stats::phase;
+use crate::rt::tensor::bf16_activations;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{cuda_tensor_shaped, WeightMap};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -145,25 +145,25 @@ fn dump_merged(prefix: &str, lin: &Linear) -> Result<()> {
     let Ok(list) = std::env::var("FV_H3_DUMP_MERGED") else {
         return Ok(());
     };
-    if !crate::wan::dump::enabled() || !list.split(',').any(|p| p.trim() == prefix) {
+    if !crate::rt::dump::enabled() || !list.split(',').any(|p| p.trim() == prefix) {
         return Ok(());
     }
     let snap = lin.snapshot()?;
     let data: Vec<f32> = match &snap.weight {
-        crate::wan::nn::SnapshotWeight::Bf16(bytes) => bytes
+        crate::rt::nn::SnapshotWeight::Bf16(bytes) => bytes
             .as_chunks::<2>()
             .0
             .iter()
             .map(|b| f32::from_bits(u32::from(u16::from_le_bytes([b[0], b[1]])) << 16))
             .collect(),
-        crate::wan::nn::SnapshotWeight::F32(v) => v.clone(),
-        crate::wan::nn::SnapshotWeight::Quant { .. } => {
+        crate::rt::nn::SnapshotWeight::F32(v) => v.clone(),
+        crate::rt::nn::SnapshotWeight::Quant { .. } => {
             return Err(msg(format!(
                 "FV_H3_DUMP_MERGED: {prefix} is already quantized"
             )))
         }
     };
-    crate::wan::dump::host(
+    crate::rt::dump::host(
         &format!("merged.{prefix}"),
         &[snap.out_dim, snap.in_dim],
         &data,
@@ -181,10 +181,10 @@ fn dump_merged(prefix: &str, lin: &Linear) -> Result<()> {
 #[cfg(feature = "cuda")]
 pub(crate) mod lora_device {
     use super::super::lora::FuseParts;
-    use crate::wan::nn::Linear;
-    use crate::wan::ops::{lora_fuse_bf16_device, LoraBase, LoraPairDev};
-    use crate::wan::tensor::{Result, TensorError};
-    use crate::wan::weights::WeightMap;
+    use crate::rt::nn::Linear;
+    use crate::rt::ops::{lora_fuse_bf16_device, LoraBase, LoraPairDev};
+    use crate::rt::tensor::{Result, TensorError};
+    use crate::rt::weights::WeightMap;
     use cudarc::driver::{CudaSlice, CudaViewMut};
     use fastvideo_loader::LazyDType;
     use half::bf16;
@@ -194,8 +194,8 @@ pub(crate) mod lora_device {
     }
 
     pub fn enabled() -> bool {
-        static FLAG: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
-        FLAG.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_H3_LORA_DEVICE", true))
+        static FLAG: crate::rt::envflag::CachedBool = crate::rt::envflag::CachedBool::new();
+        FLAG.get_or_init(|| crate::rt::envflag::bool_flag("FASTVIDEO_H3_LORA_DEVICE", true))
             && Linear::device_bf16_route()
     }
 
@@ -216,11 +216,11 @@ pub(crate) mod lora_device {
         if v.shape != [rows, cols] {
             return Ok(None);
         }
-        let dev = crate::wan::device::global_device().ok_or_else(|| msg("no device"))?;
+        let dev = crate::rt::device::global_device().ok_or_else(|| msg("no device"))?;
         let e = |e: cudarc::driver::DriverError| msg(format!("lora base {key}: {e}"));
         match *v.dtype {
             LazyDType::BF16 => {
-                if let Some(w) = crate::wan::stage_upload::upload_bf16_bytes(v.bytes)? {
+                if let Some(w) = crate::rt::stage_upload::upload_bf16_bytes(v.bytes)? {
                     return Ok(Some(Base::Bf16(w)));
                 }
                 let host: Vec<bf16> = v
@@ -228,7 +228,7 @@ pub(crate) mod lora_device {
                     .chunks_exact(2)
                     .map(|c| bf16::from_bits(u16::from_le_bytes([c[0], c[1]])))
                     .collect();
-                crate::wan::stats::record_h2d(host.len() / 2);
+                crate::rt::stats::record_h2d(host.len() / 2);
                 Ok(Some(Base::Bf16(dev.stream.memcpy_stod(&host).map_err(e)?)))
             }
             LazyDType::F32 => {
@@ -237,7 +237,7 @@ pub(crate) mod lora_device {
                     .chunks_exact(4)
                     .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                     .collect();
-                crate::wan::stats::record_h2d(host.len());
+                crate::rt::stats::record_h2d(host.len());
                 Ok(Some(Base::F32(dev.stream.memcpy_stod(&host).map_err(e)?)))
             }
             _ => Ok(None),
@@ -255,10 +255,10 @@ pub(crate) mod lora_device {
         parts: &FuseParts,
         out: &mut CudaViewMut<'_, bf16>,
     ) -> Result<bool> {
-        let dev = crate::wan::device::global_device().ok_or_else(|| msg("no device"))?;
+        let dev = crate::rt::device::global_device().ok_or_else(|| msg("no device"))?;
         let e = |e: cudarc::driver::DriverError| msg(format!("lora fuse {key}: {e}"));
         let up = |v: &[f32]| -> Result<CudaSlice<f32>> {
-            crate::wan::stats::record_h2d(v.len());
+            crate::rt::stats::record_h2d(v.len());
             dev.stream.memcpy_stod(v).map_err(e)
         };
         // A `.set_weight` replacement overwrites the base: it is not read.
@@ -316,7 +316,7 @@ pub(crate) mod lora_device {
         if !enabled() {
             return Ok(Err(parts));
         }
-        let dev = crate::wan::device::global_device().ok_or_else(|| msg("no device"))?;
+        let dev = crate::rt::device::global_device().ok_or_else(|| msg("no device"))?;
         // SAFETY: fully written by the kernel before any read.
         let mut out = unsafe { dev.stream.alloc::<bf16>(rows * cols) }
             .map_err(|e| msg(format!("lora fuse {key}: {e}")))?;
@@ -334,8 +334,8 @@ pub(crate) mod lora_device {
     /// require the device merge's bits to equal it (an identity check; the
     /// load then costs both paths).
     pub fn verify_enabled() -> bool {
-        static FLAG: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
-        FLAG.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_H3_LORA_VERIFY", false))
+        static FLAG: crate::rt::envflag::CachedBool = crate::rt::envflag::CachedBool::new();
+        FLAG.get_or_init(|| crate::rt::envflag::bool_flag("FASTVIDEO_H3_LORA_VERIFY", false))
     }
 
     static COUNTS: [std::sync::atomic::AtomicU64; 2] = [
@@ -377,7 +377,7 @@ pub(crate) mod lora_device {
             map.get_f32(key)?.1
         };
         parts.apply_host(key, &mut host, &[rows, cols])?;
-        let dev = crate::wan::device::global_device().ok_or_else(|| msg("no device"))?;
+        let dev = crate::rt::device::global_device().ok_or_else(|| msg("no device"))?;
         let got = dev
             .stream
             .memcpy_dtov(got)
@@ -388,7 +388,7 @@ pub(crate) mod lora_device {
             .all(|(g, h)| g.to_bits() == bf16::from_f32(*h).to_bits());
         let n = COUNTS[usize::from(!equal)].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if !equal && n < 5 {
-            crate::wan::log::info(format_args!("h3 lora device merge MISMATCH: {key}"));
+            crate::rt::log::info(format_args!("h3 lora device merge MISMATCH: {key}"));
         }
         Ok(())
     }
@@ -436,10 +436,10 @@ fn tea_relative_l1(current: &CudaTensor, previous: &CudaTensor) -> Result<f64> {
     }
     #[cfg(feature = "cuda")]
     if let (Some(a), Some(b)) = (current.dev()?, previous.dev()?) {
-        let (diff, prev) = crate::wan::ops::abs_diff_sums_device(&a, &b)?;
+        let (diff, prev) = crate::rt::ops::abs_diff_sums_device(&a, &b)?;
         return Ok(fastvideo_models::h3::sol::relative_l1_from_sums(diff, prev));
     }
-    crate::wan::stats::host_fallback(
+    crate::rt::stats::host_fallback(
         "h3_teacache_relative_l1",
         format_args!("{:?}", current.shape),
     )?;
@@ -486,12 +486,12 @@ impl RowGather {
                 Some(idx) => idx,
                 None => {
                     let host: Vec<u32> = self.host.iter().map(|&i| i as u32).collect();
-                    let up = crate::wan::ops::upload_row_indices(&host)?;
+                    let up = crate::rt::ops::upload_row_indices(&host)?;
                     let _ = self.dev.set(up);
                     self.dev.get().expect("h3 sol gather indices")
                 }
             };
-            let out = crate::wan::ops::index_select_rows_idx_device(&table, d, idx)?;
+            let out = crate::rt::ops::index_select_rows_idx_device(&table, d, idx)?;
             return CudaTensor::from_device_slice(out, vec![1, s, d]);
         }
         t.reshape(vec![s, d])?
@@ -626,22 +626,22 @@ pub enum AttnMode<'a> {
 }
 
 /// A dense block's attention: the FP8 `Q K^T` kernel when the request runs
-/// `fp8_attention` on dense calls ([`crate::wan::attn_fp8`]), otherwise (and
+/// `fp8_attention` on dense calls ([`crate::rt::attn_fp8`]), otherwise (and
 /// wherever that kernel cannot run) the bf16 SDPA.
 fn dense_attention(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor) -> Result<CudaTensor> {
     #[cfg(feature = "cuda")]
-    if crate::wan::attn_fp8::dense_enabled() {
-        let out_bf16 = crate::wan::tensor::bf16_activations();
-        if let Some(out) = crate::wan::attn_fp8::dense_sdpa(q, k, v, None, out_bf16)? {
+    if crate::rt::attn_fp8::dense_enabled() {
+        let out_bf16 = crate::rt::tensor::bf16_activations();
+        if let Some(out) = crate::rt::attn_fp8::dense_sdpa(q, k, v, None, out_bf16)? {
             return Ok(out);
         }
     }
     scaled_dot_product_attention(q, k, v, None)
 }
 
-/// `benchmark.json` attention route of one block (see [`crate::wan::evalstats`]).
+/// `benchmark.json` attention route of one block (see [`crate::rt::evalstats`]).
 fn record_attn(step: usize, layer: usize, mode: &AttnMode<'_>) {
-    use crate::wan::evalstats::{attn, AttnKind};
+    use crate::rt::evalstats::{attn, AttnKind};
     let kind = match mode {
         AttnMode::Dense | AttnMode::Sol(_) | AttnMode::SolVsa { .. } | AttnMode::Vdn(_) => {
             AttnKind::Dense
@@ -834,7 +834,7 @@ impl AdaLnTable {
                         .for_each(|v| *v += 1.0);
                 }
             }
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3 adaln table: block {}/{}",
                 b + 1,
                 cfg.num_layers
@@ -917,7 +917,7 @@ impl AdaLnTable {
                 cfg.time_embed_dim
             )));
         }
-        crate::wan::log::info(format_args!("h3 adaln table: from the pre-quantized tree"));
+        crate::rt::log::info(format_args!("h3 adaln table: from the pre-quantized tree"));
         Ok(Self {
             steps,
             blocks: cfg.num_layers,
@@ -1013,7 +1013,7 @@ impl AdaLnTable {
                     .chunks_exact(cfg.time_embed_dim)
                     .map(<[f32]>::to_vec)
                     .collect();
-                crate::wan::log::info(format_args!("h3 adaln table: read from {}", path.display()));
+                crate::rt::log::info(format_args!("h3 adaln table: read from {}", path.display()));
                 return Ok(Self {
                     steps,
                     blocks: cfg.num_layers,
@@ -1024,7 +1024,7 @@ impl AdaLnTable {
                     temb,
                 });
             }
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3 adaln table: {} is for another checkpoint or ladder; rebuilding",
                 path.display()
             ));
@@ -1046,7 +1046,7 @@ impl AdaLnTable {
             .map_or(Ok(()), std::fs::create_dir_all)
             .and_then(|()| std::fs::write(path, &bytes));
         if let Err(e) = written {
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3 adaln table: could not write {}: {e}",
                 path.display()
             ));
@@ -1121,7 +1121,7 @@ impl FactorizedAdaLn {
             .collect();
         let x: Vec<f32> = silu.iter().map(|&v| f16_round(v)).collect();
         let r = fp16_linear(&x, rows, te, &basis, None, rank);
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "h3 adaln: factorized, rank {rank} (shared basis, float16 projections)"
         ));
         Ok(Self { rank, r })
@@ -1303,8 +1303,8 @@ fn adaln_device_tables(table: &AdaLnTable, step: usize) -> Result<(CudaTensor, C
             vec![table.blocks, MODALITY_NUM, ADALN_PARAMS, table.hidden],
         )?
         .to_device()?;
-        crate::wan::ledger::set(
-            crate::wan::ledger::ADALN_TABLE,
+        crate::rt::ledger::set(
+            crate::rt::ledger::ADALN_TABLE,
             (ladder.numel() + kf.numel()) as u64 * 4,
         );
         *c.borrow_mut() = Some((key, ladder.clone(), kf.clone()));
@@ -1316,7 +1316,7 @@ fn adaln_device_tables(table: &AdaLnTable, step: usize) -> Result<(CudaTensor, C
 pub fn release_adaln_device_tables() {
     ADALN_DEVICE.with(|c| *c.borrow_mut() = None);
     ADALN_ROWS16.with(|c| *c.borrow_mut() = None);
-    crate::wan::ledger::clear(crate::wan::ledger::ADALN_TABLE);
+    crate::rt::ledger::clear(crate::rt::ledger::ADALN_TABLE);
 }
 
 thread_local! {
@@ -1331,16 +1331,16 @@ thread_local! {
 /// fused kernels do. Idempotent, so an f32-built cache converts too.
 fn bf16_table_value(v: f32, is_scale: bool) -> f32 {
     if is_scale {
-        crate::wan::quant::bf16_round(v - 1.0) + 1.0
+        crate::rt::quant::bf16_round(v - 1.0) + 1.0
     } else {
-        crate::wan::quant::bf16_round(v)
+        crate::rt::quant::bf16_round(v)
     }
 }
 
 /// Step `step`'s ladder rows then the keyframe table, as the fused kernels
 /// read them, uploaded once per step.
 /// FASTVIDEO_DUMP_OPS: block `block`'s six AdaLN vectors at `step`, gathered
-/// per sequence row (every [`crate::wan::dump::BLOCK_ROW_STRIDE`]-th row) as
+/// per sequence row (every [`crate::rt::dump::BLOCK_ROW_STRIDE`]-th row) as
 /// `[rows, 6 * hidden]` in (shift, scale, gate) msa then mlp order: the
 /// reference's `adaln_proj(temb)` chunks `index_select`ed by its row indices.
 /// Raw f32 table values (before any bf16 rounding of ours), scales as
@@ -1358,7 +1358,7 @@ fn dump_adaln_rows(
         .block_mods
         .get(step * per_step..(step + 1) * per_step)
         .ok_or_else(|| msg(format!("h3 adaln dump: step {step} of {}", table.steps)))?;
-    let stride = crate::wan::dump::BLOCK_ROW_STRIDE;
+    let stride = crate::rt::dump::BLOCK_ROW_STRIDE;
     let mut out = Vec::new();
     for r in (0..layout.adaln_idx.len()).step_by(stride) {
         // `src * blocks * 3 + tag`, src 0 = ladder, 1 = keyframe table.
@@ -1379,7 +1379,7 @@ fn dump_adaln_rows(
             }
         }
     }
-    crate::wan::dump::host(
+    crate::rt::dump::host(
         &format!("step00_b{block}_adaln"),
         &[out.len() / slice, slice],
         &out,
@@ -1476,7 +1476,7 @@ fn adaln_rows16(table: &AdaLnTable, step: usize, layout: &DeviceLayout) -> Resul
 /// `FASTVIDEO_BF16_ACT`.
 fn with_quant_act<R>(quant: QuantMode, f: impl FnOnce() -> R) -> R {
     if quant != QuantMode::Off && !bf16_activations() {
-        crate::wan::tensor::with_bf16_act(true, f)
+        crate::rt::tensor::with_bf16_act(true, f)
     } else {
         f()
     }
@@ -1594,8 +1594,7 @@ impl Attention {
             let qkvg = if device {
                 #[cfg(feature = "cuda")]
                 {
-                    let dev =
-                        crate::wan::device::global_device().ok_or_else(|| msg("no device"))?;
+                    let dev = crate::rt::device::global_device().ok_or_else(|| msg("no device"))?;
                     // SAFETY: every part is written below before any read.
                     let mut stacked = unsafe { dev.stream.alloc::<half::bf16>(rows * hidden) }
                         .map_err(|e| msg(format!("qkvg stack: {e}")))?;
@@ -1656,7 +1655,7 @@ impl Attention {
             });
         }
         let keys: Vec<&str> = names.iter().map(String::as_str).collect();
-        let (qkvg, to_out) = if let Some(bits) = crate::wan::affine::bits_from_env() {
+        let (qkvg, to_out) = if let Some(bits) = crate::rt::affine::bits_from_env() {
             (
                 Linear::load_fused_affine(map, &keys, hidden, inner, false, bits)?,
                 Linear::load_affine(
@@ -1770,7 +1769,7 @@ impl Attention {
             if fused
                 && super::vsa::READS_F32
                 && fused16::fuse_enabled()
-                && !crate::wan::nvfp4::kv_enabled()
+                && !crate::rt::nvfp4::kv_enabled()
             {
                 if let Some(out) = self.attend_vsa_f32(&packed, rope, vsa)? {
                     drop(packed);
@@ -1783,7 +1782,7 @@ impl Attention {
         #[cfg(feature = "cuda")]
         if fused
             && fused16::glue_enabled()
-            && !crate::wan::nvfp4::kv_enabled()
+            && !crate::rt::nvfp4::kv_enabled()
             && matches!(mode, AttnMode::Dense | AttnMode::SolLayer { .. })
             && packed.is_bf16()
             && packed.is_device_fresh()
@@ -1839,7 +1838,7 @@ impl Attention {
         let v = phase("h3_attn_v", || {
             packed.split_heads_bhsd(2 * inner, self.heads, self.head_dim)
         })?;
-        let (k, v) = crate::wan::nvfp4::maybe_kv(k, v)?;
+        let (k, v) = crate::rt::nvfp4::maybe_kv(k, v)?;
         let out = match mode {
             AttnMode::Dense => dense_attention(&q, &k, &v)?,
             AttnMode::Vsa(vsa) => {
@@ -1923,7 +1922,7 @@ impl Attention {
             packed.split_heads_bhsd(2 * inner, self.heads, self.head_dim)
         })?;
         let o = phase("h3_vdn_window", || {
-            crate::wan::nn::sdpa_vdn_window(&q, &k, &v, None, plan.window)
+            crate::rt::nn::sdpa_vdn_window(&q, &k, &v, None, plan.window)
         })?;
         drop((q, k, v));
         let o = phase("h3_vdn_gate", || branch.gate_heads(o, &aux))?;
@@ -2116,7 +2115,7 @@ pub(crate) struct FeedForward {
 /// `FASTVIDEO_H3_FFN_FP8` (a per-tensor E4M3 FFN matching no reference,
 /// 17-20 dB) is retired: refuse it rather than silently run bf16.
 fn refuse_retired_ffn_fp8() -> Result<()> {
-    if crate::wan::envflag::bool_flag("FASTVIDEO_H3_FFN_FP8", false) {
+    if crate::rt::envflag::bool_flag("FASTVIDEO_H3_FFN_FP8", false) {
         return Err(msg(
             "FASTVIDEO_H3_FFN_FP8 is retired; use FASTVIDEO_H3_QUANT=w8a8|mxfp8 (the reference recipes)",
         ));
@@ -2152,7 +2151,7 @@ impl FeedForward {
                 ffn_dim: cfg.ffn_dim,
             });
         }
-        let (ff_in, ff_out) = if let Some(bits) = crate::wan::affine::bits_from_env() {
+        let (ff_in, ff_out) = if let Some(bits) = crate::rt::affine::bits_from_env() {
             (
                 Linear::load_affine(
                     map,
@@ -2218,7 +2217,7 @@ impl FeedForward {
                     self.ff_in.forward_mx(&act, vec![1, rows, 2 * self.ffn_dim])
                 })?;
                 drop(act);
-                crate::wan::evalstats::ffn(1);
+                crate::rt::evalstats::ffn(1);
                 return self.down(h, rows, hidden);
             }
         };
@@ -2236,7 +2235,7 @@ impl FeedForward {
             parts.push(self.down(h, len, hidden)?);
             start += len;
         }
-        crate::wan::evalstats::ffn(parts.len());
+        crate::rt::evalstats::ffn(parts.len());
         if parts.len() == 1 {
             return Ok(parts.pop().unwrap());
         }
@@ -2290,7 +2289,7 @@ impl FeedForward {
             parts.push(phase("h3_ffn_out", || self.ff_out.forward(&act))?);
             start += len;
         }
-        crate::wan::evalstats::ffn(parts.len());
+        crate::rt::evalstats::ffn(parts.len());
         if parts.len() == 1 {
             return Ok(parts.pop().unwrap());
         }
@@ -2616,10 +2615,10 @@ impl Block {
         // Without `cuda`, `NormOut` has only `T` and this pattern is irrefutable.
         #[cfg_attr(not(feature = "cuda"), allow(irrefutable_let_patterns))]
         if let NormOut::T(t) = &n {
-            crate::wan::dump::op("attn_in", t)?;
+            crate::rt::dump::op("attn_in", t)?;
         }
         let a = phase("h3_2_attn", || self.attn.forward_in(n, rows, rope, mode))?;
-        crate::wan::dump::op("attn_out", &a)?;
+        crate::rt::dump::op("attn_out", &a)?;
         let (x, n) = phase("h3_3_residual_msa", || {
             fused16::res_gate_norm_mod(
                 x,
@@ -2633,14 +2632,14 @@ impl Block {
             )
         })?;
         drop(a);
-        crate::wan::dump::op("resid_msa", &x)?;
+        crate::rt::dump::op("resid_msa", &x)?;
         // Without `cuda`, `NormOut` has only `T` and this pattern is irrefutable.
         #[cfg_attr(not(feature = "cuda"), allow(irrefutable_let_patterns))]
         if let NormOut::T(t) = &n {
-            crate::wan::dump::op("ffn_in", t)?;
+            crate::rt::dump::op("ffn_in", t)?;
         }
         let f = phase("h3_5_ffn", || self.ff.forward_in(n, rows))?;
-        crate::wan::dump::op("ffn_out", &f)?;
+        crate::rt::dump::op("ffn_out", &f)?;
         if defer {
             return Ok(BlockOut::Pending { res: x, f, base });
         }
@@ -2714,8 +2713,8 @@ impl H3TextRefiner {
         lora: &mut Option<super::lora::H3LoraFuse>,
         residency: Residency,
     ) -> Result<Self> {
-        let mut blocks = BlockWeights::new("h3 refiner", residency)
-            .with_ledger(crate::wan::ledger::REFINER_RING);
+        let mut blocks =
+            BlockWeights::new("h3 refiner", residency).with_ledger(crate::rt::ledger::REFINER_RING);
         let quant = QuantMode::from_env().map_err(msg)?;
         let plan = H3QuantPlan::new(quant, cfg.num_layers, cfg.num_refiner_layers);
         for i in 0..cfg.num_refiner_layers {
@@ -2768,8 +2767,8 @@ impl H3TextRefiner {
         r: &super::dit_tree::TreeReader,
         residency: Residency,
     ) -> Result<Self> {
-        let mut blocks = BlockWeights::new("h3 refiner", residency)
-            .with_ledger(crate::wan::ledger::REFINER_RING);
+        let mut blocks =
+            BlockWeights::new("h3 refiner", residency).with_ledger(crate::rt::ledger::REFINER_RING);
         let quant = QuantMode::from_env().map_err(msg)?;
         let plan = H3QuantPlan::new(quant, cfg.num_layers, cfg.num_refiner_layers);
         for i in 0..cfg.num_refiner_layers {
@@ -2842,8 +2841,8 @@ impl DeviceLayout {
             idx[range.start..range.end()].fill(v);
         }
         #[cfg(feature = "cuda")]
-        let adaln_idx_dev = if crate::wan::stats::device_expected() {
-            Some(Arc::new(crate::wan::ops::upload_row_indices(&idx)?))
+        let adaln_idx_dev = if crate::rt::stats::device_expected() {
+            Some(Arc::new(crate::rt::ops::upload_row_indices(&idx)?))
         } else {
             None
         };
@@ -2892,7 +2891,7 @@ impl H3TeaRuntime {
             .filter_map(|t| t.as_ref())
             .map(CudaTensor::stored_bytes)
             .sum();
-        crate::wan::ledger::set(crate::wan::ledger::STEP_CACHE, bytes);
+        crate::rt::ledger::set(crate::rt::ledger::STEP_CACHE, bytes);
     }
 }
 
@@ -2941,7 +2940,7 @@ impl H3Transformer {
     }
 
     /// [`Self::load_with`] with the 50 blocks resident or streamed
-    /// ([`crate::wan::offload`]): streamed, each block leaves the device as
+    /// ([`crate::rt::offload`]): streamed, each block leaves the device as
     /// soon as it is loaded and a forward holds `lookahead + 1` of them.
     pub fn load_with_residency(
         cfg: H3TransformerConfig,
@@ -3019,7 +3018,7 @@ impl H3Transformer {
         };
         if quant != QuantMode::Off {
             let modelopt_what;
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3 quant: {} ({} reference linears incl. refiner; {}), bf16 activations",
                 quant.as_str(),
                 plan.reference_linear_count(),
@@ -3062,14 +3061,14 @@ impl H3Transformer {
                 )?,
             };
             blocks.push(block)?;
-            crate::wan::log::info(format_args!(
+            crate::rt::log::info(format_args!(
                 "h3 dit: block {}/{} {}",
                 i + 1,
                 cfg.num_layers,
                 residency.as_str()
             ));
         }
-        crate::wan::log::info(format_args!("{}", blocks.describe()));
+        crate::rt::log::info(format_args!("{}", blocks.describe()));
         // `_keep_in_fp32_modules`: the patch projections stay f32 under bf16
         // activations (the reference casts into and out of them).
         let island = |mut l: Linear| {
@@ -3171,7 +3170,7 @@ impl H3Transformer {
                 plan.dit_block(i),
             )?)?;
         }
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "h3 dit: {} blocks from the pre-quantized tree ({}{})",
             cfg.num_layers,
             quant.as_str(),
@@ -3181,7 +3180,7 @@ impl H3Transformer {
                 format!(", {} reference linears", plan.reference_linear_count())
             }
         ));
-        crate::wan::log::info(format_args!("{}", blocks.describe()));
+        crate::rt::log::info(format_args!("{}", blocks.describe()));
         let island = |mut l: Linear| {
             l.set_f32_island();
             l
@@ -3217,7 +3216,7 @@ impl H3Transformer {
     /// path leaves this empty.
     pub fn enable_sol_teacache(&self, num_forwards: usize) -> Result<()> {
         let state = H3TeaCache::official(num_forwards).map_err(msg)?;
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "{}",
             fastvideo_models::h3::sol::TEACACHE_APPLIED
         ));
@@ -3247,7 +3246,7 @@ impl H3Transformer {
             rt.pending = None;
             rt.state.reset();
         }
-        crate::wan::ledger::clear(crate::wan::ledger::STEP_CACHE);
+        crate::rt::ledger::clear(crate::rt::ledger::STEP_CACHE);
         release_adaln_device_tables();
     }
 
@@ -3286,7 +3285,7 @@ impl H3Transformer {
             0.0
         };
         let decision = runtime.state.decide(step, rel);
-        crate::wan::evalstats::teacache_decision(
+        crate::rt::evalstats::teacache_decision(
             step,
             decision.compute,
             decision.reason,
@@ -3295,7 +3294,7 @@ impl H3Transformer {
             decision.accumulator,
         );
         runtime.signal = Some(probe);
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "h3 teacache step {step}: {} ({}; rel_l1 {} indicator {} acc {:.4})",
             if decision.compute { "compute" } else { "REUSE" },
             decision.reason,
@@ -3310,7 +3309,7 @@ impl H3Transformer {
             runtime.book();
             Ok(Some(false))
         } else {
-            crate::wan::log::debug(format_args!(
+            crate::rt::log::debug(format_args!(
                 "h3 sol teacache reuse step {step} reason {}",
                 decision.reason
             ));
@@ -3353,7 +3352,7 @@ impl H3Transformer {
                 &cfg,
             )?));
         }
-        crate::wan::log::info(format_args!(
+        crate::rt::log::info(format_args!(
             "h3 vdn: linear branch attached to {} blocks",
             self.blocks.len()
         ));
@@ -3385,7 +3384,7 @@ impl H3Transformer {
 
     /// Log (and reset) the block streaming counters: H2D throughput and how
     /// much of each copy the previous block's compute hid.
-    pub fn report_offload(&self, what: &str) -> crate::wan::offload::OffloadStats {
+    pub fn report_offload(&self, what: &str) -> crate::rt::offload::OffloadStats {
         self.blocks.report(what)
     }
 
@@ -3545,12 +3544,12 @@ impl H3Transformer {
         let tea = self.begin_sol_tea(step, &x, l, eps)?;
         // FASTVIDEO_DUMP_DIR at the first step (the observer is set): the
         // packed input, the RoPE tables, and the inside of FASTVIDEO_DUMP_OPS blocks.
-        let dump_ops = observer.is_some() && crate::wan::dump::enabled();
+        let dump_ops = observer.is_some() && crate::rt::dump::enabled();
         if dump_ops {
-            let stride = crate::wan::dump::BLOCK_ROW_STRIDE;
-            crate::wan::dump::rows_strided("step00_packed_in", &x, stride)?;
-            crate::wan::dump::rows_strided("rope_cos", &layout.cos, stride)?;
-            crate::wan::dump::rows_strided("rope_sin", &layout.sin, stride)?;
+            let stride = crate::rt::dump::BLOCK_ROW_STRIDE;
+            crate::rt::dump::rows_strided("step00_packed_in", &x, stride)?;
+            crate::rt::dump::rows_strided("rope_cos", &layout.cos, stride)?;
+            crate::rt::dump::rows_strided("rope_sin", &layout.sin, stride)?;
         }
         // FASTVIDEO_H3_FUSE: the deferred last residual (see BlockIn).
         let defer_ok = fused16::fuse_enabled() && observer.is_none() && !dump_ops;
@@ -3559,8 +3558,8 @@ impl H3Transformer {
             x = self.add_sol_tea_residual(x)?;
         } else {
             for index in 0..self.blocks.len() {
-                let ops_here = dump_ops && crate::wan::dump::op_blocks().contains(&index);
-                crate::wan::dump::set_op_block(ops_here.then_some(index));
+                let ops_here = dump_ops && crate::rt::dump::op_blocks().contains(&index);
+                crate::rt::dump::set_op_block(ops_here.then_some(index));
                 if ops_here {
                     dump_adaln_rows(&self.table, step, index, layout)?;
                 }
@@ -3612,11 +3611,11 @@ impl H3Transformer {
                         BlockOut::Hidden(h) => x = h,
                         BlockOut::Pending { res, f, base } => pending = Some((res, f, base)),
                     }
-                    crate::wan::dump::set_op_block(None);
+                    crate::rt::dump::set_op_block(None);
                     if let Some(observe) = observer.as_mut() {
                         observe(&format!("block_{index}"), &x)?;
                     }
-                    crate::wan::log::info(format_args!(
+                    crate::rt::log::info(format_args!(
                         "h3 dit step {step}: block {}/{}",
                         index + 1,
                         self.blocks.len()
@@ -3649,27 +3648,27 @@ impl H3Transformer {
                     let n = phase("h3_1_norm_msa", || {
                         mods.modulate(&x.rms_norm(&block.norm1, eps)?, SCALE_MSA, SHIFT_MSA)
                     })?;
-                    crate::wan::dump::op("attn_in", &n)?;
+                    crate::rt::dump::op("attn_in", &n)?;
                     let a = phase("h3_2_attn", || block.attn.forward(&n, rope, layer_mode))?;
                     drop(n);
-                    crate::wan::dump::op("attn_out", &a)?;
+                    crate::rt::dump::op("attn_out", &a)?;
                     let x = phase("h3_3_residual_msa", || mods.gated_add(&x, &a, GATE_MSA))?;
                     drop(a);
-                    crate::wan::dump::op("resid_msa", &x)?;
+                    crate::rt::dump::op("resid_msa", &x)?;
                     let n = phase("h3_4_norm_ffn", || {
                         mods.modulate(&x.rms_norm(&block.norm2, eps)?, SCALE_MLP, SHIFT_MLP)
                     })?;
-                    crate::wan::dump::op("ffn_in", &n)?;
+                    crate::rt::dump::op("ffn_in", &n)?;
                     let f = phase("h3_5_ffn", || block.ff.forward(&n))?;
                     drop(n);
-                    crate::wan::dump::op("ffn_out", &f)?;
+                    crate::rt::dump::op("ffn_out", &f)?;
                     phase("h3_6_residual_ffn", || mods.gated_add(&x, &f, GATE_MLP))
                 })?;
-                crate::wan::dump::set_op_block(None);
+                crate::rt::dump::set_op_block(None);
                 if let Some(observe) = observer.as_mut() {
                     observe(&format!("block_{index}"), &x)?;
                 }
-                crate::wan::log::info(format_args!(
+                crate::rt::log::info(format_args!(
                     "h3 dit step {step}: block {}/{}",
                     index + 1,
                     self.blocks.len()
@@ -4686,7 +4685,7 @@ pub(crate) mod tests {
         let tab: Vec<f32> = (0..6 * h)
             .map(|i| {
                 let p = i / h;
-                let u = crate::wan::quant::bf16_round((i as f32 * 0.37).sin() * 0.1);
+                let u = crate::rt::quant::bf16_round((i as f32 * 0.37).sin() * 0.1);
                 if p == SCALE_MSA || p == SCALE_MLP {
                     1.0 + u
                 } else {
@@ -4737,7 +4736,7 @@ pub(crate) mod tests {
         )
         .unwrap();
         let run = |on: bool| {
-            crate::wan::tensor::with_bf16_act(on, || {
+            crate::rt::tensor::with_bf16_act(on, || {
                 let model = H3Transformer::load(cfg.clone(), &map, &schedule, false).unwrap();
                 let (v, a) = model
                     .forward(
@@ -4783,7 +4782,7 @@ pub(crate) mod tests {
             .unwrap();
         let ada = synthetic_rows(h, rows);
         let run = |quant: Option<QuantKind>| {
-            crate::wan::tensor::with_bf16_act(true, || {
+            crate::rt::tensor::with_bf16_act(true, || {
                 let b =
                     Block::load_quant(&map, "transformer_blocks.0", &cfg, false, &mut None, quant)
                         .unwrap();
@@ -4867,11 +4866,11 @@ pub(crate) mod tests {
     fn bf16_table_values_round_the_projection_and_keep_one_plus_scale_in_f32() {
         let v = 1.0 + 0.123_456_7f32;
         let t = bf16_table_value(v, true);
-        assert_eq!(t, crate::wan::quant::bf16_round(v - 1.0) + 1.0);
+        assert_eq!(t, crate::rt::quant::bf16_round(v - 1.0) + 1.0);
         assert_eq!(bf16_table_value(t, true), t, "idempotent");
         assert_eq!(
             bf16_table_value(0.3, false),
-            crate::wan::quant::bf16_round(0.3)
+            crate::rt::quant::bf16_round(0.3)
         );
     }
 }

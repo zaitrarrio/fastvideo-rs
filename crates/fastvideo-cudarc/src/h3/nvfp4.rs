@@ -47,8 +47,8 @@ use std::path::{Path, PathBuf};
 use fastvideo_loader::{LazyDType, LazyStore};
 use fastvideo_models::h3::config::H3TransformerConfig;
 
-use crate::wan::tensor::{Result, TensorError};
-use crate::wan::weights::WeightMap;
+use crate::rt::tensor::{Result, TensorError};
+use crate::rt::weights::WeightMap;
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -99,7 +99,7 @@ pub fn sibling_tree(root: &Path) -> PathBuf {
 pub fn require_tensor_cores() -> Result<()> {
     #[cfg(feature = "cuda")]
     {
-        let Some(d) = crate::wan::device::global_device() else {
+        let Some(d) = crate::rt::device::global_device() else {
             return Err(msg(
                 "h3 nvfp4: needs a CUDA device (NVFP4 tensor cores, sm_100 / sm_120)",
             ));
@@ -244,7 +244,7 @@ impl PublishedLinear {
             for c in 0..self.k {
                 let byte = self.codes[r * self.k / 2 + c / 2];
                 let code = if c % 2 == 0 { byte & 15 } else { byte >> 4 };
-                let s = crate::wan::quant::e4m3_decode(self.scales[blocked_offset(r, c / 16, sc)]);
+                let s = crate::rt::quant::e4m3_decode(self.scales[blocked_offset(r, c / 16, sc)]);
                 out[r * self.k + c] =
                     fastvideo_models::nvfp4::e2m1_to_f32(code) * s * self.decode_scale;
             }
@@ -656,9 +656,9 @@ impl Nvfp4Dit {
         &self,
         cfg: &H3TransformerConfig,
         i: usize,
-    ) -> Result<[crate::wan::nn::Linear; 2]> {
-        use crate::wan::nn::Linear;
-        use crate::wan::nvfp4_linear::{Nvfp4Linear, Nvfp4Operand, Nvfp4Stack};
+    ) -> Result<[crate::rt::nn::Linear; 2]> {
+        use crate::rt::nn::Linear;
+        use crate::rt::nvfp4_linear::{Nvfp4Linear, Nvfp4Operand, Nvfp4Stack};
         let Nvfp4Layout::ModelOpt(opts) = self.layout else {
             return Err(msg("h3 nvfp4: modelopt_ffn on a ComfyUI file"));
         };
@@ -698,13 +698,13 @@ impl Nvfp4Dit {
         cfg: &H3TransformerConfig,
         i: usize,
         gate: bool,
-    ) -> Result<[crate::wan::nn::Linear; 2]> {
-        use crate::wan::nn::Linear;
-        use crate::wan::nvfp4_linear::{Nvfp4Linear, Nvfp4Stack};
+    ) -> Result<[crate::rt::nn::Linear; 2]> {
+        use crate::rt::nn::Linear;
+        use crate::rt::nvfp4_linear::{Nvfp4Linear, Nvfp4Stack};
         use cudarc::driver::DevicePtr;
         let rule = fastvideo_models::nvfp4::ScaleRule::Static6;
         let d =
-            crate::wan::device::global_device().ok_or_else(|| msg("h3 nvfp4: no CUDA device"))?;
+            crate::rt::device::global_device().ok_or_else(|| msg("h3 nvfp4: no CUDA device"))?;
         let quantize = |name: &str, rows: usize, k: usize| -> Result<Nvfp4Linear> {
             let key = format!("transformer_blocks.{i}.attn.{name}.weight");
             let (shape, values) = self
@@ -752,9 +752,9 @@ impl Nvfp4Dit {
         cfg: &H3TransformerConfig,
         i: usize,
         gate: bool,
-    ) -> Result<[crate::wan::nn::Linear; 4]> {
-        use crate::wan::nn::Linear;
-        use crate::wan::nvfp4_linear::{Nvfp4Linear, Nvfp4Operand, Nvfp4Stack};
+    ) -> Result<[crate::rt::nn::Linear; 4]> {
+        use crate::rt::nn::Linear;
+        use crate::rt::nvfp4_linear::{Nvfp4Linear, Nvfp4Operand, Nvfp4Stack};
         let rule = fastvideo_models::nvfp4::ScaleRule::Static6;
         let dev = |l: PublishedLinear| -> Result<Nvfp4Linear> {
             let op = Nvfp4Operand::from_host_layout(
@@ -876,7 +876,7 @@ mod tests {
         // The cuBLASLt operand quantizer's layout (wan/nvfp4_gemm.rs swizzle_scales_host).
         let (rows, sc) = (256, 8);
         let linear: Vec<u8> = (0..rows * sc).map(|i| (i % 251) as u8).collect();
-        let sw = crate::wan::nvfp4_gemm::swizzle_scales_host(&linear, rows, sc);
+        let sw = crate::rt::nvfp4_gemm::swizzle_scales_host(&linear, rows, sc);
         for r in 0..rows {
             for c in 0..sc {
                 assert_eq!(sw[blocked_offset(r, c, sc)], linear[r * sc + c]);

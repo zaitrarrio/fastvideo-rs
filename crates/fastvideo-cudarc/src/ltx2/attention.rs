@@ -19,9 +19,9 @@ use fastvideo_models::ltx2::memory::FeedForwardChunking;
 use fastvideo_models::ltx2::{SplitRope, SplitRopeLut};
 use std::borrow::Cow;
 
-use crate::wan::nn::{scaled_dot_product_attention, Linear};
-use crate::wan::tensor::{CudaTensor, Result};
-use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
+use crate::rt::nn::{scaled_dot_product_attention, Linear};
+use crate::rt::tensor::{CudaTensor, Result};
+use crate::rt::weights::{cuda_tensor_shaped, WeightMap};
 
 use super::keys::Keys;
 use super::{msg, pinned};
@@ -57,9 +57,9 @@ impl DeviceRope {
     /// [`Self::upload`] of the expanded table; without a device it is that.
     pub fn from_lut(lut: &SplitRopeLut) -> Result<Self> {
         #[cfg(feature = "cuda")]
-        if crate::wan::device::global_device().is_some() {
+        if crate::rt::device::global_device().is_some() {
             let (rows, d) = (lut.heads * lut.tokens, lut.half * 2);
-            let (cos, sin) = crate::wan::ops::ltx_split_rope_device(
+            let (cos, sin) = crate::rt::ops::ltx_split_rope_device(
                 &lut.index, &lut.cos, &lut.sin, lut.heads, lut.tokens, lut.half, lut.axes, lut.pad,
                 lut.n,
             )?;
@@ -117,15 +117,15 @@ impl DeviceRope {
         let (Some(cos), Some(sin)) = (self.cos.dev()?, self.sin.dev()?) else {
             return Ok(None);
         };
-        let rows = crate::wan::ops::ltx_rope_rows_device(idx, self.heads, self.tokens)?;
+        let rows = crate::rt::ops::ltx_rope_rows_device(idx, self.heads, self.tokens)?;
         let shape = vec![self.heads * idx.len(), self.head_dim];
         Ok(Some(Self {
             cos: CudaTensor::from_device_slice(
-                crate::wan::ops::index_select_rows_dev_idx(&cos, self.head_dim, &rows)?,
+                crate::rt::ops::index_select_rows_dev_idx(&cos, self.head_dim, &rows)?,
                 shape.clone(),
             )?,
             sin: CudaTensor::from_device_slice(
-                crate::wan::ops::index_select_rows_dev_idx(&sin, self.head_dim, &rows)?,
+                crate::rt::ops::index_select_rows_dev_idx(&sin, self.head_dim, &rows)?,
                 shape,
             )?,
             heads: self.heads,
@@ -348,7 +348,7 @@ impl Attention {
         let v = then(self.to_v.forward(ctx)?, |t| t.split_heads_bhsd(0, heads, d))?;
         // An owned input is done with: free it before the attention runs.
         drop(x);
-        let (k, v) = crate::wan::nvfp4::maybe_kv(k, v)?;
+        let (k, v) = crate::rt::nvfp4::maybe_kv(k, v)?;
         let scale = Some((d as f32).powf(-0.5));
         let kernel = if context.is_some() {
             VideoAttnKernel::Dense
@@ -455,8 +455,8 @@ pub struct FeedForward {
 /// activation quantizer, so its bf16 output is never written.
 #[cfg(feature = "cuda")]
 struct Nvfp4Ffn {
-    up: crate::wan::nvfp4_linear::Nvfp4Linear,
-    down: crate::wan::nvfp4_linear::Nvfp4Linear,
+    up: crate::rt::nvfp4_linear::Nvfp4Linear,
+    down: crate::rt::nvfp4_linear::Nvfp4Linear,
 }
 
 /// The video FFN's NVFP4 W4A4 (`FASTVIDEO_NVFP4`, the `nvfp4` technique):
@@ -470,8 +470,8 @@ fn quantize_ffn(
     down: &mut Linear,
     rule: fastvideo_models::nvfp4::ScaleRule,
 ) -> Result<Option<Nvfp4Ffn>> {
-    use crate::wan::nvfp4_linear::{tensor_cores, Nvfp4Linear};
-    use crate::wan::quant::ptr;
+    use crate::rt::nvfp4_linear::{tensor_cores, Nvfp4Linear};
+    use crate::rt::quant::ptr;
     static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     let why = if rule == fastvideo_models::nvfp4::ScaleRule::Mse {
         Some("the FourOverSix mse rule has no tensor-core form; use static_6".to_string())
@@ -495,7 +495,7 @@ fn quantize_ffn(
     let (wu, wd) = match (why, up.weight_bf16_shared(), down.weight_bf16_shared()) {
         (None, Some(wu), Some(wd)) => (wu, wd),
         (why, _, _) => {
-            crate::wan::log::info_once(
+            crate::rt::log::info_once(
                 &SAID,
                 format_args!(
                     "ltx2 nvfp4: video FFN stays bf16 ({})",
@@ -519,7 +519,7 @@ fn quantize_ffn(
     drop((wu, wd));
     up.release_weight_bf16();
     down.release_weight_bf16();
-    crate::wan::log::info_once(
+    crate::rt::log::info_once(
         &SAID,
         format_args!(
             "ltx2 nvfp4: video FFN on NVFP4 tensor cores (cuBLASLt VEC16_UE4M3, TE {} rule, RHT / SR off; {:.1} MiB per block vs {:.1} MiB bf16)",
@@ -602,7 +602,7 @@ impl FeedForward {
     /// `gelu_tanh` of its output. `None` when `x` is not a device tensor.
     #[cfg(feature = "cuda")]
     fn forward_nvfp4(&self, q: &Nvfp4Ffn, x: &CudaTensor) -> Result<Option<CudaTensor>> {
-        use crate::wan::quant::ptr;
+        use crate::rt::quant::ptr;
         let Some(&k) = x.shape.last() else {
             return Ok(None);
         };
@@ -610,7 +610,7 @@ impl FeedForward {
             return Ok(None);
         };
         let m = x.numel() / k.max(1);
-        crate::wan::evalstats::quant_call("nvfp4_cublaslt");
+        crate::rt::evalstats::quant_call("nvfp4_cublaslt");
         let (h, bias_in) = q.up.forward_bf16(ptr(&x16), m, false)?;
         drop(x16);
         // A bias-free FFN (LTX-2.5 `ff_bias = false`) or one whose bias the
@@ -622,7 +622,7 @@ impl FeedForward {
                 .ok_or_else(|| msg("nvfp4 ffn: up output not on the device"))?,
             _ => std::sync::Arc::new(h),
         };
-        crate::wan::evalstats::quant_call("nvfp4_cublaslt");
+        crate::rt::evalstats::quant_call("nvfp4_cublaslt");
         let (y, bias_in) = q.down.forward_bf16(ptr(&h), m, true)?;
         drop(h);
         let mut shape = x.shape.clone();
@@ -658,7 +658,7 @@ impl FeedForward {
             ))
         })?;
         let spans = chunking.spans(x.shape[axis]);
-        crate::wan::evalstats::ffn(spans.len().max(1));
+        crate::rt::evalstats::ffn(spans.len().max(1));
         if spans.len() <= 1 {
             return self.forward_whole(x);
         }
@@ -680,7 +680,7 @@ impl FeedForward {
             ))
         })?;
         let spans = FeedForwardChunking::RTX5090.spans(x.shape[axis]);
-        crate::wan::evalstats::ffn(spans.len().max(1));
+        crate::rt::evalstats::ffn(spans.len().max(1));
         if spans.len() <= 1 {
             if self.is_nvfp4() {
                 return self.forward_whole(&x);
@@ -1168,7 +1168,7 @@ pub(crate) mod tests {
     #[test]
     fn score_budget_matches_the_memory_plan() {
         assert_eq!(
-            crate::wan::attn::DENSE_SCORE_BUDGET,
+            crate::rt::attn::DENSE_SCORE_BUDGET,
             fastvideo_models::ltx2::memory::DENSE_SCORE_BUDGET_ELEMS
         );
     }

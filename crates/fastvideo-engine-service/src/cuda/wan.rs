@@ -86,7 +86,7 @@ fn load_plug_dit(
     recipe: &WanRecipe,
     name: &str,
     obs: &mut dyn FnMut(&'static str),
-) -> Result<fastvideo_cudarc::wan::weights::WeightMap, ApiError> {
+) -> Result<fastvideo_cudarc::rt::weights::WeightMap, ApiError> {
     let plug = PlugRecipe::named(name)
         .filter(|r| r.family == PlugFamily::Wan && r.preset == recipe.preset)
         .ok_or_else(|| {
@@ -120,7 +120,7 @@ fn load_plug_dit(
 pub fn load_pipeline_with_dit(
     recipe: &WanRecipe,
     obs: &mut dyn FnMut(&'static str),
-    dit: Option<fastvideo_cudarc::wan::weights::WeightMap>,
+    dit: Option<fastvideo_cudarc::rt::weights::WeightMap>,
 ) -> Result<WanPipeline, ApiError> {
     let _vae = (recipe.decoder != WanDecoder::Auto)
         .then(|| EnvGuard::set("FASTVIDEO_WAN_VAE", recipe.decoder.env_value()));

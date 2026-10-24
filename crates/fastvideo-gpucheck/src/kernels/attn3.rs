@@ -16,8 +16,8 @@
 //! 12 heads, 0.8), tile (4, 4, 4), d=128.
 
 use super::*;
-use fastvideo_cudarc::wan::attn::FlashKernel;
-use fastvideo_cudarc::wan::cudnn_sdpa::{self, SdpaGraph};
+use fastvideo_cudarc::rt::attn::FlashKernel;
+use fastvideo_cudarc::rt::cudnn_sdpa::{self, SdpaGraph};
 use half::bf16;
 
 const D: usize = 128;
@@ -331,7 +331,7 @@ pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
 }
 
 /// `sdpa_rule`: the offline generator of the fixed dense-SDPA rule
-/// (`fastvideo_cudarc::wan::sdpa_rule`). For every shape below it times
+/// (`fastvideo_cudarc::rt::sdpa_rule`). For every shape below it times
 /// cuDNN's plan and `flash_mma_fwd2` (bf16 in and out, median of three
 /// synchronized calls after a warm-up) and reports the faster, the margin,
 /// what the rule picks and what that costs against the faster. The check
@@ -340,7 +340,7 @@ pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
 /// `rule_suggestion` lists the shapes to move. `FV_SDPA_RULE_SHAPES` limits
 /// the run to named shapes.
 pub(super) fn sdpa_rule(c: &mut Ctx<'_>) -> StageResult<()> {
-    use fastvideo_cudarc::wan::sdpa_rule as rule;
+    use fastvideo_cudarc::rt::sdpa_rule as rule;
     let dev = dev()?;
     if dev.sm_major < 8 {
         c.report.note(

@@ -126,7 +126,7 @@ pub fn sha256_file(path: &Path) -> std::io::Result<String> {
 
 /// Digest over the captured codes and scales, in load order.
 #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
-fn capture_digest(c: &fastvideo_cudarc::wan::nn::Fp8Capture) -> String {
+fn capture_digest(c: &fastvideo_cudarc::rt::nn::Fp8Capture) -> String {
     let mut h = Sha256::new();
     for (prefix, codes, scales) in c {
         h.update(prefix.as_bytes());
@@ -179,8 +179,8 @@ pub fn quantize_text_encoder(
     verify_only: bool,
 ) -> StageResult<()> {
     use fastvideo_cudarc::llm::{prequant, ResidentDecoder, WeightPrecision};
-    use fastvideo_cudarc::wan::nn::capture_fp8_rows;
-    use fastvideo_cudarc::wan::weights::WeightMap;
+    use fastvideo_cudarc::rt::nn::capture_fp8_rows;
+    use fastvideo_cudarc::rt::weights::WeightMap;
 
     let (cfg, layers) = family(family_name)?;
     let source = root.join("text_encoder");
@@ -286,7 +286,7 @@ pub fn quantize_text_encoder(
             let scale = format!(
                 "{}.{}",
                 k.strip_suffix(".weight").unwrap_or(&k),
-                fastvideo_cudarc::wan::nn::FP8_ROWS_SCALE_SUFFIX
+                fastvideo_cudarc::rt::nn::FP8_ROWS_SCALE_SUFFIX
             );
             if tl.contains(&scale) {
                 continue;
@@ -371,7 +371,7 @@ pub fn quantize_dit(
             identity.linear_route
         )));
     }
-    let quant = fastvideo_cudarc::wan::quant::QuantMode::parse(&identity.quant)
+    let quant = fastvideo_cudarc::rt::quant::QuantMode::parse(&identity.quant)
         .map_err(|e| anyhow::anyhow!(e))?;
     let name = dit_tree::dir_name(&identity.recipe, quant);
     let final_dir = r.weights.join(&name);
@@ -407,7 +407,7 @@ pub fn quantize_dit(
         pipe.export_dit(&mut w)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         drop(pipe);
-        let _ = fastvideo_cudarc::wan::device::trim_pool();
+        let _ = fastvideo_cudarc::rt::device::trim_pool();
         Ok((w, from_tree, load_s))
     };
 

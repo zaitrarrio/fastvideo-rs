@@ -186,7 +186,7 @@ pub struct Ltx2Recipe {
     /// Audio-to-video on this model ([`LtxA2v`]).
     #[serde(default)]
     pub a2v: LtxA2v,
-    /// SageAttention2 (`fastvideo_cudarc::wan::attn_sage`, INT8 QK / FP8 PV)
+    /// SageAttention2 (`fastvideo_cudarc::rt::attn_sage`, INT8 QK / FP8 PV)
     /// on the dense DiT self-attention of this model's two-stage generations,
     /// on sm_120 only (RTX PRO 6000 / RTX 5090); edits stay bf16.
     /// `FASTVIDEO_ATTN_SAGE=0|2` overrides it. Set on `ltx25-distill-dense`

@@ -73,7 +73,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| B1 | Extract the runtime: `cudarc/src/wan/{tensor,device,ops,kernels,nn,weights,offload,quant,log,dump,ledger,envflag,resident,stage_upload,hostmem,writer}` to `cudarc/src/rt/`; `kernels.cu` split by region and concatenated at build time; `gpucheck` and `engine-service` import `rt` | byte-identical SASS and clips | CPU tests + nvrtc gate on the pod; **GPU** `techniques` byte-identity cell for H3, LTX, Wan | F1 | active |
+| B1 | Extract the runtime: `cudarc/src/wan/{tensor,device,ops,kernels,nn,weights,offload,quant,log,dump,ledger,envflag,resident,stage_upload,hostmem,writer}` to `cudarc/src/rt/`; `kernels.cu` split by region and concatenated at build time; `gpucheck` and `engine-service` import `rt` | byte-identical SASS and clips | CPU tests + nvrtc gate on the pod; **GPU** `techniques` byte-identity cell for H3, LTX, Wan | F1 | pr |
 | B2 | `VideoFamily` trait, common `Request`/`Conditioning`, `Request::validate(&ModelCaps)`; the 21 registry tables, `resolve()`, `all_registered_ids()` and the 20 `generate_*` functions replaced by the manifest and a static family list; `AvGenerateOptions` reduced to common fields | CLI behaviour unchanged for every preset (golden `--help` and tiny CPU generations); 83 Hub ids resolve | pod; **GPU** one tiny generation per served family | A2, B1 | todo |
 | B3 | Settings layer: the `FASTVIDEO_*` table generated from one declarative list; the 111 direct reads routed through `settings::var`; a `Settings` snapshot passed to `load`; `model_spec` for Wan and the small families; `docs/scope.md` table generated | zero direct `env::var("FASTVIDEO_` outside `settings`; off-identity invariant tests | pod; **GPU** byte-identity cell | B1 | todo |
 
@@ -101,7 +101,7 @@ parallel agents.
 | E1 | Vendored upstream specs under `docs/serve/specs/` with a drift script; `schemars` schemas for native and director | drift script green | CI | none | merged (#144; schemars schemas deferred to E2) |
 | E2 | `ParamSpec` per (surface, model) derived from the manifest caps; adapters validate from it; duplicated constants deleted; LTX body typed | one source for every limit | pod; serve-compat | A3 | todo |
 | E3 | Certification matrix harness over every surface, parameter x surface x model TSV, CI assertion that every parameter has a valid and an invalid case | TSV with no empty cell | pod | E2 | todo |
-| E4 | `cargo-llvm-cov` on the pod; adapter `cargo test` in a GitHub workflow | coverage artifact in CI | CI | none | todo |
+| E4 | `cargo-llvm-cov` on the pod; adapter `cargo test` in a GitHub workflow | coverage artifact in CI | CI | none | pr |
 | E5 | Upstream captures as fixtures | depends on owner keys | manual | owner | blocked |
 
 ### Phase 7: inference core unification (Workstream B, second half)
@@ -216,3 +216,44 @@ ran (pod id, $/hr), result, cost.
 - 2026-10-24 00:36Z: A2, A5 (registry WO-001 against the merged crate, built
   in the coordinator's container since that workspace is small) and B1
   started. Balance $21.6, pod `i8tu0lpdb6nvov` at 4.4 h uptime.
+- 2026-10-24 01:20Z: E4 opened as a draft PR (`claude/e4-adapter-ci`): the
+  `adapter-tests` workflow runs `scripts/serve/coverage.sh` (new) in the build
+  base image on pull requests and main pushes touching the serve crates:
+  `cargo test --locked` of 11 crates (the five adapters, `fastvideo-serve`,
+  protocol, trace, engine-service, serve-kit, upsampler) under
+  `cargo-llvm-cov` 0.9.1, with `lcov.info`, an HTML report and the totals as
+  the `adapter-coverage` artifact and job summary. Before: no workflow ran
+  these crates' Rust tests on pull requests (serve-compat runs the client
+  libraries against the binary; tools-release runs `check.sh` on main only).
+  `task coverage` / `task coverage:tests` added; `coverage.sh` allowlisted
+  for new build pods (the running pod's server from main refuses it until
+  merge). On pod `i8tu0lpdb6nvov`: `cargo test --locked` of the set, 711
+  passed, 0 failed, 10 ignored, 171 s; no Rust change. Not done:
+  `cargo-llvm-cov` in `docker/build-base.Dockerfile` (re-pins the image).
+- 2026-10-24 01:25Z: E4's `adapter-tests` run on the PR head (PR #148,
+  run 40049075337) green on the first attempt, 8 min wall clock (container
+  pull 55 s, the instrumented `cargo test` 6.5 min cold, no rust-cache
+  hit yet): 69 test binaries, 720 passed, 0 failed; coverage over the instrumented
+  workspace files: lines 62.42% (54115 / 86700), regions 62.96%, functions
+  59.31%; `adapter-coverage` artifact 4.5 MB (lcov, HTML, summaries).
+- 2026-10-24 00:40Z: B1 opened as a draft PR (`claude/b1-runtime-extract`)
+  from the build pod `i8tu0lpdb6nvov`: 45 `wan/` modules moved to
+  `cudarc/src/rt/` with `wan::` re-export shims, `kernels.cu` split into 14
+  region files concatenated at build time (sha256 pinned by two tests). On
+  the pod: fmt and clippy `-D warnings` green, `--features cuda` type-check
+  green (nvcc embedded cubins for sm 75–120 from the concatenation), 1809
+  workspace lib tests passed, 0 failed (cudarc 606, models 544,
+  engine-service 75), `scripts/serve/check.sh` green. GPU byte-identity cell
+  pending (coordinator, before merge).
+- 2026-10-24 01:41Z: B1 GPU byte-identity gate green on one RTX PRO 6000
+  (EU-RO-1, volume `bz0ofkfx45`, pod `b4vz9cljstlvbc`, 34 min at $2.49/hr,
+  deleted): `techniques` family, baseline `42da257` against the PR image
+  `51898b8`; cells fasth3-4step-vsa-768p, h3-480p-fullopt and
+  ltx25-512p-sol, each base vs env and base vs prof: 124/124 (H3) and
+  121/121 (LTX) frames identical, max abs diff 0; the LTX cache arm
+  identical too. fasth3-8step-768p skipped (`h3-8step` is not on the 500 GB
+  EU volume, owner decision); no Wan cell (no Wan trees on the EU volume;
+  Wan is covered by the kernel-source sha256 pins and the shared runtime).
+  Evidence: `artifacts/runpod/techniques/51898b8-10240107/compare/`. Main
+  (A2, E4) merged into the branch: no cudarc or gpucheck file changed since
+  the baseline, so the GPU evidence stands for the merged head.

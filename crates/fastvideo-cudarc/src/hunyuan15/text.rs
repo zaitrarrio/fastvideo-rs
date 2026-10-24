@@ -13,9 +13,9 @@ use fastvideo_models::hunyuan15::{
 use fastvideo_models::wan::Umt5Config;
 
 use crate::llm::{self, DecoderConfig};
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::WeightMap;
 use crate::wan::umt5::Umt5Encoder;
-use crate::wan::weights::WeightMap;
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())

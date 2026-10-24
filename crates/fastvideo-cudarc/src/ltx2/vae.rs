@@ -46,9 +46,9 @@
 use fastvideo_models::ltx2::config::Ltx2VideoVaeConfig;
 use fastvideo_models::ltx2::tiling::{axis_weight_sum, AxisTile, DecodePlan, TileSizeConfig};
 
-use crate::wan::ops::PadMode;
-use crate::wan::tensor::{CudaTensor, Result};
-use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
+use crate::rt::ops::PadMode;
+use crate::rt::tensor::{CudaTensor, Result};
+use crate::rt::weights::{cuda_tensor_shaped, WeightMap};
 
 use super::{msg, ones};
 
@@ -523,7 +523,7 @@ impl VideoDecoder {
         latents: &CudaTensor,
         sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
     ) -> Result<usize> {
-        let chunk = crate::wan::envflag::usize_flag("FASTVIDEO_LTX2_VAE_CHUNK", 8);
+        let chunk = crate::rt::envflag::usize_flag("FASTVIDEO_LTX2_VAE_CHUNK", 8);
         self.decode_streaming_chunked(latents, chunk, sink)
     }
 
@@ -566,7 +566,7 @@ impl VideoDecoder {
         // clip's early stages hold 16 GB per whole-clip activation; streamed,
         // a stage holds its chunk plus two carried frames per conv.
         let latent_chunk =
-            crate::wan::envflag::usize_flag("FASTVIDEO_LTX2_VAE_LATENT_CHUNK", 1).max(1);
+            crate::rt::envflag::usize_flag("FASTVIDEO_LTX2_VAE_LATENT_CHUNK", 1).max(1);
         let chunk = chunk.max(1);
         let mut conv_in = ConvState::default();
         let mut states: Vec<BlockState> = early.iter().map(|_| BlockState::default()).collect();
@@ -661,19 +661,19 @@ impl VideoDecoder {
     /// `None` otherwise (the reason is logged once).
     #[cfg(feature = "cuda")]
     fn fast_decoder(&self) -> Option<&fast::FastDecoder> {
-        if !fast::enabled() || crate::wan::device::global_device().is_none() {
+        if !fast::enabled() || crate::rt::device::global_device().is_none() {
             return None;
         }
         let built = self.fast.get_or_init(|| {
             let timer = std::time::Instant::now();
             let r = fast::FastDecoder::build(self).map_err(|e| e.to_string());
             match &r {
-                Ok(_) => crate::wan::log::info(format_args!(
+                Ok(_) => crate::rt::log::info(format_args!(
                     "ltx vae: channels-last bf16 decoder ({:.2}s to convert weights)",
                     timer.elapsed().as_secs_f64()
                 )),
                 Err(e) => {
-                    crate::wan::log::info(format_args!("ltx vae: f32 streaming decoder ({e})"))
+                    crate::rt::log::info(format_args!("ltx vae: f32 streaming decoder ({e})"))
                 }
             }
             r
@@ -697,7 +697,7 @@ impl VideoDecoder {
         if !std::mem::take(check) || !fast::check_enabled() {
             return fd.decode_tile(latents, convs);
         }
-        let dev = crate::wan::device::global_device().ok_or_else(|| msg("no device"))?;
+        let dev = crate::rt::device::global_device().ok_or_else(|| msg("no device"))?;
         let time = |f: &mut dyn FnMut() -> Result<CudaTensor>| -> Result<(CudaTensor, f64)> {
             dev.synchronize().map_err(|e| msg(e.to_string()))?;
             let t = std::time::Instant::now();

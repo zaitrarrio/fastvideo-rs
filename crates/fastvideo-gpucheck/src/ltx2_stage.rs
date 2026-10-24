@@ -28,8 +28,8 @@ use fastvideo_cudarc::ltx2::text::{HiddenStack, PaddedPrompt, TextConnectors};
 use fastvideo_cudarc::ltx2::transformer::{Ltx2Transformer, Ropes};
 use fastvideo_cudarc::ltx2::vae::VideoDecoder;
 use fastvideo_cudarc::ltx2::vocoder::Vocoder;
+use fastvideo_cudarc::rt::weights::WeightMap;
 use fastvideo_cudarc::wan::pipeline::{interleave_audio, write_wav};
-use fastvideo_cudarc::wan::weights::WeightMap;
 use fastvideo_cudarc::CudaTensor;
 use fastvideo_models::ltx2::config::{
     ltx2_19b_distilled, ltx2_23_22b_distilled, ltx2_5_22b_distilled, Ltx2Config,
@@ -790,7 +790,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                     text_residency,
                     dit_offload: dit_offload
                         .as_deref()
-                        .map(fastvideo_cudarc::wan::offload::DitOffload::parse)
+                        .map(fastvideo_cudarc::rt::offload::DitOffload::parse)
                         .transpose()
                         .map_err(|e| anyhow::anyhow!(e))?,
                     offload: offload
@@ -1602,7 +1602,7 @@ fn dit(
         let mut observe = |i: usize,
                            v: &CudaTensor,
                            a: &CudaTensor|
-         -> fastvideo_cudarc::wan::tensor::Result<()> {
+         -> fastvideo_cudarc::rt::tensor::Result<()> {
             for (stream, t) in [("video", v), ("audio", a)] {
                 let name = format!("block{i:02}.{stream}");
                 if wanted.contains(&name) {
@@ -1611,7 +1611,7 @@ fn dit(
             }
             Ok(())
         };
-        let mut probe = |name: &str, t: &CudaTensor| -> fastvideo_cudarc::wan::tensor::Result<()> {
+        let mut probe = |name: &str, t: &CudaTensor| -> fastvideo_cudarc::rt::tensor::Result<()> {
             if wanted.contains(name) && probe_err.is_none() {
                 match strided(t, stride) {
                     Ok(values) => ours.push((name.to_string(), values)),
@@ -1957,7 +1957,7 @@ fn vae_bench(
     let pe = |e: fastvideo_cudarc::wan::pipeline::PipelineError| anyhow::anyhow!("{e}");
     report.set("device", crate::gpu::init(device)?);
     // As the pipeline runs it (bf16 activations on the GPU).
-    fastvideo_cudarc::wan::tensor::default_bf16_activations();
+    fastvideo_cudarc::rt::tensor::default_bf16_activations();
     let cfg = model_version.config();
     let timer = std::time::Instant::now();
     let map = WeightMap::open(&weights.join("vae"))?;
@@ -1965,7 +1965,7 @@ fn vae_bench(
     let load_s = timer.elapsed().as_secs_f64();
     let z = match latents {
         Some(prefix) => {
-            let (shape, data) = fastvideo_cudarc::wan::dump::read_raw(prefix)?;
+            let (shape, data) = fastvideo_cudarc::rt::dump::read_raw(prefix)?;
             CudaTensor::from_vec(data, shape)?.to_device()?
         }
         None => {
@@ -2015,10 +2015,10 @@ fn vae_bench(
                 Some(tiles) => vae.decode_tiled(&z, tiles, &mut sink)?,
                 None => vae.decode_streaming(&z, &mut sink)?,
             };
-            fastvideo_cudarc::wan::device::synchronize()?;
+            fastvideo_cudarc::rt::device::synchronize()?;
             warm_s = Some(t.elapsed().as_secs_f64());
         }
-        fastvideo_cudarc::wan::device::trim_pool()?;
+        fastvideo_cudarc::rt::device::trim_pool()?;
         let writer = match clip {
             Some(dir) if decoder == "both" => {
                 VideoWriter::spawn(&dir.join(name), 24, mp4).map_err(pe)?
@@ -2049,9 +2049,9 @@ fn vae_bench(
             "video_encode_s": encode_s, "write_s": write_s, "frames_written": frames.len(),
             "writer": writer_json(writer.stats()), "peak_vram_mib": peak_mib,
         });
-        if let Some(trace) = fastvideo_cudarc::wan::gpu_trace::last_window_report() {
+        if let Some(trace) = fastvideo_cudarc::rt::gpu_trace::last_window_report() {
             run["gpu_trace_decode"] = trace;
-            fastvideo_cudarc::wan::gpu_trace::reset_report();
+            fastvideo_cudarc::rt::gpu_trace::reset_report();
         }
         runs.push(run);
     }
@@ -2225,8 +2225,8 @@ fn gen(
     let peak = crate::gpu::PeakMem::start();
     let wall = std::time::Instant::now();
     let mut pipeline = Ltx2Pipeline::load(paths, &cfg, options)?;
-    fastvideo_cudarc::wan::device::trim_pool()?;
-    let load_used = fastvideo_cudarc::wan::device::pool_usage();
+    fastvideo_cudarc::rt::device::trim_pool()?;
+    let load_used = fastvideo_cudarc::rt::device::pool_usage();
     if warm {
         // Untimed: first-use costs (cuDNN plan search, allocator growth, page
         // cache) land here. The cache is bypassed so this run cannot turn the
@@ -2263,7 +2263,7 @@ fn gen(
         };
         // The first prompt's peak includes the load, as before prompt sets.
         let peak = load_peak.take().unwrap_or_else(crate::gpu::PeakMem::start);
-        fastvideo_cudarc::wan::evalstats::reset();
+        fastvideo_cudarc::rt::evalstats::reset();
         // Latent statistics per step: a run that diverges shows here, not in a grey video.
         let mut stats: Vec<serde_json::Value> = Vec::new();
         let mut observe = |i: usize,
@@ -2278,7 +2278,7 @@ fn gen(
             stats.push(json!({"step": i, "seconds": s, "video_mean": vm, "video_std": vs, "audio_mean": am, "audio_std": as_, "non_finite": bad}));
             Ok(())
         };
-        fastvideo_cudarc::wan::gpu_trace::reset_report();
+        fastvideo_cudarc::rt::gpu_trace::reset_report();
         let timed = std::time::Instant::now();
         let mut collected = fastvideo_cudarc::sink::CollectFrames::default();
         let sink_check =
@@ -2291,7 +2291,7 @@ fn gen(
             pipeline.generate(&request, true, Some(&mut observe))?
         };
         let generate_s = timed.elapsed().as_secs_f64();
-        let counters = fastvideo_cudarc::wan::evalstats::snapshot();
+        let counters = fastvideo_cudarc::rt::evalstats::snapshot();
         let wall_s = wall.elapsed().as_secs_f64();
         let peak_mib = peak.stop();
         let t = &out.timings;
@@ -2315,11 +2315,11 @@ fn gen(
     );
         report.set("peak_vram_mib", peak_mib);
         // FASTVIDEO_GPU_TRACE: the timed generate's traced step.
-        if let Some(trace) = fastvideo_cudarc::wan::gpu_trace::last_report() {
+        if let Some(trace) = fastvideo_cudarc::rt::gpu_trace::last_report() {
             report.set("gpu_trace", trace);
         }
         // FASTVIDEO_GPU_TRACE_DECODE: the timed generate's video decode.
-        if let Some(trace) = fastvideo_cudarc::wan::gpu_trace::last_window_report() {
+        if let Some(trace) = fastvideo_cudarc::rt::gpu_trace::last_window_report() {
             report.set("gpu_trace_decode", trace);
         }
         // Per-phase peaks from the allocator pool's high-water marks.
@@ -2767,13 +2767,13 @@ fn ltx2_benchmark(b: &Ltx2Bench<'_>) -> serde_json::Value {
                 "end_allocated_gib": gib(p.end_used),
             })).collect::<Vec<_>>(),
         },
-        "gpu_trace": fastvideo_cudarc::wan::gpu_trace::last_report(),
+        "gpu_trace": fastvideo_cudarc::rt::gpu_trace::last_report(),
     });
     crate::benchmark::merge(crate::benchmark::common("ltx2", b.warm), doc)
 }
 
-/// A frame writer's account ([`fastvideo_cudarc::wan::writer::WriterStats`]).
-pub(crate) fn writer_json(s: &fastvideo_cudarc::wan::writer::WriterStats) -> serde_json::Value {
+/// A frame writer's account ([`fastvideo_cudarc::rt::writer::WriterStats`]).
+pub(crate) fn writer_json(s: &fastvideo_cudarc::rt::writer::WriterStats) -> serde_json::Value {
     json!({
         "png_mode": s.png_mode, "frames": s.frames, "ffmpeg_feed_s": s.ffmpeg_feed_s,
         "video_tail_s": s.video_tail_s, "png_inline": s.png_inline, "png_deferred": s.png_deferred,

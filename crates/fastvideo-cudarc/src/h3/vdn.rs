@@ -4,7 +4,7 @@
 //! merged at load) and adds:
 //!
 //! * a **window softmax** in place of dense attention
-//!   ([`crate::wan::nn::sdpa_vdn_window`], one flash launch,
+//!   ([`crate::rt::nn::sdpa_vdn_window`], one flash launch,
 //!   `flash_mma_fwd2_window_d128`), its output scaled per (row, head) by the
 //!   softmax gate before `to_out`;
 //! * the **linear branch** ([`VdnBranch`]) on the inner video frames, added
@@ -25,14 +25,14 @@ use fastvideo_models::h3::vdn::{
     self as vref, gather_plan, inner_bounds, VdnLayout, VdnTransform, VDN_TEXT_STATE_SCALE,
 };
 
-use crate::wan::attn::VdnWindow;
-use crate::wan::nn::Linear;
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::WeightMap;
+use crate::rt::attn::VdnWindow;
+use crate::rt::nn::Linear;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::WeightMap;
 
 // `launch!` names `super::stats` / `super::device` from its call site (`dev`).
 #[cfg(feature = "cuda")]
-use crate::wan::{device, stats};
+use crate::rt::{device, stats};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -153,7 +153,7 @@ impl VdnBranch {
         let c = heads * d;
         let la = format!("{prefix}.linear_attention");
         let get = |key: &str, shape: &[usize]| -> Result<Vec<f32>> {
-            Ok(crate::wan::weights::cuda_tensor_shaped(map, key, shape)?
+            Ok(crate::rt::weights::cuda_tensor_shaped(map, key, shape)?
                 .host_cow()?
                 .into_owned())
         };
@@ -201,7 +201,7 @@ impl VdnBranch {
         // The reference casts every hybrid parameter to bf16 after loading.
         let small = small.rounded();
         #[cfg(feature = "cuda")]
-        let dev = if crate::wan::stats::device_expected() && d == vref::VDN_HEAD_DIM {
+        let dev = if crate::rt::stats::device_expected() && d == vref::VDN_HEAD_DIM {
             Some(Arc::new(dev::DevSmall::upload(&small, heads)?))
         } else {
             None
@@ -239,7 +239,7 @@ impl VdnBranch {
         let [1, h, s, d] = o.shape[..] else {
             return Err(msg(format!("vdn gate: attention output {:?}", o.shape)));
         };
-        let bf = crate::wan::tensor::bf16_activations();
+        let bf = crate::rt::tensor::bf16_activations();
         let a = aux.host_cow()?;
         let mut v = o.host_cow()?.into_owned();
         for hh in 0..h {
@@ -469,7 +469,7 @@ pub fn add_rows(out: CudaTensor, add: &CudaTensor, row0: usize) -> Result<CudaTe
         return Ok(t);
     }
     let hidden = out.shape[out.rank() - 1];
-    let bf = crate::wan::tensor::bf16_activations();
+    let bf = crate::rt::tensor::bf16_activations();
     let mut v = out.host_cow()?.into_owned();
     let a = add.host_cow()?;
     for (o, &x) in v[row0 * hidden..][..a.len()].iter_mut().zip(a.iter()) {
@@ -490,7 +490,7 @@ pub fn add_rows(out: CudaTensor, add: &CudaTensor, row0: usize) -> Result<CudaTe
 pub mod check {
     use super::dev;
     use super::*;
-    use crate::wan::attn::{device_mma_sdpa_window, device_mma_sdpa_with, FlashKernel};
+    use crate::rt::attn::{device_mma_sdpa_window, device_mma_sdpa_with, FlashKernel};
     use cudarc::driver::CudaSlice;
     use fastvideo_models::h3::vdn::VDN_HEAD_DIM as D;
 
@@ -535,8 +535,8 @@ pub mod check {
         1.0 / (1.0 + (-x).exp())
     }
 
-    fn dev_ctx() -> Result<std::sync::Arc<crate::wan::device::DeviceContext>> {
-        crate::wan::device::global_device().ok_or_else(|| msg("vdn check: no device"))
+    fn dev_ctx() -> Result<std::sync::Arc<crate::rt::device::DeviceContext>> {
+        crate::rt::device::global_device().ok_or_else(|| msg("vdn check: no device"))
     }
 
     fn up16(v: &[f32]) -> Result<CudaSlice<half::bf16>> {
@@ -701,7 +701,7 @@ pub mod check {
         let x = rng.vec(n * c, 2.0);
         let xd = up16(&x)?;
         let got = down16(&dev::act_rows(
-            crate::wan::quant::ptr(&xd),
+            crate::rt::quant::ptr(&xd),
             c,
             0,
             n,
@@ -722,7 +722,7 @@ pub mod check {
             .map(|(t, ch)| wsp[ch * 25 + t])
             .collect();
         let sp = dev::sconv5(
-            crate::wan::quant::ptr(&xd),
+            crate::rt::quant::ptr(&xd),
             c,
             0,
             frames,
@@ -763,7 +763,7 @@ pub mod check {
         let (a, b) = dev::frame_stats(
             &kf,
             &vf,
-            crate::wan::quant::ptr(&auxd),
+            crate::rt::quant::ptr(&auxd),
             width,
             0,
             frames,
@@ -813,7 +813,7 @@ pub mod check {
         };
         let sm = dev::DevSmall::upload(&small, heads)?;
         let alpha = dev::alpha(
-            crate::wan::quant::ptr(&xind),
+            crate::rt::quant::ptr(&xind),
             0,
             frames,
             s,
@@ -868,7 +868,7 @@ pub mod check {
         let (at, bt) = dev::frame_stats(
             &up16(&ktx)?,
             &up16(&vtx)?,
-            crate::wan::quant::ptr(&up16(&auxt)?),
+            crate::rt::quant::ptr(&up16(&auxt)?),
             width,
             0,
             1,
@@ -953,7 +953,7 @@ pub mod check {
         let r = dev::readout(
             &state,
             &up16(&qf)?,
-            crate::wan::quant::ptr(&ogd),
+            crate::rt::quant::ptr(&ogd),
             &up16(&small.norm)?,
             frames,
             s,
@@ -1119,10 +1119,10 @@ pub(crate) mod dev {
     use cudarc::driver::{CudaFunction, CudaSlice, LaunchConfig};
 
     use super::{msg, AuxCols, Small, VdnBranch, VdnPlan};
-    use crate::wan::device::DeviceContext;
-    use crate::wan::kernels::launch;
-    use crate::wan::quant::{ptr, ptr_mut};
-    use crate::wan::tensor::{CudaTensor, Result};
+    use crate::rt::device::DeviceContext;
+    use crate::rt::kernels::launch;
+    use crate::rt::quant::{ptr, ptr_mut};
+    use crate::rt::tensor::{CudaTensor, Result};
     use fastvideo_models::h3::vdn::{VDN_HEAD_DIM as D, VDN_NORM_EPS, VDN_TEXT_STATE_SCALE};
 
     const SRC: &str = include_str!("vdn.cu");
@@ -1130,12 +1130,12 @@ pub(crate) mod dev {
     const SCAN_SMEM: u32 = ((D * D + 32 * D) * 4) as u32;
     const READOUT_SMEM: u32 = (D * D * 2 + 64 * D * 4) as u32;
 
-    fn err(e: impl std::fmt::Display) -> crate::wan::tensor::TensorError {
+    fn err(e: impl std::fmt::Display) -> crate::rt::tensor::TensorError {
         msg(format!("vdn: {e}"))
     }
 
     fn ctx() -> Result<Arc<DeviceContext>> {
-        crate::wan::device::global_device().ok_or_else(|| msg("vdn: no global CUDA device"))
+        crate::rt::device::global_device().ok_or_else(|| msg("vdn: no global CUDA device"))
     }
 
     pub(crate) struct Kernels {
@@ -1180,7 +1180,7 @@ pub(crate) mod dev {
         dev: &DeviceContext,
     ) -> Result<Option<(Arc<cudarc::driver::CudaModule>, String)>> {
         let want = (dev.sm_major * 10 + dev.sm_minor) as u32;
-        if crate::wan::envflag::string_flag("FASTVIDEO_KERNELS", "auto") == "nvrtc" {
+        if crate::rt::envflag::string_flag("FASTVIDEO_KERNELS", "auto") == "nvrtc" {
             return Ok(None);
         }
         if let Some((_, cubin, _)) = aot::AOT_H3_VDN.iter().find(|(sm, _, _)| *sm == want) {
@@ -1221,7 +1221,7 @@ pub(crate) mod dev {
                 options: vec!["-std=c++17".into()],
                 ..Default::default()
             };
-            let (module, origin) = crate::wan::nvrtc_sass::load_for_device(
+            let (module, origin) = crate::rt::nvrtc_sass::load_for_device(
                 &dev.ctx,
                 dev.sm_major,
                 dev.sm_minor,
@@ -1251,10 +1251,10 @@ pub(crate) mod dev {
             add_rows: f("vdn_add_rows")?,
             _module: module,
         };
-        crate::wan::ops::opt_in_dynamic_shared(&k.solve, SOLVE_SMEM)?;
-        crate::wan::ops::opt_in_dynamic_shared(&k.scan, SCAN_SMEM)?;
-        crate::wan::ops::opt_in_dynamic_shared(&k.readout, READOUT_SMEM)?;
-        crate::wan::log::info(format_args!(
+        crate::rt::ops::opt_in_dynamic_shared(&k.solve, SOLVE_SMEM)?;
+        crate::rt::ops::opt_in_dynamic_shared(&k.scan, SCAN_SMEM)?;
+        crate::rt::ops::opt_in_dynamic_shared(&k.readout, READOUT_SMEM)?;
+        crate::rt::log::info(format_args!(
             "h3 vdn: kernels loaded ({origin}, {:.1}s, sm{}{})",
             timer.elapsed().as_secs_f64(),
             dev.sm_major,
@@ -1597,7 +1597,7 @@ pub(crate) mod dev {
         let [1, h, s, d] = o.shape[..] else {
             return Ok(None);
         };
-        if h != heads || d != D || !crate::wan::stats::device_expected() {
+        if h != heads || d != D || !crate::rt::stats::device_expected() {
             return Ok(None);
         }
         let dev = ctx()?;
@@ -1619,7 +1619,7 @@ pub(crate) mod dev {
         add: &CudaTensor,
         row0: usize,
     ) -> Result<Option<CudaTensor>> {
-        if !crate::wan::stats::device_expected() {
+        if !crate::rt::stats::device_expected() {
             return Ok(None);
         }
         let hidden = out.shape[out.rank() - 1];
@@ -1926,7 +1926,7 @@ mod tests {
             CudaTensor::from_vec(out, vec![1, h, s, d]).unwrap()
         };
         let got =
-            crate::wan::nn::sdpa_vdn_window(&bhsd(&q), &bhsd(&k), &bhsd(&v), None, plan.window)
+            crate::rt::nn::sdpa_vdn_window(&bhsd(&q), &bhsd(&k), &bhsd(&v), None, plan.window)
                 .unwrap();
         let got = got.host_cow().unwrap();
         for si in 0..s {

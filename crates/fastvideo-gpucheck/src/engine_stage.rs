@@ -251,7 +251,7 @@ pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
 
     // ---- cancel mid-run ----
     if let Some(at) = a.cancel_after_step {
-        let used_before = fastvideo_cudarc::wan::device::pool_usage().map(|u| u.used);
+        let used_before = fastvideo_cudarc::rt::device::pool_usage().map(|u| u.used);
         let id = JobId::new();
         let t2 = Instant::now();
         let mut h = rt
@@ -293,7 +293,7 @@ pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
         // The executor thread has handed the pool back by the time the
         // terminal event is sent; let the stream settle.
         std::thread::sleep(Duration::from_millis(500));
-        let used_after = fastvideo_cudarc::wan::device::pool_usage().map(|u| u.used);
+        let used_after = fastvideo_cudarc::rt::device::pool_usage().map(|u| u.used);
         let leftover = job_dir
             .parent()
             .map(|p| p.join(id.to_string()).join("frames"))

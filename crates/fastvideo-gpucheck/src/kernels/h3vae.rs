@@ -16,8 +16,8 @@
 //!   bandwidth roofline.
 
 use super::*;
-use fastvideo_cudarc::wan::attn::FlashKernel;
-use fastvideo_cudarc::wan::quant::{self, MxAct, QuantKind, QuantLayout, QuantWeight, Section};
+use fastvideo_cudarc::rt::attn::FlashKernel;
+use fastvideo_cudarc::rt::quant::{self, MxAct, QuantKind, QuantLayout, QuantWeight, Section};
 use half::bf16;
 
 const DIM: usize = 2048;

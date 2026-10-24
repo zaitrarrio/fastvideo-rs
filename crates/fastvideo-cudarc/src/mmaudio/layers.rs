@@ -1,8 +1,8 @@
 //! Small building blocks shared by the MMAudio modules (all device ops).
 
-use crate::wan::nn::Linear;
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
-use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
+use crate::rt::nn::Linear;
+use crate::rt::tensor::{CudaTensor, Result, TensorError};
+use crate::rt::weights::{cuda_tensor_shaped, WeightMap};
 
 pub(crate) fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())

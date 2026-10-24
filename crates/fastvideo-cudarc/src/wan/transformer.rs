@@ -2454,7 +2454,7 @@ impl WanTransformer3D {
 
     /// [`Self::kv_tables`] as host tensors computed afresh (no cache, no
     /// device): the same values, for a caller that copies them into buffers
-    /// of its own (the inputs of a CUDA graph, `wan::graph`).
+    /// of its own (the inputs of a CUDA graph, `rt::graph`).
     pub fn kv_tables_host(&self, spec: &KvTableSpec, h: usize, w: usize) -> Result<KvTables> {
         let (cos, sin) = wan_rope_at(&self.cfg, spec.frames, h, w, spec.start_frame)?;
         let rope = if spec.rows == cos.shape[0] {
@@ -2495,7 +2495,7 @@ impl WanTransformer3D {
     /// [`Self::forward_kv`] on prepared conditioning and RoPE tables: the
     /// rebased sink (when `tables.sink`), then the block. Past the host
     /// bookkeeping of the cache, only kernel launches and stream-ordered
-    /// allocations: what a CUDA graph can capture (`wan::graph`).
+    /// allocations: what a CUDA graph can capture (`rt::graph`).
     pub fn forward_kv_cond(
         &self,
         latents: &CudaTensor,

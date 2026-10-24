@@ -21,11 +21,11 @@ use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
 
 use crate::llm::DecoderConfig;
+use crate::rt::tensor::CudaTensor;
+use crate::rt::weights::WeightMap;
 use crate::wan::pipeline::{PipelineError, Result};
 use crate::wan::sol_cache::{mean_abs, mean_abs_delta};
-use crate::wan::tensor::CudaTensor;
 use crate::wan::vae::AutoencoderKlWan;
-use crate::wan::weights::WeightMap;
 
 use super::text::{encode_layout, gemma2_decoder};
 use super::transformer::SanaVideoTransformer;

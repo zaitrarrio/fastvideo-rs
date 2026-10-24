@@ -1,6 +1,6 @@
 //! Seeded random weights and inputs, generated inside cudarc's own loaders.
 
-use fastvideo_cudarc::wan::weights::WeightMap;
+use fastvideo_cudarc::rt::weights::WeightMap;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use rand_distr::StandardNormal;
 

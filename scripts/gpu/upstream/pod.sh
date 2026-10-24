@@ -128,7 +128,7 @@ bench_vsa() {
     >"$OUT/bench-vsa/stdout.log" 2>"$OUT/bench-vsa/stderr.log"
 }
 
-# Datacenter attention kernels (crates/fastvideo-cudarc/src/wan/attn_dc.cu)
+# Datacenter attention kernels (crates/fastvideo-cudarc/src/rt/attn_dc.cu)
 # against flash_mma_fwd2: attn_dc_bench.cu is built here with the image's
 # nvcc for the GPU's arch-specific target. Parity runs the debug build (a
 # stuck mbarrier wait traps instead of hanging), timings the release build.
