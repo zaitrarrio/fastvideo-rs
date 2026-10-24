@@ -35,10 +35,7 @@ post_encoder = "auto"
 
 # ltx-pro: LTX-2.5 distilled two-stage, dense stage 2 (one GPU).
 [[models]]
-id = "ltx25-distill-dense"
-family = "ltx2"
-recipe = "ltx-pro"
-weights = "\${FV_WEIGHTS}/ltx25"
+variant = "ltx25-distill-dense"
 resident = true
 
 [protocols]
@@ -99,12 +96,9 @@ post_encoder = "auto"
 # (the unfused base in pinned host memory, ~38 GB of host RAM) plus the LoRA
 # factors: an 80-96 GB card.
 [[models]]
-id = "ltx25-a2v-guided"
-family = "ltx2"
-recipe = "ltx25-a2v-guided"
-weights = "\${FV_WEIGHTS}/ltx25"
+variant = "ltx25-a2v-guided"
 resident = true
-# The dev DiT is \${FV_WEIGHTS}/ltx25-dev/transformer_full (the catalog's
+# The dev DiT is \${FV_WEIGHTS}/ltx25-dev/transformer_full (the variant's
 # layout); \`dit = "/abs/path"\` overrides it.
 
 [protocols]
@@ -161,12 +155,9 @@ post_encoder = "auto"
 # on this pod. The DiT keeps an unfused copy of the weights the LoRA touches
 # (~26 GB): an 80-96 GB card.
 [[models]]
-id = "ltx25-ref2v"
-family = "ltx2"
-recipe = "ltx25-ref2v"
-weights = "\${FV_WEIGHTS}/ltx25"
+variant = "ltx25-ref2v"
 resident = true
-# The IC-LoRA is \${FV_WEIGHTS}/ltx25-ic-lora-ingredients/<file> (the catalog's
+# The IC-LoRA is \${FV_WEIGHTS}/ltx25-ic-lora-ingredients/<file> (the variant's
 # layout); \`ic_lora = "/abs/path.safetensors"\` overrides it.
 
 [protocols]
@@ -231,22 +222,12 @@ post_encoder = "auto"
 swap = true
 
 [[models]]
-id = "h3-ref2v-turbo"
-family = "h3"
-recipe = "h3-ref2v-turbo"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "h3-ref2v-turbo"
 resident = true
 
 [[models]]
-id = "h3-ref2v-max"
-family = "h3"
-recipe = "h3-ref2v-max"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "h3-ref2v-max"
 resident = false
-
-[aliases]
-"MiniMax-H3-Max" = "h3-ref2v-max"
-"MiniMax-H3-Turbo" = "h3-ref2v-turbo"
 
 [protocols]
 openai_videos = true
@@ -295,18 +276,11 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "fasth3-trim-8step"
-family = "h3"
-recipe = "h3-trim"
-weights = "\${FV_WEIGHTS}/fasth3-trim-8step"
-# The text encoder, tokenizer and audio VAE: the catalog's text_weights,
+variant = "fasth3-trim-8step"
+# The text encoder, tokenizer and audio VAE: the variant's text_weights,
 # \${FV_WEIGHTS}/h3-base.
 resident = true
-served_names = ["h3-trim", "fasth3-trim"]
 warmup = true
-
-[aliases]
-"MiniMax-H3-Trim" = "fasth3-trim-8step"
 
 [protocols]
 openai_videos = true
@@ -361,19 +335,12 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "fasth3-trim-nvfp4"
-family = "h3"
-recipe = "h3-trim-nvfp4"
-weights = "\${FV_WEIGHTS}/fasth3-trim-8step"
+variant = "fasth3-trim-nvfp4"
 # The NVFP4 DiT: \${FV_WEIGHTS}/fasth3-trim-8step-nvfp4, read beside weights.
-# The text encoder, tokenizer and audio VAE: the catalog's text_weights,
+# The text encoder, tokenizer and audio VAE: the variant's text_weights,
 # \${FV_WEIGHTS}/h3-base.
 resident = true
-served_names = ["h3-trim-nvfp4"]
 warmup = true
-
-[aliases]
-"MiniMax-H3-Trim-NVFP4" = "fasth3-trim-nvfp4"
 
 [protocols]
 openai_videos = true
@@ -435,19 +402,12 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "fasth3-v2-nvfp4"
-family = "h3"
-recipe = "h3-v2-nvfp4"
-weights = "\${FV_WEIGHTS}/fasth3-v2-nvfp4"
+variant = "fasth3-v2-nvfp4"
 # The ModelOpt NVFP4 DiT and the published NVFP4 vae/ (shards 1-2): this
 # tree. The text encoder, tokenizer, audio VAE and the vae/'s third shard
-# (byte-identical): the catalog's text_weights, \${FV_WEIGHTS}/h3-base.
+# (byte-identical): the variant's text_weights, \${FV_WEIGHTS}/h3-base.
 resident = true
-served_names = ["h3-v2-nvfp4"]
 warmup = true
-
-[aliases]
-"MiniMax-H3-V2-NVFP4" = "fasth3-v2-nvfp4"
 
 [protocols]
 openai_videos = true
@@ -505,19 +465,12 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "fasth3-4step-vsa-nvfp4"
-family = "h3"
-recipe = "h3-turbo-nvfp4"
-weights = "\${FV_WEIGHTS}/fasth3-4step-vsa-nvfp4"
+variant = "fasth3-4step-vsa-nvfp4"
 # The ModelOpt NVFP4 DiT and the published NVFP4 vae/ (shards 1-2): this
 # tree. The text encoder, tokenizer, audio VAE and the vae/'s third shard
-# (byte-identical): the catalog's text_weights, \${FV_WEIGHTS}/h3-base.
+# (byte-identical): the variant's text_weights, \${FV_WEIGHTS}/h3-base.
 resident = true
-served_names = ["h3-turbo-nvfp4"]
 warmup = true
-
-[aliases]
-"MiniMax-H3-Turbo-NVFP4" = "fasth3-4step-vsa-nvfp4"
 
 [protocols]
 openai_videos = true
@@ -576,19 +529,12 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "fasth3-trim-nvfp4-fast"
-family = "h3"
-recipe = "h3-trim-nvfp4-fast"
-weights = "\${FV_WEIGHTS}/fasth3-trim-8step"
+variant = "fasth3-trim-nvfp4-fast"
 # The NVFP4 DiT: \${FV_WEIGHTS}/fasth3-trim-8step-nvfp4, read beside weights.
-# The text encoder, tokenizer and audio VAE: the catalog's text_weights,
+# The text encoder, tokenizer and audio VAE: the variant's text_weights,
 # \${FV_WEIGHTS}/h3-base.
 resident = true
-served_names = ["h3-trim-nvfp4-fast"]
 warmup = true
-
-[aliases]
-"MiniMax-H3-Trim-NVFP4-Fast" = "fasth3-trim-nvfp4-fast"
 
 [protocols]
 openai_videos = true
@@ -640,19 +586,12 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "fasth3-v2-nvfp4-taeh3"
-family = "h3"
-recipe = "h3-v2-nvfp4-preview"
-weights = "\${FV_WEIGHTS}/fasth3-v2-nvfp4"
+variant = "fasth3-v2-nvfp4-taeh3"
 # The ModelOpt NVFP4 DiT and the published NVFP4 vae/ (shards 1-2): this
 # tree. The text encoder, tokenizer, audio VAE and the vae/'s third shard
-# (byte-identical): the catalog's text_weights, \${FV_WEIGHTS}/h3-base.
+# (byte-identical): the variant's text_weights, \${FV_WEIGHTS}/h3-base.
 resident = true
-served_names = ["h3-v2-nvfp4-preview"]
 warmup = true
-
-[aliases]
-"MiniMax-H3-V2-NVFP4-Preview" = "fasth3-v2-nvfp4-taeh3"
 
 [protocols]
 openai_videos = true
@@ -702,19 +641,12 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "fasth3-4step-vsa-nvfp4-taeh3"
-family = "h3"
-recipe = "h3-turbo-nvfp4-preview"
-weights = "\${FV_WEIGHTS}/fasth3-4step-vsa-nvfp4"
+variant = "fasth3-4step-vsa-nvfp4-taeh3"
 # The ModelOpt NVFP4 DiT and the published NVFP4 vae/ (shards 1-2): this
 # tree. The text encoder, tokenizer, audio VAE and the vae/'s third shard
-# (byte-identical): the catalog's text_weights, \${FV_WEIGHTS}/h3-base.
+# (byte-identical): the variant's text_weights, \${FV_WEIGHTS}/h3-base.
 resident = true
-served_names = ["h3-turbo-nvfp4-preview"]
 warmup = true
-
-[aliases]
-"MiniMax-H3-Turbo-NVFP4-Preview" = "fasth3-4step-vsa-nvfp4-taeh3"
 
 [protocols]
 openai_videos = true
@@ -766,16 +698,9 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "fasth3-4step-vsa-taeh3"
-family = "h3"
-recipe = "h3-turbo-preview"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "fasth3-4step-vsa-taeh3"
 resident = true
-served_names = ["h3-turbo-preview"]
 warmup = true
-
-[aliases]
-"MiniMax-H3-Turbo-Preview" = "fasth3-4step-vsa-taeh3"
 
 [protocols]
 openai_videos = true
@@ -828,19 +753,12 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "h3-larry-turbo"
-family = "h3"
-recipe = "h3-larry-turbo"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "h3-larry-turbo"
 # The adapter: \${FV_WEIGHTS}/h3-turbo-loras/larry, found beside h3-base.
 resident = true
-served_names = ["h3-larry-turbo"]
 steps = 6
 lora_strength = 1.0
 warmup = true
-
-[aliases]
-"MiniMax-H3-Turbo-Lora" = "h3-larry-turbo"
 
 [protocols]
 openai_videos = true
@@ -896,19 +814,12 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "h3-lightx2v-turbo"
-family = "h3"
-recipe = "h3-lightx2v-turbo"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "h3-lightx2v-turbo"
 # The adapter: \${FV_WEIGHTS}/h3-turbo-loras/lightx2v, found beside h3-base.
 resident = true
-served_names = ["h3-lightx2v-turbo"]
 steps = 4
 lora_strength = 1.0
 warmup = true
-
-[aliases]
-"MiniMax-H3-Turbo-Lightx2v" = "h3-lightx2v-turbo"
 
 [protocols]
 openai_videos = true
@@ -964,19 +875,16 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "h3-lightx2v-turbo-v01"
-family = "h3"
-recipe = "lightx2v-turbo-v0.1"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "h3-lightx2v-turbo-v01"
+# Compatibility: this deployment also answers to the id of the h3-lightx2v-turbo
+# variant, as it did before plan A3 (kept so the served names stay identical;
+# drop it when clients no longer use it).
+served_names = ["h3-lightx2v-turbo"]
 # The adapter: \${FV_WEIGHTS}/h3-turbo-loras/lightx2v-v0.1, found beside h3-base.
 resident = true
-served_names = ["h3-lightx2v-turbo-v01"]
 steps = 4
 lora_strength = 1.0
 warmup = true
-
-[aliases]
-"MiniMax-H3-Turbo-Lightx2v-v0.1" = "h3-lightx2v-turbo-v01"
 
 [protocols]
 openai_videos = true
@@ -1034,20 +942,13 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "vdn-h3"
-family = "h3"
-recipe = "vdn-h3-50step"
-weights = "\${FV_WEIGHTS}/h3-base"
-# The VDN checkpoint: the catalog's vdn_weights,
+variant = "vdn-h3"
+# The VDN checkpoint: the variant's vdn_weights,
 # \${FV_WEIGHTS}/vdn-h3-stage-b-2000/stage-b-step-2000.
 resident = true
-served_names = ["vdn-h3-50step"]
 # No warm-up: it runs an image-to-video generation (not offered here) and a
 # text-to-video one, each 50 forwards.
 warmup = false
-
-[aliases]
-"VDN-H3" = "vdn-h3"
 
 [protocols]
 openai_videos = true
@@ -1071,7 +972,7 @@ pool = "vdn-h3"
 # $FV_WEIGHTS/h3-base (the MiniMax-H3 DiT, both VAEs, the text encoder and
 # tokenizer), $FV_WEIGHTS/vdn-h3-dmd-250-turbo/stage-dmd-step-250 (the turbo
 # LoRA) and $FV_WEIGHTS/vdn-h3-stage-b-2000/stage-b-step-2000 (the linear branch
-# and the default LoRA, byte-identical in both stages; the catalog's
+# and the default LoRA, byte-identical in both stages; the variant's
 # vdn_shared). Both LoRAs merge into h3-base at load.
 #
 # 8 forwards on the uniform grid, shifts 12 / 3, no CFG; every block attends
@@ -1101,17 +1002,11 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "vdn-h3-8step"
-family = "h3"
-recipe = "vdn-h3-8step"
-weights = "\${FV_WEIGHTS}/h3-base"
-# The VDN checkpoint: the catalog's vdn_weights / vdn_shared.
+variant = "vdn-h3-8step"
+# The VDN checkpoint: the variant's vdn_weights / vdn_shared.
 resident = true
 # No warm-up: it runs an image-to-video generation (not offered here).
 warmup = false
-
-[aliases]
-"VDN-H3-8step" = "vdn-h3-8step"
 
 [protocols]
 openai_videos = true
@@ -1175,12 +1070,12 @@ post_encoder = "auto"
 # (\`longlive_recache = false\`: keep the cache, the ablation). Served as
 # \`longlive-1.3b\` and \`longlive\`.
 [[models]]
-id = "longlive-1.3b"
-family = "wan"
-recipe = "sfwan21-1.3b"
-weights = "\${FV_WEIGHTS}/sfwan21-1.3b"
+variant = "longlive-1.3b"
+# Compatibility: this deployment also answers to the id of the sfwan21-1.3b
+# variant, as it did before plan A3 (kept so the served names stay identical;
+# drop it when clients no longer use it).
+served_names = ["sfwan21-1.3b"]
 resident = true
-longlive = "/workspace/weights/longlive-1.3b-safetensors"
 
 [protocols]
 openai_videos = false
@@ -1210,7 +1105,7 @@ pool = "longlive"
 # 2026-10-18: "for the presets means all of the weights for a model family
 # and it's variants are installed onto 1 [pod]"; docs/control/README.md §4).
 #
-# Every H3 variant a pool preset serves, plus the catalog's h3-draft tier:
+# Every H3 variant a pool preset serves, plus the family file's h3-draft tier:
 # turbo (resident), max, Ref2V turbo / max, the TAEH3 previews, Trim (bf16 /
 # NVFP4 / NVFP4 + FP4 attention), the NVFP4 tier (FastH3 V2, 4-step), the
 # MiniMax-H3 Turbo LoRAs and VDN-H3 (50 / 8 steps). One H3 DiT is 40-66 GB,
@@ -1254,182 +1149,102 @@ swap = true
 
 # h3-turbo: resident at boot, warmed up (runpod.toml).
 [[models]]
+variant = "fasth3-4step-vsa"
 id = "fasth3"
-family = "h3"
-recipe = "h3-turbo"
-weights = "\${FV_WEIGHTS}/h3-base"
 resident = true
-served_names = ["fasth3"]
 continuity = "anchor-last-frame"
 i2v_encoder = "auto"
 warmup = true
 
 # h3-max (runpod-h3-max.toml).
 [[models]]
-id = "sol-h3"
-family = "h3"
-recipe = "h3-max"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "sol-h3"
 resident = false
 i2v_encoder = "auto"
 
-# The 480p TAEH3 draft tier (catalog h3-draft).
+# The 480p TAEH3 draft tier (the h3-draft tier).
 [[models]]
-id = "fasth3-4step-vsa-480p-taeh3"
-family = "h3"
-recipe = "h3-draft"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "fasth3-4step-vsa-480p-taeh3"
 resident = false
 
 # Ref2V companions (runpod-h3-ref2v.toml; transformer_ref in
 # \${FV_WEIGHTS}/h3-ref2va): Ref2V requests on h3-turbo / h3-max route here.
 [[models]]
-id = "h3-ref2v-turbo"
-family = "h3"
-recipe = "h3-ref2v-turbo"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "h3-ref2v-turbo"
 resident = false
 
 [[models]]
-id = "h3-ref2v-max"
-family = "h3"
-recipe = "h3-ref2v-max"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "h3-ref2v-max"
 resident = false
 
 # Fast previews: TAEH3 decode (runpod-h3-*-preview.toml).
 [[models]]
-id = "fasth3-4step-vsa-taeh3"
-family = "h3"
-recipe = "h3-turbo-preview"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "fasth3-4step-vsa-taeh3"
 resident = false
-served_names = ["h3-turbo-preview"]
 
 [[models]]
-id = "fasth3-v2-nvfp4-taeh3"
-family = "h3"
-recipe = "h3-v2-nvfp4-preview"
-weights = "\${FV_WEIGHTS}/fasth3-v2-nvfp4"
+variant = "fasth3-v2-nvfp4-taeh3"
 resident = false
-served_names = ["h3-v2-nvfp4-preview"]
 
 [[models]]
-id = "fasth3-4step-vsa-nvfp4-taeh3"
-family = "h3"
-recipe = "h3-turbo-nvfp4-preview"
-weights = "\${FV_WEIGHTS}/fasth3-4step-vsa-nvfp4"
+variant = "fasth3-4step-vsa-nvfp4-taeh3"
 resident = false
-served_names = ["h3-turbo-nvfp4-preview"]
 
 # FastH3 Trim (runpod-h3-trim*.toml; the NVFP4 DiT in
 # \${FV_WEIGHTS}/fasth3-trim-8step-nvfp4, read beside weights).
 [[models]]
-id = "fasth3-trim-8step"
-family = "h3"
-recipe = "h3-trim"
-weights = "\${FV_WEIGHTS}/fasth3-trim-8step"
+variant = "fasth3-trim-8step"
 resident = false
-served_names = ["h3-trim", "fasth3-trim"]
 
 [[models]]
-id = "fasth3-trim-nvfp4"
-family = "h3"
-recipe = "h3-trim-nvfp4"
-weights = "\${FV_WEIGHTS}/fasth3-trim-8step"
+variant = "fasth3-trim-nvfp4"
 resident = false
-served_names = ["h3-trim-nvfp4"]
 
 [[models]]
-id = "fasth3-trim-nvfp4-fast"
-family = "h3"
-recipe = "h3-trim-nvfp4-fast"
-weights = "\${FV_WEIGHTS}/fasth3-trim-8step"
+variant = "fasth3-trim-nvfp4-fast"
 resident = false
-served_names = ["h3-trim-nvfp4-fast"]
 
 # The NVFP4 tier (runpod-h3-v2-nvfp4.toml, runpod-h3-turbo-nvfp4.toml).
 [[models]]
-id = "fasth3-v2-nvfp4"
-family = "h3"
-recipe = "h3-v2-nvfp4"
-weights = "\${FV_WEIGHTS}/fasth3-v2-nvfp4"
+variant = "fasth3-v2-nvfp4"
 resident = false
-served_names = ["h3-v2-nvfp4"]
 
 [[models]]
-id = "fasth3-4step-vsa-nvfp4"
-family = "h3"
-recipe = "h3-turbo-nvfp4"
-weights = "\${FV_WEIGHTS}/fasth3-4step-vsa-nvfp4"
+variant = "fasth3-4step-vsa-nvfp4"
 resident = false
-served_names = ["h3-turbo-nvfp4"]
 
 # MiniMax-H3 Turbo LoRAs (runpod-h3-*-turbo*.toml; adapters in
 # \${FV_WEIGHTS}/h3-turbo-loras).
 [[models]]
-id = "h3-larry-turbo"
-family = "h3"
-recipe = "h3-larry-turbo"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "h3-larry-turbo"
 resident = false
-served_names = ["h3-larry-turbo"]
 steps = 6
 lora_strength = 1.0
 
 [[models]]
-id = "h3-lightx2v-turbo"
-family = "h3"
-recipe = "h3-lightx2v-turbo"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "h3-lightx2v-turbo"
 resident = false
-served_names = ["h3-lightx2v-turbo"]
 steps = 4
 lora_strength = 1.0
 
 [[models]]
-id = "h3-lightx2v-turbo-v01"
-family = "h3"
-recipe = "lightx2v-turbo-v0.1"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "h3-lightx2v-turbo-v01"
+# Compatibility: this deployment also answers to the id of the h3-lightx2v-turbo
+# variant, as it did before plan A3 (kept so the served names stay identical;
+# drop it when clients no longer use it).
+served_names = ["h3-lightx2v-turbo"]
 resident = false
-served_names = ["h3-lightx2v-turbo-v01"]
 steps = 4
 lora_strength = 1.0
 
 # VDN-H3 (runpod-vdn-h3*.toml; bf16 linears, its own default).
 [[models]]
-id = "vdn-h3"
-family = "h3"
-recipe = "vdn-h3-50step"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "vdn-h3"
 resident = false
-served_names = ["vdn-h3-50step"]
 
 [[models]]
-id = "vdn-h3-8step"
-family = "h3"
-recipe = "vdn-h3-8step"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "vdn-h3-8step"
 resident = false
-
-[aliases]
-"MiniMax-H3" = "fasth3"
-"MiniMax-H3-Turbo" = "fasth3"
-"MiniMax-H3-Max" = "sol-h3"
-"MiniMax-H3-Turbo-Preview" = "fasth3-4step-vsa-taeh3"
-"MiniMax-H3-V2-NVFP4-Preview" = "fasth3-v2-nvfp4-taeh3"
-"MiniMax-H3-Turbo-NVFP4-Preview" = "fasth3-4step-vsa-nvfp4-taeh3"
-"MiniMax-H3-Trim" = "fasth3-trim-8step"
-"MiniMax-H3-Trim-NVFP4" = "fasth3-trim-nvfp4"
-"MiniMax-H3-Trim-NVFP4-Fast" = "fasth3-trim-nvfp4-fast"
-"MiniMax-H3-V2-NVFP4" = "fasth3-v2-nvfp4"
-"MiniMax-H3-Turbo-NVFP4" = "fasth3-4step-vsa-nvfp4"
-"MiniMax-H3-Turbo-Lora" = "h3-larry-turbo"
-"MiniMax-H3-Turbo-Lightx2v" = "h3-lightx2v-turbo"
-"MiniMax-H3-Turbo-Lightx2v-v0.1" = "h3-lightx2v-turbo-v01"
-"VDN-H3" = "vdn-h3"
-"VDN-H3-8step" = "vdn-h3-8step"
 
 [protocols]
 openai_videos = true
@@ -1451,7 +1266,7 @@ pool = "h3-family"
 `,
   "runpod-family-fasth3.toml": `# fv-serve on Runpod: the FastH3 family on ONE GPU, one process (owner
 # decision 2026-10-18, as runpod-family-h3.toml): every FastH3 release a pool
-# preset serves (model ids fasth3*) and the catalog's 480p draft tier. turbo
+# preset serves (model ids fasth3*) and the family file's 480p draft tier. turbo
 # (fasth3, the FastH3 4-step Preview) is resident; the draft, the TAEH3
 # previews, Trim (bf16 / NVFP4 / NVFP4 + FP4 attention) and the NVFP4 tier
 # (FastH3 V2, 4-step) load on their first request, swapping the resident DiT
@@ -1488,99 +1303,49 @@ post_encoder = "auto"
 swap = true
 
 [[models]]
+variant = "fasth3-4step-vsa"
 id = "fasth3"
-family = "h3"
-recipe = "h3-turbo"
-weights = "\${FV_WEIGHTS}/h3-base"
 resident = true
-served_names = ["fasth3"]
 continuity = "anchor-last-frame"
 i2v_encoder = "auto"
 warmup = true
 
 [[models]]
-id = "fasth3-4step-vsa-480p-taeh3"
-family = "h3"
-recipe = "h3-draft"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "fasth3-4step-vsa-480p-taeh3"
 resident = false
 
 [[models]]
-id = "fasth3-4step-vsa-taeh3"
-family = "h3"
-recipe = "h3-turbo-preview"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "fasth3-4step-vsa-taeh3"
 resident = false
-served_names = ["h3-turbo-preview"]
 
 [[models]]
-id = "fasth3-v2-nvfp4-taeh3"
-family = "h3"
-recipe = "h3-v2-nvfp4-preview"
-weights = "\${FV_WEIGHTS}/fasth3-v2-nvfp4"
+variant = "fasth3-v2-nvfp4-taeh3"
 resident = false
-served_names = ["h3-v2-nvfp4-preview"]
 
 [[models]]
-id = "fasth3-4step-vsa-nvfp4-taeh3"
-family = "h3"
-recipe = "h3-turbo-nvfp4-preview"
-weights = "\${FV_WEIGHTS}/fasth3-4step-vsa-nvfp4"
+variant = "fasth3-4step-vsa-nvfp4-taeh3"
 resident = false
-served_names = ["h3-turbo-nvfp4-preview"]
 
 # The NVFP4 Trim DiT: \${FV_WEIGHTS}/fasth3-trim-8step-nvfp4, read beside weights.
 [[models]]
-id = "fasth3-trim-8step"
-family = "h3"
-recipe = "h3-trim"
-weights = "\${FV_WEIGHTS}/fasth3-trim-8step"
+variant = "fasth3-trim-8step"
 resident = false
-served_names = ["h3-trim", "fasth3-trim"]
 
 [[models]]
-id = "fasth3-trim-nvfp4"
-family = "h3"
-recipe = "h3-trim-nvfp4"
-weights = "\${FV_WEIGHTS}/fasth3-trim-8step"
+variant = "fasth3-trim-nvfp4"
 resident = false
-served_names = ["h3-trim-nvfp4"]
 
 [[models]]
-id = "fasth3-trim-nvfp4-fast"
-family = "h3"
-recipe = "h3-trim-nvfp4-fast"
-weights = "\${FV_WEIGHTS}/fasth3-trim-8step"
+variant = "fasth3-trim-nvfp4-fast"
 resident = false
-served_names = ["h3-trim-nvfp4-fast"]
 
 [[models]]
-id = "fasth3-v2-nvfp4"
-family = "h3"
-recipe = "h3-v2-nvfp4"
-weights = "\${FV_WEIGHTS}/fasth3-v2-nvfp4"
+variant = "fasth3-v2-nvfp4"
 resident = false
-served_names = ["h3-v2-nvfp4"]
 
 [[models]]
-id = "fasth3-4step-vsa-nvfp4"
-family = "h3"
-recipe = "h3-turbo-nvfp4"
-weights = "\${FV_WEIGHTS}/fasth3-4step-vsa-nvfp4"
+variant = "fasth3-4step-vsa-nvfp4"
 resident = false
-served_names = ["h3-turbo-nvfp4"]
-
-[aliases]
-"MiniMax-H3" = "fasth3"
-"MiniMax-H3-Turbo" = "fasth3"
-"MiniMax-H3-Turbo-Preview" = "fasth3-4step-vsa-taeh3"
-"MiniMax-H3-V2-NVFP4-Preview" = "fasth3-v2-nvfp4-taeh3"
-"MiniMax-H3-Turbo-NVFP4-Preview" = "fasth3-4step-vsa-nvfp4-taeh3"
-"MiniMax-H3-Trim" = "fasth3-trim-8step"
-"MiniMax-H3-Trim-NVFP4" = "fasth3-trim-nvfp4"
-"MiniMax-H3-Trim-NVFP4-Fast" = "fasth3-trim-nvfp4-fast"
-"MiniMax-H3-V2-NVFP4" = "fasth3-v2-nvfp4"
-"MiniMax-H3-Turbo-NVFP4" = "fasth3-4step-vsa-nvfp4"
 
 [protocols]
 openai_videos = true
@@ -1638,33 +1403,21 @@ post_encoder = "auto"
 swap = true
 
 [[models]]
-id = "ltx25-distill-sol"
-family = "ltx2"
-recipe = "ltx-turbo"
-weights = "\${FV_WEIGHTS}/ltx25"
+variant = "ltx25-distill-sol"
 resident = true
 
 [[models]]
-id = "ltx25-distill-dense"
-family = "ltx2"
-recipe = "ltx-pro"
-weights = "\${FV_WEIGHTS}/ltx25"
+variant = "ltx25-distill-dense"
 resident = false
 
-# The dev DiT: \${FV_WEIGHTS}/ltx25-dev/transformer_full (the catalog's layout).
+# The dev DiT: \${FV_WEIGHTS}/ltx25-dev/transformer_full (the variant's layout).
 [[models]]
-id = "ltx25-a2v-guided"
-family = "ltx2"
-recipe = "ltx25-a2v-guided"
-weights = "\${FV_WEIGHTS}/ltx25"
+variant = "ltx25-a2v-guided"
 resident = false
 
 # The IC-LoRA: \${FV_WEIGHTS}/ltx25-ic-lora-ingredients.
 [[models]]
-id = "ltx25-ref2v"
-family = "ltx2"
-recipe = "ltx25-ref2v"
-weights = "\${FV_WEIGHTS}/ltx25"
+variant = "ltx25-ref2v"
 resident = false
 
 [protocols]
@@ -1725,19 +1478,16 @@ post_encoder = "auto"
 swap = true
 
 [[models]]
-id = "sfwan21-1.3b"
-family = "wan"
-recipe = "sfwan21-1.3b"
-weights = "\${FV_WEIGHTS}/sfwan21-1.3b"
+variant = "sfwan21-1.3b"
 resident = true
 
 [[models]]
-id = "longlive-1.3b"
-family = "wan"
-recipe = "sfwan21-1.3b"
-weights = "\${FV_WEIGHTS}/sfwan21-1.3b"
+variant = "longlive-1.3b"
+# Compatibility: this deployment also answers to the id of the sfwan21-1.3b
+# variant, as it did before plan A3 (kept so the served names stay identical;
+# drop it when clients no longer use it).
+served_names = ["sfwan21-1.3b"]
 resident = false
-longlive = "/workspace/weights/longlive-1.3b-safetensors"
 
 [protocols]
 openai_videos = false

@@ -132,10 +132,10 @@ EOF
     max) printf '[[models]]\nvariant = "h3-max"\nweights = "%s/h3-base"\nresident = true\ni2v_encoder = "auto"\n' $W ;;
     draft) printf '[[models]]\nvariant = "h3-draft"\nweights = "%s/h3-base"\nresident = true\ni2v_encoder = "auto"\n' $W ;;
     v2) printf '[[models]]\nvariant = "fasth3-8step-dense"\nweights = "%s/h3-8step"\nresident = true\ni2v_encoder = "auto"\n' $W ;;
-    larry) printf '[[models]]\nid = "h3-larry-turbo"\nfamily = "h3"\nrecipe = "h3-larry-turbo"\nweights = "%s/h3-base"\nresident = true\nsteps = 6\nlora_strength = 1.0\ni2v_encoder = "auto"\n' $W ;;
-    lightx) printf '[[models]]\nid = "h3-lightx2v-turbo"\nfamily = "h3"\nrecipe = "h3-lightx2v-turbo"\nweights = "%s/h3-base"\nresident = true\nsteps = 4\nlora_strength = 1.0\ni2v_encoder = "auto"\n' $W ;;
-    ref2v-turbo) printf '[[models]]\nid = "h3-ref2v-turbo"\nfamily = "h3"\nrecipe = "h3-ref2v-turbo"\nweights = "%s/h3-base"\nresident = true\n' $W ;;
-    ref2v-max) printf '[[models]]\nid = "h3-ref2v-max"\nfamily = "h3"\nrecipe = "h3-ref2v-max"\nweights = "%s/h3-base"\nresident = true\n' $W ;;
+    larry) printf '[[models]]\nvariant = "h3-larry-turbo"\nweights = "%s/h3-base"\nresident = true\nsteps = 6\nlora_strength = 1.0\ni2v_encoder = "auto"\n' $W ;;
+    lightx) printf '[[models]]\nvariant = "h3-lightx2v-turbo"\nweights = "%s/h3-base"\nresident = true\nsteps = 4\nlora_strength = 1.0\ni2v_encoder = "auto"\n' $W ;;
+    ref2v-turbo) printf '[[models]]\nvariant = "h3-ref2v-turbo"\nweights = "%s/h3-base"\nresident = true\n' $W ;;
+    ref2v-max) printf '[[models]]\nvariant = "h3-ref2v-max"\nweights = "%s/h3-base"\nresident = true\n' $W ;;
     *) return 1 ;;
   esac
 }

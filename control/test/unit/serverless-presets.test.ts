@@ -13,7 +13,7 @@ import { GPU_MEMORY_GB } from "../../src/gpus";
 import { examplesFor, fillExample } from "../../src/serverless/examples";
 import { SLS_BOOT, templateCreatePayload, templateUpdatePayload, v2CreatePayload, v2TemplateBoot, workerEnv } from "../../src/serverless/payloads";
 import { inferPreset, mergeSpec, servingIssues, servingView, SLS_PRESETS } from "../../src/serverless/presets";
-import { compareCapabilities, readToml, servesOf } from "../../src/serverless/serves";
+import { compareCapabilities, readToml, servesOf, servesOfToml } from "../../src/serverless/serves";
 import { defaultEndpointSpec, normalizeEndpointSpec } from "../../src/serverless/spec";
 import { missingTrees, VOLUME_TREES } from "../../src/volumes";
 
@@ -107,14 +107,14 @@ describe("validation before create", () => {
     expect(paths(servingIssues(normalizeEndpointSpec({ name: "c", variant: "h3-turbo", gpu_types: ["NVIDIA A40"] })))).toEqual(["gpu_types.0"]);
   });
   it("weights: a tree the volume lacks is refused, with the source of the list", () => {
-    const toml = `[engine]\nbackend = "cuda"\n[[models]]\nid = "x"\nfamily = "wan"\nrecipe = "wan-max"\nweights = "\${FV_WEIGHTS}/not-on-the-volume"\n`;
+    const toml = `[engine]\nbackend = "cuda"\n[[models]]\nvariant = "wan-max"\nid = "x"\nweights = "\${FV_WEIGHTS}/not-on-the-volume"\n`;
     const r = servingIssues(normalizeEndpointSpec({ name: "c", variant: "wan5b", config_toml: toml }));
     expect(paths(r)).toEqual(["network_volume"]);
     expect(r.issues[0]!.message).toMatch(/no weights tree not-on-the-volume .*volumes\.sh FV_EU_VOLUME_TREES/);
     // No volume at all: a preset is refused by the schema, a custom config that loads weights by the serving check.
     expect(() => normalizeEndpointSpec({ name: "r", preset: "h3-ref2v", network_volume: null })).toThrow(/network_volume: preset h3-ref2v loads weights/);
     const nv = servingIssues(normalizeEndpointSpec({ name: "c", variant: "h3-turbo", network_volume: null }));
-    expect(nv.issues[0]).toMatchObject({ path: ["network_volume"], message: expect.stringMatching(/loads weight trees \(h3-base\)/) });
+    expect(nv.issues[0]).toMatchObject({ path: ["network_volume"], message: expect.stringMatching(/loads weight trees \(FastH3-4-step-Preview-v1-LoRA, h3-base\)/) });
   });
   it("data centre: a worker with the EU volume runs in EU-RO-1 only", () => {
     expect(() => normalizeEndpointSpec({ name: "r", preset: "h3-ref2v", data_centers: ["US-CA-2"] })).toThrow(/must run in EU-RO-1/);
@@ -148,18 +148,45 @@ describe("what an endpoint serves", () => {
     const t = readToml(`# c\n[engine]\nswap = true # x\n[[models]]\nid = "a"\nweights = "\${FV_WEIGHTS}/t"\n[[models]]\nid = "b"\n[aliases]\n"MiniMax-H3" = "a"\n[protocols]\nfal_apps = ["x/y", "z"]\nnative = false\n`);
     expect(t).toEqual({ engine: { swap: true }, models: [{ id: "a", weights: "${FV_WEIGHTS}/t" }, { id: "b" }], aliases: { "MiniMax-H3": "a" }, protocols: { fal_apps: ["x/y", "z"], native: false } });
   });
-  it("h3-ref2v: the two Ref2VA models, ref2v only, MiniMax names to them, swap, weights h3-base (+ h3-ref2va from the preset)", () => {
+  it("h3-ref2v: the two Ref2VA models, ref2v only, MiniMax names to them, swap, weights the variants' trees", () => {
     const v = servingView(normalizeEndpointSpec({ name: "r", preset: "h3-ref2v" }));
     expect(v.preset).toBe("h3-ref2v");
     expect(v.serves.models.map((m) => [m.id, m.tier, m.tasks.join(","), m.resident])).toEqual([
       ["h3-ref2v-turbo", "turbo", "ref2v", true],
       ["h3-ref2v-max", "max", "ref2v", false],
     ]);
-    expect(v.serves.aliases).toEqual(expect.arrayContaining([{ name: "MiniMax-H3-Turbo", model: "h3-ref2v-turbo", via: "config" }, { name: "MiniMax-H3-Max", model: "h3-ref2v-max", via: "config" }]));
-    expect(v.serves).toMatchObject({ swap: true, engine: "cuda", source: { kind: "inline" }, weights: ["h3-base"] });
+    // The variants' public names (families/h3.toml), as fv-serve maps them (CapabilityTable::public_aliases).
+    expect(v.serves.aliases).toEqual(expect.arrayContaining([{ name: "MiniMax-H3-Turbo", model: "h3-ref2v-turbo", via: "manifest" }, { name: "MiniMax-H3-Max", model: "h3-ref2v-max", via: "manifest" }]));
+    expect(v.serves).toMatchObject({ swap: true, engine: "cuda", source: { kind: "inline" }, weights: ["h3-base", "h3-ref2va"] });
     expect(v.serves.protocols).toEqual(expect.arrayContaining(["native", "minimax", "fal", "openai_videos"]));
     expect(v.serves.protocols).not.toContain("ltx");
     expect(v.serves.fal_apps).toContain("minimax/h3-turbo");
+  });
+  it("a [[models]] block names a variant: id, family, tier, tasks, served and public names from the manifests", () => {
+    const toml = `[engine]\nbackend = "cuda"\nswap = true\n[[models]]\nvariant = "h3-turbo"\nid = "fasth3"\nresident = true\n[[models]]\nvariant = "h3-ref2v-turbo"\nresident = false\n[[models]]\nvariant = "longlive"\n`;
+    const s = servesOfToml(toml, { kind: "inline", config: null });
+    expect(s.models.map((m) => [m.id, m.family, m.recipe, m.tier, m.tasks.join(","), m.resident])).toEqual([
+      ["fasth3", "h3", "h3-turbo", "turbo", "t2v,i2v,keyframes", true],
+      ["h3-ref2v-turbo", "h3", "h3-ref2v-turbo", "turbo", "ref2v", false],
+      ["longlive-1.3b", "wan", "longlive", null, "stream", false],
+    ]);
+    expect(s.models[0]!.served_names).toEqual(["fasth3", "fasth3-4step-vsa"]);
+    expect(s.models[2]!.served_names).toEqual(["longlive-1.3b", "longlive"]);
+    expect(s.models[2]!.weights).toEqual(["longlive-1.3b-safetensors", "sfwan21-1.3b"]);
+    // MiniMax-H3-Turbo is claimed by the turbo model and its Ref2V companion: the one serving t2v gets it.
+    const manifest = s.aliases.filter((a) => a.via === "manifest");
+    expect(manifest).toEqual([
+      { name: "MiniMax-H3", model: "fasth3", via: "manifest" },
+      { name: "MiniMax-H3-Turbo", model: "fasth3", via: "manifest" },
+    ]);
+    // A config without [[models]] on the fake engine: its built-in models and their public names.
+    const fake = servesOfToml(`[engine]\nbackend = "fake"\n`, { kind: "inline", config: null });
+    expect(fake.aliases.filter((a) => a.via === "manifest").map((a) => [a.name, a.model])).toEqual([
+      ["MiniMax-H3", "fake-h3-turbo"],
+      ["MiniMax-H3-Max", "fake-h3-max"],
+      ["MiniMax-H3-Turbo", "fake-h3-turbo"],
+      ["fastwan-1.3b", "fake-wan"],
+    ]);
   });
   it("the incident: h3-max with no config is preset h3-max (inferred), serving sol-h3 only; MiniMax-H3-Turbo is not a name it answers", () => {
     const spec = normalizeEndpointSpec({ name: "ref2va", variant: "h3-max", mode: "lb" });

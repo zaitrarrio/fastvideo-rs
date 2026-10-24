@@ -121,15 +121,8 @@ fn prompt_family(f: fastvideo_protocol::Family) -> Option<PromptFamily> {
 }
 
 /// The counters `[upsampler]` and `[[models]]` point at.
-pub fn counters(c: &Config) -> fastvideo_upsampler::Counters {
-    // The resolved models; a config that does not resolve was refused
-    // before the engine started (no counters from it here).
-    let models = crate::app::catalog_models(&c.models).unwrap_or_default();
-    counters_for(c, &models)
-}
-
-/// [`counters`] over already resolved models.
-pub fn counters_for(c: &Config, models: &[CudaModel]) -> fastvideo_upsampler::Counters {
+/// `models` are the config's resolved `[[models]]` (`app::resolve_models`).
+pub fn counters(c: &Config, models: &[CudaModel]) -> fastvideo_upsampler::Counters {
     let explicit = c
         .upsampler
         .as_ref()
@@ -212,7 +205,7 @@ mod tests {
     fn counters_follow_config_and_models() {
         let mut c = Config::default();
         let m = models(&[("fasth3", "h3-turbo", &[])]);
-        let k = counters_for(&c, &m);
+        let k = counters(&c, &m);
         assert_eq!(
             k.h3.map(|x| x.describe()).as_deref(),
             Some("/w/h3-base/tokenizer/tokenizer.json")
@@ -222,11 +215,11 @@ mod tests {
         u.tokenizers.h3 = Some("/t/h3.json".into());
         u.tokenizers.wan = Some("/t/wan.json".into());
         c.upsampler = Some(u);
-        let k = counters_for(&c, &m);
+        let k = counters(&c, &m);
         assert_eq!(k.h3.map(|x| x.describe()).as_deref(), Some("/t/h3.json"));
         assert_eq!(k.wan.map(|x| x.describe()).as_deref(), Some("/t/wan.json"));
         // Without models (a fake deployment) and without explicit paths: characters.
-        assert!(counters_for(&Config::default(), &[]).h3.is_none());
+        assert!(counters(&Config::default(), &[]).h3.is_none());
     }
 
     /// FastH3 Trim's tree has no tokenizer: its prompts are measured with
@@ -235,19 +228,19 @@ mod tests {
     fn trim_counts_with_the_h3_base_tokenizer() {
         let c = Config::default();
         let m = models(&[("fasth3-trim-8step", "h3-trim", &[])]);
-        let k = counters_for(&c, &m);
+        let k = counters(&c, &m);
         assert_eq!(
             k.h3.map(|x| x.describe()).as_deref(),
             Some("/w/h3-base/tokenizer/tokenizer.json")
         );
         let m = models(&[("t", "h3-trim", &[("text_weights", "/v/h3-base")])]);
-        let k = counters_for(&c, &m);
+        let k = counters(&c, &m);
         assert_eq!(
             k.h3.map(|x| x.describe()).as_deref(),
             Some("/v/h3-base/tokenizer/tokenizer.json")
         );
         let m = models(&[("ltx", "ltx-turbo", &[]), ("wan", "wan-turbo", &[])]);
-        let k = counters_for(&c, &m);
+        let k = counters(&c, &m);
         assert_eq!(
             k.ltx.map(|x| x.describe()).as_deref(),
             Some("/w/ltx25/tokenizer/tokenizer.json")

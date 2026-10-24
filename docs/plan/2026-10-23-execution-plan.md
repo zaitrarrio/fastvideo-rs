@@ -305,3 +305,14 @@ ran (pod id, $/hr), result, cost.
   `-D warnings`, cuda-feature check green. Control-side follow-up for A4:
   `gen-configs.mjs --check` and `serverless/serves.ts` must read the new
   `[[models]]` form.
+- 2026-10-24 02:55Z: A3 merged main (A4 #149, F3c #150) and brought the
+  control plane in line: `gen-configs.mjs` regenerated (worker and image
+  configs, `families-gen.ts` with `public_names`, `tasks`, `main_tree` and
+  the two new variants), `CATALOG_EXCEPTIONS`, `ENGINE_RECIPE_ALIASES`, the
+  `recipe-trees.ts` override and the LongLive `weights_extra` removed,
+  `serverless/serves.ts` reads `[[models]] variant` and public names. Review
+  fixes: e2e scripts write and edit the variant form (with guards), retired
+  config forms get named refusals, `[[models]]` resolve against one manifest
+  snapshot. Control: `gen-configs.mjs --check`, typecheck, vitest 580/580;
+  pod: `check.sh` 1000 passed / 0 failed, serve `--features otel` 143
+  passed, manifest + engine + protocol 292, fmt, clippy, cuda check green.

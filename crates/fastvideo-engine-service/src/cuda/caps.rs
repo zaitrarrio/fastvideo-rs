@@ -881,13 +881,19 @@ pub struct ModelEntryCfg {
 /// family files under `layout`).
 pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<CudaModel, String> {
     let cat = catalog(layout).map_err(|err| err.to_string())?;
+    model_from_catalog(&cat, e)
+}
+
+/// [`model_from_config`] against an already projected catalog (one parse of
+/// the family files for every entry of a config).
+pub fn model_from_catalog(cat: &[CudaModel], e: &ModelEntryCfg) -> Result<CudaModel, String> {
     if e.variant.trim().is_empty() {
         return Err(format!(
             "model `{}`: `variant` names the family-file variant (a variant id, a served name or a tier alias)",
             e.id
         ));
     }
-    let mut m = find(&cat, &e.variant).ok_or_else(|| {
+    let mut m = find(cat, &e.variant).ok_or_else(|| {
         format!(
             "model `{}`: variant `{}` is not in families/*.toml ({})",
             e.id,

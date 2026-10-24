@@ -473,7 +473,7 @@
           "type": "string"
         },
         "public_names": {
-          "description": "The public API names (the MiniMax `model` ids, `MiniMax-H3-Turbo`) a\nserver maps onto this variant when it serves it: what the serve\nconfigs' `[aliases]` tables used to list by hand. Several variants may\nclaim one name (a tier and its task companion): the server gives it\nto the served model that generates from text, else the first listed.",
+          "description": "The public API names (the MiniMax `model` ids, `MiniMax-H3-Turbo`) a\nserver maps onto this variant when it serves it: what the serve\nconfigs' `[aliases]` tables used to list by hand. Several variants may\nclaim one name (a tier and its task companion): the server gives it\nto the served model that generates from text, else to the first by\nmodel id.",
           "type": "array",
           "items": {
             "type": "string"

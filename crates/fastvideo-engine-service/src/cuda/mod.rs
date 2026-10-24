@@ -69,8 +69,8 @@ pub mod wan;
 #[cfg(feature = "cuda")]
 pub use backend::{install_process_plan, CudaBackend, CudaBackendConfig, Mp4Encoder};
 pub use caps::{
-    catalog, find, gate_h3_1080p, model_from_config, CatalogError, CudaModel, CudaRecipe, H3Recipe,
-    Ltx2Recipe, LtxStage2, LtxVersion, ModelEntryCfg, ProcessPlan, SfWanRecipe, WanDecoder,
-    WanRecipe, WanSampler, WarmupMode, WeightLayout, WARMUP_ENV,
+    catalog, find, gate_h3_1080p, model_from_catalog, model_from_config, CatalogError, CudaModel,
+    CudaRecipe, H3Recipe, Ltx2Recipe, LtxStage2, LtxVersion, ModelEntryCfg, ProcessPlan,
+    SfWanRecipe, WanDecoder, WanRecipe, WanSampler, WarmupMode, WeightLayout, WARMUP_ENV,
 };
 pub use families::FAMILIES_DIR_ENV;

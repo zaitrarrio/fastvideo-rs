@@ -15,6 +15,8 @@ import {
 } from "../../src/cluster/payloads";
 import { assertRegionsAvailable, AVAILABLE_REGIONS, defaultSpec, migrateSpec, normalizeSpec, POOL_PRESETS, REGIONS, TEMPLATES, type RegionId } from "../../src/cluster/spec";
 import CATALOG from "../../src/cluster/catalog.json";
+import { mustVariant } from "../../src/families";
+import { configModelRefs } from "../../src/presets";
 import { OUTPUTS } from "../../gen-configs.mjs";
 import { WORKER_CONFIGS } from "../../src/cluster/worker-configs";
 
@@ -141,7 +143,7 @@ describe("templates and pool presets", () => {
     }
     const s = normalizeSpec({ name: "a", pools: [{ id: "ltx-pro", count: 2 }, { id: "longlive" }] });
     expect(s.pools[0]).toMatchObject({ id: "ltx-pro", variant: "ltx", count: 2, models: [{ id: "ltx25-distill-dense", family: "ltx2", recipe: "ltx-pro" }] });
-    expect(s.pools[0]!.config_toml).toMatch(/^recipe = "ltx-pro"$/m);
+    expect(s.pools[0]!.config_toml).toMatch(/^variant = "ltx25-distill-dense"$/m);
     expect(s.pools[1]).toMatchObject({ id: "longlive", variant: "sfwan", count: 1 });
     // A pool's own config wins over the preset's inline one.
     const own = normalizeSpec({ name: "b", pools: [{ id: "ltx-pro", config: "/etc/fv/runpod-ltx-pro.toml" }] }).pools[0]!;
@@ -162,8 +164,10 @@ describe("templates and pool presets", () => {
         expect(stage, `${pr.id}: the ${p.variant} image carries ${file}`).toContain(`configs/serve/${file}`);
         toml = readFileSync(join(repo, "configs/serve", file), "utf8");
       }
-      const ids = [...toml.matchAll(/^\[\[models\]\]\nid = "([^"]+)"\nfamily = "([^"]+)"\nrecipe = "([^"]+)"/gm)].map((m) => ({ id: m[1], family: m[2], recipe: m[3] }));
-      expect(p.models, pr.id).toEqual(ids);
+      // The worker config names variants (plan A3); the preset's models are the same ids, families and variants.
+      const cfg = configModelRefs(toml);
+      expect(p.models!.map((m) => [m.id, m.family]), pr.id).toEqual(cfg.map((m) => [m.id, m.family]));
+      for (const [i, m] of p.models!.entries()) expect(mustVariant(m.recipe).id, `${pr.id}: ${m.id}`).toBe(mustVariant(cfg[i]!.recipe).id);
       for (const m of p.models!) expect(CATALOG.recipes.find((r) => r.id === m.recipe)?.serve, `${pr.id}: ${m.recipe}`).toBe(true);
       expect(pr.description.length).toBeGreaterThan(10);
     }

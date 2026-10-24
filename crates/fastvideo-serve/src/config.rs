@@ -1428,6 +1428,41 @@ pub struct Config {
     pub dispatch: DispatchCfg,
 }
 
+/// The config forms plan A3 retired, each with what replaces it: the
+/// `[aliases]` table (the variants' `public_names`) and a `[[models]]` entry
+/// without `variant` or with `family` / `recipe`.
+fn retired_forms(raw: &toml::Table) -> Result<(), String> {
+    if raw.contains_key("aliases") {
+        return Err("[aliases] is no longer a table: the public API names (MiniMax-H3-Turbo, ...) are each \
+             variant's `public_names` in families/*.toml, and the tier aliases are the engine's"
+            .to_owned());
+    }
+    let Some(toml::Value::Array(models)) = raw.get("models") else {
+        return Ok(());
+    };
+    for (i, m) in models.iter().enumerate() {
+        let Some(m) = m.as_table() else { continue };
+        let label = m
+            .get("id")
+            .or_else(|| m.get("variant"))
+            .and_then(toml::Value::as_str)
+            .map_or_else(|| format!("#{i}"), |s| format!("`{s}`"));
+        for (k, why) in ModelCfg::RETIRED_KEYS {
+            if m.contains_key(k) {
+                return Err(format!(
+                    "[[models]] {label}: `{k}` is no longer a key: {why}"
+                ));
+            }
+        }
+        if !m.contains_key("variant") {
+            return Err(format!(
+                "[[models]] {label}: `variant` is required (a variant id, a served name or a tier alias of families/*.toml)"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Why a config was refused.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -1474,6 +1509,11 @@ fn parse_enum<T: for<'de> Deserialize<'de>>(name: &str, v: &str) -> Result<T, Co
 impl Config {
     /// Parses TOML text.
     pub fn from_toml(text: &str, origin: &str) -> Result<Self, ConfigError> {
+        // The pre-A3 forms get a message naming their replacement before
+        // serde's generic "unknown field" / "missing field" could.
+        if let Ok(raw) = text.parse::<toml::Table>() {
+            retired_forms(&raw).map_err(|m| ConfigError::Invalid(format!("{origin}: {m}")))?;
+        }
         toml::from_str(text).map_err(|e| ConfigError::Parse(origin.to_owned(), e))
     }
 
@@ -2451,13 +2491,25 @@ body_max_mb = 64
         assert!(e.to_string().contains("bindd"), "{e}");
         // The pre-A3 model keys and the `[aliases]` table name their replacement.
         let e = Config::from_toml("[aliases]\n\"MiniMax-H3\" = \"fasth3\"\n", "t").unwrap_err();
-        assert!(e.to_string().contains("aliases"), "{e}");
+        assert!(e.to_string().contains("public_names"), "{e}");
         for old in ["family = \"h3\"", "recipe = \"h3-turbo\""] {
-            let c = Config::from_toml(&format!("[[models]]\nvariant = \"h3-turbo\"\n{old}\n"), "t")
-                .unwrap();
-            let e = c.validate().unwrap_err().to_string();
+            let e = Config::from_toml(&format!("[[models]]\nvariant = \"h3-turbo\"\n{old}\n"), "t")
+                .unwrap_err()
+                .to_string();
             assert!(e.contains("no longer a key"), "{old}: {e}");
         }
+        // A whole pre-A3 block: the first retired key is named, not serde's "missing field".
+        let e = Config::from_toml(
+            "[[models]]\nid = \"fasth3\"\nfamily = \"h3\"\nrecipe = \"h3-turbo\"\n",
+            "t",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("`fasth3`: `family` is no longer a key"), "{e}");
+        let e = Config::from_toml("[[models]]\nid = \"fasth3\"\n", "t")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("`variant` is required"), "{e}");
         let c = Config::from_toml("[[models]]\nvariant = \"\"\n", "t").unwrap();
         assert!(c.validate().is_err());
     }

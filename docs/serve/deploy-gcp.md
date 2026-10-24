@@ -52,8 +52,9 @@ branch):
 - `ltx-turbo` and `wan-turbo` became `ltx` and `wan`, named after the Runpod
   pools. The old `gcp-wan-turbo.toml` had `recipe = "wan-turbo"` with the 1.3B
   weights. Since `wan-turbo` now names FastWan2.2 5B (`runpod-wan5b.toml`), that
-  would have loaded the 5B model from the 1.3B tree. `gcp-wan.toml` uses
-  `recipe = "fastwan21-1.3b"` as `runpod-wan.toml` does.
+  would have loaded the 5B model from the 1.3B tree. `gcp-wan.toml` names
+  the `fastwan21-1.3b` variant as `runpod-wan.toml` does (since plan A3,
+  `[[models]] variant = "fastwan21-1.3b"`; there is no `recipe` key).
 - The worker role, the default EU region, the label-based reaper, the idle
   stop and optional TLS were added. Weights are verified on the host, because
   the per-variant serve images ship no scripts. Weight revisions come from

@@ -54,9 +54,10 @@ udp_port = 40110
 tcp_port = 40100
 public_ip = "127.0.0.1"
 TOML
-  sed -e 's/^id = "longlive-1.3b"/id = "ltx25-distill-sol"/' -e 's/^family = "wan"/family = "ltx2"/' -e 's/^recipe = "sfwan21-1.3b"/recipe = "ltx-turbo"/' \
+  sed -e 's/^variant = "longlive-1.3b"/variant = "ltx25-distill-sol"/' \
       -e 's#^weights = .*#weights = "/workspace/weights/ltx25"#' -e '/^longlive = /d' -e 's#fastvideo/longlive#fastvideo/ltx-turbo#' $WK/fv.toml > $WK/fv-ltx.toml
-  grep -E "^(id|family|recipe|weights|fal_apps)" $WK/fv-ltx.toml
+  grep -q '^variant = "ltx25-distill-sol"$' $WK/fv-ltx.toml || { log "fv-ltx.toml: the longlive [[models]] variant line was not found"; exit 1; }
+  grep -E "^(variant|id|weights|fal_apps)" $WK/fv-ltx.toml
   ls $W/ltx25 | head
   log "setup done"
   ;;

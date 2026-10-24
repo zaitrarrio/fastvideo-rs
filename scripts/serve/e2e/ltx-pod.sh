@@ -54,7 +54,7 @@ entry_cmd() {
   local b64
   b64="$(base64 -w0 "${FV_SERVE_TOML:-$ROOT/configs/serve/runpod-ltx.toml}")"
   watchdog_cmd
-  printf '%s' "echo $b64 | base64 -d | sed -e \"s/^recipe = \\\"ltx-turbo\\\"/recipe = \\\"\$FV_LTX_RECIPE\\\"/\" -e \"s/^id = \\\"ltx25-distill-sol\\\"/id = \\\"ltx25-\$FV_LTX_RECIPE\\\"/\" -e \"s#fastvideo/ltx-turbo#fastvideo/\$FV_LTX_RECIPE#\" > /tmp/fv-ltx.toml && cat /tmp/fv-ltx.toml | grep -E '^(id|recipe|fal_apps)' && exec /opt/fastvideo-rs/bin/fv-serve --config /tmp/fv-ltx.toml"
+  printf '%s' "echo $b64 | base64 -d | sed -e \"s/^variant = \\\"ltx25-distill-sol\\\"/variant = \\\"\$FV_LTX_RECIPE\\\"\\nid = \\\"ltx25-\$FV_LTX_RECIPE\\\"/\" -e \"s#fastvideo/ltx-turbo#fastvideo/\$FV_LTX_RECIPE#\" > /tmp/fv-ltx.toml && grep -q \"^variant = \\\"\$FV_LTX_RECIPE\\\"\" /tmp/fv-ltx.toml && cat /tmp/fv-ltx.toml | grep -E '^(variant|id|fal_apps)' && exec /opt/fastvideo-rs/bin/fv-serve --config /tmp/fv-ltx.toml"
 }
 
 payload() { # $1 image $2 gpu $3 name $4 keyhash $5 recipe

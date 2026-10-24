@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import CATALOG from "../../src/cluster/catalog.json";
 import { defaultSpec, FAMILY_PRESETS, FASTH3_FAMILY_MEMBERS, H3_FAMILY_MEMBERS, LTX_FAMILY_MEMBERS, MODEL_PRESETS, normalizeSpec, POOL_PRESETS, poolModelFamilies, STREAMING_FAMILY_MEMBERS, TEMPLATES, type ModelRef } from "../../src/cluster/spec";
 import type { Env } from "../../src/env";
+import { mustVariant } from "../../src/families";
 import { H3_DRAFT } from "../../src/presets";
 import { weightsPlan, weightsSource } from "../../src/providers";
 import { r2Bytes, r2DiskGb } from "../../src/r2weights";
@@ -19,8 +20,12 @@ const preset = (id: string) => POOL_PRESETS.find((p) => p.id === id)!;
 const modelsOf = (ids: string[]) => ids.flatMap((id) => preset(id).pool.models || []);
 const byId = (ms: ModelRef[]) => [...ms].sort((a, b) => a.id.localeCompare(b.id));
 const env = {} as Env;
-/** A family config's [[models]] blocks: id, resident. */
-const blocks = (toml: string) => toml.split(/^\[\[models\]\]$/m).slice(1).map((b) => ({ id: /^id = "([^"]+)"/m.exec(b)![1]!, resident: /^resident = (true|false)/m.exec(b)?.[1] }));
+/** A family config's [[models]] blocks: id (default: the variant's id), resident. */
+const blocks = (toml: string) =>
+  toml
+    .split(/^\[\[models\]\]$/m)
+    .slice(1)
+    .map((b) => ({ id: /^id = "([^"]+)"/m.exec(b)?.[1] ?? mustVariant(/^variant = "([^"]+)"/m.exec(b)![1]!).id, resident: /^resident = (true|false)/m.exec(b)?.[1] }));
 
 describe("family templates: one pod per family", () => {
   it("every family template is ONE pool, one worker, a family preset (wan: the wan preset)", () => {
@@ -60,13 +65,14 @@ describe("family templates: one pod per family", () => {
     const want = CATALOG.models.filter((m) => m.family === "ltx2" && !NO_PRESET.has(m.id)).map((m) => m.id).sort();
     expect(preset("ltx-family").pool.models!.map((m) => m.id).sort()).toEqual(want);
   });
-  it("streaming: the presets whose recipes caps.rs builds as causal (SF-Wan, LongLive), on one pod", () => {
-    const caps = readFileSync(join(repo, "crates/fastvideo-engine-service/src/cuda/caps.rs"), "utf8");
-    const causal = caps
-      .split("CudaModel::new(")
+  it("streaming: the presets whose variants are causal (SF-Wan, LongLive), on one pod", () => {
+    // The variants whose engine recipe is the SF-Wan causal rollout (families/wan.toml `engine.family = "sf_wan"`).
+    const wan = readFileSync(join(repo, "families/wan.toml"), "utf8");
+    const causal = wan
+      .split(/^\[\[variants\]\]$/m)
       .slice(1)
-      .filter((chunk) => chunk.includes("CudaRecipe::SfWan("))
-      .map((chunk) => /^\s*"([^"]+)"/.exec(chunk)?.[1]);
+      .filter((chunk) => /^family = "sf_wan"$/m.test(chunk))
+      .map((chunk) => /^id = "([^"]+)"/m.exec(chunk)?.[1]);
     expect(causal.length).toBeGreaterThan(0);
     expect(CATALOG.recipes.filter((r) => (r as { stream?: string }).stream === "causal").map((r) => r.id).sort()).toEqual([...new Set(causal)].sort());
     expect(STREAMING_FAMILY_MEMBERS).toEqual(["sfwan", "longlive"]);

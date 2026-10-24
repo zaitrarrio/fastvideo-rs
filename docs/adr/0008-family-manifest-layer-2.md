@@ -185,6 +185,11 @@ are deleted. Five decisions:
    bare `${tae}` is the directory as a search path (the file the recipe
    reads there, if any, is listed by name); a bare `${weights}` is refused.
 
+Layer 2 is not yet a pinned public format: nothing outside this repository
+reads it, so A3 adds the required `serving` table and `public_names` within
+`schema = 1`; once a consumer outside the repository depends on it (the
+registry, a published runtime), such a change bumps `schema`.
+
 `engine.family` stays the recipe kind (`h3`, `ltx2`, `wan`, `sf_wan`), not
 the family id; there is no separate `kind` key. Two serve-config special
 cases became variants: `h3-lightx2v-turbo-v01` (the v0.1 Turbo LoRA, tree

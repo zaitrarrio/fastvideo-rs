@@ -247,7 +247,8 @@ pub struct VariantManifest {
     /// server maps onto this variant when it serves it: what the serve
     /// configs' `[aliases]` tables used to list by hand. Several variants may
     /// claim one name (a tier and its task companion): the server gives it
-    /// to the served model that generates from text, else the first listed.
+    /// to the served model that generates from text, else to the first by
+    /// model id.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub public_names: Vec<String>,
     /// Loaded before readiness when a deployment does not say otherwise.

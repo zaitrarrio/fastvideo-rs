@@ -17,7 +17,8 @@ case "${1:-}" in
   cfgs)
     { state </etc/fv/runpod-h3-max.toml; printf '%s' "$WEBRTC"; } >$E/cfg-h3max.toml
     # h3-draft alone (a second H3 DiT does not fit next to turbo on 80 GB).
-    state <$E/fv.toml | sed -e 's/^recipe = "h3-turbo"/recipe = "h3-draft"/' >$E/cfg-h3draft.toml
+    state <$E/fv.toml | sed -e 's/^variant = "fasth3-4step-vsa"/variant = "h3-draft"/' >$E/cfg-h3draft.toml
+    grep -q '^variant = "h3-draft"$' $E/cfg-h3draft.toml || { echo "cfg-h3draft.toml: the h3-turbo [[models]] variant line was not found" >&2; exit 1; }
     { state </etc/fv/runpod-ltx.toml; printf '%s' "$WEBRTC"; } >$E/cfg-ltx.toml
     cat >$E/cfg-sfwan.toml <<EOF
 [server]
