@@ -16,36 +16,17 @@ use axum::body::Body;
 use axum::http::Request;
 use fastvideo_serve::config::{Config, EngineBackendKind};
 use fastvideo_serve::{App, Overrides};
-use fastvideo_serve_kit::KeyRing;
 use serde_json::{Map, Value};
 use tower::ServiceExt;
 
-const KEY: &str = "sk-golden";
+mod common;
 
-fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
+use common::{configs, root};
+
+const KEY: &str = "sk-golden";
 
 fn golden_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goldens/param_specs.json")
-}
-
-/// Every shipped config: `configs/serve/*.toml` sorted by name, then the
-/// compat suite's.
-fn configs() -> Vec<(String, PathBuf)> {
-    let dir = root().join("configs/serve");
-    let mut out: Vec<(String, PathBuf)> = std::fs::read_dir(&dir)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|x| x == "toml"))
-        .map(|p| (p.file_stem().unwrap().to_string_lossy().into_owned(), p))
-        .collect();
-    out.sort();
-    out.push((
-        "compat-serve".to_owned(),
-        root().join("tests/compat/serve.toml"),
-    ));
-    out
 }
 
 async fn get(app: &axum::Router, uri: &str) -> (u16, Value) {
@@ -65,22 +46,9 @@ async fn get(app: &axum::Router, uri: &str) -> (u16, Value) {
     (status, v)
 }
 
-/// The config as the server loads it, with the environment a test needs.
+/// The config as the server loads it, with the golden's key.
 fn load(name: &str, path: &Path, state_dir: &Path) -> Config {
-    let text = std::fs::read_to_string(path).unwrap();
-    let mut c = Config::from_toml(&text, name).unwrap_or_else(|e| panic!("{name}: {e}"));
-    let mut env = BTreeMap::new();
-    env.insert("FV_API_KEYS".to_owned(), KeyRing::hash_hex(KEY));
-    env.insert("FV_URL_SIGNING_KEY".to_owned(), "golden-key".to_owned());
-    env.insert("FV_STATE_DIR".to_owned(), state_dir.display().to_string());
-    env.insert("FV_PUBLIC_BASE_URL".to_owned(), "http://fv.test".to_owned());
-    env.insert("FV_WEIGHTS".to_owned(), "/workspace/weights".to_owned());
-    c.apply_env(&env).unwrap();
-    // The capabilities are rendered on the fake engine: local stores.
-    c.jobs.backend = fastvideo_serve::config::JobBackend::Memory;
-    c.artifacts.backend = fastvideo_serve::config::ArtifactBackend::Local;
-    c.validate().unwrap_or_else(|e| panic!("{name}: {e}"));
-    c
+    common::load(name, path, state_dir, &[KEY.to_owned()])
 }
 
 /// The config's specs, grouped by surface (in the order served).

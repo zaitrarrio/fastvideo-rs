@@ -100,7 +100,7 @@ parallel agents.
 |---|---|---|---|---|---|
 | E1 | Vendored upstream specs under `docs/serve/specs/` with a drift script; `schemars` schemas for native and director | drift script green | CI | none | merged (#144; schemars schemas deferred to E2) |
 | E2 | `ParamSpec` per (surface, model) derived from the manifest caps; adapters validate from it; duplicated constants deleted; LTX body typed | one source for every limit | pod; serve-compat | A3 | merged (#158) |
-| E3 | Certification matrix harness over every surface, parameter x surface x model TSV, CI assertion that every parameter has a valid and an invalid case | TSV with no empty cell | pod | E2 | in progress |
+| E3 | Certification matrix harness over every surface, parameter x surface x model TSV, CI assertion that every parameter has a valid and an invalid case | TSV with no empty cell | pod | E2 | pr (#164) |
 | E4 | `cargo-llvm-cov` on the pod; adapter `cargo test` in a GitHub workflow | coverage artifact in CI | CI | none | merged (#148) |
 | E5 | Upstream captures as fixtures | depends on owner keys | manual | owner | blocked |
 
@@ -477,3 +477,19 @@ ran (pod id, $/hr), result, cost.
   `guidance_scale_2` message list). Started B3b, B5 and E3; C2 opened
   #159, under review, its GPU boot smoke running (serve image `:ltx`, PR
   `fv-boot` from the build pod, EU volume).
+- 2026-10-24 06:30Z: E3 opened a draft PR (`claude/e3-cert-matrix`): the
+  certification matrix `crates/fastvideo-serve/tests/cert_matrix.rs`
+  (ADR-0016) drives every spec the 36 shipped configs serve at
+  `/fv/v1/params`, the director `configure` / `prompt` specs
+  (`fastvideo_fal::params::director_specs`) and the Reactor command tables
+  (`CommandTable::param_specs`) with a valid and every invalid case through
+  the real router on the fake engine (8,065 requests, 9-24 s on the pod);
+  `docs/serve/certification.tsv`: 4,630 rows (290 base, 3,863 parameter,
+  290 unknown-field, 187 pair), 8 surfaces, 290 distinct specs, 36 engine
+  models, no empty cell, drift-checked; CI assertion
+  `every_param_has_a_valid_and_an_invalid_case` with 2 reasoned exemptions.
+  No 5xx or panic; 1,114 rows carry findings (15 kinds, listed with
+  candidate fixes in docs/serve/params.md; no wire change). On build pod
+  `pzocv1keasg3xn`: protocol + serve + fal + reactor 389 passed,
+  `scripts/serve/check.sh` 1035 passed / 0 failed in 113 binaries,
+  `tests/compat/run.sh` 10/10, fmt and clippy `-D warnings` green.
