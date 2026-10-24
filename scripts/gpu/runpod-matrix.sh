@@ -16,8 +16,14 @@
 #   FV_LPIPS=1: fetch-lpips.sh, then compare-clips adds LPIPS(alex).
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
+#
+# FV_DRY_RUN=1: no GPU and no weights needed. Each cell's command line is
+# logged instead of run (weights not verified, no baseline fetched), so a
+# family's cells can be read off-pod: FV_DRY_RUN=1 FV_WORK=/tmp/fv-dry
+# FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b6.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
+FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|b6|h3arms|h3attn}"
+DRY_RUN="${FV_DRY_RUN:-0}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -59,7 +65,7 @@ if [[ ! -e $SCRATCH/fv-libs/libcupti.so ]]; then
   [[ -e "$cupti_src" ]] && ln -sf "$(readlink -f "$cupti_src")" "$SCRATCH/fv-libs/libcupti.so"
 fi
 export LD_LIBRARY_PATH="$SCRATCH/fv-libs:/lib/x86_64-linux-gnu:/usr/local/cuda-13.0/lib64:/usr/local/cuda/lib64:/usr/local/cuda/targets/x86_64-linux/lib:${LD_LIBRARY_PATH:-}"
-[[ -e $SCRATCH/fv-libs/libcudnn.so ]] || { echo "FATAL: libcudnn.so not linked" | tee -a "$LOG"; exit 2; }
+[[ -e $SCRATCH/fv-libs/libcudnn.so || "$DRY_RUN" == 1 ]] || { echo "FATAL: libcudnn.so not linked" | tee -a "$LOG"; exit 2; }
 
 log() {
   local line
@@ -135,6 +141,10 @@ run_cell() {
     log "skip $name (not in FV_CELLS)"
     return 0
   fi
+  if [[ "$DRY_RUN" == 1 ]]; then
+    log "dry-run $name: $(printf '%q ' "$@")"
+    return 0
+  fi
   if ! gpu_clean; then
     mkdir -p "$RUNS/$name"
     write_json "$RUNS/$name/summary.json" "$(printf '{"cell":"%s","family":"%s","exit":null,"skipped":"gpu not clean"}' "$name" "$FAMILY")"
@@ -182,7 +192,7 @@ gated_cell() {
     log "skip $name (not in FV_CELLS)"
     return 0
   fi
-  if ! FV_WEIGHTS="$W" bash "$VERIFY" "$wcell" >"$RUNS/$name.weights.log" 2>&1; then
+  if [[ "$DRY_RUN" != 1 ]] && ! FV_WEIGHTS="$W" bash "$VERIFY" "$wcell" >"$RUNS/$name.weights.log" 2>&1; then
     mkdir -p "$RUNS/$name"
     log "SKIP $name: weights incomplete"
     tee -a "$LOG" <"$RUNS/$name.weights.log"
@@ -236,6 +246,10 @@ tae_gated_cell() {
 compare_one() {
   local tag="$1" bf="$2" cf="$3" dir="$RUNS/compare"
   shift 3
+  if [[ "$DRY_RUN" == 1 ]]; then
+    log "dry-run compare $tag $*"
+    return 0
+  fi
   mkdir -p "$dir"
   if ! compgen -G "$bf/*.png" >/dev/null || ! compgen -G "$cf/*.png" >/dev/null; then
     log "skip compare $tag (frames missing)"
@@ -390,13 +404,15 @@ oracle_diff() {
 }
 
 log "matrix start image=$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null || echo unknown)"
-if [[ ! -x "$BIN" ]]; then
-  log "FATAL: fv-gpucheck missing at $BIN"
-  exit 2
+if [[ "$DRY_RUN" != 1 ]]; then
+  if [[ ! -x "$BIN" ]]; then
+    log "FATAL: fv-gpucheck missing at $BIN"
+    exit 2
+  fi
+  command -v nvidia-smi >/dev/null || { log "FATAL: nvidia-smi missing"; exit 2; }
+  nvidia-smi -L | tee -a "$LOG"
+  nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader | tee -a "$LOG"
 fi
-command -v nvidia-smi >/dev/null || { log "FATAL: nvidia-smi missing"; exit 2; }
-nvidia-smi -L | tee -a "$LOG"
-nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader | tee -a "$LOG"
 
 case "$FAMILY" in
   mmaudio)

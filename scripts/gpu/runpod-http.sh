@@ -17,6 +17,11 @@
 #   runpod-http.sh attach <pod> <tag>  re-attach to a running pod (wait, collect, delete)
 #   runpod-http.sh status <pod>  print live.log from a running pod
 #   runpod-http.sh down <pod>    destroy a pod
+#   runpod-http.sh plan [sha] [tag]  print the pod body `run` would send (no pod, no
+#                                price check): the payload golden of fv-lab pod up
+#                                (scripts/gpu/tests/fv-lab-goldens.sh). The volume's
+#                                datacentre comes from FV_PLAN_VOLUME="<id> <dc>" or,
+#                                without it, the API lookup `run` makes.
 #
 # The pod's start command runs everything; results are published read-only on
 # port 8000 (python http.server over /workspace/runs) and fetched through
@@ -254,6 +259,29 @@ exec sleep infinity
 EOF
 }
 
+# $1 = image, $2 = run tag, $3 = mode, $4 = volume id, $5 = its datacentre:
+# the PodCreateInput `create_pod` sends (and `plan` prints).
+pod_payload() {
+  local image="$1" tag="$2" mode="$3" vol="$4" dc="$5" files="" f
+  if [[ -n "${FV_POD_FILES:-}" ]]; then
+    local ft
+    ft="$(mktemp -d)"
+    for f in $FV_POD_FILES; do cp "$f" "$ft/" || die "FV_POD_FILES: $f"; done
+    files="$(tar -czf - -C "$ft" . | base64 -w0)"
+    rm -rf "$ft"
+  fi
+  jq -n --arg files "$files" --arg name "${FV_POD_PREFIX:-fv}-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
+    --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-120}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" \
+    --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" '{
+      name: $name, imageName: $image, cloudType: $cloud, computeType: "GPU",
+      gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
+      ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd]
+    } + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)
+      + (if $files == "" then {} else {env: {FV_POD_FILES_TGZ: $files}} end)
+      + (if $vol == "" then {} else
+      {networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc]} end)'
+}
+
 create_pod() {
   local image="$1" tag="$2" mode="$3" vol="" dc="" payload resp id dph
   # RUNPOD_NO_VOLUME=1: no network volume, any datacenter with stock (for
@@ -263,24 +291,7 @@ create_pod() {
     read -r vol dc < <(volume) || true
     [[ -n "${vol:-}" ]] || die "no network volume ($VOL_NAME)"
   fi
-  local files="" f
-  if [[ -n "${FV_POD_FILES:-}" ]]; then
-    local ft
-    ft="$(mktemp -d)"
-    for f in $FV_POD_FILES; do cp "$f" "$ft/" || die "FV_POD_FILES: $f"; done
-    files="$(tar -czf - -C "$ft" . | base64 -w0)"
-    rm -rf "$ft"
-  fi
-  payload="$(jq -n --arg files "$files" --arg name "${FV_POD_PREFIX:-fv}-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
-    --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-120}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" \
-    --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" '{
-      name: $name, imageName: $image, cloudType: $cloud, computeType: "GPU",
-      gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
-      ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd]
-    } + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)
-      + (if $files == "" then {} else {env: {FV_POD_FILES_TGZ: $files}} end)
-      + (if $vol == "" then {} else
-      {networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc]} end)')"
+  payload="$(pod_payload "$image" "$tag" "$mode" "$vol" "$dc")"
   # The price cap on Runpod's quote, BEFORE the create (scripts/gpu/runpod-price.sh).
   fv_runpod_price_ok "$GPU" "$MAX_DPH" "${RUNPOD_CLOUD_TYPE:-SECURE}" "$dc" || die "not creating a pod on \"$GPU\" over the \$$MAX_DPH/hr cap"
   log "create pod gpu=\"$GPU\" image=$image volume=${vol:-none} dc=${dc:-any} cloud=${RUNPOD_CLOUD_TYPE:-SECURE} quoted=\$$FV_QUOTED_DPH/hr"
@@ -483,7 +494,17 @@ case "${1:-}" in
     log "destroy pod $id"
     rest DELETE "/pods/$id" >/dev/null || log "WARN: delete failed for $id"
     exit $rc ;;
+  plan)
+    # The body `run` would send for <sha> and <tag>; nothing is created.
+    sha="${2:-$(git -C "$ROOT" rev-parse --short=7 origin/main)}"
+    tag="${3:-$sha-$(date -u +%m%d%H%M)}"
+    vol="" dc=""
+    if [[ "${RUNPOD_NO_VOLUME:-0}" != 1 ]]; then
+      if [[ -n "${FV_PLAN_VOLUME:-}" ]]; then read -r vol dc <<<"$FV_PLAN_VOLUME"; else read -r vol dc < <(volume) || true; fi
+      [[ -n "${vol:-}" ]] || die "no network volume ($VOL_NAME)"
+    fi
+    pod_payload "${RUNPOD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-$sha}" "$tag" run "$vol" "$dc" ;;
   status) proxy "${2:?pod}" "$FAMILY/" ;;
   down) rest DELETE "/pods/${2:?pod}" >/dev/null && echo "deleted ${2}" ;;
-  *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
