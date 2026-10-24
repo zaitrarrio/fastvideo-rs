@@ -375,7 +375,7 @@ Legend for the "Cost" column:
 | World / action models | Matrix-Game 2.0 (causal, self-forcing variants) and 3.0, HunyuanGameCraft, HY-WorldPlay (bidirectional, AR), LingBot-World (Base-Cam, Base-Act, Fast), LingBot-World-2 14B causal-fast, DreamX-World 5B (Cam, AR), `FastVideo/Waypoint-1-Small-Diffusers` | action/camera-driven streaming I2V | R (most) | medium each; these are Reactor-style "world model" products |
 | LingBot-Video | `FastVideo/LingBot-Video-{Dense-1.3B,MoE-30B-A3B}-Diffusers` | T2V | R | medium |
 | Image models | FLUX.1-dev, FLUX.2 (dev, klein 4B/9B), SD3.5-medium, Z-Image-Turbo, GLM-Image | T2I (GLM also edit) | R | — |
-| FastMetal-QAD (MLX) | `FastVideo/FastMetal-{1.3B,5B,14B}-QAD` | Apple Silicon T2V | scaffold (`fastvideo-mlx`) | out of scope for serving |
+| FastMetal-QAD (MLX) | `FastVideo/FastMetal-{1.3B,5B,14B}-QAD` | Apple Silicon T2V | none (the `fastvideo-mlx` scaffold was retired in plan B6) | out of scope for serving |
 | Training-side techniques | VSA, sparse distillation, DMD2, Self-Forcing causal distillation, Attn-QAT, LoRA fine-tuning | — | VSA ✓, DMD ✓, causal DMD ✓ | — |
 | **Not in FastVideo** | **VACE** (issue #1435), InfiniteTalk/MultiTalk/OmniAvatar, StreamDiffusionV2, Krea realtime, SANA-Streaming | — | — | no FastVideo oracle; use each upstream repo |
 

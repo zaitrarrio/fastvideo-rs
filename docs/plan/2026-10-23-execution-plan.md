@@ -110,7 +110,7 @@ parallel agents.
 |---|---|---|---|---|---|
 | B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | todo |
 | B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | pr (#161) |
-| B6 | `H3Pipeline::load` and `Ltx2Pipeline::load` split into plan, open, place, fuse; dead code (`TensorBackend`, mlx scaffold) retired | engine lifecycle testable on CPU | pod | B1 | todo |
+| B6 | `H3Pipeline::load` and `Ltx2Pipeline::load` split into plan, open, place, fuse; dead code (`TensorBackend`, mlx scaffold) retired | engine lifecycle testable on CPU | pod | B1 | pr |
 
 ## 3. Order of execution
 
@@ -569,3 +569,26 @@ ran (pod id, $/hr), result, cost.
   arms and the LTX cache arm, max abs diff 0; every H3 and LTX cell loads
   through `load_with_settings`; fasth3-8step skipped (not on the EU
   volume). Evidence: `artifacts/runpod/techniques/93696e5-10240625/`.
+- 2026-10-24 09:20Z: B6 opened as a draft PR (`claude/b6-loader-split`,
+  ADR-0017): `H3Pipeline::load_with_settings` and
+  `Ltx2Pipeline::load_with_settings` are the composition of four typed
+  stages (`h3/pipeline/load.rs`, `ltx2/pipeline/load.rs`): the plan (pure
+  over the options, the settings snapshot, configs and manifests and a
+  `rt::load_stages::DeviceFacts` measured once), open (maps and read-ahead),
+  place (the device; adapter merge per linear) and fuse (TeaCache, the merge
+  report; LTX-2's LoRAs fuse per request). Same tensors, order, precisions,
+  placements, `load/io` lines and ledger bookings; only non-evidence log
+  lines and failure timing moved (listed in the ADR). CPU lifecycle:
+  plan goldens for 9 H3 and 7 LTX-2 served / `techniques` configurations,
+  H3 plan + open on a tiny snapshot, the full LTX-2 plan → open → place →
+  fuse on the tiny fixtures (H3 place needs production dims; neither
+  family's generate runs on the CPU). Retired: `fastvideo-ops::TensorBackend`
+  and its host twin, `CudarcBackend`, the `fastvideo-mlx` crate (and the
+  `mlx-rs` lock tree); kept: `fastvideo-ops::fp8`, the CUDA reader of the
+  MLX H3 export (`h3/mlx.rs`, chosen by the checkpoint). On build pod
+  (agent `b6-loader`): models + cudarc + core + engine-service 1378 passed,
+  0 failed; workspace lib 1916 passed; fmt and workspace clippy `-D
+  warnings` green; `--features cuda` check of cudarc, engine-service,
+  gpucheck and core green (the base's warnings only); `scripts/serve/check.sh`
+  1037 passed; `scripts/gpu/lint.sh` green. GPU `techniques` byte-identity
+  family pending (coordinator).

@@ -1182,3 +1182,23 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0010-settings-layer.md (amendment B3b)
 - Verification: `techniques::registry::tests` (a Wan profile is refused as before, small families compose nothing), `workspace_check::family_specs_declare_their_techniques_reads`, `fastvideo-core` `family::tests::every_family_has_a_model_spec`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-loader-stages
+- Trigger: plan B6: split `H3Pipeline::load` (one ~880-line function) and `Ltx2Pipeline::load` into plan, open, place, fuse; "engine lifecycle testable on CPU"
+- Options: extract helper functions inside the existing bodies; four typed stages with the device read once into a facts value the plan decides on; four stages with the plan reading the device itself
+- Decision: **four typed stages per family (`H3LoadPlan` / `Ltx2LoadPlan::new` → `open` → `place` → `fuse`), `load_with_settings` their composition; the plan is pure over the options, the settings snapshot, configs and manifests and a `DeviceFacts` value (`free`, capability, device-expected, bf16 activations, linear route) measured once before it; pure forms of the runtime's device-dependent precision rules (`QuantMode::resolve_on`, `mxfp8_wanted_on`, `planned_linears_on`, `require_tensor_cores_on`) with the live functions defined as them; an adapter merge stays applied per linear in place (merge before quantization, no second copy) with the plan deciding it and fuse holding the passes over the finished model (TeaCache, the merge report); LTX-2's fuse records strength 0 (its LoRAs fuse per request)**
+- Reason: the plan becomes a value that can be pinned in goldens for served configurations on given cards without a GPU or weights; the stage order is the statement order, so tensors, precisions, placements, `load/io` lines and ledger bookings are unchanged; a post-placement merge would change numerics or double the DiT's memory
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: 0017
+- Verification: build pod: plan goldens (`tests/goldens/{h3,ltx2}_load_plan.txt`, 9 H3 and 7 LTX-2 configurations), H3 open on a tiny snapshot, the LTX-2 plan → open → place → fuse on the tiny fixtures, `QuantMode::resolve_on` against the live reader; GPU `techniques` byte-identity family by the coordinator
+
+### FVID · 2026-10-24 · FVID-2026-10-24-b6-retire-dead-code
+- Trigger: plan B6 / review §7.3 item 6: retire `TensorBackend` and the mlx scaffold, only what is unreachable
+- Options: delete; move out of the workspace (as oxide); keep
+- Decision: **delete `fastvideo-ops::TensorBackend` with its host reference (`HostBackend`, `HostTensor`, `Device`, `DType`, `OpsError`), `fastvideo-cudarc::CudarcBackend`, the unused `fastvideo-ops` dependency of `fastvideo-core` and `fastvideo-gpucheck`, and the `fastvideo-mlx` crate (its `mlx-rs` lock entries go with it); keep `fastvideo-ops::fp8` and the CUDA runtime's reader of FastVideo's MLX H3 export (`h3/mlx.rs`, the MLX key aliases, `rt::affine`)**
+- Reason: nothing called the trait but its own tests, and nothing depended on the scaffold (host stubs, no graph); the MLX H3 export reader is a live load path, chosen by the checkpoint (any H3 tree holding `mlx_h3_dit.json` loads through it, from the CLI or a serve config), even though no served variant or EU-volume tree ships one today; the scaffold stays readable in git history
+- Reversibility: cheap (git history)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: 0017 (and 0001's status)
+- Verification: workspace `cargo check` / clippy `-D warnings` with `--locked` on the regenerated lockfile, workspace lib tests

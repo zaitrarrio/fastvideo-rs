@@ -13,7 +13,7 @@ CLI generate path (since plan B2 the family's `VideoFamily` module, `crates/fast
 | 4 | GLM-Image | yes | yes | yes | yes | PNG | ByT5 glyph + AR text tower when dirs present; Hub probes |
 | 5 | Stable Audio | yes | yes | yes | yes | WAV | T5/CLIP text encode when present |
 | 5 | MMAudio | yes | yes | yes | yes | WAV | Synchformer visual encode when `image_encoder/` has `vfeat_extractor.*` |
-| 6 | FastMetal MLX | yes | mlx crate | n/a | separate | scaffold | Target-optional `mlx-rs` 0.25 on aarch64; host stubs elsewhere |
+| 6 | FastMetal MLX | — | — | — | — | retired | The `fastvideo-mlx` scaffold was retired in plan B6 (ADR-0017); the CUDA runtime still reads FastVideo's MLX H3 export (`h3/mlx.rs`) |
 | — | LTX I2V encode | yes | — | yes | — | — | Full encoder ResNet/downsample when keys present; else stem/stub |
 
 ## Landed this pass
@@ -24,11 +24,11 @@ CLI generate path (since plan B2 the family's `VideoFamily` module, `crates/fast
 - World DiT fuses: CameraNet / PRoPE / Action / cam injector / SigLIP probe+inject when keys present.
 - MMAudio: Synchformer visual path (`mmaudio/synchformer.rs`) — 16/8 clips → ~24 fps × 768-d sync features; clear error if `image_encoder/` has unrecognized keys.
 - GLM-Image: ByT5 glyph encode from Hub `text_encoder/`; AR text LM from `vision_language_encoder/` (no silent CLIP-only when AR/ByT5 packs exist).
-- MLX: `MetalGate` + optional target `mlx-rs` (`Array`/`ops::zeros`/`Device::gpu`); DiT/TAEHV still scaffold after gate.
+- MLX: the `fastvideo-mlx` scaffold (`MetalGate`, optional `mlx-rs`) was retired in plan B6; nothing generated through it.
 
 ## Still external-only
 
 - Full Hub weight download / auth for gated packs (SD3.5, FLUX, GLM, …).
 - Full 30-layer DiT / VAE decode parity (scaffolds load probes + shape-correct forward).
 - GLM AR **prior VQ `generate()`** loop (text tower hidden states wired; token upsample deferred).
-- Apple Silicon Metal DiT/TAEHV graphs (mlx-rs gate open on aarch64 + `--features mlx`).
+- Apple Silicon Metal DiT/TAEHV graphs (the scaffold crate was retired in plan B6; a port starts from git history, `crates/fastvideo-mlx` before B6).

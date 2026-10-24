@@ -1,6 +1,6 @@
 # ADR-0001: TensorBackend trait over Burn, Candle, Luminal, and cudarc
 
-- Status: Accepted (amended 2026-09-10; cudarc-primary 2026-09-10)
+- Status: Superseded (amended 2026-09-10; cudarc-primary 2026-09-10; the trait retired 2026-10-24, plan B6)
 - Date: 2026-09-09
 - Decision-id: FVID-2026-09-09-tensor-backend
 
@@ -72,3 +72,14 @@ record stays as the history of how cudarc became the sole path; the review
 `docs/gaps/2026-10-22-architecture-review.md` §4.2 and the execution plan
 `docs/plan/2026-10-23-execution-plan.md` (WP-B1) carry what happens next to
 the runtime layer.
+
+## Status 2026-10-24 (plan B6)
+
+`fastvideo_ops::TensorBackend`, its host reference (`HostBackend`,
+`HostTensor`, `Device`, `DType`, `OpsError`) and `fastvideo-cudarc`'s
+`CudarcBackend` were retired (`docs/adr/0017-loader-stages.md`): nothing ran
+through them. `fastvideo-ops` keeps only the FP8 E4M3 helpers (`fp8`) the
+runtime and the model crate share. The Apple Silicon scaffold `fastvideo-mlx`
+was retired with it. The decision this ADR records (one trait over several
+runtimes) is superseded by its own amendment: cudarc is the only runtime, and
+model code calls `fastvideo-cudarc`'s `rt` directly.
