@@ -1,0 +1,55 @@
+# A small family file for test/unit/families-gen.test.ts: the shapes families/*.toml use (a tiered variant with
+# served names, an untiered one with an auxiliary file), not a real family.
+schema = 1
+
+[family]
+id = "h3"
+display = "Fixture family"
+licence = "Fixture licence"
+port_doc = "docs/ports/fixture.md"
+
+[[variants]]
+id = "fix-turbo"
+tier = "turbo"
+served_names = ["fix", "fixture-turbo"]
+resident_default = true
+recipe_name = "fix-turbo-4step"
+trees = ["fix-adapter", "fix-base"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 89
+needs = ["fp8"]
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.engine]
+family = "h3"
+recipe = "4step"
+weights = "${weights}/fix-base"
+
+[[variants]]
+id = "fix-draft-tae"
+resident_default = false
+recipe_name = "fix-draft-tae"
+trees = ["auxiliary/tae/taefix.safetensors", "fix-base"]
+
+[variants.gpu]
+min_vram_gib = 24
+min_sm = 80
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.engine]
+family = "h3"
+recipe = "draft"
+tae = "${tae}/taefix.safetensors"
+weights = "${weights}/fix-base"

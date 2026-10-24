@@ -70,7 +70,8 @@ the same thing.
 | `control/src/auth.ts` | Access JWT, passphrase sessions, CSRF, API tokens |
 | `control/src/cluster/spec.ts` | the cluster definition, templates and pool presets |
 | `control/src/cluster/catalog.json` | editor suggestions: recipes, model ids, fal apps, engine env keys |
-| `control/gen-configs.mjs` | generates `worker-configs.ts` from `configs/serve` |
+| `control/gen-configs.mjs` | generates `worker-configs.ts`, `image-configs.ts`, the R2 and Hub tables from `configs/serve` and the weights TSVs, and the family-manifest tables from `families/*.toml` (below) |
+| `control/src/families-gen.ts`, `control/src/families.ts` | GENERATED: the family manifests (families, variants, every name a config may use, trees, GPU needs); the helpers over them |
 | `control/src/cluster/payloads.ts` | boot commands, env, pod payloads (edge and direct workers) |
 | `control/src/cluster/ops.ts` | create / patch / delete, price projection, admin token, probes |
 | `control/src/cluster/do.ts` | `ClusterOps`: the operations |
@@ -87,6 +88,49 @@ the same thing.
 | `control/migrations/0001_init.sql` | the D1 schema |
 | `control/src/serverless/` | Runpod serverless endpoints ([serverless.md](serverless.md)) |
 | `control/public/` | the dashboard (no framework, SVG charts) |
+
+### Generated from the family manifests
+
+`families/*.toml` (layer 2, [ADR-0008](../adr/0008-family-manifest-layer-2.md))
+is the source of model identity; `control/gen-configs.mjs` derives the
+control-plane and script copies from it (plan A4). What the generator owns:
+
+| output | what |
+|---|---|
+| `control/src/families-gen.ts` (whole file) | `MANIFEST_FAMILIES`, `MANIFEST_VARIANTS` (tier, served names, recipe name, `trees`, `weight_trees` = trees without `auxiliary/`, `gpu`), `MODEL_NAMES` (every name a serve config's `recipe` or `id` may use, resolved as `caps.rs find` does: tier alias → first variant of its tier in file order, variant id, served name; a variant's `recipe_name` is what the capabilities report, not a config name), `ENGINE_RECIPE_ALIASES` (the `caps.rs model_from_config` recipe arms a config here uses: `vdn-h3-50step`; `recipeVariant` consults them, `variantOf` does not) |
+| `control/src/volumes.ts` region `EU_TREES` | copied from `scripts/gpu/volumes.sh` `FV_EU_VOLUME_TREES` (an ops fact: what `r2-fill-volume.sh` wrote; the shell stays the hand-written source) |
+| `scripts/gcp/families.tsv` columns `weight_trees`, `served` | from each row's Runpod twin config's `[[models]]` recipes, resolved to variants |
+| `scripts/gpu/verify-weights.sh` region `variant_trees` | the `variant:<id>` cells: a variant's trees as the manifest names them |
+
+Consumers derive from the tables instead of restating: `recipe-trees.ts`
+(`required` = the variant's `weight_trees`; hand-written: the pre-quantized
+trees, the notes, the one recipe alias the manifests do not know),
+`presets.ts` (`weights` and `min_vram_gb` of every model preset come from
+its models' recipes), `schemas.ts` (the `family` enum).
+
+Cross-checks (`crossChecks`, run by `--check`): every manifest tree is a dest
+of `weights-manifest.tsv` / `weights-r2.tsv`; `cluster/catalog.json` names
+only families, models and recipes the manifests know, except
+`CATALOG_EXCEPTIONS` (`longlive-1.3b`, `lightx2v-turbo-v0.1` and its served
+id: no variant in `wan.toml` / `h3.toml` yet, a question for plan A3);
+`configs/autoscale.toml` pools name a dispatch family; `volumes.sh` names
+published trees; `serverless/serves.ts` `RECIPES` gives every name the
+manifests' tier. The engine also accepts contract names neither table lists
+(`4step-vsa`, `8step`, `sol-h3` / `sol_h3`, `trim-8step`, an empty recipe,
+family `ltx`): plan A3 settles which the manifests carry.
+
+Still hand-written, because the manifests carry no deployment data (plan C1,
+the `[deploy]` section): preset ids, titles, image variants, configs, queue
+sizes and timeouts (`presets.ts`, `enums.ts` `VARIANTS` / `POOL_PRESET_IDS`,
+`scripts/serve/variants.sh`), `families.tsv`'s machine, cells and API names,
+autoscale pool sizes, the component-level `verify-weights.sh` cells, the
+image table of `docs/serve/images.md`, `catalog.json`'s descriptions.
+
+```bash
+cd control
+node gen-configs.mjs            # rewrite (after the cross-checks pass)
+node gen-configs.mjs --check    # CI: .github/workflows/control.yml, test/unit/payloads.test.ts
+```
 
 ## 2. Auth
 

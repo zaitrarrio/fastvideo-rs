@@ -22,6 +22,7 @@
 #                                      wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq
 #                                      lingbot-moe cosmos3-super upsampler-local
 #                                      sha:<dest> (dest in weights-sha256.tsv)
+#                                      variant:<id> (a family manifest variant, families/*.toml)
 #   verify-weights.sh --list           print the cells and what each needs
 #
 # For every weight root a cell needs, this checks:
@@ -51,6 +52,11 @@
 # SHA-256 and the model's size and full length, plus the model's SHA-256 when
 # FV_VERIFY_DIT_SHA=1 (about 26 GB read). A missing tree only means the
 # loader quantizes at load; the cell reports it as INCOMPLETE.
+# A `variant:<id>` cell checks every weight tree a family manifest variant
+# reads (families/<family>.toml `trees`, the generated `variant_trees` table
+# below): each tree present (a directory with complete safetensors, or the
+# auxiliary/ file), as the component cells above check their roots. It is the
+# manifest's view of a variant; the hand-written cells name the components.
 # A `sha:<dest>` cell checks every file weights-sha256.tsv lists for <dest>
 # (hashes recorded at fetch time): present, the listed size, the listed
 # SHA-256 or md5 (alternatives a|b accepted). It reads the whole of each file (h3-ref2va: 69 GB).
@@ -201,6 +207,47 @@ CELLS=(fasth3-8step fasth3-trim-8step fasth3-trim-8step-nvfp4 fasth3-v2-nvfp4 fa
   sana-video-2b-480p wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq lingbot-moe cosmos3-super upsampler-local
   h3-turbo-loras ncii-guard)
 
+# BEGIN GENERATED from families/*.toml by control/gen-configs.mjs; do not edit
+# variant_trees <variant id> -> the weight trees the variant reads (families/<family>.toml `trees`, as
+# weights-manifest.tsv names them; the `variant:<id>` cells), or status 1 for an unknown id.
+variant_trees() {
+  case "$1" in
+    sol-h3) echo "FastH3-4-step-Preview-v1-LoRA h3-base" ;;
+    fasth3-4step-vsa) echo "FastH3-4-step-Preview-v1-LoRA h3-base" ;;
+    fasth3-4step-vsa-480p-taeh3) echo "FastH3-4-step-Preview-v1-LoRA auxiliary/tae/taeh3.safetensors h3-base" ;;
+    fasth3-8step-dense) echo "h3-8step h3-base" ;;
+    fasth3-trim-8step) echo "fasth3-trim-8step h3-base" ;;
+    fasth3-trim-nvfp4) echo "fasth3-trim-8step fasth3-trim-8step-nvfp4 h3-base" ;;
+    fasth3-trim-nvfp4-fast) echo "fasth3-trim-8step fasth3-trim-8step-nvfp4 h3-base" ;;
+    fasth3-v2-nvfp4) echo "fasth3-v2-nvfp4 h3-base" ;;
+    fasth3-4step-vsa-nvfp4) echo "fasth3-4step-vsa-nvfp4 h3-base" ;;
+    h3-larry-turbo) echo "h3-base h3-turbo-loras/larry" ;;
+    h3-lightx2v-turbo) echo "h3-base h3-turbo-loras/lightx2v" ;;
+    vdn-h3) echo "h3-base vdn-h3-stage-b-2000" ;;
+    vdn-h3-8step) echo "h3-base vdn-h3-dmd-250-turbo vdn-h3-stage-b-2000" ;;
+    h3-ref2v-max) echo "h3-base h3-ref2va" ;;
+    h3-ref2v-turbo) echo "h3-base h3-ref2va" ;;
+    fasth3-v2-nvfp4-taeh3) echo "auxiliary/tae/taeh3.safetensors fasth3-v2-nvfp4 h3-base" ;;
+    fasth3-4step-vsa-nvfp4-taeh3) echo "auxiliary/tae/taeh3.safetensors fasth3-4step-vsa-nvfp4 h3-base" ;;
+    fasth3-4step-vsa-taeh3) echo "FastH3-4-step-Preview-v1-LoRA auxiliary/tae/taeh3.safetensors h3-base" ;;
+    ltx25-distill-dense) echo "ltx25" ;;
+    ltx25-distill-sol) echo "ltx25" ;;
+    ltx25-distill-sol-nvfp4-taehv) echo "auxiliary/tae/taeltx2_3_wide.safetensors ltx25" ;;
+    ltx25-ref2v) echo "ltx25 ltx25-ic-lora-ingredients" ;;
+    ltx25-a2v-guided) echo "ltx25 ltx25-dev" ;;
+    wan22-ti2v-5b) echo "wan22-ti2v-5b" ;;
+    fastwan22-ti2v-5b) echo "fastwan22-ti2v-5b" ;;
+    fastwan22-ti2v-5b-taehv) echo "auxiliary/tae/taew2_2.safetensors fastwan22-ti2v-5b" ;;
+    wan14b-plug-4step) echo "longlive-plug/wan21-t2v-14b-cfg longlive-plug/wan21-t2v-14b-few-step wan21-t2v-14b" ;;
+    fastwan21-1.3b) echo "fastwan21-1.3b" ;;
+    fastwan21-1.3b-taehv) echo "auxiliary/tae/taew2_1.safetensors fastwan21-1.3b" ;;
+    sfwan21-1.3b) echo "auxiliary/tae/taew2_1.safetensors sfwan21-1.3b" ;;
+    *) return 1 ;;
+  esac
+}
+FV_VARIANT_IDS="sol-h3 fasth3-4step-vsa fasth3-4step-vsa-480p-taeh3 fasth3-8step-dense fasth3-trim-8step fasth3-trim-nvfp4 fasth3-trim-nvfp4-fast fasth3-v2-nvfp4 fasth3-4step-vsa-nvfp4 h3-larry-turbo h3-lightx2v-turbo vdn-h3 vdn-h3-8step h3-ref2v-max h3-ref2v-turbo fasth3-v2-nvfp4-taeh3 fasth3-4step-vsa-nvfp4-taeh3 fasth3-4step-vsa-taeh3 ltx25-distill-dense ltx25-distill-sol ltx25-distill-sol-nvfp4-taehv ltx25-ref2v ltx25-a2v-guided wan22-ti2v-5b fastwan22-ti2v-5b fastwan22-ti2v-5b-taehv wan14b-plug-4step fastwan21-1.3b fastwan21-1.3b-taehv sfwan21-1.3b"
+# END GENERATED
+
 # The weights-sha256.tsv dests a composite cell also checks (sha:<dest>).
 sha_dests() {
   case "$1" in
@@ -220,6 +267,7 @@ SHA_LIST="$HERE/weights-sha256.tsv"
 
 if [[ "${1:-}" == "--list" ]]; then
   for c in "${CELLS[@]}"; do printf '%-20s %s\n' "$c" "$(needs "$c")"; done
+  for c in $FV_VARIANT_IDS; do printf '%-20s %s\n' "variant:$c" "$(variant_trees "$c")"; done
   if [[ -f "$SHA_LIST" ]]; then
     grep -vE '^[[:space:]]*(#|$)' "$SHA_LIST" | cut -f1 | sort | uniq -c \
       | awk '{printf "%-20s %s files by recorded hash (weights-sha256.tsv)\n", "sha:" $2, $1}'
@@ -400,6 +448,13 @@ check_sha_list() {
 }
 
 for cell in "$@"; do
+  if [[ "$cell" == variant:* ]]; then
+    trees="$(variant_trees "${cell#variant:}")" || { echo "unknown variant ${cell#variant:} (see --list)" >&2; exit 2; }
+    cell_rc=0
+    for t in $trees; do check_path "$W/$t" || cell_rc=1; done
+    if (( cell_rc == 0 )); then echo "weights ok: $cell"; else echo "weights INCOMPLETE: $cell" >&2; fail=1; fi
+    continue
+  fi
   if [[ "$cell" == sha:* ]]; then
     if check_sha_list "${cell#sha:}"; then echo "weights ok: $cell"; else echo "weights INCOMPLETE: $cell" >&2; fail=1; fi
     continue
