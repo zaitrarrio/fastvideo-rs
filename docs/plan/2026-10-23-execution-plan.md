@@ -257,3 +257,18 @@ ran (pod id, $/hr), result, cost.
   Evidence: `artifacts/runpod/techniques/51898b8-10240107/compare/`. Main
   (A2, E4) merged into the branch: no cudarc or gpucheck file changed since
   the baseline, so the GPU evidence stands for the merged head.
+- 2026-10-24 02:26Z: A3 opened a draft PR (`claude/a3-engine-projection`):
+  the engine embeds `families/*.toml` (`FV_FAMILIES_DIR` overrides) and
+  `catalog()` is their projection; the hand-written rows and recipe-derived
+  caps are deleted; `[variants.serving]` and `public_names` added to layer 2;
+  `longlive-1.3b` and `h3-lightx2v-turbo-v01` are variants; the 35 serve
+  TOMLs and the compat config name `variant` + residency (zero `[aliases]`).
+  Golden `/fv/v1/capabilities` + `/v1/models` for 36 configs taken on the
+  unchanged tree first: identical for every CUDA config; one listed
+  exception (`fake.toml`, `tests/compat/serve.toml` gain `fastwan-1.3b`).
+  On build pod `i8tu0lpdb6nvov`, merged head: manifest + engine-service +
+  protocol 292 tests, `scripts/serve/check.sh` 999 passed / 0 failed in 106
+  binaries (dimension_sweep 8, e2e 14, capabilities_golden 1), fmt, clippy
+  `-D warnings`, cuda-feature check green. Control-side follow-up for A4:
+  `gen-configs.mjs --check` and `serverless/serves.ts` must read the new
+  `[[models]]` form.
