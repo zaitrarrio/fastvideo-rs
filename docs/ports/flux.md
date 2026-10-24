@@ -40,7 +40,7 @@ Latents packed: VAE 16-ch → DiT **64**-ch (2×2 pack).
 | `fastvideo-models::flux` | landed |
 | Registry + CLI T2I path | landed |
 | cudarc DiT (tiny zeros + load) | landed (`Flux1Transformer2D`) |
-| Generate path | landed (`Flux1Pipeline` + `av_generate`) |
+| Generate path | landed (`Flux1Pipeline` + `fastvideo-core` `family/flux.rs`) |
 | CLIP+T5 encode / full weight parity | CLIP-L + T5-XXL `CudaTensor` encoders + tokenize helpers |
 | Pack / RoPE ids / shift | landed (`flux::family`) |
 | Weight-key maps + `transformer/config.json` | landed (`flux::weights`, `FLUX1_*_REQUIRED_KEYS`) |

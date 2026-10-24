@@ -69,6 +69,7 @@ pub mod multiworker;
 pub mod native;
 #[cfg(feature = "otel")]
 pub mod otel;
+pub mod params;
 #[cfg(feature = "reactor")]
 pub mod reactor;
 pub mod router;

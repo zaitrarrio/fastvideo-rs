@@ -1,0 +1,230 @@
+### fastvideo --help
+exit=0
+--- stdout
+Rust FastVideo inference (Wan / LTX / H3 / T2I / T2A; cudarc CUDA primary).
+
+Usage: fastvideo [OPTIONS] <COMMAND>
+
+Commands:
+  list-models  List registered Hugging Face ids (Wan, LTX, H3, image, audio families)
+  generate     Resolve a model id and run generation (use --tiny for Wan zero-weight smoke)
+  bench        Time CUDA generate (Vast GPU). Not a laptop CPU job
+  schedule     Print the flow-match or DMD sigma table for a resolved Wan model
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+      --techniques <FILE>  Technique profile (`profiles/<model>/*.toml`, or a sol-engine config): the techniques, kernels and settings the pipeline runs with (docs/techniques.md). Default: `FASTVIDEO_TECHNIQUES`. Every `FASTVIDEO_*` env var still overrides it
+  -h, --help               Print help
+--- stderr
+
+### fastvideo help
+exit=0
+--- stdout
+Rust FastVideo inference (Wan / LTX / H3 / T2I / T2A; cudarc CUDA primary).
+
+Usage: fastvideo [OPTIONS] <COMMAND>
+
+Commands:
+  list-models  List registered Hugging Face ids (Wan, LTX, H3, image, audio families)
+  generate     Resolve a model id and run generation (use --tiny for Wan zero-weight smoke)
+  bench        Time CUDA generate (Vast GPU). Not a laptop CPU job
+  schedule     Print the flow-match or DMD sigma table for a resolved Wan model
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+      --techniques <FILE>  Technique profile (`profiles/<model>/*.toml`, or a sol-engine config): the techniques, kernels and settings the pipeline runs with (docs/techniques.md). Default: `FASTVIDEO_TECHNIQUES`. Every `FASTVIDEO_*` env var still overrides it
+  -h, --help               Print help
+--- stderr
+
+### fastvideo list-models --help
+exit=0
+--- stdout
+List registered Hugging Face ids (Wan, LTX, H3, image, audio families)
+
+Usage: fastvideo list-models [OPTIONS]
+
+Options:
+      --techniques <FILE>  Technique profile (`profiles/<model>/*.toml`, or a sol-engine config): the techniques, kernels and settings the pipeline runs with (docs/techniques.md). Default: `FASTVIDEO_TECHNIQUES`. Every `FASTVIDEO_*` env var still overrides it
+  -h, --help               Print help
+--- stderr
+
+### fastvideo generate --help
+exit=0
+--- stdout
+Resolve a model id and run generation (use --tiny for Wan zero-weight smoke)
+
+Usage: fastvideo generate [OPTIONS] --model <MODEL>
+
+Options:
+      --model <MODEL>                Hugging Face repo id, e.g. Wan-AI/Wan2.1-T2V-1.3B-Diffusers
+      --techniques <FILE>            Technique profile (`profiles/<model>/*.toml`, or a sol-engine config): the techniques, kernels and settings the pipeline runs with (docs/techniques.md). Default: `FASTVIDEO_TECHNIQUES`. Every `FASTVIDEO_*` env var still overrides it
+      --backend <BACKEND>            [default: cudarc] [possible values: cudarc]
+      --prompt <PROMPT>              
+      --negative <NEGATIVE>          
+      --num-gpus <NUM_GPUS>          [default: 1]
+      --tiny                         Zero-weight tiny graph (no Hub download). Writes PNG frames
+      --weights <WEIGHTS>            Local Diffusers directory with transformer/, vae/, and text_encoder/. If omitted, uses FASTVIDEO_WEIGHTS or the cached Hugging Face snapshot
+      --output <OUTPUT>              Directory for decoded PNG frames
+      --device <DEVICE>              `cpu`, `cuda`, or `cuda:0`. GPU builds (`--features cuda-cudarc` or `cuda`) default to `cuda`; CPU builds default to `cpu` [default: cpu]
+      --dtype <DTYPE>                `f32`, `f16`, or `bf16`. Defaults to bf16 on CUDA, f32 on CPU
+      --steps <STEPS>                
+      --frames <FRAMES>              
+      --height <HEIGHT>              
+      --width <WIDTH>                
+      --guidance <GUIDANCE>          
+      --guidance-2 <GUIDANCE_2>      
+      --seed <SEED>                  
+      --image <IMAGE>                First-frame image for I2V / H3 FL2VA (PNG or JPEG)
+      --last-image <LAST_IMAGE>      H3 FL2VA last-frame image (PNG or JPEG)
+      --ref <REFERENCES>             H3 Ref2VA reference (repeatable, ordered). Image / video / audio by extension; needs MiniMax-H3 `transformer_ref/`
+      --control <CONTROL>            Control / reference frame for Fun Control / Lucy (PNG or JPEG)
+      --config <CONFIG>              TOML overlay for common generate knobs (height, width, frames, steps, …). CLI flags override values from the file
+      --save-mp4                     Mux PNG frames to `output.mp4` via ffmpeg (same as FASTVIDEO_SAVE_MP4=1)
+      --audio <AUDIO>                Wan family: add a soundtrack to the mp4 with a video-to-audio sidecar (`mmaudio`: MMAudio large-44k-v2, AAC). Same as FASTVIDEO_WAN_AUDIO
+      --two-stage                    LTX distilled two-stage (2.3 / 2.5): half-res → upsampler → refine
+      --diff-vae                     LTX-2.5: DiffVAE video decode instead of conv VAE
+      --refine-steps <REFINE_STEPS>  LTX two-stage refine steps (2 or 3). Default: 2 when `--steps 5`, else 3
+      --sol-stage2                   LTX-2.5 stage-2 Sol route: video self-attention on layer 0 dense, layers 1-47 on the Sol-Attn kernel at tau 1 / 1.25 / 1.5 (`thresh_type=diag`). Requires `--two-stage` and 3 refine steps. On by default for the 2.5 distilled two-stage, as in the reference single-GPU profile
+      --dense-stage2                 Dense stage 2 (the reference's dense control run)
+      --pisa-stage2                  LTX-2.3 stage-2 PISA route: video self-attention on layers 0-1 dense, layers 2-47 on the PISA score-route kernel at sparsity 0.9, block 64. Requires `--two-stage` and 3 refine steps
+      --ltx23-hq                     LTX-2.3 official HQ: 15-step stage-1 + 3-sigma refine, guidance 3, 1920×1088 / 241f. Requires the 2.3 base line (`Lightricks/LTX-2.3`). Also `FASTVIDEO_LTX2_HQ=1`
+      --h3-recipe <H3_RECIPE>        FastH3 / Sol-H3 recipe (`8step`, `4step-vsa`, `4step-dense`, `sol-h3`, `sol-h3-ref2va`, `sol-h3-spark`, `sol-h3-rtx`)
+      --h3-adapter <H3_ADAPTER>      Sol-H3 / FastH3 Preview (`4step-vsa`, `4step-dense`) LoRA adapter. Default: searched under and next to the MiniMax-H3 snapshot
+      --seconds <SECONDS>            FastH3 duration in whole seconds (5..=15)
+      --text-weights <TEXT_WEIGHTS>  Alternate root for `tokenizer/` + `text_encoder/` (LTX slim / H3 slim)
+      --dit <DIT>                    Alternate DiT root for LTX (default: `<weights>/transformer`)
+      --dit-offload <DIT_OFFLOAD>    LTX / H3 DiT block residency: `auto` (resident when the free device memory covers the planned need, else streamed), `resident`, or `streamed` (blocks copied from pinned host memory one ahead of the computing block; decoders on the device only while decoding). Default: `FASTVIDEO_DIT_OFFLOAD`, else `auto`
+      --tae-weights <TAE_WEIGHTS>    Tiny autoencoder video decoder (madebyollin/taehv): LTX-2.3/2.5 takes `taeltx2_3_wide.safetensors`, H3 takes `taeh3.safetensors` (file or directory). Default: the full video VAE
+  -h, --help                         Print help
+--- stderr
+
+### fastvideo bench --help
+exit=0
+--- stdout
+Time CUDA generate (Vast GPU). Not a laptop CPU job
+
+Usage: fastvideo bench [OPTIONS]
+
+Options:
+      --model <MODEL>        [default: Wan-AI/Wan2.1-T2V-1.3B-Diffusers]
+      --techniques <FILE>    Technique profile (`profiles/<model>/*.toml`, or a sol-engine config): the techniques, kernels and settings the pipeline runs with (docs/techniques.md). Default: `FASTVIDEO_TECHNIQUES`. Every `FASTVIDEO_*` env var still overrides it
+      --backend <BACKEND>    [default: cudarc] [possible values: cudarc]
+      --prompt <PROMPT>      [default: "A curious raccoon in a field of sunflowers."]
+      --weights <WEIGHTS>    
+      --output <OUTPUT>      
+      --device <DEVICE>      [default: cuda]
+      --dtype <DTYPE>        
+      --steps <STEPS>        
+      --frames <FRAMES>      
+      --height <HEIGHT>      
+      --width <WIDTH>        
+      --guidance <GUIDANCE>  
+      --seed <SEED>          
+      --image <IMAGE>        
+      --clip-only            Only time CLIP ViT-H `image_encoder/` (no DiT)
+  -h, --help                 Print help
+--- stderr
+
+### fastvideo schedule --help
+exit=0
+--- stdout
+Print the flow-match or DMD sigma table for a resolved Wan model
+
+Usage: fastvideo schedule [OPTIONS] --model <MODEL>
+
+Options:
+      --model <MODEL>      
+      --techniques <FILE>  Technique profile (`profiles/<model>/*.toml`, or a sol-engine config): the techniques, kernels and settings the pipeline runs with (docs/techniques.md). Default: `FASTVIDEO_TECHNIQUES`. Every `FASTVIDEO_*` env var still overrides it
+  -h, --help               Print help
+--- stderr
+
+### fastvideo help generate
+exit=0
+--- stdout
+Resolve a model id and run generation (use --tiny for Wan zero-weight smoke)
+
+Usage: fastvideo generate [OPTIONS] --model <MODEL>
+
+Options:
+      --model <MODEL>                Hugging Face repo id, e.g. Wan-AI/Wan2.1-T2V-1.3B-Diffusers
+      --techniques <FILE>            Technique profile (`profiles/<model>/*.toml`, or a sol-engine config): the techniques, kernels and settings the pipeline runs with (docs/techniques.md). Default: `FASTVIDEO_TECHNIQUES`. Every `FASTVIDEO_*` env var still overrides it
+      --backend <BACKEND>            [default: cudarc] [possible values: cudarc]
+      --prompt <PROMPT>              
+      --negative <NEGATIVE>          
+      --num-gpus <NUM_GPUS>          [default: 1]
+      --tiny                         Zero-weight tiny graph (no Hub download). Writes PNG frames
+      --weights <WEIGHTS>            Local Diffusers directory with transformer/, vae/, and text_encoder/. If omitted, uses FASTVIDEO_WEIGHTS or the cached Hugging Face snapshot
+      --output <OUTPUT>              Directory for decoded PNG frames
+      --device <DEVICE>              `cpu`, `cuda`, or `cuda:0`. GPU builds (`--features cuda-cudarc` or `cuda`) default to `cuda`; CPU builds default to `cpu` [default: cpu]
+      --dtype <DTYPE>                `f32`, `f16`, or `bf16`. Defaults to bf16 on CUDA, f32 on CPU
+      --steps <STEPS>                
+      --frames <FRAMES>              
+      --height <HEIGHT>              
+      --width <WIDTH>                
+      --guidance <GUIDANCE>          
+      --guidance-2 <GUIDANCE_2>      
+      --seed <SEED>                  
+      --image <IMAGE>                First-frame image for I2V / H3 FL2VA (PNG or JPEG)
+      --last-image <LAST_IMAGE>      H3 FL2VA last-frame image (PNG or JPEG)
+      --ref <REFERENCES>             H3 Ref2VA reference (repeatable, ordered). Image / video / audio by extension; needs MiniMax-H3 `transformer_ref/`
+      --control <CONTROL>            Control / reference frame for Fun Control / Lucy (PNG or JPEG)
+      --config <CONFIG>              TOML overlay for common generate knobs (height, width, frames, steps, …). CLI flags override values from the file
+      --save-mp4                     Mux PNG frames to `output.mp4` via ffmpeg (same as FASTVIDEO_SAVE_MP4=1)
+      --audio <AUDIO>                Wan family: add a soundtrack to the mp4 with a video-to-audio sidecar (`mmaudio`: MMAudio large-44k-v2, AAC). Same as FASTVIDEO_WAN_AUDIO
+      --two-stage                    LTX distilled two-stage (2.3 / 2.5): half-res → upsampler → refine
+      --diff-vae                     LTX-2.5: DiffVAE video decode instead of conv VAE
+      --refine-steps <REFINE_STEPS>  LTX two-stage refine steps (2 or 3). Default: 2 when `--steps 5`, else 3
+      --sol-stage2                   LTX-2.5 stage-2 Sol route: video self-attention on layer 0 dense, layers 1-47 on the Sol-Attn kernel at tau 1 / 1.25 / 1.5 (`thresh_type=diag`). Requires `--two-stage` and 3 refine steps. On by default for the 2.5 distilled two-stage, as in the reference single-GPU profile
+      --dense-stage2                 Dense stage 2 (the reference's dense control run)
+      --pisa-stage2                  LTX-2.3 stage-2 PISA route: video self-attention on layers 0-1 dense, layers 2-47 on the PISA score-route kernel at sparsity 0.9, block 64. Requires `--two-stage` and 3 refine steps
+      --ltx23-hq                     LTX-2.3 official HQ: 15-step stage-1 + 3-sigma refine, guidance 3, 1920×1088 / 241f. Requires the 2.3 base line (`Lightricks/LTX-2.3`). Also `FASTVIDEO_LTX2_HQ=1`
+      --h3-recipe <H3_RECIPE>        FastH3 / Sol-H3 recipe (`8step`, `4step-vsa`, `4step-dense`, `sol-h3`, `sol-h3-ref2va`, `sol-h3-spark`, `sol-h3-rtx`)
+      --h3-adapter <H3_ADAPTER>      Sol-H3 / FastH3 Preview (`4step-vsa`, `4step-dense`) LoRA adapter. Default: searched under and next to the MiniMax-H3 snapshot
+      --seconds <SECONDS>            FastH3 duration in whole seconds (5..=15)
+      --text-weights <TEXT_WEIGHTS>  Alternate root for `tokenizer/` + `text_encoder/` (LTX slim / H3 slim)
+      --dit <DIT>                    Alternate DiT root for LTX (default: `<weights>/transformer`)
+      --dit-offload <DIT_OFFLOAD>    LTX / H3 DiT block residency: `auto` (resident when the free device memory covers the planned need, else streamed), `resident`, or `streamed` (blocks copied from pinned host memory one ahead of the computing block; decoders on the device only while decoding). Default: `FASTVIDEO_DIT_OFFLOAD`, else `auto`
+      --tae-weights <TAE_WEIGHTS>    Tiny autoencoder video decoder (madebyollin/taehv): LTX-2.3/2.5 takes `taeltx2_3_wide.safetensors`, H3 takes `taeh3.safetensors` (file or directory). Default: the full video VAE
+  -h, --help                         Print help
+--- stderr
+
+### fastvideo 
+exit=2
+--- stdout
+--- stderr
+Rust FastVideo inference (Wan / LTX / H3 / T2I / T2A; cudarc CUDA primary).
+
+Usage: fastvideo [OPTIONS] <COMMAND>
+
+Commands:
+  list-models  List registered Hugging Face ids (Wan, LTX, H3, image, audio families)
+  generate     Resolve a model id and run generation (use --tiny for Wan zero-weight smoke)
+  bench        Time CUDA generate (Vast GPU). Not a laptop CPU job
+  schedule     Print the flow-match or DMD sigma table for a resolved Wan model
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+      --techniques <FILE>  Technique profile (`profiles/<model>/*.toml`, or a sol-engine config): the techniques, kernels and settings the pipeline runs with (docs/techniques.md). Default: `FASTVIDEO_TECHNIQUES`. Every `FASTVIDEO_*` env var still overrides it
+  -h, --help               Print help
+
+### fastvideo generate
+exit=2
+--- stdout
+--- stderr
+error: the following required arguments were not provided:
+  --model <MODEL>
+
+Usage: fastvideo generate --model <MODEL>
+
+For more information, try '--help'.
+
+### fastvideo no-such-command
+exit=2
+--- stdout
+--- stderr
+error: unrecognized subcommand 'no-such-command'
+
+Usage: fastvideo [OPTIONS] <COMMAND>
+
+For more information, try '--help'.
+

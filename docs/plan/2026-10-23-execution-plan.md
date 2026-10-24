@@ -74,15 +74,15 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | B1 | Extract the runtime: `cudarc/src/wan/{tensor,device,ops,kernels,nn,weights,offload,quant,log,dump,ledger,envflag,resident,stage_upload,hostmem,writer}` to `cudarc/src/rt/`; `kernels.cu` split by region and concatenated at build time; `gpucheck` and `engine-service` import `rt` | byte-identical SASS and clips | CPU tests + nvrtc gate on the pod; **GPU** `techniques` byte-identity cell for H3, LTX, Wan | F1 | merged (#146) |
-| B2 | `VideoFamily` trait, common `Request`/`Conditioning`, `Request::validate(&ModelCaps)`; the 21 registry tables, `resolve()`, `all_registered_ids()` and the 20 `generate_*` functions replaced by the manifest and a static family list; `AvGenerateOptions` reduced to common fields | CLI behaviour unchanged for every preset (golden `--help` and tiny CPU generations); 83 Hub ids resolve | pod; **GPU** one tiny generation per served family | A2, B1 | todo |
-| B3 | Settings layer: the `FASTVIDEO_*` table generated from one declarative list; the 111 direct reads routed through `settings::var`; a `Settings` snapshot passed to `load`; `model_spec` for Wan and the small families; `docs/scope.md` table generated | zero direct `env::var("FASTVIDEO_` outside `settings`; off-identity invariant tests | pod; **GPU** byte-identity cell | B1 | pr (B3a #153; B3b todo) |
+| B2 | `VideoFamily` trait, common `Request`/`Conditioning`, `Request::validate(&ModelCaps)`; the 21 registry tables, `resolve()`, `all_registered_ids()` and the 20 `generate_*` functions replaced by the manifest and a static family list; `AvGenerateOptions` reduced to common fields | CLI behaviour unchanged for every preset (golden `--help` and tiny CPU generations); 83 Hub ids resolve | pod; **GPU** one tiny generation per served family | A2, B1 | merged (#157) |
+| B3 | Settings layer: the `FASTVIDEO_*` table generated from one declarative list; the 111 direct reads routed through `settings::var`; a `Settings` snapshot passed to `load`; `model_spec` for Wan and the small families; `docs/scope.md` table generated | zero direct `env::var("FASTVIDEO_` outside `settings`; off-identity invariant tests | pod; **GPU** byte-identity cell | B1 | pr (B3a merged #153; B3b agent running) |
 
 ### Phase 3 and 4: deployment (Workstream C)
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| C1 | `[deploy]` section of the family manifest; presets, variant tables, `families.tsv`, autoscale pools and the Dockerfile variant stages generated from it | `--check` green; one image with boot-time config if the owner decides so | pod | A4 | pr (single image: owner decision, analysed in ADR-0011) |
-| C2 | `fv-boot` in `fastvideo-deploy`: driver check, config materialization, weights plan (volume / registry `hydrate` / hub / none), sidecar, tunnel and phase reports, watchdog, exec; fake provider and fake chunk source tests; the ten boot variants deleted | one boot script in the tree; fv-control sends env only | pod; **GPU** one pod boot on the EU volume | C1, registry WO-002 for the `hydrate` source (volume and hub sources first) | pr (#159: fv-boot is the images' entrypoint and every fv-control boot prefers it, ADR-0014; GPU gate pending; remaining: C2b deletes the shell boots and sends env only after the image promotion, the `registry` source after WO-002, the upsampler launcher in Rust) |
+| C1 | `[deploy]` section of the family manifest; presets, variant tables, `families.tsv`, autoscale pools and the Dockerfile variant stages generated from it | `--check` green; one image with boot-time config if the owner decides so | pod | A4 | merged (#156; single image: owner decision, ADR-0011) |
+| C2 | `fv-boot` in `fastvideo-deploy`: driver check, config materialization, weights plan (volume / registry `hydrate` / hub / none), sidecar, tunnel and phase reports, watchdog, exec; fake provider and fake chunk source tests; the ten boot variants deleted | one boot script in the tree; fv-control sends env only | pod; **GPU** one pod boot on the EU volume | C1, registry WO-002 for the `hydrate` source (volume and hub sources first) | pr (#159: fv-boot is the images' entrypoint and every fv-control boot prefers it, ADR-0014; GPU gate green for the image kind on the EU volume (ltx); remaining: C2b deletes the shell boots and sends env only after the image promotion, the `registry` source after WO-002, the upsampler launcher in Rust) |
 | C3 | `fv-deploy` with the `Provider` trait (from `fastvideo-autoscale`): `runpod::{Pod,Serverless}`, `vast`, `gcp`; shared money guards, backstop, ledger, templates, release promote/rollback; fv-control on the shared `Launch` schema | `fv-deploy up` per provider with the same smoke | pod; **GPU** one `fv-deploy up` on Runpod EU | C2 | todo |
 
 ### Phase 5: validation driver and gold standards (Workstream D)
@@ -99,8 +99,8 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | E1 | Vendored upstream specs under `docs/serve/specs/` with a drift script; `schemars` schemas for native and director | drift script green | CI | none | merged (#144; schemars schemas deferred to E2) |
-| E2 | `ParamSpec` per (surface, model) derived from the manifest caps; adapters validate from it; duplicated constants deleted; LTX body typed | one source for every limit | pod; serve-compat | A3 | todo |
-| E3 | Certification matrix harness over every surface, parameter x surface x model TSV, CI assertion that every parameter has a valid and an invalid case | TSV with no empty cell | pod | E2 | todo |
+| E2 | `ParamSpec` per (surface, model) derived from the manifest caps; adapters validate from it; duplicated constants deleted; LTX body typed | one source for every limit | pod; serve-compat | A3 | merged (#158) |
+| E3 | Certification matrix harness over every surface, parameter x surface x model TSV, CI assertion that every parameter has a valid and an invalid case | TSV with no empty cell | pod | E2 | in progress |
 | E4 | `cargo-llvm-cov` on the pod; adapter `cargo test` in a GitHub workflow | coverage artifact in CI | CI | none | merged (#148) |
 | E5 | Upstream captures as fixtures | depends on owner keys | manual | owner | blocked |
 
@@ -109,7 +109,7 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | todo |
-| B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | todo |
+| B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | in progress |
 | B6 | `H3Pipeline::load` and `Ltx2Pipeline::load` split into plan, open, place, fuse; dead code (`TensorBackend`, mlx scaffold) retired | engine lifecycle testable on CPU | pod | B1 | todo |
 
 ## 3. Order of execution
@@ -422,6 +422,61 @@ ran (pod id, $/hr), result, cost.
   `coverage.sh --tests` 13 crates / 819 passed (fastvideo-manifest joins the
   set); `fastvideo-autoscale` `committed_example_parses` and the GCP e2e
   test green on the generated files.
+
+- 2026-10-24 04:30Z: B2 opened draft PR #157 (`claude/b2-video-family`):
+  `fastvideo-core::family` (`VideoFamily`, `Pipeline`, the static `FAMILIES`
+  list of 21 families, one module each with its Hub-id table and run),
+  `fastvideo-core::request` (`Request`, `Conditioning`,
+  `Request::validate(&ModelCaps)`), `AvGenerateOptions` reduced to the
+  common fields plus `Wan/Ltx2/H3Options`; `registry.rs` and
+  `av_generate.rs` deleted; ADR-0013. Goldens taken first on the unchanged
+  tree (CLI `--help`, `list-models` 83 ids, generate/schedule for every id
+  and preset, tiny CPU frames, a 459-input resolution table) pass
+  unmodified. On build pod `pzocv1keasg3xn`: workspace lib tests 1881
+  passed, models + cli + core 595 passed, fmt, clippy `-D warnings`, the
+  cuda check and a `--features cuda` check of core and cli green,
+  `scripts/serve/check.sh` 1004 passed. GPU cells pending (coordinator):
+  CLI A/B frame identity for H3 (`h3-base` + LoRA), LTX-2.5 (`ltx25`), Wan
+  (R2 `fastwan21-1.3b`, or `--tiny --device cuda`).
+- 2026-10-24 05:00Z: B2 GPU gate (coordinator): CLI A/B frame identity,
+  release CUDA `fastvideo` built on build pod `pzocv1keasg3xn` at main
+  `6d5cf6a6` (base) and the PR at `9c56b15e` (head), the same command run
+  with both binaries on one RTX PRO 6000 pod (EU-RO-1, volume `bz0ofkfx45`,
+  runtime image `sha-6d5cf6a` for the CUDA libraries only), sha256 of every
+  output file compared. `ltx25` (LTX-2.5 T2V, seed 7): identical, 122
+  files; `wan-tiny-cuda`: identical, 2 files (pod `o6u0poa0uwoj38`);
+  `h3-4step` (FastH3 4-step dense LoRA on `h3-base`, 5 s, seed 7):
+  identical, 125 files (pod `txi9ybyb3uj24k`; two earlier H3 attempts on
+  `h6o3z35thydpey` and the first pod gave the LoRA directory instead of its
+  file, exit 2 on both arms, a script error). Evidence:
+  `artifacts/runpod/b2-cli/6d5cf6a-1024{0441,0453}/`. The review follow-up
+  `c898d2c4` changed only LTX's `--guidance-2` routing (same value, not
+  passed by the cells) and test-only `Request::validate`; the evidence
+  stands for it. Three pods, about 17 GPU-minutes at $2.49/hr, deleted.
+- 2026-10-24 05:10Z: E2 opened a draft PR (`claude/e2-paramspec`):
+  `fastvideo-protocol::params` (`ParamSpec`, the surface rules: every
+  upstream limit once, cited, H3 facts derived from `fastvideo_models`), the
+  five adapters and the native API validate with them and build their specs
+  (`params.rs`), the LTX bodies typed against `ltx/openapi.json`, `GET
+  /fv/v1/params` with a golden for all 36 configs (182 distinct specs).
+  Census in docs/serve/params.md: 9 duplicated limits (H3 5-15 s x3, H3
+  references x4, LTX matrix / motions / prompt / rates, fal prompt, fast-h3
+  x3) now one source; one disagreement resolved (`guidance_scale_2` 0..=20,
+  FastVideo's bound); 8 upstream divergences kept and pinned. On build pod
+  `pzocv1keasg3xn` (main #153 merged in): `scripts/serve/check.sh` 1031
+  passed / 0 failed in 110 binaries (capabilities golden unchanged),
+  protocol + engine-service + manifest 308 passed, `tests/compat/run.sh`
+  10/10 suites, fmt and clippy `-D warnings` green. Left for E3: director /
+  Reactor control-channel specs, the matrix and TSV, `schemars`.
+- 2026-10-24 05:45Z (coordinator): merged C1 (#156, 04:43Z), B2 (#157,
+  05:08Z) and E2 (#158, 05:41Z), each with main merged in, CI green on the
+  head and an independent review; review fixes landed on the branches
+  (B2: unused `Conditioning::task` dropped, the frames-wins divergence
+  named; E2: `/fv/v1/params` mounted only with the native API,
+  `param_scan` over `segments.rs` and `player.rs`, the full
+  `guidance_scale_2` message list). Started B3b, B5 and E3; C2 opened
+  #159, under review, its GPU boot smoke running (serve image `:ltx`, PR
+  `fv-boot` from the build pod, EU volume).
 - 2026-10-24 05:40Z: C2 opened draft PR #159 (`claude/c2-fv-boot`): `fv-boot`
   in `fastvideo-deploy` (feature `boot`), the `ENTRYPOINT` of every serve
   image (`fv-entry.sh` deleted), ADR-0014 with the inventory of the ten boots,

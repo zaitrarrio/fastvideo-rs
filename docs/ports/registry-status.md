@@ -2,7 +2,7 @@
 
 Snapshot of FastVideo Hub families landed in this tree after Phase 4–6 scaffolding
 (2026-09-22). Green = host config + cudarc tiny forward/generate + registry +
-CLI `generate_av` path. Weight-parity remains Hub-gated unless noted.
+CLI generate path (since plan B2 the family's `VideoFamily` module, `crates/fastvideo-core/src/family/`). Weight-parity remains Hub-gated unless noted.
 
 | Phase | Family | Spec | Models | Cudarc | Registry | Generate | Notes |
 |---|---|---|---|---|---|---|---|

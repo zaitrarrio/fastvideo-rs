@@ -40,14 +40,24 @@ use serde_json::{json, Value};
 
 use crate::{MiniMax, MiniMaxModel, Resolution};
 
-/// Longest `text` item (research §1.3.1).
-pub const MAX_PROMPT_CHARS: usize = 7000;
-/// Reference limits (research §1.3.1): images, videos, audio, total.
-pub const MAX_REFS: (usize, usize, usize, usize) = (9, 3, 3, 12);
-/// `ratio` values (research §1.3).
-pub const RATIOS: [&str; 7] = ["adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
+use fastvideo_protocol::params::rules::minimax::REFERENCES;
+/// The MiniMax surface rules (`fastvideo_protocol::params::rules::minimax`):
+/// the `text` length, reference limits, `ratio` and
 /// `extra.prompt_expansion_mode` values.
-pub const PROMPT_EXPANSION_MODES: [&str; 3] = ["disabled", "balanced", "quality"];
+pub use fastvideo_protocol::params::rules::minimax::{
+    PROMPT_EXPANSION_MODES, PROMPT_MAX_CHARS as MAX_PROMPT_CHARS, RATIOS,
+};
+
+/// `ContentItem.type` values (`VideoGenerationV2Req`).
+pub const CONTENT_TYPES: [&str; 4] = ["text", "image_url", "video_url", "audio_url"];
+/// `ContentItem.role` values.
+pub const ROLES: [&str; 5] = [
+    "first_frame",
+    "last_frame",
+    "reference_image",
+    "reference_video",
+    "reference_audio",
+];
 
 /// `VideoGenerationV2Req`. Unknown top-level fields are ignored (the spec
 /// does not say; strobe's adapter ignores them).
@@ -265,7 +275,10 @@ pub fn normalize(b: CreateBody) -> Result<GenerationRequest, ApiError> {
                     _ => {
                         return Err(bad(
                             "extra.prompt_expansion_mode",
-                            "prompt_expansion_mode must be one of disabled, balanced, quality",
+                            format!(
+                                "prompt_expansion_mode must be one of {}",
+                                PROMPT_EXPANSION_MODES.join(", ")
+                            ),
                         ))
                     }
                 }
@@ -360,17 +373,10 @@ fn parse_content(items: &[ContentItem]) -> Result<Content, ApiError> {
                 c.refs.push(Reference { kind, media })
             }
             (_, Some(r)) => {
-                let known = [
-                    "first_frame",
-                    "last_frame",
-                    "reference_image",
-                    "reference_video",
-                    "reference_audio",
-                ];
-                let msg = if known.contains(&r) {
+                let msg = if ROLES.contains(&r) {
                     format!("role `{r}` is not valid for a {ty} item")
                 } else {
-                    format!("unknown role `{r}`; expected one of {}", known.join(", "))
+                    format!("unknown role `{r}`; expected one of {}", ROLES.join(", "))
                 };
                 return Err(bad(p("role"), msg));
             }
@@ -405,7 +411,13 @@ fn parse_content(items: &[ContentItem]) -> Result<Content, ApiError> {
         ));
     }
     let n = |k: MediaKind| c.refs.iter().filter(|r| r.kind == k).count();
-    let (mi, mv, ma, mt) = MAX_REFS;
+    let r = REFERENCES;
+    let (mi, mv, ma, mt) = (
+        r.images as usize,
+        r.videos as usize,
+        r.audio as usize,
+        r.total as usize,
+    );
     for (got, max, what) in [
         (n(MediaKind::Image), mi, "reference_image items"),
         (n(MediaKind::Video), mv, "reference_video items"),

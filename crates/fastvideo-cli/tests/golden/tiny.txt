@@ -1,0 +1,477 @@
+### wan_t2v_1_3b (Wan-AI/Wan2.1-T2V-1.3B-Diffusers)
+exit=0
+--- stdout
+model=Wan-AI/Wan2.1-T2V-1.3B-Diffusers preset=wan_t2v_1_3b sampling=unipc backend=cudarc tiny=true device=cpu 64x64 frames=5 steps=2 shift=3
+wrote 2 frames, first=<OUT>/frame-000.png
+--- frames 2
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-001.png
+
+### wan_t2v_14b (Wan-AI/Wan2.1-T2V-14B-Diffusers)
+exit=0
+--- stdout
+model=Wan-AI/Wan2.1-T2V-14B-Diffusers preset=wan_t2v_14b sampling=unipc backend=cudarc tiny=true device=cpu 64x64 frames=5 steps=2 shift=5
+wrote 2 frames, first=<OUT>/frame-000.png
+--- frames 2
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-001.png
+
+### wan_i2v_14b_480p (Wan-AI/Wan2.1-I2V-14B-480P-Diffusers)
+exit=0
+--- stdout
+model=Wan-AI/Wan2.1-I2V-14B-480P-Diffusers preset=wan_i2v_14b_480p sampling=unipc backend=cudarc tiny=true device=cpu 64x64 frames=5 steps=2 shift=3
+wrote 2 frames, first=<OUT>/frame-000.png
+--- frames 2
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-001.png
+
+### wan_i2v_14b_720p (Wan-AI/Wan2.1-I2V-14B-720P-Diffusers)
+exit=0
+--- stdout
+model=Wan-AI/Wan2.1-I2V-14B-720P-Diffusers preset=wan_i2v_14b_720p sampling=unipc backend=cudarc tiny=true device=cpu 64x64 frames=5 steps=2 shift=5
+wrote 2 frames, first=<OUT>/frame-000.png
+--- frames 2
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-001.png
+
+### wan_fun_1_3b_inp (weizhou03/Wan2.1-Fun-1.3B-InP-Diffusers)
+exit=0
+--- stdout
+model=weizhou03/Wan2.1-Fun-1.3B-InP-Diffusers preset=wan_fun_1_3b_inp sampling=unipc backend=cudarc tiny=true device=cpu 64x64 frames=5 steps=2 shift=3
+wrote 2 frames, first=<OUT>/frame-000.png
+--- frames 2
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-001.png
+
+### wan_fun_1_3b_control (IRMChen/Wan2.1-Fun-1.3B-Control-Diffusers)
+exit=0
+--- stdout
+model=IRMChen/Wan2.1-Fun-1.3B-Control-Diffusers preset=wan_fun_1_3b_control sampling=unipc backend=cudarc tiny=true device=cpu 64x64 frames=5 steps=2 shift=3
+wrote 2 frames, first=<OUT>/frame-000.png
+--- frames 2
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-001.png
+
+### turbo_t2v_1_3b (loayrashid/TurboWan2.1-T2V-1.3B-Diffusers)
+exit=0
+--- stdout
+model=loayrashid/TurboWan2.1-T2V-1.3B-Diffusers preset=turbo_t2v_1_3b sampling=rcm backend=cudarc tiny=true device=cpu 64x64 frames=5 steps=2 shift=3
+wrote 2 frames, first=<OUT>/frame-000.png
+--- frames 2
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-001.png
+
+### turbo_t2v_14b (loayrashid/TurboWan2.1-T2V-14B-Diffusers)
+exit=0
+--- stdout
+model=loayrashid/TurboWan2.1-T2V-14B-Diffusers preset=turbo_t2v_14b sampling=rcm backend=cudarc tiny=true device=cpu 64x64 frames=5 steps=2 shift=5
+wrote 2 frames, first=<OUT>/frame-000.png
+--- frames 2
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-001.png
+
+### turbo_i2v_a14b (loayrashid/TurboWan2.2-I2V-A14B-Diffusers)
+exit=0
+--- stdout
+model=loayrashid/TurboWan2.2-I2V-A14B-Diffusers preset=turbo_i2v_a14b sampling=rcm backend=cudarc tiny=true device=cpu 64x64 frames=5 steps=2 shift=5
+wrote 2 frames, first=<OUT>/frame-000.png
+--- frames 2
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-001.png
+
+### fast_wan_t2v_480p (FastVideo/FastWan2.1-T2V-1.3B-Diffusers)
+exit=0
+--- stdout
+model=FastVideo/FastWan2.1-T2V-1.3B-Diffusers preset=fast_wan_t2v_480p sampling=dmd backend=cudarc tiny=true device=cpu 64x64 frames=5 steps=2 shift=8
+wrote 2 frames, first=<OUT>/frame-000.png
+--- frames 2
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-001.png
+
+### wan_2_2_ti2v_5b (Wan-AI/Wan2.2-TI2V-5B-Diffusers)
+exit=0
+--- stdout
+model=Wan-AI/Wan2.2-TI2V-5B-Diffusers preset=wan_2_2_ti2v_5b sampling=unipc backend=cudarc tiny=true device=cpu 64x64 frames=5 steps=2 shift=5
+wrote 2 frames, first=<OUT>/frame-000.png
+--- frames 2
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-001.png
+
+### fast_wan_2_2_ti2v_5b (FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers)
+exit=0
+--- stdout
+model=FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers preset=fast_wan_2_2_ti2v_5b sampling=dmd backend=cudarc tiny=true device=cpu 64x64 frames=5 steps=2 shift=5
+wrote 2 frames, first=<OUT>/frame-000.png
+--- frames 2
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-001.png
+
+### lucy_edit_dev (decart-ai/Lucy-Edit-Dev)
+exit=0
+--- stdout
+model=decart-ai/Lucy-Edit-Dev preset=lucy_edit_dev sampling=unipc backend=cudarc tiny=true device=cpu 64x64 frames=5 steps=2 shift=3
+wrote 2 frames, first=<OUT>/frame-000.png
+--- frames 2
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-001.png
+
+### wan_2_2_t2v_a14b (Wan-AI/Wan2.2-T2V-A14B-Diffusers)
+exit=0
+--- stdout
+model=Wan-AI/Wan2.2-T2V-A14B-Diffusers preset=wan_2_2_t2v_a14b sampling=unipc backend=cudarc tiny=true device=cpu 64x64 frames=5 steps=2 shift=12
+wrote 2 frames, first=<OUT>/frame-000.png
+--- frames 2
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-001.png
+
+### wan_2_2_i2v_a14b (Wan-AI/Wan2.2-I2V-A14B-Diffusers)
+exit=0
+--- stdout
+model=Wan-AI/Wan2.2-I2V-A14B-Diffusers preset=wan_2_2_i2v_a14b sampling=unipc backend=cudarc tiny=true device=cpu 64x64 frames=5 steps=2 shift=5
+wrote 2 frames, first=<OUT>/frame-000.png
+--- frames 2
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-001.png
+
+### sf_wan_t2v_1_3b (wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers)
+exit=0
+--- stdout
+model=wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers preset=sf_wan_t2v_1_3b sampling=causal_dmd backend=cudarc tiny=true device=cpu 64x64 frames=5 steps=2 shift=5
+wrote 2 frames, first=<OUT>/frame-000.png
+--- frames 2
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-001.png
+
+### sf_wan_2_2_t2v_a14b (rand0nmr/SFWan2.2-T2V-A14B-Diffusers)
+exit=0
+--- stdout
+model=rand0nmr/SFWan2.2-T2V-A14B-Diffusers preset=sf_wan_2_2_t2v_a14b sampling=causal_dmd backend=cudarc tiny=true device=cpu 64x64 frames=5 steps=2 shift=12
+wrote 2 frames, first=<OUT>/frame-000.png
+--- frames 2
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-001.png
+
+### sf_wan_2_2_i2v_a14b (FastVideo/SFWan2.2-I2V-A14B-Preview-Diffusers)
+exit=0
+--- stdout
+model=FastVideo/SFWan2.2-I2V-A14B-Preview-Diffusers preset=sf_wan_2_2_i2v_a14b sampling=causal_dmd backend=cudarc tiny=true device=cpu 64x64 frames=5 steps=2 shift=12
+wrote 2 frames, first=<OUT>/frame-000.png
+--- frames 2
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-000.png
+3e03c9ebfcf68b4e0acc9e8bf8d32cedc1c2fedfcb4ec2a1782eeeee01084b19  frame-001.png
+
+### ltx2_distilled_20 (FastVideo/LTX2-Distilled-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=ltx2)
+--- frames 0
+
+### ltx2_distilled_25 (Lightricks/LTX-2.5-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=ltx2)
+--- frames 0
+
+### ltx2_base_20 (Lightricks/LTX-2)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=ltx2)
+--- frames 0
+
+### ltx2_distilled_23 (FastVideo/LTX-2.3-Distilled-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=ltx2)
+--- frames 0
+
+### ltx2_base_23 (Lightricks/LTX-2.3)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=ltx2)
+--- frames 0
+
+### sol_h3_ref2va (lightx2v/Minimax-h3-Turbo)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=h3)
+--- frames 0
+
+### sol_h3 (FastVideo/FastH3-4-step-Preview-v1-LoRA)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=h3)
+--- frames 0
+
+### fasth3_8step (FastVideo/FastVideo-FastH3-8-Step-V2)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=h3)
+--- frames 0
+
+### minimax_h3 (MiniMaxAI/MiniMax-H3)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=h3)
+--- frames 0
+
+### hy15_480p_t2v (hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=hunyuan15)
+--- frames 0
+
+### hy15_480p_i2v_distilled (hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_i2v_step_distilled)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=hunyuan15)
+--- frames 0
+
+### hy15_720p_t2v (hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=hunyuan15)
+--- frames 0
+
+### hy15_720p_i2v_distilled (hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v_distilled)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=hunyuan15)
+--- frames 0
+
+### hy15_1080p_sr (weizhou03/HunyuanVideo-1.5-Diffusers-1080p)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=hunyuan15)
+--- frames 0
+
+### k5_lite_t2v_5s (kandinskylab/Kandinsky-5.0-T2V-Lite-sft-5s-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=kandinsky5)
+--- frames 0
+
+### k5_pro_t2v_5s (kandinskylab/Kandinsky-5.0-T2V-Pro-sft-5s-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=kandinsky5)
+--- frames 0
+
+### cosmos2_v2w_2b (nvidia/Cosmos-Predict2-2B-Video2World)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=cosmos)
+--- frames 0
+
+### cosmos2_v2w_14b (nvidia/Cosmos-Predict2-14B-Video2World)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=cosmos)
+--- frames 0
+
+### longcat_t2v_480p (FastVideo/LongCat-Video-T2V-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=longcat)
+--- frames 0
+
+### longcat_t2v_720p (FastVideo/LongCat-Video-T2V-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=longcat)
+--- frames 0
+
+### lingbot_dense_1_3b (robbyant/lingbot-video-dense-1.3b)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=lingbot)
+--- frames 0
+
+### lingbot_moe_30b (robbyant/lingbot-video-moe-30b-a3b)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=lingbot)
+--- frames 0
+
+### gen3c_cosmos_7b (FastVideo/GEN3C-Cosmos-7B-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=gen3c)
+--- frames 0
+
+### mg2_base_distilled (FastVideo/Matrix-Game-2.0-Base-Distilled-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=matrixgame)
+--- frames 0
+
+### mg2_gta_distilled (FastVideo/Matrix-Game-2.0-GTA-Distilled-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=matrixgame)
+--- frames 0
+
+### mg2_templerun_distilled (FastVideo/Matrix-Game-2.0-TempleRun-Distilled-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=matrixgame)
+--- frames 0
+
+### mg2_base (FastVideo/Matrix-Game-2.0-Base-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=matrixgame)
+--- frames 0
+
+### mg3_base_distilled (FastVideo/Matrix-Game-3.0-Base-Distilled-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=matrixgame)
+--- frames 0
+
+### dreamx_5b_cam (FastVideo/DreamX-World-5B-Cam-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=dreamx_world)
+--- frames 0
+
+### dreamx_5b_ar (FastVideo/DreamX-World-5B-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=dreamx_world)
+--- frames 0
+
+### lingbotworld_base_cam (FastVideo/LingBot-World-Base-Cam-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=lingbotworld)
+--- frames 0
+
+### lingbotworld2_causal_fast (robbyant/lingbot-world-v2-14b-causal-fast)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=lingbotworld)
+--- frames 0
+
+### gamecraft_i2v (FastVideo/HunyuanGameCraft-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=gamecraft)
+--- frames 0
+
+### hyworld_bidirectional (FastVideo/HY-WorldPlay-Bidirectional-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=hyworld)
+--- frames 0
+
+### zimage_turbo (Tongyi-MAI/Z-Image-Turbo)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=zimage)
+--- frames 0
+
+### sd35_medium (stabilityai/stable-diffusion-3.5-medium)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=sd35)
+--- frames 0
+
+### flux1_dev (black-forest-labs/FLUX.1-dev)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=flux)
+--- frames 0
+
+### flux1_schnell (black-forest-labs/FLUX.1-schnell)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=flux)
+--- frames 0
+
+### flux2_klein_4b (black-forest-labs/FLUX.2-klein-4B)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=flux2)
+--- frames 0
+
+### flux2_klein_9b (black-forest-labs/FLUX.2-klein-9B)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=flux2)
+--- frames 0
+
+### flux2_dev (black-forest-labs/FLUX.2-dev)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=flux2)
+--- frames 0
+
+### glm_image (zai-org/GLM-Image)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=glm_image)
+--- frames 0
+
+### stable_audio_open_1_0 (FastVideo/stable-audio-open-1.0-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=stable_audio)
+--- frames 0
+
+### stable_audio_open_small (FastVideo/stable-audio-open-small-Diffusers)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=stable_audio)
+--- frames 0
+
+### mmaudio_large_44k_v2 (hkchengrex/MMAudio)
+exit=1
+--- stdout
+--- stderr (last line)
+Error: --tiny is Wan-only; LTX/H3 need real weights (family=mmaudio)
+--- frames 0
+

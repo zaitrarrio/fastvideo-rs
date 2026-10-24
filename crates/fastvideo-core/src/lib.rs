@@ -1,19 +1,26 @@
-pub mod av_generate;
+//! FastVideo-rs pipeline core: the model families behind one
+//! [`VideoFamily`] trait and a static [`FAMILIES`] list, the common
+//! [`Request`], Wan sampling and [`VideoGenerator`].
+
 pub mod backend_kind;
 pub mod error;
+pub mod family;
 pub mod generator;
-pub mod registry;
+pub mod request;
 pub mod sampling;
 
-pub use av_generate::{generate_av, AvGenerateOptions, AvGenerateOutput};
 pub use backend_kind::BackendKind;
 pub use error::{FastVideoError, Result};
-pub use generator::{BenchStats, ClipBenchStats, GenerateOutput, LoadOptions, VideoGenerator};
-pub use registry::{
-    all_registered_ids, resolve, resolve_wan, FamilyModelDefinition, Ltx2Line, ModelFamily,
-    ResolvedModel, SamplingAlgorithm, WanModelDefinition, H3_MODEL_DEFINITIONS,
-    LTX2_MODEL_DEFINITIONS, WAN_MODEL_DEFINITIONS,
+pub use family::ltx2::Ltx2Line;
+pub use family::wan::{resolve_wan, SamplingAlgorithm, WanModelDefinition, WAN_MODEL_DEFINITIONS};
+pub use family::{
+    registered, resolve, AvGenerateOptions, FamilyOptions, Output, Pipeline, Resolved, Variant,
+    VideoFamily, FAMILIES,
 };
+/// Cancellation and progress for [`Pipeline::generate`].
+pub use fastvideo_cudarc::hooks::Hooks;
+pub use generator::{BenchStats, ClipBenchStats, GenerateOutput, LoadOptions, VideoGenerator};
+pub use request::{Canvas, Conditioning, Request, RequestError, Sampler, Timing};
 pub use sampling::{
     sampling_from_definition, AudioSamplingParam, ImageSamplingParam, InferencePreset,
     SamplingParam, WorkloadType, ALL_PRESETS,

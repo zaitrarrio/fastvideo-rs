@@ -60,16 +60,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 pub use wan::{WanInput, WanVariant};
 
-/// `prompt` maxLength (fal §3.3).
-pub const PROMPT_MAX_CHARS: usize = 50_000;
-/// `duration` bounds in seconds (fal §3.3).
-pub const DURATION_MIN: i64 = 5;
-pub const DURATION_MAX: i64 = 15;
-/// Reference list limits (fal §5.2).
-pub const MAX_REFERENCE_IMAGES: usize = 9;
-pub const MAX_REFERENCE_VIDEOS: usize = 3;
-pub const MAX_REFERENCE_AUDIO: usize = 3;
-pub const MAX_REFERENCES: usize = 12;
+use fastvideo_protocol::params::rules::fal_h3;
+
+/// `prompt` maxLength (fal §3.3; `rules::fal_h3`).
+pub use fastvideo_protocol::params::rules::fal_h3::PROMPT_MAX_CHARS;
+/// `duration` bounds in seconds (fal §3.3; `rules::fal_h3::DURATION`).
+pub const DURATION_MIN: i64 = fal_h3::DURATION.min;
+pub const DURATION_MAX: i64 = fal_h3::DURATION.max;
+/// Reference list limits (fal §5.2; `rules::fal_h3::REFERENCES`).
+pub const MAX_REFERENCE_IMAGES: usize = fal_h3::REFERENCES.images as usize;
+pub const MAX_REFERENCE_VIDEOS: usize = fal_h3::REFERENCES.videos as usize;
+pub const MAX_REFERENCE_AUDIO: usize = fal_h3::REFERENCES.audio as usize;
+pub const MAX_REFERENCES: usize = fal_h3::REFERENCES.total as usize;
 
 /// One HTTP endpoint under an app. The sub-path may have several segments
 /// (`text-to-video/fast`, `v2.2-5b/text-to-video/fast-wan`); every sub is
