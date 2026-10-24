@@ -27,7 +27,7 @@ weights volume). Mac/CI stay on CPU (cudarc without `--features cuda` /
 | Candle / Luminal | **frozen** |
 | Sequence parallel | `--num-gpus N` (query-seq shard, real per-rank devices via `FASTVIDEO_SP_WORLD`, host-mediated all-gather) |
 | VSA | `FASTVIDEO_VSA=1` → in-tree block-sparse SDPA (hard-fail without flag) |
-| Flash-style SDPA | default (`FASTVIDEO_SDPA=flash`); `dense` / `sparse` overrides |
+| Dense SDPA | one entry (`rt::sdpa::sdpa`), kernel chosen by `rt::sdpa_rule` (fused tensor-core / cuDNN / attn_dc); `FASTVIDEO_SDPA=cublas` / `flash` overrides (ADR-0015) |
 | GPU tests + benches | Runpod (`task rtx6000`, `scripts/gpu/runpod-http.sh`) |
 
 ## Tasks

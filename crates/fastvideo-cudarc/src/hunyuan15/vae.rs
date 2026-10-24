@@ -3,9 +3,9 @@
 //! Diffusers layout: DCAE-style temporal/spatial upsample, channel-first
 //! L2×√C RMS, mid-block causal attention. Spec: docs/ports/hunyuan15.md.
 
+use crate::rt::sdpa::{sdpa, Plan};
 use fastvideo_models::hunyuan15::Hunyuan15VaeConfig;
 
-use crate::rt::nn;
 use crate::rt::ops::PadMode;
 use crate::rt::tensor::{CudaTensor, Result, TensorError};
 use crate::rt::weights::{self, WeightMap};
@@ -313,7 +313,7 @@ impl AttnBlock {
         let k = to_bhsd(k)?;
         let v = to_bhsd(v)?;
         let mask = causal_frame_mask(t, n_hw)?;
-        let attn = nn::scaled_dot_product_attention_masked(&q, &k, &v, None, Some(&mask))?;
+        let attn = sdpa(&q, &k, &v, &Plan::masked(None, Some(&mask)))?;
         let out = attn
             .squeeze(1)?
             .reshape(vec![b, t, h, w, c])?

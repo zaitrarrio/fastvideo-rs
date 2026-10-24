@@ -178,7 +178,7 @@ direction". The port follows the inference path (one rounding per fused stage, f
 |---|---|
 | checkpoint reading, transform config (`chunk 5`, `radius 1`, `linear_head_dim 128`, strict JSON), window bounds, adapter key rerooting, packed-row layout, gather plan, recipe names (`vdn-h3` = 50, `vdn-h3-<N>step`), and the **f32 / f64 host reference** of the whole branch and of the window softmax | `crates/fastvideo-models/src/h3/vdn.rs` |
 | schedule: VDN recipes map to `H3InferenceContract::base(N + 1)` (uniform grid, shifts 12 / 3, guidance 1) | `crates/fastvideo-models/src/h3/config.rs` |
-| the window softmax kernel `flash_mma_fwd2_window_d128` (our FA2 MMA kernel with a chunk-aligned tile walk) | `crates/fastvideo-cudarc/src/wan/kernels.cu`, `wan/attn.rs` (`VdnWindow`), `wan/nn.rs` (`sdpa_vdn_window`) |
+| the window softmax kernel `flash_mma_fwd2_window_d128` (our FA2 MMA kernel with a chunk-aligned tile walk) | `crates/fastvideo-cudarc/src/wan/kernels.cu`, `wan/attn.rs` (`VdnWindow`), `rt/sdpa.rs` (`Plan::vdn_window`) |
 | the linear-branch kernels | `crates/fastvideo-cudarc/src/h3/vdn.cu` (AOT table `AOT_H3_VDN` in `build.rs`, IEEE flags) |
 | branch loader, plan, launchers, GPU self-check | `crates/fastvideo-cudarc/src/h3/vdn.rs` |
 | the hybrid block (`AttnMode::Vdn`, `Attention::forward_vdn`, `H3Transformer::attach_vdn`) | `crates/fastvideo-cudarc/src/h3/transformer.rs` |

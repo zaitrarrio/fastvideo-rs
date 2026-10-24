@@ -24,6 +24,18 @@ rayon.workspace = true
 default = []
 # `cudarc/cupti` backs FASTVIDEO_GPU_TRACE (wan::gpu_trace); libcupti loads lazily.
 cuda = ["dep:cudarc", "cudarc/cupti"]
+# `rt::nvfp4_gemm`: the kernel-level NVFP4 GEMM backends (cuBLASLt block-scaled
+# FP4, the scale swizzle and the device quantizer) that no served model path
+# calls; fv-gpucheck's `nvfp4_gemm` / `nvfp4_linear` groups measure them. Off by
+# default (ADR-0015).
+nvfp4-gemm = ["cuda"]
+# The oxide Tile-IR NVFP4 GEMM: build.rs embeds the `fv-oxide-aot` cubins
+# (artifacts/oxide or FV_OXIDE_CUBIN_DIR; FV_REQUIRE_OXIDE checks them), the
+# device loads them, and the LongLive NVFP4 linear may route to them under
+# FASTVIDEO_NVFP4_OXIDE_GEMM. Off by default and in every served config; without
+# it the setting falls back to the in-tree W4A4 kernel, as a build without the
+# cubins always did (ADR-0015).
+oxide = ["nvfp4-gemm"]
 
 [dependencies.cudarc]
 workspace = true

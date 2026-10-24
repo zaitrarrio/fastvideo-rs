@@ -3,6 +3,7 @@
 //! Tiny (`block_out_channels.len() <= 2`) stays a short conv + 2× nearest
 //! stack for CI. Full decode walks ResNet + mid attention + upsample convs.
 
+use crate::rt::sdpa::{sdpa, Plan};
 use fastvideo_models::flux2::Flux2VaeConfig;
 
 use crate::rt::nn::{self, Linear};
@@ -263,7 +264,7 @@ impl SpatialAttention {
         let q = self.to_q.forward(&seq)?.reshape(vec![b, 1, h * w, c])?;
         let k = self.to_k.forward(&seq)?.reshape(vec![b, 1, h * w, c])?;
         let v = self.to_v.forward(&seq)?.reshape(vec![b, 1, h * w, c])?;
-        let attn = nn::scaled_dot_product_attention(&q, &k, &v, None)?;
+        let attn = sdpa(&q, &k, &v, &Plan::dense(None))?;
         let out = attn.reshape(vec![b, h * w, c])?;
         let out = self
             .to_out

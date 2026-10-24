@@ -19,7 +19,8 @@ use fastvideo_models::ltx2::memory::FeedForwardChunking;
 use fastvideo_models::ltx2::{SplitRope, SplitRopeLut};
 use std::borrow::Cow;
 
-use crate::rt::nn::{scaled_dot_product_attention, Linear};
+use crate::rt::nn::Linear;
+use crate::rt::sdpa::{sdpa, Plan};
 use crate::rt::tensor::{CudaTensor, Result};
 use crate::rt::weights::{cuda_tensor_shaped, WeightMap};
 
@@ -356,7 +357,7 @@ impl Attention {
             kernel
         };
         let out = match kernel {
-            VideoAttnKernel::Dense => scaled_dot_product_attention(&q, &k, &v, scale)?,
+            VideoAttnKernel::Dense => sdpa(&q, &k, &v, &Plan::dense(scale))?,
             VideoAttnKernel::Sol { tau } => {
                 crate::sol_attn::sol_attn(&q, &k, &v, tau, scale, None, 0)?
             }

@@ -35,8 +35,10 @@ macro_rules! kernel_fns {
             /// Tile-IR NVFP4 GEMMs (fv-oxide-aot) embedded for this SM, one
             /// per compiled tile shape / output type. Empty when none was
             /// embedded or the driver refused them (`oxide_error`).
+            #[cfg(feature = "oxide")]
             pub oxide_gemms: Vec<OxideGemm>,
             /// Why embedded oxide cubins for this SM failed to load, if they did.
+            #[cfg(feature = "oxide")]
             pub oxide_error: Option<String>,
         }
 
@@ -47,7 +49,9 @@ macro_rules! kernel_fns {
             fn load(module: &Arc<cudarc::driver::CudaModule>) -> Result<Self> {
                 Ok(Self {
                     $($name: module.load_function(stringify!($name))?,)+
+                    #[cfg(feature = "oxide")]
                     oxide_gemms: Vec::new(),
+                    #[cfg(feature = "oxide")]
                     oxide_error: None,
                 })
             }
@@ -300,6 +304,7 @@ pub struct OxideCubin {
 }
 
 /// A loaded [`OxideCubin`].
+#[cfg(feature = "oxide")]
 #[derive(Debug, Clone)]
 pub struct OxideGemm {
     pub out: &'static str,
@@ -309,6 +314,7 @@ pub struct OxideGemm {
     pub func: CudaFunction,
 }
 
+#[cfg(feature = "oxide")]
 impl OxideGemm {
     pub fn label(&self) -> String {
         format!("{}_{}x{}x{}", self.out, self.bm, self.bn, self.bk)
@@ -328,6 +334,7 @@ pub fn oxide_cubins() -> Vec<String> {
         .collect()
 }
 
+#[cfg(feature = "oxide")]
 fn load_oxide_gemms(
     ctx: &Arc<cudarc::driver::CudaContext>,
     want: u32,
@@ -364,11 +371,39 @@ fn load_oxide_gemms(
 }
 
 impl KernelFns {
+    #[cfg(feature = "oxide")]
     fn attach_oxide(mut self, ctx: &Arc<cudarc::driver::CudaContext>, want: u32) -> Self {
         let (gemms, error) = load_oxide_gemms(ctx, want);
         self.oxide_gemms = gemms;
         self.oxide_error = error;
         self
+    }
+
+    /// Without the `oxide` feature no Tile-IR cubin is embedded.
+    #[cfg(not(feature = "oxide"))]
+    fn attach_oxide(self, _ctx: &Arc<cudarc::driver::CudaContext>, _want: u32) -> Self {
+        self
+    }
+
+    /// The loaded oxide GEMMs for the device banner (`error(..)` when the
+    /// driver refused them; empty without the `oxide` feature).
+    pub fn oxide_summary(&self) -> String {
+        #[cfg(feature = "oxide")]
+        {
+            match &self.oxide_error {
+                Some(e) => format!("error({e})"),
+                None => self
+                    .oxide_gemms
+                    .iter()
+                    .map(|g| g.label())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            }
+        }
+        #[cfg(not(feature = "oxide"))]
+        {
+            String::new()
+        }
     }
 }
 

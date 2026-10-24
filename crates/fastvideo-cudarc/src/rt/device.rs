@@ -105,20 +105,12 @@ impl DeviceContext {
             };
         let cudnn = cudarc::cudnn::Cudnn::new(stream.clone())?;
         let (kernels, origin) = super::kernels::KernelFns::load_for(&ctx, sm_major, sm_minor)?;
-        let oxide = match &kernels.oxide_error {
-            Some(e) => format!("error({e})"),
-            None => kernels
-                .oxide_gemms
-                .iter()
-                .map(|g| g.label())
-                .collect::<Vec<_>>()
-                .join(","),
-        };
+        let oxide = kernels.oxide_summary();
         super::log::info(format_args!(
             "cuda device={device_index} sm_{sm_major}{sm_minor} kernels={origin:?} gemm={gemm_math:?} resident={} sdpa={} \
              sdpa_chunk={} oxide=[{oxide}] oxide_embedded={}",
             super::resident::residency_enabled(),
-            super::nn::sdpa_backend(),
+            super::sdpa_rule::backend_setting(),
             super::hopper::sdpa_query_chunk(sm_major),
             super::kernels::oxide_cubins().len(),
         ));

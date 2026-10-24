@@ -3,6 +3,7 @@
 //! Latents `[B,C,T,H,W]` with optional condition + padding channels. Tiny
 //! configs exercise patch → blocks → unpatch without Hub weights.
 
+use crate::rt::sdpa::{sdpa, Plan};
 use std::sync::{Arc, Mutex};
 
 use fastvideo_models::cosmos::sol::SolCosmosTea;
@@ -121,7 +122,7 @@ impl Attn {
             q = rope_real(&q, cos, sin, b, self.heads, s, self.head_dim)?;
             k = rope_real(&k, cos, sin, b, self.heads, ks, self.head_dim)?;
         }
-        let attn = nn::scaled_dot_product_attention(&q, &k, &v, None)?;
+        let attn = sdpa(&q, &k, &v, &Plan::dense(None))?;
         let out = attn
             .transpose(1, 2)?
             .reshape(vec![b, s, self.heads * self.head_dim])?;

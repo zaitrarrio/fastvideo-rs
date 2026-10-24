@@ -109,7 +109,7 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | todo |
-| B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | in progress |
+| B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | pr (#161) |
 | B6 | `H3Pipeline::load` and `Ltx2Pipeline::load` split into plan, open, place, fuse; dead code (`TensorBackend`, mlx scaffold) retired | engine lifecycle testable on CPU | pod | B1 | todo |
 
 ## 3. Order of execution
@@ -493,3 +493,55 @@ ran (pod id, $/hr), result, cost.
   `pzocv1keasg3xn`: protocol + serve + fal + reactor 389 passed,
   `scripts/serve/check.sh` 1035 passed / 0 failed in 113 binaries,
   `tests/compat/run.sh` 10/10, fmt and clippy `-D warnings` green.
+
+- 2026-10-24 06:10Z: B5 opened as draft PR #161 (`claude/b5-sdpa`, ADR-0015):
+  `rt::sdpa::sdpa(q, k, v, &Plan)` is the one dense-attention entry (every
+  family; nn's six SDPA functions, the ops wrapper, H3's FP8 chooser, H3
+  VAE's kernel parse and FLUX.2's `text_sdpa` copy removed) and
+  `rt::sdpa_rule` the one chooser (`dense_route`, `mma_kernel`, the masked
+  routes, over a `Probe`). Identity: `sdpa_rule_identity.rs` transcribes the
+  merge-base choosers; identical kernel / argument / effectful-probe traces
+  over 19 200 fused-kernel picks and 2.8 M entry cases (every setting, device
+  fact, production shape, output type and set of declining kernels).
+  Retired: `FASTVIDEO_SDPA=host|sparse` (host-only, already refused on a GPU
+  run); the sparse routes' host oracles and the composed SDPA stay. Features
+  `fastvideo-cudarc/nvfp4-gemm` and `oxide`, off by default (no served config
+  sets them), on in `fastvideo-gpucheck/cuda`; the serve binaries no longer
+  embed the oxide cubins. On build pod `pzocv1keasg3xn`: fmt, workspace
+  clippy `-D warnings` green; `-p fastvideo-cudarc -p fastvideo-models -p
+  fastvideo-gpucheck` 1220 passed (base 1211; +11 new, 2 removed with the
+  host twin); workspace lib 1891 passed; `scripts/serve/check.sh` 1004
+  passed; `--features cuda` clippy of cudarc (features off, `nvfp4-gemm`,
+  `oxide`), engine-service and gpucheck: the base's warnings and no new one
+  (cudarc 62 = 62). GPU pending (coordinator): `kernels` tier
+  (`no_host_fallback` now runs every `Plan` on device operands) and the
+  `techniques` byte-identity cells for H3 and LTX.
+- 2026-10-24 06:40Z: B5 review follow-ups on #161 (no dispatch change; GPU
+  evidence on `1de80f1`): main merged (B2 #157, E2 #158, plan #160);
+  `gpucheck-t0` job `serve-cuda-check` type-checks the serve feature set
+  (`-p fastvideo-cudarc --features cuda`, `-p fastvideo-engine-service
+  --features cuda`; fv-gpucheck's own check pulls `oxide` in);
+  `release-artifacts-pod.sh` builds serve without the oxide environment;
+  stale `nn::` SDPA pointers in five docs fixed; `device_mma_sdpa_pick`
+  private. The `sdpa_rule` tests (the 2.8 M-case enumeration included) take
+  2.0 s in a debug build, so all stay in the default run. On build pod
+  `pzocv1keasg3xn`: fmt, workspace clippy `-D warnings`, `scripts/gpu/lint.sh`
+  green; cudarc + models + gpucheck 1220 passed, 0 failed; both new checks
+  green with no warning; `scripts/serve/check.sh` 1033 passed, 0 failed.
+- 2026-10-24 06:50Z: B5 GPU gates (coordinator), runtime image `sha-1de80f1`
+  (the PR's code; later commits change no dispatch), RTX PRO 6000 in
+  EU-RO-1 with volume `bz0ofkfx45`, pods deleted. `kernels` tier (pod
+  `kkm6prv7a2q7a2`): every `no_host_fallback` check passes on device (48
+  new `sdpa_*_on_device` checks over d 128/64/80, self and cross, f32 and
+  bf16: zero host fallbacks, device-resident output); 889 PASS, 9 FAIL. The
+  same 9 fail on main's `sha-326c879` (pod `b7qm5l9f2kip2a`, 841 PASS):
+  the five FP8 "peaked" accuracy checks (known, docs/techniques.md), the
+  three `sdpa_rule` timing margins (cuDNN 7-8 % faster than the rule's
+  fwd2 pick on LTX 1080p/720p and the 24k edge) and one Wan norm at 2 ULP;
+  none is B5's. `techniques` byte identity vs `326c879` (pod
+  `syol3vmb2k5qfd` failed at once without FV_BASELINE_SHA on the pod, a
+  coordinator error; rerun on a new pod): fasth3-4step-vsa-768p and
+  h3-480p-fullopt 124/124 frames, ltx25-512p-sol 121/121, env and prof
+  arms and the LTX cache arm, max abs diff 0; fasth3-8step skipped (not
+  on the EU volume). Evidence: `artifacts/runpod/techniques/1de80f1-10240618/`,
+  `artifacts/runpod/kernels/{1de80f1-10240616,326c879-10240623}/`.

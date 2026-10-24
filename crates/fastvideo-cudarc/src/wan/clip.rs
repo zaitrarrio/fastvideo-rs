@@ -5,6 +5,7 @@
 use super::nn::{self, Linear};
 use super::tensor::{CudaTensor, Result, TensorError};
 use super::weights::{self, WeightMap};
+use crate::rt::sdpa::{sdpa, Plan};
 
 const CLIP_MEAN: [f32; 3] = [0.48145466, 0.4578275, 0.40821073];
 // The published CLIP constants, verbatim.
@@ -93,7 +94,7 @@ impl ClipAttention {
         let v = v
             .reshape(vec![b, s, self.heads, self.dim_head])?
             .transpose(1, 2)?;
-        let attn = nn::scaled_dot_product_attention(&q, &k, &v, None)?;
+        let attn = sdpa(&q, &k, &v, &Plan::dense(None))?;
         let attn = attn
             .transpose(1, 2)?
             .reshape(vec![b, s, self.heads * self.dim_head])?;

@@ -1,5 +1,6 @@
 //! Flux2 DiT on `CudaTensor` (cudarc primary path).
 
+use crate::rt::sdpa::{sdpa, Plan};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -259,11 +260,11 @@ impl JointAttn {
         let v = CudaTensor::cat(&[&ev, &v], 1)?;
         q = apply_rotary(&q, &rope.0, &rope.1)?;
         k = apply_rotary(&k, &rope.0, &rope.1)?;
-        let attn = nn::scaled_dot_product_attention(
+        let attn = sdpa(
             &q.transpose(1, 2)?,
             &k.transpose(1, 2)?,
             &v.transpose(1, 2)?,
-            None,
+            &Plan::dense(None),
         )?;
         let attn = attn.transpose(1, 2)?;
         let b = attn.shape[0];
@@ -411,11 +412,11 @@ impl ParallelAttn {
         let v = v.reshape(vec![v.shape[0], v.shape[1], self.heads, self.dim_head])?;
         let q = apply_rotary(&q, &rope.0, &rope.1)?;
         let k = apply_rotary(&k, &rope.0, &rope.1)?;
-        let attn = nn::scaled_dot_product_attention(
+        let attn = sdpa(
             &q.transpose(1, 2)?,
             &k.transpose(1, 2)?,
             &v.transpose(1, 2)?,
-            None,
+            &Plan::dense(None),
         )?
         .transpose(1, 2)?;
         let attn = attn.reshape(vec![attn.shape[0], attn.shape[1], self.inner])?;

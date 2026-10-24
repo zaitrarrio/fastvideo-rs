@@ -4,7 +4,7 @@
 //! merged at load) and adds:
 //!
 //! * a **window softmax** in place of dense attention
-//!   ([`crate::rt::nn::sdpa_vdn_window`], one flash launch,
+//!   ([`crate::rt::sdpa::Plan::vdn_window`], one flash launch,
 //!   `flash_mma_fwd2_window_d128`), its output scaled per (row, head) by the
 //!   softmax gate before `to_out`;
 //! * the **linear branch** ([`VdnBranch`]) on the inner video frames, added
@@ -1744,6 +1744,7 @@ mod tests {
     use super::*;
     use crate::h3::transformer::tests::tiny_cfg;
     use crate::h3::transformer::{AttnMode, DeviceLayout, H3Transformer};
+    use crate::rt::sdpa::{sdpa, Plan};
     use fastvideo_models::h3::schedule::H3JointSchedule;
 
     /// The transformer tests' weights, with the softmax gate open (logit 30:
@@ -1925,9 +1926,13 @@ mod tests {
             }
             CudaTensor::from_vec(out, vec![1, h, s, d]).unwrap()
         };
-        let got =
-            crate::rt::nn::sdpa_vdn_window(&bhsd(&q), &bhsd(&k), &bhsd(&v), None, plan.window)
-                .unwrap();
+        let got = sdpa(
+            &bhsd(&q),
+            &bhsd(&k),
+            &bhsd(&v),
+            &Plan::vdn_window(None, plan.window),
+        )
+        .unwrap();
         let got = got.host_cow().unwrap();
         for si in 0..s {
             for hh in 0..h {

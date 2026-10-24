@@ -1,13 +1,17 @@
-//! Attention kernels for Wan: fused tensor-core dense SDPA (default on bf16
-//! sm80+ contexts), cuBLAS dense (fallback / `FASTVIDEO_SDPA=cublas`), device
-//! flash (opt-in), and host implementations for CPU runs.
+//! The dense attention kernels: fused tensor-core SDPA (default on bf16
+//! sm80+ contexts; V1 / V2 / V3 / V3s, cuDNN, attn_dc), its block-causal and
+//! VDN-window variants, cuBLAS dense (fallback / `FASTVIDEO_SDPA=cublas`) and
+//! device flash (opt-in). Which one runs is [`super::sdpa_rule`]'s choice and
+//! model code reaches them through [`super::sdpa::sdpa`] (ADR-0015).
 
 #[cfg(feature = "cuda")]
 use std::sync::atomic::AtomicBool;
 
-use super::nn::host_only_op;
-use super::tensor::{CudaTensor, Result, TensorError};
+#[cfg(feature = "cuda")]
+use super::tensor::TensorError;
+use super::tensor::{CudaTensor, Result};
 
+#[cfg(feature = "cuda")]
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
 }
@@ -36,6 +40,7 @@ fn probs_bf16() -> bool {
             .is_some_and(|d| d.gemm_math == super::device::GemmMath::Bf16)
 }
 
+#[cfg(feature = "cuda")]
 fn bhsd(
     q: &CudaTensor,
     k: &CudaTensor,
@@ -95,8 +100,9 @@ pub fn device_flash_sdpa(
 /// Head dims the fused tensor-core kernel (`flash_mma_fwd_d{64,128}`) exists for.
 pub const MMA_HEAD_DIMS: [usize; 2] = [64, 128];
 
-/// Query/key tile of the fused kernel (one CTA per 64 queries).
-pub const MMA_TILE: usize = 64;
+/// Query/key tile of the fused kernel (one CTA per 64 queries), and the
+/// kernel choice ([`super::sdpa_rule`] is the one chooser).
+pub use super::sdpa_rule::{FlashKernel, MMA_TILE};
 
 /// Whether the fused kernel can run a `[b, h, sq, d] x [b, h, sk, d]` SDPA on
 /// an `sm_major` device: bf16 `mma.sync` needs sm80+, the head dim must be
@@ -135,148 +141,6 @@ pub fn mma_sdpa_default() -> bool {
 #[cfg(not(feature = "cuda"))]
 pub fn mma_sdpa_default() -> bool {
     false
-}
-
-/// Which fused dense kernel runs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FlashKernel {
-    /// `flash_mma_fwd_d*`: 64-query CTAs, 4 warps, one K and one V buffer.
-    V1,
-    /// `flash_mma_fwd2_d*`: 128-query CTAs (8 warps x 16 rows) and
-    /// double-buffered K/V; bit-identical to V1 (same per-row arithmetic).
-    V2,
-    /// `flash_mma_fwd3_d128`: V2's CTA and arithmetic with S_{j+1} issued
-    /// before softmax(S_j) and a three-stage K/V ring; bit-identical to V2.
-    /// d=128 only (V2 otherwise).
-    V3,
-    /// `flash_mma_fwd3s_d128`: V3 that skips the O rescale when no row max
-    /// rose (the factor V2 applies there is within a few ulp of 1).
-    V3s,
-    /// cuDNN's fused attention engine (`cudnn_sdpa`), bf16 output only;
-    /// V2 whenever cuDNN offers no engine or the caller wants f32 out.
-    Cudnn,
-    /// `attn_dc.cu` (d = 128 on 9.0 / 10.0): tcgen05 + TMEM on B200, wgmma
-    /// on H100 / H200, TMA-fed and warp-specialised; V2 anywhere else.
-    Dc,
-}
-
-/// `FASTVIDEO_FLASH_KERNEL=v1|v2|cudnn|dc|auto`. `auto` takes Dc on a 9.0 / 10.0
-/// device (d = 128; other head dims fall to V2), else V2 when its
-/// 128-query grid fills the GPU for many waves ([`flash_v2_default`] and
-/// [`flash_v2_fills`]), V1 otherwise (at LTX 768x512, 6 144 tokens x 32
-/// heads, V2's one-CTA-per-SM tail costs 2%).
-pub fn flash_kernel_choice() -> FlashKernel {
-    flash_kernel_for(usize::MAX, 1, 1)
-}
-
-/// [`flash_kernel_choice`] for a `bh` x `sq` grid on `sms` SMs.
-pub fn flash_kernel_for(sq: usize, bh: usize, sms: usize) -> FlashKernel {
-    // The kernel seam (`[kernels] dense_attention`, else `FASTVIDEO_FLASH_KERNEL`).
-    match fastvideo_models::techniques::kernels::choice(
-        fastvideo_models::techniques::kernels::KernelOp::DenseAttention,
-    )
-    .as_str()
-    {
-        "v1" => FlashKernel::V1,
-        "v2" => FlashKernel::V2,
-        "v3" => FlashKernel::V3,
-        "v3s" => FlashKernel::V3s,
-        "cudnn" => FlashKernel::Cudnn,
-        "dc" => FlashKernel::Dc,
-        // auto on a 9.0 / 10.0 device: the datacenter kernel (sm_120 and
-        // older keep the choice below; `v2` / `v1` are the escape hatch).
-        _ if dc_default() => FlashKernel::Dc,
-        _ if flash_v2_default() && flash_v2_fills(sq, bh, sms) => FlashKernel::V2,
-        _ => FlashKernel::V1,
-    }
-}
-
-/// Whether `auto` takes [`FlashKernel::Dc`]: the global device is 9.0 or 10.0
-/// and its attn_dc module loaded (d = 128; the caller falls to V2 otherwise).
-/// Measured: B200 1.15 PFLOPS vs V2's 0.37, H100 0.62-0.65 vs 0.32-0.34.
-#[cfg(feature = "cuda")]
-pub fn dc_default() -> bool {
-    super::attn_dc::dense().is_some()
-}
-
-#[cfg(not(feature = "cuda"))]
-pub fn dc_default() -> bool {
-    false
-}
-
-/// Whether V2's grid (one 256-thread CTA per SM) is at least 16 waves.
-pub fn flash_v2_fills(sq: usize, bh: usize, sms: usize) -> bool {
-    sq.div_ceil(2 * MMA_TILE).saturating_mul(bh) >= 16 * sms.max(1)
-}
-
-/// Whether `auto` picks the 128-query double-buffered kernel: yes. It is
-/// bit-identical to V1 and 4% faster on RTX PRO 6000 at the H3 / LTX shapes
-/// (`attn_bench`: 373 vs 358 TFLOPS). `FASTVIDEO_FLASH_KERNEL=v1` restores V1.
-pub fn flash_v2_default() -> bool {
-    true
-}
-
-/// Whether `auto` lets a bf16-output dense SDPA that V2 would run go to
-/// cuDNN's unified SDPA node instead, per shape ([`auto_cudnn_or_v2`]): on
-/// sm_12x only. RTX PRO 6000, cuDNN 9.26, `attn3_bench` (two pods): 104.8-105.0
-/// vs 108.4-109.1 ms at H3 768p, 658.8-659.8 vs 682.2-682.7 ms at LTX 1080p
-/// 20 s, but 766.6-769.0 vs 757.2-759.9 ms at 4K 5 s (engine 11, heuristic
-/// mode A config 0), hence the per-shape rule ([`super::sdpa_rule`]).
-/// `FASTVIDEO_FLASH_KERNEL=v2` (or `=cudnn`) fixes the kernel.
-pub fn cudnn_default(sm_major: i32) -> bool {
-    CUDNN_DEFAULT_ON && sm_major == 12
-}
-
-/// On since the attn3 generation A/B (FastH3 4-step dense 768p denoise 33.23 -> 32.28 s,
-/// LTX-2.5 1080p 20 s dense stage 2 44.0 -> 42.7 s/step).
-const CUDNN_DEFAULT_ON: bool = true;
-
-/// `auto` on sm_12x, bf16 out: the fixed per-shape rule
-/// ([`super::sdpa_rule::pick`]), so a shape runs the same kernel in every
-/// process (the two kernels round 1-2 bf16 ulp apart). A shape cuDNN has no
-/// plan for is V2. The pick is logged once per shape.
-/// `FASTVIDEO_SDPA_AUTO=timed` restores the old first-call timing
-/// ([`timed_cudnn_or_v2`]), which is not reproducible across processes.
-#[cfg(feature = "cuda")]
-fn auto_cudnn_or_v2(
-    q: &CudaTensor,
-    k: &CudaTensor,
-    v: &CudaTensor,
-    scale: Option<f32>,
-) -> Result<Option<CudaTensor>> {
-    use super::sdpa_rule::{self, AutoMode, DensePick};
-    use std::collections::HashSet;
-    use std::sync::{Mutex, OnceLock};
-    if sdpa_rule::auto_mode() == AutoMode::Timed {
-        return timed_cudnn_or_v2(q, k, v, scale);
-    }
-    let Some((b, h, sq, sk, d)) = bhsd(q, k, v) else {
-        return device_mma_sdpa_with(q, k, v, scale, true, FlashKernel::V2);
-    };
-    let sm_major = super::device::global_device().map_or(0, |dev| dev.sm_major);
-    let rule = sdpa_rule::pick(sm_major, sq, sk, d);
-    let kernel = match rule {
-        DensePick::Cudnn if super::cudnn_sdpa::has_plan(b * h, sq, sk, d) => FlashKernel::Cudnn,
-        _ => FlashKernel::V2,
-    };
-    static LOGGED: OnceLock<Mutex<HashSet<(usize, usize, usize, usize)>>> = OnceLock::new();
-    if LOGGED
-        .get_or_init(|| Mutex::new(HashSet::new()))
-        .lock()
-        .expect("sdpa rule log")
-        .insert((b * h, sq, sk, d))
-    {
-        super::log::info(format_args!(
-            "sdpa auto (sm_{sm_major}x rule): bh={} sq={sq} sk={sk} d={d} -> {}",
-            b * h,
-            if kernel == FlashKernel::Cudnn {
-                "cuDNN"
-            } else {
-                "flash_mma_fwd2"
-            }
-        ));
-    }
-    device_mma_sdpa_with(q, k, v, scale, true, kernel)
 }
 
 /// `FASTVIDEO_SDPA_AUTO=timed`: the first call of each `(bh, sq, sk, d)`
@@ -354,8 +218,9 @@ fn timed_cudnn_or_v2(
 /// Fused dense SDPA on tensor cores (`flash_mma_fwd_d{64,128}`): bf16 Q/K/V
 /// (cast once, RNE, when they are f32), f32 online softmax, bf16 P, f32
 /// accumulation; one launch, no score buffer. Output is f32, or bf16 when
-/// `out_bf16`. `None` when [`mma_sdpa_supported`] says no or no device is
-/// expected, so the caller falls back to [`device_dense_sdpa`].
+/// `out_bf16`. The kernel is [`super::sdpa_rule::mma_kernel`]'s pick. `None`
+/// when [`mma_sdpa_supported`] says no or no device is expected, so the
+/// caller falls back to [`device_dense_sdpa`].
 #[cfg(feature = "cuda")]
 pub fn device_mma_sdpa(
     q: &CudaTensor,
@@ -364,30 +229,53 @@ pub fn device_mma_sdpa(
     scale: Option<f32>,
     out_bf16: bool,
 ) -> Result<Option<CudaTensor>> {
-    let kernel = match (bhsd(q, k, v), super::device::global_device()) {
-        (Some((b, h, sq, _, _)), Some(dev)) => {
-            use cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT;
-            let sms = dev
-                .ctx
-                .attribute(CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
-                .map_or(1, |n| n.max(1) as usize);
-            match flash_kernel_for(sq, b * h, sms) {
-                // `auto` only: an explicit `v2` stays V2.
-                FlashKernel::V2
-                    if out_bf16
-                        && cudnn_default(dev.sm_major)
-                        && fastvideo_models::techniques::kernels::choice(
-                            fastvideo_models::techniques::kernels::KernelOp::DenseAttention,
-                        ) == "auto" =>
+    let dims = super::sdpa_rule::Shape::of(&q.shape, &k.shape, &v.shape).dims;
+    let kernel = super::sdpa_rule::mma_kernel(dims, out_bf16, &super::sdpa::Live);
+    device_mma_sdpa_pick(q, k, v, scale, out_bf16, kernel)
+}
+
+/// [`device_mma_sdpa`] on a [`super::sdpa_rule::MmaKernel`]: a fixed kernel,
+/// the per-shape rule's (logged once per shape; bf16 out), or the timed
+/// pick of `FASTVIDEO_SDPA_AUTO=timed`.
+#[cfg(feature = "cuda")]
+fn device_mma_sdpa_pick(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    scale: Option<f32>,
+    out_bf16: bool,
+    kernel: super::sdpa_rule::MmaKernel,
+) -> Result<Option<CudaTensor>> {
+    use super::sdpa_rule::MmaKernel;
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    match kernel {
+        MmaKernel::Fixed(kernel) => device_mma_sdpa_with(q, k, v, scale, out_bf16, kernel),
+        MmaKernel::Timed => timed_cudnn_or_v2(q, k, v, scale),
+        MmaKernel::Rule { kernel, sm_major } => {
+            if let Some((b, h, sq, sk, d)) = bhsd(q, k, v) {
+                static LOGGED: OnceLock<Mutex<HashSet<(usize, usize, usize, usize)>>> =
+                    OnceLock::new();
+                if LOGGED
+                    .get_or_init(|| Mutex::new(HashSet::new()))
+                    .lock()
+                    .expect("sdpa rule log")
+                    .insert((b * h, sq, sk, d))
                 {
-                    return auto_cudnn_or_v2(q, k, v, scale);
+                    super::log::info(format_args!(
+                        "sdpa auto (sm_{sm_major}x rule): bh={} sq={sq} sk={sk} d={d} -> {}",
+                        b * h,
+                        if kernel == FlashKernel::Cudnn {
+                            "cuDNN"
+                        } else {
+                            "flash_mma_fwd2"
+                        }
+                    ));
                 }
-                k => k,
             }
+            device_mma_sdpa_with(q, k, v, scale, true, kernel)
         }
-        _ => flash_kernel_choice(),
-    };
-    device_mma_sdpa_with(q, k, v, scale, out_bf16, kernel)
+    }
 }
 
 /// [`device_mma_sdpa`] on an explicit kernel.
@@ -986,109 +874,9 @@ pub fn device_dense_sdpa(
     Ok(None)
 }
 
-/// Online-softmax tiled attention on host (`FASTVIDEO_SDPA=host`, CPU runs).
-pub(crate) fn flash_style_sdpa_host(
-    q: &CudaTensor,
-    k: &CudaTensor,
-    v: &CudaTensor,
-    scale: Option<f32>,
-) -> Result<CudaTensor> {
-    let (b, h, sq, sk, d) = bhsd(q, k, v).ok_or_else(|| msg("flash sdpa shape mismatch"))?;
-    host_only_op("sdpa_host", format_args!("q={:?} k={:?}", q.shape, k.shape))?;
-    let scale = scale.unwrap_or(1.0 / (d as f32).sqrt());
-    let tile = 64usize.min(sk.max(1));
-    let (qh, kh, vh) = (q.host_cow()?, k.host_cow()?, v.host_cow()?);
-    let mut out = vec![0.0f32; b * h * sq * d];
-    use rayon::prelude::*;
-    out.par_chunks_mut(d).enumerate().for_each(|(row, o)| {
-        let (bh, qi) = (row / sq, row % sq);
-        let q_off = bh * sq * d + qi * d;
-        let mut m_i = f32::NEG_INFINITY;
-        let mut l_i = 0.0f32;
-        let mut start = 0;
-        while start < sk {
-            let len = tile.min(sk - start);
-            let scores: Vec<f32> = (0..len)
-                .map(|tj| {
-                    let k_off = bh * sk * d + (start + tj) * d;
-                    (0..d).map(|t| qh[q_off + t] * kh[k_off + t]).sum::<f32>() * scale
-                })
-                .collect();
-            let tile_max = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            let m_new = m_i.max(tile_max);
-            let alpha = if m_i.is_finite() {
-                (m_i - m_new).exp()
-            } else {
-                0.0
-            };
-            o.iter_mut().for_each(|x| *x *= alpha);
-            l_i *= alpha;
-            for (tj, s) in scores.iter().enumerate() {
-                let p = (s - m_new).exp();
-                l_i += p;
-                let v_off = bh * sk * d + (start + tj) * d;
-                for t in 0..d {
-                    o[t] += p * vh[v_off + t];
-                }
-            }
-            m_i = m_new;
-            start += len;
-        }
-        let inv = 1.0 / l_i.max(1e-20);
-        o.iter_mut().for_each(|x| *x *= inv);
-    });
-    CudaTensor::from_vec(out, vec![b, h, sq, d])
-}
-
-/// Block-sparse local+sink window attention (`FASTVIDEO_VSA=1`). Host only:
-/// a GPU run errors instead of computing it on the CPU.
-pub fn block_sparse_sdpa(
-    q: &CudaTensor,
-    k: &CudaTensor,
-    v: &CudaTensor,
-    scale: Option<f32>,
-    window: usize,
-) -> Result<CudaTensor> {
-    let (b, h, sq, sk, d) = bhsd(q, k, v).ok_or_else(|| msg("sparse sdpa shape mismatch"))?;
-    host_only_op("block_sparse_sdpa", format_args!("q={:?}", q.shape))?;
-    let scale = scale.unwrap_or(1.0 / (d as f32).sqrt());
-    let window = window.max(1);
-    let sink = window.min(sk);
-    let (qh, kh, vh) = (q.host_cow()?, k.host_cow()?, v.host_cow()?);
-    let mut out = vec![0.0f32; b * h * sq * d];
-    for bh in 0..b * h {
-        for qi in 0..sq {
-            let q_off = bh * sq * d + qi * d;
-            let (lo, hi) = (qi.saturating_sub(window), (qi + window + 1).min(sk));
-            let idx: Vec<usize> = (0..sk)
-                .filter(|&j| j < sink || (j >= lo && j < hi))
-                .collect();
-            let scores: Vec<f32> = idx
-                .iter()
-                .map(|&j| {
-                    (0..d)
-                        .map(|t| qh[q_off + t] * kh[bh * sk * d + j * d + t])
-                        .sum::<f32>()
-                        * scale
-                })
-                .collect();
-            let m = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            let exps: Vec<f32> = scores.iter().map(|s| (s - m).exp()).collect();
-            let z: f32 = exps.iter().sum();
-            let o = &mut out[q_off..q_off + d];
-            for (&j, e) in idx.iter().zip(&exps) {
-                for t in 0..d {
-                    o[t] += e / z * vh[bh * sk * d + j * d + t];
-                }
-            }
-        }
-    }
-    CudaTensor::from_vec(out, vec![b, h, sq, d])
-}
-
 #[cfg(test)]
 mod tests {
-    use super::super::nn::scaled_dot_product_attention;
+    use super::super::sdpa::{sdpa, Plan};
     use super::*;
 
     #[test]
@@ -1130,27 +918,15 @@ mod tests {
             window: 2,
             sink: 1,
         };
-        let got = super::super::nn::sdpa_block_causal(&q, &k, &vv, None, spec).unwrap();
+        let got = sdpa(&q, &k, &vv, &Plan::block_causal(None, spec)).unwrap();
         let mask = CudaTensor::from_vec(spec.dense_mask(s, s), vec![1, 1, s, s]).unwrap();
-        let want =
-            super::super::nn::scaled_dot_product_attention_masked(&q, &k, &vv, None, Some(&mask))
-                .unwrap();
+        let want = sdpa(&q, &k, &vv, &Plan::masked(None, Some(&mask))).unwrap();
         assert_eq!(got.host_cow().unwrap(), want.host_cow().unwrap());
         // The first query (block 0) sees only block 0: its output is the
         // softmax-weighted mean of the first five value rows alone.
         let masked_first = got.host_cow().unwrap()[..d].to_vec();
-        let dense = scaled_dot_product_attention(&q, &k, &vv, None).unwrap();
+        let dense = sdpa(&q, &k, &vv, &Plan::dense(None)).unwrap();
         assert_ne!(masked_first, dense.host_cow().unwrap()[..d].to_vec());
-    }
-
-    #[test]
-    fn flash_v2_only_where_its_grid_fills_the_gpu() {
-        // RTX PRO 6000: 188 SMs.
-        assert!(flash_v2_fills(37_710, 56, 188)); // H3 768p
-        assert!(flash_v2_fills(124_440, 32, 188)); // LTX 1080p 20 s stage 2
-        assert!(flash_v2_fills(130_560, 32, 188)); // LTX 4K 5 s stage 2
-        assert!(!flash_v2_fills(6_144, 32, 188)); // LTX 768x512: V1 wins by 2%
-        assert!(!flash_v2_fills(1, 1, 188));
     }
 
     #[test]
@@ -1192,20 +968,6 @@ mod tests {
         assert!(device_mma_sdpa(&q, &q, &q, None, false).unwrap().is_none());
     }
 
-    #[test]
-    fn host_flash_matches_composed() {
-        let q = CudaTensor::from_vec(
-            (0..24).map(|x| (x as f32) * 0.01).collect(),
-            vec![1, 2, 3, 4],
-        )
-        .unwrap();
-        let dense = scaled_dot_product_attention(&q, &q, &q, None).unwrap();
-        let flash = flash_style_sdpa_host(&q, &q, &q, None).unwrap();
-        for (a, b) in dense.data.iter().zip(&flash.data) {
-            assert!((a - b).abs() < 1e-5, "{a} vs {b}");
-        }
-    }
-
     fn psnr_db(actual: &[f32], reference: &[f32]) -> f64 {
         let peak = reference.iter().fold(0.0f32, |a, &v| a.max(v.abs()));
         let range = f64::from(2.0 * peak.max(1.0));
@@ -1222,17 +984,17 @@ mod tests {
     }
 
     #[test]
-    fn host_flash_bf16_act_psnr_vs_f32() {
+    fn dense_bf16_act_psnr_vs_f32() {
         let q = CudaTensor::from_vec(
             (0..24).map(|x| (x as f32) * 0.13 - 0.8).collect(),
             vec![1, 2, 3, 4],
         )
         .unwrap();
         let f32_out = crate::rt::tensor::with_bf16_act(false, || {
-            scaled_dot_product_attention(&q, &q, &q, None).unwrap()
+            sdpa(&q, &q, &q, &Plan::dense(None)).unwrap()
         });
         let bf16_out = crate::rt::tensor::with_bf16_act(true, || {
-            scaled_dot_product_attention(&q, &q, &q, None).unwrap()
+            sdpa(&q, &q, &q, &Plan::dense(None)).unwrap()
         });
         assert_eq!(bf16_out.dtype(), crate::rt::tensor::TensorDType::Bf16);
         let p = psnr_db(&bf16_out.host_cow().unwrap(), &f32_out.host_cow().unwrap());
