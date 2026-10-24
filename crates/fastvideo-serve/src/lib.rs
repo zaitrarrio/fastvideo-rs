@@ -67,6 +67,8 @@ pub mod metrics;
 pub mod moderation;
 pub mod multiworker;
 pub mod native;
+#[cfg(feature = "otel")]
+pub mod otel;
 #[cfg(feature = "reactor")]
 pub mod reactor;
 pub mod router;
