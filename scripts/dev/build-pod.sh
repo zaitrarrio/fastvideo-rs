@@ -20,6 +20,7 @@
 #                                    sync, then run an allowlisted command
 #                                    (cargo check|build|test|clippy|fmt|doc|tree|
 #                                    metadata, bash scripts/serve/check.sh,
+#                                    bash scripts/serve/coverage.sh [--tests],
 #                                    bash scripts/gpu/lint.sh); streams the log
 #                                    and exits with the command's status
 #   build-pod.sh log <job>           re-attach to a job's log

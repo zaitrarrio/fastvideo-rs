@@ -45,6 +45,35 @@ lint at its source; where it flags an intentional pattern, the narrowest
 `rust-version` (1.88) is what clippy's `incompatible_msrv` checks the std
 APIs against, so every crate inherits it.
 
+## Coverage
+
+`scripts/serve/coverage.sh` (plan E4) runs `cargo test --locked` over the
+adapter crates (`fastvideo-openai-videos`, `-minimax`, `-ltxapi`, `-fal`,
+`-reactor`), `fastvideo-serve` and the CPU crates they build on
+(`fastvideo-protocol`, `-trace`, `-engine-service`, `-serve-kit`,
+`-upsampler`) under [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov),
+one instrumented run, and writes `lcov.info`, `html/` and the line / region /
+function totals (`summary.json`, `summary.md`) to `target/llvm-cov`
+(`FV_COV_OUT` moves it). `task coverage` runs it; `task coverage:tests` (or
+`coverage.sh --tests`) runs the same crate set with plain `cargo test
+--locked`, no instrumentation.
+
+In CI the `adapter-tests` workflow runs the script in the build base image
+on every pull request that touches those crates (and on pushes to main),
+uploads the reports as the `adapter-coverage` artifact and prints the
+totals in the job summary. It is the only workflow that runs these crates'
+Rust tests on pull requests: `serve-compat` drives the client libraries
+against the `fv-serve` binary, and `tools-release` runs `check.sh` only on
+pushes to main whose tools inputs changed.
+
+Locally: `cargo install cargo-llvm-cov --locked` and `rustup component add
+llvm-tools-preview`. On the build pod `coverage.sh` is allowlisted
+(`build-pod.sh run <agent> -- bash scripts/serve/coverage.sh --tests` works
+today); the instrumented mode waits for `cargo-llvm-cov` and
+`llvm-tools-preview` in `docker/build-base.Dockerfile` (a re-pin of the
+image, see [build-pod.md](build-pod.md) "Base image"), after which the
+workflow's run-time installs can go too.
+
 ## What goes where
 
 **Stage 2 (load-tolerant).** Everything that checks behaviour: protocol
