@@ -226,6 +226,12 @@ watchdog's, as `FV_TUNNEL_TOKEN` is. A GMI / Brev pod on r2 cleans `.*.partial-*
 `weights checking` after the fetch, as PROVIDER_BOOT's weights loop did; an unset `FV_R2_SKIP_TREES` that resolves to
 nothing stays unset.
 
+Signals, as with the shell boots: a TERM sent to fv-boot before its exec (PID 1 of the container, no handler
+installed) is ignored by the kernel, as it was by the shell boot; after the exec it reaches fv-serve, which drains.
+The streaming guard's KILL after the grace is likewise a no-op when fv-serve is PID 1 (the kernel ignores KILL to a
+container's init from inside it), exactly as the shell guard's `kill -KILL` was; the TERM it sends first is what stops
+fv-serve, and Runpod's restart policy then starts a fresh container.
+
 ### 6. Staging (deploy compatibility) and what is deleted when
 
 Images already deployed have no fv-boot, and fv-control is deployed by hand, separately from the images (plan A3
@@ -278,6 +284,12 @@ change carry `out/fv-boot` in their `serve-cuda` and `serve-cpu` sets (`release-
 named context, so nothing compiles. With a release from before fv-boot (the newest today, `tools-v0.1.37`) the
 `serve-build` / `cpu-build` contexts stay prebuilt and only `boot-build` compiles on the runner (one crate and its
 dependencies), with a notice in the job. `serve-image.yml` therefore builds with both kinds of release.
+fv-boot reports the release version it was built for (`FV_RELEASE_VERSION`, as fv-serve does; the tools-release
+gates check `fv-boot version`). On a stale or pinned pre-fv-boot release (`FV_PREBUILT_STALE=latest`,
+`FV_TOOLS_VERSION`), the image's fv-boot is compiled from HEAD while its fv-serve comes from the older release. That
+is acceptable: fv-boot talks to fv-serve only through its command line (`--config`, `--print-config`, `--version`, an
+exec) and its environment, which fv-serve has accepted unchanged for every release since the env contract (§3) was
+the shell boots'; the newer side is the boot, which adds checks and never needs a newer fv-serve flag.
 
 **Deploy order (recommended).** The GPU gate covered one kind (the image on its own, `:ltx`, volume weights). So:
 

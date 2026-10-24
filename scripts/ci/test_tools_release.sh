@@ -94,7 +94,9 @@ mkgroup() { # dir sets... : a fake build of those sets for HEAD; binaries print 
   for set in "$@"; do
     local st="$tmp/st-$set"; rm -rf "$st"; mkdir -p "$st"
     case "$set" in
-      serve-cpu) mkdir -p "$st/out"; printf '#!/bin/sh\necho "fv-serve 0.1.11"\n' >"$st/out/fv-serve"; chmod +x "$st/out/fv-serve" ;;
+      serve-cpu) mkdir -p "$st/out"; printf '#!/bin/sh\necho "fv-serve 0.1.11"\n' >"$st/out/fv-serve"; chmod +x "$st/out/fv-serve"
+        # FAKE_BOOT_VERSION: the set also carries fv-boot (ADR-0014), whose `version` prints that.
+        if [[ -n "${FAKE_BOOT_VERSION:-}" ]]; then printf '#!/bin/sh\n[ "$1" = version ] && echo "fv-boot %s"\n' "$FAKE_BOOT_VERSION" >"$st/out/fv-boot"; chmod +x "$st/out/fv-boot"; fi ;;
       serve-fake) printf '#!/bin/sh\necho "fv-serve 0.1.11"\n' >"$st/fv-serve"; chmod +x "$st/fv-serve" ;;
       gpucheck) printf '#!/bin/sh\necho "fv-gpucheck 0.1.11"\n' >"$st/fv-gpucheck"; chmod +x "$st/fv-gpucheck" ;;
       *) echo "$set" >"$st/$set.txt" ;;
@@ -117,6 +119,13 @@ grep -q "^manifest-sha256: $(sha256sum "$tmp/asm/release/manifest.json" 2>/dev/n
   && echo "ok   (body carries the manifest sha256)" || { echo "FAIL assemble body"; tail -5 "$tmp/asm.log"; fail=1; }
 check "assemble refuses a wrong -V" 2 "$(bash "$T" assemble HEAD --version 0.1.12 --tag tools-v0.1.12 --in "$tmp/in" --out "$tmp/asm4" >/dev/null 2>"$tmp/asm4.log"; echo $?)"
 grep -q "expected 0.1.12" "$tmp/asm4.log" && echo "ok   (because of -V)" || { echo "FAIL -V reason"; tail -3 "$tmp/asm4.log"; fail=1; }
+# fv-boot in the serve set: its `version` must be the release's.
+rm -rf "$tmp/inb" && cp -a "$tmp/in" "$tmp/inb" && FAKE_BOOT_VERSION=0.1.11 mkgroup "$tmp/inb/a" oxide serve-cuda serve-cpu
+check "assemble checks fv-boot's version" 0 "$(bash "$T" assemble HEAD --version 0.1.11 --tag tools-v0.1.11 --in "$tmp/inb" --out "$tmp/asm5" >/dev/null 2>"$tmp/asm5.log"; echo $?)"
+grep -q "serve-cpu/out/fv-boot: fv-boot 0.1.11" "$tmp/asm5.log" && echo "ok   (fv-boot 0.1.11 checked)" || { echo "FAIL fv-boot not checked"; tail -3 "$tmp/asm5.log"; fail=1; }
+FAKE_BOOT_VERSION=0.1.1 mkgroup "$tmp/inb/a" oxide serve-cuda serve-cpu
+check "assemble refuses an fv-boot with another version" 2 "$(bash "$T" assemble HEAD --version 0.1.11 --tag tools-v0.1.11 --in "$tmp/inb" --out "$tmp/asm6" >/dev/null 2>"$tmp/asm6.log"; echo $?)"
+grep -q "fv-boot version says 'fv-boot 0.1.1', expected fv-boot 0.1.11" "$tmp/asm6.log" && echo "ok   (because of fv-boot version)" || { echo "FAIL fv-boot reason"; tail -3 "$tmp/asm6.log"; fail=1; }
 mkgroup "$tmp/in/d" hf-fm
 check "assemble refuses a set built twice" 2 "$(bash "$T" assemble HEAD --version 0.1.11 --tag tools-v0.1.11 --in "$tmp/in" --out "$tmp/asm2" >/dev/null 2>&1; echo $?)"
 rm -rf "$tmp/in/d"; rm "$tmp/in/c/hf-fm.tar.gz"

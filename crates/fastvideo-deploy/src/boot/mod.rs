@@ -46,8 +46,15 @@ pub use error::BootError;
 pub use report::{Log, Reporter};
 pub use sys::{Clock, Cmd, Http, LogSink, Spawner};
 
-/// fv-boot's version (the crate's).
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// fv-boot's version: the tools release being built (`FV_RELEASE_VERSION`,
+/// which scripts/dev/release-artifacts-pod.sh exports and the tools-release.sh
+/// gates check: `fv-boot version` = `fv-boot <release version>`), else the
+/// package version, as fastvideo-serve's build.rs does. rustc records the
+/// `option_env!` read, so cargo rebuilds when it changes.
+pub const VERSION: &str = match option_env!("FV_RELEASE_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 /// The marker a fv-serve built with the streaming loader carries
 /// (docs/ops/r2-weights.md §11): the boot only streams into a binary that has it.

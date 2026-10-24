@@ -518,3 +518,12 @@ ran (pod id, $/hr), result, cost.
   and tests in `check.sh`, the image entrypoint asserted in CI. Recommended
   rollout: fv-control with `FV_BOOT_LEGACY=1`, lifted per kind after the
   open per-kind gates (ADR-0014 §6).
+- 2026-10-24 06:35Z: C2 tools-release fix on #159: the hosted serve-cpu
+  dry run (run 40069726472) failed in tools-deps' oxide stage, which runs
+  only when `release-artifacts-pod.sh` changes (its layer is otherwise
+  cached): `ldconfig -p | grep -q libclang` under `pipefail` lost a race
+  (grep exits at the match, ldconfig's next write dies of SIGPIPE), although
+  build-base's ld cache lists libclang (checked in the image's layers and on
+  the build pod); now `grep >/dev/null`. fv-boot reports
+  `FV_RELEASE_VERSION` as fv-serve does (the gates check `fv-boot version`;
+  a mismatch case added to `test_tools_release.sh`).

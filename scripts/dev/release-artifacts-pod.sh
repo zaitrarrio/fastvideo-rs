@@ -82,7 +82,10 @@ done
 # redist toolkit without cuRAND gets the libcurand redist headers in a
 # private overlay of it on the container disk.
 oxide_prereqs() {
-  ldconfig -p | grep -q 'libclang[-.0-9]*\.so' \
+  # grep reads all of ldconfig's output (no -q): with -q it exits at the match, a later write of ldconfig's then
+  # dies of SIGPIPE, and under pipefail the check failed although libclang was there (the hosted serve-cpu job,
+  # 2026-10-24: a race, so it only showed once a change of this file invalidated the cached oxide layer).
+  ldconfig -p | grep 'libclang[-.0-9]*\.so' >/dev/null \
     || die "libclang is missing from the build pod image ${FV_BUILD_IMAGE:-?} (docker/build-base.Dockerfile)"
   [[ -x "$CUDA_HOME/bin/tileiras" ]] || die "no tileiras in $CUDA_HOME"
   if [[ -f "$CUDA_HOME/include/cuda.h" && -f "$CUDA_HOME/include/curand.h" ]]; then

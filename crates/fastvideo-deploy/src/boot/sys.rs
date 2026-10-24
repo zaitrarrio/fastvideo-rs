@@ -404,9 +404,10 @@ impl LogSink for StderrLog {
     }
 }
 
-/// A signal to a process through the shell's `kill` builtin (`sh -c 'kill -s
-/// SIG "$1"'`): the serve images have no procps, so no `kill` / `pkill`
-/// binary can be assumed.
+/// A signal to a process through the shell's `kill` builtin: `sh -c 'kill -s
+/// "$0" "$1"' <SIG> <pid>` (the signal and the pid are the script's `$0` and
+/// `$1`, never spliced into it). The serve images have no procps, so no `kill`
+/// / `pkill` binary can be assumed.
 pub fn kill_cmd(sig: &str, pid: u32) -> Cmd {
     Cmd::new("sh").args(["-c", "kill -s \"$0\" \"$1\"", sig, &pid.to_string()])
 }
