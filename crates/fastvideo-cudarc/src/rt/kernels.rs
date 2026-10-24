@@ -14,12 +14,14 @@ use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
 
 use super::device::{DeviceError, Result};
 
-/// The NVRTC / nvcc source: one file, two consumers. build.rs compiles it
+/// The NVRTC / nvcc source: one string, two consumers. build.rs compiles it
 /// ahead of time with nvcc when a toolkit is present (per-SM cubins embedded
 /// in the binary); the runtime falls back to NVRTC from this same string
-/// when it is not. Keeping them one file is what makes the two paths
-/// provably the same code.
-pub(crate) const KERNEL_SRC: &str = include_str!("kernels.cu");
+/// when it is not. The string is the region files (`rt/kernels/*.cu`, the
+/// family `kernels/*.cu`) concatenated in build.rs's `KERNEL_PARTS` order,
+/// and [`super::kernel_src`]'s tests pin its bytes, which is what makes the
+/// two paths provably the same code.
+pub(crate) use super::kernel_src::KERNEL_SRC;
 
 /// Declares [`KernelFns`] and [`KERNEL_NAMES`] from one list, so a kernel
 /// can't be compiled but not loaded (or vice versa).
@@ -169,7 +171,7 @@ kernel_fns!(
     vsa_tile_qkv_b16,
     vsa_combine_g16,
     vsa_topk2,
-    // ---- ltx2 region (appended; see the end of kernels.cu) ----
+    // ---- ltx2 region (ltx2/kernels/dit.cu) ----
     ltx_abs_diff_sums,
     ltx_row_sumsq,
     ltx_index_copy_rows,
@@ -198,7 +200,7 @@ kernel_fns!(
     amax_abs_mixed,
     w8a8_quantize,
     w8a8_dequantize,
-    // ---- h3 video vae region (appended; see the end of kernels.cu) ----
+    // ---- h3 video vae region (h3/kernels/video_vae.cu) ----
     h3v_residual_norm_bf16,
     h3v_qkv_heads_bf16,
     h3v_merge_heads_bf16,
@@ -209,12 +211,12 @@ kernel_fns!(
     h3v_residual_norm_mx,
     h3v_merge_heads_mx,
     h3v_swiglu_mx,
-    // ---- ltx video vae region (appended; see the end of kernels.cu) ----
+    // ---- ltx video vae region (ltx2/kernels/video_vae.cu) ----
     ltxv_norm_silu,
     ltxv_latent_in,
     ltxv_d2s_bias,
     ltxv_out_unpatch,
-    // ---- DiT block fusions (appended; see the end of kernels.cu) ----
+    // ---- DiT block fusions (rt/kernels/dit_fusions.cu) ----
     fvf_ltx_qk_norm_rope,
     fvf_ltx_res_norm_mod,
     fvf_ltx_gate_merge,
@@ -225,12 +227,12 @@ kernel_fns!(
     fvf_h3_swiglu_nvfp4,
     fvf_amax_f32_r16,
     fvf_h3_merge_heads_nvfp4,
-    // ---- Wan block, bf16 activations (appended) ----
+    // ---- Wan block, bf16 activations (wan/kernels/block.cu) ----
     wan_res_ln,
     wan_res_gate,
     wan_ln,
     wan_qk_norm_rope16,
-    // ---- adapter fuse on the device (appended) ----
+    // ---- adapter fuse on the device (rt/kernels/lora_fuse.cu) ----
     lora_fuse_bf16,
 );
 

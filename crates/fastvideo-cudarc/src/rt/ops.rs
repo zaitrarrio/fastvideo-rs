@@ -4655,10 +4655,11 @@ pub fn scatter_add_rows_host(
     out
 }
 
-/// The MoE region of `kernels.cu` as its own NVRTC source (LingBot MoE).
+/// The MoE region of the kernel source (`rt/kernels/moe.cu`) as its own NVRTC
+/// source (LingBot MoE), sliced from the concatenated string as before the split.
 #[cfg(feature = "cuda")]
 pub fn moe_kernel_src() -> String {
-    const ALL: &str = include_str!("kernels.cu");
+    const ALL: &str = super::kernel_src::KERNEL_SRC;
     let start = ALL
         .find("// ==== region: moe ====")
         .expect("kernels.cu moe region");

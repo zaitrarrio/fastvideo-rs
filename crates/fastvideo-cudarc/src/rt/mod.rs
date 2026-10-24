@@ -35,6 +35,8 @@ pub mod graph;
 pub mod hopper;
 pub mod hostmem;
 pub mod inject;
+/// The kernel source string, concatenated by `build.rs` from the region files.
+pub(crate) mod kernel_src;
 #[cfg(feature = "cuda")]
 pub mod kernels;
 pub mod ledger;

@@ -2,8 +2,9 @@
 //!
 //! When an `nvcc` is reachable (`NVCC=/path` or on `PATH`) and the `cuda`
 //! feature is on, every SM in `FV_CUBIN_SMS` (default: Turing through
-//! Blackwell) gets a cubin and a PTX compiled from `src/rt/kernels.cu`, and a
-//! generated `aot.rs` embeds them. The runtime then loads real SASS for the
+//! Blackwell) gets a cubin and a PTX compiled from the kernel source (the
+//! region files of [`KERNEL_PARTS`] concatenated into `$OUT_DIR/kernels.cu`),
+//! and a generated `aot.rs` embeds them. The runtime then loads real SASS for the
 //! device it finds — no NVRTC on the box, no driver JIT, and the target list is
 //! decided here where CI can check it, not at runtime where a missing mapping
 //! once compiled every guarded kernel body out on Blackwell.
@@ -28,7 +29,29 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const SRC: &str = "src/rt/kernels.cu";
+/// The NVRTC / nvcc kernel source, one region per file, in this order. The
+/// concatenation is byte for byte the former `src/wan/kernels.cu` (sha256
+/// `c9b61cd2b2677292eba5a83b6ec93ba744c69f51de3bec06accbaae9087cc0d3`, checked
+/// by `rt::kernel_src`'s tests), and both consumers see only the concatenation:
+/// nvcc compiles `$OUT_DIR/kernels.cu` written here, NVRTC gets the same bytes
+/// as `concat!(include_str!(..), ..)` from the generated `kernel_src.rs`. Adding
+/// a region means appending a file here and nowhere else.
+const KERNEL_PARTS: &[&str] = &[
+    "src/rt/kernels/core.cu",
+    "src/rt/kernels/sol.cu",
+    "src/rt/kernels/attn2.cu",
+    "src/rt/kernels/attn3.cu",
+    "src/rt/kernels/moe.cu",
+    "src/rt/kernels/nvfp4.cu",
+    "src/ltx2/kernels/dit.cu",
+    "src/rt/kernels/act16.cu",
+    "src/h3/kernels/block_ops.cu",
+    "src/h3/kernels/video_vae.cu",
+    "src/ltx2/kernels/video_vae.cu",
+    "src/rt/kernels/dit_fusions.cu",
+    "src/wan/kernels/block.cu",
+    "src/rt/kernels/lora_fuse.cu",
+];
 /// The FP8 attention module (`rt::attn_fp8`): its own cubins, sm_89 and newer.
 const SRC_FP8: &str = "src/rt/attn_fp8.cu";
 /// The SageAttention2-style module (`rt::attn_sage`): same options, sm_89+.
@@ -192,7 +215,9 @@ fn write_aot(table: &Path, nvcc_entries: &str, oxide: &str, dc_entries: &str) {
 }
 
 fn main() {
-    println!("cargo:rerun-if-changed={SRC}");
+    for part in KERNEL_PARTS {
+        println!("cargo:rerun-if-changed={part}");
+    }
     println!("cargo:rerun-if-changed={SRC_FP8}");
     println!("cargo:rerun-if-changed={SRC_SAGE}");
     println!("cargo:rerun-if-changed={SRC_VDN}");
@@ -207,6 +232,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=FV_DC_PTXAS_VERBOSE");
 
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+    let kernel_cu = write_kernel_src(&out);
     let table = out.join("aot.rs");
     let fp8_table = out.join("aot_attn_fp8.rs");
     let sage_table = out.join("aot_attn_sage.rs");
@@ -276,12 +302,13 @@ fn main() {
                     "-o",
                 ])
                 .arg(dest)
-                .arg(SRC)
+                .arg(&kernel_cu)
                 .status()
                 .unwrap_or_else(|e| panic!("running {}: {e}", nvcc.display()));
             assert!(
                 status.success(),
-                "nvcc {kind} -arch={arch} failed for {SRC}"
+                "nvcc {kind} -arch={arch} failed for {}",
+                kernel_cu.display()
             );
         }
         entries.push_str(&format!(
@@ -352,6 +379,32 @@ fn main() {
         sms,
         nvcc.display()
     );
+}
+
+/// Concatenate [`KERNEL_PARTS`] into `$OUT_DIR/kernels.cu` (nvcc's input) and
+/// write `$OUT_DIR/kernel_src.rs`, which spells the same concatenation as a
+/// `concat!` of `include_str!`s for the NVRTC fallback (`rt::kernel_src`).
+/// One list, two consumers, so the two paths cannot drift apart.
+fn write_kernel_src(out: &Path) -> PathBuf {
+    let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let mut cat = Vec::new();
+    let mut rs = String::from(
+        "/// The kernel source: `build.rs`'s `KERNEL_PARTS` concatenated in order.\n\
+         #[cfg_attr(not(feature = \"cuda\"), allow(dead_code))]\n\
+         pub(crate) const KERNEL_SRC: &str = concat!(\n",
+    );
+    for part in KERNEL_PARTS {
+        let path = root.join(part);
+        let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        cat.extend_from_slice(&bytes);
+        rs.push_str(&format!("    include_str!({:?}),\n", path.display()));
+    }
+    rs.push_str(");\n");
+    let cu = out.join("kernels.cu");
+    fs::write(&cu, cat).unwrap_or_else(|e| panic!("write {}: {e}", cu.display()));
+    let gen = out.join("kernel_src.rs");
+    fs::write(&gen, rs).unwrap_or_else(|e| panic!("write {}: {e}", gen.display()));
+    cu
 }
 
 fn write_fp8(table: &Path, entries: &str) {

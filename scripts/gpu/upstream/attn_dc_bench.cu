@@ -25,7 +25,22 @@
 #include <string>
 #include <vector>
 
-#include "../../../crates/fastvideo-cudarc/src/rt/kernels.cu"
+// The kernel source, region by region in build.rs KERNEL_PARTS order (the
+// concatenation is the former kernels.cu).
+#include "../../../crates/fastvideo-cudarc/src/rt/kernels/core.cu"
+#include "../../../crates/fastvideo-cudarc/src/rt/kernels/sol.cu"
+#include "../../../crates/fastvideo-cudarc/src/rt/kernels/attn2.cu"
+#include "../../../crates/fastvideo-cudarc/src/rt/kernels/attn3.cu"
+#include "../../../crates/fastvideo-cudarc/src/rt/kernels/moe.cu"
+#include "../../../crates/fastvideo-cudarc/src/rt/kernels/nvfp4.cu"
+#include "../../../crates/fastvideo-cudarc/src/ltx2/kernels/dit.cu"
+#include "../../../crates/fastvideo-cudarc/src/rt/kernels/act16.cu"
+#include "../../../crates/fastvideo-cudarc/src/h3/kernels/block_ops.cu"
+#include "../../../crates/fastvideo-cudarc/src/h3/kernels/video_vae.cu"
+#include "../../../crates/fastvideo-cudarc/src/ltx2/kernels/video_vae.cu"
+#include "../../../crates/fastvideo-cudarc/src/rt/kernels/dit_fusions.cu"
+#include "../../../crates/fastvideo-cudarc/src/wan/kernels/block.cu"
+#include "../../../crates/fastvideo-cudarc/src/rt/kernels/lora_fuse.cu"
 #include "../../../crates/fastvideo-cudarc/src/rt/attn_dc.cu"
 
 #define CK(x)                                                                                   \
