@@ -1385,10 +1385,13 @@ impl H3LoadPlan {
             }
             model.enable_teacache(state)?;
         }
-        // The block fusions this plan decided: the DiT's forwards run under
-        // them instead of the process-wide setting (ADR-0017, ADR-0022).
+        // The block fusions this plan decided: the DiT's and the text
+        // refiner's forwards run under them instead of the process-wide
+        // setting (ADR-0017, ADR-0022).
         let mut model = model;
         model.install_kernel_fusion(self.kernel_fusions);
+        let mut refiner = refiner;
+        refiner.install_kernel_fusion(self.kernel_fusions);
         #[cfg(feature = "cuda")]
         if lora.is_some() {
             use crate::h3::transformer::lora_device;

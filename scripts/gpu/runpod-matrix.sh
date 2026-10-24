@@ -2245,20 +2245,23 @@ Audio: male speech, clear voice, quiet room"
     # Plan B4b (docs/adr/0022-block-fusion.md): byte identity of the DiT
     # block fusions after the three families' copies became rt::fuse (one
     # rounding-policy table, one host reference, one switch, the plan's
-    # value installed on the DiT). Each cell runs the baseline binary
-    # (FV_BASELINE_SHA's runtime image, fetch-baseline.sh) and this build
-    # with the same command line and environment, then compare-clips
-    # --off-identity; run_cell writes each arm's frames.sha256.json. Every
-    # arm encodes its prompt (--no-text-cache) and is CUPTI-traced for one
-    # warm denoise step (FASTVIDEO_GPU_TRACE=1, the second step): the trace's
-    # kernel table is the evidence of which fused kernels ran (no log line
-    # names them; the trace exists in both builds). The verdict
-    # (b4b-<cell>.verdict.json, b4-verdict.sh b4b_verdict) passes only when
-    # both arms exited 0, the --off-identity compare passed (not skipped),
-    # both arms' fused-kernel evidence (fvf_* / h3_* / wan_* kernels of the
-    # traced step, name and calls) is identical and, rule "on", holds a
-    # switch-gated fused kernel (fvf_*, the FASTVIDEO_H3_FUSE / _LTX_FUSE
-    # ones) or, rule "off", holds none while the trace ran.
+    # value installed on the DiT and the text refiner / connectors). Each
+    # cell runs the baseline binary (FV_BASELINE_SHA's runtime image,
+    # fetch-baseline.sh) and this build with the same command line and
+    # environment, then compare-clips --off-identity; run_cell writes each
+    # arm's frames.sha256.json. Every arm encodes its prompt (--no-text-cache)
+    # and is CUPTI-traced for one denoise step (FASTVIDEO_GPU_TRACE=1, the
+    # second step): the trace's kernel table is the evidence of which fused
+    # kernels ran (no log line names them). FASTVIDEO_GPU_TRACE_TOP lists
+    # every kernel of the step in this build; the baseline predates it and
+    # lists its 25 slowest, so the named-kernel checks rest on the PR arm and
+    # the base arm must agree, call for call, on every fused / bf16-chain
+    # kernel it lists, and on the step's total launches. The verdict
+    # (b4b-<cell>.verdict.json, b4-verdict.sh b4b_verdict) also needs both
+    # arms exit 0, --off-identity passed (not skipped), no dropped trace
+    # record, the PR table complete, the named kernels (rule on: the
+    # switch-gated fused kernels; rule off: none of those, and the unfused
+    # path's kernels) and, for H3, the block structure in the call counts.
     # Only trees of the EU volume (H3, LTX; volumes.sh FV_EU_VOLUME_TREES):
     # Wan's fusions rest on the CPU fixtures (rt/fuse/equality.rs).
     # FV_B4B_CELLS narrows the cells (default: the four below; b4b-h3-fullopt,
@@ -2281,17 +2284,18 @@ Audio: male speech, clear voice, quiet room"
     b4b_cells="${FV_B4B_CELLS:-b4b-h3-4stepvsa b4b-h3-4stepvsa-off b4b-ltx25-512p b4b-ltx25-512p-off}"
     # No verdict of an earlier run in this directory may stand in for this one.
     [[ "$DRY_RUN" == 1 ]] || rm -f "$RUNS"/b4b-*.verdict.json "$RUNS/b4b.verdict.json"
-    # b4b_pair <cell> <weight cell> <rule on|off> <env K=V ... or -> <clip
-    # flag> <fv-gpucheck args ...>: <cell>-base (the baseline binary) and
-    # <cell>-pr (this build), each traced (FASTVIDEO_GPU_TRACE=1), the clip
-    # flag and the frames directory last; then the byte-identity compare and
-    # the cell's verdict (b4b_verdict).
+    # b4b_pair <cell> <weight cell> <rule on|off> <relations h3|-> <named
+    # kernels> <env K=V ... or -> <clip flag> <fv-gpucheck args ...>:
+    # <cell>-base (the baseline binary) and <cell>-pr (this build), each
+    # traced with the whole kernel table requested, the clip flag and the
+    # frames directory last; then the byte-identity compare and the cell's
+    # verdict (b4b_verdict).
     b4b_pair() {
-      local cell="$1" wcell="$2" rule="$3" envs="$4" clip="$5" arm bin
-      shift 5
+      local cell="$1" wcell="$2" rule="$3" rel="$4" named="$5" envs="$6" clip="$7" arm bin
+      shift 7
       [[ " $b4b_cells " == *" $cell "* ]] || { log "skip $cell (not in FV_B4B_CELLS)"; return 0; }
       # shellcheck disable=SC2206
-      local e=($envs)
+      local e=($envs) k=($named)
       [[ "$envs" == - ]] && e=()
       for arm in base pr; do
         bin="$BIN"
@@ -2302,34 +2306,43 @@ Audio: male speech, clear voice, quiet room"
           rm -rf "${RUNS:?}/$cell-$arm"
         fi
         gated_cell "$cell-$arm" "$wcell" \
-          env FASTVIDEO_GPU_TRACE=1 ${e[@]+"${e[@]}"} "$bin" "$@" "$clip" "$RUNS/$cell-$arm/frames"
+          env FASTVIDEO_GPU_TRACE=1 FASTVIDEO_GPU_TRACE_TOP=100000 ${e[@]+"${e[@]}"} \
+          "$bin" "$@" "$clip" "$RUNS/$cell-$arm/frames"
       done
       [[ "$DRY_RUN" == 1 ]] || rm -f "$RUNS/compare/compare-clips-$cell-base--$cell-pr.json"
       compare_cells "$cell-base" "$cell-pr" --off-identity
       if [[ "$DRY_RUN" == 1 ]]; then
-        log "dry-run $cell: verdict b4b_verdict $cell $rule: both arms exit 0 (summary.json); --off-identity passed; the arms' fused kernels of the traced step (stderr.log /gpu_trace top_kernels: fvf_* / h3_* / wan_*, name and calls) identical and $([[ "$rule" == on ]] && echo 'holding a switch-gated fvf_* kernel' || echo 'holding no switch-gated fvf_* kernel')"
+        log "dry-run $cell: verdict b4b_verdict $cell $rule $rel ${k[*]}: both arms exit 0 (summary.json); --off-identity passed; both traces (stderr.log /gpu_trace) with a kernel table, dropped_records 0 and equal kernel_count; the PR table complete (calls sum to kernel_count); every fvf_* / h3_* / wan_* / mx_* kernel the base lists in the PR with the same calls; rule $rule: $([[ "$rule" == on ]] && echo "${k[*]} ran" || echo "no switch-gated fvf_* kernel ran, ${k[*]} did")$([[ "$rel" == h3 ]] && echo '; the H3 block structure in the call counts')"
         return 0
       fi
-      log "$(b4b_verdict "$cell" "$rule")"
+      log "$(b4b_verdict "$cell" "$rule" "$rel" ${k[@]+"${k[@]}"})"
       tee -a "$LOG" <"$RUNS/$cell-pr/fusion-evidence.log" >/dev/null || true
     }
     # H3: FastH3 4-step VSA at 480p / 5 s, the auto text encoder, each arm
-    # encoding its prompt; fusions on (the default, set explicitly), then the
-    # control with FASTVIDEO_H3_FUSE=0 (the glue follows it off).
+    # encoding its prompt; fusions on (the default, set explicitly: the
+    # deferred last residual and the q/k/v/gate heads in one launch), then
+    # the control with FASTVIDEO_H3_FUSE=0 (the glue follows it off).
     h3_b4b=(--mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa --height 480 --width 832
       --seconds 5 --prompt "$PROMPT" --seed "$SEED" --text-encoder auto --no-text-cache --no-mp4)
-    b4b_pair b4b-h3-4stepvsa fasth3-4step-vsa on "FASTVIDEO_H3_FUSE=1" --clip-dir "${h3_b4b[@]}"
-    b4b_pair b4b-h3-4stepvsa-off fasth3-4step-vsa off "FASTVIDEO_H3_FUSE=0" --clip-dir "${h3_b4b[@]}"
-    # LTX-2.5 two-stage at 512p / 49 frames, streamed Gemma; fusions on,
-    # then the control with FASTVIDEO_LTX_FUSE=0.
+    b4b_pair b4b-h3-4stepvsa fasth3-4step-vsa on h3 "fvf_h3_gate_res_norm_mod fvf_h3_qkvg_heads" \
+      "FASTVIDEO_H3_FUSE=1" --clip-dir "${h3_b4b[@]}"
+    b4b_pair b4b-h3-4stepvsa-off fasth3-4step-vsa off h3 "h3_norm_mod h3_gate_residual h3_qk_norm_rope" \
+      "FASTVIDEO_H3_FUSE=0" --clip-dir "${h3_b4b[@]}"
+    # LTX-2.5 two-stage at 512p / 49 frames, streamed Gemma; fusions on
+    # (modulated norms, q/k norm + RoPE, the per-head output gates), then the
+    # control with FASTVIDEO_LTX_FUSE=0 (the bf16 op chains).
     ltx_b4b=(--mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25"
       --height 512 --width 768 --num-frames 49 --prompt "$PROMPT" --seed "$SEED"
       --two-stage --text streamed --no-text-cache)
-    b4b_pair b4b-ltx25-512p ltx25-two-stage on "FASTVIDEO_LTX_FUSE=1" --clip "${ltx_b4b[@]}"
-    b4b_pair b4b-ltx25-512p-off ltx25-two-stage off "FASTVIDEO_LTX_FUSE=0" --clip "${ltx_b4b[@]}"
-    # Named only: the RTX 5090 fullopt route (MXFP8 linears: the norms write
-    # MXFP8, the head merge feeds to_out's MXFP8 activation), 49 forwards.
-    b4b_pair b4b-h3-fullopt h3-base on "FASTVIDEO_H3_QUANT=mxfp8" --clip-dir \
+    b4b_pair b4b-ltx25-512p ltx25-two-stage on - "fvf_ltx_res_norm_mod fvf_ltx_qk_norm_rope fvf_ltx_gate_merge" \
+      "FASTVIDEO_LTX_FUSE=1" --clip "${ltx_b4b[@]}"
+    b4b_pair b4b-ltx25-512p-off ltx25-two-stage off - "mx_rms_norm mx_rope_half" \
+      "FASTVIDEO_LTX_FUSE=0" --clip "${ltx_b4b[@]}"
+    # Named only: the RTX 5090 fullopt route (MXFP8 linears: the head merge
+    # feeds to_out's MXFP8 activation), 49 forwards. Its TeaCache may read
+    # block outputs, which keeps the last residual undeferred, so only the
+    # merge is named and no block relation is checked.
+    b4b_pair b4b-h3-fullopt h3-base on - "fvf_merge_heads_mx" "FASTVIDEO_H3_QUANT=mxfp8" --clip-dir \
       --mode fast h3 gen --weights "$W/h3-base" --techniques h3/rtx5090_fullopt --height 480 --width 832 \
       --seconds 5 --prompt "$PROMPT" --seed "$SEED" --text-encoder auto --no-text-cache --no-mp4
     # The family: every cell named in FV_B4B_CELLS must have passed.

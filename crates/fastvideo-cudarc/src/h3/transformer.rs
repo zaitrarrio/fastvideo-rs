@@ -2692,6 +2692,9 @@ pub struct H3TextRefiner {
     eps: f32,
     final_eps: f32,
     quant: QuantMode,
+    /// The block fusions the load plan decided ([`Self::install_kernel_fusion`]);
+    /// `None`: the process-wide settings (a refiner built outside a plan).
+    kernel_fusion: Option<crate::rt::fuse::BlockFusion>,
 }
 
 impl H3TextRefiner {
@@ -2747,6 +2750,7 @@ impl H3TextRefiner {
             eps: cfg.norm_eps as f32,
             final_eps: cfg.final_norm_eps as f32,
             quant,
+            kernel_fusion: None,
         })
     }
 
@@ -2788,13 +2792,22 @@ impl H3TextRefiner {
             eps: cfg.norm_eps as f32,
             final_eps: cfg.final_norm_eps as f32,
             quant,
+            kernel_fusion: None,
         })
+    }
+
+    /// Run every following forward under the block fusions a load plan
+    /// decided, as the DiT does (the fuse stage; `crate::rt::fuse::installed`).
+    pub fn install_kernel_fusion(&mut self, fusion: crate::rt::fuse::BlockFusion) {
+        self.kernel_fusion = Some(fusion);
     }
 
     /// `[1, N, text_dim]` hidden states to `[1, N, hidden]`: plain pre-norm
     /// blocks, bidirectional attention, no RoPE, no AdaLN.
     pub fn forward(&self, text: &CudaTensor) -> Result<CudaTensor> {
-        with_quant_act(self.quant, || self.forward_inner(text))
+        crate::rt::fuse::installed(self.kernel_fusion, || {
+            with_quant_act(self.quant, || self.forward_inner(text))
+        })
     }
 
     fn forward_inner(&self, text: &CudaTensor) -> Result<CudaTensor> {

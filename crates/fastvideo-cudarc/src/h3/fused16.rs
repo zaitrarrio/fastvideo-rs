@@ -198,7 +198,13 @@ pub fn gate_residual(
         return dev::gate_residual(res, branch, rows, base, gate_slot, dim);
     }
     let (rh, bh, tab) = (res.host_cow()?, branch.host_cow()?, rows.tab.host_cow()?);
-    let n = rh.len() / dim.max(1);
+    if dim == 0 || !rh.len().is_multiple_of(dim) || bh.len() != rh.len() {
+        return Err(msg(format!(
+            "h3 fused gate residual: {:?} and {:?} are not rows of {dim}",
+            res.shape, branch.shape
+        )));
+    }
+    let n = rh.len() / dim;
     let mut out = vec![0.0f32; rh.len()];
     for r in 0..n {
         let span = r * dim..(r + 1) * dim;
@@ -1071,6 +1077,16 @@ mod tests {
         assert_eq!(out[0], 35.0);
         assert_eq!(out[h], 45.0);
         assert_eq!(out[2 * h], 45.0);
+    }
+
+    #[test]
+    fn a_residual_that_is_not_whole_rows_is_an_error() {
+        let ada = rows(4, 2, vec![0, 0]);
+        let res = CudaTensor::from_vec(vec![0.0; 6], vec![1, 6]).unwrap();
+        assert!(gate_residual(&res, &res, &ada, 0, 5).is_err());
+        let short = CudaTensor::from_vec(vec![0.0; 4], vec![1, 1, 4]).unwrap();
+        let two = CudaTensor::from_vec(vec![0.0; 8], vec![1, 2, 4]).unwrap();
+        assert!(gate_residual(&two, &short, &ada, 0, 5).is_err());
     }
 
     #[test]

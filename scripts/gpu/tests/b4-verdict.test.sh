@@ -166,79 +166,135 @@ expect fail "no-cells" "family: no cells" b4_family_verdict b4c
 printf '{"cell":"x","verdict":"fail","why":"y"}\n' >"$RUNS/b4c-b4c-ltx.verdict.json"
 expect fail "b4c-ltx:fail" "family: a failed cell" b4_family_verdict b4c $c b4c-ltx
 
-# b4b: the fused kernels of the CUPTI-traced step (stderr.log "/gpu_trace"
-# line, as rt/gpu_trace.rs prints it: compact JSON, keys in order).
-trace() { # <cell> <kernel:calls ...> (none: a trace without fused kernels)
+# b4b: the CUPTI-traced step (stderr.log "/gpu_trace" line, as
+# rt/gpu_trace.rs prints it: compact JSON, keys in order).
+# trace <cell> <top N or all> <dropped> <kernel:calls ...>: a step running
+# two GEMM / attention kernels and the given ones; the table lists the N
+# kernels with the most time (each listed kernel's time is its calls here).
+trace() {
   mkdir -p "$RUNS/$1"
-  local cell="$1" k objs="" sep=""
-  shift
-  for k in gemm_bf16:200 vsa_mma_attn:50 "$@"; do
-    objs+="$sep{\"calls\":${k#*:},\"category\":\"x\",\"name\":\"${k%%:*}\",\"share\":0.1,\"total_s\":0.01}"
+  local cell="$1" top="$2" dropped="$3" k objs="" sep="" total=0 n=0 rows
+  shift 3
+  rows="$(for k in gemm_bf16:200 vsa_mma_attn:150 "$@"; do printf '%s %s\n' "${k#*:}" "${k%%:*}"; done | sort -k1,1nr -k2,2)"
+  while read -r calls name; do
+    total=$((total + calls))
+    n=$((n + 1))
+    [[ "$top" != all ]] && (( n > top )) && continue
+    objs+="$sep{\"calls\":$calls,\"category\":\"x\",\"name\":\"$name\",\"share\":0.1,\"total_s\":0.01}"
     sep=","
-  done
+  done <<<"$rows"
   {
     printf '[INFO] loading\n'
-    printf '[INFO] h3/gpu_trace {"by_category":[{"calls":3,"category":"gemm"}],"pass":"h3","step":1,"top_kernels":[%s],"wall_s":1.0}\n' "$objs"
+    printf '[INFO] h3/gpu_trace {"by_category":[{"calls":3,"category":"gemm"}],"dropped_records":%s,"kernel_count":%s,"pass":"h3","step":1,"top_kernels":[%s],"wall_s":1.0}\n' "$dropped" "$total" "$objs"
     printf '[INFO] done\n'
   } >"$RUNS/$cell/stderr.log"
 }
-good_b4b() { # <cell> <kernel:calls ...>
-  local arm
-  for arm in base pr; do
-    summary "$1-$arm" 0
-    trace "$1-$arm" "${@:2}"
-  done
-  compare "$1-base" "$1-pr" ok
+# good_b4b <cell> <base top> <kernel:calls ...>: both arms exit 0 with the
+# same step, the base listing <base top> kernels, the PR all; identical.
+good_b4b() {
+  local cell="$1" top="$2"
+  shift 2
+  summary "$cell-base" 0
+  summary "$cell-pr" 0
+  trace "$cell-base" "$top" 0 "$@"
+  trace "$cell-pr" all 0 "$@"
+  compare "$cell-base" "$cell-pr" ok
 }
-on_kernels=(fvf_h3_gate_res_norm_mod:100 h3_norm_mod:2 fvf_h3_qkvg_heads:50 fvf_split_heads_rows:10)
-off_kernels=(h3_norm_mod:2 h3_res_gate_norm_mod:100 fvf_split_heads_rows:10)
+# H3, 40 blocks: fused, block 0's norm and the last block's residual run
+# alone, 39 deferred residuals fuse with the next norm.
+h3_on=(h3_res_gate_norm_mod:40 h3_norm_mod:1 h3_gate_residual:1 fvf_h3_gate_res_norm_mod:39 fvf_h3_qkvg_heads:40 h3_swiglu_mx:40 fvf_split_heads_rows:10)
+h3_off=(h3_res_gate_norm_mod:40 h3_norm_mod:40 h3_gate_residual:40 h3_qk_norm_rope:80 fvf_split_heads_rows:10)
+on_named=(fvf_h3_gate_res_norm_mod fvf_h3_qkvg_heads)
+off_named=(h3_norm_mod h3_gate_residual h3_qk_norm_rope)
 b=b4b-h3
 
-fresh; good_b4b $b "${on_kernels[@]}"
-expect pass - "b4b: fused kernels in both arms, identical" b4b_verdict $b on
+fresh; good_b4b $b 25 "${h3_on[@]}"
+expect pass - "b4b on: named kernels, block structure, complete PR table" b4b_verdict $b on h3 "${on_named[@]}"
 [[ -f "$RUNS/b4b-$b.verdict.json" ]] || { echo "FAIL no b4b verdict file" >&2; fails=$((fails + 1)); }
-if [[ "$(cat "$RUNS/$b-pr/fusion-evidence.log")" == $'fvf_h3_gate_res_norm_mod 100\nfvf_h3_qkvg_heads 50\nfvf_split_heads_rows 10\nh3_norm_mod 2' ]]; then
-  echo "ok   b4b evidence: fused kernels only, name order, with calls"
+if [[ "$(head -2 "$RUNS/$b-pr/fusion-evidence.log")" == $'fvf_h3_gate_res_norm_mod 39\nfvf_h3_qkvg_heads 40' ]] &&
+  ! grep -q gemm "$RUNS/$b-pr/fusion-evidence.log"; then
+  echo "ok   b4b evidence: fused and bf16-chain kernels only, name order, with calls"
 else
   echo "FAIL b4b evidence: $(cat "$RUNS/$b-pr/fusion-evidence.log")" >&2
   fails=$((fails + 1))
 fi
 
-fresh; good_b4b $b "${off_kernels[@]}"
-expect pass - "b4b off: no gated kernel, split rows allowed" b4b_verdict $b off
+fresh; good_b4b $b 3 "${h3_on[@]}"
+expect pass - "b4b on: the base lists only its top 3 (the old limit)" b4b_verdict $b on h3 "${on_named[@]}"
 
-fresh; good_b4b $b "${off_kernels[@]}"
-expect fail "base:no-fused-kernel" "b4b on: fusion did not run" b4b_verdict $b on
+fresh; good_b4b $b 25 "${h3_off[@]}"
+expect pass - "b4b off: the unfused path with its call counts" b4b_verdict $b off h3 "${off_named[@]}"
 
-fresh; good_b4b $b "${on_kernels[@]}"
-expect fail "pr:fused-kernel-ran" "b4b off: a gated kernel ran" b4b_verdict $b off
+fresh; good_b4b $b 25 "${h3_off[@]}"
+expect fail "pr:missing:fvf_h3_gate_res_norm_mod" "b4b on: fusion did not run" b4b_verdict $b on h3 "${on_named[@]}"
 
-fresh; good_b4b $b "${on_kernels[@]}"; trace $b-pr fvf_h3_gate_res_norm_mod:99 h3_norm_mod:2 fvf_h3_qkvg_heads:50
-expect fail "evidence-differs" "b4b: different call counts" b4b_verdict $b on
+fresh; good_b4b $b 25 h3_res_gate_norm_mod:40 h3_norm_mod:1 h3_gate_residual:1 fvf_h3_gate_res_norm_mod:39 h3_qk_norm_rope:80
+expect fail "pr:missing:fvf_h3_qkvg_heads" "b4b on: one named kernel missing (glue)" b4b_verdict $b on h3 "${on_named[@]}"
 
-fresh; good_b4b $b "${on_kernels[@]}"; trace $b-base fvf_h3_gate_res_norm_mod:100 h3_norm_mod:2
-expect fail "evidence-differs" "b4b: a fused kernel missing in one arm" b4b_verdict $b on
+fresh; good_b4b $b 25 "${h3_on[@]}"
+expect fail "pr:fused-kernel-ran:fvf_h3_gate_res_norm_mod,fvf_h3_qkvg_heads" "b4b off: gated kernels ran" b4b_verdict $b off h3 "${off_named[@]}"
 
-fresh; good_b4b $b "${on_kernels[@]}"; printf '[INFO] h3/gpu_trace {"pass":"h3","step":1,"error":"libcupti not found"}\n' >"$RUNS/$b-pr/stderr.log"
-expect fail "pr:no-trace" "b4b: the trace failed (no kernel table)" b4b_verdict $b on
+fresh; good_b4b $b 2 "${h3_off[@]}" fvf_ltx_gate_merge:1
+expect fail "pr:fused-kernel-ran:fvf_ltx_gate_merge" "b4b off: a gated kernel below the base's cut" b4b_verdict $b off - "${off_named[@]}"
 
-fresh; good_b4b $b "${on_kernels[@]}"; rm "$RUNS/$b-base/stderr.log"
-expect fail "base:no-trace" "b4b: an arm that never ran" b4b_verdict $b off
+fresh; good_b4b $b 25 h3_res_gate_norm_mod:40 h3_norm_mod:40 h3_gate_residual:40
+expect fail "pr:missing:h3_qk_norm_rope" "b4b off: an unfused-path kernel missing" b4b_verdict $b off h3 "${off_named[@]}"
 
-fresh; good_b4b $b "${on_kernels[@]}"; summary $b-base 1
-expect fail "base:exit" "b4b: an arm that exited 1" b4b_verdict $b on
+fresh; good_b4b $b 25 h3_res_gate_norm_mod:40 h3_norm_mod:2 h3_gate_residual:1 fvf_h3_gate_res_norm_mod:39 fvf_h3_qkvg_heads:40
+expect fail "relation:norm2+fused39!=blocks40" "b4b on: an extra norm breaks the block structure" b4b_verdict $b on h3 "${on_named[@]}"
 
-fresh; good_b4b $b "${on_kernels[@]}"; compare $b-base $b-pr skipped
-expect fail "not-identical" "b4b: a skipped compare" b4b_verdict $b on
+fresh; good_b4b $b 25 h3_res_gate_norm_mod:40 h3_norm_mod:40 h3_gate_residual:39 h3_qk_norm_rope:80
+expect fail "relation:norm40,residual39!=blocks40" "b4b off: a residual missing from the block structure" b4b_verdict $b off h3 "${off_named[@]}"
 
-fresh; good_b4b $b "${on_kernels[@]}"; compare $b-base $b-pr different
-expect fail "not-identical" "b4b: a failed --off-identity" b4b_verdict $b on
+fresh; good_b4b $b 25 "${h3_on[@]}"; trace $b-pr all 0 h3_res_gate_norm_mod:40 h3_norm_mod:1 h3_gate_residual:1 fvf_h3_gate_res_norm_mod:38 fvf_h3_qkvg_heads:40 h3_swiglu_mx:40 fvf_split_heads_rows:10 h3_qk_norm_rope:1
+expect fail "evidence-differs" "b4b: different call counts" b4b_verdict $b on h3 "${on_named[@]}"
 
-fresh; good_b4b $b "${on_kernels[@]}"
-expect fail "rule:maybe" "b4b: an unknown rule" b4b_verdict $b maybe
+fresh; good_b4b $b 25 "${h3_on[@]}"; trace $b-pr all 0 "${h3_on[@]}" mx_binary:4
+expect fail "kernel-count-differs" "b4b: one more launch in the PR step" b4b_verdict $b on h3 "${on_named[@]}"
 
-fresh; good_b4b $b "${on_kernels[@]}"; good_b4b b4b-ltx fvf_ltx_res_norm_mod:300 fvf_ltx_qk_norm_rope:200
-b4b_verdict $b on >/dev/null; b4b_verdict b4b-ltx on >/dev/null
+fresh; good_b4b $b 25 "${h3_on[@]}"; trace $b-pr 3 0 "${h3_on[@]}"
+expect fail "pr:incomplete-trace" "b4b: the PR table cut (FASTVIDEO_GPU_TRACE_TOP not read)" b4b_verdict $b on h3 "${on_named[@]}"
+
+fresh; good_b4b $b 25 "${h3_on[@]}"; trace $b-pr all 3 "${h3_on[@]}"
+expect fail "pr:dropped-records=3" "b4b: CUPTI dropped records (PR)" b4b_verdict $b on h3 "${on_named[@]}"
+
+fresh; good_b4b $b 25 "${h3_on[@]}"; trace $b-base 25 1 "${h3_on[@]}"
+expect fail "base:dropped-records=1" "b4b: CUPTI dropped records (base)" b4b_verdict $b on h3 "${on_named[@]}"
+
+fresh; good_b4b $b 25 "${h3_on[@]}"; sed -i 's/"dropped_records":0,//' "$RUNS/$b-pr/stderr.log"
+expect fail "pr:dropped-records=none" "b4b: no dropped_records field" b4b_verdict $b on h3 "${on_named[@]}"
+
+fresh; good_b4b $b 25 "${h3_on[@]}"; sed -i 's/"kernel_count":[0-9]*,//' "$RUNS/$b-pr/stderr.log"
+expect fail "pr:no-kernel-count" "b4b: no kernel_count field" b4b_verdict $b on h3 "${on_named[@]}"
+
+fresh; good_b4b $b 25 "${h3_on[@]}"; printf '[INFO] h3/gpu_trace {"pass":"h3","step":1,"error":"libcupti not found"}\n' >"$RUNS/$b-pr/stderr.log"
+expect fail "pr:no-trace" "b4b: the trace failed (no kernel table)" b4b_verdict $b on h3 "${on_named[@]}"
+
+fresh; good_b4b $b 25 "${h3_on[@]}"; rm "$RUNS/$b-base/stderr.log"
+expect fail "base:no-trace" "b4b: an arm that never ran" b4b_verdict $b on h3 "${on_named[@]}"
+
+fresh; good_b4b $b 25 "${h3_on[@]}"; summary $b-base 1
+expect fail "base:exit" "b4b: an arm that exited 1" b4b_verdict $b on h3 "${on_named[@]}"
+
+fresh; good_b4b $b 25 "${h3_on[@]}"; compare $b-base $b-pr skipped
+expect fail "not-identical" "b4b: a skipped compare" b4b_verdict $b on h3 "${on_named[@]}"
+
+fresh; good_b4b $b 25 "${h3_on[@]}"; compare $b-base $b-pr different
+expect fail "not-identical" "b4b: a failed --off-identity" b4b_verdict $b on h3 "${on_named[@]}"
+
+fresh; good_b4b $b 25 "${h3_on[@]}"
+expect fail "rule:maybe" "b4b: an unknown rule" b4b_verdict $b maybe h3 "${on_named[@]}"
+
+ltx_on=(fvf_ltx_res_norm_mod:300 fvf_ltx_qk_norm_rope:200 fvf_ltx_gate_merge:100 mx_binary:50)
+fresh; good_b4b b4b-ltx 25 "${ltx_on[@]}"
+expect pass - "b4b LTX on: all three fused kernels" b4b_verdict b4b-ltx on - fvf_ltx_res_norm_mod fvf_ltx_qk_norm_rope fvf_ltx_gate_merge
+fresh; good_b4b b4b-ltx 25 fvf_ltx_qk_norm_rope:200 fvf_ltx_gate_merge:100 mx_binary:50
+expect fail "pr:missing:fvf_ltx_res_norm_mod" "b4b LTX on: the q/k kernel alone is not enough" b4b_verdict b4b-ltx on - fvf_ltx_res_norm_mod fvf_ltx_qk_norm_rope fvf_ltx_gate_merge
+fresh; good_b4b b4b-ltx 25 mx_rms_norm:400 mx_rope_half:200 mx_binary:300 fvf_split_heads_rows:200
+expect pass - "b4b LTX off: the bf16 op chain ran" b4b_verdict b4b-ltx off - mx_rms_norm mx_rope_half
+
+fresh; good_b4b $b 25 "${h3_on[@]}"; good_b4b b4b-ltx 25 "${ltx_on[@]}"
+b4b_verdict $b on h3 "${on_named[@]}" >/dev/null; b4b_verdict b4b-ltx on - fvf_ltx_res_norm_mod >/dev/null
 expect pass - "b4b family: both cells passed" b4_family_verdict b4b $b b4b-ltx
 expect fail "b4b-ltx-off:no-verdict" "b4b family: a named cell that never ran" b4_family_verdict b4b $b b4b-ltx b4b-ltx-off
 

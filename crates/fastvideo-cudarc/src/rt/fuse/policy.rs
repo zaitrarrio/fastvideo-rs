@@ -382,6 +382,9 @@ pub enum RopeCombine {
 }
 
 /// The rounding points of a q/k RMSNorm followed by RoPE (bf16 BHSD out).
+/// Descriptive on the device: each family has one q/k kernel, whose
+/// launcher has no mode argument a policy could set, so this names that
+/// kernel (pinned by a test) and drives the host twins ([`super::host`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QkPolicy {
     pub scope: QkScope,

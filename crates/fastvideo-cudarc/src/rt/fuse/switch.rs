@@ -156,38 +156,74 @@ pub fn enabled(switch: Switch) -> bool {
     }
 }
 
+/// Restores a switch's forced value when dropped (also on unwind).
+struct ForcedGuard {
+    index: usize,
+    prev: Option<bool>,
+}
+
+impl Drop for ForcedGuard {
+    fn drop(&mut self) {
+        FORCED.with(|c| {
+            let mut v = c.get();
+            v[self.index] = self.prev;
+            c.set(v);
+        });
+    }
+}
+
+/// Restores the installed value when dropped (also on unwind).
+struct InstalledGuard(BlockFusion);
+
+impl Drop for InstalledGuard {
+    fn drop(&mut self) {
+        INSTALLED.with(|c| c.set(self.0));
+    }
+}
+
 /// Run `f` with `switch` forced on or off on this thread (parity checks).
+/// The previous value comes back when `f` returns or unwinds.
 pub fn with_forced<R>(switch: Switch, on: bool, f: impl FnOnce() -> R) -> R {
-    let i = switch.index();
+    let index = switch.index();
     let prev = FORCED.with(|c| {
         let old = c.get();
         let mut new = old;
-        new[i] = Some(on);
+        new[index] = Some(on);
         c.set(new);
-        old[i]
+        old[index]
     });
-    let out = f();
-    FORCED.with(|c| {
-        let mut v = c.get();
-        v[i] = prev;
-        c.set(v);
-    });
-    out
+    let _restore = ForcedGuard { index, prev };
+    f()
 }
 
 /// Run `f` under a plan's switches on this thread (`None`: no plan, the
-/// process values). Forced values still win.
+/// process values). Forced values still win. The previous value comes back
+/// when `f` returns or unwinds, so a caught panic leaves nothing installed
+/// on a reused thread.
 pub fn installed<R>(value: Option<BlockFusion>, f: impl FnOnce() -> R) -> R {
     let Some(value) = value else { return f() };
-    let prev = INSTALLED.with(|c| c.replace(value));
-    let out = f();
-    INSTALLED.with(|c| c.set(prev));
-    out
+    let _restore = InstalledGuard(INSTALLED.with(|c| c.replace(value)));
+    f()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_panic_restores_the_installed_and_forced_values() {
+        let before = (enabled(Switch::Ltx), enabled(Switch::Wan));
+        let plan = BlockFusion::default().with(Switch::Ltx, !before.0);
+        let caught = std::panic::catch_unwind(|| {
+            installed(Some(plan), || {
+                with_forced(Switch::Wan, !before.1, || panic!("inside the scopes"))
+            })
+        });
+        assert!(caught.is_err());
+        assert_eq!((enabled(Switch::Ltx), enabled(Switch::Wan)), before);
+        assert_eq!(INSTALLED.with(|c| c.get()), BlockFusion::default());
+        assert_eq!(FORCED.with(|c| c.get()), [None; 4]);
+    }
 
     #[test]
     fn forced_beats_installed_and_restores() {

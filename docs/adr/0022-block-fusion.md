@@ -128,7 +128,12 @@ then_mod)`, `WAN_QK_NORM_ROPE`, `H3_QK_NORM_ROPE`, `LTX_QK_NORM_ROPE`).
    ...); `split()` gives Wan's two-kernel form. The launchers take their mode
    arguments from it instead of literals; a policy no kernel implements is a
    typed `PolicyError`. Kernel sources and launch configurations are
-   unchanged.
+   unchanged. `QkPolicy` is descriptive on the device: each family has one
+   q/k kernel and its launcher has no mode argument a policy could set
+   (`use_rope`, the output dtype and the tables follow the call), so the
+   policy names that kernel (a test pins the name against the legacy
+   launch and the pinned source) and drives the host twins, but selects
+   nothing at launch.
 2. **One host reference** (`rt::fuse::host`): `res_norm_row(policy, row
    operands)` and `qk_norm` / `qk_rope_head(policy, ...)`, built from small
    primitives (`combine`, `normalize_ln_sequential`, `normalize_rms_lanes`,
@@ -166,12 +171,18 @@ then_mod)`, `WAN_QK_NORM_ROPE`, `H3_QK_NORM_ROPE`, `LTX_QK_NORM_ROPE`).
 (`BlockFusion::h3(settings)`, `BlockFusion::ltx(settings)`, from the load's
 snapshot; `on()` gives what the plan descriptions print, so
 `tests/goldens/{h3,ltx2}_load_plan.txt` are unchanged). The fuse stage
-installs it: `H3Transformer::install_kernel_fusion` (H3's fuse stage) and
-`Ltx2Transformer::install_kernel_fusion` (LTX's fuse stage for the placed
-DiT, and `Ltx2Pipeline` for every DiT it loads later). `forward` /
-`forward_probed` run inside `rt::fuse::installed(value, ..)`, so every
-fused call of the forward resolves against the plan, not the process
-cache. A switch resolves: forced (`with_forced`, the parity checks) >
+installs it: H3's fuse stage on the DiT and the text refiner
+(`H3Transformer::install_kernel_fusion`,
+`H3TextRefiner::install_kernel_fusion`); LTX's fuse stage on the placed DiT
+and `Ltx2Pipeline` on every DiT it loads later
+(`Ltx2Transformer::install_kernel_fusion`), and the pipeline runs its text
+encodes (the connectors' q/k norms and output gates) under the same value.
+The DiT's `forward` / `forward_probed`, the refiner's `forward` and the
+encodes run inside `rt::fuse::installed(value, ..)`, so no fused call of a
+planned pipeline reads the process cache and one pipeline never mixes two
+values. `installed` and `with_forced` restore the previous value through a
+drop guard, so a caught panic cannot leave a value installed on a reused
+thread. A switch resolves: forced (`with_forced`, the parity checks) >
 installed > the process setting read once (DiTs built outside a plan:
 gpucheck stages, tests). Wan has no loader stages (ADR-0017 covers H3 and
 LTX-2): its switch keeps the process value.
@@ -207,36 +218,64 @@ inside a forward reads the process value: the same value.
   each setting; the switches against the old getters (unforced, every
   forced combination and nesting, under no plan / an H3 plan / an LTX plan
   / both).
-- **Mutations** (each alone, all caught): Wan's cross residual reading the
-  f32 sum; H3's residual product-then-sum instead of FMA (caught by the
-  kernel selection and the contraction fixture); the host's product-then-sum
-  as an FMA (the contraction fixture); the rounded-norm modulation without
-  its inner rounding; Wan q/k without the normalized rounding; LTX's
-  `res_mode` 1 and 2 swapped; the glue switch not needing the fusions; an
-  installed value beating a forced one; H3's gate residual given Wan's
-  policy; the interleaved RoPE reading sin at the even slot.
+- **Mutations** (`scripts/dev/b4b-fuse-mutations.sh` applies each alone as
+  an exact-text edit, reruns the fusion tests and restores the file; all
+  eleven caught): Wan's cross residual reading the f32 sum; H3's residual
+  product-then-sum instead of FMA (caught by the kernel selection and the
+  contraction fixture); the host's product-then-sum as an FMA (the
+  contraction fixture); the rounded-norm modulation without its inner
+  rounding; Wan q/k without the normalized rounding; LTX's `res_mode` 1
+  and 2 swapped; the glue switch not needing the fusions; an installed
+  value beating a forced one; H3's gate residual given Wan's policy; the
+  interleaved RoPE reading sin at the even slot; `installed` restoring
+  without a guard (lost on unwind).
 - **GPU** (`scripts/gpu/runpod-matrix.sh b4b`, `FV_BASELINE_SHA` = the
   commit before B4b): per cell, the baseline binary and this build with the
   same argv and env, `compare-clips --off-identity`, each arm's
   `frames.sha256.json`. Every arm runs with `FASTVIDEO_GPU_TRACE=1`: the
-  CUPTI table of one traced denoise step is the evidence of which fused
-  kernels ran (no log line names them, and the trace exists in both
-  builds). `b4b_verdict` (`scripts/gpu/b4-verdict.sh`, held to stub trees
-  by `scripts/gpu/tests/b4-verdict.test.sh`) passes only when both arms
-  exited 0, the compare passed `off_identity` and
-  `off_identity_frame_count` (not skipped), both traces logged a kernel
-  table, the arms' fused kernels (`fvf_*`, `h3_*`, `wan_*`: name and calls)
-  are identical and, rule `on`, include a switch-gated `fvf_*` kernel or,
-  rule `off`, none. Cells: `b4b-h3-4stepvsa` (FastH3 4-step VSA, 480p / 5 s,
+  CUPTI kernel table of one traced denoise step is the evidence of which
+  fused kernels ran (no log line names them, and a new line would exist in
+  the PR arm only). The table used to list the step's 25 slowest kernels,
+  which cannot prove an absence (an `off` cell) or that every fused kernel
+  ran (an `on` cell could pass on one kernel while another was cut). So
+  B4b adds `FASTVIDEO_GPU_TRACE_TOP` (a `Layered` `trace` row, default 25:
+  how many kernels the report lists; it changes the report only), and the
+  cells set it to list every kernel. The baseline (main `17e4a1dc`)
+  predates the setting and keeps its 25, so the checks that need a
+  complete table rest on the PR arm, and the base arm must agree with it
+  wherever it can be compared: `b4b_verdict` (`scripts/gpu/b4-verdict.sh`,
+  held to stub trees by `scripts/gpu/tests/b4-verdict.test.sh`) passes only
+  when
+  - both arms exited 0 and the compare passed `off_identity` and
+    `off_identity_frame_count` (not skipped);
+  - both arms logged a trace with a kernel table, `dropped_records` 0 and
+    the same `kernel_count` (the step's launches);
+  - the PR arm's table is complete: its calls sum to `kernel_count`;
+  - every fused or bf16-chain kernel (`fvf_*`, `h3_*`, `wan_*`, `mx_*`) the
+    base arm lists is in the PR arm with the same calls;
+  - rule `on`: every named switch-gated kernel ran in the PR arm (H3:
+    `fvf_h3_gate_res_norm_mod`, `fvf_h3_qkvg_heads`; LTX:
+    `fvf_ltx_res_norm_mod`, `fvf_ltx_qk_norm_rope`, `fvf_ltx_gate_merge`;
+    fullopt: `fvf_merge_heads_mx`); rule `off`: no switch-gated kernel
+    (`fvf_*` but `fvf_split_heads_rows`) ran in the PR arm, and the
+    unfused path's kernels did (H3: `h3_norm_mod`, `h3_gate_residual`,
+    `h3_qk_norm_rope`; LTX: `mx_rms_norm`, `mx_rope_half`);
+  - for H3, the PR arm's calls keep the block structure: one
+    `h3_res_gate_norm_mod` per block; fused, `h3_norm_mod` +
+    `fvf_h3_gate_res_norm_mod` and `h3_gate_residual` +
+    `fvf_h3_gate_res_norm_mod` each equal it (block 0's norm and the last
+    block's residual run alone, every other block's residual is deferred);
+    unfused, `h3_norm_mod` and `h3_gate_residual` each equal it.
+  Cells: `b4b-h3-4stepvsa` (FastH3 4-step VSA, 480p / 5 s,
   `FASTVIDEO_H3_FUSE=1`), `b4b-h3-4stepvsa-off` (`=0`), `b4b-ltx25-512p`
   (LTX-2.5 two-stage 512p / 49 frames, `FASTVIDEO_LTX_FUSE=1`),
   `b4b-ltx25-512p-off` (`=0`), and, named only, `b4b-h3-fullopt` (the
-  MXFP8 route: MXFP8 norm outputs and head merge). `b4b.verdict.json`
-  fails when a cell named in `FV_B4B_CELLS` has no passing verdict.
-  The trace table lists the 25 kernels with the most time in the step; a
-  fused kernel near that cutoff could appear in one arm only, which fails
-  the cell (fail closed). Wan has no tree on the EU volume (`volumes.sh`
-  `FV_EU_VOLUME_TREES`): its evidence is the CPU fixtures.
+  MXFP8 route). `b4b.verdict.json` fails when a cell named in
+  `FV_B4B_CELLS` has no passing verdict. A named kernel the route does not
+  in fact launch on the card (e.g. `fvf_h3_qkvg_heads` when VSA does not
+  take bf16 there) fails the cell and names it; the list is set from the
+  code paths, not yet from a GPU run. Wan has no tree on the EU volume
+  (`volumes.sh` `FV_EU_VOLUME_TREES`): its evidence is the CPU fixtures.
 
 ## Consequences
 
@@ -245,6 +284,9 @@ inside a forward reads the process value: the same value.
   rounding variant is a new named policy value with an equality fixture,
   never an edit of an existing constant.
 - `legacy.rs` is test-only and frozen.
+- H3's host `gate_residual` now returns an error for operands that are not
+  whole rows of `hidden` (or differ in length), where the old twin could
+  index past the row index (a panic); well-formed inputs are unchanged.
 - The cached process value remains as the fallback for DiTs built outside
   a plan; removing it needs every such caller (gpucheck stages, Wan) to
   take a plan value first.

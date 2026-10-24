@@ -945,3 +945,15 @@ ran (pod id, $/hr), result, cost.
   `-off`, `b4b-ltx25-512p`, `-off`; `b4b-h3-fullopt` when named;
   `FV_B4B_CELLS`), every arm CUPTI-traced so the verdict sees the fused
   kernels run in both arms. Wan: CPU evidence only (no EU-volume tree).
+- 2026-10-24 19:15Z: B4b review fixes on #179: the GPU gate's kernel
+  evidence was cut to the trace's 25 slowest kernels; `FASTVIDEO_GPU_TRACE_TOP`
+  (report only) now lists every kernel in the PR arm (the baseline keeps
+  25), and `b4b_verdict` requires a complete PR table, no dropped records,
+  equal launch counts, the base's listed fused / bf16-chain kernels equal
+  call for call, every named gated kernel (`on`) or the unfused path's
+  kernels and no gated one (`off`), and H3's block structure in the call
+  counts; the plan's value now also covers the H3 text refiner and the
+  LTX text connectors; the switch scopes restore through drop guards; H3's
+  host `gate_residual` rejects partial rows; `QkPolicy` documented as
+  descriptive on the device; the mutations are a script
+  (`scripts/dev/b4b-fuse-mutations.sh`, eleven, all caught).

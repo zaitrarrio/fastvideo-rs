@@ -3540,7 +3540,10 @@ impl Ltx2Pipeline {
         }
 
         hooks.stage(Stage::Text, 0)?;
-        let (mut contexts, text_report) = self.text.encode(&req.prompt, use_text_cache)?;
+        // The text connectors run under the plan's block fusions, as the DiT.
+        let fusion = Some(self.kernel_fusion);
+        let (mut contexts, text_report) =
+            crate::rt::fuse::installed(fusion, || self.text.encode(&req.prompt, use_text_cache))?;
         timings.text_s = text_report.seconds;
         // FASTVIDEO_DUMP_DIR / FASTVIDEO_INJECT_DIR: ours first (so a diff
         // shows the text path's own parity), then the reference's contexts.
@@ -3577,7 +3580,8 @@ impl Ltx2Pipeline {
             } else {
                 req.negative_prompt.as_str()
             };
-            let (mut c, rep) = self.text.encode(negative, use_text_cache)?;
+            let (mut c, rep) =
+                crate::rt::fuse::installed(fusion, || self.text.encode(negative, use_text_cache))?;
             timings.text_s += rep.seconds;
             crate::rt::dump::tensor("text_video_ctx_neg", &c.video)?;
             crate::rt::dump::tensor("text_audio_ctx_neg", &c.audio)?;
@@ -4412,7 +4416,9 @@ impl Ltx2Pipeline {
 
         let mut timings = Ltx2Timings::default();
         let mut memory = MemoryLog::start("ltx2");
-        let (contexts, text_report) = self.text.encode(prompt, true)?;
+        let fusion = Some(self.kernel_fusion);
+        let (contexts, text_report) =
+            crate::rt::fuse::installed(fusion, || self.text.encode(prompt, true))?;
         timings.text_s = text_report.seconds;
         trim()?;
         memory.mark("text")?;

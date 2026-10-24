@@ -279,6 +279,8 @@ mod rows {
             "CUPTI trace of a whole video decode (kernel time by category, GPU idle)."),
         row("FASTVIDEO_GPU_TRACE_STEP", Layered, Usize, "", Value("1"), Runtime, "trace", Call,
             "Denoise step `FASTVIDEO_GPU_TRACE` traces."),
+        row("FASTVIDEO_GPU_TRACE_TOP", Layered, Usize, "", Value("25"), Runtime, "trace", Call,
+            "Kernels a `FASTVIDEO_GPU_TRACE` report lists (`top_kernels`, by time); the report only."),
         row("FASTVIDEO_H2D_TRACE_BYTES", Env, Text, "a `usize` (not trimmed); unset or unparsable = off", Unset, Runtime, "trace", Process,
             "Log host-to-device copies of at least this many bytes."),
         row("FASTVIDEO_H2D_TRACE_SKIP", Layered, Usize, "", Value("0"), Runtime, "trace", Call,
