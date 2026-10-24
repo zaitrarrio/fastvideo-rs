@@ -117,7 +117,9 @@ impl VideoEdit {
     pub fn region(&self) -> (f64, f64) {
         match self.kind {
             EditKind::Retake { start_s, end_s, .. } => (start_s, end_s),
-            EditKind::Extend { frames, at } => e::extend_window(self.window_frames, frames, at, self.source_fps),
+            EditKind::Extend { frames, at } => {
+                e::extend_window(self.window_frames, frames, at, self.source_fps)
+            }
         }
     }
 
@@ -133,10 +135,15 @@ impl VideoEdit {
     /// one stage).
     pub fn validate(&self, num_frames: usize, frame_rate: f64, two_stage: bool) -> Result<()> {
         if two_stage {
-            return Err(err("ltx2 retake/extend runs one stage at the source size (RetakePipeline)"));
+            return Err(err(
+                "ltx2 retake/extend runs one stage at the source size (RetakePipeline)",
+            ));
         }
         if e::frames_8k1_floor(self.window_frames) != Some(self.window_frames) {
-            return Err(err(format!("ltx2 edit: the window is {} frames, not 8k+1 (at least 9)", self.window_frames)));
+            return Err(err(format!(
+                "ltx2 edit: the window is {} frames, not 8k+1 (at least 9)",
+                self.window_frames
+            )));
         }
         if num_frames != self.target_frames() {
             return Err(err(format!(
@@ -144,28 +151,41 @@ impl VideoEdit {
                 self.target_frames()
             )));
         }
-        if !(self.source_fps.is_finite() && self.source_fps > 0.0) || (frame_rate - self.source_fps).abs() > 1e-9 {
+        if !(self.source_fps.is_finite() && self.source_fps > 0.0)
+            || (frame_rate - self.source_fps).abs() > 1e-9
+        {
             return Err(err(format!(
                 "ltx2 edit: frame rate {frame_rate} must be the source's {}",
                 self.source_fps
             )));
         }
         match self.kind {
-            EditKind::Retake { start_s, end_s, video, audio } => {
+            EditKind::Retake {
+                start_s,
+                end_s,
+                video,
+                audio,
+            } => {
                 let clip = self.window_frames as f64 / self.source_fps;
                 if !(0.0..clip).contains(&start_s) || end_s <= start_s {
-                    return Err(err(format!("ltx2 retake window [{start_s}, {end_s}) is outside the {clip:.3} s clip")));
+                    return Err(err(format!(
+                        "ltx2 retake window [{start_s}, {end_s}) is outside the {clip:.3} s clip"
+                    )));
                 }
                 if !video && !audio {
                     return Err(err("ltx2 retake regenerates the video, the audio or both"));
                 }
                 if self.dub.is_some() && (!video || audio) {
-                    return Err(err("ltx2 retake: new window audio goes with regenerating the video only"));
+                    return Err(err(
+                        "ltx2 retake: new window audio goes with regenerating the video only",
+                    ));
                 }
             }
             EditKind::Extend { frames, .. } => {
                 if frames == 0 || frames % e::TIME_FACTOR != 0 {
-                    return Err(err(format!("ltx2 extend: {frames} new frames is not a positive multiple of 8")));
+                    return Err(err(format!(
+                        "ltx2 extend: {frames} new frames is not a positive multiple of 8"
+                    )));
                 }
                 if self.dub.is_some() {
                     return Err(err("ltx2 extend takes no new audio"));
@@ -184,7 +204,11 @@ pub fn probe_video(path: &Path) -> Result<(usize, f64)> {
         let mut c = Command::new("ffprobe");
         c.args(["-v", "error", "-select_streams", "v:0"]);
         if count {
-            c.args(["-count_frames", "-show_entries", "stream=nb_read_frames,avg_frame_rate"]);
+            c.args([
+                "-count_frames",
+                "-show_entries",
+                "stream=nb_read_frames,avg_frame_rate",
+            ]);
         } else {
             c.args(["-show_entries", "stream=nb_frames,avg_frame_rate"]);
         }
@@ -201,7 +225,9 @@ pub fn probe_video(path: &Path) -> Result<(usize, f64)> {
         for line in text.lines() {
             let (k, v) = line.split_once('=').unwrap_or((line, ""));
             match k.trim() {
-                "nb_frames" | "nb_read_frames" => frames = v.trim().parse::<usize>().ok().filter(|n| *n > 0),
+                "nb_frames" | "nb_read_frames" => {
+                    frames = v.trim().parse::<usize>().ok().filter(|n| *n > 0)
+                }
                 "avg_frame_rate" => {
                     let (n, d) = v.trim().split_once('/').unwrap_or((v.trim(), "1"));
                     fps = match (n.parse::<f64>(), d.parse::<f64>()) {
@@ -220,7 +246,10 @@ pub fn probe_video(path: &Path) -> Result<(usize, f64)> {
     }
     match (frames, fps) {
         (Some(n), Some(f)) => Ok((n, f)),
-        _ => Err(err(format!("ffprobe {}: no video frame count or rate", path.display()))),
+        _ => Err(err(format!(
+            "ffprobe {}: no video frame count or rate",
+            path.display()
+        ))),
     }
 }
 
@@ -231,53 +260,108 @@ impl VideoEdit {
     /// to `8k + 1` frames (LTX-Desktop `correct_frame_count`), its rate and
     /// audio probed.
     pub fn from_spec(spec: &str) -> Result<Self> {
-        let bad = || err(format!("edit spec {spec}: retake:SRC:START:END:av|v|a or extend:SRC:FRAMES:start|end"));
+        let bad = || {
+            err(format!(
+                "edit spec {spec}: retake:SRC:START:END:av|v|a or extend:SRC:FRAMES:start|end"
+            ))
+        };
         let (kind, rest) = spec.split_once(':').ok_or_else(bad)?;
         let (source, kind) = match kind {
             "retake" => {
                 let mut it = rest.rsplitn(4, ':');
                 let (mode, end, start, src) = (it.next(), it.next(), it.next(), it.next());
-                let (Some(mode), Some(end), Some(start), Some(src)) = (mode, end, start, src) else { return Err(bad()) };
+                let (Some(mode), Some(end), Some(start), Some(src)) = (mode, end, start, src)
+                else {
+                    return Err(bad());
+                };
                 let start_s: f64 = start.parse().map_err(|_| bad())?;
                 let end_s: f64 = end.parse().map_err(|_| bad())?;
                 if !matches!(mode, "av" | "v" | "a") {
                     return Err(bad());
                 }
-                (src, EditKind::Retake { start_s, end_s, video: mode.contains('v'), audio: mode.contains('a') })
+                (
+                    src,
+                    EditKind::Retake {
+                        start_s,
+                        end_s,
+                        video: mode.contains('v'),
+                        audio: mode.contains('a'),
+                    },
+                )
             }
             "extend" => {
                 let mut it = rest.rsplitn(3, ':');
                 let (at, frames, src) = (it.next(), it.next(), it.next());
-                let (Some(at), Some(frames), Some(src)) = (at, frames, src) else { return Err(bad()) };
+                let (Some(at), Some(frames), Some(src)) = (at, frames, src) else {
+                    return Err(bad());
+                };
                 let at = match at {
                     "start" => ExtendAt::Start,
                     "end" => ExtendAt::End,
                     _ => return Err(bad()),
                 };
-                (src, EditKind::Extend { frames: frames.parse().map_err(|_| bad())?, at })
+                (
+                    src,
+                    EditKind::Extend {
+                        frames: frames.parse().map_err(|_| bad())?,
+                        at,
+                    },
+                )
             }
             _ => return Err(bad()),
         };
         let source = PathBuf::from(source);
         let (frames, fps) = probe_video(&source)?;
-        let window = e::frames_8k1_floor(frames)
-            .ok_or_else(|| err(format!("{}: {frames} frames, the editor needs at least 9", source.display())))?;
+        let window = e::frames_8k1_floor(frames).ok_or_else(|| {
+            err(format!(
+                "{}: {frames} frames, the editor needs at least 9",
+                source.display()
+            ))
+        })?;
         let source_audio = a2v::probe(&source).is_ok();
-        Ok(Self { source, source_fps: fps, window_start: 0, window_frames: window, kind, source_audio, dub: None })
+        Ok(Self {
+            source,
+            source_fps: fps,
+            window_start: 0,
+            window_frames: window,
+            kind,
+            source_audio,
+            dub: None,
+        })
     }
 }
 
 /// `(width, height)` of the first video stream (ffprobe).
 fn probe_size(path: &Path) -> Result<(usize, usize)> {
     let out = Command::new("ffprobe")
-        .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0"])
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=p=0",
+        ])
         .arg(path)
         .output()
         .map_err(|x| err(format!("ffprobe not available: {x}")))?;
     let text = String::from_utf8_lossy(&out.stdout);
-    let mut it = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").split(',');
-    let w = it.next().and_then(|v| v.trim().parse::<usize>().ok()).filter(|v| *v > 0);
-    let h = it.next().and_then(|v| v.trim().parse::<usize>().ok()).filter(|v| *v > 0);
+    let mut it = text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
+        .split(',');
+    let w = it
+        .next()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v > 0);
+    let h = it
+        .next()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v > 0);
     match (w, h) {
         (Some(w), Some(h)) if out.status.success() => Ok((w, h)),
         _ => Err(err(format!(
@@ -300,7 +384,12 @@ pub struct SourcePixels {
 
 impl SourcePixels {
     /// `[3, t, y, x]` of a tile as f32, channel-major (the encoder's layout).
-    pub fn tile(&self, t: std::ops::Range<usize>, y: std::ops::Range<usize>, x: std::ops::Range<usize>) -> Vec<f32> {
+    pub fn tile(
+        &self,
+        t: std::ops::Range<usize>,
+        y: std::ops::Range<usize>,
+        x: std::ops::Range<usize>,
+    ) -> Vec<f32> {
         let (h, w) = (self.height, self.width);
         let (nt, ny, nx) = (t.len(), y.len(), x.len());
         let mut out = vec![0f32; 3 * nt * ny * nx];
@@ -309,7 +398,8 @@ impl SourcePixels {
                 let plane = &self.bits[(f * 3 + c) * h * w..(f * 3 + c + 1) * h * w];
                 for (yi, yy) in y.clone().enumerate() {
                     let row = &plane[yy * w + x.start..yy * w + x.end];
-                    let dst = &mut out[((c * nt + ti) * ny + yi) * nx..((c * nt + ti) * ny + yi + 1) * nx];
+                    let dst = &mut out
+                        [((c * nt + ti) * ny + yi) * nx..((c * nt + ti) * ny + yi + 1) * nx];
                     for (d, b) in dst.iter_mut().zip(row) {
                         *d = f32::from_bits(u32::from(*b) << 16);
                     }
@@ -328,7 +418,13 @@ impl SourcePixels {
 /// `decode_video_from_file` + `video_preprocess` for source frames
 /// `start .. start + count`: ffmpeg RGB24 (no autorotation, no frame-rate
 /// conversion), each frame resized and center-cropped to `height x width`.
-pub fn decode_source(path: &Path, start: usize, count: usize, height: usize, width: usize) -> Result<SourcePixels> {
+pub fn decode_source(
+    path: &Path,
+    start: usize,
+    count: usize,
+    height: usize,
+    width: usize,
+) -> Result<SourcePixels> {
     let (sw, sh) = probe_size(path)?;
     let trim = format!("trim=start_frame={start}:end_frame={}", start + count);
     let run = |sync: &[&str]| -> Result<std::process::Child> {
@@ -346,7 +442,10 @@ pub fn decode_source(path: &Path, start: usize, count: usize, height: usize, wid
     let frame_bytes = sw * sh * 3;
     let attempt = |sync: &[&str]| -> Result<(Vec<u16>, usize, String, bool)> {
         let mut child = run(sync)?;
-        let mut stdout = child.stdout.take().ok_or_else(|| err("ffmpeg stdout closed"))?;
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| err("ffmpeg stdout closed"))?;
         let mut buf = vec![0u8; frame_bytes];
         let mut bits: Vec<u16> = Vec::with_capacity(count * 3 * height * width);
         let mut n = 0usize;
@@ -356,8 +455,13 @@ pub fn decode_source(path: &Path, start: usize, count: usize, height: usize, wid
                 Err(x) if x.kind() == std::io::ErrorKind::UnexpectedEof => break,
                 Err(x) => return Err(err(format!("ffmpeg stdout: {x}"))),
             }
-            let img = RgbImage::from_raw(sw as u32, sh as u32, buf.clone()).ok_or_else(|| err("ffmpeg frame size"))?;
-            bits.extend(image_pixels(&img, height, width).into_iter().map(|v| (v.to_bits() >> 16) as u16));
+            let img = RgbImage::from_raw(sw as u32, sh as u32, buf.clone())
+                .ok_or_else(|| err("ffmpeg frame size"))?;
+            bits.extend(
+                image_pixels(&img, height, width)
+                    .into_iter()
+                    .map(|v| (v.to_bits() >> 16) as u16),
+            );
             n += 1;
         }
         drop(stdout);
@@ -365,7 +469,10 @@ pub fn decode_source(path: &Path, start: usize, count: usize, height: usize, wid
         if let Some(mut x) = child.stderr.take() {
             let _ = x.read_to_string(&mut stderr);
         }
-        let ok = child.wait().map_err(|x| err(format!("ffmpeg: {x}")))?.success();
+        let ok = child
+            .wait()
+            .map_err(|x| err(format!("ffmpeg: {x}")))?
+            .success();
         Ok((bits, n, stderr, ok))
     };
     let (mut bits, mut n, mut stderr, mut ok) = attempt(&["-fps_mode", "passthrough"])?;
@@ -377,17 +484,30 @@ pub fn decode_source(path: &Path, start: usize, count: usize, height: usize, wid
         return Err(err(format!(
             "ltx2 edit: {} gave {n} frames from frame {start}, the window needs {count}{}",
             path.display(),
-            if ok { String::new() } else { format!(" (ffmpeg: {})", stderr.trim()) }
+            if ok {
+                String::new()
+            } else {
+                format!(" (ffmpeg: {})", stderr.trim())
+            }
         )));
     }
-    Ok(SourcePixels { frames: n, height, width, bits })
+    Ok(SourcePixels {
+        frames: n,
+        height,
+        width,
+        bits,
+    })
 }
 
 /// `VideoEncoder.tiled_encode`: each tile of the plan encoded on its own,
 /// weighted by its separable masks and summed; divided by the summed
 /// weights unless they are all 1. Returns `[1, C, F', H', W']` on the host
 /// (accumulated in f32; the reference accumulates in the model's bf16).
-pub fn tiled_encode(encoder: &VideoEncoder, px: &SourcePixels, cfg: &TileSizeConfig) -> Result<CudaTensor> {
+pub fn tiled_encode(
+    encoder: &VideoEncoder,
+    px: &SourcePixels,
+    cfg: &TileSizeConfig,
+) -> Result<CudaTensor> {
     let plan = EncodePlan::new(px.frames, px.height, px.width, cfg, VIDEO_SCALE).map_err(err)?;
     let [lf, lh, lw] = plan.latent;
     let c = encoder.latent_channels();
@@ -397,10 +517,18 @@ pub fn tiled_encode(encoder: &VideoEncoder, px: &SourcePixels, cfg: &TileSizeCon
         for th in &plan.height {
             for tw in &plan.width {
                 let pixels = px.tile(tt.input.clone(), th.input.clone(), tw.input.clone());
-                let lat = encoder.encode_video(&pixels, tt.input.len(), th.input.len(), tw.input.len())?;
+                let lat = encoder.encode_video(
+                    &pixels,
+                    tt.input.len(),
+                    th.input.len(),
+                    tw.input.len(),
+                )?;
                 let (nf, nh, nw) = (tt.latent.len(), th.latent.len(), tw.latent.len());
                 if lat.shape != [1, c, nf, nh, nw] {
-                    return Err(err(format!("ltx2 tiled encode: tile latent {:?}, expected [1, {c}, {nf}, {nh}, {nw}]", lat.shape)));
+                    return Err(err(format!(
+                        "ltx2 tiled encode: tile latent {:?}, expected [1, {c}, {nf}, {nh}, {nw}]",
+                        lat.shape
+                    )));
                 }
                 let host = lat.host_cow()?;
                 let m = |mask: &Option<Vec<f32>>, i: usize| mask.as_ref().map_or(1.0, |m| m[i]);
@@ -410,7 +538,8 @@ pub fn tiled_encode(encoder: &VideoEncoder, px: &SourcePixels, cfg: &TileSizeCon
                             let w = m(&tt.mask, fi) * m(&th.mask, yi) * m(&tw.mask, xi);
                             let at = (f * lh + y) * lw + x;
                             for ch in 0..c {
-                                acc[ch * lf * lh * lw + at] += host[((ch * nf + fi) * nh + yi) * nw + xi] * w;
+                                acc[ch * lf * lh * lw + at] +=
+                                    host[((ch * nf + fi) * nh + yi) * nw + xi] * w;
                             }
                             if let Some(ws) = wsum.as_mut() {
                                 ws[at] += w;
@@ -453,7 +582,9 @@ fn pad_rows(x: CudaTensor, pad: usize, at: ExtendAt) -> Result<CudaTensor> {
 /// Replace `t` with the reference's dump of the same size when injecting
 /// (`FASTVIDEO_INJECT_COND`, default on).
 fn inject(name: &str, t: CudaTensor) -> Result<CudaTensor> {
-    if crate::wan::inject::enabled() && std::env::var("FASTVIDEO_INJECT_COND").map_or(true, |v| v != "0") {
+    if crate::wan::inject::enabled()
+        && std::env::var("FASTVIDEO_INJECT_COND").map_or(true, |v| v != "0")
+    {
         if let Some(v) = crate::wan::inject::load_numel(name, t.numel())? {
             crate::wan::log::info(format_args!("inject: {name} (reference)"));
             return Ok(CudaTensor::from_vec(v, t.shape.clone())?.to_device()?);
@@ -464,12 +595,21 @@ fn inject(name: &str, t: CudaTensor) -> Result<CudaTensor> {
 
 /// The kept runs of a stream as pinned segments over `clean`'s rows
 /// (`frame_tokens` rows per latent frame).
-fn pinned_segments(mask: &[bool], frame_tokens: usize, clean: &CudaTensor) -> Result<Vec<CondSegment>> {
+fn pinned_segments(
+    mask: &[bool],
+    frame_tokens: usize,
+    clean: &CudaTensor,
+) -> Result<Vec<CondSegment>> {
     e::kept_runs(mask)
         .into_iter()
         .map(|(start, len)| {
             let (s, n) = (start * frame_tokens, len * frame_tokens);
-            Ok(CondSegment { start: s, len: n, mask: 0.0, clean: clean.narrow(1, s, n)? })
+            Ok(CondSegment {
+                start: s,
+                len: n,
+                mask: 0.0,
+                clean: clean.narrow(1, s, n)?,
+            })
         })
         .collect()
 }
@@ -503,21 +643,36 @@ pub fn prepare(
     let [lf, lh, lw] = grid;
     let hw = lh * lw;
     if lf != e::video_latent_frames(target) {
-        return Err(err(format!("ltx2 edit: latent grid {grid:?} for {target} frames")));
+        return Err(err(format!(
+            "ltx2 edit: latent grid {grid:?} for {target} frames"
+        )));
     }
     let (regen_v, regen_a) = edit.regenerates();
     let (r0, r1) = edit.region();
 
     // ---- video
     let t = Instant::now();
-    let px = decode_source(&edit.source, edit.window_start, edit.window_frames, height, width)?;
+    let px = decode_source(
+        &edit.source,
+        edit.window_start,
+        edit.window_frames,
+        height,
+        width,
+    )?;
     crate::wan::dump::host("v2v_frame0_pixels", &[3, height, width], &px.frame(0))?;
-    let encoder = VideoEncoder::load(&weights.join("vae"), cfg.vae.patch_size, cfg.vae.pixel_norm_eps)?;
+    let encoder = VideoEncoder::load(
+        &weights.join("vae"),
+        cfg.vae.patch_size,
+        cfg.vae.pixel_norm_eps,
+    )?;
     let latent = tiled_encode(&encoder, &px, &TileSizeConfig::encode_default())?;
     drop((encoder, px));
     let window_latent = e::video_latent_frames(edit.window_frames);
     if latent.shape[2] != window_latent || latent.shape[3] != lh || latent.shape[4] != lw {
-        return Err(err(format!("ltx2 edit: encoded {:?}, the window is [{window_latent}, {lh}, {lw}]", latent.shape)));
+        return Err(err(format!(
+            "ltx2 edit: encoded {:?}, the window is [{window_latent}, {lh}, {lw}]",
+            latent.shape
+        )));
     }
     let packed = state.store(pack_video(&latent.to_device()?)?)?;
     crate::wan::dump::tensor("v2v_video_latent", &packed)?;
@@ -528,7 +683,11 @@ pub fn prepare(
         EditKind::Retake { .. } => packed,
     };
     if clean_v.shape[1] != lf * hw {
-        return Err(err(format!("ltx2 edit: clean video {:?} for {} rows", clean_v.shape, lf * hw)));
+        return Err(err(format!(
+            "ltx2 edit: clean video {:?} for {} rows",
+            clean_v.shape,
+            lf * hw
+        )));
     }
     let video_s = t.elapsed().as_secs_f64();
 
@@ -554,7 +713,12 @@ pub fn prepare(
     let window_s = edit.window_frames as f64 / fps;
     let window_tokens = cfg.transformer.audio_tokens(edit.window_frames, fps);
     let wave = if edit.source_audio {
-        Some(a2v::decode_range(&edit.source, edit.window_start as f64 / fps, Some(window_s), None)?)
+        Some(a2v::decode_range(
+            &edit.source,
+            edit.window_start as f64 / fps,
+            Some(window_s),
+            None,
+        )?)
     } else {
         None
     };
@@ -578,32 +742,48 @@ pub fn prepare(
         Some(mut wave) => {
             let wname = "v2v_audio_wave";
             crate::wan::dump::host(wname, &[wave.channels, wave.samples()], &wave.planar)?;
-            if crate::wan::inject::enabled() && std::env::var("FASTVIDEO_INJECT_PIXELS").map_or(true, |v| v != "0") {
+            if crate::wan::inject::enabled()
+                && std::env::var("FASTVIDEO_INJECT_PIXELS").map_or(true, |v| v != "0")
+            {
                 if let Some(v) = crate::wan::inject::load_numel(wname, wave.planar.len())? {
                     crate::wan::log::info(format_args!("inject: {wname} (reference)"));
                     wave.planar = v;
                 }
             }
-            let encoder = AudioEncoder::load(&super::pipeline::open_audio_encoder(weights)?, &cfg.audio_vae)?;
+            let encoder = AudioEncoder::load(
+                &super::pipeline::open_audio_encoder(weights)?,
+                &cfg.audio_vae,
+            )?;
             let encoded = encoder.encode_waveform(&wave.planar, wave.channels, wave.rate)?;
             drop(encoder);
             // `_conform_latent_length`: cut, or zero-padded when the audio is short.
-            let packed = state.store(pack_audio_latent(&conform_audio_time(&encoded, window_tokens)?.to_device()?)?)?;
+            let packed = state.store(pack_audio_latent(
+                &conform_audio_time(&encoded, window_tokens)?.to_device()?,
+            )?)?;
             crate::wan::dump::tensor("v2v_audio_latent", &packed)?;
             crate::wan::dump::digest("v2v_audio_latent", &packed)?;
             let packed = inject("v2v_audio_latent", packed)?;
             let padded = match edit.kind {
-                EditKind::Extend { at, .. } => pad_rows(packed, audio_tokens.saturating_sub(window_tokens), at)?,
+                EditKind::Extend { at, .. } => {
+                    pad_rows(packed, audio_tokens.saturating_sub(window_tokens), at)?
+                }
                 EditKind::Retake { .. } => packed,
             };
             if padded.shape[1] != audio_tokens {
-                return Err(err(format!("ltx2 edit: clean audio {:?} for {audio_tokens} tokens", padded.shape)));
+                return Err(err(format!(
+                    "ltx2 edit: clean audio {:?} for {audio_tokens} tokens",
+                    padded.shape
+                )));
             }
             crate::wan::log::info(format_args!(
                 "ltx2 edit: audio {} Hz, {:.3}s{} → {window_tokens} of {audio_tokens} tokens",
                 wave.rate,
                 wave.duration_s(),
-                if edit.dub.is_some() { " (window dubbed)" } else { "" }
+                if edit.dub.is_some() {
+                    " (window dubbed)"
+                } else {
+                    ""
+                }
             ));
             Some(padded)
         }
@@ -618,7 +798,12 @@ pub fn prepare(
             cond = cond.with_frozen_audio(clean)?;
         }
     }
-    Ok(EditConditioning { cond, video_frozen: !regen_v, video_s, audio_s })
+    Ok(EditConditioning {
+        cond,
+        video_frozen: !regen_v,
+        video_s,
+        audio_s,
+    })
 }
 
 #[cfg(test)]
@@ -639,21 +824,44 @@ mod tests {
 
     #[test]
     fn edits_check_their_request() {
-        let r = edit(EditKind::Retake { start_s: 1.0, end_s: 3.0, video: true, audio: true });
+        let r = edit(EditKind::Retake {
+            start_s: 1.0,
+            end_s: 3.0,
+            video: true,
+            audio: true,
+        });
         assert_eq!(r.target_frames(), 97);
         assert!(r.validate(97, 24.0, false).is_ok());
         assert!(r.validate(97, 24.0, true).is_err());
         assert!(r.validate(105, 24.0, false).is_err());
         assert!(r.validate(97, 25.0, false).is_err());
-        let x = edit(EditKind::Extend { frames: 48, at: ExtendAt::End });
+        let x = edit(EditKind::Extend {
+            frames: 48,
+            at: ExtendAt::End,
+        });
         assert_eq!(x.target_frames(), 145);
         assert!(x.validate(145, 24.0, false).is_ok());
         assert_eq!(x.region(), (85.0 / 24.0, 145.0 / 24.0));
-        assert!(edit(EditKind::Extend { frames: 44, at: ExtendAt::End }).validate(141, 24.0, false).is_err());
-        let mut d = edit(EditKind::Retake { start_s: 1.0, end_s: 3.0, video: true, audio: true });
+        assert!(edit(EditKind::Extend {
+            frames: 44,
+            at: ExtendAt::End
+        })
+        .validate(141, 24.0, false)
+        .is_err());
+        let mut d = edit(EditKind::Retake {
+            start_s: 1.0,
+            end_s: 3.0,
+            video: true,
+            audio: true,
+        });
         d.dub = Some(PathBuf::from("/d.wav"));
         assert!(d.validate(97, 24.0, false).is_err());
-        d.kind = EditKind::Retake { start_s: 1.0, end_s: 3.0, video: true, audio: false };
+        d.kind = EditKind::Retake {
+            start_s: 1.0,
+            end_s: 3.0,
+            video: true,
+            audio: false,
+        };
         assert!(d.validate(97, 24.0, false).is_ok());
     }
 
@@ -670,7 +878,12 @@ mod tests {
                 }
             }
         }
-        let px = SourcePixels { frames: 2, height: h, width: w, bits };
+        let px = SourcePixels {
+            frames: 2,
+            height: h,
+            width: w,
+            bits,
+        };
         let t = px.tile(1..2, 1..2, 1..3);
         // c 0: frame 1, row 1, x 1..3 → 104, 105; c 1: 114, 115; c 2: 124, 125.
         assert_eq!(t, vec![104.0, 105.0, 114.0, 115.0, 124.0, 125.0]);

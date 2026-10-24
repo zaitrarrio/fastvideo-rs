@@ -98,7 +98,10 @@ pub trait DirectorEngine: Send + Sync + 'static {
     /// Opens a causal rollout for a `StreamCaps::Causal` model (exclusive
     /// executor lease). Engines without causal support refuse.
     async fn open_stream(&self, spec: SessionSpec) -> Result<Arc<dyn DirectorStream>, ApiError> {
-        Err(ApiError::invalid(format!("model `{}` (causal streaming) is not available to the director here", spec.model)))
+        Err(ApiError::invalid(format!(
+            "model `{}` (causal streaming) is not available to the director here",
+            spec.model
+        )))
     }
 }
 
@@ -108,7 +111,8 @@ pub fn frames_for(caps: &ModelCaps, fps: u32, seconds: f64) -> Option<u32> {
     if !seconds.is_finite() || seconds <= 0.0 {
         return None;
     }
-    caps.frames.align_up((seconds * f64::from(fps)).round() as u32)
+    caps.frames
+        .align_up((seconds * f64::from(fps)).round() as u32)
 }
 
 #[cfg(test)]

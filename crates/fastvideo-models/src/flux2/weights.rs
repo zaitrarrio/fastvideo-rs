@@ -28,7 +28,10 @@ pub fn transformer_config_json(root: &Path) -> Option<String> {
 }
 
 /// Override arch fields from a Diffusers `transformer/config.json` body.
-pub fn arch_from_transformer_config(cfg: &Flux2ArchConfig, raw: &str) -> Result<Flux2ArchConfig, String> {
+pub fn arch_from_transformer_config(
+    cfg: &Flux2ArchConfig,
+    raw: &str,
+) -> Result<Flux2ArchConfig, String> {
     let v: serde_json::Value =
         serde_json::from_str(raw).map_err(|e| format!("transformer/config.json: {e}"))?;
     let mut out = cfg.clone();

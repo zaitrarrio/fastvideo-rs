@@ -44,7 +44,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use fastvideo_protocol::{Job, JobId, JobSnapshot, JobState, JobStore, JobUpdate, ListQuery, Page, ProtocolId, StoreError};
+use fastvideo_protocol::{
+    Job, JobId, JobSnapshot, JobState, JobStore, JobUpdate, ListQuery, Page, ProtocolId, StoreError,
+};
 use fastvideo_serve_kit::D1JobStore;
 use time::OffsetDateTime;
 use tokio::sync::watch;
@@ -115,7 +117,14 @@ impl View {
         let mut g = self.lock();
         if g.by_id.len() >= VIEW_MAX {
             let fresh = self.fresh;
-            g.by_id.retain(|_, (j, at)| at.elapsed() < if j.is_terminal() { TERMINAL_FRESH } else { fresh });
+            g.by_id.retain(|_, (j, at)| {
+                at.elapsed()
+                    < if j.is_terminal() {
+                        TERMINAL_FRESH
+                    } else {
+                        fresh
+                    }
+            });
             if g.by_id.len() >= VIEW_MAX {
                 g.by_id.clear();
             }
@@ -152,7 +161,11 @@ impl View {
     fn get(&self, id: JobId) -> Option<Job> {
         let g = self.lock();
         let (j, at) = g.by_id.get(&id)?;
-        let ttl = if j.is_terminal() { TERMINAL_FRESH } else { self.fresh };
+        let ttl = if j.is_terminal() {
+            TERMINAL_FRESH
+        } else {
+            self.fresh
+        };
         (at.elapsed() < ttl).then(|| j.clone())
     }
     fn by_external(&self, p: ProtocolId, ext: &str) -> Option<Job> {
@@ -178,7 +191,9 @@ fn counted(source: &'static str) {
 
 impl std::fmt::Debug for GatewayJobStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GatewayJobStore").field("poll", &self.poll).finish_non_exhaustive()
+        f.debug_struct("GatewayJobStore")
+            .field("poll", &self.poll)
+            .finish_non_exhaustive()
     }
 }
 
@@ -189,7 +204,10 @@ impl GatewayJobStore {
             inner,
             poll,
             watchers: Arc::default(),
-            view: Arc::new(View { fresh: poll, ..View::default() }),
+            view: Arc::new(View {
+                fresh: poll,
+                ..View::default()
+            }),
             behind: std::sync::OnceLock::new(),
             pending: Arc::default(),
             waiter: std::sync::OnceLock::new(),
@@ -208,12 +226,21 @@ impl GatewayJobStore {
     }
 
     fn pending_job(&self, id: JobId) -> Option<Job> {
-        self.pending.lock().unwrap_or_else(|p| p.into_inner()).get(&id).map(|(j, _)| j.clone())
+        self.pending
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&id)
+            .map(|(j, _)| j.clone())
     }
 
     /// Waits until an insert in flight for `id` landed (or gave up).
     async fn settled(&self, id: JobId) {
-        let rx = self.pending.lock().unwrap_or_else(|p| p.into_inner()).get(&id).map(|(_, rx)| rx.clone());
+        let rx = self
+            .pending
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&id)
+            .map(|(_, rx)| rx.clone());
         if let Some(mut rx) = rx {
             let _ = tokio::time::timeout(PENDING_WAIT, rx.wait_for(|done| *done)).await;
         }
@@ -237,7 +264,12 @@ impl GatewayJobStore {
     pub fn observe(&self, job: Job) {
         let id = job.id;
         self.view.merge(job);
-        let w = self.watchers.lock().unwrap_or_else(|p| p.into_inner()).get(&id).cloned();
+        let w = self
+            .watchers
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&id)
+            .cloned();
         if let Some(w) = w {
             w.wake.notify_one();
         }
@@ -257,7 +289,16 @@ fn fingerprint(j: &Job) -> (String, u32, Option<u32>, usize, usize, bool) {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn poller(store: Arc<D1JobStore>, view: Arc<View>, pending: Pending, id: JobId, w: Arc<Watcher>, watchers: Watchers, every: Duration, waiter: Option<Arc<dyn JobWaiter>>) {
+async fn poller(
+    store: Arc<D1JobStore>,
+    view: Arc<View>,
+    pending: Pending,
+    id: JobId,
+    w: Arc<Watcher>,
+    watchers: Watchers,
+    every: Duration,
+    waiter: Option<Arc<dyn JobWaiter>>,
+) {
     let mut seq = 0u64;
     let mut last = None;
     // Woken by a worker's report: the view already holds that job.
@@ -282,7 +323,12 @@ async fn poller(store: Arc<D1JobStore>, view: Arc<View>, pending: Pending, id: J
                         continue;
                     }
                     Some(Some(j)) => view.merge(j),
-                    Some(None) => match pending.lock().unwrap_or_else(|p| p.into_inner()).get(&id).map(|(j, _)| j.clone()) {
+                    Some(None) => match pending
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .get(&id)
+                        .map(|(j, _)| j.clone())
+                    {
                         // Inserted behind, not in D1 yet.
                         Some(j) => j,
                         None => break,
@@ -327,17 +373,26 @@ impl JobStore for GatewayJobStore {
         if self.behind.get().is_some_and(|f| f(&job)) {
             let id = job.id;
             let (tx, rx) = watch::channel(false);
-            self.pending.lock().unwrap_or_else(|p| p.into_inner()).insert(id, (job.clone(), rx));
+            self.pending
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(id, (job.clone(), rx));
             self.view.remember(&job);
             let inner = self.inner.clone();
             let pending = self.pending.clone();
             tokio::spawn(async move {
                 let t0 = std::time::Instant::now();
                 match inner.insert(job).await {
-                    Ok(()) => metrics::histogram!("fv_gateway_insert_behind_seconds").record(t0.elapsed().as_secs_f64()),
-                    Err(e) => tracing::warn!(job = %id, error = %e, "gateway: a job row inserted behind the dispatch failed"),
+                    Ok(()) => metrics::histogram!("fv_gateway_insert_behind_seconds")
+                        .record(t0.elapsed().as_secs_f64()),
+                    Err(e) => {
+                        tracing::warn!(job = %id, error = %e, "gateway: a job row inserted behind the dispatch failed")
+                    }
                 }
-                pending.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
+                pending
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .remove(&id);
                 let _ = tx.send(true);
             });
             return Ok(());
@@ -373,7 +428,13 @@ impl JobStore for GatewayJobStore {
             counted("memory");
             return Some(j);
         }
-        let pend = self.pending.lock().unwrap_or_else(|p| p.into_inner()).values().find(|(j, _)| j.protocol == p && j.external_id == external_id).map(|(j, _)| j.clone());
+        let pend = self
+            .pending
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+            .find(|(j, _)| j.protocol == p && j.external_id == external_id)
+            .map(|(j, _)| j.clone());
         if let Some(j) = pend {
             counted("memory");
             return Some(j);
@@ -426,9 +487,21 @@ impl JobStore for GatewayJobStore {
             queue_position: None,
             log_count: 0,
         });
-        let w = Arc::new(Watcher { tx, wake: tokio::sync::Notify::new() });
+        let w = Arc::new(Watcher {
+            tx,
+            wake: tokio::sync::Notify::new(),
+        });
         g.insert(id, w.clone());
-        tokio::spawn(poller(self.inner.clone(), self.view.clone(), self.pending.clone(), id, w, self.watchers.clone(), self.poll, self.waiter.get().cloned()));
+        tokio::spawn(poller(
+            self.inner.clone(),
+            self.view.clone(),
+            self.pending.clone(),
+            id,
+            w,
+            self.watchers.clone(),
+            self.poll,
+            self.waiter.get().cloned(),
+        ));
         Some(rx)
     }
 

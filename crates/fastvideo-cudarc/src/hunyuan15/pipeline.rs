@@ -197,14 +197,14 @@ impl Hunyuan15Pipeline {
 
         let mut step_s = Vec::with_capacity(timesteps.len());
         let denoise_t = std::time::Instant::now();
-        for (_step, &t) in timesteps.iter().enumerate() {
+        for &t in timesteps.iter() {
             let step_t = std::time::Instant::now();
             let lat = pack_latents(&sample, c_out, lt, lh, lw, pad_c)?;
             let text2 = Some(&cond.byt5);
             let velocity = dit.forward(&lat, &cond.qwen, text2, t as f32)?;
             // DiT returns `[B, T*H*W, out_channels]` — flatten to CTHW host.
             let vel = tokens_to_cthw(&velocity, c_out, lt, lh, lw)?;
-            sample = sched.inner.step_euler(&sample, &vel).map_err(|e| msg(e))?;
+            sample = sched.inner.step_euler(&sample, &vel).map_err(msg)?;
             step_s.push(step_t.elapsed().as_secs_f64());
         }
         let denoise_s = denoise_t.elapsed().as_secs_f64();

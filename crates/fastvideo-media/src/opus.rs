@@ -35,12 +35,20 @@ pub struct OpusConfig {
 impl OpusConfig {
     /// Reactor local runtime: 48 kHz mono, 10 ms frames.
     pub fn reactor() -> Self {
-        Self { channels: 1, frame_ms: 10, bitrate_bps: 64_000 }
+        Self {
+            channels: 1,
+            frame_ms: 10,
+            bitrate_bps: 64_000,
+        }
     }
 
     /// fal director (WMA): stereo, 20 ms, `audio_bitrate` 96/128/192k (default 96k).
     pub fn wma(bitrate_bps: Option<u32>) -> Self {
-        Self { channels: 2, frame_ms: 20, bitrate_bps: bitrate_bps.unwrap_or(96_000) }
+        Self {
+            channels: 2,
+            frame_ms: 20,
+            bitrate_bps: bitrate_bps.unwrap_or(96_000),
+        }
     }
 
     /// WHIP publish: stereo, 20 ms, 96k.
@@ -61,7 +69,9 @@ impl OpusConfig {
             return Err(MediaError::invalid("opus frame_ms must be 10 or 20"));
         }
         if !(6_000..=510_000).contains(&self.bitrate_bps) {
-            return Err(MediaError::invalid("opus bitrate must be within 6..510 kb/s"));
+            return Err(MediaError::invalid(
+                "opus bitrate must be within 6..510 kb/s",
+            ));
         }
         Ok(())
     }
@@ -88,7 +98,11 @@ pub struct OpusFramer {
 impl OpusFramer {
     pub fn new(cfg: OpusConfig, rtp_base: u32) -> Result<Self> {
         cfg.validate()?;
-        Ok(Self { cfg, buf: Vec::new(), clock: AudioRtpClock::new(rtp_base) })
+        Ok(Self {
+            cfg,
+            buf: Vec::new(),
+            clock: AudioRtpClock::new(rtp_base),
+        })
     }
 
     pub fn config(&self) -> &OpusConfig {
@@ -97,8 +111,10 @@ impl OpusFramer {
 
     /// Append interleaved 48 kHz PCM with the configured channel count.
     pub fn push(&mut self, samples: &[f32]) -> Result<()> {
-        if samples.len() % self.cfg.channels as usize != 0 {
-            return Err(MediaError::invalid("pcm is not a whole number of sample frames"));
+        if !samples.len().is_multiple_of(self.cfg.channels as usize) {
+            return Err(MediaError::invalid(
+                "pcm is not a whole number of sample frames",
+            ));
         }
         self.buf.extend_from_slice(samples);
         Ok(())
@@ -113,7 +129,11 @@ impl OpusFramer {
         let samples: Vec<f32> = self.buf.drain(..n).collect();
         let offset = self.clock.samples();
         let rtp_ts = self.clock.advance(self.cfg.frame_samples() as u64);
-        Some(PcmFrame { samples, rtp_ts, offset })
+        Some(PcmFrame {
+            samples,
+            rtp_ts,
+            offset,
+        })
     }
 
     /// Samples per channel waiting for a full frame.
@@ -155,7 +175,9 @@ impl Toc {
 
 /// Parse a packet's TOC byte.
 pub fn toc(packet: &[u8]) -> Result<Toc> {
-    let b = *packet.first().ok_or_else(|| MediaError::parse(None, "empty opus packet"))?;
+    let b = *packet
+        .first()
+        .ok_or_else(|| MediaError::parse(None, "empty opus packet"))?;
     let config = b >> 3;
     let stereo = b & 0x04 != 0;
     // Frame durations in units of 2.5 ms (120 samples at 48 kHz).
@@ -167,9 +189,17 @@ pub fn toc(packet: &[u8]) -> Result<Toc> {
     let frames = match b & 0x03 {
         0 => 1,
         1 | 2 => 2,
-        _ => packet.get(1).map(|c| c & 0x3f).ok_or_else(|| MediaError::parse(None, "opus code-3 packet too short"))?,
+        _ => packet
+            .get(1)
+            .map(|c| c & 0x3f)
+            .ok_or_else(|| MediaError::parse(None, "opus code-3 packet too short"))?,
     };
-    Ok(Toc { config, stereo, frames, frame_samples: units * 120 })
+    Ok(Toc {
+        config,
+        stereo,
+        frames,
+        frame_samples: units * 120,
+    })
 }
 
 #[cfg(feature = "opus")]
@@ -182,7 +212,11 @@ mod enc {
     use audiopus::{packet::Packet, Application, Bitrate, Channels, MutSignals, SampleRate};
 
     fn channels(n: u8) -> Channels {
-        if n == 2 { Channels::Stereo } else { Channels::Mono }
+        if n == 2 {
+            Channels::Stereo
+        } else {
+            Channels::Mono
+        }
     }
 
     /// libopus encoder with a built-in framer.
@@ -195,15 +229,23 @@ mod enc {
     impl OpusEncoder {
         pub fn new(cfg: OpusConfig, rtp_base: u32) -> Result<Self> {
             let framer = OpusFramer::new(cfg, rtp_base)?;
-            let mut enc = Encoder::new(SampleRate::Hz48000, channels(cfg.channels), Application::Audio)
-                .map_err(|e| MediaError::Encode(format!("opus init: {e}")))?;
+            let mut enc = Encoder::new(
+                SampleRate::Hz48000,
+                channels(cfg.channels),
+                Application::Audio,
+            )
+            .map_err(|e| MediaError::Encode(format!("opus init: {e}")))?;
             enc.set_bitrate(Bitrate::BitsPerSecond(cfg.bitrate_bps as i32))
                 .map_err(|e| MediaError::Encode(format!("opus bitrate: {e}")))?;
             // Keep the declared channel layout on the wire (no automatic
             // stereo-to-mono decisions for correlated input).
             enc.set_force_channels(channels(cfg.channels))
                 .map_err(|e| MediaError::Encode(format!("opus channels: {e}")))?;
-            Ok(Self { enc, framer, out: vec![0u8; 4000] })
+            Ok(Self {
+                enc,
+                framer,
+                out: vec![0u8; 4000],
+            })
         }
 
         pub fn config(&self) -> &OpusConfig {
@@ -216,7 +258,10 @@ mod enc {
             if samples.len() != cfg.frame_samples() * cfg.channels as usize {
                 return Err(MediaError::invalid("opus frame has the wrong length"));
             }
-            let n = self.enc.encode_float(samples, &mut self.out).map_err(|e| MediaError::Encode(format!("opus: {e}")))?;
+            let n = self
+                .enc
+                .encode_float(samples, &mut self.out)
+                .map_err(|e| MediaError::Encode(format!("opus: {e}")))?;
             Ok(Bytes::copy_from_slice(&self.out[..n]))
         }
 
@@ -226,7 +271,11 @@ mod enc {
             let mut out = Vec::new();
             while let Some(f) = self.framer.next_frame() {
                 let data = self.encode_frame(&f.samples)?;
-                out.push(OpusPacket { data, rtp_ts: f.rtp_ts, samples: self.framer.config().frame_samples() as u32 });
+                out.push(OpusPacket {
+                    data,
+                    rtp_ts: f.rtp_ts,
+                    samples: self.framer.config().frame_samples() as u32,
+                });
             }
             Ok(out)
         }
@@ -245,15 +294,24 @@ mod enc {
 
     impl OpusDecoder {
         pub fn new(ch: u8) -> Result<Self> {
-            let dec = Decoder::new(SampleRate::Hz48000, channels(ch)).map_err(|e| MediaError::Decode(e.to_string()))?;
-            Ok(Self { dec, channels: ch, buf: vec![0.0; 5760 * 2] })
+            let dec = Decoder::new(SampleRate::Hz48000, channels(ch))
+                .map_err(|e| MediaError::Decode(e.to_string()))?;
+            Ok(Self {
+                dec,
+                channels: ch,
+                buf: vec![0.0; 5760 * 2],
+            })
         }
 
         /// Decode one packet to interleaved f32.
         pub fn decode(&mut self, packet: &[u8]) -> Result<Vec<f32>> {
             let p = Packet::try_from(packet).map_err(|e| MediaError::Decode(e.to_string()))?;
-            let sig = MutSignals::try_from(&mut self.buf[..]).map_err(|e| MediaError::Decode(e.to_string()))?;
-            let n = self.dec.decode_float(Some(p), sig, false).map_err(|e| MediaError::Decode(e.to_string()))?;
+            let sig = MutSignals::try_from(&mut self.buf[..])
+                .map_err(|e| MediaError::Decode(e.to_string()))?;
+            let n = self
+                .dec
+                .decode_float(Some(p), sig, false)
+                .map_err(|e| MediaError::Decode(e.to_string()))?;
             Ok(self.buf[..n * self.channels as usize].to_vec())
         }
     }
@@ -269,8 +327,18 @@ mod tests {
         assert_eq!(OpusConfig::reactor().channels, 1);
         assert_eq!(OpusConfig::wma(None).frame_samples(), 960);
         assert_eq!(OpusConfig::wma(Some(192_000)).bitrate_bps, 192_000);
-        assert!(OpusConfig { channels: 3, ..OpusConfig::whip() }.validate().is_err());
-        assert!(OpusConfig { frame_ms: 5, ..OpusConfig::whip() }.validate().is_err());
+        assert!(OpusConfig {
+            channels: 3,
+            ..OpusConfig::whip()
+        }
+        .validate()
+        .is_err());
+        assert!(OpusConfig {
+            frame_ms: 5,
+            ..OpusConfig::whip()
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]
@@ -310,7 +378,10 @@ mod tests {
     fn toc_parsing() {
         // config 30 = CELT FB 10 ms, mono, code 0.
         let t = toc(&[30 << 3]).unwrap();
-        assert_eq!((t.config, t.stereo, t.frames, t.frame_samples), (30, false, 1, 480));
+        assert_eq!(
+            (t.config, t.stereo, t.frames, t.frame_samples),
+            (30, false, 1, 480)
+        );
         // config 31 = CELT FB 20 ms, stereo.
         let t = toc(&[(31 << 3) | 0x04]).unwrap();
         assert!(t.stereo);
@@ -329,8 +400,9 @@ mod tests {
         let mut e = OpusEncoder::new(OpusConfig::reactor(), 0).unwrap();
         let mut d = OpusDecoder::new(1).unwrap();
         // 1 s of a 440 Hz tone in 24 fps ticks.
-        let tone: Vec<f32> =
-            (0..48_000).map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 48_000.0).sin() * 0.3).collect();
+        let tone: Vec<f32> = (0..48_000)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 48_000.0).sin() * 0.3)
+            .collect();
         let mut pkts = Vec::new();
         for tick in tone.chunks(2000) {
             pkts.extend(e.push(tick).unwrap());
@@ -351,7 +423,10 @@ mod tests {
         let rms = |v: &[f32]| (v.iter().map(|x| x * x).sum::<f32>() / v.len() as f32).sqrt();
         let r_in = rms(&tone[4800..]);
         let r_out = rms(&decoded[4800..]);
-        assert!((r_out / r_in - 1.0).abs() < 0.15, "rms in {r_in} out {r_out}");
+        assert!(
+            (r_out / r_in - 1.0).abs() < 0.15,
+            "rms in {r_in} out {r_out}"
+        );
     }
 
     #[cfg(feature = "opus")]

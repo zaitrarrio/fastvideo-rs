@@ -448,15 +448,21 @@ impl TensorSource for HashMap<String, (Vec<usize>, Vec<f32>)> {
 fn to_f32(dtype: &LazyDType, bytes: &[u8], key: &str) -> Result<Vec<f32>> {
     Ok(match dtype {
         LazyDType::F32 => bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect(),
         LazyDType::BF16 => bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| half::bf16::from_bits(u16::from_le_bytes([c[0], c[1]])).to_f32())
             .collect(),
         LazyDType::F16 => bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| half::f16::from_bits(u16::from_le_bytes([c[0], c[1]])).to_f32())
             .collect(),
         other => {
@@ -570,11 +576,11 @@ pub fn build_transformer_tensors(
 /// [`super::pipeline::WanPipeline::load_with_dit`]): `base` renamed, `lora`
 /// merged.
 pub fn load_transformer_map(w: &LongLiveWeights) -> Result<(WeightMap, MergeReport)> {
-    let base = LazyStore::open_files(&[w.base.clone()])
+    let base = LazyStore::open_files(std::slice::from_ref(&w.base))
         .map_err(|e| msg(format!("{}: {e}", w.base.display())))?;
     let lora = match &w.lora {
         Some(p) => Some(
-            LazyStore::open_files(&[p.clone()])
+            LazyStore::open_files(std::slice::from_ref(p))
                 .map_err(|e| msg(format!("{}: {e}", p.display())))?,
         ),
         None => None,

@@ -17,9 +17,7 @@
 
 use std::time::Duration;
 
-use fastvideo_protocol::{
-    ApiError, ErrorCtx, HttpReply, Job, JobState, JobView, Tier, ViewCtx,
-};
+use fastvideo_protocol::{ApiError, ErrorCtx, HttpReply, Job, JobState, JobView, Tier, ViewCtx};
 use serde_json::{json, Value};
 use time::format_description::FormatItem;
 use time::macros::format_description;
@@ -140,7 +138,10 @@ impl JobView for V2View {
         if Endpoint::of_task(job.task()) != Some(self.endpoint) {
             return error::render(&not_found(&job.external_id), Api::V2, &ErrorCtx::default());
         }
-        with_meta(HttpReply::json(200, status_body(job, cx, self.url_ttl)), job)
+        with_meta(
+            HttpReply::json(200, status_body(job, cx, self.url_ttl)),
+            job,
+        )
     }
     fn result_reply(&self, job: &Job, cx: &ViewCtx) -> HttpReply {
         self.status_reply(job, cx)

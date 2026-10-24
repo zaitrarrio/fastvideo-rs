@@ -49,7 +49,13 @@ pub struct IngestConfig {
 
 impl IngestConfig {
     pub fn new(video: Option<VideoInputCaps>, audio: Option<AudioInputCaps>) -> Self {
-        Self { video, audio, max_seconds: None, queue: 32, pool: None }
+        Self {
+            video,
+            audio,
+            max_seconds: None,
+            queue: 32,
+            pool: None,
+        }
     }
 
     /// The decoder profiles a client may need: every accepted codec at the
@@ -57,7 +63,13 @@ impl IngestConfig {
     pub fn decoder_configs(&self) -> Vec<VideoDecoderConfig> {
         self.video
             .iter()
-            .flat_map(|v| v.codecs.iter().map(|c| VideoDecoderConfig { codec: *c, width: v.width, height: v.height }))
+            .flat_map(|v| {
+                v.codecs.iter().map(|c| VideoDecoderConfig {
+                    codec: *c,
+                    width: v.width,
+                    height: v.height,
+                })
+            })
             .collect()
     }
 
@@ -134,7 +146,9 @@ pub struct Ingest {
 
 impl std::fmt::Debug for Ingest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Ingest").field("stats", &self.stats()).finish()
+        f.debug_struct("Ingest")
+            .field("stats", &self.stats())
+            .finish()
     }
 }
 
@@ -142,7 +156,11 @@ impl Ingest {
     /// Starts the decode thread. `peer` receives the keyframe requests.
     /// Both tracks start enabled; a Reactor gateway disables them until
     /// `PublishTrack`.
-    pub fn start(cfg: IngestConfig, buffers: Arc<InputBuffers>, peer: PeerHandle) -> std::io::Result<Self> {
+    pub fn start(
+        cfg: IngestConfig,
+        buffers: Arc<InputBuffers>,
+        peer: PeerHandle,
+    ) -> std::io::Result<Self> {
         let (tx, rx) = sync_channel(cfg.queue.max(1));
         let shared = Arc::new(Shared {
             stats: Mutex::new(IngestStats::default()),
@@ -155,7 +173,11 @@ impl Ingest {
         let thread = std::thread::Builder::new()
             .name("fv-ingest".into())
             .spawn(move || Worker::new(cfg, buffers, peer, sh).run(rx))?;
-        Ok(Self { tx, shared, thread: Some(thread) })
+        Ok(Self {
+            tx,
+            shared,
+            thread: Some(thread),
+        })
     }
 
     /// Accept (or drop) a track's media: the Reactor publisher slot.
@@ -269,7 +291,12 @@ fn to_input_codec(c: VideoCodec) -> Option<InputVideoCodec> {
 }
 
 impl Worker {
-    fn new(cfg: IngestConfig, buffers: Arc<InputBuffers>, peer: PeerHandle, sh: Arc<Shared>) -> Self {
+    fn new(
+        cfg: IngestConfig,
+        buffers: Arc<InputBuffers>,
+        peer: PeerHandle,
+        sh: Arc<Shared>,
+    ) -> Self {
         Self {
             cfg,
             buffers,
@@ -321,7 +348,9 @@ impl Worker {
     /// Past the session's input limit: stop taking media.
     fn expired(&mut self) -> bool {
         let first = *self.first_media.get_or_insert_with(Instant::now);
-        let Some(max) = self.cfg.max_seconds else { return false };
+        let Some(max) = self.cfg.max_seconds else {
+            return false;
+        };
         if first.elapsed() < Duration::from_secs(u64::from(max)) {
             return false;
         }
@@ -344,9 +373,13 @@ impl Worker {
     }
 
     fn video(&mut self, m: InboundMedia) {
-        let Some(caps) = self.cfg.video.clone() else { return };
+        let Some(caps) = self.cfg.video.clone() else {
+            return;
+        };
         self.sh.stats().video_frames_in += 1;
-        let Some(codec) = m.codec.and_then(to_input_codec) else { return };
+        let Some(codec) = m.codec.and_then(to_input_codec) else {
+            return;
+        };
         if !caps.codecs.contains(&codec) {
             self.reject(format!("codec {} is not accepted", codec.as_str()));
             return;
@@ -370,7 +403,12 @@ impl Worker {
             match keyframe_size(codec, &m.data) {
                 Some((w, h)) if caps.allows_size(w, h) => {
                     if self.source != Some((w, h)) {
-                        tracing::info!(codec = codec.as_str(), width = w, height = h, "ingest: client video");
+                        tracing::info!(
+                            codec = codec.as_str(),
+                            width = w,
+                            height = h,
+                            "ingest: client video"
+                        );
                     }
                     self.source = Some((w, h));
                     let mut st = self.sh.stats();
@@ -403,8 +441,16 @@ impl Worker {
         }
         let pts = self.video_clock.us(m.rtp_time, 90_000);
         if self.decoder.is_none() {
-            let dcfg = VideoDecoderConfig { codec, width: caps.width, height: caps.height };
-            let pool = self.cfg.pool.clone().unwrap_or_else(DecoderPool::per_session);
+            let dcfg = VideoDecoderConfig {
+                codec,
+                width: caps.width,
+                height: caps.height,
+            };
+            let pool = self
+                .cfg
+                .pool
+                .clone()
+                .unwrap_or_else(DecoderPool::per_session);
             match VideoDecoder::with_pool(dcfg, pool) {
                 Ok(d) => self.decoder = Some(d),
                 Err(e) => {
@@ -415,7 +461,9 @@ impl Worker {
                 }
             }
         }
-        let Some(dec) = self.decoder.as_mut() else { return };
+        let Some(dec) = self.decoder.as_mut() else {
+            return;
+        };
         if let Err(e) = dec.push(&m.data, pts) {
             tracing::debug!(error = %e, "ingest: decoder write failed");
             let mut st = self.sh.stats();
@@ -437,7 +485,9 @@ impl Worker {
     }
 
     fn drain_decoder(&mut self) {
-        let Some(dec) = self.decoder.as_mut() else { return };
+        let Some(dec) = self.decoder.as_mut() else {
+            return;
+        };
         let pics = match dec.poll() {
             Ok(p) => p,
             Err(e) => {
@@ -461,20 +511,32 @@ impl Worker {
         self.sh.stats().video_frames_decoded += 1;
         // The fps cap, with 20 % slack for capture jitter.
         let min_gap = 800_000 / u64::from(caps.max_fps.max(1));
-        if self.last_buffered_pts.is_some_and(|last| pts_us.saturating_sub(last) < min_gap && pts_us >= last) {
+        if self
+            .last_buffered_pts
+            .is_some_and(|last| pts_us.saturating_sub(last) < min_gap && pts_us >= last)
+        {
             self.sh.stats().dropped_fps += 1;
             return;
         }
         self.last_buffered_pts = Some(pts_us);
         let source = self.source.unwrap_or((frame.width, frame.height));
-        if self.buffers.video.push(pts_us, InputFrame { frame, pts_us, source }) {
+        if self.buffers.video.push(
+            pts_us,
+            InputFrame {
+                frame,
+                pts_us,
+                source,
+            },
+        ) {
             self.sh.stats().video_frames_buffered += 1;
         }
     }
 
     #[cfg(feature = "opus")]
     fn audio(&mut self, m: InboundMedia) {
-        let Some(caps) = self.cfg.audio.clone() else { return };
+        let Some(caps) = self.cfg.audio.clone() else {
+            return;
+        };
         self.sh.stats().audio_packets_in += 1;
         if self.opus.is_none() {
             // Decode stereo: a mono Opus stream comes out duplicated.
@@ -488,7 +550,9 @@ impl Worker {
             }
         }
         let pts = self.audio_clock.us(m.rtp_time, 48_000);
-        let Some(dec) = self.opus.as_mut() else { return };
+        let Some(dec) = self.opus.as_mut() else {
+            return;
+        };
         let samples = match dec.decode(&m.data) {
             Ok(s) => s,
             Err(_) => {
@@ -497,8 +561,16 @@ impl Worker {
             }
         };
         let pcm = fastvideo_protocol::Pcm::new(48_000, 2, samples);
-        let pcm = if caps.channels == 1 { pcm.to_mono() } else { pcm };
-        if self.buffers.audio.push(pts, fastvideo_protocol::InputAudio { pcm, pts_us: pts }) {
+        let pcm = if caps.channels == 1 {
+            pcm.to_mono()
+        } else {
+            pcm
+        };
+        if self
+            .buffers
+            .audio
+            .push(pts, fastvideo_protocol::InputAudio { pcm, pts_us: pts })
+        {
             self.sh.stats().audio_chunks_buffered += 1;
         }
     }

@@ -58,15 +58,30 @@ impl OutputTap {
     pub fn channel(ticks: usize) -> (OutputTap, TapReceiver) {
         let (tx, rx) = mpsc::channel(ticks.max(1));
         let dropped = Arc::new(AtomicU64::new(0));
-        let tap = OutputTap { tx, dropped: dropped.clone(), pushed: Arc::new(AtomicU64::new(0)) };
-        (tap, TapReceiver { rx, dropped, seen: 0 })
+        let tap = OutputTap {
+            tx,
+            dropped: dropped.clone(),
+            pushed: Arc::new(AtomicU64::new(0)),
+        };
+        (
+            tap,
+            TapReceiver {
+                rx,
+                dropped,
+                seen: 0,
+            },
+        )
     }
 
     /// Queues one tick; never blocks. Returns `false` once the publisher has
     /// gone (the copy ended).
     pub fn push(&self, frame: Option<&RgbFrame>, audio: Option<&[f32]>) -> bool {
         let index = self.pushed.fetch_add(1, Ordering::Relaxed);
-        let t = TapTick { index, frame: frame.cloned(), audio: audio.map(<[f32]>::to_vec) };
+        let t = TapTick {
+            index,
+            frame: frame.cloned(),
+            audio: audio.map(<[f32]>::to_vec),
+        };
         match self.tx.try_send(t) {
             Ok(()) => true,
             Err(mpsc::error::TrySendError::Full(_)) => {
@@ -163,7 +178,12 @@ mod tests {
     #[tokio::test]
     async fn tap_never_blocks_and_counts_drops() {
         let (tap, mut rx) = OutputTap::channel(2);
-        let f = RgbFrame { width: 2, height: 2, data: bytes::Bytes::from(vec![0u8; 12]), index: 0 };
+        let f = RgbFrame {
+            width: 2,
+            height: 2,
+            data: bytes::Bytes::from(vec![0u8; 12]),
+            index: 0,
+        };
         assert!(tap.push(Some(&f), Some(&[0.0; 4])));
         assert!(tap.push(None, None));
         assert!(tap.push(Some(&f), None), "full: dropped, still open");

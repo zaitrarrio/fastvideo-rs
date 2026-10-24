@@ -40,7 +40,7 @@ const FILTER_TAPS: usize = 12;
 const RATIO: usize = 2;
 const UP_PAD: usize = FILTER_TAPS / RATIO - 1; // 5
 const UP_CROP_LEFT: usize = UP_PAD * RATIO + (FILTER_TAPS - RATIO) / 2; // 15
-const UP_CROP_RIGHT: usize = UP_PAD * RATIO + (FILTER_TAPS - RATIO + 1) / 2; // 15
+const UP_CROP_RIGHT: usize = UP_PAD * RATIO + (FILTER_TAPS - RATIO).div_ceil(2); // 15
 const DOWN_PAD_LEFT: usize = FILTER_TAPS / 2 - 1; // 5
 const DOWN_PAD_RIGHT: usize = FILTER_TAPS / 2; // 6
 
@@ -60,7 +60,7 @@ fn pinned(data: Vec<f32>, shape: Vec<usize>) -> Result<CudaTensor> {
 /// with `dim = 0`). `rows` is `v.shape[0]`: output channels of a `Conv1d`,
 /// *input* channels of a `ConvTranspose1d`.
 pub fn fold_weight_norm(g: &[f32], v: &[f32], rows: usize) -> Result<Vec<f32>> {
-    if rows == 0 || g.len() != rows || v.len() % rows != 0 {
+    if rows == 0 || g.len() != rows || !v.len().is_multiple_of(rows) {
         return Err(msg(format!(
             "weight norm: {} gains for {rows} rows of {} values",
             g.len(),
@@ -689,7 +689,7 @@ impl AudioPreBlock {
         let n1 = x.layer_norm(1e-5, Some(&self.norm1.0), Some(&self.norm1.1))?;
         let attn = self.causal_attn(&n1)?;
         let n3 = x.layer_norm(1e-5, Some(&self.norm3.0), Some(&self.norm3.1))?;
-        let mut h = self.skip.forward(&n3)?.add(&attn)?;
+        let h = self.skip.forward(&n3)?.add(&attn)?;
         let n2 = h.layer_norm(1e-5, Some(&self.norm2.0), Some(&self.norm2.1))?;
         let mn = n2.layer_norm(1e-5, Some(&self.mlp_norm.0), Some(&self.mlp_norm.1))?;
         let g = self.mlp_w0.forward(&mn)?.gelu_tanh();
@@ -792,7 +792,7 @@ fn adaptive_avg_pool1d_into(src: &[f32], dst: &mut [f32]) {
     let (lin, lout) = (src.len(), dst.len());
     for (j, d) in dst.iter_mut().enumerate() {
         let start = (j * lin) / lout;
-        let end = ((j + 1) * lin + lout - 1) / lout;
+        let end = ((j + 1) * lin).div_ceil(lout);
         let end = end.max(start + 1).min(lin);
         let mut sum = 0f32;
         for v in &src[start..end] {
@@ -876,7 +876,7 @@ impl H3AudioEncoder {
 
     /// Stereo planar `[2 * samples]` → DiT rows `[2 * Na, 32]` (L then R).
     pub fn encode_stereo_planar(&self, planar: &[f32]) -> Result<CudaTensor> {
-        if planar.len() < 2 || planar.len() % 2 != 0 {
+        if planar.len() < 2 || !planar.len().is_multiple_of(2) {
             return Err(msg(format!(
                 "stereo planar needs even length, got {}",
                 planar.len()

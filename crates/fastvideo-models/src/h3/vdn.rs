@@ -174,7 +174,8 @@ impl VdnCheckpoint {
     pub fn open(dir: &Path) -> Result<Self, String> {
         let stage = resolve_stage_dir(dir)?;
         let path = stage.join(VDN_CONFIG_REL);
-        let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         Self::from_config_json(&stage, &text)
     }
 
@@ -182,14 +183,17 @@ impl VdnCheckpoint {
     pub fn from_config_json(stage: &Path, text: &str) -> Result<Self, String> {
         let doc: serde_json::Value =
             serde_json::from_str(text).map_err(|e| format!("vdn config: {e}"))?;
-        if doc.get("_class_name").and_then(|v| v.as_str()) != Some("VDNMiniMaxH3Transformer3DModel") {
+        if doc.get("_class_name").and_then(|v| v.as_str()) != Some("VDNMiniMaxH3Transformer3DModel")
+        {
             return Err("vdn config: _class_name is not VDNMiniMaxH3Transformer3DModel".into());
         }
         let vdn = doc.get("vdn").ok_or("vdn config: no `vdn` block")?;
         let rel = |v: &serde_json::Value| -> Result<PathBuf, String> {
             let s = v.as_str().ok_or("vdn config: a path is not a string")?;
             if s.starts_with('/') || s.split('/').any(|p| p == "..") {
-                return Err(format!("vdn config: path {s:?} leaves the checkpoint directory"));
+                return Err(format!(
+                    "vdn config: path {s:?} leaves the checkpoint directory"
+                ));
             }
             Ok(stage.join(s))
         };
@@ -205,7 +209,8 @@ impl VdnCheckpoint {
         if base.get("subfolder").and_then(|s| s.as_str()) != Some("h3-base/transformer") {
             return Err("vdn config: base.subfolder is not h3-base/transformer".into());
         }
-        let transform = VdnTransform::from_json(vdn.get("transform").ok_or("vdn config: no transform")?)?;
+        let transform =
+            VdnTransform::from_json(vdn.get("transform").ok_or("vdn config: no transform")?)?;
         Ok(Self {
             dir: stage.to_path_buf(),
             branch,
@@ -351,7 +356,9 @@ impl VdnLayout {
             return Err("vdn layout: Ref2VA was not trained for VDN-H3".into());
         }
         if l.text.len == 0 {
-            return Err("vdn layout: no prompt rows (the linear branch's text state reads them)".into());
+            return Err(
+                "vdn layout: no prompt rows (the linear branch's text state reads them)".into(),
+            );
         }
         Ok(Self {
             seq_len: l.sequence_length(),
@@ -484,7 +491,14 @@ pub fn activate(x: &[f32], heads: usize, d: usize, l2: bool) -> Vec<f32> {
 /// Depthwise 5x5 spatial conv per frame, zero padding, no bias
 /// (`F.conv2d(..., padding=2, groups=C)`): `x [frames, gh, gw, C]`,
 /// `w [C, 5, 5]`.
-pub fn spatial_conv(x: &[f32], frames: usize, gh: usize, gw: usize, c: usize, w: &[f32]) -> Vec<f32> {
+pub fn spatial_conv(
+    x: &[f32],
+    frames: usize,
+    gh: usize,
+    gw: usize,
+    c: usize,
+    w: &[f32],
+) -> Vec<f32> {
     let k = VDN_CONV_TAPS as i64;
     let p = k / 2;
     let mut out = vec![0.0f32; frames * gh * gw * c];
@@ -598,7 +612,9 @@ pub fn spd_inverse(a: &[f32], d: usize) -> Result<Vec<f64>, String> {
             }
             if i == j {
                 if s <= 0.0 {
-                    return Err(format!("vdn solve: I + A is not positive definite (pivot {i}: {s})"));
+                    return Err(format!(
+                        "vdn solve: I + A is not positive definite (pivot {i}: {s})"
+                    ));
                 }
                 l[i * d + i] = s.sqrt();
             } else {
@@ -711,7 +727,14 @@ pub fn kda_alpha(
 /// The two scans (`M:_run_scans`): `P[f] = P[f-1] T_f + J_f` from `P[-1] =
 /// start`, and `Q[f] = Q[f+1] T_f + J_f` from `Q[F] = start`; states are
 /// `[d_v, d_k]` per head, banks `[F, H, d, d]`.
-pub fn scans(t: &[f32], j: &[f32], start: &[f32], frames: usize, heads: usize, d: usize) -> (Vec<f32>, Vec<f32>) {
+pub fn scans(
+    t: &[f32],
+    j: &[f32],
+    start: &[f32],
+    frames: usize,
+    heads: usize,
+    d: usize,
+) -> (Vec<f32>, Vec<f32>) {
     let mat = d * d;
     let step = |state: &[f64], f: usize, h: usize| -> Vec<f64> {
         let base = (f * heads + h) * mat;
@@ -730,7 +753,10 @@ pub fn scans(t: &[f32], j: &[f32], start: &[f32], frames: usize, heads: usize, d
     let mut p = vec![0.0f32; frames * heads * mat];
     let mut q = vec![0.0f32; frames * heads * mat];
     for h in 0..heads {
-        let s0: Vec<f64> = start[h * mat..][..mat].iter().map(|&x| f64::from(x)).collect();
+        let s0: Vec<f64> = start[h * mat..][..mat]
+            .iter()
+            .map(|&x| f64::from(x))
+            .collect();
         let mut s = s0.clone();
         for f in 0..frames {
             s = step(&s, f, h);
@@ -768,7 +794,8 @@ pub fn gather(
     let mut lp = vec![0.0f64; (frames + 1) * c];
     for f in 0..frames {
         for ch in 0..c {
-            lp[(f + 1) * c + ch] = lp[f * c + ch] + f64::from(alpha[f * c + ch]).max(VDN_ALPHA_FLOOR).ln();
+            lp[(f + 1) * c + ch] =
+                lp[f * c + ch] + f64::from(alpha[f * c + ch]).max(VDN_ALPHA_FLOOR).ln();
         }
     }
     let mut out = vec![0.0f32; frames * heads * mat];
@@ -789,7 +816,8 @@ pub fn gather(
                 let da = (lp[(row.after_to + 1) * c + ch] - lp[t * c + ch]).exp();
                 for v in 0..d {
                     o[v * d + kk] = (f64::from(before[v * d + kk]) * db
-                        + f64::from(after[v * d + kk]) * da) as f32;
+                        + f64::from(after[v * d + kk]) * da)
+                        as f32;
                 }
             }
         }
@@ -832,8 +860,9 @@ pub fn readout(
                 let ms = r.iter().map(|x| x * x).sum::<f64>() / d as f64;
                 let rs = 1.0 / (ms + f64::from(VDN_NORM_EPS)).sqrt();
                 for v in 0..d {
-                    out[row * c + h * d + v] = (r[v] * rs * f64::from(weight[v])
-                        * f64::from(gate[row * c + h * d + v])) as f32;
+                    out[row * c + h * d + v] =
+                        (r[v] * rs * f64::from(weight[v]) * f64::from(gate[row * c + h * d + v]))
+                            as f32;
                 }
             }
         }
@@ -859,7 +888,14 @@ pub struct BranchWeightsRef<'a> {
     pub v_tm: &'a [f32],
 }
 
-fn linear(x: &[f32], w: &[f32], bias: Option<&[f32]>, rows: usize, inn: usize, out: usize) -> Vec<f32> {
+fn linear(
+    x: &[f32],
+    w: &[f32],
+    bias: Option<&[f32]>,
+    rows: usize,
+    inn: usize,
+    out: usize,
+) -> Vec<f32> {
     let mut y = vec![0.0f32; rows * out];
     for r in 0..rows {
         let xr = &x[r * inn..][..inn];
@@ -910,13 +946,25 @@ pub fn reference_branch(
     // 1. features
     let q = activate(x.q_inner, heads, d, true);
     let k = activate(
-        &temporal_conv(&spatial_conv(x.k_inner, frames, grid.0, grid.1, c, w.k_sp), frames, s, c, w.k_tm),
+        &temporal_conv(
+            &spatial_conv(x.k_inner, frames, grid.0, grid.1, c, w.k_sp),
+            frames,
+            s,
+            c,
+            w.k_tm,
+        ),
         heads,
         d,
         true,
     );
     let v = activate(
-        &temporal_conv(&spatial_conv(x.v_inner, frames, grid.0, grid.1, c, w.v_sp), frames, s, c, w.v_tm),
+        &temporal_conv(
+            &spatial_conv(x.v_inner, frames, grid.0, grid.1, c, w.v_sp),
+            frames,
+            s,
+            c,
+            w.v_tm,
+        ),
         heads,
         d,
         false,
@@ -936,11 +984,23 @@ pub fn reference_branch(
     let mut mean = vec![0.0f32; frames * hidden];
     for f in 0..frames {
         for col in 0..hidden {
-            let sum: f64 = (0..s).map(|si| f64::from(x.x_inner[(f * s + si) * hidden + col])).sum();
+            let sum: f64 = (0..s)
+                .map(|si| f64::from(x.x_inner[(f * s + si) * hidden + col]))
+                .sum();
             mean[f * hidden + col] = (sum / s as f64) as f32;
         }
     }
-    let alpha = kda_alpha(&mean, frames, hidden, w.alpha_down, w.alpha_up, w.dt_bias, w.a_log, heads, d);
+    let alpha = kda_alpha(
+        &mean,
+        frames,
+        hidden,
+        w.alpha_down,
+        w.alpha_up,
+        w.dt_bias,
+        w.a_log,
+        heads,
+        d,
+    );
     // 6. the text state
     let kt = activate(x.k_text, heads, d, true);
     let vt = activate(x.v_text, heads, d, false);
@@ -982,7 +1042,11 @@ pub fn reference_window_attention(
             for (jj, pj) in p.iter_mut().enumerate() {
                 *pj = if layout.allows(bounds, i, jj) {
                     let kj = &k[jj * c + h * d..][..d];
-                    qi.iter().zip(kj).map(|(&a, &b)| f64::from(a) * f64::from(b)).sum::<f64>() * scale
+                    qi.iter()
+                        .zip(kj)
+                        .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                        .sum::<f64>()
+                        * scale
                 } else {
                     f64::NEG_INFINITY
                 };
@@ -990,11 +1054,17 @@ pub fn reference_window_attention(
             }
             let mut sum = 0.0;
             for pj in p.iter_mut() {
-                *pj = if pj.is_finite() { (*pj - mx).exp() } else { 0.0 };
+                *pj = if pj.is_finite() {
+                    (*pj - mx).exp()
+                } else {
+                    0.0
+                };
                 sum += *pj;
             }
             for e in 0..d {
-                let acc: f64 = (0..s).map(|jj| p[jj] * f64::from(v[jj * c + h * d + e])).sum();
+                let acc: f64 = (0..s)
+                    .map(|jj| p[jj] * f64::from(v[jj * c + h * d + e]))
+                    .sum();
                 out[i * c + h * d + e] = (acc / sum) as f32;
             }
         }
@@ -1010,7 +1080,11 @@ pub fn vdn_recipe_forwards(name: &str) -> Option<usize> {
     if name == "vdn-h3" {
         return Some(50);
     }
-    let n: usize = name.strip_prefix("vdn-h3-")?.strip_suffix("step")?.parse().ok()?;
+    let n: usize = name
+        .strip_prefix("vdn-h3-")?
+        .strip_suffix("step")?
+        .parse()
+        .ok()?;
     (1..=99).contains(&n).then_some(n)
 }
 
@@ -1023,7 +1097,9 @@ mod tests {
     use super::*;
 
     fn lcg(seed: &mut u64) -> f32 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((*seed >> 33) as f32 / (1u64 << 31) as f32) * 2.0 - 1.0
     }
 
@@ -1044,7 +1120,10 @@ mod tests {
         for t in 10..12 {
             assert_eq!(b[t], (5, 19));
         }
-        assert_eq!(window_bounds(4, 1, 0), vec![(-1, 1), (0, 2), (1, 3), (2, 4)]);
+        assert_eq!(
+            window_bounds(4, 1, 0),
+            vec![(-1, 1), (0, 2), (1, 3), (2, 4)]
+        );
         let tr = VdnTransform::released();
         assert!(tr.full_cover(10) && !tr.full_cover(11));
         // the 14.4 s clip: 102 latent frames, chunk 20 holds 100 and 101
@@ -1060,7 +1139,10 @@ mod tests {
             "short_conv":{"targets":["k","v"]}},"softmax_attention":{"chunk":5,"radius":1}}"#,
         )
         .unwrap();
-        assert_eq!(VdnTransform::from_json(&json).unwrap(), VdnTransform::released());
+        assert_eq!(
+            VdnTransform::from_json(&json).unwrap(),
+            VdnTransform::released()
+        );
         for (path, bad) in [
             ("delta_rule", r#""sana_scaled""#),
             ("bridge", r#""none""#),
@@ -1079,7 +1161,11 @@ mod tests {
     fn adapter_keys_reroot_the_hybrid_attention() {
         assert_eq!(
             adapter_key("transformer_blocks.3.attn.orig.to_q.lora_A.default.weight"),
-            Some(("transformer_blocks.3.attn.to_q".into(), LoraSideName::A, "default".into()))
+            Some((
+                "transformer_blocks.3.attn.to_q".into(),
+                LoraSideName::A,
+                "default".into()
+            ))
         );
         assert_eq!(
             adapter_key("token_refiner.refiner_blocks.1.attn.to_out.0.lora_B.turbo.weight"),
@@ -1090,10 +1176,15 @@ mod tests {
             ))
         );
         assert_eq!(
-            adapter_key("transformer_blocks.0.adaln_proj.linear.lora_A.turbo.weight").unwrap().0,
+            adapter_key("transformer_blocks.0.adaln_proj.linear.lora_A.turbo.weight")
+                .unwrap()
+                .0,
             "transformer_blocks.0.adaln_proj.linear"
         );
-        assert_eq!(adapter_key("transformer_blocks.0.attn.to_out_linear.weight"), None);
+        assert_eq!(
+            adapter_key("transformer_blocks.0.attn.to_out_linear.weight"),
+            None
+        );
     }
 
     /// The 8-step tree holds only adapters/turbo (and JSON files): the branch
@@ -1172,7 +1263,10 @@ mod tests {
         let k = rand(9 * d, &mut seed, 1.0);
         let k = activate(&k, 1, d, true);
         let v = rand(9 * d, &mut seed, 1.0);
-        let beta: Vec<f32> = rand(9, &mut seed, 1.0).iter().map(|x| 0.5 + 0.4 * x).collect();
+        let beta: Vec<f32> = rand(9, &mut seed, 1.0)
+            .iter()
+            .map(|x| 0.5 + 0.4 * x)
+            .collect();
         let (a, b) = frame_statistics(&k, &v, &beta, 1, 9, 1, d);
         let alpha: Vec<f32> = rand(d, &mut seed, 0.4).iter().map(|x| 0.5 + x).collect();
         let (t, j) = vdn_factors(&a, &b, Some(&alpha), 1, d).unwrap();
@@ -1181,9 +1275,13 @@ mod tests {
         for vrow in 0..d {
             for c in 0..d {
                 let lhs: f64 = (0..d)
-                    .map(|i| f64::from(p[vrow * d + i]) * (f64::from(a[i * d + c]) + if i == c { 1.0 } else { 0.0 }))
+                    .map(|i| {
+                        f64::from(p[vrow * d + i])
+                            * (f64::from(a[i * d + c]) + if i == c { 1.0 } else { 0.0 })
+                    })
                     .sum();
-                let rhs = f64::from(s[vrow * d + c]) * f64::from(alpha[c]) + f64::from(b[vrow * d + c]);
+                let rhs =
+                    f64::from(s[vrow * d + c]) * f64::from(alpha[c]) + f64::from(b[vrow * d + c]);
                 assert!((lhs - rhs).abs() < 1e-4, "{lhs} vs {rhs}");
             }
         }
@@ -1197,7 +1295,11 @@ mod tests {
         let mut seed = 11u64;
         let mat = d * d;
         let tm: Vec<f32> = (0..frames)
-            .flat_map(|_| (0..mat).map(|i| if i % (d + 1) == 0 { 1.0 } else { 0.0 }).collect::<Vec<_>>())
+            .flat_map(|_| {
+                (0..mat)
+                    .map(|i| if i % (d + 1) == 0 { 1.0 } else { 0.0 })
+                    .collect::<Vec<_>>()
+            })
             .collect();
         let jm = rand(frames * mat, &mut seed, 1.0);
         let start = vec![0.0f32; mat];
@@ -1211,7 +1313,11 @@ mod tests {
                     .filter(|&f| f < lo || f > hi)
                     .map(|f| jm[f as usize * mat + e])
                     .sum();
-                assert!((g[t * mat + e] - want).abs() < 1e-5, "t {t}: {} vs {want}", g[t * mat + e]);
+                assert!(
+                    (g[t * mat + e] - want).abs() < 1e-5,
+                    "t {t}: {} vs {want}",
+                    g[t * mat + e]
+                );
             }
         }
     }
@@ -1224,7 +1330,10 @@ mod tests {
         let p = rand(frames * mat, &mut seed, 1.0);
         let q = rand(frames * mat, &mut seed, 1.0);
         let start = rand(mat, &mut seed, 1.0);
-        let alpha: Vec<f32> = rand(frames * d, &mut seed, 0.3).iter().map(|x| 0.6 + x).collect();
+        let alpha: Vec<f32> = rand(frames * d, &mut seed, 0.3)
+            .iter()
+            .map(|x| 0.6 + x)
+            .collect();
         let inner = vec![(1i64, 3i64); frames];
         let plan = gather_plan(&inner);
         let g = gather(&p, &q, &alpha, &start, &plan, 1, d);
@@ -1233,7 +1342,8 @@ mod tests {
             for kk in 0..d {
                 let db: f64 = (1..=t).map(|u| f64::from(alpha[u * d + kk])).product();
                 let da: f64 = (t..=3).map(|u| f64::from(alpha[u * d + kk])).product();
-                let want = f64::from(p[vrow * d + kk]) * db + f64::from(q[4 * mat + vrow * d + kk]) * da;
+                let want =
+                    f64::from(p[vrow * d + kk]) * db + f64::from(q[4 * mat + vrow * d + kk]) * da;
                 assert!((f64::from(g[t * mat + vrow * d + kk]) - want).abs() < 1e-5);
             }
         }

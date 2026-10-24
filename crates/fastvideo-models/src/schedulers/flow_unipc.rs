@@ -631,6 +631,8 @@ mod tests {
             x = sched.step(&vel, &x).unwrap();
             traj.push(x.clone());
         }
+        // The reference trajectory, verbatim.
+        #[allow(clippy::excessive_precision)]
         let expected = [
             [0.18999911, -0.37999822, 0.79499956, 1.4699973, -1.0849987],
             [0.17499861, -0.34999722, 0.7874993, 1.4249958, -1.0624979],

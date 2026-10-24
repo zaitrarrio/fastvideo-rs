@@ -1228,7 +1228,9 @@ mod tests {
             vec![1, 16, 3 * blocks, 2, 2],
         )
         .unwrap();
-        let whole = tae.decode_streaming_chunked(&z, 64, &mut |_, _| Ok(())).unwrap();
+        let whole = tae
+            .decode_streaming_chunked(&z, 64, &mut |_, _| Ok(()))
+            .unwrap();
         let mut state = tae.decode_state();
         let mut parts = Vec::new();
         for b in 0..blocks {

@@ -71,7 +71,12 @@ impl RgbFrame {
             let row = (y0 + y) * stride + x0 * 3;
             out.extend_from_slice(&self.data[row..row + w as usize * 3]);
         }
-        RgbFrame { width: w, height: h, data: out.into(), index: self.index }
+        RgbFrame {
+            width: w,
+            height: h,
+            data: out.into(),
+            index: self.index,
+        }
     }
     /// The pixel at `(x, y)`.
     pub fn pixel(&self, x: u32, y: u32) -> Option<[u8; 3]> {

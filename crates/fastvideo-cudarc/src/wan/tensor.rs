@@ -126,7 +126,14 @@ impl ActKey {
 
 /// `(big, small, op, inner, period, out_shape)` of a broadcast binary op.
 #[cfg(feature = "cuda")]
-type BcastPlan<'a> = (&'a CudaTensor, &'a CudaTensor, BcastOp, usize, usize, Vec<usize>);
+type BcastPlan<'a> = (
+    &'a CudaTensor,
+    &'a CudaTensor,
+    BcastOp,
+    usize,
+    usize,
+    Vec<usize>,
+);
 
 /// A tensor's device storage in its own dtype (see [`CudaTensor::dev_any`]).
 #[cfg(feature = "cuda")]
@@ -1032,7 +1039,7 @@ impl CudaTensor {
         #[cfg(feature = "cuda")]
         let n = self.shape[0];
         if groups == 0
-            || c % groups != 0
+            || !c.is_multiple_of(groups)
             || weight.numel() != c
             || bias.numel() != c
             || self.numel() == 0
@@ -1105,7 +1112,14 @@ impl CudaTensor {
         op: BcastOp,
     ) -> Result<Option<BcastPlan<'a>>> {
         if self.shape == other.shape {
-            return Ok(Some((self, other, op, 1, self.numel().max(1), self.shape.clone())));
+            return Ok(Some((
+                self,
+                other,
+                op,
+                1,
+                self.numel().max(1),
+                self.shape.clone(),
+            )));
         }
         let out_shape = broadcast_shapes(&self.shape, &other.shape)?;
         Ok(if self.shape == out_shape {
@@ -1116,7 +1130,8 @@ impl CudaTensor {
                 BcastOp::Div => BcastOp::RDiv,
                 o => o,
             };
-            repeat_plan(&other.shape, &self.shape).map(|(i, p)| (other, self, swapped, i, p, out_shape))
+            repeat_plan(&other.shape, &self.shape)
+                .map(|(i, p)| (other, self, swapped, i, p, out_shape))
         } else {
             None
         })
@@ -1133,7 +1148,8 @@ impl CudaTensor {
         #[cfg(feature = "cuda")]
         if self.act16_device() || other.act16_device() {
             if let Some((big, small, op, inner, period, shape)) = self.bcast_plan(other, op)? {
-                if let Some(t) = super::act16::binary(big, small, op, inner, period, out16, shape)? {
+                if let Some(t) = super::act16::binary(big, small, op, inner, period, out16, shape)?
+                {
                     return Ok(t);
                 }
             }
@@ -1300,7 +1316,12 @@ impl CudaTensor {
 
     /// The bf16-native unary kernel for a bf16 activation (`None` otherwise).
     #[cfg(feature = "cuda")]
-    fn act16_unary(&self, kind: super::act16::Unary, p0: f32, p1: f32) -> Result<Option<CudaTensor>> {
+    fn act16_unary(
+        &self,
+        kind: super::act16::Unary,
+        p0: f32,
+        p1: f32,
+    ) -> Result<Option<CudaTensor>> {
         if !(self.act16_device() && self.is_bf16()) {
             return Ok(None);
         }
@@ -1912,7 +1933,7 @@ impl CudaTensor {
                 self.shape, weight.shape
             )));
         }
-        if (l - 1) * stride + dilation * (k - 1) + output_padding + 1 <= 2 * padding {
+        if (l - 1) * stride + dilation * (k - 1) + output_padding < 2 * padding {
             return Err(msg(format!(
                 "conv_transpose1d: padding {padding} leaves no output for x={:?} w={:?}",
                 self.shape, weight.shape
@@ -2079,7 +2100,10 @@ impl CudaTensor {
         }
         let cin = self.shape[1];
         let cout = weight.shape[0];
-        if cin % groups != 0 || cout % groups != 0 || weight.shape[1] != cin / groups {
+        if !cin.is_multiple_of(groups)
+            || !cout.is_multiple_of(groups)
+            || weight.shape[1] != cin / groups
+        {
             return Err(msg(format!(
                 "conv3d groups {groups}: x={:?} w={:?}",
                 self.shape, weight.shape
@@ -2232,7 +2256,7 @@ impl CudaTensor {
             return Err(msg("upsample_nearest2d NCHW"));
         }
         let (n, c, h, w) = (self.shape[0], self.shape[1], self.shape[2], self.shape[3]);
-        if out_h % h != 0 || out_w % w != 0 {
+        if !out_h.is_multiple_of(h) || !out_w.is_multiple_of(w) {
             return Err(msg(format!(
                 "upsample_nearest2d needs integer factors: {h}x{w} -> {out_h}x{out_w}"
             )));

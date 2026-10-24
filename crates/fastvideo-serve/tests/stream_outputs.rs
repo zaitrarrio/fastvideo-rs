@@ -56,7 +56,12 @@ fn hdr(h: &HeaderMap, k: &str) -> Option<String> {
     h.get(k).and_then(|v| v.to_str().ok()).map(str::to_owned)
 }
 
-async fn cf_create(State(cf): State<Cf>, Path(acct): Path<String>, h: HeaderMap, Json(body): Json<Value>) -> Response {
+async fn cf_create(
+    State(cf): State<Cf>,
+    Path(acct): Path<String>,
+    h: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
     assert_eq!(acct, "acct123");
     let mut seen = cf.seen.lock().unwrap();
     seen.creates.push((hdr(&h, "authorization"), body.clone()));
@@ -85,13 +90,25 @@ async fn cf_create(State(cf): State<Cf>, Path(acct): Path<String>, h: HeaderMap,
     .into_response()
 }
 
-async fn cf_put(State(cf): State<Cf>, Path((_acct, uid)): Path<(String, String)>, Json(body): Json<Value>) -> Json<Value> {
+async fn cf_put(
+    State(cf): State<Cf>,
+    Path((_acct, uid)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> Json<Value> {
     cf.seen.lock().unwrap().disables.push((uid, body));
     Json(json!({"success": true, "errors": [], "messages": [], "result": null}))
 }
 
-async fn cf_delete(State(cf): State<Cf>, Path((_acct, uid)): Path<(String, String)>, h: HeaderMap) -> Json<Value> {
-    cf.seen.lock().unwrap().deletes.push((uid, hdr(&h, "authorization")));
+async fn cf_delete(
+    State(cf): State<Cf>,
+    Path((_acct, uid)): Path<(String, String)>,
+    h: HeaderMap,
+) -> Json<Value> {
+    cf.seen
+        .lock()
+        .unwrap()
+        .deletes
+        .push((uid, hdr(&h, "authorization")));
     Json(json!({"success": true, "errors": [], "messages": [], "result": null}))
 }
 
@@ -116,9 +133,12 @@ async fn whip_post(State(m): State<Endpoint>, Path(key): Path<String>, body: Str
     assert_eq!(key, PUBLISH_KEY, "the publish key is the credential");
     m.rx.lock().unwrap().posts += 1;
     m.rx.lock().unwrap().offers.push(body.clone());
-    let audio = Sdp::parse(&body)
-        .ok()
-        .and_then(|s| s.media.iter().any(|x| x.kind() == MediaKind::Audio).then_some(AudioLayout::Stereo));
+    let audio = Sdp::parse(&body).ok().and_then(|s| {
+        s.media
+            .iter()
+            .any(|x| x.kind() == MediaKind::Audio)
+            .then_some(AudioLayout::Stereo)
+    });
     let opts = AnswerOptions {
         audio,
         channels: ChannelPolicy::none(),
@@ -132,7 +152,10 @@ async fn whip_post(State(m): State<Endpoint>, Path(key): Path<String>, body: Str
             tokio::spawn(collect(peer, m.rx.clone()));
             (
                 StatusCode::CREATED,
-                [("content-type", "application/sdp".to_string()), ("location", format!("publish/{id}"))],
+                [
+                    ("content-type", "application/sdp".to_string()),
+                    ("location", format!("publish/{id}")),
+                ],
                 answer,
             )
                 .into_response()
@@ -144,24 +167,36 @@ async fn whip_post(State(m): State<Endpoint>, Path(key): Path<String>, body: Str
 async fn collect(mut peer: Peer, rx: Arc<Mutex<Rx>>) {
     while let Some(ev) = peer.next_event().await {
         match ev {
-            PeerEvent::Media { kind: TrackKind::Video, rtp_time, keyframe, data, .. } => {
-                rx.lock().unwrap().video.push((rtp_time, keyframe, data))
-            }
-            PeerEvent::Media { kind: TrackKind::Audio, .. } => rx.lock().unwrap().audio += 1,
+            PeerEvent::Media {
+                kind: TrackKind::Video,
+                rtp_time,
+                keyframe,
+                data,
+                ..
+            } => rx.lock().unwrap().video.push((rtp_time, keyframe, data)),
+            PeerEvent::Media {
+                kind: TrackKind::Audio,
+                ..
+            } => rx.lock().unwrap().audio += 1,
             PeerEvent::Closed(_) => break,
             _ => {}
         }
     }
 }
 
-async fn whip_delete(State(m): State<Endpoint>, Path((_key, _id)): Path<(String, String)>) -> StatusCode {
+async fn whip_delete(
+    State(m): State<Endpoint>,
+    Path((_key, _id)): Path<(String, String)>,
+) -> StatusCode {
     m.rx.lock().unwrap().deletes += 1;
     StatusCode::OK
 }
 
 /// The fake Stream API and its WHIP ingest on one listener.
 async fn fake_cloudflare() -> (String, Arc<Mutex<CfSeen>>, Arc<Mutex<Rx>>) {
-    let host = RtcHost::bind(HostConfig::loopback(true, false)).await.unwrap();
+    let host = RtcHost::bind(HostConfig::loopback(true, false))
+        .await
+        .unwrap();
     let rx = Arc::new(Mutex::new(Rx::default()));
     let seen = Arc::new(Mutex::new(CfSeen::default()));
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -169,11 +204,23 @@ async fn fake_cloudflare() -> (String, Arc<Mutex<CfSeen>>, Arc<Mutex<Rx>>) {
     let whip = Router::new()
         .route("/{key}/webRTC/publish", post(whip_post))
         .route("/{key}/webRTC/publish/{id}", delete(whip_delete))
-        .with_state(Endpoint { host, rx: rx.clone() });
+        .with_state(Endpoint {
+            host,
+            rx: rx.clone(),
+        });
     let api = Router::new()
-        .route("/client/v4/accounts/{acct}/stream/live_inputs", post(cf_create))
-        .route("/client/v4/accounts/{acct}/stream/live_inputs/{uid}", delete(cf_delete).put(cf_put))
-        .with_state(Cf { seen: seen.clone(), whip_base: format!("{base}/ingest") });
+        .route(
+            "/client/v4/accounts/{acct}/stream/live_inputs",
+            post(cf_create),
+        )
+        .route(
+            "/client/v4/accounts/{acct}/stream/live_inputs/{uid}",
+            delete(cf_delete).put(cf_put),
+        )
+        .with_state(Cf {
+            seen: seen.clone(),
+            whip_base: format!("{base}/ingest"),
+        });
     let app = Router::new().nest("/ingest", whip).merge(api);
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
     (base, seen, rx)
@@ -182,7 +229,11 @@ async fn fake_cloudflare() -> (String, Arc<Mutex<CfSeen>>, Arc<Mutex<Rx>>) {
 // ---- the server ------------------------------------------------------------------
 
 async fn app_with(extra: &[(&str, &str)]) -> App {
-    let dir = tempfile::Builder::new().prefix("fv-serve-outputs-").tempdir().unwrap().keep();
+    let dir = tempfile::Builder::new()
+        .prefix("fv-serve-outputs-")
+        .tempdir()
+        .unwrap()
+        .keep();
     let mut env = BTreeMap::new();
     env.insert("FV_API_KEYS".to_owned(), KeyRing::hash_hex(KEY));
     env.insert("FV_URL_SIGNING_KEY".to_owned(), "k".to_owned());
@@ -221,7 +272,10 @@ async fn cf_app(base: &str, extra: &[(&str, &str)]) -> App {
 }
 
 async fn call(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, String) {
-    let mut b = Request::builder().method(method).uri(uri).header("authorization", format!("Bearer {KEY}"));
+    let mut b = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("authorization", format!("Bearer {KEY}"));
     let req = match body {
         Some(v) => {
             b = b.header("content-type", "application/json");
@@ -241,7 +295,14 @@ fn json_of(s: &str) -> Value {
 
 /// No response may carry a credential.
 fn assert_clean(text: &str) {
-    for secret in [CF_TOKEN, PUBLISH_KEY, RTMPS_KEY, SRT_PASS, "user-secret-key", "s3cret-passphrase"] {
+    for secret in [
+        CF_TOKEN,
+        PUBLISH_KEY,
+        RTMPS_KEY,
+        SRT_PASS,
+        "user-secret-key",
+        "s3cret-passphrase",
+    ] {
         assert!(!text.contains(secret), "secret {secret} leaked: {text}");
     }
 }
@@ -249,7 +310,10 @@ fn assert_clean(text: &str) {
 async fn wait<F: Fn() -> bool>(what: &str, secs: u64, f: F) {
     let t0 = std::time::Instant::now();
     while !f() {
-        assert!(t0.elapsed() < Duration::from_secs(secs), "timed out waiting for {what}");
+        assert!(
+            t0.elapsed() < Duration::from_secs(secs),
+            "timed out waiting for {what}"
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
@@ -282,9 +346,18 @@ async fn cloudflare_default_publishes_native_h264_and_cleans_up() {
     assert_eq!(v["playback"]["provider"], "cloudflare");
     assert_eq!(v["playback"]["format"], "whep");
     let uid = v["playback"]["live_input_id"].as_str().unwrap().to_owned();
-    assert_eq!(v["playback"]["whep_url"], format!("https://customer-abc123.cloudflarestream.com/{uid}/webRTC/play"));
-    assert_eq!(v["playback"]["iframe_url"], format!("https://customer-abc123.cloudflarestream.com/{uid}/iframe"));
-    assert!(v["playback"].get("hls_url").is_none(), "WebRTC inputs have no HLS");
+    assert_eq!(
+        v["playback"]["whep_url"],
+        format!("https://customer-abc123.cloudflarestream.com/{uid}/webRTC/play")
+    );
+    assert_eq!(
+        v["playback"]["iframe_url"],
+        format!("https://customer-abc123.cloudflarestream.com/{uid}/iframe")
+    );
+    assert!(
+        v["playback"].get("hls_url").is_none(),
+        "WebRTC inputs have no HLS"
+    );
     {
         let seen = seen.lock().unwrap();
         assert_eq!(seen.creates.len(), 1);
@@ -294,7 +367,10 @@ async fn cloudflare_default_publishes_native_h264_and_cleans_up() {
         assert_eq!(body["recording"]["mode"], "off");
     }
 
-    wait("48 video frames at the ingest", 90, || rx.lock().unwrap().video.len() >= 48).await;
+    wait("48 video frames at the ingest", 90, || {
+        rx.lock().unwrap().video.len() >= 48
+    })
+    .await;
     let (s, text) = call(&a.router, "GET", &format!("/fv/v1/streams/{id}"), None).await;
     assert_eq!(s, StatusCode::OK);
     assert_clean(&text);
@@ -302,13 +378,26 @@ async fn cloudflare_default_publishes_native_h264_and_cleans_up() {
     assert_eq!(v["status"]["state"], "streaming", "{v}");
     assert_eq!(v["status"]["output_state"], "publishing");
     assert_eq!(v["status"]["video_codec"], "H264");
-    assert_eq!((v["status"]["width"].as_u64(), v["status"]["height"].as_u64()), (Some(1344), Some(768)), "native canvas");
+    assert_eq!(
+        (
+            v["status"]["width"].as_u64(),
+            v["status"]["height"].as_u64()
+        ),
+        (Some(1344), Some(768)),
+        "native canvas"
+    );
     let resource = v["status"]["whip_resource"].as_str().unwrap();
-    assert!(resource.contains("/<key>/webRTC/publish/"), "redacted resource: {resource}");
+    assert!(
+        resource.contains("/<key>/webRTC/publish/"),
+        "redacted resource: {resource}"
+    );
     {
         let rx = rx.lock().unwrap();
         let offer = &rx.offers[0];
-        assert!(offer.contains("profile-level-id=42e01f"), "Cloudflare's documented H.264 offer");
+        assert!(
+            offer.contains("profile-level-id=42e01f"),
+            "Cloudflare's documented H.264 offer"
+        );
         assert!(!offer.contains("VP8"), "one codec offered");
         // The bitstream: native 1344x768 at the level it needs (3.2).
         let idr = rx.video.iter().find(|x| x.1).expect("an IDR");
@@ -321,10 +410,16 @@ async fn cloudflare_default_publishes_native_h264_and_cleans_up() {
     assert_eq!(s, StatusCode::OK);
     assert_clean(&text);
     wait("WHIP DELETE", 10, || rx.lock().unwrap().deletes == 1).await;
-    wait("live input DELETE", 10, || seen.lock().unwrap().deletes.len() == 1).await;
+    wait("live input DELETE", 10, || {
+        seen.lock().unwrap().deletes.len() == 1
+    })
+    .await;
     let seen = seen.lock().unwrap();
     assert_eq!(seen.deletes[0].0, uid);
-    assert_eq!(seen.deletes[0].1.as_deref(), Some(format!("Bearer {CF_TOKEN}").as_str()));
+    assert_eq!(
+        seen.deletes[0].1.as_deref(),
+        Some(format!("Bearer {CF_TOKEN}").as_str())
+    );
 }
 
 /// `codec: vp8`: only VP8 is offered and Cloudflare's ingest gets VP8
@@ -349,10 +444,25 @@ async fn cloudflare_vp8_on_request() {
     {
         let rx = rx.lock().unwrap();
         let offer = Sdp::parse(&rx.offers[0]).unwrap();
-        let video = offer.media.iter().find(|m| m.kind() == MediaKind::Video).unwrap();
-        assert!(video.codecs().iter().all(|c| c.is("VP8") || c.is("rtx")), "{}", video.m_line);
-        let key = rx.video.iter().find(|x| fastvideo_media::vp8::is_keyframe(&x.2)).expect("a VP8 keyframe");
-        assert_eq!(fastvideo_media::decode::vp8_keyframe_size(&key.2), Some((832, 480)));
+        let video = offer
+            .media
+            .iter()
+            .find(|m| m.kind() == MediaKind::Video)
+            .unwrap();
+        assert!(
+            video.codecs().iter().all(|c| c.is("VP8") || c.is("rtx")),
+            "{}",
+            video.m_line
+        );
+        let key = rx
+            .video
+            .iter()
+            .find(|x| fastvideo_media::vp8::is_keyframe(&x.2))
+            .expect("a VP8 keyframe");
+        assert_eq!(
+            fastvideo_media::decode::vp8_keyframe_size(&key.2),
+            Some((832, 480))
+        );
     }
     call(&a.router, "DELETE", &format!("/fv/v1/streams/{id}"), None).await;
 }
@@ -365,7 +475,13 @@ async fn cloudflare_vp8_on_request() {
 async fn refusals_and_cloudflare_errors() {
     // No Cloudflare account: an output is required.
     let a = app_with(&[]).await;
-    let (s, text) = call(&a.router, "POST", "/fv/v1/streams", Some(json!({"model": "fake-sfwan", "prompt": "p"}))).await;
+    let (s, text) = call(
+        &a.router,
+        "POST",
+        "/fv/v1/streams",
+        Some(json!({"model": "fake-sfwan", "prompt": "p"})),
+    )
+    .await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{text}");
     assert_eq!(json_of(&text)["error"]["param"], "output");
     let (_, info) = call(&a.router, "GET", "/fv/v1/outputs", None).await;
@@ -383,16 +499,37 @@ async fn refusals_and_cloudflare_errors() {
     }
     // Shape errors name the field, never the value.
     for (body, param) in [
-        (json!({"kind": "rtmps", "url": "https://x.example/live", "stream_key": "user-secret-key"}), "output.url"),
-        (json!({"kind": "whip", "url": "https://x.example/w", "codec": "av1", "token": "user-secret-key"}), "output.codec"),
-        (json!({"kind": "cloudflare-srt", "passphrase": "s3cret-passphrase"}), "output.passphrase"),
-        (json!({"kind": "srt", "url": "srt://x.example:9", "nope": "user-secret-key"}), "output"),
+        (
+            json!({"kind": "rtmps", "url": "https://x.example/live", "stream_key": "user-secret-key"}),
+            "output.url",
+        ),
+        (
+            json!({"kind": "whip", "url": "https://x.example/w", "codec": "av1", "token": "user-secret-key"}),
+            "output.codec",
+        ),
+        (
+            json!({"kind": "cloudflare-srt", "passphrase": "s3cret-passphrase"}),
+            "output.passphrase",
+        ),
+        (
+            json!({"kind": "srt", "url": "srt://x.example:9", "nope": "user-secret-key"}),
+            "output",
+        ),
     ] {
-        let (s, text) = call(&a.router, "POST", "/fv/v1/streams", Some(json!({"model": "fake-sfwan", "prompt": "p", "output": body}))).await;
+        let (s, text) = call(
+            &a.router,
+            "POST",
+            "/fv/v1/streams",
+            Some(json!({"model": "fake-sfwan", "prompt": "p", "output": body})),
+        )
+        .await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{text}");
         assert_clean(&text);
         let e = json_of(&text);
-        assert!(e["error"]["param"].as_str().unwrap().starts_with(param), "{text}");
+        assert!(
+            e["error"]["param"].as_str().unwrap().starts_with(param),
+            "{text}"
+        );
     }
 
     // Cloudflare refuses the token (no Stream permission): a clear 500 that
@@ -400,17 +537,35 @@ async fn refusals_and_cloudflare_errors() {
     let (base, seen, _rx) = fake_cloudflare().await;
     seen.lock().unwrap().fail = Some((403, 10000, "Authentication error".into()));
     let a = cf_app(&base, &[]).await;
-    let (s, text) = call(&a.router, "POST", "/fv/v1/streams", Some(json!({"model": "fake-sfwan", "prompt": "p"}))).await;
+    let (s, text) = call(
+        &a.router,
+        "POST",
+        "/fv/v1/streams",
+        Some(json!({"model": "fake-sfwan", "prompt": "p"})),
+    )
+    .await;
     assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR, "{text}");
-    assert!(text.contains("10000 Authentication error") && text.contains("Stream > Edit"), "{text}");
+    assert!(
+        text.contains("10000 Authentication error") && text.contains("Stream > Edit"),
+        "{text}"
+    );
     assert_clean(&text);
     seen.lock().unwrap().fail = None;
     // The executor is free again: the next stream starts.
-    let (s, text) = call(&a.router, "POST", "/fv/v1/streams", Some(json!({"model": "fake-sfwan", "prompt": "p"}))).await;
+    let (s, text) = call(
+        &a.router,
+        "POST",
+        "/fv/v1/streams",
+        Some(json!({"model": "fake-sfwan", "prompt": "p"})),
+    )
+    .await;
     assert_eq!(s, StatusCode::CREATED, "{text}");
     let id = json_of(&text)["id"].as_str().unwrap().to_owned();
     call(&a.router, "DELETE", &format!("/fv/v1/streams/{id}"), None).await;
-    wait("live input DELETE", 10, || seen.lock().unwrap().deletes.len() == 1).await;
+    wait("live input DELETE", 10, || {
+        seen.lock().unwrap().deletes.len() == 1
+    })
+    .await;
 }
 
 /// RTMPS / SRT through Cloudflare: the inputs record (HLS needs it), the
@@ -431,9 +586,18 @@ async fn cloudflare_rtmps_and_srt_get_hls_playback() {
         let id = v["id"].as_str().unwrap().to_owned();
         let uid = v["playback"]["live_input_id"].as_str().unwrap().to_owned();
         assert_eq!(v["playback"]["format"], "hls");
-        assert_eq!(v["playback"]["hls_url"], format!("https://customer-abc123.cloudflarestream.com/{uid}/manifest/video.m3u8"));
-        assert_eq!(v["playback"]["dash_url"], format!("https://customer-abc123.cloudflarestream.com/{uid}/manifest/video.mpd"));
-        assert_eq!(seen.lock().unwrap().creates.last().unwrap().1["recording"]["mode"], "automatic");
+        assert_eq!(
+            v["playback"]["hls_url"],
+            format!("https://customer-abc123.cloudflarestream.com/{uid}/manifest/video.m3u8")
+        );
+        assert_eq!(
+            v["playback"]["dash_url"],
+            format!("https://customer-abc123.cloudflarestream.com/{uid}/manifest/video.mpd")
+        );
+        assert_eq!(
+            seen.lock().unwrap().creates.last().unwrap().1["recording"]["mode"],
+            "automatic"
+        );
         // ffmpeg starts and fails to reach the (fake) ingest: reported, scrubbed.
         let t0 = std::time::Instant::now();
         let mut st = Value::Null;
@@ -446,14 +610,26 @@ async fn cloudflare_rtmps_and_srt_get_hls_playback() {
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        assert!(st["output_error"].is_string(), "the unreachable ingest is reported: {st}");
-        assert_eq!(st["state"], "streaming", "a sink failure does not end the stream: {st}");
+        assert!(
+            st["output_error"].is_string(),
+            "the unreachable ingest is reported: {st}"
+        );
+        assert_eq!(
+            st["state"], "streaming",
+            "a sink failure does not end the stream: {st}"
+        );
         let (_, text) = call(&a.router, "DELETE", &format!("/fv/v1/streams/{id}"), None).await;
         assert_clean(&text);
     }
     // Recording inputs are disabled (PUT enabled=false), not deleted.
-    wait("two disables", 10, || seen.lock().unwrap().disables.len() == 2).await;
+    wait("two disables", 10, || {
+        seen.lock().unwrap().disables.len() == 2
+    })
+    .await;
     let seen = seen.lock().unwrap();
     assert!(seen.deletes.is_empty());
-    assert!(seen.disables.iter().all(|d| d.1 == json!({"enabled": false})));
+    assert!(seen
+        .disables
+        .iter()
+        .all(|d| d.1 == json!({"enabled": false})));
 }

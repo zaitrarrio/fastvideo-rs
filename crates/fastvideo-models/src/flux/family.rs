@@ -40,7 +40,7 @@ pub fn pack_latents_flux1(
     height: usize,
     width: usize,
 ) -> Result<Vec<f32>, String> {
-    if height % 2 != 0 || width % 2 != 0 {
+    if !height.is_multiple_of(2) || !width.is_multiple_of(2) {
         return Err(format!("pack wants even H/W, got {height}x{width}"));
     }
     let spatial = height * width;

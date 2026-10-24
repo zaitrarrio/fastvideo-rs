@@ -157,7 +157,10 @@ mod tests {
     #[test]
     fn reports_platform() {
         let ready = MlxGenerateScaffold::apple_silicon_ready();
-        assert_eq!(ready, cfg!(all(target_os = "macos", target_arch = "aarch64")));
+        assert_eq!(
+            ready,
+            cfg!(all(target_os = "macos", target_arch = "aarch64"))
+        );
     }
 
     #[test]
@@ -185,7 +188,9 @@ mod tests {
                 assert!(p.is_file());
                 let _ = std::fs::remove_dir_all(&dir);
             }
-            Err(e) => assert!(e.contains("Apple Silicon") || e.contains("mlx") || e.contains("metal")),
+            Err(e) => {
+                assert!(e.contains("Apple Silicon") || e.contains("mlx") || e.contains("metal"))
+            }
         }
     }
 }

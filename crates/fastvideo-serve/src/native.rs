@@ -29,12 +29,13 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use fastvideo_protocol::{EditOp, ExpansionMode, ExtendAt, PromptExpansion, RetakeMode, VideoEdit};
 use fastvideo_protocol::{
-    ApiError, AudioInput, AudioRole, BatchProtocol, CanvasSpec, CausalLimits, ErrorCtx, GenerationRequest, HttpReply, Job, JobId, JobState, JobStatus,
-    JobView, Keyframe, Length, ListQuery, MediaKind, MediaRef, Reference, NormalizeCtx, ProtocolId, Ratio, SamplingOverrides, Snap,
-    SortOrder, StreamCaps, SubmitEndpoint, Task, TimingSpec, ViewCtx,
+    ApiError, AudioInput, AudioRole, BatchProtocol, CanvasSpec, CausalLimits, ErrorCtx,
+    GenerationRequest, HttpReply, Job, JobId, JobState, JobStatus, JobView, Keyframe, Length,
+    ListQuery, MediaKind, MediaRef, NormalizeCtx, ProtocolId, Ratio, Reference, SamplingOverrides,
+    Snap, SortOrder, StreamCaps, SubmitEndpoint, Task, TimingSpec, ViewCtx,
 };
+use fastvideo_protocol::{EditOp, ExpansionMode, ExtendAt, PromptExpansion, RetakeMode, VideoEdit};
 use fastvideo_serve_kit::handlers::{self, error_reply, find_job, SubmitOpts};
 use fastvideo_serve_kit::{IngestPolicy, ServeCtx};
 use serde::Deserialize;
@@ -178,7 +179,10 @@ fn media(s: &str, field: &str) -> Result<MediaRef, ApiError> {
 fn parse_size(s: &str) -> Result<(u32, u32), ApiError> {
     let bad = || ApiError::invalid_param("size", format!("size `{s}` must be WxH"));
     let (w, h) = s.split_once(['x', 'X', '*']).ok_or_else(bad)?;
-    Ok((w.trim().parse().map_err(|_| bad())?, h.trim().parse().map_err(|_| bad())?))
+    Ok((
+        w.trim().parse().map_err(|_| bad())?,
+        h.trim().parse().map_err(|_| bad())?,
+    ))
 }
 
 /// Submit endpoint for native jobs.
@@ -192,8 +196,14 @@ impl SubmitEndpoint for NativeSubmit {
         let _ = cx;
         // Audio-to-video with a first frame may leave the prompt empty; so
         // may a retake or an extend (the LTX API's `prompt` is optional).
-        if b.prompt.trim().is_empty() && !(b.audio_url.is_some() && b.image_url.is_some()) && b.video_url.is_none() {
-            return Err(ApiError::invalid_param("prompt", "`prompt` must not be empty"));
+        if b.prompt.trim().is_empty()
+            && !(b.audio_url.is_some() && b.image_url.is_some())
+            && b.video_url.is_none()
+        {
+            return Err(ApiError::invalid_param(
+                "prompt",
+                "`prompt` must not be empty",
+            ));
         }
         if b.video_url.is_some() {
             return normalize_edit(b);
@@ -207,13 +217,19 @@ impl SubmitEndpoint for NativeSubmit {
             (b.context_s.is_some(), "context_s"),
         ] {
             if set {
-                return Err(ApiError::invalid_param(field, format!("`{field}` needs `video_url` (retake / extend)")));
+                return Err(ApiError::invalid_param(
+                    field,
+                    format!("`{field}` needs `video_url` (retake / extend)"),
+                ));
             }
         }
         let expansion = match b.prompt_expansion.as_deref() {
             None => None,
             Some(s) => Some(ExpansionMode::parse(s).ok_or_else(|| {
-                ApiError::invalid_param("prompt_expansion", format!("`prompt_expansion` must be disabled, balanced or quality, got `{s}`"))
+                ApiError::invalid_param(
+                    "prompt_expansion",
+                    format!("`prompt_expansion` must be disabled, balanced or quality, got `{s}`"),
+                )
             })?),
         };
         let mut r = GenerationRequest::text(ProtocolId::Native, b.model, b.prompt);
@@ -228,9 +244,9 @@ impl SubmitEndpoint for NativeSubmit {
             (None, Some(width), Some(height), None) => CanvasSpec::Exact { width, height },
             (None, None, None, Some(a)) => CanvasSpec::Aspect {
                 ratio: a.parse::<Ratio>()?,
-                short_edge: b
-                    .short_edge
-                    .ok_or_else(|| ApiError::invalid_param("short_edge", "`aspect_ratio` needs `short_edge`"))?,
+                short_edge: b.short_edge.ok_or_else(|| {
+                    ApiError::invalid_param("short_edge", "`aspect_ratio` needs `short_edge`")
+                })?,
             },
             // No size: an image-conditioned job follows its image
             // (`negotiate`), at `short_edge` when given.
@@ -246,9 +262,20 @@ impl SubmitEndpoint for NativeSubmit {
             }
         };
         let length = match (b.seconds, b.num_frames) {
-            (Some(_), Some(_)) => return Err(ApiError::invalid_param("num_frames", "give `seconds` or `num_frames`, not both")),
-            (Some(value), None) => Length::Seconds { value, snap: Snap::AlignUp },
-            (None, Some(value)) => Length::Frames { value, snap: Snap::Exact },
+            (Some(_), Some(_)) => {
+                return Err(ApiError::invalid_param(
+                    "num_frames",
+                    "give `seconds` or `num_frames`, not both",
+                ))
+            }
+            (Some(value), None) => Length::Seconds {
+                value,
+                snap: Snap::AlignUp,
+            },
+            (None, Some(value)) => Length::Frames {
+                value,
+                snap: Snap::Exact,
+            },
             (None, None) => Length::ModelDefault,
         };
         r.timing = TimingSpec { length, fps: b.fps };
@@ -261,11 +288,17 @@ impl SubmitEndpoint for NativeSubmit {
         };
         if let Some(u) = b.image_url {
             r.task = Task::I2V;
-            r.keyframes.push(Keyframe { at: fastvideo_protocol::Anchor::First, image: media(&u, "image_url")? });
+            r.keyframes.push(Keyframe {
+                at: fastvideo_protocol::Anchor::First,
+                image: media(&u, "image_url")?,
+            });
         }
         if let Some(u) = b.last_image_url {
             r.task = Task::Keyframes;
-            r.keyframes.push(Keyframe { at: fastvideo_protocol::Anchor::Last, image: media(&u, "last_image_url")? });
+            r.keyframes.push(Keyframe {
+                at: fastvideo_protocol::Anchor::Last,
+                image: media(&u, "last_image_url")?,
+            });
         }
         if !b.reference_urls.is_empty() {
             // `negotiate` refuses references mixed with first/last frames.
@@ -281,7 +314,11 @@ impl SubmitEndpoint for NativeSubmit {
             // Audio-to-video: the images (if any) stay its first/last frames;
             // `negotiate` refuses references mixed in.
             r.task = Task::A2V;
-            r.audio_in = Some(AudioInput { media: media(&u, "audio_url")?, role: AudioRole::Drive, max_s: None });
+            r.audio_in = Some(AudioInput {
+                media: media(&u, "audio_url")?,
+                role: AudioRole::Drive,
+                max_s: None,
+            });
         }
         if r.task == Task::T2V && matches!(r.canvas, CanvasSpec::FollowImage { .. }) {
             return Err(ApiError::invalid_param(
@@ -303,7 +340,10 @@ fn normalize_edit(b: NativeBody) -> Result<GenerationRequest, ApiError> {
     let op = match (b.start_s, b.end_s, b.extend_s) {
         (Some(start_s), Some(end_s), None) => {
             if end_s.partial_cmp(&start_s) != Some(std::cmp::Ordering::Greater) {
-                return Err(ApiError::invalid_param("end_s", "`end_s` must be greater than `start_s`"));
+                return Err(ApiError::invalid_param(
+                    "end_s",
+                    "`end_s` must be greater than `start_s`",
+                ));
             }
             let mode = match b.retake_mode.as_deref() {
                 None if b.audio_url.is_some() => RetakeMode::ReplaceVideo,
@@ -315,17 +355,30 @@ fn normalize_edit(b: NativeBody) -> Result<GenerationRequest, ApiError> {
             if b.extend_at.is_some() || b.context_s.is_some() {
                 return Err(ApiError::invalid_param("extend_at", "`extend_at` / `context_s` are extend fields; a retake takes `start_s`, `end_s`"));
             }
-            EditOp::Retake { start_s, duration_s: end_s - start_s, mode }
+            EditOp::Retake {
+                start_s,
+                duration_s: end_s - start_s,
+                mode,
+            }
         }
         (None, None, Some(duration_s)) => {
             let at = match b.extend_at.as_deref() {
                 None => ExtendAt::End,
-                Some(a) => ExtendAt::parse(a).ok_or_else(|| ApiError::invalid_param("extend_at", "`extend_at` must be one of start, end"))?,
+                Some(a) => ExtendAt::parse(a).ok_or_else(|| {
+                    ApiError::invalid_param("extend_at", "`extend_at` must be one of start, end")
+                })?,
             };
             if b.retake_mode.is_some() || b.audio_url.is_some() {
-                return Err(ApiError::invalid_param("retake_mode", "an extend takes no `retake_mode` or `audio_url`"));
+                return Err(ApiError::invalid_param(
+                    "retake_mode",
+                    "an extend takes no `retake_mode` or `audio_url`",
+                ));
             }
-            EditOp::Extend { duration_s, at, context_s: b.context_s }
+            EditOp::Extend {
+                duration_s,
+                at,
+                context_s: b.context_s,
+            }
         }
         _ => {
             return Err(ApiError::invalid_param(
@@ -341,10 +394,16 @@ fn normalize_edit(b: NativeBody) -> Result<GenerationRequest, ApiError> {
         (b.seconds.is_some(), "seconds"),
         (b.num_frames.is_some(), "num_frames"),
         (b.fps.is_some(), "fps"),
-        (b.aspect_ratio.is_some() || b.short_edge.is_some(), "aspect_ratio"),
+        (
+            b.aspect_ratio.is_some() || b.short_edge.is_some(),
+            "aspect_ratio",
+        ),
     ] {
         if set {
-            return Err(ApiError::invalid_param(field, format!("a retake or extend takes no `{field}`: it follows the source video")));
+            return Err(ApiError::invalid_param(
+                field,
+                format!("a retake or extend takes no `{field}`: it follows the source video"),
+            ));
         }
     }
     let mut r = GenerationRequest::text(ProtocolId::Native, b.model, b.prompt);
@@ -361,11 +420,24 @@ fn normalize_edit(b: NativeBody) -> Result<GenerationRequest, ApiError> {
         }
         (None, Some(width), Some(height)) => CanvasSpec::Exact { width, height },
         (None, None, None) => CanvasSpec::ModelDefault,
-        _ => return Err(ApiError::invalid_param("size", "give `size` or `width`+`height` (at most the source's), or neither")),
+        _ => {
+            return Err(ApiError::invalid_param(
+                "size",
+                "give `size` or `width`+`height` (at most the source's), or neither",
+            ))
+        }
     };
-    r.sampling = SamplingOverrides { steps: b.steps, guidance: b.guidance, ..Default::default() };
+    r.sampling = SamplingOverrides {
+        steps: b.steps,
+        guidance: b.guidance,
+        ..Default::default()
+    };
     if let Some(u) = b.audio_url {
-        r.audio_in = Some(AudioInput { media: media(&u, "audio_url")?, role: AudioRole::Dub, max_s: None });
+        r.audio_in = Some(AudioInput {
+            media: media(&u, "audio_url")?,
+            role: AudioRole::Dub,
+            max_s: None,
+        });
     }
     r.edit = Some(VideoEdit { video, op });
     Ok(r)
@@ -373,9 +445,14 @@ fn normalize_edit(b: NativeBody) -> Result<GenerationRequest, ApiError> {
 
 /// The native job object.
 pub fn job_json(job: &Job, cx: &ViewCtx) -> Value {
-    let rfc = |t: time::OffsetDateTime| t.format(&time::format_description::well_known::Rfc3339).ok();
+    let rfc = |t: time::OffsetDateTime| {
+        t.format(&time::format_description::well_known::Rfc3339)
+            .ok()
+    };
     let error = match &job.state {
-        JobState::Failed(e) => json!({"kind": serde_json::to_value(e.kind).unwrap_or(Value::Null), "message": e.message}),
+        JobState::Failed(e) => {
+            json!({"kind": serde_json::to_value(e.kind).unwrap_or(Value::Null), "message": e.message})
+        }
         _ => Value::Null,
     };
     let output = job.artifacts.first().map(|a| {
@@ -449,7 +526,12 @@ fn protocol_filter(p: Option<&str>) -> Result<Option<ProtocolId>, ApiError> {
             .iter()
             .find(|p| p.as_str() == name)
             .map(|p| Some(*p))
-            .ok_or_else(|| ApiError::invalid_param("protocol", format!("unknown protocol `{name}` (native, all, or an API name)"))),
+            .ok_or_else(|| {
+                ApiError::invalid_param(
+                    "protocol",
+                    format!("unknown protocol `{name}` (native, all, or an API name)"),
+                )
+            }),
     }
 }
 
@@ -471,7 +553,10 @@ impl JobView for NativeView {
                 &ApiError::conflict(format!("job is {} and has no output", s.as_str())),
                 &ErrorCtx::default(),
             ),
-            _ => Native.render_error(&ApiError::conflict("job is still in progress"), &ErrorCtx::default()),
+            _ => Native.render_error(
+                &ApiError::conflict("job is still in progress"),
+                &ErrorCtx::default(),
+            ),
         }
     }
 }
@@ -489,10 +574,18 @@ struct ListParams {
 fn reply_err(e: ApiError) -> Response {
     let r = error_reply(&Native, &e, &ErrorCtx::default());
     let body = r.json_body().cloned().unwrap_or(Value::Null);
-    (StatusCode::from_u16(r.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), Json(body)).into_response()
+    (
+        StatusCode::from_u16(r.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        Json(body),
+    )
+        .into_response()
 }
 
-async fn list(State(ctx): State<ServeCtx>, headers: HeaderMap, Query(p): Query<ListParams>) -> Response {
+async fn list(
+    State(ctx): State<ServeCtx>,
+    headers: HeaderMap,
+    Query(p): Query<ListParams>,
+) -> Response {
     let owner = match ctx.auth().authenticate(ProtocolId::Native, &headers) {
         Ok(o) => o,
         Err(e) => return reply_err(e),
@@ -517,7 +610,12 @@ async fn list(State(ctx): State<ServeCtx>, headers: HeaderMap, Query(p): Query<L
                 "succeeded" => JobStatus::Succeeded,
                 "failed" => JobStatus::Failed,
                 "cancelled" => JobStatus::Cancelled,
-                other => return reply_err(ApiError::invalid_param("status", format!("unknown status `{other}`"))),
+                other => {
+                    return reply_err(ApiError::invalid_param(
+                        "status",
+                        format!("unknown status `{other}`"),
+                    ))
+                }
             };
             q.statuses.push(st);
         }
@@ -525,7 +623,12 @@ async fn list(State(ctx): State<ServeCtx>, headers: HeaderMap, Query(p): Query<L
     q.order = match p.order.as_deref() {
         None | Some("desc") => SortOrder::Desc,
         Some("asc") => SortOrder::Asc,
-        Some(o) => return reply_err(ApiError::invalid_param("order", format!("unknown order `{o}`"))),
+        Some(o) => {
+            return reply_err(ApiError::invalid_param(
+                "order",
+                format!("unknown order `{o}`"),
+            ))
+        }
     };
     let page = ctx.jobs().list(q).await;
     let cx = ctx.view_ctx(false);
@@ -541,7 +644,11 @@ async fn list(State(ctx): State<ServeCtx>, headers: HeaderMap, Query(p): Query<L
     .into_response()
 }
 
-async fn delete(State(ctx): State<ServeCtx>, headers: HeaderMap, Path(id): Path<String>) -> Response {
+async fn delete(
+    State(ctx): State<ServeCtx>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
     let res = async {
         let owner = ctx.auth().authenticate(ProtocolId::Native, &headers)?;
         let job = find_job(&ctx, &Native, &id, owner.as_ref()).await?;
@@ -569,7 +676,10 @@ fn capabilities(gate: &ServiceGate, causal: &CausalLimits) -> Value {
             // Live causal and duplex sessions are length-limited (design
             // §5.2); duplex models take client input at
             // `/fv/v1/streams/ingest` (design §5.11).
-            if matches!(e.caps.stream, Some(StreamCaps::Causal { .. } | StreamCaps::Duplex(_))) {
+            if matches!(
+                e.caps.stream,
+                Some(StreamCaps::Causal { .. } | StreamCaps::Duplex(_))
+            ) {
                 m["stream_limits"] = causal.advertised();
             }
             if matches!(e.caps.stream, Some(StreamCaps::Duplex(_))) {
@@ -578,7 +688,10 @@ fn capabilities(gate: &ServiceGate, causal: &CausalLimits) -> Value {
             m
         })
         .collect();
-    let tiers: Vec<Value> = caps.tier_bindings().map(|b| serde_json::to_value(b).unwrap_or(Value::Null)).collect();
+    let tiers: Vec<Value> = caps
+        .tier_bindings()
+        .map(|b| serde_json::to_value(b).unwrap_or(Value::Null))
+        .collect();
     json!({
         "object": "fv.capabilities",
         "models": models,
@@ -599,9 +712,16 @@ pub fn auth_info(mode: fastvideo_serve_kit::AuthMode) -> Value {
 /// experimental feature flags applied (crate::flags), so the 1080P tier's
 /// `max_frames` matches what negotiation enforces.
 fn flagged_canvases(body: &mut Value, served: &[fastvideo_protocol::ModelCaps]) {
-    let Some(list) = body.get_mut("models").and_then(Value::as_array_mut) else { return };
+    let Some(list) = body.get_mut("models").and_then(Value::as_array_mut) else {
+        return;
+    };
     for m in list {
-        let Some(c) = m["caps"]["id"].as_str().and_then(|id| served.iter().find(|c| c.id.0 == id)) else { continue };
+        let Some(c) = m["caps"]["id"]
+            .as_str()
+            .and_then(|id| served.iter().find(|c| c.id.0 == id))
+        else {
+            continue;
+        };
         if let Ok(v) = serde_json::to_value(&c.canvas) {
             m["caps"]["canvas"] = v;
         }
@@ -614,7 +734,13 @@ pub type CapsFn = Arc<dyn Fn() -> Value + Send + Sync>;
 /// The native routes; `causal` is advertised as each causal model's
 /// `stream_limits`, and `protocols` (which APIs this server mounts, for the
 /// console's snippets and pages) as the capabilities' `protocols`.
-pub fn routes(gate: Arc<ServiceGate>, body_max: usize, sync_timeout: Duration, causal: CausalLimits, protocols: Value) -> Router<ServeCtx> {
+pub fn routes(
+    gate: Arc<ServiceGate>,
+    body_max: usize,
+    sync_timeout: Duration,
+    causal: CausalLimits,
+    protocols: Value,
+) -> Router<ServeCtx> {
     let _ = sync_timeout;
     routes_with(
         Arc::new(move || {
@@ -655,8 +781,14 @@ pub fn routes_with(caps: CapsFn, body_max: usize) -> Router<ServeCtx> {
             "/fv/v1/jobs",
             handlers::submit(proto.clone(), Arc::new(NativeSubmit), view.clone(), opts).get(list),
         )
-        .route("/fv/v1/jobs/{id}", handlers::status(proto.clone(), view.clone(), "id").delete(delete))
-        .route("/fv/v1/jobs/{id}/content", handlers::result(proto, view, "id"))
+        .route(
+            "/fv/v1/jobs/{id}",
+            handlers::status(proto.clone(), view.clone(), "id").delete(delete),
+        )
+        .route(
+            "/fv/v1/jobs/{id}/content",
+            handlers::result(proto, view, "id"),
+        )
         .route(
             "/fv/v1/quality/gates",
             get(|| async {
@@ -704,7 +836,13 @@ mod tests {
         assert_eq!(r.references[0].kind, MediaKind::Image);
         assert_eq!(r.sampling.reference_strength, Some(0.9));
         assert_eq!(r.sampling.reference_lora_strength, Some(1.2));
-        assert_eq!(r.canvas, CanvasSpec::Exact { width: 1536, height: 896 });
+        assert_eq!(
+            r.canvas,
+            CanvasSpec::Exact {
+                width: 1536,
+                height: 896
+            }
+        );
         let bad = NativeSubmit.normalize(
             body(json!({"model": "ltx-pro", "prompt": "p", "reference_urls": ["not a url"]})),
             &cx,
@@ -741,9 +879,15 @@ mod tests {
         assert_eq!((i.task, i.keyframes.len()), (Task::A2V, 1));
         assert!(i.prompt.is_empty());
         // Without an image the prompt is required; a bad URL names its field.
-        let e = NativeSubmit.normalize(body(json!({"model": "m", "audio_url": "https://e.x/a.wav"})), &cx);
+        let e = NativeSubmit.normalize(
+            body(json!({"model": "m", "audio_url": "https://e.x/a.wav"})),
+            &cx,
+        );
         assert_eq!(e.unwrap_err().param.as_deref(), Some("prompt"));
-        let e = NativeSubmit.normalize(body(json!({"model": "m", "prompt": "p", "audio_url": "nope"})), &cx);
+        let e = NativeSubmit.normalize(
+            body(json!({"model": "m", "prompt": "p", "audio_url": "nope"})),
+            &cx,
+        );
         assert_eq!(e.unwrap_err().param.as_deref(), Some("audio_url"));
     }
 
@@ -754,26 +898,75 @@ mod tests {
         let r = n(json!({"model": "ltx-pro", "prompt": "it rains", "video_url": "https://e.x/v.mp4", "start_s": 1.0, "end_s": 3.5})).unwrap();
         assert_eq!(r.task, Task::Retake);
         let e = r.edit.unwrap();
-        assert_eq!(e.op, EditOp::Retake { start_s: 1.0, duration_s: 2.5, mode: RetakeMode::ReplaceAudioAndVideo });
+        assert_eq!(
+            e.op,
+            EditOp::Retake {
+                start_s: 1.0,
+                duration_s: 2.5,
+                mode: RetakeMode::ReplaceAudioAndVideo
+            }
+        );
         assert!(r.audio_in.is_none());
         // New window audio: replace_video by default, the audio a dub.
         let r = n(json!({"model": "ltx-pro", "prompt": "", "video_url": "https://e.x/v.mp4", "start_s": 0, "end_s": 2, "audio_url": "https://e.x/a.wav"})).unwrap();
-        assert_eq!(r.edit.unwrap().op, EditOp::Retake { start_s: 0.0, duration_s: 2.0, mode: RetakeMode::ReplaceVideo });
+        assert_eq!(
+            r.edit.unwrap().op,
+            EditOp::Retake {
+                start_s: 0.0,
+                duration_s: 2.0,
+                mode: RetakeMode::ReplaceVideo
+            }
+        );
         assert_eq!(r.audio_in.map(|a| a.role), Some(AudioRole::Dub));
         let x = n(json!({"model": "ltx-pro", "prompt": "the road", "video_url": "https://e.x/v.mp4", "extend_s": 4, "extend_at": "start", "context_s": 3})).unwrap();
         assert_eq!(x.task, Task::Extend);
-        assert_eq!(x.edit.unwrap().op, EditOp::Extend { duration_s: 4.0, at: ExtendAt::Start, context_s: Some(3.0) });
+        assert_eq!(
+            x.edit.unwrap().op,
+            EditOp::Extend {
+                duration_s: 4.0,
+                at: ExtendAt::Start,
+                context_s: Some(3.0)
+            }
+        );
         for (b, param) in [
-            (json!({"model": "m", "prompt": "p", "video_url": "https://e.x/v.mp4"}), "video_url"),
-            (json!({"model": "m", "prompt": "p", "video_url": "https://e.x/v.mp4", "start_s": 2, "end_s": 1}), "end_s"),
-            (json!({"model": "m", "prompt": "p", "video_url": "https://e.x/v.mp4", "start_s": 0, "end_s": 2, "retake_mode": "x"}), "retake_mode"),
-            (json!({"model": "m", "prompt": "p", "video_url": "https://e.x/v.mp4", "extend_s": 2, "extend_at": "middle"}), "extend_at"),
-            (json!({"model": "m", "prompt": "p", "video_url": "https://e.x/v.mp4", "extend_s": 2, "seconds": 4}), "seconds"),
-            (json!({"model": "m", "prompt": "p", "video_url": "https://e.x/v.mp4", "extend_s": 2, "image_url": "https://e.x/i.png"}), "image_url"),
-            (json!({"model": "m", "prompt": "p", "start_s": 0, "end_s": 2}), "start_s"),
-            (json!({"model": "m", "prompt": "p", "extend_s": 2}), "extend_s"),
+            (
+                json!({"model": "m", "prompt": "p", "video_url": "https://e.x/v.mp4"}),
+                "video_url",
+            ),
+            (
+                json!({"model": "m", "prompt": "p", "video_url": "https://e.x/v.mp4", "start_s": 2, "end_s": 1}),
+                "end_s",
+            ),
+            (
+                json!({"model": "m", "prompt": "p", "video_url": "https://e.x/v.mp4", "start_s": 0, "end_s": 2, "retake_mode": "x"}),
+                "retake_mode",
+            ),
+            (
+                json!({"model": "m", "prompt": "p", "video_url": "https://e.x/v.mp4", "extend_s": 2, "extend_at": "middle"}),
+                "extend_at",
+            ),
+            (
+                json!({"model": "m", "prompt": "p", "video_url": "https://e.x/v.mp4", "extend_s": 2, "seconds": 4}),
+                "seconds",
+            ),
+            (
+                json!({"model": "m", "prompt": "p", "video_url": "https://e.x/v.mp4", "extend_s": 2, "image_url": "https://e.x/i.png"}),
+                "image_url",
+            ),
+            (
+                json!({"model": "m", "prompt": "p", "start_s": 0, "end_s": 2}),
+                "start_s",
+            ),
+            (
+                json!({"model": "m", "prompt": "p", "extend_s": 2}),
+                "extend_s",
+            ),
         ] {
-            assert_eq!(n(b.clone()).unwrap_err().param.as_deref(), Some(param), "{b}");
+            assert_eq!(
+                n(b.clone()).unwrap_err().param.as_deref(),
+                Some(param),
+                "{b}"
+            );
         }
     }
 }

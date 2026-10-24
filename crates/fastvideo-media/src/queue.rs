@@ -30,7 +30,12 @@ impl<T> DropOldest<T> {
     pub fn new(cap: usize) -> Self {
         Self {
             cap: cap.max(1),
-            inner: Mutex::new(Inner { q: VecDeque::new(), closed: false, dropped_total: 0, dropped_latched: false }),
+            inner: Mutex::new(Inner {
+                q: VecDeque::new(),
+                closed: false,
+                dropped_total: 0,
+                dropped_latched: false,
+            }),
             cv: Condvar::new(),
         }
     }
@@ -75,7 +80,11 @@ impl<T> DropOldest<T> {
             if now >= deadline {
                 return None;
             }
-            g = self.cv.wait_timeout(g, deadline - now).unwrap_or_else(|p| p.into_inner()).0;
+            g = self
+                .cv
+                .wait_timeout(g, deadline - now)
+                .unwrap_or_else(|p| p.into_inner())
+                .0;
         }
     }
 
@@ -138,7 +147,10 @@ impl GapKeyframes {
 
     /// A gap seen at `now`: whether to force a keyframe for it.
     pub fn gap_needs_keyframe(&self, now: Instant) -> bool {
-        !self.in_flight && self.last_out.is_none_or(|t| now.duration_since(t) >= Self::WINDOW)
+        !self.in_flight
+            && self
+                .last_out
+                .is_none_or(|t| now.duration_since(t) >= Self::WINDOW)
     }
 }
 

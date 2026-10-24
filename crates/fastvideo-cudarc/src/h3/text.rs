@@ -447,8 +447,7 @@ impl MultimodalLm<'_> {
                 precision: Native, ..
             } => "streamed-multimodal",
             Self::Streamed {
-                precision: Fp8Rows,
-                ..
+                precision: Fp8Rows, ..
             } => "streamed-fp8-multimodal",
         }
     }
@@ -804,7 +803,7 @@ fn merge_deepstack(
             }
             let n_vis = visual_mask.iter().filter(|&&m| m).count();
             let mut out = Vec::with_capacity(img.len());
-            for (im, vd) in img.into_iter().zip(vid.into_iter()) {
+            for (im, vd) in img.into_iter().zip(vid) {
                 let ih = im.host_cow()?;
                 let vh = vd.host_cow()?;
                 let mut combined = vec![0f32; n_vis * hidden];

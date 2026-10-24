@@ -42,9 +42,13 @@ fn status_of(e: &ApiError) -> StatusCode {
         ErrorKind::Unauthorized => StatusCode::UNAUTHORIZED,
         ErrorKind::Forbidden => StatusCode::FORBIDDEN,
         ErrorKind::NotFound => StatusCode::NOT_FOUND,
-        ErrorKind::Conflict | ErrorKind::RateLimited | ErrorKind::QueueFull => StatusCode::TOO_MANY_REQUESTS,
+        ErrorKind::Conflict | ErrorKind::RateLimited | ErrorKind::QueueFull => {
+            StatusCode::TOO_MANY_REQUESTS
+        }
         ErrorKind::Loading => StatusCode::SERVICE_UNAVAILABLE,
-        ErrorKind::InvalidRequest | ErrorKind::Unsupported(_) | ErrorKind::UnsupportedMedia => StatusCode::UNPROCESSABLE_ENTITY,
+        ErrorKind::InvalidRequest | ErrorKind::Unsupported(_) | ErrorKind::UnsupportedMedia => {
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
         ErrorKind::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         ErrorKind::Timeout => StatusCode::GATEWAY_TIMEOUT,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
@@ -70,11 +74,18 @@ fn runner_error(e: ApiError) -> Response {
 }
 
 fn unprocessable(msg: String) -> Response {
-    (StatusCode::UNPROCESSABLE_ENTITY, [("content-type", "text/plain; charset=utf-8")], msg).into_response()
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        [("content-type", "text/plain; charset=utf-8")],
+        msg,
+    )
+        .into_response()
 }
 
 fn auth(ctx: &ServeCtx, headers: &HeaderMap) -> Result<(), ApiError> {
-    ctx.auth().authenticate(ProtocolId::Fal, headers).map(|_| ())
+    ctx.auth()
+        .authenticate(ProtocolId::Fal, headers)
+        .map(|_| ())
 }
 
 fn body<T: for<'de> Deserialize<'de>>(bytes: &Bytes) -> Result<T, Box<Response>> {
@@ -130,7 +141,11 @@ struct StartSessionBody {
 
 /// The edge session a forwarded offer stands for (set by the edge only).
 fn edge_session(headers: &HeaderMap) -> Option<String> {
-    headers.get(super::service::EDGE_SESSION_HEADER).and_then(|v| v.to_str().ok()).map(str::to_owned).filter(|s| !s.is_empty())
+    headers
+        .get(super::service::EDGE_SESSION_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+        .filter(|s| !s.is_empty())
 }
 
 fn offer() -> String {
@@ -141,7 +156,12 @@ fn ice_reply(svc: &DirectorService) -> Response {
     Json(json!({"ice_servers": svc.config().ice_servers})).into_response()
 }
 
-async fn wma_ice(State(ctx): State<ServeCtx>, Extension(svc): Svc, headers: HeaderMap, raw: Bytes) -> Response {
+async fn wma_ice(
+    State(ctx): State<ServeCtx>,
+    Extension(svc): Svc,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
     if let Err(e) = auth(&ctx, &headers) {
         return bridge_error(e);
     }
@@ -162,7 +182,12 @@ async fn app_ice(State(ctx): State<ServeCtx>, Extension(svc): Svc, headers: Head
     ice_reply(&svc)
 }
 
-async fn wma_session(State(ctx): State<ServeCtx>, Extension(svc): Svc, headers: HeaderMap, raw: Bytes) -> Response {
+async fn wma_session(
+    State(ctx): State<ServeCtx>,
+    Extension(svc): Svc,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
     if let Err(e) = auth(&ctx, &headers) {
         return bridge_error(e);
     }
@@ -176,9 +201,13 @@ async fn wma_session(State(ctx): State<ServeCtx>, Extension(svc): Svc, headers: 
     let Some(app) = svc.app_for(&b.app_id).cloned() else {
         return bridge_error(ApiError::not_found(format!("unknown app `{}`", b.app_id)));
     };
-    match svc.create(&ctx, &app, &b.sdp, None, true, edge_session(&headers)).await {
+    match svc
+        .create(&ctx, &app, &b.sdp, None, true, edge_session(&headers))
+        .await
+    {
         Ok(c) => {
-            let mut r = Json(json!({"session_id": c.session_id, "sdp": c.sdp, "type": "answer"})).into_response();
+            let mut r = Json(json!({"session_id": c.session_id, "sdp": c.sdp, "type": "answer"}))
+                .into_response();
             let h = r.headers_mut();
             if let Ok(v) = HeaderValue::from_str(c.caps.id.as_str()) {
                 h.insert("x-fv-model", v);
@@ -186,7 +215,12 @@ async fn wma_session(State(ctx): State<ServeCtx>, Extension(svc): Svc, headers: 
             if let Some(t) = c.caps.tier {
                 h.insert("x-fv-tier", HeaderValue::from_static(t.as_str()));
             }
-            if let Some(v) = c.caps.recipe.as_deref().and_then(|r| HeaderValue::from_str(r).ok()) {
+            if let Some(v) = c
+                .caps
+                .recipe
+                .as_deref()
+                .and_then(|r| HeaderValue::from_str(r).ok())
+            {
                 h.insert("x-fv-recipe", v);
             }
             r
@@ -195,7 +229,12 @@ async fn wma_session(State(ctx): State<ServeCtx>, Extension(svc): Svc, headers: 
     }
 }
 
-async fn wma_heartbeat(State(ctx): State<ServeCtx>, Extension(svc): Svc, headers: HeaderMap, raw: Bytes) -> Response {
+async fn wma_heartbeat(
+    State(ctx): State<ServeCtx>,
+    Extension(svc): Svc,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
     if let Err(e) = auth(&ctx, &headers) {
         return bridge_error(e);
     }
@@ -203,7 +242,9 @@ async fn wma_heartbeat(State(ctx): State<ServeCtx>, Extension(svc): Svc, headers
         Ok(b) => b,
         Err(r) => return *r,
     };
-    let alive = svc.session(&b.session_id).is_some_and(|s| s.heartbeats && s.beat());
+    let alive = svc
+        .session(&b.session_id)
+        .is_some_and(|s| s.heartbeats && s.beat());
     Json(json!({"alive": alive})).into_response()
 }
 
@@ -216,7 +257,12 @@ impl Drop for EndOnDrop {
     }
 }
 
-async fn start_session(State(ctx): State<ServeCtx>, Extension(svc): Svc, headers: HeaderMap, raw: Bytes) -> Response {
+async fn start_session(
+    State(ctx): State<ServeCtx>,
+    Extension(svc): Svc,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
     if let Err(e) = auth(&ctx, &headers) {
         return runner_error(e);
     }
@@ -230,11 +276,22 @@ async fn start_session(State(ctx): State<ServeCtx>, Extension(svc): Svc, headers
     let Some(app) = svc.runner_app().cloned() else {
         return runner_error(ApiError::not_found("no director app is configured"));
     };
-    let c = match svc.create(&ctx, &app, &b.sdp, b.session_id, false, edge_session(&headers)).await {
+    let c = match svc
+        .create(
+            &ctx,
+            &app,
+            &b.sdp,
+            b.session_id,
+            false,
+            edge_session(&headers),
+        )
+        .await
+    {
         Ok(c) => c,
         Err(e) => return runner_error(e),
     };
-    let first = Event::default().data(json!({"sdp": c.sdp, "type": "answer", "session_id": c.session_id}).to_string());
+    let first = Event::default()
+        .data(json!({"sdp": c.sdp, "type": "answer", "session_id": c.session_id}).to_string());
     let closed = c.handle.closed();
     let guard = EndOnDrop(c.handle.clone());
     let rest = futures::stream::unfold((closed, guard), |(mut closed, guard)| async move {
@@ -243,7 +300,13 @@ async fn start_session(State(ctx): State<ServeCtx>, Extension(svc): Svc, headers
         None::<(Result<Event, Infallible>, _)>
     });
     let stream = futures::stream::once(async move { Ok::<_, Infallible>(first) }).chain(rest);
-    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("keepalive")).into_response()
+    Sse::new(stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("keepalive"),
+        )
+        .into_response()
 }
 
 async fn info(State(ctx): State<ServeCtx>, Extension(svc): Svc, headers: HeaderMap) -> Response {
@@ -282,10 +345,22 @@ mod tests {
 
     #[test]
     fn statuses() {
-        assert_eq!(status_of(&ApiError::conflict("busy")), StatusCode::TOO_MANY_REQUESTS);
-        assert_eq!(status_of(&ApiError::loading("warming")), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(status_of(&ApiError::unauthorized("key")), StatusCode::UNAUTHORIZED);
-        assert_eq!(status_of(&ApiError::invalid("bad")), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            status_of(&ApiError::conflict("busy")),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(
+            status_of(&ApiError::loading("warming")),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            status_of(&ApiError::unauthorized("key")),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            status_of(&ApiError::invalid("bad")),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
         let r = bridge_error(ApiError::conflict("busy").with_retry_after(5));
         assert_eq!(r.status(), 429);
         assert_eq!(r.headers()["retry-after"], "5");

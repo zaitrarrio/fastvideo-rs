@@ -36,7 +36,10 @@ pub struct Stmt {
 
 impl Stmt {
     pub fn new(sql: impl Into<String>, params: Vec<Value>) -> Self {
-        Self { sql: sql.into(), params }
+        Self {
+            sql: sql.into(),
+            params,
+        }
     }
     pub fn raw(sql: impl Into<String>) -> Self {
         Self::new(sql, Vec::new())
@@ -66,7 +69,11 @@ pub enum D1Error {
     },
     /// D1 reported an error (`errors[0]`), with the HTTP status.
     #[error("D1 error {code} (HTTP {status}): {message}")]
-    Api { status: u16, code: i64, message: String },
+    Api {
+        status: u16,
+        code: i64,
+        message: String,
+    },
     /// The reply did not have the expected shape.
     #[error("D1 reply: {0}")]
     Decode(String),
@@ -78,7 +85,9 @@ impl D1Error {
         match self {
             D1Error::Transport(_) => true,
             D1Error::Http { status, .. } => *status == 429 || *status >= 500,
-            D1Error::Api { status, message, .. } => {
+            D1Error::Api {
+                status, message, ..
+            } => {
                 if *status == 429 || *status >= 500 {
                     return !is_sql_error(message);
                 }
@@ -170,7 +179,11 @@ impl std::fmt::Debug for D1Config {
 pub const CLOUDFLARE_API_BASE: &str = "https://api.cloudflare.com/client/v4";
 
 impl D1Config {
-    pub fn new(account_id: impl Into<String>, api_token: impl Into<String>, database_id: impl Into<String>) -> Self {
+    pub fn new(
+        account_id: impl Into<String>,
+        api_token: impl Into<String>,
+        database_id: impl Into<String>,
+    ) -> Self {
         Self {
             account_id: account_id.into(),
             api_token: api_token.into(),
@@ -228,9 +241,17 @@ impl D1Transport for HttpD1Transport {
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.trim().parse::<u64>().ok())
             .map(Duration::from_secs);
-        let text = r.text().await.map_err(|e| D1Error::Transport(e.to_string()))?;
+        let text = r
+            .text()
+            .await
+            .map_err(|e| D1Error::Transport(e.to_string()))?;
         let body = serde_json::from_str(&text).unwrap_or(Value::Null);
-        Ok(RawReply { status, retry_after, body, text })
+        Ok(RawReply {
+            status,
+            retry_after,
+            body,
+            text,
+        })
     }
 }
 
@@ -245,17 +266,28 @@ pub struct RetryPolicy {
 
 impl Default for RetryPolicy {
     fn default() -> Self {
-        Self { attempts: 5, base: Duration::from_millis(100), max_delay: Duration::from_secs(5) }
+        Self {
+            attempts: 5,
+            base: Duration::from_millis(100),
+            max_delay: Duration::from_secs(5),
+        }
     }
 }
 
 impl RetryPolicy {
     /// No waiting (tests).
     pub fn immediate(attempts: u32) -> Self {
-        Self { attempts, base: Duration::ZERO, max_delay: Duration::ZERO }
+        Self {
+            attempts,
+            base: Duration::ZERO,
+            max_delay: Duration::ZERO,
+        }
     }
     fn delay(&self, retry: u32, hint: Option<Duration>) -> Duration {
-        let exp = self.base.saturating_mul(1u32 << retry.min(16)).min(self.max_delay);
+        let exp = self
+            .base
+            .saturating_mul(1u32 << retry.min(16))
+            .min(self.max_delay);
         let jitter = if exp.is_zero() {
             Duration::ZERO
         } else {
@@ -276,13 +308,18 @@ pub struct D1Client {
 
 impl std::fmt::Debug for D1Client {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("D1Client").field("retry", &self.retry).finish_non_exhaustive()
+        f.debug_struct("D1Client")
+            .field("retry", &self.retry)
+            .finish_non_exhaustive()
     }
 }
 
 impl D1Client {
     pub fn new(transport: Arc<dyn D1Transport>) -> Self {
-        Self { transport, retry: RetryPolicy::default() }
+        Self {
+            transport,
+            retry: RetryPolicy::default(),
+        }
     }
     /// The HTTPS client for `cfg`.
     #[cfg(feature = "fetch")]
@@ -297,7 +334,8 @@ impl D1Client {
     /// One statement.
     pub async fn query(&self, stmt: Stmt) -> Result<StmtResult, D1Error> {
         let mut v = self.batch(vec![stmt]).await?;
-        v.pop().ok_or_else(|| D1Error::Decode("empty result".into()))
+        v.pop()
+            .ok_or_else(|| D1Error::Decode("empty result".into()))
     }
 
     /// Statements as one transaction (a single statement is sent unbatched).
@@ -337,16 +375,33 @@ impl D1Client {
 fn decode(r: RawReply, n: usize) -> Result<Vec<StmtResult>, D1Error> {
     let ok = r.body.get("success").and_then(Value::as_bool);
     if ok != Some(true) || !(200..300).contains(&r.status) {
-        if let Some(e) = r.body.get("errors").and_then(Value::as_array).and_then(|a| a.first()) {
+        if let Some(e) = r
+            .body
+            .get("errors")
+            .and_then(Value::as_array)
+            .and_then(|a| a.first())
+        {
             return Err(D1Error::Api {
                 status: r.status,
                 code: e.get("code").and_then(Value::as_i64).unwrap_or(0),
-                message: e.get("message").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                message: e
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
             });
         }
-        let mut body = if r.text.is_empty() { r.body.to_string() } else { r.text };
+        let mut body = if r.text.is_empty() {
+            r.body.to_string()
+        } else {
+            r.text
+        };
         body.truncate(500);
-        return Err(D1Error::Http { status: r.status, body, retry_after: r.retry_after });
+        return Err(D1Error::Http {
+            status: r.status,
+            body,
+            retry_after: r.retry_after,
+        });
     }
     let arr = r
         .body
@@ -354,7 +409,10 @@ fn decode(r: RawReply, n: usize) -> Result<Vec<StmtResult>, D1Error> {
         .and_then(Value::as_array)
         .ok_or_else(|| D1Error::Decode("missing `result`".into()))?;
     if arr.len() != n {
-        return Err(D1Error::Decode(format!("expected {n} results, got {}", arr.len())));
+        return Err(D1Error::Decode(format!(
+            "expected {n} results, got {}",
+            arr.len()
+        )));
     }
     arr.iter()
         .map(|x| {
@@ -362,7 +420,11 @@ fn decode(r: RawReply, n: usize) -> Result<Vec<StmtResult>, D1Error> {
                 return Err(D1Error::Api {
                     status: r.status,
                     code: 0,
-                    message: x.get("error").and_then(Value::as_str).unwrap_or("statement failed").to_owned(),
+                    message: x
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .unwrap_or("statement failed")
+                        .to_owned(),
                 });
             }
             let rows = x
@@ -396,7 +458,12 @@ mod tests {
     }
 
     fn reply(status: u16, body: Value) -> Result<RawReply, D1Error> {
-        Ok(RawReply { status, retry_after: None, text: String::new(), body })
+        Ok(RawReply {
+            status,
+            retry_after: None,
+            text: String::new(),
+            body,
+        })
     }
 
     fn ok_body() -> Value {
@@ -409,7 +476,10 @@ mod tests {
             Mutex::new(vec![
                 Err(D1Error::Transport("reset".into())),
                 reply(503, Value::Null),
-                reply(500, serde_json::json!({"success":false,"errors":[{"code":7500,"message":"Network connection lost."}]})),
+                reply(
+                    500,
+                    serde_json::json!({"success":false,"errors":[{"code":7500,"message":"Network connection lost."}]}),
+                ),
                 reply(200, ok_body()),
             ]),
             Mutex::new(0),
@@ -443,7 +513,10 @@ mod tests {
             Mutex::new(0),
         ));
         let c = D1Client::new(s.clone()).with_retry(RetryPolicy::immediate(3));
-        assert!(matches!(c.query(Stmt::raw("x")).await, Err(D1Error::Http { status: 429, .. })));
+        assert!(matches!(
+            c.query(Stmt::raw("x")).await,
+            Err(D1Error::Http { status: 429, .. })
+        ));
         assert_eq!(*s.1.lock().unwrap(), 3);
     }
 
@@ -451,10 +524,16 @@ mod tests {
     fn config_redacts_and_builds_url() {
         let c = D1Config::new("acct", "sekrit", "db");
         assert!(!format!("{c:?}").contains("sekrit"));
-        assert_eq!(c.query_url(), "https://api.cloudflare.com/client/v4/accounts/acct/d1/database/db/query");
+        assert_eq!(
+            c.query_url(),
+            "https://api.cloudflare.com/client/v4/accounts/acct/d1/database/db/query"
+        );
         let p = RetryPolicy::default();
         assert!(p.delay(0, None) >= Duration::from_millis(100));
         assert!(p.delay(10, None) <= Duration::from_millis(6250));
-        assert_eq!(p.delay(0, Some(Duration::from_secs(2))), Duration::from_secs(2));
+        assert_eq!(
+            p.delay(0, Some(Duration::from_secs(2))),
+            Duration::from_secs(2)
+        );
     }
 }

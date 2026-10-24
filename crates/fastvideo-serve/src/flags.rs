@@ -74,7 +74,10 @@ pub struct FlagValue {
 }
 
 enum Backend {
-    D1 { db: D1Client, schema: tokio::sync::OnceCell<()> },
+    D1 {
+        db: D1Client,
+        schema: tokio::sync::OnceCell<()>,
+    },
     File(PathBuf),
     Memory,
 }
@@ -87,12 +90,18 @@ pub struct FeatureFlags {
 
 impl std::fmt::Debug for FeatureFlags {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FeatureFlags").field("backend", &self.backend_kind()).field("values", &self.values.read().ok()).finish()
+        f.debug_struct("FeatureFlags")
+            .field("backend", &self.backend_kind())
+            .field("values", &self.values.read().ok())
+            .finish()
     }
 }
 
 fn now_ms() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 fn known(name: &str) -> Option<&'static FlagDef> {
@@ -102,13 +111,22 @@ fn known(name: &str) -> Option<&'static FlagDef> {
 impl FeatureFlags {
     /// Process-local flags (tests).
     pub fn memory() -> Arc<Self> {
-        Arc::new(Self { values: RwLock::new(BTreeMap::new()), backend: Backend::Memory })
+        Arc::new(Self {
+            values: RwLock::new(BTreeMap::new()),
+            backend: Backend::Memory,
+        })
     }
 
     /// Flags in D1, loaded now (a D1 error leaves the defaults and logs;
     /// the refresh retries).
     pub async fn d1(db: D1Client) -> Arc<Self> {
-        let f = Arc::new(Self { values: RwLock::new(BTreeMap::new()), backend: Backend::D1 { db, schema: tokio::sync::OnceCell::new() } });
+        let f = Arc::new(Self {
+            values: RwLock::new(BTreeMap::new()),
+            backend: Backend::D1 {
+                db,
+                schema: tokio::sync::OnceCell::new(),
+            },
+        });
         if let Err(e) = f.reload().await {
             tracing::warn!(error = %e, "feature flags: D1 load failed; using the defaults until the next refresh");
         }
@@ -117,7 +135,10 @@ impl FeatureFlags {
 
     /// Flags in a JSON file (`<state_dir>/feature_flags.json`).
     pub async fn file(path: PathBuf) -> Arc<Self> {
-        let f = Arc::new(Self { values: RwLock::new(BTreeMap::new()), backend: Backend::File(path) });
+        let f = Arc::new(Self {
+            values: RwLock::new(BTreeMap::new()),
+            backend: Backend::File(path),
+        });
         if let Err(e) = f.reload().await {
             tracing::warn!(error = %e, "feature flags: reading the file failed; using the defaults");
         }
@@ -136,7 +157,11 @@ impl FeatureFlags {
     /// unknown name).
     pub fn enabled(&self, name: &str) -> bool {
         let Some(def) = known(name) else { return false };
-        self.values.read().expect("flags").get(name).map_or(def.default, |v| v.enabled)
+        self.values
+            .read()
+            .expect("flags")
+            .get(name)
+            .map_or(def.default, |v| v.enabled)
     }
 
     /// `caps` with the flags applied (see the module docs).
@@ -166,7 +191,10 @@ impl FeatureFlags {
 
     async fn ensure(&self) -> Result<(), String> {
         if let Backend::D1 { db, schema } = &self.backend {
-            schema.get_or_try_init(|| async { db.query(Stmt::raw(TABLE_SQL)).await.map(|_| ()) }).await.map_err(|e| format!("feature_flags table: {e}"))?;
+            schema
+                .get_or_try_init(|| async { db.query(Stmt::raw(TABLE_SQL)).await.map(|_| ()) })
+                .await
+                .map_err(|e| format!("feature_flags table: {e}"))?;
         }
         Ok(())
     }
@@ -183,7 +211,9 @@ impl FeatureFlags {
             Backend::D1 { db, .. } => {
                 self.ensure().await?;
                 let r = db
-                    .query(Stmt::raw("SELECT name, enabled, updated_at, updated_by FROM feature_flags"))
+                    .query(Stmt::raw(
+                        "SELECT name, enabled, updated_at, updated_by FROM feature_flags",
+                    ))
                     .await
                     .map_err(|e| e.to_string())?;
                 r.rows
@@ -192,8 +222,18 @@ impl FeatureFlags {
                         let name = row.get("name")?.as_str()?.to_owned();
                         let enabled = row.get("enabled").and_then(Value::as_i64).unwrap_or(0) != 0;
                         let updated_at = row.get("updated_at").and_then(Value::as_i64).unwrap_or(0);
-                        let updated_by = row.get("updated_by").and_then(Value::as_str).map(str::to_owned);
-                        Some((name, FlagValue { enabled, updated_at, updated_by }))
+                        let updated_by = row
+                            .get("updated_by")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
+                        Some((
+                            name,
+                            FlagValue {
+                                enabled,
+                                updated_at,
+                                updated_by,
+                            },
+                        ))
                     })
                     .collect()
             }
@@ -203,11 +243,20 @@ impl FeatureFlags {
     }
 
     /// Sets a known flag durably, then in this process's cache.
-    pub async fn set(&self, name: &str, enabled: bool, by: Option<String>) -> Result<FlagValue, String> {
+    pub async fn set(
+        &self,
+        name: &str,
+        enabled: bool,
+        by: Option<String>,
+    ) -> Result<FlagValue, String> {
         if known(name).is_none() {
             return Err(format!("unknown feature flag `{name}`"));
         }
-        let v = FlagValue { enabled, updated_at: now_ms(), updated_by: by };
+        let v = FlagValue {
+            enabled,
+            updated_at: now_ms(),
+            updated_by: by,
+        };
         match &self.backend {
             Backend::Memory => {}
             Backend::File(p) => {
@@ -215,8 +264,12 @@ impl FeatureFlags {
                 all.insert(name.to_owned(), v.clone());
                 let body = serde_json::to_vec_pretty(&all).map_err(|e| e.to_string())?;
                 let tmp = p.with_extension("json.tmp");
-                tokio::fs::write(&tmp, body).await.map_err(|e| format!("{}: {e}", tmp.display()))?;
-                tokio::fs::rename(&tmp, p).await.map_err(|e| format!("{}: {e}", p.display()))?;
+                tokio::fs::write(&tmp, body)
+                    .await
+                    .map_err(|e| format!("{}: {e}", tmp.display()))?;
+                tokio::fs::rename(&tmp, p)
+                    .await
+                    .map_err(|e| format!("{}: {e}", p.display()))?;
             }
             Backend::D1 { db, .. } => {
                 self.ensure().await?;
@@ -229,7 +282,10 @@ impl FeatureFlags {
                 .map_err(|e| e.to_string())?;
             }
         }
-        self.values.write().expect("flags").insert(name.to_owned(), v.clone());
+        self.values
+            .write()
+            .expect("flags")
+            .insert(name.to_owned(), v.clone());
         tracing::info!(flag = name, enabled, "feature flag set");
         Ok(v)
     }
@@ -291,7 +347,11 @@ struct St {
 }
 
 fn err(code: StatusCode, kind: &str, msg: impl Into<String>) -> Response {
-    (code, Json(json!({"error": {"kind": kind, "message": msg.into()}}))).into_response()
+    (
+        code,
+        Json(json!({"error": {"kind": kind, "message": msg.into()}})),
+    )
+        .into_response()
 }
 
 fn body(flags: &FeatureFlags) -> Value {
@@ -300,7 +360,11 @@ fn body(flags: &FeatureFlags) -> Value {
 
 async fn list(State(st): State<St>, headers: HeaderMap) -> Response {
     if !st.admin.check_headers(&headers) {
-        return err(StatusCode::UNAUTHORIZED, "unauthorized", "the admin token is required");
+        return err(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "the admin token is required",
+        );
     }
     // Fresh from the store, so the page shows what other replicas set.
     if let Err(e) = st.flags.reload().await {
@@ -314,16 +378,34 @@ struct SetBody {
     enabled: bool,
 }
 
-async fn set(State(st): State<St>, headers: HeaderMap, Path(name): Path<String>, b: Option<Json<Value>>) -> Response {
+async fn set(
+    State(st): State<St>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    b: Option<Json<Value>>,
+) -> Response {
     if !st.admin.check_headers(&headers) {
-        return err(StatusCode::UNAUTHORIZED, "unauthorized", "the admin token is required");
+        return err(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "the admin token is required",
+        );
     }
     if known(&name).is_none() {
         let names: Vec<&str> = FLAGS.iter().map(|f| f.name).collect();
-        return err(StatusCode::NOT_FOUND, "not_found", format!("unknown feature flag `{name}`; known: {}", names.join(", ")));
+        return err(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            format!("unknown feature flag `{name}`; known: {}", names.join(", ")),
+        );
     }
-    let Some(Ok(SetBody { enabled })) = b.map(|Json(v)| serde_json::from_value::<SetBody>(v)) else {
-        return err(StatusCode::BAD_REQUEST, "invalid_request", "expected a JSON body {\"enabled\": true | false}");
+    let Some(Ok(SetBody { enabled })) = b.map(|Json(v)| serde_json::from_value::<SetBody>(v))
+    else {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "expected a JSON body {\"enabled\": true | false}",
+        );
     };
     match st.flags.set(&name, enabled, Some("admin".into())).await {
         Ok(_) => Json(body(&st.flags)).into_response(),
@@ -332,7 +414,10 @@ async fn set(State(st): State<St>, headers: HeaderMap, Path(name): Path<String>,
 }
 
 /// `/fv/v1/admin/flags` routes (admin token).
-pub fn routes<S: Clone + Send + Sync + 'static>(flags: Arc<FeatureFlags>, admin: Arc<AdminToken>) -> Router<S> {
+pub fn routes<S: Clone + Send + Sync + 'static>(
+    flags: Arc<FeatureFlags>,
+    admin: Arc<AdminToken>,
+) -> Router<S> {
     Router::new()
         .route("/fv/v1/admin/flags", get(list))
         .route("/fv/v1/admin/flags/{name}", put(set))
@@ -345,7 +430,8 @@ mod tests {
 
     #[tokio::test]
     async fn file_flags_persist_and_default_off() {
-        let dir = std::env::temp_dir().join(format!("fv-flags-{}", fastvideo_serve_kit::random_token()));
+        let dir =
+            std::env::temp_dir().join(format!("fv-flags-{}", fastvideo_serve_kit::random_token()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("feature_flags.json");
         let f = FeatureFlags::file(p.clone()).await;
@@ -364,7 +450,9 @@ mod tests {
         let client = D1Client::new(Arc::new(fastvideo_serve_kit::d1::mock::MockD1::new()));
         let a = FeatureFlags::d1(client.clone()).await;
         let b = FeatureFlags::d1(client).await;
-        a.set("h3_1080p_long", true, Some("admin".into())).await.unwrap();
+        a.set("h3_1080p_long", true, Some("admin".into()))
+            .await
+            .unwrap();
         assert!(a.enabled("h3_1080p_long"));
         assert!(!b.enabled("h3_1080p_long"), "cached until the refresh");
         b.reload().await.unwrap();

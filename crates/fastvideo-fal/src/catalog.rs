@@ -40,12 +40,12 @@ use fastvideo_protocol::{route_task, ExtendAt, ModelCaps, RetakeMode, Task};
 use fastvideo_serve_kit::ServeCtx;
 use serde_json::{json, Map, Value};
 
-use crate::schema::{a2v, edit, ingredient};
 use crate::schema::ltx::{self, LtxAspect, LtxClass, CAMERA_MOTIONS, LTX_PROMPT_MAX_CHARS};
 use crate::schema::wan::{self, WanAspect, WanResolution, WanVariant, INTERPOLATORS};
+use crate::schema::{a2v, edit, ingredient};
 use crate::schema::{
-    AppKind, AspectRatio, Endpoint, Resolution, DURATION_MAX, DURATION_MIN, MAX_REFERENCES, MAX_REFERENCE_AUDIO,
-    MAX_REFERENCE_IMAGES, MAX_REFERENCE_VIDEOS, PROMPT_MAX_CHARS,
+    AppKind, AspectRatio, Endpoint, Resolution, DURATION_MAX, DURATION_MIN, MAX_REFERENCES,
+    MAX_REFERENCE_AUDIO, MAX_REFERENCE_IMAGES, MAX_REFERENCE_VIDEOS, PROMPT_MAX_CHARS,
 };
 use crate::{FalApp, FalConfig};
 
@@ -128,7 +128,9 @@ pub fn input_schema_for(kind: AppKind, endpoint: Endpoint) -> Value {
         Endpoint::LtxAudioToVideoPro => a2v_schema(endpoint, LtxClass::Pro),
         Endpoint::LtxRetake => retake_schema(endpoint),
         Endpoint::LtxExtend => extend_schema(endpoint),
-        Endpoint::TextToVideo | Endpoint::ImageToVideo | Endpoint::ReferenceToVideo => h3_schema(kind, endpoint),
+        Endpoint::TextToVideo | Endpoint::ImageToVideo | Endpoint::ReferenceToVideo => {
+            h3_schema(kind, endpoint)
+        }
     }
 }
 
@@ -214,11 +216,23 @@ fn h3_schema(kind: AppKind, endpoint: Endpoint) -> Value {
                 "reference_audio_urls".into(),
                 media_list("audio", MAX_REFERENCE_AUDIO, "URLs of reference audio clips (2-15 seconds each), referenced in the prompt as Audio 1, Audio 2, and so on."),
             );
-            extra.extend(["aspect_ratio", "reference_image_urls", "reference_video_urls", "reference_audio_urls"]);
+            extra.extend([
+                "aspect_ratio",
+                "reference_image_urls",
+                "reference_video_urls",
+                "reference_audio_urls",
+            ]);
         }
     }
-    let mut order: Vec<&str> =
-        vec!["prompt", "duration", "resolution", "seed", "enable_safety_checker", "sync_mode", "prompt_expansion_mode"];
+    let mut order: Vec<&str> = vec![
+        "prompt",
+        "duration",
+        "resolution",
+        "seed",
+        "enable_safety_checker",
+        "sync_mode",
+        "prompt_expansion_mode",
+    ];
     order.extend(extra);
     let mut schema = object(endpoint.title(), props, order, &["prompt"]);
     if endpoint == Endpoint::ReferenceToVideo {
@@ -231,7 +245,13 @@ fn h3_schema(kind: AppKind, endpoint: Endpoint) -> Value {
 fn ltx_schema(endpoint: Endpoint, class: LtxClass, i2v: bool) -> Value {
     let mut props = Map::new();
     let mut order = vec!["prompt"];
-    props.insert("prompt".into(), prompt(LTX_PROMPT_MAX_CHARS, "The prompt to generate the video from."));
+    props.insert(
+        "prompt".into(),
+        prompt(
+            LTX_PROMPT_MAX_CHARS,
+            "The prompt to generate the video from.",
+        ),
+    );
     if i2v {
         props.insert(
             "image_url".into(),
@@ -239,7 +259,10 @@ fn ltx_schema(endpoint: Endpoint, class: LtxClass, i2v: bool) -> Value {
         );
         props.insert(
             "end_image_url".into(),
-            media_url("image", "Optional URL of the image to use as the last frame (a first-to-last transition)."),
+            media_url(
+                "image",
+                "Optional URL of the image to use as the last frame (a first-to-last transition).",
+            ),
         );
         order.extend(["image_url", "end_image_url"]);
     }
@@ -264,8 +287,11 @@ fn ltx_schema(endpoint: Endpoint, class: LtxClass, i2v: bool) -> Value {
         "resolution".into(),
         json!({"type": "string", "enum": strings(class.resolutions(), ltx::LtxResolution::as_str), "default": "1080p", "description": "The resolution of the generated video."}),
     );
-    let (aspects, default_aspect): (&[LtxAspect], _) =
-        if i2v { (&LtxAspect::I2V, LtxAspect::Auto) } else { (&LtxAspect::T2V, LtxAspect::R16x9) };
+    let (aspects, default_aspect): (&[LtxAspect], _) = if i2v {
+        (&LtxAspect::I2V, LtxAspect::Auto)
+    } else {
+        (&LtxAspect::T2V, LtxAspect::R16x9)
+    };
     props.insert(
         "aspect_ratio".into(),
         json!({"type": "string", "enum": strings(aspects, LtxAspect::as_str), "default": default_aspect.as_str(), "description": if i2v { "The aspect ratio of the generated video; `auto` follows the input image." } else { "The aspect ratio of the generated video." }}),
@@ -284,15 +310,34 @@ fn ltx_schema(endpoint: Endpoint, class: LtxClass, i2v: bool) -> Value {
     );
     props.insert("seed".into(), seed());
     props.insert("sync_mode".into(), sync_mode());
-    order.extend(["duration", "resolution", "aspect_ratio", "fps", "generate_audio", "camera_motion", "seed", "sync_mode"]);
-    let required: &[&str] = if i2v { &["prompt", "image_url"] } else { &["prompt"] };
+    order.extend([
+        "duration",
+        "resolution",
+        "aspect_ratio",
+        "fps",
+        "generate_audio",
+        "camera_motion",
+        "seed",
+        "sync_mode",
+    ]);
+    let required: &[&str] = if i2v {
+        &["prompt", "image_url"]
+    } else {
+        &["prompt"]
+    };
     object(endpoint.title(), props, order, required)
 }
 
 fn wan_schema(endpoint: Endpoint, variant: WanVariant) -> Value {
     let mut props = Map::new();
     let mut order = vec!["prompt"];
-    props.insert("prompt".into(), prompt(PROMPT_MAX_CHARS, "The text prompt to guide video generation."));
+    props.insert(
+        "prompt".into(),
+        prompt(
+            PROMPT_MAX_CHARS,
+            "The text prompt to guide video generation.",
+        ),
+    );
     if variant == WanVariant::ImageToVideo {
         props.insert(
             "image_url".into(),
@@ -316,7 +361,12 @@ fn wan_schema(endpoint: Endpoint, variant: WanVariant) -> Value {
         "aspect_ratio".into(),
         json!({"type": "string", "enum": strings(variant.aspects(), WanAspect::as_str), "default": variant.default_aspect().as_str(), "description": "Aspect ratio of the generated video."}),
     );
-    order.extend(["num_frames", "frames_per_second", "resolution", "aspect_ratio"]);
+    order.extend([
+        "num_frames",
+        "frames_per_second",
+        "resolution",
+        "aspect_ratio",
+    ]);
     let distilled = variant.distilled();
     props.insert(
         "negative_prompt".into(),
@@ -367,7 +417,11 @@ fn wan_schema(endpoint: Endpoint, variant: WanVariant) -> Value {
         "enable_safety_checker",
         "sync_mode",
     ]);
-    let required: &[&str] = if variant == WanVariant::ImageToVideo { &["prompt", "image_url"] } else { &["prompt"] };
+    let required: &[&str] = if variant == WanVariant::ImageToVideo {
+        &["prompt", "image_url"]
+    } else {
+        &["prompt"]
+    };
     object(endpoint.title(), props, order, required)
 }
 
@@ -469,7 +523,15 @@ fn a2v_schema(endpoint: Endpoint, class: LtxClass) -> Value {
     );
     props.insert("seed".into(), seed());
     props.insert("sync_mode".into(), sync_mode());
-    let order = vec!["audio_url", "image_url", "prompt", "aspect_ratio", "guidance_scale", "seed", "sync_mode"];
+    let order = vec![
+        "audio_url",
+        "image_url",
+        "prompt",
+        "aspect_ratio",
+        "guidance_scale",
+        "seed",
+        "sync_mode",
+    ];
     object(endpoint.title(), props, order, &["audio_url"])
 }
 
@@ -479,7 +541,13 @@ const EDIT_VIDEO: &str = "URL of the source video (MP4, MOV, MKV or WebM; 8 to 6
 /// server's `seed` and `sync_mode`).
 fn retake_schema(endpoint: Endpoint) -> Value {
     let mut props = Map::new();
-    props.insert("video_url".into(), required_media_url("video", &format!("The URL of the video to retake. {EDIT_VIDEO}")));
+    props.insert(
+        "video_url".into(),
+        required_media_url(
+            "video",
+            &format!("The URL of the video to retake. {EDIT_VIDEO}"),
+        ),
+    );
     props.insert(
         "prompt".into(),
         json!({"type": "string", "minLength": 1, "maxLength": LTX_PROMPT_MAX_CHARS, "description": "The prompt to retake the video with: what happens in the retaken section.", "x-fv-multiline": true}),
@@ -499,7 +567,15 @@ fn retake_schema(endpoint: Endpoint) -> Value {
     );
     props.insert("seed".into(), seed());
     props.insert("sync_mode".into(), sync_mode());
-    let order = vec!["video_url", "prompt", "start_time", "duration", "retake_mode", "seed", "sync_mode"];
+    let order = vec![
+        "video_url",
+        "prompt",
+        "start_time",
+        "duration",
+        "retake_mode",
+        "seed",
+        "sync_mode",
+    ];
     object(endpoint.title(), props, order, &["video_url", "prompt"])
 }
 
@@ -507,7 +583,13 @@ fn retake_schema(endpoint: Endpoint) -> Value {
 /// server's `seed` and `sync_mode`).
 fn extend_schema(endpoint: Endpoint) -> Value {
     let mut props = Map::new();
-    props.insert("video_url".into(), required_media_url("video", &format!("The URL of the video to extend. {EDIT_VIDEO}")));
+    props.insert(
+        "video_url".into(),
+        required_media_url(
+            "video",
+            &format!("The URL of the video to extend. {EDIT_VIDEO}"),
+        ),
+    );
     props.insert(
         "prompt".into(),
         json!({"anyOf": [{"type": "string", "maxLength": LTX_PROMPT_MAX_CHARS}, {"type": "null"}], "default": null, "description": "Description of what should happen in the extended portion of the video.", "x-fv-multiline": true}),
@@ -526,7 +608,15 @@ fn extend_schema(endpoint: Endpoint) -> Value {
     );
     props.insert("seed".into(), seed());
     props.insert("sync_mode".into(), sync_mode());
-    let order = vec!["video_url", "prompt", "duration", "mode", "context", "seed", "sync_mode"];
+    let order = vec![
+        "video_url",
+        "prompt",
+        "duration",
+        "mode",
+        "context",
+        "seed",
+        "sync_mode",
+    ];
     object(endpoint.title(), props, order, &["video_url"])
 }
 
@@ -556,13 +646,22 @@ fn app_entry(a: &FalApp, served: Option<&dyn Fn(Endpoint) -> bool>) -> Value {
 
 /// `GET /fal/schema` body with every endpoint of every configured app.
 pub fn catalog(cfg: &FalConfig) -> Value {
-    let apps: Vec<Value> = cfg.apps.iter().filter(|a| a.is_valid()).map(|a| app_entry(a, None)).collect();
+    let apps: Vec<Value> = cfg
+        .apps
+        .iter()
+        .filter(|a| a.is_valid())
+        .map(|a| app_entry(a, None))
+        .collect();
     json!({"apps": apps})
 }
 
 /// `GET /fal/schema` body: the configured apps with the endpoints this
 /// server's models serve.
-pub fn catalog_served(cfg: &FalConfig, models: &[ModelCaps], alias: &dyn Fn(&str) -> Option<String>) -> Value {
+pub fn catalog_served(
+    cfg: &FalConfig,
+    models: &[ModelCaps],
+    alias: &dyn Fn(&str) -> Option<String>,
+) -> Value {
     let apps: Vec<Value> = cfg
         .apps
         .iter()
@@ -574,7 +673,10 @@ pub fn catalog_served(cfg: &FalConfig, models: &[ModelCaps], alias: &dyn Fn(&str
             let d = director_caps(a, models, alias);
             e["director"] = d.is_some().into();
             if let Some(c) = &d {
-                if matches!(c.stream, Some(fastvideo_protocol::StreamCaps::Causal { .. })) {
+                if matches!(
+                    c.stream,
+                    Some(fastvideo_protocol::StreamCaps::Causal { .. })
+                ) {
                     e["director_mode"] = "causal".into();
                 }
                 if crate::director::info::is_longlive(c) {
@@ -591,8 +693,15 @@ pub fn catalog_served(cfg: &FalConfig, models: &[ModelCaps], alias: &dyn Fn(&str
 /// image-to-video once an image is set).
 pub fn endpoint_task(e: Endpoint) -> Task {
     match e {
-        Endpoint::TextToVideo | Endpoint::LtxTextToVideoFast | Endpoint::LtxTextToVideoPro | Endpoint::WanTextToVideo | Endpoint::WanFastWan => Task::T2V,
-        Endpoint::ImageToVideo | Endpoint::LtxImageToVideoFast | Endpoint::LtxImageToVideoPro | Endpoint::WanImageToVideo => Task::I2V,
+        Endpoint::TextToVideo
+        | Endpoint::LtxTextToVideoFast
+        | Endpoint::LtxTextToVideoPro
+        | Endpoint::WanTextToVideo
+        | Endpoint::WanFastWan => Task::T2V,
+        Endpoint::ImageToVideo
+        | Endpoint::LtxImageToVideoFast
+        | Endpoint::LtxImageToVideoPro
+        | Endpoint::WanImageToVideo => Task::I2V,
         Endpoint::ReferenceToVideo | Endpoint::LtxIngredient => Task::Ref2V,
         Endpoint::LtxAudioToVideoFast | Endpoint::LtxAudioToVideoPro => Task::A2V,
         Endpoint::LtxRetake => Task::Retake,
@@ -603,33 +712,62 @@ pub fn endpoint_task(e: Endpoint) -> Task {
 /// The caps of the model an endpoint of `app` runs on (its name through the
 /// aliases, else its tier, then the task companion), when served here and
 /// serving the endpoint's task.
-pub fn endpoint_caps(app: &FalApp, e: Endpoint, models: &[ModelCaps], alias: &dyn Fn(&str) -> Option<String>) -> Option<ModelCaps> {
+pub fn endpoint_caps(
+    app: &FalApp,
+    e: Endpoint,
+    models: &[ModelCaps],
+    alias: &dyn Fn(&str) -> Option<String>,
+) -> Option<ModelCaps> {
     let (name, tier) = app.target(e);
     let caps = fastvideo_protocol::resolve_model(&name, alias, models)
         .ok()
-        .or_else(|| tier.and_then(|(family, tier)| fastvideo_protocol::resolve_tier(family, tier, models).ok()))?;
+        .or_else(|| {
+            tier.and_then(|(family, tier)| {
+                fastvideo_protocol::resolve_tier(family, tier, models).ok()
+            })
+        })?;
     let task = endpoint_task(e);
     let caps = route_task(caps, task, models);
     caps.supports(task).then(|| caps.clone())
 }
 
 /// The caps of the model an app's director runs (the app's own model).
-pub fn director_caps(app: &FalApp, models: &[ModelCaps], alias: &dyn Fn(&str) -> Option<String>) -> Option<ModelCaps> {
+pub fn director_caps(
+    app: &FalApp,
+    models: &[ModelCaps],
+    alias: &dyn Fn(&str) -> Option<String>,
+) -> Option<ModelCaps> {
     app.kind().director().then_some(())?;
-    endpoint_caps(app, Endpoint::TextToVideo, models, alias).filter(crate::director::info::director_capable)
+    endpoint_caps(app, Endpoint::TextToVideo, models, alias)
+        .filter(crate::director::info::director_capable)
 }
 
-fn narrow_enum(schema: &mut Value, field: &str, keep: impl Fn(&Value) -> bool, preferred_default: Option<Value>) {
-    let Some(p) = schema["properties"].get_mut(field) else { return };
-    let path = if p.get("enum").is_some() { "/enum" } else { "/anyOf/0/enum" };
-    let Some(Value::Array(list)) = p.pointer(path) else { return };
+fn narrow_enum(
+    schema: &mut Value,
+    field: &str,
+    keep: impl Fn(&Value) -> bool,
+    preferred_default: Option<Value>,
+) {
+    let Some(p) = schema["properties"].get_mut(field) else {
+        return;
+    };
+    let path = if p.get("enum").is_some() {
+        "/enum"
+    } else {
+        "/anyOf/0/enum"
+    };
+    let Some(Value::Array(list)) = p.pointer(path) else {
+        return;
+    };
     let kept: Vec<Value> = list.iter().filter(|v| keep(v)).cloned().collect();
     if kept.is_empty() || kept.len() == list.len() {
         return;
     }
     let default = p.get("default").cloned().unwrap_or(Value::Null);
     if !default.is_null() && !kept.contains(&default) {
-        p["default"] = preferred_default.filter(|d| kept.contains(d)).unwrap_or_else(|| kept[0].clone());
+        p["default"] = preferred_default
+            .filter(|d| kept.contains(d))
+            .unwrap_or_else(|| kept[0].clone());
     }
     if let Some(slot) = p.pointer_mut(path) {
         *slot = Value::Array(kept);
@@ -637,8 +775,12 @@ fn narrow_enum(schema: &mut Value, field: &str, keep: impl Fn(&Value) -> bool, p
 }
 
 fn narrow_range(schema: &mut Value, field: &str, lo: i64, hi: i64) {
-    let Some(p) = schema["properties"].get_mut(field) else { return };
-    let (Some(a), Some(b)) = (p["minimum"].as_i64(), p["maximum"].as_i64()) else { return };
+    let Some(p) = schema["properties"].get_mut(field) else {
+        return;
+    };
+    let (Some(a), Some(b)) = (p["minimum"].as_i64(), p["maximum"].as_i64()) else {
+        return;
+    };
     let (a, b) = (a.max(lo), b.min(hi));
     if a > b {
         return;
@@ -659,7 +801,10 @@ pub fn served_schema(kind: AppKind, endpoint: Endpoint, caps: &ModelCaps) -> Val
     match endpoint {
         Endpoint::TextToVideo | Endpoint::ImageToVideo | Endpoint::ReferenceToVideo => {
             let served = |v: &Value| {
-                Resolution::ALL.iter().chain(&Resolution::BASE).any(|r| v == r.as_str() && tiers.contains(&r.short_edge()))
+                Resolution::ALL
+                    .iter()
+                    .chain(&Resolution::BASE)
+                    .any(|r| v == r.as_str() && tiers.contains(&r.short_edge()))
             };
             // An omitted resolution is the model's default (first) tier:
             // 768P on H3, 1080P on LTX, 480P on h3-draft.
@@ -680,7 +825,10 @@ pub fn served_schema(kind: AppKind, endpoint: Endpoint, caps: &ModelCaps) -> Val
             if let Some(t) = caps.canvas.hd.filter(|t| tiers.contains(&t.short_edge)) {
                 if let (Some(max), Some(p)) = (t.max_frames, s["properties"].get_mut("duration")) {
                     let cap = i64::from(max / fps).min(hi);
-                    let res = Resolution::ALL.iter().find(|r| r.short_edge() == t.short_edge).map(|r| r.as_str());
+                    let res = Resolution::ALL
+                        .iter()
+                        .find(|r| r.short_edge() == t.short_edge)
+                        .map(|r| r.as_str());
                     if let Some(res) = res {
                         let mut by = Map::new();
                         by.insert(res.to_owned(), cap.into());
@@ -694,7 +842,8 @@ pub fn served_schema(kind: AppKind, endpoint: Endpoint, caps: &ModelCaps) -> Val
                             None => format!(" At {res} the longest clip is {cap} s."),
                         };
                         let d = p["description"].as_str().unwrap_or("").to_owned();
-                        p["description"] = Value::String(format!("{d}{note}").trim_start().to_owned());
+                        p["description"] =
+                            Value::String(format!("{d}{note}").trim_start().to_owned());
                     }
                 }
             }
@@ -705,29 +854,78 @@ pub fn served_schema(kind: AppKind, endpoint: Endpoint, caps: &ModelCaps) -> Val
         | Endpoint::LtxImageToVideoPro
         | Endpoint::LtxAudioToVideoFast
         | Endpoint::LtxAudioToVideoPro => {
-            narrow_enum(&mut s, "resolution", |v| ltx::LtxResolution::ALL.iter().any(|r| v == r.as_str() && tiers.contains(&r.landscape().1)), None);
-            narrow_enum(&mut s, "fps", |v| v.as_u64().is_some_and(|f| caps.fps.allows(f as u32)), None);
+            narrow_enum(
+                &mut s,
+                "resolution",
+                |v| {
+                    ltx::LtxResolution::ALL
+                        .iter()
+                        .any(|r| v == r.as_str() && tiers.contains(&r.landscape().1))
+                },
+                None,
+            );
+            narrow_enum(
+                &mut s,
+                "fps",
+                |v| v.as_u64().is_some_and(|f| caps.fps.allows(f as u32)),
+                None,
+            );
             // `auto` needs the LTX-2.5 duration head, which is not loaded.
             narrow_enum(&mut s, "duration", Value::is_number, None);
         }
         Endpoint::WanTextToVideo | Endpoint::WanImageToVideo | Endpoint::WanFastWan => {
-            narrow_enum(&mut s, "resolution", |v| WanResolution::ALL.iter().any(|r| v == r.as_str() && tiers.contains(&r.short_edge())), None);
-            narrow_range(&mut s, "num_frames", i64::from(caps.frames.min), i64::from(caps.frames.max));
+            narrow_enum(
+                &mut s,
+                "resolution",
+                |v| {
+                    WanResolution::ALL
+                        .iter()
+                        .any(|r| v == r.as_str() && tiers.contains(&r.short_edge()))
+                },
+                None,
+            );
+            narrow_range(
+                &mut s,
+                "num_frames",
+                i64::from(caps.frames.min),
+                i64::from(caps.frames.max),
+            );
         }
         // The source video sets the size, length and rate.
         Endpoint::LtxRetake | Endpoint::LtxExtend => {}
         Endpoint::LtxIngredient => {
-            narrow_range(&mut s, "num_frames", i64::from(caps.frames.min), i64::from(caps.frames.max));
+            narrow_range(
+                &mut s,
+                "num_frames",
+                i64::from(caps.frames.min),
+                i64::from(caps.frames.max),
+            );
             // The rates the model generates at, as a list.
             if let Some(p) = s["properties"].get_mut("frames_per_second") {
-                let (lo, hi) = (p["minimum"].as_u64().unwrap_or(0), p["maximum"].as_u64().unwrap_or(u64::MAX));
-                let rates: Vec<Value> = caps.fps.allowed.iter().filter(|&&f| (lo..=hi).contains(&u64::from(f))).map(|&f| f.into()).collect();
+                let (lo, hi) = (
+                    p["minimum"].as_u64().unwrap_or(0),
+                    p["maximum"].as_u64().unwrap_or(u64::MAX),
+                );
+                let rates: Vec<Value> = caps
+                    .fps
+                    .allowed
+                    .iter()
+                    .filter(|&&f| (lo..=hi).contains(&u64::from(f)))
+                    .map(|&f| f.into())
+                    .collect();
                 if !rates.is_empty() {
                     let def = p["default"].clone();
                     let obj = p.as_object_mut().expect("property object");
                     obj.remove("minimum");
                     obj.remove("maximum");
-                    obj.insert("default".into(), if rates.contains(&def) { def } else { rates[0].clone() });
+                    obj.insert(
+                        "default".into(),
+                        if rates.contains(&def) {
+                            def
+                        } else {
+                            rates[0].clone()
+                        },
+                    );
                     obj.insert("enum".into(), Value::Array(rates));
                 }
             }
@@ -739,12 +937,16 @@ pub fn served_schema(kind: AppKind, endpoint: Endpoint, caps: &ModelCaps) -> Val
 /// The director form of an app whose model has `caps`: the `configure`
 /// fields the console sets, with the values the model serves.
 pub fn director_schema(caps: &ModelCaps) -> Value {
-    use crate::director::messages::Resolution as R;
     use crate::director::info::{relative_chunk_cost, served_resolutions};
+    use crate::director::messages::Resolution as R;
     let served = served_resolutions(caps);
     let res: Vec<&str> = served.iter().map(|r| r.as_str()).collect();
     // The session's own default: 768p when served, else the last tier.
-    let default = if served.contains(&R::R768) { "768p" } else { res.last().copied().unwrap_or("768p") };
+    let default = if served.contains(&R::R768) {
+        "768p"
+    } else {
+        res.last().copied().unwrap_or("768p")
+    };
     // What a chunk costs next to 768p on this model (the console's labels).
     let mut labels = Map::new();
     let mut notes = Vec::new();
@@ -756,7 +958,10 @@ pub fn director_schema(caps: &ModelCaps) -> Value {
                 format!("{} (about {x}x the time per chunk)", r.as_str())
             };
             labels.insert(r.as_str().to_owned(), label.into());
-            notes.push(format!("{} takes about {x}x as long per chunk as 768p", r.as_str()));
+            notes.push(format!(
+                "{} takes about {x}x as long per chunk as 768p",
+                r.as_str()
+            ));
         }
     }
     let description = if notes.is_empty() {
@@ -764,9 +969,15 @@ pub fn director_schema(caps: &ModelCaps) -> Value {
     } else {
         format!("The resolution of every chunk ({}).", notes.join("; "))
     };
-    let causal = matches!(caps.stream, Some(fastvideo_protocol::StreamCaps::Causal { .. }));
+    let causal = matches!(
+        caps.stream,
+        Some(fastvideo_protocol::StreamCaps::Causal { .. })
+    );
     let description = if causal {
-        format!("The resolution of the stream: this causal model generates its {} canvas only.", res.join(", "))
+        format!(
+            "The resolution of the stream: this causal model generates its {} canvas only.",
+            res.join(", ")
+        )
     } else {
         description
     };
@@ -790,17 +1001,27 @@ pub fn director_schema(caps: &ModelCaps) -> Value {
         let l = crate::director::info::model_limits(caps, default, 4);
         let options = l.chunk_options();
         if !options.is_empty() {
-            let by_res: Map<String, Value> = served.iter().map(|r| (r.as_str().to_owned(), json!(l.at(*r).chunk_options()))).collect();
+            let by_res: Map<String, Value> = served
+                .iter()
+                .map(|r| (r.as_str().to_owned(), json!(l.at(*r).chunk_options())))
+                .collect();
             let labels: Map<String, Value> = options
                 .iter()
                 .map(|d| {
-                    let what = if *d <= 5 { "prompt changes land sooner" } else { "fewer joins" };
+                    let what = if *d <= 5 {
+                        "prompt changes land sooner"
+                    } else {
+                        "fewer joins"
+                    };
                     (d.to_string(), format!("{d} s ({what})").into())
                 })
                 .collect();
             let mut description = "Seconds per chunk: shorter chunks react to prompt updates sooner, longer ones have fewer joins.".to_owned();
             if options.len() < crate::director::messages::CHUNK_DURATIONS.len() {
-                description.push_str(&format!(" This model's clips stop short of 10 s: {} s only.", options[0]));
+                description.push_str(&format!(
+                    " This model's clips stop short of 10 s: {} s only.",
+                    options[0]
+                ));
             }
             props.insert(
                 "chunk_duration".into(),
@@ -844,33 +1065,44 @@ pub(crate) fn routes(router: Router<ServeCtx>, cfg: &Arc<FalConfig>) -> Router<S
         )
         .route(
             "/fal/schema/{owner}/{alias}/{*sub}",
-            get(move |State(ctx): State<ServeCtx>, Path((owner, alias, sub)): Path<(String, String, String)>| {
-                let id = format!("{owner}/{alias}");
-                let sub = sub.trim_matches('/').to_owned();
-                let app = c2.apps.iter().find(|a| a.is_valid() && a.id == id);
-                let models = ctx.engine().models();
-                let engine = ctx.engine().clone();
-                let alias = |n: &str| engine.alias(n);
-                std::future::ready(match (app, sub.as_str()) {
-                    (Some(a), "director") => match director_caps(a, &models, &alias) {
-                        Some(caps) => Json(director_schema(&caps)).into_response(),
-                        None => not_found(&id, &sub),
-                    },
-                    (Some(a), _) => match Endpoint::from_sub(&sub).filter(|e| a.endpoints().contains(e)) {
-                        Some(e) => match endpoint_caps(a, e, &models, &alias) {
-                            Some(caps) => Json(served_schema(a.kind(), e, &caps)).into_response(),
+            get(
+                move |State(ctx): State<ServeCtx>,
+                      Path((owner, alias, sub)): Path<(String, String, String)>| {
+                    let id = format!("{owner}/{alias}");
+                    let sub = sub.trim_matches('/').to_owned();
+                    let app = c2.apps.iter().find(|a| a.is_valid() && a.id == id);
+                    let models = ctx.engine().models();
+                    let engine = ctx.engine().clone();
+                    let alias = |n: &str| engine.alias(n);
+                    std::future::ready(match (app, sub.as_str()) {
+                        (Some(a), "director") => match director_caps(a, &models, &alias) {
+                            Some(caps) => Json(director_schema(&caps)).into_response(),
                             None => not_found(&id, &sub),
                         },
-                        None => not_found(&id, &sub),
-                    },
-                    _ => not_found(&id, &sub),
-                })
-            }),
+                        (Some(a), _) => {
+                            match Endpoint::from_sub(&sub).filter(|e| a.endpoints().contains(e)) {
+                                Some(e) => match endpoint_caps(a, e, &models, &alias) {
+                                    Some(caps) => {
+                                        Json(served_schema(a.kind(), e, &caps)).into_response()
+                                    }
+                                    None => not_found(&id, &sub),
+                                },
+                                None => not_found(&id, &sub),
+                            }
+                        }
+                        _ => not_found(&id, &sub),
+                    })
+                },
+            ),
         )
 }
 
 fn not_found(app: &str, sub: &str) -> Response {
-    (StatusCode::NOT_FOUND, Json(json!({"detail": format!("no endpoint `{app}/{sub}` on this server")}))).into_response()
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({"detail": format!("no endpoint `{app}/{sub}` on this server")})),
+    )
+        .into_response()
 }
 
 #[cfg(test)]
@@ -878,7 +1110,14 @@ mod tests {
     use super::*;
     use crate::schema::FalInput;
 
-    const KINDS: [AppKind; 6] = [AppKind::H3, AppKind::H3Base, AppKind::Ltx25, AppKind::Wan, AppKind::LtxQuality, AppKind::Ltx23];
+    const KINDS: [AppKind; 6] = [
+        AppKind::H3,
+        AppKind::H3Base,
+        AppKind::Ltx25,
+        AppKind::Wan,
+        AppKind::LtxQuality,
+        AppKind::Ltx23,
+    ];
 
     fn defaults(s: &Value) -> Map<String, Value> {
         let mut m = Map::new();
@@ -897,7 +1136,10 @@ mod tests {
         m.insert("prompt".into(), "a cat".into());
         match e {
             Endpoint::ReferenceToVideo => {
-                m.insert("reference_image_urls".into(), json!(["https://a.test/1.png"]));
+                m.insert(
+                    "reference_image_urls".into(),
+                    json!(["https://a.test/1.png"]),
+                );
             }
             Endpoint::LtxImageToVideoFast
             | Endpoint::LtxImageToVideoPro
@@ -923,9 +1165,16 @@ mod tests {
         for kind in KINDS {
             for &e in kind.endpoints() {
                 let s = input_schema_for(kind, e);
-                let parse = |b: &Map<String, Value>| FalInput::parse_for(kind, e, &Value::Object(b.clone()));
+                let parse = |b: &Map<String, Value>| {
+                    FalInput::parse_for(kind, e, &Value::Object(b.clone()))
+                };
                 let props = s["properties"].as_object().unwrap();
-                let order: Vec<&str> = s["x-fal-order-properties"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+                let order: Vec<&str> = s["x-fal-order-properties"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_str().unwrap())
+                    .collect();
                 assert_eq!(order.len(), props.len(), "{e:?}");
                 assert!(order.iter().all(|k| props.contains_key(*k)));
                 for r in s["required"].as_array().unwrap() {
@@ -935,11 +1184,16 @@ mod tests {
                 }
                 let mut body = defaults(&s);
                 body.extend(minimal(e));
-                let parsed = parse(&body).unwrap_or_else(|err| panic!("{kind:?} {e:?} defaults: {err:?}"));
+                let parsed =
+                    parse(&body).unwrap_or_else(|err| panic!("{kind:?} {e:?} defaults: {err:?}"));
                 // Defaults in the schema equal the parser's defaults (an
                 // explicit `prompt_expansion_mode` also opts in to the
                 // upsampler: that flag aside).
-                assert_eq!(parse(&minimal(e)).unwrap(), parsed.clone().without_explicit_expansion(), "{e:?} defaults");
+                assert_eq!(
+                    parse(&minimal(e)).unwrap(),
+                    parsed.clone().without_explicit_expansion(),
+                    "{e:?} defaults"
+                );
                 // LTX: 20 s is only within the engine's frame grid at 24 fps.
                 if kind == AppKind::Ltx25 {
                     body.insert("fps".into(), 24.into());
@@ -956,24 +1210,42 @@ mod tests {
                         b.insert(k.clone(), "bogus".into());
                         assert!(parse(&b).is_err(), "{e:?} {k}");
                     }
-                    let (lo, hi) = (p.get("minimum").and_then(Value::as_f64), p.get("maximum").and_then(Value::as_f64));
+                    let (lo, hi) = (
+                        p.get("minimum").and_then(Value::as_f64),
+                        p.get("maximum").and_then(Value::as_f64),
+                    );
                     if let (Some(lo), Some(hi)) = (lo, hi) {
                         let step = if p["type"] == "integer" { 1.0 } else { 0.01 };
-                        for (v, ok) in [(lo, true), (hi, true), (lo - step, false), (hi + step, false)] {
+                        for (v, ok) in [
+                            (lo, true),
+                            (hi, true),
+                            (lo - step, false),
+                            (hi + step, false),
+                        ] {
                             let mut b = body.clone();
-                            let v = if p["type"] == "integer" { json!(v as i64) } else { json!(v) };
+                            let v = if p["type"] == "integer" {
+                                json!(v as i64)
+                            } else {
+                                json!(v)
+                            };
                             b.insert(k.clone(), v.clone());
                             assert_eq!(parse(&b).is_ok(), ok, "{e:?} {k}={v}");
                         }
                     }
                     if let Some(max) = p.get("maxItems").and_then(Value::as_u64) {
                         let mut b = body.clone();
-                        b.insert(k.clone(), Value::Array(vec!["https://a.test/x".into(); max as usize + 1]));
+                        b.insert(
+                            k.clone(),
+                            Value::Array(vec!["https://a.test/x".into(); max as usize + 1]),
+                        );
                         assert!(parse(&b).is_err(), "{e:?} {k} maxItems");
                     }
                 }
                 let p = &s["properties"]["prompt"];
-                let max = p["maxLength"].as_u64().or_else(|| p.pointer("/anyOf/0/maxLength").and_then(Value::as_u64)).unwrap() as usize;
+                let max = p["maxLength"]
+                    .as_u64()
+                    .or_else(|| p.pointer("/anyOf/0/maxLength").and_then(Value::as_u64))
+                    .unwrap() as usize;
                 let mut b = body.clone();
                 b.insert("prompt".into(), "x".repeat(max + 1).into());
                 assert!(parse(&b).is_err());
@@ -983,44 +1255,78 @@ mod tests {
 
     #[test]
     fn audio_to_video_form_uploads_audio() {
-        let fam = FalConfig { apps: vec![FalApp::from_id("lightricks/ltx-2.5")], ..FalConfig::default() };
+        let fam = FalConfig {
+            apps: vec![FalApp::from_id("lightricks/ltx-2.5")],
+            ..FalConfig::default()
+        };
         let c = catalog(&fam);
         let eps = c["apps"][0]["endpoints"].as_array().unwrap();
         let a2v: Vec<(&str, &str)> = eps
             .iter()
             .filter(|e| e["sub"].as_str().unwrap().starts_with("audio-to-video"))
-            .map(|e| (e["endpoint_id"].as_str().unwrap(), e["model"].as_str().unwrap()))
+            .map(|e| {
+                (
+                    e["endpoint_id"].as_str().unwrap(),
+                    e["model"].as_str().unwrap(),
+                )
+            })
             .collect();
         assert_eq!(
             a2v,
-            [("lightricks/ltx-2.5/audio-to-video/fast", "ltx-turbo"), ("lightricks/ltx-2.5/audio-to-video/pro", "ltx-pro")]
+            [
+                ("lightricks/ltx-2.5/audio-to-video/fast", "ltx-turbo"),
+                ("lightricks/ltx-2.5/audio-to-video/pro", "ltx-pro")
+            ]
         );
-        for (e, max) in [(Endpoint::LtxAudioToVideoFast, "20"), (Endpoint::LtxAudioToVideoPro, "10")] {
+        for (e, max) in [
+            (Endpoint::LtxAudioToVideoFast, "20"),
+            (Endpoint::LtxAudioToVideoPro, "10"),
+        ] {
             let s = input_schema_for(AppKind::Ltx25, e);
             assert_eq!(s["required"], json!(["audio_url"]));
             assert_eq!(s["properties"]["audio_url"]["x-fv-media"], "audio");
             assert_eq!(s["properties"]["image_url"]["x-fv-media"], "image");
-            assert!(s["properties"]["audio_url"]["description"].as_str().unwrap().contains(&format!("2 and {max} seconds")));
+            assert!(s["properties"]["audio_url"]["description"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("2 and {max} seconds")));
             assert_eq!(s["x-fal-order-properties"][0], "audio_url");
         }
     }
 
     #[test]
     fn retake_and_extend_forms_upload_a_video() {
-        let app = FalConfig { apps: vec![FalApp::from_id("fal-ai/ltx-2.3")], ..FalConfig::default() };
+        let app = FalConfig {
+            apps: vec![FalApp::from_id("fal-ai/ltx-2.3")],
+            ..FalConfig::default()
+        };
         let c = catalog(&app);
         assert_eq!(c["apps"][0]["kind"], "ltx23");
         let eps: Vec<(&str, &str)> = c["apps"][0]["endpoints"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|e| (e["endpoint_id"].as_str().unwrap(), e["model"].as_str().unwrap()))
+            .map(|e| {
+                (
+                    e["endpoint_id"].as_str().unwrap(),
+                    e["model"].as_str().unwrap(),
+                )
+            })
             .collect();
-        assert_eq!(eps, [("fal-ai/ltx-2.3/retake-video", "ltx-pro"), ("fal-ai/ltx-2.3/extend-video", "ltx-pro")]);
+        assert_eq!(
+            eps,
+            [
+                ("fal-ai/ltx-2.3/retake-video", "ltx-pro"),
+                ("fal-ai/ltx-2.3/extend-video", "ltx-pro")
+            ]
+        );
         let r = input_schema_for(AppKind::Ltx23, Endpoint::LtxRetake);
         assert_eq!(r["required"], json!(["video_url", "prompt"]));
         assert_eq!(r["properties"]["video_url"]["x-fv-media"], "video");
-        assert_eq!(r["properties"]["retake_mode"]["default"], "replace_audio_and_video");
+        assert_eq!(
+            r["properties"]["retake_mode"]["default"],
+            "replace_audio_and_video"
+        );
         let x = input_schema_for(AppKind::Ltx23, Endpoint::LtxExtend);
         assert_eq!(x["required"], json!(["video_url"]));
         assert_eq!(x["properties"]["mode"]["enum"], json!(["start", "end"]));
@@ -1031,24 +1337,59 @@ mod tests {
     #[test]
     fn catalog_lists_configured_apps() {
         let c = catalog(&FalConfig::default());
-        let ids: Vec<&str> = c["apps"].as_array().unwrap().iter().map(|a| a["id"].as_str().unwrap()).collect();
-        assert_eq!(ids, ["minimax/h3-max", "minimax/h3-turbo", "minimax/h3-draft", "minimax/h3-max-turbo", "minimax/h3"]);
-        assert_eq!(c["apps"][0]["endpoints"][2]["endpoint_id"], "minimax/h3-max/reference-to-video");
+        let ids: Vec<&str> = c["apps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "minimax/h3-max",
+                "minimax/h3-turbo",
+                "minimax/h3-draft",
+                "minimax/h3-max-turbo",
+                "minimax/h3"
+            ]
+        );
+        assert_eq!(
+            c["apps"][0]["endpoints"][2]["endpoint_id"],
+            "minimax/h3-max/reference-to-video"
+        );
         assert_eq!(c["apps"][1]["tier"], "turbo");
         assert_eq!(c["apps"][3]["tier"], "turbo");
         assert_eq!(c["apps"][4]["kind"], "h3_base");
-        let fam = FalConfig { apps: vec![FalApp::from_id("lightricks/ltx-2.5"), FalApp::from_id("fal-ai/wan")], ..FalConfig::default() };
+        let fam = FalConfig {
+            apps: vec![
+                FalApp::from_id("lightricks/ltx-2.5"),
+                FalApp::from_id("fal-ai/wan"),
+            ],
+            ..FalConfig::default()
+        };
         let c = catalog(&fam);
-        assert_eq!(c["apps"][0]["endpoints"][1]["endpoint_id"], "lightricks/ltx-2.5/text-to-video/pro");
+        assert_eq!(
+            c["apps"][0]["endpoints"][1]["endpoint_id"],
+            "lightricks/ltx-2.5/text-to-video/pro"
+        );
         assert_eq!(c["apps"][0]["endpoints"][1]["model"], "ltx-pro");
         assert_eq!(c["apps"][0]["director"], false);
-        assert_eq!(c["apps"][1]["endpoints"][2]["endpoint_id"], "fal-ai/wan/v2.2-5b/text-to-video/fast-wan");
+        assert_eq!(
+            c["apps"][1]["endpoints"][2]["endpoint_id"],
+            "fal-ai/wan/v2.2-5b/text-to-video/fast-wan"
+        );
         assert_eq!(c["apps"][1]["endpoints"][2]["model"], "wan-turbo");
         assert_eq!(c["apps"][1]["endpoints"][0]["model"], "wan-max");
-        let q = FalConfig { apps: vec![FalApp::from_id("fal-ai/ltx-2.3-quality")], ..FalConfig::default() };
+        let q = FalConfig {
+            apps: vec![FalApp::from_id("fal-ai/ltx-2.3-quality")],
+            ..FalConfig::default()
+        };
         let c = catalog(&q);
         assert_eq!(c["apps"][0]["kind"], "ltx_quality");
-        assert_eq!(c["apps"][0]["endpoints"][0]["endpoint_id"], "fal-ai/ltx-2.3-quality/ingredient");
+        assert_eq!(
+            c["apps"][0]["endpoints"][0]["endpoint_id"],
+            "fal-ai/ltx-2.3-quality/ingredient"
+        );
         assert_eq!(c["apps"][0]["endpoints"][0]["model"], "ltx-pro");
     }
 }

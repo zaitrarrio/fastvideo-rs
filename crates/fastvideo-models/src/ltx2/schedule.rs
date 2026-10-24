@@ -188,7 +188,10 @@ impl Ltx2Schedule {
         }
         let n_train = 1000usize;
         Self {
-            timesteps: sig[..n].iter().map(|&s| s as f64 * n_train as f64).collect(),
+            timesteps: sig[..n]
+                .iter()
+                .map(|&s| s as f64 * n_train as f64)
+                .collect(),
             sigmas: sig.iter().map(|&s| s as f64).collect(),
             num_train_timesteps: n_train,
         }
@@ -473,7 +476,11 @@ mod tests {
         let raw = e / (e + t);
         let raw_last = e / (e + 29.0);
         let want = 1.0 - (1.0 - raw) / ((1.0 - raw_last) / 0.9);
-        assert!((s.sigmas[1] - want).abs() < 1e-6, "{} vs {want}", s.sigmas[1]);
+        assert!(
+            (s.sigmas[1] - want).abs() < 1e-6,
+            "{} vs {want}",
+            s.sigmas[1]
+        );
         assert!((s.timestep_f32(1) - (s.sigmas[1] as f32) * 1000.0).abs() < 1e-3);
     }
     use super::*;

@@ -70,7 +70,10 @@ pub fn default_prices() -> BTreeMap<String, f64> {
         ("serverless:NVIDIA H200", 5.58),
         ("serverless:NVIDIA H100 80GB HBM3", 4.18),
         ("serverless:NVIDIA H100 NVL", 4.18),
-        ("serverless:NVIDIA RTX PRO 6000 Blackwell Server Edition", 3.24),
+        (
+            "serverless:NVIDIA RTX PRO 6000 Blackwell Server Edition",
+            3.24,
+        ),
         ("serverless:NVIDIA L40S", 1.91),
         ("serverless:NVIDIA GeForce RTX 4090", 1.12),
     ]
@@ -89,8 +92,12 @@ impl AutoscaleConfig {
             autoscale: Option<toml::Value>,
         }
         let doc: Doc = toml::from_str(text).map_err(|e| ConfigError::Parse(e.to_string()))?;
-        let Some(v) = doc.autoscale else { return Ok(Self::default()) };
-        let cfg: Self = v.try_into().map_err(|e: toml::de::Error| ConfigError::Parse(e.to_string()))?;
+        let Some(v) = doc.autoscale else {
+            return Ok(Self::default());
+        };
+        let cfg: Self = v
+            .try_into()
+            .map_err(|e: toml::de::Error| ConfigError::Parse(e.to_string()))?;
         cfg.validate()?;
         Ok(cfg)
     }
@@ -105,7 +112,11 @@ impl AutoscaleConfig {
             PoolKind::Serverless => format!("serverless:{}", pool.gpu_type()),
             PoolKind::Pod => pool.gpu_type().to_owned(),
         };
-        self.prices.get(&key).or_else(|| self.prices.get(pool.gpu_type())).copied().unwrap_or(0.0)
+        self.prices
+            .get(&key)
+            .or_else(|| self.prices.get(pool.gpu_type()))
+            .copied()
+            .unwrap_or(0.0)
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
@@ -118,14 +129,22 @@ impl AutoscaleConfig {
             if !names.insert(p.name.as_str()) {
                 return bad(format!("duplicate pool {}", p.name));
             }
-            if p.name.is_empty() || !p.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            if p.name.is_empty()
+                || !p
+                    .name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
                 return bad(format!("pool name {:?} must be [A-Za-z0-9_-]+", p.name));
             }
             if p.min_workers > p.max_workers {
                 return bad(format!("pool {}: min_workers > max_workers", p.name));
             }
             if p.jobs_per_worker == 0 || p.streams_per_worker == 0 {
-                return bad(format!("pool {}: jobs_per_worker and streams_per_worker must be >= 1", p.name));
+                return bad(format!(
+                    "pool {}: jobs_per_worker and streams_per_worker must be >= 1",
+                    p.name
+                ));
             }
             if p.slo_queue_wait_s.is_nan() || p.slo_queue_wait_s <= 0.0 {
                 return bad(format!("pool {}: slo_queue_wait_s must be > 0", p.name));
@@ -135,17 +154,27 @@ impl AutoscaleConfig {
             }
             for s in &p.schedule {
                 if s.start_hour > 24 || s.end_hour > 24 || s.days.iter().any(|d| *d > 6) {
-                    return bad(format!("pool {}: schedule hours are 0-24, days 0 (Mon)-6 (Sun)", p.name));
+                    return bad(format!(
+                        "pool {}: schedule hours are 0-24, days 0 (Mon)-6 (Sun)",
+                        p.name
+                    ));
                 }
             }
             if (p.budget_usd_per_hr > 0.0 || self.budget_usd_per_hr > 0.0) && self.price(p) <= 0.0 {
-                return bad(format!("pool {}: no price for {:?} (set prices or price_usd_per_hr)", p.name, p.gpu_type()));
+                return bad(format!(
+                    "pool {}: no price for {:?} (set prices or price_usd_per_hr)",
+                    p.name,
+                    p.gpu_type()
+                ));
             }
             match p.kind {
                 // The gateway fills an empty endpoint id from its `[[pools]]`.
                 PoolKind::Serverless => {}
                 PoolKind::Pod => {
-                    if p.pod.template_id.is_empty() || p.pod.gpu_types.is_empty() || p.pod.placements.is_empty() {
+                    if p.pod.template_id.is_empty()
+                        || p.pod.gpu_types.is_empty()
+                        || p.pod.placements.is_empty()
+                    {
                         return bad(format!("pool {}: pod.template_id, pod.gpu_types and pod.placements are required", p.name));
                     }
                 }
@@ -177,7 +206,11 @@ pub struct LeaseConfig {
 
 impl Default for LeaseConfig {
     fn default() -> Self {
-        Self { backend: LeaseBackend::Memory, name: "fv-autoscale".into(), ttl_s: 60.0 }
+        Self {
+            backend: LeaseBackend::Memory,
+            name: "fv-autoscale".into(),
+            ttl_s: 60.0,
+        }
     }
 }
 
@@ -307,7 +340,12 @@ impl PoolConfig {
         // 1970-01-01 was a Thursday: Monday = 0.
         let weekday = (day_index + 3).rem_euclid(7) as u8;
         let hour = (local.rem_euclid(86_400.0) / 3600.0).floor() as u8;
-        self.schedule.iter().filter(|r| r.matches(weekday, hour)).map(|r| r.min_workers).max().unwrap_or(0)
+        self.schedule
+            .iter()
+            .filter(|r| r.matches(weekday, hour))
+            .map(|r| r.min_workers)
+            .max()
+            .unwrap_or(0)
     }
 }
 
@@ -396,7 +434,10 @@ impl Default for PodConfig {
             // The EU weights volume (fv-weights-h3-ltx-500, EU-RO-1, H3 + LTX trees
             // only since 2026-10-13); the US volume (s2k01690bi, US-CA-2) was deleted
             // (docs/ops/runpod-volumes.md).
-            placements: vec![Placement { data_center: "EU-RO-1".into(), volume_id: "bz0ofkfx45".into() }],
+            placements: vec![Placement {
+                data_center: "EU-RO-1".into(),
+                volume_id: "bz0ofkfx45".into(),
+            }],
             cloud_type: "SECURE".into(),
             max_lifetime_s: 12.0 * 3600.0,
             boot_timeout_s: 1200.0,
@@ -454,7 +495,9 @@ mod tests {
 
     #[test]
     fn committed_example_parses() {
-        let c = AutoscaleConfig::from_toml_document(include_str!("../../../configs/autoscale.toml")).unwrap();
+        let c =
+            AutoscaleConfig::from_toml_document(include_str!("../../../configs/autoscale.toml"))
+                .unwrap();
         assert!(c.enabled && c.dry_run);
         assert_eq!(c.lease.backend, LeaseBackend::D1);
         let names: Vec<&str> = c.pools.iter().map(|p| p.name.as_str()).collect();
@@ -479,7 +522,10 @@ mod tests {
         let t = "[autoscale]\n[[autoscale.pools]]\nname='a'\nmin_workers=3\nmax_workers=1\nserverless={endpoint_id='e'}\n";
         assert!(AutoscaleConfig::from_toml_document(t).is_err());
         let t = "[autoscale]\n[[autoscale.pools]]\nname='a'\nkind='pod'\n";
-        assert!(AutoscaleConfig::from_toml_document(t).is_err(), "pod template required");
+        assert!(
+            AutoscaleConfig::from_toml_document(t).is_err(),
+            "pod template required"
+        );
         let t = "[autoscale]\nbogus=1\n";
         assert!(AutoscaleConfig::from_toml_document(t).is_err());
     }
@@ -488,8 +534,18 @@ mod tests {
     fn schedule_floor_by_weekday_and_hour() {
         let p = PoolConfig {
             schedule: vec![
-                ScheduleRule { days: vec![0, 1, 2, 3, 4], start_hour: 9, end_hour: 18, min_workers: 2 },
-                ScheduleRule { days: vec![4], start_hour: 22, end_hour: 2, min_workers: 1 },
+                ScheduleRule {
+                    days: vec![0, 1, 2, 3, 4],
+                    start_hour: 9,
+                    end_hour: 18,
+                    min_workers: 2,
+                },
+                ScheduleRule {
+                    days: vec![4],
+                    start_hour: 22,
+                    end_hour: 2,
+                    min_workers: 1,
+                },
             ],
             ..PoolConfig::default()
         };
@@ -497,13 +553,20 @@ mod tests {
         let monday = 1_790_553_600.0;
         assert_eq!(p.scheduled_min(monday + 10.0 * 3600.0), 2);
         assert_eq!(p.scheduled_min(monday + 8.0 * 3600.0), 0);
-        assert_eq!(p.scheduled_min(monday + 5.0 * 86_400.0 + 10.0 * 3600.0), 0, "Saturday");
+        assert_eq!(
+            p.scheduled_min(monday + 5.0 * 86_400.0 + 10.0 * 3600.0),
+            0,
+            "Saturday"
+        );
         // Friday 23:00 and Saturday 01:00 (wrapped rule of Friday).
         assert_eq!(p.scheduled_min(monday + 4.0 * 86_400.0 + 23.0 * 3600.0), 1);
         assert_eq!(p.scheduled_min(monday + 5.0 * 86_400.0 + 3600.0), 1);
         assert_eq!(p.scheduled_min(monday + 6.0 * 86_400.0 + 3600.0), 0);
         // Offset clock: 10:00 local at UTC-7 is 17:00 UTC.
-        let q = PoolConfig { schedule_utc_offset_min: -420, ..p.clone() };
+        let q = PoolConfig {
+            schedule_utc_offset_min: -420,
+            ..p.clone()
+        };
         assert_eq!(q.scheduled_min(monday + 17.0 * 3600.0), 2);
     }
 }

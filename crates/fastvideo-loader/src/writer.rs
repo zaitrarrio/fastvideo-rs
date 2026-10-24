@@ -61,55 +61,55 @@ fn build_header(
     specs: &[TensorSpec],
     metadata: &[(&str, &str)],
 ) -> Result<(String, Vec<(String, usize)>), LoaderError> {
-        let mut seen = std::collections::HashSet::new();
-        let mut header = String::from("{");
-        if !metadata.is_empty() {
-            let meta: serde_json::Map<String, serde_json::Value> = metadata
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        (*k).to_string(),
-                        serde_json::Value::String((*v).to_string()),
-                    )
-                })
-                .collect();
-            header.push_str(&format!(
-                "\"__metadata__\":{},",
-                serde_json::Value::Object(meta)
+    let mut seen = std::collections::HashSet::new();
+    let mut header = String::from("{");
+    if !metadata.is_empty() {
+        let meta: serde_json::Map<String, serde_json::Value> = metadata
+            .iter()
+            .map(|(k, v)| {
+                (
+                    (*k).to_string(),
+                    serde_json::Value::String((*v).to_string()),
+                )
+            })
+            .collect();
+        header.push_str(&format!(
+            "\"__metadata__\":{},",
+            serde_json::Value::Object(meta)
+        ));
+    }
+    let mut layout = Vec::with_capacity(specs.len());
+    let mut offset = 0usize;
+    for (i, spec) in specs.iter().enumerate() {
+        if spec.name == "__metadata__" || !seen.insert(spec.name.as_str()) {
+            return Err(io(
+                path,
+                format!("duplicate or reserved tensor name '{}'", spec.name),
             ));
         }
-        let mut layout = Vec::with_capacity(specs.len());
-        let mut offset = 0usize;
-        for (i, spec) in specs.iter().enumerate() {
-            if spec.name == "__metadata__" || !seen.insert(spec.name.as_str()) {
-                return Err(io(
-                    path,
-                    format!("duplicate or reserved tensor name '{}'", spec.name),
-                ));
-            }
-            let len = spec.bytes()?;
-            if i > 0 {
-                header.push(',');
-            }
-            // Built by hand so the header lists tensors in file order (serde's
-            // map would sort them); names still go through serde for escaping.
-            header.push_str(&format!(
-                "{}:{{\"dtype\":\"{}\",\"shape\":{},\"data_offsets\":[{},{}]}}",
-                serde_json::Value::String(spec.name.clone()),
-                spec.dtype.as_str(),
-                serde_json::to_string(&spec.shape).map_err(|e| io(path, e))?,
-                offset,
-                offset + len
-            ));
-            layout.push((spec.name.clone(), len));
-            offset += len;
+        let len = spec.bytes()?;
+        if i > 0 {
+            header.push(',');
         }
-        header.push('}');
-        // Pad with spaces so the data starts 8-byte aligned, as the format asks.
-        while (8 + header.len()) % 8 != 0 {
-            header.push(' ');
-        }
-        Ok((header, layout))
+        // Built by hand so the header lists tensors in file order (serde's
+        // map would sort them); names still go through serde for escaping.
+        header.push_str(&format!(
+            "{}:{{\"dtype\":\"{}\",\"shape\":{},\"data_offsets\":[{},{}]}}",
+            serde_json::Value::String(spec.name.clone()),
+            spec.dtype.as_str(),
+            serde_json::to_string(&spec.shape).map_err(|e| io(path, e))?,
+            offset,
+            offset + len
+        ));
+        layout.push((spec.name.clone(), len));
+        offset += len;
+    }
+    header.push('}');
+    // Pad with spaces so the data starts 8-byte aligned, as the format asks.
+    while (8 + header.len()) % 8 != 0 {
+        header.push(' ');
+    }
+    Ok((header, layout))
 }
 
 /// Write a whole safetensors file with positioned writes spread over the
@@ -142,27 +142,34 @@ pub fn write_parallel<'a>(
     let part = PathBuf::from(part);
     let file = File::create(&part).map_err(|e| io(&part, e))?;
     file.set_len(at).map_err(|e| io(&part, e))?;
-    file.write_all_at(&header_len, 0).map_err(|e| io(&part, e))?;
+    file.write_all_at(&header_len, 0)
+        .map_err(|e| io(&part, e))?;
     let jobs: Vec<(usize, usize, usize)> = specs
         .iter()
         .enumerate()
         .flat_map(|(i, s)| {
             let len = s.bytes().unwrap_or(0);
-            (0..len.div_ceil(piece.max(1))).map(move |k| (i, k * piece, (len - k * piece).min(piece)))
+            (0..len.div_ceil(piece.max(1)))
+                .map(move |k| (i, k * piece, (len - k * piece).min(piece)))
         })
         .collect();
-    jobs.par_iter().try_for_each(|&(i, off, len)| -> Result<(), LoaderError> {
-        let bytes = data(i)?;
-        let want = specs[i].bytes()?;
-        if bytes.len() != want {
-            return Err(io(
-                path,
-                format!("'{}': {} bytes, {want} declared", specs[i].name, bytes.len()),
-            ));
-        }
-        file.write_all_at(&bytes[off..off + len], offsets[i] + off as u64)
-            .map_err(|e| io(&part, e))
-    })?;
+    jobs.par_iter()
+        .try_for_each(|&(i, off, len)| -> Result<(), LoaderError> {
+            let bytes = data(i)?;
+            let want = specs[i].bytes()?;
+            if bytes.len() != want {
+                return Err(io(
+                    path,
+                    format!(
+                        "'{}': {} bytes, {want} declared",
+                        specs[i].name,
+                        bytes.len()
+                    ),
+                ));
+            }
+            file.write_all_at(&bytes[off..off + len], offsets[i] + off as u64)
+                .map_err(|e| io(&part, e))
+        })?;
     file.sync_all().map_err(|e| io(&part, e))?;
     drop(file);
     std::fs::rename(&part, path).map_err(|e| io(path, e))
@@ -290,8 +297,14 @@ mod tests {
         }
         w.finish().unwrap();
         let b = d.join("b.safetensors");
-        write_parallel(&b, &specs, &[("k", "v")], &|i| Ok(std::borrow::Cow::Borrowed(&data[i][..])), 4)
-            .unwrap();
+        write_parallel(
+            &b,
+            &specs,
+            &[("k", "v")],
+            &|i| Ok(std::borrow::Cow::Borrowed(&data[i][..])),
+            4,
+        )
+        .unwrap();
         assert_eq!(std::fs::read(&a).unwrap(), std::fs::read(&b).unwrap());
         let _ = std::fs::remove_dir_all(&d);
     }

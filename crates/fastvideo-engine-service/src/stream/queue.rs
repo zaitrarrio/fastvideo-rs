@@ -97,7 +97,13 @@ pub struct ClipEntry {
 
 impl ClipEntry {
     /// A fresh entry with a new UUID.
-    pub fn new(prompt: impl Into<String>, metadata: impl Into<String>, frames: u32, fps: u32, seed: u64) -> Self {
+    pub fn new(
+        prompt: impl Into<String>,
+        metadata: impl Into<String>,
+        frames: u32,
+        fps: u32,
+        seed: u64,
+    ) -> Self {
         Self {
             clip_id: Uuid::new_v4(),
             prompt: prompt.into(),
@@ -321,7 +327,10 @@ mod tests {
         let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
         let mut keys = keys;
         keys.sort_unstable();
-        assert_eq!(keys, ["clip_id", "frames", "metadata", "prompt", "ready", "seconds", "seed"]);
+        assert_eq!(
+            keys,
+            ["clip_id", "frames", "metadata", "prompt", "ready", "seconds", "seed"]
+        );
         assert_eq!(v["seconds"], 5.167);
         assert_eq!(v["ready"], false);
     }

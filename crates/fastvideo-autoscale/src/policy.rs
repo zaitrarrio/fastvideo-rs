@@ -72,7 +72,11 @@ pub struct PoolState {
 
 impl PoolState {
     fn record(&mut self, now: f64, sig: &PoolSignals, obs: &PoolObservation, window: f64) {
-        self.samples.push_back(Sample { t: now, arrivals: sig.arrivals_total, queued: sig.queued });
+        self.samples.push_back(Sample {
+            t: now,
+            arrivals: sig.arrivals_total,
+            queued: sig.queued,
+        });
         while self.samples.len() > 2 && self.samples.front().is_some_and(|s| now - s.t > window) {
             self.samples.pop_front();
         }
@@ -101,7 +105,9 @@ impl PoolState {
 
     /// (arrivals per second, queue growth per second) over the window.
     fn rates(&self) -> (f64, f64) {
-        let (Some(a), Some(b)) = (self.samples.front(), self.samples.back()) else { return (0.0, 0.0) };
+        let (Some(a), Some(b)) = (self.samples.front(), self.samples.back()) else {
+            return (0.0, 0.0);
+        };
         if b.t <= a.t {
             return (0.0, 0.0);
         }
@@ -182,14 +188,31 @@ impl Policy {
         let balance_unknown = inp.balance_usd.is_none();
         let mut wants: Vec<Want> = Vec::with_capacity(cfg.pools.len());
         for pool in &cfg.pools {
-            let sig = inp.signals.get(&pool.name).cloned().unwrap_or_else(|| PoolSignals {
-                pool: pool.name.clone(),
-                ..PoolSignals::default()
-            });
-            let obs = inp.observations.get(&pool.name).cloned().unwrap_or_default();
+            let sig = inp
+                .signals
+                .get(&pool.name)
+                .cloned()
+                .unwrap_or_else(|| PoolSignals {
+                    pool: pool.name.clone(),
+                    ..PoolSignals::default()
+                });
+            let obs = inp
+                .observations
+                .get(&pool.name)
+                .cloned()
+                .unwrap_or_default();
             let st = self.states.entry(pool.name.clone()).or_default();
             st.record(inp.now_s, &sig, &obs, pool.rate_window_s);
-            wants.push(want(cfg, pool, st, inp.now_s, &sig, &obs, hard_stop, balance_unknown));
+            wants.push(want(
+                cfg,
+                pool,
+                st,
+                inp.now_s,
+                &sig,
+                &obs,
+                hard_stop,
+                balance_unknown,
+            ));
         }
         if !hard_stop && cfg.budget_usd_per_hr > 0.0 {
             apply_global_budget(cfg, &mut wants);
@@ -198,8 +221,15 @@ impl Policy {
             .iter()
             .zip(wants)
             .map(|(pool, w)| {
-                let obs = inp.observations.get(&pool.name).cloned().unwrap_or_default();
-                let st = self.states.get_mut(&pool.name).expect("state created above");
+                let obs = inp
+                    .observations
+                    .get(&pool.name)
+                    .cloned()
+                    .unwrap_or_default();
+                let st = self
+                    .states
+                    .get_mut(&pool.name)
+                    .expect("state created above");
                 commit(cfg, pool, st, inp.now_s, &obs, w, hard_stop)
             })
             .collect()
@@ -221,9 +251,15 @@ fn want(
     let c = f64::from(pool.jobs_per_worker);
     let slo = pool.slo_queue_wait_s;
     let job_s = st.job_s.unwrap_or(pool.default_job_s).max(0.001);
-    let cold = st.cold_start_s.unwrap_or(pool.cold_start_s).max(pool.cold_start_s.min(1.0));
+    let cold = st
+        .cold_start_s
+        .unwrap_or(pool.cold_start_s)
+        .max(pool.cold_start_s.min(1.0));
     let (slope, growth) = st.rates();
-    let lambda = sig.arrival_rate_per_s.filter(|r| r.is_finite() && *r >= 0.0).unwrap_or(slope);
+    let lambda = sig
+        .arrival_rate_per_s
+        .filter(|r| r.is_finite() && *r >= 0.0)
+        .unwrap_or(slope);
     let q = f64::from(sig.queued);
 
     // Workers holding work: the provider's busy workers, or the gateway's
@@ -237,7 +273,11 @@ fn want(
     let active_now = obs
         .workers
         .iter()
-        .filter(|w| w.state != WorkerState::Draining && !expired.contains(&w.id) && !boot_timed_out(pool, w, now))
+        .filter(|w| {
+            w.state != WorkerState::Draining
+                && !expired.contains(&w.id)
+                && !boot_timed_out(pool, w, now)
+        })
         .count() as u32;
     // Serverless: the control variable is the endpoint's `workersMin`
     // (Runpod adds and reaps workers above it itself).
@@ -245,36 +285,71 @@ fn want(
         (PoolKind::Serverless, Some(e)) => e.workers_min,
         _ => active_now,
     };
-    let serving = |w: &&crate::types::Worker| w.state == WorkerState::Ready && !expired.contains(&w.id);
+    let serving =
+        |w: &&crate::types::Worker| w.state == WorkerState::Ready && !expired.contains(&w.id);
     let starting = obs
         .workers
         .iter()
         .filter(|w| w.state == WorkerState::Starting && !boot_timed_out(pool, w, now))
         .count() as u32;
-    let idle_ready = obs.workers.iter().filter(serving).filter(|w| w.busy == 0).count() as u32;
-    let busy_ready = obs.workers.iter().filter(serving).filter(|w| w.busy > 0).count() as u32;
+    let idle_ready = obs
+        .workers
+        .iter()
+        .filter(serving)
+        .filter(|w| w.busy == 0)
+        .count() as u32;
+    let busy_ready = obs
+        .workers
+        .iter()
+        .filter(serving)
+        .filter(|w| w.busy > 0)
+        .count() as u32;
     // 1. Demand.
     let stream_workers = ceil_u32(f64::from(sig.live_streams) / f64::from(pool.streams_per_worker));
-    let need_now = queue_need(q, slo, job_s, pool.jobs_per_worker, f64::from(busy_ready.min(busy)), f64::from(busy));
-    let steady_raw = lambda * job_s / (pool.target_utilization.clamp(0.05, 1.0) * c) + f64::from(stream_workers);
+    let need_now = queue_need(
+        q,
+        slo,
+        job_s,
+        pool.jobs_per_worker,
+        f64::from(busy_ready.min(busy)),
+        f64::from(busy),
+    );
+    let steady_raw =
+        lambda * job_s / (pool.target_utilization.clamp(0.05, 1.0) * c) + f64::from(stream_workers);
     let need_steady = steady_raw.ceil();
     let mut demand = need_now.max(need_steady);
     if need_steady > need_now {
         reasons.push(format!("steady: {:.2}/min x {:.0}s", lambda * 60.0, job_s));
     } else if q > 0.0 {
-        reasons.push(format!("queue: {} queued, oldest {:.0}s", sig.queued, sig.oldest_queued_s));
+        reasons.push(format!(
+            "queue: {} queued, oldest {:.0}s",
+            sig.queued, sig.oldest_queued_s
+        ));
     }
 
     // 2. Cold-start prediction.
     let mu = f64::from(current.saturating_sub(stream_workers)) * c / job_s;
     let rise = (lambda - mu).max(growth).max(0.0);
     let projected = q + rise * cold;
-    let projected_wait = if current > 0 { projected * job_s / (f64::from(current) * c) } else { f64::INFINITY };
+    let projected_wait = if current > 0 {
+        projected * job_s / (f64::from(current) * c)
+    } else {
+        f64::INFINITY
+    };
     if rise > 0.0 && projected > q && projected_wait > slo {
-        let pred = queue_need(projected, slo, job_s, pool.jobs_per_worker, f64::from(busy_ready.min(busy)), f64::from(busy));
+        let pred = queue_need(
+            projected,
+            slo,
+            job_s,
+            pool.jobs_per_worker,
+            f64::from(busy_ready.min(busy)),
+            f64::from(busy),
+        );
         if pred > demand {
             demand = pred;
-            reasons.push(format!("predictive: queue {projected:.1} in {cold:.0}s cold start"));
+            reasons.push(format!(
+                "predictive: queue {projected:.1} in {cold:.0}s cold start"
+            ));
         }
     }
 
@@ -284,18 +359,28 @@ fn want(
         && sig.queued > (starting + idle_ready) * pool.jobs_per_worker;
     if urgent {
         demand = demand.max(f64::from(current + 1));
-        reasons.push(format!("queue age {:.0}s > {:.0}s", sig.oldest_queued_s, slo * pool.slo_breach_fraction));
+        reasons.push(format!(
+            "queue age {:.0}s > {:.0}s",
+            sig.oldest_queued_s,
+            slo * pool.slo_breach_fraction
+        ));
     }
 
     // 4. Floors and caps.
-    let floor = pool.min_workers.max(pool.warm_min).max(pool.scheduled_min(now));
+    let floor = pool
+        .min_workers
+        .max(pool.warm_min)
+        .max(pool.scheduled_min(now));
     let price = cfg.price(pool);
     let mut cap = pool.max_workers;
     if pool.budget_usd_per_hr > 0.0 && price > 0.0 {
         let by_budget = (pool.budget_usd_per_hr / price).floor() as u32;
         if by_budget < cap {
             cap = by_budget;
-            reasons.push(format!("pool budget ${:.2}/h caps {cap}", pool.budget_usd_per_hr));
+            reasons.push(format!(
+                "pool budget ${:.2}/h caps {cap}",
+                pool.budget_usd_per_hr
+            ));
         }
     }
     let cap = cap.max(busy);
@@ -305,17 +390,26 @@ fn want(
     let mut target = current;
     if hard_stop {
         target = busy;
-        reasons.push(format!("balance below ${:.2}: hard stop", cfg.balance_floor_usd));
+        reasons.push(format!(
+            "balance below ${:.2}: hard stop",
+            cfg.balance_floor_usd
+        ));
         st.below_since_s = None;
     } else if desired > current {
         st.below_since_s = None;
-        let cooled = st.last_up_s.is_none_or(|t| now - t >= pool.scale_up_cooldown_s);
+        let cooled = st
+            .last_up_s
+            .is_none_or(|t| now - t >= pool.scale_up_cooldown_s);
         let from_zero = current == 0 && (sig.queued > 0 || floor > 0);
         if balance_unknown {
             reasons.push("balance unknown: no scale-up".into());
         } else if cooled || urgent || from_zero || current < floor || ceil_u32(need_now) > current {
             // Jobs already queued (or floors) are not held by the cooldown.
-            let stepped = if pool.scale_up_step == 0 { desired } else { desired.min(current + pool.scale_up_step) };
+            let stepped = if pool.scale_up_step == 0 {
+                desired
+            } else {
+                desired.min(current + pool.scale_up_step)
+            };
             // Floors (warm, schedule) and jobs already waiting are met at
             // once; the step limits only rate- and prediction-driven growth.
             target = stepped.max(floor.min(cap)).max(ceil_u32(need_now).min(cap));
@@ -331,14 +425,25 @@ fn want(
             st.below_since_s = None;
         } else {
             let since = *st.below_since_s.get_or_insert(now);
-            let last_change = st.last_up_s.into_iter().chain(st.last_down_s).fold(f64::NEG_INFINITY, f64::max);
-            if now - since >= pool.idle_timeout_s && now - last_change >= pool.scale_down_cooldown_s {
-                target = desired.max(current.saturating_sub(pool.scale_down_step.max(1))).max(busy);
+            let last_change = st
+                .last_up_s
+                .into_iter()
+                .chain(st.last_down_s)
+                .fold(f64::NEG_INFINITY, f64::max);
+            if now - since >= pool.idle_timeout_s && now - last_change >= pool.scale_down_cooldown_s
+            {
+                target = desired
+                    .max(current.saturating_sub(pool.scale_down_step.max(1)))
+                    .max(busy);
             } else if current > cap {
                 // Over a cap (budget or max): no idle wait.
                 target = cap.max(busy);
             } else {
-                reasons.push(format!("idle {:.0}s of {:.0}s", now - since, pool.idle_timeout_s));
+                reasons.push(format!(
+                    "idle {:.0}s of {:.0}s",
+                    now - since,
+                    pool.idle_timeout_s
+                ));
             }
         }
     } else {
@@ -348,7 +453,11 @@ fn want(
         target = cap.max(busy);
     }
 
-    let urgency = if slo > 0.0 { sig.oldest_queued_s / slo } else { 0.0 };
+    let urgency = if slo > 0.0 {
+        sig.oldest_queued_s / slo
+    } else {
+        0.0
+    };
     Want {
         target,
         busy,
@@ -381,22 +490,38 @@ fn apply_global_budget(cfg: &AutoscaleConfig, wants: &mut [Want]) {
             .then(a.cmp(&b))
     });
     let mut grant: Vec<u32> = wants.iter().map(|w| w.busy.min(w.target)).collect();
-    let mut left = cfg.budget_usd_per_hr - grant.iter().zip(&prices).map(|(g, p)| f64::from(*g) * p).sum::<f64>();
+    let mut left = cfg.budget_usd_per_hr
+        - grant
+            .iter()
+            .zip(&prices)
+            .map(|(g, p)| f64::from(*g) * p)
+            .sum::<f64>();
     for pass in 0..2 {
         for &i in &order {
-            let goal = if pass == 0 { wants[i].target.min(wants[i].floor.max(wants[i].busy)) } else { wants[i].target };
+            let goal = if pass == 0 {
+                wants[i].target.min(wants[i].floor.max(wants[i].busy))
+            } else {
+                wants[i].target
+            };
             let need = goal.saturating_sub(grant[i]);
             if need == 0 {
                 continue;
             }
-            let afford = if prices[i] <= 0.0 { need } else { ((left / prices[i]).floor().max(0.0) as u32).min(need) };
+            let afford = if prices[i] <= 0.0 {
+                need
+            } else {
+                ((left / prices[i]).floor().max(0.0) as u32).min(need)
+            };
             grant[i] += afford;
             left -= f64::from(afford) * prices[i];
         }
     }
     for (i, w) in wants.iter_mut().enumerate() {
         if grant[i] < w.target {
-            w.reasons.push(format!("global budget ${:.2}/h: {} of {}", cfg.budget_usd_per_hr, grant[i], w.target));
+            w.reasons.push(format!(
+                "global budget ${:.2}/h: {} of {}",
+                cfg.budget_usd_per_hr, grant[i], w.target
+            ));
             w.target = grant[i];
         }
     }
@@ -429,7 +554,17 @@ fn commit(
     w: Want,
     hard_stop: bool,
 ) -> PoolDecision {
-    let Want { target, busy, floor, cap, current, demand, reasons, est, .. } = w;
+    let Want {
+        target,
+        busy,
+        floor,
+        cap,
+        current,
+        demand,
+        reasons,
+        est,
+        ..
+    } = w;
     let mut reasons = reasons;
     let action = if hard_stop {
         Action::HardStop
@@ -466,7 +601,11 @@ fn commit(
     };
     match pool.kind {
         PoolKind::Serverless => {
-            let (min, max) = if hard_stop { (0, busy) } else { (target, cap.max(target).max(busy)) };
+            let (min, max) = if hard_stop {
+                (0, busy)
+            } else {
+                (target, cap.max(target).max(busy))
+            };
             d.endpoint = Some(EndpointSettings {
                 workers_min: min,
                 workers_max: max,
@@ -493,7 +632,11 @@ fn pod_actions(
     let expired = expired_ids(pool, obs, now);
     let mut workers: Vec<&crate::types::Worker> = obs.workers.iter().collect();
     // Deterministic order: oldest first, then id.
-    workers.sort_by(|a, b| a.created_at_s.total_cmp(&b.created_at_s).then(a.id.cmp(&b.id)));
+    workers.sort_by(|a, b| {
+        a.created_at_s
+            .total_cmp(&b.created_at_s)
+            .then(a.id.cmp(&b.id))
+    });
 
     // Deletes: idle draining workers; starting workers past the boot timeout.
     for w in &workers {
@@ -501,7 +644,10 @@ fn pod_actions(
             d.delete.push(w.id.clone());
         } else if boot_timed_out(pool, w, now) {
             d.delete.push(w.id.clone());
-            reasons.push(format!("{} not ready after {:.0}s", w.id, pool.pod.boot_timeout_s));
+            reasons.push(format!(
+                "{} not ready after {:.0}s",
+                w.id, pool.pod.boot_timeout_s
+            ));
         }
     }
     let gone = |id: &str, d: &PoolDecision| d.delete.iter().any(|x| x == id);
@@ -537,7 +683,10 @@ fn pod_actions(
             if need == 0 {
                 break;
             }
-            if w.state == WorkerState::Draining && w.busy > 0 && now - w.created_at_s <= pool.pod.max_lifetime_s {
+            if w.state == WorkerState::Draining
+                && w.busy > 0
+                && now - w.created_at_s <= pool.pod.max_lifetime_s
+            {
                 d.undrain.push(w.id.clone());
                 need -= 1;
             }
@@ -584,10 +733,16 @@ fn pod_actions(
         if ready_fresh >= target {
             for w in workers.iter().filter(|w| expired.contains(&w.id)) {
                 d.drain.push(w.id.clone());
-                reasons.push(format!("{} past max lifetime {:.0}s", w.id, pool.pod.max_lifetime_s));
+                reasons.push(format!(
+                    "{} past max lifetime {:.0}s",
+                    w.id, pool.pod.max_lifetime_s
+                ));
             }
         } else {
-            reasons.push(format!("{} worker(s) past max lifetime: replacing first", expired.len()));
+            reasons.push(format!(
+                "{} worker(s) past max lifetime: replacing first",
+                expired.len()
+            ));
         }
     }
 }

@@ -83,14 +83,25 @@ pub struct VersionCount {
 
 /// Groups `(short sha, channel)` per worker; `true` when there is more than
 /// one sha.
-pub fn versions(it: impl IntoIterator<Item = (String, Option<String>)>) -> (Vec<VersionCount>, bool) {
+pub fn versions(
+    it: impl IntoIterator<Item = (String, Option<String>)>,
+) -> (Vec<VersionCount>, bool) {
     let mut m: BTreeMap<(String, Option<String>), u32> = BTreeMap::new();
     for k in it {
         *m.entry(k).or_default() += 1;
     }
     let shas: std::collections::BTreeSet<&String> = m.keys().map(|(s, _)| s).collect();
     let mixed = shas.len() > 1;
-    (m.into_iter().map(|((sha, channel), workers)| VersionCount { sha, channel, workers }).collect(), mixed)
+    (
+        m.into_iter()
+            .map(|((sha, channel), workers)| VersionCount {
+                sha,
+                channel,
+                workers,
+            })
+            .collect(),
+        mixed,
+    )
 }
 
 /// This server's own `{sha, channel}` (see [`crate::build_info`]).
@@ -134,7 +145,11 @@ pub struct PoolStatus {
 
 /// A pod pool's state from its workers' (none: scaled to zero).
 pub fn pool_state(workers: &[WorkerStatus]) -> State {
-    workers.iter().map(|w| w.state).min().unwrap_or(State::ScaledToZero)
+    workers
+        .iter()
+        .map(|w| w.state)
+        .min()
+        .unwrap_or(State::ScaledToZero)
 }
 
 /// A serverless pool's state from Runpod's `/health` worker counts.
@@ -158,7 +173,11 @@ pub fn worker_counts(health: &Value) -> BTreeMap<String, u64> {
     health
         .get("workers")
         .and_then(Value::as_object)
-        .map(|o| o.iter().filter_map(|(k, v)| v.as_u64().map(|n| (k.clone(), n))).collect())
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| v.as_u64().map(|n| (k.clone(), n)))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -206,7 +225,10 @@ pub fn body(gateway: bool, pools: Vec<PoolStatus>, names: BTreeMap<String, Strin
 }
 
 /// `names` for [`body`]: ids and served names of `models`, then `aliases`.
-pub fn names<'a>(models: impl Iterator<Item = &'a fastvideo_protocol::ModelCaps>, aliases: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+pub fn names<'a>(
+    models: impl Iterator<Item = &'a fastvideo_protocol::ModelCaps>,
+    aliases: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     for m in models {
         out.insert(m.id.0.clone(), m.id.0.clone());
@@ -230,25 +252,52 @@ mod tests {
     use super::*;
 
     fn w(state: State) -> WorkerStatus {
-        WorkerStatus { label: "w1".into(), state, last_seen_s: Some(1.0), running: 0, queued: 0, sessions: 0 }
+        WorkerStatus {
+            label: "w1".into(),
+            state,
+            last_seen_s: Some(1.0),
+            running: 0,
+            queued: 0,
+            sessions: 0,
+        }
     }
 
     #[test]
     fn a_pool_is_its_best_worker_and_empty_is_scaled_to_zero() {
         assert_eq!(pool_state(&[]), State::ScaledToZero);
-        assert_eq!(pool_state(&[w(State::Down), w(State::Loading)]), State::Loading);
-        assert_eq!(pool_state(&[w(State::Busy), w(State::Ready), w(State::Down)]), State::Ready);
-        assert_eq!(pool_state(&[w(State::Down), w(State::Unhealthy)]), State::Unhealthy);
+        assert_eq!(
+            pool_state(&[w(State::Down), w(State::Loading)]),
+            State::Loading
+        );
+        assert_eq!(
+            pool_state(&[w(State::Busy), w(State::Ready), w(State::Down)]),
+            State::Ready
+        );
+        assert_eq!(
+            pool_state(&[w(State::Down), w(State::Unhealthy)]),
+            State::Unhealthy
+        );
     }
 
     #[test]
     fn serverless_counts_map_to_states() {
-        let c = |pairs: &[(&str, u64)]| pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect::<BTreeMap<_, _>>();
+        let c = |pairs: &[(&str, u64)]| {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), *v))
+                .collect::<BTreeMap<_, _>>()
+        };
         assert_eq!(serverless_state(&c(&[])), State::ScaledToZero);
-        assert_eq!(serverless_state(&c(&[("idle", 1), ("running", 2)])), State::Ready);
+        assert_eq!(
+            serverless_state(&c(&[("idle", 1), ("running", 2)])),
+            State::Ready
+        );
         assert_eq!(serverless_state(&c(&[("running", 2)])), State::Busy);
         assert_eq!(serverless_state(&c(&[("initializing", 1)])), State::Loading);
-        assert_eq!(worker_counts(&json!({"workers": {"idle": 2, "x": "y"}})), c(&[("idle", 2)]));
+        assert_eq!(
+            worker_counts(&json!({"workers": {"idle": 2, "x": "y"}})),
+            c(&[("idle", 2)])
+        );
     }
 
     #[test]
@@ -269,19 +318,35 @@ mod tests {
             mixed_versions: false,
             failed_models: BTreeMap::new(),
         };
-        let b = body(true, vec![pool("a", State::Down, &["m1", "m2"]), pool("b", State::Busy, &["m2"])], BTreeMap::new());
+        let b = body(
+            true,
+            vec![
+                pool("a", State::Down, &["m1", "m2"]),
+                pool("b", State::Busy, &["m2"]),
+            ],
+            BTreeMap::new(),
+        );
         assert_eq!(b["state"], "busy");
         assert_eq!(b["models"]["m1"], json!({"state": "down", "pools": ["a"]}));
-        assert_eq!(b["models"]["m2"], json!({"state": "busy", "pools": ["a", "b"]}));
+        assert_eq!(
+            b["models"]["m2"],
+            json!({"state": "busy", "pools": ["a", "b"]})
+        );
         assert_eq!(body(false, vec![], BTreeMap::new())["state"], "down");
         assert_eq!(b["mixed_versions"], false);
-        assert_eq!(b["version"]["sha"], crate::build_info::BuildInfo::current().git_sha_short);
+        assert_eq!(
+            b["version"]["sha"],
+            crate::build_info::BuildInfo::current().git_sha_short
+        );
     }
 
     #[test]
     fn a_failed_model_carries_its_reason() {
         let mut failed = BTreeMap::new();
-        failed.insert("h3-turbo".to_owned(), "model `h3-turbo` cannot run on this GPU (NVIDIA A100 80GB, sm80)".to_owned());
+        failed.insert(
+            "h3-turbo".to_owned(),
+            "model `h3-turbo` cannot run on this GPU (NVIDIA A100 80GB, sm80)".to_owned(),
+        );
         let p = PoolStatus {
             id: "local".into(),
             kind: "local".into(),
@@ -300,7 +365,10 @@ mod tests {
         };
         let b = body(false, vec![p], BTreeMap::new());
         assert_eq!(b["models"]["h3-turbo"]["state"], "failed");
-        assert!(b["models"]["h3-turbo"]["reason"].as_str().unwrap().contains("sm80"));
+        assert!(b["models"]["h3-turbo"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("sm80"));
         assert!(b["models"]["wan"].get("reason").is_none());
         assert!(b["pools"][0]["failed_models"]["h3-turbo"].is_string());
     }
@@ -310,11 +378,25 @@ mod tests {
         let k = |s: &str, c: Option<&str>| (s.to_owned(), c.map(str::to_owned));
         let (v, mixed) = versions([k("aaaaaaa", Some("stable")), k("aaaaaaa", Some("stable"))]);
         assert!(!mixed);
-        assert_eq!(v, vec![VersionCount { sha: "aaaaaaa".into(), channel: Some("stable".into()), workers: 2 }]);
-        let (v, mixed) = versions([k("bbbbbbb", Some("stable")), k("aaaaaaa", Some("stable")), k("aaaaaaa", None)]);
+        assert_eq!(
+            v,
+            vec![VersionCount {
+                sha: "aaaaaaa".into(),
+                channel: Some("stable".into()),
+                workers: 2
+            }]
+        );
+        let (v, mixed) = versions([
+            k("bbbbbbb", Some("stable")),
+            k("aaaaaaa", Some("stable")),
+            k("aaaaaaa", None),
+        ]);
         assert!(mixed);
         assert_eq!(v.len(), 3);
-        assert_eq!(serde_json::to_value(&v[0]).unwrap(), json!({"sha": "aaaaaaa", "channel": null, "workers": 1}));
+        assert_eq!(
+            serde_json::to_value(&v[0]).unwrap(),
+            json!({"sha": "aaaaaaa", "channel": null, "workers": 1})
+        );
         // One sha under two channel names is not a mix.
         assert!(!versions([k("aaaaaaa", Some("stable")), k("aaaaaaa", Some("latest"))]).1);
         assert_eq!(versions(Vec::new()), (vec![], false));

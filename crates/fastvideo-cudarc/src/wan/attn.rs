@@ -269,7 +269,11 @@ fn auto_cudnn_or_v2(
         super::log::info(format_args!(
             "sdpa auto (sm_{sm_major}x rule): bh={} sq={sq} sk={sk} d={d} -> {}",
             b * h,
-            if kernel == FlashKernel::Cudnn { "cuDNN" } else { "flash_mma_fwd2" }
+            if kernel == FlashKernel::Cudnn {
+                "cuDNN"
+            } else {
+                "flash_mma_fwd2"
+            }
         ));
     }
     device_mma_sdpa_with(q, k, v, scale, true, kernel)
@@ -302,7 +306,11 @@ fn timed_cudnn_or_v2(
         .get(&key)
         .copied();
     if let Some(cudnn) = known {
-        let kernel = if cudnn { FlashKernel::Cudnn } else { FlashKernel::V2 };
+        let kernel = if cudnn {
+            FlashKernel::Cudnn
+        } else {
+            FlashKernel::V2
+        };
         return device_mma_sdpa_with(q, k, v, scale, true, kernel);
     }
     let timed = |kernel| -> Result<(Option<CudaTensor>, f64)> {
@@ -324,9 +332,16 @@ fn timed_cudnn_or_v2(
             t2 * 1e3,
             if tc < t2 { "cuDNN" } else { "flash_mma_fwd2" }
         ));
-        if tc < t2 { (oc, true) } else { (o2, false) }
+        if tc < t2 {
+            (oc, true)
+        } else {
+            (o2, false)
+        }
     } else {
-        (device_mma_sdpa_with(q, k, v, scale, true, FlashKernel::V2)?, false)
+        (
+            device_mma_sdpa_with(q, k, v, scale, true, FlashKernel::V2)?,
+            false,
+        )
     };
     PICKS
         .get_or_init(|| Mutex::new(HashMap::new()))
@@ -690,7 +705,10 @@ pub fn device_mma_sdpa_window(
             &*qb, &*kb, &*vb, &mut dummy, &mut out, &is_bf16, &sq_i, &sk_i, &sl2,
             &p[0], &p[1], &p[2], &p[3], &p[4], &p[5])
         .map_err(launch_err)?;
-        Ok(Some(CudaTensor::from_device_slice_bf16(out, vec![b, h, sq, d])?))
+        Ok(Some(CudaTensor::from_device_slice_bf16(
+            out,
+            vec![b, h, sq, d],
+        )?))
     } else {
         let mut out = super::ops::alloc(n)?;
         let mut dummy = unsafe { dev.stream.alloc::<half::bf16>(1) }.map_err(err)?;
@@ -1101,7 +1119,7 @@ mod tests {
         let (b, h, s, d) = (1usize, 2usize, 24usize, 8usize);
         let v = |n: usize, k: f32| {
             (0..n)
-                .map(|i| ((i as f32 * k).sin() * 0.9))
+                .map(|i| (i as f32 * k).sin() * 0.9)
                 .collect::<Vec<_>>()
         };
         let q = CudaTensor::from_vec(v(b * h * s * d, 0.37), vec![b, h, s, d]).unwrap();

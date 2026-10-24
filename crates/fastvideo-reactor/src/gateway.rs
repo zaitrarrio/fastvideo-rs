@@ -49,7 +49,11 @@ struct Gw {
     pending: Vec<ServerMsg>,
     /// Validated commands, run one at a time in arrival order by this
     /// connection's command worker (RT runs a model's handlers serially).
-    commands: mpsc::UnboundedSender<(Option<String>, String, serde_json::Map<String, serde_json::Value>)>,
+    commands: mpsc::UnboundedSender<(
+        Option<String>,
+        String,
+        serde_json::Map<String, serde_json::Value>,
+    )>,
     /// Duplex: this connection's decode pipeline (from its first publish).
     ingest: Option<Ingest>,
     /// The last refusal reported to the client (`input_rejected`).
@@ -71,7 +75,11 @@ pub(crate) fn spawn(
         let (handle, events) = peer.split();
         let out = live.out.register(conn);
         let (rtx, rrx) = mpsc::unbounded_channel();
-        let (ctx, mut crx) = mpsc::unbounded_channel::<(Option<String>, String, serde_json::Map<String, serde_json::Value>)>();
+        let (ctx, mut crx) = mpsc::unbounded_channel::<(
+            Option<String>,
+            String,
+            serde_json::Map<String, serde_json::Value>,
+        )>();
         let driver = live.driver.clone();
         let moderated = rt.clone();
         tokio::spawn(async move {
@@ -83,10 +91,11 @@ pub(crate) fn spawn(
                     args.get("prompt").and_then(|v| v.as_str()),
                 ) {
                     let visual = moderated.config().mode == Some(crate::engine::Mode::Avatar)
-                        || args
-                            .iter()
-                            .any(|(k, v)| (k.contains("image") || k.contains("video")) && !v.is_null());
-                    if let Err(e) = fastvideo_protocol::moderate(m.0.as_ref(), prompt, visual).await {
+                        || args.iter().any(|(k, v)| {
+                            (k.contains("image") || k.contains("video")) && !v.is_null()
+                        });
+                    if let Err(e) = fastvideo_protocol::moderate(m.0.as_ref(), prompt, visual).await
+                    {
                         tracing::warn!(conn, command = %name, "reactor: {}; stopping the session", e.message);
                         let _ = moderated.stop_session(true, "moderation".into()).await;
                         break;
@@ -94,9 +103,17 @@ pub(crate) fn spawn(
                 }
                 let o = driver.command(conn, &name, args).await;
                 let m = match (o, request_id) {
-                    (Outcome::Reply(kind, data), r) => ServerMsg::Model { request_id: r, kind, data },
+                    (Outcome::Reply(kind, data), r) => ServerMsg::Model {
+                        request_id: r,
+                        kind,
+                        data,
+                    },
                     (Outcome::Ack, Some(r)) => ServerMsg::CommandAck { request_id: r },
-                    (Outcome::Error { code, message }, Some(r)) => ServerMsg::CommandError { request_id: r, code, message },
+                    (Outcome::Error { code, message }, Some(r)) => ServerMsg::CommandError {
+                        request_id: r,
+                        code,
+                        message,
+                    },
                     (_, None) => continue,
                 };
                 if rtx.send(m).is_err() {
@@ -255,13 +272,23 @@ impl Gw {
     fn set_track_paused(&self, name: &str, paused: bool) {
         let kind = if name == self.live.tracks.video.name {
             Some(TrackKind::Video)
-        } else if self.live.tracks.audio.as_ref().is_some_and(|a| a.name == name) {
+        } else if self
+            .live
+            .tracks
+            .audio
+            .as_ref()
+            .is_some_and(|a| a.name == name)
+        {
             Some(TrackKind::Audio)
         } else {
             None
         };
         let Some(kind) = kind else {
-            tracing::debug!(conn = self.conn, name, "pause/resume of an unknown track ignored");
+            tracing::debug!(
+                conn = self.conn,
+                name,
+                "pause/resume of an unknown track ignored"
+            );
             return;
         };
         let r = match self.mapping.get(name) {
@@ -281,15 +308,24 @@ impl Gw {
     fn route(&mut self, msg: ClientMsg) {
         match msg {
             ClientMsg::Ping => {}
-            ClientMsg::RequestSchema { request_id } => {
-                self.send(ServerMsg::ModelSchema { request_id, openapi: self.live.openapi.clone() })
-            }
+            ClientMsg::RequestSchema { request_id } => self.send(ServerMsg::ModelSchema {
+                request_id,
+                openapi: self.live.openapi.clone(),
+            }),
             ClientMsg::FileUploaded { upload } => {
                 tracing::debug!(conn = self.conn, upload = %upload.upload_id, "file_uploaded ignored (no upload hook)");
             }
-            ClientMsg::RequestClip { request_id, .. } | ClientMsg::RequestRecording { request_id } => {
-                let request_id = if request_id.is_empty() { new_request_id() } else { request_id };
-                self.send(ServerMsg::ClipFailed { request_id, reason: RECORDING_DISABLED.into() })
+            ClientMsg::RequestClip { request_id, .. }
+            | ClientMsg::RequestRecording { request_id } => {
+                let request_id = if request_id.is_empty() {
+                    new_request_id()
+                } else {
+                    request_id
+                };
+                self.send(ServerMsg::ClipFailed {
+                    request_id,
+                    reason: RECORDING_DISABLED.into(),
+                })
             }
             ClientMsg::PublishTrack { request_id, name } => self.publish(request_id, name),
             ClientMsg::PauseTrack { name } => self.set_track_paused(&name, true),
@@ -298,7 +334,12 @@ impl Gw {
             ClientMsg::Error { code, message } => {
                 tracing::debug!(conn = self.conn, %code, %message, "client error payload");
             }
-            ClientMsg::Command { request_id, name, mut data, uploads } => {
+            ClientMsg::Command {
+                request_id,
+                name,
+                mut data,
+                uploads,
+            } => {
                 // `Command.uploads[param]` fills that parameter with the
                 // upload reference (reactor §3.5); the driver resolves it.
                 for (param, u) in uploads {
@@ -319,7 +360,11 @@ impl Gw {
                     Err(e) => {
                         tracing::info!(conn = self.conn, command = %name, error = %e, "invalid command");
                         if let Some(r) = request_id {
-                            self.send(ServerMsg::CommandError { request_id: r, code: "invalid_command".into(), message: e });
+                            self.send(ServerMsg::CommandError {
+                                request_id: r,
+                                code: "invalid_command".into(),
+                                message: e,
+                            });
                         }
                         return;
                     }
@@ -340,7 +385,9 @@ impl Gw {
             message,
         };
         let Some(inputs) = self.live.inputs.clone() else {
-            self.send(refuse(format!("the model declares no input track `{name}`")));
+            self.send(refuse(format!(
+                "the model declares no input track `{name}`"
+            )));
             return;
         };
         let kind = match inputs.claim(&name, self.conn) {
@@ -352,7 +399,11 @@ impl Gw {
             }
         };
         if self.ingest.is_none() {
-            match Ingest::start(inputs.ingest_config(), inputs.buffers.clone(), self.handle.clone()) {
+            match Ingest::start(
+                inputs.ingest_config(),
+                inputs.buffers.clone(),
+                self.handle.clone(),
+            ) {
                 Ok(i) => {
                     i.set_enabled(TrackKind::Video, false);
                     i.set_enabled(TrackKind::Audio, false);
@@ -382,7 +433,9 @@ impl Gw {
 
     /// `UnpublishTrack`: release the slot if this connection holds it.
     fn unpublish(&mut self, name: &str) {
-        let Some(inputs) = self.live.inputs.clone() else { return };
+        let Some(inputs) = self.live.inputs.clone() else {
+            return;
+        };
         if let Some(kind) = inputs.release(name, self.conn) {
             if let Some(i) = &self.ingest {
                 i.set_enabled(kind, false);
@@ -394,7 +447,9 @@ impl Gw {
     /// Publishes this connection's ingest counters to the session (when it
     /// publishes anything) and tells the client about a new refusal.
     fn report_ingest(&mut self) {
-        let (Some(inputs), Some(ingest)) = (self.live.inputs.clone(), &self.ingest) else { return };
+        let (Some(inputs), Some(ingest)) = (self.live.inputs.clone(), &self.ingest) else {
+            return;
+        };
         let st = ingest.stats();
         if inputs.publishers().values().any(|c| *c == self.conn) {
             inputs.set_stats(st.clone());
@@ -402,7 +457,10 @@ impl Gw {
         if st.rejected.is_some() && st.rejected != self.rejected {
             self.rejected = st.rejected.clone();
             let track = inputs.video.clone().unwrap_or_default();
-            self.send(ServerMsg::broadcast("input_rejected", json!({"track": track, "reason": st.rejected})));
+            self.send(ServerMsg::broadcast(
+                "input_rejected",
+                json!({"track": track, "reason": st.rejected}),
+            ));
         }
     }
 }

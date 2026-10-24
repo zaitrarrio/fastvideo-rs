@@ -217,8 +217,10 @@ impl TextCache {
         }
         let (len, real) = (u32_at(take(4)?) as usize, u32_at(take(4)?) as usize);
         let ids: Vec<u32> = take(len.checked_mul(4)?)?
-            .chunks_exact(4)
-            .map(u32_at)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|s| u32::from_le_bytes(*s))
             .collect();
         if ids != prompt.ids || real != prompt.real {
             return None;
@@ -229,14 +231,18 @@ impl TextCache {
                 return None;
             }
             let shape: Vec<usize> = take(rank * 8)?
-                .chunks_exact(8)
+                .as_chunks::<8>()
+                .0
+                .iter()
                 .map(|c| {
                     u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as usize
                 })
                 .collect();
             let n = shape.iter().try_fold(1usize, |a, d| a.checked_mul(*d))?;
             let data: Vec<f32> = take(n.checked_mul(4)?)?
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect();
             CudaTensor::from_vec(data, shape).ok()

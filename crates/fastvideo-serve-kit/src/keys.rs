@@ -50,7 +50,10 @@ pub const NAME_MAX_CHARS: usize = 64;
 pub fn random_secret(prefix: &str) -> String {
     let mut b = [0u8; 32];
     rand::rng().fill_bytes(&mut b);
-    format!("{prefix}{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b))
+    format!(
+        "{prefix}{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b)
+    )
 }
 
 fn digest(s: &str) -> [u8; 32] {
@@ -87,7 +90,9 @@ impl std::fmt::Debug for AdminToken {
 impl AdminToken {
     /// From a configured secret (`FV_ADMIN_TOKEN`).
     pub fn from_secret(s: &str) -> Self {
-        Self { digest: digest(s.trim()) }
+        Self {
+            digest: digest(s.trim()),
+        }
     }
 
     /// A fresh token: `(token, plaintext)`. The caller shows the plaintext
@@ -105,7 +110,10 @@ impl AdminToken {
 
     /// `Authorization: Bearer <t>` (or `Key <t>`), or `x-fv-admin-token`.
     pub fn check_headers(&self, headers: &HeaderMap) -> bool {
-        if let Some(v) = headers.get("x-fv-admin-token").and_then(|v| v.to_str().ok()) {
+        if let Some(v) = headers
+            .get("x-fv-admin-token")
+            .and_then(|v| v.to_str().ok())
+        {
             return self.check(v);
         }
         headers
@@ -145,7 +153,10 @@ impl ApiKeyRecord {
         let rfc = |ms: i64| {
             time::OffsetDateTime::from_unix_timestamp_nanos(ms as i128 * 1_000_000)
                 .ok()
-                .and_then(|t| t.format(&time::format_description::well_known::Rfc3339).ok())
+                .and_then(|t| {
+                    t.format(&time::format_description::well_known::Rfc3339)
+                        .ok()
+                })
         };
         json!({
             "id": self.id,
@@ -209,7 +220,11 @@ impl KeyBackend for MemoryKeyBackend {
         Ok(())
     }
     async fn revoke(&self, id: &str, at: i64) -> Result<bool, String> {
-        Ok(apply_revoke(&mut self.rows.lock().map_err(|e| e.to_string())?, id, at))
+        Ok(apply_revoke(
+            &mut self.rows.lock().map_err(|e| e.to_string())?,
+            id,
+            at,
+        ))
     }
     async fn touch(&self, updates: &[(String, i64)]) -> Result<(), String> {
         apply_touch(&mut self.rows.lock().map_err(|e| e.to_string())?, updates);
@@ -233,7 +248,10 @@ struct KeyFile {
 
 impl FileKeyBackend {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into(), lock: tokio::sync::Mutex::new(()) }
+        Self {
+            path: path.into(),
+            lock: tokio::sync::Mutex::new(()),
+        }
     }
 
     pub fn path(&self) -> &std::path::Path {
@@ -255,13 +273,17 @@ impl FileKeyBackend {
         if let Some(dir) = self.path.parent() {
             tokio::fs::create_dir_all(dir).await.map_err(err)?;
         }
-        let tmp = self.path.with_extension(format!("tmp-{}", crate::random_token()));
+        let tmp = self
+            .path
+            .with_extension(format!("tmp-{}", crate::random_token()));
         let body = serde_json::to_vec_pretty(&KeyFile { keys }).map_err(|e| e.to_string())?;
         tokio::fs::write(&tmp, body).await.map_err(err)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            tokio::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600)).await.map_err(err)?;
+            tokio::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
+                .await
+                .map_err(err)?;
         }
         tokio::fs::rename(&tmp, &self.path).await.map_err(err)
     }
@@ -308,7 +330,9 @@ pub struct D1KeyBackend {
 
 impl D1KeyBackend {
     pub async fn open(db: D1Client) -> Result<Self, String> {
-        crate::d1::schema::migrate(&db).await.map_err(|e| e.to_string())?;
+        crate::d1::schema::migrate(&db)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(Self { db })
     }
 }
@@ -379,7 +403,11 @@ impl KeyBackend for D1KeyBackend {
                 )
             })
             .collect();
-        self.db.batch(stmts).await.map(|_| ()).map_err(|e| e.to_string())
+        self.db
+            .batch(stmts)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -423,14 +451,20 @@ pub enum KeyError {
 impl KeyStore {
     /// Loads the backend's records.
     pub async fn open(backend: Arc<dyn KeyBackend>) -> Result<Arc<Self>, String> {
-        let s = Arc::new(Self { backend, cache: RwLock::new(HashMap::new()), touch_every: Duration::from_secs(60) });
+        let s = Arc::new(Self {
+            backend,
+            cache: RwLock::new(HashMap::new()),
+            touch_every: Duration::from_secs(60),
+        });
         s.refresh().await?;
         Ok(s)
     }
 
     /// An empty in-memory store.
     pub async fn memory() -> Arc<Self> {
-        Self::open(Arc::new(MemoryKeyBackend::default())).await.expect("memory backend")
+        Self::open(Arc::new(MemoryKeyBackend::default()))
+            .await
+            .expect("memory backend")
     }
 
     /// How often `last_used_at` may change per key (default 60 s).
@@ -456,16 +490,24 @@ impl KeyStore {
             return Err(KeyError::Invalid("`name` must not be empty".into()));
         }
         if name.chars().count() > NAME_MAX_CHARS {
-            return Err(KeyError::Invalid(format!("`name` must be at most {NAME_MAX_CHARS} characters")));
+            return Err(KeyError::Invalid(format!(
+                "`name` must be at most {NAME_MAX_CHARS} characters"
+            )));
         }
         if name.chars().any(char::is_control) {
-            return Err(KeyError::Invalid("`name` must not contain control characters".into()));
+            return Err(KeyError::Invalid(
+                "`name` must not contain control characters".into(),
+            ));
         }
         let (key, d) = loop {
             let k = random_secret(KEY_PREFIX);
             let d = digest(&k);
             let id = key_id_of(&d);
-            let taken = self.cache.read().map(|c| c.values().any(|e| e.record.id == id)).unwrap_or(false);
+            let taken = self
+                .cache
+                .read()
+                .map(|c| c.values().any(|e| e.record.id == id))
+                .unwrap_or(false);
             if !taken {
                 break (k, d);
             }
@@ -481,24 +523,45 @@ impl KeyStore {
         };
         self.backend.insert(&rec).await.map_err(KeyError::Backend)?;
         if let Ok(mut c) = self.cache.write() {
-            c.insert(d, Entry { record: rec.clone(), persisted: None });
+            c.insert(
+                d,
+                Entry {
+                    record: rec.clone(),
+                    persisted: None,
+                },
+            );
         }
         Ok((key, rec))
     }
 
     /// Every key, newest first.
     pub fn list(&self) -> Vec<ApiKeyRecord> {
-        let mut v: Vec<ApiKeyRecord> =
-            self.cache.read().map(|c| c.values().map(|e| e.record.clone()).collect()).unwrap_or_default();
-        v.sort_by(|a, b| b.created_at.cmp(&a.created_at).then_with(|| a.id.cmp(&b.id)));
+        let mut v: Vec<ApiKeyRecord> = self
+            .cache
+            .read()
+            .map(|c| c.values().map(|e| e.record.clone()).collect())
+            .unwrap_or_default();
+        v.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
         v
     }
 
     /// Revokes `id` (idempotent); `None` when unknown.
     pub async fn revoke(&self, id: &str) -> Result<Option<ApiKeyRecord>, KeyError> {
         let at = now_ms();
-        let known = self.cache.read().map(|c| c.values().any(|e| e.record.id == id)).unwrap_or(false);
-        let hit = self.backend.revoke(id, at).await.map_err(KeyError::Backend)?;
+        let known = self
+            .cache
+            .read()
+            .map(|c| c.values().any(|e| e.record.id == id))
+            .unwrap_or(false);
+        let hit = self
+            .backend
+            .revoke(id, at)
+            .await
+            .map_err(KeyError::Backend)?;
         if !hit && !known {
             return Ok(None);
         }
@@ -568,12 +631,21 @@ impl KeyStore {
 
     /// Refreshes every `refresh` (when set) and flushes `last_used_at`
     /// every `flush`, until the handle is aborted.
-    pub fn spawn_maintenance(self: &Arc<Self>, refresh: Option<Duration>, flush: Duration) -> tokio::task::JoinHandle<()> {
+    pub fn spawn_maintenance(
+        self: &Arc<Self>,
+        refresh: Option<Duration>,
+        flush: Duration,
+    ) -> tokio::task::JoinHandle<()> {
         let s = self.clone();
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(flush.min(refresh.unwrap_or(flush)).max(Duration::from_millis(100)));
+            let mut tick = tokio::time::interval(
+                flush
+                    .min(refresh.unwrap_or(flush))
+                    .max(Duration::from_millis(100)),
+            );
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            let (mut last_refresh, mut last_flush) = (tokio::time::Instant::now(), tokio::time::Instant::now());
+            let (mut last_refresh, mut last_flush) =
+                (tokio::time::Instant::now(), tokio::time::Instant::now());
             loop {
                 tick.tick().await;
                 if last_flush.elapsed() >= flush {
@@ -631,21 +703,36 @@ struct AdminState {
 }
 
 fn err(status: StatusCode, kind: &str, message: impl Into<String>) -> Response {
-    let mut r = (status, Json(json!({"error": {"kind": kind, "message": message.into()}}))).into_response();
-    r.headers_mut().insert(header::CACHE_CONTROL, header::HeaderValue::from_static("no-store"));
+    let mut r = (
+        status,
+        Json(json!({"error": {"kind": kind, "message": message.into()}})),
+    )
+        .into_response();
+    r.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store"),
+    );
     r
 }
 
 fn ok(status: StatusCode, body: Value) -> Response {
     let mut r = (status, Json(body)).into_response();
-    r.headers_mut().insert(header::CACHE_CONTROL, header::HeaderValue::from_static("no-store"));
+    r.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store"),
+    );
     r
 }
 
 /// The 401 to send when the admin token is missing or wrong.
 fn refused(st: &AdminState, headers: &HeaderMap) -> Option<Response> {
-    (!st.admin.check_headers(headers))
-        .then(|| err(StatusCode::UNAUTHORIZED, "unauthorized", "admin token required (Authorization: Bearer <admin token>)"))
+    (!st.admin.check_headers(headers)).then(|| {
+        err(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "admin token required (Authorization: Bearer <admin token>)",
+        )
+    })
 }
 
 #[derive(Deserialize)]
@@ -653,18 +740,31 @@ struct MintBody {
     name: String,
 }
 
-async fn mint_handler(State(st): State<AdminState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+async fn mint_handler(
+    State(st): State<AdminState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
     if let Some(r) = refused(&st, &headers) {
         return r;
     }
     let b: MintBody = match serde_json::from_slice(&body) {
         Ok(b) => b,
-        Err(e) => return err(StatusCode::BAD_REQUEST, "invalid_request", format!("expected {{\"name\": \"...\"}}: {e}")),
+        Err(e) => {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                format!("expected {{\"name\": \"...\"}}: {e}"),
+            )
+        }
     };
     match st.store.mint(&b.name).await {
         Ok((key, rec)) => {
             tracing::info!(id = %rec.id, name = %rec.name, "api key minted");
-            ok(StatusCode::CREATED, json!({"api_key": key, "key": rec.view()}))
+            ok(
+                StatusCode::CREATED,
+                json!({"api_key": key, "key": rec.view()}),
+            )
         }
         Err(KeyError::Invalid(m)) => err(StatusCode::BAD_REQUEST, "invalid_request", m),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()),
@@ -676,10 +776,17 @@ async fn list_handler(State(st): State<AdminState>, headers: HeaderMap) -> Respo
         return r;
     }
     let keys: Vec<Value> = st.store.list().iter().map(ApiKeyRecord::view).collect();
-    ok(StatusCode::OK, json!({"keys": keys, "backend": st.store.backend_kind()}))
+    ok(
+        StatusCode::OK,
+        json!({"keys": keys, "backend": st.store.backend_kind()}),
+    )
 }
 
-async fn revoke_handler(State(st): State<AdminState>, headers: HeaderMap, Path(id): Path<String>) -> Response {
+async fn revoke_handler(
+    State(st): State<AdminState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
     if let Some(r) = refused(&st, &headers) {
         return r;
     }
@@ -697,7 +804,10 @@ async fn revoke_handler(State(st): State<AdminState>, headers: HeaderMap, Path(i
 /// the key is shown); `GET /fv/v1/admin/keys` → `{keys, backend}`;
 /// `DELETE /fv/v1/admin/keys/{id}` → `{key}` (revoked) or 404. Every call
 /// needs the admin token.
-pub fn admin_routes<S: Clone + Send + Sync + 'static>(store: Arc<KeyStore>, admin: Arc<AdminToken>) -> Router<S> {
+pub fn admin_routes<S: Clone + Send + Sync + 'static>(
+    store: Arc<KeyStore>,
+    admin: Arc<AdminToken>,
+) -> Router<S> {
     Router::new()
         .route("/fv/v1/admin/keys", get(list_handler).post(mint_handler))
         .route("/fv/v1/admin/keys/{id}", delete(revoke_handler))
@@ -724,7 +834,10 @@ mod tests {
         let (_, other) = AdminToken::generate();
         assert_ne!(plain, other);
         let mut h = HeaderMap::new();
-        h.insert(header::AUTHORIZATION, format!("Bearer {plain}").parse().unwrap());
+        h.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {plain}").parse().unwrap(),
+        );
         assert!(t.check_headers(&h));
         h.insert(header::AUTHORIZATION, "Bearer nope".parse().unwrap());
         assert!(!t.check_headers(&h));
@@ -740,9 +853,15 @@ mod tests {
         assert_eq!(s.check(&k).unwrap().0, rec.id);
         assert!(s.check("fv_nope").is_none());
         assert!(s.check("not-a-key").is_none());
-        assert!(s.list()[0].last_used_at.is_some(), "check touches last_used_at");
+        assert!(
+            s.list()[0].last_used_at.is_some(),
+            "check touches last_used_at"
+        );
         assert!(matches!(s.mint(" ").await, Err(KeyError::Invalid(_))));
-        assert!(matches!(s.mint(&"x".repeat(65)).await, Err(KeyError::Invalid(_))));
+        assert!(matches!(
+            s.mint(&"x".repeat(65)).await,
+            Err(KeyError::Invalid(_))
+        ));
         let r = s.revoke(&rec.id).await.unwrap().unwrap();
         assert!(r.revoked_at.is_some());
         assert!(s.check(&k).is_none());
@@ -755,35 +874,55 @@ mod tests {
     async fn file_backend_persists_digests_only() {
         let dir = std::env::temp_dir().join(format!("fv-keys-{}", crate::random_token()));
         let path = dir.join("api_keys.json");
-        let s = KeyStore::open(Arc::new(FileKeyBackend::new(&path))).await.unwrap();
+        let s = KeyStore::open(Arc::new(FileKeyBackend::new(&path)))
+            .await
+            .unwrap();
         let (k1, r1) = s.mint("a").await.unwrap();
         let (k2, r2) = s.mint("b").await.unwrap();
         assert!(s.check(&k1).is_some());
         assert_eq!(s.flush().await.unwrap(), 1);
         s.revoke(&r2.id).await.unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(!text.contains(&k1) && !text.contains(&k2), "plaintext keys must not be stored");
+        assert!(
+            !text.contains(&k1) && !text.contains(&k2),
+            "plaintext keys must not be stored"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
         // A new process sees the same keys.
-        let s2 = KeyStore::open(Arc::new(FileKeyBackend::new(&path))).await.unwrap();
+        let s2 = KeyStore::open(Arc::new(FileKeyBackend::new(&path)))
+            .await
+            .unwrap();
         assert_eq!(s2.check(&k1).unwrap().0, r1.id);
         assert!(s2.check(&k2).is_none(), "revocation persisted");
         let l = s2.list();
         assert_eq!(l.len(), 2);
-        assert!(l.iter().find(|r| r.id == r1.id).unwrap().last_used_at.is_some());
+        assert!(l
+            .iter()
+            .find(|r| r.id == r1.id)
+            .unwrap()
+            .last_used_at
+            .is_some());
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
     async fn d1_backend_shares_keys_between_workers() {
         let m = crate::d1::mock::MockD1::new();
-        let client = || D1Client::new(Arc::new(m.clone())).with_retry(crate::d1::RetryPolicy::immediate(1));
-        let a = KeyStore::open(Arc::new(D1KeyBackend::open(client()).await.unwrap())).await.unwrap();
-        let b = KeyStore::open(Arc::new(D1KeyBackend::open(client()).await.unwrap())).await.unwrap();
+        let client =
+            || D1Client::new(Arc::new(m.clone())).with_retry(crate::d1::RetryPolicy::immediate(1));
+        let a = KeyStore::open(Arc::new(D1KeyBackend::open(client()).await.unwrap()))
+            .await
+            .unwrap();
+        let b = KeyStore::open(Arc::new(D1KeyBackend::open(client()).await.unwrap()))
+            .await
+            .unwrap();
         let (k, rec) = a.mint("ci").await.unwrap();
         assert!(b.check(&k).is_none(), "not refreshed yet");
         b.refresh().await.unwrap();
@@ -795,13 +934,17 @@ mod tests {
         assert!(a.check(&k).is_none());
         let row = m.sql("SELECT * FROM api_keys", &[]).unwrap();
         assert_eq!(row.len(), 1);
-        assert!(row[0]["last_used_at"].as_f64().is_some() || row[0]["last_used_at"].as_i64().is_some());
+        assert!(
+            row[0]["last_used_at"].as_f64().is_some() || row[0]["last_used_at"].as_i64().is_some()
+        );
         assert!(!serde_json::to_string(&row).unwrap().contains(&k));
     }
 
     #[tokio::test]
     async fn last_used_is_rate_limited() {
-        let s = KeyStore::memory().await.with_touch_every(Duration::from_secs(3600));
+        let s = KeyStore::memory()
+            .await
+            .with_touch_every(Duration::from_secs(3600));
         let (k, _) = s.mint("x").await.unwrap();
         s.check(&k);
         let t1 = s.list()[0].last_used_at;
@@ -811,16 +954,26 @@ mod tests {
         assert_eq!(s.flush().await.unwrap(), 0);
     }
 
-    async fn call(r: &Router, method: &str, uri: &str, auth: Option<&str>, body: Option<Value>) -> (StatusCode, Value) {
+    async fn call(
+        r: &Router,
+        method: &str,
+        uri: &str,
+        auth: Option<&str>,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
         let mut b = Request::builder().method(method).uri(uri);
         if let Some(a) = auth {
             b = b.header("authorization", format!("Bearer {a}"));
         }
-        let req = b.body(body.map_or_else(Body::empty, |v| Body::from(v.to_string()))).unwrap();
+        let req = b
+            .body(body.map_or_else(Body::empty, |v| Body::from(v.to_string())))
+            .unwrap();
         let resp = r.clone().oneshot(req).await.unwrap();
         let s = resp.status();
         assert_eq!(resp.headers()[header::CACHE_CONTROL], "no-store");
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         (s, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
     }
 
@@ -829,11 +982,25 @@ mod tests {
         let store = KeyStore::memory().await;
         let (admin, plain) = AdminToken::generate();
         let r: Router = admin_routes(store.clone(), Arc::new(admin));
-        for (m, u) in [("GET", "/fv/v1/admin/keys"), ("POST", "/fv/v1/admin/keys"), ("DELETE", "/fv/v1/admin/keys/key_x")] {
+        for (m, u) in [
+            ("GET", "/fv/v1/admin/keys"),
+            ("POST", "/fv/v1/admin/keys"),
+            ("DELETE", "/fv/v1/admin/keys/key_x"),
+        ] {
             assert_eq!(call(&r, m, u, None, None).await.0, StatusCode::UNAUTHORIZED);
-            assert_eq!(call(&r, m, u, Some("fvadm_bad"), None).await.0, StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                call(&r, m, u, Some("fvadm_bad"), None).await.0,
+                StatusCode::UNAUTHORIZED
+            );
         }
-        let (s, v) = call(&r, "POST", "/fv/v1/admin/keys", Some(&plain), Some(json!({"name": "demo"}))).await;
+        let (s, v) = call(
+            &r,
+            "POST",
+            "/fv/v1/admin/keys",
+            Some(&plain),
+            Some(json!({"name": "demo"})),
+        )
+        .await;
         assert_eq!(s, StatusCode::CREATED, "{v}");
         let key = v["api_key"].as_str().unwrap().to_owned();
         let id = v["key"]["id"].as_str().unwrap().to_owned();
@@ -843,15 +1010,43 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(v["keys"][0]["id"], id.as_str());
         assert!(!v.to_string().contains(&key), "list never shows the key");
-        let (s, _) = call(&r, "POST", "/fv/v1/admin/keys", Some(&plain), Some(json!({"name": ""}))).await;
+        let (s, _) = call(
+            &r,
+            "POST",
+            "/fv/v1/admin/keys",
+            Some(&plain),
+            Some(json!({"name": ""})),
+        )
+        .await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
-        let (s, _) = call(&r, "POST", "/fv/v1/admin/keys", Some(&plain), Some(json!({}))).await;
+        let (s, _) = call(
+            &r,
+            "POST",
+            "/fv/v1/admin/keys",
+            Some(&plain),
+            Some(json!({})),
+        )
+        .await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
-        let (s, v) = call(&r, "DELETE", &format!("/fv/v1/admin/keys/{id}"), Some(&plain), None).await;
+        let (s, v) = call(
+            &r,
+            "DELETE",
+            &format!("/fv/v1/admin/keys/{id}"),
+            Some(&plain),
+            None,
+        )
+        .await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(v["key"]["revoked"], true);
         assert!(store.check(&key).is_none());
-        let (s, _) = call(&r, "DELETE", "/fv/v1/admin/keys/key_nope", Some(&plain), None).await;
+        let (s, _) = call(
+            &r,
+            "DELETE",
+            "/fv/v1/admin/keys/key_nope",
+            Some(&plain),
+            None,
+        )
+        .await;
         assert_eq!(s, StatusCode::NOT_FOUND);
     }
 }

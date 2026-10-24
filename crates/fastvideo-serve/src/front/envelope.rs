@@ -70,9 +70,17 @@ impl InputRef {
 /// A job's input files with their kinds, in `resolved` order.
 pub(crate) fn input_paths(job: &Job) -> Vec<(PathBuf, MediaKind)> {
     let r = &job.resolved;
-    let mut v: Vec<(PathBuf, MediaKind)> = r.keyframes.iter().map(|(_, p)| (p.clone(), MediaKind::Image)).collect();
+    let mut v: Vec<(PathBuf, MediaKind)> = r
+        .keyframes
+        .iter()
+        .map(|(_, p)| (p.clone(), MediaKind::Image))
+        .collect();
     v.extend(r.references.iter().map(|(k, p)| (p.clone(), *k)));
-    v.extend(r.audio_in.iter().map(|(_, p)| (p.clone(), MediaKind::Audio)));
+    v.extend(
+        r.audio_in
+            .iter()
+            .map(|(_, p)| (p.clone(), MediaKind::Audio)),
+    );
     v
 }
 
@@ -104,14 +112,30 @@ pub async fn sha256_file(path: &Path) -> Result<String, ApiError> {
 }
 
 /// Copies `input.path` into the artifact store and signs a URL for it.
-pub(crate) async fn store_one(ctx: &ServeCtx, ttl: Duration, i: usize, input: &InputRef) -> Result<InputRef, ApiError> {
+pub(crate) async fn store_one(
+    ctx: &ServeCtx,
+    ttl: Duration,
+    i: usize,
+    input: &InputRef,
+) -> Result<InputRef, ApiError> {
     let path = &input.path;
-    let name = path.file_name().and_then(|n| n.to_str()).filter(|n| valid_file_name(n)).map(str::to_owned).unwrap_or_else(|| format!("input-{i}.bin"));
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| valid_file_name(n))
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("input-{i}.bin"));
     // The store moves the file: keep the gateway copy (a re-dispatch or a
     // later copy still has it) by copying first.
     let tmp = path.with_extension(format!("gw{i}-{}.tmp", fastvideo_serve_kit::random_token()));
-    tokio::fs::copy(path, &tmp).await.map_err(|e| ApiError::internal(format!("staging input for dispatch: {e}")))?;
-    let meta = ArtifactMeta { file_name: name, mime: "application/octet-stream".into(), ..ArtifactMeta::default() };
+    tokio::fs::copy(path, &tmp)
+        .await
+        .map_err(|e| ApiError::internal(format!("staging input for dispatch: {e}")))?;
+    let meta = ArtifactMeta {
+        file_name: name,
+        mime: "application/octet-stream".into(),
+        ..ArtifactMeta::default()
+    };
     let art = match ctx.artifacts().put(&tmp, meta).await {
         Ok(a) => a,
         Err(e) => {
@@ -120,12 +144,24 @@ pub(crate) async fn store_one(ctx: &ServeCtx, ttl: Duration, i: usize, input: &I
         }
     };
     let url = ctx.url_signer().url_for(&art, ttl).to_string();
-    Ok(InputRef { url, artifact: Some(art), inline: None, source: None, sha256: None, ..input.clone() })
+    Ok(InputRef {
+        url,
+        artifact: Some(art),
+        inline: None,
+        source: None,
+        sha256: None,
+        ..input.clone()
+    })
 }
 
 /// Stores the inputs at `idx` concurrently (one store round trip in wall
 /// time, not one per input); on a failure the ones that made it are deleted.
-pub(crate) async fn store_many(ctx: &ServeCtx, ttl: Duration, inputs: &mut [InputRef], idx: &[usize]) -> Result<(), ApiError> {
+pub(crate) async fn store_many(
+    ctx: &ServeCtx,
+    ttl: Duration,
+    inputs: &mut [InputRef],
+    idx: &[usize],
+) -> Result<(), ApiError> {
     let puts = idx.iter().map(|&i| {
         let input = inputs[i].clone();
         async move { store_one(ctx, ttl, i, &input).await.map(|r| (i, r)) }
@@ -169,11 +205,16 @@ fn one() -> u32 {
     1
 }
 
-
 /// How each input travels: inline while the job's total fits `budget`,
 /// then the client's URL for large video/audio (`passthrough`), else the
 /// store (all store copies at once).
-pub async fn plan_inputs(ctx: &ServeCtx, job: &Job, budget: u64, passthrough: bool, ttl: Duration) -> Result<Vec<InputRef>, ApiError> {
+pub async fn plan_inputs(
+    ctx: &ServeCtx,
+    job: &Job,
+    budget: u64,
+    passthrough: bool,
+    ttl: Duration,
+) -> Result<Vec<InputRef>, ApiError> {
     let paths = input_paths(job);
     if paths.is_empty() {
         return Ok(Vec::new());
@@ -182,11 +223,25 @@ pub async fn plan_inputs(ctx: &ServeCtx, job: &Job, budget: u64, passthrough: bo
     let mut out = Vec::with_capacity(paths.len());
     let mut to_store = Vec::new();
     for (i, (path, kind)) in paths.into_iter().enumerate() {
-        let bytes = tokio::fs::metadata(&path).await.map_err(|e| ApiError::internal(format!("staged input: {e}")))?.len();
-        let mut r = InputRef { path, kind: Some(kind), bytes, ..InputRef::default() };
-        let source = job.input_sources.iter().find(|(p, _)| *p == r.path).map(|(_, u)| u.clone());
+        let bytes = tokio::fs::metadata(&path)
+            .await
+            .map_err(|e| ApiError::internal(format!("staged input: {e}")))?
+            .len();
+        let mut r = InputRef {
+            path,
+            kind: Some(kind),
+            bytes,
+            ..InputRef::default()
+        };
+        let source = job
+            .input_sources
+            .iter()
+            .find(|(p, _)| *p == r.path)
+            .map(|(_, u)| u.clone());
         if bytes <= left {
-            let data = tokio::fs::read(&r.path).await.map_err(|e| ApiError::internal(format!("staged input: {e}")))?;
+            let data = tokio::fs::read(&r.path)
+                .await
+                .map_err(|e| ApiError::internal(format!("staged input: {e}")))?;
             r.inline = Some(base64::engine::general_purpose::STANDARD.encode(data));
             left -= bytes;
         } else if let Some(u) = source.filter(|_| passthrough) {
@@ -205,9 +260,15 @@ pub async fn plan_inputs(ctx: &ServeCtx, job: &Job, budget: u64, passthrough: bo
 
 /// Copies the inputs that skipped the store into it (`idx`: all of them
 /// when `None`) and returns the inputs pointing at the copies.
-pub async fn store_copies(ctx: &ServeCtx, ttl: Duration, inputs: &[InputRef]) -> Result<Vec<InputRef>, ApiError> {
+pub async fn store_copies(
+    ctx: &ServeCtx,
+    ttl: Duration,
+    inputs: &[InputRef],
+) -> Result<Vec<InputRef>, ApiError> {
     let mut out = inputs.to_vec();
-    let idx: Vec<usize> = (0..out.len()).filter(|&i| out[i].artifact.is_none()).collect();
+    let idx: Vec<usize> = (0..out.len())
+        .filter(|&i| out[i].artifact.is_none())
+        .collect();
     if !idx.is_empty() {
         store_many(ctx, ttl, &mut out, &idx).await?;
     }

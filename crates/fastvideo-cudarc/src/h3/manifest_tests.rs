@@ -398,7 +398,10 @@ fn trim_dit_loaders_cover_the_published_transformer_and_nothing_else() {
         ]
     );
     assert_eq!(table["adaln_basis.weight"], [16, 2688]);
-    assert_eq!(table["transformer_blocks.0.adaln_proj.linear.weight"], [96768, 16]);
+    assert_eq!(
+        table["transformer_blocks.0.adaln_proj.linear.weight"],
+        [96768, 16]
+    );
     assert_eq!(table["norm_out.linear.weight"], [10752, 16]);
     // Stored F32 (upstream loads them as float16); every other tensor is BF16.
     for (k, d) in dtypes(json) {
@@ -474,8 +477,18 @@ fn vdn_adapters_target_published_base_parameters() {
     use fastvideo_models::h3::vdn::{adapter_key, LoraSideName};
     let base = manifest(include_str!("manifests/transformer.json"));
     for (json, name, pairs, ranks) in [
-        (include_str!("manifests/vdn_adapter_default.json"), "default", 208usize, vec![64usize]),
-        (include_str!("manifests/vdn_adapter_turbo.json"), "turbo", 363, vec![16, 64]),
+        (
+            include_str!("manifests/vdn_adapter_default.json"),
+            "default",
+            208usize,
+            vec![64usize],
+        ),
+        (
+            include_str!("manifests/vdn_adapter_turbo.json"),
+            "turbo",
+            363,
+            vec![16, 64],
+        ),
     ] {
         let adapter = manifest(json);
         let mut a_of: BTreeMap<String, Vec<usize>> = BTreeMap::new();
@@ -489,7 +502,10 @@ fn vdn_adapters_target_published_base_parameters() {
             };
         }
         assert_eq!(a_of.len(), pairs, "{name}");
-        assert_eq!(a_of.keys().collect::<Vec<_>>(), b_of.keys().collect::<Vec<_>>());
+        assert_eq!(
+            a_of.keys().collect::<Vec<_>>(),
+            b_of.keys().collect::<Vec<_>>()
+        );
         let mut seen_ranks = std::collections::BTreeSet::new();
         for (module, a) in &a_of {
             let b = &b_of[module];
@@ -516,12 +532,16 @@ fn vdn_configs_parse() {
     assert!(!b.is_distilled());
     assert_eq!(b.branch, dir.join("linear_branch/model.safetensors"));
     assert_eq!(b.transform, VdnTransform::released());
-    let d = VdnCheckpoint::from_config_json(dir, include_str!("fixtures/vdn_stage_dmd_config.json"))
-        .unwrap();
+    let d =
+        VdnCheckpoint::from_config_json(dir, include_str!("fixtures/vdn_stage_dmd_config.json"))
+            .unwrap();
     assert_eq!(d.adapter_names(), ["default", "turbo"]);
     assert!(d.is_distilled());
     let lb: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/vdn_linear_branch_config.json")).unwrap();
     assert_eq!(lb["type"], "hybrid_attention");
-    assert_eq!(VdnTransform::from_json(&lb["config"]).unwrap(), VdnTransform::released());
+    assert_eq!(
+        VdnTransform::from_json(&lb["config"]).unwrap(),
+        VdnTransform::released()
+    );
 }

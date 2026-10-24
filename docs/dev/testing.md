@@ -9,7 +9,7 @@ busy blocks everyone's merge, so the tests are split by what they measure.
 
 | Stage | What | How it runs |
 |---|---|---|
-| 1. build | `cargo check`, `cargo clippy -D warnings` (default and, with `FV_SERVE_HEAVY=1`, the heavy feature sets) | parallel, as cargo does |
+| 1. build | `cargo check` of the serve crates, `cargo clippy --workspace --all-targets --no-deps -- -D warnings` (and, with `FV_SERVE_HEAVY=1`, the heavy feature sets) | parallel, as cargo does |
 | 2. tests | `cargo test` of every crate and feature set | parallel test threads, next to other agents' jobs: **load-tolerant** |
 | 3. realtime | the `realtime_*` tests and the `/console` browser tests | only with `--realtime` (or `FV_SERVE_REALTIME=1`); after stages 1-2; each test binary is built first (`--no-run`), then run with `--test-threads=1`, one binary after the other: nothing of `check.sh` compiles or tests meanwhile |
 
@@ -27,6 +27,23 @@ accept that a rate failure there may be the neighbours'.
 
 `FV_SERVE_UI=1` without `--realtime` still runs the browser tests, last,
 after every compile.
+
+## Formatting and lint gates
+
+Since plan F2 the workspace is rustfmt-clean and clippy-clean, and both are
+gates rather than advice: `task check` runs `cargo fmt --all -- --check`
+(`task fmt:check`; `task fmt` fixes drift) and `cargo clippy --workspace
+--all-targets --no-deps -- -D warnings` (`task lint:rust`); the
+`serve-compat` and `gpucheck-t0` workflows run the `fmt --check` in the
+build base image (the build pod's rustfmt, so the pod's `--check` is the
+source of truth) on every pull request that touches the crates; and
+`scripts/serve/check.sh` stage 1 runs the same clippy line over the whole
+workspace, so the tools-release pipeline gates every crate on it. Fix a
+lint at its source; where it flags an intentional pattern, the narrowest
+`#[allow(clippy::...)]` with a one-line reason is the rule (see
+`crates/fastvideo-ops/src/fp8.rs` `scale_for_amax`). The workspace
+`rust-version` (1.88) is what clippy's `incompatible_msrv` checks the std
+APIs against, so every crate inherits it.
 
 ## What goes where
 

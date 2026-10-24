@@ -45,7 +45,8 @@ use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
 use str0m::channel::ChannelId;
 use str0m::format::Codec;
 use str0m::media::{
-    Direction as RtcDirection, Frequency, KeyframeRequestKind, MediaKind as RtcMediaKind, MediaTime, Mid, Pt,
+    Direction as RtcDirection, Frequency, KeyframeRequestKind, MediaKind as RtcMediaKind,
+    MediaTime, Mid, Pt,
 };
 use str0m::net::{Protocol, Receive, TcpType};
 use str0m::{Candidate, Event, IceConnectionState, IceCreds, Input, Output, Rtc};
@@ -60,8 +61,7 @@ use crate::profile::{EncodeProfile, H264Level};
 use crate::sdp::{self, Direction, MediaKind, OfferRequirements, Sdp};
 use crate::stun;
 use crate::writer::{
-    AudioPacket, TrackKind, VideoCodec, VideoFrame, WallclockMap, AUDIO_CLOCK_HZ,
-    VIDEO_CLOCK_HZ,
+    AudioPacket, TrackKind, VideoCodec, VideoFrame, WallclockMap, AUDIO_CLOCK_HZ, VIDEO_CLOCK_HZ,
 };
 use crate::WebrtcError;
 
@@ -1399,13 +1399,19 @@ impl HostLoop {
             }
             Cmd::RequestKeyframe { peer, mid } => {
                 self.with_peer(peer, now, |slot, _| {
-                    let Some(m) = slot.mids.iter().find(|m| m.info.mid == mid).map(|m| m.mid) else {
+                    let Some(m) = slot.mids.iter().find(|m| m.info.mid == mid).map(|m| m.mid)
+                    else {
                         return;
                     };
-                    let r = slot.rtc.writer(m).map(|mut w| w.request_keyframe(None, KeyframeRequestKind::Pli));
+                    let r = slot
+                        .rtc
+                        .writer(m)
+                        .map(|mut w| w.request_keyframe(None, KeyframeRequestKind::Pli));
                     match r {
                         Some(Ok(())) => slot.stats.inbound.keyframe_requests_sent += 1,
-                        Some(Err(e)) => tracing::debug!(%mid, error = %e, "keyframe request not sent"),
+                        Some(Err(e)) => {
+                            tracing::debug!(%mid, error = %e, "keyframe request not sent")
+                        }
                         None => {}
                     }
                 });
@@ -1687,7 +1693,8 @@ impl HostLoop {
             }
             None => (None, None),
         };
-        let (id, handle, events) = self.new_slot(rtc, SlotState::Active, opts.channels, mids, lane, now);
+        let (id, handle, events) =
+            self.new_slot(rtc, SlotState::Active, opts.channels, mids, lane, now);
         self.with_peer(id, now, |_, _| {});
         Ok((
             Peer {
@@ -1732,8 +1739,14 @@ impl HostLoop {
             sdp.set_opus_stereo(layout == AudioLayout::Stereo);
         }
         let policy = ChannelPolicy::Only(opts.channels.clone());
-        let (id, handle, events) =
-            self.new_slot(rtc, SlotState::Offering(Some(pending)), policy, mids, None, now);
+        let (id, handle, events) = self.new_slot(
+            rtc,
+            SlotState::Offering(Some(pending)),
+            policy,
+            mids,
+            None,
+            now,
+        );
         if let Some(slot) = self.peers.get_mut(&id) {
             slot.video_prefs = opts.video_codecs.clone();
         }
@@ -1810,7 +1823,11 @@ fn accept_answer(slot: &mut PeerSlot, answer: &str) -> Result<Vec<MediaInfo>, We
         }
         if m.info.kind == TrackKind::Video && m.info.sends() {
             // The answer's codec in our preference order (VP8 test clients).
-            if let Some((pt, codec)) = slot.rtc.writer(m.mid).and_then(|w| choose_video(&w, &slot.video_prefs)) {
+            if let Some((pt, codec)) = slot
+                .rtc
+                .writer(m.mid)
+                .and_then(|w| choose_video(&w, &slot.video_prefs))
+            {
                 m.pt = Some(pt);
                 m.info.video_codec = Some(codec);
             }
@@ -1915,7 +1932,9 @@ fn choose_video(w: &str0m::media::Writer, prefs: &[VideoCodec]) -> Option<(Pt, V
             // Profile 0 (8-bit 4:2:0, what libvpx-vp9 emits for yuv420p).
             VideoCodec::Vp9 => w
                 .payload_params()
-                .find(|p| p.spec().codec == Codec::Vp9 && p.spec().format.profile_id.unwrap_or(0) == 0)
+                .find(|p| {
+                    p.spec().codec == Codec::Vp9 && p.spec().format.profile_id.unwrap_or(0) == 0
+                })
                 .map(|p| p.pt()),
         };
         if let Some(pt) = pt {
@@ -1957,8 +1976,16 @@ fn pick_pt(w: &str0m::media::Writer, kind: TrackKind) -> Option<Pt> {
 
 /// Routes one client frame to the bounded inbound queue: codec check,
 /// bitrate budget, queue room (design §5.11).
-fn inbound_media(slot: &mut PeerSlot, d: str0m::media::MediaData, kind: TrackKind, keyframe: bool, now: Instant) {
-    let Some(lane) = slot.inbound.as_mut() else { return };
+fn inbound_media(
+    slot: &mut PeerSlot,
+    d: str0m::media::MediaData,
+    kind: TrackKind,
+    keyframe: bool,
+    now: Instant,
+) {
+    let Some(lane) = slot.inbound.as_mut() else {
+        return;
+    };
     let st = &mut slot.stats.inbound;
     let codec = match d.params.spec().codec {
         Codec::Vp8 => Some(VideoCodec::Vp8),
@@ -1990,7 +2017,11 @@ fn inbound_media(slot: &mut PeerSlot, d: str0m::media::MediaData, kind: TrackKin
     let m = InboundMedia {
         mid: d.mid.to_string(),
         kind,
-        codec: if kind == TrackKind::Video { codec } else { None },
+        codec: if kind == TrackKind::Video {
+            codec
+        } else {
+            None
+        },
         rtp_time: d.time.numer(),
         keyframe,
         contiguous,

@@ -61,7 +61,11 @@ impl CausalConv {
                 &format!("{prefix}.conv.weight"),
                 &[cout, cin, 3, 3, 3],
             )?)?,
-            bias: pinned(cuda_tensor_shaped(map, &format!("{prefix}.conv.bias"), &[cout])?)?,
+            bias: pinned(cuda_tensor_shaped(
+                map,
+                &format!("{prefix}.conv.bias"),
+                &[cout],
+            )?)?,
             reflect,
         })
     }
@@ -250,14 +254,23 @@ impl VideoEncoder {
             )));
         }
         let mut ch = conv_in.out_channels();
-        let n_blocks = count(&map, |i| format!("encoder.down_blocks.{i}.resnets.0.conv1.conv.weight"));
+        let n_blocks = count(&map, |i| {
+            format!("encoder.down_blocks.{i}.resnets.0.conv1.conv.weight")
+        });
         let mut blocks = Vec::with_capacity(n_blocks);
         for i in 0..n_blocks {
             let n_res = count(&map, |r| {
                 format!("encoder.down_blocks.{i}.resnets.{r}.conv1.conv.weight")
             });
             let resnets = (0..n_res)
-                .map(|r| Resnet::load(&map, &format!("encoder.down_blocks.{i}.resnets.{r}"), ch, reflect))
+                .map(|r| {
+                    Resnet::load(
+                        &map,
+                        &format!("encoder.down_blocks.{i}.resnets.{r}"),
+                        ch,
+                        reflect,
+                    )
+                })
                 .collect::<Result<Vec<_>>>()?;
             let dkey = format!("encoder.down_blocks.{i}.downsamplers.0.conv.conv.weight");
             let downsampler = match map.shape(&dkey) {
@@ -301,7 +314,9 @@ impl VideoEncoder {
                 downsampler,
             });
         }
-        let n_mid = count(&map, |r| format!("encoder.mid_block.resnets.{r}.conv1.conv.weight"));
+        let n_mid = count(&map, |r| {
+            format!("encoder.mid_block.resnets.{r}.conv1.conv.weight")
+        });
         let mid = (0..n_mid)
             .map(|r| Resnet::load(&map, &format!("encoder.mid_block.resnets.{r}"), ch, reflect))
             .collect::<Result<Vec<_>>>()?;
@@ -341,7 +356,13 @@ impl VideoEncoder {
     /// → the normalized latent `[1, C, (F − 1)/8 + 1, H/32, W/32]` on the
     /// host (`VideoEncoder.forward`: causal in time, the first frame alone
     /// in the first latent frame).
-    pub fn encode_video(&self, pixels: &[f32], frames: usize, height: usize, width: usize) -> Result<CudaTensor> {
+    pub fn encode_video(
+        &self,
+        pixels: &[f32],
+        frames: usize,
+        height: usize,
+        width: usize,
+    ) -> Result<CudaTensor> {
         let p = self.patch;
         if frames == 0
             || pixels.len() != 3 * frames * height * width

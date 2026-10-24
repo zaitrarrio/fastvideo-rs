@@ -23,7 +23,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, MethodRouter};
 use fastvideo_protocol::{
     negotiate_noted, precheck, resolve_model, ApiError, BatchProtocol, ErrorCtx, GenerationRequest,
-    HttpReply, Job, JobId, JobView, KeyId, MediaKind, MediaRef, NormalizeCtx, ReplyBody, SubmitEndpoint,
+    HttpReply, Job, JobId, JobView, KeyId, MediaKind, MediaRef, NormalizeCtx, ReplyBody,
+    SubmitEndpoint,
 };
 use tower_http::services::ServeFile;
 
@@ -32,7 +33,11 @@ use crate::events::wait_terminal;
 use crate::ingest::IngestPolicy;
 
 /// Converts a framework-free reply. `view` renders `SseFollow::JobStatus`.
-pub async fn into_response(reply: HttpReply, ctx: &ServeCtx, view: Option<Arc<dyn JobView>>) -> Response {
+pub async fn into_response(
+    reply: HttpReply,
+    ctx: &ServeCtx,
+    view: Option<Arc<dyn JobView>>,
+) -> Response {
     let status = StatusCode::from_u16(reply.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let mut resp = match reply.body {
         ReplyBody::Json(v) => (status, axum::Json(v)).into_response(),
@@ -42,7 +47,9 @@ pub async fn into_response(reply: HttpReply, ctx: &ServeCtx, view: Option<Arc<dy
             r
         }
         ReplyBody::File { path, mime } => {
-            let req = Request::get("/").body(Body::empty()).expect("static request");
+            let req = Request::get("/")
+                .body(Body::empty())
+                .expect("static request");
             let mut r = match tower::ServiceExt::oneshot(ServeFile::new(&path), req).await {
                 Ok(r) => r.map(Body::new).into_response(),
                 Err(e) => match e {},
@@ -61,7 +68,10 @@ pub async fn into_response(reply: HttpReply, ctx: &ServeCtx, view: Option<Arc<dy
         ReplyBody::Empty => status.into_response(),
     };
     for (k, v) in reply.headers {
-        if let (Ok(k), Ok(v)) = (HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(&v)) {
+        if let (Ok(k), Ok(v)) = (
+            HeaderName::from_bytes(k.as_bytes()),
+            HeaderValue::from_str(&v),
+        ) {
             resp.headers_mut().append(k, v);
         }
     }
@@ -75,7 +85,11 @@ fn set(r: &mut Response, k: HeaderName, v: &str) {
 }
 
 /// Renders `err` through the adapter, adding `Retry-After` when set.
-pub fn error_reply<P: BatchProtocol + ?Sized>(proto: &P, err: &ApiError, cx: &ErrorCtx) -> HttpReply {
+pub fn error_reply<P: BatchProtocol + ?Sized>(
+    proto: &P,
+    err: &ApiError,
+    cx: &ErrorCtx,
+) -> HttpReply {
     let mut r = proto.render_error(err, cx);
     if let Some(s) = err.retry_after_s {
         if r.header("retry-after").is_none() {
@@ -101,7 +115,12 @@ pub struct SubmitOpts {
 
 impl SubmitOpts {
     pub fn new(ingest: IngestPolicy) -> Self {
-        Self { ingest, wait: None, body_max: 64 * 1024 * 1024, request_id_header: None }
+        Self {
+            ingest,
+            wait: None,
+            body_max: 64 * 1024 * 1024,
+            request_id_header: None,
+        }
     }
     pub fn sync(mut self, timeout: Duration) -> Self {
         self.wait = Some(timeout);
@@ -109,7 +128,13 @@ impl SubmitOpts {
     }
 }
 
-fn normalize_ctx(ctx: &ServeCtx, owner: Option<KeyId>, headers: &HeaderMap, query: Vec<(String, String)>, request_id: String) -> NormalizeCtx {
+fn normalize_ctx(
+    ctx: &ServeCtx,
+    owner: Option<KeyId>,
+    headers: &HeaderMap,
+    query: Vec<(String, String)>,
+    request_id: String,
+) -> NormalizeCtx {
     let mut n = NormalizeCtx::new(ctx.now());
     n.owner = owner;
     n.query = query;
@@ -164,7 +189,8 @@ pub async fn submit_request<P: BatchProtocol + ?Sized>(
     let t_ingest = mark();
     let resolved = async {
         let staged = ctx.ingestor().stage(&req, policy, &dir, ctx.now()).await?;
-        negotiate_noted(&req, caps, &staged).map(|(r, n)| (r, n, passthrough_sources(&req, &staged)))
+        negotiate_noted(&req, caps, &staged)
+            .map(|(r, n)| (r, n, passthrough_sources(&req, &staged)))
     }
     .await;
     let (resolved, notes, sources) = match resolved {
@@ -177,7 +203,14 @@ pub async fn submit_request<P: BatchProtocol + ?Sized>(
     span("ingest_negotiate", fastvideo_trace::Comp::Adapter, t_ingest);
     let now = ctx.now();
     let pid = proto.id();
-    let mut job = Job::new(id, pid, proto.new_external_id(id), resolved, now, ctx.config().retention(pid));
+    let mut job = Job::new(
+        id,
+        pid,
+        proto.new_external_id(id),
+        resolved,
+        now,
+        ctx.config().retention(pid),
+    );
     job.owner = owner;
     job.request_echo = request_echo;
     job.callback = req.callback.clone();
@@ -218,7 +251,10 @@ pub async fn submit_request<P: BatchProtocol + ?Sized>(
 /// `Job::input_sources`): video and audio given as `http(s)` URLs, stored
 /// byte for byte as fetched. Images are left out: ingestion may re-encode
 /// them upright (EXIF orientation).
-fn passthrough_sources(req: &GenerationRequest, staged: &fastvideo_protocol::StagedInputs) -> Vec<(std::path::PathBuf, String)> {
+fn passthrough_sources(
+    req: &GenerationRequest,
+    staged: &fastvideo_protocol::StagedInputs,
+) -> Vec<(std::path::PathBuf, String)> {
     let mut out = Vec::new();
     for (r, (kind, m)) in req.references.iter().zip(&staged.references) {
         if let (MediaRef::Http(u), MediaKind::Video | MediaKind::Audio) = (&r.media, kind) {
@@ -239,16 +275,28 @@ fn passthrough_sources(req: &GenerationRequest, staged: &fastvideo_protocol::Sta
 /// `store.lookup` with the job's status as its argument (0 queued ..
 /// 4 cancelled, -1 unknown), so the trace shows which poll first saw the
 /// job terminal.
-pub async fn find_job<P: BatchProtocol + ?Sized>(ctx: &ServeCtx, proto: &P, external_id: &str, owner: Option<&KeyId>) -> Result<Job, ApiError> {
+pub async fn find_job<P: BatchProtocol + ?Sized>(
+    ctx: &ServeCtx,
+    proto: &P,
+    external_id: &str,
+    owner: Option<&KeyId>,
+) -> Result<Job, ApiError> {
     let trace = fastvideo_trace::current();
     let t0 = trace.map(|_| fastvideo_trace::now_ns());
     let found = ctx.jobs().by_external(proto.id(), external_id).await;
     if let (Some(t), Some(s)) = (trace, t0) {
-        t.span_since(fastvideo_trace::Comp::Store, "lookup", s, found.as_ref().map_or(-1, status_code));
+        t.span_since(
+            fastvideo_trace::Comp::Store,
+            "lookup",
+            s,
+            found.as_ref().map_or(-1, status_code),
+        );
     }
     match found {
         Some(j) if j.owner.is_none() || j.owner.as_ref() == owner => Ok(j),
-        _ => Err(ApiError::not_found(format!("`{external_id}` was not found"))),
+        _ => Err(ApiError::not_found(format!(
+            "`{external_id}` was not found"
+        ))),
     }
 }
 
@@ -260,7 +308,12 @@ fn request_id(headers: &HeaderMap, from: Option<&'static str>) -> String {
 }
 
 /// `POST` handler for one submit endpoint.
-pub fn submit<P, E, V>(proto: Arc<P>, endpoint: Arc<E>, view: Arc<V>, opts: SubmitOpts) -> MethodRouter<ServeCtx>
+pub fn submit<P, E, V>(
+    proto: Arc<P>,
+    endpoint: Arc<E>,
+    view: Arc<V>,
+    opts: SubmitOpts,
+) -> MethodRouter<ServeCtx>
 where
     P: BatchProtocol,
     E: SubmitEndpoint,
@@ -274,7 +327,8 @@ where
               Query(query): Query<Vec<(String, String)>>,
               headers: HeaderMap,
               body: Bytes| {
-            let (proto, endpoint, view, opts) = (proto.clone(), endpoint.clone(), view.clone(), opts.clone());
+            let (proto, endpoint, view, opts) =
+                (proto.clone(), endpoint.clone(), view.clone(), opts.clone());
             async move {
                 let rid = request_id(&headers, opts.request_id_header);
                 let ecx = ErrorCtx {
@@ -298,7 +352,12 @@ where
                     let ncx = normalize_ctx(&ctx, owner.clone(), &headers, query, rid.clone());
                     let req = endpoint.normalize(parsed, &ncx)?;
                     if let (Some(t), Some(s)) = (trace, t_parse) {
-                        t.span_since(fastvideo_trace::Comp::Adapter, "parse", s, body.len() as i64);
+                        t.span_since(
+                            fastvideo_trace::Comp::Adapter,
+                            "parse",
+                            s,
+                            body.len() as i64,
+                        );
                     }
                     let job = submit_request(&ctx, &*proto, req, owner, echo, &opts.ingest).await?;
                     match opts.wait {
@@ -328,7 +387,12 @@ enum Which {
     Result,
 }
 
-fn lookup<P: BatchProtocol, V: JobView>(proto: Arc<P>, view: Arc<V>, param: &'static str, which: Which) -> MethodRouter<ServeCtx> {
+fn lookup<P: BatchProtocol, V: JobView>(
+    proto: Arc<P>,
+    view: Arc<V>,
+    param: &'static str,
+    which: Which,
+) -> MethodRouter<ServeCtx> {
     let which = Arc::new(which);
     get(
         move |State(ctx): State<ServeCtx>,
@@ -380,12 +444,20 @@ pub fn status_code(job: &Job) -> i64 {
 
 /// `GET` status handler; the job's wire id is the path parameter `param`.
 /// `?logs=1|true` sets `ViewCtx::with_logs`.
-pub fn status<P: BatchProtocol, V: JobView>(proto: Arc<P>, view: Arc<V>, param: &'static str) -> MethodRouter<ServeCtx> {
+pub fn status<P: BatchProtocol, V: JobView>(
+    proto: Arc<P>,
+    view: Arc<V>,
+    param: &'static str,
+) -> MethodRouter<ServeCtx> {
     lookup(proto, view, param, Which::Status)
 }
 
 /// `GET` result handler (see [`status`]).
-pub fn result<P: BatchProtocol, V: JobView>(proto: Arc<P>, view: Arc<V>, param: &'static str) -> MethodRouter<ServeCtx> {
+pub fn result<P: BatchProtocol, V: JobView>(
+    proto: Arc<P>,
+    view: Arc<V>,
+    param: &'static str,
+) -> MethodRouter<ServeCtx> {
     lookup(proto, view, param, Which::Result)
 }
 

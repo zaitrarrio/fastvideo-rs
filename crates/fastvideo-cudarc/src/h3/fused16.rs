@@ -208,7 +208,9 @@ pub fn qk_norm_rope(
     };
     #[cfg(feature = "cuda")]
     if crate::wan::stats::device_expected() && packed.is_device_fresh() {
-        return dev::qk_norm_rope(packed, w, rope, batch, seq, heads, d, width, col_off, eps, false);
+        return dev::qk_norm_rope(
+            packed, w, rope, batch, seq, heads, d, width, col_off, eps, false,
+        );
     }
     let x = host_bf16(packed)?;
     let wh = w.host_cow()?;
@@ -257,12 +259,20 @@ pub fn qk_norm_rope_f32(
     if !(packed.is_bf16() && packed.is_device_fresh()) {
         return Ok(None);
     }
-    dev::qk_norm_rope(packed, w, rope, batch, seq, heads, d, width, col_off, eps, true).map(Some)
+    dev::qk_norm_rope(
+        packed, w, rope, batch, seq, heads, d, width, col_off, eps, true,
+    )
+    .map(Some)
 }
 
 /// `split_heads_bhsd` of a bf16 projection, stored widened to f32 (exact).
 #[cfg(feature = "cuda")]
-pub fn split_heads_f32(packed: &CudaTensor, col_off: usize, heads: usize, d: usize) -> Result<Option<CudaTensor>> {
+pub fn split_heads_f32(
+    packed: &CudaTensor,
+    col_off: usize,
+    heads: usize,
+    d: usize,
+) -> Result<Option<CudaTensor>> {
     let [batch, seq, width] = packed.shape[..] else {
         return Ok(None);
     };
@@ -366,11 +376,38 @@ pub fn gate_res_norm_mod(
     mx: bool,
 ) -> Result<Option<(CudaTensor, NormOut)>> {
     #[cfg(feature = "cuda")]
-    if fuse_enabled() && device_ok(res, rows) && res.is_bf16() && res.device_slice_bf16().is_some() && branch.shape == res.shape {
-        return dev::gate_res_norm_mod(res, branch, w, rows, base_g, gate_slot, base_n, scale_shift, eps, mx)
-            .map(Some);
+    if fuse_enabled()
+        && device_ok(res, rows)
+        && res.is_bf16()
+        && res.device_slice_bf16().is_some()
+        && branch.shape == res.shape
+    {
+        return dev::gate_res_norm_mod(
+            res,
+            branch,
+            w,
+            rows,
+            base_g,
+            gate_slot,
+            base_n,
+            scale_shift,
+            eps,
+            mx,
+        )
+        .map(Some);
     }
-    let _ = (res, branch, w, rows, base_g, gate_slot, base_n, scale_shift, eps, mx);
+    let _ = (
+        res,
+        branch,
+        w,
+        rows,
+        base_g,
+        gate_slot,
+        base_n,
+        scale_shift,
+        eps,
+        mx,
+    );
     Ok(None)
 }
 
@@ -425,7 +462,12 @@ pub fn swiglu_nvfp4(
 ) -> Result<Option<crate::wan::nvfp4_linear::Nvfp4Operand>> {
     let last = *h.shape.last().unwrap_or(&0);
     let half = last / 2;
-    if !glue_enabled() || half == 0 || !half.is_multiple_of(64) || !h.is_bf16() || !h.is_device_fresh() {
+    if !glue_enabled()
+        || half == 0
+        || !half.is_multiple_of(64)
+        || !h.is_bf16()
+        || !h.is_device_fresh()
+    {
         return Ok(None);
     }
     let Some(src) = h.device_slice_bf16() else {
@@ -683,7 +725,9 @@ mod dev {
         let (op, o16) = (out.ptr(), out.is16());
         let (sp, s16) = (ptr(src), 1i32);
         if crate::wan::act16::split_rows_ok(d, width, col_off) {
-            crate::wan::act16::split_rows(&dev, sp, s16, op, o16, batch, seq, heads, d, width, col_off)?;
+            crate::wan::act16::split_rows(
+                &dev, sp, s16, op, o16, batch, seq, heads, d, width, col_off,
+            )?;
             return out.into_tensor(vec![batch, heads, seq, d]);
         }
         let v = [n, seq, heads, d, width, col_off].map(|u| u as i64);
@@ -738,7 +782,9 @@ mod dev {
         let dim = rows.hidden;
         let n = res.numel() / dim;
         let dev = global_device().ok_or_else(|| msg("no device"))?;
-        let rp = ptr(res.device_slice_bf16().ok_or_else(|| msg("h3 fused: residual off device"))?);
+        let rp = ptr(res
+            .device_slice_bf16()
+            .ok_or_else(|| msg("h3 fused: residual off device"))?);
         let bo = operand(branch)?.ok_or_else(|| msg("h3 fused: branch off device"))?;
         let w = weight_f32(w)?;
         let wo = operand(&w)?.ok_or_else(|| msg("h3 fused: norm weight"))?;
@@ -746,7 +792,11 @@ mod dev {
         let mx = mx && dim.is_multiple_of(32);
         let mut hidden = OutBuf::new(n * dim, true)?;
         let mut out16 = OutBuf::new(if mx { 1 } else { n * dim }, true)?;
-        let mut act = if mx { Some(MxAct::alloc(n, dim)?) } else { None };
+        let mut act = if mx {
+            Some(MxAct::alloc(n, dim)?)
+        } else {
+            None
+        };
         let (hp, op) = (hidden.ptr(), out16.ptr());
         let (qp, sp) = match act.as_mut() {
             Some(a) => (ptr_mut(&mut a.q), ptr_mut(&mut a.s)),
@@ -802,7 +852,9 @@ mod dev {
             operand(&sin)?.ok_or_else(|| msg("rope sin"))?,
         );
         let n = batch * heads * seq * d;
-        let mut outs: Vec<OutBuf> = (0..parts).map(|_| OutBuf::new(n, true)).collect::<Result<_>>()?;
+        let mut outs: Vec<OutBuf> = (0..parts)
+            .map(|_| OutBuf::new(n, true))
+            .collect::<Result<_>>()?;
         let mut ptrs: Vec<u64> = outs.iter_mut().map(|o| o.ptr()).collect();
         if parts == 3 {
             ptrs.push(ptrs[2]);
@@ -881,7 +933,12 @@ mod dev {
         let dev = global_device().ok_or_else(|| msg("no device"))?;
         let mut a = nvfp4_alloc(rows, half)?;
         dev.stream.memcpy_dtod(amax, &mut a.amax).map_err(err)?;
-        let (sp, ap, pp, scp) = (ptr(src), ptr(&a.amax), ptr_mut(&mut a.packed), ptr_mut(&mut a.scales));
+        let (sp, ap, pp, scp) = (
+            ptr(src),
+            ptr(&a.amax),
+            ptr_mut(&mut a.packed),
+            ptr_mut(&mut a.scales),
+        );
         let (rows_i, pack_i, half_i) = (rows as i32, a.rows_pack as i32, half as i32);
         launch!(dev.stream, &dev.kernels.fvf_h3_swiglu_nvfp4, nvfp4_cfg(rows);
             &sp, &ap, &pp, &scp, &rows_i, &pack_i, &half_i, &code)
@@ -931,8 +988,10 @@ mod dev {
                 launch!(dev.stream, &dev.kernels.nvfp4_amax_bf16, amax_cfg; &op, &g, &mut a.amax, &nn)
                     .map_err(err)?
             }
-            None => launch!(dev.stream, &dev.kernels.fvf_amax_f32_r16, amax_cfg; &op, &mut a.amax, &nn)
-                .map_err(err)?,
+            None => {
+                launch!(dev.stream, &dev.kernels.fvf_amax_f32_r16, amax_cfg; &op, &mut a.amax, &nn)
+                    .map_err(err)?
+            }
         }
         let (ap, pp, scp) = (ptr(&a.amax), ptr_mut(&mut a.packed), ptr_mut(&mut a.scales));
         let v = [seq, a.rows_pack, heads, d].map(|u| u as i32);

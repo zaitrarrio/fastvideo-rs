@@ -11,11 +11,12 @@ use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::Router;
 use fastvideo_engine_service::{
-    CausalControl, CausalSession, ClipBuild, ClipSession, EngineBackend, EngineConfig, EngineService, FakeBackend,
-    FakeConfig, FakeModel, FakeTiming, Mp4Mode, Readiness,
+    CausalControl, CausalSession, ClipBuild, ClipSession, EngineBackend, EngineConfig,
+    EngineService, FakeBackend, FakeConfig, FakeModel, FakeTiming, Mp4Mode, Readiness,
 };
 use fastvideo_fal::director::{
-    ChunkBuild, ChunkOutput, DirectorClips, DirectorConfig, DirectorEngine, DirectorService, DirectorStream, StreamBlock,
+    ChunkBuild, ChunkOutput, DirectorClips, DirectorConfig, DirectorEngine, DirectorService,
+    DirectorStream, StreamBlock,
 };
 use fastvideo_fal::{router_with, FalApp, FalConfig};
 use fastvideo_media::video::EncoderBackend;
@@ -50,7 +51,11 @@ pub fn h3_silent() -> FakeModel {
 
 /// The silent model's fal app (`fv/h3-silent/director`).
 pub fn silent_app() -> FalApp {
-    FalApp { id: "fv/h3-silent".into(), model: "fake-h3-silent".into(), tier: None }
+    FalApp {
+        id: "fv/h3-silent".into(),
+        model: "fake-h3-silent".into(),
+        tier: None,
+    }
 }
 
 /// The fake LongLive app (`fastvideo/longlive`: served name `longlive`).
@@ -113,7 +118,11 @@ impl DirectorStream for Stream {
 
 /// `DirectorEngine` over `EngineService` (what fv-serve does), with a
 /// test gate in front of every chunk build (see [`Opts::hold_builds`]).
-pub struct EngineDirector(pub EngineService, pub tokio::sync::watch::Receiver<bool>, pub Arc<std::sync::Mutex<Vec<String>>>);
+pub struct EngineDirector(
+    pub EngineService,
+    pub tokio::sync::watch::Receiver<bool>,
+    pub Arc<std::sync::Mutex<Vec<String>>>,
+);
 
 /// The clip session, released by `close` (the build future may outlive it).
 pub struct Clips {
@@ -139,7 +148,9 @@ impl DirectorClips for Clips {
     }
     async fn build(&self, c: ChunkBuild) -> Result<ChunkOutput, ApiError> {
         let mut gate = self.gate.clone();
-        gate.wait_for(|open| *open).await.map_err(|_| ApiError::internal("the build gate is gone"))?;
+        gate.wait_for(|open| *open)
+            .await
+            .map_err(|_| ApiError::internal("the build gate is gone"))?;
         let b = ClipBuild {
             prompt: c.prompt,
             negative_prompt: None,
@@ -153,11 +164,16 @@ impl DirectorClips for Clips {
         };
         let job = {
             let g = self.session.read().await;
-            let s = g.as_ref().ok_or_else(|| ApiError::internal("the clip session is closed"))?;
+            let s = g
+                .as_ref()
+                .ok_or_else(|| ApiError::internal("the clip session is closed"))?;
             s.build(b).await?
         };
         let out = job.wait().await?;
-        Ok(ChunkOutput { frames: out.frames.unwrap_or_default(), audio: out.audio })
+        Ok(ChunkOutput {
+            frames: out.frames.unwrap_or_default(),
+            audio: out.audio,
+        })
     }
 }
 
@@ -196,7 +212,9 @@ impl EngineGate for Gate {
         self.0.caps().resolve(name).map(|c| c.id.0.clone())
     }
     async fn submit(&self, _job: &Job) -> Result<(), ApiError> {
-        Err(ApiError::internal("batch jobs are not part of the director tests"))
+        Err(ApiError::internal(
+            "batch jobs are not part of the director tests",
+        ))
     }
     async fn cancel(&self, _id: JobId) -> bool {
         false
@@ -205,9 +223,16 @@ impl EngineGate for Gate {
 
 /// An ffmpeg with the given encoder (`FV_FFMPEG`, else `ffmpeg` on PATH).
 pub fn ffmpeg_with(encoder: &str) -> Option<PathBuf> {
-    let p = std::env::var_os("FV_FFMPEG").map(PathBuf::from).unwrap_or_else(|| "ffmpeg".into());
-    let out = std::process::Command::new(&p).args(["-hide_banner", "-encoders"]).output().ok()?;
-    String::from_utf8_lossy(&out.stdout).contains(encoder).then_some(p)
+    let p = std::env::var_os("FV_FFMPEG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "ffmpeg".into());
+    let out = std::process::Command::new(&p)
+        .args(["-hide_banner", "-encoders"])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .contains(encoder)
+        .then_some(p)
 }
 
 /// The H.264 backend the tests can run: x264 through ffmpeg when present,
@@ -216,7 +241,9 @@ pub fn h264_backend() -> Option<EncoderBackend> {
     if ffmpeg_with("libx264").is_some() {
         return Some(EncoderBackend::CpuTestX264);
     }
-    EncoderBackend::OpenH264.compiled().then_some(EncoderBackend::OpenH264)
+    EncoderBackend::OpenH264
+        .compiled()
+        .then_some(EncoderBackend::OpenH264)
 }
 
 pub struct Fixture {
@@ -297,15 +324,30 @@ impl Default for Opts {
 pub async fn fixture(o: Opts) -> Fixture {
     let dir = std::env::temp_dir().join(format!("fv-director-{}", uuid::Uuid::new_v4().simple()));
     let fake = FakeConfig {
-        models: vec![h3_av(), h3_silent(), FakeModel::longlive(), FakeModel::sf_wan()],
-        timing: FakeTiming { step: o.step, causal_steps: o.causal_steps, ..FakeTiming::default() },
+        models: vec![
+            h3_av(),
+            h3_silent(),
+            FakeModel::longlive(),
+            FakeModel::sf_wan(),
+        ],
+        timing: FakeTiming {
+            step: o.step,
+            causal_steps: o.causal_steps,
+            ..FakeTiming::default()
+        },
         mp4: Mp4Mode::Off,
         ..FakeConfig::default()
     };
-    let cfg = EngineConfig { output_dir: dir.join("engine"), ..EngineConfig::default() };
+    let cfg = EngineConfig {
+        output_dir: dir.join("engine"),
+        ..EngineConfig::default()
+    };
     let backends: Vec<Box<dyn EngineBackend>> = vec![Box::new(FakeBackend::new(fake))];
     let engine = EngineService::start(cfg, backends).expect("engine starts");
-    assert_eq!(tokio::time::timeout(T, engine.wait_ready()).await.unwrap(), Readiness::Ready);
+    assert_eq!(
+        tokio::time::timeout(T, engine.wait_ready()).await.unwrap(),
+        Readiness::Ready
+    );
 
     let scfg = ServeConfig::new(Url::parse(&o.public_base).unwrap(), &dir);
     let mut builder = ServeCtx::builder(scfg, Arc::new(Gate(engine.clone())))
@@ -317,13 +359,22 @@ pub async fn fixture(o: Opts) -> Fixture {
     let ctx = builder.build().await.unwrap();
 
     let hcfg = if o.lan {
-        HostConfig { udp_bind: Some("0.0.0.0:0".parse().unwrap()), ice_servers: Vec::new(), ..HostConfig::default() }
+        HostConfig {
+            udp_bind: Some("0.0.0.0:0".parse().unwrap()),
+            ice_servers: Vec::new(),
+            ..HostConfig::default()
+        }
     } else {
         HostConfig::loopback(true, false)
     };
     let host = RtcHost::bind(hcfg).await.unwrap();
     let dcfg = DirectorConfig {
-        apps: vec![FalApp::h3(Tier::Max), silent_app(), longlive_app(), sfwan_app()],
+        apps: vec![
+            FalApp::h3(Tier::Max),
+            silent_app(),
+            longlive_app(),
+            sfwan_app(),
+        ],
         causal_lead_seconds: o.causal_lead_seconds,
         buffer_chunks: o.buffer_chunks,
         buffer_max_bytes: o.buffer_max_bytes,
@@ -338,10 +389,35 @@ pub async fn fixture(o: Opts) -> Fixture {
     };
     let (builds, gate) = tokio::sync::watch::channel(!o.hold_builds);
     let engine_prompts = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let svc = DirectorService::new(dcfg, host, Arc::new(EngineDirector(engine.clone(), gate, engine_prompts.clone())));
-    let fal = FalConfig { apps: vec![FalApp::h3(Tier::Max), silent_app(), longlive_app(), sfwan_app()], ..FalConfig::default() };
-    let app = router_with(ctx.clone(), fal, fastvideo_fal::director::routes(svc.clone())).merge(ctx.routes().with_state(()));
-    Fixture { ctx, engine, svc, app, dir, builds, engine_prompts }
+    let svc = DirectorService::new(
+        dcfg,
+        host,
+        Arc::new(EngineDirector(engine.clone(), gate, engine_prompts.clone())),
+    );
+    let fal = FalConfig {
+        apps: vec![
+            FalApp::h3(Tier::Max),
+            silent_app(),
+            longlive_app(),
+            sfwan_app(),
+        ],
+        ..FalConfig::default()
+    };
+    let app = router_with(
+        ctx.clone(),
+        fal,
+        fastvideo_fal::director::routes(svc.clone()),
+    )
+    .merge(ctx.routes().with_state(()));
+    Fixture {
+        ctx,
+        engine,
+        svc,
+        app,
+        dir,
+        builds,
+        engine_prompts,
+    }
 }
 
 pub struct Resp {
@@ -363,7 +439,11 @@ pub async fn send(app: &Router, req: Request<Body>) -> Resp {
     let r = app.clone().oneshot(req).await.unwrap();
     let (parts, body) = r.into_parts();
     let body = axum::body::to_bytes(body, 1 << 30).await.unwrap();
-    Resp { status: parts.status, headers: parts.headers, body }
+    Resp {
+        status: parts.status,
+        headers: parts.headers,
+        body,
+    }
 }
 
 pub fn req(method: &str, uri: &str, key: Option<&str>, body: Option<String>) -> Request<Body> {
@@ -372,7 +452,10 @@ pub fn req(method: &str, uri: &str, key: Option<&str>, body: Option<String>) -> 
         b = b.header("authorization", format!("Key {k}"));
     }
     match body {
-        Some(v) => b.header("content-type", "application/json").body(Body::from(v)).unwrap(),
+        Some(v) => b
+            .header("content-type", "application/json")
+            .body(Body::from(v))
+            .unwrap(),
         None => b.body(Body::empty()).unwrap(),
     }
 }

@@ -44,14 +44,25 @@ impl Expansion {
 /// Rewrites `req.prompt` with the server's upsampler when the request asks
 /// for it (module docs). Image-conditioned requests get a text-only
 /// rewrite that is told an unseen image sets the first frame.
-pub async fn expand_request(ctx: &ServeCtx, req: &mut GenerationRequest, caps: &ModelCaps) -> Expansion {
-    let (Some(pe), Some(svc)) = (req.prompt_expansion, ctx.upsampler()) else { return Expansion::default() };
+pub async fn expand_request(
+    ctx: &ServeCtx,
+    req: &mut GenerationRequest,
+    caps: &ModelCaps,
+) -> Expansion {
+    let (Some(pe), Some(svc)) = (req.prompt_expansion, ctx.upsampler()) else {
+        return Expansion::default();
+    };
     if !pe.wanted(svc.settings().default_on) || req.prompt.trim().is_empty() || req.edit.is_some() {
         return Expansion::default();
     }
-    let effort = if pe.mode == ExpansionMode::Quality { Effort::Quality } else { Effort::Balanced };
+    let effort = if pe.mode == ExpansionMode::Quality {
+        Effort::Quality
+    } else {
+        Effort::Balanced
+    };
     let family = prompt_family(caps.family);
-    let image = !req.keyframes.is_empty() || req.references.iter().any(|r| r.kind == MediaKind::Image);
+    let image =
+        !req.keyframes.is_empty() || req.references.iter().any(|r| r.kind == MediaKind::Image);
     match svc.rewrite(family, effort, image, &req.prompt).await {
         Ok(p) => {
             req.unnote_noop(pe.field);
@@ -61,7 +72,11 @@ pub async fn expand_request(ctx: &ServeCtx, req: &mut GenerationRequest, caps: &
                     "prompt expanded by the upsampler ({} `{}`, {}): {} -> {} characters",
                     pe.field,
                     pe.mode.as_str(),
-                    if pe.explicit { "requested" } else { "protocol default" },
+                    if pe.explicit {
+                        "requested"
+                    } else {
+                        "protocol default"
+                    },
                     before.chars().count(),
                     p.chars().count()
                 )),
@@ -70,7 +85,9 @@ pub async fn expand_request(ctx: &ServeCtx, req: &mut GenerationRequest, caps: &
         }
         Err(e) => Expansion {
             expanded: None,
-            log: Some(format!("prompt expansion failed ({e}); generating with the original prompt")),
+            log: Some(format!(
+                "prompt expansion failed ({e}); generating with the original prompt"
+            )),
         },
     }
 }

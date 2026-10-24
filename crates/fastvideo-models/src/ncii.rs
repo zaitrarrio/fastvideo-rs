@@ -54,7 +54,8 @@ pub struct NciiConfig {
 
 impl NciiConfig {
     pub fn from_json(text: &str) -> Result<Self, String> {
-        let v: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("ncii config.json: {e}"))?;
+        let v: serde_json::Value =
+            serde_json::from_str(text).map_err(|e| format!("ncii config.json: {e}"))?;
         let u = |k: &str| -> Result<usize, String> {
             v.get(k)
                 .and_then(serde_json::Value::as_u64)
@@ -64,7 +65,10 @@ impl NciiConfig {
         if v.get("model_type").and_then(|x| x.as_str()) != Some("gemma3_text") {
             return Err("ncii config.json: model_type is not gemma3_text".into());
         }
-        if v.get("use_bidirectional_attention").and_then(|x| x.as_bool()) == Some(true) {
+        if v.get("use_bidirectional_attention")
+            .and_then(|x| x.as_bool())
+            == Some(true)
+        {
             return Err("ncii config.json: bidirectional attention is not supported".into());
         }
         for k in ["attn_logit_softcapping", "final_logit_softcapping"] {
@@ -86,14 +90,24 @@ impl NciiConfig {
             .or_else(|| v.get("rope_theta"))
             .and_then(serde_json::Value::as_f64)
             .ok_or("ncii config.json: missing rope_theta")?;
-        if v.pointer("/rope_parameters/full_attention/rope_type").and_then(|x| x.as_str()).is_some_and(|t| t != "default") {
+        if v.pointer("/rope_parameters/full_attention/rope_type")
+            .and_then(|x| x.as_str())
+            .is_some_and(|t| t != "default")
+        {
             return Err("ncii config.json: only the default RoPE is supported".into());
         }
-        let id2label = v.get("id2label").and_then(|x| x.as_object()).ok_or("ncii config.json: missing id2label")?;
+        let id2label = v
+            .get("id2label")
+            .and_then(|x| x.as_object())
+            .ok_or("ncii config.json: missing id2label")?;
         let mut labels = vec![String::new(); id2label.len()];
         for (k, l) in id2label {
-            let i: usize = k.parse().map_err(|_| format!("ncii config.json: id2label key {k}"))?;
-            *labels.get_mut(i).ok_or("ncii config.json: id2label is not dense")? =
+            let i: usize = k
+                .parse()
+                .map_err(|_| format!("ncii config.json: id2label key {k}"))?;
+            *labels
+                .get_mut(i)
+                .ok_or("ncii config.json: id2label is not dense")? =
                 l.as_str().unwrap_or_default().to_owned();
         }
         Ok(Self {
@@ -104,7 +118,10 @@ impl NciiConfig {
             head_dim: u("head_dim")?,
             intermediate: u("intermediate_size")?,
             vocab: u("vocab_size")?,
-            eps: v.get("rms_norm_eps").and_then(|x| x.as_f64()).unwrap_or(1e-6) as f32,
+            eps: v
+                .get("rms_norm_eps")
+                .and_then(|x| x.as_f64())
+                .unwrap_or(1e-6) as f32,
             rope_theta,
             query_pre_attn_scalar: v
                 .get("query_pre_attn_scalar")
@@ -194,17 +211,25 @@ impl SafeTensors {
         let header = data
             .get(8..8 + n)
             .ok_or_else(|| format!("{}: truncated header", path.display()))?;
-        let header: serde_json::Value =
-            serde_json::from_slice(header).map_err(|e| format!("{}: header: {e}", path.display()))?;
+        let header: serde_json::Value = serde_json::from_slice(header)
+            .map_err(|e| format!("{}: header: {e}", path.display()))?;
         let mut tensors = HashMap::new();
-        for (name, t) in header.as_object().ok_or("safetensors header is not an object")? {
+        for (name, t) in header
+            .as_object()
+            .ok_or("safetensors header is not an object")?
+        {
             if name == "__metadata__" {
                 continue;
             }
             let dtype = t["dtype"].as_str().unwrap_or_default().to_owned();
             let shape = t["shape"]
                 .as_array()
-                .map(|a| a.iter().filter_map(|x| x.as_u64()).map(|x| x as usize).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_u64())
+                        .map(|x| x as usize)
+                        .collect()
+                })
                 .unwrap_or_default();
             let off = t["data_offsets"].as_array().ok_or("missing data_offsets")?;
             let (a, b) = (
@@ -214,7 +239,11 @@ impl SafeTensors {
             tensors.insert(name.clone(), (dtype, shape, a, b));
         }
         let start = 8 + n;
-        Ok(Self { data, start, tensors })
+        Ok(Self {
+            data,
+            start,
+            tensors,
+        })
     }
 
     fn raw(&self, name: &str, shape: &[usize]) -> Result<(&str, &[u8]), String> {
@@ -223,7 +252,9 @@ impl SafeTensors {
             .get(name)
             .ok_or_else(|| format!("ncii weights: missing {name}"))?;
         if s != shape {
-            return Err(format!("ncii weights: {name} has shape {s:?}, expected {shape:?}"));
+            return Err(format!(
+                "ncii weights: {name} has shape {s:?}, expected {shape:?}"
+            ));
         }
         let bytes = self
             .data
@@ -236,12 +267,29 @@ impl SafeTensors {
         let (dtype, bytes) = self.raw(name, shape)?;
         let n: usize = shape.iter().product();
         let out: Vec<f32> = match dtype {
-            "BF16" => bytes.chunks_exact(2).map(|c| bf16_to_f32(u16::from_le_bytes([c[0], c[1]]))).collect(),
-            "F32" => bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
-            other => return Err(format!("ncii weights: {name} is {other}; BF16 or F32 expected")),
+            "BF16" => bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| bf16_to_f32(u16::from_le_bytes([c[0], c[1]])))
+                .collect(),
+            "F32" => bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect(),
+            other => {
+                return Err(format!(
+                    "ncii weights: {name} is {other}; BF16 or F32 expected"
+                ))
+            }
         };
         if out.len() != n {
-            return Err(format!("ncii weights: {name} holds {} values, expected {n}", out.len()));
+            return Err(format!(
+                "ncii weights: {name} holds {} values, expected {n}",
+                out.len()
+            ));
         }
         Ok(out)
     }
@@ -249,12 +297,24 @@ impl SafeTensors {
     fn bf16(&self, name: &str, shape: &[usize]) -> Result<Vec<u16>, String> {
         let (dtype, bytes) = self.raw(name, shape)?;
         match dtype {
-            "BF16" => Ok(bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect()),
-            "F32" => Ok(bytes
-                .chunks_exact(4)
-                .map(|c| (round_bf16(f32::from_le_bytes([c[0], c[1], c[2], c[3]])).to_bits() >> 16) as u16)
+            "BF16" => Ok(bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect()),
-            other => Err(format!("ncii weights: {name} is {other}; BF16 or F32 expected")),
+            "F32" => Ok(bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| {
+                    (round_bf16(f32::from_le_bytes([c[0], c[1], c[2], c[3]])).to_bits() >> 16)
+                        as u16
+                })
+                .collect()),
+            other => Err(format!(
+                "ncii weights: {name} is {other}; BF16 or F32 expected"
+            )),
         }
     }
 }
@@ -380,7 +440,10 @@ impl NciiGuard {
             if id >= c.vocab {
                 return Err(format!("ncii: token {id} out of the vocabulary"));
             }
-            for (d, e) in x[t * h..(t + 1) * h].iter_mut().zip(&self.embed[id * h..(id + 1) * h]) {
+            for (d, e) in x[t * h..(t + 1) * h]
+                .iter_mut()
+                .zip(&self.embed[id * h..(id + 1) * h])
+            {
                 *d = bf16_to_f32(*e) * self.embed_scale;
             }
         }
@@ -423,31 +486,33 @@ impl NciiGuard {
                 }
             }
             let mut attn = vec![0f32; n * nh * hd];
-            attn.par_chunks_mut(nh * hd).enumerate().for_each(|(t, out)| {
-                let mut p = vec![0f32; t + 1];
-                for head in 0..nh {
-                    let kvh = head / group;
-                    let qv = &q[(t * nh + head) * hd..][..hd];
-                    let mut max = f32::NEG_INFINITY;
-                    for (s, ps) in p.iter_mut().enumerate() {
-                        let kv = &k[(s * nkv + kvh) * hd..][..hd];
-                        *ps = qv.iter().zip(kv).map(|(a, b)| a * b).sum::<f32>() * scale;
-                        max = max.max(*ps);
-                    }
-                    let mut sum = 0f32;
-                    for ps in p.iter_mut() {
-                        *ps = (*ps - max).exp();
-                        sum += *ps;
-                    }
-                    let o = &mut out[head * hd..(head + 1) * hd];
-                    for (s, ps) in p.iter().enumerate() {
-                        let w = ps / sum;
-                        for (d, vv) in o.iter_mut().zip(&v[(s * nkv + kvh) * hd..][..hd]) {
-                            *d += w * vv;
+            attn.par_chunks_mut(nh * hd)
+                .enumerate()
+                .for_each(|(t, out)| {
+                    let mut p = vec![0f32; t + 1];
+                    for head in 0..nh {
+                        let kvh = head / group;
+                        let qv = &q[(t * nh + head) * hd..][..hd];
+                        let mut max = f32::NEG_INFINITY;
+                        for (s, ps) in p.iter_mut().enumerate() {
+                            let kv = &k[(s * nkv + kvh) * hd..][..hd];
+                            *ps = qv.iter().zip(kv).map(|(a, b)| a * b).sum::<f32>() * scale;
+                            max = max.max(*ps);
+                        }
+                        let mut sum = 0f32;
+                        for ps in p.iter_mut() {
+                            *ps = (*ps - max).exp();
+                            sum += *ps;
+                        }
+                        let o = &mut out[head * hd..(head + 1) * hd];
+                        for (s, ps) in p.iter().enumerate() {
+                            let w = ps / sum;
+                            for (d, vv) in o.iter_mut().zip(&v[(s * nkv + kvh) * hd..][..hd]) {
+                                *d += w * vv;
+                            }
                         }
                     }
-                }
-            });
+                });
             let mut a = linear(&attn, n, nh * hd, &layer.o, h);
             rms_norm(&mut a, h, &layer.post_attn_norm, c.eps);
             for (xv, av) in x.iter_mut().zip(&a) {
@@ -523,11 +588,23 @@ mod tests {
         assert_eq!(c.rope_theta, 1e6);
         for (from, to) in [
             ("\"gemma3_text\"", "\"llama\""),
-            ("\"use_bidirectional_attention\":false", "\"use_bidirectional_attention\":true"),
-            ("\"layer_types\":[\"full_attention\"]", "\"layer_types\":[\"sliding_attention\"]"),
-            ("\"final_logit_softcapping\":null", "\"final_logit_softcapping\":30.0"),
+            (
+                "\"use_bidirectional_attention\":false",
+                "\"use_bidirectional_attention\":true",
+            ),
+            (
+                "\"layer_types\":[\"full_attention\"]",
+                "\"layer_types\":[\"sliding_attention\"]",
+            ),
+            (
+                "\"final_logit_softcapping\":null",
+                "\"final_logit_softcapping\":30.0",
+            ),
         ] {
-            assert!(NciiConfig::from_json(&CONFIG.replace(from, to)).is_err(), "{to}");
+            assert!(
+                NciiConfig::from_json(&CONFIG.replace(from, to)).is_err(),
+                "{to}"
+            );
         }
     }
 
@@ -564,14 +641,17 @@ mod tests {
     fn matches_transformers_when_weights_are_present() {
         // FV_NCII_DIR, else an untracked copy at tests/fixtures/ncii-guard
         // (how the build pod, which takes no environment, gets it).
-        let local = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ncii-guard");
+        let local =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ncii-guard");
         // (`*.safetensors` is gitignored, and the pod sync skips ignored files:
         // the local copy is named `model.st`.)
         let (dir, weights) = match std::env::var_os("FV_NCII_DIR") {
             Some(d) => (std::path::PathBuf::from(d), "model.safetensors"),
             None if local.join("model.st").is_file() => (local, "model.st"),
             None => {
-                eprintln!("ncii: no weights (FV_NCII_DIR or tests/fixtures/ncii-guard/model.st); skipped");
+                eprintln!(
+                    "ncii: no weights (FV_NCII_DIR or tests/fixtures/ncii-guard/model.st); skipped"
+                );
                 return;
             }
         };
@@ -580,7 +660,8 @@ mod tests {
         eprintln!("ncii: loaded in {:.2} s", t.elapsed().as_secs_f64());
         let reference: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ncii_reference.json"),
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/ncii_reference.json"),
             )
             .unwrap(),
         )
@@ -588,7 +669,12 @@ mod tests {
         let mut worst = 0f32;
         for case in reference["cases"].as_array().unwrap() {
             let prompt = case["prompt"].as_str().unwrap();
-            let want_ids: Vec<u32> = case["ids"].as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as u32).collect();
+            let want_ids: Vec<u32> = case["ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_u64().unwrap() as u32)
+                .collect();
             assert_eq!(guard.tokenize(prompt).unwrap(), want_ids, "{prompt}");
             let t = std::time::Instant::now();
             let got = guard.classify(prompt).unwrap();
@@ -602,7 +688,11 @@ mod tests {
             );
             let want = case["ncii"].as_f64().unwrap() as f32;
             worst = worst.max((got.ncii - want).abs());
-            assert_eq!(got.label, case["label"].as_str().unwrap(), "{prompt}: {got:?} vs {want}");
+            assert_eq!(
+                got.label,
+                case["label"].as_str().unwrap(),
+                "{prompt}: {got:?} vs {want}"
+            );
         }
         eprintln!("ncii: max |p_ncii - transformers| = {worst}");
         assert!(worst < 0.02, "{worst}");

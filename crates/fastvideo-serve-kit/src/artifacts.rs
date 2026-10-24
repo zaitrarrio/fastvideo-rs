@@ -45,7 +45,11 @@ impl UrlKey {
     }
     /// A random key (URLs die with the process).
     pub fn random() -> Self {
-        Self::new(format!("{}{}", crate::random_token(), crate::random_token()))
+        Self::new(format!(
+            "{}{}",
+            crate::random_token(),
+            crate::random_token()
+        ))
     }
 
     /// `hex(HMAC-SHA256(key, "id|name|exp"))`.
@@ -128,9 +132,9 @@ pub trait ArtifactStore: UrlSigner + Send + Sync + 'static {
     async fn open(&self, a: &Artifact) -> Result<ArtifactBody, ApiError> {
         match &a.location {
             ArtifactLocation::Local(p) => Ok(ArtifactBody::File(p.clone())),
-            ArtifactLocation::Object { .. } => {
-                Err(ApiError::internal("this artifact store cannot read objects back"))
-            }
+            ArtifactLocation::Object { .. } => Err(ApiError::internal(
+                "this artifact store cannot read objects back",
+            )),
         }
     }
 }
@@ -197,7 +201,8 @@ impl LocalArtifactStore {
 
 impl UrlSigner for LocalArtifactStore {
     fn url_for(&self, a: &Artifact, ttl: Duration) -> Url {
-        self.urls.files_url_ttl(&a.id.to_string(), &a.file_name, ttl)
+        self.urls
+            .files_url_ttl(&a.id.to_string(), &a.file_name, ttl)
     }
     fn url_issued(&self, a: &Artifact, issued: OffsetDateTime, ttl: Duration) -> Url {
         let exp = issued.unix_timestamp() + ttl.as_secs() as i64;
@@ -209,7 +214,10 @@ impl UrlSigner for LocalArtifactStore {
 impl ArtifactStore for LocalArtifactStore {
     async fn put(&self, src: &Path, meta: ArtifactMeta) -> Result<Artifact, ApiError> {
         if !valid_file_name(&meta.file_name) {
-            return Err(ApiError::internal(format!("bad artifact name `{}`", meta.file_name)));
+            return Err(ApiError::internal(format!(
+                "bad artifact name `{}`",
+                meta.file_name
+            )));
         }
         let id = ArtifactId::new();
         let dir = self.root.join(id.to_string());
@@ -272,8 +280,10 @@ async fn serve_file(
 ) -> Response {
     let not_found = || {
         let mut r = (StatusCode::NOT_FOUND, "not found").into_response();
-        r.headers_mut()
-            .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
+        r.headers_mut().insert(
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            HeaderValue::from_static("*"),
+        );
         r
     };
     let (Some(exp), Some(sig)) = (q.exp, q.sig) else {
@@ -281,7 +291,9 @@ async fn serve_file(
     };
     if !valid_file_name(&name)
         || !valid_file_name(&id)
-        || !fs.key.verify(&id, &name, exp, &sig, OffsetDateTime::now_utc())
+        || !fs
+            .key
+            .verify(&id, &name, exp, &sig, OffsetDateTime::now_utc())
     {
         return not_found();
     }
@@ -293,8 +305,14 @@ async fn serve_file(
                 Err(e) => match e {},
             };
             let h = resp.headers_mut();
-            h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
-            h.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=86400"));
+            h.insert(
+                header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                HeaderValue::from_static("*"),
+            );
+            h.insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("private, max-age=86400"),
+            );
             return resp;
         }
     }
@@ -339,7 +357,9 @@ fn uri_encode(s: &str, keep_slash: bool) -> String {
     let mut o = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => o.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                o.push(b as char)
+            }
             b'/' if keep_slash => o.push('/'),
             _ => o.push_str(&format!("%{b:02X}")),
         }
@@ -362,7 +382,11 @@ impl S3Config {
         let path = if self.path_style {
             format!("{base_path}/{}/{ekey}", uri_encode(&self.bucket, false))
         } else {
-            let host = format!("{}.{}", self.bucket, self.endpoint.host_str().unwrap_or_default());
+            let host = format!(
+                "{}.{}",
+                self.bucket,
+                self.endpoint.host_str().unwrap_or_default()
+            );
             let _ = u.set_host(Some(&host));
             format!("{base_path}/{ekey}")
         };
@@ -385,7 +409,10 @@ impl S3Config {
         let scope = format!("{date}/{}/s3/aws4_request", self.region);
         let mut q: Vec<(String, String)> = vec![
             ("X-Amz-Algorithm".into(), "AWS4-HMAC-SHA256".into()),
-            ("X-Amz-Credential".into(), format!("{}/{scope}", self.access_key)),
+            (
+                "X-Amz-Credential".into(),
+                format!("{}/{scope}", self.access_key),
+            ),
             ("X-Amz-Date".into(), ts.clone()),
             ("X-Amz-Expires".into(), expires.to_string()),
             ("X-Amz-SignedHeaders".into(), "host".into()),
@@ -407,10 +434,7 @@ impl S3Config {
         let k = hmac(&k, "aws4_request");
         let sig = hex::encode(&hmac(&k, &sts));
         u.set_path("");
-        let full = format!(
-            "{}://{host}{path}?{cq}&X-Amz-Signature={sig}",
-            u.scheme()
-        );
+        let full = format!("{}://{host}{path}?{cq}&X-Amz-Signature={sig}", u.scheme());
         Url::parse(&full).expect("well-formed presigned URL")
     }
 }
@@ -445,7 +469,8 @@ impl UrlSigner for S3ArtifactStore {
             ArtifactLocation::Object { key, .. } => key.clone(),
             ArtifactLocation::Local(_) => self.key_for(a.id, &a.file_name),
         };
-        self.cfg.presign("GET", &key, ttl, OffsetDateTime::now_utc())
+        self.cfg
+            .presign("GET", &key, ttl, OffsetDateTime::now_utc())
     }
     /// `X-Amz-Date` = `issued`: the same presigned URL for the same window.
     /// A window past S3's 7-day presign cap that has outlived the cap gets
@@ -467,7 +492,10 @@ impl UrlSigner for S3ArtifactStore {
 impl ArtifactStore for S3ArtifactStore {
     async fn put(&self, src: &Path, meta: ArtifactMeta) -> Result<Artifact, ApiError> {
         if !valid_file_name(&meta.file_name) {
-            return Err(ApiError::internal(format!("bad artifact name `{}`", meta.file_name)));
+            return Err(ApiError::internal(format!(
+                "bad artifact name `{}`",
+                meta.file_name
+            )));
         }
         let id = ArtifactId::new();
         let key = self.key_for(id, &meta.file_name);
@@ -493,7 +521,12 @@ impl ArtifactStore for S3ArtifactStore {
     async fn delete(&self, a: &Artifact) {
         #[cfg(feature = "fetch")]
         if let ArtifactLocation::Object { key, .. } = &a.location {
-            let u = self.cfg.presign("DELETE", key, Duration::from_secs(300), OffsetDateTime::now_utc());
+            let u = self.cfg.presign(
+                "DELETE",
+                key,
+                Duration::from_secs(300),
+                OffsetDateTime::now_utc(),
+            );
             if let Err(e) = self.http.delete(u).send().await {
                 tracing::warn!(error = %e, "S3 delete failed");
             }
@@ -509,7 +542,9 @@ impl ArtifactStore for S3ArtifactStore {
     async fn open(&self, a: &Artifact) -> Result<ArtifactBody, ApiError> {
         match &a.location {
             ArtifactLocation::Local(p) => Ok(ArtifactBody::File(p.clone())),
-            ArtifactLocation::Object { key, .. } => self.download(key).await.map(ArtifactBody::Bytes),
+            ArtifactLocation::Object { key, .. } => {
+                self.download(key).await.map(ArtifactBody::Bytes)
+            }
         }
     }
 }
@@ -517,7 +552,12 @@ impl ArtifactStore for S3ArtifactStore {
 impl S3ArtifactStore {
     #[cfg(feature = "fetch")]
     async fn download(&self, key: &str) -> Result<bytes::Bytes, ApiError> {
-        let u = self.cfg.presign("GET", key, Duration::from_secs(300), OffsetDateTime::now_utc());
+        let u = self.cfg.presign(
+            "GET",
+            key,
+            Duration::from_secs(300),
+            OffsetDateTime::now_utc(),
+        );
         let r = self
             .http
             .get(u)
@@ -525,9 +565,14 @@ impl S3ArtifactStore {
             .await
             .map_err(|e| ApiError::internal(format!("S3 download: {e}")))?;
         if !r.status().is_success() {
-            return Err(ApiError::internal(format!("S3 download: HTTP {}", r.status())));
+            return Err(ApiError::internal(format!(
+                "S3 download: HTTP {}",
+                r.status()
+            )));
         }
-        r.bytes().await.map_err(|e| ApiError::internal(format!("S3 download: {e}")))
+        r.bytes()
+            .await
+            .map_err(|e| ApiError::internal(format!("S3 download: {e}")))
     }
 
     #[cfg(not(feature = "fetch"))]
@@ -543,7 +588,12 @@ impl S3ArtifactStore {
             .await
             .map_err(|e| ApiError::internal(format!("reading artifact: {e}")))?;
         let n = data.len() as u64;
-        let u = self.cfg.presign("PUT", key, Duration::from_secs(900), OffsetDateTime::now_utc());
+        let u = self.cfg.presign(
+            "PUT",
+            key,
+            Duration::from_secs(900),
+            OffsetDateTime::now_utc(),
+        );
         let r = self
             .http
             .put(u)
@@ -553,7 +603,10 @@ impl S3ArtifactStore {
             .await
             .map_err(|e| ApiError::internal(format!("S3 upload: {e}")))?;
         if !r.status().is_success() {
-            return Err(ApiError::internal(format!("S3 upload: HTTP {}", r.status())));
+            return Err(ApiError::internal(format!(
+                "S3 upload: HTTP {}",
+                r.status()
+            )));
         }
         Ok(n)
     }
@@ -585,17 +638,29 @@ mod tests {
         assert_eq!(sig.len(), 64);
         assert!(k.verify("id1", "a.mp4", exp, &sig, now));
         assert!(k.verify("id1", "a.mp4", exp, &sig, now + Duration::from_secs(60)));
-        assert!(!k.verify("id1", "a.mp4", exp, &sig, now + Duration::from_secs(61)), "expired");
+        assert!(
+            !k.verify("id1", "a.mp4", exp, &sig, now + Duration::from_secs(61)),
+            "expired"
+        );
         assert!(!k.verify("id1", "b.mp4", exp, &sig, now), "other name");
         assert!(!k.verify("id2", "a.mp4", exp, &sig, now), "other id");
-        assert!(!k.verify("id1", "a.mp4", exp + 1, &sig, now), "extended exp");
-        assert!(!UrlKey::new("other").verify("id1", "a.mp4", exp, &sig, now), "other key");
+        assert!(
+            !k.verify("id1", "a.mp4", exp + 1, &sig, now),
+            "extended exp"
+        );
+        assert!(
+            !UrlKey::new("other").verify("id1", "a.mp4", exp, &sig, now),
+            "other key"
+        );
         assert!(!k.verify("id1", "a.mp4", exp, "zz", now));
     }
 
     #[test]
     fn files_url_shape() {
-        let urls = LocalUrls { public_base: Url::parse("https://h.example/base").unwrap(), key: UrlKey::new("k") };
+        let urls = LocalUrls {
+            public_base: Url::parse("https://h.example/base").unwrap(),
+            key: UrlKey::new("k"),
+        };
         let u = urls.files_url("abc", "x.mp4", 100);
         assert_eq!(u.path(), "/base/files/abc/x.mp4");
         let q: Vec<(String, String)> = u.query_pairs().into_owned().collect();
@@ -624,11 +689,24 @@ mod tests {
             path_style: false,
             prefix: String::new(),
         };
-        let u = cfg.presign("GET", "test.txt", Duration::from_secs(86400), t("2013-05-24T00:00:00Z"));
+        let u = cfg.presign(
+            "GET",
+            "test.txt",
+            Duration::from_secs(86400),
+            t("2013-05-24T00:00:00Z"),
+        );
         assert_eq!(u.host_str(), Some("examplebucket.s3.amazonaws.com"));
         assert_eq!(u.path(), "/test.txt");
-        let sig = u.query_pairs().find(|(k, _)| k == "X-Amz-Signature").unwrap().1.into_owned();
-        assert_eq!(sig, "aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404");
+        let sig = u
+            .query_pairs()
+            .find(|(k, _)| k == "X-Amz-Signature")
+            .unwrap()
+            .1
+            .into_owned();
+        assert_eq!(
+            sig,
+            "aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"
+        );
     }
 
     #[test]
@@ -648,13 +726,25 @@ mod tests {
             mime: "video/mp4".into(),
             file_name: "a b.mp4".into(),
             bytes: 1,
-            location: ArtifactLocation::Object { bucket: "vol123".into(), key: "out/x/a b.mp4".into() },
-            width: 1, height: 1, frames: 1, fps: 24, audio: None,
+            location: ArtifactLocation::Object {
+                bucket: "vol123".into(),
+                key: "out/x/a b.mp4".into(),
+            },
+            width: 1,
+            height: 1,
+            frames: 1,
+            fps: 24,
+            audio: None,
         };
         let u = s.url_for(&a, Duration::from_secs(30 * 24 * 3600));
         assert_eq!(u.host_str(), Some("s3api-eu-ro-1.runpod.io"));
         assert_eq!(u.path(), "/vol123/out/x/a%20b.mp4");
-        let exp = u.query_pairs().find(|(k, _)| k == "X-Amz-Expires").unwrap().1.into_owned();
+        let exp = u
+            .query_pairs()
+            .find(|(k, _)| k == "X-Amz-Expires")
+            .unwrap()
+            .1
+            .into_owned();
         assert_eq!(exp, "604800", "clamped to 7 days");
 
         // `url_issued`: one URL per (artifact, issue time, ttl), whenever asked.
@@ -663,18 +753,40 @@ mod tests {
         let u1 = s.url_issued(&a, issued, day);
         std::thread::sleep(Duration::from_millis(1100));
         assert_eq!(s.url_issued(&a, issued, day), u1);
-        let q = |u: &Url, k: &str| u.query_pairs().find(|(n, _)| n == k).unwrap().1.into_owned();
+        let q = |u: &Url, k: &str| {
+            u.query_pairs()
+                .find(|(n, _)| n == k)
+                .unwrap()
+                .1
+                .into_owned()
+        };
         assert_eq!(q(&u1, "X-Amz-Expires"), "86400");
-        assert_eq!(q(&u1, "X-Amz-Date"), issued.format(time::macros::format_description!("[year][month][day]T[hour][minute][second]Z")).unwrap());
+        assert_eq!(
+            q(&u1, "X-Amz-Date"),
+            issued
+                .format(time::macros::format_description!(
+                    "[year][month][day]T[hour][minute][second]Z"
+                ))
+                .unwrap()
+        );
         // A window that outlived the 7-day presign cap gets a fresh, live URL.
         let old = OffsetDateTime::now_utc() - time::Duration::days(8);
         let u = s.url_issued(&a, old, Duration::from_secs(30 * 24 * 3600));
-        assert_ne!(q(&u, "X-Amz-Date"), old.format(time::macros::format_description!("[year][month][day]T[hour][minute][second]Z")).unwrap());
+        assert_ne!(
+            q(&u, "X-Amz-Date"),
+            old.format(time::macros::format_description!(
+                "[year][month][day]T[hour][minute][second]Z"
+            ))
+            .unwrap()
+        );
     }
 
     #[test]
     fn local_url_issued_is_stable_and_verifies() {
-        let urls = LocalUrls { public_base: Url::parse("http://localhost:8000").unwrap(), key: UrlKey::new("k") };
+        let urls = LocalUrls {
+            public_base: Url::parse("http://localhost:8000").unwrap(),
+            key: UrlKey::new("k"),
+        };
         let store = LocalArtifactStore::new("/tmp/unused", urls.clone());
         let a = Artifact {
             id: ArtifactId::new(),
@@ -682,28 +794,55 @@ mod tests {
             file_name: "x.mp4".into(),
             bytes: 1,
             location: ArtifactLocation::Local("/tmp/unused/x.mp4".into()),
-            width: 1, height: 1, frames: 1, fps: 24, audio: None,
+            width: 1,
+            height: 1,
+            frames: 1,
+            fps: 24,
+            audio: None,
         };
         let issued = OffsetDateTime::now_utc() - time::Duration::minutes(5);
         let ttl = Duration::from_secs(3600);
         let u1 = store.url_issued(&a, issued, ttl);
         std::thread::sleep(Duration::from_millis(1100));
-        assert_eq!(store.url_issued(&a, issued, ttl), u1, "same URL a second later");
-        let q = |k: &str| u1.query_pairs().find(|(n, _)| n == k).unwrap().1.into_owned();
+        assert_eq!(
+            store.url_issued(&a, issued, ttl),
+            u1,
+            "same URL a second later"
+        );
+        let q = |k: &str| {
+            u1.query_pairs()
+                .find(|(n, _)| n == k)
+                .unwrap()
+                .1
+                .into_owned()
+        };
         let exp: i64 = q("exp").parse().unwrap();
         assert_eq!(exp, issued.unix_timestamp() + 3600);
-        assert!(urls.key.verify(&a.id.to_string(), "x.mp4", exp, &q("sig"), OffsetDateTime::now_utc()));
+        assert!(urls.key.verify(
+            &a.id.to_string(),
+            "x.mp4",
+            exp,
+            &q("sig"),
+            OffsetDateTime::now_utc()
+        ));
     }
 
     #[tokio::test]
     async fn local_open_is_the_file() {
         let dir = std::env::temp_dir().join(format!("fvkit-open-{}", crate::random_token()));
-        let urls = LocalUrls { public_base: Url::parse("http://localhost:8000").unwrap(), key: UrlKey::new("k") };
+        let urls = LocalUrls {
+            public_base: Url::parse("http://localhost:8000").unwrap(),
+            key: UrlKey::new("k"),
+        };
         let store = LocalArtifactStore::new(dir.join("artifacts"), urls);
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let src = dir.join("tmp.mp4");
         tokio::fs::write(&src, b"abc").await.unwrap();
-        let meta = ArtifactMeta { file_name: "o.mp4".into(), mime: "video/mp4".into(), ..Default::default() };
+        let meta = ArtifactMeta {
+            file_name: "o.mp4".into(),
+            mime: "video/mp4".into(),
+            ..Default::default()
+        };
         let a = store.put(&src, meta).await.unwrap();
         match store.open(&a).await.unwrap() {
             ArtifactBody::File(p) => assert_eq!(std::fs::read(p).unwrap(), b"abc"),
@@ -725,10 +864,12 @@ mod tests {
         let (o1, o2) = (objects.clone(), objects.clone());
         let app: Router = Router::new().route(
             "/{*key}",
-            put(move |UrlPath(k): UrlPath<String>, body: axum::body::Bytes| async move {
-                o1.lock().unwrap().insert(k, body.to_vec());
-                StatusCode::OK
-            })
+            put(
+                move |UrlPath(k): UrlPath<String>, body: axum::body::Bytes| async move {
+                    o1.lock().unwrap().insert(k, body.to_vec());
+                    StatusCode::OK
+                },
+            )
             .get(move |UrlPath(k): UrlPath<String>| async move {
                 match o2.lock().unwrap().get(&k) {
                     Some(b) => (StatusCode::OK, b.clone()).into_response(),
@@ -752,12 +893,24 @@ mod tests {
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let src = dir.join("x.mp4");
         tokio::fs::write(&src, b"mp4 bytes").await.unwrap();
-        let meta = ArtifactMeta { file_name: "x.mp4".into(), mime: "video/mp4".into(), ..Default::default() };
+        let meta = ArtifactMeta {
+            file_name: "x.mp4".into(),
+            mime: "video/mp4".into(),
+            ..Default::default()
+        };
         let a = store.put(&src, meta).await.unwrap();
-        assert!(matches!(&a.location, ArtifactLocation::Object { bucket, .. } if bucket == "fv-media"));
-        assert_eq!(store.open(&a).await.unwrap(), ArtifactBody::Bytes(bytes::Bytes::from_static(b"mp4 bytes")));
+        assert!(
+            matches!(&a.location, ArtifactLocation::Object { bucket, .. } if bucket == "fv-media")
+        );
+        assert_eq!(
+            store.open(&a).await.unwrap(),
+            ArtifactBody::Bytes(bytes::Bytes::from_static(b"mp4 bytes"))
+        );
         let mut gone = a.clone();
-        gone.location = ArtifactLocation::Object { bucket: "fv-media".into(), key: "t/missing".into() };
+        gone.location = ArtifactLocation::Object {
+            bucket: "fv-media".into(),
+            key: "t/missing".into(),
+        };
         assert!(store.open(&gone).await.is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -766,20 +919,34 @@ mod tests {
     async fn local_put_and_serve() {
         let dir = std::env::temp_dir().join(format!("fvkit-art-{}", crate::random_token()));
         let key = UrlKey::new("k");
-        let urls = LocalUrls { public_base: Url::parse("http://localhost:8000").unwrap(), key: key.clone() };
+        let urls = LocalUrls {
+            public_base: Url::parse("http://localhost:8000").unwrap(),
+            key: key.clone(),
+        };
         let store = LocalArtifactStore::new(dir.join("artifacts"), urls);
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let src = dir.join("tmp.mp4");
         tokio::fs::write(&src, b"0123456789").await.unwrap();
-        let meta = ArtifactMeta { file_name: "out.mp4".into(), mime: "video/mp4".into(), ..Default::default() };
+        let meta = ArtifactMeta {
+            file_name: "out.mp4".into(),
+            mime: "video/mp4".into(),
+            ..Default::default()
+        };
         let a = store.put(&src, meta).await.unwrap();
         assert_eq!(a.bytes, 10);
         assert!(!src.exists());
 
-        let app: Router = files_router(Arc::new(FileServer { key: key.clone(), roots: vec![dir.join("artifacts")] }));
+        let app: Router = files_router(Arc::new(FileServer {
+            key: key.clone(),
+            roots: vec![dir.join("artifacts")],
+        }));
         let url = store.url_for(&a, Duration::from_secs(60));
         let pq = format!("{}?{}", url.path(), url.query().unwrap());
-        let r = app.clone().oneshot(Request::get(&pq).body(Body::empty()).unwrap()).await.unwrap();
+        let r = app
+            .clone()
+            .oneshot(Request::get(&pq).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::OK);
         assert_eq!(r.headers()["access-control-allow-origin"], "*");
         let b = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
@@ -788,7 +955,12 @@ mod tests {
         // Range requests work (video players seek).
         let r = app
             .clone()
-            .oneshot(Request::get(&pq).header("range", "bytes=2-4").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get(&pq)
+                    .header("range", "bytes=2-4")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(r.status(), StatusCode::PARTIAL_CONTENT);
@@ -798,11 +970,18 @@ mod tests {
         let expired = key.sign(&a.id.to_string(), "out.mp4", 1);
         let expired = format!("{}?exp=1&sig={expired}", url.path());
         for p in [bad, expired, url.path().to_owned()] {
-            let r = app.clone().oneshot(Request::get(&p).body(Body::empty()).unwrap()).await.unwrap();
+            let r = app
+                .clone()
+                .oneshot(Request::get(&p).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
             assert_eq!(r.status(), StatusCode::NOT_FOUND, "{p}");
         }
         store.delete(&a).await;
-        let r = app.oneshot(Request::get(&pq).body(Body::empty()).unwrap()).await.unwrap();
+        let r = app
+            .oneshot(Request::get(&pq).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
         assert_eq!(r.status(), StatusCode::NOT_FOUND);
         let _ = std::fs::remove_dir_all(&dir);
     }

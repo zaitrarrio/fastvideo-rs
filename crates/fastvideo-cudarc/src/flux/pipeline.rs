@@ -3,7 +3,8 @@
 use std::path::Path;
 
 use fastvideo_models::flux::{
-    arch_from_transformer_config, calculate_shift_flux1, packed_hw, unpack_latents_flux1, Flux1ArchConfig,
+    arch_from_transformer_config, calculate_shift_flux1, packed_hw, unpack_latents_flux1,
+    Flux1ArchConfig,
 };
 use fastvideo_models::flux2::Flux2VaeConfig;
 use fastvideo_models::schedulers::FlowMatchEulerDiscreteScheduler;
@@ -126,7 +127,11 @@ impl Flux1Pipeline {
         let (height, width, steps) = if self.tiny {
             (16usize, 16, 2usize)
         } else {
-            (cfg.height.max(16), cfg.width.max(16), cfg.num_inference_steps.max(1))
+            (
+                cfg.height.max(16),
+                cfg.width.max(16),
+                cfg.num_inference_steps.max(1),
+            )
         };
         let (ph, pw) = if self.tiny {
             (2, 2)
@@ -148,7 +153,9 @@ impl Flux1Pipeline {
             if dummy_text() { "dummy" } else { "clip+t5" },
         ));
         let mut rng = rand::rngs::StdRng::seed_from_u64(cfg.seed);
-        let noise: Vec<f32> = (0..channels * seq).map(|_| rng.sample(StandardNormal)).collect();
+        let noise: Vec<f32> = (0..channels * seq)
+            .map(|_| rng.sample(StandardNormal))
+            .collect();
         let mut latents = CudaTensor::from_vec(noise, vec![1, channels, 1, ph, pw])?;
         let (clip_ids, t5_ids) = encode_prompt_ids(&self.text, cfg, self.tiny);
         let t_text = std::time::Instant::now();
@@ -170,7 +177,10 @@ impl Flux1Pipeline {
         let mut euler_host_ms = 0u128;
         let t_denoise = std::time::Instant::now();
         {
-            let _denoise = crate::wan::log::StepTimer::start(format!("flux1.denoise {} steps", timesteps.len()));
+            let _denoise = crate::wan::log::StepTimer::start(format!(
+                "flux1.denoise {} steps",
+                timesteps.len()
+            ));
             for (i, t) in timesteps.iter().copied().enumerate() {
                 let t_step = std::time::Instant::now();
                 let _step = crate::wan::log::StepTimer::start(format!(
@@ -199,12 +209,7 @@ impl Flux1Pipeline {
         let unpacked = if self.tiny {
             None
         } else {
-            Some(unpack_nchw(
-                &latents,
-                self.vae.cfg.latent_channels,
-                ph,
-                pw,
-            )?)
+            Some(unpack_nchw(&latents, self.vae.cfg.latent_channels, ph, pw)?)
         };
         let unpack_ms = t_unpack.elapsed().as_millis();
         let t_vae = std::time::Instant::now();
@@ -219,7 +224,8 @@ impl Flux1Pipeline {
         let t_write = std::time::Instant::now();
         let paths = {
             let _w = crate::wan::log::StepTimer::start("flux1.write_frames");
-            write_frames(&decoded, Path::new(&cfg.output_dir)).map_err(|e| PipelineError::Message(e.to_string()))?
+            write_frames(&decoded, Path::new(&cfg.output_dir))
+                .map_err(|e| PipelineError::Message(e.to_string()))?
         };
         let write_frames_ms = t_write.elapsed().as_millis();
         let xfer = stats::snapshot().since(&xfer0);
@@ -263,7 +269,12 @@ impl Flux1Pipeline {
     }
 }
 
-fn unpack_nchw(packed: &CudaTensor, latent_channels: usize, ph: usize, pw: usize) -> Result<CudaTensor> {
+fn unpack_nchw(
+    packed: &CudaTensor,
+    latent_channels: usize,
+    ph: usize,
+    pw: usize,
+) -> Result<CudaTensor> {
     let host = packed.host_cow()?;
     let seq = ph * pw;
     let packed_ch = host.len() / seq;
@@ -273,14 +284,19 @@ fn unpack_nchw(packed: &CudaTensor, latent_channels: usize, ph: usize, pw: usize
             seq_major[s * packed_ch + c] = host[c * seq + s];
         }
     }
-    let spatial = unpack_latents_flux1(&seq_major, latent_channels, ph, pw).map_err(PipelineError::Message)?;
+    let spatial = unpack_latents_flux1(&seq_major, latent_channels, ph, pw)
+        .map_err(PipelineError::Message)?;
     Ok(CudaTensor::from_vec(
         spatial,
         vec![1, latent_channels, 1, ph * 2, pw * 2],
     )?)
 }
 
-fn encode_prompt_ids(text: &Flux1TextEncoder, cfg: &GenerateConfig, tiny: bool) -> (Vec<u32>, Vec<u32>) {
+fn encode_prompt_ids(
+    text: &Flux1TextEncoder,
+    cfg: &GenerateConfig,
+    tiny: bool,
+) -> (Vec<u32>, Vec<u32>) {
     if tiny {
         return ((0..4).collect(), (0..4).collect());
     }
@@ -334,12 +350,14 @@ mod tests {
     #[test]
     fn tiny_generate_writes_png() {
         let mut pipe = Flux1Pipeline::tiny();
-        let mut cfg = GenerateConfig::default();
-        cfg.tiny = true;
-        cfg.output_dir = std::env::temp_dir()
-            .join("fastvideo-cudarc-flux1-tiny")
-            .to_string_lossy()
-            .into();
+        let cfg = GenerateConfig {
+            tiny: true,
+            output_dir: std::env::temp_dir()
+                .join("fastvideo-cudarc-flux1-tiny")
+                .to_string_lossy()
+                .into(),
+            ..Default::default()
+        };
         let paths = pipe.generate(&cfg).unwrap();
         assert!(Path::new(&paths[0]).exists());
         let profile = Path::new(&cfg.output_dir).join("profile.json");

@@ -520,9 +520,11 @@ fn sol_attn_cuda(
 ) -> Result<CudaTensor> {
     let (batch, heads, tokens, dim) = (q.shape[0], q.shape[1], q.shape[2], q.shape[3]);
     // bf16 activations: read the bf16 buffers directly and store bf16.
-    if let (Some(q16), Some(k16), Some(v16)) =
-        (q.device_slice_bf16(), k.device_slice_bf16(), v.device_slice_bf16())
-    {
+    if let (Some(q16), Some(k16), Some(v16)) = (
+        q.device_slice_bf16(),
+        k.device_slice_bf16(),
+        v.device_slice_bf16(),
+    ) {
         let out = super::ops::sol_fused_device_bf16(q16, k16, v16, batch * heads, tokens, dim, p)?;
         return CudaTensor::from_device_slice_bf16(out, q.shape.clone());
     }

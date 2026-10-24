@@ -42,7 +42,8 @@ fn tone(rate: u32, channels: u8, secs: f64) -> Pcm {
     let n = (f64::from(rate) * secs) as usize;
     let mut v = Vec::with_capacity(n * channels as usize);
     for i in 0..n {
-        let s = (2.0 * std::f64::consts::PI * 440.0 * i as f64 / f64::from(rate)).sin() as f32 * 0.3;
+        let s =
+            (2.0 * std::f64::consts::PI * 440.0 * i as f64 / f64::from(rate)).sin() as f32 * 0.3;
         for _ in 0..channels {
             v.push(s);
         }
@@ -69,14 +70,30 @@ fn fal_h3_mp4_format() {
     let out = dir.path().join("h3.mp4");
     // H3 native audio: 32 kHz stereo; a 1 s clip (24 frames) at a small canvas.
     let native = tone(32_000, 2, 1.1);
-    mp4::write_mp4(&out, cpu(Mp4Spec::fal_h3(128, 72)), &frames(128, 72, 24), Some(&native)).unwrap();
+    mp4::write_mp4(
+        &out,
+        cpu(Mp4Spec::fal_h3(128, 72)),
+        &frames(128, 72, 24),
+        Some(&native),
+    )
+    .unwrap();
     let info = mp4::inspect(&out).unwrap();
-    assert!(info.fal_h3_problems().is_empty(), "{:?}\n{info:#?}", info.fal_h3_problems());
-    assert!(info.top_level.iter().position(|t| t == "moov") < info.top_level.iter().position(|t| t == "mdat"));
+    assert!(
+        info.fal_h3_problems().is_empty(),
+        "{:?}\n{info:#?}",
+        info.fal_h3_problems()
+    );
+    assert!(
+        info.top_level.iter().position(|t| t == "moov")
+            < info.top_level.iter().position(|t| t == "mdat")
+    );
     let v = info.video().unwrap();
     assert_eq!((v.width, v.height, v.samples), (Some(128), Some(72), 24));
     let a = info.audio().unwrap().audio.clone().unwrap();
-    assert_eq!((a.sample_rate, a.channels, a.object_type), (32_000, 2, Some(2)));
+    assert_eq!(
+        (a.sample_rate, a.channels, a.object_type),
+        (32_000, 2, Some(2))
+    );
     if tools::ffprobe_available() {
         let p = probe::ffprobe(&out).unwrap();
         assert_eq!(p.kind, Some(MediaKind::Video));
@@ -88,7 +105,11 @@ fn fal_h3_mp4_format() {
     }
     // The decoded audio is the lockstep length: 1 s at 32 kHz (+AAC padding trimmed).
     let back = probe::decode_audio(&out, 32_000, 2).unwrap();
-    assert!((back.frames() as i64 - 32_000).abs() <= 1024, "{}", back.frames());
+    assert!(
+        (back.frames() as i64 - 32_000).abs() <= 1024,
+        "{}",
+        back.frames()
+    );
 }
 
 #[test]
@@ -98,15 +119,26 @@ fn mp4_44k_target_and_video_only() {
     }
     let dir = tempfile::tempdir().unwrap();
     let a = dir.path().join("cd.mp4");
-    mp4::write_mp4(&a, cpu(Mp4Spec::new(64, 64, 16, Some(AudioTarget::CD))), &frames(64, 64, 16), Some(&tone(48_000, 1, 1.0)))
-        .unwrap();
+    mp4::write_mp4(
+        &a,
+        cpu(Mp4Spec::new(64, 64, 16, Some(AudioTarget::CD))),
+        &frames(64, 64, 16),
+        Some(&tone(48_000, 1, 1.0)),
+    )
+    .unwrap();
     let ia = mp4::inspect(&a).unwrap();
     let aa = ia.audio().unwrap().audio.clone().unwrap();
     assert_eq!((aa.sample_rate, aa.channels), (44_100, 2));
     assert_eq!(ia.video().unwrap().fps, Some(16.0)); // SF-Wan rate
-    // Video-only (Wan): no audio track at all.
+                                                     // Video-only (Wan): no audio track at all.
     let b = dir.path().join("wan.mp4");
-    mp4::write_mp4(&b, cpu(Mp4Spec::new(64, 64, 16, None)), &frames(64, 64, 17), None).unwrap();
+    mp4::write_mp4(
+        &b,
+        cpu(Mp4Spec::new(64, 64, 16, None)),
+        &frames(64, 64, 17),
+        None,
+    )
+    .unwrap();
     let ib = mp4::inspect(&b).unwrap();
     assert!(ib.audio().is_none());
     assert!(ib.faststart);
@@ -126,23 +158,49 @@ fn finalize_faststart_drop_audio_and_crop() {
     assert!(!mp4::inspect(&src).unwrap().faststart);
 
     let fast = dir.path().join("fast.mp4");
-    mp4::finalize_with(&src, &fast, &PostProcess::default(), FfmpegH264::Libx264CpuTest).unwrap();
+    mp4::finalize_with(
+        &src,
+        &fast,
+        &PostProcess::default(),
+        FfmpegH264::Libx264CpuTest,
+    )
+    .unwrap();
     let i = mp4::inspect(&fast).unwrap();
     assert!(i.faststart);
     assert!(i.audio().is_some());
     assert_eq!(i.video().unwrap().samples, 12);
 
     let silent = dir.path().join("silent.mp4");
-    mp4::finalize_with(&src, &silent, &PostProcess { crop: None, drop_audio: true }, FfmpegH264::Libx264CpuTest).unwrap();
+    mp4::finalize_with(
+        &src,
+        &silent,
+        &PostProcess {
+            crop: None,
+            drop_audio: true,
+        },
+        FfmpegH264::Libx264CpuTest,
+    )
+    .unwrap();
     let i = mp4::inspect(&silent).unwrap();
     assert!(i.faststart && i.audio().is_none());
 
     // Pad-and-crop: 64x72 -> 64x64 (the 1920x1088 -> 1920x1080 case in miniature).
     let cropped = dir.path().join("crop.mp4");
-    let post = PostProcess { crop: Some(Crop { width: 64, height: 64, x: None, y: None }), drop_audio: false };
+    let post = PostProcess {
+        crop: Some(Crop {
+            width: 64,
+            height: 64,
+            x: None,
+            y: None,
+        }),
+        drop_audio: false,
+    };
     mp4::finalize_with(&src, &cropped, &post, FfmpegH264::Libx264CpuTest).unwrap();
     let i = mp4::inspect(&cropped).unwrap();
-    assert_eq!((i.video().unwrap().width, i.video().unwrap().height), (Some(64), Some(64)));
+    assert_eq!(
+        (i.video().unwrap().width, i.video().unwrap().height),
+        (Some(64), Some(64))
+    );
     assert!(i.faststart && i.audio().is_some());
     assert_eq!(i.video().unwrap().samples, 12);
 
@@ -169,7 +227,11 @@ fn pipe_encoder_gop_profile_level() {
     aus.extend(enc.finish().unwrap());
     assert_eq!(aus.len(), 60);
     let keys: Vec<u64> = aus.iter().filter(|a| a.keyframe).map(|a| a.index).collect();
-    assert_eq!(keys, vec![0, 48], "IDR every 2 s at 24 fps, no scene-cut IDRs");
+    assert_eq!(
+        keys,
+        vec![0, 48],
+        "IDR every 2 s at 24 fps, no scene-cut IDRs"
+    );
     let sps = h264::find_sps(&aus[0].data).expect("sps in the first AU");
     assert!(sps.is_constrained_baseline(), "{sps:?}");
     assert_eq!((sps.width, sps.height), (1344, 768));
@@ -216,8 +278,16 @@ fn file_sink_video_only_still_has_audio() {
     assert_eq!(st.frames_sent, 32);
     let i = mp4::inspect(&out).unwrap();
     assert!(i.faststart);
-    let a = i.audio().expect("a silent AAC track is always present").audio.clone().unwrap();
-    assert_eq!((a.sample_rate, a.channels, a.object_type), (48_000, 2, Some(2)));
+    let a = i
+        .audio()
+        .expect("a silent AAC track is always present")
+        .audio
+        .clone()
+        .unwrap();
+    assert_eq!(
+        (a.sample_rate, a.channels, a.object_type),
+        (48_000, 2, Some(2))
+    );
     assert_eq!(i.video().unwrap().samples, 32);
 }
 
@@ -227,7 +297,11 @@ fn live_sink_exit_error_has_ffmpegs_reason_and_no_key() {
         return;
     }
     // A closed port: ffmpeg's RTMP connect is refused and it exits at once.
-    let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     let url = format!("rtmp://127.0.0.1:{port}/live/sk-secret-stream-key");
     let mut cfg = SinkConfig::new(SinkTarget::Rtmp { url }, 64, 64, 16, None);
     cfg.encoder = FfmpegH264::Libx264CpuTest;
@@ -238,7 +312,10 @@ fn live_sink_exit_error_has_ffmpegs_reason_and_no_key() {
         if let Some(m) = s.exit_error() {
             break m;
         }
-        assert!(t0.elapsed() < Duration::from_secs(20), "ffmpeg should exit on a refused connection");
+        assert!(
+            t0.elapsed() < Duration::from_secs(20),
+            "ffmpeg should exit on a refused connection"
+        );
         std::thread::sleep(Duration::from_millis(20));
     };
     // The status and ffmpeg's own words, read after its stderr reached EOF
@@ -246,7 +323,10 @@ fn live_sink_exit_error_has_ffmpegs_reason_and_no_key() {
     println!("exit_error: {msg}");
     assert!(msg.starts_with("ffmpeg exited ("), "{msg}");
     assert!(!msg.contains("without an error message"), "{msg}");
-    assert!(!msg.contains("sk-secret-stream-key"), "the stream key is scrubbed: {msg}");
+    assert!(
+        !msg.contains("sk-secret-stream-key"),
+        "the stream key is scrubbed: {msg}"
+    );
     assert!(!s.is_running());
 }
 
@@ -269,13 +349,24 @@ fn live_sink_reports_an_exit_that_a_restart_reaped() {
             }
         }
     });
-    let mut cfg = SinkConfig::new(SinkTarget::Rtmp { url: format!("rtmp://127.0.0.1:{port}/live/k") }, 64, 64, 16, None);
+    let mut cfg = SinkConfig::new(
+        SinkTarget::Rtmp {
+            url: format!("rtmp://127.0.0.1:{port}/live/k"),
+        },
+        64,
+        64,
+        16,
+        None,
+    );
     cfg.encoder = FfmpegH264::Libx264CpuTest;
     let mut s = FfmpegSink::start(cfg).unwrap();
     let t0 = std::time::Instant::now();
     // Never asking in between: the restart (2 s on) reaps the first ffmpeg.
     while s.stats().restarts == 0 {
-        assert!(t0.elapsed() < Duration::from_secs(20), "the sink should restart");
+        assert!(
+            t0.elapsed() < Duration::from_secs(20),
+            "the sink should restart"
+        );
         s.send(&pattern(64, 64, 0), None).unwrap();
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -298,7 +389,10 @@ fn file_sink_av_over_two_pipes() {
         64,
         64,
         24,
-        Some(SinkAudioIn { rate: 48_000, channels: 1 }),
+        Some(SinkAudioIn {
+            rate: 48_000,
+            channels: 1,
+        }),
     );
     cfg.encoder = FfmpegH264::Libx264CpuTest;
     let mut s = FfmpegSink::start(cfg).unwrap();
@@ -308,11 +402,23 @@ fn file_sink_av_over_two_pipes() {
         std::thread::sleep(Duration::from_millis(2));
     }
     let st = s.finish(Duration::from_secs(20)).unwrap();
-    assert_eq!((st.frames_sent, st.audio_ticks_sent, st.dropped_video, st.dropped_audio), (48, 48, 0, 0));
+    assert_eq!(
+        (
+            st.frames_sent,
+            st.audio_ticks_sent,
+            st.dropped_video,
+            st.dropped_audio
+        ),
+        (48, 48, 0, 0)
+    );
     let i = mp4::inspect(&out).unwrap();
     assert_eq!(i.video().unwrap().samples, 48);
     let a = i.audio().unwrap();
-    assert!((a.duration_s() - 2.0).abs() < 0.1, "audio {} s", a.duration_s());
+    assert!(
+        (a.duration_s() - 2.0).abs() < 0.1,
+        "audio {} s",
+        a.duration_s()
+    );
 }
 
 #[test]
@@ -322,7 +428,17 @@ fn hls_sink_writes_a_playlist() {
     }
     let dir = tempfile::tempdir().unwrap();
     let hls = dir.path().join("hls");
-    let mut cfg = SinkConfig::new(SinkTarget::Hls { dir: hls.clone(), segment_s: 1, window: 6 }, 64, 64, 24, None);
+    let mut cfg = SinkConfig::new(
+        SinkTarget::Hls {
+            dir: hls.clone(),
+            segment_s: 1,
+            window: 6,
+        },
+        64,
+        64,
+        24,
+        None,
+    );
     cfg.encoder = FfmpegH264::Libx264CpuTest;
     let mut s = FfmpegSink::start(cfg).unwrap();
     for i in 0..72 {
@@ -388,18 +504,45 @@ fn fragmented_mp4_is_append_only() {
     let path = w.finish().unwrap();
     let full = std::fs::read(&path).unwrap();
     let grown = snapshots.iter().filter(|s| !s.is_empty()).count();
-    assert!(grown >= 2, "the file grew while frames were written ({:?})", snapshots.iter().map(Vec::len).collect::<Vec<_>>());
+    assert!(
+        grown >= 2,
+        "the file grew while frames were written ({:?})",
+        snapshots.iter().map(Vec::len).collect::<Vec<_>>()
+    );
     for s in &snapshots {
         assert!(full.len() >= s.len());
-        assert_eq!(&full[..s.len()], &s[..], "bytes written earlier changed (not append-only)");
+        assert_eq!(
+            &full[..s.len()],
+            &s[..],
+            "bytes written earlier changed (not append-only)"
+        );
     }
     let info = mp4::inspect(&path).unwrap();
     assert_eq!(info.top_level.first().map(String::as_str), Some("ftyp"));
-    assert_eq!(info.top_level.get(1).map(String::as_str), Some("moov"), "{:?}", info.top_level);
-    assert!(info.top_level.iter().any(|t| t == "moof"), "{:?}", info.top_level);
+    assert_eq!(
+        info.top_level.get(1).map(String::as_str),
+        Some("moov"),
+        "{:?}",
+        info.top_level
+    );
+    assert!(
+        info.top_level.iter().any(|t| t == "moof"),
+        "{:?}",
+        info.top_level
+    );
     if tools::ffprobe_available() {
         let o = std::process::Command::new(tools::ffprobe_bin())
-            .args(["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0"])
+            .args([
+                "-v",
+                "error",
+                "-count_frames",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=nb_read_frames",
+                "-of",
+                "csv=p=0",
+            ])
             .arg(&path)
             .output()
             .unwrap();

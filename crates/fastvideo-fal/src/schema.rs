@@ -47,18 +47,18 @@ pub mod wan;
 
 use base64::Engine as _;
 use fastvideo_protocol::{
-    Anchor, ApiError, AudioInput, AudioRole, CallbackSpec, CanvasSpec, ExpansionMode, Family, GenerationRequest,
-    Job, Keyframe, Length, MediaKind, MediaRef, NormalizeCtx, PromptExpansion, ProtocolId, Ratio, Reference, Snap,
-    Task, Tier, TimingSpec,
+    Anchor, ApiError, AudioInput, AudioRole, CallbackSpec, CanvasSpec, ExpansionMode, Family,
+    GenerationRequest, Job, Keyframe, Length, MediaKind, MediaRef, NormalizeCtx, PromptExpansion,
+    ProtocolId, Ratio, Reference, Snap, Task, Tier, TimingSpec,
 };
 
 pub use a2v::LtxA2vInput;
 pub use edit::LtxEditInput;
 pub use ingredient::IngredientInput;
 pub use ltx::{LtxClass, LtxInput};
-pub use wan::{WanInput, WanVariant};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+pub use wan::{WanInput, WanVariant};
 
 /// `prompt` maxLength (fal §3.3).
 pub const PROMPT_MAX_CHARS: usize = 50_000;
@@ -123,7 +123,11 @@ impl Endpoint {
         Endpoint::LtxAudioToVideoPro,
     ];
     /// `fal-ai/wan`.
-    pub const WAN: [Endpoint; 3] = [Endpoint::WanTextToVideo, Endpoint::WanImageToVideo, Endpoint::WanFastWan];
+    pub const WAN: [Endpoint; 3] = [
+        Endpoint::WanTextToVideo,
+        Endpoint::WanImageToVideo,
+        Endpoint::WanFastWan,
+    ];
     /// `fal-ai/ltx-2.3-quality`.
     pub const LTX_QUALITY: [Endpoint; 1] = [Endpoint::LtxIngredient];
     /// `fal-ai/ltx-2.3`.
@@ -197,10 +201,12 @@ impl Endpoint {
     /// endpoints: they run the app's own model).
     pub fn target(&self) -> Option<(Family, Tier)> {
         Some(match self {
-            Endpoint::TextToVideo | Endpoint::ImageToVideo | Endpoint::ReferenceToVideo => return None,
-            Endpoint::LtxTextToVideoFast | Endpoint::LtxImageToVideoFast | Endpoint::LtxAudioToVideoFast => {
-                (Family::Ltx2, Tier::Turbo)
+            Endpoint::TextToVideo | Endpoint::ImageToVideo | Endpoint::ReferenceToVideo => {
+                return None
             }
+            Endpoint::LtxTextToVideoFast
+            | Endpoint::LtxImageToVideoFast
+            | Endpoint::LtxAudioToVideoFast => (Family::Ltx2, Tier::Turbo),
             // `ltx-pro`: its Ref2V requests route to the IC-LoRA companion.
             Endpoint::LtxTextToVideoPro
             | Endpoint::LtxImageToVideoPro
@@ -287,7 +293,12 @@ impl Resolution {
     /// The H3 Max enum (`minimax/h3-max[-turbo]`).
     pub const ALL: [Resolution; 3] = [Resolution::P480, Resolution::P768, Resolution::P1080];
     /// The base H3 enum (`minimax/h3`).
-    pub const BASE: [Resolution; 4] = [Resolution::P480, Resolution::P768, Resolution::K2, Resolution::K4];
+    pub const BASE: [Resolution; 4] = [
+        Resolution::P480,
+        Resolution::P768,
+        Resolution::K2,
+        Resolution::K4,
+    ];
 
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -461,7 +472,10 @@ impl<'a> Fields<'a> {
         match self.get(k) {
             None => Ok(None),
             Some(Value::String(s)) => Ok(Some(s)),
-            Some(v) => Err(bad(k, format!("Input should be a valid string, got {}", type_name(v)))),
+            Some(v) => Err(bad(
+                k,
+                format!("Input should be a valid string, got {}", type_name(v)),
+            )),
         }
     }
 
@@ -475,7 +489,10 @@ impl<'a> Fields<'a> {
         match self.get(k) {
             None => Ok(default),
             Some(Value::Bool(b)) => Ok(*b),
-            Some(v) => Err(bad(k, format!("Input should be a valid boolean, got {}", type_name(v)))),
+            Some(v) => Err(bad(
+                k,
+                format!("Input should be a valid boolean, got {}", type_name(v)),
+            )),
         }
     }
 
@@ -488,26 +505,43 @@ impl<'a> Fields<'a> {
                     return Ok(Some(i));
                 }
                 if n.as_u64().is_some() {
-                    return Err(bad(k, "Input should be a valid integer, got a number out of range"));
+                    return Err(bad(
+                        k,
+                        "Input should be a valid integer, got a number out of range",
+                    ));
                 }
                 match n.as_f64() {
                     Some(f) if f.fract() == 0.0 && f.abs() < 9.0e15 => Ok(Some(f as i64)),
-                    _ => Err(bad(k, "Input should be a valid integer, got a number with a fractional part")),
+                    _ => Err(bad(
+                        k,
+                        "Input should be a valid integer, got a number with a fractional part",
+                    )),
                 }
             }
-            Some(v) => Err(bad(k, format!("Input should be a valid integer, got {}", type_name(v)))),
+            Some(v) => Err(bad(
+                k,
+                format!("Input should be a valid integer, got {}", type_name(v)),
+            )),
         }
     }
 
     fn url_list(&self, k: &str, max: usize) -> Result<Vec<String>, ApiError> {
-        let Some(v) = self.get(k) else { return Ok(Vec::new()) };
+        let Some(v) = self.get(k) else {
+            return Ok(Vec::new());
+        };
         let Value::Array(items) = v else {
-            return Err(bad(k, format!("Input should be a valid list, got {}", type_name(v))));
+            return Err(bad(
+                k,
+                format!("Input should be a valid list, got {}", type_name(v)),
+            ));
         };
         if items.len() > max {
             return Err(bad(
                 k,
-                format!("List should have at most {max} items after validation, not {}", items.len()),
+                format!(
+                    "List should have at most {max} items after validation, not {}",
+                    items.len()
+                ),
             ));
         }
         items
@@ -515,7 +549,10 @@ impl<'a> Fields<'a> {
             .enumerate()
             .map(|(i, it)| match it {
                 Value::String(s) if !s.trim().is_empty() => Ok(s.clone()),
-                Value::String(_) => Err(bad(format!("{k}[{i}]"), "String should match pattern '\\S'")),
+                Value::String(_) => Err(bad(
+                    format!("{k}[{i}]"),
+                    "String should match pattern '\\S'",
+                )),
                 other => Err(bad(
                     format!("{k}[{i}]"),
                     format!("Input should be a valid string, got {}", type_name(other)),
@@ -525,26 +562,46 @@ impl<'a> Fields<'a> {
     }
 }
 
-fn parse_enum<T: Copy>(f: &Fields, k: &str, allowed: &[T], name: fn(&T) -> &'static str, default: T) -> Result<T, ApiError> {
-    let Some(s) = f.string(k)? else { return Ok(default) };
-    allowed.iter().copied().find(|a| name(a) == s).ok_or_else(|| {
-        let list: Vec<String> = allowed.iter().map(|a| format!("'{}'", name(a))).collect();
-        bad(k, format!("Input should be {}", list.join(", ")))
-    })
+fn parse_enum<T: Copy>(
+    f: &Fields,
+    k: &str,
+    allowed: &[T],
+    name: fn(&T) -> &'static str,
+    default: T,
+) -> Result<T, ApiError> {
+    let Some(s) = f.string(k)? else {
+        return Ok(default);
+    };
+    allowed
+        .iter()
+        .copied()
+        .find(|a| name(a) == s)
+        .ok_or_else(|| {
+            let list: Vec<String> = allowed.iter().map(|a| format!("'{}'", name(a))).collect();
+            bad(k, format!("Input should be {}", list.join(", ")))
+        })
 }
 
 fn parse_prompt(f: &Fields, max: usize) -> Result<String, ApiError> {
     let prompt = match f.get("prompt") {
         None => return Err(bad("prompt", "Field required")),
         Some(Value::String(s)) => s.clone(),
-        Some(v) => return Err(bad("prompt", format!("Input should be a valid string, got {}", type_name(v)))),
+        Some(v) => {
+            return Err(bad(
+                "prompt",
+                format!("Input should be a valid string, got {}", type_name(v)),
+            ))
+        }
     };
     let n = prompt.chars().count();
     if n < 1 {
         return Err(bad("prompt", "String should have at least 1 character"));
     }
     if n > max {
-        return Err(bad("prompt", format!("String should have at most {max} characters")));
+        return Err(bad(
+            "prompt",
+            format!("String should have at most {max} characters"),
+        ));
     }
     Ok(prompt)
 }
@@ -561,12 +618,24 @@ fn parse_common(f: &Fields, resolutions: &[Resolution]) -> Result<CommonInput, A
     let prompt = parse_prompt(f, PROMPT_MAX_CHARS)?;
     let duration = f.int("duration")?.unwrap_or(DURATION_MIN);
     if duration < DURATION_MIN {
-        return Err(bad("duration", format!("Input should be greater than or equal to {DURATION_MIN}")));
+        return Err(bad(
+            "duration",
+            format!("Input should be greater than or equal to {DURATION_MIN}"),
+        ));
     }
     if duration > DURATION_MAX {
-        return Err(bad("duration", format!("Input should be less than or equal to {DURATION_MAX}")));
+        return Err(bad(
+            "duration",
+            format!("Input should be less than or equal to {DURATION_MAX}"),
+        ));
     }
-    let resolution = parse_enum(f, "resolution", resolutions, Resolution::as_str, Resolution::P768)?;
+    let resolution = parse_enum(
+        f,
+        "resolution",
+        resolutions,
+        Resolution::as_str,
+        Resolution::P768,
+    )?;
     let seed = parse_seed(f)?;
     Ok(CommonInput {
         prompt,
@@ -575,7 +644,10 @@ fn parse_common(f: &Fields, resolutions: &[Resolution]) -> Result<CommonInput, A
         seed,
         enable_safety_checker: f.bool("enable_safety_checker", true)?,
         sync_mode: f.bool("sync_mode", false)?,
-        prompt_expansion_mode: f.string("prompt_expansion_mode")?.unwrap_or("balanced").to_owned(),
+        prompt_expansion_mode: f
+            .string("prompt_expansion_mode")?
+            .unwrap_or("balanced")
+            .to_owned(),
         prompt_expansion_explicit: f.string("prompt_expansion_mode")?.is_some(),
     })
 }
@@ -583,7 +655,9 @@ fn parse_common(f: &Fields, resolutions: &[Resolution]) -> Result<CommonInput, A
 fn target_audio(f: &Fields) -> Result<Option<String>, ApiError> {
     match f.string("target_audio_url")? {
         None => Ok(None),
-        Some(s) if s.trim().is_empty() => Err(bad("target_audio_url", "String should match pattern '\\S'")),
+        Some(s) if s.trim().is_empty() => {
+            Err(bad("target_audio_url", "String should match pattern '\\S'"))
+        }
         Some(s) => Ok(Some(s.to_owned())),
     }
 }
@@ -614,16 +688,32 @@ impl FalInput {
         };
         let f = Fields(map);
         match endpoint {
-            Endpoint::LtxTextToVideoFast => return Ok(FalInput::Ltx(ltx::parse(&f, LtxClass::Fast, false)?)),
-            Endpoint::LtxTextToVideoPro => return Ok(FalInput::Ltx(ltx::parse(&f, LtxClass::Pro, false)?)),
-            Endpoint::LtxImageToVideoFast => return Ok(FalInput::Ltx(ltx::parse(&f, LtxClass::Fast, true)?)),
-            Endpoint::LtxImageToVideoPro => return Ok(FalInput::Ltx(ltx::parse(&f, LtxClass::Pro, true)?)),
-            Endpoint::WanTextToVideo => return Ok(FalInput::Wan(wan::parse(&f, WanVariant::TextToVideo)?)),
-            Endpoint::WanImageToVideo => return Ok(FalInput::Wan(wan::parse(&f, WanVariant::ImageToVideo)?)),
+            Endpoint::LtxTextToVideoFast => {
+                return Ok(FalInput::Ltx(ltx::parse(&f, LtxClass::Fast, false)?))
+            }
+            Endpoint::LtxTextToVideoPro => {
+                return Ok(FalInput::Ltx(ltx::parse(&f, LtxClass::Pro, false)?))
+            }
+            Endpoint::LtxImageToVideoFast => {
+                return Ok(FalInput::Ltx(ltx::parse(&f, LtxClass::Fast, true)?))
+            }
+            Endpoint::LtxImageToVideoPro => {
+                return Ok(FalInput::Ltx(ltx::parse(&f, LtxClass::Pro, true)?))
+            }
+            Endpoint::WanTextToVideo => {
+                return Ok(FalInput::Wan(wan::parse(&f, WanVariant::TextToVideo)?))
+            }
+            Endpoint::WanImageToVideo => {
+                return Ok(FalInput::Wan(wan::parse(&f, WanVariant::ImageToVideo)?))
+            }
             Endpoint::WanFastWan => return Ok(FalInput::Wan(wan::parse(&f, WanVariant::FastWan)?)),
             Endpoint::LtxIngredient => return Ok(FalInput::Ingredient(ingredient::parse(&f)?)),
-            Endpoint::LtxAudioToVideoFast => return Ok(FalInput::LtxA2v(a2v::parse(&f, LtxClass::Fast)?)),
-            Endpoint::LtxAudioToVideoPro => return Ok(FalInput::LtxA2v(a2v::parse(&f, LtxClass::Pro)?)),
+            Endpoint::LtxAudioToVideoFast => {
+                return Ok(FalInput::LtxA2v(a2v::parse(&f, LtxClass::Fast)?))
+            }
+            Endpoint::LtxAudioToVideoPro => {
+                return Ok(FalInput::LtxA2v(a2v::parse(&f, LtxClass::Pro)?))
+            }
             Endpoint::LtxRetake => return Ok(FalInput::LtxEdit(edit::parse_retake(&f)?)),
             Endpoint::LtxExtend => return Ok(FalInput::LtxEdit(edit::parse_extend(&f)?)),
             Endpoint::TextToVideo | Endpoint::ImageToVideo | Endpoint::ReferenceToVideo => {}
@@ -631,7 +721,13 @@ impl FalInput {
         let common = parse_common(&f, kind.h3_resolutions())?;
         Ok(match endpoint {
             Endpoint::TextToVideo => FalInput::TextToVideo {
-                aspect_ratio: parse_enum(&f, "aspect_ratio", &AspectRatio::T2V, AspectRatio::as_str, AspectRatio::R16x9)?,
+                aspect_ratio: parse_enum(
+                    &f,
+                    "aspect_ratio",
+                    &AspectRatio::T2V,
+                    AspectRatio::as_str,
+                    AspectRatio::R16x9,
+                )?,
                 target_audio_url: target_audio(&f)?,
                 common,
             },
@@ -657,7 +753,13 @@ impl FalInput {
                     ));
                 }
                 FalInput::ReferenceToVideo {
-                    aspect_ratio: parse_enum(&f, "aspect_ratio", &AspectRatio::R2V, AspectRatio::as_str, AspectRatio::Adaptive)?,
+                    aspect_ratio: parse_enum(
+                        &f,
+                        "aspect_ratio",
+                        &AspectRatio::R2V,
+                        AspectRatio::as_str,
+                        AspectRatio::Adaptive,
+                    )?,
                     reference_image_urls: images,
                     reference_video_urls: videos,
                     reference_audio_urls: audio,
@@ -698,7 +800,10 @@ impl FalInput {
     /// one field whose explicit default differs from its absence: an
     /// explicit mode opts in to the upsampler).
     pub fn without_explicit_expansion(mut self) -> Self {
-        if let FalInput::TextToVideo { common, .. } | FalInput::ImageToVideo { common, .. } | FalInput::ReferenceToVideo { common, .. } = &mut self {
+        if let FalInput::TextToVideo { common, .. }
+        | FalInput::ImageToVideo { common, .. }
+        | FalInput::ReferenceToVideo { common, .. } = &mut self
+        {
             common.prompt_expansion_explicit = false;
         }
         self
@@ -710,16 +815,25 @@ impl FalInput {
             FalInput::TextToVideo { common, .. }
             | FalInput::ImageToVideo { common, .. }
             | FalInput::ReferenceToVideo { common, .. } => Some(common),
-            FalInput::Ltx(_) | FalInput::Wan(_) | FalInput::Ingredient(_) | FalInput::LtxA2v(_) | FalInput::LtxEdit(_) => None,
+            FalInput::Ltx(_)
+            | FalInput::Wan(_)
+            | FalInput::Ingredient(_)
+            | FalInput::LtxA2v(_)
+            | FalInput::LtxEdit(_) => None,
         }
     }
 
     fn normalize_h3(&self, model: &str) -> Result<GenerationRequest, ApiError> {
-        let Some(c) = self.common() else { return Err(ApiError::internal("not an H3 input")) };
+        let Some(c) = self.common() else {
+            return Err(ApiError::internal("not an H3 input"));
+        };
         let mut r = GenerationRequest::text(ProtocolId::Fal, model, c.prompt.clone());
         r.seed = c.seed;
         r.timing = TimingSpec {
-            length: Length::Seconds { value: c.duration as f64, snap: Snap::AlignUp },
+            length: Length::Seconds {
+                value: c.duration as f64,
+                snap: Snap::AlignUp,
+            },
             fps: None,
         };
         r.output.inline_data_uri = c.sync_mode;
@@ -737,18 +851,37 @@ impl FalInput {
         let short_edge = c.resolution.short_edge();
         let media = |s: &str, param: &str| MediaRef::parse(s, param);
         match self {
-            FalInput::TextToVideo { aspect_ratio, target_audio_url, .. } => {
+            FalInput::TextToVideo {
+                aspect_ratio,
+                target_audio_url,
+                ..
+            } => {
                 r.canvas = aspect_canvas(*aspect_ratio, short_edge);
                 if let Some(a) = target_audio_url {
-                    r.audio_in = Some(AudioInput { media: media(a, "target_audio_url")?, role: AudioRole::TargetSoundtrack, max_s: None });
+                    r.audio_in = Some(AudioInput {
+                        media: media(a, "target_audio_url")?,
+                        role: AudioRole::TargetSoundtrack,
+                        max_s: None,
+                    });
                 }
             }
-            FalInput::ImageToVideo { target_audio_url, image_url, end_image_url, .. } => {
+            FalInput::ImageToVideo {
+                target_audio_url,
+                image_url,
+                end_image_url,
+                ..
+            } => {
                 if let Some(u) = image_url {
-                    r.keyframes.push(Keyframe { at: Anchor::First, image: media(u, "image_url")? });
+                    r.keyframes.push(Keyframe {
+                        at: Anchor::First,
+                        image: media(u, "image_url")?,
+                    });
                 }
                 if let Some(u) = end_image_url {
-                    r.keyframes.push(Keyframe { at: Anchor::Last, image: media(u, "end_image_url")? });
+                    r.keyframes.push(Keyframe {
+                        at: Anchor::Last,
+                        image: media(u, "end_image_url")?,
+                    });
                 }
                 (r.task, r.canvas) = match (image_url.is_some(), end_image_url.is_some()) {
                     // "If both images are omitted, the request is handled as
@@ -758,7 +891,11 @@ impl FalInput {
                     _ => (Task::Keyframes, CanvasSpec::FollowImage { short_edge }),
                 };
                 if let Some(a) = target_audio_url {
-                    r.audio_in = Some(AudioInput { media: media(a, "target_audio_url")?, role: AudioRole::TargetSoundtrack, max_s: None });
+                    r.audio_in = Some(AudioInput {
+                        media: media(a, "target_audio_url")?,
+                        role: AudioRole::TargetSoundtrack,
+                        max_s: None,
+                    });
                 }
             }
             FalInput::ReferenceToVideo {
@@ -771,23 +908,44 @@ impl FalInput {
                 r.task = Task::Ref2V;
                 // "Image 1… Video 1… Audio 1…": images, then videos, then audio.
                 for (kind, list, field) in [
-                    (MediaKind::Image, reference_image_urls, "reference_image_urls"),
-                    (MediaKind::Video, reference_video_urls, "reference_video_urls"),
-                    (MediaKind::Audio, reference_audio_urls, "reference_audio_urls"),
+                    (
+                        MediaKind::Image,
+                        reference_image_urls,
+                        "reference_image_urls",
+                    ),
+                    (
+                        MediaKind::Video,
+                        reference_video_urls,
+                        "reference_video_urls",
+                    ),
+                    (
+                        MediaKind::Audio,
+                        reference_audio_urls,
+                        "reference_audio_urls",
+                    ),
                 ] {
                     for (i, u) in list.iter().enumerate() {
-                        r.references.push(Reference { kind, media: media(u, &format!("{field}[{i}]"))? });
+                        r.references.push(Reference {
+                            kind,
+                            media: media(u, &format!("{field}[{i}]"))?,
+                        });
                     }
                 }
                 r.canvas = match aspect_ratio {
                     // INFERRED: `adaptive` follows the first reference image;
                     // with no reference image it falls back to 16:9.
-                    AspectRatio::Adaptive if !reference_image_urls.is_empty() => CanvasSpec::FollowImage { short_edge },
+                    AspectRatio::Adaptive if !reference_image_urls.is_empty() => {
+                        CanvasSpec::FollowImage { short_edge }
+                    }
                     AspectRatio::Adaptive => aspect_canvas(AspectRatio::R16x9, short_edge),
                     a => aspect_canvas(*a, short_edge),
                 };
             }
-            FalInput::Ltx(_) | FalInput::Wan(_) | FalInput::Ingredient(_) | FalInput::LtxA2v(_) | FalInput::LtxEdit(_) => {}
+            FalInput::Ltx(_)
+            | FalInput::Wan(_)
+            | FalInput::Ingredient(_)
+            | FalInput::LtxA2v(_)
+            | FalInput::LtxEdit(_) => {}
         }
         Ok(r)
     }
@@ -822,12 +980,16 @@ impl FalInput {
 /// `short_edges` is the resolved model's `CanvasCaps::short_edges`.
 pub fn default_resolution_for(req: &mut GenerationRequest, short_edges: &[u32]) {
     let default = Resolution::P768.short_edge();
-    let Some(&first) = short_edges.first() else { return };
+    let Some(&first) = short_edges.first() else {
+        return;
+    };
     if first == default {
         return;
     }
     match &mut req.canvas {
-        CanvasSpec::Aspect { short_edge, .. } | CanvasSpec::FollowImage { short_edge } if *short_edge == default => {
+        CanvasSpec::Aspect { short_edge, .. } | CanvasSpec::FollowImage { short_edge }
+            if *short_edge == default =>
+        {
             *short_edge = first;
         }
         _ => {}
@@ -845,7 +1007,11 @@ fn aspect_canvas(a: AspectRatio, short_edge: u32) -> CanvasSpec {
 /// `audio`) back to the fal field of `req`.
 pub fn fal_param(param: &str, req: &GenerationRequest) -> String {
     let idx = |p: &str, name: &str| -> Option<usize> {
-        p.strip_prefix(name)?.strip_prefix('[')?.strip_suffix(']')?.parse().ok()
+        p.strip_prefix(name)?
+            .strip_prefix('[')?
+            .strip_suffix(']')?
+            .parse()
+            .ok()
     };
     if let Some(i) = idx(param, "keyframes") {
         return match req.keyframes.get(i).map(|k| k.at) {
@@ -864,7 +1030,10 @@ pub fn fal_param(param: &str, req: &GenerationRequest) -> String {
     }
     if let Some(i) = idx(param, "references") {
         if let Some(r) = req.references.get(i) {
-            let k = req.references[..i].iter().filter(|x| x.kind == r.kind).count();
+            let k = req.references[..i]
+                .iter()
+                .filter(|x| x.kind == r.kind)
+                .count();
             let field = match r.kind {
                 MediaKind::Image => "reference_image_urls",
                 MediaKind::Video => "reference_video_urls",
@@ -947,7 +1116,15 @@ pub struct VideoOutput {
 pub fn output_slug(app_id: &str) -> String {
     let (owner, alias) = app_id.split_once('/').unwrap_or(("", app_id));
     let clean = |s: &str| -> String {
-        s.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '-' }).collect()
+        s.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect()
     };
     match (owner, alias) {
         (_, "") => "video".to_owned(),
@@ -988,7 +1165,10 @@ pub fn app_id(endpoint_id: &str) -> &str {
 
 /// Whether the job asked for `sync_mode` (inline data URI).
 pub fn wants_inline(job: &Job) -> bool {
-    job.request_echo.get("sync_mode").and_then(Value::as_bool).unwrap_or(false)
+    job.request_echo
+        .get("sync_mode")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -1006,17 +1186,26 @@ mod tests {
         assert_eq!(loc(None), json!(["body"]));
         assert_eq!(loc(Some("task")), json!(["body"]));
         assert_eq!(loc(Some("seed")), json!(["body", "seed"]));
-        assert_eq!(loc(Some("reference_image_urls[3]")), json!(["body", "reference_image_urls", 3]));
+        assert_eq!(
+            loc(Some("reference_image_urls[3]")),
+            json!(["body", "reference_image_urls", 3])
+        );
         assert_eq!(loc(Some("fal_webhook")), json!(["query", "fal_webhook"]));
     }
 
     #[test]
     fn param_mapping() {
         let body = json!({"prompt": "p", "end_image_url": "https://a.test/x.png"});
-        let r = FalInput::parse(Endpoint::ImageToVideo, &body).unwrap().normalize("h3-max", &cx()).unwrap();
+        let r = FalInput::parse(Endpoint::ImageToVideo, &body)
+            .unwrap()
+            .normalize("h3-max", &cx())
+            .unwrap();
         assert_eq!(fal_param("keyframes[0]", &r), "end_image_url");
         let body = json!({"prompt": "p", "reference_image_urls": ["https://a.test/1.png"], "reference_audio_urls": ["https://a.test/a.wav", "https://a.test/b.wav"]});
-        let r = FalInput::parse(Endpoint::ReferenceToVideo, &body).unwrap().normalize("h3-max", &cx()).unwrap();
+        let r = FalInput::parse(Endpoint::ReferenceToVideo, &body)
+            .unwrap()
+            .normalize("h3-max", &cx())
+            .unwrap();
         assert_eq!(fal_param("references[2]", &r), "reference_audio_urls[1]");
         assert_eq!(fal_param("audio", &r), "target_audio_url");
         assert_eq!(fal_param("duration", &r), "duration");
@@ -1026,17 +1215,35 @@ mod tests {
     fn audio_to_video_drives_the_ltx_tiers() {
         let kind = AppKind::of("lightricks/ltx-2.5");
         assert!(kind.endpoints().contains(&Endpoint::LtxAudioToVideoFast));
-        assert_eq!(Endpoint::from_sub("audio-to-video/pro"), Some(Endpoint::LtxAudioToVideoPro));
-        assert_eq!(Endpoint::LtxAudioToVideoFast.target(), Some((Family::Ltx2, Tier::Turbo)));
-        assert_eq!(Endpoint::LtxAudioToVideoPro.target(), Some((Family::Ltx2, Tier::Max)));
+        assert_eq!(
+            Endpoint::from_sub("audio-to-video/pro"),
+            Some(Endpoint::LtxAudioToVideoPro)
+        );
+        assert_eq!(
+            Endpoint::LtxAudioToVideoFast.target(),
+            Some((Family::Ltx2, Tier::Turbo))
+        );
+        assert_eq!(
+            Endpoint::LtxAudioToVideoPro.target(),
+            Some((Family::Ltx2, Tier::Max))
+        );
         let parse = |e, b: Value| FalInput::parse_for(kind, e, &b);
         // Prompt only: 16:9 1080p, the length from the audio, 24 fps.
         let i = parse(Endpoint::LtxAudioToVideoFast, json!({"audio_url": "https://a.test/s.mp3", "prompt": "a man talks", "guidance_scale": 5})).unwrap();
         assert_eq!(i.endpoint(), Endpoint::LtxAudioToVideoFast);
         let r = i.normalize("ltx-turbo", &cx()).unwrap();
         assert_eq!(r.task, Task::A2V);
-        assert_eq!(r.canvas, CanvasSpec::Oriented { width: 1920, height: 1080 });
-        assert_eq!((r.timing.length.clone(), r.timing.fps), (Length::ModelDefault, Some(24)));
+        assert_eq!(
+            r.canvas,
+            CanvasSpec::Oriented {
+                width: 1920,
+                height: 1080
+            }
+        );
+        assert_eq!(
+            (r.timing.length.clone(), r.timing.fps),
+            (Length::ModelDefault, Some(24))
+        );
         let a = r.audio_in.as_ref().unwrap();
         assert_eq!((a.role, a.max_s), (AudioRole::Drive, None));
         assert!(r.keyframes.is_empty());
@@ -1044,34 +1251,61 @@ mod tests {
         assert_eq!(fal_param("audio_url", &r), "audio_url");
         // An image: the first frame, `auto` follows it, the prompt optional;
         // pro caps the audio at 10 s.
-        let r = parse(Endpoint::LtxAudioToVideoPro, json!({"audio_url": "data:audio/wav;base64,AA", "image_url": "https://a.test/f.png"}))
-            .unwrap()
-            .normalize("ltx-pro", &cx())
-            .unwrap();
-        assert_eq!(r.canvas, CanvasSpec::Oriented { width: 1920, height: 1080 });
+        let r = parse(
+            Endpoint::LtxAudioToVideoPro,
+            json!({"audio_url": "data:audio/wav;base64,AA", "image_url": "https://a.test/f.png"}),
+        )
+        .unwrap()
+        .normalize("ltx-pro", &cx())
+        .unwrap();
+        assert_eq!(
+            r.canvas,
+            CanvasSpec::Oriented {
+                width: 1920,
+                height: 1080
+            }
+        );
         assert_eq!(r.keyframes.len(), 1);
         assert!(r.prompt.is_empty());
         assert_eq!(r.audio_in.as_ref().unwrap().max_s, Some(10));
         // Pro runs the guided dev pipeline: guidance_scale is its CFG scale.
         assert_eq!(r.sampling.guidance, None);
         assert!(r.accepted_noop.is_empty());
-        let r = parse(Endpoint::LtxAudioToVideoPro, json!({"audio_url": "https://a.test/s.mp3", "prompt": "p", "guidance_scale": 5}))
-            .unwrap()
-            .normalize("ltx-pro", &cx())
-            .unwrap();
+        let r = parse(
+            Endpoint::LtxAudioToVideoPro,
+            json!({"audio_url": "https://a.test/s.mp3", "prompt": "p", "guidance_scale": 5}),
+        )
+        .unwrap()
+        .normalize("ltx-pro", &cx())
+        .unwrap();
         assert_eq!(r.sampling.guidance, Some(5.0));
         assert!(r.accepted_noop.is_empty());
-        let r = parse(Endpoint::LtxAudioToVideoFast, json!({"audio_url": "https://a.test/s.mp3", "prompt": "p", "aspect_ratio": "9:16"}))
-            .unwrap()
-            .normalize("ltx-turbo", &cx())
-            .unwrap();
-        assert_eq!(r.canvas, CanvasSpec::Exact { width: 1080, height: 1920 });
+        let r = parse(
+            Endpoint::LtxAudioToVideoFast,
+            json!({"audio_url": "https://a.test/s.mp3", "prompt": "p", "aspect_ratio": "9:16"}),
+        )
+        .unwrap()
+        .normalize("ltx-turbo", &cx())
+        .unwrap();
+        assert_eq!(
+            r.canvas,
+            CanvasSpec::Exact {
+                width: 1080,
+                height: 1920
+            }
+        );
         // No audio; neither prompt nor image; guidance out of range; an empty prompt.
         for (b, field) in [
             (json!({"prompt": "p"}), "audio_url"),
             (json!({"audio_url": "https://a.test/s.mp3"}), "prompt"),
-            (json!({"audio_url": "https://a.test/s.mp3", "prompt": "p", "guidance_scale": 0.5}), "guidance_scale"),
-            (json!({"audio_url": "https://a.test/s.mp3", "prompt": ""}), "prompt"),
+            (
+                json!({"audio_url": "https://a.test/s.mp3", "prompt": "p", "guidance_scale": 0.5}),
+                "guidance_scale",
+            ),
+            (
+                json!({"audio_url": "https://a.test/s.mp3", "prompt": ""}),
+                "prompt",
+            ),
         ] {
             let e = parse(Endpoint::LtxAudioToVideoFast, b).unwrap_err();
             assert_eq!(e.param.as_deref(), Some(field));
@@ -1083,9 +1317,18 @@ mod tests {
         let kind = AppKind::of("fal-ai/ltx-2.3-quality");
         assert_eq!(kind, AppKind::LtxQuality);
         assert_eq!(kind.endpoints(), &[Endpoint::LtxIngredient]);
-        assert_eq!(Endpoint::from_sub("ingredient"), Some(Endpoint::LtxIngredient));
-        assert_eq!(Endpoint::LtxIngredient.target(), Some((Family::Ltx2, Tier::Max)));
-        assert_eq!(app_id("fal-ai/ltx-2.3-quality/ingredient"), "fal-ai/ltx-2.3-quality");
+        assert_eq!(
+            Endpoint::from_sub("ingredient"),
+            Some(Endpoint::LtxIngredient)
+        );
+        assert_eq!(
+            Endpoint::LtxIngredient.target(),
+            Some((Family::Ltx2, Tier::Max))
+        );
+        assert_eq!(
+            app_id("fal-ai/ltx-2.3-quality/ingredient"),
+            "fal-ai/ltx-2.3-quality"
+        );
         let body = json!({
             "prompt": "Reference sheet: a crab. Generated video: the crab walks.",
             "image_url": "https://a.test/sheet.png",
@@ -1101,30 +1344,53 @@ mod tests {
         assert_eq!(r.model, "ltx-pro");
         assert_eq!(r.references.len(), 1);
         assert_eq!(r.references[0].kind, MediaKind::Image);
-        assert_eq!(r.canvas, CanvasSpec::Exact { width: 1536, height: 896 });
-        assert_eq!(r.timing.length, Length::Frames { value: 100, snap: Snap::Nearest });
+        assert_eq!(
+            r.canvas,
+            CanvasSpec::Exact {
+                width: 1536,
+                height: 896
+            }
+        );
+        assert_eq!(
+            r.timing.length,
+            Length::Frames {
+                value: 100,
+                snap: Snap::Nearest
+            }
+        );
         assert_eq!(r.timing.fps, Some(24));
         assert_eq!(r.sampling.reference_lora_strength, Some(1.5));
         assert_eq!(r.sampling.reference_strength, Some(1.0));
         assert_eq!(r.audio_out, fastvideo_protocol::AudioOut::Silent);
         // Engine errors name the fal fields.
         assert_eq!(fal_param("references[0]", &r), "image_url");
-        assert_eq!(fal_param("reference_lora_strength", &r), "ingredient_strength");
+        assert_eq!(
+            fal_param("reference_lora_strength", &r),
+            "ingredient_strength"
+        );
         assert_eq!(fal_param("reference_strength", &r), "reference_strength");
         assert_eq!(fal_param("fps", &r), "frames_per_second");
         // The sheet is required; strengths stay within fal's 0..=2.
         let no_sheet = json!({"prompt": "p"});
         assert!(FalInput::parse_for(kind, Endpoint::LtxIngredient, &no_sheet).is_err());
-        let hot = json!({"prompt": "p", "image_url": "https://a.test/s.png", "reference_strength": 2.5});
+        let hot =
+            json!({"prompt": "p", "image_url": "https://a.test/s.png", "reference_strength": 2.5});
         let e = FalInput::parse_for(kind, Endpoint::LtxIngredient, &hot).unwrap_err();
         assert_eq!(e.param.as_deref(), Some("reference_strength"));
     }
 
     #[test]
     fn omitted_resolution_follows_the_model_tiers() {
-        let t2v = |b: Value| FalInput::parse(Endpoint::TextToVideo, &b).unwrap().normalize("m", &cx()).unwrap();
+        let t2v = |b: Value| {
+            FalInput::parse(Endpoint::TextToVideo, &b)
+                .unwrap()
+                .normalize("m", &cx())
+                .unwrap()
+        };
         let edge = |r: &GenerationRequest| match r.canvas {
-            CanvasSpec::Aspect { short_edge, .. } | CanvasSpec::FollowImage { short_edge } => short_edge,
+            CanvasSpec::Aspect { short_edge, .. } | CanvasSpec::FollowImage { short_edge } => {
+                short_edge
+            }
             _ => 0,
         };
         // H3 (768 served): unchanged.
@@ -1140,41 +1406,90 @@ mod tests {
         let mut r = t2v(json!({"prompt": "p", "aspect_ratio": "9:16"}));
         default_resolution_for(&mut r, &[480]);
         assert_eq!(edge(&r), 480);
-        assert!(matches!(r.canvas, CanvasSpec::Aspect { ratio, .. } if ratio.w == 9 && ratio.h == 16));
+        assert!(
+            matches!(r.canvas, CanvasSpec::Aspect { ratio, .. } if ratio.w == 9 && ratio.h == 16)
+        );
     }
 
     #[test]
     fn retake_and_extend_are_edits_on_ltx_pro() {
         let kind = AppKind::of("fal-ai/ltx-2.3");
         assert_eq!(kind, AppKind::Ltx23);
-        assert_eq!(kind.endpoints(), &[Endpoint::LtxRetake, Endpoint::LtxExtend]);
-        assert_eq!(Endpoint::from_sub("retake-video"), Some(Endpoint::LtxRetake));
-        assert_eq!(Endpoint::LtxExtend.target(), Some((Family::Ltx2, Tier::Max)));
+        assert_eq!(
+            kind.endpoints(),
+            &[Endpoint::LtxRetake, Endpoint::LtxExtend]
+        );
+        assert_eq!(
+            Endpoint::from_sub("retake-video"),
+            Some(Endpoint::LtxRetake)
+        );
+        assert_eq!(
+            Endpoint::LtxExtend.target(),
+            Some((Family::Ltx2, Tier::Max))
+        );
         let body = json!({"video_url": "https://a.test/v.mp4", "prompt": "the dog jumps", "start_time": 1.5, "retake_mode": "replace_video", "seed": 7});
         let i = FalInput::parse_for(kind, Endpoint::LtxRetake, &body).unwrap();
         assert_eq!(i.endpoint(), Endpoint::LtxRetake);
         let r = i.normalize("ltx-pro", &cx()).unwrap();
-        assert_eq!((r.task, r.seed, r.prompt.as_str()), (Task::Retake, Some(7), "the dog jumps"));
+        assert_eq!(
+            (r.task, r.seed, r.prompt.as_str()),
+            (Task::Retake, Some(7), "the dog jumps")
+        );
         assert_eq!(
             r.edit.as_ref().unwrap().op,
-            fastvideo_protocol::EditOp::Retake { start_s: 1.5, duration_s: 5.0, mode: fastvideo_protocol::RetakeMode::ReplaceVideo }
+            fastvideo_protocol::EditOp::Retake {
+                start_s: 1.5,
+                duration_s: 5.0,
+                mode: fastvideo_protocol::RetakeMode::ReplaceVideo
+            }
         );
         let x = FalInput::parse_for(kind, Endpoint::LtxExtend, &json!({"video_url": "https://a.test/v.mp4", "duration": 2.5, "mode": "start", "context": 4})).unwrap();
         let r = x.normalize("ltx-pro", &cx()).unwrap();
         assert_eq!((r.task, r.prompt.as_str()), (Task::Extend, ""));
         assert_eq!(
             r.edit.unwrap().op,
-            fastvideo_protocol::EditOp::Extend { duration_s: 2.5, at: fastvideo_protocol::ExtendAt::Start, context_s: Some(4.0) }
+            fastvideo_protocol::EditOp::Extend {
+                duration_s: 2.5,
+                at: fastvideo_protocol::ExtendAt::Start,
+                context_s: Some(4.0)
+            }
         );
         for (e, b, param) in [
             (Endpoint::LtxRetake, json!({"prompt": "p"}), "video_url"),
-            (Endpoint::LtxRetake, json!({"video_url": "https://a.test/v.mp4"}), "prompt"),
-            (Endpoint::LtxRetake, json!({"video_url": "https://a.test/v.mp4", "prompt": "p", "start_time": 21}), "start_time"),
-            (Endpoint::LtxRetake, json!({"video_url": "https://a.test/v.mp4", "prompt": "p", "duration": 1}), "duration"),
-            (Endpoint::LtxExtend, json!({"video_url": "https://a.test/v.mp4", "context": 25}), "context"),
-            (Endpoint::LtxExtend, json!({"video_url": "https://a.test/v.mp4", "mode": "both"}), "mode"),
+            (
+                Endpoint::LtxRetake,
+                json!({"video_url": "https://a.test/v.mp4"}),
+                "prompt",
+            ),
+            (
+                Endpoint::LtxRetake,
+                json!({"video_url": "https://a.test/v.mp4", "prompt": "p", "start_time": 21}),
+                "start_time",
+            ),
+            (
+                Endpoint::LtxRetake,
+                json!({"video_url": "https://a.test/v.mp4", "prompt": "p", "duration": 1}),
+                "duration",
+            ),
+            (
+                Endpoint::LtxExtend,
+                json!({"video_url": "https://a.test/v.mp4", "context": 25}),
+                "context",
+            ),
+            (
+                Endpoint::LtxExtend,
+                json!({"video_url": "https://a.test/v.mp4", "mode": "both"}),
+                "mode",
+            ),
         ] {
-            assert_eq!(FalInput::parse_for(kind, e, &b).unwrap_err().param.as_deref(), Some(param), "{b}");
+            assert_eq!(
+                FalInput::parse_for(kind, e, &b)
+                    .unwrap_err()
+                    .param
+                    .as_deref(),
+                Some(param),
+                "{b}"
+            );
         }
     }
 }

@@ -11,6 +11,8 @@ pub const DEFAULT_YAW_SPEED: f32 = 3.0_f32.to_radians();
 pub const DEFAULT_PITCH_SPEED: f32 = 3.0_f32.to_radians();
 
 /// Default 1920×1080 intrinsic before normalization.
+// The reference's focal length (1920 / 1.98), verbatim.
+#[allow(clippy::excessive_precision)]
 pub const DEFAULT_INTRINSIC: [[f32; 3]; 3] = [
     [969.6969696969696, 0.0, 960.0],
     [0.0, 969.6969696969696, 540.0],

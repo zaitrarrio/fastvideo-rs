@@ -108,7 +108,10 @@ impl ClipSession {
             return Ok(grid.default);
         };
         if !s.is_finite() || s <= 0.0 {
-            return Err(ApiError::invalid_param("seconds", "clip length must be positive"));
+            return Err(ApiError::invalid_param(
+                "seconds",
+                "clip length must be positive",
+            ));
         }
         let n = (s * self.spec.fps as f64).round() as u32;
         grid.align_up(n).ok_or_else(|| {
@@ -130,7 +133,10 @@ impl ClipSession {
             Some(n) => {
                 return Err(ApiError::invalid_param(
                     "frames",
-                    format!("{n} frames is not an admissible clip length for `{}`", self.caps.id),
+                    format!(
+                        "{n} frames is not an admissible clip length for `{}`",
+                        self.caps.id
+                    ),
                 ))
             }
             None => self.frames_for(b.seconds)?,
@@ -151,7 +157,11 @@ impl ClipSession {
         };
         if !self.caps.supports(task) {
             return Err(ApiError::invalid_param(
-                if task == Task::A2V { "audio_url" } else { "image_url" },
+                if task == Task::A2V {
+                    "audio_url"
+                } else {
+                    "image_url"
+                },
                 format!("model `{}` cannot build {task:?} clips", self.caps.id),
             ));
         }

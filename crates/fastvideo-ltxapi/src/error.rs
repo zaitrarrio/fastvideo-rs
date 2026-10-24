@@ -269,8 +269,14 @@ mod tests {
         assert_eq!(v2(K::QueueFull), LtxErrorType::RateLimit);
         assert_eq!(v1(K::QueueFull), LtxErrorType::ConcurrencyLimit);
         assert_eq!(v1(K::RateLimited), LtxErrorType::ConcurrencyLimit);
-        assert_eq!(v2(K::Unsupported(GapId::LtxFps)), LtxErrorType::InvalidRequest);
-        assert_eq!(v2(K::Unsupported(GapId::LtxEndpoint)), LtxErrorType::Permission);
+        assert_eq!(
+            v2(K::Unsupported(GapId::LtxFps)),
+            LtxErrorType::InvalidRequest
+        );
+        assert_eq!(
+            v2(K::Unsupported(GapId::LtxEndpoint)),
+            LtxErrorType::Permission
+        );
         assert_eq!(v2(K::Loading), LtxErrorType::ServiceUnavailable);
         assert_eq!(v2(K::Cancelled), LtxErrorType::Api);
         assert_eq!(status_of(&ApiError::timeout("t"), Api::V1), 504);
@@ -284,7 +290,10 @@ mod tests {
         };
         let r = render(&ApiError::queue_full("full"), Api::V2, &cx);
         assert_eq!(r.status, 429);
-        assert_eq!(r.header("x-request-id"), Some("1234567890abcdef1234567890abcdef"));
+        assert_eq!(
+            r.header("x-request-id"),
+            Some("1234567890abcdef1234567890abcdef")
+        );
         assert_eq!(r.header("retry-after"), Some("5"));
         let r = render(&ApiError::loading("warming"), Api::V1, &ErrorCtx::default());
         assert_eq!(r.status, 503);

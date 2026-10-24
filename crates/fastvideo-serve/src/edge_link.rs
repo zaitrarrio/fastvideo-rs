@@ -42,7 +42,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use fastvideo_dispatch_proto::{self as proto, DoMsg, Held, HeldSession, Hello, Scope, Slots, WorkerMsg};
+use fastvideo_dispatch_proto::{
+    self as proto, DoMsg, Held, HeldSession, Hello, Scope, Slots, WorkerMsg,
+};
 use fastvideo_protocol::JobId;
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{mpsc, oneshot};
@@ -113,14 +115,21 @@ pub struct LinkHandle {
 
 impl std::fmt::Debug for LinkHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LinkHandle").field("scope", &self.scope).finish_non_exhaustive()
+        f.debug_struct("LinkHandle")
+            .field("scope", &self.scope)
+            .finish_non_exhaustive()
     }
 }
 
 impl LinkHandle {
     /// A handle over `tx` (the link task reads the other end).
     pub fn new(scope: Scope, tx: mpsc::UnboundedSender<WorkerMsg>) -> Arc<Self> {
-        Arc::new(Self { scope, tx, pending: Mutex::default(), next: AtomicU64::new(0) })
+        Arc::new(Self {
+            scope,
+            tx,
+            pending: Mutex::default(),
+            next: AtomicU64::new(0),
+        })
     }
 
     /// Queues a frame (sent once the socket is up).
@@ -129,17 +138,30 @@ impl LinkHandle {
     }
 
     /// Sends the frame `build(req)` and waits for the answer with that `req`.
-    pub async fn request(&self, build: impl FnOnce(u64) -> WorkerMsg, timeout: Duration) -> Result<DoMsg, String> {
+    pub async fn request(
+        &self,
+        build: impl FnOnce(u64) -> WorkerMsg,
+        timeout: Duration,
+    ) -> Result<DoMsg, String> {
         let req = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(req, tx);
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(req, tx);
         self.send(build(req));
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(m)) => Ok(m),
             Ok(Err(_)) => Err("the link was dropped".into()),
             Err(_) => {
-                self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&req);
-                Err(format!("no answer from the dispatcher within {} s", timeout.as_secs()))
+                self.pending
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&req);
+                Err(format!(
+                    "no answer from the dispatcher within {} s",
+                    timeout.as_secs()
+                ))
             }
         }
     }
@@ -150,7 +172,11 @@ impl LinkHandle {
             DoMsg::UploadGrant { req, .. } | DoMsg::UploadCommitted { req, .. } => *req,
             _ => return Some(m),
         };
-        let w = self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&req);
+        let w = self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&req);
         match w {
             Some(w) => {
                 let _ = w.send(m);
@@ -221,13 +247,21 @@ impl Link {
             }
             _ => (0, 0),
         };
-        Slots { free, session_free, offers_seen: self.offers_seen.load(Ordering::SeqCst) }
+        Slots {
+            free,
+            session_free,
+            offers_seen: self.offers_seen.load(Ordering::SeqCst),
+        }
     }
 }
 
 /// Starts the link (runs until aborted). `fam`: the family links' shared
 /// arbiter and uploads (required for a family scope).
-pub fn spawn(st: Arc<WorkerState>, cfg: LinkCfg, fam: Option<Family>) -> tokio::task::JoinHandle<()> {
+pub fn spawn(
+    st: Arc<WorkerState>,
+    cfg: LinkCfg,
+    fam: Option<Family>,
+) -> tokio::task::JoinHandle<()> {
     let (tx, rx) = mpsc::unbounded_channel::<WorkerMsg>();
     let handle = LinkHandle::new(cfg.scope.clone(), tx);
     let link = Arc::new(Link {
@@ -263,8 +297,12 @@ async fn run(link: Arc<Link>, mut rx: mpsc::UnboundedReceiver<WorkerMsg>) {
     loop {
         let t0 = Instant::now();
         match session(&link, &url, &mut rx).await {
-            Ok(()) => tracing::info!(scope = %scope, "worker: dispatcher socket closed; reconnecting"),
-            Err(e) => tracing::warn!(scope = %scope, error = %e, "worker: dispatcher socket failed; reconnecting"),
+            Ok(()) => {
+                tracing::info!(scope = %scope, "worker: dispatcher socket closed; reconnecting")
+            }
+            Err(e) => {
+                tracing::warn!(scope = %scope, error = %e, "worker: dispatcher socket failed; reconnecting")
+            }
         }
         if t0.elapsed() > Duration::from_secs(30) {
             backoff = Duration::from_millis(250);
@@ -275,27 +313,53 @@ async fn run(link: Arc<Link>, mut rx: mpsc::UnboundedReceiver<WorkerMsg>) {
 }
 
 fn state_word(j: Option<&fastvideo_protocol::Job>) -> String {
-    j.map(|j| j.status().as_str().to_owned()).unwrap_or_else(|| "failed".into())
+    j.map(|j| j.status().as_str().to_owned())
+        .unwrap_or_else(|| "failed".into())
 }
 
 async fn hello(link: &Link) -> (Hello, Vec<JobId>) {
     let st = &link.st;
-    let held: Vec<(JobId, (u32, u64))> = link.taken.lock().unwrap_or_else(|p| p.into_inner()).iter().map(|(k, v)| (*k, *v)).collect();
+    let held: Vec<(JobId, (u32, u64))> = link
+        .taken
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .iter()
+        .map(|(k, v)| (*k, *v))
+        .collect();
     let mut jobs = Vec::new();
     let mut finished = Vec::new();
     for (id, (attempt, lease)) in held {
         let j = st.ctx.jobs().get(id).await;
-        let h = Held { job_id: id.to_string(), attempt, lease, state: state_word(j.as_ref()) };
+        let h = Held {
+            job_id: id.to_string(),
+            attempt,
+            lease,
+            state: state_word(j.as_ref()),
+        };
         if h.finished() {
             finished.push(id);
         }
         jobs.push(h);
     }
     let build = crate::build_info::BuildInfo::current().json();
-    let sha = build.get("git_sha").and_then(|v| v.as_str()).unwrap_or("unknown").chars().take(7).collect();
+    let sha = build
+        .get("git_sha")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .chars()
+        .take(7)
+        .collect();
     let family = link.fam.is_some();
     let sessions = if family {
-        link.sessions.lock().unwrap_or_else(|p| p.into_inner()).iter().map(|(k, v)| HeldSession { session_id: k.clone(), lease: *v }).collect()
+        link.sessions
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .map(|(k, v)| HeldSession {
+                session_id: k.clone(),
+                lease: *v,
+            })
+            .collect()
     } else {
         Vec::new()
     };
@@ -318,7 +382,12 @@ async fn hello(link: &Link) -> (Hello, Vec<JobId>) {
                 .models()
                 .iter()
                 .map(|m| m.id.to_string())
-                .filter(|m| link.cfg.model_families.get(m).is_none_or(|f| f == link.family()))
+                .filter(|m| {
+                    link.cfg
+                        .model_families
+                        .get(m)
+                        .is_none_or(|f| f == link.family())
+                })
                 .collect()
         } else {
             Vec::new()
@@ -326,31 +395,54 @@ async fn hello(link: &Link) -> (Hello, Vec<JobId>) {
         caps: crate::worker::status_json(st),
         jobs,
         sessions,
-        endpoint: if family { link.cfg.endpoint.clone() } else { String::new() },
+        endpoint: if family {
+            link.cfg.endpoint.clone()
+        } else {
+            String::new()
+        },
         slots: family.then(|| link.slots()),
         front: link.front(),
     };
     (h, finished)
 }
 
-async fn session(link: &Arc<Link>, url: &str, rx: &mut mpsc::UnboundedReceiver<WorkerMsg>) -> Result<(), String> {
+async fn session(
+    link: &Arc<Link>,
+    url: &str,
+    rx: &mut mpsc::UnboundedReceiver<WorkerMsg>,
+) -> Result<(), String> {
     let st = &link.st;
-    let mut req = url.into_client_request().map_err(|e| format!("dispatcher URL: {e}"))?;
+    let mut req = url
+        .into_client_request()
+        .map_err(|e| format!("dispatcher URL: {e}"))?;
     let h = req.headers_mut();
-    h.insert(proto::TOKEN_HEADER, HeaderValue::from_str(&link.cfg.token).map_err(|_| "internal token is not a valid header value".to_owned())?);
-    h.insert(proto::WORKER_HEADER, HeaderValue::from_str(&st.worker_id).map_err(|_| "worker id is not a valid header value".to_owned())?);
+    h.insert(
+        proto::TOKEN_HEADER,
+        HeaderValue::from_str(&link.cfg.token)
+            .map_err(|_| "internal token is not a valid header value".to_owned())?,
+    );
+    h.insert(
+        proto::WORKER_HEADER,
+        HeaderValue::from_str(&st.worker_id)
+            .map_err(|_| "worker id is not a valid header value".to_owned())?,
+    );
     let t0 = Instant::now();
-    let (ws, _) = tokio::time::timeout(Duration::from_secs(15), tokio_tungstenite::connect_async(req))
-        .await
-        .map_err(|_| "connect timed out".to_owned())?
-        .map_err(|e| format!("connect: {e}"))?;
+    let (ws, _) = tokio::time::timeout(
+        Duration::from_secs(15),
+        tokio_tungstenite::connect_async(req),
+    )
+    .await
+    .map_err(|_| "connect timed out".to_owned())?
+    .map_err(|e| format!("connect: {e}"))?;
     let (mut sink, mut stream) = ws.split();
     // A new socket: the offer count starts again (the hello resets it there too).
     link.offers_seen.store(0, Ordering::SeqCst);
     let (h, finished) = hello(link).await;
     let n = h.jobs.len();
     let text = serde_json::to_string(&WorkerMsg::Hello(h)).map_err(|e| e.to_string())?;
-    sink.send(Message::text(text)).await.map_err(|e| format!("hello: {e}"))?;
+    sink.send(Message::text(text))
+        .await
+        .map_err(|e| format!("hello: {e}"))?;
     {
         let mut g = link.taken.lock().unwrap_or_else(|p| p.into_inner());
         for id in finished {
@@ -438,25 +530,55 @@ async fn session(link: &Arc<Link>, url: &str, rx: &mut mpsc::UnboundedReceiver<W
 }
 
 fn on_frame(link: &Arc<Link>, m: DoMsg) {
-    let Some(m) = link.handle.resolve(m) else { return };
+    let Some(m) = link.handle.resolve(m) else {
+        return;
+    };
     let st = &link.st;
     match m {
-        DoMsg::Job { job_id, attempt, envelope, lease, takeover } => {
+        DoMsg::Job {
+            job_id,
+            attempt,
+            envelope,
+            lease,
+            takeover,
+        } => {
             link.offers_seen.fetch_add(1, Ordering::SeqCst);
             if let Some(f) = &link.fam {
                 // The arbiter decides now, before anything else can.
                 if let Err(r) = f.arbiter.try_take_job(link.family(), &job_id) {
                     tracing::info!(job = %job_id, family = link.family(), reason = %r, "worker: offer refused by the arbiter");
                     metrics::counter!("fv_worker_arbiter_refused_total", "family" => link.family().to_owned()).increment(1);
-                    link.handle.send(WorkerMsg::Nack { job_id, attempt, retry: true, code: 429, message: r.to_string() });
+                    link.handle.send(WorkerMsg::Nack {
+                        job_id,
+                        attempt,
+                        retry: true,
+                        code: 429,
+                        message: r.to_string(),
+                    });
                     return;
                 }
             }
             let link = link.clone();
-            tokio::spawn(async move { take(link, Push { job_id, attempt, lease, takeover }, envelope).await });
+            tokio::spawn(async move {
+                take(
+                    link,
+                    Push {
+                        job_id,
+                        attempt,
+                        lease,
+                        takeover,
+                    },
+                    envelope,
+                )
+                .await
+            });
         }
         DoMsg::Cancel { job_id } => cancel(st, job_id),
-        DoMsg::Welcome { cancel: drop, end_sessions, .. } => {
+        DoMsg::Welcome {
+            cancel: drop,
+            end_sessions,
+            ..
+        } => {
             for j in drop {
                 tracing::warn!(job = %j, "worker: the dispatcher gave this job to another worker; cancelling the copy here");
                 cancel(st, j);
@@ -468,29 +590,58 @@ fn on_frame(link: &Arc<Link>, m: DoMsg) {
         DoMsg::Drain { on } => {
             st.set_drained(on);
         }
-        DoMsg::SessionOffer { session_id, lease, kind, .. } => {
+        DoMsg::SessionOffer {
+            session_id,
+            lease,
+            kind,
+            ..
+        } => {
             let Some(f) = &link.fam else {
-                link.handle.send(WorkerMsg::SessionNack { session_id, lease, code: 501, message: "no sessions on a pool socket".into() });
+                link.handle.send(WorkerMsg::SessionNack {
+                    session_id,
+                    lease,
+                    code: 501,
+                    message: "no sessions on a pool socket".into(),
+                });
                 return;
             };
-            let r = if st.draining() { Err("draining".to_owned()) } else { f.arbiter.try_take_session(link.family(), &session_id).map_err(|e| e.to_string()) };
+            let r = if st.draining() {
+                Err("draining".to_owned())
+            } else {
+                f.arbiter
+                    .try_take_session(link.family(), &session_id)
+                    .map_err(|e| e.to_string())
+            };
             match r {
                 Ok(()) => {
-                    link.sessions.lock().unwrap_or_else(|p| p.into_inner()).insert(session_id.clone(), lease);
+                    link.sessions
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .insert(session_id.clone(), lease);
                     // Ended here (the local session ended): slot and object.
                     let weak = Arc::downgrade(link);
-                    let ender: crate::edge_sessions::Ender = Arc::new(move |id: &str, lease: u64, why: &str| {
-                        if let Some(l) = weak.upgrade() {
-                            ended_here(&l, id, lease, why);
-                        }
-                    });
+                    let ender: crate::edge_sessions::Ender =
+                        Arc::new(move |id: &str, lease: u64, why: &str| {
+                            if let Some(l) = weak.upgrade() {
+                                ended_here(&l, id, lease, why);
+                            }
+                        });
                     f.sessions.admitted(&session_id, lease, &kind, ender);
                     tracing::info!(session = %session_id, lease, kind = %kind, family = link.family(), "worker: session admitted");
-                    link.handle.send(WorkerMsg::SessionAck { session_id, lease, endpoint: link.cfg.endpoint.clone() });
+                    link.handle.send(WorkerMsg::SessionAck {
+                        session_id,
+                        lease,
+                        endpoint: link.cfg.endpoint.clone(),
+                    });
                 }
                 Err(e) => {
                     tracing::info!(session = %session_id, reason = %e, "worker: session refused");
-                    link.handle.send(WorkerMsg::SessionNack { session_id, lease, code: 429, message: e });
+                    link.handle.send(WorkerMsg::SessionNack {
+                        session_id,
+                        lease,
+                        code: 429,
+                        message: e,
+                    });
                 }
             }
         }
@@ -502,7 +653,12 @@ fn on_frame(link: &Arc<Link>, m: DoMsg) {
 
 /// The dispatcher ended the session (revoke, or while disconnected).
 fn end_session(link: &Link, id: &str, why: &str) {
-    let had = link.sessions.lock().unwrap_or_else(|p| p.into_inner()).remove(id).is_some();
+    let had = link
+        .sessions
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(id)
+        .is_some();
     if let Some(f) = &link.fam {
         f.arbiter.release_session(id);
         f.sessions.forget(id);
@@ -517,19 +673,30 @@ fn end_session(link: &Link, id: &str, why: &str) {
 /// is down queues the frame; the next hello no longer lists the session
 /// either way.
 fn ended_here(link: &Link, id: &str, lease: u64, why: &str) {
-    let had = link.sessions.lock().unwrap_or_else(|p| p.into_inner()).remove(id).is_some();
+    let had = link
+        .sessions
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(id)
+        .is_some();
     if let Some(f) = &link.fam {
         f.arbiter.release_session(id);
     }
     if had {
-        link.handle.send(WorkerMsg::SessionEnd { session_id: id.to_owned(), lease });
-        metrics::counter!("fv_worker_session_end_total", "family" => link.family().to_owned()).increment(1);
+        link.handle.send(WorkerMsg::SessionEnd {
+            session_id: id.to_owned(),
+            lease,
+        });
+        metrics::counter!("fv_worker_session_end_total", "family" => link.family().to_owned())
+            .increment(1);
         tracing::info!(session = %id, lease, reason = %why, "worker: session ended; slot free");
     }
 }
 
 fn cancel(st: &Arc<WorkerState>, job_id: String) {
-    let Ok(id) = job_id.parse::<JobId>() else { return };
+    let Ok(id) = job_id.parse::<JobId>() else {
+        return;
+    };
     let st = st.clone();
     tokio::spawn(async move {
         if let Err(e) = fastvideo_serve_kit::events::cancel_job(&st.ctx, id).await {
@@ -547,7 +714,12 @@ struct Push {
 }
 
 async fn take(link: Arc<Link>, push: Push, envelope: serde_json::Value) {
-    let Push { job_id, attempt, lease, takeover } = push;
+    let Push {
+        job_id,
+        attempt,
+        lease,
+        takeover,
+    } = push;
     let st = link.st.clone();
     let t0 = Instant::now();
     let release = |link: &Link| {
@@ -555,12 +727,19 @@ async fn take(link: Arc<Link>, push: Push, envelope: serde_json::Value) {
             f.arbiter.release_job(&job_id);
         }
     };
-    let nack = |retry: bool, code: u16, message: String| WorkerMsg::Nack { job_id: job_id.clone(), attempt, retry, code, message };
+    let nack = |retry: bool, code: u16, message: String| WorkerMsg::Nack {
+        job_id: job_id.clone(),
+        attempt,
+        retry,
+        code,
+        message,
+    };
     let env: Envelope = match serde_json::from_value(envelope) {
         Ok(e) => e,
         Err(e) => {
             release(&link);
-            link.handle.send(nack(false, 400, format!("unreadable envelope: {e}")));
+            link.handle
+                .send(nack(false, 400, format!("unreadable envelope: {e}")));
             return;
         }
     };
@@ -573,7 +752,8 @@ async fn take(link: Arc<Link>, push: Push, envelope: serde_json::Value) {
     });
     if id.to_string() != job_id {
         release(&link);
-        link.handle.send(nack(false, 400, "the envelope is for another job".into()));
+        link.handle
+            .send(nack(false, 400, "the envelope is for another job".into()));
         return;
     }
     let file_name = crate::adapters::artifact_file_name(&env.job);
@@ -584,13 +764,25 @@ async fn take(link: Arc<Link>, push: Push, envelope: serde_json::Value) {
     }
     if resp.status().is_success() {
         let worker_ms = t0.elapsed().as_millis() as u64;
-        link.taken.lock().unwrap_or_else(|p| p.into_inner()).insert(id, (attempt, lease));
-        link.handle.send(WorkerMsg::Ack { job_id: job_id.clone(), attempt, lease, worker_ms });
+        link.taken
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(id, (attempt, lease));
+        link.handle.send(WorkerMsg::Ack {
+            job_id: job_id.clone(),
+            attempt,
+            lease,
+            worker_ms,
+        });
         metrics::histogram!("fv_worker_edge_take_seconds").record(worker_ms as f64 / 1e3);
         tracing::info!(job = %id, attempt, lease, takeover, worker_ms, scope = %link.cfg.scope.object_name(), "worker: took a pushed job");
         let uploads = link.fam.as_ref().and_then(|f| f.uploads.clone());
         if let Some(u) = &uploads {
-            let name = if proto::valid_id(&file_name) { file_name } else { "output.mp4".to_owned() };
+            let name = if proto::valid_id(&file_name) {
+                file_name
+            } else {
+                "output.mp4".to_owned()
+            };
             u.start(UploadSpec {
                 job: id,
                 attempt,
@@ -615,14 +807,24 @@ async fn take(link: Arc<Link>, push: Push, envelope: serde_json::Value) {
         }
         let state = state_word(st.ctx.jobs().get(id).await.as_ref());
         release(&link);
-        link.handle.send(WorkerMsg::Done { job_id, attempt, state });
+        link.handle.send(WorkerMsg::Done {
+            job_id,
+            attempt,
+            state,
+        });
         return;
     }
     release(&link);
-    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap_or_default();
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap_or_default();
     let message = serde_json::from_slice::<serde_json::Value>(&body)
         .ok()
-        .and_then(|v| v.pointer("/error/message").and_then(|m| m.as_str()).map(str::to_owned))
+        .and_then(|v| {
+            v.pointer("/error/message")
+                .and_then(|m| m.as_str())
+                .map(str::to_owned)
+        })
         .unwrap_or_default();
     // Busy, draining, loading, held elsewhere, or a server-side failure:
     // another worker (or this one later) may take it. A bad job is final.

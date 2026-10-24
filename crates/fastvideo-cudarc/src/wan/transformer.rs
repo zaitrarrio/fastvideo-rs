@@ -27,7 +27,6 @@ fn pinned(mut t: CudaTensor) -> Result<CudaTensor> {
     Ok(t)
 }
 
-
 #[derive(Debug, Clone)]
 struct WanAttention {
     /// Self-attention: [q; k; v] rows. Cross-attention: q only.
@@ -258,6 +257,7 @@ impl WanAttention {
         self.to_out.forward(&out)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward_self(
         &self,
         hidden: &CudaTensor,
@@ -465,7 +465,10 @@ fn rotary_1d_cached(dim: usize, seq: usize, theta: f64) -> std::sync::Arc<(Vec<f
     type Memo = std::collections::HashMap<(usize, u64), std::sync::Arc<(Vec<f32>, Vec<f32>)>>;
     static MEMO: std::sync::OnceLock<std::sync::Mutex<Memo>> = std::sync::OnceLock::new();
     let key = (dim, theta.to_bits());
-    let mut memo = MEMO.get_or_init(Default::default).lock().expect("rope memo");
+    let mut memo = MEMO
+        .get_or_init(Default::default)
+        .lock()
+        .expect("rope memo");
     if let Some(t) = memo.get(&key) {
         if t.0.len() >= seq * dim {
             return t.clone();
@@ -494,9 +497,22 @@ fn wan_rope_at(
     let axes = [
         // Past the checkpoint's table (an open-ended stream, `wan::stream`) the
         // temporal rows continue with the same formula.
-        (t_dim, rotary_1d_cached(t_dim, cfg.rope_max_seq_len.max(start_frame + frames), 10000.0)),
-        (h_dim, rotary_1d_cached(h_dim, cfg.rope_max_seq_len, 10000.0)),
-        (w_dim, rotary_1d_cached(w_dim, cfg.rope_max_seq_len, 10000.0)),
+        (
+            t_dim,
+            rotary_1d_cached(
+                t_dim,
+                cfg.rope_max_seq_len.max(start_frame + frames),
+                10000.0,
+            ),
+        ),
+        (
+            h_dim,
+            rotary_1d_cached(h_dim, cfg.rope_max_seq_len, 10000.0),
+        ),
+        (
+            w_dim,
+            rotary_1d_cached(w_dim, cfg.rope_max_seq_len, 10000.0),
+        ),
     ];
     let (ppf, pph, ppw) = (
         frames / cfg.patch_size[0],
@@ -670,12 +686,15 @@ pub struct KvTableSpec {
     pub sink: Option<(usize, usize)>,
 }
 
+/// A rebased sink's RoPE tables: `(target, (cos, sin) at 0, (cos, sin) at target)`.
+pub type SinkTables = (usize, (CudaTensor, CudaTensor), (CudaTensor, CudaTensor));
+
 /// The RoPE tables of one causal block forward: `(cos, sin)` of the rows
 /// the block reads, and for a rebased sink `(target, at 0, at target)`.
 #[derive(Debug, Clone)]
 pub struct KvTables {
     pub rope: (CudaTensor, CudaTensor),
-    pub sink: Option<(usize, (CudaTensor, CudaTensor), (CudaTensor, CudaTensor))>,
+    pub sink: Option<SinkTables>,
 }
 
 impl KvTables {
@@ -725,7 +744,9 @@ impl KvText {
             kv: match &self.kv {
                 Some(kv) => Some(
                     kv.iter()
-                        .map(|(k, v)| Ok((super::graph::duplicate(k)?, super::graph::duplicate(v)?)))
+                        .map(|(k, v)| {
+                            Ok((super::graph::duplicate(k)?, super::graph::duplicate(v)?))
+                        })
                         .collect::<Result<Vec<_>>>()?,
                 ),
                 None => None,
@@ -897,6 +918,7 @@ impl WanBlock {
 
     /// `cond.e`: this block's modulation, `timestep_proj + scale_shift_table`
     /// ([`WanBlock::modulation`]); `cond.cross_kv`: its cached cross K/V.
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         hidden: &CudaTensor,
@@ -983,7 +1005,7 @@ fn mod_view(x: &CudaTensor, e: &CudaTensor) -> Result<CudaTensor> {
     if rows == b {
         return Ok(x.clone());
     }
-    if rows % b != 0 || (b * s) % rows != 0 {
+    if !rows.is_multiple_of(b) || (b * s) % rows != 0 {
         return Err(TensorError::Message(format!(
             "modulation rows {rows} do not tile {:?}",
             x.shape
@@ -1077,6 +1099,11 @@ impl WanBlockResidency {
     }
 }
 
+/// RoPE `(cos, sin)` tables keyed by `(seq_len, head_dim, start_frame)`.
+type RotaryCache = std::sync::Arc<
+    std::sync::Mutex<std::collections::HashMap<(usize, usize, usize), (CudaTensor, CudaTensor)>>,
+>;
+
 #[derive(Debug, Clone)]
 pub struct WanTransformer3D {
     pub cfg: WanVideoArchConfig,
@@ -1094,11 +1121,7 @@ pub struct WanTransformer3D {
     freq_dim: usize,
     /// RoPE tables keyed by `(seq_len, head_dim, start_frame)`: built and
     /// uploaded once.
-    rotary_cache: std::sync::Arc<
-        std::sync::Mutex<
-            std::collections::HashMap<(usize, usize, usize), (CudaTensor, CudaTensor)>,
-        >,
-    >,
+    rotary_cache: RotaryCache,
     /// VSA tiling per latent grid, built once and shared by every layer.
     #[cfg(feature = "cuda")]
     vsa_cache: std::sync::Arc<
@@ -2247,7 +2270,7 @@ impl WanTransformer3D {
         let vsa = self.vsa_for(t, h, w)?;
         let p = self.cfg.patch_size;
         let morton_grid = Some((t / p[0], h / p[1], w / p[2]));
-        let tea = self.begin_sol_tea(&timestep_proj)?;
+        let tea = self.begin_sol_tea(timestep_proj)?;
         let block_in = if tea == Some(false) {
             Some(hidden.clone())
         } else {
@@ -2303,7 +2326,7 @@ impl WanTransformer3D {
                     &hidden,
                     super::dump::BLOCK_ROW_STRIDE,
                 )?;
-                super::dump::tensor(&super::dump::named("timestep_proj"), &timestep_proj)?;
+                super::dump::tensor(&super::dump::named("timestep_proj"), timestep_proj)?;
             }
             for layer in 0..self.blocks.len() {
                 hidden = self.blocks.with(layer, |block| {
@@ -2686,11 +2709,14 @@ mod tests {
         use fastvideo_loader::{LazyDType, SafetensorsWriter, TensorSpec};
         use std::sync::{Arc, Mutex};
         let cfg = WanVideoArchConfig::tiny();
+        #[allow(clippy::type_complexity)] // a one-off tuple; a named struct would outweigh it
         let seen: Arc<Mutex<Vec<(String, Vec<usize>, Vec<f32>)>>> = Arc::default();
         let sink = seen.clone();
         let recorder = WeightMap::generated(move |key, shape| {
             let v = generated_values(key, shape);
-            sink.lock().unwrap().push((key.to_string(), shape.to_vec(), v.clone()));
+            sink.lock()
+                .unwrap()
+                .push((key.to_string(), shape.to_vec(), v.clone()));
             v
         });
         drop(WanTransformer3D::load(cfg.clone(), &recorder).unwrap());
@@ -2716,7 +2742,8 @@ mod tests {
         }
         w.finish().unwrap();
 
-        let eager = WanTransformer3D::load(cfg.clone(), &WeightMap::from_dir(&dir).unwrap()).unwrap();
+        let eager =
+            WanTransformer3D::load(cfg.clone(), &WeightMap::from_dir(&dir).unwrap()).unwrap();
         let lazy_map = WeightMap::open(&dir).unwrap();
         assert!(lazy_map.lazy().is_some());
         let lazy = WanTransformer3D::load(cfg, &lazy_map).unwrap();

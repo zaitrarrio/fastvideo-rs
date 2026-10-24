@@ -46,7 +46,9 @@ pub mod service;
 #[cfg(feature = "director")]
 pub mod session;
 
-pub use engine::{ChunkBuild, ChunkOutput, DirectorClips, DirectorEngine, DirectorStream, StreamBlock};
+pub use engine::{
+    ChunkBuild, ChunkOutput, DirectorClips, DirectorEngine, DirectorStream, StreamBlock,
+};
 
 #[cfg(feature = "director")]
 pub use routes::routes;

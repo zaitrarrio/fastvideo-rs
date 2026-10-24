@@ -67,10 +67,15 @@ pub struct SimJob {
 impl SimJob {
     /// The parsed error report.
     pub fn error_report(&self) -> Option<Value> {
-        self.error.as_deref().and_then(|e| serde_json::from_str(e).ok())
+        self.error
+            .as_deref()
+            .and_then(|e| serde_json::from_str(e).ok())
     }
     pub fn is_terminal(&self) -> bool {
-        matches!(self.status, SimStatus::Completed | SimStatus::Failed | SimStatus::Cancelled)
+        matches!(
+            self.status,
+            SimStatus::Completed | SimStatus::Failed | SimStatus::Cancelled
+        )
     }
 }
 
@@ -107,7 +112,9 @@ pub struct Sim {
 
 impl std::fmt::Debug for Sim {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Sim").field("endpoint", &self.endpoint).finish_non_exhaustive()
+        f.debug_struct("Sim")
+            .field("endpoint", &self.endpoint)
+            .finish_non_exhaustive()
     }
 }
 
@@ -139,10 +146,22 @@ impl Sim {
     pub fn env(&self, base: &str, worker: &str, ping_ms: u64) -> Vec<(String, String)> {
         let ep = &self.endpoint;
         [
-            ("RUNPOD_WEBHOOK_GET_JOB", format!("{base}/v2/{ep}/job-take/$ID?gpu=SIM")),
-            ("RUNPOD_WEBHOOK_POST_OUTPUT", format!("{base}/v2/{ep}/job-done/$RUNPOD_POD_ID/$ID?gpu=SIM")),
-            ("RUNPOD_WEBHOOK_POST_STREAM", format!("{base}/v2/{ep}/job-stream/$RUNPOD_POD_ID/$ID?gpu=SIM")),
-            ("RUNPOD_WEBHOOK_PING", format!("{base}/v2/{ep}/ping/$RUNPOD_POD_ID")),
+            (
+                "RUNPOD_WEBHOOK_GET_JOB",
+                format!("{base}/v2/{ep}/job-take/$ID?gpu=SIM"),
+            ),
+            (
+                "RUNPOD_WEBHOOK_POST_OUTPUT",
+                format!("{base}/v2/{ep}/job-done/$RUNPOD_POD_ID/$ID?gpu=SIM"),
+            ),
+            (
+                "RUNPOD_WEBHOOK_POST_STREAM",
+                format!("{base}/v2/{ep}/job-stream/$RUNPOD_POD_ID/$ID?gpu=SIM"),
+            ),
+            (
+                "RUNPOD_WEBHOOK_PING",
+                format!("{base}/v2/{ep}/ping/$RUNPOD_POD_ID"),
+            ),
             ("RUNPOD_PING_INTERVAL", ping_ms.to_string()),
             ("RUNPOD_AI_API_KEY", self.api_key.clone()),
             ("RUNPOD_POD_ID", worker.to_owned()),
@@ -242,7 +261,8 @@ impl Sim {
     }
 
     fn authorized(&self, h: &HeaderMap) -> bool {
-        let ok = h.get("authorization").and_then(|v| v.to_str().ok()) == Some(self.api_key.as_str());
+        let ok =
+            h.get("authorization").and_then(|v| v.to_str().ok()) == Some(self.api_key.as_str());
         if !ok {
             self.lock().unauthorized += 1;
         }
@@ -267,7 +287,10 @@ impl Sim {
     }
 
     /// Serves on `addr` (e.g. `127.0.0.1:0`); returns the base URL.
-    pub async fn serve(&self, addr: &str) -> std::io::Result<(String, tokio::task::JoinHandle<()>)> {
+    pub async fn serve(
+        &self,
+        addr: &str,
+    ) -> std::io::Result<(String, tokio::task::JoinHandle<()>)> {
         let l = tokio::net::TcpListener::bind(addr).await?;
         let base = format!("http://{}", l.local_addr()?);
         let r = self.router();
@@ -281,7 +304,9 @@ impl Sim {
         let mut st = self.lock();
         let mut out = Vec::new();
         while out.len() < n {
-            let Some(id) = st.queue.pop_front() else { break };
+            let Some(id) = st.queue.pop_front() else {
+                break;
+            };
             if let Some(j) = st.jobs.get_mut(&id) {
                 j.status = SimStatus::InProgress;
                 j.worker = Some(worker.to_owned());
@@ -291,12 +316,21 @@ impl Sim {
         out
     }
 
-    async fn take_n(&self, worker: &str, q: &BTreeMap<String, String>, n: usize, batch: bool) -> Response {
+    async fn take_n(
+        &self,
+        worker: &str,
+        q: &BTreeMap<String, String>,
+        n: usize,
+        batch: bool,
+    ) -> Response {
         {
             let mut st = self.lock();
-            st.takes.push(q.get("job_in_progress").map(String::as_str) == Some("1"));
+            st.takes
+                .push(q.get("job_in_progress").map(String::as_str) == Some("1"));
             if let Some(code) = st.take_script.pop_front() {
-                return StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR).into_response();
+                return StatusCode::from_u16(code)
+                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+                    .into_response();
             }
         }
         let end = tokio::time::Instant::now() + self.long_poll;
@@ -304,7 +338,11 @@ impl Sim {
             let notified = self.notify.notified();
             let jobs = self.pop(worker, n);
             if !jobs.is_empty() {
-                return if batch { Json(Value::Array(jobs)).into_response() } else { Json(jobs[0].clone()).into_response() };
+                return if batch {
+                    Json(Value::Array(jobs)).into_response()
+                } else {
+                    Json(jobs[0].clone()).into_response()
+                };
             }
             if tokio::time::timeout_at(end, notified).await.is_err() {
                 return StatusCode::NO_CONTENT.into_response();
@@ -313,18 +351,32 @@ impl Sim {
     }
 }
 
-async fn take(State(s): State<Sim>, Path((_ep, worker)): Path<(String, String)>, Query(q): Q, h: HeaderMap) -> Response {
+async fn take(
+    State(s): State<Sim>,
+    Path((_ep, worker)): Path<(String, String)>,
+    Query(q): Q,
+    h: HeaderMap,
+) -> Response {
     if !s.authorized(&h) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     s.take_n(&worker, &q, 1, false).await
 }
 
-async fn take_batch(State(s): State<Sim>, Path((_ep, worker)): Path<(String, String)>, Query(q): Q, h: HeaderMap) -> Response {
+async fn take_batch(
+    State(s): State<Sim>,
+    Path((_ep, worker)): Path<(String, String)>,
+    Query(q): Q,
+    h: HeaderMap,
+) -> Response {
     if !s.authorized(&h) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let n = q.get("batch_size").and_then(|v| v.parse().ok()).unwrap_or(1usize).max(1);
+    let n = q
+        .get("batch_size")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1usize)
+        .max(1);
     s.take_n(&worker, &q, n, true).await
 }
 
@@ -355,7 +407,11 @@ async fn done(
     if !s.authorized(&h) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let rid = h.get("x-request-id").and_then(|v| v.to_str().ok()).unwrap_or_default().to_owned();
+    let rid = h
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
     let Ok(v) = serde_json::from_slice::<Value>(&body) else {
         return (StatusCode::BAD_REQUEST, "body is not JSON").into_response();
     };
@@ -365,20 +421,27 @@ async fn done(
         if fail {
             st.done_failures -= 1;
         }
-        let Some(j) = st.jobs.get_mut(&job) else { return StatusCode::NOT_FOUND.into_response() };
+        let Some(j) = st.jobs.get_mut(&job) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
         j.done_posts += 1;
         j.x_request_ids.push(rid);
         if fail {
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         } else if v.get("status").and_then(Value::as_str) == Some("IN_PROGRESS") {
-            j.progress.push(v.get("output").cloned().unwrap_or(Value::Null));
+            j.progress
+                .push(v.get("output").cloned().unwrap_or(Value::Null));
             StatusCode::OK.into_response()
         } else {
             j.final_is_stream = Some(q.get("isStream").map(String::as_str) == Some("true"));
             j.output = v.get("output").cloned();
             j.error = v.get("error").and_then(Value::as_str).map(str::to_owned);
             if j.status != SimStatus::Cancelled {
-                j.status = if j.error.is_some() { SimStatus::Failed } else { SimStatus::Completed };
+                j.status = if j.error.is_some() {
+                    SimStatus::Failed
+                } else {
+                    SimStatus::Completed
+                };
             }
             StatusCode::OK.into_response()
         }
@@ -387,7 +450,12 @@ async fn done(
     resp
 }
 
-async fn stream(State(s): State<Sim>, Path((_ep, _worker, job)): Path<(String, String, String)>, h: HeaderMap, body: Bytes) -> Response {
+async fn stream(
+    State(s): State<Sim>,
+    Path((_ep, _worker, job)): Path<(String, String, String)>,
+    h: HeaderMap,
+    body: Bytes,
+) -> Response {
     if !s.authorized(&h) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -396,25 +464,49 @@ async fn stream(State(s): State<Sim>, Path((_ep, _worker, job)): Path<(String, S
     };
     {
         let mut st = s.lock();
-        let Some(j) = st.jobs.get_mut(&job) else { return StatusCode::NOT_FOUND.into_response() };
-        j.stream.push(v.get("output").cloned().unwrap_or(Value::Null));
+        let Some(j) = st.jobs.get_mut(&job) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        j.stream
+            .push(v.get("output").cloned().unwrap_or(Value::Null));
     }
     s.notify.notify_waiters();
     StatusCode::OK.into_response()
 }
 
-async fn ping(State(s): State<Sim>, Path((_ep, worker)): Path<(String, String)>, Query(q): Q, h: HeaderMap) -> Response {
+async fn ping(
+    State(s): State<Sim>,
+    Path((_ep, worker)): Path<(String, String)>,
+    Query(q): Q,
+    h: HeaderMap,
+) -> Response {
     if !s.authorized(&h) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let job_ids = q.get("job_id").map(|v| v.split(',').filter(|x| !x.is_empty()).map(str::to_owned).collect()).unwrap_or_default();
-    s.lock().pings.push(Ping { worker, job_ids, version: q.get("runpod_version").cloned().unwrap_or_default() });
+    let job_ids = q
+        .get("job_id")
+        .map(|v| {
+            v.split(',')
+                .filter(|x| !x.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    s.lock().pings.push(Ping {
+        worker,
+        job_ids,
+        version: q.get("runpod_version").cloned().unwrap_or_default(),
+    });
     StatusCode::OK.into_response()
 }
 
 async fn run(State(s): State<Sim>, Json(body): Json<Value>) -> Response {
     let Some(input) = body.get("input").cloned() else {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": "input is required"}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "input is required"})),
+        )
+            .into_response();
     };
     let id = s.submit(input);
     Json(json!({"id": id, "status": "IN_QUEUE"})).into_response()

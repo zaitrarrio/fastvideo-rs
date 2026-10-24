@@ -654,12 +654,12 @@ impl CosmosTransformer {
                             for ph in 0..p_h {
                                 for pw in 0..p_w {
                                     for ci in 0..cin {
-                                        let src = ((((bi * cin + ci) * t + ti * p_t + pt) * h
+                                        let src = (((bi * cin + ci) * t + ti * p_t + pt) * h
                                             + yi * p_h
                                             + ph)
                                             * w
                                             + xi * p_w
-                                            + pw);
+                                            + pw;
                                         tokens[((bi * seq + tok) * cin * p_t * p_h * p_w) + o] =
                                             host[src];
                                         o += 1;
@@ -742,12 +742,12 @@ impl CosmosTransformer {
                             for ph in 0..p_h {
                                 for pw in 0..p_w {
                                     for ci in 0..oc {
-                                        let dst = ((((bi * oc + ci) * t + ti * p_t + pt) * h
+                                        let dst = (((bi * oc + ci) * t + ti * p_t + pt) * h
                                             + yi * p_h
                                             + ph)
                                             * w
                                             + xi * p_w
-                                            + pw);
+                                            + pw;
                                         pixels[dst] =
                                             oh[((bi * seq + tok) * (p_t * p_h * p_w * oc)) + o];
                                         o += 1;
@@ -759,7 +759,7 @@ impl CosmosTransformer {
                 }
             }
         }
-        Ok(CudaTensor::from_vec(pixels, vec![b, oc, t, h, w])?)
+        CudaTensor::from_vec(pixels, vec![b, oc, t, h, w])
     }
 
     fn learnable_pos(
@@ -843,7 +843,7 @@ fn expand_frame_tokens(
             }
         }
     }
-    Ok(CudaTensor::from_vec(out, vec![batch, seq, c])?)
+    CudaTensor::from_vec(out, vec![batch, seq, c])
 }
 
 #[cfg(test)]

@@ -68,7 +68,10 @@ const PREFIX: &str = "fv-test-";
 const CF_API: &str = "https://api.cloudflare.com/client/v4";
 
 fn arg(args: &[String], name: &str) -> Option<String> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
 }
 
 fn env(name: &str) -> String {
@@ -88,7 +91,16 @@ fn decode(path: &str, extra: &[&str]) -> Option<(String, usize, usize, u64, u64)
     let out = Command::new(fastvideo_media::tools::ffprobe_bin())
         .args(["-v", "error"])
         .args(extra)
-        .args(["-select_streams", "v:0", "-show_entries", "stream=codec_name:frame=width,height,key_frame", "-show_frames", "-of", "json", path])
+        .args([
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name:frame=width,height,key_frame",
+            "-show_frames",
+            "-of",
+            "json",
+            path,
+        ])
         .output()
         .ok()?;
     let v: Value = serde_json::from_slice(&out.stdout).ok()?;
@@ -96,20 +108,50 @@ fn decode(path: &str, extra: &[&str]) -> Option<(String, usize, usize, u64, u64)
     let frames = v["frames"].as_array()?;
     let keys = frames.iter().filter(|f| f["key_frame"] == 1).count();
     let last = frames.last()?;
-    Some((codec, frames.len(), keys, last["width"].as_u64()?, last["height"].as_u64()?))
+    Some((
+        codec,
+        frames.len(),
+        keys,
+        last["width"].as_u64()?,
+        last["height"].as_u64()?,
+    ))
 }
 
 /// The first audio stream of a media file: codec, sample rate, channels and
 /// the mean / max volume (ffmpeg volumedetect), or null without audio.
 fn audio_probe(path: &str) -> Value {
     let out = Command::new(fastvideo_media::tools::ffprobe_bin())
-        .args(["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name,sample_rate,channels", "-of", "json", path])
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_name,sample_rate,channels",
+            "-of",
+            "json",
+            path,
+        ])
         .output();
     let Ok(out) = out else { return Value::Null };
     let v: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
-    let Some(s) = v["streams"].as_array().and_then(|a| a.first()).cloned() else { return Value::Null };
+    let Some(s) = v["streams"].as_array().and_then(|a| a.first()).cloned() else {
+        return Value::Null;
+    };
     let vol = Command::new(fastvideo_media::tools::ffmpeg_bin())
-        .args(["-v", "info", "-nostdin", "-i", path, "-vn", "-af", "volumedetect", "-f", "null", "-"])
+        .args([
+            "-v",
+            "info",
+            "-nostdin",
+            "-i",
+            path,
+            "-vn",
+            "-af",
+            "volumedetect",
+            "-f",
+            "null",
+            "-",
+        ])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
         .unwrap_or_default();
@@ -129,7 +171,16 @@ fn luma(path: &str, extra: &[&str]) -> Option<(usize, f64, f64, usize)> {
     let out = Command::new(fastvideo_media::tools::ffmpeg_bin())
         .args(["-v", "error", "-nostdin"])
         .args(extra)
-        .args(["-i", path, "-an", "-vf", "scale=64:36,format=gray", "-f", "rawvideo", "-"])
+        .args([
+            "-i",
+            path,
+            "-an",
+            "-vf",
+            "scale=64:36,format=gray",
+            "-f",
+            "rawvideo",
+            "-",
+        ])
         .output()
         .ok()?;
     let px = 64 * 36;
@@ -156,7 +207,11 @@ fn es_file(codec: VideoCodec, frames: &[bytes::Bytes]) -> Vec<u8> {
         VideoCodec::H264 => frames.iter().for_each(|f| file.extend_from_slice(f)),
         _ => {
             file.extend_from_slice(b"DKIF\0\0\x20\0");
-            file.extend_from_slice(if codec == VideoCodec::Vp9 { b"VP90" } else { b"VP80" });
+            file.extend_from_slice(if codec == VideoCodec::Vp9 {
+                b"VP90"
+            } else {
+                b"VP80"
+            });
             file.extend_from_slice(&[0u8; 4]);
             file.extend_from_slice(&90_000u32.to_le_bytes());
             file.extend_from_slice(&1u32.to_le_bytes());
@@ -181,13 +236,20 @@ struct Viewer {
 }
 
 async fn whep_view(whep_url: &str, codec: VideoCodec, secs: u64) -> Result<Viewer, String> {
-    let host = RtcHost::bind(HostConfig::default()).await.map_err(|e| e.to_string())?;
+    let host = RtcHost::bind(HostConfig::default())
+        .await
+        .map_err(|e| e.to_string())?;
     let (pending, offer) = host
         .offer(OfferOptions {
             video: Some(Direction::RecvOnly),
             audio: Some((Direction::RecvOnly, AudioLayout::Stereo)),
             channels: vec![],
-            srflx: host.gather_srflx(&[fastvideo_webrtc::ice::IceServer::default_stun()], Duration::from_secs(2)).await,
+            srflx: host
+                .gather_srflx(
+                    &[fastvideo_webrtc::ice::IceServer::default_stun()],
+                    Duration::from_secs(2),
+                )
+                .await,
             h264_level: fastvideo_webrtc::profile::H264Level::L4_0,
             video_codecs: vec![codec],
         })
@@ -204,18 +266,37 @@ async fn whep_view(whep_url: &str, codec: VideoCodec, secs: u64) -> Result<Viewe
     let status = resp.status();
     let answer = resp.text().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
-        return Err(format!("WHEP HTTP {status}: {}", answer.chars().take(160).collect::<String>()));
+        return Err(format!(
+            "WHEP HTTP {status}: {}",
+            answer.chars().take(160).collect::<String>()
+        ));
     }
-    let mut peer = pending.accept_answer(&answer).await.map_err(|e| e.to_string())?;
-    let mut v = Viewer { frames: Vec::new(), audio_packets: 0, audio_bytes: 0, first_ms: None };
+    let mut peer = pending
+        .accept_answer(&answer)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut v = Viewer {
+        frames: Vec::new(),
+        audio_packets: 0,
+        audio_bytes: 0,
+        first_ms: None,
+    };
     let end = Instant::now() + Duration::from_secs(secs);
     while Instant::now() < end {
         match tokio::time::timeout(Duration::from_millis(500), peer.next_event()).await {
-            Ok(Some(PeerEvent::Media { kind: TrackKind::Video, data, .. })) => {
+            Ok(Some(PeerEvent::Media {
+                kind: TrackKind::Video,
+                data,
+                ..
+            })) => {
                 v.first_ms.get_or_insert(t0.elapsed().as_millis());
                 v.frames.push(data);
             }
-            Ok(Some(PeerEvent::Media { kind: TrackKind::Audio, data, .. })) => {
+            Ok(Some(PeerEvent::Media {
+                kind: TrackKind::Audio,
+                data,
+                ..
+            })) => {
                 v.audio_packets += 1;
                 v.audio_bytes += data.len();
             }
@@ -236,16 +317,35 @@ async fn whep_view(whep_url: &str, codec: VideoCodec, secs: u64) -> Result<Viewe
 
 /// WHEP read-back of one URL, retried every 2 s until video arrives or
 /// `deadline` passes; then decoded. Returns the result object.
-async fn whep_case(whep: &str, codec: VideoCodec, t0: Instant, deadline: Duration, watch_s: u64, out: &Path, name: &str) -> Value {
+async fn whep_case(
+    whep: &str,
+    codec: VideoCodec,
+    t0: Instant,
+    deadline: Duration,
+    watch_s: u64,
+    out: &Path,
+    name: &str,
+) -> Value {
     let mut last_err = String::from("never tried");
     while t0.elapsed() < deadline {
         tokio::time::sleep(Duration::from_secs(2)).await;
         let t_try = t0.elapsed();
         match whep_view(whep, codec, watch_s).await {
             Ok(w) if !w.frames.is_empty() => {
-                let file = out.join(format!("{name}.{}", if codec == VideoCodec::H264 { "h264" } else { "ivf" }));
+                let file = out.join(format!(
+                    "{name}.{}",
+                    if codec == VideoCodec::H264 {
+                        "h264"
+                    } else {
+                        "ivf"
+                    }
+                ));
                 std::fs::write(&file, es_file(codec, &w.frames)).ok();
-                let fmt: &[&str] = if codec == VideoCodec::H264 { &["-f", "h264"] } else { &["-f", "ivf"] };
+                let fmt: &[&str] = if codec == VideoCodec::H264 {
+                    &["-f", "h264"]
+                } else {
+                    &["-f", "ivf"]
+                };
                 let f = file.to_string_lossy().into_owned();
                 let d = decode(&f, fmt);
                 let l = luma(&f, fmt);
@@ -270,9 +370,18 @@ async fn whep_case(whep: &str, codec: VideoCodec, t0: Instant, deadline: Duratio
 
 /// The top HLS variant's last `n` segments (with the fMP4 init segment) in
 /// one file; the master's variant lines.
-async fn hls_grab(http: &reqwest::Client, master: &str, n: usize, out: &Path) -> Result<Vec<String>, String> {
+async fn hls_grab(
+    http: &reqwest::Client,
+    master: &str,
+    n: usize,
+    out: &Path,
+) -> Result<Vec<String>, String> {
     let get = |u: reqwest::Url| async move {
-        let r = http.get(u.clone()).send().await.map_err(|e| e.without_url().to_string())?;
+        let r = http
+            .get(u.clone())
+            .send()
+            .await
+            .map_err(|e| e.without_url().to_string())?;
         if !r.status().is_success() {
             return Err(format!("HTTP {}", r.status()));
         }
@@ -284,21 +393,33 @@ async fn hls_grab(http: &reqwest::Client, master: &str, n: usize, out: &Path) ->
     let mut lines = text.lines();
     while let Some(l) = lines.next() {
         if l.starts_with("#EXT-X-STREAM-INF") {
-            let bw = l.split("BANDWIDTH=").nth(1).and_then(|r| r.split(',').next()).and_then(|b| b.parse().ok()).unwrap_or(0);
+            let bw = l
+                .split("BANDWIDTH=")
+                .nth(1)
+                .and_then(|r| r.split(',').next())
+                .and_then(|b| b.parse().ok())
+                .unwrap_or(0);
             if let Some(u) = lines.next() {
                 vars.push((bw, l.to_owned(), u.trim().to_owned()));
             }
         }
     }
     vars.sort_by_key(|v| std::cmp::Reverse(v.0));
-    let (_, _, uri) = vars.first().cloned().ok_or("no variant in the master playlist yet")?;
+    let (_, _, uri) = vars
+        .first()
+        .cloned()
+        .ok_or("no variant in the master playlist yet")?;
     let media_url = base.join(&uri).map_err(|e| e.to_string())?;
     let media = String::from_utf8_lossy(&get(media_url.clone()).await?).into_owned();
     let mut init = None;
     let mut segs = Vec::new();
     for l in media.lines() {
         if let Some(m) = l.strip_prefix("#EXT-X-MAP:") {
-            init = m.split("URI=\"").nth(1).and_then(|r| r.split('"').next()).map(str::to_owned);
+            init = m
+                .split("URI=\"")
+                .nth(1)
+                .and_then(|r| r.split('"').next())
+                .map(str::to_owned);
         } else if !l.starts_with('#') && !l.trim().is_empty() {
             segs.push(l.trim().to_owned());
         }
@@ -334,7 +455,13 @@ impl Cf {
     }
 
     async fn get(&self, path: &str) -> (u16, Value) {
-        match self.http.get(format!("{}{path}", self.api)).bearer_auth(&self.token).send().await {
+        match self
+            .http
+            .get(format!("{}{path}", self.api))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+        {
             Ok(r) => {
                 let st = r.status().as_u16();
                 (st, r.json().await.unwrap_or(Value::Null))
@@ -344,7 +471,13 @@ impl Cf {
     }
 
     async fn delete(&self, path: &str) -> u16 {
-        match self.http.delete(format!("{}{path}", self.api)).bearer_auth(&self.token).send().await {
+        match self
+            .http
+            .delete(format!("{}{path}", self.api))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+        {
             Ok(r) => r.status().as_u16(),
             Err(_) => 0,
         }
@@ -352,7 +485,12 @@ impl Cf {
 
     async fn input_state(&self, uid: &str) -> Option<String> {
         let (st, v) = self.get(&format!("/live_inputs/{uid}")).await;
-        (st == 200).then(|| v["result"]["status"]["current"]["state"].as_str().unwrap_or("").to_owned())
+        (st == 200).then(|| {
+            v["result"]["status"]["current"]["state"]
+                .as_str()
+                .unwrap_or("")
+                .to_owned()
+        })
     }
 
     /// Deletes one input this run created (only an `fv-test-` input) and its
@@ -365,7 +503,10 @@ impl Cf {
         if st != 200 {
             return json!({"uid": uid, "before": st, "gone": false, "note": "GET failed"});
         }
-        let name = v["result"]["meta"]["name"].as_str().unwrap_or("").to_owned();
+        let name = v["result"]["meta"]["name"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned();
         if !name.starts_with(PREFIX) {
             return json!({"uid": uid, "before": 200, "gone": false, "note": "not an fv-test- input: left alone"});
         }
@@ -387,7 +528,10 @@ impl Cf {
         }
         // A recording that could not be deleted keeps its input, so a later
         // `cleanup` finds it again (deleting the input would orphan it).
-        if recs.iter().any(|r| !matches!(r["delete"].as_u64(), Some(200 | 404))) {
+        if recs
+            .iter()
+            .any(|r| !matches!(r["delete"].as_u64(), Some(200 | 404)))
+        {
             return json!({"uid": uid, "name": name, "before": 200, "recordings": recs, "gone": false,
                           "note": "a recording was not deleted: input kept, run cleanup again"});
         }
@@ -405,7 +549,9 @@ impl Cf {
         let (_, vids) = self.get("").await;
         let mut out = Vec::new();
         for v in vids["result"].as_array().into_iter().flatten() {
-            let (Some(vid), Some(li)) = (v["uid"].as_str(), v["liveInput"].as_str()) else { continue };
+            let (Some(vid), Some(li)) = (v["uid"].as_str(), v["liveInput"].as_str()) else {
+                continue;
+            };
             if !inputs.contains(&li) {
                 continue;
             }
@@ -422,7 +568,11 @@ impl Cf {
         let all = v["result"].as_array().cloned().unwrap_or_default();
         let ours: Vec<Value> = all
             .iter()
-            .filter(|i| i["meta"]["name"].as_str().is_some_and(|n| n.starts_with(PREFIX)))
+            .filter(|i| {
+                i["meta"]["name"]
+                    .as_str()
+                    .is_some_and(|n| n.starts_with(PREFIX))
+            })
             .map(|i| json!({"uid": i["uid"], "name": i["meta"]["name"], "created": i["created"]}))
             .collect();
         // Recordings whose live input is gone (an fv-test- input deleted
@@ -433,8 +583,14 @@ impl Cf {
             .as_array()
             .into_iter()
             .flatten()
-            .filter(|v| v["liveInput"].as_str().is_some_and(|l| !l.is_empty() && !live.contains(&l)))
-            .map(|v| json!({"uid": v["uid"], "live_input": v["liveInput"], "created": v["created"]}))
+            .filter(|v| {
+                v["liveInput"]
+                    .as_str()
+                    .is_some_and(|l| !l.is_empty() && !live.contains(&l))
+            })
+            .map(
+                |v| json!({"uid": v["uid"], "live_input": v["liveInput"], "created": v["created"]}),
+            )
             .collect();
         json!({"http": st, "fv_test_inputs": ours, "other_inputs": all.len() - ours.len(),
                "recordings_without_input": orphans, "videos": vids["result"].as_array().map_or(0, Vec::len),
@@ -450,18 +606,31 @@ async fn streams(args: &[String]) {
          wind howls against the glass."
             .into()
     });
-    let secs: u64 = arg(args, "--seconds").and_then(|s| s.parse().ok()).unwrap_or(60);
-    let cases = arg(args, "--cases").unwrap_or_else(|| "whip-h264,whip-vp8,whip-vp9,rtmps,srt".into());
-    let clips: usize = arg(args, "--clips").and_then(|s| s.parse().ok()).unwrap_or(7);
+    let secs: u64 = arg(args, "--seconds")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
+    let cases =
+        arg(args, "--cases").unwrap_or_else(|| "whip-h264,whip-vp8,whip-vp9,rtmps,srt".into());
+    let clips: usize = arg(args, "--clips")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(7);
     let clip_prompt = arg(args, "--clip-prompt").unwrap_or_else(|| {
         "Storm waves crash against the lighthouse rocks at night, thunder rolls, rain lashes the windows, the lamp beam \
          sweeps the sea."
             .into()
     });
-    let audio_window: u64 = arg(args, "--audio-seconds").and_then(|s| s.parse().ok()).unwrap_or(60);
-    let audio_deadline: u64 = arg(args, "--audio-deadline").and_then(|s| s.parse().ok()).unwrap_or(300);
-    let ingest_secs: u64 = arg(args, "--ingest-seconds").and_then(|s| s.parse().ok()).unwrap_or(45);
-    let ingest_after: u64 = arg(args, "--ingest-after").and_then(|s| s.parse().ok()).unwrap_or(20);
+    let audio_window: u64 = arg(args, "--audio-seconds")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
+    let audio_deadline: u64 = arg(args, "--audio-deadline")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(300);
+    let ingest_secs: u64 = arg(args, "--ingest-seconds")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(45);
+    let ingest_after: u64 = arg(args, "--ingest-after")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20);
     let mut failed = Vec::new();
     let out = PathBuf::from(arg(args, "--out").unwrap_or_else(|| "cf-out".into()));
     std::fs::create_dir_all(&out).unwrap();
@@ -472,8 +641,14 @@ async fn streams(args: &[String]) {
     for name in cases.split(',').map(str::trim).filter(|s| !s.is_empty()) {
         let (output, codec) = match name {
             "whip-h264" => (json!({"kind": "cloudflare"}), Some(VideoCodec::H264)),
-            "whip-vp8" => (json!({"kind": "cloudflare", "codec": "vp8"}), Some(VideoCodec::Vp8)),
-            "whip-vp9" => (json!({"kind": "cloudflare", "codec": "vp9"}), Some(VideoCodec::Vp9)),
+            "whip-vp8" => (
+                json!({"kind": "cloudflare", "codec": "vp8"}),
+                Some(VideoCodec::Vp8),
+            ),
+            "whip-vp9" => (
+                json!({"kind": "cloudflare", "codec": "vp9"}),
+                Some(VideoCodec::Vp9),
+            ),
             "rtmps" => (json!({"kind": "cloudflare-rtmps"}), None),
             "srt" => (json!({"kind": "cloudflare-srt"}), None),
             other => panic!("unknown case {other}"),
@@ -486,7 +661,12 @@ async fn streams(args: &[String]) {
             json!({"model": model, "prompt": prompt, "clips": more, "output": output, "max_seconds": secs.max(audio_deadline) + 60})
         };
         let t0 = Instant::now();
-        let r = http.post(format!("{base}/fv/v1/streams")).bearer_auth(&key).json(&body).send().await;
+        let r = http
+            .post(format!("{base}/fv/v1/streams"))
+            .bearer_auth(&key)
+            .json(&body)
+            .send()
+            .await;
         let (st, v) = match r {
             Ok(r) => {
                 let st = r.status().as_u16();
@@ -496,10 +676,15 @@ async fn streams(args: &[String]) {
         };
         let create_ms = t0.elapsed().as_millis();
         if st != 201 {
-            let res = json!({"case": name, "ok": false, "create_http": st, "error": v["error"].clone()});
+            let res =
+                json!({"case": name, "ok": false, "create_http": st, "error": v["error"].clone()});
             failed.push(name.to_owned());
             println!("RESULT {res}");
-            std::fs::write(out.join(format!("{name}.json")), serde_json::to_vec_pretty(&res).unwrap()).ok();
+            std::fs::write(
+                out.join(format!("{name}.json")),
+                serde_json::to_vec_pretty(&res).unwrap(),
+            )
+            .ok();
             continue;
         }
         let id = v["id"].as_str().unwrap_or_default().to_owned();
@@ -512,7 +697,16 @@ async fn streams(args: &[String]) {
         let read = match codec {
             Some(c) => {
                 let whep = pb["whep_url"].as_str().unwrap_or_default().to_owned();
-                whep_case(&whep, c, t0, Duration::from_secs(secs + 120), 40, &out, name).await
+                whep_case(
+                    &whep,
+                    c,
+                    t0,
+                    Duration::from_secs(secs + 120),
+                    40,
+                    &out,
+                    name,
+                )
+                .await
             }
             None => {
                 let hls = pb["hls_url"].as_str().unwrap_or_default().to_owned();
@@ -531,9 +725,14 @@ async fn streams(args: &[String]) {
                         match (pb["url"].as_str(), pb["streamKey"].as_str()) {
                             (Some(u), Some(k)) => {
                                 let f = out.join(format!("{name}-ingest.flv"));
-                                serde_json::to_value(hls::read_rtmps_playback(u, k, ingest_secs, &f).await).unwrap_or(Value::Null)
+                                serde_json::to_value(
+                                    hls::read_rtmps_playback(u, k, ingest_secs, &f).await,
+                                )
+                                .unwrap_or(Value::Null)
                             }
-                            _ => json!({"audible": false, "error": "the live input lists no rtmpsPlayback"}),
+                            _ => {
+                                json!({"audible": false, "error": "the live input lists no rtmpsPlayback"})
+                            }
                         }
                     })
                 });
@@ -541,7 +740,9 @@ async fn streams(args: &[String]) {
                 let mut last = String::new();
                 while t0.elapsed() < Duration::from_secs(secs.max(150)) {
                     tokio::time::sleep(Duration::from_secs(3)).await;
-                    if connected.is_none() && cf.input_state(&uid).await.as_deref() == Some("connected") {
+                    if connected.is_none()
+                        && cf.input_state(&uid).await.as_deref() == Some("connected")
+                    {
                         connected = Some(t0.elapsed().as_secs_f64());
                     }
                     match hls_grab(&http, &hls, 1, &file).await {
@@ -554,7 +755,9 @@ async fn streams(args: &[String]) {
                     }
                 }
                 match ready {
-                    None => json!({"transport": "hls", "ok": false, "error": last, "connected_after_s": connected}),
+                    None => {
+                        json!({"transport": "hls", "ok": false, "error": last, "connected_after_s": connected})
+                    }
                     Some(rd) => {
                         tokio::time::sleep(Duration::from_secs(12)).await;
                         let vars = hls_grab(&http, &hls, 3, &file).await;
@@ -564,12 +767,34 @@ async fn streams(args: &[String]) {
                         // The audio, through the master playlist (a separate rendition on Cloudflare).
                         let deadline = t0 + Duration::from_secs(audio_deadline);
                         let afile = out.join(format!("{name}-audio.seg"));
-                        let ingest = async { ingest_task.take().expect("one HLS read per case").await.unwrap_or(Value::Null) };
+                        let ingest = async {
+                            ingest_task
+                                .take()
+                                .expect("one HLS read per case")
+                                .await
+                                .unwrap_or(Value::Null)
+                        };
                         let hls_audio = async {
-                            match hls::read_audio(&http, &hls, Duration::from_secs(audio_window), deadline, &afile).await {
+                            match hls::read_audio(
+                                &http,
+                                &hls,
+                                Duration::from_secs(audio_window),
+                                deadline,
+                                &afile,
+                            )
+                            .await
+                            {
                                 Ok(a) => {
-                                    std::fs::write(out.join(format!("{name}-master.m3u8")), &a.master_text).ok();
-                                    std::fs::write(out.join(format!("{name}-audio.m3u8")), &a.media_text).ok();
+                                    std::fs::write(
+                                        out.join(format!("{name}-master.m3u8")),
+                                        &a.master_text,
+                                    )
+                                    .ok();
+                                    std::fs::write(
+                                        out.join(format!("{name}-audio.m3u8")),
+                                        &a.media_text,
+                                    )
+                                    .ok();
                                     let mut j = serde_json::to_value(&a).unwrap_or(Value::Null);
                                     j["read_after_post_s"] = json!(t0.elapsed().as_secs_f64());
                                     j
@@ -604,13 +829,28 @@ async fn streams(args: &[String]) {
         if t0.elapsed() < Duration::from_secs(secs) {
             tokio::time::sleep(Duration::from_secs(secs) - t0.elapsed()).await;
         }
-        let stv: Value = match http.get(format!("{base}/fv/v1/streams/{id}")).bearer_auth(&key).send().await {
+        let stv: Value = match http
+            .get(format!("{base}/fv/v1/streams/{id}"))
+            .bearer_auth(&key)
+            .send()
+            .await
+        {
             Ok(r) => r.json().await.unwrap_or(Value::Null),
             Err(_) => Value::Null,
         };
-        let del = http.delete(format!("{base}/fv/v1/streams/{id}")).bearer_auth(&key).send().await.map(|r| r.status().as_u16()).unwrap_or(0);
+        let del = http
+            .delete(format!("{base}/fv/v1/streams/{id}"))
+            .bearer_auth(&key)
+            .send()
+            .await
+            .map(|r| r.status().as_u16())
+            .unwrap_or(0);
         tokio::time::sleep(Duration::from_secs(3)).await;
-        let clean = if uid.is_empty() { Value::Null } else { cf.cleanup(&uid).await };
+        let clean = if uid.is_empty() {
+            Value::Null
+        } else {
+            cf.cleanup(&uid).await
+        };
         let s = &stv["status"];
         if read["ok"] != true {
             failed.push(name.to_owned());
@@ -626,7 +866,11 @@ async fn streams(args: &[String]) {
             "stream_delete_http": del, "cleanup": clean,
         });
         println!("RESULT {res}");
-        std::fs::write(out.join(format!("{name}.json")), serde_json::to_vec_pretty(&res).unwrap()).ok();
+        std::fs::write(
+            out.join(format!("{name}.json")),
+            serde_json::to_vec_pretty(&res).unwrap(),
+        )
+        .ok();
     }
     println!("CREATED {}", created.join(","));
     println!("LIST {}", cf.list().await);
@@ -648,15 +892,23 @@ async fn edges(http: &reqwest::Client, master: &str) -> Value {
     }
     fn edge(p: Option<hls::MediaPlaylist>) -> Value {
         match p {
-            Some(p) => json!({"first_seq": p.media_sequence, "last_seq": p.segments.last().map(|s| s.sequence),
-                              "listed": p.segments.len(), "listed_s": p.seconds()}),
+            Some(p) => {
+                json!({"first_seq": p.media_sequence, "last_seq": p.segments.last().map(|s| s.sequence),
+                              "listed": p.segments.len(), "listed_s": p.seconds()})
+            }
             None => Value::Null,
         }
     }
-    let Ok(base) = reqwest::Url::parse(master) else { return Value::Null };
-    let Some(text) = get(http, base.clone()).await else { return json!({"master": "not served"}) };
+    let Ok(base) = reqwest::Url::parse(master) else {
+        return Value::Null;
+    };
+    let Some(text) = get(http, base.clone()).await else {
+        return json!({"master": "not served"});
+    };
     let m = hls::MasterPlaylist::parse(&text);
-    let Some(best) = m.best_variant() else { return json!({"master": "no variant"}) };
+    let Some(best) = m.best_variant() else {
+        return json!({"master": "no variant"});
+    };
     let video = match base.join(&best.uri) {
         Ok(u) => get(http, u).await.map(|t| hls::MediaPlaylist::parse(&t)),
         Err(_) => None,
@@ -687,7 +939,9 @@ fn synthetic_tick(i: u64, w: u32, h: u32, per: usize) -> (fastvideo_media::RgbFr
         .flat_map(|k| {
             let n = i as usize * per + k;
             let t = n as f64 / 48_000.0;
-            let v = (0.25 * (2.0 * std::f64::consts::PI * (200.0 + 100.0 * (t / 10.0).floor()) * t).sin()) as f32;
+            let v = (0.25
+                * (2.0 * std::f64::consts::PI * (200.0 + 100.0 * (t / 10.0).floor()) * t).sin())
+                as f32;
             [v, v]
         })
         .collect();
@@ -701,11 +955,16 @@ fn tone_clock(file: &Path) -> Vec<Option<u64>> {
     let pcm = Command::new(fastvideo_media::tools::ffmpeg_bin())
         .args(["-v", "error", "-nostdin", "-i"])
         .arg(file)
-        .args(["-map", "0:a:0", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"])
+        .args([
+            "-map", "0:a:0", "-ac", "1", "-ar", "48000", "-f", "s16le", "-",
+        ])
         .output()
         .map(|o| o.stdout)
         .unwrap_or_default();
-    let s: Vec<i16> = pcm.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+    let s: Vec<i16> = pcm
+        .chunks_exact(2)
+        .map(|b| i16::from_le_bytes([b[0], b[1]]))
+        .collect();
     s.chunks(48_000)
         .filter(|c| c.len() >= 24_000)
         .map(|c| {
@@ -722,11 +981,20 @@ fn tone_clock(file: &Path) -> Vec<Option<u64>> {
 
 /// `srt://host:port` with the host replaced by its first IPv4 address.
 async fn pin_host(u: &str) -> String {
-    let Ok(mut url) = reqwest::Url::parse(u) else { return u.to_owned() };
-    let (Some(host), Some(port)) = (url.host_str().map(str::to_owned), url.port()) else { return u.to_owned() };
-    let ip = tokio::net::lookup_host((host.as_str(), port)).await.ok().and_then(|mut a| a.find(|a| a.is_ipv4()));
+    let Ok(mut url) = reqwest::Url::parse(u) else {
+        return u.to_owned();
+    };
+    let (Some(host), Some(port)) = (url.host_str().map(str::to_owned), url.port()) else {
+        return u.to_owned();
+    };
+    let ip = tokio::net::lookup_host((host.as_str(), port))
+        .await
+        .ok()
+        .and_then(|mut a| a.find(|a| a.is_ipv4()));
     match ip {
-        Some(a) if url.set_ip_host(a.ip()).is_ok() => url.to_string().trim_end_matches('/').to_owned(),
+        Some(a) if url.set_ip_host(a.ip()).is_ok() => {
+            url.to_string().trim_end_matches('/').to_owned()
+        }
         _ => u.to_owned(),
     }
 }
@@ -747,10 +1015,18 @@ async fn push(args: &[String]) {
     use std::sync::atomic::{AtomicBool, Ordering};
     let kind = arg(args, "--kind").unwrap_or_else(|| "srt".into());
     let source = arg(args, "--source").unwrap_or_else(|| "lavfi".into());
-    let secs: u64 = arg(args, "--seconds").and_then(|s| s.parse().ok()).unwrap_or(150);
-    let latency: u32 = arg(args, "--latency-ms").and_then(|s| s.parse().ok()).unwrap_or(1000);
-    let kbps: u32 = arg(args, "--video-kbps").and_then(|s| s.parse().ok()).unwrap_or(6000);
-    let audio_window: u64 = arg(args, "--audio-seconds").and_then(|s| s.parse().ok()).unwrap_or(60);
+    let secs: u64 = arg(args, "--seconds")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(150);
+    let latency: u32 = arg(args, "--latency-ms")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1000);
+    let kbps: u32 = arg(args, "--video-kbps")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(6000);
+    let audio_window: u64 = arg(args, "--audio-seconds")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
     let out = PathBuf::from(arg(args, "--out").unwrap_or_else(|| "cf-out".into()));
     std::fs::create_dir_all(&out).unwrap();
     if source == "sink" && kind != "srt" {
@@ -768,7 +1044,10 @@ async fn push(args: &[String]) {
         timeout: Duration::from_secs(30),
     })
     .expect("cloudflare client");
-    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let name = format!("{PREFIX}push-{kind}-{source}-{stamp}");
     let li = match cfs.create(&name, true).await {
         Ok(li) => li,
@@ -778,9 +1057,16 @@ async fn push(args: &[String]) {
         }
     };
     println!("CREATED {} ({name})", li.uid);
-    let hls_url = li.playback(None, false)["hls_url"].as_str().unwrap_or_default().to_owned();
+    let hls_url = li.playback(None, false)["hls_url"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
     let url = match kind.as_str() {
-        "rtmps" => format!("{}{}", li.rtmps_url.clone().unwrap_or_default(), li.rtmps_key.clone().unwrap_or_default()),
+        "rtmps" => format!(
+            "{}{}",
+            li.rtmps_url.clone().unwrap_or_default(),
+            li.rtmps_key.clone().unwrap_or_default()
+        ),
         _ => fastvideo_media::sink::srt_url(
             // A fully static ffmpeg (FV_FFMPEG) cannot resolve host names:
             // the address is pinned as fv-serve's SRT output does.
@@ -795,9 +1081,18 @@ async fn push(args: &[String]) {
         ("srt", Some(x)) => format!("{url}&{x}"),
         _ => url,
     };
-    let mut secrets: Vec<String> = [&li.srt_stream_id, &li.srt_passphrase, &li.rtmps_key].into_iter().flatten().cloned().collect();
+    let mut secrets: Vec<String> = [&li.srt_stream_id, &li.srt_passphrase, &li.rtmps_key]
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect();
     secrets.push(url.clone());
-    let scrub = |t: &str| secrets.iter().filter(|x| !x.is_empty()).fold(t.to_owned(), |t, x| t.replace(x.as_str(), "<redacted>"));
+    let scrub = |t: &str| {
+        secrets
+            .iter()
+            .filter(|x| !x.is_empty())
+            .fold(t.to_owned(), |t, x| t.replace(x.as_str(), "<redacted>"))
+    };
     let t0 = Instant::now();
     let stop = std::sync::Arc::new(AtomicBool::new(false));
     let producer: std::thread::JoinHandle<String> = if source == "sink" {
@@ -806,7 +1101,16 @@ async fn push(args: &[String]) {
         let target = SinkTarget::Srt { url: url.clone() };
         std::thread::spawn(move || {
             let (w, h, fps) = (1344u32, 768u32, 24u32);
-            let mut cfg = SinkConfig::new(target, w, h, fps, Some(SinkAudioIn { rate: 48_000, channels: 2 }));
+            let mut cfg = SinkConfig::new(
+                target,
+                w,
+                h,
+                fps,
+                Some(SinkAudioIn {
+                    rate: 48_000,
+                    channels: 2,
+                }),
+            );
             cfg.encoder = fastvideo_media::video::FfmpegH264::Libx264CpuTest;
             let mut sink = match FfmpegSink::start(cfg) {
                 Ok(s) => s,
@@ -828,7 +1132,10 @@ async fn push(args: &[String]) {
                 i += 1;
             }
             let st = sink.stats();
-            let fin = sink.finish(Duration::from_secs(5)).err().map(|e| e.to_string());
+            let fin = sink
+                .finish(Duration::from_secs(5))
+                .err()
+                .map(|e| e.to_string());
             format!(
                 "sink: {} frames, {} audio ticks, dropped {} / {}, restarts {}, ran {:.1}s, exits {errors:?}, finish {fin:?}",
                 st.frames_sent,
@@ -844,16 +1151,71 @@ async fn push(args: &[String]) {
         let fmt = if kind == "rtmps" { "flv" } else { "mpegts" };
         let rate = format!("{kbps}k");
         let mut cmd = Command::new(fastvideo_media::tools::ffmpeg_bin());
-        cmd.args(["-hide_banner", "-loglevel", "error", "-nostdin", "-re", "-f", "lavfi", "-i", "testsrc2=size=1344x768:rate=24"])
-            .args(["-re", "-f", "lavfi", "-i", "aevalsrc=0.25*sin(2*PI*(200+100*floor(t/10))*t):s=48000:c=stereo", "-map", "0:v", "-map", "1:a"])
-            .args(["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-pix_fmt", "yuv420p"])
-            .args(["-b:v", &rate, "-maxrate", &rate, "-minrate", &rate, "-bufsize", &rate])
-            .args(["-g", "48", "-keyint_min", "48", "-sc_threshold", "0", "-bf", "0", "-flags", "+cgop", "-x264-params", "nal-hrd=cbr"])
-            .args(["-c:a", "aac", "-profile:a", "aac_low", "-b:a", "128k", "-ar", "48000", "-ac", "2"])
-            .args(["-t", &secs.to_string(), "-f", fmt, &url])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped());
+        cmd.args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-re",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=1344x768:rate=24",
+        ])
+        .args([
+            "-re",
+            "-f",
+            "lavfi",
+            "-i",
+            "aevalsrc=0.25*sin(2*PI*(200+100*floor(t/10))*t):s=48000:c=stereo",
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+        ])
+        .args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-tune",
+            "zerolatency",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .args([
+            "-b:v", &rate, "-maxrate", &rate, "-minrate", &rate, "-bufsize", &rate,
+        ])
+        .args([
+            "-g",
+            "48",
+            "-keyint_min",
+            "48",
+            "-sc_threshold",
+            "0",
+            "-bf",
+            "0",
+            "-flags",
+            "+cgop",
+            "-x264-params",
+            "nal-hrd=cbr",
+        ])
+        .args([
+            "-c:a",
+            "aac",
+            "-profile:a",
+            "aac_low",
+            "-b:a",
+            "128k",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+        ])
+        .args(["-t", &secs.to_string(), "-f", fmt, &url])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
         std::thread::spawn(move || {
             let mut child = match cmd.spawn() {
                 Ok(c) => c,
@@ -868,8 +1230,14 @@ async fn push(args: &[String]) {
             }
             let ran = start.elapsed().as_secs_f64();
             let _ = child.kill();
-            let o = child.wait_with_output().map(|o| String::from_utf8_lossy(&o.stderr).into_owned()).unwrap_or_default();
-            format!("ffmpeg ran {ran:.1}s; stderr: {}", o.lines().take(8).collect::<Vec<_>>().join(" | "))
+            let o = child
+                .wait_with_output()
+                .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+                .unwrap_or_default();
+            format!(
+                "ffmpeg ran {ran:.1}s; stderr: {}",
+                o.lines().take(8).collect::<Vec<_>>().join(" | ")
+            )
         })
     };
     let http = reqwest::Client::new();
@@ -889,19 +1257,35 @@ async fn push(args: &[String]) {
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(40)).await;
             let v = cfs.get(&uid).await.unwrap_or(Value::Null);
-            let (Some(u), Some(k)) = (v["rtmpsPlayback"]["url"].as_str(), v["rtmpsPlayback"]["streamKey"].as_str()) else {
+            let (Some(u), Some(k)) = (
+                v["rtmpsPlayback"]["url"].as_str(),
+                v["rtmpsPlayback"]["streamKey"].as_str(),
+            ) else {
                 return json!({"error": "no rtmpsPlayback in the live input"});
             };
             let file = out.join("rtmps-playback.flv");
-            let mut j = serde_json::to_value(hls::read_rtmps_playback(u, k, 30, &file).await).unwrap_or(Value::Null);
+            let mut j = serde_json::to_value(hls::read_rtmps_playback(u, k, 30, &file).await)
+                .unwrap_or(Value::Null);
             j["stream_time_per_second"] = json!(tone_clock(&file));
             j
         })
     };
     let afile = out.join(format!("push-{kind}-{source}-audio.seg"));
-    let audio = match hls::read_audio(&http, &hls_url, Duration::from_secs(audio_window), t0 + Duration::from_secs(secs), &afile).await {
+    let audio = match hls::read_audio(
+        &http,
+        &hls_url,
+        Duration::from_secs(audio_window),
+        t0 + Duration::from_secs(secs),
+        &afile,
+    )
+    .await
+    {
         Ok(a) => {
-            std::fs::write(out.join(format!("push-{kind}-{source}-audio.m3u8")), &a.media_text).ok();
+            std::fs::write(
+                out.join(format!("push-{kind}-{source}-audio.m3u8")),
+                &a.media_text,
+            )
+            .ok();
             let mut j = serde_json::to_value(&a).unwrap_or(Value::Null);
             j["stream_time_per_second"] = json!(tone_clock(&afile));
             j
@@ -911,16 +1295,26 @@ async fn push(args: &[String]) {
     if t0.elapsed() < Duration::from_secs(secs) {
         tokio::time::sleep(Duration::from_secs(secs) - t0.elapsed()).await;
     }
-    let state = cfs.get(&li.uid).await.map(|v| v["status"].clone()).unwrap_or(Value::Null);
+    let state = cfs
+        .get(&li.uid)
+        .await
+        .map(|v| v["status"].clone())
+        .unwrap_or(Value::Null);
     stop.store(true, Ordering::Relaxed);
     let edges_seen = sampler.await.unwrap_or_default();
-    let prod = tokio::task::spawn_blocking(move || producer.join().unwrap_or_default()).await.unwrap_or_default();
+    let prod = tokio::task::spawn_blocking(move || producer.join().unwrap_or_default())
+        .await
+        .unwrap_or_default();
     tokio::time::sleep(Duration::from_secs(3)).await;
     let clean = Cf::from_env().cleanup(&li.uid).await;
     let res = json!({"kind": kind, "source": source, "seconds": secs, "latency_ms": latency, "video_kbps": kbps, "srt_extra": arg(args, "--srt-extra"), "ffmpeg": fastvideo_media::tools::ffmpeg_bin(),
                      "audio": audio, "rtmps_playback": playback.await.unwrap_or(Value::Null), "edges": edges_seen, "input_status": state, "producer": scrub(&prod), "cleanup": clean});
     println!("RESULT {res}");
-    std::fs::write(out.join(format!("push-{kind}-{source}.json")), serde_json::to_vec_pretty(&res).unwrap()).ok();
+    std::fs::write(
+        out.join(format!("push-{kind}-{source}.json")),
+        serde_json::to_vec_pretty(&res).unwrap(),
+    )
+    .ok();
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
@@ -931,16 +1325,35 @@ async fn main() {
         Some("whep") => {
             let url = arg(&args, "--url").expect("--url");
             let codec = codec_of(&arg(&args, "--codec").unwrap_or_default());
-            let secs: u64 = arg(&args, "--seconds").and_then(|s| s.parse().ok()).unwrap_or(40);
+            let secs: u64 = arg(&args, "--seconds")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(40);
             let out = PathBuf::from(arg(&args, "--out").unwrap_or_else(|| "cf-out".into()));
             std::fs::create_dir_all(&out).unwrap();
-            let r = whep_case(&url, codec, Instant::now(), Duration::from_secs(secs + 60), secs, &out, "whep").await;
+            let r = whep_case(
+                &url,
+                codec,
+                Instant::now(),
+                Duration::from_secs(secs + 60),
+                secs,
+                &out,
+                "whep",
+            )
+            .await;
             println!("RESULT {r}");
-            std::fs::write(out.join("whep.json"), serde_json::to_vec_pretty(&r).unwrap()).ok();
+            std::fs::write(
+                out.join("whep.json"),
+                serde_json::to_vec_pretty(&r).unwrap(),
+            )
+            .ok();
         }
         Some("cleanup") => {
             let cf = Cf::from_env();
-            for uid in arg(&args, "--uids").unwrap_or_default().split(',').filter(|s| !s.is_empty()) {
+            for uid in arg(&args, "--uids")
+                .unwrap_or_default()
+                .split(',')
+                .filter(|s| !s.is_empty())
+            {
                 println!("CLEANUP {}", cf.cleanup(uid).await);
             }
             // `--recordings-of <uid,...>`: recordings left by inputs this run

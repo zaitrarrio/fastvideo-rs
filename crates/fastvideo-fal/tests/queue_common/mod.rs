@@ -3,8 +3,8 @@
 //! recording webhook transport, and the fal router.
 #![allow(dead_code)]
 
-use std::path::PathBuf;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -36,7 +36,9 @@ pub const T: Duration = Duration::from_secs(60);
 /// The ffmpeg the fake engine writes MP4s with: `FV_FFMPEG`, else `ffmpeg`
 /// on PATH, else none (placeholder outputs).
 pub fn ffmpeg() -> Option<PathBuf> {
-    let p = std::env::var_os("FV_FFMPEG").map(PathBuf::from).unwrap_or_else(|| "ffmpeg".into());
+    let p = std::env::var_os("FV_FFMPEG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "ffmpeg".into());
     std::process::Command::new(&p)
         .arg("-version")
         .stdout(std::process::Stdio::null())
@@ -85,7 +87,9 @@ async fn placeholder(ctx: &ServeCtx, id: JobId) -> PathBuf {
     let dir = ctx.outputs_dir(id);
     tokio::fs::create_dir_all(&dir).await.unwrap();
     let p = dir.join("output.mp4");
-    tokio::fs::write(&p, b"\0\0\0\x18ftypisom\0\0\x02\0isomiso2avc1mp41").await.unwrap();
+    tokio::fs::write(&p, b"\0\0\0\x18ftypisom\0\0\x02\0isomiso2avc1mp41")
+        .await
+        .unwrap();
     p
 }
 
@@ -105,11 +109,17 @@ fn finished(job: &Job, file: PathBuf, metrics: JobMetrics) -> JobEvent {
         fps: r.fps,
         audio,
     };
-    JobEvent::Finished(FinishedOutput { file, meta, metrics })
+    JobEvent::Finished(FinishedOutput {
+        file,
+        meta,
+        metrics,
+    })
 }
 
 async fn run_sim(gate: Arc<Gate>, ctx: ServeCtx, job: Job, position: u32, flag: Arc<AtomicBool>) {
-    let Backend::Sim(sim) = &gate.backend else { unreachable!() };
+    let Backend::Sim(sim) = &gate.backend else {
+        unreachable!()
+    };
     let id = job.id;
     let ev = |e: JobEvent| {
         let ctx = ctx.clone();
@@ -124,8 +134,14 @@ async fn run_sim(gate: Arc<Gate>, ctx: ServeCtx, job: Job, position: u32, flag: 
         return ev(JobEvent::Cancelled).await;
     }
     ev(JobEvent::Started).await;
-    ev(JobEvent::Stage { name: "text_encode".into() }).await;
-    ev(JobEvent::Stage { name: "denoise".into() }).await;
+    ev(JobEvent::Stage {
+        name: "text_encode".into(),
+    })
+    .await;
+    ev(JobEvent::Stage {
+        name: "denoise".into(),
+    })
+    .await;
     let t0 = tokio::time::Instant::now();
     for s in 1..=4 {
         tokio::time::sleep(sim.step).await;
@@ -133,11 +149,17 @@ async fn run_sim(gate: Arc<Gate>, ctx: ServeCtx, job: Job, position: u32, flag: 
             return ev(JobEvent::Cancelled).await;
         }
         if job.resolved.prompt.contains("[fake:fail]") {
-            return ev(JobEvent::Failed(ApiError::engine_failed(format!("injected failure at step {s}/4")))).await;
+            return ev(JobEvent::Failed(ApiError::engine_failed(format!(
+                "injected failure at step {s}/4"
+            ))))
+            .await;
         }
         ev(JobEvent::Progress { step: s, total: 4 }).await;
     }
-    let metrics = JobMetrics { inference_s: Some(t0.elapsed().as_secs_f64()), ..Default::default() };
+    let metrics = JobMetrics {
+        inference_s: Some(t0.elapsed().as_secs_f64()),
+        ..Default::default()
+    };
     let file = placeholder(&ctx, id).await;
     ev(finished(&job, file, metrics)).await;
     sim.cancels.lock().unwrap().remove(&id);
@@ -175,14 +197,18 @@ impl EngineGate for GateRef {
             }
             Backend::Fake(e) => e,
         };
-        let mut h = engine.submit(job.id, job.resolved.clone(), Priority::Batch).await?;
+        let mut h = engine
+            .submit(job.id, job.resolved.clone(), Priority::Batch)
+            .await?;
         tokio::spawn(async move {
             while let Some(ev) = h.events.recv().await {
                 let terminal = ev.is_terminal();
                 let jev = match ev {
                     EngineEvent::Queued { position } => JobEvent::Queued { position },
                     EngineEvent::Started => JobEvent::Started,
-                    EngineEvent::Stage { name } => JobEvent::Stage { name: name.to_owned() },
+                    EngineEvent::Stage { name } => JobEvent::Stage {
+                        name: name.to_owned(),
+                    },
                     EngineEvent::Progress { step, total } => JobEvent::Progress { step, total },
                     EngineEvent::Log(l) => JobEvent::Log(l),
                     EngineEvent::Failed(e) => JobEvent::Failed(e),
@@ -206,7 +232,10 @@ impl EngineGate for GateRef {
     }
     async fn cancel(&self, id: JobId) -> bool {
         match &self.0.backend {
-            Backend::Fake(e) => !matches!(e.cancel(id), fastvideo_engine_service::CancelOutcome::Unknown),
+            Backend::Fake(e) => !matches!(
+                e.cancel(id),
+                fastvideo_engine_service::CancelOutcome::Unknown
+            ),
             Backend::Sim(sim) => match sim.cancels.lock().unwrap().get(&id) {
                 Some(f) => {
                     f.store(true, Ordering::SeqCst);
@@ -227,9 +256,18 @@ pub struct Hooks(pub Mutex<Vec<Post>>);
 
 #[async_trait::async_trait]
 impl CallbackTransport for Hooks {
-    async fn post(&self, u: &Url, h: &[(String, String)], body: bytes::Bytes, _t: &TargetPolicy) -> Result<PostReply, PostError> {
+    async fn post(
+        &self,
+        u: &Url,
+        h: &[(String, String)],
+        body: bytes::Bytes,
+        _t: &TargetPolicy,
+    ) -> Result<PostReply, PostError> {
         self.0.lock().unwrap().push((u.clone(), h.to_vec(), body));
-        Ok(PostReply { status: 200, body: bytes::Bytes::from_static(b"{}") })
+        Ok(PostReply {
+            status: 200,
+            body: bytes::Bytes::from_static(b"{}"),
+        })
     }
 }
 
@@ -281,7 +319,10 @@ pub async fn fixture(o: Opts) -> Fixture {
     let dir = std::env::temp_dir().join(format!("fv-fal-{}", uuid::Uuid::new_v4().simple()));
     let mut fake = FakeConfig {
         models: o.models.clone(),
-        timing: FakeTiming { step: o.step, ..FakeTiming::default() },
+        timing: FakeTiming {
+            step: o.step,
+            ..FakeTiming::default()
+        },
         mp4: Mp4Mode::Off,
         ..FakeConfig::default()
     };
@@ -294,10 +335,17 @@ pub async fn fixture(o: Opts) -> Fixture {
     let caps: Vec<ModelCaps> = o.models.iter().map(|m| m.caps.clone()).collect();
     let backend = match o.engine {
         Engine::Fake => {
-            let cfg = EngineConfig { queue_max: o.queue_max, output_dir: dir.join("engine"), ..EngineConfig::default() };
+            let cfg = EngineConfig {
+                queue_max: o.queue_max,
+                output_dir: dir.join("engine"),
+                ..EngineConfig::default()
+            };
             let backends: Vec<Box<dyn EngineBackend>> = vec![Box::new(FakeBackend::new(fake))];
             let engine = EngineService::start(cfg, backends).expect("engine starts");
-            assert_eq!(tokio::time::timeout(T, engine.wait_ready()).await.unwrap(), Readiness::Ready);
+            assert_eq!(
+                tokio::time::timeout(T, engine.wait_ready()).await.unwrap(),
+                Readiness::Ready
+            );
             Backend::Fake(engine)
         }
         Engine::Sim => Backend::Sim(Sim {
@@ -307,13 +355,24 @@ pub async fn fixture(o: Opts) -> Fixture {
             cancels: Mutex::new(HashMap::new()),
         }),
     };
-    let gate = Arc::new(Gate { backend, caps, ctx: OnceLock::new(), refuse: Mutex::new(None) });
+    let gate = Arc::new(Gate {
+        backend,
+        caps,
+        ctx: OnceLock::new(),
+        refuse: Mutex::new(None),
+    });
     let hooks = Arc::new(Hooks::default());
     let signer = WebhookSigner::from_seed([7u8; 32], "fv-test-user");
-    let cb = Arc::new(CallbackSender::new(Some(hooks.clone()), Some(signer.clone())));
+    let cb = Arc::new(CallbackSender::new(
+        Some(hooks.clone()),
+        Some(signer.clone()),
+    ));
     let scfg = ServeConfig::new(Url::parse(&o.public_base).unwrap(), &dir);
     let mut builder = ServeCtx::builder(scfg, Arc::new(GateRef(gate.clone())))
-        .auth(Auth::new(AuthMode::Keys, KeyRing::from_plain([KEY, OTHER_KEY])))
+        .auth(Auth::new(
+            AuthMode::Keys,
+            KeyRing::from_plain([KEY, OTHER_KEY]),
+        ))
         .url_key(UrlKey::new("fal-test-url-key"))
         .callbacks(cb)
         .renderer(ProtocolId::Fal, Arc::new(FalWebhook::default()));
@@ -324,10 +383,21 @@ pub async fn fixture(o: Opts) -> Fixture {
     gate.ctx.set(ctx.clone()).ok().unwrap();
     let mut fal = FalConfig::default();
     if !o.fal_apps.is_empty() {
-        fal.apps = o.fal_apps.iter().map(|id| fastvideo_fal::FalApp::from_id(id)).collect();
+        fal.apps = o
+            .fal_apps
+            .iter()
+            .map(|id| fastvideo_fal::FalApp::from_id(id))
+            .collect();
     }
     let app = router(ctx.clone(), fal).merge(ctx.routes().with_state(()));
-    Fixture { ctx, gate, hooks, signer, app, dir }
+    Fixture {
+        ctx,
+        gate,
+        hooks,
+        signer,
+        app,
+        dir,
+    }
 }
 
 pub struct Resp {
@@ -349,16 +419,28 @@ pub async fn send(app: &Router, req: Request<Body>) -> Resp {
     let r = app.clone().oneshot(req).await.unwrap();
     let (parts, body) = r.into_parts();
     let body = axum::body::to_bytes(body, 1 << 30).await.unwrap();
-    Resp { status: parts.status, headers: parts.headers, body }
+    Resp {
+        status: parts.status,
+        headers: parts.headers,
+        body,
+    }
 }
 
-pub fn req(method: &str, uri: &str, key: Option<&str>, body: Option<serde_json::Value>) -> Request<Body> {
+pub fn req(
+    method: &str,
+    uri: &str,
+    key: Option<&str>,
+    body: Option<serde_json::Value>,
+) -> Request<Body> {
     let mut b = Request::builder().method(method).uri(uri);
     if let Some(k) = key {
         b = b.header("authorization", format!("Key {k}"));
     }
     match body {
-        Some(v) => b.header("content-type", "application/json").body(Body::from(v.to_string())).unwrap(),
+        Some(v) => b
+            .header("content-type", "application/json")
+            .body(Body::from(v.to_string()))
+            .unwrap(),
         None => b.body(Body::empty()).unwrap(),
     }
 }

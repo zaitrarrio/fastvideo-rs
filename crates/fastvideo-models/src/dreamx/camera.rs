@@ -299,8 +299,11 @@ pub fn build_dreamx_camera_condition(
         }
     }
 
-    // DreamX-World-5B-Cam fixed normalized intrinsics.
+    // DreamX-World-5B-Cam fixed normalized intrinsics (the reference's focal
+    // length 1920 / 1.98, verbatim).
+    #[allow(clippy::excessive_precision)]
     let fx = 969.6969696969696 / (960.0 * 2.0);
+    #[allow(clippy::excessive_precision)]
     let fy = 969.6969696969696 / (540.0 * 2.0);
     let mut k_flat = Vec::with_capacity(latent_frame_count * 9);
     for _ in 0..latent_frame_count {

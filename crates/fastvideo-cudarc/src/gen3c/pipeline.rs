@@ -160,6 +160,7 @@ impl Gen3CPipeline {
     }
 
     /// First-frame VAE encode → condition mask; build 3D warp buffers from depth+trajectory.
+    #[allow(clippy::type_complexity)] // a one-off tuple; a named struct would outweigh it
     pub(crate) fn prepare_conditioning(
         &self,
         request: &Gen3CRequest,
@@ -344,6 +345,7 @@ impl Gen3CPipeline {
     }
 
     /// Pack noise + mask + 3D warp buffers into DiT input channels.
+    #[allow(clippy::too_many_arguments)]
     fn pack_step(
         &self,
         sample: &[f32],
@@ -386,6 +388,7 @@ impl Gen3CPipeline {
         Ok((lat, frame_ts))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn edm_denoise(
         &self,
         sample: &[f32],

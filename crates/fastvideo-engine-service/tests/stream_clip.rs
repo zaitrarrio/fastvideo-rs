@@ -47,7 +47,10 @@ fn tiny_wan() -> FakeModel {
     m.caps.id = ModelId::new("tiny-wan");
     m.caps.served_names = vec!["tiny-wan".into()];
     m.caps.frames = FrameGrid::new(1, 0, 4, 32, 8);
-    m.caps.stream = Some(StreamCaps::Clip { min_s: 0.25, max_s: 2.0 });
+    m.caps.stream = Some(StreamCaps::Clip {
+        min_s: 0.25,
+        max_s: 2.0,
+    });
     m
 }
 
@@ -65,7 +68,10 @@ fn fake(step_ms: u64) -> FakeConfig {
 
 async fn engine_with(backend: Box<dyn EngineBackend>) -> EngineService {
     let e = EngineService::start(EngineConfig::default(), vec![backend]).unwrap();
-    assert_eq!(tokio::time::timeout(T, e.wait_ready()).await.unwrap(), Readiness::Ready);
+    assert_eq!(
+        tokio::time::timeout(T, e.wait_ready()).await.unwrap(),
+        Readiness::Ready
+    );
     e
 }
 
@@ -74,9 +80,20 @@ async fn engine(step_ms: u64) -> EngineService {
 }
 
 fn spec(model: &str, continuity: Continuity, channels: Option<u8>) -> SessionSpec {
-    let m = if model == "tiny-wan" { tiny_wan() } else { tiny_h3() };
+    let m = if model == "tiny-wan" {
+        tiny_wan()
+    } else {
+        tiny_h3()
+    };
     let fps = m.caps.fps.default;
-    let mut tracks = TrackSet::for_model(&m.caps, (64, 32), fps, ("main_video", "main_audio"), 1, false);
+    let mut tracks = TrackSet::for_model(
+        &m.caps,
+        (64, 32),
+        fps,
+        ("main_video", "main_audio"),
+        1,
+        false,
+    );
     if let (Some(a), Some(ch)) = (tracks.audio.as_mut(), channels) {
         a.channels = ch;
     }
@@ -133,7 +150,12 @@ impl Rig {
     }
 
     fn names(&self) -> Vec<&'static str> {
-        self.events.lock().unwrap().iter().map(|e| e.type_name()).collect()
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|e| e.type_name())
+            .collect()
     }
 
     fn fasth3_names(&self) -> Vec<&'static str> {
@@ -153,7 +175,11 @@ impl Rig {
     async fn until(&self, what: &str, f: impl Fn(&Rig) -> bool) {
         let t0 = std::time::Instant::now();
         while !f(self) {
-            assert!(t0.elapsed() < T, "timed out waiting for {what}; events: {:?}", self.names());
+            assert!(
+                t0.elapsed() < T,
+                "timed out waiting for {what}; events: {:?}",
+                self.names()
+            );
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     }
@@ -199,17 +225,35 @@ fn clip_id(ev: &ClipEvent) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn scripted_log_matches_the_fasth3_message_sequence() {
-    let r = Rig::new(engine(1).await, spec("tiny-h3", Continuity::HardCut, Some(1)), ClipPlayerConfig::default()).await;
+    let r = Rig::new(
+        engine(1).await,
+        spec("tiny-h3", Continuity::HardCut, Some(1)),
+        ClipPlayerConfig::default(),
+    )
+    .await;
 
     // enqueue -> reply clip_queued; broadcasts queue_update, state_update.
     let q = r.enqueue("a").await;
-    let ClipEvent::ClipQueued { clip } = &q else { panic!() };
-    assert_eq!((clip.frames, clip.seed, clip.ready, clip.metadata.as_str()), (FRAMES, 1000, false, "tag"));
-    r.until("clip_generated", |r| r.count("clip_generated") == 1).await;
+    let ClipEvent::ClipQueued { clip } = &q else {
+        panic!()
+    };
+    assert_eq!(
+        (clip.frames, clip.seed, clip.ready, clip.metadata.as_str()),
+        (FRAMES, 1000, false, "tag")
+    );
+    r.until("clip_generated", |r| r.count("clip_generated") == 1)
+        .await;
     // play -> bodyless; queue_update, state_update, clip_started, state_update,
     // then clip_finished, state_update.
-    assert_eq!(r.cmd(ClipCommand::Play { clip_id: String::new() }).await, None);
-    r.until("clip_finished", |r| r.count("clip_finished") == 1).await;
+    assert_eq!(
+        r.cmd(ClipCommand::Play {
+            clip_id: String::new()
+        })
+        .await,
+        None
+    );
+    r.until("clip_finished", |r| r.count("clip_finished") == 1)
+        .await;
     // Nothing else starts on its own (no autoplay).
     tokio::time::sleep(Duration::from_millis(150)).await;
 
@@ -229,13 +273,20 @@ async fn scripted_log_matches_the_fasth3_message_sequence() {
             "state_update",
         ]
     );
-    assert_eq!(r.names().iter().filter(|n| **n == "build_started").count(), 1);
+    assert_eq!(
+        r.names().iter().filter(|n| **n == "build_started").count(),
+        1
+    );
 
     // The whole clip went out, in 3-frame lockstep slices.
     let slices = r.slices();
     assert_eq!(slices.iter().map(|s| s.1).sum::<usize>(), FRAMES as usize);
     for (_, n, audio) in &slices {
-        assert_eq!(audio.as_ref().unwrap().len(), n * 2000, "48 kHz mono, 2000 samples per frame");
+        assert_eq!(
+            audio.as_ref().unwrap().len(),
+            n * 2000,
+            "48 kHz mono, 2000 samples per frame"
+        );
     }
     let ev = r.events.lock().unwrap().clone();
     let started = ev.iter().find_map(|e| match e {
@@ -266,18 +317,44 @@ async fn scripted_log_matches_the_fasth3_message_sequence() {
     assert_eq!(ends, [(PlayOutcome::Finished, false)]);
     let st = r.player.state();
     assert!(!st.playing);
-    assert_eq!((st.clips_played, st.playout_queued, st.generation_queued), (1, 0, 0));
+    assert_eq!(
+        (st.clips_played, st.playout_queued, st.generation_queued),
+        (1, 0, 0)
+    );
     assert!(st.valid_commands.contains(&"set_canvas".to_string()));
     r.player.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn refusals_are_broadcast_and_replies_stay_bodyless() {
-    let r = Rig::new(engine(1).await, spec("tiny-h3", Continuity::HardCut, Some(1)), ClipPlayerConfig::default()).await;
-    assert_eq!(r.cmd(ClipCommand::Play { clip_id: String::new() }).await, None);
+    let r = Rig::new(
+        engine(1).await,
+        spec("tiny-h3", Continuity::HardCut, Some(1)),
+        ClipPlayerConfig::default(),
+    )
+    .await;
+    assert_eq!(
+        r.cmd(ClipCommand::Play {
+            clip_id: String::new()
+        })
+        .await,
+        None
+    );
     assert_eq!(r.cmd(ClipCommand::Stop).await, None);
-    assert_eq!(r.cmd(ClipCommand::Pop { clip_id: "nope".into() }).await, None);
-    assert_eq!(r.cmd(ClipCommand::Pop { clip_id: String::new() }).await, None);
+    assert_eq!(
+        r.cmd(ClipCommand::Pop {
+            clip_id: "nope".into()
+        })
+        .await,
+        None
+    );
+    assert_eq!(
+        r.cmd(ClipCommand::Pop {
+            clip_id: String::new()
+        })
+        .await,
+        None
+    );
     assert_eq!(
         r.cmd(ClipCommand::Enqueue {
             prompt: "   ".into(),
@@ -290,7 +367,8 @@ async fn refusals_are_broadcast_and_replies_stay_bodyless() {
         None
     );
     assert_eq!(r.cmd(ClipCommand::SetClipSeconds(99.0)).await, None);
-    r.until("six refusals", |r| r.count("command_error") == 6).await;
+    r.until("six refusals", |r| r.count("command_error") == 6)
+        .await;
     let errs: Vec<(String, String)> = r
         .events
         .lock()
@@ -304,21 +382,49 @@ async fn refusals_are_broadcast_and_replies_stay_bodyless() {
     assert_eq!(
         errs,
         [
-            ("play".to_string(), "The playout queue is empty; `enqueue` a clip and wait for `clip_generated`.".to_string()),
+            (
+                "play".to_string(),
+                "The playout queue is empty; `enqueue` a clip and wait for `clip_generated`."
+                    .to_string()
+            ),
             ("stop".to_string(), "No clip is playing.".to_string()),
-            ("pop".to_string(), "No queued clip has id 'nope'.".to_string()),
-            ("pop".to_string(), "Pass the `clip_id` of the queued clip to remove.".to_string()),
-            ("enqueue".to_string(), "The prompt is empty; a clip needs one.".to_string()),
-            ("set_clip_seconds".to_string(), "The clip length must be between 0.25 and 2 seconds, got 99.".to_string()),
+            (
+                "pop".to_string(),
+                "No queued clip has id 'nope'.".to_string()
+            ),
+            (
+                "pop".to_string(),
+                "Pass the `clip_id` of the queued clip to remove.".to_string()
+            ),
+            (
+                "enqueue".to_string(),
+                "The prompt is empty; a clip needs one.".to_string()
+            ),
+            (
+                "set_clip_seconds".to_string(),
+                "The clip length must be between 0.25 and 2 seconds, got 99.".to_string()
+            ),
         ]
     );
     // Reads and settings reply with their message.
-    assert!(matches!(r.cmd(ClipCommand::GetState).await, Some(ClipEvent::StateUpdate(_))));
-    assert!(matches!(r.cmd(ClipCommand::GetQueue).await, Some(ClipEvent::QueueUpdate { .. })));
-    assert_eq!(r.cmd(ClipCommand::SetSeed(7)).await, Some(ClipEvent::SeedAccepted { seed: 7 }));
+    assert!(matches!(
+        r.cmd(ClipCommand::GetState).await,
+        Some(ClipEvent::StateUpdate(_))
+    ));
+    assert!(matches!(
+        r.cmd(ClipCommand::GetQueue).await,
+        Some(ClipEvent::QueueUpdate { .. })
+    ));
+    assert_eq!(
+        r.cmd(ClipCommand::SetSeed(7)).await,
+        Some(ClipEvent::SeedAccepted { seed: 7 })
+    );
     assert_eq!(
         r.cmd(ClipCommand::SetClipSeconds(1.0)).await,
-        Some(ClipEvent::ClipLengthAccepted { clip_seconds: 1.0, frames: 24 })
+        Some(ClipEvent::ClipLengthAccepted {
+            clip_seconds: 1.0,
+            frames: 24
+        })
     );
     assert_eq!(r.player.state().seed, 7);
 }
@@ -330,7 +436,12 @@ async fn seeds_advance_and_explicit_values_apply_to_one_clip() {
         audience: false,
         ..ClipPlayerConfig::default()
     };
-    let r = Rig::new(engine(1).await, spec("tiny-h3", Continuity::HardCut, Some(1)), cfg).await;
+    let r = Rig::new(
+        engine(1).await,
+        spec("tiny-h3", Continuity::HardCut, Some(1)),
+        cfg,
+    )
+    .await;
     let a = r.enqueue("a").await;
     let b = r
         .cmd(ClipCommand::Enqueue {
@@ -350,12 +461,29 @@ async fn seeds_advance_and_explicit_values_apply_to_one_clip() {
     assert_eq!(info(&a), (1000, FRAMES));
     assert_eq!(info(&b), (5, 24));
     assert_eq!(info(&c), (1001, FRAMES));
-    let Some(ClipEvent::QueueUpdate { generation, playout }) = r.cmd(ClipCommand::GetQueue).await else { panic!() };
-    assert_eq!(generation.iter().map(|c| c.prompt.as_str()).collect::<Vec<_>>(), ["b", "a", "c"]);
+    let Some(ClipEvent::QueueUpdate {
+        generation,
+        playout,
+    }) = r.cmd(ClipCommand::GetQueue).await
+    else {
+        panic!()
+    };
+    assert_eq!(
+        generation
+            .iter()
+            .map(|c| c.prompt.as_str())
+            .collect::<Vec<_>>(),
+        ["b", "a", "c"]
+    );
     assert!(playout.is_empty());
     // move within the generation queue
-    let Some(ClipEvent::ClipMoved { queue, position, .. }) = r
-        .cmd(ClipCommand::Move { clip_id: clip_id(&c), position: 0 })
+    let Some(ClipEvent::ClipMoved {
+        queue, position, ..
+    }) = r
+        .cmd(ClipCommand::Move {
+            clip_id: clip_id(&c),
+            position: 0,
+        })
         .await
     else {
         panic!()
@@ -365,7 +493,8 @@ async fn seeds_advance_and_explicit_values_apply_to_one_clip() {
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_eq!(r.count("build_started"), 0);
     r.player.set_audience(true).await.unwrap();
-    r.until("three builds", |r| r.count("clip_generated") == 3).await;
+    r.until("three builds", |r| r.count("clip_generated") == 3)
+        .await;
     let built: Vec<String> = r
         .events
         .lock()
@@ -388,20 +517,33 @@ async fn stop_cuts_the_clip_and_keeps_the_queue() {
         clip_seconds: Some(2.0),
         ..ClipPlayerConfig::default()
     };
-    let r = Rig::new(engine(1).await, spec("tiny-h3", Continuity::HardCut, Some(2)), cfg).await;
+    let r = Rig::new(
+        engine(1).await,
+        spec("tiny-h3", Continuity::HardCut, Some(2)),
+        cfg,
+    )
+    .await;
     r.enqueue("a").await;
     r.enqueue("b").await;
-    r.until("two built", |r| r.player.state().playout_queued == 2).await;
-    r.cmd(ClipCommand::Play { clip_id: String::new() }).await;
+    r.until("two built", |r| r.player.state().playout_queued == 2)
+        .await;
+    r.cmd(ClipCommand::Play {
+        clip_id: String::new(),
+    })
+    .await;
     r.until("first slice", |r| !r.slices().is_empty()).await;
     assert_eq!(r.cmd(ClipCommand::Stop).await, None);
-    r.until("clip_stopped", |r| r.count("clip_stopped") == 1).await;
+    r.until("clip_stopped", |r| r.count("clip_stopped") == 1)
+        .await;
     assert_eq!(r.count("clip_finished"), 0);
     let sent: usize = r.slices().iter().map(|s| s.1).sum();
     assert!(sent < 48, "the cut clip went out only partially ({sent})");
     assert!(r.media.lock().unwrap().contains(&MediaItem::Clear));
     let st = r.player.state();
-    assert_eq!((st.playout_queued, st.playing, st.clips_played), (1, false, 1));
+    assert_eq!(
+        (st.playout_queued, st.playing, st.clips_played),
+        (1, false, 1)
+    );
     // Stereo slices carry 2 channels.
     for (_, n, a) in r.slices() {
         assert_eq!(a.unwrap().len(), n * 2000 * 2);
@@ -410,14 +552,20 @@ async fn stop_cuts_the_clip_and_keeps_the_queue() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn autoplay_chains_ready_clips_without_play() {
-    let r = Rig::new(engine(1).await, spec("tiny-h3", Continuity::HardCut, Some(1)), ClipPlayerConfig::default()).await;
+    let r = Rig::new(
+        engine(1).await,
+        spec("tiny-h3", Continuity::HardCut, Some(1)),
+        ClipPlayerConfig::default(),
+    )
+    .await;
     assert_eq!(
         r.cmd(ClipCommand::SetAutoplay(true)).await,
         Some(ClipEvent::AutoplayAccepted { enabled: true })
     );
     r.enqueue("a").await;
     r.enqueue("b").await;
-    r.until("two finished", |r| r.count("clip_finished") == 2).await;
+    r.until("two finished", |r| r.count("clip_finished") == 2)
+        .await;
     tokio::time::sleep(Duration::from_millis(150)).await;
     let started: Vec<String> = r
         .events
@@ -430,7 +578,10 @@ async fn autoplay_chains_ready_clips_without_play() {
         })
         .collect();
     assert_eq!(started, ["a", "b"]);
-    assert_eq!(r.slices().iter().map(|s| s.1).sum::<usize>(), 2 * FRAMES as usize);
+    assert_eq!(
+        r.slices().iter().map(|s| s.1).sum::<usize>(),
+        2 * FRAMES as usize
+    );
     assert_eq!(r.count("clip_started"), 2);
 }
 
@@ -440,17 +591,35 @@ async fn the_playout_reservation_pauses_builds() {
         playout_capacity: 1,
         ..ClipPlayerConfig::default()
     };
-    let r = Rig::new(engine(1).await, spec("tiny-h3", Continuity::HardCut, None), cfg).await;
+    let r = Rig::new(
+        engine(1).await,
+        spec("tiny-h3", Continuity::HardCut, None),
+        cfg,
+    )
+    .await;
     for p in ["a", "b", "c"] {
         r.enqueue(p).await;
     }
-    r.until("one built", |r| r.count("clip_generated") == 1).await;
+    r.until("one built", |r| r.count("clip_generated") == 1)
+        .await;
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(r.count("build_started"), 1, "no build while the playout queue is full");
-    assert!(r.player.state().valid_commands.contains(&"play".to_string()));
+    assert_eq!(
+        r.count("build_started"),
+        1,
+        "no build while the playout queue is full"
+    );
+    assert!(r
+        .player
+        .state()
+        .valid_commands
+        .contains(&"play".to_string()));
     // Playing frees the slot; the next build starts while the clip plays.
-    r.cmd(ClipCommand::Play { clip_id: String::new() }).await;
-    r.until("second built", |r| r.count("clip_generated") == 2).await;
+    r.cmd(ClipCommand::Play {
+        clip_id: String::new(),
+    })
+    .await;
+    r.until("second built", |r| r.count("clip_generated") == 2)
+        .await;
     // Video-only session: slices carry no audio.
     r.until("finished", |r| r.count("clip_finished") == 1).await;
     assert!(r.slices().iter().all(|s| s.2.is_none()));
@@ -459,10 +628,20 @@ async fn the_playout_reservation_pauses_builds() {
 #[tokio::test(flavor = "multi_thread")]
 async fn pop_cancels_the_build_in_flight_and_discards_it() {
     // 4 steps x 150 ms: the pop lands mid-build.
-    let r = Rig::new(engine(150).await, spec("tiny-h3", Continuity::HardCut, Some(1)), ClipPlayerConfig::default()).await;
+    let r = Rig::new(
+        engine(150).await,
+        spec("tiny-h3", Continuity::HardCut, Some(1)),
+        ClipPlayerConfig::default(),
+    )
+    .await;
     let a = r.enqueue("a").await;
-    r.until("build_started", |r| r.count("build_started") == 1).await;
-    let popped = r.cmd(ClipCommand::Pop { clip_id: clip_id(&a) }).await;
+    r.until("build_started", |r| r.count("build_started") == 1)
+        .await;
+    let popped = r
+        .cmd(ClipCommand::Pop {
+            clip_id: clip_id(&a),
+        })
+        .await;
     assert!(matches!(popped, Some(ClipEvent::ClipPopped { .. })));
     r.enqueue("b").await;
     r.until("b built", |r| r.count("clip_generated") == 1).await;
@@ -482,7 +661,12 @@ async fn pop_cancels_the_build_in_flight_and_discards_it() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_failing_build_reports_and_the_queue_moves_on() {
-    let r = Rig::new(engine(1).await, spec("tiny-h3", Continuity::HardCut, Some(1)), ClipPlayerConfig::default()).await;
+    let r = Rig::new(
+        engine(1).await,
+        spec("tiny-h3", Continuity::HardCut, Some(1)),
+        ClipPlayerConfig::default(),
+    )
+    .await;
     r.enqueue("a [fake:fail]").await;
     r.enqueue("b").await;
     r.until("b built", |r| r.count("clip_generated") == 1).await;
@@ -498,8 +682,16 @@ async fn a_failing_build_reports_and_the_queue_moves_on() {
         .unwrap();
     assert_eq!(failed.0, "a [fake:fail]");
     assert!(failed.1.contains("injected failure"), "{}", failed.1);
-    let Some(ClipEvent::QueueUpdate { playout, .. }) = r.cmd(ClipCommand::GetQueue).await else { panic!() };
-    assert_eq!(playout.iter().map(|c| c.prompt.as_str()).collect::<Vec<_>>(), ["b"]);
+    let Some(ClipEvent::QueueUpdate { playout, .. }) = r.cmd(ClipCommand::GetQueue).await else {
+        panic!()
+    };
+    assert_eq!(
+        playout
+            .iter()
+            .map(|c| c.prompt.as_str())
+            .collect::<Vec<_>>(),
+        ["b"]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -508,10 +700,16 @@ async fn reset_cuts_playout_drops_queues_and_restores_defaults() {
         clip_seconds: Some(2.0),
         ..ClipPlayerConfig::default()
     };
-    let r = Rig::new(engine(1).await, spec("tiny-h3", Continuity::HardCut, Some(1)), cfg).await;
+    let r = Rig::new(
+        engine(1).await,
+        spec("tiny-h3", Continuity::HardCut, Some(1)),
+        cfg,
+    )
+    .await;
     r.enqueue("a").await;
     r.enqueue("b").await;
-    r.until("two built", |r| r.player.state().playout_queued == 2).await;
+    r.until("two built", |r| r.player.state().playout_queued == 2)
+        .await;
     r.cmd(ClipCommand::SetSeed(42)).await;
     r.cmd(ClipCommand::SetAutoplay(true)).await;
     r.until("playing", |r| !r.slices().is_empty()).await;
@@ -524,15 +722,23 @@ async fn reset_cuts_playout_drops_queues_and_restores_defaults() {
             was_playing: true
         })
     );
-    r.until("clip_stopped", |r| r.count("clip_stopped") == 1).await;
+    r.until("clip_stopped", |r| r.count("clip_stopped") == 1)
+        .await;
     // The watch state is published at the top of the player's next loop
     // iteration, after `clip_stopped` went out: wait for it rather than read
     // a snapshot that may still be the one from before the reset (seen on
     // a loaded 4-vCPU CI runner).
-    r.until("the reset state", |r| !r.player.state().playing).await;
+    r.until("the reset state", |r| !r.player.state().playing)
+        .await;
     let st = r.player.state();
     assert_eq!(
-        (st.playing, st.generation_queued, st.playout_queued, st.seed, st.autoplay),
+        (
+            st.playing,
+            st.generation_queued,
+            st.playout_queued,
+            st.seed,
+            st.autoplay
+        ),
         (false, 0, 0, 1000, false)
     );
     assert_eq!(st.clip_seconds, 2.0);
@@ -544,7 +750,12 @@ async fn the_canvas_is_locked_while_clips_exist() {
         audience: false,
         ..ClipPlayerConfig::default()
     };
-    let r = Rig::new(engine(1).await, spec("tiny-h3", Continuity::HardCut, Some(1)), cfg).await;
+    let r = Rig::new(
+        engine(1).await,
+        spec("tiny-h3", Continuity::HardCut, Some(1)),
+        cfg,
+    )
+    .await;
     assert_eq!(r.player.state().aspect, "2:1");
     let want = canvas_for_aspect(&tiny_h3().caps.canvas, 1.0, 32);
     assert_eq!(
@@ -557,7 +768,8 @@ async fn the_canvas_is_locked_while_clips_exist() {
     );
     r.enqueue("a").await;
     assert_eq!(r.cmd(ClipCommand::SetCanvas("16:9".into())).await, None);
-    r.until("command_error", |r| r.count("command_error") == 1).await;
+    r.until("command_error", |r| r.count("command_error") == 1)
+        .await;
     assert_eq!(r.player.state().aspect, "1:1");
 }
 
@@ -580,7 +792,12 @@ impl EngineBackend for Recording {
     fn load(&mut self, m: &ModelId, obs: &mut dyn FnMut(LoadEvent)) -> Result<(), ApiError> {
         self.inner.load(m, obs)
     }
-    fn generate(&mut self, job: &ResolvedJob, out: &mut dyn ClipSink, ctl: &StepControl) -> Result<ClipOutput, ApiError> {
+    fn generate(
+        &mut self,
+        job: &ResolvedJob,
+        out: &mut dyn ClipSink,
+        ctl: &StepControl,
+    ) -> Result<ClipOutput, ApiError> {
         // The anchor must exist when the build reads it.
         for (_, p) in &job.keyframes {
             assert!(p.is_file(), "keyframe {} missing", p.display());
@@ -591,7 +808,13 @@ impl EngineBackend for Recording {
     fn causal_open(&mut self, s: SessionId, spec: &CausalSpec) -> Result<(), ApiError> {
         self.inner.causal_open(s, spec)
     }
-    fn causal_block(&mut self, s: SessionId, i: &BlockInput, out: &mut dyn ClipSink, ctl: &StepControl) -> Result<BlockStats, ApiError> {
+    fn causal_block(
+        &mut self,
+        s: SessionId,
+        i: &BlockInput,
+        out: &mut dyn ClipSink,
+        ctl: &StepControl,
+    ) -> Result<BlockStats, ApiError> {
         self.inner.causal_block(s, i, out, ctl)
     }
     fn causal_close(&mut self, s: SessionId) {
@@ -613,14 +836,27 @@ async fn anchor_last_frame_builds_from_the_previous_last_frame() {
         autoplay: true,
         ..ClipPlayerConfig::default()
     };
-    let r = Rig::new(e, spec("tiny-h3", Continuity::AnchorLastFrame { crossfade_ms: 20 }, Some(1)), cfg).await;
+    let r = Rig::new(
+        e,
+        spec(
+            "tiny-h3",
+            Continuity::AnchorLastFrame { crossfade_ms: 20 },
+            Some(1),
+        ),
+        cfg,
+    )
+    .await;
     r.enqueue("a").await;
     r.enqueue("b").await;
     r.enqueue("c").await;
-    r.until("three built", |r| r.count("clip_generated") == 3).await;
+    r.until("three built", |r| r.count("clip_generated") == 3)
+        .await;
     let jobs = jobs.lock().unwrap().clone();
     assert_eq!(jobs.len(), 3);
-    assert!(jobs[0].keyframes.is_empty(), "the first clip has nothing to anchor on");
+    assert!(
+        jobs[0].keyframes.is_empty(),
+        "the first clip has nothing to anchor on"
+    );
     for j in &jobs[1..] {
         assert_eq!(j.keyframes.len(), 1);
         assert_eq!(j.keyframes[0].0, Anchor::First);
@@ -643,7 +879,11 @@ async fn anchor_last_frame_builds_from_the_previous_last_frame() {
 async fn anchor_needs_an_image_to_video_model() {
     let e = engine(1).await;
     let s = e
-        .open_clip_session(spec("tiny-wan", Continuity::AnchorLastFrame { crossfade_ms: 20 }, None))
+        .open_clip_session(spec(
+            "tiny-wan",
+            Continuity::AnchorLastFrame { crossfade_ms: 20 },
+            None,
+        ))
         .await
         .unwrap();
     let err = s.into_player(ClipPlayerConfig::default()).unwrap_err();
@@ -653,18 +893,27 @@ async fn anchor_needs_an_image_to_video_model() {
 /// First 20 ms of each clip's audio (the fake puts a full-scale click at
 /// every clip start).
 async fn clip_heads(continuity: Continuity) -> Vec<f32> {
-    let r = Rig::new(engine(1).await, spec("tiny-h3", continuity, Some(1)), ClipPlayerConfig {
-        autoplay: true,
-        ..ClipPlayerConfig::default()
-    })
+    let r = Rig::new(
+        engine(1).await,
+        spec("tiny-h3", continuity, Some(1)),
+        ClipPlayerConfig {
+            autoplay: true,
+            ..ClipPlayerConfig::default()
+        },
+    )
     .await;
     r.enqueue("a").await;
     r.enqueue("b").await;
-    r.until("two finished", |r| r.count("clip_finished") == 2).await;
+    r.until("two finished", |r| r.count("clip_finished") == 2)
+        .await;
     r.slices()
         .iter()
         .filter(|s| s.0 == 0)
-        .map(|s| s.2.as_ref().unwrap()[..960].iter().fold(0f32, |m, x| m.max(x.abs())))
+        .map(|s| {
+            s.2.as_ref().unwrap()[..960]
+                .iter()
+                .fold(0f32, |m, x| m.max(x.abs()))
+        })
         .collect()
 }
 
@@ -709,11 +958,19 @@ async fn the_clip_pacer_ticks_one_frame_and_48000_over_fps_samples() {
     while player.state().playout_queued == 0 {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    player.command(ClipCommand::Play { clip_id: String::new() }).await.unwrap();
+    player
+        .command(ClipCommand::Play {
+            clip_id: String::new(),
+        })
+        .await
+        .unwrap();
     let mut fresh = 0;
     let mut black_after = false;
     for i in 0..(FRAMES as u64 + 12) {
-        let t = tokio::time::timeout(T, paced.ticks.recv()).await.unwrap().unwrap();
+        let t = tokio::time::timeout(T, paced.ticks.recv())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(t.index, i);
         assert_eq!(t.video_rtp as u64, i * 90_000 / 24);
         assert_eq!(t.audio.as_ref().unwrap().len(), 2000 * 2);
@@ -728,7 +985,10 @@ async fn the_clip_pacer_ticks_one_frame_and_48000_over_fps_samples() {
         }
     }
     assert_eq!(fresh, FRAMES);
-    assert!(black_after, "IdlePolicy::Black flushes to black after the clip");
+    assert!(
+        black_after,
+        "IdlePolicy::Black flushes to black after the clip"
+    );
     assert!(*paced.first_frame.borrow());
     let st = paced.stats.borrow().clone();
     assert_eq!(st.fresh_frames, FRAMES as u64);
@@ -738,14 +998,22 @@ async fn the_clip_pacer_ticks_one_frame_and_48000_over_fps_samples() {
 #[tokio::test(flavor = "multi_thread")]
 async fn admission_one_session_per_executor_and_resident_models_only() {
     let e = engine(1).await;
-    let s = e.open_clip_session(spec("tiny-h3", Continuity::HardCut, Some(1))).await.unwrap();
-    let busy = e.open_clip_session(spec("tiny-h3", Continuity::HardCut, Some(1))).await.unwrap_err();
+    let s = e
+        .open_clip_session(spec("tiny-h3", Continuity::HardCut, Some(1)))
+        .await
+        .unwrap();
+    let busy = e
+        .open_clip_session(spec("tiny-h3", Continuity::HardCut, Some(1)))
+        .await
+        .unwrap_err();
     assert_eq!(busy.kind, ErrorKind::Conflict, "{busy:?}");
     assert_eq!(busy.retry_after_s, Some(5));
     let (player, _out) = s.into_player(ClipPlayerConfig::default()).unwrap();
     player.close().await;
     // Closing the player frees the executor.
-    let again = e.open_clip_session(spec("tiny-h3", Continuity::HardCut, Some(1))).await;
+    let again = e
+        .open_clip_session(spec("tiny-h3", Continuity::HardCut, Some(1)))
+        .await;
     assert!(again.is_ok());
     drop(again);
 
@@ -757,8 +1025,15 @@ async fn admission_one_session_per_executor_and_resident_models_only() {
         },
         ..fake(1)
     };
-    let e2 = EngineService::start(EngineConfig::default(), vec![Box::new(FakeBackend::new(slow))]).unwrap();
-    let err = e2.open_clip_session(spec("tiny-h3", Continuity::HardCut, Some(1))).await.unwrap_err();
+    let e2 = EngineService::start(
+        EngineConfig::default(),
+        vec![Box::new(FakeBackend::new(slow))],
+    )
+    .unwrap();
+    let err = e2
+        .open_clip_session(spec("tiny-h3", Continuity::HardCut, Some(1)))
+        .await
+        .unwrap_err();
     assert_eq!(err.kind, ErrorKind::Loading);
     assert_eq!(err.retry_after_s, Some(1));
 }
@@ -767,12 +1042,22 @@ impl Rig {
     /// One scripted step of the fast-h3 command table: sends `c`, checks the
     /// correlated reply's message type (`None` = bodyless ack) and that the
     /// fast-h3 broadcasts it caused are exactly `broadcasts`, in order.
-    async fn step(&self, c: ClipCommand, reply: Option<&str>, broadcasts: &[&str]) -> Option<ClipEvent> {
+    async fn step(
+        &self,
+        c: ClipCommand,
+        reply: Option<&str>,
+        broadcasts: &[&str],
+    ) -> Option<ClipEvent> {
         let what = c.name();
         let n0 = self.fasth3_names().len();
         let got = self.cmd(c).await;
-        assert_eq!(got.as_ref().map(ClipEvent::type_name), reply, "{what} reply");
-        self.until(what, |r| r.fasth3_names().len() >= n0 + broadcasts.len()).await;
+        assert_eq!(
+            got.as_ref().map(ClipEvent::type_name),
+            reply,
+            "{what} reply"
+        );
+        self.until(what, |r| r.fasth3_names().len() >= n0 + broadcasts.len())
+            .await;
         // Nothing further trails the command.
         tokio::time::sleep(Duration::from_millis(60)).await;
         assert_eq!(&self.fasth3_names()[n0..], broadcasts, "{what} broadcasts");
@@ -789,7 +1074,12 @@ async fn scripted_command_table_matches_fasth3_broadcasts() {
         clip_seconds: Some(2.0),
         ..ClipPlayerConfig::default()
     };
-    let r = Rig::new(engine(1).await, spec("tiny-h3", Continuity::HardCut, Some(1)), cfg).await;
+    let r = Rig::new(
+        engine(1).await,
+        spec("tiny-h3", Continuity::HardCut, Some(1)),
+        cfg,
+    )
+    .await;
     let enq = |p: &str| ClipCommand::Enqueue {
         prompt: p.into(),
         metadata: "m".into(),
@@ -801,38 +1091,102 @@ async fn scripted_command_table_matches_fasth3_broadcasts() {
     let a = r.step(enq("a"), Some("clip_queued"), &qs).await.unwrap();
     let b = r.step(enq("b"), Some("clip_queued"), &qs).await.unwrap();
     let moved = r
-        .step(ClipCommand::Move { clip_id: clip_id(&b), position: 0 }, Some("clip_moved"), &["queue_update"])
+        .step(
+            ClipCommand::Move {
+                clip_id: clip_id(&b),
+                position: 0,
+            },
+            Some("clip_moved"),
+            &["queue_update"],
+        )
         .await;
-    let Some(ClipEvent::ClipMoved { queue, position, .. }) = moved else { panic!() };
+    let Some(ClipEvent::ClipMoved {
+        queue, position, ..
+    }) = moved
+    else {
+        panic!()
+    };
     assert_eq!((queue, position), (QueueName::Generation, 0));
-    let popped = r.step(ClipCommand::Pop { clip_id: clip_id(&a) }, Some("clip_popped"), &qs).await;
-    let Some(ClipEvent::ClipPopped { clip }) = popped else { panic!() };
+    let popped = r
+        .step(
+            ClipCommand::Pop {
+                clip_id: clip_id(&a),
+            },
+            Some("clip_popped"),
+            &qs,
+        )
+        .await;
+    let Some(ClipEvent::ClipPopped { clip }) = popped else {
+        panic!()
+    };
     assert_eq!(clip.prompt, "a");
-    r.step(ClipCommand::SetClipSeconds(1.0), Some("clip_length_accepted"), &["state_update"]).await;
-    r.step(ClipCommand::SetSeed(3), Some("seed_accepted"), &["state_update"]).await;
-    r.step(ClipCommand::SetAutoplay(false), Some("autoplay_accepted"), &["state_update"]).await;
-    r.step(ClipCommand::GetQueue, Some("queue_update"), &[]).await;
-    r.step(ClipCommand::GetState, Some("state_update"), &[]).await;
+    r.step(
+        ClipCommand::SetClipSeconds(1.0),
+        Some("clip_length_accepted"),
+        &["state_update"],
+    )
+    .await;
+    r.step(
+        ClipCommand::SetSeed(3),
+        Some("seed_accepted"),
+        &["state_update"],
+    )
+    .await;
+    r.step(
+        ClipCommand::SetAutoplay(false),
+        Some("autoplay_accepted"),
+        &["state_update"],
+    )
+    .await;
+    r.step(ClipCommand::GetQueue, Some("queue_update"), &[])
+        .await;
+    r.step(ClipCommand::GetState, Some("state_update"), &[])
+        .await;
     // Refusals: bodyless, one `command_error` broadcast.
-    r.step(ClipCommand::Play { clip_id: String::new() }, None, &["command_error"]).await;
-    r.step(ClipCommand::SetCanvas("1:1".into()), None, &["command_error"]).await;
+    r.step(
+        ClipCommand::Play {
+            clip_id: String::new(),
+        },
+        None,
+        &["command_error"],
+    )
+    .await;
+    r.step(
+        ClipCommand::SetCanvas("1:1".into()),
+        None,
+        &["command_error"],
+    )
+    .await;
 
     // An audience arrives: `b` builds (clip_generated, queue_update, state_update).
     let n0 = r.fasth3_names().len();
     r.player.set_audience(true).await.unwrap();
-    r.until("clip_generated", |r| r.count("clip_generated") == 1).await;
-    r.until("post-build updates", |r| r.fasth3_names().len() >= n0 + 3).await;
-    assert_eq!(&r.fasth3_names()[n0..], ["clip_generated", "queue_update", "state_update"]);
+    r.until("clip_generated", |r| r.count("clip_generated") == 1)
+        .await;
+    r.until("post-build updates", |r| r.fasth3_names().len() >= n0 + 3)
+        .await;
+    assert_eq!(
+        &r.fasth3_names()[n0..],
+        ["clip_generated", "queue_update", "state_update"]
+    );
 
     // play: bodyless; queue_update, state_update, clip_started, state_update.
     r.step(
-        ClipCommand::Play { clip_id: clip_id(&b) },
+        ClipCommand::Play {
+            clip_id: clip_id(&b),
+        },
         None,
-        &["queue_update", "state_update", "clip_started", "state_update"],
+        &[
+            "queue_update",
+            "state_update",
+            "clip_started",
+            "state_update",
+        ],
     )
     .await;
     // stop: bodyless; clip_stopped, state_update.
-    r.step(ClipCommand::Stop, None, &["clip_stopped", "state_update"]).await;
+    r.step(ClipCommand::Stop, None, &["clip_stopped", "state_update"])
+        .await;
     r.step(ClipCommand::Stop, None, &["command_error"]).await;
     let reset = r.step(ClipCommand::Reset, Some("session_reset"), &qs).await;
     assert_eq!(

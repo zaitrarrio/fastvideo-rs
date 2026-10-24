@@ -55,13 +55,24 @@ pub struct Families {
 
 impl Families {
     pub fn new(cfg: &FrontCfg, local: Vec<String>) -> Arc<Self> {
-        let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(5)).build().unwrap_or_default();
-        Arc::new(Self { http, do_url: cfg.do_url.clone(), token: cfg.token.clone(), dispatch: cfg.dispatch.clone(), local, cache: Mutex::default() })
+        let http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .build()
+            .unwrap_or_default();
+        Arc::new(Self {
+            http,
+            do_url: cfg.do_url.clone(),
+            token: cfg.token.clone(),
+            dispatch: cfg.dispatch.clone(),
+            local,
+            cache: Mutex::default(),
+        })
     }
 
     /// The family of `model` (an id, or any name the fronts announce).
     pub async fn of(&self, model: &str) -> Option<String> {
-        if self.local.iter().any(|m| m == model) || self.dispatch.model_families.contains_key(model) {
+        if self.local.iter().any(|m| m == model) || self.dispatch.model_families.contains_key(model)
+        {
             return self.dispatch.family_of(model).map(str::to_owned);
         }
         {
@@ -73,13 +84,21 @@ impl Families {
                 return None;
             }
         }
-        let r = self.http.get(format!("{}/registry", self.do_url)).header(TOKEN_HEADER, &self.token).timeout(Duration::from_secs(10)).send().await.ok()?;
+        let r = self
+            .http
+            .get(format!("{}/registry", self.do_url))
+            .header(TOKEN_HEADER, &self.token)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .ok()?;
         let reg: fastvideo_dispatch_proto::front::Registry = r.json().await.ok()?;
         let mut map = BTreeMap::new();
         for x in reg.fronts() {
             for (name, id) in &x.info.names {
                 map.entry(id.clone()).or_insert_with(|| x.family.to_owned());
-                map.entry(name.clone()).or_insert_with(|| x.family.to_owned());
+                map.entry(name.clone())
+                    .or_insert_with(|| x.family.to_owned());
             }
         }
         let f = map.get(model).cloned();
@@ -122,7 +141,9 @@ pub struct FrontGate {
 
 impl std::fmt::Debug for FrontGate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FrontGate").field("do_url", &self.cfg.do_url).finish_non_exhaustive()
+        f.debug_struct("FrontGate")
+            .field("do_url", &self.cfg.do_url)
+            .finish_non_exhaustive()
     }
 }
 
@@ -133,10 +154,20 @@ impl FrontGate {
     }
 
     pub fn new(local: Arc<ServiceGate>, cfg: FrontCfg) -> Arc<Self> {
-        let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(5)).build().unwrap_or_default();
+        let http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .build()
+            .unwrap_or_default();
         let own: Vec<String> = local.models().iter().map(|m| m.id.to_string()).collect();
         let families = Families::new(&cfg, own);
-        Arc::new_cyclic(|me| Self { local, cfg, http, ctx: OnceLock::new(), me: me.clone(), families })
+        Arc::new_cyclic(|me| Self {
+            local,
+            cfg,
+            http,
+            ctx: OnceLock::new(),
+            me: me.clone(),
+            families,
+        })
     }
 
     pub fn attach(&self, ctx: ServeCtx) {
@@ -144,7 +175,9 @@ impl FrontGate {
     }
 
     fn ctx(&self) -> Result<&ServeCtx, ApiError> {
-        self.ctx.get().ok_or_else(|| ApiError::internal("the front is not attached"))
+        self.ctx
+            .get()
+            .ok_or_else(|| ApiError::internal("the front is not attached"))
     }
 
     fn scope_of(&self, model: &str) -> Result<Scope, ApiError> {
@@ -156,33 +189,57 @@ impl FrontGate {
     }
 
     fn req(&self, m: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
-        self.http.request(m, format!("{}{path}", self.cfg.do_url)).header(TOKEN_HEADER, &self.cfg.token)
+        self.http
+            .request(m, format!("{}{path}", self.cfg.do_url))
+            .header(TOKEN_HEADER, &self.cfg.token)
     }
 
-    async fn enqueue(&self, scope: &Scope, body: &EnqueueReq, trace: Option<fastvideo_trace::Trace>) -> Result<EnqueueResp, ApiError> {
+    async fn enqueue(
+        &self,
+        scope: &Scope,
+        body: &EnqueueReq,
+        trace: Option<fastvideo_trace::Trace>,
+    ) -> Result<EnqueueResp, ApiError> {
         let mut rb = self.req(reqwest::Method::POST, &scope.enqueue_path());
         if let Some(t) = trace {
-            rb = rb.header(fastvideo_trace::TRACEPARENT, t.traceparent(fastvideo_trace::new_span_id()));
+            rb = rb.header(
+                fastvideo_trace::TRACEPARENT,
+                t.traceparent(fastvideo_trace::new_span_id()),
+            );
         }
         let r = rb
             .timeout(Duration::from_secs(30))
             .json(body)
             .send()
             .await
-            .map_err(|e| ApiError::loading(format!("the dispatcher is unreachable: {}", e.without_url())).with_retry_after(5))?;
+            .map_err(|e| {
+                ApiError::loading(format!(
+                    "the dispatcher is unreachable: {}",
+                    e.without_url()
+                ))
+                .with_retry_after(5)
+            })?;
         let status = r.status();
         if !status.is_success() {
             let text = r.text().await.unwrap_or_default();
             tracing::warn!(job = %body.job_id, %status, body = %text.chars().take(300).collect::<String>(), "front: enqueue refused");
             return Err(match status.as_u16() {
-                429 => ApiError::queue_full("the queue for this model is full").with_retry_after(10),
+                429 => {
+                    ApiError::queue_full("the queue for this model is full").with_retry_after(10)
+                }
                 400 => ApiError::invalid("the dispatcher refused the job"),
                 _ => ApiError::loading("the dispatcher could not take the job").with_retry_after(5),
             });
         }
-        let resp: EnqueueResp = r.json().await.map_err(|e| ApiError::internal(format!("the dispatcher's answer: {}", e.without_url())))?;
+        let resp: EnqueueResp = r.json().await.map_err(|e| {
+            ApiError::internal(format!("the dispatcher's answer: {}", e.without_url()))
+        })?;
         if resp.state == "refused" {
-            return Err(ApiError::queue_full(format!("{} jobs of this model are queued (max {})", resp.position, body.max_queued)).with_retry_after(10));
+            return Err(ApiError::queue_full(format!(
+                "{} jobs of this model are queued (max {})",
+                resp.position, body.max_queued
+            ))
+            .with_retry_after(10));
         }
         Ok(resp)
     }
@@ -200,12 +257,18 @@ impl FrontGate {
             }
         };
         let env = Envelope { inputs, ..env };
-        let Ok(v) = serde_json::to_value(&env) else { return };
+        let Ok(v) = serde_json::to_value(&env) else {
+            return;
+        };
         req.envelope = v;
         req.replace = true;
         match self.enqueue(&scope, &req, None).await {
-            Ok(_) => tracing::debug!(job = %env.job.id, ms = t0.elapsed().as_millis() as u64, "front: envelope with stored inputs on the dispatcher"),
-            Err(e) => tracing::warn!(job = %env.job.id, error = %e.message, "front: replacing the envelope failed"),
+            Ok(_) => {
+                tracing::debug!(job = %env.job.id, ms = t0.elapsed().as_millis() as u64, "front: envelope with stored inputs on the dispatcher")
+            }
+            Err(e) => {
+                tracing::warn!(job = %env.job.id, error = %e.message, "front: replacing the envelope failed")
+            }
         }
     }
 }
@@ -238,19 +301,37 @@ impl EngineGate for FrontGate {
         let model = job.resolved.model.to_string();
         let scope = self.scope_of(&model)?;
         let d = &self.cfg.dispatch;
-        let inputs = envelope::plan_inputs(ctx, job, d.inline_inputs_max_bytes, d.input_passthrough, self.cfg.input_url_ttl).await?;
+        let inputs = envelope::plan_inputs(
+            ctx,
+            job,
+            d.inline_inputs_max_bytes,
+            d.input_passthrough,
+            self.cfg.input_url_ttl,
+        )
+        .await?;
         let stage_s = t0.elapsed().as_secs_f64();
         if let (Some(t), Some(s)) = (trace, t_stage) {
-            t.span_since(fastvideo_trace::Comp::Front, "stage_inputs", s, inputs.len() as i64);
+            t.span_since(
+                fastvideo_trace::Comp::Front,
+                "stage_inputs",
+                s,
+                inputs.len() as i64,
+            );
         }
         let mut sent = job.clone();
         if sent.trace.is_none() {
             sent.trace = trace.map(|t| t.traceparent(t.parent));
         }
-        let env = Envelope { job: sent, inputs, attempt: 1, pool: Some(scope.id().to_owned()) };
+        let env = Envelope {
+            job: sent,
+            inputs,
+            attempt: 1,
+            pool: Some(scope.id().to_owned()),
+        };
         let body = EnqueueReq {
             job_id: job.id.to_string(),
-            envelope: serde_json::to_value(&env).map_err(|e| ApiError::internal(format!("encoding the envelope: {e}")))?,
+            envelope: serde_json::to_value(&env)
+                .map_err(|e| ApiError::internal(format!("encoding the envelope: {e}")))?,
             retries: d.retries,
             model: Some(model),
             replace: false,
@@ -262,7 +343,12 @@ impl EngineGate for FrontGate {
         let resp = self.enqueue(&scope, &body, trace).await;
         if let (Some(t), Some(s)) = (trace, t_enq) {
             // The hop to the family object (edge DO) and back.
-            t.span_since(fastvideo_trace::Comp::Front, "do_enqueue", s, i64::from(resp.is_ok()));
+            t.span_since(
+                fastvideo_trace::Comp::Front,
+                "do_enqueue",
+                s,
+                i64::from(resp.is_ok()),
+            );
         }
         let resp = resp?;
         let enqueue_s = t1.elapsed().as_secs_f64();
@@ -288,9 +374,23 @@ impl EngineGate for FrontGate {
             return true;
         }
         let Ok(ctx) = self.ctx() else { return false };
-        let Some(job) = ctx.jobs().get(id).await else { return false };
-        let Some(scope) = self.families.of(job.resolved.model.as_str()).await.map(Scope::Family) else { return false };
-        match self.req(reqwest::Method::POST, &scope.cancel_path(&id.to_string())).timeout(Duration::from_secs(10)).send().await {
+        let Some(job) = ctx.jobs().get(id).await else {
+            return false;
+        };
+        let Some(scope) = self
+            .families
+            .of(job.resolved.model.as_str())
+            .await
+            .map(Scope::Family)
+        else {
+            return false;
+        };
+        match self
+            .req(reqwest::Method::POST, &scope.cancel_path(&id.to_string()))
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+        {
             Ok(r) if r.status().is_success() => true,
             Ok(r) => {
                 tracing::info!(job = %id, status = %r.status(), "front: the dispatcher does not know the job");
@@ -317,8 +417,17 @@ pub struct DoWaiter {
 
 impl DoWaiter {
     pub fn new(cfg: &FrontCfg, families: Arc<Families>) -> Arc<Self> {
-        let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(5)).build().unwrap_or_default();
-        Arc::new(Self { http, do_url: cfg.do_url.clone(), token: cfg.token.clone(), families, seen: Mutex::default() })
+        let http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .build()
+            .unwrap_or_default();
+        Arc::new(Self {
+            http,
+            do_url: cfg.do_url.clone(),
+            token: cfg.token.clone(),
+            families,
+            seen: Mutex::default(),
+        })
     }
 }
 
@@ -328,15 +437,34 @@ impl store::JobWaiter for DoWaiter {
         let Some(f) = self.families.of(job.resolved.model.as_str()).await else {
             return std::future::pending().await;
         };
-        let since = self.seen.lock().unwrap_or_else(|p| p.into_inner()).get(&job.id).cloned().unwrap_or_default();
-        let url = format!("{}{}?since={since}&wait_ms=25000", self.do_url, Scope::Family(f).job_wait_path(&job.id.to_string()));
-        let r = self.http.get(url).header(TOKEN_HEADER, &self.token).timeout(Duration::from_secs(35)).send().await;
+        let since = self
+            .seen
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&job.id)
+            .cloned()
+            .unwrap_or_default();
+        let url = format!(
+            "{}{}?since={since}&wait_ms=25000",
+            self.do_url,
+            Scope::Family(f).job_wait_path(&job.id.to_string())
+        );
+        let r = self
+            .http
+            .get(url)
+            .header(TOKEN_HEADER, &self.token)
+            .timeout(Duration::from_secs(35))
+            .send()
+            .await;
         match r {
             Ok(r) if r.status().is_success() => {
                 if let Ok(w) = r.json::<JobWait>().await {
                     let unknown = {
                         let mut g = self.seen.lock().unwrap_or_else(|p| p.into_inner());
-                        if matches!(w.phase.as_str(), "succeeded" | "failed" | "cancelled" | "unknown") {
+                        if matches!(
+                            w.phase.as_str(),
+                            "succeeded" | "failed" | "cancelled" | "unknown"
+                        ) {
                             g.remove(&job.id);
                         } else {
                             g.insert(job.id, w.phase.clone());
@@ -366,14 +494,26 @@ pub struct EdgeUploads {
 
 impl EdgeUploads {
     pub fn new(cfg: &FrontCfg) -> Arc<Self> {
-        let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(5)).build().unwrap_or_default();
-        Arc::new(Self { http, do_url: cfg.do_url.clone(), token: cfg.token.clone() })
+        let http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .build()
+            .unwrap_or_default();
+        Arc::new(Self {
+            http,
+            do_url: cfg.do_url.clone(),
+            token: cfg.token.clone(),
+        })
     }
 }
 
 #[async_trait::async_trait]
 impl fastvideo_serve_kit::RemoteUploads for EdgeUploads {
-    async fn fetch(&self, token: &str, dst: &std::path::Path, max_bytes: u64) -> Result<(u64, Option<String>), String> {
+    async fn fetch(
+        &self,
+        token: &str,
+        dst: &std::path::Path,
+        max_bytes: u64,
+    ) -> Result<(u64, Option<String>), String> {
         use futures::StreamExt;
         use tokio::io::AsyncWriteExt;
         if fastvideo_dispatch_proto::front::token_tag(token).is_none() {
@@ -390,8 +530,14 @@ impl fastvideo_serve_kit::RemoteUploads for EdgeUploads {
         if !r.status().is_success() {
             return Err(format!("the edge answered {}", r.status()));
         }
-        let mime = r.headers().get("content-type").and_then(|v| v.to_str().ok()).map(str::to_owned);
-        let mut f = tokio::fs::File::create(dst).await.map_err(|e| e.to_string())?;
+        let mime = r
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let mut f = tokio::fs::File::create(dst)
+            .await
+            .map_err(|e| e.to_string())?;
         let mut n = 0u64;
         let mut body = r.bytes_stream();
         while let Some(chunk) = body.next().await {
@@ -412,7 +558,10 @@ pub fn front_info(config: &Config, gate: &ServiceGate, url: &str, worker_id: &st
     let engine = gate.engine();
     let caps = engine.caps();
     let failed = crate::health::failed_models(&engine.pool());
-    let local: Vec<&ModelCaps> = caps.models().filter(|m| !failed.contains_key(m.id.as_str())).collect();
+    let local: Vec<&ModelCaps> = caps
+        .models()
+        .filter(|m| !failed.contains_key(m.id.as_str()))
+        .collect();
     let mut names: BTreeMap<String, String> = BTreeMap::new();
     for m in &local {
         names.insert(m.id.to_string(), m.id.to_string());
@@ -426,8 +575,13 @@ pub fn front_info(config: &Config, gate: &ServiceGate, url: &str, worker_id: &st
         }
     }
     for (alias, target) in &config.aliases {
-        if let Some(m) = caps.resolve(target).filter(|m| local.iter().any(|l| l.id == m.id)) {
-            names.entry(alias.clone()).or_insert_with(|| m.id.to_string());
+        if let Some(m) = caps
+            .resolve(target)
+            .filter(|m| local.iter().any(|l| l.id == m.id))
+        {
+            names
+                .entry(alias.clone())
+                .or_insert_with(|| m.id.to_string());
         }
     }
     // The APIs' own model names (MiniMax, LTX) by the tier they select:
@@ -449,11 +603,17 @@ pub fn front_info(config: &Config, gate: &ServiceGate, url: &str, worker_id: &st
     let p = &config.protocols;
     let mut protocols: Vec<&str> = vec!["serve"];
     for (on, name) in [
-        (p.openai_videos && cfg!(feature = "openai-videos"), "openai_videos"),
+        (
+            p.openai_videos && cfg!(feature = "openai-videos"),
+            "openai_videos",
+        ),
         (p.fastwan && cfg!(feature = "openai-videos"), "fastwan"),
         (p.minimax && cfg!(feature = "minimax"), "minimax"),
         (p.fal && cfg!(feature = "fal"), "fal"),
-        (p.fal && p.fal_director && cfg!(all(feature = "fal", feature = "webrtc")), "fal_director"),
+        (
+            p.fal && p.fal_director && cfg!(all(feature = "fal", feature = "webrtc")),
+            "fal_director",
+        ),
         (p.ltx && cfg!(feature = "ltxapi"), "ltx"),
         (p.reactor && cfg!(feature = "reactor"), "reactor"),
         (p.native, "native"),
@@ -467,8 +627,14 @@ pub fn front_info(config: &Config, gate: &ServiceGate, url: &str, worker_id: &st
         crate::adapters::fal_app_models(&p.fal_apps)
             .into_iter()
             .filter(|(_, model)| {
-                let target = config.aliases.get(model).map(String::as_str).unwrap_or(model);
-                caps.resolve(target).or_else(|| caps.resolve(model)).is_some_and(|m| local.iter().any(|l| l.id == m.id))
+                let target = config
+                    .aliases
+                    .get(model)
+                    .map(String::as_str)
+                    .unwrap_or(model);
+                caps.resolve(target)
+                    .or_else(|| caps.resolve(model))
+                    .is_some_and(|m| local.iter().any(|l| l.id == m.id))
             })
             .map(|(app, _)| app)
             .collect()
@@ -477,7 +643,11 @@ pub fn front_info(config: &Config, gate: &ServiceGate, url: &str, worker_id: &st
     };
     let first = local.first().map(|m| m.id.to_string());
     let mut defaults: BTreeMap<String, String> = match &first {
-        Some(m) => protocols.iter().filter(|p| !matches!(**p, "serve" | "console" | "fastwan")).map(|p| ((*p).to_owned(), m.clone())).collect(),
+        Some(m) => protocols
+            .iter()
+            .filter(|p| !matches!(**p, "serve" | "console" | "fastwan"))
+            .map(|p| ((*p).to_owned(), m.clone()))
+            .collect(),
         None => BTreeMap::new(),
     };
     // FastWan has one model (`GET /` names it): announced only by the
@@ -494,8 +664,14 @@ pub fn front_info(config: &Config, gate: &ServiceGate, url: &str, worker_id: &st
         // worker that does not is no Reactor front), else its first
         // streaming model.
         match &config.reactor.model {
-            Some(m) => caps.resolve(m).filter(|c| local.iter().any(|l| l.id == c.id)).map(|_| m.clone()),
-            None => local.iter().find(|m| m.stream.is_some()).map(|m| m.id.to_string()),
+            Some(m) => caps
+                .resolve(m)
+                .filter(|c| local.iter().any(|l| l.id == c.id))
+                .map(|_| m.clone()),
+            None => local
+                .iter()
+                .find(|m| m.stream.is_some())
+                .map(|m| m.id.to_string()),
         }
     } else {
         None
@@ -508,7 +684,10 @@ pub fn front_info(config: &Config, gate: &ServiceGate, url: &str, worker_id: &st
         defaults,
         reactor,
         failed_models: failed,
-        ready: matches!(engine.readiness(), fastvideo_engine_service::Readiness::Ready),
+        ready: matches!(
+            engine.readiness(),
+            fastvideo_engine_service::Readiness::Ready
+        ),
         tag: fastvideo_dispatch_proto::front::worker_tag(worker_id),
     }
 }

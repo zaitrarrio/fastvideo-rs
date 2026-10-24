@@ -8,7 +8,9 @@ use fastvideo_serve_kit::d1::mock::MockD1;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> std::io::Result<()> {
-    let addr = std::env::args().nth(1).unwrap_or_else(|| "127.0.0.1:0".into());
+    let addr = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "127.0.0.1:0".into());
     let mut mock = MockD1::new();
     if let Ok(t) = std::env::var("FV_D1_MOCK_TOKEN") {
         if !t.is_empty() {

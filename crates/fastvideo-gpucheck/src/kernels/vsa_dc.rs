@@ -52,13 +52,22 @@ fn mismatched_bits(a: &[f32], b: &[f32]) -> usize {
     if a.len() != b.len() {
         return a.len().max(b.len());
     }
-    a.iter().zip(b).filter(|(x, y)| x.to_bits() != y.to_bits()).count()
+    a.iter()
+        .zip(b)
+        .filter(|(x, y)| x.to_bits() != y.to_bits())
+        .count()
 }
 
 /// `heads` heads of `[seq, 128]`, raster (t, h, w) tokens. `smooth`: a sum
 /// of low-frequency plane waves per channel plus 30% noise (neighbouring
 /// tiles look alike); else white noise.
-fn field(c: &mut Ctx<'_>, grid: (usize, usize, usize), heads: usize, smooth: bool, amp: f32) -> Vec<f32> {
+fn field(
+    c: &mut Ctx<'_>,
+    grid: (usize, usize, usize),
+    heads: usize,
+    smooth: bool,
+    amp: f32,
+) -> Vec<f32> {
     let (gt, gh, gw) = grid;
     let seq = gt * gh * gw;
     let mut out = Vec::with_capacity(heads * seq * D);
@@ -75,7 +84,10 @@ fn field(c: &mut Ctx<'_>, grid: (usize, usize, usize), heads: usize, smooth: boo
             let (hi, wi) = ((rem / gw) as f32, (rem % gw) as f32);
             let ti = ti as f32;
             for d in 0..D {
-                let ph = freq(p[4 * d]) * ti + freq(p[4 * d + 1]) * hi + freq(p[4 * d + 2]) * wi + 3.0 * p[4 * d + 3];
+                let ph = freq(p[4 * d]) * ti
+                    + freq(p[4 * d + 1]) * hi
+                    + freq(p[4 * d + 2]) * wi
+                    + 3.0 * p[4 * d + 3];
                 out.push(amp * ph.sin() + noise[tok * D + d]);
             }
         }
@@ -90,7 +102,15 @@ fn bf16_rows(s: &CudaSlice<bf16>, off: usize, n: usize) -> anyhow::Result<Vec<f3
 
 /// f64 block-masked attention of query tile `qt` of one head: tiled bf16
 /// q/k/v of that head as f32, `sel` its selected key tiles.
-fn ref_tile(q: &[f32], k: &[f32], v: &[f32], qt: usize, sel: &[u32], sizes: &[u32], scale: f32) -> Vec<f32> {
+fn ref_tile(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    qt: usize,
+    sel: &[u32],
+    sizes: &[u32],
+    scale: f32,
+) -> Vec<f32> {
     let mut out = vec![0.0f32; TILE * D];
     for r in 0..TILE {
         let qr = &q[(qt * TILE + r) * D..(qt * TILE + r + 1) * D];
@@ -100,7 +120,11 @@ fn ref_tile(q: &[f32], k: &[f32], v: &[f32], qt: usize, sel: &[u32], sizes: &[u3
             for j in 0..sizes[kt as usize] as usize {
                 let row = kt as usize * TILE + j;
                 let kr = &k[row * D..(row + 1) * D];
-                let s: f64 = qr.iter().zip(kr).map(|(a, b)| f64::from(*a) * f64::from(*b)).sum();
+                let s: f64 = qr
+                    .iter()
+                    .zip(kr)
+                    .map(|(a, b)| f64::from(*a) * f64::from(*b))
+                    .sum();
                 scores.push(s * f64::from(scale));
                 rows.push(row);
             }
@@ -109,7 +133,11 @@ fn ref_tile(q: &[f32], k: &[f32], v: &[f32], qt: usize, sel: &[u32], sizes: &[u3
         let w: Vec<f64> = scores.iter().map(|s| (s - m).exp()).collect();
         let z: f64 = w.iter().sum();
         for d in 0..D {
-            let acc: f64 = w.iter().zip(&rows).map(|(wi, &row)| wi * f64::from(v[row * D + d])).sum();
+            let acc: f64 = w
+                .iter()
+                .zip(&rows)
+                .map(|(wi, &row)| wi * f64::from(v[row * D + d]))
+                .sum();
             out[r * D + d] = (acc / z) as f32;
         }
     }
@@ -149,7 +177,13 @@ struct Case {
     bh: usize,
 }
 
-fn case(c: &mut Ctx<'_>, grid: (usize, usize, usize), bh: usize, smooth: bool, repeat: bool) -> anyhow::Result<Case> {
+fn case(
+    c: &mut Ctx<'_>,
+    grid: (usize, usize, usize),
+    bh: usize,
+    smooth: bool,
+    repeat: bool,
+) -> anyhow::Result<Case> {
     let plan = vsa::TilePlan::new(grid)?;
     let dev_plan = ops::vsa_plan_upload(&plan.slot_src, &plan.block_sizes, vsa::TILE_ELEMS)?;
     let heads = if repeat { 1 } else { bh };
@@ -166,7 +200,14 @@ fn case(c: &mut Ctx<'_>, grid: (usize, usize, usize), bh: usize, smooth: bool, r
         }
     };
     let (q, k, v) = (mk(1.0)?, mk(1.0)?, mk(1.0)?);
-    Ok(Case { plan, dev_plan, q, k, v, bh })
+    Ok(Case {
+        plan,
+        dev_plan,
+        q,
+        k,
+        v,
+        bh,
+    })
 }
 
 /// Pooled f32 scores (H3's round16 tile means) and the top-k selection.
@@ -201,7 +242,17 @@ fn fine_tma2(
 ) -> anyhow::Result<CudaSlice<f32>> {
     std::env::set_var("FASTVIDEO_VSA_KERNEL", "tma2");
     let r = ops::vsa_mma_attn_tiled_device(
-        &t.0, &t.1, &t.2, sel, &cs.dev_plan, cs.bh, D, topk, 1.0 / (D as f32).sqrt(), q_base, q_tiles,
+        &t.0,
+        &t.1,
+        &t.2,
+        sel,
+        &cs.dev_plan,
+        cs.bh,
+        D,
+        topk,
+        1.0 / (D as f32).sqrt(),
+        q_base,
+        q_tiles,
     );
     std::env::remove_var("FASTVIDEO_VSA_KERNEL");
     Ok(r?)
@@ -243,7 +294,8 @@ pub(super) fn run(c: &mut Ctx<'_>) -> StageResult<()> {
         );
         return Ok(());
     };
-    c.report.note("vsa_dc_kernel", json!({"sm": k.sm, "origin": k.origin}));
+    c.report
+        .note("vsa_dc_kernel", json!({"sm": k.sm, "origin": k.origin}));
     let scale = 1.0 / (D as f32).sqrt();
     let only = std::env::var("FV_VSA_WORKLOADS").unwrap_or_default();
     let bench = std::env::var("FV_VSA_DC_BENCH").map_or(true, |v| v != "0");
@@ -262,7 +314,11 @@ pub(super) fn run(c: &mut Ctx<'_>) -> StageResult<()> {
             let sizes = cs.plan.block_sizes.clone();
             // Sparsity 0.5 (long lists) on the smallest grid only: the f64
             // reference is the harness's slowest part.
-            let sps: &[f64] = if name == "h3_480p" { &[0.5, 0.8, 0.9] } else { &[0.8, 0.9] };
+            let sps: &[f64] = if name == "h3_480p" {
+                &[0.5, 0.8, 0.9]
+            } else {
+                &[0.8, 0.9]
+            };
             for &sp in sps {
                 let topk = vsa::topk_for(sp, nb);
                 let sel = select(&cs, topk)?;
@@ -274,7 +330,11 @@ pub(super) fn run(c: &mut Ctx<'_>) -> StageResult<()> {
                     let new = down(&fine_dc(&t, &sel, &cs, topk, q_base, q_tiles)?)?;
                     let lo = q_base * TILE * D;
                     let rows = |x: &[f32]| -> Vec<f32> {
-                        (0..bh).flat_map(|h| x[h * nb * TILE * D + lo..(h + 1) * nb * TILE * D].to_vec()).collect()
+                        (0..bh)
+                            .flat_map(|h| {
+                                x[h * nb * TILE * D + lo..(h + 1) * nb * TILE * D].to_vec()
+                            })
+                            .collect()
                     };
                     let dv = diff(&rows(&new), &rows(&old));
                     // Sampled query tiles against the f64 block-masked reference.
@@ -319,18 +379,54 @@ pub(super) fn run(c: &mut Ctx<'_>) -> StageResult<()> {
                 if sp == 0.8 {
                     let coarse = up(&c.rand(bh * nb * D, 1.0))?;
                     let gate = up(&c.rand(bh * seq * D, 1.0))?;
-                    let gate16 = CudaTensor::from_device_slice(gate.clone(), vec![1, bh, seq, D])?.quantize_bf16()?;
+                    let gate16 = CudaTensor::from_device_slice(gate.clone(), vec![1, bh, seq, D])?
+                        .quantize_bf16()?;
                     let gate16 = gate16
                         .device_slice_bf16()
                         .ok_or_else(|| anyhow::anyhow!("bf16 gate"))?
                         .clone();
                     let sparse = fine_dc(&t, &sel, &cs, topk, 0, nb)?;
                     let mut want32 = ops::fill_device(bh * seq * D, 0.0)?;
-                    ops::vsa_combine_round_device(&sparse, &coarse, Some(&gate), &cs.dev_plan, &mut want32, bh, nb, 0, seq, D, true)?;
+                    ops::vsa_combine_round_device(
+                        &sparse,
+                        &coarse,
+                        Some(&gate),
+                        &cs.dev_plan,
+                        &mut want32,
+                        bh,
+                        nb,
+                        0,
+                        seq,
+                        D,
+                        true,
+                    )?;
                     let mut want16 = ops::fill_device(bh * seq * D, 0.0)?;
-                    ops::vsa_combine_gate16_device(&sparse, &coarse, Some(&gate16), &cs.dev_plan, &mut want16, bh, nb, 0, seq, D)?;
+                    ops::vsa_combine_gate16_device(
+                        &sparse,
+                        &coarse,
+                        Some(&gate16),
+                        &cs.dev_plan,
+                        &mut want16,
+                        bh,
+                        nb,
+                        0,
+                        seq,
+                        D,
+                    )?;
                     let mut want0 = ops::fill_device(bh * seq * D, 0.0)?;
-                    ops::vsa_combine_round_device(&sparse, &coarse, None, &cs.dev_plan, &mut want0, bh, nb, 0, seq, D, true)?;
+                    ops::vsa_combine_round_device(
+                        &sparse,
+                        &coarse,
+                        None,
+                        &cs.dev_plan,
+                        &mut want0,
+                        bh,
+                        nb,
+                        0,
+                        seq,
+                        D,
+                        true,
+                    )?;
                     let mut bad = Vec::new();
                     for (label, gate, want) in [
                         ("f32_gate", VsaGate::F32(&gate), &want32),
@@ -339,8 +435,22 @@ pub(super) fn run(c: &mut Ctx<'_>) -> StageResult<()> {
                     ] {
                         let mut got = ops::fill_device(bh * seq * D, 0.0)?;
                         let ran = attn_dc::vsa_fine(
-                            &t.0, &t.1, &t.2, &sel, &cs.dev_plan, bh, topk, scale, 0, nb,
-                            VsaEpilogue::CombineRound16 { out: &mut got, coarse: &coarse, gate, seq },
+                            &t.0,
+                            &t.1,
+                            &t.2,
+                            &sel,
+                            &cs.dev_plan,
+                            bh,
+                            topk,
+                            scale,
+                            0,
+                            nb,
+                            VsaEpilogue::CombineRound16 {
+                                out: &mut got,
+                                coarse: &coarse,
+                                gate,
+                                seq,
+                            },
                         )?;
                         if !ran {
                             return Err(anyhow::anyhow!("vsa_fine declined").into());
@@ -350,7 +460,10 @@ pub(super) fn run(c: &mut Ctx<'_>) -> StageResult<()> {
                     c.report.check(
                         format!("vsa_dc_{name}_{data}_fused_combine_bitexact"),
                         bad.iter().all(|(_, n)| *n == 0),
-                        json!(bad.iter().map(|(l, n)| (l.to_string(), *n)).collect::<std::collections::BTreeMap<_, _>>()),
+                        json!(bad
+                            .iter()
+                            .map(|(l, n)| (l.to_string(), *n))
+                            .collect::<std::collections::BTreeMap<_, _>>()),
                         json!({"mismatched": 0}),
                     )?;
                 }
@@ -360,7 +473,12 @@ pub(super) fn run(c: &mut Ctx<'_>) -> StageResult<()> {
                 let mut bad = std::collections::BTreeMap::new();
                 for round16 in [true, false] {
                     let p = attn_dc::vsa_prep(
-                        VsaPrepIn::F32 { q: &cs.q, k: &cs.k, v: &cs.v, round16 },
+                        VsaPrepIn::F32 {
+                            q: &cs.q,
+                            k: &cs.k,
+                            v: &cs.v,
+                            round16,
+                        },
                         &cs.dev_plan,
                         bh,
                         seq,
@@ -368,27 +486,57 @@ pub(super) fn run(c: &mut Ctx<'_>) -> StageResult<()> {
                     )?
                     .ok_or_else(|| anyhow::anyhow!("vsa_prep declined"))?;
                     let mut n = 0;
-                    for (x, xt, xc) in [(&cs.q, &p.qt, &p.qc), (&cs.k, &p.kt, &p.kc), (&cs.v, &p.vt, p.vc.as_ref().unwrap())] {
+                    for (x, xt, xc) in [
+                        (&cs.q, &p.qt, &p.qc),
+                        (&cs.k, &p.kt, &p.kc),
+                        (&cs.v, &p.vt, p.vc.as_ref().unwrap()),
+                    ] {
                         let wt = ops::vsa_tile_qkv_device(x, &cs.dev_plan, bh, seq, D)?;
-                        let wc = ops::vsa_tile_mean_round_device(x, &cs.dev_plan, bh, seq, D, round16)?;
+                        let wc =
+                            ops::vsa_tile_mean_round_device(x, &cs.dev_plan, bh, seq, D, round16)?;
                         let (a, b) = (dev.stream.memcpy_dtov(xt)?, dev.stream.memcpy_dtov(&wt)?);
-                        n += a.iter().zip(&b).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
+                        n += a
+                            .iter()
+                            .zip(&b)
+                            .filter(|(x, y)| x.to_bits() != y.to_bits())
+                            .count();
                         n += mismatched_bits(&down(xc)?, &down(&wc)?);
                     }
                     bad.insert(format!("f32_round16_{round16}"), n);
                 }
                 let to16 = |x: &CudaSlice<f32>| -> anyhow::Result<CudaSlice<bf16>> {
-                    let t = CudaTensor::from_device_slice(x.clone(), vec![1, bh, seq, D])?.quantize_bf16()?;
-                    Ok(t.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("bf16"))?.clone())
+                    let t = CudaTensor::from_device_slice(x.clone(), vec![1, bh, seq, D])?
+                        .quantize_bf16()?;
+                    Ok(t.device_slice_bf16()
+                        .ok_or_else(|| anyhow::anyhow!("bf16"))?
+                        .clone())
                 };
                 let (q16, k16, v16) = (to16(&cs.q)?, to16(&cs.k)?, to16(&cs.v)?);
-                let p = attn_dc::vsa_prep(VsaPrepIn::Bf16 { q: &q16, k: &k16, v: &v16 }, &cs.dev_plan, bh, seq, false)?
-                    .ok_or_else(|| anyhow::anyhow!("vsa_prep declined"))?;
+                let p = attn_dc::vsa_prep(
+                    VsaPrepIn::Bf16 {
+                        q: &q16,
+                        k: &k16,
+                        v: &v16,
+                    },
+                    &cs.dev_plan,
+                    bh,
+                    seq,
+                    false,
+                )?
+                .ok_or_else(|| anyhow::anyhow!("vsa_prep declined"))?;
                 let mut n = 0;
-                for (x, xt, xc) in [(&q16, &p.qt, Some(&p.qc)), (&k16, &p.kt, Some(&p.kc)), (&v16, &p.vt, None)] {
+                for (x, xt, xc) in [
+                    (&q16, &p.qt, Some(&p.qc)),
+                    (&k16, &p.kt, Some(&p.kc)),
+                    (&v16, &p.vt, None),
+                ] {
                     let wt = ops::vsa_tile_qkv_bf16_device(x, &cs.dev_plan, bh, seq, D)?;
                     let (a, b) = (dev.stream.memcpy_dtov(xt)?, dev.stream.memcpy_dtov(&wt)?);
-                    n += a.iter().zip(&b).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
+                    n += a
+                        .iter()
+                        .zip(&b)
+                        .filter(|(x, y)| x.to_bits() != y.to_bits())
+                        .count();
                     if let Some(xc) = xc {
                         let wc = ops::vsa_tile_mean_bf16_device(x, &cs.dev_plan, bh, seq, D)?;
                         n += mismatched_bits(&down(xc)?, &down(&wc)?);
@@ -428,7 +576,12 @@ pub(super) fn run(c: &mut Ctx<'_>) -> StageResult<()> {
         })?;
         let new_prep = median3(&mut || {
             attn_dc::vsa_prep(
-                VsaPrepIn::F32 { q: &cs.q, k: &cs.k, v: &cs.v, round16: true },
+                VsaPrepIn::F32 {
+                    q: &cs.q,
+                    k: &cs.k,
+                    v: &cs.v,
+                    round16: true,
+                },
                 &cs.dev_plan,
                 bh,
                 seq,
@@ -456,13 +609,39 @@ pub(super) fn run(c: &mut Ctx<'_>) -> StageResult<()> {
             let sparse = fine_tma2(&t, &sel, &cs, topk, 0, nb)?;
             let mut out = ops::fill_device(bh * seq * D, 0.0)?;
             let combine = median3(&mut || {
-                ops::vsa_combine_round_device(&sparse, &coarse, Some(&gate), &cs.dev_plan, &mut out, bh, nb, 0, seq, D, true)?;
+                ops::vsa_combine_round_device(
+                    &sparse,
+                    &coarse,
+                    Some(&gate),
+                    &cs.dev_plan,
+                    &mut out,
+                    bh,
+                    nb,
+                    0,
+                    seq,
+                    D,
+                    true,
+                )?;
                 Ok(())
             })?;
             let fused = median3(&mut || {
                 attn_dc::vsa_fine(
-                    &t.0, &t.1, &t.2, &sel, &cs.dev_plan, bh, topk, scale, 0, nb,
-                    VsaEpilogue::CombineRound16 { out: &mut out, coarse: &coarse, gate: VsaGate::F32(&gate), seq },
+                    &t.0,
+                    &t.1,
+                    &t.2,
+                    &sel,
+                    &cs.dev_plan,
+                    bh,
+                    topk,
+                    scale,
+                    0,
+                    nb,
+                    VsaEpilogue::CombineRound16 {
+                        out: &mut out,
+                        coarse: &coarse,
+                        gate: VsaGate::F32(&gate),
+                        seq,
+                    },
                 )?;
                 Ok(())
             })?;
@@ -485,7 +664,10 @@ pub(super) fn run(c: &mut Ctx<'_>) -> StageResult<()> {
                 }),
             );
         }
-        c.report.note(format!("vsa_dc_bench_{name}"), serde_json::Value::Object(row));
+        c.report.note(
+            format!("vsa_dc_bench_{name}"),
+            serde_json::Value::Object(row),
+        );
     }
     Ok(())
 }

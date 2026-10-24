@@ -19,8 +19,8 @@
 use std::time::Duration;
 
 use fastvideo_protocol::{
-    AudioPlan, Job, JobId, JobMetrics, JobStatus, JobStore, KeyId, ListQuery, ModelId, PostProcess, ProtocolId,
-    ResolvedJob, SamplingOverrides, Task,
+    AudioPlan, Job, JobId, JobMetrics, JobStatus, JobStore, KeyId, ListQuery, ModelId, PostProcess,
+    ProtocolId, ResolvedJob, SamplingOverrides, Task,
 };
 use fastvideo_serve_kit::d1::{schema, Stmt};
 use fastvideo_serve_kit::{D1Client, D1Config, D1JobStore, D1Options};
@@ -56,7 +56,10 @@ fn resolved() -> ResolvedJob {
         keyframes: vec![],
         references: vec![],
         audio_in: None,
-        audio: AudioPlan::Native { rate: 32000, channels: 2 },
+        audio: AudioPlan::Native {
+            rate: 32000,
+            channels: 2,
+        },
         post: PostProcess::default(),
         sampling: SamplingOverrides::default(),
         tier: None,
@@ -76,13 +79,21 @@ async fn live_d1_smoke() {
         Some(a) => a,
         None => {
             let v = cf_get(&http, &token, "/accounts").await;
-            v["result"][0]["id"].as_str().expect("an account").to_owned()
+            v["result"][0]["id"]
+                .as_str()
+                .expect("an account")
+                .to_owned()
         }
     };
     let database = match var("FV_D1_DATABASE_ID") {
         Some(d) => d,
         None => {
-            let v = cf_get(&http, &token, &format!("/accounts/{account}/d1/database?name=fv-jobs")).await;
+            let v = cf_get(
+                &http,
+                &token,
+                &format!("/accounts/{account}/d1/database?name=fv-jobs"),
+            )
+            .await;
             v["result"]
                 .as_array()
                 .and_then(|a| a.iter().find(|d| d["name"] == "fv-jobs"))
@@ -95,7 +106,11 @@ async fn live_d1_smoke() {
     let cfg = D1Config::new(&account, &token, &database);
     let db = D1Client::http(cfg.clone()).unwrap();
     let version = schema::migrate(&db).await.unwrap();
-    assert!(version >= schema::latest(), "schema {version} < {}", schema::latest());
+    assert!(
+        version >= schema::latest(),
+        "schema {version} < {}",
+        schema::latest()
+    );
 
     let mut opts = D1Options::new(&tag);
     opts.stale_after = None;
@@ -121,26 +136,45 @@ async fn live_d1_smoke() {
         ids.push(j.id);
         store.insert(j).await.unwrap();
     }
-    let (st, ids2, cfg2, tag2, owner2, opts2) = (store.clone(), ids.clone(), cfg.clone(), tag.clone(), owner.clone(), opts.clone());
+    let (st, ids2, cfg2, tag2, owner2, opts2) = (
+        store.clone(),
+        ids.clone(),
+        cfg.clone(),
+        tag.clone(),
+        owner.clone(),
+        opts.clone(),
+    );
     let result = tokio::spawn(async move {
         let (store, ids, cfg, tag, owner, opts) = (st, ids2, cfg2, tag2, owner2, opts2);
         // Running + throttled progress + success on job 0; cancel job 1.
         store
-            .update(ids[0], Box::new(|j| j.mark_running(OffsetDateTime::now_utc()).unwrap()))
+            .update(
+                ids[0],
+                Box::new(|j| j.mark_running(OffsetDateTime::now_utc()).unwrap()),
+            )
             .await
             .unwrap();
         for s in 1..=10 {
-            store.update(ids[0], Box::new(move |j| j.set_step(s, 10))).await.unwrap();
+            store
+                .update(ids[0], Box::new(move |j| j.set_step(s, 10)))
+                .await
+                .unwrap();
         }
         store
             .update(
                 ids[0],
-                Box::new(|j| j.mark_succeeded(OffsetDateTime::now_utc(), vec![], JobMetrics::default()).unwrap()),
+                Box::new(|j| {
+                    j.mark_succeeded(OffsetDateTime::now_utc(), vec![], JobMetrics::default())
+                        .unwrap()
+                }),
             )
             .await
             .unwrap();
         store
-            .update(ids[1], Box::new(|j| j.mark_cancelled(OffsetDateTime::now_utc()).unwrap()))
+            .update(
+                ids[1],
+                Box::new(|j| j.mark_cancelled(OffsetDateTime::now_utc()).unwrap()),
+            )
             .await
             .unwrap();
 
@@ -155,19 +189,33 @@ async fn live_d1_smoke() {
         assert_eq!(j0.status(), JobStatus::Succeeded);
         assert_eq!(j0.progress, 1.0);
         assert_eq!(
-            other.by_external(ProtocolId::MiniMaxV2, &format!("{tag}-1")).await.unwrap().status(),
+            other
+                .by_external(ProtocolId::MiniMaxV2, &format!("{tag}-1"))
+                .await
+                .unwrap()
+                .status(),
             JobStatus::Cancelled
         );
         // Owner-scoped list with a status filter, newest first.
         let page = other
-            .list(ListQuery { owner: Some(owner.clone()), ..Default::default() })
+            .list(ListQuery {
+                owner: Some(owner.clone()),
+                ..Default::default()
+            })
             .await;
         assert_eq!(page.total, 3);
         assert_eq!(page.items[0].external_id, format!("{tag}-2"));
         let queued = other
-            .list(ListQuery { owner: Some(owner.clone()), statuses: vec![JobStatus::Queued], ..Default::default() })
+            .list(ListQuery {
+                owner: Some(owner.clone()),
+                statuses: vec![JobStatus::Queued],
+                ..Default::default()
+            })
             .await;
-        assert_eq!(queued.items.iter().map(|j| j.id).collect::<Vec<_>>(), vec![ids[2]]);
+        assert_eq!(
+            queued.items.iter().map(|j| j.id).collect::<Vec<_>>(),
+            vec![ids[2]]
+        );
         // Removal deletes the row.
         assert!(store.remove(ids[2]).await.is_some());
         assert!(other.get(ids[2]).await.is_none());
@@ -183,10 +231,27 @@ async fn live_d1_smoke() {
     let workers = (tag.clone(), format!("{tag}-b"));
     let mine = "owner = ? OR worker = ? OR worker = ?";
     let params = || vec![json!(tag), json!(workers.0), json!(workers.1)];
-    let r = db.query(Stmt::new(format!("DELETE FROM jobs WHERE {mine}"), params())).await.unwrap();
+    let r = db
+        .query(Stmt::new(
+            format!("DELETE FROM jobs WHERE {mine}"),
+            params(),
+        ))
+        .await
+        .unwrap();
     eprintln!("live_d1_smoke: removed {} test rows", r.changes);
-    assert!(r.changes <= ids.len() as u64, "cleanup removed {} rows, more than the {} written", r.changes, ids.len());
-    let left = db.query(Stmt::new(format!("SELECT COUNT(*) AS n FROM jobs WHERE {mine}"), params())).await.unwrap();
+    assert!(
+        r.changes <= ids.len() as u64,
+        "cleanup removed {} rows, more than the {} written",
+        r.changes,
+        ids.len()
+    );
+    let left = db
+        .query(Stmt::new(
+            format!("SELECT COUNT(*) AS n FROM jobs WHERE {mine}"),
+            params(),
+        ))
+        .await
+        .unwrap();
     assert_eq!(left.rows[0]["n"].as_f64(), Some(0.0));
     if let Err(e) = result {
         std::panic::resume_unwind(e.into_panic());

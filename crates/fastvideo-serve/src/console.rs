@@ -25,24 +25,92 @@ use axum::Router;
 
 /// `(file name, content type, body)` of every embedded asset.
 pub const ASSETS: &[(&str, &str, &str)] = &[
-    ("console.css", "text/css; charset=utf-8", include_str!("../console/console.css")),
-    ("common.js", "text/javascript; charset=utf-8", include_str!("../console/common.js")),
-    ("home.js", "text/javascript; charset=utf-8", include_str!("../console/home.js")),
-    ("admin.js", "text/javascript; charset=utf-8", include_str!("../console/admin.js")),
-    ("model.js", "text/javascript; charset=utf-8", include_str!("../console/model.js")),
-    ("form.js", "text/javascript; charset=utf-8", include_str!("../console/form.js")),
-    ("trace.js", "text/javascript; charset=utf-8", include_str!("../console/trace.js")),
-    ("snippets.js", "text/javascript; charset=utf-8", include_str!("../console/snippets.js")),
-    ("director.js", "text/javascript; charset=utf-8", include_str!("../console/director.js")),
-    ("avatar.js", "text/javascript; charset=utf-8", include_str!("../console/avatar.js")),
-    ("live.js", "text/javascript; charset=utf-8", include_str!("../console/live.js")),
-    ("rtc.js", "text/javascript; charset=utf-8", include_str!("../console/rtc.js")),
-    ("stream.js", "text/javascript; charset=utf-8", include_str!("../console/stream.js")),
-    ("native.js", "text/javascript; charset=utf-8", include_str!("../console/native.js")),
-    ("outputs.js", "text/javascript; charset=utf-8", include_str!("../console/outputs.js")),
+    (
+        "console.css",
+        "text/css; charset=utf-8",
+        include_str!("../console/console.css"),
+    ),
+    (
+        "common.js",
+        "text/javascript; charset=utf-8",
+        include_str!("../console/common.js"),
+    ),
+    (
+        "home.js",
+        "text/javascript; charset=utf-8",
+        include_str!("../console/home.js"),
+    ),
+    (
+        "admin.js",
+        "text/javascript; charset=utf-8",
+        include_str!("../console/admin.js"),
+    ),
+    (
+        "model.js",
+        "text/javascript; charset=utf-8",
+        include_str!("../console/model.js"),
+    ),
+    (
+        "form.js",
+        "text/javascript; charset=utf-8",
+        include_str!("../console/form.js"),
+    ),
+    (
+        "trace.js",
+        "text/javascript; charset=utf-8",
+        include_str!("../console/trace.js"),
+    ),
+    (
+        "snippets.js",
+        "text/javascript; charset=utf-8",
+        include_str!("../console/snippets.js"),
+    ),
+    (
+        "director.js",
+        "text/javascript; charset=utf-8",
+        include_str!("../console/director.js"),
+    ),
+    (
+        "avatar.js",
+        "text/javascript; charset=utf-8",
+        include_str!("../console/avatar.js"),
+    ),
+    (
+        "live.js",
+        "text/javascript; charset=utf-8",
+        include_str!("../console/live.js"),
+    ),
+    (
+        "rtc.js",
+        "text/javascript; charset=utf-8",
+        include_str!("../console/rtc.js"),
+    ),
+    (
+        "stream.js",
+        "text/javascript; charset=utf-8",
+        include_str!("../console/stream.js"),
+    ),
+    (
+        "native.js",
+        "text/javascript; charset=utf-8",
+        include_str!("../console/native.js"),
+    ),
+    (
+        "outputs.js",
+        "text/javascript; charset=utf-8",
+        include_str!("../console/outputs.js"),
+    ),
     // hls.js 1.5.20 light build (Apache-2.0), console/vendor/README.md.
-    ("hls.light.min.js", "text/javascript; charset=utf-8", include_str!("../console/vendor/hls.light.min.js")),
-    ("hls.js-LICENSE.txt", "text/plain; charset=utf-8", include_str!("../console/vendor/hls.js-LICENSE.txt")),
+    (
+        "hls.light.min.js",
+        "text/javascript; charset=utf-8",
+        include_str!("../console/vendor/hls.light.min.js"),
+    ),
+    (
+        "hls.js-LICENSE.txt",
+        "text/plain; charset=utf-8",
+        include_str!("../console/vendor/hls.js-LICENSE.txt"),
+    ),
 ];
 
 const INDEX: &str = include_str!("../console/index.html");
@@ -64,10 +132,19 @@ fn with_headers(content_type: &'static str, body: &'static str, html: bool) -> R
     let h = r.headers_mut();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-    h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-    h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
     if html {
-        h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(CSP));
+        h.insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(CSP),
+        );
         h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     }
     r
@@ -93,7 +170,10 @@ pub fn routes() -> Router {
         .route("/console/live", get(|| async { page(LIVE) }))
         .route("/console/stream", get(|| async { page(STREAM) }))
         .route("/console/native", get(|| async { page(NATIVE) }))
-        .route("/console/models/{owner}/{alias}/{*task}", get(|| async { page(MODEL) }))
+        .route(
+            "/console/models/{owner}/{alias}/{*task}",
+            get(|| async { page(MODEL) }),
+        )
         .route("/console/assets/{file}", get(asset))
 }
 
@@ -105,8 +185,15 @@ mod tests {
     use tower::ServiceExt;
 
     async fn get(uri: &str) -> (StatusCode, String, String) {
-        let r = routes().oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap();
-        let ct = r.headers().get(header::CONTENT_TYPE).map(|v| v.to_str().unwrap().to_owned()).unwrap_or_default();
+        let r = routes()
+            .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let ct = r
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .map(|v| v.to_str().unwrap().to_owned())
+            .unwrap_or_default();
         let s = r.status();
         let b = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
         (s, ct, String::from_utf8(b.to_vec()).unwrap())
@@ -145,10 +232,17 @@ mod tests {
         texts.extend(ASSETS.iter().map(|a| a.2));
         for t in &texts {
             for part in t.split("/console/assets/").skip(1) {
-                let name: String = part.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-').collect();
+                let name: String = part
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-')
+                    .collect();
                 assert!(ASSETS.iter().any(|a| a.0 == name), "missing asset {name}");
             }
-            for part in t.split("from './").skip(1).chain(t.split("import('./").skip(1)) {
+            for part in t
+                .split("from './")
+                .skip(1)
+                .chain(t.split("import('./").skip(1))
+            {
                 let name: String = part.chars().take_while(|c| *c != '\'').collect();
                 assert!(ASSETS.iter().any(|a| a.0 == name), "missing module {name}");
             }
@@ -156,7 +250,10 @@ mod tests {
         }
         for t in [INDEX, ADMIN, MODEL, AVATAR, LIVE, STREAM, NATIVE] {
             for attr in ["onclick=\"", "onsubmit=\"", "onload=\"", "<script>"] {
-                assert!(!t.contains(attr), "inline script `{attr}` is blocked by the CSP");
+                assert!(
+                    !t.contains(attr),
+                    "inline script `{attr}` is blocked by the CSP"
+                );
             }
         }
     }

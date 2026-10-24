@@ -163,9 +163,7 @@ impl ScaleRule {
 
 /// `FASTVIDEO_NVFP4`. Unset / off / none / false / 0 → [`None`].
 pub fn requested(value: Option<&str>) -> Option<ScaleRule> {
-    let Some(v) = value.map(str::trim) else {
-        return None;
-    };
+    let v = value.map(str::trim)?;
     if v.is_empty() {
         return None;
     }

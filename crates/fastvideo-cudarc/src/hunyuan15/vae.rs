@@ -158,7 +158,7 @@ fn rms_l2_channels(x: &CudaTensor, gamma: &CudaTensor) -> Result<CudaTensor> {
             }
         }
     }
-    Ok(CudaTensor::from_vec(out, x.shape.clone())?.to_device()?)
+    CudaTensor::from_vec(out, x.shape.clone())?.to_device()
 }
 
 fn load_gamma(map: &WeightMap, key: &str, c: usize) -> Result<CudaTensor> {
@@ -189,7 +189,7 @@ fn repeat_interleave_channels(x: &CudaTensor, repeats: usize) -> Result<CudaTens
             }
         }
     }
-    Ok(CudaTensor::from_vec(out, vec![b, c * repeats, t, h, w])?.to_device()?)
+    CudaTensor::from_vec(out, vec![b, c * repeats, t, h, w])?.to_device()
 }
 
 /// `(B, r1*r2*r3*C, F, H, W)` → `(B, C, r1*F, r2*H, r3*W)`.
@@ -333,7 +333,7 @@ fn causal_frame_mask(n_frame: usize, n_hw: usize) -> Result<CudaTensor> {
         }
     }
     // BHSD mask broadcast: [1, 1, S, S]
-    Ok(CudaTensor::from_vec(m, vec![1, 1, seq, seq])?)
+    CudaTensor::from_vec(m, vec![1, 1, seq, seq])
 }
 
 struct MidBlock {

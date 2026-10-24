@@ -11,8 +11,8 @@
 
 use async_trait::async_trait;
 use fastvideo_engine_service::{
-    spawn_clip_pacer, ClipCommand, ClipPacerConfig, ClipPlayer, ClipPlayerConfig, ClipSession, IdlePolicy,
-    PacedStream, TickStart,
+    spawn_clip_pacer, ClipCommand, ClipPacerConfig, ClipPlayer, ClipPlayerConfig, ClipSession,
+    IdlePolicy, PacedStream, TickStart,
 };
 use fastvideo_protocol::{canvas_for_aspect, ApiError, CanvasCaps};
 use serde_json::{Map, Value};
@@ -36,7 +36,11 @@ pub struct ClipDriver {
 impl ClipDriver {
     /// Starts the player (no audience yet) and the clip pacer; returns the
     /// driver and the paced stream the media pipeline consumes.
-    pub fn start(session: ClipSession, aspect: &str, out: Outbox) -> Result<(Self, PacedStream), ApiError> {
+    pub fn start(
+        session: ClipSession,
+        aspect: &str,
+        out: Outbox,
+    ) -> Result<(Self, PacedStream), ApiError> {
         let spec = session.spec().clone();
         let (player, outputs) = session.into_player(ClipPlayerConfig {
             aspect: Some(aspect.to_owned()),
@@ -71,7 +75,10 @@ impl ClipDriver {
 }
 
 fn s(a: &Map<String, Value>, k: &str) -> String {
-    a.get(k).and_then(Value::as_str).unwrap_or_default().to_owned()
+    a.get(k)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// A validated wire command (see [`crate::commands`]) → [`ClipCommand`].
@@ -86,8 +93,12 @@ pub fn to_command(name: &str, a: &Map<String, Value>) -> Option<ClipCommand> {
             seconds: f("seconds"),
             position: u("position").map(|p| p.min(u64::from(u32::MAX)) as u32),
         },
-        "play" => ClipCommand::Play { clip_id: s(a, "clip_id") },
-        "pop" => ClipCommand::Pop { clip_id: s(a, "clip_id") },
+        "play" => ClipCommand::Play {
+            clip_id: s(a, "clip_id"),
+        },
+        "pop" => ClipCommand::Pop {
+            clip_id: s(a, "clip_id"),
+        },
         "move" => ClipCommand::Move {
             clip_id: s(a, "clip_id"),
             position: u("position").unwrap_or(0).min(u64::from(u32::MAX)) as u32,
@@ -108,12 +119,18 @@ pub fn to_command(name: &str, a: &Map<String, Value>) -> Option<ClipCommand> {
 impl Driver for ClipDriver {
     async fn command(&self, _conn: u32, name: &str, args: Map<String, Value>) -> Outcome {
         let Some(cmd) = to_command(name, &args) else {
-            return Outcome::Error { code: "invalid_command".into(), message: format!("unknown command `{name}`") };
+            return Outcome::Error {
+                code: "invalid_command".into(),
+                message: format!("unknown command `{name}`"),
+            };
         };
         match self.player.command(cmd).await {
             Ok(Some(ev)) => Outcome::Reply(ev.type_name().to_owned(), ev.data()),
             Ok(None) => Outcome::Ack,
-            Err(e) => Outcome::Error { code: "internal_error".into(), message: e.message },
+            Err(e) => Outcome::Error {
+                code: "internal_error".into(),
+                message: e.message,
+            },
         }
     }
 
@@ -153,13 +170,38 @@ mod tests {
     #[test]
     fn wire_commands_map_to_the_player() {
         assert_eq!(
-            to_command("enqueue", &m(json!({"prompt": "p", "metadata": "", "seed": null, "seconds": 5.5, "position": 2}))),
-            Some(ClipCommand::Enqueue { prompt: "p".into(), metadata: String::new(), seed: None, seconds: Some(5.5), position: Some(2) })
+            to_command(
+                "enqueue",
+                &m(
+                    json!({"prompt": "p", "metadata": "", "seed": null, "seconds": 5.5, "position": 2})
+                )
+            ),
+            Some(ClipCommand::Enqueue {
+                prompt: "p".into(),
+                metadata: String::new(),
+                seed: None,
+                seconds: Some(5.5),
+                position: Some(2)
+            })
         );
-        assert_eq!(to_command("play", &m(json!({"clip_id": ""}))), Some(ClipCommand::Play { clip_id: String::new() }));
-        assert_eq!(to_command("set_autoplay", &m(json!({"enabled": true}))), Some(ClipCommand::SetAutoplay(true)));
-        assert_eq!(to_command("set_canvas", &m(json!({"aspect": "1:1"}))), Some(ClipCommand::SetCanvas("1:1".into())));
-        assert_eq!(to_command("get_state", &Map::new()), Some(ClipCommand::GetState));
+        assert_eq!(
+            to_command("play", &m(json!({"clip_id": ""}))),
+            Some(ClipCommand::Play {
+                clip_id: String::new()
+            })
+        );
+        assert_eq!(
+            to_command("set_autoplay", &m(json!({"enabled": true}))),
+            Some(ClipCommand::SetAutoplay(true))
+        );
+        assert_eq!(
+            to_command("set_canvas", &m(json!({"aspect": "1:1"}))),
+            Some(ClipCommand::SetCanvas("1:1".into()))
+        );
+        assert_eq!(
+            to_command("get_state", &Map::new()),
+            Some(ClipCommand::GetState)
+        );
         assert_eq!(to_command("nope", &Map::new()), None);
     }
 

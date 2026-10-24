@@ -53,9 +53,17 @@ pub fn router(rt: Reactor) -> Router {
             &format!("{W}/connections/{{cid}}/sdp_params"),
             post(offer).put(offer).get(poll_answer),
         )
-        .route(&format!("{W}/connections/{{cid}}/ice_candidates"), post(candidates))
+        .route(
+            &format!("{W}/connections/{{cid}}/ice_candidates"),
+            post(candidates),
+        )
         .route("/sessions/{sid}/uploads", post(create_upload))
-        .route("/sessions/{sid}/uploads/{id}", axum::routing::put(put_upload).layer(axum::extract::DefaultBodyLimit::max(crate::uploads::MAX_UPLOAD_BYTES as usize)))
+        .route(
+            "/sessions/{sid}/uploads/{id}",
+            axum::routing::put(put_upload).layer(axum::extract::DefaultBodyLimit::max(
+                crate::uploads::MAX_UPLOAD_BYTES as usize,
+            )),
+        )
         .layer(CorsLayer::permissive())
         .with_state(rt)
 }
@@ -100,7 +108,11 @@ async fn stop_session(State(rt): State<Reactor>, headers: HeaderMap, body: Bytes
         Err(e) => return e.into_response(),
     };
     let moderate = p.get("moderate").and_then(Value::as_bool).unwrap_or(false);
-    let reason = p.get("reason").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let reason = p
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
     if reason.chars().count() > 64 {
         return Refusal::new(422, "reason: at most 64 characters").into_response();
     }
@@ -122,7 +134,11 @@ struct Since {
 async fn events(State(rt): State<Reactor>, headers: HeaderMap, Query(q): Query<Since>) -> Response {
     let since = q
         .since
-        .or_else(|| headers.get("last-event-id").and_then(|v| v.to_str().ok()?.parse().ok()))
+        .or_else(|| {
+            headers
+                .get("last-event-id")
+                .and_then(|v| v.to_str().ok()?.parse().ok())
+        })
         .unwrap_or(0);
     Sse::new(journal_stream(&rt, since))
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
@@ -132,7 +148,11 @@ async fn events(State(rt): State<Reactor>, headers: HeaderMap, Query(q): Query<S
 fn journal_stream(rt: &Reactor, since: u64) -> impl Stream<Item = Result<SseEvent, Infallible>> {
     let (replay, rx) = rt.journal().subscribe(since);
     let last = replay.last().map_or(since, |e| e.seq);
-    let to_sse = |e: crate::journal::Event| SseEvent::default().id(e.seq.to_string()).data(e.data.to_string());
+    let to_sse = |e: crate::journal::Event| {
+        SseEvent::default()
+            .id(e.seq.to_string())
+            .data(e.data.to_string())
+    };
     let live = stream::unfold((rx, last), |(mut rx, last)| async move {
         loop {
             match rx.recv().await {
@@ -156,7 +176,11 @@ async fn ice_servers(State(rt): State<Reactor>, Path(sid): Path<String>) -> Resp
     }
 }
 
-async fn connections(State(rt): State<Reactor>, Path(sid): Path<String>, headers: HeaderMap) -> Response {
+async fn connections(
+    State(rt): State<Reactor>,
+    Path(sid): Path<String>,
+    headers: HeaderMap,
+) -> Response {
     if let Err(e) = rt.authorize(&headers) {
         return e.into_response();
     }
@@ -167,7 +191,8 @@ async fn connections(State(rt): State<Reactor>, Path(sid): Path<String>, headers
 }
 
 fn parse_cid(cid: &str) -> Result<u32, Refusal> {
-    cid.parse().map_err(|_| Refusal::new(422, "connection_id must be an integer"))
+    cid.parse()
+        .map_err(|_| Refusal::new(422, "connection_id must be an integer"))
 }
 
 async fn offer(
@@ -177,7 +202,10 @@ async fn offer(
     body: Bytes,
 ) -> Response {
     // Session checks come before body validation (RT order).
-    if let Err(e) = rt.require_running(&sid).and_then(|_| rt.authorize(&headers)) {
+    if let Err(e) = rt
+        .require_running(&sid)
+        .and_then(|_| rt.authorize(&headers))
+    {
         return e.into_response();
     }
     let cid = match parse_cid(&cid) {
@@ -186,23 +214,37 @@ async fn offer(
     };
     let params: SdpParams = match serde_json::from_slice(&body) {
         Ok(p) => p,
-        Err(e) => return Refusal::new(422, format!("invalid SdpParamsRequest: {e}")).into_response(),
+        Err(e) => {
+            return Refusal::new(422, format!("invalid SdpParamsRequest: {e}")).into_response()
+        }
     };
-    let header = headers.get("reactor-webrtc-version").and_then(|v| v.to_str().ok());
+    let header = headers
+        .get("reactor-webrtc-version")
+        .and_then(|v| v.to_str().ok());
     match rt.offer(&sid, cid, params, header) {
         Ok(v) => (StatusCode::ACCEPTED, Json(v)).into_response(),
         Err(e) => e.into_response(),
     }
 }
 
-async fn poll_answer(State(rt): State<Reactor>, Path((sid, cid)): Path<(String, String)>, headers: HeaderMap) -> Response {
-    let cid = match rt.require_running(&sid).and_then(|_| rt.authorize(&headers)).and_then(|_| parse_cid(&cid)) {
+async fn poll_answer(
+    State(rt): State<Reactor>,
+    Path((sid, cid)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    let cid = match rt
+        .require_running(&sid)
+        .and_then(|_| rt.authorize(&headers))
+        .and_then(|_| parse_cid(&cid))
+    {
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
     match rt.poll_answer(&sid, cid) {
         Ok(AnswerPoll::Pending) => StatusCode::ACCEPTED.into_response(),
-        Ok(AnswerPoll::Ready(a)) => Json(json!({"sdp_answer": a, "connection_id": cid})).into_response(),
+        Ok(AnswerPoll::Ready(a)) => {
+            Json(json!({"sdp_answer": a, "connection_id": cid})).into_response()
+        }
         Err(e) => e.into_response(),
     }
 }
@@ -240,7 +282,10 @@ struct CreateUpload {
 /// The origin a client reached us at (`x-forwarded-proto` + `Host`), for
 /// the presigned URL; empty (a relative URL) without a `Host`.
 fn origin(headers: &HeaderMap) -> String {
-    let host = headers.get("x-forwarded-host").or_else(|| headers.get("host")).and_then(|v| v.to_str().ok());
+    let host = headers
+        .get("x-forwarded-host")
+        .or_else(|| headers.get("host"))
+        .and_then(|v| v.to_str().ok());
     let proto = headers
         .get("x-forwarded-proto")
         .and_then(|v| v.to_str().ok())
@@ -254,7 +299,12 @@ fn origin(headers: &HeaderMap) -> String {
 }
 
 /// `POST /sessions/{sid}/uploads` (reactor §3.5): 201 with the presigned URL.
-async fn create_upload(State(rt): State<Reactor>, Path(sid): Path<String>, headers: HeaderMap, body: Bytes) -> Response {
+async fn create_upload(
+    State(rt): State<Reactor>,
+    Path(sid): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     if let Err(e) = rt.require_running(&sid) {
         return e.into_response();
     }
@@ -262,7 +312,12 @@ async fn create_upload(State(rt): State<Reactor>, Path(sid): Path<String>, heade
         Ok(r) => r,
         Err(e) => return Refusal::new(422, format!("invalid upload request: {e}")).into_response(),
     };
-    match rt.uploads().create(&req.name, req.size, &req.mime_type, req.upload_id.as_deref()) {
+    match rt.uploads().create(
+        &req.name,
+        req.size,
+        &req.mime_type,
+        req.upload_id.as_deref(),
+    ) {
         Ok(id) => {
             let path = format!("/sessions/{sid}/uploads/{id}");
             (
@@ -276,7 +331,11 @@ async fn create_upload(State(rt): State<Reactor>, Path(sid): Path<String>, heade
 }
 
 /// `PUT /sessions/{sid}/uploads/{id}`: the raw bytes (exactly the declared size).
-async fn put_upload(State(rt): State<Reactor>, Path((sid, id)): Path<(String, String)>, body: Bytes) -> Response {
+async fn put_upload(
+    State(rt): State<Reactor>,
+    Path((sid, id)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
     if let Err(e) = rt.require_running(&sid) {
         return e.into_response();
     }

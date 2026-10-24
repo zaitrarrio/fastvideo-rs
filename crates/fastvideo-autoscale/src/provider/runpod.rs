@@ -29,7 +29,9 @@ use serde_json::{json, Map, Value};
 use super::{ApplyReport, BalanceSource, Provider, ProviderError};
 use crate::config::{PoolConfig, PoolKind};
 use crate::gateway::{SignalSource, WorkerRegistry};
-use crate::types::{EndpointSettings, PoolDecision, PoolObservation, PoolSignals, Worker, WorkerState};
+use crate::types::{
+    EndpointSettings, PoolDecision, PoolObservation, PoolSignals, Worker, WorkerState,
+};
 
 /// API endpoints and the key.
 #[derive(Clone)]
@@ -43,7 +45,10 @@ pub struct RunpodApi {
 
 impl std::fmt::Debug for RunpodApi {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RunpodApi").field("rest", &self.rest).field("queue", &self.queue).finish_non_exhaustive()
+        f.debug_struct("RunpodApi")
+            .field("rest", &self.rest)
+            .field("queue", &self.queue)
+            .finish_non_exhaustive()
     }
 }
 
@@ -104,12 +109,18 @@ impl RunpodApi {
     }
 
     async fn send(&self, req: reqwest::RequestBuilder, ctx: &str) -> Result<Value, ProviderError> {
-        let resp = req.bearer_auth(&self.key).send().await.map_err(|e| err(ctx, e.without_url()))?;
+        let resp = req
+            .bearer_auth(&self.key)
+            .send()
+            .await
+            .map_err(|e| err(ctx, e.without_url()))?;
         let status = resp.status();
         let text = resp.text().await.map_err(|e| err(ctx, e.without_url()))?;
         if !status.is_success() {
             let snippet: String = text.chars().take(300).collect();
-            if snippet.contains("no instances currently available") || snippet.contains("no longer any instances") {
+            if snippet.contains("no instances currently available")
+                || snippet.contains("no longer any instances")
+            {
                 return Err(ProviderError::NoCapacity(format!("{ctx}: {snippet}")));
             }
             return Err(err(ctx, format!("HTTP {status}: {snippet}")));
@@ -121,22 +132,39 @@ impl RunpodApi {
     }
 
     pub async fn endpoint(&self, id: &str) -> Result<Value, ProviderError> {
-        self.send(self.http.get(format!("{}/endpoints/{id}", self.rest)), "GET endpoint").await
+        self.send(
+            self.http.get(format!("{}/endpoints/{id}", self.rest)),
+            "GET endpoint",
+        )
+        .await
     }
 
     pub async fn patch_endpoint(&self, id: &str, body: &Value) -> Result<Value, ProviderError> {
-        self.send(self.http.patch(format!("{}/endpoints/{id}", self.rest)).json(body), "PATCH endpoint").await
+        self.send(
+            self.http
+                .patch(format!("{}/endpoints/{id}", self.rest))
+                .json(body),
+            "PATCH endpoint",
+        )
+        .await
     }
 
     pub async fn health(&self, id: &str) -> Result<Health, ProviderError> {
-        let v = self.send(self.http.get(format!("{}/{id}/health", self.queue)), "GET health").await?;
+        let v = self
+            .send(
+                self.http.get(format!("{}/{id}/health", self.queue)),
+                "GET health",
+            )
+            .await?;
         serde_json::from_value(v).map_err(|e| err("health", e))
     }
 
     pub async fn balance(&self) -> Result<f64, ProviderError> {
         let v = self
             .send(
-                self.http.post(&self.graphql).json(&json!({"query": "{ myself { clientBalance } }"})),
+                self.http
+                    .post(&self.graphql)
+                    .json(&json!({"query": "{ myself { clientBalance } }"})),
                 "GraphQL balance",
             )
             .await?;
@@ -146,18 +174,30 @@ impl RunpodApi {
     }
 
     pub async fn pods(&self) -> Result<Vec<Value>, ProviderError> {
-        match self.send(self.http.get(format!("{}/pods", self.rest)), "GET pods").await? {
+        match self
+            .send(self.http.get(format!("{}/pods", self.rest)), "GET pods")
+            .await?
+        {
             Value::Array(v) => Ok(v),
             _ => Ok(Vec::new()),
         }
     }
 
     pub async fn create_pod(&self, body: &Value) -> Result<Value, ProviderError> {
-        self.send(self.http.post(format!("{}/pods", self.rest)).json(body), "POST pods").await
+        self.send(
+            self.http.post(format!("{}/pods", self.rest)).json(body),
+            "POST pods",
+        )
+        .await
     }
 
     pub async fn delete_pod(&self, id: &str) -> Result<(), ProviderError> {
-        self.send(self.http.delete(format!("{}/pods/{id}", self.rest)), "DELETE pod").await.map(|_| ())
+        self.send(
+            self.http.delete(format!("{}/pods/{id}", self.rest)),
+            "DELETE pod",
+        )
+        .await
+        .map(|_| ())
     }
 }
 
@@ -168,13 +208,20 @@ pub fn endpoint_settings(v: &Value) -> EndpointSettings {
         workers_min: u("workersMin"),
         workers_max: u("workersMax"),
         idle_timeout_s: u("idleTimeout"),
-        scaler_type: v.get("scalerType").and_then(Value::as_str).unwrap_or("").to_owned(),
+        scaler_type: v
+            .get("scalerType")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned(),
         scaler_value: u("scalerValue"),
     }
 }
 
 /// The PATCH body: only fields that differ.
-pub fn endpoint_patch(cur: Option<&EndpointSettings>, want: &EndpointSettings) -> Map<String, Value> {
+pub fn endpoint_patch(
+    cur: Option<&EndpointSettings>,
+    want: &EndpointSettings,
+) -> Map<String, Value> {
     let mut m = Map::new();
     let differs = |f: &dyn Fn(&EndpointSettings) -> Value| cur.is_none_or(|c| f(c) != f(want));
     if differs(&|e| json!(e.workers_min)) {
@@ -237,16 +284,30 @@ impl Provider for RunpodServerless {
         "runpod-serverless"
     }
 
-    async fn observe(&self, pool: &PoolConfig, now_s: f64) -> Result<PoolObservation, ProviderError> {
+    async fn observe(
+        &self,
+        pool: &PoolConfig,
+        now_s: f64,
+    ) -> Result<PoolObservation, ProviderError> {
         let id = &pool.serverless.endpoint_id;
         let ep = self.api.endpoint(id).await?;
         let h = self.api.health(id).await?;
-        Ok(PoolObservation { workers: health_workers(&h, now_s), endpoint: Some(endpoint_settings(&ep)) })
+        Ok(PoolObservation {
+            workers: health_workers(&h, now_s),
+            endpoint: Some(endpoint_settings(&ep)),
+        })
     }
 
-    async fn apply(&self, pool: &PoolConfig, d: &PoolDecision, _now_s: f64) -> Result<ApplyReport, ProviderError> {
+    async fn apply(
+        &self,
+        pool: &PoolConfig,
+        d: &PoolDecision,
+        _now_s: f64,
+    ) -> Result<ApplyReport, ProviderError> {
         let mut r = ApplyReport::default();
-        let Some(want) = d.endpoint.as_ref() else { return Ok(r) };
+        let Some(want) = d.endpoint.as_ref() else {
+            return Ok(r);
+        };
         let id = &pool.serverless.endpoint_id;
         // Re-read right before writing: another tool may have changed it.
         let cur = endpoint_settings(&self.api.endpoint(id).await?);
@@ -291,7 +352,11 @@ impl RunpodHealthSignals {
             .filter(|p| p.kind == PoolKind::Serverless)
             .map(|p| (p.name.clone(), p.serverless.endpoint_id.clone()))
             .collect();
-        Self { api, endpoints, since: Mutex::new(BTreeMap::new()) }
+        Self {
+            api,
+            endpoints,
+            since: Mutex::new(BTreeMap::new()),
+        }
     }
 }
 
@@ -301,7 +366,9 @@ impl SignalSource for RunpodHealthSignals {
         let now = crate::controller::unix_now();
         let mut out = Vec::new();
         for pool in pools {
-            let Some(ep) = self.endpoints.get(pool) else { continue };
+            let Some(ep) = self.endpoints.get(pool) else {
+                continue;
+            };
             let h = match self.api.health(ep).await {
                 Ok(h) => h,
                 Err(e) => {
@@ -324,7 +391,10 @@ impl SignalSource for RunpodHealthSignals {
                 oldest_queued_s: oldest,
                 running_jobs: h.jobs.in_progress as u32,
                 live_streams: 0,
-                arrivals_total: h.jobs.completed + h.jobs.failed + h.jobs.in_progress + h.jobs.in_queue,
+                arrivals_total: h.jobs.completed
+                    + h.jobs.failed
+                    + h.jobs.in_progress
+                    + h.jobs.in_queue,
                 recent_job_s: None,
                 arrival_rate_per_s: None,
             });
@@ -351,18 +421,49 @@ pub struct GatewayWorkers {
 }
 
 impl GatewayWorkers {
-    pub fn new(d1: fastvideo_serve_kit::d1::D1Client, internal_token: Option<String>) -> Result<Self, ProviderError> {
-        let http = reqwest::Client::builder().timeout(Duration::from_secs(10)).build().map_err(|e| err("http client", e))?;
-        Ok(Self { d1, http, internal_token, urls: Mutex::new(BTreeMap::new()) })
+    pub fn new(
+        d1: fastvideo_serve_kit::d1::D1Client,
+        internal_token: Option<String>,
+    ) -> Result<Self, ProviderError> {
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| err("http client", e))?;
+        Ok(Self {
+            d1,
+            http,
+            internal_token,
+            urls: Mutex::new(BTreeMap::new()),
+        })
     }
 
     async fn post(&self, worker_id: &str, path: &str) {
-        let Some(url) = self.urls.lock().unwrap_or_else(|p| p.into_inner()).get(worker_id).cloned() else { return };
-        let Some(tok) = &self.internal_token else { return };
-        match self.http.post(format!("{url}{path}")).header("x-fv-internal-token", tok).send().await {
+        let Some(url) = self
+            .urls
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(worker_id)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(tok) = &self.internal_token else {
+            return;
+        };
+        match self
+            .http
+            .post(format!("{url}{path}"))
+            .header("x-fv-internal-token", tok)
+            .send()
+            .await
+        {
             Ok(r) if r.status().is_success() => {}
-            Ok(r) => tracing::warn!(worker = %worker_id, status = %r.status(), path, "autoscale: worker drain request refused"),
-            Err(e) => tracing::warn!(worker = %worker_id, error = %e.without_url(), path, "autoscale: worker unreachable"),
+            Ok(r) => {
+                tracing::warn!(worker = %worker_id, status = %r.status(), path, "autoscale: worker drain request refused")
+            }
+            Err(e) => {
+                tracing::warn!(worker = %worker_id, error = %e.without_url(), path, "autoscale: worker unreachable")
+            }
         }
     }
 }
@@ -370,8 +471,16 @@ impl GatewayWorkers {
 #[async_trait::async_trait]
 impl WorkerRegistry for GatewayWorkers {
     async fn register(&self, pool: &str, worker_id: &str, url: &str) {
-        self.urls.lock().unwrap_or_else(|p| p.into_inner()).insert(worker_id.to_owned(), url.to_owned());
-        tracing::info!(pool, worker = worker_id, url, "autoscale: pod ready (it registers itself with the gateway)");
+        self.urls
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(worker_id.to_owned(), url.to_owned());
+        tracing::info!(
+            pool,
+            worker = worker_id,
+            url,
+            "autoscale: pod ready (it registers itself with the gateway)"
+        );
     }
     async fn drain(&self, _pool: &str, worker_id: &str) {
         self.post(worker_id, "/fv/v1/internal/drain").await;
@@ -380,7 +489,10 @@ impl WorkerRegistry for GatewayWorkers {
         self.post(worker_id, "/fv/v1/internal/undrain").await;
     }
     async fn deregister(&self, _pool: &str, worker_id: &str) {
-        self.urls.lock().unwrap_or_else(|p| p.into_inner()).remove(worker_id);
+        self.urls
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(worker_id);
     }
     async fn in_flight(&self, pool: &str) -> BTreeMap<String, u32> {
         let now = crate::controller::unix_now();
@@ -403,7 +515,8 @@ impl WorkerRegistry for GatewayWorkers {
             if now - at > 45.0 {
                 continue;
             }
-            let n = r.get("running").and_then(Value::as_u64).unwrap_or(0) + r.get("sessions").and_then(Value::as_u64).unwrap_or(0);
+            let n = r.get("running").and_then(Value::as_u64).unwrap_or(0)
+                + r.get("sessions").and_then(Value::as_u64).unwrap_or(0);
             for k in ["worker_id", "url"] {
                 if let Some(s) = r.get(k).and_then(Value::as_str) {
                     m.insert(s.trim_end_matches('/').to_owned(), n as u32);
@@ -424,9 +537,15 @@ pub fn parse_runpod_time(s: &str) -> Option<f64> {
     let mut d = date.split('-').map(|x| x.parse::<i64>().ok());
     let (y, mo, da) = (d.next()??, d.next()??, d.next()??);
     let time = rest.trim_start_matches([' ', 'T']);
-    let hms: String = time.chars().take_while(|c| c.is_ascii_digit() || *c == ':' || *c == '.').collect();
+    let hms: String = time
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == ':' || *c == '.')
+        .collect();
     let mut t = hms.split(':');
-    let (h, mi) = (t.next()?.parse::<i64>().ok()?, t.next()?.parse::<i64>().ok()?);
+    let (h, mi) = (
+        t.next()?.parse::<i64>().ok()?,
+        t.next()?.parse::<i64>().ok()?,
+    );
     let sec: f64 = t.next()?.parse().ok()?;
     // Days from civil (Howard Hinnant).
     let y2 = if mo <= 2 { y - 1 } else { y };
@@ -456,9 +575,22 @@ pub struct RunpodPods {
 }
 
 impl RunpodPods {
-    pub fn new(api: RunpodApi, registry: Arc<dyn WorkerRegistry>, prices: BTreeMap<String, f64>) -> Result<Self, ProviderError> {
-        let http = reqwest::Client::builder().timeout(Duration::from_secs(10)).build().map_err(|e| err("http client", e))?;
-        Ok(Self { api, http, registry, prices, book: Mutex::new(PodBook::default()) })
+    pub fn new(
+        api: RunpodApi,
+        registry: Arc<dyn WorkerRegistry>,
+        prices: BTreeMap<String, f64>,
+    ) -> Result<Self, ProviderError> {
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| err("http client", e))?;
+        Ok(Self {
+            api,
+            http,
+            registry,
+            prices,
+            book: Mutex::new(PodBook::default()),
+        })
     }
 
     fn book(&self) -> std::sync::MutexGuard<'_, PodBook> {
@@ -501,11 +633,21 @@ impl RunpodPods {
         matches!(self.http.get(format!("{url}{path}")).send().await, Ok(r) if r.status().as_u16() == 200)
     }
 
-    async fn create_one(&self, pool: &PoolConfig, now_s: f64, r: &mut ApplyReport) -> Result<String, ProviderError> {
+    async fn create_one(
+        &self,
+        pool: &PoolConfig,
+        now_s: f64,
+        r: &mut ApplyReport,
+    ) -> Result<String, ProviderError> {
         let name = {
             let mut b = self.book();
             b.seq += 1;
-            format!("{}{}{}", Self::prefix(&pool.name), now_s as u64 % 100_000_000, b.seq)
+            format!(
+                "{}{}{}",
+                Self::prefix(&pool.name),
+                now_s as u64 % 100_000_000,
+                b.seq
+            )
         };
         let mut last = None;
         for (label, body) in Self::payloads(pool, &name) {
@@ -523,7 +665,9 @@ impl RunpodPods {
                         self.prices.get(gpu).map_or(f64::INFINITY, |p| p * 1.25)
                     };
                     if dph > cap {
-                        r.notes.push(format!("{id} on {label} costs ${dph}/h > ${cap:.2}/h: deleted"));
+                        r.notes.push(format!(
+                            "{id} on {label} costs ${dph}/h > ${cap:.2}/h: deleted"
+                        ));
                         let _ = self.api.delete_pod(&id).await;
                         continue;
                     }
@@ -541,7 +685,9 @@ impl RunpodPods {
                 }
             }
         }
-        Err(last.unwrap_or_else(|| ProviderError::NoCapacity("no GPU type / placement configured".into())))
+        Err(last.unwrap_or_else(|| {
+            ProviderError::NoCapacity("no GPU type / placement configured".into())
+        }))
     }
 }
 
@@ -551,27 +697,41 @@ impl Provider for RunpodPods {
         "runpod-pods"
     }
 
-    async fn observe(&self, pool: &PoolConfig, now_s: f64) -> Result<PoolObservation, ProviderError> {
+    async fn observe(
+        &self,
+        pool: &PoolConfig,
+        now_s: f64,
+    ) -> Result<PoolObservation, ProviderError> {
         let prefix = Self::prefix(&pool.name);
         let pods: Vec<Value> = self
             .api
             .pods()
             .await?
             .into_iter()
-            .filter(|p| p.get("name").and_then(Value::as_str).is_some_and(|n| n.starts_with(&prefix)))
+            .filter(|p| {
+                p.get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|n| n.starts_with(&prefix))
+            })
             .filter(|p| p.get("desiredStatus").and_then(Value::as_str) != Some("TERMINATED"))
             .collect();
         let load = self.registry.in_flight(&pool.name).await;
         let mut workers = Vec::new();
         for p in pods {
-            let Some(id) = p.get("id").and_then(Value::as_str).map(str::to_owned) else { continue };
+            let Some(id) = p.get("id").and_then(Value::as_str).map(str::to_owned) else {
+                continue;
+            };
             let url = Self::url(pool, &id);
             let created = self
                 .book()
                 .created_at
                 .get(&id)
                 .copied()
-                .or_else(|| p.get("createdAt").and_then(Value::as_str).and_then(parse_runpod_time))
+                .or_else(|| {
+                    p.get("createdAt")
+                        .and_then(Value::as_str)
+                        .and_then(parse_runpod_time)
+                })
                 .unwrap_or(now_s);
             let mut ready_at = self.book().ready_at.get(&id).copied();
             if ready_at.is_none() && self.is_ready(&url, &pool.pod.ready_path).await {
@@ -580,7 +740,11 @@ impl Provider for RunpodPods {
                 self.registry.register(&pool.name, &id, &url).await;
                 tracing::info!(pool = %pool.name, pod = %id, after_s = now_s - created, "autoscale: pod ready");
             }
-            let busy = load.get(&id).or_else(|| load.get(&url)).copied().unwrap_or(0);
+            let busy = load
+                .get(&id)
+                .or_else(|| load.get(&url))
+                .copied()
+                .unwrap_or(0);
             let state = if self.book().draining.contains(&id) {
                 WorkerState::Draining
             } else if ready_at.is_some() {
@@ -595,14 +759,25 @@ impl Provider for RunpodPods {
                 created_at_s: created,
                 ready_at_s: ready_at,
                 url: Some(url),
-                gpu_type: p.pointer("/machine/gpuTypeId").and_then(Value::as_str).map(str::to_owned),
+                gpu_type: p
+                    .pointer("/machine/gpuTypeId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
                 usd_per_hr: p.get("costPerHr").and_then(Value::as_f64),
             });
         }
-        Ok(PoolObservation { workers, endpoint: None })
+        Ok(PoolObservation {
+            workers,
+            endpoint: None,
+        })
     }
 
-    async fn apply(&self, pool: &PoolConfig, d: &PoolDecision, now_s: f64) -> Result<ApplyReport, ProviderError> {
+    async fn apply(
+        &self,
+        pool: &PoolConfig,
+        d: &PoolDecision,
+        now_s: f64,
+    ) -> Result<ApplyReport, ProviderError> {
         let mut r = ApplyReport::default();
         for id in &d.drain {
             self.book().draining.insert(id.clone());
@@ -618,9 +793,14 @@ impl Provider for RunpodPods {
             let load = self.registry.in_flight(&pool.name).await;
             for id in &d.delete {
                 let url = Self::url(pool, id);
-                let busy = load.get(id).or_else(|| load.get(&url)).copied().unwrap_or(0);
+                let busy = load
+                    .get(id)
+                    .or_else(|| load.get(&url))
+                    .copied()
+                    .unwrap_or(0);
                 if busy > 0 {
-                    r.notes.push(format!("{id} got work since the decision: not deleted"));
+                    r.notes
+                        .push(format!("{id} got work since the decision: not deleted"));
                     continue;
                 }
                 match self.api.delete_pod(id).await {
@@ -657,10 +837,23 @@ mod tests {
 
     #[test]
     fn patch_has_only_changed_fields() {
-        let cur = EndpointSettings { workers_min: 0, workers_max: 1, idle_timeout_s: 5, scaler_type: "QUEUE_DELAY".into(), scaler_value: 1 };
-        let want = EndpointSettings { workers_min: 2, idle_timeout_s: 60, ..cur.clone() };
+        let cur = EndpointSettings {
+            workers_min: 0,
+            workers_max: 1,
+            idle_timeout_s: 5,
+            scaler_type: "QUEUE_DELAY".into(),
+            scaler_value: 1,
+        };
+        let want = EndpointSettings {
+            workers_min: 2,
+            idle_timeout_s: 60,
+            ..cur.clone()
+        };
         let p = endpoint_patch(Some(&cur), &want);
-        assert_eq!(Value::Object(p), json!({"workersMin": 2, "idleTimeout": 60}));
+        assert_eq!(
+            Value::Object(p),
+            json!({"workersMin": 2, "idleTimeout": 60})
+        );
         assert!(endpoint_patch(Some(&cur), &cur).is_empty());
         let v = json!({"workersMin": 1, "workersMax": 3, "idleTimeout": 300, "scalerType": "QUEUE_DELAY", "scalerValue": 4});
         assert_eq!(endpoint_settings(&v).workers_max, 3);
@@ -677,15 +870,27 @@ mod tests {
         assert_eq!(w.len(), 3);
         assert_eq!(w.iter().filter(|w| w.busy > 0).count(), 1);
         // Running workers with no job in progress are not busy.
-        let idle: Health = serde_json::from_str(r#"{"jobs":{"inProgress":0},"workers":{"running":2}}"#).unwrap();
+        let idle: Health =
+            serde_json::from_str(r#"{"jobs":{"inProgress":0},"workers":{"running":2}}"#).unwrap();
         assert!(health_workers(&idle, 0.0).iter().all(|w| w.busy == 0));
-        assert_eq!(w.iter().filter(|w| w.state == WorkerState::Starting).count(), 1);
+        assert_eq!(
+            w.iter()
+                .filter(|w| w.state == WorkerState::Starting)
+                .count(),
+            1
+        );
     }
 
     #[test]
     fn runpod_times() {
-        assert_eq!(parse_runpod_time("2026-09-28 00:00:00.000 +0000 UTC"), Some(1_790_553_600.0));
-        assert_eq!(parse_runpod_time("2026-09-27T20:31:01Z"), Some(1_790_553_600.0 - 12_539.0));
+        assert_eq!(
+            parse_runpod_time("2026-09-28 00:00:00.000 +0000 UTC"),
+            Some(1_790_553_600.0)
+        );
+        assert_eq!(
+            parse_runpod_time("2026-09-27T20:31:01Z"),
+            Some(1_790_553_600.0 - 12_539.0)
+        );
         assert_eq!(parse_runpod_time("garbage"), None);
     }
 
@@ -700,8 +905,14 @@ mod tests {
                 // Two regions (a hypothetical rebuilt US volume first; the old
                 // US volume s2k01690bi was deleted 2026-10).
                 placements: vec![
-                    Placement { data_center: "US-CA-2".into(), volume_id: "usrebuilt0".into() },
-                    Placement { data_center: "EU-RO-1".into(), volume_id: "bz0ofkfx45".into() },
+                    Placement {
+                        data_center: "US-CA-2".into(),
+                        volume_id: "usrebuilt0".into(),
+                    },
+                    Placement {
+                        data_center: "EU-RO-1".into(),
+                        volume_id: "bz0ofkfx45".into(),
+                    },
                 ],
                 ..PodConfig::default()
             },
@@ -711,7 +922,12 @@ mod tests {
         let order: Vec<&str> = p.iter().map(|(l, _)| l.as_str()).collect();
         assert_eq!(
             order,
-            ["NVIDIA H100 80GB HBM3 in US-CA-2", "NVIDIA H200 in US-CA-2", "NVIDIA H100 80GB HBM3 in EU-RO-1", "NVIDIA H200 in EU-RO-1"]
+            [
+                "NVIDIA H100 80GB HBM3 in US-CA-2",
+                "NVIDIA H200 in US-CA-2",
+                "NVIDIA H100 80GB HBM3 in EU-RO-1",
+                "NVIDIA H200 in EU-RO-1"
+            ]
         );
         let b = &p[2].1;
         assert_eq!(b["networkVolumeId"], "bz0ofkfx45");

@@ -7,8 +7,8 @@ use fastvideo_media::video::FfmpegH264;
 use fastvideo_protocol::{ApiError, ModelCaps, ModelId, ResolvedJob};
 use serde::{Deserialize, Serialize};
 
-use super::caps::{CudaModel, CudaRecipe, ProcessPlan};
 use super::caps::SfWanRecipe;
+use super::caps::{CudaModel, CudaRecipe, ProcessPlan};
 use super::causal::CausalDriver;
 use super::h3::H3Model;
 use super::ltx2::Ltx2Model;
@@ -87,7 +87,10 @@ struct SfWan {
 }
 
 /// The rollout settings of a recipe (everything but prompt, canvas, seed).
-fn rollout_base(r: &SfWanRecipe, text_cache: Option<&Path>) -> fastvideo_cudarc::wan::stream::RolloutConfig {
+fn rollout_base(
+    r: &SfWanRecipe,
+    text_cache: Option<&Path>,
+) -> fastvideo_cudarc::wan::stream::RolloutConfig {
     use fastvideo_cudarc::wan::stream::{PromptSwitch, RolloutConfig, RopePolicy};
     let tok = r.wan.weights.join("tokenizer").join("tokenizer.json");
     let base = RolloutConfig {
@@ -140,8 +143,9 @@ fn longlive_dit(
             l.weights.display()
         )));
     }
-    let (map, _) = fastvideo_cudarc::wan::longlive::load_transformer_map(&w)
-        .map_err(|e| ApiError::engine_failed(format!("longlive weights {}: {e}", l.weights.display())))?;
+    let (map, _) = fastvideo_cudarc::wan::longlive::load_transformer_map(&w).map_err(|e| {
+        ApiError::engine_failed(format!("longlive weights {}: {e}", l.weights.display()))
+    })?;
     Ok(Some(map))
 }
 
@@ -220,9 +224,12 @@ impl CudaBackend {
     pub fn new(mut cfg: CudaBackendConfig) -> Result<Self, ApiError> {
         // The caps are published before the executor creates the context:
         // decide the H3 1080P tier on the device's total memory now.
-        if cfg.models.iter().any(|m| matches!(&m.recipe, CudaRecipe::H3(r) if r.hd_1080p)) {
-            let total =
-                fastvideo_cudarc::wan::device::device_total_memory(cfg.device as usize);
+        if cfg
+            .models
+            .iter()
+            .any(|m| matches!(&m.recipe, CudaRecipe::H3(r) if r.hd_1080p))
+        {
+            let total = fastvideo_cudarc::wan::device::device_total_memory(cfg.device as usize);
             match super::caps::gate_h3_1080p(&mut cfg.models, total) {
                 Some(off) => tracing::warn!("{off}"),
                 None => tracing::info!(
@@ -248,9 +255,15 @@ impl CudaBackend {
         // capability, FP8/NVFP4, memory) is failed with the reason instead
         // of loading and reporting ready.
         let mut unsupported = BTreeMap::new();
-        if let Some((name, (major, minor))) = fastvideo_cudarc::wan::device::device_identity(cfg.device as usize) {
+        if let Some((name, (major, minor))) =
+            fastvideo_cudarc::wan::device::device_identity(cfg.device as usize)
+        {
             let total = fastvideo_cudarc::wan::device::device_total_memory(cfg.device as usize);
-            let dev = crate::device::DeviceProfile::new(name, (major.max(0) as u32, minor.max(0) as u32), total);
+            let dev = crate::device::DeviceProfile::new(
+                name,
+                (major.max(0) as u32, minor.max(0) as u32),
+                total,
+            );
             for m in &cfg.models {
                 if let Err(why) = m.requirements().check(m.id.as_str(), &dev) {
                     tracing::error!(model = %m.id, "{why}");
@@ -339,7 +352,9 @@ impl CudaBackend {
                 runs = %runs.join(", "),
                 "warmup done"
             ),
-            Some(e) => tracing::warn!(model = %m.id, error = %e, "warmup failed; serving without it"),
+            Some(e) => {
+                tracing::warn!(model = %m.id, error = %e, "warmup failed; serving without it")
+            }
         }
     }
 
@@ -364,7 +379,10 @@ impl CudaBackend {
         name: &str,
         cancel: &crate::cancel::CancelToken,
     ) -> Result<String, ApiError> {
-        let dir = self.cfg.work_dir.join(format!("warmup-{}", uuid::Uuid::new_v4()));
+        let dir = self
+            .cfg
+            .work_dir
+            .join(format!("warmup-{}", uuid::Uuid::new_v4()));
         let r = self.warmup_job(m, name, &dir, cancel);
         remove_dir(&dir);
         r
@@ -471,8 +489,11 @@ fn model_scope(
 ) -> Result<Option<fastvideo_models::techniques::settings::ModelScope>, ApiError> {
     match &m.recipe {
         CudaRecipe::H3(r) => {
-            let own = super::caps::profile_settings(r.profile.as_deref()).map_err(ApiError::internal)?;
-            Ok(Some(fastvideo_models::techniques::settings::scope_model(own)))
+            let own =
+                super::caps::profile_settings(r.profile.as_deref()).map_err(ApiError::internal)?;
+            Ok(Some(fastvideo_models::techniques::settings::scope_model(
+                own,
+            )))
         }
         _ => Ok(None),
     }
@@ -515,7 +536,9 @@ impl EngineBackend for CudaBackend {
         self.device()?;
         // Co-residency check: the DiT alone must fit in what is free now
         // (the models already resident hold the rest).
-        if let (Some(need), Some((free, total))) = (m.dit_bytes(), fastvideo_cudarc::wan::device::free_memory()) {
+        if let (Some(need), Some((free, total))) =
+            (m.dit_bytes(), fastvideo_cudarc::wan::device::free_memory())
+        {
             if need > free {
                 let gb = |b: u64| b as f64 / 1e9;
                 return Err(ApiError::engine_failed(format!(
@@ -551,9 +574,9 @@ impl EngineBackend for CudaBackend {
                     Some(p) => *p,
                     None => {
                         let dit = longlive_dit(r)?;
-                        let p: &'static _ = Box::leak(Box::new(super::wan::load_pipeline_with_dit(
-                            &r.wan, &mut stage, dit,
-                        )?));
+                        let p: &'static _ = Box::leak(Box::new(
+                            super::wan::load_pipeline_with_dit(&r.wan, &mut stage, dit)?,
+                        ));
                         self.causal_pipes.insert(model.clone(), p);
                         p
                     }
@@ -568,7 +591,8 @@ impl EngineBackend for CudaBackend {
         obs(LoadEvent::Progress { done: 1, total: 1 });
         tracing::info!(model = %model, seconds = t0.elapsed().as_secs_f64(), "model resident");
         self.loaded.insert(model.clone(), loaded);
-        if matches!(&m.recipe, CudaRecipe::H3(r) if super::caps::WarmupMode::of(r) == super::caps::WarmupMode::Blocking) {
+        if matches!(&m.recipe, CudaRecipe::H3(r) if super::caps::WarmupMode::of(r) == super::caps::WarmupMode::Blocking)
+        {
             obs(LoadEvent::Stage("warmup"));
             self.warmup(&m);
         }
@@ -577,9 +601,13 @@ impl EngineBackend for CudaBackend {
 
     fn warmup_pending(&self, model: &ModelId) -> Vec<String> {
         match self.models.get(model) {
-            Some(m @ CudaModel { recipe: CudaRecipe::H3(r), .. })
-                if self.loaded.contains_key(model)
-                    && super::caps::WarmupMode::of(r) == super::caps::WarmupMode::Background =>
+            Some(
+                m @ CudaModel {
+                    recipe: CudaRecipe::H3(r),
+                    ..
+                },
+            ) if self.loaded.contains_key(model)
+                && super::caps::WarmupMode::of(r) == super::caps::WarmupMode::Background =>
             {
                 Self::warmup_names(m)
             }
@@ -640,19 +668,29 @@ impl EngineBackend for CudaBackend {
         let r = match loaded {
             Loaded::H3(m) => {
                 let planned = m.planned_steps();
-                deliver(job, ctl, out, &opts, Some(planned), |h| m.generate(job, &work, h))
+                deliver(job, ctl, out, &opts, Some(planned), |h| {
+                    m.generate(job, &work, h)
+                })
             }
             Loaded::Ltx2(m) => {
                 let planned = m.planned_steps(job);
-                deliver(job, ctl, out, &opts, Some(planned), |h| m.generate(job, &work, h))
+                deliver(job, ctl, out, &opts, Some(planned), |h| {
+                    m.generate(job, &work, h)
+                })
             }
             Loaded::Wan(m) => {
                 let planned = super::wan::planned_steps(m.recipe(), job);
-                deliver(job, ctl, out, &opts, Some(planned), |h| m.generate(job, &work, h))
+                deliver(job, ctl, out, &opts, Some(planned), |h| {
+                    m.generate(job, &work, h)
+                })
             }
             Loaded::SfWan(m) => {
                 // The bounded SF-Wan clip (`wan gen --preset sf_wan_t2v_1_3b`).
-                let cfg = WanModel::config(&m.recipe.wan, text_cache.as_ref().map(|c| c.join("wan")).as_deref(), job)?;
+                let cfg = WanModel::config(
+                    &m.recipe.wan,
+                    text_cache.as_ref().map(|c| c.join("wan")).as_deref(),
+                    job,
+                )?;
                 let planned = super::wan::planned_steps(&m.recipe.wan, job);
                 let pipe = m.pipe;
                 deliver(job, ctl, out, &opts, Some(planned), |h| {
@@ -698,7 +736,9 @@ impl EngineBackend for CudaBackend {
             .ok_or_else(|| ApiError::invalid(format!("causal session {s} is not open")))?;
         match self.loaded.get_mut(model) {
             Some(Loaded::SfWan(m)) => m.driver.block(s, input, out, ctl),
-            _ => Err(ApiError::engine_failed(format!("causal model `{model}` is not resident"))),
+            _ => Err(ApiError::engine_failed(format!(
+                "causal model `{model}` is not resident"
+            ))),
         }
     }
 

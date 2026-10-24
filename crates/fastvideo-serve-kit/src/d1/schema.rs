@@ -37,10 +37,11 @@ use serde_json::json;
 use super::client::{D1Client, D1Error, Stmt};
 
 /// `(version, statements)`, in order. Never edit a shipped migration; append.
-pub const MIGRATIONS: &[(u32, &[&str])] = &[(
-    1,
-    &[
-        "CREATE TABLE IF NOT EXISTS jobs (
+pub const MIGRATIONS: &[(u32, &[&str])] = &[
+    (
+        1,
+        &[
+            "CREATE TABLE IF NOT EXISTS jobs (
             id TEXT PRIMARY KEY NOT NULL,
             protocol TEXT NOT NULL,
             external_id TEXT NOT NULL,
@@ -59,18 +60,19 @@ pub const MIGRATIONS: &[(u32, &[&str])] = &[(
             job TEXT NOT NULL,
             UNIQUE (protocol, external_id)
         )",
-        "CREATE INDEX IF NOT EXISTS jobs_owner_created ON jobs (owner, protocol, created_at)",
-        "CREATE INDEX IF NOT EXISTS jobs_status_created ON jobs (status, created_at)",
-        "CREATE INDEX IF NOT EXISTS jobs_protocol_created ON jobs (protocol, created_at)",
-        "CREATE INDEX IF NOT EXISTS jobs_expires ON jobs (expires_at)",
-        "CREATE INDEX IF NOT EXISTS jobs_worker_status ON jobs (worker, status)",
-    ],
-), (
-    2,
-    &[
-        // Dynamic API keys (`crate::keys`): only the SHA-256 digest of a key
-        // is stored, never the key.
-        "CREATE TABLE IF NOT EXISTS api_keys (
+            "CREATE INDEX IF NOT EXISTS jobs_owner_created ON jobs (owner, protocol, created_at)",
+            "CREATE INDEX IF NOT EXISTS jobs_status_created ON jobs (status, created_at)",
+            "CREATE INDEX IF NOT EXISTS jobs_protocol_created ON jobs (protocol, created_at)",
+            "CREATE INDEX IF NOT EXISTS jobs_expires ON jobs (expires_at)",
+            "CREATE INDEX IF NOT EXISTS jobs_worker_status ON jobs (worker, status)",
+        ],
+    ),
+    (
+        2,
+        &[
+            // Dynamic API keys (`crate::keys`): only the SHA-256 digest of a key
+            // is stored, never the key.
+            "CREATE TABLE IF NOT EXISTS api_keys (
             id TEXT PRIMARY KEY NOT NULL,
             name TEXT NOT NULL,
             prefix TEXT NOT NULL,
@@ -79,16 +81,18 @@ pub const MIGRATIONS: &[(u32, &[&str])] = &[(
             last_used_at INTEGER,
             revoked_at INTEGER
         )",
-    ],
-), (
-    3,
-    &[
-        // Fencing token of a pushed job (docs/serve/gateway-cloudflare.md,
-        // phase 2): the lease the pool dispatcher gave the worker holding
-        // it; a write with an older lease is refused.
-        "ALTER TABLE jobs ADD COLUMN lease INTEGER",
-    ],
-)];
+        ],
+    ),
+    (
+        3,
+        &[
+            // Fencing token of a pushed job (docs/serve/gateway-cloudflare.md,
+            // phase 2): the lease the pool dispatcher gave the worker holding
+            // it; a write with an older lease is refused.
+            "ALTER TABLE jobs ADD COLUMN lease INTEGER",
+        ],
+    ),
+];
 
 /// The newest schema version this build knows.
 pub fn latest() -> u32 {

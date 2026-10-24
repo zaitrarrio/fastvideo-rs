@@ -45,7 +45,10 @@ pub struct StaticSignals {
 
 impl StaticSignals {
     pub fn set(&self, s: PoolSignals) {
-        self.inner.lock().unwrap_or_else(|p| p.into_inner()).insert(s.pool.clone(), s);
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(s.pool.clone(), s);
     }
 }
 
@@ -73,10 +76,21 @@ pub struct MemoryRegistry {
 
 impl MemoryRegistry {
     pub fn snapshot(&self, pool: &str) -> BTreeMap<String, Registered> {
-        self.inner.lock().unwrap_or_else(|p| p.into_inner()).get(pool).cloned().unwrap_or_default()
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(pool)
+            .cloned()
+            .unwrap_or_default()
     }
     pub fn set_in_flight(&self, pool: &str, worker: &str, n: u32) {
-        if let Some(w) = self.inner.lock().unwrap_or_else(|p| p.into_inner()).get_mut(pool).and_then(|m| m.get_mut(worker)) {
+        if let Some(w) = self
+            .inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_mut(pool)
+            .and_then(|m| m.get_mut(worker))
+        {
             w.in_flight = n;
         }
     }
@@ -89,25 +103,49 @@ impl WorkerRegistry for MemoryRegistry {
         g.entry(pool.to_owned())
             .or_default()
             .entry(worker_id.to_owned())
-            .or_insert(Registered { url: url.to_owned(), draining: false, in_flight: 0 });
+            .or_insert(Registered {
+                url: url.to_owned(),
+                draining: false,
+                in_flight: 0,
+            });
     }
     async fn drain(&self, pool: &str, worker_id: &str) {
-        if let Some(w) = self.inner.lock().unwrap_or_else(|p| p.into_inner()).get_mut(pool).and_then(|m| m.get_mut(worker_id)) {
+        if let Some(w) = self
+            .inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_mut(pool)
+            .and_then(|m| m.get_mut(worker_id))
+        {
             w.draining = true;
         }
     }
     async fn undrain(&self, pool: &str, worker_id: &str) {
-        if let Some(w) = self.inner.lock().unwrap_or_else(|p| p.into_inner()).get_mut(pool).and_then(|m| m.get_mut(worker_id)) {
+        if let Some(w) = self
+            .inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_mut(pool)
+            .and_then(|m| m.get_mut(worker_id))
+        {
             w.draining = false;
         }
     }
     async fn deregister(&self, pool: &str, worker_id: &str) {
-        if let Some(m) = self.inner.lock().unwrap_or_else(|p| p.into_inner()).get_mut(pool) {
+        if let Some(m) = self
+            .inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_mut(pool)
+        {
             m.remove(worker_id);
         }
     }
     async fn in_flight(&self, pool: &str) -> BTreeMap<String, u32> {
-        self.snapshot(pool).into_iter().map(|(k, v)| (k, v.in_flight)).collect()
+        self.snapshot(pool)
+            .into_iter()
+            .map(|(k, v)| (k, v.in_flight))
+            .collect()
     }
 }
 
@@ -199,8 +237,16 @@ impl GatewaySignals {
         for m in pools {
             let t = m.at_unix_ms as f64 / 1000.0;
             let load = m.queued + m.running + m.streams;
-            let e = g.entry(m.pool.clone()).or_insert(Latest { m: m.clone(), prev: None, rate: None });
-            let throughput = if m.window_s > 0 { f64::from(m.run_time.count) / m.window_s as f64 } else { 0.0 };
+            let e = g.entry(m.pool.clone()).or_insert(Latest {
+                m: m.clone(),
+                prev: None,
+                rate: None,
+            });
+            let throughput = if m.window_s > 0 {
+                f64::from(m.run_time.count) / m.window_s as f64
+            } else {
+                0.0
+            };
             let growth = match e.prev {
                 Some((t0, l0)) if t > t0 => (f64::from(load) - f64::from(l0)) / (t - t0),
                 _ => 0.0,
@@ -217,7 +263,11 @@ impl GatewaySignals {
 
     /// The latest metrics of a pool.
     pub fn latest(&self, pool: &str) -> Option<GatewayPoolMetrics> {
-        self.inner.lock().unwrap_or_else(|p| p.into_inner()).get(pool).map(|e| e.m.clone())
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(pool)
+            .map(|e| e.m.clone())
     }
 }
 
@@ -235,7 +285,8 @@ impl SignalSource for GatewaySignals {
                 running_jobs: e.m.running,
                 live_streams: e.m.streams,
                 arrivals_total: 0,
-                recent_job_s: (e.m.run_time.count > 0 && e.m.run_time.mean_s > 0.0).then_some(e.m.run_time.mean_s),
+                recent_job_s: (e.m.run_time.count > 0 && e.m.run_time.mean_s > 0.0)
+                    .then_some(e.m.run_time.mean_s),
                 arrival_rate_per_s: e.rate,
             })
             .collect()
@@ -256,7 +307,13 @@ mod tests {
             running,
             oldest_queued_age_s: if queued > 0 { 12.0 } else { 0.0 },
             streams: 0,
-            run_time: DurationStats { count: finished, mean_s: 24.0, p50_s: 24.0, p90_s: 30.0, max_s: 31.0 },
+            run_time: DurationStats {
+                count: finished,
+                mean_s: 24.0,
+                p50_s: 24.0,
+                p90_s: 30.0,
+                max_s: 31.0,
+            },
             queue_wait: DurationStats::default(),
             window_s: 300,
             workers: WorkerCounts::default(),

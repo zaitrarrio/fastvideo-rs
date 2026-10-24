@@ -110,7 +110,12 @@ where
         Err(if errs.len() == 1 {
             errs.remove(0)
         } else {
-            UpsampleError::AllFailed(errs.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))
+            UpsampleError::AllFailed(
+                errs.iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )
         })
     };
     match tokio::time::timeout(timeout, race).await {
@@ -125,7 +130,10 @@ where
 pub fn strip_think(s: &str) -> &str {
     let t = s.trim_start();
     if let Some(rest) = t.strip_prefix("<think>") {
-        return rest.split_once("</think>").map_or("", |(_, a)| a).trim_start();
+        return rest
+            .split_once("</think>")
+            .map_or("", |(_, a)| a)
+            .trim_start();
     }
     match t.split_once("</think>") {
         Some((_, a)) if !t.contains("<think>") => a.trim_start(),
@@ -137,9 +145,15 @@ pub fn strip_think(s: &str) -> &str {
 /// block and without a Markdown code fence around it.
 pub fn json_body(s: &str) -> &str {
     let t = strip_think(s).trim();
-    let Some(rest) = t.strip_prefix("```") else { return t };
+    let Some(rest) = t.strip_prefix("```") else {
+        return t;
+    };
     // An optional language tag on the fence line.
-    let rest = rest.split_once('\n').map_or(rest, |(tag, body)| if tag.trim().contains(' ') { rest } else { body });
+    let rest =
+        rest.split_once('\n').map_or(
+            rest,
+            |(tag, body)| if tag.trim().contains(' ') { rest } else { body },
+        );
     rest.trim_end().strip_suffix("```").unwrap_or(rest).trim()
 }
 
@@ -182,18 +196,37 @@ mod tests {
         let n = Arc::new(AtomicUsize::new(0));
         let r: Result<(), _> = hedged(1, Duration::from_secs(5), || {
             n.fetch_add(1, Ordering::SeqCst);
-            async { Err(UpsampleError::Status { status: 500, body: "boom".into() }) }
+            async {
+                Err(UpsampleError::Status {
+                    status: 500,
+                    body: "boom".into(),
+                })
+            }
         })
         .await;
-        assert_eq!(r, Err(UpsampleError::Status { status: 500, body: "boom".into() }));
+        assert_eq!(
+            r,
+            Err(UpsampleError::Status {
+                status: 500,
+                body: "boom".into()
+            })
+        );
         assert_eq!(n.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
     async fn both_failing_aggregates() {
-        let r: Result<(), _> = hedged(2, Duration::from_secs(5), || async { Err(UpsampleError::NoContent) }).await;
-        let Err(UpsampleError::AllFailed(m)) = r else { panic!("{r:?}") };
-        assert_eq!(m, "upsampler LLM returned no content; upsampler LLM returned no content");
+        let r: Result<(), _> = hedged(2, Duration::from_secs(5), || async {
+            Err(UpsampleError::NoContent)
+        })
+        .await;
+        let Err(UpsampleError::AllFailed(m)) = r else {
+            panic!("{r:?}")
+        };
+        assert_eq!(
+            m,
+            "upsampler LLM returned no content; upsampler LLM returned no content"
+        );
     }
 
     #[tokio::test]
@@ -222,11 +255,17 @@ mod tests {
 
     #[test]
     fn think_blocks_and_fences_are_stripped() {
-        assert_eq!(strip_think("<think>\nhmm {\"a\":1}\n</think>\n\n{\"b\":2}"), "{\"b\":2}");
+        assert_eq!(
+            strip_think("<think>\nhmm {\"a\":1}\n</think>\n\n{\"b\":2}"),
+            "{\"b\":2}"
+        );
         assert_eq!(strip_think("  reasoning…</think>{\"b\":2}"), "{\"b\":2}");
         assert_eq!(strip_think("<think>never closed"), "");
         assert_eq!(strip_think("A cat walks."), "A cat walks.");
-        assert_eq!(json_body("<think>x</think>```json\n{\"b\":2}\n```"), "{\"b\":2}");
+        assert_eq!(
+            json_body("<think>x</think>```json\n{\"b\":2}\n```"),
+            "{\"b\":2}"
+        );
         assert_eq!(json_body("```\n{\"b\":2}```"), "{\"b\":2}");
         assert_eq!(json_body(" {\"b\":2} "), "{\"b\":2}");
     }

@@ -75,7 +75,7 @@ pub fn add_low_rank(
     if out == 0 || inn == 0 || weight.len() != out * inn {
         return Err(format!("lora weight len {} != {out}x{inn}", weight.len()));
     }
-    if b.is_empty() || b.len() % out != 0 {
+    if b.is_empty() || !b.len().is_multiple_of(out) {
         return Err(format!(
             "lora B len {} is not a multiple of out {out}",
             b.len()
@@ -632,8 +632,14 @@ mod tests {
             lora_multiplier(LoraFormat::FastvideoV2, 16, 64, 1.0).unwrap(),
             1.0
         );
-        assert_eq!(lora_multiplier(LoraFormat::Comfy, 64, 1, 1.25).unwrap(), 1.25);
-        assert_eq!(lora_multiplier(LoraFormat::Comfy, 16, 1, 1.25).unwrap(), 1.25);
+        assert_eq!(
+            lora_multiplier(LoraFormat::Comfy, 64, 1, 1.25).unwrap(),
+            1.25
+        );
+        assert_eq!(
+            lora_multiplier(LoraFormat::Comfy, 16, 1, 1.25).unwrap(),
+            1.25
+        );
     }
 
     #[test]

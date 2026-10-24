@@ -31,7 +31,11 @@ pub fn split_annexb(data: &[u8]) -> Vec<&[u8]> {
     }
     let mut out = Vec::with_capacity(starts.len());
     for (k, &s) in starts.iter().enumerate() {
-        let mut e = if k + 1 < starts.len() { starts[k + 1] - 3 } else { data.len() };
+        let mut e = if k + 1 < starts.len() {
+            starts[k + 1] - 3
+        } else {
+            data.len()
+        };
         // Trailing zero bytes belong to the next 4-byte start code.
         while e > s && data[e - 1] == 0 {
             e -= 1;
@@ -66,7 +70,9 @@ pub fn annexb_to_avcc(annexb: &[u8]) -> Vec<u8> {
 }
 
 /// H.264 levels with their MaxMBPS / MaxFS limits (Table A-1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum H264Level {
     L3_0,
     L3_1,
@@ -158,10 +164,16 @@ impl std::fmt::Display for H264Level {
 impl std::str::FromStr for H264Level {
     type Err = MediaError;
     fn from_str(s: &str) -> Result<Self> {
-        let t = s.trim().trim_start_matches(['L', 'l']).replace(['_', '.'], "");
-        let idc: u8 = t.parse().map_err(|_| MediaError::invalid(format!("unknown H.264 level {s:?}")))?;
+        let t = s
+            .trim()
+            .trim_start_matches(['L', 'l'])
+            .replace(['_', '.'], "");
+        let idc: u8 = t
+            .parse()
+            .map_err(|_| MediaError::invalid(format!("unknown H.264 level {s:?}")))?;
         let idc = if idc < 10 { idc * 10 } else { idc };
-        Self::from_idc(idc).ok_or_else(|| MediaError::invalid(format!("unsupported H.264 level {s:?}")))
+        Self::from_idc(idc)
+            .ok_or_else(|| MediaError::invalid(format!("unsupported H.264 level {s:?}")))
     }
 }
 
@@ -182,7 +194,10 @@ impl SpsInfo {
         self.profile_idc == 66 && self.constraint_flags & 0x40 != 0
     }
     pub fn profile_level_id(&self) -> String {
-        format!("{:02x}{:02x}{:02x}", self.profile_idc, self.constraint_flags, self.level_idc)
+        format!(
+            "{:02x}{:02x}{:02x}",
+            self.profile_idc, self.constraint_flags, self.level_idc
+        )
     }
 }
 
@@ -207,7 +222,10 @@ impl Bits {
         Self { data, pos: 0 }
     }
     fn bit(&mut self) -> Result<u32> {
-        let byte = self.data.get(self.pos / 8).ok_or_else(|| MediaError::parse(None, "SPS truncated"))?;
+        let byte = self
+            .data
+            .get(self.pos / 8)
+            .ok_or_else(|| MediaError::parse(None, "SPS truncated"))?;
         let b = (byte >> (7 - (self.pos % 8))) & 1;
         self.pos += 1;
         Ok(u32::from(b))
@@ -231,7 +249,11 @@ impl Bits {
     }
     fn se(&mut self) -> Result<i32> {
         let k = self.ue()?;
-        Ok(if k % 2 == 1 { k.div_ceil(2) as i32 } else { -((k / 2) as i32) })
+        Ok(if k % 2 == 1 {
+            k.div_ceil(2) as i32
+        } else {
+            -((k / 2) as i32)
+        })
     }
 }
 
@@ -258,7 +280,10 @@ pub fn parse_sps(nal_unit: &[u8]) -> Result<SpsInfo> {
     let mut b = Bits::new(&nal_unit[4..]);
     b.ue()?; // seq_parameter_set_id
     let mut chroma_format_idc = 1;
-    if matches!(profile_idc, 100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135) {
+    if matches!(
+        profile_idc,
+        100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135
+    ) {
         chroma_format_idc = b.ue()?;
         if chroma_format_idc == 3 {
             b.bit()?; // separate_colour_plane_flag
@@ -315,12 +340,21 @@ pub fn parse_sps(nal_unit: &[u8]) -> Result<SpsInfo> {
     };
     let width = w_mbs * 16 - cux * (cl + cr);
     let height = (2 - frame_mbs_only) * h_map * 16 - cuy * (ct + cb);
-    Ok(SpsInfo { profile_idc, constraint_flags, level_idc, width, height })
+    Ok(SpsInfo {
+        profile_idc,
+        constraint_flags,
+        level_idc,
+        width,
+        height,
+    })
 }
 
 /// The first SPS in an Annex-B stream.
 pub fn find_sps(annexb: &[u8]) -> Option<SpsInfo> {
-    split_annexb(annexb).into_iter().find(|n| nal_type(n) == nal::SPS).and_then(|n| parse_sps(n).ok())
+    split_annexb(annexb)
+        .into_iter()
+        .find(|n| nal_type(n) == nal::SPS)
+        .and_then(|n| parse_sps(n).ok())
 }
 
 #[cfg(test)]
@@ -352,9 +386,14 @@ mod tests {
 
     #[test]
     fn annexb_split_and_avcc() {
-        let s = [0, 0, 0, 1, 0x67, 1, 2, 0, 0, 1, 0x68, 3, 0, 0, 0, 1, 0x65, 9, 9];
+        let s = [
+            0, 0, 0, 1, 0x67, 1, 2, 0, 0, 1, 0x68, 3, 0, 0, 0, 1, 0x65, 9, 9,
+        ];
         let n = split_annexb(&s);
-        assert_eq!(n, vec![&[0x67u8, 1, 2][..], &[0x68, 3][..], &[0x65, 9, 9][..]]);
+        assert_eq!(
+            n,
+            vec![&[0x67u8, 1, 2][..], &[0x68, 3][..], &[0x65, 9, 9][..]]
+        );
         assert!(is_idr(&s));
         let avcc = annexb_to_avcc(&s);
         assert_eq!(&avcc[..7], &[0, 0, 0, 3, 0x67, 1, 2]);

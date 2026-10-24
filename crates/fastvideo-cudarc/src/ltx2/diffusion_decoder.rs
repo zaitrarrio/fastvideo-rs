@@ -102,7 +102,7 @@ fn window_start(q: usize, size: usize, kernel: usize) -> usize {
 fn rope_dim_split(head_dim: usize) -> (usize, usize, usize) {
     let mut dim_t = (head_dim / 4) / 2 * 2;
     let mut dim_hw = (head_dim - dim_t) / 2;
-    if dim_hw % 2 != 0 {
+    if !dim_hw.is_multiple_of(2) {
         dim_t -= 2;
         dim_hw = (head_dim - dim_t) / 2;
     }
@@ -145,7 +145,7 @@ fn rotate_pairs(
 
 fn inv_freqs(dim: usize, base: f32) -> Vec<f32> {
     (0..dim / 2)
-        .map(|i| (1.0 / base.powf(2.0 * i as f32 / dim as f32)))
+        .map(|i| 1.0 / base.powf(2.0 * i as f32 / dim as f32))
         .collect()
 }
 
@@ -234,6 +234,7 @@ fn attn_one(q: &[f32], k: &[f32], v: &[f32], d: usize, kw: usize) -> Vec<f32> {
 }
 
 /// Neighborhood attention on `[B,T,H,W,heads,D]` → same shape (host gather + SDPA).
+#[allow(clippy::too_many_arguments)]
 fn neighborhood_attn_host(
     q: &[f32],
     k: &[f32],

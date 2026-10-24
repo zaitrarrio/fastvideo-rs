@@ -27,7 +27,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use fastvideo_engine_service::{DuplexCommand, DuplexControl, DuplexReply, DuplexSession, DuplexState, PacedStream};
+use fastvideo_engine_service::{
+    DuplexCommand, DuplexControl, DuplexReply, DuplexSession, DuplexState, PacedStream,
+};
 use fastvideo_media::decode::DecoderPool;
 use fastvideo_media::ring::InputBuffers;
 use fastvideo_protocol::{ApiError, InputCaps, InputVideoCodec};
@@ -74,7 +76,10 @@ pub fn input_schema(caps: &InputCaps) -> InputSchema {
     if caps.audio.is_some() {
         tracks.push(json!({"name": INPUT_AUDIO_TRACK, "kind": "audio", "direction": "in"}));
     }
-    InputSchema { tracks, caps: serde_json::to_value(caps).unwrap_or(Value::Null) }
+    InputSchema {
+        tracks,
+        caps: serde_json::to_value(caps).unwrap_or(Value::Null),
+    }
 }
 
 /// A session's input tracks, their publishers and the ingest counters.
@@ -115,7 +120,10 @@ impl Inputs {
     }
 
     fn base_config(&self) -> IngestConfig {
-        IngestConfig { max_seconds: self.max_seconds, ..IngestConfig::new(self.caps.video.clone(), self.caps.audio.clone()) }
+        IngestConfig {
+            max_seconds: self.max_seconds,
+            ..IngestConfig::new(self.caps.video.clone(), self.caps.audio.clone())
+        }
     }
 
     /// The kind of an input track name.
@@ -166,7 +174,11 @@ impl Inputs {
     /// Every slot `conn` holds (the connection closed).
     pub fn release_all(&self, conn: u32) -> Vec<String> {
         let mut p = lock(&self.publishers);
-        let names: Vec<String> = p.iter().filter(|(_, c)| **c == conn).map(|(n, _)| n.clone()).collect();
+        let names: Vec<String> = p
+            .iter()
+            .filter(|(_, c)| **c == conn)
+            .map(|(n, _)| n.clone())
+            .collect();
         for n in &names {
             p.remove(n);
         }
@@ -198,10 +210,16 @@ impl Inputs {
     /// `track_map` entries (model perspective: `in`).
     pub fn track_map(&self, m: &mut Map<String, Value>) {
         if let (Some(n), Some(c)) = (&self.video, &self.caps.video) {
-            m.insert(n.clone(), json!({"kind": "video", "direction": "in", "rate": f64::from(c.max_fps)}));
+            m.insert(
+                n.clone(),
+                json!({"kind": "video", "direction": "in", "rate": f64::from(c.max_fps)}),
+            );
         }
         if let (Some(n), Some(a)) = (&self.audio, &self.caps.audio) {
-            m.insert(n.clone(), json!({"kind": "audio", "direction": "in", "rate": f64::from(a.rate)}));
+            m.insert(
+                n.clone(),
+                json!({"kind": "audio", "direction": "in", "rate": f64::from(a.rate)}),
+            );
         }
     }
 
@@ -232,7 +250,10 @@ impl Inputs {
 
     /// One publisher's ingest settings (the session's warm decoders).
     pub fn ingest_config(&self) -> IngestConfig {
-        IngestConfig { pool: Some(self.decoders.clone()), ..self.base_config() }
+        IngestConfig {
+            pool: Some(self.decoders.clone()),
+            ..self.base_config()
+        }
     }
 }
 
@@ -255,7 +276,11 @@ fn state_value(s: &DuplexState, inputs: &Inputs) -> Value {
 impl DuplexDriver {
     /// Starts the model worker; the model stays paused until a peer is
     /// connected.
-    pub fn start(session: DuplexSession, out: Outbox, inputs: Arc<Inputs>) -> Result<(Self, PacedStream), ApiError> {
+    pub fn start(
+        session: DuplexSession,
+        out: Outbox,
+        inputs: Arc<Inputs>,
+    ) -> Result<(Self, PacedStream), ApiError> {
         let (control, paced) = session.start()?;
         control.set_paused(true);
         // state_update every second while frames go out.
@@ -286,7 +311,8 @@ impl DuplexDriver {
     }
 
     fn apply_pause(&self) {
-        let paused = self.user_paused.load(Ordering::Relaxed) || self.peers.load(Ordering::Relaxed) == 0;
+        let paused =
+            self.user_paused.load(Ordering::Relaxed) || self.peers.load(Ordering::Relaxed) == 0;
         self.control.set_paused(paused);
     }
 
@@ -303,28 +329,43 @@ impl Driver for DuplexDriver {
         let cmd = match name {
             "set_paused" => match args.get("paused").and_then(Value::as_bool) {
                 Some(p) => DuplexCommand::SetPaused { paused: p },
-                None => return Outcome::Error { code: "invalid_command".into(), message: "`paused` must be a boolean".into() },
+                None => {
+                    return Outcome::Error {
+                        code: "invalid_command".into(),
+                        message: "`paused` must be a boolean".into(),
+                    }
+                }
             },
             "get_state" => DuplexCommand::GetState,
-            _ => return Outcome::Error { code: "invalid_command".into(), message: format!("unknown command `{name}`") },
+            _ => {
+                return Outcome::Error {
+                    code: "invalid_command".into(),
+                    message: format!("unknown command `{name}`"),
+                }
+            }
         };
         if let DuplexCommand::SetPaused { paused } = cmd {
             self.user_paused.store(paused, Ordering::Relaxed);
             self.apply_pause();
-            self.out.broadcast(ServerMsg::broadcast("state_update", self.state()));
+            self.out
+                .broadcast(ServerMsg::broadcast("state_update", self.state()));
             return Outcome::Ack;
         }
         match self.control.apply(cmd) {
             DuplexReply::StateUpdate(_) => Outcome::Reply("state_update".into(), self.state()),
             DuplexReply::CommandError { command, reason } => {
-                self.out.broadcast(ServerMsg::broadcast("command_error", json!({"command": command, "reason": reason})));
+                self.out.broadcast(ServerMsg::broadcast(
+                    "command_error",
+                    json!({"command": command, "reason": reason}),
+                ));
                 Outcome::Ack
             }
         }
     }
 
     fn greet(&self, conn: u32) {
-        self.out.to(conn, ServerMsg::broadcast("state_update", self.state()));
+        self.out
+            .to(conn, ServerMsg::broadcast("state_update", self.state()));
     }
 
     fn peers_changed(&self, connected: usize) {
@@ -352,7 +393,10 @@ mod tests {
                 max_fps: 30,
                 codecs: vec![InputVideoCodec::Vp8, InputVideoCodec::H264],
             }),
-            audio: Some(AudioInputCaps { rate: 48_000, channels: 1 }),
+            audio: Some(AudioInputCaps {
+                rate: 48_000,
+                channels: 1,
+            }),
             max_bitrate_kbps: 2000,
             buffer_ms: 500,
         };
@@ -364,16 +408,33 @@ mod tests {
     fn publisher_slots_are_first_come_first_served() {
         let i = inputs();
         assert_eq!(i.claim(INPUT_VIDEO_TRACK, 1001), Ok(TrackKind::Video));
-        assert_eq!(i.claim(INPUT_VIDEO_TRACK, 1001), Ok(TrackKind::Video), "re-publish by the holder");
-        assert_eq!(i.claim(INPUT_VIDEO_TRACK, 1002), Err(ALREADY_PUBLISHED.into()));
-        assert!(i.claim("cam", 1002).unwrap_err().contains("no input track `cam`"));
+        assert_eq!(
+            i.claim(INPUT_VIDEO_TRACK, 1001),
+            Ok(TrackKind::Video),
+            "re-publish by the holder"
+        );
+        assert_eq!(
+            i.claim(INPUT_VIDEO_TRACK, 1002),
+            Err(ALREADY_PUBLISHED.into())
+        );
+        assert!(i
+            .claim("cam", 1002)
+            .unwrap_err()
+            .contains("no input track `cam`"));
         assert_eq!(i.claim(INPUT_AUDIO_TRACK, 1002), Ok(TrackKind::Audio));
-        assert_eq!(i.release(INPUT_VIDEO_TRACK, 1002), None, "only the holder releases");
+        assert_eq!(
+            i.release(INPUT_VIDEO_TRACK, 1002),
+            None,
+            "only the holder releases"
+        );
         assert_eq!(i.release(INPUT_VIDEO_TRACK, 1001), Some(TrackKind::Video));
         assert_eq!(i.claim(INPUT_VIDEO_TRACK, 1002), Ok(TrackKind::Video));
         let mut gone = i.release_all(1002);
         gone.sort();
-        assert_eq!(gone, vec![INPUT_AUDIO_TRACK.to_owned(), INPUT_VIDEO_TRACK.to_owned()]);
+        assert_eq!(
+            gone,
+            vec![INPUT_AUDIO_TRACK.to_owned(), INPUT_VIDEO_TRACK.to_owned()]
+        );
         assert!(i.publishers().is_empty());
     }
 

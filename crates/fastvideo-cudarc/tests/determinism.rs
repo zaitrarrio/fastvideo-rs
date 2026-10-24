@@ -50,9 +50,13 @@ fn digest() -> String {
     let cfg = fastvideo_models::ltx2::config::ltx2_5_22b_distilled();
     let audio_tokens = cfg.transformer.audio_tokens(145, 24.0);
     let mut noise = fastvideo_cudarc::ltx2::pipeline::NoiseStream::new(SEED, true);
-    let (video, audio) =
-        fastvideo_cudarc::ltx2::pipeline::initial_noise(&cfg, [19, 17, 30], audio_tokens, &mut noise)
-            .expect("ltx noise");
+    let (video, audio) = fastvideo_cudarc::ltx2::pipeline::initial_noise(
+        &cfg,
+        [19, 17, 30],
+        audio_tokens,
+        &mut noise,
+    )
+    .expect("ltx noise");
     feed_f32(&mut h, "ltx_noise_video", &video.host_cow().expect("host"));
     feed_f32(&mut h, "ltx_noise_audio", &audio.host_cow().expect("host"));
     // The stage-2 renoise continues the same stream.
@@ -99,8 +103,10 @@ fn digest() -> String {
 
     // H3 at 1920x1088, 5 s.
     let h3 = fastvideo_models::h3::config::H3TransformerConfig::fasth3_8step();
-    let geometry = fastvideo_models::h3::config::H3Geometry::new(1088, 1920, 124).expect("h3 geometry");
-    let (hv, ha) = fastvideo_cudarc::h3::pipeline::seeded_noise(&h3, &geometry, SEED).expect("h3 noise");
+    let geometry =
+        fastvideo_models::h3::config::H3Geometry::new(1088, 1920, 124).expect("h3 geometry");
+    let (hv, ha) =
+        fastvideo_cudarc::h3::pipeline::seeded_noise(&h3, &geometry, SEED).expect("h3 noise");
     feed_f32(&mut h, "h3_noise_video", &hv);
     feed_f32(&mut h, "h3_noise_audio", &ha);
 
@@ -118,7 +124,9 @@ fn digest() -> String {
     h.update(&picks);
 
     // The ordered second pass of the per-block f64 reductions.
-    let pairs: Vec<f64> = (0..8192).map(|i| ((i * 7919) % 1000) as f64 * 1e-3 + 1e-9 * i as f64).collect();
+    let pairs: Vec<f64> = (0..8192)
+        .map(|i| ((i * 7919) % 1000) as f64 * 1e-3 + 1e-9 * i as f64)
+        .collect();
     let (a, b) = fastvideo_cudarc::wan::ops::sum_pairs_in_order(&pairs);
     feed_f64(&mut h, "pair_sums", &[a, b]);
 
@@ -149,18 +157,35 @@ fn same_seed_same_bytes_across_processes() {
     }
     let exe = std::env::current_exe().expect("test binary");
     let out = Command::new(exe)
-        .args(["--exact", "determinism_child_digest", "--nocapture", "--test-threads=1"])
+        .args([
+            "--exact",
+            "determinism_child_digest",
+            "--nocapture",
+            "--test-threads=1",
+        ])
         .env(CHILD_ENV, "1")
         .output()
         .expect("spawn the child process");
-    assert!(out.status.success(), "child failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "child failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     let child = stdout
         .lines()
-        .find_map(|l| l.split(DIGEST_TAG).nth(1).and_then(|r| r.split_whitespace().next()))
+        .find_map(|l| {
+            l.split(DIGEST_TAG)
+                .nth(1)
+                .and_then(|r| r.split_whitespace().next())
+        })
         .unwrap_or_else(|| panic!("no digest in the child's output:\n{stdout}"))
         .to_string();
-    assert_eq!(digest(), child, "the child process computed a different digest");
+    assert_eq!(
+        digest(),
+        child,
+        "the child process computed a different digest"
+    );
 }
 
 #[test]
@@ -170,9 +195,12 @@ fn a_cached_conditioning_reads_back_bit_for_bit() {
     let dir = std::env::temp_dir().join(format!("fv-determinism-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let cache = TextCache::new(&dir);
-    let prompt = fastvideo_cudarc::ltx2::text::PaddedPrompt::from_ids(&[2, 7, 9], 8).expect("prompt");
+    let prompt =
+        fastvideo_cudarc::ltx2::text::PaddedPrompt::from_ids(&[2, 7, 9], 8).expect("prompt");
     // Values a bf16 activation path produces, and awkward f32 ones.
-    let video: Vec<f32> = (0..8 * 6).map(|i| half::bf16::from_f32((i as f32 * 0.37).sin()).to_f32()).collect();
+    let video: Vec<f32> = (0..8 * 6)
+        .map(|i| half::bf16::from_f32((i as f32 * 0.37).sin()).to_f32())
+        .collect();
     let audio: Vec<f32> = (0..8 * 4).map(|i| (i as f32 * 1.1).cos() / 3.0).collect();
     let (v, a) = (
         CudaTensor::from_vec(video.clone(), vec![1, 8, 6]).expect("video"),
@@ -183,7 +211,9 @@ fn a_cached_conditioning_reads_back_bit_for_bit() {
     let hit = cache.load("k", &prompt).expect("hit");
     assert_eq!(&*hit.video.host_cow().expect("host"), video.as_slice());
     assert_eq!(&*hit.audio.host_cow().expect("host"), audio.as_slice());
-    cache.store("k", &prompt, &hit.video, &hit.audio).expect("store again");
+    cache
+        .store("k", &prompt, &hit.video, &hit.audio)
+        .expect("store again");
     assert_eq!(std::fs::read(cache.path("k")).expect("entry"), first);
     let _ = std::fs::remove_dir_all(&dir);
 }

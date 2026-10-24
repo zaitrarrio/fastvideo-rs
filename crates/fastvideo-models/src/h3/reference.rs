@@ -85,7 +85,8 @@ impl PreparedImageRef {
                 "bad image ref size {width}x{height} / {spatial_compression}"
             ));
         }
-        if height % spatial_compression != 0 || width % spatial_compression != 0 {
+        if !height.is_multiple_of(spatial_compression) || !width.is_multiple_of(spatial_compression)
+        {
             return Err(format!(
                 "image canvas {width}x{height} not divisible by VAE ratio {spatial_compression}"
             ));
@@ -103,7 +104,7 @@ impl PreparedImageRef {
         if pt != 1 {
             return Err(format!("Ref2VA image refs need temporal patch 1, got {pt}"));
         }
-        if self.latent_height % ph != 0 || self.latent_width % pw != 0 {
+        if !self.latent_height.is_multiple_of(ph) || !self.latent_width.is_multiple_of(pw) {
             return Err(format!(
                 "image latent {}x{} not divisible by patch {patch:?}",
                 self.latent_height, self.latent_width

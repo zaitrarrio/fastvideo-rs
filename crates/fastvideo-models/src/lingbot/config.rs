@@ -253,7 +253,9 @@ impl LingBotTransformerConfig {
 
     /// The upstream constructor's assertions plus what routing needs.
     pub fn validate(&self) -> Result<(), String> {
-        if self.num_attention_heads == 0 || self.hidden_size % self.num_attention_heads != 0 {
+        if self.num_attention_heads == 0
+            || !self.hidden_size.is_multiple_of(self.num_attention_heads)
+        {
             return Err("lingbot config: hidden not divisible by heads".into());
         }
         if self.head_dim() != 2 * self.rope_half() {
@@ -272,7 +274,7 @@ impl LingBotTransformerConfig {
             }
             if let Some(g) = self.n_group {
                 let tg = self.topk_group.unwrap_or(g);
-                if self.num_experts % g != 0 || tg == 0 || tg > g {
+                if !self.num_experts.is_multiple_of(g) || tg == 0 || tg > g {
                     return Err("lingbot config: bad group routing".into());
                 }
                 if tg * (self.num_experts / g) < self.num_experts_per_tok {
@@ -355,7 +357,7 @@ impl LingBotTransformerConfig {
     pub fn layer_is_moe(&self, layer: usize) -> bool {
         self.is_moe()
             && !self.mlp_only_layers.contains(&layer)
-            && (layer + 1) % self.decoder_sparse_step.max(1) == 0
+            && (layer + 1).is_multiple_of(self.decoder_sparse_step.max(1))
     }
 
     pub fn patch_dim(&self) -> usize {
@@ -373,14 +375,20 @@ impl LingBotTransformerConfig {
         let mut out: Vec<(String, Vec<usize>)> = vec![
             ("patch_embedder.weight".into(), vec![h, self.patch_dim()]),
             ("patch_embedder.bias".into(), vec![h]),
-            ("time_embedder.linear_1.weight".into(), vec![h, self.freq_dim]),
+            (
+                "time_embedder.linear_1.weight".into(),
+                vec![h, self.freq_dim],
+            ),
             ("time_embedder.linear_1.bias".into(), vec![h]),
             ("time_embedder.linear_2.weight".into(), vec![h, h]),
             ("time_embedder.linear_2.bias".into(), vec![h]),
             ("time_modulation.1.weight".into(), vec![6 * h, h]),
             ("time_modulation.1.bias".into(), vec![6 * h]),
             ("text_embedder.norm.weight".into(), vec![self.text_dim]),
-            ("text_embedder.linear_1.weight".into(), vec![h, self.text_dim]),
+            (
+                "text_embedder.linear_1.weight".into(),
+                vec![h, self.text_dim],
+            ),
             ("text_embedder.linear_1.bias".into(), vec![h]),
             ("text_embedder.linear_2.weight".into(), vec![h, h]),
             ("text_embedder.linear_2.bias".into(), vec![h]),

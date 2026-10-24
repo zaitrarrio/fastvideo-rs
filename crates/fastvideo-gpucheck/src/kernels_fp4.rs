@@ -80,7 +80,10 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
         return Ok(());
     }
     mma_layout(report, seed)?;
-    let (layout, heads) = (H3PackedLayout::new(300, (8, 32, 64), 32, [1, 2, 2]).map_err(anyhow::Error::msg)?, 2);
+    let (layout, heads) = (
+        H3PackedLayout::new(300, (8, 32, 64), 32, [1, 2, 2]).map_err(anyhow::Error::msg)?,
+        2,
+    );
     fine_stage(report, seed, &layout, heads)?;
     timing(report, seed)?;
     Ok(())
@@ -103,17 +106,20 @@ fn mma_host(a: &[u32], b: &[u32], sfa: &[u32], sfb: &[u32]) -> Vec<f32> {
             for i in 0..8 {
                 let row = g + 8 * (r & 1);
                 let k = 8 * t + i + 32 * (r >> 1);
-                am[row * 64 + k] = f64::from(fp4::e2m1_value(((a[4 * l + r] >> (4 * i)) & 15) as u8));
+                am[row * 64 + k] =
+                    f64::from(fp4::e2m1_value(((a[4 * l + r] >> (4 * i)) & 15) as u8));
             }
         }
         for r in 0..2 {
             for i in 0..8 {
-                bm[(8 * t + i + 32 * r) * 8 + g] = f64::from(fp4::e2m1_value(((b[2 * l + r] >> (4 * i)) & 15) as u8));
+                bm[(8 * t + i + 32 * r) * 8 + g] =
+                    f64::from(fp4::e2m1_value(((b[2 * l + r] >> (4 * i)) & 15) as u8));
             }
         }
         if t < 2 {
             for j in 0..4 {
-                sa[(g + 8 * (l & 1)) * 4 + j] = f64::from(fp4::e4m3_value((sfa[l] >> (8 * j)) as u8));
+                sa[(g + 8 * (l & 1)) * 4 + j] =
+                    f64::from(fp4::e4m3_value((sfa[l] >> (8 * j)) as u8));
             }
         }
         if t == 0 {
@@ -125,10 +131,21 @@ fn mma_host(a: &[u32], b: &[u32], sfa: &[u32], sfb: &[u32]) -> Vec<f32> {
     let mut d = vec![0f32; 128];
     for l in 0..32 {
         let (g, t) = (l >> 2, l & 3);
-        for (e, (row, col)) in [(g, 2 * t), (g, 2 * t + 1), (g + 8, 2 * t), (g + 8, 2 * t + 1)].into_iter().enumerate() {
+        for (e, (row, col)) in [
+            (g, 2 * t),
+            (g, 2 * t + 1),
+            (g + 8, 2 * t),
+            (g + 8, 2 * t + 1),
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let mut acc = 0f64;
             for k in 0..64 {
-                acc += am[row * 64 + k] * sa[row * 4 + k / 16] * bm[k * 8 + col] * sb[col * 4 + k / 16];
+                acc += am[row * 64 + k]
+                    * sa[row * 4 + k / 16]
+                    * bm[k * 8 + col]
+                    * sb[col * 4 + k / 16];
             }
             d[4 * l + e] = acc as f32;
         }
@@ -138,7 +155,8 @@ fn mma_host(a: &[u32], b: &[u32], sfa: &[u32], sfb: &[u32]) -> Vec<f32> {
 
 fn mma_layout(report: &mut Report, seed: u64) -> StageResult<()> {
     let mut rng = Rng(seed ^ 0xf4f4);
-    let word = |rng: &mut Rng| (0..8).fold(0u32, |w, i| w | (((rng.next() % 16) as u32) << (4 * i)));
+    let word =
+        |rng: &mut Rng| (0..8).fold(0u32, |w, i| w | (((rng.next() % 16) as u32) << (4 * i)));
     let a: Vec<u32> = (0..128).map(|_| word(&mut rng)).collect();
     let b: Vec<u32> = (0..64).map(|_| word(&mut rng)).collect();
     // Scales: byte j of lane l's sfa is row g + 8 (l & 1), group j; lanes l and
@@ -147,29 +165,54 @@ fn mma_layout(report: &mut Report, seed: u64) -> StageResult<()> {
     let row_scale = |row: usize, j: usize| -> u32 { 0x30 + ((row * 5 + j * 3) % 16) as u32 };
     let col_scale = |col: usize, j: usize| -> u32 { 0x34 + ((col * 7 + j * 5) % 12) as u32 };
     let sfa: Vec<u32> = (0..32)
-        .map(|l| (0..4).fold(0u32, |w, j| w | (row_scale((l >> 2) + 8 * (l & 1), j) << (8 * j))))
+        .map(|l| {
+            (0..4).fold(0u32, |w, j| {
+                w | (row_scale((l >> 2) + 8 * (l & 1), j) << (8 * j))
+            })
+        })
         .collect();
-    let sfb: Vec<u32> = (0..32).map(|l| (0..4).fold(0u32, |w, j| w | (col_scale(l >> 2, j) << (8 * j)))).collect();
+    let sfb: Vec<u32> = (0..32)
+        .map(|l| (0..4).fold(0u32, |w, j| w | (col_scale(l >> 2, j) << (8 * j))))
+        .collect();
     let mut results = serde_json::Map::new();
     let mut ok = true;
     for (name, sa, sb) in [("unit_scales", &ones, &ones), ("block_scales", &sfa, &sfb)] {
         let got = fp4::mma_probe(&a, &b, sa, sb)?;
         let want = mma_host(&a, &b, sa, sb);
-        let max_abs = got.iter().zip(&want).fold(0f64, |m, (x, y)| m.max(f64::from((x - y).abs())));
-        let wrong: Vec<usize> = (0..128).filter(|&i| (got[i] - want[i]).abs() > 1e-3 * want[i].abs().max(1.0)).collect();
+        let max_abs = got
+            .iter()
+            .zip(&want)
+            .fold(0f64, |m, (x, y)| m.max(f64::from((x - y).abs())));
+        let wrong: Vec<usize> = (0..128)
+            .filter(|&i| (got[i] - want[i]).abs() > 1e-3 * want[i].abs().max(1.0))
+            .collect();
         // Which outputs are wrong, by (row, col), for a layout diagnosis.
         let cells: Vec<String> = wrong
             .iter()
             .take(12)
             .map(|&i| {
                 let (l, e) = (i / 4, i % 4);
-                format!("D[{}][{}]={} want {}", (l >> 2) + 8 * (e >> 1), 2 * (l & 3) + (e & 1), got[i], want[i])
+                format!(
+                    "D[{}][{}]={} want {}",
+                    (l >> 2) + 8 * (e >> 1),
+                    2 * (l & 3) + (e & 1),
+                    got[i],
+                    want[i]
+                )
             })
             .collect();
         ok &= wrong.is_empty();
-        results.insert(name.into(), json!({"max_abs": max_abs, "wrong": wrong.len(), "first": cells}));
+        results.insert(
+            name.into(),
+            json!({"max_abs": max_abs, "wrong": wrong.len(), "first": cells}),
+        );
     }
-    report.check("mma_mxf4nvf4_layout", ok, serde_json::Value::Object(results), json!({"wrong": 0}))
+    report.check(
+        "mma_mxf4nvf4_layout",
+        ok,
+        serde_json::Value::Object(results),
+        json!({"wrong": 0}),
+    )
 }
 
 // ---- host twins -----------------------------------------------------------------------------------------------------
@@ -217,11 +260,21 @@ fn problem(layout: &H3PackedLayout, bh: usize, seed: u64) -> anyhow::Result<Prob
             [r as f32 / prefix as f32, 0.5, 0.5]
         } else {
             let i = r - prefix;
-            [(i / (gh * gw)) as f32 / gt as f32, ((i / gw) % gh) as f32 / gh as f32, (i % gw) as f32 / gw as f32]
+            [
+                (i / (gh * gw)) as f32 / gt as f32,
+                ((i / gw) % gh) as f32 / gh as f32,
+                (i % gw) as f32 / gw as f32,
+            ]
         }
     };
     let freqs: Vec<[f32; 3]> = (0..128)
-        .map(|d| [(d % 7) as f32 * 2.1 + 0.5, (d % 5) as f32 * 3.3 + 0.7, (d % 3) as f32 * 4.7 + 0.3])
+        .map(|d| {
+            [
+                (d % 7) as f32 * 2.1 + 0.5,
+                (d % 5) as f32 * 3.3 + 0.7,
+                (d % 3) as f32 * 4.7 + 0.3,
+            ]
+        })
         .collect();
     let mut gen = |shared: f32| -> Vec<f32> {
         let mut x = vec![0f32; bh * seq * 128];
@@ -230,9 +283,12 @@ fn problem(layout: &H3PackedLayout, bh: usize, seed: u64) -> anyhow::Result<Prob
                 let p = pos(r);
                 for d in 0..128 {
                     let f = freqs[d];
-                    let smooth = (f[0] * p[0] * 6.0 + f[1] * p[1] * 6.0 + f[2] * p[2] * 6.0 + h as f32).sin();
+                    let smooth =
+                        (f[0] * p[0] * 6.0 + f[1] * p[1] * 6.0 + f[2] * p[2] * 6.0 + h as f32)
+                            .sin();
                     let outlier = if d % 37 == 5 { 4.0 } else { 1.0 };
-                    x[(h * seq + r) * 128 + d] = bf16r((0.6 * rng.normal() + shared * smooth) * outlier);
+                    x[(h * seq + r) * 128 + d] =
+                        bf16r((0.6 * rng.normal() + shared * smooth) * outlier);
                 }
             }
         }
@@ -274,7 +330,10 @@ fn select(p: &Problem, k_vid: Option<usize>) -> (Vec<u32>, usize) {
                 .collect();
             vids.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
             let row = &mut lists[(h * n + i) * topk..(h * n + i + 1) * topk];
-            for (s, j) in row.iter_mut().zip((0..plan.prefix_tiles).chain(vids.iter().take(k_vid).map(|v| v.1))) {
+            for (s, j) in row
+                .iter_mut()
+                .zip((0..plan.prefix_tiles).chain(vids.iter().take(k_vid).map(|v| v.1)))
+            {
                 *s = j as u32;
             }
         }
@@ -288,35 +347,49 @@ fn reference(p: &Problem, lists: &[u32], topk: usize, q_base: usize) -> Vec<f32>
     let (n, plan, seq) = (p.plan.num_tiles(), &p.plan, p.plan.seq);
     let scale = 1.0 / (128f64).sqrt();
     let mut out = vec![0f32; p.bh * n * 64 * 128];
-    out.par_chunks_mut(64 * 128).enumerate().for_each(|(ht, o)| {
-        let (h, i) = (ht / n, ht % n);
-        if i < q_base {
-            return;
-        }
-        let keys: Vec<usize> = lists[(h * n + i) * topk..(h * n + i + 1) * topk]
-            .iter()
-            .flat_map(|&j| plan.slot_src[j as usize * 64..j as usize * 64 + plan.block_sizes[j as usize] as usize].iter())
-            .map(|&r| r as usize)
-            .collect();
-        for slot in 0..plan.block_sizes[i] as usize {
-            let r = plan.slot_src[i * 64 + slot] as usize;
-            let qr = &p.q[(h * seq + r) * 128..(h * seq + r + 1) * 128];
-            let s: Vec<f64> = keys
-                .iter()
-                .map(|&kr| {
-                    let kk = &p.k[(h * seq + kr) * 128..(h * seq + kr + 1) * 128];
-                    qr.iter().zip(kk).map(|(a, b)| f64::from(*a) * f64::from(*b)).sum::<f64>() * scale
-                })
-                .collect();
-            let mx = s.iter().cloned().fold(f64::MIN, f64::max);
-            let w: Vec<f64> = s.iter().map(|x| (x - mx).exp()).collect();
-            let z: f64 = w.iter().sum();
-            for d in 0..128 {
-                let acc: f64 = keys.iter().zip(&w).map(|(&kr, wi)| wi * f64::from(p.v[(h * seq + kr) * 128 + d])).sum();
-                o[slot * 128 + d] = (acc / z) as f32;
+    out.par_chunks_mut(64 * 128)
+        .enumerate()
+        .for_each(|(ht, o)| {
+            let (h, i) = (ht / n, ht % n);
+            if i < q_base {
+                return;
             }
-        }
-    });
+            let keys: Vec<usize> = lists[(h * n + i) * topk..(h * n + i + 1) * topk]
+                .iter()
+                .flat_map(|&j| {
+                    plan.slot_src
+                        [j as usize * 64..j as usize * 64 + plan.block_sizes[j as usize] as usize]
+                        .iter()
+                })
+                .map(|&r| r as usize)
+                .collect();
+            for slot in 0..plan.block_sizes[i] as usize {
+                let r = plan.slot_src[i * 64 + slot] as usize;
+                let qr = &p.q[(h * seq + r) * 128..(h * seq + r + 1) * 128];
+                let s: Vec<f64> = keys
+                    .iter()
+                    .map(|&kr| {
+                        let kk = &p.k[(h * seq + kr) * 128..(h * seq + kr + 1) * 128];
+                        qr.iter()
+                            .zip(kk)
+                            .map(|(a, b)| f64::from(*a) * f64::from(*b))
+                            .sum::<f64>()
+                            * scale
+                    })
+                    .collect();
+                let mx = s.iter().cloned().fold(f64::MIN, f64::max);
+                let w: Vec<f64> = s.iter().map(|x| (x - mx).exp()).collect();
+                let z: f64 = w.iter().sum();
+                for d in 0..128 {
+                    let acc: f64 = keys
+                        .iter()
+                        .zip(&w)
+                        .map(|(&kr, wi)| wi * f64::from(p.v[(h * seq + kr) * 128 + d]))
+                        .sum();
+                    o[slot * 128 + d] = (acc / z) as f32;
+                }
+            }
+        });
     out
 }
 
@@ -337,70 +410,105 @@ fn emulate(p: &Problem, lists: &[u32], topk: usize, q_base: usize, single: bool)
     };
     let deq = |x: &[f32]| -> Vec<f64> {
         let (c, sf) = quant_row(x);
-        (0..128).map(|d| f64::from(nib(&c, d)) * f64::from(fp4::e4m3_value(sf[d / 16]))).collect()
+        (0..128)
+            .map(|d| f64::from(nib(&c, d)) * f64::from(fp4::e4m3_value(sf[d / 16])))
+            .collect()
     };
     let mut out = vec![0f32; p.bh * n * 64 * 128];
-    out.par_chunks_mut(64 * 128).enumerate().for_each(|(ht, o)| {
-        let (h, i) = (ht / n, ht % n);
-        if i < q_base {
-            return;
-        }
-        // Dequantized K rows and V (per head dim, 16 slots per scale) of the listed tiles.
-        let list = &lists[(h * n + i) * topk..(h * n + i + 1) * topk];
-        let tiles: Vec<(Vec<Vec<f64>>, Vec<Vec<f64>>)> = list
-            .iter()
-            .map(|&j| {
-                let j = j as usize;
-                let kd: Vec<Vec<f64>> = (0..64).map(|s| deq(&row_of(&p.k, h, j * 64 + s))).collect();
-                let raw: Vec<Vec<f32>> = (0..64).map(|s| row_of(&p.v, h, j * 64 + s)).collect();
-                let mut vd = vec![vec![0f64; 128]; 64];
-                for d in 0..128 {
+    out.par_chunks_mut(64 * 128)
+        .enumerate()
+        .for_each(|(ht, o)| {
+            let (h, i) = (ht / n, ht % n);
+            if i < q_base {
+                return;
+            }
+            // Dequantized K rows and V (per head dim, 16 slots per scale) of the listed tiles.
+            let list = &lists[(h * n + i) * topk..(h * n + i + 1) * topk];
+            let tiles: Vec<(Vec<Vec<f64>>, Vec<Vec<f64>>)> = list
+                .iter()
+                .map(|&j| {
+                    let j = j as usize;
+                    let kd: Vec<Vec<f64>> =
+                        (0..64).map(|s| deq(&row_of(&p.k, h, j * 64 + s))).collect();
+                    let raw: Vec<Vec<f32>> = (0..64).map(|s| row_of(&p.v, h, j * 64 + s)).collect();
+                    let mut vd = vec![vec![0f64; 128]; 64];
+                    for d in 0..128 {
+                        for g in 0..4 {
+                            let col: Vec<f32> = (0..16).map(|s| raw[16 * g + s][d]).collect();
+                            let (sb, c) = fp4::quant16(&col);
+                            for s in 0..16 {
+                                vd[16 * g + s][d] = f64::from(fp4::e2m1_value(c[s]))
+                                    * f64::from(fp4::e4m3_value(sb));
+                            }
+                        }
+                    }
+                    (kd, vd)
+                })
+                .collect();
+            for slot in 0..64 {
+                let qd = deq(&row_of(&p.q, h, i * 64 + slot));
+                let (mut m, mut l) = (f64::NEG_INFINITY, 0f64);
+                let mut acc = vec![0f64; 128];
+                for (t, &j) in list.iter().enumerate() {
+                    let len = plan.block_sizes[j as usize] as usize;
+                    let (kd, vd) = &tiles[t];
+                    let s: Vec<f64> = (0..64)
+                        .map(|c| {
+                            if c < len {
+                                qd.iter().zip(&kd[c]).map(|(a, b)| a * b).sum()
+                            } else {
+                                f64::NEG_INFINITY
+                            }
+                        })
+                        .collect();
+                    let mn = s.iter().cloned().fold(m, f64::max);
+                    let ms = if mn == f64::NEG_INFINITY {
+                        0.0
+                    } else {
+                        mn * sl2
+                    };
+                    let alpha = if m == f64::NEG_INFINITY {
+                        0.0
+                    } else {
+                        (m * sl2 - ms).exp2()
+                    };
+                    m = mn;
+                    let pt: Vec<f64> = s
+                        .iter()
+                        .map(|x| {
+                            if *x == f64::NEG_INFINITY {
+                                0.0
+                            } else {
+                                (x * sl2 - ms).exp2()
+                            }
+                        })
+                        .collect();
+                    l = l * alpha + pt.iter().sum::<f64>();
+                    acc.iter_mut().for_each(|a| *a *= alpha);
                     for g in 0..4 {
-                        let col: Vec<f32> = (0..16).map(|s| raw[16 * g + s][d]).collect();
-                        let (sb, c) = fp4::quant16(&col);
-                        for s in 0..16 {
-                            vd[16 * g + s][d] = f64::from(fp4::e2m1_value(c[s])) * f64::from(fp4::e4m3_value(sb));
+                        let gm = pt[16 * g..16 * g + 16].iter().cloned().fold(0f64, f64::max);
+                        let sb = fp4::e4m3_encode((gm * pmul / 6.0) as f32);
+                        let sf = f64::from(fp4::e4m3_value(sb));
+                        let inv = if sf == 0.0 { 0.0 } else { pmul / sf };
+                        for c in 16 * g..16 * g + 16 {
+                            let pq =
+                                f64::from(fp4::e2m1_value(fp4::e2m1_encode((pt[c] * inv) as f32)))
+                                    * sf;
+                            if pq != 0.0 {
+                                acc.iter_mut().zip(&vd[c]).for_each(|(a, v)| *a += pq * v);
+                            }
                         }
                     }
                 }
-                (kd, vd)
-            })
-            .collect();
-        for slot in 0..64 {
-            let qd = deq(&row_of(&p.q, h, i * 64 + slot));
-            let (mut m, mut l) = (f64::NEG_INFINITY, 0f64);
-            let mut acc = vec![0f64; 128];
-            for (t, &j) in list.iter().enumerate() {
-                let len = plan.block_sizes[j as usize] as usize;
-                let (kd, vd) = &tiles[t];
-                let s: Vec<f64> = (0..64)
-                    .map(|c| if c < len { qd.iter().zip(&kd[c]).map(|(a, b)| a * b).sum() } else { f64::NEG_INFINITY })
-                    .collect();
-                let mn = s.iter().cloned().fold(m, f64::max);
-                let ms = if mn == f64::NEG_INFINITY { 0.0 } else { mn * sl2 };
-                let alpha = if m == f64::NEG_INFINITY { 0.0 } else { (m * sl2 - ms).exp2() };
-                m = mn;
-                let pt: Vec<f64> = s.iter().map(|x| if *x == f64::NEG_INFINITY { 0.0 } else { (x * sl2 - ms).exp2() }).collect();
-                l = l * alpha + pt.iter().sum::<f64>();
-                acc.iter_mut().for_each(|a| *a *= alpha);
-                for g in 0..4 {
-                    let gm = pt[16 * g..16 * g + 16].iter().cloned().fold(0f64, f64::max);
-                    let sb = fp4::e4m3_encode((gm * pmul / 6.0) as f32);
-                    let sf = f64::from(fp4::e4m3_value(sb));
-                    let inv = if sf == 0.0 { 0.0 } else { pmul / sf };
-                    for c in 16 * g..16 * g + 16 {
-                        let pq = f64::from(fp4::e2m1_value(fp4::e2m1_encode((pt[c] * inv) as f32))) * sf;
-                        if pq != 0.0 {
-                            acc.iter_mut().zip(&vd[c]).for_each(|(a, v)| *a += pq * v);
-                        }
-                    }
+                for d in 0..128 {
+                    o[slot * 128 + d] = if l > 0.0 {
+                        (acc[d] / (l * pmul)) as f32
+                    } else {
+                        0.0
+                    };
                 }
             }
-            for d in 0..128 {
-                o[slot * 128 + d] = if l > 0.0 { (acc[d] / (l * pmul)) as f32 } else { 0.0 };
-            }
-        }
-    });
+        });
     out
 }
 
@@ -421,7 +529,12 @@ fn live(p: &Problem, x: &[f32], q_base: usize) -> Vec<f32> {
 
 // ---- 2. / 3. ---------------------------------------------------------------------------------------------------------
 
-fn fine_stage(report: &mut Report, seed: u64, layout: &H3PackedLayout, heads: usize) -> StageResult<()> {
+fn fine_stage(
+    report: &mut Report,
+    seed: u64,
+    layout: &H3PackedLayout,
+    heads: usize,
+) -> StageResult<()> {
     let d = dev()?;
     let p = problem(layout, heads, seed)?;
     let (n, seq, bh) = (p.plan.num_tiles(), p.plan.seq, p.bh);
@@ -429,7 +542,8 @@ fn fine_stage(report: &mut Report, seed: u64, layout: &H3PackedLayout, heads: us
     let qd = d.stream.memcpy_stod(&p.q)?;
     let kd = d.stream.memcpy_stod(&p.k)?;
     let vd = d.stream.memcpy_stod(&p.v)?;
-    let to16 = |x: &[f32]| -> Vec<half::bf16> { x.iter().map(|&v| half::bf16::from_f32(v)).collect() };
+    let to16 =
+        |x: &[f32]| -> Vec<half::bf16> { x.iter().map(|&v| half::bf16::from_f32(v)).collect() };
     let (q16, k16, v16) = (
         d.stream.memcpy_stod(&to16(&p.q))?,
         d.stream.memcpy_stod(&to16(&p.k))?,
@@ -441,11 +555,37 @@ fn fine_stage(report: &mut Report, seed: u64, layout: &H3PackedLayout, heads: us
     );
 
     // 2. The quantizer, bit for bit (E2M1 -0 read as 0).
-    let t32 = fp4::quantize(&Fp4In::F32 { q: &qd, k: &kd, v: &vd }, &plan, bh, seq)?;
-    let t16 = fp4::quantize(&Fp4In::Bf16 { q: &q16, k: &k16, v: &v16 }, &plan, bh, seq)?;
+    let t32 = fp4::quantize(
+        &Fp4In::F32 {
+            q: &qd,
+            k: &kd,
+            v: &vd,
+        },
+        &plan,
+        bh,
+        seq,
+    )?;
+    let t16 = fp4::quantize(
+        &Fp4In::Bf16 {
+            q: &q16,
+            k: &k16,
+            v: &v16,
+        },
+        &plan,
+        bh,
+        seq,
+    )?;
     let get = |s: &CudaSlice<u8>| -> anyhow::Result<Vec<u8>> { Ok(d.stream.memcpy_dtov(s)?) };
-    let (qk4, qksf, v4, vsf) = (get(&t32.qk4)?, get(&t32.qksf)?, get(&t32.v4)?, get(&t32.vsf)?);
-    let same_inputs = qk4 == get(&t16.qk4)? && qksf == get(&t16.qksf)? && v4 == get(&t16.v4)? && vsf == get(&t16.vsf)?;
+    let (qk4, qksf, v4, vsf) = (
+        get(&t32.qk4)?,
+        get(&t32.qksf)?,
+        get(&t32.v4)?,
+        get(&t32.vsf)?,
+    );
+    let same_inputs = qk4 == get(&t16.qk4)?
+        && qksf == get(&t16.qksf)?
+        && v4 == get(&t16.v4)?
+        && vsf == get(&t16.vsf)?;
     let zero_neg = |b: u8| -> u8 {
         let lo = if b & 15 == 8 { b & 0xf0 } else { b };
         if lo >> 4 == 8 {
@@ -468,7 +608,11 @@ fn fine_stage(report: &mut Report, seed: u64, layout: &H3PackedLayout, heads: us
         for slot in 0..padded {
             for (which, x) in [(0usize, &p.q), (1, &p.k)] {
                 let (c, sf) = quant_row(&row_of(x, h, slot));
-                let stored = if which == 1 { (slot / 64) * 64 + fp4::kperm(slot % 64) } else { slot };
+                let stored = if which == 1 {
+                    (slot / 64) * 64 + fp4::kperm(slot % 64)
+                } else {
+                    slot
+                };
                 let row = (which * bh + h) * padded + stored;
                 let dc = &qk4[row * 64..row * 64 + 64];
                 let ds = &qksf[row * 8..row * 8 + 8];
@@ -488,7 +632,12 @@ fn fine_stage(report: &mut Report, seed: u64, layout: &H3PackedLayout, heads: us
                 let row = (h * n + t) * 128 + dim;
                 let dc = &v4[row * 32..row * 32 + 32];
                 let ds = &vsf[row * 4..row * 4 + 4];
-                if dc.iter().zip(&c[..32]).any(|(a, b)| zero_neg(*a) != zero_neg(*b)) || ds != &sf[..4] {
+                if dc
+                    .iter()
+                    .zip(&c[..32])
+                    .any(|(a, b)| zero_neg(*a) != zero_neg(*b))
+                    || ds != &sf[..4]
+                {
                     mismatches[2] += 1;
                 }
             }
@@ -520,18 +669,39 @@ fn fine_stage(report: &mut Report, seed: u64, layout: &H3PackedLayout, heads: us
                 let em = live(&p, &emulate(&p, &lists, topk, q_base, single), q_base);
                 let vs_em = rel_l2(&got, &em);
                 row.insert(format!("{tag}_vs_emulation"), json!(vs_em));
-                row.insert(format!("{tag}_emulation_vs_f64"), json!(rel_l2(&em, &reference)));
+                row.insert(
+                    format!("{tag}_emulation_vs_f64"),
+                    json!(rel_l2(&em, &reference)),
+                );
                 ok &= vs_em < EMULATION_LIMIT;
             }
         }
         // Our bf16 VSA fine stage on the same lists, for scale.
-        let bf = ops::vsa_mma_attn_range_device(&qd, &kd, &vd, &sel, &plan, bh, seq, 128, topk, scale, q_base, n - q_base)?;
+        let bf = ops::vsa_mma_attn_range_device(
+            &qd,
+            &kd,
+            &vd,
+            &sel,
+            &plan,
+            bh,
+            seq,
+            128,
+            topk,
+            scale,
+            q_base,
+            n - q_base,
+        )?;
         let bf = live(&p, &d.stream.memcpy_dtov(&bf)?, q_base);
         row.insert("bf16_vsa_vs_f64".into(), json!(rel_l2(&bf, &reference)));
         row.insert("topk".into(), json!(topk));
         values.insert(case.into(), serde_json::Value::Object(row));
     }
-    report.check("fp4_quantizer_bitwise", quant_ok, quant_values, json!({"differ": 0}))?;
+    report.check(
+        "fp4_quantizer_bitwise",
+        quant_ok,
+        quant_values,
+        json!({"differ": 0}),
+    )?;
     report.check(
         "fp4_fine_stage",
         ok,
@@ -544,7 +714,8 @@ fn fine_stage(report: &mut Report, seed: u64, layout: &H3PackedLayout, heads: us
 
 fn timing(report: &mut Report, seed: u64) -> StageResult<()> {
     let d = dev()?;
-    let heads = fastvideo_models::h3::config::H3TransformerConfig::fasth3_8step().num_attention_heads;
+    let heads =
+        fastvideo_models::h3::config::H3TransformerConfig::fasth3_8step().num_attention_heads;
     for (name, h, w) in [("480p", 480usize, 832usize), ("768p", 768, 1344)] {
         let geo = H3Geometry::new(h, w, 124).map_err(anyhow::Error::msg)?;
         let layout = H3PackedLayout::from_geometry(&geo, 256).map_err(anyhow::Error::msg)?;
@@ -558,7 +729,11 @@ fn timing(report: &mut Report, seed: u64) -> StageResult<()> {
             let one: Vec<f32> = (0..seq * 128).map(|_| bf16r(rng.normal())).collect();
             one.repeat(heads)
         };
-        let (q, k, v) = (d.stream.memcpy_stod(&rnd(&mut rng))?, d.stream.memcpy_stod(&rnd(&mut rng))?, d.stream.memcpy_stod(&rnd(&mut rng))?);
+        let (q, k, v) = (
+            d.stream.memcpy_stod(&rnd(&mut rng))?,
+            d.stream.memcpy_stod(&rnd(&mut rng))?,
+            d.stream.memcpy_stod(&rnd(&mut rng))?,
+        );
         // Random lists of the real length: prefix tiles, then distinct video tiles.
         let mut lists = Vec::with_capacity(heads * n * topk);
         for _ in 0..heads * n {
@@ -584,12 +759,23 @@ fn timing(report: &mut Report, seed: u64) -> StageResult<()> {
             Ok(t.elapsed().as_secs_f64() * 1e3 / 5.0)
         };
         let bf16_ms = time(&mut || {
-            ops::vsa_mma_attn_range_device(&q, &k, &v, &sel, &pd, heads, seq, 128, topk, scale, qb, qt)?;
+            ops::vsa_mma_attn_range_device(
+                &q, &k, &v, &sel, &pd, heads, seq, 128, topk, scale, qb, qt,
+            )?;
             Ok(())
         })?;
         let mut tiles = None;
         let quant_ms = time(&mut || {
-            tiles = Some(fp4::quantize(&Fp4In::F32 { q: &q, k: &k, v: &v }, &pd, heads, seq)?);
+            tiles = Some(fp4::quantize(
+                &Fp4In::F32 {
+                    q: &q,
+                    k: &k,
+                    v: &v,
+                },
+                &pd,
+                heads,
+                seq,
+            )?);
             Ok(())
         })?;
         let tiles = tiles.ok_or_else(|| anyhow::anyhow!("no tiles"))?;

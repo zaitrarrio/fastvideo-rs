@@ -36,11 +36,13 @@ use fastvideo_engine_service::{DuplexCommand, DuplexControl, EngineService, Tick
 use fastvideo_media::decode::DecoderPool;
 use fastvideo_media::pacer::VideoOut;
 use fastvideo_protocol::{
-    canvas_for_aspect, ApiError, CausalLimits, Continuity, DuplexSpec, ErrorKind, InputVideoCodec, ModelCaps,
-    ProtocolId, RgbFrame, SessionContext, SessionSpec, StreamCaps, TrackSet,
+    canvas_for_aspect, ApiError, CausalLimits, Continuity, DuplexSpec, ErrorKind, InputVideoCodec,
+    ModelCaps, ProtocolId, RgbFrame, SessionContext, SessionSpec, StreamCaps, TrackSet,
 };
 use fastvideo_serve_kit::ServeCtx;
-use fastvideo_webrtc::host::{AnswerOptions, AudioLayout, PeerEvent, PeerHandle, ReceiveOptions, RtcHost};
+use fastvideo_webrtc::host::{
+    AnswerOptions, AudioLayout, PeerEvent, PeerHandle, ReceiveOptions, RtcHost,
+};
 use fastvideo_webrtc::ingest::{Ingest, IngestConfig, IngestStats};
 use fastvideo_webrtc::writer::{AudioPacket, VideoCodec, VideoFrame};
 use serde::Deserialize;
@@ -63,7 +65,11 @@ pub struct IngestSettings {
 
 impl IngestSettings {
     pub fn from_config(c: &crate::config::Config) -> Self {
-        Self { encoder: c.webrtc.encoder.clone(), limits: c.streams.causal_limits(), keep_ended: 32 }
+        Self {
+            encoder: c.webrtc.encoder.clone(),
+            limits: c.streams.causal_limits(),
+            keep_ended: 32,
+        }
     }
 }
 
@@ -117,9 +123,17 @@ struct Entry {
 impl Entry {
     fn view(&self) -> Value {
         let g = |m: &Mutex<Option<String>>| m.lock().ok().and_then(|g| g.clone());
-        let duplex = self.control.lock().ok().and_then(|c| c.as_ref().map(|c| c.state()));
+        let duplex = self
+            .control
+            .lock()
+            .ok()
+            .and_then(|c| c.as_ref().map(|c| c.state()));
         let ingest = self.ingest.lock().ok().and_then(|i| i.clone());
-        let peer = self.peer.lock().ok().and_then(|p| p.as_ref().map(|p| p.stats()));
+        let peer = self
+            .peer
+            .lock()
+            .ok()
+            .and_then(|p| p.as_ref().map(|p| p.stats()));
         let c = &self.counters;
         json!({
             "id": self.id,
@@ -162,7 +176,10 @@ pub struct IngestStreams {
 }
 
 fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn err_reply(e: &ApiError) -> Response {
@@ -171,7 +188,11 @@ fn err_reply(e: &ApiError) -> Response {
         _ => StatusCode::from_u16(e.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
     };
     let kind = serde_json::to_value(e.kind).unwrap_or(Value::Null);
-    let mut r = (status, Json(json!({"error": {"kind": kind, "message": e.message, "param": e.param}}))).into_response();
+    let mut r = (
+        status,
+        Json(json!({"error": {"kind": kind, "message": e.message, "param": e.param}})),
+    )
+        .into_response();
     if let Some(s) = e.retry_after_s {
         if let Ok(v) = HeaderValue::from_str(&s.to_string()) {
             r.headers_mut().insert("retry-after", v);
@@ -182,7 +203,13 @@ fn err_reply(e: &ApiError) -> Response {
 
 impl IngestStreams {
     pub fn new(engine: EngineService, host: RtcHost, cfg: IngestSettings) -> Self {
-        Self { engine, host, cfg, map: Mutex::new(HashMap::new()), order: Mutex::new(VecDeque::new()) }
+        Self {
+            engine,
+            host,
+            cfg,
+            map: Mutex::new(HashMap::new()),
+            order: Mutex::new(VecDeque::new()),
+        }
     }
 
     fn get(&self, id: &str) -> Option<Arc<Entry>> {
@@ -197,10 +224,16 @@ impl IngestStreams {
             // Forget the oldest ended streams beyond `keep_ended`.
             let ended: Vec<String> = o
                 .iter()
-                .filter(|id| m.get(*id).is_none_or(|e| e.state.lock().map(|s| *s == "closed").unwrap_or(true)))
+                .filter(|id| {
+                    m.get(*id)
+                        .is_none_or(|e| e.state.lock().map(|s| *s == "closed").unwrap_or(true))
+                })
                 .cloned()
                 .collect();
-            for id in ended.iter().take(ended.len().saturating_sub(self.cfg.keep_ended)) {
+            for id in ended
+                .iter()
+                .take(ended.len().saturating_sub(self.cfg.keep_ended))
+            {
                 m.remove(id);
                 o.retain(|x| x != id);
             }
@@ -208,21 +241,41 @@ impl IngestStreams {
     }
 
     fn list(&self) -> Vec<Value> {
-        let ids: Vec<String> = self.order.lock().map(|o| o.iter().rev().cloned().collect()).unwrap_or_default();
-        ids.iter().filter_map(|id| self.get(id)).map(|e| e.view()).collect()
+        let ids: Vec<String> = self
+            .order
+            .lock()
+            .map(|o| o.iter().rev().cloned().collect())
+            .unwrap_or_default();
+        ids.iter()
+            .filter_map(|id| self.get(id))
+            .map(|e| e.view())
+            .collect()
     }
 }
 
 /// The duplex session spec for a query (pure; exposed for tests): output
 /// canvas and fps from the query or the model, stereo audio when the model
 /// sends audio, the session-length rule.
-pub fn duplex_spec(caps: &ModelCaps, q: &IngestQuery, limits: &CausalLimits) -> Result<DuplexSpec, ApiError> {
+pub fn duplex_spec(
+    caps: &ModelCaps,
+    q: &IngestQuery,
+    limits: &CausalLimits,
+) -> Result<DuplexSpec, ApiError> {
     let Some(d) = caps.stream.as_ref().and_then(StreamCaps::duplex) else {
-        return Err(ApiError::invalid_param("model", format!("`{}` does not take client input (not a duplex model)", caps.id)));
+        return Err(ApiError::invalid_param(
+            "model",
+            format!(
+                "`{}` does not take client input (not a duplex model)",
+                caps.id
+            ),
+        ));
     };
     let fps = q.fps.unwrap_or(d.target_fps);
     if !caps.fps.allows(fps) {
-        return Err(ApiError::invalid_param("fps", format!("fps {fps} is not supported by `{}`", caps.id)));
+        return Err(ApiError::invalid_param(
+            "fps",
+            format!("fps {fps} is not supported by `{}`", caps.id),
+        ));
     }
     let canvas = match (q.width, q.height) {
         (Some(w), Some(h)) => (w, h),
@@ -230,17 +283,41 @@ pub fn duplex_spec(caps: &ModelCaps, q: &IngestQuery, limits: &CausalLimits) -> 
             let short = caps.canvas.short_edges.first().copied().unwrap_or(360);
             canvas_for_aspect(&caps.canvas, 16.0 / 9.0, short)
         }
-        _ => return Err(ApiError::invalid_param("width", "give both width and height, or neither")),
+        _ => {
+            return Err(ApiError::invalid_param(
+                "width",
+                "give both width and height, or neither",
+            ))
+        }
     };
     if canvas.0 % 2 != 0 || canvas.1 % 2 != 0 || canvas.0 < 16 || canvas.1 < 16 {
-        return Err(ApiError::invalid_param("width", "the canvas needs even sides of at least 16"));
+        return Err(ApiError::invalid_param(
+            "width",
+            "the canvas needs even sides of at least 16",
+        ));
     }
     if u64::from(canvas.0) * u64::from(canvas.1) > caps.canvas.max_area {
-        return Err(ApiError::invalid_param("width", format!("{}x{} is larger than the model's canvas", canvas.0, canvas.1)));
+        return Err(ApiError::invalid_param(
+            "width",
+            format!(
+                "{}x{} is larger than the model's canvas",
+                canvas.0, canvas.1
+            ),
+        ));
     }
     let tracks = TrackSet::for_model(caps, canvas, fps, ("video", "audio"), 2, false);
-    let tracks = if d.audio_out { tracks } else { TrackSet { audio: None, ..tracks } };
-    let context = SessionContext { scene: q.scene.clone(), persona: q.persona.clone() };
+    let tracks = if d.audio_out {
+        tracks
+    } else {
+        TrackSet {
+            audio: None,
+            ..tracks
+        }
+    };
+    let context = SessionContext {
+        scene: q.scene.clone(),
+        persona: q.persona.clone(),
+    };
     context.validate()?;
     Ok(DuplexSpec {
         session: SessionSpec {
@@ -276,13 +353,15 @@ fn h264_backend(choice: &str) -> Option<fastvideo_media::video::EncoderBackend> 
     use fastvideo_media::video::EncoderBackend;
     match choice {
         "nvenc" => Some(EncoderBackend::Nvenc),
-        "openh264" => EncoderBackend::OpenH264.compiled().then_some(EncoderBackend::OpenH264),
+        "openh264" => EncoderBackend::OpenH264
+            .compiled()
+            .then_some(EncoderBackend::OpenH264),
         "x264-test" => Some(EncoderBackend::CpuTestX264),
         _ => {
             // `auto` is resolved at startup (`encoders::resolve`); a router
-        // built without `App::build` probes here (blocking: callers are on
-        // a blocking thread).
-        let (_, sel) = crate::encoders::auto_selection();
+            // built without `App::build` probes here (blocking: callers are on
+            // a blocking thread).
+            let (_, sel) = crate::encoders::auto_selection();
             if sel.streams == "auto" {
                 return None;
             }
@@ -292,8 +371,14 @@ fn h264_backend(choice: &str) -> Option<fastvideo_media::video::EncoderBackend> 
 }
 
 fn receive_options(caps: &ModelCaps) -> ReceiveOptions {
-    let input = caps.stream.as_ref().and_then(StreamCaps::duplex).map(|d| d.input.clone());
-    let Some(input) = input else { return ReceiveOptions::default() };
+    let input = caps
+        .stream
+        .as_ref()
+        .and_then(StreamCaps::duplex)
+        .map(|d| d.input.clone());
+    let Some(input) = input else {
+        return ReceiveOptions::default();
+    };
     ReceiveOptions {
         video_codecs: input
             .video
@@ -310,19 +395,33 @@ fn receive_options(caps: &ModelCaps) -> ReceiveOptions {
     }
 }
 
-async fn create(st: &Arc<IngestStreams>, q: IngestQuery, offer: &str) -> Result<(Arc<Entry>, String), ApiError> {
+async fn create(
+    st: &Arc<IngestStreams>,
+    q: IngestQuery,
+    offer: &str,
+) -> Result<(Arc<Entry>, String), ApiError> {
     let caps = st
         .engine
         .caps()
         .get(&fastvideo_protocol::ModelId::new(&q.model))
         .or_else(|| st.engine.caps().resolve(&q.model))
         .cloned()
-        .ok_or_else(|| ApiError::invalid_param("model", format!("model `{}` is not served here", q.model)))?;
+        .ok_or_else(|| {
+            ApiError::invalid_param("model", format!("model `{}` is not served here", q.model))
+        })?;
     let spec = duplex_spec(&caps, &q, &st.cfg.limits)?;
-    let duplex = caps.stream.as_ref().and_then(StreamCaps::duplex).cloned().expect("checked by duplex_spec");
+    let duplex = caps
+        .stream
+        .as_ref()
+        .and_then(StreamCaps::duplex)
+        .cloned()
+        .expect("checked by duplex_spec");
     // Decoders for every accepted codec start now, before the first frame.
-    let icfg = IngestConfig { max_seconds: spec.session.max_seconds, ..IngestConfig::new(duplex.input.video.clone(), duplex.input.audio.clone()) }
-        .prewarm(DecoderPool::per_session());
+    let icfg = IngestConfig {
+        max_seconds: spec.session.max_seconds,
+        ..IngestConfig::new(duplex.input.video.clone(), duplex.input.audio.clone())
+    }
+    .prewarm(DecoderPool::per_session());
     let session = st.engine.open_duplex_session(spec.clone()).await?;
     let audio = spec.session.tracks.has_audio();
     // Codec probes (ffmpeg) stay off the async runtime.
@@ -365,7 +464,11 @@ async fn create(st: &Arc<IngestStreams>, q: IngestQuery, offer: &str) -> Result<
         fps: spec.session.fps,
         state: Mutex::new("connecting"),
         end_reason: Mutex::new(None),
-        video_codec: Mutex::new(handle.video_codec().map(|c| format!("{c:?}").to_lowercase())),
+        video_codec: Mutex::new(
+            handle
+                .video_codec()
+                .map(|c| format!("{c:?}").to_lowercase()),
+        ),
         control: Mutex::new(Some(control.clone())),
         ingest: Mutex::new(None),
         peer: Mutex::new(Some(handle.clone())),
@@ -465,9 +568,12 @@ impl OutEncoder {
         match codec {
             VideoCodec::H264 => {
                 let b = h264_backend(encoder).ok_or("no H.264 encoder here")?;
-                fastvideo_media::video::create_encoder(b, fastvideo_media::video::H264Config::new(w, h, fps))
-                    .map(OutEncoder::H264)
-                    .map_err(|e| e.to_string())
+                fastvideo_media::video::create_encoder(
+                    b,
+                    fastvideo_media::video::H264Config::new(w, h, fps),
+                )
+                .map(OutEncoder::H264)
+                .map_err(|e| e.to_string())
             }
             VideoCodec::Vp8 => fastvideo_media::vp8::Vp8Encoder::with_pool(
                 fastvideo_media::vp8::Vp8Config::new(w, h, fps),
@@ -480,7 +586,11 @@ impl OutEncoder {
         }
     }
 
-    fn encode(&mut self, f: &RgbFrame, key: bool) -> Result<Vec<fastvideo_media::video::EncodedFrame>, String> {
+    fn encode(
+        &mut self,
+        f: &RgbFrame,
+        key: bool,
+    ) -> Result<Vec<fastvideo_media::video::EncodedFrame>, String> {
         match self {
             OutEncoder::H264(e) => {
                 if key {
@@ -530,20 +640,32 @@ fn spawn_output(
         }
         let (vtx, vrx) = std::sync::mpsc::sync_channel::<(RgbFrame, u32, bool)>(2);
         let video = codec.map(|c| {
-            let (e, peer, force, encoder) = (e.clone(), peer.clone(), force.clone(), encoder.clone());
+            let (e, peer, force, encoder) =
+                (e.clone(), peer.clone(), force.clone(), encoder.clone());
             std::thread::Builder::new()
                 .name("fv-ingest-video-out".into())
                 .spawn(move || video_out(e, vrx, peer, c, canvas, fps, force, encoder))
         });
         let mut opus = audio
-            .then(|| fastvideo_media::opus::OpusEncoder::new(fastvideo_media::opus::OpusConfig::whip(), 0).ok())
+            .then(|| {
+                fastvideo_media::opus::OpusEncoder::new(
+                    fastvideo_media::opus::OpusConfig::whip(),
+                    0,
+                )
+                .ok()
+            })
             .flatten();
         while let Some(t) = rt.block_on(ticks.recv()) {
             if let (Some(op), Some(a)) = (opus.as_mut(), t.audio.as_ref()) {
                 if let Ok(pkts) = op.push(a) {
                     for p in pkts {
-                        if peer.send_audio(AudioPacket::new(p.data, u64::from(p.rtp_ts))).is_ok() {
-                            e.counters.audio_packets_sent.fetch_add(1, Ordering::Relaxed);
+                        if peer
+                            .send_audio(AudioPacket::new(p.data, u64::from(p.rtp_ts)))
+                            .is_ok()
+                        {
+                            e.counters
+                                .audio_packets_sent
+                                .fetch_add(1, Ordering::Relaxed);
                         }
                     }
                 }
@@ -599,7 +721,10 @@ fn video_out(
     let send = |frames: Vec<fastvideo_media::video::EncodedFrame>, rtps: &mut VecDeque<u32>| {
         for f in frames {
             let rtp = rtps.pop_front().unwrap_or_default();
-            if peer.send_video(VideoFrame::new(f.data, u64::from(rtp))).is_ok() {
+            if peer
+                .send_video(VideoFrame::new(f.data, u64::from(rtp)))
+                .is_ok()
+            {
                 e.counters.frames_sent.fetch_add(1, Ordering::Relaxed);
                 if f.keyframe {
                     e.counters.keyframes_sent.fetch_add(1, Ordering::Relaxed);
@@ -638,16 +763,31 @@ fn video_out(
 }
 
 fn auth(ctx: &ServeCtx, h: &HeaderMap) -> Result<(), Box<Response>> {
-    ctx.auth().authenticate(ProtocolId::Native, h).map(|_| ()).map_err(|e| Box::new(err_reply(&e)))
+    ctx.auth()
+        .authenticate(ProtocolId::Native, h)
+        .map(|_| ())
+        .map_err(|e| Box::new(err_reply(&e)))
 }
 
-async fn post_offer(ctx: ServeCtx, st: Arc<IngestStreams>, h: HeaderMap, q: IngestQuery, body: Bytes) -> Response {
+async fn post_offer(
+    ctx: ServeCtx,
+    st: Arc<IngestStreams>,
+    h: HeaderMap,
+    q: IngestQuery,
+    body: Bytes,
+) -> Response {
     if let Err(r) = auth(&ctx, &h) {
         return *r;
     }
-    let ct = h.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default();
+    let ct = h
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
     if !ct.starts_with("application/sdp") {
-        return err_reply(&ApiError::new(ErrorKind::UnsupportedMedia, "WHIP offers are application/sdp"));
+        return err_reply(&ApiError::new(
+            ErrorKind::UnsupportedMedia,
+            "WHIP offers are application/sdp",
+        ));
     }
     let Ok(offer) = std::str::from_utf8(&body) else {
         return err_reply(&ApiError::invalid_param("body", "the offer is not UTF-8"));
@@ -656,7 +796,10 @@ async fn post_offer(ctx: ServeCtx, st: Arc<IngestStreams>, h: HeaderMap, q: Inge
         Ok((e, answer)) => {
             let mut r = (StatusCode::CREATED, answer).into_response();
             let h = r.headers_mut();
-            h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/sdp"));
+            h.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/sdp"),
+            );
             if let Ok(v) = HeaderValue::from_str(&format!("/fv/v1/streams/ingest/{}", e.id)) {
                 h.insert(header::LOCATION, v);
             }
@@ -670,20 +813,35 @@ async fn post_offer(ctx: ServeCtx, st: Arc<IngestStreams>, h: HeaderMap, q: Inge
 }
 
 fn not_found(id: &str) -> Response {
-    err_reply(&ApiError::new(ErrorKind::NotFound, format!("no ingest stream {id}")))
+    err_reply(&ApiError::new(
+        ErrorKind::NotFound,
+        format!("no ingest stream {id}"),
+    ))
 }
 
 /// The `/fv/v1/streams/ingest` routes over `host` (the process's WebRTC host).
 pub fn routes(gate: Arc<ServiceGate>, host: RtcHost, cfg: IngestSettings) -> Router<ServeCtx> {
     let st = Arc::new(IngestStreams::new(gate.engine().clone(), host, cfg));
-    let (s1, s2, s3, s4, s5, s6) = (st.clone(), st.clone(), st.clone(), st.clone(), st.clone(), st);
+    let (s1, s2, s3, s4, s5, s6) = (
+        st.clone(),
+        st.clone(),
+        st.clone(),
+        st.clone(),
+        st.clone(),
+        st,
+    );
     Router::new()
         .route(
             "/fv/v1/streams/ingest",
-            post(move |State(ctx): State<ServeCtx>, h: HeaderMap, Query(q): Query<IngestQuery>, body: Bytes| {
-                let st = s1.clone();
-                async move { post_offer(ctx, st, h, q, body).await }
-            })
+            post(
+                move |State(ctx): State<ServeCtx>,
+                      h: HeaderMap,
+                      Query(q): Query<IngestQuery>,
+                      body: Bytes| {
+                    let st = s1.clone();
+                    async move { post_offer(ctx, st, h, q, body).await }
+                },
+            )
             .get(move |State(ctx): State<ServeCtx>, h: HeaderMap| {
                 let st = s2.clone();
                 async move {
@@ -696,69 +854,91 @@ pub fn routes(gate: Arc<ServiceGate>, host: RtcHost, cfg: IngestSettings) -> Rou
         )
         .route(
             "/fv/v1/streams/ingest/{id}",
-            get(move |State(ctx): State<ServeCtx>, h: HeaderMap, Path(id): Path<String>| {
-                let st = s3.clone();
-                async move {
-                    if let Err(r) = auth(&ctx, &h) {
-                        return *r;
-                    }
-                    match st.get(&id) {
-                        Some(e) => Json(e.view()).into_response(),
-                        None => not_found(&id),
-                    }
-                }
-            })
-            .delete(move |State(ctx): State<ServeCtx>, h: HeaderMap, Path(id): Path<String>| {
-                let st = s4.clone();
-                async move {
-                    if let Err(r) = auth(&ctx, &h) {
-                        return *r;
-                    }
-                    let Some(e) = st.get(&id) else { return not_found(&id) };
-                    e.stop.notify_one();
-                    for _ in 0..200 {
-                        if e.state.lock().map(|s| *s == "closed").unwrap_or(true) {
-                            break;
+            get(
+                move |State(ctx): State<ServeCtx>, h: HeaderMap, Path(id): Path<String>| {
+                    let st = s3.clone();
+                    async move {
+                        if let Err(r) = auth(&ctx, &h) {
+                            return *r;
                         }
-                        tokio::time::sleep(Duration::from_millis(25)).await;
+                        match st.get(&id) {
+                            Some(e) => Json(e.view()).into_response(),
+                            None => not_found(&id),
+                        }
                     }
-                    Json(e.view()).into_response()
-                }
-            })
-            .patch(move |State(ctx): State<ServeCtx>, h: HeaderMap, Path(id): Path<String>| {
-                let st = s5.clone();
-                async move {
-                    if let Err(r) = auth(&ctx, &h) {
-                        return *r;
+                },
+            )
+            .delete(
+                move |State(ctx): State<ServeCtx>, h: HeaderMap, Path(id): Path<String>| {
+                    let st = s4.clone();
+                    async move {
+                        if let Err(r) = auth(&ctx, &h) {
+                            return *r;
+                        }
+                        let Some(e) = st.get(&id) else {
+                            return not_found(&id);
+                        };
+                        e.stop.notify_one();
+                        for _ in 0..200 {
+                            if e.state.lock().map(|s| *s == "closed").unwrap_or(true) {
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(25)).await;
+                        }
+                        Json(e.view()).into_response()
                     }
-                    if st.get(&id).is_none() {
-                        return not_found(&id);
+                },
+            )
+            .patch(
+                move |State(ctx): State<ServeCtx>, h: HeaderMap, Path(id): Path<String>| {
+                    let st = s5.clone();
+                    async move {
+                        if let Err(r) = auth(&ctx, &h) {
+                            return *r;
+                        }
+                        if st.get(&id).is_none() {
+                            return not_found(&id);
+                        }
+                        let mut r = (
+                            StatusCode::METHOD_NOT_ALLOWED,
+                            "the answer is complete: no trickle ICE",
+                        )
+                            .into_response();
+                        r.headers_mut()
+                            .insert(header::ALLOW, HeaderValue::from_static("GET, DELETE"));
+                        r
                     }
-                    let mut r = (StatusCode::METHOD_NOT_ALLOWED, "the answer is complete: no trickle ICE").into_response();
-                    r.headers_mut().insert(header::ALLOW, HeaderValue::from_static("GET, DELETE"));
-                    r
-                }
-            }),
+                },
+            ),
         )
         .route(
             "/fv/v1/streams/ingest/{id}/commands",
-            post(move |State(ctx): State<ServeCtx>, h: HeaderMap, Path(id): Path<String>, Json(body): Json<Value>| {
-                let st = s6.clone();
-                async move {
-                    if let Err(r) = auth(&ctx, &h) {
-                        return *r;
+            post(
+                move |State(ctx): State<ServeCtx>,
+                      h: HeaderMap,
+                      Path(id): Path<String>,
+                      Json(body): Json<Value>| {
+                    let st = s6.clone();
+                    async move {
+                        if let Err(r) = auth(&ctx, &h) {
+                            return *r;
+                        }
+                        let Some(e) = st.get(&id) else {
+                            return not_found(&id);
+                        };
+                        let ctl = e.control.lock().ok().and_then(|c| c.clone());
+                        let Some(ctl) = ctl.filter(|c| !c.is_closed()) else {
+                            return err_reply(&ApiError::conflict("the stream has ended"));
+                        };
+                        match serde_json::from_value::<DuplexCommand>(body) {
+                            Ok(cmd) => Json(json!({"reply": ctl.apply(cmd)})).into_response(),
+                            Err(err) => {
+                                err_reply(&ApiError::invalid_param("type", err.to_string()))
+                            }
+                        }
                     }
-                    let Some(e) = st.get(&id) else { return not_found(&id) };
-                    let ctl = e.control.lock().ok().and_then(|c| c.clone());
-                    let Some(ctl) = ctl.filter(|c| !c.is_closed()) else {
-                        return err_reply(&ApiError::conflict("the stream has ended"));
-                    };
-                    match serde_json::from_value::<DuplexCommand>(body) {
-                        Ok(cmd) => Json(json!({"reply": ctl.apply(cmd)})).into_response(),
-                        Err(err) => err_reply(&ApiError::invalid_param("type", err.to_string())),
-                    }
-                }
-            }),
+                },
+            ),
         )
 }
 
@@ -767,7 +947,10 @@ mod tests {
     use super::*;
 
     fn q(model: &str) -> IngestQuery {
-        IngestQuery { model: model.into(), ..IngestQuery::default() }
+        IngestQuery {
+            model: model.into(),
+            ..IngestQuery::default()
+        }
     }
 
     #[test]
@@ -778,16 +961,52 @@ mod tests {
         assert_eq!((s.session.canvas, s.session.fps), ((640, 360), 30));
         assert_eq!(s.session.tracks.audio.as_ref().map(|a| a.channels), Some(2));
         assert_eq!(s.session.max_seconds, Some(120));
-        let s = duplex_spec(&echo, &IngestQuery { max_seconds: Some(900), scene: Some("desk".into()), ..q("fv-echo") }, &l).unwrap();
+        let s = duplex_spec(
+            &echo,
+            &IngestQuery {
+                max_seconds: Some(900),
+                scene: Some("desk".into()),
+                ..q("fv-echo")
+            },
+            &l,
+        )
+        .unwrap();
         assert_eq!(s.session.max_seconds, Some(300));
         assert_eq!(s.context.scene.as_deref(), Some("desk"));
-        assert_eq!(duplex_spec(&echo, &IngestQuery { fps: Some(7), ..q("fv-echo") }, &l).unwrap_err().param.as_deref(), Some("fps"));
         assert_eq!(
-            duplex_spec(&echo, &IngestQuery { width: Some(3840), height: Some(2160), ..q("fv-echo") }, &l).unwrap_err().param.as_deref(),
+            duplex_spec(
+                &echo,
+                &IngestQuery {
+                    fps: Some(7),
+                    ..q("fv-echo")
+                },
+                &l
+            )
+            .unwrap_err()
+            .param
+            .as_deref(),
+            Some("fps")
+        );
+        assert_eq!(
+            duplex_spec(
+                &echo,
+                &IngestQuery {
+                    width: Some(3840),
+                    height: Some(2160),
+                    ..q("fv-echo")
+                },
+                &l
+            )
+            .unwrap_err()
+            .param
+            .as_deref(),
             Some("width")
         );
         let h3 = fastvideo_engine_service::FakeModel::h3_max().caps;
-        assert_eq!(duplex_spec(&h3, &q("h3"), &l).unwrap_err().param.as_deref(), Some("model"));
+        assert_eq!(
+            duplex_spec(&h3, &q("h3"), &l).unwrap_err().param.as_deref(),
+            Some("model")
+        );
         let r = receive_options(&echo);
         assert_eq!(r.video_codecs, vec![VideoCodec::Vp8, VideoCodec::H264]);
         assert_eq!(r.max_bitrate_kbps, 4000);

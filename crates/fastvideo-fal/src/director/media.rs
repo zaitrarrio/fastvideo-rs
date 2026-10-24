@@ -39,7 +39,9 @@ use fastvideo_media::opus::{OpusConfig, OpusEncoder};
 use fastvideo_media::pacer::{AvPacer, AvPacerConfig, Metronome, VideoOut};
 use fastvideo_media::pipe::SparePool;
 use fastvideo_media::queue::{DropOldest, GapKeyframes};
-use fastvideo_media::video::{create_stream_encoder, EncoderBackend, H264Config, PublishTarget, VideoEncoder};
+use fastvideo_media::video::{
+    create_stream_encoder, EncoderBackend, H264Config, PublishTarget, VideoEncoder,
+};
 use fastvideo_media::RgbFrame;
 use fastvideo_webrtc::writer::KeyframeLimiter;
 
@@ -174,7 +176,8 @@ impl<S: MediaSink> MediaLoop<S> {
         events: tokio::sync::mpsc::UnboundedSender<MediaEvent>,
         gauges: Arc<MediaGauges>,
     ) -> Result<Self, String> {
-        let pacer = AvPacer::new(AvPacerConfig::wire(cfg.fps, cfg.audio.then_some(2))).map_err(|e| e.to_string())?;
+        let pacer = AvPacer::new(AvPacerConfig::wire(cfg.fps, cfg.audio.then_some(2)))
+            .map_err(|e| e.to_string())?;
         let opus = if cfg.audio {
             Some(OpusEncoder::new(OpusConfig::wma(None), 0).map_err(|e| e.to_string())?)
         } else {
@@ -216,8 +219,12 @@ impl<S: MediaSink> MediaLoop<S> {
             gaps: GapKeyframes::default(),
             spares: SparePool::per_session(),
         };
-        std::thread::Builder::new().name("wma-video-enc".into()).spawn(move || enc.run())?;
-        std::thread::Builder::new().name("wma-playout".into()).spawn(move || self.run())
+        std::thread::Builder::new()
+            .name("wma-video-enc".into())
+            .spawn(move || enc.run())?;
+        std::thread::Builder::new()
+            .name("wma-playout".into())
+            .spawn(move || self.run())
     }
 
     fn emit(&self, e: MediaEvent) {
@@ -228,10 +235,19 @@ impl<S: MediaSink> MediaLoop<S> {
     fn handle(&mut self, cmd: MediaCmd) -> bool {
         match cmd {
             MediaCmd::Chunk(c) => {
-                let slices = lockstep::slices(c.frames.len() as u32, EMIT_FRAMES, self.cfg.fps, WIRE_RATE).collect();
-                self.gauges.buffered_frames.fetch_add(c.frames.len() as u64, Ordering::Relaxed);
+                let slices =
+                    lockstep::slices(c.frames.len() as u32, EMIT_FRAMES, self.cfg.fps, WIRE_RATE)
+                        .collect();
+                self.gauges
+                    .buffered_frames
+                    .fetch_add(c.frames.len() as u64, Ordering::Relaxed);
                 self.gauges.pending_chunks.fetch_add(1, Ordering::Relaxed);
-                self.queue.push_back(Playing { chunk: c, slices, next: 0, started: false });
+                self.queue.push_back(Playing {
+                    chunk: c,
+                    slices,
+                    next: 0,
+                    started: false,
+                });
             }
             MediaCmd::Tap(t) => self.tap = Some(t),
             MediaCmd::Keyframe => {
@@ -301,8 +317,13 @@ impl<S: MediaSink> MediaLoop<S> {
             let fresh = tick.video.is_fresh();
             if fresh {
                 self.gauges.fresh_frames.fetch_add(1, Ordering::Relaxed);
-                #[allow(deprecated)] // `fetch_update` is `try_update` from Rust 1.99; older toolchains lack the new name
-                let _ = self.gauges.buffered_frames.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| Some(v.saturating_sub(1)));
+                #[allow(deprecated)]
+                // `fetch_update` is `try_update` from Rust 1.99; older toolchains lack the new name
+                let _ = self.gauges.buffered_frames.fetch_update(
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                    |v| Some(v.saturating_sub(1)),
+                );
             }
             let frame = match &tick.video {
                 VideoOut::Nothing => None,
@@ -338,12 +359,16 @@ impl<S: MediaSink> MediaLoop<S> {
                     }
                 }
             }
-            self.gauges.encode_us.fetch_add(enc_t.elapsed().as_micros() as u64, Ordering::Relaxed);
+            self.gauges
+                .encode_us
+                .fetch_add(enc_t.elapsed().as_micros() as u64, Ordering::Relaxed);
             since_report += 1;
             if since_report >= self.cfg.fps {
                 since_report = 0;
                 let fresh = self.gauges.fresh_frames.load(Ordering::Relaxed);
-                self.emit(MediaEvent::Emitted { video_seconds: fresh as f64 / f64::from(self.cfg.fps) });
+                self.emit(MediaEvent::Emitted {
+                    video_seconds: fresh as f64 / f64::from(self.cfg.fps),
+                });
             }
         }
     }
@@ -354,21 +379,36 @@ impl<S: MediaSink> MediaLoop<S> {
         let spf = WIRE_RATE / self.cfg.fps.max(1);
         while self.pacer.buffered_frames() < (2 * EMIT_FRAMES) as usize {
             let Some(p) = self.queue.front_mut() else {
-                if self.played_any && self.pacer.buffered_frames() == 0 && self.underrun_since.is_none() {
+                if self.played_any
+                    && self.pacer.buffered_frames() == 0
+                    && self.underrun_since.is_none()
+                {
                     self.underrun_since = Some(Instant::now());
-                    let _ = self.events.send(MediaEvent::Underrun { after: self.last_index });
+                    let _ = self.events.send(MediaEvent::Underrun {
+                        after: self.last_index,
+                    });
                 }
                 return;
             };
             if !p.started {
                 p.started = true;
-                let late_by = self.underrun_since.take().map(|t| t.elapsed().as_secs_f64());
+                let late_by = self
+                    .underrun_since
+                    .take()
+                    .map(|t| t.elapsed().as_secs_f64());
                 let index = p.chunk.index;
                 self.last_index = index;
                 self.played_any = true;
-                #[allow(deprecated)] // `fetch_update` is `try_update` from Rust 1.99; older toolchains lack the new name
-                let _ = self.gauges.pending_chunks.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| Some(v.saturating_sub(1)));
-                let _ = self.events.send(MediaEvent::ChunkStarted { index, late_by });
+                #[allow(deprecated)]
+                // `fetch_update` is `try_update` from Rust 1.99; older toolchains lack the new name
+                let _ = self.gauges.pending_chunks.fetch_update(
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                    |v| Some(v.saturating_sub(1)),
+                );
+                let _ = self
+                    .events
+                    .send(MediaEvent::ChunkStarted { index, late_by });
             }
             let Some(s) = p.slices.get(p.next).copied() else {
                 self.queue.pop_front();
@@ -389,7 +429,6 @@ impl<S: MediaSink> MediaLoop<S> {
             }
         }
     }
-
 }
 
 /// The video encoder thread: pops ticks' frames, encodes, sends.
@@ -477,18 +516,27 @@ impl<S: MediaSink> VideoThread<S> {
                 let _ = self.events.send(MediaEvent::Failed(e));
                 return;
             }
-            self.gauges.encode_us.fetch_add(t.elapsed().as_micros() as u64, Ordering::Relaxed);
+            self.gauges
+                .encode_us
+                .fetch_add(t.elapsed().as_micros() as u64, Ordering::Relaxed);
         }
     }
 
     fn open_video(&mut self, f: &RgbFrame) -> Result<(), String> {
-        let bitrate = self.cfg.video_bitrate.unwrap_or_else(|| fastvideo_media::video::default_bitrate(f.width, f.height));
+        let bitrate = self
+            .cfg
+            .video_bitrate
+            .unwrap_or_else(|| fastvideo_media::video::default_bitrate(f.width, f.height));
         self.video = match self.cfg.codec {
             VideoCodec::H264 => {
-                let mut c = H264Config::for_publish(PublishTarget::Peer, f.width, f.height, self.cfg.fps);
+                let mut c =
+                    H264Config::for_publish(PublishTarget::Peer, f.width, f.height, self.cfg.fps);
                 c.bitrate_bps = bitrate;
                 c.gop_seconds = self.cfg.gop_seconds;
-                Video::H264(create_stream_encoder(self.cfg.h264, c, &self.spares).map_err(|e| format!("h264 encoder: {e}"))?)
+                Video::H264(
+                    create_stream_encoder(self.cfg.h264, c, &self.spares)
+                        .map_err(|e| format!("h264 encoder: {e}"))?,
+                )
             }
             VideoCodec::Vp8 if fastvideo_media::vp8::libvpx_available() => {
                 let mut c = fastvideo_media::vp8::Vp8Config::new(f.width, f.height, self.cfg.fps);
@@ -499,8 +547,12 @@ impl<S: MediaSink> VideoThread<S> {
                 Video::Libvpx(Box::new(e))
             }
             VideoCodec::Vp8 => Video::Vp8(
-                Vp8Encoder::new(f.width, f.height, quality_for(bitrate, f.width, f.height, self.cfg.fps))
-                    .map_err(|e| format!("vp8 encoder: {e}"))?,
+                Vp8Encoder::new(
+                    f.width,
+                    f.height,
+                    quality_for(bitrate, f.width, f.height, self.cfg.fps),
+                )
+                .map_err(|e| format!("vp8 encoder: {e}"))?,
             ),
         };
         Ok(())
@@ -516,12 +568,29 @@ impl<S: MediaSink> VideoThread<S> {
                 // One output per input, in order: timestamps by FIFO.
                 self.pending_rtp.push_back(rtp);
                 let aus = e.encode(f).map_err(|e| format!("h264: {e}"))?;
-                aus.into_iter().map(|x| (self.pending_rtp.pop_front().unwrap_or(rtp), x.data, x.keyframe)).collect()
+                aus.into_iter()
+                    .map(|x| {
+                        (
+                            self.pending_rtp.pop_front().unwrap_or(rtp),
+                            x.data,
+                            x.keyframe,
+                        )
+                    })
+                    .collect()
             }
             Video::Libvpx(e) => {
                 self.pending_rtp.push_back(rtp);
                 let frames = e.encode(f).map_err(|e| format!("vp8: {e}"))?;
-                frames.into_iter().map(|x| (self.pending_rtp.pop_front().unwrap_or(rtp), x.data, x.keyframe)).collect()
+                frames
+                    .into_iter()
+                    .map(|x| {
+                        (
+                            self.pending_rtp.pop_front().unwrap_or(rtp),
+                            x.data,
+                            x.keyframe,
+                        )
+                    })
+                    .collect()
             }
             Video::Vp8(e) => vec![(rtp, e.encode(f).map_err(|e| format!("vp8: {e}"))?, true)],
             Video::None => Vec::new(),

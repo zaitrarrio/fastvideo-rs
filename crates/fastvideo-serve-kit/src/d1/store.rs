@@ -34,8 +34,8 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use fastvideo_protocol::{
-    ApiError, Job, JobId, JobSnapshot, JobStatus, JobStore, JobUpdate, ListQuery, Page,
-    ProtocolId, SortOrder, StoreError,
+    ApiError, Job, JobId, JobSnapshot, JobStatus, JobStore, JobUpdate, ListQuery, Page, ProtocolId,
+    SortOrder, StoreError,
 };
 use serde_json::{json, Map, Value};
 use time::OffsetDateTime;
@@ -176,7 +176,8 @@ fn opt_str(s: Option<&str>) -> Value {
 
 /// The 16 column values of [`COLS`] for `job` (`version` 0).
 fn row_params(job: &Job, worker: Option<&str>) -> Result<Vec<Value>, StoreError> {
-    let body = serde_json::to_string(job).map_err(|e| StoreError::Io(format!("encoding job: {e}")))?;
+    let body =
+        serde_json::to_string(job).map_err(|e| StoreError::Io(format!("encoding job: {e}")))?;
     Ok(vec![
         json!(job.id.to_string()),
         json!(job.protocol.as_str()),
@@ -199,7 +200,9 @@ fn row_params(job: &Job, worker: Option<&str>) -> Result<Vec<Value>, StoreError>
 
 fn insert_stmt(job: &Job, worker: Option<&str>) -> Result<Stmt, StoreError> {
     Ok(Stmt::new(
-        format!("INSERT INTO jobs ({COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+        format!(
+            "INSERT INTO jobs ({COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ),
         row_params(job, worker)?,
     ))
 }
@@ -242,7 +245,8 @@ fn leased_upsert_stmt(job: &Job, worker: &str, lease: u64) -> Result<Stmt, Store
 
 /// `UPDATE ... WHERE id = ? AND version = ?` (jobs owned elsewhere).
 fn cas_stmt(job: &Job, version: i64) -> Result<Stmt, StoreError> {
-    let body = serde_json::to_string(job).map_err(|e| StoreError::Io(format!("encoding job: {e}")))?;
+    let body =
+        serde_json::to_string(job).map_err(|e| StoreError::Io(format!("encoding job: {e}")))?;
     Ok(Stmt::new(
         "UPDATE jobs SET owner = ?, status = ?, progress = ?, updated_at = ?, completed_at = ?, \
          expires_at = ?, job = ?, version = version + 1 WHERE id = ? AND version = ?",
@@ -327,7 +331,10 @@ impl D1JobStore {
         let me = Arc::new(self);
         let recovered = me.recover(now).await?;
         if recovered > 0 {
-            tracing::warn!(jobs = recovered, "D1 job store: unfinished jobs of a previous run marked failed");
+            tracing::warn!(
+                jobs = recovered,
+                "D1 job store: unfinished jobs of a previous run marked failed"
+            );
         }
         let weak = Arc::downgrade(&me);
         let tick = me.opts.flush_tick;
@@ -361,7 +368,8 @@ impl D1JobStore {
             g.seq += 1;
             let seq = g.seq;
             let (tx, _) = watch::channel(job.snapshot(seq));
-            g.by_ext.insert((job.protocol, job.external_id.clone()), job.id);
+            g.by_ext
+                .insert((job.protocol, job.external_id.clone()), job.id);
             g.jobs.insert(
                 job.id,
                 Entry {
@@ -391,7 +399,10 @@ impl D1JobStore {
     /// Jobs fenced out by a newer lease (see [`D1JobStore::adopt_leased`]).
     pub fn subscribe_fenced(&self) -> tokio::sync::mpsc::UnboundedReceiver<JobId> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        self.fenced_tx.lock().unwrap_or_else(|p| p.into_inner()).push(tx);
+        self.fenced_tx
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(tx);
         rx
     }
 
@@ -427,11 +438,28 @@ impl D1JobStore {
         }
         let enc = |e: serde_json::Error| StoreError::Io(format!("encoding job: {e}"));
         let resolved = serde_json::to_string(&job.resolved).map_err(enc)?;
-        let dispatched = serde_json::to_value(&job).map_err(enc)?.get("dispatched_at").cloned().unwrap_or(Value::Null);
-        let stale_ms = self.opts.stale_after.unwrap_or(Duration::from_secs(900)).as_millis() as i64;
+        let dispatched = serde_json::to_value(&job)
+            .map_err(enc)?
+            .get("dispatched_at")
+            .cloned()
+            .unwrap_or(Value::Null);
+        let stale_ms = self
+            .opts
+            .stale_after
+            .unwrap_or(Duration::from_secs(900))
+            .as_millis() as i64;
         let mut params = row_params(&job, Some(&self.opts.worker_id))?;
-        let fresh_after = if takeover { now_ms() + 1 } else { now_ms() - stale_ms };
-        params.extend([json!(resolved), dispatched, json!(self.opts.worker_id), json!(fresh_after)]);
+        let fresh_after = if takeover {
+            now_ms() + 1
+        } else {
+            now_ms() - stale_ms
+        };
+        params.extend([
+            json!(resolved),
+            dispatched,
+            json!(self.opts.worker_id),
+            json!(fresh_after),
+        ]);
         let stmt = Stmt::new(
             format!(
                 "INSERT INTO jobs ({COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
@@ -460,7 +488,8 @@ impl D1JobStore {
         g.seq += 1;
         let seq = g.seq;
         let (tx, _) = watch::channel(next.snapshot(seq));
-        g.by_ext.insert((next.protocol, next.external_id.clone()), next.id);
+        g.by_ext
+            .insert((next.protocol, next.external_id.clone()), next.id);
         g.jobs.insert(
             next.id,
             Entry {
@@ -515,22 +544,31 @@ impl D1JobStore {
 
     async fn fetch_row(&self, id: JobId) -> Result<Option<(Job, i64)>, D1Error> {
         let rows = self
-            .read(Stmt::new("SELECT job, version FROM jobs WHERE id = ?", vec![json!(id.to_string())]))
+            .read(Stmt::new(
+                "SELECT job, version FROM jobs WHERE id = ?",
+                vec![json!(id.to_string())],
+            ))
             .await?;
-        Ok(rows.first().and_then(|r| Some((decode_job(r)?, version_of(r)))))
+        Ok(rows
+            .first()
+            .and_then(|r| Some((decode_job(r)?, version_of(r)))))
     }
 
     /// Fails this worker's unfinished jobs (restart recovery).
     async fn recover(&self, now: OffsetDateTime) -> Result<usize, D1Error> {
         let rows = self
             .read(Stmt::new(
-                format!("SELECT job, version FROM jobs WHERE worker = ? AND status IN {UNFINISHED}"),
+                format!(
+                    "SELECT job, version FROM jobs WHERE worker = ? AND status IN {UNFINISHED}"
+                ),
                 vec![json!(self.opts.worker_id)],
             ))
             .await?;
         let mut n = 0;
         for r in &rows {
-            let Some(mut job) = decode_job(r) else { continue };
+            let Some(mut job) = decode_job(r) else {
+                continue;
+            };
             if job.recover_after_restart(now) {
                 if let Ok(s) = cas_stmt(&job, version_of(r)) {
                     if self.write(s).await? > 0 {
@@ -545,7 +583,9 @@ impl D1JobStore {
     /// Fails other workers' unfinished jobs whose heartbeat is older than
     /// `stale_after`.
     async fn reap_stale(&self, now: OffsetDateTime) -> usize {
-        let Some(age) = self.opts.stale_after else { return 0 };
+        let Some(age) = self.opts.stale_after else {
+            return 0;
+        };
         let cutoff = now_ms() - age.as_millis() as i64;
         let rows = match self
             .read(Stmt::new(
@@ -565,8 +605,16 @@ impl D1JobStore {
         };
         let mut n = 0;
         for r in &rows {
-            let Some(mut job) = decode_job(r) else { continue };
-            if job.mark_failed(now, ApiError::internal("the worker running this job was lost")).is_ok() {
+            let Some(mut job) = decode_job(r) else {
+                continue;
+            };
+            if job
+                .mark_failed(
+                    now,
+                    ApiError::internal("the worker running this job was lost"),
+                )
+                .is_ok()
+            {
                 if let Ok(s) = cas_stmt(&job, version_of(r)) {
                     if matches!(self.write(s).await, Ok(c) if c > 0) {
                         n += 1;
@@ -608,12 +656,28 @@ impl D1JobStore {
             None => upsert_stmt(&job, Some(&self.opts.worker_id)),
         };
         let status = job.status();
-        stmt.map(|stmt| Some(DueWrite { seq, lease, status, stmt })).map_err(|e| D1Error::Decode(e.to_string()))
+        stmt.map(|stmt| {
+            Some(DueWrite {
+                seq,
+                lease,
+                status,
+                stmt,
+            })
+        })
+        .map_err(|e| D1Error::Decode(e.to_string()))
     }
 
     /// Bookkeeping after the write of version `seq` of `id` (under the job's
     /// write lock, whose value `done` is the last written sequence number).
-    fn written(&self, id: JobId, seq: u64, lease: Option<u64>, status: JobStatus, res: &Result<u64, D1Error>, done: &mut u64) {
+    fn written(
+        &self,
+        id: JobId,
+        seq: u64,
+        lease: Option<u64>,
+        status: JobStatus,
+        res: &Result<u64, D1Error>,
+        done: &mut u64,
+    ) {
         let fenced = lease.is_some() && matches!(res, Ok(0));
         let mut g = self.lock();
         if let Some(e) = g.jobs.get_mut(&id) {
@@ -633,7 +697,10 @@ impl D1JobStore {
         drop(g);
         if fenced {
             tracing::warn!(job = %id, lease = ?lease, "D1 job store: a newer lease holds this job (or it ended); its writes stop here");
-            self.fenced_tx.lock().unwrap_or_else(|p| p.into_inner()).retain(|t| t.send(id).is_ok());
+            self.fenced_tx
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .retain(|t| t.send(id).is_ok());
         }
         if res.is_ok() {
             *done = seq;
@@ -651,7 +718,11 @@ impl D1JobStore {
             return Ok(());
         };
         drop(lock.lock().await);
-        let behind = self.lock().jobs.get(&id).is_some_and(|e| !e.fenced && e.written_status != Some(e.job.status()));
+        let behind = self
+            .lock()
+            .jobs
+            .get(&id)
+            .is_some_and(|e| !e.fenced && e.written_status != Some(e.job.status()));
         if behind {
             self.flush(id).await
         } else {
@@ -666,19 +737,31 @@ impl D1JobStore {
     /// rolls the whole batch back) falls back to one write per job, so one
     /// bad row cannot hold the others back.
     async fn flush_due(&self, due: Vec<JobId>) {
-        type Item = (JobId, tokio::sync::OwnedMutexGuard<u64>, u64, Option<u64>, JobStatus);
+        type Item = (
+            JobId,
+            tokio::sync::OwnedMutexGuard<u64>,
+            u64,
+            Option<u64>,
+            JobStatus,
+        );
         let mut items: Vec<Item> = Vec::new();
         let mut stmts = Vec::new();
         for id in due {
-            let Some(lock) = self.lock().jobs.get(&id).map(|e| e.flushed.clone()) else { continue };
-            let Ok(guard) = lock.try_lock_owned() else { continue };
+            let Some(lock) = self.lock().jobs.get(&id).map(|e| e.flushed.clone()) else {
+                continue;
+            };
+            let Ok(guard) = lock.try_lock_owned() else {
+                continue;
+            };
             match self.prepare(id, *guard) {
                 Ok(Some(w)) => {
                     items.push((id, guard, w.seq, w.lease, w.status));
                     stmts.push(w.stmt);
                 }
                 Ok(None) => {}
-                Err(e) => tracing::warn!(job = %id, error = %e, "D1 job store: deferred write failed; will retry"),
+                Err(e) => {
+                    tracing::warn!(job = %id, error = %e, "D1 job store: deferred write failed; will retry")
+                }
             }
         }
         if items.len() == 1 {
@@ -719,7 +802,13 @@ impl D1JobStore {
 
     /// Writes every dirty cached job now (shutdown).
     pub async fn flush_all(&self) {
-        let ids: Vec<JobId> = self.lock().jobs.iter().filter(|(_, e)| e.dirty).map(|(id, _)| *id).collect();
+        let ids: Vec<JobId> = self
+            .lock()
+            .jobs
+            .iter()
+            .filter(|(_, e)| e.dirty)
+            .map(|(id, _)| *id)
+            .collect();
         for id in ids {
             if let Err(e) = self.flush(id).await {
                 tracing::warn!(job = %id, error = %e, "D1 job store: flush failed");
@@ -733,7 +822,11 @@ impl D1JobStore {
             let g = self.lock();
             g.jobs
                 .iter()
-                .filter(|(_, e)| e.dirty && e.last_write.is_none_or(|t| t.elapsed() >= self.opts.progress_interval))
+                .filter(|(_, e)| {
+                    e.dirty
+                        && e.last_write
+                            .is_none_or(|t| t.elapsed() >= self.opts.progress_interval)
+                })
                 .map(|(id, _)| *id)
                 .collect()
         };
@@ -756,7 +849,10 @@ impl D1JobStore {
             }
         }
         let beat = {
-            let mut hb = self.last_heartbeat.lock().unwrap_or_else(|p| p.into_inner());
+            let mut hb = self
+                .last_heartbeat
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
             let due = hb.is_none_or(|t| t.elapsed() >= self.opts.heartbeat);
             if due {
                 *hb = Some(Instant::now());
@@ -765,7 +861,9 @@ impl D1JobStore {
         };
         if beat {
             let s = Stmt::new(
-                format!("UPDATE jobs SET updated_at = ? WHERE worker = ? AND status IN {UNFINISHED}"),
+                format!(
+                    "UPDATE jobs SET updated_at = ? WHERE worker = ? AND status IN {UNFINISHED}"
+                ),
                 vec![json!(now_ms()), json!(self.opts.worker_id)],
             );
             if let Err(e) = self.write(s).await {
@@ -798,7 +896,10 @@ impl D1JobStore {
             p.push(json!(pr.as_str()));
         }
         if !q.statuses.is_empty() {
-            w.push(format!("status IN ({})", vec!["?"; q.statuses.len()].join(", ")));
+            w.push(format!(
+                "status IN ({})",
+                vec!["?"; q.statuses.len()].join(", ")
+            ));
             p.extend(q.statuses.iter().map(|s| json!(s.as_str())));
         }
         if let Some(m) = &q.model {
@@ -813,10 +914,17 @@ impl D1JobStore {
             }
         }
         if !ext_ids.is_empty() {
-            w.push(format!("external_id IN ({})", vec!["?"; ext_ids.len()].join(", ")));
+            w.push(format!(
+                "external_id IN ({})",
+                vec!["?"; ext_ids.len()].join(", ")
+            ));
             p.extend(ext_ids.iter().map(|s| json!(s)));
         }
-        let clause = if w.is_empty() { "1 = 1".to_owned() } else { w.join(" AND ") };
+        let clause = if w.is_empty() {
+            "1 = 1".to_owned()
+        } else {
+            w.join(" AND ")
+        };
         (clause, p)
     }
 
@@ -827,7 +935,10 @@ impl D1JobStore {
             let mut all: HashMap<JobId, Job> = HashMap::new();
             for chunk in q.external_ids.chunks(60) {
                 let (w, p) = Self::filters(q, chunk);
-                for r in self.read(Stmt::new(format!("SELECT job FROM jobs WHERE {w}"), p)).await? {
+                for r in self
+                    .read(Stmt::new(format!("SELECT job FROM jobs WHERE {w}"), p))
+                    .await?
+                {
                     if let Some(j) = decode_job(&r) {
                         all.insert(j.id, j);
                     }
@@ -854,9 +965,14 @@ impl D1JobStore {
             ip.extend(p.iter().cloned());
             ip.push(json!(after));
         }
-        items_sql.push_str(&format!(" ORDER BY created_at {dir}, id {dir} LIMIT ? OFFSET ?"));
+        items_sql.push_str(&format!(
+            " ORDER BY created_at {dir}, id {dir} LIMIT ? OFFSET ?"
+        ));
         // SQLite: LIMIT -1 is "no limit" (callers pass usize::MAX for all).
-        ip.push(json!(i64::try_from(q.limit).ok().and_then(|l| l.checked_add(1)).unwrap_or(-1)));
+        ip.push(json!(i64::try_from(q.limit)
+            .ok()
+            .and_then(|l| l.checked_add(1))
+            .unwrap_or(-1)));
         ip.push(json!(q.offset as i64));
         self.count(|s| s.reads += 1);
         let res = self
@@ -872,15 +988,28 @@ impl D1JobStore {
             .and_then(|r| r.get("n"))
             .and_then(Value::as_f64)
             .unwrap_or(0.0) as usize;
-        let mut items: Vec<Job> = res[1].rows.iter().filter_map(decode_job).map(|j| self.fresher(j)).collect();
+        let mut items: Vec<Job> = res[1]
+            .rows
+            .iter()
+            .filter_map(decode_job)
+            .map(|j| self.fresher(j))
+            .collect();
         let has_more = items.len() > q.limit;
         items.truncate(q.limit);
-        Ok(Page { items, total, has_more })
+        Ok(Page {
+            items,
+            total,
+            has_more,
+        })
     }
 
     /// The cached copy when it is held (fresher progress), else `j`.
     fn fresher(&self, j: Job) -> Job {
-        self.lock().jobs.get(&j.id).map(|e| e.job.clone()).unwrap_or(j)
+        self.lock()
+            .jobs
+            .get(&j.id)
+            .map(|e| e.job.clone())
+            .unwrap_or(j)
     }
 }
 
@@ -902,7 +1031,9 @@ impl JobStore for D1JobStore {
             if g.jobs.contains_key(&job.id) {
                 return Err(StoreError::AlreadyExists(job.id));
             }
-            if g.by_ext.contains_key(&(job.protocol, job.external_id.clone())) {
+            if g.by_ext
+                .contains_key(&(job.protocol, job.external_id.clone()))
+            {
                 return Err(StoreError::DuplicateExternal(job.protocol, job.external_id));
             }
             if let Some(m) = self.opts.max_active {
@@ -933,7 +1064,8 @@ impl JobStore for D1JobStore {
         g.seq += 1;
         let seq = g.seq;
         let (tx, _) = watch::channel(job.snapshot(seq));
-        g.by_ext.insert((job.protocol, job.external_id.clone()), job.id);
+        g.by_ext
+            .insert((job.protocol, job.external_id.clone()), job.id);
         let terminal = job.is_terminal();
         let status = job.status();
         g.jobs.insert(
@@ -1029,7 +1161,9 @@ impl JobStore for D1JobStore {
             }
             let changed = self.write(cas_stmt(&job, version)?).await.map_err(io)?;
             if changed == 0 {
-                return Err(StoreError::Io(format!("job {id} changed concurrently; retry")));
+                return Err(StoreError::Io(format!(
+                    "job {id} changed concurrently; retry"
+                )));
             }
             return Ok(job);
         };
@@ -1063,14 +1197,18 @@ impl JobStore for D1JobStore {
             let mut g = self.lock();
             let e = g.jobs.remove(&id);
             if let Some(e) = &e {
-                g.by_ext.remove(&(e.job.protocol, e.job.external_id.clone()));
+                g.by_ext
+                    .remove(&(e.job.protocol, e.job.external_id.clone()));
             }
             e.map(|e| e.job)
         };
         self.count(|s| s.writes += 1);
         let deleted = match self
             .db
-            .query(Stmt::new("DELETE FROM jobs WHERE id = ? RETURNING job", vec![json!(id.to_string())]))
+            .query(Stmt::new(
+                "DELETE FROM jobs WHERE id = ? RETURNING job",
+                vec![json!(id.to_string())],
+            ))
             .await
         {
             Ok(r) => r.rows.first().and_then(decode_job),
@@ -1093,10 +1231,16 @@ impl JobStore for D1JobStore {
         let mut gone: HashMap<JobId, Job> = HashMap::new();
         {
             let mut g = self.lock();
-            let ids: Vec<JobId> = g.jobs.values().filter(|e| e.job.is_expired(now)).map(|e| e.job.id).collect();
+            let ids: Vec<JobId> = g
+                .jobs
+                .values()
+                .filter(|e| e.job.is_expired(now))
+                .map(|e| e.job.id)
+                .collect();
             for id in ids {
                 if let Some(e) = g.jobs.remove(&id) {
-                    g.by_ext.remove(&(e.job.protocol, e.job.external_id.clone()));
+                    g.by_ext
+                        .remove(&(e.job.protocol, e.job.external_id.clone()));
                     gone.insert(id, e.job);
                 }
             }
@@ -1104,7 +1248,10 @@ impl JobStore for D1JobStore {
         self.count(|s| s.writes += 1);
         match self
             .db
-            .query(Stmt::new("DELETE FROM jobs WHERE expires_at <= ? RETURNING job", vec![json!(ms(now))]))
+            .query(Stmt::new(
+                "DELETE FROM jobs WHERE expires_at <= ? RETURNING job",
+                vec![json!(ms(now))],
+            ))
             .await
         {
             Ok(r) => {
@@ -1125,7 +1272,10 @@ impl JobStore for D1JobStore {
         }
         let stale = self.reap_stale(now).await;
         if stale > 0 {
-            tracing::warn!(jobs = stale, "D1 job store: jobs of lost workers marked failed");
+            tracing::warn!(
+                jobs = stale,
+                "D1 job store: jobs of lost workers marked failed"
+            );
         }
         gone.len()
     }

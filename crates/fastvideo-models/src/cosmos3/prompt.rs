@@ -85,7 +85,10 @@ pub fn token_ids(
     width: usize,
     fps: f64,
 ) -> Result<Vec<u32>, String> {
-    let body = chat(&templated(text, negative, num_frames, height, width, fps), num_frames == 1);
+    let body = chat(
+        &templated(text, negative, num_frames, height, width, fps),
+        num_frames == 1,
+    );
     let enc = tokenizer
         .encode(body.as_str(), false)
         .map_err(|e| format!("cosmos3 tokenize: {e}"))?;
@@ -120,7 +123,9 @@ mod tests {
     #[test]
     fn chat_wraps_system_and_generation_turn() {
         let c = chat("hi", false);
-        assert!(c.starts_with("<|im_start|>system\nYou are a helpful assistant who will generate videos"));
+        assert!(c.starts_with(
+            "<|im_start|>system\nYou are a helpful assistant who will generate videos"
+        ));
         assert!(c.ends_with("<|im_start|>user\nhi<|im_end|>\n<|im_start|>assistant\n"));
     }
 }

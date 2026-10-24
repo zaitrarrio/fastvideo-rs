@@ -34,7 +34,9 @@ impl ModerationScope {
             "" | "off" | "false" | "none" => Ok(Self::Off),
             "keyframe" | "keyframes" | "image" => Ok(Self::Keyframe),
             "all" | "on" | "true" => Ok(Self::All),
-            other => Err(format!("moderation scope {other:?}: expected off | keyframe | all")),
+            other => Err(format!(
+                "moderation scope {other:?}: expected off | keyframe | all"
+            )),
         }
     }
 
@@ -92,7 +94,10 @@ pub async fn moderate(
 
 /// [`moderate`] over a whole request (the prompt; the negative prompt is
 /// not an instruction and is not checked).
-pub async fn moderate_request(moderator: &dyn PromptModerator, req: &GenerationRequest) -> Result<(), ApiError> {
+pub async fn moderate_request(
+    moderator: &dyn PromptModerator,
+    req: &GenerationRequest,
+) -> Result<(), ApiError> {
     moderate(moderator, &req.prompt, has_visual_input(req)).await
 }
 
@@ -126,8 +131,14 @@ mod tests {
 
     #[test]
     fn scopes() {
-        assert_eq!(ModerationScope::parse("keyframe").unwrap(), ModerationScope::Keyframe);
-        assert_eq!(ModerationScope::parse(" OFF ").unwrap(), ModerationScope::Off);
+        assert_eq!(
+            ModerationScope::parse("keyframe").unwrap(),
+            ModerationScope::Keyframe
+        );
+        assert_eq!(
+            ModerationScope::parse(" OFF ").unwrap(),
+            ModerationScope::Off
+        );
         assert_eq!(ModerationScope::parse("all").unwrap(), ModerationScope::All);
         assert!(ModerationScope::parse("sometimes").is_err());
         assert!(!ModerationScope::Keyframe.applies(false));
@@ -141,7 +152,10 @@ mod tests {
         let mut req = GenerationRequest::text(ProtocolId::Fal, "h3-larry-turbo", "a prompt");
         let m = Refuse(ModerationScope::Keyframe);
         assert!(block(moderate_request(&m, &req)).is_ok());
-        req.keyframes.push(Keyframe { at: Anchor::First, image: MediaRef::Http("https://x/y.png".parse().unwrap()) });
+        req.keyframes.push(Keyframe {
+            at: Anchor::First,
+            image: MediaRef::Http("https://x/y.png".parse().unwrap()),
+        });
         assert!(has_visual_input(&req));
         let e = block(moderate_request(&m, &req)).unwrap_err();
         assert_eq!(e.kind, ErrorKind::ContentFiltered);

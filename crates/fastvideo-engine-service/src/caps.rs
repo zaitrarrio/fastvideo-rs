@@ -83,7 +83,11 @@ pub fn tier_alias(family: Family, tier: Tier) -> Option<&'static str> {
 pub fn parse_tier_alias(alias: &str) -> Option<(Family, Tier)> {
     [Family::H3, Family::Ltx2, Family::Wan]
         .into_iter()
-        .flat_map(|f| [Tier::Max, Tier::Turbo, Tier::Draft].into_iter().map(move |t| (f, t)))
+        .flat_map(|f| {
+            [Tier::Max, Tier::Turbo, Tier::Draft]
+                .into_iter()
+                .map(move |t| (f, t))
+        })
         .find(|(f, t)| tier_alias(*f, *t) == Some(alias))
 }
 
@@ -94,7 +98,7 @@ pub fn default_profile(family: Family, recipe: &str) -> Option<&'static str> {
         && is_sol_h3_recipe(recipe)
         && !sol_h3_forces_ref2va(recipe)
         && !is_sol_h3_spark_recipe(recipe))
-        .then_some(SOL_H3_4STEP_PROFILE)
+    .then_some(SOL_H3_4STEP_PROFILE)
 }
 
 /// The internal configuration a model id stands for. Serialized into
@@ -367,7 +371,11 @@ impl CapabilityTable {
     /// the client this server does serve.
     pub fn served_summary(&self) -> String {
         let ids: Vec<&str> = self.models.keys().map(ModelId::as_str).collect();
-        let mut aliases: Vec<String> = self.tiers.values().map(|b| format!("{} -> {}", b.alias, b.model.as_str())).collect();
+        let mut aliases: Vec<String> = self
+            .tiers
+            .values()
+            .map(|b| format!("{} -> {}", b.alias, b.model.as_str()))
+            .collect();
         for e in self.models.values() {
             for n in &e.caps.served_names {
                 if n != e.caps.id.as_str() {
@@ -375,7 +383,13 @@ impl CapabilityTable {
                 }
             }
         }
-        let list = |v: &[String]| if v.is_empty() { "none".to_owned() } else { v.join(", ") };
+        let list = |v: &[String]| {
+            if v.is_empty() {
+                "none".to_owned()
+            } else {
+                v.join(", ")
+            }
+        };
         let ids: Vec<String> = ids.into_iter().map(str::to_owned).collect();
         format!("served: {}; aliases: {}", list(&ids), list(&aliases))
     }
@@ -425,8 +439,14 @@ mod tests {
                 assert_eq!(parse_tier_alias(tier_alias(f, t).unwrap()), Some((f, t)));
             }
         }
-        assert_eq!(parse_tier_alias("h3-draft"), Some((Family::H3, Tier::Draft)));
-        assert_eq!(parse_tier_alias("ltx-draft"), Some((Family::Ltx2, Tier::Draft)));
+        assert_eq!(
+            parse_tier_alias("h3-draft"),
+            Some((Family::H3, Tier::Draft))
+        );
+        assert_eq!(
+            parse_tier_alias("ltx-draft"),
+            Some((Family::Ltx2, Tier::Draft))
+        );
         assert_eq!(tier_alias(Family::MmAudio, Tier::Max), None);
         assert_eq!(parse_tier_alias("nope"), None);
     }
@@ -434,8 +454,15 @@ mod tests {
     /// The not-served error's list: model ids and the tier aliases bound to them.
     #[test]
     fn served_summary_lists_ids_and_aliases() {
-        let t = CapabilityTable::build(vec![vec![(h3("sol-h3", Some(Tier::Max)), Recipe::default())]], &BTreeMap::new()).unwrap();
-        assert_eq!(t.served_summary(), "served: sol-h3; aliases: h3-max -> sol-h3");
+        let t = CapabilityTable::build(
+            vec![vec![(h3("sol-h3", Some(Tier::Max)), Recipe::default())]],
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            t.served_summary(),
+            "served: sol-h3; aliases: h3-max -> sol-h3"
+        );
         let empty = CapabilityTable::build(vec![], &BTreeMap::new()).unwrap();
         assert_eq!(empty.served_summary(), "served: none; aliases: none");
     }
@@ -447,8 +474,14 @@ mod tests {
         let c = h3("c", Some(Tier::Max));
         let t = CapabilityTable::build(
             vec![
-                vec![(a.clone(), Recipe::default()), (b.clone(), Recipe::default())],
-                vec![(c.clone(), Recipe::default()), (a.clone(), Recipe::default())],
+                vec![
+                    (a.clone(), Recipe::default()),
+                    (b.clone(), Recipe::default()),
+                ],
+                vec![
+                    (c.clone(), Recipe::default()),
+                    (a.clone(), Recipe::default()),
+                ],
             ],
             &BTreeMap::new(),
         )
@@ -468,7 +501,10 @@ mod tests {
         let mut ov = BTreeMap::new();
         ov.insert("h3-max".to_owned(), ModelId::new("c"));
         let t = CapabilityTable::build(
-            vec![vec![(a.clone(), Recipe::default()), (h3("c", None), rec("x"))]],
+            vec![vec![
+                (a.clone(), Recipe::default()),
+                (h3("c", None), rec("x")),
+            ]],
             &ov,
         )
         .unwrap();
@@ -492,7 +528,9 @@ mod tests {
         )
         .is_err());
         let tagged = a.with_tier(Tier::Max, "one");
-        assert!(CapabilityTable::build(vec![vec![(tagged, rec("two"))]], &BTreeMap::new()).is_err());
+        assert!(
+            CapabilityTable::build(vec![vec![(tagged, rec("two"))]], &BTreeMap::new()).is_err()
+        );
     }
 
     #[test]
@@ -517,8 +555,14 @@ mod tests {
         assert_eq!(p("sol-dense").as_deref(), Some(SOL_H3_4STEP_DENSE_PROFILE));
         assert_eq!(p("sol-ref"), None);
         assert_eq!(p("fast"), None);
-        assert_eq!(Recipe::sol_h3_4step().profile.as_deref(), Some(SOL_H3_4STEP_PROFILE));
-        assert_eq!(default_profile(Family::H3, "sol_h3"), Some(SOL_H3_4STEP_PROFILE));
+        assert_eq!(
+            Recipe::sol_h3_4step().profile.as_deref(),
+            Some(SOL_H3_4STEP_PROFILE)
+        );
+        assert_eq!(
+            default_profile(Family::H3, "sol_h3"),
+            Some(SOL_H3_4STEP_PROFILE)
+        );
         assert_eq!(default_profile(Family::H3, "sol-h3-spark"), None);
         assert_eq!(default_profile(Family::Ltx2, "sol-h3"), None);
     }
@@ -528,12 +572,19 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../profiles");
         for p in [SOL_H3_4STEP_PROFILE, SOL_H3_4STEP_DENSE_PROFILE] {
             let f = root.join(format!("{p}.toml"));
-            let text = std::fs::read_to_string(&f).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
-            assert!(text.contains("recipe = \"sol-h3\""), "{p} must run the sol-h3 recipe");
+            let text =
+                std::fs::read_to_string(&f).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
+            assert!(
+                text.contains("recipe = \"sol-h3\""),
+                "{p} must run the sol-h3 recipe"
+            );
         }
         let p = Recipe::plug_h3_4step_engine_ladder();
         let f = root.join(format!("{}.toml", p.profile.as_deref().unwrap()));
         let text = std::fs::read_to_string(&f).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
-        assert!(text.contains(&format!("recipe = \"{}\"", p.name)), "{PLUG_H3_4STEP_PROFILE}");
+        assert!(
+            text.contains(&format!("recipe = \"{}\"", p.name)),
+            "{PLUG_H3_4STEP_PROFILE}"
+        );
     }
 }

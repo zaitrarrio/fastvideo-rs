@@ -37,7 +37,8 @@ fn fixture(name: &str) -> WeightMap {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("src/h3/fixtures")
         .join(name);
-    WeightMap::open_files(&[path.clone()]).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    WeightMap::open_files(std::slice::from_ref(&path))
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
 fn values(map: &WeightMap, key: &str) -> (Vec<usize>, Vec<f32>) {

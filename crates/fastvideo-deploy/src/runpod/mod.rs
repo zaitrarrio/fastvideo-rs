@@ -26,9 +26,9 @@
 //!   (feature `runpod`) is the production one, [`RouterTransport`] drives an
 //!   in-process router (the [`sim`] simulator in tests).
 
+pub mod sim;
 mod transport;
 mod worker;
-pub mod sim;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -70,7 +70,14 @@ impl fmt::Debug for RunpodEnv {
             .field("post_stream", &self.post_stream)
             .field("ping", &self.ping)
             .field("ping_interval", &self.ping_interval)
-            .field("api_key", &if self.api_key.is_empty() { "<unset>" } else { "<redacted>" })
+            .field(
+                "api_key",
+                &if self.api_key.is_empty() {
+                    "<unset>"
+                } else {
+                    "<redacted>"
+                },
+            )
             .field("worker_id", &self.worker_id)
             .finish()
     }
@@ -99,10 +106,18 @@ impl RunpodEnv {
     /// Reads the variables through `var`. `Err` when this is not a queue
     /// worker (`RUNPOD_WEBHOOK_GET_JOB` unset: the SDK's "local" mode).
     pub fn from_lookup(var: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
-        let get = |k: &str| var(k).map(|v| v.trim().to_owned()).filter(|v| !v.is_empty());
-        let get_job = get("RUNPOD_WEBHOOK_GET_JOB").ok_or("RUNPOD_WEBHOOK_GET_JOB is not set (not a Runpod queue worker)")?;
-        let post_output = get("RUNPOD_WEBHOOK_POST_OUTPUT").ok_or("RUNPOD_WEBHOOK_POST_OUTPUT is not set")?;
-        let ping_ms: u64 = get("RUNPOD_PING_INTERVAL").and_then(|v| v.parse().ok()).unwrap_or(10_000);
+        let get = |k: &str| {
+            var(k)
+                .map(|v| v.trim().to_owned())
+                .filter(|v| !v.is_empty())
+        };
+        let get_job = get("RUNPOD_WEBHOOK_GET_JOB")
+            .ok_or("RUNPOD_WEBHOOK_GET_JOB is not set (not a Runpod queue worker)")?;
+        let post_output =
+            get("RUNPOD_WEBHOOK_POST_OUTPUT").ok_or("RUNPOD_WEBHOOK_POST_OUTPUT is not set")?;
+        let ping_ms: u64 = get("RUNPOD_PING_INTERVAL")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10_000);
         Ok(Self {
             get_job,
             post_output,
@@ -122,38 +137,56 @@ impl RunpodEnv {
     }
 
     fn worker_subst(&self, t: &str) -> String {
-        t.replace("$RUNPOD_POD_ID", &self.worker_id).replace("$ID", &self.worker_id)
+        t.replace("$RUNPOD_POD_ID", &self.worker_id)
+            .replace("$ID", &self.worker_id)
     }
 
     fn job_subst(&self, t: &str, job: &str) -> String {
-        t.replace("$RUNPOD_POD_ID", &self.worker_id).replace("$ID", job)
+        t.replace("$RUNPOD_POD_ID", &self.worker_id)
+            .replace("$ID", job)
     }
 
     /// `GET` job-take.
     pub fn take_url(&self, in_progress: bool) -> String {
-        append_query(&self.worker_subst(&self.get_job), &format!("job_in_progress={}", u8::from(in_progress)))
+        append_query(
+            &self.worker_subst(&self.get_job),
+            &format!("job_in_progress={}", u8::from(in_progress)),
+        )
     }
 
     /// `GET` job-take-batch (concurrency > 1).
     pub fn take_batch_url(&self, in_progress: bool, n: usize) -> String {
-        let base = self.worker_subst(&self.get_job).replacen("/job-take/", "/job-take-batch/", 1);
-        append_query(&append_query(&base, &format!("job_in_progress={}", u8::from(in_progress))), &format!("batch_size={n}"))
+        let base = self
+            .worker_subst(&self.get_job)
+            .replacen("/job-take/", "/job-take-batch/", 1);
+        append_query(
+            &append_query(&base, &format!("job_in_progress={}", u8::from(in_progress))),
+            &format!("batch_size={n}"),
+        )
     }
 
     /// `GET` job-stop (long poll), or `None` if the template has no
     /// `/job-take/` segment to rewrite.
     pub fn stop_url(&self) -> Option<String> {
-        self.get_job.contains("/job-take/").then(|| self.worker_subst(&self.get_job).replacen("/job-take/", "/job-stop/", 1))
+        self.get_job.contains("/job-take/").then(|| {
+            self.worker_subst(&self.get_job)
+                .replacen("/job-take/", "/job-stop/", 1)
+        })
     }
 
     /// `POST` job-done (also progress, with `is_stream = false`).
     pub fn done_url(&self, job: &str, is_stream: bool) -> String {
-        append_query(&self.job_subst(&self.post_output, job), &format!("isStream={is_stream}"))
+        append_query(
+            &self.job_subst(&self.post_output, job),
+            &format!("isStream={is_stream}"),
+        )
     }
 
     /// `POST` stream chunk.
     pub fn stream_url(&self, job: &str) -> Option<String> {
-        self.post_stream.as_ref().map(|t| append_query(&self.job_subst(t, job), "isStream=false"))
+        self.post_stream
+            .as_ref()
+            .map(|t| append_query(&self.job_subst(t, job), "isStream=false"))
     }
 
     /// `GET` heartbeat.
@@ -163,7 +196,10 @@ impl RunpodEnv {
         if !jobs.is_empty() {
             u = append_query(&u, &format!("job_id={}", qenc(&jobs.join(","))));
         }
-        Some(append_query(&u, &format!("runpod_version={}", qenc(version))))
+        Some(append_query(
+            &u,
+            &format!("runpod_version={}", qenc(version)),
+        ))
     }
 }
 
@@ -238,7 +274,10 @@ impl fmt::Debug for StreamJob {
         f.debug_struct("StreamJob")
             .field("model", &self.model)
             .field("whip_url", &self.whip_url)
-            .field("whip_token", &self.whip_token.as_ref().map(|_| "<redacted>"))
+            .field(
+                "whip_token",
+                &self.whip_token.as_ref().map(|_| "<redacted>"),
+            )
             .field("duration_s", &self.duration_s)
             .finish_non_exhaustive()
     }
@@ -264,7 +303,9 @@ pub enum JobInput {
 impl JobInput {
     /// Parses `input`; a missing `kind` with a `path` means `http`.
     pub fn parse(input: &Value) -> Result<Self, String> {
-        let Value::Object(map) = input else { return Err("job input must be a JSON object".into()) };
+        let Value::Object(map) = input else {
+            return Err("job input must be a JSON object".into());
+        };
         let mut map = map.clone();
         let kind = match map.remove("kind") {
             Some(Value::String(k)) => k,
@@ -274,9 +315,15 @@ impl JobInput {
         };
         let v = Value::Object(map);
         match kind.as_str() {
-            "http" => serde_json::from_value(v).map(Self::Http).map_err(|e| format!("http job: {e}")),
-            "stream" => serde_json::from_value(v).map(Self::Stream).map_err(|e| format!("stream job: {e}")),
-            "info" => serde_json::from_value(v).map(Self::Info).map_err(|e| format!("info job: {e}")),
+            "http" => serde_json::from_value(v)
+                .map(Self::Http)
+                .map_err(|e| format!("http job: {e}")),
+            "stream" => serde_json::from_value(v)
+                .map(Self::Stream)
+                .map_err(|e| format!("stream job: {e}")),
+            "info" => serde_json::from_value(v)
+                .map(Self::Info)
+                .map_err(|e| format!("info job: {e}")),
             k => Err(format!("unknown job kind `{k}` (http | stream | info)")),
         }
     }
@@ -301,7 +348,11 @@ pub struct JobError {
 
 impl JobError {
     pub fn new(kind: impl Into<String>, message: impl Into<String>) -> Self {
-        Self { kind: kind.into(), message: message.into(), output: None }
+        Self {
+            kind: kind.into(),
+            message: message.into(),
+            output: None,
+        }
     }
     pub fn with_output(mut self, v: Value) -> Self {
         self.output = Some(v);
@@ -359,7 +410,11 @@ pub struct JobCtx {
 
 impl JobCtx {
     pub fn new(id: impl Into<String>, cancel: Cancel, tx: mpsc::UnboundedSender<Update>) -> Self {
-        Self { id: id.into(), cancel, tx }
+        Self {
+            id: id.into(),
+            cancel,
+            tx,
+        }
     }
     /// A context whose updates go nowhere (local one-shot runs).
     pub fn detached(id: impl Into<String>) -> (Self, mpsc::UnboundedReceiver<Update>) {
@@ -387,10 +442,22 @@ mod tests {
 
     fn env() -> RunpodEnv {
         let m: BTreeMap<&str, &str> = [
-            ("RUNPOD_WEBHOOK_GET_JOB", "https://api.runpod.ai/v2/ep1/job-take/$ID?gpu=NVIDIA+H200"),
-            ("RUNPOD_WEBHOOK_POST_OUTPUT", "https://api.runpod.ai/v2/ep1/job-done/$RUNPOD_POD_ID/$ID?gpu=NVIDIA+H200"),
-            ("RUNPOD_WEBHOOK_POST_STREAM", "https://api.runpod.ai/v2/ep1/job-stream/$RUNPOD_POD_ID/$ID?gpu=NVIDIA+H200"),
-            ("RUNPOD_WEBHOOK_PING", "https://api.runpod.ai/v2/ep1/ping/$RUNPOD_POD_ID"),
+            (
+                "RUNPOD_WEBHOOK_GET_JOB",
+                "https://api.runpod.ai/v2/ep1/job-take/$ID?gpu=NVIDIA+H200",
+            ),
+            (
+                "RUNPOD_WEBHOOK_POST_OUTPUT",
+                "https://api.runpod.ai/v2/ep1/job-done/$RUNPOD_POD_ID/$ID?gpu=NVIDIA+H200",
+            ),
+            (
+                "RUNPOD_WEBHOOK_POST_STREAM",
+                "https://api.runpod.ai/v2/ep1/job-stream/$RUNPOD_POD_ID/$ID?gpu=NVIDIA+H200",
+            ),
+            (
+                "RUNPOD_WEBHOOK_PING",
+                "https://api.runpod.ai/v2/ep1/ping/$RUNPOD_POD_ID",
+            ),
             ("RUNPOD_PING_INTERVAL", "4000"),
             ("RUNPOD_AI_API_KEY", "secret-key"),
             ("RUNPOD_POD_ID", "w42"),
@@ -403,19 +470,34 @@ mod tests {
     #[test]
     fn url_templates() {
         let e = env();
-        assert_eq!(e.take_url(false), "https://api.runpod.ai/v2/ep1/job-take/w42?gpu=NVIDIA+H200&job_in_progress=0");
+        assert_eq!(
+            e.take_url(false),
+            "https://api.runpod.ai/v2/ep1/job-take/w42?gpu=NVIDIA+H200&job_in_progress=0"
+        );
         assert_eq!(
             e.take_batch_url(true, 3),
             "https://api.runpod.ai/v2/ep1/job-take-batch/w42?gpu=NVIDIA+H200&job_in_progress=1&batch_size=3"
         );
-        assert_eq!(e.stop_url().unwrap(), "https://api.runpod.ai/v2/ep1/job-stop/w42?gpu=NVIDIA+H200");
-        assert_eq!(e.done_url("j1", true), "https://api.runpod.ai/v2/ep1/job-done/w42/j1?gpu=NVIDIA+H200&isStream=true");
-        assert_eq!(e.stream_url("j1").unwrap(), "https://api.runpod.ai/v2/ep1/job-stream/w42/j1?gpu=NVIDIA+H200&isStream=false");
+        assert_eq!(
+            e.stop_url().unwrap(),
+            "https://api.runpod.ai/v2/ep1/job-stop/w42?gpu=NVIDIA+H200"
+        );
+        assert_eq!(
+            e.done_url("j1", true),
+            "https://api.runpod.ai/v2/ep1/job-done/w42/j1?gpu=NVIDIA+H200&isStream=true"
+        );
+        assert_eq!(
+            e.stream_url("j1").unwrap(),
+            "https://api.runpod.ai/v2/ep1/job-stream/w42/j1?gpu=NVIDIA+H200&isStream=false"
+        );
         assert_eq!(
             e.ping_url(&["a".into(), "b".into()], "fv-rs/0.1").unwrap(),
             "https://api.runpod.ai/v2/ep1/ping/w42?job_id=a%2Cb&runpod_version=fv-rs%2F0.1"
         );
-        assert_eq!(e.ping_url(&[], "v").unwrap(), "https://api.runpod.ai/v2/ep1/ping/w42?runpod_version=v");
+        assert_eq!(
+            e.ping_url(&[], "v").unwrap(),
+            "https://api.runpod.ai/v2/ep1/ping/w42?runpod_version=v"
+        );
         assert_eq!(e.ping_interval, Duration::from_secs(4));
         assert!(!format!("{e:?}").contains("secret-key"));
     }
@@ -427,16 +509,25 @@ mod tests {
 
     #[test]
     fn envelope_parsing() {
-        let j = JobInput::parse(&json!({"kind":"http","method":"GET","path":"/fv/v1/capabilities"})).unwrap();
+        let j =
+            JobInput::parse(&json!({"kind":"http","method":"GET","path":"/fv/v1/capabilities"}))
+                .unwrap();
         assert!(matches!(j, JobInput::Http(HttpJob { ref method, .. }) if method == "GET"));
-        let j = JobInput::parse(&json!({"path":"/v2/video_generation","body":{"model":"MiniMax-H3"},"wait":true})).unwrap();
-        assert!(matches!(j, JobInput::Http(HttpJob { wait: true, ref method, .. }) if method == "POST"));
+        let j = JobInput::parse(
+            &json!({"path":"/v2/video_generation","body":{"model":"MiniMax-H3"},"wait":true}),
+        )
+        .unwrap();
+        assert!(
+            matches!(j, JobInput::Http(HttpJob { wait: true, ref method, .. }) if method == "POST")
+        );
         let j = JobInput::parse(&json!({"kind":"stream","model":"wan-sf","prompt":"p","whip_url":"https://w/x","whip_token":"s3cr3t","duration_s":600,"image_url":null,"fps":16})).unwrap();
         let JobInput::Stream(s) = j else { panic!() };
         assert_eq!(s.extra["fps"], 16);
         assert!(!format!("{s:?}").contains("s3cr3t"));
         assert!(JobInput::parse(&json!({"kind":"info"})).is_ok());
-        assert!(JobInput::parse(&json!({"kind":"shell"})).unwrap_err().contains("unknown job kind"));
+        assert!(JobInput::parse(&json!({"kind":"shell"}))
+            .unwrap_err()
+            .contains("unknown job kind"));
         assert!(JobInput::parse(&json!({"prompt":"x"})).is_err());
         assert!(JobInput::parse(&json!("x")).is_err());
         assert!(JobInput::parse(&json!({"kind":"http","path":"/x","bogus":1})).is_err());

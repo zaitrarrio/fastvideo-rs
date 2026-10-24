@@ -49,10 +49,11 @@ impl Conv2d {
             &weights::join_key(prefix, "weight"),
             &[cout, cin, k, k],
         )?)?;
-        let bias = match weights::cuda_tensor_shaped(map, &weights::join_key(prefix, "bias"), &[cout]) {
-            Ok(b) => Some(pinned(b)?),
-            Err(_) => None,
-        };
+        let bias =
+            match weights::cuda_tensor_shaped(map, &weights::join_key(prefix, "bias"), &[cout]) {
+                Ok(b) => Some(pinned(b)?),
+                Err(_) => None,
+            };
         Ok(Self {
             weight: w,
             bias,
@@ -76,17 +77,34 @@ struct GroupNorm {
 impl GroupNorm {
     fn zeros(channels: usize, groups: usize, eps: f32) -> Self {
         Self {
-            weight: pinned(CudaTensor::from_vec(vec![1.0; channels], vec![channels]).expect("gn w")).expect("pin"),
+            weight: pinned(
+                CudaTensor::from_vec(vec![1.0; channels], vec![channels]).expect("gn w"),
+            )
+            .expect("pin"),
             bias: pinned(CudaTensor::zeros(&[channels])).expect("gn b"),
             groups: groups.min(channels).max(1),
             eps,
         }
     }
 
-    fn load(map: &WeightMap, prefix: &str, channels: usize, groups: usize, eps: f32) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        channels: usize,
+        groups: usize,
+        eps: f32,
+    ) -> Result<Self> {
         Ok(Self {
-            weight: pinned(weights::cuda_tensor_shaped(map, &weights::join_key(prefix, "weight"), &[channels])?)?,
-            bias: pinned(weights::cuda_tensor_shaped(map, &weights::join_key(prefix, "bias"), &[channels])?)?,
+            weight: pinned(weights::cuda_tensor_shaped(
+                map,
+                &weights::join_key(prefix, "weight"),
+                &[channels],
+            )?)?,
+            bias: pinned(weights::cuda_tensor_shaped(
+                map,
+                &weights::join_key(prefix, "bias"),
+                &[channels],
+            )?)?,
             groups: groups.min(channels).max(1),
             eps,
         })
@@ -144,7 +162,15 @@ impl ResnetBlock2d {
             norm1: GroupNorm::load(map, &weights::join_key(prefix, "norm1"), cin, groups, 1e-6)?,
             conv1: Conv2d::load(map, &weights::join_key(prefix, "conv1"), cin, cout, 3, 1, 1)?,
             norm2: GroupNorm::load(map, &weights::join_key(prefix, "norm2"), cout, groups, 1e-6)?,
-            conv2: Conv2d::load(map, &weights::join_key(prefix, "conv2"), cout, cout, 3, 1, 1)?,
+            conv2: Conv2d::load(
+                map,
+                &weights::join_key(prefix, "conv2"),
+                cout,
+                cout,
+                3,
+                1,
+                1,
+            )?,
             skip: if cin != cout {
                 Some(Conv2d::load(
                     map,
@@ -192,11 +218,41 @@ impl SpatialAttention {
 
     fn load(map: &WeightMap, prefix: &str, channels: usize, groups: usize) -> Result<Self> {
         Ok(Self {
-            norm: GroupNorm::load(map, &weights::join_key(prefix, "group_norm"), channels, groups, 1e-6)?,
-            to_q: Linear::load(map, &weights::join_key(prefix, "to_q"), channels, channels, true)?,
-            to_k: Linear::load(map, &weights::join_key(prefix, "to_k"), channels, channels, true)?,
-            to_v: Linear::load(map, &weights::join_key(prefix, "to_v"), channels, channels, true)?,
-            to_out: Linear::load(map, &weights::join_key(prefix, "to_out.0"), channels, channels, true)?,
+            norm: GroupNorm::load(
+                map,
+                &weights::join_key(prefix, "group_norm"),
+                channels,
+                groups,
+                1e-6,
+            )?,
+            to_q: Linear::load(
+                map,
+                &weights::join_key(prefix, "to_q"),
+                channels,
+                channels,
+                true,
+            )?,
+            to_k: Linear::load(
+                map,
+                &weights::join_key(prefix, "to_k"),
+                channels,
+                channels,
+                true,
+            )?,
+            to_v: Linear::load(
+                map,
+                &weights::join_key(prefix, "to_v"),
+                channels,
+                channels,
+                true,
+            )?,
+            to_out: Linear::load(
+                map,
+                &weights::join_key(prefix, "to_out.0"),
+                channels,
+                channels,
+                true,
+            )?,
         })
     }
 
@@ -209,7 +265,11 @@ impl SpatialAttention {
         let v = self.to_v.forward(&seq)?.reshape(vec![b, 1, h * w, c])?;
         let attn = nn::scaled_dot_product_attention(&q, &k, &v, None)?;
         let out = attn.reshape(vec![b, h * w, c])?;
-        let out = self.to_out.forward(&out)?.transpose(1, 2)?.reshape(vec![b, c, h, w])?;
+        let out = self
+            .to_out
+            .forward(&out)?
+            .transpose(1, 2)?
+            .reshape(vec![b, c, h, w])?;
         xs.add(&out)
     }
 }
@@ -231,7 +291,13 @@ impl MidBlock {
     }
 
     fn load(map: &WeightMap, prefix: &str, channels: usize, groups: usize) -> Result<Self> {
-        let r0 = ResnetBlock2d::load(map, &weights::join_key(prefix, "resnets.0"), channels, channels, groups)?;
+        let r0 = ResnetBlock2d::load(
+            map,
+            &weights::join_key(prefix, "resnets.0"),
+            channels,
+            channels,
+            groups,
+        )?;
         let attn = SpatialAttention::load(
             map,
             &weights::join_key(prefix, "attentions.0"),
@@ -239,7 +305,14 @@ impl MidBlock {
             groups,
         )
         .ok();
-        let r1 = ResnetBlock2d::load(map, &weights::join_key(prefix, "resnets.1"), channels, channels, groups).ok();
+        let r1 = ResnetBlock2d::load(
+            map,
+            &weights::join_key(prefix, "resnets.1"),
+            channels,
+            channels,
+            groups,
+        )
+        .ok();
         let mut resnets = vec![r0];
         if let Some(r) = r1 {
             resnets.push(r);
@@ -425,7 +498,14 @@ impl AutoencoderKlFlux2 {
             prev = ch;
         }
         let last_ch = *chans.first().unwrap_or(&c0);
-        let conv_norm_out = GroupNorm::load(map, "decoder.conv_norm_out", last_ch, groups.min(last_ch).max(1), 1e-6).ok();
+        let conv_norm_out = GroupNorm::load(
+            map,
+            "decoder.conv_norm_out",
+            last_ch,
+            groups.min(last_ch).max(1),
+            1e-6,
+        )
+        .ok();
         let conv_out = Conv2d::load(map, "decoder.conv_out", last_ch, cfg.out_channels, 3, 1, 1)?;
         Ok(Self {
             cfg,
@@ -503,5 +583,4 @@ mod tests {
         let out = vae.decode(&z).unwrap();
         assert_eq!(out.shape, vec![1, 3, 1, 8, 8]);
     }
-
 }

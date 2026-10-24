@@ -58,7 +58,9 @@ impl std::str::FromStr for EncoderBackend {
         match s {
             "nvenc" => Ok(Self::Nvenc),
             "openh264" => Ok(Self::OpenH264),
-            other => Err(MediaError::invalid(format!("unknown encoder {other:?} (nvenc | openh264)"))),
+            other => Err(MediaError::invalid(format!(
+                "unknown encoder {other:?} (nvenc | openh264)"
+            ))),
         }
     }
 }
@@ -76,7 +78,11 @@ impl EncoderBackend {
 
 /// Default bitrate by encoded canvas (§5.1): 6 Mb/s at 720p and up, 2.5 Mb/s at 480p.
 pub fn default_bitrate(width: u32, height: u32) -> u32 {
-    if width.min(height) >= 720 { 6_000_000 } else { 2_500_000 }
+    if width.min(height) >= 720 {
+        6_000_000
+    } else {
+        2_500_000
+    }
 }
 
 /// Where a stream is published; selects the level floor (decision 2).
@@ -161,9 +167,14 @@ impl H264Config {
     }
 
     pub fn validate(&self) -> Result<()> {
-        for (w, h) in [(self.width, self.height), (self.input_width, self.input_height)] {
+        for (w, h) in [
+            (self.width, self.height),
+            (self.input_width, self.input_height),
+        ] {
             if w == 0 || h == 0 || w % 2 != 0 || h % 2 != 0 {
-                return Err(MediaError::invalid(format!("H.264 4:2:0 needs even dimensions, got {w}x{h}")));
+                return Err(MediaError::invalid(format!(
+                    "H.264 4:2:0 needs even dimensions, got {w}x{h}"
+                )));
             }
         }
         if self.fps == 0 {
@@ -179,7 +190,10 @@ impl H264Config {
     /// too small for the encoded canvas is an error, not a non-conforming stream.
     pub fn resolved_level(&self) -> Result<H264Level> {
         let min = H264Level::min_for(self.width, self.height, self.fps).ok_or_else(|| {
-            MediaError::invalid(format!("{}x{}@{} exceeds H.264 level 5.2", self.width, self.height, self.fps))
+            MediaError::invalid(format!(
+                "{}x{}@{} exceeds H.264 level 5.2",
+                self.width, self.height, self.fps
+            ))
         })?;
         match self.level {
             None => Ok(min),
@@ -232,26 +246,38 @@ pub fn create_encoder(backend: EncoderBackend, cfg: H264Config) -> Result<Box<dy
     cfg.validate()?;
     match backend {
         EncoderBackend::Nvenc => Ok(Box::new(PipeEncoder::new(cfg, FfmpegH264::Nvenc)?)),
-        EncoderBackend::CpuTestX264 => Ok(Box::new(PipeEncoder::new(cfg, FfmpegH264::Libx264CpuTest)?)),
+        EncoderBackend::CpuTestX264 => {
+            Ok(Box::new(PipeEncoder::new(cfg, FfmpegH264::Libx264CpuTest)?))
+        }
         #[cfg(feature = "openh264")]
         EncoderBackend::OpenH264 => Ok(Box::new(openh264_backend::OpenH264Encoder::new(cfg)?)),
         #[cfg(not(feature = "openh264"))]
-        EncoderBackend::OpenH264 => {
-            Err(MediaError::Unsupported("built without the `openh264` feature of fastvideo-media".into()))
-        }
+        EncoderBackend::OpenH264 => Err(MediaError::Unsupported(
+            "built without the `openh264` feature of fastvideo-media".into(),
+        )),
     }
 }
 
 /// Construct a backend for a streaming session: a pipe encoder starts from
 /// and restarts into `pool`'s warm spare ([`crate::pipe`]); in-process
 /// encoders ignore the pool.
-pub fn create_stream_encoder(backend: EncoderBackend, cfg: H264Config, pool: &SparePool) -> Result<Box<dyn VideoEncoder>> {
+pub fn create_stream_encoder(
+    backend: EncoderBackend,
+    cfg: H264Config,
+    pool: &SparePool,
+) -> Result<Box<dyn VideoEncoder>> {
     cfg.validate()?;
     match backend {
-        EncoderBackend::Nvenc => Ok(Box::new(PipeEncoder::with_pool(cfg, FfmpegH264::Nvenc, Some(pool.clone()))?)),
-        EncoderBackend::CpuTestX264 => {
-            Ok(Box::new(PipeEncoder::with_pool(cfg, FfmpegH264::Libx264CpuTest, Some(pool.clone()))?))
-        }
+        EncoderBackend::Nvenc => Ok(Box::new(PipeEncoder::with_pool(
+            cfg,
+            FfmpegH264::Nvenc,
+            Some(pool.clone()),
+        )?)),
+        EncoderBackend::CpuTestX264 => Ok(Box::new(PipeEncoder::with_pool(
+            cfg,
+            FfmpegH264::Libx264CpuTest,
+            Some(pool.clone()),
+        )?)),
         EncoderBackend::OpenH264 => create_encoder(backend, cfg),
     }
 }
@@ -266,7 +292,11 @@ pub struct IdrLimiter {
 
 impl IdrLimiter {
     pub fn new(min_interval: f64) -> Self {
-        Self { min_interval, last: None, pending: false }
+        Self {
+            min_interval,
+            last: None,
+            pending: false,
+        }
     }
 
     /// Record a request (PLI/FIR from any peer).
@@ -364,7 +394,9 @@ impl KeyframePolicy {
             let to_gop = (self.gop_frames - self.since_key % self.gop_frames) % self.gop_frames;
             // One frame of slack so a request exactly `window` after a
             // keyframe is still covered by the next periodic one.
-            let gop_soon = self.interval.is_some_and(|i| f64::from(to_gop) * i <= self.window + i);
+            let gop_soon = self
+                .interval
+                .is_some_and(|i| f64::from(to_gop) * i <= self.window + i);
             let limited = self.last_forced.is_some_and(|t| now - t < self.window);
             if gop_soon {
                 // Leave it pending: the periodic IDR clears it.
@@ -419,20 +451,87 @@ impl FfmpegH264 {
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
         let mut a = match self {
             FfmpegH264::Nvenc => {
-                let mut a = s(&["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll", "-profile:v", "baseline"]);
-                a.extend(s(&["-level:v", &lvl.to_string(), "-rc", "cbr", "-b:v", &b, "-maxrate", &b]));
-                a.extend(["-bufsize".into(), (u64::from(cfg.bitrate_bps) / 2).to_string()]);
-                a.extend(s(&["-g", &g, "-bf", "0", "-forced-idr", "1", "-no-scenecut", "1", "-strict_gop", "1"]));
-                a.extend(s(&["-zerolatency", "1", "-rc-lookahead", "0", "-delay", "0", "-aud", "1"]));
+                let mut a = s(&[
+                    "-c:v",
+                    "h264_nvenc",
+                    "-preset",
+                    "p4",
+                    "-tune",
+                    "ll",
+                    "-profile:v",
+                    "baseline",
+                ]);
+                a.extend(s(&[
+                    "-level:v",
+                    &lvl.to_string(),
+                    "-rc",
+                    "cbr",
+                    "-b:v",
+                    &b,
+                    "-maxrate",
+                    &b,
+                ]));
+                a.extend([
+                    "-bufsize".into(),
+                    (u64::from(cfg.bitrate_bps) / 2).to_string(),
+                ]);
+                a.extend(s(&[
+                    "-g",
+                    &g,
+                    "-bf",
+                    "0",
+                    "-forced-idr",
+                    "1",
+                    "-no-scenecut",
+                    "1",
+                    "-strict_gop",
+                    "1",
+                ]));
+                a.extend(s(&[
+                    "-zerolatency",
+                    "1",
+                    "-rc-lookahead",
+                    "0",
+                    "-delay",
+                    "0",
+                    "-aud",
+                    "1",
+                ]));
                 a
             }
             FfmpegH264::Libx264CpuTest => {
-                let mut a = s(&["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-profile:v", "baseline"]);
-                a.extend(s(&["-level:v", &lvl.to_string(), "-g", &g, "-keyint_min", &g, "-sc_threshold", "0"]));
+                let mut a = s(&[
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-tune",
+                    "zerolatency",
+                    "-profile:v",
+                    "baseline",
+                ]);
+                a.extend(s(&[
+                    "-level:v",
+                    &lvl.to_string(),
+                    "-g",
+                    &g,
+                    "-keyint_min",
+                    &g,
+                    "-sc_threshold",
+                    "0",
+                ]));
                 a.extend(s(&["-b:v", &b, "-maxrate", &b]));
-                a.extend(["-bufsize".into(), (u64::from(cfg.bitrate_bps) / 2).to_string()]);
+                a.extend([
+                    "-bufsize".into(),
+                    (u64::from(cfg.bitrate_bps) / 2).to_string(),
+                ]);
                 // A forced keyframe (the warm spare's first real frame) is an IDR.
-                a.extend(s(&["-forced-idr", "1", "-x264-params", "aud=1:repeat-headers=1"]));
+                a.extend(s(&[
+                    "-forced-idr",
+                    "1",
+                    "-x264-params",
+                    "aud=1:repeat-headers=1",
+                ]));
                 a
             }
         };
@@ -445,10 +544,28 @@ impl FfmpegH264 {
         let q = quality.to_string();
         let v: Vec<&str> = match self {
             FfmpegH264::Nvenc => vec![
-                "-c:v", "h264_nvenc", "-preset", "p5", "-tune", "hq", "-profile:v", "high", "-rc", "vbr", "-cq", &q, "-b:v",
-                "0", "-bf", "0", "-pix_fmt", "yuv420p",
+                "-c:v",
+                "h264_nvenc",
+                "-preset",
+                "p5",
+                "-tune",
+                "hq",
+                "-profile:v",
+                "high",
+                "-rc",
+                "vbr",
+                "-cq",
+                &q,
+                "-b:v",
+                "0",
+                "-bf",
+                "0",
+                "-pix_fmt",
+                "yuv420p",
             ],
-            FfmpegH264::Libx264CpuTest => vec!["-c:v", "libx264", "-preset", "veryfast", "-crf", &q, "-pix_fmt", "yuv420p"],
+            FfmpegH264::Libx264CpuTest => vec![
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", &q, "-pix_fmt", "yuv420p",
+            ],
         };
         v.into_iter().map(String::from).collect()
     }
@@ -469,18 +586,38 @@ pub fn nvenc_probe() -> std::result::Result<(), String> {
 fn nvenc_probe_with(ffmpeg: &std::path::Path) -> std::result::Result<(), String> {
     let mut c = std::process::Command::new(ffmpeg);
     c.args(["-hide_banner", "-loglevel", "error", "-nostats"])
-        .args(["-f", "lavfi", "-i", "color=c=black:s=256x144:r=24:d=0.2", "-c:v", "h264_nvenc", "-f", "null", "-"])
+        .args([
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=256x144:r=24:d=0.2",
+            "-c:v",
+            "h264_nvenc",
+            "-f",
+            "null",
+            "-",
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
-    let out = c.output().map_err(|e| format!("cannot run {}: {e}", ffmpeg.display()))?;
+    let out = c
+        .output()
+        .map_err(|e| format!("cannot run {}: {e}", ffmpeg.display()))?;
     if out.status.success() {
         return Ok(());
     }
     let err = String::from_utf8_lossy(&out.stderr);
-    let lines: Vec<&str> = err.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let lines: Vec<&str> = err
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
     let tail = lines[lines.len().saturating_sub(3)..].join(" | ");
-    Err(if tail.is_empty() { format!("ffmpeg h264_nvenc exited with {}", out.status) } else { tail })
+    Err(if tail.is_empty() {
+        format!("ffmpeg h264_nvenc exited with {}", out.status)
+    } else {
+        tail
+    })
 }
 
 /// What an `auto` encoder setting resolves to (see [`auto_encoder`]).
@@ -498,8 +635,16 @@ impl AutoEncoder {
     /// From one probe outcome.
     pub fn from_probe(probe: std::result::Result<(), String>) -> Self {
         match probe {
-            Ok(()) => Self { backend: EncoderBackend::Nvenc, nvenc_error: None, attempts: 1 },
-            Err(e) => Self { backend: EncoderBackend::OpenH264, nvenc_error: Some(e), attempts: 1 },
+            Ok(()) => Self {
+                backend: EncoderBackend::Nvenc,
+                nvenc_error: None,
+                attempts: 1,
+            },
+            Err(e) => Self {
+                backend: EncoderBackend::OpenH264,
+                nvenc_error: Some(e),
+                attempts: 1,
+            },
         }
     }
 
@@ -507,12 +652,18 @@ impl AutoEncoder {
     /// (ffmpeg ran and has `h264_nvenc`, but opening the encoder failed:
     /// a serverless GPU whose driver or NVENC sessions are not ready yet),
     /// waits `delay` and probes once more.
-    pub fn probe_with_retry(mut probe: impl FnMut() -> std::result::Result<(), String>, delay: std::time::Duration) -> Self {
+    pub fn probe_with_retry(
+        mut probe: impl FnMut() -> std::result::Result<(), String>,
+        delay: std::time::Duration,
+    ) -> Self {
         let first = probe();
         match first {
             Err(e) if probe_error_is_transient(&e) => {
                 std::thread::sleep(delay);
-                Self { attempts: 2, ..Self::from_probe(probe()) }
+                Self {
+                    attempts: 2,
+                    ..Self::from_probe(probe())
+                }
             }
             other => Self::from_probe(other),
         }
@@ -530,7 +681,9 @@ pub fn probe_error_is_transient(e: &str) -> bool {
 /// OpenH264. The probe runs once per process (it spawns ffmpeg), so every
 /// `auto` setting and every later session agree.
 pub fn auto_encoder() -> &'static AutoEncoder {
-    AUTO.get_or_init(|| AutoEncoder::probe_with_retry(nvenc_probe, std::time::Duration::from_secs(2)))
+    AUTO.get_or_init(|| {
+        AutoEncoder::probe_with_retry(nvenc_probe, std::time::Duration::from_secs(2))
+    })
 }
 
 /// The [`auto_encoder`] outcome when the probe already ran (no probing).
@@ -546,10 +699,24 @@ static AUTO: std::sync::OnceLock<AutoEncoder> = std::sync::OnceLock::new();
 
 /// The full ffmpeg argument list (after the common flags) of the pipe encoder.
 pub fn pipe_encoder_args(cfg: &H264Config, codec: FfmpegH264) -> Result<Vec<String>> {
-    let mut a: Vec<String> = ["-f", "rawvideo", "-pix_fmt", "rgb24", "-s"].map(String::from).to_vec();
+    let mut a: Vec<String> = ["-f", "rawvideo", "-pix_fmt", "rgb24", "-s"]
+        .map(String::from)
+        .to_vec();
     a.push(format!("{}x{}", cfg.input_width, cfg.input_height));
-    a.extend(["-r".into(), cfg.fps.to_string(), "-i".into(), "pipe:0".into(), "-an".into()]);
-    if let Some(vf) = scale::ffmpeg_filter(cfg.input_width, cfg.input_height, cfg.width, cfg.height, cfg.scale) {
+    a.extend([
+        "-r".into(),
+        cfg.fps.to_string(),
+        "-i".into(),
+        "pipe:0".into(),
+        "-an".into(),
+    ]);
+    if let Some(vf) = scale::ffmpeg_filter(
+        cfg.input_width,
+        cfg.input_height,
+        cfg.width,
+        cfg.height,
+        cfg.scale,
+    ) {
         a.extend(["-vf".into(), vf]);
     }
     a.extend(codec.stream_args(cfg)?);
@@ -587,7 +754,13 @@ impl PipeEncoder {
     /// holds this profile, and restarts into it.
     pub fn with_pool(cfg: H264Config, codec: FfmpegH264, pool: Option<SparePool>) -> Result<Self> {
         let procs = PipeProcs::new(SpareSpec::h264(codec, &cfg)?, pool)?;
-        Ok(Self { cfg, codec, procs, out_index: 0, idr_pending: false })
+        Ok(Self {
+            cfg,
+            codec,
+            procs,
+            out_index: 0,
+            idr_pending: false,
+        })
     }
 
     /// ffmpeg restarts done to honour forced IDRs.
@@ -603,7 +776,11 @@ impl PipeEncoder {
     fn wrap(&mut self, aus: impl IntoIterator<Item = Vec<u8>>) -> Vec<EncodedFrame> {
         aus.into_iter()
             .map(|au| {
-                let f = EncodedFrame { keyframe: h264::is_idr(&au), data: Bytes::from(au), index: self.out_index };
+                let f = EncodedFrame {
+                    keyframe: h264::is_idr(&au),
+                    data: Bytes::from(au),
+                    index: self.out_index,
+                };
                 self.out_index += 1;
                 f
             })
@@ -668,8 +845,8 @@ impl VideoEncoder for PipeEncoder {
 pub mod openh264_backend {
     use super::*;
     use openh264::encoder::{
-        BitRate, Complexity, Encoder, EncoderConfig, FrameRate, FrameType, IntraFramePeriod, Level, Profile,
-        RateControlMode, SpsPpsStrategy, UsageType,
+        BitRate, Complexity, Encoder, EncoderConfig, FrameRate, FrameType, IntraFramePeriod, Level,
+        Profile, RateControlMode, SpsPpsStrategy, UsageType,
     };
     use openh264::formats::{RgbSliceU8, YUVBuffer, YUVSource};
     use openh264::{OpenH264API, Timestamp};
@@ -716,7 +893,13 @@ pub mod openh264_backend {
             let enc = Encoder::with_api_config(OpenH264API::from_source(), oc)
                 .map_err(|e| MediaError::Encode(format!("openh264 init: {e}")))?;
             let yuv = YUVBuffer::new(cfg.width as usize, cfg.height as usize);
-            Ok(Self { cfg, enc, yuv, frames_in: 0, frames_out: 0 })
+            Ok(Self {
+                cfg,
+                enc,
+                yuv,
+                frames_in: 0,
+                frames_out: 0,
+            })
         }
     }
 
@@ -748,7 +931,10 @@ pub mod openh264_backend {
             self.yuv.read_rgb8(RgbSliceU8::new(&frame.data, dims));
             let ts = Timestamp::from_millis(self.frames_in * 1000 / u64::from(self.cfg.fps));
             self.frames_in += 1;
-            let bs = self.enc.encode_at(&self.yuv, ts).map_err(|e| MediaError::Encode(format!("openh264: {e}")))?;
+            let bs = self
+                .enc
+                .encode_at(&self.yuv, ts)
+                .map_err(|e| MediaError::Encode(format!("openh264: {e}")))?;
             let ft = bs.frame_type();
             if matches!(ft, FrameType::Skip | FrameType::Invalid) {
                 return Ok(Vec::new());
@@ -757,7 +943,11 @@ pub mod openh264_backend {
             if data.is_empty() {
                 return Ok(Vec::new());
             }
-            let out = EncodedFrame { keyframe: ft == FrameType::IDR, data: Bytes::from(data), index: self.frames_out };
+            let out = EncodedFrame {
+                keyframe: ft == FrameType::IDR,
+                data: Bytes::from(data),
+                index: self.frames_out,
+            };
             self.frames_out += 1;
             Ok(vec![out])
         }
@@ -774,21 +964,33 @@ pub mod openh264_backend {
 
     /// Decode an Annex-B stream with the OpenH264 decoder into RGB24 frames.
     pub fn decode_rgb(access_units: &[&[u8]]) -> Result<Vec<RgbFrame>> {
-        let mut dec = openh264::decoder::Decoder::new().map_err(|e| MediaError::Decode(e.to_string()))?;
+        let mut dec =
+            openh264::decoder::Decoder::new().map_err(|e| MediaError::Decode(e.to_string()))?;
         let mut out = Vec::new();
         let push = |y: &openh264::decoder::DecodedYUV<'_>, out: &mut Vec<RgbFrame>| {
             let (w, h) = y.dimensions();
             let mut rgb = vec![0u8; w * h * 3];
             y.write_rgb8(&mut rgb);
             let idx = out.len() as u64;
-            out.push(RgbFrame { width: w as u32, height: h as u32, data: Bytes::from(rgb), index: idx });
+            out.push(RgbFrame {
+                width: w as u32,
+                height: h as u32,
+                data: Bytes::from(rgb),
+                index: idx,
+            });
         };
         for au in access_units {
-            if let Some(y) = dec.decode(au).map_err(|e| MediaError::Decode(e.to_string()))? {
+            if let Some(y) = dec
+                .decode(au)
+                .map_err(|e| MediaError::Decode(e.to_string()))?
+            {
                 push(&y, &mut out);
             }
         }
-        for y in dec.flush_remaining().map_err(|e| MediaError::Decode(e.to_string()))? {
+        for y in dec
+            .flush_remaining()
+            .map_err(|e| MediaError::Decode(e.to_string()))?
+        {
             push(&y, &mut out);
         }
         Ok(out)
@@ -817,12 +1019,18 @@ mod tests {
     fn publish_profiles() {
         // Cloudflare WHIP: H3 1344x768 stays native, at the level it needs (3.2).
         let cf = H264Config::for_publish(PublishTarget::Cloudflare, 1344, 768, 24);
-        assert_eq!((cf.input_width, cf.input_height, cf.width, cf.height), (1344, 768, 1344, 768));
+        assert_eq!(
+            (cf.input_width, cf.input_height, cf.width, cf.height),
+            (1344, 768, 1344, 768)
+        );
         assert_eq!(cf.resolved_level().unwrap(), H264Level::L3_2);
         assert!(!cf.scales());
         // 1080p30 (H3 1080p tier): level 4.0; portrait keeps its orientation.
         let hd = H264Config::for_publish(PublishTarget::Cloudflare, 1920, 1088, 30);
-        assert_eq!((hd.width, hd.height, hd.resolved_level().unwrap()), (1920, 1088, H264Level::L4_0));
+        assert_eq!(
+            (hd.width, hd.height, hd.resolved_level().unwrap()),
+            (1920, 1088, H264Level::L4_0)
+        );
         let cfp = H264Config::for_publish(PublishTarget::Cloudflare, 768, 1344, 24);
         assert_eq!((cfp.width, cfp.height), (768, 1344));
         // Small canvases stay at the floor (3.1, the offered `42e01f`).
@@ -846,33 +1054,55 @@ mod tests {
         (cf.width, cf.height, cf.level) = (1280, 720, Some(H264Level::L3_1));
         let a = pipe_encoder_args(&cf, FfmpegH264::Nvenc).unwrap().join(" ");
         assert!(a.contains("-s 1344x768 -r 24 -i pipe:0"), "{a}");
-        assert!(a.contains("-vf scale=1260:720:flags=bicubic,pad=1280:720:10:0:black,setsar=1"), "{a}");
+        assert!(
+            a.contains("-vf scale=1260:720:flags=bicubic,pad=1280:720:10:0:black,setsar=1"),
+            "{a}"
+        );
         assert!(a.contains("-c:v h264_nvenc"));
         assert!(a.contains("-profile:v baseline -level:v 3.1 -rc cbr -b:v 6000000"));
         let native = H264Config::for_publish(PublishTarget::Cloudflare, 1344, 768, 24);
-        let a = pipe_encoder_args(&native, FfmpegH264::Nvenc).unwrap().join(" ");
+        let a = pipe_encoder_args(&native, FfmpegH264::Nvenc)
+            .unwrap()
+            .join(" ");
         assert!(!a.contains("-vf") && a.contains("-level:v 3.2"), "{a}");
         assert!(a.contains("-g 48 -bf 0 -forced-idr 1 -no-scenecut 1"));
         assert!(a.contains("-zerolatency 1") && a.contains("-aud 1"));
         assert!(a.ends_with("-f h264 pipe:1"));
         assert!(!a.contains("libx264"));
         let peer = H264Config::for_publish(PublishTarget::Peer, 1344, 768, 24);
-        let a = pipe_encoder_args(&peer, FfmpegH264::Nvenc).unwrap().join(" ");
+        let a = pipe_encoder_args(&peer, FfmpegH264::Nvenc)
+            .unwrap()
+            .join(" ");
         assert!(!a.contains("-vf"));
         assert!(a.contains("-level:v 4.0"));
-        assert!(FfmpegH264::Nvenc.file_args(19).join(" ").contains("h264_nvenc -preset p5 -tune hq -profile:v high -rc vbr -cq 19"));
+        assert!(FfmpegH264::Nvenc
+            .file_args(19)
+            .join(" ")
+            .contains("h264_nvenc -preset p5 -tune hq -profile:v high -rc vbr -cq 19"));
         assert_eq!(FfmpegH264::default(), FfmpegH264::Nvenc);
     }
 
     #[test]
     fn backend_names() {
-        assert_eq!("nvenc".parse::<EncoderBackend>().unwrap(), EncoderBackend::Nvenc);
-        assert_eq!("openh264".parse::<EncoderBackend>().unwrap(), EncoderBackend::OpenH264);
+        assert_eq!(
+            "nvenc".parse::<EncoderBackend>().unwrap(),
+            EncoderBackend::Nvenc
+        );
+        assert_eq!(
+            "openh264".parse::<EncoderBackend>().unwrap(),
+            EncoderBackend::OpenH264
+        );
         assert!("x264-ffmpeg".parse::<EncoderBackend>().is_err());
         assert!("x264".parse::<EncoderBackend>().is_err());
         assert!(EncoderBackend::Nvenc.compiled());
-        assert_eq!(serde_json::to_string(&EncoderBackend::Nvenc).unwrap(), "\"nvenc\"");
-        assert_eq!(serde_json::to_string(&EncoderBackend::OpenH264).unwrap(), "\"openh264\"");
+        assert_eq!(
+            serde_json::to_string(&EncoderBackend::Nvenc).unwrap(),
+            "\"nvenc\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EncoderBackend::OpenH264).unwrap(),
+            "\"openh264\""
+        );
         assert!(serde_json::from_str::<EncoderBackend>("\"cpu-test-x264\"").is_err());
     }
 
@@ -882,7 +1112,10 @@ mod tests {
         assert_eq!((a.backend, a.nvenc_error), (EncoderBackend::Nvenc, None));
         let a = AutoEncoder::from_probe(Err("No NVENC capable devices found".into()));
         assert_eq!(a.backend, EncoderBackend::OpenH264);
-        assert_eq!(a.nvenc_error.as_deref(), Some("No NVENC capable devices found"));
+        assert_eq!(
+            a.nvenc_error.as_deref(),
+            Some("No NVENC capable devices found")
+        );
         // A missing ffmpeg is a probe failure, not a panic.
         let e = nvenc_probe_with(std::path::Path::new("/nonexistent/ffmpeg")).unwrap_err();
         assert!(e.contains("cannot run /nonexistent/ffmpeg"), "{e}");
@@ -897,11 +1130,18 @@ mod tests {
         let a = AutoEncoder::probe_with_retry(
             || {
                 n += 1;
-                if n == 1 { Err("OpenEncodeSessionEx failed: out of memory (10)".into()) } else { Ok(()) }
+                if n == 1 {
+                    Err("OpenEncodeSessionEx failed: out of memory (10)".into())
+                } else {
+                    Ok(())
+                }
             },
             Duration::ZERO,
         );
-        assert_eq!((a.backend, a.attempts, a.nvenc_error), (EncoderBackend::Nvenc, 2, None));
+        assert_eq!(
+            (a.backend, a.attempts, a.nvenc_error),
+            (EncoderBackend::Nvenc, 2, None)
+        );
         // Fails twice: OpenH264 with the second error.
         let mut n = 0;
         let a = AutoEncoder::probe_with_retry(
@@ -912,9 +1152,15 @@ mod tests {
             Duration::ZERO,
         );
         assert_eq!((a.backend, a.attempts), (EncoderBackend::OpenH264, 2));
-        assert_eq!(a.nvenc_error.as_deref(), Some("Cannot load libcuda.so.1 (2)"));
+        assert_eq!(
+            a.nvenc_error.as_deref(),
+            Some("Cannot load libcuda.so.1 (2)")
+        );
         // No retry when a retry cannot help.
-        for e in ["cannot run ffmpeg: No such file or directory", "Unknown encoder 'h264_nvenc'"] {
+        for e in [
+            "cannot run ffmpeg: No such file or directory",
+            "Unknown encoder 'h264_nvenc'",
+        ] {
             let mut n = 0;
             let a = AutoEncoder::probe_with_retry(
                 || {
@@ -1044,7 +1290,9 @@ mod tests {
 
     #[test]
     fn aud_splitter() {
-        let mut buf = vec![0, 0, 0, 1, 9, 0xf0, 0, 0, 0, 1, 0x65, 1, 0, 0, 0, 1, 9, 0xf0, 0, 0, 1, 0x41, 2];
+        let mut buf = vec![
+            0, 0, 0, 1, 9, 0xf0, 0, 0, 0, 1, 0x65, 1, 0, 0, 0, 1, 9, 0xf0, 0, 0, 1, 0x41, 2,
+        ];
         let aus = crate::pipe::take_complete_aus(&mut buf);
         assert_eq!(aus.len(), 1);
         assert_eq!(aus[0], vec![0, 0, 0, 1, 9, 0xf0, 0, 0, 0, 1, 0x65, 1]);

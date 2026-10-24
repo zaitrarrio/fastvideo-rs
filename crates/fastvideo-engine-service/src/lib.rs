@@ -30,6 +30,7 @@ pub mod backend;
 pub mod cancel;
 pub mod caps;
 pub mod clock;
+pub mod cuda;
 pub mod device;
 pub(crate) mod executor;
 pub mod fake;
@@ -38,7 +39,6 @@ pub mod scheduler;
 pub mod service;
 pub mod stitch;
 pub mod stream;
-pub mod cuda;
 
 pub use backend::{
     BlockInput, BlockStats, CausalSpec, ClipOutput, ClipSink, CollectSink, DeviceInfo,
@@ -46,12 +46,15 @@ pub use backend::{
 };
 pub use cancel::{CancelToken, Deadline, OutputMode, StepControl, StepEvent, StepHook};
 pub use caps::{
-    default_profile, ltx_fps_caps, parse_tier_alias, tier_alias, CapabilityTable, ModelEntry, Recipe,
-    TierBinding, LTX_FPS, PLUG_H3_4STEP_PROFILE, SOL_H3_4STEP_DENSE_PROFILE, SOL_H3_4STEP_PROFILE,
+    default_profile, ltx_fps_caps, parse_tier_alias, tier_alias, CapabilityTable, ModelEntry,
+    Recipe, TierBinding, LTX_FPS, PLUG_H3_4STEP_PROFILE, SOL_H3_4STEP_DENSE_PROFILE,
+    SOL_H3_4STEP_PROFILE,
+};
+pub use clock::{Clock, ManualClock, SystemClock};
+pub use fake::{
+    FakeBackend, FakeConfig, FakeFaults, FakeModel, FakeTiming, FakeWarmup, JobValidator, Mp4Mode,
 };
 pub use fastvideo_protocol::Tier;
-pub use clock::{Clock, ManualClock, SystemClock};
-pub use fake::{FakeBackend, FakeConfig, FakeFaults, FakeModel, FakeTiming, FakeWarmup, JobValidator, Mp4Mode};
 pub use pool::{ModelPool, Readiness, Residency, Warmup};
 pub use scheduler::Priority;
 pub use service::{
@@ -68,8 +71,8 @@ pub use stream::causal::{
 };
 pub use stream::clip::{ClipBuild, ClipSession};
 pub use stream::duplex::{
-    draw_echo_overlay, echo_caps, read_echo_index, DuplexCommand, DuplexControl, DuplexReply, DuplexSession,
-    DuplexState, EchoBackend, ECHO_BORDER, ECHO_MODEL,
+    draw_echo_overlay, echo_caps, read_echo_index, DuplexCommand, DuplexControl, DuplexReply,
+    DuplexSession, DuplexState, EchoBackend, ECHO_BORDER, ECHO_MODEL,
 };
 pub use stream::pace::{
     spawn_causal_pacer, spawn_clip_pacer, CausalPacerConfig, ClipPacerConfig, IdlePolicy,

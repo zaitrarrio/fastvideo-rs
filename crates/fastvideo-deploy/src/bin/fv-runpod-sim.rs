@@ -12,8 +12,13 @@
 use fastvideo_deploy::runpod::sim::Sim;
 
 fn main() {
-    let addr = std::env::args().nth(1).unwrap_or_else(|| "127.0.0.1:8765".into());
-    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+    let addr = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "127.0.0.1:8765".into());
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("fv-runpod-sim: {e}");
@@ -33,7 +38,9 @@ fn main() {
         for (k, v) in sim.env(&base, "local-worker", 10_000) {
             println!("{k}='{v}'");
         }
-        eprintln!("fv-runpod-sim: listening on {base} (client API: {base}/v2/sim-ep/run, /status/<id>)");
+        eprintln!(
+            "fv-runpod-sim: listening on {base} (client API: {base}/v2/sim-ep/run, /status/<id>)"
+        );
         let _ = handle.await;
     });
 }

@@ -154,8 +154,7 @@ pub fn upscaler_key_is_known(key: &str, in_entries: usize, out_entries: usize) -
         "embed.2.bias",
         "conv_out.weight",
     ];
-    if FIXED.contains(&key)
-        || matches!(key, "conv_out.bias" | "norm_out.weight" | "norm_out.bias")
+    if FIXED.contains(&key) || matches!(key, "conv_out.bias" | "norm_out.weight" | "norm_out.bias")
     {
         return true;
     }
@@ -239,8 +238,8 @@ pub fn h3_temporal_positions(num_pixel_frames: usize) -> Result<Vec<f32>, String
     if num_pixel_frames == 0 {
         return Err("num_pixel_frames must be positive".into());
     }
-    let tokens_per_chunk = (H3_CLIP_LENGTH + H3_TEMPORAL_COMPRESSION - 1) / H3_TEMPORAL_COMPRESSION;
-    let num_chunks = (num_pixel_frames + H3_CLIP_LENGTH - 1) / H3_CLIP_LENGTH;
+    let tokens_per_chunk = H3_CLIP_LENGTH.div_ceil(H3_TEMPORAL_COMPRESSION);
+    let num_chunks = num_pixel_frames.div_ceil(H3_CLIP_LENGTH);
     let mut positions = Vec::with_capacity(num_chunks * tokens_per_chunk);
     for chunk in 0..num_chunks {
         for token in 0..tokens_per_chunk {
@@ -258,11 +257,7 @@ pub fn padded_ltx_pixel_frames(num_pixel_frames: usize) -> Result<usize, String>
     if num_pixel_frames == 0 {
         return Err("num_pixel_frames must be positive".into());
     }
-    Ok(
-        ((num_pixel_frames - 1 + LTX_TEMPORAL_COMPRESSION - 1) / LTX_TEMPORAL_COMPRESSION)
-            * LTX_TEMPORAL_COMPRESSION
-            + 1,
-    )
+    Ok((num_pixel_frames - 1).div_ceil(LTX_TEMPORAL_COMPRESSION) * LTX_TEMPORAL_COMPRESSION + 1)
 }
 
 pub fn ltx_temporal_positions(num_pixel_frames: usize) -> Result<Vec<f32>, String> {
@@ -329,7 +324,7 @@ pub fn pixel_unshuffle2(
     h: usize,
     w: usize,
 ) -> Result<Vec<f32>, String> {
-    if h % 2 != 0 || w % 2 != 0 || nchw.len() != n * c * h * w {
+    if !h.is_multiple_of(2) || !w.is_multiple_of(2) || nchw.len() != n * c * h * w {
         return Err("pixel_unshuffle expects even H and W".into());
     }
     let (oh, ow) = (h / 2, w / 2);
@@ -592,7 +587,11 @@ mod tests {
         assert_eq!(upscaler_block_cadence(3, false), vec![false; 3]);
         assert!(upscaler_key_is_known("conv_in.weight", 18, 18));
         assert!(upscaler_key_is_known("embed.2.bias", 18, 18));
-        assert!(upscaler_key_is_known("in_blocks.17.in_layers.2.weight", 18, 18));
+        assert!(upscaler_key_is_known(
+            "in_blocks.17.in_layers.2.weight",
+            18,
+            18
+        ));
         assert!(upscaler_key_is_known("out_blocks.1.dwconv.weight", 18, 18));
         assert!(!upscaler_key_is_known("in_blocks.18.norm.weight", 18, 18));
         assert!(!upscaler_key_is_known("in_blocks.1.q.weight", 18, 18));

@@ -145,7 +145,11 @@ impl H3Model {
     /// the model serves the native 1080P tier, so canvases up to 1088 x 1920
     /// are admitted (`fv-gpucheck h3 gen --oversize-canvas`).
     pub fn request(job: &ResolvedJob, hd_1080p: bool) -> Result<H3Request, ApiError> {
-        let (h, w, n) = (job.height as usize, job.width as usize, job.num_frames as usize);
+        let (h, w, n) = (
+            job.height as usize,
+            job.width as usize,
+            job.num_frames as usize,
+        );
         let mut req = if hd_1080p {
             H3Request::sized_1080p(job.prompt.clone(), h, w, n, job.seed)
         } else {
@@ -206,10 +210,7 @@ impl H3Model {
             return Err(if req.is_ref2va() {
                 ApiError::unsupported(fastvideo_protocol::GapId::H3Ref2vaNotLoaded)
             } else {
-                ApiError::invalid_param(
-                    "task",
-                    "this H3 model serves reference-to-video only",
-                )
+                ApiError::invalid_param("task", "this H3 model serves reference-to-video only")
             });
         }
         let out = self

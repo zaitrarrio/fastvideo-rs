@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use fastvideo_engine_service::{CausalControl, PacedStream};
 use fastvideo_protocol::{
-    draw_seed, ApiError, CausalLimits, Continuity, DuplexSpec, EndReason, ModelCaps, SessionContext, SessionSpec,
-    StreamCaps, TrackSet,
+    draw_seed, ApiError, CausalLimits, Continuity, DuplexSpec, EndReason, ModelCaps,
+    SessionContext, SessionSpec, StreamCaps, TrackSet,
 };
 use fastvideo_webrtc::host::{PeerHandle, RtcHost};
 use fastvideo_webrtc::writer::VideoCodec;
@@ -36,10 +36,10 @@ use crate::duplex::{DuplexDriver, Inputs};
 use crate::engine::{LoadState, Mode, StreamEngine};
 use crate::journal::Journal;
 use crate::media::{sendable_codecs, H264Backend, MediaConfig, MediaPipeline};
-use fastvideo_media::pipe::SparePool;
 use crate::schema;
 use crate::uploads::Uploads;
 use crate::wire::ServerMsg;
+use fastvideo_media::pipe::SparePool;
 
 /// RT's fixed local session id (`runner.py:SESSION_ID`).
 pub const SESSION_ID: &str = "00000000-0000-0000-0000-000000000000";
@@ -194,7 +194,10 @@ impl RtState {
     }
     /// A session is running (the signalling routes are open).
     pub fn is_running(self) -> bool {
-        matches!(self, RtState::Waiting | RtState::Streaming | RtState::Orphaned)
+        matches!(
+            self,
+            RtState::Waiting | RtState::Streaming | RtState::Orphaned
+        )
     }
 }
 
@@ -277,7 +280,11 @@ pub struct Refusal {
 
 impl Refusal {
     pub fn new(status: u16, detail: impl Into<String>) -> Self {
-        Self { status, detail: detail.into(), retry_after: None }
+        Self {
+            status,
+            detail: detail.into(),
+            retry_after: None,
+        }
     }
 }
 
@@ -289,7 +296,9 @@ pub struct Reactor {
 
 impl std::fmt::Debug for Reactor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Reactor").field("state", &self.state()).finish()
+        f.debug_struct("Reactor")
+            .field("state", &self.state())
+            .finish()
     }
 }
 
@@ -298,9 +307,16 @@ pub fn clip_bounds(caps: &ModelCaps, fps: u32) -> ClipBounds {
     let fps = f64::from(fps.max(1));
     let (min_s, max_s) = match caps.stream {
         Some(StreamCaps::Clip { min_s, max_s }) => (f64::from(min_s), f64::from(max_s)),
-        _ => (f64::from(caps.frames.min) / fps, f64::from(caps.frames.max) / fps),
+        _ => (
+            f64::from(caps.frames.min) / fps,
+            f64::from(caps.frames.max) / fps,
+        ),
     };
-    ClipBounds { min_s, max_s, default_s: f64::from(caps.frames.default) / fps }
+    ClipBounds {
+        min_s,
+        max_s,
+        default_s: f64::from(caps.frames.default) / fps,
+    }
 }
 
 impl Reactor {
@@ -311,12 +327,19 @@ impl Reactor {
                 cfg,
                 engine,
                 host,
-                st: Mutex::new(St { phase: RtState::Ready, live: None, epoch: 0, orphan_gen: 0 }),
+                st: Mutex::new(St {
+                    phase: RtState::Ready,
+                    live: None,
+                    epoch: 0,
+                    orphan_gen: 0,
+                }),
                 op: tokio::sync::Mutex::new(()),
                 journal: Journal::default(),
                 next_spares: Mutex::new(None),
                 uploads: Arc::new(Uploads::new(
-                    std::env::temp_dir().join("fv-reactor-uploads").join(uuid::Uuid::new_v4().simple().to_string()),
+                    std::env::temp_dir()
+                        .join("fv-reactor-uploads")
+                        .join(uuid::Uuid::new_v4().simple().to_string()),
                 )),
             }),
         };
@@ -396,7 +419,9 @@ impl Reactor {
         if self.inner.engine.load_state() != LoadState::Ready {
             return None;
         }
-        self.inner.engine.stream_model(self.inner.cfg.model.as_deref())
+        self.inner
+            .engine
+            .stream_model(self.inner.cfg.model.as_deref())
     }
 
     fn fps(caps: &ModelCaps) -> u32 {
@@ -420,7 +445,14 @@ impl Reactor {
 
     /// The tracks a session of `caps` carries (mono audio, design §5.3).
     pub fn tracks(&self, caps: &ModelCaps) -> TrackSet {
-        TrackSet::for_model(caps, self.canvas(caps), Self::fps(caps), (VIDEO_TRACK, AUDIO_TRACK), 1, false)
+        TrackSet::for_model(
+            caps,
+            self.canvas(caps),
+            Self::fps(caps),
+            (VIDEO_TRACK, AUDIO_TRACK),
+            1,
+            false,
+        )
     }
 
     /// The mode a session of `caps` runs: the configured override when the
@@ -439,7 +471,10 @@ impl Reactor {
     /// The command table for `caps`.
     pub fn table(&self, caps: &ModelCaps) -> Option<CommandTable> {
         let mode = self.mode(caps)?;
-        Some(CommandTable::for_mode(mode, clip_bounds(caps, Self::fps(caps))))
+        Some(CommandTable::for_mode(
+            mode,
+            clip_bounds(caps, Self::fps(caps)),
+        ))
     }
 
     /// The upload store.
@@ -451,9 +486,17 @@ impl Reactor {
     fn openapi(&self, caps: &ModelCaps, table: &CommandTable, tracks: &TrackSet) -> Value {
         let cfg = &self.inner.cfg;
         // Duplex models add their input tracks and caps (design §5.11).
-        let inputs = (table.mode == Mode::Duplex).then(|| Self::input_caps(caps).map(crate::duplex::input_schema)).flatten();
-        let mut doc =
-            schema::openapi_with_inputs(&caps.id.0, &cfg.server_version, table, tracks, &cfg.causal_limits, inputs.as_ref());
+        let inputs = (table.mode == Mode::Duplex)
+            .then(|| Self::input_caps(caps).map(crate::duplex::input_schema))
+            .flatten();
+        let mut doc = schema::openapi_with_inputs(
+            &caps.id.0,
+            &cfg.server_version,
+            table,
+            tracks,
+            &cfg.causal_limits,
+            inputs.as_ref(),
+        );
         if table.mode == Mode::Avatar {
             use fastvideo_engine_service::stream::avatar::{TAKE_MAX_S, TAKE_MIN_S};
             doc["x-reactor"]["session_limits"] = json!({
@@ -484,7 +527,10 @@ impl Reactor {
 
     /// A duplex model's input caps.
     pub fn input_caps(caps: &ModelCaps) -> Option<&fastvideo_protocol::InputCaps> {
-        caps.stream.as_ref().and_then(StreamCaps::duplex).map(|d| &d.input)
+        caps.stream
+            .as_ref()
+            .and_then(StreamCaps::duplex)
+            .map(|d| &d.input)
     }
 
     /// Whether the live session (else the model to stream) is duplex.
@@ -497,7 +543,9 @@ impl Reactor {
 
     /// The [`IngestAuth`] check, for duplex sessions only.
     pub fn authorize(&self, headers: &axum::http::HeaderMap) -> Result<(), Refusal> {
-        let Some(auth) = &self.inner.cfg.ingest_auth else { return Ok(()) };
+        let Some(auth) = &self.inner.cfg.ingest_auth else {
+            return Ok(());
+        };
         if !self.is_duplex() {
             return Ok(());
         }
@@ -506,7 +554,8 @@ impl Reactor {
 
     /// `capabilities.tracks`, client perspective (`recvonly` = model out).
     pub fn client_tracks(tracks: &TrackSet) -> Value {
-        let mut v = vec![json!({"name": tracks.video.name, "kind": "video", "direction": "recvonly"})];
+        let mut v =
+            vec![json!({"name": tracks.video.name, "kind": "video", "direction": "recvonly"})];
         if let Some(a) = &tracks.audio {
             v.push(json!({"name": a.name, "kind": "audio", "direction": "recvonly"}));
         }
@@ -516,9 +565,15 @@ impl Reactor {
     /// `track_map` of `POST /connections`, model perspective.
     pub fn track_map(tracks: &TrackSet) -> Value {
         let mut m = serde_json::Map::new();
-        m.insert(tracks.video.name.clone(), json!({"kind": "video", "direction": "out", "rate": 0.0}));
+        m.insert(
+            tracks.video.name.clone(),
+            json!({"kind": "video", "direction": "out", "rate": 0.0}),
+        );
         if let Some(a) = &tracks.audio {
-            m.insert(a.name.clone(), json!({"kind": "audio", "direction": "out", "rate": f64::from(a.rate)}));
+            m.insert(
+                a.name.clone(),
+                json!({"kind": "audio", "direction": "out", "rate": f64::from(a.rate)}),
+            );
         }
         Value::Object(m)
     }
@@ -537,12 +592,19 @@ impl Reactor {
     pub fn descriptor(&self) -> Value {
         let state = self.state();
         let (caps, tracks, output) = match &lock(&self.inner.st).live {
-            Some(l) => (Some(l.caps.clone()), Some(l.tracks.clone()), lock(&l.output).clone()),
+            Some(l) => (
+                Some(l.caps.clone()),
+                Some(l.tracks.clone()),
+                lock(&l.output).clone(),
+            ),
             None => (None, None, None),
         };
         let caps = caps.or_else(|| self.model());
         let tracks = tracks.or_else(|| caps.as_ref().map(|c| self.tracks(c)));
-        let inputs = caps.as_ref().and_then(Self::input_caps).map(crate::duplex::client_input_tracks);
+        let inputs = caps
+            .as_ref()
+            .and_then(Self::input_caps)
+            .map(crate::duplex::client_input_tracks);
         let mut d = json!({
             "session_id": SESSION_ID,
             "state": state.as_str(),
@@ -569,10 +631,15 @@ impl Reactor {
     fn transition(&self, st: &mut St, to: RtState, event: &str, detail: Value) {
         let from = st.phase;
         st.phase = to;
-        if matches!(to, RtState::Waiting | RtState::Streaming | RtState::Orphaned) {
+        if matches!(
+            to,
+            RtState::Waiting | RtState::Streaming | RtState::Orphaned
+        ) {
             st.orphan_gen += 1;
         }
-        self.inner.journal.record(event, from.as_str(), to.as_str(), detail);
+        self.inner
+            .journal
+            .record(event, from.as_str(), to.as_str(), detail);
     }
 
     fn arm_orphan_timer(&self, epoch: u64, gen: u64) {
@@ -602,21 +669,35 @@ impl Reactor {
             RtState::Created => {
                 return Err(Refusal {
                     retry_after: Some(1),
-                    ..Refusal::new(503, "cannot start session while created: the model is loading")
+                    ..Refusal::new(
+                        503,
+                        "cannot start session while created: the model is loading",
+                    )
                 })
             }
-            RtState::Terminated => return Err(Refusal::new(503, "cannot start session while terminated")),
-            s => return Err(Refusal::new(409, format!("cannot start session while {}", s.as_str()))),
+            RtState::Terminated => {
+                return Err(Refusal::new(503, "cannot start session while terminated"))
+            }
+            s => {
+                return Err(Refusal::new(
+                    409,
+                    format!("cannot start session while {}", s.as_str()),
+                ))
+            }
         }
-        let caps = self
-            .model()
-            .ok_or_else(|| Refusal::new(503, "cannot start session: no streamable model is loaded"))?;
-        let table = self.table(&caps).ok_or_else(|| Refusal::new(503, "the model has no stream caps"))?;
+        let caps = self.model().ok_or_else(|| {
+            Refusal::new(503, "cannot start session: no streamable model is loaded")
+        })?;
+        let table = self
+            .table(&caps)
+            .ok_or_else(|| Refusal::new(503, "the model has no stream caps"))?;
         let fps = Self::fps(&caps);
         let canvas = self.canvas(&caps);
         let tracks = self.tracks(&caps);
         if tracks.has_audio() {
-            tracks.samples_per_frame().map_err(|e| Refusal::new(503, e.message))?;
+            tracks
+                .samples_per_frame()
+                .map_err(|e| Refusal::new(503, e.message))?;
         }
         let seed = self
             .inner
@@ -630,13 +711,17 @@ impl Reactor {
             Mode::Causal | Mode::Duplex => {
                 let asked = match params.get("max_seconds") {
                     None | Some(Value::Null) => None,
-                    Some(v) => Some(
-                        v.as_u64()
-                            .and_then(|n| u32::try_from(n).ok())
-                            .ok_or_else(|| Refusal::new(400, "max_seconds must be a whole number of seconds"))?,
-                    ),
+                    Some(v) => Some(v.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(
+                        || Refusal::new(400, "max_seconds must be a whole number of seconds"),
+                    )?),
                 };
-                Some(self.inner.cfg.causal_limits.resolve(asked).map_err(|e| Refusal::new(400, e.message))?)
+                Some(
+                    self.inner
+                        .cfg
+                        .causal_limits
+                        .resolve(asked)
+                        .map_err(|e| Refusal::new(400, e.message))?,
+                )
             }
             Mode::Avatar => {
                 let cap = self.inner.cfg.avatar.session_max_s;
@@ -646,7 +731,9 @@ impl Reactor {
                         v.as_u64()
                             .and_then(|n| u32::try_from(n).ok())
                             .filter(|n| (1..=cap).contains(n))
-                            .ok_or_else(|| Refusal::new(400, format!("max_seconds must be 1..={cap}")))?,
+                            .ok_or_else(|| {
+                                Refusal::new(400, format!("max_seconds must be 1..={cap}"))
+                            })?,
                     ),
                 }
             }
@@ -656,9 +743,16 @@ impl Reactor {
         let gen_canvas = match table.mode {
             Mode::Avatar => {
                 let (w, h) = canvas;
-                fastvideo_protocol::resolve_canvas(&fastvideo_protocol::CanvasSpec::Exact { width: w, height: h }, &caps, None)
-                    .map(|(gw, gh, _)| (gw, gh))
-                    .map_err(|e| Refusal::new(503, format!("avatar canvas {w}x{h}: {}", e.message)))?
+                fastvideo_protocol::resolve_canvas(
+                    &fastvideo_protocol::CanvasSpec::Exact {
+                        width: w,
+                        height: h,
+                    },
+                    &caps,
+                    None,
+                )
+                .map(|(gw, gh, _)| (gw, gh))
+                .map_err(|e| Refusal::new(503, format!("avatar canvas {w}x{h}: {}", e.message)))?
             }
             _ => canvas,
         };
@@ -686,8 +780,16 @@ impl Reactor {
         };
         // An output copy (ours): `output` or `x_fv_output`, checked before
         // the engine session opens.
-        let want_output = match (params.get("output").filter(|v| !v.is_null()), params.get("x_fv_output").filter(|v| !v.is_null())) {
-            (Some(_), Some(_)) => return Err(Refusal::new(400, "give `output` or `x_fv_output`, not both")),
+        let want_output = match (
+            params.get("output").filter(|v| !v.is_null()),
+            params.get("x_fv_output").filter(|v| !v.is_null()),
+        ) {
+            (Some(_), Some(_)) => {
+                return Err(Refusal::new(
+                    400,
+                    "give `output` or `x_fv_output`, not both",
+                ))
+            }
             (Some(o), None) | (None, Some(o)) => Some(o.clone()),
             (None, None) => None,
         };
@@ -696,38 +798,66 @@ impl Reactor {
         }
         let context: SessionContext = match params.get("context") {
             None | Some(Value::Null) => SessionContext::default(),
-            Some(v) => serde_json::from_value(v.clone()).map_err(|e| Refusal::new(400, format!("context: {e}")))?,
+            Some(v) => serde_json::from_value(v.clone())
+                .map_err(|e| Refusal::new(400, format!("context: {e}")))?,
         };
-        context.validate().map_err(|e| Refusal::new(400, format!("{}: {}", e.param.unwrap_or_default(), e.message)))?;
+        context.validate().map_err(|e| {
+            Refusal::new(
+                400,
+                format!("{}: {}", e.param.unwrap_or_default(), e.message),
+            )
+        })?;
         let mut inputs = None;
-        let (driver, paced, causal): (Arc<dyn Driver>, PacedStream, Option<CausalControl>) = match table.mode {
-            Mode::Clip => {
-                let session = self.inner.engine.open_clip(spec).await.map_err(refuse)?;
-                let (d, p) = ClipDriver::start(session, &cfg.aspect, out.clone()).map_err(refuse)?;
-                (Arc::new(d), p, None)
-            }
-            Mode::Causal => {
-                let session = self.inner.engine.open_causal(spec).await.map_err(refuse)?;
-                let (d, p) =
-                    CausalDriver::start(session, seed, &cfg.causal_limits, out.clone()).map_err(refuse)?;
-                let c = d.control().clone();
-                (Arc::new(d), p, Some(c))
-            }
-            Mode::Duplex => {
-                let session = self.inner.engine.open_duplex(DuplexSpec { session: spec, context }).await.map_err(refuse)?;
-                let i = Arc::new(Inputs::new(&session.duplex_caps().input, session.input().clone(), max_seconds));
-                i.prewarm();
-                let (d, p) = DuplexDriver::start(session, out.clone(), i.clone()).map_err(refuse)?;
-                inputs = Some(i);
-                (Arc::new(d), p, None)
-            }
-            Mode::Avatar => {
-                let session = self.inner.engine.open_clip(spec).await.map_err(refuse)?;
-                let (d, p) = AvatarDriver::start(session, &cfg.avatar, self.inner.uploads.clone(), seed, out.clone())
+        let (driver, paced, causal): (Arc<dyn Driver>, PacedStream, Option<CausalControl>) =
+            match table.mode {
+                Mode::Clip => {
+                    let session = self.inner.engine.open_clip(spec).await.map_err(refuse)?;
+                    let (d, p) =
+                        ClipDriver::start(session, &cfg.aspect, out.clone()).map_err(refuse)?;
+                    (Arc::new(d), p, None)
+                }
+                Mode::Causal => {
+                    let session = self.inner.engine.open_causal(spec).await.map_err(refuse)?;
+                    let (d, p) =
+                        CausalDriver::start(session, seed, &cfg.causal_limits, out.clone())
+                            .map_err(refuse)?;
+                    let c = d.control().clone();
+                    (Arc::new(d), p, Some(c))
+                }
+                Mode::Duplex => {
+                    let session = self
+                        .inner
+                        .engine
+                        .open_duplex(DuplexSpec {
+                            session: spec,
+                            context,
+                        })
+                        .await
+                        .map_err(refuse)?;
+                    let i = Arc::new(Inputs::new(
+                        &session.duplex_caps().input,
+                        session.input().clone(),
+                        max_seconds,
+                    ));
+                    i.prewarm();
+                    let (d, p) =
+                        DuplexDriver::start(session, out.clone(), i.clone()).map_err(refuse)?;
+                    inputs = Some(i);
+                    (Arc::new(d), p, None)
+                }
+                Mode::Avatar => {
+                    let session = self.inner.engine.open_clip(spec).await.map_err(refuse)?;
+                    let (d, p) = AvatarDriver::start(
+                        session,
+                        &cfg.avatar,
+                        self.inner.uploads.clone(),
+                        seed,
+                        out.clone(),
+                    )
                     .map_err(refuse)?;
-                (Arc::new(d), p, None)
-            }
-        };
+                    (Arc::new(d), p, None)
+                }
+            };
         let copy = match (&want_output, &cfg.outputs) {
             (Some(req), Some(hook)) => {
                 let media = fastvideo_media::output::OutputMedia {
@@ -747,9 +877,14 @@ impl Reactor {
             _ => None,
         };
         let mut pace_stats = paced.stats.clone();
-        let spares = lock(&self.inner.next_spares).take().unwrap_or_else(SparePool::per_session);
-        let media =
-            Arc::new(MediaPipeline::start_with_spares(self.media_config(&caps, tracks.has_audio()), paced.ticks, spares));
+        let spares = lock(&self.inner.next_spares)
+            .take()
+            .unwrap_or_else(SparePool::per_session);
+        let media = Arc::new(MediaPipeline::start_with_spares(
+            self.media_config(&caps, tracks.has_audio()),
+            paced.ticks,
+            spares,
+        ));
         if let Some(c) = causal {
             media.on_first_frame(move || c.mark_first_frame_sent());
         }
@@ -785,8 +920,13 @@ impl Reactor {
                 let l = live.clone();
                 tokio::spawn(async move {
                     while let Some(ev) = rx.recv().await {
-                        let kind = ev.get("type").and_then(Value::as_str).unwrap_or("output_event").to_owned();
-                        l.out.broadcast(crate::wire::ServerMsg::broadcast(kind, ev.clone()));
+                        let kind = ev
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("output_event")
+                            .to_owned();
+                        l.out
+                            .broadcast(crate::wire::ServerMsg::broadcast(kind, ev.clone()));
                         *lock(&l.output) = Some(ev);
                     }
                 });
@@ -800,10 +940,19 @@ impl Reactor {
         if let Some(limit) = max_seconds {
             let me = self.clone();
             tokio::spawn(async move {
-                let hit = pace_stats.wait_for(|s| s.ended.is_some()).await.is_ok_and(|s| s.ended == Some(EndReason::SessionLimit));
+                let hit = pace_stats
+                    .wait_for(|s| s.ended.is_some())
+                    .await
+                    .is_ok_and(|s| s.ended == Some(EndReason::SessionLimit));
                 if hit {
                     tracing::info!(limit, "reactor session reached its length limit: closing");
-                    me.close_epoch(Some(epoch), Some(session_limit_reason(limit)), false, "session_limit").await;
+                    me.close_epoch(
+                        Some(epoch),
+                        Some(session_limit_reason(limit)),
+                        false,
+                        "session_limit",
+                    )
+                    .await;
                 }
             });
         }
@@ -815,9 +964,17 @@ impl Reactor {
         match self.state() {
             s if s.is_running() => {}
             RtState::Created | RtState::Terminated => {
-                return Err(Refusal::new(503, format!("cannot stop session while {}", self.state().as_str())))
+                return Err(Refusal::new(
+                    503,
+                    format!("cannot stop session while {}", self.state().as_str()),
+                ))
             }
-            s => return Err(Refusal::new(409, format!("cannot stop session while {}", s.as_str()))),
+            s => {
+                return Err(Refusal::new(
+                    409,
+                    format!("cannot stop session while {}", s.as_str()),
+                ))
+            }
         }
         let reason = (!reason.is_empty()).then_some(reason);
         self.close(reason, moderate, "stop_session").await;
@@ -837,7 +994,13 @@ impl Reactor {
     }
 
     /// [`Self::close`], only if the live session is still `epoch` (when set).
-    async fn close_epoch(&self, epoch: Option<u64>, reason: Option<String>, moderated: bool, event: &str) {
+    async fn close_epoch(
+        &self,
+        epoch: Option<u64>,
+        reason: Option<String>,
+        moderated: bool,
+        event: &str,
+    ) {
         let _op = self.inner.op.lock().await;
         let live = {
             let mut st = lock(&self.inner.st);
@@ -845,27 +1008,46 @@ impl Reactor {
                 return;
             }
             let Some(live) = st.live.take() else { return };
-            self.transition(&mut st, RtState::Closing, event, json!({"reason": reason, "moderated": moderated}));
+            self.transition(
+                &mut st,
+                RtState::Closing,
+                event,
+                json!({"reason": reason, "moderated": moderated}),
+            );
             live
         };
         if moderated {
-            live.out.broadcast(ServerMsg::Moderation { action: "terminate".into(), message: MODERATION_MESSAGE.into() });
+            live.out.broadcast(ServerMsg::Moderation {
+                action: "terminate".into(),
+                message: MODERATION_MESSAGE.into(),
+            });
         } else if let Some(r) = &reason {
-            live.out.broadcast(ServerMsg::SessionEnded { reason: r.clone() });
+            live.out
+                .broadcast(ServerMsg::SessionEnded { reason: r.clone() });
         }
         // Let the gateways put the farewell on the ordered channels first.
         if !live.out.is_empty() {
             tokio::time::sleep(Duration::from_millis(150)).await;
         }
-        let peers: Vec<PeerHandle> = lock(&live.conns).values_mut().filter_map(|c| c.peer.take()).collect();
+        let peers: Vec<PeerHandle> = lock(&live.conns)
+            .values_mut()
+            .filter_map(|c| c.peer.take())
+            .collect();
         let n_peers = peers.len();
         for p in peers {
             p.close();
         }
-        tracing::info!(event, peers = n_peers, "reactor session closing: peers closed");
+        tracing::info!(
+            event,
+            peers = n_peers,
+            "reactor session closing: peers closed"
+        );
         // The driver releases the engine session; bounded, so a stuck
         // driver cannot leave the runtime in CLOSING for good.
-        if tokio::time::timeout(DRIVER_CLOSE_TIMEOUT, live.driver.close()).await.is_err() {
+        if tokio::time::timeout(DRIVER_CLOSE_TIMEOUT, live.driver.close())
+            .await
+            .is_err()
+        {
             tracing::warn!(event, "reactor session closing: the driver did not close within {DRIVER_CLOSE_TIMEOUT:?}; going on");
         }
         tracing::info!(event, "reactor session closing: driver closed");
@@ -891,7 +1073,12 @@ impl Reactor {
         {
             let mut st = lock(&self.inner.st);
             if st.epoch == live.epoch && matches!(st.phase, RtState::Waiting | RtState::Orphaned) {
-                self.transition(&mut st, RtState::Streaming, "connection_opened", json!({"connection_id": conn}));
+                self.transition(
+                    &mut st,
+                    RtState::Streaming,
+                    "connection_opened",
+                    json!({"connection_id": conn}),
+                );
             }
         }
         live.driver.peers_changed(n);
@@ -911,7 +1098,12 @@ impl Reactor {
             let arm = {
                 let mut st = lock(&self.inner.st);
                 if st.epoch == live.epoch && st.phase == RtState::Streaming {
-                    self.transition(&mut st, RtState::Orphaned, "connection_closed", json!({"connection_id": conn}));
+                    self.transition(
+                        &mut st,
+                        RtState::Orphaned,
+                        "connection_closed",
+                        json!({"connection_id": conn}),
+                    );
                     Some((st.epoch, st.orphan_gen))
                 } else {
                     None
@@ -929,6 +1121,9 @@ impl Reactor {
 
     /// Whether `live` is still the current session.
     pub(crate) fn is_current(&self, live: &Live) -> bool {
-        lock(&self.inner.st).live.as_ref().is_some_and(|l| l.epoch == live.epoch)
+        lock(&self.inner.st)
+            .live
+            .as_ref()
+            .is_some_and(|l| l.epoch == live.epoch)
     }
 }

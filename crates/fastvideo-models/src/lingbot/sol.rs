@@ -87,7 +87,11 @@ impl SolArm {
                 "1" | "sol" | "fullopt" | "on" | "true" => arm = Self::FULLOPT,
                 "cache" | "easycache" => arm.easycache = true,
                 "pisa" => arm.pisa = true,
-                other => return Err(format!("FASTVIDEO_LINGBOT_SOL: unknown technique {other:?}")),
+                other => {
+                    return Err(format!(
+                        "FASTVIDEO_LINGBOT_SOL: unknown technique {other:?}"
+                    ))
+                }
             }
         }
         Ok(arm)
@@ -182,7 +186,8 @@ impl EasyCache {
         let Some(reference) = self.reference.as_deref() else {
             return false;
         };
-        let window = self.cfg.head_steps <= i && i < self.num_steps.saturating_sub(self.cfg.tail_steps);
+        let window =
+            self.cfg.head_steps <= i && i < self.num_steps.saturating_sub(self.cfg.tail_steps);
         if !window || self.run >= self.cfg.max_reuse {
             return false;
         }
@@ -275,9 +280,18 @@ mod tests {
 
     #[test]
     fn official_numbers_match_the_lingbot_toml() {
-        assert_eq!((OFFICIAL_WIDTH, OFFICIAL_HEIGHT, OFFICIAL_FRAMES), (832, 480, 121));
-        assert_eq!((OFFICIAL_STEPS, OFFICIAL_GUIDANCE, OFFICIAL_SHIFT), (40, 3.0, 3.0));
-        assert_eq!((REFINER_WIDTH, REFINER_HEIGHT, REFINER_STEPS), (1920, 1088, 8));
+        assert_eq!(
+            (OFFICIAL_WIDTH, OFFICIAL_HEIGHT, OFFICIAL_FRAMES),
+            (832, 480, 121)
+        );
+        assert_eq!(
+            (OFFICIAL_STEPS, OFFICIAL_GUIDANCE, OFFICIAL_SHIFT),
+            (40, 3.0, 3.0)
+        );
+        assert_eq!(
+            (REFINER_WIDTH, REFINER_HEIGHT, REFINER_STEPS),
+            (1920, 1088, 8)
+        );
         assert_eq!((REFINER_T_THRESH, REFINER_SIGMA_TAIL_STEPS), (0.85, 2));
         assert!((PUBLISHED_BASELINE_S / PUBLISHED_FULLOPT_S - 2.60).abs() < 0.01);
     }

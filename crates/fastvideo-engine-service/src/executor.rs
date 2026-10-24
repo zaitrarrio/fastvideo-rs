@@ -133,8 +133,9 @@ impl Warmups {
     /// The next run: the first model, still resident, with runs left.
     fn next(&mut self, pool: &crate::pool::ModelPool, idx: usize) -> Option<(ModelId, String)> {
         // A model that left the GPU (swap mode) drops its warm-up.
-        self.left
-            .retain(|(m, runs)| !runs.is_empty() && pool.state(idx, m) == Some(&Residency::Resident));
+        self.left.retain(|(m, runs)| {
+            !runs.is_empty() && pool.state(idx, m) == Some(&Residency::Resident)
+        });
         self.left
             .first()
             .and_then(|(m, runs)| runs.front().map(|r| (m.clone(), r.clone())))
@@ -165,7 +166,11 @@ impl Warmups {
         entry.1 += took;
         let mut st = sh.lock();
         st.warmup_cancel[idx] = None;
-        let runs = self.left.iter_mut().find(|(m, _)| m == model).map(|(_, r)| r);
+        let runs = self
+            .left
+            .iter_mut()
+            .find(|(m, _)| m == model)
+            .map(|(_, r)| r);
         let state = match r {
             Ok(what) => {
                 entry.2.push(what);
@@ -211,7 +216,13 @@ impl Warmups {
 /// are marked pending in the same critical section that makes it resident,
 /// so nobody can see it ready with its warm-up not yet known (the readiness
 /// probe and `warmup()` read the pool under the same lock).
-fn load(sh: &Shared, idx: usize, backend: &mut dyn EngineBackend, model: &ModelId, boot: bool) -> Result<(), ApiError> {
+fn load(
+    sh: &Shared,
+    idx: usize,
+    backend: &mut dyn EngineBackend,
+    model: &ModelId,
+    boot: bool,
+) -> Result<(), ApiError> {
     {
         let mut st = sh.lock();
         st.pool.set(
@@ -272,7 +283,12 @@ fn load(sh: &Shared, idx: usize, backend: &mut dyn EngineBackend, model: &ModelI
 }
 
 /// Swap mode: evicts every other resident model, then loads `model`.
-fn swap_in(sh: &Shared, idx: usize, backend: &mut dyn EngineBackend, model: &ModelId) -> Result<(), ApiError> {
+fn swap_in(
+    sh: &Shared,
+    idx: usize,
+    backend: &mut dyn EngineBackend,
+    model: &ModelId,
+) -> Result<(), ApiError> {
     let others: Vec<ModelId> = {
         let st = sh.lock();
         st.sched
@@ -345,7 +361,9 @@ fn run_job(sh: &Arc<Shared>, idx: usize, backend: &mut dyn EngineBackend, it: Qu
         }
         if let Some(t) = trace {
             // Marks storage is allocated here, before the run.
-            let pool = backend.marks(TIMELINE_MARKS).unwrap_or_else(|| Box::new(fastvideo_trace::HostMarks));
+            let pool = backend
+                .marks(TIMELINE_MARKS)
+                .unwrap_or_else(|| Box::new(fastvideo_trace::HostMarks));
             ctl = ctl.with_timeline(fastvideo_trace::Timeline::new(t, pool, TIMELINE_MARKS));
         }
         let mut collect = CollectSink::default();
@@ -377,12 +395,18 @@ fn run_job(sh: &Arc<Shared>, idx: usize, backend: &mut dyn EngineBackend, it: Qu
             out.metrics.inference_s = Some(wall);
         }
         if out.metrics.build_rtf.is_none() && job.duration_s() > 0.0 {
-            out.metrics.build_rtf = Some(out.metrics.inference_s.unwrap_or(wall) / job.duration_s());
+            out.metrics.build_rtf =
+                Some(out.metrics.inference_s.unwrap_or(wall) / job.duration_s());
         }
         Ok(out)
     })();
     if let (Some(t), Some(s)) = (trace, t_run) {
-        t.span_since(fastvideo_trace::Comp::Engine, "run", s, i64::from(result.is_ok()));
+        t.span_since(
+            fastvideo_trace::Comp::Engine,
+            "run",
+            s,
+            i64::from(result.is_ok()),
+        );
     }
     let ev = match result {
         Ok(out) => EngineEvent::Finished(out),

@@ -60,14 +60,23 @@ impl Transport for RouterTransport {
         for (k, v) in &req.headers {
             b = b.header(k.as_str(), v.as_str());
         }
-        let r = b.body(req.body.map(Body::from).unwrap_or_else(Body::empty)).map_err(|e| e.to_string())?;
+        let r = b
+            .body(req.body.map(Body::from).unwrap_or_else(Body::empty))
+            .map_err(|e| e.to_string())?;
         let fut = async {
             let resp = self.0.clone().oneshot(r).await.map_err(|e| e.to_string())?;
             let status = resp.status().as_u16();
-            let body = axum::body::to_bytes(resp.into_body(), 64 << 20).await.map_err(|e| e.to_string())?;
-            Ok(InResp { status, body: body.to_vec() })
+            let body = axum::body::to_bytes(resp.into_body(), 64 << 20)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(InResp {
+                status,
+                body: body.to_vec(),
+            })
         };
-        tokio::time::timeout(req.timeout, fut).await.map_err(|_| "timed out".to_owned())?
+        tokio::time::timeout(req.timeout, fut)
+            .await
+            .map_err(|_| "timed out".to_owned())?
     }
 }
 
@@ -102,9 +111,19 @@ impl Transport for ReqwestTransport {
         if let Some(body) = req.body {
             b = b.body(body);
         }
-        let resp = b.timeout(req.timeout).send().await.map_err(|e| e.without_url().to_string())?;
+        let resp = b
+            .timeout(req.timeout)
+            .send()
+            .await
+            .map_err(|e| e.without_url().to_string())?;
         let status = resp.status().as_u16();
-        let body = resp.bytes().await.map_err(|e| e.without_url().to_string())?;
-        Ok(InResp { status, body: body.to_vec() })
+        let body = resp
+            .bytes()
+            .await
+            .map_err(|e| e.without_url().to_string())?;
+        Ok(InResp {
+            status,
+            body: body.to_vec(),
+        })
     }
 }

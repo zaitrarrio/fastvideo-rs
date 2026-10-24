@@ -8,7 +8,8 @@ use std::time::Duration;
 use anyhow::{anyhow, Context};
 use axum::Router;
 use fastvideo_engine_service::{
-    EngineBackend, EngineConfig, EngineService, FakeBackend, FakeConfig, FakeTiming, Mp4Mode, Readiness,
+    EngineBackend, EngineConfig, EngineService, FakeBackend, FakeConfig, FakeTiming, Mp4Mode,
+    Readiness,
 };
 use fastvideo_media::video::FfmpegH264;
 use fastvideo_protocol::{JobStore, ModelId, ProtocolId};
@@ -71,7 +72,9 @@ pub struct App {
 
 impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("App").field("ctx", &self.ctx).finish_non_exhaustive()
+        f.debug_struct("App")
+            .field("ctx", &self.ctx)
+            .finish_non_exhaustive()
     }
 }
 
@@ -96,7 +99,10 @@ pub fn upsampler_service(c: &Config) -> Option<Arc<fastvideo_upsampler::Service>
         match fastvideo_upsampler::Service::http(&u.base_url, key, u.settings()) {
             Ok(s) => {
                 let counters = crate::tokens::counters(c);
-                let tok = |x: &Option<Arc<dyn fastvideo_upsampler::TokenCounter>>| x.as_ref().map_or_else(|| "chars".to_owned(), |t| t.describe());
+                let tok = |x: &Option<Arc<dyn fastvideo_upsampler::TokenCounter>>| {
+                    x.as_ref()
+                        .map_or_else(|| "chars".to_owned(), |t| t.describe())
+                };
                 tracing::info!(
                     backend = %s.describe(),
                     timeout_ms = u.timeout_ms(),
@@ -158,14 +164,20 @@ pub fn build_engine_with_clock(
             if f.h3_1080p {
                 for m in &mut fc.models {
                     if m.caps.family == fastvideo_protocol::Family::H3
-                        && matches!(m.caps.tier, Some(fastvideo_protocol::Tier::Max | fastvideo_protocol::Tier::Turbo))
+                        && matches!(
+                            m.caps.tier,
+                            Some(fastvideo_protocol::Tier::Max | fastvideo_protocol::Tier::Turbo)
+                        )
                     {
                         m.caps.canvas = m.caps.canvas.clone().with_h3_1080p();
                     }
                 }
             }
             if let Some(d) = &f.device {
-                fc.device_profile = Some(fastvideo_engine_service::device::DeviceProfile::parse(d).map_err(|e| anyhow!("engine.fake.device: {e}"))?);
+                fc.device_profile = Some(
+                    fastvideo_engine_service::device::DeviceProfile::parse(d)
+                        .map_err(|e| anyhow!("engine.fake.device: {e}"))?,
+                );
             }
             fc.timing = FakeTiming {
                 load: Duration::from_millis(f.load_ms),
@@ -187,7 +199,9 @@ pub fn build_engine_with_clock(
             } else {
                 // Without `[[models]]`: the SF-Wan-only causal backend from
                 // `FV_SFWAN_WEIGHTS` (WP-15).
-                if let Some(b) = fastvideo_engine_service::cuda::causal::CausalCudaBackend::from_env() {
+                if let Some(b) =
+                    fastvideo_engine_service::cuda::causal::CausalCudaBackend::from_env()
+                {
                     let cfg = EngineConfig {
                         queue_max: c.limits.queue_max,
                         output_dir: c.server.state_dir.join("engine-out"),
@@ -197,7 +211,9 @@ pub fn build_engine_with_clock(
                     return EngineService::start(cfg, vec![Box::new(b)])
                         .map_err(|e| anyhow!("starting the engine: {e}"));
                 }
-                return Err(anyhow!("engine.backend = cuda needs [[models]] (or FV_SFWAN_WEIGHTS)"));
+                return Err(anyhow!(
+                    "engine.backend = cuda needs [[models]] (or FV_SFWAN_WEIGHTS)"
+                ));
             }
             #[cfg(not(feature = "cuda"))]
             return Err(anyhow!(
@@ -212,7 +228,12 @@ pub fn build_engine_with_clock(
     let cfg = EngineConfig {
         queue_max: c.limits.queue_max,
         swap: c.engine.swap,
-        tier_overrides: c.engine.tier_overrides.iter().map(|(k, v)| (k.clone(), ModelId::new(v))).collect(),
+        tier_overrides: c
+            .engine
+            .tier_overrides
+            .iter()
+            .map(|(k, v)| (k.clone(), ModelId::new(v)))
+            .collect(),
         output_dir: c.server.state_dir.join("engine-out"),
         job_deadline: c.engine.job_deadline(),
         ..EngineConfig::default()
@@ -231,7 +252,9 @@ pub fn cuda_models(c: &Config) -> anyhow::Result<Vec<fastvideo_engine_service::c
     use fastvideo_engine_service::cuda::ProcessPlan;
     let models = catalog_models(&c.models)?;
     if !models.iter().any(|m| m.resident) {
-        return Err(anyhow!("[[models]]: no model is `resident = true` (nothing would load before readiness)"));
+        return Err(anyhow!(
+            "[[models]]: no model is `resident = true` (nothing would load before readiness)"
+        ));
     }
     ProcessPlan::for_models(&models).map_err(|e| anyhow!("[[models]]: {e}"))?;
     Ok(models)
@@ -239,7 +262,9 @@ pub fn cuda_models(c: &Config) -> anyhow::Result<Vec<fastvideo_engine_service::c
 
 /// `[[models]]`-style entries resolved against the CUDA catalog (CPU-only:
 /// no weights are read).
-pub fn catalog_models(entries: &[crate::config::ModelCfg]) -> anyhow::Result<Vec<fastvideo_engine_service::cuda::CudaModel>> {
+pub fn catalog_models(
+    entries: &[crate::config::ModelCfg],
+) -> anyhow::Result<Vec<fastvideo_engine_service::cuda::CudaModel>> {
     use fastvideo_engine_service::cuda::{model_from_config, ModelEntryCfg, WeightLayout};
     let root = std::env::var("FV_WEIGHTS").unwrap_or_else(|_| "/workspace/weights".into());
     let mut layout = WeightLayout::new(&root);
@@ -306,16 +331,25 @@ fn public_base(c: &Config) -> anyhow::Result<Url> {
     let addr: SocketAddr = c.bind_addr()?;
     // Runpod pod proxy / LB URL, Vast public IP:port (WP-16 discovery).
     if c.server.mode == Mode::Http {
-        if let Some(u) = fastvideo_deploy::env::Discovery::from_process().public_base_url(addr.port()) {
+        if let Some(u) =
+            fastvideo_deploy::env::Discovery::from_process().public_base_url(addr.port())
+        {
             return Url::parse(&u).context("discovered public base URL");
         }
     }
-    let host = if addr.ip().is_unspecified() { "127.0.0.1".to_owned() } else { addr.ip().to_string() };
+    let host = if addr.ip().is_unspecified() {
+        "127.0.0.1".to_owned()
+    } else {
+        addr.ip().to_string()
+    };
     Url::parse(&format!("http://{host}:{}", addr.port())).context("public base")
 }
 
 fn worker_id(c: &Config) -> String {
-    c.server.worker_id.clone().unwrap_or_else(|| format!("fv-{}", fastvideo_serve_kit::random_token()))
+    c.server
+        .worker_id
+        .clone()
+        .unwrap_or_else(|| format!("fv-{}", fastvideo_serve_kit::random_token()))
 }
 
 impl App {
@@ -344,8 +378,10 @@ impl App {
         // Direct output uploads through the family objects' part URLs
         // (docs/serve/dispatch-do-family.md §7): in front of the store.
         #[cfg(feature = "http-client")]
-        let direct_uploads = (worker_role && config.dispatch.direct_upload && !config.dispatch.families.is_empty())
-            .then(|| crate::upload::Uploads::new(u64::from(config.dispatch.upload_part_mib) << 20));
+        let direct_uploads = (worker_role
+            && config.dispatch.direct_upload
+            && !config.dispatch.families.is_empty())
+        .then(|| crate::upload::Uploads::new(u64::from(config.dispatch.upload_part_mib) << 20));
         #[cfg(feature = "http-client")]
         let artifacts: Arc<dyn fastvideo_serve_kit::ArtifactStore> = match &direct_uploads {
             Some(u) => crate::upload::DirectStore::new(artifacts, u.clone()),
@@ -361,14 +397,20 @@ impl App {
             tracing::info!("dispatch.front: API auth is the edge's (trust-edge); every route needs the internal token");
             config.auth.mode = fastvideo_serve_kit::AuthMode::TrustEdge;
         }
-        if worker_role && !direct && !front && config.auth.mode != fastvideo_serve_kit::AuthMode::TrustGateway {
+        if worker_role
+            && !direct
+            && !front
+            && config.auth.mode != fastvideo_serve_kit::AuthMode::TrustGateway
+        {
             tracing::info!("server.role = worker (an executor: neither a front nor direct): every route needs the internal token");
             config.auth.mode = fastvideo_serve_kit::AuthMode::TrustGateway;
         }
         let (jobs, d1, jobs_kind) = match ov.jobs {
             Some(j) => (j, None, "custom"),
             None => {
-                let j = storage::build_jobs(&config, &worker, artifacts.clone(), ov.d1.clone()).await.map_err(|e| anyhow!(e))?;
+                let j = storage::build_jobs(&config, &worker, artifacts.clone(), ov.d1.clone())
+                    .await
+                    .map_err(|e| anyhow!(e))?;
                 let kind = match j.kind {
                     JobBackend::D1 => "d1",
                     JobBackend::Memory => "memory",
@@ -383,14 +425,17 @@ impl App {
         };
         let encoder = match config.engine.post_encoder.as_str() {
             "cpu-test-x264" => FfmpegH264::Libx264CpuTest,
-            "auto" if crate::encoders::auto_selection().1.post == "cpu-test-x264" => FfmpegH264::Libx264CpuTest,
+            "auto" if crate::encoders::auto_selection().1.post == "cpu-test-x264" => {
+                FfmpegH264::Libx264CpuTest
+            }
             _ => FfmpegH264::Nvenc,
         };
         let gate = ServiceGate::new(
             engine,
             config.aliases.clone(),
             OutputPolicy {
-                placeholder: config.engine.backend == EngineBackendKind::Fake && config.engine.fake.placeholder_output,
+                placeholder: config.engine.backend == EngineBackendKind::Fake
+                    && config.engine.fake.placeholder_output,
                 encoder,
                 scratch: config.server.state_dir.join("outputs"),
                 fragmented: config.engine.mp4_fragmented,
@@ -413,8 +458,13 @@ impl App {
         } else {
             KeyRing::from_hash_list(config.auth.keys.expose()).map_err(|e| anyhow!(e))?
         };
-        let key_store = storage::build_key_store(&config, ov.d1.clone()).await.map_err(|e| anyhow!(e))?;
-        if config.auth.mode == fastvideo_serve_kit::AuthMode::Keys && keys.is_empty() && key_store.list().is_empty() {
+        let key_store = storage::build_key_store(&config, ov.d1.clone())
+            .await
+            .map_err(|e| anyhow!(e))?;
+        if config.auth.mode == fastvideo_serve_kit::AuthMode::Keys
+            && keys.is_empty()
+            && key_store.list().is_empty()
+        {
             tracing::warn!("auth.mode = keys with no FV_API_KEYS and no minted keys: keyed APIs answer 401 until a key is minted (/console/admin)");
         }
         let admin_resolved = crate::admin_token::resolve(&config, !worker_role)?;
@@ -427,11 +477,14 @@ impl App {
         // per process (receivers must re-fetch the JWKS after restarts).
         let signer = if config.webhook_key.is_empty() {
             if config.protocols.fal {
-                tracing::warn!("FV_WEBHOOK_ED25519_KEY is not set: fal webhooks use a per-process key");
+                tracing::warn!(
+                    "FV_WEBHOOK_ED25519_KEY is not set: fal webhooks use a per-process key"
+                );
             }
             WebhookSigner::random("fv-serve")
         } else {
-            WebhookSigner::from_seed_str(config.webhook_key.expose(), "fv-serve").map_err(|e| anyhow!(e))?
+            WebhookSigner::from_seed_str(config.webhook_key.expose(), "fv-serve")
+                .map_err(|e| anyhow!(e))?
         };
         let mut callbacks = CallbackSender::new(CallbackSender::default_transport(), Some(signer));
         if config.server.callbacks_allow_private {
@@ -449,23 +502,38 @@ impl App {
         // rows inserted behind the enqueue, pollers woken by the family
         // object (crate::front).
         #[cfg(feature = "http-client")]
-        let front_cfg = if front { crate::front::FrontCfg::from_config(&config) } else { None };
+        let front_cfg = if front {
+            crate::front::FrontCfg::from_config(&config)
+        } else {
+            None
+        };
         #[cfg(feature = "http-client")]
-        let front_gate = front_cfg.as_ref().map(|fc| crate::front::FrontGate::new(gate.clone(), fc.clone()));
+        let front_gate = front_cfg
+            .as_ref()
+            .map(|fc| crate::front::FrontGate::new(gate.clone(), fc.clone()));
         #[cfg(feature = "http-client")]
         let jobs: Arc<dyn JobStore> = match (&front_cfg, &d1, &front_gate) {
             (Some(fc), Some(d1s), Some(fg)) => {
-                let store = Arc::new(crate::front::store::FrontJobStore::new(d1s.clone(), Duration::from_millis(config.gateway.watch_poll_ms.max(50))));
+                let store = Arc::new(crate::front::store::FrontJobStore::new(
+                    d1s.clone(),
+                    Duration::from_millis(config.gateway.watch_poll_ms.max(50)),
+                ));
                 store.set_insert_behind(Arc::new(|_| true));
                 store.set_waiter(crate::front::DoWaiter::new(fc, fg.families()));
                 store
             }
-            (Some(_), None, _) => return Err(anyhow!("dispatch.front needs the D1 job store (jobs.backend = d1)")),
+            (Some(_), None, _) => {
+                return Err(anyhow!(
+                    "dispatch.front needs the D1 job store (jobs.backend = d1)"
+                ))
+            }
             _ => jobs,
         };
         #[cfg(not(feature = "http-client"))]
         if worker_role {
-            return Err(anyhow!("the worker role needs fv-serve built with `http-client`"));
+            return Err(anyhow!(
+                "the worker role needs fv-serve built with `http-client`"
+            ));
         }
         #[cfg(feature = "http-client")]
         let engine_gate: Arc<dyn fastvideo_serve_kit::EngineGate> = match &front_gate {
@@ -479,11 +547,17 @@ impl App {
         // negotiates against (crate::flags).
         let flags = match &d1 {
             Some(d) => crate::flags::FeatureFlags::d1(d.client().clone()).await,
-            None => crate::flags::FeatureFlags::file(config.server.state_dir.join("feature_flags.json")).await,
+            None => {
+                crate::flags::FeatureFlags::file(config.server.state_dir.join("feature_flags.json"))
+                    .await
+            }
         };
         let flags_refresh = flags.spawn_refresh(Duration::from_secs(30));
         let engine_gate: Arc<dyn fastvideo_serve_kit::EngineGate> =
-            Arc::new(crate::flags::FlaggedGate { inner: engine_gate, flags: flags.clone() });
+            Arc::new(crate::flags::FlaggedGate {
+                inner: engine_gate,
+                flags: flags.clone(),
+            });
         let mut builder = ServeCtx::builder(sc, engine_gate)
             .auth(Auth::new(config.auth.mode, keys).with_key_store(key_store.clone()))
             .url_key(key)
@@ -511,7 +585,10 @@ impl App {
         if let Some(m) = moderator {
             builder = builder.moderator(m);
         }
-        let ctx = builder.build().await.context("building the serve context")?;
+        let ctx = builder
+            .build()
+            .await
+            .context("building the serve context")?;
         gate.attach(ctx.clone());
         #[cfg(feature = "http-client")]
         if let (Some(f), Some(fc)) = (&front_gate, &front_cfg) {
@@ -519,7 +596,8 @@ impl App {
             // Upload tokens carry this front's tag (the edge routes their
             // PUT and file reads here); other fronts' uploads come through
             // the edge.
-            ctx.uploads().set_token_prefix(&fastvideo_dispatch_proto::front::worker_tag(&worker));
+            ctx.uploads()
+                .set_token_prefix(&fastvideo_dispatch_proto::front::worker_tag(&worker));
             ctx.uploads().set_remote(crate::front::EdgeUploads::new(fc));
         }
         let admin = Arc::new(admin);
@@ -528,11 +606,17 @@ impl App {
         // ingest): they share the `[webrtc]` ports.
         #[cfg(feature = "webrtc")]
         let ingest_on = config.protocols.native
-            && gate.engine().caps().models().any(|m| m.stream.as_ref().is_some_and(|s| s.duplex().is_some()));
+            && gate
+                .engine()
+                .caps()
+                .models()
+                .any(|m| m.stream.as_ref().is_some_and(|s| s.duplex().is_some()));
         #[cfg(feature = "webrtc")]
         let rtc_host = {
             let reactor_on = cfg!(feature = "reactor") && config.protocols.reactor;
-            let director_on = cfg!(all(feature = "fal", feature = "webrtc")) && config.protocols.fal && config.protocols.fal_director;
+            let director_on = cfg!(all(feature = "fal", feature = "webrtc"))
+                && config.protocols.fal
+                && config.protocols.fal_director;
             if reactor_on || director_on || ingest_on {
                 match crate::rtc::bind(&config).await {
                     Ok(h) => Some(h),
@@ -571,11 +655,16 @@ impl App {
         #[cfg(feature = "webrtc")]
         if let (Some(host), true) = (&rtc_host, ingest_on) {
             let settings = crate::ingest::IngestSettings::from_config(&config);
-            streams = streams.merge(crate::ingest::routes(gate.clone(), host.clone(), settings).with_state(ctx.clone()));
+            streams = streams.merge(
+                crate::ingest::routes(gate.clone(), host.clone(), settings).with_state(ctx.clone()),
+            );
         }
         // Minted API keys: /fv/v1/admin/keys behind the admin token.
         streams = streams
-            .merge(fastvideo_serve_kit::admin_routes(key_store.clone(), admin.clone()))
+            .merge(fastvideo_serve_kit::admin_routes(
+                key_store.clone(),
+                admin.clone(),
+            ))
             .merge(crate::flags::routes(flags.clone(), admin.clone()))
             .merge(crate::admin_token::routes(sealed_admin));
         // Edge sessions taken by the family links, bound to the director
@@ -590,8 +679,17 @@ impl App {
         #[allow(unused_mut)]
         let mut fal_extra: Router<ServeCtx> = Router::new();
         #[cfg(all(feature = "fal", feature = "webrtc"))]
-        if let (Some(host), true) = (&rtc_host, config.protocols.fal && config.protocols.fal_director) {
-            let svc = crate::director::build(&config, &mcfg, gate.engine().clone(), host.clone(), Some(edge_sessions.clone()));
+        if let (Some(host), true) = (
+            &rtc_host,
+            config.protocols.fal && config.protocols.fal_director,
+        ) {
+            let svc = crate::director::build(
+                &config,
+                &mcfg,
+                gate.engine().clone(),
+                host.clone(),
+                Some(edge_sessions.clone()),
+            );
             fal_extra = fastvideo_fal::director::routes(svc);
         }
         #[allow(unused_mut)]
@@ -603,9 +701,13 @@ impl App {
         #[cfg(feature = "http-client")]
         if worker_role {
             let drained = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            if let (Some(pool), Some(d), Some(url), true, Mode::Http) =
-                (&config.gateway.pool, &d1, &config.server.public_base_url, config.gateway.register, config.server.mode)
-            {
+            if let (Some(pool), Some(d), Some(url), true, Mode::Http) = (
+                &config.gateway.pool,
+                &d1,
+                &config.server.public_base_url,
+                config.gateway.register,
+                config.server.mode,
+            ) {
                 let reg = crate::worker::Registration {
                     db: d.client().clone(),
                     pool: pool.clone(),
@@ -633,10 +735,23 @@ impl App {
             // internal routes stay.
             // This pod's own URL (signalling, the edge's forwards); the
             // public base stays the URL clients see (the edge, behind one).
-            let endpoint = config.dispatch.endpoint.clone().unwrap_or_else(|| base.as_str().to_owned()).trim_end_matches('/').to_owned();
+            let endpoint = config
+                .dispatch
+                .endpoint
+                .clone()
+                .unwrap_or_else(|| base.as_str().to_owned())
+                .trim_end_matches('/')
+                .to_owned();
             let front_source = config.dispatch.front.then(|| {
-                let (cfg, gate, url, id) = (Arc::new(config.clone()), gate.clone(), endpoint.clone(), worker.clone());
-                crate::edge_link::FrontSource(Arc::new(move || crate::front::front_info(&cfg, &gate, &url, &id)))
+                let (cfg, gate, url, id) = (
+                    Arc::new(config.clone()),
+                    gate.clone(),
+                    endpoint.clone(),
+                    worker.clone(),
+                );
+                crate::edge_link::FrontSource(Arc::new(move || {
+                    crate::front::front_info(&cfg, &gate, &url, &id)
+                }))
             });
             if let Some(do_url) = &config.dispatch.do_url {
                 use fastvideo_dispatch_proto::Scope;
@@ -662,10 +777,18 @@ impl App {
                         sessions: edge_sessions.clone(),
                     };
                     for f in &config.dispatch.families {
-                        background.push(crate::edge_link::spawn(st.clone(), link(Scope::Family(f.clone())), Some(fam.clone())));
+                        background.push(crate::edge_link::spawn(
+                            st.clone(),
+                            link(Scope::Family(f.clone())),
+                            Some(fam.clone()),
+                        ));
                     }
                 } else if let Some(pool) = &config.gateway.pool {
-                    background.push(crate::edge_link::spawn(st.clone(), link(Scope::Pool(pool.clone())), None));
+                    background.push(crate::edge_link::spawn(
+                        st.clone(),
+                        link(Scope::Pool(pool.clone())),
+                        None,
+                    ));
                 }
             }
             streams = streams.merge(crate::worker::routes_shared(st));
@@ -673,19 +796,24 @@ impl App {
         let mut router = assemble(&config, &ctx, &gate, jobs_kind, streams, fal_extra);
         #[cfg(feature = "http-client")]
         if worker_role {
-            router = crate::worker::token_layer(router, Arc::from(config.gateway.internal_token.expose()), direct, front);
+            router = crate::worker::token_layer(
+                router,
+                Arc::from(config.gateway.internal_token.expose()),
+                direct,
+                front,
+            );
         }
         if config.server.forward {
             let ready = Arc::new(std::sync::OnceLock::new());
-            let h = fastvideo_deploy::dispatch::RouterHandler::new(router.clone()).with_info(crate::deploy::info_fn(
-                &config,
-                gate.clone(),
-                crate::deploy::Boot::now(),
-                ready,
-            ));
+            let h = fastvideo_deploy::dispatch::RouterHandler::new(router.clone()).with_info(
+                crate::deploy::info_fn(&config, gate.clone(), crate::deploy::Boot::now(), ready),
+            );
             router = crate::deploy::with_forward(router, h);
         }
-        let sweeper = spawn_sweeper(jobs, Duration::from_secs(config.jobs.sweep_interval_s.max(1)));
+        let sweeper = spawn_sweeper(
+            jobs,
+            Duration::from_secs(config.jobs.sweep_interval_s.max(1)),
+        );
         // D1 is shared between workers: reload it so keys minted or revoked
         // elsewhere apply here within 30 s.
         let refresh = (key_store.backend_kind() == "d1").then_some(Duration::from_secs(30));
@@ -714,7 +842,11 @@ impl App {
     /// Serves on `listener` until `stop` resolves, then drains (§6.3):
     /// admission stops (503), queued jobs are cancelled, the running one
     /// gets `shutdown_grace`, pending D1 writes are flushed, HTTP closes.
-    pub async fn serve(self, listener: TcpListener, stop: impl std::future::Future<Output = ()> + Send + 'static) -> anyhow::Result<()> {
+    pub async fn serve(
+        self,
+        listener: TcpListener,
+        stop: impl std::future::Future<Output = ()> + Send + 'static,
+    ) -> anyhow::Result<()> {
         self.announce();
         let drained = self.drain_after(stop);
         axum::serve(listener, self.router.clone())
@@ -731,7 +863,10 @@ impl App {
     }
 
     /// Waits for `stop`, then drains (see [`App::serve`]).
-    fn drain_after(&self, stop: impl std::future::Future<Output = ()> + Send + 'static) -> impl std::future::Future<Output = ()> + Send + 'static {
+    fn drain_after(
+        &self,
+        stop: impl std::future::Future<Output = ()> + Send + 'static,
+    ) -> impl std::future::Future<Output = ()> + Send + 'static {
         let gate = self.gate.clone();
         let grace = self.config.shutdown_grace();
         let d1 = self.d1.clone();
@@ -818,7 +953,10 @@ pub async fn serve_while_building(
     tracing::info!("app built: serving every route");
     app.drain_after(stopped(stop_rx)).await;
     let _ = tx.send(());
-    server.await.context("HTTP server task")?.context("HTTP server")?;
+    server
+        .await
+        .context("HTTP server task")?
+        .context("HTTP server")?;
     Ok(())
 }
 
@@ -850,7 +988,11 @@ fn booting_reply(path: &str) -> axum::response::Response {
             Json(json!({"status": "loading", "model_loaded": false, "state": "LOADING"})),
         )
             .into_response(),
-        "/healthz" => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"state": "starting"}))).into_response(),
+        "/healthz" => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"state": "starting"})),
+        )
+            .into_response(),
         _ => (
             StatusCode::SERVICE_UNAVAILABLE,
             [(header::RETRY_AFTER, "5")],
@@ -861,7 +1003,11 @@ fn booting_reply(path: &str) -> axum::response::Response {
 }
 
 /// Stops admission, drains the engine, waits for the job pumps, flushes D1.
-pub async fn drain(gate: &ServiceGate, grace: Duration, d1: Option<&fastvideo_serve_kit::D1JobStore>) {
+pub async fn drain(
+    gate: &ServiceGate,
+    grace: Duration,
+    d1: Option<&fastvideo_serve_kit::D1JobStore>,
+) {
     gate.stop_admission();
     gate.engine().drain(grace).await;
     // Let the per-job pumps record the terminal events (and fire callbacks).
@@ -877,7 +1023,12 @@ fn announce_ready(gate: Arc<ServiceGate>) {
     tokio::spawn(async move {
         match gate.engine().wait_ready().await {
             Readiness::Ready => {
-                let ids: Vec<String> = gate.engine().caps().models().map(|m| m.id.0.clone()).collect();
+                let ids: Vec<String> = gate
+                    .engine()
+                    .caps()
+                    .models()
+                    .map(|m| m.id.0.clone())
+                    .collect();
                 println!("FV-SERVE READY models={}", ids.join(","));
                 tracing::info!(models = ids.len(), "ready");
             }
@@ -937,8 +1088,17 @@ pub fn assemble(
     let mcfg = mount_cfg(config);
     let mut kit: Router<ServeCtx> = ctx.routes();
     if config.protocols.native {
-        kit = kit.merge(native::routes(gate.clone(), mcfg.body_max, mcfg.sync_timeout, config.streams.causal_limits(), mounted_protocols(config)));
-        kit = kit.merge(crate::streams::routes(gate.clone(), crate::streams::StreamsConfig::from_config(config)));
+        kit = kit.merge(native::routes(
+            gate.clone(),
+            mcfg.body_max,
+            mcfg.sync_timeout,
+            config.streams.causal_limits(),
+            mounted_protocols(config),
+        ));
+        kit = kit.merge(crate::streams::routes(
+            gate.clone(),
+            crate::streams::StreamsConfig::from_config(config),
+        ));
         if config.segments.enabled {
             kit = kit.merge(crate::segments::routes(
                 gate.clone(),

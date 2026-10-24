@@ -35,7 +35,7 @@ weights volume). Mac/CI stay on CPU (cudarc without `--features cuda` /
 Everything below is wrapped in a [Taskfile](https://taskfile.dev) — `task` alone lists them.
 
 ```bash
-task check      # lint, tests, the NVRTC gate, cuda type-check — no GPU, no cost
+task check      # shell lint, rustfmt --check, clippy -D warnings, tests, the NVRTC gate, cuda type-check — no GPU, no cost
 task rtx6000    # one RTX PRO 6000 on Runpod: weight gate, then H3 / FastH3 / LTX-2.5 parity cells (~$2/hr)
 task clip       # the older Vast ladder (scripts/gpu/validate.sh): T1 → T3 on one box
 task gen PROMPT="a dog running on a beach"

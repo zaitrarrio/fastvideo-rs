@@ -10,10 +10,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use fastvideo_engine_service::{CancelToken, CausalControl, CausalSession, ClipBuild, ClipSession, EngineService};
+use fastvideo_engine_service::{
+    CancelToken, CausalControl, CausalSession, ClipBuild, ClipSession, EngineService,
+};
 use fastvideo_fal::director::service::{LeaseHook, SessionLeases};
 use fastvideo_fal::director::{
-    ChunkBuild, ChunkOutput, DirectorClips, DirectorConfig, DirectorEngine, DirectorService, DirectorStream, StreamBlock,
+    ChunkBuild, ChunkOutput, DirectorClips, DirectorConfig, DirectorEngine, DirectorService,
+    DirectorStream, StreamBlock,
 };
 use fastvideo_media::video::EncoderBackend;
 use fastvideo_protocol::{ApiError, JobId, ModelCaps, SessionSpec};
@@ -75,7 +78,9 @@ impl DirectorClips for Clips {
         };
         let job = {
             let g = self.session.read().await;
-            let s = g.as_ref().ok_or_else(|| ApiError::internal("the clip session is closed"))?;
+            let s = g
+                .as_ref()
+                .ok_or_else(|| ApiError::internal("the clip session is closed"))?;
             s.build(b).await?
         };
         let id = job.id;
@@ -83,7 +88,10 @@ impl DirectorClips for Clips {
         let out = job.wait().await;
         self.inflight().retain(|(j, _)| *j != id);
         let out = out?;
-        Ok(ChunkOutput { frames: out.frames.unwrap_or_default(), audio: out.audio })
+        Ok(ChunkOutput {
+            frames: out.frames.unwrap_or_default(),
+            audio: out.audio,
+        })
     }
     async fn close(&self) {
         let tokens: Vec<CancelToken> = self.inflight().drain(..).map(|(_, t)| t).collect();
@@ -108,7 +116,12 @@ pub struct Stream {
 
 impl Stream {
     pub fn new(s: CausalSession) -> Self {
-        Self { caps: s.caps().clone(), spec: s.spec().clone(), control: s.control(), session: tokio::sync::Mutex::new(Some(s)) }
+        Self {
+            caps: s.caps().clone(),
+            spec: s.spec().clone(),
+            control: s.control(),
+            session: tokio::sync::Mutex::new(Some(s)),
+        }
     }
 }
 
@@ -181,7 +194,10 @@ fn buffer_max_bytes(mb: u64) -> u64 {
         return mb << 20;
     }
     let avail_kb = std::fs::read_to_string("/proc/meminfo").ok().and_then(|m| {
-        m.lines().find_map(|l| l.strip_prefix("MemAvailable:").and_then(|v| v.trim().trim_end_matches("kB").trim().parse::<u64>().ok()))
+        m.lines().find_map(|l| {
+            l.strip_prefix("MemAvailable:")
+                .and_then(|v| v.trim().trim_end_matches("kB").trim().parse::<u64>().ok())
+        })
     });
     match avail_kb {
         Some(kb) => ((kb << 10) / 2).max(2 << 30),
@@ -197,7 +213,11 @@ pub fn director_config(c: &Config, m: &MountCfg, host: &RtcHost) -> DirectorConf
         // `fastvideo/ltx-turbo` or `fastvideo/longlive`); fal's LTX and Wan
         // family apps have no director. A causal model's app runs the causal
         // director (docs/serve/director-causal.md).
-        apps: crate::adapters::fal_config(m).apps.into_iter().filter(|a| a.kind().director()).collect(),
+        apps: crate::adapters::fal_config(m)
+            .apps
+            .into_iter()
+            .filter(|a| a.kind().director())
+            .collect(),
         ice_servers: host.ice_servers().to_vec(),
         chunk_seconds: d.chunk_seconds,
         max_session_seconds: (d.max_session_seconds > 0).then_some(d.max_session_seconds),
@@ -211,14 +231,17 @@ pub fn director_config(c: &Config, m: &MountCfg, host: &RtcHost) -> DirectorConf
         heartbeat_timeout: Duration::from_secs(15),
         causal_chunk_blocks: d.causal_chunk_blocks.max(1),
         // 0: never pause; a lead below half a second is half a second.
-        causal_lead_seconds: if d.causal_lead_seconds > 0.0 { d.causal_lead_seconds.max(0.5) } else { 0.0 },
+        causal_lead_seconds: if d.causal_lead_seconds > 0.0 {
+            d.causal_lead_seconds.max(0.5)
+        } else {
+            0.0
+        },
         outputs: crate::stream_outputs::hook(c),
         allow_output: d.allow_output,
         upsample_wait: d.upsample_wait,
         ..DirectorConfig::default()
     }
 }
-
 
 /// Director sessions behind the edge: a session binds to the edge session
 /// admitted for it when it starts and gives its lease back when it ends
@@ -239,7 +262,13 @@ impl SessionLeases for EdgeLeases {
 /// The director service on the shared WebRTC host (`crate::rtc`);
 /// `edge`: the worker's edge sessions (a session that ends gives its lease
 /// back at once).
-pub fn build(c: &Config, m: &MountCfg, engine: EngineService, host: RtcHost, edge: Option<Arc<crate::edge_sessions::EdgeSessions>>) -> Arc<DirectorService> {
+pub fn build(
+    c: &Config,
+    m: &MountCfg,
+    engine: EngineService,
+    host: RtcHost,
+    edge: Option<Arc<crate::edge_sessions::EdgeSessions>>,
+) -> Arc<DirectorService> {
     let mut cfg = director_config(c, m, &host);
     cfg.leases = edge.map(|e| LeaseHook(Arc::new(EdgeLeases(e))));
     tracing::info!(apps = cfg.apps.len(), udp = ?host.udp_addr(), tcp = ?host.tcp_addr(), "fal director mounted");
@@ -259,13 +288,25 @@ mod tests {
         let mut c = Config::default();
         c.engine.fake.step_ms = 2_000;
         let engine = crate::app::build_engine(&c).unwrap();
-        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let spec = SessionSpec {
                 model: "fake-h3-turbo".into(),
                 tracks: TrackSet {
-                    video: VideoTrack { name: "main_video".into(), width: 64, height: 32, fps: 24 },
-                    audio: Some(AudioTrack { name: "main_audio".into(), rate: 48_000, channels: 2 }),
+                    video: VideoTrack {
+                        name: "main_video".into(),
+                        width: 64,
+                        height: 32,
+                        fps: 24,
+                    },
+                    audio: Some(AudioTrack {
+                        name: "main_audio".into(),
+                        rate: 48_000,
+                        channels: 2,
+                    }),
                 },
                 canvas: (64, 32),
                 fps: 24,
@@ -282,12 +323,20 @@ mod tests {
             };
             let c2 = clips.clone();
             let build = tokio::spawn(async move {
-                c2.build(ChunkBuild { prompt: "p".into(), seconds: 5.0, ..ChunkBuild::default() }).await
+                c2.build(ChunkBuild {
+                    prompt: "p".into(),
+                    seconds: 5.0,
+                    ..ChunkBuild::default()
+                })
+                .await
             });
             tokio::time::sleep(Duration::from_millis(300)).await;
             let t0 = std::time::Instant::now();
             clips.close().await;
-            let r = tokio::time::timeout(Duration::from_secs(5), build).await.expect("build ends").unwrap();
+            let r = tokio::time::timeout(Duration::from_secs(5), build)
+                .await
+                .expect("build ends")
+                .unwrap();
             let e = r.expect_err("the build is cancelled");
             assert!(fastvideo_engine_service::cancel::is_cancel(&e), "{e:?}");
             assert!(t0.elapsed() < Duration::from_secs(5));
@@ -300,9 +349,14 @@ mod tests {
         c.director.max_session_seconds = 600;
         c.director.encoder = "openh264".into();
         let m = crate::app::mount_cfg(&c);
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
-            let host = RtcHost::bind(HostConfig::loopback(true, false)).await.unwrap();
+            let host = RtcHost::bind(HostConfig::loopback(true, false))
+                .await
+                .unwrap();
             let d = director_config(&c, &m, &host);
             assert_eq!(d.apps.len(), fastvideo_fal::DEFAULT_APPS.len());
             assert_eq!(d.max_session_seconds, Some(600));

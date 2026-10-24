@@ -13,8 +13,8 @@ use fastvideo_engine_service::{
 };
 use fastvideo_media::pacer::VideoOut;
 use fastvideo_protocol::{
-    AudioPlan, CausalLimits, Continuity, EndReason, JobId, ModelId, PostProcess, ResolvedJob, SamplingOverrides,
-    SessionSpec, StreamCaps, Task, TrackSet,
+    AudioPlan, CausalLimits, Continuity, EndReason, JobId, ModelId, PostProcess, ResolvedJob,
+    SamplingOverrides, SessionSpec, StreamCaps, Task, TrackSet,
 };
 
 const T: Duration = Duration::from_secs(20);
@@ -28,8 +28,15 @@ async fn engine(step_ms: u64) -> EngineService {
         mp4: Mp4Mode::Off,
         ..FakeConfig::default()
     };
-    let e = EngineService::start(EngineConfig::default(), vec![Box::new(FakeBackend::new(cfg))]).unwrap();
-    assert_eq!(tokio::time::timeout(T, e.wait_ready()).await.unwrap(), Readiness::Ready);
+    let e = EngineService::start(
+        EngineConfig::default(),
+        vec![Box::new(FakeBackend::new(cfg))],
+    )
+    .unwrap();
+    assert_eq!(
+        tokio::time::timeout(T, e.wait_ready()).await.unwrap(),
+        Readiness::Ready
+    );
     e
 }
 
@@ -74,31 +81,54 @@ async fn the_reactor_causal_command_set() {
     let e = engine(1).await;
     let s = e.open_causal_session(spec()).await.unwrap();
     let c = s.control();
-    let CausalReply::StateUpdate(st) = c.apply(CausalCommand::GetState) else { panic!() };
-    assert_eq!((st.prompt.as_str(), st.paused, st.seed, st.block_index), ("", false, 7, 0));
+    let CausalReply::StateUpdate(st) = c.apply(CausalCommand::GetState) else {
+        panic!()
+    };
     assert_eq!(
-        c.apply(CausalCommand::SetPrompt { prompt: "  ".into() }),
+        (st.prompt.as_str(), st.paused, st.seed, st.block_index),
+        ("", false, 7, 0)
+    );
+    assert_eq!(
+        c.apply(CausalCommand::SetPrompt {
+            prompt: "  ".into()
+        }),
         CausalReply::CommandError {
             command: "set_prompt".into(),
             reason: "The prompt is empty.".into()
         }
     );
-    let CausalReply::StateUpdate(st) = c.apply(CausalCommand::SetPrompt { prompt: "a fox".into() }) else { panic!() };
+    let CausalReply::StateUpdate(st) = c.apply(CausalCommand::SetPrompt {
+        prompt: "a fox".into(),
+    }) else {
+        panic!()
+    };
     assert_eq!(st.prompt, "a fox");
-    let CausalReply::StateUpdate(st) = c.apply(CausalCommand::SetSeed { seed: 9 }) else { panic!() };
+    let CausalReply::StateUpdate(st) = c.apply(CausalCommand::SetSeed { seed: 9 }) else {
+        panic!()
+    };
     assert_eq!(st.seed, 9);
-    let CausalReply::StateUpdate(st) = c.apply(CausalCommand::SetPaused { paused: true }) else { panic!() };
+    let CausalReply::StateUpdate(st) = c.apply(CausalCommand::SetPaused { paused: true }) else {
+        panic!()
+    };
     assert!(st.paused);
     // Wire shape: {"type":"state_update","data":{prompt,paused,seed,block_index,unique_fps}}.
     let v = serde_json::to_value(c.apply(CausalCommand::GetState)).unwrap();
     assert_eq!(v["type"], "state_update");
     let mut keys: Vec<String> = v["data"].as_object().unwrap().keys().cloned().collect();
     keys.sort();
-    assert_eq!(keys, ["block_index", "paused", "prompt", "seed", "unique_fps"]);
-    let cmd: CausalCommand = serde_json::from_value(serde_json::json!({"type": "set_prompt", "data": {"prompt": "x"}})).unwrap();
+    assert_eq!(
+        keys,
+        ["block_index", "paused", "prompt", "seed", "unique_fps"]
+    );
+    let cmd: CausalCommand =
+        serde_json::from_value(serde_json::json!({"type": "set_prompt", "data": {"prompt": "x"}}))
+            .unwrap();
     assert_eq!(cmd.name(), "set_prompt");
     s.close();
-    assert!(matches!(c.apply(CausalCommand::GetState), CausalReply::CommandError { .. }));
+    assert!(matches!(
+        c.apply(CausalCommand::GetState),
+        CausalReply::CommandError { .. }
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -108,14 +138,22 @@ async fn prompt_switches_land_at_block_boundaries_and_reset_restarts() {
     assert_eq!(s.set_prompt("one"), 1);
     let mut seen = Vec::new();
     for _ in 0..3 {
-        let b = tokio::time::timeout(T, s.next_block()).await.unwrap().unwrap().unwrap();
+        let b = tokio::time::timeout(T, s.next_block())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         seen.push((b.index, b.prompt_version));
     }
     assert_eq!(s.set_prompt("two"), 2);
     // Blocks already generated or in flight keep version 1; every later one is 2.
     let mut switched = false;
     for _ in 0..8 {
-        let b = tokio::time::timeout(T, s.next_block()).await.unwrap().unwrap().unwrap();
+        let b = tokio::time::timeout(T, s.next_block())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         assert!(b.prompt_version >= if switched { 2 } else { 1 });
         switched |= b.prompt_version == 2;
         assert_eq!(b.frames.len(), 12);
@@ -126,7 +164,11 @@ async fn prompt_switches_land_at_block_boundaries_and_reset_restarts() {
     assert!(idx.windows(2).all(|w| w[1] == w[0] + 1), "{idx:?}");
     s.reset();
     loop {
-        let b = tokio::time::timeout(T, s.next_block()).await.unwrap().unwrap().unwrap();
+        let b = tokio::time::timeout(T, s.next_block())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         if b.reset {
             assert_eq!(b.index, 0);
             break;
@@ -141,12 +183,21 @@ async fn the_lease_is_exclusive_and_batch_waits() {
     s.set_prompt("x");
     // One stream session per executor, Starting counts busy.
     assert!(e.open_causal_session(spec()).await.is_err());
-    let mut h = e.submit(JobId::new(), wan_job(), Priority::Batch).await.unwrap();
-    let first = tokio::time::timeout(T, h.events.recv()).await.unwrap().unwrap();
+    let mut h = e
+        .submit(JobId::new(), wan_job(), Priority::Batch)
+        .await
+        .unwrap();
+    let first = tokio::time::timeout(T, h.events.recv())
+        .await
+        .unwrap()
+        .unwrap();
     assert!(matches!(first, EngineEvent::Queued { .. }));
     tokio::time::sleep(Duration::from_millis(200)).await;
     while let Ok(ev) = h.events.try_recv() {
-        assert!(!matches!(ev, EngineEvent::Started), "batch ran under the causal lease");
+        assert!(
+            !matches!(ev, EngineEvent::Started),
+            "batch ran under the causal lease"
+        );
     }
     s.close();
     let out = tokio::time::timeout(T, h.wait()).await.unwrap();
@@ -164,7 +215,10 @@ async fn the_causal_pacer_ticks_and_reports_ttff_and_unique_fps() {
     let mut paced = spawn_causal_pacer(s, CausalPacerConfig::for_spec(&spec())).unwrap();
     let mut rtp = Vec::new();
     for _ in 0..24 {
-        let t = tokio::time::timeout(T, paced.ticks.recv()).await.unwrap().unwrap();
+        let t = tokio::time::timeout(T, paced.ticks.recv())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(t.audio.is_none(), "SF-Wan is video-only");
         assert!(!matches!(t.video, VideoOut::Nothing));
         rtp.push(t.video_rtp);
@@ -202,7 +256,10 @@ async fn a_generator_faster_than_playout_is_held_back_not_dropped() {
     let mut last: Option<u64> = None;
     let mut ticks = 0u64;
     while ticks < 64 {
-        let t = tokio::time::timeout(T, paced.ticks.recv()).await.unwrap().unwrap();
+        let t = tokio::time::timeout(T, paced.ticks.recv())
+            .await
+            .unwrap()
+            .unwrap();
         ticks += 1;
         match t.video {
             VideoOut::Fresh(f) => {
@@ -226,7 +283,11 @@ async fn a_generator_faster_than_playout_is_held_back_not_dropped() {
         _ => unreachable!(),
     };
     let generated = n * c.state().block_index;
-    assert!(generated <= st.ticks + mark as u64 + 4 * n, "generated {generated} for {} ticks", st.ticks);
+    assert!(
+        generated <= st.ticks + mark as u64 + 4 * n,
+        "generated {generated} for {} ticks",
+        st.ticks
+    );
     c.close();
     assert!(tokio::time::timeout(T, paced.task).await.is_ok());
 }
@@ -240,7 +301,11 @@ async fn max_seconds_ends_the_causal_stream_in_video_time() {
     s.set_prompt("x");
     let mut paced = spawn_causal_pacer(s, CausalPacerConfig::for_spec(&sp)).unwrap();
     let mut n = 0;
-    while tokio::time::timeout(T, paced.ticks.recv()).await.unwrap().is_some() {
+    while tokio::time::timeout(T, paced.ticks.recv())
+        .await
+        .unwrap()
+        .is_some()
+    {
         n += 1;
     }
     // Video time follows the adaptive rate (the RTP clock): playout eases in
@@ -256,15 +321,25 @@ async fn max_seconds_ends_the_causal_stream_in_video_time() {
 
 /// Runs a causal session under `limits` in tokio's paused (virtual) time
 /// until the pacer ends it; returns the stats at the end.
-async fn run_limited(limits: CausalLimits, requested: Option<u32>) -> fastvideo_engine_service::stream::PaceStats {
+async fn run_limited(
+    limits: CausalLimits,
+    requested: Option<u32>,
+) -> fastvideo_engine_service::stream::PaceStats {
     // No tokio timeouts here: paused time would fire them while the
     // (real-time) fake executor loads.
     let cfg = FakeConfig {
-        timing: FakeTiming { step: Duration::from_millis(1), ..FakeTiming::default() },
+        timing: FakeTiming {
+            step: Duration::from_millis(1),
+            ..FakeTiming::default()
+        },
         mp4: Mp4Mode::Off,
         ..FakeConfig::default()
     };
-    let e = EngineService::start(EngineConfig::default(), vec![Box::new(FakeBackend::new(cfg))]).unwrap();
+    let e = EngineService::start(
+        EngineConfig::default(),
+        vec![Box::new(FakeBackend::new(cfg))],
+    )
+    .unwrap();
     assert_eq!(e.wait_ready().await, Readiness::Ready);
     let mut sp = spec();
     sp.max_seconds = Some(limits.resolve(requested).unwrap());
@@ -282,7 +357,11 @@ async fn run_limited(limits: CausalLimits, requested: Option<u32>) -> fastvideo_
 async fn the_default_limit_ends_a_live_session_at_120_s() {
     let st = run_limited(CausalLimits::default(), None).await;
     assert_eq!(st.ended, Some(EndReason::SessionLimit));
-    assert!((120.0..121.0).contains(&st.video_seconds), "{}", st.video_seconds);
+    assert!(
+        (120.0..121.0).contains(&st.video_seconds),
+        "{}",
+        st.video_seconds
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -290,14 +369,26 @@ async fn a_requested_limit_is_honoured_and_clamped_to_the_ceiling() {
     let l = CausalLimits::default();
     let st = run_limited(l, Some(30)).await;
     assert_eq!(st.ended, Some(EndReason::SessionLimit));
-    assert!((30.0..31.0).contains(&st.video_seconds), "{}", st.video_seconds);
+    assert!(
+        (30.0..31.0).contains(&st.video_seconds),
+        "{}",
+        st.video_seconds
+    );
     let st = run_limited(l, Some(200)).await;
-    assert!((200.0..201.0).contains(&st.video_seconds), "{}", st.video_seconds);
+    assert!(
+        (200.0..201.0).contains(&st.video_seconds),
+        "{}",
+        st.video_seconds
+    );
     // 3600 asked, 300 served.
     assert_eq!(l.resolve(Some(3600)).unwrap(), 300);
     let st = run_limited(l, Some(3600)).await;
     assert_eq!(st.ended, Some(EndReason::SessionLimit));
-    assert!((300.0..301.0).contains(&st.video_seconds), "{}", st.video_seconds);
+    assert!(
+        (300.0..301.0).contains(&st.video_seconds),
+        "{}",
+        st.video_seconds
+    );
     assert!(l.resolve(Some(0)).is_err());
 }
 
@@ -306,16 +397,26 @@ async fn a_reset_restarts_the_clock_up_to_the_hard_ceiling() {
     let e = engine(1).await;
     // Real time, small limits: a reset lands a few blocks after it is asked
     // for (the blocks already queued play first), well inside the 4 s window.
-    let limits = CausalLimits { default_max_s: 4, hard_max_s: 9 };
+    let limits = CausalLimits {
+        default_max_s: 4,
+        hard_max_s: 9,
+    };
     let mut sp = spec();
     sp.max_seconds = Some(limits.resolve(None).unwrap());
     let s = e.open_causal_session(sp.clone()).await.unwrap();
     s.set_prompt("x");
     let c = s.control();
-    let cfg = CausalPacerConfig { buffer_frames: 12, ..CausalPacerConfig::with_limits(&sp, &limits) };
+    let cfg = CausalPacerConfig {
+        buffer_frames: 12,
+        ..CausalPacerConfig::with_limits(&sp, &limits)
+    };
     let mut paced = spawn_causal_pacer(s, cfg).unwrap();
     let (mut resets, mut pending, mut last, mut peak) = (0, false, 0.0f64, 0.0f64);
-    while tokio::time::timeout(T, paced.ticks.recv()).await.unwrap().is_some() {
+    while tokio::time::timeout(T, paced.ticks.recv())
+        .await
+        .unwrap()
+        .is_some()
+    {
         let st = paced.stats.borrow().clone();
         if st.limit_seconds < last {
             pending = false; // the reset block arrived: the clock restarted
@@ -333,5 +434,10 @@ async fn a_reset_restarts_the_clock_up_to_the_hard_ceiling() {
     assert!(resets >= 2, "{resets} resets");
     assert!(peak < 4.0, "the window reached {peak} s");
     // Ended by the 9 s ceiling, not the 4 s window.
-    assert!((9.0..9.4).contains(&st.video_seconds), "{} s, {} in the window", st.video_seconds, st.limit_seconds);
+    assert!(
+        (9.0..9.4).contains(&st.video_seconds),
+        "{} s, {} in the window",
+        st.video_seconds,
+        st.limit_seconds
+    );
 }

@@ -9,7 +9,11 @@ use fastvideo_serve::config::{Config, ProcessEnv};
 use fastvideo_serve::{App, Overrides};
 
 #[derive(Debug, Parser)]
-#[command(name = "fv-serve", version, about = "fastvideo-rs serving: FastVideo, MiniMax, fal, LTX and Reactor APIs")]
+#[command(
+    name = "fv-serve",
+    version,
+    about = "fastvideo-rs serving: FastVideo, MiniMax, fal, LTX and Reactor APIs"
+)]
 struct Args {
     /// TOML config (docs/serve/design.md §6.1, configs/serve/).
     #[arg(long, env = "FV_CONFIG")]
@@ -55,11 +59,17 @@ fn main() -> ExitCode {
         }
     };
     if args.print_config {
-        println!("{}", serde_json::to_string_pretty(&config.redacted()).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&config.redacted()).unwrap_or_default()
+        );
         return ExitCode::SUCCESS;
     }
     init_tracing(&config);
-    let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("fv-serve: tokio runtime: {e}");

@@ -5,7 +5,6 @@
 pub(crate) mod act16;
 pub mod affine;
 pub mod ar_cache;
-pub mod causal;
 pub mod attn;
 #[cfg(feature = "cuda")]
 pub mod attn_dc;
@@ -13,6 +12,7 @@ pub mod attn_fp4;
 pub mod attn_fp8;
 pub mod attn_sage;
 pub mod bf16_gemm;
+pub mod causal;
 pub mod clip;
 #[cfg(feature = "cuda")]
 pub mod conv;
@@ -20,15 +20,15 @@ pub mod cudnn_sdpa;
 pub mod device;
 pub mod dump;
 pub mod envflag;
-pub mod graph;
-pub mod hostmem;
 pub mod evalstats;
 #[cfg(feature = "cuda")]
 pub mod fp8;
 pub mod fuse;
 pub mod fused;
 pub mod gpu_trace;
+pub mod graph;
 pub mod hopper;
+pub mod hostmem;
 pub mod inject;
 #[cfg(feature = "cuda")]
 pub mod kernels;
@@ -56,10 +56,10 @@ pub mod sla;
 pub mod sol_cache;
 pub mod sol_ops;
 pub mod sp;
-pub mod stream;
-pub mod stats;
 #[cfg(feature = "cuda")]
 pub mod stage_upload;
+pub mod stats;
+pub mod stream;
 pub mod taehv;
 pub mod taehv_ref;
 pub mod tensor;
@@ -86,15 +86,17 @@ mod tests {
     #[test]
     fn tiny_generate_writes_png() {
         let mut pipe = WanPipeline::tiny();
-        let mut cfg = GenerateConfig::default();
-        cfg.tiny = true;
-        cfg.is_dmd = true;
-        cfg.flow_shift = 8.0;
-        cfg.guidance_scale = 1.0;
-        cfg.output_dir = std::env::temp_dir()
-            .join("fastvideo-cudarc-tiny")
-            .to_string_lossy()
-            .into();
+        let cfg = GenerateConfig {
+            tiny: true,
+            is_dmd: true,
+            flow_shift: 8.0,
+            guidance_scale: 1.0,
+            output_dir: std::env::temp_dir()
+                .join("fastvideo-cudarc-tiny")
+                .to_string_lossy()
+                .into(),
+            ..Default::default()
+        };
         let paths = pipe.generate(&cfg).unwrap();
         assert!(!paths.is_empty());
         assert!(Path::new(&paths[0]).exists());
@@ -109,15 +111,17 @@ mod tests {
     #[test]
     fn tiny_generate_with_cfg_writes_png() {
         let mut pipe = WanPipeline::tiny();
-        let mut cfg = GenerateConfig::default();
-        cfg.tiny = true;
-        cfg.is_dmd = true;
-        cfg.flow_shift = 8.0;
-        cfg.guidance_scale = 2.5;
-        cfg.output_dir = std::env::temp_dir()
-            .join("fastvideo-cudarc-tiny-cfg")
-            .to_string_lossy()
-            .into();
+        let cfg = GenerateConfig {
+            tiny: true,
+            is_dmd: true,
+            flow_shift: 8.0,
+            guidance_scale: 2.5,
+            output_dir: std::env::temp_dir()
+                .join("fastvideo-cudarc-tiny-cfg")
+                .to_string_lossy()
+                .into(),
+            ..Default::default()
+        };
         let paths = pipe.generate(&cfg).unwrap();
         assert!(!paths.is_empty());
         assert!(Path::new(&paths[0]).exists());

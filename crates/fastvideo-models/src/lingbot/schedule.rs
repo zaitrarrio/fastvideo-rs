@@ -35,7 +35,9 @@ pub fn refiner_sigmas(
     tail_steps: usize,
 ) -> Result<Vec<f64>, String> {
     if !(t_thresh > 0.0 && t_thresh <= 1.0) {
-        return Err(format!("refiner t_thresh must lie in (0, 1], got {t_thresh}"));
+        return Err(format!(
+            "refiner t_thresh must lie in (0, 1], got {t_thresh}"
+        ));
     }
     if num_inference_steps == 0 {
         return Err("refiner steps must be >= 1".into());
@@ -60,7 +62,9 @@ pub fn refiner_sigmas(
         }
     }
     if sigmas.windows(2).any(|w| w[1] >= w[0]) {
-        return Err(format!("refiner sigmas not strictly descending: {sigmas:?}"));
+        return Err(format!(
+            "refiner sigmas not strictly descending: {sigmas:?}"
+        ));
     }
     Ok(sigmas.into_iter().map(|s| f64::from(s as f32)).collect())
 }
@@ -73,7 +77,14 @@ pub fn refiner_unipc(
     tail_steps: usize,
 ) -> Result<FlowUniPCMultistepScheduler, String> {
     let mut s = FlowUniPCMultistepScheduler::new(1_000, 1.0);
-    let sigmas = refiner_sigmas(s.sigma_max(), s.sigma_min(), steps, shift, t_thresh, tail_steps)?;
+    let sigmas = refiner_sigmas(
+        s.sigma_max(),
+        s.sigma_min(),
+        steps,
+        shift,
+        t_thresh,
+        tail_steps,
+    )?;
     s.set_sigmas(&sigmas);
     Ok(s)
 }
@@ -82,11 +93,7 @@ pub fn refiner_unipc(
 /// the transformer dtype (bf16) → `* 1000` in f32.
 pub fn transformer_timestep(t: i64, bf16: bool) -> f32 {
     let sigma = t as f32 / 1000.0;
-    let sigma = if bf16 {
-        half_bf16_round(sigma)
-    } else {
-        sigma
-    };
+    let sigma = if bf16 { half_bf16_round(sigma) } else { sigma };
     sigma * 1000.0
 }
 

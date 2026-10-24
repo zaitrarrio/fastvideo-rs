@@ -115,12 +115,11 @@ impl SanaVideoPipeline {
         let dit_cfg =
             SanaVideoTransformerConfig::from_json(&read(&root.join("transformer/config.json"))?)
                 .map_err(msg)?;
-        let dit_map =
-            WeightMap::open(&root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let dit_map = WeightMap::open(&root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         let dit = SanaVideoTransformer::load(dit_cfg, opt, &dit_map)?;
         let vae_root = vae_dir.map_or_else(|| root.join("vae"), Path::to_path_buf);
-        let mut vae_cfg = WanVaeConfig::from_json_str(&read(&vae_root.join("config.json"))?)
-            .map_err(msg)?;
+        let mut vae_cfg =
+            WanVaeConfig::from_json_str(&read(&vae_root.join("config.json"))?).map_err(msg)?;
         vae_cfg.load_encoder = false;
         let vae_map = WeightMap::open(&vae_root).map_err(|e| msg(e.to_string()))?;
         let vae = AutoencoderKlWan::load(vae_cfg, &vae_map)?;

@@ -200,6 +200,7 @@ impl CosmosPipeline {
     }
 
     /// Pack noise/cond into DiT input and build per-frame AdaLN timesteps.
+    #[allow(clippy::too_many_arguments)]
     fn pack_step(
         &self,
         sample: &[f32],
@@ -233,6 +234,7 @@ impl CosmosPipeline {
         Ok((lat, frame_ts))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn edm_denoise(
         &self,
         sample: &[f32],

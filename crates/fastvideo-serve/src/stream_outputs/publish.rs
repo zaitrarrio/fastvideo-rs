@@ -22,7 +22,9 @@ use fastvideo_engine_service::stream::PacedStream;
 use fastvideo_media::output::{OutputCopy, OutputMedia, OutputOpener, OutputTap, TapReceiver};
 use fastvideo_media::pacer::VideoOut;
 use fastvideo_media::sink::{srt_url, FfmpegSink, SinkAudioIn, SinkConfig, SinkTarget};
-use fastvideo_media::video::{create_encoder, EncodedFrame, EncoderBackend, FfmpegH264, KeyframePolicy, VideoEncoder};
+use fastvideo_media::video::{
+    create_encoder, EncodedFrame, EncoderBackend, FfmpegH264, KeyframePolicy, VideoEncoder,
+};
 use fastvideo_media::vp8::{Vp8Config, Vp8Encoder};
 use fastvideo_media::RgbFrame;
 use fastvideo_protocol::{ApiError, ErrorKind};
@@ -44,7 +46,10 @@ pub(crate) enum Dest {
     Whip(WhipConfig),
     /// RTMP or SRT through the ffmpeg sink, to the IP address checked when
     /// the output started (`tc_url`: the RTMP server's own URL).
-    Sink { target: SinkTarget, tc_url: Option<String> },
+    Sink {
+        target: SinkTarget,
+        tc_url: Option<String>,
+    },
     /// RTMPS: ffmpeg publishes plain RTMP to a [`RtmpsRelay`] on loopback,
     /// which carries it over verified TLS ([`super::rtmps`]).
     Rtmps(RtmpsDest),
@@ -64,13 +69,22 @@ pub(crate) struct RtmpsDest {
 /// Resolves `host:port` once; every address must pass `policy`. The
 /// publisher connects to these addresses only, so the address checked is
 /// the address used (no second lookup a DNS change could redirect).
-async fn resolve_checked(host: &str, port: u16, policy: UrlPolicy) -> Result<Vec<SocketAddr>, ApiError> {
+async fn resolve_checked(
+    host: &str,
+    port: u16,
+    policy: UrlPolicy,
+) -> Result<Vec<SocketAddr>, ApiError> {
     let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
         .await
-        .map_err(|_| ApiError::invalid_param("output.url", "the destination host does not resolve"))?
+        .map_err(|_| {
+            ApiError::invalid_param("output.url", "the destination host does not resolve")
+        })?
         .collect();
     if addrs.is_empty() {
-        return Err(ApiError::invalid_param("output.url", "the destination host does not resolve"));
+        return Err(ApiError::invalid_param(
+            "output.url",
+            "the destination host does not resolve",
+        ));
     }
     for a in &addrs {
         check_ip(a.ip(), policy)?;
@@ -81,7 +95,8 @@ async fn resolve_checked(host: &str, port: u16, policy: UrlPolicy) -> Result<Vec
 /// `url` with its host replaced by `ip`.
 fn pin(url: &Url, ip: IpAddr) -> Result<Url, ApiError> {
     let mut u = url.clone();
-    u.set_ip_host(ip).map_err(|_| ApiError::internal("output URL: cannot pin its address"))?;
+    u.set_ip_host(ip)
+        .map_err(|_| ApiError::internal("output URL: cannot pin its address"))?;
     Ok(u)
 }
 
@@ -94,18 +109,25 @@ fn tc_url(publish: &Url) -> String {
     u.set_query(None);
     u.set_fragment(None);
     let path = u.path().trim_end_matches('/').to_owned();
-    let app = path.rsplit_once('/').map_or("", |(head, _)| head).to_owned();
+    let app = path
+        .rsplit_once('/')
+        .map_or("", |(head, _)| head)
+        .to_owned();
     u.set_path(&app);
     u.to_string().trim_end_matches('/').to_owned()
 }
 
 fn url_host(u: &Url) -> Result<String, ApiError> {
-    Ok(u.host_str().ok_or_else(|| ApiError::invalid_param("output.url", "the URL has no host"))?.trim_matches(['[', ']']).to_owned())
+    Ok(u.host_str()
+        .ok_or_else(|| ApiError::invalid_param("output.url", "the URL has no host"))?
+        .trim_matches(['[', ']'])
+        .to_owned())
 }
 
 /// The sink or relay destination of an RTMP(S) publish URL.
 async fn rtmp_dest(publish: &str, verify: bool, policy: UrlPolicy) -> Result<Dest, ApiError> {
-    let u = Url::parse(publish).map_err(|_| ApiError::invalid_param("output.url", "not a valid RTMP URL"))?;
+    let u = Url::parse(publish)
+        .map_err(|_| ApiError::invalid_param("output.url", "not a valid RTMP URL"))?;
     let host = url_host(&u)?;
     let tls = u.scheme() == "rtmps";
     let port = u.port().unwrap_or(if tls { 443 } else { 1935 });
@@ -116,21 +138,45 @@ async fn rtmp_dest(publish: &str, verify: bool, policy: UrlPolicy) -> Result<Des
         if let Some(q) = u.query() {
             path = format!("{path}?{q}");
         }
-        return Ok(Dest::Rtmps(RtmpsDest { target: TlsTarget { host, port, addrs }, path, tc_url: tc, verify }));
+        return Ok(Dest::Rtmps(RtmpsDest {
+            target: TlsTarget { host, port, addrs },
+            path,
+            tc_url: tc,
+            verify,
+        }));
     }
     let pinned = pin(&u, addrs[0].ip())?;
-    Ok(Dest::Sink { target: SinkTarget::Rtmp { url: pinned.to_string() }, tc_url: Some(tc) })
+    Ok(Dest::Sink {
+        target: SinkTarget::Rtmp {
+            url: pinned.to_string(),
+        },
+        tc_url: Some(tc),
+    })
 }
 
 /// The SRT sink destination: the listener's address pinned, then the
 /// `streamid` / `passphrase` / latency query.
-async fn srt_dest(base: &str, stream_id: Option<&str>, passphrase: Option<&str>, latency_ms: u32, policy: UrlPolicy) -> Result<Dest, ApiError> {
-    let u = Url::parse(base).map_err(|_| ApiError::invalid_param("output.url", "not a valid SRT URL"))?;
+async fn srt_dest(
+    base: &str,
+    stream_id: Option<&str>,
+    passphrase: Option<&str>,
+    latency_ms: u32,
+    policy: UrlPolicy,
+) -> Result<Dest, ApiError> {
+    let u = Url::parse(base)
+        .map_err(|_| ApiError::invalid_param("output.url", "not a valid SRT URL"))?;
     let host = url_host(&u)?;
-    let port = u.port().ok_or_else(|| ApiError::invalid_param("output.url", "an SRT URL needs a port (srt://host:port)"))?;
+    let port = u.port().ok_or_else(|| {
+        ApiError::invalid_param("output.url", "an SRT URL needs a port (srt://host:port)")
+    })?;
     let addrs = resolve_checked(&host, port, policy).await?;
     let pinned = pin(&u, addrs[0].ip())?;
-    Ok(Dest::Sink { target: SinkTarget::Srt { url: srt_url(pinned.as_str(), stream_id, passphrase, latency_ms) }, tc_url: None })
+    Ok(Dest::Sink {
+        target: SinkTarget::Srt {
+            url: srt_url(pinned.as_str(), stream_id, passphrase, latency_ms),
+        },
+        tc_url: None,
+    })
 }
 
 /// A destination ready to publish to (a Cloudflare live input created).
@@ -181,11 +227,16 @@ impl Outputs {
     /// Creates the Cloudflare live input (Cloudflare kinds) or checks the
     /// destination's DNS (others), and builds the publish target.
     pub async fn provision(&self, spec: &OutputSpec, label: &str) -> Result<Provisioned, ApiError> {
-        let mut secrets: Vec<String> = [&spec.token, &spec.stream_key, &spec.stream_id, &spec.passphrase]
-            .into_iter()
-            .flatten()
-            .cloned()
-            .collect();
+        let mut secrets: Vec<String> = [
+            &spec.token,
+            &spec.stream_key,
+            &spec.stream_id,
+            &spec.passphrase,
+        ]
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect();
         if let Some(u) = &spec.url {
             secrets.extend(url_secrets(u.as_str()));
         }
@@ -194,29 +245,53 @@ impl Outputs {
                 ApiError::invalid_param("output.kind", "this server has no Cloudflare Stream account ([outputs.cloudflare] account_id and FV_CF_STREAM_API_TOKEN)")
             })?;
             let whip = spec.kind == OutputKind::Cloudflare;
-            let prefix = self.cfg.cloudflare.as_ref().map_or("fv-", |a| a.name_prefix.as_str());
+            let prefix = self
+                .cfg
+                .cloudflare
+                .as_ref()
+                .map_or("fv-", |a| a.name_prefix.as_str());
             let name = format!("{prefix}{label}");
             let live = cf.create(&name, cf.records(whip)).await?;
             let playback = live.playback(cf.settings().customer_domain.as_deref(), whip);
             tracing::info!(live_input = %live.uid, kind = spec.kind.as_str(), recording = live.recording, "cloudflare live input created");
-            let missing = |what: &str| ApiError::internal(format!("the Cloudflare live input has no {what} ingest"));
+            let missing = |what: &str| {
+                ApiError::internal(format!("the Cloudflare live input has no {what} ingest"))
+            };
             // Cloudflare's ingest hosts come from its API: resolved once and
             // pinned like any destination, but not held to the private-address
             // policy (the API is trusted; tests point it at localhost).
-            let trusted = UrlPolicy { allow_private: true };
+            let trusted = UrlPolicy {
+                allow_private: true,
+            };
             let dest = match spec.kind {
                 OutputKind::Cloudflare => {
                     let u = live.webrtc_url.clone().ok_or_else(|| missing("WebRTC"))?;
-                    let url = Url::parse(&u).map_err(|e| ApiError::internal(format!("Cloudflare WebRTC URL: {e}")))?;
-                    Ok(Dest::Whip(WhipConfig::new(url, WhipAuth::None).with_target(WhipTarget::Cloudflare).with_codec(spec.codec)))
+                    let url = Url::parse(&u)
+                        .map_err(|e| ApiError::internal(format!("Cloudflare WebRTC URL: {e}")))?;
+                    Ok(Dest::Whip(
+                        WhipConfig::new(url, WhipAuth::None)
+                            .with_target(WhipTarget::Cloudflare)
+                            .with_codec(spec.codec),
+                    ))
                 }
                 OutputKind::CloudflareRtmps => {
-                    let (u, k) = live.rtmps_url.clone().zip(live.rtmps_key.clone()).ok_or_else(|| missing("RTMPS"))?;
+                    let (u, k) = live
+                        .rtmps_url
+                        .clone()
+                        .zip(live.rtmps_key.clone())
+                        .ok_or_else(|| missing("RTMPS"))?;
                     rtmp_dest(&format!("{}/{}", u.trim_end_matches('/'), k), true, trusted).await
                 }
                 _ => {
                     let u = live.srt_url.clone().ok_or_else(|| missing("SRT"))?;
-                    srt_dest(&u, live.srt_stream_id.as_deref(), live.srt_passphrase.as_deref(), self.cfg.srt_latency_ms, trusted).await
+                    srt_dest(
+                        &u,
+                        live.srt_stream_id.as_deref(),
+                        live.srt_passphrase.as_deref(),
+                        self.cfg.srt_latency_ms,
+                        trusted,
+                    )
+                    .await
                 }
             };
             let dest = match dest {
@@ -224,14 +299,31 @@ impl Outputs {
                 Err(e) => {
                     // The live input exists: do not leave it behind.
                     let _ = cf.release(&live).await;
-                    return Err(ApiError::internal(format!("the Cloudflare live input's ingest: {}", e.message)));
+                    return Err(ApiError::internal(format!(
+                        "the Cloudflare live input's ingest: {}",
+                        e.message
+                    )));
                 }
             };
-            for s in [&live.webrtc_url, &live.rtmps_key, &live.srt_stream_id, &live.srt_passphrase].into_iter().flatten() {
+            for s in [
+                &live.webrtc_url,
+                &live.rtmps_key,
+                &live.srt_stream_id,
+                &live.srt_passphrase,
+            ]
+            .into_iter()
+            .flatten()
+            {
                 secrets.extend(url_secrets(s));
             }
             secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
-            return Ok(Provisioned { dest, live: Some(live), kind: spec.kind, playback, secrets });
+            return Ok(Provisioned {
+                dest,
+                live: Some(live),
+                kind: spec.kind,
+                playback,
+                secrets,
+            });
         }
         // Your own destination: every address its name resolves to must be
         // public unless `[outputs] allow_private` (RTMP(S) and SRT then
@@ -239,10 +331,17 @@ impl Outputs {
         if let (Some((host, port)), true) = (spec.host(), spec.kind == OutputKind::Whip) {
             resolve_checked(&host, port, self.cfg.policy).await?;
         }
-        let url = spec.url.clone().ok_or_else(|| ApiError::invalid_param("output.url", "this kind needs `url`"))?;
+        let url = spec
+            .url
+            .clone()
+            .ok_or_else(|| ApiError::invalid_param("output.url", "this kind needs `url`"))?;
         let dest = match spec.kind {
             OutputKind::Whip => {
-                let token = spec.token.clone().or_else(|| self.cfg.whip_token.clone()).unwrap_or_default();
+                let token = spec
+                    .token
+                    .clone()
+                    .or_else(|| self.cfg.whip_token.clone())
+                    .unwrap_or_default();
                 if let Some(t) = &self.cfg.whip_token {
                     secrets.push(t.clone());
                 }
@@ -254,26 +353,60 @@ impl Outputs {
                 let target = match spec.whip_target {
                     Some(t) => t,
                     None => match &self.cfg.whip_target {
-                        Some(t) => t.parse::<WhipTarget>().map_err(|e| ApiError::invalid_param("output.target", e.to_string()))?,
+                        Some(t) => t
+                            .parse::<WhipTarget>()
+                            .map_err(|e| ApiError::invalid_param("output.target", e.to_string()))?,
                         None => WhipTarget::guess(&url),
                     },
                 };
-                Dest::Whip(WhipConfig::new(url, auth).with_target(target).with_codec(spec.codec))
+                Dest::Whip(
+                    WhipConfig::new(url, auth)
+                        .with_target(target)
+                        .with_codec(spec.codec),
+                )
             }
-            OutputKind::Rtmps => rtmp_dest(&spec.rtmp_publish_url().unwrap_or_default(), !spec.insecure_skip_verify, self.cfg.policy).await?,
-            _ => srt_dest(url.as_str(), spec.stream_id.as_deref(), spec.passphrase.as_deref(), self.cfg.srt_latency_ms, self.cfg.policy).await?,
+            OutputKind::Rtmps => {
+                rtmp_dest(
+                    &spec.rtmp_publish_url().unwrap_or_default(),
+                    !spec.insecure_skip_verify,
+                    self.cfg.policy,
+                )
+                .await?
+            }
+            _ => {
+                srt_dest(
+                    url.as_str(),
+                    spec.stream_id.as_deref(),
+                    spec.passphrase.as_deref(),
+                    self.cfg.srt_latency_ms,
+                    self.cfg.policy,
+                )
+                .await?
+            }
         };
         secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
-        Ok(Provisioned { dest, live: None, kind: spec.kind, playback: json!({}), secrets })
+        Ok(Provisioned {
+            dest,
+            live: None,
+            kind: spec.kind,
+            playback: json!({}),
+            secrets,
+        })
     }
 
     /// Deletes / disables the Cloudflare live input per `on_stop` (best
     /// effort, logged).
     pub async fn release(&self, p: &Provisioned) {
-        let (Some(live), Some(cf)) = (&p.live, self.cloudflare()) else { return };
+        let (Some(live), Some(cf)) = (&p.live, self.cloudflare()) else {
+            return;
+        };
         match cf.release(live).await {
-            Ok(a) => tracing::info!(live_input = %live.uid, action = ?a, "cloudflare live input released"),
-            Err(e) => tracing::warn!(live_input = %live.uid, error = %e.message, "cloudflare live input release failed"),
+            Ok(a) => {
+                tracing::info!(live_input = %live.uid, action = ?a, "cloudflare live input released")
+            }
+            Err(e) => {
+                tracing::warn!(live_input = %live.uid, error = %e.message, "cloudflare live input release failed")
+            }
         }
     }
 }
@@ -305,12 +438,22 @@ impl Source<'_> {
                     VideoOut::Fresh(f) | VideoOut::Repeat(f) => Some(f),
                     VideoOut::Nothing => None,
                 };
-                Some(PubTick { frame, audio: t.audio, rtp: u64::from(t.video_rtp), gap })
+                Some(PubTick {
+                    frame,
+                    audio: t.audio,
+                    rtp: u64::from(t.video_rtp),
+                    gap,
+                })
             }
             Source::Tap { rx, fps } => {
                 let t = rx.recv().await?;
                 let gap = rx.take_dropped();
-                Some(PubTick { frame: t.frame, audio: t.audio, rtp: video_rtp_time(t.index, *fps), gap })
+                Some(PubTick {
+                    frame: t.frame,
+                    audio: t.audio,
+                    rtp: video_rtp_time(t.index, *fps),
+                    gap,
+                })
             }
         }
     }
@@ -370,14 +513,22 @@ fn pick_encoder(choice: &str) -> EncoderBackend {
         "x264-test" => EncoderBackend::CpuTestX264,
         _ => {
             let (_, sel) = crate::encoders::auto_selection();
-            if sel.streams == "auto" { EncoderBackend::OpenH264 } else { pick_encoder(&sel.streams) }
+            if sel.streams == "auto" {
+                EncoderBackend::OpenH264
+            } else {
+                pick_encoder(&sel.streams)
+            }
         }
     }
 }
 
 /// Publishes `src` to `prov` until the source ends or `stop`. Returns the
 /// end reason; an `Err` is a destination failure (scrubbed).
-pub(crate) async fn publish(ctx: &mut Ctx<'_>, prov: &Provisioned, src: &mut Source<'_>) -> Result<String, ApiError> {
+pub(crate) async fn publish(
+    ctx: &mut Ctx<'_>,
+    prov: &Provisioned,
+    src: &mut Source<'_>,
+) -> Result<String, ApiError> {
     ctx.phase("waiting");
     // Never offer an empty track (design §5.2): start at the first frame.
     let first = loop {
@@ -392,14 +543,28 @@ pub(crate) async fn publish(ctx: &mut Ctx<'_>, prov: &Provisioned, src: &mut Sou
     };
     match &prov.dest {
         Dest::Whip(w) => publish_whip(ctx, prov, w.clone(), src, first).await,
-        Dest::Sink { target, tc_url } => publish_sink(ctx, prov, target.clone(), tc_url.clone(), None, src, first).await,
+        Dest::Sink { target, tc_url } => {
+            publish_sink(ctx, prov, target.clone(), tc_url.clone(), None, src, first).await
+        }
         Dest::Rtmps(r) => {
-            let config = client_config(r.verify, ctx.outs.cfg.rtmps_ca_file.as_deref()).map_err(|e| err(ErrorKind::Internal, prov, e))?;
+            let config = client_config(r.verify, ctx.outs.cfg.rtmps_ca_file.as_deref())
+                .map_err(|e| err(ErrorKind::Internal, prov, e))?;
             let relay = RtmpsRelay::start(r.target.clone(), config)
                 .await
                 .map_err(|e| err(ErrorKind::Internal, prov, format!("RTMPS relay: {e}")))?;
-            let target = SinkTarget::Rtmp { url: format!("rtmp://127.0.0.1:{}{}", relay.port(), r.path) };
-            publish_sink(ctx, prov, target, Some(r.tc_url.clone()), Some(relay), src, first).await
+            let target = SinkTarget::Rtmp {
+                url: format!("rtmp://127.0.0.1:{}{}", relay.port(), r.path),
+            };
+            publish_sink(
+                ctx,
+                prov,
+                target,
+                Some(r.tc_url.clone()),
+                Some(relay),
+                src,
+                first,
+            )
+            .await
         }
     }
 }
@@ -410,7 +575,14 @@ enum VEnc {
 }
 
 impl VEnc {
-    fn new(codec: VideoCodec, target: WhipTarget, backend: EncoderBackend, w: u32, h: u32, fps: u32) -> Result<(Self, u32, String), String> {
+    fn new(
+        codec: VideoCodec,
+        target: WhipTarget,
+        backend: EncoderBackend,
+        w: u32,
+        h: u32,
+        fps: u32,
+    ) -> Result<(Self, u32, String), String> {
         match codec {
             VideoCodec::H264 => {
                 let c = crate::whip::whip_h264(target, w, h, fps);
@@ -420,11 +592,23 @@ impl VEnc {
             }
             VideoCodec::Vp8 | VideoCodec::Vp9 => {
                 let vp9 = codec == VideoCodec::Vp9;
-                let ok = if vp9 { fastvideo_media::vp8::libvpx_vp9_available() } else { fastvideo_media::vp8::libvpx_available() };
+                let ok = if vp9 {
+                    fastvideo_media::vp8::libvpx_vp9_available()
+                } else {
+                    fastvideo_media::vp8::libvpx_available()
+                };
                 if !ok {
-                    return Err(format!("{} needs ffmpeg with {}", codec.sdp_name(), if vp9 { "libvpx-vp9" } else { "libvpx" }));
+                    return Err(format!(
+                        "{} needs ffmpeg with {}",
+                        codec.sdp_name(),
+                        if vp9 { "libvpx-vp9" } else { "libvpx" }
+                    ));
                 }
-                let mut c = if vp9 { Vp8Config::vp9(w, h, fps) } else { Vp8Config::new(w, h, fps) };
+                let mut c = if vp9 {
+                    Vp8Config::vp9(w, h, fps)
+                } else {
+                    Vp8Config::new(w, h, fps)
+                };
                 if target == WhipTarget::Cloudflare {
                     c.gop_seconds = 1.0;
                 }
@@ -477,17 +661,31 @@ fn stereo(a: &[f32], channels: Option<u8>) -> std::borrow::Cow<'_, [f32]> {
     }
 }
 
-async fn publish_whip(ctx: &mut Ctx<'_>, prov: &Provisioned, wcfg: WhipConfig, src: &mut Source<'_>, first: PubTick) -> Result<String, ApiError> {
+async fn publish_whip(
+    ctx: &mut Ctx<'_>,
+    prov: &Provisioned,
+    wcfg: WhipConfig,
+    src: &mut Source<'_>,
+    first: PubTick,
+) -> Result<String, ApiError> {
     let cfg = &ctx.outs.cfg;
     let target = wcfg.target;
     let codec = wcfg.codec;
     let audio = ctx.audio_channels.is_some();
     ctx.phase("connecting");
     let stun: Vec<IceServer> = cfg.stun.iter().map(IceServer::stun).collect();
-    let host = RtcHost::bind(HostConfig { udp_bind: Some(cfg.udp_bind), ice_servers: stun.clone(), ..HostConfig::default() })
-        .await
-        .map_err(|e| err(ErrorKind::Internal, prov, e))?;
-    let opts = WhipPublishOptions { audio: audio.then_some(AudioLayout::Stereo), stun, stun_timeout: Duration::from_secs(2) };
+    let host = RtcHost::bind(HostConfig {
+        udp_bind: Some(cfg.udp_bind),
+        ice_servers: stun.clone(),
+        ..HostConfig::default()
+    })
+    .await
+    .map_err(|e| err(ErrorKind::Internal, prov, e))?;
+    let opts = WhipPublishOptions {
+        audio: audio.then_some(AudioLayout::Stereo),
+        stun,
+        stun_timeout: Duration::from_secs(2),
+    };
     let mut publisher = match WhipPublisher::publish(&host, wcfg, opts).await {
         Ok(p) => p,
         Err(e) => {
@@ -495,7 +693,9 @@ async fn publish_whip(ctx: &mut Ctx<'_>, prov: &Provisioned, wcfg: WhipConfig, s
             return Err(err(ErrorKind::Internal, prov, format!("whip: {e}")));
         }
     };
-    let resource = publisher.resource_url().map(|u| redact_url(u, OutputKind::Whip));
+    let resource = publisher
+        .resource_url()
+        .map(|u| redact_url(u, OutputKind::Whip));
     let negotiated = publisher.negotiated_video_codec().map(str::to_owned);
     ctx.state.set(|s| {
         s.whip_resource = resource;
@@ -533,7 +733,9 @@ async fn whip_loop(
     }
     let backend = {
         let c = ctx.outs.cfg.encoder.clone();
-        tokio::task::spawn_blocking(move || pick_encoder(&c)).await.map_err(|e| ApiError::internal(e.to_string()))?
+        tokio::task::spawn_blocking(move || pick_encoder(&c))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
     };
     let fps = ctx.fps;
     // Opus comes with `webrtc` (this module's gate), not `encoders`: the
@@ -556,7 +758,17 @@ async fn whip_loop(
     // sent the moment the encoder returns it (no sleeps, no batching; RTP
     // times are the ticks' media times).
     let (notes_tx, mut notes) = mpsc::unbounded_channel::<VideoNote>();
-    let video = VideoPub::spawn(VideoPubCfg { codec, target, backend, fps, handle: handle.clone() }, notes_tx).map_err(|e| err(ErrorKind::Internal, prov, e))?;
+    let video = VideoPub::spawn(
+        VideoPubCfg {
+            codec,
+            target,
+            backend,
+            fps,
+            handle: handle.clone(),
+        },
+        notes_tx,
+    )
+    .map_err(|e| err(ErrorKind::Internal, prov, e))?;
     let mut pending = Some(first);
     let mut first_sent = false;
     let reason = loop {
@@ -621,7 +833,13 @@ async fn whip_loop(
                 Ok(pkts) => {
                     let mut sent = 0;
                     for p in pkts {
-                        if handle.send_audio(fastvideo_webrtc::writer::AudioPacket::new(p.data, u64::from(p.rtp_ts))).is_ok() {
+                        if handle
+                            .send_audio(fastvideo_webrtc::writer::AudioPacket::new(
+                                p.data,
+                                u64::from(p.rtp_ts),
+                            ))
+                            .is_ok()
+                        {
                             sent += 1;
                         }
                     }
@@ -646,10 +864,18 @@ const VIDEO_QUEUE: usize = 10;
 /// What the video thread reports to the publish loop (counters, failure).
 #[derive(Debug)]
 enum VideoNote {
-    Encoder { name: String, width: u32, height: u32 },
-    Sent { keyframe: bool },
+    Encoder {
+        name: String,
+        width: u32,
+        height: u32,
+    },
+    Sent {
+        keyframe: bool,
+    },
     SendError,
-    Forced { covered: u64 },
+    Forced {
+        covered: u64,
+    },
     Covered(u64),
     /// Frames dropped because the encoder fell behind (drop-oldest).
     Dropped,
@@ -676,7 +902,10 @@ impl VideoPub {
         let q = Arc::new(fastvideo_media::queue::DropOldest::new(VIDEO_QUEUE));
         let keyframe = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (q2, k2) = (q.clone(), keyframe.clone());
-        std::thread::Builder::new().name("whip-video".into()).spawn(move || video_thread(cfg, &q2, &k2, &notes)).map_err(|e| format!("video thread: {e}"))?;
+        std::thread::Builder::new()
+            .name("whip-video".into())
+            .spawn(move || video_thread(cfg, &q2, &k2, &notes))
+            .map_err(|e| format!("video thread: {e}"))?;
         Ok(Self { q, keyframe })
     }
 
@@ -688,7 +917,8 @@ impl VideoPub {
 
     /// A keyframe is wanted (PLI/FIR, a gap in the ticks).
     fn keyframe(&self) {
-        self.keyframe.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.keyframe
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn close(&self) {
@@ -702,7 +932,12 @@ impl Drop for VideoPub {
     }
 }
 
-fn video_thread(cfg: VideoPubCfg, q: &fastvideo_media::queue::DropOldest<(RgbFrame, u64)>, want_key: &std::sync::atomic::AtomicBool, notes: &mpsc::UnboundedSender<VideoNote>) {
+fn video_thread(
+    cfg: VideoPubCfg,
+    q: &fastvideo_media::queue::DropOldest<(RgbFrame, u64)>,
+    want_key: &std::sync::atomic::AtomicBool,
+    notes: &mpsc::UnboundedSender<VideoNote>,
+) {
     let t0 = Instant::now();
     let now = || t0.elapsed().as_secs_f64();
     let mut enc: Option<VEnc> = None;
@@ -723,7 +958,10 @@ fn video_thread(cfg: VideoPubCfg, q: &fastvideo_media::queue::DropOldest<(RgbFra
             idr.request(now());
         }
         // One encoder per canvas (a size change restarts it on a keyframe).
-        if enc.as_ref().is_none_or(|e| e.dims() != (frame.width, frame.height)) {
+        if enc
+            .as_ref()
+            .is_none_or(|e| e.dims() != (frame.width, frame.height))
+        {
             let (w, h) = (frame.width, frame.height);
             if let Some(mut old) = enc.take() {
                 old.finish();
@@ -733,7 +971,11 @@ fn video_thread(cfg: VideoPubCfg, q: &fastvideo_media::queue::DropOldest<(RgbFra
                     idr = KeyframePolicy::new(1.0, gop);
                     rtps.clear();
                     enc = Some(e);
-                    let _ = notes.send(VideoNote::Encoder { name, width: w, height: h });
+                    let _ = notes.send(VideoNote::Encoder {
+                        name,
+                        width: w,
+                        height: h,
+                    });
                 }
                 Err(e) => {
                     let _ = notes.send(VideoNote::Failed(e));
@@ -751,7 +993,13 @@ fn video_thread(cfg: VideoPubCfg, q: &fastvideo_media::queue::DropOldest<(RgbFra
                 return;
             }
         };
-        let _ = notes.send(if force { VideoNote::Forced { covered: idr.covered() } } else { VideoNote::Covered(idr.covered()) });
+        let _ = notes.send(if force {
+            VideoNote::Forced {
+                covered: idr.covered(),
+            }
+        } else {
+            VideoNote::Covered(idr.covered())
+        });
         for au in aus {
             let rtp = rtps.pop_front().unwrap_or(rtp);
             let key = au.keyframe;
@@ -786,14 +1034,29 @@ async fn publish_sink(
     ctx.phase("connecting");
     let backend = {
         let c = ctx.outs.cfg.encoder.clone();
-        tokio::task::spawn_blocking(move || pick_encoder(&c)).await.map_err(|e| ApiError::internal(e.to_string()))?
+        tokio::task::spawn_blocking(move || pick_encoder(&c))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
     };
     // NVENC in production; the CPU builds (fake engine, tests) run the
     // libx264 test path, the only ffmpeg H.264 encoder they have.
-    let encoder = if backend == EncoderBackend::Nvenc { FfmpegH264::Nvenc } else { FfmpegH264::Libx264CpuTest };
+    let encoder = if backend == EncoderBackend::Nvenc {
+        FfmpegH264::Nvenc
+    } else {
+        FfmpegH264::Libx264CpuTest
+    };
     let f0 = first.frame.as_ref().expect("first tick has a frame");
     let (w, h) = (f0.width, f0.height);
-    let mut scfg = SinkConfig::new(target, w, h, ctx.fps, ctx.audio_channels.map(|c| SinkAudioIn { rate: 48_000, channels: c }));
+    let mut scfg = SinkConfig::new(
+        target,
+        w,
+        h,
+        ctx.fps,
+        ctx.audio_channels.map(|c| SinkAudioIn {
+            rate: 48_000,
+            channels: c,
+        }),
+    );
     scfg.encoder = encoder;
     scfg.rtmp_tc_url = tc_url;
     let mut sink = tokio::task::spawn_blocking(move || FfmpegSink::start(scfg))
@@ -802,7 +1065,14 @@ async fn publish_sink(
         .map_err(|e| err(ErrorKind::Internal, prov, format!("sink: {e}")))?;
     ctx.state.set(|s| {
         s.video_codec = Some("H264".into());
-        s.encoder = Some(format!("ffmpeg {}", if encoder == FfmpegH264::Nvenc { "h264_nvenc" } else { "libx264" }));
+        s.encoder = Some(format!(
+            "ffmpeg {}",
+            if encoder == FfmpegH264::Nvenc {
+                "h264_nvenc"
+            } else {
+                "libx264"
+            }
+        ));
         s.width = Some(w);
         s.height = Some(h);
     });
@@ -870,10 +1140,14 @@ async fn publish_sink(
             }
         }
     };
-    let r = tokio::task::spawn_blocking(move || sink.finish(Duration::from_secs(5))).await.map_err(|e| ApiError::internal(e.to_string()))?;
+    let r = tokio::task::spawn_blocking(move || sink.finish(Duration::from_secs(5)))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     match r {
         Ok(st) => ctx.state.set(|s| s.frames_sent = st.frames_sent),
-        Err(e) => tracing::info!(error = %prov.scrub(&e.to_string()), "sink finished with an error"),
+        Err(e) => {
+            tracing::info!(error = %prov.scrub(&e.to_string()), "sink finished with an error")
+        }
     }
     drop(relay);
     match failure {
@@ -903,7 +1177,13 @@ impl OutputOpener for Opener {
 }
 
 /// A session's output copy, to completion. Failures become events.
-async fn run_copy(outs: Arc<Outputs>, spec: OutputSpec, media: OutputMedia, rx: TapReceiver, tx: mpsc::UnboundedSender<Value>) {
+async fn run_copy(
+    outs: Arc<Outputs>,
+    spec: OutputSpec,
+    media: OutputMedia,
+    rx: TapReceiver,
+    tx: mpsc::UnboundedSender<Value>,
+) {
     let state = OutputState::new(spec.view());
     let view = state.view.clone();
     let prov = match outs.provision(&spec, &media.label).await {
@@ -919,7 +1199,10 @@ async fn run_copy(outs: Arc<Outputs>, spec: OutputSpec, media: OutputMedia, rx: 
         *p = prov.playback.clone();
     }
     let stop = Notify::new();
-    let mut src = Source::Tap { rx, fps: media.fps.max(1) };
+    let mut src = Source::Tap {
+        rx,
+        fps: media.fps.max(1),
+    };
     let mut ctx = Ctx {
         outs: &outs,
         state: &state,
@@ -946,7 +1229,6 @@ async fn run_copy(outs: Arc<Outputs>, spec: OutputSpec, media: OutputMedia, rx: 
     let _ = tx.send(json!({"type": "output_ended", "output": view, "reason": reason, "frames_sent": st.frames_sent}));
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -954,45 +1236,97 @@ mod tests {
     #[test]
     fn tc_url_is_the_server_url_without_the_key() {
         let t = |u: &str| tc_url(&Url::parse(u).unwrap());
-        assert_eq!(t("rtmps://live.cloudflare.com:443/live/0123456789abcdef"), "rtmps://live.cloudflare.com:443/live");
-        assert_eq!(t("rtmp://user:pw@a.example/app/inst/key?token=x"), "rtmp://a.example/app/inst");
+        assert_eq!(
+            t("rtmps://live.cloudflare.com:443/live/0123456789abcdef"),
+            "rtmps://live.cloudflare.com:443/live"
+        );
+        assert_eq!(
+            t("rtmp://user:pw@a.example/app/inst/key?token=x"),
+            "rtmp://a.example/app/inst"
+        );
         assert_eq!(t("rtmp://a.example/live/k"), "rtmp://a.example/live");
     }
 
     #[test]
     fn pin_keeps_everything_but_the_host() {
         let u = Url::parse("srt://live.example.com:778").unwrap();
-        assert_eq!(pin(&u, "203.0.113.7".parse().unwrap()).unwrap().as_str(), "srt://203.0.113.7:778");
+        assert_eq!(
+            pin(&u, "203.0.113.7".parse().unwrap()).unwrap().as_str(),
+            "srt://203.0.113.7:778"
+        );
         let u = Url::parse("rtmp://a.example/live/k3y").unwrap();
-        assert_eq!(pin(&u, "2001:db8::1".parse().unwrap()).unwrap().as_str(), "rtmp://[2001:db8::1]/live/k3y");
+        assert_eq!(
+            pin(&u, "2001:db8::1".parse().unwrap()).unwrap().as_str(),
+            "rtmp://[2001:db8::1]/live/k3y"
+        );
     }
 
     #[tokio::test]
     async fn rtmps_goes_through_the_relay_and_rtmp_srt_are_pinned() {
-        let open = UrlPolicy { allow_private: true };
-        match rtmp_dest("rtmps://localhost:1937/live/k3y", true, open).await.unwrap() {
+        let open = UrlPolicy {
+            allow_private: true,
+        };
+        match rtmp_dest("rtmps://localhost:1937/live/k3y", true, open)
+            .await
+            .unwrap()
+        {
             Dest::Rtmps(r) => {
-                assert_eq!((r.target.host.as_str(), r.target.port, r.path.as_str()), ("localhost", 1937, "/live/k3y"));
+                assert_eq!(
+                    (r.target.host.as_str(), r.target.port, r.path.as_str()),
+                    ("localhost", 1937, "/live/k3y")
+                );
                 assert_eq!(r.tc_url, "rtmps://localhost:1937/live");
                 assert!(r.verify && r.target.addrs.iter().all(|a| a.ip().is_loopback()));
             }
             _ => panic!("rtmps must use the relay"),
         }
-        match rtmp_dest("rtmp://localhost/live/k3y", true, open).await.unwrap() {
-            Dest::Sink { target: SinkTarget::Rtmp { url }, tc_url } => {
-                assert!(url.starts_with("rtmp://127.0.0.1/live/k3y") || url.starts_with("rtmp://[::1]/live/k3y"), "{url}");
+        match rtmp_dest("rtmp://localhost/live/k3y", true, open)
+            .await
+            .unwrap()
+        {
+            Dest::Sink {
+                target: SinkTarget::Rtmp { url },
+                tc_url,
+            } => {
+                assert!(
+                    url.starts_with("rtmp://127.0.0.1/live/k3y")
+                        || url.starts_with("rtmp://[::1]/live/k3y"),
+                    "{url}"
+                );
                 assert_eq!(tc_url.as_deref(), Some("rtmp://localhost/live"));
             }
             _ => panic!("rtmp is a pinned sink"),
         }
-        match srt_dest("srt://localhost:9000", Some("publish:x"), None, 1000, open).await.unwrap() {
-            Dest::Sink { target: SinkTarget::Srt { url }, tc_url: None } => {
-                assert!(url.starts_with("srt://127.0.0.1:9000?streamid=publish:x") || url.starts_with("srt://[::1]:9000?"), "{url}")
+        match srt_dest("srt://localhost:9000", Some("publish:x"), None, 1000, open)
+            .await
+            .unwrap()
+        {
+            Dest::Sink {
+                target: SinkTarget::Srt { url },
+                tc_url: None,
+            } => {
+                assert!(
+                    url.starts_with("srt://127.0.0.1:9000?streamid=publish:x")
+                        || url.starts_with("srt://[::1]:9000?"),
+                    "{url}"
+                )
             }
             _ => panic!("srt is a pinned sink"),
         }
         // The checked addresses are the policy's: loopback refused by default.
-        assert!(rtmp_dest("rtmps://localhost:1937/live/k", true, UrlPolicy::default()).await.is_err());
-        assert!(srt_dest("srt://localhost:9000", None, None, 1000, UrlPolicy::default()).await.is_err());
+        assert!(
+            rtmp_dest("rtmps://localhost:1937/live/k", true, UrlPolicy::default())
+                .await
+                .is_err()
+        );
+        assert!(srt_dest(
+            "srt://localhost:9000",
+            None,
+            None,
+            1000,
+            UrlPolicy::default()
+        )
+        .await
+        .is_err());
     }
 }

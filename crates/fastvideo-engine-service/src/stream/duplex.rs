@@ -33,15 +33,18 @@ use fastvideo_media::pacer::VideoOut;
 use fastvideo_media::ring::InputBuffers;
 use fastvideo_media::scale::{scale_rgb, ScaleMode};
 use fastvideo_protocol::{
-    ApiError, AudioCaps, AudioInputCaps, CanvasCaps, DuplexCaps, DuplexSpec, EndReason, ErrorKind, Family, FpsCaps,
-    FrameGrid, InputCaps, InputVideoCodec, KnobCaps, ModelCaps, ModelId, RefLimits, ResolvedJob,
-    RgbFrame, SessionContext, StreamCaps, VideoInputCaps, WIRE_AUDIO_RATE,
+    ApiError, AudioCaps, AudioInputCaps, CanvasCaps, DuplexCaps, DuplexSpec, EndReason, ErrorKind,
+    Family, FpsCaps, FrameGrid, InputCaps, InputVideoCodec, KnobCaps, ModelCaps, ModelId,
+    RefLimits, ResolvedJob, RgbFrame, SessionContext, StreamCaps, VideoInputCaps, WIRE_AUDIO_RATE,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{watch, Notify};
 
 use super::pace::{tick_queue, PaceStats, PacedStream, Tick, TICK_DEPTH};
-use crate::backend::{BlockInput, BlockStats, CausalSpec, ClipOutput, ClipSink, DeviceInfo, EngineBackend, LoadEvent, SessionId};
+use crate::backend::{
+    BlockInput, BlockStats, CausalSpec, ClipOutput, ClipSink, DeviceInfo, EngineBackend, LoadEvent,
+    SessionId,
+};
 use crate::cancel::{lock, StepControl};
 use crate::service::Shared;
 
@@ -65,7 +68,10 @@ pub fn echo_caps() -> ModelCaps {
                 max_fps: 30,
                 codecs: vec![InputVideoCodec::Vp8, InputVideoCodec::H264],
             }),
-            audio: Some(AudioInputCaps { rate: WIRE_AUDIO_RATE, channels: 1 }),
+            audio: Some(AudioInputCaps {
+                rate: WIRE_AUDIO_RATE,
+                channels: 1,
+            }),
             max_bitrate_kbps: 4000,
             buffer_ms: 500,
         },
@@ -77,8 +83,16 @@ pub fn echo_caps() -> ModelCaps {
         family: Family::Loopback,
         served_names: vec![ECHO_MODEL.to_owned()],
         tasks: Default::default(),
-        audio: Some(AudioCaps { native_rate: WIRE_AUDIO_RATE, channels: 1, via_sidecar: false }),
-        fps: FpsCaps { allowed: vec![24, 25, 30], default: 30, container_only: false },
+        audio: Some(AudioCaps {
+            native_rate: WIRE_AUDIO_RATE,
+            channels: 1,
+            via_sidecar: false,
+        }),
+        fps: FpsCaps {
+            allowed: vec![24, 25, 30],
+            default: 30,
+            container_only: false,
+        },
         frames: FrameGrid::new(1, 0, 1, 1, 1),
         canvas: CanvasCaps {
             multiple: 2,
@@ -104,12 +118,19 @@ pub fn echo_caps() -> ModelCaps {
 pub struct EchoBackend;
 
 fn echo_refusal() -> ApiError {
-    ApiError::new(ErrorKind::InvalidRequest, format!("`{ECHO_MODEL}` only streams (duplex sessions)"))
+    ApiError::new(
+        ErrorKind::InvalidRequest,
+        format!("`{ECHO_MODEL}` only streams (duplex sessions)"),
+    )
 }
 
 impl EngineBackend for EchoBackend {
     fn device(&self) -> DeviceInfo {
-        DeviceInfo { index: 0, name: "loopback (no device)".into(), total_memory_mb: 0 }
+        DeviceInfo {
+            index: 0,
+            name: "loopback (no device)".into(),
+            total_memory_mb: 0,
+        }
     }
     fn caps(&self) -> Vec<ModelCaps> {
         vec![echo_caps()]
@@ -117,7 +138,12 @@ impl EngineBackend for EchoBackend {
     fn load(&mut self, _model: &ModelId, _obs: &mut dyn FnMut(LoadEvent)) -> Result<(), ApiError> {
         Ok(())
     }
-    fn generate(&mut self, _job: &ResolvedJob, _out: &mut dyn ClipSink, _ctl: &StepControl) -> Result<ClipOutput, ApiError> {
+    fn generate(
+        &mut self,
+        _job: &ResolvedJob,
+        _out: &mut dyn ClipSink,
+        _ctl: &StepControl,
+    ) -> Result<ClipOutput, ApiError> {
         Err(echo_refusal())
     }
     fn causal_open(&mut self, _s: SessionId, _spec: &CausalSpec) -> Result<(), ApiError> {
@@ -176,7 +202,12 @@ pub fn draw_echo_overlay(src: &RgbFrame, index: u64) -> RgbFrame {
             }
         }
     }
-    RgbFrame { width: src.width, height: src.height, data: d.into(), index: src.index }
+    RgbFrame {
+        width: src.width,
+        height: src.height,
+        data: d.into(),
+        index: src.index,
+    }
 }
 
 /// Reads the index an echo overlay carries (tests, clients): the 32 cells,
@@ -325,11 +356,22 @@ impl DuplexSession {
             Some(d) => d.clone(),
             None => {
                 engine.close_clip_session(id);
-                return Err(ApiError::invalid_param("model", format!("`{}` is not a duplex model", caps.id)));
+                return Err(ApiError::invalid_param(
+                    "model",
+                    format!("`{}` is not a duplex model", caps.id),
+                ));
             }
         };
         let input = InputBuffers::for_caps(&duplex.input);
-        Ok(Self { engine, id, executor, spec, caps, duplex, input })
+        Ok(Self {
+            engine,
+            id,
+            executor,
+            spec,
+            caps,
+            duplex,
+            input,
+        })
     }
 
     pub fn id(&self) -> SessionId {
@@ -361,7 +403,10 @@ impl DuplexSession {
         if self.caps.family != Family::Loopback {
             return Err(ApiError::new(
                 ErrorKind::InvalidRequest,
-                format!("no duplex worker for `{}` yet (only the loopback echo streams duplex)", self.caps.id),
+                format!(
+                    "no duplex worker for `{}` yet (only the loopback echo streams duplex)",
+                    self.caps.id
+                ),
             ));
         }
         let ctl = Arc::new(Ctl::default());
@@ -371,7 +416,10 @@ impl DuplexSession {
             s.unit_ms = self.duplex.unit_ms;
             s.fps = self.spec.session.fps;
         }
-        let control = DuplexControl { ctl: ctl.clone(), input: self.input.clone() };
+        let control = DuplexControl {
+            ctl: ctl.clone(),
+            input: self.input.clone(),
+        };
         let paced = spawn_echo(self, ctl)?;
         Ok((control, paced))
     }
@@ -392,7 +440,10 @@ fn spawn_echo(session: DuplexSession, ctl: Arc<Ctl>) -> Result<PacedStream, ApiE
     let (w, h) = spec.canvas;
     let fps = spec.fps;
     if fps == 0 || w == 0 || h == 0 {
-        return Err(ApiError::invalid_param("fps", "a duplex session needs a canvas and an fps"));
+        return Err(ApiError::invalid_param(
+            "fps",
+            "a duplex session needs a canvas and an fps",
+        ));
     }
     let out_ch = spec.tracks.audio.as_ref().map(|a| a.channels);
     let spf = match out_ch {
@@ -409,7 +460,9 @@ fn spawn_echo(session: DuplexSession, ctl: Arc<Ctl>) -> Result<PacedStream, ApiE
         let waiting = RgbFrame::solid(w, h, [64, 64, 64], 0);
         let mut last: Option<RgbFrame> = None;
         let mut fifo: VecDeque<f32> = VecDeque::new();
-        let fifo_max = out_ch.map_or(0, |c| (WIRE_AUDIO_RATE as u64 * ECHO_AUDIO_MAX_MS / 1000) as usize * usize::from(c));
+        let fifo_max = out_ch.map_or(0, |c| {
+            (WIRE_AUDIO_RATE as u64 * ECHO_AUDIO_MAX_MS / 1000) as usize * usize::from(c)
+        });
         let mut stats = PaceStats::default();
         let mut index = 0u64;
         let ended = loop {
@@ -442,7 +495,11 @@ fn spawn_echo(session: DuplexSession, ctl: Arc<Ctl>) -> Result<PacedStream, ApiE
             while fifo.len() > fifo_max {
                 fifo.pop_front();
             }
-            let fresh_input = if paused { None } else { input.video.take_latest() };
+            let fresh_input = if paused {
+                None
+            } else {
+                input.video.take_latest()
+            };
             let video = match fresh_input {
                 Some(t) => {
                     let src = scale_rgb(&t.item.frame, w, h, ScaleMode::Fit);
@@ -452,7 +509,10 @@ fn spawn_echo(session: DuplexSession, ctl: Arc<Ctl>) -> Result<PacedStream, ApiE
                         s.input_frames += 1;
                         s.has_input = true;
                         s.input_latency_ms = Some(t.arrived.elapsed().as_secs_f64() * 1e3);
-                        s.last_input_centre = t.item.frame.pixel(t.item.frame.width / 2, t.item.frame.height / 2);
+                        s.last_input_centre = t
+                            .item
+                            .frame
+                            .pixel(t.item.frame.width / 2, t.item.frame.height / 2);
                         s.last_input_source = Some(t.item.source);
                     }
                     last = Some(f.clone());
@@ -495,7 +555,10 @@ fn spawn_echo(session: DuplexSession, ctl: Arc<Ctl>) -> Result<PacedStream, ApiE
             stats.video_seconds = index as f64 / f64::from(fps);
             stats.limit_seconds = stats.video_seconds;
             stats_tx.send_replace(stats.clone());
-            if spec.max_seconds.is_some_and(|m| stats.video_seconds >= f64::from(m)) {
+            if spec
+                .max_seconds
+                .is_some_and(|m| stats.video_seconds >= f64::from(m))
+            {
                 break EndReason::SessionLimit;
             }
         };
@@ -504,7 +567,12 @@ fn spawn_echo(session: DuplexSession, ctl: Arc<Ctl>) -> Result<PacedStream, ApiE
         tx.close();
         drop(session);
     });
-    Ok(PacedStream { ticks: rx, first_frame: first_rx, stats: stats_rx, task })
+    Ok(PacedStream {
+        ticks: rx,
+        first_frame: first_rx,
+        stats: stats_rx,
+        task,
+    })
 }
 
 #[cfg(test)]

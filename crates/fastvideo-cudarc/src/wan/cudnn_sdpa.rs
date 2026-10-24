@@ -70,12 +70,16 @@ pub mod raw {
 
     type CreateFn = unsafe extern "C" fn(u32, *mut cudnnBackendDescriptor_t) -> i32;
     type DestroyFn = unsafe extern "C" fn(cudnnBackendDescriptor_t) -> i32;
-    type SetFn = unsafe extern "C" fn(cudnnBackendDescriptor_t, u32, u32, i64, *const c_void) -> i32;
+    type SetFn =
+        unsafe extern "C" fn(cudnnBackendDescriptor_t, u32, u32, i64, *const c_void) -> i32;
     type GetFn =
         unsafe extern "C" fn(cudnnBackendDescriptor_t, u32, u32, i64, *mut i64, *mut c_void) -> i32;
     type FinalizeFn = unsafe extern "C" fn(cudnnBackendDescriptor_t) -> i32;
-    type ExecuteFn =
-        unsafe extern "C" fn(sys::cudnnHandle_t, cudnnBackendDescriptor_t, cudnnBackendDescriptor_t) -> i32;
+    type ExecuteFn = unsafe extern "C" fn(
+        sys::cudnnHandle_t,
+        cudnnBackendDescriptor_t,
+        cudnnBackendDescriptor_t,
+    ) -> i32;
 
     // The transmutes only change enum parameters to their `repr(u32)` integer
     // and the `repr(u32)` status return to `i32`: same size, same ABI.
@@ -87,7 +91,13 @@ pub mod raw {
         let f: DestroyFn = std::mem::transmute(sys::culib().cudnnBackendDestroyDescriptor);
         f(d)
     }
-    pub unsafe fn set(d: cudnnBackendDescriptor_t, name: u32, ty: u32, n: i64, v: *const c_void) -> i32 {
+    pub unsafe fn set(
+        d: cudnnBackendDescriptor_t,
+        name: u32,
+        ty: u32,
+        n: i64,
+        v: *const c_void,
+    ) -> i32 {
         let f: SetFn = std::mem::transmute(sys::culib().cudnnBackendSetAttribute);
         f(d, name, ty, n, v)
     }
@@ -128,7 +138,10 @@ fn ok(st: i32, what: &str) -> Result<()> {
         Ok(())
     } else {
         let e = raw::last_error();
-        Err(msg(format!("cudnn sdpa: {what}: status {st}{}{e}", if e.is_empty() { "" } else { ": " })))
+        Err(msg(format!(
+            "cudnn sdpa: {what}: status {st}{}{e}",
+            if e.is_empty() { "" } else { ": " }
+        )))
     }
 }
 
@@ -154,13 +167,22 @@ impl Desc {
     }
     fn new_raw(ty: u32) -> Result<Self> {
         let mut d: cudnnBackendDescriptor_t = std::ptr::null_mut();
-        ok(unsafe { raw::create(ty, &mut d) }, &format!("create descriptor type {ty}"))?;
+        ok(
+            unsafe { raw::create(ty, &mut d) },
+            &format!("create descriptor type {ty}"),
+        )?;
         Ok(Self(d))
     }
     fn set_raw<V>(&self, name: u32, ty: T, vals: &[V]) -> Result<()> {
         ok(
             unsafe {
-                raw::set(self.0, name, ty as u32, vals.len() as i64, vals.as_ptr() as *const c_void)
+                raw::set(
+                    self.0,
+                    name,
+                    ty as u32,
+                    vals.len() as i64,
+                    vals.as_ptr() as *const c_void,
+                )
             },
             &format!("set attribute {name}"),
         )
@@ -183,7 +205,14 @@ impl Desc {
         let (mut v, mut n) = (0i64, 0i64);
         ok(
             unsafe {
-                raw::get(self.0, name as u32, T::CUDNN_TYPE_INT64 as u32, 1, &mut n, &mut v as *mut i64 as *mut c_void)
+                raw::get(
+                    self.0,
+                    name as u32,
+                    T::CUDNN_TYPE_INT64 as u32,
+                    1,
+                    &mut n,
+                    &mut v as *mut i64 as *mut c_void,
+                )
             },
             &format!("get {name:?}"),
         )?;
@@ -214,7 +243,8 @@ fn handle(dev: &super::device::DeviceContext) -> Result<sys::cudnnHandle_t> {
         Ok(h) => {
             // The handle is shared; the stream is the caller's device's (a
             // thread may run on another stream, e.g. a CUDA-graph capture).
-            let st = unsafe { sys::cudnnSetStream(h.0, dev.stream.cu_stream() as sys::cudaStream_t) };
+            let st =
+                unsafe { sys::cudnnSetStream(h.0, dev.stream.cu_stream() as sys::cudaStream_t) };
             if st != sys::cudnnStatus_t::CUDNN_STATUS_SUCCESS {
                 return Err(msg(format!("cudnnSetStream: {st:?}")));
             }
@@ -239,14 +269,30 @@ fn tensor(
     by_value: bool,
 ) -> Result<Desc> {
     let t = Desc::new(DT::CUDNN_BACKEND_TENSOR_DESCRIPTOR)?;
-    t.set(A::CUDNN_ATTR_TENSOR_DATA_TYPE, T::CUDNN_TYPE_DATA_TYPE, &[dtype])?;
+    t.set(
+        A::CUDNN_ATTR_TENSOR_DATA_TYPE,
+        T::CUDNN_TYPE_DATA_TYPE,
+        &[dtype],
+    )?;
     t.set(A::CUDNN_ATTR_TENSOR_DIMENSIONS, T::CUDNN_TYPE_INT64, &dims)?;
     t.set(A::CUDNN_ATTR_TENSOR_STRIDES, T::CUDNN_TYPE_INT64, &strides)?;
     t.set(A::CUDNN_ATTR_TENSOR_UNIQUE_ID, T::CUDNN_TYPE_INT64, &[uid])?;
-    t.set(A::CUDNN_ATTR_TENSOR_BYTE_ALIGNMENT, T::CUDNN_TYPE_INT64, &[16i64])?;
-    t.set(A::CUDNN_ATTR_TENSOR_IS_VIRTUAL, T::CUDNN_TYPE_BOOLEAN, &[virt])?;
+    t.set(
+        A::CUDNN_ATTR_TENSOR_BYTE_ALIGNMENT,
+        T::CUDNN_TYPE_INT64,
+        &[16i64],
+    )?;
+    t.set(
+        A::CUDNN_ATTR_TENSOR_IS_VIRTUAL,
+        T::CUDNN_TYPE_BOOLEAN,
+        &[virt],
+    )?;
     if by_value {
-        t.set(A::CUDNN_ATTR_TENSOR_IS_BY_VALUE, T::CUDNN_TYPE_BOOLEAN, &[true])?;
+        t.set(
+            A::CUDNN_ATTR_TENSOR_IS_BY_VALUE,
+            T::CUDNN_TYPE_BOOLEAN,
+            &[true],
+        )?;
     }
     t.finalize("tensor")
 }
@@ -258,7 +304,11 @@ fn pointwise_op(
     y: &Desc,
 ) -> Result<(Desc, Desc)> {
     let pw = Desc::new(DT::CUDNN_BACKEND_POINTWISE_DESCRIPTOR)?;
-    pw.set(A::CUDNN_ATTR_POINTWISE_MODE, T::CUDNN_TYPE_POINTWISE_MODE, &[mode])?;
+    pw.set(
+        A::CUDNN_ATTR_POINTWISE_MODE,
+        T::CUDNN_TYPE_POINTWISE_MODE,
+        &[mode],
+    )?;
     pw.set(
         A::CUDNN_ATTR_POINTWISE_MATH_PREC,
         T::CUDNN_TYPE_DATA_TYPE,
@@ -275,11 +325,7 @@ fn pointwise_op(
     Ok((pw, op.finalize("pointwise op")?))
 }
 
-fn reduction_op(
-    op_ty: sys::cudnnReduceTensorOp_t,
-    x: &Desc,
-    y: &Desc,
-) -> Result<(Desc, Desc)> {
+fn reduction_op(op_ty: sys::cudnnReduceTensorOp_t, x: &Desc, y: &Desc) -> Result<(Desc, Desc)> {
     let r = Desc::new(DT::CUDNN_BACKEND_REDUCTION_DESCRIPTOR)?;
     r.set(
         A::CUDNN_ATTR_REDUCTION_OPERATOR,
@@ -356,20 +402,64 @@ struct Graph {
     _keep: Vec<Desc>,
 }
 
-fn build_graph(h: sys::cudnnHandle_t, kind: SdpaGraph, bh: i64, sq: i64, sk: i64, d: i64) -> Result<Graph> {
+fn build_graph(
+    h: sys::cudnnHandle_t,
+    kind: SdpaGraph,
+    bh: i64,
+    sq: i64,
+    sk: i64,
+    d: i64,
+) -> Result<Graph> {
     use cudnnDataType_t::{CUDNN_DATA_BFLOAT16 as BF16, CUDNN_DATA_FLOAT as F32};
     use sys::cudnnPointwiseMode_t as PM;
     use sys::cudnnReduceTensorOp_t as RO;
-    let q = tensor(UID_Q, BF16, [1, bh, sq, d], [bh * sq * d, sq * d, d, 1], false, false)?;
-    let v = tensor(UID_V, BF16, [1, bh, sk, d], [bh * sk * d, sk * d, d, 1], false, false)?;
-    let o = tensor(UID_O, BF16, [1, bh, sq, d], [bh * sq * d, sq * d, d, 1], false, false)?;
+    let q = tensor(
+        UID_Q,
+        BF16,
+        [1, bh, sq, d],
+        [bh * sq * d, sq * d, d, 1],
+        false,
+        false,
+    )?;
+    let v = tensor(
+        UID_V,
+        BF16,
+        [1, bh, sk, d],
+        [bh * sk * d, sk * d, d, 1],
+        false,
+        false,
+    )?;
+    let o = tensor(
+        UID_O,
+        BF16,
+        [1, bh, sq, d],
+        [bh * sq * d, sq * d, d, 1],
+        false,
+        false,
+    )?;
     let scale = tensor(UID_SCALE, F32, [1, 1, 1, 1], [1, 1, 1, 1], false, true)?;
-    let full = |uid| tensor(uid, F32, [1, bh, sq, sk], [bh * sq * sk, sq * sk, sk, 1], true, false);
+    let full = |uid| {
+        tensor(
+            uid,
+            F32,
+            [1, bh, sq, sk],
+            [bh * sq * sk, sq * sk, sk, 1],
+            true,
+            false,
+        )
+    };
     let row = |uid| tensor(uid, F32, [1, bh, sq, 1], [bh * sq, sq, 1, 1], true, false);
     let (ops, mut keep): (Vec<Desc>, Vec<Desc>) = match kind {
         SdpaGraph::Unified => {
             // The literal K, [.., sk, d].
-            let k = tensor(UID_K, BF16, [1, bh, sk, d], [bh * sk * d, sk * d, d, 1], false, false)?;
+            let k = tensor(
+                UID_K,
+                BF16,
+                [1, bh, sk, d],
+                [bh * sk * d, sk * d, d, 1],
+                false,
+                false,
+            )?;
             let op = Desc::new_raw(raw::OPERATION_SDPA_FWD_DESCRIPTOR)?;
             op.set_desc_raw(raw::ATTR_OPERATION_SDPA_FWD_QDESC, &[&q])?;
             op.set_desc_raw(raw::ATTR_OPERATION_SDPA_FWD_KDESC, &[&k])?;
@@ -381,7 +471,14 @@ fn build_graph(h: sys::cudnnHandle_t, kind: SdpaGraph, bh: i64, sq: i64, sk: i64
         }
         SdpaGraph::Softmax | SdpaGraph::Composite => {
             // K^T as a [.., d, sk] view of row-major K.
-            let kt = tensor(UID_K, BF16, [1, bh, d, sk], [bh * sk * d, sk * d, 1, d], false, false)?;
+            let kt = tensor(
+                UID_K,
+                BF16,
+                [1, bh, d, sk],
+                [bh * sk * d, sk * d, 1, d],
+                false,
+                false,
+            )?;
             let (s, s2, p) = (full(100)?, full(101)?, full(106)?);
             let (d1, bmm1) = matmul_op(&q, &kt, &s)?;
             let (d2, mul) = pointwise_op(PM::CUDNN_POINTWISE_MUL, &s, Some(&scale), &s2)?;
@@ -401,14 +498,23 @@ fn build_graph(h: sys::cudnnHandle_t, kind: SdpaGraph, bh: i64, sq: i64, sk: i64
                 let (d7, pdiv) = pointwise_op(PM::CUDNN_POINTWISE_DIV, &ex, Some(&sum), &p)?;
                 (
                     vec![bmm1, mul, rmax, psub, pexp, rsum, pdiv, bmm2],
-                    vec![kt, s, s2, p, mx, sub, ex, sum, d1, d2, d3, d4, d5, d6, d7, d8],
+                    vec![
+                        kt, s, s2, p, mx, sub, ex, sum, d1, d2, d3, d4, d5, d6, d7, d8,
+                    ],
                 )
             }
         }
     };
     let graph = Desc::new(DT::CUDNN_BACKEND_OPERATIONGRAPH_DESCRIPTOR)?;
-    graph.set_desc(A::CUDNN_ATTR_OPERATIONGRAPH_OPS, &ops.iter().collect::<Vec<_>>())?;
-    graph.set(A::CUDNN_ATTR_OPERATIONGRAPH_HANDLE, T::CUDNN_TYPE_HANDLE, &[h])?;
+    graph.set_desc(
+        A::CUDNN_ATTR_OPERATIONGRAPH_OPS,
+        &ops.iter().collect::<Vec<_>>(),
+    )?;
+    graph.set(
+        A::CUDNN_ATTR_OPERATIONGRAPH_HANDLE,
+        T::CUDNN_TYPE_HANDLE,
+        &[h],
+    )?;
     let graph = graph.finalize("operation graph")?;
     keep.extend([q, v, o, scale]);
     keep.extend(ops);
@@ -489,7 +595,8 @@ fn numerical_notes(cfg: &Desc) -> Option<Vec<u32>> {
 /// (`CUDNN_NUMERICAL_NOTE_NONDETERMINISTIC`: atomics, split reductions).
 /// Such configs are skipped unless `FASTVIDEO_CUDNN_SDPA_NONDETERMINISTIC=1`.
 fn is_nondeterministic(notes: &[u32]) -> bool {
-    notes.contains(&(sys::cudnnBackendNumericalNote_t::CUDNN_NUMERICAL_NOTE_NONDETERMINISTIC as u32))
+    notes
+        .contains(&(sys::cudnnBackendNumericalNote_t::CUDNN_NUMERICAL_NOTE_NONDETERMINISTIC as u32))
 }
 
 fn allow_nondeterministic() -> bool {
@@ -532,10 +639,18 @@ fn build(
     // Heuristic modes in cudnn-frontend's order: A, then B, then FALLBACK.
     use sys::cudnnBackendHeurMode_t as HM;
     let mut last = String::from("no engine config");
-    for mode in [HM::CUDNN_HEUR_MODE_A, HM::CUDNN_HEUR_MODE_B, HM::CUDNN_HEUR_MODE_FALLBACK] {
+    for mode in [
+        HM::CUDNN_HEUR_MODE_A,
+        HM::CUDNN_HEUR_MODE_B,
+        HM::CUDNN_HEUR_MODE_FALLBACK,
+    ] {
         let heur = Desc::new(DT::CUDNN_BACKEND_ENGINEHEUR_DESCRIPTOR)?;
         heur.set_desc(A::CUDNN_ATTR_ENGINEHEUR_OPERATION_GRAPH, &[&g.graph])?;
-        heur.set(A::CUDNN_ATTR_ENGINEHEUR_MODE, T::CUDNN_TYPE_HEUR_MODE, &[mode])?;
+        heur.set(
+            A::CUDNN_ATTR_ENGINEHEUR_MODE,
+            T::CUDNN_TYPE_HEUR_MODE,
+            &[mode],
+        )?;
         let heur = match heur.finalize("engine heuristics") {
             Ok(h) => h,
             Err(e) => {
@@ -582,7 +697,11 @@ fn build(
                 continue;
             }
             let plan = Desc::new(DT::CUDNN_BACKEND_EXECUTION_PLAN_DESCRIPTOR)?;
-            plan.set(A::CUDNN_ATTR_EXECUTION_PLAN_HANDLE, T::CUDNN_TYPE_HANDLE, &[h])?;
+            plan.set(
+                A::CUDNN_ATTR_EXECUTION_PLAN_HANDLE,
+                T::CUDNN_TYPE_HANDLE,
+                &[h],
+            )?;
             plan.set_desc(A::CUDNN_ATTR_EXECUTION_PLAN_ENGINE_CONFIG, &[cfg])?;
             match plan.finalize("execution plan") {
                 Ok(plan) => {
@@ -613,10 +732,14 @@ fn build(
             }
         }
         if skipped > 0 {
-            last = format!("{mode:?}: only {skipped} executable configs (asked for index {want_cfg})");
+            last =
+                format!("{mode:?}: only {skipped} executable configs (asked for index {want_cfg})");
         }
     }
-    Err(msg(format!("cudnn sdpa ({}): no executable plan ({last})", kind.name())))
+    Err(msg(format!(
+        "cudnn sdpa ({}): no executable plan ({last})",
+        kind.name()
+    )))
 }
 
 type Key = (SdpaGraph, usize, usize, usize, usize, usize);
@@ -644,7 +767,9 @@ pub fn plan_for_graph(
     if let Some(p) = map.get(&key) {
         return p.clone();
     }
-    let p = build(&dev, kind, cfg, bh, sq, sk, d).map(Arc::new).map_err(|e| e.to_string());
+    let p = build(&dev, kind, cfg, bh, sq, sk, d)
+        .map(Arc::new)
+        .map_err(|e| e.to_string());
     map.insert(key, p.clone());
     p
 }
@@ -673,7 +798,10 @@ fn plan_for(bh: usize, sq: usize, sk: usize, d: usize) -> Option<Arc<SdpaPlan>> 
     }
     super::log::info_once(
         &FAILED,
-        format_args!("sdpa: cuDNN fused attention unavailable, using flash_mma: {}", errs.join("; ")),
+        format_args!(
+            "sdpa: cuDNN fused attention unavailable, using flash_mma: {}",
+            errs.join("; ")
+        ),
     );
     None
 }
@@ -742,12 +870,24 @@ pub fn execute(
         &scale_host as *const f32 as *mut c_void,
     ];
     let pack = Desc::new(DT::CUDNN_BACKEND_VARIANT_PACK_DESCRIPTOR)?;
-    pack.set(A::CUDNN_ATTR_VARIANT_PACK_UNIQUE_IDS, T::CUDNN_TYPE_INT64, &uids)?;
-    pack.set(A::CUDNN_ATTR_VARIANT_PACK_DATA_POINTERS, T::CUDNN_TYPE_VOID_PTR, &ptrs)?;
+    pack.set(
+        A::CUDNN_ATTR_VARIANT_PACK_UNIQUE_IDS,
+        T::CUDNN_TYPE_INT64,
+        &uids,
+    )?;
+    pack.set(
+        A::CUDNN_ATTR_VARIANT_PACK_DATA_POINTERS,
+        T::CUDNN_TYPE_VOID_PTR,
+        &ptrs,
+    )?;
     let wptr: *mut c_void = wsp
         .as_ref()
         .map_or(std::ptr::null_mut(), |(p, _)| *p as *mut c_void);
-    pack.set(A::CUDNN_ATTR_VARIANT_PACK_WORKSPACE, T::CUDNN_TYPE_VOID_PTR, &[wptr])?;
+    pack.set(
+        A::CUDNN_ATTR_VARIANT_PACK_WORKSPACE,
+        T::CUDNN_TYPE_VOID_PTR,
+        &[wptr],
+    )?;
     let pack = pack.finalize("variant pack")?;
     ok(unsafe { raw::execute(h, plan.plan.0, pack.0) }, "execute")
 }

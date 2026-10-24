@@ -99,7 +99,7 @@ fn swiglu(xs: &CudaTensor) -> Result<CudaTensor> {
     }
     let x1 = xs.narrow(xs.rank() - 1, 0, last / 2)?;
     let x2 = xs.narrow(xs.rank() - 1, last / 2, last / 2)?;
-    Ok(x1.silu().mul(&x2)?)
+    x1.silu().mul(&x2)
 }
 
 struct FeedForward {
@@ -123,7 +123,8 @@ impl FeedForward {
     }
 
     fn forward(&self, xs: &CudaTensor) -> Result<CudaTensor> {
-        self.linear_out.forward(&swiglu(&self.linear_in.forward(xs)?)?)
+        self.linear_out
+            .forward(&swiglu(&self.linear_in.forward(xs)?)?)
     }
 }
 
@@ -187,7 +188,14 @@ impl JointAttn {
         }
     }
 
-    fn load(map: &WeightMap, prefix: &str, dim: usize, heads: usize, dim_head: usize, eps: f32) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        dim: usize,
+        heads: usize,
+        dim_head: usize,
+        eps: f32,
+    ) -> Result<Self> {
         let inner = heads * dim_head;
         Ok(Self {
             to_q: Linear::load(map, &format!("{prefix}.to_q"), dim, inner, false)?,
@@ -213,14 +221,34 @@ impl JointAttn {
         encoder: &CudaTensor,
         rope: &(CudaTensor, CudaTensor),
     ) -> Result<(CudaTensor, CudaTensor)> {
-        let q = rms_heads(&self.to_q.forward(hidden)?, &self.norm_q, self.heads, self.dim_head)?;
-        let k = rms_heads(&self.to_k.forward(hidden)?, &self.norm_k, self.heads, self.dim_head)?;
+        let q = rms_heads(
+            &self.to_q.forward(hidden)?,
+            &self.norm_q,
+            self.heads,
+            self.dim_head,
+        )?;
+        let k = rms_heads(
+            &self.to_k.forward(hidden)?,
+            &self.norm_k,
+            self.heads,
+            self.dim_head,
+        )?;
         let v = {
             let t = self.to_v.forward(hidden)?;
             t.reshape(vec![t.shape[0], t.shape[1], self.heads, self.dim_head])?
         };
-        let eq = rms_heads(&self.add_q.forward(encoder)?, &self.norm_aq, self.heads, self.dim_head)?;
-        let ek = rms_heads(&self.add_k.forward(encoder)?, &self.norm_ak, self.heads, self.dim_head)?;
+        let eq = rms_heads(
+            &self.add_q.forward(encoder)?,
+            &self.norm_aq,
+            self.heads,
+            self.dim_head,
+        )?;
+        let ek = rms_heads(
+            &self.add_k.forward(encoder)?,
+            &self.norm_ak,
+            self.heads,
+            self.dim_head,
+        )?;
         let ev = {
             let t = self.add_v.forward(encoder)?;
             t.reshape(vec![t.shape[0], t.shape[1], self.heads, self.dim_head])?
@@ -258,7 +286,12 @@ impl DoubleBlock {
     fn zeros(cfg: &Flux2ArchConfig) -> Self {
         let dim = cfg.hidden_size();
         Self {
-            attn: JointAttn::zeros(dim, cfg.num_attention_heads, cfg.attention_head_dim, cfg.eps),
+            attn: JointAttn::zeros(
+                dim,
+                cfg.num_attention_heads,
+                cfg.attention_head_dim,
+                cfg.eps,
+            ),
             ff: FeedForward::zeros(dim, cfg.mlp_hidden()),
             ff_ctx: FeedForward::zeros(dim, cfg.mlp_hidden()),
             eps: cfg.eps,
@@ -269,14 +302,26 @@ impl DoubleBlock {
         let dim = cfg.hidden_size();
         let p = format!("transformer_blocks.{i}");
         Ok(Self {
-            attn: JointAttn::load(map, &format!("{p}.attn"), dim, cfg.num_attention_heads, cfg.attention_head_dim, cfg.eps)?,
+            attn: JointAttn::load(
+                map,
+                &format!("{p}.attn"),
+                dim,
+                cfg.num_attention_heads,
+                cfg.attention_head_dim,
+                cfg.eps,
+            )?,
             ff: FeedForward::load(map, &format!("{p}.ff"), dim, cfg.mlp_hidden())?,
             ff_ctx: FeedForward::load(map, &format!("{p}.ff_context"), dim, cfg.mlp_hidden())?,
             eps: cfg.eps,
         })
     }
 
-    fn modulate(xs: &CudaTensor, shift: &CudaTensor, scale: &CudaTensor, eps: f32) -> Result<CudaTensor> {
+    fn modulate(
+        xs: &CudaTensor,
+        shift: &CudaTensor,
+        scale: &CudaTensor,
+        eps: f32,
+    ) -> Result<CudaTensor> {
         let n = xs.layer_norm(eps, None, None)?;
         n.mul(&scale.add_scalar(1.0))?.add(shift)
     }
@@ -326,10 +371,24 @@ impl ParallelAttn {
         }
     }
 
-    fn load(map: &WeightMap, prefix: &str, dim: usize, heads: usize, dim_head: usize, mlp: usize, eps: f32) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        dim: usize,
+        heads: usize,
+        dim_head: usize,
+        mlp: usize,
+        eps: f32,
+    ) -> Result<Self> {
         let inner = heads * dim_head;
         Ok(Self {
-            to_qkv_mlp: Linear::load(map, &format!("{prefix}.to_qkv_mlp_proj"), dim, inner * 3 + mlp * 2, false)?,
+            to_qkv_mlp: Linear::load(
+                map,
+                &format!("{prefix}.to_qkv_mlp_proj"),
+                dim,
+                inner * 3 + mlp * 2,
+                false,
+            )?,
             to_out: Linear::load(map, &format!("{prefix}.to_out"), inner + mlp, dim, false)?,
             norm_q: RmsNorm::load(map, &format!("{prefix}.norm_q"), dim_head, eps)?,
             norm_k: RmsNorm::load(map, &format!("{prefix}.norm_k"), dim_head, eps)?,
@@ -361,7 +420,8 @@ impl ParallelAttn {
         .transpose(1, 2)?;
         let attn = attn.reshape(vec![attn.shape[0], attn.shape[1], self.inner])?;
         let mlp = swiglu(&mlp)?;
-        self.to_out.forward(&CudaTensor::cat(&[&attn, &mlp], attn.rank() - 1)?)
+        self.to_out
+            .forward(&CudaTensor::cat(&[&attn, &mlp], attn.rank() - 1)?)
     }
 }
 
@@ -482,6 +542,9 @@ impl Modulation {
     }
 }
 
+/// Pinned RoPE `(sin, cos)` keyed by `(text_len, img_h, img_w)`.
+type RopeCache = Option<((usize, usize, usize), (CudaTensor, CudaTensor))>;
+
 pub struct Flux2Transformer2D {
     pub cfg: Flux2ArchConfig,
     time: TimeEmbed,
@@ -496,7 +559,7 @@ pub struct Flux2Transformer2D {
     norm_out: Linear,
     proj_out: Linear,
     /// `(text_len, img_h, img_w)` → pinned sin/cos. Reused across denoise steps.
-    rope_cache: Option<((usize, usize, usize), (CudaTensor, CudaTensor))>,
+    rope_cache: RopeCache,
     /// Times `flux2_rope` ran for this instance (cache misses).
     rope_builds: u64,
 }
@@ -514,8 +577,12 @@ impl Flux2Transformer2D {
             single: Modulation::zeros(dim, 1),
             x_embed: Linear::zeros(cfg.in_channels, dim, false),
             ctx_embed: Linear::zeros(cfg.joint_attention_dim, dim, false),
-            blocks: (0..cfg.num_layers).map(|_| DoubleBlock::zeros(&cfg)).collect(),
-            singles: (0..cfg.num_single_layers).map(|_| SingleBlock::zeros(&cfg)).collect(),
+            blocks: (0..cfg.num_layers)
+                .map(|_| DoubleBlock::zeros(&cfg))
+                .collect(),
+            singles: (0..cfg.num_single_layers)
+                .map(|_| SingleBlock::zeros(&cfg))
+                .collect(),
             norm_out: Linear::zeros(dim, dim * 2, false),
             proj_out: Linear::zeros(dim, cfg.out_channels, false),
             rope_cache: None,
@@ -535,7 +602,12 @@ impl Flux2Transformer2D {
             singles.push(SingleBlock::load(map, i, &cfg)?);
         }
         Ok(Self {
-            time: TimeEmbed::load(map, "time_guidance_embed.timestep_embedder", cfg.timestep_guidance_channels, dim)?,
+            time: TimeEmbed::load(
+                map,
+                "time_guidance_embed.timestep_embedder",
+                cfg.timestep_guidance_channels,
+                dim,
+            )?,
             guidance: if cfg.guidance_embeds {
                 Some(TimeEmbed::load(
                     map,
@@ -561,14 +633,25 @@ impl Flux2Transformer2D {
         })
     }
 
-    fn cached_rope(&mut self, text_len: usize, img_h: usize, img_w: usize) -> Result<(CudaTensor, CudaTensor)> {
+    fn cached_rope(
+        &mut self,
+        text_len: usize,
+        img_h: usize,
+        img_w: usize,
+    ) -> Result<(CudaTensor, CudaTensor)> {
         let key = (text_len, img_h, img_w);
         if let Some((k, tables)) = &self.rope_cache {
             if *k == key {
                 return Ok(tables.clone());
             }
         }
-        let (mut cos, mut sin) = flux2_rope(text_len, img_h, img_w, &self.cfg.axes_dims_rope, self.cfg.rope_theta)?;
+        let (mut cos, mut sin) = flux2_rope(
+            text_len,
+            img_h,
+            img_w,
+            &self.cfg.axes_dims_rope,
+            self.cfg.rope_theta,
+        )?;
         cos.pin_device()?;
         sin.pin_device()?;
         let tables = (cos, sin);
@@ -591,7 +674,9 @@ impl Flux2Transformer2D {
         if x.rank() == 5 {
             let (b, c, t, h, w) = (x.shape[0], x.shape[1], x.shape[2], x.shape[3], x.shape[4]);
             five = Some((b, t, h, w, c));
-            x = x.permute(&[0, 2, 3, 4, 1])?.reshape(vec![b, t * h * w, c])?;
+            x = x
+                .permute(&[0, 2, 3, 4, 1])?
+                .reshape(vec![b, t * h * w, c])?;
         }
         let t = CudaTensor::from_vec(vec![timestep * 1000.0], vec![1])?;
         let mut temb = self.time.forward(&t)?;
@@ -635,7 +720,13 @@ impl Flux2Transformer2D {
     }
 }
 
-fn flux2_rope(text_len: usize, img_h: usize, img_w: usize, axes: &[usize; 4], theta: f32) -> Result<(CudaTensor, CudaTensor)> {
+fn flux2_rope(
+    text_len: usize,
+    img_h: usize,
+    img_w: usize,
+    axes: &[usize; 4],
+    theta: f32,
+) -> Result<(CudaTensor, CudaTensor)> {
     let t0 = Instant::now();
     let txt = fastvideo_models::flux2::text_ids(text_len);
     let img = fastvideo_models::flux2::image_ids(1, img_h, img_w);
@@ -680,7 +771,8 @@ mod tests {
     fn apply_rotary_records_host_stats() {
         let _guard = ROPE_STATS_LOCK.lock().unwrap();
         reset_rope_host_stats();
-        let xs = CudaTensor::from_vec((0..16).map(|i| i as f32 * 0.1).collect(), vec![1, 2, 1, 8]).unwrap();
+        let xs = CudaTensor::from_vec((0..16).map(|i| i as f32 * 0.1).collect(), vec![1, 2, 1, 8])
+            .unwrap();
         let ones = vec![1.0f32; 16];
         let zeros = vec![0.0f32; 16];
         let cos = CudaTensor::from_vec(ones, vec![2, 8]).unwrap();

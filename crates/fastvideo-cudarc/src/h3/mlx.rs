@@ -23,12 +23,9 @@ pub struct MlxH3Manifest {
 
 /// Look for an official FastVideo MLX H3 export under `transformer/` or `root`.
 pub fn find(root: &Path) -> Option<PathBuf> {
-    for dir in [root.join("transformer"), root.to_path_buf()] {
-        if dir.join(MANIFEST).is_file() && dir.join(WEIGHTS).is_file() {
-            return Some(dir);
-        }
-    }
-    None
+    [root.join("transformer"), root.to_path_buf()]
+        .into_iter()
+        .find(|dir| dir.join(MANIFEST).is_file() && dir.join(WEIGHTS).is_file())
 }
 
 pub fn read_manifest(dir: &Path) -> Result<MlxH3Manifest> {
@@ -70,7 +67,7 @@ pub fn read_manifest(dir: &Path) -> Result<MlxH3Manifest> {
 pub fn open_map(dir: &Path) -> Result<(WeightMap, MlxH3Manifest)> {
     let spec = read_manifest(dir)?;
     affine::apply_env(Some(spec.bits));
-    let map = WeightMap::open_files(&[spec.weights.clone()])?.with_mlx_h3_aliases();
+    let map = WeightMap::open_files(std::slice::from_ref(&spec.weights))?.with_mlx_h3_aliases();
     Ok((map, spec))
 }
 

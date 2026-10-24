@@ -941,7 +941,9 @@ impl QuantLayout {
             return Err(msg(format!("quant layout of {} bytes", bytes.len())));
         }
         let w: Vec<u32> = bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         let n = w[3] as usize;
@@ -1043,7 +1045,9 @@ mod device_impl {
         m: usize,
         k: usize,
     ) -> Result<Option<Arc<W8Act>>> {
-        let Some(key) = x.act_key() else { return Ok(None) };
+        let Some(key) = x.act_key() else {
+            return Ok(None);
+        };
         let mut slot = W8_CACHE.lock().expect("w8a8 activation cache");
         if let Some(c) = slot.as_ref() {
             if c.key.matches(&key) && c.act.m == m && c.act.k == k {
@@ -1373,8 +1377,10 @@ mod device_impl {
                     let mut _own_x = None;
                     let xb = if lay.sections.iter().any(|s| !s.quantized) {
                         let xp = x_bf16.ok_or_else(|| msg("bf16 section without input"))?;
-                        let mut xpad =
-                            dev.stream.alloc_zeros::<half::bf16>(m_pad * k).map_err(err)?;
+                        let mut xpad = dev
+                            .stream
+                            .alloc_zeros::<half::bf16>(m_pad * k)
+                            .map_err(err)?;
                         let dst = ptr_mut(&mut xpad);
                         // SAFETY: `xp` holds `m * k` bf16 values (the caller's
                         // contract) and `xpad` holds `m_pad * k >= m * k`, both
@@ -1692,7 +1698,9 @@ mod device_impl {
                 || !lay.sections[0].quantized
                 || act.k != lay.in_dim
             {
-                return Err(msg("forward_mx_padded: needs one MXFP8 section of the act's width"));
+                return Err(msg(
+                    "forward_mx_padded: needs one MXFP8 section of the act's width",
+                ));
             }
             let blob = self
                 .blob_dev
@@ -1701,8 +1709,8 @@ mod device_impl {
             let bp = ptr(blob.as_ref());
             let rows_pad = act.q.len() / act.k;
             let n_out = lay.out_dim;
-            let mut out =
-                unsafe { dev.stream.alloc::<half::bf16>((rows_pad * n_out).max(1)) }.map_err(err)?;
+            let mut out = unsafe { dev.stream.alloc::<half::bf16>((rows_pad * n_out).max(1)) }
+                .map_err(err)?;
             let l = &lay.lay[0];
             let g = LtGemm {
                 m: n_out,
@@ -1893,8 +1901,14 @@ mod tests {
         assert_eq!(mx.mxfp8_last_block(), MXFP8_LAST_BLOCK);
         // FastH3 Trim: 42 blocks, the last three (source 47-49) stay bf16.
         let trim = H3QuantPlan::new(QuantMode::Mxfp8, 42, 2);
-        assert_eq!((trim.dit_block(1), trim.dit_block(2)), (None, Some(QuantKind::Mxfp8)));
-        assert_eq!((trim.dit_block(38), trim.dit_block(39)), (Some(QuantKind::Mxfp8), None));
+        assert_eq!(
+            (trim.dit_block(1), trim.dit_block(2)),
+            (None, Some(QuantKind::Mxfp8))
+        );
+        assert_eq!(
+            (trim.dit_block(38), trim.dit_block(39)),
+            (Some(QuantKind::Mxfp8), None)
+        );
         assert_eq!(trim.reference_linear_count(), 37 * 4);
         assert_eq!(QuantMode::parse("W8A8").unwrap(), QuantMode::W8A8);
         assert_eq!(QuantMode::parse("off").unwrap(), QuantMode::Off);

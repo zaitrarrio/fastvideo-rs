@@ -26,8 +26,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use fastvideo_engine_service::stream::avatar::{
-    derived_seconds, effective_seconds, plan, word_count, AvatarConfig, AvatarEvent, AvatarPlayer, AvatarStatus,
-    AvatarTake, PlanInput, WPM_DEFAULT, WPM_MAX, WPM_MIN,
+    derived_seconds, effective_seconds, plan, word_count, AvatarConfig, AvatarEvent, AvatarPlayer,
+    AvatarStatus, AvatarTake, PlanInput, WPM_DEFAULT, WPM_MAX, WPM_MIN,
 };
 use fastvideo_engine_service::{
     spawn_clip_pacer, ClipPacerConfig, ClipSession, IdlePolicy, PacedStream, TickStart,
@@ -57,7 +57,13 @@ pub struct AvatarSettings {
 
 impl Default for AvatarSettings {
     fn default() -> Self {
-        Self { window_s: 10.0, size: (640, 352), session_max_s: 1800, lookahead: 2, speed: 1.0 }
+        Self {
+            window_s: 10.0,
+            size: (640, 352),
+            session_max_s: 1800,
+            lookahead: 2,
+            speed: 1.0,
+        }
     }
 }
 
@@ -90,7 +96,16 @@ struct Conds {
 
 impl Conds {
     fn new(seed: u64) -> Self {
-        Self { image: None, voice: None, script: String::new(), prompt: String::new(), wpm: WPM_DEFAULT, duration: 0.0, seed, queued: Vec::new() }
+        Self {
+            image: None,
+            voice: None,
+            script: String::new(),
+            prompt: String::new(),
+            wpm: WPM_DEFAULT,
+            duration: 0.0,
+            seed,
+            queued: Vec::new(),
+        }
     }
 
     fn derived(&self) -> f64 {
@@ -146,7 +161,9 @@ impl AvatarDriver {
     ) -> Result<(Self, PacedStream), ApiError> {
         let spec = session.spec().clone();
         let grid = session.caps().frames.clone();
-        let dir = std::env::temp_dir().join("fv-sessions").join(format!("{}-avatar-inputs", session.id()));
+        let dir = std::env::temp_dir()
+            .join("fv-sessions")
+            .join(format!("{}-avatar-inputs", session.id()));
         let (player, outputs) = AvatarPlayer::start(
             session,
             AvatarConfig {
@@ -197,7 +214,17 @@ impl Inner {
     fn state(&self, st: &AvatarStatus) -> Value {
         let c = lock(&self.conds);
         let generating = st.generating;
-        let mut valid = vec!["set_avatar_image", "set_script", "set_prompt", "set_wpm", "set_duration_seconds", "set_seed", "set_voice_audio", "get_state", "reset"];
+        let mut valid = vec![
+            "set_avatar_image",
+            "set_script",
+            "set_prompt",
+            "set_wpm",
+            "set_duration_seconds",
+            "set_seed",
+            "set_voice_audio",
+            "get_state",
+            "reset",
+        ];
         if c.startable() && !generating {
             valid.push("start");
         }
@@ -230,13 +257,17 @@ impl Inner {
     }
 
     fn broadcast_state(&self) {
-        self.out.broadcast(ServerMsg::broadcast("state_update", self.state_now()));
+        self.out
+            .broadcast(ServerMsg::broadcast("state_update", self.state_now()));
     }
 
     fn refuse(&self, command: &str, reason: impl Into<String>) -> Outcome {
         let reason = reason.into();
         tracing::info!(command, reason = %reason, "avatar command refused");
-        self.out.broadcast(ServerMsg::broadcast("command_error", json!({"command": command, "reason": reason})));
+        self.out.broadcast(ServerMsg::broadcast(
+            "command_error",
+            json!({"command": command, "reason": reason}),
+        ));
         Outcome::Ack
     }
 
@@ -249,7 +280,12 @@ impl Inner {
 
     async fn forward(&self, ev: AvatarEvent) {
         let (kind, data) = match ev {
-            AvatarEvent::Started { seconds, total_windows, width, height } => (
+            AvatarEvent::Started {
+                seconds,
+                total_windows,
+                width,
+                height,
+            } => (
                 "generation_started",
                 json!({"seconds": seconds, "total_windows": total_windows, "width": width, "height": height}),
             ),
@@ -258,22 +294,45 @@ impl Inner {
                 json!({"window_index": r.index, "total_windows": r.total_windows, "kind": r.kind, "frames": r.frames,
                        "seconds": r.seconds, "build_seconds": r.build_s, "rtf": r.rtf}),
             ),
-            AvatarEvent::WindowStarted { index, total_windows, seconds_sent, since_start_s, stalled_s } => (
+            AvatarEvent::WindowStarted {
+                index,
+                total_windows,
+                seconds_sent,
+                since_start_s,
+                stalled_s,
+            } => (
                 "window_started",
                 json!({"window_index": index, "total_windows": total_windows, "seconds_sent": seconds_sent,
                        "since_start_seconds": since_start_s, "stalled_seconds": stalled_s}),
             ),
-            AvatarEvent::WindowProgress { index, total_windows, seconds_sent, total_seconds } => (
+            AvatarEvent::WindowProgress {
+                index,
+                total_windows,
+                seconds_sent,
+                total_seconds,
+            } => (
                 "window_progress",
                 json!({"window_index": index, "total_windows": total_windows, "seconds_sent": seconds_sent, "total_seconds": total_seconds}),
             ),
-            AvatarEvent::Paused { seconds_sent } => ("generation_paused", json!({"seconds_sent": seconds_sent})),
-            AvatarEvent::Resumed { seconds_sent } => ("generation_resumed", json!({"seconds_sent": seconds_sent})),
-            AvatarEvent::Stopped { seconds_sent } => ("generation_stopped", json!({"seconds_sent": seconds_sent})),
-            AvatarEvent::Complete { seconds_sent } => ("generation_complete", json!({"seconds_sent": seconds_sent})),
-            AvatarEvent::Failed { reason, seconds_sent } => {
-                ("generation_failed", json!({"reason": reason, "seconds_sent": seconds_sent}))
+            AvatarEvent::Paused { seconds_sent } => {
+                ("generation_paused", json!({"seconds_sent": seconds_sent}))
             }
+            AvatarEvent::Resumed { seconds_sent } => {
+                ("generation_resumed", json!({"seconds_sent": seconds_sent}))
+            }
+            AvatarEvent::Stopped { seconds_sent } => {
+                ("generation_stopped", json!({"seconds_sent": seconds_sent}))
+            }
+            AvatarEvent::Complete { seconds_sent } => {
+                ("generation_complete", json!({"seconds_sent": seconds_sent}))
+            }
+            AvatarEvent::Failed {
+                reason,
+                seconds_sent,
+            } => (
+                "generation_failed",
+                json!({"reason": reason, "seconds_sent": seconds_sent}),
+            ),
         };
         self.out.broadcast(ServerMsg::broadcast(kind, data));
         // The player's status catches up right after the event.
@@ -282,11 +341,17 @@ impl Inner {
     }
 
     async fn upload(&self, v: &Value) -> Result<crate::uploads::Upload, Outcome> {
-        let id = v.get("upload_id").and_then(Value::as_str).unwrap_or_default();
-        self.uploads.resolve(id, RESOLVE_TIMEOUT).await.ok_or_else(|| Outcome::Error {
-            code: "unresolved_upload".into(),
-            message: format!("upload `{id}` was not received"),
-        })
+        let id = v
+            .get("upload_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        self.uploads
+            .resolve(id, RESOLVE_TIMEOUT)
+            .await
+            .ok_or_else(|| Outcome::Error {
+                code: "unresolved_upload".into(),
+                message: format!("upload `{id}` was not received"),
+            })
     }
 
     async fn command(&self, name: &str, a: Map<String, Value>) -> Outcome {
@@ -298,7 +363,9 @@ impl Inner {
                     Ok(u) => u,
                     Err(o) => return o,
                 };
-                let dst = self.dir.join(format!("avatar-{}.png", uuid::Uuid::new_v4().simple()));
+                let dst = self
+                    .dir
+                    .join(format!("avatar-{}.png", uuid::Uuid::new_v4().simple()));
                 let (src, d2) = (up.path.clone(), dst.clone());
                 let decoded = tokio::task::spawn_blocking(move || normalize_image(&src, &d2)).await;
                 let (width, height) = match decoded {
@@ -309,12 +376,20 @@ impl Inner {
                 {
                     let mut c = lock(&self.conds);
                     self.queue_change(&mut c, "avatar_image");
-                    if let Some(old) = c.image.replace(Image { path: dst, name: up.name.clone(), width, height }) {
+                    if let Some(old) = c.image.replace(Image {
+                        path: dst,
+                        name: up.name.clone(),
+                        width,
+                        height,
+                    }) {
                         let _ = std::fs::remove_file(old.path);
                     }
                 }
                 self.broadcast_state();
-                reply("avatar_image_accepted", json!({"name": up.name, "width": width, "height": height}))
+                reply(
+                    "avatar_image_accepted",
+                    json!({"name": up.name, "width": width, "height": height}),
+                )
             }
             "set_voice_audio" => {
                 let up = match self.upload(&a["voice_audio"]).await {
@@ -322,7 +397,9 @@ impl Inner {
                     Err(o) => return o,
                 };
                 let src = up.path.clone();
-                let dst = self.dir.join(format!("voice-{}", uuid::Uuid::new_v4().simple()));
+                let dst = self
+                    .dir
+                    .join(format!("voice-{}", uuid::Uuid::new_v4().simple()));
                 let d2 = dst.clone();
                 let probed = tokio::task::spawn_blocking(move || {
                     std::fs::create_dir_all(d2.parent().unwrap_or(Path::new(".")))
@@ -333,20 +410,30 @@ impl Inner {
                 .await;
                 let seconds = match probed {
                     Ok(Ok(s)) if s >= 1.0 => s,
-                    Ok(Ok(s)) => return self.refuse(name, format!("the voice audio is {s:.2} s; at least 1 s")),
+                    Ok(Ok(s)) => {
+                        return self
+                            .refuse(name, format!("the voice audio is {s:.2} s; at least 1 s"))
+                    }
                     Ok(Err(e)) => return self.refuse(name, e),
                     Err(e) => return self.refuse(name, format!("probing the voice: {e}")),
                 };
                 let effective = {
                     let mut c = lock(&self.conds);
                     self.queue_change(&mut c, "voice_audio");
-                    if let Some(old) = c.voice.replace(Voice { path: dst, name: up.name.clone(), seconds }) {
+                    if let Some(old) = c.voice.replace(Voice {
+                        path: dst,
+                        name: up.name.clone(),
+                        seconds,
+                    }) {
                         let _ = std::fs::remove_file(old.path);
                     }
                     c.effective()
                 };
                 self.broadcast_state();
-                reply("voice_audio_accepted", json!({"name": up.name, "seconds": r2(seconds), "effective_seconds": effective}))
+                reply(
+                    "voice_audio_accepted",
+                    json!({"name": up.name, "seconds": r2(seconds), "effective_seconds": effective}),
+                )
             }
             "set_script" => {
                 let script = a["script"].as_str().unwrap_or_default().to_owned();
@@ -426,9 +513,21 @@ impl Inner {
                     });
                     c.queued.clear();
                     let n = p.windows.len();
-                    (AvatarTake { plan: p, image: image.path, seed: c.seed, voice: c.voice.as_ref().map(|v| v.path.clone()) }, n)
+                    (
+                        AvatarTake {
+                            plan: p,
+                            image: image.path,
+                            seed: c.seed,
+                            voice: c.voice.as_ref().map(|v| v.path.clone()),
+                        },
+                        n,
+                    )
                 };
-                tracing::info!(windows = plan_len, seconds = take.plan.effective_seconds, "avatar start");
+                tracing::info!(
+                    windows = plan_len,
+                    seconds = take.plan.effective_seconds,
+                    "avatar start"
+                );
                 match self.player.start_take(take).await {
                     Ok(()) => Outcome::Ack,
                     Err(e) => self.refuse(name, e),
@@ -460,11 +559,17 @@ impl Inner {
                     }
                     *c = Conds::new(self.session_seed);
                 }
-                self.out.broadcast(ServerMsg::broadcast("generation_reset", json!({"was_generating": was_generating})));
+                self.out.broadcast(ServerMsg::broadcast(
+                    "generation_reset",
+                    json!({"was_generating": was_generating}),
+                ));
                 self.broadcast_state();
                 Outcome::Ack
             }
-            _ => Outcome::Error { code: "invalid_command".into(), message: format!("unknown command `{name}`") },
+            _ => Outcome::Error {
+                code: "invalid_command".into(),
+                message: format!("unknown command `{name}`"),
+            },
         }
     }
 }
@@ -485,14 +590,24 @@ fn normalize_image(src: &Path, dst: &Path) -> Result<(u32, u32), String> {
     if let Some(d) = dst.parent() {
         std::fs::create_dir_all(d).map_err(|e| format!("storing the image: {e}"))?;
     }
-    img.save(dst).map_err(|e| format!("storing the image: {e}"))?;
+    img.save(dst)
+        .map_err(|e| format!("storing the image: {e}"))?;
     Ok((w, h))
 }
 
 /// Duration of an audio file (ffprobe `format=duration`).
 fn audio_seconds(path: &Path) -> Result<f64, String> {
     let out = std::process::Command::new("ffprobe")
-        .args(["-v", "error", "-select_streams", "a:0", "-show_entries", "format=duration", "-of", "csv=p=0"])
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
+        ])
         .arg(path)
         .output()
         .map_err(|e| format!("ffprobe not available: {e}"))?;
@@ -510,7 +625,10 @@ impl Driver for AvatarDriver {
     }
 
     fn greet(&self, conn: u32) {
-        self.inner.out.to(conn, ServerMsg::broadcast("state_update", self.inner.state_now()));
+        self.inner.out.to(
+            conn,
+            ServerMsg::broadcast("state_update", self.inner.state_now()),
+        );
     }
 
     fn peers_changed(&self, connected: usize) {

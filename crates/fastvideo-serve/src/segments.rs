@@ -752,9 +752,17 @@ fn luma_diff(a: &RgbFrame, b: &RgbFrame) -> f64 {
     if a.width != b.width || a.height != b.height || a.data.len() != b.data.len() {
         return 255.0;
     }
-    let luma = |p: &[u8]| 0.299 * f64::from(p[0]) + 0.587 * f64::from(p[1]) + 0.114 * f64::from(p[2]);
+    let luma =
+        |p: &[u8]| 0.299 * f64::from(p[0]) + 0.587 * f64::from(p[1]) + 0.114 * f64::from(p[2]);
     let (mut sum, mut n) = (0.0, 0u64);
-    for (pa, pb) in a.data.chunks_exact(3).zip(b.data.chunks_exact(3)).step_by(4) {
+    for (pa, pb) in a
+        .data
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .zip(b.data.as_chunks::<3>().0.iter())
+        .step_by(4)
+    {
         sum += (luma(pa) - luma(pb)).abs();
         n += 1;
     }

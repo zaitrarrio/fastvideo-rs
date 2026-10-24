@@ -17,10 +17,14 @@ pub fn webp_to_vp8(webp: &[u8]) -> Result<&[u8], String> {
         return Err("not a WebP file".into());
     }
     if &webp[12..16] != b"VP8 " {
-        return Err(format!("unexpected WebP chunk {:?} (want lossy `VP8 `)", String::from_utf8_lossy(&webp[12..16])));
+        return Err(format!(
+            "unexpected WebP chunk {:?} (want lossy `VP8 `)",
+            String::from_utf8_lossy(&webp[12..16])
+        ));
     }
     let len = u32::from_le_bytes([webp[16], webp[17], webp[18], webp[19]]) as usize;
-    webp.get(20..20 + len).ok_or_else(|| "truncated VP8 chunk".to_string())
+    webp.get(20..20 + len)
+        .ok_or_else(|| "truncated VP8 chunk".to_string())
 }
 
 /// Whether a VP8 frame is a key frame (RFC 6386 §9.1: bit 0 clear).
@@ -31,7 +35,8 @@ pub fn is_keyframe(frame: &[u8]) -> bool {
 /// libwebp quality (0-100) for a target bitrate at `w·h·fps`: intra-only
 /// frames need roughly 0.1-0.4 bit/pixel at a useful quality.
 pub fn quality_for(bitrate_bps: u32, w: u32, h: u32, fps: u32) -> f32 {
-    let bpp = f64::from(bitrate_bps) / (f64::from(w.max(1)) * f64::from(h.max(1)) * f64::from(fps.max(1)));
+    let bpp = f64::from(bitrate_bps)
+        / (f64::from(w.max(1)) * f64::from(h.max(1)) * f64::from(fps.max(1)));
     (bpp * 250.0).clamp(20.0, 80.0) as f32
 }
 
@@ -47,7 +52,10 @@ impl Vp8Encoder {
         if w == 0 || h == 0 || w > 16383 || h > 16383 {
             return Err(format!("VP8 cannot carry {w}x{h}"));
         }
-        Ok(Self { dims: (w, h), quality })
+        Ok(Self {
+            dims: (w, h),
+            quality,
+        })
     }
 
     pub fn dims(&self) -> (u32, u32) {
@@ -58,7 +66,10 @@ impl Vp8Encoder {
     #[cfg(feature = "director")]
     pub fn encode(&mut self, f: &RgbFrame) -> Result<Bytes, String> {
         if (f.width, f.height) != self.dims {
-            return Err(format!("frame {}x{} does not match the encoder {}x{}", f.width, f.height, self.dims.0, self.dims.1));
+            return Err(format!(
+                "frame {}x{} does not match the encoder {}x{}",
+                f.width, f.height, self.dims.0, self.dims.1
+            ));
         }
         let mut cfg = webp::WebPConfig::new().map_err(|_| "libwebp config".to_string())?;
         cfg.lossless = 0;

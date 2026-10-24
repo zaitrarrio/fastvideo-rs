@@ -198,11 +198,15 @@ fn deserialize(bytes: &[u8]) -> Option<CachedText> {
         return None;
     }
     let ids = body[24..ids_end]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     let data = body[ids_end..]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     Some(CachedText { ids, width, data })

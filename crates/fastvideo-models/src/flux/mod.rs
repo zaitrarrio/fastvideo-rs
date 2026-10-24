@@ -9,7 +9,8 @@ use crate::schedulers::FlowMatchEulerDiscreteScheduler;
 use crate::vae::AutoencoderKlConfig;
 
 pub use config::{
-    Flux1ArchConfig, FLUX1_CLIP_REQUIRED_KEYS, FLUX1_T5_REQUIRED_KEYS, FLUX1_TRANSFORMER_REQUIRED_KEYS,
+    Flux1ArchConfig, FLUX1_CLIP_REQUIRED_KEYS, FLUX1_T5_REQUIRED_KEYS,
+    FLUX1_TRANSFORMER_REQUIRED_KEYS,
 };
 pub use family::{
     calculate_shift, calculate_shift_flux1, image_ids, pack_latents_flux1, packed_hw, text_ids,

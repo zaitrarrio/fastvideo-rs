@@ -115,7 +115,11 @@ pub fn pad_token_ids(ids: &[u32], text_len: usize, pad_id: u32) -> (Vec<u32>, us
     crate::flux2::pad_token_ids(ids, text_len, pad_id)
 }
 
-pub fn tokenize_flux1(path: &str, prompt: &str, max_len: usize) -> Result<(Vec<u32>, usize), String> {
+pub fn tokenize_flux1(
+    path: &str,
+    prompt: &str,
+    max_len: usize,
+) -> Result<(Vec<u32>, usize), String> {
     crate::flux2::tokenize_flux2(path, prompt, max_len)
 }
 

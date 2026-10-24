@@ -80,7 +80,10 @@ impl MemJobStore {
             if p.extension().and_then(|x| x.to_str()) != Some("json") {
                 continue;
             }
-            let job = match tokio::fs::read(&p).await.map(|b| serde_json::from_slice::<Job>(&b)) {
+            let job = match tokio::fs::read(&p)
+                .await
+                .map(|b| serde_json::from_slice::<Job>(&b))
+            {
                 Ok(Ok(j)) => j,
                 Ok(Err(err)) => {
                     tracing::warn!(path = %p.display(), %err, "skipping unreadable job manifest");
@@ -100,7 +103,9 @@ impl MemJobStore {
             let inner = store.inner.get_mut().expect("fresh mutex");
             inner.seq += 1;
             let (tx, _) = watch::channel(job.snapshot(inner.seq));
-            inner.by_ext.insert((job.protocol, job.external_id.clone()), job.id);
+            inner
+                .by_ext
+                .insert((job.protocol, job.external_id.clone()), job.id);
             inner.jobs.insert(job.id, Entry { job, tx });
         }
         Ok(store)
@@ -187,7 +192,13 @@ impl JobStore for MemJobStore {
             g.seq += 1;
             let (tx, _) = watch::channel(job.snapshot(g.seq));
             g.by_ext.insert(key, job.id);
-            g.jobs.insert(job.id, Entry { job: job.clone(), tx });
+            g.jobs.insert(
+                job.id,
+                Entry {
+                    job: job.clone(),
+                    tx,
+                },
+            );
         }
         if let Err(e) = self.persist(&job).await {
             let mut g = self.lock();
@@ -208,11 +219,7 @@ impl JobStore for MemJobStore {
         g.jobs.get(id).map(|e| e.job.clone())
     }
 
-    async fn update(
-        &self,
-        id: JobId,
-        f: JobUpdate,
-    ) -> Result<Job, StoreError> {
+    async fn update(&self, id: JobId, f: JobUpdate) -> Result<Job, StoreError> {
         let _io = self.io.lock().await;
         let job = {
             let mut g = self.lock();
@@ -243,7 +250,8 @@ impl JobStore for MemJobStore {
         let job = {
             let mut g = self.lock();
             let e = g.jobs.remove(&id)?;
-            g.by_ext.remove(&(e.job.protocol, e.job.external_id.clone()));
+            g.by_ext
+                .remove(&(e.job.protocol, e.job.external_id.clone()));
             e.job
         };
         self.cleanup(&job).await;
@@ -267,7 +275,8 @@ impl JobStore for MemJobStore {
             ids.into_iter()
                 .filter_map(|id| {
                     let e = g.jobs.remove(&id)?;
-                    g.by_ext.remove(&(e.job.protocol, e.job.external_id.clone()));
+                    g.by_ext
+                        .remove(&(e.job.protocol, e.job.external_id.clone()));
                     Some(e.job)
                 })
                 .collect()
@@ -320,7 +329,10 @@ pub(crate) mod tests {
             keyframes: vec![],
             references: vec![],
             audio_in: None,
-            audio: AudioPlan::Native { rate: 32000, channels: 2 },
+            audio: AudioPlan::Native {
+                rate: 32000,
+                channels: 2,
+            },
             post: PostProcess::default(),
             sampling: SamplingOverrides::default(),
             tier: None,
@@ -330,7 +342,14 @@ pub(crate) mod tests {
     }
 
     pub fn job(p: ProtocolId, ext: &str, at: OffsetDateTime) -> Job {
-        Job::new(JobId::new(), p, ext, resolved(), at, Duration::from_secs(3600))
+        Job::new(
+            JobId::new(),
+            p,
+            ext,
+            resolved(),
+            at,
+            Duration::from_secs(3600),
+        )
     }
 
     fn t0() -> OffsetDateTime {
@@ -345,9 +364,15 @@ pub(crate) mod tests {
         assert_eq!(s.get(j.id).await.unwrap().external_id, "abc");
         assert!(s.by_external(ProtocolId::Fal, "abc").await.is_some());
         assert!(s.by_external(ProtocolId::LtxV2, "abc").await.is_none());
-        assert_eq!(s.insert(j.clone()).await, Err(StoreError::AlreadyExists(j.id)));
+        assert_eq!(
+            s.insert(j.clone()).await,
+            Err(StoreError::AlreadyExists(j.id))
+        );
         let dup = job(ProtocolId::Fal, "abc", t0());
-        assert!(matches!(s.insert(dup).await, Err(StoreError::DuplicateExternal(..))));
+        assert!(matches!(
+            s.insert(dup).await,
+            Err(StoreError::DuplicateExternal(..))
+        ));
         // Same external id under another protocol is fine.
         s.insert(job(ProtocolId::LtxV2, "abc", t0())).await.unwrap();
     }
@@ -360,11 +385,14 @@ pub(crate) mod tests {
         let mut rx = s.watch(j.id).unwrap();
         let seq0 = rx.borrow().seq;
         let out = s
-            .update(j.id, Box::new(move |j| {
-                j.mark_running(t0()).unwrap();
-                j.set_step(5, 10);
-                j.external_id = "tamper".into(); // identity fields are restored
-            }))
+            .update(
+                j.id,
+                Box::new(move |j| {
+                    j.mark_running(t0()).unwrap();
+                    j.set_step(5, 10);
+                    j.external_id = "tamper".into(); // identity fields are restored
+                }),
+            )
             .await
             .unwrap();
         assert_eq!(out.external_id, "1");
@@ -384,31 +412,63 @@ pub(crate) mod tests {
     async fn list_filters_and_pages() {
         let s = MemJobStore::memory();
         for i in 0..5 {
-            let mut j = job(ProtocolId::OpenAiVideos, &format!("v{i}"), t0() + Duration::from_secs(i));
+            let mut j = job(
+                ProtocolId::OpenAiVideos,
+                &format!("v{i}"),
+                t0() + Duration::from_secs(i),
+            );
             if i % 2 == 0 {
                 j.mark_cancelled(t0()).unwrap();
             }
             s.insert(j).await.unwrap();
         }
         s.insert(job(ProtocolId::Fal, "f", t0())).await.unwrap();
-        let q = ListQuery { protocol: Some(ProtocolId::OpenAiVideos), limit: 2, ..Default::default() };
+        let q = ListQuery {
+            protocol: Some(ProtocolId::OpenAiVideos),
+            limit: 2,
+            ..Default::default()
+        };
         let p = s.list(q.clone()).await;
         assert_eq!(p.total, 5);
         assert!(p.has_more);
-        assert_eq!(p.items.iter().map(|j| j.external_id.as_str()).collect::<Vec<_>>(), ["v4", "v3"]);
-        let p2 = s.list(ListQuery { after: Some("v3".into()), ..q.clone() }).await;
+        assert_eq!(
+            p.items
+                .iter()
+                .map(|j| j.external_id.as_str())
+                .collect::<Vec<_>>(),
+            ["v4", "v3"]
+        );
+        let p2 = s
+            .list(ListQuery {
+                after: Some("v3".into()),
+                ..q.clone()
+            })
+            .await;
         assert_eq!(p2.items[0].external_id, "v2");
         let asc = s
-            .list(ListQuery { order: SortOrder::Asc, statuses: vec![JobStatus::Queued], ..q })
+            .list(ListQuery {
+                order: SortOrder::Asc,
+                statuses: vec![JobStatus::Queued],
+                ..q
+            })
             .await;
-        assert_eq!(asc.items.iter().map(|j| j.external_id.as_str()).collect::<Vec<_>>(), ["v1", "v3"]);
+        assert_eq!(
+            asc.items
+                .iter()
+                .map(|j| j.external_id.as_str())
+                .collect::<Vec<_>>(),
+            ["v1", "v3"]
+        );
     }
 
     #[tokio::test]
     async fn max_jobs_is_full() {
         let s = MemJobStore::memory().with_max_jobs(1);
         s.insert(job(ProtocolId::Fal, "a", t0())).await.unwrap();
-        assert_eq!(s.insert(job(ProtocolId::Fal, "b", t0())).await, Err(StoreError::Full));
+        assert_eq!(
+            s.insert(job(ProtocolId::Fal, "b", t0())).await,
+            Err(StoreError::Full)
+        );
         let e: ApiError = StoreError::Full.into();
         assert_eq!(e.kind, ErrorKind::QueueFull);
     }
@@ -429,15 +489,23 @@ pub(crate) mod tests {
             for j in [a, b, c] {
                 s.insert(j).await.unwrap();
             }
-            s.update(running, Box::new(|j| j.mark_running(t0()).unwrap())).await.unwrap();
-            s.update(done, Box::new(|j| {
-                j.mark_running(t0()).unwrap();
-                j.mark_succeeded(t0(), vec![], JobMetrics::default()).unwrap();
-            }))
+            s.update(running, Box::new(|j| j.mark_running(t0()).unwrap()))
+                .await
+                .unwrap();
+            s.update(
+                done,
+                Box::new(|j| {
+                    j.mark_running(t0()).unwrap();
+                    j.mark_succeeded(t0(), vec![], JobMetrics::default())
+                        .unwrap();
+                }),
+            )
             .await
             .unwrap();
             // A corrupt manifest is skipped.
-            tokio::fs::write(dir.join("jobs/junk.json"), b"{not json").await.unwrap();
+            tokio::fs::write(dir.join("jobs/junk.json"), b"{not json")
+                .await
+                .unwrap();
         }
         let later = t0() + Duration::from_secs(60);
         let s = MemJobStore::open(dir.join("jobs"), later)
@@ -455,7 +523,9 @@ pub(crate) mod tests {
         assert_eq!(s.get(done).await.unwrap().status(), JobStatus::Succeeded);
         assert!(s.by_external(ProtocolId::MiniMaxV2, "q").await.is_some());
         // Recovery was persisted: a third open sees the same.
-        let s3 = MemJobStore::open(dir.join("jobs"), later + Duration::from_secs(1)).await.unwrap();
+        let s3 = MemJobStore::open(dir.join("jobs"), later + Duration::from_secs(1))
+            .await
+            .unwrap();
         assert_eq!(
             s3.get(running).await.unwrap().completed_at,
             Some(later),
@@ -463,7 +533,9 @@ pub(crate) mod tests {
         );
         drop(s3);
 
-        tokio::fs::create_dir_all(inputs.join(done.to_string())).await.unwrap();
+        tokio::fs::create_dir_all(inputs.join(done.to_string()))
+            .await
+            .unwrap();
         assert_eq!(s.sweep_expired(t0() + Duration::from_secs(10)).await, 0);
         assert_eq!(s.sweep_expired(t0() + Duration::from_secs(3600)).await, 3);
         assert!(s.is_empty());

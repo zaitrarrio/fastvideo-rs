@@ -53,14 +53,21 @@ impl ShipCfg {
         let url = get("FV_LOG_SHIP_URL").filter(|v| !v.is_empty())?;
         let token = get("FV_LOG_SHIP_TOKEN").filter(|v| !v.is_empty())?;
         let num = |k: &str, d: u64| get(k).and_then(|v| v.parse().ok()).unwrap_or(d);
-        let level = match get("FV_LOG_SHIP_LEVEL").unwrap_or_default().to_ascii_lowercase().as_str() {
+        let level = match get("FV_LOG_SHIP_LEVEL")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "trace" => Level::TRACE,
             "debug" => Level::DEBUG,
             "warn" => Level::WARN,
             "error" => Level::ERROR,
             _ => Level::INFO,
         };
-        let pod = get("FV_LOG_SHIP_POD").or_else(|| get("RUNPOD_POD_ID")).or_else(|| get("FV_WORKER_ID")).unwrap_or_else(|| "local".into());
+        let pod = get("FV_LOG_SHIP_POD")
+            .or_else(|| get("RUNPOD_POD_ID"))
+            .or_else(|| get("FV_WORKER_ID"))
+            .unwrap_or_else(|| "local".into());
         Some(Self {
             url,
             token,
@@ -89,7 +96,10 @@ pub fn layer() -> Option<ShipLayer> {
     }
     let (tx, rx) = tokio::sync::mpsc::channel(QUEUE);
     let level = cfg.level;
-    RX.get_or_init(|| Mutex::new(None)).lock().ok()?.replace((rx, cfg));
+    RX.get_or_init(|| Mutex::new(None))
+        .lock()
+        .ok()?
+        .replace((rx, cfg));
     Some(ShipLayer { tx, level })
 }
 
@@ -102,10 +112,12 @@ pub fn dropped() -> u64 {
 struct JsonVisitor(Map<String, Value>);
 impl Visit for JsonVisitor {
     fn record_debug(&mut self, f: &Field, v: &dyn std::fmt::Debug) {
-        self.0.insert(f.name().to_owned(), Value::String(format!("{v:?}")));
+        self.0
+            .insert(f.name().to_owned(), Value::String(format!("{v:?}")));
     }
     fn record_str(&mut self, f: &Field, v: &str) {
-        self.0.insert(f.name().to_owned(), Value::String(v.to_owned()));
+        self.0
+            .insert(f.name().to_owned(), Value::String(v.to_owned()));
     }
     fn record_i64(&mut self, f: &Field, v: i64) {
         self.0.insert(f.name().to_owned(), v.into());
@@ -124,18 +136,37 @@ impl Visit for JsonVisitor {
 struct SpanFields(Map<String, Value>);
 
 fn skipped(target: &str) -> bool {
-    ["hyper", "reqwest", "rustls", "h2", "tower", "fastvideo_serve::log_ship"].iter().any(|p| target.starts_with(p))
+    [
+        "hyper",
+        "reqwest",
+        "rustls",
+        "h2",
+        "tower",
+        "fastvideo_serve::log_ship",
+    ]
+    .iter()
+    .any(|p| target.starts_with(p))
 }
 
 impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for ShipLayer {
-    fn on_new_span(&self, attrs: &tracing::span::Attributes<'_>, id: &tracing::span::Id, ctx: Context<'_, S>) {
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        ctx: Context<'_, S>,
+    ) {
         let mut v = JsonVisitor::default();
         attrs.record(&mut v);
         if let Some(span) = ctx.span(id) {
             span.extensions_mut().insert(SpanFields(v.0));
         }
     }
-    fn on_record(&self, id: &tracing::span::Id, values: &tracing::span::Record<'_>, ctx: Context<'_, S>) {
+    fn on_record(
+        &self,
+        id: &tracing::span::Id,
+        values: &tracing::span::Record<'_>,
+        ctx: Context<'_, S>,
+    ) {
         if let Some(span) = ctx.span(id) {
             let mut v = JsonVisitor::default();
             values.record(&mut v);
@@ -162,7 +193,10 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for ShipLayer {
         }
         let mut v = JsonVisitor(fields);
         event.record(&mut v);
-        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
         let line = serde_json::json!({"ts": ts, "level": meta.level().as_str(), "target": meta.target(), "fields": Value::Object(v.0)});
         if self.tx.try_send(line).is_err() {
             DROPPED.fetch_add(1, Ordering::Relaxed);
@@ -173,7 +207,11 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for ShipLayer {
 /// Starts the sender task (inside the tokio runtime). No-op when shipping is off.
 #[cfg(feature = "http-client")]
 pub fn spawn() {
-    let Some((rx, cfg)) = RX.get().and_then(|m| m.lock().ok()).and_then(|mut g| g.take()) else {
+    let Some((rx, cfg)) = RX
+        .get()
+        .and_then(|m| m.lock().ok())
+        .and_then(|mut g| g.take())
+    else {
         return;
     };
     tokio::spawn(run(rx, cfg));
@@ -184,7 +222,10 @@ pub fn spawn() {}
 #[cfg(feature = "http-client")]
 async fn run(mut rx: Rx, cfg: ShipCfg) {
     use std::time::{Duration, Instant};
-    let http = match reqwest::Client::builder().timeout(Duration::from_secs(15)).build() {
+    let http = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+    {
         Ok(c) => c,
         Err(_) => return,
     };
@@ -215,7 +256,10 @@ async fn run(mut rx: Rx, cfg: ShipCfg) {
         }
         let drops = dropped();
         if drops > reported_drops {
-            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
             batch.push(serde_json::json!({"ts": ts, "level": "WARN", "target": "fv_serve::log_ship", "fields": {"message": "log lines dropped (queue full or over FV_LOG_SHIP_MAX_PER_MIN)", "dropped_total": drops}}));
             reported_drops = drops;
         }
@@ -225,7 +269,12 @@ async fn run(mut rx: Rx, cfg: ShipCfg) {
         in_window += batch.len() as u64;
         let body = serde_json::json!({"pod": cfg.pod, "lines": batch});
         for attempt in 0..3u32 {
-            let r = http.post(&cfg.url).bearer_auth(&cfg.token).json(&body).send().await;
+            let r = http
+                .post(&cfg.url)
+                .bearer_auth(&cfg.token)
+                .json(&body)
+                .send()
+                .await;
             match r {
                 Ok(r) if r.status().is_success() => break,
                 // Auth or request problems do not get better with a retry.
@@ -243,10 +292,27 @@ mod tests {
 
     #[test]
     fn config_from_env() {
-        let env = |pairs: &'static [(&'static str, &'static str)]| move |k: &str| pairs.iter().find(|(a, _)| *a == k).map(|(_, b)| (*b).to_owned());
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| {
+                pairs
+                    .iter()
+                    .find(|(a, _)| *a == k)
+                    .map(|(_, b)| (*b).to_owned())
+            }
+        };
         assert!(ShipCfg::from_env(env(&[])).is_none());
-        assert!(ShipCfg::from_env(env(&[("FV_LOG_SHIP_URL", "https://x")])).is_none(), "a token is required");
-        let c = ShipCfg::from_env(env(&[("FV_LOG_SHIP_URL", "https://x"), ("FV_LOG_SHIP_TOKEN", "t"), ("RUNPOD_POD_ID", "abc"), ("FV_LOG_SHIP_LEVEL", "WARN"), ("FV_LOG_SHIP_BATCH", "99999")])).unwrap();
+        assert!(
+            ShipCfg::from_env(env(&[("FV_LOG_SHIP_URL", "https://x")])).is_none(),
+            "a token is required"
+        );
+        let c = ShipCfg::from_env(env(&[
+            ("FV_LOG_SHIP_URL", "https://x"),
+            ("FV_LOG_SHIP_TOKEN", "t"),
+            ("RUNPOD_POD_ID", "abc"),
+            ("FV_LOG_SHIP_LEVEL", "WARN"),
+            ("FV_LOG_SHIP_BATCH", "99999"),
+        ]))
+        .unwrap();
         assert_eq!(c.pod, "abc");
         assert_eq!(c.level, Level::WARN);
         assert_eq!(c.batch, 2000);
@@ -256,7 +322,10 @@ mod tests {
     #[test]
     fn events_become_json_lines_with_span_fields() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
-        let sub = tracing_subscriber::registry().with(ShipLayer { tx, level: Level::INFO });
+        let sub = tracing_subscriber::registry().with(ShipLayer {
+            tx,
+            level: Level::INFO,
+        });
         tracing::subscriber::with_default(sub, || {
             // (The shipper skips its own module's events: these name another target.)
             let span = tracing::info_span!(target: "fv_test", "job", job_id = "job_1");
@@ -277,7 +346,10 @@ mod tests {
     fn a_full_queue_drops_instead_of_blocking() {
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let before = dropped();
-        let sub = tracing_subscriber::registry().with(ShipLayer { tx, level: Level::INFO });
+        let sub = tracing_subscriber::registry().with(ShipLayer {
+            tx,
+            level: Level::INFO,
+        });
         tracing::subscriber::with_default(sub, || {
             for i in 0..5 {
                 tracing::info!(target: "fv_test", i, "x");

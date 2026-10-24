@@ -186,7 +186,9 @@ impl ResolvedEdit {
     /// source).
     pub fn prefix_frames(&self) -> u32 {
         match self.op {
-            ResolvedEditOp::Extend { at: ExtendAt::End, .. } => self.window_start,
+            ResolvedEditOp::Extend {
+                at: ExtendAt::End, ..
+            } => self.window_start,
             _ => 0,
         }
     }
@@ -196,9 +198,12 @@ impl ResolvedEdit {
     /// source).
     pub fn suffix_frames(&self) -> u32 {
         match self.op {
-            ResolvedEditOp::Extend { at: ExtendAt::Start, .. } => {
-                self.source_frames.saturating_sub(self.window_start + self.window_frames)
-            }
+            ResolvedEditOp::Extend {
+                at: ExtendAt::Start,
+                ..
+            } => self
+                .source_frames
+                .saturating_sub(self.window_start + self.window_frames),
             _ => 0,
         }
     }
@@ -337,7 +342,15 @@ pub fn negotiate_noted(
         None
     };
     let (fps, width, height, crop, num_frames, note, frames_note) = match &edit {
-        Some(e) => (e.fps, e.width, e.height, None, e.num_frames, e.note.clone(), None),
+        Some(e) => (
+            e.fps,
+            e.width,
+            e.height,
+            None,
+            e.num_frames,
+            e.note.clone(),
+            None,
+        ),
         None => {
             let fps = requested_fps(req, caps);
             let spec = effective_canvas(req, caps);
@@ -357,7 +370,13 @@ pub fn negotiate_noted(
         }
     };
     check_h3_geometry(caps, width, height, num_frames)?;
-    check_hd_length(caps, is_hd_canvas(caps, width, height), num_frames, fps, &req.timing.length)?;
+    check_hd_length(
+        caps,
+        is_hd_canvas(caps, width, height),
+        num_frames,
+        fps,
+        &req.timing.length,
+    )?;
     check_refs(req, caps)?;
     check_ref_durations(caps, staged)?;
     check_knobs(req, caps)?;
@@ -482,15 +501,29 @@ pub fn is_hd_canvas(caps: &ModelCaps, width: u32, height: u32) -> bool {
 
 /// The longest clip at the opt-in tier (`HdTier::max_frames`): H3 1080P
 /// is 5 s unless the `h3_1080p_long` experimental feature is on (10 s).
-fn check_hd_length(caps: &ModelCaps, hd: bool, num_frames: u32, fps: u32, length: &Length) -> Result<(), ApiError> {
-    let Some(t) = caps.canvas.hd.filter(|_| hd) else { return Ok(()) };
-    let Some(max) = t.max_frames else { return Ok(()) };
+fn check_hd_length(
+    caps: &ModelCaps,
+    hd: bool,
+    num_frames: u32,
+    fps: u32,
+    length: &Length,
+) -> Result<(), ApiError> {
+    let Some(t) = caps.canvas.hd.filter(|_| hd) else {
+        return Ok(());
+    };
+    let Some(max) = t.max_frames else {
+        return Ok(());
+    };
     if num_frames <= max {
         return Ok(());
     }
     let f = f64::from(fps.max(1));
     let secs = |n: u32| (f64::from(n) / f).floor();
-    let param = if matches!(length, Length::Frames { .. }) { "num_frames" } else { "duration" };
+    let param = if matches!(length, Length::Frames { .. }) {
+        "num_frames"
+    } else {
+        "duration"
+    };
     let mut msg = format!(
         "{}P clips are limited to {} s (at most {max} frames at {fps} fps) on model `{}`; this request asks for {num_frames} frames ({:.2} s)",
         t.short_edge,
@@ -604,7 +637,10 @@ fn check_task(req: &GenerationRequest, caps: &ModelCaps) -> Result<(), ApiError>
     if task.edits_video() {
         check_edit_request(req)?;
     } else if req.edit.is_some() {
-        return Err(ApiError::invalid_param("video_url", "a source video is only taken by retake and extend"));
+        return Err(ApiError::invalid_param(
+            "video_url",
+            "a source video is only taken by retake and extend",
+        ));
     }
     if task == Task::A2V {
         if !matches!(&req.audio_in, Some(a) if a.role == AudioRole::Drive) {
@@ -669,7 +705,12 @@ fn check_staged(req: &GenerationRequest, staged: &StagedInputs) -> Result<(), Ap
                 .iter()
                 .map(|m| (MediaKind::Audio, m, "audio_url")),
         )
-        .chain(staged.video_in.iter().map(|m| (MediaKind::Video, m, "video_url")));
+        .chain(
+            staged
+                .video_in
+                .iter()
+                .map(|m| (MediaKind::Video, m, "video_url")),
+        );
     for (kind, m, param) in kinds {
         if !mime_fits(kind, &m.mime) {
             return Err(ApiError::unsupported_media(format!(
@@ -723,7 +764,11 @@ fn follow_dims(staged: &StagedInputs) -> Result<Option<(u32, u32)>, ApiError> {
             // Reference-to-video: the first image reference, else the first
             // video reference (fal and MiniMax allow video-only references).
             let first = |kind: MediaKind| {
-                staged.references.iter().find(|(k, _)| *k == kind).map(|(_, m)| m)
+                staged
+                    .references
+                    .iter()
+                    .find(|(k, _)| *k == kind)
+                    .map(|(_, m)| m)
             };
             first(MediaKind::Image).or_else(|| first(MediaKind::Video))
         });
@@ -744,7 +789,11 @@ fn check_tier(short_edge: u32, caps: &ModelCaps) -> Result<(), ApiError> {
     }
     let mut tiers = caps.canvas.short_edges.clone();
     tiers.sort_unstable();
-    let list = tiers.iter().map(|t| format!("{t}p")).collect::<Vec<_>>().join(", ");
+    let list = tiers
+        .iter()
+        .map(|t| format!("{t}p"))
+        .collect::<Vec<_>>()
+        .join(", ");
     if caps.family == Family::H3 {
         let gap = match short_edge {
             1080 => Some(GapId::H3Refine1080P),
@@ -835,8 +884,12 @@ pub fn resolve_canvas_noted(
             }
             // The canvas the tier promises at this aspect: snapped to the
             // multiple within the range, scaled into the pixel budget.
-            follow_canvas(f64::from(ratio.w) / f64::from(ratio.h), *short_edge, caps)
-                .map_err(|e| ApiError { param: Some("aspect_ratio".into()), ..e })
+            follow_canvas(f64::from(ratio.w) / f64::from(ratio.h), *short_edge, caps).map_err(|e| {
+                ApiError {
+                    param: Some("aspect_ratio".into()),
+                    ..e
+                }
+            })
         }
         CanvasSpec::FollowImage { .. } => unreachable!("handled above"),
         CanvasSpec::ModelDefault => {
@@ -853,7 +906,11 @@ pub fn resolve_canvas_noted(
 /// at `short_edge`: the model's aspect rule, except that a pad-and-crop
 /// canvas (LTX) whose padded size would exceed the pixel budget is scaled
 /// down to fit instead of refused.
-fn follow_canvas(ratio: f64, short_edge: u32, caps: &ModelCaps) -> Result<ResolvedCanvas, ApiError> {
+fn follow_canvas(
+    ratio: f64,
+    short_edge: u32,
+    caps: &ModelCaps,
+) -> Result<ResolvedCanvas, ApiError> {
     let c = &caps.canvas;
     if !c.pad_and_crop || caps.family == Family::H3 {
         // Snapping an aspect at the end of the range can land just outside
@@ -863,18 +920,30 @@ fn follow_canvas(ratio: f64, short_edge: u32, caps: &ModelCaps) -> Result<Resolv
         let mut last = None;
         for _ in 0..16 {
             match aspect_canvas(r, 1.0, short_edge, caps) {
-                Ok(out) if c.aspect_ok(out.0, out.1) && h3_canvas_ok(caps, out.0, out.1) => return Ok(out),
+                Ok(out) if c.aspect_ok(out.0, out.1) && h3_canvas_ok(caps, out.0, out.1) => {
+                    return Ok(out)
+                }
                 Ok(_) => {}
                 Err(e) => last = Some(e),
             }
-            r = if r > 1.0 { (r * 0.99).max(1.0) } else { (r / 0.99).min(1.0) };
+            r = if r > 1.0 {
+                (r * 0.99).max(1.0)
+            } else {
+                (r / 0.99).min(1.0)
+            };
         }
-        return Err(last.unwrap_or_else(|| ApiError::invalid_param("image_url", "no canvas fits the input image's aspect")));
+        return Err(last.unwrap_or_else(|| {
+            ApiError::invalid_param("image_url", "no canvas fits the input image's aspect")
+        }));
     }
     let m = c.multiple.max(1);
     let even = |v: f64| ((v / 2.0).round() as u32).max(1) * 2;
     let s = f64::from(short_edge);
-    let (mut w, mut h) = if ratio >= 1.0 { (even(s * ratio), short_edge) } else { (short_edge, even(s / ratio)) };
+    let (mut w, mut h) = if ratio >= 1.0 {
+        (even(s * ratio), short_edge)
+    } else {
+        (short_edge, even(s / ratio))
+    };
     let padded = |w: u32, h: u32| u64::from(w.div_ceil(m) * m) * u64::from(h.div_ceil(m) * m);
     if padded(w, h) > c.max_area {
         let k = (c.max_area as f64 / padded(w, h) as f64).sqrt();
@@ -888,7 +957,10 @@ fn follow_canvas(ratio: f64, short_edge: u32, caps: &ModelCaps) -> Result<Resolv
             }
         }
     }
-    exact_canvas(w, h, caps).map_err(|e| ApiError { param: Some("image_url".into()), ..e })
+    exact_canvas(w, h, caps).map_err(|e| ApiError {
+        param: Some("image_url".into()),
+        ..e
+    })
 }
 
 /// H3 only: the canvas passes the check the engine makes (768x1344, or the
@@ -955,21 +1027,26 @@ fn exact_canvas(w: u32, h: u32, caps: &ModelCaps) -> Result<ResolvedCanvas, ApiE
 fn h3_exact_canvas(w: u32, h: u32, caps: &ModelCaps) -> Result<ResolvedCanvas, ApiError> {
     let exact = h3::check_canvas(h as usize, w as usize);
     if exact.is_ok() || caps.canvas.hd.is_none() {
-        return exact.map(|()| (w, h, None)).map_err(|e| ApiError::invalid_param("size", e));
+        return exact
+            .map(|()| (w, h, None))
+            .map_err(|e| ApiError::invalid_param("size", e));
     }
     let m = h3::H3_CANVAS_MULTIPLE as u32;
     let (gw, gh) = (w.div_ceil(m) * m, h.div_ceil(m) * m);
     if (gw as usize) * (gh as usize) <= h3::H3_MAX_PIXELS {
         // Within the trained budget: the canvas must be exact, as before.
-        return exact.map(|()| (w, h, None)).map_err(|e| ApiError::invalid_param("size", e));
+        return exact
+            .map(|()| (w, h, None))
+            .map_err(|e| ApiError::invalid_param("size", e));
     }
-    if (gw, gh) != (w, h) && (w % 2 != 0 || h % 2 != 0) {
+    if (gw, gh) != (w, h) && (!w.is_multiple_of(2) || !h.is_multiple_of(2)) {
         return Err(ApiError::invalid_param(
             "size",
             format!("a 1080P-tier size off the multiple of {m} is cropped from a padded canvas and needs even sides, got {w}x{h}"),
         ));
     }
-    h3::check_canvas_1080p(gh as usize, gw as usize).map_err(|e| ApiError::invalid_param("size", e))?;
+    h3::check_canvas_1080p(gh as usize, gw as usize)
+        .map_err(|e| ApiError::invalid_param("size", e))?;
     let crop = ((gw, gh) != (w, h)).then_some((w, h));
     Ok((gw, gh, crop))
 }
@@ -1072,7 +1149,10 @@ fn check_fps(fps: u32, caps: &ModelCaps) -> Result<(), ApiError> {
     if caps.family == Family::Ltx2 {
         return Err(ApiError::unsupported_msg(
             GapId::LtxFps,
-            format!("fps {fps} is not supported by this server; allowed: {:?}", caps.fps.allowed),
+            format!(
+                "fps {fps} is not supported by this server; allowed: {:?}",
+                caps.fps.allowed
+            ),
         )
         .with_param("fps"));
     }
@@ -1092,9 +1172,22 @@ pub fn resolve_frames(length: &Length, fps: u32, caps: &ModelCaps) -> Result<u32
 
 /// [`resolve_frames`], with a note when [`Snap::Nearest`] moved the length
 /// to the end of the model's range.
-pub fn resolve_frames_noted(length: &Length, fps: u32, caps: &ModelCaps) -> Result<(u32, Option<String>), ApiError> {
+pub fn resolve_frames_noted(
+    length: &Length,
+    fps: u32,
+    caps: &ModelCaps,
+) -> Result<(u32, Option<String>), ApiError> {
     let g = &caps.frames;
-    let nearest = matches!(length, Length::Seconds { snap: Snap::Nearest, .. } | Length::Frames { snap: Snap::Nearest, .. });
+    let nearest = matches!(
+        length,
+        Length::Seconds {
+            snap: Snap::Nearest,
+            ..
+        } | Length::Frames {
+            snap: Snap::Nearest,
+            ..
+        }
+    );
     let n = resolve_frames_inner(length, fps, caps)?;
     if !nearest {
         return Ok((n, None));
@@ -1204,11 +1297,20 @@ fn a2v_frames(
     fps: u32,
 ) -> Result<u32, ApiError> {
     let probe = staged.audio_in.as_ref().map(|m| &m.probe);
-    let Some(d) = probe.and_then(|p| p.duration_s).filter(|d| d.is_finite() && *d > 0.0) else {
-        return Err(ApiError::unsupported_media("could not read the audio duration").with_param("audio_url"));
+    let Some(d) = probe
+        .and_then(|p| p.duration_s)
+        .filter(|d| d.is_finite() && *d > 0.0)
+    else {
+        return Err(
+            ApiError::unsupported_media("could not read the audio duration")
+                .with_param("audio_url"),
+        );
     };
     let Some(rate) = probe.and_then(|p| p.audio_rate) else {
-        return Err(ApiError::unsupported_media("could not read the audio sample rate").with_param("audio_url"));
+        return Err(
+            ApiError::unsupported_media("could not read the audio sample rate")
+                .with_param("audio_url"),
+        );
     };
     if !A2V_AUDIO_RATES.contains(&rate) {
         return Err(ApiError::invalid_param(
@@ -1293,22 +1395,43 @@ struct EditPlan {
 /// decides (length, rate, a non-exact canvas).
 fn check_edit_request(req: &GenerationRequest) -> Result<(), ApiError> {
     let Some(edit) = &req.edit else {
-        return Err(ApiError::invalid_param("video_url", "retake and extend need the source video"));
+        return Err(ApiError::invalid_param(
+            "video_url",
+            "retake and extend need the source video",
+        ));
     };
     let finite = |param: &str, v: f64, lo: f64, hi: f64| -> Result<(), ApiError> {
         if v.is_finite() && (lo..=hi).contains(&v) {
             Ok(())
         } else {
-            Err(ApiError::invalid_param(param, format!("{param} must be within {lo} to {hi} seconds")))
+            Err(ApiError::invalid_param(
+                param,
+                format!("{param} must be within {lo} to {hi} seconds"),
+            ))
         }
     };
     match (req.task, edit.op) {
-        (Task::Retake, EditOp::Retake { start_s, duration_s, mode }) => {
+        (
+            Task::Retake,
+            EditOp::Retake {
+                start_s,
+                duration_s,
+                mode,
+            },
+        ) => {
             finite("start_time", start_s, 0.0, EDIT_SOURCE_MAX_S)?;
-            finite("duration", duration_s, EDIT_DURATION_MIN_S, EDIT_DURATION_MAX_S)?;
+            finite(
+                "duration",
+                duration_s,
+                EDIT_DURATION_MIN_S,
+                EDIT_DURATION_MAX_S,
+            )?;
             if let Some(a) = &req.audio_in {
                 if a.role != AudioRole::Dub {
-                    return Err(ApiError::invalid_param("audio_url", "retake takes new audio for its window only"));
+                    return Err(ApiError::invalid_param(
+                        "audio_url",
+                        "retake takes new audio for its window only",
+                    ));
                 }
                 if mode != RetakeMode::ReplaceVideo {
                     return Err(ApiError::invalid_param(
@@ -1318,16 +1441,36 @@ fn check_edit_request(req: &GenerationRequest) -> Result<(), ApiError> {
                 }
             }
         }
-        (Task::Extend, EditOp::Extend { duration_s, context_s, .. }) => {
-            finite("duration", duration_s, EDIT_DURATION_MIN_S, EDIT_DURATION_MAX_S)?;
+        (
+            Task::Extend,
+            EditOp::Extend {
+                duration_s,
+                context_s,
+                ..
+            },
+        ) => {
+            finite(
+                "duration",
+                duration_s,
+                EDIT_DURATION_MIN_S,
+                EDIT_DURATION_MAX_S,
+            )?;
             if let Some(c) = context_s {
                 finite("context", c, EXTEND_CONTEXT_MIN_S, EXTEND_CONTEXT_MAX_S)?;
             }
             if req.audio_in.is_some() {
-                return Err(ApiError::invalid_param("audio_url", "extend takes no input audio"));
+                return Err(ApiError::invalid_param(
+                    "audio_url",
+                    "extend takes no input audio",
+                ));
             }
         }
-        _ => return Err(ApiError::invalid_param("task", "the edit does not match the task (retake or extend)")),
+        _ => {
+            return Err(ApiError::invalid_param(
+                "task",
+                "the edit does not match the task (retake or extend)",
+            ))
+        }
     }
     if req.timing.length != Length::ModelDefault {
         return Err(ApiError::invalid_param(
@@ -1336,7 +1479,10 @@ fn check_edit_request(req: &GenerationRequest) -> Result<(), ApiError> {
         ));
     }
     if req.timing.fps.is_some() {
-        return Err(ApiError::invalid_param("fps", "an edit keeps the source video's frame rate; leave fps unset"));
+        return Err(ApiError::invalid_param(
+            "fps",
+            "an edit keeps the source video's frame rate; leave fps unset",
+        ));
     }
     match req.canvas {
         CanvasSpec::ModelDefault | CanvasSpec::Exact { .. } => Ok(()),
@@ -1361,7 +1507,11 @@ fn check_edit_request(req: &GenerationRequest) -> Result<(), ApiError> {
 ///   as fit (or `context_s`), `8k + 1`, with the extension within
 ///   [`EDIT_MAX_FRAMES`]. Source frames outside the context are copied to the
 ///   output unchanged.
-fn resolve_edit(req: &GenerationRequest, caps: &ModelCaps, staged: &StagedInputs) -> Result<EditPlan, ApiError> {
+fn resolve_edit(
+    req: &GenerationRequest,
+    caps: &ModelCaps,
+    staged: &StagedInputs,
+) -> Result<EditPlan, ApiError> {
     use fastvideo_models::ltx2::edit as e;
     check_edit_request(req)?;
     let edit = req.edit.as_ref().expect("checked");
@@ -1369,13 +1519,23 @@ fn resolve_edit(req: &GenerationRequest, caps: &ModelCaps, staged: &StagedInputs
         return Err(ApiError::internal("the source video was not staged"));
     };
     let p = &src.probe;
-    let unreadable = |what: &str| ApiError::unsupported_media(format!("could not read the video's {what}")).with_param("video_url");
+    let unreadable = |what: &str| {
+        ApiError::unsupported_media(format!("could not read the video's {what}"))
+            .with_param("video_url")
+    };
     let (sw, sh) = p.dims().ok_or_else(|| unreadable("size"))?;
-    let fps = p.fps.filter(|f| f.is_finite() && *f > 0.0).ok_or_else(|| unreadable("frame rate"))?;
+    let fps = p
+        .fps
+        .filter(|f| f.is_finite() && *f > 0.0)
+        .ok_or_else(|| unreadable("frame rate"))?;
     if !EDIT_FPS.contains(&fps) {
         return Err(ApiError::invalid_param(
             "video_url",
-            format!("the video is {fps:.2} fps; it must be within {} to {} fps", EDIT_FPS.start(), EDIT_FPS.end()),
+            format!(
+                "the video is {fps:.2} fps; it must be within {} to {} fps",
+                EDIT_FPS.start(),
+                EDIT_FPS.end()
+            ),
         ));
     }
     let frames = match (p.frames, p.duration_s) {
@@ -1393,7 +1553,10 @@ fn resolve_edit(req: &GenerationRequest, caps: &ModelCaps, staged: &StagedInputs
     let too_short = || {
         ApiError::invalid_param(
             "video_url",
-            format!("the video has {frames} frames; it must have at least {} frames", e::MIN_FRAMES),
+            format!(
+                "the video has {frames} frames; it must have at least {} frames",
+                e::MIN_FRAMES
+            ),
         )
     };
     let _ = caps;
@@ -1402,7 +1565,10 @@ fn resolve_edit(req: &GenerationRequest, caps: &ModelCaps, staged: &StagedInputs
     let (width, height) = match req.canvas {
         CanvasSpec::Exact { width, height } => {
             if width == 0 || height == 0 {
-                return Err(ApiError::invalid_param("resolution", "the resolution must be positive"));
+                return Err(ApiError::invalid_param(
+                    "resolution",
+                    "the resolution must be positive",
+                ));
             }
             e::edit_canvas(width.min(sw), height.min(sh), EDIT_MAX_PIXELS)
         }
@@ -1421,7 +1587,11 @@ fn resolve_edit(req: &GenerationRequest, caps: &ModelCaps, staged: &StagedInputs
     };
     let mut note = None;
     let (num_frames, resolved) = match edit.op {
-        EditOp::Retake { start_s, duration_s, mode } => {
+        EditOp::Retake {
+            start_s,
+            duration_s,
+            mode,
+        } => {
             if frames as usize > max {
                 return Err(ApiError::invalid_param(
                     "video_url",
@@ -1441,7 +1611,10 @@ fn resolve_edit(req: &GenerationRequest, caps: &ModelCaps, staged: &StagedInputs
             }
             let end_s = (start_s + duration_s).min(clip_s);
             if window < frames {
-                note = Some(format!("the video's last {} frame(s) are dropped (the model takes 8k+1 frames)", frames - window));
+                note = Some(format!(
+                    "the video's last {} frame(s) are dropped (the model takes 8k+1 frames)",
+                    frames - window
+                ));
             }
             let (video, audio) = mode.regenerates();
             if let Some(a) = staged.audio_in.as_ref() {
@@ -1449,13 +1622,32 @@ fn resolve_edit(req: &GenerationRequest, caps: &ModelCaps, staged: &StagedInputs
                 if d + EDIT_SLACK_S < end_s - start_s {
                     return Err(ApiError::invalid_param(
                         "audio_url",
-                        format!("the new audio is {d:.2} s; it must cover the {:.2} s window", end_s - start_s),
+                        format!(
+                            "the new audio is {d:.2} s; it must cover the {:.2} s window",
+                            end_s - start_s
+                        ),
                     ));
                 }
             }
-            (window, base(0, window, ResolvedEditOp::Retake { start_s, end_s, video, audio }))
+            (
+                window,
+                base(
+                    0,
+                    window,
+                    ResolvedEditOp::Retake {
+                        start_s,
+                        end_s,
+                        video,
+                        audio,
+                    },
+                ),
+            )
         }
-        EditOp::Extend { duration_s, at, context_s } => {
+        EditOp::Extend {
+            duration_s,
+            at,
+            context_s,
+        } => {
             let ext = e::extend_frames(duration_s, fps);
             let room = max.saturating_sub(ext);
             if room < e::MIN_FRAMES {
@@ -1471,14 +1663,22 @@ fn resolve_edit(req: &GenerationRequest, caps: &ModelCaps, staged: &StagedInputs
             }
             let mut ctx = (frames as usize).min(room);
             if let Some(c) = context_s {
-                let want = fastvideo_models::ltx2::config::round_half_even(c * fps).max(0.0) as usize;
+                let want =
+                    fastvideo_models::ltx2::config::round_half_even(c * fps).max(0.0) as usize;
                 ctx = ctx.min(want);
             }
             let Some(window) = e::frames_8k1_floor(ctx) else {
                 return Err(if (frames as usize) < e::MIN_FRAMES {
                     too_short()
                 } else {
-                    ApiError::invalid_param("context", format!("the context must be at least {} frames ({:.2} s)", e::MIN_FRAMES, e::MIN_FRAMES as f64 / fps))
+                    ApiError::invalid_param(
+                        "context",
+                        format!(
+                            "the context must be at least {} frames ({:.2} s)",
+                            e::MIN_FRAMES,
+                            e::MIN_FRAMES as f64 / fps
+                        ),
+                    )
                 });
             };
             let window = window as u32;
@@ -1487,10 +1687,27 @@ fn resolve_edit(req: &GenerationRequest, caps: &ModelCaps, staged: &StagedInputs
                 ExtendAt::Start => 0,
             };
             let generated = window + ext as u32;
-            (generated, base(start, window, ResolvedEditOp::Extend { frames: ext as u32, at }))
+            (
+                generated,
+                base(
+                    start,
+                    window,
+                    ResolvedEditOp::Extend {
+                        frames: ext as u32,
+                        at,
+                    },
+                ),
+            )
         }
     };
-    Ok(EditPlan { fps: out_fps, width, height, num_frames, note, resolved })
+    Ok(EditPlan {
+        fps: out_fps,
+        width,
+        height,
+        num_frames,
+        note,
+        resolved,
+    })
 }
 
 // ---- rules 6-8 -------------------------------------------------------------------
@@ -1529,8 +1746,15 @@ fn check_ref_durations(caps: &ModelCaps, staged: &StagedInputs) -> Result<(), Ap
     }
     for (kind, what) in [(MediaKind::Video, "video"), (MediaKind::Audio, "audio")] {
         let mut total = 0.0;
-        for (i, (_, m)) in staged.references.iter().filter(|(k, _)| *k == kind).enumerate() {
-            let Some(d) = m.probe.duration_s else { continue };
+        for (i, (_, m)) in staged
+            .references
+            .iter()
+            .filter(|(k, _)| *k == kind)
+            .enumerate()
+        {
+            let Some(d) = m.probe.duration_s else {
+                continue;
+            };
             if d + SLACK_S < REFERENCE_CLIP_MIN_S || d > REFERENCE_CLIP_MAX_S + SLACK_S {
                 return Err(ApiError::invalid_param(
                     "references",
@@ -1635,8 +1859,16 @@ fn check_knobs(req: &GenerationRequest, caps: &ModelCaps) -> Result<(), ApiError
         }
     }
     for (param, v, max) in [
-        ("reference_strength", s.reference_strength, REFERENCE_STRENGTH_MAX),
-        ("reference_lora_strength", s.reference_lora_strength, REFERENCE_LORA_STRENGTH_MAX),
+        (
+            "reference_strength",
+            s.reference_strength,
+            REFERENCE_STRENGTH_MAX,
+        ),
+        (
+            "reference_lora_strength",
+            s.reference_lora_strength,
+            REFERENCE_LORA_STRENGTH_MAX,
+        ),
     ] {
         let Some(v) = v else { continue };
         if !k.reference_strength {

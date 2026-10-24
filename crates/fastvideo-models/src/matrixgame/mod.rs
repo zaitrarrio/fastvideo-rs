@@ -76,9 +76,7 @@ impl MatrixGamePreset {
     }
 
     pub fn default_steps(self) -> usize {
-        if self.is_mg3() {
-            3
-        } else if self.is_distilled() {
+        if self.is_mg3() || self.is_distilled() {
             3
         } else {
             50

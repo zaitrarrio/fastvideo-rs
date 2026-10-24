@@ -191,6 +191,7 @@ fn bf16r(v: f32) -> f32 {
 /// VSA-H3 in plain loops: `[heads, seq, dim]` row-major inputs in packed
 /// order. The statement of the algorithm the device path is judged against,
 /// with upstream's bf16 rounding points (pooling inputs, combine).
+#[allow(clippy::too_many_arguments)]
 pub fn attention_host(
     q: &[f32],
     k: &[f32],
@@ -638,8 +639,9 @@ impl H3Vsa {
         let mut out = ops::fill_device(bh * seq * dim, 0.0)?;
         let gate_slice = gate.as_ref().map(slice).transpose()?;
         let sm = device::global_device().map_or(0, |d| d.sm_major);
-        let forced_gather =
-            fastvideo_models::techniques::kernels::choice(fastvideo_models::techniques::kernels::KernelOp::VsaAttention) == "gather";
+        let forced_gather = fastvideo_models::techniques::kernels::choice(
+            fastvideo_models::techniques::kernels::KernelOp::VsaAttention,
+        ) == "gather";
         if sm >= 8 && dim == 128 && !forced_gather {
             let prefix = self.plan.prefix_tiles;
             let (q_base, q_tiles) = if topk < n && prefix > 0 && prefix < n {
@@ -651,14 +653,24 @@ impl H3Vsa {
                 if self.fp4 {
                     use crate::wan::attn_fp4::{vsa_fine, Fp4In};
                     return vsa_fine(
-                        &Fp4In::F32 { q: qd, k: kd, v: vd },
-                        &selected, &dp.plan, bh, seq, topk, scale, q_base, q_tiles,
+                        &Fp4In::F32 {
+                            q: qd,
+                            k: kd,
+                            v: vd,
+                        },
+                        &selected,
+                        &dp.plan,
+                        bh,
+                        seq,
+                        topk,
+                        scale,
+                        q_base,
+                        q_tiles,
                     );
                 }
                 if self.fp8 && crate::wan::attn_fp8::supported() {
                     return crate::wan::attn_fp8::vsa_fine(
-                        qd, kd, vd, &selected, &dp.plan, bh, seq, dim, topk, scale, q_base,
-                        q_tiles,
+                        qd, kd, vd, &selected, &dp.plan, bh, seq, dim, topk, scale, q_base, q_tiles,
                     );
                 }
                 ops::vsa_mma_attn_range_device(
@@ -704,8 +716,7 @@ impl H3Vsa {
                 )
                 .map_err(err)?;
                 ops::vsa_combine_round_device(
-                    &sparse, &coarse, gate_slice, &dp.plan, &mut out, bh, g, q_base, seq, dim,
-                    true,
+                    &sparse, &coarse, gate_slice, &dp.plan, &mut out, bh, g, q_base, seq, dim, true,
                 )?;
                 q_base += g;
             }
@@ -734,14 +745,27 @@ impl H3Vsa {
                     .quantize_bf16()?
                     .mul(&g.narrow(2, 0, prefix)?.quantize_bf16()?)?
                     .quantize_bf16()?;
-                dense = dense.quantize_bf16()?.add(&term)?.quantize_bf16()?.to_f32_act()?;
+                dense = dense
+                    .quantize_bf16()?
+                    .add(&term)?
+                    .quantize_bf16()?
+                    .to_f32_act()?;
             }
             // The dense rows go straight into the head of `out` (the fine
             // stage left them for this), not through a narrow + cat of the
             // whole output (FASTVIDEO_H3_FUSE; the same bytes either way).
             if super::fused16::fuse_enabled() && !dense.is_bf16() {
                 if let Some(d) = dense.device_slice() {
-                    ops::block_copy_device(d, &mut out, bh, prefix * dim, prefix * dim, seq * dim, 0, 0)?;
+                    ops::block_copy_device(
+                        d,
+                        &mut out,
+                        bh,
+                        prefix * dim,
+                        prefix * dim,
+                        seq * dim,
+                        0,
+                        0,
+                    )?;
                     return CudaTensor::from_device_slice(out, vec![1, bh, seq, dim]);
                 }
             }
@@ -771,7 +795,12 @@ impl H3Vsa {
         use crate::wan::attn_dc::{self, VsaEpilogue, VsaGate, VsaPrepIn};
         use crate::wan::stats::phase;
         use crate::wan::{device, ops};
-        let (bh, seq, dim, n) = (self.heads, self.plan.seq, self.head_dim, self.plan.num_tiles());
+        let (bh, seq, dim, n) = (
+            self.heads,
+            self.plan.seq,
+            self.head_dim,
+            self.plan.num_tiles(),
+        );
         if dim != attn_dc::DC_HEAD_DIM
             || self.fp4
             || (self.fp8 && crate::wan::attn_fp8::supported())
@@ -780,8 +809,17 @@ impl H3Vsa {
             return Ok(None);
         }
         let prep_in = match (q.device_slice(), k.device_slice(), v.device_slice()) {
-            (Some(q), Some(k), Some(v)) => VsaPrepIn::F32 { q, k, v, round16: true },
-            _ => match (q.device_slice_bf16(), k.device_slice_bf16(), v.device_slice_bf16()) {
+            (Some(q), Some(k), Some(v)) => VsaPrepIn::F32 {
+                q,
+                k,
+                v,
+                round16: true,
+            },
+            _ => match (
+                q.device_slice_bf16(),
+                k.device_slice_bf16(),
+                v.device_slice_bf16(),
+            ) {
                 (Some(q), Some(k), Some(v)) => VsaPrepIn::Bf16 { q, k, v },
                 _ => return Ok(None),
             },
@@ -815,8 +853,17 @@ impl H3Vsa {
                 return Ok::<_, TensorError>(None);
             };
             let mut scores = ops::alloc(bh * n * n)?;
-            device::matmul_linear_wt_strided_batched_f32(&prep.qc, &prep.kc, &mut scores, bh, n, dim, n, scale)
-                .map_err(err)?;
+            device::matmul_linear_wt_strided_batched_f32(
+                &prep.qc,
+                &prep.kc,
+                &mut scores,
+                bh,
+                n,
+                dim,
+                n,
+                scale,
+            )
+            .map_err(err)?;
             let coarse = match &prep.vc {
                 Some(vc) => {
                     let probs = ops::softmax_last_device(&scores, n)?;
@@ -900,14 +947,34 @@ impl H3Vsa {
             // The shape is outside the dc kernel: the mma.sync fine stage on
             // the same tiles, then the ordinary combine.
             let sparse = ops::vsa_mma_attn_tiled_device(
-                &prep.qt, &prep.kt, &prep.vt, &selected, &dp.plan, bh, dim, topk, scale, q_base, q_tiles,
+                &prep.qt, &prep.kt, &prep.vt, &selected, &dp.plan, bh, dim, topk, scale, q_base,
+                q_tiles,
             )?;
             match &gate_dc {
                 VsaGate::Bf16(g) => ops::vsa_combine_gate16_device(
-                    &sparse, &coarse, Some(*g), &dp.plan, &mut out, bh, n, 0, seq, dim,
+                    &sparse,
+                    &coarse,
+                    Some(*g),
+                    &dp.plan,
+                    &mut out,
+                    bh,
+                    n,
+                    0,
+                    seq,
+                    dim,
                 ),
                 VsaGate::F32(g) => ops::vsa_combine_round_device(
-                    &sparse, &coarse, Some(*g), &dp.plan, &mut out, bh, n, 0, seq, dim, true,
+                    &sparse,
+                    &coarse,
+                    Some(*g),
+                    &dp.plan,
+                    &mut out,
+                    bh,
+                    n,
+                    0,
+                    seq,
+                    dim,
+                    true,
                 ),
                 VsaGate::None => ops::vsa_combine_round_device(
                     &sparse, &coarse, None, &dp.plan, &mut out, bh, n, 0, seq, dim, true,
@@ -917,13 +984,21 @@ impl H3Vsa {
         drop(prep);
         let prefix = self.plan.prefix_rows;
         if topk == n || prefix == 0 {
-            return Ok(Some(CudaTensor::from_device_slice(out, vec![1, bh, seq, dim])?));
+            return Ok(Some(CudaTensor::from_device_slice(
+                out,
+                vec![1, bh, seq, dim],
+            )?));
         }
         // 4. Text / audio query rows: dense against all keys, plus their
         //    compression term (the bf16 path's code; the SDPA quantizes its
         //    operands to bf16 whatever they are stored as).
         phase("vsa_h3_4_prefix_dense", || {
-            let mut dense = crate::wan::nn::scaled_dot_product_attention(&q.narrow(2, 0, prefix)?, k, v, Some(scale))?;
+            let mut dense = crate::wan::nn::scaled_dot_product_attention(
+                &q.narrow(2, 0, prefix)?,
+                k,
+                v,
+                Some(scale),
+            )?;
             if let Some(g) = gate {
                 let branch = dp.prefix_branch(&coarse, dim)?;
                 let term = branch
@@ -931,16 +1006,39 @@ impl H3Vsa {
                     .quantize_bf16()?
                     .mul(&g.narrow(2, 0, prefix)?.quantize_bf16()?)?
                     .quantize_bf16()?;
-                dense = dense.quantize_bf16()?.add(&term)?.quantize_bf16()?.to_f32_act()?;
+                dense = dense
+                    .quantize_bf16()?
+                    .add(&term)?
+                    .quantize_bf16()?
+                    .to_f32_act()?;
             }
-            let mut dense = if dense.is_bf16() { dense.to_f32_act()? } else { dense };
+            let mut dense = if dense.is_bf16() {
+                dense.to_f32_act()?
+            } else {
+                dense
+            };
             dense.ensure_device()?;
             if let Some(d) = dense.device_slice() {
-                ops::block_copy_device(d, &mut out, bh, prefix * dim, prefix * dim, seq * dim, 0, 0)?;
-                return Ok(Some(CudaTensor::from_device_slice(out, vec![1, bh, seq, dim])?));
+                ops::block_copy_device(
+                    d,
+                    &mut out,
+                    bh,
+                    prefix * dim,
+                    prefix * dim,
+                    seq * dim,
+                    0,
+                    0,
+                )?;
+                return Ok(Some(CudaTensor::from_device_slice(
+                    out,
+                    vec![1, bh, seq, dim],
+                )?));
             }
             let out = CudaTensor::from_device_slice(out, vec![1, bh, seq, dim])?;
-            Ok(Some(CudaTensor::cat(&[&dense, &out.narrow(2, prefix, seq - prefix)?], 2)?))
+            Ok(Some(CudaTensor::cat(
+                &[&dense, &out.narrow(2, prefix, seq - prefix)?],
+                2,
+            )?))
         })
     }
 
@@ -965,7 +1063,12 @@ impl H3Vsa {
         if !crate::wan::envflag::bool_flag("FASTVIDEO_VSA_BF16", true) {
             return Ok(None);
         }
-        let (bh, seq, dim, n) = (self.heads, self.plan.seq, self.head_dim, self.plan.num_tiles());
+        let (bh, seq, dim, n) = (
+            self.heads,
+            self.plan.seq,
+            self.head_dim,
+            self.plan.num_tiles(),
+        );
         let sm = device::global_device().map_or(0, |d| d.sm_major);
         let forced_gather = fastvideo_models::techniques::kernels::choice(
             fastvideo_models::techniques::kernels::KernelOp::VsaAttention,
@@ -973,8 +1076,11 @@ impl H3Vsa {
         if sm < 8 || dim != 128 || forced_gather {
             return Ok(None);
         }
-        let (Some(qd), Some(kd), Some(vd)) = (q.device_slice_bf16(), k.device_slice_bf16(), v.device_slice_bf16())
-        else {
+        let (Some(qd), Some(kd), Some(vd)) = (
+            q.device_slice_bf16(),
+            k.device_slice_bf16(),
+            v.device_slice_bf16(),
+        ) else {
             return Ok(None);
         };
         let gd = match gate {
@@ -985,7 +1091,10 @@ impl H3Vsa {
             None => None,
         };
         static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        crate::wan::log::info_once(&LOGGED, format_args!("vsa-h3: bf16 inputs read in place (no f32 widening)"));
+        crate::wan::log::info_once(
+            &LOGGED,
+            format_args!("vsa-h3: bf16 inputs read in place (no f32 widening)"),
+        );
         let scale = 1.0 / (dim as f32).sqrt();
         let err = |e: device::DeviceError| msg(e.to_string());
 
@@ -993,8 +1102,17 @@ impl H3Vsa {
             let qc = ops::vsa_tile_mean_bf16_device(qd, &dp.plan, bh, seq, dim)?;
             let kc = ops::vsa_tile_mean_bf16_device(kd, &dp.plan, bh, seq, dim)?;
             let mut scores = ops::alloc(bh * n * n)?;
-            device::matmul_linear_wt_strided_batched_f32(&qc, &kc, &mut scores, bh, n, dim, n, scale)
-                .map_err(err)?;
+            device::matmul_linear_wt_strided_batched_f32(
+                &qc,
+                &kc,
+                &mut scores,
+                bh,
+                n,
+                dim,
+                n,
+                scale,
+            )
+            .map_err(err)?;
             let coarse = match gd {
                 Some(_) => {
                     let vc = ops::vsa_tile_mean_bf16_device(vd, &dp.plan, bh, seq, dim)?;
@@ -1032,8 +1150,19 @@ impl H3Vsa {
             if self.fp4 {
                 use crate::wan::attn_fp4::{vsa_fine, Fp4In};
                 return vsa_fine(
-                    &Fp4In::Bf16 { q: qd, k: kd, v: vd },
-                    &selected, &dp.plan, bh, seq, topk, scale, q_base, q_tiles,
+                    &Fp4In::Bf16 {
+                        q: qd,
+                        k: kd,
+                        v: vd,
+                    },
+                    &selected,
+                    &dp.plan,
+                    bh,
+                    seq,
+                    topk,
+                    scale,
+                    q_base,
+                    q_tiles,
                 );
             }
             let (qt, kt, vt) = (
@@ -1041,19 +1170,31 @@ impl H3Vsa {
                 ops::vsa_tile_qkv_bf16_device(kd, &dp.plan, bh, seq, dim)?,
                 ops::vsa_tile_qkv_bf16_device(vd, &dp.plan, bh, seq, dim)?,
             );
-            ops::vsa_mma_attn_tiled_device(&qt, &kt, &vt, &selected, &dp.plan, bh, dim, topk, scale, q_base, q_tiles)
+            ops::vsa_mma_attn_tiled_device(
+                &qt, &kt, &vt, &selected, &dp.plan, bh, dim, topk, scale, q_base, q_tiles,
+            )
         })?;
-        ops::vsa_combine_gate16_device(&sparse, &coarse, gd, &dp.plan, &mut out, bh, n, 0, seq, dim)?;
+        ops::vsa_combine_gate16_device(
+            &sparse, &coarse, gd, &dp.plan, &mut out, bh, n, 0, seq, dim,
+        )?;
         drop(sparse);
         let prefix = self.plan.prefix_rows;
         if topk == n || prefix == 0 {
-            return Ok(Some(CudaTensor::from_device_slice(out, vec![1, bh, seq, dim])?));
+            return Ok(Some(CudaTensor::from_device_slice(
+                out,
+                vec![1, bh, seq, dim],
+            )?));
         }
         // Text / audio query rows: dense against all keys, plus their
         // compression term, exactly as the f32 path (the SDPA quantizes its
         // operands to bf16 either way).
         phase("vsa_h3_4_prefix_dense", || {
-            let mut dense = crate::wan::nn::scaled_dot_product_attention(&q.narrow(2, 0, prefix)?, k, v, Some(scale))?;
+            let mut dense = crate::wan::nn::scaled_dot_product_attention(
+                &q.narrow(2, 0, prefix)?,
+                k,
+                v,
+                Some(scale),
+            )?;
             if let Some(g) = gate {
                 let branch = dp.prefix_branch(&coarse, dim)?;
                 let term = branch
@@ -1061,17 +1202,40 @@ impl H3Vsa {
                     .quantize_bf16()?
                     .mul(&g.narrow(2, 0, prefix)?.quantize_bf16()?)?
                     .quantize_bf16()?;
-                dense = dense.quantize_bf16()?.add(&term)?.quantize_bf16()?.to_f32_act()?;
+                dense = dense
+                    .quantize_bf16()?
+                    .add(&term)?
+                    .quantize_bf16()?
+                    .to_f32_act()?;
             }
-            let dense = if dense.is_bf16() { dense.to_f32_act()? } else { dense };
+            let dense = if dense.is_bf16() {
+                dense.to_f32_act()?
+            } else {
+                dense
+            };
             let mut dense = dense;
             dense.ensure_device()?;
             if let Some(d) = dense.device_slice() {
-                ops::block_copy_device(d, &mut out, bh, prefix * dim, prefix * dim, seq * dim, 0, 0)?;
-                return Ok(Some(CudaTensor::from_device_slice(out, vec![1, bh, seq, dim])?));
+                ops::block_copy_device(
+                    d,
+                    &mut out,
+                    bh,
+                    prefix * dim,
+                    prefix * dim,
+                    seq * dim,
+                    0,
+                    0,
+                )?;
+                return Ok(Some(CudaTensor::from_device_slice(
+                    out,
+                    vec![1, bh, seq, dim],
+                )?));
             }
             let out = CudaTensor::from_device_slice(out, vec![1, bh, seq, dim])?;
-            Ok(Some(CudaTensor::cat(&[&dense, &out.narrow(2, prefix, seq - prefix)?], 2)?))
+            Ok(Some(CudaTensor::cat(
+                &[&dense, &out.narrow(2, prefix, seq - prefix)?],
+                2,
+            )?))
         })
     }
 }
@@ -1095,7 +1259,10 @@ impl H3Vsa {
         let forced_gather = fastvideo_models::techniques::kernels::choice(
             fastvideo_models::techniques::kernels::KernelOp::VsaAttention,
         ) == "gather";
-        crate::wan::envflag::bool_flag("FASTVIDEO_VSA_BF16", true) && sm >= 8 && self.head_dim == 128 && !forced_gather
+        crate::wan::envflag::bool_flag("FASTVIDEO_VSA_BF16", true)
+            && sm >= 8
+            && self.head_dim == 128
+            && !forced_gather
     }
 
     /// [`Self::attend`] on the device without rounding the result to the
@@ -1112,7 +1279,11 @@ impl H3Vsa {
             return Ok(None);
         };
         let shape = vec![1, self.heads, self.plan.seq, self.head_dim];
-        if q.shape != shape || k.shape != shape || v.shape != shape || gate.as_ref().is_some_and(|g| g.shape != shape) {
+        if q.shape != shape
+            || k.shape != shape
+            || v.shape != shape
+            || gate.as_ref().is_some_and(|g| g.shape != shape)
+        {
             return Err(msg(format!(
                 "vsa-h3: q {:?} k {:?} v {:?} for a plan of {shape:?}",
                 q.shape, k.shape, v.shape
@@ -1302,7 +1473,10 @@ mod tests {
             .enumerate()
         {
             // Dense up to the bf16 combine rounding.
-            assert!((g - w).abs() <= w.abs() / 256.0 + 2e-5, "value {i}: {g} vs {w}");
+            assert!(
+                (g - w).abs() <= w.abs() / 256.0 + 2e-5,
+                "value {i}: {g} vs {w}"
+            );
         }
     }
 

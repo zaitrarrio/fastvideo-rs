@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use fastvideo_models::cosmos3::rope::{rope_tables, vision_positions};
-use fastvideo_models::cosmos3::{latent_grid, prompt, schedule, Cosmos3TransformerConfig, SolCosmosTea};
+use fastvideo_models::cosmos3::{
+    latent_grid, prompt, schedule, Cosmos3TransformerConfig, SolCosmosTea,
+};
 use fastvideo_models::wan::WanVaeConfig;
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
@@ -102,7 +104,10 @@ pub struct Cosmos3Pipeline {
 
 fn und_resident() -> bool {
     matches!(
-        std::env::var("FASTVIDEO_COSMOS3_UND").ok().as_deref().map(str::trim),
+        std::env::var("FASTVIDEO_COSMOS3_UND")
+            .ok()
+            .as_deref()
+            .map(str::trim),
         Some("resident")
     )
 }
@@ -127,7 +132,11 @@ impl Cosmos3Pipeline {
 
     pub fn load(&mut self) -> Result<()> {
         if self.dit.is_none() {
-            self.dit = Some(Cosmos3Transformer::load(self.cfg.clone(), &self.map, und_resident())?);
+            self.dit = Some(Cosmos3Transformer::load(
+                self.cfg.clone(),
+                &self.map,
+                und_resident(),
+            )?);
         }
         if self.vae.is_none() {
             let dir = self.root.join("vae");
@@ -145,7 +154,12 @@ impl Cosmos3Pipeline {
             .iter()
             .map(|p| self.root.join(p))
             .find(|p| p.is_file())
-            .ok_or_else(|| msg(format!("{}: no text_tokenizer/tokenizer.json", self.root.display())))?;
+            .ok_or_else(|| {
+                msg(format!(
+                    "{}: no text_tokenizer/tokenizer.json",
+                    self.root.display()
+                ))
+            })?;
         prompt::Tokenizer::from_file(&path).map_err(|e| msg(format!("{}: {e}", path.display())))
     }
 
@@ -153,7 +167,12 @@ impl Cosmos3Pipeline {
         let t = Instant::now();
         self.load()?;
         let mut timing = Cosmos3Timing {
-            arm: if request.teacache { "teacache" } else { "baseline" }.into(),
+            arm: if request.teacache {
+                "teacache"
+            } else {
+                "baseline"
+            }
+            .into(),
             und_resident: und_resident(),
             fp8: crate::wan::envflag::bool_flag("FASTVIDEO_FP8", false),
             load_s: t.elapsed().as_secs_f64(),
@@ -167,8 +186,14 @@ impl Cosmos3Pipeline {
         // Prompts → text-tower caches.
         let t = Instant::now();
         let tok = self.tokenizer()?;
-        let (f, h, w, fps) = (request.num_frames, request.height, request.width, request.fps);
-        let cond_ids = prompt::token_ids(&tok, &request.prompt, false, f, h, w, fps).map_err(msg)?;
+        let (f, h, w, fps) = (
+            request.num_frames,
+            request.height,
+            request.width,
+            request.fps,
+        );
+        let cond_ids =
+            prompt::token_ids(&tok, &request.prompt, false, f, h, w, fps).map_err(msg)?;
         let do_cfg = request.guidance_scale > 1.0;
         let neg = request.negative_prompt.as_deref().unwrap_or("");
         let uncond_ids = if do_cfg {
@@ -219,13 +244,27 @@ impl Cosmos3Pipeline {
         for (i, &tstep) in ts.iter().enumerate() {
             let step_t = Instant::now();
             let temb = dit.time_embed(schedule::transformer_timestep(tstep, cfg.timestep_scale));
-            let compute = tea.as_mut().map_or(true, |c| c.decide(i, &temb));
+            let compute = tea.as_mut().is_none_or(|c| c.decide(i, &temb));
             let lat_t = CudaTensor::from_vec(latents.clone(), shape.clone())?;
             let tea_on = tea.is_some();
-            let vc = dit.forward_gen(&lat_t, &temb, &cond, &rope_c.0, &rope_c.1, mode(tea_on, compute, &mut res_c))?;
+            let vc = dit.forward_gen(
+                &lat_t,
+                &temb,
+                &cond,
+                &rope_c.0,
+                &rope_c.1,
+                mode(tea_on, compute, &mut res_c),
+            )?;
             let v = match (&uncond, &rope_u) {
                 (Some(u), Some((uc, us))) => {
-                    let vu = dit.forward_gen(&lat_t, &temb, u, uc, us, mode(tea_on, compute, &mut res_u))?;
+                    let vu = dit.forward_gen(
+                        &lat_t,
+                        &temb,
+                        u,
+                        uc,
+                        us,
+                        mode(tea_on, compute, &mut res_u),
+                    )?;
                     vu.add(&vc.sub(&vu)?.try_mul_scalar(request.guidance_scale)?)?
                 }
                 _ => vc,
@@ -287,7 +326,10 @@ impl Cosmos3Pipeline {
         timing.request_s = request_start.elapsed().as_secs_f64();
         let text = serde_json::to_string_pretty(&timing).map_err(terr)?;
         std::fs::write(out_dir.join("cosmos3_timing.json"), &text).map_err(terr)?;
-        crate::wan::log::info(format_args!("cosmos3 timing {}", serde_json::to_string(&timing).map_err(terr)?));
+        crate::wan::log::info(format_args!(
+            "cosmos3 timing {}",
+            serde_json::to_string(&timing).map_err(terr)?
+        ));
         Ok(timing)
     }
 }
@@ -307,7 +349,10 @@ mod tests {
     #[test]
     fn official_request() {
         let r = Cosmos3Request::official("a lake");
-        assert_eq!((r.width, r.height, r.num_frames, r.num_steps), (1280, 720, 189, 35));
+        assert_eq!(
+            (r.width, r.height, r.num_frames, r.num_steps),
+            (1280, 720, 189, 35)
+        );
         assert_eq!(r.guidance_scale, 6.0);
         assert!(!r.teacache);
     }

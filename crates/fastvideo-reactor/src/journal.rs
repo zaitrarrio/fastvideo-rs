@@ -32,7 +32,10 @@ impl std::fmt::Debug for Journal {
 
 impl Default for Journal {
     fn default() -> Self {
-        Self { ring: Mutex::new((0, VecDeque::new())), tx: broadcast::channel(256).0 }
+        Self {
+            ring: Mutex::new((0, VecDeque::new())),
+            tx: broadcast::channel(256).0,
+        }
     }
 }
 

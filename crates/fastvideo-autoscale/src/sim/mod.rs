@@ -18,7 +18,9 @@ use std::sync::{Arc, Mutex};
 use crate::config::{PoolConfig, PoolKind};
 use crate::gateway::SignalSource;
 use crate::provider::{ApplyReport, BalanceSource, Provider, ProviderError};
-use crate::types::{EndpointSettings, PoolDecision, PoolObservation, PoolSignals, Worker, WorkerState};
+use crate::types::{
+    EndpointSettings, PoolDecision, PoolObservation, PoolSignals, Worker, WorkerState,
+};
 
 pub use trace::{Arrival, Rng};
 
@@ -146,12 +148,24 @@ pub struct SimWorld {
 
 impl SimWorld {
     pub fn new(start_s: f64, seed: u64, balance_usd: f64) -> Self {
-        Self { now: start_s, pools: BTreeMap::new(), pending: BTreeMap::new(), rng: Rng::new(seed), balance_usd }
+        Self {
+            now: start_s,
+            pools: BTreeMap::new(),
+            pending: BTreeMap::new(),
+            rng: Rng::new(seed),
+            balance_usd,
+        }
     }
 
     /// Adds a pool. Serverless pools start from `endpoint` (min 0 / max
     /// `max_workers` when `None`).
-    pub fn add_pool(&mut self, cfg: PoolConfig, profile: FamilyProfile, price: f64, endpoint: Option<EndpointSettings>) {
+    pub fn add_pool(
+        &mut self,
+        cfg: PoolConfig,
+        profile: FamilyProfile,
+        price: f64,
+        endpoint: Option<EndpointSettings>,
+    ) {
         let endpoint = match cfg.kind {
             PoolKind::Serverless => Some(endpoint.unwrap_or(EndpointSettings {
                 workers_min: 0,
@@ -183,11 +197,17 @@ impl SimWorld {
     /// Schedules arrivals (times ≥ now, sorted).
     pub fn load_trace(&mut self, pool: &str, mut arrivals: Vec<Arrival>) {
         arrivals.sort_by(|a, b| a.t.total_cmp(&b.t));
-        self.pending.entry(pool.to_owned()).or_default().extend(arrivals);
+        self.pending
+            .entry(pool.to_owned())
+            .or_default()
+            .extend(arrivals);
     }
 
     pub fn stats(&self, pool: &str) -> PoolStats {
-        self.pools.get(pool).map(|p| p.stats.clone()).unwrap_or_default()
+        self.pools
+            .get(pool)
+            .map(|p| p.stats.clone())
+            .unwrap_or_default()
     }
 
     pub fn endpoint(&self, pool: &str) -> Option<EndpointSettings> {
@@ -205,8 +225,9 @@ impl SimWorld {
 
     /// Queued + running work left.
     pub fn outstanding(&self, pool: &str) -> usize {
-        self.pools.get(pool).map_or(0, |p| p.queue.len() + p.workers.iter().filter(|w| w.job.is_some()).count())
-            + self.pending.get(pool).map_or(0, VecDeque::len)
+        self.pools.get(pool).map_or(0, |p| {
+            p.queue.len() + p.workers.iter().filter(|w| w.job.is_some()).count()
+        }) + self.pending.get(pool).map_or(0, VecDeque::len)
     }
 
     /// Advances to `until` in 1 s steps.
@@ -232,9 +253,17 @@ impl SimWorld {
             let rng = &mut self.rng;
             let p = self.pools.get_mut(&name).expect("pool");
             for a in arrived {
-                let dur = if a.stream { a.duration_s } else { p.profile.job_s * a.duration_scale };
+                let dur = if a.stream {
+                    a.duration_s
+                } else {
+                    p.profile.job_s * a.duration_scale
+                };
                 p.arrivals_total += 1;
-                p.queue.push_back(Job { arrived: a.t, dur: dur.max(1.0), stream: a.stream });
+                p.queue.push_back(Job {
+                    arrived: a.t,
+                    dur: dur.max(1.0),
+                    stream: a.stream,
+                });
             }
             // Boot and finish.
             for w in &mut p.workers {
@@ -260,16 +289,24 @@ impl SimWorld {
                 let mut want = ep.workers_min.max(active.min(ep.workers_max));
                 let waiting = match ep.scaler_type.as_str() {
                     "REQUEST_COUNT" => {
-                        let work = p.queue.len() as u32 + p.workers.iter().filter(|w| w.job.is_some()).count() as u32;
+                        let work = p.queue.len() as u32
+                            + p.workers.iter().filter(|w| w.job.is_some()).count() as u32;
                         work.div_ceil(ep.scaler_value.max(1))
                     }
                     _ => {
                         // QUEUE_DELAY: one more worker per job that waited
                         // longer than the delay and no booting or idle
                         // worker will take.
-                        let over =
-                            p.queue.iter().filter(|j| now - j.arrived >= f64::from(ep.scaler_value)).count() as u32;
-                        let idle = p.workers.iter().filter(|w| w.ready && !w.draining && w.job.is_none()).count() as u32;
+                        let over = p
+                            .queue
+                            .iter()
+                            .filter(|j| now - j.arrived >= f64::from(ep.scaler_value))
+                            .count() as u32;
+                        let idle = p
+                            .workers
+                            .iter()
+                            .filter(|w| w.ready && !w.draining && w.job.is_none())
+                            .count() as u32;
                         active + over.saturating_sub(starting + idle)
                     }
                 };
@@ -283,7 +320,9 @@ impl SimWorld {
                 let idle_to = f64::from(ep.idle_timeout_s);
                 p.workers.retain(|w| {
                     let idle = w.ready && w.job.is_none();
-                    let reap = idle && ((n > ep.workers_min && now - w.idle_since >= idle_to) || n > ep.workers_max);
+                    let reap = idle
+                        && ((n > ep.workers_min && now - w.idle_since >= idle_to)
+                            || n > ep.workers_max);
                     if reap {
                         n -= 1;
                     }
@@ -294,9 +333,17 @@ impl SimWorld {
                 Self::spawn(p, rng, now);
             }
             // Dispatch FIFO.
-            for w in p.workers.iter_mut().filter(|w| w.ready && !w.draining && w.job.is_none()) {
+            for w in p
+                .workers
+                .iter_mut()
+                .filter(|w| w.ready && !w.draining && w.job.is_none())
+            {
                 let Some(j) = p.queue.pop_front() else { break };
-                let extra = if w.jobs_done == 0 && !j.stream { p.profile.first_job_extra_s } else { 0.0 };
+                let extra = if w.jobs_done == 0 && !j.stream {
+                    p.profile.first_job_extra_s
+                } else {
+                    0.0
+                };
                 w.job = Some((now + j.dur + extra, j.stream));
                 w.job_started = now;
                 p.stats.waits.push(now - j.arrived);
@@ -323,7 +370,11 @@ impl SimWorld {
         p.next_id += 1;
         let id = format!("{}-{}", p.cfg.name, p.next_id);
         let uncached = rng.next_f64() < p.profile.uncached_share;
-        let start = if uncached { p.profile.uncached_start_s } else { p.profile.worker_start_s };
+        let start = if uncached {
+            p.profile.uncached_start_s
+        } else {
+            p.profile.worker_start_s
+        };
         p.stats.cold_starts += 1;
         if uncached {
             p.stats.uncached_starts += 1;
@@ -345,7 +396,8 @@ impl SimWorld {
     /// Finishes the run: counts work never started or finished.
     pub fn finish(&mut self) {
         for p in self.pools.values_mut() {
-            p.stats.unfinished = (p.queue.len() + p.workers.iter().filter(|w| w.job.is_some()).count()) as u64;
+            p.stats.unfinished =
+                (p.queue.len() + p.workers.iter().filter(|w| w.job.is_some()).count()) as u64;
             // Waits of jobs never started count as the time they waited.
             let now = self.now;
             let waited: Vec<f64> = p.queue.iter().map(|j| now - j.arrived).collect();
@@ -354,13 +406,26 @@ impl SimWorld {
     }
 
     fn signals(&self, pool: &str) -> PoolSignals {
-        let Some(p) = self.pools.get(pool) else { return PoolSignals { pool: pool.into(), ..Default::default() } };
+        let Some(p) = self.pools.get(pool) else {
+            return PoolSignals {
+                pool: pool.into(),
+                ..Default::default()
+            };
+        };
         PoolSignals {
             pool: pool.into(),
             queued: p.queue.len() as u32,
             oldest_queued_s: p.queue.front().map_or(0.0, |j| self.now - j.arrived),
-            running_jobs: p.workers.iter().filter(|w| matches!(w.job, Some((_, false)))).count() as u32,
-            live_streams: p.workers.iter().filter(|w| matches!(w.job, Some((_, true)))).count() as u32,
+            running_jobs: p
+                .workers
+                .iter()
+                .filter(|w| matches!(w.job, Some((_, false))))
+                .count() as u32,
+            live_streams: p
+                .workers
+                .iter()
+                .filter(|w| matches!(w.job, Some((_, true))))
+                .count() as u32,
             arrivals_total: p.arrivals_total,
             recent_job_s: if p.recent.is_empty() {
                 None
@@ -372,7 +437,9 @@ impl SimWorld {
     }
 
     fn observe(&self, pool: &str) -> PoolObservation {
-        let Some(p) = self.pools.get(pool) else { return PoolObservation::default() };
+        let Some(p) = self.pools.get(pool) else {
+            return PoolObservation::default();
+        };
         PoolObservation {
             workers: p
                 .workers
@@ -401,7 +468,9 @@ impl SimWorld {
     fn apply(&mut self, pool: &str, d: &PoolDecision) -> ApplyReport {
         let now = self.now;
         let rng = &mut self.rng;
-        let Some(p) = self.pools.get_mut(pool) else { return ApplyReport::default() };
+        let Some(p) = self.pools.get_mut(pool) else {
+            return ApplyReport::default();
+        };
         let mut r = ApplyReport::default();
         if let (Some(want), Some(cur)) = (d.endpoint.as_ref(), p.endpoint.as_mut()) {
             if want != cur {
@@ -457,10 +526,19 @@ impl Provider for SimProvider {
     fn name(&self) -> &'static str {
         "sim"
     }
-    async fn observe(&self, pool: &PoolConfig, _now_s: f64) -> Result<PoolObservation, ProviderError> {
+    async fn observe(
+        &self,
+        pool: &PoolConfig,
+        _now_s: f64,
+    ) -> Result<PoolObservation, ProviderError> {
         Ok(lock(&self.0).observe(&pool.name))
     }
-    async fn apply(&self, pool: &PoolConfig, d: &PoolDecision, _now_s: f64) -> Result<ApplyReport, ProviderError> {
+    async fn apply(
+        &self,
+        pool: &PoolConfig,
+        d: &PoolDecision,
+        _now_s: f64,
+    ) -> Result<ApplyReport, ProviderError> {
         Ok(lock(&self.0).apply(&pool.name, d))
     }
 }

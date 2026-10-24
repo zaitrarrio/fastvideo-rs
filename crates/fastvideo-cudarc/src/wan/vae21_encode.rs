@@ -22,6 +22,9 @@ fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
 }
 
+// One per model block, built once; boxing the large variant would only add an
+// indirection on the forward path.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 enum Stage {
     Res(ResidualBlock),
@@ -74,12 +77,13 @@ impl Wan21ChunkedEncoder {
 
     fn build(map: Option<&WeightMap>, base: usize, z_dim: usize) -> Result<Self> {
         let top = 4 * base;
-        let conv = |key: &str, i: usize, o: usize, k: [usize; 3], p: [usize; 3]| -> Result<CausalConv3d> {
-            match map {
-                Some(m) => CausalConv3d::load(m, key, i, o, k, [1, 1, 1], p),
-                None => Ok(CausalConv3d::zeros(i, o, k, [1, 1, 1], p)),
-            }
-        };
+        let conv =
+            |key: &str, i: usize, o: usize, k: [usize; 3], p: [usize; 3]| -> Result<CausalConv3d> {
+                match map {
+                    Some(m) => CausalConv3d::load(m, key, i, o, k, [1, 1, 1], p),
+                    None => Ok(CausalConv3d::zeros(i, o, k, [1, 1, 1], p)),
+                }
+            };
         let res = |key: &str, i: usize, o: usize| -> Result<ResidualBlock> {
             match map {
                 Some(m) => ResidualBlock::load(m, key, i, o),
@@ -102,7 +106,10 @@ impl Wan21ChunkedEncoder {
                 AttentionBlock::load(m, "encoder.mid_block.attentions.0", top)?,
                 gamma(m, "encoder.norm_out.gamma", &[top, 1, 1, 1])?,
             ),
-            None => (AttentionBlock::zeros(top), CudaTensor::ones(&[top, 1, 1, 1])),
+            None => (
+                AttentionBlock::zeros(top),
+                CudaTensor::ones(&[top, 1, 1, 1]),
+            ),
         };
         Ok(Self {
             conv_in: conv("encoder.conv_in", 3, base, [3, 3, 3], [1, 1, 1])?,

@@ -159,7 +159,7 @@ pub fn fuse_into(
     if out == 0 || inn == 0 || weight.len() != out * inn {
         return Err(format!("lora weight len {} != {out}x{inn}", weight.len()));
     }
-    if b.is_empty() || b.len() % out != 0 {
+    if b.is_empty() || !b.len().is_multiple_of(out) {
         return Err(format!(
             "lora B len {} is not a multiple of out {out}",
             b.len()
@@ -220,11 +220,18 @@ mod tests {
         let a = weight_key_aliases("diffusion_model.adaln_single.linear");
         assert!(a.contains(&"time_embed.linear.weight".to_owned()), "{a:?}");
         assert!(a.contains(&"adaln_single.linear.weight".to_owned()));
-        let a = weight_key_aliases("diffusion_model.av_ca_a2v_gate_adaln_single.emb.timestep_embedder.linear_1");
-        assert!(a.contains(&"av_cross_attn_video_a2v_gate.emb.timestep_embedder.linear_1.weight".to_owned()));
-        assert!(weight_key_aliases("diffusion_model.patchify_proj").contains(&"proj_in.weight".to_owned()));
-        assert!(weight_key_aliases("diffusion_model.audio_prompt_adaln_single.linear")
-            .contains(&"audio_prompt_adaln.linear.weight".to_owned()));
+        let a = weight_key_aliases(
+            "diffusion_model.av_ca_a2v_gate_adaln_single.emb.timestep_embedder.linear_1",
+        );
+        assert!(a.contains(
+            &"av_cross_attn_video_a2v_gate.emb.timestep_embedder.linear_1.weight".to_owned()
+        ));
+        assert!(weight_key_aliases("diffusion_model.patchify_proj")
+            .contains(&"proj_in.weight".to_owned()));
+        assert!(
+            weight_key_aliases("diffusion_model.audio_prompt_adaln_single.linear")
+                .contains(&"audio_prompt_adaln.linear.weight".to_owned())
+        );
         // Block linears are spelled alike in both namings.
         let a = weight_key_aliases("diffusion_model.transformer_blocks.3.audio_ff.net.0.proj");
         assert_eq!(a.len(), 3, "{a:?}");
@@ -236,7 +243,10 @@ mod tests {
         let mut m = std::collections::HashMap::new();
         assert_eq!(reference_scale(&m, "reference_downscale_factor"), 1);
         m.insert("reference_downscale_factor".to_string(), "2".to_string());
-        m.insert("reference_temporal_scale_factor".to_string(), "x".to_string());
+        m.insert(
+            "reference_temporal_scale_factor".to_string(),
+            "x".to_string(),
+        );
         assert_eq!(reference_scale(&m, "reference_downscale_factor"), 2);
         assert_eq!(reference_scale(&m, "reference_temporal_scale_factor"), 1);
     }

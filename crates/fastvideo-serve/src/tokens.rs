@@ -41,14 +41,23 @@ pub struct FileCounter {
 
 impl FileCounter {
     pub fn new(path: PathBuf, family: PromptFamily) -> Self {
-        Self { path, h3: family == PromptFamily::H3, state: Mutex::new(State { loaded: None, tried: None }) }
+        Self {
+            path,
+            h3: family == PromptFamily::H3,
+            state: Mutex::new(State {
+                loaded: None,
+                tried: None,
+            }),
+        }
     }
 
     fn load(&self) -> Result<Loaded, String> {
         if self.h3 {
             H3Tokenizer::from_file(&self.path).map(Loaded::H3)
         } else {
-            tokenizers::Tokenizer::from_file(&self.path).map(Loaded::Hf).map_err(|e| format!("load {}: {e}", self.path.display()))
+            tokenizers::Tokenizer::from_file(&self.path)
+                .map(Loaded::Hf)
+                .map_err(|e| format!("load {}: {e}", self.path.display()))
         }
     }
 }
@@ -66,7 +75,9 @@ impl TokenCounter for FileCounter {
                         tracing::info!(path = %self.path.display(), "upsampler: text-encoder tokenizer loaded; prompt limits are in tokens");
                         st.loaded = Some(l);
                     }
-                    Err(e) => tracing::warn!(error = %e, "upsampler: the tokenizer cannot be loaded; prompt limits stay in characters"),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "upsampler: the tokenizer cannot be loaded; prompt limits stay in characters")
+                    }
                 }
             }
         }
@@ -93,7 +104,12 @@ fn under(weights: &str) -> PathBuf {
 fn text_tree(m: &crate::config::ModelCfg, fam: PromptFamily) -> Option<PathBuf> {
     let weights = m.weights.as_deref()?;
     if fam == PromptFamily::H3 {
-        if let Some(t) = m.extra.get("text_weights").and_then(|v| v.as_str()).filter(|t| !t.trim().is_empty()) {
+        if let Some(t) = m
+            .extra
+            .get("text_weights")
+            .and_then(|v| v.as_str())
+            .filter(|t| !t.trim().is_empty())
+        {
             return Some(PathBuf::from(t));
         }
         let w = Path::new(weights.trim_end_matches('/'));
@@ -131,7 +147,11 @@ fn family_of(f: &str) -> Option<PromptFamily> {
 
 /// The counters `[upsampler]` and `[[models]]` point at.
 pub fn counters(c: &Config) -> fastvideo_upsampler::Counters {
-    let explicit = c.upsampler.as_ref().map(|u| u.tokenizers.clone()).unwrap_or_default();
+    let explicit = c
+        .upsampler
+        .as_ref()
+        .map(|u| u.tokenizers.clone())
+        .unwrap_or_default();
     let path = |fam: PromptFamily, set: &Option<String>| -> Option<PathBuf> {
         if let Some(p) = set.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
             return Some(PathBuf::from(p));
@@ -183,9 +203,14 @@ mod tests {
     #[test]
     fn counters_follow_config_and_models() {
         let mut c = Config::default();
-        c.models.push(toml::from_str("id = \"fasth3\"\nfamily = \"h3\"\nweights = \"/w/FastH3\"").unwrap());
+        c.models.push(
+            toml::from_str("id = \"fasth3\"\nfamily = \"h3\"\nweights = \"/w/FastH3\"").unwrap(),
+        );
         let k = counters(&c);
-        assert_eq!(k.h3.map(|x| x.describe()).as_deref(), Some("/w/FastH3/tokenizer/tokenizer.json"));
+        assert_eq!(
+            k.h3.map(|x| x.describe()).as_deref(),
+            Some("/w/FastH3/tokenizer/tokenizer.json")
+        );
         assert!(k.wan.is_none() && k.ltx.is_none());
         let mut u = crate::config::UpsamplerCfg::default();
         u.tokenizers.h3 = Some("/t/h3.json".into());
@@ -205,13 +230,24 @@ mod tests {
             toml::from_str("id = \"fasth3-trim-8step\"\nfamily = \"h3\"\nrecipe = \"h3-trim\"\nweights = \"/w/fasth3-trim-8step\"").unwrap(),
         );
         let k = counters(&c);
-        assert_eq!(k.h3.map(|x| x.describe()).as_deref(), Some("/w/h3-base/tokenizer/tokenizer.json"));
-        c.models[0] = toml::from_str("id = \"t\"\nfamily = \"h3\"\nweights = \"/w/fasth3-trim-8step/\"").unwrap();
+        assert_eq!(
+            k.h3.map(|x| x.describe()).as_deref(),
+            Some("/w/h3-base/tokenizer/tokenizer.json")
+        );
+        c.models[0] =
+            toml::from_str("id = \"t\"\nfamily = \"h3\"\nweights = \"/w/fasth3-trim-8step/\"")
+                .unwrap();
         let k = counters(&c);
-        assert_eq!(k.h3.map(|x| x.describe()).as_deref(), Some("/w/h3-base/tokenizer/tokenizer.json"));
+        assert_eq!(
+            k.h3.map(|x| x.describe()).as_deref(),
+            Some("/w/h3-base/tokenizer/tokenizer.json")
+        );
         c.models[0] =
             toml::from_str("id = \"t\"\nfamily = \"h3\"\nweights = \"/w/fasth3-trim-8step\"\ntext_weights = \"/v/h3-base\"").unwrap();
         let k = counters(&c);
-        assert_eq!(k.h3.map(|x| x.describe()).as_deref(), Some("/v/h3-base/tokenizer/tokenizer.json"));
+        assert_eq!(
+            k.h3.map(|x| x.describe()).as_deref(),
+            Some("/v/h3-base/tokenizer/tokenizer.json")
+        );
     }
 }

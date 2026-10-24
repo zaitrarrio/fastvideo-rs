@@ -36,9 +36,11 @@ impl AvCheck for RgbFrame {
 impl AvCheck for Pcm {
     fn check(&self) -> Result<()> {
         if self.rate == 0 || self.channels == 0 {
-            return Err(MediaError::invalid("pcm needs a nonzero rate and channel count"));
+            return Err(MediaError::invalid(
+                "pcm needs a nonzero rate and channel count",
+            ));
         }
-        if self.samples.len() % self.channels as usize != 0 {
+        if !self.samples.len().is_multiple_of(self.channels as usize) {
             return Err(MediaError::invalid(format!(
                 "{} interleaved samples do not divide into {} channels",
                 self.samples.len(),
@@ -50,8 +52,18 @@ impl AvCheck for Pcm {
 }
 
 /// Build a checked frame from raw RGB24 bytes.
-pub fn frame(width: u32, height: u32, data: impl Into<bytes::Bytes>, index: u64) -> Result<RgbFrame> {
-    let f = RgbFrame { width, height, data: data.into(), index };
+pub fn frame(
+    width: u32,
+    height: u32,
+    data: impl Into<bytes::Bytes>,
+    index: u64,
+) -> Result<RgbFrame> {
+    let f = RgbFrame {
+        width,
+        height,
+        data: data.into(),
+        index,
+    };
     f.check()?;
     Ok(f)
 }
@@ -85,7 +97,12 @@ pub fn f32_to_f32le(samples: &[f32]) -> Vec<u8> {
 
 /// Parse little-endian f32 bytes (a trailing partial sample is ignored).
 pub fn f32le_to_f32(bytes: &[u8]) -> Vec<f32> {
-    bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
 }
 
 #[cfg(test)]

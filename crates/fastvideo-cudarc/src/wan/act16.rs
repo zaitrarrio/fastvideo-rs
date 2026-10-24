@@ -317,7 +317,9 @@ pub(crate) fn split_heads(
     let mut out = OutBuf::new(n, is16(x))?;
     let (op_p, o16) = (out.ptr(), out.is16());
     if split_rows_ok(d, width, col_off) {
-        split_rows(&dev, a.ptr, a.is16, op_p, o16, batch, seq, heads, d, width, col_off)?;
+        split_rows(
+            &dev, a.ptr, a.is16, op_p, o16, batch, seq, heads, d, width, col_off,
+        )?;
         return out.into_tensor(vec![batch, heads, seq, d]).map(Some);
     }
     let v = [n, seq, heads, d, width, col_off].map(|u| u as i64);
