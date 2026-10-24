@@ -89,7 +89,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | todo |
+| D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | todo (D1a pr #171: `fv-lab run` + `pod` on fv-deploy's guards, `lab/tiers.toml` and `lab/cells/rtx6000-*.toml`, dry-run and payload goldens from the scripts, ADR-0019; GPU run pending (coordinator); next: D1b other families, D1c `report`, D1d `gate`/`oracle`, D1e one-offs) |
 | D2 | `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments; keyed by registry name and `@rev` | every served variant has a gold file; comments in `profiles/` no longer carry numbers | pod | A2 | merged (#151) |
 | D3 | `fv-lab report tiers` and the generated `docs/perf/tiers.md` | table generated from one run set | pod; **GPU** the gold runs | D1, D2 | todo |
 | D4 | CI bridge: gold files parse and resolve; `last_validated.commit` age check; an on-demand `fv-lab run gold --all` workflow | visible per-model validation age in CI | CI | D3 | todo |
@@ -689,3 +689,20 @@ ran (pod id, $/hr), result, cost.
   `c7a6bb5` that hung for over an hour, before the #166/#167 fixes); the
   coordinator cancelled it, tools-v0.1.38 published from `8178a7a` and
   `serve-image` rebuilt every variant.
+
+- 2026-10-24 10:50Z: D1a (`claude/d1a-fv-lab`, draft PR #171): `fv-lab`
+  (binary of `fastvideo-lab`, feature `cli`) with `run <tier|cell>
+  [--dry-run]` (runpod-matrix.sh's frame, the same run directory) and `pod
+  {up,status,fetch,down,reap}` on fv-deploy's `Provider`, guards and
+  lifecycle; `lab/tiers.toml` (`rtx6000`) and `lab/cells/rtx6000-{h3,ltx25}.toml`
+  (seven arms) with schemas; B6's `FV_DRY_RUN=1` hunks and a new
+  `runpod-http.sh plan`; goldens from the scripts (`fv-lab-goldens.sh`): the
+  dry run equals runpod-matrix.sh's, the pod body equals runpod-http.sh's but
+  the runner line and `env {}`; `fv-lab` in the runtime image; one seam in
+  fastvideo-deploy (`runpod::Pod::list`); ADR-0019. CPU only, on the shared
+  build pod (`pzocv1keasg3xn`, no pod created): `cargo test -p fastvideo-lab
+  --all-features` (33 unit + 25 integration), fastvideo-deploy tests,
+  workspace clippy (with and without `cli`), fmt, lint, goldens `--check`
+  green. No Runpod call, no GPU. GPU run for the coordinator:
+  `RUNPOD_API_KEY=… fv-lab pod up --sha <7> --family rtx6000 --yes`, then
+  `fv-lab pod fetch <id> --wait --down`.
