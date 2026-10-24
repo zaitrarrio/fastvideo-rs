@@ -732,5 +732,6 @@ ran (pod id, $/hr), result, cost.
   `matrix_exit=0`. About 15 GPU-minutes per side, ~$1.25 in all.
   Evidence: `artifacts/runpod/rtx6000/492e28a-1024114432-9d08/` (fv-lab,
   with `compare-vs-script.txt`) and `artifacts/runpod/rtx6000/492e28a-10241144/`
-  (script). The other four `rtx6000` arms are not part of this gate (D1b
-  moves the remaining families with their own goldens).
+  (script). The other `rtx6000` arms (fasth3-4step-vsa, fasth3-4step-dense,
+  sol-h3-spark; fasth3-8step is skipped on the EU volume) were not run on
+  GPU here; their command lines are covered by the dry-run golden.
