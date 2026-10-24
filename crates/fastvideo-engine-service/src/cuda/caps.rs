@@ -60,6 +60,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::caps::{Recipe, SOL_H3_4STEP_PROFILE};
 
+pub use super::families::{catalog_from_manifests, engine_table, recipe_from_engine};
+
 /// FastVideo's English Wan negative prompt (`fv-gpucheck wan gen` default).
 pub const WAN_NEGATIVE_EN: &str = "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards";
 

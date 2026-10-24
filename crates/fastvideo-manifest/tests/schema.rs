@@ -6,7 +6,8 @@
 mod common;
 
 use fastvideo_manifest::schema::{
-    manifest_schema, model_toml_schema, schema_text, MANIFEST_SCHEMA_PATH, MODEL_TOML_SCHEMA_PATH,
+    family_schema, manifest_schema, model_toml_schema, schema_text, FAMILY_SCHEMA_PATH,
+    MANIFEST_SCHEMA_PATH, MODEL_TOML_SCHEMA_PATH,
 };
 
 fn check(rel: &str, generated: String) {
@@ -33,6 +34,47 @@ fn model_toml_schema_has_not_drifted() {
 #[test]
 fn manifest_schema_has_not_drifted() {
     check(MANIFEST_SCHEMA_PATH, schema_text(&manifest_schema()));
+}
+
+#[test]
+fn family_schema_has_not_drifted() {
+    check(FAMILY_SCHEMA_PATH, schema_text(&family_schema()));
+}
+
+#[test]
+fn family_schema_is_strict_and_keeps_engine_opaque() {
+    let f: serde_json::Value = serde_json::from_str(&schema_text(&family_schema())).unwrap();
+    assert_eq!(f["additionalProperties"], serde_json::Value::Bool(false));
+    let props = f["properties"].as_object().unwrap();
+    for key in ["schema", "family", "variants"] {
+        assert!(props.contains_key(key), "family schema lacks `{key}`");
+    }
+    let variant = &f["$defs"]["VariantManifest"];
+    assert_eq!(
+        variant["additionalProperties"],
+        serde_json::Value::Bool(false)
+    );
+    let vprops = variant["properties"].as_object().unwrap();
+    for key in [
+        "id",
+        "registry_name",
+        "tier",
+        "served_names",
+        "resident_default",
+        "recipe_name",
+        "trees",
+        "gpu",
+        "caps",
+        "engine",
+    ] {
+        assert!(vprops.contains_key(key), "variant schema lacks `{key}`");
+    }
+    // The engine table is opaque: any object.
+    assert_eq!(vprops["engine"]["type"], "object");
+    assert_eq!(
+        vprops["engine"]["additionalProperties"],
+        serde_json::Value::Bool(true)
+    );
 }
 
 #[test]

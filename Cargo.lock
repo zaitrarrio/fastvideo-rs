@@ -1307,6 +1307,7 @@ name = "fastvideo-engine-service"
 version = "0.1.1"
 dependencies = [
  "fastvideo-cudarc",
+ "fastvideo-manifest",
  "fastvideo-media",
  "fastvideo-models",
  "fastvideo-protocol",
@@ -1317,6 +1318,7 @@ dependencies = [
  "thiserror",
  "time",
  "tokio",
+ "toml",
  "tracing",
  "uuid",
 ]

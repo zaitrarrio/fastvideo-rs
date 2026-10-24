@@ -1,0 +1,296 @@
+# Family manifest (layer 2, docs/adr/0008-family-manifest-layer-2.md): LTX-2 / LTX-2.3 / LTX-2.5.
+# GENERATED from crates/fastvideo-engine-service/src/cuda/caps.rs `catalog()` by
+# `tests/families.rs` (`regenerate_family_files`); do not hand-edit until plan A3
+# makes this file the source. Paths: `${weights}/<tree>/...` and `${tae}/<file>`
+# are substituted with the engine's weight layout at load (families/README.md).
+
+schema = 1
+
+[family]
+id = "ltx2"
+display = "LTX-2 / LTX-2.3 / LTX-2.5"
+licence = "LTX-2 Community License"
+port_doc = "docs/ports/ltx2.md"
+
+[[variants]]
+id = "ltx25-distill-dense"
+tier = "max"
+resident_default = true
+recipe_name = "ltx25-distill-two-stage-dense"
+trees = ["ltx25"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 80
+
+[variants.caps.frames]
+step = 8
+offset = 1
+min = 9
+max = 481
+
+[variants.caps.canvas]
+multiple = 64
+max_area = 8355840
+aspect = [0.25, 4.0]
+short_edges = [1080, 480, 720, 768, 1440, 2160]
+
+[variants.caps.fps]
+allowed = [24, 25, 48, 50]
+default = 24
+
+[variants.caps.refs]
+images = 0
+videos = 0
+audios = 0
+total = 0
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+a2v = "off"
+canvas = [1920, 1080]
+dit = "${weights}/ltx25"
+family = "ltx2"
+profile = "ltx2/ltx25_distill_dense"
+refine_steps = 3
+sage_attention = true
+stage1_steps = 8
+stage2 = "dense"
+text = "streamed"
+two_stage = true
+version = "2.5"
+weights = "${weights}/ltx25"
+
+[[variants]]
+id = "ltx25-distill-sol"
+tier = "turbo"
+resident_default = true
+recipe_name = "ltx25-distill-two-stage-sol"
+trees = ["ltx25"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 80
+
+[variants.caps.frames]
+step = 8
+offset = 1
+min = 9
+max = 481
+
+[variants.caps.canvas]
+multiple = 64
+max_area = 8355840
+aspect = [0.25, 4.0]
+short_edges = [1080, 480, 720, 768, 1440, 2160]
+
+[variants.caps.fps]
+allowed = [24, 25, 48, 50]
+default = 24
+
+[variants.caps.refs]
+images = 0
+videos = 0
+audios = 0
+total = 0
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+a2v = "distilled"
+canvas = [1920, 1080]
+dit = "${weights}/ltx25"
+family = "ltx2"
+profile = "ltx2/ltx25_distill_sol"
+refine_steps = 3
+sage_attention = false
+stage1_steps = 8
+stage2 = "sol"
+text = "streamed"
+two_stage = true
+version = "2.5"
+weights = "${weights}/ltx25"
+
+[[variants]]
+id = "ltx25-distill-sol-nvfp4-taehv"
+tier = "draft"
+resident_default = true
+recipe_name = "ltx25-distill-two-stage-sol-nvfp4-taehv"
+trees = ["auxiliary/tae/taeltx2_3_wide.safetensors", "ltx25"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 100
+needs = ["fp8", "nvfp4"]
+
+[variants.caps.frames]
+step = 8
+offset = 1
+min = 9
+max = 481
+
+[variants.caps.canvas]
+multiple = 64
+max_area = 8355840
+aspect = [0.25, 4.0]
+short_edges = [1080, 480, 720, 768, 1440, 2160]
+
+[variants.caps.fps]
+allowed = [24, 25, 48, 50]
+default = 24
+
+[variants.caps.refs]
+images = 0
+videos = 0
+audios = 0
+total = 0
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+a2v = "distilled"
+canvas = [1920, 1080]
+dit = "${weights}/ltx25"
+family = "ltx2"
+profile = "ltx2/ltx25_distill_sol_nvfp4"
+refine_steps = 3
+sage_attention = false
+stage1_steps = 8
+stage2 = "sol"
+tae = "${tae}/taeltx2_3_wide.safetensors"
+text = "streamed"
+two_stage = true
+version = "2.5"
+weights = "${weights}/ltx25"
+
+[[variants]]
+id = "ltx25-ref2v"
+tier = "max"
+resident_default = true
+recipe_name = "ltx25-ic-lora-ingredients-dense"
+trees = ["ltx25", "ltx25-ic-lora-ingredients"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 80
+
+[variants.caps.frames]
+step = 8
+offset = 1
+min = 9
+max = 241
+
+[variants.caps.canvas]
+multiple = 64
+max_area = 2088960
+aspect = [0.25, 4.0]
+short_edges = [896, 720, 1080]
+
+[variants.caps.fps]
+allowed = [24, 25, 48, 50]
+default = 24
+
+[variants.caps.refs]
+images = 1
+videos = 0
+audios = 0
+total = 1
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+a2v = "distilled"
+canvas = [1536, 896]
+dit = "${weights}/ltx25"
+family = "ltx2"
+ic_lora = "${weights}/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors"
+profile = "ltx2/ltx25_distill_dense"
+refine_steps = 3
+sage_attention = false
+stage1_steps = 8
+stage2 = "dense"
+text = "streamed"
+two_stage = true
+version = "2.5"
+weights = "${weights}/ltx25"
+
+[[variants]]
+id = "ltx25-a2v-guided"
+tier = "max"
+resident_default = true
+recipe_name = "ltx25-dev-a2v-guided"
+trees = ["ltx25", "ltx25-dev"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 80
+
+[variants.caps.frames]
+step = 8
+offset = 1
+min = 9
+max = 481
+
+[variants.caps.canvas]
+multiple = 64
+max_area = 8355840
+aspect = [0.25, 4.0]
+short_edges = [1080, 480, 720, 768, 1440, 2160]
+
+[variants.caps.fps]
+allowed = [24, 25, 48, 50]
+default = 24
+
+[variants.caps.refs]
+images = 0
+videos = 0
+audios = 0
+total = 0
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = true
+guidance_2 = false
+flow_shift = false
+
+[variants.engine]
+a2v = "guided"
+canvas = [1920, 1080]
+dit = "${weights}/ltx25-dev/transformer_full"
+family = "ltx2"
+profile = "ltx2/ltx25_distill_dense"
+refine_steps = 3
+sage_attention = false
+stage1_steps = 30
+stage2 = "dense"
+text = "streamed"
+two_stage = true
+version = "2.5"
+weights = "${weights}/ltx25"
