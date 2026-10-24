@@ -83,7 +83,7 @@ parallel agents.
 |---|---|---|---|---|---|
 | C1 | `[deploy]` section of the family manifest; presets, variant tables, `families.tsv`, autoscale pools and the Dockerfile variant stages generated from it | `--check` green; one image with boot-time config if the owner decides so | pod | A4 | merged (#156; single image: owner decision, ADR-0011) |
 | C2 | `fv-boot` in `fastvideo-deploy`: driver check, config materialization, weights plan (volume / registry `hydrate` / hub / none), sidecar, tunnel and phase reports, watchdog, exec; fake provider and fake chunk source tests; the ten boot variants deleted | one boot script in the tree; fv-control sends env only | pod; **GPU** one pod boot on the EU volume | C1, registry WO-002 for the `hydrate` source (volume and hub sources first) | pr (#159: fv-boot is the images' entrypoint and every fv-control boot prefers it, ADR-0014; GPU gate green for the image kind on the EU volume (ltx); open per-kind gates before lifting `FV_BOOT_LEGACY` (cluster worker, serverless r2 streaming, edge watchdog, GMI / Brev, upsampler; ADR-0014 §6); remaining: C2b deletes the shell boots and sends env only after the image promotion, the `registry` source after WO-002, the upsampler launcher in Rust) |
-| C3 | `fv-deploy` with the `Provider` trait (from `fastvideo-autoscale`): `runpod::{Pod,Serverless}`, `vast`, `gcp`; shared money guards, backstop, ledger, templates, release promote/rollback; fv-control on the shared `Launch` schema | `fv-deploy up` per provider with the same smoke | pod; **GPU** one `fv-deploy up` on Runpod EU | C2 | todo (C3a pr #TBD: Runpod pods and serverless queue endpoints, the `Provider` trait in `fastvideo-deploy`, the `Launch` schema, the shared guards and backstop, `fv-deploy plan|up|status|logs|smoke|down`, ADR-0018; live gate pending (coordinator); next: C3b Vast + GCP, C3c fv-control on the generated `Launch` types, C3d templates / release / D1 ledger) |
+| C3 | `fv-deploy` with the `Provider` trait (from `fastvideo-autoscale`): `runpod::{Pod,Serverless}`, `vast`, `gcp`; shared money guards, backstop, ledger, templates, release promote/rollback; fv-control on the shared `Launch` schema | `fv-deploy up` per provider with the same smoke | pod; **GPU** one `fv-deploy up` on Runpod EU | C2 | todo (C3a pr #169: Runpod pods and serverless queue endpoints, the `Provider` trait in `fastvideo-deploy`, the `Launch` schema, the shared guards and backstop, `fv-deploy plan|up|status|logs|smoke|down`, ADR-0018; live gate pending (coordinator); next: C3b Vast + GCP, C3c fv-control on the generated `Launch` types, C3d templates / release / D1 ledger) |
 
 ### Phase 5: validation driver and gold standards (Workstream D)
 
@@ -633,7 +633,7 @@ ran (pod id, $/hr), result, cost.
   check in `release-artifacts-pod.sh`, docs, and merges main (#163); the
   boot path is unchanged. Evidence:
   `artifacts/runpod/c2-boot/entry-0975761-10240642/`.
-- 2026-10-24 09:30Z: C3a (`claude/c3a-fv-deploy`, draft PR #TBD): `fv-deploy` with
+- 2026-10-24 09:30Z: C3a (`claude/c3a-fv-deploy`, draft PR #169): `fv-deploy` with
   the `Provider` trait in `fastvideo-deploy` (`runpod::{Pod, Serverless}`;
   `fastvideo-autoscale` now depends on it), the `Launch` / `Instance` /
   `Offer` / `Account` schemas, a launch from a `deploy/deploy.toml` preset,
