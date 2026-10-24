@@ -74,15 +74,15 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | B1 | Extract the runtime: `cudarc/src/wan/{tensor,device,ops,kernels,nn,weights,offload,quant,log,dump,ledger,envflag,resident,stage_upload,hostmem,writer}` to `cudarc/src/rt/`; `kernels.cu` split by region and concatenated at build time; `gpucheck` and `engine-service` import `rt` | byte-identical SASS and clips | CPU tests + nvrtc gate on the pod; **GPU** `techniques` byte-identity cell for H3, LTX, Wan | F1 | merged (#146) |
-| B2 | `VideoFamily` trait, common `Request`/`Conditioning`, `Request::validate(&ModelCaps)`; the 21 registry tables, `resolve()`, `all_registered_ids()` and the 20 `generate_*` functions replaced by the manifest and a static family list; `AvGenerateOptions` reduced to common fields | CLI behaviour unchanged for every preset (golden `--help` and tiny CPU generations); 83 Hub ids resolve | pod; **GPU** one tiny generation per served family | A2, B1 | pr (#157) |
-| B3 | Settings layer: the `FASTVIDEO_*` table generated from one declarative list; the 111 direct reads routed through `settings::var`; a `Settings` snapshot passed to `load`; `model_spec` for Wan and the small families; `docs/scope.md` table generated | zero direct `env::var("FASTVIDEO_` outside `settings`; off-identity invariant tests | pod; **GPU** byte-identity cell | B1 | pr (B3a #153; B3b todo) |
+| B2 | `VideoFamily` trait, common `Request`/`Conditioning`, `Request::validate(&ModelCaps)`; the 21 registry tables, `resolve()`, `all_registered_ids()` and the 20 `generate_*` functions replaced by the manifest and a static family list; `AvGenerateOptions` reduced to common fields | CLI behaviour unchanged for every preset (golden `--help` and tiny CPU generations); 83 Hub ids resolve | pod; **GPU** one tiny generation per served family | A2, B1 | merged (#157) |
+| B3 | Settings layer: the `FASTVIDEO_*` table generated from one declarative list; the 111 direct reads routed through `settings::var`; a `Settings` snapshot passed to `load`; `model_spec` for Wan and the small families; `docs/scope.md` table generated | zero direct `env::var("FASTVIDEO_` outside `settings`; off-identity invariant tests | pod; **GPU** byte-identity cell | B1 | pr (B3a merged #153; B3b agent running) |
 
 ### Phase 3 and 4: deployment (Workstream C)
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| C1 | `[deploy]` section of the family manifest; presets, variant tables, `families.tsv`, autoscale pools and the Dockerfile variant stages generated from it | `--check` green; one image with boot-time config if the owner decides so | pod | A4 | pr (single image: owner decision, analysed in ADR-0011) |
-| C2 | `fv-boot` in `fastvideo-deploy`: driver check, config materialization, weights plan (volume / registry `hydrate` / hub / none), sidecar, tunnel and phase reports, watchdog, exec; fake provider and fake chunk source tests; the ten boot variants deleted | one boot script in the tree; fv-control sends env only | pod; **GPU** one pod boot on the EU volume | C1, registry WO-002 for the `hydrate` source (volume and hub sources first) | todo |
+| C1 | `[deploy]` section of the family manifest; presets, variant tables, `families.tsv`, autoscale pools and the Dockerfile variant stages generated from it | `--check` green; one image with boot-time config if the owner decides so | pod | A4 | merged (#156; single image: owner decision, ADR-0011) |
+| C2 | `fv-boot` in `fastvideo-deploy`: driver check, config materialization, weights plan (volume / registry `hydrate` / hub / none), sidecar, tunnel and phase reports, watchdog, exec; fake provider and fake chunk source tests; the ten boot variants deleted | one boot script in the tree; fv-control sends env only | pod; **GPU** one pod boot on the EU volume | C1, registry WO-002 for the `hydrate` source (volume and hub sources first) | pr (#159; C2b after the image promotion) |
 | C3 | `fv-deploy` with the `Provider` trait (from `fastvideo-autoscale`): `runpod::{Pod,Serverless}`, `vast`, `gcp`; shared money guards, backstop, ledger, templates, release promote/rollback; fv-control on the shared `Launch` schema | `fv-deploy up` per provider with the same smoke | pod; **GPU** one `fv-deploy up` on Runpod EU | C2 | todo |
 
 ### Phase 5: validation driver and gold standards (Workstream D)
@@ -99,8 +99,8 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | E1 | Vendored upstream specs under `docs/serve/specs/` with a drift script; `schemars` schemas for native and director | drift script green | CI | none | merged (#144; schemars schemas deferred to E2) |
-| E2 | `ParamSpec` per (surface, model) derived from the manifest caps; adapters validate from it; duplicated constants deleted; LTX body typed | one source for every limit | pod; serve-compat | A3 | todo |
-| E3 | Certification matrix harness over every surface, parameter x surface x model TSV, CI assertion that every parameter has a valid and an invalid case | TSV with no empty cell | pod | E2 | todo |
+| E2 | `ParamSpec` per (surface, model) derived from the manifest caps; adapters validate from it; duplicated constants deleted; LTX body typed | one source for every limit | pod; serve-compat | A3 | merged (#158) |
+| E3 | Certification matrix harness over every surface, parameter x surface x model TSV, CI assertion that every parameter has a valid and an invalid case | TSV with no empty cell | pod | E2 | in progress |
 | E4 | `cargo-llvm-cov` on the pod; adapter `cargo test` in a GitHub workflow | coverage artifact in CI | CI | none | merged (#148) |
 | E5 | Upstream captures as fixtures | depends on owner keys | manual | owner | blocked |
 
@@ -453,6 +453,30 @@ ran (pod id, $/hr), result, cost.
   `c898d2c4` changed only LTX's `--guidance-2` routing (same value, not
   passed by the cells) and test-only `Request::validate`; the evidence
   stands for it. Three pods, about 17 GPU-minutes at $2.49/hr, deleted.
+- 2026-10-24 05:10Z: E2 opened a draft PR (`claude/e2-paramspec`):
+  `fastvideo-protocol::params` (`ParamSpec`, the surface rules: every
+  upstream limit once, cited, H3 facts derived from `fastvideo_models`), the
+  five adapters and the native API validate with them and build their specs
+  (`params.rs`), the LTX bodies typed against `ltx/openapi.json`, `GET
+  /fv/v1/params` with a golden for all 36 configs (182 distinct specs).
+  Census in docs/serve/params.md: 9 duplicated limits (H3 5-15 s x3, H3
+  references x4, LTX matrix / motions / prompt / rates, fal prompt, fast-h3
+  x3) now one source; one disagreement resolved (`guidance_scale_2` 0..=20,
+  FastVideo's bound); 8 upstream divergences kept and pinned. On build pod
+  `pzocv1keasg3xn` (main #153 merged in): `scripts/serve/check.sh` 1031
+  passed / 0 failed in 110 binaries (capabilities golden unchanged),
+  protocol + engine-service + manifest 308 passed, `tests/compat/run.sh`
+  10/10 suites, fmt and clippy `-D warnings` green. Left for E3: director /
+  Reactor control-channel specs, the matrix and TSV, `schemars`.
+- 2026-10-24 05:45Z (coordinator): merged C1 (#156, 04:43Z), B2 (#157,
+  05:08Z) and E2 (#158, 05:41Z), each with main merged in, CI green on the
+  head and an independent review; review fixes landed on the branches
+  (B2: unused `Conditioning::task` dropped, the frames-wins divergence
+  named; E2: `/fv/v1/params` mounted only with the native API,
+  `param_scan` over `segments.rs` and `player.rs`, the full
+  `guidance_scale_2` message list). Started B3b, B5 and E3; C2 opened
+  #159, under review, its GPU boot smoke running (serve image `:ltx`, PR
+  `fv-boot` from the build pod, EU volume).
 - 2026-10-24 06:10Z: B5 opened as draft PR #161 (`claude/b5-sdpa`, ADR-0015):
   `rt::sdpa::sdpa(q, k, v, &Plan)` is the one dense-attention entry (every
   family; nn's six SDPA functions, the ops wrapper, H3's FP8 chooser, H3

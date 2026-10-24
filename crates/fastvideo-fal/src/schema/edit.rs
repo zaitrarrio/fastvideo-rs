@@ -39,10 +39,13 @@ use serde_json::Value;
 use super::ltx::LTX_PROMPT_MAX_CHARS;
 use super::{bad, type_name, Fields};
 
-/// `start_time` bounds.
-pub const RETAKE_START: (f64, f64) = (0.0, 20.0);
+/// `start_time` bounds (`rules::ltx::FAL_RETAKE_START`).
+pub const RETAKE_START: (f64, f64) = (
+    fastvideo_protocol::params::rules::ltx::FAL_RETAKE_START.min,
+    fastvideo_protocol::params::rules::ltx::FAL_RETAKE_START.max,
+);
 /// `duration` default (both endpoints).
-pub const EDIT_DURATION_DEFAULT: f64 = 5.0;
+pub use fastvideo_protocol::params::rules::ltx::FAL_EDIT_DURATION_DEFAULT as EDIT_DURATION_DEFAULT;
 /// `retake_mode` values, in schema order.
 pub const RETAKE_MODES: [RetakeMode; 3] = RetakeMode::ALL;
 /// `mode` values, in schema order.

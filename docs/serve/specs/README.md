@@ -90,7 +90,12 @@ again, and never fails the run. It does not run on pull requests.
 
 ## Later work packages
 
-E2 derives `ParamSpec` per (surface, model) and generates the native and
-director schemas from the Rust types with `schemars`; E3 builds the
-conformance generator over these files (boundary-valid bodies and one invalid
-body per constraint, replies validated against the response schemas).
+E2 (done, ADR-0012, [`../params.md`](../params.md)): every upstream limit is
+one constant in `fastvideo_protocol::params::rules`, checked against these
+files by `crates/fastvideo-protocol/tests/param_rules.rs` (where this server
+differs on purpose, the upstream value is pinned next to ours), and every
+submit endpoint has a `ParamSpec` per (surface, model) at `GET
+/fv/v1/params`. The `schemars` schemas for native and director move to E3,
+which builds the conformance generator over these files and the specs
+(boundary-valid bodies and one invalid body per constraint, replies
+validated against the response schemas).

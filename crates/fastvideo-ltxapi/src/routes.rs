@@ -23,17 +23,14 @@ use axum::http::{HeaderMap, HeaderValue};
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::Router;
-use fastvideo_protocol::{
-    resolve_model, resolve_tier, ApiError, ErrorCtx, Family, HttpReply, JobView, NormalizeCtx,
-    SubmitEndpoint,
-};
+use fastvideo_protocol::{ApiError, ErrorCtx, HttpReply, JobView, NormalizeCtx, SubmitEndpoint};
 use fastvideo_serve_kit::events::{cancel_job, wait_terminal};
 use fastvideo_serve_kit::handlers::{find_job, into_response, submit_request};
 use fastvideo_serve_kit::{IngestPolicy, ServeCtx};
 use serde_json::Value;
 
 use crate::error::{self, Api, LtxProtocol};
-use crate::models::{parse_tier_alias, LtxModels};
+use crate::models::LtxModels;
 use crate::request::{Endpoint, Submit};
 use crate::stubs::{refused, STUB_ENDPOINTS};
 use crate::upload::upload_reply;
@@ -201,15 +198,8 @@ async fn ensure_request_id(mut res: Response) -> Response {
 fn bind_model(ctx: &ServeCtx, name: &str, requested: &str) -> Result<String, ApiError> {
     let engine = ctx.engine().clone();
     let models = engine.models();
-    if let Ok(c) = resolve_model(name, |n| engine.alias(n), &models) {
-        if c.family == Family::Ltx2 {
-            return Ok(c.id.0.clone());
-        }
-    }
-    if let Some(t) = parse_tier_alias(name) {
-        if let Ok(c) = resolve_tier(Family::Ltx2, t, &models) {
-            return Ok(c.id.0.clone());
-        }
+    if let Some(c) = crate::params::bind(name, &|n| engine.alias(n), &models) {
+        return Ok(c.id.0.clone());
     }
     Err(ApiError::forbidden(format!(
         "model `{requested}` is not available for the account"
