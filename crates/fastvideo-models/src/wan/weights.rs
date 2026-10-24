@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 /// `FASTVIDEO_WEIGHTS` or the Hugging Face hub snapshot for
 /// `Wan-AI/Wan2.1-T2V-1.3B-Diffusers`.
 pub fn local_wan_t2v_1_3b() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("FASTVIDEO_WEIGHTS") {
+    if let Ok(path) = crate::settings::env_var("FASTVIDEO_WEIGHTS") {
         let p = PathBuf::from(path);
         if p.join("transformer").is_dir() {
             return Some(p);

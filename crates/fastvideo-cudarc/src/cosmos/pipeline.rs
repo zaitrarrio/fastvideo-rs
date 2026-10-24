@@ -306,7 +306,9 @@ impl CosmosPipeline {
         let t_cond = (request.sigma_conditioning / (request.sigma_conditioning + 1.0)) as f32;
         let fps = Some(request.fps as f32);
         let sol_tea = fastvideo_models::cosmos::sol::teacache_requested(
-            std::env::var("FASTVIDEO_COSMOS_SOL").ok().as_deref(),
+            fastvideo_models::settings::env_var("FASTVIDEO_COSMOS_SOL")
+                .ok()
+                .as_deref(),
         );
         if sol_tea {
             dit.enable_sol_teacache();
@@ -318,7 +320,9 @@ impl CosmosPipeline {
             ));
         }
         if fastvideo_models::cosmos::sol::official_requested(
-            std::env::var("FASTVIDEO_COSMOS3_OFFICIAL").ok().as_deref(),
+            fastvideo_models::settings::env_var("FASTVIDEO_COSMOS3_OFFICIAL")
+                .ok()
+                .as_deref(),
         ) {
             crate::rt::log::info(format_args!(
                 "cosmos3 official: {}x{} {}f {} steps guidance {} fps {} (flow_shift {} recorded, EDM schedule unchanged, nvfp4 not applied)",

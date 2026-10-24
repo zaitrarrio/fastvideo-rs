@@ -164,7 +164,7 @@ pub enum Residency {
 
 impl Residency {
     pub fn from_env() -> Self {
-        match std::env::var("FASTVIDEO_LINGBOT_RESIDENCY")
+        match fastvideo_models::settings::env_var("FASTVIDEO_LINGBOT_RESIDENCY")
             .ok()
             .as_deref()
             .map(str::trim)

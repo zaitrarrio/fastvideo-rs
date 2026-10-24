@@ -1718,7 +1718,7 @@ fn gen(
             "profile": active.path.as_ref().map(|p| p.display().to_string()),
             "plan": t.plan.techniques.iter().map(|x| x.describe()).collect::<Vec<_>>(),
             "sources": t.sources.iter().map(|(s, f)| json!({"seam": s, "from": f})).collect::<Vec<_>>(),
-            "settings": active.settings.iter().map(|(k, v, s)| json!({"name": k, "value": v, "source": s, "env_overrides": std::env::var_os(k).is_some()})).collect::<Vec<_>>(),
+            "settings": active.settings.iter().map(|(k, v, s)| json!({"name": k, "value": v, "source": s, "env_overrides": fastvideo_models::settings::env_var_os(k).is_some()})).collect::<Vec<_>>(),
         })
     };
     report.set(

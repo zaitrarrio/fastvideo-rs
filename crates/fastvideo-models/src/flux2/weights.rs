@@ -6,7 +6,7 @@ use super::Flux2ArchConfig;
 
 /// `FASTVIDEO_WEIGHTS` or the Hugging Face hub snapshot for `repo`.
 pub fn local_flux2(repo: &str) -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("FASTVIDEO_WEIGHTS") {
+    if let Ok(path) = crate::settings::env_var("FASTVIDEO_WEIGHTS") {
         let p = PathBuf::from(path);
         if looks_like_flux2(&p) {
             return Some(p);

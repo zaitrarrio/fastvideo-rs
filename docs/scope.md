@@ -287,55 +287,243 @@ because they change frames.
 
 Weights: `--weights`, `FASTVIDEO_WEIGHTS`, or the Hugging Face snapshot.
 
-| Variable | Effect |
-|---|---|
-| `FASTVIDEO_LTX2_WEIGHTS` | LTX-2.5 root for the Spark refiner. DiT defaults to `weights/transformer` |
-| `FASTVIDEO_LTX2_DIT` | Override that DiT path |
-| `FASTVIDEO_LTX2_LORA` | Distilled LoRA file. Otherwise a known filename beside the weights |
-| `FASTVIDEO_LTX2_AUDIO_VAE` | Audio encoder file or directory. Otherwise `audio_vae/` or `ltx-2.5-audio-vae-bf16.safetensors` |
-| `FASTVIDEO_LTX2_TEXT` | `resident`, `streamed`, or `auto` |
-| `FASTVIDEO_LTX_OFFLOAD` | `cpu` gives sol-engine's `--offload cpu` placement. The DiT blocks stream from pinned host memory through 2 device slots. Gemma streams per layer. The connectors, upsampler, video VAE and audio VAE are on the device only around their calls, with a trim after each. The frames are byte-identical to the resident run. Peak 20.4 GiB at 4k5s and 19.0 GiB at 1080p20s, against the reference's 30.4 and 29.1 GiB. `none` (default) leaves each model to its own policy. `ltx2 gen --offload` overrides it. See [ports/ltx25.md](ports/ltx25.md#offload-placement-fastvideo_ltx_offloadcpu) |
-| `FASTVIDEO_DIT_OFFLOAD` | LTX-2 / H3 DiT blocks: `auto` (default), `resident`, or `streamed`. Wan DiTs: `streamed` streams the blocks layer by layer (any other value: resident, or the A14B plan below) |
-| `FASTVIDEO_WAN_MOE` | Wan 2.2 A14B experts: `auto` (default: both resident when the free memory after UMT5 covers two bf16 experts plus `FASTVIDEO_WAN_MOE_HEADROOM_GIB`, default 36, else `swap`), `both`, or `swap` (both parked in pinned host memory, swapped at the 0.875 boundary). See [ports/sol-wan-ltx23.md](ports/sol-wan-ltx23.md) |
-| `FASTVIDEO_WAN_UNIPC_SIGMAS` | `fastvideo` (default: FastVideo's double-shifted flow-UniPC sigmas) or `diffusers` (Diffusers' single shift, the sol-engine Wan baselines) |
-| `FASTVIDEO_DEVICE_BUDGET_GIB` | Plan and run as if the card had this many GiB. A phase that peaks above it fails the run |
-| `FASTVIDEO_LTX2_HQ` | 2.3-base 15+3 HQ contract (`fv-gpucheck ltx2 gen --model-version 2.3 --hq` runs it on the dev DiT) |
-| `FASTVIDEO_LTX2_UPSAMPLER` | Spatial-upsampler file or folder in place of the pack's (`ltx-2.3-spatial-upscaler-x2-1.1.safetensors` for the 2.3 HQ cell) |
-| `FASTVIDEO_LTX2_FBCACHE` | LTX-2.5 stage-1 first-block cache |
-| `FASTVIDEO_LTX2_STAGE1_CACHE` | LTX-2.3 stage-1 SCSP (res2s calls 16–28 of 29) |
-| `FASTVIDEO_LTX2_MIDPOINT_PRUNE` | LTX-2.3 stage-2 feature-norm prune |
-| `FASTVIDEO_LTX_VAE_FAST` | LTX conv VAE tiled decode on the channels-last bf16 decoder (default on); `0` restores the f32 streaming decoder |
-| `FASTVIDEO_LTX_VAE_CHECK` | Decode the process's first LTX VAE tile both ways and log rel_l2 and both times |
-| `FASTVIDEO_LTX_VAE_CONV_ALGO` | `tune`: time every cuDNN forward algorithm per conv shape (default: cuDNN's heuristic) |
-| `FASTVIDEO_LTX_VAE_CHUNK_FRAMES` / `FASTVIDEO_LTX_VAE_CHUNK_MB` | Output frames (16) / MB (1024) per channels-last conv launch |
-| `FASTVIDEO_LTX2_SAVE_LATENTS` | Save the decoded video latents to `<prefix>.f32` / `.shape` (for `ltx2 vae-bench --latents`) |
-| `FASTVIDEO_GPU_TRACE_DECODE` | CUPTI trace of a whole video decode (kernel time by category, GPU idle) |
-| `FASTVIDEO_H3_SOL_ATTN` | `spark` or `rtx` |
-| `FASTVIDEO_H3_SOL_CACHE` | RTX TeaCache |
-| `FASTVIDEO_H3_UPSCALER` / `FASTVIDEO_H3_LTX_ADAPTER` | Spark bridge checkpoints, if not beside the H3 weights |
-| `FASTVIDEO_WAN_SOL_CACHE` | `easycache`, `teacache` or `taylorseer` (lossy; off by default) |
-| `FASTVIDEO_WAN_SOL_ATTN` | Sol-Attn route: 14B (10 dense forwards, layer 0 dense) and 1.3B (layer 0 dense), Morton3D on the device. `fullstack` on the 1.3B: the 14B guards (sol-engine `wan21_fullstack_sol.toml`, the 50-step base model) |
-| `FASTVIDEO_WAN_VAE` | `auto` (TAEHV for distilled presets when found), `full`, `taehv` |
-| `FASTVIDEO_TAE_DIR` | Where the distilled presets look for `taew2_1.safetensors` (`scripts/gpu/fetch_taehv.sh`) |
-| `FASTVIDEO_VAE_CHUNK` | Latent frames per Wan VAE pass (default 2) |
-| `FASTVIDEO_WAN_COND_CACHE` | `0`: recompute text K/V, text and time embeddings every forward |
-| `FASTVIDEO_WAN_TEXT_CACHE` | UMT5 prompt cache directory, or `off` (default `~/.cache/fastvideo/wan-text`) |
-| `FASTVIDEO_COSMOS3_OFFICIAL` | Cosmos3 canvas |
-| `FASTVIDEO_COSMOS_SOL` | Cosmos TeaCache |
-| `FASTVIDEO_HUNYUAN15_OFFICIAL` | 720p / 129f / 50-step canvas |
-| `FASTVIDEO_HUNYUAN15_SOL` | Logs the 13B TeaCache gap and stays dense |
-| `FASTVIDEO_LINGBOT_OFFICIAL` | 832×480 / 121f / 40-step canvas |
-| `FASTVIDEO_LINGBOT_SOL` | Logs the unspecified cache/PISA/topology gap and stays dense |
-| `FASTVIDEO_NVFP4` | W4A4 dequant (`1` → `static_6`; `mse` for FourOverSix). LTX-2: the video FFN on NVFP4 tensor cores (`static_6` / `static_4`) |
-| `FASTVIDEO_BF16` | cuBLAS tf32/bf16 compute. On unless set to `0` |
-| `FASTVIDEO_BF16_ACT` | DiT activations (and residual) as bf16, as the reference runs them. On by default for H3, LTX-2 and Wan on a GPU (Wan's UMT5 and VAE stay f32, FastVideo's fp32 precisions); `0` restores f32, `1` forces bf16 for every model. CPU runs keep f32. FastWan 1.3B 480x832x81 on RTX PRO 6000: denoise 2.50 → 1.96 s, LPIPS 0.107 vs f32 (see [ports/wan.md](ports/wan.md)) |
-| `FASTVIDEO_H3_QUANT` | H3 FP8 linear recipe: `mxfp8` (Sol-H3, the default on sm_100+ GPUs), `w8a8` (FastVideo) or `off` (bf16) |
-| `FASTVIDEO_WAN_QUANT` | Wan DiT FP8 recipe on every block's attention + FFN linears: `mxfp8`, `w8a8` (FastVideo) or `off`. Default `mxfp8` on sm_100, `off` elsewhere (on sm_120 both were slower than bf16 and doubled LPIPS) |
-| `FASTVIDEO_WAN_FUSE` | Wan block residual + LayerNorm (+ AdaLN) as one kernel under bf16 activations (default on); `0` runs the byte-identical two-kernel form |
-| `FASTVIDEO_WAN_CAUSAL_FLASH` | SF-Wan block-causal self-attention on the masked flash kernel (default on); `0` materializes the `[S, S]` mask through `sdpa_composed` |
-| `FASTVIDEO_VSA` | Wan block-sparse video attention |
-| `FASTVIDEO_SP_WORLD` | Sequence-parallel world size |
-| `FASTVIDEO_SAVE_MP4` | Mux frames with ffmpeg |
+Every `FASTVIDEO_*` setting the workspace reads, rendered from the declarative
+list in `crates/fastvideo-models/src/techniques/settings/table.rs` (a test
+fails when this table and the list differ; ADR-0010). *Read by*: `env, then
+profile` settings take the environment variable, then the active technique
+profile's value ([techniques.md](techniques.md#precedence)), then the default;
+`env` settings take the process environment only, and a profile's `[env]`
+entry for one has no effect. *Read*: when a change takes effect (once per
+process: the first read is cached).
+
+<!-- BEGIN GENERATED: FASTVIDEO_* settings (crates/fastvideo-models/src/techniques/settings/table.rs; do not edit) -->
+
+| Variable | Read by | Type and parse | Default | Read | Family | Seam | Effect |
+|---|---|---|---|---|---|---|---|
+| `FASTVIDEO_ARTIFACT_DIR` | env | text: a directory | the system temp directory | per call | harness | `test` | Root of the artifact directories `fastvideo-core`'s GPU tests write. |
+| `FASTVIDEO_ATTENTION_BACKEND` | env, then profile | keyword | empty | per call | runtime | `attention_backend` | `SLA_ATTN` / `sla` / `sagesla` / `SAGE_SLA_ATTN` (any case) select sparse-linear attention. |
+| `FASTVIDEO_ATTN_FP8` | env, then profile | text: `0`, `1` / `all`, `dense` or `vsa` (H3 technique adapter) | the recipe's / profile's | per load | H3 | `attention` | FP8 attention ops (opt-in, lossy; H3). |
+| `FASTVIDEO_ATTN_PROBS_BF16` | env, then profile | flag | `1` | once per process | runtime | `activation_precision` | Attention probabilities in bf16 (default on); `0` keeps them f32. |
+| `FASTVIDEO_ATTN_SAGE` | env, then profile | text: `2` / `on` force, `0` / `off` disable, empty = unset (trimmed, any case); any other value turns it off with a one-time log line | unset | once per process | runtime | `attention_backend` | SageAttention-2 (INT8 QK + FP8 PV) for dense attention; unset leaves the dispatch rule. |
+| `FASTVIDEO_ATTN_SAGE_MIN_SEQ` | env, then profile | usize | `6144` | once per process | runtime | `attention_backend` | Shortest sequence SageAttention runs on. |
+| `FASTVIDEO_BF16` | env, then profile | flag | `1` | once per process | runtime | `ffn_precision` | cuBLAS tf32/bf16 compute. On unless set to `0`. |
+| `FASTVIDEO_BF16_ACT` | env, then profile | flag: set: a default-on flag | on for H3, LTX-2 and Wan on a GPU, f32 on the CPU | once per process | runtime | `activation_precision` | DiT activations (and residual) as bf16, as the reference runs them. On by default for H3, LTX-2 and Wan on a GPU (Wan's UMT5 and VAE stay f32, FastVideo's fp32 precisions); `0` restores f32, `1` forces bf16 for every model. CPU runs keep f32. FastWan 1.3B 480x832x81 on RTX PRO 6000: denoise 2.50 → 1.96 s, LPIPS 0.107 vs f32 (see [ports/wan.md](ports/wan.md)). |
+| `FASTVIDEO_CACHE` | env | text: a directory (empty = unset) | `$XDG_CACHE_HOME/fastvideo`, else `~/.cache/fastvideo` | per load | LTX-2 | `cache` | Root of the LTX text-conditioning cache (`<root>/ltx2-text`). |
+| `FASTVIDEO_CONV3D` | env, then profile | keyword | `auto` | once per process | runtime | `kernel_choice` | 3D convolution kernel (profile `[kernels] conv3d`). |
+| `FASTVIDEO_CONV3D_TIMED` | env, then profile | flag | `0` | once per process | runtime | `debug` | Time every 3D convolution and log it. |
+| `FASTVIDEO_CONV_BWD_DATA_NONDETERMINISTIC` | env, then profile | flag | `0` | per call | runtime | `debug` | Allow cuDNN's non-deterministic backward-data convolution algorithms. |
+| `FASTVIDEO_COSMOS3_GEN` | env | text: `auto` / empty, `resident`, `parked` / `park` (trimmed); anything else is an error | `auto` | per load | Cosmos3 | `residency` | Cosmos3 gen tower placement: `auto` parks it when the free memory does not cover it plus the decode headroom. |
+| `FASTVIDEO_COSMOS3_MLP_CHUNK` | env, then profile | usize: at least 1 | `8192` | per call | Cosmos3 | `memory` | Cosmos3 MLP rows per chunk. |
+| `FASTVIDEO_COSMOS3_OFFICIAL` | env | text: `1` or `official` (trimmed, any case) | `0` | per generate | Cosmos | `canvas` | Cosmos3 canvas: the published 1280×720 / 189f / 35-step / guidance-6 contract. |
+| `FASTVIDEO_COSMOS3_UND` | env | text: `resident` (trimmed) keeps it resident | unset | per load | Cosmos3 | `residency` | Cosmos3 understanding tower kept resident. |
+| `FASTVIDEO_COSMOS_SOL` | env | text: `1` or `teacache` (trimmed, any case) | `0` | per generate | Cosmos | `step_output` | Cosmos TeaCache. |
+| `FASTVIDEO_CUDNN_SDPA_CFG` | env, then profile | usize | `0` | per call | runtime | `kernel_choice` | cuDNN SDPA engine config index (0: the heuristic's first). |
+| `FASTVIDEO_CUDNN_SDPA_GRAPH` | env, then profile | keyword | `auto` | per call | runtime | `kernel_choice` | cuDNN SDPA graph capture: `auto`, or forced on / off. |
+| `FASTVIDEO_CUDNN_SDPA_NONDETERMINISTIC` | env, then profile | flag | `0` | once per process | runtime | `debug` | Allow cuDNN SDPA's non-deterministic algorithms. |
+| `FASTVIDEO_DC_SM103` | env, then profile | flag | `0` | per call | runtime | `kernel_choice` | Build the data-center attention kernels for `compute_103a` on sm_103. |
+| `FASTVIDEO_DEVICE_BUDGET_GIB` | env | text: GiB, fractions allowed (trimmed); empty, `0` or `off` = no budget; an unparsable value is logged and ignored | unset | once per process | runtime | `memory` | Plan and run as if the card had this many GiB. A phase that peaks above it fails the run. |
+| `FASTVIDEO_DEVICE_STATS` | env, then profile | flag | `0` | per generate | Wan | `trace` | Log device memory statistics after a Wan generate. |
+| `FASTVIDEO_DIGEST` | env, then profile | flag | `0` | once per process | runtime | `debug` | Log a digest of every dumped tensor. |
+| `FASTVIDEO_DIGEST_WEIGHTS` | env, then profile | flag | `0` | once per process | runtime | `debug` | Log a digest of every loaded weight (with `FASTVIDEO_DIGEST`). |
+| `FASTVIDEO_DIT_OFFLOAD` | env, then profile | text: `auto`, `resident`, `streamed` (an unknown value is an error) | `auto` | per load | runtime | `residency` | LTX-2 / H3 DiT blocks: `auto` (default), `resident`, or `streamed`. Wan DiTs: `streamed` streams the blocks layer by layer (any other value: resident, or the A14B plan of `FASTVIDEO_WAN_MOE`). |
+| `FASTVIDEO_DIT_OFFLOAD_LOOKAHEAD` | env, then profile | usize: clamped to 1..=8 | `1` | per load | runtime | `residency` | Streamed DiT blocks copied ahead of the one computing. |
+| `FASTVIDEO_DUMP_DIR` | env | text: a directory (empty = unset) | unset | once per process | runtime | `debug` | Dump named intermediate tensors here (parity runs). |
+| `FASTVIDEO_DUMP_OPS` | env | text: block indices whose ops are dumped | `0` | once per process | runtime | `debug` | Blocks whose per-op tensors are dumped. |
+| `FASTVIDEO_FFMPEG` | env | text: a program | `ffmpeg` | per call | LTX-2 | `io` | ffmpeg binary for the LTX image-conditioning recompression. |
+| `FASTVIDEO_FLASH_KERNEL` | env, then profile | keyword | `auto` | per call | runtime | `kernel_choice` | Dense attention kernel (profile `[kernels] dense_attention`). |
+| `FASTVIDEO_FLUX1_DUMMY_TEXT` | env | text: `1`, `true` or `TRUE` (exact) | `0` | per load | FLUX.1 | `text_encoder` | FLUX.1: zero text embeddings instead of the T5/CLIP encoders (smoke runs). |
+| `FASTVIDEO_FLUX1_TEXT_LEN` | env | text: a `usize` (not trimmed), at least 1; unparsable = default | the model's T5 length | per load | FLUX.1 | `text_encoder` | FLUX.1 T5 sequence length. |
+| `FASTVIDEO_FLUX2_DUMMY_TEXT` | env | text: `1`, `true` or `TRUE` (exact) | `0` | per load | FLUX.2 | `text_encoder` | FLUX.2: zero text embeddings instead of the text encoder (smoke runs). |
+| `FASTVIDEO_FLUX2_TEXT_LEN` | env | text: a `usize` (not trimmed), at least 1; unparsable = default | the model's text length | per load | FLUX.2 | `text_encoder` | FLUX.2 text sequence length. |
+| `FASTVIDEO_FP8` | env, then profile | flag | `0` | once per process | runtime | `ffn_precision` | FastVideo W8A8 tensorwise FP8 recipe on every linear (Cosmos3 reads it per load and per generate). |
+| `FASTVIDEO_GPU_SMOKE` | env | text: `1` runs the test | unset | per call | harness | `test` | Opt in to `fastvideo-core`'s 1.3B CUDA smoke test. |
+| `FASTVIDEO_GPU_TRACE` | env, then profile | flag | `0` | once per process | runtime | `trace` | CUPTI trace of one denoise step (kernel time by category, GPU idle). |
+| `FASTVIDEO_GPU_TRACE_DECODE` | env, then profile | flag | `0` | once per process | runtime | `trace` | CUPTI trace of a whole video decode (kernel time by category, GPU idle). |
+| `FASTVIDEO_GPU_TRACE_STEP` | env, then profile | usize | `1` | per call | runtime | `trace` | Denoise step `FASTVIDEO_GPU_TRACE` traces. |
+| `FASTVIDEO_H2D_TRACE_BYTES` | env | text: a `usize` (not trimmed); unset or unparsable = off | unset | once per process | runtime | `trace` | Log host-to-device copies of at least this many bytes. |
+| `FASTVIDEO_H2D_TRACE_SKIP` | env, then profile | usize | `0` | per call | runtime | `trace` | Host-to-device copies skipped before `FASTVIDEO_H2D_TRACE_BYTES` logs. |
+| `FASTVIDEO_H3_AFFINE` | env, then profile | keyword: bit list | empty | once per process | H3 | `kernel_fusion` | H3 affine-fusion bits (`fv-gpucheck --h3-affine`). |
+| `FASTVIDEO_H3_DIT_TREE` | env | text: `auto` / empty, `off` / `0` / `false` / `no`, `require` / `1` / `on` / `true` / `yes` (trimmed, any case); anything else is an error | `auto` | per load | H3 | `weights` | Pre-quantized H3 DiT tree: use it when valid, never, or require it. |
+| `FASTVIDEO_H3_DIT_TREE_DIR` | env | text: a directory (trimmed; empty = default) | `<root>/transformer_prequant_<recipe>_<quant>` | per load | H3 | `weights` | Where the pre-quantized H3 DiT tree lives. |
+| `FASTVIDEO_H3_FFN_FP8` | env, then profile | flag | `0` | per load | H3 | `ffn_precision` | Retired flag: set, the H3 load refuses and names `FASTVIDEO_H3_QUANT`. |
+| `FASTVIDEO_H3_FUSE` | env, then profile | flag | `1` | once per process | H3 | `kernel_fusion` | H3 fused MXFP8 activation and residual-plus-norm kernels (bit-identical); `0` runs the separate ops. |
+| `FASTVIDEO_H3_GLUE` | env, then profile | flag | `1` | once per process | H3 | `kernel_fusion` | H3 glue kernels between the fused ops (bit-identical); `0` runs the separate ops. |
+| `FASTVIDEO_H3_GRAPHS` | env, then profile | flag | `0` | per call | H3 | `cuda_graphs` | CUDA-graph capture of the H3 denoise step. |
+| `FASTVIDEO_H3_LORA_DEVICE` | env, then profile | flag | `1` | once per process | H3 | `lora` | Fuse H3 LoRAs on the device. |
+| `FASTVIDEO_H3_LORA_VERIFY` | env, then profile | flag | `0` | once per process | H3 | `debug` | Check the device LoRA fusion against the host. |
+| `FASTVIDEO_H3_LTX_ADAPTER` | env | text: a path | found beside the H3 weights | per load | H3 | `weights` | Spark bridge LTX adapter checkpoint. |
+| `FASTVIDEO_H3_NVFP4_ACT` | env, then profile | text: `static` / empty or `dynamic` (trimmed); anything else is an error | `static` | per load | H3 | `ffn_precision` | ModelOpt NVFP4 DiT: activation scales from the checkpoint or measured per call. |
+| `FASTVIDEO_H3_NVFP4_ATTN` | env, then profile | text: `1` / `on` / `true` / `nvfp4`, or `0` / `off` / `false` / `bf16` / empty (trimmed); anything else is an error | `0` | per load | H3 | `ffn_precision` | ModelOpt NVFP4 DiT: attention linears in NVFP4 too. |
+| `FASTVIDEO_H3_QUANT` | env, then profile | text: `mxfp8`, `w8a8` or `off` (an unknown value is an error) | `mxfp8` on sm_100+ GPUs, the recipe's scoped default (VDN-H3: bf16) | per load | H3 | `ffn_precision` | H3 FP8 linear recipe: `mxfp8` (Sol-H3, the default on sm_100+ GPUs), `w8a8` (FastVideo) or `off` (bf16). |
+| `FASTVIDEO_H3_SOL_ATTN` | env, then profile | text: `off`, `rtx`, `engine`, `spark` (H3 technique adapter) | the recipe's route | per load | H3 | `attention_backend` | H3 Sol-Attn route: `spark` or `rtx`. |
+| `FASTVIDEO_H3_SOL_CACHE` | env, then profile | text: `teacache` or `0` (H3 technique adapter) | unset | per load | H3 | `step_output` | H3 RTX TeaCache. |
+| `FASTVIDEO_H3_STEP_SYNC` | env, then profile | flag | `0` | per call | H3 | `debug` | Synchronize after every H3 denoise step (timing). |
+| `FASTVIDEO_H3_UPSCALER` | env | text: a file | found beside the H3 weights | per load | H3 | `weights` | Spark bridge upscaler checkpoint. |
+| `FASTVIDEO_H3_VAE_AB` | env, then profile | flag | `0` | once per process | H3 | `debug` | Re-decode with the bf16 H3 VAE and log the difference. |
+| `FASTVIDEO_H3_VAE_CHECK` | env, then profile | flag | `0` | once per process | H3 | `debug` | Decode the first H3 VAE tile batch both ways and log the error. |
+| `FASTVIDEO_H3_VAE_FUSED` | env, then profile | flag | `1` | once per process | H3 | `kernel_fusion` | H3 VAE fused kernels. |
+| `FASTVIDEO_H3_VAE_GEMM` | env, then profile | keyword | `cublas` | once per process | H3 | `kernel_choice` | H3 VAE GEMM backend. |
+| `FASTVIDEO_H3_VAE_MXFP8` | env, then profile | text: `0` or `1` (an unknown value is an error) | MXFP8 on sm_100+ for the measured decoder depths | per load | H3 | `video_decoder` | H3 VAE decoder linears as MXFP8. |
+| `FASTVIDEO_H3_VAE_MXFP8_ALGO` | env, then profile | usize | `0` | per call | H3 | `kernel_choice` | H3 VAE MXFP8 GEMM algorithm index. |
+| `FASTVIDEO_H3_VAE_NVFP4` | env, then profile | text: `0` or `1` (an unknown value is an error) | the tree's: NVFP4 when its `vae/` carries NVFP4 linears | per load | H3 | `video_decoder` | H3 VAE decoder linears as published ModelOpt NVFP4; `0` decodes with h3-base's bf16 `vae/`. |
+| `FASTVIDEO_H3_VAE_NVFP4_ACT` | env, then profile | text: `static` / empty or `dynamic` (an unknown value is an error) | `static` | per load | H3 | `video_decoder` | H3 NVFP4 VAE activation scales: calibrated `input_scale` or measured per call. |
+| `FASTVIDEO_H3_VAE_NVFP4_REF` | env, then profile | text: a `vae/` directory | unset | per load | H3 | `debug` | With `FASTVIDEO_H3_VAE_CHECK`, also decode through this bf16 decoder. |
+| `FASTVIDEO_H3_VAE_SDPA` | env, then profile | keyword | `auto` | once per process | H3 | `kernel_choice` | H3 VAE attention kernel. |
+| `FASTVIDEO_H3_VAE_TILE_BATCH` | env, then profile | usize: at least 1 | `8` | per load | H3 | `memory` | H3 VAE tiles decoded per batch. |
+| `FASTVIDEO_H3_VAE_VEC` | env, then profile | flag | `1` | once per process | H3 | `kernel_choice` | H3 VAE vectorized kernels. |
+| `FASTVIDEO_H3_VDN` | env | text: a path | unset | per load | H3 | `weights` | VDN-H3 checkpoint when `--vdn` is not given. |
+| `FASTVIDEO_H3_VDN_SHARED` | env | text: a path (empty = unset) | unset | per load | H3 | `weights` | VDN-H3 shared checkpoint when the option is not given. |
+| `FASTVIDEO_H3_VSA_FP4` | env, then profile | flag: set: a default-on flag | on where the NVFP4 tier has it | per load | H3 | `attention` | H3 VSA attention in NVFP4. |
+| `FASTVIDEO_H3_VSA_FP4_P` | env, then profile | keyword | `two-level` | per call | H3 | `attention` | `single`: upstream's single-level P quantization (default two-level). |
+| `FASTVIDEO_HUNYUAN15_OFFICIAL` | env | text: `1` or `official` (trimmed, any case) | `0` | per generate | HunyuanVideo 1.5 | `canvas` | 720p / 129f / 50-step canvas. |
+| `FASTVIDEO_HUNYUAN15_SOL` | env | text: `1` or `teacache` (trimmed, any case) | `0` | per generate | HunyuanVideo 1.5 | `step_output` | Logs the 13B TeaCache gap and stays dense. |
+| `FASTVIDEO_INJECT_COND` | env | text: H3: on only for `1`; LTX-2: on unless `0` (not trimmed) | off for H3, on for LTX-2 | per call | runtime | `debug` | With `FASTVIDEO_INJECT_DIR`: inject the reference's condition tensors. |
+| `FASTVIDEO_INJECT_DIR` | env | text: a directory (empty = unset) | unset | once per process | runtime | `debug` | Inject reference tensors from this directory (parity runs). |
+| `FASTVIDEO_INJECT_PIXELS` | env | text: on unless `0` (not trimmed) | `1` | per call | LTX-2 | `debug` | With `FASTVIDEO_INJECT_DIR`: inject the reference's conditioning pixels. |
+| `FASTVIDEO_INJECT_STAGE2` | env | text: on unless `0` (not trimmed) | `1` | per call | LTX-2 | `debug` | With `FASTVIDEO_INJECT_DIR`: inject the reference's stage-2 entry latents. |
+| `FASTVIDEO_INJECT_TEXT` | env | text: on unless `0` (not trimmed) | `1` | per call | runtime | `debug` | With `FASTVIDEO_INJECT_DIR`: inject the reference's text embeddings. |
+| `FASTVIDEO_KERNELS` | env, then profile | keyword | `auto` | per load | runtime | `kernel_choice` | `nvrtc` compiles the kernels with NVRTC instead of the embedded cubins. |
+| `FASTVIDEO_LINGBOT_MOE_CHUNK` | env, then profile | usize: at least 1 | `32768` | per call | LingBot | `memory` | LingBot MoE tokens per chunk. |
+| `FASTVIDEO_LINGBOT_OFFICIAL` | env | text: `1` or `official` (trimmed, any case) | `0` | per generate | LingBot | `canvas` | 832×480 / 121f / 40-step canvas. |
+| `FASTVIDEO_LINGBOT_REFINE` | env | text: `0` or `off` (exact) stop after the base stage | unset | per generate | LingBot | `canvas` | LingBot 1080p refiner stage. |
+| `FASTVIDEO_LINGBOT_RESIDENCY` | env | text: `both` or `resident` (trimmed); anything else swaps | `swap` | per load | LingBot | `residency` | LingBot experts: both resident or swapped. |
+| `FASTVIDEO_LINGBOT_ROUTER` | env, then profile | keyword | `device` | once per process | LingBot | `kernel_choice` | LingBot MoE router on the device or the host. |
+| `FASTVIDEO_LINGBOT_ROUTER_CHECK` | env, then profile | flag | `0` | per call | LingBot | `debug` | Check the device router against the host. |
+| `FASTVIDEO_LINGBOT_SOL` | env | text: `0` / `off` / `baseline`, `1` / `sol` / `fullopt`, `cache` / `easycache`, `pisa`, or a comma list (trimmed, any case) | `baseline` | per generate | LingBot | `step_output` | LingBot EasyCache and refiner PISA. |
+| `FASTVIDEO_LLM_PREFETCH` | env | text: on unless `0` (not trimmed) | `1` | per call | text encoders | `loader` | Prefetch the next text-encoder layer while one computes. |
+| `FASTVIDEO_LOG` | env | text: `0` / `off` / `false` / `quiet` / `error`, `2` / `debug` / `trace` / `verbose`, else info (trimmed, any case) | `info` | once per process | runtime | `log` | Runtime log level. |
+| `FASTVIDEO_LTX2_AUDIO_VAE` | env | text: a file or directory | `audio_vae/` or `ltx-2.5-audio-vae-bf16.safetensors` | per load | LTX-2 | `weights` | Audio encoder file or directory. |
+| `FASTVIDEO_LTX2_DIT` | env | text: a path | `$FASTVIDEO_LTX2_WEIGHTS/transformer` | per generate | H3 | `weights` | Override the Spark refiner's DiT path. |
+| `FASTVIDEO_LTX2_FBCACHE` | env | text: `1` or `fbcache` (trimmed, any case) | `0` | per generate | LTX-2 | `step_output` | LTX-2.5 stage-1 first-block cache. |
+| `FASTVIDEO_LTX2_HOST_ROPE` | env, then profile | flag | `0` | per call | LTX-2 | `debug` | Compute the LTX-2 RoPE tables on the host. |
+| `FASTVIDEO_LTX2_HQ` | env | text: `1`, `hq` or `official` (trimmed, any case) | `0` | per generate | LTX-2 | `canvas` | 2.3-base 15+3 HQ contract (`fv-gpucheck ltx2 gen --model-version 2.3 --hq` runs it on the dev DiT). |
+| `FASTVIDEO_LTX2_IC_LORA` | env | text: a file (empty = unset) | unset | per load | LTX-2 | `lora` | IC-LoRA file when the request names none. |
+| `FASTVIDEO_LTX2_LORA` | env | text: a file | a known filename beside the weights | per load | LTX-2 | `lora` | Distilled LoRA file. |
+| `FASTVIDEO_LTX2_LORA_BASE` | env | text: `host` or `device` (trimmed; another value is an error) | the load option | per load | LTX-2 | `residency` | Where the LoRA base weights stay during the fuse. |
+| `FASTVIDEO_LTX2_MIDPOINT_PRUNE` | env | text: `1`, `feat_norm` or `prune` (trimmed, any case) | `0` | per generate | LTX-2 | `token_set` | LTX-2.3 stage-2 feature-norm prune. |
+| `FASTVIDEO_LTX2_SAVE_LATENTS` | env | text: a path prefix (empty = unset) | unset | per generate | LTX-2 | `debug` | Save the decoded video latents to `<prefix>.f32` / `.shape` (for `ltx2 vae-bench --latents`). |
+| `FASTVIDEO_LTX2_STAGE1_CACHE` | env | text: `1`, the preset name or `scsp` (trimmed, any case) | `0` | per generate | LTX-2 | `step_output` | LTX-2.3 stage-1 SCSP (res2s calls 16–28 of 29). |
+| `FASTVIDEO_LTX2_TAE_WEIGHTS` | env, then profile | text: a path (empty = unset) | unset | per load | LTX-2 | `video_decoder` | LTX tiny decoder (TAEHV) weights. |
+| `FASTVIDEO_LTX2_TEXT` | env | text: `resident`, `streamed` or `auto` (trimmed, any case; empty = unset); anything else is an error | the load option's text residency | per load | LTX-2 | `residency` | Gemma text encoder placement. |
+| `FASTVIDEO_LTX2_TEXT_FP8` | env | text: on only for `1` (trimmed) | `0` | per load | LTX-2 | `text_encoder` | Gemma from the pre-quantized FP8 tree. |
+| `FASTVIDEO_LTX2_TEXT_WARM` | env | text: on unless `0` (trimmed) | `1` | per load | LTX-2 | `text_encoder` | Open the Gemma weights ahead of the first encode. |
+| `FASTVIDEO_LTX2_UPSAMPLER` | env | text: a file or directory | the pack's upsampler | per load | LTX-2 | `weights` | Spatial-upsampler file or folder in place of the pack's (`ltx-2.3-spatial-upscaler-x2-1.1.safetensors` for the 2.3 HQ cell). |
+| `FASTVIDEO_LTX2_VAE_CHUNK` | env, then profile | usize | `8` | per call | LTX-2 | `memory` | LTX-2 streaming VAE frames per chunk. |
+| `FASTVIDEO_LTX2_VAE_LATENT_CHUNK` | env, then profile | usize: at least 1 | `1` | per call | LTX-2 | `memory` | LTX-2 VAE latent frames per decode chunk. |
+| `FASTVIDEO_LTX2_WEIGHTS` | env | text: a directory | unset | per generate | H3 | `weights` | LTX-2.5 root for the Spark refiner. DiT defaults to `weights/transformer`. |
+| `FASTVIDEO_LTX_FUSE` | env, then profile | flag | `1` | once per process | LTX-2 | `kernel_fusion` | LTX block fusions (bit-identical); `0` runs the separate ops. |
+| `FASTVIDEO_LTX_OFFLOAD` | env, then profile | text: `none` / `off` / `0` / empty, `cpu` / `on` / `1` (trimmed, any case); `disk` and others are errors | `none` | per load | LTX-2 | `residency` | `cpu` gives sol-engine's `--offload cpu` placement: the DiT blocks stream from pinned host memory through 2 device slots, Gemma streams per layer, the connectors, upsampler and VAEs are on the device only around their calls. Byte-identical frames. `ltx2 gen --offload` overrides it. See [ports/ltx25.md](ports/ltx25.md#offload-placement-fastvideo_ltx_offloadcpu). |
+| `FASTVIDEO_LTX_VAE_CHECK` | env, then profile | flag | `0` | once per process | LTX-2 | `debug` | Decode the process's first LTX VAE tile both ways and log rel_l2 and both times. |
+| `FASTVIDEO_LTX_VAE_CHUNK_FRAMES` | env, then profile | usize: at least 1 | `16` | per call | LTX-2 | `memory` | Output frames per channels-last conv launch. |
+| `FASTVIDEO_LTX_VAE_CHUNK_MB` | env, then profile | usize: at least 1 | `1024` | per call | LTX-2 | `memory` | MB per channels-last conv launch. |
+| `FASTVIDEO_LTX_VAE_CONV_ALGO` | env, then profile | keyword | `heuristic` | per call | LTX-2 | `kernel_choice` | `tune`: time every cuDNN forward algorithm per conv shape (default: cuDNN's heuristic). |
+| `FASTVIDEO_LTX_VAE_FAST` | env, then profile | flag | `1` | once per process | LTX-2 | `video_decoder` | LTX conv VAE tiled decode on the channels-last bf16 decoder (default on); `0` restores the f32 streaming decoder. |
+| `FASTVIDEO_MMAUDIO_INJECT` | env | text: comma-separated stage names | unset | per call | MMAudio | `debug` | MMAudio stages whose reference tensors are injected. |
+| `FASTVIDEO_MMAUDIO_WEIGHTS` | env | text: a directory | `MMAUDIO_MODEL_PATH`, else under `FV_WEIGHTS` | per load | MMAudio | `weights` | MMAudio weights root. |
+| `FASTVIDEO_NVFP4` | env, then profile | text: `0` / `off` / `false` / `none` / `no`, `1` / `static_6` / `te` / ..., `static_4`, `mse` / `4o6` (any case); unknown = off | `0` | per load | runtime | `ffn_precision` | W4A4 dequant (`1` → `static_6`; `mse` for FourOverSix). LTX-2: the video FFN on NVFP4 tensor cores (`static_6` / `static_4`). |
+| `FASTVIDEO_NVFP4_COSMOS_STEPS` | reserved (not read) | text: `1` / `true` / `on` / `yes` (trimmed, any case) | `0` | per load | Cosmos | `ffn_precision` | Reserved: restrict NVFP4 to the middle Cosmos steps (the parser exists, no reader yet). |
+| `FASTVIDEO_NVFP4_LTX_VIDEO_FFN` | reserved (not read) | text: `1` / `true` / `on` / `yes` (trimmed, any case) | `0` | per load | LTX-2 | `ffn_precision` | Reserved: restrict NVFP4 to the LTX video FFN (the parser exists, no reader yet). |
+| `FASTVIDEO_NVFP4_OXIDE_GEMM` | env, then profile | text: `1` / `true` / `on` / `yes` (trimmed, any case) | `0` | per call | runtime | `kernel_choice` | Tile-IR W4A4 GEMM (profile `[kernels] nvfp4_gemm`); off until it beats cuBLAS bf16. |
+| `FASTVIDEO_NVRTC_PTX` | env, then profile | flag | `0` | per load | runtime | `kernel_choice` | Have NVRTC emit PTX instead of SASS. |
+| `FASTVIDEO_PISA_FIRST_ORDER` | env, then profile | keyword | `1` | per call | runtime | `attention` | `0` drops PISA's first-order term. |
+| `FASTVIDEO_PISA_KERNEL` | env, then profile | keyword | `fused` | per call | runtime | `kernel_choice` | `legacy` runs the unfused PISA kernel. |
+| `FASTVIDEO_PLUG_ROOT` | env | text: a directory | `<base_root>/../longlive-plug` | per load | Wan | `lora` | Where LongLive-Plug adapters live. |
+| `FASTVIDEO_PNG` | env | text: `inline`, `off` / `0` / `none`, else deferred (trimmed, any case) | `deferred` | per generate | runtime | `io` | PNG frame writing: deferred to a writer thread, inline, or off. |
+| `FASTVIDEO_PNG_BUFFER_GIB` | env | text: GiB as `f64` (trimmed), negative = 0 | half the available host memory, else 8 GiB | per generate | runtime | `io` | Host RAM the deferred PNG frames may hold. |
+| `FASTVIDEO_PNG_SYNC` | env, then profile | flag | `1` | per generate | runtime | `io` | Wait for the PNG writer before returning. |
+| `FASTVIDEO_PREFETCH` | env | text: on unless `0` (trimmed) | `1` | per load | loader | `loader` | Weight read-ahead pool. |
+| `FASTVIDEO_PREFETCH_CHUNK_MB` | env | text: a `usize` (trimmed), clamped to 1..=1024 | `16` | per load | loader | `loader` | Read-ahead chunk size. |
+| `FASTVIDEO_PREFETCH_MODE` | env | text: `cache` (trimmed) forces page-cache mode | unset | once per process | loader | `loader` | Read-ahead into owned memory while `MemAvailable` allows, else the page cache. |
+| `FASTVIDEO_PREFETCH_THREADS` | env | text: a `usize` (trimmed) | 16; `FASTVIDEO_STREAMING_PREFETCH_THREADS` while the weights stream | per load | loader | `loader` | Read-ahead threads. |
+| `FASTVIDEO_PREFETCH_WINDOW_GB` | env | text: GB as `f64` (trimmed) | the smaller of 24 GB and 40% of `MemAvailable` | per load | loader | `loader` | Read-ahead window. |
+| `FASTVIDEO_PROFILE` | env, then profile | flag | `0` | once per process | runtime | `trace` | Per-op timing statistics. |
+| `FASTVIDEO_RESIDENT` | env, then profile | flag | `1` | once per process | runtime | `residency` | Keep tensors on the device between ops (default on); `0` is refused with a live CUDA device. |
+| `FASTVIDEO_SANA_EASYCACHE` | env | text: an EasyCache threshold (a number) | unset | per load | SANA-Video | `step_output` | SANA-Video EasyCache threshold. |
+| `FASTVIDEO_SANA_LINATTN_BF16` | env | text: a SANA-Video flag | the `FASTVIDEO_SANA_OPT` arm's | per load | SANA-Video | `activation_precision` | SANA-Video linear attention in bf16. |
+| `FASTVIDEO_SANA_OPT` | env | text: `baseline` or `full` | `baseline` | per load | SANA-Video | `step_output` | SANA-Video optimization arm. |
+| `FASTVIDEO_SANA_QKV_MERGE` | env | text: a SANA-Video flag | the `FASTVIDEO_SANA_OPT` arm's | per load | SANA-Video | `kernel_fusion` | SANA-Video merged QKV projection. |
+| `FASTVIDEO_SAVE_MP4` | env | text: `1` or `true` (any case, not trimmed) | `0` | per generate | harness | `io` | Mux frames with ffmpeg. |
+| `FASTVIDEO_SDPA` | env, then profile | keyword | `dense` | once per process | runtime | `attention_backend` | Wan self-attention backend. |
+| `FASTVIDEO_SDPA_AUTO` | env, then profile | keyword | `rule` | once per process | runtime | `kernel_choice` | How the dense attention backend is chosen. |
+| `FASTVIDEO_SDPA_CHUNK` | env | text: a `usize` (not trimmed), at least 64 | by device | once per process | runtime | `memory` | Query rows per SDPA chunk. |
+| `FASTVIDEO_SLA_BLKK` | env, then profile | usize: at least 1 | `64` | per call | runtime | `attention` | SLA key block. |
+| `FASTVIDEO_SLA_BLKQ` | env, then profile | usize: at least 1 | `128` | per call | runtime | `attention` | SLA query block. |
+| `FASTVIDEO_SLA_TOPK` | env, then profile | f32: clamped to 0.01..=1 | `0.1` | per call | runtime | `attention` | SLA top-k ratio. |
+| `FASTVIDEO_SOL_KERNEL` | env, then profile | keyword | `auto` | per call | runtime | `kernel_choice` | Sol attention kernel (profile `[kernels] sol_attention`). |
+| `FASTVIDEO_SOL_SPLITS` | env, then profile | keyword | `auto` | per call | runtime | `kernel_choice` | Sol attention split count. |
+| `FASTVIDEO_SPLIT_ROWS` | env, then profile | flag | `1` | once per process | runtime | `kernel_fusion` | Row-split activation kernels (profile `kernel_fusion.split_rows`). |
+| `FASTVIDEO_SP_WORLD` | env, then profile | usize: at least 1 | `1` | once per process | runtime | `parallel` | Sequence-parallel world size (`fastvideo --num-gpus` sets it). |
+| `FASTVIDEO_STAGED_UPLOAD` | env, then profile | flag | `1` | once per process | runtime | `loader` | Upload weights through pinned staging buffers. |
+| `FASTVIDEO_STREAMING_FETCH` | env | text: on only for `1` (trimmed) | `0` | per load | loader | `loader` | The boot started this process while the weights were still being fetched. |
+| `FASTVIDEO_STREAMING_FETCH_STALE_S` | env | text: seconds as a positive finite `f64` (trimmed) | `120` | per load | loader | `loader` | A fetch whose status file is older than this is dead. |
+| `FASTVIDEO_STREAMING_FETCH_STATUS` | env | text: a file (empty = unset) | unset | per load | loader | `loader` | The fetcher's status JSON. |
+| `FASTVIDEO_STREAMING_FETCH_TIMEOUT_S` | env | text: seconds as a positive finite `f64` (trimmed) | `3600` | per load | loader | `loader` | The longest a single wait for streamed weights may take. |
+| `FASTVIDEO_STREAMING_PREFETCH_THREADS` | env | text: a `usize` (trimmed) | `4` | per load | loader | `loader` | Read-ahead threads while the weights stream. |
+| `FASTVIDEO_TAEH3_WEIGHTS` | env, then profile | text: a path (empty = unset) | unset | per load | H3 | `video_decoder` | H3 tiny decoder (TAEH3) weights. |
+| `FASTVIDEO_TAEHV_CHUNK` | env, then profile | usize: at least 1 | the TAE architecture's decode chunk | per call | runtime | `memory` | TAEHV decode frames per chunk. |
+| `FASTVIDEO_TAEHV_ENC_CHUNK` | env, then profile | usize | 2 × the temporal downscale | per call | runtime | `memory` | TAEHV encode frames per chunk. |
+| `FASTVIDEO_TAEHV_WEIGHTS` | env | text: a path (empty = unset) | unset | per load | Wan | `video_decoder` | Wan tiny decoder (TAEHV) weights. |
+| `FASTVIDEO_TAE_DIR` | env | text: a directory (empty = unset) | unset | per load | Wan | `video_decoder` | Where the distilled presets look for `taew2_1.safetensors` (`scripts/gpu/fetch_taehv.sh`). |
+| `FASTVIDEO_TAE_TEST_DIR` | env | text: a directory | unset | per call | harness | `test` | Real TAE checkpoints for the reference test. |
+| `FASTVIDEO_TEACACHE` | env | text: `1` or `true` (any case, not trimmed) | `0` | per load | Wan | `step_output` | Wan TeaCache (FastVideo's). |
+| `FASTVIDEO_TEACACHE_RET` | env | text: `1` or `true` (any case, not trimmed) | `0` | per load | Wan | `step_output` | Wan TeaCache `use_ret_steps` coefficients. |
+| `FASTVIDEO_TEACACHE_THRESH` | env | text: an `f64` (not trimmed); unparsable = default | `0.08` | per load | Wan | `step_output` | Wan TeaCache threshold. |
+| `FASTVIDEO_TECHNIQUES` | env | text: a profile path or compiled-in name | unset | at start-up | runtime | `techniques` | Technique profile to install when no `--techniques` flag did (`docs/techniques.md`). |
+| `FASTVIDEO_TEXT_FP8_TREE` | env | text: `0` (trimmed) skips the tree | `1` | per load | text encoders | `weights` | Text encoder from its pre-quantized FP8 tree when one is valid. |
+| `FASTVIDEO_TF32` | env, then profile | flag | `1` | once per process | runtime | `ffn_precision` | TF32 tensor-core math for f32 GEMMs. |
+| `FASTVIDEO_VAE_CHUNK` | env, then profile | usize: at least 1 | `2` | per call | Wan | `memory` | Latent frames per Wan VAE pass. |
+| `FASTVIDEO_VERIFY_UPLOAD` | env, then profile | flag | `0` | once per process | runtime | `debug` | Read back every staged upload and compare. |
+| `FASTVIDEO_VSA` | env, then profile | flag: the `fastvideo` CLI's VSA-id check reads `1` / `true` (any case, not trimmed) from the environment only | `0` | once per process | runtime | `attention_backend` | Wan block-sparse video attention. |
+| `FASTVIDEO_VSA_BF16` | env, then profile | flag | `1` | per call | H3 | `activation_precision` | H3 VSA in bf16. |
+| `FASTVIDEO_VSA_FUSED` | env, then profile | flag | `0` | per call | runtime | `kernel_choice` | Fused scalar VSA fine kernel. |
+| `FASTVIDEO_VSA_GROUP` | env, then profile | usize: H3 technique adapter: its own parse | 8 for H3, 32 for Wan | per load | runtime | `attention` | VSA block group size. |
+| `FASTVIDEO_VSA_KERNEL` | env, then profile | keyword | `auto` | per call | runtime | `kernel_choice` | VSA attention kernel (profile `[kernels] vsa_attention`). |
+| `FASTVIDEO_VSA_SPARSITY` | env, then profile | f64: H3 technique adapter: a number in [0, 1) | 0.8 for Wan, the recipe's for H3 | per load | runtime | `attention` | VSA sparsity, one value everywhere. |
+| `FASTVIDEO_VSA_TMA` | env, then profile | keyword | `1` | per call | runtime | `kernel_choice` | `0` turns the VSA TMA kernels off. |
+| `FASTVIDEO_VSA_TOPK` | env, then profile | keyword | `v2` | per call | runtime | `kernel_choice` | `v1` runs the first VSA top-k kernel. |
+| `FASTVIDEO_VSA_UNION_LOG` | env, then profile | flag | `0` | per call | H3 | `debug` | Log the VSA block-union statistics. |
+| `FASTVIDEO_VSA_WINDOW` | env, then profile | usize | `128` | per call | runtime | `attention` | Masked-attention window of the VSA fallback. |
+| `FASTVIDEO_WAN_AUDIO` | env | text: `mmaudio` or `1` (trimmed) | unset | per generate | MMAudio | `audio` | MMAudio soundtrack for Wan clips. |
+| `FASTVIDEO_WAN_AUDIO_CFG` | env | text: parsed as the preset's number (not trimmed); unparsable = default | the MMAudio preset's | per generate | MMAudio | `audio` | MMAudio guidance. |
+| `FASTVIDEO_WAN_AUDIO_PROMPT` | env | text: text | the video prompt | per generate | MMAudio | `audio` | MMAudio prompt. |
+| `FASTVIDEO_WAN_AUDIO_SEED` | env | text: an integer (not trimmed); unparsable = default | the request's seed | per generate | MMAudio | `audio` | MMAudio seed. |
+| `FASTVIDEO_WAN_AUDIO_STEPS` | env | text: a `usize` (not trimmed); unparsable = default | the MMAudio preset's | per generate | MMAudio | `audio` | MMAudio steps. |
+| `FASTVIDEO_WAN_CAUSAL_AR` | env, then profile | flag | `1` | once per process | Wan | `attention` | SF-Wan autoregressive KV cache. |
+| `FASTVIDEO_WAN_CAUSAL_FLASH` | env, then profile | flag | `1` | once per process | Wan | `kernel_choice` | SF-Wan block-causal self-attention on the masked flash kernel (default on); `0` materializes the `[S, S]` mask through `sdpa_composed`. |
+| `FASTVIDEO_WAN_CAUSAL_FPB` | env, then profile | usize | the config's frames per block | per load | Wan | `attention` | SF-Wan frames per block. |
+| `FASTVIDEO_WAN_COND_CACHE` | env, then profile | flag: `fv-gpucheck wan` reports the environment's value only | `1` | once per process | Wan | `cache` | `0`: recompute text K/V, text and time embeddings every forward. |
+| `FASTVIDEO_WAN_DIT_LAZY` | env, then profile | flag | on for two experts or a streamed DiT | per load | Wan | `residency` | Open the Wan DiT weights lazily. |
+| `FASTVIDEO_WAN_EASYCACHE_COOLDOWN` | env | text: a `usize` (not trimmed), else `WAN22_EASYCACHE_COOLDOWN_STEPS` | the EasyCache profile's | per generate | Wan | `step_output` | Wan EasyCache cooldown steps. |
+| `FASTVIDEO_WAN_EASYCACHE_PROFILE` | env | text: a profile name, else `WAN22_EASYCACHE_PROFILE` | unset | per generate | Wan | `step_output` | Wan EasyCache parameter profile. |
+| `FASTVIDEO_WAN_EASYCACHE_RETAIN` | env | text: a `usize` (not trimmed), else `WAN22_EASYCACHE_RETAIN_STEPS` | the EasyCache profile's | per generate | Wan | `step_output` | Wan EasyCache retained steps. |
+| `FASTVIDEO_WAN_EASYCACHE_THRESH` | env | text: an `f64` (not trimmed), else `WAN22_EASYCACHE_THRESHOLD` | the EasyCache profile's | per generate | Wan | `step_output` | Wan EasyCache threshold. |
+| `FASTVIDEO_WAN_FUSE` | env, then profile | flag | `1` | once per process | Wan | `kernel_fusion` | Wan block residual + LayerNorm (+ AdaLN) as one kernel under bf16 activations (default on); `0` runs the byte-identical two-kernel form. |
+| `FASTVIDEO_WAN_GRAPH` | env, then profile | flag | `1` | once per process | Wan | `cuda_graphs` | CUDA-graph capture of the Wan step. |
+| `FASTVIDEO_WAN_GRAPH_CUBLAS_WS_MIB` | env, then profile | usize | `32` | per call | Wan | `memory` | cuBLAS workspace for graph-captured GEMMs. |
+| `FASTVIDEO_WAN_MOE` | env | text: `auto` / empty, `both` / `resident`, `swap` / `parked` (trimmed, any case); anything else is an error | `auto` | per load | Wan | `residency` | Wan 2.2 A14B experts: `auto` (both resident when the free memory after UMT5 covers two bf16 experts plus `FASTVIDEO_WAN_MOE_HEADROOM_GIB`, else `swap`), `both`, or `swap` (both parked in pinned host memory, swapped at the 0.875 boundary). See [ports/sol-wan-ltx23.md](ports/sol-wan-ltx23.md). |
+| `FASTVIDEO_WAN_MOE_HEADROOM_GIB` | env | text: GiB as a finite `f64` ≥ 0 (trimmed) | `36` | per load | Wan | `residency` | Headroom `FASTVIDEO_WAN_MOE=auto` keeps beside two experts. |
+| `FASTVIDEO_WAN_PISA` | env | text: `1`, `pisa`, `true` or `on` (trimmed), else `WAN22_PISA` | `0` | per load | Wan | `attention_backend` | Wan PISA sparse attention. |
+| `FASTVIDEO_WAN_QUANT` | env, then profile | text: `mxfp8`, `w8a8` or `off` (an unknown value is an error) | `mxfp8` on sm_100, `off` elsewhere | per load | Wan | `ffn_precision` | Wan DiT FP8 recipe on every block's attention + FFN linears (on sm_120 both were slower than bf16 and doubled LPIPS). |
+| `FASTVIDEO_WAN_SOL_ATTN` | env | text: `1`, `sol`, `true`, `on` or `fullstack` (trimmed), else `WAN22_SOL_ATTN` | `0` | per load | Wan | `attention_backend` | Sol-Attn route: 14B (10 dense forwards, layer 0 dense) and 1.3B (layer 0 dense), Morton3D on the device. `fullstack` on the 1.3B: the 14B guards (sol-engine `wan21_fullstack_sol.toml`, the 50-step base model). |
+| `FASTVIDEO_WAN_SOL_CACHE` | env | text: `easycache`, `teacache` or `taylorseer`; empty / `0` / `off` / `none` / `false` = off (trimmed, any case) | unset | per generate | Wan | `step_output` | Wan Sol step cache (lossy; off by default). `taylorseer` forecasts `proj_out` (interval 3, warmup 3, cooldown 2, order 1). |
+| `FASTVIDEO_WAN_TAYLOR_COOLDOWN` | env | text: a `usize` (not trimmed), else `WAN22_TAYLOR_COOLDOWN_START` | steps − 2 | per generate | Wan | `step_output` | TaylorSeer cooldown start. |
+| `FASTVIDEO_WAN_TAYLOR_INTERVAL` | env | text: a `usize` (not trimmed), else `WAN22_TAYLOR_INTERVAL` | `3` | per generate | Wan | `step_output` | TaylorSeer interval. |
+| `FASTVIDEO_WAN_TAYLOR_LITE` | env | text: `0` / `false` / `off` (trimmed) are refused, else `WAN22_TAYLOR_LITE` | `1` | per generate | Wan | `step_output` | TaylorSeer lite mode (the only mode implemented). |
+| `FASTVIDEO_WAN_TAYLOR_ORDER` | env | text: a `usize` (not trimmed), else `WAN22_TAYLOR_ORDER` | `1` | per generate | Wan | `step_output` | TaylorSeer order. |
+| `FASTVIDEO_WAN_TAYLOR_WARMUP` | env | text: a `usize` (not trimmed), else `WAN22_TAYLOR_WARMUP` | `3` | per generate | Wan | `step_output` | TaylorSeer warmup. |
+| `FASTVIDEO_WAN_TEACACHE_COEFFS` | env | text: comma-separated `f64`s (unparsable parts dropped) | `1.0,0.0` | per generate | Wan | `step_output` | Wan Sol TeaCache polynomial. |
+| `FASTVIDEO_WAN_TEACACHE_END` | env | text: a `usize` (not trimmed) | steps − 2 | per generate | Wan | `step_output` | Wan Sol TeaCache last step. |
+| `FASTVIDEO_WAN_TEACACHE_MAX_HITS` | env | text: a `usize` (not trimmed) | `0` | per generate | Wan | `step_output` | Wan Sol TeaCache consecutive-skip cap (0: none). |
+| `FASTVIDEO_WAN_TEACACHE_PERIODIC` | env | text: a `usize` (not trimmed) | `0` | per generate | Wan | `step_output` | Wan Sol TeaCache forced refresh period (0: none). |
+| `FASTVIDEO_WAN_TEACACHE_START` | env | text: a `usize` (not trimmed) | `2` | per generate | Wan | `step_output` | Wan Sol TeaCache first step. |
+| `FASTVIDEO_WAN_TEACACHE_THRESH` | env | text: an `f64` (not trimmed) | `0.12` | per generate | Wan | `step_output` | Wan Sol TeaCache threshold. |
+| `FASTVIDEO_WAN_TEXT_CACHE` | env | text: a directory (trimmed), or `off` / `0` / `false` / `none` | `$XDG_CACHE_HOME/fastvideo/wan-text`, else `~/.cache/fastvideo/wan-text` | per load | Wan | `cache` | UMT5 prompt cache directory, or `off`. |
+| `FASTVIDEO_WAN_UNIPC_SIGMAS` | env | text: `fastvideo` / `double` / empty, `diffusers` / `single` / `sol` (trimmed, any case); anything else is an error | `fastvideo` | per load | Wan | `scheduler` | `fastvideo` (FastVideo's double-shifted flow-UniPC sigmas) or `diffusers` (Diffusers' single shift, the sol-engine Wan baselines). |
+| `FASTVIDEO_WAN_VAE` | env | text: `auto`, `full`, `taehv` (trimmed, any case) | `auto` | per load | Wan | `video_decoder` | `auto` (TAEHV for distilled presets when found), `full`, `taehv`. |
+| `FASTVIDEO_WEIGHTS` | env | text: a directory | `--weights`, else the Hugging Face snapshot | per load | harness | `weights` | Weights root when `--weights` is not given. |
+| `FASTVIDEO_WRITER_TRACE` | env, then profile | flag | `0` | per generate | runtime | `trace` | Log the frame writer's timing. |
+
+<!-- END GENERATED: FASTVIDEO_* settings -->
 
 Text-conditioning cache for LTX defaults under `~/.cache/fastvideo`
 (`FASTVIDEO_CACHE` overrides the root).

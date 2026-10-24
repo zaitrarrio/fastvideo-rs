@@ -75,7 +75,7 @@ impl MoeResidency {
     }
 
     pub fn from_env() -> Result<Self, String> {
-        std::env::var(ENV).map_or(Ok(Self::Auto), |v| Self::parse(&v))
+        crate::settings::env_var(ENV).map_or(Ok(Self::Auto), |v| Self::parse(&v))
     }
 
     /// `free`: device bytes free before the experts load (`None`: no
@@ -94,7 +94,7 @@ impl MoeResidency {
 
 /// [`HEADROOM_ENV`] in bytes.
 pub fn headroom_bytes() -> u64 {
-    let gib = std::env::var(HEADROOM_ENV)
+    let gib = crate::settings::env_var(HEADROOM_ENV)
         .ok()
         .and_then(|v| v.trim().parse::<f64>().ok())
         .filter(|g| g.is_finite() && *g >= 0.0)

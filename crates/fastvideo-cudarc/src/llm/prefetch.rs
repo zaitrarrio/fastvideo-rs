@@ -44,7 +44,7 @@ fn msg(s: impl Into<String>) -> TensorError {
 }
 
 fn enabled() -> bool {
-    std::env::var("FASTVIDEO_LLM_PREFETCH").map_or(true, |v| v != "0")
+    fastvideo_models::settings::env_var("FASTVIDEO_LLM_PREFETCH").map_or(true, |v| v != "0")
         && crate::rt::nn::bf16_linears_active()
 }
 

@@ -17,13 +17,13 @@ fn msg(s: impl Into<String>) -> TensorError {
 
 pub fn flux2_dummy_text() -> bool {
     matches!(
-        std::env::var("FASTVIDEO_FLUX2_DUMMY_TEXT").as_deref(),
+        fastvideo_models::settings::env_var("FASTVIDEO_FLUX2_DUMMY_TEXT").as_deref(),
         Ok("1") | Ok("true") | Ok("TRUE")
     )
 }
 
 pub fn flux2_text_len(default: usize) -> usize {
-    std::env::var("FASTVIDEO_FLUX2_TEXT_LEN")
+    fastvideo_models::settings::env_var("FASTVIDEO_FLUX2_TEXT_LEN")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(default)

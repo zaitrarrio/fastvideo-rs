@@ -34,7 +34,7 @@ use crate::hooks::{Hooks, Stage};
 /// rather than a silent fall back to the Wan VAE: asking for TAEHV and getting
 /// a 3.9s Wan decode would look exactly like TAEHV being slow.
 fn load_taehv(arch: TaeArch) -> Result<Option<super::taehv::TaeHv>> {
-    let dir = std::env::var("FASTVIDEO_TAEHV_WEIGHTS").unwrap_or_default();
+    let dir = fastvideo_models::settings::env_var("FASTVIDEO_TAEHV_WEIGHTS").unwrap_or_default();
     if dir.is_empty() {
         return Ok(None);
     }
@@ -82,7 +82,7 @@ fn open_taehv(path: &Path, arch: TaeArch) -> TensorResult<super::taehv::TaeHv> {
 /// `/fastvideo/taehv` — where `scripts/gpu/fetch_taehv.sh` puts it.
 pub fn default_taehv_dirs(root: &Path) -> Vec<std::path::PathBuf> {
     let mut dirs = Vec::new();
-    if let Ok(d) = std::env::var("FASTVIDEO_TAE_DIR") {
+    if let Ok(d) = fastvideo_models::settings::env_var("FASTVIDEO_TAE_DIR") {
         if !d.is_empty() {
             dirs.push(std::path::PathBuf::from(d));
         }
@@ -113,7 +113,7 @@ pub enum WanVaeChoice {
 
 impl WanVaeChoice {
     pub fn from_env() -> Result<Self> {
-        match std::env::var("FASTVIDEO_WAN_VAE")
+        match fastvideo_models::settings::env_var("FASTVIDEO_WAN_VAE")
             .unwrap_or_default()
             .trim()
             .to_ascii_lowercase()
@@ -1552,10 +1552,10 @@ struct TeaCache {
 
 impl TeaCache {
     fn from_env() -> Self {
-        let enabled = std::env::var("FASTVIDEO_TEACACHE")
+        let enabled = fastvideo_models::settings::env_var("FASTVIDEO_TEACACHE")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
-        let thresh = std::env::var("FASTVIDEO_TEACACHE_THRESH")
+        let thresh = fastvideo_models::settings::env_var("FASTVIDEO_TEACACHE_THRESH")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(0.08);
@@ -1567,7 +1567,7 @@ impl TeaCache {
             -8.29855975,
             1.37887774e-1,
         ];
-        let ret_steps = std::env::var("FASTVIDEO_TEACACHE_RET")
+        let ret_steps = fastvideo_models::settings::env_var("FASTVIDEO_TEACACHE_RET")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
         let coefficients = if ret_steps {
@@ -1658,7 +1658,8 @@ use super::sol_cache::{mean_abs, mean_abs_delta};
 
 impl EasyCacheRuntime {
     fn from_env(num_steps: usize) -> Result<Option<Self>> {
-        let family = std::env::var("FASTVIDEO_WAN_SOL_CACHE").unwrap_or_default();
+        let family =
+            fastvideo_models::settings::env_var("FASTVIDEO_WAN_SOL_CACHE").unwrap_or_default();
         let family = family.trim().to_ascii_lowercase();
         if family.is_empty() || matches!(family.as_str(), "0" | "off" | "none" | "false") {
             return Ok(None);

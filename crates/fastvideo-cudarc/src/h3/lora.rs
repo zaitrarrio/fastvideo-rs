@@ -261,7 +261,8 @@ impl H3LoraFuse {
         let path = match explicit {
             Some(p) => p.to_path_buf(),
             None => {
-                let env = std::env::var_os(PLUG_ROOT_ENV).map(std::path::PathBuf::from);
+                let env = fastvideo_models::settings::env_var_os(PLUG_ROOT_ENV)
+                    .map(std::path::PathBuf::from);
                 spec.resolve(root, env.as_deref()).map_err(msg)?
             }
         };

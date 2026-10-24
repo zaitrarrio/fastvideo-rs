@@ -50,7 +50,7 @@ pub fn a14b_controller(num_steps: usize) -> Result<A14bCacheController> {
 }
 
 fn env_f64(primary: &str, fallback: &str, default: f64) -> f64 {
-    std::env::var(primary)
+    fastvideo_models::settings::env_var(primary)
         .ok()
         .and_then(|s| s.parse().ok())
         .or_else(|| std::env::var(fallback).ok().and_then(|s| s.parse().ok()))
@@ -58,7 +58,7 @@ fn env_f64(primary: &str, fallback: &str, default: f64) -> f64 {
 }
 
 fn env_usize(primary: &str, fallback: &str, default: usize) -> usize {
-    std::env::var(primary)
+    fastvideo_models::settings::env_var(primary)
         .ok()
         .and_then(|s| s.parse().ok())
         .or_else(|| std::env::var(fallback).ok().and_then(|s| s.parse().ok()))
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn easycache_profile_defaults_stay_on_code_default() {
-        let saved = std::env::var("FASTVIDEO_WAN_EASYCACHE_PROFILE").ok();
+        let saved = fastvideo_models::settings::env_var("FASTVIDEO_WAN_EASYCACHE_PROFILE").ok();
         std::env::remove_var("FASTVIDEO_WAN_EASYCACHE_PROFILE");
         std::env::remove_var("WAN22_EASYCACHE_PROFILE");
         let (thr, retain, cooldown) = easy_cache_params().unwrap();

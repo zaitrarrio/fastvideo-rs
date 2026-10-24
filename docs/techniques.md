@@ -14,7 +14,7 @@ pins and the `fastvideo-rs-upstream-*` images carry). Citations below are
 Code: `crates/fastvideo-models/src/techniques/` (host-side, no GPU), the
 model adapters `crates/fastvideo-models/src/h3/techniques.rs` and
 `crates/fastvideo-models/src/ltx2/techniques.rs`, and the readers in
-`fastvideo-cudarc` (`wan::envflag`, the kernel dispatch sites, the H3 and
+`fastvideo-cudarc` (`rt::envflag`, the kernel dispatch sites, the H3 and
 LTX-2 pipelines). Profiles: `profiles/<model>/*.toml`, also compiled into the
 binaries.
 
@@ -44,6 +44,16 @@ For every setting, highest first:
 3. the profile (a technique, a `[kernels]` entry, or a raw `[env]` entry);
 4. the recipe's default (e.g. `sol-h3-rtx` runs the Sol RTX route);
 5. the built-in default.
+
+This applies to the settings read through the layered reader
+(`settings::var`), which are every name a technique, a `[kernels]` entry or a
+compiled-in profile installs. The settings table in
+[scope.md](scope.md#configurations), rendered from the declarative list in
+`techniques/settings/table.rs` (ADR-0010), says for every `FASTVIDEO_*` name
+which reader it has: `env, then profile` follows this order; `env` names are
+read from the process environment only, so a raw `[env]` entry for one of
+them has no effect (a test keeps the techniques and the compiled-in profiles
+on layered names).
 
 The pipeline log prints the resolved plan, each installed setting with the
 technique that set it, and `overridden by env` where an env var won. The H3

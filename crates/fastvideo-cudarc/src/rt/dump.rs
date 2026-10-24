@@ -30,7 +30,7 @@ pub const BLOCK_ROW_STRIDE: usize = 64;
 pub fn dir() -> Option<&'static PathBuf> {
     static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
     DIR.get_or_init(|| {
-        std::env::var_os("FASTVIDEO_DUMP_DIR")
+        fastvideo_models::settings::env_var_os("FASTVIDEO_DUMP_DIR")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
     })
@@ -132,7 +132,10 @@ fn strided(data: &[f32], width: usize, stride: usize) -> Vec<f32> {
 pub fn op_blocks() -> &'static [usize] {
     static OPS: OnceLock<Vec<usize>> = OnceLock::new();
     OPS.get_or_init(|| {
-        parse_op_blocks(&std::env::var("FASTVIDEO_DUMP_OPS").unwrap_or_else(|_| "0".into()))
+        parse_op_blocks(
+            &fastvideo_models::settings::env_var("FASTVIDEO_DUMP_OPS")
+                .unwrap_or_else(|_| "0".into()),
+        )
     })
 }
 

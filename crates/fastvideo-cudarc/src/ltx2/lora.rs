@@ -96,7 +96,7 @@ pub(crate) fn wants(key: &str) -> bool {
 /// `FASTVIDEO_LTX2_LORA`, or a known filename beside the weights or the DiT.
 /// Missing file with the env unset leaves the base DiT unfused.
 pub fn resolve(weights: &Path, dit: &Path, version: Ltx2ModelVersion) -> Result<Option<PathBuf>> {
-    if let Ok(raw) = std::env::var("FASTVIDEO_LTX2_LORA") {
+    if let Ok(raw) = fastvideo_models::settings::env_var("FASTVIDEO_LTX2_LORA") {
         let path = PathBuf::from(raw);
         if path.is_file() {
             return Ok(Some(path));

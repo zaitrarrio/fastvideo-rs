@@ -127,7 +127,7 @@ pub fn load_pipeline_with_dit(
     let _tae = recipe
         .tae_dir
         .as_ref()
-        .filter(|_| std::env::var_os("FASTVIDEO_TAE_DIR").is_none())
+        .filter(|_| fastvideo_models::settings::env_var_os("FASTVIDEO_TAE_DIR").is_none())
         .map(|d| EnvGuard::set("FASTVIDEO_TAE_DIR", &d.to_string_lossy()));
     obs("wan_pipeline");
     let pipe = WanPipeline::load_with_dit(

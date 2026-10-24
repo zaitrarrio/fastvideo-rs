@@ -257,7 +257,8 @@ impl GenResidency {
 
     /// `FASTVIDEO_COSMOS3_GEN` for a gen tower of `bytes` on the device.
     pub fn from_env(bytes: u64, free: Option<u64>) -> Result<Self> {
-        let asked = std::env::var("FASTVIDEO_COSMOS3_GEN").unwrap_or_default();
+        let asked =
+            fastvideo_models::settings::env_var("FASTVIDEO_COSMOS3_GEN").unwrap_or_default();
         Self::resolve(asked.trim(), bytes, free)
     }
 

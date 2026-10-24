@@ -124,7 +124,7 @@ fn require_cuda(device: &str) -> Result<()> {
 fn weights_root(opts: &AvGenerateOptions) -> Result<PathBuf> {
     opts.weights
         .clone()
-        .or_else(|| std::env::var_os("FASTVIDEO_WEIGHTS").map(PathBuf::from))
+        .or_else(|| fastvideo_models::settings::env_var_os("FASTVIDEO_WEIGHTS").map(PathBuf::from))
         .ok_or_else(|| {
             FastVideoError::Message(
                 "LTX/H3 generate needs --weights <diffusers root> or FASTVIDEO_WEIGHTS".into(),
@@ -169,7 +169,9 @@ fn generate_ltx2(
         let is_base = matches!(line, Ltx2Line::Base20 | Ltx2Line::Base23);
         let hq = opts.ltx23_hq
             || fastvideo_models::ltx2::hq::requested(
-                std::env::var("FASTVIDEO_LTX2_HQ").ok().as_deref(),
+                fastvideo_models::settings::env_var("FASTVIDEO_LTX2_HQ")
+                    .ok()
+                    .as_deref(),
             );
         if hq && !matches!(line, Ltx2Line::Base23) {
             return Err(FastVideoError::Message(
@@ -441,7 +443,7 @@ fn generate_hunyuan15(
         let mut request = Hunyuan15Request::t2v_480p(opts.prompt, opts.seed);
         request.preset = preset;
         let official = fastvideo_models::hunyuan15::sol::official_requested(
-            std::env::var("FASTVIDEO_HUNYUAN15_OFFICIAL")
+            fastvideo_models::settings::env_var("FASTVIDEO_HUNYUAN15_OFFICIAL")
                 .ok()
                 .as_deref(),
         );
@@ -593,7 +595,9 @@ fn generate_cosmos(
         request.image_path = opts.image_path.clone();
         request.negative_prompt = opts.negative_prompt.clone();
         let official = fastvideo_models::cosmos::sol::official_requested(
-            std::env::var("FASTVIDEO_COSMOS3_OFFICIAL").ok().as_deref(),
+            fastvideo_models::settings::env_var("FASTVIDEO_COSMOS3_OFFICIAL")
+                .ok()
+                .as_deref(),
         );
         if official {
             if opts.height.is_none() {
@@ -1668,7 +1672,9 @@ fn generate_lingbot(
         let mut pipe = LingBotPipeline::open(&weights, preset)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
         let official = fastvideo_models::lingbot::sol::official_requested(
-            std::env::var("FASTVIDEO_LINGBOT_OFFICIAL").ok().as_deref(),
+            fastvideo_models::settings::env_var("FASTVIDEO_LINGBOT_OFFICIAL")
+                .ok()
+                .as_deref(),
         );
         // Official: the models/lingbot_video.toml two-stage contract (base +
         // 1080p refiner). `FASTVIDEO_LINGBOT_REFINE=0` stops after the base.
@@ -1683,13 +1689,17 @@ fn generate_lingbot(
             request.seed = opts.seed;
         }
         if matches!(
-            std::env::var("FASTVIDEO_LINGBOT_REFINE").ok().as_deref(),
+            fastvideo_models::settings::env_var("FASTVIDEO_LINGBOT_REFINE")
+                .ok()
+                .as_deref(),
             Some("0") | Some("off")
         ) {
             request.refiner = None;
         }
         request.sol = fastvideo_models::lingbot::sol::SolArm::parse(
-            std::env::var("FASTVIDEO_LINGBOT_SOL").ok().as_deref(),
+            fastvideo_models::settings::env_var("FASTVIDEO_LINGBOT_SOL")
+                .ok()
+                .as_deref(),
         )
         .map_err(FastVideoError::Message)?;
         if !opts.negative_prompt.is_empty() {
