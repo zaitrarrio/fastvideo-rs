@@ -1,0 +1,287 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "text_encoder",
+      "ok": true,
+      "values": {
+        "chosen": "resident-fp8",
+        "device_gib": 22.72038459777832,
+        "free_gib_before_load": 94.28277587890625,
+        "load_seconds": 64.96298532,
+        "requested": "Auto"
+      }
+    },
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "audio_vae_s": 0.171573708,
+        "dit_residency": "resident",
+        "dit_s": 328.21055533,
+        "refiner_s": 0.03695854,
+        "seconds": 462.569427686,
+        "text_encoder_s": 64.96298532,
+        "video_vae_s": 2.937602772
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.12828596,
+        "decode_s": 2.12567889,
+        "denoise_s": 23.785791935,
+        "load_s": 462.569427686,
+        "peak_mib": 58340,
+        "refine_s": 0.004892048,
+        "step_s": [
+          1.9463916015625,
+          1.9186002197265626,
+          1.89638671875,
+          1.8974371337890625,
+          1.9021035156250001,
+          0.024784927368164063,
+          0.05247078323364258,
+          0.06057676696777344,
+          0.05177958297729492,
+          0.05739622497558594,
+          0.05102284622192383,
+          0.05673471832275391,
+          0.050702335357666016,
+          1.410070556640625,
+          0.018481151580810547,
+          0.056597503662109375,
+          0.05096755218505859,
+          0.056700927734375,
+          0.050472961425781254,
+          0.0560854721069336,
+          0.0497224006652832,
+          1.4100859375,
+          0.02514841651916504,
+          0.057867263793945314,
+          0.0504749755859375,
+          0.056600608825683595,
+          0.05015961456298828,
+          0.056065025329589846,
+          1.402681396484375,
+          0.024770559310913088,
+          0.05167001724243164,
+          0.05635276794433594,
+          0.050334720611572265,
+          0.056444927215576174,
+          1.40092724609375,
+          0.024052703857421875,
+          0.051687454223632814,
+          0.0566855697631836,
+          0.050824161529541015,
+          1.4045471191406251,
+          0.021046272277832033,
+          0.0563507194519043,
+          0.050612224578857425,
+          1.4023515625,
+          0.018505727767944336,
+          1.4010777587890626,
+          0.0182609920501709,
+          1.400743896484375,
+          1.3637969970703125
+        ],
+        "text_cache": "disabled",
+        "text_encoder": "resident-fp8",
+        "text_s": 0.578332258,
+        "total_s": 26.73721711,
+        "video_decode_s": 1.99739293,
+        "video_encode_s": 0.00004409,
+        "video_push_s": 0.000042019999999999994,
+        "video_rgb_s": 0.0367921089999438,
+        "video_vae_s": 1.9771488293111323,
+        "video_wait_s": 0.15864414400000001,
+        "warm": false,
+        "write_s": 0.119761805
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/b4a/abccc38-10241424/b4a-h3-fullopt-prof-base/frames/frame-062.png",
+        "mean": 0.44684432297641624,
+        "std": 0.25636885488283573
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/fvscratch/runs/b4a/abccc38-10241424/b4a-h3-fullopt-prof-base/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "device_budget_gib": null,
+    "memory_plan": {
+      "resident": {
+        "peak_gib": 53.87927266955376,
+        "stages": [
+          {
+            "gib": 51.905614107847214,
+            "stage": "text"
+          },
+          {
+            "gib": 48.275975435972214,
+            "stage": "refine"
+          },
+          {
+            "gib": 53.87927266955376,
+            "stage": "denoise"
+          },
+          {
+            "gib": 46.546623677015305,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 49.436656683683395,
+            "stage": "video_decode"
+          }
+        ]
+      },
+      "streamed": {
+        "peak_gib": 11.871074885129929,
+        "stages": [
+          {
+            "gib": 7.503166675567627,
+            "stage": "text"
+          },
+          {
+            "gib": 5.309156894683838,
+            "stage": "refine"
+          },
+          {
+            "gib": 10.91245412826538,
+            "stage": "denoise"
+          },
+          {
+            "gib": 2.3855392932891846,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 11.871074885129929,
+            "stage": "video_decode"
+          }
+        ]
+      }
+    },
+    "mode": "fast",
+    "output": {
+      "audio_samples_per_channel": 165600,
+      "frames": 124,
+      "mp4": null,
+      "sequence_length": 14890,
+      "text_tokens": 46,
+      "wav": "/fvscratch/runs/b4a/abccc38-10241424/b4a-h3-fullopt-prof-base/frames/audio.wav"
+    },
+    "request": {
+      "attention": "sol-attn Rtx",
+      "height": 480,
+      "num_frames": 124,
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "prompt_set": null,
+      "seconds": 5,
+      "seed": 1024,
+      "techniques": {
+        "plan": [
+          "bf16_linears (transform/Load)",
+          "sol_attn [rtx] (dense steps 0-9, dense layers 0-1, tau 1, sink text, thresh diag)",
+          "teacache (threshold 0.1, retain 5, cooldown 1, coefficients [1.0, 0.0])"
+        ],
+        "profile": "h3/rtx5090_fullopt",
+        "settings": [
+          {
+            "env_overrides": true,
+            "name": "FASTVIDEO_H3_QUANT",
+            "source": "bf16_linears",
+            "value": "off"
+          }
+        ],
+        "sources": [
+          {
+            "from": "profile",
+            "seam": "attention_backend"
+          },
+          {
+            "from": "profile",
+            "seam": "step_output"
+          }
+        ]
+      },
+      "text_cache": null,
+      "text_weights": null,
+      "video_vae": "official",
+      "warm": false,
+      "width": 832
+    },
+    "stage_memory": {
+      "dit_residency": "resident",
+      "stages": [
+        {
+          "end_used_gib": 52.688895512372255,
+          "peak_reserved_gib": 53.21875,
+          "peak_used_gib": 52.94765240326524,
+          "stage": "text"
+        },
+        {
+          "end_used_gib": 52.68935613706708,
+          "peak_reserved_gib": 53.21875,
+          "peak_used_gib": 52.694423008710146,
+          "stage": "refine"
+        },
+        {
+          "end_used_gib": 52.69410543516278,
+          "peak_reserved_gib": 56.28125,
+          "peak_used_gib": 55.01390263065696,
+          "stage": "denoise"
+        },
+        {
+          "end_used_gib": 52.776970001868904,
+          "peak_reserved_gib": 53.0625,
+          "peak_used_gib": 52.908622357062995,
+          "stage": "audio_decode"
+        },
+        {
+          "end_used_gib": 52.78213057201356,
+          "peak_reserved_gib": 53.96875,
+          "peak_used_gib": 53.577034207992256,
+          "stage": "video_decode"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 489.745568628,
+  "env": {
+    "FASTVIDEO_H3_QUANT": "mxfp8"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "h3",
+  "status": "pass"
+}

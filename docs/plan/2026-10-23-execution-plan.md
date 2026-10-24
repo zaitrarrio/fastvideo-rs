@@ -831,3 +831,19 @@ ran (pod id, $/hr), result, cost.
   comparison family and the TeaCache4Wan2.1 f32 accumulator pinned (five
   comparison / precision mutations now caught); `dit_cfg_easy` without
   `expect`; `Forced` enum, `WrongRefresh`; docs.
+
+- 2026-10-24 14:24Z, coordinator: B4a GPU gate, runtime image
+  `sha-abccc38` (the PR head) against main `sha-e93e357` (pre-B4a step
+  caches), three single-cell RTX PRO 6000 pods in EU-RO-1 with
+  `bz0ofkfx45` (`FV_B4A_CELLS=<cell>`): b4a-h3-fullopt-env, b4a-h3-fullopt-prof
+  and b4a-h3-4step-tea all `compare-clips --off-identity` pass, 124 of 124
+  frame digests equal; TeaCache reused 35 steps in both arms of each
+  fullopt cell and 2 forwards in both arms of the 4-step cell (the 4-step
+  fixture's threshold 4.0 does reuse), and the cache evidence lines
+  (`h3 teacache …`, `fuse step cache`) are identical between arms (49, 49
+  and 5 lines). The pods' fetch takes only JSON and stdout/stderr, so the
+  cells' own `verdict.json` / `cache-evidence.log` stayed on the pods; the
+  coordinator recomputed both from the fetched stderr
+  (`<cell>-<arm>/cache-evidence.txt`, `<cell>.evidence.diff`, empty).
+  About 35 GPU-minutes, ~$1.45. Evidence:
+  `artifacts/runpod/b4a/abccc38-{10241423,10241424,10241425}/`.
