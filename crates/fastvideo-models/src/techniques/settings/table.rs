@@ -27,6 +27,9 @@ pub enum Reader {
     Env,
     /// Declared (a parser and a `const` name exist) but nothing reads it yet.
     Reserved,
+    /// No longer read: its reader was retired, and only a message that
+    /// refuses the old usage still names it.
+    Retired,
 }
 
 /// The value's type and parse rule.
@@ -482,8 +485,8 @@ mod rows {
             "SANA-Video merged QKV projection."),
         row("FASTVIDEO_SAVE_MP4", Env, Text, "`1` or `true` (any case, not trimmed)", Value("0"), Harness, "io", Request,
             "Mux frames with ffmpeg."),
-        row("FASTVIDEO_SDPA", Layered, Keyword, "", Value("dense"), Runtime, "attention_backend", Process,
-            "Wan self-attention backend."),
+        row("FASTVIDEO_SDPA", Layered, Keyword, "`dense` (default), `cublas` or `flash`; `host` and `sparse` are retired and refused", Value("dense"), Runtime, "attention_backend", Process,
+            "Dense attention backend for every family (`rt::sdpa_rule`): the dense rule's pick, or a forced `cublas` / `flash` route."),
         row("FASTVIDEO_SDPA_AUTO", Layered, Keyword, "", Value("rule"), Runtime, "kernel_choice", Process,
             "How the dense attention backend is chosen."),
         row("FASTVIDEO_SDPA_CHUNK", Env, Text, "a `usize` (not trimmed), at least 64", Computed("by device"), Runtime, "memory", Process,
@@ -560,8 +563,8 @@ mod rows {
             "`v1` runs the first VSA top-k kernel."),
         row("FASTVIDEO_VSA_UNION_LOG", Layered, Flag, "", Value("0"), H3, "debug", Call,
             "Log the VSA block-union statistics."),
-        row("FASTVIDEO_VSA_WINDOW", Layered, Usize, "", Value("128"), Runtime, "attention", Call,
-            "Masked-attention window of the VSA fallback."),
+        row("FASTVIDEO_VSA_WINDOW", Retired, Text, "not read", Unset, Runtime, "attention", Call,
+            "Retired with the host block-sparse prototype (`FASTVIDEO_SDPA=sparse`, plan B5): not read. `FASTVIDEO_SDPA=sparse` is refused, and the refusal names this variable."),
         row("FASTVIDEO_WAN_AUDIO", Env, Text, "`mmaudio` or `1` (trimmed)", Unset, MmAudio, "audio", Request,
             "MMAudio soundtrack for Wan clips."),
         row("FASTVIDEO_WAN_AUDIO_CFG", Env, Text, "parsed as the preset's number (not trimmed); unparsable = default", Computed("the MMAudio preset's"), MmAudio, "audio", Request,

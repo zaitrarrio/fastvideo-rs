@@ -673,9 +673,14 @@ const RUNTIME_FAMILY_ROWS: &[(&str, &[&str], &str)] = &[
         "rt::attn_fp4::p_single: h3/pipeline.rs vsa_fp4_choice",
     ),
     (
+        "FASTVIDEO_H3_VAE_SDPA",
+        &["h3"],
+        "rt::sdpa_rule::h3_vae_kernel: the H3 ViT decoder's attention (h3/vae.rs)",
+    ),
+    (
         "FASTVIDEO_WAN_CAUSAL_FLASH",
         &["wan"],
-        "rt::nn::causal_flash_enabled: the causal Wan attention (sdpa_block_causal, sdpa_kv_window)",
+        "rt::sdpa_rule::causal_flash_enabled (Probe::causal_flash): the block-causal and KV-window plans, which only causal Wan builds (wan/transformer.rs)",
     ),
     (
         "FASTVIDEO_WAN_GRAPH",

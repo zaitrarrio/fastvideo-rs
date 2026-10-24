@@ -438,8 +438,8 @@ layered read (the typed getters, `settings::var` / `is_set`, a `Source`'s
 family's spec does not declare it. A runtime file's read must be declared by
 the Wan, H3 and LTX-2 specs alike, except a reviewed family row the runtime
 reads on behalf of some of them (`RUNTIME_FAMILY_ROWS`, with the caller that
-reaches it: `FASTVIDEO_H3_QUANT`, `_H3_AFFINE`, `_H3_VSA_FP4`, `_H3_VSA_FP4_P`
-for H3; `FASTVIDEO_WAN_QUANT`, `_WAN_GRAPH`, `_WAN_CAUSAL_FLASH` for Wan;
+reaches it: `FASTVIDEO_H3_QUANT`, `_H3_AFFINE`, `_H3_VSA_FP4`, `_H3_VSA_FP4_P`,
+`_H3_VAE_SDPA` for H3; `FASTVIDEO_WAN_QUANT`, `_WAN_GRAPH`, `_WAN_CAUSAL_FLASH` for Wan;
 `FASTVIDEO_WAN_GRAPH_CUBLAS_WS_MIB` for Wan and H3, whose step graphs open a
 `GraphStream`, so `h3_spec` lists it in `extra_settings`). At run time the
 same reads come from the load's snapshot. The attention files are plan B5's;
@@ -452,6 +452,20 @@ Rule 4 of `workspace_check` (a read agrees with its row) now also matches a
 `Source`'s methods (`settings.bool_flag(..)`, `.var(..)`, `.env_var(..)`, the
 snapshot reads in the loaders), so the literal defaults and readers of the
 moved reads stay checked.
+
+### After plan B5
+
+B5 (#161) moved the dense-attention reads into `rt/sdpa_rule.rs` and
+`rt/sdpa.rs` (`FASTVIDEO_SDPA`, `_SDPA_AUTO`, `_WAN_CAUSAL_FLASH`,
+`_H3_VAE_SDPA`, `_SP_WORLD`, the `[kernels] dense_attention` choice); they
+stay per-call / once-per-process reads where B5 put them, and the runtime
+scan covers the new files. The list follows it: `FASTVIDEO_SDPA` chooses the
+dense backend for every family (`host` and `sparse` are retired and
+refused), and `FASTVIDEO_VSA_WINDOW` is no longer read. A new reader kind,
+`Reader::Retired`, keeps such a row (the refusal message still names it, so
+the name scan needs it) and shows it as "retired (not read)" in
+`docs/scope.md`. The counts above become 111 `Layered`, 108 `Env`, 2
+`Reserved`, 1 `Retired`.
 
 ### Not in this change
 
