@@ -7,12 +7,14 @@
 //! 2. each file resolves against the family manifests: its variant exists in
 //!    the family it names, with the same tier and profile, and its
 //!    `registry_name` (and `@rev`) is the one the family file publishes it as;
-//! 3. a `[last_validated].commit`, when present, names a commit of this
-//!    repository (`git cat-file -e`), when the tree is a git checkout.
+//! 3. a `[last_validated].commit`, when present, names exactly one commit of
+//!    this repository (`git rev-parse --verify --quiet <c>^{commit}`; an
+//!    ambiguous short sha is its own failure), when the tree is a git checkout.
 //!
 //! The table is the validation age of every variant: days since
 //! `last_validated.date`, and commits since `last_validated.commit` when git
-//! can say. Missing validation is a warning, never a failure (no gold file is
+//! can say, marked when that commit is not an ancestor of `HEAD`
+//! (`git merge-base --is-ancestor`). Missing validation is a warning, never a failure (no gold file is
 //! validated yet); `--max-age-days` turns an over-age validated variant into
 //! a failure.
 
@@ -50,13 +52,26 @@ pub fn day_number(date: &str) -> Result<i64, String> {
     ))
 }
 
+/// What a commit name resolves to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lookup {
+    /// Exactly one commit.
+    Found,
+    /// No commit (no object, or not a commit).
+    Missing,
+    /// A short sha that more than one object starts with.
+    Ambiguous,
+}
+
 /// What the check asks of git; [`GitCli`] in the binary, a fake in tests.
 pub trait Git {
-    /// Whether `commit` names a commit object of the repository.
-    fn commit_exists(&self, commit: &str) -> Result<bool, String>;
+    /// What `commit` names in the repository.
+    fn lookup(&self, commit: &str) -> Result<Lookup, String>;
     /// Commits on `HEAD` since `commit` (`git rev-list --count <c>..HEAD`),
     /// when git can say (a shallow clone may not).
     fn commits_since(&self, commit: &str) -> Option<u64>;
+    /// Whether `commit` is an ancestor of `HEAD`, when git can say.
+    fn is_ancestor(&self, commit: &str) -> Option<bool>;
 }
 
 /// `git` as a process, in one work tree.
@@ -94,15 +109,47 @@ impl GitCli {
 }
 
 impl Git for GitCli {
-    fn commit_exists(&self, commit: &str) -> Result<bool, String> {
+    fn lookup(&self, commit: &str) -> Result<Lookup, String> {
         let st = self
             .git()
-            .args(["cat-file", "-e", &format!("{commit}^{{commit}}")])
+            .args(["rev-parse", "--verify", "--quiet"])
+            .arg(format!("{commit}^{{commit}}"))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
-            .map_err(|e| format!("git cat-file: {e}"))?;
-        Ok(st.success())
+            .map_err(|e| format!("git rev-parse: {e}"))?;
+        if st.success() {
+            return Ok(Lookup::Found);
+        }
+        // Not resolved: an ambiguous prefix, or nothing.
+        let out = self
+            .git()
+            .arg("rev-parse")
+            .arg(format!("--disambiguate={commit}"))
+            .stderr(Stdio::null())
+            .output()
+            .map_err(|e| format!("git rev-parse: {e}"))?;
+        let n = String::from_utf8_lossy(&out.stdout).lines().count();
+        Ok(if n > 1 {
+            Lookup::Ambiguous
+        } else {
+            Lookup::Missing
+        })
+    }
+
+    fn is_ancestor(&self, commit: &str) -> Option<bool> {
+        let st = self
+            .git()
+            .args(["merge-base", "--is-ancestor", commit, "HEAD"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .ok()?;
+        match st.code() {
+            Some(0) => Some(true),
+            Some(1) => Some(false),
+            _ => None,
+        }
     }
 
     fn commits_since(&self, commit: &str) -> Option<u64> {
@@ -124,6 +171,7 @@ impl Git for GitCli {
 pub enum CommitState {
     Found,
     Missing,
+    Ambiguous,
     /// Not checked, and why (no git checkout).
     NotChecked(String),
 }
@@ -137,6 +185,8 @@ pub struct Validation {
     pub age_days: i64,
     pub commit_state: CommitState,
     pub commits_since: Option<u64>,
+    /// Whether the commit is an ancestor of `HEAD`, when git can say.
+    pub ancestor: Option<bool>,
 }
 
 /// One row of the age table.
@@ -198,10 +248,14 @@ impl CheckReport {
                     match &v.commit_state {
                         CommitState::Found => format!("`{}`", v.commit),
                         CommitState::Missing => format!("`{}` (missing)", v.commit),
+                        CommitState::Ambiguous => format!("`{}` (ambiguous)", v.commit),
                         CommitState::NotChecked(_) => format!("`{}` (not checked)", v.commit),
                     },
-                    v.commits_since
-                        .map_or_else(|| "-".to_owned(), |n| n.to_string()),
+                    match (v.commits_since, v.ancestor) {
+                        (None, _) => "-".to_owned(),
+                        (Some(n), Some(false)) => format!("{n} (not an ancestor of HEAD)"),
+                        (Some(n), _) => n.to_string(),
+                    },
                 ),
                 None => ("never".into(), "-".into(), "-".into(), "-".into()),
             };
@@ -339,14 +393,27 @@ pub fn check(
         let validation = match (&lv.commit, &lv.date) {
             (Some(commit), Some(date)) => {
                 let age_days = today_n - day_number(date)?;
-                let (commit_state, commits_since) = match &git {
-                    Ok(git) => match git.commit_exists(commit) {
-                        Ok(true) => (CommitState::Found, git.commits_since(commit)),
-                        Ok(false) => (CommitState::Missing, None),
-                        Err(e) => (CommitState::NotChecked(e), None),
+                let (commit_state, commits_since, ancestor) = match &git {
+                    Ok(git) => match git.lookup(commit) {
+                        Ok(Lookup::Found) => (
+                            CommitState::Found,
+                            git.commits_since(commit),
+                            git.is_ancestor(commit),
+                        ),
+                        Ok(Lookup::Missing) => (CommitState::Missing, None, None),
+                        Ok(Lookup::Ambiguous) => (CommitState::Ambiguous, None, None),
+                        Err(e) => (CommitState::NotChecked(e), None, None),
                     },
-                    Err(why) => (CommitState::NotChecked(why.clone()), None),
+                    Err(why) => (CommitState::NotChecked(why.clone()), None, None),
                 };
+                if commit_state == CommitState::Ambiguous {
+                    failed = true;
+                    status.push("commit ambiguous".into());
+                    rep.errors.push(format!(
+                        "`{}`: last_validated.commit `{commit}` is an ambiguous short sha here: write more digits",
+                        g.model.variant
+                    ));
+                }
                 if commit_state == CommitState::Missing {
                     failed = true;
                     status.push("commit missing".into());
@@ -379,6 +446,7 @@ pub fn check(
                     age_days,
                     commit_state,
                     commits_since,
+                    ancestor,
                 })
             }
             _ => {
@@ -556,11 +624,18 @@ why = "x"
 
     struct FakeGit(&'static [&'static str]);
     impl Git for FakeGit {
-        fn commit_exists(&self, c: &str) -> Result<bool, String> {
-            Ok(self.0.contains(&c))
+        fn lookup(&self, c: &str) -> Result<Lookup, String> {
+            Ok(match self.0.iter().filter(|x| x.starts_with(c)).count() {
+                0 => Lookup::Missing,
+                1 => Lookup::Found,
+                _ => Lookup::Ambiguous,
+            })
         }
         fn commits_since(&self, _: &str) -> Option<u64> {
             Some(3)
+        }
+        fn is_ancestor(&self, c: &str) -> Option<bool> {
+            Some(!c.starts_with("bad"))
         }
     }
 
@@ -599,8 +674,36 @@ why = "x"
         let r = check(&[gold(lv)], &fams(FAMILY), Ok(&found), "2026-10-24", None).unwrap();
         assert!(r.ok(), "{:?}", r.errors);
         let v = r.rows[0].validation.as_ref().unwrap();
-        assert_eq!((v.age_days, v.commits_since), (10, Some(3)));
+        assert_eq!(
+            (v.age_days, v.commits_since, v.ancestor),
+            (10, Some(3), Some(true))
+        );
         assert_eq!(r.rows[0].status, "ok");
+
+        // An ambiguous short sha fails on its own.
+        let two = FakeGit(&["abcdef1aaa", "abcdef1bbb"]);
+        let r = check(&[gold(lv)], &fams(FAMILY), Ok(&two), "2026-10-24", None).unwrap();
+        assert!(!r.ok());
+        assert_eq!(r.rows[0].status, "FAIL: commit ambiguous");
+        assert!(r.markdown().contains("`abcdef1` (ambiguous)"));
+
+        // Found but not an ancestor of HEAD: counted and marked, not failed.
+        let lv_branch = lv.replace("abcdef1", "bad0001");
+        let side = FakeGit(&["bad0001"]);
+        let r = check(
+            &[gold(&lv_branch)],
+            &fams(FAMILY),
+            Ok(&side),
+            "2026-10-24",
+            None,
+        )
+        .unwrap();
+        assert!(r.ok(), "{:?}", r.errors);
+        assert!(
+            r.markdown().contains("| 3 (not an ancestor of HEAD) |"),
+            "{}",
+            r.markdown()
+        );
 
         let missing = FakeGit(&[]);
         let r = check(&[gold(lv)], &fams(FAMILY), Ok(&missing), "2026-10-24", None).unwrap();

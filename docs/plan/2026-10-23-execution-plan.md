@@ -1058,3 +1058,10 @@ ran (pod id, $/hr), result, cost.
   about 11 run on the EU volume), `gold-check.yml` and `gold-run.yml`.
   Build pod only; no GPU. Open: the owner's `RUNPOD_API_KEY` secret for
   `gold-run.yml`, and the GPU gold runs (about $2.50 for one pass).
+- 2026-10-24 21:20Z: #181 review fixes (coordinator's review): no pod
+  outlives a cancelled `gold-run` (`pod down --from-ledger` from fv-deploy's
+  create line; every fv-lab and `runpod-http.sh run` pod deletes itself at its
+  wall cap), `cells` checked as arms, the key step-scoped and the actions
+  pinned, a `gold-runs` environment recommended (owner), a same-named arm of
+  another tier never counts as a gold measurement, `git rev-parse --verify`
+  with ambiguity and ancestry. Build pod only.

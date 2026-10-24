@@ -5,8 +5,11 @@
 //! `fv-lab pod fetch` (or `runpod-http.sh`) writes it, one arm directory per
 //! run directory (`summary.json`, and `benchmark.json` for a CLI generation or
 //! `gpucheck-out/engine.json` for a serve-engine job), plus `pod.json`. A
-//! gold variant is measured by the arm of the same name (the `gold` tier
-//! names its arms by variant id, `crate::goldcell`). Everything the table
+//! gold variant is measured by the arm of the same name, and only when that
+//! arm is its gold cell: the run set is the `gold` tier's (which names its arms
+//! by variant id, `crate::goldcell`), or the arm's engine report names the
+//! variant as the model it ran (`context.model.id`). A CLI arm of another tier
+//! that happens to share the name is not the variant. Everything the table
 //! shows is read from those files or the gold files: a variant without an arm,
 //! with a skipped or failed arm, or with no timing record is "not measured",
 //! and no number is derived but `$/clip` (the run's own `usd_per_hr` times its
@@ -22,6 +25,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::gold::Gold;
+use crate::goldcell::GOLD_TIER;
 use crate::goldcheck::day_number;
 
 /// The committed table.
@@ -50,6 +54,8 @@ pub struct Metrics {
     pub decode_s: Option<f64>,
     pub load_s: Option<f64>,
     pub peak_gib: Option<f64>,
+    /// The catalog model an engine report ran (`context.model.id`).
+    pub model_id: Option<String>,
 }
 
 /// One arm directory of a run set.
@@ -111,6 +117,7 @@ fn benchmark_metrics(b: &Value) -> Metrics {
         decode_s: f(b, "/decode_s"),
         load_s: f(b, "/load_s"),
         peak_gib: peak_mib.map(|m| m / 1024.0),
+        model_id: None,
     }
 }
 
@@ -141,9 +148,16 @@ fn engine_metrics(r: &Value) -> Metrics {
         wall_s: t("/submit_to_mp4_s"),
         text_s: t("/metrics/stage_durations/text"),
         denoise_s: t("/metrics/stage_durations/denoise"),
-        decode_s: t("/metrics/stage_durations/video_decode"),
+        // The decode through the finished MP4, as benchmark.json's `decode_s`
+        // (the encode included): the engine reports its encode on its own.
+        decode_s: t("/metrics/stage_durations/video_decode")
+            .map(|d| d + t("/metrics/stage_durations/encode").unwrap_or(0.0)),
         load_s: t("/load_s"),
         peak_gib: t("/metrics/peak_memory_mb").map(|m| m / 1024.0),
+        model_id: r
+            .pointer("/context/model/id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
     }
 }
 
@@ -226,6 +240,11 @@ impl RunSet {
     }
 }
 
+/// Text for a Markdown table cell: `|` escaped, line breaks flattened.
+fn cell_text(s: &str) -> String {
+    s.replace('|', "\\|").replace(['\n', '\r'], " ")
+}
+
 fn opt(v: Option<f64>, digits: usize) -> String {
     v.map_or_else(|| "-".to_owned(), |x| format!("{x:.digits$}"))
 }
@@ -284,7 +303,7 @@ pub fn render(golds: &[Gold], runs: Option<&RunSet>) -> String {
         None => s.push_str(&format!("{RUN_SET_PREFIX}{NO_RUN_SET}\n\n")),
     }
     s.push_str(
-        "One row per gold file (`lab/gold/<variant>.toml`, ADR-0009). A variant is measured by the arm of the same name in the run set (`fv-lab run gold --all` names its arms by variant id); every value is read from that arm's files (`summary.json`, `benchmark.json` or `gpucheck-out/engine.json`) and the run's `pod.json`, and `$/clip` is the run's own `usd_per_hr` times its own wall time. A variant without an arm, with a skipped or failed arm, or without a timing record is not measured: nothing is filled in from elsewhere. Wall time `gen` is one warm `generate()` (text, denoise, decode, MP4; load excluded), `job` a serve-engine job from submit to MP4. `vs gold` compares the measured canvas, frames and steps with the gold file's `[workload]`. Design: docs/adr/0023-lab-report-and-ci-bridge.md.\n\n",
+        "One row per gold file (`lab/gold/<variant>.toml`, ADR-0009). A variant is measured by the arm of the same name in the run set (`fv-lab run gold --all` names its arms by variant id); every value is read from that arm's files (`summary.json`, `benchmark.json` or `gpucheck-out/engine.json`) and the run's `pod.json`, and `$/clip` is the run's own `usd_per_hr` times its own wall time. A variant without an arm, with a skipped or failed arm, or without a timing record is not measured: nothing is filled in from elsewhere. A variant counts as measured only by its gold cell: an arm of a `gold` run set, or an arm whose engine report ran that variant; a same-named arm of another tier is not. Wall time `gen` is one warm `generate()` (text, denoise, decode, MP4; load excluded), `job` a serve-engine job from submit to MP4; `decode s` is the decode through the finished MP4 in both (for `job`, the engine's `video_decode` plus its `encode`). `vs gold` compares the measured canvas, frames and steps with the gold file's `[workload]`. Design: docs/adr/0023-lab-report-and-ci-bridge.md.\n\n",
     );
     match runs {
         Some(r) => {
@@ -321,6 +340,7 @@ pub fn render(golds: &[Gold], runs: Option<&RunSet>) -> String {
             let lv = last_validated(g, run_day);
             let arm = runs.and_then(|r| r.arms.get(v.as_str()));
             let not = |why: String| {
+                let why = cell_text(&why);
                 format!("| `{v}` | {tier} | not measured ({why}) | - | - | - | - | - | - | - | - | - | - | {lv} |\n")
             };
             let row = match (runs, arm) {
@@ -334,12 +354,23 @@ pub fn render(golds: &[Gold], runs: Option<&RunSet>) -> String {
                     None => "no exit recorded".into(),
                 }),
                 (Some(r), Some(a)) => match &a.metrics {
+                    Some(m) if r.tier != GOLD_TIER && m.model_id.as_deref() != Some(v.as_str()) => {
+                        not(format!(
+                            "arm `{v}` of tier `{}` is not its gold cell",
+                            r.tier
+                        ))
+                    }
+                    None if r.tier != GOLD_TIER => not(format!(
+                        "arm `{v}` of tier `{}` is not its gold cell",
+                        r.tier
+                    )),
                     Some(m) if m.wall_s.is_some() => {
-                        let gpu = m
-                            .gpu
-                            .clone()
-                            .or_else(|| r.pod_gpu.clone())
-                            .unwrap_or_else(|| "-".into());
+                        let gpu = cell_text(
+                            &m.gpu
+                                .clone()
+                                .or_else(|| r.pod_gpu.clone())
+                                .unwrap_or_else(|| "-".into()),
+                        );
                         let clip = r.usd_per_hr.zip(m.wall_s).map(|(p, w)| p * w / 3600.0);
                         format!(
                             "| `{v}` | {tier} | measured | {gpu} | {} | {} | {} {} | {} | {} | {} | {} | {} | {} | {lv} |\n",
@@ -455,6 +486,11 @@ mod tests {
             },
         );
         assert_eq!(r.date().as_deref(), Some("2026-10-24"));
+    }
+
+    #[test]
+    fn table_cells_escape_pipes() {
+        assert_eq!(cell_text("a|b\nc"), "a\\|b c");
     }
 
     #[test]

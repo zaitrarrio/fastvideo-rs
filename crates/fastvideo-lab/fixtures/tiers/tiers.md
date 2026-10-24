@@ -3,7 +3,7 @@
 
 Run set: `crates/fastvideo-lab/fixtures/tiers/runs/gold/1234567-1024120000-abcd`
 
-One row per gold file (`lab/gold/<variant>.toml`, ADR-0009). A variant is measured by the arm of the same name in the run set (`fv-lab run gold --all` names its arms by variant id); every value is read from that arm's files (`summary.json`, `benchmark.json` or `gpucheck-out/engine.json`) and the run's `pod.json`, and `$/clip` is the run's own `usd_per_hr` times its own wall time. A variant without an arm, with a skipped or failed arm, or without a timing record is not measured: nothing is filled in from elsewhere. Wall time `gen` is one warm `generate()` (text, denoise, decode, MP4; load excluded), `job` a serve-engine job from submit to MP4. `vs gold` compares the measured canvas, frames and steps with the gold file's `[workload]`. Design: docs/adr/0023-lab-report-and-ci-bridge.md.
+One row per gold file (`lab/gold/<variant>.toml`, ADR-0009). A variant is measured by the arm of the same name in the run set (`fv-lab run gold --all` names its arms by variant id); every value is read from that arm's files (`summary.json`, `benchmark.json` or `gpucheck-out/engine.json`) and the run's `pod.json`, and `$/clip` is the run's own `usd_per_hr` times its own wall time. A variant without an arm, with a skipped or failed arm, or without a timing record is not measured: nothing is filled in from elsewhere. A variant counts as measured only by its gold cell: an arm of a `gold` run set, or an arm whose engine report ran that variant; a same-named arm of another tier is not. Wall time `gen` is one warm `generate()` (text, denoise, decode, MP4; load excluded), `job` a serve-engine job from submit to MP4; `decode s` is the decode through the finished MP4 in both (for `job`, the engine's `video_decode` plus its `encode`). `vs gold` compares the measured canvas, frames and steps with the gold file's `[workload]`. Design: docs/adr/0023-lab-report-and-ci-bridge.md.
 
 Tier `gold`, tag `1234567-1024120000-abcd`, commit `1234567`, ended 2026-10-24; pod GPU NVIDIA RTX PRO 6000 Blackwell Server Edition, $2.49/hr.
 
@@ -12,7 +12,7 @@ Tier `gold`, tag `1234567-1024120000-abcd`, commit `1234567`, ended 2026-10-24; 
 | variant | tier | status | GPU | cell (WxHxframes) | vs gold | wall s | text s | denoise s | decode s | load s | peak GiB | $/clip | last validated |
 |---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|
 | `demo-h3-max` | max | not measured (skipped: weights incomplete) | - | - | - | - | - | - | - | - | - | - | never |
-| `demo-h3-turbo` | turbo | measured | NVIDIA RTX PRO 6000 Blackwell Server Edition | 832x480x124, 4 steps | same | 9.88 job | 0.22 | 6.50 | 2.71 | 182.1 | 60.0 | 0.00683 | 2026-10-14 `abcdef1`, 10 d before the run set |
+| `demo-h3-turbo` | turbo | measured | NVIDIA RTX PRO 6000 Blackwell Server Edition | 832x480x124, 4 steps | same | 9.88 job | 0.22 | 6.50 | 3.01 | 182.1 | 60.0 | 0.00683 | 2026-10-14 `abcdef1`, 10 d before the run set |
 
 ## ltx2
 

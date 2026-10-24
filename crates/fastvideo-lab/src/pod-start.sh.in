@@ -13,6 +13,17 @@
     fi
   done ) >/dev/null 2>&1 &
 set -u
+# The pod's own wall cap (FV_POD_CAP_S, docs/adr/0023-lab-report-and-ci-bridge.md §4):
+# @CAP_S@ s after the container starts it deletes itself with the pod-scoped key
+# Runpod injects, retrying each minute, whatever the driver's host did.
+if [ -n "${RUNPOD_API_KEY:-}" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then
+  ( sleep @CAP_S@
+    while :; do
+      echo "$(date -u +%FT%TZ) wall cap @CAP_S@ s: deleting pod $RUNPOD_POD_ID" >>/tmp/cap-watchdog.log
+      curl -fsS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID" >>/tmp/cap-watchdog.log 2>&1 && break
+      sleep 60
+    done ) >/dev/null 2>&1 &
+fi
 # All writes on the container disk: the weight volume is read-only for us
 # (some hosts have silently dropped data writes to it).
 SCRATCH=/fvscratch

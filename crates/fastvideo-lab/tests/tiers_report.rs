@@ -81,6 +81,26 @@ fn fixture_rows_say_what_was_and_was_not_measured() {
 }
 
 #[test]
+fn a_same_named_arm_of_another_tier_is_not_the_variant() {
+    // The same run set as another tier's: only the engine arm whose report
+    // ran the variant (`context.model.id`) still counts; the CLI arm does not.
+    let mut set = RunSet::load(&repo_root(), FIXTURE_RUNS).expect("fixture run set");
+    set.tier = "rtx6000".into();
+    let text = render(&fixture_golds(), Some(&set));
+    let row = |v: &str| {
+        text.lines()
+            .find(|l| l.starts_with(&format!("| `{v}` |")))
+            .unwrap_or_else(|| panic!("no row {v}"))
+            .to_owned()
+    };
+    assert!(row("demo-h3-turbo").contains("| measured |"));
+    assert!(row("demo-ltx-turbo")
+        .contains("not measured (arm `demo-ltx-turbo` of tier `rtx6000` is not its gold cell)"));
+    // The engine's decode is reported through the MP4: video_decode + encode.
+    assert!(row("demo-h3-turbo").contains("| 6.50 | 3.01 |"));
+}
+
+#[test]
 fn without_a_run_set_nothing_is_measured() {
     let text = render(&fixture_golds(), None);
     assert_eq!(run_set_of(&text).unwrap(), None);

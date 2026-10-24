@@ -103,7 +103,8 @@ RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family rtx6000 --yes
 
 RUNPOD_API_KEY=… ./fv-lab pod status <pod id>           # provider state, server, last log lines
 RUNPOD_API_KEY=… ./fv-lab pod fetch <pod id> --wait --down   # wait for DONE, fetch, delete
-RUNPOD_API_KEY=… ./fv-lab pod down <pod id>             # delete now
+RUNPOD_API_KEY=… ./fv-lab pod down <pod id>             # delete now (no pod record needed)
+RUNPOD_API_KEY=… ./fv-lab pod down --from-ledger        # every pod the ledger shows created and not deleted
 RUNPOD_API_KEY=… ./fv-lab pod reap [--yes]              # pods recorded here, past their cap + 10 min
 RUNPOD_API_KEY=… ./fv-lab pod reap --account [--yes]    # any fv-lab-<tier>-<sha7>-<MMDDHHMMSS>-<hex4> pod past its tier's cap
 
@@ -116,7 +117,10 @@ Options of `up`: `--cells a b` (only these arms), `--extra-env K=V …` (`FV_EXT
 has the name. Results land in `artifacts/runpod/<tier>/<tag>/` (the same place and files as
 `runpod-http.sh`, plus `pod.json`); the ledger, pod records and backstop logs in `artifacts/fv-lab/`. Run `up` from a
 host that outlives the tier's wall cap (4 h for `rtx6000`): the backstop process runs there. The pod also deletes
-itself after 10 idle GPU minutes (the start command's idle watchdog, with the pod-scoped key Runpod injects).
+itself after 10 idle GPU minutes (the start command's idle watchdog, with the pod-scoped key Runpod injects),
+and at the tier's wall cap after its container starts (the cap watchdog, ADR-0023 §4), whatever happens to that host.
+After an interrupted `up` (its pod record is only written once the pod is ready), `pod down --from-ledger` deletes
+what the ledger shows created and not deleted.
 
 `fetch` (and `up --wait`) fail (exit 1) unless the fetched `DONE` says `done <tag>` and `matrix.out` holds
 `matrix_exit=0`, and when the host's driver was too old; the files fetched so far are kept. `--down` and `up --wait`

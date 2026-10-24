@@ -1621,3 +1621,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0023-lab-report-and-ci-bridge.md §4
 - Verification: the workflow's first step; owner decision pending
+
+### FVID · 2026-10-24 · FVID-2026-10-24-lab-report-ci-bridge-review
+- Trigger: independent review of PR #181 (coordinator): a pod could leak on a cancelled `gold-run` (record written only after readiness, second signal exits without cleanup, backstop killed with the runner); the `cells` input passed flags; `RUNPOD_API_KEY` was job-wide; a same-named arm of another tier counted as a variant's measurement; the table step needed exactly one run dir; gold-check paths; `git cat-file` could not tell an ambiguous short sha; nits (decode column, orphan cells, `|` in reasons, re-runs spend)
+- Options: fix in this PR; record as follow-ups
+- Decision: (coordinator) fix in this PR. `pod down --from-ledger` deletes every `runpod-pod-created` id with no `-deleted` line (the ledger line is written right after the create), `pod down <id>` needs no record, and gold-run's always() step uses it; every fv-lab pod (and every `runpod-http.sh run` pod, in lockstep for the payload goldens) deletes itself at the tier's wall cap after its container starts; `pod up --cells` must name arms of the tier and the workflow checks each word; the key is step-level env of the Runpod steps, the actions pinned by commit read from their tags, a `gold-runs` environment named and recommended (main only, required reviewers); the report counts an arm only from a `gold` run set or an engine report of that variant; a unique per-run tag; `git rev-parse --verify`, an ambiguous sha fails, `merge-base --is-ancestor` marks non-ancestors; decode through the MP4 in both kinds; `gold cells --check` catches orphans and the tier list
+- Reason: the guards must hold before the owner adds the secret
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0023-lab-report-and-ci-bridge.md §1, §2, §4
+- Verification: `pod::tests::{every_pod_deletes_itself_at_its_wall_cap, the_ledger_lists_pods_created_and_not_deleted, cells_must_be_arms_of_the_tier}`, `tests/fv_lab_bin.rs` (`pod down --from-ledger`, `pod up --cells`), `tests/payload_golden.rs` against the regenerated `runpod-http-*.json`, `goldcheck` and `goldcell::drift` unit tests, `tests/tiers_report.rs`; gates on the build pod

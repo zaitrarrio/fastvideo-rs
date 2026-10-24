@@ -26,9 +26,12 @@
 # The pod's start command runs everything; results are published read-only on
 # port 8000 (python http.server over /workspace/runs) and fetched through
 # https://<pod>-8000.proxy.runpod.net. The pod is always deleted at the end,
-# and a wall-clock cap (FV_POD_CAP_S, default 4h) deletes it regardless; the
-# pod also deletes itself after FV_IDLE_GPU_MIN (default 10) minutes at 0 %
-# GPU once it has used the GPU (idle_watchdog).
+# and a wall-clock cap (FV_POD_CAP_S, default 4h) deletes it regardless: the
+# driver's backstop, and the pod's own cap watchdog (start_cmd: FV_POD_CAP_S
+# after the container starts, the pod deletes itself with the pod-scoped key,
+# so a dead driver cannot leave it running); the pod also deletes itself after
+# FV_IDLE_GPU_MIN (default 10) minutes at 0 % GPU once it has used the GPU
+# (idle_watchdog).
 #
 # RUNPOD_VOLUME_NAME may name several weight volumes; the one whose DC has
 # stock for the GPU is used. RUNPOD_NO_VOLUME=1 mounts none and takes any
@@ -160,6 +163,17 @@ start_cmd() {
   idle_watchdog
   cat <<EOF
 set -u
+# The pod's own wall cap (FV_POD_CAP_S, docs/adr/0023-lab-report-and-ci-bridge.md §4):
+# $CAP_S s after the container starts it deletes itself with the pod-scoped key
+# Runpod injects, retrying each minute, whatever the driver's host did.
+if [ -n "\${RUNPOD_API_KEY:-}" ] && [ -n "\${RUNPOD_POD_ID:-}" ]; then
+  ( sleep $CAP_S
+    while :; do
+      echo "\$(date -u +%FT%TZ) wall cap $CAP_S s: deleting pod \$RUNPOD_POD_ID" >>/tmp/cap-watchdog.log
+      curl -fsS -X DELETE -H "Authorization: Bearer \$RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/\$RUNPOD_POD_ID" >>/tmp/cap-watchdog.log 2>&1 && break
+      sleep 60
+    done ) >/dev/null 2>&1 &
+fi
 # All writes on the container disk: the weight volume is read-only for us
 # (some hosts have silently dropped data writes to it).
 SCRATCH=/fvscratch
