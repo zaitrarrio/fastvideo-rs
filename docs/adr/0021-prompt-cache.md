@@ -83,13 +83,22 @@ and the arguments:
 | key form | `[u8; 32]`, file stem in hex | `[u8; 32]`, hex | hex `String` (also reported as `text.key`) |
 
 Precision is in the key only where it was: H3's FP8-rows suffix, LTX's
-kind string. Two pre-existing gaps are carried over unchanged, because
-closing them changes keys (decision log, follow-up):
+kind string. The keys leave out several things the conditioning depends
+on. All of these gaps predate B4c and are carried over unchanged: closing
+any of them changes keys, so they are the follow-up B4c2 (decision log
+`FVID-2026-10-24-prompt-cache-gaps-kept`), not part of this unification.
+Line references are to this branch.
 
-- LTX `FASTVIDEO_LTX2_TEXT_FP8=1` (weight-only FP8 Gemma, "changes the
-  conditioning numerics") is not in the LTX key: an entry written by an FP8
-  run is served to a bf16 run of the same prompt and weights.
-- Wan's UMT5 precision is not in the Wan key.
+#### Follow-ups: key gaps carried over
+
+| # | gap | where | effect | severity |
+|---|---|---|---|---|
+| 1 | LTX FP8 Gemma (`FASTVIDEO_LTX2_TEXT_FP8=1`, weight-only FP8 rows, "changes the conditioning numerics") is not in the key: neither the kind string nor the Gemma identity, which is taken from `text_encoder/`, not from the `text_encoder_fp8/` tree that is read | read at `ltx2/pipeline.rs:2274`; key `:2385-2441` (`TextEncoder::key`), kind `:2343-2355` (`text_encoder_kind`); FP8 tree `:2282` (`open_gemma`) | an entry written by an FP8 run is served to a bf16 run of the same prompt and weights (and the reverse): **silent wrong output** | medium |
+| 2 | H3 recovered-8B identity is a constant, `sha256("recovered-8b-tap24")`: the 8B base weights, the `ara.safetensors` LoRA and `conditioning_adapter.safetensors` are not fingerprinted | `h3/text_cache.rs:120` (`recovered_identity`), used at `h3/text.rs:388`; weights read at `h3/recovered_8b.rs:89-107` | a changed LoRA or adapter (or base) under the same tokenizer serves stale conditioning: **silent wrong output** | medium |
+| 3 | Wan UMT5 GEMM compute type is not in the key: `FASTVIDEO_BF16` (`rt/bf16_gemm.rs:14`), `FASTVIDEO_TF32` (`rt/hopper.rs:16`) and the GPU architecture choose the GEMM path | key `wan/pipeline.rs:732` (`text_cache_key`) | entries from one compute type served to another: small numeric differences | low |
+| 4 | H3 and LTX: `FASTVIDEO_BF16_ACT` (`rt/tensor.rs:66-67`), the global GEMM compute type (`FASTVIDEO_BF16`, `FASTVIDEO_TF32`) and the GPU architecture are not in the keys | H3 key `h3/text.rs:333`, LTX key `ltx2/pipeline.rs:2385` | small numeric differences between a hit and a fresh encode under other settings or on another card (a cache directory shared across cards) | low |
+| 5 | LTX resident vs streamed Gemma share a key | `ltx2/pipeline.rs:2509-2524` (`compute`: `HiddenStack::encode_resident` vs `HiddenStack::encode`) | expected to be equal, **not proven**: if they differ, a hit replays whichever ran first | low until measured |
+| 6 | The pre-quantised FP8 tree and quantise-at-load share a key (H3: the `/fp8-rows` identity is computed from `text_encoder/` whether the rows come from the tree or are quantised at load; LTX: as row 1) | H3 `h3/text.rs:291` (`open_tree`) and `:331`; `llm/prequant.rs:150` (`open_tree`) | correct only while the two paths are bit-equal (the tree is meant to be the load-time quantisation, written once) | low while bit-equal |
 
 ### On-disk format
 
@@ -235,7 +244,15 @@ shared `Outcome`, `off`) keep their strings.
   against pr for each pass, each pass's `frames.sha256.json`; the cell
   fails unless every miss pass reports `"text_cache": "miss"` and every hit
   pass `"hit"` (`benchmark.json`) and the two arms' cache directories hold
-  the same entries byte for byte. Cells: `b4c-h3-4stepvsa` (FastH3 4-step
+  the same entries byte for byte; on H3 also unless the miss passes'
+  `"text_encoder"` contains `fp8` and the hit passes' is `cache` (so a card
+  where `auto` streams bf16 cannot pass without the `/fp8-rows` identity);
+  and unless both base-vs-PR compares passed `--off-identity` (not skipped),
+  every pass exited 0 and no temporary file is left. A cell named in
+  `FV_B4C_CELLS` without a passing verdict fails the family
+  (`b4c.verdict.json`). The verdict is `scripts/gpu/b4-verdict.sh`, held to
+  stub run trees by `scripts/gpu/tests/b4-verdict.test.sh`.
+  Cells: `b4c-h3-4stepvsa` (FastH3 4-step
   VSA, 480p / 5 s, auto encoder: resident FP8 on an RTX PRO 6000) and
   `b4c-ltx25-512p` (LTX-2.5 two-stage, 512p / 49 frames, streamed Gemma).
   Wan has no tree on the EU volume; its cache is the H3 format with its own
@@ -249,5 +266,5 @@ shared `Outcome`, `off`) keep their strings.
   new named parameter with a fixture, never an edit of an existing format.
 - `legacy.rs` is test-only and frozen.
 - Follow-ups, each a key or behaviour change and so its own decision: the
-  LTX FP8-Gemma and Wan UMT5-precision key gaps; a size cap; per-thread
-  temporary names.
+  six key gaps in "Follow-ups: key gaps carried over" (B4c2, right after
+  this merges), a size cap, per-thread temporary names.

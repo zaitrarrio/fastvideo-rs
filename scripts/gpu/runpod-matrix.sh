@@ -41,6 +41,8 @@ unset FASTVIDEO_LTX2_WEIGHTS
 mkdir -p "$RUNS" "$SCRATCH/gpucheck-out/logs" "$SCRATCH/fv-libs"
 # shellcheck source=scripts/gpu/cuda-13.pins
 . "$(dirname "${BASH_SOURCE[0]}")/cuda-13.pins"
+# shellcheck source=scripts/gpu/b4-verdict.sh
+. "$(dirname "${BASH_SOURCE[0]}")/b4-verdict.sh"
 # cudarc looks for libcudnn.so (unversioned). The image ships the pinned SONAME.
 if [[ ! -e $SCRATCH/fv-libs/libcudnn.so ]]; then
   bash /opt/fastvideo-rs/scripts/gpu/remote.sh env >/tmp/fv-env.json 2>/tmp/fv-env.err || true
@@ -2106,8 +2108,11 @@ Audio: male speech, clear voice, quiet room"
     # fetch-baseline.sh) and this build with the same command line and
     # environment, then compare-clips --off-identity; run_cell writes each
     # arm's frames.sha256.json. Every arm encodes its prompt
-    # (--no-text-cache). A cell also fails (b4a-<cell>.verdict) when either
-    # arm reused no forward or the arms' cache evidence lines differ.
+    # (--no-text-cache). A cell fails (b4a-<cell>.verdict.json) when either
+    # arm did not exit 0 or reused no forward, the --off-identity compare did
+    # not pass (b4-verdict.sh b4_identical), or the arms' cache evidence
+    # lines differ; b4a.verdict.json fails when a cell named in
+    # FV_B4A_CELLS has no passing verdict.
     # Only H3 TeaCache: Wan / SANA / LingBot / Cosmos caches have no tree
     # on the EU volume (volumes.sh FV_EU_VOLUME_TREES), and LTX-2.5 FBCache
     # has no reachable path (fbcache::scope admits only dev guided stage 1,
@@ -2129,6 +2134,8 @@ Audio: male speech, clear voice, quiet room"
     export FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-900}"
     fx="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures"
     b4a_cells="${FV_B4A_CELLS:-b4a-h3-fullopt-env b4a-h3-fullopt-prof b4a-h3-4step-tea}"
+    # No verdict of an earlier run in this directory may stand in for this one.
+    [[ "$DRY_RUN" == 1 ]] || rm -f "$RUNS"/b4a-*.verdict.json "$RUNS/b4a.verdict.json"
     # b4a_evidence <cell>-<arm>: the step cache's lines of that arm's
     # stderr.log (what was installed, every H3 decision), without the
     # timestamp a log line starts with, into cache-evidence.log.
@@ -2150,9 +2157,15 @@ Audio: male speech, clear voice, quiet room"
       for arm in base pr; do
         bin="$BIN"
         [[ "$arm" == base ]] && bin="$BASE"
+        if [[ "$DRY_RUN" == 1 ]]; then
+          log "dry-run $cell-$arm: rm -rf $RUNS/$cell-$arm"
+        else
+          rm -rf "${RUNS:?}/$cell-$arm"
+        fi
         gated_cell "$cell-$arm" "$wcell" \
           env ${e[@]+"${e[@]}"} "$bin" "$@" "$RUNS/$cell-$arm/frames"
         [[ "$DRY_RUN" == 1 ]] && continue
+        b4_exit_ok "$cell-$arm" || { verdict=fail; why+=" $arm:exit"; }
         if [[ ! -f "$RUNS/$cell-$arm/stderr.log" ]]; then
           verdict=fail why+=" $arm:no-run"
           continue
@@ -2162,8 +2175,13 @@ Audio: male speech, clear voice, quiet room"
         log "[$cell-$arm] teacache reused forwards: ${reuses:-0}"
         (( ${reuses:-0} > 0 )) || { verdict=fail; why+=" $arm:no-reuse"; }
       done
+      [[ "$DRY_RUN" == 1 ]] || rm -f "$RUNS/compare/compare-clips-$cell-base--$cell-pr.json"
       compare_cells "$cell-base" "$cell-pr" --off-identity
-      [[ "$DRY_RUN" == 1 ]] && return 0
+      if [[ "$DRY_RUN" == 1 ]]; then
+        log "dry-run $cell: verdict also needs both arms exit 0 (summary.json) and the --off-identity compare passed"
+        return 0
+      fi
+      b4_identical "$cell-base" "$cell-pr" || { verdict=fail; why+=" not-identical"; }
       if [[ -f "$RUNS/$cell-base/cache-evidence.log" && -f "$RUNS/$cell-pr/cache-evidence.log" ]]; then
         if ! diff "$RUNS/$cell-base/cache-evidence.log" "$RUNS/$cell-pr/cache-evidence.log" \
           >"$RUNS/$cell.evidence.diff"; then
@@ -2192,6 +2210,13 @@ Audio: male speech, clear voice, quiet room"
     #    Unmeasured on a GPU before this family; the reuse assertion says.
     b4a_pair b4a-h3-4step-tea fasth3-4step-vsa - \
       "${h3_b4a[@]}" --techniques "$fx/b4a-h3-4step-teacache.toml" --clip-dir
+    # The family: every cell named in FV_B4A_CELLS must have passed.
+    if [[ "$DRY_RUN" == 1 ]]; then
+      log "dry-run b4a: family verdict b4_family_verdict b4a $b4a_cells -> $RUNS/b4a.verdict.json (a named cell without a passing verdict fails)"
+    else
+      # shellcheck disable=SC2086
+      log "$(b4_family_verdict b4a $b4a_cells)"
+    fi
     for f in "$RUNS"/compare/compare-clips-b4a-*.json; do
       [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"
     done
@@ -2208,9 +2233,13 @@ Audio: male speech, clear voice, quiet room"
     # the hit pass (run_cell writes each pass's frames.sha256.json), and the
     # two arms' cache directories must hold byte-identical entries under the
     # same names (so this build reads a cache the baseline wrote exactly as
-    # it reads its own). A cell fails (b4c-<cell>.verdict.json) when a pass's
-    # benchmark.json does not say "text_cache": "miss" / "hit" as planned,
-    # or the entries differ. pr-miss against pr-hit is compared too, for the
+    # it reads its own). The verdict (b4c-<cell>.verdict.json,
+    # b4-verdict.sh b4c_verdict) passes only when every pass exited 0, its
+    # benchmark.json says "text_cache": "miss" / "hit" as planned (H3: and
+    # "text_encoder" FP8 on the miss, "cache" on the hit), both base-vs-pr
+    # compares passed --off-identity, and both caches hold the same entries
+    # and no temporary file; b4c.verdict.json fails when a cell named in
+    # FV_B4C_CELLS has no passing verdict. pr-miss against pr-hit is compared too, for the
     # record only: on LTX a hit feeds the stored f32 connector output (see
     # the techniques ltx25-512p-sol cell and ADR-0021); it gates nothing.
     # Only trees of the EU volume (H3, LTX); Wan's cache (same format as H3,
@@ -2232,72 +2261,71 @@ Audio: male speech, clear voice, quiet room"
     # A cold H3 load reads ~70 GB from the volume before its first step.
     export FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-900}"
     b4c_cells="${FV_B4C_CELLS:-b4c-h3-4stepvsa b4c-ltx25-512p}"
-    # b4c_entries <dir>: the cache directory's files, name and SHA-256, in
-    # name order (no temporary or .part file may be left).
-    b4c_entries() {
-      (cd "$1" 2>/dev/null && find . -maxdepth 1 -type f -printf '%P\n' | LC_ALL=C sort | while IFS= read -r f; do
-        printf '%s %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$f"
-      done)
-    }
-    # b4c_cell <cell> <weight cell> <clip flag> <fv-gpucheck args ...>:
-    # <cell>-<arm>-<pass> for arm base (the baseline binary) and pr (this
-    # build), pass miss then hit over $SCRATCH/b4c-cache/<cell>-<arm>; the
-    # clip flag and the frames directory go last.
+    B4C_CACHE="$SCRATCH/b4c-cache"
+    # No verdict of an earlier run in this directory may stand in for this one.
+    [[ "$DRY_RUN" == 1 ]] || rm -f "$RUNS"/b4c-*.verdict.json "$RUNS/b4c.verdict.json"
+    # b4c_cell <cell> <weight cell> <encoder rule: fp8 | -> <clip flag>
+    # <fv-gpucheck args ...>: <cell>-<arm>-<pass> for arm base (the baseline
+    # binary) and pr (this build), pass miss then hit over
+    # $B4C_CACHE/<cell>-<arm>; the clip flag and the frames directory go
+    # last. Each pass's directory and the cache start empty; the verdict is
+    # b4c_verdict (scripts/gpu/b4-verdict.sh).
     b4c_cell() {
-      local cell="$1" wcell="$2" clip="$3" arm bin pass dir state verdict=pass why=""
-      shift 3
+      local cell="$1" wcell="$2" rule="$3" clip="$4" arm bin pass dir
+      shift 4
       [[ " $b4c_cells " == *" $cell "* ]] || { log "skip $cell (not in FV_B4C_CELLS)"; return 0; }
       for arm in base pr; do
         bin="$BIN"
         [[ "$arm" == base ]] && bin="$BASE"
-        dir="$SCRATCH/b4c-cache/$cell-$arm"
+        dir="$B4C_CACHE/$cell-$arm"
         if [[ "$DRY_RUN" == 1 ]]; then
           log "dry-run $cell-$arm: rm -rf $dir (a cold cache for the miss pass)"
         else
           rm -rf "$dir"
         fi
         for pass in miss hit; do
+          if [[ "$DRY_RUN" == 1 ]]; then
+            log "dry-run $cell-$arm-$pass: rm -rf $RUNS/$cell-$arm-$pass"
+          else
+            rm -rf "${RUNS:?}/$cell-$arm-$pass"
+          fi
           gated_cell "$cell-$arm-$pass" "$wcell" \
             "$bin" "$@" --text-cache "$dir" "$clip" "$RUNS/$cell-$arm-$pass/frames"
-          if [[ "$DRY_RUN" == 1 ]]; then
-            log "dry-run $cell-$arm-$pass: require \"text_cache\": \"$pass\" in $RUNS/$cell-$arm-$pass/benchmark.json"
-            continue
-          fi
-          state="$(grep -oE '"text_cache": *"[a-z]+"' "$RUNS/$cell-$arm-$pass/benchmark.json" 2>/dev/null | head -1 | grep -oE '"[a-z]+"$' | tr -d '"' || true)"
-          log "[$cell-$arm-$pass] text_cache: ${state:-none}"
-          [[ "$state" == "$pass" ]] || { verdict=fail; why+=" $arm-$pass:text_cache=${state:-none}"; }
+          [[ "$DRY_RUN" == 1 ]] || log "[$cell-$arm-$pass] text_cache: $(b4_field "$RUNS/$cell-$arm-$pass/benchmark.json" text_cache) text_encoder: $(b4_field "$RUNS/$cell-$arm-$pass/benchmark.json" text_encoder)"
         done
       done
-      compare_cells "$cell-base-miss" "$cell-pr-miss" --off-identity
-      compare_cells "$cell-base-hit" "$cell-pr-hit" --off-identity
+      for pass in miss hit; do
+        [[ "$DRY_RUN" == 1 ]] || rm -f "$RUNS/compare/compare-clips-$cell-base-$pass--$cell-pr-$pass.json"
+        compare_cells "$cell-base-$pass" "$cell-pr-$pass" --off-identity
+      done
       compare_cells "$cell-pr-miss" "$cell-pr-hit"
       if [[ "$DRY_RUN" == 1 ]]; then
-        log "dry-run $cell: entries of $SCRATCH/b4c-cache/$cell-base and $SCRATCH/b4c-cache/$cell-pr (name and sha256) must be equal and non-empty"
+        log "dry-run $cell: verdict b4c_verdict $cell $rule: every pass exit 0 (summary.json); benchmark.json \"text_cache\" miss / hit$([[ "$rule" == fp8 ]] && echo '; "text_encoder" contains fp8 on miss, is cache on hit'); --off-identity base vs pr passed for miss and hit; $B4C_CACHE/$cell-base and -pr hold the same entries (name, sha256), non-empty, no *.part / *.tmp*"
         return 0
       fi
-      b4c_entries "$SCRATCH/b4c-cache/$cell-base" >"$RUNS/$cell.cache-base.txt"
-      b4c_entries "$SCRATCH/b4c-cache/$cell-pr" >"$RUNS/$cell.cache-pr.txt"
+      log "$(b4c_verdict "$cell" "$rule")"
       tee -a "$LOG" <"$RUNS/$cell.cache-pr.txt" >/dev/null
-      if [[ ! -s "$RUNS/$cell.cache-base.txt" ]]; then
-        verdict=fail why+=" no-cache-entries"
-      elif ! diff "$RUNS/$cell.cache-base.txt" "$RUNS/$cell.cache-pr.txt" >"$RUNS/$cell.cache.diff"; then
-        verdict=fail why+=" cache-entries-differ"
-      fi
-      write_json "$RUNS/b4c-$cell.verdict.json" "$(printf '{"cell":"%s","verdict":"%s","why":"%s"}' "$cell" "$verdict" "${why# }")"
-      log "b4c $cell: $verdict${why:+ (${why# })}"
     }
-    # 1. H3: FastH3 4-step VSA at 480p / 5 s, the auto text encoder
-    #    (resident FP8 on this card: the "/fp8-rows" identity), each arm's
-    #    own cache.
-    b4c_cell b4c-h3-4stepvsa fasth3-4step-vsa --clip-dir \
+    # 1. H3: FastH3 4-step VSA at 480p / 5 s, the auto text encoder, which
+    #    must resolve to FP8 rows (resident FP8 on an RTX PRO 6000, so the
+    #    "/fp8-rows" identity is exercised; rule fp8 fails the cell on a card
+    #    where auto streams bf16), each arm's own cache.
+    b4c_cell b4c-h3-4stepvsa fasth3-4step-vsa fp8 --clip-dir \
       --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa --height 480 --width 832 \
       --seconds 5 --prompt "$PROMPT" --seed "$SEED" --text-encoder auto --no-mp4
     # 2. LTX-2.5 two-stage at 512p / 49 frames, Gemma streamed on the miss
     #    pass and not opened on the hit pass.
-    b4c_cell b4c-ltx25-512p ltx25-two-stage --clip \
+    b4c_cell b4c-ltx25-512p ltx25-two-stage - --clip \
       --mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25" \
       --height 512 --width 768 --num-frames 49 --prompt "$PROMPT" --seed "$SEED" \
       --two-stage --text streamed
+    # The family: every cell named in FV_B4C_CELLS must have passed.
+    if [[ "$DRY_RUN" == 1 ]]; then
+      log "dry-run b4c: family verdict b4_family_verdict b4c $b4c_cells -> $RUNS/b4c.verdict.json (a named cell without a passing verdict fails)"
+    else
+      # shellcheck disable=SC2086
+      log "$(b4_family_verdict b4c $b4c_cells)"
+    fi
     for f in "$RUNS"/compare/compare-clips-b4c-*.json; do
       [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"
     done

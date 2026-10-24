@@ -1414,19 +1414,19 @@ Project code: FVID
 - Verification: `equality.rs` cross reads both ways and byte-equal files; GPU `b4c` cells require the base and PR cache directories to hold byte-identical entries
 
 ### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-gaps-kept
-- Trigger: B4c review of the keys: `FASTVIDEO_LTX2_TEXT_FP8=1` (FP8 Gemma, different numerics) is not in the LTX key, and Wan's UMT5 precision is not in the Wan key; no size cap; threads of one process share a temporary name
+- Trigger: B4c review of the keys (and the independent review of PR #177): six inputs the conditioning depends on are not in the keys: LTX FP8 Gemma `FASTVIDEO_LTX2_TEXT_FP8` (silent wrong output, medium); the H3 recovered-8B identity is a constant, so a changed `ara.safetensors` LoRA, conditioning adapter or base serves stale conditioning (silent wrong output, medium); Wan UMT5 GEMM compute type (low); `FASTVIDEO_BF16_ACT`, the global GEMM compute type and GPU arch for H3 / LTX (small numeric differences); LTX resident vs streamed Gemma (expected equal, unproven); FP8 tree vs quantise-at-load (fine while bit-equal). Also: no size cap; threads of one process share a temporary name
 - Options: fix in B4c; keep and record as follow-ups
-- Decision: keep unchanged in B4c, recorded as follow-ups in ADR-0021
+- Decision: **(coordinator) keep unchanged in B4c, recorded with file:line and severity in ADR-0021 "Follow-ups: key gaps carried over"; the coordinator fixes them in a follow-up PR (B4c2) right after B4c merges**
 - Reason: each fix changes keys or behaviour, which B4c (byte identity) must not; each is its own reviewed decision
 - Reversibility: cheap
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
-- ADR: docs/adr/0021-prompt-cache.md "Key", "Eviction and size", "Concurrency"
-- Verification: n/a (recorded gaps)
+- ADR: docs/adr/0021-prompt-cache.md "Follow-ups: key gaps carried over", "Eviction and size", "Concurrency"
+- Verification: n/a (recorded gaps; B4c2)
 
 ### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-gpu-cells
 - Trigger: B4c's exit criterion (byte identity per family) needs GPU cells; only H3 and LTX trees are on the EU volume
 - Options: one cell per family with a cache, base vs PR, a cold pass and a hit pass per arm; a shared cache across arms
-- Decision: `runpod-matrix.sh b4c`: `b4c-h3-4stepvsa` and `b4c-ltx25-512p`, each arm (baseline binary, PR build; same argv / env) over its own new cache directory, pass `-miss` then `-hit`; `--off-identity` base vs PR per pass; fails unless the passes report `miss` / `hit` in `benchmark.json` and both arms' cache directories hold byte-identical entries; `pr-miss` vs `pr-hit` compared for the record only; `FV_B4C_CELLS` narrows; Wan rests on the CPU fixtures (no EU-volume tree)
+- Decision: `runpod-matrix.sh b4c`: `b4c-h3-4stepvsa` and `b4c-ltx25-512p`, each arm (baseline binary, PR build; same argv / env) over its own new cache directory, pass `-miss` then `-hit` (each pass directory emptied first); `--off-identity` base vs PR per pass; the verdict (`scripts/gpu/b4-verdict.sh`) passes only on positive evidence: every pass `summary.json` exit 0, `benchmark.json` `miss` / `hit` as planned, on H3 `text_encoder` containing `fp8` on the misses and `cache` on the hits, both compares' `off_identity` checks passed and not skipped, both cache directories non-empty, byte-identical and free of `*.part` / `*.tmp*`; `b4c.verdict.json` fails when a named cell has no passing verdict (review of PR #177; `b4a` got the same exit / compare / family fold); `pr-miss` vs `pr-hit` compared for the record only; `FV_B4C_CELLS` narrows; Wan rests on the CPU fixtures (no EU-volume tree)
 - Reason: separate caches per arm compare like with like (a shared cache would compare a hit with a miss, the techniques LTX lesson); byte-equal entries prove the PR reads the baseline's cache as its own
 - Reversibility: cheap
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)

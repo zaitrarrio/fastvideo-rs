@@ -279,6 +279,10 @@ easycache: ...`, `wan a14b easycache: ...`, `wan sol taylorseer: ...`,
   arm's `frames.sha256.json`; a cell also fails when either arm reused no
   forward or the arms' step-cache evidence lines (install line, every
   `h3 teacache step` decision, the load plan's `fuse step cache`) differ.
+  Since the B4c review (PR #177) the verdict also needs both arms' exit 0
+  and the `--off-identity` compare passed and not skipped
+  (`scripts/gpu/b4-verdict.sh`), and `b4a.verdict.json` fails when a cell
+  named in `FV_B4A_CELLS` has no passing verdict.
   Three H3 TeaCache cells: the legacy flag, the profile, and a 4-step
   reuse fixture. **Not on the GPU:**
   - LTX-2.5 FBCache has no reachable path today: `fbcache::scope` admits
