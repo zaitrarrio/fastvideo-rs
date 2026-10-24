@@ -34,6 +34,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
+use fastvideo_media::clock::{Clock, MonotonicClock};
 use fastvideo_media::lockstep::{self, Slice, EMIT_FRAMES, WIRE_RATE};
 use fastvideo_media::opus::{OpusConfig, OpusEncoder};
 use fastvideo_media::pacer::{AvPacer, AvPacerConfig, Metronome, VideoOut};
@@ -77,6 +78,37 @@ pub struct MediaConfig {
     /// Video bitrate; `None`: by canvas (§5.1).
     pub video_bitrate: Option<u32>,
     pub gop_seconds: f32,
+    /// The clock playout ticks by.
+    pub clock: PlayoutClock,
+}
+
+/// The clock playout ticks by (seconds; only differences count). Sessions
+/// play out in wall time ([`PlayoutClock::wall`]); a test can hold or step
+/// playout with a [`fastvideo_media::clock::ManualClock`] to check how
+/// generation runs against playout whatever the host's speed.
+#[derive(Clone)]
+pub struct PlayoutClock(Arc<dyn Clock>);
+
+impl PlayoutClock {
+    /// Wall time (monotonic).
+    pub fn wall() -> Self {
+        Self(Arc::new(MonotonicClock::new()))
+    }
+
+    /// Playout on `clock`.
+    pub fn new(clock: Arc<dyn Clock>) -> Self {
+        Self(clock)
+    }
+
+    fn now(&self) -> f64 {
+        self.0.now()
+    }
+}
+
+impl std::fmt::Debug for PlayoutClock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PlayoutClock")
+    }
 }
 
 /// A built chunk ready for playout.
@@ -280,7 +312,8 @@ impl<S: MediaSink> MediaLoop<S> {
             }
         }
         let _close = CloseOnExit(self.video_q.clone());
-        let t0 = Instant::now();
+        let clock = self.cfg.clock.clone();
+        let t0 = clock.now();
         let mut met = Metronome::new(f64::from(self.cfg.fps));
         let mut since_report = 0u32;
         loop {
@@ -298,7 +331,7 @@ impl<S: MediaSink> MediaLoop<S> {
             if self.keyframes.poll(Instant::now()) {
                 self.force_keyframe();
             }
-            if let Err(dt) = met.poll(t0.elapsed().as_secs_f64()) {
+            if let Err(dt) = met.poll(clock.now() - t0) {
                 match self.rx.recv_timeout(Duration::from_secs_f64(dt.min(0.01))) {
                     Ok(cmd) => {
                         if !self.handle(cmd) {
