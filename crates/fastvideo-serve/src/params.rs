@@ -14,7 +14,10 @@
 //! Mounted with the native API only (it carries native auth and lists
 //! engine ids). The body is `{"object": "fv.param_specs", "specs": [...]}`; the
 //! `param_spec_golden` test pins it for every shipped config. The director
-//! and Reactor control channels are not in it yet (plan E3).
+//! and Reactor control channels are not submit endpoints and are not in it:
+//! their specs come from `fastvideo_fal::params::director_specs` and
+//! `fastvideo_reactor::commands::CommandTable::param_specs`, certified with
+//! the rest by `tests/cert_matrix.rs` (plan E3, ADR-0016).
 
 use axum::extract::State;
 use axum::http::HeaderMap;

@@ -1112,3 +1112,23 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: ADR-0012
 - Verification: `param_rules` (fails if either side moves)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-cert-matrix
+- Trigger: plan E3: a parameter x surface x model certification matrix over every surface, as a TSV, with a CI assertion that every parameter has a valid and an invalid case (review §7.6 item 3)
+- Options: a new test crate; a test in `fastvideo-serve` over the assembled router; per-adapter tests at parse time only
+- Decision: a `fastvideo-serve` integration test (`tests/cert_matrix.rs`) driving the specs each shipped config serves at `/fv/v1/params` through the real router on the fake engine (job checks of the CUDA pipelines, accepted jobs cancelled); the director and Reactor channels through their parsers, with `ParamSpec`s built by their crates; cases from `Domain::valid_example` / `invalid_examples` plus explicit plans for composite fields; output `docs/serve/certification.tsv` with a drift check; the CI assertion plans the golden's specs without a server and requires a reasoned exemption for a parameter with no invalid case
+- Reason: reuses the e2e machinery and the CI that already runs serve tests (no new crate, workflow or dependency); the served specs, not hand-written lists, decide the matrix
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: ADR-0016
+- Verification: `cert_matrix::certification_matrix_is_golden`, `cert_matrix::every_param_has_a_valid_and_an_invalid_case`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-cert-findings-recorded
+- Trigger: the matrix's first run: 1,070 of 4,630 rows disagree with their spec (naming, spec support, routing, director empty URLs, the two census findings); no 5xx or panic
+- Options: fix the wire behaviour in the E3 PR; record each finding in the TSV and list the candidate fixes
+- Decision: record and list (docs/serve/params.md "Findings and candidate fixes"); no wire behaviour changes in E3
+- Reason: each fix changes what clients see and is the coordinator's / owner's decision; the TSV shows the change when one lands
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: ADR-0016
+- Verification: `docs/serve/certification.tsv` `finding` column

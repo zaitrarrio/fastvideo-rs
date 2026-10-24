@@ -133,3 +133,89 @@ All on `/v1/videos` `guidance_scale_2`, all keeping status 400, type
   `/v1/videos` and native; MiniMax, LTX and fal are covered at parse time
   (`parse_agreement`, and fal's catalog test); their caps-level checks are
   E3's matrix.
+
+All three are now rows of the certification matrix (below): the first two
+as findings, the third as every MiniMax, LTX and fal parameter driven
+through negotiation and the engine's job checks.
+
+## Certification matrix (plan E3, ADR-0016)
+
+`docs/serve/certification.tsv` is every parameter of every served spec,
+driven through the real surface with a valid and an invalid value, on the
+fake engine serving each shipped config's models with their real caps and
+the CUDA pipelines' job checks. `crates/fastvideo-serve/tests/cert_matrix.rs`
+generates it and fails when it drifts:
+
+    cargo test -p fastvideo-serve --test cert_matrix                    # check
+    FV_CERT_WRITE=1 cargo test -p fastvideo-serve --test cert_matrix    # regenerate
+    FV_CERT_WRITE=<file> ...                                            # write elsewhere
+
+The same file's `every_param_has_a_valid_and_an_invalid_case` is the CI
+assertion: every parameter of `goldens/param_specs.json`, the director and
+every Reactor mode has a valid and an invalid case, or an exemption (below).
+Both run in adapter-tests (`scripts/serve/coverage.sh`) and
+`scripts/serve/check.sh`; the matrix is about 8,000 requests, 10-25 s on
+the build pod.
+
+### Reading the TSV
+
+One row per (section, surface, endpoint, model, engine model, parameter),
+sorted. No cell is empty: where a value does not apply the cell says
+`n/a (why)`. Several cases in one cell are separated by ` ; `, in the same
+order across `invalid_value`, `invalid_status`, `invalid_code` and
+`invalid_param`.
+
+| Column | Meaning |
+|---|---|
+| `section` | `base` (the request every case of the spec starts from), `param` (one parameter), `unknown_field` (the surface's unknown-field policy, probed with `x_fv_cert_unknown`), `pair` (two fields valid alone, refused together) |
+| `surface`, `endpoint`, `model`, `engine_model` | the spec (as `/fv/v1/params` serves it; `*` for the director, any app) |
+| `configs` | the shipped config the spec was driven on, `(+N)` other configs serving the identical spec |
+| `driver` | `http` (in-process `POST` through the assembled router), or `parse (... data channel)`: the director's `messages::parse`, Reactor's `CommandTable::validate` |
+| `base` | the base candidate used and its fields; `(routed to X)` when every candidate ran on a tier companion |
+| `param`, `type`, `required`, `support`, `domain` | from the spec; `domain` shows the parser's wider domain as `(parse: ...)` |
+| `valid_value`, `valid_outcome` | the valid case and what happened (`accepted`, `accepted (routed to X)`, `accepted; engine refuses: ...`, `refused <status> <code> param=<p>`); `(first accepted of N tried)` when earlier set members were refused with the base's other fields; `n/a (refused parameter)` / `n/a (engine gap <code>)`: the parameter has no valid value on this model |
+| `invalid_value` | the invalid cases: domain bounds and set misses, off-grid frames, too long text or lists, a malformed media URL (`not-a-url`; `""` for the director), a wrong JSON type `(wrong type)`; for a refused parameter, a value of it |
+| `invalid_status`, `invalid_code` | the HTTP status (`n/a (data channel ...)` for the parse drivers) and the surface's code: native `error.kind`, `/v1/videos` / MiniMax / LTX `error.type`, fal `x-fal-error-type`, director `invalid_message`, Reactor `invalid_command`, FastWan none (`{detail}` only) |
+| `invalid_param` | the field the refusal names: `error.param` (native, `/v1/videos`), the last `loc` element (fal), the parse error's field (director, Reactor); on FastWan, MiniMax and LTX, whose errors carry no field, `n/a (no param field; message names ...)`, and for FastWan's pairs also the parser's own param |
+| `upstream` | the vendored contract (`ours` when none) |
+| `finding` | `none`, or each disagreement with the spec: a valid value refused, an invalid one accepted, a refusal naming another field (`reported as X`), a message naming no field, a 5xx |
+
+Media cases are data URIs (a 320x180 PNG, an 8 s WAV, a 21 s 768x512 MP4,
+3 s reference clips), shown as `<data: ...>`; long strings as `"a"x5001`.
+
+### Exemptions (parameters with no invalid case)
+
+| Surface | Parameter | Reason |
+|---|---|---|
+| `minimax` | `prompt_optimizer` | MiniMax V1's switch: a non-boolean is ignored (no value is refused) |
+| `ltx` | `enhance_prompt` | ours: a non-boolean is ignored |
+| `fal_director` | `output`, `x_fv_output` | an output-copy object checked by the session (`[director] allow_output`), not by the parser |
+
+### Findings (2026-10-24) and candidate fixes
+
+No request produced a 5xx or a panic. Every finding is recorded, none is
+fixed here: each fix changes wire behaviour and is a separate decision.
+Counts are TSV rows with the finding (a row can carry several kinds; 1,070 of the 4,630 rows carry at least one).
+
+| # | Surface | Observed (request -> response) | Rows | Candidate fix |
+|---|---|---|---|---|
+| 1 | native | `seconds: 0.0` -> 400 `invalid_request` `param: "duration"` (also `extend_s`, `end_s` -> `duration`; `steps` -> `num_inference_steps`; `guidance` -> `guidance_scale`; `context_s` -> `context`; `start_s` -> `start_time`; `width` / `height` and width without height -> `size`; `short_edge` -> `resolution`; reference counts -> `references`) | 267 | rename negotiation's params to the native field names when rendering native errors (a native `fastvideo_param`) |
+| 2 | native | an input the model's tasks lack (`audio_url`, `image_url`, `last_image_url`, `reference_urls`, image + references) -> 400 `param: "task"` | 81 | name the input field |
+| 3 | native | body errors name no field: `seed: -1` (a u64), a wrong JSON type, an unknown field -> 400 `param: null` | 98 | `/v1/videos`' `body_error` (field from serde's unknown / missing field text) |
+| 4 | `/v1/videos` | a wrong JSON type (`negative_prompt: 7`, `generate_sound: "x"`) -> 400 `param: null` | 124 | as 3 |
+| 5 | `/v1/videos` | `width` / `height` / `video_params.width` / `.height` / `short_edge` over the canvas -> 400 `param: "size"`; reference counts -> `references`; refused reference lists -> `task` or `null` | 235 | report the field sent, or document `size` as the canvas group |
+| 6 | `/v1/videos` | `input_reference` / `reference_url` / `image_reference` (one image) on a text-only model (13 models: Wan, FastWan, SF-Wan, FastH3, VDN-H3, Wan 14B plug) -> 400 `model ... does not support task i2v` | 39 | the spec's support follows the model's I2V / keyframe tasks |
+| 7 | MiniMax | `content` first-frame image on a model without image-to-video -> 400 (2013) `does not support task i2v`; text-only `content` on `h3-ref2v-*` -> `does not support task t2v` | 33 | the spec's support follows the resolved model's tasks |
+| 8 | MiniMax | wrong JSON types (`callback_url: 7`, `content: "x"`) -> 400 `invalid type ... expected a string`, no field named; reference items on a model without reference-to-video -> `reference-to-video is not enabled`, the item not named | 172 | name the field in the message (MiniMax has no param field) |
+| 9 | LTX | `/v2/audio-to-video` with a 2 s audio (the spec's minimum) -> 400 `the audio is 2.00 s, shorter than the model's shortest clip (145 frames at 24 fps)`; audio length errors do not name `audio_uri` | 8 | derive the audio minimum from the caps (frames.min / fps) |
+| 10 | fal | `fal-ai/ltx-2.3-quality/ingredient` `num_frames: 242` (off the 8k+1 grid) -> accepted (aligned up); Wan `interpolator_model: "none"`, `num_interpolated_frames: 0` -> accepted though `refused` | 7 | the spec says "aligned up" (wire range) and marks the default values `no_op` |
+| 11 | native | `ltx25-a2v-guided`: `last_image_url` (spec: refused) accepted, `prompt: " "` accepted with audio + image (the note's exception), `seconds` 10.02 s refused against the 8 s audio; `ltx25-distill-dense`: `reference_urls` (spec: refused) accepted, routed to `ltx25-ref2v` | 4 | the spec reflects tier routing and the audio-to-video exceptions |
+| 12 | `/v1/videos` | `ltx25-ref2v`, `ltx25-a2v-guided`: every base routes to `ltx25-distill-dense`; then `seconds: 11`, `num_frames: 249` are accepted (the companion's caps) | 6 | specs for routed names describe the companion, or the surface lists only models it can run |
+| 13 | director | `configure` / `prompt` with `end_image_url: ""` or `audio_url: ""` -> accepted (only `image_url` and script beats are checked); enum and type errors name no field | 11 | `check_url` on those fields |
+| 14 | FastWan | `{"prompt", "height": 480}` -> 400 `width and height must both be positive`: the parser's param is `width` (invisible on FastWan's wire, which has no param field); a canvas over the pixel budget names neither side | 6 | name `height` in the parser (no wire change) |
+
+The pairs section also records the mutual exclusions that hold: MiniMax
+first-frame + reference items, two text items; LTX audio-to-video
+`last_frame_uri` without `image_uri`, no prompt and no image;
+`/v1/videos` `input_reference` + `reference_url` / `image_reference`;
+native retake + extend fields (named `video_url`, finding 1's kind).
