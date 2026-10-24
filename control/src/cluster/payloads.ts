@@ -8,6 +8,7 @@ import { DC_ANY, DEFAULT_ALLOWED_CUDA, noVolumePod } from "../enums";
 import { R2_RUNPOD_SH, r2DiskGb, r2PodEnv } from "../r2weights";
 import { DRIVER_CHECK_SH } from "../driver-check";
 import { UPSAMPLER_START_SH, UPSAMPLER_WAIT_SH, upsamplerDiskGb, upsamplerPodEnv } from "../upsampler";
+import { PREFER_FV_BOOT_SH } from "../fv-boot";
 
 /** Runpod secret references (values live in Runpod, never here). */
 export const SECRET_ENV_REFS: Record<string, string> = {
@@ -22,9 +23,10 @@ export const SECRET_ENV_REFS: Record<string, string> = {
 };
 
 // A worker's start command (direct workers): the config from the image, or
-// inline (FV_WORKER_TOML_B64) when the pool has one.
+// inline (FV_WORKER_TOML_B64) when the pool has one. An image with fv-boot runs
+// that instead (PREFER_FV_BOOT_SH, fv-boot.ts): the same steps from the same env.
 export const WORKER_BOOT = `set -u
-echo "[fv-boot] start" >&2
+${PREFER_FV_BOOT_SH}echo "[fv-boot] start" >&2
 FV_DRV_POD="\${RUNPOD_POD_ID:-}"
 ${DRIVER_CHECK_SH}if [ -d /workspace/weights ]; then echo "[fv-boot] volume: /workspace/weights ($(ls /workspace/weights 2>/dev/null | wc -l) trees)" >&2; else echo "[fv-boot] volume: /workspace/weights missing" >&2; fi
 mkdir -p /fvstate

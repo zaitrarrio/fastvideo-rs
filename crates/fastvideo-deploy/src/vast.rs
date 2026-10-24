@@ -4,7 +4,8 @@
 //!   dict"`): published ports as `{"-p 8000:8000": "1"}` keys plus plain
 //!   `KEY: value` pairs. Secrets never go here: they are Vast account env
 //!   vars (the same upper-case `FV_*` names), injected by Vast.
-//! - [`onstart`]: the `ssh_direct` onstart script that launches `fv-serve`
+//! - [`onstart`]: the `ssh_direct` onstart script that launches `fv-boot`
+//!   (else, on an older image, `fv-serve`)
 //!   (sshd is PID 1 under every `ssh_*` runtype; the image entrypoint never
 //!   runs), logging to [`MODEL_LOG`] so the PyWorker can tail it.
 //! - [`WORKER_PY`]: the Vast serverless PyWorker forwarder
@@ -82,14 +83,18 @@ pub fn env_dict(ports: &[Port], vars: &[(&str, &str)]) -> Result<Value, String> 
 }
 
 /// The onstart script: exports the env to `/etc/environment` (ssh sessions
-/// see it), then starts fv-serve detached with its log at [`MODEL_LOG`].
-/// `args` are fv-serve's arguments (e.g. `--config /etc/fv/vast.toml`).
+/// see it), then starts the boot detached with its log at [`MODEL_LOG`]:
+/// `fv-boot` (docs/adr/0014-fv-boot.md: driver check, config, weights,
+/// then exec fv-serve) when the image has it, else fv-serve itself (an image
+/// from before fv-boot; that fallback goes once every Vast image carries
+/// fv-boot). `args` are fv-serve's arguments (e.g. `--config /etc/fv/vast.toml`).
 pub fn onstart(args: &str) -> String {
     format!(
         "#!/bin/bash\n\
          env | grep -E '^(FV_|VAST_|PUBLIC_IPADDR|CONTAINER_ID|RUST_LOG)' >> /etc/environment\n\
          mkdir -p /var/log /fvstate\n\
-         nohup /opt/fastvideo-rs/bin/fv-serve {args} >> {MODEL_LOG} 2>&1 &\n"
+         B=/opt/fastvideo-rs/bin/fv-boot; [ -x \"$B\" ] || B=/opt/fastvideo-rs/bin/fv-serve\n\
+         nohup \"$B\" {args} >> {MODEL_LOG} 2>&1 &\n"
     )
 }
 
@@ -116,7 +121,10 @@ mod tests {
     fn onstart_fits_and_starts_the_server() {
         let s = onstart("--config /etc/fv/vast.toml");
         assert!(s.len() < 4048, "Vast caps onstart at 4048 chars");
-        assert!(s.contains("nohup /opt/fastvideo-rs/bin/fv-serve --config /etc/fv/vast.toml >> /var/log/fv-serve.log"));
+        assert!(s.contains(
+            "B=/opt/fastvideo-rs/bin/fv-boot; [ -x \"$B\" ] || B=/opt/fastvideo-rs/bin/fv-serve\n"
+        ));
+        assert!(s.contains("nohup \"$B\" --config /etc/fv/vast.toml >> /var/log/fv-serve.log"));
     }
 
     #[test]

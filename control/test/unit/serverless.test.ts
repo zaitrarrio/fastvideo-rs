@@ -98,7 +98,7 @@ describe("serverless payloads", () => {
     expect(t).toMatchObject({ name: "fvc-fake-261006210507", imageName: IMG, isServerless: true, category: "CPU", containerDiskInGb: 20, volumeInGb: 0 });
     expect(t.env).toMatchObject({ FV_SERVE_MODE: "runpod-queue", FV_AUTH_MODE: "trust-gateway", FV_IMAGE_REF: IMG, FV_IMAGE_DIGEST: "sha256:" + "a".repeat(64), FV_RELEASE_CHANNEL: "stable", FV_R2_SECRET_ACCESS_KEY: "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}", FV_LOG: "x" });
     expect(t.env.FV_WEIGHTS).toBeUndefined();
-    // No config: the image's own entrypoint (fv-entry) and baked FV_CONFIG.
+    // No config: the image's own entrypoint (fv-boot; fv-entry on older images) and baked FV_CONFIG.
     expect("dockerEntrypoint" in t).toBe(false);
   });
   it("GPU template with a config: the boot links the weights and runs fv-serve with it", () => {

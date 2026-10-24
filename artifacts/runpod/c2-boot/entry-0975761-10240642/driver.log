@@ -1,0 +1,7 @@
+[06:42:14] attempt 1: pod gnpypqun6ueyv1 image ghcr.io/zaitrarrio/fastvideo-rs-serve:ltx-sha-0975761 (own entrypoint)
+[06:42:56] pod answers /ping after 42s
+[06:44:30] healthz state=ready after 94s: {"state":"ready","loaded":["ltx25-distill-sol"],"build":"0975761","variant":"ltx"}
+[06:44:31] unauthenticated submit -> HTTP 401 (expect 401)
+[06:44:32] submitted ltx25-distill-sol -> fvjob_7af38982a8fe4b34b47ff5fd2006b03d
+[06:46:12] job fvjob_7af38982a8fe4b34b47ff5fd2006b03d: succeeded after 100s
+[06:46:12] deleted pod gnpypqun6ueyv1

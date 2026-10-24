@@ -10,9 +10,14 @@
 //!   ports, ICE candidates, public base URL.
 //! - [`vast`]: the Vast `env` dict, onstart script and the PyWorker forwarder
 //!   (`deploy/vast/worker.py`).
+//! - [`boot`]: `fv-boot`, the one boot sequence of a serve container (driver
+//!   check, config, weights plan, sidecar, tunnel and phase reports,
+//!   watchdog, exec fv-serve; docs/adr/0014-fv-boot.md). The binary needs the
+//!   `boot` feature (its HTTP client).
 //!
 //! Deploy scripts: `scripts/serve/{runpod-pod,runpod-endpoint,vast,vast-serverless}.sh`.
 
+pub mod boot;
 pub mod dispatch;
 pub mod env;
 pub mod runpod;

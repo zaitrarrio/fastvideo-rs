@@ -583,6 +583,14 @@ cmd_assemble() {
     [[ "$got" == *" $v" || "$got" == *" $v "* ]] || die "${bin#"$d/"} -V says '$got', expected $v"
     log "  ${bin#"$d/"}: $got"
   done
+  # fv-boot (ADR-0014; `fv-boot version`: its -V is fv-serve's) in both serve sets, from the commits that have it.
+  for set in serve-cuda serve-cpu; do [[ -f "$out/$set.tar.gz" ]] && mkdir -p "$d/$set" && tar -xzf "$out/$set.tar.gz" -C "$d/$set"; done
+  for bin in "$d/serve-cuda/out/fv-boot" "$d/serve-cpu/out/fv-boot"; do
+    [[ -e "$bin" ]] || { log "  ${bin#"$d/"}: not built at this commit"; continue; }
+    got="$("$bin" version 2>&1 | head -1)" || true
+    [[ "$got" == "fv-boot $v" ]] || die "${bin#"$d/"} version says '$got', expected fv-boot $v"
+    log "  ${bin#"$d/"}: $got"
+  done
   rm -rf "$d"
   local nt; nt="$(cat "$in"/*/gate-unit-tests.count 2>/dev/null | head -1)"
   GATE_SUMMARY="scripts/serve/check.sh (lint and test stages) passed in parallel GitHub-hosted jobs in the build-base image; the ${nt:-?} shipped gpucheck/cudarc unit-test binaries passed; the binaries report $v; the builds' fv-gpucheck nvrtc gate (AOT + oxide cubins for sm_100/120) and glibc <= 2.35 check passed"
@@ -747,6 +755,13 @@ run_gate() {
       note=" (fv-gpucheck at this commit predates -V)"; log "  gpucheck/fv-gpucheck: no -V at this commit"; continue
     fi
     [[ "$got" == *" $v" || "$got" == *" $v "* ]] || { log "${bin#"$d/"} -V says '$got', expected $v"; return 1; }
+    log "  ${bin#"$d/"}: $got"
+  done
+  if [[ -f "$out/serve-cuda.tar.gz" ]]; then mkdir -p "$d/serve-cuda" && tar -xzf "$out/serve-cuda.tar.gz" -C "$d/serve-cuda"; fi
+  for bin in "$d/serve-cuda/out/fv-boot" "$d/serve-cpu/out/fv-boot"; do
+    [[ -e "$bin" ]] || { log "  ${bin#"$d/"}: not built at this commit"; continue; }
+    got="$("$bin" version 2>&1 | head -1)" || true
+    [[ "$got" == "fv-boot $v" ]] || { log "${bin#"$d/"} version says '$got', expected fv-boot $v"; return 1; }
     log "  ${bin#"$d/"}: $got"
   done
   local ntests; ntests="$(wc -l <"$d/gpucheck-tests/tests.tsv")"

@@ -171,6 +171,7 @@ jobs:
           img="${{ steps.meta.outputs.image }}@${{ steps.push.outputs.digest }}"
           docker pull "$img"
           docker image inspect "$img" --format 'size={{.Size}} entrypoint={{json .Config.Entrypoint}}'
+          test "$(docker image inspect "$img" --format '{{json .Config.Entrypoint}}')" = '["/opt/fastvideo-rs/bin/fv-boot"]'
           docker run --rm "$img" --version
           docker run --rm --entrypoint bash "$img" -euo pipefail -c '
             test "$NVIDIA_DRIVER_CAPABILITIES" = compute,utility,video
