@@ -23,20 +23,38 @@ struct Args {
     print_config: bool,
 }
 
-fn init_tracing(c: &Config) {
+/// The subscriber: the `[log]` filter, log shipping, the OpenTelemetry
+/// layer (feature `otel`, `[otel] enabled`) and the stderr formatter. `Err`
+/// is an `[otel]` exporter that could not be built.
+fn init_tracing(c: &Config) -> Result<(), String> {
     use tracing_subscriber::prelude::*;
     use tracing_subscriber::EnvFilter;
     let filter = EnvFilter::try_new(&c.log.filter).unwrap_or_else(|_| EnvFilter::new("info"));
     // Log shipping to fv-control (FV_LOG_SHIP_URL; off by default, src/log_ship.rs).
-    // A tracing-opentelemetry layer would join here (the `otel` feature seam).
     let ship = fastvideo_serve::log_ship::layer();
+    // OTLP export of the request traces (src/otel.rs; docs/serve/tracing.md
+    // "OpenTelemetry export"): built here, before the runtime, and `None`
+    // unless `[otel] enabled`.
+    #[cfg(feature = "otel")]
+    let otel = fastvideo_serve::otel::init(&c.otel).map_err(|e| e.to_string())?;
     let fmt = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
     let reg = tracing_subscriber::registry().with(filter).with(ship);
+    #[cfg(feature = "otel")]
+    let reg = reg.with(otel);
     if c.log.format == "json" {
         reg.with(fmt.json()).init();
     } else {
         reg.with(fmt).init();
     }
+    #[cfg(not(feature = "otel"))]
+    {
+        if c.otel.enabled {
+            tracing::warn!(
+                "[otel] enabled = true, but this build has no `otel` feature: no trace export"
+            );
+        }
+    }
+    Ok(())
 }
 
 /// `--version` prints the build identity (git sha, build time, variant,
@@ -65,7 +83,10 @@ fn main() -> ExitCode {
         );
         return ExitCode::SUCCESS;
     }
-    init_tracing(&config);
+    if let Err(e) = init_tracing(&config) {
+        eprintln!("fv-serve: {e}");
+        return ExitCode::from(2);
+    }
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -99,6 +120,9 @@ fn main() -> ExitCode {
         )
         .await
     });
+    // The last spans leave before the process does.
+    #[cfg(feature = "otel")]
+    fastvideo_serve::otel::shutdown();
     match res {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

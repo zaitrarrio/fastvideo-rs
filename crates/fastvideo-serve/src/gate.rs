@@ -197,6 +197,10 @@ async fn pump(
     let started = std::time::Instant::now();
     let model = resolved.model.to_string();
     let mut run_started: Option<std::time::Instant> = None;
+    // The job's OpenTelemetry span (src/otel.rs): only a traced job has one.
+    #[cfg(feature = "otel")]
+    let mut otel_job =
+        trace.map(|t| crate::otel::JobSpan::new(t, id.to_string(), model.clone(), api));
     let mut ended = false;
     while let Some(ev) = events.recv().await {
         match &ev {
@@ -212,11 +216,23 @@ async fn pump(
             metrics::histogram!("fv_job_queue_wait_seconds", "model" => model.clone())
                 .record(now.duration_since(started).as_secs_f64());
             run_started = Some(now);
+            #[cfg(feature = "otel")]
+            {
+                if let Some(j) = otel_job.as_mut() {
+                    j.queue_wait = Some(now.duration_since(started));
+                }
+            }
         }
         if ev.is_terminal() {
             if let Some(s) = run_started {
                 metrics::histogram!("fv_job_inference_seconds", "model" => model.clone())
                     .record(s.elapsed().as_secs_f64());
+                #[cfg(feature = "otel")]
+                {
+                    if let Some(j) = otel_job.as_mut() {
+                        j.inference = Some(s.elapsed());
+                    }
+                }
             }
         }
         let ev = match ev {
@@ -279,6 +295,12 @@ async fn pump(
                 .increment(1);
             metrics::histogram!("fv_job_duration_seconds", "api" => api, "model" => model.clone())
                 .record(started.elapsed().as_secs_f64());
+            #[cfg(feature = "otel")]
+            {
+                if let Some(j) = otel_job.take() {
+                    j.finish(status);
+                }
+            }
             ended = true;
             break;
         }

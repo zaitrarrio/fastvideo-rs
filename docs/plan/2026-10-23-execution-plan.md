@@ -56,7 +56,7 @@ parallel agents.
 | F1 | Delete the six `scripts/vast-*.sh`, `scripts/docker-build-cuda.sh`, `scripts/gpu/serverless-worker.sh`, `scripts/gpu/upstream_bench.py`, `scripts/gpu/build-remote.sh`, `scripts/gpu/prompts-flux2.json`, `scripts/gpu/sage/{run,vast-run,setup}.sh`; move the 24 port one-offs and `runpod-matrix.sh` to `scripts/gpu/experiments/`; remove the `h3-*`/`ltx2-*` tiers from `validate.sh` and the README Vast sections; fix `docs/serve/images.md:87`, `scripts/gcp/weights.sh:3-4`, ADR-0001 and `docs/scope.md` (removed backends, `unsafe` scope); add `docs/ports/CHECKLIST.md` | no reference to a deleted path remains (`grep`), `scripts/gpu/lint.sh` passes, README describes the Runpod path | `bash scripts/gpu/lint.sh`; `task check` lint part on the pod | none | merged (#139) |
 | F2 | One formatting commit; fix the 27 clippy lints; `task check` runs `cargo fmt --check` and `clippy -D warnings` as real gates; `gpucheck-t0` runs them | `cargo fmt --check` and `cargo clippy --workspace --all-targets -D warnings` green | pod | F1 (to avoid churn) | merged (#142) |
 | F3a | Serving hardening from review §7.7: per-job deadline in `StepControl`, bounded engine event channel, per-model duration and queue-wait histograms, residency gauges, `otel` feature implemented | tests in `fastvideo-engine-service` and `fastvideo-serve`; `scripts/serve/check.sh` green | pod | none | merged (#140; `otel` deferred to F3c) |
-| F3c | Implement the `otel` feature (OpenTelemetry export of the trace recorder's spans) | spans visible in an OTLP collector | pod | F3a | todo |
+| F3c | Implement the `otel` feature (OpenTelemetry export of the trace recorder's spans) | spans visible in an OTLP collector | pod | F3a | pr (draft; live-collector check pending) |
 | F3b | Delete `multiworker.rs` and `server.workers_max`; rename `[gateway]` to `[cluster]`, drop `gw_workers` | config round-trip tests | pod | owner decision (Runpod LB mode) | blocked |
 
 ### Phase 1: the manifest (Workstream A)
@@ -203,3 +203,19 @@ ran (pod id, $/hr), result, cost.
 - 2026-10-24 00:36Z: A2, A5 (registry WO-001 against the merged crate, built
   in the coordinator's container since that workspace is small) and B1
   started. Balance $21.6, pod `i8tu0lpdb6nvov` at 4.4 h uptime.
+- 2026-10-24 01:37Z: F3c opened a draft PR (`claude/f3c-otel`): the `otel`
+  feature of `fastvideo-serve` implemented (`src/otel.rs`, `[otel]` config
+  section with `FV_OTEL*` overrides, off by default; OTLP over
+  http/protobuf; one trace per job: a `job` span with id / model / api /
+  status / queue-wait / inference durations and the recorder's events as
+  spans under the request's trace id; `tracing-opentelemetry` layer in
+  `init_tracing`). Crates `opentelemetry*` 0.33.1 and
+  `tracing-opentelemetry` 0.34.0 (6 new lockfile entries, nothing bumped).
+  On build pod `i8tu0lpdb6nvov`: `cargo test -p fastvideo-serve` 83 unit
+  tests and `--features otel` 88 (5 `otel::tests`, the config round-trip),
+  every integration suite green both ways; `cargo clippy --workspace
+  --all-targets -D warnings` and the `otel` clippy green; `cargo fmt
+  --check` green; `scripts/serve/check.sh` 987 cargo tests + 45
+  release.test + 2 node, exit 0 in 245 s. Not done: a run against a live
+  OTLP collector (needs a pod with a collector; recorded as pending in
+  docs/serve/tracing.md).

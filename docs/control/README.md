@@ -990,10 +990,12 @@ This follows the owner's "lean" guidance.
     `pod_samples` (24 h) and the charts read that instead.
 - **Logs:** structured JSON from fv-serve, shipped to R2 (section 6). This
   is the only new fv-serve code, and it is off by default.
-- **Traces:** none for now. The `otel` cargo feature of fastvideo-serve is
-  an empty seam, off by default: a `tracing-opentelemetry` layer would go
-  next to the log-shipping layer in `main.rs`'s `init_tracing` (the
-  registry already takes optional layers).
+- **Traces:** fv-serve's own request tracing (docs/serve/tracing.md) is
+  the source; fv-control runs no collector. The `otel` cargo feature of
+  fastvideo-serve (built 2026-10-24, off by default and not in the default
+  image) exports those traces over OTLP/HTTP when `[otel] enabled`
+  (`FV_OTEL=1`), for an operator who runs a collector; it adds nothing to
+  fv-control.
 - **Grafana (not built):** if Grafana is wanted later, fv-control's cron
   can push the same whitelisted samples to a Grafana Cloud Prometheus
   `remote_write` endpoint. That needs snappy-compressed protobuf, a
