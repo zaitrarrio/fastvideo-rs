@@ -13,6 +13,7 @@
 //! | [`profile`]: typed TOML profiles, sol-engine config import | `config_manifest.py`, `config/*/*.toml` |
 //! | [`settings`]: env > profile > default for every `FASTVIDEO_*` knob | `TransformContext.env` / `set_env` |
 //! | [`kernels`]: [`KernelBackend`]s (nvcc, oxide, cuDNN, cuBLAS) per op | — (sol-engine picks backends by env) |
+//! | [`step_cache`]: the [`StepCache`] trait, `EasyCache` / `TeaCache` / `FbCache` / `Taylor` (ADR-0020) | `methods/teacache.py`, `wan_cache.py`, `step_cache.py` |
 //!
 //! The model adapters (`fastvideo_models::h3::techniques` for H3) turn a
 //! profile plus the legacy env flags plus the recipe's defaults into a
@@ -27,12 +28,14 @@ pub mod profile;
 pub mod registry;
 pub mod schedule;
 pub mod settings;
+pub mod step_cache;
 pub mod technique;
 
 pub use compose::{compose, CompositionError, Plan, HORIZON};
 pub use kernels::{KernelBackend, KernelChoice, KernelOp, Provider};
 pub use profile::Profile;
 pub use schedule::{Route, Schedule, SparseRoute, StepSet, VsaSchedule};
+pub use step_cache::StepCache;
 pub use technique::{Capability, Kind, ModelSpec, Phase, Seam, Technique, TransformPhase};
 
 #[cfg(test)]

@@ -96,7 +96,7 @@ and `:791-799` replaces `prev` with the uncond hidden state. Python stage 2 is
 
 | Technique | Sol-Engine (file:line) | fastvideo-rs (file:line) | Verdict | Note |
 |---|---|---|---|---|
-| EasyCache whole-stack (5B/14B/1.3B) | `cache_runtime.py:353-369` guards+accumulator, `:430-439` k refresh/payload; tomls 0.036/7/1, tuned 0.10/5 | `wan/sol_cache.rs:257-316` decide_cond/note_cond_computed/uncond_compute; `pipeline.rs:929-965` signals; profiles `:184-190` | same | |
+| EasyCache whole-stack (5B/14B/1.3B) | `cache_runtime.py:353-369` guards+accumulator, `:430-439` k refresh/payload; tomls 0.036/7/1, tuned 0.10/5 | `wan/sol_cache.rs:257-316` decide_cond/note_cond_computed/uncond_compute (since B4a: `wan::sol_cache::easycache` on `techniques::step_cache::EasyCache`, ADR-0020); `pipeline.rs:929-965` signals; profiles `:184-190` | same | |
 | TeaCache (5B family, timestep_proj signal) | `cache_runtime.py:165-187` force order, `:241-267` per-branch state + whole-stack residual; never batched | `sol_cache.rs:472-596` same defaults/Horner; `transformer.rs:824-865` batched mode skips only if both rows reuse and resets both accumulators (`:1157-1160`) | algorithm drift | Separate-forward path is identical; the default batched T2V path couples cond/uncond decisions. |
 | TaylorSeer lite (interval 3 / warmup 3 / order 1) | `cache_runtime.py:459-503` diffusers TaylorSeerCacheConfig, compute rule `(step-warmup-1)%interval==0` per branch | `sol_cache.rs:70-146` same formula, divided differences, forecast skips blocks+head (`transformer.rs:1563-1566`); step counter per forward_ctx (`:1389`) not per branch | algorithm drift | On unbatched paths (MoE, i2v, image) the counter advances twice per denoise step, halving warmup/interval. |
 | A14B MoE cache controller (block-0 fresh, tail-39 residual) | `cache_controller.py:186-195` guards, `:148-155` probe = 64 strided tokens x first 128 channels, `:376-387` k from probe | `sol_cache.rs:715-850` same constants/guard order/threshold 0.30; `transformer.rs:1314,1364-1369` signal is full-tensor mean_abs_delta | param drift | Different k, estimate, and hit pattern than the probe. |
@@ -170,7 +170,7 @@ and `:791-799` replaces `prev` with the uncond hidden state. Python stage 2 is
 
 | Technique | Sol-Engine (file:line) | fastvideo-rs (file:line) | Verdict | Note |
 |---|---|---|---|---|
-| TeaCache 1.15 / start 10 / max 3 (rel-L1, identity coeffs) | `optimized/env.sh:20` teacache_c115_s10_m3 parsed by EXTERNAL `run_cosmos3_cache_matrix.sh`; generic controller `techniques/methods/teacache.py:46-135` | `cosmos/sol.rs:54-63` relative_l1, `:88-101` `TeaCacheWindow::decide` (equivalent), `:122-131` follow(); `cosmos3/transformer.rs:292-307` block-residual reuse | param drift | Controller logic matches but `cosmos3/config.rs:79-81` `super_64b() -> None`; only exercised by Predict2 EDM path which skips flow_shift 10 (`cosmos/sol.rs:18-19`). |
+| TeaCache 1.15 / start 10 / max 3 (rel-L1, identity coeffs) | `optimized/env.sh:20` teacache_c115_s10_m3 parsed by EXTERNAL `run_cosmos3_cache_matrix.sh`; generic controller `techniques/methods/teacache.py:46-135` | `cosmos/sol.rs:54-63` relative_l1, `:88-101` `TeaCacheWindow::decide` (equivalent; since B4a `cosmos::sol::teacache_window` on `techniques::step_cache::TeaCache`, ADR-0020), `:122-131` follow(); `cosmos3/transformer.rs:292-307` block-residual reuse | param drift | Controller logic matches but `cosmos3/config.rs:79-81` `super_64b() -> None`; only exercised by Predict2 EDM path which skips flow_shift 10 (`cosmos/sol.rs:18-19`). |
 | NVFP4 step-selective (gate_up/down/qkv/out, skip first 3 / last 3) | `optimized/env.sh:24-30` SGLANG_COSMOS3_FP4_LINEAR | `cosmos/sol.rs:49-51` `fp4_linear(step,n)` predicate only; no quantised linears | param drift | Constants only. |
 | 4-GPU sequence parallel | `run_cosmos3_common.sh:46,131` NUM_GPUS=4 | single GPU | missing | |
 
@@ -178,7 +178,7 @@ and `:791-799` replaces `prev` with the uncond hidden state. Python stage 2 is
 
 | Technique | Sol-Engine (file:line) | fastvideo-rs (file:line) | Verdict | Note |
 |---|---|---|---|---|
-| TeaCache 0.15 / 6 / 2 on time_text_embed, whole-step cache | `step_cache_runtime.py:67-118` identity coeffs (`teacache.py:93`), wraps transformer.forward; `full.toml` | `hunyuan15/sol.rs:29-39` GAP string; `pipeline.rs:178-196` dense; time path is time_in only (`transformer.rs:236-283`) | missing | Rust ports HunyuanVideo 1.5, Sol-Engine runs 13B; controller portable via `cosmos::sol::TeaCacheWindow` with recalibration. |
+| TeaCache 0.15 / 6 / 2 on time_text_embed, whole-step cache | `step_cache_runtime.py:67-118` identity coeffs (`teacache.py:93`), wraps transformer.forward; `full.toml` | `hunyuan15/sol.rs:29-39` GAP string; `pipeline.rs:178-196` dense; time path is time_in only (`transformer.rs:236-283`) | missing | Rust ports HunyuanVideo 1.5, Sol-Engine runs 13B; controller portable via `cosmos::sol::TeaCacheWindow` (since B4a: a `techniques::step_cache::TeaCache` parameter set, ADR-0020) with recalibration. |
 | Sol-Attn tau 1.0 diag, exact text KV sink, dense text queries | `gpu_infer.py:134-185`; `sol_attn_backend.py:429-546` sink_start=video_len, text rows overwritten with SDPA | `transformer.rs:203` dense SDPA; text-sink kernel exists for Wan (`wan/sol_ops.rs:333-343`) but is not wired | missing | |
 
 ### SANA (1)

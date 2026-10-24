@@ -108,7 +108,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | todo (B4a step caches in progress, ADR-0020; then B4b `fuse.rs`, B4c disk prompt cache) |
+| B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | active (B4a pr #173: step caches, ADR-0020, GPU `b4a` cells pending; then B4b `fuse.rs`, B4c disk prompt cache) |
 | B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | merged (#161) |
 | B6 | `H3Pipeline::load` and `Ltx2Pipeline::load` split into plan, open, place, fuse; dead code (`TensorBackend`, mlx scaffold) retired | engine lifecycle testable on CPU | pod | B1 | merged (#170: plan/open/place/fuse, ADR-0017; `techniques` and `b6` GPU identity cells all byte-identical vs main; TensorBackend and the mlx scaffold retired) |
 
@@ -807,3 +807,43 @@ ran (pod id, $/hr), result, cost.
   command and `fv-build` volume, cpu3c 16 vCPU, EU-RO-1) and the stopped
   pod deleted. Main's images compile `fv-lab` (`lab-build`) until the
   tools release from `20cb60c` publishes; then it comes prebuilt.
+- 2026-10-24 13:25Z: B4a opened draft PR #173 (`claude/b4a-stepcache`):
+  `fastvideo_models::techniques::step_cache` (ADR-0020), one `StepCache`
+  trait and one `EasyCache` / `TeaCache` / `FbCache` / `Taylor`; the nine
+  per-family controllers (Wan / SANA / A14B / LingBot EasyCache, H3 / Wan
+  Sol / Cosmos(3) / TeaCache4Wan2.1 TeaCache, LTX FBCache, Wan Taylor) are
+  parameter sets, their arithmetic differences named parameters. CPU
+  evidence: `step_cache/equality.rs` against the verbatim pre-B4a
+  controllers (`legacy.rs`), decisions and latents bit for bit. On build
+  pod `l3d75u8a8zhw47` (agent `b4a-stepcache`): fmt, workspace clippy
+  `-D warnings`, `--features cuda` check, `scripts/gpu/lint.sh`,
+  `scripts/serve/check.sh` green; cudarc + models + engine-service + core
+  1396 passed, 1 failed: `settings::workspace_check` on fastvideo-lab's
+  `FASTVIDEO_X` test names, failing identically on main `3da5cab4` (D1a).
+  GPU gate pending (coordinator): `runpod-matrix.sh b4a`, three H3
+  TeaCache cells (fullopt env / profile, a 4-step reuse fixture),
+  `FV_B4A_CELLS` for one cell per pod; Wan / SANA / LingBot / Cosmos caches
+  (no EU-volume tree) and LTX-2.5 FBCache (no reachable path) rest on the
+  CPU fixtures.
+- 2026-10-24 14:10Z: B4a review fixes on #173: the unreachable LTX FBCache
+  cell dropped (ADR-0020 and decision log corrected); b4a cells fail on
+  zero reuses or differing cache evidence; exact threshold-tie fixtures per
+  comparison family and the TeaCache4Wan2.1 f32 accumulator pinned (five
+  comparison / precision mutations now caught); `dit_cfg_easy` without
+  `expect`; `Forced` enum, `WrongRefresh`; docs.
+
+- 2026-10-24 14:24Z, coordinator: B4a GPU gate, runtime image
+  `sha-abccc38` (the PR head) against main `sha-e93e357` (pre-B4a step
+  caches), three single-cell RTX PRO 6000 pods in EU-RO-1 with
+  `bz0ofkfx45` (`FV_B4A_CELLS=<cell>`): b4a-h3-fullopt-env, b4a-h3-fullopt-prof
+  and b4a-h3-4step-tea all `compare-clips --off-identity` pass, 124 of 124
+  frame digests equal; TeaCache reused 35 steps in both arms of each
+  fullopt cell and 2 forwards in both arms of the 4-step cell (the 4-step
+  fixture's threshold 4.0 does reuse), and the cache evidence lines
+  (`h3 teacache …`, `fuse step cache`) are identical between arms (49, 49
+  and 5 lines). The pods' fetch takes only JSON and stdout/stderr, so the
+  cells' own `verdict.json` / `cache-evidence.log` stayed on the pods; the
+  coordinator recomputed both from the fetched stderr
+  (`<cell>-<arm>/cache-evidence.txt`, `<cell>.evidence.diff`, empty).
+  About 35 GPU-minutes, ~$1.45. Evidence:
+  `artifacts/runpod/b4a/abccc38-{10241423,10241424,10241425}/`.

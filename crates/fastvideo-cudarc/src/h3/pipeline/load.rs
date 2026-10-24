@@ -26,9 +26,9 @@ use crate::h3::nvfp4::{ModelOptOptions, Nvfp4Dit};
 use crate::rt::load_stages::DeviceFacts;
 use crate::rt::quant::QuantMode;
 use fastvideo_models::h3::memory::H3VaeLinears;
-use fastvideo_models::h3::sol::H3TeaCache;
 use fastvideo_models::h3::turbo_lora::TurboLora;
 use fastvideo_models::techniques::settings::Active;
+use fastvideo_models::techniques::step_cache::TeaCache;
 
 /// Where the DiT's weights come from.
 #[derive(Clone, Debug)]
@@ -152,7 +152,7 @@ pub struct H3LoadPlan {
     /// The AdaLN projections are not read (a valid cache file, no adapter).
     pub skip_adaln: bool,
     /// The step-output cache the fuse stage installs.
-    pub teacache: Option<H3TeaCache>,
+    pub teacache: Option<TeaCache>,
     /// The runtime's block fusions under bf16 activations, as the snapshot
     /// sets them: `FASTVIDEO_H3_FUSE` and, with it, `FASTVIDEO_H3_GLUE`
     /// (`crate::h3::fused16`).
@@ -838,10 +838,10 @@ impl H3LoadPlan {
             format!("fuse adapter: {}", self.adapter.describe()),
             format!(
                 "fuse step cache: {}",
-                self.teacache.as_ref().map_or("none".to_owned(), |t| format!(
-                    "teacache threshold={} retain={} cooldown={}",
-                    t.threshold, t.retain_steps, t.cooldown_steps
-                ))
+                self.teacache.as_ref().map_or("none".to_owned(), |t| {
+                    let (threshold, retain, cooldown, _) = fastvideo_models::h3::sol::teacache_knobs(t);
+                    format!("teacache threshold={threshold} retain={retain} cooldown={cooldown}")
+                })
             ),
             format!(
                 "fuse kernels: fused16={} glue={}",
@@ -1378,9 +1378,10 @@ impl H3LoadPlan {
                     fastvideo_models::h3::sol::TEACACHE_APPLIED
                 ));
             } else {
+                let (threshold, retain, cooldown, coefficients) =
+                    fastvideo_models::h3::sol::teacache_knobs(&state);
                 crate::rt::log::info(format_args!(
-                    "h3 teacache: threshold {} retain {} cooldown {} coefficients {:?}",
-                    state.threshold, state.retain_steps, state.cooldown_steps, state.coefficients
+                    "h3 teacache: threshold {threshold} retain {retain} cooldown {cooldown} coefficients {coefficients:?}"
                 ));
             }
             model.enable_teacache(state)?;

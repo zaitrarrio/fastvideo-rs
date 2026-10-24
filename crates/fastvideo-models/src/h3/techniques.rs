@@ -23,13 +23,13 @@ use super::config::H3InferenceContract;
 use super::lora::is_sol_h3_spark_recipe;
 use super::sol::{
     policy_technique, recipe_sol_attn_policy, sink_policy, teacache_requested, H3SolAttnPolicy,
-    H3TeaCache,
 };
 use crate::techniques::methods::{
     DenseAttention, Fp8Attention, Fp8AttentionOps, SinkMode, SolAttn, TeaCache, TinyDecoder,
     TinyDecoderKind, Vsa,
 };
 use crate::techniques::registry::h3_spec;
+use crate::techniques::step_cache;
 use crate::techniques::VsaSchedule;
 use crate::techniques::{compose, Plan, Profile, Schedule, Technique, HORIZON};
 
@@ -357,17 +357,21 @@ impl H3Techniques {
     }
 
     /// The TeaCache controller for a denoise of `num_forwards` forwards.
-    pub fn teacache_state(&self, num_forwards: usize) -> Result<Option<H3TeaCache>, String> {
+    pub fn teacache_state(
+        &self,
+        num_forwards: usize,
+    ) -> Result<Option<step_cache::TeaCache>, String> {
         self.teacache
             .as_ref()
             .map(|tc| {
-                H3TeaCache::new(
+                super::sol::teacache(
                     tc.threshold,
                     tc.retain_steps,
                     tc.cooldown_steps,
                     tc.num_forwards.unwrap_or(num_forwards),
                     tc.coefficients.clone(),
                 )
+                .map_err(|e| e.to_string())
             })
             .transpose()
     }
@@ -400,8 +404,11 @@ impl H3Techniques {
 #[cfg(test)]
 mod tests {
     use super::super::packing::{H3PackedLayout, KeyframeAnchor};
-    use super::super::sol::{policy_route, sink_spec, sink_spec_for, technique_route, H3TeaCache};
+    use super::super::sol::{
+        policy_route, rtx_teacache, sink_spec, sink_spec_for, technique_route,
+    };
     use super::*;
+    use crate::techniques::step_cache::{Lane, Refresh, Signal, StepCache};
     use std::collections::BTreeMap;
 
     const RECIPES: [&str; 8] = [
@@ -522,7 +529,7 @@ mod tests {
         let c = contract("sol-h3-rtx");
         let t = H3Techniques::resolve(Some("sol-h3-rtx"), &c, false, None, &env_of(m)).unwrap();
         let a = t.teacache_state(49).unwrap().unwrap();
-        let b = H3TeaCache::official(49).unwrap();
+        let b = rtx_teacache(49).unwrap();
         assert_eq!(format!("{a:?}"), format!("{b:?}"));
         assert!(t.teacache_is_official());
     }
@@ -727,15 +734,61 @@ mod tests {
             // Every step's signal is tiny: exactly the middle steps reuse.
             let reused: Vec<usize> = (0..8)
                 .filter(|&s| {
-                    let d = tc.decide(s, 0.01);
-                    if d.compute {
-                        tc.note_computed();
+                    let signal = if tc.needs_signal(Lane::ONLY, s) {
+                        Signal::Distance(0.01)
+                    } else {
+                        Signal::None
+                    };
+                    let d = tc.decide(Lane::ONLY, s, signal).unwrap();
+                    if d.compute() {
+                        tc.note_computed(Lane::ONLY, Refresh::None).unwrap();
                     }
-                    !d.compute
+                    !d.compute()
                 })
                 .collect();
             assert_eq!(reused, vec![3, 4], "{name}");
         }
+    }
+
+    /// The B4a GPU identity cell's profile (`scripts/gpu/fixtures/
+    /// b4a-h3-4step-teacache.toml`) resolves on FastH3 4-step VSA and reuses
+    /// exactly forwards 1 and 2 of 4 on small signals.
+    #[test]
+    fn b4a_gpu_cell_profile_reuses_the_middle_forwards() {
+        let none = |_: &str| None;
+        let p = Profile::parse(include_str!(
+            "../../../../scripts/gpu/fixtures/b4a-h3-4step-teacache.toml"
+        ))
+        .unwrap();
+        let c = contract("4step-vsa");
+        let t = H3Techniques::resolve(None, &c, false, Some(&p), &none).unwrap();
+        // The served FastH3 4-step VSA techniques plus the TeaCache.
+        let fasth3 =
+            Profile::parse(crate::techniques::builtin::get("h3/fasth3_4step_vsa").unwrap())
+                .unwrap();
+        let base = H3Techniques::resolve(None, &c, false, Some(&fasth3), &none).unwrap();
+        let mut want = base.plan.names();
+        want.push("teacache");
+        want.sort_unstable();
+        let mut got = t.plan.names();
+        got.sort_unstable();
+        assert_eq!(got, want);
+        let mut tc = t.teacache_state(4).unwrap().unwrap();
+        let reused: Vec<usize> = (0..4)
+            .filter(|&s| {
+                let signal = if tc.needs_signal(Lane::ONLY, s) {
+                    Signal::Distance(0.05)
+                } else {
+                    Signal::None
+                };
+                let d = tc.decide(Lane::ONLY, s, signal).unwrap();
+                if d.compute() {
+                    tc.note_computed(Lane::ONLY, Refresh::None).unwrap();
+                }
+                !d.compute()
+            })
+            .collect();
+        assert_eq!(reused, vec![1, 2]);
     }
 
     /// `h3/plug_h3_4step_engine_ladder` is h3-max's technique set on the

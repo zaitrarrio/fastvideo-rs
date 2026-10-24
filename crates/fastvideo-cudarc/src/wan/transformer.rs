@@ -6,10 +6,13 @@
 //! copies, and a bias+GELU fused FFN.
 
 use crate::rt::sdpa::{sdpa, Plan};
+use fastvideo_models::techniques::step_cache::{
+    taylor as step_taylor, EasyCache, Lane, Refresh, Signal, StepCache, Taylor, TeaCache,
+};
 use fastvideo_models::wan::sol::{
     morton3d_on_route, pisa_requested, route, sol_attn_requested, WanAttnProfile, WanAttnRoute,
 };
-use fastvideo_models::wan::sol_cache::{A14bCacheController, A14bExpert};
+use fastvideo_models::wan::sol_cache::A14bExpert;
 use fastvideo_models::wan::WanVideoArchConfig;
 
 use super::attn::BlockCausal;
@@ -1143,12 +1146,10 @@ pub struct WanTransformer3D {
     time_cache: std::sync::Arc<std::sync::Mutex<Vec<std::sync::Arc<PreparedTime>>>>,
 }
 
-use fastvideo_models::wan::sol_cache::{SolTeaCache, TaylorSchedule, TeaBranch};
-
 /// Per-branch block residual for Sol TeaCache. Armed by the denoise loop.
 #[derive(Debug)]
 struct SolTeaRuntime {
-    state: SolTeaCache,
+    state: TeaCache,
     pending: Option<TeaArm>,
     active: Option<TeaActive>,
     cond_signal: Option<CudaTensor>,
@@ -1161,30 +1162,31 @@ struct SolTeaRuntime {
 
 #[derive(Debug, Clone, Copy)]
 enum TeaArm {
-    One(TeaBranch, usize),
+    /// One CFG branch ([`Lane::COND`] or [`Lane::UNCOND`]) at a step.
+    One(Lane, usize),
     /// Row 0 is uncond, row 1 is cond.
     Batch(usize),
 }
 
 #[derive(Debug, Clone, Copy)]
 enum TeaActive {
-    One(TeaBranch),
+    One(Lane),
     Batch,
 }
 
 /// TaylorSeer lite: forecast `proj_out`, skip the blocks on a forecast step.
 #[derive(Debug)]
 struct SolTaylorRuntime {
-    schedule: TaylorSchedule,
+    /// The schedule, the forward clock and the last-update bookkeeping.
+    taylor: Taylor,
     compute: bool,
-    last_update: Option<isize>,
     factors: Vec<CudaTensor>,
 }
 
 /// A14B EasyCache runtime: block 0 always runs; tail residual is per CFG branch.
 #[derive(Debug)]
 struct A14bRuntime {
-    state: A14bCacheController,
+    state: EasyCache,
     pending: Option<(bool, usize)>,
     active_cond: bool,
     reuse: bool,
@@ -1223,7 +1225,7 @@ fn env_usize_alt(primary: &str, fallback: &str, default: usize) -> usize {
 fn decide_one_branch(
     runtime: &mut SolTeaRuntime,
     signal: &CudaTensor,
-    branch: TeaBranch,
+    branch: Lane,
     step: usize,
 ) -> Result<Option<bool>> {
     if signal.shape.first().copied().unwrap_or(0) != 1 {
@@ -1231,23 +1233,19 @@ fn decide_one_branch(
             "wan sol teacache single-branch forward has a batch other than 1".into(),
         ));
     }
-    let rel = if runtime.state.needs_signal(branch, step) {
-        let previous = match branch {
-            TeaBranch::Cond => runtime.cond_signal.as_ref(),
-            TeaBranch::Uncond => runtime.uncond_signal.as_ref(),
-        }
-        .expect("teacache signal");
-        relative_l1(signal, previous)?
+    let measured = if runtime.state.needs_signal(branch, step) {
+        let previous = tea_signal(runtime, branch)?;
+        Signal::Distance(relative_l1(signal, previous)?)
     } else {
-        0.0
+        Signal::None
     };
-    let decision = runtime.state.decide(branch, step, rel);
-    match branch {
-        TeaBranch::Cond => runtime.cond_signal = Some(signal.clone()),
-        TeaBranch::Uncond => runtime.uncond_signal = Some(signal.clone()),
-    }
+    let decision = runtime
+        .state
+        .decide(branch, step, measured)
+        .map_err(super::sol_cache::cache_err)?;
+    *tea_signal_slot(runtime, branch) = Some(signal.clone());
     runtime.active = Some(TeaActive::One(branch));
-    if decision.compute {
+    if decision.compute() {
         Ok(Some(false))
     } else {
         runtime.state.note_reused(branch);
@@ -1256,6 +1254,24 @@ fn decide_one_branch(
             decision.reason
         ));
         Ok(Some(true))
+    }
+}
+
+/// The previous signal of `branch`; present whenever the cache asks for it.
+fn tea_signal(runtime: &SolTeaRuntime, branch: Lane) -> Result<&CudaTensor> {
+    if branch == Lane::COND {
+        runtime.cond_signal.as_ref()
+    } else {
+        runtime.uncond_signal.as_ref()
+    }
+    .ok_or_else(|| TensorError::Message("wan sol teacache: no previous signal".into()))
+}
+
+fn tea_signal_slot(runtime: &mut SolTeaRuntime, branch: Lane) -> &mut Option<CudaTensor> {
+    if branch == Lane::COND {
+        &mut runtime.cond_signal
+    } else {
+        &mut runtime.uncond_signal
     }
 }
 
@@ -1270,31 +1286,27 @@ fn decide_cfg_batch(
         ));
     }
     let mut compute = false;
-    for (row, branch) in [(0, TeaBranch::Uncond), (1, TeaBranch::Cond)] {
+    for (row, branch) in [(0, Lane::UNCOND), (1, Lane::COND)] {
         let row_signal = signal.narrow(0, row, 1)?;
-        let rel = if runtime.state.needs_signal(branch, step) {
-            let previous = match branch {
-                TeaBranch::Cond => runtime.cond_signal.as_ref(),
-                TeaBranch::Uncond => runtime.uncond_signal.as_ref(),
-            }
-            .expect("teacache signal");
-            relative_l1(&row_signal, previous)?
+        let measured = if runtime.state.needs_signal(branch, step) {
+            let previous = tea_signal(runtime, branch)?;
+            Signal::Distance(relative_l1(&row_signal, previous)?)
         } else {
-            0.0
+            Signal::None
         };
-        let decision = runtime.state.decide(branch, step, rel);
-        match branch {
-            TeaBranch::Cond => runtime.cond_signal = Some(row_signal),
-            TeaBranch::Uncond => runtime.uncond_signal = Some(row_signal),
-        }
-        compute |= decision.compute;
+        let decision = runtime
+            .state
+            .decide(branch, step, measured)
+            .map_err(super::sol_cache::cache_err)?;
+        *tea_signal_slot(runtime, branch) = Some(row_signal);
+        compute |= decision.compute();
     }
     runtime.active = Some(TeaActive::Batch);
     if compute {
         Ok(Some(false))
     } else {
-        runtime.state.note_reused(TeaBranch::Uncond);
-        runtime.state.note_reused(TeaBranch::Cond);
+        runtime.state.note_reused(Lane::UNCOND);
+        runtime.state.note_reused(Lane::COND);
         super::log::debug(format_args!(
             "wan sol teacache reuse step {step} both cfg rows"
         ));
@@ -1302,6 +1314,9 @@ fn decide_cfg_batch(
     }
 }
 
+/// Device factor refresh: the value, then divided differences scaled by
+/// [`step_taylor::difference_scale`] (the host twin is
+/// [`step_taylor::host_update`]).
 fn update_factors(
     previous: &[CudaTensor],
     features: &CudaTensor,
@@ -1312,7 +1327,7 @@ fn update_factors(
     if previous.is_empty() {
         return Ok(factors);
     }
-    let inv = 1.0 / delta as f32;
+    let inv = step_taylor::difference_scale(delta);
     for j in 0..max_order {
         let Some(prev) = previous.get(j) else {
             break;
@@ -1322,17 +1337,16 @@ fn update_factors(
     Ok(factors)
 }
 
+/// Device forecast: `base · 1` plus each higher factor times its
+/// [`step_taylor::forecast_coefficients`] coefficient.
 fn predict_factors(factors: &[CudaTensor], step_offset: isize) -> Result<CudaTensor> {
     let base = factors.first().ok_or_else(|| {
         TensorError::Message("wan taylorseer forecast before the first proj_out".into())
     })?;
+    let coefficients = step_taylor::forecast_coefficients(factors.len(), step_offset);
     let mut output = base.mul_scalar(1.0);
-    let mut pow = 1.0f64;
-    let mut fact = 1.0f64;
-    for (order, factor) in factors.iter().enumerate().skip(1) {
-        pow *= step_offset as f64;
-        fact *= order as f64;
-        output = output.add(&factor.mul_scalar((pow / fact) as f32))?;
+    for (factor, coeff) in factors.iter().zip(coefficients).skip(1) {
+        output = output.add(&factor.mul_scalar(coeff))?;
     }
     Ok(output)
 }
@@ -1576,18 +1590,22 @@ impl WanTransformer3D {
             .split(',')
             .filter_map(|part| part.trim().parse().ok())
             .collect();
-        let state = SolTeaCache::new(
+        let (threshold, start_step, end_step) = (
             env_f64("FASTVIDEO_WAN_TEACACHE_THRESH", 0.12),
             env_usize("FASTVIDEO_WAN_TEACACHE_START", 2),
             env_usize("FASTVIDEO_WAN_TEACACHE_END", num_steps.saturating_sub(2)),
+        );
+        let state = fastvideo_models::wan::sol_cache::sol_teacache(
+            threshold,
+            start_step,
+            end_step,
             env_usize("FASTVIDEO_WAN_TEACACHE_MAX_HITS", 0),
             env_usize("FASTVIDEO_WAN_TEACACHE_PERIODIC", 0),
             coefficients,
         )
-        .map_err(TensorError::Message)?;
+        .map_err(super::sol_cache::cache_err)?;
         super::log::info(format_args!(
-            "wan sol teacache: threshold {} start {} end {} (block residual, dense head)",
-            state.threshold, state.start_step, state.end_step
+            "wan sol teacache: threshold {threshold} start {start_step} end {end_step} (block residual, dense head)"
         ));
         *slot = Some(SolTeaRuntime {
             state,
@@ -1611,11 +1629,7 @@ impl WanTransformer3D {
         let mut slot = self.sol_tea.lock().expect("sol tea");
         if let Some(runtime) = slot.as_mut() {
             runtime.pending = Some(TeaArm::One(
-                if cond {
-                    TeaBranch::Cond
-                } else {
-                    TeaBranch::Uncond
-                },
+                if cond { Lane::COND } else { Lane::UNCOND },
                 step,
             ));
         }
@@ -1650,8 +1664,8 @@ impl WanTransformer3D {
             let mut slot = self.sol_tea.lock().expect("sol tea");
             let runtime = slot.as_mut().expect("sol tea");
             match runtime.active.take().expect("sol tea branch") {
-                TeaActive::One(TeaBranch::Cond) => runtime.cond_residual.clone(),
-                TeaActive::One(TeaBranch::Uncond) => runtime.uncond_residual.clone(),
+                TeaActive::One(Lane::COND) => runtime.cond_residual.clone(),
+                TeaActive::One(_) => runtime.uncond_residual.clone(),
                 TeaActive::Batch => runtime.batch_residual.clone(),
             }
             .expect("sol tea residual")
@@ -1665,15 +1679,23 @@ impl WanTransformer3D {
         let residual = after.sub(before)?;
         match runtime.active.take().expect("sol tea branch") {
             TeaActive::One(branch) => {
-                runtime.state.note_computed(branch);
-                match branch {
-                    TeaBranch::Cond => runtime.cond_residual = Some(residual),
-                    TeaBranch::Uncond => runtime.uncond_residual = Some(residual),
+                runtime
+                    .state
+                    .note_computed(branch, Refresh::None)
+                    .map_err(super::sol_cache::cache_err)?;
+                if branch == Lane::COND {
+                    runtime.cond_residual = Some(residual);
+                } else {
+                    runtime.uncond_residual = Some(residual);
                 }
             }
             TeaActive::Batch => {
-                runtime.state.note_computed(TeaBranch::Uncond);
-                runtime.state.note_computed(TeaBranch::Cond);
+                for branch in [Lane::UNCOND, Lane::COND] {
+                    runtime
+                        .state
+                        .note_computed(branch, Refresh::None)
+                        .map_err(super::sol_cache::cache_err)?;
+                }
                 runtime.batch_residual = Some(residual);
             }
         }
@@ -1698,7 +1720,7 @@ impl WanTransformer3D {
                 "wan taylorseer lite is the published mode (WAN22_TAYLOR_LITE); full per-block factors are not this path".into(),
             ));
         }
-        let schedule = TaylorSchedule::new(
+        let taylor = fastvideo_models::wan::sol_cache::taylor(
             env_usize_alt("FASTVIDEO_WAN_TAYLOR_INTERVAL", "WAN22_TAYLOR_INTERVAL", 3),
             env_usize_alt("FASTVIDEO_WAN_TAYLOR_WARMUP", "WAN22_TAYLOR_WARMUP", 3),
             env_usize_alt(
@@ -1708,15 +1730,15 @@ impl WanTransformer3D {
             ),
             env_usize_alt("FASTVIDEO_WAN_TAYLOR_ORDER", "WAN22_TAYLOR_ORDER", 1),
         )
-        .map_err(TensorError::Message)?;
+        .map_err(super::sol_cache::cache_err)?;
+        let p = *taylor.params();
         super::log::info(format_args!(
             "wan sol taylorseer: interval {} warmup {} cooldown {} order {} (proj_out forecast, blocks skipped)",
-            schedule.interval, schedule.warmup, schedule.cooldown_start, schedule.max_order
+            p.interval, p.warmup, p.cooldown_start, p.max_order
         ));
         *slot = Some(SolTaylorRuntime {
-            schedule,
+            taylor,
             compute: true,
-            last_update: None,
             factors: Vec::new(),
         });
         Ok(())
@@ -1741,10 +1763,13 @@ impl WanTransformer3D {
                 "wan a14b cache needs at least two transformer blocks".into(),
             ));
         }
-        let state = A14bCacheController::official(num_steps).map_err(TensorError::Message)?;
+        let state = super::sol_cache::a14b_controller(num_steps)?;
         super::log::info(format_args!(
             "wan a14b easycache: threshold {} start {} tail {} max_reuse {} (block-0 fresh, blocks 1-{} residual)",
-            state.threshold, state.start_step, state.tail_steps, state.max_reuse,
+            fastvideo_models::wan::sol_cache::A14B_EASY_THRESHOLD,
+            fastvideo_models::wan::sol_cache::A14B_START_STEP,
+            fastvideo_models::wan::sol_cache::A14B_TAIL_STEPS,
+            fastvideo_models::wan::sol_cache::A14B_MAX_REUSE,
             self.blocks.len().saturating_sub(1)
         ));
         *slot = Some(A14bRuntime {
@@ -1832,18 +1857,22 @@ impl WanTransformer3D {
         let Some((cond, step)) = runtime.pending.take() else {
             return Ok(None);
         };
+        let lane = A14bExpert::HighNoise.lane();
         if cond {
-            let change = if runtime
-                .state
-                .needs_input_signal(A14bExpert::HighNoise, step)
-            {
-                mean_abs_delta(prefix, runtime.previous_input.as_ref().expect("a14b prev"))?
+            let change = if runtime.state.needs_signal(lane, step) {
+                let previous = runtime.previous_input.as_ref().ok_or_else(|| {
+                    TensorError::Message("wan a14b cache: no previous input".into())
+                })?;
+                Signal::Distance(mean_abs_delta(prefix, previous)?)
             } else {
-                0.0
+                Signal::None
             };
             runtime.previous_input = Some(prefix.clone());
-            let decision = runtime.state.decide(A14bExpert::HighNoise, step, change);
-            runtime.reuse = !decision.compute;
+            let decision = runtime
+                .state
+                .decide(lane, step, change)
+                .map_err(super::sol_cache::cache_err)?;
+            runtime.reuse = !decision.compute();
         }
         runtime.active_cond = cond;
         let residual = if cond {
@@ -1857,7 +1886,7 @@ impl WanTransformer3D {
                 return Ok(Some(false));
             }
             if cond {
-                runtime.state.note_reused(A14bExpert::HighNoise);
+                runtime.state.note_reused(lane);
             }
             Ok(Some(true))
         } else {
@@ -1895,7 +1924,15 @@ impl WanTransformer3D {
             let norm = mean_abs(&residual)?;
             runtime
                 .state
-                .note_computed(A14bExpert::HighNoise, full_in, out_change, norm);
+                .note_computed(
+                    A14bExpert::HighNoise.lane(),
+                    Refresh::Drift {
+                        full_input_change: full_in,
+                        output_change: out_change,
+                        output_norm: Some(norm),
+                    },
+                )
+                .map_err(super::sol_cache::cache_err)?;
             runtime.last_compute_input = Some(prefix.clone());
             runtime.last_compute_output = Some(residual.clone());
             runtime.cond_residual = Some(residual);
@@ -1912,12 +1949,15 @@ impl WanTransformer3D {
         let Some(runtime) = slot.as_mut() else {
             return Ok(TaylorPhase::Off);
         };
-        let decision = runtime.schedule.begin_forward();
-        runtime.compute = decision.compute;
-        if decision.compute {
+        let decision = runtime
+            .taylor
+            .decide(Lane::ONLY, 0, Signal::None)
+            .map_err(super::sol_cache::cache_err)?;
+        runtime.compute = decision.compute();
+        if decision.compute() {
             return Ok(TaylorPhase::Compute);
         }
-        if runtime.factors.is_empty() || runtime.last_update.is_none() {
+        if runtime.factors.is_empty() || runtime.taylor.last_update().is_none() {
             return Err(TensorError::Message(
                 "wan taylorseer forecast before the first proj_out".into(),
             ));
@@ -1931,32 +1971,38 @@ impl WanTransformer3D {
 
     fn predict_taylor(&self) -> Result<CudaTensor> {
         let slot = self.sol_taylor.lock().expect("sol taylor");
-        let runtime = slot.as_ref().expect("sol taylor");
-        let last = runtime.last_update.expect("taylor last update");
-        let offset = runtime.schedule.current_step() - last;
+        let runtime = slot
+            .as_ref()
+            .ok_or_else(|| TensorError::Message("wan taylorseer is off".into()))?;
+        let offset = runtime
+            .taylor
+            .forecast_offset()
+            .map_err(super::sol_cache::cache_err)?;
         predict_factors(&runtime.factors, offset)
     }
 
     fn update_taylor(&self, features: &CudaTensor) -> Result<()> {
         let mut slot = self.sol_taylor.lock().expect("sol taylor");
-        let runtime = slot.as_mut().expect("sol taylor");
+        let runtime = slot
+            .as_mut()
+            .ok_or_else(|| TensorError::Message("wan taylorseer is off".into()))?;
         if !runtime.compute {
             return Ok(());
         }
-        let current = runtime.schedule.current_step();
-        let delta = runtime.last_update.map(|last| current - last).unwrap_or(1);
-        if runtime.last_update.is_some() && delta == 0 {
-            return Err(TensorError::Message(
-                "wan taylorseer delta step cannot be zero".into(),
-            ));
-        }
+        let delta = runtime
+            .taylor
+            .update_delta()
+            .map_err(super::sol_cache::cache_err)?;
         runtime.factors = update_factors(
             &runtime.factors,
             features,
             delta,
-            runtime.schedule.max_order,
+            runtime.taylor.params().max_order,
         )?;
-        runtime.last_update = Some(current);
+        runtime
+            .taylor
+            .note_computed(Lane::ONLY, Refresh::None)
+            .map_err(super::sol_cache::cache_err)?;
         Ok(())
     }
 

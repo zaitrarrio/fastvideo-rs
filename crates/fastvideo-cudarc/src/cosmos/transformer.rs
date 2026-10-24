@@ -548,7 +548,10 @@ impl CosmosTransformer {
         runtime.cond_next = false;
         let compute = if cond {
             let host = signal.host_cow()?;
-            runtime.state.decide(step, &host)
+            runtime
+                .state
+                .decide(step, &host)
+                .map_err(|e| msg(e.to_string()))?
         } else {
             runtime.state.follow()
         };

@@ -330,6 +330,10 @@ The pipeline (`cudarc::h3::pipeline`) reads the plan instead of the flags:
 `H3SolPolicy::from_technique` takes the route and sink, the block loop asks
 `route(step, layer)` of the DSL, `H3Transformer::enable_teacache` takes the
 technique's controller, and VSA takes the plan's sparsity and group. The
+controller is the one `TeaCache` of `techniques::step_cache` with H3's
+parameters (`h3::sol::teacache`); every family's step cache (EasyCache,
+TeaCache, FbCache, Taylor) is a parameter set of that module's one
+implementation per algorithm (ADR-0020). The
 checks the flags had carry over to the profile path: a `suffix` (Spark) sink
 outside `sol-h3-spark`, a `prefix` (engine) sink on Ref2VA, `vsa` on a recipe
 whose DiT has no compression gate, `taehv` on H3, and `taeh3` without
