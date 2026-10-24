@@ -1,0 +1,18 @@
+# The LTX-2.5 arm of the rtx6000 tier (runpod-matrix.sh `rtx6000`). Schema:
+# crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md.
+schema = 1
+name = "rtx6000-ltx25"
+description = "LTX-2.5 distilled two-stage at its default workload, streamed Gemma, one prompt, seed 1024, warm"
+
+[workload]
+model = "ltx2"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+note = "runpod-matrix.sh's default PROMPT and SEED; canvas, frames and steps are the two-stage pipeline's defaults"
+
+[[arm]]
+name = "ltx25-two-stage"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit", "{weights}/ltx25",
+  "--prompt", "{prompt}", "--seed", "{seed}", "--two-stage", "--text", "streamed", "--warm", "--clip", "{runs}/{arm}/frames"]

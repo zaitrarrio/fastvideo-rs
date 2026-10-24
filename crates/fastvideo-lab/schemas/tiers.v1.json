@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tiers",
+  "description": "`lab/tiers.toml`.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "description": "Always 1.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "tier": {
+      "description": "The run plans, one per GPU class and purpose.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Tier"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "tier"
+  ],
+  "$defs": {
+    "CloudType": {
+      "description": "Runpod's cloud tier.",
+      "type": "string",
+      "enum": [
+        "SECURE",
+        "COMMUNITY"
+      ]
+    },
+    "ImageFlavour": {
+      "description": "The image a tier's pod boots.",
+      "oneOf": [
+        {
+          "description": "`ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-<7>`: fv-gpucheck,\nfv-lab, scripts/gpu and the CUDA runtime (docker/gpucheck.Dockerfile\n`runtime`).",
+          "type": "string",
+          "const": "runtime"
+        }
+      ]
+    },
+    "Tier": {
+      "description": "One `[[tier]]`: a run plan on one GPU class (a `runpod-matrix.sh` family).",
+      "type": "object",
+      "properties": {
+        "cell_timeout_s": {
+          "description": "Per-arm cap (s), `timeout --kill-after=15` around each command; 0 = none.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cells": {
+          "description": "The cell files (`lab/cells/<name>.toml`), in run order.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cloud": {
+          "$ref": "#/$defs/CloudType",
+          "default": "SECURE"
+        },
+        "container_disk_gb": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "description": {
+          "type": "string"
+        },
+        "gpu": {
+          "description": "The provider's GPU type id.",
+          "type": "string"
+        },
+        "gpu_count": {
+          "description": "GPUs per pod (1: the runner drives one GPU).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "image": {
+          "$ref": "#/$defs/ImageFlavour"
+        },
+        "max_usd_per_hr": {
+          "description": "Price cap ($/hr): a quote over it is never created; a pod billed over\nit is deleted at once (fv-deploy's guard).",
+          "type": "number",
+          "format": "double"
+        },
+        "name": {
+          "description": "The family name (`fv-lab run <name>`; the run directory\n`runs/<name>/<tag>` and `artifacts/runpod/<name>/<tag>`).",
+          "type": "string"
+        },
+        "preflight": {
+          "description": "`verify-weights.sh` cells the pod checks at start into `weights.log`\n(a report only: each arm gates on its own cell).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "provider": {
+          "$ref": "#/$defs/TierProvider"
+        },
+        "region": {
+          "description": "fv-control's region id (`eu`: the only one with a weights volume).",
+          "type": "string"
+        },
+        "tae": {
+          "description": "Fetch the tiny autoencoders (`fetch-tae.sh`) onto the container disk\nat start, as `runpod-http.sh` does unless `FV_SKIP_TAE=1`.",
+          "type": "boolean",
+          "default": false
+        },
+        "wall_cap_s": {
+          "description": "Wall-clock cap (s): the detached backstop deletes the pod then.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "weights": {
+          "description": "Where the arms' weight trees come from: `volume` (the EU volume,\nmounted at `/workspace`, trees under `/workspace/weights`) today;\n`registry` (the registry's `hydrate`) later (ADR-0019 §4).",
+          "$ref": "#/$defs/WeightsSource"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "description",
+        "provider",
+        "gpu",
+        "gpu_count",
+        "region",
+        "image",
+        "max_usd_per_hr",
+        "wall_cap_s",
+        "cell_timeout_s",
+        "container_disk_gb",
+        "weights",
+        "cells"
+      ]
+    },
+    "TierProvider": {
+      "description": "Where a tier's pods come from. Runpod pods only today (plan C3b adds\nVast and GCP to the `Provider` trait).",
+      "type": "string",
+      "enum": [
+        "runpod-pod"
+      ]
+    },
+    "WeightsSource": {
+      "description": "Where the weights come from (fv-boot's `FV_WEIGHTS_SOURCE`, ADR-0014 §3.3).\nC3a launches `volume` only (the region guard's rule); the other sources\nare typed so the schema does not change when they are allowed.",
+      "type": "string",
+      "enum": [
+        "volume",
+        "r2",
+        "hub",
+        "none",
+        "registry"
+      ]
+    }
+  }
+}
