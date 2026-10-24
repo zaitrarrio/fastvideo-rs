@@ -1,0 +1,115 @@
+// GENERATED from families/*.toml by control/gen-configs.mjs; do not edit.
+// The runtime family manifests (layer 2, docs/adr/0008-family-manifest-layer-2.md, families/README.md): every served
+// model family and variant, the names a serve config may use for a variant, the weight trees it reads and its GPU
+// needs. Helpers: src/families.ts. Regenerate with `node gen-configs.mjs`; CI runs `--check`.
+export type Tier = "max" | "turbo" | "draft";
+export interface ManifestFamily {
+  id: string;
+  display: string;
+  licence: string;
+  port_doc: string;
+  /** Variant ids in file order (the engine catalog's order: a tier alias resolves to the first of its tier). */
+  variants: string[];
+}
+export interface ManifestVariant {
+  family: string;
+  tier: Tier | null;
+  /** Names besides the id the variant answers to. */
+  served_names: string[];
+  resident_default: boolean;
+  /** The short recipe name the capabilities report. */
+  recipe_name: string;
+  /** Every weight tree the variant reads, as scripts/gpu/weights-manifest.tsv names them (sorted). */
+  trees: string[];
+  /** `trees` without the auxiliary/ files (TAE decoders, LPIPS), which every boot fetches as the aux trees:
+   * what a preset lists as its weights and a weights plan fetches. */
+  weight_trees: string[];
+  gpu: { min_vram_gib: number; min_sm: number; needs: string[] };
+}
+export const MANIFEST_FAMILIES: ManifestFamily[] = [
+  {
+    "id": "h3",
+    "display": "Fixture family",
+    "licence": "Fixture licence",
+    "port_doc": "docs/ports/fixture.md",
+    "variants": [
+      "fix-turbo",
+      "fix-draft-tae"
+    ]
+  }
+];
+export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
+  "fix-turbo": {
+    "family": "h3",
+    "tier": "turbo",
+    "served_names": [
+      "fix",
+      "fixture-turbo"
+    ],
+    "resident_default": true,
+    "recipe_name": "fix-turbo-4step",
+    "trees": [
+      "fix-adapter",
+      "fix-base"
+    ],
+    "weight_trees": [
+      "fix-adapter",
+      "fix-base"
+    ],
+    "gpu": {
+      "min_vram_gib": 80,
+      "min_sm": 89,
+      "needs": [
+        "fp8"
+      ]
+    }
+  },
+  "fix-draft-tae": {
+    "family": "h3",
+    "tier": null,
+    "served_names": [],
+    "resident_default": false,
+    "recipe_name": "fix-draft-tae",
+    "trees": [
+      "auxiliary/tae/taefix.safetensors",
+      "fix-base"
+    ],
+    "weight_trees": [
+      "fix-base"
+    ],
+    "gpu": {
+      "min_vram_gib": 24,
+      "min_sm": 80,
+      "needs": []
+    }
+  }
+};
+/** Every name a serve config's `recipe` (or `id`) may use for a variant, as the engine resolves it (caps.rs find,
+ * parse_tier_alias): a tier alias (`h3-turbo`: the first variant of its tier), the variant id, a served name or the
+ * recipe name. */
+export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" | "served" | "recipe" }> = {
+  "fix": {
+    "variant": "fix-turbo",
+    "kind": "served"
+  },
+  "fix-draft-tae": {
+    "variant": "fix-draft-tae",
+    "kind": "id"
+  },
+  "fix-turbo": {
+    "variant": "fix-turbo",
+    "kind": "id"
+  },
+  "fix-turbo-4step": {
+    "variant": "fix-turbo",
+    "kind": "recipe"
+  },
+  "fixture-turbo": {
+    "variant": "fix-turbo",
+    "kind": "served"
+  },
+  "h3-turbo": {
+    "variant": "fix-turbo",
+    "kind": "tier"
+  }
+};
