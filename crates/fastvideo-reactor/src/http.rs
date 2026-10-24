@@ -113,8 +113,9 @@ async fn stop_session(State(rt): State<Reactor>, headers: HeaderMap, body: Bytes
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
-    if reason.chars().count() > 64 {
-        return Refusal::new(422, "reason: at most 64 characters").into_response();
+    let max = fastvideo_protocol::params::rules::reactor::STOP_REASON_MAX_CHARS;
+    if reason.chars().count() > max {
+        return Refusal::new(422, format!("reason: at most {max} characters")).into_response();
     }
     match rt.stop_session(moderate, reason).await {
         Ok(()) => StatusCode::OK.into_response(),

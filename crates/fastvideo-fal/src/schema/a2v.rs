@@ -34,15 +34,17 @@ use serde_json::Value;
 use super::ltx::{LtxAspect, LtxClass, LTX_PROMPT_MAX_CHARS};
 use super::{bad, parse_enum, type_name, Fields};
 
+use fastvideo_protocol::params::rules::ltx as rules;
+
 /// `guidance_scale` bounds.
-pub const A2V_GUIDANCE: (f64, f64) = (1.0, 50.0);
+pub const A2V_GUIDANCE: (f64, f64) = (rules::FAL_A2V_GUIDANCE.min, rules::FAL_A2V_GUIDANCE.max);
+/// Output frame rate (the LTX-2.5 default).
+pub use fastvideo_protocol::params::rules::ltx::FAL_A2V_FPS as A2V_FPS;
 /// The pro endpoints' audio ceiling ("pro models support a maximum of 10
 /// seconds"); fast takes the protocol's 20 s.
-pub const A2V_PRO_MAX_S: u32 = 10;
+pub use fastvideo_protocol::params::rules::ltx::FAL_A2V_PRO_MAX_S as A2V_PRO_MAX_S;
 /// Short edge of the output (fal: 1080p).
-pub const A2V_SHORT_EDGE: u32 = 1080;
-/// Output frame rate (the LTX-2.5 default).
-pub const A2V_FPS: u32 = 24;
+pub use fastvideo_protocol::params::rules::ltx::FAL_A2V_SHORT_EDGE as A2V_SHORT_EDGE;
 /// `aspect_ratio` values, in schema order.
 pub const A2V_ASPECTS: [LtxAspect; 3] = [LtxAspect::Auto, LtxAspect::R16x9, LtxAspect::R9x16];
 

@@ -12,6 +12,9 @@
 //!   [`SubmitEndpoint`], [`JobView`] traits.
 //! - [`stream`]: [`TrackSet`], [`StreamProtocol`], session types.
 //! - [`av`]: raw [`RgbFrame`] / [`Pcm`] buffers.
+//! - [`params`]: [`ParamSpec`], one typed description per (surface, model)
+//!   of every request parameter, and the surface [`rules`](params::rules)
+//!   every adapter validates with (plan E2, ADR-0012).
 //! - [`ingest`]: duplex streaming: [`DuplexCaps`], input tracks, decoded
 //!   [`InputFrame`] / [`InputAudio`], the session [`SessionContext`].
 //!
@@ -27,6 +30,7 @@ pub mod ingest;
 pub mod job;
 pub mod moderation;
 pub mod negotiate;
+pub mod params;
 pub mod quality;
 pub mod request;
 pub mod stream;
@@ -64,6 +68,10 @@ pub use negotiate::{
     ResolvedEdit, ResolvedEditOp, EDIT_DURATION_MAX_S, EDIT_DURATION_MIN_S, EDIT_FPS,
     EDIT_MAX_FRAMES, EDIT_MAX_PIXELS, EDIT_SOURCE_MAX_S, EXTEND_CONTEXT_MAX_S,
     EXTEND_CONTEXT_MIN_S,
+};
+pub use params::{
+    Domain, IntField, IntRange, MediaField, NumField, NumRange, Param, ParamSpec, ParamType,
+    Support, UnknownFields,
 };
 pub use request::{
     Anchor, AudioInput, AudioOut, AudioRole, CanvasSpec, Family, GenerationRequest, Keyframe,

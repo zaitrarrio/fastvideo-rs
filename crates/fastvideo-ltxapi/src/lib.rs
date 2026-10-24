@@ -2,7 +2,9 @@
 //! `403 permission_error` stubs (design §4.5, research-ltx-api.md).
 //!
 //! - [`routes`]: [`router`] with every LTX route and [`LtxConfig`].
+//! - [`body`]: the typed request bodies (`ltx/openapi.json`).
 //! - [`request`]: request validation and normalization (`SubmitEndpoint`).
+//! - [`params`]: the `ParamSpec`s of the generation endpoints (plan E2).
 //! - [`models`]: `model` ids → engine tiers, and the support matrix.
 //! - [`v2`]: `202 {id, created_at}` and the `oneOf` status shapes.
 //! - [`v1`]: sync MP4 replies and the per-key concurrency limit.
@@ -12,8 +14,10 @@
 //!
 //! Owned by WP-08 (docs/serve/design.md §8).
 
+pub mod body;
 pub mod error;
 pub mod models;
+pub mod params;
 pub mod request;
 pub mod routes;
 pub mod stubs;

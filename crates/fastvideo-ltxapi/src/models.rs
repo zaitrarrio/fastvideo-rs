@@ -176,6 +176,11 @@ impl ResTier {
         }
     }
     pub const ALL: [ResTier; 4] = [ResTier::P720, ResTier::P1080, ResTier::P1440, ResTier::K4];
+
+    /// The short edge (the landscape height).
+    pub fn short_edge(&self) -> u32 {
+        self.landscape().1
+    }
 }
 
 /// A validated `resolution` string.
@@ -226,18 +231,19 @@ impl Resolution {
     }
 }
 
-/// Frame rates the API documents.
-pub const API_FPS: [u32; 4] = [24, 25, 48, 50];
-/// The default `fps`.
-pub const DEFAULT_FPS: u32 = 24;
+/// Frame rates the API documents, and the default `fps`
+/// (`fastvideo_protocol::params::rules::ltx`).
+pub use fastvideo_protocol::params::rules::ltx::{API_DEFAULT_FPS as DEFAULT_FPS, FPS as API_FPS};
 
-/// The durations (seconds) the matrix allows for `class` at `res` and `fps`.
+/// The durations (seconds) the matrix allows for `class` at `res` and `fps`
+/// (`rules::ltx::max_duration`: the LTX product matrix, shared with fal).
 pub fn allowed_durations(class: ModelClass, res: ResTier, fps: u32) -> Vec<u32> {
-    let long = class == ModelClass::Fast
-        && matches!(res, ResTier::P720 | ResTier::P1080)
-        && matches!(fps, 24 | 25);
-    let max = if long { 20 } else { 10 };
-    (6..=max).step_by(2).collect()
+    use fastvideo_protocol::params::rules::ltx;
+    ltx::durations(ltx::max_duration(
+        class == ModelClass::Fast,
+        res.short_edge(),
+        fps,
+    ))
 }
 
 /// Checks `fps` against the documented list.
@@ -245,9 +251,10 @@ pub fn check_fps(fps: u32) -> Result<(), ApiError> {
     if API_FPS.contains(&fps) {
         Ok(())
     } else {
+        let list: Vec<String> = API_FPS.iter().map(u32::to_string).collect();
         Err(ApiError::invalid_param(
             "fps",
-            format!("fps must be one of: 24, 25, 48, 50 (got {fps})"),
+            format!("fps must be one of: {} (got {fps})", list.join(", ")),
         ))
     }
 }

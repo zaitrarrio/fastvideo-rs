@@ -40,26 +40,20 @@ use serde_json::Value;
 
 use super::{bad, parse_enum, type_name, Fields};
 
-/// `prompt` maxLength (the LTX API contract).
-pub const LTX_PROMPT_MAX_CHARS: usize = 5000;
-/// The omitted `duration` (fal: `"auto"`, see the module docs).
-pub const LTX_DEFAULT_DURATION: u32 = 6;
-pub const LTX_DEFAULT_FPS: u32 = 25;
-pub const LTX_FPS_FAST: [u32; 4] = [24, 25, 48, 50];
-pub const LTX_FPS_PRO: [u32; 3] = [24, 25, 50];
-/// The engine's LTX frame grid ceiling (`ltx2_caps`: 8k+1, 9..=481).
-pub const LTX_FRAMES_MAX: u32 = 481;
+use fastvideo_protocol::params::rules::ltx as rules;
+
 /// `camera_motion` values (LTX API).
-pub const CAMERA_MOTIONS: [&str; 8] = [
-    "dolly_in",
-    "dolly_out",
-    "dolly_left",
-    "dolly_right",
-    "jib_up",
-    "jib_down",
-    "static",
-    "focus_shift",
-];
+pub use fastvideo_protocol::params::rules::ltx::CAMERA_MOTIONS;
+/// The omitted `duration` (fal: `"auto"`, see the module docs).
+pub use fastvideo_protocol::params::rules::ltx::FAL_DEFAULT_DURATION as LTX_DEFAULT_DURATION;
+pub use fastvideo_protocol::params::rules::ltx::FAL_DEFAULT_FPS as LTX_DEFAULT_FPS;
+pub use fastvideo_protocol::params::rules::ltx::FPS as LTX_FPS_FAST;
+pub use fastvideo_protocol::params::rules::ltx::FPS_FAL_PRO as LTX_FPS_PRO;
+/// The engine's LTX frame grid ceiling (`rules::ltx::FRAMES_MAX`; the
+/// tests pin it to the served caps).
+pub use fastvideo_protocol::params::rules::ltx::FRAMES_MAX as LTX_FRAMES_MAX;
+/// `prompt` maxLength (the LTX API contract; `rules::ltx`).
+pub use fastvideo_protocol::params::rules::ltx::PROMPT_MAX_CHARS as LTX_PROMPT_MAX_CHARS;
 
 /// fast (`ltx-turbo`) or pro (`ltx-pro`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -85,11 +79,10 @@ impl LtxClass {
     /// Every duration the schema lists (the matrix narrows it per fps and
     /// resolution, see [`max_duration`]).
     pub fn durations(self) -> Vec<u32> {
-        let max = match self {
-            LtxClass::Fast => 20,
-            LtxClass::Pro => 10,
-        };
-        (6..=max).step_by(2).collect()
+        rules::durations(match self {
+            LtxClass::Fast => rules::DURATION_MAX_LONG,
+            LtxClass::Pro => rules::DURATION_MAX_SHORT,
+        })
     }
 }
 
@@ -158,14 +151,7 @@ impl LtxAspect {
 /// fal's matrix: fast allows up to 20 s at 720p/1080p and 24/25 fps, 10 s
 /// otherwise; pro 10 s.
 pub fn max_duration(class: LtxClass, res: LtxResolution, fps: u32) -> u32 {
-    let long = class == LtxClass::Fast
-        && matches!(res, LtxResolution::P720 | LtxResolution::P1080)
-        && matches!(fps, 24 | 25);
-    if long {
-        20
-    } else {
-        10
-    }
+    rules::max_duration(class == LtxClass::Fast, res.landscape().1, fps)
 }
 
 /// Frames the engine generates for `duration` s at `fps` (8k+1, rounded up).

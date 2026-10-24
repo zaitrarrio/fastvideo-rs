@@ -1083,6 +1083,36 @@ Project code: FVID
 - ADR: 0013
 - Verification: `request::tests` (tasks, conflicts, canvas, frames, seconds, fps, refs, knobs)
 
+### FVID · 2026-10-24 · FVID-2026-10-24-param-spec
+- Trigger: plan E2: request limits duplicated across the adapters and disagreeing between surfaces (review §4.4, §7.6 item 2); E3 needs a machine-readable parameter list
+- Options: per-adapter spec types; one `ParamSpec` type in `fastvideo-protocol` with the limits in each adapter; the type and every upstream limit in `fastvideo-protocol::params` (adapters keep their wire enums and wording)
+- Decision: the last: `ParamSpec` / `Param` / `Domain` / `Support` and `params::rules` (one cited constant per upstream limit, model facts derived from `fastvideo_models`) in the protocol crate; each adapter builds its specs from the rules and the caps; `GET /fv/v1/params` serves them; the LTX bodies are typed; a scan test refuses numeric limits in adapter validation code
+- Reason: one source per limit with no dependency cycle; adapters' error texts stay theirs
+- Reversibility: moderate (the endpoint and the golden are new public surface)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: ADR-0012
+- Verification: `param_scan`, `param_rules`, the adapters' `params` agreement tests, `ltxapi::body` tests, `param_spec_golden`, `capabilities_golden` unchanged
+
+### FVID · 2026-10-24 · FVID-2026-10-24-guidance-scale-2-bound
+- Trigger: E2 census: `/v1/videos` bounds `guidance_scale` to 0..=20 but `guidance_scale_2` only to >= 0 (negotiation); FastVideo's `protocol.py` gives both `ge=0, le=20`
+- Options: keep the gap; bound `guidance_scale_2` to 0..=20 like upstream
+- Decision: bound it at parse time (400 `guidance_scale_2 must be within 0..=20`, the `guidance_scale` wording). Full list of message changes, same status and code in each: above 20 refused (was accepted); a negative value gets the range message instead of "must be a non-negative number"; on a model without the `guidance_2` knob an out-of-range value gets the range message instead of "not supported by model"; reported before `boundary_ratio`, the task / image checks and negotiation errors
+- Reason: the vendored upstream contract wins where two places disagree (specs README rule); only upstream-invalid requests change
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: ADR-0012
+- Verification: `fastvideo-openai-videos/tests/params.rs` (agreement), `param_rules::fastvideo_videos_rules`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-upstream-divergences-kept
+- Trigger: E2 census against the vendored specs: fal `minimax/h3-max*` `duration` is now a number 0.92..=15 (ours integer 5..=15); FastVideo seeds may be negative (ours >= 0); OpenAI `limit` minimum 0 (ours 1); FastVideo's new `audio_start_in_s` / `audio_end_in_s` and fal h3-max r2v's `middle_*` / `reference_conditions` are not read
+- Options: follow upstream now (accepts requests refused today, and needs engine work for sub-5 s H3 on fal); keep and pin
+- Decision: keep this server's behaviour, pin each upstream value in `param_rules` next to ours, list them in docs/serve/params.md for the owner and E3
+- Reason: E2 must not change behaviour for valid requests or existing errors; widening is a product decision
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: ADR-0012
+- Verification: `param_rules` (fails if either side moves)
+
 ### FVID · 2026-10-24 · FVID-2026-10-24-b3b-load-snapshot
 - Trigger: plan B3, second half: a `Settings` snapshot passed to the H3 / LTX-2 / Wan `load` instead of process globals, byte-identical, without restructuring the loaders (B6's)
 - Options: thread a snapshot parameter through every helper a load calls (the shared runtime included, B5's attention files among them); a snapshot parameter for the load bodies and their load-only helpers plus a thread-local scope that serves the snapshot to the unchanged callees; a scope alone
