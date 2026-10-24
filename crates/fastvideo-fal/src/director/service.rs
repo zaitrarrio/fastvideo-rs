@@ -118,6 +118,10 @@ pub struct DirectorConfig {
     /// it (at most the upsampler's timeout). `false` (the default): it
     /// builds with the unexpanded prompt at once (generation never waits).
     pub upsample_wait: bool,
+    /// The clock sessions play out by; `None` (the default): wall time.
+    /// Tests hold or step playout with a manual clock
+    /// ([`super::media::PlayoutClock`]).
+    pub playout_clock: Option<super::media::PlayoutClock>,
 }
 
 impl Default for DirectorConfig {
@@ -144,6 +148,7 @@ impl Default for DirectorConfig {
             allow_output: false,
             leases: None,
             upsample_wait: false,
+            playout_clock: None,
         }
     }
 }

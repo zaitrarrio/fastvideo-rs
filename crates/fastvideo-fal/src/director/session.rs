@@ -331,6 +331,11 @@ pub async fn run(init: SessionInit) {
         h264: init.cfg.h264,
         video_bitrate: init.cfg.video_bitrate,
         gop_seconds: 2.0,
+        clock: init
+            .cfg
+            .playout_clock
+            .clone()
+            .unwrap_or_else(media::PlayoutClock::wall),
     };
     let dir = init.cfg.work_dir.join(format!("wma-{}", init.handle.id));
     let handle = init.handle.clone();

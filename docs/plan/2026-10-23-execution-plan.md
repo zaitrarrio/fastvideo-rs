@@ -56,7 +56,7 @@ parallel agents.
 | F1 | Delete the six `scripts/vast-*.sh`, `scripts/docker-build-cuda.sh`, `scripts/gpu/serverless-worker.sh`, `scripts/gpu/upstream_bench.py`, `scripts/gpu/build-remote.sh`, `scripts/gpu/prompts-flux2.json`, `scripts/gpu/sage/{run,vast-run,setup}.sh`; move the 24 port one-offs and `runpod-matrix.sh` to `scripts/gpu/experiments/`; remove the `h3-*`/`ltx2-*` tiers from `validate.sh` and the README Vast sections; fix `docs/serve/images.md:87`, `scripts/gcp/weights.sh:3-4`, ADR-0001 and `docs/scope.md` (removed backends, `unsafe` scope); add `docs/ports/CHECKLIST.md` | no reference to a deleted path remains (`grep`), `scripts/gpu/lint.sh` passes, README describes the Runpod path | `bash scripts/gpu/lint.sh`; `task check` lint part on the pod | none | merged (#139) |
 | F2 | One formatting commit; fix the 27 clippy lints; `task check` runs `cargo fmt --check` and `clippy -D warnings` as real gates; `gpucheck-t0` runs them | `cargo fmt --check` and `cargo clippy --workspace --all-targets -D warnings` green | pod | F1 (to avoid churn) | merged (#142) |
 | F3a | Serving hardening from review §7.7: per-job deadline in `StepControl`, bounded engine event channel, per-model duration and queue-wait histograms, residency gauges, `otel` feature implemented | tests in `fastvideo-engine-service` and `fastvideo-serve`; `scripts/serve/check.sh` green | pod | none | merged (#140; `otel` deferred to F3c) |
-| F3c | Implement the `otel` feature (OpenTelemetry export of the trace recorder's spans) | spans visible in an OTLP collector | pod | F3a | pr (draft; live-collector check pending) |
+| F3c | Implement the `otel` feature (OpenTelemetry export of the trace recorder's spans) | spans visible in an OTLP collector | pod | F3a | merged (#150; live-collector check pending) |
 | F3b | Delete `multiworker.rs` and `server.workers_max`; rename `[gateway]` to `[cluster]`, drop `gw_workers` | config round-trip tests | pod | owner decision (Runpod LB mode) | blocked |
 
 ### Phase 1: the manifest (Workstream A)
@@ -64,18 +64,18 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | A1 | `crates/fastvideo-manifest` layer 1: modules `name`, `model_toml`, `manifest`, `lineage`, `sig`, `schema`; the registry's WO-001 contracts verbatim plus the two widenings (`[variant]`, `[runtime]` recipe/profile, `[caps]`); fixtures under `crates/fastvideo-manifest/fixtures/` (valid and ≥25 invalid names with error kinds, model.toml valid/invalid, manifests with `.digest` siblings, test keys, lineage chains); proptest round-trip; `schemas/*.json` export with a drift test; ADR-0005 naming, ADR-0006 model.toml, ADR-0007 manifest/digest/lineage/signatures | all WO-001 acceptance tests green on CPU; no I/O, no CUDA, `unsafe` forbidden | `cargo test -p fastvideo-manifest` on the pod; clippy -D warnings | none | merged (#143) |
-| A2 | Layer 2 types (`family`, `variant`, `tiers`) and the first three family files `families/{h3,ltx2,wan}.toml` authored from `engine-service/src/cuda/caps.rs`; an equality test proving `catalog()` equals the manifest projection row for row | equality test green for every catalog row | pod | A1 | pr |
-| A3 | Engine projection: `model_from_config` resolves through the manifest; `validate.rs` and `protocol::ModelCaps` ranges come from it; `[aliases]`, `served_names`, `[protocols]` derived; the 35 serve TOMLs reduced to variant ids and residency; the fake backend serves the manifest; `catalog()` deleted | zero hand-written catalog rows; zero `[aliases]` blocks; `dimension_sweep.rs` and `tests/e2e.rs` green; `/fv/v1/capabilities` unchanged for every config (golden) | pod; serve-compat CI | A2 | todo |
-| A4 | Control-plane and script generation from the families: `control/gen-configs.mjs` emits presets, `enums.ts` ids, `recipe-trees.ts`, `r2-trees.ts`, `weights-sources.ts`, `volumes.ts`; `variants.sh` tables, `volumes.sh`, `gcp/families.tsv`, `autoscale.toml` pools, `verify-weights.sh` cells and `docs/serve/images.md` table generated with `--check` in CI | `gen-configs.mjs --check` green; control unit tests green | pod (node + vitest) | A2 | pr |
+| A2 | Layer 2 types (`family`, `variant`, `tiers`) and the first three family files `families/{h3,ltx2,wan}.toml` authored from `engine-service/src/cuda/caps.rs`; an equality test proving `catalog()` equals the manifest projection row for row | equality test green for every catalog row | pod | A1 | merged (#147) |
+| A3 | Engine projection: `model_from_config` resolves through the manifest; `validate.rs` and `protocol::ModelCaps` ranges come from it; `[aliases]`, `served_names`, `[protocols]` derived; the 35 serve TOMLs reduced to variant ids and residency; the fake backend serves the manifest; `catalog()` deleted | zero hand-written catalog rows; zero `[aliases]` blocks; `dimension_sweep.rs` and `tests/e2e.rs` green; `/fv/v1/capabilities` unchanged for every config (golden) | pod; serve-compat CI | A2 | pr (#152) |
+| A4 | Control-plane and script generation from the families: `control/gen-configs.mjs` emits presets, `enums.ts` ids, `recipe-trees.ts`, `r2-trees.ts`, `weights-sources.ts`, `volumes.ts`; `variants.sh` tables, `volumes.sh`, `gcp/families.tsv`, `autoscale.toml` pools, `verify-weights.sh` cells and `docs/serve/images.md` table generated with `--check` in CI | `gen-configs.mjs --check` green; control unit tests green | pod (node + vitest) | A2 | merged (#149) |
 | A5 | Registry hand-off: publish layer 1 (git dependency at a pinned rev); the registry's WO-001 scaffolds against it | registry WO-001 green | registry repo | A1 | active |
 
 ### Phase 2: inference core structure (Workstream B, first half)
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| B1 | Extract the runtime: `cudarc/src/wan/{tensor,device,ops,kernels,nn,weights,offload,quant,log,dump,ledger,envflag,resident,stage_upload,hostmem,writer}` to `cudarc/src/rt/`; `kernels.cu` split by region and concatenated at build time; `gpucheck` and `engine-service` import `rt` | byte-identical SASS and clips | CPU tests + nvrtc gate on the pod; **GPU** `techniques` byte-identity cell for H3, LTX, Wan | F1 | pr |
+| B1 | Extract the runtime: `cudarc/src/wan/{tensor,device,ops,kernels,nn,weights,offload,quant,log,dump,ledger,envflag,resident,stage_upload,hostmem,writer}` to `cudarc/src/rt/`; `kernels.cu` split by region and concatenated at build time; `gpucheck` and `engine-service` import `rt` | byte-identical SASS and clips | CPU tests + nvrtc gate on the pod; **GPU** `techniques` byte-identity cell for H3, LTX, Wan | F1 | merged (#146) |
 | B2 | `VideoFamily` trait, common `Request`/`Conditioning`, `Request::validate(&ModelCaps)`; the 21 registry tables, `resolve()`, `all_registered_ids()` and the 20 `generate_*` functions replaced by the manifest and a static family list; `AvGenerateOptions` reduced to common fields | CLI behaviour unchanged for every preset (golden `--help` and tiny CPU generations); 83 Hub ids resolve | pod; **GPU** one tiny generation per served family | A2, B1 | todo |
-| B3 | Settings layer: the `FASTVIDEO_*` table generated from one declarative list; the 111 direct reads routed through `settings::var`; a `Settings` snapshot passed to `load`; `model_spec` for Wan and the small families; `docs/scope.md` table generated | zero direct `env::var("FASTVIDEO_` outside `settings`; off-identity invariant tests | pod; **GPU** byte-identity cell | B1 | pr (B3a: list, routing, generated doc, tests; B3b: `load` snapshot and `model_spec`s, todo) |
+| B3 | Settings layer: the `FASTVIDEO_*` table generated from one declarative list; the 111 direct reads routed through `settings::var`; a `Settings` snapshot passed to `load`; `model_spec` for Wan and the small families; `docs/scope.md` table generated | zero direct `env::var("FASTVIDEO_` outside `settings`; off-identity invariant tests | pod; **GPU** byte-identity cell | B1 | pr (B3a #153; B3b todo) |
 
 ### Phase 3 and 4: deployment (Workstream C)
 
@@ -90,7 +90,7 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | todo |
-| D2 | `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments; keyed by registry name and `@rev` | every served variant has a gold file; comments in `profiles/` no longer carry numbers | pod | A2 | pr |
+| D2 | `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments; keyed by registry name and `@rev` | every served variant has a gold file; comments in `profiles/` no longer carry numbers | pod | A2 | merged (#151) |
 | D3 | `fv-lab report tiers` and the generated `docs/perf/tiers.md` | table generated from one run set | pod; **GPU** the gold runs | D1, D2 | todo |
 | D4 | CI bridge: gold files parse and resolve; `last_validated.commit` age check; an on-demand `fv-lab run gold --all` workflow | visible per-model validation age in CI | CI | D3 | todo |
 
@@ -101,7 +101,7 @@ parallel agents.
 | E1 | Vendored upstream specs under `docs/serve/specs/` with a drift script; `schemars` schemas for native and director | drift script green | CI | none | merged (#144; schemars schemas deferred to E2) |
 | E2 | `ParamSpec` per (surface, model) derived from the manifest caps; adapters validate from it; duplicated constants deleted; LTX body typed | one source for every limit | pod; serve-compat | A3 | todo |
 | E3 | Certification matrix harness over every surface, parameter x surface x model TSV, CI assertion that every parameter has a valid and an invalid case | TSV with no empty cell | pod | E2 | todo |
-| E4 | `cargo-llvm-cov` on the pod; adapter `cargo test` in a GitHub workflow | coverage artifact in CI | CI | none | pr |
+| E4 | `cargo-llvm-cov` on the pod; adapter `cargo test` in a GitHub workflow | coverage artifact in CI | CI | none | merged (#148) |
 | E5 | Upstream captures as fixtures | depends on owner keys | manual | owner | blocked |
 
 ### Phase 7: inference core unification (Workstream B, second half)
@@ -325,6 +325,27 @@ ran (pod id, $/hr), result, cost.
   unit, 8 gold-files, 1 profile lint, 2 schema); the coverage crate set
   (`cargo test --locked` of its 12 crates) 748 passed, 0 failed; fmt, clippy
   `-D warnings` and `scripts/gpu/lint.sh` green.
+- 2026-10-24 02:50Z (coordinator): merged since 01:15Z, each on a head
+  with main merged in and CI green: A2 (#147, after an independent review),
+  E4 (#148), B1 (#146, after the GPU byte-identity gate: 9 compare reports,
+  every frame identical), A4 (#149, after review fixes: `MODEL_NAMES` holds
+  only names the engine resolves), F3c (#150, after review fixes; the live
+  OTLP collector check, an `[otel] headers` key and an `--features otel` CI
+  build stay open), D2 (#151, after review fixes: tier-GPU and exact-setting
+  rules). Coordinator decisions: gold quality numbers measured on a GPU
+  other than the tier's are gaps (values kept in cited notes); a number
+  measured under a non-default setting stays only when `workload.note`
+  names the setting. A lab test's made-up setting name became
+  `FASTVIDEO_TEST_X` in B3a's merge (the settings scan exempts that prefix).
+  Main's `adapter-tests` is intermittently red in `fastvideo-fal`
+  `tests/director_e2e.rs` (a duplicate SDP `a=mid` in the test offer; a
+  playout-depth assertion that depends on machine speed), first run on every
+  PR since E4; a fix is being root-caused on `claude/fix-fal-director-flakes`.
+  Three agents stopped on a usage-credit error at 01:51Z and were resumed
+  from their worktrees. Runpod balance $58.6 after a top-up. Open: A3 (#152,
+  merging main and regenerating control), B3a (#153, GPU byte-identity run
+  pending), A5 (blocked on the `FASTVIDEO_RS_TOKEN` secret). Next: B2, C1, E2
+  after A3; B3b after B3a.
 - 2026-10-24 02:55Z: B3a opened as draft PR #153 (`claude/b3-settings`): the
   declarative `FASTVIDEO_*` list (`techniques::settings::SETTINGS`, 222 rows:
   112 layered, 108 env-only, 2 reserved), the 112 direct and 27 indirect
@@ -339,3 +360,15 @@ ran (pod id, $/hr), result, cost.
   while `hooks.rs`'s Wan end-to-end test decodes. B3b (`load` snapshot,
   `model_spec`s) is a second PR. GPU byte-identity cell pending
   (coordinator).
+- 2026-10-24 03:40Z: B3a GPU byte-identity gate green on one RTX PRO 6000
+  (EU-RO-1, volume `bz0ofkfx45`, pod `3nbse01c0zav0e`, deleted): the
+  `techniques` family, baseline `1ea846f` (main) against the PR image
+  `90dd3f8`; fasth3-4step-vsa-768p and h3-480p-fullopt 124/124 frames, and
+  ltx25-512p-sol 121/121, identical for base vs env and base vs prof (max
+  abs diff 0); the LTX cache arm identical too. fasth3-8step-768p skipped
+  (`h3-8step` is not on the 500 GB EU volume); no Wan cell (no Wan trees on
+  the volume; Wan's reads are `std::env::var` at the same call sites,
+  checked by script in the review). Evidence:
+  `artifacts/runpod/techniques/90dd3f8-10240259/compare/`. Review: no
+  blocking finding; three documentation-only table rows corrected. Main
+  merged in since then changed no inference crate, so the evidence stands.

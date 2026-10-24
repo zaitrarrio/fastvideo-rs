@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use director_common::*;
+use fastvideo_media::clock::ManualClock;
 use fastvideo_protocol::{EndReason, SessionState};
 use fastvideo_webrtc::channel::ChannelMessage;
 use fastvideo_webrtc::host::{
@@ -1831,18 +1832,26 @@ async fn upsampled_long_premise_never_reaches_the_engine() {
 }
 
 /// The server's default (`buffer_chunks = 0`): generation never waits for
-/// playout. Chunk N+1 is dispatched as soon as chunk N is built, so with
-/// builds faster than real time the video queued for playout keeps
-/// growing. With a hold of one chunk (the earlier default) it could never
-/// exceed the playing chunk plus one queued plus the new one (15 s of 5 s
-/// chunks); the playout clock is untouched (the RTP grid).
+/// playout. Chunk N+1 is dispatched as soon as chunk N is built, so while
+/// playout stands still the video queued for it keeps growing. With a hold
+/// of one chunk (the earlier default) it could never exceed the playing
+/// chunk plus one queued plus the new one (15 s of 5 s chunks).
+///
+/// Playout runs on a manual clock, held at its start until the queue is
+/// that deep, then let go in real time. On wall time the queue grows only by
+/// what building beats real time by, which is the machine's speed and not
+/// the property: an instrumented (coverage) build on a shared runner builds
+/// a 5 s chunk in 2-6 s, and its queue peaked at 15.7 s by chunk 11. The
+/// playout clock is untouched (the RTP grid).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn generation_never_waits_for_playout() {
     let Some(h264) = h264_or_skip() else { return };
+    let clock = Arc::new(ManualClock::new(0.0));
     let f = fixture(Opts {
         h264,
         buffer_chunks: 0,
         buffer_max_bytes: 4 << 30,
+        playout_clock: Some(clock.clone()),
         ..Opts::default()
     })
     .await;
@@ -1851,16 +1860,26 @@ async fn generation_never_waits_for_playout() {
     c.send(json!({"type": "configure", "prompt_version": 1, "prompt": "A lighthouse at dusk", "resolution": "480p"})).await;
     c.expect("configured").await;
     let t0 = Instant::now();
-    let (chunks, _) = chunks_until(&mut c, |m| {
-        m["chunk_index"] == 11 || m["buffer_depth_seconds"].as_f64().unwrap() > 16.0
-    })
-    .await;
-    let depth = chunks
-        .iter()
-        .map(|m| m["buffer_depth_seconds"].as_f64().unwrap())
-        .fold(0.0, f64::max);
+    let depth_of = |m: &Value| m["buffer_depth_seconds"].as_f64().unwrap();
+    let deadline = tokio::time::Instant::now() + T;
+    let mut chunks: Vec<Value> = Vec::new();
+    while !chunks
+        .last()
+        .is_some_and(|m| m["chunk_index"] == 11 || depth_of(m) > 16.0)
+    {
+        match tokio::time::timeout_at(deadline, c.msgs.recv()).await {
+            Ok(Some(m)) if m["type"] == "chunk" => chunks.push(m),
+            Ok(Some(m)) => assert_ne!(m["type"], "error", "{m}"),
+            Ok(None) => panic!("the control channel closed"),
+            Err(_) => panic!(
+                "with playout held, generation stopped after {} chunks: it waits for playout",
+                chunks.len()
+            ),
+        }
+    }
+    let depth = chunks.iter().map(depth_of).fold(0.0, f64::max);
     eprintln!(
-        "{} chunks built in {:?}; deepest playout queue {depth:.1} s",
+        "{} chunks built in {:?} with playout held; deepest playout queue {depth:.1} s",
         chunks.len(),
         t0.elapsed()
     );
@@ -1876,10 +1895,22 @@ async fn generation_never_waits_for_playout() {
             ))
             .collect::<Vec<_>>()
     );
+    // Playout goes on in real time.
+    let playout = {
+        let clock = clock.clone();
+        tokio::spawn(async move {
+            let start = Instant::now();
+            loop {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                clock.set(start.elapsed().as_secs_f64());
+            }
+        })
+    };
     c.more_media(24, 0).await;
     c.assert_rtp_grids();
     c.send(json!({"type": "stop"})).await;
     c.expect("stream_exhausted").await;
+    playout.abort();
 }
 
 /// The memory guard (`buffer_max_bytes`) is the one thing that holds

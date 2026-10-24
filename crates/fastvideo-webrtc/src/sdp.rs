@@ -390,6 +390,17 @@ impl Sdp {
                 .any(|m| m.attr("end-of-candidates").is_some())
     }
 
+    /// The first `a=mid` value carried by more than one m-line, if any
+    /// (m-lines without a mid are skipped; [`validate_offer`] refuses a
+    /// duplicate with [`SdpError::DuplicateMid`]).
+    pub fn duplicate_mid(&self) -> Option<&str> {
+        let mut seen = std::collections::HashSet::new();
+        self.media
+            .iter()
+            .filter_map(MediaSection::mid)
+            .find(|mid| !seen.insert(*mid))
+    }
+
     /// Set the direction of every non-rejected m-line of `kind`.
     pub fn set_direction_for_kind(&mut self, kind: MediaKind, dir: Direction) -> usize {
         let mut n = 0;
@@ -932,6 +943,8 @@ a=max-message-size:262144\r\n";
             validate_offer(&dup, OfferRequirements::default()),
             Err(SdpError::DuplicateMid("0".into()))
         );
+        assert_eq!(dup.duplicate_mid(), Some("0"));
+        assert_eq!(Sdp::parse(OFFER).unwrap().duplicate_mid(), None);
 
         let vp8_only = Sdp::parse(&OFFER.replace("H264", "H263")).unwrap();
         assert!(matches!(

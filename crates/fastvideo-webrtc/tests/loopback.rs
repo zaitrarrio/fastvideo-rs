@@ -598,19 +598,28 @@ async fn ice_tcp_only_host() {
     let local = stream.local_addr().unwrap();
     let (mut rd, mut wr) = stream.into_split();
 
-    let mut rtc = Rtc::builder().build(Instant::now());
-    rtc.add_local_candidate(
-        Candidate::builder()
-            .tcp()
-            .host(local)
-            .tcptype(TcpType::Active)
-            .build()
-            .unwrap(),
-    );
-    let mut api = rtc.sdp_api();
-    api.add_media(RKind::Video, RDir::RecvOnly, None, None, None);
-    api.add_channel("control".into());
-    let (offer, pending) = api.apply().unwrap();
+    // str0m can give both m-lines of one offer the same random mid (about
+    // one offer in 216 000 here; the host's `offer` makes such an offer
+    // again): a fresh client until the mids differ.
+    let (mut rtc, offer, pending) = loop {
+        let mut rtc = Rtc::builder().build(Instant::now());
+        rtc.add_local_candidate(
+            Candidate::builder()
+                .tcp()
+                .host(local)
+                .tcptype(TcpType::Active)
+                .build()
+                .unwrap(),
+        );
+        let mut api = rtc.sdp_api();
+        api.add_media(RKind::Video, RDir::RecvOnly, None, None, None);
+        api.add_channel("control".into());
+        let (offer, pending) = api.apply().unwrap();
+        let sdp = Sdp::parse(&offer.to_sdp_string()).unwrap();
+        if sdp.duplicate_mid().is_none() {
+            break (rtc, offer, pending);
+        }
+    };
 
     let (mut sp, answer) = server
         .answer(
