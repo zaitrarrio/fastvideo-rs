@@ -6,7 +6,9 @@ workloads, and which NVlabs/Sana `sol-engine` profiles are actually wired.
 
 Host math is `crates/fastvideo-models`. The CUDA graph is
 `crates/fastvideo-cudarc` under the same module name. `crates/fastvideo-core`
-resolves a Hub id to one of those. A Mac without `nvcc` can test the host
+resolves a Hub id to one of those: every family is one `VideoFamily` in its
+static `FAMILIES` list (`family/<fam>.rs`: the Hub-id table and the run), and
+every generate takes the common `Request` (ADR-0013, plan B2). A Mac without `nvcc` can test the host
 half. `--features cuda` needs a CUDA toolchain.
 
 ## Crates
@@ -17,8 +19,8 @@ half. `--features cuda` needs a CUDA toolchain.
 | `fastvideo-models` | Configs, schedules, geometry, sol-engine contracts. No CUDA |
 | `fastvideo-loader` | Safetensors, lazy shards, bf16 views. `unsafe` allowed (mmap) |
 | `fastvideo-cudarc` | The runtime (`src/rt`: tensors, device, kernels, ops, weights) and the family pipelines. `unsafe` allowed (driver, cuBLAS, cuDNN FFI) |
-| `fastvideo-core` | Registry, workloads, `generate` dispatch |
-| `fastvideo-cli` | `generate` / `generate_av` |
+| `fastvideo-core` | The `VideoFamily` trait and the static family list (Hub ids, resolution, each family's run), the common `Request` and `Request::validate(&ModelCaps)`, Wan sampling and `VideoGenerator` |
+| `fastvideo-cli` | `fastvideo list-models` / `generate` / `bench` / `schedule` over the family list; behaviour pinned by goldens (`tests/cli_golden.rs`) |
 | `fastvideo-gpucheck` | Staged GPU checks (`kernels`, `parity`, `clip`). `unsafe` allowed |
 | `fastvideo-mlx` | Apple Silicon scaffold (`mlx-rs` behind `--features mlx` on aarch64 macOS); host stubs elsewhere. Not a generate path |
 | `fastvideo-manifest` | The registry's public formats: model names, `model.toml` v1, the signed lineage manifest and its canonical BLAKE3 digest, JSON Schema export (ADR-0005..0007); layer 2, the family manifest `families/*.toml` (ADR-0008). Pure: no I/O, no CUDA (`fs` feature: the one directory reader) |
@@ -41,7 +43,7 @@ name a variant and its residency (`[[models]] variant = ...`, no
 projections of them (plan A4).
 
 Workloads: `t2v`, `i2v`, `t2av`, `fl2va`, `ref2va`, `t2i`, `t2a`, `v2a`,
-plus control/edit entries that carry an empty workload list in the registry.
+plus control/edit entries that carry an empty workload list in their family table.
 
 ## Video
 

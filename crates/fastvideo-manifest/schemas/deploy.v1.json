@@ -1,0 +1,376 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DeployManifest",
+  "description": "`deploy/deploy.toml`.",
+  "type": "object",
+  "properties": {
+    "autoscale": {
+      "$ref": "#/$defs/AutoscaleSection",
+      "default": {}
+    },
+    "dispatch": {
+      "description": "Model family id -> its edge / dispatch family (`ltx2` -> `ltx`).",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "family_presets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FamilyPreset"
+      }
+    },
+    "gcp": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/GcpRow"
+      }
+    },
+    "images": {
+      "description": "The serve image variants (and documented legacy tag sets).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Image"
+      }
+    },
+    "presets": {
+      "description": "The model presets, in the dashboard's order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Preset"
+      }
+    },
+    "schema": {
+      "description": "Always 1.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "dispatch",
+    "images",
+    "presets"
+  ],
+  "$defs": {
+    "AutoscaleSection": {
+      "description": "`[autoscale]`: only its pools; the controller's own settings and prices\nstay in `configs/autoscale.toml`.",
+      "type": "object",
+      "properties": {
+        "pools": {
+          "description": "`[[autoscale.pools]]`, opaque to this crate (`fastvideo-autoscale`\nowns the format) but for `name`, `family` and the volume rule.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Compute": {
+      "description": "What an image variant's fv-serve is built for.",
+      "oneOf": [
+        {
+          "description": "The CUDA fv-serve (`serve-cuda-bin`).",
+          "type": "string",
+          "const": "gpu"
+        },
+        {
+          "description": "fv-serve without CUDA, the fake engine.",
+          "type": "string",
+          "const": "cpu"
+        }
+      ]
+    },
+    "FamilyPreset": {
+      "description": "One `[[family_presets]]` table: one pool serving the models of several\nmodel presets of one family (one process, `[engine] swap`).",
+      "type": "object",
+      "properties": {
+        "config": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "image": {
+          "type": "string"
+        },
+        "left_out": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LeftOut"
+          }
+        },
+        "members": {
+          "description": "Model preset ids, in the presets' order.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "min_vram_gb": {
+          "description": "The card class (GB of GPU memory), hand-chosen: at least the members'\nvariants' `gpu.min_vram_gib`.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "prequant": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "title": {
+          "description": "`{members}` stands for the members, comma separated.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "description",
+        "image",
+        "config",
+        "min_vram_gb",
+        "members"
+      ]
+    },
+    "GcpRow": {
+      "description": "One `[[gcp]]` table: a row of `scripts/gcp/families.tsv`.",
+      "type": "object",
+      "properties": {
+        "config": {
+          "description": "The VM's worker config (a `configs/serve` file name).",
+          "type": "string"
+        },
+        "dispatch_family": {
+          "description": "A value of [`DeployManifest::dispatch`].",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fal_app": {
+          "type": "string"
+        },
+        "machine": {
+          "type": "string"
+        },
+        "minimax_model": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "reactor_mode": {
+          "type": "string"
+        },
+        "runpod_twin": {
+          "description": "The Runpod config it mirrors; its `[[models]]` give the row's weight\ntrees and served ids.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "served": {
+          "description": "The served model ids of a row without a twin.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "verify_cells": {
+          "description": "`scripts/gpu/verify-weights.sh` cells.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "config",
+        "machine",
+        "fal_app",
+        "minimax_model",
+        "reactor_mode"
+      ]
+    },
+    "Image": {
+      "description": "One `[[images]]` table: a serve image variant\n(`docker/gpucheck.Dockerfile` stage `serve-<id>`).",
+      "type": "object",
+      "properties": {
+        "also": {
+          "description": "Further worker configs the image carries under `/etc/fv`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "compute": {
+          "$ref": "#/$defs/Compute"
+        },
+        "config": {
+          "description": "The worker config baked as `FV_CONFIG` (a `configs/serve` file name).",
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "legacy": {
+          "description": "A documented tag set that CI no longer builds as a variant.",
+          "type": "boolean"
+        },
+        "note": {
+          "description": "A short note for the documentation tables.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "config"
+      ]
+    },
+    "LeftOut": {
+      "description": "Something a family preset does not serve, and why.",
+      "type": "object",
+      "properties": {
+        "what": {
+          "type": "string"
+        },
+        "why": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "what",
+        "why"
+      ]
+    },
+    "PoolModel": {
+      "description": "One model of a preset's pool.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The model id the pool serves (default: the variant id).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recipe": {
+          "description": "The name the pool uses for the variant when it is not the id: a\nserved name or the family's tier alias (default: the variant id).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "variant": {
+          "description": "The variant id (`families/*.toml`), never a served name.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "variant"
+      ]
+    },
+    "Preset": {
+      "description": "One `[[presets]]` table: a model preset (one pool).",
+      "type": "object",
+      "properties": {
+        "config": {
+          "description": "The worker config (a `configs/serve` file name).",
+          "type": "string"
+        },
+        "container_disk_gb": {
+          "description": "Container disk per worker (GB) when not sized from the weights.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "image": {
+          "description": "The image variant ([`Image::id`]).",
+          "type": "string"
+        },
+        "job_timeout_s": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "licence": {
+          "description": "Set when the weights' licence restricts use.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_queued": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PoolModel"
+          }
+        },
+        "prequant": {
+          "description": "Derived pre-quantized trees nested in a weight tree (a faster load).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stale_after_s": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "standard": {
+          "description": "One of the default cluster's pools.",
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "description",
+        "image",
+        "config",
+        "models",
+        "max_queued",
+        "job_timeout_s",
+        "stale_after_s"
+      ]
+    }
+  }
+}

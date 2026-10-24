@@ -1,0 +1,480 @@
+# input	family	preset	workloads	detail
+Wan-AI/Wan2.1-T2V-1.3B-Diffusers	wan	wan_t2v_1_3b	t2v	pipeline_config=WanT2V480PConfig sampling=unipc
+Wan-AI/Wan2.1-T2V-14B-Diffusers	wan	wan_t2v_14b	t2v	pipeline_config=WanT2V720PConfig sampling=unipc
+FastVideo/Wan2.1-VSA-T2V-14B-720P-Diffusers	wan	wan_t2v_14b	t2v	pipeline_config=WanT2V720PConfig sampling=unipc
+Wan-AI/Wan2.1-I2V-14B-480P-Diffusers	wan	wan_i2v_14b_480p	i2v	pipeline_config=WanI2V480PConfig sampling=unipc
+Wan-AI/Wan2.1-I2V-14B-720P-Diffusers	wan	wan_i2v_14b_720p	i2v	pipeline_config=WanI2V720PConfig sampling=unipc
+weizhou03/Wan2.1-Fun-1.3B-InP-Diffusers	wan	wan_fun_1_3b_inp	i2v	pipeline_config=WanI2V480PConfig sampling=unipc
+IRMChen/Wan2.1-Fun-1.3B-Control-Diffusers	wan	wan_fun_1_3b_control		pipeline_config=WANV2VConfig sampling=unipc
+loayrashid/TurboWan2.1-T2V-1.3B-Diffusers	wan	turbo_t2v_1_3b	t2v	pipeline_config=TurboDiffusionT2V_1_3B_Config sampling=rcm
+loayrashid/TurboWan2.1-T2V-14B-Diffusers	wan	turbo_t2v_14b	t2v	pipeline_config=TurboDiffusionT2V_14B_Config sampling=rcm
+loayrashid/TurboWan2.2-I2V-A14B-Diffusers	wan	turbo_i2v_a14b	i2v	pipeline_config=TurboDiffusionI2V_A14B_Config sampling=rcm
+FastVideo/FastWan2.1-T2V-1.3B-Diffusers	wan	fast_wan_t2v_480p	t2v	pipeline_config=FastWan2_1_T2V_480P_Config sampling=dmd
+FastVideo/FastWan2.1-T2V-14B-480P-Diffusers	wan	fast_wan_t2v_480p	t2v	pipeline_config=FastWan2_1_T2V_480P_Config sampling=dmd
+FastVideo/FastWan-QAD-1.3B	wan	fast_wan_t2v_480p	t2v	pipeline_config=FastWan2_1_T2V_480P_Config sampling=dmd
+FastVideo/FastWan-QAD-1.3B-SA2	wan	fast_wan_t2v_480p	t2v	pipeline_config=FastWan2_1_T2V_480P_Config sampling=dmd
+FastVideo/FastWan-QAD-FP8-1.3B	wan	fast_wan_t2v_480p	t2v	pipeline_config=FastWan2_1_T2V_480P_Config sampling=dmd
+Wan-AI/Wan2.2-TI2V-5B-Diffusers	wan	wan_2_2_ti2v_5b	t2v,i2v	pipeline_config=Wan2_2_TI2V_5B_Config sampling=unipc
+FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers	wan	fast_wan_2_2_ti2v_5b	t2v,i2v	pipeline_config=FastWan2_2_TI2V_5B_Config sampling=dmd
+FastVideo/FastWan2.2-TI2V-5B-Diffusers	wan	fast_wan_2_2_ti2v_5b	t2v,i2v	pipeline_config=FastWan2_2_TI2V_5B_Config sampling=dmd
+decart-ai/Lucy-Edit-Dev	wan	lucy_edit_dev		pipeline_config=LucyEditDevConfig sampling=unipc
+decart-ai/Lucy-Edit-1.1-Dev	wan	lucy_edit_dev		pipeline_config=LucyEditDevConfig sampling=unipc
+Wan-AI/Wan2.2-T2V-A14B-Diffusers	wan	wan_2_2_t2v_a14b	t2v	pipeline_config=Wan2_2_T2V_A14B_Config sampling=unipc
+Wan-AI/Wan2.2-I2V-A14B-Diffusers	wan	wan_2_2_i2v_a14b	i2v	pipeline_config=Wan2_2_I2V_A14B_Config sampling=unipc
+wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers	wan	sf_wan_t2v_1_3b	t2v	pipeline_config=SelfForcingWanT2V480PConfig sampling=causal_dmd
+rand0nmr/SFWan2.2-T2V-A14B-Diffusers	wan	sf_wan_2_2_t2v_a14b	t2v	pipeline_config=SelfForcingWan2_2_T2V480PConfig sampling=causal_dmd
+FastVideo/SFWan2.2-I2V-A14B-Preview-Diffusers	wan	sf_wan_2_2_i2v_a14b	i2v	pipeline_config=SelfForcingWan2_2_T2V480PConfig sampling=causal_dmd
+FastVideo/LTX2-Distilled-Diffusers	ltx2	ltx2_distilled_20	t2av	ltx_line=Some(Distilled20)
+rootonchair/LTX-2-19b-distilled	ltx2	ltx2_distilled_20	t2av	ltx_line=Some(Distilled20)
+Lightricks/LTX-2.5-Diffusers	ltx2	ltx2_distilled_25	t2av	ltx_line=Some(Distilled25)
+Lightricks/LTX-2	ltx2	ltx2_base_20	t2av	ltx_line=Some(Base20)
+FastVideo/LTX2-base	ltx2	ltx2_base_20	t2av	ltx_line=Some(Base20)
+FastVideo/LTX2-Diffusers	ltx2	ltx2_base_20	t2av	ltx_line=Some(Base20)
+FastVideo/LTX-2.3-Distilled-Diffusers	ltx2	ltx2_distilled_23	t2av,i2v	ltx_line=Some(Distilled23)
+FastVideo/LTX2.3-Distilled-Diffusers	ltx2	ltx2_distilled_23	t2av,i2v	ltx_line=Some(Distilled23)
+diffusers/LTX-2.3-Distilled-Diffusers	ltx2	ltx2_distilled_23	t2av,i2v	ltx_line=Some(Distilled23)
+Lightricks/LTX-2.3	ltx2	ltx2_base_23	t2av,i2v	ltx_line=Some(Base23)
+FastVideo/LTX2.3-base	ltx2	ltx2_base_23	t2av,i2v	ltx_line=Some(Base23)
+FastVideo/LTX2.3-Diffusers	ltx2	ltx2_base_23	t2av,i2v	ltx_line=Some(Base23)
+diffusers/LTX-2.3-Diffusers	ltx2	ltx2_base_23	t2av,i2v	ltx_line=Some(Base23)
+lightx2v/Minimax-h3-Turbo	h3	sol_h3_ref2va	ref2va	ltx_line=None
+FastVideo/FastH3-4-step-Preview-v1-LoRA	h3	sol_h3	t2av,i2v,fl2va,ref2va	ltx_line=None
+FastVideo/FastVideo-FastH3-8-Step-V2	h3	fasth3_8step	t2av,fl2va	ltx_line=None
+FastVideo/FastVideo-Minimax-FastH3-Preview-v0.2	h3	fasth3_8step	t2av,fl2va	ltx_line=None
+MiniMaxAI/MiniMax-H3	h3	minimax_h3	t2av,fl2va,ref2va	ltx_line=None
+hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v	hunyuan15	hy15_480p_t2v	t2v	ltx_line=None
+hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_i2v_step_distilled	hunyuan15	hy15_480p_i2v_distilled	i2v	ltx_line=None
+hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v	hunyuan15	hy15_720p_t2v	t2v	ltx_line=None
+hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v_distilled	hunyuan15	hy15_720p_i2v_distilled	i2v	ltx_line=None
+weizhou03/HunyuanVideo-1.5-Diffusers-1080p	hunyuan15	hy15_1080p_sr	t2v	ltx_line=None
+weizhou03/HunyuanVideo-1.5-Diffusers-1080p-2SR	hunyuan15	hy15_1080p_sr	t2v	ltx_line=None
+kandinskylab/Kandinsky-5.0-T2V-Lite-sft-5s-Diffusers	kandinsky5	k5_lite_t2v_5s	t2v	ltx_line=None
+kandinskylab/Kandinsky-5.0-T2V-Pro-sft-5s-Diffusers	kandinsky5	k5_pro_t2v_5s	t2v	ltx_line=None
+nvidia/Cosmos-Predict2-2B-Video2World	cosmos	cosmos2_v2w_2b	i2v	ltx_line=None
+nvidia/Cosmos-Predict2-14B-Video2World	cosmos	cosmos2_v2w_14b	i2v	ltx_line=None
+FastVideo/LongCat-Video-T2V-Diffusers	longcat	longcat_t2v_480p	t2v	ltx_line=None
+robbyant/lingbot-video-dense-1.3b	lingbot	lingbot_dense_1_3b	t2v	ltx_line=None
+robbyant/lingbot-video-moe-30b-a3b	lingbot	lingbot_moe_30b	t2v	ltx_line=None
+FastVideo/GEN3C-Cosmos-7B-Diffusers	gen3c	gen3c_cosmos_7b	i2v	ltx_line=None
+FastVideo/Matrix-Game-2.0-Base-Distilled-Diffusers	matrixgame	mg2_base_distilled	i2v	ltx_line=None
+FastVideo/Matrix-Game-2.0-GTA-Distilled-Diffusers	matrixgame	mg2_gta_distilled	i2v	ltx_line=None
+FastVideo/Matrix-Game-2.0-TempleRun-Distilled-Diffusers	matrixgame	mg2_templerun_distilled	i2v	ltx_line=None
+FastVideo/Matrix-Game-2.0-Base-Diffusers	matrixgame	mg2_base	i2v	ltx_line=None
+FastVideo/Matrix-Game-2.0-GTA-Diffusers	matrixgame	mg2_base	i2v	ltx_line=None
+FastVideo/Matrix-Game-2.0-TempleRun-Diffusers	matrixgame	mg2_base	i2v	ltx_line=None
+FastVideo/Matrix-Game-3.0-Base-Distilled-Diffusers	matrixgame	mg3_base_distilled	i2v	ltx_line=None
+FastVideo/DreamX-World-5B-Cam-Diffusers	dreamx_world	dreamx_5b_cam	i2v	ltx_line=None
+FastVideo/DreamX-World-5B-Diffusers	dreamx_world	dreamx_5b_ar	i2v	ltx_line=None
+FastVideo/LingBot-World-Base-Cam-Diffusers	lingbotworld	lingbotworld_base_cam	i2v	ltx_line=None
+robbyant/lingbot-world-v2-14b-causal-fast	lingbotworld	lingbotworld2_causal_fast	i2v	ltx_line=None
+FastVideo/HunyuanGameCraft-Diffusers	gamecraft	gamecraft_i2v	i2v	ltx_line=None
+FastVideo/HY-WorldPlay-Bidirectional-Diffusers	hyworld	hyworld_bidirectional	i2v	ltx_line=None
+Tongyi-MAI/Z-Image-Turbo	zimage	zimage_turbo	t2i	ltx_line=None
+stabilityai/stable-diffusion-3.5-medium	sd35	sd35_medium	t2i	ltx_line=None
+black-forest-labs/FLUX.1-dev	flux	flux1_dev	t2i	ltx_line=None
+black-forest-labs/FLUX.1-schnell	flux	flux1_schnell	t2i	ltx_line=None
+black-forest-labs/FLUX.2-klein-4B	flux2	flux2_klein_4b	t2i	ltx_line=None
+black-forest-labs/FLUX.2-klein-9B	flux2	flux2_klein_9b	t2i	ltx_line=None
+black-forest-labs/FLUX.2-dev	flux2	flux2_dev	t2i	ltx_line=None
+zai-org/GLM-Image	glm_image	glm_image	t2i	ltx_line=None
+FastVideo/stable-audio-open-1.0-Diffusers	stable_audio	stable_audio_open_1_0	t2a	ltx_line=None
+FastVideo/stable-audio-open-small-Diffusers	stable_audio	stable_audio_open_small	t2a	ltx_line=None
+hkchengrex/MMAudio	mmaudio	mmaudio_large_44k_v2	v2a,t2a	ltx_line=None
+FastVideo/MMAudio-large-44k-v2-Diffusers	mmaudio	mmaudio_large_44k_v2	v2a,t2a	ltx_line=None
+wan-ai/wan2.1-t2v-1.3b-diffusers	wan	wan_t2v_1_3b	t2v	pipeline_config=WanT2V480PConfig sampling=unipc
+wan-ai/wan2.1-t2v-14b-diffusers	wan	wan_t2v_14b	t2v	pipeline_config=WanT2V720PConfig sampling=unipc
+fastvideo/wan2.1-vsa-t2v-14b-720p-diffusers	wan	wan_t2v_14b	t2v	pipeline_config=WanT2V720PConfig sampling=unipc
+wan-ai/wan2.1-i2v-14b-480p-diffusers	wan	wan_i2v_14b_480p	i2v	pipeline_config=WanI2V480PConfig sampling=unipc
+wan-ai/wan2.1-i2v-14b-720p-diffusers	wan	wan_i2v_14b_720p	i2v	pipeline_config=WanI2V720PConfig sampling=unipc
+weizhou03/wan2.1-fun-1.3b-inp-diffusers	wan	wan_fun_1_3b_inp	i2v	pipeline_config=WanI2V480PConfig sampling=unipc
+irmchen/wan2.1-fun-1.3b-control-diffusers	wan	wan_fun_1_3b_control		pipeline_config=WANV2VConfig sampling=unipc
+loayrashid/turbowan2.1-t2v-1.3b-diffusers	wan	turbo_t2v_1_3b	t2v	pipeline_config=TurboDiffusionT2V_1_3B_Config sampling=rcm
+loayrashid/turbowan2.1-t2v-14b-diffusers	wan	turbo_t2v_14b	t2v	pipeline_config=TurboDiffusionT2V_14B_Config sampling=rcm
+loayrashid/turbowan2.2-i2v-a14b-diffusers	wan	turbo_i2v_a14b	i2v	pipeline_config=TurboDiffusionI2V_A14B_Config sampling=rcm
+fastvideo/fastwan2.1-t2v-1.3b-diffusers	wan	fast_wan_t2v_480p	t2v	pipeline_config=FastWan2_1_T2V_480P_Config sampling=dmd
+fastvideo/fastwan2.1-t2v-14b-480p-diffusers	wan	fast_wan_t2v_480p	t2v	pipeline_config=FastWan2_1_T2V_480P_Config sampling=dmd
+fastvideo/fastwan-qad-1.3b	wan	fast_wan_t2v_480p	t2v	pipeline_config=FastWan2_1_T2V_480P_Config sampling=dmd
+fastvideo/fastwan-qad-1.3b-sa2	wan	fast_wan_t2v_480p	t2v	pipeline_config=FastWan2_1_T2V_480P_Config sampling=dmd
+fastvideo/fastwan-qad-fp8-1.3b	wan	fast_wan_t2v_480p	t2v	pipeline_config=FastWan2_1_T2V_480P_Config sampling=dmd
+wan-ai/wan2.2-ti2v-5b-diffusers	wan	wan_2_2_ti2v_5b	t2v,i2v	pipeline_config=Wan2_2_TI2V_5B_Config sampling=unipc
+fastvideo/fastwan2.2-ti2v-5b-fullattn-diffusers	wan	fast_wan_2_2_ti2v_5b	t2v,i2v	pipeline_config=FastWan2_2_TI2V_5B_Config sampling=dmd
+fastvideo/fastwan2.2-ti2v-5b-diffusers	wan	fast_wan_2_2_ti2v_5b	t2v,i2v	pipeline_config=FastWan2_2_TI2V_5B_Config sampling=dmd
+decart-ai/lucy-edit-dev	wan	lucy_edit_dev		pipeline_config=LucyEditDevConfig sampling=unipc
+decart-ai/lucy-edit-1.1-dev	wan	lucy_edit_dev		pipeline_config=LucyEditDevConfig sampling=unipc
+wan-ai/wan2.2-t2v-a14b-diffusers	wan	wan_2_2_t2v_a14b	t2v	pipeline_config=Wan2_2_T2V_A14B_Config sampling=unipc
+wan-ai/wan2.2-i2v-a14b-diffusers	wan	wan_2_2_i2v_a14b	i2v	pipeline_config=Wan2_2_I2V_A14B_Config sampling=unipc
+wlsaidhi/sfwan2.1-t2v-1.3b-diffusers	wan	sf_wan_t2v_1_3b	t2v	pipeline_config=SelfForcingWanT2V480PConfig sampling=causal_dmd
+rand0nmr/sfwan2.2-t2v-a14b-diffusers	wan	sf_wan_2_2_t2v_a14b	t2v	pipeline_config=SelfForcingWan2_2_T2V480PConfig sampling=causal_dmd
+fastvideo/sfwan2.2-i2v-a14b-preview-diffusers	wan	sf_wan_2_2_i2v_a14b	i2v	pipeline_config=SelfForcingWan2_2_T2V480PConfig sampling=causal_dmd
+fastvideo/ltx2-distilled-diffusers	ltx2	ltx2_distilled_20	t2av	ltx_line=Some(Distilled20)
+rootonchair/ltx-2-19b-distilled	ltx2	ltx2_distilled_20	t2av	ltx_line=Some(Distilled20)
+lightricks/ltx-2.5-diffusers	ltx2	ltx2_distilled_25	t2av	ltx_line=Some(Distilled25)
+lightricks/ltx-2	ltx2	ltx2_base_20	t2av	ltx_line=Some(Base20)
+fastvideo/ltx2-base	ltx2	ltx2_base_20	t2av	ltx_line=Some(Base20)
+fastvideo/ltx2-diffusers	ltx2	ltx2_base_20	t2av	ltx_line=Some(Base20)
+fastvideo/ltx-2.3-distilled-diffusers	ltx2	ltx2_distilled_23	t2av,i2v	ltx_line=Some(Distilled23)
+fastvideo/ltx2.3-distilled-diffusers	ltx2	ltx2_distilled_23	t2av,i2v	ltx_line=Some(Distilled23)
+diffusers/ltx-2.3-distilled-diffusers	ltx2	ltx2_distilled_23	t2av,i2v	ltx_line=Some(Distilled23)
+lightricks/ltx-2.3	ltx2	ltx2_base_23	t2av,i2v	ltx_line=Some(Base23)
+fastvideo/ltx2.3-base	ltx2	ltx2_base_23	t2av,i2v	ltx_line=Some(Base23)
+fastvideo/ltx2.3-diffusers	ltx2	ltx2_base_23	t2av,i2v	ltx_line=Some(Base23)
+diffusers/ltx-2.3-diffusers	ltx2	ltx2_base_23	t2av,i2v	ltx_line=Some(Base23)
+lightx2v/minimax-h3-turbo	h3	sol_h3_ref2va	ref2va	ltx_line=None
+fastvideo/fasth3-4-step-preview-v1-lora	h3	sol_h3	t2av,i2v,fl2va,ref2va	ltx_line=None
+fastvideo/fastvideo-fasth3-8-step-v2	h3	fasth3_8step	t2av,fl2va	ltx_line=None
+fastvideo/fastvideo-minimax-fasth3-preview-v0.2	h3	fasth3_8step	t2av,fl2va	ltx_line=None
+minimaxai/minimax-h3	h3	minimax_h3	t2av,fl2va,ref2va	ltx_line=None
+hunyuanvideo-community/hunyuanvideo-1.5-diffusers-480p_t2v	hunyuan15	hy15_480p_t2v	t2v	ltx_line=None
+hunyuanvideo-community/hunyuanvideo-1.5-diffusers-480p_i2v_step_distilled	hunyuan15	hy15_480p_i2v_distilled	i2v	ltx_line=None
+hunyuanvideo-community/hunyuanvideo-1.5-diffusers-720p_t2v	hunyuan15	hy15_720p_t2v	t2v	ltx_line=None
+hunyuanvideo-community/hunyuanvideo-1.5-diffusers-720p_i2v_distilled	hunyuan15	hy15_720p_i2v_distilled	i2v	ltx_line=None
+weizhou03/hunyuanvideo-1.5-diffusers-1080p	hunyuan15	hy15_1080p_sr	t2v	ltx_line=None
+weizhou03/hunyuanvideo-1.5-diffusers-1080p-2sr	hunyuan15	hy15_1080p_sr	t2v	ltx_line=None
+kandinskylab/kandinsky-5.0-t2v-lite-sft-5s-diffusers	kandinsky5	k5_lite_t2v_5s	t2v	ltx_line=None
+kandinskylab/kandinsky-5.0-t2v-pro-sft-5s-diffusers	kandinsky5	k5_pro_t2v_5s	t2v	ltx_line=None
+nvidia/cosmos-predict2-2b-video2world	cosmos	cosmos2_v2w_2b	i2v	ltx_line=None
+nvidia/cosmos-predict2-14b-video2world	cosmos	cosmos2_v2w_14b	i2v	ltx_line=None
+fastvideo/longcat-video-t2v-diffusers	longcat	longcat_t2v_480p	t2v	ltx_line=None
+fastvideo/gen3c-cosmos-7b-diffusers	gen3c	gen3c_cosmos_7b	i2v	ltx_line=None
+fastvideo/matrix-game-2.0-base-distilled-diffusers	matrixgame	mg2_base_distilled	i2v	ltx_line=None
+fastvideo/matrix-game-2.0-gta-distilled-diffusers	matrixgame	mg2_gta_distilled	i2v	ltx_line=None
+fastvideo/matrix-game-2.0-templerun-distilled-diffusers	matrixgame	mg2_templerun_distilled	i2v	ltx_line=None
+fastvideo/matrix-game-2.0-base-diffusers	matrixgame	mg2_base	i2v	ltx_line=None
+fastvideo/matrix-game-2.0-gta-diffusers	matrixgame	mg2_base	i2v	ltx_line=None
+fastvideo/matrix-game-2.0-templerun-diffusers	matrixgame	mg2_base	i2v	ltx_line=None
+fastvideo/matrix-game-3.0-base-distilled-diffusers	matrixgame	mg3_base_distilled	i2v	ltx_line=None
+fastvideo/dreamx-world-5b-cam-diffusers	dreamx_world	dreamx_5b_cam	i2v	ltx_line=None
+fastvideo/dreamx-world-5b-diffusers	dreamx_world	dreamx_5b_ar	i2v	ltx_line=None
+fastvideo/lingbot-world-base-cam-diffusers	lingbotworld	lingbotworld_base_cam	i2v	ltx_line=None
+fastvideo/hunyuangamecraft-diffusers	gamecraft	gamecraft_i2v	i2v	ltx_line=None
+fastvideo/hy-worldplay-bidirectional-diffusers	hyworld	hyworld_bidirectional	i2v	ltx_line=None
+tongyi-mai/z-image-turbo	zimage	zimage_turbo	t2i	ltx_line=None
+black-forest-labs/flux.1-dev	flux	flux1_dev	t2i	ltx_line=None
+black-forest-labs/flux.1-schnell	flux	flux1_schnell	t2i	ltx_line=None
+black-forest-labs/flux.2-klein-4b	flux2	flux2_klein_4b	t2i	ltx_line=None
+black-forest-labs/flux.2-klein-9b	flux2	flux2_klein_9b	t2i	ltx_line=None
+black-forest-labs/flux.2-dev	flux2	flux2_dev	t2i	ltx_line=None
+zai-org/glm-image	glm_image	glm_image	t2i	ltx_line=None
+fastvideo/stable-audio-open-1.0-diffusers	stable_audio	stable_audio_open_1_0	t2a	ltx_line=None
+fastvideo/stable-audio-open-small-diffusers	stable_audio	stable_audio_open_small	t2a	ltx_line=None
+hkchengrex/mmaudio	mmaudio	mmaudio_large_44k_v2	v2a,t2a	ltx_line=None
+fastvideo/mmaudio-large-44k-v2-diffusers	mmaudio	mmaudio_large_44k_v2	v2a,t2a	ltx_line=None
+Wan2.1-T2V-1.3B-Diffusers	-	-	-	error: unknown model id `Wan2.1-T2V-1.3B-Diffusers` — no registered family match (Wan/LTX/H3/…)
+Wan2.1-T2V-14B-Diffusers	wan	wan_t2v_14b	t2v	pipeline_config=WanT2V720PConfig sampling=unipc
+Wan2.1-VSA-T2V-14B-720P-Diffusers	wan	wan_t2v_14b	t2v	pipeline_config=WanT2V720PConfig sampling=unipc
+Wan2.1-I2V-14B-480P-Diffusers	-	-	-	error: unknown model id `Wan2.1-I2V-14B-480P-Diffusers` — no registered family match (Wan/LTX/H3/…)
+Wan2.1-I2V-14B-720P-Diffusers	wan	wan_i2v_14b_720p	i2v	pipeline_config=WanI2V720PConfig sampling=unipc
+Wan2.1-Fun-1.3B-InP-Diffusers	wan	wan_fun_1_3b_inp	i2v	pipeline_config=WanI2V480PConfig sampling=unipc
+Wan2.1-Fun-1.3B-Control-Diffusers	wan	wan_fun_1_3b_control		pipeline_config=WANV2VConfig sampling=unipc
+TurboWan2.1-T2V-1.3B-Diffusers	wan	turbo_t2v_1_3b	t2v	pipeline_config=TurboDiffusionT2V_1_3B_Config sampling=rcm
+TurboWan2.1-T2V-14B-Diffusers	wan	turbo_t2v_14b	t2v	pipeline_config=TurboDiffusionT2V_14B_Config sampling=rcm
+TurboWan2.2-I2V-A14B-Diffusers	wan	turbo_i2v_a14b	i2v	pipeline_config=TurboDiffusionI2V_A14B_Config sampling=rcm
+FastWan2.1-T2V-1.3B-Diffusers	-	-	-	error: unknown model id `FastWan2.1-T2V-1.3B-Diffusers` — no registered family match (Wan/LTX/H3/…)
+FastWan2.1-T2V-14B-480P-Diffusers	-	-	-	error: unknown model id `FastWan2.1-T2V-14B-480P-Diffusers` — no registered family match (Wan/LTX/H3/…)
+FastWan-QAD-1.3B	-	-	-	error: unknown model id `FastWan-QAD-1.3B` — no registered family match (Wan/LTX/H3/…)
+FastWan-QAD-1.3B-SA2	-	-	-	error: unknown model id `FastWan-QAD-1.3B-SA2` — no registered family match (Wan/LTX/H3/…)
+FastWan-QAD-FP8-1.3B	-	-	-	error: unknown model id `FastWan-QAD-FP8-1.3B` — no registered family match (Wan/LTX/H3/…)
+Wan2.2-TI2V-5B-Diffusers	wan	wan_2_2_ti2v_5b	t2v,i2v	pipeline_config=Wan2_2_TI2V_5B_Config sampling=unipc
+FastWan2.2-TI2V-5B-FullAttn-Diffusers	wan	fast_wan_2_2_ti2v_5b	t2v,i2v	pipeline_config=FastWan2_2_TI2V_5B_Config sampling=dmd
+FastWan2.2-TI2V-5B-Diffusers	wan	fast_wan_2_2_ti2v_5b	t2v,i2v	pipeline_config=FastWan2_2_TI2V_5B_Config sampling=dmd
+Lucy-Edit-Dev	wan	lucy_edit_dev		pipeline_config=LucyEditDevConfig sampling=unipc
+Lucy-Edit-1.1-Dev	wan	lucy_edit_dev		pipeline_config=LucyEditDevConfig sampling=unipc
+Wan2.2-T2V-A14B-Diffusers	wan	wan_2_2_t2v_a14b	t2v	pipeline_config=Wan2_2_T2V_A14B_Config sampling=unipc
+Wan2.2-I2V-A14B-Diffusers	wan	wan_2_2_i2v_a14b	i2v	pipeline_config=Wan2_2_I2V_A14B_Config sampling=unipc
+SFWan2.1-T2V-1.3B-Diffusers	-	-	-	error: unknown model id `SFWan2.1-T2V-1.3B-Diffusers` — no registered family match (Wan/LTX/H3/…)
+SFWan2.2-T2V-A14B-Diffusers	wan	sf_wan_2_2_t2v_a14b	t2v	pipeline_config=SelfForcingWan2_2_T2V480PConfig sampling=causal_dmd
+SFWan2.2-I2V-A14B-Preview-Diffusers	wan	sf_wan_2_2_i2v_a14b	i2v	pipeline_config=SelfForcingWan2_2_T2V480PConfig sampling=causal_dmd
+LTX2-Distilled-Diffusers	ltx2	ltx2_distilled_20	t2av	ltx_line=Some(Distilled20)
+LTX-2-19b-distilled	ltx2	ltx2_distilled_20	t2av	ltx_line=Some(Distilled20)
+LTX-2.5-Diffusers	ltx2	ltx2_distilled_25	t2av	ltx_line=Some(Distilled25)
+LTX-2	-	-	-	error: unknown model id `LTX-2` — no registered family match (Wan/LTX/H3/…)
+LTX2-base	ltx2	ltx2_base_20	t2av	ltx_line=Some(Base20)
+LTX2-Diffusers	-	-	-	error: unknown model id `LTX2-Diffusers` — no registered family match (Wan/LTX/H3/…)
+LTX-2.3-Distilled-Diffusers	ltx2	ltx2_distilled_23	t2av,i2v	ltx_line=Some(Distilled23)
+LTX2.3-Distilled-Diffusers	ltx2	ltx2_distilled_23	t2av,i2v	ltx_line=Some(Distilled23)
+LTX-2.3	ltx2	ltx2_base_23	t2av,i2v	ltx_line=Some(Base23)
+LTX2.3-base	ltx2	ltx2_base_23	t2av,i2v	ltx_line=Some(Base23)
+LTX2.3-Diffusers	ltx2	ltx2_base_23	t2av,i2v	ltx_line=Some(Base23)
+LTX-2.3-Diffusers	ltx2	ltx2_base_23	t2av,i2v	ltx_line=Some(Base23)
+Minimax-h3-Turbo	h3	sol_h3_ref2va	ref2va	ltx_line=None
+FastH3-4-step-Preview-v1-LoRA	h3	fasth3_8step	t2av,fl2va	ltx_line=None
+FastVideo-FastH3-8-Step-V2	h3	fasth3_8step	t2av,fl2va	ltx_line=None
+FastVideo-Minimax-FastH3-Preview-v0.2	h3	fasth3_8step	t2av,fl2va	ltx_line=None
+MiniMax-H3	h3	minimax_h3	t2av,fl2va,ref2va	ltx_line=None
+HunyuanVideo-1.5-Diffusers-480p_t2v	hunyuan15	hy15_480p_t2v	t2v	ltx_line=None
+HunyuanVideo-1.5-Diffusers-480p_i2v_step_distilled	hunyuan15	hy15_480p_i2v_distilled	i2v	ltx_line=None
+HunyuanVideo-1.5-Diffusers-720p_t2v	hunyuan15	hy15_720p_t2v	t2v	ltx_line=None
+HunyuanVideo-1.5-Diffusers-720p_i2v_distilled	hunyuan15	hy15_720p_i2v_distilled	i2v	ltx_line=None
+HunyuanVideo-1.5-Diffusers-1080p	hunyuan15	hy15_1080p_sr	t2v	ltx_line=None
+HunyuanVideo-1.5-Diffusers-1080p-2SR	hunyuan15	hy15_1080p_sr	t2v	ltx_line=None
+Kandinsky-5.0-T2V-Lite-sft-5s-Diffusers	kandinsky5	k5_lite_t2v_5s	t2v	ltx_line=None
+Kandinsky-5.0-T2V-Pro-sft-5s-Diffusers	kandinsky5	k5_pro_t2v_5s	t2v	ltx_line=None
+Cosmos-Predict2-2B-Video2World	cosmos	cosmos2_v2w_2b	i2v	ltx_line=None
+Cosmos-Predict2-14B-Video2World	cosmos	cosmos2_v2w_14b	i2v	ltx_line=None
+LongCat-Video-T2V-Diffusers	longcat	longcat_t2v_480p	t2v	ltx_line=None
+lingbot-video-dense-1.3b	lingbot	lingbot_dense_1_3b	t2v	ltx_line=None
+lingbot-video-moe-30b-a3b	lingbot	lingbot_moe_30b	t2v	ltx_line=None
+GEN3C-Cosmos-7B-Diffusers	gen3c	gen3c_cosmos_7b	i2v	ltx_line=None
+Matrix-Game-2.0-Base-Distilled-Diffusers	matrixgame	mg2_base_distilled	i2v	ltx_line=None
+Matrix-Game-2.0-GTA-Distilled-Diffusers	matrixgame	mg2_gta_distilled	i2v	ltx_line=None
+Matrix-Game-2.0-TempleRun-Distilled-Diffusers	matrixgame	mg2_templerun_distilled	i2v	ltx_line=None
+Matrix-Game-2.0-Base-Diffusers	matrixgame	mg2_base	i2v	ltx_line=None
+Matrix-Game-2.0-GTA-Diffusers	-	-	-	error: unknown model id `Matrix-Game-2.0-GTA-Diffusers` — no registered family match (Wan/LTX/H3/…)
+Matrix-Game-2.0-TempleRun-Diffusers	matrixgame	mg2_templerun_distilled	i2v	ltx_line=None
+Matrix-Game-3.0-Base-Distilled-Diffusers	matrixgame	mg3_base_distilled	i2v	ltx_line=None
+DreamX-World-5B-Cam-Diffusers	dreamx_world	dreamx_5b_cam	i2v	ltx_line=None
+DreamX-World-5B-Diffusers	dreamx_world	dreamx_5b_ar	i2v	ltx_line=None
+LingBot-World-Base-Cam-Diffusers	lingbotworld	lingbotworld_base_cam	i2v	ltx_line=None
+lingbot-world-v2-14b-causal-fast	lingbotworld	lingbotworld2_causal_fast	i2v	ltx_line=None
+HunyuanGameCraft-Diffusers	gamecraft	gamecraft_i2v	i2v	ltx_line=None
+HY-WorldPlay-Bidirectional-Diffusers	hyworld	hyworld_bidirectional	i2v	ltx_line=None
+Z-Image-Turbo	zimage	zimage_turbo	t2i	ltx_line=None
+stable-diffusion-3.5-medium	sd35	sd35_medium	t2i	ltx_line=None
+FLUX.1-dev	flux	flux1_dev	t2i	ltx_line=None
+FLUX.1-schnell	flux	flux1_schnell	t2i	ltx_line=None
+FLUX.2-klein-4B	flux2	flux2_klein_4b	t2i	ltx_line=None
+FLUX.2-klein-9B	flux2	flux2_klein_9b	t2i	ltx_line=None
+FLUX.2-dev	flux2	flux2_dev	t2i	ltx_line=None
+GLM-Image	glm_image	glm_image	t2i	ltx_line=None
+stable-audio-open-1.0-Diffusers	stable_audio	stable_audio_open_1_0	t2a	ltx_line=None
+stable-audio-open-small-Diffusers	stable_audio	stable_audio_open_small	t2a	ltx_line=None
+MMAudio	mmaudio	mmaudio_large_44k_v2	v2a,t2a	ltx_line=None
+MMAudio-large-44k-v2-Diffusers	mmaudio	mmaudio_large_44k_v2	v2a,t2a	ltx_line=None
+wan_t2v_1_3b	-	-	-	error: unknown model id `wan_t2v_1_3b` — no registered family match (Wan/LTX/H3/…)
+wan-t2v-1-3b	-	-	-	error: unknown model id `wan-t2v-1-3b` — no registered family match (Wan/LTX/H3/…)
+wan_t2v_14b	-	-	-	error: unknown model id `wan_t2v_14b` — no registered family match (Wan/LTX/H3/…)
+wan-t2v-14b	wan	wan_t2v_14b	t2v	pipeline_config=WanT2V720PConfig sampling=unipc
+wan_i2v_14b_480p	-	-	-	error: unknown model id `wan_i2v_14b_480p` — no registered family match (Wan/LTX/H3/…)
+wan-i2v-14b-480p	-	-	-	error: unknown model id `wan-i2v-14b-480p` — no registered family match (Wan/LTX/H3/…)
+wan_i2v_14b_720p	-	-	-	error: unknown model id `wan_i2v_14b_720p` — no registered family match (Wan/LTX/H3/…)
+wan-i2v-14b-720p	wan	wan_i2v_14b_720p	i2v	pipeline_config=WanI2V720PConfig sampling=unipc
+wan_fun_1_3b_inp	-	-	-	error: unknown model id `wan_fun_1_3b_inp` — no registered family match (Wan/LTX/H3/…)
+wan-fun-1-3b-inp	wan	wan_fun_1_3b_inp	i2v	pipeline_config=WanI2V480PConfig sampling=unipc
+wan_fun_1_3b_control	-	-	-	error: unknown model id `wan_fun_1_3b_control` — no registered family match (Wan/LTX/H3/…)
+wan-fun-1-3b-control	wan	wan_fun_1_3b_control		pipeline_config=WANV2VConfig sampling=unipc
+turbo_t2v_1_3b	-	-	-	error: unknown model id `turbo_t2v_1_3b` — no registered family match (Wan/LTX/H3/…)
+turbo-t2v-1-3b	-	-	-	error: unknown model id `turbo-t2v-1-3b` — no registered family match (Wan/LTX/H3/…)
+turbo_t2v_14b	-	-	-	error: unknown model id `turbo_t2v_14b` — no registered family match (Wan/LTX/H3/…)
+turbo-t2v-14b	-	-	-	error: unknown model id `turbo-t2v-14b` — no registered family match (Wan/LTX/H3/…)
+turbo_i2v_a14b	-	-	-	error: unknown model id `turbo_i2v_a14b` — no registered family match (Wan/LTX/H3/…)
+turbo-i2v-a14b	-	-	-	error: unknown model id `turbo-i2v-a14b` — no registered family match (Wan/LTX/H3/…)
+fast_wan_t2v_480p	-	-	-	error: unknown model id `fast_wan_t2v_480p` — no registered family match (Wan/LTX/H3/…)
+fast-wan-t2v-480p	-	-	-	error: unknown model id `fast-wan-t2v-480p` — no registered family match (Wan/LTX/H3/…)
+wan_2_2_ti2v_5b	-	-	-	error: unknown model id `wan_2_2_ti2v_5b` — no registered family match (Wan/LTX/H3/…)
+wan-2-2-ti2v-5b	wan	wan_2_2_ti2v_5b	t2v,i2v	pipeline_config=Wan2_2_TI2V_5B_Config sampling=unipc
+fast_wan_2_2_ti2v_5b	-	-	-	error: unknown model id `fast_wan_2_2_ti2v_5b` — no registered family match (Wan/LTX/H3/…)
+fast-wan-2-2-ti2v-5b	wan	wan_2_2_ti2v_5b	t2v,i2v	pipeline_config=Wan2_2_TI2V_5B_Config sampling=unipc
+lucy_edit_dev	-	-	-	error: unknown model id `lucy_edit_dev` — no registered family match (Wan/LTX/H3/…)
+lucy-edit-dev	wan	lucy_edit_dev		pipeline_config=LucyEditDevConfig sampling=unipc
+wan_2_2_t2v_a14b	-	-	-	error: unknown model id `wan_2_2_t2v_a14b` — no registered family match (Wan/LTX/H3/…)
+wan-2-2-t2v-a14b	wan	wan_2_2_t2v_a14b	t2v	pipeline_config=Wan2_2_T2V_A14B_Config sampling=unipc
+wan_2_2_i2v_a14b	-	-	-	error: unknown model id `wan_2_2_i2v_a14b` — no registered family match (Wan/LTX/H3/…)
+wan-2-2-i2v-a14b	wan	wan_2_2_i2v_a14b	i2v	pipeline_config=Wan2_2_I2V_A14B_Config sampling=unipc
+sf_wan_t2v_1_3b	-	-	-	error: unknown model id `sf_wan_t2v_1_3b` — no registered family match (Wan/LTX/H3/…)
+sf-wan-t2v-1-3b	-	-	-	error: unknown model id `sf-wan-t2v-1-3b` — no registered family match (Wan/LTX/H3/…)
+sf_wan_2_2_t2v_a14b	-	-	-	error: unknown model id `sf_wan_2_2_t2v_a14b` — no registered family match (Wan/LTX/H3/…)
+sf-wan-2-2-t2v-a14b	wan	wan_2_2_t2v_a14b	t2v	pipeline_config=Wan2_2_T2V_A14B_Config sampling=unipc
+sf_wan_2_2_i2v_a14b	-	-	-	error: unknown model id `sf_wan_2_2_i2v_a14b` — no registered family match (Wan/LTX/H3/…)
+sf-wan-2-2-i2v-a14b	wan	wan_2_2_i2v_a14b	i2v	pipeline_config=Wan2_2_I2V_A14B_Config sampling=unipc
+ltx2_distilled_20	-	-	-	error: unknown model id `ltx2_distilled_20` — no registered family match (Wan/LTX/H3/…)
+ltx2-distilled-20	ltx2	ltx2_distilled_20	t2av	ltx_line=Some(Distilled20)
+ltx2_distilled_25	-	-	-	error: unknown model id `ltx2_distilled_25` — no registered family match (Wan/LTX/H3/…)
+ltx2-distilled-25	ltx2	ltx2_distilled_20	t2av	ltx_line=Some(Distilled20)
+ltx2_base_20	-	-	-	error: unknown model id `ltx2_base_20` — no registered family match (Wan/LTX/H3/…)
+ltx2-base-20	ltx2	ltx2_base_20	t2av	ltx_line=Some(Base20)
+ltx2_distilled_23	-	-	-	error: unknown model id `ltx2_distilled_23` — no registered family match (Wan/LTX/H3/…)
+ltx2-distilled-23	ltx2	ltx2_distilled_20	t2av	ltx_line=Some(Distilled20)
+ltx2_base_23	-	-	-	error: unknown model id `ltx2_base_23` — no registered family match (Wan/LTX/H3/…)
+ltx2-base-23	ltx2	ltx2_base_20	t2av	ltx_line=Some(Base20)
+sol_h3_ref2va	h3	sol_h3_ref2va	ref2va	ltx_line=None
+sol-h3-ref2va	h3	sol_h3_ref2va	ref2va	ltx_line=None
+sol_h3	h3	sol_h3	t2av,i2v,fl2va,ref2va	ltx_line=None
+sol-h3	h3	sol_h3	t2av,i2v,fl2va,ref2va	ltx_line=None
+fasth3_8step	h3	fasth3_8step	t2av,fl2va	ltx_line=None
+fasth3-8step	h3	fasth3_8step	t2av,fl2va	ltx_line=None
+minimax_h3	h3	minimax_h3	t2av,fl2va,ref2va	ltx_line=None
+minimax-h3	h3	minimax_h3	t2av,fl2va,ref2va	ltx_line=None
+hy15_480p_t2v	-	-	-	error: unknown model id `hy15_480p_t2v` — no registered family match (Wan/LTX/H3/…)
+hy15-480p-t2v	hunyuan15	hy15_480p_t2v	t2v	ltx_line=None
+hy15_480p_i2v_distilled	-	-	-	error: unknown model id `hy15_480p_i2v_distilled` — no registered family match (Wan/LTX/H3/…)
+hy15-480p-i2v-distilled	hunyuan15	hy15_480p_i2v_distilled	i2v	ltx_line=None
+hy15_720p_t2v	-	-	-	error: unknown model id `hy15_720p_t2v` — no registered family match (Wan/LTX/H3/…)
+hy15-720p-t2v	hunyuan15	hy15_720p_t2v	t2v	ltx_line=None
+hy15_720p_i2v_distilled	hunyuan15	hy15_720p_i2v_distilled	i2v	ltx_line=None
+hy15-720p-i2v-distilled	hunyuan15	hy15_720p_i2v_distilled	i2v	ltx_line=None
+hy15_1080p_sr	-	-	-	error: unknown model id `hy15_1080p_sr` — no registered family match (Wan/LTX/H3/…)
+hy15-1080p-sr	hunyuan15	hy15_1080p_sr	t2v	ltx_line=None
+k5_lite_t2v_5s	-	-	-	error: unknown model id `k5_lite_t2v_5s` — no registered family match (Wan/LTX/H3/…)
+k5-lite-t2v-5s	kandinsky5	k5_lite_t2v_5s	t2v	ltx_line=None
+k5_pro_t2v_5s	-	-	-	error: unknown model id `k5_pro_t2v_5s` — no registered family match (Wan/LTX/H3/…)
+k5-pro-t2v-5s	kandinsky5	k5_pro_t2v_5s	t2v	ltx_line=None
+cosmos2_v2w_2b	-	-	-	error: unknown model id `cosmos2_v2w_2b` — no registered family match (Wan/LTX/H3/…)
+cosmos2-v2w-2b	-	-	-	error: unknown model id `cosmos2-v2w-2b` — no registered family match (Wan/LTX/H3/…)
+cosmos2_v2w_14b	-	-	-	error: unknown model id `cosmos2_v2w_14b` — no registered family match (Wan/LTX/H3/…)
+cosmos2-v2w-14b	-	-	-	error: unknown model id `cosmos2-v2w-14b` — no registered family match (Wan/LTX/H3/…)
+longcat_t2v_480p	-	-	-	error: unknown model id `longcat_t2v_480p` — no registered family match (Wan/LTX/H3/…)
+longcat-t2v-480p	longcat	longcat_t2v_480p	t2v	ltx_line=None
+longcat_t2v_720p	-	-	-	error: unknown model id `longcat_t2v_720p` — no registered family match (Wan/LTX/H3/…)
+longcat-t2v-720p	longcat	longcat_t2v_720p	t2v	ltx_line=None
+lingbot_dense_1_3b	-	-	-	error: unknown model id `lingbot_dense_1_3b` — no registered family match (Wan/LTX/H3/…)
+lingbot-dense-1-3b	-	-	-	error: unknown model id `lingbot-dense-1-3b` — no registered family match (Wan/LTX/H3/…)
+lingbot_moe_30b	-	-	-	error: unknown model id `lingbot_moe_30b` — no registered family match (Wan/LTX/H3/…)
+lingbot-moe-30b	lingbot	lingbot_moe_30b	t2v	ltx_line=None
+gen3c_cosmos_7b	gen3c	gen3c_cosmos_7b	i2v	ltx_line=None
+gen3c-cosmos-7b	gen3c	gen3c_cosmos_7b	i2v	ltx_line=None
+mg2_base_distilled	-	-	-	error: unknown model id `mg2_base_distilled` — no registered family match (Wan/LTX/H3/…)
+mg2-base-distilled	matrixgame	mg2_base_distilled	i2v	ltx_line=None
+mg2_gta_distilled	-	-	-	error: unknown model id `mg2_gta_distilled` — no registered family match (Wan/LTX/H3/…)
+mg2-gta-distilled	matrixgame	mg2_gta_distilled	i2v	ltx_line=None
+mg2_templerun_distilled	-	-	-	error: unknown model id `mg2_templerun_distilled` — no registered family match (Wan/LTX/H3/…)
+mg2-templerun-distilled	matrixgame	mg2_templerun_distilled	i2v	ltx_line=None
+mg2_base	-	-	-	error: unknown model id `mg2_base` — no registered family match (Wan/LTX/H3/…)
+mg2-base	matrixgame	mg2_base	i2v	ltx_line=None
+mg3_base_distilled	-	-	-	error: unknown model id `mg3_base_distilled` — no registered family match (Wan/LTX/H3/…)
+mg3-base-distilled	matrixgame	mg3_base_distilled	i2v	ltx_line=None
+dreamx_5b_cam	dreamx_world	dreamx_5b_cam	i2v	ltx_line=None
+dreamx-5b-cam	-	-	-	error: unknown model id `dreamx-5b-cam` — no registered family match (Wan/LTX/H3/…)
+dreamx_5b_ar	dreamx_world	dreamx_5b_ar	i2v	ltx_line=None
+dreamx-5b-ar	-	-	-	error: unknown model id `dreamx-5b-ar` — no registered family match (Wan/LTX/H3/…)
+lingbotworld_base_cam	lingbotworld	lingbotworld_base_cam	i2v	ltx_line=None
+lingbotworld-base-cam	-	-	-	error: unknown model id `lingbotworld-base-cam` — no registered family match (Wan/LTX/H3/…)
+lingbotworld2_causal_fast	lingbotworld	lingbotworld2_causal_fast	i2v	ltx_line=None
+lingbotworld2-causal-fast	lingbotworld	lingbotworld2_causal_fast	i2v	ltx_line=None
+gamecraft_i2v	gamecraft	gamecraft_i2v	i2v	ltx_line=None
+gamecraft-i2v	gamecraft	gamecraft_i2v	i2v	ltx_line=None
+hyworld_bidirectional	hyworld	hyworld_bidirectional	i2v	ltx_line=None
+hyworld-bidirectional	hyworld	hyworld_bidirectional	i2v	ltx_line=None
+zimage_turbo	zimage	zimage_turbo	t2i	ltx_line=None
+zimage-turbo	zimage	zimage_turbo	t2i	ltx_line=None
+sd35_medium	sd35	sd35_medium	t2i	ltx_line=None
+sd35-medium	sd35	sd35_medium	t2i	ltx_line=None
+flux1_dev	-	-	-	error: unknown model id `flux1_dev` — no registered family match (Wan/LTX/H3/…)
+flux1-dev	flux	flux1_dev	t2i	ltx_line=None
+flux1_schnell	-	-	-	error: unknown model id `flux1_schnell` — no registered family match (Wan/LTX/H3/…)
+flux1-schnell	flux	flux1_schnell	t2i	ltx_line=None
+flux2_klein_4b	-	-	-	error: unknown model id `flux2_klein_4b` — no registered family match (Wan/LTX/H3/…)
+flux2-klein-4b	flux2	flux2_klein_4b	t2i	ltx_line=None
+flux2_klein_9b	-	-	-	error: unknown model id `flux2_klein_9b` — no registered family match (Wan/LTX/H3/…)
+flux2-klein-9b	flux2	flux2_klein_9b	t2i	ltx_line=None
+flux2_dev	-	-	-	error: unknown model id `flux2_dev` — no registered family match (Wan/LTX/H3/…)
+flux2-dev	flux2	flux2_dev	t2i	ltx_line=None
+glm_image	glm_image	glm_image	t2i	ltx_line=None
+glm-image	glm_image	glm_image	t2i	ltx_line=None
+stable_audio_open_1_0	stable_audio	stable_audio_open_1_0	t2a	ltx_line=None
+stable-audio-open-1-0	-	-	-	error: unknown model id `stable-audio-open-1-0` — no registered family match (Wan/LTX/H3/…)
+stable_audio_open_small	stable_audio	stable_audio_open_small	t2a	ltx_line=None
+stable-audio-open-small	stable_audio	stable_audio_open_small	t2a	ltx_line=None
+mmaudio_large_44k_v2	mmaudio	mmaudio_large_44k_v2	v2a,t2a	ltx_line=None
+mmaudio-large-44k-v2	mmaudio	mmaudio_large_44k_v2	v2a,t2a	ltx_line=None
+wanpipeline	wan	wan_t2v_1_3b	t2v	pipeline_config=WanT2V480PConfig sampling=unipc
+wanimagetovideo	wan	wan_i2v_14b_480p	i2v	pipeline_config=WanI2V480PConfig sampling=unipc
+turbowan2.1-t2v-1.3b	wan	turbo_t2v_1_3b	t2v	pipeline_config=TurboDiffusionT2V_1_3B_Config sampling=rcm
+turbodiffusion-t2v-1.3b	wan	turbo_t2v_1_3b	t2v	pipeline_config=TurboDiffusionT2V_1_3B_Config sampling=rcm
+turbowan2.1-t2v-14b	wan	turbo_t2v_14b	t2v	pipeline_config=TurboDiffusionT2V_14B_Config sampling=rcm
+turbodiffusion-t2v-14b	wan	turbo_t2v_14b	t2v	pipeline_config=TurboDiffusionT2V_14B_Config sampling=rcm
+turbowan2.2-i2v	wan	turbo_i2v_a14b	i2v	pipeline_config=TurboDiffusionI2V_A14B_Config sampling=rcm
+turbodiffusion-i2v	wan	turbo_i2v_a14b	i2v	pipeline_config=TurboDiffusionI2V_A14B_Config sampling=rcm
+wandmdpipeline	wan	fast_wan_t2v_480p	t2v	pipeline_config=FastWan2_1_T2V_480P_Config sampling=dmd
+lucy-edit	wan	lucy_edit_dev		pipeline_config=LucyEditDevConfig sampling=unipc
+wancausaldmdpipeline	wan	sf_wan_t2v_1_3b	t2v	pipeline_config=SelfForcingWanT2V480PConfig sampling=causal_dmd
+sfwan2.2	wan	sf_wan_2_2_t2v_a14b	t2v	pipeline_config=SelfForcingWan2_2_T2V480PConfig sampling=causal_dmd
+sfwan2_2	wan	sf_wan_2_2_t2v_a14b	t2v	pipeline_config=SelfForcingWan2_2_T2V480PConfig sampling=causal_dmd
+i2v	wan	wan_i2v_14b_720p	i2v	pipeline_config=WanI2V720PConfig sampling=unipc
+ltx2-distilled	ltx2	ltx2_distilled_20	t2av	ltx_line=Some(Distilled20)
+ltx-2-19b-distilled	ltx2	ltx2_distilled_20	t2av	ltx_line=Some(Distilled20)
+ltx-2.5	ltx2	ltx2_distilled_25	t2av	ltx_line=Some(Distilled25)
+ltx2.5	ltx2	ltx2_distilled_25	t2av	ltx_line=Some(Distilled25)
+ltx2-base	ltx2	ltx2_base_20	t2av	ltx_line=Some(Base20)
+ltx-2-diffusers	ltx2	ltx2_base_20	t2av	ltx_line=Some(Base20)
+ltx-2.3-distilled	ltx2	ltx2_distilled_23	t2av,i2v	ltx_line=Some(Distilled23)
+ltx2.3-distilled	ltx2	ltx2_distilled_23	t2av,i2v	ltx_line=Some(Distilled23)
+ltx-2.3	ltx2	ltx2_base_23	t2av,i2v	ltx_line=Some(Base23)
+ltx2.3	ltx2	ltx2_base_23	t2av,i2v	ltx_line=Some(Base23)
+minimax-h3-turbo	h3	sol_h3_ref2va	ref2va	ltx_line=None
+fasth3	h3	fasth3_8step	t2av,fl2va	ltx_line=None
+fast-h3	h3	fasth3_8step	t2av,fl2va	ltx_line=None
+hunyuanvideo-1.5-diffusers-480p_t2v	hunyuan15	hy15_480p_t2v	t2v	ltx_line=None
+480p_i2v_step_distilled	hunyuan15	hy15_480p_i2v_distilled	i2v	ltx_line=None
+hy15-480p-i2v	hunyuan15	hy15_480p_i2v_distilled	i2v	ltx_line=None
+hunyuanvideo-1.5-diffusers-720p_t2v	hunyuan15	hy15_720p_t2v	t2v	ltx_line=None
+720p_i2v_distilled	hunyuan15	hy15_720p_i2v_distilled	i2v	ltx_line=None
+hy15-720p-i2v	hunyuan15	hy15_720p_i2v_distilled	i2v	ltx_line=None
+hunyuanvideo-1.5-diffusers-1080p	hunyuan15	hy15_1080p_sr	t2v	ltx_line=None
+hy15-1080p	hunyuan15	hy15_1080p_sr	t2v	ltx_line=None
+kandinsky-5.0-t2v-lite	kandinsky5	k5_lite_t2v_5s	t2v	ltx_line=None
+k5-lite-t2v	kandinsky5	k5_lite_t2v_5s	t2v	ltx_line=None
+kandinsky-5.0-t2v-pro	kandinsky5	k5_pro_t2v_5s	t2v	ltx_line=None
+k5-pro-t2v	kandinsky5	k5_pro_t2v_5s	t2v	ltx_line=None
+cosmos-predict2-2b-video2world	cosmos	cosmos2_v2w_2b	i2v	ltx_line=None
+cosmos2-2b-v2w	cosmos	cosmos2_v2w_2b	i2v	ltx_line=None
+cosmos-predict2-14b-video2world	cosmos	cosmos2_v2w_14b	i2v	ltx_line=None
+cosmos2-14b-v2w	cosmos	cosmos2_v2w_14b	i2v	ltx_line=None
+longcat-video-t2v	longcat	longcat_t2v_480p	t2v	ltx_line=None
+longcat-720p-bsa	longcat	longcat_t2v_720p	t2v	ltx_line=None
+lingbot-video-dense	lingbot	lingbot_dense_1_3b	t2v	ltx_line=None
+lingbot-dense-1.3b	lingbot	lingbot_dense_1_3b	t2v	ltx_line=None
+lingbot-video-moe	lingbot	lingbot_moe_30b	t2v	ltx_line=None
+gen3c-cosmos	gen3c	gen3c_cosmos_7b	i2v	ltx_line=None
+matrix-game-2.0-base-distilled	matrixgame	mg2_base_distilled	i2v	ltx_line=None
+matrix-game-2.0-gta-distilled	matrixgame	mg2_gta_distilled	i2v	ltx_line=None
+mg2-gta	matrixgame	mg2_gta_distilled	i2v	ltx_line=None
+matrix-game-2.0-templerun	matrixgame	mg2_templerun_distilled	i2v	ltx_line=None
+mg2-templerun	matrixgame	mg2_templerun_distilled	i2v	ltx_line=None
+matrix-game-2.0-base-diffusers	matrixgame	mg2_base	i2v	ltx_line=None
+matrix-game-3.0	matrixgame	mg3_base_distilled	i2v	ltx_line=None
+mg3-base	matrixgame	mg3_base_distilled	i2v	ltx_line=None
+dreamx-world-5b-cam	dreamx_world	dreamx_5b_cam	i2v	ltx_line=None
+dreamx-world-5b-diffusers	dreamx_world	dreamx_5b_ar	i2v	ltx_line=None
+lingbot-world-base-cam	lingbotworld	lingbotworld_base_cam	i2v	ltx_line=None
+lingbot-world-v2	lingbotworld	lingbotworld2_causal_fast	i2v	ltx_line=None
+lingbotworld2	lingbotworld	lingbotworld2_causal_fast	i2v	ltx_line=None
+hunyuangamecraft	gamecraft	gamecraft_i2v	i2v	ltx_line=None
+gamecraft	gamecraft	gamecraft_i2v	i2v	ltx_line=None
+hy-worldplay	hyworld	hyworld_bidirectional	i2v	ltx_line=None
+hyworld	hyworld	hyworld_bidirectional	i2v	ltx_line=None
+z-image	zimage	zimage_turbo	t2i	ltx_line=None
+zimage	zimage	zimage_turbo	t2i	ltx_line=None
+stable-diffusion-3.5	sd35	sd35_medium	t2i	ltx_line=None
+sd35	sd35	sd35_medium	t2i	ltx_line=None
+sd3.5	sd35	sd35_medium	t2i	ltx_line=None
+flux.1-dev	flux	flux1_dev	t2i	ltx_line=None
+flux-1-dev	flux	flux1_dev	t2i	ltx_line=None
+flux.1-schnell	flux	flux1_schnell	t2i	ltx_line=None
+flux-schnell	flux	flux1_schnell	t2i	ltx_line=None
+flux.2-klein-4b	flux2	flux2_klein_4b	t2i	ltx_line=None
+flux.2-klein-9b	flux2	flux2_klein_9b	t2i	ltx_line=None
+flux.2-dev	flux2	flux2_dev	t2i	ltx_line=None
+stable-audio-open-1.0	stable_audio	stable_audio_open_1_0	t2a	ltx_line=None
+mmaudio-large	mmaudio	mmaudio_large_44k_v2	v2a,t2a	ltx_line=None
+mmaudio	mmaudio	mmaudio_large_44k_v2	v2a,t2a	ltx_line=None
+not-a-real/model	-	-	-	error: unknown model id `not-a-real/model` — no registered family match (Wan/LTX/H3/…)
+wan	wan	wan_t2v_14b	t2v	pipeline_config=WanT2V720PConfig sampling=unipc
+ltx	-	-	-	error: unknown model id `ltx` — no registered family match (Wan/LTX/H3/…)
+h3	-	-	-	error: unknown model id `h3` — no registered family match (Wan/LTX/H3/…)
+Wan-AI/Wan2.1-T2V-1.3B	-	-	-	error: unknown model id `Wan-AI/Wan2.1-T2V-1.3B` — no registered family match (Wan/LTX/H3/…)
+FastVideo/Wan2.1-VSA-T2V-14B-720P-Diffusers-extra	wan	wan_t2v_14b	t2v	pipeline_config=WanT2V720PConfig sampling=unipc
+/models/wan22-ti2v-5b	-	-	-	error: unknown model id `/models/wan22-ti2v-5b` — no registered family match (Wan/LTX/H3/…)
+/workspace/weights/ltx2.3-distilled	ltx2	ltx2_distilled_23	t2av,i2v	ltx_line=Some(Distilled23)
+/workspace/weights/minimax-h3	h3	minimax_h3	t2av,fl2va,ref2va	ltx_line=None
+sfwan2.2-i2v	wan	sf_wan_2_2_i2v_a14b	i2v	pipeline_config=SelfForcingWan2_2_T2V480PConfig sampling=causal_dmd
+sfwan2.2-t2v	wan	sf_wan_2_2_t2v_a14b	t2v	pipeline_config=SelfForcingWan2_2_T2V480PConfig sampling=causal_dmd
+
+# wan preset	sampling	pipeline
+wan_t2v_1_3b	SamplingParam { prompt: None, negative_prompt: "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards", output_path: "outputs/", seed: 1024, num_frames: 81, height: 480, width: 832, fps: 16, num_inference_steps: 50, guidance_scale: 3.0, guidance_scale_2: None, boundary_ratio: None, save_video: true }	PipelineDefaults { flow_shift: 3.0, dmd_steps: None, boundary_ratio: None, rcm_sigma_max: None }
+wan_t2v_14b	SamplingParam { prompt: None, negative_prompt: "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards", output_path: "outputs/", seed: 1024, num_frames: 81, height: 720, width: 1280, fps: 16, num_inference_steps: 50, guidance_scale: 5.0, guidance_scale_2: None, boundary_ratio: None, save_video: true }	PipelineDefaults { flow_shift: 5.0, dmd_steps: None, boundary_ratio: None, rcm_sigma_max: None }
+wan_i2v_14b_480p	SamplingParam { prompt: None, negative_prompt: "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards", output_path: "outputs/", seed: 1024, num_frames: 81, height: 480, width: 832, fps: 16, num_inference_steps: 40, guidance_scale: 5.0, guidance_scale_2: None, boundary_ratio: None, save_video: true }	PipelineDefaults { flow_shift: 3.0, dmd_steps: None, boundary_ratio: None, rcm_sigma_max: None }
+wan_i2v_14b_720p	SamplingParam { prompt: None, negative_prompt: "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards", output_path: "outputs/", seed: 1024, num_frames: 81, height: 720, width: 1280, fps: 16, num_inference_steps: 40, guidance_scale: 5.0, guidance_scale_2: None, boundary_ratio: None, save_video: true }	PipelineDefaults { flow_shift: 5.0, dmd_steps: None, boundary_ratio: None, rcm_sigma_max: None }
+wan_fun_1_3b_inp	SamplingParam { prompt: None, negative_prompt: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走", output_path: "outputs/", seed: 1024, num_frames: 81, height: 480, width: 832, fps: 16, num_inference_steps: 50, guidance_scale: 6.0, guidance_scale_2: None, boundary_ratio: None, save_video: true }	PipelineDefaults { flow_shift: 3.0, dmd_steps: None, boundary_ratio: None, rcm_sigma_max: None }
+wan_fun_1_3b_control	SamplingParam { prompt: None, negative_prompt: "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards", output_path: "outputs/", seed: 1024, num_frames: 49, height: 832, width: 480, fps: 16, num_inference_steps: 50, guidance_scale: 6.0, guidance_scale_2: None, boundary_ratio: None, save_video: true }	PipelineDefaults { flow_shift: 3.0, dmd_steps: None, boundary_ratio: None, rcm_sigma_max: None }
+turbo_t2v_1_3b	SamplingParam { prompt: None, negative_prompt: "", output_path: "outputs/", seed: 1024, num_frames: 81, height: 480, width: 832, fps: 16, num_inference_steps: 4, guidance_scale: 1.0, guidance_scale_2: None, boundary_ratio: None, save_video: true }	PipelineDefaults { flow_shift: 3.0, dmd_steps: None, boundary_ratio: None, rcm_sigma_max: Some(80.0) }
+turbo_t2v_14b	SamplingParam { prompt: None, negative_prompt: "", output_path: "outputs/", seed: 1024, num_frames: 81, height: 720, width: 1280, fps: 16, num_inference_steps: 4, guidance_scale: 1.0, guidance_scale_2: None, boundary_ratio: None, save_video: true }	PipelineDefaults { flow_shift: 5.0, dmd_steps: None, boundary_ratio: None, rcm_sigma_max: Some(80.0) }
+turbo_i2v_a14b	SamplingParam { prompt: None, negative_prompt: "", output_path: "outputs/", seed: 1024, num_frames: 81, height: 720, width: 1280, fps: 16, num_inference_steps: 4, guidance_scale: 1.0, guidance_scale_2: None, boundary_ratio: None, save_video: true }	PipelineDefaults { flow_shift: 5.0, dmd_steps: None, boundary_ratio: Some(0.9), rcm_sigma_max: Some(200.0) }
+fast_wan_t2v_480p	SamplingParam { prompt: None, negative_prompt: "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards", output_path: "outputs/", seed: 1024, num_frames: 61, height: 448, width: 832, fps: 16, num_inference_steps: 3, guidance_scale: 3.0, guidance_scale_2: None, boundary_ratio: None, save_video: true }	PipelineDefaults { flow_shift: 8.0, dmd_steps: Some([1000, 757, 522]), boundary_ratio: None, rcm_sigma_max: None }
+wan_2_2_ti2v_5b	SamplingParam { prompt: None, negative_prompt: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走", output_path: "outputs/", seed: 1024, num_frames: 121, height: 704, width: 1280, fps: 24, num_inference_steps: 50, guidance_scale: 5.0, guidance_scale_2: None, boundary_ratio: None, save_video: true }	PipelineDefaults { flow_shift: 5.0, dmd_steps: None, boundary_ratio: None, rcm_sigma_max: None }
+fast_wan_2_2_ti2v_5b	SamplingParam { prompt: None, negative_prompt: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走", output_path: "outputs/", seed: 1024, num_frames: 121, height: 704, width: 1280, fps: 24, num_inference_steps: 50, guidance_scale: 5.0, guidance_scale_2: None, boundary_ratio: None, save_video: true }	PipelineDefaults { flow_shift: 5.0, dmd_steps: Some([1000, 757, 522]), boundary_ratio: None, rcm_sigma_max: None }
+lucy_edit_dev	SamplingParam { prompt: None, negative_prompt: "", output_path: "outputs/", seed: 1024, num_frames: 81, height: 480, width: 832, fps: 24, num_inference_steps: 50, guidance_scale: 5.0, guidance_scale_2: None, boundary_ratio: None, save_video: true }	PipelineDefaults { flow_shift: 3.0, dmd_steps: None, boundary_ratio: None, rcm_sigma_max: None }
+wan_2_2_t2v_a14b	SamplingParam { prompt: None, negative_prompt: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走", output_path: "outputs/", seed: 1024, num_frames: 81, height: 480, width: 832, fps: 16, num_inference_steps: 40, guidance_scale: 4.0, guidance_scale_2: Some(3.0), boundary_ratio: None, save_video: true }	PipelineDefaults { flow_shift: 12.0, dmd_steps: Some([1000, 750, 500, 250]), boundary_ratio: Some(0.875), rcm_sigma_max: None }
+wan_2_2_i2v_a14b	SamplingParam { prompt: None, negative_prompt: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走", output_path: "outputs/", seed: 1024, num_frames: 81, height: 480, width: 832, fps: 16, num_inference_steps: 40, guidance_scale: 3.5, guidance_scale_2: Some(3.5), boundary_ratio: None, save_video: true }	PipelineDefaults { flow_shift: 5.0, dmd_steps: None, boundary_ratio: Some(0.875), rcm_sigma_max: None }
+sf_wan_t2v_1_3b	SamplingParam { prompt: None, negative_prompt: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走", output_path: "outputs/", seed: 1024, num_frames: 81, height: 480, width: 832, fps: 16, num_inference_steps: 50, guidance_scale: 6.0, guidance_scale_2: None, boundary_ratio: None, save_video: true }	PipelineDefaults { flow_shift: 5.0, dmd_steps: None, boundary_ratio: None, rcm_sigma_max: None }
+sf_wan_2_2_t2v_a14b	SamplingParam { prompt: None, negative_prompt: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走", output_path: "outputs/", seed: 1024, num_frames: 81, height: 448, width: 832, fps: 16, num_inference_steps: 8, guidance_scale: 4.0, guidance_scale_2: Some(3.0), boundary_ratio: None, save_video: true }	PipelineDefaults { flow_shift: 12.0, dmd_steps: Some([1000, 850, 700, 550, 350, 275, 200, 125]), boundary_ratio: Some(0.875), rcm_sigma_max: None }
+sf_wan_2_2_i2v_a14b	SamplingParam { prompt: None, negative_prompt: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走", output_path: "outputs/", seed: 1024, num_frames: 81, height: 448, width: 832, fps: 16, num_inference_steps: 8, guidance_scale: 4.0, guidance_scale_2: Some(3.0), boundary_ratio: None, save_video: true }	PipelineDefaults { flow_shift: 12.0, dmd_steps: Some([1000, 850, 700, 550, 350, 275, 200, 125]), boundary_ratio: Some(0.875), rcm_sigma_max: None }

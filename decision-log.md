@@ -1043,6 +1043,46 @@ Project code: FVID
 - ADR: none
 - Verification: the workflow on the A4 PR
 
+### FVID · 2026-10-24 · FVID-2026-10-24-deploy-section
+- Trigger: plan C1 asks for the deployment half of the family manifest (review §7.4) and the deployment tables A4 left hand-written (presets, `enums.ts` `VARIANTS` / `POOL_PRESET_IDS`, `variants.sh`, `families.tsv` rows, autoscale pools, the `images.md` table, the Dockerfile variant stages) generated from it
+- Options: a `[deploy]` table per variant in `families/*.toml`; one `deploy/<family>.toml` per family; one `deploy/deploy.toml`; types in `fastvideo-manifest` or in `fastvideo-deploy`
+- Decision: one `deploy/deploy.toml` (images, model presets = one pool each, family presets, GCP rows, dispatch map, autoscale pools), typed and validated in `fastvideo_manifest::deploy` against the `FamilySet` (variant ids exist, recipe names resolve to them, family-preset card class meets the variants' floor, only the EU volume `bz0ofkfx45` in `EU-RO-1`), schema `deploy.v1.json` with a drift test; `control/gen-configs.mjs` generates every table from it with `--check`; the single CUDA image with boot-time config is analysed in the ADR and left to the owner
+- Reason: the engine embeds the family files, so deployment edits there would rebuild it; the deployment unit is a pool, not a variant; the dashboard and the autoscaler keep cross-family orders and some entries have no family; validation needs the family types and no server stack (`fastvideo-deploy` is the fv-serve queue worker)
+- Reversibility: cheap (this repository's format, versioned by `schema`; not a registry contract)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0011-deploy-section.md
+- Verification: `cargo test -p fastvideo-manifest` (`deploy::tests`, `tests/deploy.rs`, `tests/schema.rs`), `gen-configs.mjs --check`, `control/test/unit/deploy-gen.test.ts`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-manifest-tests-in-ci
+- Trigger: no workflow ran `fastvideo-manifest`'s tests, so the deployment file's Rust validation and the schema drift would only run on the build pod
+- Options: a new workflow; add the crate to the adapter-tests set (`scripts/serve/coverage.sh`) with `crates/fastvideo-manifest/**` and `deploy/deploy.toml` in its paths
+- Decision: the adapter-tests set (one more crate, no new workflow), as D2 did for `fastvideo-lab`
+- Reason: one place for the CPU crates' tests and coverage; `families/**` already triggers it
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: none
+- Verification: `bash scripts/serve/coverage.sh --tests` on the build pod (13 crates, 819 passed)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-b2-family-trait
+- Trigger: plan B2: replace the 21 registry tables, `resolve()`, `all_registered_ids()` and the 20 `generate_*` functions with one trait and a static family list, CLI behaviour unchanged
+- Options: (a) the review's sketch verbatim (`Conditioning` one enum value, `load` places weights, Hub ids from the manifest); (b) the same trait with `conditioning: Vec<Conditioning>`, `load` that plans and `generate` that loads, the Hub-id tables in one Rust module per family
+- Decision: (b), all 21 families moved in one PR (no stack needed: the moves are verbatim and the CPU goldens pass unmodified)
+- Reason: the CLI takes `--image`, `--last-image`, `--ref`, `--control` together and each family has always picked its own (LTX with `--image --ref` runs I2V, H3 refuses FL2VA with Ref2VA); one enum value would drop inputs and change those behaviours. Every family but Wan loads and generates in one call today (B6 splits the loaders). The family files describe the 30 served variants, not the CLI's 63 Hub presets, and `family.rs` / `families/*.toml` are C1's this round
+- Reversibility: cheap (the trait does not change when `variants()` reads Hub ids from a widened manifest)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: 0013
+- Verification: `crates/fastvideo-cli/tests/cli_golden.rs` and `crates/fastvideo-core/tests/resolve_golden.rs`, taken on the unchanged tree, pass unmodified; `family::tests` (83 Hub ids resolve to their family)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-b2-validate-not-in-cli
+- Trigger: `Request::validate(&ModelCaps)` is the one check the review asks for; the CLI's presets have no `ModelCaps`
+- Options: validate CLI requests against the nearest served variant's caps; leave the CLI on each family's own checks and make validate the serve path's
+- Decision: the CLI does not call `validate`; `engine-service` adopting it is left to E2 (it owns `validate.rs` and `fastvideo-protocol` this round)
+- Reason: caps on the CLI would refuse what it accepts today (the tiny goldens run at 64x64x5, below every served grid)
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: 0013
+- Verification: `request::tests` (tasks, conflicts, canvas, frames, seconds, fps, refs, knobs)
+
 ### FVID · 2026-10-24 · FVID-2026-10-24-param-spec
 - Trigger: plan E2: request limits duplicated across the adapters and disagreeing between surfaces (review §4.4, §7.6 item 2); E3 needs a machine-readable parameter list
 - Options: per-adapter spec types; one `ParamSpec` type in `fastvideo-protocol` with the limits in each adapter; the type and every upstream limit in `fastvideo-protocol::params` (adapters keep their wire enums and wording)

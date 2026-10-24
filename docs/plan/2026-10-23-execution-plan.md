@@ -74,14 +74,14 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | B1 | Extract the runtime: `cudarc/src/wan/{tensor,device,ops,kernels,nn,weights,offload,quant,log,dump,ledger,envflag,resident,stage_upload,hostmem,writer}` to `cudarc/src/rt/`; `kernels.cu` split by region and concatenated at build time; `gpucheck` and `engine-service` import `rt` | byte-identical SASS and clips | CPU tests + nvrtc gate on the pod; **GPU** `techniques` byte-identity cell for H3, LTX, Wan | F1 | merged (#146) |
-| B2 | `VideoFamily` trait, common `Request`/`Conditioning`, `Request::validate(&ModelCaps)`; the 21 registry tables, `resolve()`, `all_registered_ids()` and the 20 `generate_*` functions replaced by the manifest and a static family list; `AvGenerateOptions` reduced to common fields | CLI behaviour unchanged for every preset (golden `--help` and tiny CPU generations); 83 Hub ids resolve | pod; **GPU** one tiny generation per served family | A2, B1 | todo |
+| B2 | `VideoFamily` trait, common `Request`/`Conditioning`, `Request::validate(&ModelCaps)`; the 21 registry tables, `resolve()`, `all_registered_ids()` and the 20 `generate_*` functions replaced by the manifest and a static family list; `AvGenerateOptions` reduced to common fields | CLI behaviour unchanged for every preset (golden `--help` and tiny CPU generations); 83 Hub ids resolve | pod; **GPU** one tiny generation per served family | A2, B1 | pr (#157) |
 | B3 | Settings layer: the `FASTVIDEO_*` table generated from one declarative list; the 111 direct reads routed through `settings::var`; a `Settings` snapshot passed to `load`; `model_spec` for Wan and the small families; `docs/scope.md` table generated | zero direct `env::var("FASTVIDEO_` outside `settings`; off-identity invariant tests | pod; **GPU** byte-identity cell | B1 | pr (B3a #153; B3b todo) |
 
 ### Phase 3 and 4: deployment (Workstream C)
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| C1 | `[deploy]` section of the family manifest; presets, variant tables, `families.tsv`, autoscale pools and the Dockerfile variant stages generated from it | `--check` green; one image with boot-time config if the owner decides so | pod | A4 | todo |
+| C1 | `[deploy]` section of the family manifest; presets, variant tables, `families.tsv`, autoscale pools and the Dockerfile variant stages generated from it | `--check` green; one image with boot-time config if the owner decides so | pod | A4 | pr (single image: owner decision, analysed in ADR-0011) |
 | C2 | `fv-boot` in `fastvideo-deploy`: driver check, config materialization, weights plan (volume / registry `hydrate` / hub / none), sidecar, tunnel and phase reports, watchdog, exec; fake provider and fake chunk source tests; the ten boot variants deleted | one boot script in the tree; fv-control sends env only | pod; **GPU** one pod boot on the EU volume | C1, registry WO-002 for the `hydrate` source (volume and hub sources first) | todo |
 | C3 | `fv-deploy` with the `Provider` trait (from `fastvideo-autoscale`): `runpod::{Pod,Serverless}`, `vast`, `gcp`; shared money guards, backstop, ledger, templates, release promote/rollback; fv-control on the shared `Launch` schema | `fv-deploy up` per provider with the same smoke | pod; **GPU** one `fv-deploy up` on Runpod EU | C2 | todo |
 
@@ -398,6 +398,61 @@ ran (pod id, $/hr), result, cost.
   `artifacts/runpod/techniques/90dd3f8-10240259/compare/`. Review: no
   blocking finding; three documentation-only table rows corrected. Main
   merged in since then changed no inference crate, so the evidence stands.
+- 2026-10-24 04:30Z: C1 opened a draft PR (`claude/c1-deploy-section`):
+  `deploy/deploy.toml` (ADR-0011) holds the deployment data A4 left
+  hand-written, value for value: 8 images (one legacy), 24 model presets, 4
+  family presets, 5 GCP rows, the dispatch map, 4 autoscale pools.
+  `fastvideo_manifest::deploy` types and validates it against the families
+  (variant ids, recipe names, family-preset card class >= the variants'
+  floor, prequant nesting, EU-only volume), `schemas/deploy.v1.json` with a
+  drift test. `gen-configs.mjs` generates `deploy-gen.ts` (presets.ts reads
+  it), the `enums.ts` `VARIANTS` / `POOL_PRESET_IDS` regions, the inline
+  worker configs, `variants.sh`, the thin Dockerfile stages, the autoscale
+  pools, the `images.md` table and `families.tsv`; `deployChecks` ties the
+  cpu stage, `serve-image.yml`'s lists, the GCP cells and the autoscale
+  prices to it. Byte identity: fv-control's preset values identical
+  (JSON dump before and after), autoscale.toml and the Dockerfile build lines
+  identical but markers, every families.tsv row identical; intended: one
+  preset order for the three id lists, uniform doc tables. Single image with
+  boot-time config: not implemented, analysed in ADR-0011 for the owner.
+  Control (this container): `--check`, typecheck, vitest 45 files / 595
+  tests, `scripts/gpu/lint.sh`. Build pod `pzocv1keasg3xn`: `cargo test
+  --locked -p fastvideo-manifest` green (3 deploy unit + 2 committed-file +
+  7 schema tests among them), workspace clippy `-D warnings`, fmt,
+  `coverage.sh --tests` 13 crates / 819 passed (fastvideo-manifest joins the
+  set); `fastvideo-autoscale` `committed_example_parses` and the GCP e2e
+  test green on the generated files.
+
+- 2026-10-24 04:30Z: B2 opened draft PR #157 (`claude/b2-video-family`):
+  `fastvideo-core::family` (`VideoFamily`, `Pipeline`, the static `FAMILIES`
+  list of 21 families, one module each with its Hub-id table and run),
+  `fastvideo-core::request` (`Request`, `Conditioning`,
+  `Request::validate(&ModelCaps)`), `AvGenerateOptions` reduced to the
+  common fields plus `Wan/Ltx2/H3Options`; `registry.rs` and
+  `av_generate.rs` deleted; ADR-0013. Goldens taken first on the unchanged
+  tree (CLI `--help`, `list-models` 83 ids, generate/schedule for every id
+  and preset, tiny CPU frames, a 459-input resolution table) pass
+  unmodified. On build pod `pzocv1keasg3xn`: workspace lib tests 1881
+  passed, models + cli + core 595 passed, fmt, clippy `-D warnings`, the
+  cuda check and a `--features cuda` check of core and cli green,
+  `scripts/serve/check.sh` 1004 passed. GPU cells pending (coordinator):
+  CLI A/B frame identity for H3 (`h3-base` + LoRA), LTX-2.5 (`ltx25`), Wan
+  (R2 `fastwan21-1.3b`, or `--tiny --device cuda`).
+- 2026-10-24 05:00Z: B2 GPU gate (coordinator): CLI A/B frame identity,
+  release CUDA `fastvideo` built on build pod `pzocv1keasg3xn` at main
+  `6d5cf6a6` (base) and the PR at `9c56b15e` (head), the same command run
+  with both binaries on one RTX PRO 6000 pod (EU-RO-1, volume `bz0ofkfx45`,
+  runtime image `sha-6d5cf6a` for the CUDA libraries only), sha256 of every
+  output file compared. `ltx25` (LTX-2.5 T2V, seed 7): identical, 122
+  files; `wan-tiny-cuda`: identical, 2 files (pod `o6u0poa0uwoj38`);
+  `h3-4step` (FastH3 4-step dense LoRA on `h3-base`, 5 s, seed 7):
+  identical, 125 files (pod `txi9ybyb3uj24k`; two earlier H3 attempts on
+  `h6o3z35thydpey` and the first pod gave the LoRA directory instead of its
+  file, exit 2 on both arms, a script error). Evidence:
+  `artifacts/runpod/b2-cli/6d5cf6a-1024{0441,0453}/`. The review follow-up
+  `c898d2c4` changed only LTX's `--guidance-2` routing (same value, not
+  passed by the cells) and test-only `Request::validate`; the evidence
+  stands for it. Three pods, about 17 GPU-minutes at $2.49/hr, deleted.
 - 2026-10-24 05:10Z: E2 opened a draft PR (`claude/e2-paramspec`):
   `fastvideo-protocol::params` (`ParamSpec`, the surface rules: every
   upstream limit once, cited, H3 facts derived from `fastvideo_models`), the

@@ -13,16 +13,20 @@ All tags live in the one public package `ghcr.io/zaitrarrio/fastvideo-rs-serve`
 (a new package per variant would start private on GHCR, and Runpod and the
 deploy scripts pull anonymously).
 
+<!-- BEGIN GENERATED from deploy/deploy.toml by control/gen-configs.mjs; do not edit -->
+
 | variant | config baked as `FV_CONFIG` | GHCR tags | Runpod templates |
 |---|---|---|---|
 | h3-turbo | `runpod.toml` | `:h3-turbo-sha-<sha>`, `:h3-turbo` / `:h3-turbo-latest`, `:h3-turbo-stable` | `fv-serve-h3-turbo-sls`, `fv-serve-h3-turbo-pod` |
-| h3-max | `runpod-h3-max.toml` | `:h3-max`, … | `fv-serve-h3-max-sls` / `-pod` |
-| ltx | `runpod-ltx.toml` | `:ltx`, … | `fv-serve-ltx-sls` / `-pod` |
-| wan (wan-turbo) | `runpod-wan.toml` | `:wan`, … | `fv-serve-wan-sls` / `-pod` |
-| wan5b | `runpod-wan5b.toml` (also carries `runpod-wan14b.toml`, the `wan14b-turbo` tier: set `FV_CONFIG=/etc/fv/runpod-wan14b.toml`) | `:wan5b`, … | `fv-serve-wan5b-sls` / `-pod` |
-| sfwan | `runpod-sfwan.toml` | `:sfwan`, … | `fv-serve-sfwan-sls` / `-pod` |
-| cpu (CPU only, fake engine; `gateway` until 2026-10-06) | `runpod-fake.toml` | `:cpu`, … | `fv-serve-cpu-pod` |
+| h3-max | `runpod-h3-max.toml` | `:h3-max-sha-<sha>`, `:h3-max` / `:h3-max-latest`, `:h3-max-stable` | `fv-serve-h3-max-sls`, `fv-serve-h3-max-pod` |
+| ltx | `runpod-ltx.toml` | `:ltx-sha-<sha>`, `:ltx` / `:ltx-latest`, `:ltx-stable` | `fv-serve-ltx-sls`, `fv-serve-ltx-pod` |
+| wan | `runpod-wan.toml` | `:wan-sha-<sha>`, `:wan` / `:wan-latest`, `:wan-stable` | `fv-serve-wan-sls`, `fv-serve-wan-pod` |
+| wan5b | `runpod-wan5b.toml` (also carries `runpod-wan14b.toml`, serving `wan14b-plug-4step` / `wan14b-turbo`: set `FV_CONFIG=/etc/fv/runpod-wan14b.toml`) | `:wan5b-sha-<sha>`, `:wan5b` / `:wan5b-latest`, `:wan5b-stable` | `fv-serve-wan5b-sls`, `fv-serve-wan5b-pod` |
+| sfwan | `runpod-sfwan.toml` | `:sfwan-sha-<sha>`, `:sfwan` / `:sfwan-latest`, `:sfwan-stable` | `fv-serve-sfwan-sls`, `fv-serve-sfwan-pod` |
+| cpu (CPU only, fake engine; `gateway` until 2026-10-06) | `runpod-fake.toml` | `:cpu-sha-<sha>`, `:cpu` / `:cpu-latest`, `:cpu-stable` | `fv-serve-cpu-pod` |
 | debug (the old all-in-one tags; since 2026-10-06 the `runtime` image + fv-serve, on the shared layers) | every config, `runpod.toml` default | `:sha-<sha>`, `:latest`, `:stable` | none |
+
+<!-- END GENERATED -->
 
 Each image also carries `runpod-fake.toml` (CI smoke check, fake engine).
 `<sha>` tags are immutable. Two release channels move over them

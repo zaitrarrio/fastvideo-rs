@@ -11,8 +11,9 @@ The registry's public formats, layer 1 of the model family manifest
 | `manifest`, `canonical` | `Manifest` v1 and `canonical_digest = blake3(JCS(manifest without signatures))`, integers only | [0007](../../docs/adr/0007-manifest-digest-lineage-signatures.md) |
 | `sig` | `KeyRing`, `sign`, `verify`: Ed25519 over `gia-manifest-v1\0 || digest` | 0007 |
 | `lineage` | `verify_chain` over `[vendor, fork1, fork2, ...]`; `verify_lineage` with each clone's `model.toml` | 0007 |
-| `schema` | JSON Schema export, committed under `schemas/` and drift-checked | 0006, 0007, 0008 |
+| `schema` | JSON Schema export, committed under `schemas/` and drift-checked | 0006, 0007, 0008, 0011 |
 | `family` | Layer 2: `FamilyManifest` / `VariantManifest`, `families/<family>.toml`, the runtime's superset the engine catalog and the deployment tooling are generated from; `engine` is an opaque table the runtime interprets | [0008](../../docs/adr/0008-family-manifest-layer-2.md) |
+| `deploy` | The deployment data: `DeployManifest`, `deploy/deploy.toml` (image variants, presets = one pool each, family presets, GCP rows, autoscale pools), validated against a `FamilySet`; not a registry format | [0011](../../docs/adr/0011-deploy-section.md) |
 
 Pure: no I/O (callers read the files and pass bytes), no CUDA, no other
 fastvideo crate. Dependencies: serde, serde_json, toml, blake3,

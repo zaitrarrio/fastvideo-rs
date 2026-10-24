@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
+use fastvideo_core::family::{h3::H3Options, ltx2::Ltx2Options, wan, wan::WanOptions};
 use fastvideo_core::{
-    all_registered_ids, generate_av, resolve, AvGenerateOptions, BackendKind, LoadOptions,
-    ResolvedModel, VideoGenerator,
+    registered, resolve, AvGenerateOptions, BackendKind, Canvas, FamilyOptions, Hooks, LoadOptions,
+    Request, Sampler, Timing, VideoGenerator,
 };
 use fastvideo_models::{DmdSchedule, FlowUniPCMultistepScheduler, RcmSchedule};
 use serde::Deserialize;
@@ -281,8 +282,15 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("technique profile: {e}"))?;
     match cli.command {
         Commands::ListModels => {
-            for (family, id, preset) in all_registered_ids() {
-                println!("{}\tfamily={}\tpreset={preset}", id, family.as_str());
+            for (family, variant) in registered() {
+                for id in variant.hub_ids {
+                    println!(
+                        "{}\tfamily={}\tpreset={}",
+                        id,
+                        family.name(),
+                        variant.preset
+                    );
+                }
             }
         }
         Commands::Generate(args) => {
@@ -302,140 +310,119 @@ fn main() -> Result<()> {
                 .or(file.prompt)
                 .unwrap_or_else(|| "A curious raccoon in a field of sunflowers.".into());
             let resolved = resolve(&args.model)?;
-            match resolved {
-                ResolvedModel::Wan(_) => {
-                    let gen = VideoGenerator::from_pretrained(
-                        &args.model,
-                        LoadOptions {
-                            backend: args.backend.into(),
-                            num_gpus: args.num_gpus,
-                            tiny: args.tiny,
-                            weights_path: args.weights,
-                            output_path: args.output.or(file.output),
-                            device: if args.device != DEFAULT_DEVICE {
-                                args.device
-                            } else {
-                                file.device.unwrap_or(args.device)
-                            },
-                            dtype: args.dtype.or(file.dtype),
-                            height: args.height.or(file.height),
-                            width: args.width.or(file.width),
-                            num_frames: args.frames.or(file.frames).or(file.num_frames),
-                            num_inference_steps: args
-                                .steps
-                                .or(file.steps)
-                                .or(file.num_inference_steps),
-                            guidance_scale: args.guidance.or(file.guidance).or(file.guidance_scale),
-                            guidance_scale_2: args
-                                .guidance_2
-                                .or(file.guidance_2)
-                                .or(file.guidance_scale_2),
-                            seed: args.seed.or(file.seed),
-                            negative_prompt: args.negative.or(file.negative),
-                            image_path: args.image.or(file.image),
-                            control_path: args.control.or(file.control),
-                            save_mp4: args.save_mp4 || file.save_mp4.unwrap_or(false),
-                        },
-                    )?;
-                    println!("{}", gen.summary());
-                    match gen.generate_video(&prompt) {
-                        Ok(out) => {
-                            if let Some(path) = out.frame_paths.first() {
-                                println!("wrote {} frames, first={path}", out.frame_paths.len());
-                            }
-                        }
-                        Err(err) => {
-                            eprintln!("{err}");
-                            std::process::exit(2);
-                        }
-                    }
-                }
-                ResolvedModel::Family(def) => {
-                    if args.tiny {
-                        anyhow::bail!(
-                            "--tiny is Wan-only; LTX/H3 need real weights (family={})",
-                            def.family.as_str()
-                        );
-                    }
-                    let output = PathBuf::from(
-                        args.output
-                            .or(file.output)
-                            .unwrap_or_else(|| format!("outputs/{}", def.preset)),
-                    );
-                    let av = AvGenerateOptions {
-                        weights: args.weights.map(PathBuf::from),
-                        text_weights: args.text_weights.map(PathBuf::from),
+            let family = resolved.family;
+            if args.tiny && !family.supports_tiny() {
+                anyhow::bail!(
+                    "--tiny is Wan-only; LTX/H3 need real weights (family={})",
+                    family.name()
+                );
+            }
+            let references: Vec<PathBuf> = if args.references.is_empty() {
+                file.references
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(PathBuf::from)
+                    .collect()
+            } else {
+                args.references.into_iter().map(PathBuf::from).collect()
+            };
+            // `--guidance-2`: the second expert's guidance (Wan 2.2), or the
+            // audio branch's for the families that have one (LTX-2).
+            let guidance_2 = args
+                .guidance_2
+                .or(file.guidance_2)
+                .or(file.guidance_scale_2);
+            let request = Request {
+                prompt,
+                negative: args.negative.or(file.negative),
+                seed: args.seed.or(file.seed),
+                canvas: Canvas {
+                    width: args.width.or(file.width),
+                    height: args.height.or(file.height),
+                },
+                timing: Timing {
+                    frames: args.frames.or(file.frames).or(file.num_frames),
+                    seconds: args.seconds,
+                    fps: None,
+                },
+                sampler: Sampler {
+                    steps: args.steps.or(file.steps).or(file.num_inference_steps),
+                    guidance: args.guidance.or(file.guidance).or(file.guidance_scale),
+                    guidance_2: guidance_2.filter(|_| !family.second_guidance_is_audio()),
+                    audio_guidance: guidance_2.filter(|_| family.second_guidance_is_audio()),
+                },
+                conditioning: Request::conditioning_from_inputs(
+                    args.image.or(file.image).map(PathBuf::from),
+                    args.last_image.or(file.last_image).map(PathBuf::from),
+                    references,
+                    args.control.or(file.control).map(PathBuf::from),
+                ),
+            };
+            // The flag wins; else the config file; else `cuda` for the
+            // CUDA-only families and the build's default for Wan.
+            let device = if args.device != DEFAULT_DEVICE {
+                args.device
+            } else if family.requires_cuda() {
+                file.device.unwrap_or_else(|| "cuda".into())
+            } else {
+                file.device.unwrap_or(args.device)
+            };
+            let options = AvGenerateOptions {
+                model_id: args.model,
+                weights: args.weights.map(PathBuf::from),
+                output: args.output.or(file.output).map(PathBuf::from),
+                device,
+                save_mp4: args.save_mp4 || file.save_mp4.unwrap_or(false),
+                family: FamilyOptions {
+                    wan: WanOptions {
+                        backend: args.backend.into(),
+                        num_gpus: args.num_gpus,
+                        tiny: args.tiny,
+                        dtype: args.dtype.or(file.dtype),
+                    },
+                    ltx2: Ltx2Options {
+                        text_weights: args.text_weights.clone().map(PathBuf::from),
                         dit: args.dit.map(PathBuf::from),
-                        output,
-                        prompt,
-                        seed: args.seed.or(file.seed).unwrap_or(1024),
-                        height: args.height.or(file.height),
-                        width: args.width.or(file.width),
-                        num_frames: args.frames.or(file.frames).or(file.num_frames),
-                        device: if args.device != DEFAULT_DEVICE {
-                            args.device
-                        } else {
-                            file.device.unwrap_or_else(|| "cuda".into())
-                        },
-                        save_mp4: args.save_mp4 || file.save_mp4.unwrap_or(false),
                         two_stage: args.two_stage || file.two_stage.unwrap_or(false),
                         diff_vae: args.diff_vae || file.diff_vae.unwrap_or(false),
-                        negative_prompt: args.negative.or(file.negative).unwrap_or_default(),
-                        guidance_scale: args.guidance.or(file.guidance).or(file.guidance_scale),
-                        audio_guidance_scale: args
-                            .guidance_2
-                            .or(file.guidance_2)
-                            .or(file.guidance_scale_2),
-                        num_inference_steps: args.steps.or(file.steps).or(file.num_inference_steps),
                         refine_steps: args.refine_steps.or(file.refine_steps),
                         sol_stage2: args.sol_stage2 || file.sol_stage2.unwrap_or(false),
                         dense_stage2: args.dense_stage2 || file.dense_stage2.unwrap_or(false),
                         pisa_stage2: args.pisa_stage2 || file.pisa_stage2.unwrap_or(false),
                         ltx23_hq: args.ltx23_hq || file.ltx23_hq.unwrap_or(false),
-                        image_path: args.image.or(file.image).map(PathBuf::from),
-                        last_image_path: args.last_image.or(file.last_image).map(PathBuf::from),
-                        reference_images: {
-                            let mut refs: Vec<PathBuf> =
-                                args.references.into_iter().map(PathBuf::from).collect();
-                            if refs.is_empty() {
-                                refs = file
-                                    .references
-                                    .unwrap_or_default()
-                                    .into_iter()
-                                    .map(PathBuf::from)
-                                    .collect();
-                            }
-                            refs
-                        },
-                        h3_recipe: args.h3_recipe,
-                        h3_adapter: args.h3_adapter.map(PathBuf::from),
-                        h3_seconds: args.seconds,
+                        dit_offload: args.dit_offload.clone(),
+                        tae_weights: args
+                            .tae_weights
+                            .clone()
+                            .or(file.tae_weights.clone())
+                            .map(PathBuf::from),
+                    },
+                    h3: H3Options {
+                        recipe: args.h3_recipe,
+                        adapter: args.h3_adapter.map(PathBuf::from),
+                        text_weights: args.text_weights.map(PathBuf::from),
                         dit_offload: args.dit_offload,
                         tae_weights: args.tae_weights.or(file.tae_weights).map(PathBuf::from),
-                    };
-                    println!(
-                        "family={} preset={} device={}",
-                        def.family.as_str(),
-                        def.preset,
-                        av.device
-                    );
-                    match generate_av(resolved, av) {
-                        Ok(out) => {
-                            if let Some(path) = out.frame_paths.first() {
-                                println!("wrote {} frames, first={path}", out.frame_paths.len());
-                            }
-                            if let Some(wav) = out.wav {
-                                println!("wav={wav}");
-                            }
-                            if let Some(mp4) = out.mp4 {
-                                println!("mp4={mp4}");
-                            }
-                        }
-                        Err(err) => {
-                            eprintln!("{err}");
-                            std::process::exit(2);
-                        }
+                    },
+                },
+            };
+            let mut pipeline = family.load(resolved.variant, &options)?;
+            println!("{}", pipeline.describe(&request)?);
+            match pipeline.generate(&request, Hooks::NONE) {
+                Ok(out) => {
+                    if let Some(path) = out.frame_paths.first() {
+                        println!("wrote {} frames, first={path}", out.frame_paths.len());
                     }
+                    if let Some(wav) = out.wav {
+                        println!("wav={wav}");
+                    }
+                    if let Some(mp4) = out.mp4 {
+                        println!("mp4={mp4}");
+                    }
+                }
+                Err(err) => {
+                    eprintln!("{err}");
+                    std::process::exit(2);
                 }
             }
         }
@@ -527,15 +514,13 @@ fn main() -> Result<()> {
             }
         }
         Commands::Schedule(args) => {
-            match resolve(&args.model)? {
-                ResolvedModel::Wan(_) => {}
-                ResolvedModel::Family(def) => {
-                    anyhow::bail!(
-                        "schedule is Wan-only for now (got family={} preset={})",
-                        def.family.as_str(),
-                        def.preset
-                    );
-                }
+            let resolved = resolve(&args.model)?;
+            if resolved.family.name() != wan::NAME {
+                anyhow::bail!(
+                    "schedule is Wan-only for now (got family={} preset={})",
+                    resolved.family.name(),
+                    resolved.preset()
+                );
             }
             let gen = VideoGenerator::from_pretrained(&args.model, LoadOptions::default())?;
             println!("{}", gen.summary());

@@ -1,0 +1,2661 @@
+### generate --model Wan-AI/Wan2.1-T2V-1.3B-Diffusers
+exit=2
+--- stdout
+model=Wan-AI/Wan2.1-T2V-1.3B-Diffusers preset=wan_t2v_1_3b sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=50 shift=3
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model Wan-AI/Wan2.1-T2V-1.3B-Diffusers
+exit=0
+--- stdout
+model=Wan-AI/Wan2.1-T2V-1.3B-Diffusers preset=wan_t2v_1_3b sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=50 shift=3
+unipc_first_timestep=999.888791 last=57.673804 n=50 first_sigma=0.999889 i64_t0=999
+
+### generate --model wan_t2v_1_3b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan_t2v_1_3b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model wan_t2v_1_3b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan_t2v_1_3b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model wan-t2v-1-3b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan-t2v-1-3b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model wan-t2v-1-3b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan-t2v-1-3b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model Wan-AI/Wan2.1-T2V-14B-Diffusers
+exit=2
+--- stdout
+model=Wan-AI/Wan2.1-T2V-14B-Diffusers preset=wan_t2v_14b sampling=unipc backend=cudarc tiny=false device=cpu 1280x720 frames=81 steps=50 shift=5
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model Wan-AI/Wan2.1-T2V-14B-Diffusers
+exit=0
+--- stdout
+model=Wan-AI/Wan2.1-T2V-14B-Diffusers preset=wan_t2v_14b sampling=unipc backend=cudarc tiny=false device=cpu 1280x720 frames=81 steps=50 shift=5
+unipc_first_timestep=999.959962 last=92.575432 n=50 first_sigma=0.999960 i64_t0=999
+
+### generate --model wan_t2v_14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan_t2v_14b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model wan_t2v_14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan_t2v_14b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model wan-t2v-14b
+exit=2
+--- stdout
+model=wan-t2v-14b preset=wan_t2v_14b sampling=unipc backend=cudarc tiny=false device=cpu 1280x720 frames=81 steps=50 shift=5
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model wan-t2v-14b
+exit=0
+--- stdout
+model=wan-t2v-14b preset=wan_t2v_14b sampling=unipc backend=cudarc tiny=false device=cpu 1280x720 frames=81 steps=50 shift=5
+unipc_first_timestep=999.959962 last=92.575432 n=50 first_sigma=0.999960 i64_t0=999
+
+### generate --model FastVideo/Wan2.1-VSA-T2V-14B-720P-Diffusers
+exit=2
+--- stdout
+model=FastVideo/Wan2.1-VSA-T2V-14B-720P-Diffusers preset=wan_t2v_14b sampling=unipc backend=cudarc tiny=false device=cpu 1280x720 frames=81 steps=50 shift=5
+--- stderr (last line)
+VSA checkpoint detected: set FASTVIDEO_VSA=1 to enable block-sparse attention (in-tree), or use a dense Wan model id.
+
+### schedule --model FastVideo/Wan2.1-VSA-T2V-14B-720P-Diffusers
+exit=0
+--- stdout
+model=FastVideo/Wan2.1-VSA-T2V-14B-720P-Diffusers preset=wan_t2v_14b sampling=unipc backend=cudarc tiny=false device=cpu 1280x720 frames=81 steps=50 shift=5
+unipc_first_timestep=999.959962 last=92.575432 n=50 first_sigma=0.999960 i64_t0=999
+
+### generate --model Wan-AI/Wan2.1-I2V-14B-480P-Diffusers
+exit=2
+--- stdout
+model=Wan-AI/Wan2.1-I2V-14B-480P-Diffusers preset=wan_i2v_14b_480p sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=40 shift=3
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model Wan-AI/Wan2.1-I2V-14B-480P-Diffusers
+exit=0
+--- stdout
+model=Wan-AI/Wan2.1-I2V-14B-480P-Diffusers preset=wan_i2v_14b_480p sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=40 shift=3
+unipc_first_timestep=999.888791 last=71.405880 n=40 first_sigma=0.999889 i64_t0=999
+
+### generate --model wan_i2v_14b_480p
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan_i2v_14b_480p` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model wan_i2v_14b_480p
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan_i2v_14b_480p` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model wan-i2v-14b-480p
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan-i2v-14b-480p` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model wan-i2v-14b-480p
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan-i2v-14b-480p` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model Wan-AI/Wan2.1-I2V-14B-720P-Diffusers
+exit=2
+--- stdout
+model=Wan-AI/Wan2.1-I2V-14B-720P-Diffusers preset=wan_i2v_14b_720p sampling=unipc backend=cudarc tiny=false device=cpu 1280x720 frames=81 steps=40 shift=5
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model Wan-AI/Wan2.1-I2V-14B-720P-Diffusers
+exit=0
+--- stdout
+model=Wan-AI/Wan2.1-I2V-14B-720P-Diffusers preset=wan_i2v_14b_720p sampling=unipc backend=cudarc tiny=false device=cpu 1280x720 frames=81 steps=40 shift=5
+unipc_first_timestep=999.959962 last=113.615686 n=40 first_sigma=0.999960 i64_t0=999
+
+### generate --model wan_i2v_14b_720p
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan_i2v_14b_720p` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model wan_i2v_14b_720p
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan_i2v_14b_720p` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model wan-i2v-14b-720p
+exit=2
+--- stdout
+model=wan-i2v-14b-720p preset=wan_i2v_14b_720p sampling=unipc backend=cudarc tiny=false device=cpu 1280x720 frames=81 steps=40 shift=5
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model wan-i2v-14b-720p
+exit=0
+--- stdout
+model=wan-i2v-14b-720p preset=wan_i2v_14b_720p sampling=unipc backend=cudarc tiny=false device=cpu 1280x720 frames=81 steps=40 shift=5
+unipc_first_timestep=999.959962 last=113.615686 n=40 first_sigma=0.999960 i64_t0=999
+
+### generate --model weizhou03/Wan2.1-Fun-1.3B-InP-Diffusers
+exit=2
+--- stdout
+model=weizhou03/Wan2.1-Fun-1.3B-InP-Diffusers preset=wan_fun_1_3b_inp sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=50 shift=3
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model weizhou03/Wan2.1-Fun-1.3B-InP-Diffusers
+exit=0
+--- stdout
+model=weizhou03/Wan2.1-Fun-1.3B-InP-Diffusers preset=wan_fun_1_3b_inp sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=50 shift=3
+unipc_first_timestep=999.888791 last=57.673804 n=50 first_sigma=0.999889 i64_t0=999
+
+### generate --model wan_fun_1_3b_inp
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan_fun_1_3b_inp` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model wan_fun_1_3b_inp
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan_fun_1_3b_inp` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model wan-fun-1-3b-inp
+exit=2
+--- stdout
+model=wan-fun-1-3b-inp preset=wan_fun_1_3b_inp sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=50 shift=3
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model wan-fun-1-3b-inp
+exit=0
+--- stdout
+model=wan-fun-1-3b-inp preset=wan_fun_1_3b_inp sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=50 shift=3
+unipc_first_timestep=999.888791 last=57.673804 n=50 first_sigma=0.999889 i64_t0=999
+
+### generate --model IRMChen/Wan2.1-Fun-1.3B-Control-Diffusers
+exit=2
+--- stdout
+model=IRMChen/Wan2.1-Fun-1.3B-Control-Diffusers preset=wan_fun_1_3b_control sampling=unipc backend=cudarc tiny=false device=cpu 480x832 frames=49 steps=50 shift=3
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model IRMChen/Wan2.1-Fun-1.3B-Control-Diffusers
+exit=0
+--- stdout
+model=IRMChen/Wan2.1-Fun-1.3B-Control-Diffusers preset=wan_fun_1_3b_control sampling=unipc backend=cudarc tiny=false device=cpu 480x832 frames=49 steps=50 shift=3
+unipc_first_timestep=999.888791 last=57.673804 n=50 first_sigma=0.999889 i64_t0=999
+
+### generate --model wan_fun_1_3b_control
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan_fun_1_3b_control` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model wan_fun_1_3b_control
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan_fun_1_3b_control` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model wan-fun-1-3b-control
+exit=2
+--- stdout
+model=wan-fun-1-3b-control preset=wan_fun_1_3b_control sampling=unipc backend=cudarc tiny=false device=cpu 480x832 frames=49 steps=50 shift=3
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model wan-fun-1-3b-control
+exit=0
+--- stdout
+model=wan-fun-1-3b-control preset=wan_fun_1_3b_control sampling=unipc backend=cudarc tiny=false device=cpu 480x832 frames=49 steps=50 shift=3
+unipc_first_timestep=999.888791 last=57.673804 n=50 first_sigma=0.999889 i64_t0=999
+
+### generate --model loayrashid/TurboWan2.1-T2V-1.3B-Diffusers
+exit=2
+--- stdout
+model=loayrashid/TurboWan2.1-T2V-1.3B-Diffusers preset=turbo_t2v_1_3b sampling=rcm backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=4 shift=3
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model loayrashid/TurboWan2.1-T2V-1.3B-Diffusers
+exit=0
+--- stdout
+model=loayrashid/TurboWan2.1-T2V-1.3B-Diffusers preset=turbo_t2v_1_3b sampling=rcm backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=4 shift=3
+rcm_sigma_max=80 init_noise_scale=0.987654 n=4
+rcm_sigmas=[0.9876543209876543, 0.933781061416858, 0.852895394823775, 0.608979049230431, 0.0]
+rcm_timesteps=[987.6543209876543, 933.781061416858, 852.895394823775, 608.979049230431]
+
+### generate --model turbo_t2v_1_3b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `turbo_t2v_1_3b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model turbo_t2v_1_3b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `turbo_t2v_1_3b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model turbo-t2v-1-3b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `turbo-t2v-1-3b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model turbo-t2v-1-3b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `turbo-t2v-1-3b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model loayrashid/TurboWan2.1-T2V-14B-Diffusers
+exit=2
+--- stdout
+model=loayrashid/TurboWan2.1-T2V-14B-Diffusers preset=turbo_t2v_14b sampling=rcm backend=cudarc tiny=false device=cpu 1280x720 frames=81 steps=4 shift=5
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model loayrashid/TurboWan2.1-T2V-14B-Diffusers
+exit=0
+--- stdout
+model=loayrashid/TurboWan2.1-T2V-14B-Diffusers preset=turbo_t2v_14b sampling=rcm backend=cudarc tiny=false device=cpu 1280x720 frames=81 steps=4 shift=5
+rcm_sigma_max=80 init_noise_scale=0.987654 n=4
+rcm_sigmas=[0.9876543209876543, 0.933781061416858, 0.852895394823775, 0.608979049230431, 0.0]
+rcm_timesteps=[987.6543209876543, 933.781061416858, 852.895394823775, 608.979049230431]
+
+### generate --model turbo_t2v_14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `turbo_t2v_14b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model turbo_t2v_14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `turbo_t2v_14b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model turbo-t2v-14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `turbo-t2v-14b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model turbo-t2v-14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `turbo-t2v-14b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model loayrashid/TurboWan2.2-I2V-A14B-Diffusers
+exit=2
+--- stdout
+model=loayrashid/TurboWan2.2-I2V-A14B-Diffusers preset=turbo_i2v_a14b sampling=rcm backend=cudarc tiny=false device=cpu 1280x720 frames=81 steps=4 shift=5
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model loayrashid/TurboWan2.2-I2V-A14B-Diffusers
+exit=0
+--- stdout
+model=loayrashid/TurboWan2.2-I2V-A14B-Diffusers preset=turbo_i2v_a14b sampling=rcm backend=cudarc tiny=false device=cpu 1280x720 frames=81 steps=4 shift=5
+rcm_sigma_max=200 init_noise_scale=0.995025 n=4
+rcm_sigmas=[0.9950248756218906, 0.933781061416858, 0.852895394823775, 0.608979049230431, 0.0]
+rcm_timesteps=[995.0248756218906, 933.781061416858, 852.895394823775, 608.979049230431]
+
+### generate --model turbo_i2v_a14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `turbo_i2v_a14b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model turbo_i2v_a14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `turbo_i2v_a14b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model turbo-i2v-a14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `turbo-i2v-a14b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model turbo-i2v-a14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `turbo-i2v-a14b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model FastVideo/FastWan2.1-T2V-1.3B-Diffusers
+exit=2
+--- stdout
+model=FastVideo/FastWan2.1-T2V-1.3B-Diffusers preset=fast_wan_t2v_480p sampling=dmd backend=cudarc tiny=false device=cpu 832x448 frames=61 steps=3 shift=8
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model FastVideo/FastWan2.1-T2V-1.3B-Diffusers
+exit=0
+--- stdout
+model=FastVideo/FastWan2.1-T2V-1.3B-Diffusers preset=fast_wan_t2v_480p sampling=dmd backend=cudarc tiny=false device=cpu 832x448 frames=61 steps=3 shift=8
+dmd_timesteps=[1000, 757, 522]
+dmd_sigmas=[1.0, 0.7567567229270935, 0.52173912525177, 0.0]
+
+### generate --model fast_wan_t2v_480p
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `fast_wan_t2v_480p` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model fast_wan_t2v_480p
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `fast_wan_t2v_480p` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model fast-wan-t2v-480p
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `fast-wan-t2v-480p` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model fast-wan-t2v-480p
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `fast-wan-t2v-480p` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model FastVideo/FastWan2.1-T2V-14B-480P-Diffusers
+exit=2
+--- stdout
+model=FastVideo/FastWan2.1-T2V-14B-480P-Diffusers preset=fast_wan_t2v_480p sampling=dmd backend=cudarc tiny=false device=cpu 832x448 frames=61 steps=3 shift=8
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model FastVideo/FastWan2.1-T2V-14B-480P-Diffusers
+exit=0
+--- stdout
+model=FastVideo/FastWan2.1-T2V-14B-480P-Diffusers preset=fast_wan_t2v_480p sampling=dmd backend=cudarc tiny=false device=cpu 832x448 frames=61 steps=3 shift=8
+dmd_timesteps=[1000, 757, 522]
+dmd_sigmas=[1.0, 0.7567567229270935, 0.52173912525177, 0.0]
+
+### generate --model FastVideo/FastWan-QAD-1.3B
+exit=2
+--- stdout
+model=FastVideo/FastWan-QAD-1.3B preset=fast_wan_t2v_480p sampling=dmd backend=cudarc tiny=false device=cpu 832x448 frames=61 steps=3 shift=8
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model FastVideo/FastWan-QAD-1.3B
+exit=0
+--- stdout
+model=FastVideo/FastWan-QAD-1.3B preset=fast_wan_t2v_480p sampling=dmd backend=cudarc tiny=false device=cpu 832x448 frames=61 steps=3 shift=8
+dmd_timesteps=[1000, 757, 522]
+dmd_sigmas=[1.0, 0.7567567229270935, 0.52173912525177, 0.0]
+
+### generate --model FastVideo/FastWan-QAD-1.3B-SA2
+exit=2
+--- stdout
+model=FastVideo/FastWan-QAD-1.3B-SA2 preset=fast_wan_t2v_480p sampling=dmd backend=cudarc tiny=false device=cpu 832x448 frames=61 steps=3 shift=8
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model FastVideo/FastWan-QAD-1.3B-SA2
+exit=0
+--- stdout
+model=FastVideo/FastWan-QAD-1.3B-SA2 preset=fast_wan_t2v_480p sampling=dmd backend=cudarc tiny=false device=cpu 832x448 frames=61 steps=3 shift=8
+dmd_timesteps=[1000, 757, 522]
+dmd_sigmas=[1.0, 0.7567567229270935, 0.52173912525177, 0.0]
+
+### generate --model FastVideo/FastWan-QAD-FP8-1.3B
+exit=2
+--- stdout
+model=FastVideo/FastWan-QAD-FP8-1.3B preset=fast_wan_t2v_480p sampling=dmd backend=cudarc tiny=false device=cpu 832x448 frames=61 steps=3 shift=8
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model FastVideo/FastWan-QAD-FP8-1.3B
+exit=0
+--- stdout
+model=FastVideo/FastWan-QAD-FP8-1.3B preset=fast_wan_t2v_480p sampling=dmd backend=cudarc tiny=false device=cpu 832x448 frames=61 steps=3 shift=8
+dmd_timesteps=[1000, 757, 522]
+dmd_sigmas=[1.0, 0.7567567229270935, 0.52173912525177, 0.0]
+
+### generate --model Wan-AI/Wan2.2-TI2V-5B-Diffusers
+exit=2
+--- stdout
+model=Wan-AI/Wan2.2-TI2V-5B-Diffusers preset=wan_2_2_ti2v_5b sampling=unipc backend=cudarc tiny=false device=cpu 1280x704 frames=121 steps=50 shift=5
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model Wan-AI/Wan2.2-TI2V-5B-Diffusers
+exit=0
+--- stdout
+model=Wan-AI/Wan2.2-TI2V-5B-Diffusers preset=wan_2_2_ti2v_5b sampling=unipc backend=cudarc tiny=false device=cpu 1280x704 frames=121 steps=50 shift=5
+unipc_first_timestep=999.959962 last=92.575432 n=50 first_sigma=0.999960 i64_t0=999
+
+### generate --model wan_2_2_ti2v_5b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan_2_2_ti2v_5b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model wan_2_2_ti2v_5b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan_2_2_ti2v_5b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model wan-2-2-ti2v-5b
+exit=2
+--- stdout
+model=wan-2-2-ti2v-5b preset=wan_2_2_ti2v_5b sampling=unipc backend=cudarc tiny=false device=cpu 1280x704 frames=121 steps=50 shift=5
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model wan-2-2-ti2v-5b
+exit=0
+--- stdout
+model=wan-2-2-ti2v-5b preset=wan_2_2_ti2v_5b sampling=unipc backend=cudarc tiny=false device=cpu 1280x704 frames=121 steps=50 shift=5
+unipc_first_timestep=999.959962 last=92.575432 n=50 first_sigma=0.999960 i64_t0=999
+
+### generate --model FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers
+exit=2
+--- stdout
+model=FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers preset=fast_wan_2_2_ti2v_5b sampling=dmd backend=cudarc tiny=false device=cpu 1280x704 frames=121 steps=50 shift=5
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers
+exit=0
+--- stdout
+model=FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers preset=fast_wan_2_2_ti2v_5b sampling=dmd backend=cudarc tiny=false device=cpu 1280x704 frames=121 steps=50 shift=5
+dmd_timesteps=[1000, 757, 522]
+dmd_sigmas=[1.0, 0.7567567229270935, 0.52173912525177, 0.0]
+
+### generate --model fast_wan_2_2_ti2v_5b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `fast_wan_2_2_ti2v_5b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model fast_wan_2_2_ti2v_5b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `fast_wan_2_2_ti2v_5b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model fast-wan-2-2-ti2v-5b
+exit=2
+--- stdout
+model=fast-wan-2-2-ti2v-5b preset=wan_2_2_ti2v_5b sampling=unipc backend=cudarc tiny=false device=cpu 1280x704 frames=121 steps=50 shift=5
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model fast-wan-2-2-ti2v-5b
+exit=0
+--- stdout
+model=fast-wan-2-2-ti2v-5b preset=wan_2_2_ti2v_5b sampling=unipc backend=cudarc tiny=false device=cpu 1280x704 frames=121 steps=50 shift=5
+unipc_first_timestep=999.959962 last=92.575432 n=50 first_sigma=0.999960 i64_t0=999
+
+### generate --model FastVideo/FastWan2.2-TI2V-5B-Diffusers
+exit=2
+--- stdout
+model=FastVideo/FastWan2.2-TI2V-5B-Diffusers preset=fast_wan_2_2_ti2v_5b sampling=dmd backend=cudarc tiny=false device=cpu 1280x704 frames=121 steps=50 shift=5
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model FastVideo/FastWan2.2-TI2V-5B-Diffusers
+exit=0
+--- stdout
+model=FastVideo/FastWan2.2-TI2V-5B-Diffusers preset=fast_wan_2_2_ti2v_5b sampling=dmd backend=cudarc tiny=false device=cpu 1280x704 frames=121 steps=50 shift=5
+dmd_timesteps=[1000, 757, 522]
+dmd_sigmas=[1.0, 0.7567567229270935, 0.52173912525177, 0.0]
+
+### generate --model decart-ai/Lucy-Edit-Dev
+exit=2
+--- stdout
+model=decart-ai/Lucy-Edit-Dev preset=lucy_edit_dev sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=50 shift=3
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model decart-ai/Lucy-Edit-Dev
+exit=0
+--- stdout
+model=decart-ai/Lucy-Edit-Dev preset=lucy_edit_dev sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=50 shift=3
+unipc_first_timestep=999.888791 last=57.673804 n=50 first_sigma=0.999889 i64_t0=999
+
+### generate --model lucy_edit_dev
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `lucy_edit_dev` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model lucy_edit_dev
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `lucy_edit_dev` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model lucy-edit-dev
+exit=2
+--- stdout
+model=lucy-edit-dev preset=lucy_edit_dev sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=50 shift=3
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model lucy-edit-dev
+exit=0
+--- stdout
+model=lucy-edit-dev preset=lucy_edit_dev sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=50 shift=3
+unipc_first_timestep=999.888791 last=57.673804 n=50 first_sigma=0.999889 i64_t0=999
+
+### generate --model decart-ai/Lucy-Edit-1.1-Dev
+exit=2
+--- stdout
+model=decart-ai/Lucy-Edit-1.1-Dev preset=lucy_edit_dev sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=50 shift=3
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model decart-ai/Lucy-Edit-1.1-Dev
+exit=0
+--- stdout
+model=decart-ai/Lucy-Edit-1.1-Dev preset=lucy_edit_dev sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=50 shift=3
+unipc_first_timestep=999.888791 last=57.673804 n=50 first_sigma=0.999889 i64_t0=999
+
+### generate --model Wan-AI/Wan2.2-T2V-A14B-Diffusers
+exit=2
+--- stdout
+model=Wan-AI/Wan2.2-T2V-A14B-Diffusers preset=wan_2_2_t2v_a14b sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=40 shift=12
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model Wan-AI/Wan2.2-T2V-A14B-Diffusers
+exit=0
+--- stdout
+model=Wan-AI/Wan2.2-T2V-A14B-Diffusers preset=wan_2_2_t2v_a14b sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=40 shift=12
+unipc_first_timestep=999.993049 last=235.278725 n=40 first_sigma=0.999993 i64_t0=999
+
+### generate --model wan_2_2_t2v_a14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan_2_2_t2v_a14b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model wan_2_2_t2v_a14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan_2_2_t2v_a14b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model wan-2-2-t2v-a14b
+exit=2
+--- stdout
+model=wan-2-2-t2v-a14b preset=wan_2_2_t2v_a14b sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=40 shift=12
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model wan-2-2-t2v-a14b
+exit=0
+--- stdout
+model=wan-2-2-t2v-a14b preset=wan_2_2_t2v_a14b sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=40 shift=12
+unipc_first_timestep=999.993049 last=235.278725 n=40 first_sigma=0.999993 i64_t0=999
+
+### generate --model Wan-AI/Wan2.2-I2V-A14B-Diffusers
+exit=2
+--- stdout
+model=Wan-AI/Wan2.2-I2V-A14B-Diffusers preset=wan_2_2_i2v_a14b sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=40 shift=5
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model Wan-AI/Wan2.2-I2V-A14B-Diffusers
+exit=0
+--- stdout
+model=Wan-AI/Wan2.2-I2V-A14B-Diffusers preset=wan_2_2_i2v_a14b sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=40 shift=5
+unipc_first_timestep=999.959962 last=113.615686 n=40 first_sigma=0.999960 i64_t0=999
+
+### generate --model wan_2_2_i2v_a14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan_2_2_i2v_a14b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model wan_2_2_i2v_a14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `wan_2_2_i2v_a14b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model wan-2-2-i2v-a14b
+exit=2
+--- stdout
+model=wan-2-2-i2v-a14b preset=wan_2_2_i2v_a14b sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=40 shift=5
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model wan-2-2-i2v-a14b
+exit=0
+--- stdout
+model=wan-2-2-i2v-a14b preset=wan_2_2_i2v_a14b sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=40 shift=5
+unipc_first_timestep=999.959962 last=113.615686 n=40 first_sigma=0.999960 i64_t0=999
+
+### generate --model wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers
+exit=2
+--- stdout
+model=wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers preset=sf_wan_t2v_1_3b sampling=causal_dmd backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=50 shift=5
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers
+exit=0
+--- stdout
+model=wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers preset=sf_wan_t2v_1_3b sampling=causal_dmd backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=50 shift=5
+dmd_timesteps=[1000, 757, 522]
+dmd_sigmas=[1.0, 0.7567567229270935, 0.52173912525177, 0.0]
+
+### generate --model sf_wan_t2v_1_3b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `sf_wan_t2v_1_3b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model sf_wan_t2v_1_3b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `sf_wan_t2v_1_3b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model sf-wan-t2v-1-3b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `sf-wan-t2v-1-3b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model sf-wan-t2v-1-3b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `sf-wan-t2v-1-3b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model rand0nmr/SFWan2.2-T2V-A14B-Diffusers
+exit=2
+--- stdout
+model=rand0nmr/SFWan2.2-T2V-A14B-Diffusers preset=sf_wan_2_2_t2v_a14b sampling=causal_dmd backend=cudarc tiny=false device=cpu 832x448 frames=81 steps=8 shift=12
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model rand0nmr/SFWan2.2-T2V-A14B-Diffusers
+exit=0
+--- stdout
+model=rand0nmr/SFWan2.2-T2V-A14B-Diffusers preset=sf_wan_2_2_t2v_a14b sampling=causal_dmd backend=cudarc tiny=false device=cpu 832x448 frames=81 steps=8 shift=12
+dmd_timesteps=[1000, 850, 700, 550, 350, 275, 200, 125]
+dmd_sigmas=[1.0, 0.8501920700073242, 0.7002323865890503, 0.5510098338127136, 0.3497571349143982, 0.2737642526626587, 0.1983470916748047, 0.1278863251209259, 0.0]
+
+### generate --model sf_wan_2_2_t2v_a14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `sf_wan_2_2_t2v_a14b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model sf_wan_2_2_t2v_a14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `sf_wan_2_2_t2v_a14b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model sf-wan-2-2-t2v-a14b
+exit=2
+--- stdout
+model=sf-wan-2-2-t2v-a14b preset=wan_2_2_t2v_a14b sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=40 shift=12
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model sf-wan-2-2-t2v-a14b
+exit=0
+--- stdout
+model=sf-wan-2-2-t2v-a14b preset=wan_2_2_t2v_a14b sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=40 shift=12
+unipc_first_timestep=999.993049 last=235.278725 n=40 first_sigma=0.999993 i64_t0=999
+
+### generate --model FastVideo/SFWan2.2-I2V-A14B-Preview-Diffusers
+exit=2
+--- stdout
+model=FastVideo/SFWan2.2-I2V-A14B-Preview-Diffusers preset=sf_wan_2_2_i2v_a14b sampling=causal_dmd backend=cudarc tiny=false device=cpu 832x448 frames=81 steps=8 shift=12
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model FastVideo/SFWan2.2-I2V-A14B-Preview-Diffusers
+exit=0
+--- stdout
+model=FastVideo/SFWan2.2-I2V-A14B-Preview-Diffusers preset=sf_wan_2_2_i2v_a14b sampling=causal_dmd backend=cudarc tiny=false device=cpu 832x448 frames=81 steps=8 shift=12
+dmd_timesteps=[1000, 850, 700, 550, 350, 275, 200, 125]
+dmd_sigmas=[1.0, 0.8501920700073242, 0.7002323865890503, 0.5510098338127136, 0.3497571349143982, 0.2737642526626587, 0.1983470916748047, 0.1278863251209259, 0.0]
+
+### generate --model sf_wan_2_2_i2v_a14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `sf_wan_2_2_i2v_a14b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model sf_wan_2_2_i2v_a14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `sf_wan_2_2_i2v_a14b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model sf-wan-2-2-i2v-a14b
+exit=2
+--- stdout
+model=sf-wan-2-2-i2v-a14b preset=wan_2_2_i2v_a14b sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=40 shift=5
+--- stderr (last line)
+cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot
+
+### schedule --model sf-wan-2-2-i2v-a14b
+exit=0
+--- stdout
+model=sf-wan-2-2-i2v-a14b preset=wan_2_2_i2v_a14b sampling=unipc backend=cudarc tiny=false device=cpu 832x480 frames=81 steps=40 shift=5
+unipc_first_timestep=999.959962 last=113.615686 n=40 first_sigma=0.999960 i64_t0=999
+
+### generate --model FastVideo/LTX2-Distilled-Diffusers
+exit=2
+--- stdout
+family=ltx2 preset=ltx2_distilled_20 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/LTX2-Distilled-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=ltx2 preset=ltx2_distilled_20)
+
+### generate --model ltx2_distilled_20
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `ltx2_distilled_20` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model ltx2_distilled_20
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `ltx2_distilled_20` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model ltx2-distilled-20
+exit=2
+--- stdout
+family=ltx2 preset=ltx2_distilled_20 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model ltx2-distilled-20
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=ltx2 preset=ltx2_distilled_20)
+
+### generate --model rootonchair/LTX-2-19b-distilled
+exit=2
+--- stdout
+family=ltx2 preset=ltx2_distilled_20 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model rootonchair/LTX-2-19b-distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=ltx2 preset=ltx2_distilled_20)
+
+### generate --model Lightricks/LTX-2.5-Diffusers
+exit=2
+--- stdout
+family=ltx2 preset=ltx2_distilled_25 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model Lightricks/LTX-2.5-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=ltx2 preset=ltx2_distilled_25)
+
+### generate --model ltx2_distilled_25
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `ltx2_distilled_25` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model ltx2_distilled_25
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `ltx2_distilled_25` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model ltx2-distilled-25
+exit=2
+--- stdout
+family=ltx2 preset=ltx2_distilled_20 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model ltx2-distilled-25
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=ltx2 preset=ltx2_distilled_20)
+
+### generate --model Lightricks/LTX-2
+exit=2
+--- stdout
+family=ltx2 preset=ltx2_base_20 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model Lightricks/LTX-2
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=ltx2 preset=ltx2_base_20)
+
+### generate --model ltx2_base_20
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `ltx2_base_20` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model ltx2_base_20
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `ltx2_base_20` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model ltx2-base-20
+exit=2
+--- stdout
+family=ltx2 preset=ltx2_base_20 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model ltx2-base-20
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=ltx2 preset=ltx2_base_20)
+
+### generate --model FastVideo/LTX2-base
+exit=2
+--- stdout
+family=ltx2 preset=ltx2_base_20 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/LTX2-base
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=ltx2 preset=ltx2_base_20)
+
+### generate --model FastVideo/LTX2-Diffusers
+exit=2
+--- stdout
+family=ltx2 preset=ltx2_base_20 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/LTX2-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=ltx2 preset=ltx2_base_20)
+
+### generate --model FastVideo/LTX-2.3-Distilled-Diffusers
+exit=2
+--- stdout
+family=ltx2 preset=ltx2_distilled_23 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/LTX-2.3-Distilled-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=ltx2 preset=ltx2_distilled_23)
+
+### generate --model ltx2_distilled_23
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `ltx2_distilled_23` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model ltx2_distilled_23
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `ltx2_distilled_23` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model ltx2-distilled-23
+exit=2
+--- stdout
+family=ltx2 preset=ltx2_distilled_20 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model ltx2-distilled-23
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=ltx2 preset=ltx2_distilled_20)
+
+### generate --model FastVideo/LTX2.3-Distilled-Diffusers
+exit=2
+--- stdout
+family=ltx2 preset=ltx2_distilled_23 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/LTX2.3-Distilled-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=ltx2 preset=ltx2_distilled_23)
+
+### generate --model diffusers/LTX-2.3-Distilled-Diffusers
+exit=2
+--- stdout
+family=ltx2 preset=ltx2_distilled_23 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model diffusers/LTX-2.3-Distilled-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=ltx2 preset=ltx2_distilled_23)
+
+### generate --model Lightricks/LTX-2.3
+exit=2
+--- stdout
+family=ltx2 preset=ltx2_base_23 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model Lightricks/LTX-2.3
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=ltx2 preset=ltx2_base_23)
+
+### generate --model ltx2_base_23
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `ltx2_base_23` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model ltx2_base_23
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `ltx2_base_23` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model ltx2-base-23
+exit=2
+--- stdout
+family=ltx2 preset=ltx2_base_20 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model ltx2-base-23
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=ltx2 preset=ltx2_base_20)
+
+### generate --model FastVideo/LTX2.3-base
+exit=2
+--- stdout
+family=ltx2 preset=ltx2_base_23 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/LTX2.3-base
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=ltx2 preset=ltx2_base_23)
+
+### generate --model FastVideo/LTX2.3-Diffusers
+exit=2
+--- stdout
+family=ltx2 preset=ltx2_base_23 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/LTX2.3-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=ltx2 preset=ltx2_base_23)
+
+### generate --model diffusers/LTX-2.3-Diffusers
+exit=2
+--- stdout
+family=ltx2 preset=ltx2_base_23 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model diffusers/LTX-2.3-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=ltx2 preset=ltx2_base_23)
+
+### generate --model lightx2v/Minimax-h3-Turbo
+exit=2
+--- stdout
+family=h3 preset=sol_h3_ref2va device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model lightx2v/Minimax-h3-Turbo
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=h3 preset=sol_h3_ref2va)
+
+### generate --model sol_h3_ref2va
+exit=2
+--- stdout
+family=h3 preset=sol_h3_ref2va device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model sol_h3_ref2va
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=h3 preset=sol_h3_ref2va)
+
+### generate --model sol-h3-ref2va
+exit=2
+--- stdout
+family=h3 preset=sol_h3_ref2va device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model sol-h3-ref2va
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=h3 preset=sol_h3_ref2va)
+
+### generate --model FastVideo/FastH3-4-step-Preview-v1-LoRA
+exit=2
+--- stdout
+family=h3 preset=sol_h3 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/FastH3-4-step-Preview-v1-LoRA
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=h3 preset=sol_h3)
+
+### generate --model sol_h3
+exit=2
+--- stdout
+family=h3 preset=sol_h3 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model sol_h3
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=h3 preset=sol_h3)
+
+### generate --model sol-h3
+exit=2
+--- stdout
+family=h3 preset=sol_h3 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model sol-h3
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=h3 preset=sol_h3)
+
+### generate --model FastVideo/FastVideo-FastH3-8-Step-V2
+exit=2
+--- stdout
+family=h3 preset=fasth3_8step device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/FastVideo-FastH3-8-Step-V2
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=h3 preset=fasth3_8step)
+
+### generate --model fasth3_8step
+exit=2
+--- stdout
+family=h3 preset=fasth3_8step device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model fasth3_8step
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=h3 preset=fasth3_8step)
+
+### generate --model fasth3-8step
+exit=2
+--- stdout
+family=h3 preset=fasth3_8step device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model fasth3-8step
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=h3 preset=fasth3_8step)
+
+### generate --model FastVideo/FastVideo-Minimax-FastH3-Preview-v0.2
+exit=2
+--- stdout
+family=h3 preset=fasth3_8step device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/FastVideo-Minimax-FastH3-Preview-v0.2
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=h3 preset=fasth3_8step)
+
+### generate --model MiniMaxAI/MiniMax-H3
+exit=2
+--- stdout
+family=h3 preset=minimax_h3 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model MiniMaxAI/MiniMax-H3
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=h3 preset=minimax_h3)
+
+### generate --model minimax_h3
+exit=2
+--- stdout
+family=h3 preset=minimax_h3 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model minimax_h3
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=h3 preset=minimax_h3)
+
+### generate --model minimax-h3
+exit=2
+--- stdout
+family=h3 preset=minimax_h3 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model minimax-h3
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=h3 preset=minimax_h3)
+
+### generate --model hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v
+exit=2
+--- stdout
+family=hunyuan15 preset=hy15_480p_t2v device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=hunyuan15 preset=hy15_480p_t2v)
+
+### generate --model hy15_480p_t2v
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `hy15_480p_t2v` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model hy15_480p_t2v
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `hy15_480p_t2v` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model hy15-480p-t2v
+exit=2
+--- stdout
+family=hunyuan15 preset=hy15_480p_t2v device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model hy15-480p-t2v
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=hunyuan15 preset=hy15_480p_t2v)
+
+### generate --model hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_i2v_step_distilled
+exit=2
+--- stdout
+family=hunyuan15 preset=hy15_480p_i2v_distilled device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_i2v_step_distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=hunyuan15 preset=hy15_480p_i2v_distilled)
+
+### generate --model hy15_480p_i2v_distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `hy15_480p_i2v_distilled` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model hy15_480p_i2v_distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `hy15_480p_i2v_distilled` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model hy15-480p-i2v-distilled
+exit=2
+--- stdout
+family=hunyuan15 preset=hy15_480p_i2v_distilled device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model hy15-480p-i2v-distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=hunyuan15 preset=hy15_480p_i2v_distilled)
+
+### generate --model hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v
+exit=2
+--- stdout
+family=hunyuan15 preset=hy15_720p_t2v device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=hunyuan15 preset=hy15_720p_t2v)
+
+### generate --model hy15_720p_t2v
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `hy15_720p_t2v` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model hy15_720p_t2v
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `hy15_720p_t2v` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model hy15-720p-t2v
+exit=2
+--- stdout
+family=hunyuan15 preset=hy15_720p_t2v device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model hy15-720p-t2v
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=hunyuan15 preset=hy15_720p_t2v)
+
+### generate --model hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v_distilled
+exit=2
+--- stdout
+family=hunyuan15 preset=hy15_720p_i2v_distilled device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v_distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=hunyuan15 preset=hy15_720p_i2v_distilled)
+
+### generate --model hy15_720p_i2v_distilled
+exit=2
+--- stdout
+family=hunyuan15 preset=hy15_720p_i2v_distilled device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model hy15_720p_i2v_distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=hunyuan15 preset=hy15_720p_i2v_distilled)
+
+### generate --model hy15-720p-i2v-distilled
+exit=2
+--- stdout
+family=hunyuan15 preset=hy15_720p_i2v_distilled device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model hy15-720p-i2v-distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=hunyuan15 preset=hy15_720p_i2v_distilled)
+
+### generate --model weizhou03/HunyuanVideo-1.5-Diffusers-1080p
+exit=2
+--- stdout
+family=hunyuan15 preset=hy15_1080p_sr device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model weizhou03/HunyuanVideo-1.5-Diffusers-1080p
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=hunyuan15 preset=hy15_1080p_sr)
+
+### generate --model hy15_1080p_sr
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `hy15_1080p_sr` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model hy15_1080p_sr
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `hy15_1080p_sr` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model hy15-1080p-sr
+exit=2
+--- stdout
+family=hunyuan15 preset=hy15_1080p_sr device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model hy15-1080p-sr
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=hunyuan15 preset=hy15_1080p_sr)
+
+### generate --model weizhou03/HunyuanVideo-1.5-Diffusers-1080p-2SR
+exit=2
+--- stdout
+family=hunyuan15 preset=hy15_1080p_sr device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model weizhou03/HunyuanVideo-1.5-Diffusers-1080p-2SR
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=hunyuan15 preset=hy15_1080p_sr)
+
+### generate --model kandinskylab/Kandinsky-5.0-T2V-Lite-sft-5s-Diffusers
+exit=2
+--- stdout
+family=kandinsky5 preset=k5_lite_t2v_5s device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model kandinskylab/Kandinsky-5.0-T2V-Lite-sft-5s-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=kandinsky5 preset=k5_lite_t2v_5s)
+
+### generate --model k5_lite_t2v_5s
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `k5_lite_t2v_5s` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model k5_lite_t2v_5s
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `k5_lite_t2v_5s` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model k5-lite-t2v-5s
+exit=2
+--- stdout
+family=kandinsky5 preset=k5_lite_t2v_5s device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model k5-lite-t2v-5s
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=kandinsky5 preset=k5_lite_t2v_5s)
+
+### generate --model kandinskylab/Kandinsky-5.0-T2V-Pro-sft-5s-Diffusers
+exit=2
+--- stdout
+family=kandinsky5 preset=k5_pro_t2v_5s device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model kandinskylab/Kandinsky-5.0-T2V-Pro-sft-5s-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=kandinsky5 preset=k5_pro_t2v_5s)
+
+### generate --model k5_pro_t2v_5s
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `k5_pro_t2v_5s` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model k5_pro_t2v_5s
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `k5_pro_t2v_5s` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model k5-pro-t2v-5s
+exit=2
+--- stdout
+family=kandinsky5 preset=k5_pro_t2v_5s device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model k5-pro-t2v-5s
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=kandinsky5 preset=k5_pro_t2v_5s)
+
+### generate --model nvidia/Cosmos-Predict2-2B-Video2World
+exit=2
+--- stdout
+family=cosmos preset=cosmos2_v2w_2b device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model nvidia/Cosmos-Predict2-2B-Video2World
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=cosmos preset=cosmos2_v2w_2b)
+
+### generate --model cosmos2_v2w_2b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `cosmos2_v2w_2b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model cosmos2_v2w_2b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `cosmos2_v2w_2b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model cosmos2-v2w-2b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `cosmos2-v2w-2b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model cosmos2-v2w-2b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `cosmos2-v2w-2b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model nvidia/Cosmos-Predict2-14B-Video2World
+exit=2
+--- stdout
+family=cosmos preset=cosmos2_v2w_14b device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model nvidia/Cosmos-Predict2-14B-Video2World
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=cosmos preset=cosmos2_v2w_14b)
+
+### generate --model cosmos2_v2w_14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `cosmos2_v2w_14b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model cosmos2_v2w_14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `cosmos2_v2w_14b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model cosmos2-v2w-14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `cosmos2-v2w-14b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model cosmos2-v2w-14b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `cosmos2-v2w-14b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model FastVideo/LongCat-Video-T2V-Diffusers
+exit=2
+--- stdout
+family=longcat preset=longcat_t2v_480p device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/LongCat-Video-T2V-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=longcat preset=longcat_t2v_480p)
+
+### generate --model longcat_t2v_480p
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `longcat_t2v_480p` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model longcat_t2v_480p
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `longcat_t2v_480p` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model longcat-t2v-480p
+exit=2
+--- stdout
+family=longcat preset=longcat_t2v_480p device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model longcat-t2v-480p
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=longcat preset=longcat_t2v_480p)
+
+### generate --model longcat_t2v_720p
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `longcat_t2v_720p` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model longcat_t2v_720p
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `longcat_t2v_720p` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model longcat-t2v-720p
+exit=2
+--- stdout
+family=longcat preset=longcat_t2v_720p device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model longcat-t2v-720p
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=longcat preset=longcat_t2v_720p)
+
+### generate --model robbyant/lingbot-video-dense-1.3b
+exit=2
+--- stdout
+family=lingbot preset=lingbot_dense_1_3b device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model robbyant/lingbot-video-dense-1.3b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=lingbot preset=lingbot_dense_1_3b)
+
+### generate --model lingbot_dense_1_3b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `lingbot_dense_1_3b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model lingbot_dense_1_3b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `lingbot_dense_1_3b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model lingbot-dense-1-3b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `lingbot-dense-1-3b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model lingbot-dense-1-3b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `lingbot-dense-1-3b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model robbyant/lingbot-video-moe-30b-a3b
+exit=2
+--- stdout
+family=lingbot preset=lingbot_moe_30b device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model robbyant/lingbot-video-moe-30b-a3b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=lingbot preset=lingbot_moe_30b)
+
+### generate --model lingbot_moe_30b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `lingbot_moe_30b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model lingbot_moe_30b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `lingbot_moe_30b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model lingbot-moe-30b
+exit=2
+--- stdout
+family=lingbot preset=lingbot_moe_30b device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model lingbot-moe-30b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=lingbot preset=lingbot_moe_30b)
+
+### generate --model FastVideo/GEN3C-Cosmos-7B-Diffusers
+exit=2
+--- stdout
+family=gen3c preset=gen3c_cosmos_7b device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/GEN3C-Cosmos-7B-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=gen3c preset=gen3c_cosmos_7b)
+
+### generate --model gen3c_cosmos_7b
+exit=2
+--- stdout
+family=gen3c preset=gen3c_cosmos_7b device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model gen3c_cosmos_7b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=gen3c preset=gen3c_cosmos_7b)
+
+### generate --model gen3c-cosmos-7b
+exit=2
+--- stdout
+family=gen3c preset=gen3c_cosmos_7b device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model gen3c-cosmos-7b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=gen3c preset=gen3c_cosmos_7b)
+
+### generate --model FastVideo/Matrix-Game-2.0-Base-Distilled-Diffusers
+exit=2
+--- stdout
+family=matrixgame preset=mg2_base_distilled device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/Matrix-Game-2.0-Base-Distilled-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=matrixgame preset=mg2_base_distilled)
+
+### generate --model mg2_base_distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `mg2_base_distilled` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model mg2_base_distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `mg2_base_distilled` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model mg2-base-distilled
+exit=2
+--- stdout
+family=matrixgame preset=mg2_base_distilled device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model mg2-base-distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=matrixgame preset=mg2_base_distilled)
+
+### generate --model FastVideo/Matrix-Game-2.0-GTA-Distilled-Diffusers
+exit=2
+--- stdout
+family=matrixgame preset=mg2_gta_distilled device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/Matrix-Game-2.0-GTA-Distilled-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=matrixgame preset=mg2_gta_distilled)
+
+### generate --model mg2_gta_distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `mg2_gta_distilled` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model mg2_gta_distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `mg2_gta_distilled` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model mg2-gta-distilled
+exit=2
+--- stdout
+family=matrixgame preset=mg2_gta_distilled device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model mg2-gta-distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=matrixgame preset=mg2_gta_distilled)
+
+### generate --model FastVideo/Matrix-Game-2.0-TempleRun-Distilled-Diffusers
+exit=2
+--- stdout
+family=matrixgame preset=mg2_templerun_distilled device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/Matrix-Game-2.0-TempleRun-Distilled-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=matrixgame preset=mg2_templerun_distilled)
+
+### generate --model mg2_templerun_distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `mg2_templerun_distilled` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model mg2_templerun_distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `mg2_templerun_distilled` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model mg2-templerun-distilled
+exit=2
+--- stdout
+family=matrixgame preset=mg2_templerun_distilled device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model mg2-templerun-distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=matrixgame preset=mg2_templerun_distilled)
+
+### generate --model FastVideo/Matrix-Game-2.0-Base-Diffusers
+exit=2
+--- stdout
+family=matrixgame preset=mg2_base device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/Matrix-Game-2.0-Base-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=matrixgame preset=mg2_base)
+
+### generate --model mg2_base
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `mg2_base` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model mg2_base
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `mg2_base` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model mg2-base
+exit=2
+--- stdout
+family=matrixgame preset=mg2_base device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model mg2-base
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=matrixgame preset=mg2_base)
+
+### generate --model FastVideo/Matrix-Game-2.0-GTA-Diffusers
+exit=2
+--- stdout
+family=matrixgame preset=mg2_base device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/Matrix-Game-2.0-GTA-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=matrixgame preset=mg2_base)
+
+### generate --model FastVideo/Matrix-Game-2.0-TempleRun-Diffusers
+exit=2
+--- stdout
+family=matrixgame preset=mg2_base device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/Matrix-Game-2.0-TempleRun-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=matrixgame preset=mg2_base)
+
+### generate --model FastVideo/Matrix-Game-3.0-Base-Distilled-Diffusers
+exit=2
+--- stdout
+family=matrixgame preset=mg3_base_distilled device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/Matrix-Game-3.0-Base-Distilled-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=matrixgame preset=mg3_base_distilled)
+
+### generate --model mg3_base_distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `mg3_base_distilled` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model mg3_base_distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `mg3_base_distilled` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model mg3-base-distilled
+exit=2
+--- stdout
+family=matrixgame preset=mg3_base_distilled device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model mg3-base-distilled
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=matrixgame preset=mg3_base_distilled)
+
+### generate --model FastVideo/DreamX-World-5B-Cam-Diffusers
+exit=2
+--- stdout
+family=dreamx_world preset=dreamx_5b_cam device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/DreamX-World-5B-Cam-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=dreamx_world preset=dreamx_5b_cam)
+
+### generate --model dreamx_5b_cam
+exit=2
+--- stdout
+family=dreamx_world preset=dreamx_5b_cam device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model dreamx_5b_cam
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=dreamx_world preset=dreamx_5b_cam)
+
+### generate --model dreamx-5b-cam
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `dreamx-5b-cam` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model dreamx-5b-cam
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `dreamx-5b-cam` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model FastVideo/DreamX-World-5B-Diffusers
+exit=2
+--- stdout
+family=dreamx_world preset=dreamx_5b_ar device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/DreamX-World-5B-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=dreamx_world preset=dreamx_5b_ar)
+
+### generate --model dreamx_5b_ar
+exit=2
+--- stdout
+family=dreamx_world preset=dreamx_5b_ar device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model dreamx_5b_ar
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=dreamx_world preset=dreamx_5b_ar)
+
+### generate --model dreamx-5b-ar
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `dreamx-5b-ar` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model dreamx-5b-ar
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `dreamx-5b-ar` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model FastVideo/LingBot-World-Base-Cam-Diffusers
+exit=2
+--- stdout
+family=lingbotworld preset=lingbotworld_base_cam device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/LingBot-World-Base-Cam-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=lingbotworld preset=lingbotworld_base_cam)
+
+### generate --model lingbotworld_base_cam
+exit=2
+--- stdout
+family=lingbotworld preset=lingbotworld_base_cam device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model lingbotworld_base_cam
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=lingbotworld preset=lingbotworld_base_cam)
+
+### generate --model lingbotworld-base-cam
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `lingbotworld-base-cam` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model lingbotworld-base-cam
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `lingbotworld-base-cam` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model robbyant/lingbot-world-v2-14b-causal-fast
+exit=2
+--- stdout
+family=lingbotworld preset=lingbotworld2_causal_fast device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model robbyant/lingbot-world-v2-14b-causal-fast
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=lingbotworld preset=lingbotworld2_causal_fast)
+
+### generate --model lingbotworld2_causal_fast
+exit=2
+--- stdout
+family=lingbotworld preset=lingbotworld2_causal_fast device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model lingbotworld2_causal_fast
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=lingbotworld preset=lingbotworld2_causal_fast)
+
+### generate --model lingbotworld2-causal-fast
+exit=2
+--- stdout
+family=lingbotworld preset=lingbotworld2_causal_fast device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model lingbotworld2-causal-fast
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=lingbotworld preset=lingbotworld2_causal_fast)
+
+### generate --model FastVideo/HunyuanGameCraft-Diffusers
+exit=2
+--- stdout
+family=gamecraft preset=gamecraft_i2v device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/HunyuanGameCraft-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=gamecraft preset=gamecraft_i2v)
+
+### generate --model gamecraft_i2v
+exit=2
+--- stdout
+family=gamecraft preset=gamecraft_i2v device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model gamecraft_i2v
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=gamecraft preset=gamecraft_i2v)
+
+### generate --model gamecraft-i2v
+exit=2
+--- stdout
+family=gamecraft preset=gamecraft_i2v device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model gamecraft-i2v
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=gamecraft preset=gamecraft_i2v)
+
+### generate --model FastVideo/HY-WorldPlay-Bidirectional-Diffusers
+exit=2
+--- stdout
+family=hyworld preset=hyworld_bidirectional device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/HY-WorldPlay-Bidirectional-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=hyworld preset=hyworld_bidirectional)
+
+### generate --model hyworld_bidirectional
+exit=2
+--- stdout
+family=hyworld preset=hyworld_bidirectional device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model hyworld_bidirectional
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=hyworld preset=hyworld_bidirectional)
+
+### generate --model hyworld-bidirectional
+exit=2
+--- stdout
+family=hyworld preset=hyworld_bidirectional device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model hyworld-bidirectional
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=hyworld preset=hyworld_bidirectional)
+
+### generate --model Tongyi-MAI/Z-Image-Turbo
+exit=2
+--- stdout
+family=zimage preset=zimage_turbo device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model Tongyi-MAI/Z-Image-Turbo
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=zimage preset=zimage_turbo)
+
+### generate --model zimage_turbo
+exit=2
+--- stdout
+family=zimage preset=zimage_turbo device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model zimage_turbo
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=zimage preset=zimage_turbo)
+
+### generate --model zimage-turbo
+exit=2
+--- stdout
+family=zimage preset=zimage_turbo device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model zimage-turbo
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=zimage preset=zimage_turbo)
+
+### generate --model stabilityai/stable-diffusion-3.5-medium
+exit=2
+--- stdout
+family=sd35 preset=sd35_medium device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model stabilityai/stable-diffusion-3.5-medium
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=sd35 preset=sd35_medium)
+
+### generate --model sd35_medium
+exit=2
+--- stdout
+family=sd35 preset=sd35_medium device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model sd35_medium
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=sd35 preset=sd35_medium)
+
+### generate --model sd35-medium
+exit=2
+--- stdout
+family=sd35 preset=sd35_medium device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model sd35-medium
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=sd35 preset=sd35_medium)
+
+### generate --model black-forest-labs/FLUX.1-dev
+exit=2
+--- stdout
+family=flux preset=flux1_dev device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model black-forest-labs/FLUX.1-dev
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=flux preset=flux1_dev)
+
+### generate --model flux1_dev
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `flux1_dev` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model flux1_dev
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `flux1_dev` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model flux1-dev
+exit=2
+--- stdout
+family=flux preset=flux1_dev device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model flux1-dev
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=flux preset=flux1_dev)
+
+### generate --model black-forest-labs/FLUX.1-schnell
+exit=2
+--- stdout
+family=flux preset=flux1_schnell device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model black-forest-labs/FLUX.1-schnell
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=flux preset=flux1_schnell)
+
+### generate --model flux1_schnell
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `flux1_schnell` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model flux1_schnell
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `flux1_schnell` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model flux1-schnell
+exit=2
+--- stdout
+family=flux preset=flux1_schnell device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model flux1-schnell
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=flux preset=flux1_schnell)
+
+### generate --model black-forest-labs/FLUX.2-klein-4B
+exit=2
+--- stdout
+family=flux2 preset=flux2_klein_4b device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model black-forest-labs/FLUX.2-klein-4B
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=flux2 preset=flux2_klein_4b)
+
+### generate --model flux2_klein_4b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `flux2_klein_4b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model flux2_klein_4b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `flux2_klein_4b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model flux2-klein-4b
+exit=2
+--- stdout
+family=flux2 preset=flux2_klein_4b device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model flux2-klein-4b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=flux2 preset=flux2_klein_4b)
+
+### generate --model black-forest-labs/FLUX.2-klein-9B
+exit=2
+--- stdout
+family=flux2 preset=flux2_klein_9b device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model black-forest-labs/FLUX.2-klein-9B
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=flux2 preset=flux2_klein_9b)
+
+### generate --model flux2_klein_9b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `flux2_klein_9b` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model flux2_klein_9b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `flux2_klein_9b` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model flux2-klein-9b
+exit=2
+--- stdout
+family=flux2 preset=flux2_klein_9b device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model flux2-klein-9b
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=flux2 preset=flux2_klein_9b)
+
+### generate --model black-forest-labs/FLUX.2-dev
+exit=2
+--- stdout
+family=flux2 preset=flux2_dev device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model black-forest-labs/FLUX.2-dev
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=flux2 preset=flux2_dev)
+
+### generate --model flux2_dev
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `flux2_dev` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model flux2_dev
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `flux2_dev` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model flux2-dev
+exit=2
+--- stdout
+family=flux2 preset=flux2_dev device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model flux2-dev
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=flux2 preset=flux2_dev)
+
+### generate --model zai-org/GLM-Image
+exit=2
+--- stdout
+family=glm_image preset=glm_image device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model zai-org/GLM-Image
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=glm_image preset=glm_image)
+
+### generate --model glm_image
+exit=2
+--- stdout
+family=glm_image preset=glm_image device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model glm_image
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=glm_image preset=glm_image)
+
+### generate --model glm-image
+exit=2
+--- stdout
+family=glm_image preset=glm_image device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model glm-image
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=glm_image preset=glm_image)
+
+### generate --model FastVideo/stable-audio-open-1.0-Diffusers
+exit=2
+--- stdout
+family=stable_audio preset=stable_audio_open_1_0 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/stable-audio-open-1.0-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=stable_audio preset=stable_audio_open_1_0)
+
+### generate --model stable_audio_open_1_0
+exit=2
+--- stdout
+family=stable_audio preset=stable_audio_open_1_0 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model stable_audio_open_1_0
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=stable_audio preset=stable_audio_open_1_0)
+
+### generate --model stable-audio-open-1-0
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `stable-audio-open-1-0` — no registered family match (Wan/LTX/H3/…)
+
+### schedule --model stable-audio-open-1-0
+exit=1
+--- stdout
+--- stderr (last line)
+Error: unknown model id `stable-audio-open-1-0` — no registered family match (Wan/LTX/H3/…)
+
+### generate --model FastVideo/stable-audio-open-small-Diffusers
+exit=2
+--- stdout
+family=stable_audio preset=stable_audio_open_small device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/stable-audio-open-small-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=stable_audio preset=stable_audio_open_small)
+
+### generate --model stable_audio_open_small
+exit=2
+--- stdout
+family=stable_audio preset=stable_audio_open_small device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model stable_audio_open_small
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=stable_audio preset=stable_audio_open_small)
+
+### generate --model stable-audio-open-small
+exit=2
+--- stdout
+family=stable_audio preset=stable_audio_open_small device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model stable-audio-open-small
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=stable_audio preset=stable_audio_open_small)
+
+### generate --model hkchengrex/MMAudio
+exit=2
+--- stdout
+family=mmaudio preset=mmaudio_large_44k_v2 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model hkchengrex/MMAudio
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=mmaudio preset=mmaudio_large_44k_v2)
+
+### generate --model mmaudio_large_44k_v2
+exit=2
+--- stdout
+family=mmaudio preset=mmaudio_large_44k_v2 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model mmaudio_large_44k_v2
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=mmaudio preset=mmaudio_large_44k_v2)
+
+### generate --model mmaudio-large-44k-v2
+exit=2
+--- stdout
+family=mmaudio preset=mmaudio_large_44k_v2 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model mmaudio-large-44k-v2
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=mmaudio preset=mmaudio_large_44k_v2)
+
+### generate --model FastVideo/MMAudio-large-44k-v2-Diffusers
+exit=2
+--- stdout
+family=mmaudio preset=mmaudio_large_44k_v2 device=cuda
+--- stderr (last line)
+rebuild with --features cuda-cudarc to generate LTX/H3
+
+### schedule --model FastVideo/MMAudio-large-44k-v2-Diffusers
+exit=1
+--- stdout
+--- stderr (last line)
+Error: schedule is Wan-only for now (got family=mmaudio preset=mmaudio_large_44k_v2)
+
