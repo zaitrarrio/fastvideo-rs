@@ -32,6 +32,8 @@ members = [
     # and scheduler, and the Cloudflare Worker / Durable Object (wasm).
     "crates/fastvideo-dispatch-proto",
     "crates/fastvideo-edge",
+    # The registry's public formats (docs/adr/0005..0007): pure, no I/O, no CUDA.
+    "crates/fastvideo-manifest",
 ]
 
 [workspace.package]
@@ -113,6 +115,13 @@ fastvideo-reactor = { path = "crates/fastvideo-reactor" }
 fastvideo-deploy = { path = "crates/fastvideo-deploy" }
 fastvideo-autoscale = { path = "crates/fastvideo-autoscale" }
 fastvideo-dispatch-proto = { path = "crates/fastvideo-dispatch-proto" }
+fastvideo-manifest = { path = "crates/fastvideo-manifest" }
+
+# ---- fastvideo-manifest (docs/adr/0005..0007) --------------------------------
+blake3 = "1"
+semver = { version = "1", features = ["serde"] }
+schemars = { version = "1", features = ["derive"] }
+proptest = "1"
 
 cudarc = { version = "0.17", default-features = false, features = ["std", "driver", "cublas", "cublaslt", "cudnn", "nvrtc", "f16", "cuda-version-from-build-system", "dynamic-loading"] }
 
