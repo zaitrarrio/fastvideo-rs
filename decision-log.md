@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-10-24 · FVID-2026-10-24-settings-layer
+- Trigger: plan B3 (docs/plan/2026-10-23-execution-plan.md): the `FASTVIDEO_*` table from one declarative list, the direct reads routed through the settings layer, the scope doc generated, byte-identical
+- Options: a typed key per setting at every call site; string literals at the call sites with the list made authoritative by workspace scan tests; the list and readers in a new dependency-free crate or in `fastvideo-models`; route the direct reads through the layered reader (`settings::var`) or through an env-only reader
+- Decision: **one sorted `SETTINGS` table in `fastvideo-models::techniques::settings` (222 rows: reader, parse, default, family, seam, read timing, doc); call sites keep their literals; every direct and indirect read calls `settings::env_var` / `env_var_os` (exactly `std::env::var` / `var_os`) at the same call site, so no name changes reader, parse or read time; the runtime's typed getters call the shared `settings::parse` functions; `docs/scope.md`'s table is rendered from the rows; B3 lands in two PRs (this one: list, routing, doc, tests; then the `Settings` snapshot for `load` and the Wan / small-family `model_spec`s)**
+- Reason: `fastvideo-models` sits below every reader without a cycle; promoting the 108 env-only names to the layered reader would let profiles set them, a behaviour change; typed keys would rewrite ~400 sites in one structure change for what the scan tests already enforce
+- Reversibility: cheap (moving a name to the layered reader, or to a typed key, is a local change plus its row)
+- Executed by: Executor (plan B3)
+- ADR: docs/adr/0010-settings-layer.md
+- Verification: `crates/fastvideo-models/src/techniques/settings/{table,parse,workspace_check}.rs` on the build pod (no direct read outside the module, no undeclared name, getters agree with rows, doc not stale, off-identity per typed row and per in-crate text parser, env > profile > default for H3 / LTX keys); GPU `techniques` byte-identity cell by the coordinator
+
 ### FVID · 2026-10-24 · FVID-2026-10-24-family-manifest-layer-2
 - Trigger: plan A2 (docs/plan/2026-10-23-execution-plan.md): layer 2 of the model family manifest and the first three family files, with the equality proof against the hand-written engine catalog
 - Options: the pure crate also owning the engine's recipe structs (one schema, the crate depends on the inference core); the engine's recipe as an opaque table the crate validates only around (ids, trees, GPU, caps); a separate crate for layer 2
