@@ -2,6 +2,26 @@
 
 Project code: FVID
 
+### FVID · 2026-10-24 · FVID-2026-10-24-gold-tier-gpu-and-settings
+- Trigger: review of PR #151 (plan D2): two gold files carried oracle numbers measured on an H100 for an RTX PRO 6000 tier (`fasth3-4step-vsa` PSNR / LPIPS, `ltx25-ref2v` PSNR), and H3 latencies measured before the MXFP8 video-decoder default (2026-10-14) sat in the fields while `fasth3-trim-nvfp4` gapped its numbers for the same reason
+- Options: keep the numbers with a note; gap every number not measured in the served configuration; keep a number measured under a non-default setting only when that exact setting is named
+- Decision: **(coordinator) a number measured on a GPU other than the tier's is a gap, its values kept in a cited `[[source]]` note and the gap reason ("measured on H100 only; D3 re-measures on the tier GPU"); a number measured under a non-default setting stays in the fields only when `workload.note` names the exact setting that reproduces it (here `FASTVIDEO_H3_VAE_MXFP8=0`, the bf16 video decode that was the default before 2026-10-14, and `FASTVIDEO_WAN_QUANT=mxfp8` for the Wan TAEHV arms), with the environment also in a new `workload.env` the parser checks the note names; every `[[source]]` carries a heading (checked to exist in the file) and a date.** ADR-0009 Choice 1 unchanged; Choice 5 added
+- Reason: one rule for every file; `fv-lab` can rerun a cell exactly; a gold number is only comparable on the tier's GPU
+- Reversibility: cheap (this repository's format)
+- Executed by: Executor (plan D2, review fixes)
+- ADR: docs/adr/0009-gold-standard-files.md (Choice 5)
+- Verification: `cargo test -p fastvideo-lab` (`sources_need_a_heading_and_a_date`, `workload_env_is_named_in_the_note`, `every_cited_heading_exists_in_its_file`)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-gold-standard-files
+- Trigger: plan D2 (docs/plan/2026-10-23-execution-plan.md): `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments, keyed by registry name and `@rev`; the profile comments stop carrying numbers
+- Options: bounds with margins as the review sketches them; the measured values as the sources report them, with the gate's tolerances applied by `fv-lab`; numbers copied from the nearest measured configuration when the variant itself has none; only cited numbers, with every absence declared
+- Decision: **a new library crate `fastvideo-lab` defines the format (`Gold`, `validate`, `load_dir`, `schemas/gold.v1.json`); every numeric field is optional, a present one must be cited by a `[[source]]` (path, heading, date) and an absent one declared by a `[[gap]]` with its reason, both enforced by the parser; the first 30 files hold the sources' measured values (no margins, no rescaling, no borrowing from nearby configurations, which are cited in notes); the most recent dated source wins and both are cited; `cost.usd_per_hr` is the class's most recent dated price ($2.49/hr, RTX PRO 6000, EU-RO-1, 2026-10-14) and `usd_per_clip` the one derived value; profile comments point to the gold files and `docs/techniques.md` and a CPU test rejects measurement-looking numbers in them; `lab/tiers.toml` is left to D1**
+- Reason: a gold standard that invents is worse than none; the gaps are D3's GPU work list; the gate's tolerances are already the repository's rule
+- Reversibility: cheap (this repository's format, versioned by `schema`; nothing published depends on it)
+- Executed by: Executor (plan D2)
+- ADR: docs/adr/0009-gold-standard-files.md
+- Verification: `cargo test -p fastvideo-lab` (unit tests; every gold file parses and validates; gold files == family variant ids both ways; family, tier and profile agree; cited paths exist; no measurement in a profile comment; schema drift); profiles' TOML values unchanged (comment-only diff)
+
 ### FVID · 2026-10-24 · FVID-2026-10-24-settings-layer
 - Trigger: plan B3 (docs/plan/2026-10-23-execution-plan.md): the `FASTVIDEO_*` table from one declarative list, the direct reads routed through the settings layer, the scope doc generated, byte-identical
 - Options: a typed key per setting at every call site; string literals at the call sites with the list made authoritative by workspace scan tests; the list and readers in a new dependency-free crate or in `fastvideo-models`; route the direct reads through the layered reader (`settings::var`) or through an env-only reader
@@ -943,3 +963,32 @@ Project code: FVID
 - ADR: none
 - Verification: CPU tests on the fake causal model (`tests/segments.rs`); GPU smoke 2026-10-21 on an H100 (docs/serve/segments.md §6): four 6 s segments, 2.9 s generation per segment in steady state, the seam between segments 0 and 1 indistinguishable from an inter-frame difference, `stale_blocks`/`discarded_blocks` as designed
 
+### FVID · 2026-10-24 · FVID-2026-10-24-a4-toml-parser
+- Trigger: plan A4 needs `control/gen-configs.mjs` (plain Node) to read `families/*.toml`; control had no TOML parser (wrangler bundles its own, not importable) and Node 22 has none
+- Options: a hand-written TOML-subset parser in the generator; `smol-toml`; `@iarna/toml` (TOML 0.5, unmaintained)
+- Decision: `smol-toml` 1.9.1 as a pinned devDependency of `control/` (TOML 1.0, zero dependencies); the generator validates the shape it reads (`parseFamily`) and tests pin a fixture
+- Reason: the family files use tables, arrays of tables and typed arrays a subset parser would get subtly wrong; the dependency is small, well known and dev-only
+- Reversibility: cheap (one import)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: none (ADR-0008 covers the format)
+- Verification: `node gen-configs.mjs --check`, `test/unit/families-gen.test.ts`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-a4-generator-scope
+- Trigger: plan A4 lists presets, `enums.ts`, `variants.sh`, `families.tsv`, autoscale pools, `verify-weights.sh` cells and the `images.md` table as generated; the family manifests carry no deployment data (image variant, config, pool sizes, machine types, cells by component)
+- Options: invent a `[deploy]` section now; generate only what the manifests derive and cross-check the rest; leave everything hand-written until C1
+- Decision: the generator owns the identity-derived parts only (`families-gen.ts`, `volumes.ts` `EU_TREES` from `volumes.sh`, `families.tsv` `weight_trees` / `served`, `verify-weights.sh` `variant_trees`), consumers derive from the tables (`recipe-trees.ts`, every model preset's `weights` / `min_vram_gb`, the `family` enum) and `--check` cross-checks the hand-written copies (`catalog.json`, `autoscale.toml`, `volumes.sh`); deployment data stays hand-written for C1. Names the manifests lack (`longlive-1.3b`, `lightx2v-turbo-v0.1`) are recorded exceptions, not invented variants
+- Reason: no invented data; the family files are A3's to change; a generated region with a hand-written source is still one source
+- Reversibility: cheap (C1 extends the same generator)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: none
+- Verification: `gen-configs.mjs --check` and the control unit tests in `.github/workflows/control.yml`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-a4-control-workflow
+- Trigger: A4 needs `gen-configs.mjs --check` and the control unit tests in CI; no workflow ran them (control's vitest suite was not in CI, which let one test go stale after F2)
+- Options: a job in `serve-compat.yml` (its `paths` would then run the ten compat suites on every control change); a new node-only workflow
+- Decision: `.github/workflows/control.yml`: `npm ci`, `--check`, typecheck, vitest, `scripts/gpu/lint.sh`, on changes to the generator's inputs and outputs
+- Reason: minutes instead of a Rust build and a browser matrix; the same pinned-by-tag action style
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: none
+- Verification: the workflow on the A4 PR

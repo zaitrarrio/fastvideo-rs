@@ -56,7 +56,7 @@ parallel agents.
 | F1 | Delete the six `scripts/vast-*.sh`, `scripts/docker-build-cuda.sh`, `scripts/gpu/serverless-worker.sh`, `scripts/gpu/upstream_bench.py`, `scripts/gpu/build-remote.sh`, `scripts/gpu/prompts-flux2.json`, `scripts/gpu/sage/{run,vast-run,setup}.sh`; move the 24 port one-offs and `runpod-matrix.sh` to `scripts/gpu/experiments/`; remove the `h3-*`/`ltx2-*` tiers from `validate.sh` and the README Vast sections; fix `docs/serve/images.md:87`, `scripts/gcp/weights.sh:3-4`, ADR-0001 and `docs/scope.md` (removed backends, `unsafe` scope); add `docs/ports/CHECKLIST.md` | no reference to a deleted path remains (`grep`), `scripts/gpu/lint.sh` passes, README describes the Runpod path | `bash scripts/gpu/lint.sh`; `task check` lint part on the pod | none | merged (#139) |
 | F2 | One formatting commit; fix the 27 clippy lints; `task check` runs `cargo fmt --check` and `clippy -D warnings` as real gates; `gpucheck-t0` runs them | `cargo fmt --check` and `cargo clippy --workspace --all-targets -D warnings` green | pod | F1 (to avoid churn) | merged (#142) |
 | F3a | Serving hardening from review §7.7: per-job deadline in `StepControl`, bounded engine event channel, per-model duration and queue-wait histograms, residency gauges, `otel` feature implemented | tests in `fastvideo-engine-service` and `fastvideo-serve`; `scripts/serve/check.sh` green | pod | none | merged (#140; `otel` deferred to F3c) |
-| F3c | Implement the `otel` feature (OpenTelemetry export of the trace recorder's spans) | spans visible in an OTLP collector | pod | F3a | todo |
+| F3c | Implement the `otel` feature (OpenTelemetry export of the trace recorder's spans) | spans visible in an OTLP collector | pod | F3a | pr (draft; live-collector check pending) |
 | F3b | Delete `multiworker.rs` and `server.workers_max`; rename `[gateway]` to `[cluster]`, drop `gw_workers` | config round-trip tests | pod | owner decision (Runpod LB mode) | blocked |
 
 ### Phase 1: the manifest (Workstream A)
@@ -66,7 +66,7 @@ parallel agents.
 | A1 | `crates/fastvideo-manifest` layer 1: modules `name`, `model_toml`, `manifest`, `lineage`, `sig`, `schema`; the registry's WO-001 contracts verbatim plus the two widenings (`[variant]`, `[runtime]` recipe/profile, `[caps]`); fixtures under `crates/fastvideo-manifest/fixtures/` (valid and ≥25 invalid names with error kinds, model.toml valid/invalid, manifests with `.digest` siblings, test keys, lineage chains); proptest round-trip; `schemas/*.json` export with a drift test; ADR-0005 naming, ADR-0006 model.toml, ADR-0007 manifest/digest/lineage/signatures | all WO-001 acceptance tests green on CPU; no I/O, no CUDA, `unsafe` forbidden | `cargo test -p fastvideo-manifest` on the pod; clippy -D warnings | none | merged (#143) |
 | A2 | Layer 2 types (`family`, `variant`, `tiers`) and the first three family files `families/{h3,ltx2,wan}.toml` authored from `engine-service/src/cuda/caps.rs`; an equality test proving `catalog()` equals the manifest projection row for row | equality test green for every catalog row | pod | A1 | pr |
 | A3 | Engine projection: `model_from_config` resolves through the manifest; `validate.rs` and `protocol::ModelCaps` ranges come from it; `[aliases]`, `served_names`, `[protocols]` derived; the 35 serve TOMLs reduced to variant ids and residency; the fake backend serves the manifest; `catalog()` deleted | zero hand-written catalog rows; zero `[aliases]` blocks; `dimension_sweep.rs` and `tests/e2e.rs` green; `/fv/v1/capabilities` unchanged for every config (golden) | pod; serve-compat CI | A2 | todo |
-| A4 | Control-plane and script generation from the families: `control/gen-configs.mjs` emits presets, `enums.ts` ids, `recipe-trees.ts`, `r2-trees.ts`, `weights-sources.ts`, `volumes.ts`; `variants.sh` tables, `volumes.sh`, `gcp/families.tsv`, `autoscale.toml` pools, `verify-weights.sh` cells and `docs/serve/images.md` table generated with `--check` in CI | `gen-configs.mjs --check` green; control unit tests green | pod (node + vitest) | A2 | todo |
+| A4 | Control-plane and script generation from the families: `control/gen-configs.mjs` emits presets, `enums.ts` ids, `recipe-trees.ts`, `r2-trees.ts`, `weights-sources.ts`, `volumes.ts`; `variants.sh` tables, `volumes.sh`, `gcp/families.tsv`, `autoscale.toml` pools, `verify-weights.sh` cells and `docs/serve/images.md` table generated with `--check` in CI | `gen-configs.mjs --check` green; control unit tests green | pod (node + vitest) | A2 | pr |
 | A5 | Registry hand-off: publish layer 1 (git dependency at a pinned rev); the registry's WO-001 scaffolds against it | registry WO-001 green | registry repo | A1 | active |
 
 ### Phase 2: inference core structure (Workstream B, first half)
@@ -90,7 +90,7 @@ parallel agents.
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
 | D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | todo |
-| D2 | `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments; keyed by registry name and `@rev` | every served variant has a gold file; comments in `profiles/` no longer carry numbers | pod | A2 | todo |
+| D2 | `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments; keyed by registry name and `@rev` | every served variant has a gold file; comments in `profiles/` no longer carry numbers | pod | A2 | pr |
 | D3 | `fv-lab report tiers` and the generated `docs/perf/tiers.md` | table generated from one run set | pod; **GPU** the gold runs | D1, D2 | todo |
 | D4 | CI bridge: gold files parse and resolve; `last_validated.commit` age check; an on-demand `fv-lab run gold --all` workflow | visible per-model validation age in CI | CI | D3 | todo |
 
@@ -257,6 +257,74 @@ ran (pod id, $/hr), result, cost.
   Evidence: `artifacts/runpod/techniques/51898b8-10240107/compare/`. Main
   (A2, E4) merged into the branch: no cudarc or gpucheck file changed since
   the baseline, so the GPU evidence stands for the merged head.
+- 2026-10-24 01:40Z: A4 opened a draft PR (`claude/a4-control-gen`): the
+  family manifests are parsed by `control/gen-configs.mjs` (smol-toml 1.9.1,
+  the one new devDependency) and generate `control/src/families-gen.ts`, the
+  `EU_TREES` region of `volumes.ts` (from `volumes.sh`), the `weight_trees` /
+  `served` columns of `scripts/gcp/families.tsv` and the `variant_trees`
+  region of `verify-weights.sh` (new `variant:<id>` cells); `recipe-trees.ts`
+  and every model preset's `weights` / `min_vram_gb` derive from them;
+  cross-checks tie `catalog.json`, `autoscale.toml` and `volumes.sh` to the
+  manifests. Byte-identical except the two H3 `weight_trees` cells of
+  `families.tsv` (order). Found: `longlive-1.3b` and the lightx2v v0.1 recipe
+  have no variant in the manifests (recorded as exceptions, for A3). In this
+  container (node 22, no Rust): `gen-configs.mjs --check`, `npm run
+  typecheck`, 43 vitest files (one pre-existing failure fixed: a test grepped
+  a `caps.rs` line F2 reformatted), `scripts/gpu/lint.sh` green. New workflow
+  `.github/workflows/control.yml` runs them. Deployment data stays hand-written
+  for C1 (presets, image variants, `variants.sh`, autoscale pools, the
+  component cells, the `images.md` table).
+- 2026-10-24 01:37Z: F3c opened a draft PR (`claude/f3c-otel`): the `otel`
+  feature of `fastvideo-serve` implemented (`src/otel.rs`, `[otel]` config
+  section with `FV_OTEL*` overrides, off by default; OTLP over
+  http/protobuf; one trace per job: a `job` span with id / model / api /
+  status / queue-wait / inference durations and the recorder's events as
+  spans under the request's trace id; `tracing-opentelemetry` layer in
+  `init_tracing`). Crates `opentelemetry*` 0.33.1 and
+  `tracing-opentelemetry` 0.34.0 (6 new lockfile entries, nothing bumped).
+  On build pod `i8tu0lpdb6nvov`: `cargo test -p fastvideo-serve` 83 unit
+  tests and `--features otel` 88 (5 `otel::tests`, the config round-trip),
+  every integration suite green both ways; `cargo clippy --workspace
+  --all-targets -D warnings` and the `otel` clippy green; `cargo fmt
+  --check` green; `scripts/serve/check.sh` 987 cargo tests + 45
+  release.test + 2 node, exit 0 in 245 s. Not done: a run against a live
+  OTLP collector (needs a pod with a collector; recorded as pending in
+  docs/serve/tracing.md).
+- 2026-10-24 02:10Z: D2 opened a draft PR (`claude/d2-gold-files`):
+  `crates/fastvideo-lab` (lib: `gold` types, `validate`, `load_dir`,
+  `schemas/gold.v1.json`, the `profiles` comment lint), 30
+  `lab/gold/<variant>.toml` (one per family variant id), `lab/README.md`,
+  ADR-0009; the measurement lines of 20 `profiles/h3/*.toml` comments
+  replaced by pointers (comment-only: every profile parses to the same TOML).
+  Every number in a gold file is cited by a `[[source]]` and every absent one
+  declared by a `[[gap]]`, both enforced by the parser: 14 of 30 variants
+  carry a clip time, 3 a PSNR against upstream, 0 a `[last_validated]`; 10
+  variants carry no measurement but the class price (the D3 work list). On
+  build pod `i8tu0lpdb6nvov`: `cargo test --locked -p fastvideo-lab` 19
+  passed (10 unit, 6 gold-files, 1 profile lint, 2 schema), `cargo fmt --all
+  --check` and `cargo clippy --locked --workspace --all-targets -D warnings`
+  green. Lockfile: the new crate only. `lab/tiers.toml` and
+  `lab/cells/*.toml` left to D1 (wall caps, stages and cells are not in any
+  document).
+- 2026-10-24 02:25Z: D2 review fixes on #151 (coordinator decisions in the
+  decision log, FVID-2026-10-24-gold-tier-gpu-and-settings): quality numbers
+  measured on an H100 are gaps with the values in source notes
+  (`fasth3-4step-vsa`, `ltx25-ref2v`); numbers measured under a non-default
+  setting stay only with the setting named in `workload.note` and the new
+  `workload.env` (`FASTVIDEO_H3_VAE_MXFP8=0` on the pre-2026-10-14 H3 runs,
+  `FASTVIDEO_WAN_QUANT=mxfp8` on the Wan TAEHV arms; `fasth3-trim-nvfp4`
+  un-gapped under the same rule); `quality.cell` on the Trim and V2 TAEH3
+  files; `[[source]]` heading and date required, every heading checked
+  against its file; the profile lint catches ranges with a unit, `×` / `X`
+  / spaced speed-ups, more units and metric names up to three words before
+  the value, and lets scale factors and clip lengths pass;
+  `fastvideo-lab`, `lab/**`, `profiles/**`, `families/**` in the
+  adapter-tests workflow and `scripts/serve/coverage.sh`. Coverage now: p50
+  17/30, PSNR vs upstream 1/30, LPIPS 0/30, 11 variants with the price only.
+  On `i8tu0lpdb6nvov`: `cargo test --locked -p fastvideo-lab` 28 passed (17
+  unit, 8 gold-files, 1 profile lint, 2 schema); the coverage crate set
+  (`cargo test --locked` of its 12 crates) 748 passed, 0 failed; fmt, clippy
+  `-D warnings` and `scripts/gpu/lint.sh` green.
 - 2026-10-24 02:55Z: B3a opened as draft PR #153 (`claude/b3-settings`): the
   declarative `FASTVIDEO_*` list (`techniques::settings::SETTINGS`, 222 rows:
   112 layered, 108 env-only, 2 reserved), the 112 direct and 27 indirect

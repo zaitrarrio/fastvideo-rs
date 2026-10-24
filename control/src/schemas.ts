@@ -8,6 +8,7 @@
 import { z } from "zod";
 import type { Policies } from "./alerts";
 import CATALOG from "./cluster/catalog.json";
+import { MODEL_FAMILY_IDS } from "./families";
 import { AVAILABLE_REGIONS, REGIONS, type RegionId } from "./cluster/regions";
 import {
   BREV_DISK_MAX_GB,
@@ -141,7 +142,7 @@ const sha = z.string().regex(SHA_RE, { message: "7-40 lower-case hex characters"
 
 // The fv-serve catalog (cluster/catalog.json): static per build, so they are enums.
 const MODEL_IDS = CATALOG.models.map((m) => m.id) as [string, ...string[]];
-const FAMILY_IDS = CATALOG.families.map((f) => f.id) as [string, ...string[]];
+const FAMILY_IDS = MODEL_FAMILY_IDS as [string, ...string[]]; // the family manifests (families/*.toml); catalog.json's agree (gen-configs.mjs --check)
 const SERVABLE_RECIPES = CATALOG.recipes.filter((r) => r.serve).map((r) => r.id) as [string, ...string[]];
 const familyOfModel = new Map(CATALOG.models.map((m) => [m.id, m.family]));
 const familyOfRecipe = new Map(CATALOG.recipes.map((r) => [r.id, r.family]));

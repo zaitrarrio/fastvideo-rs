@@ -1,0 +1,124 @@
+# Gold standard of `ltx25-distill-dense` (ltx2, max): docs/adr/0009-gold-standard-files.md.
+# Every number is copied from the [[source]] that cites it; absent numbers are listed under [[gap]].
+# `fv-lab run gold` (plan D1/D3) fills [last_validated] and replaces these with its own run record.
+# Served as ltx-pro: LTX-2.5 distilled two-stage, dense stage 2; SageAttention2 on sm_120.
+
+schema = 1
+
+[model]
+variant = "ltx25-distill-dense"
+family = "ltx2"
+profile = "ltx2/ltx25_distill_dense"
+
+[tier]
+name = "max"
+gpu = "RTX PRO 6000 Blackwell"
+sm = 120
+vram_gib = 96
+offer = "runpod: NVIDIA RTX PRO 6000 Blackwell Server Edition, EU-RO-1 (plan §1: the gold-standard GPU)"
+
+[workload]
+width = 1920
+height = 1088
+frames = 121
+fps = 24
+steps = 11
+prompt_set = "ltx-multishot, ltx-newsbroadcast, ltx-frogyoga (scripts/gpu/prompts-eval.json) x 3 seeds (own, +1000, +2000)"
+seeds = [42, 1042, 2042]
+note = "steps = 8 stage-1 + 3 stage-2. The ltx-pro gate under the calibrated rule: one RTX PRO 6000 Server Edition pod (p63ptu6lo1wbgb, EUR-IS-1, $2.09/hr), image fastvideo-rs-serve:sha-ee9de1a, 1920x1080 requested (1088 generated), 5 s, 9 clips per arm after a warm-up, kernel picks pinned; SageAttention2 on, as the recipe runs on sm_120."
+
+[workload.upstream]
+target = "ltx25-512p-dense"
+image = "sol-ltx25"
+rev = "fd4ded7"
+
+[latency]
+measures = "end_to_end"
+p50_s = 31.73
+denoise_s = 20.0
+note = "benchmark.json total_s with the prompt cached (median of 9); denoise 20.00 s = stage 1 6.59 s + stage 2 12.49 s with Sage, against 22.85 s / 34.29 s for the bf16 cuDNN arm (1.142x denoise, 1.08x total). A serve job of the same model logged denoise 22.80 s (Sage, first routed call)."
+
+[quality]
+cell = "oracle: 768x512x121, dense stage 2, the matrix prompt, seed 1024; sol-engine gpu_infer.py on Lightricks/LTX-2 fd4ded7, all 18 seeded draws, both text contexts and the stage-2 entry state injected."
+oracle = "pass: LTX-2.5 distilled two-stage, dense stage 2, at 512p our bf16 run is closer to the reference than to our own f32 run at every block and step (typically by 2x in the blocks); what is left is below the model's bf16/f32 noise floor (docs/oracle.md)."
+gate = "pass under the calibrated rule (docs/perf/sage-attention.md §9): SageAttention2, on by default for this recipe on sm_120, against the bf16 dense kernels; 3 of 3 prompts inside the bf16 band, no outlier; LPIPS 0.18-0.31 and PSNR 21.1-25.5 dB against the bf16 control (the control's own kernel swap: 0.16-0.37 / 18.2-26.3 dB)."
+note = "The gate compares Sage against our own bf16 arms, not against upstream; per-prompt sharpness ratios 0.992-1.016, jitter 0.98-1.02."
+
+[cost]
+usd_per_hr = 2.49
+usd_per_clip = 0.02195
+
+[last_validated]
+# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+
+[[source]]
+fields = ["latency.measures", "latency.p50_s", "latency.denoise_s", "quality.gate", "workload"]
+path = "docs/perf/sage-attention.md"
+heading = "9.2 Results"
+date = "2026-10-02"
+note = "Arms table: cud 22.85 / 34.29 s, fw2 22.74 / 34.33 s, sage 20.00 / 31.73 s (denoise / total, median of 9); per-prompt LPIPS / PSNR table; verdict ltx-pro Sage PASS."
+
+[[source]]
+fields = ["quality.oracle", "quality.cell", "workload.upstream"]
+path = "docs/oracle.md"
+heading = "LTX-2.5 distilled two-stage, 512p (sol-engine gpu_infer.py, bf16 pipeline)"
+date = "2026-10-12"
+note = "Dense stage 2 column: s1 blocks 3.3e-3 (0) to 2.3e-2 (47), s2 latents 1.3e-2 / 4.8e-2 / 8.0e-2; the f32 floor table gives ours-bf16 vs ours-f32 0.44 at s1 step 8 against 0.34 vs the reference."
+
+[[source]]
+fields = []
+path = "docs/perf/sage-attention.md"
+heading = "8.1 What is merged (a)"
+date = "2026-10-02"
+note = "ltx25-distill-dense is the only recipe that opts into SageAttention2 (sm_120 only); its edit routes (retake, extend) and the Ref2V / A2V companions stay bf16."
+
+[[source]]
+fields = ["cost.usd_per_hr", "cost.usd_per_clip"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
+date = "2026-10-14"
+note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
+
+[[gap]]
+field = "latency.min_s"
+why = "the source gives medians of 9 only"
+
+[[gap]]
+field = "latency.max_s"
+why = "the source gives medians of 9 only"
+
+[[gap]]
+field = "latency.decode_s"
+why = "not reported separately (total minus denoise includes the upsample and host glue)"
+
+[[gap]]
+field = "latency.load_s"
+why = "not reported per model (wall of 9 clips + warm-up + load: 536 s)"
+
+[[gap]]
+field = "latency.peak_gib"
+why = "not reported in the ltx-pro gate"
+
+[[gap]]
+field = "quality.psnr_vs_upstream_min_db"
+why = "the T2V oracle reports per-tensor rel-L2, no decoded-clip PSNR against the reference"
+
+[[gap]]
+field = "quality.lpips_vs_upstream_max"
+why = "the T2V oracle reports per-tensor rel-L2, no LPIPS against the reference"
+
+[[gap]]
+field = "quality.sharpness_ratio"
+why = "the calibrated gate reports per-prompt ratios (0.992-1.016), no pooled median"
+
+[[gap]]
+field = "quality.jitter_ratio"
+why = "the calibrated gate reports per-prompt ratios (0.98-1.02), no pooled median"
+
+[[gap]]
+field = "latency.fps"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "latency.ttff_s"
+why = "a clip, not a stream"

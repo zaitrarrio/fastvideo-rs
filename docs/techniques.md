@@ -264,7 +264,7 @@ techniques, parameters and settings as the shipped profile of the same name.
 | `h3/fasth3_8step_sol` | `8step` | `sol_attn` (tau 1.0, text sink, no dense step or block), `mxfp8`, `bf16_activations` |
 | `h3/fasth3_8step_teacache` | `8step` | `vsa`, `teacache` (threshold 1.0, retain 3, cooldown 3: only steps 3-4 can reuse), `mxfp8`, `bf16_activations` |
 | `h3/fasth3_8step_sol_teacache` | `8step` | both of the above |
-| `h3/fasth3_8step_vsa*`, `_sol_vsa_d2*`, `_sol_d2`, `h3/fasth3_4step_vsa0925` / `095*`, `h3/sol_h3_4step_engine_t075` / `_ladder`, `h3/rtx5090_fullopt_d6` / `_t125`, `*_fp8attn` | per recipe | the `h3attn` arms (below); each profile's first line holds its numbers |
+| `h3/fasth3_8step_vsa*`, `_sol_vsa_d2*`, `_sol_d2`, `h3/fasth3_4step_vsa0925` / `095*`, `h3/sol_h3_4step_engine_t075` / `_ladder`, `h3/rtx5090_fullopt_d6` / `_t125`, `*_fp8attn` | per recipe | the `h3attn` arms (below); their numbers are in the table below, and a served variant's in its gold file (`lab/gold/<variant>.toml`) |
 | `ltx2/ltx25_rtx5090_distill_bf16` | (two-stage) | `sol_attn` (`ltx25_stage2`), `bf16_linears`, `offload.placement = "cpu"` |
 | `ltx2/ltx25_distill_sol` | (two-stage) | `sol_attn` (`ltx25_stage2`) |
 | `ltx2/ltx25_distill_dense` | (two-stage) | `dense_attention` |
@@ -466,8 +466,10 @@ LPIPS, and the `lossy` gate against the recipe's own profile. Every arm of a
 recipe ran in one process (`h3 gen --arm NAME=PROFILE`), so all arms of a
 recipe loaded the weights once and ran warm. Each table value is the median
 over the prompts. "sharp. min" is the worst prompt's sharpness ratio; the
-gate's hard floor is 0.95. Each arm is a profile under `profiles/h3/`, and its
-numbers are in the profile's first line. No default changed.
+gate's hard floor is 0.95. Each arm is a profile under `profiles/h3/`; its
+numbers are in this table (profile comments carry no numbers since plan D2),
+and a served variant's in its gold file (`lab/gold/<variant>.toml`, e.g.
+`sol-h3`, `fasth3-4step-vsa`). No default changed.
 
 ```bash
 FV_FAMILY=h3attn FV_PROMPTS=5 FV_LPIPS=1 scripts/gpu/runpod-http.sh run <sha7>

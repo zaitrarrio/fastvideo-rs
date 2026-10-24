@@ -44,6 +44,9 @@ CRATES=(
   fastvideo-fal
   fastvideo-reactor
   fastvideo-serve
+  # The gold files and the profile-comment lint (plan D2, ADR-0009): its tests read
+  # lab/gold, families and profiles, so they run on every PR that touches them.
+  fastvideo-lab
 )
 PKGS=()
 for c in "${CRATES[@]}"; do PKGS+=(-p "$c"); done
