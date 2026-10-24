@@ -31,7 +31,8 @@
 # after the container starts, the pod deletes itself with the pod-scoped key,
 # so a dead driver cannot leave it running); the pod also deletes itself after
 # FV_IDLE_GPU_MIN (default 10) minutes at 0 % GPU once it has used the GPU
-# (idle_watchdog).
+# (idle_watchdog). Both self-deletes are GraphQL podTerminate: Runpod refuses
+# the pod-scoped key a REST DELETE (HTTP 403; ADR-0023 §4).
 #
 # RUNPOD_VOLUME_NAME may name several weight volumes; the one whose DC has
 # stock for the GPU is used. RUNPOD_NO_VOLUME=1 mounts none and takes any
@@ -136,6 +137,15 @@ idle_watchdog() {
   [[ "$idle" == 0 ]] && return 0
   cat <<WDEOF
 ( used=0; n=0; tx0=0
+  fv_self_delete() {
+    # GraphQL podTerminate: the pod-scoped key may not DELETE through REST (HTTP 403,
+    # docs/adr/0023-lab-report-and-ci-bridge.md §4). Success: HTTP 200 and no "errors".
+    code=\$(curl -sS --max-time 30 -o "\$1.resp" -w '%{http_code}' -X POST https://api.runpod.io/graphql \\
+      -H 'Content-Type: application/json' -H "Authorization: Bearer \$RUNPOD_API_KEY" \\
+      --data "{\\"query\\":\\"mutation { podTerminate(input: {podId: \\\\\\"\$RUNPOD_POD_ID\\\\\\"}) }\\"}" 2>>"\$1")
+    { cat "\$1.resp"; echo " http=\$code"; } >>"\$1" 2>/dev/null
+    [ "\$code" = 200 ] && ! grep -q '"errors"' "\$1.resp"
+  }
   txb() { awk 'NR > 2 { sub(/^[ \t]+/, ""); split(\$0, f, /[: ]+/); if (f[1] != "lo") s += f[10] } END { printf "%.0f", s }' /proc/net/dev 2>/dev/null || echo 0; }
   [ "$net" = net ] && tx0=\$(txb)
   while sleep 60; do
@@ -146,7 +156,7 @@ idle_watchdog() {
     lim=$grace; [ "\$used" = 1 ] && lim=$idle
     if [ "\$n" -ge "\$lim" ] && [ -n "\${RUNPOD_API_KEY:-}" ] && [ -n "\${RUNPOD_POD_ID:-}" ]; then
       echo "\$(date -u +%FT%TZ) idle \$n min at 0 % GPU: deleting pod \$RUNPOD_POD_ID" >>/tmp/idle-watchdog.log
-      curl -sS -X DELETE -H "Authorization: Bearer \$RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/\$RUNPOD_POD_ID" >>/tmp/idle-watchdog.log 2>&1
+      fv_self_delete /tmp/idle-watchdog.log
     fi
   done ) >/dev/null 2>&1 &
 WDEOF
@@ -165,12 +175,21 @@ start_cmd() {
 set -u
 # The pod's own wall cap (FV_POD_CAP_S, docs/adr/0023-lab-report-and-ci-bridge.md §4):
 # $CAP_S s after the container starts it deletes itself with the pod-scoped key
-# Runpod injects, retrying each minute, whatever the driver's host did.
+# Runpod injects (GraphQL podTerminate), retrying each minute, whatever the driver's host did.
 if [ -n "\${RUNPOD_API_KEY:-}" ] && [ -n "\${RUNPOD_POD_ID:-}" ]; then
-  ( sleep $CAP_S
+  ( fv_self_delete() {
+      # GraphQL podTerminate: the pod-scoped key may not DELETE through REST (HTTP 403,
+      # docs/adr/0023-lab-report-and-ci-bridge.md §4). Success: HTTP 200 and no "errors".
+      code=\$(curl -sS --max-time 30 -o "\$1.resp" -w '%{http_code}' -X POST https://api.runpod.io/graphql \\
+        -H 'Content-Type: application/json' -H "Authorization: Bearer \$RUNPOD_API_KEY" \\
+        --data "{\\"query\\":\\"mutation { podTerminate(input: {podId: \\\\\\"\$RUNPOD_POD_ID\\\\\\"}) }\\"}" 2>>"\$1")
+      { cat "\$1.resp"; echo " http=\$code"; } >>"\$1" 2>/dev/null
+      [ "\$code" = 200 ] && ! grep -q '"errors"' "\$1.resp"
+    }
+    sleep $CAP_S
     while :; do
       echo "\$(date -u +%FT%TZ) wall cap $CAP_S s: deleting pod \$RUNPOD_POD_ID" >>/tmp/cap-watchdog.log
-      curl -fsS -X DELETE -H "Authorization: Bearer \$RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/\$RUNPOD_POD_ID" >>/tmp/cap-watchdog.log 2>&1 && break
+      fv_self_delete /tmp/cap-watchdog.log && break
       sleep 60
     done ) >/dev/null 2>&1 &
 fi

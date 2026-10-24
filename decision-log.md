@@ -1631,3 +1631,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0023-lab-report-and-ci-bridge.md §1, §2, §4
 - Verification: `pod::tests::{every_pod_deletes_itself_at_its_wall_cap, the_ledger_lists_pods_created_and_not_deleted, cells_must_be_arms_of_the_tier}`, `tests/fv_lab_bin.rs` (`pod down --from-ledger`, `pod up --cells`), `tests/payload_golden.rs` against the regenerated `runpod-http-*.json`, `goldcheck` and `goldcell::drift` unit tests, `tests/tiers_report.rs`; gates on the build pod
+
+### FVID · 2026-10-24 · FVID-2026-10-24-pod-self-delete-graphql
+- Trigger: the coordinator's live test of #181's pod-side wall cap (2026-10-24 21:16–21:45Z, EU-RO-1): pod `pq69qpoh5b0mxy` (`FV_POD_CAP_S=240`, driver and backstop killed) was still running after nine minutes; on a CPU probe pod the pod-scoped `RUNPOD_API_KEY` gets HTTP 403 on `DELETE rest.runpod.io/v1/pods/$RUNPOD_POD_ID`, while GraphQL `podTerminate` with the same key answered 200 and the pod was gone within a second
+- Options: GraphQL `podTerminate`; REST with another key in the pod (a full account key on every pod: no)
+- Decision: every in-pod self-delete of the GPU test pods (the cap and idle watchdogs of `runpod-http.sh` `idle_watchdog` / `start_cmd` and fv-lab's `src/pod-start.sh.in`) calls GraphQL `podTerminate` with the pod-scoped key; success = HTTP 200 without `"errors"`, retried each minute; no REST DELETE left there; the other REST self-deletes are listed in ADR-0023 §4 as a follow-up (scripts/serve, experiments, control, fv-boot's watchdog), not changed in this PR
+- Reason: the idle watchdogs documented since D1a never deleted a pod; only the driver-side backstop did
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ); probes by the coordinator
+- ADR: docs/adr/0023-lab-report-and-ci-bridge.md §4
+- Verification: `pod::tests::every_pod_deletes_itself_at_its_wall_cap`; the rendered function run locally against a fake curl (200 + data: success; 200 + errors and 403: retry; the request body is exactly the probe's); payload goldens regenerated and equal; the coordinator's live cap test on the pushed commit

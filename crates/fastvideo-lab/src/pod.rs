@@ -942,16 +942,33 @@ cells = ["c"]
         let t = tier();
         let mut o = StartOptions::for_tier(&t, "abcdef1-1");
         assert_eq!(o.cap_s, t.wall_cap_s);
+        // The self-delete is GraphQL podTerminate with the pod-scoped key: Runpod
+        // refuses that key a REST DELETE (HTTP 403, ADR-0023 §4). Success is an
+        // HTTP 200 without "errors"; anything else is retried.
+        let graphql = r#"-X POST https://api.runpod.io/graphql"#;
+        let mutation = r#"--data "{\"query\":\"mutation { podTerminate(input: {podId: \\\"$RUNPOD_POD_ID\\\"}) }\"}""#;
+        let success = r#"[ "$code" = 200 ] && ! grep -q '"errors"' "$1.resp""#;
         for idle in [10, 0] {
             o.idle_min = idle;
             let s = start_command(&o).unwrap();
-            let cap = format!("( sleep {}\n    while :; do", t.wall_cap_s);
+            let cap = format!("    sleep {}\n    while :; do", t.wall_cap_s);
             let at = s.find(&cap).expect("the cap watchdog");
             // Started before anything that can block (the server, the run).
             assert!(at < s.find("fv-gpucheck serve").unwrap());
-            assert!(s.contains(
-                "curl -fsS -X DELETE -H \"Authorization: Bearer $RUNPOD_API_KEY\" \"https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID\" >>/tmp/cap-watchdog.log 2>&1 && break"
-            ));
+            assert!(
+                s.contains("      fv_self_delete /tmp/cap-watchdog.log && break\n      sleep 60\n")
+            );
+            // One definition per watchdog (the idle one only when it runs).
+            let defs = if idle == 0 { 1 } else { 2 };
+            assert_eq!(s.matches(graphql).count(), defs, "idle {idle}");
+            assert_eq!(s.matches(mutation).count(), defs, "idle {idle}");
+            assert_eq!(s.matches(success).count(), defs, "idle {idle}");
+            if idle != 0 {
+                assert!(s.contains("      fv_self_delete /tmp/idle-watchdog.log\n"));
+            }
+            // No REST delete anywhere (it never worked with the pod's key).
+            assert!(!s.contains("rest.runpod.io"));
+            assert!(!s.contains("-X DELETE"));
             assert!(!s.contains("@CAP_S@"));
         }
         o.cap_s = 0;

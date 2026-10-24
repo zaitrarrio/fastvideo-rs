@@ -119,6 +119,7 @@ has the name. Results land in `artifacts/runpod/<tier>/<tag>/` (the same place a
 host that outlives the tier's wall cap (4 h for `rtx6000`): the backstop process runs there. The pod also deletes
 itself after 10 idle GPU minutes (the start command's idle watchdog, with the pod-scoped key Runpod injects),
 and at the tier's wall cap after its container starts (the cap watchdog, ADR-0023 §4), whatever happens to that host.
+Both use GraphQL `podTerminate`: the pod-scoped key gets HTTP 403 on a REST DELETE.
 After an interrupted `up` (its pod record is only written once the pod is ready), `pod down --from-ledger` deletes
 what the ledger shows created and not deleted.
 

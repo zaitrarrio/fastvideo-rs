@@ -141,11 +141,45 @@ shown as failed: that is a finding, not a number.
      deleted). `pod down <id>` no longer needs a pod record either.
   2. Every fv-lab pod deletes itself at its tier's wall cap: the start command (`src/pod-start.sh.in`, and
      `runpod-http.sh start_cmd` in lockstep, so the payload goldens stay equal) starts a cap watchdog that sleeps
-     `wall_cap_s` (`FV_POD_CAP_S` on the script side) after the container starts, then DELETEs the pod with the
-     pod-scoped key Runpod injects, retrying each minute. It counts from the container start, so it fires up to the
+     `wall_cap_s` (`FV_POD_CAP_S` on the script side) after the container starts, then terminates the pod with the
+     pod-scoped key Runpod injects (GraphQL `podTerminate`, below), retrying each minute until it succeeds. It counts from the container start, so it fires up to the
      boot time after the driver-side backstop would have; it is the guard for a dead runner, not a tighter cap. A
      `StartOptions` without a cap is refused. (The script's `upstream` mode start command is unchanged.)
-  3. The idle watchdog (10 GPU-idle minutes) as before.
+  3. The idle watchdog (10 GPU-idle minutes), now through the same GraphQL call, so it actually works (below).
+
+  **The pod-scoped key cannot delete through REST (live evidence, coordinator, 2026-10-24 21:16–21:45Z, EU-RO-1 with
+  `bz0ofkfx45`).** (1) RTX PRO 6000 pod `pq69qpoh5b0mxy` via `runpod-http.sh run` with `FV_POD_CAP_S=240`, the driver
+  and its backstop killed right after the create: the REST cap watchdog of the first version of this change did not
+  fire; the pod was still running nine minutes later and was deleted by hand. (2) A CPU probe pod (python image):
+  `RUNPOD_API_KEY` and `RUNPOD_POD_ID` are set inside, but `DELETE https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID`
+  with `Authorization: Bearer $RUNPOD_API_KEY` answers HTTP 403 every time. (3) A second CPU probe pod: `POST
+  https://api.runpod.io/graphql`, `Content-Type: application/json`, the same Bearer key, body
+  `{"query":"mutation { podTerminate(input: {podId: \"<RUNPOD_POD_ID>\"}) }"}` answered 200
+  `{"data":{"podTerminate":null}}` and the pod was gone within a second. So every in-pod self-delete through REST
+  with the pod-scoped key never worked, the existing idle watchdogs of `runpod-http.sh` and fv-lab's start command
+  included (their documented "the pod deletes itself after 10 idle GPU minutes" was not true until now).
+
+  Both watchdogs now call `fv_self_delete`: curl `POST https://api.runpod.io/graphql` with that body and the Bearer
+  key (never printed), the response into `<log>.resp` and the log; success is HTTP 200 with no `"errors"` in the
+  body, anything else is retried (the cap watchdog every 60 s until success; the idle watchdog each minute while
+  idle). No REST DELETE remains in either start command. `pod::tests::every_pod_deletes_itself_at_its_wall_cap` pins
+  the call (endpoint, mutation, success rule, one definition per watchdog) and the absence of `rest.runpod.io` and
+  `-X DELETE`; the payload goldens are regenerated from the script and equal. The script's `upstream` mode shares
+  `idle_watchdog`, so its pods get the fix too.
+
+  **Follow-up, not changed here** (in-pod REST self-deletes with the pod-scoped `RUNPOD_API_KEY`, the same defect):
+  `scripts/serve/e2e/pod-boot.sh:49`, `scripts/serve/e2e/ltx-pod.sh:49`, `scripts/gpu/family-pool-pod.sh:40`,
+  `scripts/gpu/family-pool-validate.sh:82`, `scripts/gpu/sol-bench-pod.sh:41`, and the one-offs under
+  `scripts/gpu/experiments/` (`h3-tier-ship-validate.sh:126`, `h3-fp4attn-validate.sh:110`,
+  `h3-tier-options-pod.sh:81`, `h3-turbo-loras-validate.sh:96`, `vdn-h3-validate.sh:120`, `h3-glue-pod.sh:52`,
+  `h3-glue-validate.sh:113`, `vdn-h3-pod.sh:53`, `h3-graphs-validate.sh:107`, `h3-graphs-pod.sh:92`,
+  `h3-fp4attn-pod.sh:82`, `h3-tier-ship-pod.sh:74`, `h3-trim-pod.sh:56`, `h3-trim-validate.sh:120`,
+  `h3-tier-options-validate.sh:126`, `fasth3-nvfp4-validate.sh:93`, `h3-trim-nvfp4-pod.sh:48`,
+  `fasth3-nvfp4-pod.sh:56`, `h3-turbo-loras-pod.sh:49`, `h3-trim-nvfp4-validate.sh:83`; plan D1e retires them). With
+  another key, to be checked: `control/src/cluster/payloads.ts:54` and `crates/fastvideo-deploy/src/boot/watchdog.rs:139`
+  (`delete_runpod`, REST with `FV_BACKSTOP_API_KEY`, which also counts any HTTP answer, a 403 included, as done).
+  `scripts/dev/build-pod-server.py:73` already falls back to GraphQL. `artifacts/perf/h3-trim-vae-mxfp8/driver/`
+  is committed evidence and stays as run.
 - **The secret's scope.** `RUNPOD_API_KEY` is a step-level env of the three steps that call Runpod (the refusal check,
   `pod up`, `pod down`), never the job's: the cargo build scripts and the third-party actions never see it. The
   third-party actions of both workflows are pinned by commit, read from their tags with `git ls-remote` on 2026-10-24:
