@@ -204,6 +204,90 @@ an RTX PRO 6000, pod direct. Overhead A/B: every traced − untraced median
 difference is inside its 95 % bootstrap interval (denoise +6.5 ms of 7.1 s
 at 480P, +14.5 ms of 19.2 s at 768P); 0 events dropped.
 
+## OpenTelemetry export
+
+Status: **built 2026-10-24** (F3c of `docs/plan/2026-10-23-execution-plan.md`),
+validated on CPU with an in-memory exporter and the OTLP exporter built
+against no collector; **verification against a live OTLP collector is
+pending** (a GPU pod with a collector sidecar, or any `otel/opentelemetry-collector`
+with the `otlp` receiver's HTTP port 4318).
+
+The recorder above is the source of truth; this sends the same events to
+an OTLP collector so they can be looked at next to other services' traces.
+It is compiled in by the cargo feature `otel` of `fastvideo-serve`
+(`cargo build -p fastvideo-serve --features otel,…`; the default image does
+not carry it) and turned on by the `[otel]` section (`src/config.rs`); a
+build without the feature accepts the section, warns when `enabled` and
+exports nothing. Off by default either way; nothing changes without both.
+
+```toml
+[otel]
+enabled = true                                   # FV_OTEL=1
+endpoint = "http://127.0.0.1:4318/v1/traces"     # FV_OTEL_ENDPOINT: the full traces URL, used as given
+protocol = "http/protobuf"                       # FV_OTEL_PROTOCOL: the only protocol built (no gRPC/tonic)
+service_name = "fv-serve"                        # FV_OTEL_SERVICE_NAME: resource service.name
+sample_ratio = 1.0                               # FV_OTEL_SAMPLE_RATIO: head sampling by trace id, 0..=1
+timeout_ms = 10000                               # FV_OTEL_TIMEOUT_MS: one export request
+```
+
+What a collector shows for a traced job (`crates/fastvideo-serve/src/otel.rs`):
+
+- one trace per request, under the request's W3C trace id (the same id as
+  `GET /fv/v1/traces/{id}`, `traceparent` and the console's waterfall);
+- a `job` span per job, opened at submit and ended when the job ends: at
+  its terminal event, or as `failed` when the engine drops the job without
+  one (the gate records that as a failure in the store too), with the
+  attributes `fv.job` (job id), `fv.model`, `fv.api`, `fv.status`
+  (`succeeded` / `failed` / `cancelled`; `failed` sets the span's error
+  status), `fv.queue_wait_ms` (submit → `Started`), `fv.inference_ms`
+  (`Started` → the engine's terminal event, an on-demand load included, as
+  `fv_job_inference_seconds`) and `fv.duration_ms`;
+- every event of the [event list](#event-list) as a finished span named
+  `<comp>.<name>` (`queue.wait`, `engine.run`, `gpu.denoise.step`,
+  `post.finalize`, `upload.artifact_put`, `store.terminal`, …) with its
+  start and duration as recorded and the attributes `fv.trace_id`,
+  `fv.comp`, `fv.stage` (the event name), `fv.clock` (`host` / `gpu`),
+  `fv.host`, `fv.dur_ms`, `fv.arg`, `fv.t_mono_ns` and `fv.attrs` (JSON):
+  the same fields the log shipper's `fv_trace` lines carry. The job's
+  phases (`queue`, `engine`, `gpu`, `post`, `upload`, `store.terminal*`)
+  are children of the `job` span; the request's own steps (`http.*`,
+  `adapter.*`, `store.insert` / `get` / `lookup`, `front.*`, `worker.*`)
+  are roots in the same trace, since the recorder keeps no span ids
+  (the `job` span's id is derived from the trace id).
+
+**One job per trace.** The `job` span's id is derived from the trace id,
+so the model assumes one job per trace: a client that submits two jobs
+under the same `traceparent` (the console and the bench never do; an
+instrumented SDK that reuses one trace for a batch would) gets two `job`
+spans with the same span id and the phases of both under that one id. Use
+a fresh trace per submit.
+
+Sampling is the SDK's `TraceIdRatioBased` rule applied per trace, so a
+trace is exported whole or not at all; the events are converted on the
+recorder's drain thread and sent by the SDK's batch processor on its own
+thread (OTLP over HTTP with the blocking reqwest client), so a traced
+request's path is unchanged: the hot path is still the recorder's
+`try_send`. The SDK's own failures (unreachable collector, export
+timeouts, queue drops) are logged through `tracing` (targets
+`opentelemetry*`, features `internal-logs`). At exit the recorder's drain
+is flushed (2 s) before the batch processor, so the last events become
+spans and leave with the process.
+
+The process's own `tracing` spans go through a `tracing-opentelemetry`
+layer in `main.rs`'s `init_tracing` as well. At the default `info` filter
+there are none; at `RUST_LOG=debug` tower-http's per-request `request`
+spans (and any other `debug` spans) become OTel spans too, each under its
+own, fresh trace id, not linked to the fv trace of the request: look them
+up by time or `http.target`, not by the fv trace id.
+
+Edge and browser events posted to `/fv/v1/traces/{id}/events` are also
+exported (they pass through the same drain), on their own hosts' clocks
+(see [Clock alignment](#clock-alignment)). Crates (versions from
+`Cargo.lock`): `opentelemetry` / `opentelemetry_sdk` / `opentelemetry-otlp`
+0.33.1 (`trace`, `http-proto`, `reqwest-blocking-client`: the workspace's
+reqwest 0.13, prost 0.14 and http 1 serve them, no second copy),
+`tracing-opentelemetry` 0.34.0.
+
 ## Prometheus metrics
 
 Traces answer "what happened to this request"; the series below answer

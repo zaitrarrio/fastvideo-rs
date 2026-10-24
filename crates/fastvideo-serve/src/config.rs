@@ -33,6 +33,7 @@
 //! | `FV_R2_BUCKET`, `FV_R2_ENDPOINT`, `FV_R2_ACCESS_KEY_ID`, `FV_R2_SECRET_ACCESS_KEY` | `artifacts.s3.*` (R2: region `auto`) |
 //! | `FV_S3_ENDPOINT`, `FV_S3_REGION`, `FV_S3_BUCKET`, `FV_S3_ACCESS_KEY_ID`, `FV_S3_SECRET_ACCESS_KEY` | `artifacts.s3.*` (generic S3) |
 //! | `FV_LOG_FORMAT` (`text` \| `json`), `RUST_LOG` | logging |
+//! | `FV_OTEL` (`0` \| `1`), `FV_OTEL_ENDPOINT`, `FV_OTEL_PROTOCOL` (`http/protobuf`), `FV_OTEL_SERVICE_NAME`, `FV_OTEL_SAMPLE_RATIO` (0..=1), `FV_OTEL_TIMEOUT_MS` | `[otel]`: OpenTelemetry (OTLP) export of the request traces; needs the `otel` cargo feature, off by default (docs/serve/tracing.md "OpenTelemetry export") |
 //! | `FV_SERVE_ROLE` (`standalone` \| `worker`) | `server.role` (a worker of a cluster: an edge front, a direct worker or an executor; docs/serve/edge-control-plane.md) |
 //! | `FV_INTERNAL_TOKEN` | `gateway.internal_token` (edge ↔ worker; never a user key) |
 //! | `FV_GATEWAY_POOL` | `gateway.pool` (a worker's pool: its `gw_workers` row, the per-pool object socket) |
@@ -1249,6 +1250,85 @@ impl Default for LogCfg {
     }
 }
 
+/// `[otel]`: OpenTelemetry export of the request traces (docs/serve/tracing.md
+/// "OpenTelemetry export"). Off by default; the export code is compiled in by
+/// the `otel` cargo feature (a build without it accepts the section, warns
+/// when `enabled` and exports nothing).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct OtelCfg {
+    /// Export spans (`FV_OTEL=1`).
+    pub enabled: bool,
+    /// The collector's OTLP/HTTP traces URL, used as given (the SDK appends
+    /// nothing): `http://127.0.0.1:4318/v1/traces` by default.
+    pub endpoint: String,
+    /// `http/protobuf` (the only protocol built; gRPC is not).
+    pub protocol: String,
+    /// `service.name` of the exported resource.
+    pub service_name: String,
+    /// Head sampling by trace id, 0..=1 (1: every traced request).
+    pub sample_ratio: f64,
+    /// Export request timeout.
+    pub timeout_ms: u64,
+}
+
+impl OtelCfg {
+    /// The one protocol the exporter speaks.
+    pub const PROTOCOL: &'static str = "http/protobuf";
+
+    pub fn timeout(&self) -> Duration {
+        Duration::from_millis(self.timeout_ms)
+    }
+
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.protocol != Self::PROTOCOL {
+            return Err(ConfigError::Invalid(format!(
+                "[otel] protocol = `{}`: only `{}` is built",
+                self.protocol,
+                Self::PROTOCOL
+            )));
+        }
+        if !(0.0..=1.0).contains(&self.sample_ratio) {
+            return Err(ConfigError::Invalid(format!(
+                "[otel] sample_ratio = {}: expected 0..=1",
+                self.sample_ratio
+            )));
+        }
+        if self.timeout_ms == 0 {
+            return Err(ConfigError::Invalid(
+                "[otel] timeout_ms must be 1 or more".into(),
+            ));
+        }
+        if self.service_name.trim().is_empty() {
+            return Err(ConfigError::Invalid(
+                "[otel] service_name must not be empty".into(),
+            ));
+        }
+        let u = url::Url::parse(&self.endpoint)
+            .map_err(|e| ConfigError::Invalid(format!("[otel] endpoint: {e}")))?;
+        if !matches!(u.scheme(), "http" | "https") || u.host_str().is_none() {
+            return Err(ConfigError::Invalid(format!(
+                "[otel] endpoint `{}`: an http(s) URL with a host",
+                self.endpoint
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl Default for OtelCfg {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: "http://127.0.0.1:4318/v1/traces".into(),
+            protocol: Self::PROTOCOL.into(),
+            service_name: "fv-serve".into(),
+            sample_ratio: 1.0,
+            timeout_ms: 10_000,
+        }
+    }
+}
+
 /// `[moderation]`: optional prompt admission checks (design §10 R8;
 /// docs/ports/h3-turbo-loras.md "NCII guard"). Off by default.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1339,6 +1419,8 @@ pub struct Config {
     /// Prompt admission checks (the NCII guard); off by default.
     pub moderation: ModerationCfg,
     pub log: LogCfg,
+    /// OpenTelemetry export of the request traces; off by default.
+    pub otel: OtelCfg,
     /// Ed25519 seed for fal webhooks (normally `FV_WEBHOOK_ED25519_KEY`).
     pub webhook_key: Secret,
     pub gateway: GatewayCfg,
@@ -1755,6 +1837,36 @@ impl Config {
         if let Some(v) = env.var("RUST_LOG") {
             self.log.filter = v;
         }
+        self.apply_otel_env(env)?;
+        Ok(())
+    }
+
+    /// `FV_OTEL*` → `[otel]`.
+    fn apply_otel_env(&mut self, env: &dyn Env) -> Result<(), ConfigError> {
+        if let Some(v) = env.var("FV_OTEL") {
+            self.otel.enabled = matches!(v.trim(), "1" | "true" | "on" | "yes");
+        }
+        if let Some(v) = env.var("FV_OTEL_ENDPOINT") {
+            self.otel.endpoint = v.trim().to_owned();
+        }
+        if let Some(v) = env.var("FV_OTEL_PROTOCOL") {
+            self.otel.protocol = v.trim().to_owned();
+        }
+        if let Some(v) = env.var("FV_OTEL_SERVICE_NAME") {
+            self.otel.service_name = v.trim().to_owned();
+        }
+        if let Some(v) = env.var("FV_OTEL_SAMPLE_RATIO") {
+            self.otel.sample_ratio = v.trim().parse().map_err(|_| {
+                ConfigError::Invalid(format!("FV_OTEL_SAMPLE_RATIO={v} is not a number"))
+            })?;
+        }
+        if let Some(v) = env.var("FV_OTEL_TIMEOUT_MS") {
+            self.otel.timeout_ms = v.trim().parse().map_err(|_| {
+                ConfigError::Invalid(format!(
+                    "FV_OTEL_TIMEOUT_MS={v} is not a number of milliseconds"
+                ))
+            })?;
+        }
         Ok(())
     }
 
@@ -1823,6 +1935,7 @@ impl Config {
             u.validate()?;
         }
         self.moderation.validate()?;
+        self.otel.validate()?;
         if self.server.workers_max == 0 {
             return Err(ConfigError::Invalid(
                 "server.workers_max must be 1 or more".into(),
@@ -2104,6 +2217,74 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn otel_default_off_env_file_and_validation() {
+        let c = Config::default();
+        assert!(!c.otel.enabled, "off by default");
+        assert_eq!(c.otel.endpoint, "http://127.0.0.1:4318/v1/traces");
+        assert_eq!(c.otel.protocol, OtelCfg::PROTOCOL);
+        assert_eq!(c.otel.service_name, "fv-serve");
+        assert_eq!(c.otel.sample_ratio, 1.0);
+        assert_eq!(c.otel.timeout(), std::time::Duration::from_secs(10));
+        c.validate().unwrap();
+        // An absent section parses to the defaults; the section round-trips.
+        let t: Config = toml::from_str("[server]\nbind = \"127.0.0.1:1\"\n").unwrap();
+        assert_eq!(t.otel, OtelCfg::default());
+        let text = toml::to_string(&c).unwrap();
+        assert!(text.contains("[otel]"), "{text}");
+        let back: Config = toml::from_str(&text).unwrap();
+        assert_eq!(back.otel, c.otel);
+        let t: Config = toml::from_str(
+            "[otel]\nenabled = true\nendpoint = \"https://otel.example/v1/traces\"\nsample_ratio = 0.5\n",
+        )
+        .unwrap();
+        assert!(t.otel.enabled);
+        assert_eq!(t.otel.endpoint, "https://otel.example/v1/traces");
+        assert_eq!(t.otel.sample_ratio, 0.5);
+        t.validate().unwrap();
+        // Environment over the file.
+        let mut c = t;
+        c.apply_env(&env(&[
+            ("FV_OTEL", "0"),
+            ("FV_OTEL_ENDPOINT", "http://collector:4318/v1/traces"),
+            ("FV_OTEL_SERVICE_NAME", "fv-serve-eu"),
+            ("FV_OTEL_SAMPLE_RATIO", "0.25"),
+            ("FV_OTEL_TIMEOUT_MS", "2500"),
+        ]))
+        .unwrap();
+        assert!(!c.otel.enabled);
+        assert_eq!(c.otel.endpoint, "http://collector:4318/v1/traces");
+        assert_eq!(c.otel.service_name, "fv-serve-eu");
+        assert_eq!(c.otel.sample_ratio, 0.25);
+        assert_eq!(c.otel.timeout_ms, 2500);
+        c.validate().unwrap();
+        c.apply_env(&env(&[("FV_OTEL", "1")])).unwrap();
+        assert!(c.otel.enabled);
+        assert!(c
+            .apply_env(&env(&[("FV_OTEL_SAMPLE_RATIO", "half")]))
+            .is_err());
+        assert!(c.apply_env(&env(&[("FV_OTEL_TIMEOUT_MS", "x")])).is_err());
+        // Validation: the one protocol, the ratio range, the URL.
+        for (text, needle) in [
+            ("[otel]\nprotocol = \"grpc\"\n", "protocol"),
+            ("[otel]\nsample_ratio = 1.5\n", "sample_ratio"),
+            ("[otel]\nsample_ratio = -0.1\n", "sample_ratio"),
+            ("[otel]\ntimeout_ms = 0\n", "timeout_ms"),
+            ("[otel]\nservice_name = \" \"\n", "service_name"),
+            ("[otel]\nendpoint = \"collector:4318\"\n", "endpoint"),
+            ("[otel]\nendpoint = \"ftp://x/v1/traces\"\n", "endpoint"),
+        ] {
+            let t: Config = toml::from_str(text).unwrap();
+            let err = t.validate().unwrap_err().to_string();
+            assert!(err.contains(needle), "{text}: {err}");
+        }
+        // Unknown keys are refused like in every section.
+        assert!(toml::from_str::<Config>("[otel]\nheaders = {}\n").is_err());
+        // The printed config shows the section (nothing in it is secret).
+        let v = Config::default().redacted();
+        assert_eq!(v["otel"]["enabled"], serde_json::json!(false));
     }
 
     #[test]

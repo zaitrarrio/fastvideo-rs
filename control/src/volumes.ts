@@ -3,13 +3,15 @@
 // /runpod-volume/weights). A static list, not a live listing: fv-control
 // cannot read a volume without a pod. The source is scripts/gpu/volumes.sh
 // FV_EU_VOLUME_TREES (what r2-fill-volume.sh wrote and compared on
-// 2026-10-13) and docs/ops/runpod-volumes.md §1;
-// test/unit/serverless-presets.test.ts checks this list against volumes.sh.
-// A new tree on the volume (CLAUDE.md: add-only) is added here in the same change.
+// 2026-10-13) and docs/ops/runpod-volumes.md §1; the EU_TREES region below
+// is generated from it by control/gen-configs.mjs (`--check` in CI;
+// test/unit/serverless-presets.test.ts compares them too). A new tree on the
+// volume (CLAUDE.md: add-only) goes into volumes.sh, then `node gen-configs.mjs`.
 import { REGIONS } from "./cluster/regions";
 
 /** fv-weights-h3-ltx-500 (owner decision 2026-10-13: 500 GB, H3 + LTX only; everything else from R2). Full tree
  * names: a nested tree (h3-base/text_encoder_fp8) is on the volume only when it is listed itself. */
+// BEGIN GENERATED from scripts/gpu/volumes.sh FV_EU_VOLUME_TREES by control/gen-configs.mjs; do not edit
 export const EU_TREES = [
   "h3-base",
   "h3-base/text_encoder_fp8",
@@ -25,6 +27,7 @@ export const EU_TREES = [
   "auxiliary/tae",
   "auxiliary/lpips",
 ] as const;
+// END GENERATED
 
 /** Volume id → the weight trees on it (paths under weights/). */
 export const VOLUME_TREES: Record<string, readonly string[]> = {
