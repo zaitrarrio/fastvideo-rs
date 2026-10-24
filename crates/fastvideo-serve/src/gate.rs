@@ -306,6 +306,14 @@ async fn pump(
         }
     }
     if !ended {
+        // The engine dropped the job without a terminal event: failed, in the
+        // store and in the trace, so the phase spans' parent still arrives.
+        #[cfg(feature = "otel")]
+        {
+            if let Some(j) = otel_job.take() {
+                j.finish("failed");
+            }
+        }
         let e = ApiError::internal("the engine dropped the job");
         let _ = apply_event(&ctx, id, JobEvent::Failed(e)).await;
     }

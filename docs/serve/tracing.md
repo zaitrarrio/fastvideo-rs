@@ -234,8 +234,10 @@ What a collector shows for a traced job (`crates/fastvideo-serve/src/otel.rs`):
 
 - one trace per request, under the request's W3C trace id (the same id as
   `GET /fv/v1/traces/{id}`, `traceparent` and the console's waterfall);
-- a `job` span per job, opened at submit and ended at the terminal event,
-  with the attributes `fv.job` (job id), `fv.model`, `fv.api`, `fv.status`
+- a `job` span per job, opened at submit and ended when the job ends: at
+  its terminal event, or as `failed` when the engine drops the job without
+  one (the gate records that as a failure in the store too), with the
+  attributes `fv.job` (job id), `fv.model`, `fv.api`, `fv.status`
   (`succeeded` / `failed` / `cancelled`; `failed` sets the span's error
   status), `fv.queue_wait_ms` (submit → `Started`), `fv.inference_ms`
   (`Started` → the engine's terminal event, an on-demand load included, as
@@ -253,14 +255,30 @@ What a collector shows for a traced job (`crates/fastvideo-serve/src/otel.rs`):
   are roots in the same trace, since the recorder keeps no span ids
   (the `job` span's id is derived from the trace id).
 
+**One job per trace.** The `job` span's id is derived from the trace id,
+so the model assumes one job per trace: a client that submits two jobs
+under the same `traceparent` (the console and the bench never do; an
+instrumented SDK that reuses one trace for a batch would) gets two `job`
+spans with the same span id and the phases of both under that one id. Use
+a fresh trace per submit.
+
 Sampling is the SDK's `TraceIdRatioBased` rule applied per trace, so a
 trace is exported whole or not at all; the events are converted on the
 recorder's drain thread and sent by the SDK's batch processor on its own
 thread (OTLP over HTTP with the blocking reqwest client), so a traced
 request's path is unchanged: the hot path is still the recorder's
-`try_send`. The process's own `tracing` spans go through a
-`tracing-opentelemetry` layer in `main.rs`'s `init_tracing` as well (at the
-default `info` filter there are none); they carry their own trace ids.
+`try_send`. The SDK's own failures (unreachable collector, export
+timeouts, queue drops) are logged through `tracing` (targets
+`opentelemetry*`, features `internal-logs`). At exit the recorder's drain
+is flushed (2 s) before the batch processor, so the last events become
+spans and leave with the process.
+
+The process's own `tracing` spans go through a `tracing-opentelemetry`
+layer in `main.rs`'s `init_tracing` as well. At the default `info` filter
+there are none; at `RUST_LOG=debug` tower-http's per-request `request`
+spans (and any other `debug` spans) become OTel spans too, each under its
+own, fresh trace id, not linked to the fv trace of the request: look them
+up by time or `http.target`, not by the fv trace id.
 
 Edge and browser events posted to `/fv/v1/traces/{id}/events` are also
 exported (they pass through the same drain), on their own hosts' clocks

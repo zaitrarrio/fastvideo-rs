@@ -201,7 +201,10 @@ impl Exporter {
             parent,
             name: format!("{}.{}", e.comp, e.name),
             start,
-            end: start + Duration::from_nanos(e.dur_ns),
+            // `dur_ns` may come from the ingest endpoint: no overflow panic.
+            end: start
+                .checked_add(Duration::from_nanos(e.dur_ns))
+                .unwrap_or(start),
             attributes,
             status: Status::Unset,
         });
@@ -284,7 +287,8 @@ impl Exporter {
 
 /// The `job` span of a traced job: the gate's pump opens it at submit,
 /// notes the phases as the engine reports them and ends it at the terminal
-/// event ([`JobSpan::finish`]).
+/// event, or as `failed` when the engine drops the job without one
+/// ([`JobSpan::finish`]).
 #[derive(Debug)]
 pub struct JobSpan {
     trace: Trace,
@@ -351,9 +355,15 @@ pub fn export_event(e: &Event) {
     }
 }
 
-/// Flushes and stops the process's exporter (at exit).
+/// Flushes and stops the process's exporter (at exit): the recorder's drain
+/// first (its events become spans there), then the batch processor, so the
+/// last spans leave with the process. A process that traced nothing has no
+/// drain to wait for.
 pub fn shutdown() {
     if let Some(x) = G.get() {
+        if fastvideo_trace::started() {
+            fastvideo_trace::global().flush(Duration::from_secs(2));
+        }
         x.shutdown();
     }
 }
