@@ -104,13 +104,7 @@ pub fn require_tensor_cores() -> Result<()> {
                 "h3 nvfp4: needs a CUDA device (NVFP4 tensor cores, sm_100 / sm_120)",
             ));
         };
-        if d.sm_major < 10 {
-            return Err(msg(format!(
-                "h3 nvfp4: this GPU is sm_{}{}; the published NVFP4 DiT runs only on NVFP4 tensor cores (sm_100 / sm_120: B200, RTX PRO 6000, RTX 50xx). No bf16 fallback: serve the bf16 / MXFP8 Trim instead",
-                d.sm_major, d.sm_minor
-            )));
-        }
-        Ok(())
+        tensor_cores_of(d.sm_major, d.sm_minor)
     }
     #[cfg(not(feature = "cuda"))]
     {
@@ -118,6 +112,26 @@ pub fn require_tensor_cores() -> Result<()> {
             "h3 nvfp4: needs a CUDA build and NVFP4 tensor cores (sm_100 / sm_120)",
         ))
     }
+}
+
+/// [`require_tensor_cores`] for a global device of compute capability
+/// `device_sm`, as a load's plan decides it
+/// ([`crate::rt::load_stages::DeviceFacts::device_sm`]); `None` (no device)
+/// is the live refusal ([`require_tensor_cores`]: no device, or no CUDA build).
+pub fn require_tensor_cores_on(device_sm: Option<(i32, i32)>) -> Result<()> {
+    match device_sm {
+        Some((major, minor)) => tensor_cores_of(major, minor),
+        None => require_tensor_cores(),
+    }
+}
+
+fn tensor_cores_of(sm_major: i32, sm_minor: i32) -> Result<()> {
+    if sm_major < 10 {
+        return Err(msg(format!(
+            "h3 nvfp4: this GPU is sm_{sm_major}{sm_minor}; the published NVFP4 DiT runs only on NVFP4 tensor cores (sm_100 / sm_120: B200, RTX PRO 6000, RTX 50xx). No bf16 fallback: serve the bf16 / MXFP8 Trim instead"
+        )));
+    }
+    Ok(())
 }
 
 /// Byte offset of block scale `(r, c)` in the 128x4 tiled layout of a

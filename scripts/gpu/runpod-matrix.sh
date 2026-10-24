@@ -16,8 +16,14 @@
 #   FV_LPIPS=1: fetch-lpips.sh, then compare-clips adds LPIPS(alex).
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
+#
+# FV_DRY_RUN=1: no GPU and no weights needed. Each cell's command line is
+# logged instead of run (weights not verified, no baseline fetched), so a
+# family's cells can be read off-pod: FV_DRY_RUN=1 FV_WORK=/tmp/fv-dry
+# FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b6.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
+FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|b6|h3arms|h3attn}"
+DRY_RUN="${FV_DRY_RUN:-0}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -59,7 +65,7 @@ if [[ ! -e $SCRATCH/fv-libs/libcupti.so ]]; then
   [[ -e "$cupti_src" ]] && ln -sf "$(readlink -f "$cupti_src")" "$SCRATCH/fv-libs/libcupti.so"
 fi
 export LD_LIBRARY_PATH="$SCRATCH/fv-libs:/lib/x86_64-linux-gnu:/usr/local/cuda-13.0/lib64:/usr/local/cuda/lib64:/usr/local/cuda/targets/x86_64-linux/lib:${LD_LIBRARY_PATH:-}"
-[[ -e $SCRATCH/fv-libs/libcudnn.so ]] || { echo "FATAL: libcudnn.so not linked" | tee -a "$LOG"; exit 2; }
+[[ -e $SCRATCH/fv-libs/libcudnn.so || "$DRY_RUN" == 1 ]] || { echo "FATAL: libcudnn.so not linked" | tee -a "$LOG"; exit 2; }
 
 log() {
   local line
@@ -135,6 +141,10 @@ run_cell() {
     log "skip $name (not in FV_CELLS)"
     return 0
   fi
+  if [[ "$DRY_RUN" == 1 ]]; then
+    log "dry-run $name: $(printf '%q ' "$@")"
+    return 0
+  fi
   if ! gpu_clean; then
     mkdir -p "$RUNS/$name"
     write_json "$RUNS/$name/summary.json" "$(printf '{"cell":"%s","family":"%s","exit":null,"skipped":"gpu not clean"}' "$name" "$FAMILY")"
@@ -182,7 +192,7 @@ gated_cell() {
     log "skip $name (not in FV_CELLS)"
     return 0
   fi
-  if ! FV_WEIGHTS="$W" bash "$VERIFY" "$wcell" >"$RUNS/$name.weights.log" 2>&1; then
+  if [[ "$DRY_RUN" != 1 ]] && ! FV_WEIGHTS="$W" bash "$VERIFY" "$wcell" >"$RUNS/$name.weights.log" 2>&1; then
     mkdir -p "$RUNS/$name"
     log "SKIP $name: weights incomplete"
     tee -a "$LOG" <"$RUNS/$name.weights.log"
@@ -236,6 +246,10 @@ tae_gated_cell() {
 compare_one() {
   local tag="$1" bf="$2" cf="$3" dir="$RUNS/compare"
   shift 3
+  if [[ "$DRY_RUN" == 1 ]]; then
+    log "dry-run compare $tag $*"
+    return 0
+  fi
   mkdir -p "$dir"
   if ! compgen -G "$bf/*.png" >/dev/null || ! compgen -G "$cf/*.png" >/dev/null; then
     log "skip compare $tag (frames missing)"
@@ -390,13 +404,15 @@ oracle_diff() {
 }
 
 log "matrix start image=$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null || echo unknown)"
-if [[ ! -x "$BIN" ]]; then
-  log "FATAL: fv-gpucheck missing at $BIN"
-  exit 2
+if [[ "$DRY_RUN" != 1 ]]; then
+  if [[ ! -x "$BIN" ]]; then
+    log "FATAL: fv-gpucheck missing at $BIN"
+    exit 2
+  fi
+  command -v nvidia-smi >/dev/null || { log "FATAL: nvidia-smi missing"; exit 2; }
+  nvidia-smi -L | tee -a "$LOG"
+  nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader | tee -a "$LOG"
 fi
-command -v nvidia-smi >/dev/null || { log "FATAL: nvidia-smi missing"; exit 2; }
-nvidia-smi -L | tee -a "$LOG"
-nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader | tee -a "$LOG"
 
 case "$FAMILY" in
   mmaudio)
@@ -1968,6 +1984,97 @@ Audio: male speech, clear voice, quiet room"
     for c in "$RUNS"/*-base "$RUNS"/*-env "$RUNS"/*-prof; do
       [[ -d "$c" ]] || continue
       log "$(basename "$c") $(grep -ho '"denoise_s":[0-9.]*\|"total_s":[0-9.]*' "$c/stderr.log" 2>/dev/null | tail -2 | tr '\n' ' ')"
+    done
+    ;;
+  b6)
+    # Plan B6 (docs/adr/0017-loader-stages.md): byte identity of the load
+    # paths the plan / open / place / fuse split moved, beyond the
+    # `techniques` cells. Each cell runs the baseline binary (FV_BASELINE_SHA's
+    # runtime image, fetch-baseline.sh) and this build with the same command
+    # line and environment, then compare-clips --off-identity. Short on
+    # purpose (480p / 5 s H3 at 4 forwards, 49- to 121-frame LTX); every arm
+    # encodes its prompt (--no-text-cache), so no arm compares a cache hit
+    # with a fresh encode. Only trees of the EU volume (volumes.sh
+    # FV_EU_VOLUME_TREES); the NVFP4 and VDN loads have no tree there.
+    # FV_B6_CELLS narrows the cells (default: all eight).
+    base_sha="${FV_BASELINE_SHA:?b6 family needs FV_BASELINE_SHA (the commit before the loader split)}"
+    BASE="$SCRATCH/baseline-$base_sha/fv-gpucheck"
+    if [[ "$DRY_RUN" != 1 ]]; then
+      if ! bash "$(dirname "${BASH_SOURCE[0]}")/fetch-baseline.sh" "$base_sha" "$(dirname "$BASE")" >>"$RUNS/baseline-fetch.log" 2>&1; then
+        log "FATAL: baseline binary sha-$base_sha unavailable (baseline-fetch.log)"
+        tee -a "$LOG" <"$RUNS/baseline-fetch.log"
+        exit 2
+      fi
+      log "baseline $(tail -1 "$RUNS/baseline-fetch.log")"
+    fi
+    # A cold H3 load reads ~70 GB from the volume before its first step.
+    export FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-900}"
+    fx="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures"
+    b6_cells="${FV_B6_CELLS:-b6-solh3-tree b6-solh3-merge b6-4stepvsa-merge b6-h3-streamed b6-h3-ref2va b6-ltx25-ref2v b6-ltx25-a2v-guided b6-ltx25-offload-cpu}"
+    # b6_pair <cell> <weight cell> <env K=V ... or -> <fv-gpucheck args ...>:
+    # <cell>-base (the baseline binary) and <cell>-pr (this build), the
+    # frames under <cell>-<arm>/frames, then the byte-identity compare.
+    b6_pair() {
+      local cell="$1" wcell="$2" envs="$3" arm bin
+      shift 3
+      [[ " $b6_cells " == *" $cell "* ]] || { log "skip $cell (not in FV_B6_CELLS)"; return 0; }
+      # shellcheck disable=SC2206
+      local e=($envs)
+      [[ "$envs" == - ]] && e=()
+      for arm in base pr; do
+        bin="$BIN"
+        [[ "$arm" == base ]] && bin="$BASE"
+        gated_cell "$cell-$arm" "$wcell" \
+          env ${e[@]+"${e[@]}"} "$bin" "$@" "$RUNS/$cell-$arm/frames"
+        # What the load decided, for the report: the stage logs both arms write.
+        grep -h 'h3 dit\|h3 text encoder: auto\|h3 dit offload\|h3 i2v encoder\|h3 sol-h3\|h3 fasth3-preview\|h3 lora merge\|ltx2 dit offload\|ltx2 offload\|ltx2 ic-lora\|ltx2 lora\|load/io' \
+          "$RUNS/$cell-$arm/stderr.log" 2>/dev/null | sed "s/^/[$cell-$arm] /" | tee -a "$LOG" >/dev/null || true
+      done
+      compare_cells "$cell-base" "$cell-pr" --off-identity
+    }
+    # H3 at 480p / 5 s, the auto text encoder (resident FP8 on this card),
+    # each arm encoding its prompt. b6_pair appends the clip directory.
+    h3_b6=(--mode fast h3 gen --weights "$W/h3-base" --height 480 --width 832 --seconds 5
+      --prompt "$PROMPT" --seed "$SEED" --text-encoder auto --no-text-cache --no-mp4)
+    # 1. sol-h3 from h3-base/transformer_prequant_sol-h3_mxfp8 (the served
+    #    tree; selection keyed on the linear route and the quant mode).
+    b6_pair b6-solh3-tree sol-h3 - "${h3_b6[@]}" --h3-recipe sol-h3 --clip-dir
+    # 2. sol-h3 without the tree: the Sol-H3 adapter merged in place.
+    b6_pair b6-solh3-merge sol-h3 "FASTVIDEO_H3_DIT_TREE=off" "${h3_b6[@]}" --h3-recipe sol-h3 --clip-dir
+    # 3. FastH3 4-step VSA without the tree: the Preview LoRA merged at load.
+    b6_pair b6-4stepvsa-merge fasth3-4step-vsa "FASTVIDEO_H3_DIT_TREE=off" "${h3_b6[@]}" --h3-recipe 4step-vsa --clip-dir
+    # 4. Streamed: a 32 GiB budget on this card (the auto encoder streams,
+    #    the DiT streams, the decoders load for the decode only).
+    b6_pair b6-h3-streamed fasth3-4step-vsa "FASTVIDEO_DEVICE_BUDGET_GIB=32" "${h3_b6[@]}" --h3-recipe 4step-vsa --clip-dir
+    # 5. Ref2VA: transformer_ref from h3-ref2va, one image reference, the
+    #    vision tower resident beside the auto encoder; base-4step, dense.
+    b6_pair b6-h3-ref2va h3-ref2va - "${h3_b6[@]}" --h3-recipe base-4step --dense \
+      --ref-root "$W/h3-ref2va" --ref "$fx/ti2v-beach-832x480.jpg" --clip-dir
+    # LTX-2.5 two-stage, streamed Gemma, each arm encoding its prompt.
+    ltx_b6=(--mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --seed "$SEED"
+      --two-stage --text streamed --no-text-cache)
+    # 6. Reference-to-video: the Ingredients IC-LoRA attached unfused at
+    #    load, fused at stage 1 (the oracle's sheet and bucket, 49 frames).
+    b6_pair b6-ltx25-ref2v ltx25-ref2v - "${ltx_b6[@]}" --dit "$W/ltx25" \
+      --height 896 --width 1536 --num-frames 49 --dense-stage2 \
+      --reference "$fx/ltx-ref-sheet-768x448.png" \
+      --ic-lora "$W/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors" \
+      --prompt "Reference sheet: a rocky coastline at golden hour and a cartoon orange crab. Generated video: the crab scuttles across the wet sand." \
+      --clip
+    # 7. Guided audio-to-video on the dev DiT: the distilled LoRA pipeline
+    #    (DiT loaded on the first request, base kept in host memory), 8
+    #    stage-1 steps at 512p for 49 frames.
+    b6_pair b6-ltx25-a2v-guided ltx25-a2v-guided - "${ltx_b6[@]}" --dit "$W/ltx25-dev/transformer_full" \
+      --height 512 --width 768 --num-frames 49 --dense-stage2 --guided --num-inference-steps 8 \
+      --audio "$fx/speech-flite-44k.flac" \
+      --prompt "A close-up of a woman with short dark hair talking directly to the camera in a bright living room." \
+      --clip
+    # 8. --offload cpu at 512p: the DiT and Gemma streamed, the decoders on
+    #    the device around their calls.
+    b6_pair b6-ltx25-offload-cpu ltx25-two-stage - "${ltx_b6[@]}" --dit "$W/ltx25" \
+      --height 512 --width 768 --num-frames 121 --offload cpu --prompt "$PROMPT" --clip
+    for f in "$RUNS"/compare/compare-clips-b6-*.json; do
+      [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"
     done
     ;;
   h3arms)

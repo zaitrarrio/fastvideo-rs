@@ -47,6 +47,10 @@ use crate::wan::pipeline::{
 };
 pub use fastvideo_models::ltx2::memory::LtxOffload;
 
+mod load;
+use crate::rt::load_stages::DeviceFacts;
+pub use load::{Ltx2LoadPlan, Ltx2Opened, Ltx2Placed};
+
 use super::a2v::{DrivingAudio, Waveform};
 use super::audio_vae::{conform_audio_time, pack_audio_latent, AudioDecoder, AudioEncoder};
 use super::diffusion_decoder::DiffusionDecoder;
@@ -2924,9 +2928,15 @@ impl Ltx2Pipeline {
 
     /// [`Self::load`] with its `FASTVIDEO_*` settings from `settings`, a
     /// snapshot of the readers taken when the load starts
-    /// (`docs/adr/0010-settings-layer.md`): the reads below take it as a
-    /// parameter, and while the load runs this thread's readers serve it to
-    /// the code the load calls ([`Snapshot::scope`]).
+    /// (`docs/adr/0010-settings-layer.md`): the reads take it as a parameter,
+    /// and while the load runs this thread's readers serve it to the code the
+    /// load calls ([`Snapshot::scope`]).
+    ///
+    /// The load is four stages (`docs/adr/0017-loader-stages.md`): the plan
+    /// ([`Ltx2LoadPlan::new`]: pure, from the paths, config, options, the
+    /// snapshot and the [`DeviceFacts`] measured here), open
+    /// ([`Ltx2LoadPlan::open`]), place ([`Ltx2LoadPlan::place`]) and fuse
+    /// ([`Ltx2LoadPlan::fuse`]).
     pub fn load_with_settings(
         paths: &Ltx2Paths,
         cfg: &Ltx2Config,
@@ -2938,222 +2948,19 @@ impl Ltx2Pipeline {
         // FASTVIDEO_NVFP4 here is the video FFN only (sol-engine scope):
         // Gemma, the connectors and the other DiT linears stay dense.
         crate::rt::nvfp4::enter_ltx_video_ffn_scope();
-        let timer = Instant::now();
-        // A distilled checkpoint already carries the adapter: the RTX5090
-        // distilled two-stage (`run_ltx25_gpu.sh`) passes no LoRA. Only a dev
-        // transformer fuses one (two-stage stage 2, the refiners).
-        let lora = if cfg.scheduler.use_dynamic_shifting {
-            super::lora::resolve(&paths.weights, &paths.dit, cfg.version)?
-        } else {
-            None
-        };
-        let ic_lora = match resolve_ic_lora(options.ic_lora.as_deref(), settings) {
-            None => None,
-            Some(path) => {
-                if lora.is_some() || cfg.version != Ltx2ModelVersion::V25 {
-                    return Err(err(
-                        "ltx2 ic-lora: reference-to-video runs on the LTX-2.5 distilled DiT only",
-                    ));
-                }
-                if !path.is_file() {
-                    return Err(err(format!(
-                        "ltx2 ic-lora: {} is not a file",
-                        path.display()
-                    )));
-                }
-                let info = super::lora::ic_lora_info(&path)?;
-                if info.temporal_scale != 1 {
-                    return Err(err(format!(
-                        "ltx2 ic-lora: reference_temporal_scale_factor {} is not supported",
-                        info.temporal_scale
-                    )));
-                }
-                crate::rt::log::info(format_args!(
-                    "ltx2 ic-lora: {} ({} pairs, reference downscale {}, stage 1 only)",
-                    path.display(),
-                    info.pairs,
-                    info.downscale
-                ));
-                Some((path, info))
-            }
-        };
-        let active = fastvideo_models::techniques::settings::active();
-        if let Some(path) = active.path.as_ref() {
-            crate::rt::log::info(format_args!("ltx2 technique profile: {}", path.display()));
-            for (k, v, source) in active.settings.iter() {
-                crate::rt::log::info(format_args!(
-                    "ltx2 technique setting {k}={v} ({source}{})",
-                    if settings.env_var_os(k).is_some() {
-                        "; overridden by env"
-                    } else {
-                        ""
-                    }
-                ));
-            }
-            let has_taehv = active
-                .profile
-                .iter()
-                .flat_map(|p| p.techniques.iter())
-                .any(|t| {
-                    t.name() == "taehv" && t.active_somewhere(fastvideo_models::techniques::HORIZON)
-                });
-            if has_taehv && resolve_tae(options.tae.as_deref(), settings).is_none() {
-                return Err(err(
-                    "techniques.taehv: no weights (pass --ltx-tae-weights, set FASTVIDEO_LTX2_TAE_WEIGHTS, or give techniques.taehv.weights)",
-                ));
-            }
-        }
-        let offload = LtxOffload::from_settings_or(settings, options.offload).map_err(err)?;
-        let text_residency = resolve_text_for_offload(
-            offload,
-            options.text_residency,
-            settings.env_var("FASTVIDEO_LTX2_TEXT").ok().as_deref(),
-        )?;
-        let residency = {
-            let policy = dit_policy_for_offload(
-                offload,
-                DitOffload::from_settings_or(settings, options.dit_offload).map_err(err)?,
-            )?;
-            if offload.is_cpu() {
-                crate::rt::log::info(format_args!(
-                    "ltx2 offload cpu: DiT blocks streamed from pinned host memory ({} device slots), Gemma streamed per layer, connectors / upsampler / video VAE / audio VAE on the device only around their calls",
-                    crate::rt::offload::lookahead() + 1
-                ));
-            }
-            let w = fastvideo_models::ltx2::Rtx5090Workload::DEFAULT;
-            let need = fastvideo_models::ltx2::memory::plan_distilled_two_stage(
-                cfg,
-                w.height(),
-                w.width(),
-                w.num_frames(),
-                w.frame_rate(),
-                fastvideo_models::ltx2::memory::PlanOptions::default(),
-            )
-            .peak();
-            let free = crate::rt::device::free_memory().map(|(f, _)| f);
-            let residency = policy.resolve(need, free);
-            crate::rt::log::info(format_args!(
-                "ltx2 dit offload: {} -> {} (resident {} plan {:.1} GiB, {} free before load)",
-                policy.as_str(),
-                residency.as_str(),
-                w.name(),
-                need as f64 / f64::from(1u32 << 30),
-                free.map_or("unknown".into(), |f| format!(
-                    "{:.1} GiB",
-                    f as f64 / f64::from(1u32 << 30)
-                )),
-            ));
-            residency
-        };
-        let mut booking = crate::rt::ledger::Booking::default();
-        let io_base = fastvideo_loader::PrefetchStats::now();
-        let model = if lora.is_none() {
-            let map = open_distilled(&paths.dit, "transformer")?;
-            map.prefetch_all();
-            Some(booking.track(
-                crate::rt::ledger::DIT_NONLINEAR,
-                || {
-                    load_transformer_ic(
-                        &map,
-                        cfg,
-                        residency,
-                        ic_lora.as_ref().map(|(p, _)| p.as_path()),
-                    )
-                },
-                |_| None,
-            )?)
-        } else {
-            None
-        };
-        let decoders = if residency.is_streamed() {
-            None
-        } else {
-            Some(booking.track(
-                crate::rt::ledger::VAE,
-                || Decoders::load_without_upsampler(&paths.weights, cfg),
-                |_| None,
-            )?)
-        };
-        let has_upsampler =
-            cfg.latent_upsampler.is_some() && upsampler_dir(&paths.weights).is_some();
-        let tae = match resolve_tae(options.tae.as_deref(), settings) {
-            Some(path) => {
-                use crate::rt::taehv::{TaeArch, TaeHv};
-                if cfg.transformer.in_channels != TaeArch::LtxWide.latent_channels() {
-                    return Err(err(format!(
-                        "ltx2: the LTX tiny autoencoder decodes {}-channel latents, this line has {}",
-                        TaeArch::LtxWide.latent_channels(),
-                        cfg.transformer.in_channels
-                    )));
-                }
-                let tae = TaeHv::load_from_path(&path, TaeArch::LtxWide)
-                    .map_err(|e| err(format!("ltx2 tae {}: {e}", path.display())))?;
-                crate::rt::log::info(format_args!("ltx2 vae=taehv ({})", path.display()));
-                Some(tae)
-            }
-            None => None,
-        };
-        sync()?;
-        crate::rt::weights::log_load_io("ltx2 load", &io_base, timer.elapsed().as_secs_f64());
-        let loaded_strength = model.as_ref().map(|_| 0.0);
-        let mut text = TextEncoder::new(
+        let started = Instant::now();
+        let plan = Ltx2LoadPlan::new(
             paths,
             cfg,
-            &PipelineOptions {
-                text_residency,
-                ..options.clone()
-            },
-        );
-        // The first request encodes the prompt (Gemma), then a LoRA pipeline
-        // loads its DiT: queue both reads now, in that order.
-        text.warm()?;
-        let dit_warm = if model.is_none() {
-            let map = open_distilled(&paths.dit, "transformer")?;
-            map.prefetch_all();
-            Some(map)
-        } else {
-            None
-        };
-        let lora_base_host = match settings
-            .env_var("FASTVIDEO_LTX2_LORA_BASE")
-            .ok()
-            .as_deref()
-            .map(str::trim)
-        {
-            Some("host") => true,
-            Some("device") => false,
-            Some(other) if !other.is_empty() => {
-                return Err(err(format!(
-                    "FASTVIDEO_LTX2_LORA_BASE={other}: expected host or device"
-                )))
-            }
-            _ => options.lora_base_host,
-        };
-        if lora_base_host && lora.is_some() && residency.is_streamed() {
-            return Err(err(
-                "ltx2: a host-kept LoRA base needs a resident DiT (dit offload 'resident' or 'auto' with room)",
-            ));
-        }
-        Ok(Self {
-            lora_base_host,
-            ic_lora,
-            ic_strength: 0.0,
-            dit_warm: std::sync::Mutex::new(dit_warm),
-            cfg: cfg.clone(),
-            dit: paths.dit.clone(),
-            weights: paths.weights.clone(),
-            model,
-            lora,
-            loaded_strength,
-            decoders,
-            residency,
-            offload,
-            has_upsampler,
-            text,
-            load_s: timer.elapsed().as_secs_f64(),
-            booking,
-            tae,
-        })
+            options,
+            settings,
+            fastvideo_models::techniques::settings::active(),
+            DeviceFacts::measure(),
+            started,
+        )?;
+        let opened = plan.open()?;
+        let placed = plan.place(opened)?;
+        plan.fuse(placed)
     }
 
     /// Resident DiT fused at `strength`. `0` is the base checkpoint.

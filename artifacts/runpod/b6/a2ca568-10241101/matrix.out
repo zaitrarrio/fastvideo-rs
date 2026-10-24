@@ -1,0 +1,19 @@
+[11:01:57] [b6] matrix start image=414de85108d422e8
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-3554fcb7-e743-bce6-d821-16c243e5f45a)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[11:02:00] [b6] baseline baseline: sha-d061c68 layer sha256:088a1dcb4abb6ca49ac3a9af17dc9db1438df513743b04f1177c0eb041748f23 -> /fvscratch/baseline-d061c68/fv-gpucheck (a568234263b97c27)
+[11:02:00] [b6] skip b6-solh3-tree (not in FV_B6_CELLS)
+[11:02:00] [b6] skip b6-solh3-merge (not in FV_B6_CELLS)
+[11:02:00] [b6] skip b6-4stepvsa-merge (not in FV_B6_CELLS)
+[11:02:00] [b6] skip b6-h3-streamed (not in FV_B6_CELLS)
+[11:02:00] [b6] skip b6-h3-ref2va (not in FV_B6_CELLS)
+[11:02:00] [b6] skip b6-ltx25-ref2v (not in FV_B6_CELLS)
+[11:02:00] [b6] skip b6-ltx25-a2v-guided (not in FV_B6_CELLS)
+[11:02:02] [b6] ▶ b6-ltx25-offload-cpu-base  env /fvscratch/baseline-d061c68/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --seed 1024 --two-stage --text streamed --no-text-cache --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 121 --offload cpu --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --clip /fvscratch/runs/b6/a2ca568-10241101/b6-ltx25-offload-cpu-base/frames  (wall cap 3600s; 0=none)
+[11:15:36] [b6] ok b6-ltx25-offload-cpu-base  814s  
+[11:15:39] [b6] ▶ b6-ltx25-offload-cpu-pr  env /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --seed 1024 --two-stage --text streamed --no-text-cache --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 121 --offload cpu --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --clip /fvscratch/runs/b6/a2ca568-10241101/b6-ltx25-offload-cpu-pr/frames  (wall cap 3600s; 0=none)
+[11:20:44] [b6] ok b6-ltx25-offload-cpu-pr  305s  
+[11:20:44] [b6] compare b6-ltx25-offload-cpu-base--b6-ltx25-offload-cpu-pr exit=0 "psnr_mean":null 
+[11:20:44] [b6] compare-clips-b6-ltx25-offload-cpu-base--b6-ltx25-offload-cpu-pr.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 
+[11:20:44] [b6] matrix done
+matrix_exit=0

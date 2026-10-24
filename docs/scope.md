@@ -22,7 +22,6 @@ half. `--features cuda` needs a CUDA toolchain.
 | `fastvideo-core` | The `VideoFamily` trait and the static family list (Hub ids, resolution, each family's run), the common `Request` and `Request::validate(&ModelCaps)`, Wan sampling and `VideoGenerator` |
 | `fastvideo-cli` | `fastvideo list-models` / `generate` / `bench` / `schedule` over the family list; behaviour pinned by goldens (`tests/cli_golden.rs`) |
 | `fastvideo-gpucheck` | Staged GPU checks (`kernels`, `parity`, `clip`). `unsafe` allowed |
-| `fastvideo-mlx` | Apple Silicon scaffold (`mlx-rs` behind `--features mlx` on aarch64 macOS); host stubs elsewhere. Not a generate path |
 | `fastvideo-manifest` | The registry's public formats: model names, `model.toml` v1, the signed lineage manifest and its canonical BLAKE3 digest, JSON Schema export (ADR-0005..0007); layer 2, the family manifest `families/*.toml` (ADR-0008). Pure: no I/O, no CUDA (`fs` feature: the one directory reader) |
 | `fastvideo-lab` | The lab's gold standards: `lab/gold/<variant>.toml` types, validation, directory reader and JSON Schema (ADR-0009), and the lint that keeps measurements out of `profiles/` comments. CPU only; plan D1 adds the `fv-lab` binary |
 
@@ -222,8 +221,13 @@ against Hub weights is still gated on those weights. See
 | `stable_audio_open_small` | t2a | `FastVideo/stable-audio-open-small-Diffusers` | T5 / CLIP |
 | `mmaudio_large_44k_v2` | v2a, t2a | `hkchengrex/MMAudio` (tree from `scripts/gpu/fetch-mmaudio.sh`) | CLIP DFN5B text; CLIP + Synchformer visual. Also the opt-in Wan soundtrack stage (`--audio mmaudio`). See [ports/mmaudio.md](ports/mmaudio.md) |
 
-`fastvideo-mlx` is a separate Apple Silicon gate (`mlx-rs` on aarch64). The
-DiT and TAEHV graphs behind that gate are still a scaffold.
+The Apple Silicon scaffold `fastvideo-mlx` (host stubs, `mlx-rs` behind a
+feature, no generate path) was retired in plan B6
+(`docs/adr/0017-loader-stages.md`). What stays is the CUDA runtime's reader of
+FastVideo's MLX H3 export (`mlx_h3_dit.safetensors` + `mlx_h3_dit.json`, affine
+INT8/6/4, `crates/fastvideo-cudarc/src/h3/mlx.rs`): an H3 load whose
+`transformer/` (or root) holds that export runs it on the GPU with the fused
+affine GEMM.
 
 ## Sol-engine profiles
 

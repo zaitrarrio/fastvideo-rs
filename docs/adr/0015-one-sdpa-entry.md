@@ -57,7 +57,7 @@ Others: `llm::attn` GQA (`device_gqa_masked`; its host fallback calls the dense
 entry), the Gemma-2 softcap attention, SANA's linear attention, LTX-2.5's
 diffusion-decoder neighbourhood attention (`neighborhood_attn_host`, host
 only, opt-in `--diff-vae`, no device kernel), H3's audio VAE causal pre-block
-(host), `fastvideo-ops::TensorBackend` (dead, B6), and the plain-Rust oracles in
+(host), `fastvideo-ops::TensorBackend` (retired in B6), and the plain-Rust oracles in
 `fastvideo-models` (`sol_attn`, `pisa_attn`) and gpucheck (`ref_sdpa`,
 `sdpa_host`).
 

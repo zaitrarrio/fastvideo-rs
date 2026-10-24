@@ -1,17 +1,10 @@
-//! Tensor ops trait shared by backend adapters (Luminal today).
+//! Shared numeric helpers: the FP8 E4M3 conversions (`fp8`) the runtime
+//! (`fastvideo-cudarc`) and the model crate (`fastvideo-models`) both check
+//! against.
 //!
-//! Model code in `fastvideo-models` is generic over [`TensorBackend`]. Pipeline
-//! orchestration in `fastvideo-core` stays backend-agnostic.
+//! The backend-agnostic `TensorBackend` trait and its host reference
+//! (`HostBackend`, `HostTensor`) were retired in plan B6
+//! (`docs/adr/0017-loader-stages.md`): no model ran through them; every
+//! pipeline reaches the device through `fastvideo-cudarc`'s runtime.
 
-pub mod backend;
-pub mod device;
-pub mod dtype;
-pub mod error;
 pub mod fp8;
-pub mod host;
-
-pub use backend::TensorBackend;
-pub use device::Device;
-pub use dtype::DType;
-pub use error::OpsError;
-pub use host::{HostBackend, HostTensor};

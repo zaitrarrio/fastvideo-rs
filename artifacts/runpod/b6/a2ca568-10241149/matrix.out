@@ -1,0 +1,19 @@
+[11:49:53] [b6] matrix start image=414de85108d422e8
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-d46e5ed9-98a9-5557-f267-2512d51f2b0f)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[11:49:55] [b6] baseline baseline: sha-d061c68 layer sha256:088a1dcb4abb6ca49ac3a9af17dc9db1438df513743b04f1177c0eb041748f23 -> /fvscratch/baseline-d061c68/fv-gpucheck (a568234263b97c27)
+[11:49:55] [b6] skip b6-solh3-tree (not in FV_B6_CELLS)
+[11:49:55] [b6] skip b6-solh3-merge (not in FV_B6_CELLS)
+[11:49:55] [b6] skip b6-4stepvsa-merge (not in FV_B6_CELLS)
+[11:49:55] [b6] skip b6-h3-streamed (not in FV_B6_CELLS)
+[11:49:55] [b6] skip b6-h3-ref2va (not in FV_B6_CELLS)
+[11:49:57] [b6] ▶ b6-ltx25-ref2v-base  env /fvscratch/baseline-d061c68/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --seed 1024 --two-stage --text streamed --no-text-cache --dit /workspace/weights/ltx25 --height 896 --width 1536 --num-frames 49 --dense-stage2 --reference /opt/fastvideo-rs/scripts/gpu/fixtures/ltx-ref-sheet-768x448.png --ic-lora /workspace/weights/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors --prompt Reference sheet: a rocky coastline at golden hour and a cartoon orange crab. Generated video: the crab scuttles across the wet sand. --clip /fvscratch/runs/b6/a2ca568-10241149/b6-ltx25-ref2v-base/frames  (wall cap 3600s; 0=none)
+[11:59:32] [b6] ok b6-ltx25-ref2v-base  575s  
+[11:59:35] [b6] ▶ b6-ltx25-ref2v-pr  env /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --seed 1024 --two-stage --text streamed --no-text-cache --dit /workspace/weights/ltx25 --height 896 --width 1536 --num-frames 49 --dense-stage2 --reference /opt/fastvideo-rs/scripts/gpu/fixtures/ltx-ref-sheet-768x448.png --ic-lora /workspace/weights/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors --prompt Reference sheet: a rocky coastline at golden hour and a cartoon orange crab. Generated video: the crab scuttles across the wet sand. --clip /fvscratch/runs/b6/a2ca568-10241149/b6-ltx25-ref2v-pr/frames  (wall cap 3600s; 0=none)
+[12:08:36] [b6] ok b6-ltx25-ref2v-pr  541s  
+[12:08:36] [b6] compare b6-ltx25-ref2v-base--b6-ltx25-ref2v-pr exit=0 "psnr_mean":null 
+[12:08:36] [b6] skip b6-ltx25-a2v-guided (not in FV_B6_CELLS)
+[12:08:36] [b6] skip b6-ltx25-offload-cpu (not in FV_B6_CELLS)
+[12:08:36] [b6] compare-clips-b6-ltx25-ref2v-base--b6-ltx25-ref2v-pr.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 
+[12:08:36] [b6] matrix done
+matrix_exit=0

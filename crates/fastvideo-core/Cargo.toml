@@ -10,7 +10,6 @@ description = "FastVideo-rs pipeline core: the VideoFamily list, the common Requ
 thiserror.workspace = true
 fastvideo-models.workspace = true
 fastvideo-loader.workspace = true
-fastvideo-ops.workspace = true
 fastvideo-cudarc.workspace = true
 fastvideo-protocol.workspace = true
 serde_json.workspace = true

@@ -4,10 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Backend-agnostic tensor ops for fastvideo-rs."
-
-[dependencies]
-thiserror.workspace = true
+description = "Shared numeric helpers for fastvideo-rs (FP8 E4M3 conversions)."
 
 [lints]
 workspace = true

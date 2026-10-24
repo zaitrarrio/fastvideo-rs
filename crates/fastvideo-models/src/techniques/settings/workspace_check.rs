@@ -85,7 +85,12 @@ const INDIRECT_ALLOWED: &[(&str, &str, &str)] = &[
         "FASTH3_LORA_STRENGTH, not a FASTVIDEO_* name",
     ),
     (
-        "crates/fastvideo-cudarc/src/h3/pipeline.rs",
+        "crates/fastvideo-cudarc/src/h3/pipeline/load.rs",
+        "FASTH3_LORA_STRENGTH_ENV",
+        "FASTH3_LORA_STRENGTH, not a FASTVIDEO_* name (the load's place stage)",
+    ),
+    (
+        "crates/fastvideo-cudarc/src/h3/pipeline/load.rs",
         "TURBO_LORA_STRENGTH_ENV",
         "FV_H3_TURBO_LORA_STRENGTH, not a FASTVIDEO_* name",
     ),

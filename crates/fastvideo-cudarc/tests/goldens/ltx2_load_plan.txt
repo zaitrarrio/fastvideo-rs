@@ -1,0 +1,84 @@
+== ltx25-distill two-stage (served ltx25-distill-sol) on an RTX PRO 6000 ==
+facts: free=95.0GiB sm=120 device_expected=true bf16_act=true linear_route=device-bf16
+model: V25 distilled layers=48 in_channels=128
+offload: None dit auto need=59.59GiB -> resident (at the load-start free memory, as the load decides)
+dit: at load decoders: resident
+text: Streamed
+precision: video ffn nvfp4=off
+video decoder: conv vae
+upsampler: true
+fuse lora: none (distilled DiT)
+fuse ic-lora: none
+fuse kernels: dit block fusions=true
+== ltx25-distill two-stage on a 32 GiB card ==
+facts: free=30.0GiB sm=120 device_expected=true bf16_act=true linear_route=device-bf16
+model: V25 distilled layers=48 in_channels=128
+offload: None dit auto need=59.59GiB -> streamed (at the load-start free memory, as the load decides)
+dit: at load decoders: around their calls
+text: Streamed
+precision: video ffn nvfp4=off
+video decoder: conv vae
+upsampler: true
+fuse lora: none (distilled DiT)
+fuse ic-lora: none
+fuse kernels: dit block fusions=true
+== ltx25-distill two-stage, --offload cpu (PipelineOptions::offload) ==
+facts: free=95.0GiB sm=120 device_expected=true bf16_act=true linear_route=device-bf16
+model: V25 distilled layers=48 in_channels=128
+offload: Cpu dit streamed need=59.59GiB -> streamed (at the load-start free memory, as the load decides)
+dit: at load decoders: around their calls
+text: Streamed
+precision: video ffn nvfp4=off
+video decoder: conv vae
+upsampler: true
+fuse lora: none (distilled DiT)
+fuse ic-lora: none
+fuse kernels: dit block fusions=true
+== ltx25-distill with the tiny autoencoder (served ltx25-distill-sol-nvfp4-taehv) ==
+facts: free=95.0GiB sm=120 device_expected=true bf16_act=true linear_route=device-bf16
+model: V25 distilled layers=48 in_channels=128
+offload: None dit auto need=59.59GiB -> resident (at the load-start free memory, as the load decides)
+dit: at load decoders: resident
+text: Streamed
+precision: video ffn nvfp4=Static6
+video decoder: taehv <weights>/taeltx2_3_wide.safetensors
+upsampler: true
+fuse lora: none (distilled DiT)
+fuse ic-lora: none
+fuse kernels: dit block fusions=true
+== ltx25-ref2v (IC-LoRA) on an RTX PRO 6000 ==
+facts: free=95.0GiB sm=120 device_expected=true bf16_act=true linear_route=device-bf16
+model: V25 distilled layers=48 in_channels=128
+offload: None dit auto need=59.59GiB -> resident (at the load-start free memory, as the load decides)
+dit: at load decoders: resident
+text: Streamed
+precision: video ffn nvfp4=off
+video decoder: conv vae
+upsampler: true
+fuse lora: none (distilled DiT)
+fuse ic-lora: <weights>/ltx-2.5-22b-ic-lora-ingredients.safetensors pairs=1 downscale=2 (attached unfused, stage 1)
+fuse kernels: dit block fusions=true
+== ltx25-a2v-guided (dev DiT, distilled LoRA, base on the host) on an RTX PRO 6000 ==
+facts: free=95.0GiB sm=120 device_expected=true bf16_act=true linear_route=device-bf16
+model: V25 dev layers=48 in_channels=128
+offload: None dit auto need=59.59GiB -> resident (at the load-start free memory, as the load decides)
+dit: first request (LoRA pipeline; read-ahead queued at load) decoders: resident
+text: Streamed
+precision: video ffn nvfp4=off
+video decoder: conv vae
+upsampler: true
+fuse lora: <weights>/ltx-2.5-22b-distilled-lora-450-bf16.safetensors per request, unfused base on the host
+fuse ic-lora: none
+fuse kernels: dit block fusions=true
+== ltx25-distill on the CPU ==
+facts: free=unknown sm=none device_expected=false bf16_act=false linear_route=f32
+model: V25 distilled layers=48 in_channels=128
+offload: None dit auto need=59.59GiB -> resident (at the load-start free memory, as the load decides)
+dit: at load decoders: resident
+text: Streamed
+precision: video ffn nvfp4=off
+video decoder: conv vae
+upsampler: true
+fuse lora: none (distilled DiT)
+fuse ic-lora: none
+fuse kernels: dit block fusions=true
