@@ -20,9 +20,9 @@
 # FV_DRY_RUN=1: no GPU and no weights needed. Each cell's command line is
 # logged instead of run (weights not verified, no baseline fetched), so a
 # family's cells can be read off-pod: FV_DRY_RUN=1 FV_WORK=/tmp/fv-dry
-# FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b6 (or b4a, b4c).
+# FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b6 (or b4a, b4c, b4c2).
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|b6|b4a|b4c|h3arms|h3attn}"
+FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|b6|b4a|b4c|b4c2|h3arms|h3attn}"
 DRY_RUN="${FV_DRY_RUN:-0}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
@@ -2327,6 +2327,181 @@ Audio: male speech, clear voice, quiet room"
       log "$(b4_family_verdict b4c $b4c_cells)"
     fi
     for f in "$RUNS"/compare/compare-clips-b4c-*.json; do
+      [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"
+    done
+    ;;
+  b4c2)
+    # Plan B4c2 (docs/adr/0021-prompt-cache.md "B4c2"): the prompt-cache keys
+    # now carry every setting that changes the conditioning. FV_BASELINE_SHA
+    # is main before B4c2. Two kinds of cell, both with the baseline binary
+    # (fetch-baseline.sh) and this build, each arm over its own new cache
+    # directory ($SCRATCH/b4c2-cache/<cell>-<arm>, emptied first):
+    #  - a switch cell (b4c2_switch): pass -write runs one setting and stores
+    #    (a miss), pass -read runs the other setting over the same cache, and
+    #    this build also runs the read setting over a new cache (-fresh). The
+    #    verdict (b4-verdict.sh b4c2_switch_verdict) passes only when the
+    #    baseline's read *hits* (the gap, reproduced: main serves the other
+    #    setting's conditioning), this build's read misses and its frames are
+    #    byte-identical (--off-identity) to the fresh encode (the read setting
+    #    over its own new cache, $SCRATCH/b4c2-cache/<cell>-pr-fresh), every
+    #    pass exited 0, the caches hold one (base) and two (pr) entries and no
+    #    temporary file, and the fresh encode stored exactly the entry (name
+    #    and bytes) the read pass stored. -write against -read and base-read against pr-read
+    #    are compared for the record only: they measure what the setting does
+    #    to the output (for b4c2-ltx25-mode and b4c2-h3-tree, whether the two
+    #    paths are bit-equal, which the key no longer assumes).
+    #  - the no-change cell (b4c2_noop): default settings, -miss then -hit
+    #    per arm, as b4c. Passes only when base and pr are byte-identical on
+    #    the miss and on the hit, this build's hit equals its miss, and the
+    #    two caches hold one entry each with the same bytes under different
+    #    names (the same conditioning under the new key).
+    # Only trees of the EU volume: H3 (with its text_encoder_fp8 tree) and
+    # LTX-2.5 (no FP8 tree: its FP8 Gemma is quantised at load). The
+    # recovered-8B weights (gap 2) and Wan (gap 3) are not on it; their
+    # evidence is CPU-only (h3::text_cache, rt/prompt_cache/equality.rs).
+    # FV_B4C2_CELLS narrows the cells (default: all five), one or more per
+    # pod. Estimated wall time on an RTX PRO 6000, from the b4c gate's runs
+    # (H3 cold miss ~115-205 s, hit ~33 s; LTX cold miss ~100-365 s, hit
+    # ~30-130 s), after a ~2 min baseline fetch: each LTX switch cell (five
+    # runs) ~12-16 min, each H3 switch cell (five runs) ~8-12 min, the
+    # no-change cell (four runs) ~6-8 min; all five on one pod ~50-65 min.
+    base_sha="${FV_BASELINE_SHA:?b4c2 family needs FV_BASELINE_SHA (main before B4c2)}"
+    BASE="$SCRATCH/baseline-$base_sha/fv-gpucheck"
+    if [[ "$DRY_RUN" != 1 ]]; then
+      if ! bash "$(dirname "${BASH_SOURCE[0]}")/fetch-baseline.sh" "$base_sha" "$(dirname "$BASE")" >>"$RUNS/baseline-fetch.log" 2>&1; then
+        log "FATAL: baseline binary sha-$base_sha unavailable (baseline-fetch.log)"
+        tee -a "$LOG" <"$RUNS/baseline-fetch.log"
+        exit 2
+      fi
+      log "baseline $(tail -1 "$RUNS/baseline-fetch.log")"
+    fi
+    # A cold H3 load reads ~70 GB from the volume before its first step.
+    export FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-900}"
+    b4c2_cells="${FV_B4C2_CELLS:-b4c2-ltx25-fp8 b4c2-ltx25-mode b4c2-h3-numerics b4c2-h3-tree b4c2-h3-noop}"
+    B4C_CACHE="$SCRATCH/b4c2-cache"
+    # No verdict of an earlier run in this directory may stand in for this one.
+    [[ "$DRY_RUN" == 1 ]] || rm -f "$RUNS"/b4c2-*.verdict.json "$RUNS/b4c2.verdict.json"
+    # b4c2_pass <cell>-<arm>-<pass> <weight cell> <binary> <env or -> <flags or -> <cache flags> <clip flag> -- <fv-gpucheck args ...>:
+    # one cold run in an empty pass directory; the env words go before the
+    # binary, the flags after the shared arguments, then the cache flags,
+    # the clip flag and the frames directory.
+    b4c2_pass() {
+      local name="$1" wcell="$2" bin="$3" envs="$4" flags="$5" cachef="$6" clip="$7"
+      shift 8
+      # shellcheck disable=SC2206
+      local e=($envs) f=($flags) cf=($cachef)
+      [[ "$envs" == - ]] && e=()
+      [[ "$flags" == - ]] && f=()
+      if [[ "$DRY_RUN" == 1 ]]; then
+        log "dry-run $name: rm -rf $RUNS/$name"
+      else
+        rm -rf "${RUNS:?}/$name"
+      fi
+      gated_cell "$name" "$wcell" \
+        env ${e[@]+"${e[@]}"} "$bin" "$@" ${f[@]+"${f[@]}"} "${cf[@]}" "$clip" "$RUNS/$name/frames"
+      [[ "$DRY_RUN" == 1 ]] || log "[$name] text_cache: $(b4_field "$RUNS/$name/benchmark.json" text_cache) text_encoder: $(b4_field "$RUNS/$name/benchmark.json" text_encoder)"
+    }
+    # b4c2_switch <cell> <weight cell> <clip flag> <write env> <write flags>
+    # <read env> <read flags> <fv-gpucheck args ...> (env / flags: words, or
+    # - for none).
+    b4c2_switch() {
+      local cell="$1" wcell="$2" clip="$3" wenv="$4" wflags="$5" renv="$6" rflags="$7" arm bin dir
+      shift 7
+      [[ " $b4c2_cells " == *" $cell "* ]] || { log "skip $cell (not in FV_B4C2_CELLS)"; return 0; }
+      for arm in base pr; do
+        bin="$BIN"
+        [[ "$arm" == base ]] && bin="$BASE"
+        dir="$B4C_CACHE/$cell-$arm"
+        if [[ "$DRY_RUN" == 1 ]]; then
+          log "dry-run $cell-$arm: rm -rf $dir (a cold cache for the write pass)"
+        else
+          rm -rf "$dir"
+        fi
+        b4c2_pass "$cell-$arm-write" "$wcell" "$bin" "$wenv" "$wflags" "--text-cache $dir" "$clip" -- "$@"
+        b4c2_pass "$cell-$arm-read" "$wcell" "$bin" "$renv" "$rflags" "--text-cache $dir" "$clip" -- "$@"
+      done
+      # The reference: the read setting over a new, empty cache (a fresh
+      # encode through the same path as the read pass's miss).
+      if [[ "$DRY_RUN" == 1 ]]; then
+        log "dry-run $cell-pr-fresh: rm -rf $B4C_CACHE/$cell-pr-fresh (a cold cache)"
+      else
+        rm -rf "$B4C_CACHE/$cell-pr-fresh"
+      fi
+      b4c2_pass "$cell-pr-fresh" "$wcell" "$BIN" "$renv" "$rflags" "--text-cache $B4C_CACHE/$cell-pr-fresh" "$clip" -- "$@"
+      [[ "$DRY_RUN" == 1 ]] || rm -f "$RUNS"/compare/compare-clips-"$cell"-*.json
+      compare_cells "$cell-pr-fresh" "$cell-pr-read" --off-identity
+      # For the record (not gating): what the setting does to the output,
+      # and what main's wrong hit produced.
+      compare_cells "$cell-pr-write" "$cell-pr-read" --off-identity
+      compare_cells "$cell-base-read" "$cell-pr-read" --off-identity
+      if [[ "$DRY_RUN" == 1 ]]; then
+        log "dry-run $cell: verdict b4c2_switch_verdict $cell: every pass exit 0 (summary.json); benchmark.json \"text_cache\" base-write / pr-write miss, base-read hit (main reproduces the gap), pr-read miss, pr-fresh miss; --off-identity pr-fresh vs pr-read passed; $B4C_CACHE/$cell-base holds 1 entry, -pr 2, -pr-fresh 1 that is also in -pr (name and sha256), no *.part / *.tmp*"
+        return 0
+      fi
+      log "$(b4c2_switch_verdict "$cell")"
+    }
+    # b4c2_noop <cell> <weight cell> <clip flag> <fv-gpucheck args ...>.
+    b4c2_noop() {
+      local cell="$1" wcell="$2" clip="$3" arm bin dir pass
+      shift 3
+      [[ " $b4c2_cells " == *" $cell "* ]] || { log "skip $cell (not in FV_B4C2_CELLS)"; return 0; }
+      for arm in base pr; do
+        bin="$BIN"
+        [[ "$arm" == base ]] && bin="$BASE"
+        dir="$B4C_CACHE/$cell-$arm"
+        if [[ "$DRY_RUN" == 1 ]]; then
+          log "dry-run $cell-$arm: rm -rf $dir (a cold cache for the miss pass)"
+        else
+          rm -rf "$dir"
+        fi
+        for pass in miss hit; do
+          b4c2_pass "$cell-$arm-$pass" "$wcell" "$bin" - - "--text-cache $dir" "$clip" -- "$@"
+        done
+      done
+      [[ "$DRY_RUN" == 1 ]] || rm -f "$RUNS"/compare/compare-clips-"$cell"-*.json
+      for pass in miss hit; do
+        compare_cells "$cell-base-$pass" "$cell-pr-$pass" --off-identity
+      done
+      compare_cells "$cell-pr-miss" "$cell-pr-hit" --off-identity
+      if [[ "$DRY_RUN" == 1 ]]; then
+        log "dry-run $cell: verdict b4c2_noop_verdict $cell: every pass exit 0 (summary.json); benchmark.json \"text_cache\" miss / hit; --off-identity base vs pr passed for miss and hit, and pr-miss vs pr-hit; $B4C_CACHE/$cell-base and -pr hold one entry each, same sha256, different names, no *.part / *.tmp*"
+        return 0
+      fi
+      log "$(b4c2_noop_verdict "$cell")"
+    }
+    ltx_b4c2=(--mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25"
+      --height 512 --width 768 --num-frames 49 --prompt "$PROMPT" --seed "$SEED" --two-stage)
+    h3_b4c2=(--mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa --height 480 --width 832
+      --seconds 5 --prompt "$PROMPT" --seed "$SEED" --text-encoder auto --no-mp4)
+    # 1. Gaps 1 and 6 (LTX): FP8 Gemma (quantised at load: LTX-2.5 has no
+    #    FP8 tree on the volume) writes, bf16 Gemma reads, both resident (FP8
+    #    is always resident; two-stage drops Gemma before the DiT loads).
+    b4c2_switch b4c2-ltx25-fp8 ltx25-two-stage --clip \
+      "FASTVIDEO_LTX2_TEXT_FP8=1" "--text resident" - "--text resident" "${ltx_b4c2[@]}"
+    # 2. Gap 5 (LTX): streamed Gemma writes, resident Gemma reads (bf16).
+    #    -write vs -read measures whether the two modes are bit-equal.
+    b4c2_switch b4c2-ltx25-mode ltx25-two-stage --clip \
+      - "--text streamed" - "--text resident" "${ltx_b4c2[@]}"
+    # 3. Gap 4 (H3; Wan's gap 3 is the same field): f32 activations write,
+    #    the default bf16 activations read; auto encoder (resident FP8 rows
+    #    from the text_encoder_fp8 tree on an RTX PRO 6000).
+    b4c2_switch b4c2-h3-numerics fasth3-4step-vsa --clip-dir \
+      "FASTVIDEO_BF16_ACT=0" - - - "${h3_b4c2[@]}"
+    # 4. Gap 6 (H3): FP8 rows quantised at load (FASTVIDEO_TEXT_FP8_TREE=0)
+    #    write, the pre-quantised tree reads. -write vs -read measures whether
+    #    the tree is the load-time quantisation bit for bit on the device.
+    b4c2_switch b4c2-h3-tree fasth3-4step-vsa --clip-dir \
+      "FASTVIDEO_TEXT_FP8_TREE=0" - - - "${h3_b4c2[@]}"
+    # 5. No change: default settings, H3 (a hit there equals its miss).
+    b4c2_noop b4c2-h3-noop fasth3-4step-vsa --clip-dir "${h3_b4c2[@]}"
+    # The family: every cell named in FV_B4C2_CELLS must have passed.
+    if [[ "$DRY_RUN" == 1 ]]; then
+      log "dry-run b4c2: family verdict b4_family_verdict b4c2 $b4c2_cells -> $RUNS/b4c2.verdict.json (a named cell without a passing verdict fails)"
+    else
+      # shellcheck disable=SC2086
+      log "$(b4_family_verdict b4c2 $b4c2_cells)"
+    fi
+    for f in "$RUNS"/compare/compare-clips-b4c2-*.json; do
       [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"
     done
     ;;

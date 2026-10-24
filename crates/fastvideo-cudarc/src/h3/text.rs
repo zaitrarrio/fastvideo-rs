@@ -325,12 +325,45 @@ pub fn encode_prompt_with_at(
     let store = map
         .lazy()
         .ok_or_else(|| msg("h3 text: the encoder checkpoint was not opened lazily"))?;
-    let mut identity = cache::encoder_identity(store, &cfg, tap)?;
-    if fp8_numbers {
-        // Weight-only FP8 rows are a different function of the same weights.
-        identity = cache::fp8_rows_identity(&identity);
-    }
-    let key = cache::cache_key(prompt, &cache::sha256(&tokenizer_bytes), tap, &identity);
+    let identity = cache::encoder_identity(store, &cfg, tap)?;
+    // Weight-only FP8 rows are a different function of the same weights, and
+    // the pre-quantized tree is keyed apart from quantizing at load until the
+    // two are proven equal on the device (ADR-0021 "B4c2", gap 6). What the
+    // encoder actually read: a resident decoder says so itself; the streamed
+    // FP8 encoder read the tree iff it was opened above.
+    let weights = match (encoder.decoder(), fp8_numbers) {
+        (Some(d), _) => match (d.precision(), d.prequantized()) {
+            (crate::llm::WeightPrecision::Native, _) => cache::WeightsRead::Checkpoint,
+            (crate::llm::WeightPrecision::Fp8Rows, true) => cache::WeightsRead::Fp8RowsTree,
+            (crate::llm::WeightPrecision::Fp8Rows, false) => cache::WeightsRead::Fp8RowsAtLoad,
+        },
+        (None, false) => cache::WeightsRead::Checkpoint,
+        (None, true) if resident.is_some() => cache::WeightsRead::Fp8RowsUnknown,
+        (None, true) if fp8_tree.is_some() => cache::WeightsRead::Fp8RowsTree,
+        (None, true) => cache::WeightsRead::Fp8RowsAtLoad,
+    };
+    let tree_identity = match weights {
+        cache::WeightsRead::Fp8RowsTree => {
+            let dir = crate::llm::prequant::tree_dir(&root.join("text_encoder"))
+                .ok_or_else(|| msg("h3 text: no FP8 tree directory"))?;
+            Some(crate::rt::prompt_cache::identity::files_head_tail(
+                &dir, None,
+            )?)
+        }
+        _ => None,
+    };
+    // The numerics this encode runs with (gap 4): resolved by the device
+    // context and the activation policy, read where the encode runs.
+    let numerics = crate::rt::prompt_cache::Numerics::live();
+    let key = cache::cache_key(
+        prompt,
+        &cache::sha256(&tokenizer_bytes),
+        tap,
+        &identity,
+        weights,
+        tree_identity.as_ref(),
+        &numerics,
+    );
     let (entry, hit) = cache::get_or_compute(dir, &key, &ids, cfg.hidden, || {
         Ok(encoder.hidden_state(&ids, tap)?.host_cow()?.into_owned())
     })?;
@@ -356,10 +389,11 @@ pub fn encode_prompt(root: &Path, prompt: &str) -> Result<(Vec<u32>, CudaTensor)
 
 /// SearchingMan recovered-8B path: tokenize with the DiT snapshot's H3
 /// tokenizer, encode with a resident [`super::recovered_8b::Recovered8bEncoder`]
-/// (tap 24 + adapter → `[1, S, 5120]`). Cache entries are keyed as width 5120.
+/// (tap 24 + adapter → `[1, S, 5120]`). Cache entries are keyed as width 5120,
+/// by the base, LoRA and adapter files under `encoder_root`.
 pub fn encode_prompt_recovered(
     tokenizer_root: &Path,
-    _encoder_root: &Path,
+    encoder_root: &Path,
     prompt: &str,
     cache_dir: Option<&Path>,
     resident: Option<&dyn HiddenStateEncoder>,
@@ -383,10 +417,26 @@ pub fn encode_prompt_recovered(
     let tokenizer_path = tokenizer_root.join("tokenizer").join("tokenizer.json");
     let tokenizer_bytes = std::fs::read(&tokenizer_path)
         .map_err(|e| msg(format!("{}: {e}", tokenizer_path.display())))?;
-    // Identity is the encoder kind + tap; recovered weights are not a LazyStore
-    // under text_encoder/, so we fingerprint the kind string instead.
-    let identity = cache::recovered_identity(tap);
-    let key = cache::cache_key(prompt, &cache::sha256(&tokenizer_bytes), tap, &identity);
+    // The kind and tap, and the three weight files the encoder was loaded
+    // from (`encoder_root` is the root `Recovered8bEncoder::load` was given):
+    // file identities as LTX's (ADR-0021 "B4c2", gap 2).
+    let [base, ara, adapter] = super::recovered_8b::weight_files(encoder_root)?;
+    let file_id = |p: &Path| crate::rt::prompt_cache::identity::files_head_tail(p, None);
+    let identity = cache::recovered_weights_identity(
+        tap,
+        &file_id(&base)?,
+        &file_id(&ara)?,
+        &file_id(&adapter)?,
+    );
+    let key = cache::cache_key(
+        prompt,
+        &cache::sha256(&tokenizer_bytes),
+        tap,
+        &identity,
+        cache::WeightsRead::Checkpoint,
+        None,
+        &crate::rt::prompt_cache::Numerics::live(),
+    );
     let (entry, hit) = cache::get_or_compute(dir, &key, &ids, out_hidden, || {
         Ok(encoder.hidden_state(&ids, tap)?.host_cow()?.into_owned())
     })?;

@@ -32,6 +32,7 @@
 
 pub mod identity;
 pub mod key;
+pub mod numerics;
 pub mod tokens_width;
 
 #[cfg(test)]
@@ -42,10 +43,16 @@ pub(crate) mod legacy;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-pub use key::{hex, sha256, Fields, KeyRecipe, PromptNorm, H3_KEY, LTX2_KEY, WAN_KEY};
+pub use key::{
+    hex, sha256, Fields, KeyRecipe, PromptNorm, H3_KEY, H3_KEY_V1, LTX2_KEY, LTX2_KEY_V1, WAN_KEY,
+    WAN_KEY_V1,
+};
+pub use numerics::{Gemm, Numerics, WeightsRead};
 
-/// H3's entry magic, also the first field of its key ([`H3_KEY`]). Bump when
-/// the H3 file layout or key derivation changes.
+/// H3's entry magic, also the first field of its pre-B4c2 key
+/// ([`H3_KEY_V1`]). Bump when the H3 file layout changes; a changed key
+/// derivation gets a new key domain instead ([`H3_KEY`], ADR-0021
+/// "Versioning").
 pub(crate) const H3_MAGIC: [u8; 8] = *b"H3TEXT01";
 
 /// Bytes of the trailing seal: SHA-256 of everything before it.

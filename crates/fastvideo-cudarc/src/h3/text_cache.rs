@@ -29,7 +29,7 @@ use crate::llm::DecoderConfig;
 use crate::rt::prompt_cache::{self, Fields};
 use crate::rt::tensor::{Result, TensorError};
 
-pub use crate::rt::prompt_cache::{hex, sha256};
+pub use crate::rt::prompt_cache::{hex, sha256, Numerics, WeightsRead};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -109,32 +109,81 @@ pub fn encoder_identity(store: &LazyStore, cfg: &DecoderConfig, tap: usize) -> R
     Ok(h.finish())
 }
 
-/// The identity of the same encoder run with weight-only FP8 rows: a
-/// different function of the same weights (`h3/text.rs`).
+/// The pre-B4c2 identity of the same encoder run with weight-only FP8 rows
+/// ([`cache_key_v1`]). Since B4c2 the precision and the source of the rows
+/// are their own key field ([`WeightsRead`]).
 pub fn fp8_rows_identity(identity: &[u8; 32]) -> [u8; 32] {
     sha256(&[identity.as_slice(), b"/fp8-rows".as_slice()].concat())
 }
 
-/// The identity of the recovered-8B encoder: its kind and tap. Its weights
-/// are not a `LazyStore` under `text_encoder/`, so the kind string stands in.
+/// The pre-B4c2 identity of the recovered-8B encoder: a constant of its tap,
+/// which left its weights out of the key (ADR-0021 gap 2). Superseded by
+/// [`recovered_weights_identity`].
 pub fn recovered_identity(tap: usize) -> [u8; 32] {
     sha256(format!("recovered-8b-tap{tap}").as_bytes())
 }
 
-/// The cache key ([`prompt_cache::H3_KEY`]): the format magic, the prompt,
-/// the tokenizer digest, the tap and the encoder identity, each a
-/// length-prefixed field.
-pub fn cache_key(
+/// The recovered-8B encoder's identity since B4c2: its kind and tap, then
+/// the file identities ([`prompt_cache::identity::files_head_tail`]: name,
+/// size, first and last MiB) of the 8B base, the ARA LoRA and the
+/// conditioning adapter, in that order. Not a full hash of multi-GB files,
+/// as for LTX: a fine-tune or a retrained LoRA or adapter changes a header
+/// or the tensor bytes at either end.
+pub fn recovered_weights_identity(
+    tap: usize,
+    base: &[u8; 32],
+    ara: &[u8; 32],
+    adapter: &[u8; 32],
+) -> [u8; 32] {
+    let mut h = Fields::new();
+    h.field(format!("recovered-8b-tap{tap}").as_bytes());
+    h.field(base);
+    h.field(ara);
+    h.field(adapter);
+    h.finish()
+}
+
+/// The pre-B4c2 cache key ([`prompt_cache::H3_KEY_V1`]): the format magic,
+/// the prompt, the tokenizer digest, the tap and the encoder identity, each a
+/// length-prefixed field. Entries on disk written before B4c2 have these
+/// names; the pipeline no longer computes it.
+pub fn cache_key_v1(
     prompt: &str,
     tokenizer_sha256: &[u8; 32],
     tap: usize,
     encoder_identity: &[u8; 32],
 ) -> [u8; 32] {
-    prompt_cache::H3_KEY.key(
+    prompt_cache::H3_KEY_V1.key(
         prompt,
         tokenizer_sha256,
         tap as u64,
         &[encoder_identity.as_slice()],
+    )
+}
+
+/// The cache key ([`prompt_cache::H3_KEY`], ADR-0021 "B4c2"): the prompt, the
+/// tokenizer digest, the tap, then the encoder identity, the weights the
+/// encoder's linears were read from, the FP8 tree's identity (an empty field
+/// unless `weights` is the tree) and the numerics the encode runs with.
+pub fn cache_key(
+    prompt: &str,
+    tokenizer_sha256: &[u8; 32],
+    tap: usize,
+    encoder_identity: &[u8; 32],
+    weights: WeightsRead,
+    tree_identity: Option<&[u8; 32]>,
+    numerics: &Numerics,
+) -> [u8; 32] {
+    prompt_cache::H3_KEY.key(
+        prompt,
+        tokenizer_sha256,
+        tap as u64,
+        &[
+            encoder_identity.as_slice(),
+            weights.field(),
+            tree_identity.map_or(&[][..], |t| t.as_slice()),
+            &numerics.field(),
+        ],
     )
 }
 
@@ -158,48 +207,273 @@ mod tests {
         dir
     }
 
+    /// The numerics of the pinned keys (an H100-class card, the defaults).
+    const NUM: Numerics = Numerics {
+        gemm: prompt_cache::Gemm::Bf16,
+        arch: Some((9, 0)),
+        bf16_act: true,
+    };
+
+    fn key(enc: &[u8; 32]) -> [u8; 32] {
+        cache_key("p", &[0; 32], 50, enc, WeightsRead::Checkpoint, None, &NUM)
+    }
+
     #[test]
-    fn the_key_is_stable_and_every_input_moves_it() {
+    fn the_v1_key_is_still_the_pre_b4c2_key() {
         let (tok, enc) = ([1u8; 32], [2u8; 32]);
-        let key = cache_key("a dog <d>hi</d>", &tok, 50, &enc);
-        // Pinned: changing the derivation silently would orphan every cache on disk.
-        assert_eq!(
-            hex(&key),
-            hex(&cache_key("a dog <d>hi</d>", &tok, 50, &enc))
-        );
+        let key = cache_key_v1("a dog <d>hi</d>", &tok, 50, &enc);
+        // Pinned: the names entries written before B4c2 have on disk.
         assert_eq!(
             hex(&key),
             "86ae3a4c85ef1725102bce88852a0d444061550701b8b40f29a6e3cca11652b5",
-            "update this constant together with MAGIC"
         );
         for other in [
-            cache_key("a dog <d>hi</d> ", &tok, 50, &enc),
-            cache_key("a dog <d>hi</d>", &[3; 32], 50, &enc),
-            cache_key("a dog <d>hi</d>", &tok, 49, &enc),
-            cache_key("a dog <d>hi</d>", &tok, 50, &[4; 32]),
+            cache_key_v1("a dog <d>hi</d> ", &tok, 50, &enc),
+            cache_key_v1("a dog <d>hi</d>", &[3; 32], 50, &enc),
+            cache_key_v1("a dog <d>hi</d>", &tok, 49, &enc),
+            cache_key_v1("a dog <d>hi</d>", &tok, 50, &[4; 32]),
         ] {
             assert_ne!(other, key);
         }
     }
 
     #[test]
+    fn the_key_is_stable_and_every_input_moves_it() {
+        let (tok, enc, tree) = ([1u8; 32], [2u8; 32], [5u8; 32]);
+        let k = |prompt: &str,
+                 tok: &[u8; 32],
+                 tap,
+                 enc: &[u8; 32],
+                 w,
+                 t: Option<&[u8; 32]>,
+                 n: &Numerics| { cache_key(prompt, tok, tap, enc, w, t, n) };
+        let base = k(
+            "a dog <d>hi</d>",
+            &tok,
+            50,
+            &enc,
+            WeightsRead::Checkpoint,
+            None,
+            &NUM,
+        );
+        // Pinned (recomputed independently with Python hashlib, ADR-0021
+        // "B4c2"): changing the derivation silently would orphan every entry.
+        assert_eq!(
+            base,
+            k(
+                "a dog <d>hi</d>",
+                &tok,
+                50,
+                &enc,
+                WeightsRead::Checkpoint,
+                None,
+                &NUM
+            )
+        );
+        assert_eq!(
+            hex(&base),
+            "fb7e2e6cc4d67ddf1886f58830373bee7c9dbefef539c47cbc0fe7a39a2bc367"
+        );
+        let tree_key = k(
+            "a dog <d>hi</d>",
+            &tok,
+            50,
+            &enc,
+            WeightsRead::Fp8RowsTree,
+            Some(&tree),
+            &NUM,
+        );
+        assert_eq!(
+            hex(&tree_key),
+            "54bb0f5f248d9335e299059ee8abac7ccceb022be13e004daf4832ef1108ee90"
+        );
+        let numerics = |n: Numerics| {
+            k(
+                "a dog <d>hi</d>",
+                &tok,
+                50,
+                &enc,
+                WeightsRead::Checkpoint,
+                None,
+                &n,
+            )
+        };
+        let others = [
+            k(
+                "a dog <d>hi</d> ",
+                &tok,
+                50,
+                &enc,
+                WeightsRead::Checkpoint,
+                None,
+                &NUM,
+            ),
+            k(
+                "a dog <d>hi</d>",
+                &[3; 32],
+                50,
+                &enc,
+                WeightsRead::Checkpoint,
+                None,
+                &NUM,
+            ),
+            k(
+                "a dog <d>hi</d>",
+                &tok,
+                49,
+                &enc,
+                WeightsRead::Checkpoint,
+                None,
+                &NUM,
+            ),
+            k(
+                "a dog <d>hi</d>",
+                &tok,
+                50,
+                &[4; 32],
+                WeightsRead::Checkpoint,
+                None,
+                &NUM,
+            ),
+            // Gap 6 (and H3's FP8 rows): bf16, FP8 quantised at load, the tree.
+            k(
+                "a dog <d>hi</d>",
+                &tok,
+                50,
+                &enc,
+                WeightsRead::Fp8RowsAtLoad,
+                None,
+                &NUM,
+            ),
+            tree_key,
+            k(
+                "a dog <d>hi</d>",
+                &tok,
+                50,
+                &enc,
+                WeightsRead::Fp8RowsTree,
+                Some(&[6; 32]),
+                &NUM,
+            ),
+            k(
+                "a dog <d>hi</d>",
+                &tok,
+                50,
+                &enc,
+                WeightsRead::Fp8RowsUnknown,
+                None,
+                &NUM,
+            ),
+            // Gap 4: GEMM math, card and activations.
+            numerics(Numerics {
+                gemm: prompt_cache::Gemm::Tf32,
+                ..NUM
+            }),
+            numerics(Numerics {
+                gemm: prompt_cache::Gemm::F32,
+                ..NUM
+            }),
+            numerics(Numerics {
+                arch: Some((12, 0)),
+                ..NUM
+            }),
+            numerics(Numerics {
+                bf16_act: false,
+                ..NUM
+            }),
+        ];
+        for (i, a) in others.iter().enumerate() {
+            assert_ne!(*a, base, "{i}");
+            for (j, b) in others.iter().enumerate().skip(i + 1) {
+                assert_ne!(a, b, "{i} vs {j}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_new_domain_alone_keeps_old_entries_out() {
+        // Even with the B4c2 fields empty, the v2 key of a prompt is not its
+        // v1 key: the domain moves every name, so no entry written before
+        // B4c2 is looked up by new code.
+        let (tok, enc) = ([1u8; 32], [2u8; 32]);
+        let v1 = cache_key_v1("a dog <d>hi</d>", &tok, 50, &enc);
+        let same_fields_new_domain =
+            prompt_cache::H3_KEY.key("a dog <d>hi</d>", &tok, 50, &[enc.as_slice()]);
+        assert_ne!(v1, same_fields_new_domain);
+        for w in [WeightsRead::Checkpoint, WeightsRead::Fp8RowsAtLoad] {
+            assert_ne!(
+                v1,
+                cache_key("a dog <d>hi</d>", &tok, 50, &enc, w, None, &NUM)
+            );
+        }
+        let fp8_v1 = cache_key_v1("a dog <d>hi</d>", &tok, 50, &fp8_rows_identity(&enc));
+        assert_ne!(
+            fp8_v1,
+            cache_key(
+                "a dog <d>hi</d>",
+                &tok,
+                50,
+                &enc,
+                WeightsRead::Fp8RowsAtLoad,
+                None,
+                &NUM
+            )
+        );
+        assert_ne!(prompt_cache::H3_KEY.domain, prompt_cache::H3_KEY_V1.domain);
+    }
+
+    #[test]
+    fn the_recovered_identity_follows_each_weight_file() {
+        let (base, ara, adapter) = ([6u8; 32], [7u8; 32], [8u8; 32]);
+        let id = recovered_weights_identity(24, &base, &ara, &adapter);
+        assert_eq!(
+            hex(&id),
+            "21417c188db91150d1636cdc8d0772690946b5a85a632682ec4b9e7a428d9d6a"
+        );
+        assert_eq!(
+            hex(&cache_key(
+                "a dog <d>hi</d>",
+                &[1; 32],
+                24,
+                &id,
+                WeightsRead::Checkpoint,
+                None,
+                &NUM
+            )),
+            "bc19c451fbf060f6df2b4de3c67402abdbc9fb615eb6654a2182202f9495a91f"
+        );
+        let others = [
+            recovered_weights_identity(24, &[9; 32], &ara, &adapter),
+            recovered_weights_identity(24, &base, &[9; 32], &adapter),
+            recovered_weights_identity(24, &base, &ara, &[9; 32]),
+            recovered_weights_identity(23, &base, &ara, &adapter),
+            // The weights in another order are another encoder.
+            recovered_weights_identity(24, &ara, &base, &adapter),
+            // The pre-B4c2 constant.
+            recovered_identity(24),
+        ];
+        for (i, a) in others.iter().enumerate() {
+            assert_ne!(*a, id, "{i}");
+        }
+    }
+
+    #[test]
     fn cache_key_ignores_recipe_and_follows_encoder_identity() {
-        let tok = [9u8; 32];
         let enc_a = [1u8; 32];
         let enc_b = [2u8; 32];
-        let k_sol = cache_key("same prompt", &tok, 50, &enc_a);
-        let k_spark = cache_key("same prompt", &tok, 50, &enc_a);
+        let k_sol = key(&enc_a);
+        let k_spark = key(&enc_a);
         assert_eq!(
             k_sol, k_spark,
             "recipe is not part of the cache key; only encoder identity is"
         );
-        assert_ne!(cache_key("same prompt", &tok, 50, &enc_b), k_sol);
+        assert_ne!(key(&enc_b), k_sol);
     }
 
     #[test]
     fn a_second_request_is_a_hit_and_never_recomputes() {
         let dir = temp_dir("hit");
-        let key = cache_key("p", &[0; 32], 50, &[0; 32]);
+        let key = key(&[0; 32]);
         let ids = [7u32, 8, 9];
         let mut calls = 0;
         let mut run = |ids: &[u32]| {

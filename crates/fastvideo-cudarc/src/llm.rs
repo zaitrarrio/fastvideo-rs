@@ -1746,6 +1746,10 @@ pub struct ResidentDecoder {
     final_norm: Option<CudaTensor>,
     embed: EmbedTable,
     precision: WeightPrecision,
+    /// The map held pre-quantized FP8 rows (`text_encoder_fp8/`, [`prequant`])
+    /// that the layers loaded as they are, rather than quantizing a float
+    /// checkpoint at load. A prompt-cache key field (ADR-0021 "B4c2", gap 6).
+    prequantized: bool,
 }
 
 struct Resident<'a>(&'a ResidentDecoder);
@@ -1834,6 +1838,7 @@ impl ResidentDecoder {
             final_norm: None,
             embed: EmbedTable::load(map, cfg)?,
             precision: WeightPrecision::Native,
+            prequantized: false,
         })
     }
 
@@ -1872,7 +1877,14 @@ impl ResidentDecoder {
             final_norm,
             embed: EmbedTable::load(map, cfg)?,
             precision,
+            prequantized: precision == WeightPrecision::Fp8Rows && prequant::holds_fp8_rows(map),
         })
+    }
+
+    /// Whether the FP8 rows of this decoder's linears came pre-quantized
+    /// from the map (the `text_encoder_fp8/` tree), not quantized at load.
+    pub fn prequantized(&self) -> bool {
+        self.prequantized
     }
 
     pub fn config(&self) -> &DecoderConfig {
@@ -2612,6 +2624,12 @@ mod tests {
         })
         .unwrap();
         assert_eq!(captured, again, "codes and scales byte-identical");
+        // The prompt-cache key tells the two sources apart (ADR-0021 B4c2,
+        // gap 6), although they are equal here.
+        assert!(!quantized.prequantized());
+        assert!(from_tree.prequantized());
+        assert_eq!(prequant::resolve_tree(&src, 2), Some(tree.clone()));
+        assert_eq!(prequant::tree_dir(&src), Some(tree.clone()));
         let ids = [1u32, 3, 0, 2];
         let pos: Vec<u32> = (0..4).collect();
         let a = quantized

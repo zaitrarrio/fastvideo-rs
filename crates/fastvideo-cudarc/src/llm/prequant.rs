@@ -145,19 +145,23 @@ pub fn check(
     Ok(m)
 }
 
-/// The pre-quantized map for `source_dir` (`…/text_encoder`) when a valid
-/// sibling tree exists, else `None` (logged).
-pub fn open_tree(source_dir: &Path, layers: usize) -> Result<Option<WeightMap>> {
+/// Where the pre-quantized tree of `source_dir` (`…/text_encoder`) lives:
+/// its sibling `text_encoder_fp8/`. `None` for a path without a parent.
+pub fn tree_dir(source_dir: &Path) -> Option<PathBuf> {
+    source_dir.parent().map(|p| p.join(DIR_NAME))
+}
+
+/// The directory of the valid pre-quantized tree for `source_dir`, else
+/// `None` (logged): what [`open_tree`] opens. `FASTVIDEO_TEXT_FP8_TREE=0`
+/// turns trees off.
+pub fn resolve_tree(source_dir: &Path, layers: usize) -> Option<PathBuf> {
     if fastvideo_models::settings::env_var("FASTVIDEO_TEXT_FP8_TREE").is_ok_and(|v| v.trim() == "0")
     {
-        return Ok(None);
+        return None;
     }
-    let Some(parent) = source_dir.parent() else {
-        return Ok(None);
-    };
-    let dir = parent.join(DIR_NAME);
+    let dir = tree_dir(source_dir)?;
     if !dir.is_dir() {
-        return Ok(None);
+        return None;
     }
     match check(source_dir, &dir, layers) {
         Ok(m) => {
@@ -167,16 +171,33 @@ pub fn open_tree(source_dir: &Path, layers: usize) -> Result<Option<WeightMap>> 
                 m.quantized_linears,
                 m.layers
             ));
-            Ok(Some(WeightMap::open(&dir)?))
+            Some(dir)
         }
         Err(why) => {
             crate::rt::log::info(format_args!(
                 "text encoder: ignoring {} ({why}); quantizing at load",
                 dir.display()
             ));
-            Ok(None)
+            None
         }
     }
+}
+
+/// The pre-quantized map for `source_dir` (`…/text_encoder`) when a valid
+/// sibling tree exists ([`resolve_tree`]), else `None` (logged).
+pub fn open_tree(source_dir: &Path, layers: usize) -> Result<Option<WeightMap>> {
+    match resolve_tree(source_dir, layers) {
+        Some(dir) => Ok(Some(WeightMap::open(&dir)?)),
+        None => Ok(None),
+    }
+}
+
+/// Whether `map` holds pre-quantized FP8 rows (any `weight_scale_rows`
+/// tensor): a tree, not a float checkpoint.
+pub fn holds_fp8_rows(map: &WeightMap) -> bool {
+    let suffix = format!(".{FP8_ROWS_SCALE_SUFFIX}");
+    map.lazy()
+        .is_some_and(|lazy| lazy.keys().any(|k| k.ends_with(&suffix)))
 }
 
 /// Keys of `src` a resident decoder with `layers` layers reads.
