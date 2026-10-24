@@ -953,3 +953,32 @@ Project code: FVID
 - ADR: none
 - Verification: CPU tests on the fake causal model (`tests/segments.rs`); GPU smoke 2026-10-21 on an H100 (docs/serve/segments.md §6): four 6 s segments, 2.9 s generation per segment in steady state, the seam between segments 0 and 1 indistinguishable from an inter-frame difference, `stale_blocks`/`discarded_blocks` as designed
 
+### FVID · 2026-10-24 · FVID-2026-10-24-a4-toml-parser
+- Trigger: plan A4 needs `control/gen-configs.mjs` (plain Node) to read `families/*.toml`; control had no TOML parser (wrangler bundles its own, not importable) and Node 22 has none
+- Options: a hand-written TOML-subset parser in the generator; `smol-toml`; `@iarna/toml` (TOML 0.5, unmaintained)
+- Decision: `smol-toml` 1.9.1 as a pinned devDependency of `control/` (TOML 1.0, zero dependencies); the generator validates the shape it reads (`parseFamily`) and tests pin a fixture
+- Reason: the family files use tables, arrays of tables and typed arrays a subset parser would get subtly wrong; the dependency is small, well known and dev-only
+- Reversibility: cheap (one import)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: none (ADR-0008 covers the format)
+- Verification: `node gen-configs.mjs --check`, `test/unit/families-gen.test.ts`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-a4-generator-scope
+- Trigger: plan A4 lists presets, `enums.ts`, `variants.sh`, `families.tsv`, autoscale pools, `verify-weights.sh` cells and the `images.md` table as generated; the family manifests carry no deployment data (image variant, config, pool sizes, machine types, cells by component)
+- Options: invent a `[deploy]` section now; generate only what the manifests derive and cross-check the rest; leave everything hand-written until C1
+- Decision: the generator owns the identity-derived parts only (`families-gen.ts`, `volumes.ts` `EU_TREES` from `volumes.sh`, `families.tsv` `weight_trees` / `served`, `verify-weights.sh` `variant_trees`), consumers derive from the tables (`recipe-trees.ts`, every model preset's `weights` / `min_vram_gb`, the `family` enum) and `--check` cross-checks the hand-written copies (`catalog.json`, `autoscale.toml`, `volumes.sh`); deployment data stays hand-written for C1. Names the manifests lack (`longlive-1.3b`, `lightx2v-turbo-v0.1`) are recorded exceptions, not invented variants
+- Reason: no invented data; the family files are A3's to change; a generated region with a hand-written source is still one source
+- Reversibility: cheap (C1 extends the same generator)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: none
+- Verification: `gen-configs.mjs --check` and the control unit tests in `.github/workflows/control.yml`
+
+### FVID · 2026-10-24 · FVID-2026-10-24-a4-control-workflow
+- Trigger: A4 needs `gen-configs.mjs --check` and the control unit tests in CI; no workflow ran them (control's vitest suite was not in CI, which let one test go stale after F2)
+- Options: a job in `serve-compat.yml` (its `paths` would then run the ten compat suites on every control change); a new node-only workflow
+- Decision: `.github/workflows/control.yml`: `npm ci`, `--check`, typecheck, vitest, `scripts/gpu/lint.sh`, on changes to the generator's inputs and outputs
+- Reason: minutes instead of a Rust build and a browser matrix; the same pinned-by-tag action style
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: none
+- Verification: the workflow on the A4 PR

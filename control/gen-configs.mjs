@@ -1,5 +1,7 @@
 // Generates the controller's copies of the serve configs from
-// configs/serve (the source of truth):
+// configs/serve (the source of truth), and the control-plane and script
+// tables that derive from the family manifests families/*.toml (plan A4,
+// docs/adr/0008-family-manifest-layer-2.md):
 //   src/cluster/worker-configs.ts   the worker configs the pool presets send
 //                                   inline (FV_WORKER_TOML_B64), so they run on
 //                                   images whose variant does not carry them
@@ -14,12 +16,26 @@
 //                                   (crates/fastvideo-serve/console, the
 //                                   files console.rs embeds), served unchanged
 //                                   by the serverless console proxy
-//   node gen-configs.mjs            rewrite them
-//   node gen-configs.mjs --check    exit 1 when they are stale (test/unit/payloads.test.ts runs the same check)
+//   src/families-gen.ts             the family manifests: families, variants (tier, served
+//                                   names, trees, GPU needs) and every name a serve config
+//                                   may use for a variant (families/*.toml)
+//   src/volumes.ts                  region EU_TREES from scripts/gpu/volumes.sh FV_EU_VOLUME_TREES
+//   ../scripts/gcp/families.tsv     columns weight_trees and served, from each row's Runpod
+//                                   twin config and the family manifests
+//   ../scripts/gpu/verify-weights.sh region variant_trees (the `variant:<id>` cells)
+//   node gen-configs.mjs            rewrite them (after the cross-checks below pass)
+//   node gen-configs.mjs --check    exit 1 when they are stale or a cross-check fails
+//                                   (test/unit/payloads.test.ts and families-gen.test.ts run the same)
+// Cross-checks (crossChecks): every family tree is a dest of weights-manifest.tsv / weights-r2.tsv,
+// src/cluster/catalog.json names only families, models and recipes the manifests know (two
+// documented exceptions), configs/autoscale.toml pools name a dispatch family, volumes.sh's
+// trees are published trees. What the manifests do not carry (image variants, presets, pool
+// sizes, cells by component) stays hand-written until plan C1's `[deploy]` section.
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse as parseToml } from "smol-toml";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVE = join(HERE, "../configs/serve");
@@ -198,6 +214,290 @@ export const R2_FETCH_PY = ${lit(py)};
 `;
 }
 
+// ---------------------------------------------------------------- family manifests (families/*.toml, plan A4)
+const ROOT = join(HERE, "..");
+const FAMILIES_DIR = join(ROOT, "families");
+const GEN_HEADER = "GENERATED from families/*.toml by control/gen-configs.mjs; do not edit";
+export const TIERS = ["max", "turbo", "draft"];
+/** The canonical tier alias of (family, tier): crates/fastvideo-engine-service/src/caps.rs tier_alias. */
+export const TIER_ALIAS = {
+  h3: { max: "h3-max", turbo: "h3-turbo", draft: "h3-draft" },
+  ltx2: { max: "ltx-pro", turbo: "ltx-turbo", draft: "ltx-draft" },
+  wan: { max: "wan-max", turbo: "wan-turbo", draft: "wan-draft" },
+};
+/** The edge / dispatch family of a model family (docs/serve/dispatch-do-family.md §4; fastvideo-serve tests/e2e.rs do_family). */
+export const DISPATCH_FAMILY = { h3: "h3", ltx2: "ltx", wan: "wan" };
+/** The auxiliary/ files (TAE decoders, LPIPS): fetched by every boot as the aux trees, never a preset's weights. */
+export const isAuxTree = (t) => t.startsWith("auxiliary/");
+const isRelPath = (t) => typeof t === "string" && t.length > 0 && !t.startsWith("/") && !t.endsWith("/") && !t.includes("//") && !t.split("/").some((seg) => seg === "" || seg === "." || seg === "..");
+
+/** One family file (layer 2): the header and its variants, validated as crates/fastvideo-manifest/src/family.rs does for what the generator reads. */
+export function parseFamily(label, text) {
+  const doc = parseToml(text);
+  if (doc.schema !== 1) throw new Error(`${label}: schema = ${JSON.stringify(doc.schema)}, want 1`);
+  const f = doc.family;
+  if (!f || typeof f !== "object") throw new Error(`${label}: no [family] table`);
+  for (const k of ["id", "display", "licence", "port_doc"]) if (typeof f[k] !== "string" || !f[k]) throw new Error(`${label}: family.${k} missing`);
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(f.id)) throw new Error(`${label}: family.id ${JSON.stringify(f.id)}`);
+  const vs = doc.variants;
+  if (!Array.isArray(vs) || !vs.length) throw new Error(`${label}: no [[variants]]`);
+  const variants = vs.map((v, i) => {
+    const at = `${label}: variants[${i}]`;
+    if (typeof v.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(v.id)) throw new Error(`${at}.id ${JSON.stringify(v.id)}`);
+    if (v.tier !== undefined && !TIERS.includes(v.tier)) throw new Error(`${at}.tier ${JSON.stringify(v.tier)}: ${TIERS.join(" | ")}`);
+    const served = v.served_names ?? [];
+    if (!Array.isArray(served) || !served.every((s) => typeof s === "string" && s) || served.includes(v.id)) throw new Error(`${at}.served_names`);
+    if (typeof v.recipe_name !== "string" || !v.recipe_name) throw new Error(`${at}.recipe_name`);
+    if (typeof v.resident_default !== "boolean") throw new Error(`${at}.resident_default`);
+    if (!Array.isArray(v.trees) || !v.trees.length || !v.trees.every(isRelPath)) throw new Error(`${at}.trees: a non-empty list of relative paths`);
+    const sorted = [...v.trees].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    if (sorted.some((t, j) => t !== v.trees[j]) || new Set(v.trees).size !== v.trees.length) throw new Error(`${at}.trees: sorted and unique`);
+    const g = v.gpu;
+    if (!g || !Number.isInteger(g.min_vram_gib) || g.min_vram_gib <= 0) throw new Error(`${at}.gpu.min_vram_gib`);
+    if (!Number.isInteger(g.min_sm) || g.min_sm < 10 || g.min_sm > 999) throw new Error(`${at}.gpu.min_sm`);
+    const needs = g.needs ?? [];
+    if (!Array.isArray(needs) || !needs.every((n) => typeof n === "string" && n)) throw new Error(`${at}.gpu.needs`);
+    if (!v.caps || typeof v.caps !== "object") throw new Error(`${at}.caps`);
+    if (!v.engine || typeof v.engine !== "object" || !Object.keys(v.engine).length) throw new Error(`${at}.engine`);
+    return {
+      id: v.id,
+      tier: v.tier ?? null,
+      served_names: [...served],
+      resident_default: v.resident_default,
+      recipe_name: v.recipe_name,
+      trees: [...v.trees],
+      weight_trees: v.trees.filter((t) => !isAuxTree(t)),
+      gpu: { min_vram_gib: g.min_vram_gib, min_sm: g.min_sm, needs: [...needs] },
+    };
+  });
+  return { id: f.id, display: f.display, licence: f.licence, port_doc: f.port_doc, variants };
+}
+
+/** Recipe aliases the engine resolves besides the names in MODEL_NAMES: `cuda/caps.rs model_from_config` arms that
+ * map a recipe string to a catalog id. Only the ones a serve config in this repository uses; `variantOf` does not
+ * consult them (`recipeVariant` does). The engine also accepts contract names nothing here lists (`4step-vsa`,
+ * `8step`, `sol-h3` / `sol_h3`, `trim-8step`, an empty recipe for the turbo tier, family `ltx` for `ltx2`): A3
+ * settles which names the manifests carry; until then a config using them is refused by the control plane. */
+export const ENGINE_RECIPE_ALIASES = { "vdn-h3-50step": "vdn-h3" }; // VDN_H3_RECIPE => VDN_H3_ID
+
+/** The families together: ids and served names unique across the set, and the name table (a serve config's `recipe`
+ * or `id` → variant) as the engine resolves names (caps.rs `find` / `parse_tier_alias`): a tier alias (`h3-turbo`:
+ * the first variant of the family with that tier, in file order), the variant id, or a served name. A variant's
+ * `recipe_name` is what the capabilities report, not a name a config may use: it is not in the table. */
+export function familySet(families) {
+  const names = new Map();
+  const put = (name, variant, kind, family) => {
+    const cur = names.get(name);
+    if (cur && cur.variant !== variant) throw new Error(`families: ${name} is the ${cur.kind} of ${cur.variant} and the ${kind} of ${variant}`);
+    if (!cur) names.set(name, { variant, kind, family });
+  };
+  const famIds = new Set();
+  for (const f of families) {
+    if (famIds.has(f.id)) throw new Error(`families: family ${f.id} twice`);
+    famIds.add(f.id);
+    if (!TIER_ALIAS[f.id] || !DISPATCH_FAMILY[f.id]) throw new Error(`families: ${f.id} has no tier alias / dispatch family (gen-configs.mjs TIER_ALIAS, DISPATCH_FAMILY; caps.rs tier_alias)`);
+    for (const v of f.variants) put(v.id, v.id, "id", f.id);
+  }
+  for (const f of families) for (const v of f.variants) for (const s of v.served_names) put(s, v.id, "served", f.id);
+  for (const f of families) for (const tier of TIERS) {
+    const v = f.variants.find((x) => x.tier === tier);
+    if (v) put(TIER_ALIAS[f.id][tier], v.id, "tier", f.id);
+  }
+  const variants = new Map(families.flatMap((f) => f.variants.map((v) => [v.id, { ...v, family: f.id }])));
+  const engineAliases = Object.fromEntries(Object.entries(ENGINE_RECIPE_ALIASES).filter(([, id]) => variants.has(id)));
+  for (const [alias, id] of Object.entries(engineAliases)) if (names.has(alias)) throw new Error(`families: engine alias ${alias} is also the ${names.get(alias).kind} of ${names.get(alias).variant}`);
+  return { families, variants, names, engineAliases };
+}
+/** The variant a serve config's `recipe` resolves to: a MODEL_NAMES name, else an engine recipe alias; undefined otherwise. */
+export function recipeVariantOf(set, recipe) {
+  const n = set.names.get(recipe);
+  if (n) return set.variants.get(n.variant);
+  const id = set.engineAliases[recipe];
+  return id ? set.variants.get(id) : undefined;
+}
+
+export function loadFamilies(dir = FAMILIES_DIR) {
+  const files = readdirSync(dir).filter((f) => f.endsWith(".toml")).sort();
+  return familySet(files.map((f) => parseFamily(`families/${f}`, readFileSync(join(dir, f), "utf8"))));
+}
+
+const sortedKeys = (o) => Object.fromEntries(Object.keys(o).sort().map((k) => [k, o[k]]));
+/** src/families-gen.ts: the tables fv-control reads (src/families.ts, recipe-trees.ts, presets.ts, schemas.ts). */
+export function familiesGenTs(set = loadFamilies()) {
+  const fams = set.families.map((f) => ({ id: f.id, display: f.display, licence: f.licence, port_doc: f.port_doc, variants: f.variants.map((v) => v.id) }));
+  const variants = {};
+  for (const f of set.families) for (const v of f.variants) variants[v.id] = { family: f.id, tier: v.tier, served_names: v.served_names, resident_default: v.resident_default, recipe_name: v.recipe_name, trees: v.trees, weight_trees: v.weight_trees, gpu: v.gpu };
+  const names = sortedKeys(Object.fromEntries([...set.names].map(([n, x]) => [n, { variant: x.variant, kind: x.kind }])));
+  const aliases = sortedKeys(set.engineAliases);
+  return `// ${GEN_HEADER}.
+// The runtime family manifests (layer 2, docs/adr/0008-family-manifest-layer-2.md, families/README.md): every served
+// model family and variant, the names a serve config may use for a variant, the weight trees it reads and its GPU
+// needs. Helpers: src/families.ts. Regenerate with \`node gen-configs.mjs\`; CI runs \`--check\`.
+export type Tier = "max" | "turbo" | "draft";
+export interface ManifestFamily {
+  id: string;
+  display: string;
+  licence: string;
+  port_doc: string;
+  /** Variant ids in file order (the engine catalog's order: a tier alias resolves to the first of its tier). */
+  variants: string[];
+}
+export interface ManifestVariant {
+  family: string;
+  tier: Tier | null;
+  /** Names besides the id the variant answers to. */
+  served_names: string[];
+  resident_default: boolean;
+  /** The short recipe name the capabilities report. */
+  recipe_name: string;
+  /** Every weight tree the variant reads, as scripts/gpu/weights-manifest.tsv names them (sorted). */
+  trees: string[];
+  /** \`trees\` without the auxiliary/ files (TAE decoders, LPIPS), which every boot fetches as the aux trees:
+   * what a preset lists as its weights and a weights plan fetches. */
+  weight_trees: string[];
+  gpu: { min_vram_gib: number; min_sm: number; needs: string[] };
+}
+export const MANIFEST_FAMILIES: ManifestFamily[] = ${JSON.stringify(fams, null, 2)};
+export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = ${JSON.stringify(variants, null, 2)};
+/** Every name a serve config's \`recipe\` (or \`id\`) may use for a variant, as the engine resolves it (caps.rs \`find\`,
+ * \`parse_tier_alias\`): a tier alias (\`h3-turbo\`: the first variant of its tier), the variant id or a served name. A
+ * variant's \`recipe_name\` is what the capabilities report, not a config name, and is not here. */
+export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" | "served" }> = ${JSON.stringify(names, null, 2)};
+/** Recipe aliases the engine resolves besides MODEL_NAMES (caps.rs \`model_from_config\` arms a config here uses);
+ * \`variantOf\` does not consult them, \`recipeVariant\` does. The engine also accepts contract names neither table
+ * lists (\`4step-vsa\`, \`8step\`, \`sol-h3\` / \`sol_h3\`, \`trim-8step\`, an empty recipe, family \`ltx\`): plan A3 settles
+ * which the manifests carry. */
+export const ENGINE_RECIPE_ALIASES: Record<string, string> = ${JSON.stringify(aliases, null, 2)};
+`;
+}
+
+/** The text of `file` with the lines between the `begin` and `end` marker lines replaced by `body` (the markers stay). */
+export function withRegion(text, begin, end, body, label) {
+  const lines = text.split("\n");
+  const b = lines.indexOf(begin);
+  const e = lines.indexOf(end);
+  if (b < 0 || e < 0 || e < b) throw new Error(`${label}: no generated region (${begin} … ${end})`);
+  return [...lines.slice(0, b + 1), ...body.split("\n"), ...lines.slice(e)].join("\n");
+}
+const readRel = (rel) => readFileSync(join(HERE, rel), "utf8");
+
+/** scripts/gpu/volumes.sh FV_EU_VOLUME_TREES: what r2-fill-volume.sh wrote to the EU volume (an ops fact, hand-kept there). */
+export function euVolumeTrees() {
+  const m = /^FV_EU_VOLUME_TREES="([^"]*)"/m.exec(readFileSync(join(GPU, "volumes.sh"), "utf8"));
+  if (!m) throw new Error("scripts/gpu/volumes.sh: no FV_EU_VOLUME_TREES");
+  return m[1].replace(/\\\n/g, " ").split(/\s+/).filter(Boolean);
+}
+export const VOLUMES_TS_BEGIN = "// BEGIN GENERATED from scripts/gpu/volumes.sh FV_EU_VOLUME_TREES by control/gen-configs.mjs; do not edit";
+export const VOLUMES_TS_END = "// END GENERATED";
+export function volumesTs() {
+  const body = `export const EU_TREES = [\n${euVolumeTrees().map((t) => `  ${JSON.stringify(t)},`).join("\n")}\n] as const;`;
+  return withRegion(readRel("src/volumes.ts"), VOLUMES_TS_BEGIN, VOLUMES_TS_END, body, "src/volumes.ts");
+}
+
+/** The `[[models]]` rows of a serve config (id, family, recipe), as the control plane's tests read them. */
+export function configModels(text) {
+  return [...text.matchAll(/^\[\[models\]\]\nid = "([^"]+)"\nfamily = "([^"]+)"\nrecipe = "([^"]+)"/gm)].map((m) => ({ id: m[1], family: m[2], recipe: m[3] }));
+}
+/** The variant a config's `recipe` resolves to, or an error naming the config. */
+function resolveRecipe(set, recipe, where) {
+  const v = recipeVariantOf(set, recipe);
+  if (!v) throw new Error(`${where}: recipe ${JSON.stringify(recipe)} is not a name the family manifests know (tier alias, variant id, served name) nor an engine recipe alias`);
+  return v;
+}
+
+/** scripts/gcp/families.tsv: the hand-written rows with the columns the manifests derive (weight_trees, served)
+ * recomputed from each row's Runpod twin config: its [[models]] recipes → variants → weight trees. */
+export function gcpFamiliesTsv(set = loadFamilies()) {
+  const rel = "../scripts/gcp/families.tsv";
+  return readRel(rel)
+    .split("\n")
+    .map((line) => {
+      if (!line.trim() || line.startsWith("#")) return line;
+      const c = line.split("\t");
+      if (c.length !== 11) throw new Error(`${rel}: ${c.length} columns in ${JSON.stringify(line)}`);
+      const [family, , twin, dfam] = c;
+      if (twin === "-") return line;
+      const models = configModels(readFileSync(join(SERVE, twin), "utf8"));
+      if (!models.length) throw new Error(`${rel} ${family}: ${twin} has no [[models]]`);
+      const trees = [];
+      for (const m of models) {
+        const v = resolveRecipe(set, m.recipe, `${rel} ${family} (${twin})`);
+        if (v.family !== m.family) throw new Error(`${rel} ${family}: ${twin} model ${m.id} says family ${m.family}, the manifests say ${v.family}`);
+        if (DISPATCH_FAMILY[v.family] !== dfam) throw new Error(`${rel} ${family}: dispatch_family ${dfam}, the manifests say ${DISPATCH_FAMILY[v.family]}`);
+        for (const t of v.weight_trees) if (!trees.includes(t)) trees.push(t);
+      }
+      c[5] = trees.join(" ");
+      c[9] = models.map((m) => m.id).join(" ");
+      return c.join("\t");
+    })
+    .join("\n");
+}
+
+export const VERIFY_SH_BEGIN = `# BEGIN ${GEN_HEADER}`;
+export const VERIFY_SH_END = "# END GENERATED";
+/** scripts/gpu/verify-weights.sh: `variant_trees <id>` (the `variant:<id>` cells) and the id list. */
+export function verifyWeightsSh(set = loadFamilies()) {
+  const ids = [...set.variants.keys()];
+  const body = [
+    "# variant_trees <variant id> -> the weight trees the variant reads (families/<family>.toml `trees`, as",
+    "# weights-manifest.tsv names them; the `variant:<id>` cells), or status 1 for an unknown id.",
+    "variant_trees() {",
+    "  case \"$1\" in",
+    ...ids.map((id) => `    ${id}) echo "${set.variants.get(id).trees.join(" ")}" ;;`),
+    "    *) return 1 ;;",
+    "  esac",
+    "}",
+    `FV_VARIANT_IDS="${ids.join(" ")}"`,
+  ].join("\n");
+  return withRegion(readRel("../scripts/gpu/verify-weights.sh"), VERIFY_SH_BEGIN, VERIFY_SH_END, body, "scripts/gpu/verify-weights.sh");
+}
+
+/** Names src/cluster/catalog.json uses that the family manifests do not carry, and why (each a question for plan A3 / C1). */
+export const CATALOG_EXCEPTIONS = {
+  "longlive-1.3b": "LongLive-1.3B is served through the sfwan21-1.3b variant with a `longlive` path in the worker config (configs/serve/runpod-longlive.toml); wan.toml has no LongLive variant",
+  "lightx2v-turbo-v0.1": "the h3-lightx2v-turbo catalog model with the lightx2v v0.1 adapter (caps.rs model_from_config); h3.toml has no variant for it (tree h3-turbo-loras/lightx2v-v0.1)",
+  "h3-lightx2v-turbo-v01": "the served id of that model (configs/serve/runpod-h3-lightx2v-turbo-v01.toml); the same missing variant",
+};
+/** What must agree with the family manifests but is kept elsewhere (hand-written until plan C1): a list of problems, empty when all agree. */
+export function crossChecks(set = loadFamilies()) {
+  const out = [];
+  const dests = new Set([...tsvRows("weights-manifest.tsv"), ...tsvRows("weights-r2.tsv")].map((r) => r[0]));
+  for (const [id, v] of set.variants) for (const t of v.trees) if (!dests.has(t)) out.push(`families/${v.family}.toml ${id}: tree ${t} is not a dest of scripts/gpu/weights-manifest.tsv or weights-r2.tsv`);
+  for (const t of euVolumeTrees()) if (!dests.has(t) && ![...dests].some((d) => d.startsWith(t + "/"))) out.push(`scripts/gpu/volumes.sh FV_EU_VOLUME_TREES: ${t} is not a published tree (weights-manifest.tsv / weights-r2.tsv)`);
+  const cat = JSON.parse(readRel("src/cluster/catalog.json"));
+  const famIds = set.families.map((f) => f.id);
+  const catFams = cat.families.map((f) => f.id);
+  if (JSON.stringify([...catFams].sort()) !== JSON.stringify([...famIds].sort())) out.push(`src/cluster/catalog.json families ${catFams.join(", ")} vs families/*.toml ${famIds.join(", ")}`);
+  const known = (name, family, where) => {
+    const v = recipeVariantOf(set, name);
+    if (v) {
+      if (v.family !== family) out.push(`${where}: ${name} is a ${v.family} name in the manifests, not ${family}`);
+      return;
+    }
+    if (!CATALOG_EXCEPTIONS[name]) out.push(`${where}: ${name} is not a name the family manifests know (a tier alias, variant id, served name), not an engine recipe alias (ENGINE_RECIPE_ALIASES) and not a documented exception (gen-configs.mjs CATALOG_EXCEPTIONS)`);
+  };
+  for (const m of cat.models) {
+    known(m.id, m.family, `src/cluster/catalog.json models ${m.id}`);
+    known(m.recipe, m.family, `src/cluster/catalog.json models ${m.id} recipe`);
+  }
+  for (const r of cat.recipes) if (r.serve) known(r.id, r.family, `src/cluster/catalog.json recipes ${r.id}`);
+  // src/serverless/serves.ts RECIPES restates each name's tier (what an endpoint serves): it must be the variant's.
+  const serves = readRel("src/serverless/serves.ts");
+  const recipesTs = /export const RECIPES[^=]*= \{\n([\s\S]*?)\n\};/.exec(serves);
+  if (!recipesTs) out.push("src/serverless/serves.ts: no RECIPES table");
+  for (const m of (recipesTs?.[1] ?? "").matchAll(/^ {2}"([^"]+)": \{ tasks: [^,]+, tier: (?:"([a-z]+)"|null) \},$/gm)) {
+    const [, name, tier = null] = m;
+    const v = recipeVariantOf(set, name);
+    if (!v) {
+      if (!CATALOG_EXCEPTIONS[name]) out.push(`src/serverless/serves.ts RECIPES ${name}: not a name the family manifests know and not a documented exception`);
+    } else if (v.tier !== tier) out.push(`src/serverless/serves.ts RECIPES ${name}: tier ${tier}, the manifests say ${v.tier} (${v.id})`);
+  }
+  const auto = parseToml(readRel("../configs/autoscale.toml"));
+  const dispatch = new Set(Object.values(DISPATCH_FAMILY));
+  for (const p of auto.autoscale?.pools ?? []) if (!dispatch.has(p.family)) out.push(`configs/autoscale.toml pool ${p.name}: family ${p.family} is not a dispatch family (${[...dispatch].join(", ")})`);
+  return out;
+}
+
 export const OUTPUTS = {
   "src/cluster/worker-configs.ts": workerConfigsTs,
   "src/cluster/image-configs.ts": imageConfigsTs,
@@ -205,10 +505,17 @@ export const OUTPUTS = {
   "src/weights-sources.ts": weightsSourcesTs,
   "src/r2-trees.ts": r2TreesTs,
   "src/r2-fetch-script.ts": r2FetchScriptTs,
+  "src/families-gen.ts": () => familiesGenTs(),
+  "src/volumes.ts": volumesTs,
+  "../scripts/gcp/families.tsv": () => gcpFamiliesTsv(),
+  "../scripts/gpu/verify-weights.sh": () => verifyWeightsSh(),
 };
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const check = process.argv.includes("--check");
+  const problems = crossChecks();
+  for (const p of problems) console.error(`cross-check: ${p}`);
+  if (problems.length) process.exit(1);
   let stale = 0;
   for (const [rel, gen] of Object.entries(OUTPUTS)) {
     const p = join(HERE, rel);
