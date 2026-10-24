@@ -1,5 +1,5 @@
 # fv-serve on Runpod: the Wan 2.1 T2V-14B fast tier, `wan14b-turbo`
-# (catalog id `wan14b-plug-4step`; docs/serve/research-longlive.md §12).
+# (variant `wan14b-plug-4step`; docs/serve/research-longlive.md §12).
 # Secrets as in runpod.toml.
 #
 # Wan 2.1 T2V-14B with the LongLive-Plug 14B adapters (few-step lightx2v at
@@ -43,10 +43,7 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "wan14b-plug-4step"
-family = "wan"
-recipe = "wan14b-turbo"
-weights = "${FV_WEIGHTS}/wan21-t2v-14b"
+variant = "wan14b-plug-4step"
 resident = true
 
 [protocols]

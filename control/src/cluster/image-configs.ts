@@ -93,12 +93,6 @@ load_ms = 500
 all_resident = true
 placeholder_output = true
 
-[aliases]
-"MiniMax-H3" = "fake-h3-turbo"
-"MiniMax-H3-Max" = "fake-h3-max"
-"MiniMax-H3-Turbo" = "fake-h3-turbo"
-"fastwan-1.3b" = "fake-wan"
-
 [protocols]
 openai_videos = true
 fastwan = false
@@ -138,10 +132,7 @@ post_encoder = "auto"
 
 # h3-max: Sol-H3 4-step on the tau-ladder engine route (one GPU).
 [[models]]
-id = "sol-h3"
-family = "h3"
-recipe = "h3-max"
-weights = "\${FV_WEIGHTS}/h3-base"
+variant = "sol-h3"
 resident = true
 # Image-to-video text: keep the Qwen-VL vision tower resident beside the
 # resident text encoder (\`auto\`: when it fits; \`stream\` reads it from the
@@ -154,9 +145,6 @@ i2v_encoder = "auto"
 warmup = true
 # The native 1080P tier is on (80 GB-class GPUs and up): see runpod.toml.
 # h3_1080p = false
-
-[aliases]
-"MiniMax-H3-Max" = "sol-h3"
 
 [protocols]
 openai_videos = true
@@ -204,10 +192,7 @@ post_encoder = "auto"
 
 # ltx-turbo: LTX-2.5 distilled two-stage, Sol stage 2 (one GPU).
 [[models]]
-id = "ltx25-distill-sol"
-family = "ltx2"
-recipe = "ltx-turbo"
-weights = "\${FV_WEIGHTS}/ltx25"
+variant = "ltx25-distill-sol"
 resident = true
 
 [protocols]
@@ -270,10 +255,7 @@ post_encoder = "auto"
 
 # SF-Wan 1.3B causal rollout (StreamCaps::Causal), one session per GPU.
 [[models]]
-id = "sfwan21-1.3b"
-family = "wan"
-recipe = "sfwan21-1.3b"
-weights = "\${FV_WEIGHTS}/sfwan21-1.3b"
+variant = "sfwan21-1.3b"
 resident = true
 
 [protocols]
@@ -329,10 +311,7 @@ post_encoder = "auto"
 # FastWan2.1 1.3B DMD 3-step, VSA (one GPU; small, add more FASTVIDEO_VSA=1
 # Wan models here). Untiered since the 5B FastWan2.2 became wan-turbo.
 [[models]]
-id = "fastwan21-1.3b"
-family = "wan"
-recipe = "fastwan21-1.3b"
-weights = "\${FV_WEIGHTS}/fastwan21-1.3b"
+variant = "fastwan21-1.3b"
 resident = true
 
 [protocols]
@@ -360,7 +339,7 @@ body_max_mb = 64
 pool = "wan"
 `,
   "runpod-wan14b.toml": `# fv-serve on Runpod: the Wan 2.1 T2V-14B fast tier, \`wan14b-turbo\`
-# (catalog id \`wan14b-plug-4step\`; docs/serve/research-longlive.md §12).
+# (variant \`wan14b-plug-4step\`; docs/serve/research-longlive.md §12).
 # Secrets as in runpod.toml.
 #
 # Wan 2.1 T2V-14B with the LongLive-Plug 14B adapters (few-step lightx2v at
@@ -404,10 +383,7 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "wan14b-plug-4step"
-family = "wan"
-recipe = "wan14b-turbo"
-weights = "\${FV_WEIGHTS}/wan21-t2v-14b"
+variant = "wan14b-plug-4step"
 resident = true
 
 [protocols]
@@ -466,17 +442,11 @@ post_encoder = "auto"
 swap = true
 
 [[models]]
-id = "fastwan22-ti2v-5b"
-family = "wan"
-recipe = "wan-turbo"
-weights = "\${FV_WEIGHTS}/fastwan22-ti2v-5b"
+variant = "fastwan22-ti2v-5b"
 resident = true
 
 [[models]]
-id = "wan22-ti2v-5b"
-family = "wan"
-recipe = "wan-max"
-weights = "\${FV_WEIGHTS}/wan22-ti2v-5b"
+variant = "wan22-ti2v-5b"
 resident = false
 
 [protocols]
@@ -533,20 +503,17 @@ backend = "cuda"
 post_encoder = "auto"
 
 # One GPU (RTX PRO 6000, 96 GB): the resident models load before /ping
-# answers 200. Each entry resolves against the CUDA catalog
-# (crates/fastvideo-engine-service/src/cuda/caps.rs): \`recipe\` is a tier alias
-# (h3-turbo, h3-max, ltx-turbo, wan-turbo, ...), a catalog id or an H3 recipe
-# name; \`weights\` replaces the catalog's weight directory. One H3 DiT is
-# ~41 GB, so h3-turbo and h3-max do not co-reside: serve them from separate
-# processes (runpod-h3-max.toml), or mark one \`resident = false\` with
-# \`[engine] swap = true\` (a switch reloads from the volume).
+# answers 200. Each entry names a variant of the family manifests
+# (families/*.toml: \`variant\` is a variant id, a served name or a tier alias
+# such as h3-turbo); \`id\` is the id this deployment serves it under, \`weights\`
+# replaces the variant's tree under $FV_WEIGHTS. One H3 DiT is ~41 GB, so
+# h3-turbo and h3-max do not co-reside: serve them from separate processes
+# (runpod-h3-max.toml), or mark one \`resident = false\` with \`[engine] swap =
+# true\` (a switch reloads from the volume).
 [[models]]
+variant = "fasth3-4step-vsa"
 id = "fasth3"
-family = "h3"
-recipe = "h3-turbo"
-weights = "\${FV_WEIGHTS}/h3-base"
 resident = true
-served_names = ["fasth3"]
 continuity = "anchor-last-frame"
 # Image-to-video text: keep the Qwen-VL vision tower resident beside the
 # resident text encoder (\`auto\`: when it fits; \`stream\` reads it from the
@@ -563,10 +530,6 @@ warmup = true
 # tier's memory plan (80 GB-class cards and up). 768P stays the default.
 # \`h3_1080p = false\` turns it off. docs/serve/h3-1080p-and-upscaler.md.
 # h3_1080p = false
-
-[aliases]
-"MiniMax-H3" = "fasth3"
-"MiniMax-H3-Turbo" = "fasth3"
 
 [protocols]
 openai_videos = true

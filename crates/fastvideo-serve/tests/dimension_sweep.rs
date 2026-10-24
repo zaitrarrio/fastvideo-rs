@@ -321,7 +321,7 @@ impl Drop for Sweep {
 /// The catalog a server on an 80 GB-class GPU serves (`hd`: the H3 1080P
 /// tier on), or on a smaller one (the tier off, `gate_h3_1080p`).
 fn served_catalog(hd: bool) -> Vec<CudaModel> {
-    let mut cat = catalog(&WeightLayout::default());
+    let mut cat = catalog(&WeightLayout::default()).unwrap();
     if !hd {
         gate_h3_1080p(&mut cat, None);
     }

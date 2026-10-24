@@ -8,7 +8,9 @@ import type { ModelRef, PoolSpec } from "./cluster/spec";
 import CATALOG from "./cluster/catalog.json";
 import { WORKER_CONFIGS } from "./cluster/worker-configs";
 import { MANIFEST_VARIANTS } from "./families-gen";
-import { RECIPE_TREES } from "./recipe-trees";
+import { mustVariant } from "./families";
+import { recipeTreesOf } from "./recipe-trees";
+import { readToml } from "./serverless/serves";
 
 export const STANDARD_POOLS: PoolSpec[] = [
   { id: "h3-turbo", variant: "h3-turbo", count: 1, compute: "GPU", config: "/etc/fv/runpod.toml", models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
@@ -55,7 +57,7 @@ export interface PoolPreset {
 }
 const uniq = <T,>(xs: T[]) => [...new Set(xs)];
 const recipeOf = (r: string) => {
-  const t = RECIPE_TREES[r];
+  const t = recipeTreesOf(r);
   if (!t) throw new Error(`recipe-trees.ts has no entry for recipe ${r}`);
   return t;
 };
@@ -225,7 +227,7 @@ const MODEL_PRESET_INPUTS: PresetInput[] = [
     title: "MiniMax-H3 Turbo LoRA (lightx2v v0.1, the Space's)",
     description: "MiniMax-H3 with lightx2v/Minimax-h3-Turbo FL2VA/T2VA 4-step v0.1 (Apache-2.0), the file the MiniMax-H3-Turbo-Lora Space folds: 4 forwards at shifts 12 / 3, dense attention, MXFP8; text-, image- and first/last-frame-to-video with audio.",
     prequant: ["h3-base/text_encoder_fp8"],
-    pool: { id: "h3-lightx2v-turbo-v01", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-h3-lightx2v-turbo-v01.toml"), models: [{ id: "h3-lightx2v-turbo-v01", family: "h3", recipe: "lightx2v-turbo-v0.1" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
+    pool: { id: "h3-lightx2v-turbo-v01", variant: "h3-max", count: 1, compute: "GPU", config_toml: inline("runpod-h3-lightx2v-turbo-v01.toml"), models: [{ id: "h3-lightx2v-turbo-v01", family: "h3", recipe: "h3-lightx2v-turbo-v01" }], max_queued: 32, job_timeout_s: 1800, stale_after_s: 120 },
   },
   {
     id: "fastwan21",
@@ -243,10 +245,8 @@ const MODEL_PRESET_INPUTS: PresetInput[] = [
     id: "longlive",
     title: "LongLive-1.3B causal (NON-COMMERCIAL)",
     description: "LongLive-1.3B on the SF-Wan engine (window 12, sink 3, KV re-cache at prompt switches): Reactor and native streams. NON-COMMERCIAL licence: research and evaluation only.",
-    // The converted LongLive checkpoint the config's `longlive` path names: wan.toml has no LongLive variant.
-    weights_extra: ["longlive-1.3b-safetensors"],
     licence: "LongLive-1.3B weights: CC-BY-NC-SA-4.0 (non-commercial; research / evaluation only)",
-    pool: { id: "longlive", variant: "sfwan", count: 1, compute: "GPU", config_toml: inline("runpod-longlive.toml"), models: [{ id: "longlive-1.3b", family: "wan", recipe: "sfwan21-1.3b" }], max_queued: 8, job_timeout_s: 1800, stale_after_s: 60 },
+    pool: { id: "longlive", variant: "sfwan", count: 1, compute: "GPU", config_toml: inline("runpod-longlive.toml"), models: [{ id: "longlive-1.3b", family: "wan", recipe: "longlive-1.3b" }], max_queued: 8, job_timeout_s: 1800, stale_after_s: 60 },
   },
 ];
 export const MODEL_PRESETS: PoolPreset[] = MODEL_PRESET_INPUTS.map(fromManifest);
@@ -273,6 +273,15 @@ export const FASTH3_FAMILY_MEMBERS = presetsWhere((m) => m.family === "h3" && /^
 export const STREAMING_FAMILY_MEMBERS = presetsWhere((m) => recipeStream.get(m.recipe) === "causal");
 /** Every LTX-2.5 preset (turbo, pro, guided A2V, Ref2V). */
 export const LTX_FAMILY_MEMBERS = presetsWhere((m) => m.family === "ltx2");
+/** A serve config's [[models]] as pool models: the id (default: the variant's id), the variant's family, and the
+ * variant as written for the recipe (plan A3: a config names a variant of families/*.toml). */
+export function configModelRefs(toml: string): ModelRef[] {
+  const doc = readToml(toml);
+  return (Array.isArray(doc.models) ? doc.models : []).map((m: Record<string, unknown>) => {
+    const v = mustVariant(String(m.variant ?? ""));
+    return { id: typeof m.id === "string" && m.id ? m.id : v.id, family: v.family, recipe: String(m.variant) };
+  });
+}
 /** The catalog's 480p TAEH3 draft tier: no model preset of its own; the H3 and FastH3 family pools serve it. */
 export const H3_DRAFT: ModelRef = { id: "fasth3-4step-vsa-480p-taeh3", family: "h3", recipe: "h3-draft" };
 
@@ -295,7 +304,14 @@ function familyPreset(o: FamilyOpts): PoolPreset {
   const toml = inline(o.config);
   // The pool's models are its config's [[models]], in its order (the edge routes each id to this pool); the members'
   // models (and the draft tier, H3_DRAFT, for the H3 families) must be exactly those (test/unit/templates.test.ts).
-  const models: ModelRef[] = [...toml.matchAll(/^\[\[models\]\]\nid = "([^"]+)"\nfamily = "([^"]+)"\nrecipe = "([^"]+)"/gm)].map((m) => ({ id: m[1]!, family: m[2]!, recipe: m[3]! }));
+  // A config names a variant (plan A3: `variant`, `id` defaulting to the variant's id); a model keeps the recipe its
+  // member preset uses, which must resolve to the same variant.
+  const known = new Map([...ms.flatMap((p) => p.pool.models ?? []), H3_DRAFT].map((m) => [m.id, m]));
+  const models: ModelRef[] = configModelRefs(toml).map((m) => {
+    const k = known.get(m.id);
+    if (k && mustVariant(k.recipe).id !== mustVariant(m.recipe).id) throw new Error(`${o.config}: model ${m.id} is variant ${m.recipe}, its preset says ${k.recipe}`);
+    return k ?? m;
+  });
   const max = (k: "max_queued" | "job_timeout_s" | "stale_after_s" | "container_disk_gb") => {
     const v = ms.map((p) => p.pool[k]).filter((x): x is number => typeof x === "number");
     return v.length ? Math.max(...v) : undefined;

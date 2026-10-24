@@ -157,6 +157,12 @@ pub trait EngineBackend: Send + 'static {
     fn recipe(&self, _model: &ModelId) -> Recipe {
         Recipe::default()
     }
+    /// The public API names a server maps onto a model (the family file's
+    /// `public_names`, e.g. `MiniMax-H3-Turbo`): what `[aliases]` listed by
+    /// hand before plan A3. Empty when the backend has none.
+    fn public_names(&self, _model: &ModelId) -> Vec<String> {
+        Vec::new()
+    }
     fn load(&mut self, model: &ModelId, obs: &mut dyn FnMut(LoadEvent)) -> Result<(), ApiError>;
     /// Background warm-up (fast boot B): the warm-up runs a resident model
     /// still wants after [`Self::load`] returned, in order. The executor

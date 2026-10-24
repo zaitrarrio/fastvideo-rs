@@ -91,14 +91,17 @@ impl Drop for App {
 /// The prompt upsampler from `[upsampler]` (docs/serve/prompt-upsampling.md):
 /// `None` when the section is absent, or (logged) when the build has no
 /// HTTP client or the client cannot be made. Never logs the key.
-pub fn upsampler_service(c: &Config) -> Option<Arc<fastvideo_upsampler::Service>> {
+pub fn upsampler_service(
+    c: &Config,
+    models: &[fastvideo_engine_service::cuda::CudaModel],
+) -> Option<Arc<fastvideo_upsampler::Service>> {
     let u = c.upsampler.as_ref()?;
     #[cfg(feature = "http-client")]
     {
         let key = (!u.api_key.is_empty()).then(|| u.api_key.expose().to_owned());
         match fastvideo_upsampler::Service::http(&u.base_url, key, u.settings()) {
             Ok(s) => {
-                let counters = crate::tokens::counters(c);
+                let counters = crate::tokens::counters(c, models);
                 let tok = |x: &Option<Arc<dyn fastvideo_upsampler::TokenCounter>>| {
                     x.as_ref()
                         .map_or_else(|| "chars".to_owned(), |t| t.describe())
@@ -128,7 +131,7 @@ pub fn upsampler_service(c: &Config) -> Option<Arc<fastvideo_upsampler::Service>
     }
     #[cfg(not(feature = "http-client"))]
     {
-        let _ = u;
+        let _ = (u, models);
         tracing::warn!("[upsampler] is configured but this build has no `http-client` feature: prompt expansion stays off");
         None
     }
@@ -139,16 +142,46 @@ pub fn build_engine(c: &Config) -> anyhow::Result<EngineService> {
     build_engine_with_clock(c, None)
 }
 
+/// The `[[models]]` of a config resolved against one snapshot of the family
+/// manifests ([`cuda_models`]); none when the config has no `[[models]]`.
+pub fn resolve_models(
+    c: &Config,
+) -> anyhow::Result<Vec<fastvideo_engine_service::cuda::CudaModel>> {
+    if c.models.is_empty() {
+        Ok(Vec::new())
+    } else {
+        cuda_models(c)
+    }
+}
+
 /// [`build_engine`], with the fake backend's load and step time on `clock`
 /// (tests pass a `ManualClock` to decide when loading and steps end).
 pub fn build_engine_with_clock(
     c: &Config,
     clock: Option<std::sync::Arc<dyn fastvideo_engine_service::Clock>>,
 ) -> anyhow::Result<EngineService> {
+    build_engine_resolved(c, &resolve_models(c)?, clock)
+}
+
+/// [`build_engine_with_clock`] with the config's `[[models]]` already
+/// resolved ([`resolve_models`]).
+pub fn build_engine_resolved(
+    c: &Config,
+    models: &[fastvideo_engine_service::cuda::CudaModel],
+    clock: Option<std::sync::Arc<dyn fastvideo_engine_service::Clock>>,
+) -> anyhow::Result<EngineService> {
     let mut backends: Vec<Box<dyn EngineBackend>> = match c.engine.backend {
         EngineBackendKind::Fake => {
             let f = &c.engine.fake;
-            let mut fc = FakeConfig::default();
+            // With `[[models]]`, the fake serves those variants of the family
+            // manifests (their real caps, recipes, public names and the CUDA
+            // pipelines' job checks): a GPU config runs on CPU unchanged
+            // but for `engine.backend`. Without, the built-in fake set.
+            let mut fc = if models.is_empty() {
+                FakeConfig::default()
+            } else {
+                FakeConfig::cuda_catalog(models)
+            };
             if !f.models.is_empty() {
                 let ids: Vec<&str> = f.models.iter().map(String::as_str).collect();
                 fc = fc.with_models(&ids);
@@ -194,8 +227,8 @@ pub fn build_engine_with_clock(
         EngineBackendKind::Cuda => {
             // WP-11: the CudaBackend from `[[models]]` (one GPU).
             #[cfg(feature = "cuda")]
-            if !c.models.is_empty() {
-                vec![cuda_backend(c)?]
+            if !models.is_empty() {
+                vec![cuda_backend(c, models.to_vec())?]
             } else {
                 // Without `[[models]]`: the SF-Wan-only causal backend from
                 // `FV_SFWAN_WEIGHTS` (WP-15).
@@ -241,13 +274,12 @@ pub fn build_engine_with_clock(
     EngineService::start(cfg, backends).map_err(|e| anyhow!("starting the engine: {e}"))
 }
 
-/// The CUDA catalog models for `[[models]]`: each entry resolves against
-/// the catalog (`recipe` = tier alias, catalog id or H3 recipe name, empty =
-/// the family's turbo tier); weights default under `FV_WEIGHTS`
-/// (`/workspace/weights`) and the tiny decoders under `FV_TAE_DIR`
-/// (`$FV_WEIGHTS/auxiliary/tae`). Also checks that the set can share one
-/// process (process-wide technique settings). Built without `cuda` so the
-/// shipped configs are tested on CPU.
+/// The models of `[[models]]`: each entry names a variant of the family
+/// manifests (`families/*.toml`: its id, a served name or a tier alias),
+/// resolved under `FV_WEIGHTS` (`/workspace/weights`) with the tiny decoders
+/// under `FV_TAE_DIR` (`$FV_WEIGHTS/auxiliary/tae`). Also checks that the set
+/// can share one process (process-wide technique settings). Built without
+/// `cuda` so the shipped configs are tested on CPU.
 pub fn cuda_models(c: &Config) -> anyhow::Result<Vec<fastvideo_engine_service::cuda::CudaModel>> {
     use fastvideo_engine_service::cuda::ProcessPlan;
     let models = catalog_models(&c.models)?;
@@ -260,17 +292,21 @@ pub fn cuda_models(c: &Config) -> anyhow::Result<Vec<fastvideo_engine_service::c
     Ok(models)
 }
 
-/// `[[models]]`-style entries resolved against the CUDA catalog (CPU-only:
-/// no weights are read).
+/// `[[models]]`-style entries resolved against the family manifests
+/// (CPU-only: no weights are read).
 pub fn catalog_models(
     entries: &[crate::config::ModelCfg],
 ) -> anyhow::Result<Vec<fastvideo_engine_service::cuda::CudaModel>> {
-    use fastvideo_engine_service::cuda::{model_from_config, ModelEntryCfg, WeightLayout};
+    use fastvideo_engine_service::cuda::{
+        catalog, model_from_catalog, ModelEntryCfg, WeightLayout,
+    };
     let root = std::env::var("FV_WEIGHTS").unwrap_or_else(|_| "/workspace/weights".into());
     let mut layout = WeightLayout::new(&root);
     if let Ok(t) = std::env::var("FV_TAE_DIR") {
         layout = layout.with_tae_dir(t);
     }
+    // One snapshot of the family manifests for every entry.
+    let cat = catalog(&layout).map_err(|e| anyhow!("families: {e}"))?;
     entries
         .iter()
         .map(|m| {
@@ -288,12 +324,12 @@ pub fn catalog_models(
                         .map(|s| (k.clone(), s))
                 })
                 .collect();
-            model_from_config(
-                &layout,
+            model_from_catalog(
+                &cat,
                 &ModelEntryCfg {
-                    id: m.id.clone(),
-                    family: m.family.clone(),
-                    recipe: m.recipe.clone().unwrap_or_default(),
+                    // Empty: the resolved variant's id (not the alias named).
+                    id: m.id.clone().unwrap_or_default(),
+                    variant: m.variant.clone(),
                     weights: m.weights.as_ref().map(Into::into),
                     resident: m.resident,
                     served_names: m.served_names.clone(),
@@ -307,9 +343,12 @@ pub fn catalog_models(
 
 /// The WP-11 `CudaBackend` (GPU 0) for `[[models]]` ([`cuda_models`]).
 #[cfg(feature = "cuda")]
-fn cuda_backend(c: &Config) -> anyhow::Result<Box<dyn EngineBackend>> {
+fn cuda_backend(
+    c: &Config,
+    models: Vec<fastvideo_engine_service::cuda::CudaModel>,
+) -> anyhow::Result<Box<dyn EngineBackend>> {
     use fastvideo_engine_service::cuda::{CudaBackend, CudaBackendConfig, Mp4Encoder};
-    let mut cfg = CudaBackendConfig::new(0, cuda_models(c)?);
+    let mut cfg = CudaBackendConfig::new(0, models);
     cfg.work_dir = c.server.state_dir.join("engine-work");
     cfg.text_cache = Some(c.server.state_dir.join("text-cache"));
     // `auto` was resolved at startup (encoders::resolve) to nvenc or the
@@ -419,9 +458,12 @@ impl App {
                 (j.store, j.d1, kind)
             }
         };
+        // `[[models]]` resolved once: the engine and the prompt upsampler's
+        // tokenizers read the same snapshot of the family manifests.
+        let models = resolve_models(&config)?;
         let engine = match ov.engine {
             Some(e) => e,
-            None => build_engine(&config)?,
+            None => build_engine_resolved(&config, &models, None)?,
         };
         let encoder = match config.engine.post_encoder.as_str() {
             "cpu-test-x264" => FfmpegH264::Libx264CpuTest,
@@ -432,7 +474,6 @@ impl App {
         };
         let gate = ServiceGate::new(
             engine,
-            config.aliases.clone(),
             OutputPolicy {
                 placeholder: config.engine.backend == EngineBackendKind::Fake
                     && config.engine.fake.placeholder_output,
@@ -570,7 +611,7 @@ impl App {
         if let Some(dir) = &config.artifacts.local_dir {
             builder = builder.artifacts_root(dir);
         }
-        if let Some(u) = upsampler_service(&config) {
+        if let Some(u) = upsampler_service(&config, &models) {
             builder = builder.upsampler(u);
         }
         // `[moderation]`: the NCII prompt guard (CPU), loaded before any

@@ -36,12 +36,6 @@ load_ms = 500
 all_resident = true
 placeholder_output = true
 
-[aliases]
-"MiniMax-H3" = "fake-h3-turbo"
-"MiniMax-H3-Max" = "fake-h3-max"
-"MiniMax-H3-Turbo" = "fake-h3-turbo"
-"fastwan-1.3b" = "fake-wan"
-
 [protocols]
 openai_videos = true
 fastwan = false

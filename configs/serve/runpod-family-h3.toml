@@ -2,7 +2,7 @@
 # 2026-10-18: "for the presets means all of the weights for a model family
 # and it's variants are installed onto 1 [pod]"; docs/control/README.md §4).
 #
-# Every H3 variant a pool preset serves, plus the catalog's h3-draft tier:
+# Every H3 variant a pool preset serves, plus the family file's h3-draft tier:
 # turbo (resident), max, Ref2V turbo / max, the TAEH3 previews, Trim (bf16 /
 # NVFP4 / NVFP4 + FP4 attention), the NVFP4 tier (FastH3 V2, 4-step), the
 # MiniMax-H3 Turbo LoRAs and VDN-H3 (50 / 8 steps). One H3 DiT is 40-66 GB,
@@ -46,182 +46,102 @@ swap = true
 
 # h3-turbo: resident at boot, warmed up (runpod.toml).
 [[models]]
+variant = "fasth3-4step-vsa"
 id = "fasth3"
-family = "h3"
-recipe = "h3-turbo"
-weights = "${FV_WEIGHTS}/h3-base"
 resident = true
-served_names = ["fasth3"]
 continuity = "anchor-last-frame"
 i2v_encoder = "auto"
 warmup = true
 
 # h3-max (runpod-h3-max.toml).
 [[models]]
-id = "sol-h3"
-family = "h3"
-recipe = "h3-max"
-weights = "${FV_WEIGHTS}/h3-base"
+variant = "sol-h3"
 resident = false
 i2v_encoder = "auto"
 
-# The 480p TAEH3 draft tier (catalog h3-draft).
+# The 480p TAEH3 draft tier (the h3-draft tier).
 [[models]]
-id = "fasth3-4step-vsa-480p-taeh3"
-family = "h3"
-recipe = "h3-draft"
-weights = "${FV_WEIGHTS}/h3-base"
+variant = "fasth3-4step-vsa-480p-taeh3"
 resident = false
 
 # Ref2V companions (runpod-h3-ref2v.toml; transformer_ref in
 # ${FV_WEIGHTS}/h3-ref2va): Ref2V requests on h3-turbo / h3-max route here.
 [[models]]
-id = "h3-ref2v-turbo"
-family = "h3"
-recipe = "h3-ref2v-turbo"
-weights = "${FV_WEIGHTS}/h3-base"
+variant = "h3-ref2v-turbo"
 resident = false
 
 [[models]]
-id = "h3-ref2v-max"
-family = "h3"
-recipe = "h3-ref2v-max"
-weights = "${FV_WEIGHTS}/h3-base"
+variant = "h3-ref2v-max"
 resident = false
 
 # Fast previews: TAEH3 decode (runpod-h3-*-preview.toml).
 [[models]]
-id = "fasth3-4step-vsa-taeh3"
-family = "h3"
-recipe = "h3-turbo-preview"
-weights = "${FV_WEIGHTS}/h3-base"
+variant = "fasth3-4step-vsa-taeh3"
 resident = false
-served_names = ["h3-turbo-preview"]
 
 [[models]]
-id = "fasth3-v2-nvfp4-taeh3"
-family = "h3"
-recipe = "h3-v2-nvfp4-preview"
-weights = "${FV_WEIGHTS}/fasth3-v2-nvfp4"
+variant = "fasth3-v2-nvfp4-taeh3"
 resident = false
-served_names = ["h3-v2-nvfp4-preview"]
 
 [[models]]
-id = "fasth3-4step-vsa-nvfp4-taeh3"
-family = "h3"
-recipe = "h3-turbo-nvfp4-preview"
-weights = "${FV_WEIGHTS}/fasth3-4step-vsa-nvfp4"
+variant = "fasth3-4step-vsa-nvfp4-taeh3"
 resident = false
-served_names = ["h3-turbo-nvfp4-preview"]
 
 # FastH3 Trim (runpod-h3-trim*.toml; the NVFP4 DiT in
 # ${FV_WEIGHTS}/fasth3-trim-8step-nvfp4, read beside weights).
 [[models]]
-id = "fasth3-trim-8step"
-family = "h3"
-recipe = "h3-trim"
-weights = "${FV_WEIGHTS}/fasth3-trim-8step"
+variant = "fasth3-trim-8step"
 resident = false
-served_names = ["h3-trim", "fasth3-trim"]
 
 [[models]]
-id = "fasth3-trim-nvfp4"
-family = "h3"
-recipe = "h3-trim-nvfp4"
-weights = "${FV_WEIGHTS}/fasth3-trim-8step"
+variant = "fasth3-trim-nvfp4"
 resident = false
-served_names = ["h3-trim-nvfp4"]
 
 [[models]]
-id = "fasth3-trim-nvfp4-fast"
-family = "h3"
-recipe = "h3-trim-nvfp4-fast"
-weights = "${FV_WEIGHTS}/fasth3-trim-8step"
+variant = "fasth3-trim-nvfp4-fast"
 resident = false
-served_names = ["h3-trim-nvfp4-fast"]
 
 # The NVFP4 tier (runpod-h3-v2-nvfp4.toml, runpod-h3-turbo-nvfp4.toml).
 [[models]]
-id = "fasth3-v2-nvfp4"
-family = "h3"
-recipe = "h3-v2-nvfp4"
-weights = "${FV_WEIGHTS}/fasth3-v2-nvfp4"
+variant = "fasth3-v2-nvfp4"
 resident = false
-served_names = ["h3-v2-nvfp4"]
 
 [[models]]
-id = "fasth3-4step-vsa-nvfp4"
-family = "h3"
-recipe = "h3-turbo-nvfp4"
-weights = "${FV_WEIGHTS}/fasth3-4step-vsa-nvfp4"
+variant = "fasth3-4step-vsa-nvfp4"
 resident = false
-served_names = ["h3-turbo-nvfp4"]
 
 # MiniMax-H3 Turbo LoRAs (runpod-h3-*-turbo*.toml; adapters in
 # ${FV_WEIGHTS}/h3-turbo-loras).
 [[models]]
-id = "h3-larry-turbo"
-family = "h3"
-recipe = "h3-larry-turbo"
-weights = "${FV_WEIGHTS}/h3-base"
+variant = "h3-larry-turbo"
 resident = false
-served_names = ["h3-larry-turbo"]
 steps = 6
 lora_strength = 1.0
 
 [[models]]
-id = "h3-lightx2v-turbo"
-family = "h3"
-recipe = "h3-lightx2v-turbo"
-weights = "${FV_WEIGHTS}/h3-base"
+variant = "h3-lightx2v-turbo"
 resident = false
-served_names = ["h3-lightx2v-turbo"]
 steps = 4
 lora_strength = 1.0
 
 [[models]]
-id = "h3-lightx2v-turbo-v01"
-family = "h3"
-recipe = "lightx2v-turbo-v0.1"
-weights = "${FV_WEIGHTS}/h3-base"
+variant = "h3-lightx2v-turbo-v01"
+# Compatibility: this deployment also answers to the id of the h3-lightx2v-turbo
+# variant, as it did before plan A3 (kept so the served names stay identical;
+# drop it when clients no longer use it).
+served_names = ["h3-lightx2v-turbo"]
 resident = false
-served_names = ["h3-lightx2v-turbo-v01"]
 steps = 4
 lora_strength = 1.0
 
 # VDN-H3 (runpod-vdn-h3*.toml; bf16 linears, its own default).
 [[models]]
-id = "vdn-h3"
-family = "h3"
-recipe = "vdn-h3-50step"
-weights = "${FV_WEIGHTS}/h3-base"
+variant = "vdn-h3"
 resident = false
-served_names = ["vdn-h3-50step"]
 
 [[models]]
-id = "vdn-h3-8step"
-family = "h3"
-recipe = "vdn-h3-8step"
-weights = "${FV_WEIGHTS}/h3-base"
+variant = "vdn-h3-8step"
 resident = false
-
-[aliases]
-"MiniMax-H3" = "fasth3"
-"MiniMax-H3-Turbo" = "fasth3"
-"MiniMax-H3-Max" = "sol-h3"
-"MiniMax-H3-Turbo-Preview" = "fasth3-4step-vsa-taeh3"
-"MiniMax-H3-V2-NVFP4-Preview" = "fasth3-v2-nvfp4-taeh3"
-"MiniMax-H3-Turbo-NVFP4-Preview" = "fasth3-4step-vsa-nvfp4-taeh3"
-"MiniMax-H3-Trim" = "fasth3-trim-8step"
-"MiniMax-H3-Trim-NVFP4" = "fasth3-trim-nvfp4"
-"MiniMax-H3-Trim-NVFP4-Fast" = "fasth3-trim-nvfp4-fast"
-"MiniMax-H3-V2-NVFP4" = "fasth3-v2-nvfp4"
-"MiniMax-H3-Turbo-NVFP4" = "fasth3-4step-vsa-nvfp4"
-"MiniMax-H3-Turbo-Lora" = "h3-larry-turbo"
-"MiniMax-H3-Turbo-Lightx2v" = "h3-lightx2v-turbo"
-"MiniMax-H3-Turbo-Lightx2v-v0.1" = "h3-lightx2v-turbo-v01"
-"VDN-H3" = "vdn-h3"
-"VDN-H3-8step" = "vdn-h3-8step"
 
 [protocols]
 openai_videos = true

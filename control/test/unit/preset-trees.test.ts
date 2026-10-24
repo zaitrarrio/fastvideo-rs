@@ -7,11 +7,11 @@ import { describe, expect, it } from "vitest";
 import { BAKED_CONFIGS, IMAGE_CONFIGS } from "../../src/cluster/image-configs";
 import { WORKER_CONFIGS } from "../../src/cluster/worker-configs";
 import { POOL_PRESETS } from "../../src/presets";
-import { weightsPlan, weightsSource } from "../../src/providers";
+import { poolTrees, weightsPlan, weightsSource } from "../../src/providers";
 import { R2_AUX_TREES } from "../../src/r2weights";
 import { R2_TREES } from "../../src/r2-trees";
 import { MANIFEST_VARIANTS, MODEL_NAMES } from "../../src/families-gen";
-import { FASTH3_LORA, MXFP8_TREE_GLOB, RECIPE_TREES } from "../../src/recipe-trees";
+import { FASTH3_LORA, MXFP8_TREE_GLOB, RECIPE_TREES, recipeTreesOf } from "../../src/recipe-trees";
 import { readToml } from "../../src/serverless/serves";
 import { SLS_PRESETS } from "../../src/serverless/presets";
 import { slsFetchTrees, slsTrees } from "../../src/serverless/weights";
@@ -35,15 +35,16 @@ const treeOf = (path: string) => {
   const nested = m[2] ? `${m[1]}/${m[2]}` : "";
   return nested && (HUB_TREES[nested] || R2_TREES[nested]) ? nested : m[1]!;
 };
-/** What the preset's config reads: its models' weights (and LongLive paths) plus each recipe's own trees. */
+/** What the preset's config reads: its models' weights paths (and LongLive paths) when they name another tree, plus
+ * each variant's own trees ([[models]] variant, plan A3). */
 function expected(p: (typeof POOL_PRESETS)[number]) {
   const cfg = readToml(configOf(p));
   const required = new Set<string>();
   const prequant = new Set<string>();
   for (const m of cfg.models as Record<string, unknown>[]) {
     for (const k of ["weights", "longlive"]) if (typeof m[k] === "string") required.add(treeOf(m[k] as string)!);
-    const r = RECIPE_TREES[String(m.recipe)];
-    expect(r, `${p.id}: recipe ${String(m.recipe)} is not in recipe-trees.ts: add what the engine reads for it`).toBeTruthy();
+    const r = recipeTreesOf(String(m.variant));
+    expect(r, `${p.id}: variant ${String(m.variant)} is not in recipe-trees.ts: add what the engine reads for it`).toBeTruthy();
     r!.required.forEach((t) => required.add(t));
     r!.prequant.forEach((t) => prequant.add(t));
   }
@@ -80,9 +81,8 @@ describe("preset trees: each preset lists every tree its config reads", () => {
 });
 
 describe("the H3 NVFP4 tier, its fast previews and the fastest Trim (owner decisions 2026-10-14)", () => {
-  const caps = rust("crates/fastvideo-engine-service/src/cuda/caps.rs");
   const cases: [string, string, string, string[]][] = [
-    // preset, model recipe in its config, catalog id, the trees beyond h3-base's
+    // preset, the pool model's recipe, the variant its config names, the trees beyond h3-base's
     ["fasth3-v2-nvfp4", "h3-v2-nvfp4", "fasth3-v2-nvfp4", ["fasth3-v2-nvfp4"]],
     ["fasth3-4step-nvfp4", "h3-turbo-nvfp4", "fasth3-4step-vsa-nvfp4", ["fasth3-4step-vsa-nvfp4"]],
     ["fasth3-v2-nvfp4-preview", "h3-v2-nvfp4-preview", "fasth3-v2-nvfp4-taeh3", ["fasth3-v2-nvfp4"]],
@@ -96,10 +96,10 @@ describe("the H3 NVFP4 tier, its fast previews and the fastest Trim (owner decis
       expect(p, id).toBeTruthy();
       const cfg = readToml(configOf(p));
       const models = cfg.models as Record<string, unknown>[];
-      expect(models.map((m) => m.recipe)).toEqual([recipe]);
+      expect(models.map((m) => m.variant)).toEqual([catalog]);
       expect(p.pool.models.map((m) => m.recipe)).toEqual([recipe]);
       expect(RECIPE_TREES[recipe]!.catalog).toBe(catalog);
-      expect(caps, `${catalog} is in the fv-serve catalog`).toContain(`"${catalog}"`);
+      expect(MANIFEST_VARIANTS[catalog], `${catalog} is a variant of the family manifests (the fv-serve catalog)`).toBeTruthy();
       expect([...p.weights].sort()).toEqual(["h3-base", ...trees].sort());
       // The NVFP4 / Trim release trees are in R2 only: those presets default to weights_source r2.
       const r2Only = trees.some((t) => t.startsWith("fasth3-"));
@@ -129,19 +129,18 @@ describe("recipe-trees.ts against the Rust sources", () => {
     expect(lora).toMatch(/"4step-vsa" \| "preview-vsa" \| "fasth3-4step-vsa" => Some\(Self::Vsa\)/);
   });
   it("the tier aliases resolve to the manifest variants the table names, on h3-base", () => {
-    // The manifests (families/*.toml, generated from caps.rs catalog() until A3 inverts the direction) are the source;
-    // caps.rs is grepped only for what they do not carry (the Ref2VA tree's role).
+    // The manifests (families/*.toml) are the source (plan A3): the engine catalog is their projection.
     expect(MODEL_NAMES["h3-turbo"]).toEqual({ variant: "fasth3-4step-vsa", kind: "tier" });
     expect(MODEL_NAMES["h3-max"]).toEqual({ variant: "sol-h3", kind: "tier" });
     expect(MANIFEST_VARIANTS["fasth3-4step-vsa"]!.trees).toEqual([FASTH3_LORA, "h3-base"]);
     expect(MANIFEST_VARIANTS["sol-h3"]!.trees).toEqual([FASTH3_LORA, "h3-base"]);
-    expect(caps).toContain('ref_weights: Some(layout.at("h3-ref2va"))');
+    expect(rust("families/h3.toml")).toContain('ref_weights = "${weights}/h3-ref2va"');
     for (const [recipe, r] of Object.entries(RECIPE_TREES)) {
       const v = MANIFEST_VARIANTS[r.catalog];
       expect(v, `${recipe} -> ${r.catalog} is a manifest variant`).toBeTruthy();
-      // The recipe's trees are the variant's (the one exception reads another adapter the manifests lack).
-      if (recipe !== "lightx2v-turbo-v0.1") expect(r.required, recipe).toEqual(v!.weight_trees);
-      for (const t of r.required) if (recipe === "lightx2v-turbo-v0.1") expect(R2_TREES[t], `${recipe}: ${t} is published`).toBeTruthy();
+      // The recipe's trees are the variant's, every one published.
+      expect(r.required, recipe).toEqual(v!.weight_trees);
+      for (const t of r.required) expect(R2_TREES[t], `${recipe}: ${t} is published`).toBeTruthy();
     }
     expect(caps).toContain('pub const LTX25_DEV_DIT: &str = "ltx25-dev/transformer_full"');
     expect(rust("crates/fastvideo-models/src/ltx2/lora.rs")).toContain('pub const LTX25_INGREDIENTS_DIR: &str = "ltx25-ic-lora-ingredients"');
@@ -154,6 +153,29 @@ describe("recipe-trees.ts against the Rust sources", () => {
     // the MXFP8 DiT trees only help on sm_100+: QuantMode::for_device runs W8A8 below that (the boot skips them)
     expect(rust("crates/fastvideo-cudarc/src/rt/quant.rs")).toMatch(/if d\.sm_major < 10 \{/);
     expect(MXFP8_TREE_GLOB).toBe("*_mxfp8");
+  });
+});
+
+describe("the trees a config without a preset loads (plan A3: [[models]] name variants)", () => {
+  const larry = `[engine]\nbackend = "cuda"\n[[models]]\nvariant = "h3-larry-turbo"\nresident = true\n`;
+  it("pools: a custom inline config and a baked /etc/fv config resolve their variants' trees", () => {
+    expect(poolTrees({ id: "c", variant: "h3-max", count: 1, compute: "GPU", config_toml: larry } as any)).toEqual(["h3-base", "h3-turbo-loras/larry"]);
+    expect(poolTrees({ id: "c", variant: "wan5b", count: 1, compute: "GPU", config: "/etc/fv/runpod-wan14b.toml" } as any)).toEqual([
+      "longlive-plug/wan21-t2v-14b-cfg",
+      "longlive-plug/wan21-t2v-14b-few-step",
+      "wan21-t2v-14b",
+    ]);
+    // A `weights` path replaces the variant's own tree.
+    const moved = `[[models]]\nvariant = "wan-max"\nweights = "\${FV_WEIGHTS}/my-wan"\nresident = true\n`;
+    expect(poolTrees({ id: "c", variant: "wan5b", count: 1, compute: "GPU", config_toml: moved } as any)).toEqual(["my-wan"]);
+  });
+  it("serverless: the same for an endpoint's custom inline and baked configs", () => {
+    expect(slsTrees({ variant: "h3-max", compute: "GPU", config_toml: larry, image: { channel: "stable" } })).toEqual(["h3-base", "h3-turbo-loras/larry"]);
+    expect(slsTrees({ variant: "wan5b", compute: "GPU", config: "/etc/fv/runpod-wan14b.toml", image: { channel: "stable" } })).toEqual([
+      "longlive-plug/wan21-t2v-14b-cfg",
+      "longlive-plug/wan21-t2v-14b-few-step",
+      "wan21-t2v-14b",
+    ]);
   });
 });
 

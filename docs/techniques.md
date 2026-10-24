@@ -675,7 +675,7 @@ transformer on the host at load, through the same
 the sampler (`WanSampler::StepDistill` → `WanPipeline::set_step_distill`).
 Steps, shift and guidance are then fixed: the model's caps offer only `seed`.
 Serve it with `configs/serve/runpod-wan14b.toml`, or with a `[[models]]` entry
-`recipe = "wan14b-turbo"` whose `weights` are the `wan21-t2v-14b` tree.
+`variant = "wan14b-turbo"` (its `wan21-t2v-14b` tree under `$FV_WEIGHTS`).
 
 ## Adding a technique
 

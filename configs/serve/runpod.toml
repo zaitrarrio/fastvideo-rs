@@ -37,20 +37,17 @@ backend = "cuda"
 post_encoder = "auto"
 
 # One GPU (RTX PRO 6000, 96 GB): the resident models load before /ping
-# answers 200. Each entry resolves against the CUDA catalog
-# (crates/fastvideo-engine-service/src/cuda/caps.rs): `recipe` is a tier alias
-# (h3-turbo, h3-max, ltx-turbo, wan-turbo, ...), a catalog id or an H3 recipe
-# name; `weights` replaces the catalog's weight directory. One H3 DiT is
-# ~41 GB, so h3-turbo and h3-max do not co-reside: serve them from separate
-# processes (runpod-h3-max.toml), or mark one `resident = false` with
-# `[engine] swap = true` (a switch reloads from the volume).
+# answers 200. Each entry names a variant of the family manifests
+# (families/*.toml: `variant` is a variant id, a served name or a tier alias
+# such as h3-turbo); `id` is the id this deployment serves it under, `weights`
+# replaces the variant's tree under $FV_WEIGHTS. One H3 DiT is ~41 GB, so
+# h3-turbo and h3-max do not co-reside: serve them from separate processes
+# (runpod-h3-max.toml), or mark one `resident = false` with `[engine] swap =
+# true` (a switch reloads from the volume).
 [[models]]
+variant = "fasth3-4step-vsa"
 id = "fasth3"
-family = "h3"
-recipe = "h3-turbo"
-weights = "${FV_WEIGHTS}/h3-base"
 resident = true
-served_names = ["fasth3"]
 continuity = "anchor-last-frame"
 # Image-to-video text: keep the Qwen-VL vision tower resident beside the
 # resident text encoder (`auto`: when it fits; `stream` reads it from the
@@ -67,10 +64,6 @@ warmup = true
 # tier's memory plan (80 GB-class cards and up). 768P stays the default.
 # `h3_1080p = false` turns it off. docs/serve/h3-1080p-and-upscaler.md.
 # h3_1080p = false
-
-[aliases]
-"MiniMax-H3" = "fasth3"
-"MiniMax-H3-Turbo" = "fasth3"
 
 [protocols]
 openai_videos = true

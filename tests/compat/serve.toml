@@ -32,11 +32,6 @@ load_ms = 0
 all_resident = true
 placeholder_output = true
 
-[aliases]
-"MiniMax-H3" = "fake-h3-turbo"
-"MiniMax-H3-Max" = "fake-h3-max"
-"MiniMax-H3-Turbo" = "fake-h3-turbo"
-
 [limits]
 queue_max = 32
 body_max_mb = 64

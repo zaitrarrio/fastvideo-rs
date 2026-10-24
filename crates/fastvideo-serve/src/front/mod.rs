@@ -574,7 +574,7 @@ pub fn front_info(config: &Config, gate: &ServiceGate, url: &str, worker_id: &st
             names.entry(alias).or_insert_with(|| model.to_string());
         }
     }
-    for (alias, target) in &config.aliases {
+    for (alias, target) in gate.aliases() {
         if let Some(m) = caps
             .resolve(target)
             .filter(|m| local.iter().any(|l| l.id == m.id))
@@ -627,8 +627,8 @@ pub fn front_info(config: &Config, gate: &ServiceGate, url: &str, worker_id: &st
         crate::adapters::fal_app_models(&p.fal_apps)
             .into_iter()
             .filter(|(_, model)| {
-                let target = config
-                    .aliases
+                let target = gate
+                    .aliases()
                     .get(model)
                     .map(String::as_str)
                     .unwrap_or(model);

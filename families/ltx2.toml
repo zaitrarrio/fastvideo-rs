@@ -1,8 +1,8 @@
 # Family manifest (layer 2, docs/adr/0008-family-manifest-layer-2.md): LTX-2 / LTX-2.3 / LTX-2.5.
-# GENERATED from crates/fastvideo-engine-service/src/cuda/caps.rs `catalog()` by
-# `tests/families.rs` (`regenerate_family_files`); do not hand-edit until plan A3
-# makes this file the source. Paths: `${weights}/<tree>/...` and `${tae}/<file>`
-# are substituted with the engine's weight layout at load (families/README.md).
+# The source the engine catalog, the serve configs and the deployment tooling are
+# projected from (plan A3): hand-edited, validated by `cargo test -p fastvideo-manifest
+# -p fastvideo-engine-service` (families/README.md). Paths: `${weights}/<tree>/...` and
+# `${tae}/<file>` are substituted with the engine's weight layout at load.
 
 schema = 1
 
@@ -52,6 +52,15 @@ steps = false
 guidance = false
 guidance_2 = false
 flow_shift = false
+
+[variants.serving]
+tasks = ["t2v", "i2v", "keyframes", "extend", "retake"]
+frames_default = 121
+pad_and_crop = true
+
+[variants.serving.audio]
+native_rate = 48000
+channels = 2
 
 [variants.engine]
 a2v = "off"
@@ -108,6 +117,15 @@ steps = false
 guidance = false
 guidance_2 = false
 flow_shift = false
+
+[variants.serving]
+tasks = ["t2v", "i2v", "keyframes", "a2v", "extend", "retake"]
+frames_default = 121
+pad_and_crop = true
+
+[variants.serving.audio]
+native_rate = 48000
+channels = 2
 
 [variants.engine]
 a2v = "distilled"
@@ -166,6 +184,15 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["t2v", "i2v", "keyframes", "a2v", "extend", "retake"]
+frames_default = 121
+pad_and_crop = true
+
+[variants.serving.audio]
+native_rate = 48000
+channels = 2
+
 [variants.engine]
 a2v = "distilled"
 canvas = [1920, 1080]
@@ -223,6 +250,16 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["ref2v"]
+frames_default = 121
+pad_and_crop = true
+reference_strength = true
+
+[variants.serving.audio]
+native_rate = 48000
+channels = 2
+
 [variants.engine]
 a2v = "distilled"
 canvas = [1536, 896]
@@ -279,6 +316,15 @@ steps = false
 guidance = true
 guidance_2 = false
 flow_shift = false
+
+[variants.serving]
+tasks = ["a2v"]
+frames_default = 121
+pad_and_crop = true
+
+[variants.serving.audio]
+native_rate = 48000
+channels = 2
 
 [variants.engine]
 a2v = "guided"

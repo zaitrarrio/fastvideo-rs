@@ -1,8 +1,8 @@
 # Family manifest (layer 2, docs/adr/0008-family-manifest-layer-2.md): MiniMax-H3 / FastH3.
-# GENERATED from crates/fastvideo-engine-service/src/cuda/caps.rs `catalog()` by
-# `tests/families.rs` (`regenerate_family_files`); do not hand-edit until plan A3
-# makes this file the source. Paths: `${weights}/<tree>/...` and `${tae}/<file>`
-# are substituted with the engine's weight layout at load (families/README.md).
+# The source the engine catalog, the serve configs and the deployment tooling are
+# projected from (plan A3): hand-edited, validated by `cargo test -p fastvideo-manifest
+# -p fastvideo-engine-service` (families/README.md). Paths: `${weights}/<tree>/...` and
+# `${tae}/<file>` are substituted with the engine's weight layout at load.
 
 schema = 1
 
@@ -15,6 +15,7 @@ port_doc = "docs/ports/h3.md"
 [[variants]]
 id = "sol-h3"
 tier = "max"
+public_names = ["MiniMax-H3-Max"]
 resident_default = true
 recipe_name = "sol-h3-4step-engine-ladder"
 trees = ["FastH3-4-step-Preview-v1-LoRA", "h3-base"]
@@ -54,6 +55,20 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["t2v", "i2v", "keyframes"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
+[variants.serving.hd]
+short_edge = 1080
+max_area = 2088960
+max_frames = 124
+experimental_max_frames = 243
+
 [variants.engine]
 dense = false
 family = "h3"
@@ -74,6 +89,7 @@ weights = "${weights}/h3-base"
 id = "fasth3-4step-vsa"
 tier = "turbo"
 served_names = ["fasth3"]
+public_names = ["MiniMax-H3", "MiniMax-H3-Turbo"]
 resident_default = true
 recipe_name = "fasth3-4step-vsa"
 trees = ["FastH3-4-step-Preview-v1-LoRA", "h3-base"]
@@ -112,6 +128,20 @@ steps = false
 guidance = false
 guidance_2 = false
 flow_shift = false
+
+[variants.serving]
+tasks = ["t2v", "i2v", "keyframes"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
+[variants.serving.hd]
+short_edge = 1080
+max_area = 2088960
+max_frames = 124
+experimental_max_frames = 243
 
 [variants.engine]
 dense = false
@@ -171,6 +201,14 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["t2v", "i2v", "keyframes"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
 [variants.engine]
 dense = false
 family = "h3"
@@ -228,6 +266,14 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["t2v", "i2v", "keyframes"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
 [variants.engine]
 dense = true
 family = "h3"
@@ -245,7 +291,8 @@ weights = "${weights}/h3-8step"
 
 [[variants]]
 id = "fasth3-trim-8step"
-served_names = ["h3-trim"]
+served_names = ["h3-trim", "fasth3-trim"]
+public_names = ["MiniMax-H3-Trim"]
 resident_default = true
 recipe_name = "fasth3-trim-8step-vsa"
 trees = ["fasth3-trim-8step", "h3-base"]
@@ -284,6 +331,14 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
 [variants.engine]
 dense = false
 family = "h3"
@@ -302,6 +357,7 @@ weights = "${weights}/fasth3-trim-8step"
 [[variants]]
 id = "fasth3-trim-nvfp4"
 served_names = ["h3-trim-nvfp4"]
+public_names = ["MiniMax-H3-Trim-NVFP4"]
 resident_default = true
 recipe_name = "fasth3-trim-8step-vsa-nvfp4"
 trees = ["fasth3-trim-8step", "fasth3-trim-8step-nvfp4", "h3-base"]
@@ -341,6 +397,14 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
 [variants.engine]
 dense = false
 family = "h3"
@@ -359,6 +423,7 @@ weights = "${weights}/fasth3-trim-8step"
 [[variants]]
 id = "fasth3-trim-nvfp4-fast"
 served_names = ["h3-trim-nvfp4-fast"]
+public_names = ["MiniMax-H3-Trim-NVFP4-Fast"]
 resident_default = true
 recipe_name = "fasth3-trim-8step-vsa-fp4-nvfp4"
 trees = ["fasth3-trim-8step", "fasth3-trim-8step-nvfp4", "h3-base"]
@@ -398,6 +463,14 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
 [variants.engine]
 dense = false
 family = "h3"
@@ -416,6 +489,7 @@ weights = "${weights}/fasth3-trim-8step"
 [[variants]]
 id = "fasth3-v2-nvfp4"
 served_names = ["h3-v2-nvfp4"]
+public_names = ["MiniMax-H3-V2-NVFP4"]
 resident_default = true
 recipe_name = "fasth3-v2-8step-vsa-nvfp4"
 trees = ["fasth3-v2-nvfp4", "h3-base"]
@@ -455,6 +529,14 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
 [variants.engine]
 dense = false
 family = "h3"
@@ -473,6 +555,7 @@ weights = "${weights}/fasth3-v2-nvfp4"
 [[variants]]
 id = "fasth3-4step-vsa-nvfp4"
 served_names = ["h3-turbo-nvfp4"]
+public_names = ["MiniMax-H3-Turbo-NVFP4"]
 resident_default = true
 recipe_name = "fasth3-4step-vsa-nvfp4"
 trees = ["fasth3-4step-vsa-nvfp4", "h3-base"]
@@ -512,6 +595,14 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
 [variants.engine]
 dense = false
 family = "h3"
@@ -529,6 +620,7 @@ weights = "${weights}/fasth3-4step-vsa-nvfp4"
 
 [[variants]]
 id = "h3-larry-turbo"
+public_names = ["MiniMax-H3-Turbo-Lora"]
 resident_default = true
 recipe_name = "h3-larry-turbo-ckpt850-dense"
 trees = ["h3-base", "h3-turbo-loras/larry"]
@@ -568,6 +660,14 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["t2v", "i2v", "keyframes"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
 [variants.engine]
 dense = true
 family = "h3"
@@ -586,6 +686,7 @@ weights = "${weights}/h3-base"
 
 [[variants]]
 id = "h3-lightx2v-turbo"
+public_names = ["MiniMax-H3-Turbo-Lightx2v"]
 resident_default = true
 recipe_name = "h3-lightx2v-turbo-v1.2-768p-dense"
 trees = ["h3-base", "h3-turbo-loras/lightx2v"]
@@ -625,6 +726,14 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["t2v", "i2v", "keyframes"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
 [variants.engine]
 dense = true
 family = "h3"
@@ -642,7 +751,75 @@ warmup_blocking = false
 weights = "${weights}/h3-base"
 
 [[variants]]
+id = "h3-lightx2v-turbo-v01"
+public_names = ["MiniMax-H3-Turbo-Lightx2v-v0.1"]
+resident_default = true
+recipe_name = "h3-lightx2v-turbo-v1.2-768p-dense"
+trees = ["h3-base", "h3-turbo-loras/lightx2v-v0.1"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 89
+needs = ["fp8"]
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.serving]
+tasks = ["t2v", "i2v", "keyframes"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
+[variants.engine]
+dense = true
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+profile = "h3/lightx2v_turbo_dense"
+recipe = "lightx2v-turbo-v0.1"
+ref2va = false
+short_edge = 768
+steps = 4
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/h3-base"
+
+[[variants]]
 id = "vdn-h3"
+served_names = ["vdn-h3-50step"]
+public_names = ["VDN-H3"]
 resident_default = true
 recipe_name = "vdn-h3-50step"
 trees = ["h3-base", "vdn-h3-stage-b-2000"]
@@ -681,6 +858,14 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
 [variants.engine]
 dense = true
 dit_offload = "resident"
@@ -700,6 +885,7 @@ weights = "${weights}/h3-base"
 
 [[variants]]
 id = "vdn-h3-8step"
+public_names = ["VDN-H3-8step"]
 resident_default = true
 recipe_name = "vdn-h3-8step"
 trees = ["h3-base", "vdn-h3-dmd-250-turbo", "vdn-h3-stage-b-2000"]
@@ -738,6 +924,14 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
 [variants.engine]
 dense = true
 dit_offload = "resident"
@@ -759,6 +953,7 @@ weights = "${weights}/h3-base"
 [[variants]]
 id = "h3-ref2v-max"
 tier = "max"
+public_names = ["MiniMax-H3-Max"]
 resident_default = true
 recipe_name = "h3-ref2va-base-49step"
 trees = ["h3-base", "h3-ref2va"]
@@ -798,6 +993,14 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["ref2v"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
 [variants.engine]
 dense = true
 family = "h3"
@@ -818,6 +1021,7 @@ weights = "${weights}/h3-base"
 [[variants]]
 id = "h3-ref2v-turbo"
 tier = "turbo"
+public_names = ["MiniMax-H3-Turbo"]
 resident_default = true
 recipe_name = "sol-h3-ref2va"
 trees = ["h3-base", "h3-ref2va"]
@@ -857,6 +1061,14 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["ref2v"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
 [variants.engine]
 dense = true
 family = "h3"
@@ -877,6 +1089,7 @@ weights = "${weights}/h3-base"
 [[variants]]
 id = "fasth3-v2-nvfp4-taeh3"
 served_names = ["h3-v2-nvfp4-preview"]
+public_names = ["MiniMax-H3-V2-NVFP4-Preview"]
 resident_default = true
 recipe_name = "fasth3-v2-nvfp4-taeh3"
 trees = ["auxiliary/tae/taeh3.safetensors", "fasth3-v2-nvfp4", "h3-base"]
@@ -916,6 +1129,14 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
 [variants.engine]
 dense = false
 family = "h3"
@@ -935,6 +1156,7 @@ weights = "${weights}/fasth3-v2-nvfp4"
 [[variants]]
 id = "fasth3-4step-vsa-nvfp4-taeh3"
 served_names = ["h3-turbo-nvfp4-preview"]
+public_names = ["MiniMax-H3-Turbo-NVFP4-Preview"]
 resident_default = true
 recipe_name = "fasth3-4step-vsa-nvfp4-taeh3"
 trees = ["auxiliary/tae/taeh3.safetensors", "fasth3-4step-vsa-nvfp4", "h3-base"]
@@ -974,6 +1196,14 @@ guidance = false
 guidance_2 = false
 flow_shift = false
 
+[variants.serving]
+tasks = ["t2v"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
 [variants.engine]
 dense = false
 family = "h3"
@@ -993,6 +1223,7 @@ weights = "${weights}/fasth3-4step-vsa-nvfp4"
 [[variants]]
 id = "fasth3-4step-vsa-taeh3"
 served_names = ["h3-turbo-preview"]
+public_names = ["MiniMax-H3-Turbo-Preview"]
 resident_default = true
 recipe_name = "fasth3-4step-vsa-taeh3"
 trees = ["FastH3-4-step-Preview-v1-LoRA", "auxiliary/tae/taeh3.safetensors", "h3-base"]
@@ -1031,6 +1262,14 @@ steps = false
 guidance = false
 guidance_2 = false
 flow_shift = false
+
+[variants.serving]
+tasks = ["t2v", "i2v", "keyframes"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
 
 [variants.engine]
 dense = false

@@ -43,12 +43,12 @@ post_encoder = "auto"
 # (`longlive_recache = false`: keep the cache, the ablation). Served as
 # `longlive-1.3b` and `longlive`.
 [[models]]
-id = "longlive-1.3b"
-family = "wan"
-recipe = "sfwan21-1.3b"
-weights = "${FV_WEIGHTS}/sfwan21-1.3b"
+variant = "longlive-1.3b"
+# Compatibility: this deployment also answers to the id of the sfwan21-1.3b
+# variant, as it did before plan A3 (kept so the served names stay identical;
+# drop it when clients no longer use it).
+served_names = ["sfwan21-1.3b"]
 resident = true
-longlive = "/workspace/weights/longlive-1.3b-safetensors"
 
 [protocols]
 openai_videos = false

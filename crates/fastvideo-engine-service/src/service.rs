@@ -699,6 +699,7 @@ impl EngineService {
         let mut per_exec = Vec::new();
         let mut execs = Vec::new();
         let mut pool = ModelPool::default();
+        let mut public_names: BTreeMap<ModelId, Vec<String>> = BTreeMap::new();
         for (i, b) in backends.iter().enumerate() {
             let caps = b.caps();
             let mut ex = ExecState::default();
@@ -710,12 +711,17 @@ impl EngineService {
                 }
                 pool.declare(i, c.id.clone(), c.resident);
                 let r = b.recipe(&c.id);
+                let names = b.public_names(&c.id);
+                if !names.is_empty() {
+                    public_names.entry(c.id.clone()).or_insert(names);
+                }
                 list.push((c, r));
             }
             execs.push(ex);
             per_exec.push(list);
         }
-        let caps = CapabilityTable::build(per_exec, &cfg.tier_overrides)?;
+        let caps =
+            CapabilityTable::build(per_exec, &cfg.tier_overrides)?.with_public_names(public_names);
         let n = backends.len();
         let readiness = watch::Sender::new(pool.readiness());
         let shared = Arc::new(Shared {

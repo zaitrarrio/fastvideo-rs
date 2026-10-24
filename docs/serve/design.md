@@ -1601,9 +1601,9 @@ Config sketch (native):
 [server]    bind = "0.0.0.0:8000"; public_base_url = "https://…"; state_dir = "/workspace/fv-state"
 [auth]      mode = "keys"            # none | keys | trust-gateway ; keys from FV_API_KEYS (sha256 hashes)
 [artifacts] backend = "local"        # local | s3 ; url_ttl_s = 86400 ; signing key FV_URL_SIGNING_KEY
-[[models]]  id = "fasth3"; family = "h3"; weights = "${FV_WEIGHTS}/FastH3"; recipe = "4step-vsa"; resident = true
-            served_names = ["fasth3"]; continuity = "anchor-last-frame"
-[aliases]   "MiniMax-H3" = "fasth3"; "MiniMax-H3-Max" = "fasth3"; "minimax/h3-max" = "fasth3"
+[[models]]  variant = "h3-turbo"; id = "fasth3"; resident = true; continuity = "anchor-last-frame"
+            # a variant of families/*.toml (plan A3): its id, a served name or a tier alias;
+            # API names such as "MiniMax-H3-Turbo" come from the variant's public_names (no [aliases])
 [protocols] openai_videos = true; fastwan = false; minimax = true; fal = true; fal_director = true; ltx = false; reactor = true
 [webrtc]    udp_port = 70010; tcp_port = 70000; public_ip = "auto"; ice_servers = [{urls=["stun:stun.l.google.com:19302"]}]
 [limits]    queue_max = 32; body_max_mb = 64

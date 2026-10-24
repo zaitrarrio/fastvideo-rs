@@ -55,6 +55,7 @@ async fn app(tag: &str) -> App {
     // The real catalog's caps on the fake backend; the jobs never finish
     // within the test (slow steps, no MP4).
     let models = catalog(&WeightLayout::default())
+        .unwrap()
         .into_iter()
         .map(|m| {
             let mut caps = m.caps();
@@ -62,6 +63,7 @@ async fn app(tag: &str) -> App {
             FakeModel {
                 caps,
                 recipe: m.describe(),
+                public_names: m.public_names.clone(),
             }
         })
         .collect();

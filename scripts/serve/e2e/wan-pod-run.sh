@@ -136,9 +136,8 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
+variant = "sfwan21-1.3b"
 id = "sf-wan"
-family = "wan"
-recipe = "sfwan21-1.3b"
 weights = "\${FV_WEIGHTS}/sfwan21-1.3b"
 resident = true
 

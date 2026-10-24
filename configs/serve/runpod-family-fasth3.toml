@@ -1,6 +1,6 @@
 # fv-serve on Runpod: the FastH3 family on ONE GPU, one process (owner
 # decision 2026-10-18, as runpod-family-h3.toml): every FastH3 release a pool
-# preset serves (model ids fasth3*) and the catalog's 480p draft tier. turbo
+# preset serves (model ids fasth3*) and the family file's 480p draft tier. turbo
 # (fasth3, the FastH3 4-step Preview) is resident; the draft, the TAEH3
 # previews, Trim (bf16 / NVFP4 / NVFP4 + FP4 attention) and the NVFP4 tier
 # (FastH3 V2, 4-step) load on their first request, swapping the resident DiT
@@ -37,99 +37,49 @@ post_encoder = "auto"
 swap = true
 
 [[models]]
+variant = "fasth3-4step-vsa"
 id = "fasth3"
-family = "h3"
-recipe = "h3-turbo"
-weights = "${FV_WEIGHTS}/h3-base"
 resident = true
-served_names = ["fasth3"]
 continuity = "anchor-last-frame"
 i2v_encoder = "auto"
 warmup = true
 
 [[models]]
-id = "fasth3-4step-vsa-480p-taeh3"
-family = "h3"
-recipe = "h3-draft"
-weights = "${FV_WEIGHTS}/h3-base"
+variant = "fasth3-4step-vsa-480p-taeh3"
 resident = false
 
 [[models]]
-id = "fasth3-4step-vsa-taeh3"
-family = "h3"
-recipe = "h3-turbo-preview"
-weights = "${FV_WEIGHTS}/h3-base"
+variant = "fasth3-4step-vsa-taeh3"
 resident = false
-served_names = ["h3-turbo-preview"]
 
 [[models]]
-id = "fasth3-v2-nvfp4-taeh3"
-family = "h3"
-recipe = "h3-v2-nvfp4-preview"
-weights = "${FV_WEIGHTS}/fasth3-v2-nvfp4"
+variant = "fasth3-v2-nvfp4-taeh3"
 resident = false
-served_names = ["h3-v2-nvfp4-preview"]
 
 [[models]]
-id = "fasth3-4step-vsa-nvfp4-taeh3"
-family = "h3"
-recipe = "h3-turbo-nvfp4-preview"
-weights = "${FV_WEIGHTS}/fasth3-4step-vsa-nvfp4"
+variant = "fasth3-4step-vsa-nvfp4-taeh3"
 resident = false
-served_names = ["h3-turbo-nvfp4-preview"]
 
 # The NVFP4 Trim DiT: ${FV_WEIGHTS}/fasth3-trim-8step-nvfp4, read beside weights.
 [[models]]
-id = "fasth3-trim-8step"
-family = "h3"
-recipe = "h3-trim"
-weights = "${FV_WEIGHTS}/fasth3-trim-8step"
+variant = "fasth3-trim-8step"
 resident = false
-served_names = ["h3-trim", "fasth3-trim"]
 
 [[models]]
-id = "fasth3-trim-nvfp4"
-family = "h3"
-recipe = "h3-trim-nvfp4"
-weights = "${FV_WEIGHTS}/fasth3-trim-8step"
+variant = "fasth3-trim-nvfp4"
 resident = false
-served_names = ["h3-trim-nvfp4"]
 
 [[models]]
-id = "fasth3-trim-nvfp4-fast"
-family = "h3"
-recipe = "h3-trim-nvfp4-fast"
-weights = "${FV_WEIGHTS}/fasth3-trim-8step"
+variant = "fasth3-trim-nvfp4-fast"
 resident = false
-served_names = ["h3-trim-nvfp4-fast"]
 
 [[models]]
-id = "fasth3-v2-nvfp4"
-family = "h3"
-recipe = "h3-v2-nvfp4"
-weights = "${FV_WEIGHTS}/fasth3-v2-nvfp4"
+variant = "fasth3-v2-nvfp4"
 resident = false
-served_names = ["h3-v2-nvfp4"]
 
 [[models]]
-id = "fasth3-4step-vsa-nvfp4"
-family = "h3"
-recipe = "h3-turbo-nvfp4"
-weights = "${FV_WEIGHTS}/fasth3-4step-vsa-nvfp4"
+variant = "fasth3-4step-vsa-nvfp4"
 resident = false
-served_names = ["h3-turbo-nvfp4"]
-
-[aliases]
-"MiniMax-H3" = "fasth3"
-"MiniMax-H3-Turbo" = "fasth3"
-"MiniMax-H3-Turbo-Preview" = "fasth3-4step-vsa-taeh3"
-"MiniMax-H3-V2-NVFP4-Preview" = "fasth3-v2-nvfp4-taeh3"
-"MiniMax-H3-Turbo-NVFP4-Preview" = "fasth3-4step-vsa-nvfp4-taeh3"
-"MiniMax-H3-Trim" = "fasth3-trim-8step"
-"MiniMax-H3-Trim-NVFP4" = "fasth3-trim-nvfp4"
-"MiniMax-H3-Trim-NVFP4-Fast" = "fasth3-trim-nvfp4-fast"
-"MiniMax-H3-V2-NVFP4" = "fasth3-v2-nvfp4"
-"MiniMax-H3-Turbo-NVFP4" = "fasth3-4step-vsa-nvfp4"
 
 [protocols]
 openai_videos = true

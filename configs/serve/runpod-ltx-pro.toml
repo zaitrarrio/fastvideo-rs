@@ -31,10 +31,7 @@ post_encoder = "auto"
 
 # ltx-pro: LTX-2.5 distilled two-stage, dense stage 2 (one GPU).
 [[models]]
-id = "ltx25-distill-dense"
-family = "ltx2"
-recipe = "ltx-pro"
-weights = "${FV_WEIGHTS}/ltx25"
+variant = "ltx25-distill-dense"
 resident = true
 
 [protocols]

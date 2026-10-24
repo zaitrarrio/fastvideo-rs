@@ -60,11 +60,13 @@ fn family_schema_is_strict_and_keeps_engine_opaque() {
         "registry_name",
         "tier",
         "served_names",
+        "public_names",
         "resident_default",
         "recipe_name",
         "trees",
         "gpu",
         "caps",
+        "serving",
         "engine",
     ] {
         assert!(vprops.contains_key(key), "variant schema lacks `{key}`");

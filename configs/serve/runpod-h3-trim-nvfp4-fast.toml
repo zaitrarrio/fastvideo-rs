@@ -38,19 +38,12 @@ backend = "cuda"
 post_encoder = "auto"
 
 [[models]]
-id = "fasth3-trim-nvfp4-fast"
-family = "h3"
-recipe = "h3-trim-nvfp4-fast"
-weights = "${FV_WEIGHTS}/fasth3-trim-8step"
+variant = "fasth3-trim-nvfp4-fast"
 # The NVFP4 DiT: ${FV_WEIGHTS}/fasth3-trim-8step-nvfp4, read beside weights.
-# The text encoder, tokenizer and audio VAE: the catalog's text_weights,
+# The text encoder, tokenizer and audio VAE: the variant's text_weights,
 # ${FV_WEIGHTS}/h3-base.
 resident = true
-served_names = ["h3-trim-nvfp4-fast"]
 warmup = true
-
-[aliases]
-"MiniMax-H3-Trim-NVFP4-Fast" = "fasth3-trim-nvfp4-fast"
 
 [protocols]
 openai_videos = true
