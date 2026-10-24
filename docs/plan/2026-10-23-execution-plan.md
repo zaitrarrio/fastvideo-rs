@@ -89,7 +89,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | todo (D1a merged #171: `fv-lab run` + `pod` on fv-deploy's guards, `lab/tiers.toml` and `lab/cells/rtx6000-*.toml`, dry-run and payload goldens from the scripts, ADR-0019; GPU gate passed (fv-lab = script, sol-h3 and ltx25-two-stage frames byte-identical); D1b pr #176: `techniques`, `b6`, `rtx5090`, `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae`, `precision` as tiers (cell schema: baseline arms, TAE arms, bare `env`, paired gates), a golden per tier, the family inventory in ADR-0019 §9; GPU runs per family pending (coordinator); next: those runs and branch deletions, D1c `report`, D1d `gate`/`oracle` (+ `b4a`'s verdict), D1e one-offs) |
+| D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | todo (D1a merged #171: `fv-lab run` + `pod` on fv-deploy's guards, `lab/tiers.toml` and `lab/cells/rtx6000-*.toml`, dry-run and payload goldens from the scripts, ADR-0019; GPU gate passed (fv-lab = script, sol-h3 and ltx25-two-stage frames byte-identical); D1b pr #176: `techniques`, `b6`, `rtx5090`, `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae`, `precision` as tiers (cell schema: baseline arms, TAE arms, bare `env`, paired gates), a golden per tier, the family inventory in ADR-0019 §9; GPU fv-lab = script for `techniques`, `b6`, `precision` and `rtx5090` (every arm's frames byte-identical; the other five tiers not yet run); next: the remaining families' runs and the script branch deletions, D1c `report`, D1d `gate`/`oracle` (+ `b4a`'s verdict), D1e one-offs) |
 | D2 | `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments; keyed by registry name and `@rev` | every served variant has a gold file; comments in `profiles/` no longer carry numbers | pod | A2 | merged (#151) |
 | D3 | `fv-lab report tiers` and the generated `docs/perf/tiers.md` | table generated from one run set | pod; **GPU** the gold runs | D1, D2 | todo |
 | D4 | CI bridge: gold files parse and resolve; `last_validated.commit` age check; an on-demand `fv-lab run gold --all` workflow | visible per-model validation age in CI | CI | D3 | todo |
@@ -907,3 +907,25 @@ ran (pod id, $/hr), result, cost.
   363 s / 130 s, PR 100 s / 27 s (the base arms run first and pay the cold
   volume reads). About 19 GPU-minutes, ~$0.80. Evidence:
   `artifacts/runpod/b4c/da9dbac-{10241612,10241613}/`.
+- 2026-10-24 17:21Z, coordinator: D1b GPU comparisons, runtime image
+  `sha-c21d801` (#176's head before the main merge), baseline `e93e357` for
+  the `-base` arms. RTX PRO 6000 pods in EU-RO-1 with `bz0ofkfx45`: each family
+  ran once through `fv-lab pod up --wait` and once through `runpod-http.sh`
+  (the script) with the same cells, then `fv-lab-compare-runs.sh` (fails
+  closed):
+  - `b6` (b6-solh3-tree base/pr): 2 arms, 124 frames each byte-identical; 8 reports the same;
+  - `techniques` (h3-480p-fullopt base/env/prof): 3 arms, 248 frames each byte-identical; 9 reports the same;
+  - `precision` (ltx25-4k5s-sol f32act/bf16act): 2 arms, 242 frames each byte-identical; 9 reports and the
+    gate report the same;
+  - `rtx5090` (h3-480p dense/sol/fullopt/fullopt-taeh3): 4 arms, 248 frames each byte-identical; 14 reports
+    the same.
+  Within each run the gates also hold: b6 and techniques base against the
+  candidate arms pass `--off-identity` (identical), so the techniques arms
+  now cover the candidate's own H3 text encoder and AdaLN caches. The fv-lab
+  `rtx5090` and `precision` pods were first refused by fv-deploy's floor
+  projection (4 h cap × (quote + the account's current spend) would cross
+  $8 with five pods up), as designed; they ran once nothing else was up.
+  The first script-side launch failed before creating any pod (a launcher
+  quoting error on my side). About 133 GPU-minutes, ~$5.50. Evidence:
+  `artifacts/runpod/{b6,techniques,precision,rtx5090}/c21d801-*` and the
+  comparison outputs in `artifacts/runpod/d1b-compare/`.

@@ -1,0 +1,13 @@
+$ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/b6/c21d801-1024155958-468a artifacts/runpod/b6/c21d801-10241608
+same b6-solh3-tree-base: {"exit":0,"skipped":null}, 124 frames byte-identical
+same b6-solh3-tree-pr: {"exit":0,"skipped":null}, 124 frames byte-identical
+same compare/compare-clips-b6-4stepvsa-merge-base--b6-4stepvsa-merge-pr.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-b6-h3-ref2va-base--b6-h3-ref2va-pr.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-b6-h3-streamed-base--b6-h3-streamed-pr.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-b6-ltx25-a2v-guided-base--b6-ltx25-a2v-guided-pr.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-b6-ltx25-offload-cpu-base--b6-ltx25-offload-cpu-pr.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-b6-ltx25-ref2v-base--b6-ltx25-ref2v-pr.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-b6-solh3-merge-base--b6-solh3-merge-pr.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-b6-solh3-tree-base--b6-solh3-tree-pr.json: {"status":"pass","off_identity":"ok"}
+2 arm(s) the same (2 ran with byte-identical frames, 0 skipped in both, 0 failed in both), 8 report(s) the same, 0 difference(s)
+exit=0

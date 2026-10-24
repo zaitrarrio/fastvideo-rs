@@ -1,0 +1,28 @@
+[16:28:02] [precision] matrix start image=e010afe97d6c058c
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-3c50997c-701b-df9e-bf67-32d59bae87c4)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[16:28:02] [precision] skip fasth3-8step-768p-f32act (not in FV_CELLS)
+[16:28:02] [precision] skip fasth3-8step-768p-bf16act (not in FV_CELLS)
+[16:28:02] [precision] skip fasth3-8step-768p-w8a8 (not in FV_CELLS)
+[16:28:02] [precision] skip fasth3-8step-768p-mxfp8 (not in FV_CELLS)
+[16:28:02] [precision] skip compare fasth3-8step-768p-f32act--fasth3-8step-768p-bf16act (frames missing)
+[16:28:02] [precision] skip gate fasth3-8step-768p-f32act--fasth3-8step-768p-bf16act (benchmark.json missing)
+[16:28:02] [precision] skip compare fasth3-8step-768p-f32act--fasth3-8step-768p-w8a8 (frames missing)
+[16:28:02] [precision] skip gate fasth3-8step-768p-f32act--fasth3-8step-768p-w8a8 (benchmark.json missing)
+[16:28:02] [precision] skip compare fasth3-8step-768p-f32act--fasth3-8step-768p-mxfp8 (frames missing)
+[16:28:02] [precision] skip gate fasth3-8step-768p-f32act--fasth3-8step-768p-mxfp8 (benchmark.json missing)
+[16:28:02] [precision] skip compare fasth3-8step-768p-bf16act--fasth3-8step-768p-w8a8 (frames missing)
+[16:28:02] [precision] skip compare fasth3-8step-768p-bf16act--fasth3-8step-768p-mxfp8 (frames missing)
+[16:28:03] [precision] ▶ ltx25-4k5s-sol-f32act  env FASTVIDEO_BF16_ACT=0 FASTVIDEO_H3_QUANT=off /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --workload 4k5s --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text streamed --warm --clip /fvscratch/runs/precision/c21d801-1024162714-5531/ltx25-4k5s-sol-f32act/frames  (wall cap 3600s; 0=none)
+[16:36:48] [precision] ok ltx25-4k5s-sol-f32act  525s  
+[16:36:52] [precision] ▶ ltx25-4k5s-sol-bf16act  env FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=off /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --workload 4k5s --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text streamed --warm --clip /fvscratch/runs/precision/c21d801-1024162714-5531/ltx25-4k5s-sol-bf16act/frames  (wall cap 3600s; 0=none)
+[16:43:23] [precision] ok ltx25-4k5s-sol-bf16act  391s  
+[16:43:24] [precision] skip ltx25-4k5s-sol-fp8 (not in FV_CELLS)
+[16:43:24] [precision] skip ltx25-4k5s-sol-bf16act-fp8 (not in FV_CELLS)
+[16:43:29] [precision] compare ltx25-4k5s-sol-f32act--ltx25-4k5s-sol-bf16act exit=0 "psnr_mean":22.2800221875955 
+[16:43:29] [precision] gate ltx25-4k5s-sol-f32act--ltx25-4k5s-sol-bf16act exit=1 gate verdict: "fail"
+[16:43:29] [precision] skip compare ltx25-4k5s-sol-f32act--ltx25-4k5s-sol-fp8 (frames missing)
+[16:43:29] [precision] skip gate ltx25-4k5s-sol-f32act--ltx25-4k5s-sol-fp8 (benchmark.json missing)
+[16:43:29] [precision] skip compare ltx25-4k5s-sol-f32act--ltx25-4k5s-sol-bf16act-fp8 (frames missing)
+[16:43:29] [precision] skip gate ltx25-4k5s-sol-f32act--ltx25-4k5s-sol-bf16act-fp8 (benchmark.json missing)
+[16:43:29] [precision] matrix done
