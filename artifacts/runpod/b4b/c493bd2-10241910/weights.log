@@ -1,0 +1,10 @@
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+weights ok: fasth3-4step-vsa
+weights ok: fasth3-4step-dense
+weights ok: sol-h3
+weights ok: sol-h3-spark
+weights ok: ltx25-two-stage
+exit=1

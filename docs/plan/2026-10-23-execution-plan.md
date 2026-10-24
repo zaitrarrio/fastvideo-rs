@@ -108,7 +108,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | active (B4a pr #173: step caches, ADR-0020, GPU `b4a` cells pending; B4b pr #179: one `rt::fuse` (rounding policies selecting the existing kernels, one host reference, one switch, the plan's value installed on the DiT), ADR-0022, GPU `b4b` cells pending; B4c pr #177: one disk prompt cache `rt::prompt_cache`, ADR-0021, GPU `b4c` cells passed; B4c2 merged #178: the six pre-existing key gaps closed, GPU `b4c2` cells passed) |
+| B4 | One `fuse.rs` with a rounding policy; one `StepCache` trait with `EasyCache`/`TeaCache`/`FbCache`/`Taylor`; one disk prompt cache | byte identity per family | **GPU** byte-identity cells | B1 | active (B4a pr #173: step caches, ADR-0020, GPU `b4a` cells pending; B4b pr #179: one `rt::fuse` (rounding policies selecting the existing kernels, one host reference, one switch, the plan's value installed on the DiT), ADR-0022, GPU `b4b` cells passed; B4c pr #177: one disk prompt cache `rt::prompt_cache`, ADR-0021, GPU `b4c` cells passed; B4c2 merged #178: the six pre-existing key gaps closed, GPU `b4c2` cells passed) |
 | B5 | One `sdpa(q, k, v, Plan)` entry with `sdpa_rule.rs` as the chooser; host attention twins retired after `no_host_fallback`; `nvfp4_gemm.rs` and the oxide AOT path behind features | `no_host_fallback` green | **GPU** `kernels` tier | B1 | merged (#161) |
 | B6 | `H3Pipeline::load` and `Ltx2Pipeline::load` split into plan, open, place, fuse; dead code (`TensorBackend`, mlx scaffold) retired | engine lifecycle testable on CPU | pod | B1 | merged (#170: plan/open/place/fuse, ADR-0017; `techniques` and `b6` GPU identity cells all byte-identical vs main; TensorBackend and the mlx scaffold retired) |
 
@@ -1020,3 +1020,27 @@ ran (pod id, $/hr), result, cost.
   host `gate_residual` rejects partial rows; `QkPolicy` documented as
   descriptive on the device; the mutations are a script
   (`scripts/dev/b4b-fuse-mutations.sh`, eleven, all caught).
+- 2026-10-24 19:20Z, coordinator: B4b GPU gate, runtime image
+  `sha-c493bd2` (#179's head after the review fixes) against main
+  `sha-17e4a1d` (before B4b), four single-cell RTX PRO 6000 pods in EU-RO-1
+  with `bz0ofkfx45` (`FV_B4B_CELLS=<cell>`), every arm under
+  `FASTVIDEO_GPU_TRACE=1 FASTVIDEO_GPU_TRACE_TOP=100000`. All four `pass`:
+  base against PR `compare-clips --off-identity` identical on every frame,
+  `dropped_records` 0 and the same step kernel count in both arms, the PR's
+  table complete:
+  - `b4b-h3-4stepvsa` (fuse on): 1785 launches per traced step;
+    `fvf_h3_gate_res_norm_mod` 49 + `h3_norm_mod` 1 = `h3_gate_residual` 1 +
+    49 = `h3_res_gate_norm_mod` 50 (the block structure), `fvf_h3_qkvg_heads`
+    50, `fvf_merge_heads_mx` 45, the same in both arms.
+  - `b4b-h3-4stepvsa-off`: 2074 launches; no gated `fvf_*` kernel;
+    `h3_norm_mod` and `h3_gate_residual` 50 each, `h3_qk_norm_rope` 100.
+  - `b4b-ltx25-512p` (fuse on): 7464 launches; `fvf_ltx_res_norm_mod` 480,
+    `fvf_ltx_qk_norm_rope` 576, `fvf_ltx_gate_merge` 288 in both arms.
+  - `b4b-ltx25-512p-off`: 12072 launches; no gated kernel; `mx_rms_norm`
+    1056, `mx_rope_half` 384.
+  The baseline lists its 25 slowest kernels only (it predates
+  `FASTVIDEO_GPU_TRACE_TOP`); every fused kernel it lists has the PR's call
+  count. Each cell's `fusion-evidence.log` / `trace-meta.txt` were
+  recomputed from the fetched stderr with `b4b_evidence` (the fetch takes
+  only JSON and stdout/stderr). Wan: CPU evidence only. About 32
+  GPU-minutes, ~$1.35. Evidence: `artifacts/runpod/b4b/c493bd2-1024191{0,1,2,3}/`.

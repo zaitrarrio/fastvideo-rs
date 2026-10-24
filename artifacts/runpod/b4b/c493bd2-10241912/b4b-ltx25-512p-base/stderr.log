@@ -1,0 +1,101 @@
+ltx2 ltx2 techniques: sol_attn [ltx25_stage2] (dense steps none, dense layers 0, tau 0:1,1:1.25,2:1.5, sink none, thresh diag) [attention_backend from recipe]
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+ltx2 gen 768x512x49: planned peak 44.26 GiB resident, 9.64 GiB streamed
+[fastvideo] ltx2 dit offload: auto -> resident (resident 4k5s plan 59.6 GiB, 94.3 GiB free before load)
+[fastvideo] ltx2 dit: loaded block 8/48 (88.5 GiB free)
+[fastvideo] ltx2 dit: loaded block 16/48 (82.8 GiB free)
+[fastvideo] ltx2 dit: loaded block 24/48 (77.0 GiB free)
+[fastvideo] ltx2 dit: loaded block 32/48 (71.2 GiB free)
+[fastvideo] ltx2 dit: loaded block 40/48 (65.4 GiB free)
+[fastvideo] ltx2 dit: loaded block 48/48 (59.7 GiB free)
+[fastvideo] ltx2 dit: 48 blocks resident
+ltx2 vocoder: SnakeBeta main (`vocoder.`) + BWE (Hann-sinc ×3 + MelSTFT + bwe_generator)
+[fastvideo] load/io ltx2 load {"wall_s":254.56,"viewed_gb":39.11,"prefetch_read_gb":39.11,"prefetch_skipped_gb":0.00,"prefetch_busy_s":3774.1,"viewed_gbps":0.15,"window_wait_s":0.0,"fill_s":0.6,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":231.5,"fetch_wait_s":0.0,"mem_mode":false,"prefetch":true}
+[fastvideo] llm layer 1/48
+[fastvideo] llm layer 2/48
+[fastvideo] llm layer 3/48
+[fastvideo] llm layer 4/48
+[fastvideo] llm layer 5/48
+[fastvideo] llm layer 6/48
+[fastvideo] llm layer 7/48
+[fastvideo] llm layer 8/48
+[fastvideo] llm layer 9/48
+[fastvideo] llm layer 10/48
+[fastvideo] llm layer 11/48
+[fastvideo] llm layer 12/48
+[fastvideo] llm layer 13/48
+[fastvideo] llm layer 14/48
+[fastvideo] llm layer 15/48
+[fastvideo] llm layer 16/48
+[fastvideo] llm layer 17/48
+[fastvideo] llm layer 18/48
+[fastvideo] llm layer 19/48
+[fastvideo] llm layer 20/48
+[fastvideo] llm layer 21/48
+[fastvideo] llm layer 22/48
+[fastvideo] llm layer 23/48
+[fastvideo] llm layer 24/48
+[fastvideo] llm layer 25/48
+[fastvideo] llm layer 26/48
+[fastvideo] llm layer 27/48
+[fastvideo] llm layer 28/48
+[fastvideo] llm layer 29/48
+[fastvideo] llm layer 30/48
+[fastvideo] llm layer 31/48
+[fastvideo] llm layer 32/48
+[fastvideo] llm layer 33/48
+[fastvideo] llm layer 34/48
+[fastvideo] llm layer 35/48
+[fastvideo] llm layer 36/48
+[fastvideo] llm layer 37/48
+[fastvideo] llm layer 38/48
+[fastvideo] llm layer 39/48
+[fastvideo] llm layer 40/48
+[fastvideo] llm layer 41/48
+[fastvideo] llm layer 42/48
+[fastvideo] llm layer 43/48
+[fastvideo] llm layer 44/48
+[fastvideo] llm layer 45/48
+[fastvideo] llm layer 46/48
+[fastvideo] llm layer 47/48
+[fastvideo] llm layer 48/48
+[fastvideo] llm prefetch: 48 layers, host read+convert 25.49s, upload wait 0.19s, compute starved 25.61s
+[fastvideo] sdpa: fused mma B=1 H=32 Sq=1024 Sk=1024 D=128
+[fastvideo] ltx2 memory text: peak 43.56 GiB used, 43.62 GiB reserved; 37.55 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | activations 6.06 | pool_reserved 0.07 | non_pool 0.70 | total 44.26 GiB
+[fastvideo] ltx2 ancestral step 1/8 sigma 1.000000 (0.14s)
+[INFO] ltx2/gpu_trace {"busy_s":0.10760944700000001,"by_category":[{"calls":2492,"category":"gemm","share":0.7126912018166975,"total_s":0.076928544},{"calls":2234,"category":"norm_modulate_elementwise","share":0.19203737563103965,"total_s":0.020728691},{"calls":288,"category":"attention","share":0.04544148780647784,"total_s":0.004904996},{"calls":1776,"category":"cast","share":0.0368926168129751,"total_s":0.003982223},{"calls":674,"category":"layout","share":0.012937317932809911,"total_s":0.001396466}],"dropped_records":0,"gap_count":6487,"gap_histogram":[{"bucket":"<5us","count":6482,"idle_s":0.001740755},{"bucket":"5-50us","count":4,"idle_s":0.000058464},{"bucket":"50-500us","count":1,"idle_s":0.000250912},{"bucket":">500us","count":0,"idle_s":0.0}],"host":{"device_tail_s":0.01448678970336914,"enqueue_s":0.095205148,"first_activity_lag_s":0.0000324249267578125},"host_launches":4972,"idle_frac":0.01869541208703174,"idle_s":0.002050131,"kernel_count":7464,"kernel_s":0.10794092000000001,"largest_gaps":[{"after":"cast_f32_bf16","at_s":3.8400000000000005e-7,"before":"memcpy HtoD","gap_us":250.912},{"after":"internal::gemvx::kernel<…>","at_s":0.00026716800000000003,"before":"cast_f32_bf16","gap_us":24.96},{"after":"cast_f32_bf16","at_s":0.00025232,"before":"cast_f32_bf16","gap_us":13.472},{"after":"nvjet_sm120_tst_mma_192x8x64_3_48x8x64_tmaAB_alignCD4_splitK_TNNN","at_s":0.000306624,"before":"cast_f32_bf16","gap_us":12.704},{"after":"block_copy","at_s":0.10962767400000001,"before":"memcpy HtoD","gap_us":7.328},{"after":"cast_f32_bf16","at_s":0.00030131200000000003,"before":"mx_unary","gap_us":4.096},{"after":"mx_unary","at_s":0.000296288,"before":"internal::gemvx::kernel<…>","gap_us":3.7760000000000002},{"after":"memcpy HtoD","at_s":0.10961817,"before":"cublasLt::splitKreduce_kernel<…>","gap_us":1.8880000000000001},{"after":"cast_f32_bf16","at_s":0.018269444000000003,"before":"fvf_ltx_qk_norm_rope","gap_us":0.384},{"after":"cast_f32_bf16","at_s":0.022794565000000003,"before":"fvf_ltx_qk_norm_rope","gap_us":0.384}],"memcpy":{"HtoD":{"bytes":371200,"count":2}},"memset":{"bytes":0,"count":0},"pass":"ltx2","step":1,"sync_count":2,"top_kernels":[{"calls":336,"category":"gemm","name":"nvjet_sm120_tst_mma_128x144x64_2_32x72x64_tmaAB_alignCD4_bx_biast_TNNN","share":0.20653230489419583,"total_s":0.022293287000000002},{"calls":48,"category":"gemm","name":"nvjet_sm120_tst_mma_128x144x64_2_32x72x64_tmaAB_alignCD4_bz_TNNN","share":0.12183172053749403,"total_s":0.013150628000000001},{"calls":48,"category":"gemm","name":"nvjet_sm120_tst_mma_128x176x64_2_32x88x64_tmaAB_alignCD4_bz_TNNN","share":0.11236398578036948,"total_s":0.012128672},{"calls":96,"category":"gemm","name":"nvjet_sm120_tst_mma_192x128x64_2_48x64x64_tmaAB_alignCD4_bx_biast_TNNN","share":0.08401753477735784,"total_s":0.009068930000000001},{"calls":144,"category":"gemm","name":"nvjet_sm120_tst_mma_128x64x64_4_64x32x64_tmaAB_alignCD4_bx_biast_TNNN","share":0.06375188390093396,"total_s":0.006881437000000001},{"calls":576,"category":"norm_modulate_elementwise","name":"fvf_ltx_qk_norm_rope","share":0.061837466273216866,"total_s":0.006674793},{"calls":480,"category":"norm_modulate_elementwise","name":"fvf_ltx_res_norm_mod","share":0.05597787196922168,"total_s":0.006042303000000001},{"calls":480,"category":"gemm","name":"nvjet_sm120_tst_mma_96x64x64_4_96x16x64_tmaAB_alignCD4_splitK_TNNN","share":0.040372400012895944,"total_s":0.0043578340000000005},{"calls":1770,"category":"cast","name":"cast_f32_bf16","share":0.036835400328253644,"total_s":0.003976047},{"calls":578,"category":"norm_modulate_elementwise","name":"mx_binary","share":0.03357985090362395,"total_s":0.00362464},{"calls":96,"category":"attention","name":"flash_mma_fwd_d128","share":0.030010194465639167,"total_s":0.003239328},{"calls":96,"category":"gemm","name":"nvjet_sm120_tst_mma_128x96x64_3_64x24x64_tmaAB_alignCD4_bx_biast_TNNN","share":0.02653398729601341,"total_s":0.0028641030000000002},{"calls":208,"category":"norm_modulate_elementwise","name":"mx_unary","share":0.020576858155368697,"total_s":0.0022210850000000002},{"calls":832,"category":"gemm","name":"cublasLt::splitKreduce_kernel<…>","share":0.016496857725503914,"total_s":0.001780686},{"calls":192,"category":"attention","name":"flash_mma_fwd_d64","share":0.015431293340838674,"total_s":0.0016656680000000001},{"calls":48,"category":"gemm","name":"nvjet_sm120_tst_mma_64x56x128_3_16x56x128_tmaAB_alignCD4_bx_biast_TNNN","share":0.013364931482888974,"total_s":0.001442623},{"calls":48,"category":"gemm","name":"nvjet_sm120_tst_mma_128x80x64_3_32x40x64_tmaAB_alignCD4_splitK_TNNN","share":0.012907486799260189,"total_s":0.0013932460000000001},{"calls":96,"category":"norm_modulate_elementwise","name":"mx_residual_gate","share":0.010738902355103143,"total_s":0.001159167},{"calls":288,"category":"norm_modulate_elementwise","name":"fvf_ltx_gate_merge","share":0.009122166088634412,"total_s":0.000984655},{"calls":288,"category":"layout","name":"fvf_split_heads_rows","share":0.008129965910981673,"total_s":0.000877556},{"calls":144,"category":"gemm","name":"nvjet_sm120_tst_mma_32x64x128_4_16x32x128_tmaAB_alignCD4_splitK_TNNN","share":0.005664367137133906,"total_s":0.0006114170000000001},{"calls":384,"category":"layout","name":"mx_block_copy","share":0.004785414095043844,"total_s":0.000516542},{"calls":144,"category":"gemm","name":"nvjet_sm120_tst_mma_32x16x128_8_16x8x128_tmaAB_alignCD4_splitK_TNNN","share":0.002878324550133536,"total_s":0.000310689},{"calls":9,"category":"gemm","name":"internal::gemvx::kernel<…>","share":0.0021454699478196037,"total_s":0.000231584},{"calls":10,"category":"gemm","name":"nvjet_sm120_tst_mma_192x8x64_3_48x8x64_tmaAB_alignCD4_splitK_TNNN","share":0.0015214248683446464,"total_s":0.000164224}],"wall_s":0.109737774,"window_s":0.10965957800000001}
+[fastvideo] ltx2 ancestral step 2/8 sigma 0.993750 (0.11s)
+[fastvideo] ltx2 ancestral step 3/8 sigma 0.987500 (0.11s)
+[fastvideo] ltx2 ancestral step 4/8 sigma 0.981250 (0.11s)
+[fastvideo] ltx2 ancestral step 5/8 sigma 0.975000 (0.11s)
+[fastvideo] ltx2 ancestral step 6/8 sigma 0.909375 (0.11s)
+[fastvideo] ltx2 ancestral step 7/8 sigma 0.725000 (0.11s)
+[fastvideo] ltx2 ancestral step 8/8 sigma 0.421875 (0.11s)
+[fastvideo] ltx2 memory stage1: peak 37.64 GiB used, 37.75 GiB reserved; 37.55 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | activations 0.14 | pool_reserved 0.11 | non_pool 0.71 | total 38.34 GiB
+[fastvideo] ltx2 memory upsample: peak 39.73 GiB used, 39.84 GiB reserved; 37.72 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | upsampler 0.00 (max 1.85) | activations 0.38 | pool_reserved 0.12 | non_pool 0.71 | total 40.43 GiB
+[fastvideo] ltx2 upsample 5.32s → latent grid [7, 16, 24]
+[fastvideo] ltx2 sol stage-2: taus 1/1.25/1.5, layer 0 dense, layers 1-47 sol-attn kernel (thresh_type=diag), distilled lora not beside weights
+[fastvideo] sol-attn kernel (fused device): thresh_type=Diag tau=1 block=64 tokens=2688 blocks=42 sink=0
+[fastvideo] ltx2 step transfers: d2h 0 MiB in 2 copies, h2d 1901 MiB in 86 copies
+[fastvideo] ltx2 step 1/3 sigma 0.909375 (0.28s)
+[fastvideo] ltx2 step 2/3 sigma 0.725000 (0.27s)
+[fastvideo] ltx2 step 3/3 sigma 0.421875 (0.27s)
+[fastvideo] ltx2 memory stage2: peak 38.05 GiB used, 38.34 GiB reserved; 37.72 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | activations 0.55 | pool_reserved 0.30 | non_pool 0.71 | total 38.75 GiB
+[fastvideo] ltx vae: channels-last bf16 decoder (0.02s to convert weights)
+[fastvideo] ltx2 video decode 0.22s: vae 0.17s, rgb 0.02s, push 0.05s, wait 0.06s
+[fastvideo] video writer: 49 frames, png deferred (0 inline, 49 after the mp4 in 0.07s, 0.02 GiB, synced), ffmpeg feed blocked 0.08s, mp4 tail 0.05s, buffered peak 0.05 GiB of 43.33
+[fastvideo] ltx2 video decode + mp4 0.27s (mp4 tail 0.05s); png frames after it 0.07s
+[fastvideo] ltx2 memory decode: peak 39.73 GiB used, 40.19 GiB reserved; 38.45 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | activations 2.24 | pool_reserved 0.46 | non_pool 0.71 | total 40.44 GiB
+ltx2 memory load: 37.50 GiB live after load
+ltx2 memory     text: peak  43.56 GiB used,  43.62 GiB reserved,  37.55 GiB live after
+ltx2 memory   stage1: peak  37.64 GiB used,  37.75 GiB reserved,  37.55 GiB live after
+ltx2 memory upsample: peak  39.73 GiB used,  39.84 GiB reserved,  37.72 GiB live after
+ltx2 memory   stage2: peak  38.05 GiB used,  38.34 GiB reserved,  37.72 GiB live after
+ltx2 memory   decode: peak  39.73 GiB used,  40.19 GiB reserved,  38.45 GiB live after
+[PASS] ltx2/gen.mp4_frames_and_rate {"audio":{"channels":2,"codec_name":"aac","duration":"2.010000","sample_rate":"48000"},"avg_frame_rate":"24/1","ffprobe":true,"has_audio":true,"height":512,"path":"/fvscratch/runs/b4b/c493bd2-10241912/b4b-ltx25-512p-base/frames/output.mp4","r_frame_rate":"24/1","video_duration_s":2.041667,"video_frames":49,"width":768} (limits {"has_audio":true,"r_frame_rate":"24/1","video_frames":49})
+[PASS] ltx2/gen.latents_finite {"steps":11} (limits {"non_finite":0,"steps":11})
+[PASS] ltx2/gen.frames {"frames":49} (limits {"frames":49})
+[PASS] ltx2/gen.wav {"bytes":385964} (limits {"channels":2,"sample_rate":48000,"samples_per_channel":96480})
+[PASS] ltx2/gen.mp4 {"bytes":207781,"path":"/fvscratch/runs/b4b/c493bd2-10241912/b4b-ltx25-512p-base/frames/output.mp4"} (limits {"bytes_min":1})
+benchmark.json → /fvscratch/runs/b4b/c493bd2-10241912/b4b-ltx25-512p-base/benchmark.json
+[PASS] stage ltx2 → gpucheck-out/ltx2.json (355.4s)

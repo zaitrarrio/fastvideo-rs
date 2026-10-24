@@ -1,0 +1,12 @@
+fvf_h3_gate_res_norm_mod 49
+fvf_h3_qkvg_heads 50
+fvf_merge_heads_mx 45
+h3_gate_residual 1
+h3_norm_mod 1
+h3_res_gate_norm_mod 50
+h3_swiglu_mx 45
+mx_binary 104
+mx_block_copy 105
+mx_merge_heads 5
+mx_rms_norm 2
+mx_swiglu 5

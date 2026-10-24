@@ -1,0 +1,27 @@
+[19:13:58] [b4b] matrix start image=aaf5ccd443501db9
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-fbf2dfe0-2370-ef6a-3a5c-34beebebb0b5)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[19:14:02] [b4b] baseline baseline: sha-17e4a1d layer sha256:ab9734049547ebe95fb68424437953b06afac4638cb5d01afcd00eb14cbc8648 -> /fvscratch/baseline-17e4a1d/fv-gpucheck (29114694cfa737bd)
+[19:14:02] [b4b] skip b4b-h3-4stepvsa (not in FV_B4B_CELLS)
+[19:14:02] [b4b] skip b4b-h3-4stepvsa-off (not in FV_B4B_CELLS)
+[19:14:02] [b4b] skip b4b-ltx25-512p (not in FV_B4B_CELLS)
+[19:14:03] [b4b] ▶ b4b-ltx25-512p-off-base  env FASTVIDEO_GPU_TRACE=1 FASTVIDEO_GPU_TRACE_TOP=100000 FASTVIDEO_LTX_FUSE=0 /fvscratch/baseline-17e4a1d/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 49 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text streamed --no-text-cache --clip /fvscratch/runs/b4b/c493bd2-10241913/b4b-ltx25-512p-off-base/frames  (wall cap 3600s; 0=none)
+[19:17:49] [b4b] ok b4b-ltx25-512p-off-base  226s  
+[19:17:50] [b4b] ▶ b4b-ltx25-512p-off-pr  env FASTVIDEO_GPU_TRACE=1 FASTVIDEO_GPU_TRACE_TOP=100000 FASTVIDEO_LTX_FUSE=0 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 49 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text streamed --no-text-cache --clip /fvscratch/runs/b4b/c493bd2-10241913/b4b-ltx25-512p-off-pr/frames  (wall cap 3600s; 0=none)
+[19:18:06] [b4b] ok b4b-ltx25-512p-off-pr  16s  
+[19:18:06] [b4b] compare b4b-ltx25-512p-off-base--b4b-ltx25-512p-off-pr exit=0 "psnr_mean":null 
+[19:18:06] [b4b] b4b b4b-ltx25-512p-off: pass
+fvf_split_heads_rows 864
+mx_binary 1634
+mx_block_copy 1440
+mx_gather_nd 288
+mx_ln_adaln_e 2
+mx_merge_heads 288
+mx_residual_gate 288
+mx_rms_norm 1056
+mx_rope_half 384
+mx_unary 1264
+[19:18:06] [b4b] skip b4b-h3-fullopt (not in FV_B4B_CELLS)
+[19:18:06] [b4b] b4b family: pass
+[19:18:06] [b4b] compare-clips-b4b-ltx25-512p-off-base--b4b-ltx25-512p-off-pr.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 
+[19:18:06] [b4b] matrix done
