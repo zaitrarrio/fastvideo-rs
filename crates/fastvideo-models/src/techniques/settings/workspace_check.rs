@@ -38,6 +38,11 @@ const INFERENCE_CRATES: &[&str] = &[
 /// inference crates, with why each is not a settings read.
 const INDIRECT_ALLOWED: &[(&str, &str, &str)] = &[
     (
+        "crates/fastvideo-engine-service/src/cuda/families.rs",
+        "FAMILIES_DIR_ENV",
+        "FV_FAMILIES_DIR (an FV_* deployment override of the embedded family files), not a FASTVIDEO_* setting",
+    ),
+    (
         "crates/fastvideo-engine-service/src/cuda/backend.rs",
         "k",
         "install_process_plan compares the environment with the plan before it sets it",
