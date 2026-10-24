@@ -770,10 +770,10 @@ cells = ["c"]
     fn start_options_refuse_shell_text() {
         let t = tier();
         let mut o = StartOptions::for_tier(&t, "abcdef1-1");
-        o.extra_env = vec!["FASTVIDEO_X=1".into()];
+        o.extra_env = vec!["FASTVIDEO_TEST_X=1".into()];
         assert!(start_command(&o)
             .unwrap()
-            .contains("env FASTVIDEO_X=1 FV_WORK=/workspace"));
+            .contains("env FASTVIDEO_TEST_X=1 FV_WORK=/workspace"));
         for bad in ["X=$(id)", "x=1", "X=a b", "X"] {
             o.extra_env = vec![bad.into()];
             assert!(start_command(&o).is_err(), "{bad}");
