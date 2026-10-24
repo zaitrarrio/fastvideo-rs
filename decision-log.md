@@ -1062,3 +1062,33 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: none
 - Verification: `bash scripts/serve/coverage.sh --tests` on the build pod (13 crates, 819 passed)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-boot
+- Trigger: plan C2 asks for one boot sequence (review §7.4) instead of the ten in bash, TypeScript strings and Rust (`fv-entry.sh`, fv-control's `*_BOOT` / `PROVIDER_BOOT` / `SLS_*`, the host scripts, Vast's onstart)
+- Options: keep bash and share snippets; one shell script in the image; a Rust binary beside fv-serve driven by the env fv-control already sends
+- Decision: `fv-boot` in `fastvideo-deploy` (feature `boot`), the `ENTRYPOINT` of every serve image (`serve`, `serve-<variant>`, `serve-cpu`); typed steps on four seams (processes, HTTP, clock, log); the host kind from existing env (`FV_PROVIDER`, `FV_SERVE_ROLE`, `RUNPOD_ENDPOINT_ID` / `FV_CONTROL_ENDPOINT`), no new switch; r2 stays on `r2-fetch.py` (streaming under `fv-boot fetch-guard`); `registry` typed and refused until `hydrate`; the upsampler launcher (`fv-upsampler.sh`) kept as the sidecar's supervisor; the report protocols and log markers byte-compatible, pinned by a fixture both the Rust test and a control vitest read; the driver check and `--print-config` preflight on every path; `deploy/runpod/fv-entry.sh` deleted
+- Reason: CPU-testable end to end (fake provider, real fetcher against a fake chunk source); one place for every provider's boot; the env contract is already what fv-control sends
+- Reversibility: cheap (the shell boots remain until C2b; `FV_BOOT_LEGACY=1` selects them)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0014-fv-boot.md
+- Verification: `cargo test --locked -p fastvideo-deploy --features boot`, `control/test/unit/fv-boot-protocol.test.ts`; GPU: `scripts/gpu/fv-boot-smoke-pod.sh` on the EU volume (pending, coordinator)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-fv-boot-staging
+- Trigger: images already deployed have no fv-boot, and fv-control is deployed by hand separately from the images (plan A3 caveat), so fv-control cannot require fv-boot yet
+- Options: wait with fv-control until every image is promoted; payloads that require fv-boot; payloads that prefer fv-boot when the image has it
+- Decision: every shell boot fv-control sends starts with `PREFER_FV_BOOT_SH` (`exec fv-boot` when it is executable and `FV_BOOT_LEGACY` is not 1, else the shell body as before); Vast's onstart prefers fv-boot the same way; the shell bodies are deleted and fv-control sends env only in a follow-up (C2b) once no pool, endpoint, channel or pinned spec can start a pre-fv-boot image; deploy order: merge, GPU gate, promote, fv-control at any time, C2b
+- Reason: all four combinations of old / new fv-control and old / new image keep working; one env switch rolls back without a deploy
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0014-fv-boot.md §6
+- Verification: `fv-boot-protocol.test.ts` (the preamble in every boot; fv-boot runs when present, the shell boot otherwise or with `FV_BOOT_LEGACY=1`); the existing bash boot tests unchanged
+
+### FVID · 2026-10-24 · FVID-2026-10-24-deploy-tests-in-ci
+- Trigger: no workflow ran `fastvideo-deploy`'s tests (fv-boot's fake-provider tests, the Runpod queue simulator)
+- Options: a new workflow; the adapter-tests set
+- Decision: the adapter-tests set (`scripts/serve/coverage.sh`, `crates/fastvideo-deploy/**` in its paths); control.yml also runs on `crates/fastvideo-deploy/fixtures/**` (its vitest reads the fixture)
+- Reason: as for `fastvideo-manifest` and `fastvideo-lab`
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: none
+- Verification: `bash scripts/serve/coverage.sh --tests` on the build pod

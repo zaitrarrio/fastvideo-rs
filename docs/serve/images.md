@@ -79,12 +79,19 @@ CUDA libraries, so the win would be small and one shared binary layer is
 cached once across variants instead of seven. The variant images therefore
 share the binary and differ in config and entrypoint.
 
-**Entrypoint** (`deploy/runpod/fv-entry.sh`): links `/workspace/weights` to
-`/runpod-volume/weights` on serverless workers (the volume's HF-cache trees
-link absolutely into `/workspace/weights`), defaults `FV_WEIGHTS` to the
-mounted root, warns about any weights tree of the baked config that is
-missing, and `exec`s fv-serve (which reads `FV_CONFIG`). Arguments pass
-through (`--config …` still overrides).
+**Entrypoint** (`/opt/fastvideo-rs/bin/fv-boot`, `crates/fastvideo-deploy`
+`boot`, [ADR-0014](../adr/0014-fv-boot.md); it replaced
+`deploy/runpod/fv-entry.sh`): the host driver check, links
+`/workspace/weights` to `/runpod-volume/weights` on serverless workers (the
+volume's HF-cache trees link absolutely into `/workspace/weights`), defaults
+`FV_WEIGHTS` to the mounted root, materializes the config (inline
+`FV_WORKER_TOML_B64`, `--config` / `FV_WORKER_CONFIG`, baked `FV_CONFIG`) and
+checks it with `fv-serve --print-config`, runs the weights plan
+(`FV_WEIGHTS_SOURCE`: volume, r2, hub, none), the upsampler sidecar, a GMI /
+Brev pod's tunnel and the watchdog, and `exec`s fv-serve. Arguments pass
+through (`--config …` still overrides; `--version`, `--help` and
+`--print-config` go straight to fv-serve). The `serve` (debug) and `cpu`
+images use it too.
 
 ### Weights are not in the images
 

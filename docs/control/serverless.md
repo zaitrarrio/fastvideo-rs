@@ -319,7 +319,8 @@ form), checked the same way.
 load balancer) has no entrypoint field, so after create fv-control patches the
 v2-made template with that start (`v2TemplateBoot`), as it already did for CPU
 queue endpoints; a template update sets it too. A load balancer's config
-*file* still rides v2's `args` (`--config <path>` to the image's `fv-entry`).
+*file* still rides v2's `args` (`--config <path>` to the image's entrypoint,
+fv-boot, or `fv-entry` on images from before it).
 With `workers_min: 0` no worker runs before the patch; with a warm worker
 Runpod rolls it onto the patched template.
 
