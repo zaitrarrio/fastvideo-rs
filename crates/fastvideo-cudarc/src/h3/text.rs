@@ -328,7 +328,7 @@ pub fn encode_prompt_with_at(
     let mut identity = cache::encoder_identity(store, &cfg, tap)?;
     if fp8_numbers {
         // Weight-only FP8 rows are a different function of the same weights.
-        identity = cache::sha256(&[identity.as_slice(), b"/fp8-rows".as_slice()].concat());
+        identity = cache::fp8_rows_identity(&identity);
     }
     let key = cache::cache_key(prompt, &cache::sha256(&tokenizer_bytes), tap, &identity);
     let (entry, hit) = cache::get_or_compute(dir, &key, &ids, cfg.hidden, || {
@@ -385,7 +385,7 @@ pub fn encode_prompt_recovered(
         .map_err(|e| msg(format!("{}: {e}", tokenizer_path.display())))?;
     // Identity is the encoder kind + tap; recovered weights are not a LazyStore
     // under text_encoder/, so we fingerprint the kind string instead.
-    let identity = cache::sha256(format!("recovered-8b-tap{tap}").as_bytes());
+    let identity = cache::recovered_identity(tap);
     let key = cache::cache_key(prompt, &cache::sha256(&tokenizer_bytes), tap, &identity);
     let (entry, hit) = cache::get_or_compute(dir, &key, &ids, out_hidden, || {
         Ok(encoder.hidden_state(&ids, tap)?.host_cow()?.into_owned())

@@ -1,3 +1,9 @@
+//! LTX-2's use of the disk prompt cache ([`crate::rt::prompt_cache`],
+//! ADR-0021): its key inputs, its entry type and its default directory. The
+//! cache itself — key derivation, file format, atomic write, hit and miss —
+//! is the shared one, with the [`prompt_cache::LTX2`] format and the
+//! [`prompt_cache::LTX2_KEY`] recipe.
+//!
 //! A cache of finished text conditioning, because the text encoder is the most
 //! expensive thing a repeated prompt pays for and the cheapest to skip.
 //!
@@ -12,45 +18,30 @@
 //!
 //! The key must be computable **without opening the weights**, or a hit would
 //! still pay for mapping 12 files and parsing their headers. A checkpoint is
-//! therefore identified by its files: name, size, and a hash of the first and
-//! last mebibyte of each — the head is the safetensors header (every key, dtype,
-//! shape and offset), the tail is real tensor bytes, so a fine-tune with the
-//! same layout still keys differently. No timestamps: a re-download of the same
-//! files keeps its cache.
+//! therefore identified by its files ([`weights_identity`]).
 //!
 //! An entry carries the padded token ids it was made from and ends in a hash of
 //! its own bytes. A hit re-tokenises the prompt and compares; a short, corrupt
 //! or foreign file is a miss, never an error — the cache can only make a run
 //! faster, not make it fail.
+//!
+//! A hit returns the stored f32 values as host tensors; a miss returns the
+//! connectors' own device tensors. The pipeline puts both into one form
+//! (`ltx2::pipeline::canonical_contexts`) before the DiT sees them.
 
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use crate::rt::tensor::{CudaTensor, Result};
+use crate::rt::prompt_cache::{
+    self, Cached, Check, Entry, EntryRef, Header, PromptCache, PromptCacheError, TensorRef,
+};
+use crate::rt::tensor::CudaTensor;
 
-use sha2::{Digest, Sha256};
-
-use super::msg;
 use super::text::PaddedPrompt;
 
-const MAGIC: &[u8; 8] = b"FVLTX2T1";
-
-fn digest(data: &[u8]) -> [u8; 32] {
-    Sha256::digest(data).into()
-}
-
-/// A length-prefixed field, so `("ab", "c")` and `("a", "bc")` hash differently.
-fn field(h: &mut Sha256, data: &[u8]) {
-    h.update((data.len() as u64).to_le_bytes());
-    h.update(data);
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// How much of each end of a weight file goes into its identity.
-const PROBE: u64 = 1 << 20;
+/// Identity of a checkpoint from its files
+/// ([`prompt_cache::identity::files_head_tail`]).
+pub use crate::rt::prompt_cache::identity::files_head_tail as weights_identity;
+pub use crate::rt::prompt_cache::Outcome as CacheOutcome;
 
 /// The two contexts of one prompt, as the connectors emit them.
 pub struct CachedContexts {
@@ -58,61 +49,49 @@ pub struct CachedContexts {
     pub audio: CudaTensor,
 }
 
-/// Identity of a checkpoint — a file, or every `.safetensors` directly under a
-/// directory (optionally only those whose name starts with `prefix`) — from
-/// file names, sizes and the first and last mebibyte of each.
-pub fn weights_identity(path: &Path, prefix: Option<&str>) -> Result<[u8; 32]> {
-    let io = |e: std::io::Error, p: &Path| msg(format!("{}: {e}", p.display()));
-    let mut files: Vec<PathBuf> = if path.is_file() {
-        vec![path.to_path_buf()]
-    } else {
-        std::fs::read_dir(path)
-            .map_err(|e| io(e, path))?
-            .filter_map(|entry| entry.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|x| x == "safetensors"))
-            .filter(|p| {
-                prefix.is_none_or(|pre| {
-                    p.file_name()
-                        .is_some_and(|n| n.to_string_lossy().starts_with(pre))
-                })
-            })
-            .collect()
-    };
-    if files.is_empty() {
-        return Err(msg(format!(
-            "{}: no safetensors files to identify",
-            path.display()
-        )));
+impl Cached for CachedContexts {
+    fn from_entry(entry: Entry) -> Option<Self> {
+        let [video, audio] = <[_; 2]>::try_from(entry.tensors).ok()?;
+        Some(Self {
+            video: CudaTensor::from_vec(video.data, video.shape).ok()?,
+            audio: CudaTensor::from_vec(audio.data, audio.shape).ok()?,
+        })
     }
-    files.sort();
-    let mut h = Sha256::new();
-    for file in &files {
-        let mut f = std::fs::File::open(file).map_err(|e| io(e, file))?;
-        let size = f.metadata().map_err(|e| io(e, file))?.len();
-        field(
-            &mut h,
-            file.file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default()
-                .as_bytes(),
-        );
-        field(&mut h, &size.to_le_bytes());
-        let mut buf = vec![0u8; PROBE.min(size) as usize];
-        f.read_exact(&mut buf).map_err(|e| io(e, file))?;
-        field(&mut h, &buf);
-        if size > PROBE {
-            let tail = PROBE.min(size - PROBE);
-            f.seek(SeekFrom::End(-(tail as i64)))
-                .map_err(|e| io(e, file))?;
-            buf.truncate(tail as usize);
-            f.read_exact(&mut buf).map_err(|e| io(e, file))?;
-            field(&mut h, &buf);
-        }
+
+    fn with_tensors<R>(
+        &self,
+        f: impl FnOnce(&[TensorRef<'_>]) -> R,
+    ) -> Result<R, PromptCacheError> {
+        with_host(&self.video, &self.audio, f)
     }
-    Ok(h.finalize().into())
 }
 
-/// Everything the conditioning depends on, hashed.
+/// `f` over the two contexts read back as f32 (video, then audio).
+fn with_host<R>(
+    video: &CudaTensor,
+    audio: &CudaTensor,
+    f: impl FnOnce(&[TensorRef<'_>]) -> R,
+) -> Result<R, PromptCacheError> {
+    fn host(t: &CudaTensor) -> Result<std::borrow::Cow<'_, [f32]>, PromptCacheError> {
+        t.host_cow()
+            .map_err(|e| PromptCacheError::Tensor(e.to_string()))
+    }
+    let (v, a) = (host(video)?, host(audio)?);
+    Ok(f(&[
+        TensorRef {
+            shape: &video.shape,
+            data: &v,
+        },
+        TensorRef {
+            shape: &audio.shape,
+            data: &a,
+        },
+    ]))
+}
+
+/// Everything the conditioning depends on, hashed ([`prompt_cache::LTX2_KEY`]):
+/// the stripped prompt, the tokenizer file's digest, the padded length, the
+/// encoder kind and the Gemma and connector identities. Hex.
 pub fn cache_key(
     prompt: &str,
     tokenizer_json: &[u8],
@@ -121,16 +100,12 @@ pub fn cache_key(
     gemma: &[u8; 32],
     connectors: &[u8; 32],
 ) -> String {
-    let mut h = Sha256::new();
-    field(&mut h, b"fastvideo ltx2 text conditioning v1");
-    // The pipeline strips the prompt before tokenising; so does the key.
-    field(&mut h, prompt.trim().as_bytes());
-    field(&mut h, &digest(tokenizer_json));
-    field(&mut h, &(max_len as u64).to_le_bytes());
-    field(&mut h, text_encoder_kind);
-    field(&mut h, gemma);
-    field(&mut h, connectors);
-    hex(&h.finalize())
+    prompt_cache::hex(&prompt_cache::LTX2_KEY.key(
+        prompt,
+        &prompt_cache::sha256(tokenizer_json),
+        max_len as u64,
+        &[text_encoder_kind, gemma.as_slice(), connectors.as_slice()],
+    ))
 }
 
 /// `$FASTVIDEO_CACHE`, else `$XDG_CACHE_HOME/fastvideo`, else `~/.cache/fastvideo`,
@@ -150,16 +125,25 @@ pub fn default_dir() -> Option<PathBuf> {
 }
 
 pub struct TextCache {
-    dir: PathBuf,
+    cache: PromptCache,
 }
 
 impl TextCache {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into() }
+        Self {
+            cache: PromptCache::new(dir, &prompt_cache::LTX2),
+        }
     }
 
     pub fn path(&self, key: &str) -> PathBuf {
-        self.dir.join(format!("{key}.ltx2text"))
+        self.cache.path(key)
+    }
+
+    fn check(prompt: &PaddedPrompt) -> Check<'_> {
+        Check {
+            ids: &prompt.ids,
+            header: Header::Real(prompt.real),
+        }
     }
 
     /// Write atomically: a reader never sees half an entry under the final name.
@@ -169,88 +153,38 @@ impl TextCache {
         prompt: &PaddedPrompt,
         video: &CudaTensor,
         audio: &CudaTensor,
-    ) -> Result<()> {
-        let io = |e: std::io::Error| msg(format!("text cache {}: {e}", self.dir.display()));
-        let mut body = Vec::new();
-        body.extend_from_slice(MAGIC);
-        body.extend_from_slice(&(prompt.ids.len() as u32).to_le_bytes());
-        body.extend_from_slice(&(prompt.real as u32).to_le_bytes());
-        for id in &prompt.ids {
-            body.extend_from_slice(&id.to_le_bytes());
-        }
-        for t in [video, audio] {
-            body.extend_from_slice(&(t.rank() as u32).to_le_bytes());
-            for d in &t.shape {
-                body.extend_from_slice(&(*d as u64).to_le_bytes());
-            }
-            for v in t.host_cow()?.iter() {
-                body.extend_from_slice(&v.to_le_bytes());
-            }
-        }
-        let seal = digest(&body);
-        std::fs::create_dir_all(&self.dir).map_err(io)?;
-        let part = self.dir.join(format!("{key}.{}.part", std::process::id()));
-        let mut f = std::fs::File::create(&part).map_err(io)?;
-        f.write_all(&body)
-            .and_then(|()| f.write_all(&seal))
-            .and_then(|()| f.sync_all())
-            .map_err(io)?;
-        drop(f);
-        std::fs::rename(&part, self.path(key)).map_err(io)
+    ) -> Result<(), PromptCacheError> {
+        with_host(video, audio, |tensors| {
+            self.cache.store(
+                key,
+                &EntryRef {
+                    ids: &prompt.ids,
+                    header: Header::Real(prompt.real),
+                    tensors,
+                },
+            )
+        })
+        .and_then(|r| r)
+        .map(|_| ())
     }
 
     /// The entry under `key`, if it is whole and was made from exactly these
     /// token ids. Anything else is a miss.
     pub fn load(&self, key: &str, prompt: &PaddedPrompt) -> Option<CachedContexts> {
-        let bytes = std::fs::read(self.path(key)).ok()?;
-        let (body, seal) = bytes.split_at_checked(bytes.len().checked_sub(32)?)?;
-        if digest(body) != *seal {
-            return None;
-        }
-        let mut at = 0usize;
-        let mut take = |n: usize| -> Option<&[u8]> {
-            let s = body.get(at..at.checked_add(n)?)?;
-            at += n;
-            Some(s)
-        };
-        let u32_at = |s: &[u8]| u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
-        if take(8)? != MAGIC {
-            return None;
-        }
-        let (len, real) = (u32_at(take(4)?) as usize, u32_at(take(4)?) as usize);
-        let ids: Vec<u32> = take(len.checked_mul(4)?)?
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|s| u32::from_le_bytes(*s))
-            .collect();
-        if ids != prompt.ids || real != prompt.real {
-            return None;
-        }
-        let mut tensor = || -> Option<CudaTensor> {
-            let rank = u32_at(take(4)?) as usize;
-            if rank > 8 {
-                return None;
-            }
-            let shape: Vec<usize> = take(rank * 8)?
-                .as_chunks::<8>()
-                .0
-                .iter()
-                .map(|c| {
-                    u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as usize
-                })
-                .collect();
-            let n = shape.iter().try_fold(1usize, |a, d| a.checked_mul(*d))?;
-            let data: Vec<f32> = take(n.checked_mul(4)?)?
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                .collect();
-            CudaTensor::from_vec(data, shape).ok()
-        };
-        let (video, audio) = (tensor()?, tensor()?);
-        (at == body.len()).then_some(CachedContexts { video, audio })
+        self.cache
+            .load(key, &Self::check(prompt))
+            .and_then(CachedContexts::from_entry)
+    }
+
+    /// Load, else `compute` and store (a store that fails is logged).
+    pub fn get_or_compute<E>(
+        &self,
+        key: &str,
+        prompt: &PaddedPrompt,
+        compute: impl FnOnce() -> Result<CachedContexts, E>,
+    ) -> Result<(CachedContexts, CacheOutcome), E> {
+        self.cache
+            .get_or_compute(key, &Self::check(prompt), compute)
     }
 }
 

@@ -1462,3 +1462,52 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §9.2, §9.3, §9.5
 - Verification: `fv-lab-goldens.sh --check` (negative cases: all-skipped, all-crashed, unreadable summaries and reports), `pod::tests::the_baseline_commit_of_a_pod_fails_closed`, `tests/fv_lab_bin.rs::a_baseline_tier_needs_the_baseline_commit`, `tests/runner.rs::a_baseline_that_is_this_build_is_fatal`, `tests/dry_run.rs::arms_and_gates_are_the_scripts_and_arms_name_their_trees`
+### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-home
+- Trigger: plan B4c; three disk prompt caches (H3 `h3/text_cache.rs`, LTX-2 `ltx2/text_cache.rs`, Wan's key in `wan/pipeline.rs` over H3's store; review §3, §7.3 item 4)
+- Options: `fastvideo_models` beside B4a's `step_cache`; `fastvideo_cudarc::rt::prompt_cache`
+- Decision: `fastvideo_cudarc::rt::prompt_cache` (key, file identities, format, atomic store, load, get-or-compute); the families keep only their identity inputs, default directories and value types
+- Reason: keys and seals are SHA-256 and `sha2` is a cudarc dependency only (no new dependency); the identities read weight files and lazy checkpoints and the values are device tensors read back; every caller is a cudarc pipeline; `rt` is the shared runtime (B1) and builds without CUDA
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0021-prompt-cache.md
+- Verification: `cargo test -p fastvideo-cudarc prompt_cache`, cudarc/models/engine-service/core tests
+
+### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-parameters
+- Trigger: the copies differ in what is on disk: key domain and prompt trimming, file identities (framed head+tail MiB vs unframed 256 KiB head vs tensor fingerprint), two entry layouts, finite check, temporary names, fsync, cleanup, error text and log line
+- Options: normalise to one key and one format (orphaning or re-versioning every existing cache); keep each difference as a named parameter
+- Decision: named parameters: `KeyRecipe { domain, PromptNorm }` with the length and identity fields as arguments (one derivation for all three), `Format { magic, extension, Layout, TempName, Durability, TempCleanup, Finite, ErrorText, StoreLog }` with two instances, `H3` (H3 and Wan) and `LTX2`; keys, files and log lines unchanged
+- Reason: byte identity first (plan §1); existing cache directories must keep working
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0021-prompt-cache.md "Key", "On-disk format"
+- Verification: `rt/prompt_cache/equality.rs` against the pre-B4c caches in `legacy.rs` (verbatim): keys (pinned H3 / LTX / Wan values recomputed in Python), identities, byte-equal files, cross reads, identical accept / reject of every truncation and bit flip, hit / miss sequences, failure leftovers, concurrent writers; 18 mutations of key and format all caught
+
+### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-compatibility
+- Trigger: B4c brief: existing cache directories must be read exactly as before or ignored safely, never misread
+- Options: version the unified format (ignore old entries); read old entries as before
+- Decision: read as before, every family: same names, same format, same checks; nothing is versioned, so nothing is ignored by version; damaged or foreign files stay misses
+- Reason: the unification changes no byte on disk, so a version bump would only throw away warm caches
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0021-prompt-cache.md "Compatibility rule"
+- Verification: `equality.rs` cross reads both ways and byte-equal files; GPU `b4c` cells require the base and PR cache directories to hold byte-identical entries
+
+### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-gaps-kept
+- Trigger: B4c review of the keys (and the independent review of PR #177): six inputs the conditioning depends on are not in the keys: LTX FP8 Gemma `FASTVIDEO_LTX2_TEXT_FP8` (silent wrong output, medium); the H3 recovered-8B identity is a constant, so a changed `ara.safetensors` LoRA, conditioning adapter or base serves stale conditioning (silent wrong output, medium); Wan UMT5 GEMM compute type (low); `FASTVIDEO_BF16_ACT`, the global GEMM compute type and GPU arch for H3 / LTX (small numeric differences); LTX resident vs streamed Gemma (expected equal, unproven); FP8 tree vs quantise-at-load (fine while bit-equal). Also: no size cap; threads of one process share a temporary name
+- Options: fix in B4c; keep and record as follow-ups
+- Decision: **(coordinator) keep unchanged in B4c, recorded with file:line and severity in ADR-0021 "Follow-ups: key gaps carried over"; the coordinator fixes them in a follow-up PR (B4c2) right after B4c merges**
+- Reason: each fix changes keys or behaviour, which B4c (byte identity) must not; each is its own reviewed decision
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0021-prompt-cache.md "Follow-ups: key gaps carried over", "Eviction and size", "Concurrency"
+- Verification: n/a (recorded gaps; B4c2)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-prompt-cache-gpu-cells
+- Trigger: B4c's exit criterion (byte identity per family) needs GPU cells; only H3 and LTX trees are on the EU volume
+- Options: one cell per family with a cache, base vs PR, a cold pass and a hit pass per arm; a shared cache across arms
+- Decision: `runpod-matrix.sh b4c`: `b4c-h3-4stepvsa` and `b4c-ltx25-512p`, each arm (baseline binary, PR build; same argv / env) over its own new cache directory, pass `-miss` then `-hit` (each pass directory emptied first); `--off-identity` base vs PR per pass; the verdict (`scripts/gpu/b4-verdict.sh`) passes only on positive evidence: every pass `summary.json` exit 0, `benchmark.json` `miss` / `hit` as planned, on H3 `text_encoder` containing `fp8` on the misses and `cache` on the hits, both compares' `off_identity` checks passed and not skipped, both cache directories non-empty, byte-identical and free of `*.part` / `*.tmp*`; `b4c.verdict.json` fails when a named cell has no passing verdict (review of PR #177; `b4a` got the same exit / compare / family fold); `pr-miss` vs `pr-hit` compared for the record only; `FV_B4C_CELLS` narrows; Wan rests on the CPU fixtures (no EU-volume tree)
+- Reason: separate caches per arm compare like with like (a shared cache would compare a hit with a miss, the techniques LTX lesson); byte-equal entries prove the PR reads the baseline's cache as its own
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0021-prompt-cache.md "Evidence"
+- Verification: `FV_DRY_RUN=1 FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b4c`; GPU run by the coordinator
