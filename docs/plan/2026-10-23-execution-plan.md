@@ -89,7 +89,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | todo (D1a merged #171: `fv-lab run` + `pod` on fv-deploy's guards, `lab/tiers.toml` and `lab/cells/rtx6000-*.toml`, dry-run and payload goldens from the scripts, ADR-0019; GPU gate passed (fv-lab = script, sol-h3 and ltx25-two-stage frames byte-identical); next: D1b other families, D1c `report`, D1d `gate`/`oracle`, D1e one-offs) |
+| D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | todo (D1a merged #171: `fv-lab run` + `pod` on fv-deploy's guards, `lab/tiers.toml` and `lab/cells/rtx6000-*.toml`, dry-run and payload goldens from the scripts, ADR-0019; GPU gate passed (fv-lab = script, sol-h3 and ltx25-two-stage frames byte-identical); D1b pr #176: `techniques`, `b6`, `rtx5090`, `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae`, `precision` as tiers (cell schema: baseline arms, TAE arms, bare `env`, paired gates), a golden per tier, the family inventory in ADR-0019 §9; GPU runs per family pending (coordinator); next: those runs and branch deletions, D1c `report`, D1d `gate`/`oracle` (+ `b4a`'s verdict), D1e one-offs) |
 | D2 | `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments; keyed by registry name and `@rev` | every served variant has a gold file; comments in `profiles/` no longer carry numbers | pod | A2 | merged (#151) |
 | D3 | `fv-lab report tiers` and the generated `docs/perf/tiers.md` | table generated from one run set | pod; **GPU** the gold runs | D1, D2 | todo |
 | D4 | CI bridge: gold files parse and resolve; `last_validated.commit` age check; an on-demand `fv-lab run gold --all` workflow | visible per-model validation age in CI | CI | D3 | todo |
@@ -847,3 +847,19 @@ ran (pod id, $/hr), result, cost.
   (`<cell>-<arm>/cache-evidence.txt`, `<cell>.evidence.diff`, empty).
   About 35 GPU-minutes, ~$1.45. Evidence:
   `artifacts/runpod/b4a/abccc38-{10241423,10241424,10241425}/`.
+- 2026-10-24 15:30Z: D1b (`claude/d1b-fv-lab-families`, draft PR #176): nine more
+  `runpod-matrix.sh` families as fv-lab tiers and cells (`techniques`, `b6`,
+  `rtx5090`, `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae`, `precision`
+  default mode; 10 tiers, 38 cells, 113 arms with `rtx6000`). Four additive
+  cell fields: `bin = "baseline"` (fetch-baseline.sh, `--baseline-sha`), `tae`
+  with `{tae}`, `env = []`, and a compare's paired `gate`. The script changes
+  only its dry run (`FV_DRY_RUN_GATES`, no TAE / baseline fetch when dry). The
+  goldens cover every tier: dry run, gate cells, pod body.
+  `fv-lab-compare-runs.sh` also compares compare verdicts and gate reports.
+  ADR-0019 §9 has the 40-family inventory with a retire-when for each; `b4a`
+  stays (its evidence verdict), as do `hd`, `ltxoffload` and the rest, each
+  with a reason. No branch was deleted. CPU only, on build pod
+  `l3d75u8a8zhw47` (agent `d1b-lab`): fastvideo-lab tests (all features),
+  workspace clippy, fmt, lint and goldens `--check` all green. No Runpod call.
+  GPU runs (coordinator), one per family, cheapest cells, about $13 in all:
+  ADR-0019 §9.5.
