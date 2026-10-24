@@ -220,6 +220,6 @@ ran (pod id, $/hr), result, cost.
 - 2026-10-24 01:25Z: E4's `adapter-tests` run on the PR head (PR #148,
   run 40049075337) green on the first attempt, 8 min wall clock (container
   pull 55 s, the instrumented `cargo test` 6.5 min cold, no rust-cache
-  hit yet): 69 test binaries, 0 failures; coverage over the instrumented
+  hit yet): 69 test binaries, 720 passed, 0 failed; coverage over the instrumented
   workspace files: lines 62.42% (54115 / 86700), regions 62.96%, functions
   59.31%; `adapter-coverage` artifact 4.5 MB (lcov, HTML, summaries).
