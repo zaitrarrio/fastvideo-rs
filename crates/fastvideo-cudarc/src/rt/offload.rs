@@ -80,10 +80,19 @@ impl DitOffload {
 
     /// `explicit` (a CLI flag) wins, then [`ENV`], then `Auto`.
     pub fn from_env_or(explicit: Option<Self>) -> std::result::Result<Self, String> {
+        Self::from_settings_or(&fastvideo_models::settings::Live, explicit)
+    }
+
+    /// [`Self::from_env_or`] reading [`ENV`] from `settings` (a load's
+    /// snapshot).
+    pub fn from_settings_or(
+        settings: &dyn fastvideo_models::settings::Source,
+        explicit: Option<Self>,
+    ) -> std::result::Result<Self, String> {
         if let Some(p) = explicit {
             return Ok(p);
         }
-        match fastvideo_models::techniques::settings::var(ENV) {
+        match settings.var(ENV) {
             Some(v) => Self::parse(&v).map_err(|e| format!("{ENV}: {e}")),
             None => Ok(Self::Auto),
         }

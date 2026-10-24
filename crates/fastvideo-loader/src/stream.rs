@@ -79,7 +79,15 @@ impl GateOptions {
 /// `FASTVIDEO_STREAMING_FETCH=1`: the boot started this process while the
 /// weights are still arriving (the read-ahead takes fewer threads then).
 pub fn streaming_fetch_env() -> bool {
-    fastvideo_models::settings::env_var("FASTVIDEO_STREAMING_FETCH").is_ok_and(|v| v.trim() == "1")
+    streaming_fetch_from(&fastvideo_models::settings::Live)
+}
+
+/// [`streaming_fetch_env`] with the setting from `settings` (a load's
+/// snapshot).
+pub fn streaming_fetch_from(settings: &dyn fastvideo_models::settings::Source) -> bool {
+    settings
+        .env_var("FASTVIDEO_STREAMING_FETCH")
+        .is_ok_and(|v| v.trim() == "1")
 }
 
 /// The progress map of one file being fetched.

@@ -297,18 +297,18 @@ pub const ACT_ENV: &str = "FASTVIDEO_H3_NVFP4_ACT";
 
 impl ModelOptOptions {
     pub fn from_env() -> Result<Self> {
-        let attention = match fastvideo_models::techniques::settings::var(ATTN_ENV)
-            .as_deref()
-            .map(str::trim)
-        {
+        Self::from_settings(&fastvideo_models::settings::Live)
+    }
+
+    /// [`Self::from_env`] with [`ATTN_ENV`] and [`ACT_ENV`] from `settings`
+    /// (a load's snapshot).
+    pub fn from_settings(settings: &dyn fastvideo_models::settings::Source) -> Result<Self> {
+        let attention = match settings.var(ATTN_ENV).as_deref().map(str::trim) {
             None | Some("" | "0" | "off" | "false" | "bf16") => false,
             Some("1" | "on" | "true" | "nvfp4") => true,
             Some(other) => return Err(msg(format!("{ATTN_ENV}={other}: expected 0|1"))),
         };
-        let static_act = match fastvideo_models::techniques::settings::var(ACT_ENV)
-            .as_deref()
-            .map(str::trim)
-        {
+        let static_act = match settings.var(ACT_ENV).as_deref().map(str::trim) {
             None | Some("" | "static") => true,
             Some("dynamic") => false,
             Some(other) => return Err(msg(format!("{ACT_ENV}={other}: expected static|dynamic"))),

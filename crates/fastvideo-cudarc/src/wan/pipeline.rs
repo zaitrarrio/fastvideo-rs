@@ -9,6 +9,7 @@ use fastvideo_models::schedulers::{
     DmdSchedule, FlowUniPCMultistepScheduler, RcmSchedule, SelfForcingSchedule, UniPcTerm,
     FAST_WAN_1_3B_DMD_STEPS, RCM_SIGMA_MAX_T2V, SF_WAN_1_3B_DMD_STEPS,
 };
+use fastvideo_models::settings::{Live, Snapshot, Source};
 use fastvideo_models::wan::{
     i2v_first_frame_mask, moe_expert, MoeExpert, Umt5Config, WanVaeConfig, WanVideoArchConfig,
 };
@@ -33,8 +34,10 @@ use crate::hooks::{Hooks, Stage};
 /// there is no sensible place to guess. A set-but-unloadable path is an error
 /// rather than a silent fall back to the Wan VAE: asking for TAEHV and getting
 /// a 3.9s Wan decode would look exactly like TAEHV being slow.
-fn load_taehv(arch: TaeArch) -> Result<Option<super::taehv::TaeHv>> {
-    let dir = fastvideo_models::settings::env_var("FASTVIDEO_TAEHV_WEIGHTS").unwrap_or_default();
+fn load_taehv(arch: TaeArch, settings: &dyn Source) -> Result<Option<super::taehv::TaeHv>> {
+    let dir = settings
+        .env_var("FASTVIDEO_TAEHV_WEIGHTS")
+        .unwrap_or_default();
     if dir.is_empty() {
         return Ok(None);
     }
@@ -80,9 +83,9 @@ fn open_taehv(path: &Path, arch: TaeArch) -> TensorResult<super::taehv::TaeHv> {
 /// `FASTVIDEO_TAEHV_WEIGHTS` is unset: `FASTVIDEO_TAE_DIR`, `<weights>/taehv`,
 /// `<weights>/../taehv`, then `$XDG_CACHE_HOME` (or `~/.cache`)
 /// `/fastvideo/taehv` — where `scripts/gpu/fetch_taehv.sh` puts it.
-pub fn default_taehv_dirs(root: &Path) -> Vec<std::path::PathBuf> {
+pub fn default_taehv_dirs(root: &Path, settings: &dyn Source) -> Vec<std::path::PathBuf> {
     let mut dirs = Vec::new();
-    if let Ok(d) = fastvideo_models::settings::env_var("FASTVIDEO_TAE_DIR") {
+    if let Ok(d) = settings.env_var("FASTVIDEO_TAE_DIR") {
         if !d.is_empty() {
             dirs.push(std::path::PathBuf::from(d));
         }
@@ -113,7 +116,14 @@ pub enum WanVaeChoice {
 
 impl WanVaeChoice {
     pub fn from_env() -> Result<Self> {
-        match fastvideo_models::settings::env_var("FASTVIDEO_WAN_VAE")
+        Self::from_settings(&Live)
+    }
+
+    /// [`Self::from_env`] with `FASTVIDEO_WAN_VAE` from `settings` (a load's
+    /// snapshot).
+    pub fn from_settings(settings: &dyn Source) -> Result<Self> {
+        match settings
+            .env_var("FASTVIDEO_WAN_VAE")
             .unwrap_or_default()
             .trim()
             .to_ascii_lowercase()
@@ -423,12 +433,33 @@ impl WanPipeline {
     /// Diffusers-named map, e.g. `wan::longlive::load_transformer_map`)
     /// instead of `<root>/transformer`; the rest of the tree (text encoder,
     /// VAE, TAEHV) as usual.
+    ///
+    /// The load's settings are captured when it starts
+    /// ([`Self::load_with_settings`]).
     pub fn load_with_dit(
         root: &Path,
         preset: &str,
         parts: LoadParts,
         dit: Option<WeightMap>,
     ) -> Result<Self> {
+        Self::load_with_settings(root, preset, parts, dit, &Snapshot::capture())
+    }
+
+    /// [`Self::load_with_dit`] with its `FASTVIDEO_*` settings from
+    /// `settings`, a snapshot of the readers taken when the load starts
+    /// (`docs/adr/0010-settings-layer.md`): the reads below take it as a
+    /// parameter, and while the load runs this thread's readers serve it to
+    /// the code the load calls ([`Snapshot::scope`]). The techniques-layer
+    /// settings Wan reads are the ones `techniques::registry::wan_spec`
+    /// declares.
+    pub fn load_with_settings(
+        root: &Path,
+        preset: &str,
+        parts: LoadParts,
+        dit: Option<WeightMap>,
+        settings: &Snapshot,
+    ) -> Result<Self> {
+        let _load_scope = settings.scope();
         // The DiT runs bf16 activations as FastVideo does (`dit_precision`
         // bf16); UMT5 and the VAE keep f32 (`text_encoder_precisions` /
         // `vae_precision` fp32), see umt5.rs / vae.rs. FASTVIDEO_BF16_ACT=0
@@ -439,9 +470,9 @@ impl WanPipeline {
             // Diagnostic: FASTVIDEO_WAN_CAUSAL_FPB=1 with FASTVIDEO_WAN_CAUSAL_AR=0
             // is the per-frame whole-clip mask this port ran before it
             // followed FastVideo's blocks.
-            cfg.num_frames_per_block =
-                super::envflag::usize_flag("FASTVIDEO_WAN_CAUSAL_FPB", cfg.num_frames_per_block)
-                    .max(1);
+            cfg.num_frames_per_block = settings
+                .usize_flag("FASTVIDEO_WAN_CAUSAL_FPB", cfg.num_frames_per_block)
+                .max(1);
         }
         // A two-expert checkpoint (Wan 2.2 A14B) is 2 x 57 GB of f32 on
         // disk. The eager map copies a whole directory into host memory and
@@ -457,9 +488,8 @@ impl WanPipeline {
         // docs/ops/r2-bench-2026-10-13-wan-lazy.md). `FASTVIDEO_WAN_DIT_LAZY=1`
         // opens it lazily in any case, `=0` keeps any checkpoint on the eager path.
         let two_experts = root.join("transformer_2").is_dir();
-        let streaming = fastvideo_loader::stream::streaming_fetch_env();
-        let lazy_dit =
-            super::envflag::bool_flag("FASTVIDEO_WAN_DIT_LAZY", two_experts || streaming);
+        let streaming = fastvideo_loader::stream::streaming_fetch_from(settings);
+        let lazy_dit = settings.bool_flag("FASTVIDEO_WAN_DIT_LAZY", two_experts || streaming);
         let open_dit = |dir: &Path| -> Result<WeightMap> {
             Ok(if lazy_dit {
                 WeightMap::open(dir)?
@@ -514,16 +544,16 @@ impl WanPipeline {
         // encoder, else parks both in pinned host memory and swaps them at
         // the boundary (`FASTVIDEO_WAN_MOE`). `FASTVIDEO_DIT_OFFLOAD=streamed`
         // streams any Wan DiT layer by layer instead.
-        let offload =
-            super::offload::DitOffload::from_env_or(None).map_err(PipelineError::Message)?;
+        let offload = super::offload::DitOffload::from_settings_or(settings, None)
+            .map_err(PipelineError::Message)?;
         let (residency, moe) = if offload == super::offload::DitOffload::Streamed {
             (WanBlockResidency::Streamed, None)
         } else if two_experts {
             use fastvideo_models::wan::moe::{self, MoePlan, MoeResidency};
-            let asked = MoeResidency::from_env().map_err(PipelineError::Message)?;
+            let asked = MoeResidency::from_settings(settings).map_err(PipelineError::Message)?;
             let expert = moe::expert_bf16_bytes(&cfg);
             let free = super::device::free_memory().map(|(f, _)| f);
-            let plan = asked.resolve(expert, moe::headroom_bytes(), free);
+            let plan = asked.resolve(expert, moe::headroom_bytes_from(settings), free);
             super::log::info(format_args!(
                 "wan moe: {asked:?} -> {} (expert {:.1} GiB bf16, {} free after the text encoder)",
                 plan.as_str(),
@@ -560,14 +590,14 @@ impl WanPipeline {
         };
 
         let boundary_ratio = cfg.boundary_ratio;
-        let vae_choice = WanVaeChoice::from_env()?;
+        let vae_choice = WanVaeChoice::from_settings(settings)?;
         // taew2_1 decodes the 16-channel Wan 2.1 latent space, taew2_2 the
         // 48-channel Wan 2.2 one.
         let tae_arch = taehv_arch(vae_cfg.z_dim);
-        let mut taehv = load_taehv(tae_arch)?;
+        let mut taehv = load_taehv(tae_arch, settings)?;
         let taehv_explicit = taehv.is_some();
         if taehv.is_none() && matches!(vae_cfg.z_dim, 16 | 48) && vae_choice != WanVaeChoice::Full {
-            for dir in default_taehv_dirs(root) {
+            for dir in default_taehv_dirs(root, settings) {
                 if !dir.join(tae_arch.file_name()).is_file() {
                     continue;
                 }
@@ -590,7 +620,7 @@ impl WanPipeline {
             return Err(PipelineError::Message(format!(
                 "FASTVIDEO_WAN_VAE=taehv but no {} (FASTVIDEO_TAEHV_WEIGHTS, or one of {:?}; scripts/gpu/fetch_taehv.sh)",
                 tae_arch.file_name(),
-                default_taehv_dirs(root)
+                default_taehv_dirs(root, settings)
             )));
         }
         let dit = WanTransformer3D::load_with_residency(cfg, &dit, residency)?;
@@ -2784,5 +2814,123 @@ mod frame_output_tests {
         let err = writer.finish().unwrap_err().to_string();
         assert!(err.contains("not whole"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// Plan B3: the Wan load's settings from its snapshot resolve what the
+/// readers they replaced resolved from the same sources.
+#[cfg(test)]
+mod load_settings_tests {
+    use super::*;
+    use crate::h3::pipeline::load_settings_tests::cases;
+    use fastvideo_models::settings::parse;
+    use fastvideo_models::wan::moe::{self, MoeResidency};
+
+    #[test]
+    fn wan_load_settings_resolve_as_before() {
+        let arms: &[(&str, &[&str], bool)] = &[
+            ("FASTVIDEO_WAN_CAUSAL_FPB", &["1", "3", "0", "junk"], true),
+            ("FASTVIDEO_WAN_DIT_LAZY", &["0", "1", "junk"], true),
+            ("FASTVIDEO_STREAMING_FETCH", &["1", " 1 ", "0"], false),
+            (
+                "FASTVIDEO_DIT_OFFLOAD",
+                &["streamed", "resident", "junk"],
+                true,
+            ),
+            (
+                "FASTVIDEO_WAN_MOE",
+                &["auto", "both", "swap", "junk"],
+                false,
+            ),
+            (
+                "FASTVIDEO_WAN_MOE_HEADROOM_GIB",
+                &["12", "-1", "junk"],
+                false,
+            ),
+            ("FASTVIDEO_WAN_VAE", &["", "full", "taehv", "junk"], false),
+            ("FASTVIDEO_TAEHV_WEIGHTS", &["", "/no/such/taehv"], false),
+            ("FASTVIDEO_TAE_DIR", &["", "/tae"], false),
+        ];
+        let root = Path::new("/weights/wan");
+        for case in cases(arms) {
+            let s = case.snapshot();
+            let what = format!("env={:?} table={:?}", case.env, case.table);
+            for fpb in [1usize, 3] {
+                assert_eq!(
+                    parse::usize_or(case.layered("FASTVIDEO_WAN_CAUSAL_FPB").as_deref(), fpb),
+                    s.usize_flag("FASTVIDEO_WAN_CAUSAL_FPB", fpb),
+                    "{what}"
+                );
+            }
+            let streaming = case
+                .env("FASTVIDEO_STREAMING_FETCH")
+                .is_some_and(|v| v.trim() == "1");
+            assert_eq!(
+                streaming,
+                fastvideo_loader::stream::streaming_fetch_from(&s),
+                "{what}"
+            );
+            for default in [false, true] {
+                assert_eq!(
+                    parse::flag(case.layered("FASTVIDEO_WAN_DIT_LAZY").as_deref(), default),
+                    s.bool_flag("FASTVIDEO_WAN_DIT_LAZY", default),
+                    "{what}"
+                );
+            }
+            let offload = match case.layered(crate::rt::offload::ENV) {
+                Some(v) => super::super::offload::DitOffload::parse(&v)
+                    .map_err(|e| format!("{}: {e}", crate::rt::offload::ENV)),
+                None => Ok(super::super::offload::DitOffload::Auto),
+            };
+            assert_eq!(
+                offload,
+                super::super::offload::DitOffload::from_settings_or(&s, None),
+                "{what}"
+            );
+            let asked = case
+                .env(moe::ENV)
+                .map_or(Ok(MoeResidency::Auto), |v| MoeResidency::parse(&v));
+            assert_eq!(asked, MoeResidency::from_settings(&s), "{what}");
+            let gib = case
+                .env(moe::HEADROOM_ENV)
+                .and_then(|v| v.trim().parse::<f64>().ok())
+                .filter(|g| g.is_finite() && *g >= 0.0)
+                .unwrap_or(moe::DEFAULT_HEADROOM_GIB);
+            assert_eq!(
+                (gib * f64::from(1u32 << 30)) as u64,
+                moe::headroom_bytes_from(&s),
+                "{what}"
+            );
+            let vae = match case
+                .env("FASTVIDEO_WAN_VAE")
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "" | "auto" => Some(WanVaeChoice::Auto),
+                "full" | "wan" | "vae" | "official" => Some(WanVaeChoice::Full),
+                "taehv" | "tae" | "tiny" => Some(WanVaeChoice::Taehv),
+                _ => None,
+            };
+            assert_eq!(vae, WanVaeChoice::from_settings(&s).ok(), "{what}");
+            // load_taehv: unset / empty is no TAEHV; a path that does not
+            // load is an error naming it.
+            let taehv = load_taehv(TaeArch::Wan, &s).map(|t| t.is_some());
+            match case
+                .env("FASTVIDEO_TAEHV_WEIGHTS")
+                .filter(|d| !d.is_empty())
+            {
+                None => assert!(matches!(taehv, Ok(false)), "{what}"),
+                Some(_) => assert!(taehv.is_err(), "{what}"),
+            }
+            let mut dirs = Vec::new();
+            if let Some(d) = case.env("FASTVIDEO_TAE_DIR").filter(|d| !d.is_empty()) {
+                dirs.push(std::path::PathBuf::from(d));
+            }
+            let got = default_taehv_dirs(root, &s);
+            assert_eq!(dirs[..], got[..dirs.len()], "{what}");
+            assert_eq!(got[dirs.len()], root.join("taehv"), "{what}");
+        }
     }
 }
