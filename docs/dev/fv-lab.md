@@ -4,7 +4,7 @@
 on fv-deploy's guards (price cap, $8 floor, EU volume, detached backstop, ready within 600 s in at most 3 cycles).
 Design: [ADR-0019](../adr/0019-fv-lab.md). Today it carries ten tiers, each one a `runpod-matrix.sh` family. Each is
 held equal to the script's dry run by a golden ([The families](#the-families)). The other families move in later
-slices.
+slices. An eleventh, `gold`, is fv-lab's own: every gold variant's canonical cell (ADR-0023).
 
 ## Build
 
@@ -49,6 +49,7 @@ dry run show what will run.
 | `ltxfps` | `ltxfps-{ltx25,h3}` | 5 | LTX-2.5 at 25 / 48 / 50 fps and silent, the frame-sink checks | |
 | `ltxvae` | `ltxvae-*` (4) | 12 | the LTX-2.5 VAE decode alone (`vae-bench`) | |
 | `precision` | `precision-{h3,ltx25}` | 8 | precision switches against f32 activations | the script's default mode only |
+| `gold` | `gold-*` (32) | 32 | every gold variant's canonical cell: the served variant through the serve engine at its gold canvas | fv-lab's own, generated from `lab/gold/` ([below](#the-gold-files-ci-and-the-tier-table)) |
 
 The script keeps the other families. ADR-0019 §9.1 says why for each and when its branch retires. An arm whose tree is
 not on the EU volume (`h3-8step`) is recorded as skipped (`weights incomplete`), as the script records it.
@@ -135,6 +136,34 @@ pod up --sha <7> --family rtx6000 --yes --wait` and one `runpod-http.sh run <7>`
 the final head of PR #171 or later. ADR-0019 §9.5 has the D1b families' runs: the cheapest cells per family and their
 cost.
 
+## The gold files: CI and the tier table
+
+Design: [ADR-0023](../adr/0023-lab-report-and-ci-bridge.md) (plan D3, D4).
+
+```sh
+./fv-lab gold check                         # parse, resolve against families/, validated commits exist, the age table
+./fv-lab gold check --max-age-days 30       # also fail a validated variant older than 30 days (default: warn only)
+./fv-lab gold cells --write                 # regenerate lab/cells/gold-*.toml after a gold or family file changes
+./fv-lab gold cells --check                 # CI: the committed gold cells are current
+./fv-lab run gold --all --dry-run           # the gold tier: one serve-engine arm per gold variant
+RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family gold --yes --wait   # the gold runs -> artifacts/runpod/gold/<tag>/
+./fv-lab report tiers --runs artifacts/runpod/gold/<tag>                # docs/perf/tiers.md from that run set
+./fv-lab report tiers --check               # CI: docs/perf/tiers.md is what the run set its header names renders to
+```
+
+`gold check` prints Markdown (the table CI appends to the job summary) and exits 1 on a gold file that does not parse
+or resolve, or a `[last_validated].commit` that is not a commit here (outside a git work tree the commits are not
+checked, and it says so). A variant never validated is a warning.
+
+`report tiers` writes one row per gold file. A variant is measured only by the arm of its name in the run set (the gold
+tier names its arms by variant id), with every value read from that arm's `summary.json`, `benchmark.json` or
+`gpucheck-out/engine.json` and the run's `pod.json`; anything else is "not measured" with the reason. Options:
+`--gold DIR` (other gold files), `--out FILE`, `--stdout`.
+
+Workflows: `gold-check.yml` runs the three checks on lab, family and lab-crate changes; `gold-run.yml`
+(`workflow_dispatch`, input `confirm: spend`) runs `pod up --family gold --yes --wait` and renders the table as an
+artifact. It needs the `RUNPOD_API_KEY` repository secret, which is the owner's to add; without it the job refuses.
+
 ## Keeping it equal to the scripts
 
 ```sh
@@ -144,6 +173,7 @@ bash scripts/gpu/tests/fv-lab-goldens.sh --check   # CI (control.yml)
 
 For every tier of `lab/tiers.toml`, the fixtures are the script's dry run (`<tier>-dry-run.txt`), its weight gates
 (`<tier>-gates.tsv`: the cells the dry run gated, with their `verify-weights.sh --list` needs) and `runpod-http.sh
-plan`'s pod body (`runpod-http-<tier>.json`). Once, there is also its `frames_digest` of a sample. A new tier fails
+plan`'s pod body (`runpod-http-<tier>.json`). The `gold` tier is no script family: only its pod body is written there, and its dry run is fv-lab's own golden
+(`fixtures/gold-dry-run.txt`, `tests/gold_tier.rs`). Once, there is also its `frames_digest` of a sample. A new tier fails
 `--check` until its fixtures are written; `tests/{dry_run,payload_golden,frames_digest,fv_lab_bin}.rs` hold fv-lab to
 them. The script runs every script under `env -i`, so your `FV_*` / `RUNPOD_*` settings do not leak in.

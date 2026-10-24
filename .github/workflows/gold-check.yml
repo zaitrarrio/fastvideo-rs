@@ -1,0 +1,63 @@
+# The CI bridge of the gold files (plan D4, docs/adr/0023-lab-report-and-ci-bridge.md):
+# every lab/gold/<variant>.toml parses and resolves against families/*.toml
+# (variant, family, tier, profile, registry name and @rev), every
+# [last_validated].commit is a commit of this repository, and the validation
+# age of every variant goes to the job summary. Warn-only on age and on
+# missing validation (no gold file is validated yet); a parse or resolution
+# failure, or a validated commit that does not exist, fails. Then
+# docs/perf/tiers.md must be what `fv-lab report tiers` renders from the run
+# set it names. CPU only, no secrets, nothing spent.
+name: gold-check
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "lab/**"
+      - "families/**"
+      - "crates/fastvideo-lab/**"
+      - "docs/perf/tiers.md"
+      - "Cargo.lock"
+      - ".github/workflows/gold-check.yml"
+  push:
+    branches: [main]
+    paths:
+      - "lab/**"
+      - "families/**"
+      - "crates/fastvideo-lab/**"
+      - "docs/perf/tiers.md"
+      - "Cargo.lock"
+      - ".github/workflows/gold-check.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gold-check-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gold-check:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The whole history: `git cat-file -e` and the commits since each
+          # last_validated.commit need it.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: build fv-lab
+        run: cargo build --locked -p fastvideo-lab --features cli --bin fv-lab
+      - name: fv-lab gold check (validation age to the job summary)
+        run: |
+          set -o pipefail
+          ./target/debug/fv-lab gold check --root . | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: fv-lab gold cells --check (the gold tier's cells equal their gold files)
+        run: ./target/debug/fv-lab gold cells --check --root .
+      - name: fv-lab report tiers --check (docs/perf/tiers.md is current)
+        run: ./target/debug/fv-lab report tiers --check --root .

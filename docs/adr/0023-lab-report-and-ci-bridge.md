@@ -1,0 +1,152 @@
+# ADR-0023: The tier table and the gold CI bridge (plan D3, D4)
+
+- Status: Accepted for the CPU parts of D3 and D4 (`fv-lab report tiers`, `docs/perf/tiers.md` with no run set,
+  `fv-lab gold check`, the `gold` tier and its cells, the two workflows). The GPU gold runs that fill the table are
+  not run here (budget); the `gold-run` workflow needs the owner's `RUNPOD_API_KEY` secret (§4)
+- Date: 2026-10-24
+- Decision-id: FVID-2026-10-24-lab-report-ci-bridge
+- Code: `crates/fastvideo-lab/src/{report,goldcheck,goldcell}.rs`, `src/bin/fv-lab.rs` (`report tiers`, `gold check`,
+  `gold cells`, `run --all`); data `lab/tiers.toml` (`gold` tier), `lab/cells/gold-*.toml` (generated);
+  `docs/perf/tiers.md` (generated); `.github/workflows/{gold-check,gold-run}.yml`; fixtures
+  `crates/fastvideo-lab/fixtures/{tiers/,gold-dry-run.txt,runpod-http-gold.json}`; tests
+  `tests/{tiers_report,gold_tier}.rs`
+- Builds on: ADR-0009 (gold files), ADR-0019 (fv-lab, its run sets, tiers and cells)
+- Plan: D3, D4 (`docs/plan/2026-10-23-execution-plan.md`)
+
+## Context
+
+ADR-0009 gave every served variant a gold file whose numbers are cited or declared gaps, with an empty
+`[last_validated]`, and named D3's tier table and D4's CI bridge ("every file parses and `last_validated.commit` is an
+ancestor of HEAD no older than N days"). ADR-0019 gave the run plan (tiers, cells) and the run set a pod leaves in
+`artifacts/runpod/<tier>/<tag>/` (`summary.json` per arm, fv-gpucheck's `benchmark.json` or `gpucheck-out/*.json`,
+`pod.json`). Nothing joined the two: no table was generated from a run set, no CI step read the gold files, and there
+was no command that runs every gold variant. The gold runs themselves are GPU work that the budget does not cover now,
+so this decides and builds everything they need, so that one run set fills the table.
+
+## Decision
+
+### 1. `fv-lab report tiers`: one run set, rendered, never invented
+
+`fv-lab report tiers --runs artifacts/runpod/<tier>/<tag>` writes `docs/perf/tiers.md`: one section per family, one row
+per gold file (gold-file order). A variant is measured by the arm of the same name in the run set (the `gold` tier
+names its arms by variant id, §3). The columns come from the gold schema and what the runs record:
+
+| column | from |
+|---|---|
+| variant, tier | the gold file |
+| status | the arm: `measured`, or `not measured (<why>)`: no run set, no arm, skipped (the runner's reason), failed (its exit), no timing record |
+| GPU | `benchmark.json` `gpu`, else `pod.json` `gpu` |
+| cell, `vs gold` | measured width x height x frames and steps (`benchmark.json` `workload`, or the engine report's `mp4` / `job` / `progress`), and whether that is the gold file's `[workload]` |
+| wall s and what it measures | `gen`: `benchmark.json` `total_s` (one warm `generate()`); `job`: `engine.json` `submit_to_mp4_s` |
+| text / denoise / decode / load s, peak GiB | the same record's stage times, `load_s`, peak device memory |
+| `$/clip` | the run's own `pod.json` `usd_per_hr` x its own wall time; `-` when the run recorded no price |
+| last validated | the gold file's `[last_validated]` date and commit, and its age in days before the run set ended |
+
+Nothing is copied from elsewhere: a row that is not measured shows `-`, not the gold file's cited number (those stay in
+the gold file and its sources). `$/clip` is the only derived value, from two numbers of the same run.
+
+The rendering is deterministic, and its header line `Run set: <path>` (or `none`) names its input, so `fv-lab report
+tiers --check` re-renders from the run set the committed file names and fails on any difference (first differing line
+in the message). The golden is a fixture run set (`fixtures/tiers/runs/gold/…`: a serve-engine arm, a CLI arm at another
+canvas, a skipped arm, a failed arm, an arm of no gold variant, a variant with no arm) and fixture gold files, rendered
+to `fixtures/tiers/tiers.md` (`tests/tiers_report.rs`), which also checks the committed `docs/perf/tiers.md`.
+
+**Seeded with no run set.** No committed run set measured a gold variant's cell: the only arm named like a variant is
+`sol-h3` in `artifacts/runpod/rtx6000/492e28a-*`, and that is the `rtx6000` family's CLI arm (`h3 gen --h3-recipe
+sol-h3` without the variant's technique profile, at 1344x768, not the gold 832x480), not the served variant. Showing it
+as `sol-h3`'s measurement would mislabel it. So `docs/perf/tiers.md` is rendered with `Run set: none`, every variant
+"not measured (no run set)"; the first gold run replaces it.
+
+### 2. `fv-lab gold check`: parse, resolve, commit, age
+
+- **Parse**: `lab/gold/*.toml` through `gold::load_dir` (ADR-0009's validation), and every family variant has a gold
+  file.
+- **Resolve** against `families/*.toml` (`fastvideo_manifest::family::load_dir`, A2's loader): the variant exists as
+  a variant id in the family the file names, with the same tier and profile; a `registry_name` equals the family
+  file's (both without `@rev`, which family files never carry); a `rev` needs a `registry_name`. A family variant with
+  a registry name the gold file does not carry is shown `(not certified)`, not failed. The rev itself is the published
+  manifest's: no file in this repository holds it, so the check cannot confirm it beyond its shape (ADR-0009).
+- **Commit**: `git cat-file -e <commit>^{commit}` through `std::process::Command` (no dependency). Outside a git work
+  tree (`git rev-parse --is-inside-work-tree` fails, or no `git`), commits are not checked and the report says why.
+- **Age**: days from `last_validated.date` to today (UTC, or `--today`), and commits since
+  (`git rev-list --count <c>..HEAD`, `-` when git cannot say, e.g. a shallow clone).
+
+Output: a Markdown table (variant, family, tier, registry, last validated, age, commit, commits since, status) on
+stdout, for `$GITHUB_STEP_SUMMARY`; warnings and errors on stderr. Exit 1 on a parse or resolution failure, a validated
+commit that is not in the repository, or a date after today. Never validated is a warning (every file today). Age is
+warn-only by default; `--max-age-days N` fails a validated variant older than N days. "Served" is every family variant:
+ADR-0009 gives each one a gold file. ADR-0009's "ancestor of HEAD" is weakened to "exists in the repository" for now,
+because a validation run of a branch commit merged with `--no-ff` is not an ancestor of the branch's later heads until
+merged; `commits since` makes the distance visible instead.
+
+### 3. The `gold` tier: each variant's canonical cell, generated
+
+`fv-lab run gold --all` runs one arm per gold file. The arm is the served variant through the serve engine:
+`fv-gpucheck --keep-going --mode fast engine --model <variant> --weights-root {weights} --prompt … --seed …
+--width/--height[/--num-frames] … --clip-out {runs}/{arm}/out`. `fv-gpucheck engine` loads the variant from the family
+files (the engine's one catalog) with its recipe and technique profile, as fv-serve does, so the cell needs no
+per-variant flags and cannot disagree with what is served. It gates on `verify-weights.sh variant:<id>` and names the
+family variant's trees. The canvas and length are the gold file's `[workload]`; the seed its first seed (else 1024);
+the prompt `runpod-matrix.sh`'s default (the engine runs one request; the gold prompt set is named in the cell's note,
+not run); the gold file's `workload.env`, which reproduces an older measurement, is not applied: the gold run measures
+the served default, and the report's `vs gold` column shows where the canvas moved.
+
+The cells are ordinary cell files (`lab/cells/gold-<variant>.toml`, no schema change) in an ordinary tier (`gold`, the
+`rtx6000` tier's pod: PRO 6000, $2.50/hr cap, 4 h wall cap, 3600 s per arm, the same preflight and TAE fetch), so the
+runner, the pod, `pod fetch` and the report need nothing new. They are generated by `gold::gold_cells`
+(`fv-lab gold cells --write`), and `tests/gold_tier.rs` holds the committed files equal to the generation, the tier's
+cell list equal to the gold files in order, each arm equal to its variant (name, `variant:<id>` gate, trees, canvas),
+and `fv-lab run gold --all --dry-run` equal to `fixtures/gold-dry-run.txt`. That dry-run golden is fv-lab's own: the
+gold tier has no `runpod-matrix.sh` family to be equal to, so `fv-lab-goldens.sh` writes only its pod body
+(`runpod-http-gold.json`, from `runpod-http.sh plan` as for every tier, which `tests/payload_golden.rs` checks), and
+the script-equality tests (`dry_run.rs`, `lab_files.rs`) leave the gold tier out. `--all` names the whole tier
+explicitly (the default for a tier; refused for a single cell and with `--cells`).
+
+On the EU volume about eleven arms run (the H3 and LTX-2.5 variants whose trees are there); the Wan, LongLive, trim,
+NVFP4, VDN and turbo-LoRA trees are R2-only, so those arms are recorded as skipped (`weights incomplete`) and the
+table says so. Variants the engine cannot run from a text request (reference-to-video, audio-to-video) fail and are
+shown as failed: that is a finding, not a number.
+
+### 4. CI
+
+- **`gold-check.yml`** (pull requests and pushes touching `lab/**`, `families/**`, `crates/fastvideo-lab/**`,
+  `docs/perf/tiers.md`, `Cargo.lock`, the workflow; and `workflow_dispatch`): builds fv-lab, runs `fv-lab gold check`
+  with its table appended to `$GITHUB_STEP_SUMMARY` (the visible per-model validation age), `fv-lab gold cells --check`
+  and `fv-lab report tiers --check`. Full history (`fetch-depth: 0`) for the commit checks. No secrets.
+- **`gold-run.yml`** (`workflow_dispatch` only): inputs `sha` (the runtime image), optional `cells`, and `confirm`,
+  which must be `spend`. It refuses to start when `RUNPOD_API_KEY` is absent, before building anything. It runs `fv-lab
+  pod up --sha <sha> --family gold --yes --wait`: fv-deploy's guards (price cap on quote and bill, $8 floor projected
+  over the cap, detached backstop at the 4 h cap, 600 s x 3 readiness), `fv-lab run gold` on the pod, fetch into
+  `artifacts/runpod/gold/<tag>/`, delete. An `always()` step deletes every pod this job recorded (cancel or failure),
+  because the detached backstop lives on the runner and dies with the job; the pod's own idle watchdog (10 GPU-idle
+  minutes) is the last guard. It renders `docs/perf/tiers.md` from the run set into the job summary and uploads the run
+  set, the ledger and the table. It commits nothing.
+
+**Owner decision needed:** the repository has no `RUNPOD_API_KEY` secret, and this change does not add or request
+one. Until the owner adds it (and accepts about $2.49/hr for roughly an hour per gold run), `gold-run` refuses, and the
+gold runs go through `fv-lab pod up --family gold` by hand as every GPU run does today.
+
+### What a gold run then does (not automated here)
+
+Commit the fetched run set, `fv-lab report tiers --runs artifacts/runpod/gold/<tag>` and the table; then, per measured
+variant, update the gold file by ADR-0009's rules (the run record as the `[[source]]`, `[last_validated]` with the
+commit, run and date, gaps closed only for fields the run measured). Writing gold files automatically is a later step
+with its own review: it changes the files' numbers.
+
+## Consequences
+
+- One run set fills `docs/perf/tiers.md` with one command; `--check` keeps it from drifting.
+- CI shows every variant's validation age on every lab or family change, and fails on an unresolvable gold file or a
+  validated commit that does not exist.
+- A gold file change regenerates its cell (`fv-lab gold cells --write`), or CI fails.
+- No new dependency, no schema change (tiers v1 and cell v1 are unchanged; the `gold` tier is data).
+- Not done: the GPU gold runs, the automatic gold-file update, a hard age limit (`--max-age-days` exists, CI does not
+  pass it until variants are validated), and confirming `@rev` against published manifests (the registry's).
+
+## Validation
+
+CPU, on the build pod: `cargo fmt --all --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings`,
+`cargo clippy --locked -p fastvideo-lab --all-features --all-targets -- -D warnings`, `cargo test --locked -p
+fastvideo-lab --all-features`, `cargo test --workspace --lib --locked`, `bash scripts/gpu/lint.sh`; locally
+`bash scripts/gpu/tests/fv-lab-goldens.sh --check`, `fv-lab gold check`, `fv-lab gold cells --check`, `fv-lab report
+tiers --check`. GPU: none here.

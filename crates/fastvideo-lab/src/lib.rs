@@ -17,6 +17,13 @@
 //!   `scripts/gpu/runpod-matrix.sh`'s frame) and its `--dry-run`.
 //! - [`pod`]: `fv-lab pod`, a tier's Runpod pod on fv-deploy's `Provider`
 //!   trait, guards and lifecycle.
+//! - [`goldcheck`]: `fv-lab gold check`, the CI bridge (plan D4): every
+//!   gold file parses and resolves against the family files, a validated
+//!   commit exists, and the per-variant validation age.
+//! - [`goldcell`]: the `gold` tier's cells, each gold variant's canonical
+//!   cell generated from its gold file (`fv-lab run gold --all`).
+//! - [`report`]: `fv-lab report tiers`, `docs/perf/tiers.md` from the gold
+//!   files and one run set (plan D3).
 //! - [`quote`]: bash's `printf %q`, for the dry-run equality.
 //! - [`schema`]: the JSON Schema export, committed under `schemas/` and
 //!   drift-checked.
@@ -26,10 +33,13 @@
 //! HTTP client of `fastvideo-deploy`).
 
 pub mod gold;
+pub mod goldcell;
+pub mod goldcheck;
 pub mod plan;
 pub mod pod;
 pub mod profiles;
 pub mod quote;
+pub mod report;
 pub mod run;
 pub mod schema;
 

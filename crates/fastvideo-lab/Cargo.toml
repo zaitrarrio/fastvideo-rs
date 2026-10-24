@@ -14,7 +14,9 @@ thiserror.workspace = true
 # The frames digest (`run::frames_digest`).
 sha2.workspace = true
 schemars.workspace = true
-fastvideo-manifest.workspace = true
+# `fs`: `family::load_dir`, the families/ reader `fv-lab gold check` and
+# `gold cells` use (already on through fastvideo-deploy; named here).
+fastvideo-manifest = { workspace = true, features = ["fs"] }
 # The Provider trait, Launch schema, guards and lifecycle fv-lab's pod runs on
 # (docs/adr/0019-fv-lab.md §6); the library half builds without features.
 fastvideo-deploy.workspace = true

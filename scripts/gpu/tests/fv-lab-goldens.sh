@@ -7,7 +7,8 @@
 #   fv-lab-goldens.sh           regenerate crates/fastvideo-lab/fixtures/*
 #   fv-lab-goldens.sh --check   fail when a script's output differs from the fixture
 #
-# Fixtures, per family <f> (every [[tier]] name of lab/tiers.toml):
+# Fixtures, per family <f> (every [[tier]] name of lab/tiers.toml; for the
+# `gold` tier, generated from lab/gold/ and no script family, only the pod body):
 #   <f>-dry-run.txt            FV_DRY_RUN=1 runpod-matrix.sh <f>: every log line of the
 #                              family without its [HH:MM:SS] stamp, the volume at
 #                              /workspace (its auxiliary/tae complete), the container disk at /fvscratch, the
@@ -57,6 +58,16 @@ clean() { env -i PATH="$PATH" HOME="$HOME" LC_ALL=C "$@"; }
 list="$(clean bash "$ROOT/scripts/gpu/verify-weights.sh" --list)"
 FIXTURES=()
 for FAMILY in $FAMILIES; do
+  # The `gold` tier (docs/adr/0023-lab-report-and-ci-bridge.md §3) is no
+  # runpod-matrix.sh family: its cells come from lab/gold/ and fv-lab's own dry
+  # run is its golden (fixtures/gold-dry-run.txt, tests/gold_tier.rs). Its pod
+  # is runpod-http.sh's like every tier's, so only the pod body is written here.
+  if [[ "$FAMILY" == gold ]]; then
+    clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY="$FAMILY" \
+      bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-$FAMILY.json"
+    FIXTURES+=("runpod-http-$FAMILY.json")
+    continue
+  fi
   rm -rf "$TMP/work" "$TMP/scratch" "$TMP/pairs.txt"
   # The volume's TAE copy is complete, as on bz0ofkfx45 (auxiliary/tae): the
   # script's $TAE is then /workspace/weights/auxiliary/tae, not the container

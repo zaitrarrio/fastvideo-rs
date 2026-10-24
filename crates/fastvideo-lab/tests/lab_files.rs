@@ -7,7 +7,22 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use fastvideo_deploy::launch::parse_eu_trees;
-use fastvideo_lab::plan::Lab;
+use fastvideo_lab::goldcell::GOLD_TIER;
+use fastvideo_lab::plan::{CellFile, Lab};
+
+/// The cells of the runpod-matrix.sh families: every cell but the `gold`
+/// tier's, which gate on `variant:<id>` cells and read the trees of their
+/// family variant, on the EU volume or not (tests/gold_tier.rs).
+fn script_cells(lab: &Lab) -> Vec<&CellFile> {
+    let gold: BTreeSet<&str> = lab
+        .tier(GOLD_TIER)
+        .map(|t| t.cells.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+    lab.cells
+        .values()
+        .filter(|c| !gold.contains(c.name.as_str()))
+        .collect()
+}
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -43,7 +58,7 @@ fn trees_and_gates_exist() {
             assert!(gates.contains(p.as_str()), "tier {}: preflight {p}", t.name);
         }
     }
-    for c in lab.cells.values() {
+    for c in script_cells(&lab) {
         for a in &c.arms {
             assert!(
                 gates.contains(a.gate.as_str()),
@@ -91,9 +106,8 @@ fn the_only_tree_any_tier_lacks_on_the_eu_volume_is_h3_8step() {
     let eu: BTreeSet<String> = parse_eu_trees(&read("scripts/gpu/volumes.sh"))
         .into_iter()
         .collect();
-    let lacking: BTreeSet<&str> = lab
-        .cells
-        .values()
+    let lacking: BTreeSet<&str> = script_cells(&lab)
+        .into_iter()
         .flat_map(|c| &c.arms)
         .flat_map(|a| &a.trees)
         .filter(|t| !eu.contains(t.as_str()))
