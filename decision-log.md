@@ -1082,3 +1082,23 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: 0013
 - Verification: `request::tests` (tasks, conflicts, canvas, frames, seconds, fps, refs, knobs)
+
+### FVID · 2026-10-24 · FVID-2026-10-24-b3b-load-snapshot
+- Trigger: plan B3, second half: a `Settings` snapshot passed to the H3 / LTX-2 / Wan `load` instead of process globals, byte-identical, without restructuring the loaders (B6's)
+- Options: thread a snapshot parameter through every helper a load calls (the shared runtime included, B5's attention files among them); a snapshot parameter for the load bodies and their load-only helpers plus a thread-local scope that serves the snapshot to the unchanged callees; a scope alone
+- Decision: **`settings::Snapshot` (both readers' sources for every row, captured at load start) passed to new `load_with_settings` entries (the old entries capture one); the load bodies and load-only helpers read it as a parameter through the `settings::Source` trait (`from_settings` twins of `QuantMode`, `DitOffload`, `LtxOffload`, `ModelOptOptions`, `MoeResidency`, `nvfp4`, `H3Techniques`, `WanVaeChoice`); `Snapshot::scope` serves it to the four readers on the load thread for the callees; process-cached getters stay as they are; the one in-load `set_var` (MLX `FASTVIDEO_H3_AFFINE`) goes through `settings::set_env`, which updates the scope**
+- Reason: identical values by construction (the accessors are the readers' definitions over the captured pair), identical read results because nothing changes the environment, profile or model scope during a load, worker threads unchanged (the scope is per thread like the model scope), and no signature change below the load bodies; B6 makes the remaining callees explicit
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0010-settings-layer.md (amendment B3b)
+- Verification: `settings::snapshot::tests` (empty snapshot = today's defaults row for row, captured = live readers, non-UTF-8, scope freezes the capture, nested and cross-thread, `set_env`), per-family resolved-config identity (`h3::techniques`, `h3::pipeline`, `ltx2::pipeline`, `wan::pipeline` `load_settings_tests`), `rt::envflag` cached-getter order test; GPU `techniques` byte-identity family by the coordinator
+
+### FVID · 2026-10-24 · FVID-2026-10-24-b3b-model-spec
+- Trigger: plan B3: "`model_spec` for Wan and the small families"; ADR-0010 noted that adding `wan` to `[pipeline].model` makes Wan profiles loadable
+- Options: the minimal spec (what the runtime exposes and which techniques-layer settings and kernels it reads, no profile loadability); the full spec (Wan profiles loadable, with a Wan technique adapter and settings mapping)
+- Decision: **the minimal spec: `ModelSpec` gains `profiles`, `families`, `extra_settings`, `kernels`; `registry::family_spec` covers H3, LTX-2, Wan and the 18 small families; `model_spec` (profile loadability) stays H3 and LTX-2; a workspace scan requires every layered read and kernel op in a family's sources and in the review's 11 shared runtime files to be declared by its spec**
+- Reason: the full version needs a Wan profile adapter and a settings mapping (`taehv` and the precision recipes map to H3 / LTX names; Wan's TAEHV, step-cache and route settings are env-only rows, so promoting them is a reviewed behaviour change) and a Wan GPU cell, and the EU volume has no Wan tree beyond `--tiny`
+- Reversibility: cheap (setting `profiles: true` with an adapter later)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0010-settings-layer.md (amendment B3b)
+- Verification: `techniques::registry::tests` (a Wan profile is refused as before, small families compose nothing), `workspace_check::family_specs_declare_their_techniques_reads`, `fastvideo-core` `family::tests::every_family_has_a_model_spec`

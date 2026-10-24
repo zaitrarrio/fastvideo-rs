@@ -1,5 +1,13 @@
 //! Precision modes. The cudarc crate caches its `FASTVIDEO_*` flags on first
 //! read, so the mode must be applied at process start, before any cudarc call.
+//!
+//! The load-time settings snapshot (`docs/adr/0010-settings-layer.md`) does
+//! not change that: a load reads its settings as they were when it started,
+//! but `FASTVIDEO_BF16` (`rt::bf16_gemm`) and `FASTVIDEO_TF32` (`rt::hopper`)
+//! are cached once per process on their first read, whenever that is, and
+//! `FASTVIDEO_TEACACHE` is read by each Wan generate. Setting the mode before
+//! the first cudarc call stays the rule
+//! (`rt::envflag::tests::a_cache_filled_inside_a_load_keeps_the_snapshot_value`).
 
 use clap::ValueEnum;
 use serde::Serialize;

@@ -4,8 +4,10 @@
 
 use std::collections::BTreeMap;
 
+use super::kernels::KernelOp;
 use super::methods::*;
 use super::schedule::{parse_sparsity, Schedule, SparseRoute, StepSet, VsaSchedule};
+use super::settings::Family;
 use super::technique::{Capability, ModelSpec, Technique};
 
 type Factory = fn(&str, &toml::Table) -> Result<Box<dyn Technique>, String>;
@@ -313,6 +315,18 @@ fn kernel_fusion(name: &str, t: &toml::Table) -> Result<Box<dyn Technique>, Stri
 // model specs
 // ---------------------------------------------------------------------------
 
+/// The kernel ops every CUDA family reaches through the shared runtime's
+/// dense attention and 3-D convolution (`rt::attn`, `rt::conv`).
+const SHARED_KERNELS: &[KernelOp] = &[KernelOp::DenseAttention, KernelOp::Conv3d];
+
+/// The block-sparse kernels (VSA and Sol-Attn) besides the shared ones.
+const SPARSE_KERNELS: &[KernelOp] = &[
+    KernelOp::DenseAttention,
+    KernelOp::SolAttention,
+    KernelOp::VsaAttention,
+    KernelOp::Conv3d,
+];
+
 /// MiniMax-H3 / FastH3 (`cudarc::h3`): 50 blocks, swappable attention
 /// (dense / VSA / Sol), whole-stack step cache, tiny decoder, streaming.
 pub fn h3_spec() -> ModelSpec {
@@ -332,6 +346,10 @@ pub fn h3_spec() -> ModelSpec {
             Capability::SupportsLayerOffload,
         ],
         layers: crate::h3::sol::LAYERS_PER_FORWARD,
+        profiles: true,
+        families: &[Family::H3, Family::Runtime, Family::TextEncoder],
+        extra_settings: &[],
+        kernels: SPARSE_KERNELS,
     }
 }
 
@@ -353,10 +371,122 @@ pub fn ltx2_spec() -> ModelSpec {
             Capability::SupportsLayerOffload,
         ],
         layers: 48,
+        profiles: true,
+        families: &[Family::Ltx2, Family::Runtime, Family::TextEncoder],
+        extra_settings: &[],
+        kernels: SPARSE_KERNELS,
     }
 }
 
-/// `get_model_spec` (:67-78) by pipeline name.
+/// Wan 2.1 / 2.2 (`cudarc::wan`), the minimal spec
+/// (`docs/adr/0010-settings-layer.md` "`model_spec`"): what the runtime
+/// exposes and which techniques-layer settings and kernels it reads, with no
+/// profile adapter, so `[pipeline].model = "wan"` stays refused. Its seams
+/// are driven by its own settings today: attention backend (`FASTVIDEO_SDPA`,
+/// `FASTVIDEO_VSA`, `FASTVIDEO_WAN_SOL_ATTN`, `FASTVIDEO_WAN_PISA`), step
+/// cache (`FASTVIDEO_TEACACHE`, `FASTVIDEO_WAN_SOL_CACHE`), FFN precision
+/// (`FASTVIDEO_WAN_QUANT`, `FASTVIDEO_FP8`), the TAEHV decoder
+/// (`FASTVIDEO_WAN_VAE`, `FASTVIDEO_TAEHV_WEIGHTS`) and streamed blocks
+/// (`FASTVIDEO_DIT_OFFLOAD=streamed`). `layers` is the widest Wan DiT (14B /
+/// A14B, 40 blocks; 1.3B and TI2V-5B have 30).
+pub fn wan_spec() -> ModelSpec {
+    ModelSpec {
+        name: "wan",
+        capabilities: vec![
+            Capability::Blocks,
+            Capability::SwappableAttention,
+            Capability::HasDenoiseSteps,
+            Capability::HasTransformerBlocks,
+            Capability::HasAttentionLayers,
+            Capability::HasAttentionBackendSwitch,
+            Capability::HasFfnLinearModules,
+            Capability::HasSpatiotemporalTokenLayout,
+            Capability::SupportsStepCache,
+            Capability::SwappableVideoDecoder,
+            Capability::SupportsLayerOffload,
+        ],
+        layers: 40,
+        profiles: false,
+        families: &[Family::Wan, Family::Runtime],
+        extra_settings: &[],
+        kernels: SPARSE_KERNELS,
+    }
+}
+
+/// A family with no technique seam (`capabilities` empty: nothing composes
+/// for it) whose runtime reads the shared runtime's settings and its own.
+fn small_spec(name: &'static str, families: &'static [Family]) -> ModelSpec {
+    ModelSpec {
+        name,
+        capabilities: Vec::new(),
+        layers: 0,
+        profiles: false,
+        families,
+        extra_settings: &[],
+        kernels: SHARED_KERNELS,
+    }
+}
+
+/// The small families: every `fastvideo-core` family but Wan, LTX-2 and H3,
+/// by `VideoFamily::name`, in the order of `fastvideo_core::family::FAMILIES`.
+pub const SMALL_FAMILIES: &[&str] = &[
+    "hunyuan15",
+    "kandinsky5",
+    "cosmos",
+    "longcat",
+    "lingbot",
+    "gen3c",
+    "matrixgame",
+    "dreamx_world",
+    "lingbotworld",
+    "gamecraft",
+    "hyworld",
+    "zimage",
+    "sd35",
+    "flux",
+    "flux2",
+    "glm_image",
+    "stable_audio",
+    "mmaudio",
+];
+
+/// The spec of any family `fastvideo-core` registers (its
+/// `VideoFamily::name`): H3, LTX-2 (`ltx2` / `ltx`), Wan and the small
+/// families. Describes what the family reads; whether a profile may name it
+/// is [`model_spec`]'s answer.
+pub fn family_spec(name: &str) -> Option<ModelSpec> {
+    use Family as F;
+    const RT: F = F::Runtime;
+    Some(match name {
+        "h3" => h3_spec(),
+        "ltx2" | "ltx" => ltx2_spec(),
+        "wan" => wan_spec(),
+        "hunyuan15" => small_spec("hunyuan15", &[F::Hunyuan15, RT, F::TextEncoder]),
+        "cosmos" => small_spec("cosmos", &[F::Cosmos, F::Cosmos3, RT, F::TextEncoder]),
+        "lingbot" => small_spec("lingbot", &[F::Lingbot, RT]),
+        "lingbotworld" => small_spec("lingbotworld", &[F::Lingbot, RT]),
+        "flux" => small_spec("flux", &[F::Flux, RT, F::TextEncoder]),
+        "flux2" => small_spec("flux2", &[F::Flux2, RT, F::TextEncoder]),
+        "mmaudio" => small_spec("mmaudio", &[F::MmAudio, RT]),
+        "kandinsky5" => small_spec("kandinsky5", &[RT, F::TextEncoder]),
+        "longcat" => small_spec("longcat", &[RT, F::TextEncoder]),
+        "gen3c" => small_spec("gen3c", &[RT, F::TextEncoder]),
+        "matrixgame" => small_spec("matrixgame", &[RT]),
+        "dreamx_world" => small_spec("dreamx_world", &[RT, F::TextEncoder]),
+        "gamecraft" => small_spec("gamecraft", &[RT, F::TextEncoder]),
+        "hyworld" => small_spec("hyworld", &[RT, F::TextEncoder]),
+        "zimage" => small_spec("zimage", &[RT, F::TextEncoder]),
+        "sd35" => small_spec("sd35", &[RT, F::TextEncoder]),
+        "glm_image" => small_spec("glm_image", &[RT, F::TextEncoder]),
+        "stable_audio" => small_spec("stable_audio", &[RT, F::TextEncoder]),
+        _ => return None,
+    })
+}
+
+/// `get_model_spec` (:67-78) by pipeline name: the models a technique profile
+/// may name (`[pipeline].model`), H3 and LTX-2. Wan and the small families
+/// have a [`family_spec`] but no profile adapter (the minimal spec,
+/// `docs/adr/0010-settings-layer.md`).
 pub fn model_spec(model: &str) -> Option<ModelSpec> {
     match model {
         "h3" => Some(h3_spec()),
@@ -368,4 +498,71 @@ pub fn model_spec(model: &str) -> Option<ModelSpec> {
 /// An always-true schedule, for code that builds techniques directly.
 pub fn on() -> Schedule<bool> {
     Schedule::Const(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_h3_and_ltx2_profiles_load() {
+        for name in ["h3", "ltx2", "ltx", "wan"]
+            .into_iter()
+            .chain(SMALL_FAMILIES.iter().copied())
+        {
+            let spec = family_spec(name).unwrap_or_else(|| panic!("{name}: no spec"));
+            assert_eq!(spec.profiles, model_spec(name).is_some(), "{name}");
+        }
+        // The minimal Wan spec adds no profile loadability: the error a Wan
+        // profile got before the spec existed.
+        let e = crate::techniques::Profile::parse("[id]\nname='x'\n[pipeline]\nmodel='wan'\n")
+            .unwrap_err();
+        assert_eq!(e, "[pipeline].model = \"wan\": expected h3 | ltx2");
+    }
+
+    #[test]
+    fn spec_names_are_the_family_names() {
+        for name in ["h3", "ltx2", "wan"]
+            .into_iter()
+            .chain(SMALL_FAMILIES.iter().copied())
+        {
+            assert_eq!(family_spec(name).map(|s| s.name), Some(name));
+        }
+        assert_eq!(family_spec("ltx").map(|s| s.name), Some("ltx2"));
+        assert!(family_spec("sora").is_none());
+    }
+
+    /// A small family exposes no technique seam: every technique that needs
+    /// one fails its capability check there.
+    #[test]
+    fn small_families_compose_nothing() {
+        use crate::techniques::methods::TeaCache;
+        for name in SMALL_FAMILIES {
+            let spec = family_spec(name).unwrap_or_else(|| panic!("{name}"));
+            assert!(spec.capabilities.is_empty(), "{name}");
+            let items: Vec<Box<dyn Technique>> = vec![Box::new(TeaCache::rtx())];
+            assert!(
+                crate::techniques::compose(items, &spec, crate::techniques::HORIZON).is_err(),
+                "{name}"
+            );
+        }
+    }
+
+    /// Wan reads its own layered rows and the runtime's, never H3's or
+    /// LTX-2's own (the precision recipes map to those names).
+    #[test]
+    fn wan_reads_its_own_and_the_runtime_settings() {
+        let wan = wan_spec();
+        assert!(wan.reads("FASTVIDEO_WAN_FUSE"));
+        assert!(wan.reads("FASTVIDEO_BF16_ACT"));
+        assert!(wan.reads("FASTVIDEO_DIT_OFFLOAD"));
+        assert!(wan.dispatches(KernelOp::VsaAttention));
+        // `Env` rows are not the techniques layer, whatever their family.
+        assert!(!wan.reads("FASTVIDEO_WAN_VAE"));
+        assert!(!wan.reads("FASTVIDEO_H3_QUANT"));
+        assert!(!wan.reads("FASTVIDEO_LTX_OFFLOAD"));
+        let names = wan.settings();
+        assert!(names.windows(2).all(|w| w[0] < w[1]));
+        assert!(names.iter().all(|n| wan.reads(n)));
+    }
 }

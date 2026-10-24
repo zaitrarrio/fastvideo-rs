@@ -11,7 +11,9 @@
 //! 4. a typed getter (`bool_flag("FASTVIDEO_X", default)`, ...) or a reader
 //!    call with a literal name agrees with its row: the parse, the literal
 //!    default, and the reader (layered getters on `Layered` rows,
-//!    `env_var` on `Env` rows);
+//!    `env_var` on `Env` rows), for the free functions and for a
+//!    `settings::Source`'s methods (`settings.bool_flag(..)`,
+//!    `settings.env_var(..)`: a load's snapshot) alike;
 //! 5. `docs/scope.md`'s generated region is [`super::render_markdown`].
 
 use std::collections::BTreeSet;
@@ -316,8 +318,10 @@ fn calls<'a>(code: &'a str, needle: &str) -> Vec<(usize, &'a str)> {
     while let Some(n) = code[from..].find(needle) {
         let at = from + n;
         from = at + needle.len();
+        // A method call (`.var(`) follows its receiver; a path or a free
+        // function call must not be the tail of a longer identifier.
         let prev = code[..at].chars().next_back();
-        if prev.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_') {
+        if !needle.starts_with('.') && prev.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_') {
             continue;
         }
         let rest = &code[from..];
@@ -536,7 +540,9 @@ fn literal_reads_agree_with_their_rows() {
                 }
             }
         }
-        for needle in ["settings::var(", "settings::is_set("] {
+        // `settings::var(..)` and a `Source`'s (a load's `Snapshot`)
+        // `.var(..)` / `.is_set(..)`.
+        for needle in ["settings::var(", "settings::is_set(", ".var(", ".is_set("] {
             for (at, arg) in calls(&src.code, needle) {
                 if let Some(row) = literal_name(arg).and_then(lookup) {
                     if row.reader != Reader::Layered {
@@ -550,7 +556,12 @@ fn literal_reads_agree_with_their_rows() {
                 }
             }
         }
-        for needle in ["settings::env_var(", "settings::env_var_os("] {
+        for needle in [
+            "settings::env_var(",
+            "settings::env_var_os(",
+            ".env_var(",
+            ".env_var_os(",
+        ] {
             for (at, arg) in calls(&src.code, needle) {
                 if let Some(row) = literal_name(arg).and_then(lookup) {
                     let reviewed = ENV_READS_OF_LAYERED
@@ -602,4 +613,199 @@ fn the_lexer_blanks_comments_and_finds_strings() {
     assert!(!code.contains("/* c */"));
     let lits: Vec<&str> = strings.iter().map(|&(a, z)| &code[a..z]).collect();
     assert_eq!(lits, vec!["x // y", "q"]);
+}
+
+/// The shared runtime files through which Wan (and every CUDA family) reads
+/// the techniques layer: the review's "11 files" (`docs/gaps/2026-10-22-
+/// architecture-review.md` §4.2), which were under `wan/` before plan B1
+/// moved them to `rt/`.
+const RUNTIME_TECHNIQUE_FILES: &[&str] = &[
+    "crates/fastvideo-cudarc/src/rt/attn.rs",
+    "crates/fastvideo-cudarc/src/rt/attn_dc.rs",
+    "crates/fastvideo-cudarc/src/rt/attn_fp4.rs",
+    "crates/fastvideo-cudarc/src/rt/attn_sage.rs",
+    "crates/fastvideo-cudarc/src/rt/conv.rs",
+    "crates/fastvideo-cudarc/src/rt/envflag.rs",
+    "crates/fastvideo-cudarc/src/rt/offload.rs",
+    "crates/fastvideo-cudarc/src/rt/ops.rs",
+    "crates/fastvideo-cudarc/src/rt/quant.rs",
+    "crates/fastvideo-cudarc/src/rt/tensor.rs",
+    "crates/fastvideo-cudarc/src/rt/vsa.rs",
+];
+
+/// Where a family's own code lives (`crates/fastvideo-{cudarc,models}/src/<dir>/`).
+/// Every CUDA family also reads through [`RUNTIME_TECHNIQUE_FILES`].
+fn family_sources(name: &str) -> Vec<String> {
+    let dirs: Vec<&str> = match name {
+        "cosmos" => vec!["cosmos", "cosmos3"],
+        "dreamx_world" => vec!["dreamx"],
+        other => vec![other],
+    };
+    dirs.iter()
+        .flat_map(|d| {
+            [
+                format!("crates/fastvideo-cudarc/src/{d}/"),
+                format!("crates/fastvideo-models/src/{d}/"),
+            ]
+        })
+        .collect()
+}
+
+/// The `FASTVIDEO_*` value of `const <ident>: &str = "..."` in `code`.
+fn const_value<'a>(src: &'a Source, ident: &str) -> Option<&'a str> {
+    let needle = format!("const {ident}: &str = \"");
+    let at = src.code.find(&needle)? + needle.len();
+    let rest = &src.code[at..];
+    let name = &rest[..rest.find('"')?];
+    name.starts_with("FASTVIDEO_").then_some(name)
+}
+
+/// The layered reads in `src`: `(line, name)` of every typed getter and
+/// `var` / `is_set` call (free or a `Source`'s) with a literal name or a
+/// same-file `const` name, and every `KernelOp` it names.
+fn layered_reads(src: &Source) -> (Vec<(usize, &str)>, BTreeSet<&'static str>) {
+    let mut names = Vec::new();
+    let needles = TYPED.iter().map(|(n, _)| *n).chain([
+        "settings::var(",
+        "settings::is_set(",
+        ".var(",
+        ".is_set(",
+        " var(",
+        "(var(",
+    ]);
+    for needle in needles {
+        for (at, arg) in calls(&src.code, needle) {
+            let name = literal_name(arg).or_else(|| {
+                let ident = arg.rsplit("::").next()?.trim_start_matches('&');
+                const_value(src, ident)
+            });
+            if let Some(n) = name.filter(|n| !exempt(n)) {
+                if lookup(n).is_some_and(|r| r.reader == Reader::Layered) {
+                    names.push((src.line_of(at), n));
+                }
+            }
+        }
+    }
+    let ops = crate::techniques::kernels::KernelOp::ALL
+        .iter()
+        .filter(|op| {
+            let variant = format!("{op:?}");
+            src.code.contains(&format!("KernelOp::{variant}"))
+        })
+        .map(|op| op.key())
+        .collect();
+    (names, ops)
+}
+
+/// `src`'s code without its `#[cfg(test)] mod` (test scaffolding reads
+/// settings a family's runtime does not).
+fn without_tests(src: &Source) -> &str {
+    let code = src.code.as_str();
+    let mut from = 0;
+    while let Some(n) = code[from..].find("#[cfg(test)]") {
+        let at = from + n;
+        let rest = code[at + "#[cfg(test)]".len()..].trim_start();
+        // An inline `mod tests { .. }`, not a `mod manifest_tests;` file.
+        let inline = rest.starts_with("mod ")
+            && rest
+                .find('{')
+                .is_some_and(|b| rest.find(';').is_none_or(|c| b < c));
+        if inline {
+            return &code[..at];
+        }
+        from = at + 1;
+    }
+    code
+}
+
+/// The `model_spec`s of Wan, H3, LTX-2 and the small families declare every
+/// techniques-layer read their code makes (`docs/adr/0010-settings-layer.md`
+/// "`model_spec`"): each layered setting a family's own sources read is one
+/// its spec `reads`, and each `[kernels]` op they name is one it
+/// `dispatches`. The shared runtime files ([`RUNTIME_TECHNIQUE_FILES`]) are
+/// read by Wan, H3 and LTX-2 alike: their runtime rows and kernel ops are
+/// declared by all three specs, a family row they read (`FASTVIDEO_H3_QUANT`
+/// in `rt/quant.rs`) by its own family's spec.
+#[test]
+fn family_specs_declare_their_techniques_reads() {
+    use crate::techniques::registry::{family_spec, SMALL_FAMILIES};
+    use crate::techniques::technique::ModelSpec;
+    let all = sources();
+    let mut bad = Vec::new();
+    let mut checked = 0;
+    let mut check = |spec: &ModelSpec, src: &Source, code: &str, label: &str| {
+        let view = Source {
+            rel: src.rel.clone(),
+            code: code.to_string(),
+            strings: Vec::new(),
+        };
+        let (names, ops) = layered_reads(&view);
+        for (line, n) in names {
+            checked += 1;
+            if !spec.reads(n) {
+                bad.push(format!("{label}: {}:{line}: reads {n}", src.rel));
+            }
+        }
+        for op in ops {
+            if !spec.kernels.iter().any(|k| k.key() == op) {
+                bad.push(format!("{label}: {}: dispatches kernel op {op}", src.rel));
+            }
+        }
+    };
+    for name in ["wan", "h3", "ltx2"]
+        .into_iter()
+        .chain(SMALL_FAMILIES.iter().copied())
+    {
+        let spec = family_spec(name).unwrap_or_else(|| panic!("{name}: no spec"));
+        let dirs = family_sources(name);
+        for src in all
+            .iter()
+            .filter(|s| dirs.iter().any(|d| s.rel.starts_with(d.as_str())))
+        {
+            check(&spec, src, without_tests(src), name);
+        }
+    }
+    for src in all
+        .iter()
+        .filter(|s| RUNTIME_TECHNIQUE_FILES.contains(&s.rel.as_str()))
+    {
+        let code = without_tests(src);
+        let view = Source {
+            rel: src.rel.clone(),
+            code: code.to_string(),
+            strings: Vec::new(),
+        };
+        let (names, ops) = layered_reads(&view);
+        for (line, n) in names {
+            checked += 1;
+            let family = lookup(n).map(|r| r.family);
+            for name in ["wan", "h3", "ltx2"] {
+                let spec = family_spec(name).unwrap_or_else(|| panic!("{name}"));
+                let owner = match family {
+                    Some(super::Family::Runtime) => true,
+                    // A spec's first family is the family's own.
+                    Some(f) => spec.families.first() == Some(&f),
+                    None => false,
+                };
+                if owner && !spec.reads(n) {
+                    bad.push(format!("{name}: {}:{line}: reads {n}", src.rel));
+                }
+            }
+        }
+        for op in ops {
+            for name in ["wan", "h3", "ltx2"] {
+                let spec = family_spec(name).unwrap_or_else(|| panic!("{name}"));
+                if !spec.kernels.iter().any(|k| k.key() == op) {
+                    bad.push(format!("{name}: {}: dispatches kernel op {op}", src.rel));
+                }
+            }
+        }
+    }
+    assert!(checked > 60, "only {checked} layered reads found");
+    assert!(
+        bad.is_empty(),
+        "techniques-layer reads a family's spec does not declare (add the family, an \
+         extra_settings entry or the kernel op to techniques::registry):\n{}",
+        bad.join("\n")
+    );
 }

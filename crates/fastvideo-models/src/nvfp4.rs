@@ -180,7 +180,12 @@ pub fn requested(value: Option<&str>) -> Option<ScaleRule> {
 
 /// Process env. Safe to call from load paths; not cached (tests mutate env).
 pub fn from_env() -> Option<ScaleRule> {
-    requested(crate::techniques::settings::var(ENV).as_deref())
+    from_settings(&crate::techniques::settings::Live)
+}
+
+/// [`from_env`] with [`ENV`] from `settings` (a load's snapshot).
+pub fn from_settings(settings: &dyn crate::techniques::settings::Source) -> Option<ScaleRule> {
+    requested(settings.var(ENV).as_deref())
 }
 
 /// Serialize tests that poke [`ENV`]. Production load paths do not take this.

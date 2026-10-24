@@ -449,6 +449,29 @@ pub(crate) fn msg(e: impl std::fmt::Display) -> FastVideoError {
 mod tests {
     use super::*;
 
+    /// Every registered family has a `model_spec` (plan B3): its name, what
+    /// its runtime reads of the techniques layer, and (H3 and LTX-2 only)
+    /// that a technique profile may name it.
+    #[test]
+    fn every_family_has_a_model_spec() {
+        use fastvideo_models::techniques::registry::{family_spec, model_spec, SMALL_FAMILIES};
+        let mut small = Vec::new();
+        for f in FAMILIES {
+            let spec = family_spec(f.name()).unwrap_or_else(|| panic!("{}: no spec", f.name()));
+            assert_eq!(spec.name, f.name());
+            assert_eq!(
+                model_spec(f.name()).is_some(),
+                matches!(f.name(), "h3" | "ltx2"),
+                "{}: profile loadability",
+                f.name()
+            );
+            if !matches!(f.name(), "h3" | "ltx2" | "wan") {
+                small.push(f.name());
+            }
+        }
+        assert_eq!(small, SMALL_FAMILIES, "SMALL_FAMILIES is FAMILIES' order");
+    }
+
     #[test]
     fn family_names_are_unique_and_tables_are_not_empty() {
         let mut names: Vec<&str> = FAMILIES.iter().map(|f| f.name()).collect();
