@@ -1023,7 +1023,7 @@ Sources: `strobe:scripts/batch/` (read in full).
 | `negative_prompt` | Not used by H3 (CFG-distilled). **INFERRED:** accept and ignore, as FastVideo does not pass it for H3 | `negative_prompt` | `negative_prompt` |
 | `guidance_scale` | FastH3 requires 1 | `guidance_scale` | `guidance_scale` |
 | `guidance_scale_2` | none | `audio_guidance_scale` (our meaning; FastVideo's `guidance_scale_2` means the Wan 2.2 second expert) | `guidance_scale_2` |
-| `num_inference_steps` | **Gap:** H3 steps are fixed by the recipe; `generate_h3` does not read `num_inference_steps` | `num_inference_steps` | `num_inference_steps` |
+| `num_inference_steps` | **Gap:** H3 steps are fixed by the recipe; `generate_h3` (before plan B2; now `crates/fastvideo-core/src/family/h3.rs`) does not read `num_inference_steps` | `num_inference_steps` | `num_inference_steps` |
 | `flow_shift` | none | none | **Gap:** CLI TOML only, not in `LoadOptions` |
 | `task` = `t2va` / `fl2va` / `ref2va` | t2va: no images or refs. fl2va: `first_image` / `last_image` from `image_reference[0..2]`. ref2va: `references` from image, video and audio refs | 400 (FastVideo: "only defined for MiniMax-H3") | 400 |
 | `image_reference` / `input_reference` | As above | `image_path` (LTX I2V, first frame) | `image_path` (I2V / TI2V) |
@@ -1056,7 +1056,8 @@ Sources: `strobe:scripts/batch/` (read in full).
    FastH3 or Sol-H3 recipe.
 4. **Prompt expansion** (`prompt_expansion_mode`, H3-Context-IR): none.
 5. **Per-request H3 step count:** the recipe fixes it; `num_inference_steps`
-   is ignored for H3 in `generate_h3`.
+   is ignored for H3 in `generate_h3` (before plan B2; now
+   `crates/fastvideo-core/src/family/h3.rs`).
 6. **Per-request fps** for Wan and LTX, and **`flow_shift`** for Wan, are not
    in the core request structs.
 7. **One model per process today:** `VideoGenerator` and `generate_av` (since

@@ -37,7 +37,7 @@ runtime error.
 4. **A common `Request`** (`crates/fastvideo-core/src/request.rs`):
    `prompt`, `negative`, `seed`, `canvas { width, height }`,
    `timing { frames, seconds, fps }`, `sampler { steps, guidance,
-   guidance_2 }`, `conditioning: Vec<Conditioning>` with
+   guidance_2, audio_guidance }`, `conditioning: Vec<Conditioning>` with
    `Conditioning::{Image, Keyframes, Refs, Control, Audio}` (text only = no
    conditioning). `None` means the variant's default; the family fills it in.
    **`Request::validate(&ModelCaps)`** does not re-derive the serve path's

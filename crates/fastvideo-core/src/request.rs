@@ -82,17 +82,6 @@ pub enum Conditioning {
 }
 
 impl Conditioning {
-    /// The task this input asks of the model.
-    pub fn task(&self) -> Task {
-        match self {
-            Self::Image(_) => Task::I2V,
-            Self::Keyframes { .. } => Task::Keyframes,
-            Self::Refs(_) => Task::Ref2V,
-            Self::Control(_) => Task::V2V,
-            Self::Audio(_) => Task::A2V,
-        }
-    }
-
     fn kind(&self) -> &'static str {
         match self {
             Self::Image(_) => "image",
@@ -256,11 +245,12 @@ impl Request {
         })
     }
 
-    /// The request as the protocol states it, for model `caps`: what an API
-    /// adapter would hand to `negotiate`. Local paths become
+    /// The request as the protocol states it, for model `caps`: what the
+    /// OpenAI-style adapter would hand to `negotiate`. Local paths become
     /// [`MediaRef::ProviderFile`] (the precheck reads only kinds and counts);
     /// `frames` is an exact count, `seconds` aligns up to the frame grid (as
-    /// H3's seconds always did), `frames` wins when both are set.
+    /// H3's seconds always did), `frames` wins when both are set (the CLI's
+    /// rule; the native surface refuses both, fal-wan aligns frames up).
     pub fn to_generation_request(
         &self,
         caps: &ModelCaps,
