@@ -1,0 +1,115 @@
+# Gold standard of `wan14b-plug-4step` (wan, untiered): docs/adr/0009-gold-standard-files.md.
+# Every number is copied from the [[source]] that cites it; absent numbers are listed under [[gap]].
+# `fv-lab run gold` (plan D1/D3) fills [last_validated] and replaces these with its own run record.
+# Served as wan14b-turbo: Wan 2.1 T2V-14B with the LongLive-Plug few-step and CFG adapters merged, 4 steps.
+
+schema = 1
+
+[model]
+variant = "wan14b-plug-4step"
+family = "wan"
+
+[tier]
+gpu = "RTX PRO 6000 Blackwell"
+sm = 120
+vram_gib = 96
+offer = "runpod: NVIDIA RTX PRO 6000 Blackwell Server Edition, EU-RO-1 (plan §1: the gold-standard GPU)"
+
+[workload]
+width = 832
+height = 480
+frames = 81
+fps = 16
+steps = 4
+prompt_set = "scripts/gpu/prompts-eval.json (no run of this variant in D2's sources)"
+
+[latency]
+
+[quality]
+
+[cost]
+usd_per_hr = 2.49
+
+[last_validated]
+# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+
+[[source]]
+fields = []
+path = "docs/perf/sol-bench.md"
+heading = "Phase A results (2026-10-06)"
+date = "2026-10-06"
+note = "Wan2.1 T2V-14B 720p (1280x720x81, 50 steps): base 1797.48 s (extrapolated x50/15), fullstack 478.58 s (3.76x). The 50-step recipes, not this 4-step Plug variant."
+
+[[source]]
+fields = []
+path = "docs/techniques.md"
+heading = "LongLive-Plug recipes"
+note = "wan14b-plug-4step is the Wan 2.1 T2V-14B fast tier (owner decision 2026-10-02), public name wan14b-turbo; LightX2V step-distill timesteps [1000, 750, 500, 250] with shift 5, guidance 1.0. Results and verdicts: docs/serve/research-longlive.md §12."
+
+[[source]]
+fields = []
+path = "docs/serve/research-longlive.md"
+note = "Not a D2 source; named here so D3 knows where to look."
+
+[[source]]
+fields = ["cost.usd_per_hr"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
+date = "2026-10-14"
+note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
+
+[[gap]]
+field = "latency.p50_s"
+why = "no measurement in D2's sources: docs/perf/sol-bench.md's Wan 2.1 14B cells are the 50-step base and the EasyCache + Sol-Attn fullstack, not the LongLive-Plug 4-step; the Plug's own numbers are in docs/serve/research-longlive.md §12 (not a D2 source)"
+
+[[gap]]
+field = "latency.min_s"
+why = "no measurement in D2's sources: docs/perf/sol-bench.md's Wan 2.1 14B cells are the 50-step base and the EasyCache + Sol-Attn fullstack, not the LongLive-Plug 4-step; the Plug's own numbers are in docs/serve/research-longlive.md §12 (not a D2 source)"
+
+[[gap]]
+field = "latency.max_s"
+why = "no measurement in D2's sources: docs/perf/sol-bench.md's Wan 2.1 14B cells are the 50-step base and the EasyCache + Sol-Attn fullstack, not the LongLive-Plug 4-step; the Plug's own numbers are in docs/serve/research-longlive.md §12 (not a D2 source)"
+
+[[gap]]
+field = "latency.denoise_s"
+why = "no measurement in D2's sources: docs/perf/sol-bench.md's Wan 2.1 14B cells are the 50-step base and the EasyCache + Sol-Attn fullstack, not the LongLive-Plug 4-step; the Plug's own numbers are in docs/serve/research-longlive.md §12 (not a D2 source)"
+
+[[gap]]
+field = "latency.decode_s"
+why = "no measurement in D2's sources: docs/perf/sol-bench.md's Wan 2.1 14B cells are the 50-step base and the EasyCache + Sol-Attn fullstack, not the LongLive-Plug 4-step; the Plug's own numbers are in docs/serve/research-longlive.md §12 (not a D2 source)"
+
+[[gap]]
+field = "latency.load_s"
+why = "no measurement in D2's sources: docs/perf/sol-bench.md's Wan 2.1 14B cells are the 50-step base and the EasyCache + Sol-Attn fullstack, not the LongLive-Plug 4-step; the Plug's own numbers are in docs/serve/research-longlive.md §12 (not a D2 source)"
+
+[[gap]]
+field = "latency.peak_gib"
+why = "no measurement in D2's sources: docs/perf/sol-bench.md's Wan 2.1 14B cells are the 50-step base and the EasyCache + Sol-Attn fullstack, not the LongLive-Plug 4-step; the Plug's own numbers are in docs/serve/research-longlive.md §12 (not a D2 source)"
+
+[[gap]]
+field = "quality.psnr_vs_upstream_min_db"
+why = "no measurement in D2's sources: docs/perf/sol-bench.md's Wan 2.1 14B cells are the 50-step base and the EasyCache + Sol-Attn fullstack, not the LongLive-Plug 4-step; the Plug's own numbers are in docs/serve/research-longlive.md §12 (not a D2 source)"
+
+[[gap]]
+field = "quality.lpips_vs_upstream_max"
+why = "no measurement in D2's sources: docs/perf/sol-bench.md's Wan 2.1 14B cells are the 50-step base and the EasyCache + Sol-Attn fullstack, not the LongLive-Plug 4-step; the Plug's own numbers are in docs/serve/research-longlive.md §12 (not a D2 source)"
+
+[[gap]]
+field = "quality.sharpness_ratio"
+why = "no measurement in D2's sources: docs/perf/sol-bench.md's Wan 2.1 14B cells are the 50-step base and the EasyCache + Sol-Attn fullstack, not the LongLive-Plug 4-step; the Plug's own numbers are in docs/serve/research-longlive.md §12 (not a D2 source)"
+
+[[gap]]
+field = "quality.jitter_ratio"
+why = "no measurement in D2's sources: docs/perf/sol-bench.md's Wan 2.1 14B cells are the 50-step base and the EasyCache + Sol-Attn fullstack, not the LongLive-Plug 4-step; the Plug's own numbers are in docs/serve/research-longlive.md §12 (not a D2 source)"
+
+[[gap]]
+field = "latency.fps"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "latency.ttff_s"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "cost.usd_per_clip"
+why = "derived from latency.p50_s, which has no measurement here"

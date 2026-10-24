@@ -1,0 +1,109 @@
+# Gold standard of `sol-h3` (h3, max): docs/adr/0009-gold-standard-files.md.
+# Every number is copied from the [[source]] that cites it; absent numbers are listed under [[gap]].
+# `fv-lab run gold` (plan D1/D3) fills [last_validated] and replaces these with its own run record.
+
+schema = 1
+
+[model]
+variant = "sol-h3"
+family = "h3"
+profile = "h3/sol_h3_4step_engine_ladder"
+
+[tier]
+name = "max"
+gpu = "RTX PRO 6000 Blackwell"
+sm = 120
+vram_gib = 96
+offer = "runpod: NVIDIA RTX PRO 6000 Blackwell Server Edition, EU-RO-1 (plan §1: the gold-standard GPU)"
+
+[workload]
+width = 832
+height = 480
+frames = 124
+fps = 24
+prompt_set = "raw5: one fox prompt x 5 (artifacts/perf/raw-inference/bench.sh)"
+seeds = [7]
+steps = 4
+note = "fv-gpucheck h3 gen --techniques h3/sol_h3_4step_engine_ladder --h3-recipe sol-h3 (Sol engine route, tau 1.0 / 1.25 / 1.5, MXFP8), official ViT VAE, --text-encoder resident-fp8, --dit-offload resident. fv-gpucheck straight from the CLI: everything resident, one untimed warm-up, then 5 timed generations of the raw5 set (one fox prompt x 5, seed 7); gen = total_s - text_s (text cached, no MP4; PNG frames outside the timed region). Median (min-max) of the 5. The serving default canvas is 1344x768; this run measured every model at its smallest size."
+
+[latency]
+measures = "gen"
+p50_s = 8.87
+min_s = 8.82
+max_s = 8.89
+denoise_s = 6.13
+decode_s = 2.69
+load_s = 122.6
+peak_gib = 54.7
+note = "At 480p H3 max beats H3 turbo by about 0.9 s of denoise: the VSA gather / gate overhead costs more than it saves at this grid; the tiers were tuned at 768p (docs/perf/raw-inference.md, Notes)."
+
+[quality]
+cell = "h3attn arm sol_h3_4step_engine_ladder: 1344x768x124, the five gate prompts (scripts/gpu/prompts-eval.json), medians, b299214, RTX PRO 6000, 2026-09-27, against Sol-H3 4-step dense in the same process."
+gate = "pass vs Sol-H3 4-step dense at 768p (docs/techniques.md, H3 attention arms): the fastest Sol-H3 route that passes the lossy gate."
+sharpness_ratio = 1.02
+jitter_ratio = 1.05
+note = "The gate numbers are against our own dense Sol-H3 arm, not against upstream."
+
+[cost]
+usd_per_hr = 2.49
+usd_per_clip = 0.00614
+
+[last_validated]
+# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+
+[[source]]
+fields = ["latency.measures", "latency.p50_s", "latency.min_s", "latency.max_s", "latency.denoise_s", "latency.decode_s", "latency.peak_gib", "workload"]
+path = "docs/perf/raw-inference.md"
+heading = "RTX PRO 6000 (sm_120)"
+date = "2026-09-30"
+note = "Row 'H3 max (Sol-H3 4-step), 832x480x124, default': gen 8.87 (8.82-8.89) s, denoise 6.13 s, decode 2.69 s (audio decode included), peak 54.7 GiB. Image fastvideo-rs-runtime:sha-3341394, pod 5zbsx3omtnotmv."
+
+[[source]]
+fields = ["latency.load_s"]
+path = "artifacts/perf/raw-inference/rtx-pro-6000-summary.json"
+date = "2026-09-30"
+note = "h3m-def load_s (warm page cache after the first H3 load of the pod)."
+
+[[source]]
+fields = ["quality.gate", "quality.cell", "quality.sharpness_ratio", "quality.jitter_ratio"]
+path = "docs/techniques.md"
+heading = "H3 attention arms (h3attn, RTX PRO 6000, 2026-09-27)"
+date = "2026-09-27"
+note = "b299214, 1344x768x124, five prompts (scripts/gpu/prompts-eval.json), medians: denoise 21.80 s against 33.45 s for Sol-H3 4-step dense (1.53x), total 28.7 s against 40.3 s, LPIPS 0.375, PSNR 15.2 dB, sharpness 1.02, jitter 1.05, gate PASS. Was the first line of profiles/h3/sol_h3_4step_engine_ladder.toml."
+
+[[source]]
+fields = []
+path = "docs/perf/raw-inference.md"
+heading = "H100 / H200: older figures only (not this run)"
+date = "2026-09-29"
+note = "H100 SXM, 768p, fv-serve job (x264 and job overhead included): run 23.65 s (docs/perf/datacenter-profile.md). Another GPU; not a number of this file."
+
+[[source]]
+fields = []
+path = "docs/perf/sage-attention.md"
+heading = "8.3 Results (b): H3 max"
+date = "2026-10-02"
+note = "SageAttention2 on H3 max fails the calibrated gate; H3 stays bf16 attention. No change to this file's numbers."
+
+[[source]]
+fields = ["cost.usd_per_hr", "cost.usd_per_clip"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
+date = "2026-10-14"
+note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
+
+[[gap]]
+field = "quality.psnr_vs_upstream_min_db"
+why = "no oracle target for Sol-H3: docs/oracle.md covers FastH3 8-step, FastH3 4-step VSA, H3 Ref2VA, LTX-2.5 and Wan 2.2 modules"
+
+[[gap]]
+field = "quality.lpips_vs_upstream_max"
+why = "no oracle target for Sol-H3 (see psnr_vs_upstream_min_db)"
+
+[[gap]]
+field = "latency.fps"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "latency.ttff_s"
+why = "a clip, not a stream"

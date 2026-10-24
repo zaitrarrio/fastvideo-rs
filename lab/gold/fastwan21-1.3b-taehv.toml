@@ -1,0 +1,106 @@
+# Gold standard of `fastwan21-1.3b-taehv` (wan, untiered): docs/adr/0009-gold-standard-files.md.
+# Every number is copied from the [[source]] that cites it; absent numbers are listed under [[gap]].
+# `fv-lab run gold` (plan D1/D3) fills [last_validated] and replaces these with its own run record.
+# FastWan 2.1 1.3B with the TAEHV decoder (the CLI's default decoder for the distilled presets).
+
+schema = 1
+
+[model]
+variant = "fastwan21-1.3b-taehv"
+family = "wan"
+
+[tier]
+gpu = "RTX PRO 6000 Blackwell"
+sm = 120
+vram_gib = 96
+offer = "runpod: NVIDIA RTX PRO 6000 Blackwell Server Edition, EU-RO-1 (plan §1: the gold-standard GPU)"
+
+[workload]
+width = 832
+height = 480
+frames = 81
+fps = 16
+steps = 3
+prompt_set = "raw5: one fox prompt x 5 (artifacts/perf/raw-inference/bench.sh)"
+seeds = [7]
+note = "The FastWan 2.1 recipe decoded by TAEHV (taew2_1). The nearest measured arm (docs/perf/raw-inference.md 'max: TAEHV + MXFP8') also set FASTVIDEO_WAN_QUANT=mxfp8, which this variant does not, so only the decoder number is this file's."
+
+[latency]
+measures = "gen"
+decode_s = 0.26
+note = "The TAEHV decode does not depend on the DiT precision. The MXFP8 arm's other numbers, for scale and not this variant's: gen 2.26 (2.26-2.29) s, denoise 1.99 s (+3 % from MXFP8, as docs/ports/wan.md found), peak 21.5 GiB."
+
+[quality]
+note = "No quality measured in the raw-inference run."
+
+[cost]
+usd_per_hr = 2.49
+
+[last_validated]
+# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+
+[[source]]
+fields = ["latency.measures", "latency.decode_s", "workload"]
+path = "docs/perf/raw-inference.md"
+heading = "RTX PRO 6000 (sm_120)"
+date = "2026-09-30"
+note = "Row 'FastWan 1.3B, 832x480x81, max: TAEHV + MXFP8': decode 0.26 s (the TAEHV decoder, taew2_1)."
+
+[[source]]
+fields = ["cost.usd_per_hr"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
+date = "2026-10-14"
+note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
+
+[[gap]]
+field = "latency.p50_s"
+why = "the measured TAEHV arm also ran FASTVIDEO_WAN_QUANT=mxfp8 (gen 2.26 s, denoise 1.99 s, peak 21.5 GiB); the served variant keeps the bf16 DiT, so those are not its numbers"
+
+[[gap]]
+field = "latency.min_s"
+why = "the measured TAEHV arm also ran FASTVIDEO_WAN_QUANT=mxfp8 (gen 2.26 s, denoise 1.99 s, peak 21.5 GiB); the served variant keeps the bf16 DiT, so those are not its numbers"
+
+[[gap]]
+field = "latency.max_s"
+why = "the measured TAEHV arm also ran FASTVIDEO_WAN_QUANT=mxfp8 (gen 2.26 s, denoise 1.99 s, peak 21.5 GiB); the served variant keeps the bf16 DiT, so those are not its numbers"
+
+[[gap]]
+field = "latency.denoise_s"
+why = "the measured TAEHV arm also ran FASTVIDEO_WAN_QUANT=mxfp8 (gen 2.26 s, denoise 1.99 s, peak 21.5 GiB); the served variant keeps the bf16 DiT, so those are not its numbers"
+
+[[gap]]
+field = "latency.peak_gib"
+why = "the measured TAEHV arm also ran FASTVIDEO_WAN_QUANT=mxfp8 (gen 2.26 s, denoise 1.99 s, peak 21.5 GiB); the served variant keeps the bf16 DiT, so those are not its numbers"
+
+[[gap]]
+field = "latency.load_s"
+why = "the measured arm's load (36.5 s) is the MXFP8 arm's"
+
+[[gap]]
+field = "quality.psnr_vs_upstream_min_db"
+why = "no oracle run of the FastWan 2.1 checkpoint"
+
+[[gap]]
+field = "quality.lpips_vs_upstream_max"
+why = "no oracle run of the FastWan 2.1 checkpoint"
+
+[[gap]]
+field = "quality.sharpness_ratio"
+why = "no gate run of this variant against a baseline in D2's sources"
+
+[[gap]]
+field = "quality.jitter_ratio"
+why = "no gate run of this variant against a baseline in D2's sources"
+
+[[gap]]
+field = "latency.fps"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "latency.ttff_s"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "cost.usd_per_clip"
+why = "derived from latency.p50_s, which has no measurement here"

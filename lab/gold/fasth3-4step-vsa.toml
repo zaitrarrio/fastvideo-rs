@@ -1,0 +1,141 @@
+# Gold standard of `fasth3-4step-vsa` (h3, turbo): docs/adr/0009-gold-standard-files.md.
+# Every number is copied from the [[source]] that cites it; absent numbers are listed under [[gap]].
+# `fv-lab run gold` (plan D1/D3) fills [last_validated] and replaces these with its own run record.
+
+schema = 1
+
+[model]
+variant = "fasth3-4step-vsa"
+family = "h3"
+profile = "h3/fasth3_4step_vsa"
+
+[tier]
+name = "turbo"
+gpu = "RTX PRO 6000 Blackwell"
+sm = 120
+vram_gib = 96
+offer = "runpod: NVIDIA RTX PRO 6000 Blackwell Server Edition, EU-RO-1 (plan §1: the gold-standard GPU)"
+
+[workload]
+width = 832
+height = 480
+frames = 124
+fps = 24
+prompt_set = "raw5: one fox prompt x 5 (artifacts/perf/raw-inference/bench.sh)"
+seeds = [7]
+steps = 4
+note = "fv-gpucheck h3 gen --techniques h3/fasth3_4step_vsa --h3-recipe 4step-vsa (FastH3 Preview LoRA, VSA 0.9, MXFP8 linears, bf16 activations), official ViT VAE, --text-encoder resident-fp8, --dit-offload resident. fv-gpucheck straight from the CLI: everything resident, one untimed warm-up, then 5 timed generations of the raw5 set (one fox prompt x 5, seed 7); gen = total_s - text_s (text cached, no MP4; PNG frames outside the timed region). Median (min-max) of the 5. The serving default canvas is 1344x768."
+
+[workload.upstream]
+target = "fasth3-4step-vsa"
+image = "fastvideo-rs-upstream-fastvideo"
+rev = "e90be59"
+
+[latency]
+measures = "gen"
+p50_s = 9.84
+min_s = 9.75
+max_s = 9.85
+denoise_s = 7.07
+decode_s = 2.71
+load_s = 138.8
+peak_gib = 60.3
+
+[quality]
+cell = "oracle target fasth3-4step-vsa: 1344x768x124, the matrix prompt, seed 1024, the reference's noise and text injected; ours on one H100 SXM with the default dc VSA kernel (runtime f9be674, 2026-09-29), the reference (FastVideo e90be59, strict eager route) on an RTX PRO 6000."
+oracle = "H3 matches the reference to the model's own bf16/f32 noise floor: our bf16 and f32 runs part from each other as much as either parts from the reference, block for block, with no systematic offset (docs/oracle.md, Results: H3, 2026-09-26). The 2026-09-29 dc arm is at or below the 2026-09-26 RTX PRO 6000 tma2 profile everywhere."
+psnr_vs_upstream_min_db = 19.73
+lpips_vs_upstream_max = 0.236
+note = "Clip PSNR / SSIM / LPIPS vs the reference: dc 19.73 dB / 0.699 / 0.236; tma2 19.17 dB / 0.691 / 0.238 (the kernel the RTX PRO 6000 runs). This tier is the baseline the h3attn arms are gated against."
+
+[cost]
+usd_per_hr = 2.49
+usd_per_clip = 0.00681
+
+[last_validated]
+# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+
+[[source]]
+fields = ["latency.measures", "latency.p50_s", "latency.min_s", "latency.max_s", "latency.denoise_s", "latency.decode_s", "latency.peak_gib", "workload"]
+path = "docs/perf/raw-inference.md"
+heading = "RTX PRO 6000 (sm_120)"
+date = "2026-09-30"
+note = "Row 'H3 turbo (FastH3 4-step VSA), 832x480x124, default': gen 9.84 (9.75-9.85) s, denoise 7.07 s, decode 2.71 s (audio decode 0.06 s included), peak 60.3 GiB."
+
+[[source]]
+fields = ["latency.load_s"]
+path = "artifacts/perf/raw-inference/rtx-pro-6000-summary.json"
+date = "2026-09-30"
+note = "h3t-def load_s."
+
+[[source]]
+fields = ["quality.psnr_vs_upstream_min_db", "quality.lpips_vs_upstream_max", "quality.cell", "workload.upstream"]
+path = "docs/oracle.md"
+heading = "Results: H3 turbo on H100 with the datacenter VSA kernel (2026-09-29)"
+date = "2026-09-29"
+note = "Clip PSNR / SSIM / LPIPS: tma2 19.17 dB / 0.691 / 0.238; dc 19.73 dB / 0.699 / 0.236. Latents after steps 1-4: 6.2e-3 / 2.03e-2 / 6.92e-2 / 0.375 (dc)."
+
+[[source]]
+fields = ["quality.oracle"]
+path = "docs/oracle.md"
+heading = "Results: H3 (2026-09-26, RTX PRO 6000, runtime f49db62 / 5312e4b / b1226e9)"
+date = "2026-09-26"
+note = "4-step VSA 0.9 column: step-1 blocks 8.2e-4 (block 0) to 3.56e-1 (block 49); latents after step 4 4.35e-1. The controls section gives the bf16-vs-f32 floor the verdict rests on."
+
+[[source]]
+fields = []
+path = "docs/techniques.md"
+heading = "H3 attention arms (h3attn, RTX PRO 6000, 2026-09-27)"
+date = "2026-09-27"
+note = "768p baseline of the arms (b299214, five prompts, medians): denoise 19.81 s, total 26.7 s with a cached prompt. The VSA 0.925 / 0.95 / 0.95-with-edges arms of this recipe pass quality but not the 1.10x promotion bar; their numbers are in that table (they were the first lines of profiles/h3/fasth3_4step_vsa0925.toml, _vsa095.toml, _vsa095_edges.toml)."
+
+[[source]]
+fields = []
+path = "docs/techniques.md"
+heading = "Results (RTX PRO 6000, 2026-09-27)"
+date = "2026-09-27"
+note = "Byte-identity cell of the technique layer: FastH3 4-step VSA 768p, one prompt, seed 1024, denoise 19.59 / 19.54 / 19.46 s (base / env / profile), frames identical."
+
+[[source]]
+fields = []
+path = "docs/perf/h3-vae-decode-speed.md"
+heading = "H3 video VAE decode speed (work order follow-up, 2026-10-14)"
+date = "2026-10-14"
+note = "The official ViT VAE on this recipe (h3-demo x 3 seeds, medians): bf16 decode 480p 2.671 s / 768p 6.306 s / 1080p 13.482 s; MXFP8 block linears (the default since 2026-10-14, owner decision; FASTVIDEO_H3_VAE_MXFP8=0 restores the bf16 decode byte for byte) 1.986 / 4.679 / 9.906 s (-25.6 / -25.8 / -26.5 %), LPIPS 0.001-0.002 and PSNR 50-51 dB vs the bf16 decode, sharpness / jitter 1.00, gate quality pass (5 prompts x 3 seeds); FASTVIDEO_H3_VAE_VEC (default) 768p 6.203 s, byte-identical; TILE_BATCH=196 at 1080p +2.8 %. Were the first lines of profiles/h3/fasth3_4step_vsa.toml."
+
+[[source]]
+fields = []
+path = "docs/perf/h3-vae-tile-batching.md"
+heading = "H3 VAE decode tile batching (work order, 2026-10-14)"
+date = "2026-10-14"
+note = "FASTVIDEO_H3_VAE_TILE_BATCH=196 vs the default 7 tiles per forward: 768p video VAE 6.292 -> 6.192 s (-1.6 %), generate 26.88 -> 26.80 s; 480p 2.666 -> 2.669 s; frames byte-identical; default kept."
+
+[[source]]
+fields = []
+path = "docs/perf/raw-inference.md"
+heading = "H100 / H200: older figures only (not this run)"
+date = "2026-09-29"
+note = "H100 SXM 768p: CLI text + denoise + decode 21.50 s (denoise 16.34 s, dc VSA); fv-serve job 28.48 s. H200 (2026-09-24, pre-dc kernels): generate 35.0 s. Other GPUs; not numbers of this file."
+
+[[source]]
+fields = ["cost.usd_per_hr", "cost.usd_per_clip"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
+date = "2026-10-14"
+note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
+
+[[gap]]
+field = "quality.sharpness_ratio"
+why = "no gate run of this variant against a baseline in D2's sources: this tier is the baseline the h3attn arms are compared against"
+
+[[gap]]
+field = "quality.jitter_ratio"
+why = "no gate run of this variant against a baseline in D2's sources: this tier is the baseline the h3attn arms are compared against"
+
+[[gap]]
+field = "latency.fps"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "latency.ttff_s"
+why = "a clip, not a stream"

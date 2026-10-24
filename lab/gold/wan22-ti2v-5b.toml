@@ -1,0 +1,106 @@
+# Gold standard of `wan22-ti2v-5b` (wan, max): docs/adr/0009-gold-standard-files.md.
+# Every number is copied from the [[source]] that cites it; absent numbers are listed under [[gap]].
+# `fv-lab run gold` (plan D1/D3) fills [last_validated] and replaces these with its own run record.
+# Served as wan-max (fal-ai/wan): Wan 2.2 TI2V-5B, 50 UniPC steps, CFG 5; a 32 GB card.
+
+schema = 1
+
+[model]
+variant = "wan22-ti2v-5b"
+family = "wan"
+
+[tier]
+name = "max"
+gpu = "RTX PRO 6000 Blackwell"
+sm = 120
+vram_gib = 96
+offer = "runpod: NVIDIA RTX PRO 6000 Blackwell Server Edition, EU-RO-1 (plan §1: the gold-standard GPU)"
+
+[workload]
+width = 1280
+height = 704
+frames = 121
+fps = 24
+steps = 50
+prompt_set = "the sol-bench prompt (one prompt; scripts/gpu/sol-bench-pod.sh)"
+seeds = [1024]
+note = "sol-bench phase A, instance 2: T2V 704x1280, 50 UniPC steps, CFG 5, shift 5, --warm, one timed request; RTX PRO 6000 Server (96 GB, sm_120, driver 595.91), EUR-IS-1, image fastvideo-rs-runtime@sha256:76aba91a (sha-c74c5f5), $2.09/hr. The run used the Wan defaults (the default DiT precision is bf16: docs/perf/raw-inference.md adds FASTVIDEO_WAN_QUANT=mxfp8 only in its max-speed arm); the quant pin (WAN_QUANT=off, Diffusers sigmas, full VAE) was made explicit from phase B on."
+
+[workload.upstream]
+target = "wan5b-base (sol-engine models/ at 670482d: 1x GB200, 5-prompt median 70.25 s)"
+
+[latency]
+measures = "end_to_end"
+p50_s = 164.89
+denoise_s = 151.14
+decode_s = 13.71
+load_s = 84.43
+note = "One timed request (n = 1); total_s excludes load; text 0.01 s (cache hit). Upstream: 70.25 s on one GB200 (5-prompt median), so ours / theirs 2.35x on different hardware. Our EasyCache 0.036 arm (not served): 86.21 s, 1.91x over this base."
+
+[quality]
+cell = "oracle: Diffusers AutoencoderKLWan encode / decode of a 9-frame 704x1280 clip (fp32) and one bf16 WanTransformer3DModel forward per timestep layout, H100, wan/cfce899-09271307 (scripts/gpu/upstream/oracle_wan22.py)."
+oracle = "module-level pass: VAE decode PSNR 65.7 dB (rel-L2 1.8e-3; exact f32 mode 1.4e-4), encode rel-L2 1.8e-3, DiT output rel-L2 2.7e-2 (t2v) / 1.5e-2 (i2v per-frame timesteps), from 3e-3 at the patch embedding and block 0 with no jump (docs/oracle.md). No decoded-clip comparison."
+
+[cost]
+usd_per_hr = 2.49
+usd_per_clip = 0.11405
+
+[last_validated]
+# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+
+[[source]]
+fields = ["latency.measures", "latency.p50_s", "latency.denoise_s", "latency.decode_s", "latency.load_s", "workload", "workload.upstream"]
+path = "docs/perf/sol-bench.md"
+heading = "Phase A results (2026-10-06)"
+date = "2026-10-06"
+note = "Row 'Wan2.2 TI2V-5B, 704x1280x121, 50 st, CFG 5, base': ours 164.89 s (load / text / denoise / decode 84.43 / 0.01 / 151.14 / 13.71), theirs 70.25 s on 1x GB200. Raw: artifacts/runpod/sol-bench/2026-10-06/a2-wan/wan5b-base/benchmark.json."
+
+[[source]]
+fields = ["quality.oracle", "quality.cell"]
+path = "docs/oracle.md"
+heading = "Wan 2.2 TI2V-5B modules (Diffusers)"
+date = "2026-09-27"
+note = "The module oracle; details in docs/ports/wan.md."
+
+[[source]]
+fields = ["cost.usd_per_hr", "cost.usd_per_clip"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
+date = "2026-10-14"
+note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
+
+[[gap]]
+field = "latency.min_s"
+why = "one timed request"
+
+[[gap]]
+field = "latency.max_s"
+why = "one timed request"
+
+[[gap]]
+field = "latency.peak_gib"
+why = "not reported in the sol-bench table"
+
+[[gap]]
+field = "quality.psnr_vs_upstream_min_db"
+why = "the Wan oracle is module-level (VAE round trip, one DiT forward); no decoded-clip PSNR against the reference"
+
+[[gap]]
+field = "quality.lpips_vs_upstream_max"
+why = "module-level oracle only; no LPIPS"
+
+[[gap]]
+field = "quality.sharpness_ratio"
+why = "no gate run of this variant against a baseline in D2's sources: this tier is the base the Wan 5B arms (EasyCache, PISA) are compared against"
+
+[[gap]]
+field = "quality.jitter_ratio"
+why = "no gate run of this variant against a baseline in D2's sources"
+
+[[gap]]
+field = "latency.fps"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "latency.ttff_s"
+why = "a clip, not a stream"
