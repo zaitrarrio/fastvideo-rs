@@ -1,8 +1,8 @@
-# fv-control and the family-manifest generation (plan A4): everything
-# control/gen-configs.mjs derives from families/*.toml, configs/serve, the
-# weights TSVs and the shell tables must be current (`--check`), the
-# cross-checks between the manifests and their hand-written copies must agree,
-# and fv-control's typecheck and unit tests must pass. No Rust, no GPU: node
+# fv-control and the family-manifest generation (plan A4, C1): everything
+# control/gen-configs.mjs derives from families/*.toml, deploy/deploy.toml,
+# configs/serve, the weights TSVs and the shell tables must be current
+# (`--check`), the cross-checks between the manifests and their hand-written
+# copies must agree, and fv-control's typecheck and unit tests must pass. No Rust, no GPU: node
 # only (control/package-lock.json pins the tools). The shell lint runs here
 # too, since the generator writes scripts/gpu/verify-weights.sh. The engine
 # and model crates are inputs as well: test/unit/preset-trees.test.ts and
@@ -14,6 +14,7 @@ on:
   pull_request:
     paths:
       - "families/**"
+      - "deploy/deploy.toml"
       - "control/**"
       - "configs/serve/**"
       - "configs/autoscale.toml"
@@ -24,6 +25,8 @@ on:
       - "scripts/gpu/r2-fetch.py"
       - "scripts/serve/variants.sh"
       - "docker/gpucheck.Dockerfile"
+      - ".github/workflows/serve-image.yml"
+      - "docs/serve/images.md"
       - "crates/fastvideo-serve/console/**"
       - "crates/fastvideo-engine-service/**"
       - "crates/fastvideo-models/**"
@@ -35,6 +38,7 @@ on:
     branches: ["main"]
     paths:
       - "families/**"
+      - "deploy/deploy.toml"
       - "control/**"
       - "configs/serve/**"
       - "configs/autoscale.toml"
@@ -45,6 +49,8 @@ on:
       - "scripts/gpu/r2-fetch.py"
       - "scripts/serve/variants.sh"
       - "docker/gpucheck.Dockerfile"
+      - ".github/workflows/serve-image.yml"
+      - "docs/serve/images.md"
       - "crates/fastvideo-serve/console/**"
       - "crates/fastvideo-engine-service/**"
       - "crates/fastvideo-models/**"

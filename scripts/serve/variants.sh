@@ -1,65 +1,50 @@
 # shellcheck shell=bash
 # Per-variant serve images and their Runpod templates (docs/serve/images.md).
 # Sourced by runpod-templates.sh, runpod-endpoint.sh and runpod-pod.sh.
+# BEGIN GENERATED from deploy/deploy.toml by control/gen-configs.mjs; do not edit
 #
-#   variant    config (baked as FV_CONFIG)   GHCR tag                          Runpod templates
-#   h3-turbo   runpod.toml                   fastvideo-rs-serve:h3-turbo[-sha-…]  fv-serve-h3-turbo-sls / -pod
-#   h3-max     runpod-h3-max.toml            …:h3-max                           fv-serve-h3-max-sls / -pod
-#   ltx        runpod-ltx.toml               …:ltx                              fv-serve-ltx-sls / -pod
-#   wan        runpod-wan.toml               …:wan                              fv-serve-wan-sls / -pod
-#   wan5b      runpod-wan5b.toml             …:wan5b                            fv-serve-wan5b-sls / -pod
-#   sfwan      runpod-sfwan.toml             …:sfwan                            fv-serve-sfwan-sls / -pod
-#   cpu        runpod-fake.toml              …:cpu (CPU only, fake engine)      fv-serve-cpu-pod
-#   debug      every config (legacy image)   …:latest / :sha-…                  (none)
-
+#   variant   config (baked as FV_CONFIG)               GHCR tag            Runpod templates              note
+#   h3-turbo  runpod.toml                               …:h3-turbo[-sha-…]  fv-serve-h3-turbo-sls / -pod
+#   h3-max    runpod-h3-max.toml                        …:h3-max[-sha-…]    fv-serve-h3-max-sls / -pod
+#   ltx       runpod-ltx.toml                           …:ltx[-sha-…]       fv-serve-ltx-sls / -pod
+#   wan       runpod-wan.toml                           …:wan[-sha-…]       fv-serve-wan-sls / -pod
+#   wan5b     runpod-wan5b.toml (+ runpod-wan14b.toml)  …:wan5b[-sha-…]     fv-serve-wan5b-sls / -pod
+#   sfwan     runpod-sfwan.toml                         …:sfwan[-sha-…]     fv-serve-sfwan-sls / -pod
+#   cpu       runpod-fake.toml                          …:cpu[-sha-…]       fv-serve-cpu-pod              CPU only, fake engine; gateway until 2026-10-06
+#   debug     every config (legacy image)               …:latest / :sha-…   (none)                        the old all-in-one tags; since 2026-10-06 the runtime image + fv-serve, on the shared layers
 #
-# Pool presets (fv-control's POOL_PRESETS, control/src/cluster/spec.ts): more
-# worker configs on the same images. A config the variant's image does not
-# carry rides inline (FV_WORKER_TOML_B64); fv-control's unit tests keep this
-# list and the presets in step.
+# Pool presets (fv-control's POOL_PRESETS, control/src/presets.ts) beyond the standard pools: more worker
+# configs on the same images. A config the variant's image does not carry rides inline (FV_WORKER_TOML_B64).
 #
-#   preset     variant    config                     how
-#   ltx-pro    ltx        runpod-ltx-pro.toml        inline (ltx25-distill-dense, recipe ltx-pro)
-#   ltx-a2v    ltx        runpod-ltx-a2v.toml        inline (guided audio-to-video)
-#   ltx-ref2v  ltx        runpod-ltx-ref2v.toml      inline (reference-to-video)
-#   h3-ref2v   h3-max     runpod-h3-ref2v.toml       inline (H3 Ref2VA)
-#   fasth3-trim h3-max    runpod-h3-trim.toml        inline (FastH3 Trim 8-step, served h3-trim)
-#   fasth3-trim-nvfp4 h3-max runpod-h3-trim-nvfp4.toml inline (FastH3 Trim NVFP4 DiT, served h3-trim-nvfp4; opt-in)
-#   fasth3-v2-nvfp4 h3-max runpod-h3-v2-nvfp4.toml inline (H3 NVFP4 tier, V2: NVFP4 DiT + its NVFP4 VAE, served h3-v2-nvfp4)
-#   fasth3-4step-nvfp4 h3-max runpod-h3-turbo-nvfp4.toml inline (H3 NVFP4 tier, 4-step, served h3-turbo-nvfp4)
-#   fasth3-v2-nvfp4-preview h3-max runpod-h3-v2-nvfp4-preview.toml inline (NVFP4 V2 + TAEH3 fast preview, served h3-v2-nvfp4-preview)
-#   fasth3-4step-nvfp4-preview h3-max runpod-h3-turbo-nvfp4-preview.toml inline (NVFP4 4-step + TAEH3 fast preview)
-#   h3-turbo-preview h3-max runpod-h3-turbo-preview.toml inline (h3-turbo + TAEH3 fast preview, 768p / 480p)
-#   fasth3-trim-nvfp4-fast h3-max runpod-h3-trim-nvfp4-fast.toml inline (Trim NVFP4 + sparse FP4 VSA, fastest, opt-in)
-#   h3-larry-turbo h3-max runpod-h3-larry-turbo.toml inline (H3 + larry Turbo LoRA)
-#   h3-lightx2v-turbo h3-max runpod-h3-lightx2v-turbo.toml inline (H3 + lightx2v Turbo LoRA)
-#   h3-lightx2v-turbo-v01 h3-max runpod-h3-lightx2v-turbo-v01.toml inline (H3 + lightx2v v0.1, the Space's)
-#   vdn-h3      h3-max    runpod-vdn-h3.toml         inline (VDN-H3 stage B, 50 forwards, served vdn-h3)
-#   vdn-h3-8step h3-max   runpod-vdn-h3-8step.toml   inline (VDN-H3 8-step DMD, served vdn-h3-8step)
-#   fastwan21  wan        runpod-wan.toml            in the image
-#   sfwan      sfwan      runpod-sfwan.toml          in the image
-#   longlive   sfwan      runpod-longlive.toml       inline (LongLive-1.3B; NON-COMMERCIAL weights)
-#   h3-family  h3-max     runpod-family-h3.toml      inline (every H3 variant on one pod, one process, swap)
-#   fasth3-family h3-max  runpod-family-fasth3.toml  inline (every FastH3 release on one pod, one process, swap)
-#   ltx-family ltx        runpod-family-ltx.toml     inline (every LTX-2.5 preset on one pod, one process, swap)
-#   streaming-family sfwan runpod-family-streaming.toml inline (SF-Wan + LongLive on one pod, one process, swap)
+#   preset                      variant  config                              how           title
+#   ltx-pro                     ltx      runpod-ltx-pro.toml                 inline        LTX pro (dense)
+#   ltx-a2v                     ltx      runpod-ltx-a2v.toml                 inline        LTX guided audio-to-video
+#   ltx-ref2v                   ltx      runpod-ltx-ref2v.toml               inline        LTX reference-to-video
+#   h3-ref2v                    h3-max   runpod-h3-ref2v.toml                inline        H3 reference-to-video
+#   fasth3-trim                 h3-max   runpod-h3-trim.toml                 inline        FastH3 Trim 8-step
+#   fasth3-trim-nvfp4           h3-max   runpod-h3-trim-nvfp4.toml           inline        FastH3 Trim 8-step NVFP4
+#   fasth3-v2-nvfp4             h3-max   runpod-h3-v2-nvfp4.toml             inline        H3 NVFP4 tier: FastH3 V2 NVFP4
+#   fasth3-4step-nvfp4          h3-max   runpod-h3-turbo-nvfp4.toml          inline        H3 NVFP4 tier: FastH3 4-step NVFP4
+#   fasth3-v2-nvfp4-preview     h3-max   runpod-h3-v2-nvfp4-preview.toml     inline        H3 NVFP4 tier, fast preview (TAEH3)
+#   fasth3-4step-nvfp4-preview  h3-max   runpod-h3-turbo-nvfp4-preview.toml  inline        H3 NVFP4 4-step, fast preview (TAEH3)
+#   h3-turbo-preview            h3-max   runpod-h3-turbo-preview.toml        inline        H3 turbo, fast preview (TAEH3)
+#   fasth3-trim-nvfp4-fast      h3-max   runpod-h3-trim-nvfp4-fast.toml      inline        FastH3 Trim NVFP4 + FP4 attention (fastest, opt-in)
+#   h3-larry-turbo              h3-max   runpod-h3-larry-turbo.toml          inline        MiniMax-H3 Turbo LoRA (larry)
+#   h3-lightx2v-turbo           h3-max   runpod-h3-lightx2v-turbo.toml       inline        MiniMax-H3 Turbo LoRA (lightx2v)
+#   vdn-h3                      h3-max   runpod-vdn-h3.toml                  inline        VDN-H3 (Video DeltaNet)
+#   vdn-h3-8step                h3-max   runpod-vdn-h3-8step.toml            inline        VDN-H3 8-step (Video DeltaNet, DMD)
+#   h3-lightx2v-turbo-v01       h3-max   runpod-h3-lightx2v-turbo-v01.toml   inline        MiniMax-H3 Turbo LoRA (lightx2v v0.1, the Space's)
+#   fastwan21                   wan      runpod-wan.toml                     in the image  FastWan 2.1 1.3B
+#   sfwan                       sfwan    runpod-sfwan.toml                   in the image  SF-Wan causal streaming
+#   longlive                    sfwan    runpod-longlive.toml                inline        LongLive-1.3B causal (NON-COMMERCIAL)
+#   h3-family                   h3-max   runpod-family-h3.toml               inline        H3 family: every H3 variant on one pod
+#   fasth3-family               h3-max   runpod-family-fasth3.toml           inline        FastH3 family: every FastH3 release on one pod
+#   ltx-family                  ltx      runpod-family-ltx.toml              inline        LTX family: turbo, pro, guided A2V and Ref2V on one pod
+#   streaming-family            sfwan    runpod-family-streaming.toml        inline        Streaming: every causal streaming model on one pod (sfwan, longlive; LongLive weights NON-COMMERCIAL)
 
 FV_VARIANTS="h3-turbo h3-max ltx wan wan5b sfwan cpu"
 # <preset>:<variant>:<config> for every non-standard preset (the table above).
-FV_POOL_PRESETS="ltx-pro:ltx:runpod-ltx-pro.toml ltx-a2v:ltx:runpod-ltx-a2v.toml ltx-ref2v:ltx:runpod-ltx-ref2v.toml h3-ref2v:h3-max:runpod-h3-ref2v.toml fasth3-trim:h3-max:runpod-h3-trim.toml fasth3-trim-nvfp4:h3-max:runpod-h3-trim-nvfp4.toml fasth3-v2-nvfp4:h3-max:runpod-h3-v2-nvfp4.toml fasth3-4step-nvfp4:h3-max:runpod-h3-turbo-nvfp4.toml fasth3-v2-nvfp4-preview:h3-max:runpod-h3-v2-nvfp4-preview.toml fasth3-4step-nvfp4-preview:h3-max:runpod-h3-turbo-nvfp4-preview.toml h3-turbo-preview:h3-max:runpod-h3-turbo-preview.toml fasth3-trim-nvfp4-fast:h3-max:runpod-h3-trim-nvfp4-fast.toml h3-larry-turbo:h3-max:runpod-h3-larry-turbo.toml h3-lightx2v-turbo:h3-max:runpod-h3-lightx2v-turbo.toml h3-lightx2v-turbo-v01:h3-max:runpod-h3-lightx2v-turbo-v01.toml vdn-h3:h3-max:runpod-vdn-h3.toml vdn-h3-8step:h3-max:runpod-vdn-h3-8step.toml fastwan21:wan:runpod-wan.toml sfwan:sfwan:runpod-sfwan.toml longlive:sfwan:runpod-longlive.toml h3-family:h3-max:runpod-family-h3.toml fasth3-family:h3-max:runpod-family-fasth3.toml ltx-family:ltx:runpod-family-ltx.toml streaming-family:sfwan:runpod-family-streaming.toml"
-FV_SERVE_REPO="${FV_SERVE_REPO:-ghcr.io/zaitrarrio/fastvideo-rs-serve}"
-
-# fv_preset <preset> -> "<variant> <config>" (a pool preset), or status 1
-fv_preset() {
-  local x
-  for x in $FV_POOL_PRESETS; do
-    [[ "${x%%:*}" == "$1" ]] || continue
-    x="${x#*:}"
-    echo "${x%%:*} ${x#*:}"
-    return 0
-  done
-  return 1
-}
+FV_POOL_PRESETS="ltx-pro:ltx:runpod-ltx-pro.toml ltx-a2v:ltx:runpod-ltx-a2v.toml ltx-ref2v:ltx:runpod-ltx-ref2v.toml h3-ref2v:h3-max:runpod-h3-ref2v.toml fasth3-trim:h3-max:runpod-h3-trim.toml fasth3-trim-nvfp4:h3-max:runpod-h3-trim-nvfp4.toml fasth3-v2-nvfp4:h3-max:runpod-h3-v2-nvfp4.toml fasth3-4step-nvfp4:h3-max:runpod-h3-turbo-nvfp4.toml fasth3-v2-nvfp4-preview:h3-max:runpod-h3-v2-nvfp4-preview.toml fasth3-4step-nvfp4-preview:h3-max:runpod-h3-turbo-nvfp4-preview.toml h3-turbo-preview:h3-max:runpod-h3-turbo-preview.toml fasth3-trim-nvfp4-fast:h3-max:runpod-h3-trim-nvfp4-fast.toml h3-larry-turbo:h3-max:runpod-h3-larry-turbo.toml h3-lightx2v-turbo:h3-max:runpod-h3-lightx2v-turbo.toml vdn-h3:h3-max:runpod-vdn-h3.toml vdn-h3-8step:h3-max:runpod-vdn-h3-8step.toml h3-lightx2v-turbo-v01:h3-max:runpod-h3-lightx2v-turbo-v01.toml fastwan21:wan:runpod-wan.toml sfwan:sfwan:runpod-sfwan.toml longlive:sfwan:runpod-longlive.toml h3-family:h3-max:runpod-family-h3.toml fasth3-family:h3-max:runpod-family-fasth3.toml ltx-family:ltx:runpod-family-ltx.toml streaming-family:sfwan:runpod-family-streaming.toml"
 
 # fv_variant_config <variant> -> config file name
 fv_variant_config() {
@@ -73,6 +58,20 @@ fv_variant_config() {
     cpu) echo runpod-fake.toml ;;
     *) return 1 ;;
   esac
+}
+# END GENERATED
+FV_SERVE_REPO="${FV_SERVE_REPO:-ghcr.io/zaitrarrio/fastvideo-rs-serve}"
+
+# fv_preset <preset> -> "<variant> <config>" (a pool preset), or status 1
+fv_preset() {
+  local x
+  for x in $FV_POOL_PRESETS; do
+    [[ "${x%%:*}" == "$1" ]] || continue
+    x="${x#*:}"
+    echo "${x%%:*} ${x#*:}"
+    return 0
+  done
+  return 1
 }
 
 # fv_variant_for_config </etc/fv/….toml> -> variant, or nothing (fake, ref2v, …)
