@@ -1,0 +1,80 @@
+# The fastvideo family's h3-768p cell (runpod-matrix.sh `fastvideo`): our
+# optimized stack with no sol-engine technique (no Sol-Attn, no TeaCache), the
+# FastH3 recipes against their TAEH3-decoded twins and LTX-2.5 dense stage 2
+# against its TAE-decoded twin (compare-clips, then the lossy gate). One loop
+# iteration per cell (ADR-0019 open decision 3). Schema:
+# crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md (D1b).
+schema = 1
+name = "fastvideo-h3-768p"
+description = "H3 base (dense), FastH3 8-step and 4-step VSA at the recipe canvas (768p), the FastH3 recipes also decoded by TAEH3"
+
+[workload]
+model = "h3"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+note = "runpod-matrix.sh's default PROMPT and SEED; each recipe's default canvas; the fasth3-8step arms are skipped on the EU volume (h3-8step is R2-only)"
+
+[lists]
+h3_common = ["--prompt", "{prompt}", "--seconds", "{seconds}", "--seed", "{seed}", "--text-encoder", "auto",
+  "--text-cache", "{scratch}/h3-text-cache", "--text-weights", "{weights}/h3-base", "--warm"]
+
+[[arm]]
+name = "h3-base-768p"
+gate = "h3-base"
+trees = ["h3-base"]
+note = "base H3 on the dense flash kernel (the sol-h3-rtx route with Sol-Attn off)"
+env = ["FASTVIDEO_H3_SOL_ATTN=off"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "sol-h3-rtx",
+  "--adaln-cache", "{runs}/h3-base-768p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-8step-768p"
+gate = "fasth3-8step"
+trees = ["h3-8step", "h3-base"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-8step", "--h3-recipe", "8step",
+  "--adaln-cache", "{runs}/fasth3-8step-768p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-4step-vsa-768p"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-vsa",
+  "--adaln-cache", "{runs}/fasth3-4step-vsa-768p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames",
+  "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-8step-768p-taeh3"
+gate = "fasth3-8step"
+trees = ["h3-8step", "h3-base"]
+tae = "taeh3.safetensors"
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-8step", "--h3-recipe", "8step",
+  "--taeh3-weights", "{tae}/taeh3.safetensors", "--adaln-cache", "{runs}/fasth3-8step-768p-adaln.cache",
+  "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-4step-vsa-768p-taeh3"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+tae = "taeh3.safetensors"
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-vsa",
+  "--taeh3-weights", "{tae}/taeh3.safetensors", "--adaln-cache", "{runs}/fasth3-4step-vsa-768p-adaln.cache",
+  "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[compare]]
+baseline = "fasth3-8step-768p"
+candidate = "fasth3-8step-768p-taeh3"
+
+[[compare]]
+baseline = "fasth3-4step-vsa-768p"
+candidate = "fasth3-4step-vsa-768p-taeh3"
+
+[[gate]]
+baseline = "fasth3-8step-768p"
+candidate = "fasth3-8step-768p-taeh3"
+kind = "lossy"
+
+[[gate]]
+baseline = "fasth3-4step-vsa-768p"
+candidate = "fasth3-4step-vsa-768p-taeh3"
+kind = "lossy"

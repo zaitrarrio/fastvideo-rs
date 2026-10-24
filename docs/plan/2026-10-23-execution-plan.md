@@ -89,7 +89,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | todo (D1a merged #171: `fv-lab run` + `pod` on fv-deploy's guards, `lab/tiers.toml` and `lab/cells/rtx6000-*.toml`, dry-run and payload goldens from the scripts, ADR-0019; GPU gate passed (fv-lab = script, sol-h3 and ltx25-two-stage frames byte-identical); next: D1b other families, D1c `report`, D1d `gate`/`oracle`, D1e one-offs) |
+| D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | todo (D1a merged #171: `fv-lab run` + `pod` on fv-deploy's guards, `lab/tiers.toml` and `lab/cells/rtx6000-*.toml`, dry-run and payload goldens from the scripts, ADR-0019; GPU gate passed (fv-lab = script, sol-h3 and ltx25-two-stage frames byte-identical); D1b pr #176: `techniques`, `b6`, `rtx5090`, `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae`, `precision` as tiers (cell schema: baseline arms, TAE arms, bare `env`, paired gates), a golden per tier, the family inventory in ADR-0019 §9; GPU fv-lab = script for `techniques`, `b6`, `precision` and `rtx5090` (every arm's frames byte-identical; the other five tiers not yet run); next: the remaining families' runs and the script branch deletions, D1c `report`, D1d `gate`/`oracle` (+ `b4a`'s verdict), D1e one-offs) |
 | D2 | `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments; keyed by registry name and `@rev` | every served variant has a gold file; comments in `profiles/` no longer carry numbers | pod | A2 | merged (#151) |
 | D3 | `fv-lab report tiers` and the generated `docs/perf/tiers.md` | table generated from one run set | pod; **GPU** the gold runs | D1, D2 | todo |
 | D4 | CI bridge: gold files parse and resolve; `last_validated.commit` age check; an on-demand `fv-lab run gold --all` workflow | visible per-model validation age in CI | CI | D3 | todo |
@@ -847,6 +847,22 @@ ran (pod id, $/hr), result, cost.
   (`<cell>-<arm>/cache-evidence.txt`, `<cell>.evidence.diff`, empty).
   About 35 GPU-minutes, ~$1.45. Evidence:
   `artifacts/runpod/b4a/abccc38-{10241423,10241424,10241425}/`.
+- 2026-10-24 15:30Z: D1b (`claude/d1b-fv-lab-families`, draft PR #176): nine more
+  `runpod-matrix.sh` families as fv-lab tiers and cells (`techniques`, `b6`,
+  `rtx5090`, `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae`, `precision`
+  default mode; 10 tiers, 38 cells, 113 arms with `rtx6000`). Four additive
+  cell fields: `bin = "baseline"` (fetch-baseline.sh, `--baseline-sha`), `tae`
+  with `{tae}`, `env = []`, and a compare's paired `gate`. The script changes
+  only its dry run (`FV_DRY_RUN_GATES`, no TAE / baseline fetch when dry). The
+  goldens cover every tier: dry run, gate cells, pod body.
+  `fv-lab-compare-runs.sh` also compares compare verdicts and gate reports.
+  ADR-0019 §9 has the 40-family inventory with a retire-when for each; `b4a`
+  stays (its evidence verdict), as do `hd`, `ltxoffload` and the rest, each
+  with a reason. No branch was deleted. CPU only, on build pod
+  `l3d75u8a8zhw47` (agent `d1b-lab`): fastvideo-lab tests (all features),
+  workspace clippy, fmt, lint and goldens `--check` all green. No Runpod call.
+  GPU runs (coordinator), one per family, cheapest cells, about $13 in all:
+  ADR-0019 §9.5.
 - 2026-10-24 15:40Z: B4c opened draft PR #177 (`claude/b4c-prompt-cache`):
   `fastvideo_cudarc::rt::prompt_cache` (ADR-0021), one key derivation
   (`KeyRecipe`: domain and prompt trimming; H3 / Wan / LTX recipes) and one
@@ -867,6 +883,16 @@ ran (pod id, $/hr), result, cost.
   `runpod-matrix.sh b4c` with `FV_BASELINE_SHA=e18ec010`, cells
   `b4c-h3-4stepvsa` and `b4c-ltx25-512p` (`FV_B4C_CELLS`, one per pod),
   each base and PR arm a cold miss pass then a hit pass over its own cache.
+- 2026-10-24 16:20Z: D1b review fixes on #176 (main merged in):
+  - `fv-lab-compare-runs.sh` fails unless an arm ran with byte-identical frames, treats unreadable files as
+    differences and prints ran / skipped / failed counts;
+  - `pod up` refuses a baseline equal to `--sha` and a malformed or empty `FV_BASELINE_SHA` in `--extra-env`, and the
+    runner refuses a baseline that is this build;
+  - the goldens record gate kind / OFF arm and each arm's TAE file, with the volume's TAE copy complete;
+  - the `techniques` H3 arms get their own text and AdaLN caches in the script and the cells. Before this, those
+    gates did not cover the candidate's H3 text-encoder or AdaLN paths (docs/techniques.md);
+  - CI path filters and the control.yml step name fixed.
+  CPU only, build pod `l3d75u8a8zhw47`: lab tests, workspace clippy, fmt, lint and goldens all green.
 - 2026-10-24 16:25Z, coordinator: B4c GPU gate, runtime image
   `sha-da9dbac` (the PR head after the review fixes) against main
   `sha-e18ec01` (pre-B4c prompt caches), two single-cell RTX PRO 6000 pods
@@ -881,6 +907,28 @@ ran (pod id, $/hr), result, cost.
   363 s / 130 s, PR 100 s / 27 s (the base arms run first and pay the cold
   volume reads). About 19 GPU-minutes, ~$0.80. Evidence:
   `artifacts/runpod/b4c/da9dbac-{10241612,10241613}/`.
+- 2026-10-24 17:21Z, coordinator: D1b GPU comparisons, runtime image
+  `sha-c21d801` (#176's head before the main merge), baseline `e93e357` for
+  the `-base` arms. RTX PRO 6000 pods in EU-RO-1 with `bz0ofkfx45`: each family
+  ran once through `fv-lab pod up --wait` and once through `runpod-http.sh`
+  (the script) with the same cells, then `fv-lab-compare-runs.sh` (fails
+  closed):
+  - `b6` (b6-solh3-tree base/pr): 2 arms, 124 frames each byte-identical; 8 reports the same;
+  - `techniques` (h3-480p-fullopt base/env/prof): 3 arms, 248 frames each byte-identical; 9 reports the same;
+  - `precision` (ltx25-4k5s-sol f32act/bf16act): 2 arms, 242 frames each byte-identical; 9 reports and the
+    gate report the same;
+  - `rtx5090` (h3-480p dense/sol/fullopt/fullopt-taeh3): 4 arms, 248 frames each byte-identical; 14 reports
+    the same.
+  Within each run the gates also hold: b6 and techniques base against the
+  candidate arms pass `--off-identity` (identical), so the techniques arms
+  now cover the candidate's own H3 text encoder and AdaLN caches. The fv-lab
+  `rtx5090` and `precision` pods were first refused by fv-deploy's floor
+  projection (4 h cap × (quote + the account's current spend) would cross
+  $8 with five pods up), as designed; they ran once nothing else was up.
+  The first script-side launch failed before creating any pod (a launcher
+  quoting error on my side). About 133 GPU-minutes, ~$5.50. Evidence:
+  `artifacts/runpod/{b6,techniques,precision,rtx5090}/c21d801-*` and the
+  comparison outputs in `artifacts/runpod/d1b-compare/`.
 - 2026-10-24 17:40Z: B4c2 opened draft PR #178 (`claude/b4c2-prompt-key-gaps`):
   the six key gaps of ADR-0021 closed. New key fields, each the value the
   run resolved: `Numerics` (GEMM math, compute capability, bf16
@@ -908,3 +956,19 @@ ran (pod id, $/hr), result, cost.
   cells `b4c2-ltx25-fp8`, `b4c2-ltx25-mode`, `b4c2-h3-numerics`,
   `b4c2-h3-tree`, `b4c2-h3-noop` (`FV_B4C2_CELLS`); recovered 8B and Wan are
   CPU evidence only (not on the EU volume).
+- 2026-10-24 17:56Z: B4c2 review fixes on #178 (coordinator's review: all
+  six gaps closed, nothing blocking): the H3 key gets the resident /
+  streamed mode (`EncodeSettings`, shared with LTX); `EncoderRun`
+  (`h3/text.rs`) is the pure choice of weights read and mode, its table
+  tested; Wan reads `Numerics::live` inside UMT5's `with_bf16_act(false, ..)`
+  scope; LTX `plan_mode`, `gemma_tree`, `gemma_weights_read` pure and tested,
+  FP8 with an explicit streamed residency keyed as the bf16 checkpoint it
+  streams (computation unchanged; ADR notes the tree-map case); H3 tree and
+  recovered identities through `files_head_tail_cached`; ADR: in LTX `auto`
+  the key depends on free memory at the lookup (spurious misses only). New
+  pins (Python): H3 `29d517fd…` / tree `9556f05a…` / streamed tree
+  `59ddcb14…`, recovered `1af19d5f…`, Wan `1f09144a…` (LTX unchanged). 31
+  mutations all caught. Gates on the build pod green (cudarc + models +
+  engine-service + core tests 1430, `--workspace --lib` 2087). No H3
+  streamed-FP8 GPU cell: no flag makes H3 stream FP8. Merged main
+  `1100c35f` (D1b).

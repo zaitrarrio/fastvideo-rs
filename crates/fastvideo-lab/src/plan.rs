@@ -311,6 +311,28 @@ pub struct Workload {
     pub note: Option<String>,
 }
 
+/// Which fv-gpucheck an arm runs (docs/adr/0019-fv-lab.md, D1b).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ArmBin {
+    /// The image's own (`FV_GPUCHECK`, `/opt/fastvideo-rs/target/release/fv-gpucheck`).
+    #[default]
+    Gpucheck,
+    /// The baseline commit's: `FV_BASELINE_SHA`'s runtime image binary,
+    /// fetched by `scripts/gpu/fetch-baseline.sh` into
+    /// `<scratch>/baseline-<sha>/fv-gpucheck` before the first arm, as the
+    /// script's `techniques` / `b6` / `b4a` families do. The byte-identity
+    /// families pair a `baseline` arm with a `gpucheck` arm and compare them
+    /// with `--off-identity`.
+    Baseline,
+}
+
+impl ArmBin {
+    fn is_default(&self) -> bool {
+        *self == ArmBin::Gpucheck
+    }
+}
+
 /// One arm: one run directory `runs/<family>/<tag>/<name>/`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -329,11 +351,29 @@ pub struct Arm {
     pub steps: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    /// `K=V` settings, in order, for `env K=V … fv-gpucheck …`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub env: Vec<String>,
+    /// The binary: `gpucheck` (default) or `baseline` ([`ArmBin`]).
+    #[serde(default, skip_serializing_if = "ArmBin::is_default")]
+    pub bin: ArmBin,
+    /// A tiny-autoencoder file the arm reads as `{tae}/<file>` (the script's
+    /// `tae_gated_cell`): fetched once with `fetch-tae.sh` when missing, and
+    /// the arm recorded as skipped (`tae weights missing`) when still absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tae: Option<String>,
+    /// `K=V` settings, in order, for `env K=V … fv-gpucheck …`. Absent: no
+    /// `env`; `env = []`: a bare `env` before the binary, as the script's
+    /// `env ${e[@]} "$bin"` renders an empty list (the command line equal
+    /// word for word).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<Vec<String>>,
     /// fv-gpucheck's arguments (the binary is the runner's).
     pub argv: Vec<String>,
+}
+
+impl Arm {
+    /// The arm's `K=V` settings (none when `env` is absent).
+    pub fn env_entries(&self) -> &[String] {
+        self.env.as_deref().unwrap_or(&[])
+    }
 }
 
 /// `compare_cells <baseline> <candidate> [args]`.
@@ -345,6 +385,22 @@ pub struct Compare {
     /// Extra `compare-clips` arguments (`--off-identity`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    /// The promotion gate of the same pair, run right after this compare
+    /// (the script's `compare_cells b c; gate_cells b c …` in one loop
+    /// iteration). A `[[gate]]` runs after every compare of the cell instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<PairedGate>,
+}
+
+/// The gate of a compare's own pair (`Compare::gate`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PairedGate {
+    #[serde(default)]
+    pub kind: GateKind,
+    /// An OFF-arm whose compare with the baseline must be byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub off: Option<String>,
 }
 
 /// The gate's kind (`fv-gpucheck gate --kind`).
@@ -389,9 +445,16 @@ pub struct Paths {
     pub runs: PathBuf,
     /// `{root}`: the repository / image root (`/opt/fastvideo-rs`).
     pub root: PathBuf,
+    /// `{tae}`: the tiny-autoencoder directory (the script's `$TAE`: the
+    /// volume's `auxiliary/tae` when complete, else `<scratch>/tae`).
+    pub tae: PathBuf,
+    /// The baseline binary `bin = "baseline"` arms run
+    /// (`<scratch>/baseline-<sha>/fv-gpucheck`); `None` without a baseline
+    /// commit, and such an arm does not render.
+    pub baseline: Option<PathBuf>,
 }
 
-const PATH_KEYS: [&str; 5] = ["weights", "scratch", "runs", "root", "arm"];
+const PATH_KEYS: [&str; 6] = ["weights", "scratch", "runs", "root", "arm", "tae"];
 const WORKLOAD_KEYS: [&str; 8] = [
     "prompt",
     "prompt_set",
@@ -535,7 +598,7 @@ impl CellFile {
             if arm.argv.is_empty() {
                 return Err(field(file, at("argv"), "empty"));
             }
-            for e in &arm.env {
+            for e in arm.env_entries() {
                 let key = e.split_once('=').map(|(k, _)| k).unwrap_or("");
                 let ok = !key.is_empty()
                     && key
@@ -559,7 +622,25 @@ impl CellFile {
             }
             let argv = self.spliced(arm).map_err(|m| field(file, at("argv"), m))?;
             let mut referenced_trees = BTreeSet::new();
-            for s in arm.env.iter().chain(&argv) {
+            if let Some(t) = &arm.tae {
+                if !is_token(t) || t.contains('/') {
+                    return Err(field(file, at("tae"), format!("`{t}` is not a file name")));
+                }
+                let want = format!("{{tae}}/{t}");
+                if !arm
+                    .env_entries()
+                    .iter()
+                    .chain(&argv)
+                    .any(|s| s.contains(&want))
+                {
+                    return Err(field(
+                        file,
+                        at("tae"),
+                        format!("the command does not read `{want}`"),
+                    ));
+                }
+            }
+            for s in arm.env_entries().iter().chain(&argv) {
                 let ph = placeholders(s).map_err(|m| field(file, at("argv"), m))?;
                 for p in ph {
                     if p.starts_with('@') {
@@ -567,6 +648,13 @@ impl CellFile {
                             file,
                             at("argv"),
                             format!("`{s}`: a list splice is a whole element"),
+                        ));
+                    }
+                    if p == "tae" && arm.tae.is_none() {
+                        return Err(field(
+                            file,
+                            at("argv"),
+                            "`{tae}` in an arm without `tae` (the file it gates on)",
                         ));
                     }
                     if WORKLOAD_KEYS.contains(&p) {
@@ -622,7 +710,11 @@ impl CellFile {
         }
         let arm = |n: &str| names.contains(n);
         for (i, c) in self.compares.iter().enumerate() {
-            for n in [&c.baseline, &c.candidate] {
+            let off = c.gate.as_ref().and_then(|g| g.off.as_ref());
+            for n in [Some(&c.baseline), Some(&c.candidate), off]
+                .into_iter()
+                .flatten()
+            {
                 if !arm(n) {
                     return Err(field(
                         file,
@@ -665,6 +757,7 @@ impl CellFile {
                 "scratch" => p.scratch.display().to_string(),
                 "runs" => p.runs.display().to_string(),
                 "root" => p.root.display().to_string(),
+                "tae" => p.tae.display().to_string(),
                 "arm" => arm.to_owned(),
                 "prompt_set" => match &self.workload.prompt_set {
                     Some(ps) => p.root.join(ps).display().to_string(),
@@ -683,15 +776,23 @@ impl CellFile {
     }
 
     /// An arm's full command line, as `runpod-matrix.sh` passes it to
-    /// `run_cell`: `[env K=V …] <bin> <args…>`.
+    /// `run_cell`: `[env K=V …] <bin> <args…>`; `bin` is the image's
+    /// fv-gpucheck, a `baseline` arm's is `p.baseline`.
     pub fn command(&self, arm: &Arm, bin: &Path, p: &Paths) -> Result<Vec<String>, String> {
         let mut cmd = Vec::new();
-        if !arm.env.is_empty() {
+        if let Some(env) = &arm.env {
             cmd.push("env".to_owned());
-            for e in &arm.env {
+            for e in env {
                 cmd.push(self.render(e, &arm.name, p)?);
             }
         }
+        let bin = match arm.bin {
+            ArmBin::Gpucheck => bin,
+            ArmBin::Baseline => p.baseline.as_deref().ok_or_else(|| {
+                "a `bin = \"baseline\"` arm needs the baseline commit (FV_BASELINE_SHA, --baseline-sha)"
+                    .to_owned()
+            })?,
+        };
         cmd.push(bin.display().to_string());
         for a in self.spliced(arm)? {
             cmd.push(self.render(&a, &arm.name, p)?);
@@ -705,12 +806,17 @@ impl CellFile {
 /// One step of a run, rendered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
-    /// `gated_cell <name> <gate> <command…>`.
+    /// `gated_cell <name> <gate> <command…>`, or with `tae`
+    /// `tae_gated_cell <name> <tae file> <gate> <command…>`.
     Arm {
         name: String,
         gate: String,
         trees: Vec<String>,
         command: Vec<String>,
+        /// The tiny-autoencoder file the arm needs (`{tae}/<Arm::tae>`).
+        tae: Option<PathBuf>,
+        /// The arm runs the baseline binary (fetched before the first arm).
+        baseline: bool,
     },
     /// `compare_cells <baseline> <candidate> <args…>`.
     Compare {
@@ -854,8 +960,18 @@ impl Lab {
         Ok((tier, vec![cell]))
     }
 
+    /// Whether any arm of `cells` runs the baseline binary (the run then
+    /// needs `FV_BASELINE_SHA` and fetches it first).
+    pub fn needs_baseline(cells: &[&CellFile]) -> bool {
+        cells
+            .iter()
+            .flat_map(|c| &c.arms)
+            .any(|a| a.bin == ArmBin::Baseline)
+    }
+
     /// The steps of `cells`, rendered with `bin` and `paths`: per cell its
-    /// arms, then its compares, then its gates.
+    /// arms, then its compares (each followed by its paired gate), then its
+    /// gates.
     pub fn steps(cells: &[&CellFile], bin: &Path, paths: &Paths) -> Result<Vec<Step>, LabError> {
         let mut out = Vec::new();
         for c in cells {
@@ -869,6 +985,8 @@ impl Lab {
                     gate: a.gate.clone(),
                     trees: a.trees.clone(),
                     command,
+                    tae: a.tae.as_ref().map(|t| paths.tae.join(t)),
+                    baseline: a.bin == ArmBin::Baseline,
                 });
             }
             for cmp in &c.compares {
@@ -877,6 +995,14 @@ impl Lab {
                     candidate: cmp.candidate.clone(),
                     args: cmp.args.clone(),
                 });
+                if let Some(g) = &cmp.gate {
+                    out.push(Step::Gate {
+                        baseline: cmp.baseline.clone(),
+                        candidate: cmp.candidate.clone(),
+                        kind: g.kind,
+                        off: g.off.clone(),
+                    });
+                }
             }
             for g in &c.gates {
                 out.push(Step::Gate {
@@ -932,6 +1058,8 @@ candidate = "a2"
             scratch: "/fvscratch".into(),
             runs: "/fvscratch/runs/f/t".into(),
             root: "/opt/fastvideo-rs".into(),
+            tae: "/fvscratch/tae".into(),
+            baseline: None,
         }
     }
 
@@ -1045,6 +1173,136 @@ cells = ["c1"]
                 .to_string();
             assert!(e.contains(want), "{e} lacks {want}");
         }
+    }
+
+    const PAIRS: &str = r#"
+schema = 1
+name = "p1"
+description = "baseline pairs"
+
+[workload]
+model = "h3"
+seed = 7
+
+[[arm]]
+name = "x-base"
+gate = "h3-base"
+trees = ["h3-base"]
+bin = "baseline"
+env = []
+argv = ["h3", "gen", "--seed", "{seed}"]
+
+[[arm]]
+name = "x-pr"
+gate = "h3-base"
+trees = ["h3-base"]
+env = []
+argv = ["h3", "gen", "--seed", "{seed}"]
+
+[[arm]]
+name = "x-tae"
+gate = "h3-base"
+trees = ["h3-base"]
+tae = "taeh3.safetensors"
+argv = ["h3", "gen", "--taeh3-weights", "{tae}/taeh3.safetensors"]
+
+[[compare]]
+baseline = "x-base"
+candidate = "x-pr"
+args = ["--off-identity"]
+gate = { kind = "exact", off = "x-pr" }
+
+[[compare]]
+baseline = "x-pr"
+candidate = "x-tae"
+
+[[gate]]
+baseline = "x-pr"
+candidate = "x-tae"
+"#;
+
+    #[test]
+    fn baseline_arms_bare_env_tae_and_paired_gates() {
+        let c = CellFile::parse(PAIRS, "p1.toml").unwrap();
+        let mut p = paths();
+        // Without the baseline commit a baseline arm does not render.
+        let e = c.command(&c.arms[0], Path::new("/bin/fv"), &p).unwrap_err();
+        assert!(e.contains("FV_BASELINE_SHA"), "{e}");
+        p.baseline = Some("/fvscratch/baseline-7654321/fv-gpucheck".into());
+        assert_eq!(
+            c.command(&c.arms[0], Path::new("/bin/fv"), &p).unwrap(),
+            [
+                "env",
+                "/fvscratch/baseline-7654321/fv-gpucheck",
+                "h3",
+                "gen",
+                "--seed",
+                "7"
+            ]
+        );
+        assert_eq!(
+            c.command(&c.arms[1], Path::new("/bin/fv"), &p).unwrap()[..2],
+            ["env", "/bin/fv"]
+        );
+        assert_eq!(
+            c.command(&c.arms[2], Path::new("/bin/fv"), &p).unwrap()[4],
+            "/fvscratch/tae/taeh3.safetensors"
+        );
+        assert!(Lab::needs_baseline(&[&c]));
+        let steps = Lab::steps(&[&c], Path::new("/bin/fv"), &p).unwrap();
+        let shape: Vec<String> = steps
+            .iter()
+            .map(|s| match s {
+                Step::Arm {
+                    name,
+                    tae,
+                    baseline,
+                    ..
+                } => format!("arm {name} {baseline} {tae:?}"),
+                Step::Compare {
+                    baseline,
+                    candidate,
+                    ..
+                } => format!("compare {baseline}--{candidate}"),
+                Step::Gate {
+                    baseline,
+                    candidate,
+                    kind,
+                    off,
+                } => format!("gate {baseline}--{candidate} {} {off:?}", kind.as_str()),
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                "arm x-base true None",
+                "arm x-pr false None",
+                "arm x-tae false Some(\"/fvscratch/tae/taeh3.safetensors\")",
+                "compare x-base--x-pr",
+                "gate x-base--x-pr exact Some(\"x-pr\")",
+                "compare x-pr--x-tae",
+                "gate x-pr--x-tae lossy None",
+            ]
+        );
+        let bad = |from: &str, to: &str, want: &str| {
+            let e = CellFile::parse(&PAIRS.replacen(from, to, 1), "p1.toml")
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains(want), "{e} lacks {want}");
+        };
+        bad(
+            "tae = \"taeh3.safetensors\"",
+            "tae = \"taeh3x.safetensors\"",
+            "does not read `{tae}/taeh3x.safetensors`",
+        );
+        bad("tae = \"taeh3.safetensors\"\n", "", "without `tae`");
+        bad(
+            "tae = \"taeh3.safetensors\"",
+            "tae = \"a/b\"",
+            "not a file name",
+        );
+        bad("off = \"x-pr\"", "off = \"zz\"", "not an arm");
+        bad("bin = \"baseline\"", "bin = \"other\"", "TOML");
     }
 
     #[test]

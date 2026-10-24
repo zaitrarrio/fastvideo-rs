@@ -274,3 +274,148 @@ fn a_missing_binary_or_library_is_fatal() {
         assert!(e.contains("libcudnn.so not linked"), "{e}");
     }
 }
+
+const PAIRS: &str = r#"
+schema = 1
+name = "p"
+description = "baseline and tae arms"
+
+[workload]
+model = "h3"
+
+[[arm]]
+name = "x-base"
+gate = "ok"
+trees = ["w"]
+bin = "baseline"
+env = []
+argv = ["gen", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "x-pr"
+gate = "ok"
+trees = ["w"]
+env = []
+argv = ["gen", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "x-tae"
+gate = "ok"
+trees = ["w"]
+tae = "t1.safetensors"
+argv = ["gen", "--tae", "{tae}/t1.safetensors"]
+
+[[arm]]
+name = "y-tae"
+gate = "ok"
+trees = ["w"]
+tae = "t2.safetensors"
+argv = ["gen", "--tae", "{tae}/t2.safetensors"]
+
+[[compare]]
+baseline = "x-base"
+candidate = "x-pr"
+args = ["--off-identity"]
+gate = { kind = "exact" }
+"#;
+
+/// fetch-baseline.sh puts a binary that says so into <dest>; fetch-tae.sh
+/// writes only t1 (t2 stays missing) and logs each call.
+fn fetchers(f: &Fake, baseline_ok: bool) {
+    let root = f.dir.join("root/scripts/gpu");
+    let body = if baseline_ok {
+        format!(
+            "mkdir -p \"$2\" && cp {} \"$2/fv-gpucheck\" && echo \"base-$1\" > \"$2/fv-gpucheck.build-id\" && echo \"baseline ok: $1 into $2\"\n",
+            f.dir.join("bin/fv-gpucheck").display()
+        )
+    } else {
+        "echo \"fetch-baseline: no amd64 manifest for sha-$1\" >&2\nexit 1\n".to_owned()
+    };
+    script(&root.join("fetch-baseline.sh"), &body);
+    script(
+        &root.join("fetch-tae.sh"),
+        "echo \"fetch-tae into $1\"\nmkdir -p \"$1\" && : > \"$1/t1.safetensors\"\n",
+    );
+}
+
+#[test]
+fn baseline_arms_and_tae_arms() {
+    let f = fake("pairs");
+    fetchers(&f, true);
+    let cell = CellFile::parse(PAIRS, "p.toml").unwrap();
+    let mut cfg = config(&f);
+    cfg.baseline_sha = Some("7654321".into());
+    let steps = Lab::steps(&[&cell], &cfg.bin, &cfg.paths()).unwrap();
+    Runner::new(cfg).run(&steps).unwrap();
+    let runs = f.dir.join("scratch/runs/fam/t1");
+    let base = f.dir.join("scratch/baseline-7654321/fv-gpucheck");
+    assert!(base.is_file(), "fetched into <scratch>/baseline-<sha>");
+    assert!(read(&runs.join("baseline-fetch.log")).contains("baseline ok: 7654321"));
+    // Both arms of the pair ran (the base one from the fetched copy), the
+    // paired gate right after the compare.
+    for arm in ["x-base", "x-pr", "x-tae"] {
+        assert!(
+            read(&runs.join(arm).join("summary.json")).contains("\"exit\":0,"),
+            "{arm}"
+        );
+    }
+    assert!(read(&runs.join("x-tae/stdout.log")).contains("/scratch/tae/t1.safetensors"));
+    assert_eq!(
+        read(&runs.join("y-tae/summary.json")),
+        "{\"cell\":\"y-tae\",\"family\":\"fam\",\"exit\":null,\"skipped\":\"tae weights missing\"}\n"
+    );
+    // fetch-tae.sh ran once, for the first missing file only.
+    assert_eq!(
+        read(&runs.join("tae-fetch.log"))
+            .matches("fetch-tae into")
+            .count(),
+        1
+    );
+    assert!(read(&runs.join("gate/gate-x-base--x-pr.json")).contains("--kind exact"));
+    let log = read(&runs.join("live.log"));
+    for want in [
+        "[fam] baseline baseline ok: 7654321 into ",
+        "[fam] baseline build-id base-7654321, image build-id unknown",
+        "[fam] SKIP y-tae: ",
+        "t2.safetensors missing (see tae-fetch.log)",
+        "[fam] gate x-base--x-pr exit=0",
+    ] {
+        assert!(log.contains(want), "live.log lacks {want:?}:\n{log}");
+    }
+    let compare = log.find("[fam] compare x-base--x-pr").unwrap();
+    let gate = log.find("[fam] gate x-base--x-pr").unwrap();
+    assert!(compare < gate);
+}
+
+#[test]
+fn an_unavailable_baseline_is_fatal_before_any_arm() {
+    let f = fake("nobase");
+    fetchers(&f, false);
+    let cell = CellFile::parse(PAIRS, "p.toml").unwrap();
+    let mut cfg = config(&f);
+    cfg.baseline_sha = Some("7654321".into());
+    let steps = Lab::steps(&[&cell], &cfg.bin, &cfg.paths()).unwrap();
+    let e = Runner::new(cfg).run(&steps).unwrap_err().to_string();
+    assert!(e.contains("baseline binary sha-7654321 unavailable"), "{e}");
+    let runs = f.dir.join("scratch/runs/fam/t1");
+    assert!(!runs.join("x-base").exists() && !runs.join("done.json").exists());
+    let log = read(&runs.join("live.log"));
+    assert!(log.contains("FATAL: baseline binary sha-7654321 unavailable (baseline-fetch.log)"));
+    assert!(log.contains("no amd64 manifest for sha-7654321"), "{log}");
+}
+
+#[test]
+fn a_baseline_that_is_this_build_is_fatal() {
+    let f = fake("selfbase");
+    fetchers(&f, true);
+    // The image's build-id equals the one the fetched baseline carries.
+    std::fs::write(f.dir.join("bin/fv-gpucheck.build-id"), "base-7654321\n").unwrap();
+    let cell = CellFile::parse(PAIRS, "p.toml").unwrap();
+    let mut cfg = config(&f);
+    cfg.baseline_sha = Some("7654321".into());
+    let steps = Lab::steps(&[&cell], &cfg.bin, &cfg.paths()).unwrap();
+    let e = Runner::new(cfg).run(&steps).unwrap_err().to_string();
+    assert!(e.contains("is this build (base-7654321)"), "{e}");
+    let runs = f.dir.join("scratch/runs/fam/t1");
+    assert!(!runs.join("x-base").exists());
+}

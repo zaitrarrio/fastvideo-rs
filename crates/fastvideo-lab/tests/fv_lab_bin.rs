@@ -19,7 +19,11 @@ fn fv_lab() -> Command {
         .env_remove("FV_SCRATCH")
         .env_remove("FV_RUN_TAG")
         .env_remove("FV_GPUCHECK")
-        .env_remove("FV_GEN_TIMEOUT_S");
+        .env_remove("FV_GEN_TIMEOUT_S")
+        .env_remove("FV_BASELINE_SHA")
+        .env_remove("FV_AUX_DIR")
+        // The goldens' `$TAE` (the volume's complete auxiliary/tae copy).
+        .env("FV_TAE_DIR", "/workspace/weights/auxiliary/tae");
     c
 }
 
@@ -57,6 +61,92 @@ fn dry_run_prints_the_scripts_lines() {
 }
 
 #[test]
+fn a_baseline_tier_needs_the_baseline_commit() {
+    let args = [
+        "run",
+        "b6",
+        "--dry-run",
+        "--work",
+        "/workspace",
+        "--scratch",
+        "/fvscratch",
+        "--tag",
+        "1234567-10241200",
+    ];
+    let no = fv_lab().args(args).output().unwrap();
+    assert!(!no.status.success());
+    assert!(String::from_utf8_lossy(&no.stderr).contains("--baseline-sha"));
+    let out = stdout(fv_lab().args(args).args(["--baseline-sha", "7654321"]));
+    // `{root}` is the root fv-lab found (the image's /opt/fastvideo-rs on a
+    // pod; this checkout here), as the goldens script writes it.
+    let root = std::fs::canonicalize(repo_root()).expect("repo root");
+    let out = out.replace(&root.display().to_string(), "/opt/fastvideo-rs");
+    let stripped: Vec<&str> = out.lines().map(|l| l.get(11..).unwrap_or("")).collect();
+    let fixture = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/b6-dry-run.txt"),
+    )
+    .unwrap();
+    assert_eq!(stripped, fixture.lines().collect::<Vec<_>>());
+    // The pod: refused without it, FV_BASELINE_SHA in the run's environment with it.
+    let up = [
+        "pod",
+        "up",
+        "--sha",
+        "1234567",
+        "--family",
+        "b6",
+        "--tag",
+        "1234567-10241200",
+    ];
+    assert!(!fv_lab().args(up).output().unwrap().status.success());
+    let plan = stdout(fv_lab().args(up).args(["--baseline-sha", "7654321"]));
+    let v: serde_json::Value = serde_json::from_str(&plan).expect("json plan");
+    let cmd = v["requests"][0]["body"]["dockerStartCmd"][2]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        cmd.contains("env FV_BASELINE_SHA=7654321 FV_WORK=/workspace"),
+        "{cmd}"
+    );
+    assert!(cmd.contains("fv-lab run b6 >"), "{cmd}");
+    // Refused: the run's own commit as its baseline, a bad or empty
+    // FV_BASELINE_SHA in --extra-env, and the commit given twice.
+    for (extra, want) in [
+        (vec!["--baseline-sha", "1234567"], "own commit"),
+        (vec!["--extra-env", "FV_BASELINE_SHA=1234567"], "own commit"),
+        (
+            vec!["--extra-env", "FV_BASELINE_SHA="],
+            "FV_BASELINE_SHA ``",
+        ),
+        (
+            vec!["--extra-env", "FV_BASELINE_SHA=main"],
+            "7 lower-case hex",
+        ),
+        (vec!["--baseline-sha", "xyz"], "--baseline-sha `xyz`"),
+        (
+            vec![
+                "--baseline-sha",
+                "7654321",
+                "--extra-env",
+                "FV_BASELINE_SHA=7654321",
+            ],
+            "twice",
+        ),
+    ] {
+        let o = fv_lab().args(up).args(&extra).output().unwrap();
+        assert!(!o.status.success(), "{extra:?}");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(err.contains(want), "{extra:?}: {err}");
+    }
+    let o = fv_lab()
+        .args(args)
+        .args(["--baseline-sha", "main"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&o.stderr).contains("--baseline-sha / FV_BASELINE_SHA `main`"));
+}
+
+#[test]
 fn dry_run_of_one_cell_and_a_subset() {
     let out = stdout(fv_lab().args([
         "run",
@@ -82,6 +172,7 @@ fn dry_run_of_one_cell_and_a_subset() {
 fn check_and_schema() {
     let out = stdout(fv_lab().arg("check"));
     assert!(out.contains("rtx6000: 2 cell(s), 7 arm(s)"), "{out}");
+    assert!(out.contains("b6: 8 cell(s), 16 arm(s)"), "{out}");
     let s = stdout(fv_lab().args(["schema", "cell"]));
     let committed = std::fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("schemas/cell.v1.json"),

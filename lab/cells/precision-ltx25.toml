@@ -1,0 +1,80 @@
+# The precision family's LTX-2.5 cell (runpod-matrix.sh `precision`, its
+# default mode; the FV_PRECISION_ARM=ltx-nvfp4 mode stays in the script): the
+# precision switches on the current build against the f32-activation baseline,
+# same prompt, seed, warm. `gate` on a compare runs that pair's gate right
+# after it, as the script's loop does. Schema:
+# crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md (D1b).
+schema = 1
+name = "precision-ltx25"
+description = "LTX-2.5 Sol two-stage at 4k5s: f32 activations, bf16 activations, FP8, bf16 activations + FP8"
+
+[workload]
+model = "ltx2"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+note = "runpod-matrix.sh's default PROMPT and SEED; the reference's 4k5s workload (--workload)"
+
+[[arm]]
+name = "ltx25-4k5s-sol-f32act"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = [
+  "FASTVIDEO_BF16_ACT=0",
+  "FASTVIDEO_H3_QUANT=off",
+]
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--workload", "4k5s", "--prompt", "{prompt}", "--seed", "{seed}", "--two-stage", "--text",
+  "streamed", "--warm", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "ltx25-4k5s-sol-bf16act"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = [
+  "FASTVIDEO_BF16_ACT=1",
+  "FASTVIDEO_H3_QUANT=off",
+]
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--workload", "4k5s", "--prompt", "{prompt}", "--seed", "{seed}", "--two-stage", "--text",
+  "streamed", "--warm", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "ltx25-4k5s-sol-fp8"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = [
+  "FASTVIDEO_BF16_ACT=0",
+  "FASTVIDEO_FP8=1",
+  "FASTVIDEO_H3_QUANT=off",
+]
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--workload", "4k5s", "--prompt", "{prompt}", "--seed", "{seed}", "--two-stage", "--text",
+  "streamed", "--warm", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "ltx25-4k5s-sol-bf16act-fp8"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = [
+  "FASTVIDEO_BF16_ACT=1",
+  "FASTVIDEO_FP8=1",
+  "FASTVIDEO_H3_QUANT=off",
+]
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--workload", "4k5s", "--prompt", "{prompt}", "--seed", "{seed}", "--two-stage", "--text",
+  "streamed", "--warm", "--clip", "{runs}/{arm}/frames"]
+
+[[compare]]
+baseline = "ltx25-4k5s-sol-f32act"
+candidate = "ltx25-4k5s-sol-bf16act"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "ltx25-4k5s-sol-f32act"
+candidate = "ltx25-4k5s-sol-fp8"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "ltx25-4k5s-sol-f32act"
+candidate = "ltx25-4k5s-sol-bf16act-fp8"
+gate = { kind = "lossy" }

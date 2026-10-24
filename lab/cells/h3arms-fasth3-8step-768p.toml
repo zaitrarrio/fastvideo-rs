@@ -1,0 +1,69 @@
+# The h3arms family's fasth3-8step-768p cell (runpod-matrix.sh `h3arms`):
+# FastH3 technique arms on the technique layer (docs/techniques.md), each
+# compared with and gated (lossy) against the plain recipe cell of the same
+# run; at 480p also each arm decoded by TAEH3. `gate` on a compare runs that
+# pair's gate right after it, as the script's loop does. The fasth3-8step arms
+# are skipped on the EU volume (h3-8step is R2-only). Schema:
+# crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md (D1b).
+schema = 1
+name = "h3arms-fasth3-8step-768p"
+description = "FastH3 8-step at its 768p canvas: plain, Sol-Attn, TeaCache, both"
+
+[workload]
+model = "h3"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+note = "runpod-matrix.sh's default PROMPT and SEED; streamed text encoder (the prompts are encoded once, into the shared cache); the recipe's canvas"
+
+[lists]
+h3_common = ["--prompt", "{prompt}", "--seconds", "{seconds}", "--seed", "{seed}", "--text-encoder", "streamed",
+  "--text-cache", "{scratch}/h3-text-cache", "--text-weights", "{weights}/h3-base", "--warm"]
+
+[[arm]]
+name = "fasth3-8step-768p"
+gate = "fasth3-8step"
+trees = ["h3-8step", "h3-base"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-8step", "--h3-recipe", "8step",
+  "--adaln-cache", "{runs}/fasth3-8step-768p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-8step-768p-sol"
+gate = "fasth3-8step"
+trees = ["h3-8step", "h3-base"]
+note = "profiles/h3/fasth3_8step_sol.toml"
+argv = ["--techniques", "h3/fasth3_8step_sol", "--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-8step",
+  "--adaln-cache", "{runs}/fasth3-8step-768p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-8step-768p-tea"
+gate = "fasth3-8step"
+trees = ["h3-8step", "h3-base"]
+note = "profiles/h3/fasth3_8step_teacache.toml"
+argv = ["--techniques", "h3/fasth3_8step_teacache", "--mode", "fast", "h3", "gen", "--weights",
+  "{weights}/h3-8step", "--adaln-cache", "{runs}/fasth3-8step-768p-adaln.cache", "--clip-dir",
+  "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-8step-768p-soltea"
+gate = "fasth3-8step"
+trees = ["h3-8step", "h3-base"]
+note = "profiles/h3/fasth3_8step_sol_teacache.toml"
+argv = ["--techniques", "h3/fasth3_8step_sol_teacache", "--mode", "fast", "h3", "gen", "--weights",
+  "{weights}/h3-8step", "--adaln-cache", "{runs}/fasth3-8step-768p-adaln.cache", "--clip-dir",
+  "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[compare]]
+baseline = "fasth3-8step-768p"
+candidate = "fasth3-8step-768p-sol"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "fasth3-8step-768p"
+candidate = "fasth3-8step-768p-tea"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "fasth3-8step-768p"
+candidate = "fasth3-8step-768p-soltea"
+gate = { kind = "lossy" }

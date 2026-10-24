@@ -157,8 +157,14 @@ fn run_plan_schemas_are_strict_and_name_their_fields() {
                     "steps",
                 ],
             ),
-            ("Arm", vec!["name", "gate", "trees", "steps", "env", "argv"]),
-            ("Compare", vec!["baseline", "candidate", "args"]),
+            (
+                "Arm",
+                vec![
+                    "name", "gate", "trees", "steps", "bin", "tae", "env", "argv",
+                ],
+            ),
+            ("Compare", vec!["baseline", "candidate", "args", "gate"]),
+            ("PairedGate", vec!["kind", "off"]),
             ("GatePair", vec!["baseline", "candidate", "kind", "off"]),
         ],
     );

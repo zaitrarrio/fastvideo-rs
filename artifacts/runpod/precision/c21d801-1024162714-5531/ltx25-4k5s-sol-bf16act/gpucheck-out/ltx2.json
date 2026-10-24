@@ -1,0 +1,403 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "warmup",
+      "ok": true,
+      "values": {
+        "seconds": 154.509117996
+      }
+    },
+    {
+      "limits": {
+        "has_audio": true,
+        "r_frame_rate": "24/1",
+        "video_frames": 121
+      },
+      "name": "gen.mp4_frames_and_rate",
+      "ok": true,
+      "values": {
+        "audio": {
+          "channels": 2,
+          "codec_name": "aac",
+          "duration": "5.010000",
+          "sample_rate": "48000"
+        },
+        "avg_frame_rate": "24/1",
+        "ffprobe": true,
+        "has_audio": true,
+        "height": 2176,
+        "path": "/fvscratch/runs/precision/c21d801-1024162714-5531/ltx25-4k5s-sol-bf16act/frames/output.mp4",
+        "r_frame_rate": "24/1",
+        "video_duration_s": 5.041667,
+        "video_frames": 121,
+        "width": 3840
+      }
+    },
+    {
+      "limits": {
+        "non_finite": 0,
+        "steps": 11
+      },
+      "name": "gen.latents_finite",
+      "ok": true,
+      "values": {
+        "steps": 11
+      }
+    },
+    {
+      "limits": {
+        "frames": 121
+      },
+      "name": "gen.frames",
+      "ok": true,
+      "values": {
+        "frames": 121
+      }
+    },
+    {
+      "limits": {
+        "channels": 2,
+        "sample_rate": 48000,
+        "samples_per_channel": 240480
+      },
+      "name": "gen.wav",
+      "ok": true,
+      "values": {
+        "bytes": 961964
+      }
+    },
+    {
+      "limits": {
+        "bytes_min": 1
+      },
+      "name": "gen.mp4",
+      "ok": true,
+      "values": {
+        "bytes": 5498548,
+        "path": "/fvscratch/runs/precision/c21d801-1024162714-5531/ltx25-4k5s-sol-bf16act/frames/output.mp4"
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/fvscratch/runs/precision/c21d801-1024162714-5531/ltx25-4k5s-sol-bf16act/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "diff_vae": false,
+    "guided": null,
+    "hq": null,
+    "memory_plan": {
+      "peak_gib": 59.58571928739548,
+      "phases": [
+        {
+          "gib": 44.26482981443405,
+          "phase": "text"
+        },
+        {
+          "gib": 46.25323790311813,
+          "phase": "stage1"
+        },
+        {
+          "gib": 45.73867291212082,
+          "phase": "upsample"
+        },
+        {
+          "gib": 59.58571928739548,
+          "phase": "stage2"
+        },
+        {
+          "gib": 16.75054281949997,
+          "phase": "decode"
+        }
+      ],
+      "streamed": {
+        "peak_gib": 24.95741605758667,
+        "phases": [
+          {
+            "gib": 9.636526584625244,
+            "phase": "text"
+          },
+          {
+            "gib": 11.624934673309326,
+            "phase": "stage1"
+          },
+          {
+            "gib": 12.627193629741669,
+            "phase": "upsample"
+          },
+          {
+            "gib": 24.95741605758667,
+            "phase": "stage2"
+          },
+          {
+            "gib": 16.75054281949997,
+            "phase": "decode"
+          }
+        ]
+      }
+    },
+    "mode": "fast",
+    "model_version": "2.5",
+    "mp4_probe": {
+      "audio": {
+        "channels": 2,
+        "codec_name": "aac",
+        "duration": "5.010000",
+        "sample_rate": "48000"
+      },
+      "avg_frame_rate": "24/1",
+      "ffprobe": true,
+      "has_audio": true,
+      "height": 2176,
+      "path": "/fvscratch/runs/precision/c21d801-1024162714-5531/ltx25-4k5s-sol-bf16act/frames/output.mp4",
+      "r_frame_rate": "24/1",
+      "video_duration_s": 5.041667,
+      "video_frames": 121,
+      "width": 3840
+    },
+    "outputs": {
+      "first_frame": "/fvscratch/runs/precision/c21d801-1024162714-5531/ltx25-4k5s-sol-bf16act/frames/frame-000.png",
+      "frames": 121,
+      "mp4": "/fvscratch/runs/precision/c21d801-1024162714-5531/ltx25-4k5s-sol-bf16act/frames/output.mp4",
+      "wav": "/fvscratch/runs/precision/c21d801-1024162714-5531/ltx25-4k5s-sol-bf16act/frames/audio.wav"
+    },
+    "peak_vram_mib": 55660,
+    "phase_memory": {
+      "dit_residency": "resident",
+      "load_used_gib": 37.4951391145587,
+      "offload": "none",
+      "phases": [
+        {
+          "end_used_gib": 40.354133777320385,
+          "peak_reserved_gib": 40.5,
+          "peak_used_gib": 40.354133777320385,
+          "phase": "text"
+        },
+        {
+          "end_used_gib": 40.36975782364607,
+          "peak_reserved_gib": 45.65625,
+          "peak_used_gib": 44.359088115394115,
+          "phase": "stage1"
+        },
+        {
+          "end_used_gib": 40.41644971817732,
+          "peak_reserved_gib": 47.6875,
+          "peak_used_gib": 46.81523483619094,
+          "phase": "upsample"
+        },
+        {
+          "end_used_gib": 40.41644971817732,
+          "peak_reserved_gib": 53.5,
+          "peak_used_gib": 52.381785564124584,
+          "phase": "stage2"
+        },
+        {
+          "end_used_gib": 40.330696277320385,
+          "peak_reserved_gib": 53.65625,
+          "peak_used_gib": 52.10615017917007,
+          "phase": "decode"
+        }
+      ]
+    },
+    "request": {
+      "cond_images": [],
+      "diff_vae": false,
+      "frame_rate": 24.0,
+      "height": 2176,
+      "image": null,
+      "num_frames": 121,
+      "pisa_stage2": false,
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "prompt_set": null,
+      "seed": 1024,
+      "sol_stage2": true,
+      "two_stage": true,
+      "width": 3840
+    },
+    "sink_check": false,
+    "skip_audio_decode": false,
+    "steps": [
+      {
+        "audio_mean": -0.0031468567867127674,
+        "audio_std": 0.9982526815721121,
+        "non_finite": 0,
+        "seconds": 5.015044276,
+        "step": 0,
+        "video_mean": 0.0010740959854158563,
+        "video_std": 0.9942268988779608
+      },
+      {
+        "audio_mean": -0.0014334441798310431,
+        "audio_std": 0.9928987347430837,
+        "non_finite": 0,
+        "seconds": 5.02496026,
+        "step": 1,
+        "video_mean": 0.0005625538164925577,
+        "video_std": 0.9888781029080722
+      },
+      {
+        "audio_mean": 0.0039794661865998355,
+        "audio_std": 0.9837629453510087,
+        "non_finite": 0,
+        "seconds": 5.022119686,
+        "step": 2,
+        "video_mean": 0.00021237636584133082,
+        "video_std": 0.9829404124140374
+      },
+      {
+        "audio_mean": 0.005059530308085774,
+        "audio_std": 0.975660794223561,
+        "non_finite": 0,
+        "seconds": 5.029199886,
+        "step": 3,
+        "video_mean": -0.00011407224120569695,
+        "video_std": 0.9769719888767958
+      },
+      {
+        "audio_mean": -0.015230206264522933,
+        "audio_std": 0.9057660217074317,
+        "non_finite": 0,
+        "seconds": 5.031235269,
+        "step": 4,
+        "video_mean": -0.001873193929010625,
+        "video_std": 0.9156630115731483
+      },
+      {
+        "audio_mean": -0.03365750234511252,
+        "audio_std": 0.8052587323491496,
+        "non_finite": 0,
+        "seconds": 5.032957331,
+        "step": 5,
+        "video_mean": -0.0070345710482975915,
+        "video_std": 0.763558171647234
+      },
+      {
+        "audio_mean": -0.06839362854167583,
+        "audio_std": 0.9715072680788215,
+        "non_finite": 0,
+        "seconds": 5.033457091,
+        "step": 6,
+        "video_mean": -0.013779343502215744,
+        "video_std": 0.6198453758851811
+      },
+      {
+        "audio_mean": -0.1201900045077006,
+        "audio_std": 1.4968291734430161,
+        "non_finite": 0,
+        "seconds": 5.03221257,
+        "step": 7,
+        "video_mean": -0.02318237702859858,
+        "video_std": 0.7600381645778035
+      },
+      {
+        "audio_mean": -0.035539135019043606,
+        "audio_std": 0.795528385205565,
+        "non_finite": 0,
+        "seconds": 19.929312182,
+        "step": 8,
+        "video_mean": -0.005745817596572485,
+        "video_std": 0.7642064882997831
+      },
+      {
+        "audio_mean": -0.08348973578817788,
+        "audio_std": 0.9548953486652447,
+        "non_finite": 0,
+        "seconds": 18.130669973,
+        "step": 9,
+        "video_mean": -0.011531114261008186,
+        "video_std": 0.6101430775523655
+      },
+      {
+        "audio_mean": -0.15101002889966209,
+        "audio_std": 1.450491080954454,
+        "non_finite": 0,
+        "seconds": 16.713286446,
+        "step": 10,
+        "video_mean": -0.020021629599610676,
+        "video_std": 0.6954225976441579
+      }
+    ],
+    "text": {
+      "cache": "hit",
+      "cache_dir": "/root/.cache/fastvideo/ltx2-text",
+      "key": "10660d1dd5aef52c5c0feaea43d01f9725b4e3eed91862076aef737a24aed947",
+      "mode": "cache",
+      "seconds": 0.142810339,
+      "text_weights": null,
+      "tokens": 48
+    },
+    "timings": {
+      "decode_audio_s": 0.14348273,
+      "decode_video_s": 13.163614563,
+      "denoise_s": 100.968085734,
+      "generate_s": 115.644909618,
+      "image_s": 0.0,
+      "load_s": 118.918072324,
+      "stage1_s": 40.312503077,
+      "stage2_s": 54.907148188,
+      "step_s": [
+        5.015044276,
+        5.02496026,
+        5.022119686,
+        5.029199886,
+        5.031235269,
+        5.032957331,
+        5.033457091,
+        5.03221257,
+        19.929312182,
+        18.130669973,
+        16.713286446
+      ],
+      "text_s": 0.142810339,
+      "upsample_s": 5.748434469,
+      "video_encode_s": 0.692522846,
+      "video_push_s": 0.313415985,
+      "video_rgb_s": 0.749125569940272,
+      "video_vae_s": 12.033274340629573,
+      "video_wait_s": 0.456297606,
+      "wall_s": 389.072614429,
+      "warm": true,
+      "write_s": 0.933188992,
+      "writer": {
+        "active_at_spawn": 0,
+        "buffer_budget_gib": 43.23219108581543,
+        "buffered_peak_gib": 2.824859619140625,
+        "ffmpeg_feed_s": 1.722257723,
+        "frames": 121,
+        "png_deferred": 121,
+        "png_gib": 0.742355571128428,
+        "png_inline": 0,
+        "png_mode": "deferred",
+        "png_s": 0.933120762,
+        "video_tail_s": 0.692519766
+      }
+    },
+    "tokens": {
+      "audio": 126,
+      "prompt": 48,
+      "video": 130560
+    },
+    "two_stage": true,
+    "video_vae": {
+      "decoder": "conv_vae"
+    }
+  },
+  "elapsed_s": 390.80066188,
+  "env": {
+    "FASTVIDEO_BF16_ACT": "1",
+    "FASTVIDEO_H3_QUANT": "off"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "ltx2",
+  "status": "pass"
+}

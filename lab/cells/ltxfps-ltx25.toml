@@ -1,0 +1,49 @@
+# The ltxfps family's LTX-2.5 cell (runpod-matrix.sh `ltxfps`, serve E4): the
+# frame count, mp4 rate and audio track checked with ffprobe (benchmark.json
+# "mp4_probe"); --sink-check runs serve E2's frame sink beside the PNG writer
+# and checks its frames byte for byte. Schema:
+# crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md (D1b).
+schema = 1
+name = "ltxfps-ltx25"
+description = "LTX-2.5 distilled two-stage at the 1920x1088 engine canvas, 121 frames, at 25 / 48 / 50 fps and 50 fps silent"
+
+[workload]
+model = "ltx2"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+frames = 121
+note = "runpod-matrix.sh's default PROMPT and SEED; the 1080p20s canvas (--workload) cut to 121 frames (FV_LTXFPS_FRAMES' default), one cold run each"
+
+[[arm]]
+name = "ltx25-1080p-25fps"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--workload", "1080p20s", "--num-frames", "{frames}", "--frame-rate", "25", "--prompt",
+  "{prompt}", "--seed", "{seed}", "--two-stage", "--text", "streamed", "--clip", "{runs}/{arm}/frames",
+  "--sink-check"]
+
+[[arm]]
+name = "ltx25-1080p-48fps"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--workload", "1080p20s", "--num-frames", "{frames}", "--frame-rate", "48", "--prompt",
+  "{prompt}", "--seed", "{seed}", "--two-stage", "--text", "streamed", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "ltx25-1080p-50fps"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--workload", "1080p20s", "--num-frames", "{frames}", "--frame-rate", "50", "--prompt",
+  "{prompt}", "--seed", "{seed}", "--two-stage", "--text", "streamed", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "ltx25-1080p-50fps-silent"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--workload", "1080p20s", "--num-frames", "{frames}", "--frame-rate", "50",
+  "--skip-audio-decode", "--sink-check", "--prompt", "{prompt}", "--seed", "{seed}", "--two-stage", "--text",
+  "streamed", "--clip", "{runs}/{arm}/frames"]

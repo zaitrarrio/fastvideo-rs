@@ -1,14 +1,16 @@
 # ADR-0019: `fv-lab`, the run plan in `lab/`, and the pod on fv-deploy's guards
 
 - Status: Accepted for D1a (`fv-lab run` and `fv-lab pod` for the `rtx6000` family, the `lab/tiers.toml` and
-  `lab/cells/*.toml` schemas, the dry-run and payload goldens); the GPU run that shows `fv-lab run rtx6000`
-  reproduces the family is the coordinator's; D1b (the other families), D1c (`report`), D1d (`gate` / `oracle`
-  moved) and the retirement of `runpod-matrix.sh`, `runpod-http.sh` and the port one-offs follow (§8)
+  `lab/cells/*.toml` schemas, the dry-run and payload goldens; GPU gate passed) and D1b (nine more families as tiers,
+  four additive cell-schema fields, a golden per tier, §9; their GPU runs are the coordinator's); D1c (`report`), D1d
+  (`gate` / `oracle` moved) and the retirement of `runpod-matrix.sh`, `runpod-http.sh` and the port one-offs follow (§8)
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
   `scripts/gpu/fv-lab-compare-runs.sh` (the GPU gate's comparison); fv-lab in the tools release's `gpucheck` set;
-  schemas `crates/fastvideo-lab/schemas/{tiers,cell}.v1.json`; data `lab/tiers.toml`, `lab/cells/rtx6000-*.toml`;
+  schemas `crates/fastvideo-lab/schemas/{tiers,cell}.v1.json`; data `lab/tiers.toml`, `lab/cells/*.toml` (D1a
+  `rtx6000-*`, D1b `techniques-*`, `b6-*`, `rtx5090-*`, `fastvideo-*`, `h3arms-*`, `trace-*`, `ltxfps-*`, `ltxvae-*`,
+  `precision-*`);
   goldens `crates/fastvideo-lab/fixtures/*` (written by `scripts/gpu/tests/fv-lab-goldens.sh`); one seam in
   `fastvideo-deploy` (`runpod::Pod::list`, §6)
 - Usage: `docs/dev/fv-lab.md`
@@ -250,15 +252,226 @@ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/rtx6000/$SHA-<MMDDHHMMS
 
 Pass: exit 0, every arm `same`, `fasth3-8step` skipped (`weights incomplete`) in both. Then:
 
-- **D1b**: the other families as tiers and cells (`rtx5090`, `fastvideo`, `techniques`, `b6`, `h3arms`, … one PR per
-  few families, each with its dry-run golden; TAE gating and prompt sets join the cell schema); `runpod-http.sh run`
-  then calls `fv-lab pod up --wait`; `runpod-matrix.sh`'s branches are deleted as they move; when the last moves, the
-  script is deleted, and `runpod.sh cmd_rtx6000` with it.
+- **D1b** (§9): the other families as tiers and cells (`techniques`, `b6`, `rtx5090`, `fastvideo`, `h3arms`, `trace`,
+  `ltxfps`, `ltxvae`, `precision` in the first D1b PR, each with its dry-run golden; TAE gating and the baseline
+  binary joined the cell schema, prompt sets wait for a family that needs them); a family's `runpod-matrix.sh`
+  branch is deleted once its GPU run through both runners matches (§9.5), and `runpod-http.sh run` then calls
+  `fv-lab pod up --wait` for it; when the last moves, the script is deleted, and `runpod.sh cmd_rtx6000` with it.
 - **D1c**: `fv-lab report {summary,table,tiers}` replacing the `*-summary.py`, `hd_report.py`, `sol_bench_table.py`,
   `timings.sh`; the `FV_FETCH_TREE` mirror.
 - **D1d**: `gate` / `oracle` moved into or aliased by `fv-lab` (`oracle.sh`, the `oracle` family).
 - **D1e**: the 24 port one-offs in `scripts/gpu/experiments/` (F1) become cells or are deleted; `runpod-http.sh`
   is deleted once nothing calls it (`upstream` mode moves with D1d).
+
+### 9. D1b: nine more families, four schema additions
+
+D1b moves the `runpod-matrix.sh` families whose branches are lists of arms, compares and gates, the byte-identity
+families with a baseline binary first. Each one becomes a tier in `lab/tiers.toml` and cell files in `lab/cells/`.
+A golden made from the script holds it equal (§9.3). No branch is deleted yet: the coordinator's GPU run of a family
+through both runners (§9.5) retires its branch.
+
+**Moved** (tier: cells / arms): `techniques` (4 / 13), `b6` (8 / 16), `rtx5090` (5 / 17), `fastvideo` (6 / 17),
+`h3arms` (3 / 13), `trace` (2 / 5), `ltxfps` (2 / 5), `ltxvae` (4 / 12), `precision` (2 / 8, the default mode only).
+With `rtx6000` that makes 10 tiers, 38 cell files and 113 arms. Every tier is the `rtx6000` tier's pod, because
+`runpod-http.sh` gives every `FV_FAMILY` the same pod: the PRO 6000, its six preflight cells, `FV_GEN_TIMEOUT_S`
+3600, the TAE fetch and a 4 h cap.
+
+#### 9.1 Inventory of `runpod-matrix.sh`
+
+Trees on the EU volume (`bz0ofkfx45`, volumes.sh `FV_EU_VOLUME_TREES`): `h3-base`, `FastH3-4-step-Preview-v1-LoRA`,
+`h3-ref2va`, `ltx25`, `ltx25-dev`, `ltx25-ic-lora-ingredients`, `upscaler`, `h3-to-ltx`, `auxiliary/{tae,lpips}`.
+"Steps between arms" means steps other than compares and gates that run between arms, or that read what an arm
+wrote. ADR-0019 open decision 3 covers compares and gates placed between arms.
+
+| family | arms (compares / gates) | trees; on the EU volume | steps between arms | schema | D1b | retire-when |
+|---|---|---|---|---|---|---|
+| `rtx6000` | 7 | H3, LoRA, upscaler, h3-to-ltx, ltx25 yes; `h3-8step` no (1 arm skipped) | none | as is | moved (D1a) | D1a's gate matched on 2 of 7 arms; the branch goes when `runpod-http.sh run`'s default calls `fv-lab pod up` (§8) |
+| `techniques` | 13 in 4 cells (9 / 0) | yes, but `h3-8step` (3 arms) | a compare pair after each `tech_h3` call: one cell per call | `bin = "baseline"`, `env = []` | moved | its GPU run matches (§9.5) |
+| `b6` | 16 in 8 cells (8 / 0) | yes (h3-base, LoRA, h3-ref2va, ltx25, ltx25-dev, ic-lora) | a compare after each pair: one cell per pair; per-arm stage-log lines in live.log (log only) | `bin`, `env = []` | moved | its GPU run matches |
+| `b4a` | 6 (3 / 0) | yes | after each arm: TeaCache reuse count and `cache-evidence.log`; after each pair: the evidence diff, `b4a-<cell>.verdict.json` | no: a verdict step that is neither a compare nor a gate | stays | a typed evidence/verdict step (D1d, with `gate`) |
+| `rtx5090` | 17 in 5 cells (14 / 0) | yes (h3-base, ltx25, TAE) | compares after each resolution and workload: one cell per loop iteration | `tae` | moved | its GPU run matches |
+| `fastvideo` | 17 in 6 cells (7 / 7) | yes, but `h3-8step` (4 arms) | per iteration: one cell each | `tae`, paired gate | moved | its GPU run matches |
+| `h3arms` | 13 in 3 cells (13 / 10) | `h3-8step` for 11 arms (skipped); 4-step VSA yes | a compare followed by its gate; per-arm reuse counts in live.log (log only) | paired gate, `tae` | moved | its GPU run matches |
+| `trace` | 5 in 2 cells | yes, but `h3-8step` (1 arm) | `/gpu_trace` lines copied into live.log after the arms (log only) | as is | moved | its GPU run matches |
+| `ltxfps` | 5 in 2 cells | yes, but `h3-8step` (1 arm) | PASS/FAIL lines copied into live.log (log only) | as is | moved | its GPU run matches |
+| `ltxvae` | 12 in 4 cells (2 / 0) | yes (ltx25) | a compare after the first two arms of each workload: two cells per workload; `FV_VAE_GEN=1` arms (off by default) | as is | moved (default arms) | GPU run matches and `FV_VAE_GEN` dropped or moved as a tier |
+| `precision` | 8 in 2 cells (8 / 6) | ltx25 yes; `h3-8step` (4 arms) | compare + gate pairs | paired gate | moved (default mode) | GPU run matches and the `FV_PRECISION_ARM=ltx-nvfp4` mode moved (it deletes frames after each compare) or dropped |
+| `fuse` | 10 (3 / 3) | yes, but `h3-8step` | an ungated `kernels` run_cell; one compare block across H3 and LTX arms | needs ungated arms | stays | a later slice |
+| `attn3` | 6 (3 / 0) | yes | one compare block across H3 and LTX arms (one cell, two pipelines) | almost (`model` is one pipeline) | stays | a later slice |
+| `ltx` | 3 | ltx25 yes; ltx23, ltx2 no | ungated `run_cell` | needs ungated arms | stays | a later slice |
+| `eval` | 5 (3 / 3) | yes, but `h3-8step` | a prompt set and LPIPS by default; an LPIPS self-test only when LPIPS loaded | no | stays | prompt sets join the schema |
+| `h3attn` | 4 processes, ~30 `--arm`s | partly | one process runs many arms (`{arm}` in its clip dir); FP8 arms dropped on a kernel FAIL | no | stays | D1e or retired |
+| `hd` | 8 | yes | ffmpeg Lanczos upscale between the arms and their compares; keyframe prune; post script | no | stays | D1c (`report`) or a cell type for derived clips |
+| `ltxoffload` | 3 to 6 | yes | 4K cells run only when the 512p frames hash equal (data-dependent); `env -u` | no | stays | a later slice |
+| `cold` | 10 | yes, but `h3-8step` | page-cache drop before each LTX arm, PNG deletion, `env -u` | no | stays | a later slice |
+| `serve-engine` | 6 | H3, LTX yes; Wan no | frames deleted after the run; `FV_ENGINE_CELLS`; `--tae-dir` without a gate | almost | stays | a later slice |
+| `writer` | 7 | ltx25 yes | sysinfo, a sampler process, `dd` throughput | no | stays | D1e or retired |
+| `determinism`, `det-short` | 9 to 19 | partly | prompt-set files written at run time, hashing, verdict files, frame deletion | no | stay | determinism checks move with D1c / D1d |
+| `oracle`, `sfwan` | many | partly | reference-dump fetches from upstream pods, compare-dumps; `sfwan` recurses into `oracle` and `wan` | no | stay | D1d |
+| `wan` | ~35 | no (Wan trees R2-only) | oracle fetches, ungated kernels, `rm` | no | stays | D1d / a Wan volume |
+| `b200` | 8 | partly | TAE and Spark file probes at run time; ungated | no | stays | retired with the US volume, or D1e |
+| `h3` | 3 | `h3-8step` no | Spark file probes; ungated | no | stays | retired (rtx6000 covers it) |
+| `headline` | the others' | partly | runs other families with `FV_CELLS` subsets | no: a tier of other tiers' arms | stays | after its sources move: a tier with an arm filter |
+| `mmaudio`, `speechtest` | 10+ | no | Python venvs, upstream clones, Whisper | no | stay | D1e |
+| `sfstream`, `sfquality` | 2 to 4 | no (sfwan R2-only) | TAEHV fetch, run lists from env | no | stay | D1e |
+| `precision-debug` | 7 to 10 | partly | compare-dumps only when dump dirs exist; dump deletion | no | stays | D1e or retired |
+| `identity` | from `FV_ID_CASES` | partly | cases from the environment, hashing, frame deletion | no | stays | D1e or retired |
+| `solbench`, `sol-lingbot`, `sol-cosmos3` | 3 to 9 | no | per-arm timeouts, exported settings, ungated routers, prompts read from files | no | stay | D1e |
+| `hunyuan`, `sana-video` | 1 to 2 | no | a `--help` probe that ends the family | no | stay | D1e or retired |
+
+`kernels` is not a family. It is a `runpod-http.sh` mode (`kernels`, `all`) that runs `fv-gpucheck kernels` before or
+instead of the family (ADR-0019 §7: not in fv-lab). Its in-family uses (`kernels-wan`, `kernels-fuse`,
+`attn-fp8-kernels`) are ungated `run_cell`s. They move once an arm may have no weight gate. That step is small, but
+every family that uses one also needs something more (above).
+
+#### 9.2 The schema additions (cell v1, additive, `deny_unknown_fields` kept)
+
+All four are optional fields. Every D1a cell parses unchanged. `schemas/cell.v1.json` is regenerated and its drift
+test (`tests/schema.rs`) also names the new keys.
+
+1. **`[[arm]] bin = "gpucheck" | "baseline"`** (`ArmBin`, default `gpucheck`). A `baseline` arm runs
+   `<scratch>/baseline-<sha>/fv-gpucheck`: the binary of `FV_BASELINE_SHA`'s runtime image, which
+   `scripts/gpu/fetch-baseline.sh` fetches into the same path as the script's `techniques` / `b6` / `b4a` preamble. The
+   runner fetches it after `matrix start` and the GPU checks, once, when any selected cell has a baseline arm. It logs
+   `baseline <the fetch's last line>`. A failed fetch is the script's FATAL (exit 2, before any arm). The commit
+   comes from `fv-lab run --baseline-sha` / `FV_BASELINE_SHA`. `fv-lab pod up --baseline-sha <7>` puts it in the pod's
+   run environment (`FV_EXTRA_ENV`), and refuses a tier with baseline arms without it.
+
+   The baseline fails closed (review of #176):
+   - `pod up` refuses a baseline equal to `--sha`. A byte-identity gate of a build against itself passes whatever
+     the build does.
+   - `pod up` refuses a `FV_BASELINE_SHA` in `--extra-env` that is not 7 hex digits, including an empty value.
+   - `pod up` refuses the commit given twice (`pod::baseline_for_pod`).
+   - The runner logs the baseline's `fv-gpucheck.build-id` beside the image's, and stops (FATAL) when they are the
+     same build. The script has no such check. The arm is the same file as its
+   `-pr` / `-env` twin but for `bin`, so `--off-identity` compares stay a byte-identity check of the two binaries.
+   Why: the script's identity families have a baseline binary, and a cell arm needs a way to name it.
+2. **`env = []`** (`env: Option<Vec<String>>`). If `env` is absent, the command line has no `env` prefix. If it is
+   present but empty, the command line starts with a bare `env`. The script's `env ${e[@]+"${e[@]}"} "$bin"` writes
+   that bare `env` (`techniques`, `b6`), and the dry-run equality is word for word. Why: without it the commands differ
+   in one word.
+3. **`[[arm]] tae = "<file>"` and the `{tae}` placeholder.** `{tae}` is the script's `$TAE`: `FV_TAE_DIR`; else the
+   volume's `auxiliary/tae` when its `.complete` marker exists; else `<scratch>/tae`, where the pod's start command
+   fetches the files. An arm with `tae` is `tae_gated_cell`: `fetch-tae.sh` runs once per run if the file is missing,
+   and if the file is still missing the arm is recorded as skipped (`tae weights missing`). Then the weight gate runs.
+   Validation: such an arm must read `{tae}/<file>`, and `{tae}` may not appear in an arm without `tae`. Every `tae`
+   file is one that `fetch-tae.sh` fetches, and every tier with TAE arms has `tae = true`
+   (`tests/lab_files.rs`). Why: the TAE-decoded twins of `rtx5090`, `fastvideo` and `h3arms`.
+4. **`[[compare]] gate = { kind, off }`** (`PairedGate`). The gate of the compare's own pair runs right after that
+   compare. A `[[gate]]` still runs after all of the cell's compares. Why: `h3arms` and `precision` loop
+   `compare_cells b c; gate_cells b c`, `fastvideo` loops `compare; compare; gate; gate`, and the dry run (and
+   `live.log`) keeps the script's order either way. Gate placement (open decision 3) is otherwise settled as
+   proposed: one cell per loop iteration (`rtx5090`, `fastvideo`, `ltxvae`), one per helper call (`techniques`,
+   `b6`).
+
+`Workload` gains no field. A named sol-engine workload (`--workload 4k5s`) stays a literal in the argv, and the
+cell's note names it.
+
+#### 9.3 Equality: one golden per tier, from the script
+
+`scripts/gpu/tests/fv-lab-goldens.sh` now reads the tier names from `lab/tiers.toml`, so a new tier with no fixture
+fails `--check`. It writes `<tier>-dry-run.txt`, `<tier>-gates.tsv` and `runpod-http-<tier>.json` for every tier,
+under `env -i` as before, with `FV_BASELINE_SHA=7654321`. The repository path is written as `/opt/fastvideo-rs`, the
+image's root, which is what `{root}` renders on a pod (the b6 fixtures under `scripts/gpu/fixtures/`). The fake
+volume's `auxiliary/tae` is marked complete, as on `bz0ofkfx45`, so `$TAE` is `/workspace/weights/auxiliary/tae`.
+A cell that hard-coded `{scratch}/tae` would differ.
+
+`<tier>-gates.tsv` comes from the dry run itself, in run order, through `FV_DRY_RUN_GATES=<file>`:
+- each `gated_cell` writes `arm <name> <verify-weights.sh cell> <TAE file or ->`, and the goldens add that cell's
+  needs;
+- each `gate_cells` writes `gate <baseline> <candidate> <kind> <OFF arm or ->`, which the dry run's log never
+  showed.
+
+So a gate's `kind` / `off`, and whether an arm is TAE-gated, are checked too. A cell that wrote the TAE path into
+its argv without `tae` would match the dry run and fail here. This replaces D1a's awk over the branch, which cannot
+expand loops.
+
+Script changes, dry run only: `FV_DRY_RUN_GATES`; a dry `tae_gated_cell` neither fetches nor checks the file, it logs
+the command (before this change a dry `rtx5090` would download the TAE files); and `techniques` skips the baseline
+fetch when dry, as `b6` / `b4a` already did. No family's real run changes.
+
+`tests/dry_run.rs` asserts `dry_run_lines` equal to each tier's fixture, line for line: 10 tiers, 217 lines, one
+`dry-run` line per arm. It also asserts that every arm gates on the script's cell with that cell's trees, and that the
+baseline arms run `/fvscratch/baseline-7654321/fv-gpucheck` and do not render without the commit.
+`tests/payload_golden.rs` asserts every tier's pod body equal to `FV_FAMILY=<tier> runpod-http.sh plan`'s (the
+runner line and `env {}` excepted, §6). `tests/fv_lab_bin.rs` runs `fv-lab run b6 --dry-run --baseline-sha` against
+its fixture, and `pod up --family b6` with and without `--baseline-sha`. `tests/runner.rs` runs a baseline pair, a
+fetched TAE arm, a missing TAE arm (one fetch) and a paired gate on fakes, and also a failing baseline fetch (FATAL,
+no arm run). `tests/lab_files.rs` checks every tree against weights-manifest.tsv or the EU volume's list
+(`h3-ref2va` is a volume tree with no hub row). It also checks that the only tree any tier needs and the volume lacks
+is `h3-8step`, and that a cell belongs to exactly one tier.
+
+#### 9.4 Differences from the script, and why
+
+| | script | fv-lab | why |
+|---|---|---|---|
+| summaries copied into `live.log` after arms (b6 stage lines, techniques / b6 compare fields, h3arms reuse counts and gate verdicts, trace `/gpu_trace`, ltxfps PASS/FAIL, ltxvae decode lines) | yes | no | log only: each is a `grep` of a file both runners write and both fetches take (`stderr.log`, `compare/*.json`, `gate/*.json`). Nothing reads them from `live.log`. D1c's `report` reads the files |
+| `FV_TECH_CELLS`, `FV_B6_CELLS` (narrow by pair) | yes | `--cells` / `FV_CELLS` by arm (`<pair>-base,<pair>-pr`), or `fv-lab run <cell> --family <tier>` | arms are the unit of a run directory |
+| `techniques` H3 caches | shared by the three arms until this PR | per arm, both sides | see below |
+| `FV_GEN_TIMEOUT_S` default 900 (`b6`) | when run by hand | the tier's 3600 | `runpod-http.sh` passes 3600 to every family, so 900 never applied on a pod |
+| `FV_PROMPTS`, `FV_LPIPS` defaults meant for `h3arms` | honoured | `FV_PROMPTS` ignored (§7), `--lpips` | a prompt set is a cell's workload; a `h3arms-eval` tier with `prompt_set` is one cell file each when wanted |
+| `FV_VAE_*` (`ltxvae`), `FV_LTXFPS*`, `FV_PRECISION_ARM` | change the arms | not read | the cells are the defaults; another variant is another tier |
+
+**`techniques`: the H3 caches were shared, and the identity missed two code paths (review of #176).**
+- **What was wrong:** the three H3 arms of a `tech_h3` cell shared `--text-cache $SCRATCH/h3-text-cache` (keyed by
+  prompt, tokenizer and encoder weights, with no code version: fastvideo-cudarc `h3/text_cache.rs`) and
+  `--adaln-cache $RUNS/<cell>-adaln.cache` (it skips the AdaLN projections when the file exists). `-base` ran first
+  and wrote both, and the candidate build's `-env` / `-prof` read them.
+- **Consequence:** `techniques` gates before this fix did not cover the candidate build's H3 text encoder or its
+  AdaLN path. A regression in either would have passed `--off-identity`.
+- **Fix, in the script and the cells in lockstep:** every H3 arm has its own `h3-text-cache-<arm>` and
+  `<arm>-adaln.cache`. Its warm-up encodes and projects with its own binary, and its timed pass (the compared one)
+  reads them back. The cache-on path is still exercised, now within each arm. The family's intent (one warm process
+  per arm, timings comparable with earlier `techniques` runs) is kept.
+- **Not chosen:** `--no-text-cache` and no AdaLN cache, as `b6` runs. That would change what `-prof`'s timings
+  measure.
+- **Not affected:** the LTX cell already encodes per arm.
+- This is the one real-run change to `runpod-matrix.sh` in D1b. The goldens are regenerated from the changed script.
+  `docs/techniques.md` notes the gap.
+
+#### 9.5 The GPU gate per family (the coordinator's)
+
+The procedure is §8's. Use one commit for both sides: this PR's head or its merge, once
+`fastvideo-rs-runtime:sha-<7>` is published (the image carries the new `lab/` and fv-lab). Use the cheapest cells
+that exercise the new parts. Both runners honour `FV_CELLS`. An unselected arm is logged `skip`. A compare whose
+frames are missing writes the same `skipped` report on both sides.
+
+`fv-lab-compare-runs.sh` now also checks:
+- each compare report (`compare/compare-clips-*.json`) agrees on `status` and the off-identity status;
+- each gate report exists in both runs (a gate's verdict weighs timings, which differ between pods, so only its
+  presence is compared);
+- any unreadable summary, frames record or report is a difference;
+- it fails unless at least one arm ran (exit 0) with byte-identical frames in both runs, because two all-skipped or
+  all-crashed runs are equal but prove nothing. It prints how many arms ran, were skipped and failed alike. The baseline families need `BASE`, a commit whose runtime image is published (e.g. `e93e357`, the B4a gate's
+baseline).
+
+```sh
+SHA=<7>; BASE=e93e357
+# fv-lab side (FAMILY and CELLS per row below; --baseline-sha only for techniques / b6)
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family $FAMILY --cells $CELLS [--baseline-sha $BASE] --yes --wait
+# script side, the same commit and cells
+RUNPOD_API_KEY=… FV_FAMILY=$FAMILY FV_CELLS="$CELLS" [FV_EXTRA_ENV="FV_BASELINE_SHA=$BASE"] \
+  bash scripts/gpu/runpod-http.sh run $SHA
+bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/$FAMILY/$SHA-<MMDDHHMMSS>-<hex> artifacts/runpod/$FAMILY/$SHA-<MMDDHHMM>
+```
+
+| family | `CELLS` (cheapest that exercises it) | what it proves | est. per side | est. total |
+|---|---|---|---|---|
+| `techniques` | `h3-480p-fullopt-base h3-480p-fullopt-env h3-480p-fullopt-prof` | baseline fetch, bare `env`, the profile arm, per-arm text and AdaLN caches (each arm encodes with its own binary), 2 `--off-identity` reports | ~22 min | ~$1.85 |
+| `b6` | `b6-solh3-tree-base b6-solh3-tree-pr` | a baseline pair, 1 `--off-identity` report | ~20 min | ~$1.70 |
+| `rtx5090` | `h3-480p-dense h3-480p-sol h3-480p-fullopt h3-480p-fullopt-taeh3` | TAE arm via `{tae}`, 4 compares | ~25 min | ~$2.10 |
+| `fastvideo` | `fasth3-4step-vsa-480p fasth3-4step-vsa-480p-taeh3 fasth3-8step-480p fasth3-8step-480p-taeh3` | a standalone `[[gate]]`, TAE, 2 skipped arms | ~15 min | ~$1.25 |
+| `h3arms` | all (11 arms skip on `h3-8step`) | paired gates, skipped arms, 4-step VSA + TAEH3 | ~15 min | ~$1.25 |
+| `trace` | `fasth3-4step-vsa-768p fasth3-8step-768p` | env arm, one skip | ~12 min | ~$1.00 |
+| `ltxfps` | `ltx25-1080p-25fps fasth3-8step-sink` | 1080p 121-frame sink check, one skip | ~15 min | ~$1.25 |
+| `ltxvae` | `ltxvae-4k5s-fast ltxvae-4k5s-streaming` | vae-bench, a compare | ~15 min | ~$1.25 |
+| `precision` | `ltx25-4k5s-sol-f32act ltx25-4k5s-sol-bf16act` | a paired compare + gate at 4k5s | ~22 min | ~$1.85 |
+
+The estimates are for the PRO 6000 at about $2.49/hr. They come from the D1a gate (two arms, ~15 min per side), b6
+(~7 min per arm) and B4a (one 480p pair per pod, ~12 min). Pod boot and the preflight add ~5 min per side. All nine
+come to about $13. Run both sides of a family in parallel. Pass, for each family: `fv-lab-compare-runs.sh` exits 0 (at least one arm ran with byte-identical frames),
+both `matrix_exit=0`. That family's `case` branch is then deleted in the next D1 PR. Once a family's branch is gone,
+`runpod-http.sh run` for it calls `fv-lab pod up --wait` (§8 D1b).
 
 ## Open decisions
 
@@ -271,7 +484,9 @@ Pass: exit 0, every arm `same`, `fasth3-8step` skipped (`weights incomplete`) in
    still compile the `lab-build` stage (a notice in the job says so) until a tools release is published from a commit
    with fv-lab; branch images, which compile everything anyway, are unaffected.
 3. **Gate placement in a cell**: compares and gates run after a cell's arms; a family that interleaves them (rtx5090
-   per resolution) splits into one cell per loop iteration. Acceptable until D1b shows otherwise.
+   per resolution) splits into one cell per loop iteration. Settled by D1b (§9.2 item 4): one cell per loop iteration
+   or helper call, plus a compare's optional paired `gate` for `compare; gate` loops. A family that also interleaves
+   other steps (`b4a`'s verdict, `hd`'s upscale) stays in the script (§9.1).
 
 ## Consequences
 
@@ -295,3 +510,6 @@ fastvideo-lab/cli`), `cargo fmt --all --check`, `bash scripts/gpu/lint.sh`, `bas
 GPU (the coordinator's): the procedure of §8, on a commit whose runtime image is published with `fv-lab` in it and
 whose `runpod-matrix.sh` writes `frames.sha256.json`. Expected: the six arms whose trees are on the EU volume run, `fasth3-8step` is recorded as skipped
 (`weights incomplete`), each run directory holds the files of §5, and `fv-lab-compare-runs.sh` exits 0.
+
+D1b, GPU (the coordinator's): §9.5 per moved family, on one commit whose runtime image carries D1b's `lab/` and
+fv-lab; expected `fv-lab-compare-runs.sh` exit 0 (arms, frames, compare reports) and `matrix_exit=0` on both sides.

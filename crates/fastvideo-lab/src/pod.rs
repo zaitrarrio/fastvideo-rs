@@ -178,8 +178,13 @@ pub fn start_command(o: &StartOptions) -> Result<String, PodError> {
     Ok(s)
 }
 
-/// A 7-hex-digit commit.
+/// A 7-hex-digit commit (`--sha`).
 pub fn check_sha7(sha: &str) -> Result<(), PodError> {
+    check_sha7_named("--sha", sha)
+}
+
+/// A 7-hex-digit commit given as `what` (a flag or variable, for the error).
+pub fn check_sha7_named(what: &str, sha: &str) -> Result<(), PodError> {
     if sha.len() == 7
         && sha
             .bytes()
@@ -188,9 +193,60 @@ pub fn check_sha7(sha: &str) -> Result<(), PodError> {
         Ok(())
     } else {
         Err(PodError::Invalid(format!(
-            "--sha `{sha}`: 7 lower-case hex digits"
+            "{what} `{sha}`: 7 lower-case hex digits"
         )))
     }
+}
+
+/// The baseline commit of a pod's run (ADR-0019 §9.2): `--baseline-sha`
+/// (`flag`) or one `FV_BASELINE_SHA=<7>` entry of `--extra-env`, not both;
+/// 7 hex digits (an empty value is refused); never the run's own commit
+/// `sha7` (a byte-identity gate of a build against itself passes whatever it
+/// does). A flag is appended to `extra_env`. `needed`: the tier has
+/// `bin = "baseline"` arms, so a baseline commit is required.
+pub fn baseline_for_pod(
+    sha7: &str,
+    flag: Option<&str>,
+    extra_env: &mut Vec<String>,
+    needed: bool,
+) -> Result<Option<String>, PodError> {
+    const KEY: &str = "FV_BASELINE_SHA=";
+    let from_env: Vec<&str> = extra_env
+        .iter()
+        .filter_map(|e| e.strip_prefix(KEY))
+        .collect();
+    if from_env.len() > 1 || (flag.is_some() && !from_env.is_empty()) {
+        return Err(PodError::Invalid(
+            "the baseline commit given twice (--baseline-sha and/or FV_BASELINE_SHA in --extra-env)".into(),
+        ));
+    }
+    let chosen = match (flag, from_env.first()) {
+        (Some(f), _) => {
+            check_sha7_named("--baseline-sha", f)?;
+            Some(f.to_owned())
+        }
+        (None, Some(v)) => {
+            check_sha7_named("--extra-env FV_BASELINE_SHA", v)?;
+            Some((*v).to_owned())
+        }
+        (None, None) => None,
+    };
+    if let Some(b) = &chosen {
+        if b == sha7 {
+            return Err(PodError::Invalid(format!(
+                "the baseline commit {b} is the run's own commit: a byte-identity gate against itself proves nothing"
+            )));
+        }
+        if flag.is_some() {
+            extra_env.push(format!("{KEY}{b}"));
+        }
+    } else if needed {
+        return Err(PodError::Invalid(
+            "the tier runs `bin = \"baseline\"` arms: pass --baseline-sha <7>, the baseline commit"
+                .into(),
+        ));
+    }
+    Ok(chosen)
 }
 
 /// fv-lab's run tag: `<sha>-<MMDDHHMMSS>-<4 hex>` (UTC, and a random
@@ -721,6 +777,43 @@ pub fn wait_done(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_baseline_commit_of_a_pod_fails_closed() {
+        let mut env = vec!["FASTVIDEO_TEST_X=1".to_owned()];
+        assert_eq!(
+            baseline_for_pod("1234567", Some("7654321"), &mut env, true).unwrap(),
+            Some("7654321".to_owned())
+        );
+        assert_eq!(env, ["FASTVIDEO_TEST_X=1", "FV_BASELINE_SHA=7654321"]);
+        let mut via_env = vec!["FV_BASELINE_SHA=7654321".to_owned()];
+        assert!(baseline_for_pod("1234567", None, &mut via_env, true).is_ok());
+        assert_eq!(via_env.len(), 1);
+        let err = |sha: &str, flag: Option<&str>, env: &[&str], needed: bool| {
+            let mut e: Vec<String> = env.iter().map(|s| (*s).to_owned()).collect();
+            baseline_for_pod(sha, flag, &mut e, needed)
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(err("1234567", Some("1234567"), &[], true).contains("own commit"));
+        assert!(err("1234567", None, &["FV_BASELINE_SHA=1234567"], true).contains("own commit"));
+        assert!(err("1234567", None, &["FV_BASELINE_SHA="], true)
+            .contains("--extra-env FV_BASELINE_SHA ``"));
+        assert!(err("1234567", None, &["FV_BASELINE_SHA=main"], false).contains("7 lower-case hex"));
+        assert!(err("1234567", Some("xyz"), &[], true).contains("--baseline-sha `xyz`"));
+        assert!(err(
+            "1234567",
+            Some("7654321"),
+            &["FV_BASELINE_SHA=7654321"],
+            true
+        )
+        .contains("twice"));
+        assert!(err("1234567", None, &[], true).contains("--baseline-sha <7>"));
+        assert_eq!(
+            baseline_for_pod("1234567", None, &mut Vec::new(), false).unwrap(),
+            None
+        );
+    }
     use crate::plan::Tiers;
 
     const TIERS: &str = r#"

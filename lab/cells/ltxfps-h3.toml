@@ -1,0 +1,24 @@
+# The ltxfps family's H3 cell (runpod-matrix.sh `ltxfps`, serve E4): the frame
+# count, mp4 rate and audio track checked with ffprobe (benchmark.json
+# "mp4_probe"); --sink-check runs serve E2's frame sink beside the PNG writer
+# and checks its frames byte for byte. Schema:
+# crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md (D1b).
+schema = 1
+name = "ltxfps-h3"
+description = "FastH3 8-step with the frame-sink check (FV_SINK_CHECK=1)"
+
+[workload]
+model = "h3"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+note = "runpod-matrix.sh's default PROMPT and SEED; the recipe's canvas, one cold run; skipped on the EU volume (h3-8step is R2-only)"
+
+[[arm]]
+name = "fasth3-8step-sink"
+gate = "fasth3-8step"
+trees = ["h3-8step", "h3-base"]
+env = ["FV_SINK_CHECK=1"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-8step", "--h3-recipe", "8step", "--prompt",
+  "{prompt}", "--seconds", "{seconds}", "--seed", "{seed}", "--text-encoder", "auto", "--text-cache",
+  "{scratch}/h3-text-cache", "--text-weights", "{weights}/h3-base", "--clip-dir", "{runs}/{arm}/frames"]

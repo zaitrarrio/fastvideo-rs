@@ -1,6 +1,7 @@
-//! The payload golden (docs/adr/0019-fv-lab.md §6): the pod `fv-lab pod up
-//! --family rtx6000` creates is the one `runpod-http.sh run` creates
-//! (`fixtures/runpod-http-rtx6000.json`, from `runpod-http.sh plan` through
+//! The payload golden (docs/adr/0019-fv-lab.md §6, D1b): for every tier, the
+//! pod `fv-lab pod up --family <tier>` creates is the one `FV_FAMILY=<tier>
+//! runpod-http.sh run` creates (`fixtures/runpod-http-<tier>.json`, from
+//! `runpod-http.sh plan` through
 //! `scripts/gpu/tests/fv-lab-goldens.sh`), apart from the listed differences:
 //!
 //! 1. the start command runs `fv-lab run` where the script ran
@@ -26,8 +27,10 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-fn fixture() -> Value {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/runpod-http-rtx6000.json");
+fn fixture(family: &str) -> Value {
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures")
+        .join(format!("runpod-http-{family}.json"));
     let t = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
     serde_json::from_str(&t).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
 }
@@ -35,31 +38,42 @@ fn fixture() -> Value {
 #[test]
 fn pod_body_equals_runpod_http_sh_but_the_runner() {
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
-    let tier = lab.tier("rtx6000").expect("tier rtx6000");
-    let l = launch(tier, SHA, &StartOptions::for_tier(tier, TAG)).expect("launch");
-    let mut ours = pod_create_body(&l);
-    // Difference 2.
-    assert_eq!(
-        ours.as_object_mut().and_then(|m| m.remove("env")),
-        Some(json!({}))
-    );
-    // Difference 1.
-    let mut theirs = fixture();
-    let cmd = theirs["dockerStartCmd"][2]
-        .as_str()
-        .expect("a start command")
-        .to_owned();
-    let script =
-        "bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh rtx6000 >\"$OUT/matrix.out\" 2>&1";
-    let lab_run = "/opt/fastvideo-rs/target/release/fv-lab run rtx6000 >\"$OUT/matrix.out\" 2>&1";
-    assert_eq!(cmd.matches(script).count(), 1, "the runner line moved");
-    theirs["dockerStartCmd"][2] = Value::String(cmd.replace(script, lab_run));
-    if ours != theirs {
-        let a = ours["dockerStartCmd"][2].as_str().unwrap_or("");
-        let b = theirs["dockerStartCmd"][2].as_str().unwrap_or("");
-        for (i, (x, y)) in a.lines().zip(b.lines()).enumerate() {
-            assert_eq!(x, y, "start command line {i}");
+    assert!(lab.tiers.tiers.len() >= 10);
+    for tier in &lab.tiers.tiers {
+        let family = tier.name.as_str();
+        let l = launch(tier, SHA, &StartOptions::for_tier(tier, TAG)).expect("launch");
+        let mut ours = pod_create_body(&l);
+        // Difference 2.
+        assert_eq!(
+            ours.as_object_mut().and_then(|m| m.remove("env")),
+            Some(json!({})),
+            "{family}"
+        );
+        // Difference 1.
+        let mut theirs = fixture(family);
+        let cmd = theirs["dockerStartCmd"][2]
+            .as_str()
+            .expect("a start command")
+            .to_owned();
+        let script = format!(
+            "bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh {family} >\"$OUT/matrix.out\" 2>&1"
+        );
+        let lab_run = format!(
+            "/opt/fastvideo-rs/target/release/fv-lab run {family} >\"$OUT/matrix.out\" 2>&1"
+        );
+        assert_eq!(
+            cmd.matches(&script).count(),
+            1,
+            "{family}: the runner line moved"
+        );
+        theirs["dockerStartCmd"][2] = Value::String(cmd.replace(&script, &lab_run));
+        if ours != theirs {
+            let a = ours["dockerStartCmd"][2].as_str().unwrap_or("");
+            let b = theirs["dockerStartCmd"][2].as_str().unwrap_or("");
+            for (i, (x, y)) in a.lines().zip(b.lines()).enumerate() {
+                assert_eq!(x, y, "{family}: start command line {i}");
+            }
+            assert_eq!(ours, theirs, "{family}");
         }
-        assert_eq!(ours, theirs);
     }
 }

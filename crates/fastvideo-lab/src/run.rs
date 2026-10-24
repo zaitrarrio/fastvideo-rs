@@ -92,6 +92,13 @@ pub struct RunConfig {
     pub timeout: String,
     /// The pause between GPU-memory polls before a cell (2 s).
     pub gpu_poll: Duration,
+    /// `FV_BASELINE_SHA`: the commit whose runtime image's fv-gpucheck the
+    /// `bin = "baseline"` arms run (fetched into `<scratch>/baseline-<sha>/`).
+    pub baseline_sha: Option<String>,
+    /// `FV_AUX_DIR` (default `<weights>/auxiliary`).
+    pub aux_dir: Option<PathBuf>,
+    /// `FV_TAE_DIR` (default: `<aux>/tae` when complete, else `<scratch>/tae`).
+    pub tae_dir: Option<PathBuf>,
 }
 
 impl RunConfig {
@@ -110,7 +117,35 @@ impl RunConfig {
             nvidia_smi: "nvidia-smi".into(),
             timeout: "timeout".into(),
             gpu_poll: Duration::from_secs(2),
+            baseline_sha: None,
+            aux_dir: None,
+            tae_dir: None,
         }
+    }
+
+    /// `$AUX`: `FV_AUX_DIR`, else `<weights>/auxiliary`.
+    pub fn aux(&self) -> PathBuf {
+        self.aux_dir
+            .clone()
+            .unwrap_or_else(|| self.weights().join("auxiliary"))
+    }
+
+    /// `$TAE`: `FV_TAE_DIR`; else the volume's `<aux>/tae` when its
+    /// `.complete` marker exists; else `<scratch>/tae` (where the pod's start
+    /// command fetches the files).
+    pub fn tae(&self) -> PathBuf {
+        match &self.tae_dir {
+            Some(d) => d.clone(),
+            None if self.aux().join("tae/.complete").is_file() => self.aux().join("tae"),
+            None => self.scratch.join("tae"),
+        }
+    }
+
+    /// `$BASE`'s directory: `<scratch>/baseline-<sha>`.
+    pub fn baseline_dir(&self) -> Option<PathBuf> {
+        self.baseline_sha
+            .as_ref()
+            .map(|s| self.scratch.join(format!("baseline-{s}")))
     }
 
     /// `$W`.
@@ -134,6 +169,8 @@ impl RunConfig {
             scratch: self.scratch.clone(),
             runs: self.runs(),
             root: self.root.clone(),
+            tae: self.tae(),
+            baseline: self.baseline_dir().map(|d| d.join("fv-gpucheck")),
         }
     }
 
@@ -220,6 +257,8 @@ pub struct Runner {
     /// Set on every child (`export PATH`, `LD_LIBRARY_PATH`, `FV_AUX_DIR`).
     env: Vec<(String, String)>,
     lpips_args: Vec<String>,
+    /// `tae_fetched`: `fetch-tae.sh` runs at most once per run.
+    tae_fetched: bool,
 }
 
 impl Runner {
@@ -232,6 +271,7 @@ impl Runner {
             log_path,
             env: Vec::new(),
             lpips_args: Vec::new(),
+            tae_fetched: false,
         }
     }
 
@@ -354,10 +394,7 @@ impl Runner {
         }
         let path = std::env::var("PATH").unwrap_or_default();
         let ld = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
-        let aux = std::env::var("FV_AUX_DIR")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| self.cfg.weights().join("auxiliary").display().to_string());
+        let aux = self.cfg.aux().display().to_string();
         self.env = vec![
             (
                 "PATH".into(),
@@ -451,12 +488,26 @@ impl Runner {
     /// Every step, then `matrix done` and `done.json`.
     pub fn run(&mut self, steps: &[Step]) -> Result<(), RunError> {
         self.prepare()?;
+        if steps
+            .iter()
+            .any(|s| matches!(s, Step::Arm { baseline: true, .. }))
+        {
+            self.fetch_baseline()?;
+        }
         for s in steps {
             match s {
                 Step::Arm {
                     name,
                     gate,
                     command,
+                    tae: Some(file),
+                    ..
+                } => self.tae_gated_cell(name, file, gate, command),
+                Step::Arm {
+                    name,
+                    gate,
+                    command,
+                    tae: None,
                     ..
                 } => self.gated_cell(name, gate, command),
                 Step::Compare {
@@ -482,6 +533,87 @@ impl Runner {
             ),
         );
         Ok(())
+    }
+
+    /// The baseline binary (the script's `techniques` / `b6` preamble):
+    /// `fetch-baseline.sh <sha> <scratch>/baseline-<sha>` into
+    /// `baseline-fetch.log`, then `baseline <its last line>`; a failure is the
+    /// script's FATAL (exit 2, before any arm).
+    pub fn fetch_baseline(&self) -> Result<(), RunError> {
+        let (Some(sha), Some(dir)) = (self.cfg.baseline_sha.clone(), self.cfg.baseline_dir())
+        else {
+            self.log("FATAL: baseline arms need FV_BASELINE_SHA (the baseline commit)");
+            return Err(RunError::Fatal(
+                "baseline arms need FV_BASELINE_SHA (the baseline commit)".into(),
+            ));
+        };
+        let log = self.runs.join("baseline-fetch.log");
+        let ok = self
+            .cmd("bash")
+            .arg(self.cfg.scripts().join("fetch-baseline.sh"))
+            .arg(&sha)
+            .arg(&dir)
+            .stdout(append(&log)?)
+            .stderr(append(&log)?)
+            .status()
+            .is_ok_and(|s| s.success());
+        let text = fs::read_to_string(&log).unwrap_or_default();
+        if !ok {
+            let why = format!("baseline binary sha-{sha} unavailable (baseline-fetch.log)");
+            self.log(&format!("FATAL: {why}"));
+            for l in text.lines() {
+                self.raw(l);
+            }
+            return Err(RunError::Fatal(why));
+        }
+        self.log(&format!("baseline {}", text.lines().last().unwrap_or("")));
+        // A baseline that is this build makes every byte-identity compare
+        // pass whatever the build does: refuse it (fv-lab only; `pod up`
+        // also refuses a baseline commit equal to the run's).
+        let base_id = build_id(&dir.join("fv-gpucheck"));
+        let image_id = build_id(&self.cfg.bin);
+        self.log(&format!(
+            "baseline build-id {base_id}, image build-id {image_id}"
+        ));
+        if base_id != "unknown" && base_id == image_id {
+            let why = format!("the baseline binary sha-{sha} is this build ({base_id})");
+            self.log(&format!("FATAL: {why}"));
+            return Err(RunError::Fatal(why));
+        }
+        Ok(())
+    }
+
+    /// `tae_gated_cell`: `FV_CELLS`, then the tiny-autoencoder file (one
+    /// `fetch-tae.sh` per run when it is missing; still missing: recorded as
+    /// skipped), then `gated_cell`.
+    pub fn tae_gated_cell(&mut self, name: &str, file: &Path, gate: &str, command: &[String]) {
+        if !self.cfg.selected(name) {
+            self.log(&format!("skip {name} (not in FV_CELLS)"));
+            return;
+        }
+        if !file.is_file() && !self.tae_fetched {
+            self.tae_fetched = true;
+            let log = self.runs.join("tae-fetch.log");
+            if let (Ok(out), Ok(err)) = (append(&log), append(&log)) {
+                let _ = self
+                    .cmd("bash")
+                    .arg(self.cfg.scripts().join("fetch-tae.sh"))
+                    .arg(self.cfg.tae())
+                    .stdout(out)
+                    .stderr(err)
+                    .status();
+            }
+        }
+        if !file.is_file() {
+            let _ = fs::create_dir_all(self.runs.join(name));
+            self.log(&format!(
+                "SKIP {name}: {} missing (see tae-fetch.log)",
+                file.display()
+            ));
+            self.skipped(name, "tae weights missing");
+            return;
+        }
+        self.gated_cell(name, gate, command);
     }
 
     fn skipped(&self, name: &str, why: &str) {
@@ -1053,6 +1185,18 @@ mod tests {
         c.tag = Some("abc-1".into());
         assert_eq!(c.runs(), Path::new("/fvscratch/runs/rtx6000/abc-1"));
         assert_eq!(c.weights(), Path::new("/workspace/weights"));
+        assert_eq!(c.aux(), Path::new("/workspace/weights/auxiliary"));
+        if !Path::new("/workspace/weights/auxiliary/tae/.complete").exists() {
+            assert_eq!(c.tae(), Path::new("/fvscratch/tae"));
+        }
+        c.tae_dir = Some("/t".into());
+        assert_eq!(c.paths().tae, Path::new("/t"));
+        assert_eq!(c.paths().baseline, None);
+        c.baseline_sha = Some("7654321".into());
+        assert_eq!(
+            c.paths().baseline.as_deref(),
+            Some(Path::new("/fvscratch/baseline-7654321/fv-gpucheck"))
+        );
     }
 
     #[test]
@@ -1066,12 +1210,16 @@ mod tests {
                 gate: "g".into(),
                 trees: vec![],
                 command: vec!["/nonexistent/fv".into(), "x y".into()],
+                tae: None,
+                baseline: false,
             },
             Step::Arm {
                 name: "b".into(),
                 gate: "g".into(),
                 trees: vec![],
                 command: vec!["/nonexistent/fv".into()],
+                tae: Some("/nonexistent/tae/t.safetensors".into()),
+                baseline: true,
             },
             Step::Compare {
                 baseline: "a".into(),

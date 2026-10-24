@@ -1,0 +1,292 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "frame_counts",
+      "ok": true,
+      "values": {
+        "baseline": 124,
+        "candidate": 124,
+        "match": true,
+        "pairs": 124
+      }
+    },
+    {
+      "limits": {},
+      "name": "frame_shape",
+      "ok": true,
+      "values": {
+        "shape_mismatch": null
+      }
+    },
+    {
+      "limits": {},
+      "name": "pixel_metrics",
+      "ok": true,
+      "values": {
+        "mean_abs_pixel_diff": 0.0,
+        "mse_max": 0.0,
+        "mse_mean": 0.0,
+        "pairs": 124,
+        "patch_boundary_ratio_by_size_max": {
+          "16": 1.0,
+          "32": 1.0,
+          "8": 1.0
+        },
+        "patch_boundary_ratio_by_size_mean": {
+          "16": 1.0,
+          "32": 1.0,
+          "8": 1.0
+        },
+        "patch_boundary_ratio_max": 1.0,
+        "patch_boundary_ratio_mean": 1.0,
+        "psnr_mean": null,
+        "psnr_min": null,
+        "sharpness_ratio_mean": 1.0,
+        "status": "ok",
+        "temporal_delta_error_max": 0.0,
+        "temporal_delta_error_mean": 0.0,
+        "temporal_jitter_ratio_max": 1.0,
+        "temporal_jitter_ratio_mean": 1.0,
+        "temporal_jitter_ratio_min": 1.0
+      }
+    },
+    {
+      "limits": {
+        "max_abs_diff_uint8": 0
+      },
+      "name": "off_identity",
+      "ok": true,
+      "values": {
+        "max_abs_diff_uint8": 0,
+        "nonidentical_frames": 0,
+        "pairs": 124,
+        "status": "ok"
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "off_identity_frame_count",
+      "ok": true,
+      "values": {
+        "baseline": 124,
+        "candidate": 124
+      }
+    }
+  ],
+  "context": {
+    "baseline": {
+      "dir": "/fvscratch/runs/techniques/c21d801-1024155754-31bc/h3-480p-fullopt-base/frames",
+      "frames": 124,
+      "frames_dir": "/fvscratch/runs/techniques/c21d801-1024155754-31bc/h3-480p-fullopt-base/frames",
+      "log": "/fvscratch/runs/techniques/c21d801-1024155754-31bc/h3-480p-fullopt-base/stderr.log",
+      "mp4": "/fvscratch/runs/techniques/c21d801-1024155754-31bc/h3-480p-fullopt-base/frames/output.mp4",
+      "notes": [],
+      "status": "completed"
+    },
+    "candidate": {
+      "dir": "/fvscratch/runs/techniques/c21d801-1024155754-31bc/h3-480p-fullopt-prof/frames",
+      "frames": 124,
+      "frames_dir": "/fvscratch/runs/techniques/c21d801-1024155754-31bc/h3-480p-fullopt-prof/frames",
+      "log": "/fvscratch/runs/techniques/c21d801-1024155754-31bc/h3-480p-fullopt-prof/stderr.log",
+      "mp4": "/fvscratch/runs/techniques/c21d801-1024155754-31bc/h3-480p-fullopt-prof/frames/output.mp4",
+      "notes": [],
+      "status": "completed"
+    },
+    "cuda_feature": true,
+    "lpips": {
+      "reason": "disabled (pass --lpips <weights dir>)",
+      "status": "deferred"
+    },
+    "mode": "exact",
+    "off_identity": {
+      "max_abs_diff_uint8": 0,
+      "nonidentical_frames": 0,
+      "pairs": 124,
+      "status": "ok"
+    },
+    "pixel_metrics": {
+      "mean_abs_pixel_diff": 0.0,
+      "mse_max": 0.0,
+      "mse_mean": 0.0,
+      "pairs": 124,
+      "patch_boundary_ratio_by_size_max": {
+        "16": 1.0,
+        "32": 1.0,
+        "8": 1.0
+      },
+      "patch_boundary_ratio_by_size_mean": {
+        "16": 1.0,
+        "32": 1.0,
+        "8": 1.0
+      },
+      "patch_boundary_ratio_max": 1.0,
+      "patch_boundary_ratio_mean": 1.0,
+      "psnr_mean": null,
+      "psnr_min": null,
+      "psnr_per_frame": [
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf",
+        "inf"
+      ],
+      "sharpness_ratio_mean": 1.0,
+      "status": "ok",
+      "temporal_delta_error_max": 0.0,
+      "temporal_delta_error_mean": 0.0,
+      "temporal_jitter_ratio_max": 1.0,
+      "temporal_jitter_ratio_mean": 1.0,
+      "temporal_jitter_ratio_min": 1.0
+    },
+    "thresholds": {
+      "gemini_absolute_threshold": "disabled_for_lossy_generative_dimensions",
+      "lpips_absolute_threshold": "disabled_for_lossy_generative_dimensions",
+      "off_identity": "hard gate: max_abs_diff_uint8 == 0",
+      "pixel_metrics": "telemetry (no absolute threshold)",
+      "quality_ranking": {
+        "primary": "aligned_pairwise_gemini_max_artifact_severity",
+        "secondary": "aligned_lpips_max",
+        "tie_breaker": "higher_speedup"
+      },
+      "selection": "best_quality_at_or_above_speed_target",
+      "source": "sol-engine evals/tiers.toml",
+      "speedup_targets": {
+        "high": 3.0,
+        "low": 1.5,
+        "medium": 2.0
+      }
+    }
+  },
+  "elapsed_s": 0.209577853,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "compare-clips-h3-480p-fullopt-base--h3-480p-fullopt-prof",
+  "status": "pass"
+}

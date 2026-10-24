@@ -1,0 +1,13 @@
+{
+  "id": "czlvrt7pmgro0n",
+  "name": "fv-lab-rtx5090-c21d801-1024165627-a3e1",
+  "family": "rtx5090",
+  "tag": "c21d801-1024165627-a3e1",
+  "sha": "c21d801",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:5da2ad7513878c5ebe8215e42c99cab3157a78b403266288d3a75ebe6d666bdf",
+  "url": "https://czlvrt7pmgro0n-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1792860989.972222,
+  "cap_s": 14400
+}

@@ -2,8 +2,9 @@
 
 `fv-lab` runs the lab's run plan (`lab/tiers.toml`, `lab/cells/*.toml`) on a GPU box and makes that box: a Runpod pod
 on fv-deploy's guards (price cap, $8 floor, EU volume, detached backstop, ready within 600 s in at most 3 cycles).
-Design: [ADR-0019](../adr/0019-fv-lab.md). Today it carries one tier, `rtx6000` (the RTX PRO 6000 parity baseline that
-`scripts/gpu/runpod-http.sh` runs by default); the other `runpod-matrix.sh` families move in later slices.
+Design: [ADR-0019](../adr/0019-fv-lab.md). Today it carries ten tiers, each one a `runpod-matrix.sh` family. Each is
+held equal to the script's dry run by a golden ([The families](#the-families)). The other families move in later
+slices.
 
 ## Build
 
@@ -33,6 +34,46 @@ nothing. A tier lists cells; a cell (`lab/cells/<name>.toml`) is one workload (p
 arms; an arm is one run directory, one fv-gpucheck command (with `{weights}`, `{runs}`, `{prompt}`, … placeholders),
 gated on a `verify-weights.sh` cell and naming the weight trees it reads. Edit a cell, then `fv-lab check` and the
 dry run show what will run.
+
+## The families
+
+| tier | cells | arms | what it runs | notes |
+|---|---|---|---|---|
+| `rtx6000` | `rtx6000-{h3,ltx25}` | 7 | the RTX PRO 6000 parity baseline: H3, FastH3, LTX-2.5 | D1a; `runpod-http.sh`'s default |
+| `techniques` | `techniques-*` (4) | 13 | technique profiles against the baseline binary and this build, byte identity | needs `--baseline-sha` |
+| `b6` | `b6-*` (8) | 16 | the loader split's load paths, baseline binary vs this build, byte identity | needs `--baseline-sha` |
+| `rtx5090` | `rtx5090-*` (5) | 17 | the sol-engine RTX 5090 suite (dense, Sol, fullopt, TAE decoders) | resident on the PRO 6000 |
+| `fastvideo` | `fastvideo-*` (6) | 17 | our stack without sol-engine techniques, TAE twins, lossy gates | |
+| `h3arms` | `h3arms-*` (3) | 13 | FastH3 Sol / TeaCache arms gated against the plain recipe | 11 arms skip on the EU volume (`h3-8step`) |
+| `trace` | `trace-{h3,ltx25}` | 5 | one CUPTI-traced warm step per workload | |
+| `ltxfps` | `ltxfps-{ltx25,h3}` | 5 | LTX-2.5 at 25 / 48 / 50 fps and silent, the frame-sink checks | |
+| `ltxvae` | `ltxvae-*` (4) | 12 | the LTX-2.5 VAE decode alone (`vae-bench`) | |
+| `precision` | `precision-{h3,ltx25}` | 8 | precision switches against f32 activations | the script's default mode only |
+
+The script keeps the other families. ADR-0019 §9.1 says why for each and when its branch retires. An arm whose tree is
+not on the EU volume (`h3-8step`) is recorded as skipped (`weights incomplete`), as the script records it.
+
+Cell fields beyond D1a ([ADR-0019 §9.2](../adr/0019-fv-lab.md)):
+
+```toml
+[[arm]]
+name = "b6-solh3-tree-base"
+bin = "baseline"            # FV_BASELINE_SHA's fv-gpucheck, fetched into <scratch>/baseline-<sha>/
+env = []                    # a bare `env` before the binary, as the script writes it
+tae = "taeh3.safetensors"   # read as {tae}/taeh3.safetensors; fetched once, else the arm is skipped
+...
+
+[[compare]]
+baseline = "a"
+candidate = "b"
+gate = { kind = "lossy" }   # this pair's gate, right after the compare
+```
+
+```sh
+./fv-lab run b6 --dry-run --baseline-sha <7>      # the baseline tiers need the commit
+RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family b6 --baseline-sha <base7> --yes --wait
+./fv-lab run rtx5090 --dry-run --cells h3-480p-fullopt,h3-480p-fullopt-taeh3   # a subset, by arm
+```
 
 ## On a GPU box: `fv-lab run`
 
@@ -87,10 +128,12 @@ alike, fetched by both drivers). Two runs of one commit compare with
 bash scripts/gpu/fv-lab-compare-runs.sh <fv-lab run dir> <runpod-http run dir>
 ```
 
-(same arms, same exits and skips, byte-identical frames records); the D1a GPU gate is that command after one `fv-lab
+(same arms, same exits and skips, byte-identical frames records, and for the D1b families the same compare verdicts
+and the same gate reports); the D1a GPU gate is that command after one `fv-lab
 pod up --sha <7> --family rtx6000 --yes --wait` and one `runpod-http.sh run <7>` of the same commit
 ([ADR-0019 §8](../adr/0019-fv-lab.md)). The commit must be one whose runtime image carries fv-lab and the frames record:
-the final head of PR #171 or later.
+the final head of PR #171 or later. ADR-0019 §9.5 has the D1b families' runs: the cheapest cells per family and their
+cost.
 
 ## Keeping it equal to the scripts
 
@@ -99,6 +142,8 @@ bash scripts/gpu/tests/fv-lab-goldens.sh           # regenerate crates/fastvideo
 bash scripts/gpu/tests/fv-lab-goldens.sh --check   # CI (control.yml)
 ```
 
-The fixtures are the script's dry run, its weight gates (`verify-weights.sh --list`), `runpod-http.sh plan`'s pod
-body and its `frames_digest` of a sample; `tests/{dry_run,payload_golden,frames_digest,fv_lab_bin}.rs` hold fv-lab to
+For every tier of `lab/tiers.toml`, the fixtures are the script's dry run (`<tier>-dry-run.txt`), its weight gates
+(`<tier>-gates.tsv`: the cells the dry run gated, with their `verify-weights.sh --list` needs) and `runpod-http.sh
+plan`'s pod body (`runpod-http-<tier>.json`). Once, there is also its `frames_digest` of a sample. A new tier fails
+`--check` until its fixtures are written; `tests/{dry_run,payload_golden,frames_digest,fv_lab_bin}.rs` hold fv-lab to
 them. The script runs every script under `env -i`, so your `FV_*` / `RUNPOD_*` settings do not leak in.

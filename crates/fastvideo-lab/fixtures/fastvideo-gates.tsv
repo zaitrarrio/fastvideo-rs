@@ -1,0 +1,24 @@
+arm	h3-base-768p	h3-base	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	fasth3-8step-768p	fasth3-8step	-	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	fasth3-4step-vsa-768p	fasth3-4step-vsa	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:vsa-datafree/adapter_model.safetensors
+arm	fasth3-8step-768p-taeh3	fasth3-8step	/workspace/weights/auxiliary/tae/taeh3.safetensors	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	fasth3-4step-vsa-768p-taeh3	fasth3-4step-vsa	/workspace/weights/auxiliary/tae/taeh3.safetensors	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:vsa-datafree/adapter_model.safetensors
+gate	fasth3-8step-768p	fasth3-8step-768p-taeh3	lossy	-
+gate	fasth3-4step-vsa-768p	fasth3-4step-vsa-768p-taeh3	lossy	-
+arm	h3-base-480p	h3-base	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	fasth3-8step-480p	fasth3-8step	-	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	fasth3-4step-vsa-480p	fasth3-4step-vsa	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:vsa-datafree/adapter_model.safetensors
+arm	fasth3-8step-480p-taeh3	fasth3-8step	/workspace/weights/auxiliary/tae/taeh3.safetensors	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	fasth3-4step-vsa-480p-taeh3	fasth3-4step-vsa	/workspace/weights/auxiliary/tae/taeh3.safetensors	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:vsa-datafree/adapter_model.safetensors
+gate	fasth3-8step-480p	fasth3-8step-480p-taeh3	lossy	-
+gate	fasth3-4step-vsa-480p	fasth3-4step-vsa-480p-taeh3	lossy	-
+arm	fasth3-4step-dense-768p	fasth3-4step-dense	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:dense-datafree/adapter_model.safetensors
+arm	ltx25-4k5s	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	ltx25-4k5s-taehv	ltx25-two-stage	/workspace/weights/auxiliary/tae/taeltx2_3_wide.safetensors	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+gate	ltx25-4k5s	ltx25-4k5s-taehv	lossy	-
+arm	ltx25-1080p20s	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	ltx25-1080p20s-taehv	ltx25-two-stage	/workspace/weights/auxiliary/tae/taeltx2_3_wide.safetensors	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+gate	ltx25-1080p20s	ltx25-1080p20s-taehv	lossy	-
+arm	ltx25-512p	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	ltx25-512p-taehv	ltx25-two-stage	/workspace/weights/auxiliary/tae/taeltx2_3_wide.safetensors	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+gate	ltx25-512p	ltx25-512p-taehv	lossy	-

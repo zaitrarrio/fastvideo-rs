@@ -1,0 +1,49 @@
+# The b6 family's b6-ltx25-ref2v pair (runpod-matrix.sh `b6`, plan B6,
+# docs/adr/0017-loader-stages.md): the baseline binary (FV_BASELINE_SHA's
+# runtime image, fetch-baseline.sh) and this build with the same command line
+# and environment, every arm encoding its prompt (--no-text-cache), then
+# compare-clips --off-identity. `env = []` keeps the script's bare `env`
+# before the binary. Schema: crates/fastvideo-lab/schemas/cell.v1.json;
+# docs/adr/0019-fv-lab.md (D1b).
+schema = 1
+name = "b6-ltx25-ref2v"
+description = "LTX-2.5 reference-to-video: the Ingredients IC-LoRA attached unfused at load, fused at stage 1 (the oracle's sheet and bucket); byte identity"
+
+[workload]
+model = "ltx2"
+prompt = "Reference sheet: a rocky coastline at golden hour and a cartoon orange crab. Generated video: the crab scuttles across the wet sand."
+seed = 1024
+frames = 49
+width = 1536
+height = 896
+note = "runpod-matrix.sh's SEED and the b6 reference-sheet prompt; the oracle's 1536x896 bucket, 49 frames, dense stage 2"
+
+[lists]
+ltx_b6 = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--seed",
+  "{seed}", "--two-stage", "--text", "streamed", "--no-text-cache"]
+
+[[arm]]
+name = "b6-ltx25-ref2v-base"
+gate = "ltx25-ref2v"
+trees = ["ltx25", "ltx25-ic-lora-ingredients"]
+bin = "baseline"
+env = []
+argv = ["{@ltx_b6}", "--dit", "{weights}/ltx25", "--height", "{height}", "--width", "{width}", "--num-frames",
+  "{frames}", "--dense-stage2", "--reference", "{root}/scripts/gpu/fixtures/ltx-ref-sheet-768x448.png",
+  "--ic-lora", "{weights}/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors",
+  "--prompt", "{prompt}", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "b6-ltx25-ref2v-pr"
+gate = "ltx25-ref2v"
+trees = ["ltx25", "ltx25-ic-lora-ingredients"]
+env = []
+argv = ["{@ltx_b6}", "--dit", "{weights}/ltx25", "--height", "{height}", "--width", "{width}", "--num-frames",
+  "{frames}", "--dense-stage2", "--reference", "{root}/scripts/gpu/fixtures/ltx-ref-sheet-768x448.png",
+  "--ic-lora", "{weights}/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors",
+  "--prompt", "{prompt}", "--clip", "{runs}/{arm}/frames"]
+
+[[compare]]
+baseline = "b6-ltx25-ref2v-base"
+candidate = "b6-ltx25-ref2v-pr"
+args = ["--off-identity"]
