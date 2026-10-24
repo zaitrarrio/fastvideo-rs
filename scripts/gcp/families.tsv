@@ -2,9 +2,9 @@
 # scripts/gcp/{vm,e2e,weights}.sh and by crates/fastvideo-serve/tests/e2e.rs
 # (gcp_configs_*), which checks every config against today's fv-serve schema,
 # against its Runpod twin, and as a family Durable Object worker.
-# Columns (tab separated; '-' = none). The weight_trees and served columns of every row with a
-# runpod_twin are GENERATED from families/*.toml by control/gen-configs.mjs (the twin's [[models]]
-# recipes resolved to their variants); do not edit them, run `node control/gen-configs.mjs`.
+# GENERATED from deploy/deploy.toml by control/gen-configs.mjs; do not edit: edit its [[gcp]] rows.
+# The weight_trees and served columns of a row with a runpod_twin come from the twin's [[models]]
+# (their variants in families/*.toml). Columns (tab separated; '-' = none):
 # family	config	runpod_twin	dispatch_family	verify_cells	weight_trees	machine	fal_app	minimax_model	served	reactor_mode
 h3-turbo	gcp-h3-turbo.toml	runpod.toml	h3	fasth3-4step-vsa aux	FastH3-4-step-Preview-v1-LoRA h3-base	g4-standard-48	minimax/h3-turbo	MiniMax-H3	fasth3	av
 h3-max	gcp-h3-max.toml	runpod-h3-max.toml	h3	sol-h3 aux	FastH3-4-step-Preview-v1-LoRA h3-base	g4-standard-48	minimax/h3-max	MiniMax-H3-Max	sol-h3	av

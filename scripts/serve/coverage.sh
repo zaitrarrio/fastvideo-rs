@@ -47,6 +47,9 @@ CRATES=(
   # The gold files and the profile-comment lint (plan D2, ADR-0009): its tests read
   # lab/gold, families and profiles, so they run on every PR that touches them.
   fastvideo-lab
+  # The family manifests' and the deployment data's types, validation and schema drift
+  # (ADR-0008, ADR-0011): its tests read families/ and deploy/deploy.toml.
+  fastvideo-manifest
 )
 PKGS=()
 for c in "${CRATES[@]}"; do PKGS+=(-p "$c"); done

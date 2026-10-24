@@ -18,6 +18,10 @@
 //!   [`VariantManifest`]: `families/<family>.toml`, the runtime's superset
 //!   the engine catalog and the deployment tooling are generated from. Not
 //!   a public format: it is this repository's, versioned by `schema`.
+//! - [`deploy`]: the deployment data (ADR-0011), [`DeployManifest`]:
+//!   `deploy/deploy.toml`, the presets (one pool each), image variants, GCP
+//!   rows and autoscale pools the deployment tooling is generated from,
+//!   checked against the family manifests. Not a public format either.
 //!
 //! Pure: no I/O (callers read files), no CUDA, no other fastvideo crate.
 //! The optional `fs` feature adds the one directory reader
@@ -30,6 +34,7 @@
 //! §7.2, §7.10).
 
 pub mod canonical;
+pub mod deploy;
 pub mod family;
 pub mod lineage;
 pub mod manifest;
@@ -40,6 +45,10 @@ pub mod schema;
 pub mod sig;
 
 pub use canonical::{to_canonical_bytes, to_canonical_string, CanonicalError};
+pub use deploy::{
+    AutoscaleSection, Compute, DeployError, DeployManifest, FamilyPreset, GcpRow, GpuFloor, Image,
+    LeftOut, PoolModel, Preset, DEPLOY_SCHEMA, EU_DATA_CENTER, EU_REGION, EU_VOLUME_ID,
+};
 pub use family::{
     FamilyError, FamilyHeader, FamilyId, FamilyManifest, FamilySet, GpuNeeds, HdTier, ServingCaps,
     Tier, VariantManifest, FAMILY_SCHEMA, TAE_TREE_PREFIX, TAE_VAR, WEIGHTS_VAR,

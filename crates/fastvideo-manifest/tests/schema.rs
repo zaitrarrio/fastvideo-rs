@@ -1,4 +1,4 @@
-//! Schema export (ADR-0006, ADR-0007): the committed `schemas/*.json` equal
+//! Schema export (ADR-0006, ADR-0007, ADR-0008, ADR-0011): the committed `schemas/*.json` equal
 //! what the crate generates. On drift the test fails and names the file;
 //! regenerate with `FV_MANIFEST_WRITE=<dir> cargo test -p fastvideo-manifest
 //! --test schema` and copy `<dir>/schemas/*.json` over.
@@ -6,8 +6,8 @@
 mod common;
 
 use fastvideo_manifest::schema::{
-    family_schema, manifest_schema, model_toml_schema, schema_text, FAMILY_SCHEMA_PATH,
-    MANIFEST_SCHEMA_PATH, MODEL_TOML_SCHEMA_PATH,
+    deploy_schema, family_schema, manifest_schema, model_toml_schema, schema_text,
+    DEPLOY_SCHEMA_PATH, FAMILY_SCHEMA_PATH, MANIFEST_SCHEMA_PATH, MODEL_TOML_SCHEMA_PATH,
 };
 
 fn check(rel: &str, generated: String) {
@@ -39,6 +39,39 @@ fn manifest_schema_has_not_drifted() {
 #[test]
 fn family_schema_has_not_drifted() {
     check(FAMILY_SCHEMA_PATH, schema_text(&family_schema()));
+}
+
+#[test]
+fn deploy_schema_has_not_drifted() {
+    check(DEPLOY_SCHEMA_PATH, schema_text(&deploy_schema()));
+}
+
+#[test]
+fn deploy_schema_is_strict_and_keeps_autoscale_pools_opaque() {
+    let d: serde_json::Value = serde_json::from_str(&schema_text(&deploy_schema())).unwrap();
+    assert_eq!(d["additionalProperties"], serde_json::Value::Bool(false));
+    let props = d["properties"].as_object().unwrap();
+    for key in [
+        "schema",
+        "dispatch",
+        "images",
+        "presets",
+        "family_presets",
+        "gcp",
+        "autoscale",
+    ] {
+        assert!(props.contains_key(key), "deploy schema lacks `{key}`");
+    }
+    for def in ["Preset", "FamilyPreset", "Image", "PoolModel", "GcpRow"] {
+        assert_eq!(
+            d["$defs"][def]["additionalProperties"],
+            serde_json::Value::Bool(false),
+            "{def} is not strict"
+        );
+    }
+    let pools = &d["$defs"]["AutoscaleSection"]["properties"]["pools"]["items"];
+    assert_eq!(pools["type"], "object");
+    assert_eq!(pools["additionalProperties"], serde_json::Value::Bool(true));
 }
 
 #[test]

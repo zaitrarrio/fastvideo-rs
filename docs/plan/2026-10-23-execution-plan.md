@@ -81,7 +81,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| C1 | `[deploy]` section of the family manifest; presets, variant tables, `families.tsv`, autoscale pools and the Dockerfile variant stages generated from it | `--check` green; one image with boot-time config if the owner decides so | pod | A4 | todo |
+| C1 | `[deploy]` section of the family manifest; presets, variant tables, `families.tsv`, autoscale pools and the Dockerfile variant stages generated from it | `--check` green; one image with boot-time config if the owner decides so | pod | A4 | pr (single image: owner decision, analysed in ADR-0011) |
 | C2 | `fv-boot` in `fastvideo-deploy`: driver check, config materialization, weights plan (volume / registry `hydrate` / hub / none), sidecar, tunnel and phase reports, watchdog, exec; fake provider and fake chunk source tests; the ten boot variants deleted | one boot script in the tree; fv-control sends env only | pod; **GPU** one pod boot on the EU volume | C1, registry WO-002 for the `hydrate` source (volume and hub sources first) | todo |
 | C3 | `fv-deploy` with the `Provider` trait (from `fastvideo-autoscale`): `runpod::{Pod,Serverless}`, `vast`, `gcp`; shared money guards, backstop, ledger, templates, release promote/rollback; fv-control on the shared `Launch` schema | `fv-deploy up` per provider with the same smoke | pod; **GPU** one `fv-deploy up` on Runpod EU | C2 | todo |
 
@@ -398,6 +398,31 @@ ran (pod id, $/hr), result, cost.
   `artifacts/runpod/techniques/90dd3f8-10240259/compare/`. Review: no
   blocking finding; three documentation-only table rows corrected. Main
   merged in since then changed no inference crate, so the evidence stands.
+- 2026-10-24 04:30Z: C1 opened a draft PR (`claude/c1-deploy-section`):
+  `deploy/deploy.toml` (ADR-0011) holds the deployment data A4 left
+  hand-written, value for value: 8 images (one legacy), 24 model presets, 4
+  family presets, 5 GCP rows, the dispatch map, 4 autoscale pools.
+  `fastvideo_manifest::deploy` types and validates it against the families
+  (variant ids, recipe names, family-preset card class >= the variants'
+  floor, prequant nesting, EU-only volume), `schemas/deploy.v1.json` with a
+  drift test. `gen-configs.mjs` generates `deploy-gen.ts` (presets.ts reads
+  it), the `enums.ts` `VARIANTS` / `POOL_PRESET_IDS` regions, the inline
+  worker configs, `variants.sh`, the thin Dockerfile stages, the autoscale
+  pools, the `images.md` table and `families.tsv`; `deployChecks` ties the
+  cpu stage, `serve-image.yml`'s lists, the GCP cells and the autoscale
+  prices to it. Byte identity: fv-control's preset values identical
+  (JSON dump before and after), autoscale.toml and the Dockerfile build lines
+  identical but markers, every families.tsv row identical; intended: one
+  preset order for the three id lists, uniform doc tables. Single image with
+  boot-time config: not implemented, analysed in ADR-0011 for the owner.
+  Control (this container): `--check`, typecheck, vitest 45 files / 595
+  tests, `scripts/gpu/lint.sh`. Build pod `pzocv1keasg3xn`: `cargo test
+  --locked -p fastvideo-manifest` green (3 deploy unit + 2 committed-file +
+  7 schema tests among them), workspace clippy `-D warnings`, fmt,
+  `coverage.sh --tests` 13 crates / 819 passed (fastvideo-manifest joins the
+  set); `fastvideo-autoscale` `committed_example_parses` and the GCP e2e
+  test green on the generated files.
+
 - 2026-10-24 04:30Z: B2 opened draft PR #157 (`claude/b2-video-family`):
   `fastvideo-core::family` (`VideoFamily`, `Pipeline`, the static `FAMILIES`
   list of 21 families, one module each with its Hub-id table and run),

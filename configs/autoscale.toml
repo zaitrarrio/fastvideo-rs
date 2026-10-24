@@ -34,6 +34,7 @@ ttl_s = 60
 "serverless:NVIDIA H100 80GB HBM3" = 4.18
 "serverless:NVIDIA H200" = 5.58
 
+# BEGIN GENERATED from deploy/deploy.toml by control/gen-configs.mjs; do not edit: [[autoscale.pools]]
 # h3-turbo: 24 s warm jobs (+45 s on a worker's first job), cold start
 # ~80 s worker start + 52 s load (docs/serve/e2e/serverless.md).
 [[autoscale.pools]]
@@ -110,5 +111,6 @@ max_lifetime_s = 43200         # drained and replaced after 12 h
 boot_timeout_s = 1200          # an uncached image pull alone took 458 s
 url_template = "https://{id}-8000.proxy.runpod.net"
 ready_path = "/ping"
+# END GENERATED
 
 # ---- END [autoscale] ------------------------------------------------------
