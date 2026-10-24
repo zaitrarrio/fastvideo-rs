@@ -799,6 +799,14 @@ ran (pod id, $/hr), result, cost.
   sol-h3-spark; fasth3-8step is skipped on the EU volume) were not run on
   GPU here; their command lines are covered by the dry-run golden.
 
+- 2026-10-24 12:58Z, coordinator: merged C3a #169 (10:05Z), B6 #170
+  (12:31Z) and D1a #171 (12:58Z), each with main merged in and CI green
+  on that head. Started B4a (step caches, ADR-0020). The build pod
+  `pzocv1keasg3xn` stopped idle at 11:30Z and could not restart (no free
+  vCPU on its host); replaced by `l3d75u8a8zhw47` (same image, env, start
+  command and `fv-build` volume, cpu3c 16 vCPU, EU-RO-1) and the stopped
+  pod deleted. Main's images compile `fv-lab` (`lab-build`) until the
+  tools release from `20cb60c` publishes; then it comes prebuilt.
 - 2026-10-24 13:25Z: B4a opened draft PR #173 (`claude/b4a-stepcache`):
   `fastvideo_models::techniques::step_cache` (ADR-0020), one `StepCache`
   trait and one `EasyCache` / `TeaCache` / `FbCache` / `Taylor`; the nine
@@ -816,11 +824,3 @@ ran (pod id, $/hr), result, cost.
   fullopt TeaCache env / profile, H3 4-step TeaCache fixture, LTX-2.5 dev
   guided FBCache), `FV_B4A_CELLS` for one cell per pod; Wan / SANA /
   LingBot / Cosmos caches rest on the CPU fixtures (no EU-volume tree).
-- 2026-10-24 12:58Z, coordinator: merged C3a #169 (10:05Z), B6 #170
-  (12:31Z) and D1a #171 (12:58Z), each with main merged in and CI green
-  on that head. Started B4a (step caches, ADR-0020). The build pod
-  `pzocv1keasg3xn` stopped idle at 11:30Z and could not restart (no free
-  vCPU on its host); replaced by `l3d75u8a8zhw47` (same image, env, start
-  command and `fv-build` volume, cpu3c 16 vCPU, EU-RO-1) and the stopped
-  pod deleted. Main's images compile `fv-lab` (`lab-build`) until the
-  tools release from `20cb60c` publishes; then it comes prebuilt.
