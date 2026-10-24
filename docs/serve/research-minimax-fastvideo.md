@@ -930,8 +930,8 @@ Sources: `strobe:scripts/batch/` (read in full).
 
 - Wan: `LoadOptions` / `VideoGenerator`
   (`crates/fastvideo-core/src/generator.rs:11-60`).
-- LTX and H3: `AvGenerateOptions` (`crates/fastvideo-core/src/av_generate.rs:12-63`).
-- H3 mapping in `generate_h3` (`av_generate.rs:285-360`):
+- LTX and H3: `AvGenerateOptions` (`crates/fastvideo-core/src/av_generate.rs:12-63` at the time; since plan B2 the common `Request` in `crates/fastvideo-core/src/request.rs` plus `AvGenerateOptions` / `Ltx2Options` / `H3Options` in `crates/fastvideo-core/src/family/{mod,ltx2,h3}.rs`).
+- H3 mapping in `generate_h3` (`av_generate.rs:285-360` at the time; now the run in `crates/fastvideo-core/src/family/h3.rs`):
   - FL2VA and Ref2VA are mutually exclusive.
   - Base MiniMax-H3 T2AV requires `--h3-recipe sol-h3-rtx`; FastH3 recipes
     handle T2AV (`h3_t2v_unwired`).
@@ -995,7 +995,7 @@ Sources: `strobe:scripts/batch/` (read in full).
 | `image_url` + role `first_frame`, or a single image with no role | `H3Request.first_image` (`KeyframeAnchor::First`) | OK once the server downloads or decodes the URL to a file |
 | `image_url` + role `last_frame` | `H3Request.last_image` (`KeyframeAnchor::Last`) | OK; last-frame-only is allowed by both sides |
 | `reference_image` / `reference_video` / `reference_audio` | `H3Request.references` with `ReferenceKind` from the role | OK. It needs the Ref2VA DiT (`transformer_ref/`, `H3PipelineOptions.ref2va`) loaded, possibly as a second pipeline. MiniMax keeps the `content` order; our pipeline keeps the given order. FastVideo reorders to images, videos, audio. **INFERRED:** keep MiniMax's order, since prompts say "reference video 1" |
-| First/last frame mixed with references | 400 | We reject it too (`av_generate.rs:298-302`) |
+| First/last frame mixed with references | 400 | We reject it too (then `av_generate.rs:298-302`; now `crates/fastvideo-core/src/family/h3.rs`, and `RequestError::ImageAndRefs` in `Request::validate`) |
 | `url` forms: http(s), `data:` URI, `mm_file://{file_id}` | Local path | **Gap:** the engine takes paths only. The server must fetch, decode data URIs, and (for `mm_file://`) have a files store or reject with 400 |
 | `resolution: 768P` + `ratio` | `resolve_canvas_size(ratio)` gives, for example, 768×1344 for 16:9 | OK for 16:9, 4:3, 1:1, 3:4 and 9:16. **Caution:** 21:9 at a 768 short edge exceeds the 768×1344 cap, and `resolve_canvas_size` scales it down to about 640×1504. MiniMax's actual 21:9 canvas is not documented, so **INFERRED** it is an equal-area rescale |
 | `resolution: 2K` | none | **Gap:** 2K is MiniMax's regeneration stage (a separate H3 upscaler; "not included in H3-Base"). Our cap is 768×1344. Return 400, or generate at 768P and report it |
@@ -1059,7 +1059,8 @@ Sources: `strobe:scripts/batch/` (read in full).
    is ignored for H3 in `generate_h3`.
 6. **Per-request fps** for Wan and LTX, and **`flow_shift`** for Wan, are not
    in the core request structs.
-7. **One model per process today:** `VideoGenerator` and `generate_av` load
+7. **One model per process today:** `VideoGenerator` and `generate_av` (since
+   plan B2 the family runs in `crates/fastvideo-core/src/family/`) load
    per call. A server needs a resident, reusable pipeline handle. `H3Pipeline`
    supports this: `H3Pipeline::load` then `H3Pipeline::generate(&request, out_dir)`
    (`pipeline.rs:621, 1093`). It also needs FL2VA and Ref2VA DiTs side by

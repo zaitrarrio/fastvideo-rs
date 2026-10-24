@@ -326,6 +326,12 @@ fn main() -> Result<()> {
             } else {
                 args.references.into_iter().map(PathBuf::from).collect()
             };
+            // `--guidance-2`: the second expert's guidance (Wan 2.2), or the
+            // audio branch's for the families that have one (LTX-2).
+            let guidance_2 = args
+                .guidance_2
+                .or(file.guidance_2)
+                .or(file.guidance_scale_2);
             let request = Request {
                 prompt,
                 negative: args.negative.or(file.negative),
@@ -342,10 +348,8 @@ fn main() -> Result<()> {
                 sampler: Sampler {
                     steps: args.steps.or(file.steps).or(file.num_inference_steps),
                     guidance: args.guidance.or(file.guidance).or(file.guidance_scale),
-                    guidance_2: args
-                        .guidance_2
-                        .or(file.guidance_2)
-                        .or(file.guidance_scale_2),
+                    guidance_2: guidance_2.filter(|_| !family.second_guidance_is_audio()),
+                    audio_guidance: guidance_2.filter(|_| family.second_guidance_is_audio()),
                 },
                 conditioning: Request::conditioning_from_inputs(
                     args.image.or(file.image).map(PathBuf::from),

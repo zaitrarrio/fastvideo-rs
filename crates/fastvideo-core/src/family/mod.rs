@@ -112,6 +112,14 @@ pub trait VideoFamily: Sync {
         false
     }
 
+    /// Whether the CLI's `--guidance-2` is this family's audio guidance
+    /// ([`Sampler::audio_guidance`](crate::request::Sampler::audio_guidance),
+    /// LTX-2) rather than the second expert's
+    /// ([`Sampler::guidance_2`](crate::request::Sampler::guidance_2), Wan 2.2).
+    fn second_guidance_is_audio(&self) -> bool {
+        false
+    }
+
     /// Whether the family runs only on CUDA (the CLI's default device for it
     /// is then `cuda` whatever the build).
     fn requires_cuda(&self) -> bool {

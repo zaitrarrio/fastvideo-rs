@@ -142,6 +142,10 @@ impl VideoFamily for Ltx2 {
         resolve_table(NAME, VARIANTS, model_id)
     }
 
+    fn second_guidance_is_audio(&self) -> bool {
+        true
+    }
+
     fn load(&self, variant: Variant, options: &AvGenerateOptions) -> Result<Box<dyn Pipeline>> {
         Ok(Planned::boxed(variant, options, run))
     }
@@ -247,10 +251,11 @@ fn run(
             } else {
                 1.0
             }),
-            audio_guidance_scale: req
-                .sampler
-                .guidance_2
-                .unwrap_or(if is_base { 7.0 } else { 1.0 }),
+            audio_guidance_scale: req.sampler.audio_guidance.unwrap_or(if is_base {
+                7.0
+            } else {
+                1.0
+            }),
             num_inference_steps: req.sampler.steps.map(|n| n as usize).or(if hq {
                 Some(fastvideo_models::ltx2::hq::STAGE1_STEPS)
             } else {

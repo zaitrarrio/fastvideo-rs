@@ -40,10 +40,23 @@ runtime error.
    guidance_2 }`, `conditioning: Vec<Conditioning>` with
    `Conditioning::{Image, Keyframes, Refs, Control, Audio}` (text only = no
    conditioning). `None` means the variant's default; the family fills it in.
-   **`Request::validate(&ModelCaps)`** checks the tasks the conditioning asks
-   for, the canvas (multiple, aspect, pixel budget per short edge), the frame
-   grid, the duration, the fps, the reference counts by kind and the knobs
-   the request sets.
+   **`Request::validate(&ModelCaps)`** does not re-derive the serve path's
+   rules: it states the request as the protocol's `GenerationRequest`
+   (`Request::to_generation_request`: the task from the conditioning, an
+   exact canvas, frames exact or seconds aligned up, local paths as
+   provider files) and runs `fastvideo_protocol::negotiate::precheck`
+   (canvas tiers and pixel budgets, pad-and-crop, the 1080P tier and its
+   length cap, H3 geometry, the frame grid, fps, references, knobs, audio).
+   Before that it refuses what the protocol cannot state: conflicting
+   inputs, a half-set canvas, and `Sampler::audio_guidance`.
+   `tests/validate_parity.rs` runs both over a grid of requests against
+   every served model's real caps (the capabilities golden) and requires the
+   same answer and the same error.
+   `Sampler.guidance_2` is the protocol's second-expert guidance (Wan 2.2);
+   the LTX audio guidance is its own field, `Sampler.audio_guidance`, which
+   no served model takes per request (the LTX engine pins it), and the CLI
+   routes `--guidance-2` to it for LTX
+   (`VideoFamily::second_guidance_is_audio`).
 5. **`AvGenerateOptions` keeps only the common fields**: model id, weights,
    output, device, mp4, plus `FamilyOptions { wan: WanOptions, ltx2:
    Ltx2Options, h3: H3Options }` for the flags only one family reads (Wan:
