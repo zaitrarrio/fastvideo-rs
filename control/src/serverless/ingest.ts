@@ -19,8 +19,8 @@ export async function slsTokenRow(env: Env, token: string, at = now()): Promise<
     .first<SlsRow>();
 }
 
-const BOOT_RE = /^([A-Za-z0-9_.-]{1,64})@(\d{9,11})$/;
-const PHASES = new Set(["boot", "cache", "weights", "step", "serve", "failed"]);
+export const BOOT_RE = /^([A-Za-z0-9_.-]{1,64})@(\d{9,11})$/;
+export const SLS_PHASES = new Set(["boot", "cache", "weights", "step", "serve", "failed"]);
 
 /** POST /ingest/v1/sls-report: {pod: "<worker>@<container start>", phase: boot | cache | weights | step | serve | failed, detail}. */
 export async function slsReport(env: Env, req: Request): Promise<{ ok: true }> {
@@ -35,7 +35,7 @@ export async function slsReport(env: Env, req: Request): Promise<{ ok: true }> {
   const m = typeof b.pod === "string" ? BOOT_RE.exec(b.pod) : null;
   if (!m) throw new HttpError(400, "pod: <worker id>@<container start, unix s>");
   const phase = String(b.phase || "");
-  if (!PHASES.has(phase)) throw new HttpError(400, `phase: one of ${[...PHASES].join(", ")}`);
+  if (!SLS_PHASES.has(phase)) throw new HttpError(400, `phase: one of ${[...SLS_PHASES].join(", ")}`);
   const detail = scrub(env, String(b.detail ?? "")).slice(0, 300);
   const t = now();
   const prev = (await env.DB.prepare("SELECT * FROM serverless_boots WHERE endpoint = ? AND boot = ?").bind(row.id, b.pod).first<BootRow>()) ?? { worker_id: m[1]!, boot: b.pod as string, boot_at: t };

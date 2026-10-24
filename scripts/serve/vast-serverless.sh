@@ -43,7 +43,8 @@ onstart() {
 set -u
 env | grep -E '^(FV_|VAST_|PUBLIC_IPADDR|CONTAINER_ID|RUST_LOG)' >> /etc/environment
 mkdir -p /var/log /fvstate
-FV_SERVE_FORWARD=1 nohup /opt/fastvideo-rs/bin/fv-serve --config $CONFIG >> $MODEL_LOG 2>&1 &
+B=/opt/fastvideo-rs/bin/fv-boot; [ -x "\$B" ] || B=/opt/fastvideo-rs/bin/fv-serve
+FV_SERVE_FORWARD=1 nohup "\$B" --config $CONFIG >> $MODEL_LOG 2>&1 &
 command -v git >/dev/null && command -v python3 >/dev/null || { apt-get update -qq && apt-get install -y -qq git python3 python3-venv >/dev/null; }
 R=/opt/fv-pyworker; rm -rf \$R; mkdir -p \$R
 cp /opt/fastvideo-rs/deploy/vast/worker.py \$R/worker.py

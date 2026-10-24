@@ -99,11 +99,14 @@ smoke() {
   # cpu image none; none has the debug tooling.
   docker run --rm --entrypoint bash -e V="$v" "$img" -euo pipefail -c '
     bad() { echo "FAIL: $*"; exit 1; }
-    for b in /opt/fastvideo-rs/bin/fv-serve /usr/local/bin/ffmpeg /usr/local/bin/ffprobe; do
+    for b in /opt/fastvideo-rs/bin/fv-serve /opt/fastvideo-rs/bin/fv-boot /usr/local/bin/ffmpeg /usr/local/bin/ffprobe; do
       ldd "$b" | grep "not found" && bad "$b: unresolved libraries"
     done
     test "$FV_VARIANT" = "$V"
     test -f "$FV_CONFIG"
+    # the entrypoint is fv-boot (docs/adr/0014-fv-boot.md); fv-entry.sh is gone
+    /opt/fastvideo-rs/bin/fv-boot version
+    test -e /opt/fastvideo-rs/bin/fv-entry && bad "fv-entry is in the image"
     cat /opt/fastvideo-rs/bin/fv-serve.features
     FV_ENGINE=fake /opt/fastvideo-rs/bin/fv-serve --config "$FV_CONFIG" --print-config >/dev/null
     FV_ENGINE=fake /opt/fastvideo-rs/bin/fv-serve --config /etc/fv/runpod-fake.toml --print-config >/dev/null

@@ -381,8 +381,9 @@ RUN apt-get update \
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/target \
     cargo build --release -p fastvideo-serve --features "$FV_SERVE_FEATURES" \
+ && cargo build --release -p fastvideo-deploy --features boot --bin fv-boot \
  && mkdir -p /out \
- && cp /target/release/fv-serve /out/fv-serve \
+ && cp /target/release/fv-serve /target/release/fv-boot /out/ \
  && echo "$FV_SERVE_FEATURES" > /out/fv-serve.features
 
 
@@ -399,10 +400,12 @@ FROM runtime AS serve
 ENV FV_CONFIG=/etc/fv/runpod.toml
 COPY configs/serve /etc/fv
 COPY deploy/vast/worker.py /opt/fastvideo-rs/deploy/vast/worker.py
-COPY --from=serve-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
+COPY --from=serve-build /out/fv-serve /out/fv-serve.features /out/fv-boot /opt/fastvideo-rs/bin/
 LABEL org.opencontainers.image.description="fv-serve: FastVideo, MiniMax, fal and LTX APIs over the fastvideo-rs CUDA engines"
 EXPOSE 8000
-ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-serve"]
+# fv-boot (docs/adr/0014-fv-boot.md): the boot sequence, then exec fv-serve with the same arguments
+# (`--version`, `--help` and `--print-config` go straight to fv-serve).
+ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-boot"]
 
 # >>> llama-server: everything from here to "<<< llama-server", the UBUNTU ARG,
 # scripts/gpu/cuda-13.pins and cuda-13-runtime.pins are hashed into the
@@ -478,16 +481,17 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY scripts/gpu/r2-fetch.py /opt/fastvideo-rs/bin/r2-fetch.py
 # The prompt upsampler's local sidecar (docs/serve/upsampler-local.md): llama-server (the llama-server stage above,
-# or its published fastvideo-rs-runtime:llama-server-<hash> image) and its launcher, which fv-entry and fv-control's
-# boots run when FV_UPSAMPLER_LOCAL=1. Its libraries must all resolve from base-cuda (no libcuda: the host's).
+# or its published fastvideo-rs-runtime:llama-server-<hash> image) and its launcher, which fv-boot (and fv-control's
+# legacy shell boots, until every image carries fv-boot) run when FV_UPSAMPLER_LOCAL=1. Its libraries must all resolve from base-cuda (no libcuda: the host's).
 COPY --from=llama-server /llama-server /llama-server.version /opt/fastvideo-rs/bin/
 COPY deploy/runpod/fv-upsampler.sh /opt/fastvideo-rs/bin/fv-upsampler
 RUN if ldd /opt/fastvideo-rs/bin/llama-server | grep 'not found'; then echo "llama-server: unresolved libraries"; exit 1; fi \
  && cat /opt/fastvideo-rs/bin/llama-server.version
-COPY --from=serve-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
-COPY deploy/runpod/fv-entry.sh /opt/fastvideo-rs/bin/fv-entry
+COPY --from=serve-build /out/fv-serve /out/fv-serve.features /out/fv-boot /opt/fastvideo-rs/bin/
 EXPOSE 8000
-ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-entry"]
+# fv-boot (docs/adr/0014-fv-boot.md; it replaced deploy/runpod/fv-entry.sh): driver check, config, weights plan,
+# the upsampler sidecar, then exec fv-serve with the entrypoint's arguments.
+ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-boot"]
 
 # ---- one thin stage per variant: its config (plus the fake config for the
 # CI smoke check) and the variant's identity for the entrypoint.
@@ -540,16 +544,16 @@ RUN apt-get update \
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/target \
     cargo build --release -p fastvideo-serve --features "$FV_CPU_FEATURES" \
+ && cargo build --release -p fastvideo-deploy --features boot --bin fv-boot \
  && mkdir -p /out \
- && cp /target/release/fv-serve /out/fv-serve \
+ && cp /target/release/fv-serve /target/release/fv-boot /out/ \
  && echo "$FV_CPU_FEATURES" > /out/fv-serve.features
 
 
 FROM base-os AS serve-cpu
-COPY --from=cpu-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
-COPY deploy/runpod/fv-entry.sh /opt/fastvideo-rs/bin/fv-entry
+COPY --from=cpu-build /out/fv-serve /out/fv-serve.features /out/fv-boot /opt/fastvideo-rs/bin/
 COPY configs/serve/runpod-fake.toml /etc/fv/
 ENV FV_VARIANT=cpu FV_CONFIG=/etc/fv/runpod-fake.toml
 LABEL org.opencontainers.image.description="fv-serve cpu: fake engine, CPU only (configs/serve/runpod-fake.toml)"
 EXPOSE 8000
-ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-entry"]
+ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-boot"]

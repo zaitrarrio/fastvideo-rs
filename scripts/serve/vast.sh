@@ -57,13 +57,15 @@ offer_query() {
 }
 
 # ssh_direct: sshd is PID 1 and the image ENTRYPOINT never runs, so onstart
-# starts fv-serve (same text as fastvideo_deploy::vast::onstart).
+# starts fv-boot, else (an image from before fv-boot) fv-serve (same text as
+# fastvideo_deploy::vast::onstart; docs/adr/0014-fv-boot.md).
 onstart() {
   cat <<EOF
 #!/bin/bash
 env | grep -E '^(FV_|VAST_|PUBLIC_IPADDR|CONTAINER_ID|RUST_LOG)' >> /etc/environment
 mkdir -p /var/log /fvstate
-nohup /opt/fastvideo-rs/bin/fv-serve --config $CONFIG >> $MODEL_LOG 2>&1 &
+B=/opt/fastvideo-rs/bin/fv-boot; [ -x "\$B" ] || B=/opt/fastvideo-rs/bin/fv-serve
+nohup "\$B" --config $CONFIG >> $MODEL_LOG 2>&1 &
 EOF
 }
 
