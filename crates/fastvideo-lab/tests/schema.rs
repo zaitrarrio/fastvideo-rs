@@ -166,9 +166,24 @@ fn run_plan_schemas_are_strict_and_name_their_fields() {
             ("Compare", vec!["baseline", "candidate", "args", "gate"]),
             ("PairedGate", vec!["kind", "off"]),
             ("GatePair", vec!["baseline", "candidate", "kind", "off"]),
+            // D1d (ADR-0019 §11): the verdict step.
+            (
+                "Verdict",
+                vec![
+                    "family",
+                    "arms",
+                    "describe",
+                    "evidence",
+                    "count",
+                    "identical",
+                ],
+            ),
+            ("Evidence", vec!["file", "lines", "strip", "diff"]),
+            ("LineCount", vec!["what", "lines", "min", "why"]),
+            ("Identical", vec!["baseline", "candidate", "why"]),
         ],
     );
-    for k in ["workload", "lists", "arm", "compare", "gate"] {
+    for k in ["workload", "lists", "arm", "compare", "gate", "verdict"] {
         assert!(c["properties"].get(k).is_some(), "cell schema lacks `{k}`");
     }
 }
