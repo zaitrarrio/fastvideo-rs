@@ -5,6 +5,7 @@
   four additive cell-schema fields, a golden per tier, §9; GPU gate passed for all nine). The ten families' script
   branches are deleted and the tiers are fv-lab only, with frozen goldens (§10, 2026-10-25). D1d's first slice
   (§11: a typed verdict step in the cell schema, `b4a` as a tier, `fv-lab gate`) is proposed, its GPU gate pending.
+  Two dropped modes are tiers again, frozen from the script at `5987e6a4` (§12, proposed; GPU check pending).
   D1c (`report`), the rest of D1d (`oracle`) and the retirement of the rest of `runpod-matrix.sh`, `runpod-http.sh`
   and the port one-offs follow (§8)
 - Date: 2026-10-24
@@ -416,7 +417,7 @@ is `h3-8step`, and that a cell belongs to exactly one tier.
 | `techniques` H3 caches | shared by the three arms until this PR | per arm, both sides | see below |
 | `FV_GEN_TIMEOUT_S` default 900 (`b6`) | when run by hand | the tier's 3600 | `runpod-http.sh` passes 3600 to every family, so 900 never applied on a pod |
 | `FV_PROMPTS`, `FV_LPIPS` defaults meant for `h3arms` | honoured | `FV_PROMPTS` ignored (§7), `--lpips` | a prompt set is a cell's workload; a `h3arms-eval` tier with `prompt_set` is one cell file each when wanted |
-| `FV_VAE_*` (`ltxvae`), `FV_LTXFPS*`, `FV_PRECISION_ARM` | change the arms | not read | the cells are the defaults; another variant is another tier |
+| `FV_VAE_*` (`ltxvae`), `FV_LTXFPS*`, `FV_PRECISION_ARM` | change the arms | not read | the cells are the defaults; another variant is another tier (`FV_PRECISION_ARM=ltx-nvfp4` and `FV_VAE_GEN=1` are, since §12) |
 
 **`techniques`: the H3 caches were shared, and the identity missed two code paths (review of #176).**
 - **What was wrong:** the three H3 arms of a `tech_h3` cell shared `--text-cache $SCRATCH/h3-text-cache` (keyed by
@@ -519,7 +520,8 @@ rows give each one's evidence) are fv-lab only.
 4. **Dropped with the branches**, not moved (§9.4 already left them out of the tiers): `precision`'s
    `FV_PRECISION_ARM=ltx-nvfp4` mode, `ltxvae`'s `FV_VAE_GEN=1` arms, the `FV_VAE_*`, `FV_LTXFPS*`, `FV_TECH_CELLS`,
    `FV_B6_CELLS` knobs, and the summaries copied into `live.log`. Either variant returns as its own tier if wanted
-   (the commands are in git history).
+   (the commands are in git history). Both did, on the owner's decision of 2026-10-25: `precision-nvfp4` and
+   `ltxvae-gen` (§12).
 5. **`headline`** (stays in the script) borrowed cells from `fastvideo`, `rtx6000`, `rtx5090` and `precision` by
    running the script recursively with `FV_RUNS_DIR`. It now runs `fv-lab run <tier> --cells …` into its run
    directory, so `fv-lab run` gained `--runs-dir` / `FV_RUNS_DIR` (the script's switch; default
@@ -751,6 +753,172 @@ Then, in the next D1 PR: `b4a` joins `fv-lab-retired.sh`, its branch is deleted,
    `<run>.regate`, and `--check` compares.
 4. **`oracle`** (the `oracle` family, `oracle.sh`, `fv-gpucheck compare-dumps`) is the second D1d slice; the
    `determinism` verdicts become new typed checks under `[verdict]` (§11.1) with D1c / D1d.
+
+### 12. Two dropped modes restored as tiers: `precision-nvfp4`, `ltxvae-gen`
+
+Status: proposed 2026-10-25 (owner decision "restore dropped test modes"); CPU part done, GPU check pending (the
+coordinator's, below). §10 item 4 dropped two modes of retired families with their branches. They come back as
+tiers of their own, each reproducing what the script ran in that mode at `5987e6a4` (main before #185), the last
+commit with the branches.
+
+**What the modes ran** (`git show 5987e6a4:scripts/gpu/runpod-matrix.sh`, the `precision)` and `ltxvae)` branches):
+
+| mode | arms, in order | compares / gates | knobs |
+|---|---|---|---|
+| `FV_PRECISION_ARM=ltx-nvfp4 runpod-matrix.sh precision` | per workload of `FV_NVFP4_WORKLOADS` (default `4k5s 1080p20s`): `ltx25-<wl>-sol-bf16` (`--techniques ltx2/ltx25_distill_sol`), `ltx25-<wl>-sol-nvfp4` (`ltx2/ltx25_distill_sol_nvfp4`); Sol stage 2, warm, `--no-text-cache`. **Only** these: the mode exited before the default arms | per workload a compare, then its lossy gate; then `rm -rf` of both arms' frames | `FV_NVFP4_WORKLOADS` |
+| `FV_VAE_GEN=1 runpod-matrix.sh ltxvae` | the default 12 arms, and per workload after its untraced arms: `ltx25-<wl>-gen` (cold `ltx2 gen`, dense stage 2, `FASTVIDEO_LTX2_SAVE_LATENTS=$RUNS/latents-<wl>`, `FASTVIDEO_GPU_TRACE_DECODE=$FV_VAE_TRACE`), `ltx25-<wl>-gen-streaming` (`vae-bench --latents` those, streaming decoder, warm) | the default two, and per workload `compare gen-streaming gen` | `FV_VAE_TRACE` (default 1), `FV_VAE_UNTRACED` (default 1), `FV_VAE_WORKLOADS` (default both) |
+
+**Design.**
+
+1. **Tiers, cells.** `precision-nvfp4`: `precision-nvfp4-ltx25-{4k5s,1080p20s}`, one cell per workload (two arms, a
+   compare with its paired lossy gate, §9.2 item 4): 4 arms. `ltxvae-gen`: the `ltxvae` tier's four cells with a
+   `ltxvae-gen-<wl>` cell after each workload's two, in the script's order: 6 cells, 16 arms. The gen cell's second
+   arm reads `{runs}/latents-<wl>`, which its first arm writes; arms run in cell order, so that holds. Both tiers are
+   the `rtx6000` tier's pod (§9), as `runpod-http.sh` gave the script's every `FV_FAMILY`. **No schema change**: the
+   cell v1 fields of D1a/D1b cover both modes (an `env` entry with `{runs}`, a `--techniques` argv, paired gates), so
+   nothing collides with D1d's `[verdict]` (#188).
+2. **Shared cells.** `ltxvae-gen` lists `ltxvae`'s cells instead of copying 12 arms. This is the one exception to
+   "a cell belongs to exactly one tier" (`tests/lab_files.rs` pins it: `ltxvae-gen` shares exactly `ltxvae`'s cells,
+   in order, and no other tier shares any). `fv-lab run ltxvae-4k5s` still resolves to `ltxvae` (the first tier
+   listing it); `--family ltxvae-gen` writes it into `ltxvae-gen`'s run directory. Not chosen: a gen-only tier (its
+   dry run is not the mode's, and a run of the mode would need two pods); copied cells (two sources for 12 arms).
+3. **Knobs.** The workload knobs (`FV_NVFP4_WORKLOADS`, `FV_VAE_WORKLOADS`) and `FV_VAE_UNTRACED=0` become `--cells`
+   / `FV_CELLS` by arm (one cell per workload; the untraced arms are their own cells). `FV_VAE_TRACE=0` has no
+   equivalent and stays refused (a `trace = 0` twin is another tier when wanted). Only the defaults are restored.
+4. **What the tiers do not do** (§9.4's kind, log or disk only): the `precision` mode's `rm -rf` of the four arms'
+   frames after each gate (fv-lab keeps them on the pod's 120 GB container disk, about 8 GB for the four arms; the
+   frames records are written before it on both sides and no fetch takes frames) and `ltxvae`'s `vae-bench` /
+   `video decode` lines copied into `live.log` (both runners write the arms' `stderr.log`).
+5. **Frozen from the start.** No script branch can write these tiers' fixtures, so they are what the scripts at
+   `5987e6a4` wrote in each mode, under the inputs of §9.3, and are listed in `scripts/gpu/fv-lab-retired.sh`
+   (`FV_LAB_RETIRED`): `fv-lab-goldens.sh --check` checks they exist and that no branch has their names,
+   `tests/dry_run.rs::retired_families_are_frozen_tiers_without_a_branch` the same and the table below. Retired is
+   the category that fits: "fv-lab only, frozen goldens, no branch", and `runpod-http.sh run` / `plan` then route
+   `FV_FAMILY=<tier>` to `fv-lab pod up` like the ten. `FV_LAB_RESTORED` (same file) maps each tier to its mode:
+   `precision-nvfp4:precision:FV_PRECISION_ARM=ltx-nvfp4`, `ltxvae-gen:ltxvae:FV_VAE_GEN=1`.
+   `scripts/gpu/tests/fv-lab-restored-goldens.sh [--check]` reproduces the six fixtures from that commit (`git
+   archive 5987e6a4 scripts/gpu`, `env -i`, the mode's `K=V` beside `FV_DRY_RUN=1`, and `FV_EXTRA_ENV=<K=V>` for
+   `runpod-http.sh plan`). It needs the history, so it is a manual check, not CI's. The same steps for the default
+   modes reproduce the frozen `precision` and `ltxvae` fixtures byte for byte (the plan body aside, which then
+   carries the dummy setting), which checks the method.
+6. **Equality, and the only differences.** The fixtures are the script's bytes, so they name the family where
+   fv-lab names the tier, and the pod body carries the mode's setting. `tests/common/mod.rs` maps exactly that and
+   nothing else before comparing:
+   - dry run (`tests/dry_run.rs`, `tests/fv_lab_bin.rs::restored_modes_dry_run_as_the_script_did`): the `[<family>] `
+     prefix and `/runs/<family>/` read as the tier's;
+   - pod body (`tests/payload_golden.rs`): the pod name `fv-lab-<family>-<tag>`, `OUT=$SCRATCH/runs/<family>/…` and
+     the runner's `runpod-matrix.sh <family>` read as the tier's, and `env <K=V> ` on the kernels and run lines read
+     as `env  ` (fv-lab passes no setting: the tier is the mode). The mapped body must equal fv-lab's with §6's
+     differences, as for every tier.
+   Gates (`<tier>-gates.tsv`) carry no family name and compare unchanged. On a real run the same renaming holds:
+   the run directory is `runs/<tier>/<tag>` (and `artifacts/runpod/<tier>/<tag>`), `live.log` lines and
+   `done.json`'s `family` say the tier, the pod is `fv-lab-<tier>-…`; arm directories, commands and files are the
+   script's.
+7. **`runpod-http.sh`.** `FV_EXTRA_ENV` with a mode's exact `K=V` is refused on any retired family, naming the tier:
+   `use FV_FAMILY=precision-nvfp4` / `use FV_FAMILY=ltxvae-gen`. Not routed: routing would put the run under another
+   run directory and pod name than the `FV_FAMILY` asked for, and would need its own translation of the companion
+   knobs, so a refusal that names the one-word fix is less surprising. `FV_NVFP4_WORKLOADS`, `FV_VAE_WORKLOADS` and
+   `FV_VAE_UNTRACED` are refused with "narrow by arm with `FV_CELLS`"; any other value of `FV_PRECISION_ARM` /
+   `FV_VAE_GEN`, and `FV_VAE_TRACE`, keep §10's refusal. `fv-lab-route.test.sh` holds it.
+
+**Weights and GPU.** Every arm reads only `ltx25` (gate `ltx25-two-stage`), on the EU volume `bz0ofkfx45`
+(`volumes.sh` `FV_EU_VOLUME_TREES`); no new tree, no download. The NVFP4 profile quantizes the bf16 FFN weights at
+load. NVFP4 runs on sm_100 / sm_120 (`profiles/ltx2/ltx25_distill_sol_nvfp4.toml`; below sm_100 the FFN stays bf16
+with a log line, which would make the pair a bf16-vs-bf16 check); the script's mode ran on the RTX PRO 6000
+(sm_120: run `51adbb3-09271342`, FVID-2026-09-27-ltx-nvfp4-ffn-cublaslt), and the tier keeps that GPU.
+
+**The GPU check (the coordinator's).** No script branch is left at main, so the script side runs at `5987e6a4` from
+a worktree of that commit, on its published runtime image: `ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-5987e6a`
+**exists** (gpucheck-runtime-image run 40220450426, `workflow_dispatch` on main, 2026-10-25 18:17Z, digest
+`sha256:9a835991908f766bac21b812df2b44e96c3303a366ef022c11cb351860694e94`, build id `2327ed48ab74bffe`, fv-gpucheck
+from `tools-v0.1.49` "built from this commit's tools inputs"; the registry answers 200 for the tag). The fv-lab side
+runs at `SHA`, this PR's head or its merge once its runtime image is published (it must carry these `lab/` cells).
+The cheapest cells that exercise each mode:
+
+```sh
+SHA=<7>                                   # this PR's head or merge, runtime image published
+git worktree add --detach /tmp/fv-5987e6a 5987e6a4
+# precision-nvfp4 at 4k5s: the NVFP4 FFN arm, its bf16 twin, a compare and a lossy gate
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family precision-nvfp4 \
+  --cells ltx25-4k5s-sol-bf16 ltx25-4k5s-sol-nvfp4 --yes --wait
+(cd /tmp/fv-5987e6a && RUNPOD_API_KEY=… FV_FAMILY=precision FV_EXTRA_ENV="FV_PRECISION_ARM=ltx-nvfp4" \
+  FV_CELLS="ltx25-4k5s-sol-bf16 ltx25-4k5s-sol-nvfp4" bash scripts/gpu/runpod-http.sh run 5987e6a)
+bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/precision-nvfp4/$SHA-<MMDDHHMMSS>-<hex> \
+  /tmp/fv-5987e6a/artifacts/runpod/precision/5987e6a-<MMDDHHMM>
+# ltxvae-gen at 4k5s: the cold gen that saves latents, the streaming decode of them, a compare
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family ltxvae-gen \
+  --cells ltx25-4k5s-gen ltx25-4k5s-gen-streaming --yes --wait
+(cd /tmp/fv-5987e6a && RUNPOD_API_KEY=… FV_FAMILY=ltxvae FV_EXTRA_ENV="FV_VAE_GEN=1" \
+  FV_CELLS="ltx25-4k5s-gen ltx25-4k5s-gen-streaming" bash scripts/gpu/runpod-http.sh run 5987e6a)
+bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/ltxvae-gen/$SHA-<MMDDHHMMSS>-<hex> \
+  /tmp/fv-5987e6a/artifacts/runpod/ltxvae/5987e6a-<MMDDHHMM>
+git worktree remove /tmp/fv-5987e6a
+```
+
+The script side is `5987e6a4`'s `runpod-http.sh` with its own guards (its $5/hr cap, its backstop, the GraphQL
+self-delete of #183); the fv-lab side has fv-deploy's (§7). Both on the RTX PRO 6000 Blackwell Server Edition, EU,
+about $2.49/hr. Estimates from D1b (`precision` 4k5s pair ~22 min per side; one 4k5s gen plus a decode ~18 min per
+side, pod boot and preflight included): `precision-nvfp4` ~$1.85, `ltxvae-gen` ~$1.50, about **$3.35** for the
+four pods. Run the two sides of a tier in parallel.
+
+**Byte identity is expected.** The crates in fv-gpucheck's build are `cargo tree --locked -p fastvideo-gpucheck
+--features cuda -e normal,build`'s workspace members: `fastvideo-{gpucheck,cudarc,engine-service,loader,manifest,
+media,models,ops,protocol,trace}`. Add `fastvideo-oxide-kernels` for the oxide cubins (the tools release's `oxide`
+set), `profiles/`, `Cargo.toml`, `Cargo.lock` and `rust-toolchain.toml`. Between `5987e6a4` and this branch (main at
+`6c13e195` merged in), the only change among these is in `fastvideo-manifest`: the deploy section
+(`deploy.rs`, `schemas/deploy.v1.json`) and a `SMOKE_CONFIG` re-export in `lib.rs`. fv-gpucheck links it through
+`fastvideo-engine-service` (the `cuda` feature), but no generation reads the deploy section. `family.rs` is
+unchanged. The other tools inputs (`third_party/cutile-rs`, `scripts/gpu/cuda-13.pins`, `docker/build-base.Dockerfile`,
+`scripts/dev/release-artifacts-pod.sh`) are unchanged, and so is the `runtime` stage of `docker/gpucheck.Dockerfile`
+(only its serve stages changed). Fv-lab, fv-deploy, autoscale, control and scripts changed too, and none of them is in
+a generation.
+
+The binary is not the same build. The tools release's inputs are all of `crates/` (and the paths above;
+`tools-release.sh` `INPUTS`), and `crates/` changed. So the image of the PR head carries another tools build than
+`tools-v0.1.49`: one released from the head's own inputs, else the job compiles, else (on main, with
+`FV_PREBUILT_STALE=latest`) the newest release with a warning. What is promised is equal frames from equal generation
+source, not an equal binary.
+
+Pass: each `fv-lab-compare-runs.sh` exits 0, meaning:
+- both arms ran with byte-identical frames records;
+- the compare report agrees;
+- for `precision-nvfp4`, the gate report exists in both runs;
+- both sides end `matrix_exit=0`.
+
+A lossy gate *verdict* of fail (the 2026-09-27 run failed 4k5s on sharpness) is no run failure on either side.
+
+Before running, recheck at the `SHA` you test (other agents work in `crates/fastvideo-engine-service`'s tests):
+
+```sh
+git diff --stat 5987e6a4 $SHA -- crates/fastvideo-{gpucheck,cudarc,engine-service,loader,manifest,media,models,ops,protocol,trace,oxide-kernels} \
+  profiles Cargo.toml Cargo.lock rust-toolchain.toml third_party/cutile-rs scripts/gpu/cuda-13.pins
+cargo tree --locked -p fastvideo-gpucheck --features cuda -e normal,build --prefix none | grep '(/'   # the list above, unchanged?
+```
+
+Then read the fv-lab image's `dev.fastvideo.tools` label and the image job's notice. It must name a release built
+from `SHA`'s own inputs ("built from this commit's tools inputs") or a compile. A stale release (`FV_PREBUILT_STALE=latest`
+with "no release matches") is another commit's gpucheck.
+
+- **Byte identity no longer promised.** If the diff shows a change outside `fastvideo-manifest`'s deploy section, or
+  the binary is stale, require only a successful run on both sides: `matrix_exit=0`, both arms `exit 0`, the compare
+  and gate reports present. Record which files differed.
+- **Only the NVFP4 arm differs** (the bf16 arm is byte-identical): cuBLASLt picks its FP4 algorithm per driver, so
+  compare the two pods' `box.txt` driver versions before calling it a regression.
+
+**Refused, not ignored (review of #191).**
+- `fv-lab` refuses the settings no tier reads (`crates/fastvideo-lab/src/knobs.rs`):
+  - `fv-lab run` refuses the retired families' mode knobs (§9.4) in its environment.
+  - `pod up --extra-env` refuses those knobs and what the start command sets after `--extra-env`.
+  - This is the same set as `runpod-http.sh`'s `FV_LAB_NOT_READ` (`tests/knobs.rs` holds them equal, and
+    `RESTORED_MODES` equal to `FV_LAB_RESTORED`).
+  - D1d's `FV_B4A_CELLS` refusal (§11.5) is one more entry of the same module (`SCRIPT_KNOBS`), with its message
+    unchanged. It is refused by fv-lab only, because `b4a` still has its script branch, where the script reads it.
+    It joins `FV_LAB_NOT_READ` when `b4a` retires.
+- A restored mode's setting is answered first and names its tier. Each refusal lists every refused key at once.
+- `runpod-http.sh` does the same: the mode check comes before every other refusal of the call, and one message lists
+  all the refused `FV_EXTRA_ENV` keys.
+- `runpod-matrix.sh` names the tier for `FV_PRECISION_ARM=ltx-nvfp4 … precision` / `FV_VAE_GEN=1 … ltxvae`, and says
+  that `precision-nvfp4` / `ltxvae-gen` are fv-lab tiers, never script families (`fv-lab-route.test.sh`).
 
 ## Open decisions
 
