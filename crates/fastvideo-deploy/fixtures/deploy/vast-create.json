@@ -1,0 +1,20 @@
+{
+  "cancel_unavail": true,
+  "client_id": "me",
+  "disk": 40,
+  "env": {
+    "-p 70000:70000": "1",
+    "-p 70010:70010/udp": "1",
+    "-p 8000:8000": "1",
+    "FV_API_KEYS": "<sha256 of the run key>",
+    "FV_SERVE_FORWARD": "1",
+    "FV_SERVE_MODE": "http",
+    "FV_STATE_DIR": "/fvstate",
+    "RUST_LOG": "info"
+  },
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "label": "fvgpu-serve-plan",
+  "onstart": "#!/bin/bash\nenv | grep -E '^(FV_|VAST_|PUBLIC_IPADDR|CONTAINER_ID|RUST_LOG)' >> /etc/environment\nmkdir -p /var/log /fvstate\nB=/opt/fastvideo-rs/bin/fv-boot; [ -x \"$B\" ] || B=/opt/fastvideo-rs/bin/fv-serve\nnohup \"$B\" --config /etc/fv/runpod-fake.toml >> /var/log/fv-serve.log 2>&1 &",
+  "runtype": "ssh_direct",
+  "target_state": "running"
+}

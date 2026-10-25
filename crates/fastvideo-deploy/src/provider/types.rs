@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 /// The only `Launch` schema this crate reads and writes.
 pub const LAUNCH_SCHEMA: u32 = 1;
 
-/// Which provider, and which kind of instance on it. Later slices add
-/// `vast` and `gcp` (plan C3b).
+/// Which provider, and which kind of instance on it (C3a: the two Runpod
+/// kinds; C3b: `vast` and `gcp`, docs/adr/0018-fv-deploy.md §8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderKind {
@@ -29,13 +29,29 @@ pub enum ProviderKind {
     /// A Runpod serverless queue endpoint (REST v1 `POST /templates` +
     /// `POST /endpoints`).
     RunpodServerless,
+    /// A Vast instance (REST `POST /bundles/` offer search, `PUT
+    /// /asks/<offer>/` create; `scripts/serve/vast.sh`).
+    Vast,
+    /// A Google Compute Engine GPU VM (Compute REST v1 firewall + instance
+    /// insert; `scripts/gcp/vm.sh`).
+    Gcp,
 }
 
 impl ProviderKind {
+    /// Every kind, in a fixed order (`--kind` help, tests).
+    pub const ALL: [ProviderKind; 4] = [
+        ProviderKind::RunpodPod,
+        ProviderKind::RunpodServerless,
+        ProviderKind::Vast,
+        ProviderKind::Gcp,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             ProviderKind::RunpodPod => "runpod-pod",
             ProviderKind::RunpodServerless => "runpod-serverless",
+            ProviderKind::Vast => "vast",
+            ProviderKind::Gcp => "gcp",
         }
     }
 
@@ -43,6 +59,8 @@ impl ProviderKind {
         match s {
             "runpod-pod" | "pod" => Some(ProviderKind::RunpodPod),
             "runpod-serverless" | "serverless" => Some(ProviderKind::RunpodServerless),
+            "vast" => Some(ProviderKind::Vast),
+            "gcp" => Some(ProviderKind::Gcp),
             _ => None,
         }
     }

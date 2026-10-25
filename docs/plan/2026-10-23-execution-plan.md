@@ -83,7 +83,7 @@ parallel agents.
 |---|---|---|---|---|---|
 | C1 | `[deploy]` section of the family manifest; presets, variant tables, `families.tsv`, autoscale pools and the Dockerfile variant stages generated from it | `--check` green; one image with boot-time config if the owner decides so | pod | A4 | merged (#156; single image: owner decision, ADR-0011) |
 | C2 | `fv-boot` in `fastvideo-deploy`: driver check, config materialization, weights plan (volume / registry `hydrate` / hub / none), sidecar, tunnel and phase reports, watchdog, exec; fake provider and fake chunk source tests; the ten boot variants deleted | one boot script in the tree; fv-control sends env only | pod; **GPU** one pod boot on the EU volume | C1, registry WO-002 for the `hydrate` source (volume and hub sources first) | merged (#159: fv-boot is the images' entrypoint and every fv-control boot prefers it, ADR-0014; GPU gate green for the image kind on the EU volume (ltx); open per-kind gates before lifting `FV_BOOT_LEGACY` (cluster worker, serverless r2 streaming, edge watchdog, GMI / Brev, upsampler; ADR-0014 §6); remaining: C2b deletes the shell boots and sends env only after the image promotion, the `registry` source after WO-002, the upsampler launcher in Rust) |
-| C3 | `fv-deploy` with the `Provider` trait (from `fastvideo-autoscale`): `runpod::{Pod,Serverless}`, `vast`, `gcp`; shared money guards, backstop, ledger, templates, release promote/rollback; fv-control on the shared `Launch` schema | `fv-deploy up` per provider with the same smoke | pod; **GPU** one `fv-deploy up` on Runpod EU | C2 | todo (C3a pr #169: Runpod pods and serverless queue endpoints, the `Provider` trait in `fastvideo-deploy`, the `Launch` schema, the shared guards and backstop, `fv-deploy plan|up|status|logs|smoke|down`, ADR-0018; live gate passed on Runpod EU (h3-turbo smoke); C3c: fv-control on the generated `Launch` types: `control/src/launch-gen.ts` (types + zod from the committed schemas, `gen-configs.mjs --check`), every Runpod GPU pod and GPU serverless endpoint built as a `Launch` with bodies by the Rust builders' rules, payloads unchanged, fv-deploy goldens field by field with the intended differences, ADR-0018 §7; CPU / GMI / Brev outside Launch v1 until the schema gains them (after C3b); next: C3b Vast + GCP, C3d templates / release / D1 ledger) |
+| C3 | `fv-deploy` with the `Provider` trait (from `fastvideo-autoscale`): `runpod::{Pod,Serverless}`, `vast`, `gcp`; shared money guards, backstop, ledger, templates, release promote/rollback; fv-control on the shared `Launch` schema | `fv-deploy up` per provider with the same smoke | pod; **GPU** one `fv-deploy up` on Runpod EU | C2 | todo (C3a pr #169: Runpod pods and serverless queue endpoints, the `Provider` trait in `fastvideo-deploy`, the `Launch` schema, the shared guards and backstop, `fv-deploy plan|up|status|logs|smoke|down`, ADR-0018; live gate passed on Runpod EU (h3-turbo smoke); C3c: fv-control on the generated `Launch` types: `control/src/launch-gen.ts` (types + zod from the committed schemas, `gen-configs.mjs --check`), every Runpod GPU pod and GPU serverless endpoint built as a `Launch` with bodies by the Rust builders' rules, payloads unchanged, fv-deploy goldens field by field with the intended differences, ADR-0018 §7; CPU / GMI / Brev outside Launch v1 until the schema gains them (after C3b); C3b (draft PR, `claude/c3b-vast-gcp`): Vast (fake-engine smoke) and GCP (`[[gcp]]` rows) on the same trait and guards, payload goldens from `vast.sh` / `vm.sh`, `vm.sh`'s E2BIG fixed, the autoscaler's Runpod requests / answers / template pod shared with fv-deploy (ADR-0018 §8, §9; the full move listed there); `Launch` schema change additive (two `ProviderKind` values, `launch-gen.ts` regenerated); Vast and GCP live gates the owner's; next: C3d templates / release / D1 ledger) |
 | C4 | One image with boot-time config (owner decision 2026-10-25, ADR-0011): one CUDA serve image plus the CPU image instead of seven variant images; every launch path sends the worker config at boot; an image started without one refuses to boot; `variant` fields, `VARIANTS`, the thin Dockerfile stages, `image-configs.ts` and `fv_variant_for_config` removed, stored specs read through a mapping | gates green; no live resource changed; the owner's live steps written (`docs/serve/images.md` "One image: the live steps") | pod; CI image build on main; live steps by the owner | C1, C2, C3a | merged (#186, c3ceb96c; no live resource changed; the owner's ordered live steps are in `docs/serve/images.md` "One image: the live steps") |
 
 ### Phase 5: validation driver and gold standards (Workstream D)
@@ -1207,6 +1207,15 @@ ran (pod id, $/hr), result, cost.
   named (`SLS_GUARDS_NOT_CHECKED`, proposal for `null` in ADR-0018 §7.3); a
   Launch that fails the schema is a 400 / 409 before the op and a clean
   "no pod" inside it; schema errors never carry a value (tested).
+- 2026-10-25 20:42Z, C3b agent (`claude/c3b-vast-gcp`): Vast and GCP
+  providers on fv-deploy's `Provider` trait under the shared guards
+  (`--kind vast|gcp`), goldens from `vast.sh plan` and `vm.sh`'s payload
+  functions; `vm.sh` fixed (its metadata items exceeded the 128 KiB
+  argument limit, so `up` failed on main; `vm.test.sh` 21 failed → 38
+  passed); the autoscaler's Runpod requests, answer mapping, balance and
+  template pod now fv-deploy's (ADR-0018 §8, §9). CPU gates on build pod
+  `k66zz15an4sktc`. No live resource created, no GPU cost; the Vast and GCP
+  live gates are the owner's (§8.4).
 - 2026-10-25, F3b (sub-agent of the coordinating session, worktree
   `claude/f3b-cluster-renames`): owner decision "keep LB endpoints; F3b
   reduced to the renames". `[gateway]` → `[cluster]` in fv-serve (old name
@@ -1274,3 +1283,20 @@ ran (pod id, $/hr), result, cost.
   `ymrchzi0z3eixy`; script `64opofps1163h8`, `kxhdp1v19w151y`; all deleted);
   the NVFP4 pair's lossy gate verdict `fail` on both sides, as in 2026-09.
   No GPU cost in this PR.
+- 2026-10-25 21:45Z, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): serve-image
+  run 286 (c3ceb96c, C4) hung in "Smoke-check the serve images" on the
+  refusal check. Root cause: main's `FV_PREBUILT_STALE=latest` took the
+  newest tools release, tools-v0.1.50 (d428ff46, before C4), whose fv-boot
+  replaced the image's `boot-build` stage (images labelled
+  `dev.fastvideo.tools=tools-v0.1.50`); that fv-boot boots fv-serve's
+  default config when none is given, so `docker run --rm` served forever
+  (reproduced with the release's binaries: 0.1.50 execs fv-serve, 0.1.51
+  refuses in 0 s). Fix (`claude/fix-serve-smoke-hang`, draft PR): fv-boot
+  comes from a release only when it is built from the commit's tools
+  inputs (`prebuilt.sh contexts --stale`); `ci-images.sh smoke` bounds every
+  `docker run` (`FV_SMOKE_TIMEOUT_S`, 120 s, removes the container, names
+  the check); step `timeout-minutes` on both smoke steps; PR CI
+  `serve-boot.yml` runs the fv-boot binary as the smoke does
+  (`tests/fv_boot_bin.rs`, fails on d428ff46's fv-boot), the bounded-smoke
+  test and the tools-release selection tests. Build pod k66zz15an4sktc;
+  no Runpod resource created, no run cancelled or re-run.

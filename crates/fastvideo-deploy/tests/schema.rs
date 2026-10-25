@@ -35,6 +35,8 @@ fn launch_schema_is_strict_and_names_its_parts() {
     for k in [
         "\"runpod-pod\"",
         "\"runpod-serverless\"",
+        "\"vast\"",
+        "\"gcp\"",
         "\"ready_cycles\"",
         "\"min_balance_usd\"",
         "\"volume\"",
