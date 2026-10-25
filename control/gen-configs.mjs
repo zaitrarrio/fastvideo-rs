@@ -897,19 +897,39 @@ function schemaNode(n, at) {
     throw new Error(`${at}: ${why} (gen-configs.mjs schemaNode translates what schemars emits for fv-deploy's types)`);
   };
   if (!n || typeof n !== "object") bad("not a schema");
+  // Every keyword of a node is translated or explicitly not needed: `description` becomes the doc comment, `default`
+  // is the deserializer's business (the validators fill none), the rest is per kind below. Any other keyword
+  // (pattern, minLength, maxItems, uniqueItems, maximum, exclusiveMinimum, a string format, const, …) stops the
+  // generator rather than being dropped from the validator.
+  const kind = n.$ref ? "$ref" : n.anyOf ? "anyOf" : n.oneOf ? "oneOf" : n.enum ? "enum" : Array.isArray(n.type) ? n.type.find((t) => t !== "null") : n.type;
+  const KEYWORDS = {
+    $ref: ["$ref"],
+    anyOf: ["anyOf"],
+    oneOf: ["oneOf"],
+    enum: ["type", "enum"],
+    string: ["type"],
+    boolean: ["type"],
+    number: ["type", "format"],
+    integer: ["type", "format", "minimum"],
+    array: ["type", "items"],
+    object: ["type", "properties", "required", "additionalProperties"],
+  };
+  const allowed = KEYWORDS[kind];
+  if (!allowed) bad(`unsupported schema kind ${JSON.stringify(kind)}`);
+  for (const k of Object.keys(n)) if (k !== "description" && k !== "default" && !allowed.includes(k)) bad(`unsupported keyword ${k} on a ${kind} node`);
   if (n.$ref) {
     const m = /^#\/\$defs\/([A-Za-z0-9_]+)$/.exec(n.$ref);
     if (!m) bad(`unsupported $ref ${n.$ref}`);
     return { ts: m[1], zod: `${m[1]}Z` };
   }
   if (n.anyOf) {
-    const parts = n.anyOf.filter((x) => x.type !== "null");
+    const parts = n.anyOf.filter((x) => !(x.type === "null" && Object.keys(x).length === 1));
     if (parts.length !== 1 || n.anyOf.length !== 2) bad("anyOf other than [T, null]");
     const t = schemaNode(parts[0], at);
     return { ts: `${t.ts} | null`, zod: `${t.zod}.nullable()` };
   }
   if (n.oneOf) {
-    const vals = n.oneOf.map((x) => (x.type === "string" && typeof x.const === "string" ? x.const : bad("oneOf other than string consts")));
+    const vals = n.oneOf.map((x) => (x.type === "string" && typeof x.const === "string" && Object.keys(x).every((k) => ["type", "const", "description"].includes(k)) ? x.const : bad("oneOf other than string consts")));
     return { ts: vals.map((v) => JSON.stringify(v)).join(" | "), zod: `z.enum([${vals.map((v) => JSON.stringify(v)).join(", ")}])` };
   }
   if (Array.isArray(n.type)) {
@@ -940,7 +960,7 @@ function schemaNode(n, at) {
     }
     case "object": {
       if (!n.properties) {
-        if (n.additionalProperties?.type !== "string") bad("an object without properties is a string map only");
+        if (JSON.stringify(n.additionalProperties) !== '{"type":"string"}') bad("an object without properties is a string map only");
         return { ts: "Record<string, string>", zod: "z.record(z.string(), z.string())" };
       }
       if (n.additionalProperties !== false) bad("an object with properties must deny unknown fields");
