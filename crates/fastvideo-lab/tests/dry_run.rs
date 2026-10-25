@@ -305,6 +305,8 @@ fn retired_families_are_frozen_tiers_without_a_branch() {
         "precision",
         "precision-nvfp4",
         "ltxvae-gen",
+        // D1d's verdict family, after its GPU gate (ADR-0019 §11.6).
+        "b4a",
     ] {
         assert!(retired.iter().any(|r| r == f), "{f} retired");
     }

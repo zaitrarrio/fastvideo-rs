@@ -1,0 +1,13 @@
+{
+  "id": "j25pn9a2xc1ll8",
+  "name": "fv-lab-b4a-e82b6b7-1025211328-a2f3",
+  "family": "b4a",
+  "tag": "e82b6b7-1025211328-a2f3",
+  "sha": "e82b6b7",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:c5a683f55f24a9400f7010114109db589da459ad53419e0d35e1f1a32f5ee344",
+  "url": "https://j25pn9a2xc1ll8-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1792962811.2358751,
+  "cap_s": 14400
+}

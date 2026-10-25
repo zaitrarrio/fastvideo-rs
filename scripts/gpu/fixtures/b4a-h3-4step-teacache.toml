@@ -1,5 +1,5 @@
-# B4a GPU identity cell b4a-h3-4step-tea (scripts/gpu/runpod-matrix.sh b4a,
-# docs/adr/0020-step-cache.md): FastH3 Preview 4-step VSA (as
+# B4a GPU identity cell b4a-h3-4step-tea (the fv-lab tier b4a,
+# lab/cells/b4a-h3-4step-tea.toml; docs/adr/0020-step-cache.md): FastH3 Preview 4-step VSA (as
 # profiles/h3/fasth3_4step_vsa) with a TeaCache loose enough to reuse.
 # Forward 0 warms up, forward 3 cools down, forwards 1 and 2 reuse the
 # whole-stack residual while the accumulated rel-L1 (sum|d| / sum|prev|) of

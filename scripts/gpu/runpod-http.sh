@@ -514,10 +514,11 @@ tier_value() {
 
 # What `run` reads from FV_EXTRA_ENV on the script path but no tier reads: the
 # dropped modes' knobs (ADR-0019 §9.4, §10.4; the two modes restored as tiers,
-# §12, are named by fv_lab_route), the prompts fv-lab ignores (§7), and what
+# §12, are named by fv_lab_route; b4a's FV_B4A_CELLS since its branch went,
+# §11.6, answered with FV_CELLS), the prompts fv-lab ignores (§7), and what
 # the start command sets after FV_EXTRA_ENV anyway.
 FV_LAB_NOT_READ="FV_PRECISION_ARM FV_NVFP4_WORKLOADS FV_VAE_GEN FV_VAE_TRACE FV_VAE_UNTRACED FV_VAE_WORKLOADS
-  FV_LTXFPS FV_LTXFPS_FRAMES FV_TECH_CELLS FV_B6_CELLS FV_PROMPTS FV_PROMPT FV_SEED
+  FV_LTXFPS FV_LTXFPS_FRAMES FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS FV_PROMPTS FV_PROMPT FV_SEED
   FV_WORK FV_SCRATCH FV_RUN_TAG FV_CELLS FV_GEN_TIMEOUT_S"
 
 # fv_lab_route run|plan <sha> [tag]: `fv-lab pod up` for $FAMILY with this
@@ -613,6 +614,9 @@ fv_lab_route() {
       FV_NVFP4_WORKLOADS|FV_VAE_WORKLOADS|FV_VAE_UNTRACED)
         keys+=("$k")
         why+=("$k: the restored tiers (precision-nvfp4, ltxvae-gen) have one cell per workload; narrow them by arm with FV_CELLS (ADR-0019 §12)") ;;
+      FV_B4A_CELLS)
+        keys+=("$k")
+        why+=("$k: b4a selects by arm, as every tier: FV_CELLS=\"<cell>-base <cell>-pr\" (fv-lab pod up --cells; ADR-0019 §11.5, §11.6)") ;;
       *)
         if [[ " $(echo $FV_LAB_NOT_READ) " == *" $k "* ]]; then
           keys+=("$k")

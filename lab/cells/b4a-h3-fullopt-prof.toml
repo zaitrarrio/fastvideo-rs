@@ -1,6 +1,7 @@
-# The b4a family's b4a-h3-fullopt-prof pair (runpod-matrix.sh `b4a`, plan B4a,
-# docs/adr/0020-step-cache.md): the baseline binary (FV_BASELINE_SHA's runtime image,
-# fetch-baseline.sh) and this build with the same command line and environment, every arm encoding
+# The b4a family's b4a-h3-fullopt-prof pair (was runpod-matrix.sh `b4a`, retired
+# after its GPU gate, ADR-0019 §11.6; plan B4a, docs/adr/0020-step-cache.md): the baseline binary
+# (FV_BASELINE_SHA's runtime image, fetch-baseline.sh) and this build with the same command line
+# and environment, every arm encoding
 # its prompt (--no-text-cache), then compare-clips --off-identity and the cell's verdict
 # (docs/adr/0019-fv-lab.md §11, D1d): both arms exit 0, each reused at least one forward, the
 # --off-identity compare passed, and the arms' step-cache evidence lines (the install line, every

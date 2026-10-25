@@ -1,5 +1,5 @@
 //! The verdict step (docs/adr/0019-fv-lab.md §11, D1d) against the script it
-//! replaces: `runpod-matrix.sh b4a` (its real branch, copied into a fake
+//! replaced: `runpod-matrix.sh b4a` (its last real branch, copied into a fake
 //! root) and `fv-lab run b4a` (the real `lab/cells/b4a-*.toml`) on the same
 //! fake box: a fake fv-gpucheck whose arms log step-cache evidence, a fake
 //! nvidia-smi, verify-weights.sh and fetch-baseline.sh. Both runners must
@@ -7,6 +7,17 @@
 //! byte, and the same verdict lines in `live.log`; and `fv-lab gate` must
 //! derive the same verdicts again from either run directory alone, with the
 //! selection it infers itself (`run::gate_selection`).
+//!
+//! The script side is frozen (ADR-0019 §11.6: `b4a` retired, its branch
+//! deleted from `scripts/gpu/runpod-matrix.sh`). `fixtures/b4a-script/` holds
+//! it as it last ran, at main `8b18d89f` (the commit before the deletion):
+//! `runpod-matrix.sh` is that script cut to its shared frame, the `b4a`
+//! branch and the fallback branch, every kept line unchanged (`git show
+//! 8b18d89f:scripts/gpu/runpod-matrix.sh | sed -n '1,446p;1618,1743p;3197,3223p'`),
+//! and `b4-verdict.sh` is that commit's file whole. What they source besides
+//! (`cuda-13.pins`, `fv-lab-retired.sh`) is data, copied as committed. So a
+//! change to fv-lab's verdict step is still held to the script's bytes, and
+//! a change to the live scripts no longer moves the reference.
 //!
 //! The fake box's default makes one cell pass, one fail on its evidence
 //! only, and one fail on everything (exit, reuse, identity, evidence). Its
@@ -135,13 +146,12 @@ fn fake(name: &str) -> Fake {
     let f = Fake { dir };
     let gpu = f.root().join("scripts/gpu");
     std::fs::create_dir_all(&gpu).unwrap();
-    // The script and what it sources, as committed.
-    for s in [
-        "runpod-matrix.sh",
-        "cuda-13.pins",
-        "b4-verdict.sh",
-        "fv-lab-retired.sh",
-    ] {
+    // The script as it last ran b4a (frozen), and what it sources.
+    let frozen = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/b4a-script");
+    for s in ["runpod-matrix.sh", "b4-verdict.sh"] {
+        std::fs::copy(frozen.join(s), gpu.join(s)).unwrap();
+    }
+    for s in ["cuda-13.pins", "fv-lab-retired.sh"] {
         std::fs::copy(repo_root().join("scripts/gpu").join(s), gpu.join(s)).unwrap();
     }
     script(
@@ -176,8 +186,8 @@ fn fake(name: &str) -> Fake {
     f
 }
 
-/// `runpod-matrix.sh b4a` on the fake box (`FV_B4A_CELLS`, `FV_CELLS`, the
-/// locale): its run directory.
+/// The frozen `runpod-matrix.sh b4a` on the fake box (`FV_B4A_CELLS`,
+/// `FV_CELLS`, the locale): its run directory.
 fn script_run_with(
     f: &Fake,
     b4a_cells: Option<&str>,
@@ -334,6 +344,50 @@ fn assert_same(a: &Path, b: &Path, files: &[String], want: usize) {
         present += usize::from(x.is_some());
     }
     assert_eq!(present, want, "files present in both");
+}
+
+/// The frozen script is the one the frozen goldens came from: its dry run,
+/// under `fv-lab-goldens.sh`'s inputs, is `fixtures/b4a-dry-run.txt` line for
+/// line (which `tests/dry_run.rs` holds fv-lab's dry run to).
+#[test]
+fn the_frozen_script_dry_runs_as_the_frozen_golden() {
+    let f = fake("frozen-dry");
+    let (work, scratch) = (f.dir.join("dry-work"), f.dir.join("dry-scratch"));
+    std::fs::create_dir_all(work.join("weights/auxiliary/tae")).unwrap();
+    std::fs::write(work.join("weights/auxiliary/tae/.complete"), "").unwrap();
+    std::fs::create_dir_all(&scratch).unwrap();
+    let o = Command::new("bash")
+        .arg(f.root().join("scripts/gpu/runpod-matrix.sh"))
+        .arg("b4a")
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("HOME", &f.dir)
+        .env("LC_ALL", "C")
+        .env("FV_DRY_RUN", "1")
+        .env("FV_WORK", &work)
+        .env("FV_SCRATCH", &scratch)
+        .env("FV_RUN_TAG", "1234567-10241200")
+        .env("FV_BASELINE_SHA", BASELINE_SHA)
+        .output()
+        .expect("bash runs");
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let (s, w, r) = (
+        scratch.display().to_string(),
+        work.display().to_string(),
+        f.root().display().to_string(),
+    );
+    let ours: Vec<String> = String::from_utf8_lossy(&o.stdout)
+        .lines()
+        .map(|l| l.get(11..).unwrap_or(""))
+        .filter(|l| l.contains("[b4a] "))
+        .map(|l| {
+            l.replace(&s, "/fvscratch")
+                .replace(&w, "/workspace")
+                .replace(&r, "/opt/fastvideo-rs")
+        })
+        .collect();
+    let golden = text(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/b4a-dry-run.txt"));
+    assert_eq!(ours, golden.lines().collect::<Vec<_>>());
 }
 
 #[test]
