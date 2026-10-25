@@ -1,0 +1,73 @@
+# The b4a family's b4a-h3-4step-tea pair (runpod-matrix.sh `b4a`, plan B4a,
+# docs/adr/0020-step-cache.md): the baseline binary (FV_BASELINE_SHA's runtime image,
+# fetch-baseline.sh) and this build with the same command line and environment, every arm encoding
+# its prompt (--no-text-cache), then compare-clips --off-identity and the cell's verdict
+# (docs/adr/0019-fv-lab.md §11, D1d): both arms exit 0, each reused at least one forward, the
+# --off-identity compare passed, and the arms' step-cache evidence lines (the install line, every
+# `h3 teacache step` decision, the load plan's `fuse step cache`) are equal.
+# FastH3 4-step VSA with a loose TeaCache (scripts/gpu/fixtures/b4a-h3-4step-teacache.toml:
+# threshold 4.0, retain 1, cooldown 1): forwards 1 and 2 are the only candidates and reuse while the
+# accumulated rel-L1 of the block-0 probe stays under 4.0. `env = []`: the script's bare `env` (no
+# setting) before the binary.
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "b4a-h3-4step-tea"
+description = "FastH3 4-step VSA with a loose TeaCache (scripts/gpu/fixtures/b4a-h3-4step-teacache.toml: threshold 4.0, retain 1, cooldown 1): forwards 1 and 2 reuse; baseline vs this build, byte identity and the same step-cache decisions"
+
+[workload]
+model = "h3"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+width = 832
+height = 480
+note = "runpod-matrix.sh's default PROMPT and SEED; 480p / 5 s, the auto text encoder, each arm encoding its prompt"
+
+[lists]
+h3_b4a = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--height", "{height}", "--width",
+  "{width}", "--seconds", "{seconds}", "--prompt", "{prompt}", "--seed", "{seed}", "--text-encoder", "auto",
+  "--no-text-cache", "--no-mp4"]
+
+[[arm]]
+name = "b4a-h3-4step-tea-base"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+bin = "baseline"
+env = []
+argv = ["{@h3_b4a}", "--techniques", "{root}/scripts/gpu/fixtures/b4a-h3-4step-teacache.toml", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "b4a-h3-4step-tea-pr"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = []
+argv = ["{@h3_b4a}", "--techniques", "{root}/scripts/gpu/fixtures/b4a-h3-4step-teacache.toml", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[compare]]
+baseline = "b4a-h3-4step-tea-base"
+candidate = "b4a-h3-4step-tea-pr"
+args = ["--off-identity"]
+
+[verdict]
+family = "b4a"
+arms = ["b4a-h3-4step-tea-base", "b4a-h3-4step-tea-pr"]
+describe = "verdict also needs both arms exit 0 (summary.json) and the --off-identity compare passed"
+
+# The script's b4a_evidence: the step cache's lines of the arm's stderr.log without the bracketed
+# prefixes a log line starts with; the two arms' files must be equal.
+[[verdict.evidence]]
+file = "cache-evidence.log"
+lines = ["h3 sol teacache", "h3 teacache:", "h3 teacache step", "fuse step cache"]
+strip = "bracket-prefixes"
+diff = "evidence.diff"
+
+# A cell whose arms reused no forward did not exercise the cache.
+[[verdict.count]]
+what = "teacache reused forwards"
+lines = ["h3 teacache step *REUSE"]
+min = 1
+why = "no-reuse"
+
+[[verdict.identical]]
+baseline = "b4a-h3-4step-tea-base"
+candidate = "b4a-h3-4step-tea-pr"

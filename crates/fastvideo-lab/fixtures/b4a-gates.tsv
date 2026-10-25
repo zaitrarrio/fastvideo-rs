@@ -1,0 +1,6 @@
+arm	b4a-h3-fullopt-env-base	h3-base	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	b4a-h3-fullopt-env-pr	h3-base	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	b4a-h3-fullopt-prof-base	h3-base	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	b4a-h3-fullopt-prof-pr	h3-base	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	b4a-h3-4step-tea-base	fasth3-4step-vsa	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:vsa-datafree/adapter_model.safetensors
+arm	b4a-h3-4step-tea-pr	fasth3-4step-vsa	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:vsa-datafree/adapter_model.safetensors
