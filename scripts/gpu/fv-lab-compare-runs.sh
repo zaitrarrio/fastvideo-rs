@@ -3,7 +3,7 @@
 # up` run reproduce a `runpod-http.sh run` of the same commit? Both run
 # directories are what the fetches wrote under artifacts/runpod/<family>/<tag>/.
 #
-#   fv-lab-compare-runs.sh <fv-lab run dir> <runpod-http run dir>
+#   fv-lab-compare-runs.sh [--expect-verdicts N] <fv-lab run dir> <runpod-http run dir>
 #
 # Same when, for every arm directory of either run (the directories holding a
 # summary.json):
@@ -21,15 +21,32 @@
 #     --off-identity compare) agree: both follow from the frames, which are
 #     byte-identical on one GPU class. A gate's verdict also weighs the two
 #     arms' timings, which differ from pod to pod, so a gate report is only
-#     required in both runs.
+#     required in both runs;
+# and for every file of the verdict step (D1d, ADR-0019 §11: the run's
+# *.verdict.json and *.diff, each arm's *-evidence.log; `b4a`) of either run:
+#   - the file exists in both and is byte-identical (no timings in them),
+#     except a family verdict (<family>.verdict.json), whose `cells` and `why`
+#     are compared as sets: fv-lab lists the cells in the tier's order, the
+#     script in FV_B4A_CELLS's (ADR-0019 §11.5).
+# (`fv-lab pod fetch` takes these; on the runpod-http.sh side they need
+# FV_FETCH_TREE=1.) --expect-verdicts N fails unless at least N verdict files
+# compared the same: a tier with verdict cells whose files never arrived
+# would otherwise pass with none.
 # Exit 0 when the runs agree and at least one arm ran (exit 0) with
 # byte-identical frames in both; 1 otherwise (one line per difference). An
 # unreadable summary, frames record or report is a difference; arms skipped or
 # failed alike in both runs are counted, not evidence.
 # Needs bash and jq.
 set -euo pipefail
-A="${1:?usage: fv-lab-compare-runs.sh <fv-lab run dir> <runpod-http run dir>}"
-B="${2:?usage: fv-lab-compare-runs.sh <fv-lab run dir> <runpod-http run dir>}"
+USAGE="usage: fv-lab-compare-runs.sh [--expect-verdicts N] <fv-lab run dir> <runpod-http run dir>"
+EXPECT_VERDICTS=0
+if [[ "${1:-}" == --expect-verdicts ]]; then
+  [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo "$USAGE" >&2; exit 2; }
+  EXPECT_VERDICTS="$2"
+  shift 2
+fi
+A="${1:?$USAGE}"
+B="${2:?$USAGE}"
 [[ -d "$A" && -d "$B" ]] || { echo "fv-lab-compare-runs: not a directory: $A or $B" >&2; exit 2; }
 
 arms() { (cd "$1" && for s in */summary.json; do [[ -f "$s" ]] && dirname "$s"; done) | LC_ALL=C sort; }
@@ -86,7 +103,25 @@ while IFS= read -r r; do
   echo "same $r: $va"
   nrep=$((nrep + 1))
 done < <({ reports "$A"; reports "$B"; } | LC_ALL=C sort -u)
-echo "$same arm(s) the same ($ran ran with byte-identical frames, $skipped skipped in both, $failed failed in both), $nrep report(s) the same, $diffs difference(s)"
+vfiles() { (cd "$1" && for r in *.verdict.json *.diff */*-evidence.log; do [[ -f "$r" ]] && echo "$r"; done) | LC_ALL=C sort; }
+nver=0
+while IFS= read -r r; do
+  if [[ ! -f "$A/$r" ]]; then say "DIFF $r: only in the runpod-http run"; continue; fi
+  if [[ ! -f "$B/$r" ]]; then say "DIFF $r: only in the fv-lab run"; continue; fi
+  if ! cmp -s "$A/$r" "$B/$r"; then
+    # A family verdict: the same cells and reasons in another order is the same.
+    fam='select(has("family")) | .cells |= (split(" ") | sort | join(" ")) | .why |= (split(" ") | sort | join(" "))'
+    na="$(jq -cS "$fam" "$A/$r" 2>/dev/null || true)" nb="$(jq -cS "$fam" "$B/$r" 2>/dev/null || true)"
+    if [[ -z "$na" || "$na" != "$nb" ]]; then say "DIFF $r: differs (diff the two files)"; continue; fi
+  fi
+  echo "same $r"
+  nver=$((nver + 1))
+done < <({ vfiles "$A"; vfiles "$B"; } | LC_ALL=C sort -u)
+echo "$same arm(s) the same ($ran ran with byte-identical frames, $skipped skipped in both, $failed failed in both), $nrep report(s) the same, $nver verdict file(s) the same, $diffs difference(s)"
+if (( nver < EXPECT_VERDICTS )); then
+  echo "expected at least $EXPECT_VERDICTS verdict file(s) the same, found $nver"
+  exit 1
+fi
 if (( ran == 0 )); then
   echo "no arm ran with frames in both runs: nothing was compared"
   exit 1
