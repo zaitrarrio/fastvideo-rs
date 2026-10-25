@@ -288,7 +288,12 @@ Each workflow then:
    `boot-build` stage: a release whose `serve-cuda` / `serve-cpu` set carries
    `out/fv-boot` replaces it too (`boot-build=<dir>`); a release from
    before fv-boot does not, and only that stage compiles (fv-boot's one
-   crate, from `builder`), with a notice in the job. fv-lab (the runtime
+   crate, from `builder`), with a notice in the job. Nor does a release
+   older than the commit's tools inputs (main's `FV_PREBUILT_STALE=latest`,
+   a `FV_TOOLS_VERSION` pin): fv-boot enforces the image contract of the
+   Dockerfile it ships in (the refusal without a config, ADR-0011), so it is
+   always this commit's (`prebuilt.sh contexts --stale`; serve-image run 286
+   hung on an image whose stale fv-boot served fv-serve's default). fv-lab (the runtime
    image's validation driver, [ADR-0019](../adr/0019-fv-lab.md)) rides in the
    `gpucheck` set the same way (`out/fv-lab`, `lab-build=<dir>`).
 3. **Falls back** when there is no usable release (test workflows and

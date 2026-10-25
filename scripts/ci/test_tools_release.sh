@@ -166,6 +166,10 @@ printf '#!/bin/sh\necho fv-boot 0.1.11\n' >"$tmp/pre/serve-cpu/out/fv-boot"; chm
 check "contexts: a release with fv-boot replaces boot-build" "oxide=$tmp/pre/oxide serve-build=$tmp/pre/serve-cuda cpu-build=$tmp/pre/serve-cpu boot-build=$tmp/pre/serve-cpu" \
   "$(bash "$P" contexts "$tmp/pre" oxide serve-cuda serve-cpu | paste -sd' ')"
 check "contexts: no serve set, no boot-build" "oxide=$tmp/pre/oxide" "$(bash "$P" contexts "$tmp/pre" oxide | paste -sd' ')"
+# A release older than HEAD's tools inputs (main's FV_PREBUILT_STALE=latest, a pin): its fv-boot is not used, so
+# the image's entrypoint is always this commit's (serve-image run 286: a pre-ADR-0011 fv-boot in the one image).
+check "contexts --stale: an older release's fv-boot is not used (boot-build compiles)" "oxide=$tmp/pre/oxide serve-build=$tmp/pre/serve-cuda cpu-build=$tmp/pre/serve-cpu" \
+  "$(bash "$P" contexts --stale "$tmp/pre" oxide serve-cuda serve-cpu | paste -sd' ')"
 # fv-lab (ADR-0019) replaces the runtime image's lab-build stage only when the gpucheck set carries it.
 mkdir -p "$tmp/pre/gpucheck/out"
 check "contexts: a release from before fv-lab (lab-build compiles)" "oxide=$tmp/pre/oxide binary=$tmp/pre/gpucheck" \

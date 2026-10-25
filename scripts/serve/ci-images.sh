@@ -20,7 +20,9 @@
 # FV_BUILD_TIME (the commit time, for `fv-serve --version`);
 # FV_COMPRESSION (gzip | zstd, default gzip); FV_CACHE_FROM (space list of
 # registry cache refs); FV_CI_OUT (default artifacts/ci/images.tsv);
-# FV_BUILD_CONTEXTS (name=path lines from scripts/ci/prebuilt.sh: directories
+# FV_SMOKE_TIMEOUT_S (default 120: the bound on each `docker run` of the smoke, which
+# then fails, naming the check, and removes the container; FV_SMOKE_PULL_TIMEOUT_S, default
+# 600, bounds the pull); FV_BUILD_CONTEXTS (name=path lines from scripts/ci/prebuilt.sh: directories
 # of build-pod binaries that replace the serve-build / cpu-build stages,
 # so no cargo compile runs; empty: compile in the image); FV_TOOLS_TAG (the
 # tools release they come from, a `dev.fastvideo.tools` label).
@@ -33,6 +35,25 @@ SMOKE_CONFIG=/etc/fv/runpod-fake.toml
 COMPRESSION="${FV_COMPRESSION:-gzip}"
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 die() { log "FATAL: $*"; exit 2; }
+SMOKE_TIMEOUT_S="${FV_SMOKE_TIMEOUT_S:-120}"
+
+# bounded <what> <docker run args…>: `docker run --rm` under a deadline. The container gets
+# a name, so a run that outlives FV_SMOKE_TIMEOUT_S is removed (`docker rm -f`: killing the
+# client alone leaves it running) and the call returns 124 after a FATAL line naming <what>,
+# instead of waiting forever (serve-image run 286: an fv-boot that served instead of
+# refusing). Otherwise it returns the container's exit status; its output passes through.
+bounded() {
+  local what="$1" name rc=0; shift
+  name="fv-smoke-$$-$RANDOM"
+  timeout -k 10 "$SMOKE_TIMEOUT_S" docker run --rm --name "$name" "$@" || rc=$?
+  # The container (--rm) is still there only when the deadline, not its own exit, ended the run.
+  if [[ "$rc" == 124 || "$rc" == 137 ]] && timeout 60 docker container inspect "$name" >/dev/null 2>&1; then
+    timeout 60 docker rm -f "$name" >/dev/null 2>&1 || log "warning: could not remove container $name"
+    log "FATAL: $what: still running after ${SMOKE_TIMEOUT_S}s (FV_SMOKE_TIMEOUT_S); container removed"
+    return 124
+  fi
+  return "$rc"
+}
 
 # size <ref> -> "<MB> <layers>" (compressed, from the registry manifest)
 size() {
@@ -97,17 +118,18 @@ build() {
 
 smoke() {
   local v="$1" img="$2" cid ok=0
-  docker pull -q "$img" >/dev/null
+  timeout -k 10 "${FV_SMOKE_PULL_TIMEOUT_S:-600}" docker pull -q "$img" >/dev/null \
+    || die "serve-$v: docker pull $img failed or took over ${FV_SMOKE_PULL_TIMEOUT_S:-600}s"
   docker image inspect "$img" --format "size={{.Size}} entrypoint={{json .Config.Entrypoint}} env={{json .Config.Env}}"
   # The entrypoint is fv-boot (docs/adr/0014-fv-boot.md).
   local ep; ep="$(docker image inspect "$img" --format '{{json .Config.Entrypoint}}')"
   [[ "$ep" == '["/opt/fastvideo-rs/bin/fv-boot"]' ]] || die "serve-$v: entrypoint $ep, expected [\"/opt/fastvideo-rs/bin/fv-boot\"]"
-  docker run --rm "$img" --version
+  bounded "serve-$v: --version" "$img" --version
   # Every dynamic library resolves; ffmpeg does what the code asks of it;
   # no config is baked (FV_CONFIG unset) and the one the image carries parses;
   # the CUDA image has the CUDA libraries, the cpu image none; none has the
   # debug tooling.
-  docker run --rm --entrypoint bash -e V="$v" "$img" -euo pipefail -c '
+  SMOKE_TIMEOUT_S=$((SMOKE_TIMEOUT_S * 3)) bounded "serve-$v: image checks" --entrypoint bash -e V="$v" "$img" -euo pipefail -c '
     bad() { echo "FAIL: $*"; exit 1; }
     for b in /opt/fastvideo-rs/bin/fv-serve /opt/fastvideo-rs/bin/fv-boot /usr/local/bin/ffmpeg /usr/local/bin/ffprobe; do
       ldd "$b" | grep "not found" && bad "$b: unresolved libraries"
@@ -150,21 +172,24 @@ smoke() {
     fi
     echo "smoke ok: $V"'
   # Started without a config, the image refuses to boot: fv-boot exits non-zero and says why (no fv-serve default).
+  # Bounded: an fv-boot that serves fv-serve's default instead never exits (serve-image run 286).
   local out rc=0
-  out="$(docker run --rm -e FV_FAIL_SLEEP_S=0 "$img" 2>&1)" || rc=$?
+  out="$(bounded "serve-$v: the refusal without a config (an fv-boot that does not refuse serves fv-serve's default and never exits)" \
+    -e FV_FAIL_SLEEP_S=0 "$img" 2>&1)" || rc=$?
+  [[ "$rc" != 124 ]] || die "serve-$v: started without a config, it did not refuse within ${SMOKE_TIMEOUT_S}s (it serves instead: is the image's fv-boot older than ADR-0011?): $(tail -3 <<<"$out")"
   [[ "$rc" != 0 ]] || die "serve-$v: started without a config, it booted (exit 0)"
   grep -q "FAILED: no worker config" <<<"$out" || die "serve-$v: no refusal message without a config: $(tail -3 <<<"$out")"
   echo "refused without a config (exit $rc): $(grep -m1 'FAILED: no worker config' <<<"$out")"
   # HTTP mode on the fake engine through the image entrypoint, the config named explicitly
   # (FV_WORKER_CONFIG, the escape hatch for this check): /healthz 200.
-  cid="$(docker run -d -p 18001:8000 -e FV_ENGINE=fake -e FV_AUTH_MODE=none -e "FV_WORKER_CONFIG=$SMOKE_CONFIG" "$img")"
+  cid="$(timeout 120 docker run -d -p 18001:8000 -e FV_ENGINE=fake -e FV_AUTH_MODE=none -e "FV_WORKER_CONFIG=$SMOKE_CONFIG" "$img")"
   for _ in $(seq 1 60); do
-    if curl -fsS localhost:18001/healthz; then ok=1; break; fi
+    if curl -fsS -m 5 localhost:18001/healthz; then ok=1; break; fi
     sleep 1
   done
   echo
-  docker logs "$cid" 2>&1 | tail -5
-  docker rm -f "$cid" >/dev/null
+  timeout 30 docker logs "$cid" 2>&1 | tail -5
+  timeout 60 docker rm -f "$cid" >/dev/null || true
   [[ "$ok" == 1 ]] || die "$v: /healthz never answered"
 }
 

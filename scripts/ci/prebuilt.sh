@@ -25,12 +25,15 @@
 #         dir, tag, version, exact=true|false, build_id, source_commit
 #         contexts=<name=path lines>   Docker named build contexts that replace
 #                                      the compile stages (see CONTEXT below;
-#                                      boot-build when a serve set has out/fv-boot,
+#                                      boot-build when a serve set has out/fv-boot
+#                                      and the release is exact (see contexts),
 #                                      lab-build when the gpucheck set has out/fv-lab)
 #       Fallback (ok=false, a loud ::warning::, the workflow compiles as
 #       before) unless FV_PREBUILT_REQUIRE=1, which fails instead.
-#   prebuilt.sh contexts <dir> <set>...
-#       The contexts lines fetch writes, for sets already in <dir> (tests).
+#   prebuilt.sh contexts [--stale] <dir> <set>...
+#       The contexts lines fetch writes, for sets already in <dir> (tests);
+#       --stale: the release is not built from HEAD's tools inputs, so its
+#       fv-boot is not used (boot-build compiles this checkout's).
 #   prebuilt.sh run-tests <dir>
 #       Run the gpucheck-tests set (gpucheck-t0's unit tests, compiled on the
 #       pod) from the checkout (or $FV_TESTS_ROOT), each in its crate directory.
@@ -97,11 +100,16 @@ cmd_fetch() {
       fallback "$tag: $s was built with features '$(jq -r --arg s "$s" '.sets[$s].features // ""' "$m")', '$f' requested"
     fi
   done
-  local contexts
-  contexts="$(cmd_contexts "$dir" "$@")"$'\n'
+  local contexts stale_arg=()
+  [[ "$exact" == true ]] || stale_arg=(--stale)
+  contexts="$(cmd_contexts "${stale_arg[@]}" "$dir" "$@")"$'\n'
   local compiles="no cargo compile on this runner"
   if [[ "$contexts" != *"boot-build="* ]] && [[ " $* " == *" serve-cuda "* || " $* " == *" serve-cpu "* ]]; then
-    echo "::notice title=fv-boot not in $tag::the image's boot-build stage compiles fv-boot (one small crate) until a tools release carries it"
+    if [[ "$exact" == true ]]; then
+      echo "::notice title=fv-boot not in $tag::the image's boot-build stage compiles fv-boot (one small crate) until a tools release carries it"
+    else
+      echo "::notice title=fv-boot compiled from this commit::$tag is older than this commit's tools inputs: its fv-boot is not used (it enforces this commit's image contract, e.g. the refusal without a config), so the boot-build stage compiles this checkout's"
+    fi
     compiles="only the boot-build stage compiles (fv-boot)"
   fi
   if [[ "$contexts" != *"lab-build="* ]] && [[ " $* " == *" gpucheck "* ]]; then
@@ -127,12 +135,20 @@ cmd_fetch() {
 # The named build contexts of fetched sets in <dir> (one name=path line each). fv-boot
 # (ADR-0014) rides in the serve sets of releases built after it and then replaces the
 # boot-build stage too; a release from before fv-boot has none, and boot-build compiles it.
+# --stale (a release not built from HEAD's tools inputs: main's FV_PREBUILT_STALE=latest,
+# a FV_TOOLS_VERSION pin): its fv-boot is not used either. fv-boot is the image's
+# entrypoint and enforces the image contract of the Dockerfile it ships in (since ADR-0011,
+# the refusal of a boot without a config); an older one paired with a newer Dockerfile
+# booted fv-serve's default config instead, and the serve-image smoke's refusal check
+# waited on that server forever (serve-image run 286, tools-v0.1.50 in c3ceb96c's images).
 # fv-lab (ADR-0019) rides in the gpucheck set the same way and replaces lab-build.
 cmd_contexts() {
+  local stale=0
+  [[ "${1:-}" == --stale ]] && { stale=1; shift; }
   local dir="${1:?dir}" set boot="" lab=""; shift
   for set in "$@"; do
     [[ -n "${CONTEXT[$set]:-}" ]] && echo "${CONTEXT[$set]}=$dir/$set"
-    if [[ -z "$boot" && ( "$set" == serve-cuda || "$set" == serve-cpu ) && -x "$dir/$set/out/fv-boot" ]]; then boot="$dir/$set"; fi
+    if [[ "$stale" == 0 && -z "$boot" && ( "$set" == serve-cuda || "$set" == serve-cpu ) && -x "$dir/$set/out/fv-boot" ]]; then boot="$dir/$set"; fi
     if [[ "$set" == gpucheck && -x "$dir/$set/out/fv-lab" ]]; then lab="$dir/$set"; fi
   done
   [[ -z "$boot" ]] || echo "boot-build=$boot"
