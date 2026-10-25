@@ -35,10 +35,25 @@ T0="$(stat -c %Y /proc/1 2>/dev/null || date +%s)"
 uptime_s() { echo $(( $(date +%s) - T0 )); }
 log() { printf '[%s] [%s +%ss] %s\n' "$(date -u +%H:%M:%S)" "$SET" "$(uptime_s)" "$*" | tee -a "$LOG"; }
 
-# Pod-side backstop: the pod deletes itself (pod-scoped key injected by Runpod).
+# Pod-side backstop: the pod deletes itself (pod-scoped key injected by Runpod)
+# through GraphQL podTerminate (that key may not DELETE through REST, ADR-0023
+# §4; the text of scripts/gpu/lib/self-delete.sh), retried each minute.
+fv_self_delete() {
+  # GraphQL podTerminate: the pod-scoped key may not DELETE through REST (HTTP 403,
+  # docs/adr/0023-lab-report-and-ci-bridge.md §4). Success: HTTP 200 and no "errors".
+  # The key reaches curl on stdin (-H @-), never in its argv; the answer is logged, then removed.
+  _fvsd_code=$(printf 'Authorization: Bearer %s\n' "$RUNPOD_API_KEY" | curl -sS --max-time 30 -o "$1.resp" \
+    -w '%{http_code}' -X POST https://api.runpod.io/graphql -H 'Content-Type: application/json' -H @- \
+    --data "{\"query\":\"mutation { podTerminate(input: {podId: \\\"$RUNPOD_POD_ID\\\"}) }\"}" 2>>"$1")
+  { cat "$1.resp"; echo " http=$_fvsd_code"; } >>"$1" 2>/dev/null
+  _fvsd_ok=1
+  [ "$_fvsd_code" = 200 ] && ! grep -q '"errors"' "$1.resp" 2>/dev/null && _fvsd_ok=0
+  rm -f "$1.resp"
+  return "$_fvsd_ok"
+}
 if [[ -n "${RUNPOD_API_KEY:-}" && -n "${RUNPOD_POD_ID:-}" ]]; then
-  ( sleep $(( CAP_S - $(uptime_s) )); curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" \
-      "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID" >/dev/null 2>&1 ) >/dev/null 2>&1 &
+  ( sleep $(( CAP_S - $(uptime_s) ))
+    until fv_self_delete /tmp/sol-cap-watchdog.log; do sleep 60; done ) >/dev/null 2>&1 &
 fi
 
 # CUDA libraries under the unversioned names cudarc loads (as runpod-matrix.sh).

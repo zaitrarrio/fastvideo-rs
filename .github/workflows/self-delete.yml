@@ -1,0 +1,44 @@
+# The in-pod self-delete (docs/adr/0023-lab-report-and-ci-bridge.md §4): no
+# script, start command or fixture deletes a Runpod pod through REST with the
+# pod-scoped key; every copy of fv_self_delete is scripts/gpu/lib/self-delete.sh's
+# text, defined before its call; every launcher renders it into the command it
+# sends. scripts/gpu/tests/self-delete.test.sh scans scripts/, control/src,
+# deploy/, docker/, crates/ and .github/ (tracked files), so those are its paths.
+# No network, no Rust, no GPU: bash, awk, jq, git.
+name: self-delete
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "scripts/**"
+      - "control/src/**"
+      - "deploy/**"
+      - "docker/**"
+      - "crates/**"
+      - ".github/**"
+  push:
+    branches: ["main"]
+    paths:
+      - "scripts/**"
+      - "control/src/**"
+      - "deploy/**"
+      - "docker/**"
+      - "crates/**"
+      - ".github/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-delete-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: in-pod self-delete is GraphQL podTerminate, one text
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/gpu/tests/self-delete.test.sh

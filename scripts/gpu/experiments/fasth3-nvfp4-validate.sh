@@ -9,6 +9,7 @@
 #   fasth3-nvfp4-validate.sh status <pod>   status.tsv, the log tail, DONE
 #   fasth3-nvfp4-validate.sh fetch <pod> DIR  results.tgz into DIR
 #   fasth3-nvfp4-validate.sh down <pod>     delete the pod, check it is gone, drop the staged bundle by its key
+#   fasth3-nvfp4-validate.sh print-start    the pod's start command (what up sends)
 #
 # The bundle (BIN, scripts/gpu and the R2 plan: presigned GETs from the read-only key, 4 h; ~200 kB, too large for
 # the pod's env) is staged in fv-weights-staging under tmp/fasth3-nvfp4-bundle-<sha256>.tgz (presigned GET, checked
@@ -39,8 +40,19 @@ rest() {
 gql() { curl -sS -H @<(printf 'Authorization: Bearer %s\n' "$RUNPOD_API_KEY") -H 'content-type: application/json' "$GQL" --data-binary @-; }
 balance() { gql <<<'{"query":"{ myself { clientBalance } }"}' | jq -r '.data.myself.clientBalance // empty'; }
 
+# The pod's start command, as `up` sends it (`print-start` prints it): the
+# self-delete library first (fv_self_delete, docs/adr/0023-lab-report-and-ci-bridge.md §4),
+# then the run; 10 min after DONE the pod deletes itself, retried each minute.
+start_cmd() {
+  printf '%s\n' "$(<"$HERE/../lib/self-delete.sh")"
+  printf '%s' 'mkdir -p /opt/fv /srv && curl -fsSL --retry 5 -o /opt/fv/bundle.tgz "$FV_BUNDLE_URL" && echo "$FV_BUNDLE_SHA256  /opt/fv/bundle.tgz" | sha256sum -c - >>/srv/log.txt 2>&1 \
+&& tar -xzf /opt/fv/bundle.tgz -C /opt/fv && rm -f /opt/fv/bundle.tgz && chmod 600 /opt/fv/plan.json \
+&& (cd /srv && /opt/upstream/tools/bin/python -m http.server 8000 >/dev/null 2>&1 &) && bash /opt/fv/gpu/experiments/fasth3-nvfp4-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
+sleep 600; if [ -n "${RUNPOD_API_KEY:-}" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then until fv_self_delete /tmp/self-delete.log; do sleep 60; done; fi; sleep infinity'
+}
 cmd="${1:-}"
 case "$cmd" in
+  print-start) start_cmd ;;
   up)
     image="${2:?upstream fastvideo-nvfp4 image}"
     bin="${3:?the release fv-gpucheck built from this branch}"
@@ -87,10 +99,7 @@ case "$cmd" in
     log "bundle ${sha:0:12} staged, binary $size"
     # The pod deletes itself 10 min after DONE (Runpod's pod-scoped RUNPOD_API_KEY / RUNPOD_POD_ID); the backstop
     # deletes it regardless.
-    start='mkdir -p /opt/fv /srv && curl -fsSL --retry 5 -o /opt/fv/bundle.tgz "$FV_BUNDLE_URL" && echo "$FV_BUNDLE_SHA256  /opt/fv/bundle.tgz" | sha256sum -c - >>/srv/log.txt 2>&1 \
-&& tar -xzf /opt/fv/bundle.tgz -C /opt/fv && rm -f /opt/fv/bundle.tgz && chmod 600 /opt/fv/plan.json \
-&& (cd /srv && /opt/upstream/tools/bin/python -m http.server 8000 >/dev/null 2>&1 &) && bash /opt/fv/gpu/experiments/fasth3-nvfp4-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
-sleep 600; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; sleep infinity'
+    start="$(start_cmd)"
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"
     export FVX_URL="$url"

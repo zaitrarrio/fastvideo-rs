@@ -42,11 +42,14 @@ ledger() { mkdir -p "$(dirname "$LEDGER")"; printf '%s\t%s\n' "$(date -u +%FT%TZ
 # The pod-side idle watchdog (as scripts/gpu/runpod-http.sh idle_watchdog):
 # the pod deletes itself after FV_IDLE_GPU_MIN (default 10; 0 disables)
 # minutes at 0 % GPU once the GPU has been busy, FV_IDLE_GPU_GRACE_MIN
-# (default 30) before that.
+# (default 30) before that; through GraphQL podTerminate with the pod-scoped
+# key (fv_self_delete, scripts/gpu/lib/self-delete.sh embedded: that key may
+# not DELETE through REST, ADR-0023 §4), retried each minute while idle.
 watchdog_cmd() {
   local idle="${FV_IDLE_GPU_MIN:-10}" grace="${FV_IDLE_GPU_GRACE_MIN:-30}"
   [[ "$idle" == 0 ]] && return 0
-  printf '%s' "( used=0; n=0; while sleep 60; do u=\$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | sort -rn | head -1 | tr -d ' '); if [ \"\${u:-0}\" -gt 0 ] 2>/dev/null; then used=1; n=0; else n=\$((n + 1)); fi; lim=$grace; [ \"\$used\" = 1 ] && lim=$idle; if [ \"\$n\" -ge \"\$lim\" ] && [ -n \"\${RUNPOD_API_KEY:-}\" ] && [ -n \"\${RUNPOD_POD_ID:-}\" ]; then curl -sS -X DELETE -H \"Authorization: Bearer \$RUNPOD_API_KEY\" \"https://rest.runpod.io/v1/pods/\$RUNPOD_POD_ID\" >>/tmp/idle-watchdog.log 2>&1; fi; done ) >/dev/null 2>&1 & "
+  printf '(\n%s\n' "$(<"$ROOT/scripts/gpu/lib/self-delete.sh")"
+  printf '%s' "used=0; n=0; while sleep 60; do u=\$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | sort -rn | head -1 | tr -d ' '); if [ \"\${u:-0}\" -gt 0 ] 2>/dev/null; then used=1; n=0; else n=\$((n + 1)); fi; lim=$grace; [ \"\$used\" = 1 ] && lim=$idle; if [ \"\$n\" -ge \"\$lim\" ] && [ -n \"\${RUNPOD_API_KEY:-}\" ] && [ -n \"\${RUNPOD_POD_ID:-}\" ]; then echo \"\$(date -u +%FT%TZ) idle \$n min at 0 % GPU: deleting pod \$RUNPOD_POD_ID\" >>/tmp/idle-watchdog.log; fv_self_delete /tmp/idle-watchdog.log; fi; done ) >/dev/null 2>&1 & "
 }
 
 # The container command: write the inlined config (recipe substituted) and exec fv-serve.

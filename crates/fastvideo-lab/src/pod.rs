@@ -947,7 +947,9 @@ cells = ["c"]
         // HTTP 200 without "errors"; anything else is retried.
         let graphql = r#"-X POST https://api.runpod.io/graphql"#;
         let mutation = r#"--data "{\"query\":\"mutation { podTerminate(input: {podId: \\\"$RUNPOD_POD_ID\\\"}) }\"}""#;
-        let success = r#"[ "$code" = 200 ] && ! grep -q '"errors"' "$1.resp""#;
+        let success = r#"[ "$_fvsd_code" = 200 ] && ! grep -q '"errors"' "$1.resp" 2>/dev/null && _fvsd_ok=0"#;
+        // The key reaches curl on stdin, never in its argv; the answer file is removed.
+        let key_on_stdin = r#"printf 'Authorization: Bearer %s\n' "$RUNPOD_API_KEY" | curl "#;
         for idle in [10, 0] {
             o.idle_min = idle;
             let s = start_command(&o).unwrap();
@@ -963,6 +965,10 @@ cells = ["c"]
             assert_eq!(s.matches(graphql).count(), defs, "idle {idle}");
             assert_eq!(s.matches(mutation).count(), defs, "idle {idle}");
             assert_eq!(s.matches(success).count(), defs, "idle {idle}");
+            assert_eq!(s.matches(key_on_stdin).count(), defs, "idle {idle}");
+            assert_eq!(s.matches(" -H @- ").count(), defs, "idle {idle}");
+            assert_eq!(s.matches(r#"rm -f "$1.resp""#).count(), defs, "idle {idle}");
+            assert!(!s.contains("Bearer $RUNPOD_API_KEY"));
             if idle != 0 {
                 assert!(s.contains("      fv_self_delete /tmp/idle-watchdog.log\n"));
             }
