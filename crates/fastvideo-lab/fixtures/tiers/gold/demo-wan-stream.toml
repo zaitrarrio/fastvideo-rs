@@ -1,0 +1,89 @@
+# A fixture gold file of fv-lab report tiers (tests/tiers_report.rs); not a real variant.
+schema = 1
+
+[model]
+variant = "demo-wan-stream"
+family = "wan"
+
+[tier]
+name = "draft"
+gpu = "RTX PRO 6000 Blackwell"
+sm = 120
+vram_gib = 96
+
+[workload]
+width = 832
+height = 480
+seconds = 5.0
+steps = 4
+prompt_set = "fixture"
+seeds = [7]
+
+
+
+[[source]]
+fields = ["workload"]
+path = "docs/perf/raw-inference.md"
+heading = "RTX PRO 6000 (sm_120)"
+date = "2026-10-01"
+
+[[gap]]
+field = "latency.p50_s"
+why = "fixture"
+
+[[gap]]
+field = "latency.min_s"
+why = "fixture"
+
+[[gap]]
+field = "latency.max_s"
+why = "fixture"
+
+[[gap]]
+field = "latency.denoise_s"
+why = "fixture"
+
+[[gap]]
+field = "latency.decode_s"
+why = "fixture"
+
+[[gap]]
+field = "latency.load_s"
+why = "fixture"
+
+[[gap]]
+field = "latency.peak_gib"
+why = "fixture"
+
+[[gap]]
+field = "latency.fps"
+why = "fixture"
+
+[[gap]]
+field = "latency.ttff_s"
+why = "fixture"
+
+[[gap]]
+field = "quality.psnr_vs_upstream_min_db"
+why = "fixture"
+
+[[gap]]
+field = "quality.lpips_vs_upstream_max"
+why = "fixture"
+
+[[gap]]
+field = "quality.sharpness_ratio"
+why = "fixture"
+
+[[gap]]
+field = "quality.jitter_ratio"
+why = "fixture"
+
+[[gap]]
+field = "cost.usd_per_hr"
+why = "fixture"
+
+[[gap]]
+field = "cost.usd_per_clip"
+why = "fixture"
+

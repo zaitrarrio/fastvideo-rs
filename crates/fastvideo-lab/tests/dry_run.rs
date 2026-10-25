@@ -8,6 +8,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use fastvideo_lab::goldcell::GOLD_TIER;
 use fastvideo_lab::plan::{Lab, Step};
 use fastvideo_lab::run::{dry_run_lines, RunConfig};
 
@@ -44,8 +45,15 @@ fn steps(lab: &Lab, cfg: &RunConfig) -> Vec<Step> {
     Lab::steps(&cells, &cfg.bin, &cfg.paths()).expect("render")
 }
 
+/// The tiers that are runpod-matrix.sh families: every tier but `gold`,
+/// whose cells come from the gold files (tests/gold_tier.rs holds its dry run).
 fn families(lab: &Lab) -> Vec<String> {
-    lab.tiers.tiers.iter().map(|t| t.name.clone()).collect()
+    lab.tiers
+        .tiers
+        .iter()
+        .filter(|t| t.name != GOLD_TIER)
+        .map(|t| t.name.clone())
+        .collect()
 }
 
 #[test]
