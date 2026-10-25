@@ -355,7 +355,7 @@ fn cluster_worker_on_the_volume_with_an_inline_config() {
     );
     assert_eq!(
         std::fs::read_to_string(&img.paths.worker_toml).unwrap(),
-        format!("{toml}\n[cluster]\nregister = false\n")
+        format!("{toml}\n[gateway]\nregister = false\n")
     );
     assert_eq!(plan.program, img.paths.serve_bin);
     assert_eq!(
@@ -1212,7 +1212,7 @@ fn gmi_pod_hub_weights_tunnel_watchdog() {
     );
     assert_eq!(
         std::fs::read_to_string(&img.paths.worker_toml).unwrap(),
-        "[server]\n\n[cluster]\nregister = false\n"
+        "[server]\n\n[gateway]\nregister = false\n"
     );
     let w = sp.ran("watchdog");
     assert_eq!(w.len(), 1);

@@ -1219,3 +1219,10 @@ ran (pod id, $/hr), result, cost.
   edit (253 of 1024 cases, `pod/*` cluster, edge and standalone bodies,
   `dockerStartCmd` only; no serverless case). Gates on build pod
   `k66zz15an4sktc`; control checks local. No GPU cost.
+- 2026-10-25, F3b review fixes on #192 (coordinator's independent review,
+  nothing blocking): fv-boot appends `[gateway]` too (nothing writes
+  `[cluster]` before stage 2; `FV_SERVE_BIN` can name an older fv-serve);
+  fv-control refuses an inline `config_toml` that sets `[cluster]`; the
+  guard renames through a TOML parse; ADR-0011's stage 2 lists the writers
+  to flip. Merged main at e82b6b78 (#188). Gates on build pod
+  `k66zz15an4sktc`; control checks local. No GPU cost.

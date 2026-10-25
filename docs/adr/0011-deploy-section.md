@@ -388,24 +388,38 @@ would brick every pool of an older image at its next scale-up.
   `Config::deprecations`); a file with both is refused; a config
   serializes as `[cluster]` (`--print-config`). fv-boot's
   `register = false` edit (`boot::config::register_off`) goes under
-  whichever name the config has and appends `[cluster]` when it has
-  neither (fv-boot runs its own image's fv-serve). fv-control's shell
-  boots (`REGISTER_OFF_SH`, for images without fv-boot) do the same but
-  append `[gateway]`, which every fv-serve reads. **The writers are
-  unchanged:** every `configs/serve` file keeps `[gateway]`, so
+  whichever name the config has and appends `[gateway]` when it has
+  neither: fv-boot normally runs its own image's fv-serve, but
+  `FV_SERVE_BIN` can point it at another (the fv-boot smoke pod's
+  `FV_SMOKE_SERVE_BIN`), possibly an older one. fv-control's shell boots
+  (`REGISTER_OFF_SH`, for images without fv-boot) do the same. So
+  **nothing writes `[cluster]` in stage 1**: `register_off` is tested
+  never to introduce it. **The writers are unchanged:** every `configs/serve` file keeps `[gateway]`, so
   `worker-configs.ts`, the fv-deploy goldens and the worker configs every
   launcher sends are byte-identical (fv-control's start commands change
   only in the shell boots' edit); `fastvideo-serve`
   `config::tests::shipped_configs_round_trip_under_both_names` fails on a
-  shipped config that says `[cluster]`. An inline `config_toml` may say
-  `[cluster]` only for images from stage 1 on.
+  shipped config that says `[cluster]` (its rename step reads the
+  header as TOML does: spaces, quotes, a trailing comment). fv-control
+  refuses an inline `config_toml` that sets a top-level `cluster` table
+  or key (`worker-config.ts` `setsClusterTable`, in the cluster-pool,
+  standalone and serverless schemas and at launch), naming this section:
+  a pool can run a pre-stage-1 image (a pinned `sha`, `stable`), whose
+  `--print-config` preflight would fail.
 - **Stage 2 (a later change).** Once every image a launcher can boot
   carries stage 1 (the `stable` channel, every pinned `sha`, every Runpod
   template and every running endpoint's image at or after the stage-1
-  merge), the shipped configs say `[cluster]` (one rename, then
-  `node control/gen-configs.mjs` and the fv-deploy goldens regenerated) and
-  the guard flips to require it. The alias stays for stored specs' inline
-  configs until a separate decision removes it.
+  merge), the writers switch, in one change: (1) the shipped configs say
+  `[cluster]` (one rename, then `node control/gen-configs.mjs` and the
+  fv-deploy goldens regenerated) and the guard
+  `shipped_configs_round_trip_under_both_names` flips to require it;
+  (2) fv-boot's `register_off` appends `[cluster]` (and its stage-1
+  assertion flips); (3) fv-control's `REGISTER_OFF_SH` appends `[cluster]`
+  (the C3c payload corpus regenerated for it), or is deleted with the
+  shell boots once every image carries fv-boot (ADR-0014 §6); (4)
+  fv-control stops refusing `[cluster]` in `config_toml`
+  (`setsClusterTable` and its tests). The alias stays for stored specs'
+  inline configs until a separate decision removes it.
 - **Not renamed.** The environment variables (`FV_GATEWAY_POOL`,
   `FV_INTERNAL_TOKEN`, `FV_WORKER_DIRECT`): fv-control and the edge set
   them on running fleets, a contract of its own. The D1 table

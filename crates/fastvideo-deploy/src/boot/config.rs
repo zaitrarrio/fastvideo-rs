@@ -15,8 +15,9 @@
 //! Anything else **refuses to boot** ([`missing`]): no baked `FV_CONFIG`
 //! (no longer read), no fv-serve default. A controller worker's config gets
 //! `register = false` in its `[cluster]` table, or in `[gateway]`, the name
-//! that table had before plan F3b and the one the shipped configs still use
-//! (the shell boots do the same edit; [`register_off`]).
+//! that table had before plan F3b and the one the shipped configs still use;
+//! a config with neither gets `[gateway]` (the shell boots do the same edit;
+//! [`register_off`]).
 
 use std::path::{Path, PathBuf};
 
@@ -90,10 +91,12 @@ pub fn without_config(args: &[String]) -> Vec<String> {
 /// `register = false` under the config's `[cluster]` table, or under
 /// `[gateway]`, its name before plan F3b (whichever the config has: adding
 /// the other name would make fv-serve refuse a config with both). A config
-/// with neither gets a new `[cluster]` table: fv-boot runs the fv-serve of
-/// its own image, which reads that name. Idempotent: a config that already
-/// starts its table with that line (a restarted container re-reading its
-/// own copy) is kept.
+/// with neither gets a new `[gateway]` table: every fv-serve reads that
+/// name, and the fv-serve fv-boot runs need not be its own image's
+/// (`FV_SERVE_BIN`), so nothing writes `[cluster]` until stage 2 of the
+/// rename (ADR-0011, "Renaming a worker-config section"). Idempotent: a
+/// config that already starts its table with that line (a restarted
+/// container re-reading its own copy) is kept.
 pub fn register_off(toml: &str) -> String {
     let mut out = String::with_capacity(toml.len() + 32);
     let mut done = false;
@@ -113,7 +116,7 @@ pub fn register_off(toml: &str) -> String {
         }
     }
     if !done {
-        out.push_str("\n[cluster]\nregister = false\n");
+        out.push_str("\n[gateway]\nregister = false\n");
     }
     out
 }
@@ -244,7 +247,7 @@ mod tests {
     fn register_edit() {
         assert_eq!(
             register_off("[server]\nbind = \"x\"\n"),
-            "[server]\nbind = \"x\"\n\n[cluster]\nregister = false\n"
+            "[server]\nbind = \"x\"\n\n[gateway]\nregister = false\n"
         );
         // Under the table the config has, by either name (never both).
         assert_eq!(
@@ -269,6 +272,16 @@ mod tests {
         assert_eq!(register_off(&once), once);
         let appended = register_off("a = 1\n");
         assert_eq!(register_off(&appended), appended);
+        // Stage 1 of the rename (ADR-0011): fv-boot never introduces
+        // `[cluster]`; the fv-serve it runs may predate it (`FV_SERVE_BIN`).
+        for toml in [
+            "",
+            "[server]\n",
+            "a = 1\n[gateway]",
+            "[gateway]\npool = \"h3\"\n",
+        ] {
+            assert!(!register_off(toml).contains("[cluster]"), "{toml:?}");
+        }
     }
 
     #[test]
@@ -353,7 +366,7 @@ mod tests {
         assert_eq!(m.path, wt);
         assert_eq!(
             std::fs::read_to_string(&wt).unwrap(),
-            "[server]\n\n[cluster]\nregister = false\n"
+            "[server]\n\n[gateway]\nregister = false\n"
         );
         let e = BootEnv::from_pairs([("FV_WORKER_CONFIG", "/etc/fv/runpod-ltx.toml")]);
         let r = materialize(&e, &Kind::ClusterWorker, &[], &wt);

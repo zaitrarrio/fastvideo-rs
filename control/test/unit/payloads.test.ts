@@ -278,4 +278,16 @@ describe("the worker config in the env (one image: every launch sends it)", () =
     expect([...sizes].sort((a, b) => b[1] - a[1])[0]![0]).toBe("runpod-family-h3.toml");
     expect(workerConfigProblem({ config_toml: "#".repeat(MAX_WORKER_TOML_B64) })).toMatch(/over the 16384-byte guard/);
   });
+  it("an inline config may not say [cluster] until every image reads it (ADR-0011, stage 1); [gateway] is fine", async () => {
+    const { setsClusterTable, workerConfigProblem, CLUSTER_TABLE_PROBLEM } = await import("../../src/worker-config");
+    for (const t of ["[cluster]\n", '[server]\nbind = "x"\n\n[cluster] # a comment\npool = "a"\n', "  [ cluster ]\n", "[cluster.x]\n", '["cluster"]\n', "[[cluster]]\n", 'cluster.pool = "a"\n[server]\n', "cluster = { pool = \"a\" }\n"])
+      expect(setsClusterTable(t), t).toBe(true);
+    for (const t of ['[gateway]\npool = "a"\n', "[clusters]\n", '[server]\ncluster = "x"\n', '[dispatch]\nfamilies = ["cluster"]\n', "# [cluster]\n", "[server.cluster]\n"])
+      expect(setsClusterTable(t), t).toBe(false);
+    expect(workerConfigProblem({ config_toml: "[cluster]\nregister = false\n" })).toBe(CLUSTER_TABLE_PROBLEM);
+    expect(CLUSTER_TABLE_PROBLEM).toContain("Renaming a worker-config section");
+    expect(workerConfigProblem({ config_toml: "[gateway]\nregister = false\n" })).toBeNull();
+    // The configs fv-control carries are stage 1 too (the Rust guard checks configs/serve, their source).
+    for (const [k, v] of Object.entries(WORKER_CONFIGS)) expect(setsClusterTable(v), k).toBe(false);
+  });
 });

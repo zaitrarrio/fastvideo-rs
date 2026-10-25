@@ -2768,6 +2768,19 @@ body_max_mb = 64
                 back.deprecations
             );
         }
+        // Any spelling of the old header (spaces, quotes, a trailing comment).
+        for text in [
+            "[ gateway ] # a comment\npool = \"h3\"\n",
+            "[\"gateway\"]\npool = \"h3\"\n",
+            "gateway.pool = \"h3\"\n",
+        ] {
+            let c = Config::from_toml(text, "t").unwrap();
+            assert_eq!(
+                (c.cluster.pool.as_deref(), c.deprecations.len()),
+                (Some("h3"), 1),
+                "{text}"
+            );
+        }
         // The defaults round-trip too (no section at all).
         let d = Config::default();
         assert_eq!(value(&round_trip(&d, "default")), value(&d));
@@ -2824,7 +2837,7 @@ body_max_mb = 64
     #[test]
     fn shipped_configs_round_trip_under_both_names() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../configs/serve");
-        let mut n = 0;
+        let (mut n, mut with_old_name) = (0, 0);
         let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
             .unwrap()
             .map(|e| e.unwrap().path())
@@ -2841,21 +2854,20 @@ body_max_mb = 64
             );
             let c = Config::from_toml(&text, &f).unwrap();
             assert_eq!(value(&round_trip(&c, &f)), value(&c), "{f}");
-            let renamed: String = text
-                .lines()
-                .map(|l| {
-                    if l.trim_end() == "[gateway]" {
-                        "[cluster]\n".to_owned()
-                    } else {
-                        format!("{l}\n")
-                    }
-                })
-                .collect();
+            // Renamed as TOML reads the file (any header spelling: spaces,
+            // quotes, a trailing comment, dotted keys), not by text.
+            let mut moved = raw.clone();
+            if let Some(t) = moved.remove(CLUSTER_OLD_NAME) {
+                moved.insert("cluster".to_owned(), t);
+                with_old_name += 1;
+            }
+            let renamed = toml::to_string(&moved).unwrap();
             let r = Config::from_toml(&renamed, &f).unwrap();
             assert!(r.deprecations.is_empty(), "{f}: {:?}", r.deprecations);
             assert_eq!(value(&r), value(&c), "{f}: [cluster] vs [gateway]");
             n += 1;
         }
         assert!(n >= 2, "configs/serve has {n} configs");
+        assert!(with_old_name > 0, "no shipped config has a [gateway] table");
     }
 }

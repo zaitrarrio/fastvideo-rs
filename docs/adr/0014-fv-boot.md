@@ -149,9 +149,9 @@ rollback switch fv-control's shell preamble and fv-boot itself read.
 
 A controller worker's (cluster or provider) inline or `FV_WORKER_CONFIG` copy gets `register = false` under
 `[gateway]` (idempotent). **Amended 2026-10-25 (plan F3b):** the table is fv-serve's `[cluster]`, `[gateway]` its
-deprecated name; the edit goes under whichever the config has, and a config with neither gets `[cluster]` from
-fv-boot (its own image's fv-serve reads it) and `[gateway]` from the shell boots (an image without fv-boot may
-predate `[cluster]`); ADR-0011 "Renaming a worker-config section". A controller worker with neither (and no `--config` argument) fails, as the shell boots did
+deprecated name; the edit goes under whichever the config has, and a config with neither gets `[gateway]`, from
+fv-boot and the shell boots alike (the fv-serve they run may predate `[cluster]`: an image without fv-boot, or
+`FV_SERVE_BIN`); ADR-0011 "Renaming a worker-config section". A controller worker with neither (and no `--config` argument) fails, as the shell boots did
 (`set -u` on the unset `FV_WORKER_CONFIG`); it never falls back to the baked `FV_CONFIG` without the edit.
 
 **Amended 2026-10-25** (ADR-0011 "One image with boot-time config", owner decision): the images bake no
