@@ -1,13 +1,18 @@
 # ADR-0018: `fv-deploy`, the `Provider` trait and the shared money guards
 
 - Status: Accepted for C3a (Runpod pods and serverless queue endpoints, the shared guards, the `Launch` schema); the
-  live gate (one `fv-deploy up` on Runpod EU) is the coordinator's; Vast and GCP (C3b), fv-control on the generated
+  live gate (one `fv-deploy up` on Runpod EU) passed. C3b (§7, §8, 2026-10-25): Vast and GCP providers and the shared
+  Runpod pieces of the autoscaler, proposed; their live gates are the owner's (§7.4). fv-control on the generated
   `Launch` types (C3c) and templates / release / the D1 ledger (C3d) follow
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-deploy
 - Code: `crates/fastvideo-deploy/src/{provider,launch.rs,guard.rs,lifecycle.rs}`, `src/bin/fv-deploy.rs` (feature
   `deploy`); schemas `crates/fastvideo-deploy/schemas/{launch,instance,offer,account}.v1.json`; goldens
   `crates/fastvideo-deploy/fixtures/deploy/*.json` (written by `scripts/serve/tests/fv-deploy-goldens.sh`)
+- C3b code: `crates/fastvideo-deploy/src/provider/{vast,gcp}.rs`, `provider/runpod/{mod,template}.rs` (the shared
+  Runpod pieces), `launch.rs` (`vast_launch`, `gcp_launch`), `guard.rs`; goldens
+  `fixtures/deploy/{vast-offers,vast-create,gcp-firewall,gcp-instance}.json`; `fastvideo-autoscale`
+  `src/provider/runpod.rs`
 - Usage: `docs/ops/fv-deploy.md`
 - Plan: C3 (`docs/plan/2026-10-23-execution-plan.md`); review `docs/gaps/2026-10-22-architecture-review.md` §7.4
   (C3, the trait sketch and "Collapses"), §4.5 ("`fastvideo-autoscale` is orphaned")
@@ -238,6 +243,115 @@ the coordinator's live gate shows the subcommand equal on Runpod):
 
 Kept: `runpod-cuda.sh` (constants), `runpod-templates.sh` and `release.sh` (C3d), `volumes.sh`.
 
+### 7. C3b: Vast and GCP on the same trait (2026-10-25)
+
+#### 7.1 What is shared, what differs
+
+`provider::vast::Vast` and `provider::gcp::GcpVm` implement the same `Provider` trait and run under the same
+`Deployer`: the balance floor before every create (over the whole cap), the price cap on a quote before any create,
+the detached backstop armed right after every create, the readiness rule (600 s, at most 3 instances), the smoke, the
+delete on every exit, the sweep by name of a lost answer and at every exit, the ledger. `fv-deploy plan | up | status |
+logs | smoke | down` take `--kind vast|gcp`. The `Launch` schema changes only by the two `ProviderKind` values
+(`vast`, `gcp`): additive, so fv-control's generated types (C3c) gain two union members and nothing else. GCP's own
+settings (labels, verify cells, Spot, idle stop, the firewall's source ranges, Secret Manager) are provider options
+(`GcpOptions`), not `Launch` fields: a new `Launch` field would break every struct literal of the type
+(`fastvideo-lab` builds one) and is not needed by any other caller.
+
+| | Runpod (C3a) | Vast | GCP |
+|---|---|---|---|
+| create | `POST /pods` (or template + endpoint) | `POST /bundles/` search with the launch's filter (cap and disk included), `PUT /asks/<cheapest>/` | the weights disk must exist; `POST firewalls`, then `POST instances`, each operation waited on; a refused insert removes its rule |
+| quote (price cap) | GraphQL, live (`runpod-price.sh`) | the cheapest offer per GPU name, live (`dph_total`) | the price table of `scripts/gcp/lib.sh` (`GCP_PRICES`, read from the file at run time): **not live** |
+| billed price checked after create | `costPerHr` | the rented offer's `dph_total` | no (Compute Engine reports none at create; the table quote is the cap) |
+| balance floor | `clientBalance` + `currentSpendPerHr` | the account's `credit` | **the run's budget** (`FV_GCP_BUDGET_USD` / `--budget-usd`; no budget, no create): GCP bills an account with no prepaid balance |
+| wall clock | detached backstop | detached backstop (the script's `nohup … curl -X DELETE`) | detached backstop **and** Compute Engine's `maxRunDuration` = the cap with `instanceTerminationAction: DELETE`, the VM's idle stop (`fv-idle-s`) and the `fv-deadline` label `vm.sh reap` reads |
+| weights | the EU volume `bz0ofkfx45` | **none** (the fake-engine smoke only, below) | the zone's read-only weights disk `fv-weights-hdml-<zone>` (none for the `fake` row); never written or deleted |
+| config at boot (ADR-0011) | `FV_WORKER_TOML_B64` | `FV_WORKER_TOML_B64` in the env object; the onstart starts fv-boot without `--config` | the launch's `FV_WORKER_TOML_B64` becomes the `fv-config` metadata item (`startup.sh` passes it as `--config`), and is left out of `fv-env` |
+| secrets | Runpod secret references | Vast account env vars; a secret name in the env is refused | none, or Secret Manager by name (`--secret-manager`); the script's third mode (secret values as metadata) is not offered: no secret value rides in a request fv-deploy builds |
+| reach | `https://<id>-8000.proxy.runpod.net` | `http://<public_ipaddr>:<host port of 8000/tcp>`, looked up until Vast reports both | `http://<natIP>:8000` (the firewall admits only the source ranges) |
+| logs | the console's log endpoint | not read (no Vast log API in the scripts): refused with a hint | the serial console, `fvadm_` tokens masked |
+| sweep | by name | by `label` | by name (VM names are unique in a zone): the VM (ours only) and its rule |
+| default price cap | $2.50 (one GPU) | $0.60 (`VAST_MAX_DPH`) | $6.00 (`FV_GCP_MAX_DPH`, the whole VM) |
+
+#### 7.2 Vast
+
+The preset of a Vast launch is the fake-engine smoke (`--family fake --preset fake`, the config the images carry,
+`runpod-fake.toml`, inline), what `vast.sh smoke` rents today; any other preset is refused: Vast mounts no weights
+volume and fv-deploy does not build the r2 weights plan (fv-control's `weightsPlan` / `r2PodEnv`) yet. That is the
+next Vast step, together with the owner's open decision on Vast serving (plan §1). The guard refuses a Vast launch with
+a volume or weights other than `none`.
+
+**UNVERIFIED** (not in a repository script or a document read for C3b; each marked in `provider/vast.rs`): the
+account's REST path `GET /users/current/` (the scripts read the balance through `vastai show user`); the instance
+list `GET /instances/` with `.instances[].label` (the sweep); the offers' `gpu_name` and a `gpu_name: {"in": [...]}`
+filter (only used when `--gpu` names Vast GPU names; the script filters no GPU name); a 404 for an instance that is
+gone; a 2xx `{"success": false}` meaning a refused ask (read as no capacity: nothing created). Script-verified and used
+as the script uses them: the search filter and `.offers[].{id,dph_total}`, `PUT /asks/<id>/` answering
+`.new_contract`, `GET /instances/<id>/` (`.instances.{actual_status,public_ipaddr,ports}`), `DELETE /instances/<id>/`.
+A wrong guess fails safe: an unread balance or listing is an error before any create or a failed sweep that is
+reported; a gone instance read as present makes the backstop delete at the deadline instead of standing down.
+
+#### 7.3 GCP
+
+A GCP launch is a `deploy/deploy.toml` `[[gcp]]` row (`--preset h3-turbo|h3-max|ltx|wan|fake`; `--family` a model
+family whose `[dispatch]` family is the row's, or `fake`): the row's config, machine type (or `--gpu` machine types,
+each priced) and verify cells, the zone of the region (`eu` → `europe-west4-b`; a non-`europe-*` zone is refused), the
+script's container env plus the image identity, the channel and the weights source. Auth: the access token comes from
+`GCP_ACCESS_TOKEN` or from the reviewed `scripts/gcp/auth.sh gcp_token` (openssl RS256, cached mode 600), asked before
+every request; no RSA code and no new dependency in Rust. The detached backstop is told the zone, the project, the
+budget and the repository root.
+
+`vm.sh` itself did not run on main: its metadata items (about 135 KB: `startup.sh`, the verify scripts and their
+tables) went to jq as one argument, over Linux's 128 KiB per-argument limit (`E2BIG`); fixed here by passing them
+through a file descriptor (`scripts/gcp/tests/vm.test.sh`: 21 failed before, 38 passed after). The goldens run the
+script's own `firewall_payload` / `instance_payload` (what `vm.sh up` sends) in its dry-run mode; the file items are
+compared with the files themselves.
+
+#### 7.4 Evidence and the live gates
+
+`scripts/serve/tests/fv-deploy-goldens.sh` writes `vast-{offers,create}.json` from `vast.sh plan` and
+`gcp-{firewall,instance}.json` from `vm.sh`'s functions; `tests/payload_goldens.rs` asserts the Rust bodies for the
+same inputs equal them (`vast_search_and_create_equal_vast_sh`, `gcp_firewall_and_instance_equal_vm_sh`), and that a
+preset launch differs from the script's only in the name, the inline config (Vast: no `--config` in the onstart) and
+three env keys (`FV_IMAGE_*`, `FV_RELEASE_CHANNEL`, `FV_WEIGHTS_SOURCE`)
+(`preset_vast_is_the_script_instance_plus_the_inline_config`, `preset_gcp_is_the_script_vm_plus_the_channel`,
+`every_gcp_row_builds`). `provider/tests_c3b.rs` runs `up` end to end on a fake Vast and a fake Compute Engine with a
+fake fv-serve: the floor and the cap before any create, the budget required, lost answers swept, a refused insert
+removing its rule, a VM without `fv-owner=fastvideo-rs` never deleted, keys and tokens never in a URL, body, error or
+`Debug`. `tests/fv_deploy_bin.rs`: `plan --kind vast|gcp` makes no request, `down --kind vast|gcp`.
+
+**No live resource was created for C3b**: the owner allows GPU instances only on the EU Runpod volume, which Vast and
+GCP cannot mount. The live gates are the owner's: one `fv-deploy up --kind vast --family fake --preset fake` (cents)
+and one `fv-deploy up --kind gcp --family h3 --preset h3-turbo` with `FV_GCP_BUDGET_USD` (about $2.50 for 30 min of a
+G4 VM; the weights disk `fv-weights-hdml-europe-west4-b` must exist), each run from a host that outlives `--cap-s`.
+Until then the scripts stay; each is deleted after its gate shows `fv-deploy` equal.
+
+### 8. C3b: the autoscaler's Runpod code on fv-deploy's
+
+The autoscaler keeps its own pool-steering trait (`observe` / `apply`; async, called by the controller) and its async
+reqwest client. What both implemented twice is now written once in `fastvideo_deploy::provider::runpod`, sans I/O, and
+used by fv-deploy's blocking `RunpodApi` / `Pod` and by the autoscaler's `RunpodApi`:
+
+- the requests (`Requests`: URL, method, bearer header, JSON body, timeout) for create / delete / list pods, a
+  template, an endpoint and its PATCH, the queue health, the balance query;
+- the answer mapping (`decode`, `delete_answer`, `graphql_data`: "no capacity" by the shared texts, 4xx a refusal,
+  5xx / transport a lost answer, the key scrubbed) and the balance (`account_of`), the billed price (`parse_usd`);
+- the pod-from-template body (`template_pod_body`, `with_worker_config`, `template_env_of`), moved from the autoscaler.
+
+`fastvideo-autoscale`'s `RunpodApi::send` executes a shared `Request` on reqwest; its test sends each request to a local
+fake and asserts the method, path and header are fv-deploy's. Behaviour changes, all toward the guards: a `costPerHr`
+given as a numeric string is now read (it was read as 0, so never over the cap), a DELETE of a pod already gone counts
+as deleted (it was an error), error text is scrubbed of the key.
+
+**What remains** (not moved, and why): (1) the autoscaler does not call `Pod::create` / `Serverless` through the
+`Provider` trait: its pods come from a Runpod **template** (`templateId`, no image), which a `Launch` cannot name
+without a schema change, and it falls back across GPU types × placements inside one create, which is the lifecycle's job
+on the trait; (2) the trait is blocking and fv-boot's `ReqwestHttp` owns a runtime that must not be dropped inside the
+controller's async context, so a full move needs a `spawn_blocking` adapter with a client that lives outside it;
+(3) the autoscaler's price check uses its configured price table (×1.25), not a live quote, and keeps a pod whose
+create reported no price; (4) endpoint scaling (`PATCH` of the diff) and `/health` counts are steering, not lifecycle.
+The full move is: a `template` field in `Launch` (additive) and `create_body` honouring it, a `Provider`-based pool
+create that the autoscaler runs through `spawn_blocking`, and the live quote replacing the table.
+
 ## Open decisions
 
 - **The default price cap** ($2.50/hr for one GPU): a guard choice, not a price fact (the RTX PRO 6000 Secure quote
@@ -249,8 +363,13 @@ Kept: `runpod-cuda.sh` (constants), `runpod-templates.sh` and `release.sh` (C3d)
   in the pod's env, readable through `GET /pods`. C3a does not; the owner decides.
 - **Which images carry fv-boot**: the preset launch's entrypoint is fv-boot. The live gate must use an image built
   after #159 (`--channel latest`, or `--image <digest>`), until `stable` is promoted (ADR-0014 §6 step 4).
-- The autoscaler's pod and endpoint providers onto this trait, Vast and GCP (C3b), fv-control on the generated types
-  (C3c), templates / release / the D1 ledger (C3d).
+- **C3b, the owner's**: the Vast and GCP live gates (§7.4); whether Vast serves at all (plan §1); r2 weights on Vast
+  (the fv-control weights plan in Rust); GCP's quote (the static table, or the Cloud Billing catalog, UNVERIFIED here)
+  and its budget as the floor's balance; GCP's readiness timeout (the shared 600 s bound; `vm.sh wait` allows 2700 s:
+  a slow first boot needs `--force-guards --ready-timeout-s`); whether a pod whose create reports no price stays in an
+  autoscaler pool (§8 (3)).
+- The autoscaler's full move onto the trait (§8 "What remains"), fv-control on the generated types (C3c), templates /
+  release / the D1 ledger (C3d).
 
 ## Consequences
 
@@ -277,6 +396,10 @@ Kept: `runpod-cuda.sh` (constants), `runpod-templates.sh` and `release.sh` (C3d)
   `tests/fv_deploy_bin.rs` (feature `deploy`: the real detached backstop process deletes a pod on a local fake Runpod
   by itself; `up --yes` below the floor makes no create; `plan` and a dry `up` make no request and never print the
   key; the US volume is refused), `scripts/serve/tests/fv-deploy-goldens.sh --check` in `control.yml`.
+
+- C3b is pinned by `vast_search_and_create_equal_vast_sh`, `gcp_firewall_and_instance_equal_vm_sh`, the preset-diff
+  goldens, `provider/tests_c3b.rs` (13 tests), `runpod::shared_tests`, `runpod::template::tests`, the autoscaler's
+  `the_async_client_sends_the_shared_requests`, and `scripts/gcp/tests/vm.test.sh`.
 
 ## Validation
 

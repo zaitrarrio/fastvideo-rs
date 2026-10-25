@@ -36,17 +36,28 @@ RUNPOD_API_KEY=… ./fv-deploy down <pod id>
 # A serverless queue endpoint of the same preset (smoke through native queue jobs):
 RUNPOD_API_KEY=… ./fv-deploy up --family h3 --preset h3-turbo --kind serverless --channel latest --yes
 
+# Vast (ADR-0018 §7.2): the fake-engine smoke only (no weights volume on Vast; r2 not in fv-deploy yet).
+VAST_API_KEY=… ./fv-deploy up --kind vast --family fake --preset fake --channel latest --yes
+
+# GCP (ADR-0018 §7.3): a deploy/deploy.toml [[gcp]] row; the floor is checked on the run's budget.
+GCP_SA_KEY_FILE=… FV_GCP_BUDGET_USD=20 ./fv-deploy up --kind gcp --family h3 --preset h3-turbo --channel latest --yes
+./fv-deploy down <vm name> --kind gcp
+
 # The JSON Schemas (fv-control's types are generated from them, plan C3c):
 ./fv-deploy schema launch      # also: instance, offer, account
 ```
 
-Options of `plan` / `up`: `--region eu` (the only region with a weights volume; `us` is refused), `--kind pod|serverless`,
+Options of `plan` / `up`: `--region eu` (the only region with a weights volume; `us` is refused), `--kind pod|serverless|vast|gcp`,
 `--image REF` (instead of `ghcr.io/zaitrarrio/fastvideo-rs-serve:<variant>-<channel>`), `--channel stable|latest`
 (default `stable`; the preset launch runs fv-boot, so use `latest` or a digest built after #159 until `stable` is
 promoted), `--gpu TYPE` (repeatable, fallback order; default `NVIDIA RTX PRO 6000 Blackwell Server Edition`),
-`--cap-s` (1800, ≤ 14400), `--max-usd-per-hr` (2.5), `--min-balance` (8, the minimum), `--ready-timeout-s` (600, ≤ 600),
+`--cap-s` (1800, ≤ 14400), `--max-usd-per-hr` (Runpod 2.5 for one GPU, Vast 0.60, GCP 6.0 for the whole VM),
+`--min-balance` (8, the minimum), `--ready-timeout-s` (600, ≤ 600),
 `--ready-cycles` (3, ≤ 3), `--force-guards` (lifts those upper bounds). `up` only: `--yes`, `--no-smoke`, `--keep`, `--model`, `--params`, `--job-wait-s` (600),
-`--state-dir`.
+`--state-dir`. GCP only: `--source-cidr` (repeatable; default `FV_GCP_SOURCE_CIDR`, else this machine's public
+addresses as /32), `--spot`, `--idle-s` (1800; 0 off), `--secret-manager` (the VM reads the `FV_*` secrets from
+Secret Manager by name; else none), `--budget-usd` (default `FV_GCP_BUDGET_USD`). On Vast and GCP `--gpu` names
+provider GPU names / machine types (Vast: any GPU with a CUDA 13 driver when none is given; GCP: the row's machine).
 
 ## Environment
 
@@ -54,6 +65,12 @@ promoted), `--gpu TYPE` (repeatable, fallback order; default `NVIDIA RTX PRO 600
 |---|---|
 | `RUNPOD_API_KEY` | required for everything but `plan` / `schema`; only ever an `Authorization` header, never printed, never in a launch |
 | `RUNPOD_API_BASE`, `RUNPOD_GRAPHQL`, `RUNPOD_QUEUE_API`, `RUNPOD_HAPI`, `FV_RUNPOD_PROXY` | API overrides (tests, fakes) |
+| `VAST_API_KEY` | Vast (`--kind vast`): as `RUNPOD_API_KEY`; secrets are Vast account env vars, never in a launch |
+| `VAST_API_BASE` | Vast API override |
+| `GCP_SA_KEY_JSON` / `GCP_SA_KEY_FILE`, or `GCP_ACCESS_TOKEN` | GCP (`--kind gcp`): the token is minted by `scripts/gcp/auth.sh` from the key (or given), asked before every request, only a header |
+| `GCP_PROJECT`, `GCP_ZONE` | the project (default: the key's `project_id`) and the zone of id commands (default `europe-west4-b`) |
+| `FV_GCP_BUDGET_USD` | GCP's "balance": the run's budget the $8 floor and the projection are checked on; without it `up` creates nothing |
+| `FV_GCP_COMPUTE_API` | Compute API override (tests, fakes) |
 
 ## Guards (all on by default; the numbers are flags)
 
@@ -100,6 +117,7 @@ the $2.50/hr cap.
 ## Replacing the scripts
 
 `fv-deploy` replaces `scripts/serve/runpod-pod.sh`, the queue half of `runpod-endpoint.sh` and the create / cap half
-of `scripts/gpu/runpod-http.sh`; the scripts stay until the coordinator's live gate (ADR-0018 §6 lists which script
+of `scripts/gpu/runpod-http.sh`; with `--kind vast` / `--kind gcp` it does what `scripts/serve/vast.sh smoke` and
+`scripts/gcp/vm.sh up` + `wait` do (their live gates are the owner's, ADR-0018 §7.4); the scripts stay until the live gate (ADR-0018 §6 lists which script
 each subcommand replaces and when it is deleted). `scripts/serve/tests/fv-deploy-goldens.sh --check` keeps the Rust
 payloads equal to what those scripts send.
